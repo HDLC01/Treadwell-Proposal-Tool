@@ -18,6 +18,15 @@ What these tests are actually protecting:
   * **The key is the TAB.** Seal, Epoxy blank and Leveling are tabs a bid sits on that no work
     type names. There is deliberately no 'combo' — a combo job is two option lines, each priced
     off its own tab — so 'combo' is refused BY NAME, not merely as an unknown value.
+  * **…except for the four lines that are the same rule on every tab, which have ONE home.**
+    Bond is 0 on every priced sheet, the hard-bid rule is one formula on all six sheets that have
+    one, and travel lodging/food are $70 a night and $45 a day on all eleven — so they are filed
+    once, under the reserved `global` layout, and a tab-side copy is refused BY NAME. Not a
+    default-with-override: two rows for one line is a precedence question, and the answer to a
+    precedence question is a price nobody chose.
+  * **A row filed before a line moved home is still returned.** Production carries exactly one
+    (polish / bond / 1%). It is unreadable by the new rule and it is NOT filtered out of
+    list_rules, because a rule nothing reads and nobody can see is one that stays wrong forever.
   * **An empty table is an empty list.** Day one has no rows and the caller falls back to its
     constants; an error there would blank the page and a typo'd layout answered with [] would
     look identical to "nothing configured yet".
@@ -83,13 +92,39 @@ def _mk(**kw):
     return markup.upsert_rule(body, "hanz@wetreadwell.com")
 
 
+def _home(line_key):
+    """The one layout a line may be filed under. Hand-written per HALF rather than read off a
+    single map, so a key that slipped from one list to the other still has to be argued for."""
+    return "global" if line_key in markup.GLOBAL_LINE_KEYS else "polish"
+
+
 # ── the vocabulary is closed, and 'combo' is closed out by name ───────────────
-@pytest.mark.parametrize("layout", list(markup.LAYOUTS))
+@pytest.mark.parametrize("layout", list(markup.TABS))
 def test_every_tab_a_bid_can_sit_on_is_accepted(layout):
     """Five, and the three nobody would guess from a work type are the point: Seal, Epoxy blank
     and Leveling are tabs the workbook keys markup on that no work type names."""
     assert markup.validate_rule(
         {"layout": layout, "line_key": "gp", "formula": "0.3"})["layout"] == layout
+
+
+def test_global_is_a_layout_and_is_not_a_tab():
+    """The sixth name in LAYOUTS is not a sheet. It is the one home for the four lines that are
+    the same rule on every sheet, and it is accepted exactly like a tab is — the split that keeps
+    it from being a tab is on the LINE KEY, not on the layout."""
+    assert markup.GLOBAL == "global"
+    assert markup.GLOBAL not in markup.TABS
+    assert set(markup.LAYOUTS) == set(markup.TABS) | {markup.GLOBAL}
+    assert markup.validate_rule(
+        {"layout": "GLOBAL", "line_key": "bond", "formula": "0%"})["layout"] == "global"
+
+
+def test_global_goes_last_so_the_page_opens_on_a_sheet_tab():
+    """Ordering, as a behaviour rather than as tidiness. The Markup page selects LAYOUTS[0] on
+    load, and the tab somebody came to that screen to edit is a sheet tab — moving `global` to the
+    front would change what every admin sees first without anybody deciding to."""
+    assert markup.LAYOUTS[-1] == markup.GLOBAL
+    assert markup.LAYOUTS[0] == "polish"
+    assert list(markup.LAYOUTS[:-1]) == list(markup.TABS)
 
 
 @pytest.mark.parametrize("bad", ["", None, "epoxy blank", "Polish tab", "work_type", "gyp2",
@@ -119,9 +154,70 @@ def test_the_case_of_a_layout_is_forgiving_but_the_value_is_not():
 
 
 @pytest.mark.parametrize("line_key", list(markup.LINE_KEYS))
-def test_every_line_of_the_chain_is_accepted(line_key):
-    got = markup.validate_rule({"layout": "polish", "line_key": line_key, "formula": "0.1"})
+def test_every_editable_line_is_accepted_at_its_own_home(line_key):
+    home = _home(line_key)
+    got = markup.validate_rule({"layout": home, "line_key": line_key, "formula": "0.1"})
     assert got["line_key"] == line_key
+    assert got["layout"] == home
+
+
+# ── one home per line ─────────────────────────────────────────────────────────
+def test_the_two_homes_are_disjoint_and_together_are_the_api_vocabulary():
+    """Hand-authored on both sides, because the bug this stops is a key in BOTH lists: it would
+    be accepted on a tab AND on Global, which is the two-rows-for-one-line state the whole split
+    exists to prevent — and every "is it global?" reader would answer yes while every "is it a tab
+    line?" reader answered yes too."""
+    assert set(markup.GLOBAL_LINE_KEYS) & set(markup.TAB_LINE_KEYS) == set()
+    assert set(markup.LINE_KEYS) == set(markup.GLOBAL_LINE_KEYS) | set(markup.TAB_LINE_KEYS)
+    assert set(markup.GLOBAL_LINE_KEYS) == {"hard_bid", "bond", "travel_lodging",
+                                            "travel_per_diem"}
+    assert set(markup.TAB_LINE_KEYS) == {"gp", "super_pto", "soft_costs"}
+    # And neither half may claim a line the module refuses by name outright, or a key would be
+    # offered to the editor that _check_line_key rejects two lines later.
+    for line_key in markup._NOT_EDITABLE:
+        assert line_key not in markup.LINE_KEYS
+
+
+@pytest.mark.parametrize("layout", list(markup.TABS))
+@pytest.mark.parametrize("line_key", list(markup.GLOBAL_LINE_KEYS))
+def test_a_global_line_filed_under_a_tab_is_refused_by_name_and_says_where_it_went(layout,
+                                                                                  line_key):
+    """The refusal somebody will actually hit, because these four WERE per-tab lines until the
+    Global tab shipped and one such row is live on production today.
+
+    Refused rather than silently stored: a polish bond row is read by nothing — this page prices
+    bond from its home — so accepting it would save with a green tick and move nothing, which is
+    the failure mode this whole module is written against. The message has to name the line and
+    say where it lives, like the `combo` refusal does."""
+    with pytest.raises(markup.ValidationError) as e:
+        markup.validate_rule({"layout": layout, "line_key": line_key, "formula": "1%"})
+    msg = str(e.value)
+    assert line_key in msg, msg
+    assert "Global" in msg, "the refusal doesn't say where the line lives now: %s" % msg
+
+
+@pytest.mark.parametrize("line_key", list(markup.TAB_LINE_KEYS))
+def test_a_per_tab_line_filed_on_global_is_refused_and_sent_to_the_tabs(line_key):
+    """The other direction, which is the expensive one: GP is 5 tiers on polish, 6 on seal and 7
+    on gyp, and soft costs is 16% / 13% / an expression. One global row for any of them would be
+    one number standing in for five different ones."""
+    with pytest.raises(markup.ValidationError) as e:
+        markup.validate_rule({"layout": "global", "line_key": line_key, "formula": "0.3"})
+    msg = str(e.value)
+    assert line_key in msg, msg
+    for tab in markup.TABS:
+        assert tab in msg, "the refusal doesn't list the tabs it should go to instead: %s" % msg
+
+
+def test_find_rule_refuses_a_line_filed_away_from_its_home_too():
+    """The read path shares the write path's home rule, the same way it already shares the closed
+    vocabulary. `find_rule("polish", "bond")` answered None would read as "nobody has filed one"
+    rather than "this can never be filed", and upsert_rule looks its existing row up through
+    exactly this call."""
+    with pytest.raises(markup.ValidationError):
+        markup.find_rule("polish", "bond")
+    with pytest.raises(markup.ValidationError):
+        markup.find_rule("global", "gp")
 
 
 @pytest.mark.parametrize("bad", ["", None, "escalation", "sales_tax", "burden", "shipping"])
@@ -155,12 +251,16 @@ def test_contingency_and_remodel_tax_are_refused_by_name_and_say_why(line_key, f
 
 def test_contingency_and_remodel_tax_stay_in_the_compounding_chain_but_leave_the_editable_set():
     """The exclusion is from the ADMIN-EDITABLE vocabulary, not the chain itself — the money still
-    compounds through both on the sheet; there is just no admin row for either."""
+    compounds through both on the sheet; there is just no admin row for either.
+
+    Stated as two set differences rather than a length, because the editable set is no longer
+    CHAIN-minus-two: the two travel lines are editable and are NOT chain lines. Each difference is
+    written out, so a line moving between the two groups has to be argued for rather than
+    absorbed by an arithmetic that still happens to add up."""
     assert "contingency" in markup.CHAIN
     assert "remodel_tax" in markup.CHAIN
-    assert "contingency" not in markup.LINE_KEYS
-    assert "remodel_tax" not in markup.LINE_KEYS
-    assert len(markup.LINE_KEYS) == len(markup.CHAIN) - 2
+    assert set(markup.CHAIN) - set(markup.LINE_KEYS) == {"contingency", "remodel_tax"}
+    assert set(markup.LINE_KEYS) - set(markup.CHAIN) == {"travel_lodging", "travel_per_diem"}
 
 
 def test_find_rule_refuses_the_two_excluded_keys_too():
@@ -174,17 +274,43 @@ def test_find_rule_refuses_the_two_excluded_keys_too():
 
 
 def test_the_default_sort_is_the_order_the_chain_compounds():
-    """Each line's base is the running sum ABOVE it, so the order is a price, not a preference."""
-    got = [markup.validate_rule({"layout": "polish", "line_key": k, "formula": "0.1"})["sort"]
+    """Each line's base is the running sum ABOVE it, so the order is a price, not a preference.
+    The two lines that do not compound sit after the ones that do, and every line gets a slot of
+    its own — a tie is two rows whose order depends on which database answered."""
+    got = [markup.validate_rule({"layout": _home(k), "line_key": k, "formula": "0.1"})["sort"]
            for k in markup.LINE_KEYS]
     assert got == sorted(got), "the default sort does not follow the chain"
     assert len(set(got)) == len(markup.LINE_KEYS), "two lines default to the same position"
 
 
+@pytest.mark.parametrize("line_key", ["travel_lodging", "travel_per_diem"])
+def test_a_line_that_is_not_in_the_chain_still_gets_a_default_sort(store, admin, line_key):
+    """A LATENT 500, fixed with the split that made it reachable.
+
+    The default `sort` was `CHAIN.index(line_key) * 10`, evaluated EAGERLY as an argument. Travel
+    lodging and travel food are not chain lines, so that raises ValueError out of validate_rule —
+    an uncaught 500 with an empty body, on the save button, where a named 400 or a 200 belongs.
+    `_chain_order` has always had the guarded shape; `_default_sort` is the same shape at the
+    other end.
+
+    Driven through the ENDPOINT as well as the validator, because the difference between the bug
+    and the fix is a status code, and only the endpoint has one.
+
+    Mutation: `default=markup.CHAIN.index(out["line_key"]) * 10` in validate_rule."""
+    got = markup.validate_rule({"layout": "global", "line_key": line_key, "formula": "70"})
+    assert isinstance(got["sort"], int)
+
+    r = client.put("/api/markup/rules",
+                   json={"layout": "global", "line_key": line_key, "formula": "70"})
+    assert r.status_code == 200, r.text
+    assert r.json()["rule"]["formula"] == "70"
+
+
 # ── applies=false vs formula='0' — THE distinction ────────────────────────────
 def test_a_line_that_does_not_apply_stores_no_formula(store):
-    """Gyp's hard-bid cell is EMPTY. Not 0 — absent."""
-    row = _mk(layout="gyp", line_key="hard_bid", applies=False)
+    """Switched off: the line does not exist. Filed on Global, which is where hard_bid lives —
+    and where switching it off means no sheet layout charges it at all."""
+    row = _mk(layout="global", line_key="hard_bid", applies=False)
     assert row["applies"] is False
     assert row["formula"] is None, "an absent line was given a formula"
     stored = store["markup_rules"][0]
@@ -192,8 +318,9 @@ def test_a_line_that_does_not_apply_stores_no_formula(store):
 
 
 def test_a_line_that_prices_to_nothing_keeps_its_zero(store):
-    """Polish's bond line: B78 ships at zero, and it is a real line that really applies."""
-    row = _mk(layout="polish", line_key="bond", formula="0")
+    """The bond line: B78 ships at zero on every priced sheet, and it is a real line that really
+    applies — which is exactly why it is one Global row rather than five identical tab rows."""
+    row = _mk(layout="global", line_key="bond", formula="0")
     assert row["applies"] is True
     assert row["formula"] == "0", "a zero formula was thrown away"
     assert store["markup_rules"][0]["formula"] == "0"
@@ -211,28 +338,31 @@ def test_absent_and_zero_are_distinct_in_the_row_and_in_the_json(store, admin):
     whether a formula is present, so `applies = formula is not None` satisfies every assertion in
     this test. The counterexample lives in
     test_a_hand_edited_row_is_served_as_stored_when_the_two_fields_disagree, which is the only
-    fixture in this file where the two fields point in opposite directions."""
-    absent = _mk(layout="gyp", line_key="hard_bid", applies=False)
-    zero = _mk(layout="polish", line_key="hard_bid", applies=True, formula="0")
+    fixture in this file where the two fields point in opposite directions.
+
+    Both rows sit on `global` now, because that is where both lines live — so they are keyed by
+    LINE KEY below rather than by layout."""
+    absent = _mk(layout="global", line_key="hard_bid", applies=False)
+    zero = _mk(layout="global", line_key="bond", applies=True, formula="0")
 
     # The stored shape.
-    rows = {r["layout"]: r for r in store["markup_rules"]}
-    assert rows["gyp"]["applies"] is False and rows["gyp"]["formula"] is None
-    assert rows["polish"]["applies"] is True and rows["polish"]["formula"] == "0"
-    assert rows["gyp"]["formula"] != rows["polish"]["formula"]
-    assert rows["gyp"]["applies"] != rows["polish"]["applies"]
+    rows = {r["line_key"]: r for r in store["markup_rules"]}
+    assert rows["hard_bid"]["applies"] is False and rows["hard_bid"]["formula"] is None
+    assert rows["bond"]["applies"] is True and rows["bond"]["formula"] == "0"
+    assert rows["hard_bid"]["formula"] != rows["bond"]["formula"]
+    assert rows["hard_bid"]["applies"] != rows["bond"]["applies"]
 
     # The JSON shape, straight off the endpoint the page and the pricing path both read.
     body = client.get("/api/markup/rules").json()
-    served = {r["layout"]: r for r in body["rules"]}
-    assert served["gyp"]["applies"] is False, "the absent line reads as applying"
-    assert served["gyp"]["formula"] is None, "the absent line was served a formula"
-    assert served["polish"]["applies"] is True, "the zero line reads as absent"
-    assert served["polish"]["formula"] == "0", "the zero was served as %r" % (
-        served["polish"]["formula"],)
+    served = {r["line_key"]: r for r in body["rules"]}
+    assert served["hard_bid"]["applies"] is False, "the absent line reads as applying"
+    assert served["hard_bid"]["formula"] is None, "the absent line was served a formula"
+    assert served["bond"]["applies"] is True, "the zero line reads as absent"
+    assert served["bond"]["formula"] == "0", "the zero was served as %r" % (
+        served["bond"]["formula"],)
     # And the two rows are not interchangeable on EITHER field, in either direction.
-    assert (served["gyp"]["applies"], served["gyp"]["formula"]) \
-        != (served["polish"]["applies"], served["polish"]["formula"])
+    assert (served["hard_bid"]["applies"], served["hard_bid"]["formula"]) \
+        != (served["bond"]["applies"], served["bond"]["formula"])
     assert absent["id"] != zero["id"]
 
 
@@ -242,10 +372,10 @@ def test_a_reader_never_infers_applies_from_the_formula(store):
     path decides whether to run a line off `applies`, and a formula of '0' is a line it must
     still run (it contributes nothing, which is not the same as being skipped)."""
     store["markup_rules"].append({
-        "id": "r1", "layout": "polish", "line_key": "bond",
+        "id": "r1", "layout": "global", "line_key": "bond",
         "formula": "0", "applies": True, "sort": 60})
     store["markup_rules"].append({
-        "id": "r2", "layout": "gyp", "line_key": "hard_bid",
+        "id": "r2", "layout": "global", "line_key": "hard_bid",
         "formula": None, "applies": False, "sort": 10})
     served = {r["id"]: r for r in markup.list_rules()}
     assert served["r1"]["applies"] is True, "a '0' formula was read as a line that does not apply"
@@ -267,10 +397,10 @@ def test_a_hand_edited_row_is_served_as_stored_when_the_two_fields_disagree(stor
 
     Mutation: `applies = formula is not None` in _shape_rule. Either direction fails."""
     store["markup_rules"].append({
-        "id": "off-but-typed", "layout": "gyp", "line_key": "hard_bid",
+        "id": "off-but-typed", "layout": "global", "line_key": "hard_bid",
         "formula": "-0.04", "applies": False, "sort": 10})
     store["markup_rules"].append({
-        "id": "on-but-empty", "layout": "polish", "line_key": "bond",
+        "id": "on-but-empty", "layout": "global", "line_key": "bond",
         "formula": None, "applies": True, "sort": 60})
 
     served = {r["id"]: r for r in markup.list_rules()}
@@ -290,7 +420,7 @@ def test_serving_a_contradictory_row_says_so_out_loud(store, caplog):
 
     Mutation: delete the log.warning call in _shape_rule."""
     store["markup_rules"].append({
-        "id": "off-but-typed", "layout": "gyp", "line_key": "hard_bid",
+        "id": "off-but-typed", "layout": "global", "line_key": "hard_bid",
         "formula": "-0.04", "applies": False, "sort": 10})
     with caplog.at_level(logging.WARNING, logger="markup"):
         markup.list_rules()
@@ -332,8 +462,8 @@ def test_a_line_that_applies_must_carry_a_formula():
 def test_switching_a_line_off_drops_the_formula_visibly(store):
     """Dropped rather than refused, so the toggle works without clearing the box by hand — and
     the returned row says so, which is the difference between visible and silent."""
-    _mk(layout="polish", line_key="hard_bid", formula="-0.04")
-    off = markup.upsert_rule({"layout": "polish", "line_key": "hard_bid",
+    _mk(layout="global", line_key="hard_bid", formula="-0.04")
+    off = markup.upsert_rule({"layout": "global", "line_key": "hard_bid",
                               "applies": False, "formula": "-0.04"}, None)
     assert off["applies"] is False and off["formula"] is None
     assert store["markup_rules"][0]["formula"] is None
@@ -478,19 +608,36 @@ def test_saving_the_same_line_after_a_delete_writes_a_new_row_not_a_resurrection
 
 
 def test_the_chain_comes_back_in_the_order_it_compounds(store):
+    """Filed backwards at each line's own home, and read back in the order the money is applied —
+    the tab's three, then Global's four, each list in its own order."""
     for key in reversed(markup.LINE_KEYS):
-        _mk(line_key=key, formula="0.1")
-    assert [r["line_key"] for r in markup.list_rules("polish")] == list(markup.LINE_KEYS)
+        _mk(layout=_home(key), line_key=key, formula="0.1")
+    assert [r["line_key"] for r in markup.list_rules("polish")] == list(markup.TAB_LINE_KEYS)
+    assert [r["line_key"] for r in markup.list_rules("global")] == list(markup.GLOBAL_LINE_KEYS)
 
 
 def test_a_row_written_before_sort_existed_still_orders(store):
     """Read-shaped rather than backfilled, like library's buy_qty. A null sort falls back to the
     line's position in the chain, so the order stays the price it should be."""
-    store["markup_rules"].append({"id": "r1", "layout": "polish", "line_key": "bond",
-                                  "formula": "0", "applies": True, "sort": None})
+    store["markup_rules"].append({"id": "r1", "layout": "polish", "line_key": "soft_costs",
+                                  "formula": "0.16", "applies": True, "sort": None})
     store["markup_rules"].append({"id": "r2", "layout": "polish", "line_key": "gp",
                                   "formula": "0.3", "applies": True, "sort": None})
-    assert [r["line_key"] for r in markup.list_rules()] == ["gp", "bond"]
+    assert [r["line_key"] for r in markup.list_rules()] == ["gp", "soft_costs"]
+
+
+def test_a_row_for_a_line_that_is_not_in_the_chain_still_orders(store):
+    """The same fallback, for the two lines the chain has never heard of. `_chain_order` must not
+    raise on them either — it is the SAME index() hazard as the default sort, at the read end,
+    where a raise takes the whole markup screen and the pricing read behind it down."""
+    store["markup_rules"].append({"id": "r1", "layout": "global", "line_key": "travel_per_diem",
+                                  "formula": "45", "applies": True, "sort": None})
+    store["markup_rules"].append({"id": "r2", "layout": "global", "line_key": "travel_lodging",
+                                  "formula": "70", "applies": True, "sort": None})
+    store["markup_rules"].append({"id": "r3", "layout": "global", "line_key": "bond",
+                                  "formula": "0", "applies": True, "sort": None})
+    assert [r["line_key"] for r in markup.list_rules("global")] == [
+        "bond", "travel_lodging", "travel_per_diem"]
 
 
 # ── endpoints, gated like VENDORS ─────────────────────────────────────────────
@@ -550,6 +697,68 @@ def test_the_endpoint_carries_the_vocabulary_so_the_page_keeps_no_second_copy(st
     # cannot actually file a rule against.
     assert "contingency" not in body["line_keys"]
     assert "remodel_tax" not in body["line_keys"]
+
+
+def test_the_endpoint_carries_BOTH_halves_of_the_split_not_just_the_union(store):
+    """The union alone is not enough for the page to draw itself.
+
+    Which HOME a line has decides whether its row gets a box or reads "Set on the Global tab", and
+    a page that worked that out from a list of its own would be one deploy away from offering a
+    box for a key the API refuses. Hand-authored below, so shipping `line_keys` twice under two
+    names would fail here rather than look right."""
+    body = client.get("/api/markup/rules").json()
+    assert body["global_line_keys"] == list(markup.GLOBAL_LINE_KEYS)
+    assert body["tab_line_keys"] == list(markup.TAB_LINE_KEYS)
+    assert "bond" in body["global_line_keys"] and "bond" not in body["tab_line_keys"]
+    assert "gp" in body["tab_line_keys"] and "gp" not in body["global_line_keys"]
+    assert sorted(body["global_line_keys"] + body["tab_line_keys"]) == sorted(body["line_keys"])
+
+
+# ── the row that is on production right now ───────────────────────────────────
+def test_a_rule_filed_before_its_line_moved_home_is_still_returned(store):
+    """THE LIVE ROW. `markup_rules` on production holds exactly one:
+
+        layout=polish  line_key=bond  applies=true  formula="1%"  deleted_at=null
+
+    written while Bond was a per-tab line. It reaches no bid — bond has no address in the writer's
+    target table on any layout — so moving home costs no money. What it costs is VISIBILITY: the
+    page no longer has a polish bond box to show it in.
+
+    So list_rules does NOT filter it. Hiding it here is the one change that would make it
+    disappear for good, and a rule nothing reads and nobody can see is a rule that stays wrong
+    forever. It comes back with its stored layout; the page marks it misfiled and offers to
+    remove it; whether it becomes a Global 1% or goes away is a person's decision, not a
+    migration's.
+
+    Mutation: filter `list_rules` by the home rule."""
+    store["markup_rules"].append({
+        "id": "live-polish-bond", "layout": "polish", "line_key": "bond",
+        "formula": "1%", "applies": True, "sort": 60})
+
+    got = markup.list_rules("polish")
+    assert [r["id"] for r in got] == ["live-polish-bond"], (
+        "the row filed under the old home was filtered out of its own tab's list, so nothing on "
+        "any screen can mention it: %r" % got)
+    assert got[0]["formula"] == "1%", "the rate somebody chose was dropped on the way out"
+    assert got[0]["layout"] == "polish", "the row was quietly re-homed to global"
+    # …and on the un-filtered list the page actually loads.
+    assert [r["id"] for r in markup.list_rules()] == ["live-polish-bond"]
+
+
+def test_a_row_at_the_old_home_is_not_migrated_by_saving_the_new_one(store):
+    """Filing the Global rule does NOT tidy the old row away, and must not.
+
+    Moving polish/bond to global/bond would change its meaning from one tab to every tab — a
+    bigger change than leaving it alone, made by a script nobody asked for. The two rows coexist;
+    only the global one is read."""
+    store["markup_rules"].append({
+        "id": "live-polish-bond", "layout": "polish", "line_key": "bond",
+        "formula": "1%", "applies": True, "sort": 60})
+    fresh = markup.upsert_rule({"layout": "global", "line_key": "bond", "formula": "0%"},
+                               "hanz@wetreadwell.com")
+    assert fresh["id"] != "live-polish-bond", "the old row was recycled as the new one"
+    assert {r["id"]: (r["layout"], r["formula"]) for r in markup.list_rules()} == {
+        "live-polish-bond": ("polish", "1%"), fresh["id"]: ("global", "0%")}
 
 
 def test_an_unknown_layout_filter_is_a_400_not_an_empty_list(store, admin):
@@ -633,3 +842,30 @@ def test_both_schema_files_declare_the_table_and_the_live_unique_key():
         assert "applies boolean not null default true" in flat, path.name
         # The column that must NOT exist: Gyp's soft costs is an expression, not a number.
         assert "rate numeric" not in flat, "%s grew a numeric rate column" % path.name
+
+
+def test_both_schema_files_say_global_is_a_layout_and_no_migration_was_written():
+    """NO DDL. `layout` and `line_key` are plain `text` with no CHECK in either file, deliberately
+    — the comment says so and the two-databases rule is why: an unapplied CHECK surfaces as a 502
+    on whichever database missed it. So adding a sixth layout and two line keys is a COMMENT
+    change, and the comment is the only place a reader can find out what the column may hold.
+
+    Asserted as copy, like the Markup page's intro paragraph is, because that is what it is."""
+    for path in (BACKEND / "supabase_schema.sql", BACKEND / "staging" / "schema_pg.sql"):
+        sql = path.read_text(encoding="utf-8")
+        flat = re.sub(r"\s+", " ", sql)
+        block = flat[flat.index("create table if not exists public.markup_rules"):]
+        block = block[:block.index("create unique index")]
+        # EVERY enumeration of the column's values, not merely one mention of the word somewhere
+        # in the block: the risk is a reader finding the old five-name list and believing it.
+        listings = re.findall(r"polish \| seal \| epoxy \| leveling \| gyp(?: \| global)?", flat)
+        assert listings, "%s no longer enumerates what `layout` may hold at all" % path.name
+        for got in listings:
+            assert got.endswith("| global"), (
+                "%s documents `layout` as the five sheet tabs; a reader has no way to know "
+                "`global` is legal: %r" % (path.name, got))
+        assert "travel_lodging" in block, (
+            "%s does not name the two line keys that are not chain lines" % path.name)
+        # And no CHECK was smuggled in with them, on either column, in either file.
+        assert "layout text not null check" not in block, path.name
+        assert "line_key text not null check" not in block, path.name
