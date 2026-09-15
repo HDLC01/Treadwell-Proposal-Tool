@@ -66,7 +66,9 @@
     { key: "taxable", label: "Taxable",
       why: "Adds sales tax. The bid you see already includes it." },
     { key: "remodel_tax", label: "Remodel tax",
-      why: "Occupied remodel. Adds the county remodel rate on top." }
+      why: "Occupied remodel. Adds the county remodel rate on top." },
+    { key: "bond", label: "Bond",
+      why: "Bond premium on the running total. The sheet ships this at 0% either way." }
   ];
 
   // Taken FROM the pricing engine rather than restated: most jobs are local and taxable, and the
@@ -145,22 +147,17 @@
    *  polish_estimate.conditions -- which a fresh v1 project does not have -- so an
    *  estimator who set Prevailing wage on intake arrived here to find it off.
    *
-   *  DUPLICATED, NOT EXTRACTED, and deliberately. The obvious fix is one shared module,
-   *  but test_polish_intake_page.py asserts this page's <script src> list as an EXACT
-   *  seven-item sequence, so a sixth file here is a test move dressed up as a refactor.
-   *  Five rows against the day this page is deleted is the cheaper end of that trade.
-   *  The live intake's copy is the one to edit; this one follows it.
+   *  EXTRACTED AS OF 2026-09-15, having been a deliberate duplicate before that. The old note
+   *  here said one shared module was not worth it because test_polish_intake_page.py pins this
+   *  page's <script src> list as an exact seven-item sequence, so a sixth file would be a test
+   *  move dressed up as a refactor. That trade changed twice over: polish-bid-core.js is ALREADY
+   *  in both pages' script lists so nothing new is loaded, and the Review step became a second
+   *  writer of these conditions — at which point two copies stopped being a tidiness question and
+   *  became the mechanism by which the two screens would disagree about a price.
    *
-   *  Only Epoxy!B4 and B5 are paired with a Polish cell: Polish!B4/B5 hold their own
-   *  Yes/No, while Polish!D5, B6 and D6 are the formulas =Epoxy!D5 / =Epoxy!B6 /
-   *  =Epoxy!D6 and writing them would replace a live reference with a literal. */
-  var CONDITION_CELLS = {
-    local:           { cells: ["Epoxy!B4", "Polish!B4"], on: "Yes", off: "No" },
-    hard_bid:        { cells: ["Epoxy!B5", "Polish!B5"], on: "Yes", off: "No" },
-    prevailing_wage: { cells: ["Epoxy!D5"],              on: "Yes", off: "No" },
-    taxable:         { cells: ["Epoxy!B6"],              on: "Yes", off: "No" },
-    remodel_tax:     { cells: ["Epoxy!D6"],              on: "Yes", off: "No" }
-  };
+   *  The live intake (js/index.js) still keeps its own copy and remains the one to edit first;
+   *  this page and the Review step now follow it through ONE shared definition rather than two. */
+  var CONDITION_CELLS = B.CONDITION_CELLS;
 
   /** cell_values with these five written into it, MERGED over what is already there.
    *
@@ -169,13 +166,9 @@
    *  "off" -- both literals are written explicitly, because a blank Yes/No cell is not
    *  "No" to Kyle's formulas, it is whatever the IF() defaults to. */
   function conditionCells() {
-    var out = Object.assign({}, (TW.getState() || {}).cell_values || {});
-    for (var key in CONDITION_CELLS) {
-      if (!CONDITION_CELLS.hasOwnProperty(key)) continue;
-      var spec = CONDITION_CELLS[key];
-      var lit = M.conditions[key] ? spec.on : spec.off;
-      for (var i = 0; i < spec.cells.length; i++) out[spec.cells[i]] = lit;
-    }
+    // The engine five through the shared writer, so this page and the Review step cannot write
+    // the same five cells two different ways.
+    var out = B.conditionCellWrites(M.conditions, (TW.getState() || {}).cell_values);
     // The carry four, whose ONLY home this is. Written unconditionally, including
     // remove_existing_jf while Joint filler is off: the switch greys out on screen because it
     // changes no price, not because its answer stopped existing, and a blank cell is not "No"

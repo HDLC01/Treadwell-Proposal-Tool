@@ -1,0 +1,388 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-15T00:00:00Z",
+  "title": "Design System: Treadwell Proposal Generator",
+  "extensions": {
+    "colorMeta": {
+      "signal-red": {
+        "role": "primary",
+        "displayName": "Signal Red",
+        "canonical": "oklch(52.4% 0.211 25.6)",
+        "tonalRamp": ["oklch(15% 0.07 25.6)", "oklch(25% 0.11 25.6)", "oklch(35% 0.15 25.6)", "oklch(45% 0.19 25.6)", "oklch(55% 0.21 25.6)", "oklch(68% 0.17 25.6)", "oklch(82% 0.10 25.6)", "oklch(95% 0.03 25.6)"]
+      },
+      "oxblood": {
+        "role": "primary",
+        "displayName": "Oxblood",
+        "canonical": "oklch(43.3% 0.185 27.5)",
+        "tonalRamp": ["oklch(15% 0.065 27.5)", "oklch(24% 0.105 27.5)", "oklch(33% 0.145 27.5)", "oklch(43% 0.185 27.5)", "oklch(54% 0.195 27.5)", "oklch(68% 0.155 27.5)", "oklch(82% 0.095 27.5)", "oklch(95% 0.028 27.5)"]
+      },
+      "cellar-red": {
+        "role": "primary",
+        "displayName": "Cellar Red",
+        "canonical": "oklch(32.5% 0.141 28.5)",
+        "tonalRamp": ["oklch(15% 0.06 28.5)", "oklch(23% 0.10 28.5)", "oklch(32% 0.141 28.5)", "oklch(42% 0.165 28.5)", "oklch(54% 0.175 28.5)", "oklch(68% 0.14 28.5)", "oklch(82% 0.085 28.5)", "oklch(95% 0.025 28.5)"]
+      },
+      "warm-red-tint": {
+        "role": "primary",
+        "displayName": "Warm Red Tint",
+        "canonical": "oklch(90.5% 0.045 22)",
+        "tonalRamp": ["oklch(15% 0.055 22)", "oklch(26% 0.09 22)", "oklch(38% 0.125 22)", "oklch(50% 0.15 22)", "oklch(63% 0.125 22)", "oklch(75% 0.09 22)", "oklch(90.5% 0.045 22)", "oklch(97% 0.015 22)"]
+      },
+      "cool-red-tint": {
+        "role": "primary",
+        "displayName": "Cool Red Tint",
+        "canonical": "oklch(93.2% 0.023 12)",
+        "tonalRamp": ["oklch(15% 0.045 12)", "oklch(26% 0.075 12)", "oklch(38% 0.10 12)", "oklch(50% 0.11 12)", "oklch(64% 0.085 12)", "oklch(78% 0.055 12)", "oklch(93.2% 0.023 12)", "oklch(97.5% 0.009 12)"]
+      },
+      "red-wash": {
+        "role": "primary",
+        "displayName": "Red Wash",
+        "canonical": "oklch(97.3% 0.010 14)",
+        "tonalRamp": ["oklch(15% 0.03 14)", "oklch(27% 0.05 14)", "oklch(40% 0.065 14)", "oklch(53% 0.07 14)", "oklch(67% 0.055 14)", "oklch(82% 0.03 14)", "oklch(92% 0.018 14)", "oklch(97.3% 0.010 14)"]
+      },
+      "template-red": {
+        "role": "tertiary",
+        "displayName": "Template Red",
+        "canonical": "oklch(44.8% 0.176 27)",
+        "note": "Quarantined. The Wingdings square red baked into Kyle's Word template list styles, mirrored on screen so the proposal preview's bullets match what prints. Never a UI colour.",
+        "tonalRamp": ["oklch(15% 0.065 27)", "oklch(25% 0.105 27)", "oklch(35% 0.145 27)", "oklch(44.8% 0.176 27)", "oklch(56% 0.185 27)", "oklch(69% 0.145 27)", "oklch(83% 0.09 27)", "oklch(95% 0.026 27)"]
+      },
+      "near-black": {
+        "role": "neutral",
+        "displayName": "Near Black",
+        "canonical": "oklch(24.3% 0.002 240)",
+        "tonalRamp": ["oklch(15% 0.002 240)", "oklch(24.3% 0.002 240)", "oklch(35% 0.002 240)", "oklch(46% 0.002 240)", "oklch(58% 0.002 240)", "oklch(71% 0.002 240)", "oklch(84% 0.002 240)", "oklch(95% 0.002 240)"]
+      },
+      "umber-ink": {
+        "role": "neutral",
+        "displayName": "Umber Ink",
+        "canonical": "oklch(38.4% 0.033 25)",
+        "note": "The brown cast is the identity. A neutral grey here is the most common way a new screen ends up looking like somebody else's product.",
+        "tonalRamp": ["oklch(15% 0.018 25)", "oklch(25% 0.026 25)", "oklch(38.4% 0.033 25)", "oklch(50% 0.032 25)", "oklch(62% 0.028 25)", "oklch(75% 0.020 25)", "oklch(87% 0.012 25)", "oklch(96% 0.005 25)"]
+      },
+      "muted-ink": {
+        "role": "neutral",
+        "displayName": "Muted Ink",
+        "canonical": "oklch(68.2% 0.014 85)",
+        "tonalRamp": ["oklch(15% 0.010 85)", "oklch(26% 0.014 85)", "oklch(38% 0.016 85)", "oklch(50% 0.016 85)", "oklch(58% 0.015 85)", "oklch(68.2% 0.014 85)", "oklch(83% 0.009 85)", "oklch(95% 0.004 85)"]
+      },
+      "warm-paper": {
+        "role": "neutral",
+        "displayName": "Warm Paper",
+        "canonical": "oklch(98.1% 0.003 55)",
+        "note": "The page ground under everything, and the single value most responsible for the app not reading as generic.",
+        "tonalRamp": ["oklch(15% 0.004 55)", "oklch(27% 0.004 55)", "oklch(40% 0.004 55)", "oklch(53% 0.004 55)", "oklch(66% 0.004 55)", "oklch(80% 0.003 55)", "oklch(91% 0.003 55)", "oklch(98.1% 0.003 55)"]
+      },
+      "card-white": {
+        "role": "neutral",
+        "displayName": "Card White",
+        "canonical": "oklch(100% 0 0)",
+        "note": "White sits ABOVE paper in this system, not below it.",
+        "tonalRamp": ["oklch(15% 0 0)", "oklch(27% 0 0)", "oklch(40% 0 0)", "oklch(53% 0 0)", "oklch(66% 0 0)", "oklch(80% 0 0)", "oklch(92% 0 0)", "oklch(100% 0 0)"]
+      },
+      "raised-paper": {
+        "role": "neutral",
+        "displayName": "Raised Paper",
+        "canonical": "oklch(96.2% 0.003 20)",
+        "note": "The recessed step. Board columns, working panels, hovered rows, ghost-button hover. The main alternative to a shadow.",
+        "tonalRamp": ["oklch(15% 0.004 20)", "oklch(27% 0.004 20)", "oklch(40% 0.004 20)", "oklch(53% 0.004 20)", "oklch(66% 0.004 20)", "oklch(80% 0.004 20)", "oklch(90% 0.003 20)", "oklch(96.2% 0.003 20)"]
+      },
+      "warm-stone": {
+        "role": "neutral",
+        "displayName": "Warm Stone",
+        "canonical": "oklch(93.1% 0.002 60)",
+        "tonalRamp": ["oklch(15% 0.003 60)", "oklch(27% 0.003 60)", "oklch(40% 0.003 60)", "oklch(53% 0.003 60)", "oklch(66% 0.003 60)", "oklch(80% 0.002 60)", "oklch(93.1% 0.002 60)", "oklch(98% 0.002 60)"]
+      },
+      "stone-dim": {
+        "role": "neutral",
+        "displayName": "Stone Dim",
+        "canonical": "oklch(88.4% 0.002 60)",
+        "tonalRamp": ["oklch(15% 0.003 60)", "oklch(27% 0.003 60)", "oklch(40% 0.003 60)", "oklch(53% 0.003 60)", "oklch(66% 0.003 60)", "oklch(78% 0.002 60)", "oklch(88.4% 0.002 60)", "oklch(97% 0.002 60)"]
+      },
+      "hairline": {
+        "role": "neutral",
+        "displayName": "Hairline",
+        "canonical": "oklch(91.3% 0.002 30)",
+        "note": "The default 1px rule on every card, input, chip and table edge.",
+        "tonalRamp": ["oklch(15% 0.003 30)", "oklch(27% 0.003 30)", "oklch(40% 0.003 30)", "oklch(53% 0.003 30)", "oklch(66% 0.003 30)", "oklch(80% 0.002 30)", "oklch(91.3% 0.002 30)", "oklch(97.5% 0.002 30)"]
+      },
+      "umber-hairline": {
+        "role": "neutral",
+        "displayName": "Umber Hairline",
+        "canonical": "rgba(92,64,63,.16)",
+        "note": "The same rule tinted with the ink instead of with black. Preferred where a page is doing a lot of ruling; visibly warmer against cream.",
+        "tonalRamp": ["rgba(92,64,63,.90)", "rgba(92,64,63,.70)", "rgba(92,64,63,.55)", "rgba(92,64,63,.40)", "rgba(92,64,63,.28)", "rgba(92,64,63,.16)", "rgba(92,64,63,.11)", "rgba(92,64,63,.05)"]
+      },
+      "ledger-green": {
+        "role": "neutral",
+        "displayName": "Ledger Green",
+        "canonical": "oklch(50.2% 0.137 148)",
+        "tonalRamp": ["oklch(15% 0.05 148)", "oklch(25% 0.08 148)", "oklch(37% 0.11 148)", "oklch(50.2% 0.137 148)", "oklch(62% 0.13 148)", "oklch(75% 0.10 148)", "oklch(87% 0.06 148)", "oklch(96% 0.02 148)"]
+      },
+      "caution-bronze": {
+        "role": "neutral",
+        "displayName": "Caution Bronze",
+        "canonical": "oklch(45.6% 0.104 86)",
+        "tonalRamp": ["oklch(15% 0.04 86)", "oklch(25% 0.065 86)", "oklch(35% 0.088 86)", "oklch(45.6% 0.104 86)", "oklch(60% 0.11 86)", "oklch(74% 0.09 86)", "oklch(87% 0.055 86)", "oklch(96% 0.018 86)"]
+      },
+      "caution-ground": {
+        "role": "neutral",
+        "displayName": "Caution Ground",
+        "canonical": "oklch(97.2% 0.028 92)",
+        "note": "Pairs with Caution Bronze. The proposal is fine and the bid can still go out today - look at this before sending. Never red.",
+        "tonalRamp": ["oklch(15% 0.03 92)", "oklch(27% 0.05 92)", "oklch(40% 0.07 92)", "oklch(54% 0.085 92)", "oklch(68% 0.08 92)", "oklch(82% 0.06 92)", "oklch(92% 0.04 92)", "oklch(97.2% 0.028 92)"]
+      },
+      "danger-red": {
+        "role": "neutral",
+        "displayName": "Danger Red",
+        "canonical": "oklch(50.1% 0.194 28)",
+        "note": "Destructive confirmation only. Distinct from the brand accent on purpose.",
+        "tonalRamp": ["oklch(15% 0.065 28)", "oklch(25% 0.11 28)", "oklch(37% 0.155 28)", "oklch(50.1% 0.194 28)", "oklch(62% 0.175 28)", "oklch(75% 0.13 28)", "oklch(88% 0.07 28)", "oklch(96% 0.022 28)"]
+      },
+      "amber": {
+        "role": "neutral",
+        "displayName": "Amber",
+        "canonical": "oklch(76.9% 0.164 70)",
+        "tonalRamp": ["oklch(15% 0.05 70)", "oklch(27% 0.085 70)", "oklch(40% 0.115 70)", "oklch(53% 0.14 70)", "oklch(65% 0.155 70)", "oklch(76.9% 0.164 70)", "oklch(88% 0.10 70)", "oklch(96% 0.035 70)"]
+      },
+      "amber-ink": {
+        "role": "neutral",
+        "displayName": "Amber Ink",
+        "canonical": "oklch(54.8% 0.128 62)",
+        "tonalRamp": ["oklch(15% 0.045 62)", "oklch(26% 0.075 62)", "oklch(38% 0.10 62)", "oklch(54.8% 0.128 62)", "oklch(67% 0.125 62)", "oklch(79% 0.095 62)", "oklch(89% 0.055 62)", "oklch(96% 0.018 62)"]
+      },
+      "overdue-red": {
+        "role": "neutral",
+        "displayName": "Overdue Red",
+        "canonical": "oklch(51.4% 0.181 29)",
+        "note": "The bid calendar's urgency scale, deliberately NOT the brand red - if overdue were the accent colour, ordinary page chrome would read as an alarm.",
+        "tonalRamp": ["oklch(15% 0.06 29)", "oklch(26% 0.10 29)", "oklch(38% 0.145 29)", "oklch(51.4% 0.181 29)", "oklch(63% 0.165 29)", "oklch(76% 0.12 29)", "oklch(88% 0.065 29)", "oklch(96% 0.02 29)"]
+      },
+      "due-soon-bronze": {
+        "role": "neutral",
+        "displayName": "Due Soon Bronze",
+        "canonical": "oklch(49.6% 0.111 64)",
+        "tonalRamp": ["oklch(15% 0.04 64)", "oklch(26% 0.07 64)", "oklch(37% 0.093 64)", "oklch(49.6% 0.111 64)", "oklch(63% 0.108 64)", "oklch(76% 0.085 64)", "oklch(88% 0.05 64)", "oklch(96% 0.016 64)"]
+      },
+      "calm-blue": {
+        "role": "neutral",
+        "displayName": "Calm Blue",
+        "canonical": "oklch(53.2% 0.056 248)",
+        "tonalRamp": ["oklch(15% 0.025 248)", "oklch(26% 0.038 248)", "oklch(39% 0.048 248)", "oklch(53.2% 0.056 248)", "oklch(66% 0.050 248)", "oklch(78% 0.038 248)", "oklch(89% 0.022 248)", "oklch(96% 0.008 248)"]
+      },
+      "workbook-input": {
+        "role": "neutral",
+        "displayName": "Workbook Input Yellow",
+        "canonical": "oklch(95.4% 0.107 100)",
+        "note": "QUARANTINED. Lifted cell-for-cell from estimate_sheet_5.7.xlsx - Kyle recognises his own sheet by these fills. Off-limits to every other surface in the app.",
+        "tonalRamp": ["oklch(20% 0.045 100)", "oklch(33% 0.07 100)", "oklch(46% 0.09 100)", "oklch(59% 0.105 100)", "oklch(72% 0.115 100)", "oklch(84% 0.115 100)", "oklch(95.4% 0.107 100)", "oklch(98.5% 0.04 100)"]
+      },
+      "workbook-calc": {
+        "role": "neutral",
+        "displayName": "Workbook Calc Green",
+        "canonical": "oklch(92.1% 0.066 146)",
+        "note": "QUARANTINED. Material computed cells in Kyle's workbook.",
+        "tonalRamp": ["oklch(20% 0.035 146)", "oklch(33% 0.055 146)", "oklch(46% 0.07 146)", "oklch(59% 0.08 146)", "oklch(72% 0.08 146)", "oklch(83% 0.075 146)", "oklch(92.1% 0.066 146)", "oklch(98% 0.025 146)"]
+      },
+      "workbook-total": {
+        "role": "neutral",
+        "displayName": "Workbook Total Cyan",
+        "canonical": "oklch(87.8% 0.128 208)",
+        "note": "QUARANTINED. Section subtotals and grand totals in Kyle's workbook.",
+        "tonalRamp": ["oklch(20% 0.05 208)", "oklch(33% 0.075 208)", "oklch(46% 0.095 208)", "oklch(59% 0.11 208)", "oklch(72% 0.125 208)", "oklch(80% 0.13 208)", "oklch(87.8% 0.128 208)", "oklch(97% 0.045 208)"]
+      },
+      "workbook-border": {
+        "role": "neutral",
+        "displayName": "Workbook Gridline",
+        "canonical": "oklch(76.4% 0.000 0)",
+        "note": "QUARANTINED. Excel's own cell gridline.",
+        "tonalRamp": ["oklch(15% 0 0)", "oklch(27% 0 0)", "oklch(40% 0 0)", "oklch(53% 0 0)", "oklch(66% 0 0)", "oklch(76.4% 0 0)", "oklch(88% 0 0)", "oklch(96% 0 0)"]
+      }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Display", "purpose": "A single headline figure - the analytics hero number. Rare by design." },
+      "headline": { "displayName": "Headline", "purpose": "Page titles across the app shell. The legacy wizard sets its h1 larger (800, 28px) in Cellar Red." },
+      "title": { "displayName": "Title", "purpose": "Section headings, card headers, drawer section labels, button text." },
+      "body": { "displayName": "Body", "purpose": "Everything else. Prose is held to roughly 62ch where it appears in panels." },
+      "label": { "displayName": "Label", "purpose": "Field labels, column headers, nav section headings, eyebrow text. Uppercase. The dominant small-text form in the app." },
+      "numeric": { "displayName": "Numeric", "purpose": "Money, rates, quantities, cell references, percentages. Always tabular-nums." },
+      "document": { "displayName": "Document", "purpose": "The proposal preview only, at the Word template's true point sizes. Not a UI face." }
+    },
+    "fontDelivery": {
+      "webfontsShipped": false,
+      "note": "There is no @font-face rule and no font CDN link anywhere in the codebase. Inter renders only on a machine that already has it installed and otherwise resolves to Segoe UI on Windows. Roughly a hundred rules also specify bare system-ui, skipping the Inter stack entirely. Design to the fallback; never rely on an Inter-only metric."
+    },
+    "shadows": [
+      { "name": "ambient-rest", "value": "0 1px 2px rgba(60,50,40,.05), 0 4px 16px rgba(60,50,40,.055)", "purpose": "The warm baseline for a card that participates in hover. Barely visible by design." },
+      { "name": "ambient-lift", "value": "0 2px 4px rgba(60,50,40,.06), 0 10px 28px rgba(60,50,40,.10)", "purpose": "The hover answer to ambient-rest, usually paired with transform: translateY(-1px)." },
+      { "name": "overlay", "value": "0 16px 48px rgba(0,0,0,.30)", "purpose": "Drawers, modals, and panels that cover the page. Black is correct here - it says there is a gap between this and the page." },
+      { "name": "menu", "value": "0 6px 20px rgba(0,0,0,.18)", "purpose": "Context menus and dropdowns. A smaller member of the overlay family." },
+      { "name": "paper", "value": "0 1px 3px rgba(0,0,0,0.16), 0 4px 14px rgba(0,0,0,0.10)", "purpose": "The rendered proposal page only. Representational - it is a picture of a sheet of paper - not a UI token." },
+      { "name": "stray-cold-rest", "value": "0 1px 3px rgba(0,0,0,.05)", "purpose": "NOT A REGISTER. Seven resting cards currently carry this cold shadow on a surface that is not responding to anything. An inconsistency to clean up later; do not copy it into a new component." }
+    ],
+    "motion": [
+      { "name": "state-fast", "value": "120ms ease", "purpose": "Default for colour and border-colour state changes on chips, cards and rows." },
+      { "name": "state-standard", "value": "150ms", "purpose": "Button background on hover, and the legacy wizard's step pills." },
+      { "name": "press", "value": "60ms ease", "purpose": "The transform on :active. Paired with translateY(1px)." },
+      { "name": "toggle-knob", "value": "130ms", "purpose": "The switch knob travelling across its track." },
+      { "name": "drawer", "value": "200ms ease", "purpose": "The workspace nav rail sliding in and out, and the body margin that follows it. Visibility is switched on a 0s transition delayed by this duration on the way out, so a closed drawer is inert the instant it has finished leaving." }
+    ],
+    "breakpoints": [
+      { "name": "phone", "value": "480px" },
+      { "name": "narrow", "value": "560px" },
+      { "name": "compact", "value": "700px" },
+      { "name": "nav", "value": "768px" },
+      { "name": "board", "value": "900px" },
+      { "name": "wide", "value": "1100px" },
+      { "name": "rails", "value": "1400px" }
+    ],
+    "breakpointNote": "768px is the app's one structural breakpoint, because it is where navigation changes between a fixed rail and an overlay drawer. Sixteen distinct widths are currently live and both 767px and 768px appear in quantity; the others are single-component near-misses, not a scale.",
+    "iconContract": {
+      "source": "frontend/js/icons.js",
+      "api": "window.TWIcon(name, size, cls)",
+      "count": 75,
+      "viewBox": "0 0 24 24",
+      "fill": "none",
+      "stroke": "currentColor",
+      "strokeWidth": 2,
+      "linecap": "round",
+      "linejoin": "round",
+      "defaultSize": "16px",
+      "hostClass": "tw-ico",
+      "rules": "currentColor is the whole point - a danger button's icon goes red because the button is red, and a disabled row's icon dims with the row. Glyphs carry pointer-events:none and vertical-align:-.16em. Never an emoji: an emoji is drawn by whatever font the machine has, cannot take the row's colour, and ignores every size token on the page. Do not coin a near-miss of a name that already exists."
+    },
+    "tokenDrift": {
+      "note": "Recorded, not endorsed. 82% of this app's CSS lives in 23 per-page inline <style> blocks rather than in the shared sheet, and 14 of 59 custom-property names carry conflicting values across pages.",
+      "conflicts": [
+        { "token": "--red", "values": ["#c8102e (14 files)", "#9e001f (2 files)", "#c0392b (login.html, orphan)"], "resolution": "#c8102e is primary. The two #9e001f pages are the exception awaiting correction." },
+        { "token": "--line", "values": ["rgba(27,28,28,.1)", "#e4e2e2", "rgba(92,64,63,.16)", "#e8e4dc", "rgba(27,28,28,.11)"], "resolution": "#e4e2e2 default; rgba(92,64,63,.16) where a page rules heavily." },
+        { "token": "--surf", "values": ["#fbf9f8", "#f4f4f5", "#faf9f5"], "resolution": "#fbf9f8. #f4f4f5 is the cool variant the warm cast exists to avoid." },
+        { "token": "--ink", "values": ["#1b1c1c", "#1a1a1a", "#1a1915"], "resolution": "#1b1c1c." },
+        { "token": "--surf-low", "values": ["#f3f1ea", "#f5f3f3", "#f3eeed"], "resolution": "#f5f3f3." },
+        { "token": "--ok", "values": ["#0f7b34", "#1f7a34"], "resolution": "#0f7b34." },
+        { "token": "radius names", "values": ["--r:12px", "--r-lg:12px", "--r-md:8px", "--r-s:7px", "--r-sm:6px", "--radius:14px"], "resolution": "sm 6px / md 8px / lg 12px / pill 999px / full 50%. --r-s beside --r-sm is the fingerprint of an invented neighbour." }
+      ]
+    }
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The one loud control on a screen. Solid Signal Red, small, with a real 1px press.",
+      "html": "<button class=\"ds-btn-primary\">Save changes</button>",
+      "css": ".ds-btn-primary { background: #c8102e; color: #ffffff; border: 0; border-radius: 8px; padding: 8px 14px; font: 600 13px 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; cursor: pointer; transition: background 150ms ease, transform 60ms ease; } .ds-btn-primary:hover { background: #9e001f; } .ds-btn-primary:focus-visible { outline: 2px solid #c8102e; outline-offset: 2px; } .ds-btn-primary:active { background: #9e001f; transform: translateY(1px); } .ds-btn-primary:disabled { opacity: .5; cursor: not-allowed; transform: none; }"
+    },
+    {
+      "name": "Ghost Button",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "The secondary action. Transparent with a hairline; on hover the border and the label move to the accent together, never one without the other.",
+      "html": "<button class=\"ds-btn-ghost\">Cancel</button>",
+      "css": ".ds-btn-ghost { background: transparent; color: #5c403f; border: 1px solid #e4e2e2; border-radius: 8px; padding: 8px 14px; font: 600 13px 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; cursor: pointer; transition: color 120ms ease, border-color 120ms ease, background 120ms ease; } .ds-btn-ghost:hover { color: #c8102e; border-color: #c8102e; background: #f5f3f3; } .ds-btn-ghost:focus-visible { outline: 2px solid #c8102e; outline-offset: 2px; } .ds-btn-ghost:active { transform: translateY(1px); } .ds-btn-ghost:disabled { opacity: .5; cursor: not-allowed; }"
+    },
+    {
+      "name": "Filter Chip",
+      "kind": "chip",
+      "refersTo": "chip",
+      "description": "A pill that filters, labels or counts. The nested count rides inside as a second pill and inverts with the selection.",
+      "html": "<button class=\"ds-chip\">Epoxy <span class=\"ds-chip-n\">12</span></button>\n<button class=\"ds-chip ds-chip-sel\">Polish <span class=\"ds-chip-n\">4</span></button>",
+      "css": ".ds-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid #e4e2e2; background: #ffffff; color: #5c403f; border-radius: 999px; padding: 6px 12px; font: 600 12.5px 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; cursor: pointer; transition: background 120ms ease, border-color 120ms ease, color 120ms ease; } .ds-chip:hover { background: #f5f3f3; border-color: #c8102e; color: #c8102e; } .ds-chip:focus-visible { outline: 2px solid #c8102e; outline-offset: 2px; } .ds-chip-n { background: #e9e8e7; color: #5c403f; border-radius: 999px; padding: 0 6px; font: 800 11px 'Inter', system-ui, sans-serif; } .ds-chip-sel { background: #9e001f; border-color: #9e001f; color: #ffffff; } .ds-chip-sel:hover { background: #9e001f; border-color: #9e001f; color: #ffffff; } .ds-chip-sel .ds-chip-n { background: rgba(255,255,255,.24); color: #ffffff; }"
+    },
+    {
+      "name": "Text Field",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "The standard field. Read-only keeps full contrast and loses its affordance; disabled dims. The two never look alike.",
+      "html": "<label class=\"ds-field-label\">Project name</label>\n<input class=\"ds-field\" type=\"text\" value=\"Olathe Warehouse Phase 2\">\n<input class=\"ds-field\" type=\"text\" value=\"Read-only value\" readonly>\n<input class=\"ds-field\" type=\"text\" value=\"Disabled value\" disabled>",
+      "css": ".ds-field-label { display: block; font: 700 10.5px 'Inter', system-ui, sans-serif; letter-spacing: .05em; text-transform: uppercase; color: #5c403f; margin: 0 0 4px; } .ds-field { display: block; width: 100%; max-width: 320px; margin-bottom: 8px; background: #ffffff; color: #1b1c1c; border: 1px solid #e4e2e2; border-radius: 8px; padding: 8px 10px; min-height: 38px; font: 400 14px/1.55 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; transition: border-color 120ms ease; } .ds-field:hover { border-color: #dbdad9; } .ds-field:focus-visible { outline: 2px solid #c8102e; outline-offset: 2px; border-color: #c8102e; } .ds-field[readonly] { color: #5c403f; cursor: default; } .ds-field[readonly]:focus-visible { outline-color: #dbdad9; border-color: #e4e2e2; } .ds-field:disabled { opacity: .45; cursor: default; }"
+    },
+    {
+      "name": "Navigation Item",
+      "kind": "nav",
+      "refersTo": "nav-item",
+      "description": "A row in the fixed 240px workspace rail. Active is a 10% accent tint with Oxblood text, and the icon recolours with the label because it inherits.",
+      "html": "<nav class=\"ds-nav\">\n  <div class=\"ds-nav-section\">Pipeline</div>\n  <a class=\"ds-nav-item\" href=\"#\"><span class=\"ds-nav-ico\"><svg viewBox=\"0 0 24 24\" width=\"16\" height=\"16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\" focusable=\"false\"><rect x=\"3\" y=\"4\" width=\"18\" height=\"16\" rx=\"2\"></rect><path d=\"M9 4v16M15 4v16\"></path></svg></span>Board</a>\n  <a class=\"ds-nav-item ds-nav-item-active\" href=\"#\"><span class=\"ds-nav-ico\"><svg viewBox=\"0 0 24 24\" width=\"16\" height=\"16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\" focusable=\"false\"><path d=\"M3 13h5l1.5 3h5L16 13h5\"></path><path d=\"M5.5 5h13l2.5 8v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-5l2.5-8z\"></path></svg></span>Lead Inbox<span class=\"ds-nav-tag\">BETA</span></a>\n</nav>",
+      "css": ".ds-nav { width: 240px; background: #ffffff; border-right: 1px solid rgba(27,28,28,.1); padding: 14px; display: flex; flex-direction: column; gap: 3px; font: 400 14px/1.4 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; } .ds-nav-section { font: 700 10.5px 'Inter', system-ui, sans-serif; letter-spacing: .05em; text-transform: uppercase; color: #5c403f; opacity: .7; padding: 0 10px; margin: 0 0 4px; } .ds-nav-item { display: flex; align-items: center; gap: 10px; min-height: 42px; padding: 0 10px; border-radius: 7px; text-decoration: none; color: #1b1c1c; transition: background 120ms ease; } .ds-nav-item:hover { background: #f5f3f3; } .ds-nav-item:focus-visible { outline: 2px solid #c8102e; outline-offset: -2px; } .ds-nav-ico { width: 20px; flex: none; color: #5c403f; display: inline-flex; align-items: center; justify-content: center; pointer-events: none; } .ds-nav-item-active { background: rgba(200,16,46,.1); color: #9e001f; font-weight: 600; } .ds-nav-item-active .ds-nav-ico { color: #9e001f; } .ds-nav-tag { margin-left: auto; font: 700 8.5px/1 'Inter', system-ui, sans-serif; letter-spacing: .06em; padding: 3px 5px; border-radius: 4px; background: rgba(200,16,46,.12); color: #9e001f; white-space: nowrap; }"
+    },
+    {
+      "name": "Record Card",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "A card presents a record. White above paper, a hairline, and no shadow at rest; a 3px left border is the status channel.",
+      "html": "<article class=\"ds-card ds-card-late\">\n  <h3 class=\"ds-card-title\">Olathe Warehouse Phase 2</h3>\n  <p class=\"ds-card-meta\">Bid due Thu 18 Sep &middot; Direct &middot; Epoxy</p>\n  <div class=\"ds-card-figure\">$184,250.00</div>\n</article>",
+      "css": ".ds-card { display: block; background: #ffffff; border: 1px solid #e4e2e2; border-left: 3px solid #4a6b8a; border-radius: 12px; padding: 16px; max-width: 320px; color: #1b1c1c; font: 400 14px/1.55 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; transition: box-shadow 120ms ease, border-color 120ms ease, transform 120ms ease; } .ds-card:hover { box-shadow: 0 2px 4px rgba(60,50,40,.06), 0 10px 28px rgba(60,50,40,.10); border-color: #e9e8e7; transform: translateY(-1px); } .ds-card:focus-visible { outline: 2px solid #c8102e; outline-offset: 2px; } .ds-card-late { border-left-color: #b3261e; } .ds-card-title { margin: 0 0 3px; font: 700 13px 'Inter', system-ui, sans-serif; color: #1b1c1c; } .ds-card-meta { margin: 0 0 10px; font-size: 12px; color: #5c403f; } .ds-card-figure { font: 600 13px Consolas, 'SF Mono', ui-monospace, SFMono-Regular, Menlo, 'Roboto Mono', monospace; font-variant-numeric: tabular-nums; color: #1b1c1c; }"
+    },
+    {
+      "name": "Working Panel",
+      "kind": "card",
+      "refersTo": "card-working",
+      "description": "Recessed rather than raised: this is where you work, not a thing being presented. Its inert state dims to 55% and says why in words - it is never hidden.",
+      "html": "<section class=\"ds-panel\">\n  <div class=\"ds-panel-title\">Joint filler</div>\n  <div class=\"ds-panel-figure\">2 crew &middot; 1.5 days</div>\n</section>\n<section class=\"ds-panel ds-panel-inert\">\n  <div class=\"ds-panel-title\">Remove existing filler</div>\n  <div class=\"ds-panel-figure\">0 crew &middot; 0 days</div>\n  <div class=\"ds-panel-note\">Not affecting the price while Joint filler is off.</div>\n</section>",
+      "css": ".ds-panel { background: #f5f3f3; border: 1px solid #e4e2e2; border-radius: 10px; padding: 15px; margin: 0 0 11px; max-width: 320px; color: #1b1c1c; font: 400 14px/1.55 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; } .ds-panel-title { font: 600 13px 'Inter', system-ui, sans-serif; } .ds-panel-figure { font-variant-numeric: tabular-nums; color: #5c403f; font-size: 12px; margin-top: 2px; } .ds-panel-inert { opacity: .55; } .ds-panel-note { color: #5c403f; font-size: 11.5px; font-style: italic; margin: 9px 0 0; }"
+    },
+    {
+      "name": "Status Badge",
+      "kind": "chip",
+      "refersTo": "badge",
+      "description": "A non-interactive pill stating a record's state. Uppercase label type; the status scales, never the brand accent.",
+      "html": "<span class=\"ds-badge\">Draft</span>\n<span class=\"ds-badge ds-badge-ok\">Approved</span>\n<span class=\"ds-badge ds-badge-warn\">Needs review</span>",
+      "css": ".ds-badge { display: inline-block; background: #e9e8e7; color: #5c403f; border-radius: 999px; padding: 1px 8px; white-space: nowrap; font: 700 10.5px 'Inter', system-ui, sans-serif; letter-spacing: .05em; text-transform: uppercase; } .ds-badge-ok { background: #e3f3e6; color: #0f7b34; } .ds-badge-warn { background: #fdf6e3; color: #7a5c00; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Estimator's Desk",
+    "overview": "This is a warm paper desk with two foreign documents lying open on it. The desk is the app: a cream-white ground (#fbf9f8), brown-tinted ink, hairline rules, and a single red used sparingly enough that it still means something. The two documents are Kyle's estimate workbook and the Word proposal, and the governing idea of this whole system is that neither one is redressed in the app's clothes. The estimate grid wears the workbook's own cell fills, lifted colour-for-colour out of estimate_sheet_5.7.xlsx. The proposal preview renders at true 8-9pt in the template's own serif, on white, with a paper shadow under it. An estimator looking at either one is looking at the real artefact, not a re-skin of it. The app's job is to be the surface they sit on and the chrome around them - and to stay out of the way.\n\nThe personality that follows is warm, dense, and plainly spoken. Dense because this is a daily production tool for three or four people at a desk, not a landing page: rows are tight, labels are small caps, and a screen is expected to hold a lot. Warm because that is the only thing separating this from every grey estimating SaaS - the greys carry a brown cast, the shadows are mixed from rgba(60,50,40) rather than black, and the secondary ink is #5c403f, a genuine umber. Plainly spoken because the copy and the states do not hedge: a control that cannot affect the price says so in words rather than disappearing, and a figure that was hand-edited carries a mark saying it no longer matches the estimate.\n\nWhat this system rejects is settled and confirmed: cool neutral-grey SaaS chrome, emoji standing in for icons, a second type stack inside one page, and decorative elevation. Each of those was tried here and removed, and the reasons are written into the source at the point of removal. The palette and the type pairing are closed - new work extends this system, it does not propose a new one.",
+    "keyCharacteristics": [
+      "Warm cream ground with umber-tinted greys; a cool hairline is the tell that something is off-system",
+      "One red accent, rationed: active nav, primary action, focus ring - and nothing else",
+      "Flat surfaces separated by hairlines and tonal steps, not by shadow",
+      "Density over whitespace; small caps labels, 14px body, tight rows",
+      "Figures are tabular-nums everywhere, always, without exception",
+      "Two quarantined fidelity palettes - the workbook and the printed page - that the app palette never touches",
+      "Icons are inline SVG at 24x24, stroke-only, taking their colour from the element they sit in"
+    ],
+    "rules": [
+      { "name": "The Rationed Red Rule", "body": "Signal Red appears on the active navigation row, the primary action, and the focus ring. That is the list. Urgency, status, and emphasis each have their own scale precisely so the accent keeps meaning \"this is the thing to press\".", "section": "colors" },
+      { "name": "The Warm Cast Rule", "body": "Every grey in this system carries warmth, and every shadow is mixed from rgba(60,50,40) rather than from black. A cool neutral or a black shadow on a Treadwell screen is the single most reliable sign that a rule came from somewhere else. When in doubt, pick the warmer of two candidates.", "section": "colors" },
+      { "name": "The Corrected-Pages Rule", "body": "frontend/library.html and frontend/markup.html currently declare --red:#9e001f as their primary and describe Signal Red in a comment as \"a brighter substitute\". Those two pages are the ones that disagree with this file, not the other way around - Signal Red is primary, confirmed against the fourteen pages and the global navigation that already use it. Do not cite those comments as precedent, and do not propagate #9e001f-as-primary to a third page. Correcting them is a separate, approved change; until it happens this file is the authority and they are the exception.", "section": "colors" },
+      { "name": "The Quarantine Rule", "body": "The workbook palette and the printed-page palette reproduce documents. They never leak outward into app chrome, and app tokens never leak inward into them. A \"tidy-up\" that harmonises either one with the brand palette is a regression, not a cleanup.", "section": "colors" },
+      { "name": "The One Stack Rule", "body": "A page sets one type family and uses it for headings, buttons, body and totals alike. A total set in one face beside the sentence explaining it in another is the defect this rule exists to prevent - it has been fixed once already and should not return.", "section": "typography" },
+      { "name": "The Tabular Money Rule", "body": "Every figure that could ever sit above or below another figure gets font-variant-numeric: tabular-nums. Seventy-nine declarations across seventeen files already honour this without a single exception; it is the most consistent convention in the codebase. Figures that do not align down a column are a bug in an estimating tool, not a style preference.", "section": "typography" },
+      { "name": "The Fallback-First Rule", "body": "Never rely on a metric only Inter provides - no optical letter-spacing tuned to Inter's widths, no layout that breaks if the face is 2% wider. The page must look correct in Segoe UI, because on most of these machines that is what it is.", "section": "typography" },
+      { "name": "The 768 Rule", "body": "768px is the app's one structural breakpoint, because it is where navigation changes form. Write max-width: 767px / min-width: 768px and nothing in between. Do not introduce a seventeenth near-miss width for a single component; find the nearest existing one.", "section": "layout" },
+      { "name": "The Rail-Aware Fixed Rule", "body": "Any position: fixed element on a page with the workspace nav must offset itself under html.tw-nav-open using the rail's own width variable. Margin on body moves the flow; it does not move a fixed panel.", "section": "layout" },
+      { "name": "The Flat-By-Default Rule", "body": "A surface is flat at rest. Shadow appears in response to state - hover, drag, float - or not at all. Elevation with nothing under it is decoration, and a card is for something that is genuinely a separate object.", "section": "elevation" },
+      { "name": "The Warm Shadow Rule", "body": "An in-page shadow is mixed from rgba(60,50,40, ...). Only an element that floats clear of the page gets a black one. A black ambient shadow on a card is cold light on a warm desk.", "section": "elevation" },
+      { "name": "The Seven Strays Rule", "body": "Seven resting cards currently carry a plain box-shadow: 0 1px 3px rgba(0,0,0,.05) - a cold shadow on a surface that is not responding to anything. That is an inconsistency to be cleaned up, not a third register. Do not copy it into a new component; use a hairline, or Ambient rest if the card genuinely hovers.", "section": "elevation" },
+      { "name": "The Pill Rule", "body": "If it counts, labels, filters or tags, it is 999px. If it contains content, it is 8px or 12px. There is no middle case.", "section": "shapes" },
+      { "name": "The No Near-Miss Rule", "body": "Reuse a radius name that exists, or say in review that you could not find one. Never coin --r-s beside --r-sm, --surface-2 beside --surf-high, or any other one-letter variant of a live token. A fifth way to draw a card is a bug.", "section": "shapes" },
+      { "name": "The Inert-Not-Hidden Rule", "body": "A control that cannot currently affect the outcome is dimmed to 55% and says why in words. It is not removed. Hiding it loses what the estimator already typed and takes away their ability to see that the setting exists.", "section": "components" },
+      { "name": "The Read-Only Is Not Disabled Rule", "body": "Read-only keeps full contrast and loses its affordance. Disabled sits at 38-50% opacity. These are different states and must not look the same; conflating them is how a value the estimator is meant to read gets mistaken for one the system has switched off.", "section": "components" },
+      { "name": "The Resting State Is Not Finished Rule", "body": "A control ships with hover, focus-visible, active, disabled and - where it starts work - loading. A component with only a resting state is unfinished, and every list ships with a designed empty state and a designed error state rather than a defaulted one.", "section": "components" }
+    ],
+    "dos": [
+      "Do use the app's own warm tokens - Warm Paper (#fbf9f8) ground, Umber Ink (#5c403f) secondary text, warm hairlines - and treat the palette and type pairing as closed.",
+      "Do ration Signal Red (#c8102e) to the active nav row, the primary action, and the focus ring, and reach for the dedicated status scales for everything else.",
+      "Do put font-variant-numeric: tabular-nums on every money and quantity figure, without exception.",
+      "Do draw every glyph as inline SVG from frontend/js/icons.js at 24x24, stroke-only, currentColor, stroke-width 2, round caps.",
+      "Do reuse the existing class vocabulary before inventing one - .btn / .btn.ghost, .card, .tk for a working panel, .chip, .att-chip, the drawer's .sec / .lbl / .row3 / .note set - and say in review when nothing existing fits.",
+      "Do validate on blur, and keep read-only (full contrast, no affordance) visually distinct from disabled (38-50% opacity).",
+      "Do use min-height: 100dvh rather than 100vh on anything full-height, and text-wrap: balance on headings.",
+      "Do win on specificity rather than on source order. Twenty-one pages load their own <style> block after styles.css, so a tie in specificity is decided by which file happened to load last.",
+      "Do design the empty state and the error state for every list before the populated one."
+    ],
+    "donts": [
+      "Don't introduce a new palette, a new type pairing, a CSS framework, or an icon library. There is no Tailwind, no React and no build step here, and that is deliberate.",
+      "Don't use emoji as UI. An emoji is drawn by whatever font the machine has, cannot take the row's colour, and ignores every size token on the page.",
+      "Don't coin a near-miss of an existing token name. --r-s beside --r-sm is how this codebase acquired six conflicting radius names.",
+      "Don't put a black ambient shadow on a resting card. Flat by default; warm lift on response; black only for what floats.",
+      "Don't let a cool grey or a neutral-black hairline onto a Treadwell screen. That is the exact detail that makes a page read as somebody else's product.",
+      "Don't change geometry on the proposal editor - no borders, no padding, no widths on a cue. Background, outline and box-shadow only.",
+      "Don't harmonise the workbook fills or the printed-page styling with the app palette. They reproduce real documents and are quarantined on purpose.",
+      "Don't rely on hidden alone to hide something: a class display rule beats the attribute, and this app has shipped that bug four times. Pair it with [hidden] { display: none } at sufficient specificity.",
+      "Don't hide an element with opacity: 0 and leave it hit-testable. An invisible element still steals the click.",
+      "Don't cite frontend/library.html or frontend/markup.html's --red:#9e001f as precedent. Those two pages are the exception awaiting correction; Signal Red is primary."
+    ]
+  }
+}
