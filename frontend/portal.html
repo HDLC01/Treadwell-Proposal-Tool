@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Active Projects · Treadwell Proposal Generator</title>
 <link rel="icon" type="image/svg+xml" href="/img/treadwell-bison.svg" />
+<!-- Warm the jsdelivr connection (DNS + TLS, no bytes) before the parser reaches the CDN script tag below. -->
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
 <!-- This page styles itself and does not link styles.css, so it needs its own
      opt-out. Without it Chromium synthesizes a dark theme over the whole drawer
      and flattens every near-white surface to the same grey — which is what made

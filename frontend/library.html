@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Items and Assemblies · Treadwell Proposal Generator</title>
   <link rel="icon" type="image/svg+xml" href="/img/treadwell-bison.svg" />
+  <!-- Warm the jsdelivr connection (DNS + TLS, no bytes) before the parser reaches the CDN script tag below. -->
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
   <!-- Styles itself, like calendar.html and followups.html, so it needs its own opt-out:
        without it Chromium synthesizes a dark theme and flattens the amber "material
        removed" warning into the ordinary row background. There is no dark theme here. -->
