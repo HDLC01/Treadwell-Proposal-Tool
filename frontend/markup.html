@@ -79,8 +79,10 @@
     .how .explain { max-width:78ch; }
     .how .explain + .explain { margin-top:7px; }
 
-    /* Polish | Seal | Epoxy | Leveling | Gyp — the five SHEET LAYOUTS, rendered from the API's
-       own `layouts` array. There is deliberately no Combo tab: a combo job is two option lines,
+    /* Polish | Seal | Epoxy | Leveling | Gyp — the SHEET LAYOUTS — and then Global, which is not
+       a sheet at all but the one home for the four lines that are the same rule on every tab.
+       All of them rendered from the API's own `layouts` array, Global last so the page still
+       opens on a sheet tab. There is deliberately no Combo tab: a combo job is two option lines,
        each priced off its own tab, and backend/markup.py refuses the string by name. */
     .views { display:flex; gap:2px; background:var(--surf-low); border-radius:var(--r-lg);
       padding:3px; margin:0 0 16px; width:max-content; max-width:100%; flex-wrap:wrap; }
@@ -228,6 +230,12 @@
     .wbnote { display:flex; align-items:flex-start; gap:5px; font-size:11px; color:var(--ink-v);
       max-width:56ch; }
     .wbnote svg { flex:none; margin-top:1.5px; stroke:var(--ink-v); }
+    /* A rule filed where nothing reads it — one such row predates the Global tab on production.
+       The SAME note component, turned up: it is not an error the admin just made, so it is not
+       red, and it is not ordinary grey either, or it would read as one more caption on a row
+       full of them. Amber is what this page already uses for "you need to know this". */
+    .wbnote.warn { color:var(--warn); font-weight:600; }
+    .wbnote.warn svg { stroke:var(--warn); }
 
     /* A real <button role="switch">, styled. Native tab order, native Space/Enter, aria-checked
        as the single source of truth — no keydown handler to forget. */
@@ -302,7 +310,7 @@
   <div class="top">
     <img class="logo" src="/img/treadwell-bison.svg" alt="Treadwell" />
     <h1>Markup</h1>
-    <span class="beta" title="Being tested. These rows are where the chain's rates are edited by an admin instead of a developer. Super &amp; PTO and Soft Costs reach the estimate workbook; GP, the hard-bid discount and Bond are stored but not read yet, and the Polish beta is not wired to any of them — its engine still runs on its own hardcoded constants.">Beta test</span>
+    <span class="beta" title="Being tested. These rows are where the chain's rates are edited by an admin instead of a developer. Super &amp; PTO and Soft Costs reach the estimate workbook; GP, the hard-bid discount, Bond and the two travel figures are stored but not read yet, and the Polish beta is not wired to any of them — its engine still runs on its own hardcoded constants.">Beta test</span>
   </div>
   <div class="wrap">
     <!-- ONE SENTENCE, then the rest behind a disclosure. What used to stand here was paragraphs
@@ -326,7 +334,7 @@
          reachSentence() in markup.js, which prints under the rate box and again in the row's own
          disclosure. The badge's old present-tense promise that these rows overrode the beta's
          constants stays out by name; see the second pin in test_markup_page.py. -->
-    <p class="hint"><b>Markup rates, per sheet tab.</b>
+    <p class="hint"><b>Markup rates, per sheet tab — and the ones that aren't, on Global.</b>
       Super &amp; PTO and Soft Costs price the real bid; the other lines are stored and not read
       yet, and every row says which of the two it is.</p>
 
@@ -337,8 +345,19 @@
              focusable="false"><path d="M9 5l7 7-7 7"></path></svg>
         How the chain works
       </summary>
-      <p class="explain">The tabs are the five <b>sheet layouts</b> a bid can sit on — not work
-        types. There is no Combo: a combo job is two option lines, each priced off its own tab.</p>
+      <p class="explain">The first five tabs are the <b>sheet layouts</b> a bid can sit on — not
+        work types. There is no Combo: a combo job is two option lines, each priced off its own
+        tab.</p>
+      <p class="explain"><b>Global is the sixth, and it isn't a sheet.</b> Four lines are the same
+        rule on every priced tab — Bond is zero everywhere, the hard-bid give-back is one formula,
+        travel lodging and food are one figure each — so they're set once there and every sheet
+        tab reads them. On a sheet tab those rows show the value and say where it's set; there's
+        no second box, because one line with two rates is a price nobody chose. The gypsum tabs
+        are the exception that stays: their hard-bid cell is <b>empty</b> in Kyle's workbook, not
+        zero, so no Global rate gives them that line.</p>
+      <p class="explain">Global doesn't compound. Two of its lines aren't chain lines at all, and
+        the other two have nothing above them there, so that tab has no running total and no lump
+        sum — each row is just what it comes to.</p>
       <p class="explain">The rows run in the order the chain compounds, and each line's base is the
         <b>running total of everything above it</b> — the small figure under each amount. A rate is
         applied to that base; GP and a typed dollar figure return dollars instead.</p>

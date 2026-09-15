@@ -1110,7 +1110,9 @@ def api_library_unit_delete(unit_id: str, request: Request) -> Dict[str, Any]:
 
 # ── Markup rules ──────────────────────────────────────────────────────────────
 # The markup chain's rates as editable expressions, per sheet layout. See backend/markup.py for
-# why the key is the TAB and why `applies=false` is not the same as a zero formula.
+# why the key is the TAB, why `applies=false` is not the same as a zero formula, and why the four
+# lines that are the same rule on every sheet have ONE home (`global`) rather than a default a tab
+# may override.
 #
 # GATED LIKE VENDORS, NOT LIKE ITEMS. WRITING is admin-only: these rows decide what a bid sells
 # for. READING is open to every signed-in user, because the page shows a non-admin the formulas
@@ -1142,8 +1144,15 @@ def api_markup_rules(layout: Optional[str] = None) -> Dict[str, Any]:
         # configured" and quietly price off the hardcoded numbers this table replaces.
         raise HTTPException(400, str(exc))
     # The vocabularies ride along so the editor doesn't keep a second copy of them to drift.
+    #
+    # BOTH HALVES OF THE SPLIT, not just the union. `line_keys` is every markup line; which HOME
+    # each one has — per tab, or once on `global` — is what decides whether a row gets a box or
+    # reads "Set on the Global tab", and a page that derived that from a list of its own would be
+    # one deploy away from offering a box the API refuses.
     return {"ok": True, "rules": rows,
-            "layouts": list(markup.LAYOUTS), "line_keys": list(markup.LINE_KEYS)}
+            "layouts": list(markup.LAYOUTS), "line_keys": list(markup.LINE_KEYS),
+            "global_line_keys": list(markup.GLOBAL_LINE_KEYS),
+            "tab_line_keys": list(markup.TAB_LINE_KEYS)}
 
 
 @app.put("/api/markup/rules")
