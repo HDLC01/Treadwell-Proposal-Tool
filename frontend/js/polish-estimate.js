@@ -211,6 +211,7 @@
       material: materialTotal(),
       labor: B.laborTotal(M.labor),
       contingency: M.contingency,
+      fees: M.fees,
       conditions: M.conditions,
       sf: B.takeoffSf(M.takeoff),
       remodel_rate: remodelRate(),
@@ -625,11 +626,21 @@
 
     // Labor
     var labRows = [];
+    // A row that prices at nothing is left off -- EXCEPT TRAVEL, which is always listed.
+    //
+    // The difference is what a zero MEANS on each. An empty Polishing or Joint filler row is
+    // unfinished work, and the blockers panel at the top of this step already names it; repeating
+    // it here would say the same thing twice and put a $0 beside a line that is going to cost
+    // thousands. An empty Travel row is a legitimate answer -- a local job has no travel -- so its
+    // zero is a DECISION, and a decision is exactly what a review step is for. Leaving it off meant
+    // the one labor line an estimator is most likely to have forgotten was also the only one they
+    // could not see.
     M.labor.forEach(function (r) {
-      if (!B.laborCost(r)) return;
+      var cost = B.laborCost(r);
+      if (!cost && (r || {}).id !== "travel") return;
       labRows.push([r.label || "Labor line",
                     B.num(r.guys) + " × " + B.num(r.days) + " × " + B.money2(r.rate),
-                    esc(moneyAuto(B.laborCost(r)))]);
+                    esc(moneyAuto(cost))]);
     });
     if (!labRows.length) labRows.push(["No labor entered yet", "", ""]);
     labRows.push(["Labor Subtotal", "", mkAmt(b, "labor")]);
@@ -725,7 +736,13 @@
     r += row(condSwitch("remodel_tax", "Remodel tax") + remodelSource(),
       keyedPct("remodel_pct"), "remodel_tax", b.remodel_pct ? "" : "off");
     r += row("Total taxes", "", "taxes", "tot");
-    r += row("Fees + Textura", "", "fees", b.fees ? "" : "off");
+    // Typed, like Contingency above -- the sheet leaves B77 and C77 open and this is the line
+    // an estimator fills them in on. Marked up by everything beneath it, which is D77's own
+    // place in Kyle's column rather than a decision made here; see the note in markupChain.
+    r += '<tr' + (b.fees ? '' : ' class="off"') + '><td>Fees + Textura ' +
+      '<span class="note">yours to set</span></td><td class="pct"></td>' +
+      '<td class="amt"><input data-fees value="' + esc(nv(M.fees)) +
+      '" inputmode="decimal"></td></tr>';
     r += row(condSwitch("bond", "Bond") +
       ' <span class="note">the sheet ships this at 0% either way</span>',
       keyedPct("bond_pct"), "bond", b.bond ? "" : "off");
@@ -935,6 +952,13 @@
 
     if (el.matches("[data-contingency]")) {
       M.contingency = el.value;
+      changed(false);
+      return;
+    }
+    // `changed(false)` like contingency: the chain reprices and repaintNumbers refreshes every
+    // keyed cell, without the full rebuild that would take the caret out of the box.
+    if (el.matches("[data-fees]")) {
+      M.fees = el.value;
       changed(false);
       return;
     }

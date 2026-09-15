@@ -336,6 +336,7 @@ function expectedChain(model, asms, items, remodelRate) {
     material: material,
     labor: B.laborTotal(model.labor),
     contingency: model.contingency,
+    fees: model.fees,
     conditions: model.conditions,
     sf: B.takeoffSf(model.takeoff),
     // PASSED THROUGH RAW, never through num(). null/undefined means "no county picked" and the
@@ -1031,6 +1032,15 @@ const rendered = [];      // every string the page put on screen, for the Labour
                  bond_pct: B.pct(c.bond_pct) };
       })(),
       switches: switches(panels.innerHTML),
+      // Which labor lines the card actually lists, by label, in order.
+      laborRowLabels: (function () {
+        var m = /<table class="rev-t">[\s\S]*?<\/table>/g;
+        var tables = String(panels.innerHTML).match(m) || [];
+        var labor = tables[1] || "";
+        return labor.split("<tr").slice(1)
+          .map(function (c) { return (/<td>([\s\S]*?)<\/td>/.exec(c) || [])[1]; })
+          .filter(function (s) { return s != null; });
+      })(),
       // The label in the first column of every totalled row, in order.
       totalRowLabels: String(panels.innerHTML).split("<tr").slice(1)
         .filter((c) => /^[^>]*class="tot"/.test(c))
@@ -1056,6 +1066,55 @@ const rendered = [];      // every string the page put on screen, for the Labour
       after: readMk(b),
       expected: expectedChain(withC, ASMS, ITEMS),
       model: b.api.model().contingency,
+    };
+
+    // -- Travel is listed even at $0; a non-travel row at $0 is not --------------
+    // THE COUNTEREXAMPLE IS THE POINT. If travel happened to be priced in the fixture, asserting
+    // "travel appears" would prove nothing. Here travel has no hours and costs nothing, and
+    // Joint filler is zeroed the same way -- so the two rows differ ONLY in which one is travel.
+    const zeroTravel = clone(live);
+    zeroTravel.labor = [
+      { id: "polishing", label: "Polishing", guys: 3, days: 2, rate: 33 },
+      { id: "jointfill", label: "Joint filler", guys: 3, days: "", rate: 33 },
+      { id: "travel", label: "Travel", guys: "", days: "", rate: 33,
+        unit: "hours", guys_auto: true },
+    ];
+    const zt = build({ blob: blob({ polish_estimate: clone(zeroTravel) }) });
+    await zt.api.init();
+    zt.api.go(2);
+    out.review.zeroTravel = {
+      labels: (function () {
+        const tables = String(zt.dom.get("panels").innerHTML)
+          .match(/<table class="rev-t">[\s\S]*?<\/table>/g) || [];
+        return (tables[1] || "").split("<tr").slice(1)
+          .map((c) => (/<td>([\s\S]*?)<\/td>/.exec(c) || [])[1])
+          .filter((s) => s != null);
+      })(),
+      travelCost: B.laborCost(zeroTravel.labor[2]),
+      jointFillerCost: B.laborCost(zeroTravel.labor[1]),
+    };
+
+    // ── the Fees + Textura line is typed, and marked up the way D77 is ───────
+    // Same shape as contingency because it is the same kind of field, but the base it feeds is
+    // larger: D77 sits inside GP's own divisor, so a typed fee grows the bid by MORE than itself.
+    // That is Kyle's column, not a choice -- and it is the thing most likely to be read as a bug,
+    // so it is measured against the real chain rather than asserted to be "about right".
+    const feeRebuilds = panels.htmlWrites;
+    const beforeF = readMk(b);
+    typeInto(b, "[data-fees]", "800");
+    const withF = Object.assign(clone(live), { contingency: "5000", fees: "800" });
+    out.review.fees = {
+      noRebuild: panels.htmlWrites === feeRebuilds,
+      before: { gp: beforeF.money.gp, super_pto: beforeF.money.super_pto,
+                soft_costs: beforeF.money.soft_costs, remodel_tax: beforeF.money.remodel_tax,
+                total: beforeF.money.total },
+      after: readMk(b),
+      expected: expectedChain(withF, ASMS, ITEMS),
+      model: b.api.model().fees,
+      inputValue: (/data-fees value="([^"]*)"/.exec(panels.innerHTML) || [])[1],
+      freshSeed: B.freshModel().fees,
+      backfilled: B.migrateModel({ version: 2, takeoff: [], labor: [],
+                                   conditions: {}, contingency: 0 }).fees,
     };
 
     // ── the GP band is RECOMPUTED, not printed once ──────────────────────────
