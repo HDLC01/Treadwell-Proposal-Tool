@@ -1321,6 +1321,62 @@ const rendered = [];      // every string the page put on screen, for the Labour
 
     // A draft that arrived WITH a worksheet map: recorded, not asserted on — the page adds none of
     // its own, and what Object.assign carries through from getState is reported for the record.
+  // ── a material row: one product, priced straight off the library ───────────────────────────
+  {
+    const m = build();
+    // BOOT FIRST. Without init() the library fetch never happens, ITEMS stays empty, and a
+    // material name resolves to nothing -- which reads exactly like a broken picker. The
+    // first version of this probe skipped it and spent its evidence blaming setMaterial.
+    await m.api.init();
+    m.api.go(0);
+    clickOn(m, "[data-add-mat]");
+    const idx = m.api.model().takeoff.length - 1;
+    const row = () => m.api.model().takeoff[idx];
+    const card = () => (m.dom.get("panels").innerHTML.split('class="tk mat"')[1] || "")
+      .split("</div></div>")[0];
+
+    const seeded = clone(row());
+    typeInto(m, '[data-tk="' + idx + '"][data-k="item_name"]', "Densifier");
+    typeInto(m, '[data-tk="' + idx + '"][data-k="measurement"]', "10000");
+    const pickedUnit = row().unit;                    // must stay SF, NOT the item's "Pail"
+    const afterPick = clone(row());
+
+    // THE MONEY, against library-core's own engine rather than a number typed into this file.
+    // Densifier: $100 a pail, 1,000 SF a pail, no waste, roundup on. 10,000 SF is 10 pails.
+    const expected = L.priceLine({ item_id: "i4" }, ITEMS, 10000);
+    // READ THE NODE, NOT THE MARKUP. `changed(false)` repaints through textContent on the
+    // cost element; the panel innerHTML captured at render time never moves, so a regex over
+    // it reports the figure from before the keystroke -- em dash forever, which reads as a
+    // row that will not price.
+    const costCell = () => txt(m, '[data-cost-for="' + idx + '"]');
+    const costWithLibraryCoverage = costCell();
+
+    // A COVERAGE TYPED ON THE ROW WINS over the item's default, which is the whole reason the box
+    // is there: the same product goes further in one system than another.
+    typeInto(m, '[data-tk="' + idx + '"][data-k="coverage"]', "500");
+    const expectedTyped = L.priceLine({ item_id: "i4", coverage: 500 }, ITEMS, 10000);
+    const costWithTypedCoverage = costCell();
+
+    out.materialRow = {
+      seeded: seeded,
+      isItemKind: seeded.kind === "item",
+      // The card, not the model: an assembly row and a material row must not look the same.
+      saysMaterial: /MATERIAL/.test(m.dom.get("panels").innerHTML),
+      hasCoverageField: /data-k="coverage"/.test(m.dom.get("panels").innerHTML),
+      resolvedId: afterPick.item_id,
+      // NO UNIT ADOPTION. An item's unit is what it is BOUGHT in (Pail), not how the floor is
+      // measured. Copying it onto the row would price a 10,000 SF area in pails.
+      unitStayedSF: pickedUnit === "SF",
+      costWithLibraryCoverage: costWithLibraryCoverage,
+      expectedLibraryCost: expected.cost,
+      costWithTypedCoverage: costWithTypedCoverage,
+      expectedTypedCost: expectedTyped.cost,
+      // An assembly row beside it is untouched and still an assembly row.
+      assemblyRowsUnchanged: m.api.model().takeoff.slice(0, idx)
+        .every((r) => !r.item_id && r.kind !== "item"),
+    };
+  }
+
   // ── the three that moved here, and the two things nothing was pinning ──────────────────────
   {
     // 1. THE SWITCHES ARE ON THE TAKEOFF STEP. Nothing asserted this: wrapping the whole block in
