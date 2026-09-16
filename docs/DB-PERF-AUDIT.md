@@ -141,10 +141,10 @@ about 93 uncached list reads reach the database per day — roughly 2.8 seconds 
 day. Nobody is suffering.
 
 The reason to do it is the slope. Cost is `rows x expressions`, the `limit` is already 300, and
-every new card field adds another full pass over every blob. At 150 drafts today's 62 ms becomes
-roughly 190 ms of pure server time before a byte moves. The 320 ms maximum already recorded is
-what that feels like. Fixing it now is cheap; fixing it at 300 drafts is the same work under
-pressure.
+every new card field adds another full pass over every blob. The 62 ms above is 41 ACTIVE rows;
+at 150 active projects that is 3.7x the work, so about 230 ms of pure server time before a byte
+moves. The 320 ms maximum already recorded is what that feels like. Fixing it now is cheap;
+fixing it at 300 drafts is the same work under pressure.
 
 ---
 
