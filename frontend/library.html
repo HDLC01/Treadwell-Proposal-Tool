@@ -91,25 +91,19 @@
       justify-content:center; transition:background .12s ease, color .12s ease; }
     .icon:hover { color:var(--red); background:var(--surf-low); }
     .icon.danger:hover { color:var(--red-dark); background:var(--red-tint); }
-    /* The default switch, on item rows and in the assembly editor. A pill rather than a bare
-       track: this sits in a dense table beside three icon buttons, and an unlabelled toggle there
-       is the star's own mistake again -- a mark whose meaning you have to be told. */
-    .w-def { width:96px; }
-    .defsw { display:inline-flex; align-items:center; gap:6px; cursor:pointer;
-       white-space:nowrap; border:1px solid var(--line); border-radius:999px;
-       padding:3px 9px 3px 6px; background:var(--card); font:600 11px var(--ui);
-       color:var(--ink-v); }
-    .defsw .track { width:26px; height:15px; border-radius:999px; background:var(--surf-low);
-       border:1px solid var(--line); position:relative; flex:none; transition:background .12s; }
-    .defsw .track::after { content:""; position:absolute; top:1px; left:1px; width:11px;
-       height:11px; border-radius:50%; background:var(--ink-v); transition:left .12s,background .12s; }
-    .defsw:hover { border-color:var(--red); color:var(--red); }
-    /* ON IS THE LOUD ONE -- off is the resting state of nearly every row, so shouting there would
-       be the whole table shouting. On means a new bid starts holding this. */
-    .defsw.on { background:var(--red-tint); border-color:var(--red); color:var(--red-dark); }
-    .defsw.on .track { background:var(--red); border-color:transparent; }
-    .defsw.on .track::after { left:12px; background:#fff; }
-    .defsw:focus-visible { outline:2px solid var(--red); outline-offset:2px; }
+    /* The Defaults tab's search results, which are the way a library row becomes a default now
+       that the switch has come off the item rows and the assembly editor. A result is a button
+       because pressing it CHANGES something -- it is not a link to somewhere else. */
+    .defhit { display:flex; align-items:center; gap:10px; width:100%; text-align:left;
+       border:0; border-top:1px solid var(--line-soft); background:var(--card);
+       padding:9px 13px; font:600 12.5px var(--ui); color:var(--ink); cursor:pointer; }
+    .defhit:first-child { border-top:0; }
+    .defhit:hover { background:var(--surf-low); color:var(--red); }
+    .defhit .k { margin-left:auto; font:600 10.5px var(--ui); color:var(--ink-v);
+       letter-spacing:.04em; text-transform:uppercase; }
+    .nores { margin:0; padding:9px 13px; color:var(--ink-v); font-size:12px; }
+    #default-hits { border:1px solid var(--line); border-radius:var(--r-s);
+       background:var(--card); margin:0 0 14px; overflow:hidden; }
     /* THE GLYPH IS NOT A CLICK TARGET. The delete and duplicate handlers read their data-
        attribute off the element that was clicked, and an <svg> child would answer null and
        swallow the press. The handlers now resolve through closest() as well, so this rule is
@@ -668,13 +662,11 @@
                      last changed it, not only when, so the heading had to stop promising only
                      dates. No test pinned the old string. -->
                 <th class="n">Cost</th><th>Vendor</th><th>History</th>
-                <!-- WAS THE STAR'S SLOT. The favourite came off on 2026-09-16 and this replaced
-                     it: a material switched on here is one a new estimate opens already holding,
-                     greyed out until somebody types into it. Its own COLUMN rather than a fourth
-                     glyph in the action cell, because the other three are verbs you do to a row
-                     and this is a standing state of it -- and because a state nobody can see the
-                     name of is the thing the star got wrong. -->
-                <th class="w-def">Default</th><th class="w-act"></th>
+                <!-- NO DEFAULT COLUMN. It lived here for one day. Hanz, 2026-09-17: "all the
+                     default items in assemblies should be handled in default items in assemblies
+                     tab" -- one screen owns defaults, and a switch here would be a second place to
+                     set the same thing. The Defaults tab's own search adds them now. -->
+                <th class="w-act"></th>
               </tr>
             </thead>
             <tbody id="items-body"></tbody>
@@ -1020,11 +1012,6 @@
               <option value="SF">per SF</option>
               <option value="LF">per LF</option>
             </select>
-            <!-- renderPanel() sets the "on" class and aria-checked per the open assembly; static
-                 here only for the shape and the click target. Same control as the item rows'
-                 column, built by the same hand so the two cannot come to mean different things. -->
-            <button class="defsw" type="button" id="asm-def" role="switch" aria-checked="false">
-              <span class="track"></span>Default</button>
             <button class="icon danger" type="button" id="asm-del" title="Delete this assembly"
                     aria-label="Delete this assembly">
               <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"

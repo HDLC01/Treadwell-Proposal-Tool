@@ -284,11 +284,12 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   // in this file rather than the one test about names.
   ${fn("byHtml")}
   ${fn("datesHtml")}
-  // BEFORE renderItems and renderPanel, which both draw it. Same hazard as byHtml above, hit
-  // again on 2026-09-16: the default switch replaced the favourite star, renderItems called
-  // defaultSwitch(), and the missing lift was a ReferenceError that reddened all 152 scenarios
-  // in this file rather than the one test about defaults.
-  ${fn("defaultSwitch")}
+  // NO defaultSwitch LIFT ANY MORE. It was lifted here on 2026-09-16 because renderItems drew
+  // a default toggle in the Items and Assemblies tabs; that toggle is gone, because defaults
+  // are owned by the Defaults tab alone now and two places to set one flag is a precedence
+  // question nobody wants to answer. fn() THROWS on a name it cannot find, so leaving the
+  // dead lift here reddened all 156 scenarios in this file at once -- which is the failure
+  // mode the comment above it was written to warn about, arriving from the opposite side.
   // LIFTED, not stubbed, and it has to be lifted BEFORE the three renderers that call it.
   // renderItems, renderRefSection and renderPanel each ask icon() for a glyph now; leaving it
   // out is a ReferenceError that kills every scenario in this file at once.
@@ -298,6 +299,10 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   // assertion cannot catch an unbound identifier, and this repo has taken production down that
   // way once already. takeoffConditionDefaults goes first: renderDefaultTakeoff calls it.
   ${fn("takeoffConditionDefaults")}
+  // defaultRowActions BEFORE renderDefaultTakeoff, which calls it for every row. The
+  // Defaults tab is administrative now -- each row carries Edit and Delete -- so the
+  // renderer no longer just prints names.
+  ${fn("defaultRowActions")}
   ${fn("renderDefaultTakeoff")}
   ${fn("adminList")}
   ${fn("usageFor")}
