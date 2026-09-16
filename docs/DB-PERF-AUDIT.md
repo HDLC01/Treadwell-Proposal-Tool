@@ -3,8 +3,8 @@
 **Read this first: nothing in here has been applied.** No DDL, no migration, no index, no schema
 change of any kind was run against either database. Every number below comes from a read-only
 query or an `EXPLAIN` I ran against **production Supabase** on 2026-09-16. The recommendations
-are for Hanz to accept or reject; two of them need DDL on two separate databases, which is the
-one thing that turns a good idea into a 502.
+are for Hanz to accept or reject. Exactly one of them (finding 1) needs DDL, and it would have
+to land on two separate databases — which is the one thing that turns a good idea into a 502.
 
 What the numbers are measured against:
 
