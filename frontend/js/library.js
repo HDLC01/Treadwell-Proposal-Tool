@@ -84,20 +84,16 @@
    *
    *  The glyph is not a click target: see the pointer-events rule on `.icon svg` in library.html,
    *  and the closest() lookups in the click handler, which are the two halves of the same answer. */
-  function icon(name, filled) {
+  function icon(name) {
     var d = name === "trash"
         ? '<path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6"></path>'
       : name === "copy"
         ? '<rect x="9" y="9" width="12" height="12" rx="2"></rect>' +
           '<path d="M5 15V5a2 2 0 0 1 2-2h10"></path>'
       : name === "plus" ? '<path d="M12 5v14M5 12h14"></path>'
-      : name === "star"
-        ? '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>'
       : "";
-    // `filled` only ever applies to the star -- a favourite is either starred or not, drawn the
-    // same way a checked checkbox differs from an unchecked one, not by swapping glyphs.
     return '<svg class="ic" viewBox="0 0 24 24" width="16" height="16" ' +
-      'fill="' + (filled ? "currentColor" : "none") + '" ' +
+      'fill="none" ' +
       'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ' +
       'aria-hidden="true" focusable="false">' + d + "</svg>";
   }
@@ -647,21 +643,6 @@
     }
   }
 
-  /** A star press, immediately -- never through patchSoon. That queue exists for a typed field
-   *  whose save is worth debouncing and, for an item, worth confirming ("this is priced into
-   *  every assembly that uses it"); a favourite changes no price and no assembly, so routing it
-   *  through the same pipe would ask the estimator to confirm a change that has no consequence
-   *  to describe. One field, sent the moment the star is pressed, the same as Duplicate and
-   *  Remove already are. */
-  async function patchFavorite(kind, id, favorite) {
-    var r = await api("/api/library/" + kind + "/" + encodeURIComponent(id), {
-      method: "PATCH", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ favorite: favorite }) });
-    var j = await r.json().catch(function () { return {}; });
-    if (!r.ok) throw new Error(j.detail || j.error || ("HTTP " + r.status));
-    return j;
-  }
-
   // ── items ──────────────────────────────────────────────────────────────────
   /** A dropdown that never loses what the row already says.
    *
@@ -968,11 +949,6 @@
         "<td>" + pick("vendor", it.vendor, vendorNames(), "Vendor", ' class="cell-vendor"') + "</td>" +
         '<td class="datescell">' + datesHtml(it) + "</td>" +
         '<td class="rowact">' +
-          '<button class="icon fav' + (it.favorite ? " on" : "") + '" type="button" data-fav-item="' + esc(it.id) + '" ' +
-            'title="' + (it.favorite ? "Remove from favorites" : "Mark as a favorite") + '" ' +
-            'aria-pressed="' + (it.favorite ? "true" : "false") + '" ' +
-            'aria-label="' + (it.favorite ? "Remove " + esc(it.name) + " from favorites" : "Mark " + esc(it.name) + " as a favorite") + '">' +
-            icon("star", !!it.favorite) + "</button>" +
           '<button class="icon" type="button" data-dupe-item="' + esc(it.id) + '" title="Make a copy of this material" aria-label="Duplicate ' + esc(it.name) + '">' + icon("copy") + "</button>" +
           '<button class="icon danger" type="button" data-del-item="' + esc(it.id) + '" title="Remove this material" aria-label="Remove ' + esc(it.name) + '">' + icon("trash") + "</button></td>" +
       "</tr>";
@@ -1090,14 +1066,6 @@
       out += '<button class="arow" type="button" data-open="' + esc(a.id) + '"' +
         (a.id === openId ? ' aria-current="true"' : "") + ">" +
         '<span class="an">' + esc(a.name) +
-          // Read-only here on purpose -- one button cannot contain another, so toggling lives on
-          // #asm-fav in the opened panel; this glyph only says the state, the same way `.am`'s
-          // sort-value line says something without being interactive.
-          (a.favorite ? ' <svg class="ic arow-fav" viewBox="0 0 24 24" width="13" height="13" ' +
-            'fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" ' +
-            'stroke-linejoin="round" aria-hidden="true" focusable="false">' +
-            '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 ' +
-            '7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>' : "") +
           "</span>" +
         '<span class="am">' + a.lines.length + " line" + (a.lines.length === 1 ? "" : "s") +
         " · " + per + (p.broken_lines ? " · " + p.broken_lines + " to fix" : "") +
@@ -1802,15 +1770,6 @@
     if (!asm) return;
 
     if ($("asm-name").value !== asm.name) $("asm-name").value = asm.name;
-    if ($("asm-fav")) {
-      var favBtnEl = $("asm-fav");
-      favBtnEl.classList.toggle("on", !!asm.favorite);
-      favBtnEl.setAttribute("aria-pressed", asm.favorite ? "true" : "false");
-      var favLabel = asm.favorite ? "Remove from favorites" : "Mark as a favorite";
-      favBtnEl.title = favLabel;
-      favBtnEl.setAttribute("aria-label", favLabel);
-    }
-
     var area = $("area").value;
     var p = L.priceAssembly(asm, ITEMS, area);
     var out = "";
@@ -2611,24 +2570,6 @@
     // Reading it off e.target would make the button dead over most of its own area. The
     // pointer-events rule on `.icon svg` also prevents it; this is the half that survives
     // somebody tidying the stylesheet.
-    var favBtn = t.closest && t.closest("[data-fav-item]");
-    var favId = favBtn && favBtn.getAttribute("data-fav-item");
-    if (favId) {
-      var favIt = itemOf(favId);
-      if (!favIt) return;
-      var wantFav = !favIt.favorite;
-      favIt.favorite = wantFav;         // optimistic -- a star press is not worth a spinner
-      renderItems();
-      try {
-        await patchFavorite("items", favId, wantFav);
-      } catch (err) {
-        favIt.favorite = !wantFav;      // the server said no; put the star back
-        renderItems();
-        say("Couldn't save that. " + err.message);
-      }
-      return;
-    }
-
     var dupBtn = t.closest && t.closest("[data-dupe-item]");
     var dup = dupBtn && dupBtn.getAttribute("data-dupe-item");
     if (dup) {
@@ -2836,22 +2777,6 @@
         VENDORS = VENDORS.filter(function (x) { return x.id !== dv; });
         paint();
       } catch (err) { say("Couldn't remove that vendor. " + err.message); }
-      return;
-    }
-
-    if (t.closest && t.closest("#asm-fav")) {
-      var favAsm = current();
-      if (!favAsm) return;
-      var wantAsmFav = !favAsm.favorite;
-      favAsm.favorite = wantAsmFav;      // optimistic, same as the item star
-      renderPanel(); renderList();
-      try {
-        await patchFavorite("assemblies", favAsm.id, wantAsmFav);
-      } catch (err) {
-        favAsm.favorite = !wantAsmFav;
-        renderPanel(); renderList();
-        say("Couldn't save that. " + err.message);
-      }
       return;
     }
 
