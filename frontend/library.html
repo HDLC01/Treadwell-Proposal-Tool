@@ -563,6 +563,8 @@
               aria-controls="pane-asm">Assemblies<span class="n" id="n-asm"></span></button>
       <button type="button" role="tab" id="tab-vendors" aria-selected="false"
               aria-controls="pane-vendors">Administration</button>
+      <button type="button" role="tab" id="tab-defaults" aria-selected="false"
+              aria-controls="pane-defaults">Default Items &amp; Assemblies</button>
       <!-- "+ New assembly" USED TO SIT HERE, in a .tabaction wrapper pinned to the right-hand end
            of this strip. Hanz, 2026-08-27: "I dont like the New assembly button up top." It now
            lives at the TOP OF THE ASSEMBLY RAIL, which is the list it actually appends to — see
@@ -755,6 +757,22 @@
     </section>
 
     <!-- ── Assemblies ─────────────────────────────────────────────────── -->
+    <!-- EMPTY ON PURPOSE, AND SAYING SO. The favourite star came off Items and Assemblies on
+         2026-09-16 because what "default" should mean had not been settled; this tab is where the
+         answer will live once it is. An empty tab that explains itself is honest about that. What
+         it must NOT do is guess at the feature and ship a control nobody agreed to — that is the
+         thing being undone. -->
+    <section id="pane-defaults" role="tabpanel" aria-labelledby="tab-defaults" hidden>
+      <div class="empty">
+        <h3>Not built yet</h3>
+        <p>This is where the materials and assemblies an estimate starts with will live, so a new
+          bid is not built from an empty page every time.</p>
+        <p>The old star on Items and Assemblies marked favourites, but nothing ever read them —
+          no sort, no filter, no default. It came off while what a default should actually do
+          gets decided.</p>
+      </div>
+    </section>
+
     <section id="pane-asm" role="tabpanel" aria-labelledby="tab-asm">
       <p class="paneintro"><b>Assemblies are how we estimate them.</b> Build a system out of the
         items - a primer, a body coat, a top coat - and see what it costs per square foot at a

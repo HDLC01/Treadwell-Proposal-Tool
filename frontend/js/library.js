@@ -1860,8 +1860,9 @@
   }
 
   // ── view switch ────────────────────────────────────────────────────────────
-  var PANES = ["items", "asm", "vendors"];
-  var TAB_OF = { items: "tab-items", asm: "tab-asm", vendors: "tab-vendors" };
+  var PANES = ["items", "asm", "vendors", "defaults"];
+  var TAB_OF = { items: "tab-items", asm: "tab-asm", vendors: "tab-vendors",
+                 defaults: "tab-defaults" };
   function showView(which) {
     view = which;
     PANES.forEach(function (p) {

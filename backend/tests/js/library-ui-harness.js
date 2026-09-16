@@ -3337,6 +3337,15 @@ out.page = {
   wasteHeader: /Waste Factor/.test(html),
   roundupHeader: /Roundup\?/.test(html),
   vendorsTab: /id="tab-vendors"/.test(html),
+  // The fourth tab, and WHERE it sits: Hanz asked for it beside Administration, so the order in
+  // the strip is part of the ask rather than incidental.
+  defaultsTab: /id="tab-defaults"/.test(html),
+  defaultsTabLabel: (/id="tab-defaults"[^>]*>([^<]*)</.exec(html) || [])[1] || "",
+  defaultsTabIsLast: html.indexOf('id="tab-defaults"') > html.indexOf('id="tab-vendors"'),
+  defaultsPaneStartsHidden: /<section id="pane-defaults"[^>]*\shidden/.test(html),
+  // IT SAYS IT IS EMPTY RATHER THAN LOOKING BROKEN. A tab that opens onto nothing reads as a bug;
+  // one that explains it has not been built reads as a decision.
+  defaultsPaneExplainsItself: /Not built yet/.test(html),
   noCoverageSfHeader: !/Coverage \(SF\)/.test(html),
   noRoleHeader: !/<th[^>]*>Role<\/th>/.test(html),
 };

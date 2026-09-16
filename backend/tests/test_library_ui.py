@@ -52,6 +52,49 @@ def test_the_page_is_called_items_and_assemblies(ran):
 
 
 @needs_node
+def test_a_fourth_tab_holds_the_defaults_that_are_not_built_yet(ran):
+    """Hanz, 2026-09-16, asked for a tab beside Administration called "Default Items & Assemblies".
+
+    It is EMPTY, and it says so. The favourite star came off this page the same day because what a
+    default should mean had not been settled; the answer will live here once it is. An empty tab
+    that explains itself is the honest version of that. Guessing at the feature and shipping a
+    control nobody agreed to is the thing being undone, so it is not done again here.
+
+    THE ORDER IS PART OF THE ASK. "Beside Administration" is where he put it, so the strip's order
+    is asserted rather than left to whichever end a later edit appends to.
+
+    Mutation: drop `defaults` from PANES in library.js. The tab still renders and still looks like
+    the other three, and clicking it does nothing at all — which is why the pane's own wiring is
+    checked below rather than only the button's presence."""
+    page = ran["page"]
+    assert page["defaultsTab"], "the Default Items & Assemblies tab is not on the page"
+    assert page["defaultsTabLabel"] == "Default Items &amp; Assemblies", (
+        "the tab reads %r" % page["defaultsTabLabel"])
+    assert page["defaultsTabIsLast"], "the tab is not beside Administration, where it was asked for"
+    assert page["defaultsPaneStartsHidden"], (
+        "the new pane is not hidden at rest, so it would show under whichever tab is open")
+    assert page["defaultsPaneExplainsItself"], (
+        "the empty tab says nothing, so it reads as broken rather than as unbuilt")
+
+
+@needs_node
+def test_the_new_tab_is_wired_to_its_pane_and_not_just_drawn():
+    """A button in the tab strip with no entry in PANES renders identically to a working one and
+    does nothing when pressed. That is the failure worth a test here, because nothing else on the
+    page would look wrong.
+
+    Asserted against the two structures that do the switching, both of which have to name it:
+    `PANES` drives the loop that hides every other pane, and `TAB_OF` maps the pane to its button.
+
+    Mutation: remove "defaults" from either one."""
+    js = (FRONTEND / "js" / "library.js").read_text(encoding="utf-8", errors="replace")
+    assert '"vendors", "defaults"' in js, (
+        "PANES does not list the defaults pane, so its tab switches nothing")
+    assert "defaults: \"tab-defaults\"" in js, (
+        "TAB_OF has no entry for the defaults tab, so showView would throw on it")
+
+
+@needs_node
 def test_the_items_tab_no_longer_explains_itself(ran):
     """WAS test_each_tab_says_what_belongs_in_it, and it asserted the opposite. REWRITTEN RATHER
     THAN DELETED so the next reader finds a decision instead of a gap.
