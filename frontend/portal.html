@@ -865,6 +865,19 @@
   <div id="scrim"></div>
   <aside id="drawer"></aside>
 
+  <!-- FIRST, and ahead of auth.js in particular. The bare domain serves THIS FILE's bytes
+       rather than 307ing to it (main.py:_root), which leaves location.pathname as "/" where a
+       redirect left "/portal.html". auth.js captures the pathname into a const the moment it
+       runs and decides the sidebar's active row from it, so this has to have rewritten the
+       address bar by then. Its own header explains the rest, including why it is a file rather
+       than an inline tag and why it cannot simply live in auth.js.
+       NOTE THE MISSING SLASHES ABOVE, and do not add any. test_page_boot.py locates the auth
+       tag by searching the raw HTML for that filename written with a leading slash, so any
+       comment that spells it that way is indistinguishable from the tag itself — and, sitting
+       here above the Supabase SDK, reads as "auth.js loads before the SDK". That is how this
+       comment failed the suite twice: once as prose, and once in the sentence warning about
+       the prose. -->
+  <script src="/js/root-path.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0" integrity="sha384-NNePyabYRaJyedI6EQAY7SV5Z8/0sQkuQ5WVfhKm0H+j0KSugkI2ZMNzw/QtzAWz" crossorigin="anonymous"></script>
   <script src="/js/icons.js"></script>
   <script src="/auth.js"></script>
