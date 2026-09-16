@@ -3376,6 +3376,9 @@ out.page = {
         .map(function (m) { return m.replace(/.*="|"$/g, ""); }),
       addUsesTheAdminPattern: (pane.match(/class="addrow"/g) || []).length === 2 &&
         (pane.match(/class="addbtn"/g) || []).length === 2,
+      // Labor has a table to put Travel in, and an empty state that hides once it is there.
+      laborTable: /id="default-labor-body"/.test(pane),
+      laborEmptyState: /id="default-labor-empty"/.test(pane),
       sectionCount: (pane.match(/class="admin-section"/g) || []).length,
     };
   })(),

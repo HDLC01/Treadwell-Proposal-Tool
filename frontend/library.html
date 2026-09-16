@@ -843,7 +843,18 @@
         <div class="admin-section" id="default-labor">
           <h2>Labor</h2>
           <div class="card">
-            <div class="empty">
+            <div class="tw">
+              <table>
+                <thead><tr><th>Line</th><th class="n">Rate</th><th>How it is priced</th>
+                  <th class="w-act"></th></tr></thead>
+                <!-- FILLED BY renderDefaultLabor(). Travel is already in here before anybody adds
+                     anything: it is the labor default the estimate has always had, seeded into
+                     every new bid and appended to every old one. It was just never SHOWN as a
+                     default, which is what made it look hardcoded rather than chosen. -->
+                <tbody id="default-labor-body"></tbody>
+              </table>
+            </div>
+            <div id="default-labor-empty" class="empty" hidden>
               <h3>Nothing set yet</h3>
               <p>The labor lines a new estimate opens with.</p>
             </div>
@@ -1156,6 +1167,12 @@
   <script src="/auth.js"></script>
   <script src="/shared.js"></script>
   <!-- The pricing maths. Must precede the page script, which reads window.TWLib as it runs. -->
+  <!-- The estimate's own model, for ONE row: Travel is the labor default that already exists, and
+       the Defaults tab lists it. Loaded rather than re-typed because travelSeed's own comment
+       records the two copies that existed before drifting within a day -- and a third here would
+       have drifted unseen, since nothing on this page prices anything. It touches no DOM and runs
+       nothing on load; it is 14.6 KB gzipped of pure arithmetic. -->
+  <script src="/js/polish-bid-core.js"></script>
   <script src="/js/library-core.js"></script>
   <!-- ONE FUNCTION out of this file, and the eighteenth page to load it: TWCrm.nameOf, which is
        the app's single email→display-name convention ("kyle.loseke@…" → "Kyle Loseke"). The
