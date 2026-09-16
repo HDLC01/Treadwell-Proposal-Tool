@@ -91,6 +91,25 @@
       justify-content:center; transition:background .12s ease, color .12s ease; }
     .icon:hover { color:var(--red); background:var(--surf-low); }
     .icon.danger:hover { color:var(--red-dark); background:var(--red-tint); }
+    /* The default switch, on item rows and in the assembly editor. A pill rather than a bare
+       track: this sits in a dense table beside three icon buttons, and an unlabelled toggle there
+       is the star's own mistake again -- a mark whose meaning you have to be told. */
+    .w-def { width:96px; }
+    .defsw { display:inline-flex; align-items:center; gap:6px; cursor:pointer;
+       white-space:nowrap; border:1px solid var(--line); border-radius:999px;
+       padding:3px 9px 3px 6px; background:var(--card); font:600 11px var(--ui);
+       color:var(--ink-v); }
+    .defsw .track { width:26px; height:15px; border-radius:999px; background:var(--surf-low);
+       border:1px solid var(--line); position:relative; flex:none; transition:background .12s; }
+    .defsw .track::after { content:""; position:absolute; top:1px; left:1px; width:11px;
+       height:11px; border-radius:50%; background:var(--ink-v); transition:left .12s,background .12s; }
+    .defsw:hover { border-color:var(--red); color:var(--red); }
+    /* ON IS THE LOUD ONE -- off is the resting state of nearly every row, so shouting there would
+       be the whole table shouting. On means a new bid starts holding this. */
+    .defsw.on { background:var(--red-tint); border-color:var(--red); color:var(--red-dark); }
+    .defsw.on .track { background:var(--red); border-color:transparent; }
+    .defsw.on .track::after { left:12px; background:#fff; }
+    .defsw:focus-visible { outline:2px solid var(--red); outline-offset:2px; }
     /* THE GLYPH IS NOT A CLICK TARGET. The delete and duplicate handlers read their data-
        attribute off the element that was clicked, and an <svg> child would answer null and
        swallow the press. The handlers now resolve through closest() as well, so this rule is
@@ -648,7 +667,14 @@
                 <!-- "Dates" until 2026-09-04. The cell now names who added the material and who
                      last changed it, not only when, so the heading had to stop promising only
                      dates. No test pinned the old string. -->
-                <th class="n">Cost</th><th>Vendor</th><th>History</th><th class="w-act"></th>
+                <th class="n">Cost</th><th>Vendor</th><th>History</th>
+                <!-- WAS THE STAR'S SLOT. The favourite came off on 2026-09-16 and this replaced
+                     it: a material switched on here is one a new estimate opens already holding,
+                     greyed out until somebody types into it. Its own COLUMN rather than a fourth
+                     glyph in the action cell, because the other three are verbs you do to a row
+                     and this is a standing state of it -- and because a state nobody can see the
+                     name of is the thing the star got wrong. -->
+                <th class="w-def">Default</th><th class="w-act"></th>
               </tr>
             </thead>
             <tbody id="items-body"></tbody>
@@ -763,13 +789,36 @@
          it must NOT do is guess at the feature and ship a control nobody agreed to — that is the
          thing being undone. -->
     <section id="pane-defaults" role="tabpanel" aria-labelledby="tab-defaults" hidden>
-      <div class="empty">
-        <h3>Not built yet</h3>
-        <p>This is where the materials and assemblies an estimate starts with will live, so a new
-          bid is not built from an empty page every time.</p>
-        <p>The old star on Items and Assemblies marked favourites, but nothing ever read them —
-          no sort, no filter, no default. It came off while what a default should actually do
-          gets decided.</p>
+      <!-- TWO CATEGORIES, AND THEY ARE THE ESTIMATE'S OWN TWO STEPS rather than the library's.
+           Hanz, 2026-09-16: "one for takeoff and labor". That is why this is not Items and
+           Assemblies again under a second heading — a default is something a NEW BID starts
+           holding, and a bid is built as a takeoff and then as labor. The library's own split
+           (materials you buy vs systems built from them) is a different question and already has
+           its own two tabs.
+
+           Same container as Administration on purpose: .admin-grid of .admin-section, each a
+           heading over a card. It is the page's established shape for "a list an admin curates",
+           which is what both of these are. -->
+      <div class="admin-grid">
+        <div class="admin-section" id="default-takeoff">
+          <h2>Takeoff</h2>
+          <div class="card">
+            <div class="empty">
+              <h3>Nothing set yet</h3>
+              <p>The takeoff lines a new estimate opens with.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="admin-section" id="default-labor">
+          <h2>Labor</h2>
+          <div class="card">
+            <div class="empty">
+              <h3>Nothing set yet</h3>
+              <p>The labor lines a new estimate opens with.</p>
+            </div>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -906,6 +955,11 @@
               <option value="SF">per SF</option>
               <option value="LF">per LF</option>
             </select>
+            <!-- renderPanel() sets the "on" class and aria-checked per the open assembly; static
+                 here only for the shape and the click target. Same control as the item rows'
+                 column, built by the same hand so the two cannot come to mean different things. -->
+            <button class="defsw" type="button" id="asm-def" role="switch" aria-checked="false">
+              <span class="track"></span>Default</button>
             <button class="icon danger" type="button" id="asm-del" title="Delete this assembly"
                     aria-label="Delete this assembly">
               <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"

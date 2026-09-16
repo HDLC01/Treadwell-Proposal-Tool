@@ -78,6 +78,30 @@ def test_a_fourth_tab_holds_the_defaults_that_are_not_built_yet(ran):
 
 
 @needs_node
+def test_the_defaults_tab_splits_by_the_estimates_steps_not_the_librarys(ran):
+    """Hanz, 2026-09-16: "two categories one for takeoff and labor".
+
+    THOSE ARE THE ESTIMATE'S STEPS, NOT THIS PAGE'S. The obvious wrong move is to mirror the tabs
+    overhead and offer Default Items and Default Assemblies, because that is the split the rest of
+    the page is built on. But a default is what a NEW BID opens holding, and a bid is built as a
+    takeoff and then as labor. Materials-you-buy vs systems-built-from-them is a different
+    question, and it already has two tabs of its own.
+
+    The container is Administration's, which is what was asked for: an .admin-grid of
+    .admin-section blocks, each a heading over a card. It is this page's established shape for a
+    list an admin curates, and both of these are that.
+
+    Mutation: rename either heading, or drop a section."""
+    c = ran["page"]["defaultsCategories"]
+    assert c["takeoff"] and c["labor"], "the two categories are not both on the pane"
+    assert c["headings"] == ["Takeoff", "Labor"], (
+        "expected Takeoff then Labor, found %s" % c["headings"])
+    assert c["usesAdminGrid"], "the pane does not use Administration's container, as asked"
+    assert c["sectionCount"] == 2, (
+        "expected exactly two categories, found %s" % c["sectionCount"])
+
+
+@needs_node
 def test_the_new_tab_is_wired_to_its_pane_and_not_just_drawn():
     """A button in the tab strip with no entry in PANES renders identically to a working one and
     does nothing when pressed. That is the failure worth a test here, because nothing else on the
