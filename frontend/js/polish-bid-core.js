@@ -435,6 +435,38 @@
    *  a hardcoded cell, not a Yes/No flag, so there is no legacy cell to keep in sync and nothing
    *  for the intake page to read back. That is also why bond is the one condition the Review step
    *  could always flip safely. */
+  /** The read-back: the conditions a saved blob's CELLS state, with the cell winning.
+   *
+   *  THE MIRROR OF conditionCellWrites, and it lives beside it so the two cannot answer the same
+   *  question differently. polish-intake.js had this loop written out; polish-estimate.js did not,
+   *  and that asymmetry was a live bug rather than an untidiness: the Takeoff step built its model
+   *  from migrateModel alone, so every draft written before a condition existed showed freshModel's
+   *  ANSWER rather than the estimator's -- and the next save wrote that answer over the real one in
+   *  Kyle's workbook. joint_filler is the one that bit: it ships ON, so a project where somebody
+   *  deliberately turned it off would have had it silently turned back on.
+   *
+   *  WHY THE CELL WINS, restated here because it is the whole rule. A project that came through the
+   *  live intake has no polish_estimate yet, so migrateModel hands back defaults while the choices
+   *  the estimator actually made sit in cell_values. That is only safe while every writer writes
+   *  both places -- which conditionCellWrites is for, and which is why these two functions are
+   *  adjacent rather than one per page.
+   *
+   *  A BLANK IS NOT AN ANSWER. An absent or empty cell leaves the model's value alone: every save
+   *  writes both literals, so a blank means nobody has answered yet, and the documented default
+   *  applies rather than a silent "off". */
+  function conditionsFromCells(conditions, cells) {
+    var out = Object.assign({}, conditions || {});
+    var cv = (cells && typeof cells === "object") ? cells : {};
+    for (var key in CONDITION_CELLS) {
+      if (!CONDITION_CELLS.hasOwnProperty(key)) continue;
+      var cell = cv[CONDITION_CELLS[key].cells[0]];
+      if (cell == null || cell === "") continue;
+      out[key] = String(cell).trim().toLowerCase() ===
+                 String(CONDITION_CELLS[key].on).toLowerCase();
+    }
+    return out;
+  }
+
   function conditionCellWrites(conditions, cells) {
     var out = Object.assign({}, cells || {});
     var c = conditions || {};
@@ -729,6 +761,7 @@
     HOURS_PER_DAY: HOURS_PER_DAY, RATES: RATES, GP_BANDS: GP_BANDS,
     gpPct: gpPct, hardBidPct: hardBidPct,
     CONDITION_CELLS: CONDITION_CELLS, conditionCellWrites: conditionCellWrites,
+    conditionsFromCells: conditionsFromCells,
     laborCost: laborCost, laborTotal: laborTotal, travelManDays: travelManDays,
     filledIn: filledIn,
     takeoffSf: takeoffSf,

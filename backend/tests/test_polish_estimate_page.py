@@ -944,6 +944,80 @@ def test_the_save_carries_what_the_rest_of_the_app_reads(ran):
 
 
 @needs_node
+def test_the_three_that_moved_render_as_switches_on_the_takeoff_step(ran):
+    """THE FEATURE ITSELF, which nothing pinned until now.
+
+    Dye, joint filler and remove-existing came off the intake form on 2026-09-16 and onto this
+    step. Every test written with that change probed the MODEL and the CELLS -- and a control
+    deleted from the page still writes both of those correctly from its defaults. Wrapping the
+    whole `.tkconds` block in `if (false)`, removing all three switches from the product, left the
+    entire file GREEN. A feature nobody can see is not a feature.
+
+    NOT ON THE LABOR STEP. They describe material, not crew, and a switch sitting among priced
+    labor cards reads as though it changes one of them.
+
+    Mutation: delete the .tkconds block, or any one switch in it."""
+    t = ran["movedToTakeoff"]["onTheTakeoffStep"]
+    for key in ("joint_filler", "dye", "remove_existing_jf"):
+        assert t[key]["there"], "%s does not render on the Takeoff step" % key
+    assert ran["movedToTakeoff"]["notOnTheLaborStep"], (
+        "the moved conditions render on the Labor step, where they read as priced labor")
+
+
+@needs_node
+def test_remove_existing_dims_while_joint_filler_is_off(ran):
+    """The `needs` rule these carried on the intake form, kept.
+
+    Remove-existing adds a fourth hand to the joint-filler crew, so with no joint filler there is
+    no crew for it to be the fourth hand of. DIMMED, NOT HIDDEN AND NOT DISABLED -- the convention
+    this page already applies to Travel on a local job. Its answer still has to reach Polish!F29
+    whichever way it points, because a blank Yes/No cell is not "No" to Kyle's formulas.
+
+    HOW THIS NEARLY PASSED WHILE BROKEN: the harness probe first closed over ONE innerHTML
+    snapshot taken before the gate was exercised, so it reported the markup from before the
+    re-render and the gate read as working. It gave itself away by disagreeing with itself --
+    joint filler off AND remove-existing undimmed in the same read, which cannot both be true. The
+    probe now re-reads the panel on every call.
+
+    Mutation: drop the third argument from the condSwitch call for remove_existing_jf."""
+    m = ran["movedToTakeoff"]
+    assert m["gatedWhenJointFillerOff"], (
+        "remove-existing is not dimmed while joint filler is off")
+    assert m["ungatedWhenJointFillerOn"], (
+        "remove-existing stays dimmed after joint filler is switched on")
+
+
+@needs_node
+def test_the_takeoff_step_takes_its_conditions_from_the_cells(ran):
+    """THE CELL WINS WHERE THERE IS ONE, the rule polish-intake.js has always applied, now applied
+    here through the same shared reader.
+
+    THIS WAS A LIVE DEFECT IN THE FIRST VERSION OF THIS CHANGE. This page built its model from
+    migrateModel alone, which backfills freshModel's DEFAULT for any key a saved blob never
+    stated. Every draft written before these three were model keys -- which is every draft that
+    existed -- would have shown this step the defaults rather than what the estimator answered on
+    intake, and the next save would have written those defaults back over the real answers in
+    Polish!E25/E29/F29.
+
+    joint_filler is the one that bites: it ships ON, so a project where somebody deliberately
+    turned it off would have had it quietly turned back on and the downloaded workbook would have
+    said Yes. That is a wrong document, not a wrong screen.
+
+    A BLANK IS NOT AN ANSWER. Every save writes both literals, so an empty cell means nobody has
+    answered yet and the documented default stands.
+
+    Mutation: remove the conditionsFromCells call from adopt()."""
+    h = ran["hydratedFromCells"]
+    assert h["joint_filler"] is False, (
+        "the cell said No and the page still shows freshModel's Yes -- the estimator's answer is "
+        "about to be overwritten")
+    assert h["dye"] is True, "the cell said Yes and the page did not take it"
+    assert h["remove_existing_jf"] is True, "the cell said Yes and the page did not take it"
+    assert h["blankLeavesTheDefault"], (
+        "a blank cell overrode the model, but a blank means nobody has answered yet")
+
+
+@needs_node
 def test_the_save_writes_the_condition_cells_and_no_others(ran):
     """This page stopped writing state.cell_values when the workbook left it: there is no cell to
     write an assembly into. Writing a partial PRICING map would be worse than writing none —

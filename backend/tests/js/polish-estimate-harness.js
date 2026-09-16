@@ -1321,6 +1321,72 @@ const rendered = [];      // every string the page put on screen, for the Labour
 
     // A draft that arrived WITH a worksheet map: recorded, not asserted on — the page adds none of
     // its own, and what Object.assign carries through from getState is reported for the record.
+  // ── the three that moved here, and the two things nothing was pinning ──────────────────────
+  {
+    // 1. THE SWITCHES ARE ON THE TAKEOFF STEP. Nothing asserted this: wrapping the whole block in
+    //    `if (false)` -- deleting all three from the product -- left every test in this file green,
+    //    because they all probe the MODEL and the CELLS, which a deleted control still writes
+    //    correctly from its defaults. A feature nobody can see is not a feature.
+    const s = build();
+    s.api.go(0);                                         // the Takeoff step
+    // READS THE PANEL FRESH ON EVERY CALL, below. Closing over one innerHTML snapshot is the
+    // trap this repo already has a name for: the gate re-renders, and a closed-over string
+    // reports the markup from BEFORE it, so a broken gate reads as a working one. Caught by
+    // the probe disagreeing with itself -- joint filler off AND remove-existing not dimmed
+    // in the same read, which cannot both be true.
+    const sw = (key) => {
+      const m = new RegExp('<span class="mw-sw([^"]*)" data-cond="' + key + '"').exec(s.dom.get("panels").innerHTML);
+      return m ? { there: true, on: / on/.test(m[1]), inert: /inert/.test(m[1]) } : { there: false };
+    };
+    // 2. THE GATE. remove_existing_jf dims while joint filler is off -- its `needs` rule from the
+    //    intake form. Dimmed, NOT hidden and NOT disabled: it adds a fourth hand to a crew that is
+    //    not there, so it moves nothing, but its answer still has to reach Polish!F29 either way.
+    s.api.model().conditions.joint_filler = false;
+    s.api.go(0);
+    const gatedOff = sw("remove_existing_jf");
+    s.api.model().conditions.joint_filler = true;
+    s.api.go(0);
+    const gatedOn = (function () {
+      const m = /<span class="mw-sw([^"]*)" data-cond="remove_existing_jf"/.exec(
+        s.dom.get("panels").innerHTML);
+      return m ? { inert: /inert/.test(m[1]) } : { inert: null };
+    })();
+    out.movedToTakeoff = {
+      onTheTakeoffStep: { joint_filler: sw("joint_filler"), dye: sw("dye"),
+                          remove_existing_jf: sw("remove_existing_jf") },
+      gatedWhenJointFillerOff: gatedOff.inert,
+      ungatedWhenJointFillerOn: gatedOn.inert === false,
+      // Not on the Labor step, where they would read as priced labor.
+      notOnTheLaborStep: (function () {
+        const t = build(); t.api.go(1);
+        return !/data-cond="joint_filler"/.test(t.dom.get("panels").innerHTML);
+      })(),
+    };
+  }
+
+  {
+    // THE CELL WINS OVER THE MODEL, on this page as on intake. A draft whose blob never stated
+    // these keys -- every draft written before they were model keys -- must take the estimator's
+    // real answer out of cell_values rather than freshModel's default. Before the shared
+    // conditionsFromCells reader, this page read the model alone: it would have shown joint filler
+    // ON for a project where somebody turned it off, then written that Yes back over their No.
+    const h = build({ blob: blob({
+      polish_estimate: (function () { const m = clone(MODEL); delete m.conditions; return m; })(),
+      cell_values: { "Polish!E29": "No", "Polish!E25": "Yes", "Polish!F29": "Yes" },
+    }) });
+    out.hydratedFromCells = {
+      joint_filler: h.api.model().conditions.joint_filler,   // No  -> false, NOT freshModel's true
+      dye: h.api.model().conditions.dye,                     // Yes -> true
+      remove_existing_jf: h.api.model().conditions.remove_existing_jf,
+      // A BLANK IS NOT AN ANSWER: an absent cell leaves the model's value alone, because every
+      // save writes both literals and a blank therefore means nobody has answered yet.
+      blankLeavesTheDefault: (function () {
+        const k = build({ blob: blob({ cell_values: { "Polish!E29": "" } }) });
+        return k.api.model().conditions.joint_filler === true;
+      })(),
+    };
+  }
+
     const legacy = build({ blob: blob({ cell_values: { "Polish!D82": 41000 } }) });
     await legacy.api.init();
     typeInto(legacy, '[data-tk="0"][data-k="measurement"]', "9000");

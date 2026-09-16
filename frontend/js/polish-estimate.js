@@ -67,6 +67,20 @@
   function adopt(blob) {
     state = blob || {};
     M = B.migrateModel(state.polish_estimate);
+    // THE CELL WINS WHERE THERE IS ONE, the same rule polish-intake.js has always applied, through
+    // the same shared reader so the two screens cannot disagree about one answer.
+    //
+    // THIS WAS A LIVE BUG UNTIL THE THREE MOVED HERE. migrateModel alone hands back freshModel's
+    // defaults for any key a saved blob never stated, so a draft written before dye, joint filler
+    // and remove-existing were model keys would have shown this step the DEFAULTS rather than what
+    // the estimator answered on intake -- and the next save would have written those defaults over
+    // the real answers in Polish!E25/E29/F29. joint_filler is the one that bites: it ships ON, so a
+    // project where somebody deliberately turned it off would have had it quietly turned back on
+    // and the downloaded workbook would have said Yes.
+    //
+    // Safe only because every writer writes both places: saveSoon puts all eight cells back through
+    // conditionCellWrites on every save, so the cell can never be the staler of the two.
+    M.conditions = B.conditionsFromCells(M.conditions, state.cell_values);
     // BEFORE THE FIRST PAINT, not on the first edit. `changed()` is what normally keeps a derived
     // Guys figure current, and nothing calls it on load -- so without this a reopened draft shows
     // Travel's Guys box empty until somebody touches an unrelated field, and prices it at nothing
