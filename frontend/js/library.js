@@ -1895,6 +1895,57 @@
     renderDefaultLabor();
   }
 
+  // ── the defaults, split by work type ───────────────────────────────────────
+  /** The four work types, in the order the rest of the app already names them.
+   *
+   *  NOT A LIST INVENTED HERE. It is backend/leads.py's `_WORK_TYPES`, which is also the order of
+   *  the Work Type radios on the intake screen and the order detect_work_type's answers come out
+   *  in. Written once so that a fifth one reaches both strips and every renderer from one edit
+   *  instead of from six literals.
+   *
+   *  WHAT THE SUB-TABS CAN AND CANNOT MEAN is spelled out in full beside the markup in
+   *  library.html, because that is where a reader meets them. The short version, because it is
+   *  the reason everything below writes the SAME rows into four panels: being a default is stored
+   *  as `favorite`, one boolean per library row, and a boolean cannot say "polish but not epoxy".
+   *  So each renderer addresses its panel BY WORK TYPE while handing all four the same list --
+   *  and picking the rows for one work type is then the single line that changes, per renderer,
+   *  on the day the storage can tell the four apart. */
+  var DEFAULT_WORK_TYPES = ["epoxy", "polish", "combo", "gyp"];
+  /** The categories whose card carries a strip. Both of them -- the ask was both. */
+  var DEFAULT_CATEGORIES = ["takeoff", "labor"];
+
+  /** Switch one category's strip to one work type.
+   *
+   *  THE SAME SHAPE AS showView further down, deliberately: one pass that writes aria-selected on
+   *  every tab in the strip and `hidden` on every panel. Touching only the two that changed is
+   *  exactly how a strip ends up reporting two selected tabs to a screen reader, and it is a
+   *  state nothing on screen would look wrong about.
+   *
+   *  AND NO VARIABLE REMEMBERING THE CHOICE. `aria-selected` IS which tab is open -- it is what
+   *  the browser tells a screen reader and what the stylesheet draws from -- so a
+   *  `defaultWorkType` object beside it would be a second copy of one truth, free to disagree
+   *  with the strip the estimator is looking at. The two strips stay independent because each
+   *  call names its own category and touches only that category's ids, not because something is
+   *  holding two values apart.
+   *
+   *  Quiet about elements that are not there. Every caller today is a click on a tab that exists,
+   *  but the takeoff renderer this pane is waiting for will call it after a load, and a category
+   *  whose strip has not been built yet is not a reason to throw. */
+  function showDefaultWorkType(cat, wt) {
+    DEFAULT_WORK_TYPES.forEach(function (w) {
+      var tab = $("default-tab-" + cat + "-" + w);
+      var pane = $("default-pane-" + cat + "-" + w);
+      if (tab) tab.setAttribute("aria-selected", String(w === wt));
+      if (pane) pane.hidden = w !== wt;
+    });
+  }
+  DEFAULT_CATEGORIES.forEach(function (cat) {
+    DEFAULT_WORK_TYPES.forEach(function (wt) {
+      var tab = $("default-tab-" + cat + "-" + wt);
+      if (tab) tab.addEventListener("click", function () { showDefaultWorkType(cat, wt); });
+    });
+  });
+
   /** The Labor defaults. Travel is in here before anybody adds anything.
    *
    *  IT IS NOT A NEW DEFAULT, it is the one that was always there and never shown. Every new
@@ -1908,10 +1959,18 @@
    *
    *  BUILT IN, so it carries no remove control. Taking it off is a change to what every bid opens
    *  with, and the estimate has no way to express "no travel row at all" -- the row dims itself on
-   *  a local job instead, which is the behaviour that replaces deleting it. */
+   *  a local job instead, which is the behaviour that replaces deleting it.
+   *
+   *  THE SAME ROWS INTO ALL FOUR WORK-TYPE PANELS, and for Travel that is not even a compromise:
+   *  the estimate seeds it on every bid whatever its work type, so a Travel row under Epoxy,
+   *  Polish, Combo and Gyp is the literal truth about what a new bid opens holding. The rows are
+   *  built ONCE, above the loop, because four calls to travelSeed() would be four objects and the
+   *  next reader would reasonably wonder which panel was meant to differ.
+   *
+   *  The loop is what the pane is buying in advance. The day `favorite` becomes per-work-type,
+   *  `rows` moves inside the loop and gets filtered by `wt`; the markup, the strips and this
+   *  function's shape all stay exactly as they are. */
   function renderDefaultLabor() {
-    var body = $("default-labor-body");
-    if (!body) return;
     var B = window.TWPolishBid;
     var rows = B && B.travelSeed ? [B.travelSeed()] : [];
     var out = "";
@@ -1926,8 +1985,14 @@
         '<td class="rowact"><span class="builtin">Built in</span></td>' +
         "</tr>";
     }
-    body.innerHTML = out;
-    if ($("default-labor-empty")) $("default-labor-empty").hidden = rows.length > 0;
+    for (var w = 0; w < DEFAULT_WORK_TYPES.length; w++) {
+      var wt = DEFAULT_WORK_TYPES[w];
+      var body = $("default-labor-body-" + wt);
+      if (!body) continue;
+      body.innerHTML = out;
+      var blank = $("default-labor-empty-" + wt);
+      if (blank) blank.hidden = rows.length > 0;
+    }
   }
 
   // ── view switch ────────────────────────────────────────────────────────────

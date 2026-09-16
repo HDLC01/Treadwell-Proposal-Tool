@@ -65,6 +65,31 @@
       box-shadow:0 1px 2px rgba(92,64,63,.14); }
     .views .n { opacity:.6; margin-left:6px; font-weight:500; font-variant-numeric:tabular-nums; }
 
+    /* Epoxy | Polish | Combo | Gyp, INSIDE one defaults card.
+
+       SUBORDINATE TO .views, and that is the whole design constraint rather than a preference.
+       There is now a second strip of tabs a few hundred pixels below the page's primary one, and
+       two segmented pills of equal weight read as two equal choices - the reader has to work out
+       which strip owns the other, and on a narrow window they stack into what looks like eight
+       peer tabs. So this is the quiet form of the same control: no tray behind it, a step down in
+       type size, and the selected tab marked with ink and a rule under it instead of a raised
+       white pill.
+
+       It also sits INSIDE the card rather than under the h2, which says what it belongs to before
+       anybody reads a word of it. The card clips (overflow:hidden), so the strip meets the
+       rounded top corners the same way the full-bleed table head does.
+
+       The hairline is the card's own top rule for the panel below; the selected tab's 2px mark
+       sits ON it via the negative margin, so the two do not draw a four-pixel stack. */
+    .subviews { display:flex; gap:2px; padding:0 6px; background:var(--card);
+      border-bottom:1px solid var(--line); }
+    .subviews button { border:0; background:none; padding:9px 12px 7px; cursor:pointer;
+      font:600 12px var(--ui); color:var(--ink-v); border-bottom:2px solid transparent;
+      margin-bottom:-1px; transition:color .15s ease, border-color .15s ease; }
+    .subviews button:hover { color:var(--red-dark); }
+    .subviews button[aria-selected="true"] { color:var(--red-dark);
+      border-bottom-color:var(--red); }
+
     /* DEPTH IS A BORDER AND A TONAL STEP, not a drop shadow. The card used to carry one and the
        page read as a scattering of floating tiles; the only thing here that genuinely floats is
        the picker's results list, which keeps its shadow because it overlaps the rows below. */
@@ -799,6 +824,39 @@
            Same container as Administration on purpose: .admin-grid of .admin-section, each a
            heading over a card. It is the page's established shape for "a list an admin curates",
            which is what both of these are. -->
+
+      <!-- THE SUB-TABS ARE STRUCTURE, AND THE SENTENCE UNDER THEM IS WHY. Hanz, 2026-09-16,
+           asked for a work-type split inside both categories and called it "future proofing",
+           which is the honest description: the tabs are here before the storage that would let
+           them differ.
+
+           WHAT IS ACTUALLY STORED IS ONE BOOLEAN. Marking a material or an assembly a default
+           sets `favorite` on its library_items / library_assemblies row -- see backend/library.py,
+           where the flag is read and written as bool(payload.get("favorite")). A boolean has two
+           states, so it can say "this is a default" and "this is not"; there is no third state in
+           which it is a default for polish and not for epoxy. Every sub-tab therefore shows the
+           same list, and this page says so rather than letting four tabs imply four lists.
+
+           WHAT WOULD HAVE TO CHANGE, so the next person does not have to work it out:
+             1. Storage. `favorite` becomes a set of work types -- either a text[] / jsonb column
+                on both tables (library_items and library_assemblies), or a join table of
+                (row id, work_type). The DDL runs on BOTH databases, prod Supabase and the
+                separate staging Postgres, and staging needs the PostgREST schema reload after.
+             2. backend/library.py. The two `out["favorite"] = bool(...)` coercions become a
+                clean-and-validate against the four known work types, and _shape_item and
+                _shape_assembly return the list instead of the bool.
+             3. The row switch. `defaultSwitch()` in js/library.js draws one on/off control per
+                row; it becomes per-work-type, or the row gains a way to say WHICH.
+             4. js/library.js's renderDefaultLabor and the takeoff renderer that will join it:
+                each already writes into a panel addressed BY WORK TYPE, so they filter their
+                rows by that key instead of writing the same list four times. That is the only
+                step the markup here is buying in advance, and it is the only one that would
+                otherwise mean moving every element on this pane.
+           Nothing below invents any of it. -->
+      <p class="paneintro"><b>Every work type shows the same list, for now.</b> Marking something
+        a default is a single on/off switch, so it cannot yet mean "a default for polish but not
+        for epoxy" - these tabs are here so that when it can, nothing has to move.</p>
+
       <!-- A WAY IN, NOT A FILTER OVER WHAT IS ALREADY HERE. Hanz: "for when entering the
            defaults". The switch on an item or assembly row is one way to make something a
            default; this is the other, and it is the one that works when you know what you want
@@ -823,13 +881,65 @@
         <div class="admin-section" id="default-takeoff">
           <h2>Takeoff</h2>
           <div class="card">
-            <div class="empty">
-              <h3>Nothing set yet</h3>
-              <p>The takeoff lines a new estimate opens with.</p>
+            <div class="subviews" role="tablist" aria-label="Takeoff defaults by work type">
+              <button type="button" role="tab" id="default-tab-takeoff-epoxy"
+                      aria-selected="true"
+                      aria-controls="default-pane-takeoff-epoxy">Epoxy</button>
+              <button type="button" role="tab" id="default-tab-takeoff-polish"
+                      aria-selected="false"
+                      aria-controls="default-pane-takeoff-polish">Polish</button>
+              <button type="button" role="tab" id="default-tab-takeoff-combo"
+                      title="Epoxy and polish on one bid"
+                      aria-selected="false"
+                      aria-controls="default-pane-takeoff-combo">Combo</button>
+              <button type="button" role="tab" id="default-tab-takeoff-gyp"
+                      title="Gypsum underlayment"
+                      aria-selected="false"
+                      aria-controls="default-pane-takeoff-gyp">Gyp</button>
+            </div>
+            <!-- FOUR PANELS HOLDING THE SAME THING, which is the shape the storage will need and
+                 not a placeholder for it. One panel re-rendered on every click would read the
+                 same to the eye and would have to be pulled apart again the day a takeoff default
+                 belongs to one work type: the panel a tab controls has to exist for the tab to be
+                 a tab at all. -->
+            <div id="default-pane-takeoff-epoxy" role="tabpanel"
+                 aria-labelledby="default-tab-takeoff-epoxy">
+              <div class="empty">
+                <h3>Nothing set yet</h3>
+                <p>The takeoff lines a new estimate opens with.</p>
+              </div>
+            </div>
+            <div id="default-pane-takeoff-polish" role="tabpanel"
+                 aria-labelledby="default-tab-takeoff-polish" hidden>
+              <div class="empty">
+                <h3>Nothing set yet</h3>
+                <p>The takeoff lines a new estimate opens with.</p>
+              </div>
+            </div>
+            <div id="default-pane-takeoff-combo" role="tabpanel"
+                 aria-labelledby="default-tab-takeoff-combo" hidden>
+              <div class="empty">
+                <h3>Nothing set yet</h3>
+                <p>The takeoff lines a new estimate opens with.</p>
+              </div>
+            </div>
+            <div id="default-pane-takeoff-gyp" role="tabpanel"
+                 aria-labelledby="default-tab-takeoff-gyp" hidden>
+              <div class="empty">
+                <h3>Nothing set yet</h3>
+                <p>The takeoff lines a new estimate opens with.</p>
+              </div>
             </div>
             <!-- THE THIRD WAY IN, and it exists because the other two both assume you already
                  know the thing. The row switch needs you to find the row; the search needs you to
-                 name what you are after. This is for sitting down to set the defaults up. -->
+                 name what you are after. This is for sitting down to set the defaults up.
+
+                 OUTSIDE THE FOUR PANELS, AND THAT IS THE POINT. What it adds is one boolean, so
+                 whatever it adds becomes a default under every work type at once. Sitting inside
+                 the open panel it would read as "add a takeoff default FOR EPOXY", which is a
+                 promise this page cannot keep. At the foot of the card it belongs to the card,
+                 which is exactly the scope it really has. It moves inside the panel on the day
+                 the storage can tell the four apart. -->
             <div class="addrow" data-addrow-default="takeoff">
               <button class="addbtn" type="button" data-add-default="takeoff">
                 <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
@@ -843,24 +953,91 @@
         <div class="admin-section" id="default-labor">
           <h2>Labor</h2>
           <div class="card">
-            <div class="tw">
-              <table>
-                <thead><tr><th>Line</th><th class="n">Rate</th><th>How it is priced</th>
-                  <th class="w-act"></th></tr></thead>
-                <!-- FILLED BY renderDefaultLabor(). Travel is already in here before anybody adds
-                     anything: it is the labor default the estimate has always had, seeded into
-                     every new bid and appended to every old one. It was just never SHOWN as a
-                     default, which is what made it look hardcoded rather than chosen. -->
-                <tbody id="default-labor-body"></tbody>
-              </table>
+            <div class="subviews" role="tablist" aria-label="Labor defaults by work type">
+              <button type="button" role="tab" id="default-tab-labor-epoxy"
+                      aria-selected="true"
+                      aria-controls="default-pane-labor-epoxy">Epoxy</button>
+              <button type="button" role="tab" id="default-tab-labor-polish"
+                      aria-selected="false"
+                      aria-controls="default-pane-labor-polish">Polish</button>
+              <button type="button" role="tab" id="default-tab-labor-combo"
+                      title="Epoxy and polish on one bid"
+                      aria-selected="false"
+                      aria-controls="default-pane-labor-combo">Combo</button>
+              <button type="button" role="tab" id="default-tab-labor-gyp"
+                      title="Gypsum underlayment"
+                      aria-selected="false"
+                      aria-controls="default-pane-labor-gyp">Gyp</button>
             </div>
-            <div id="default-labor-empty" class="empty" hidden>
-              <h3>Nothing set yet</h3>
-              <p>The labor lines a new estimate opens with.</p>
+            <!-- FOUR TABLES, AND renderDefaultLabor() FILLS ALL FOUR WITH THE SAME ROWS. Travel
+                 is in every one of them before anybody adds anything: it is the labor default the
+                 estimate has always had, seeded into every new bid and appended to every old one.
+                 It was just never SHOWN as a default, which is what made it look hardcoded rather
+                 than chosen -- and it is genuinely seeded on all four work types, so showing it
+                 under all four is not the same compromise the takeoff lists are making. -->
+            <div id="default-pane-labor-epoxy" role="tabpanel"
+                 aria-labelledby="default-tab-labor-epoxy">
+              <div class="tw">
+                <table>
+                  <thead><tr><th>Line</th><th class="n">Rate</th><th>How it is priced</th>
+                    <th class="w-act"></th></tr></thead>
+                  <tbody id="default-labor-body-epoxy"></tbody>
+                </table>
+              </div>
+              <div id="default-labor-empty-epoxy" class="empty" hidden>
+                <h3>Nothing set yet</h3>
+                <p>The labor lines a new estimate opens with.</p>
+              </div>
+            </div>
+            <div id="default-pane-labor-polish" role="tabpanel"
+                 aria-labelledby="default-tab-labor-polish" hidden>
+              <div class="tw">
+                <table>
+                  <thead><tr><th>Line</th><th class="n">Rate</th><th>How it is priced</th>
+                    <th class="w-act"></th></tr></thead>
+                  <tbody id="default-labor-body-polish"></tbody>
+                </table>
+              </div>
+              <div id="default-labor-empty-polish" class="empty" hidden>
+                <h3>Nothing set yet</h3>
+                <p>The labor lines a new estimate opens with.</p>
+              </div>
+            </div>
+            <div id="default-pane-labor-combo" role="tabpanel"
+                 aria-labelledby="default-tab-labor-combo" hidden>
+              <div class="tw">
+                <table>
+                  <thead><tr><th>Line</th><th class="n">Rate</th><th>How it is priced</th>
+                    <th class="w-act"></th></tr></thead>
+                  <tbody id="default-labor-body-combo"></tbody>
+                </table>
+              </div>
+              <div id="default-labor-empty-combo" class="empty" hidden>
+                <h3>Nothing set yet</h3>
+                <p>The labor lines a new estimate opens with.</p>
+              </div>
+            </div>
+            <div id="default-pane-labor-gyp" role="tabpanel"
+                 aria-labelledby="default-tab-labor-gyp" hidden>
+              <div class="tw">
+                <table>
+                  <thead><tr><th>Line</th><th class="n">Rate</th><th>How it is priced</th>
+                    <th class="w-act"></th></tr></thead>
+                  <tbody id="default-labor-body-gyp"></tbody>
+                </table>
+              </div>
+              <div id="default-labor-empty-gyp" class="empty" hidden>
+                <h3>Nothing set yet</h3>
+                <p>The labor lines a new estimate opens with.</p>
+              </div>
             </div>
             <!-- NOT OPTIONAL ON THIS ONE. Labor lines are not library rows -- there is no Labor
                  tab to switch anything on from, and nothing for the search above to return. They
-                 are typed here, so this button is the only way a labor default gets made. -->
+                 are typed here, so this button is the only way a labor default gets made.
+
+                 AND OUTSIDE THE FOUR PANELS, for the reason written out at Takeoff's own add row
+                 above: what these buttons add is one boolean, so it lands under every work type
+                 at once, and a control that sits inside the open panel promises otherwise. -->
             <div class="addrow" data-addrow-default="labor">
               <button class="addbtn" type="button" data-add-default="labor">
                 <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"

@@ -154,11 +154,238 @@ def test_travel_shows_as_the_labor_default_it_already_was(ran):
     was anywhere to SEE it, which is what made it read as hardcoded rather than as a default
     somebody chose.
 
-    Mutation: drop the tbody, and Travel has nowhere to render."""
+    ONE TABLE PER WORK TYPE from 2026-09-17. The category's card now holds four panels, and a
+    sub-tab that switches to a panel with no table in it is worse than no sub-tab: the estimator
+    reads it as "no Travel on a gyp job", which is false — the estimate seeds Travel on every bid
+    whatever its work type.
+
+    Mutation: drop one tbody, and one work type's Travel has nowhere to render."""
+    want = ["epoxy", "polish", "combo", "gyp"]
     c = ran["page"]["defaultsCategories"]
-    assert c["laborTable"], "the Labor category has no table for Travel to render into"
-    assert c["laborEmptyState"], (
-        "the Labor category has no empty state, so a future removal would leave a bare table head")
+    assert c["laborTables"] == want, (
+        "the Labor category has tables for %s, not for all four work types" % c["laborTables"])
+    assert c["laborEmptyStates"] == want, (
+        "the Labor category has empty states for %s, so a future removal would leave a bare "
+        "table head under the rest" % c["laborEmptyStates"])
+
+
+# ── work-type sub-tabs, 2026-09-16 ────────────────────────────────────────
+# Hanz: sub-tabs for each work type inside both Takeoff and Labor, and he called it "future
+# proofing". That phrase is the constraint these tests are written against. The structure is
+# real and is asserted as real; what it cannot yet do is hold four different lists, because
+# being a default is one boolean on a library row, and so the tests below assert the page SAYS
+# that rather than pretending otherwise.
+@needs_node
+def test_both_defaults_categories_split_by_the_same_four_work_types(ran):
+    """THE FOUR ARE THE APP'S OWN FOUR, IN THE APP'S OWN ORDER. epoxy, polish, combo, gyp is
+    backend/leads.py's _WORK_TYPES, the order of the Work Type radios on the intake screen, and
+    the order detect_work_type's answers come out in. They are written out here rather than read
+    back from library.js, because a test that fetched the list from the code it is checking would
+    be perfectly happy with a page that shipped three of them.
+
+    THE SAME ORDER IN BOTH CATEGORIES. Two strips a few centimetres apart offering the same four
+    names in a different order is the kind of thing nobody notices and everybody misclicks.
+
+    AND THE SCRIPT HAS TO KNOW THE SAME FOUR as the markup drew. A tab in the page that
+    DEFAULT_WORK_TYPES has never heard of is a tab whose panel is never hidden and never shown -
+    and it would leave every other assertion in this file green, because the markup block reads
+    the markup and everything executed reads that list.
+
+    Mutation: drop "gyp" from DEFAULT_WORK_TYPES in library.js, or delete the Gyp button from
+    either strip in library.html, or swap Combo and Gyp in one of the two."""
+    want = ["epoxy", "polish", "combo", "gyp"]
+    s = ran["defaultSubtabs"]
+    for cat in ("takeoff", "labor"):
+        assert s[cat]["tabs"] == want, "the %s strip offers %s" % (cat, s[cat]["tabs"])
+        assert s[cat]["panels"] == want, (
+            "the %s strip has panels for %s, which do not line up with its tabs"
+            % (cat, s[cat]["panels"]))
+    run = ran["defaultSubtabsRun"]
+    assert run["knownWorkTypes"] == want, (
+        "library.js switches between %s, which is not what the page drew" % run["knownWorkTypes"])
+    assert run["knownCategories"] == ["takeoff", "labor"], (
+        "library.js wires strips for %s" % run["knownCategories"])
+
+
+@needs_node
+def test_the_work_type_sub_tabs_are_real_tabs(ran):
+    """ROLES, AND BOTH HALVES NAMING EACH OTHER.
+
+    A row of buttons that hides and shows the right div is indistinguishable from this one on
+    screen and useless with a screen reader: nothing announces the group as a tab list, nothing
+    says which panel a tab opens, and the panel that appears is an anonymous div. So role="tab"
+    and role="tabpanel" are asserted, and so is the pairing in both directions - aria-controls
+    pointing at the panel id that exists, aria-labelledby pointing back at the tab.
+
+    The pairing is the half worth the effort. Both attributes are strings assembled from a
+    category and a work type in two places, and an off-by-one there produces markup that looks
+    entirely correct and sends a screen reader to the wrong panel.
+
+    Mutation: drop role="tabpanel" from one panel, or point one aria-controls at a panel id that
+    is not on the page."""
+    s = ran["defaultSubtabs"]
+    for cat in ("takeoff", "labor"):
+        assert s[cat]["everyTabIsATab"], (
+            "a %s sub-tab is not a role=tab that names the panel it controls" % cat)
+        assert s[cat]["everyPanelIsAPanel"], (
+            "a %s panel is not a role=tabpanel that names the tab labelling it" % cat)
+
+
+@needs_node
+def test_one_work_type_is_open_at_a_time(ran):
+    """AT REST AND AFTER A CLICK, because they are two different mistakes.
+
+    At rest is the markup: three panels carry `hidden` and one does not, one tab says
+    aria-selected="true" and three say false. Get that wrong and the card opens showing four
+    stacked copies of the same list, or none - and a second tab marked selected is a page that
+    looks completely normal and reads as two open tabs.
+
+    After a click is showDefaultWorkType, and the reason it writes every tab and every panel on
+    every call rather than the two that changed. Touching only the two is how a strip accumulates
+    a second selected tab that nothing on screen would look wrong about.
+
+    Mutation: mark two tabs aria-selected="true" in library.html, or drop the `hidden` from one
+    panel, or make showDefaultWorkType set only the tab it was given."""
+    s = ran["defaultSubtabs"]
+    for cat in ("takeoff", "labor"):
+        assert s[cat]["selectedAtRest"] == ["epoxy"], (
+            "the %s strip opens with %s selected" % (cat, s[cat]["selectedAtRest"]))
+        assert s[cat]["shownAtRest"] == ["epoxy"], (
+            "the %s strip opens showing %s" % (cat, s[cat]["shownAtRest"]))
+    run = ran["defaultSubtabsRun"]
+    assert run["after"]["takeoff"]["selected"] == ["combo"], (
+        "after clicking Combo the Takeoff strip has %s selected"
+        % run["after"]["takeoff"]["selected"])
+    assert run["after"]["takeoff"]["shown"] == ["combo"], (
+        "after clicking Combo the Takeoff strip is showing %s"
+        % run["after"]["takeoff"]["shown"])
+
+
+@needs_node
+def test_clicking_a_work_type_sub_tab_switches_only_its_own_category(ran):
+    """THE CLICK IS THE FEATURE, and the wiring is where it goes wrong.
+
+    The listener is installed by two nested loops over two lists, each closure capturing a
+    category and a work type. That is the classic way to end up with four tabs that all switch
+    the same panel, or with a strip whose Labor half jumps whenever somebody touches Takeoff -
+    and the harness presses the REAL listener the page installs, so a deleted wiring loop fails
+    here as "nothing is listening for a click on #default-tab-takeoff-combo" rather than passing
+    quietly as "the panels simply did not change".
+
+    LABOR STAYING PUT IS THE SECOND HALF, and it is asserted off the strip itself rather than off
+    a variable remembering the choice, because there is no such variable: aria-selected is which
+    tab is open. The two strips are independent because each call names its own category and
+    writes only that category's ids - so a closure that captured the wrong one moves the strip
+    nobody touched, and that is what this reads.
+
+    Mutation: delete the wiring loop; or make it call showDefaultWorkType("labor", wt)."""
+    run = ran["defaultSubtabsRun"]
+    assert run["clickError"] is None, (
+        "pressing a sub-tab reached no listener: %s" % run["clickError"])
+    assert run["before"]["takeoff"]["selected"] == ["epoxy"], run["before"]["takeoff"]
+    assert run["after"]["labor"]["selected"] == ["epoxy"], (
+        "clicking a Takeoff sub-tab moved the Labor strip to %s"
+        % run["after"]["labor"]["selected"])
+    assert run["after"]["labor"]["shown"] == ["epoxy"], (
+        "clicking a Takeoff sub-tab changed which Labor panel is showing (%s)"
+        % run["after"]["labor"]["shown"])
+
+
+@needs_node
+def test_the_page_says_plainly_that_the_lists_are_the_same_for_now(ran):
+    """FOUR TABS IMPLY FOUR LISTS, AND THERE IS ONLY ONE.
+
+    Being a default is stored as `favorite`, a single boolean on the library_items and
+    library_assemblies row - see backend/library.py, where it is read and written as
+    bool(payload.get("favorite")). A boolean has two states. There is no third in which something
+    is a default for polish and not for epoxy, so every sub-tab shows the same list, and a page
+    that let four tabs imply otherwise would be lying to the estimator in a way he would only
+    discover by setting a polish default and finding it on an epoxy bid.
+
+    ONCE. Repeated into all eight panels it stops being honesty and becomes noise nobody reads,
+    and the day the storage catches up there would be eight copies to find. One sentence, at the
+    top of the pane, in the same .paneintro class the other explained panes use.
+
+    Mutation: delete the sentence; or paste it into each panel."""
+    s = ran["defaultSubtabs"]
+    assert s["saysTheListsAreTheSame"], (
+        "the Defaults pane does not say that every work type shows the same list, so four "
+        "sub-tabs imply four lists the storage cannot hold")
+    assert s["saidAsAPaneIntro"], (
+        "the sentence is not the pane's .paneintro, which is this page's one way of writing a "
+        "short explainer over a pane")
+    assert s["timesItSaysIt"] == 1, (
+        "the pane says it %s times; once is honest, eight times is noise" % s["timesItSaysIt"])
+
+
+@needs_node
+def test_the_sub_tabs_read_as_subordinate_and_the_add_row_keeps_its_real_scope(ran):
+    """TWO THINGS THAT ARE BOTH ABOUT HIERARCHY.
+
+    FIRST, the strip is the quiet control, not a second copy of the page's own. .views is the
+    primary tab strip at the top of the page - a filled segmented pill. A second pill of the same
+    weight a few hundred pixels below it reads as two equal choices and leaves the reader working
+    out which strip owns the other; on a narrow window the two stack into what looks like eight
+    peer tabs. .subviews is the same control drawn quietly, and it sits INSIDE the card, above
+    the panels, which says what it belongs to before anybody reads a word.
+
+    SECOND, the add button stays OUTSIDE the four panels. What it adds is one boolean, so
+    whatever it adds is a default under every work type at once. Inside the open panel it would
+    read as "add a takeoff default FOR EPOXY" - a promise this page cannot keep. At the foot of
+    the card it belongs to the card, which is the scope it actually has. It moves inside on the
+    day the storage can tell the four apart, and that is the change this test should be edited
+    for - not before.
+
+    Mutation: give the strip class="views"; or move either add row up between the panels."""
+    s = ran["defaultSubtabs"]
+    for cat in ("takeoff", "labor"):
+        assert s[cat]["usesTheQuietStrip"], (
+            "the %s sub-tabs are drawn as a second copy of the page's primary tab strip" % cat)
+        assert s[cat]["insideTheCard"], (
+            "the %s strip is not inside its card above its panels" % cat)
+        assert s[cat]["addRowAfterThePanels"], (
+            "the %s add row sits among the work-type panels, where it promises a per-work-type "
+            "default that a single boolean cannot hold" % cat)
+        assert s[cat]["oneAddRowPerCategory"], (
+            "the %s category has more than one add row, so one of them is per work type" % cat)
+
+
+@needs_node
+def test_the_labor_default_renders_into_every_work_type_panel(ran):
+    """TRAVEL IN ALL FOUR, AND FOR TRAVEL THAT IS NOT EVEN A COMPROMISE.
+
+    The estimate seeds a Travel row into every new bid whatever its work type, so showing it
+    under Epoxy, Polish, Combo and Gyp is the literal truth about what a new bid opens holding -
+    unlike the takeoff lists, where the same four panels are showing one list because one boolean
+    cannot hold four.
+
+    IDENTICAL, not merely non-empty. The renderer builds the row markup once and writes the same
+    string into each panel; four calls to travelSeed() would be four objects and the next reader
+    would reasonably wonder which panel was meant to differ. Asserting they match is what makes
+    the day they SHOULD differ a deliberate edit here rather than an accident.
+
+    AND THE EMPTY STATE FOLLOWS EACH ONE. With the shared module absent - the case the renderer's
+    own guard exists for - all four render empty and all four show their empty panel, rather than
+    the loop throwing on the way past the first.
+
+    Mutation: write only the first panel (drop the loop's body after the first iteration); or set
+    the empty state's `hidden` outside the loop."""
+    run = ran["defaultSubtabsRun"]
+    rows = run["laborRows"]
+    assert len(rows) == 4, "expected four Labor panels to render, got %s" % len(rows)
+    assert all("Travel" in r for r in rows), (
+        "a work-type panel rendered without the Travel row: %s" % rows)
+    assert len(set(rows)) == 1, (
+        "the four panels disagree, which the storage cannot express: %s" % rows)
+    assert run["laborEmptyHidden"] == [True] * 4, (
+        "a panel with a Travel row in it is still showing its empty state: %s"
+        % run["laborEmptyHidden"])
+    bare = run["withoutTheSharedModule"]
+    assert bare["laborRows"] == [""] * 4, (
+        "without the shared module a panel rendered something: %s" % bare["laborRows"])
+    assert bare["laborEmptyHidden"] == [False] * 4, (
+        "without the shared module a panel shows a bare table head instead of its empty state: "
+        "%s" % bare["laborEmptyHidden"])
 
 
 def test_the_labor_default_is_read_from_the_estimate_not_retyped():
@@ -225,10 +452,21 @@ def test_the_items_tab_no_longer_explains_itself(ran):
         "the Items explainer is back - Hanz asked for it gone on 2026-08-27")
     assert page["assembliesIntro"], "the Assemblies pane lost its intro, which was not asked for"
     assert page["adminIntro"], "the Administration pane lost its intro, which was not asked for"
-    # The CLASS stays, because two panes still use it. A rule with no caller is what to delete;
-    # this is not one.
-    assert page["paneintroStillUsed"] == 2, (
-        "expected Assemblies and Administration to still carry .paneintro, found %s"
+    # The CLASS stays, because other panes still use it. A rule with no caller is what to
+    # delete; this is not one.
+    #
+    # THREE FROM 2026-09-17, AND THE COUNT MOVED BECAUSE A PANE GAINED AN INTRO, not because a
+    # guard was in the way. The Defaults tab now carries the one sentence saying that its four
+    # work-type sub-tabs all show the same list, which is tested for what it SAYS in
+    # test_the_page_says_plainly_that_the_lists_are_the_same_for_now. It is the same species of
+    # sentence as Administration's - a short explainer over a pane nobody lives in - so it is
+    # written in the same class rather than in a second way of writing the same thing, which is
+    # the drift this page has form for. What is not negotiable is the Items pane still having
+    # none, which is the assertion above and the whole point of this test.
+    assert page["defaultsIntro"], (
+        "the Defaults pane lost the one sentence that keeps its four sub-tabs honest")
+    assert page["paneintroStillUsed"] == 3, (
+        "expected Assemblies, Administration and Defaults to carry .paneintro, found %s"
         % page["paneintroStillUsed"])
 
 

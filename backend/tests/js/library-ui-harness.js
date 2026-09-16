@@ -42,6 +42,11 @@ const L = require(path.join(ROOT, "js", "library-core.js"));
 // by who created an assembly through TWCrm.nameOf, which is the app's one email→display-name
 // convention. A stub here could agree with this file and disagree with the CRM board.
 const CRM = require(path.join(ROOT, "js", "crm-core.js"));
+// The REAL Travel seed. renderDefaultLabor reads it off window.TWPolishBid, and the whole point
+// of that (see its own comment, and test_the_labor_default_is_read_from_the_estimate_not_retyped)
+// is that the rate shown on this page cannot drift from the rate the estimate seeds. A stub here
+// would be a fourth copy of the one number that module exists to keep singular.
+const POLISH = require(path.join(ROOT, "js", "polish-bid-core.js"));
 
 /** Lift a named function out of the page's IIFE (two-space indent), braces balanced.
  *
@@ -122,6 +127,15 @@ function makeDom() {
     attrs: {},
     setAttribute(k, v) { this.attrs[k] = String(v); },
     getAttribute(k) { return Object.prototype.hasOwnProperty.call(this.attrs, k) ? this.attrs[k] : null; },
+    // LISTENERS, added 2026-09-17 for the defaults sub-tabs. Nothing else in this file needs
+    // them: every other decision on the page was already pulled out into a named function this
+    // harness lifts, which is the pattern to prefer. The sub-tab strip is the one case where the
+    // thing worth proving IS the wiring -- "clicking Polish shows the Polish panel" is the whole
+    // feature, and a source assertion that the loop exists cannot tell you it hooked the right
+    // tab to the right work type, which is exactly the mistake two nested loops over two lists
+    // invite.
+    handlers: {},
+    addEventListener(ev, f) { (this.handlers[ev] = this.handlers[ev] || []).push(f); },
     // Filled in on demand by tests that need to walk a rendered table.
     rows: null,
     querySelectorAll(sel) {
@@ -130,7 +144,15 @@ function makeDom() {
       return this.rows;
     },
   });
-  return { el, nodes, focused };
+  // A click, and LOUD when there is nothing listening. Returning quietly would let a deleted
+  // wiring loop pass as "the panels simply did not change", which is the exact mutation these
+  // scenarios exist to catch.
+  const click = (id) => {
+    const hs = (nodes[id] && nodes[id].handlers && nodes[id].handlers.click) || [];
+    if (!hs.length) throw new Error("nothing is listening for a click on #" + id);
+    hs.forEach((f) => f({ target: nodes[id] }));
+  };
+  return { el, nodes, focused, click };
 }
 
 /** Turn rendered table HTML into the minimum object graph `refreshNumbers` walks.
@@ -237,6 +259,11 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   var VENDOR_USE = state.VENDOR_USE, DIVISION_USE = state.DIVISION_USE || {}, UNIT_USE = state.UNIT_USE || {};
   var ADMIN = state.ADMIN;
   var openId = state.openId;
+  // A LOCAL window, not the global one -- node has no window at all, so renderDefaultLabor's
+  // window.TWPolishBid would be a ReferenceError and every scenario in this file would die on it.
+  // Settable from state so a scenario can render the page as it looks with the shared module
+  // missing, which is the case the renderer's own guard on travelSeed is there for.
+  var window = { TWPolishBid: state.TWPolishBid };
   // Which line's item picker is showing its results. pickerFor() reads it, so a test can render
   // the closed state (null, the default) or the open one by passing state.pickerOpen.
   var pickerOpen = state.pickerOpen === undefined ? null : state.pickerOpen;
@@ -395,6 +422,22 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   ${fn("snapshotItem")}
   ${fn("rememberItem")}
   ${fn("onItemEdit")}
+  // ── the Defaults tab's work-type sub-tabs ──────────────────────────────────
+  // BOTH DECLARATIONS ARE LIFTED, NOT RESTATED, and that is the difference between a test of
+  // the page and a test of this file. "The four work types, in this order" is the assertion
+  // test_library_ui.py makes; a harness that typed the list out here would agree with itself
+  // while the page shipped three.
+  ${grab(/^  var DEFAULT_WORK_TYPES = \[[^\]]*\];$/m, "the DEFAULT_WORK_TYPES declaration")}
+  ${grab(/^  var DEFAULT_CATEGORIES = \[[^\]]*\];$/m, "the DEFAULT_CATEGORIES declaration")}
+  ${fn("showDefaultWorkType")}
+  // AND THE WIRING WITH IT, which is unusual here and worth saying why. This is the one loop in
+  // library.js whose bug is invisible to the functions on either side of it: two nested forEach
+  // over two lists, each closing over cat and wt, is how a strip ends up with all four tabs
+  // switching the same panel. Lifted and RUN, so the scenario below presses the real listener
+  // the page installs rather than one this file wired for itself.
+  ${grab(/^  DEFAULT_CATEGORIES\.forEach\(function \(cat\) \{[\s\S]*?\n  \}\);$/m,
+         "the sub-tab click wiring")}
+  ${fn("renderDefaultLabor")}
   // Test glue, and the only piece in this file: load() replaces DIVISIONS with the Administration
   // tab list, and a test of "an added division reaches the filter chips" has to be able to do the
   // same thing to a scope that is ALREADY built, or renderFilterBar has nothing to notice.
@@ -415,6 +458,12 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
            ASMS,
            newMaterialName, newRefName,
            bulkCandidates, bulkSelectAllState, bulkLinesFor, bulkAddRoom, BULK_MAX_LINES,
+           // The two vocabularies and the switch. There is deliberately no fourth entry
+           // holding "which sub-tab is open": that lives on the tabs themselves as
+           // aria-selected, and a scenario reads it back off the stub the same way a screen
+           // reader would.
+           DEFAULT_WORK_TYPES, DEFAULT_CATEGORIES,
+           showDefaultWorkType, renderDefaultLabor,
            snapshotOf: function (id) { return itemBefore[id]; } };
 `);
 
@@ -454,6 +503,8 @@ function build(overrides, docSelectors) {
     DIVISION_USE: { epoxy: 1, "polished concrete": 1 },
     UNIT_USE: { gal: 1, gallon: 1 },
     ADMIN: false, openId: "a1",
+    // The real module, so the Labor defaults render the rate the estimate actually seeds.
+    TWPolishBid: POLISH,
   }, overrides || {});
   // Marked rather than formatted, so an assertion cannot pass by accident on a date that happens
   // to read the same in UTC and in Central. The dev box clock runs ~13 hours ahead of Chicago and
@@ -3335,8 +3386,13 @@ out.page = {
   // screenshotted, and neither is a tab anybody lives in.
   assembliesIntro: /Assemblies are how we estimate them/.test(html),
   adminIntro: /Administration lists\./.test(html),
-  // The class survives the deletion because two panes still use it. A stylesheet rule with no
-  // remaining caller is the thing to delete; this is not one.
+  // …and the Defaults pane gained one on 2026-09-17, which is why the count below moved from two
+  // to three. Named rather than counted: the number on its own is a guard anybody can satisfy by
+  // editing the number, and what the test is actually about is WHICH panes explain themselves.
+  defaultsIntro: /Every work type shows the same list, for now\./.test(html),
+  // The class survives the deletion because three panes still use it -- Assemblies,
+  // Administration, and Defaults from 2026-09-17. A stylesheet rule with no remaining caller is
+  // the thing to delete; this is not one.
   paneintroStillUsed: (html.match(/class="paneintro"/g) || []).length,
   coveragePerUnitHeader: /Coverage per Unit/.test(html),
   wasteHeader: /Waste Factor/.test(html),
@@ -3376,15 +3432,151 @@ out.page = {
         .map(function (m) { return m.replace(/.*="|"$/g, ""); }),
       addUsesTheAdminPattern: (pane.match(/class="addrow"/g) || []).length === 2 &&
         (pane.match(/class="addbtn"/g) || []).length === 2,
-      // Labor has a table to put Travel in, and an empty state that hides once it is there.
-      laborTable: /id="default-labor-body"/.test(pane),
-      laborEmptyState: /id="default-labor-empty"/.test(pane),
+      // Labor has a table to put Travel in, and an empty state that hides once it is there --
+      // ONE OF EACH PER WORK TYPE from 2026-09-17, because the category's card now holds four
+      // panels and a tab that switches to a panel with nothing in it is worse than no tab.
+      // DERIVED from the markup rather than checked against a list typed here, so the order and
+      // the membership are the page's own answer for test_library_ui.py to judge.
+      laborTables: (pane.match(/id="default-labor-body-([a-z]+)"/g) || [])
+        .map(function (m) { return m.split("-").pop().slice(0, -1); }),
+      laborEmptyStates: (pane.match(/id="default-labor-empty-([a-z]+)"/g) || [])
+        .map(function (m) { return m.split("-").pop().slice(0, -1); }),
       sectionCount: (pane.match(/class="admin-section"/g) || []).length,
     };
   })(),
   noCoverageSfHeader: !/Coverage \(SF\)/.test(html),
   noRoleHeader: !/<th[^>]*>Role<\/th>/.test(html),
 };
+
+// ── the work-type sub-tabs, as the markup ships them ─────────────────────────
+// Hanz, 2026-09-16: a sub-tab per work type inside BOTH Takeoff and Labor, and he called it
+// "future proofing". So the structure is what is asserted, in the at-rest state a browser gets
+// before any script runs — which is the only place the starting selection lives. The executed
+// block further down presses them.
+{
+  const pane = (html.split('id="pane-defaults"')[1] || "").split("</section>")[0];
+  // One category's card. Takeoff runs up to the next .admin-section; Labor is the rest.
+  const sectionOf = (cat) =>
+    ((pane.split('id="default-' + cat + '"')[1] || "").split('class="admin-section"')[0]);
+  const strip = (cat) => {
+    const s = sectionOf(cat);
+    const tabs = (s.match(/<button[^>]*id="default-tab-[a-z]+-[a-z]+"[\s\S]*?<\/button>/g) || []);
+    const panels = (s.match(/<div id="default-pane-[a-z]+-[a-z]+"[^>]*>/g) || []);
+    const wtOf = (m) => (/default-(?:tab|pane)-[a-z]+-([a-z]+)"/.exec(m) || ["", ""])[1];
+    return {
+      // THE ORDER AS WELL AS THE MEMBERSHIP. Four tabs in a different order in the two
+      // categories is the kind of thing nobody notices and everybody trips over.
+      tabs: tabs.map(wtOf),
+      panels: panels.map(wtOf),
+      // REAL TABS: role, and each half naming the other. aria-controls with no matching panel id
+      // is the failure a screenshot cannot show and a screen reader walks straight into.
+      everyTabIsATab: tabs.length > 0 && tabs.every((t) =>
+        /role="tab"/.test(t) &&
+        (/aria-controls="([^"]*)"/.exec(t) || ["", ""])[1] ===
+          "default-pane-" + cat + "-" + wtOf(t)),
+      everyPanelIsAPanel: panels.length > 0 && panels.every((p) =>
+        /role="tabpanel"/.test(p) &&
+        (/aria-labelledby="([^"]*)"/.exec(p) || ["", ""])[1] ===
+          "default-tab-" + cat + "-" + wtOf(p)),
+      // ONE OF EACH AT REST. Two tabs marked selected is a state the page would look completely
+      // normal in, and two panels left unhidden is the whole feature silently not working.
+      selectedAtRest: tabs.filter((t) => /aria-selected="true"/.test(t)).map(wtOf),
+      shownAtRest: panels.filter((p) => !/\shidden/.test(p)).map(wtOf),
+      // SUBORDINATE TO THE PAGE'S OWN STRIP, which was the design constraint: the card uses the
+      // quiet .subviews control, never a second copy of the primary .views pill.
+      usesTheQuietStrip: /class="subviews" role="tablist"/.test(s) && !/class="views"/.test(s),
+      // …and the strip is INSIDE the card, above the panels, rather than floating under the h2.
+      insideTheCard: s.indexOf('class="card"') < s.indexOf('class="subviews"') &&
+        s.indexOf('class="subviews"') < s.indexOf('id="default-pane-' + cat + '-'),
+      // THE ADD ROW STAYS OUTSIDE THE FOUR PANELS, because what it adds is one boolean and so
+      // lands under every work type at once. Inside the open panel it would promise a per-work-
+      // type default the storage cannot hold.
+      addRowAfterThePanels:
+        s.lastIndexOf('id="default-pane-' + cat + '-') < s.indexOf('data-addrow-default="' + cat),
+      oneAddRowPerCategory: (s.match(/data-addrow-default="/g) || []).length === 1,
+    };
+  };
+  out.defaultSubtabs = {
+    takeoff: strip("takeoff"),
+    labor: strip("labor"),
+    // THE ONE SENTENCE, AND ONLY ONE OF IT. Four tabs imply four lists; a boolean cannot hold
+    // four lists; so the page has to say so. Said once, at the top of the pane, and NOT repeated
+    // into all eight panels — which is the version of honesty that turns into noise.
+    saysTheListsAreTheSame:
+      /Every work type shows the same list, for now\.<\/b> Marking something/.test(pane),
+    timesItSaysIt: (pane.match(/shows the same list/g) || []).length,
+    // It is the pane's OWN intro, in the same class the other two explained panes use, rather
+    // than a second way of writing the same kind of sentence.
+    saidAsAPaneIntro: /<p class="paneintro"><b>Every work type shows the same list/.test(pane),
+  };
+}
+
+// ── EXECUTED: the sub-tabs actually switch, and Labor fills all four ─────────
+// The markup block above proves the strips exist and are wired as tabs. It cannot prove that
+// pressing one does anything, and that is the half of this feature worth a test: the wiring is
+// two nested forEach loops over two lists, each closure capturing a cat and a wt, which is the
+// classic way to end up with four tabs that all switch the same panel and a strip whose Labor
+// half jumps when you touch Takeoff.
+//
+// The listener is the REAL one the page installs — the wiring loop is lifted into the scope and
+// runs there — so deleting it in library.js fails here with "nothing is listening for a click
+// on #default-tab-takeoff-combo" rather than passing against buttons this file wired itself.
+{
+  const b = build();
+  // THE PAGE'S OWN LIST, not one typed here. Which four and in what order is asserted against the
+  // markup above; this only needs to walk whatever the page thinks they are.
+  const WT = b.api.DEFAULT_WORK_TYPES;
+  const readStrip = (cat) => ({
+    selected: WT.filter((w) =>
+      b.dom.el("default-tab-" + cat + "-" + w).getAttribute("aria-selected") === "true"),
+    shown: WT.filter((w) => b.dom.el("default-pane-" + cat + "-" + w).hidden === false),
+  });
+  // The stub mints a node the first time anything asks for it, and a fresh node is neither
+  // selected nor hidden — so "at rest" in HERE is the stub's state, not the page's, and the
+  // page's is asserted off the markup above instead. Putting both strips into the state the page
+  // ships with is also what makes "the other strip did not move" mean anything at all.
+  b.api.showDefaultWorkType("takeoff", "epoxy");
+  b.api.showDefaultWorkType("labor", "epoxy");
+  const before = { takeoff: readStrip("takeoff"), labor: readStrip("labor") };
+  // CAUGHT AND REPORTED, not thrown. A missing listener is a real failure and the stub says so
+  // loudly, but letting it escape would take this whole file down with "the harness itself
+  // failed" and no line number — the exact blunt-instrument failure the notes on the lifts
+  // further up keep warning about. Reported as a field, it reddens the one test about clicking.
+  let clickError = null;
+  try {
+    b.dom.click("default-tab-takeoff-combo");
+  } catch (e) {
+    clickError = String((e && e.message) || e);
+  }
+  const after = { takeoff: readStrip("takeoff"), labor: readStrip("labor") };
+
+  b.api.renderDefaultLabor();
+  out.defaultSubtabsRun = {
+    // WHAT THE SCRIPT THINKS THE WORK TYPES ARE, which has to match what the markup drew. A tab
+    // in the page that DEFAULT_WORK_TYPES has never heard of is a tab whose panel is never
+    // hidden and never shown, and every other assertion in this file would stay green: the
+    // markup block reads the markup, and everything executed here walks this list.
+    knownWorkTypes: WT.slice(),
+    knownCategories: b.api.DEFAULT_CATEGORIES.slice(),
+    clickError: clickError,
+    before: before,
+    after: after,
+    // EVERY panel filled, and filled with the SAME rows. That is the honest rendering of a
+    // single boolean, and it is the assertion that changes — not the markup, not the strips —
+    // on the day the storage can tell the four work types apart.
+    laborRows: WT.map((w) => b.dom.el("default-labor-body-" + w).innerHTML),
+    laborEmptyHidden: WT.map((w) => b.dom.el("default-labor-empty-" + w).hidden),
+  };
+  // And with the shared module absent: an empty list and the empty state showing in all four,
+  // rather than a throw on the way past the first panel. This is the case the renderer's own
+  // guard on travelSeed exists for, and a loop is a new way to get it wrong.
+  const noSeed = build({ TWPolishBid: null });
+  noSeed.api.renderDefaultLabor();
+  out.defaultSubtabsRun.withoutTheSharedModule = {
+    laborRows: WT.map((w) => noSeed.dom.el("default-labor-body-" + w).innerHTML),
+    laborEmptyHidden: WT.map((w) => noSeed.dom.el("default-labor-empty-" + w).hidden),
+  };
+}
 
 // A WATCHDOG, because the alternative failure mode is silence. These scenarios await dialogs and
 // held requests, so a change that opens one more dialog than a test answers leaves a flush waiting
