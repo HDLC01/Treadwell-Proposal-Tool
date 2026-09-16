@@ -138,15 +138,27 @@
        rather than tucked under the Guys box as a link. Flex:none so it keeps its own width
        instead of being squeezed by .labname's flex:1 1 auto; nowrap so its two words never break
        and grow the header a second line. */
-    /* The Guys switch. Borrows `.mw-sw` wholesale -- same track, same knob, same red as
-       every other switch on this page -- and only strips the chrome a <button> brings of
-       its own. It stays a <button> rather than the <span role="switch"> the conditions
-       use, because a span has no keyboard behaviour and this control had some. */
-    .labsw{flex:none;white-space:nowrap;border:0;padding:0;background:transparent;
-       font:600 11.5px var(--sans);color:var(--ink-v)}
-    .labsw.on{color:var(--ink)}
-    .labsw:focus-visible{outline:2px solid var(--red);outline-offset:3px;
-       border-radius:var(--r-s)}
+    /* The Guys switch. Borrows `.mw-sw`'s track and knob so it reads as the same family as
+       the Review step's switches, and wraps them in a pill of its own.
+
+       THE PILL IS NOT DECORATION. The control it replaced was a red-bordered button, and
+       that loudness was the entire point of the change that put it here: it had been an
+       underlined link in the small print under Guys, and nobody found it. A bare track and
+       label sitting in a busy card header is quieter than the link was, which walks the
+       same mistake backwards.
+
+       It stays a <button> rather than the <span role="switch"> the conditions use, because
+       a span has no keyboard behaviour and this control had some. */
+    .labsw{flex:none;white-space:nowrap;cursor:pointer;
+       border:1px solid var(--line);border-radius:999px;padding:4px 11px 4px 8px;
+       background:var(--card);font:600 11.5px var(--sans);color:var(--ink-v)}
+    .labsw:hover{border-color:var(--red);color:var(--red)}
+    /* ON IS THE LOUD ONE, and that is the right way round: off is the resting state every
+       Travel card sits in, so shouting there would be 23 cards shouting at once. On means
+       this row's Guys is a typed number that no longer follows the tasks above -- the one
+       state worth spotting from across the card. */
+    .labsw.on{background:var(--red-tint);border-color:var(--red);color:var(--red-dark)}
+    .labsw:focus-visible{outline:2px solid var(--red);outline-offset:2px}
     /* NOT APPLICABLE RIGHT NOW, AND STILL TYPEABLE -- `.sw.inert`'s convention in styles.css, and
        its reasoning: say plainly that an input is not affecting the price rather than disabling it
        and losing what somebody set. The house rule keeps a real `disabled` at .38-.5 and never
