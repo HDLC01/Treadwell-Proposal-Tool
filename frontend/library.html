@@ -827,6 +827,16 @@
               <h3>Nothing set yet</h3>
               <p>The takeoff lines a new estimate opens with.</p>
             </div>
+            <!-- THE THIRD WAY IN, and it exists because the other two both assume you already
+                 know the thing. The row switch needs you to find the row; the search needs you to
+                 name what you are after. This is for sitting down to set the defaults up. -->
+            <div class="addrow" data-addrow-default="takeoff">
+              <button class="addbtn" type="button" data-add-default="takeoff">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                     aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"></path></svg>
+                Add a takeoff default</button>
+            </div>
           </div>
         </div>
 
@@ -836,6 +846,16 @@
             <div class="empty">
               <h3>Nothing set yet</h3>
               <p>The labor lines a new estimate opens with.</p>
+            </div>
+            <!-- NOT OPTIONAL ON THIS ONE. Labor lines are not library rows -- there is no Labor
+                 tab to switch anything on from, and nothing for the search above to return. They
+                 are typed here, so this button is the only way a labor default gets made. -->
+            <div class="addrow" data-addrow-default="labor">
+              <button class="addbtn" type="button" data-add-default="labor">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                     aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"></path></svg>
+                Add a labor line</button>
             </div>
           </div>
         </div>

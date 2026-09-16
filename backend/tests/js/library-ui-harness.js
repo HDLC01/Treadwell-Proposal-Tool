@@ -3369,6 +3369,13 @@ out.page = {
       search: /id="default-q"/.test(pane),
       searchIsForAdding: /placeholder="Search materials and assemblies to add"/.test(pane),
       searchAboveTheLists: pane.indexOf('id="default-q"') < pane.indexOf('class="admin-grid"'),
+      // AN ADD BUTTON IN EACH, on the same .addrow the Administration lists use. Labor's is not
+      // optional: labor lines are not library rows, so there is nothing to switch on and nothing
+      // for the search to return -- typing here is the only way one gets made.
+      addButtons: (pane.match(/data-add-default="[a-z]+"/g) || [])
+        .map(function (m) { return m.replace(/.*="|"$/g, ""); }),
+      addUsesTheAdminPattern: (pane.match(/class="addrow"/g) || []).length === 2 &&
+        (pane.match(/class="addbtn"/g) || []).length === 2,
       sectionCount: (pane.match(/class="admin-section"/g) || []).length,
     };
   })(),

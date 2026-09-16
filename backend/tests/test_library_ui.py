@@ -124,6 +124,27 @@ def test_the_defaults_tab_has_a_search_for_entering_them(ran):
 
 
 @needs_node
+def test_each_defaults_category_has_its_own_add_button(ran):
+    """Three ways in, and they are not redundant. The switch on a row needs you to find the row.
+    The search needs you to name what you are after. This is the one for sitting down to set the
+    defaults up in the first place.
+
+    LABOR'S IS NOT OPTIONAL. Labor lines are not library rows -- there is no Labor tab to switch
+    anything on from, and nothing for the search above to return -- so typing here is the only way
+    a labor default ever gets made. A Labor section without this button is a category nobody can
+    put anything into.
+
+    Same .addrow/.addbtn the Administration lists use, which is the container that was asked for.
+
+    Mutation: drop either button."""
+    c = ran["page"]["defaultsCategories"]
+    assert c["addButtons"] == ["takeoff", "labor"], (
+        "expected an add button in each category, found %s" % c["addButtons"])
+    assert c["addUsesTheAdminPattern"], (
+        "the add rows do not use Administration's .addrow/.addbtn container")
+
+
+@needs_node
 def test_the_new_tab_is_wired_to_its_pane_and_not_just_drawn():
     """A button in the tab strip with no entry in PANES renders identically to a working one and
     does nothing when pressed. That is the failure worth a test here, because nothing else on the
@@ -1412,7 +1433,11 @@ def test_the_create_control_sits_in_the_container_it_adds_rows_to(ran):
     # card, which is the failure this page has form for. Moving a row must not change the count,
     # and neither may a COMMENT: quoting either attribute in full adds a phantom to it, which is
     # exactly what the note beside #asm-addrow now warns about because it happened writing it.
-    assert c["addRowCount"] == c["addBtnCount"] == 5, (
+    # SEVEN from 2026-09-16, not five: the Defaults tab's Takeoff and Labor categories each got
+    # one. The number is not the point -- the two counts AGREEING is. A wrapper without its button,
+    # or a button that escaped its wrapper, is how the create control ended up in the tab strip in
+    # the first place, which is what this whole test exists about.
+    assert c["addRowCount"] == c["addBtnCount"] == 7, (
         "the add rows disagree in number: %s wrappers, %s buttons"
         % (c["addRowCount"], c["addBtnCount"]))
 
