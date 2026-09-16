@@ -174,9 +174,9 @@ Across all 51 drafts:
 
 | | |
 |---|---|
-| Uncompressed JSON | 1,929 kB |
-| Stored on disk (TOAST, compressed) | 822 kB — 2.35x compression |
-| Per draft | average 38 kB · median 14 kB · **max 285 kB** · 3 drafts over 100 kB |
+| Uncompressed JSON | 1,929 kB total · average 38 kB · median 31 kB · **max 285 kB** |
+| Stored on disk (TOAST, compressed) | 822 kB total · average 16 kB · median 14 kB — 2.35x compression |
+| Large drafts | 3 of 51 are over 100 kB uncompressed |
 | `proposal_payload` | **1,528 kB — 79% of everything** |
 | `priced_tabs` | 75 kB |
 | `cell_values` | **30 kB — 1.6%** |
