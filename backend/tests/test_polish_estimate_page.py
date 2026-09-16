@@ -944,6 +944,67 @@ def test_the_save_carries_what_the_rest_of_the_app_reads(ran):
 
 
 @needs_node
+def test_a_takeoff_row_can_be_one_material_rather_than_an_assembly(ran):
+    """Hanz: "there should also be add material row not assemblies only."
+
+    Not everything an estimate buys is a system. A pallet of patch, a box of blades, one drum of
+    densifier: making somebody build a one-line assembly to put a single product on a bid is
+    ceremony, and the assembly it leaves behind is a system that does not exist.
+
+    `kind` IS ON THE ROW rather than inferred from item_id. A material row that has not been
+    pointed at anything yet has an empty item_id, and inferring from that alone would redraw it as
+    an assembly row the moment somebody cleared the field, taking their measurement and coverage
+    with it.
+
+    Mutation: seed the row without `kind`."""
+    m = ran["materialRow"]
+    assert m["isItemKind"], "the added row is not marked as a material row"
+    assert m["saysMaterial"], "a material row is indistinguishable from an assembly row on screen"
+    assert m["hasCoverageField"], "a material row has no coverage field, so it cannot be priced"
+    assert m["resolvedId"] == "i4", (
+        "typing a material name did not resolve it to a library item: %r" % m["resolvedId"])
+    assert m["assemblyRowsUnchanged"], "adding a material row disturbed the assembly rows"
+
+
+@needs_node
+def test_a_material_row_prices_through_the_librarys_own_engine(ran):
+    """THE MONEY, and it is checked against library-core rather than a number typed into this file.
+
+    A material row is one `priceLine` call -- the same path a line inside an assembly takes, which
+    is the whole reason this fits without a second engine. Coverage, waste and roundup all behave
+    as they do inside an assembly because it is literally the same function.
+
+    THE TWO FIGURES DIFFER, which is what makes this more than a tautology. Both sides call
+    priceLine, so agreeing proves only that the page calls it; the library's own coverage gives
+    $1,100 and a coverage typed on the row gives $2,100, so a page that ignored the row's box, or
+    passed the wrong area, cannot produce both.
+
+    Mutation: drop `coverage: r.coverage` from priceMaterialRow, and the typed figure collapses
+    back to the library one."""
+    m = ran["materialRow"]
+    assert m["costWithLibraryCoverage"] == "$1,100", (
+        "the row did not price off the item's own coverage: %r" % m["costWithLibraryCoverage"])
+    assert m["costWithTypedCoverage"] == "$2,100", (
+        "a coverage typed on the row did not reach the engine: %r" % m["costWithTypedCoverage"])
+    assert m["costWithLibraryCoverage"] != m["costWithTypedCoverage"], (
+        "both coverages priced the same, so the row's own box changes nothing")
+
+
+@needs_node
+def test_a_material_row_does_not_adopt_the_items_purchase_unit(ran):
+    """An assembly declares the unit it is MEASURED in, so picking one can legitimately switch the
+    row to LF. An item's unit is the unit it is BOUGHT in -- gallons, kits, pails -- which has
+    nothing to do with how the floor is measured.
+
+    Copying it across would set a 10,000 SF area to "Pail" and then price against it, which is the
+    kind of wrong that looks like a typo and reads as a number.
+
+    Mutation: adopt `item.unit` in setMaterial the way setAssembly adopts the assembly's."""
+    assert ran["materialRow"]["unitStayedSF"], (
+        "picking a material overwrote the row's unit with the pack it is bought in")
+
+
+@needs_node
 def test_the_three_that_moved_render_as_switches_on_the_takeoff_step(ran):
     """THE FEATURE ITSELF, which nothing pinned until now.
 

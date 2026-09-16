@@ -158,11 +158,50 @@
 
   /** What one takeoff row costs: the library's own price for that assembly at that measurement.
    *  null when the row has no assembly picked yet — which is not an error, just unfinished. */
+  /** A takeoff row is EITHER an assembly or a single material, and this is where that forks.
+   *
+   *  Hanz asked for material rows because not everything an estimate buys is a system. A pallet of
+   *  patch, a box of blades, one drum of densifier: making somebody build a one-line assembly to
+   *  put a single product on a bid is ceremony, and the assembly it produces is a system that does
+   *  not exist.
+   *
+   *  A MATERIAL ROW IS ONE `priceLine` CALL, not a new engine. That is the whole reason this fits:
+   *  library-core already prices one line against an area, applying coverage, waste and roundup,
+   *  and an assembly is nothing more than a list of those. So a material row takes the same path a
+   *  line inside an assembly takes, and cannot drift from it.
+   *
+   *  COVERAGE IS TYPED ON THE ROW, falling back to the item's own default -- priceLine's existing
+   *  rule, not a new one. It has to be per-row rather than per-item because the same product is
+   *  used at different coverages in different systems, which is exactly why Kyle's sheet keeps
+   *  coverage on the line. Storing the row's figure back onto the item would make it wrong for
+   *  every other place that item is used.
+   *
+   *  The return is shaped like priceAssembly's so every caller -- rowCost, materialTotal, the
+   *  broken-line warning, the per-unit hint -- keeps working without knowing which kind it got. */
   function rowPrice(row) {
     var r = row || {};
+    if (r.item_id) return priceMaterialRow(r);
     var asm = asmById(r.assembly_id);
     if (!asm) return null;
     return L.priceAssembly(asm, ITEMS, B.num(r.measurement));
+  }
+
+  /** One material, priced as priceAssembly would have priced a one-line assembly containing it.
+   *
+   *  `broken_lines` follows library-core's own rule rather than inventing a second one: an
+   *  unfilled row is work not started, not work gone wrong, so `no_item` is not a fault. Getting
+   *  that wrong would put "1 line cannot price yet" under every row the moment it is added. */
+  function priceMaterialRow(r) {
+    var area = B.num(r.measurement);
+    var one = L.priceLine({ item_id: r.item_id, coverage: r.coverage,
+                            waste_pct: r.waste_pct, roundup: r.roundup }, ITEMS, area);
+    var priced = one.ok && one.priced ? 1 : 0;
+    var broken = (!one.ok && one.reason !== "no_item") ? 1 : 0;
+    var total = priced ? one.cost : 0;
+    return {
+      rows: [one], total: total, priced_lines: priced, broken_lines: broken,
+      per_unit: (area !== null && area > 0 && priced) ? total / area : null
+    };
   }
 
   /** The row's cost as it should READ: a figure only when something was actually priced.
@@ -433,6 +472,47 @@
     return "From the Items &amp; Assemblies library.";
   }
 
+  /** The material row's three helpers. Separate from asmHint rather than a branch inside it,
+   *  because they answer different questions: an assembly's hint is about its LINES, a material's
+   *  is about the pack you buy. */
+  function itemById(id) {
+    for (var i = 0; i < ITEMS.length; i++) if (ITEMS[i].id === id) return ITEMS[i];
+    return null;
+  }
+
+  function matHint(row) {
+    var it = itemById((row || {}).item_id);
+    if (it) {
+      var pack = B.num(it.buy_qty) || 1;
+      return esc(B.num(it.unit_cost) != null
+        ? B.money2(it.unit_cost) + " per " + (pack === 1 ? "" : B.num(pack) + " ") +
+          (it.unit || "unit")
+        : "This material has no cost in the library yet.");
+    }
+    if (String((row || {}).item_name || "").trim()) {
+      return "No material by that name — pick one from the list.";
+    }
+    return "A single product, priced straight off the library.";
+  }
+
+  /** WHAT THE BOX WILL USE IF IT IS LEFT EMPTY, shown as the placeholder rather than typed into
+   *  the field. Filling the box with the item's default would look like an answer somebody gave
+   *  for THIS row, and the estimator would have no way to tell it apart from one they typed --
+   *  which matters the day the item's default changes in the library and this row does not. */
+  function covPlaceholder(row) {
+    var it = itemById((row || {}).item_id);
+    var cov = it && B.num(it.coverage);
+    return cov ? String(cov) : "";
+  }
+
+  function covHint(row) {
+    var it = itemById((row || {}).item_id);
+    var cov = it && B.num(it.coverage);
+    if (B.num((row || {}).coverage)) return "How far one goes, for this job.";
+    if (cov) return "Blank uses the library's " + B.num(cov) + ".";
+    return "How far one goes. The library has no default for it.";
+  }
+
   function measureText(row) {
     var r = row || {};
     return B.num(r.measurement) ? B.fmtSf(r.measurement) + " " + (r.unit || "SF") : "";
@@ -470,18 +550,28 @@
           (p.broken_lines === 1 ? '' : 's') + ' in this assembly cannot price yet — check the ' +
           'cost and coverage of its items in the library.</p>';
       }
-      return '<div class="tk"><div class="tk-h">' +
-        '<span class="tag">ROW ' + (i + 1) + '</span>' +
+      // A MATERIAL ROW IS THE SAME CARD with a different first field and one extra, not a second
+      // kind of card. An estimator reading the takeoff should see one list of things the job
+      // buys; which of them happen to be systems and which are single products is a detail of how
+      // the library stores them, not a distinction worth two layouts.
+      var mat = !!r.item_id || r.kind === "item";
+      return '<div class="tk' + (mat ? " mat" : "") + '"><div class="tk-h">' +
+        '<span class="tag">' + (mat ? "MATERIAL " : "ROW ") + (i + 1) + '</span>' +
         '<span class="tk-sub" data-measure-for="' + i + '">' + esc(measureText(r)) + '</span>' +
         (M.takeoff.length > 1
           ? '<button class="x" data-del-row="' + i + '" title="Remove this row">' + icon("x", 12) + '</button>'
           : '') +
-        '</div><div class="tk-g">' +
+        '</div><div class="tk-g' + (mat ? " matg" : "") + '">' +
 
-        '<div class="f"><label>Assembly</label>' +
-        '<input list="dl-assemblies" data-tk="' + i + '" data-k="assembly_name" ' +
-        'placeholder="Search assemblies…" value="' + esc(nv(r.assembly_name)) + '">' +
-        '<p class="hint" data-asmhint-for="' + i + '">' + asmHint(r) + '</p></div>' +
+        (mat
+          ? '<div class="f"><label>Material</label>' +
+            '<input list="dl-items" data-tk="' + i + '" data-k="item_name" ' +
+            'placeholder="Search materials…" value="' + esc(nv(r.item_name)) + '">' +
+            '<p class="hint" data-asmhint-for="' + i + '">' + matHint(r) + '</p></div>'
+          : '<div class="f"><label>Assembly</label>' +
+            '<input list="dl-assemblies" data-tk="' + i + '" data-k="assembly_name" ' +
+            'placeholder="Search assemblies…" value="' + esc(nv(r.assembly_name)) + '">' +
+            '<p class="hint" data-asmhint-for="' + i + '">' + asmHint(r) + '</p></div>') +
 
         '<div class="f"><label>Measurement</label>' +
         '<input class="n" data-tk="' + i + '" data-k="measurement" value="' +
@@ -495,6 +585,13 @@
         }).join("") + '</select>' +
         '<p class="hint">SF or LF.</p></div>' +
 
+        (mat
+          ? '<div class="f"><label>Coverage</label>' +
+            '<input class="n" data-tk="' + i + '" data-k="coverage" value="' +
+            esc(nv(r.coverage)) + '" placeholder="' + esc(covPlaceholder(r)) + '">' +
+            '<p class="hint">' + esc(covHint(r)) + '</p></div>'
+          : "") +
+
         '<div class="f"><label>Total cost</label>' +
         '<div class="costbox' + (rc.empty ? " empty" : "") + '" data-cost-for="' + i + '">' +
         esc(rc.text) + '</div>' +
@@ -505,8 +602,14 @@
         '</div>' + warn + '</div>';
     }).join("");
 
-    html += '<button class="addbtn" data-add-row="1">' + icon("plus", 13)
-      + ' Add another assembly</button>';
+    html += '<div class="addrow2">' +
+      '<button class="addbtn" data-add-row="1">' + icon("plus", 13)
+      + ' Add another assembly</button>' +
+      // TWO BUTTONS, NOT A DROPDOWN. Which kind of row you want is known before you reach for
+      // anything, so making it a choice inside a menu adds a click to both paths to save a button.
+      '<button class="addbtn" data-add-mat="1">' + icon("plus", 13)
+      + ' Add a material</button>' +
+      "</div>";
 
     // ── the three that came off the intake form, 2026-09-16 ─────────────────────────────────
     // They are questions about the WORK, and the work is described here. On intake they sat among
@@ -869,10 +972,20 @@
 
   function renderDatalist() {
     var dl = $("dl-assemblies");
-    if (!dl) return;
-    dl.innerHTML = ASMS.map(function (a) {
-      return '<option value="' + esc(a.name) + '"></option>';
-    }).join("");
+    if (dl) {
+      dl.innerHTML = ASMS.map(function (a) {
+        return '<option value="' + esc(a.name) + '"></option>';
+      }).join("");
+    }
+    // The materials list, filled from the same load. Kept apart from the assemblies rather than
+    // merged: a row is one or the other, and a merged list would let somebody pick a system into
+    // the field that prices a single product.
+    var dli = $("dl-items");
+    if (dli) {
+      dli.innerHTML = ITEMS.map(function (it) {
+        return '<option value="' + esc(it.name) + '"></option>';
+      }).join("");
+    }
   }
 
   /** Refresh every computed figure in place, without rebuilding the panel.
@@ -974,6 +1087,16 @@
       changed(true);
       return;
     }
+    // `kind` IS ON THE ROW, not inferred from item_id being set. A material row that has not been
+    // pointed at anything yet has an empty item_id, and inferring from that alone would redraw it
+    // as an assembly row the moment somebody cleared the field -- taking their measurement and
+    // coverage with it.
+    if (t.closest("[data-add-mat]")) {
+      M.takeoff.push({ kind: "item", item_id: "", item_name: "", measurement: "", unit: "SF",
+                       coverage: "" });
+      changed(true);
+      return;
+    }
     var dr = t.closest("[data-del-row]");
     if (dr) {
       M.takeoff.splice(parseInt(dr.getAttribute("data-del-row"), 10), 1);
@@ -1049,6 +1172,30 @@
     return !!asm;
   }
 
+  /** setAssembly's opposite number, and deliberately simpler than it.
+   *
+   *  NO UNIT ADOPTION. An assembly declares the unit it is measured in, so picking one can
+   *  legitimately switch the row to LF. An item's `unit` is the unit it is BOUGHT in -- gallons,
+   *  kits, pails -- which has nothing to do with how the floor is measured. Copying it onto the
+   *  row would set a 12,000 SF area to "gallons" and price against it.
+   *
+   *  COVERAGE IS LEFT ALONE on a pick, for the reason covPlaceholder gives: the item's default is
+   *  shown as a placeholder and used when the box is empty, so writing it INTO the box would turn
+   *  a library default into something indistinguishable from a figure somebody typed for this
+   *  job. */
+  function setMaterial(i, text) {
+    var row = M.takeoff[i];
+    if (!row) return false;
+    row.item_name = text;
+    var want = String(text || "").trim().toLowerCase();
+    var hit = null;
+    for (var n = 0; n < ITEMS.length; n++) {
+      if (String(ITEMS[n].name || "").trim().toLowerCase() === want) { hit = ITEMS[n]; break; }
+    }
+    row.item_id = hit ? hit.id : "";
+    return !!hit;
+  }
+
   document.addEventListener("input", function (e) {
     var el = e.target;
     if (!el || !el.matches) return;
@@ -1072,6 +1219,7 @@
     if (ti !== null && k) {
       var i = parseInt(ti, 10);
       if (k === "assembly_name") setAssembly(i, el.value);
+      if (k === "item_name") setMaterial(i, el.value);
       else if (M.takeoff[i]) M.takeoff[i][k] = el.value;
       changed(false);
       return;

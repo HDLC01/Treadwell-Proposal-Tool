@@ -106,6 +106,18 @@
     .tk-h .tag{font:700 10.5px var(--mono);letter-spacing:.06em;color:var(--ink-v)}
     .tk-sub{margin-left:auto;font:600 13px var(--mono);font-variant-numeric:tabular-nums}
     .tk-g{display:grid;gap:14px;grid-template-columns:2.1fr 1fr .75fr 1.15fr;align-items:start}
+    /* A material row carries one more field than an assembly row -- coverage, which an assembly
+       keeps on its own lines. Its own column template rather than a fifth column on the shared
+       one, so an assembly row does not grow an empty gap where coverage would go. */
+    .tk-g.matg{grid-template-columns:1.9fr .9fr .7fr .85fr 1.05fr}
+    /* Marked, not restyled. It is the same kind of thing as the row above it -- something the job
+       buys -- so it reads as one list. The tag says which kind it is; the card does not need to. */
+    .tk.mat .tag{background:var(--surf-low);color:var(--ink-v)}
+    /* Two ways to add, side by side. Which kind you want is known before you reach for either, so
+       a dropdown would add a click to both paths to save one button. */
+    .addrow2{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+    @media (max-width:640px){ .addrow2{grid-template-columns:1fr}
+      .tk-g.matg{grid-template-columns:1fr} }
     @media (max-width:760px){ .tk-g{grid-template-columns:1fr} }
     .x{background:none;border:0;color:var(--ink-3);cursor:pointer;flex:none;display:inline-flex;align-items:center;justify-content:center;padding:2px}
     .x:hover{color:var(--red)}
@@ -308,6 +320,10 @@
   <!-- Populated from the assemblies in the Items &amp; Assemblies library. A list= input searches
        anywhere in the name, which is how somebody who remembers "grind" finds the assembly. -->
   <datalist id="dl-assemblies"></datalist>
+  <!-- The materials a takeoff row can point at directly. A separate list from the assemblies on
+       purpose: they are different things and a row is one or the other, so one merged list would
+       let somebody pick a system into a field that prices a single product. -->
+  <datalist id="dl-items"></datalist>
 
   <div class="bid" id="bidbar" hidden>
     <div class="bid-in">
