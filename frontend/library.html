@@ -823,9 +823,23 @@
         <div class="admin-section" id="default-takeoff">
           <h2>Takeoff</h2>
           <div class="card">
-            <div class="empty">
+            <div class="tw">
+              <table>
+                <thead><tr><th>Line</th><th>Kind</th><th>How it is priced</th>
+                  <th class="w-act"></th></tr></thead>
+                <!-- FILLED BY renderDefaultTakeoff(). Three things end up here and they are not
+                     the same kind of thing, which is why the Kind column exists rather than three
+                     separate tables: an assembly and a material are rows a new estimate OPENS
+                     WITH, and a condition is a Yes/No it opens ANSWERED. Splitting them into
+                     sections would say they are unrelated; a column says they are the same list
+                     read three ways, which is what they are. -->
+                <tbody id="default-takeoff-body"></tbody>
+              </table>
+            </div>
+            <div id="default-takeoff-empty" class="empty" hidden>
               <h3>Nothing set yet</h3>
-              <p>The takeoff lines a new estimate opens with.</p>
+              <p>The takeoff lines a new estimate opens with. Switch a material or assembly on
+                under Items or Assemblies and it appears here.</p>
             </div>
             <!-- THE THIRD WAY IN, and it exists because the other two both assume you already
                  know the thing. The row switch needs you to find the row; the search needs you to
