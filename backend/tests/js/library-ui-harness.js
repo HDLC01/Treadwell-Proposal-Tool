@@ -3363,6 +3363,12 @@ out.page = {
       }),
       // The same container the Administration lists use, which is what was asked for.
       usesAdminGrid: /class="admin-grid"/.test(pane),
+      // A WAY IN, not a filter. Hanz asked for it "for when entering the defaults", so the
+      // placeholder has to read as adding rather than narrowing -- the same box worded the other
+      // way is a different feature that happens to look identical.
+      search: /id="default-q"/.test(pane),
+      searchIsForAdding: /placeholder="Search materials and assemblies to add"/.test(pane),
+      searchAboveTheLists: pane.indexOf('id="default-q"') < pane.indexOf('class="admin-grid"'),
       sectionCount: (pane.match(/class="admin-section"/g) || []).length,
     };
   })(),

@@ -102,6 +102,28 @@ def test_the_defaults_tab_splits_by_the_estimates_steps_not_the_librarys(ran):
 
 
 @needs_node
+def test_the_defaults_tab_has_a_search_for_entering_them(ran):
+    """Hanz, 2026-09-16: "make sure there is a search bar as well ... for when entering the
+    defaults."
+
+    A WAY IN, NOT A FILTER, and the difference is the whole test. The same box worded the other
+    way is a different feature that looks identical: one searches the LIBRARY so a result can be
+    switched on, the other narrows the two lists already on the pane. Those lists are short by
+    design -- a default is something chosen on purpose -- so a box that only narrowed them would
+    be more chrome than the thing it searched.
+
+    It sits ABOVE the lists because it adds to them. Below, it reads as filtering what it follows.
+
+    Mutation: reword the placeholder to "Search the defaults", or move the box under the grid."""
+    c = ran["page"]["defaultsCategories"]
+    assert c["search"], "the defaults tab has no search box"
+    assert c["searchIsForAdding"], (
+        "the search reads as a filter over the lists rather than a way to add to them")
+    assert c["searchAboveTheLists"], (
+        "the search sits under the lists, where it reads as narrowing them")
+
+
+@needs_node
 def test_the_new_tab_is_wired_to_its_pane_and_not_just_drawn():
     """A button in the tab strip with no entry in PANES renders identically to a working one and
     does nothing when pressed. That is the failure worth a test here, because nothing else on the

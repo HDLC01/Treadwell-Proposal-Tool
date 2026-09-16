@@ -799,6 +799,26 @@
            Same container as Administration on purpose: .admin-grid of .admin-section, each a
            heading over a card. It is the page's established shape for "a list an admin curates",
            which is what both of these are. -->
+      <!-- A WAY IN, NOT A FILTER OVER WHAT IS ALREADY HERE. Hanz: "for when entering the
+           defaults". The switch on an item or assembly row is one way to make something a
+           default; this is the other, and it is the one that works when you know what you want
+           and do not want to go and find its row first.
+
+           The two lists below are short by design -- a default is something chosen on purpose --
+           so a box that only narrowed them would be more chrome than the thing it searched. This
+           searches the LIBRARY, and picking a result switches that row on. -->
+      <div class="itemsearch" id="default-search">
+        <span class="searchbox">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
+               focusable="false"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.6-3.6"></path></svg>
+          <input id="default-q" type="search" placeholder="Search materials and assemblies to add"
+                 aria-label="Search the library for a material or assembly to make a default"
+                 autocomplete="off" />
+        </span>
+        <span class="hits" id="default-hits" hidden></span>
+      </div>
+
       <div class="admin-grid">
         <div class="admin-section" id="default-takeoff">
           <h2>Takeoff</h2>
