@@ -776,9 +776,39 @@ const rendered = [];      // every string the page put on screen, for the Labour
       }),
       // The toggle lives in the header (before the fields grid starts), on Travel's own card
       // (card index 2, the auto-appended row) -- not the old inline hint link.
-      toggleInHeader: /class="labtoggle" data-lab-manual="2"/.test(
+      toggleInHeader: /class="mw-sw labsw" role="switch"[^>]*data-lab-manual="2"/.test(
         (panels.innerHTML.split('class="tk lab')[3] || "").split('class="tk-g')[0]),
       linkishGone: panels.innerHTML.indexOf("linkish") === -1,
+      // A SWITCH REPORTS ITS STATE, which is the whole reason this stopped being a button
+      // whose words flipped. Off while the figure is derived, on once it is typed --
+      // and the label stays the same sentence in both, so it describes what IS rather
+      // than what clicking would do.
+      // BOTH POSITIONS, because the fixture only ever renders one. Travel boots in AUTO, so
+      // a check that reads the page as-built inspects a single branch of the ternary --
+      // flipping the OTHER branch back to "Back to auto" then changes nothing any
+      // assertion can see. The manual state has to be entered before it can be asserted.
+      toggleSaysItsState: await (async () => {
+        const k = build();
+        await k.api.init();
+        k.api.go(1);
+        const kp = k.dom.get("panels");
+        const ti = k.api.model().labor.findIndex((r) => r.id === "travel");
+        const headOf = () => (kp.innerHTML.split('class="tk lab')[ti + 1] || "")
+          .split('class="tk-g')[0];
+        const offHead = headOf();                 // derived: switch off
+        clickOn(k, '[data-lab-manual="' + ti + '"]');
+        const onHead = headOf();                  // typed: switch on
+        const read = (h, want) => ({
+          checked: h.indexOf('aria-checked="' + want + '"') !== -1,
+          labelOnce: (h.match(/Type my own/g) || []).length,
+          backToAutoGone: h.indexOf("Back to auto") === -1,
+          hasTrack: h.indexOf('<span class="track">') !== -1,
+        });
+        return { off: read(offHead, "false"), on: read(onHead, "true") };
+      })(),
+      // Still a <button>: the `.mw-sw` conditions are spans with no keydown handler, so
+      // matching them visually must not cost this control its keyboard.
+      toggleIsAButton: /<button[^>]*class="mw-sw labsw"/.test(panels.innerHTML),
     };
 
     // ── the derived Guys figure, and the two ways across the auto/manual line ──
