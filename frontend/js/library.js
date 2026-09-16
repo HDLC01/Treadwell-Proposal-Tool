@@ -1892,6 +1892,42 @@
   // must not run on every keystroke of a search. It is cheap and self-guarding either way.
   function paint() {
     renderItems(); renderFilterBar(); renderVendors(); renderList(); renderPanel();
+    renderDefaultLabor();
+  }
+
+  /** The Labor defaults. Travel is in here before anybody adds anything.
+   *
+   *  IT IS NOT A NEW DEFAULT, it is the one that was always there and never shown. Every new
+   *  estimate is seeded with a Travel row and every older draft has one appended on migration, so
+   *  the bid has behaved this way for months -- what was missing is anywhere to SEE that, which is
+   *  what made it read as hardcoded rather than as a default somebody chose.
+   *
+   *  READ FROM THE SHARED MODULE, never re-typed. travelSeed's own comment records the two copies
+   *  that existed before drifting within a day; a third on this page would drift unseen, because
+   *  nothing here prices anything and a stale rate would look exactly like a fresh one.
+   *
+   *  BUILT IN, so it carries no remove control. Taking it off is a change to what every bid opens
+   *  with, and the estimate has no way to express "no travel row at all" -- the row dims itself on
+   *  a local job instead, which is the behaviour that replaces deleting it. */
+  function renderDefaultLabor() {
+    var body = $("default-labor-body");
+    if (!body) return;
+    var B = window.TWPolishBid;
+    var rows = B && B.travelSeed ? [B.travelSeed()] : [];
+    var out = "";
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      out += "<tr>" +
+        "<td>" + esc(r.label) + "</td>" +
+        '<td class="n">' + esc(L.money(r.rate)) + (r.unit === "hours" ? " / hr" : "") + "</td>" +
+        "<td>" + (r.guys_auto
+          ? "Man-days come off the crew rows above it"
+          : "Typed on the estimate") + "</td>" +
+        '<td class="rowact"><span class="builtin">Built in</span></td>' +
+        "</tr>";
+    }
+    body.innerHTML = out;
+    if ($("default-labor-empty")) $("default-labor-empty").hidden = rows.length > 0;
   }
 
   // ── view switch ────────────────────────────────────────────────────────────

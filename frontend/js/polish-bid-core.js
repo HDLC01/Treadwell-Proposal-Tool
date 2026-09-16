@@ -710,6 +710,12 @@
     filledIn: filledIn,
     takeoffSf: takeoffSf,
     markupChain: markupChain,
-    freshModel: freshModel, migrateModel: migrateModel, blockers: blockers
+    freshModel: freshModel, migrateModel: migrateModel, blockers: blockers,
+    // EXPORTED 2026-09-16 for a THIRD reader: the library page's Defaults tab lists Travel as the
+    // labor default that already exists. It is exported rather than re-typed there for the reason
+    // written above travelSeed itself -- the two copies that existed before drifted within a day,
+    // and a third on another page would have drifted unseen, because nothing on the library page
+    // prices anything and nobody would have noticed the rate go stale.
+    travelSeed: travelSeed
   };
 });

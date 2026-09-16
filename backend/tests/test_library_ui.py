@@ -145,6 +145,50 @@ def test_each_defaults_category_has_its_own_add_button(ran):
 
 
 @needs_node
+def test_travel_shows_as_the_labor_default_it_already_was(ran):
+    """Hanz, 2026-09-16: "for labor we already have 1 default which is the travel so that should
+    reflect under labor."
+
+    IT IS NOT A NEW DEFAULT. Every new estimate is seeded with a Travel row and every older draft
+    gets one appended on migration, so the bid has behaved this way for months. What was missing
+    was anywhere to SEE it, which is what made it read as hardcoded rather than as a default
+    somebody chose.
+
+    Mutation: drop the tbody, and Travel has nowhere to render."""
+    c = ran["page"]["defaultsCategories"]
+    assert c["laborTable"], "the Labor category has no table for Travel to render into"
+    assert c["laborEmptyState"], (
+        "the Labor category has no empty state, so a future removal would leave a bare table head")
+
+
+def test_the_labor_default_is_read_from_the_estimate_not_retyped():
+    """THE WHOLE POINT OF THE WIRING, and the reason it is asserted at the source.
+
+    `travelSeed` carries its own warning: it was written out twice, and the two copies drifted
+    within a day. A third copy on THIS page would have drifted unseen — nothing here prices
+    anything, so a stale rate looks exactly like a fresh one and no total would ever disagree.
+
+    So the renderer must go through the shared module, and must not carry Travel's label or its
+    rate as literals of its own.
+
+    Mutation: replace `B.travelSeed()` with a typed-out row."""
+    js = (FRONTEND / "js" / "library.js").read_text(encoding="utf-8", errors="replace")
+    start = js.index("function renderDefaultLabor")
+    body = js[start:js.index("view switch", start)]
+    assert "B.travelSeed()" in body, (
+        "the Labor default is not read from the shared module")
+    assert '"Travel"' not in body and "33" not in body, (
+        "the renderer carries Travel's own label or rate as a literal, which is the copy that "
+        "drifts")
+    html = (FRONTEND / "library.html").read_text(encoding="utf-8", errors="replace")
+    assert "/js/polish-bid-core.js" in html, (
+        "the shared module is not loaded, so travelSeed is unreachable and the list renders empty")
+    core = (FRONTEND / "js" / "polish-bid-core.js").read_text(encoding="utf-8", errors="replace")
+    assert "travelSeed: travelSeed" in core, (
+        "travelSeed is no longer exported, so this page cannot reach it")
+
+
+@needs_node
 def test_the_new_tab_is_wired_to_its_pane_and_not_just_drawn():
     """A button in the tab strip with no entry in PANES renders identically to a working one and
     does nothing when pressed. That is the failure worth a test here, because nothing else on the
