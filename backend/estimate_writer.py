@@ -263,6 +263,13 @@ _WB_CACHE: Dict[tuple[str, bool], tuple[float, Any]] = {}
 # repeat tab visits to ~1ms.
 _SHEET_GRID_CACHE: Dict[tuple[str, str, float], Dict[str, Any]] = {}
 
+# Just the tab NAMES, keyed by (path, mtime) — see list_sheet_names for why a
+# list of sixteen strings deserves a cache of its own rather than being read off
+# one of the caches above. It cannot be: the workbooks in _WB_CACHE cost several
+# hundred ms to build, so deriving the names from one would make the cheap
+# request wait for the expensive parse it is trying to avoid.
+_SHEET_NAMES_CACHE: Dict[str, tuple[float, list[str]]] = {}
+
 
 # Raw template BYTES, keyed by (path, mtime). Separate from _WB_CACHE on purpose, and it is the
 # difference between a cheap fill and an expensive one.
@@ -1858,12 +1865,40 @@ def read_named_expressions() -> list[Dict[str, Any]]:
 
 
 def list_sheet_names(*, path: Path = TEMPLATE_PATH) -> list[str]:
-    """List every sheet in the template (used by tab bar)."""
+    """List every sheet in the template (used by tab bar).
+
+    CACHED BY MTIME, because this reads a whole workbook to produce sixteen
+    strings and it is the request that gates the other sixteen. `/api/sheets` is
+    the FIRST thing estimate-review fetches — the tab bar cannot render without
+    it, and no grid is asked for until it does — so every millisecond here is
+    paid before any sheet fetch has even started. Measured 2026-09-17 on the dev
+    box: 190-225 ms to return 236 bytes of JSON, five runs.
+
+    `read_only=True` does not help as much as it reads: openpyxl still parses
+    workbook.xml and the shared-string table before it can name a sheet. The
+    cheap fix is not to do it twice.
+
+    Same (path, mtime) shape as _WB_CACHE and _TEMPLATE_BYTES above, and for the
+    same reason: this module serves the Project Info Sheet's workbook too, so a
+    path-less key would hand one workbook's tab list to the other's request, and
+    Kyle swapping in a new template still has to take effect without a restart.
+
+    Returns a COPY. The list is handed straight to a JSON response today, but a
+    caller that sorted it in place would otherwise reorder the tab bar for every
+    later request in the process.
+    """
+    key = str(path)
+    mtime = path.stat().st_mtime
+    hit = _SHEET_NAMES_CACHE.get(key)
+    if hit is not None and hit[0] == mtime:
+        return list(hit[1])
     wb = load_workbook(path, read_only=True)
     try:
-        return list(wb.sheetnames)
+        names = list(wb.sheetnames)
     finally:
         wb.close()
+    _SHEET_NAMES_CACHE[key] = (mtime, names)
+    return list(names)
 
 
 def _fill_hex(cell) -> str | None:
