@@ -438,6 +438,28 @@
     return B.num(r.measurement) ? B.fmtSf(r.measurement) + " " + (r.unit || "SF") : "";
   }
 
+  /** The three conditions that describe the work, as cards rather than as bare switches.
+   *
+   *  A SPEC RATHER THAN THREE COPIES OF THE SAME MARKUP, and the `cell` is on it deliberately: the
+   *  only thing these actually do is set that cell, so naming it on screen is the difference
+   *  between a control whose effect you can see and one you have to be told about. The star this
+   *  page's library replaced got that wrong for two years.
+   *
+   *  `needs` is the gate remove_existing_jf carried on the intake form. It adds a fourth hand to
+   *  the joint-filler crew, so with no joint filler there is no crew for it to be the fourth hand
+   *  of -- dimmed, never hidden, and its answer still reaches Polish!F29 either way. */
+  var CONDITION_CARDS = [
+    { key: "joint_filler", tag: "JOINT FILLER", label: "Filling the joints", cell: "Polish!E29",
+      why: "One kit per 3,500 sq ft. The kits are counted by the workbook, not by this screen — " +
+           "there is no joint-filler assembly in the library for it to price from." },
+    { key: "remove_existing_jf", tag: "REMOVE EXISTING", label: "Taking the old filler out",
+      cell: "Polish!F29", needs: "joint_filler",
+      why: "Adds a fourth hand to the joint-filler line. Priced on the Labor step, where that " +
+           "line is." },
+    { key: "dye", tag: "DYE", label: "Two coats of dye", cell: "Polish!E25",
+      why: "Across the polished area. Carried to the workbook; nothing on this screen prices it." }
+  ];
+
   function takeoffPanel() {
     var html = M.takeoff.map(function (r, i) {
       var rc = rowCost(r);
@@ -499,14 +521,28 @@
     // remove_existing_jf IS GATED ON joint_filler, which is the `needs` rule it carried on intake.
     // It adds a fourth hand to the joint-filler crew, so with no joint filler there is no crew for
     // it to be the fourth hand of. Gated, still written: a blank cell is not "No" to Kyle.
-    html += '<div class="tkconds">' +
-      '<p class="cap">These set a Yes or No in the downloaded workbook. None of them moves the ' +
-      'price on this screen.</p>' +
-      condSwitch("joint_filler", "Joint filler") +
-      condSwitch("remove_existing_jf", "Remove existing joint filler",
-                 !M.conditions.joint_filler) +
-      condSwitch("dye", "Dye") +
-      "</div>";
+    // A CARD EACH, the same `.tk` container the assembly rows above use. Hanz asked for it and he
+    // is right: three bare switches under a column of cards read as page furniture -- something
+    // that configures the list rather than something IN it. These describe the work the same way a
+    // takeoff row does, so they get the same box.
+    //
+    // WHAT THEY ARE NOT is a row, and the card has to be honest about that or it is worse than the
+    // switches were. An assembly row carries a measurement and comes to a number. These carry a
+    // Yes or No and come to nothing on this screen: the arithmetic they drive -- one kit per 3,500
+    // sq ft -- lives in Kyle's workbook, off Polish!E29, and the beta has no assembly to price it
+    // from. So the card states its own cost as "not priced here" rather than "$0", which would be
+    // a figure and would be wrong.
+    html += CONDITION_CARDS.map(function (c) {
+      var inert = c.needs && !M.conditions[c.needs];
+      return '<div class="tk cond' + (inert ? " inert" : "") + '">' +
+        '<div class="tk-h">' +
+        '<span class="tag">' + esc(c.tag) + "</span>" +
+        condSwitch(c.key, c.label, inert) +
+        '<span class="tk-sub">' + esc(c.cell) + "</span>" +
+        "</div>" +
+        '<p class="hint">' + esc(c.why) + "</p>" +
+        "</div>";
+    }).join("");
 
     html += '<p class="cap">Material total <b data-mat-total>' +
       esc(moneyAuto(materialTotal())) + '</b> · measured area <b data-area-total>' +

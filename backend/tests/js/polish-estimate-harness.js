@@ -1357,6 +1357,21 @@ const rendered = [];      // every string the page put on screen, for the Labour
       gatedWhenJointFillerOff: gatedOff.inert,
       ungatedWhenJointFillerOn: gatedOn.inert === false,
       // Not on the Labor step, where they would read as priced labor.
+      // THE CONTAINER. Hanz: "at least make it a container the same as the assemblie". Three bare
+      // switches under a column of cards read as page furniture -- something that configures the
+      // list rather than something in it.
+      cards: (function () {
+        var h = s.dom.get("panels").innerHTML;
+        return {
+          count: (h.match(/class="tk cond/g) || []).length,
+          // The card must NOT claim a cost. An assembly row comes to a number; these come to a
+          // Yes/No that only Kyle's workbook reads, and printing "$0" beside one would be a
+          // figure, and would be wrong.
+          noCostBox: !/class="tk cond[^"]*"[\s\S]{0,600}?costbox/.test(h),
+          // It names the cell it sets, which is the only thing it actually does.
+          namesItsCell: /Polish!E29/.test(h) && /Polish!F29/.test(h) && /Polish!E25/.test(h),
+        };
+      })(),
       notOnTheLaborStep: (function () {
         const t = build(); t.api.go(1);
         return !/data-cond="joint_filler"/.test(t.dom.get("panels").innerHTML);

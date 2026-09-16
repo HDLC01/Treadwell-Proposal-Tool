@@ -962,6 +962,18 @@ def test_the_three_that_moved_render_as_switches_on_the_takeoff_step(ran):
         assert t[key]["there"], "%s does not render on the Takeoff step" % key
     assert ran["movedToTakeoff"]["notOnTheLaborStep"], (
         "the moved conditions render on the Labor step, where they read as priced labor")
+    # A CARD EACH, the same `.tk` container the assembly rows use. Hanz: "at least make it a
+    # container the same as the assemblie". Three bare switches under a column of cards read as
+    # page furniture -- something that configures the list rather than something in it.
+    c = ran["movedToTakeoff"]["cards"]
+    assert c["count"] == 3, "expected three condition cards, found %s" % c["count"]
+    # AND THE CARD MUST NOT CLAIM A COST. An assembly row comes to a number; these come to a
+    # Yes/No that only Kyle's workbook reads. Printing "$0" beside one would be a figure, and a
+    # figure is a claim -- the kits ARE charged, by Polish!E29, just not by this screen.
+    assert c["noCostBox"], (
+        "a condition card renders a cost box, which says it priced something it did not")
+    assert c["namesItsCell"], (
+        "the cards do not name the cells they set, which is the only thing they do")
 
 
 @needs_node
