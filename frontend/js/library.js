@@ -680,15 +680,6 @@
     return j;
   }
 
-  /** The switch itself, one builder for the item row and the assembly editor so the two cannot
-   *  drift into meaning the same thing differently. A <button role="switch">, not a <span>: this
-   *  page's icon controls are all real buttons and the keyboard reaches them. */
-  function defaultSwitch(attr, id, on) {
-    return '<button type="button" class="defsw' + (on ? " on" : "") + '" role="switch"' +
-      ' aria-checked="' + (on ? "true" : "false") + '" ' + attr + '="' + esc(id) + '">' +
-      '<span class="track"></span>Default</button>';
-  }
-
   // ── items ──────────────────────────────────────────────────────────────────
   /** A dropdown that never loses what the row already says.
    *
@@ -994,7 +985,6 @@
         '<td class="n"><span class="money"><span>$</span><input data-f="unit_cost" class="num cell-cost" value="' + (it.unit_cost == null ? "" : it.unit_cost) + '" aria-label="Cost of one purchase"></span></td>' +
         "<td>" + pick("vendor", it.vendor, vendorNames(), "Vendor", ' class="cell-vendor"') + "</td>" +
         '<td class="datescell">' + datesHtml(it) + "</td>" +
-        '<td>' + defaultSwitch("data-def-item", it.id, !!it.favorite) + "</td>" +
         '<td class="rowact">' +
           '<button class="icon" type="button" data-dupe-item="' + esc(it.id) + '" title="Make a copy of this material" aria-label="Duplicate ' + esc(it.name) + '">' + icon("copy") + "</button>" +
           '<button class="icon danger" type="button" data-del-item="' + esc(it.id) + '" title="Remove this material" aria-label="Remove ' + esc(it.name) + '">' + icon("trash") + "</button></td>" +
@@ -1817,11 +1807,6 @@
     if (!asm) return;
 
     if ($("asm-name").value !== asm.name) $("asm-name").value = asm.name;
-    if ($("asm-def")) {
-      var defBtnEl = $("asm-def");
-      defBtnEl.classList.toggle("on", !!asm.favorite);
-      defBtnEl.setAttribute("aria-checked", asm.favorite ? "true" : "false");
-    }
     var area = $("area").value;
     var p = L.priceAssembly(asm, ITEMS, area);
     var out = "";
@@ -1956,6 +1941,100 @@
    *  conditions follow because they are built in -- nobody set them on this page and nobody can
    *  unset them here either, which is why they carry no switch and say "Built in" the way Travel
    *  does under Labor. */
+  /** The Defaults tab's own way in, which is what lets the switches come off the other two tabs.
+   *
+   *  THE SEARCH IS THE CONTROL, not a filter over what is already listed. Hanz asked for it "for
+   *  when entering the defaults", and with the row switches gone it is the only way a library row
+   *  becomes a default at all -- so it has to ADD, and the results have to be things not already
+   *  on the list.
+   *
+   *  Assemblies before materials, and both capped: a library of 200 items behind a two-character
+   *  query is a wall, not a picker. The cap is stated on screen rather than silently applied,
+   *  because a result somebody expected and cannot see reads as the search being broken. */
+  /** Edit and Remove, on the rows that can have them.
+   *
+   *  THIS IS AN ADMIN SCREEN, not a viewport -- Hanz, and he is right: a list you can only look at
+   *  makes you go somewhere else to change anything it shows.
+   *
+   *  EDIT GOES TO THE ROW ITSELF rather than editing here. What you would want to change about a
+   *  default assembly -- its lines, its unit, a material's cost -- is the assembly, not the fact
+   *  that it is a default. Two places to edit one thing is how they come to disagree, and this
+   *  page already has the good version of that argument written into markup.py.
+   *
+   *  REMOVE MEANS "STOP BEING A DEFAULT". It does not delete the assembly, which would be a very
+   *  different and much worse button to put on this screen, so it says Remove and not the bin
+   *  glyph the Items tab uses for actual deletion. */
+  /** On or off, for either kind, with the optimistic flip and the put-it-back both in one place.
+   *
+   *  ONE FUNCTION FOR ADD AND REMOVE because they are the same write: `favorite` true or false.
+   *  Two functions would be two places to forget the rollback, and a default that looks removed
+   *  and comes back on the next reload is worse than one that refuses. */
+  async function setDefault(kind, id, on) {
+    var list = kind === "assemblies" ? ASMS : ITEMS;
+    var row = null;
+    for (var i = 0; i < list.length; i++) if (list[i].id === id) { row = list[i]; break; }
+    if (!row) return;
+    var was = !!row.favorite;
+    row.favorite = !!on;
+    paint();
+    try {
+      await patchDefault(kind, id, !!on);
+    } catch (err) {
+      row.favorite = was;
+      paint();
+      say("Couldn't save that. " + err.message);
+    }
+  }
+
+  function defaultRowActions(kind, id, name) {
+    return '<button class="linkish" type="button" data-def-edit="' + esc(kind) +
+      '" data-def-id="' + esc(id) + '">Edit</button>' +
+      '<button class="linkish danger" type="button" data-def-off="' + esc(kind) +
+      '" data-def-id="' + esc(id) + '" aria-label="Stop ' + esc(name) +
+      ' being a default">Remove</button>';
+  }
+
+  var DEFAULT_Q = "";
+  var DEFAULT_MAX = 8;
+
+  function defaultCandidates() {
+    var q = DEFAULT_Q.trim().toLowerCase();
+    if (!q) return { rows: [], more: 0 };
+    var hits = [];
+    ASMS.forEach(function (a) {
+      if (!a.favorite && String(a.name || "").toLowerCase().indexOf(q) !== -1) {
+        hits.push({ kind: "assemblies", id: a.id, name: a.name, what: "Assembly" });
+      }
+    });
+    ITEMS.forEach(function (it) {
+      if (!it.favorite && String(it.name || "").toLowerCase().indexOf(q) !== -1) {
+        hits.push({ kind: "items", id: it.id, name: it.name, what: "Material" });
+      }
+    });
+    return { rows: hits.slice(0, DEFAULT_MAX), more: Math.max(0, hits.length - DEFAULT_MAX) };
+  }
+
+  function renderDefaultSearch() {
+    var box = $("default-hits");
+    if (!box) return;
+    var res = defaultCandidates();
+    if (!DEFAULT_Q.trim()) { box.hidden = true; box.innerHTML = ""; return; }
+    box.hidden = false;
+    if (!res.rows.length) {
+      box.innerHTML = '<p class="nores">Nothing left to add by that name. Anything already a ' +
+        "default is not offered twice.</p>";
+      return;
+    }
+    box.innerHTML = res.rows.map(function (r) {
+      return '<button class="defhit" type="button" data-def-add="' + esc(r.kind) +
+        '" data-def-id="' + esc(r.id) + '">' + esc(r.name) +
+        '<span class="k">' + esc(r.what) + "</span></button>";
+    }).join("") + (res.more
+      ? '<p class="nores">' + res.more + " more match" + (res.more === 1 ? "" : "es") +
+        " — keep typing.</p>"
+      : "");
+  }
+
   function renderDefaultTakeoff() {
     var body = $("default-takeoff-body");
     if (!body) return;
@@ -1964,14 +2043,14 @@
       out += "<tr><td>" + esc(a.name) + "</td><td>Assembly</td>" +
         "<td>" + (a.lines || []).length + " item line" +
         ((a.lines || []).length === 1 ? "" : "s") + " · per " + esc(a.unit || "SF") + "</td>" +
-        '<td class="rowact"></td></tr>';
+        '<td class="rowact">' + defaultRowActions("assemblies", a.id, a.name) + "</td></tr>";
     });
     ITEMS.filter(function (it) { return it.favorite; }).forEach(function (it) {
       out += "<tr><td>" + esc(it.name) + "</td><td>Material</td>" +
         "<td>" + (L.num(it.unit_cost) != null
           ? esc(L.money(it.unit_cost)) + " per " + esc(it.unit || "unit")
           : "No cost in the library yet") + "</td>" +
-        '<td class="rowact"></td></tr>';
+        '<td class="rowact">' + defaultRowActions("items", it.id, it.name) + "</td></tr>";
     });
     GLOBAL_MARKUP.forEach(function (g) {
       out += "<tr><td>" + esc(g.label) + "</td><td>Markup</td>" +
@@ -2735,21 +2814,35 @@
     // Reading it off e.target would make the button dead over most of its own area. The
     // pointer-events rule on `.icon svg` also prevents it; this is the half that survives
     // somebody tidying the stylesheet.
-    var defBtn = t.closest && t.closest("[data-def-item]");
-    var defId = defBtn && defBtn.getAttribute("data-def-item");
-    if (defId) {
-      var defIt = itemOf(defId);
-      if (!defIt) return;
-      var wantDef = !defIt.favorite;
-      defIt.favorite = wantDef;        // optimistic -- a switch press is not worth a spinner
-      renderItems();
-      try {
-        await patchDefault("items", defId, wantDef);
-      } catch (err) {
-        defIt.favorite = !wantDef;     // the server said no; put the switch back
-        renderItems();
-        say("Couldn't save that. " + err.message);
-      }
+    // ── the Defaults tab owns defaults now ────────────────────────────────────────────────────
+    // The switch came off the item rows and the assembly editor on 2026-09-17, at Hanz's ask:
+    // "all the default items in assemblies should be handled in default items in assemblies tab".
+    // These three are what replaced it, and they had to land in the same change -- a tab that
+    // lists defaults but cannot set them would have left no way to set one at all.
+    var addBtn = t.closest && t.closest("[data-def-add]");
+    if (addBtn) {
+      await setDefault(addBtn.getAttribute("data-def-add"),
+                       addBtn.getAttribute("data-def-id"), true);
+      DEFAULT_Q = "";                      // the row has moved to the list; the hit is spent
+      var qbox = $("default-q");
+      if (qbox) qbox.value = "";
+      renderDefaultSearch();
+      return;
+    }
+    var offBtn = t.closest && t.closest("[data-def-off]");
+    if (offBtn) {
+      await setDefault(offBtn.getAttribute("data-def-off"),
+                       offBtn.getAttribute("data-def-id"), false);
+      return;
+    }
+    // EDIT GOES TO THE ROW, not to an editor here. What you want to change about a default is the
+    // assembly or the material, and this page already has screens for both.
+    var edBtn = t.closest && t.closest("[data-def-edit]");
+    if (edBtn) {
+      var ek = edBtn.getAttribute("data-def-edit");
+      var eid = edBtn.getAttribute("data-def-id");
+      if (ek === "assemblies") { openId = eid; showView("asm"); paint(); }
+      else { showView("items"); paint(); focusItemRow(eid); }
       return;
     }
 
@@ -2960,22 +3053,6 @@
         VENDORS = VENDORS.filter(function (x) { return x.id !== dv; });
         paint();
       } catch (err) { say("Couldn't remove that vendor. " + err.message); }
-      return;
-    }
-
-    if (t.closest && t.closest("#asm-def")) {
-      var defAsm = current();
-      if (!defAsm) return;
-      var wantAsmDef = !defAsm.favorite;
-      defAsm.favorite = wantAsmDef;      // optimistic, same as the item switch
-      renderPanel(); renderList();
-      try {
-        await patchDefault("assemblies", defAsm.id, wantAsmDef);
-      } catch (err) {
-        defAsm.favorite = !wantAsmDef;
-        renderPanel(); renderList();
-        say("Couldn't save that. " + err.message);
-      }
       return;
     }
 
