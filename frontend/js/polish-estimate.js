@@ -506,11 +506,36 @@
     // get this button, because clicking it would run the same handler as Travel's and overwrite
     // that row's own Guys with the man-day sum. A bare <button>, no wrapper, so its own click
     // target is what data-lab-manual/-auto sits on.
+    //
+    // A SWITCH, NOT A BUTTON WHOSE WORDS FLIP. The old control read "Type my own", and
+    // once pressed, "Back to auto" -- the label named the ACTION, so it described the
+    // state you were leaving rather than the one you were in. A switch labels the STATE
+    // and shows it: on means this row's Guys is typed, off means it is derived. One set of
+    // words, always true, and it matches the switches the Review step already uses.
+    //
+    // STILL A <button>, deliberately. The `.mw-sw` conditions are <span role="switch">
+    // with tabindex and no keydown handler, so Space and Enter do nothing on them. This
+    // control is a real button today and reaching it by keyboard works; rendering it as a
+    // span to match would quietly take that away. A <button role="switch"> looks the same
+    // and keeps Space/Enter for free.
+    //
+    // The two data attributes are UNCHANGED and still point at the two existing handlers,
+    // which are not symmetric: going manual also seeds the box with the derived figure and
+    // moves the caret into it, while going auto only sets the flag. Only the markup moved.
     var toggle = !hours ? "" : (auto
-      ? '<button type="button" class="labtoggle" data-lab-manual="' + i +
-        '" aria-label="Type my own Guys figure">Type my own</button>'
-      : '<button type="button" class="labtoggle" data-lab-auto="' + i +
-        '" aria-label="Back to the automatic Guys figure">Back to auto</button>');
+    //
+    // NO aria-label. The visible words ARE the accessible name, and that is the point: an
+    // aria-label here would override them, and the old pair ("Type my own Guys figure" /
+    // "Back to the automatic Guys figure") flipped with the state. Keeping them would have
+    // left a screen-reader user hearing the next ACTION while the screen showed the state,
+    // which is the exact confusion this change removes for everybody else. role="switch"
+    // plus aria-checked already announces on/off.
+      ? '<button type="button" class="mw-sw labsw" role="switch" aria-checked="false"'
+        + ' data-lab-manual="' + i + '">'
+        + '<span class="track"></span>Type my own</button>'
+      : '<button type="button" class="mw-sw labsw on" role="switch" aria-checked="true"'
+        + ' data-lab-auto="' + i + '">'
+        + '<span class="track"></span>Type my own</button>');
     return '<div class="tk lab' + (inert ? " inert" : "") + '" data-lab-card="' + i +
       '"><div class="tk-h">' +
       '<input class="labname" data-lab="' + i + '" data-k="label" value="' + esc(nv(r.label)) +

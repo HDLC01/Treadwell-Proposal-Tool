@@ -473,17 +473,57 @@ def test_travel_undims_live_the_moment_you_type_in_it(ran):
 
 
 @needs_node
-def test_the_type_my_own_toggle_is_a_visible_header_button(ran, html):
-    """Moved out of the small-print hint under Guys and into the card header, as a real button
-    rather than an underlined link — the hint under Guys is too quiet to notice."""
+def test_the_type_my_own_control_is_a_switch_in_the_card_header(ran, html):
+    """Moved out of the small-print hint under Guys and into the card header, and it is now a
+    SWITCH rather than a button whose words flip.
+
+    The old control read "Type my own", and once pressed, "Back to auto". That labels the
+    ACTION, so at any moment it names the state you are LEAVING rather than the one you are
+    in — an estimator glancing at a card could not tell from the words whether Guys was
+    derived or typed. A switch says the state and shows it, in one sentence that stays true
+    in both positions, and it matches the switches the Review step already uses."""
     lab = ran["labor"]
-    assert lab["toggleInHeader"], "the toggle is not in the Travel card's header"
+    assert lab["toggleInHeader"], "the switch is not in the Travel card's header"
     assert lab["noToggleOnCrewRows"], (
         "a crew row offers the auto/manual toggle — clicking it would overwrite that row's own "
         "Guys with the man-day sum")
     assert lab["linkishGone"], "the old underlined-link markup is still being rendered"
-    assert ".labtoggle" in html, "the page no longer defines the header button's own style"
+    assert ".labsw" in html, "the page no longer defines the switch's own style"
     assert ".linkish" not in html, "the old link style is still on the page"
+    assert ".labtoggle" not in html, "the old flipping-button style is still on the page"
+
+
+@needs_node
+def test_the_switch_reports_its_state_instead_of_naming_the_next_action(ran):
+    """What makes it a switch rather than a restyled button.
+
+    Mutation: put the label back to flipping between "Type my own" and "Back to auto", and
+    `labelOnce`/`backToAutoGone` go red."""
+    both = ran["labor"]["toggleSaysItsState"]
+    # BOTH POSITIONS. Travel boots in auto, so checking only the page as-built reads one
+    # branch of the ternary and the other can say anything at all.
+    for state in ("off", "on"):
+        s = both[state]
+        assert s["checked"], (
+            "aria-checked is wrong with the switch %s" % state)
+        assert s["labelOnce"] == 1, (
+            "expected the one unchanging label with the switch %s, found %d copies"
+            % (state, s["labelOnce"]))
+        assert s["backToAutoGone"], (
+            'the control still flips its words to "Back to auto" with the switch %s' % state)
+        assert s["hasTrack"], (
+            "the switch renders without the track the other switches use, %s" % state)
+
+
+@needs_node
+def test_the_switch_is_still_a_button_so_the_keyboard_still_reaches_it(ran):
+    """The `.mw-sw` conditions on this page are <span role="switch"> with tabindex and NO
+    keydown handler, so Space and Enter do nothing on them. This control was a real <button>
+    and worked from the keyboard; matching the others visually must not quietly cost it that.
+
+    Mutation: render it as a <span class="mw-sw labsw">."""
+    assert ran["labor"]["toggleIsAButton"], (
+        "the Guys switch is no longer a <button> — Space and Enter will not operate it")
 
 
 @needs_node
