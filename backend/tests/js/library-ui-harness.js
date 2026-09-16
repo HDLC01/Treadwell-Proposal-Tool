@@ -275,6 +275,11 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   // in this file rather than the one test about names.
   ${fn("byHtml")}
   ${fn("datesHtml")}
+  // BEFORE renderItems and renderPanel, which both draw it. Same hazard as byHtml above, hit
+  // again on 2026-09-16: the default switch replaced the favourite star, renderItems called
+  // defaultSwitch(), and the missing lift was a ReferenceError that reddened all 152 scenarios
+  // in this file rather than the one test about defaults.
+  ${fn("defaultSwitch")}
   // LIFTED, not stubbed, and it has to be lifted BEFORE the three renderers that call it.
   // renderItems, renderRefSection and renderPanel each ask icon() for a glyph now; leaving it
   // out is a ReferenceError that kills every scenario in this file at once.
@@ -3337,6 +3342,43 @@ out.page = {
   wasteHeader: /Waste Factor/.test(html),
   roundupHeader: /Roundup\?/.test(html),
   vendorsTab: /id="tab-vendors"/.test(html),
+  // The fourth tab, and WHERE it sits: Hanz asked for it beside Administration, so the order in
+  // the strip is part of the ask rather than incidental.
+  defaultsTab: /id="tab-defaults"/.test(html),
+  defaultsTabLabel: (/id="tab-defaults"[^>]*>([^<]*)</.exec(html) || [])[1] || "",
+  defaultsTabIsLast: html.indexOf('id="tab-defaults"') > html.indexOf('id="tab-vendors"'),
+  defaultsPaneStartsHidden: /<section id="pane-defaults"[^>]*\shidden/.test(html),
+  // IT SAYS IT IS EMPTY RATHER THAN LOOKING BROKEN. A tab that opens onto nothing reads as a bug;
+  // one that explains it has not been built reads as a decision.
+  defaultsPaneExplainsItself: /Nothing set yet/.test(html),
+  // TWO CATEGORIES, AND WHICH TWO. Hanz asked for takeoff and labor -- the estimate's own steps,
+  // not the library's Items/Assemblies split, which is a different question with its own tabs.
+  defaultsCategories: (function () {
+    var pane = (html.split('id="pane-defaults"')[1] || "").split("</section>")[0];
+    return {
+      takeoff: /id="default-takeoff"/.test(pane),
+      labor: /id="default-labor"/.test(pane),
+      headings: (pane.match(/<h2>([^<]*)<\/h2>/g) || []).map(function (h) {
+        return h.replace(/<\/?h2>/g, "");
+      }),
+      // The same container the Administration lists use, which is what was asked for.
+      usesAdminGrid: /class="admin-grid"/.test(pane),
+      // A WAY IN, not a filter. Hanz asked for it "for when entering the defaults", so the
+      // placeholder has to read as adding rather than narrowing -- the same box worded the other
+      // way is a different feature that happens to look identical.
+      search: /id="default-q"/.test(pane),
+      searchIsForAdding: /placeholder="Search materials and assemblies to add"/.test(pane),
+      searchAboveTheLists: pane.indexOf('id="default-q"') < pane.indexOf('class="admin-grid"'),
+      // AN ADD BUTTON IN EACH, on the same .addrow the Administration lists use. Labor's is not
+      // optional: labor lines are not library rows, so there is nothing to switch on and nothing
+      // for the search to return -- typing here is the only way one gets made.
+      addButtons: (pane.match(/data-add-default="[a-z]+"/g) || [])
+        .map(function (m) { return m.replace(/.*="|"$/g, ""); }),
+      addUsesTheAdminPattern: (pane.match(/class="addrow"/g) || []).length === 2 &&
+        (pane.match(/class="addbtn"/g) || []).length === 2,
+      sectionCount: (pane.match(/class="admin-section"/g) || []).length,
+    };
+  })(),
   noCoverageSfHeader: !/Coverage \(SF\)/.test(html),
   noRoleHeader: !/<th[^>]*>Role<\/th>/.test(html),
 };

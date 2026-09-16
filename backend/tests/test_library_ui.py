@@ -52,6 +52,116 @@ def test_the_page_is_called_items_and_assemblies(ran):
 
 
 @needs_node
+def test_a_fourth_tab_holds_the_defaults_that_are_not_built_yet(ran):
+    """Hanz, 2026-09-16, asked for a tab beside Administration called "Default Items & Assemblies".
+
+    It is EMPTY, and it says so. The favourite star came off this page the same day because what a
+    default should mean had not been settled; the answer will live here once it is. An empty tab
+    that explains itself is the honest version of that. Guessing at the feature and shipping a
+    control nobody agreed to is the thing being undone, so it is not done again here.
+
+    THE ORDER IS PART OF THE ASK. "Beside Administration" is where he put it, so the strip's order
+    is asserted rather than left to whichever end a later edit appends to.
+
+    Mutation: drop `defaults` from PANES in library.js. The tab still renders and still looks like
+    the other three, and clicking it does nothing at all — which is why the pane's own wiring is
+    checked below rather than only the button's presence."""
+    page = ran["page"]
+    assert page["defaultsTab"], "the Default Items & Assemblies tab is not on the page"
+    assert page["defaultsTabLabel"] == "Default Items &amp; Assemblies", (
+        "the tab reads %r" % page["defaultsTabLabel"])
+    assert page["defaultsTabIsLast"], "the tab is not beside Administration, where it was asked for"
+    assert page["defaultsPaneStartsHidden"], (
+        "the new pane is not hidden at rest, so it would show under whichever tab is open")
+    assert page["defaultsPaneExplainsItself"], (
+        "the empty tab says nothing, so it reads as broken rather than as unbuilt")
+
+
+@needs_node
+def test_the_defaults_tab_splits_by_the_estimates_steps_not_the_librarys(ran):
+    """Hanz, 2026-09-16: "two categories one for takeoff and labor".
+
+    THOSE ARE THE ESTIMATE'S STEPS, NOT THIS PAGE'S. The obvious wrong move is to mirror the tabs
+    overhead and offer Default Items and Default Assemblies, because that is the split the rest of
+    the page is built on. But a default is what a NEW BID opens holding, and a bid is built as a
+    takeoff and then as labor. Materials-you-buy vs systems-built-from-them is a different
+    question, and it already has two tabs of its own.
+
+    The container is Administration's, which is what was asked for: an .admin-grid of
+    .admin-section blocks, each a heading over a card. It is this page's established shape for a
+    list an admin curates, and both of these are that.
+
+    Mutation: rename either heading, or drop a section."""
+    c = ran["page"]["defaultsCategories"]
+    assert c["takeoff"] and c["labor"], "the two categories are not both on the pane"
+    assert c["headings"] == ["Takeoff", "Labor"], (
+        "expected Takeoff then Labor, found %s" % c["headings"])
+    assert c["usesAdminGrid"], "the pane does not use Administration's container, as asked"
+    assert c["sectionCount"] == 2, (
+        "expected exactly two categories, found %s" % c["sectionCount"])
+
+
+@needs_node
+def test_the_defaults_tab_has_a_search_for_entering_them(ran):
+    """Hanz, 2026-09-16: "make sure there is a search bar as well ... for when entering the
+    defaults."
+
+    A WAY IN, NOT A FILTER, and the difference is the whole test. The same box worded the other
+    way is a different feature that looks identical: one searches the LIBRARY so a result can be
+    switched on, the other narrows the two lists already on the pane. Those lists are short by
+    design -- a default is something chosen on purpose -- so a box that only narrowed them would
+    be more chrome than the thing it searched.
+
+    It sits ABOVE the lists because it adds to them. Below, it reads as filtering what it follows.
+
+    Mutation: reword the placeholder to "Search the defaults", or move the box under the grid."""
+    c = ran["page"]["defaultsCategories"]
+    assert c["search"], "the defaults tab has no search box"
+    assert c["searchIsForAdding"], (
+        "the search reads as a filter over the lists rather than a way to add to them")
+    assert c["searchAboveTheLists"], (
+        "the search sits under the lists, where it reads as narrowing them")
+
+
+@needs_node
+def test_each_defaults_category_has_its_own_add_button(ran):
+    """Three ways in, and they are not redundant. The switch on a row needs you to find the row.
+    The search needs you to name what you are after. This is the one for sitting down to set the
+    defaults up in the first place.
+
+    LABOR'S IS NOT OPTIONAL. Labor lines are not library rows -- there is no Labor tab to switch
+    anything on from, and nothing for the search above to return -- so typing here is the only way
+    a labor default ever gets made. A Labor section without this button is a category nobody can
+    put anything into.
+
+    Same .addrow/.addbtn the Administration lists use, which is the container that was asked for.
+
+    Mutation: drop either button."""
+    c = ran["page"]["defaultsCategories"]
+    assert c["addButtons"] == ["takeoff", "labor"], (
+        "expected an add button in each category, found %s" % c["addButtons"])
+    assert c["addUsesTheAdminPattern"], (
+        "the add rows do not use Administration's .addrow/.addbtn container")
+
+
+@needs_node
+def test_the_new_tab_is_wired_to_its_pane_and_not_just_drawn():
+    """A button in the tab strip with no entry in PANES renders identically to a working one and
+    does nothing when pressed. That is the failure worth a test here, because nothing else on the
+    page would look wrong.
+
+    Asserted against the two structures that do the switching, both of which have to name it:
+    `PANES` drives the loop that hides every other pane, and `TAB_OF` maps the pane to its button.
+
+    Mutation: remove "defaults" from either one."""
+    js = (FRONTEND / "js" / "library.js").read_text(encoding="utf-8", errors="replace")
+    assert '"vendors", "defaults"' in js, (
+        "PANES does not list the defaults pane, so its tab switches nothing")
+    assert "defaults: \"tab-defaults\"" in js, (
+        "TAB_OF has no entry for the defaults tab, so showView would throw on it")
+
+
+@needs_node
 def test_the_items_tab_no_longer_explains_itself(ran):
     """WAS test_each_tab_says_what_belongs_in_it, and it asserted the opposite. REWRITTEN RATHER
     THAN DELETED so the next reader finds a decision instead of a gap.
@@ -1323,7 +1433,11 @@ def test_the_create_control_sits_in_the_container_it_adds_rows_to(ran):
     # card, which is the failure this page has form for. Moving a row must not change the count,
     # and neither may a COMMENT: quoting either attribute in full adds a phantom to it, which is
     # exactly what the note beside #asm-addrow now warns about because it happened writing it.
-    assert c["addRowCount"] == c["addBtnCount"] == 5, (
+    # SEVEN from 2026-09-16, not five: the Defaults tab's Takeoff and Labor categories each got
+    # one. The number is not the point -- the two counts AGREEING is. A wrapper without its button,
+    # or a button that escaped its wrapper, is how the create control ended up in the tab strip in
+    # the first place, which is what this whole test exists about.
+    assert c["addRowCount"] == c["addBtnCount"] == 7, (
         "the add rows disagree in number: %s wrappers, %s buttons"
         % (c["addRowCount"], c["addBtnCount"]))
 

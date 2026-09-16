@@ -643,6 +643,35 @@
     }
   }
 
+  /** A default switch, sent immediately -- never through patchSoon. That queue exists for a typed
+   *  field whose save is worth debouncing and, for an item, worth confirming ("this is priced into
+   *  every assembly that uses it"); switching a default changes no price and no assembly, so
+   *  routing it through the same pipe would ask the estimator to confirm a change with no
+   *  consequence to describe. One field, sent on the press, the same as Duplicate and Remove.
+   *
+   *  THE COLUMN IS STILL CALLED `favorite` IN THE DATABASE, and that is deliberate rather than
+   *  sloppy. It was the star's column, the star is gone, and the flag it held was read by nothing
+   *  -- no sort, no filter, no default -- so it was free to take over. Renaming it would be DDL on
+   *  two separate databases, which is this project's documented way of shipping a 502. The name is
+   *  wrong and the migration is worse; this comment is the trade. */
+  async function patchDefault(kind, id, on) {
+    var r = await api("/api/library/" + kind + "/" + encodeURIComponent(id), {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ favorite: on }) });
+    var j = await r.json().catch(function () { return {}; });
+    if (!r.ok) throw new Error(j.detail || j.error || ("HTTP " + r.status));
+    return j;
+  }
+
+  /** The switch itself, one builder for the item row and the assembly editor so the two cannot
+   *  drift into meaning the same thing differently. A <button role="switch">, not a <span>: this
+   *  page's icon controls are all real buttons and the keyboard reaches them. */
+  function defaultSwitch(attr, id, on) {
+    return '<button type="button" class="defsw' + (on ? " on" : "") + '" role="switch"' +
+      ' aria-checked="' + (on ? "true" : "false") + '" ' + attr + '="' + esc(id) + '">' +
+      '<span class="track"></span>Default</button>';
+  }
+
   // ── items ──────────────────────────────────────────────────────────────────
   /** A dropdown that never loses what the row already says.
    *
@@ -948,6 +977,7 @@
         '<td class="n"><span class="money"><span>$</span><input data-f="unit_cost" class="num cell-cost" value="' + (it.unit_cost == null ? "" : it.unit_cost) + '" aria-label="Cost of one purchase"></span></td>' +
         "<td>" + pick("vendor", it.vendor, vendorNames(), "Vendor", ' class="cell-vendor"') + "</td>" +
         '<td class="datescell">' + datesHtml(it) + "</td>" +
+        '<td>' + defaultSwitch("data-def-item", it.id, !!it.favorite) + "</td>" +
         '<td class="rowact">' +
           '<button class="icon" type="button" data-dupe-item="' + esc(it.id) + '" title="Make a copy of this material" aria-label="Duplicate ' + esc(it.name) + '">' + icon("copy") + "</button>" +
           '<button class="icon danger" type="button" data-del-item="' + esc(it.id) + '" title="Remove this material" aria-label="Remove ' + esc(it.name) + '">' + icon("trash") + "</button></td>" +
@@ -1770,6 +1800,11 @@
     if (!asm) return;
 
     if ($("asm-name").value !== asm.name) $("asm-name").value = asm.name;
+    if ($("asm-def")) {
+      var defBtnEl = $("asm-def");
+      defBtnEl.classList.toggle("on", !!asm.favorite);
+      defBtnEl.setAttribute("aria-checked", asm.favorite ? "true" : "false");
+    }
     var area = $("area").value;
     var p = L.priceAssembly(asm, ITEMS, area);
     var out = "";
@@ -1860,8 +1895,9 @@
   }
 
   // ── view switch ────────────────────────────────────────────────────────────
-  var PANES = ["items", "asm", "vendors"];
-  var TAB_OF = { items: "tab-items", asm: "tab-asm", vendors: "tab-vendors" };
+  var PANES = ["items", "asm", "vendors", "defaults"];
+  var TAB_OF = { items: "tab-items", asm: "tab-asm", vendors: "tab-vendors",
+                 defaults: "tab-defaults" };
   function showView(which) {
     view = which;
     PANES.forEach(function (p) {
@@ -2570,6 +2606,24 @@
     // Reading it off e.target would make the button dead over most of its own area. The
     // pointer-events rule on `.icon svg` also prevents it; this is the half that survives
     // somebody tidying the stylesheet.
+    var defBtn = t.closest && t.closest("[data-def-item]");
+    var defId = defBtn && defBtn.getAttribute("data-def-item");
+    if (defId) {
+      var defIt = itemOf(defId);
+      if (!defIt) return;
+      var wantDef = !defIt.favorite;
+      defIt.favorite = wantDef;        // optimistic -- a switch press is not worth a spinner
+      renderItems();
+      try {
+        await patchDefault("items", defId, wantDef);
+      } catch (err) {
+        defIt.favorite = !wantDef;     // the server said no; put the switch back
+        renderItems();
+        say("Couldn't save that. " + err.message);
+      }
+      return;
+    }
+
     var dupBtn = t.closest && t.closest("[data-dupe-item]");
     var dup = dupBtn && dupBtn.getAttribute("data-dupe-item");
     if (dup) {
@@ -2777,6 +2831,22 @@
         VENDORS = VENDORS.filter(function (x) { return x.id !== dv; });
         paint();
       } catch (err) { say("Couldn't remove that vendor. " + err.message); }
+      return;
+    }
+
+    if (t.closest && t.closest("#asm-def")) {
+      var defAsm = current();
+      if (!defAsm) return;
+      var wantAsmDef = !defAsm.favorite;
+      defAsm.favorite = wantAsmDef;      // optimistic, same as the item switch
+      renderPanel(); renderList();
+      try {
+        await patchDefault("assemblies", defAsm.id, wantAsmDef);
+      } catch (err) {
+        defAsm.favorite = !wantAsmDef;
+        renderPanel(); renderList();
+        say("Couldn't save that. " + err.message);
+      }
       return;
     }
 
