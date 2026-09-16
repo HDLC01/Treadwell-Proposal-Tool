@@ -236,6 +236,15 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   var DIVISION_REFS = state.DIVISION_REFS || [], UNIT_REFS = state.UNIT_REFS || [];
   var VENDOR_USE = state.VENDOR_USE, DIVISION_USE = state.DIVISION_USE || {}, UNIT_USE = state.UNIT_USE || {};
   var ADMIN = state.ADMIN;
+  // The Markup page's Global lines. Declared here rather than lifted because the page fills it
+  // from its own fetch inside load(), which this sandbox does not run -- a test hands it in.
+  var GLOBAL_MARKUP = state.GLOBAL_MARKUP || [];
+  // The estimate's shared module, which the page reaches through the window object. Declared
+  // rather than
+  // stubbed away: takeoffConditionDefaults must read freshModel's REAL answers -- joint filler
+  // ships on, dye ships off -- so a fixture that made those up would prove nothing about what a
+  // new estimate actually opens with.
+  var window = state.window || {};
   var openId = state.openId;
   // Which line's item picker is showing its results. pickerFor() reads it, so a test can render
   // the closed state (null, the default) or the open one by passing state.pickerOpen.
@@ -285,6 +294,11 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   // out is a ReferenceError that kills every scenario in this file at once.
   ${fn("icon")}
   ${fn("renderItems")}
+  // THE DEFAULTS TAB'S OWN RENDERERS, lifted so they are EXECUTED rather than read. A source-text
+  // assertion cannot catch an unbound identifier, and this repo has taken production down that
+  // way once already. takeoffConditionDefaults goes first: renderDefaultTakeoff calls it.
+  ${fn("takeoffConditionDefaults")}
+  ${fn("renderDefaultTakeoff")}
   ${fn("adminList")}
   ${fn("usageFor")}
   ${fn("singular")}
@@ -415,6 +429,10 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
            ASMS,
            newMaterialName, newRefName,
            bulkCandidates, bulkSelectAllState, bulkLinesFor, bulkAddRoom, BULK_MAX_LINES,
+           // The Defaults tab's Takeoff list, EXECUTED rather than read. GLOBAL_MARKUP is handed
+           // in so a test can supply the Markup page's answer without a second fetch stub.
+           renderDefaultTakeoff, takeoffConditionDefaults,
+           setGlobalMarkup: function (g) { GLOBAL_MARKUP = g; },
            snapshotOf: function (id) { return itemBefore[id]; } };
 `);
 
@@ -3318,6 +3336,38 @@ out.serverOwnedItemFields = build().api.SERVER_OWNED_ITEM_FIELDS;
     // And the bar is not a fifth card.
     barIsNotACard: !/class="card[^"]*"[^>]*>\s*<div class="filterbar"/.test(html) &&
       !/class="filterbar card"/.test(html),
+  };
+}
+
+// ── the Defaults tab's Takeoff list, EXECUTED ────────────────────────────────
+{
+  const { api, dom: d } = build({
+    // THE REAL MODULE, required rather than faked: the whole claim is that this list reads the
+    // answers a new estimate opens with, so a made-up freshModel would prove the opposite.
+    window: { TWPolishBid: require(path.join(ROOT, "js", "polish-bid-core.js")) },
+    ITEMS: [{ id: "i1", name: "Densifier", unit: "Pail", unit_cost: 100, favorite: true },
+            { id: "i2", name: "Not a default", unit: "Gal", unit_cost: 50, favorite: false }],
+    ASMS: [{ id: "a1", name: "Polish 800", unit: "SF", favorite: true,
+             lines: [{ item_id: "i1" }, { item_id: "i2" }] },
+           { id: "a2", name: "Also not", unit: "SF", favorite: false, lines: [] }],
+  });
+  api.setGlobalMarkup([{ label: "bond", formula: "1%" }]);
+  api.renderDefaultTakeoff();
+  const h = d.nodes["default-takeoff-body"].innerHTML;
+  out.defaultsTakeoffList = {
+    rowCount: (h.match(/<tr>/g) || []).length,
+    kinds: (h.match(/<td>(Assembly|Material|Condition|Markup)<\/td>/g) || [])
+      .map((s) => s.replace(/<\/?td>/g, "")),
+    // ONLY THE SWITCHED-ON ONES. A list that showed everything would make the switch decorative.
+    namesTheDefaults: /Polish 800/.test(h) && /Densifier/.test(h),
+    skipsTheRest: !/Not a default/.test(h) && !/Also not/.test(h),
+    // Bond appears, and says it is not editable here -- one home per line, which markup.py
+    // enforces and this page must not quietly become a second one of.
+    showsBond: /bond/.test(h) && /Read only/.test(h),
+    saysWhereBondLives: /Global tab/.test(h),
+    // The conditions, read from freshModel rather than typed here: joint filler ships ON.
+    jointFillerYes: /Joint filler[\s\S]*?Polish!E29 = Yes/.test(h),
+    dyeNo: /Dye[\s\S]*?Polish!E25 = No/.test(h),
   };
 }
 

@@ -44,6 +44,14 @@ def ran():
     return json.loads(proc.stdout.strip().splitlines()[-1])
 
 
+def ran_defaults():
+    """The harness payload, for the one test that also reads the source and so takes no fixture."""
+    proc = subprocess.run(["node", str(HARNESS), str(FRONTEND)],
+                          capture_output=True, text=True, encoding="utf-8", timeout=120)
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout.strip().splitlines()[-1])["defaultsTakeoffList"]
+
+
 # ── the page says what it is ──────────────────────────────────────────
 @needs_node
 def test_the_page_is_called_items_and_assemblies(ran):
@@ -142,6 +150,58 @@ def test_each_defaults_category_has_its_own_add_button(ran):
         "expected an add button in each category, found %s" % c["addButtons"])
     assert c["addUsesTheAdminPattern"], (
         "the add rows do not use Administration's .addrow/.addbtn container")
+
+
+@needs_node
+def test_the_takeoff_defaults_list_what_a_new_estimate_starts_with(ran):
+    """EXECUTED, not read. The renderer is lifted into the harness and run against a real fixture,
+    because a source-text assertion cannot catch an unbound identifier -- which is how this repo
+    took production down once already.
+
+    FOUR KINDS IN ONE LIST, and that is deliberate. An assembly and a material are lines a new
+    estimate OPENS WITH. A condition is a question it opens ANSWERED. A markup line is a rate it
+    opens applying. They are not the same kind of thing, which is what the Kind column is for;
+    splitting them into four sections would say they are unrelated, when what they have in common
+    is the only thing that matters here -- somebody set them once and every bid starts from them.
+
+    ONLY THE SWITCHED-ON ONES. A list that showed the whole library would make the Default switch
+    decorative, which is what the favourite star was.
+
+    Mutation: drop the `.favorite` filter and `skipsTheRest` goes red."""
+    t = ran["defaultsTakeoffList"]
+    assert t["namesTheDefaults"], "the switched-on assembly and material are not listed"
+    assert t["skipsTheRest"], (
+        "the list shows rows nobody switched on, which makes the switch decorative")
+    assert t["kinds"] == ["Assembly", "Material", "Markup", "Condition", "Condition", "Condition"], (
+        "the kinds or their order changed: %s" % t["kinds"])
+
+
+@needs_node
+def test_bond_is_shown_here_but_still_lives_on_the_markup_page():
+    """Will asked for bond on this tab. It is here, and it is READ ONLY.
+
+    ONE HOME PER LINE is not a style rule, it is what markup.py enforces and why: two rows for one
+    line is a precedence question, and that question decides a price. Bond's rate belongs to the
+    Markup page's Global tab, so this tab shows it and says so. Making it editable here would
+    create the second home that whole split was written to prevent, and the two would disagree the
+    first time somebody changed one.
+
+    IT IS FETCHED, NOT COPIED, and the fetch sits outside the try that guards items and
+    assemblies: a markup service having a bad afternoon must not take Items and Assemblies down
+    with it. A failure leaves the row absent, which is the honest answer -- a bond rate this page
+    invented because a request timed out would be worse than a row that is not there.
+
+    Mutation: give the bond row an editable control, or store its rate on this page."""
+    t = ran_defaults()
+    assert t["showsBond"], "bond is not on the Defaults tab, which Will asked for"
+    assert t["saysWhereBondLives"], (
+        "the bond row does not say the Markup page owns it, so this reads as a second home")
+    js = (FRONTEND / "js" / "library.js").read_text(encoding="utf-8", errors="replace")
+    assert "/api/markup/rules" in js, "the rate is not read from the markup service"
+    start = js.index("function renderDefaultTakeoff")
+    body = js[start:js.index("The Labor defaults", start)]
+    assert "data-" not in body.split("GLOBAL_MARKUP")[1].split("});")[0], (
+        "the bond row carries a control, which would make this page a second home for the rate")
 
 
 @needs_node

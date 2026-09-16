@@ -138,6 +138,23 @@
         UNIT_USE = us.usage || {};
         UNITS = (UNIT_REFS.length ? UNIT_REFS.map(function (u) { return u.name; }) : DEFAULT_UNITS.slice());
       }
+      // The Markup page's Global lines, for the Defaults tab to SHOW. Its own request rather than
+      // a sixth entry in the Promise.all above, and deliberately outside the `throw` that guards
+      // items and assemblies: this page's whole job works without it, and a markup service having
+      // a bad afternoon must not take Items and Assemblies down with it. A failure leaves the list
+      // empty, which is the honest answer -- a bond rate this page invented because a request
+      // timed out would be worse than a row that is not there.
+      try {
+        var mk = await api("/api/markup/rules");
+        if (mk.ok) {
+          var mj = await mk.json();
+          GLOBAL_MARKUP = (mj.rules || []).filter(function (r) {
+            return r.layout === "global" && r.applies;
+          }).map(function (r) {
+            return { label: (r.line_key || "").replace(/_/g, " "), formula: r.formula };
+          });
+        }
+      } catch (e) { GLOBAL_MARKUP = []; }
       if (!openId || !current()) openId = ASMS.length ? ASMS[0].id : null;
       say("");
       paint();
@@ -1892,7 +1909,83 @@
   // must not run on every keystroke of a search. It is cheap and self-guarding either way.
   function paint() {
     renderItems(); renderFilterBar(); renderVendors(); renderList(); renderPanel();
-    renderDefaultLabor();
+    renderDefaultTakeoff(); renderDefaultLabor();
+  }
+
+  /** The three conditions the Takeoff step carries, as defaults.
+   *
+   *  THEY ARE NOT ROWS, and the table says so in its Kind column rather than by hiding them
+   *  somewhere else. An assembly or a material is a line a new estimate OPENS WITH; a condition is
+   *  a question it opens ANSWERED. Both are things somebody set once and every bid then starts
+   *  from, which is what this tab is for.
+   *
+   *  READ FROM polish-bid-core's freshModel, never re-typed, for the same reason Travel is read
+   *  from travelSeed: the answer a new estimate actually opens with lives there, and a second copy
+   *  on this page would go stale the first time somebody changed one and not the other. That is
+   *  not hypothetical -- joint_filler ships ON and dye ships off, and a page claiming the reverse
+   *  would be telling an estimator the opposite of what their next bid does. */
+  /** The markup lines that are one rule everywhere, as this page last read them.
+   *
+   *  FETCHED, NEVER STORED HERE. Bond's rate belongs to the Markup page's Global tab, and
+   *  markup.py enforces ONE HOME PER LINE for exactly the reason that rule exists: two rows for
+   *  one line is a precedence question, and that question decides a price. So this tab READS it
+   *  and says where it lives. Editing it here would be the second home the whole split was written
+   *  to prevent.
+   *
+   *  Empty until the fetch lands, and empty forever if it fails. A bond rate this page invented
+   *  because a request timed out would be worse than a row that is not there. */
+  var GLOBAL_MARKUP = [];
+
+  function takeoffConditionDefaults() {
+    var B = window.TWPolishBid;
+    if (!B || !B.freshModel) return [];
+    var c = (B.freshModel() || {}).conditions || {};
+    return [
+      { label: "Joint filler", on: !!c.joint_filler, cell: "Polish!E29",
+        why: "One kit per 3,500 sq ft, counted by the workbook" },
+      { label: "Remove existing joint filler", on: !!c.remove_existing_jf, cell: "Polish!F29",
+        why: "A fourth hand on the joint-filler line" },
+      { label: "Dye", on: !!c.dye, cell: "Polish!E25",
+        why: "Two coats across the polished area" }
+    ];
+  }
+
+  /** The Takeoff defaults: what a new estimate opens holding, and what it opens having answered.
+   *
+   *  THE SWITCHED-ON LIBRARY ROWS COME FIRST because they are the ones somebody chose here. The
+   *  conditions follow because they are built in -- nobody set them on this page and nobody can
+   *  unset them here either, which is why they carry no switch and say "Built in" the way Travel
+   *  does under Labor. */
+  function renderDefaultTakeoff() {
+    var body = $("default-takeoff-body");
+    if (!body) return;
+    var out = "";
+    ASMS.filter(function (a) { return a.favorite; }).forEach(function (a) {
+      out += "<tr><td>" + esc(a.name) + "</td><td>Assembly</td>" +
+        "<td>" + (a.lines || []).length + " item line" +
+        ((a.lines || []).length === 1 ? "" : "s") + " · per " + esc(a.unit || "SF") + "</td>" +
+        '<td class="rowact"></td></tr>';
+    });
+    ITEMS.filter(function (it) { return it.favorite; }).forEach(function (it) {
+      out += "<tr><td>" + esc(it.name) + "</td><td>Material</td>" +
+        "<td>" + (L.num(it.unit_cost) != null
+          ? esc(L.money(it.unit_cost)) + " per " + esc(it.unit || "unit")
+          : "No cost in the library yet") + "</td>" +
+        '<td class="rowact"></td></tr>';
+    });
+    GLOBAL_MARKUP.forEach(function (g) {
+      out += "<tr><td>" + esc(g.label) + "</td><td>Markup</td>" +
+        "<td>" + esc(g.formula || "not set") +
+        " · set on the Markup page's Global tab</td>" +
+        '<td class="rowact"><span class="builtin">Read only</span></td></tr>';
+    });
+    takeoffConditionDefaults().forEach(function (c) {
+      out += "<tr><td>" + esc(c.label) + "</td><td>Condition</td>" +
+        "<td>" + esc(c.why) + " · " + esc(c.cell) + " = " + (c.on ? "Yes" : "No") + "</td>" +
+        '<td class="rowact"><span class="builtin">Built in</span></td></tr>';
+    });
+    body.innerHTML = out;
+    if ($("default-takeoff-empty")) $("default-takeoff-empty").hidden = out !== "";
   }
 
   /** The Labor defaults. Travel is in here before anybody adds anything.
