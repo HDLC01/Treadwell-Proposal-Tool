@@ -121,6 +121,12 @@ jobs:
     steps:
       - name: Reusing an earlier green run
         if: needs.fingerprint.outputs.skip == 'true'
+        # The job-level default working-directory is backend/, which does not exist
+        # until the checkout below -- and on this path that checkout is itself skipped.
+        # Without this override bash cannot start, so the skip whose whole purpose is to
+        # save a run FAILS the job instead. Every other run: step here is gated behind
+        # the checkout, so this is the only step that needs it.
+        working-directory: .
         run: |
           echo "Tree ${{ needs.fingerprint.outputs.tree }} already passed on commit ${{ needs.fingerprint.outputs.matched }}."
           echo "Identical bytes, identical suite -- nothing new to learn from a second run."
