@@ -166,6 +166,19 @@ jobs:
         if: needs.fingerprint.outputs.skip != 'true'
         run: pip install -r requirements-dev.txt
 
+      # `docker build` strips the comments out of the frontend it serves
+      # (tools/strip-comments.js), so the bytes in the image are not the bytes in git.
+      # tests/test_frontend_comment_strip.py re-runs that exact transform and proves the
+      # result is the same program -- and it SKIPS without acorn, which would leave the one
+      # guard covering what production actually serves quiet instead of red. Installed at
+      # the repo root because that is where node resolves it from for tools/.
+      # The pin is asserted to match the Dockerfile's, so the image and CI cannot drift
+      # onto different parsers.
+      - name: Install the parser the frontend comment-stripper uses
+        if: needs.fingerprint.outputs.skip != 'true'
+        working-directory: ${{ github.workspace }}
+        run: npm install --no-save --no-audit --no-fund acorn@8.18.0
+
       # -n auto spreads the suite over the runner's 4 vCPUs. Locally this took the full run from
       # 14m59s to 3m32s; on 4 cores expect roughly 4 minutes instead of 12m48s.
       #

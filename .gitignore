@@ -54,6 +54,12 @@ ENV/
 .claude/skills/impeccable/scripts/
 .github/skills/impeccable/scripts/
 
+# Node packages. Nothing in this repo is built with npm -- the one exception is the
+# parser the frontend comment-stripper needs (tools/strip-comments.js), which CI and a
+# dev box install with `npm install --no-save acorn@8.18.0` at the root. The Docker build
+# installs and deletes its own copy inside one layer.
+node_modules/
+
 # OS
 .DS_Store
 Thumbs.db

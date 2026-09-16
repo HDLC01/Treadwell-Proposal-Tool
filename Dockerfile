@@ -42,6 +42,30 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 COPY backend/ /app/
 COPY frontend/ /app/frontend/
 
+# Strip the comments out of the SERVED copy of the frontend. The files in the repo are not
+# touched -- only the bytes inside this image. 44.7% of the raw bytes of frontend/**/*.js
+# are comments and 53.1% of styles.css, and gzip does not make that free: measured against
+# Content-Length on the wire, this takes the JS+CSS a browser downloads from 817,605
+# gzipped bytes to 355,992, and the whole proposal-review page from 261,145 to 102,028.
+#
+# It strips COMMENTS and nothing else -- no terser, no mangling. The harnesses under
+# backend/tests/js/ lift functions out of the real frontend files with line-anchored
+# regexes, and against a terser-minified tree 1,797 of the suite's 2,786 assertions stop
+# working. tools/strip-comments.js keeps every line, every line ending and every mtime
+# (the last one because Starlette's ETag is md5("<mtime>-<size>"), and NoCacheStaticFiles
+# in main.py needs an unchanged file to keep answering 304 after a deploy).
+# backend/tests/test_frontend_comment_strip.py re-proves all of that on every CI run.
+#
+# In this stage rather than a separate build stage on purpose: Node is already installed
+# above, and this VPS runs ~13 containers off one disk, so pulling a second base image to
+# run one script is a cost the box actually feels. acorn is installed and deleted inside
+# the same layer, so nothing of it survives into the image.
+COPY tools/strip-comments.js /tmp/strip-comments.js
+RUN cd /tmp \
+ && npm install --no-save --no-audit --no-fund acorn@8.18.0 \
+ && node /tmp/strip-comments.js /app/frontend \
+ && rm -rf /tmp/node_modules /tmp/strip-comments.js /tmp/package.json /tmp/package-lock.json
+
 # uvicorn listens on 8888 — nginx on the host will proxy 80/443 to this
 EXPOSE 8888
 
