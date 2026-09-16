@@ -944,6 +944,80 @@ def test_the_save_carries_what_the_rest_of_the_app_reads(ran):
 
 
 @needs_node
+def test_the_three_that_moved_render_as_switches_on_the_takeoff_step(ran):
+    """THE FEATURE ITSELF, which nothing pinned until now.
+
+    Dye, joint filler and remove-existing came off the intake form on 2026-09-16 and onto this
+    step. Every test written with that change probed the MODEL and the CELLS -- and a control
+    deleted from the page still writes both of those correctly from its defaults. Wrapping the
+    whole `.tkconds` block in `if (false)`, removing all three switches from the product, left the
+    entire file GREEN. A feature nobody can see is not a feature.
+
+    NOT ON THE LABOR STEP. They describe material, not crew, and a switch sitting among priced
+    labor cards reads as though it changes one of them.
+
+    Mutation: delete the .tkconds block, or any one switch in it."""
+    t = ran["movedToTakeoff"]["onTheTakeoffStep"]
+    for key in ("joint_filler", "dye", "remove_existing_jf"):
+        assert t[key]["there"], "%s does not render on the Takeoff step" % key
+    assert ran["movedToTakeoff"]["notOnTheLaborStep"], (
+        "the moved conditions render on the Labor step, where they read as priced labor")
+
+
+@needs_node
+def test_remove_existing_dims_while_joint_filler_is_off(ran):
+    """The `needs` rule these carried on the intake form, kept.
+
+    Remove-existing adds a fourth hand to the joint-filler crew, so with no joint filler there is
+    no crew for it to be the fourth hand of. DIMMED, NOT HIDDEN AND NOT DISABLED -- the convention
+    this page already applies to Travel on a local job. Its answer still has to reach Polish!F29
+    whichever way it points, because a blank Yes/No cell is not "No" to Kyle's formulas.
+
+    HOW THIS NEARLY PASSED WHILE BROKEN: the harness probe first closed over ONE innerHTML
+    snapshot taken before the gate was exercised, so it reported the markup from before the
+    re-render and the gate read as working. It gave itself away by disagreeing with itself --
+    joint filler off AND remove-existing undimmed in the same read, which cannot both be true. The
+    probe now re-reads the panel on every call.
+
+    Mutation: drop the third argument from the condSwitch call for remove_existing_jf."""
+    m = ran["movedToTakeoff"]
+    assert m["gatedWhenJointFillerOff"], (
+        "remove-existing is not dimmed while joint filler is off")
+    assert m["ungatedWhenJointFillerOn"], (
+        "remove-existing stays dimmed after joint filler is switched on")
+
+
+@needs_node
+def test_the_takeoff_step_takes_its_conditions_from_the_cells(ran):
+    """THE CELL WINS WHERE THERE IS ONE, the rule polish-intake.js has always applied, now applied
+    here through the same shared reader.
+
+    THIS WAS A LIVE DEFECT IN THE FIRST VERSION OF THIS CHANGE. This page built its model from
+    migrateModel alone, which backfills freshModel's DEFAULT for any key a saved blob never
+    stated. Every draft written before these three were model keys -- which is every draft that
+    existed -- would have shown this step the defaults rather than what the estimator answered on
+    intake, and the next save would have written those defaults back over the real answers in
+    Polish!E25/E29/F29.
+
+    joint_filler is the one that bites: it ships ON, so a project where somebody deliberately
+    turned it off would have had it quietly turned back on and the downloaded workbook would have
+    said Yes. That is a wrong document, not a wrong screen.
+
+    A BLANK IS NOT AN ANSWER. Every save writes both literals, so an empty cell means nobody has
+    answered yet and the documented default stands.
+
+    Mutation: remove the conditionsFromCells call from adopt()."""
+    h = ran["hydratedFromCells"]
+    assert h["joint_filler"] is False, (
+        "the cell said No and the page still shows freshModel's Yes -- the estimator's answer is "
+        "about to be overwritten")
+    assert h["dye"] is True, "the cell said Yes and the page did not take it"
+    assert h["remove_existing_jf"] is True, "the cell said Yes and the page did not take it"
+    assert h["blankLeavesTheDefault"], (
+        "a blank cell overrode the model, but a blank means nobody has answered yet")
+
+
+@needs_node
 def test_the_save_writes_the_condition_cells_and_no_others(ran):
     """This page stopped writing state.cell_values when the workbook left it: there is no cell to
     write an assembly into. Writing a partial PRICING map would be worse than writing none —
@@ -973,12 +1047,19 @@ def test_the_save_writes_the_condition_cells_and_no_others(ran):
     seven-step beta, which did write Polish!* cells — rides through untouched. Generating that
     project would fill the worksheet from the old beta's figures while this screen shows the new
     ones. Clearing a stale one would be an improvement and would still pass."""
-    # The five conditions' cells, and nothing else. local and hard_bid each carry a Polish mirror;
-    # the other three are formulas on the Polish tab and must NOT be written there.
+    # EIGHT CONDITIONS' CELLS NOW, and nothing else. local and hard_bid each carry a Polish
+    # mirror; prevailing_wage, taxable and remodel_tax are formulas on the Polish tab and must NOT
+    # be written there.
+    #
+    # E25/E29/F29 joined on 2026-09-16, when dye, joint filler and remove-existing moved off the
+    # intake form onto the Takeoff step. Their cells did not change and neither did their
+    # literals -- only which screen asks the question. They were written by polish-intake.js's own
+    # `carry` loop before, from exactly one page; they go through the shared writer now because
+    # two screens can answer them.
     assert ran["save"]["cellValueKeys"] == [
         "Epoxy!B4", "Epoxy!B5", "Epoxy!B6", "Epoxy!D5", "Epoxy!D6",
-        "Polish!B4", "Polish!B5"], (
-        "the save's worksheet cells are not exactly the five conditions': %r"
+        "Polish!B4", "Polish!B5", "Polish!E25", "Polish!E29", "Polish!F29"], (
+        "the save's worksheet cells are not exactly the eight conditions': %r"
         % ran["save"]["cellValueKeys"])
     # And the literals are the model's own answers. The fixture has local and taxable on, the other
     # three off, so a mapping written backwards cannot pass this.
@@ -988,11 +1069,19 @@ def test_the_save_writes_the_condition_cells_and_no_others(ran):
         "Epoxy!D5": "No",                           # prevailing_wage
         "Epoxy!B6": "Yes",                          # taxable
         "Epoxy!D6": "No",                           # remodel_tax
+        # Joint filler ships ON and the other two off, which is freshModel's answer and was the
+        # intake toggles' answer before it. BOTH LITERALS ARE ALWAYS WRITTEN, including
+        # remove_existing_jf's "No" while joint filler is on: a blank Yes/No cell is not "No" to
+        # Kyle's formulas, it is whatever his IF() falls through to.
+        "Polish!E25": "No",                         # dye
+        "Polish!E29": "Yes",                        # joint_filler
+        "Polish!F29": "No",                         # remove_existing_jf
     }, "the condition literals do not match the model: %r" % (ran["save"]["cellValues"],)
     # A draft that already carried a worksheet map keeps it, and gains only those same five.
     carried = ran["save"]["legacyCellValues"] or {}
     assert set(carried) == {"Polish!D82", "Epoxy!B4", "Epoxy!B5", "Epoxy!B6", "Epoxy!D5",
-                            "Epoxy!D6", "Polish!B4", "Polish!B5"}, (
+                            "Epoxy!D6", "Polish!B4", "Polish!B5",
+                            "Polish!E25", "Polish!E29", "Polish!F29"}, (
         "the page added a worksheet cell beyond the five conditions', or dropped a carried one: %r"
         % carried)
     assert carried["Polish!D82"] == 41000, "a cell the draft already carried was overwritten"
@@ -1090,10 +1179,17 @@ def test_a_v1_model_becomes_v2_with_its_areas_as_measurements(ran):
         ["polishing", 4, 3, 34], ["mockup", 2, 1, 30], ["jointfill", 5, 2, 31],
         ["travel", 24, "", 33]], (
         "v1 labor did not come across as guys/days/rate: %r" % m["labor"])
-    # Bond is backfilled off — a v1 draft predates the flag entirely, and freshModel's default is
-    # what migrateModel's generic conditions loop fills in for any key the saved blob never stated.
+    # FOUR keys are backfilled, not one. A v1 draft predates bond entirely, and predates dye,
+    # joint_filler and remove_existing_jf living in the model at all -- until 2026-09-16 those
+    # three sat in a separate `carry` object on the intake page, deliberately outside what the
+    # engine is handed. migrateModel's generic conditions loop fills each from freshModel.
+    #
+    # The five the draft DID state come across untouched, which is the half that matters: a
+    # migration that reset a v1 job's answers would change a bid that has already been sent.
     assert m["conditions"] == {"local": False, "hard_bid": True, "prevailing_wage": True,
-                              "taxable": False, "remodel_tax": True, "bond": False}, (
+                              "taxable": False, "remodel_tax": True, "bond": False,
+                              "dye": False, "joint_filler": True,
+                              "remove_existing_jf": False}, (
         "the v1 job conditions were not preserved: %r" % m["conditions"])
     assert m["contingency"] == 0 and m["totals"] == {}
 
