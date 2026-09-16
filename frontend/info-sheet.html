@@ -9,12 +9,19 @@
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
 <link rel="stylesheet" href="/styles.css">
 <!-- HyperFormula — so Division, Payroll Tax Group and the accounting prompts
-     recalculate as the estimator types, exactly as they would in Excel. -->
-<script src="https://cdn.jsdelivr.net/npm/hyperformula@2.7.1/dist/hyperformula.full.min.js" integrity="sha384-mL8xIzdJNHBlFY+1tgjim6oUyvoCQpvhxipvuvmbN6xCaJzrausWuA16r/ktXKcm" crossorigin="anonymous"></script>
+     recalculate as the estimator types, exactly as they would in Excel.
+
+     `defer`, and so is every other external script on this page. Same measurement as
+     estimate-review.html, which carries the long version of this note: as a classic <head>
+     script this blocked the parser until the whole 153 KB engine had arrived -- first
+     contentful paint at 3.51 s against a HyperFormula response that finished at 3.29 s.
+     Deferred scripts still run in document order, so xl-core and info-sheet.js find the
+     engine exactly where they always did. -->
+<script defer src="https://cdn.jsdelivr.net/npm/hyperformula@2.7.1/dist/hyperformula.full.min.js" integrity="sha384-mL8xIzdJNHBlFY+1tgjim6oUyvoCQpvhxipvuvmbN6xCaJzrausWuA16r/ktXKcm" crossorigin="anonymous"></script>
   <!-- Excel-compatible ROUNDUP/CEILING. Must load after HyperFormula and before any page
        script builds an engine: registration is global and one-time. Without it every
        ROUNDUP in the workbook can read a dollar or more high. See the file header. -->
-  <script src="/js/xl-excel-rounding.js"></script>
+  <script defer src="/js/xl-excel-rounding.js"></script>
 <style>
   html, body { height: 100%; overflow: hidden; margin: 0; }
   .info-app { display: flex; flex-direction: column; height: 100vh; width: auto; overflow: hidden; }
@@ -204,15 +211,15 @@
 
 <!-- auth.js bails out (and never mints a token) unless the Supabase SDK is
      already on the page, so this has to come before it. -->
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0" integrity="sha384-NNePyabYRaJyedI6EQAY7SV5Z8/0sQkuQ5WVfhKm0H+j0KSugkI2ZMNzw/QtzAWz" crossorigin="anonymous"></script>
-<script src="/shared.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0" integrity="sha384-NNePyabYRaJyedI6EQAY7SV5Z8/0sQkuQ5WVfhKm0H+j0KSugkI2ZMNzw/QtzAWz" crossorigin="anonymous"></script>
+<script defer src="/shared.js"></script>
 <!-- Shared person rendering (names, initials, avatar colours) — one source of
      truth so an estimator looks identical on every page. Must precede the page's
      own script, which reads window.TWCrm as it runs. -->
-<script src="/js/crm-core.js"></script>
-<script src="/js/icons.js"></script>
-<script src="/auth.js"></script>
-<script src="/js/xl-core.js"></script>
-<script src="/js/info-sheet.js"></script>
+<script defer src="/js/crm-core.js"></script>
+<script defer src="/js/icons.js"></script>
+<script defer src="/auth.js"></script>
+<script defer src="/js/xl-core.js"></script>
+<script defer src="/js/info-sheet.js"></script>
 </body>
 </html>
