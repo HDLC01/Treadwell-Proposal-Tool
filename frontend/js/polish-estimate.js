@@ -471,6 +471,29 @@
 
     html += '<button class="addbtn" data-add-row="1">' + icon("plus", 13)
       + ' Add another assembly</button>';
+
+    // ── the three that came off the intake form, 2026-09-16 ─────────────────────────────────
+    // They are questions about the WORK, and the work is described here. On intake they sat among
+    // questions about the building and the bid, where an estimator answered them before opening a
+    // takeoff at all.
+    //
+    // DIMMED, NOT HIDDEN AND NOT DISABLED -- `.mw-sw.inert`'s rule, and Travel's. None of these
+    // three moves a number in the beta engine; they set Yes/No in Kyle's workbook and nothing
+    // else. Greying says that out loud while leaving the answer typeable, because the answer
+    // still has to reach the downloaded .xlsx whichever way it points.
+    //
+    // remove_existing_jf IS GATED ON joint_filler, which is the `needs` rule it carried on intake.
+    // It adds a fourth hand to the joint-filler crew, so with no joint filler there is no crew for
+    // it to be the fourth hand of. Gated, still written: a blank cell is not "No" to Kyle.
+    html += '<div class="tkconds">' +
+      '<p class="cap">These set a Yes or No in the downloaded workbook. None of them moves the ' +
+      'price on this screen.</p>' +
+      condSwitch("joint_filler", "Joint filler") +
+      condSwitch("remove_existing_jf", "Remove existing joint filler",
+                 !M.conditions.joint_filler) +
+      condSwitch("dye", "Dye") +
+      "</div>";
+
     html += '<p class="cap">Material total <b data-mat-total>' +
       esc(moneyAuto(materialTotal())) + '</b> · measured area <b data-area-total>' +
       esc(B.fmtSf(B.takeoffSf(M.takeoff))) + ' SF</b>. LF rows are priced like any other but do ' +
@@ -689,9 +712,14 @@
    *  Returns the switch + label only -- callers compose it with whatever extra context that
    *  SPECIFIC row still needs (remodelSource()'s county note, hard_bid's threshold note, ...),
    *  so nothing those already said gets lost by routing through here. */
-  function condSwitch(key, label) {
+  function condSwitch(key, label, inert) {
     var on = !!(M.conditions || {})[key];
-    return '<span class="mw-sw' + (on ? " on" : "") + '" data-cond="' + esc(key) +
+    // `inert` DIMS, it does not disable and it does not hide -- `.sw.inert`'s convention and its
+    // reason. A switch whose answer changes no price still has an answer, and that answer still
+    // reaches the downloaded workbook, so taking it away would lose a cell rather than tidy a
+    // screen. It stays clickable; it just stops claiming to matter to the figure above it.
+    return '<span class="mw-sw' + (on ? " on" : "") + (inert ? " inert" : "") +
+      '" data-cond="' + esc(key) +
       '" role="switch" tabindex="0" aria-checked="' + (on ? "true" : "false") + '">' +
       '<span class="track"></span>' + esc(label) + '</span>';
   }

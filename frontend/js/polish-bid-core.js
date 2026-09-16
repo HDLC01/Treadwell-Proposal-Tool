@@ -401,7 +401,26 @@
     hard_bid:        { cells: ["Epoxy!B5", "Polish!B5"], on: "Yes", off: "No" },
     prevailing_wage: { cells: ["Epoxy!D5"],              on: "Yes", off: "No" },
     taxable:         { cells: ["Epoxy!B6"],              on: "Yes", off: "No" },
-    remodel_tax:     { cells: ["Epoxy!D6"],              on: "Yes", off: "No" }
+    remodel_tax:     { cells: ["Epoxy!D6"],              on: "Yes", off: "No" },
+
+    // MOVED OFF THE INTAKE FORM, 2026-09-16. These three were "carry" conditions: they lived in a
+    // separate object on polish-intake.js, outside the model, because the beta engine prices none
+    // of them -- they exist to set a Yes/No literal in Kyle's workbook and nothing else. Hanz
+    // asked for them on the Takeoff step instead, where the work they describe actually is.
+    //
+    // THE MOVE IS INTO THE MODEL, AND THAT IS THE WHOLE POINT. Their old home wrote these cells
+    // from exactly one page. Two screens can answer them now, so they go where the other five
+    // already are: one writer, `conditionCellWrites`, called by both. The alternative -- a second
+    // carry object on a second page -- is how the same question gets two different answers.
+    //
+    // BOTH LITERALS, ALWAYS, INCLUDING remove_existing_jf WHILE JOINT FILLER IS OFF. The loop
+    // below writes every key unconditionally, which is the behaviour being preserved rather than
+    // a detail of it: a blank Yes/No cell is not "No" to Kyle's formulas, it is whatever his IF()
+    // falls through to. The switch greys out on screen because it moves no money, not because its
+    // answer stopped existing.
+    dye:               { cells: ["Polish!E25"], on: "Yes", off: "No" },
+    joint_filler:      { cells: ["Polish!E29"], on: "Yes", off: "No" },
+    remove_existing_jf: { cells: ["Polish!F29"], on: "Yes", off: "No" }
   };
 
   /** `cells` with those five literals written over it.
@@ -451,8 +470,12 @@
         { id: "jointfill", label: "Joint filler", guys: 3, days: "", rate: 33.0 },
         travelSeed()
       ],
+      // joint_filler ships ON, which is how Kyle's sheet ships and what the intake toggle
+      // defaulted to. The other two ship off. migrateModel's generic backfill carries all three
+      // onto every draft saved before they lived here.
       conditions: { local: true, hard_bid: false, prevailing_wage: false,
-                    taxable: true, remodel_tax: false, bond: false },
+                    taxable: true, remodel_tax: false, bond: false,
+                    dye: false, joint_filler: true, remove_existing_jf: false },
       contingency: 0,
       // D77, the Fees + Textura line. Seeded from RATES.FEES rather than a bare 0 so the constant
       // stays the one place that says what the workbook ships -- the parity test pins B77×C77 as

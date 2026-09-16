@@ -164,6 +164,14 @@
        and losing what somebody set. The house rule keeps a real `disabled` at .38-.5 and never
        dims a live control by opacity alone, so this stays at .55 with nothing disabled under it. */
     .tk.inert{opacity:.55}
+    /* The three that came off the intake form. Grouped under the takeoff rows rather than mixed
+       into them: they are not rows, they price nothing, and a switch sitting in a list of priced
+       lines reads as though it changes one. */
+    .tkconds{display:flex;flex-wrap:wrap;align-items:center;gap:8px 20px;margin:14px 0 0;
+      padding:13px 0 0;border-top:1px solid var(--line)}
+    .tkconds .cap{flex-basis:100%;margin:0}
+    /* Dimmed, still clickable. Same rule and same reason as .tk.inert above. */
+    .mw-sw.inert{opacity:.5}
     .inertline{color:var(--ink-v);font-style:italic;font-size:11.5px;margin:9px 0 0}
     /* Rendered unconditionally on every hours row; the card's OWN class decides whether it shows,
        so there is one source of truth for the dimming and the caption instead of two keyed

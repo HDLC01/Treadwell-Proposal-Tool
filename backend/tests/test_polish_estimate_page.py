@@ -973,12 +973,19 @@ def test_the_save_writes_the_condition_cells_and_no_others(ran):
     seven-step beta, which did write Polish!* cells — rides through untouched. Generating that
     project would fill the worksheet from the old beta's figures while this screen shows the new
     ones. Clearing a stale one would be an improvement and would still pass."""
-    # The five conditions' cells, and nothing else. local and hard_bid each carry a Polish mirror;
-    # the other three are formulas on the Polish tab and must NOT be written there.
+    # EIGHT CONDITIONS' CELLS NOW, and nothing else. local and hard_bid each carry a Polish
+    # mirror; prevailing_wage, taxable and remodel_tax are formulas on the Polish tab and must NOT
+    # be written there.
+    #
+    # E25/E29/F29 joined on 2026-09-16, when dye, joint filler and remove-existing moved off the
+    # intake form onto the Takeoff step. Their cells did not change and neither did their
+    # literals -- only which screen asks the question. They were written by polish-intake.js's own
+    # `carry` loop before, from exactly one page; they go through the shared writer now because
+    # two screens can answer them.
     assert ran["save"]["cellValueKeys"] == [
         "Epoxy!B4", "Epoxy!B5", "Epoxy!B6", "Epoxy!D5", "Epoxy!D6",
-        "Polish!B4", "Polish!B5"], (
-        "the save's worksheet cells are not exactly the five conditions': %r"
+        "Polish!B4", "Polish!B5", "Polish!E25", "Polish!E29", "Polish!F29"], (
+        "the save's worksheet cells are not exactly the eight conditions': %r"
         % ran["save"]["cellValueKeys"])
     # And the literals are the model's own answers. The fixture has local and taxable on, the other
     # three off, so a mapping written backwards cannot pass this.
@@ -988,11 +995,19 @@ def test_the_save_writes_the_condition_cells_and_no_others(ran):
         "Epoxy!D5": "No",                           # prevailing_wage
         "Epoxy!B6": "Yes",                          # taxable
         "Epoxy!D6": "No",                           # remodel_tax
+        # Joint filler ships ON and the other two off, which is freshModel's answer and was the
+        # intake toggles' answer before it. BOTH LITERALS ARE ALWAYS WRITTEN, including
+        # remove_existing_jf's "No" while joint filler is on: a blank Yes/No cell is not "No" to
+        # Kyle's formulas, it is whatever his IF() falls through to.
+        "Polish!E25": "No",                         # dye
+        "Polish!E29": "Yes",                        # joint_filler
+        "Polish!F29": "No",                         # remove_existing_jf
     }, "the condition literals do not match the model: %r" % (ran["save"]["cellValues"],)
     # A draft that already carried a worksheet map keeps it, and gains only those same five.
     carried = ran["save"]["legacyCellValues"] or {}
     assert set(carried) == {"Polish!D82", "Epoxy!B4", "Epoxy!B5", "Epoxy!B6", "Epoxy!D5",
-                            "Epoxy!D6", "Polish!B4", "Polish!B5"}, (
+                            "Epoxy!D6", "Polish!B4", "Polish!B5",
+                            "Polish!E25", "Polish!E29", "Polish!F29"}, (
         "the page added a worksheet cell beyond the five conditions', or dropped a carried one: %r"
         % carried)
     assert carried["Polish!D82"] == 41000, "a cell the draft already carried was overwritten"
@@ -1090,10 +1105,17 @@ def test_a_v1_model_becomes_v2_with_its_areas_as_measurements(ran):
         ["polishing", 4, 3, 34], ["mockup", 2, 1, 30], ["jointfill", 5, 2, 31],
         ["travel", 24, "", 33]], (
         "v1 labor did not come across as guys/days/rate: %r" % m["labor"])
-    # Bond is backfilled off — a v1 draft predates the flag entirely, and freshModel's default is
-    # what migrateModel's generic conditions loop fills in for any key the saved blob never stated.
+    # FOUR keys are backfilled, not one. A v1 draft predates bond entirely, and predates dye,
+    # joint_filler and remove_existing_jf living in the model at all -- until 2026-09-16 those
+    # three sat in a separate `carry` object on the intake page, deliberately outside what the
+    # engine is handed. migrateModel's generic conditions loop fills each from freshModel.
+    #
+    # The five the draft DID state come across untouched, which is the half that matters: a
+    # migration that reset a v1 job's answers would change a bid that has already been sent.
     assert m["conditions"] == {"local": False, "hard_bid": True, "prevailing_wage": True,
-                              "taxable": False, "remodel_tax": True, "bond": False}, (
+                              "taxable": False, "remodel_tax": True, "bond": False,
+                              "dye": False, "joint_filler": True,
+                              "remove_existing_jf": False}, (
         "the v1 job conditions were not preserved: %r" % m["conditions"])
     assert m["contingency"] == 0 and m["totals"] == {}
 
