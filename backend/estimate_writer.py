@@ -1212,9 +1212,12 @@ def _apply_cell_protection(ws_layouts: list[tuple[Any, list[str]]]) -> None:
     # wb._protections.add(unlocked) hashes and compares the Protection object
     # (Serialisable.__hash__ walks __attrs__ and rebuilds a tuple; __eq__ walks
     # it again through safe_string) just to hand back an index it already knew.
-    # At 84,670 cells on the 11 protected sheets that was ~470ms of the ~500ms
-    # this whole function cost — pure lookup, on every /api/generate, every
-    # portal PDF, every revision download and every To-Dropbox re-file.
+    # At 84,670 cells across the 11 protected sheets that lookup WAS this
+    # function: running the old and new passes alternately in one process (so a
+    # busy box skews both alike) it went 641ms → 34ms, median of 9 each, and a
+    # whole fill_estimate went 3,611ms → 2,965ms. Worth chasing because it is
+    # not just the Generate button: /api/generate, the customer's portal PDF, a
+    # revision download and a To-Dropbox re-file all replay through _generate.
     #
     # Interning up front and writing the index straight into the cell's own
     # StyleArray is the SAME write the descriptor performs (see
