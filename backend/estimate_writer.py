@@ -30,6 +30,7 @@ log = logging.getLogger("proposal_tool.estimate_writer")
 from openpyxl import load_workbook
 from openpyxl.formatting.formatting import ConditionalFormattingList
 from openpyxl.styles import Protection
+from openpyxl.styles.cell_style import StyleArray
 from openpyxl.workbook import Workbook
 from openpyxl.worksheet.cell_range import CellRange
 
@@ -1204,6 +1205,26 @@ def _apply_cell_protection(ws_layouts: list[tuple[Any, list[str]]]) -> None:
     unlocked = Protection(locked=False)
     locked = Protection(locked=True)
 
+    # Resolve the two Protection records to their style-table indices ONCE.
+    #
+    # `cell.protection = unlocked` looks like a plain assignment but it is
+    # openpyxl's StyleDescriptor, which re-interns the value on EVERY cell:
+    # wb._protections.add(unlocked) hashes and compares the Protection object
+    # (Serialisable.__hash__ walks __attrs__ and rebuilds a tuple; __eq__ walks
+    # it again through safe_string) just to hand back an index it already knew.
+    # At 84,670 cells on the 11 protected sheets that was ~470ms of the ~500ms
+    # this whole function cost — pure lookup, on every /api/generate, every
+    # portal PDF, every revision download and every To-Dropbox re-file.
+    #
+    # Interning up front and writing the index straight into the cell's own
+    # StyleArray is the SAME write the descriptor performs (see
+    # openpyxl/styles/styleable.py: StyleDescriptor.__set__), minus the lookup.
+    # It is safe because each cell owns its StyleArray — StyleableObject.__init__
+    # copies the one it is handed, so nothing is shared with wb._cell_styles or
+    # with a neighbouring cell. tests/test_cell_protection_intern.py replays the
+    # descriptor version over the same template and asserts every resulting
+    # StyleArray is identical, so the two can't drift.
+
     # Tier 2 first (workbook-wide, once): Normal style → unlocked, so virgin
     # cells on the protected sheets stay editable. Harmless on unprotected
     # sheets — the flag only matters when a sheet's protection is on.
@@ -1224,12 +1245,28 @@ def _apply_cell_protection(ws_layouts: list[tuple[Any, list[str]]]) -> None:
                 ws.protection.sheet = False
                 ws.protection.disable()
                 continue
-            # Tier 1: only cells that already exist — list() because assigning
-            # a style can grow the dict via style interning side effects.
+            # The index is per-workbook, so it is resolved off this sheet's own
+            # parent rather than assumed — ws_layouts always comes from a single
+            # workbook today, but nothing in the signature promises that.
+            prots = ws.parent._protections
+            unlocked_id = prots.add(unlocked)
+            locked_id = prots.add(locked)
+            # Tier 1: only cells that already exist. list() is kept because the
+            # loop below used to be able to grow ws._cells through the descriptor;
+            # writing the index directly can't, but a snapshot costs one list per
+            # sheet and keeps the loop safe if anything is ever added back.
             for cell in list(ws._cells.values()):
-                cell.protection = unlocked
+                if cell._style is None:
+                    cell._style = StyleArray()
+                cell._style.protectionId = unlocked_id
             for addr in addrs:
-                ws[addr].protection = locked
+                # ws[addr] still MATERIALISES a missing lock cell, exactly as
+                # before — a lock address the template never created has to exist
+                # for Excel to honour it.
+                cell = ws[addr]
+                if cell._style is None:
+                    cell._style = StyleArray()
+                cell._style.protectionId = locked_id
             ws.protection.sheet = True
             ws.protection.formatCells = False
             ws.protection.formatColumns = False
