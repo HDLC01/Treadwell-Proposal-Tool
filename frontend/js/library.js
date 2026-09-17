@@ -2111,33 +2111,62 @@
       : "");
   }
 
+  // GROUPED, NOT A KIND COLUMN, and the comment in library.html that argued the other way is
+  // replaced rather than ignored. Hanz, 2026-09-17: "for the take off please sub categorize the
+  // containers wheter they are materials or assemblies". The old reasoning was that a column
+  // says "one list read three ways" while sections would say the three are unrelated. That
+  // reasoning survives here: these are SUB-HEADINGS INSIDE ONE TABLE, not four tables. One
+  // list, one scroll, signposted -- which is what he asked for and what that comment wanted.
+  //
+  // The Kind column goes, because with a heading over every group it repeated itself on every
+  // row, and an empty group renders NOTHING rather than a heading over blank space.
+  //
+  // SEPARATE FROM THE RENDERER so a test can execute the grouping and read it back as data.
+  // This page has already shipped a dead button behind a green markup regex once.
+  function takeoffDefaultGroups() {
+    var groups = [
+      { title: "Assemblies",
+        rows: ASMS.filter(function (a) { return a.favorite; }).map(function (a) {
+          var n = (a.lines || []).length;
+          return { name: a.name,
+                   how: n + " item line" + (n === 1 ? "" : "s") + " \u00b7 per " + (a.unit || "SF"),
+                   actions: defaultRowActions("assemblies", a.id, a.name) };
+        }) },
+      { title: "Materials",
+        rows: ITEMS.filter(function (it) { return it.favorite; }).map(function (it) {
+          return { name: it.name,
+                   how: L.num(it.unit_cost) != null
+                     ? L.money(it.unit_cost) + " per " + (it.unit || "unit")
+                     : "No cost in the library yet",
+                   actions: defaultRowActions("items", it.id, it.name) };
+        }) },
+      { title: "Markup",
+        rows: GLOBAL_MARKUP.map(function (g) {
+          return { name: g.label,
+                   how: (g.formula || "not set") + " \u00b7 set on the Markup page's Global tab",
+                   actions: '<span class="builtin">Read only</span>' };
+        }) },
+      { title: "Conditions",
+        rows: takeoffConditionDefaults().map(function (c) {
+          return { name: c.label,
+                   how: c.why + " \u00b7 " + c.cell + " = " + (c.on ? "Yes" : "No"),
+                   actions: '<span class="builtin">Built in</span>' };
+        }) },
+    ];
+    return groups.filter(function (g) { return g.rows.length > 0; });
+  }
+
   function renderDefaultTakeoff() {
     var body = $("default-takeoff-body");
     if (!body) return;
     var out = "";
-    ASMS.filter(function (a) { return a.favorite; }).forEach(function (a) {
-      out += "<tr><td>" + esc(a.name) + "</td><td>Assembly</td>" +
-        "<td>" + (a.lines || []).length + " item line" +
-        ((a.lines || []).length === 1 ? "" : "s") + " · per " + esc(a.unit || "SF") + "</td>" +
-        '<td class="rowact">' + defaultRowActions("assemblies", a.id, a.name) + "</td></tr>";
-    });
-    ITEMS.filter(function (it) { return it.favorite; }).forEach(function (it) {
-      out += "<tr><td>" + esc(it.name) + "</td><td>Material</td>" +
-        "<td>" + (L.num(it.unit_cost) != null
-          ? esc(L.money(it.unit_cost)) + " per " + esc(it.unit || "unit")
-          : "No cost in the library yet") + "</td>" +
-        '<td class="rowact">' + defaultRowActions("items", it.id, it.name) + "</td></tr>";
-    });
-    GLOBAL_MARKUP.forEach(function (g) {
-      out += "<tr><td>" + esc(g.label) + "</td><td>Markup</td>" +
-        "<td>" + esc(g.formula || "not set") +
-        " · set on the Markup page's Global tab</td>" +
-        '<td class="rowact"><span class="builtin">Read only</span></td></tr>';
-    });
-    takeoffConditionDefaults().forEach(function (c) {
-      out += "<tr><td>" + esc(c.label) + "</td><td>Condition</td>" +
-        "<td>" + esc(c.why) + " · " + esc(c.cell) + " = " + (c.on ? "Yes" : "No") + "</td>" +
-        '<td class="rowact"><span class="builtin">Built in</span></td></tr>';
+    takeoffDefaultGroups().forEach(function (g) {
+      out += '<tr class="grouphead"><th scope="colgroup" colspan="3">' +
+        esc(g.title) + "</th></tr>";
+      g.rows.forEach(function (r) {
+        out += "<tr><td>" + esc(r.name) + "</td><td>" + esc(r.how) + "</td>" +
+          '<td class="rowact">' + r.actions + "</td></tr>";
+      });
     });
     body.innerHTML = out;
     if ($("default-takeoff-empty")) $("default-takeoff-empty").hidden = out !== "";

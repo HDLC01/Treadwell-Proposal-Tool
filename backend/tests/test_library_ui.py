@@ -172,8 +172,20 @@ def test_the_takeoff_defaults_list_what_a_new_estimate_starts_with(ran):
     assert t["namesTheDefaults"], "the switched-on assembly and material are not listed"
     assert t["skipsTheRest"], (
         "the list shows rows nobody switched on, which makes the switch decorative")
-    assert t["kinds"] == ["Assembly", "Material", "Markup", "Condition", "Condition", "Condition"], (
-        "the kinds or their order changed: %s" % t["kinds"])
+    # GROUPED, 2026-09-17, at Hanz's ask: "sub categorize the containers wheter they are
+    # materials or assemblies". Sub-headings inside the one table, not four tables -- the
+    # order is the order a new estimate builds itself in.
+    assert t["groupTitles"] == ["Assemblies", "Materials", "Markup", "Conditions"], (
+        "the groups or their order changed: %s" % t["groupTitles"])
+    assert t["groupCounts"] == [1, 1, 1, 3], (
+        "a row landed in the wrong group: %s" % t["groupCounts"])
+    assert t["renderedHeadings"] == t["groupTitles"], (
+        "the groups exist in the data but are not drawn: %s" % t["renderedHeadings"])
+    assert t["noKindColumn"], (
+        "the Kind column is back; with a heading over every group it repeats itself on "
+        "every row")
+    assert t["noEmptyGroups"], (
+        "an empty group is being emitted, so the list shows a heading over blank space")
 
 
 @needs_node
@@ -268,9 +280,12 @@ def test_bond_is_shown_here_but_still_lives_on_the_markup_page():
         "the bond row does not say the Markup page owns it, so this reads as a second home")
     js = (FRONTEND / "js" / "library.js").read_text(encoding="utf-8", errors="replace")
     assert "/api/markup/rules" in js, "the rate is not read from the markup service"
-    start = js.index("function renderDefaultTakeoff")
-    body = js[start:js.index("The Labor defaults", start)]
-    assert "data-" not in body.split("GLOBAL_MARKUP")[1].split("});")[0], (
+    # READ OFF THE DRAWN ROW, not sliced out of the renderer's source. The old form split the
+    # function text on "GLOBAL_MARKUP" and then on "});" and broke the moment the renderer was
+    # regrouped -- it was asserting on punctuation, and it would equally have passed on a
+    # renderer that drew nothing. What matters is that the row a person sees offers nothing
+    # to press.
+    assert t["bondRowHasNoControl"], (
         "the bond row carries a control, which would make this page a second home for the rate")
 
 
