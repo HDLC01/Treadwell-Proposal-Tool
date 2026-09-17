@@ -55,7 +55,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
@@ -123,6 +123,66 @@ app.add_middleware(
 
 
 # ─── Conditional-GET helper (ETag / 304) ──────────────────────────────
+def _json_fallback(o: Any) -> Any:
+    """What `json.dumps` should do with a value it has no encoder for.
+
+    `json.dumps` only reaches this for a LEAF it cannot serialize, so the whole
+    payload is never walked — which is the entire point of it replacing the
+    eager `jsonable_encoder` pass below.
+
+    Two layers, deliberately:
+
+      1. `jsonable_encoder` on the single offending value. It is FastAPI's own
+         table, so anything it used to convert on the way out still converts to
+         exactly the same JSON — a `datetime.timedelta`, the one openpyxl type
+         that can genuinely reach here, still becomes `total_seconds()` and not
+         a string. openpyxl hands back a timedelta for a duration-formatted
+         cell ([h]:mm), and no cell in today's template carries that format —
+         but Kyle edits the template, and a number format changed in Excel must
+         not be able to turn a rendered sheet into a 500.
+
+      2. `str(o)` if even that raises. This is STRICTLY safer than what shipped
+         before: the old eager encoder raised out of the handler, so an
+         unconvertible value anywhere in a grid took the whole sheet down. Now
+         the worst case is one cell rendering as its repr.
+
+    THE ONE PLACE THIS IS NOT A SUPERSET OF THE OLD BEHAVIOUR: dict KEYS.
+    `json.dumps` calls `default=` for values only; a key that is not
+    str/int/float/bool/None is a TypeError it never offers to anybody, while the
+    eager encoder used to stringify it on the way past. No payload served
+    through `_versioned_json` has such a key today — `row_heights` and
+    `col_widths` are keyed by row and column NUMBER, which `json.dumps` writes
+    as decimal strings exactly as the old path did, and all six endpoints are
+    asserted byte-identical in test_versioned_json_encoding.py. Worth knowing
+    before adding a payload keyed by anything stranger.
+    """
+    try:
+        return jsonable_encoder(o)
+    except Exception:  # noqa: BLE001 — a weird cell is never worth a 500
+        return str(o)
+
+
+class _CompactJSONResponse(JSONResponse):
+    """Starlette's JSONResponse plus `default=_json_fallback`.
+
+    Starlette's `render` hardcodes its `json.dumps` call, so the only way to add
+    a `default=` is to override it. Every other argument is copied verbatim from
+    the base class — same separators, same `ensure_ascii=False`, same
+    `allow_nan=False` — so the bytes are identical to what JSONResponse
+    produced, for every value that has an encoder.
+    """
+
+    def render(self, content: Any) -> bytes:
+        return json.dumps(
+            content,
+            ensure_ascii=False,
+            allow_nan=False,
+            indent=None,
+            separators=(",", ":"),
+            default=_json_fallback,
+        ).encode("utf-8")
+
+
 def _versioned_json(request: Request, payload: Any, *, version: str) -> Response:
     """Serve `payload` as JSON with an ETag derived from `version`, honoring
     `If-None-Match` so the browser revalidates cheaply (304, no body) instead
@@ -131,12 +191,43 @@ def _versioned_json(request: Request, payload: Any, *, version: str) -> Response
     `Cache-Control: no-cache` = the browser MAY cache but must revalidate every
     time. Because `version` embeds the source file's mtime, a deploy that
     changes the template/recipes changes the ETag and busts the cache safely.
+
+    NO `jsonable_encoder` HERE, AND THAT IS THE POINT. It used to wrap `payload`
+    on the way into the response, and on this payload it was a pure no-op that
+    cost more than the serialization it preceded: it rebuilt every dict and list
+    in a 1.2 MB Epoxy grid to hand `json.dumps` a structure that was already
+    JSON-native, because `_normalize_cell_value` in estimate_writer.py has
+    already turned openpyxl's dates into strings by the time a grid gets here.
+    Measured 2026-09-17 through the real ASGI stack, grids already cached: a
+    16-tab estimate-review load spent 385 ms of its 634 ms inside
+    `jsonable_encoder` — 61% of the request time, for byte-identical output
+    (asserted on all 16 tabs in test_versioned_json_encoding.py).
+
+    The safety it was providing is not lost, it is just paid lazily: see
+    `_json_fallback`, which is now the only thing that ever calls it.
+
+    THE WIN IS ON COLD LOADS ONLY. An `If-None-Match` hit returns two lines
+    above this, so the warm steady state — a browser revalidating tabs it
+    already holds — never reached the encoder in the first place. What got
+    faster is the first estimate-review after a deploy, and any tab a browser
+    has not cached yet.
+
+    NOT DONE ON PURPOSE: this does not gzip the body itself and cache the
+    result. gzip is not the expensive part (70 ms for all 16 tabs at level 9,
+    measured), so pre-compressing only wins anything if the compressed bytes are
+    cached — and a body cache needs a key. The obvious key, the ETag, is NOT
+    safe today: `/api/sheets` and `/api/named-expressions` both pass
+    `version=_template_version()`, so they already share an ETag. That is
+    harmless for HTTP, where an ETag means nothing outside its own URL, but a
+    server-side cache keyed on it would serve one endpoint's body from the
+    other. A cache here has to be keyed on (path, query, version), and that is
+    a bigger change than the measured ~170 ms it would buy.
     """
     etag = 'W/"' + hashlib.md5(version.encode()).hexdigest()[:16] + '"'
     headers = {"ETag": etag, "Cache-Control": "no-cache"}
     if etag in (request.headers.get("if-none-match") or ""):
         return Response(status_code=304, headers=headers)
-    return JSONResponse(content=jsonable_encoder(payload), headers=headers)
+    return _CompactJSONResponse(content=payload, headers=headers)
 
 
 def _template_version() -> str:
@@ -5533,23 +5624,99 @@ def _start_basisboard_refresher() -> None:
         log.warning("Basisboard analytics refresher failed to start: %s", exc)
 
 
+# The three tabs a deploy used to warm, and still the three worth building
+# first. Epoxy is the default tab estimate-review opens on and the most
+# expensive grid in the workbook; Polish and the USG 1-8" gypsum tab are the
+# next two anyone actually lands on. Everything else in the workbook follows
+# them, in whatever order the template lists it — see _warm_sheet_cache.
+_WARM_FIRST: Tuple[str, ...] = ("Epoxy", "Polish", 'Gyp (USG 1-8")')
+
+
+def _warm_all_sheets() -> None:
+    """Build every grid in the estimate template into estimate_writer's cache.
+
+    A module-level function rather than a closure inside the startup hook below,
+    so a test can run the warm itself instead of racing a daemon thread it has
+    no handle on — the hook's job is to spawn it, and those are two claims worth
+    failing separately.
+
+    Nothing here raises. It runs on a thread nobody joins, so an exception would
+    be logged by the interpreter and lost; every failure mode has to end with
+    the request path still able to build the tab on demand, which it always can.
+    """
+    t0 = time.time()
+    try:
+        names = estimate_writer.list_sheet_names()
+    except Exception as exc:  # noqa: BLE001 — a warm cache is never worth a failed boot
+        log.warning("Sheet warm could not list the tabs: %s", exc)
+        return
+    # THE WARM STOPS AT THREE, AND THAT IS THE WHOLE MEMORY STORY.
+    #
+    # Warming all sixteen took the container's boot working set from 182.3 MB to 337.8 MB.
+    # Measured on the VPS on 2026-09-17: 1,967 MB total, 399 MB available, 1,591 MB ALREADY
+    # IN SWAP, eighteen containers, and no mem_limit on this service. estimate_writer's
+    # _SHEET_GRID_CACHE has no eviction, so a boot-time warm of every tab is a permanent
+    # floor, not a peak. We have taken production down on this box before.
+    #
+    # None of the speed came from here. The 206 ms -> 4 ms on /api/sheets and 809 ms -> 268 ms
+    # on sixteen grids are the jsonable_encoder fix and the name cache, both of which cost
+    # nothing. Warming the other thirteen only bought the FIRST request after a deploy, and it
+    # bought it with 156 MB this box does not have.
+    #
+    # So this stays at the three tabs a deploy has always warmed. The cache still fills as tabs
+    # are actually opened, exactly as it does today -- unbounded growth on use is pre-existing
+    # behaviour and is not what this change adds.
+    #
+    # list_sheet_names() above is still called and still wanted: it fills the name cache, which
+    # is the half of the /api/sheets win that has nothing to do with grids.
+    ordered = [n for n in _WARM_FIRST if n in names]
+    warmed = 0
+    for name in ordered:
+        try:
+            estimate_writer.read_sheet_grid(name)  # populates _SHEET_GRID_CACHE
+            warmed += 1
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Sheet warm failed for %s: %s", name, exc)
+    log.info("Warmed sheet cache: %d/%d tabs in %.1fs",
+             warmed, len(ordered), time.time() - t0)
+
+
 @app.on_event("startup")
 def _warm_sheet_cache() -> None:
-    """Pre-build + cache the heavy grids in a background thread so the first
-    real user after a deploy doesn't pay the ~7 s cold serialization cost.
+    """Pre-build + cache EVERY grid in a background thread so the first real
+    user after a deploy doesn't pay the cold build cost.
     Runs off-thread so it never blocks startup / the health check.
+
+    IT USED TO WARM THREE TABS OF SIXTEEN, and the other thirteen were the
+    problem. Measured 2026-09-17 on the dev box, cold process: building all
+    sixteen grids costs 7,469 ms, of which the warmed three are 3,872 ms (Epoxy
+    alone is 3,134 of that) — so the first estimate-review after every deploy
+    still spent ~3.6 s building grids for tabs nobody had touched yet, and it
+    spent it inside the estimator's request rather than in the seconds after the
+    container came up. The tab bar lists all sixteen, so "the tabs people use"
+    was never a useful filter: the page fetches whichever one gets clicked, and
+    the unwarmed ones were exactly the slow ones.
+
+    Priority order, not template order. A grid built on a background thread is
+    only a win if it lands before someone asks for it, and somebody opening
+    estimate-review fifteen seconds after a deploy is going to ask for Epoxy.
+    _WARM_FIRST goes first; the rest follow in whatever order the workbook
+    lists them.
+
+    The `list_sheet_names()` that opens _warm_all_sheets does double duty: the
+    warm loop needs the names, and calling it fills estimate_writer's name
+    cache, so the `/api/sheets` that gates the whole page is already answered
+    from memory by the time a browser asks. That is the head-of-line request —
+    no grid is fetched until the tab bar renders — so warming it is worth more
+    than its 236 bytes suggest.
+
+    STILL DOES NOT BLOCK STARTUP, which is the constraint that matters on a box
+    running thirteen containers: this is a daemon thread, /healthz answers
+    immediately, and nothing waits on the result. A tab that fails to build is
+    logged and skipped — the request path rebuilds it on demand, exactly as it
+    did before any of this existed.
     """
-    import threading
-
-    def _warm() -> None:
-        for name in ("Epoxy", "Polish", 'Gyp (USG 1-8")'):
-            try:
-                estimate_writer.read_sheet_grid(name)  # populates _SHEET_GRID_CACHE
-                log.info("Warmed sheet cache: %s", name)
-            except Exception as exc:  # noqa: BLE001
-                log.warning("Sheet warm failed for %s: %s", name, exc)
-
-    threading.Thread(target=_warm, daemon=True).start()
+    threading.Thread(target=_warm_all_sheets, daemon=True).start()
 
 
 @app.put("/api/draft/{draft_id}")
@@ -6958,8 +7125,19 @@ class NoCacheStaticFiles(StaticFiles):
         return resp
 
 
+# The static mount, held on a module global so `_root` can serve a page THROUGH it
+# rather than beside it. Assigned at the bottom of this file, read at request time.
+#
+# `_root` could just FileResponse the file, and that is what the ?new branch does — but
+# FileResponse alone answers every conditional GET with the whole body: Starlette puts the
+# ETag on the response and leaves the If-None-Match comparison to StaticFiles. Going
+# through the mount gets that comparison, and NoCacheStaticFiles' Cache-Control with it,
+# so the bare domain answers exactly as /portal.html does instead of nearly.
+_frontend_files: Optional[StaticFiles] = None
+
+
 @app.get("/", include_in_schema=False)
-def _root(request: Request) -> Response:
+async def _root(request: Request) -> Response:
     """Home is Active Projects. The intake ("New Project") screen is served only when a
     project is explicitly being created (?new) or edited (?edit) — so hitting the bare
     domain, or an old ?d=… link left in browser history, lands on a board instead of a
@@ -6973,24 +7151,42 @@ def _root(request: Request) -> Response:
     moved in the same commit, because two places deciding one landing page is how they end
     up disagreeing.
 
-    THE ?new / ?edit BRANCH IS LOAD-BEARING and must stay above the redirect. Both the
-    Database and the board's + New button navigate to `/?new=1`; redirecting that would
-    bounce somebody straight back to a board instead of the intake form, and there would be
-    no way to start a proposal at all."""
+    THE ?new / ?edit BRANCH IS LOAD-BEARING and must stay above everything else. Both the
+    Database and the board's + New button navigate to `/?new=1`; serving the board for that
+    would bounce somebody straight back to a board instead of the intake form, and there
+    would be no way to start a proposal at all.
+
+    IT SERVES THE BOARD'S BYTES; IT USED TO 307 TO /portal.html. The redirect was a round
+    trip that bought nothing and could never be cached — a 307 with no Cache-Control is
+    revalidated every single time — so every visit to the bare domain, which is how staff
+    open this app, paid a full request before the first byte of the page moved. Now the
+    board comes back on the first request.
+
+    THE PATHNAME IS THE TRAP, and the page closes it, not this function. `auth.js`
+    reads `location.pathname` three times: HOME_PAGE comparisons, the DENIED_PAGES
+    permission lookup, and the sidebar's active-row test in navItem(), which is an
+    `endsWith(href)` against "/portal.html". After a 307 the browser's pathname WAS
+    "/portal.html"; served here it would be "/", and the Active Projects row would quietly
+    stop being highlighted while nothing looked broken enough to investigate.
+    frontend/js/root-path.js rewrites the address bar, and portal.html loads it ahead of
+    auth.js, so every one of those reads sees exactly the string it saw before. Its header
+    explains the rest: why the query string is deliberately dropped (the 307 dropped it too,
+    and shared.js would otherwise adopt a stale `?d=`), and why it is a separate file that
+    only this page loads rather than an inline tag or a line in auth.js.
+    """
     q = request.query_params
     if "new" in q or "edit" in q:
         return FileResponse(
             str(FRONTEND_DIR / "index.html"),
             headers={"Cache-Control": "no-store, must-revalidate, max-age=0"},
         )
-    return RedirectResponse(url="/portal.html", status_code=307)
+    if _frontend_files is None:                 # no frontend dir (API-only deployment)
+        raise HTTPException(404, "Frontend not available")
+    return await _frontend_files.get_response("portal.html", request.scope)
 
 
 if FRONTEND_DIR.exists():
-    app.mount(
-        "/",
-        NoCacheStaticFiles(directory=str(FRONTEND_DIR), html=True),
-        name="frontend",
-    )
+    _frontend_files = NoCacheStaticFiles(directory=str(FRONTEND_DIR), html=True)
+    app.mount("/", _frontend_files, name="frontend")
 else:
     log.warning("Frontend dir not found at %s", FRONTEND_DIR)
