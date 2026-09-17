@@ -1699,3 +1699,184 @@ def test_the_county_is_printed_as_stored_not_with_County_appended(ran):
     that read "Johnson County, KS County" beside the remodel row."""
     assert not ran["remodelRate"]["county"]["doubledCountyWord"], (
         "the county name is printed with 'County' appended to a value that already contains it")
+
+
+# -- the library's default labor lines ----------------------------------------
+# "+ Add a labor line" on Library -> Default Items & Assemblies shipped wired to nothing, because
+# nothing stored a custom labor line. public.library_labor now does, and this step is what reads
+# it. Every test below BOOTS the page and RENDERS its Labor step: a gate that reads the wrong
+# thing still contains the word laborUnstated, and a row that never reaches the panel is still on
+# a model somebody could print. That is exactly how the dead button shipped green.
+@needs_node
+def test_a_brand_new_bid_opens_holding_travel_and_every_default_line(ran):
+    """A default that nothing consumes is a settings screen that lies. A new estimate opens with
+    the three crew rows off Kyle's Polish tab, Travel, and then every line the estimator set up
+    under Items & Assemblies -- named, rendered, and editable.
+
+    THE TABLE AND THE MODEL DISAGREE ON PURPOSE: the row is `name` in the database and `label` on
+    the model. One mapping bridges them (B.libraryLaborRow), and this is the test that would see
+    it come apart -- the defaults would render with blank name boxes.
+
+    Mutation: delete the `M.labor = B.seedLibraryLabor(...)` line from init(). The page still
+    opens, still prices, and every test that existed before this one still passes."""
+    n = ran["laborDefaults"]["brandNew"]
+    assert n["ids"] == ["polishing", "mockup", "jointfill", "travel",
+                        "lab-densify", "lab-night"], (
+        "a new bid did not open holding Travel AND the library's lines, in that order: %r"
+        % n["ids"])
+    # RENDERED, not merely on the model: these are the values in the boxes the Labor step drew.
+    assert n["onScreen"] == ["Polishing", "Mock-up", "Joint filler", "Travel",
+                             "Densify", "Night shift premium"], (
+        "the Labor step did not put the defaults on screen: %r" % n["onScreen"])
+    assert n["costCells"] == 6, "the panel drew %r cost cells for 6 rows" % n["costCells"]
+    assert n["rates"] == [33, 33, 33, 33, 40, 12.5], (
+        "a default's rate did not come across as a number: %r" % n["rates"])
+    # The estimator's own boxes are left for the estimator. A default says what the line is and
+    # what it costs per unit, never how much of it this job needs.
+    assert n["days"][4:] == ["", ""], "a default arrived with days already typed in"
+    # ...with the one documented exception, which is not a typed figure at all: a default that
+    # carries guys_auto gets the derived man-day sum before the first paint, exactly as Travel
+    # does. Compared to Travel's own rather than to a literal, because the point is that the two
+    # went through the same sync, not that today's fixture sums to any particular number.
+    assert n["autoGuys"] == n["travelGuys"] and n["travelGuys"] != [""], (
+        "a guys_auto default was not filled the way Travel is: %r vs %r"
+        % (n["autoGuys"], n["travelGuys"]))
+    # A default must not quietly put money on a bid nobody has priced yet.
+    assert n["laborTotal"] == n["builtInTotal"], (
+        "seeding the defaults changed the labor total before anything was typed: %r vs %r"
+        % (n["laborTotal"], n["builtInTotal"]))
+    assert n["mainShown"]
+
+
+@needs_node
+def test_a_project_that_came_through_the_beta_intake_gets_the_defaults_too(ran):
+    """THE CASE THAT DECIDES WHETHER ANY OF THIS IS REACHABLE. Every beta project starts on
+    polish-intake.html, whose save mints the first `polish_estimate` -- version, takeoff,
+    conditions, and no labor, because labor is not that page's to state.
+
+    Until 2026-09-17 that save stated labor anyway: migrateModel fills a missing `labor` in from
+    freshModel() before handing the model back, so the first keystroke on the intake form
+    persisted four crew rows nobody had been shown. That was enough to disqualify every beta
+    project from its own defaults, seconds before the estimator ever reached the Labor step.
+
+    THIS TEST OWNS THE CALCULATOR'S HALF ONLY, and its fixture is that blob written out by
+    hand. The intake page's half -- that this really is what it mints -- is pinned next door by
+    test_this_page_does_not_state_labor_it_has_no_screen_for, which asks the real
+    B.laborUnstated() the same question about what that page actually saved. Verified: dropping
+    the `delete model.labor` line from js/polish-intake.js turns that test red and leaves this one
+    green, because a hand-built fixture cannot notice the other page changing.
+
+    Mutation: delete the `M.labor = B.seedLibraryLabor(...)` line from init() -- the calculator
+    stops seeding the one blob shape every beta project arrives in."""
+    f = ran["laborDefaults"]["fromIntake"]
+    assert f["fetched"], "a project minted by the beta intake never even asked for the defaults"
+    assert f["ids"] == ["polishing", "mockup", "jointfill", "travel",
+                        "lab-densify", "lab-night"], (
+        "the normal flow does not get the defaults: %r" % f["ids"])
+    assert f["onScreen"][-2:] == ["Densify", "Night shift premium"]
+
+
+@needs_node
+def test_a_saved_bid_opens_exactly_as_it_was_saved(ran):
+    """THE HARD CONSTRAINT. An estimator's labor rows are their work. A bid that has been worked
+    on comes back row for row, number for number, no matter what the default list says today --
+    including a default they kept and then re-rated from $40 to $55.
+
+    The defaults are not filtered out late; they are never asked for. `fetches` carries no
+    /api/library/labor at all, which is the only way to tell "the gate ran" from "the gate
+    happened to add nothing today".
+
+    NOT VACUOUS: `wouldHaveAdded` seeds that same saved array with that same library list and a
+    row arrives. There was something to keep out.
+
+    Mutation: replace the gate in init() with `true` (seed unconditionally). `after` grows a fifth
+    row and the estimator's $55 sits next to a $40 duplicate."""
+    w = ran["laborDefaults"]["worked"]
+    assert w["after"] == w["saved"], (
+        "a saved bid's labor came back changed:\n saved: %r\n opened: %r"
+        % (w["saved"], w["after"]))
+    assert w["onScreen"] == ["Polishing", "Mock-up", "Travel", "Densify"], (
+        "the Labor step drew something other than the saved rows: %r" % w["onScreen"])
+    assert not [u for u in w["fetches"] if "/labor" in u], (
+        "a saved bid asked the server for the default labor lines: %r" % w["fetches"])
+    assert len(w["wouldHaveAdded"]) > len(w["saved"]), (
+        "the library holds nothing this bid is missing, so 'nothing was added' proves nothing: %r"
+        % w["wouldHaveAdded"])
+    # A v1 draft keeps its crew under `labour` and so has no `labor` key at all. Reading that
+    # absence as "never worked on" would append the defaults to crew rows typed months ago.
+    v1 = ran["laborDefaults"]["v1"]
+    assert not v1["fetched"], "a v1 draft asked for the defaults"
+    assert v1["ids"] == ["polishing", "mockup", "jointfill", "travel"], (
+        "a v1 draft was given the library's default lines: %r" % v1["ids"])
+
+
+@needs_node
+def test_deleting_a_default_leaves_the_bids_already_holding_it_alone(ran):
+    """Once seeded and saved, the row is the BID's. The library is not consulted about it again,
+    so an admin tidying the default list cannot reach into a bid that was priced with one -- which
+    would move a customer's number after it had been quoted.
+
+    Mutation: make the seeding an intersection instead of an addition -- rebuild `M.labor` from
+    the library list on every load. The kept row disappears off a saved bid the moment somebody
+    deletes the default."""
+    d = ran["laborDefaults"]["deleted"]
+    assert "lab-densify" in d["ids"], (
+        "deleting the default took it off a bid already holding it: %r" % d["ids"])
+    assert d["onScreen"] == ["Polishing", "Mock-up", "Travel", "Densify"]
+    assert d["densifyRate"] == [55], (
+        "the kept row lost the estimator's own rate: %r" % d["densifyRate"])
+
+
+@needs_node
+def test_a_missing_defaults_table_is_no_defaults_and_never_a_broken_step(ran):
+    """public.library_labor is on STAGING and not on production, by Hanz's decision. So on prod
+    today this endpoint has no table behind it, and it has to read as "no custom labor lines"
+    rather than as a broken page. A new bid that opened with no Labor step at all would be far
+    worse than one that opened without a default nobody has defined yet.
+
+    Both shapes the failure arrives in are covered: the read going down, and it answering with
+    something that is not a list of rows (a 404's JSON body, an { ok: false }).
+
+    Mutation: put the labor read inside the assemblies/items Promise.all. Both cases then land on
+    "Couldn't load the item library" with #main still hidden -- a blank screen on production."""
+    for key in ("down", "notRows"):
+        case = ran["laborDefaults"][key]
+        assert case["ids"] == ["polishing", "mockup", "jointfill", "travel"], (
+            "%s: the built-in rows did not survive the defaults read failing: %r"
+            % (key, case["ids"]))
+        assert case["mainShown"], "%s: the page never opened" % key
+        assert case["alert"] == "", (
+            "%s: an estimator was told something was wrong about a table that is simply not "
+            "there yet: %r" % (key, case["alert"]))
+    down = ran["laborDefaults"]["down"]
+    assert down["loadingHidden"], "the page stayed on its loading message"
+    assert down["onScreen"] == ["Polishing", "Mock-up", "Joint filler", "Travel"], (
+        "the Labor step came up without Travel on it: %r" % down["onScreen"])
+    assert down["costCells"] == 4
+
+
+@needs_node
+def test_a_default_that_still_needs_numbers_says_which_one(ran):
+    """A default states what the line IS and what it COSTS per unit -- never how much of it this
+    job needs. So on a `days` line it arrives with a rate and two empty boxes, and blockers()
+    reads a row with one or two of its three boxes empty as half-filled. That is exactly the
+    treatment Polishing and Joint filler already get off Kyle's own sheet: a default the estimator
+    does not need on this job is removed with the row's own x, not left sitting at nothing.
+
+    Both ways that could go wrong are pinned. It must not block the bid WITHOUT naming the row --
+    the estimator would be hunting through six rows for the empty box. And an HOURS default must
+    take the same "no hours means unused" carve-out Travel does, or every local job would open
+    demanding drive time it is never going to need.
+
+    Mutation: hardcode `unit: "days"` in libraryLaborRow. The hours default stops taking Travel's
+    carve-out and every new bid opens demanding numbers for a line nobody has switched on."""
+    n = ran["laborDefaults"]["brandNew"]
+    says = n["blockers"]
+    assert "Add the guys and days for Densify" in says, (
+        "a default that needs numbers does not say which row or which box: %r" % says)
+    assert not [s for s in says if "Night shift" in s], (
+        "an hours default did not take Travel's own 'no hours means unused' carve-out, so a bid "
+        "nobody is driving to opens blocked: %r" % says)
+    # …and the built-in rows are still named the way they always were, so the defaults have not
+    # drowned them out.
+    assert "Add the days for Polishing" in says

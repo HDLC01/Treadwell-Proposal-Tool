@@ -400,4 +400,120 @@ out.blockers = [
   { label: "a model that is not a model at all", says: P.blockers(null) }
 ];
 
+// ── the library's default labor lines ────────────────────────────────────────
+//
+// public.library_labor is what Library -> Default Items & Assemblies writes, and what
+// GET /api/library/labor hands back. Its rows are shaped the way that endpoint returns them --
+// `name` not `label`, a PostgREST numeric that can arrive as TEXT, and the audit columns -- so a
+// mapping that only works on a hand-tidied row shows up here rather than on staging.
+const LIB_ROWS = [
+  { id: "lab-densify", name: "Densify", rate: "40.00", unit: "days", guys_auto: false,
+    sort: 0, notes: null, owner_email: "hanz@wetreadwell.com",
+    created_at: "2026-09-17T14:00:00Z", updated_at: "2026-09-17T14:00:00Z" },
+  { id: "lab-night", name: "Night shift premium", rate: 12.5, unit: "hours", guys_auto: true,
+    sort: 1, notes: "after 6pm", owner_email: "hanz@wetreadwell.com",
+    created_at: "2026-09-17T14:01:00Z", updated_at: "2026-09-17T14:01:00Z" }
+];
+
+const seeded = P.seedLibraryLabor(P.freshModel().labor, LIB_ROWS);
+const inputArray = P.freshModel().labor;
+const inputBefore = JSON.stringify(inputArray);
+P.seedLibraryLabor(inputArray, LIB_ROWS);
+
+out.libraryLabor = {
+  // THE SEAM, both halves of it: the table's `name` becomes the model's `label`, and everything
+  // an estimator types starts empty.
+  mapped: LIB_ROWS.map(function (r) { return P.libraryLaborRow(r); }),
+  // PostgREST hands numeric back as a string. A rate that stayed a string would price fine
+  // (num() coerces) and then read back as a string off the saved draft forever.
+  rateType: typeof P.libraryLaborRow(LIB_ROWS[0]).rate,
+  // ADDED BESIDE. The four built-in rows come first, in their own order, then the library's in
+  // the order the server sent them.
+  seededIds: seeded.map(function (r) { return r.id; }),
+  seededLabels: seeded.map(function (r) { return r.label; }),
+  // …and the built-in four are the same objects' worth of data they always were.
+  builtInsUntouched:
+    JSON.stringify(seeded.slice(0, 4)) === JSON.stringify(P.freshModel().labor),
+  // A new array. Seeding the model the page is holding must not rewrite the array it was handed.
+  inputUntouched: JSON.stringify(inputArray) === inputBefore,
+  isANewArray: seeded !== inputArray,
+  // TRAVEL CANNOT BE DISPLACED. An id already on the model wins, which matters most for this one:
+  // migrateModel finds Travel by that exact id, so a library row that took it would take the
+  // Travel backfill with it.
+  travelCannotBeReplaced: (function () {
+    const rows = P.seedLibraryLabor(P.freshModel().labor,
+      [{ id: "travel", name: "Drive time", rate: 99, unit: "days", guys_auto: false }]);
+    const travel = rows.filter(function (r) { return r.id === "travel"; });
+    return { count: travel.length, label: travel[0].label, rate: travel[0].rate,
+             rowCount: rows.length };
+  })(),
+  // Nothing to add, in all three shapes "nothing" arrives in.
+  emptyList: P.seedLibraryLabor(P.freshModel().labor, []).map(function (r) { return r.id; }),
+  missingList: P.seedLibraryLabor(P.freshModel().labor, null)
+    .map(function (r) { return r.id; }),
+  rowsWithoutIds: P.seedLibraryLabor(P.freshModel().labor,
+    [{ name: "No id at all", rate: 5 }, null]).map(function (r) { return r.id; })
+};
+
+// ── the gate: whose labor is it? ─────────────────────────────────────────────
+//
+// laborUnstated is the ONLY thing standing between an admin editing the default list and an
+// estimator's finished bid. Every shape a saved blob actually arrives in is asked here, and the
+// v1 row is the one that matters most: a v1 draft keeps its crew under `labour`, so reading the
+// missing `labor` as "never stated" would inject defaults into a bid with real crew numbers.
+out.laborUnstated = [
+  { label: "nothing saved at all", saved: undefined },
+  { label: "null", saved: null },
+  { label: "a v2 model that states no labor", saved: { version: 2, conditions: {} } },
+  { label: "a v2 model with an empty labor array", saved: { version: 2, labor: [] } },
+  { label: "a v2 model with labor on it",
+    saved: { version: 2, labor: [{ id: "polishing", label: "Polishing", guys: 3 }] } },
+  { label: "a v1 draft, whose crew lives under `labour`", saved: V1 },
+  { label: "a version-less partial blob", saved: { conditions: { taxable: false } } },
+  { label: "a string", saved: "not a model" }
+].map(function (c) { return { label: c.label, unstated: P.laborUnstated(c.saved) }; });
+
+// ── AN EXISTING ESTIMATE MUST NOT CHANGE ─────────────────────────────────────
+//
+// The hard constraint, stated as a round trip. SAVED_WITH_LIB_ROW is a real estimator's work: the
+// four built-in rows with their own numbers typed in, Travel already in its current shape (so the
+// migration has nothing legitimate to do), and one library default they kept and then edited --
+// its rate is 55, not the library's 40, and its hours are typed.
+//
+// NOT VACUOUS: `wouldHaveAdded` seeds the very same array with the very same library list and
+// shows two rows arriving. The library has rows that COULD have landed on this bid; the gate is
+// what stops them. Without that counterexample "nothing was added" would also pass against an
+// empty library, which proves nothing at all.
+const SAVED_WITH_LIB_ROW = {
+  version: 2,
+  takeoff: [{ assembly_id: "a1", assembly_name: "Salt & Pepper polish", measurement: 9000,
+              unit: "SF" }],
+  labor: [
+    { id: "polishing", label: "Polishing", guys: 4, days: 6, rate: 33.0 },
+    { id: "mockup", label: "Mock-up", guys: 3, days: 0.5, rate: 33.0 },
+    { id: "jointfill", label: "Joint filler", guys: 2, days: 3, rate: 33.0 },
+    { id: "travel", label: "Travel", guys: 18, days: 2, rate: 33.0,
+      unit: "hours", guys_auto: true },
+    { id: "lab-densify", label: "Densify", guys: 2, days: 1, rate: 55, unit: "days",
+      guys_auto: false }
+  ],
+  conditions: { taxable: false },
+  contingency: 500,
+  fees: 0,
+  totals: {}
+};
+out.savedLaborIsUntouchable = {
+  unstated: P.laborUnstated(SAVED_WITH_LIB_ROW),
+  saved: SAVED_WITH_LIB_ROW.labor,
+  afterMigrate: P.migrateModel(JSON.parse(JSON.stringify(SAVED_WITH_LIB_ROW))).labor,
+  wouldHaveAdded: P.seedLibraryLabor(SAVED_WITH_LIB_ROW.labor, LIB_ROWS)
+    .map(function (r) { return r.id; }),
+  // REQUIREMENT 3, at the only level this module can answer it: the row is the BID's now. Nothing
+  // in the migration or the seeding consults the library about a row already on the model, so a
+  // default deleted from the library (the empty list here) leaves it exactly where it is.
+  survivesAnEmptyLibrary: P.seedLibraryLabor(
+    P.migrateModel(JSON.parse(JSON.stringify(SAVED_WITH_LIB_ROW))).labor, [])
+    .map(function (r) { return r.id; })
+};
+
 console.log(JSON.stringify(out));

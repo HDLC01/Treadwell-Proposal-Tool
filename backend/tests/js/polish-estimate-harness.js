@@ -414,6 +414,19 @@ function build(opts) {
     rec.fetches.push(url);
     log.push("fetch:" + url);
     if (opts.libraryFails) throw new Error("the network went away");
+    // GET /api/library/labor -- the estimator's own default labor lines. Answered separately from
+    // the two below because the page has to survive it failing: public.library_labor is on staging
+    // and NOT on production, so on prod today this endpoint has no table behind it. `laborFails`
+    // is that read going down on its own, `laborBody` is it answering with something that is not a
+    // list of rows -- a 404's JSON, an { ok: false } -- and neither may cost the page its Labor
+    // step. Default [] rather than the fixture list, so a page that fetched this when it had no
+    // business to shows up as an empty answer rather than silently seeding.
+    if (/\/labor/.test(url)) {
+      if (opts.laborFails) throw new Error("the defaults table is not there");
+      return { json: async () => (opts.laborBody !== undefined
+        ? clone(opts.laborBody)
+        : { ok: true, labor: clone(opts.labor === undefined ? [] : opts.labor) }) };
+    }
     if (/assemblies/.test(url)) {
       return { json: async () => ({ assemblies: clone(opts.asms === undefined ? ASMS
                                                                              : opts.asms) }) };
@@ -1768,6 +1781,153 @@ const rendered = [];      // every string the page put on screen, for the Labour
     await d.api.init();
     d.win.fire("pagehide");
     out.pagehideFlush.quietWhenNothingArmed = d.rec.saves.length === 0 && d.rec.flushed === 0;
+  }
+
+  // ── J. the library's default labor lines ──────────────────────────────────
+  //
+  // "+ Add a labor line" on Library -> Default Items & Assemblies shipped wired to nothing,
+  // because nothing stored a custom labor line. public.library_labor now does, and this step is
+  // what reads it. Every case below is the page BOOTED and its Labor step RENDERED, because the
+  // way this feature fails is invisible to a source assertion: a gate that reads the wrong thing
+  // still contains the word laborUnstated, and rows that never reach the panel are still on a
+  // model somebody could print.
+  {
+    // Shaped the way GET /api/library/labor returns them: `name` not `label`, a numeric that can
+    // arrive as TEXT out of PostgREST, and a `sort` the server has already ordered by.
+    const LIB = [
+      { id: "lab-densify", name: "Densify", rate: "40.00", unit: "days", guys_auto: false,
+        sort: 0, notes: null, owner_email: "hanz@wetreadwell.com" },
+      { id: "lab-night", name: "Night shift premium", rate: 12.5, unit: "hours", guys_auto: true,
+        sort: 1, notes: "after 6pm", owner_email: "hanz@wetreadwell.com" },
+    ];
+    /** The names the LABOR STEP actually put on screen, read off the inputs it rendered. */
+    const onScreen = (built) => built.doc.querySelectorAll('[data-lab][data-k="label"]')
+      .map((el) => el.value);
+    const ids = (built) => built.api.model().labor.map((r) => r.id);
+
+    // A brand-new project: no polish_estimate on the draft at all, which is what the sidebar door
+    // and a project that reached this page without going through the beta intake both look like.
+    const noKey = blob();
+    delete noKey.polish_estimate;
+    const brandNew = build({ blob: noKey, labor: LIB });
+    await brandNew.api.init();
+    brandNew.api.go(1);
+
+    // THE NORMAL FLOW, and the case that decides whether any of this is reachable at all. Every
+    // beta project starts on polish-intake.html, and its save mints the first polish_estimate --
+    // this exact blob: version, takeoff, conditions, and no labor, because labor is not that
+    // page's to state. If this one does not seed, the feature only works for people who skipped
+    // the intake step.
+    const fromIntake = build({ blob: blob({ polish_estimate: {
+      version: 2,
+      takeoff: [{ assembly_id: "", assembly_name: "", measurement: "", unit: "SF" }],
+      conditions: { local: true, hard_bid: false, prevailing_wage: false, taxable: true,
+                    remodel_tax: false, bond: false },
+      contingency: 0, fees: 0, totals: {} } }), labor: LIB });
+    await fromIntake.api.init();
+    fromIntake.api.go(1);
+
+    // AN ESTIMATOR'S OWN WORK. Four rows with their own numbers, Travel already in its current
+    // shape and switched to manual (so neither migrateModel nor syncAutoGuys has anything
+    // legitimate to change), and a library default they kept and re-rated from $40 to $55.
+    const WORKED = {
+      version: 2,
+      takeoff: clone(MODEL.takeoff),
+      labor: [
+        { id: "polishing", label: "Polishing", guys: 4, days: 6, rate: 33 },
+        { id: "mockup", label: "Mock-up", guys: 3, days: 0.5, rate: 33 },
+        { id: "travel", label: "Travel", guys: 18, days: 2, rate: 33,
+          unit: "hours", guys_auto: false },
+        { id: "lab-densify", label: "Densify", guys: 2, days: 1, rate: 55, unit: "days",
+          guys_auto: false },
+      ],
+      conditions: clone(MODEL.conditions),
+      contingency: 0, fees: 0, totals: {},
+    };
+    const worked = build({ blob: blob({ polish_estimate: clone(WORKED) }), labor: LIB });
+    await worked.api.init();
+    worked.api.go(1);
+
+    // The same saved bid, opened on a day when the default has been DELETED from the library.
+    const deleted = build({ blob: blob({ polish_estimate: clone(WORKED) }), labor: [] });
+    await deleted.api.init();
+    deleted.api.go(1);
+
+    // A v1 draft off staging: its crew lives under `labour`, so it has no `labor` key for a
+    // reason that has nothing to do with the estimator not having worked on it.
+    const v1 = build({ blob: blob({ polish_estimate: {
+      areas: [{ name: "Main sales floor", sf: 9000 }],
+      labour: { polishing: { crew: 4, days: 6, rate: 32.2 } },
+      conditions: { local: false } } }), labor: LIB });
+    await v1.api.init();
+    v1.api.go(1);
+
+    // PRODUCTION TODAY: the table is not there, so the read cannot answer.
+    const down = build({ blob: (() => { const b = blob(); delete b.polish_estimate; return b; })(),
+                         labor: LIB, laborFails: true });
+    await down.api.init();
+    down.api.go(1);
+
+    // …and the same read answering with something that is not a list of rows.
+    const notRows = build({ blob: (() => { const b = blob(); delete b.polish_estimate; return b; })(),
+                            laborBody: { ok: false, error: "relation library_labor does not exist" } });
+    await notRows.api.init();
+    notRows.api.go(1);
+
+    out.laborDefaults = {
+      brandNew: {
+        ids: ids(brandNew),
+        onScreen: onScreen(brandNew),
+        rates: brandNew.api.model().labor.map((r) => r.rate),
+        // Nothing an estimator has to judge is filled in for them.
+        guys: brandNew.api.model().labor.map((r) => r.guys),
+        days: brandNew.api.model().labor.map((r) => r.days),
+        // A default carrying guys_auto is filled from the man-day sum before the first paint,
+        // exactly as Travel is -- 4×6 polishing days is not the point, the point is that it is
+        // the same figure Travel got rather than a blank.
+        autoGuys: brandNew.api.model().labor
+          .filter((r) => r.id === "lab-night").map((r) => r.guys),
+        travelGuys: brandNew.api.model().labor
+          .filter((r) => r.id === "travel").map((r) => r.guys),
+        // A default must not quietly put money on the bid.
+        laborTotal: B.laborTotal(brandNew.api.model().labor),
+        builtInTotal: B.laborTotal(B.freshModel().labor),
+        costCells: brandNew.doc.querySelectorAll("[data-lcost-for]").length,
+        // What the page says is stopping this bid being priced. A default arrives with its rate
+        // and no quantity, so a `days` line has two empty boxes and blockers() reads it the way
+        // it reads Polishing and Joint filler off Kyle's own sheet -- named, in words, not
+        // silently blocking and not silently priced at nothing.
+        blockers: B.blockers(brandNew.api.model()),
+        fetches: brandNew.rec.fetches,
+        mainShown: brandNew.dom.get("main").hidden === false,
+      },
+      fromIntake: { ids: ids(fromIntake), onScreen: onScreen(fromIntake),
+                    fetched: fromIntake.rec.fetches.some((u) => /\/labor/.test(u)) },
+      worked: {
+        saved: WORKED.labor,
+        after: worked.api.model().labor,
+        onScreen: onScreen(worked),
+        // THE PROOF THAT THE GATE RAN AT ALL: a saved bid never even asks for the defaults.
+        fetches: worked.rec.fetches,
+        // …and NOT VACUOUS: those two library rows exist and one of them is missing from this
+        // bid, so there was something for the gate to keep out.
+        wouldHaveAdded: B.seedLibraryLabor(WORKED.labor, LIB).map((r) => r.id),
+      },
+      // A default deleted from the library is still on the bid that was holding it.
+      deleted: { ids: ids(deleted), onScreen: onScreen(deleted),
+                 densifyRate: deleted.api.model().labor
+                   .filter((r) => r.id === "lab-densify").map((r) => r.rate) },
+      v1: { ids: ids(v1), fetched: v1.rec.fetches.some((u) => /\/labor/.test(u)) },
+      // Never a blank Labor step. Travel is there, the page is open, and nothing says anything is
+      // wrong -- a default nobody has defined yet is not an error to report to an estimator.
+      down: { ids: ids(down), onScreen: onScreen(down),
+              mainShown: down.dom.get("main").hidden === false,
+              loadingHidden: down.dom.get("loading").hidden,
+              alert: down.dom.get("alert").textContent,
+              costCells: down.doc.querySelectorAll("[data-lcost-for]").length },
+      notRows: { ids: ids(notRows), mainShown: notRows.dom.get("main").hidden === false,
+                 alert: notRows.dom.get("alert").textContent },
+    };
   }
 
   console.log(JSON.stringify(out));

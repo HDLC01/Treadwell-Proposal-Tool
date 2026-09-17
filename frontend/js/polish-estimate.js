@@ -1290,6 +1290,30 @@
   });
 
   // ── boot ────────────────────────────────────────────────────────────────────
+  /** The estimator's own default labor lines, out of Library -> Default Items & Assemblies.
+   *  [] when there are none, and [] when the read did not work.
+   *
+   *  IT CANNOT FAIL THE PAGE, and that is the entire point of it being its own function rather
+   *  than a third entry in the Promise.all below. `public.library_labor` is on staging and NOT on
+   *  production, by Hanz's decision -- so on prod today this endpoint has no table behind it, and
+   *  a missing table has to read as "no custom labor lines", never as a broken screen. A new bid
+   *  that opened with no Labor step at all would be a far worse outcome than one that opened
+   *  without a default nobody has defined yet.
+   *
+   *  The assemblies/items pair below is genuinely unrecoverable -- with no assemblies a takeoff
+   *  row has nothing to point at, so the page stops and says so -- which is why this read is kept
+   *  out of the same all(): one rejection there takes the whole screen down, and this read must
+   *  never be able to do that. */
+  async function loadLaborDefaults() {
+    try {
+      var res = await api("/api/library/labor");
+      var j = await res.json();
+      return (j && j.labor instanceof Array) ? j.labor : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
   async function init() {
     try { if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready; } catch (e) {}
     // shared.js is still deciding which draft this page is on (it can even hydrate and reload),
@@ -1301,6 +1325,22 @@
     // this line writes to a test project. A save timer started against the real bid and fired
     // after the switch would be the bug with extra steps.
     if (!(await S.enterSandbox(adopt))) return;
+
+    // THE DEFAULTS ARE FOR A NEW BID AND NOTHING ELSE. Decided HERE, on the saved blob, the moment
+    // the sandbox has settled which draft this page is on and before a single row can be typed --
+    // and never again. B.laborUnstated is what it turns on: true only when nothing has ever stated
+    // a labor row for this estimate, so there is no saved work for a default to land on.
+    //
+    // Read the blob, not M: adopt() has already run it through migrateModel, which fills a missing
+    // `labor` in from freshModel(), so M cannot be asked this question -- every model has four
+    // rows whether or not anybody chose them.
+    //
+    // The read is only STARTED when the answer could be used, so a saved bid does not pay for a
+    // request whose result it would have to throw away; starting it here rather than after the
+    // library means the two overlap instead of queueing. It is awaited below, once the library has
+    // landed. Null, not an empty array, for "not asked": an empty array is a real answer (the
+    // table exists and holds nothing) and the two must not be confused.
+    var laborDefaults = B.laborUnstated(state.polish_estimate) ? loadLaborDefaults() : null;
 
     $("proj-line").textContent = [state.project_name, state.city && state.state
       ? state.city + ", " + state.state : ""].filter(Boolean).join(" · ") || "Untitled project";
@@ -1323,6 +1363,21 @@
     if (!ASMS.length) {
       say("The item library has no assemblies yet, so a takeoff row has nothing to point at. " +
           "Add one under Items & Assemblies first.");
+    }
+
+    // The library's default labor lines, added BESIDE the four the model ships with, so a brand
+    // new bid opens holding Travel and every line the estimator set up under Items & Assemblies.
+    // Travel is built in and stays built in -- seedLibraryLabor adds, it never replaces.
+    //
+    // Nothing is written to the draft here. The seeded rows are persisted by the first edit like
+    // every other part of this model, which is what makes removing a default from the library
+    // later leave the bids already holding it alone: once saved, the rows are the BID's, and
+    // laborUnstated has answered false ever since.
+    if (laborDefaults) {
+      M.labor = B.seedLibraryLabor(M.labor, await laborDefaults);
+      // A default can carry guys_auto, exactly as Travel does. Re-run for the same reason adopt()
+      // runs it: before the first paint, not on the first edit.
+      syncAutoGuys();
     }
 
     // Seed the measurement from intake if nothing has been measured here yet, so the page opens

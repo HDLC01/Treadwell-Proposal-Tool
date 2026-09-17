@@ -228,6 +228,25 @@ def test_the_results_appear_with_the_rows_not_beside_the_search_box(ran):
 
 
 @needs_node
+def test_both_add_buttons_sit_above_their_lists(ran):
+    """Hanz, 2026-09-17: "all buttons should be at the top".
+
+    They were under their tables, which meant the control that adds a default got further away
+    the more defaults you had -- scroll past everything you already set to reach the way to set
+    another. Nothing about the markup was wrong, only where it sat, so only a POSITION assertion
+    catches it going back.
+    """
+    c = ran["page"]["defaultsCategories"]
+    assert c["takeoffAddIsAboveTheTable"], (
+        "Add a takeoff default is back underneath the list it adds to")
+    assert c["laborAddIsAboveTheTable"], (
+        "Add a labor line is back underneath the list it adds to")
+    assert c["resultsStillFollowTheirButton"], (
+        "the picker no longer opens between the button and the rows, so what you are choosing "
+        "from renders away from where it will land")
+
+
+@needs_node
 def test_bond_is_shown_here_but_still_lives_on_the_markup_page():
     """Will asked for bond on this tab. It is here, and it is READ ONLY.
 
@@ -297,6 +316,291 @@ def test_the_labor_default_is_read_from_the_estimate_not_retyped():
     core = (FRONTEND / "js" / "polish-bid-core.js").read_text(encoding="utf-8", errors="replace")
     assert "travelSeed: travelSeed" in core, (
         "travelSeed is no longer exported, so this page cannot reach it")
+
+
+@needs_node
+def test_the_add_a_labor_line_button_opens_a_form_where_the_row_goes(ran):
+    """"the add labor line does not work" -- Hanz, twice, on 2026-09-17.
+
+    HE WAS RIGHT AND IT WAS DELIBERATE. The button shipped as markup with no handler, because
+    nothing stored a custom labor line: the renderer drew one hardcoded row out of travelSeed()
+    and there was nowhere for a second to live. `library_labor` is that place now, so the button
+    does the thing it says.
+
+    IT OPENS IN THE TABLE, WHERE THE ROW GOES. Hanz asked the same day for the takeoff picker to
+    appear "within the line item instead of up above", and a form for a labor line has the same
+    answer only louder -- the form IS the row, the name typing into the Line column and the rate
+    into the Rate column, so what is being typed is laid out as what will be read back. A modal,
+    or a panel up beside the search box, says the opposite: that this is a trip somewhere else.
+
+    EXECUTED, NOT GREPPED, and that is not a preference here -- a regex over the markup is exactly
+    what let this ship green the first time. `data-add-default="labor"` was in the pane the whole
+    time it did nothing.
+
+    Mutation: have laborFormRow() return "" and the Add button opens onto nothing, which is what
+    it did for a day."""
+    f = ran["laborAddForm"]
+    assert f["shutUntilPressed"], "the form is open before anybody asks for it"
+    assert f["opensInTheLaborTable"], (
+        "pressing Add opens no name, rate and unit -- this is the dead button Hanz reported")
+    assert f["notInTheSearchResults"], "the form opened in the search box, which is 'up above'"
+    assert f["belowTheExistingRows"], (
+        "the form draws above the lines it is joining rather than where the new row lands")
+    assert f["unitIsAList"] and f["unitOptions"] == ["hours", "days"], (
+        "the unit is not the estimate's own two, so a line could be priced by a word nothing "
+        "multiplies: found %s" % f["unitOptions"])
+    assert f["focusesTheNameBox"], "the form opens nowhere you can type"
+    assert f["hasSaveAndCancel"], "the form cannot be finished or abandoned"
+    assert f["cancelShutsIt"], "Cancel leaves the form open"
+
+
+@needs_node
+def test_the_add_buttons_route_to_the_right_thing(ran):
+    """THE WIRING ITSELF, which is the half that was missing and the half a regex cannot see.
+
+    Every other test here proves the form works. This one proves the control Hanz pressed reaches
+    it. That distinction is not academic: for a day the form did not exist, the button did, and
+    the only test over it matched the pane for data-add-default="labor" -- which a button with no
+    handler carries perfectly. It shipped green and he reported it twice.
+
+    THE DECISION LIVES IN A NAMED FUNCTION so this can call it. The page's click listener is
+    top-level wiring inside its IIFE and no test can execute it, which is exactly why the harness's
+    own doc says anything with a decision in it belongs in a function -- the same move
+    placeNewAssembly and openDefaultBrowse already made on this page.
+
+    BOTH ARMS, because a router that opened the form for everything would pass a one-armed test
+    and break the Takeoff button standing next to it.
+
+    Mutation: drop the `labor` arm of openDefaultAdd, which is precisely the state Hanz reported;
+    or point the `takeoff` arm at the labor form and watch this catch it from the other side."""
+    r = ran["laborAddButtonRouting"]
+    assert r["laborOpensTheForm"], (
+        "+ Add a labor line still opens nothing -- this is the button Hanz reported twice")
+    assert r["takeoffOpensBrowse"], "the Takeoff add button stopped opening the browse list"
+    assert r["takeoffDoesNotOpenTheLaborForm"], (
+        "the Takeoff button opens the labor form as well, so the two arms are not separate")
+    assert r["unknownOpensNothing"], (
+        "a third category would fall through into one of these two rather than doing nothing")
+    assert r["listenerCallsTheRouter"], (
+        "the click listener no longer calls openDefaultAdd, so the routing is unreachable from "
+        "the button however well it is tested here")
+    assert r["listenerWiresTheForm"], (
+        "Save, Cancel, Edit or Remove is not dispatched from the click listener, so it is a "
+        "control with nothing behind it -- the exact shape of the bug being fixed")
+
+
+@needs_node
+def test_a_typed_labor_line_is_saved_and_then_listed(ran):
+    """The whole round trip, driven: type, save, see it.
+
+    THE RATE GOES AS A NUMBER. A string "72.5" reaches the sheet and the next multiplication
+    concatenates -- the same hazard the item coercion list exists for, and the reason that one is
+    asserted by execution too.
+
+    THE NAME IS TRIMMED, because "Night shift " and "Night shift" are one line to a person and two
+    rows to a unique index.
+
+    Mutation: send `f.rate` instead of `Number(f.rate)` in submitLaborForm, or drop the trim."""
+    s = ran["laborAddSaves"]
+    assert s["callCount"] == 1, "expected exactly one write, got %s" % s["callCount"]
+    assert s["op"] == "POST" and s["kind"] == "labor", (
+        "the line went to %s %s, not POST /api/library/labor" % (s["op"], s["kind"]))
+    assert s["body"] == {"name": "Night shift", "rate": 72.5, "unit": "days"}, (
+        "the body is %s -- the name must be trimmed and the rate must be a number" % s["body"])
+    assert s["rateIsANumber"], "the rate was sent as a string, which the next multiplier will join"
+    assert s["rendersTheNewLine"], "the saved line is not on the list"
+    assert s["saysPerDay"], "the line reads per hour although days was picked"
+    assert s["formClosedAfterSaving"], "the form stays open over the row it just made"
+    # THE NEW LINE JOINS THE STORED ONES, it does not replace them. The fixture holds three
+    # so that a save which clobbers the list cannot pass as a save which appends.
+    assert s["inTheModel"] == ["Prevailing wage", "Supervisor", "Mobilization",
+                               "Night shift"], (
+        "the page's own list is %s" % s["inTheModel"])
+
+
+@needs_node
+def test_a_rate_that_arrives_as_a_string_still_reads_as_money(ran):
+    """`rate numeric(10,2)` is not promised to come back as a JSON number.
+
+    PostgREST commonly serialises numeric as "41.00", and the staging store IS PostgREST while
+    production is Supabase -- so the two environments can hand this page different types for the
+    same column. A row that printed the raw string would be cosmetic; a row that printed an em
+    dash, which is what money() answers to something it cannot read, says the line has no price.
+    Kyle would read that as a default nobody finished setting up.
+
+    The list is drawn through the same money() the rest of the page prices with, which already
+    copes with both -- this pins that it is still being asked.
+
+    Mutation: print `esc(c.rate)` instead of `esc(L.money(c.rate))` and the rate loses its dollar
+    sign on one environment and keeps it on the other."""
+    s = ran["laborStringRate"]
+    assert s["readsAsMoney"], (
+        "a rate that came back as a string is not rendered as money, so it reads as unpriced")
+    assert s["notTheRawString"], "the raw string is printed into the cell"
+    assert s["guysAutoIsExplained"], (
+        "a line whose man-days come off the crew rows does not say so")
+
+
+@needs_node
+def test_the_labor_form_refuses_what_the_api_would(ran):
+    """The same three rules, said before the request instead of after it.
+
+    THE SERVER IS STILL THE ONE THAT DECIDES -- a rule here it did not have would let any other
+    caller write what this form refuses -- but a 400 dug out of a response body is a poor way to
+    learn the name box is empty.
+
+    AND THE TYPING SURVIVES A REFUSAL. A form that cleared itself on a rejection would make
+    somebody retype the line to find out it fails a second time.
+
+    ZERO IS AN ANSWER, not a missing one: a line that costs nothing is a thing Kyle can mean.
+
+    Mutation: return "" from validateLaborForm, and the nameless line is POSTed."""
+    r = ran["laborFormRefuses"]
+    assert r["nothingWasSent"], "a refused line still reached the server"
+    assert r["namelessSaysWhy"], "a nameless line is refused silently"
+    assert r["negativeSaysWhy"], "a negative rate is accepted, which the API answers 400 to"
+    assert r["notANumberSaysWhy"], "a typo in the rate box is accepted"
+    assert r["keepsWhatWasTyped"], "the refusal threw away what was typed"
+    assert r["unitOffTheListRefused"], (
+        "a unit off the list passes, so a line could be priced by a word nothing multiplies")
+    assert r["aGoodOnePasses"], "a free line is refused, but zero is an answer and not a gap"
+
+
+@needs_node
+def test_editing_a_labor_default_goes_to_that_row(ran):
+    """Edit opens the row's own values and PATCHes the row it opened.
+
+    THIS IS THE ONE THAT SILENTLY DOUBLES. An edit that POSTed instead would look right on screen
+    -- the new rate is there -- and leave two lines behind it, which the next estimate opens
+    holding. So the request and its id are asserted, not just what the table then says.
+
+    NOT THE TAKEOFF LIST'S EDIT, which sends you to the assembly. There is nowhere else for a
+    labor line to be edited: it has no row anywhere but here.
+
+    Mutation: drop the `f.id` branch in submitLaborForm so every save posts."""
+    e = ran["laborEdit"]
+    assert e["preloadsTheName"] and e["preloadsTheRate"], (
+        "Edit opens an empty form, so saving it would rename the line to nothing")
+    assert e["op"] == "PATCH", "the edit went out as %s, which would add a second line" % e["op"]
+    assert e["patchedThatRow"], "the edit was sent to a different row"
+    assert e["body"] == {"name": "Prevailing wage", "rate": 61.0, "unit": "hours"}, (
+        "the patch body is %s" % e["body"])
+    assert e["rowShowsTheNewRate"], "the list still shows the old rate after saving"
+    assert e["storedLineCount"] == 3, (
+        "editing changed how many labor lines exist: %s" % e["storedLineCount"])
+
+
+@needs_node
+def test_removing_a_labor_default_takes_it_off_and_leaves_travel(ran):
+    """Remove means STOP BEING A DEFAULT, the same as it does on the Takeoff list beside it.
+
+    TRAVEL IS NOT REMOVABLE AND MUST NOT BE COLLATERAL. It is not a row of this table -- it is
+    what travelSeed puts in every new estimate and what migration appends to every old one -- so
+    it carries no controls, and taking a typed line off must leave it exactly where it was.
+
+    Mutation: have removeLaborDefault clear the whole list instead of filtering by id, and Travel
+    survives anyway (it is not in the list) while every other custom line vanishes -- which is why
+    the model's own length is asserted and not only what the table shows."""
+    r = ran["laborRemove"]
+    assert r["op"] == "DELETE", "Remove sent %s" % r["op"]
+    assert r["removedThatOne"], "Remove was sent for a different row"
+    assert r["goneFromTheList"], "the removed line is still listed"
+    assert r["travelSurvives"], "removing a typed line took the built-in Travel row with it"
+    # THE SURVIVORS ARE THE POINT. A one-row fixture could not tell "removed the right one"
+    # from "removed all of them" -- the reviewer proved that by mutating removeLaborDefault to
+    # wipe the list and watching the suite stay green.
+    assert r["othersSurvive"], "removing one labor line took the others with it"
+    assert r["idsLeftInTheModel"] == ["L2", "L3"], (
+        "the wrong lines are left after removing L1: %s" % r["idsLeftInTheModel"])
+    assert ran["laborDefaultsList"]["travelCarriesNoControls"], (
+        "Travel is offered Edit and Remove, and it is neither this table's row nor removable")
+    assert ran["laborDefaultsList"]["travelIsBuiltIn"], "Travel no longer reads as built in"
+
+
+@needs_node
+def test_a_refused_labor_write_is_put_back_and_said_out_loud(ran):
+    """Both writes are optimistic, and both put it back.
+
+    A ROW THAT LOOKS REMOVED AND RETURNS ON THE NEXT RELOAD IS WORSE THAN ONE THAT REFUSES --
+    setDefault's own argument, and it holds harder here because this one also holds typing.
+
+    THE SERVER'S OWN REASON REACHES THE SCREEN. "Couldn't save that" with no cause sends somebody
+    to ask why; the message the API sent is the answer they would have had to go and find.
+
+    Mutation: drop the catch in removeLaborDefault, and the row stays gone on screen while the
+    database still has it."""
+    rm = ran["laborRemoveFails"]
+    assert rm["putBackOnTheList"], "a refused Remove leaves the row gone from the screen only"
+    assert rm["stillInTheModel"], "the page's own list dropped a row the server kept"
+    assert rm["idsStillInTheModel"] == ["L1", "L2", "L3"], (
+        "a refused Remove left the list as %s" % rm["idsStillInTheModel"])
+    assert rm["saidSo"], "a refused Remove says nothing, so it reads as having worked"
+    sv = ran["laborSaveFails"]
+    assert sv["keepsTheTypedLine"], "a refused Save threw away the typed line"
+    assert sv["saysWhy"], "a refused Save does not say why, or does not say what the server said"
+    assert sv["notAddedToTheList"], "a line the server refused was added to the list anyway"
+    assert sv["saveIsPressableAgain"], "the form is stuck on Saving and cannot be retried"
+
+
+@needs_node
+def test_the_labor_list_is_read_apart_from_items_and_assemblies(ran):
+    """`library_labor` IS ON STAGING AND NOT ON PRODUCTION, by Hanz's decision: staging first,
+    prod when he promotes it.
+
+    So on production today this endpoint answers with nothing, and that has to leave a page that
+    works. A missing table is "no custom labor lines", never a broken tab -- the day Items and
+    Assemblies 500s over a list which is empty by design is the day an estimator cannot open a
+    material.
+
+    THE PRECEDENT IS ALREADY IN THIS FILE: the GLOBAL_MARKUP fetch sits outside the throw that
+    guards items and assemblies for the same reason, and says so in its own comment. This follows
+    it rather than inventing a second shape.
+
+    Mutation: move the labor fetch into the Promise.all at the top of load(), and a 404 on an
+    environment without the table takes the whole page down with it."""
+    js = (FRONTEND / "js" / "library.js").read_text(encoding="utf-8", errors="replace")
+    head = js[js.index("async function load()"):js.index("function current()")]
+    guarded = head[head.index("Promise.all(["):]
+    guarded = guarded[:guarded.index("]);")]
+    assert "/api/library/labor" not in guarded, (
+        "the labor list is fetched inside the Promise.all that items and assemblies throw on")
+    assert head.index("/api/library/labor") > head.index("if (!rs[0].ok"), (
+        "the labor fetch runs before the guard it must sit outside of")
+    assert "} catch (e) { LABOR = []; }" in head, (
+        "the labor fetch has no catch of its own, so its failure reaches the page's")
+    e = ran["laborEndpointEmpty"]
+    assert e["travelStillListed"], "with no custom lines the Labor list lost Travel too"
+    assert e["noCustomRows"], "custom rows are drawn with nothing behind them"
+    assert e["takeoffStillRenders"], (
+        "an empty labor list took the Takeoff defaults down with it")
+    assert e["emptyStateStaysHidden"], (
+        "the empty state shows over a table that has Travel in it")
+    assert e["canStillAdd"], "with nothing stored there is no way to store the first line"
+
+
+@needs_node
+def test_only_an_admin_is_offered_the_labor_controls(ran):
+    """The writes are admin-only on the server, so the page does not hand anybody a control that
+    403s on press.
+
+    THAT IS THIS PAGE'S OWN RULE, not a new one: load() resolves the role BEFORE the first paint
+    precisely because "a wrong first render would offer buttons that 403 on click", and the
+    Administration lists render text instead of inputs for the same reason.
+
+    THE LIST ITSELF STAYS VISIBLE. What a new estimate opens holding is worth reading whether or
+    not you may change it -- hiding the rows would answer a permissions question with a lie about
+    what the bid does.
+
+    Mutation: drop the ADMIN guard from laborRowActions, and a non-admin gets an Edit button that
+    cannot save."""
+    ro = ran["laborDefaultsReadOnly"]
+    assert ro["stillListsTheLine"], "a non-admin cannot see what a new estimate opens holding"
+    assert ro["noRowControls"], "a non-admin is offered Edit and Remove, which the server refuses"
+    assert ro["addRowHidden"], "a non-admin is offered an Add button that cannot save"
+    full = ran["laborDefaultsList"]
+    assert full["storedLineCanBeEdited"] and full["storedLineCanBeRemoved"], (
+        "an admin is not offered the controls either, so this is not a permissions rule")
+    assert full["addRowOfferedToAnAdmin"], "the Add button is hidden from an admin as well"
 
 
 @needs_node
