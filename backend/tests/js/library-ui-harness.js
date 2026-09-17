@@ -303,6 +303,11 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   // Defaults tab is administrative now -- each row carries Edit and Delete -- so the
   // renderer no longer just prints names.
   ${fn("defaultRowActions")}
+  // takeoffDefaultGroups BEFORE renderDefaultTakeoff, which now calls it for the whole list.
+  // The Takeoff defaults are grouped under sub-headings rather than carrying a Kind column,
+  // and the grouping is a separate function precisely so a test can execute it and read the
+  // groups back as data instead of regex-matching headings out of the rendered HTML.
+  ${fn("takeoffDefaultGroups")}
   ${fn("renderDefaultTakeoff")}
   // THE ADD-A-DEFAULT PATH, lifted so it is EXECUTED. It shipped on 2026-09-17 as two
   // buttons and a search box with nothing bound to any of them, and the only test over it
@@ -506,7 +511,7 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
            bulkCandidates, bulkSelectAllState, bulkLinesFor, bulkAddRoom, BULK_MAX_LINES,
            // The Defaults tab's Takeoff list, EXECUTED rather than read. GLOBAL_MARKUP is handed
            // in so a test can supply the Markup page's answer without a second fetch stub.
-           renderDefaultTakeoff, takeoffConditionDefaults,
+           renderDefaultTakeoff, takeoffConditionDefaults, takeoffDefaultGroups,
            // THE ADD PATH, EXECUTED. A test that only read the markup could not tell a
            // wired button from a dead one, and for two days could not.
            defaultCandidates, renderDefaultSearch, setDefaultQuery, openDefaultBrowse,
@@ -3446,8 +3451,17 @@ out.serverOwnedItemFields = build().api.SERVER_OWNED_ITEM_FIELDS;
   const h = d.nodes["default-takeoff-body"].innerHTML;
   out.defaultsTakeoffList = {
     rowCount: (h.match(/<tr>/g) || []).length,
-    kinds: (h.match(/<td>(Assembly|Material|Condition|Markup)<\/td>/g) || [])
-      .map((s) => s.replace(/<\/?td>/g, "")),
+    // THE GROUPS, taken from the function rather than scraped out of the HTML -- the point
+    // of separating it was that a test could read them as data. The rendered headings are
+    // checked too, because a grouping nothing draws is not a grouping.
+    groupTitles: api.takeoffDefaultGroups().map((g) => g.title),
+    groupCounts: api.takeoffDefaultGroups().map((g) => g.rows.length),
+    renderedHeadings: (h.match(/<th scope="colgroup"[^>]*>([^<]*)<\/th>/g) || [])
+      .map((s) => s.replace(/<[^>]*>/g, "")),
+    // NO KIND COLUMN ANY MORE. A heading over every group said it already, on every row.
+    noKindColumn: !/<td>(Assembly|Material|Condition|Markup)<\/td>/.test(h),
+    // AN EMPTY GROUP DRAWS NOTHING, rather than a heading over blank space.
+    noEmptyGroups: api.takeoffDefaultGroups().every((g) => g.rows.length > 0),
     // ONLY THE SWITCHED-ON ONES. A list that showed everything would make the switch decorative.
     namesTheDefaults: /Polish 800/.test(h) && /Densifier/.test(h),
     skipsTheRest: !/Not a default/.test(h) && !/Also not/.test(h),
@@ -3455,6 +3469,17 @@ out.serverOwnedItemFields = build().api.SERVER_OWNED_ITEM_FIELDS;
     // enforces and this page must not quietly become a second one of.
     showsBond: /bond/.test(h) && /Read only/.test(h),
     saysWhereBondLives: /Global tab/.test(h),
+    // BOND CARRIES NO CONTROL, read off the RENDERED row rather than sliced out of the
+    // renderer's source. The source version split on "GLOBAL_MARKUP" and then on "});" and
+    // broke the moment the function was regrouped -- it was asserting on punctuation. What
+    // actually matters is that the drawn row offers nothing to press: one home per line,
+    // and the rate lives on the Markup page.
+    bondRowHasNoControl: (function () {
+      var row = (h.split(/<tr>(?=[\s\S]*?bond)/).filter(function (s) {
+        return /bond/.test(s.split("</tr>")[0]);
+      })[0] || "").split("</tr>")[0];
+      return row !== "" && !/data-def-(edit|off|add)/.test(row) && /Read only/.test(row);
+    })(),
     // The conditions, read from freshModel rather than typed here: joint filler ships ON.
     jointFillerYes: /Joint filler[\s\S]*?Polish!E29 = Yes/.test(h),
     dyeNo: /Dye[\s\S]*?Polish!E25 = No/.test(h),
