@@ -5650,8 +5650,26 @@ def _warm_all_sheets() -> None:
     except Exception as exc:  # noqa: BLE001 — a warm cache is never worth a failed boot
         log.warning("Sheet warm could not list the tabs: %s", exc)
         return
-    ordered = [n for n in _WARM_FIRST if n in names] + \
-              [n for n in names if n not in _WARM_FIRST]
+    # THE WARM STOPS AT THREE, AND THAT IS THE WHOLE MEMORY STORY.
+    #
+    # Warming all sixteen took the container's boot working set from 182.3 MB to 337.8 MB.
+    # Measured on the VPS on 2026-09-17: 1,967 MB total, 399 MB available, 1,591 MB ALREADY
+    # IN SWAP, eighteen containers, and no mem_limit on this service. estimate_writer's
+    # _SHEET_GRID_CACHE has no eviction, so a boot-time warm of every tab is a permanent
+    # floor, not a peak. We have taken production down on this box before.
+    #
+    # None of the speed came from here. The 206 ms -> 4 ms on /api/sheets and 809 ms -> 268 ms
+    # on sixteen grids are the jsonable_encoder fix and the name cache, both of which cost
+    # nothing. Warming the other thirteen only bought the FIRST request after a deploy, and it
+    # bought it with 156 MB this box does not have.
+    #
+    # So this stays at the three tabs a deploy has always warmed. The cache still fills as tabs
+    # are actually opened, exactly as it does today -- unbounded growth on use is pre-existing
+    # behaviour and is not what this change adds.
+    #
+    # list_sheet_names() above is still called and still wanted: it fills the name cache, which
+    # is the half of the /api/sheets win that has nothing to do with grids.
+    ordered = [n for n in _WARM_FIRST if n in names]
     warmed = 0
     for name in ordered:
         try:

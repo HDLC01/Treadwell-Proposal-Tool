@@ -1,4 +1,4 @@
-"""The startup warm builds EVERY tab, and still does not hold the boot up.
+"""The startup warm builds THREE tabs, on purpose, and does not hold the boot up.
 
 WHAT IT USED TO DO. Three tabs of sixteen — Epoxy, Polish, and the USG 1-8" gypsum sheet.
 Measured 2026-09-17 on the dev box in a cold process: building all sixteen grids costs 7,469 ms
@@ -12,9 +12,14 @@ make the others cheap, it just decides which estimator pays.
 
 WHAT THIS MODULE WILL NOT LET DRIFT:
 
-  * coverage — asserted against the workbook's OWN tab list, not a list typed in this file.
-    The old three-name tuple is exactly the shape that goes stale when Kyle adds a tab, and
-    a test that repeats the tuple would go stale with it.
+  * THE BOUND. Warming all sixteen was built and measured first, then declined: it took the
+    container's boot working set from 182.3 MB to 337.8 MB, and the VPS on 2026-09-17 had
+    399 MB available with 1,591 MB already in swap across eighteen containers, no mem_limit
+    on this service, and no eviction in _SHEET_GRID_CACHE -- so warming every tab is a
+    permanent floor. None of the measured speed came from it: the 206 ms -> 4 ms and the
+    809 ms -> 268 ms are the encoder fix and the name cache. Warming the other thirteen
+    bought only the first request after a deploy. This module stops it creeping back, so
+    the assertion is an EQUALITY against _WARM_FIRST, not a subset.
   * it must not block startup. That is the entire reason this runs on a thread, and a
     refactor that awaits the warm would turn a deploy into a seven-second outage on a box
     running thirteen containers. Executed by parking the warm inside the first tab and timing
@@ -43,14 +48,17 @@ def fake_warm(monkeypatch):
 
 
 # ── coverage ─────────────────────────────────────────────────────────────────
-def test_the_warm_builds_every_tab_in_the_workbook(fake_warm):
-    """THE ONE THAT MATTERS, and the reason it reads the workbook rather than a list here: if
-    this file named the tabs, adding a seventeenth would leave the test green and the tab cold."""
+def test_the_warm_stops_at_the_three_tabs_and_does_not_creep(fake_warm):
+    """THE ONE THAT MATTERS, and it is a memory assertion in a coverage assertion's clothes.
+    Every tab added here is ~10 MB of permanent resident memory on a box already swapping.
+    EQUALITY, not containment: a subset check would wave through a well-meaning "warm Seal
+    too", which is exactly how the 156 MB arrived in the first place."""
+    names = estimate_writer.list_sheet_names()
     main._warm_all_sheets()
-    assert sorted(fake_warm) == sorted(estimate_writer.list_sheet_names()), (
-        "warmed %d of %d tabs; missed %r"
-        % (len(fake_warm), len(estimate_writer.list_sheet_names()),
-           sorted(set(estimate_writer.list_sheet_names()) - set(fake_warm))))
+    assert fake_warm == [n for n in main._WARM_FIRST if n in names], (
+        "the warm built %r; it must build exactly %r" % (fake_warm, main._WARM_FIRST))
+    assert len(fake_warm) < len(names), (
+        "the warm now covers every tab, which is the 156 MB this was narrowed to avoid")
 
 
 def test_there_are_more_tabs_than_the_warm_used_to_cover(fake_warm):
@@ -89,7 +97,10 @@ def test_the_likely_tabs_are_built_first_even_when_the_workbook_lists_them_last(
         "the warm started with %r instead of %r — it is following the workbook's own tab order, "
         "so the tab estimate-review opens on is built last"
         % (fake_warm[:len(main._WARM_FIRST)], main._WARM_FIRST))
-    assert sorted(fake_warm) == sorted(upside_down), "prioritising dropped or duplicated a tab"
+    # NOT sorted(fake_warm) == sorted(upside_down) any more: the warm is bounded to three, so
+    # the claim is that MEMBERSHIP follows _WARM_FIRST, not the workbook order.
+    assert sorted(fake_warm) == sorted(n for n in main._WARM_FIRST if n in upside_down), (
+        "reversing the tab list changed WHICH tabs were warmed, so membership is positional")
 
 
 def test_the_warm_leaves_the_tab_list_cached_for_the_request_that_gates_the_page(fake_warm):
@@ -168,10 +179,16 @@ def test_the_hook_spawns_a_daemon_thread(monkeypatch):
 
 # ── failure is survivable ────────────────────────────────────────────────────
 def test_one_unbuildable_tab_does_not_stop_the_rest(monkeypatch):
-    """A corrupt or renamed tab must cost that tab, not the other fifteen."""
+    """A corrupt or renamed tab must cost that tab, not the other two.
+
+    THE POISON HAS TO BE A TAB THE WARM ACTUALLY BUILDS. It used to be names[5], fine when
+    all sixteen were warmed and vacuous now three are -- the loop would never reach it, so
+    the test would pass without exercising the except at all."""
     built = []
     names = estimate_writer.list_sheet_names()
-    poison = names[5]
+    warmed = [n for n in main._WARM_FIRST if n in names]
+    assert len(warmed) > 1, "need two warmed tabs before the rest can mean anything"
+    poison = warmed[0]
 
     def flaky(name, **kw):
         if name == poison:
@@ -181,7 +198,7 @@ def test_one_unbuildable_tab_does_not_stop_the_rest(monkeypatch):
 
     monkeypatch.setattr(estimate_writer, "read_sheet_grid", flaky)
     main._warm_all_sheets()                            # must not raise
-    assert sorted(built) == sorted(n for n in names if n != poison)
+    assert sorted(built) == sorted(n for n in warmed if n != poison)
 
 
 def test_an_unlistable_workbook_does_not_take_the_thread_down(monkeypatch):

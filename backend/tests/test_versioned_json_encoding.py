@@ -103,7 +103,11 @@ VERSIONED_ENDPOINTS = [
     "/api/named-expressions",
     "/api/pricing/systems",
     "/api/sheet/Epoxy",
-    "/api/proposal-template?work_type=epoxy&audience=Direct",
+    # NOT /api/proposal-template. It stopped calling _versioned_json when the template cache
+    # landed (#534): it computes its version first and answers If-None-Match before opening
+    # anything, through its own _etag_of. Its byte-identity is proven in
+    # test_proposal_template_cache.py instead -- 99 response records and 12 generated
+    # documents. The count assertion below is what caught the drift, which is its job.
     "/api/coverletter-template?work_type=epoxy&audience=Direct",
 ]
 
