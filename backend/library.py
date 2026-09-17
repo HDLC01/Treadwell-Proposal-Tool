@@ -52,6 +52,21 @@ from typing import Any, Dict, List, Optional
 
 from supabase_client import get_client
 
+# THE WORK TYPES, IMPORTED FROM markup.py RATHER THAN RETYPED. markup.TABS is the closed
+# list of the five sheet tabs a bid can sit on, and it is already the vocabulary the markup
+# rules are filed under. A fourth hand-written copy is how a default ends up filed against a
+# name nothing looks up -- which reads on screen exactly like a default that is simply off.
+#
+# `global` is deliberately NOT here: it is markup's word for a rule that applies to every
+# tab, and a default already says that by naming no work types at all.
+#
+# COMBO IS NOT A WORK TYPE HERE EITHER. detect_work_type() returns epoxy/polish/combo for
+# which PROPOSAL gets written; a combo job runs on the epoxy AND polish tabs, so it inherits
+# both lists. A sixth entry would be a third list that has to agree with two others.
+import markup
+
+WORK_TYPES = markup.TABS
+
 log = logging.getLogger(__name__)
 
 ITEMS = "library_items"
@@ -73,11 +88,12 @@ LABOR = "library_labor"
 # validate_item / validate_assembly, which build their output from an explicit key list and drop
 # everything else — so an added column is safe by default and has to be opted IN to be writable.
 ITEM_WRITABLE = ("name", "category", "divisions", "unit", "buy_qty", "unit_cost", "coverage",
-                 "sku", "vendor", "notes")
-ASM_WRITABLE = ("name", "category", "description", "unit", "lines")
+                 "sku", "vendor", "notes", "default_work_types")
+ASM_WRITABLE = ("name", "category", "description", "unit", "lines", "default_work_types")
 VENDOR_WRITABLE = ("name", "notes")
 REF_WRITABLE = ("name", "notes")
-LABOR_WRITABLE = ("name", "rate", "unit", "guys_auto", "sort", "notes")
+LABOR_WRITABLE = ("name", "rate", "unit", "guys_auto", "sort", "notes",
+                  "default_work_types")
 
 DEFAULT_ITEM_UNIT = "Gallon"    # what Kyle's sheet buys most things by
 DEFAULT_ASM_UNIT = "SF"         # what a system is priced per
@@ -210,6 +226,47 @@ def _coerce_divisions(raw: Any, fallback: Any = None) -> List[str]:
     elif fallback not in (None, ""):
         values = [fallback]
     return _dedup_names([str(v) for v in values], DIVISIONS)
+
+
+def _coerce_work_types(raw: Any) -> List[str]:
+    """Which work types a default belongs to. EMPTY MEANS EVERY ONE.
+
+    That is not a shortcut, it is what keeps this backwards compatible: every row that existed
+    before this column did comes back [] and therefore still applies everywhere, exactly as it
+    did when `favorite` was the whole story. No data migration, and no day where somebody's
+    defaults quietly stop appearing because a column arrived empty.
+
+    REFUSED, NOT DROPPED, for a name off the list -- unlike divisions, which are offered rather
+    than enforced because legacy rows hold whatever somebody typed. Nothing legacy exists here,
+    and a work type nothing looks up is a default that silently never applies: on screen that is
+    indistinguishable from one that is simply switched off, which is the worst way for a
+    pricing default to fail. markup.py refuses an off-list layout for the same reason.
+
+    Order is not preserved and duplicates collapse: this is a set of tabs, and "epoxy, epoxy,
+    polish" is the same answer as "epoxy, polish".
+    """
+    values: List[str] = []
+    if isinstance(raw, (list, tuple)):
+        values = list(raw)
+    elif isinstance(raw, str) and raw.strip().startswith("["):
+        try:
+            parsed = json.loads(raw)
+            values = parsed if isinstance(parsed, list) else []
+        except (TypeError, ValueError):
+            values = []
+    elif raw not in (None, ""):
+        values = [raw]
+    seen: List[str] = []
+    for v in values:
+        text = str(v).strip().lower()
+        if not text:
+            continue
+        if text not in WORK_TYPES:
+            raise ValidationError(
+                "%r is not a work type. Pick from: %s." % (text, ", ".join(WORK_TYPES)))
+        if text not in seen:
+            seen.append(text)
+    return [t for t in WORK_TYPES if t in seen]
 
 
 def _number(raw: Any, *, field: str, maximum: float) -> Optional[float]:
@@ -433,6 +490,8 @@ def validate_item(payload: Dict[str, Any], *, partial: bool = False) -> Dict[str
     # in means exactly what it says, and there is no invalid value to reject.
     if "favorite" in payload or not partial:
         out["favorite"] = bool(payload.get("favorite"))
+    if "default_work_types" in payload:
+        out["default_work_types"] = _coerce_work_types(payload.get("default_work_types"))
 
     # "epoxy" pasted from somewhere becomes the Division the dropdown offers, so the row reads as a
     # known value instead of an off-list one. Case only — a division we don't recognise is left
@@ -468,6 +527,7 @@ def _shape_item(row: Dict[str, Any]) -> Dict[str, Any]:
         # A row written before this column existed has never been starred by anybody -- reads
         # False, same read-shaping every other column added to this table already gets.
         "favorite": bool(row.get("favorite")),
+        "default_work_types": _coerce_work_types(row.get("default_work_types")),
         "owner_email": row.get("owner_email") or "",
         "created_at": row.get("created_at"),
         "updated_at": row.get("updated_at"),
@@ -722,6 +782,8 @@ def validate_assembly(payload: Dict[str, Any], *, partial: bool = False) -> Dict
     # Same shared/team-wide flag the items table carries -- see validate_item's note.
     if "favorite" in payload or not partial:
         out["favorite"] = bool(payload.get("favorite"))
+    if "default_work_types" in payload:
+        out["default_work_types"] = _coerce_work_types(payload.get("default_work_types"))
 
     return out
 
@@ -758,6 +820,7 @@ def _shape_assembly(row: Dict[str, Any]) -> Dict[str, Any]:
             "note": (ln or {}).get("note") or "",
         } for ln in lines if isinstance(ln, dict)],
         "favorite": bool(row.get("favorite")),
+        "default_work_types": _coerce_work_types(row.get("default_work_types")),
         "owner_email": row.get("owner_email") or "",
         # Who last changed it, on the same terms as an item's — including a LINE change, which is
         # the edit that actually happens here. See _shape_item for why an absent column reads
@@ -1067,6 +1130,8 @@ def validate_labor(payload: Dict[str, Any], *, partial: bool = False) -> Dict[st
     if "notes" in payload or not partial:
         out["notes"] = _clean_text(payload.get("notes"), _MAX_NOTES) or None
 
+    if "default_work_types" in payload:
+        out["default_work_types"] = _coerce_work_types(payload.get("default_work_types"))
     return out
 
 
@@ -1080,6 +1145,7 @@ def _shape_labor(row: Dict[str, Any]) -> Dict[str, Any]:
         "rate": _as_float(row.get("rate")) or 0.0,
         "unit": row.get("unit") or DEFAULT_LABOR_UNIT,
         "guys_auto": bool(row.get("guys_auto")),
+        "default_work_types": _coerce_work_types(row.get("default_work_types")),
         "sort": int(_as_float(row.get("sort")) or 0),
         "notes": row.get("notes") or "",
         "owner_email": row.get("owner_email") or "",
