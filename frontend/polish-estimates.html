@@ -5,6 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Polish Estimate Database · Treadwell Proposal Generator</title>
   <link rel="icon" type="image/svg+xml" href="/img/treadwell-bison.svg" />
+  <!-- Styles itself, like library.html and polish-estimate.html, so it needs its own
+       opt-out. Missing here until 2026-09-18 -- Hanz saw this page render in dark mode
+       while its siblings did not, because it never declared one. -->
+  <meta name="color-scheme" content="only light" />
   <!-- Warm the jsdelivr connection (DNS + TLS, no bytes) before the parser reaches the CDN script tag below. -->
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
   <style>
@@ -13,7 +17,7 @@
        filter, so a second way of drawing a list would be a bug rather than a style. Values
        are copied rather than shared because projects.html carries its own <style> too; the
        six pages on /styles.css are the wizard, and this is not one of them. */
-    :root { --red:#c8102e; --ink:#1b1c1c; --ink-v:#5c403f; }
+    :root { color-scheme: only light; --red:#c8102e; --ink:#1b1c1c; --ink-v:#5c403f; }
     * { box-sizing:border-box; }
     body { margin:0; background:#f4f4f5; color:var(--ink); font:400 14px/1.5 'Inter',system-ui,-apple-system,Segoe UI,Roboto,sans-serif; padding:28px 22px 90px; }
     .top { display:flex; align-items:center; gap:14px; max-width:1100px; margin:0 auto 20px; }

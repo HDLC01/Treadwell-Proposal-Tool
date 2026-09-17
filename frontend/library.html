@@ -108,21 +108,25 @@
        it is a continuation of that list, not a floating panel over it. */
     #default-hits { border-top:1px solid var(--line); background:var(--card);
        margin:0; overflow:hidden; }
-    /* THE DEFAULTS TAB'S ROW CONTROLS, which shipped with no rules of their own on
-       2026-09-17: defaultRowActions has emitted .linkish since it was written and the
-       stylesheet had never heard of the class, so Edit and Remove drew as the browser's
-       grey chrome buttons in a table of plain text.
+    /* THE DEFAULTS TAB'S ROW CONTROLS, 2026-09-18. .linkish measured 9.29:1 -- past AAA --
+       so a contrast fix would not have helped. The real problem was a COLLISION: .linkish
+       (600 12px, --ink-v) and .builtin (600 10.5px, --ink-v) drew a control and a read-only
+       chip in the same colour at the same weight, 1.5px of type size apart, so Edit read as
+       a label. Edit and Remove now use .btn.ghost.sm, which four other controls on this app
+       already draw -- the search box's siblings, .wtab, #items-addrow .addbtn. No new class,
+       no new token. .linkish is deleted; this was its last use anywhere in the frontend.
 
-       WORDS, NOT THE BIN GLYPH, and that is the point of them being separate from .icon.
-       Remove here means "stop being a default"; the trash can on the Items tab means the
-       row is gone from the library. Two different destructions must not wear one picture. */
-    .linkish { border:0; background:none; padding:0; margin-right:12px;
-       font:600 12px var(--ui); color:var(--ink-v); cursor:pointer; }
-    .linkish:last-child { margin-right:0; }
-    .linkish:hover { color:var(--red); text-decoration:underline; }
-    .linkish.danger:hover { color:var(--red-dark); }
-    .linkish:focus-visible { outline:2px solid var(--red); outline-offset:2px;
-       border-radius:var(--r-sm); }
+       WORDS, NOT THE BIN GLYPH, still the reasoning: Remove here means "stop being a
+       default"; the trash can on the Items tab means the row is gone from the library. Two
+       different destructions must not wear one picture -- so a worded button, not a glyph,
+       and the danger colour appears on hover only, matching how .icon.danger already
+       behaves. A resting red column down a list of healthy defaults would read as a warning
+       column, and none of these rows is in trouble. */
+    .btn.ghost.danger:hover { color:var(--red-dark); border-color:var(--red);
+       background:var(--red-tint); }
+    /* .linkish carried its own margin-right; .btn does not. Scoped to the Defaults pane so
+       the Items tab's icon-button pairs (already spaced by their own gap) are untouched. */
+    #pane-defaults .rowact .btn + .btn { margin-left:6px; }
     /* What a row nobody can change here says instead of an empty cell. Travel and the three
        takeoff conditions are built in; bond is read only because the Markup page owns it. */
     .builtin { font:600 10.5px var(--ui); color:var(--ink-v); letter-spacing:.04em;
@@ -143,7 +147,11 @@
     /* THE WORK-TYPE STRIP. Quieter than the page's main tabs on purpose: those switch what
        you are looking at entirely, these narrow one list. A second row of loud tabs under
        the first reads as two navigations competing. */
-    .wtabs { display:flex; gap:4px; flex-wrap:wrap; margin:0 0 14px; }
+    /* .wtrow HOLDS THE BOTTOM MARGIN NOW, since the visible label sits beside the strip
+       rather than the strip sitting alone -- .wtabs keeps margin:0 so the two do not stack
+       two gaps into one big one. */
+    .wtrow { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin:0 0 14px; }
+    .wtabs { display:flex; gap:4px; flex-wrap:wrap; margin:0; }
     .wtab { border:1px solid var(--line); background:var(--card); border-radius:999px;
        padding:5px 13px; font:600 12px var(--ui); color:var(--ink-v); cursor:pointer; }
     .wtab:hover { border-color:var(--red); color:var(--red); }
@@ -580,9 +588,20 @@
     @media (max-width:560px) {
       .bulk-dlg { margin-top:0; max-height:100%; border-radius:0; border:0; }
       .bulk-ov { padding:0; }
+      /* Edit and Remove are now bordered buttons, not inline text, so two of them no
+         longer fit on one line beside a row's name at phone width. Let them wrap and stack
+         instead of forcing the row to scroll sideways. */
+      #pane-defaults .rowact { white-space:normal; }
+      #pane-defaults .rowact .btn { margin-bottom:4px; }
     }
 
     .admin-grid { display:grid; gap:18px; }
+    /* THE MEASURE CAP. .wrap runs to max-width:1660px because the Items table needs eight
+       columns; the Defaults tab's tables have three. Uncapped, a row's name and its Remove
+       button end up roughly fifteen hundred pixels apart on a wide monitor, so the eye has
+       to cross empty table to get from one to the other. This puts the controls back beside
+       the rows they act on and changes nothing on any other tab. */
+    #pane-defaults .admin-grid { max-width:980px; }
     .admin-section h2 { margin:0 0 8px; font:700 14px var(--ui); letter-spacing:-.01em; }
 
     /* Vendors: readable by everyone, editable by admins. The read-only state is a real state, not
@@ -858,6 +877,10 @@
            The two lists below are short by design -- a default is something chosen on purpose --
            so a box that only narrowed them would be more chrome than the thing it searched. This
            searches the LIBRARY, and picking a result switches that row on. -->
+      <!-- THE PANE'S OWN RATIONALE, said once rather than left in HTML comments. The
+         Assemblies and Administration panes both open with a .paneintro; this one did not. -->
+      <p class="paneintro"><b>Defaults are what a new bid opens holding.</b> Pick a work
+        type, then set the takeoff lines and the labor lines an estimate starts with.</p>
       <div class="itemsearch" id="default-search">
         <span class="searchbox">
           <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
@@ -883,7 +906,13 @@
            A ROW THAT NAMES NO WORK TYPE APPEARS UNDER EVERY TAB, which is what every row
            written before this existed does -- so nothing anybody already set disappears
            the day these tabs arrive. -->
-      <div class="wtabs" role="tablist" aria-label="Which work type these defaults are for">
+      <!-- VISIBLE, matching the Division facet's pattern (Items tab, #f-div-label): a
+           .flabel span the strip is aria-labelledby, not just an aria-label nobody sighted
+           can read. Five unexplained pills between a search box and two cards needed a
+           name on screen, not only for a screen reader. -->
+      <div class="wtrow">
+        <span class="flabel" id="wt-strip-label">Work type</span>
+        <div class="wtabs" role="tablist" aria-labelledby="wt-strip-label">
           <button class="wtab" type="button" role="tab" data-work-type="polish"
                   id="wt-polish" aria-selected="true">Polish</button>
           <button class="wtab" type="button" role="tab" data-work-type="seal"
@@ -894,6 +923,7 @@
                   id="wt-leveling" aria-selected="false">Leveling</button>
           <button class="wtab" type="button" role="tab" data-work-type="gyp"
                   id="wt-gyp" aria-selected="false">Gyp</button>
+        </div>
       </div>
 
       <div class="admin-grid">

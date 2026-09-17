@@ -2037,9 +2037,9 @@
   }
 
   function defaultRowActions(kind, id, name) {
-    return '<button class="linkish" type="button" data-def-edit="' + esc(kind) +
+    return '<button class="btn ghost sm" type="button" data-def-edit="' + esc(kind) +
       '" data-def-id="' + esc(id) + '">Edit</button>' +
-      '<button class="linkish danger" type="button" data-def-off="' + esc(kind) +
+      '<button class="btn ghost sm danger" type="button" data-def-off="' + esc(kind) +
       '" data-def-id="' + esc(id) + '" aria-label="Stop ' + esc(name) +
       ' being a default">Remove</button>';
   }
@@ -2389,8 +2389,8 @@
    *  it says the word rather than wearing the bin glyph the Items tab deletes rows with. */
   function laborRowActions(id, name) {
     if (!ADMIN) return "";
-    return '<button class="linkish" type="button" data-labor-edit="' + esc(id) + '">Edit</button>' +
-      '<button class="linkish danger" type="button" data-labor-del="' + esc(id) +
+    return '<button class="btn ghost sm" type="button" data-labor-edit="' + esc(id) + '">Edit</button>' +
+      '<button class="btn ghost sm danger" type="button" data-labor-del="' + esc(id) +
       '" aria-label="Remove ' + esc(name) + ' from the labor defaults">Remove</button>';
   }
 

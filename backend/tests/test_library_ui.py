@@ -662,10 +662,12 @@ def test_the_items_tab_no_longer_explains_itself(ran):
         "the Items explainer is back - Hanz asked for it gone on 2026-08-27")
     assert page["assembliesIntro"], "the Assemblies pane lost its intro, which was not asked for"
     assert page["adminIntro"], "the Administration pane lost its intro, which was not asked for"
-    # The CLASS stays, because two panes still use it. A rule with no caller is what to delete;
-    # this is not one.
-    assert page["paneintroStillUsed"] == 2, (
-        "expected Assemblies and Administration to still carry .paneintro, found %s"
+    # The CLASS stays, because it now has THREE callers. A rule with no caller is what to
+    # delete; this is the opposite of one. Defaults gained its own .paneintro on 2026-09-18,
+    # reusing the class rather than inventing a new one -- the same reasoning that kept it
+    # alive for Assemblies and Administration.
+    assert page["paneintroStillUsed"] == 3, (
+        "expected Assemblies, Administration and Defaults to carry .paneintro, found %s"
         % page["paneintroStillUsed"])
 
 
