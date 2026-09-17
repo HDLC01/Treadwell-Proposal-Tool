@@ -255,3 +255,35 @@ def test_the_deferred_tab_reaches_the_engine_before_it_is_rendered(er_src):
     render = body.index("renderSheet(sheetCache[name])")
     assert fetched < engine < render, (
         "the deferred load moved: fetched=%d engine=%d render=%d" % (fetched, engine, render))
+
+
+@needs_node
+def test_a_slow_tab_never_paints_over_the_tab_you_switched_to(result):
+    """Deferring four worksheets made showSheet's await reachable by clicking a tab, and with
+    it this race. Found by an audit of the merged staging tree on 2026-09-17, not by any PR.
+
+    showSheet sets activeSheet at the top and renders at the bottom. Between them is a fetch,
+    measured at 425-925 ms on throttled 4G. Click a deferred tab, switch before it lands, and
+    the slow one comes back and paints ITS grid -- while activeSheet, the tab bar and the badge
+    all name the tab you switched to.
+
+    THAT IS NOT A COSMETIC MISMATCH. Every structural op reads activeSheet, so right-clicking
+    "Delete row 55" on the grid in front of you deletes row 55 from the OTHER sheet -- rekeying
+    its cell values and lock overrides and persisting the result. Silent corruption of an
+    estimator's priced tab, with the evidence on screen saying it went somewhere else.
+
+    EXECUTED WITH A CONTROLLED FETCH, because the defect lives entirely in the interleaving --
+    asserting that the source contains "activeSheet !== name" would pass with the line in the
+    wrong place. Mutation-proven: delete the guard and renderedInOrder becomes
+    ["Epoxy", "Leveling"] with activeSheet still "Epoxy".
+    """
+    race = result["sheetSwitchRace"]
+    assert race["gridMatchesActiveSheet"], (
+        "the grid shows %r while activeSheet is %r -- a structural op would edit the wrong "
+        "sheet (render order: %r)"
+        % (race["renderedInOrder"][-1:], race["activeSheetAtEnd"], race["renderedInOrder"]))
+    assert race["staleNeverPainted"], (
+        "the abandoned tab painted anyway: %r" % race["renderedInOrder"])
+    assert race["renderedInOrder"] == ["Epoxy"], (
+        "the tab actually switched to must be the only thing drawn: %r"
+        % race["renderedInOrder"])

@@ -1763,7 +1763,7 @@ async function showSheet(name) {
     try {
       const r = await fetch("/api/sheet/" + encodeURIComponent(name), { headers: TW.authHeaders() });
       if (!r.ok) {
-        sheetGrid.textContent = "Failed to load " + name;
+        if (activeSheet === name) sheetGrid.textContent = "Failed to load " + name;
         return;
       }
       sheetCache[name] = await r.json();
@@ -1772,10 +1772,33 @@ async function showSheet(name) {
       // holding blanks where the template has numbers. No-ops for every other tab.
       loadDeferredIntoEngine(name);
     } catch (err) {
-      sheetGrid.textContent = "Failed to load " + name + ": " + err;
+      if (activeSheet === name) sheetGrid.textContent = "Failed to load " + name + ": " + err;
       return;
     }
   }
+  // STALENESS GUARD, AND IT DECIDES WHICH SHEET AN EDIT LANDS ON.
+  //
+  // activeSheet is set at the top of this function, but the fetch above is awaited -- so a
+  // second showSheet() can run to completion while the first is still on the wire. Without
+  // this line the slow one comes back and renderSheet paints ITS grid over the tab the
+  // estimator actually switched to, while the tab bar, the badge and activeSheet all still
+  // say the other one.
+  //
+  // That is not a cosmetic mismatch. Every structural op reads activeSheet: right-click
+  // "Delete row 55" on the grid in front of you and applyStructOp deletes row 55 from the
+  // OTHER sheet -- rekeying its cell values and lock overrides and persisting the result.
+  // Silent corruption of an estimator's priced tab.
+  //
+  // Latent until 2026-09-17, when deferring four worksheets made this branch reachable by
+  // clicking a tab: before that every tab was already cached and the await never ran. The
+  // window is the sheet fetch, measured at 425-925 ms on throttled 4G.
+  //
+  // IT GOES HERE, AFTER THE CACHE FILL AND THE ENGINE LOAD, not before them. Returning
+  // earlier would leave sheetCache[name] populated while loadDeferredIntoEngine never ran,
+  // and the NEXT showSheet(name) would skip this whole block as already-cached and paint a
+  // deferred tab with blanks where the template has numbers. The fetched work is kept; only
+  // the paint is dropped.
+  if (activeSheet !== name) return;
   renderSheet(sheetCache[name]);
 }
 

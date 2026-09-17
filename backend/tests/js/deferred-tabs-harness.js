@@ -208,4 +208,75 @@ out.pricedAmongDeferrable = Array.from(DEFERRABLE_TABS).filter((n) => BASE_ROLE[
   out.engineNotReady = { returned: api.loadDeferredIntoEngine("Leveling"), log: HF.log };
 }
 
-process.stdout.write(JSON.stringify(out) + NL);
+// EMITTED AT THE BOTTOM, not here: scenario 8 is asynchronous by nature (it exists to
+// interleave two showSheet calls) and a synchronous write here printed the report before
+// that scenario had an answer -- the key was simply absent, which reads as "not tested"
+// rather than as a failure.
+
+// ── 8. a slow tab must not paint over the tab you switched to ──────────────
+//
+// THIS RACE IS WHAT THE DEFERRAL ABOVE MADE REACHABLE. Before it, every tab was already in
+// sheetCache and showSheet never awaited anything; now four tabs fetch on click, so a second
+// click can complete while the first is still on the wire. showSheet sets activeSheet at the
+// top and, without a guard, renders at the bottom whatever IT fetched -- leaving the grid
+// showing one sheet while activeSheet, the tab bar and the badge say another.
+//
+// That mismatch is not cosmetic: every structural op reads activeSheet, so "Delete row 55" on
+// the grid in front of the estimator deletes row 55 from the OTHER sheet and persists it.
+//
+// EXECUTED WITH A FETCH THE TEST CONTROLS, because the bug only exists in the interleaving.
+// A source assertion on "activeSheet !== name" would pass with the line in the wrong place.
+(function () {
+  const rendered = [];
+  let releaseSlow;
+  const slow = new Promise((res) => { releaseSlow = res; });
+
+  const body = [
+    grab(/^let activeSheet = .*$/m, "activeSheet"),
+    grab(/^async function showSheet\(name\) \{[\s\S]*?^\}/m, "showSheet"),
+    "return { showSheet, active: () => activeSheet };",
+  ].join(NL);
+
+  const el = () => ({ textContent: "", className: "", querySelectorAll: () => [] });
+  const deps = {
+    tabBar: { querySelectorAll: () => [] },
+    badge: el(), sheetGrid: el(),
+    HF: { unregisterAll: () => {} },
+    syncFormulaBar: () => {},
+    labelFor: (n) => n,
+    renderSheet: (data) => { rendered.push(data && data.name); },
+    loadDeferredIntoEngine: () => {},
+    _clearRangeSel: () => {},
+    _activeCellInput: null, _rangeSel: null, _rangeEls: [],
+    sheetCache: { Epoxy: { name: "Epoxy" } },   // Epoxy cached, Leveling not
+    TW: { authHeaders: () => ({}) },
+    fetch: (url) => url.indexOf("Leveling") !== -1
+      ? slow.then(() => ({ ok: true, json: async () => ({ name: "Leveling" }) }))
+      : Promise.resolve({ ok: true, json: async () => ({ name: "Epoxy" }) }),
+  };
+  const names = Object.keys(deps);
+  const api = new Function(...names, body)(...names.map((k) => deps[k]));
+
+  out.sheetSwitchRace = (async () => {
+    const first = api.showSheet("Leveling");   // starts, parks on the slow fetch
+    await api.showSheet("Epoxy");              // cached, completes immediately
+    const afterSwitch = rendered.slice();
+    releaseSlow();                             // Leveling finally arrives
+    await first;
+    return {
+      renderedInOrder: rendered.slice(),
+      renderedBeforeTheSlowOneLanded: afterSwitch,
+      activeSheetAtEnd: api.active(),
+      // THE ONE THAT MATTERS: whatever is painted last must be the tab activeSheet names,
+      // because that is the sheet a structural op will edit.
+      gridMatchesActiveSheet: rendered[rendered.length - 1] === api.active(),
+      // and the stale one must never have painted at all
+      staleNeverPainted: rendered.indexOf("Leveling") === -1,
+    };
+  })();
+})();
+
+(async () => {
+  out.sheetSwitchRace = await out.sheetSwitchRace;
+  process.stdout.write(JSON.stringify(out) + NL);
+})();
