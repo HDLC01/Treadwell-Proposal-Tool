@@ -265,7 +265,6 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   ${fn("asmUnit")}
   ${fn("byId")}
   ${fn("adoptSaved")}
-  ${fn("paintDates")}
   ${fn("pick")}
   ${fn("itemDivisions")}
   ${fn("namesWithItemExtras")}
@@ -278,12 +277,14 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   ${fn("vendorNames")}
   ${fn("similarNames")}
   ${fn("dupeHtml")}
-  // BEFORE datesHtml, which calls it on both the Added and the Edited line. This is the exact
+  // BEFORE which calls it on both the Added and the Edited line. This is the exact
   // hazard the note above describes: byHtml arrived with the who-created/who-edited columns on
   // 2026-09-04, and without this lift datesHtml raises a ReferenceError that reds every scenario
-  // in this file rather than the one test about names.
+  // in this file rather than the one test about names. The History column STAYED -- only its
+  // price line came out on 2026-09-18.
   ${fn("byHtml")}
   ${fn("datesHtml")}
+  ${fn("paintDates")}
   // NO defaultSwitch LIFT ANY MORE. It was lifted here on 2026-09-16 because renderItems drew
   // a default toggle in the Items and Assemblies tabs; that toggle is gone, because defaults
   // are owned by the Defaults tab alone now and two places to set one flag is a precedence
@@ -307,6 +308,15 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   // The Takeoff defaults are grouped under sub-headings rather than carrying a Kind column,
   // and the grouping is a separate function precisely so a test can execute it and read the
   // groups back as data instead of regex-matching headings out of the rendered HTML.
+  // THE WORK-TYPE FILTER, lifted BEFORE the two renderers that call it. A default now says
+  // which of the five sheet tabs it belongs to, and an EMPTY list means every one -- which
+  // is what every row set before the column existed carries, so nothing anybody already
+  // configured disappears the day the tabs arrive. The declarations come from library.js so
+  // a renamed list cannot pass as a working one.
+  ${grab(/^  var WORK_TYPES = \[[^\]]*\];$/m, "the WORK_TYPES declaration")}
+  ${grab(/^  var DEFAULT_WT = .*$/m, "the DEFAULT_WT declaration")}
+  ${fn("appliesToWorkType")}
+  ${fn("workTypeLabel")}
   ${fn("takeoffDefaultGroups")}
   ${fn("renderDefaultTakeoff")}
   // THE ADD-A-DEFAULT PATH, lifted so it is EXECUTED. It shipped on 2026-09-17 as two
@@ -494,8 +504,8 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   // same thing to a scope that is ALREADY built, or renderFilterBar has nothing to notice.
   return { setDivisions: function (list) { DIVISIONS = list; }, renderFilterBar, parseQuery, matchesFilters, anyFilterActive, filterSummary,
            numberHits, FILTERS,
-           renderItems, renderVendors, renderPanel, renderList, refreshNumbers,
-           pickerFor, itemByName, similarNames, pick, datesHtml, adoptSaved,
+           renderItems, datesHtml, byHtml, renderVendors, renderPanel, renderList, refreshNumbers,
+           pickerFor, itemByName, similarNames, pick, adoptSaved,
            onItemEdit, QUEUED, NUMERIC_ITEM_FIELDS, SERVER_OWNED_ITEM_FIELDS, ITEMS, VENDORS,
            itemMatches, itemResultsHtml, lineForSave, visibleItems, duplicateName, nameKey,
            asmQuery, ASM_FILTERS, anyAsmFilterActive, asmMatches, asmMatchesFilters,
@@ -515,6 +525,9 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
            // THE ADD PATH, EXECUTED. A test that only read the markup could not tell a
            // wired button from a dead one, and for two days could not.
            defaultCandidates, renderDefaultSearch, setDefaultQuery, openDefaultBrowse,
+           appliesToWorkType, workTypeLabel, WORK_TYPES,
+           setWorkType: function (wt) { DEFAULT_WT = wt; },
+           workTypeNow: function () { return DEFAULT_WT; },
            // THE LABOR DEFAULTS, EXECUTED. The add button had no handler for a day and this
            // file could not tell: a source assertion cannot separate a wired control from a
            // dead one, which is exactly how it shipped green.
@@ -910,99 +923,18 @@ const out = {};
   };
 }
 
-// ── the dates ────────────────────────────────────────────────────────────────
-{
-  const { api } = build();
-  const withPrice = api.datesHtml(
-    { created_at: "2026-08-02T09:00:00Z", cost_updated_at: "2026-08-14T21:15:00Z" });
-  const never = api.datesHtml({ created_at: "2026-08-01T14:30:00Z", cost_updated_at: null });
-  out.dates = {
-    // Through TW.fmtBizDateTime, so the stamps read in Central and carry a time.
-    usesBusinessTime: /BIZ\(2026-08-02T09:00:00Z\)/.test(withPrice) &&
-      /BIZ\(2026-08-14T21:15:00Z\)/.test(withPrice),
-    saysAddedAndPrice: /Added/.test(withPrice) && /Price/.test(withPrice),
-    // Not "—" and not today's date: a material whose price has never moved must not look
-    // freshly priced.
-    neverPricedSaysSo: /not since we started tracking/.test(never),
-    neverPricedShowsNoDate: !/BIZ\(2026-08-14/.test(never),
-  };
-}
+// ── the dates: NO SCENARIO ANY MORE ──────────────────────────────────
+//
+// The History column came off the Items table on 2026-09-18 ("too much clutter"), and
+// datesHtml/byHtml/paintDates drew only into it. The COLUMNS are still stored and still
+// returned -- the Added and Price-updated sorts order by them, and those scenarios are
+// further down this file, untouched. What went is the rendering nobody reads.
 
-// ── who created it, who edited it ────────────────────────────────────────────
-// Hanz, 2026-09-04: "In the items tab we must put the name of who created it and who edited it".
-// Every field here is a real column: owner_email has always existed, updated_by was added the
-// same day. The REAL nameOf runs (see the note at the top of this file), so these assert the
-// app's one email→name convention rather than a restatement of it.
-{
-  const { api } = build();
-
-  // Filed by one person, later changed by another.
-  const edited = api.datesHtml({
-    created_at: "2026-08-02T09:00:00Z",
-    updated_at: "2026-09-01T16:00:00Z",
-    cost_updated_at: null,
-    owner_email: "kyle.loseke@wetreadwell.com",
-    updated_by: "hanz@wetreadwell.com",
-  });
-
-  // A create stamps updated_at AND created_at in one write, so equal stamps mean "nothing has
-  // happened since" — not "the creator edited it the moment they filed it".
-  const untouched = api.datesHtml({
-    created_at: "2026-08-02T09:00:00Z",
-    updated_at: "2026-08-02T09:00:00Z",
-    cost_updated_at: null,
-    owner_email: "kyle.loseke@wetreadwell.com",
-    updated_by: "kyle.loseke@wetreadwell.com",
-  });
-
-  // Filed before updated_by existed, and edited since. There is no name to show and there never
-  // will be for this row.
-  const legacy = api.datesHtml({
-    created_at: "2026-06-01T09:00:00Z",
-    updated_at: "2026-07-01T09:00:00Z",
-    cost_updated_at: null,
-    owner_email: "kyle.loseke@wetreadwell.com",
-    updated_by: "",
-  });
-
-  // A price move with no name attached to it, because no column records who moved a cost.
-  const priced = api.datesHtml({
-    created_at: "2026-08-02T09:00:00Z",
-    updated_at: "2026-08-02T09:00:00Z",
-    cost_updated_at: "2026-08-14T21:15:00Z",
-    owner_email: "kyle.loseke@wetreadwell.com",
-    updated_by: "",
-  });
-
-  out.authorship = {
-    // The NAME, not the address — what he asked for, through CRM.nameOf.
-    creatorReadsAsAName: /Added[\s\S]*?by <b>Kyle Loseke<\/b>/.test(edited),
-    creatorIsNotAnEmail: !/kyle\.loseke@/.test(edited),
-    // The two names are distinct in the same cell, so a row cannot silently attribute an edit to
-    // whoever filed it.
-    editorReadsAsAName: /Edited[\s\S]*?by <b>Hanz<\/b>/.test(edited),
-    editorDateShown: /BIZ\(2026-09-01T16:00:00Z\)/.test(edited),
-
-    // updated_at === created_at is the untouched case.
-    untouchedSaysNotEdited: /not edited since/.test(untouched),
-    untouchedNamesNoEditor: !/by <b>Hanz<\/b>/.test(untouched),
-    // The creator's name still shows on the Added line — "not edited" must not blank the row.
-    untouchedStillNamesCreator: /Added[\s\S]*?by <b>Kyle Loseke<\/b>/.test(untouched),
-
-    // An unattributable edit says so rather than rendering a bare date that reads as a name
-    // which failed to load.
-    legacyEditSaysUnknown: /Edited[\s\S]*?by <span class="never">unknown<\/span>/.test(legacy),
-    // ANCHORED AFTER "Edited", because the Edited line is the last of the three. The first
-    // version of this read `by <b>Kyle Loseke</b>[\s\S]*?Edited` and failed against correct
-    // output: it matched the ADDED line followed by the word "Edited", so it was asserting that
-    // the creator is never named anywhere — which is the opposite of what this tab is for.
-    legacyDoesNotInventAnEditor: !/Edited[\s\S]*Kyle Loseke/.test(legacy),
-
-    // THE PRICE LINE TAKES NO AUTHOR. cost_updated_at is decided server-side when the cost really
-    // moved and nothing records who moved it, so attributing it would be a guess.
-    priceLineHasNoAuthor: /Price BIZ\(2026-08-14T21:15:00Z\)(?!\s*by)/.test(priced),
-  };
-}
+// ── authorship: NO SCENARIO ANY MORE ────────────────────────────────
+//
+// It asserted who filed and who edited a material, drawn by datesHtml into the History
+// column -- and that column came off the Items table on 2026-09-18. owner_email and
+// updated_by are still stored and still returned; nothing on screen prints them now.
 
 // ── the editor is adopted off the reply, not left until F5 ───────────────────
 // The same failure the price date had one column over: an ordinary edit moves updated_at and
@@ -3446,7 +3378,11 @@ out.serverOwnedItemFields = build().api.SERVER_OWNED_ITEM_FIELDS;
              lines: [{ item_id: "i1" }, { item_id: "i2" }] },
            { id: "a2", name: "Also not", unit: "SF", favorite: false, lines: [] }],
   });
-  api.setGlobalMarkup([{ label: "bond", formula: "1%" }]);
+  // WITH ITS REAL id AND line_key, because the row now carries an editable control and the
+  // control is keyed by id -- an idless fixture would render a box that writes nowhere and
+  // still pass a test that only looked for the box.
+  api.setGlobalMarkup([{ id: "mk-bond-1", line_key: "bond", layout: "global",
+                         label: "bond", formula: "1%" }]);
   api.renderDefaultTakeoff();
   const h = d.nodes["default-takeoff-body"].innerHTML;
   out.defaultsTakeoffList = {
@@ -3467,18 +3403,36 @@ out.serverOwnedItemFields = build().api.SERVER_OWNED_ITEM_FIELDS;
     skipsTheRest: !/Not a default/.test(h) && !/Also not/.test(h),
     // Bond appears, and says it is not editable here -- one home per line, which markup.py
     // enforces and this page must not quietly become a second one of.
-    showsBond: /bond/.test(h) && /Read only/.test(h),
+    // BOND IS STILL HERE and is now EDITABLE -- Hanz, 2026-09-18, asked for no read-only
+    // rows. The box writes the markup_rules row BY ID, so it is a second DOOR on one home
+    // rather than a second home: markup.py enforces one home per line because two places
+    // to set one price disagree the first time somebody changes one, and that is a wrong
+    // bid. The id being on the control is what makes it the same row.
+    showsBond: /bond/.test(h) && /data-markup-formula=/.test(h),
+    bondIsEditableNotReadOnly: !/Read only/.test(h) && /data-markup-formula="/.test(h),
+    bondStillSaysWhereItLives: /Markup/.test(h),
     saysWhereBondLives: /Global tab/.test(h),
     // BOND CARRIES NO CONTROL, read off the RENDERED row rather than sliced out of the
     // renderer's source. The source version split on "GLOBAL_MARKUP" and then on "});" and
     // broke the moment the function was regrouped -- it was asserting on punctuation. What
     // actually matters is that the drawn row offers nothing to press: one home per line,
     // and the rate lives on the Markup page.
-    bondRowHasNoControl: (function () {
-      var row = (h.split(/<tr>(?=[\s\S]*?bond)/).filter(function (s) {
-        return /bond/.test(s.split("</tr>")[0]);
-      })[0] || "").split("</tr>")[0];
-      return row !== "" && !/data-def-(edit|off|add)/.test(row) && /Read only/.test(row);
+    // BOND'S ROW, SLICED ROBUSTLY. The old form split on /<tr>/ with a lookahead, which
+    // stopped finding the row once group headings (<tr class="grouphead">) joined the table.
+    //
+    // THE RULE CHANGED SHAPE, NOT STRENGTH. Bond used to carry no control at all; it now
+    // carries one, because Hanz asked for no read-only rows. What must still hold is that
+    // the control edits the MARKUP ROW, identified by id -- a second DOOR on one home. A
+    // control writing a library-local field would be a second HOME, and two homes for one
+    // rate disagree the first time somebody changes one, which is a wrong bid.
+    bondControlTargetsTheMarkupRule: (function () {
+      var rows = h.split("</tr>");
+      var row = "";
+      for (var i = 0; i < rows.length; i++) {
+        if (/bond/i.test(rows[i])) { row = rows[i]; break; }
+      }
+      return row !== "" && /data-markup-formula="[^"]+"/.test(row) &&
+        !/data-def-(edit|off|add)/.test(row);
     })(),
     // The conditions, read from freshModel rather than typed here: joint filler ships ON.
     jointFillerYes: /Joint filler[\s\S]*?Polish!E29 = Yes/.test(h),
@@ -3816,6 +3770,54 @@ async function laborChecks() {
       emptyStateStaysHidden: d.nodes["default-labor-empty"].hidden === true,
       // And the first line can still be typed.
       canStillAdd: d.nodes["default-labor-addrow"].hidden === false,
+    };
+  }
+
+  // THE WORK-TYPE TABS, DRIVEN. Five tabs narrow one list, and the load-bearing rule is that an
+  // EMPTY default_work_types means EVERY tab -- which is what every row set before the column
+  // existed carries. Get that backwards and everybody's existing defaults vanish on deploy.
+  {
+    const { api, dom: d } = build(seed({
+      ITEMS: [{ id: "i1", name: "Everywhere densifier", unit: "Pail", unit_cost: 100,
+                favorite: true },
+              { id: "i2", name: "Epoxy only primer", unit: "Gal", unit_cost: 50,
+                favorite: true, default_work_types: ["epoxy"] }],
+      ASMS: [{ id: "a1", name: "Polish only 800", unit: "SF", favorite: true, lines: [],
+               default_work_types: ["polish"] }],
+      LABOR: [{ id: "L1", name: "Everywhere wage", rate: 58.25, unit: "hours", guys_auto: false,
+                sort: 0, notes: null, owner_email: "k@w.dev" },
+              { id: "L2", name: "Gyp only crew", rate: 62, unit: "hours", guys_auto: false,
+                sort: 1, notes: null, owner_email: "k@w.dev", default_work_types: ["gyp"] }],
+    }));
+    const look = (wt) => {
+      api.setWorkType(wt);
+      api.renderDefaultTakeoff();
+      api.renderDefaultLabor();
+      return { takeoff: d.nodes["default-takeoff-body"].innerHTML,
+               labor: d.nodes["default-labor-body"].innerHTML };
+    };
+    const polish = look("polish"), epoxy = look("epoxy"), gyp = look("gyp");
+    out.workTypeTabs = {
+      tabsAreTheSheetTabs: api.WORK_TYPES,
+      comboIsNotATab: api.WORK_TYPES.indexOf("combo") === -1,
+      // AN UNNARROWED ROW IS ON EVERY TAB. This is the assertion that protects what is already set.
+      unnarrowedOnAll: /Everywhere densifier/.test(polish.takeoff) &&
+                       /Everywhere densifier/.test(epoxy.takeoff) &&
+                       /Everywhere densifier/.test(gyp.takeoff),
+      unnarrowedLaborOnAll: /Everywhere wage/.test(polish.labor) &&
+                            /Everywhere wage/.test(epoxy.labor) &&
+                            /Everywhere wage/.test(gyp.labor),
+      // A NARROWED ROW IS ON ITS OWN TAB AND NOWHERE ELSE.
+      epoxyOnlyOnEpoxy: /Epoxy only primer/.test(epoxy.takeoff) &&
+                        !/Epoxy only primer/.test(polish.takeoff) &&
+                        !/Epoxy only primer/.test(gyp.takeoff),
+      polishOnlyOnPolish: /Polish only 800/.test(polish.takeoff) &&
+                          !/Polish only 800/.test(epoxy.takeoff),
+      gypLaborOnlyOnGyp: /Gyp only crew/.test(gyp.labor) &&
+                         !/Gyp only crew/.test(polish.labor),
+      // TRAVEL IS NEVER FILTERED OUT: every bid is seeded with it whatever tab it sits on.
+      travelOnEveryTab: /Travel/.test(polish.labor) && /Travel/.test(epoxy.labor) &&
+                        /Travel/.test(gyp.labor),
     };
   }
 }

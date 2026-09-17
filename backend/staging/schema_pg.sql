@@ -224,6 +224,20 @@ create table if not exists public.library_labor (
 create index if not exists library_labor_live_name_idx
   on public.library_labor (name) where deleted_at is null;
 
+-- WHICH WORK TYPES A DEFAULT BELONGS TO, 2026-09-17. `favorite` says a row IS a default;
+-- this says which of the five sheet tabs it opens on.
+--
+-- EMPTY MEANS EVERY ONE, and that is what makes this additive rather than a migration: every
+-- row written before the column existed comes back [] and still applies everywhere, exactly as
+-- it did when favorite was the whole story. Nobody wakes up to defaults that stopped appearing.
+--
+-- The vocabulary is markup.TABS (polish, seal, epoxy, leveling, gyp), imported in library.py
+-- rather than retyped. `combo` is NOT one of them: a combo job runs on the epoxy AND polish
+-- tabs, so it inherits both lists instead of keeping a third that has to agree with two others.
+alter table public.library_items      add column if not exists default_work_types jsonb not null default '[]'::jsonb;
+alter table public.library_assemblies add column if not exists default_work_types jsonb not null default '[]'::jsonb;
+alter table public.library_labor      add column if not exists default_work_types jsonb not null default '[]'::jsonb;
+
 -- Items and Assemblies, 2026-08-15. Additive, and safe against a volume already holding BETA
 -- rows. buy_qty is the "5" of "5 Gal" (so unit_cost can mean what the pail costs); existing rows
 -- get 1, which prices exactly as they did before the column existed. cost_updated_at marks a

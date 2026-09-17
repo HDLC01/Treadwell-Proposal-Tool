@@ -876,6 +876,15 @@ def test_both_schema_files_declare_library_labor():
                     "sort integer not null", "deleted_at timestamptz"):
             assert col in block, "%s: library_labor is missing %r" % (path.name, col)
 
+        # AND THE WORK-TYPE COLUMN ON ALL THREE TABLES. Same rule, same reason: the database
+        # that misses it answers every default-work-type write with a 500, and because the read
+        # degrades the page looks fine while nothing saves. Asserted per table rather than by
+        # counting, so a copy-paste that adds it twice to one table and never to another fails.
+        for table in ("library_items", "library_assemblies", "library_labor"):
+            needle = ("alter table public.%s add column if not exists default_work_types" % table)
+            assert needle in re.sub(r" +", " ", flat), (
+                "%s does not add default_work_types to %s" % (path.name, table))
+
 
 def test_both_schema_files_say_global_is_a_layout_and_no_migration_was_written():
     """NO DDL. `layout` and `line_key` are plain `text` with no CHECK in either file, deliberately

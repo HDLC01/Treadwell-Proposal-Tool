@@ -140,6 +140,19 @@
        quiet: it is a signpost over rows that carry the actual content, so it must not
        out-shout the names beneath it. The first one drops its top border -- a rule directly
        under the <thead> reads as a double rule. */
+    /* THE WORK-TYPE STRIP. Quieter than the page's main tabs on purpose: those switch what
+       you are looking at entirely, these narrow one list. A second row of loud tabs under
+       the first reads as two navigations competing. */
+    .wtabs { display:flex; gap:4px; flex-wrap:wrap; margin:0 0 14px; }
+    .wtab { border:1px solid var(--line); background:var(--card); border-radius:999px;
+       padding:5px 13px; font:600 12px var(--ui); color:var(--ink-v); cursor:pointer; }
+    .wtab:hover { border-color:var(--red); color:var(--red); }
+    .wtab[aria-selected="true"] { background:var(--red-tint); border-color:var(--red);
+       color:var(--red-dark); }
+    .wtab:focus-visible { outline:2px solid var(--red); outline-offset:2px; }
+    /* What a row says when it applies to every work type rather than a chosen few. */
+    .wtall { font:600 10.5px var(--ui); color:var(--ink-v); letter-spacing:.04em;
+       text-transform:uppercase; }
     tr.grouphead th { text-align:left; padding:9px 13px 5px; background:var(--surf-low);
        border-top:1px solid var(--line); font:600 10.5px var(--ui); color:var(--ink-v);
        letter-spacing:.06em; text-transform:uppercase; }
@@ -698,9 +711,15 @@
               <tr>
                 <th>Materials <span class="th-sub">(how the manufacturer names it)</span></th>
                 <th>Division</th><th class="n">Order Quantity</th><th>Unit</th>
-                <!-- "Dates" until 2026-09-04. The cell now names who added the material and who
-                     last changed it, not only when, so the heading had to stop promising only
-                     dates. No test pinned the old string. -->
+                <!-- "Dates" until 2026-09-04. The cell names who added the material and who
+                     last changed it, not only when, so the heading stopped promising only
+                     dates.
+
+                     THE PRICE LINE CAME OUT on 2026-09-18 -- Hanz: "too much clutter".
+                     Three stacked lines on every row of a dense editing table was two more
+                     than anyone reads. Added-and-by and Edited-and-by stay; "Price not since
+                     we started tracking" went. cost_updated_at is STILL stored, still
+                     returned, and still what the Price-updated sort orders by. -->
                 <th class="n">Cost</th><th>Vendor</th><th>History</th>
                 <!-- NO DEFAULT COLUMN. It lived here for one day. Hanz, 2026-09-17: "all the
                      default items in assemblies should be handled in default items in assemblies
@@ -848,6 +867,33 @@
                  aria-label="Search the library for a material or assembly to make a default"
                  autocomplete="off" />
         </span>
+      </div>
+
+      <!-- ONE STRIP FOR BOTH SECTIONS, not one each. A work type is the question "what does
+           a polish bid open holding?", and Takeoff and Labor are two halves of that one
+           answer -- two strips could be left disagreeing, showing a polish takeoff beside
+           an epoxy labor list, which is a screen that describes no bid that exists.
+
+           FIVE, AND WHICH FIVE: markup.TABS, the closed list the markup rules are already
+           filed under, and the tabs of Kyle's own workbook. `combo` is NOT here -- it is
+           what detect_work_type() returns for which PROPOSAL to write, and a combo job
+           runs on the epoxy AND polish tabs, so it reads both lists rather than keeping a
+           third that has to agree with two others.
+
+           A ROW THAT NAMES NO WORK TYPE APPEARS UNDER EVERY TAB, which is what every row
+           written before this existed does -- so nothing anybody already set disappears
+           the day these tabs arrive. -->
+      <div class="wtabs" role="tablist" aria-label="Which work type these defaults are for">
+          <button class="wtab" type="button" role="tab" data-work-type="polish"
+                  id="wt-polish" aria-selected="true">Polish</button>
+          <button class="wtab" type="button" role="tab" data-work-type="seal"
+                  id="wt-seal" aria-selected="false">Seal</button>
+          <button class="wtab" type="button" role="tab" data-work-type="epoxy"
+                  id="wt-epoxy" aria-selected="false">Epoxy</button>
+          <button class="wtab" type="button" role="tab" data-work-type="leveling"
+                  id="wt-leveling" aria-selected="false">Leveling</button>
+          <button class="wtab" type="button" role="tab" data-work-type="gyp"
+                  id="wt-gyp" aria-selected="false">Gyp</button>
       </div>
 
       <div class="admin-grid">
