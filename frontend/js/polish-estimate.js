@@ -67,6 +67,20 @@
   function adopt(blob) {
     state = blob || {};
     M = B.migrateModel(state.polish_estimate);
+    // THE CELL WINS WHERE THERE IS ONE, the same rule polish-intake.js has always applied, through
+    // the same shared reader so the two screens cannot disagree about one answer.
+    //
+    // THIS WAS A LIVE BUG UNTIL THE THREE MOVED HERE. migrateModel alone hands back freshModel's
+    // defaults for any key a saved blob never stated, so a draft written before dye, joint filler
+    // and remove-existing were model keys would have shown this step the DEFAULTS rather than what
+    // the estimator answered on intake -- and the next save would have written those defaults over
+    // the real answers in Polish!E25/E29/F29. joint_filler is the one that bites: it ships ON, so a
+    // project where somebody deliberately turned it off would have had it quietly turned back on
+    // and the downloaded workbook would have said Yes.
+    //
+    // Safe only because every writer writes both places: saveSoon puts all eight cells back through
+    // conditionCellWrites on every save, so the cell can never be the staler of the two.
+    M.conditions = B.conditionsFromCells(M.conditions, state.cell_values);
     // BEFORE THE FIRST PAINT, not on the first edit. `changed()` is what normally keeps a derived
     // Guys figure current, and nothing calls it on load -- so without this a reopened draft shows
     // Travel's Guys box empty until somebody touches an unrelated field, and prices it at nothing
@@ -144,11 +158,50 @@
 
   /** What one takeoff row costs: the library's own price for that assembly at that measurement.
    *  null when the row has no assembly picked yet — which is not an error, just unfinished. */
+  /** A takeoff row is EITHER an assembly or a single material, and this is where that forks.
+   *
+   *  Hanz asked for material rows because not everything an estimate buys is a system. A pallet of
+   *  patch, a box of blades, one drum of densifier: making somebody build a one-line assembly to
+   *  put a single product on a bid is ceremony, and the assembly it produces is a system that does
+   *  not exist.
+   *
+   *  A MATERIAL ROW IS ONE `priceLine` CALL, not a new engine. That is the whole reason this fits:
+   *  library-core already prices one line against an area, applying coverage, waste and roundup,
+   *  and an assembly is nothing more than a list of those. So a material row takes the same path a
+   *  line inside an assembly takes, and cannot drift from it.
+   *
+   *  COVERAGE IS TYPED ON THE ROW, falling back to the item's own default -- priceLine's existing
+   *  rule, not a new one. It has to be per-row rather than per-item because the same product is
+   *  used at different coverages in different systems, which is exactly why Kyle's sheet keeps
+   *  coverage on the line. Storing the row's figure back onto the item would make it wrong for
+   *  every other place that item is used.
+   *
+   *  The return is shaped like priceAssembly's so every caller -- rowCost, materialTotal, the
+   *  broken-line warning, the per-unit hint -- keeps working without knowing which kind it got. */
   function rowPrice(row) {
     var r = row || {};
+    if (r.item_id) return priceMaterialRow(r);
     var asm = asmById(r.assembly_id);
     if (!asm) return null;
     return L.priceAssembly(asm, ITEMS, B.num(r.measurement));
+  }
+
+  /** One material, priced as priceAssembly would have priced a one-line assembly containing it.
+   *
+   *  `broken_lines` follows library-core's own rule rather than inventing a second one: an
+   *  unfilled row is work not started, not work gone wrong, so `no_item` is not a fault. Getting
+   *  that wrong would put "1 line cannot price yet" under every row the moment it is added. */
+  function priceMaterialRow(r) {
+    var area = B.num(r.measurement);
+    var one = L.priceLine({ item_id: r.item_id, coverage: r.coverage,
+                            waste_pct: r.waste_pct, roundup: r.roundup }, ITEMS, area);
+    var priced = one.ok && one.priced ? 1 : 0;
+    var broken = (!one.ok && one.reason !== "no_item") ? 1 : 0;
+    var total = priced ? one.cost : 0;
+    return {
+      rows: [one], total: total, priced_lines: priced, broken_lines: broken,
+      per_unit: (area !== null && area > 0 && priced) ? total / area : null
+    };
   }
 
   /** The row's cost as it should READ: a figure only when something was actually priced.
@@ -419,10 +472,73 @@
     return "From the Items &amp; Assemblies library.";
   }
 
+  /** The material row's three helpers. Separate from asmHint rather than a branch inside it,
+   *  because they answer different questions: an assembly's hint is about its LINES, a material's
+   *  is about the pack you buy. */
+  function itemById(id) {
+    for (var i = 0; i < ITEMS.length; i++) if (ITEMS[i].id === id) return ITEMS[i];
+    return null;
+  }
+
+  function matHint(row) {
+    var it = itemById((row || {}).item_id);
+    if (it) {
+      var pack = B.num(it.buy_qty) || 1;
+      return esc(B.num(it.unit_cost) != null
+        ? B.money2(it.unit_cost) + " per " + (pack === 1 ? "" : B.num(pack) + " ") +
+          (it.unit || "unit")
+        : "This material has no cost in the library yet.");
+    }
+    if (String((row || {}).item_name || "").trim()) {
+      return "No material by that name — pick one from the list.";
+    }
+    return "A single product, priced straight off the library.";
+  }
+
+  /** WHAT THE BOX WILL USE IF IT IS LEFT EMPTY, shown as the placeholder rather than typed into
+   *  the field. Filling the box with the item's default would look like an answer somebody gave
+   *  for THIS row, and the estimator would have no way to tell it apart from one they typed --
+   *  which matters the day the item's default changes in the library and this row does not. */
+  function covPlaceholder(row) {
+    var it = itemById((row || {}).item_id);
+    var cov = it && B.num(it.coverage);
+    return cov ? String(cov) : "";
+  }
+
+  function covHint(row) {
+    var it = itemById((row || {}).item_id);
+    var cov = it && B.num(it.coverage);
+    if (B.num((row || {}).coverage)) return "How far one goes, for this job.";
+    if (cov) return "Blank uses the library's " + B.num(cov) + ".";
+    return "How far one goes. The library has no default for it.";
+  }
+
   function measureText(row) {
     var r = row || {};
     return B.num(r.measurement) ? B.fmtSf(r.measurement) + " " + (r.unit || "SF") : "";
   }
+
+  /** The three conditions that describe the work, as cards rather than as bare switches.
+   *
+   *  A SPEC RATHER THAN THREE COPIES OF THE SAME MARKUP, and the `cell` is on it deliberately: the
+   *  only thing these actually do is set that cell, so naming it on screen is the difference
+   *  between a control whose effect you can see and one you have to be told about. The star this
+   *  page's library replaced got that wrong for two years.
+   *
+   *  `needs` is the gate remove_existing_jf carried on the intake form. It adds a fourth hand to
+   *  the joint-filler crew, so with no joint filler there is no crew for it to be the fourth hand
+   *  of -- dimmed, never hidden, and its answer still reaches Polish!F29 either way. */
+  var CONDITION_CARDS = [
+    { key: "joint_filler", tag: "JOINT FILLER", label: "Filling the joints", cell: "Polish!E29",
+      why: "One kit per 3,500 sq ft. The kits are counted by the workbook, not by this screen — " +
+           "there is no joint-filler assembly in the library for it to price from." },
+    { key: "remove_existing_jf", tag: "REMOVE EXISTING", label: "Taking the old filler out",
+      cell: "Polish!F29", needs: "joint_filler",
+      why: "Adds a fourth hand to the joint-filler line. Priced on the Labor step, where that " +
+           "line is." },
+    { key: "dye", tag: "DYE", label: "Two coats of dye", cell: "Polish!E25",
+      why: "Across the polished area. Carried to the workbook; nothing on this screen prices it." }
+  ];
 
   function takeoffPanel() {
     var html = M.takeoff.map(function (r, i) {
@@ -434,18 +550,28 @@
           (p.broken_lines === 1 ? '' : 's') + ' in this assembly cannot price yet — check the ' +
           'cost and coverage of its items in the library.</p>';
       }
-      return '<div class="tk"><div class="tk-h">' +
-        '<span class="tag">ROW ' + (i + 1) + '</span>' +
+      // A MATERIAL ROW IS THE SAME CARD with a different first field and one extra, not a second
+      // kind of card. An estimator reading the takeoff should see one list of things the job
+      // buys; which of them happen to be systems and which are single products is a detail of how
+      // the library stores them, not a distinction worth two layouts.
+      var mat = !!r.item_id || r.kind === "item";
+      return '<div class="tk' + (mat ? " mat" : "") + '"><div class="tk-h">' +
+        '<span class="tag">' + (mat ? "MATERIAL " : "ROW ") + (i + 1) + '</span>' +
         '<span class="tk-sub" data-measure-for="' + i + '">' + esc(measureText(r)) + '</span>' +
         (M.takeoff.length > 1
           ? '<button class="x" data-del-row="' + i + '" title="Remove this row">' + icon("x", 12) + '</button>'
           : '') +
-        '</div><div class="tk-g">' +
+        '</div><div class="tk-g' + (mat ? " matg" : "") + '">' +
 
-        '<div class="f"><label>Assembly</label>' +
-        '<input list="dl-assemblies" data-tk="' + i + '" data-k="assembly_name" ' +
-        'placeholder="Search assemblies…" value="' + esc(nv(r.assembly_name)) + '">' +
-        '<p class="hint" data-asmhint-for="' + i + '">' + asmHint(r) + '</p></div>' +
+        (mat
+          ? '<div class="f"><label>Material</label>' +
+            '<input list="dl-items" data-tk="' + i + '" data-k="item_name" ' +
+            'placeholder="Search materials…" value="' + esc(nv(r.item_name)) + '">' +
+            '<p class="hint" data-asmhint-for="' + i + '">' + matHint(r) + '</p></div>'
+          : '<div class="f"><label>Assembly</label>' +
+            '<input list="dl-assemblies" data-tk="' + i + '" data-k="assembly_name" ' +
+            'placeholder="Search assemblies…" value="' + esc(nv(r.assembly_name)) + '">' +
+            '<p class="hint" data-asmhint-for="' + i + '">' + asmHint(r) + '</p></div>') +
 
         '<div class="f"><label>Measurement</label>' +
         '<input class="n" data-tk="' + i + '" data-k="measurement" value="' +
@@ -459,6 +585,13 @@
         }).join("") + '</select>' +
         '<p class="hint">SF or LF.</p></div>' +
 
+        (mat
+          ? '<div class="f"><label>Coverage</label>' +
+            '<input class="n" data-tk="' + i + '" data-k="coverage" value="' +
+            esc(nv(r.coverage)) + '" placeholder="' + esc(covPlaceholder(r)) + '">' +
+            '<p class="hint">' + esc(covHint(r)) + '</p></div>'
+          : "") +
+
         '<div class="f"><label>Total cost</label>' +
         '<div class="costbox' + (rc.empty ? " empty" : "") + '" data-cost-for="' + i + '">' +
         esc(rc.text) + '</div>' +
@@ -469,8 +602,51 @@
         '</div>' + warn + '</div>';
     }).join("");
 
-    html += '<button class="addbtn" data-add-row="1">' + icon("plus", 13)
-      + ' Add another assembly</button>';
+    html += '<div class="addrow2">' +
+      '<button class="addbtn" data-add-row="1">' + icon("plus", 13)
+      + ' Add another assembly</button>' +
+      // TWO BUTTONS, NOT A DROPDOWN. Which kind of row you want is known before you reach for
+      // anything, so making it a choice inside a menu adds a click to both paths to save a button.
+      '<button class="addbtn" data-add-mat="1">' + icon("plus", 13)
+      + ' Add a material</button>' +
+      "</div>";
+
+    // ── the three that came off the intake form, 2026-09-16 ─────────────────────────────────
+    // They are questions about the WORK, and the work is described here. On intake they sat among
+    // questions about the building and the bid, where an estimator answered them before opening a
+    // takeoff at all.
+    //
+    // DIMMED, NOT HIDDEN AND NOT DISABLED -- `.mw-sw.inert`'s rule, and Travel's. None of these
+    // three moves a number in the beta engine; they set Yes/No in Kyle's workbook and nothing
+    // else. Greying says that out loud while leaving the answer typeable, because the answer
+    // still has to reach the downloaded .xlsx whichever way it points.
+    //
+    // remove_existing_jf IS GATED ON joint_filler, which is the `needs` rule it carried on intake.
+    // It adds a fourth hand to the joint-filler crew, so with no joint filler there is no crew for
+    // it to be the fourth hand of. Gated, still written: a blank cell is not "No" to Kyle.
+    // A CARD EACH, the same `.tk` container the assembly rows above use. Hanz asked for it and he
+    // is right: three bare switches under a column of cards read as page furniture -- something
+    // that configures the list rather than something IN it. These describe the work the same way a
+    // takeoff row does, so they get the same box.
+    //
+    // WHAT THEY ARE NOT is a row, and the card has to be honest about that or it is worse than the
+    // switches were. An assembly row carries a measurement and comes to a number. These carry a
+    // Yes or No and come to nothing on this screen: the arithmetic they drive -- one kit per 3,500
+    // sq ft -- lives in Kyle's workbook, off Polish!E29, and the beta has no assembly to price it
+    // from. So the card states its own cost as "not priced here" rather than "$0", which would be
+    // a figure and would be wrong.
+    html += CONDITION_CARDS.map(function (c) {
+      var inert = c.needs && !M.conditions[c.needs];
+      return '<div class="tk cond' + (inert ? " inert" : "") + '">' +
+        '<div class="tk-h">' +
+        '<span class="tag">' + esc(c.tag) + "</span>" +
+        condSwitch(c.key, c.label, inert) +
+        '<span class="tk-sub">' + esc(c.cell) + "</span>" +
+        "</div>" +
+        '<p class="hint">' + esc(c.why) + "</p>" +
+        "</div>";
+    }).join("");
+
     html += '<p class="cap">Material total <b data-mat-total>' +
       esc(moneyAuto(materialTotal())) + '</b> · measured area <b data-area-total>' +
       esc(B.fmtSf(B.takeoffSf(M.takeoff))) + ' SF</b>. LF rows are priced like any other but do ' +
@@ -506,11 +682,36 @@
     // get this button, because clicking it would run the same handler as Travel's and overwrite
     // that row's own Guys with the man-day sum. A bare <button>, no wrapper, so its own click
     // target is what data-lab-manual/-auto sits on.
+    //
+    // A SWITCH, NOT A BUTTON WHOSE WORDS FLIP. The old control read "Type my own", and
+    // once pressed, "Back to auto" -- the label named the ACTION, so it described the
+    // state you were leaving rather than the one you were in. A switch labels the STATE
+    // and shows it: on means this row's Guys is typed, off means it is derived. One set of
+    // words, always true, and it matches the switches the Review step already uses.
+    //
+    // STILL A <button>, deliberately. The `.mw-sw` conditions are <span role="switch">
+    // with tabindex and no keydown handler, so Space and Enter do nothing on them. This
+    // control is a real button today and reaching it by keyboard works; rendering it as a
+    // span to match would quietly take that away. A <button role="switch"> looks the same
+    // and keeps Space/Enter for free.
+    //
+    // The two data attributes are UNCHANGED and still point at the two existing handlers,
+    // which are not symmetric: going manual also seeds the box with the derived figure and
+    // moves the caret into it, while going auto only sets the flag. Only the markup moved.
     var toggle = !hours ? "" : (auto
-      ? '<button type="button" class="labtoggle" data-lab-manual="' + i +
-        '" aria-label="Type my own Guys figure">Type my own</button>'
-      : '<button type="button" class="labtoggle" data-lab-auto="' + i +
-        '" aria-label="Back to the automatic Guys figure">Back to auto</button>');
+    //
+    // NO aria-label. The visible words ARE the accessible name, and that is the point: an
+    // aria-label here would override them, and the old pair ("Type my own Guys figure" /
+    // "Back to the automatic Guys figure") flipped with the state. Keeping them would have
+    // left a screen-reader user hearing the next ACTION while the screen showed the state,
+    // which is the exact confusion this change removes for everybody else. role="switch"
+    // plus aria-checked already announces on/off.
+      ? '<button type="button" class="mw-sw labsw" role="switch" aria-checked="false"'
+        + ' data-lab-manual="' + i + '">'
+        + '<span class="track"></span>Type my own</button>'
+      : '<button type="button" class="mw-sw labsw on" role="switch" aria-checked="true"'
+        + ' data-lab-auto="' + i + '">'
+        + '<span class="track"></span>Type my own</button>');
     return '<div class="tk lab' + (inert ? " inert" : "") + '" data-lab-card="' + i +
       '"><div class="tk-h">' +
       '<input class="labname" data-lab="' + i + '" data-k="label" value="' + esc(nv(r.label)) +
@@ -664,9 +865,14 @@
    *  Returns the switch + label only -- callers compose it with whatever extra context that
    *  SPECIFIC row still needs (remodelSource()'s county note, hard_bid's threshold note, ...),
    *  so nothing those already said gets lost by routing through here. */
-  function condSwitch(key, label) {
+  function condSwitch(key, label, inert) {
     var on = !!(M.conditions || {})[key];
-    return '<span class="mw-sw' + (on ? " on" : "") + '" data-cond="' + esc(key) +
+    // `inert` DIMS, it does not disable and it does not hide -- `.sw.inert`'s convention and its
+    // reason. A switch whose answer changes no price still has an answer, and that answer still
+    // reaches the downloaded workbook, so taking it away would lose a cell rather than tidy a
+    // screen. It stays clickable; it just stops claiming to matter to the figure above it.
+    return '<span class="mw-sw' + (on ? " on" : "") + (inert ? " inert" : "") +
+      '" data-cond="' + esc(key) +
       '" role="switch" tabindex="0" aria-checked="' + (on ? "true" : "false") + '">' +
       '<span class="track"></span>' + esc(label) + '</span>';
   }
@@ -766,10 +972,20 @@
 
   function renderDatalist() {
     var dl = $("dl-assemblies");
-    if (!dl) return;
-    dl.innerHTML = ASMS.map(function (a) {
-      return '<option value="' + esc(a.name) + '"></option>';
-    }).join("");
+    if (dl) {
+      dl.innerHTML = ASMS.map(function (a) {
+        return '<option value="' + esc(a.name) + '"></option>';
+      }).join("");
+    }
+    // The materials list, filled from the same load. Kept apart from the assemblies rather than
+    // merged: a row is one or the other, and a merged list would let somebody pick a system into
+    // the field that prices a single product.
+    var dli = $("dl-items");
+    if (dli) {
+      dli.innerHTML = ITEMS.map(function (it) {
+        return '<option value="' + esc(it.name) + '"></option>';
+      }).join("");
+    }
   }
 
   /** Refresh every computed figure in place, without rebuilding the panel.
@@ -871,6 +1087,16 @@
       changed(true);
       return;
     }
+    // `kind` IS ON THE ROW, not inferred from item_id being set. A material row that has not been
+    // pointed at anything yet has an empty item_id, and inferring from that alone would redraw it
+    // as an assembly row the moment somebody cleared the field -- taking their measurement and
+    // coverage with it.
+    if (t.closest("[data-add-mat]")) {
+      M.takeoff.push({ kind: "item", item_id: "", item_name: "", measurement: "", unit: "SF",
+                       coverage: "" });
+      changed(true);
+      return;
+    }
     var dr = t.closest("[data-del-row]");
     if (dr) {
       M.takeoff.splice(parseInt(dr.getAttribute("data-del-row"), 10), 1);
@@ -946,6 +1172,30 @@
     return !!asm;
   }
 
+  /** setAssembly's opposite number, and deliberately simpler than it.
+   *
+   *  NO UNIT ADOPTION. An assembly declares the unit it is measured in, so picking one can
+   *  legitimately switch the row to LF. An item's `unit` is the unit it is BOUGHT in -- gallons,
+   *  kits, pails -- which has nothing to do with how the floor is measured. Copying it onto the
+   *  row would set a 12,000 SF area to "gallons" and price against it.
+   *
+   *  COVERAGE IS LEFT ALONE on a pick, for the reason covPlaceholder gives: the item's default is
+   *  shown as a placeholder and used when the box is empty, so writing it INTO the box would turn
+   *  a library default into something indistinguishable from a figure somebody typed for this
+   *  job. */
+  function setMaterial(i, text) {
+    var row = M.takeoff[i];
+    if (!row) return false;
+    row.item_name = text;
+    var want = String(text || "").trim().toLowerCase();
+    var hit = null;
+    for (var n = 0; n < ITEMS.length; n++) {
+      if (String(ITEMS[n].name || "").trim().toLowerCase() === want) { hit = ITEMS[n]; break; }
+    }
+    row.item_id = hit ? hit.id : "";
+    return !!hit;
+  }
+
   document.addEventListener("input", function (e) {
     var el = e.target;
     if (!el || !el.matches) return;
@@ -969,6 +1219,7 @@
     if (ti !== null && k) {
       var i = parseInt(ti, 10);
       if (k === "assembly_name") setAssembly(i, el.value);
+      if (k === "item_name") setMaterial(i, el.value);
       else if (M.takeoff[i]) M.takeoff[i][k] = el.value;
       changed(false);
       return;

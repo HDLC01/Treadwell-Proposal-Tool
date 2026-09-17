@@ -236,6 +236,15 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   var DIVISION_REFS = state.DIVISION_REFS || [], UNIT_REFS = state.UNIT_REFS || [];
   var VENDOR_USE = state.VENDOR_USE, DIVISION_USE = state.DIVISION_USE || {}, UNIT_USE = state.UNIT_USE || {};
   var ADMIN = state.ADMIN;
+  // The Markup page's Global lines. Declared here rather than lifted because the page fills it
+  // from its own fetch inside load(), which this sandbox does not run -- a test hands it in.
+  var GLOBAL_MARKUP = state.GLOBAL_MARKUP || [];
+  // The estimate's shared module, which the page reaches through the window object. Declared
+  // rather than
+  // stubbed away: takeoffConditionDefaults must read freshModel's REAL answers -- joint filler
+  // ships on, dye ships off -- so a fixture that made those up would prove nothing about what a
+  // new estimate actually opens with.
+  var window = state.window || {};
   var openId = state.openId;
   // Which line's item picker is showing its results. pickerFor() reads it, so a test can render
   // the closed state (null, the default) or the open one by passing state.pickerOpen.
@@ -275,11 +284,38 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   // in this file rather than the one test about names.
   ${fn("byHtml")}
   ${fn("datesHtml")}
+  // NO defaultSwitch LIFT ANY MORE. It was lifted here on 2026-09-16 because renderItems drew
+  // a default toggle in the Items and Assemblies tabs; that toggle is gone, because defaults
+  // are owned by the Defaults tab alone now and two places to set one flag is a precedence
+  // question nobody wants to answer. fn() THROWS on a name it cannot find, so leaving the
+  // dead lift here reddened all 156 scenarios in this file at once -- which is the failure
+  // mode the comment above it was written to warn about, arriving from the opposite side.
   // LIFTED, not stubbed, and it has to be lifted BEFORE the three renderers that call it.
   // renderItems, renderRefSection and renderPanel each ask icon() for a glyph now; leaving it
   // out is a ReferenceError that kills every scenario in this file at once.
   ${fn("icon")}
   ${fn("renderItems")}
+  // THE DEFAULTS TAB'S OWN RENDERERS, lifted so they are EXECUTED rather than read. A source-text
+  // assertion cannot catch an unbound identifier, and this repo has taken production down that
+  // way once already. takeoffConditionDefaults goes first: renderDefaultTakeoff calls it.
+  ${fn("takeoffConditionDefaults")}
+  // defaultRowActions BEFORE renderDefaultTakeoff, which calls it for every row. The
+  // Defaults tab is administrative now -- each row carries Edit and Delete -- so the
+  // renderer no longer just prints names.
+  ${fn("defaultRowActions")}
+  ${fn("renderDefaultTakeoff")}
+  // THE ADD-A-DEFAULT PATH, lifted so it is EXECUTED. It shipped on 2026-09-17 as two
+  // buttons and a search box with nothing bound to any of them, and the only test over it
+  // regex-matched the markup for data-add-default="..." -- which the dead buttons satisfied
+  // perfectly. The declarations come from library.js rather than being restated here, so a
+  // renamed flag cannot pass as a working one.
+  ${grab(/^  var DEFAULT_Q = "";$/m, "the DEFAULT_Q declaration")}
+  ${grab(/^  var DEFAULT_MAX = \d+;$/m, "the DEFAULT_MAX declaration")}
+  ${grab(/^  var DEFAULT_BROWSE = false;$/m, "the DEFAULT_BROWSE declaration")}
+  ${fn("defaultCandidates")}
+  ${fn("renderDefaultSearch")}
+  ${fn("setDefaultQuery")}
+  ${fn("openDefaultBrowse")}
   ${fn("adminList")}
   ${fn("usageFor")}
   ${fn("singular")}
@@ -410,6 +446,13 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
            ASMS,
            newMaterialName, newRefName,
            bulkCandidates, bulkSelectAllState, bulkLinesFor, bulkAddRoom, BULK_MAX_LINES,
+           // The Defaults tab's Takeoff list, EXECUTED rather than read. GLOBAL_MARKUP is handed
+           // in so a test can supply the Markup page's answer without a second fetch stub.
+           renderDefaultTakeoff, takeoffConditionDefaults,
+           // THE ADD PATH, EXECUTED. A test that only read the markup could not tell a
+           // wired button from a dead one, and for two days could not.
+           defaultCandidates, renderDefaultSearch, setDefaultQuery, openDefaultBrowse,
+           setGlobalMarkup: function (g) { GLOBAL_MARKUP = g; },
            snapshotOf: function (id) { return itemBefore[id]; } };
 `);
 
@@ -3316,6 +3359,64 @@ out.serverOwnedItemFields = build().api.SERVER_OWNED_ITEM_FIELDS;
   };
 }
 
+// ── the Defaults tab's Takeoff list, EXECUTED ────────────────────────────────
+{
+  const { api, dom: d } = build({
+    // THE REAL MODULE, required rather than faked: the whole claim is that this list reads the
+    // answers a new estimate opens with, so a made-up freshModel would prove the opposite.
+    window: { TWPolishBid: require(path.join(ROOT, "js", "polish-bid-core.js")) },
+    ITEMS: [{ id: "i1", name: "Densifier", unit: "Pail", unit_cost: 100, favorite: true },
+            { id: "i2", name: "Not a default", unit: "Gal", unit_cost: 50, favorite: false }],
+    ASMS: [{ id: "a1", name: "Polish 800", unit: "SF", favorite: true,
+             lines: [{ item_id: "i1" }, { item_id: "i2" }] },
+           { id: "a2", name: "Also not", unit: "SF", favorite: false, lines: [] }],
+  });
+  api.setGlobalMarkup([{ label: "bond", formula: "1%" }]);
+  api.renderDefaultTakeoff();
+  const h = d.nodes["default-takeoff-body"].innerHTML;
+  out.defaultsTakeoffList = {
+    rowCount: (h.match(/<tr>/g) || []).length,
+    kinds: (h.match(/<td>(Assembly|Material|Condition|Markup)<\/td>/g) || [])
+      .map((s) => s.replace(/<\/?td>/g, "")),
+    // ONLY THE SWITCHED-ON ONES. A list that showed everything would make the switch decorative.
+    namesTheDefaults: /Polish 800/.test(h) && /Densifier/.test(h),
+    skipsTheRest: !/Not a default/.test(h) && !/Also not/.test(h),
+    // Bond appears, and says it is not editable here -- one home per line, which markup.py
+    // enforces and this page must not quietly become a second one of.
+    showsBond: /bond/.test(h) && /Read only/.test(h),
+    saysWhereBondLives: /Global tab/.test(h),
+    // The conditions, read from freshModel rather than typed here: joint filler ships ON.
+    jointFillerYes: /Joint filler[\s\S]*?Polish!E29 = Yes/.test(h),
+    dyeNo: /Dye[\s\S]*?Polish!E25 = No/.test(h),
+  };
+
+  // THE ADD PATH, DRIVEN. Every assertion here fails against the 2026-09-17 shipping code,
+  // where the button had no handler and DEFAULT_Q was never assigned: the box stayed hidden
+  // whatever you did, so a default could not be made at all once the row switch came off.
+  api.openDefaultBrowse();
+  const browse = d.nodes["default-hits"].innerHTML;
+  api.setDefaultQuery("Also");
+  const typed = d.nodes["default-hits"].innerHTML;
+  api.setDefaultQuery("");
+  const cleared = d.nodes["default-hits"].innerHTML;
+  out.defaultsAddPath = {
+    // BROWSE OFFERS THE LIBRARY WITHOUT BEING NAMED. This is the whole point of the
+    // button: the search needs you to know the name, and setting defaults up is when you
+    // do not. Only the rows that are NOT already defaults, or it would offer them twice.
+    browseOffersNonDefaults: /Not a default/.test(browse) && /Also not/.test(browse),
+    browseSkipsExistingDefaults: !/Polish 800/.test(browse) && !/Densifier/.test(browse),
+    browseRowsAreAddButtons: /data-def-add="items"/.test(browse) &&
+                             /data-def-add="assemblies"/.test(browse),
+    // TYPING STILL NARROWS. Browse must not have replaced the search.
+    typingFilters: /Also not/.test(typed) && !/Not a default/.test(typed),
+    // AND CLEARING GOES BACK TO THE LIST, not to nothing -- emptying the box mid-session
+    // used to leave you staring at a hidden panel with no way to reopen it.
+    clearingReturnsToBrowse: /Not a default/.test(cleared) && /Also not/.test(cleared),
+    // THE CARET LANDS IN THE BOX, so the button leads somewhere you can type.
+    focusesTheSearch: d.focused[d.focused.length - 1] === "default-q",
+  };
+}
+
 // ── the page's own copy ──────────────────────────────────────────────────────
 out.page = {
   title: /<title>([^<]*)</.exec(html)[1],
@@ -3337,6 +3438,60 @@ out.page = {
   wasteHeader: /Waste Factor/.test(html),
   roundupHeader: /Roundup\?/.test(html),
   vendorsTab: /id="tab-vendors"/.test(html),
+  // The fourth tab, and WHERE it sits: Hanz asked for it beside Administration, so the order in
+  // the strip is part of the ask rather than incidental.
+  defaultsTab: /id="tab-defaults"/.test(html),
+  defaultsTabLabel: (/id="tab-defaults"[^>]*>([^<]*)</.exec(html) || [])[1] || "",
+  defaultsTabIsLast: html.indexOf('id="tab-defaults"') > html.indexOf('id="tab-vendors"'),
+  defaultsPaneStartsHidden: /<section id="pane-defaults"[^>]*\shidden/.test(html),
+  // IT SAYS IT IS EMPTY RATHER THAN LOOKING BROKEN. A tab that opens onto nothing reads as a bug;
+  // one that explains it has not been built reads as a decision.
+  defaultsPaneExplainsItself: /Nothing set yet/.test(html),
+  // TWO CATEGORIES, AND WHICH TWO. Hanz asked for takeoff and labor -- the estimate's own steps,
+  // not the library's Items/Assemblies split, which is a different question with its own tabs.
+  defaultsCategories: (function () {
+    var pane = (html.split('id="pane-defaults"')[1] || "").split("</section>")[0];
+    return {
+      takeoff: /id="default-takeoff"/.test(pane),
+      labor: /id="default-labor"/.test(pane),
+      headings: (pane.match(/<h2>([^<]*)<\/h2>/g) || []).map(function (h) {
+        return h.replace(/<\/?h2>/g, "");
+      }),
+      // The same container the Administration lists use, which is what was asked for.
+      usesAdminGrid: /class="admin-grid"/.test(pane),
+      // A WAY IN, not a filter. Hanz asked for it "for when entering the defaults", so the
+      // placeholder has to read as adding rather than narrowing -- the same box worded the other
+      // way is a different feature that happens to look identical.
+      search: /id="default-q"/.test(pane),
+      searchIsForAdding: /placeholder="Search materials and assemblies to add"/.test(pane),
+      searchAboveTheLists: pane.indexOf('id="default-q"') < pane.indexOf('class="admin-grid"'),
+      // THE RESULTS BOX LIVES WITH THE ROWS, not with the input. It shipped as a
+      // <span class="hits"> inside .itemsearch -- a flex ROW -- so the list of things you were
+      // about to add rendered beside the search box, clear of the table it was adding to.
+      // Hanz asked for it "within the line item instead of up above". Position is the whole
+      // fix, so position is what is asserted.
+      resultsInsideTakeoffSection: (function () {
+        var sec = (pane.split('id="default-takeoff"')[1] || "").split('class="admin-section"')[0];
+        return sec.indexOf('id="default-hits"') !== -1;
+      })(),
+      resultsFollowTheAddButton:
+        pane.indexOf('data-add-default="takeoff"') < pane.indexOf('id="default-hits"'),
+      resultsNotBesideTheSearchInput:
+        pane.indexOf('id="default-hits"') > pane.indexOf('class="admin-grid"'),
+      onlyOneResultsBox: (pane.match(/id="default-hits"/g) || []).length === 1,
+      // AN ADD BUTTON IN EACH, on the same .addrow the Administration lists use. Labor's is not
+      // optional: labor lines are not library rows, so there is nothing to switch on and nothing
+      // for the search to return -- typing here is the only way one gets made.
+      addButtons: (pane.match(/data-add-default="[a-z]+"/g) || [])
+        .map(function (m) { return m.replace(/.*="|"$/g, ""); }),
+      addUsesTheAdminPattern: (pane.match(/class="addrow"/g) || []).length === 2 &&
+        (pane.match(/class="addbtn"/g) || []).length === 2,
+      // Labor has a table to put Travel in, and an empty state that hides once it is there.
+      laborTable: /id="default-labor-body"/.test(pane),
+      laborEmptyState: /id="default-labor-empty"/.test(pane),
+      sectionCount: (pane.match(/class="admin-section"/g) || []).length,
+    };
+  })(),
   noCoverageSfHeader: !/Coverage \(SF\)/.test(html),
   noRoleHeader: !/<th[^>]*>Role<\/th>/.test(html),
 };

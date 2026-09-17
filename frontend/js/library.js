@@ -84,20 +84,16 @@
    *
    *  The glyph is not a click target: see the pointer-events rule on `.icon svg` in library.html,
    *  and the closest() lookups in the click handler, which are the two halves of the same answer. */
-  function icon(name, filled) {
+  function icon(name) {
     var d = name === "trash"
         ? '<path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6"></path>'
       : name === "copy"
         ? '<rect x="9" y="9" width="12" height="12" rx="2"></rect>' +
           '<path d="M5 15V5a2 2 0 0 1 2-2h10"></path>'
       : name === "plus" ? '<path d="M12 5v14M5 12h14"></path>'
-      : name === "star"
-        ? '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>'
       : "";
-    // `filled` only ever applies to the star -- a favourite is either starred or not, drawn the
-    // same way a checked checkbox differs from an unchecked one, not by swapping glyphs.
     return '<svg class="ic" viewBox="0 0 24 24" width="16" height="16" ' +
-      'fill="' + (filled ? "currentColor" : "none") + '" ' +
+      'fill="none" ' +
       'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ' +
       'aria-hidden="true" focusable="false">' + d + "</svg>";
   }
@@ -142,6 +138,23 @@
         UNIT_USE = us.usage || {};
         UNITS = (UNIT_REFS.length ? UNIT_REFS.map(function (u) { return u.name; }) : DEFAULT_UNITS.slice());
       }
+      // The Markup page's Global lines, for the Defaults tab to SHOW. Its own request rather than
+      // a sixth entry in the Promise.all above, and deliberately outside the `throw` that guards
+      // items and assemblies: this page's whole job works without it, and a markup service having
+      // a bad afternoon must not take Items and Assemblies down with it. A failure leaves the list
+      // empty, which is the honest answer -- a bond rate this page invented because a request
+      // timed out would be worse than a row that is not there.
+      try {
+        var mk = await api("/api/markup/rules");
+        if (mk.ok) {
+          var mj = await mk.json();
+          GLOBAL_MARKUP = (mj.rules || []).filter(function (r) {
+            return r.layout === "global" && r.applies;
+          }).map(function (r) {
+            return { label: (r.line_key || "").replace(/_/g, " "), formula: r.formula };
+          });
+        }
+      } catch (e) { GLOBAL_MARKUP = []; }
       if (!openId || !current()) openId = ASMS.length ? ASMS[0].id : null;
       say("");
       paint();
@@ -647,16 +660,21 @@
     }
   }
 
-  /** A star press, immediately -- never through patchSoon. That queue exists for a typed field
-   *  whose save is worth debouncing and, for an item, worth confirming ("this is priced into
-   *  every assembly that uses it"); a favourite changes no price and no assembly, so routing it
-   *  through the same pipe would ask the estimator to confirm a change that has no consequence
-   *  to describe. One field, sent the moment the star is pressed, the same as Duplicate and
-   *  Remove already are. */
-  async function patchFavorite(kind, id, favorite) {
+  /** A default switch, sent immediately -- never through patchSoon. That queue exists for a typed
+   *  field whose save is worth debouncing and, for an item, worth confirming ("this is priced into
+   *  every assembly that uses it"); switching a default changes no price and no assembly, so
+   *  routing it through the same pipe would ask the estimator to confirm a change with no
+   *  consequence to describe. One field, sent on the press, the same as Duplicate and Remove.
+   *
+   *  THE COLUMN IS STILL CALLED `favorite` IN THE DATABASE, and that is deliberate rather than
+   *  sloppy. It was the star's column, the star is gone, and the flag it held was read by nothing
+   *  -- no sort, no filter, no default -- so it was free to take over. Renaming it would be DDL on
+   *  two separate databases, which is this project's documented way of shipping a 502. The name is
+   *  wrong and the migration is worse; this comment is the trade. */
+  async function patchDefault(kind, id, on) {
     var r = await api("/api/library/" + kind + "/" + encodeURIComponent(id), {
       method: "PATCH", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ favorite: favorite }) });
+      body: JSON.stringify({ favorite: on }) });
     var j = await r.json().catch(function () { return {}; });
     if (!r.ok) throw new Error(j.detail || j.error || ("HTTP " + r.status));
     return j;
@@ -968,11 +986,6 @@
         "<td>" + pick("vendor", it.vendor, vendorNames(), "Vendor", ' class="cell-vendor"') + "</td>" +
         '<td class="datescell">' + datesHtml(it) + "</td>" +
         '<td class="rowact">' +
-          '<button class="icon fav' + (it.favorite ? " on" : "") + '" type="button" data-fav-item="' + esc(it.id) + '" ' +
-            'title="' + (it.favorite ? "Remove from favorites" : "Mark as a favorite") + '" ' +
-            'aria-pressed="' + (it.favorite ? "true" : "false") + '" ' +
-            'aria-label="' + (it.favorite ? "Remove " + esc(it.name) + " from favorites" : "Mark " + esc(it.name) + " as a favorite") + '">' +
-            icon("star", !!it.favorite) + "</button>" +
           '<button class="icon" type="button" data-dupe-item="' + esc(it.id) + '" title="Make a copy of this material" aria-label="Duplicate ' + esc(it.name) + '">' + icon("copy") + "</button>" +
           '<button class="icon danger" type="button" data-del-item="' + esc(it.id) + '" title="Remove this material" aria-label="Remove ' + esc(it.name) + '">' + icon("trash") + "</button></td>" +
       "</tr>";
@@ -1090,14 +1103,6 @@
       out += '<button class="arow" type="button" data-open="' + esc(a.id) + '"' +
         (a.id === openId ? ' aria-current="true"' : "") + ">" +
         '<span class="an">' + esc(a.name) +
-          // Read-only here on purpose -- one button cannot contain another, so toggling lives on
-          // #asm-fav in the opened panel; this glyph only says the state, the same way `.am`'s
-          // sort-value line says something without being interactive.
-          (a.favorite ? ' <svg class="ic arow-fav" viewBox="0 0 24 24" width="13" height="13" ' +
-            'fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" ' +
-            'stroke-linejoin="round" aria-hidden="true" focusable="false">' +
-            '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 ' +
-            '7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>' : "") +
           "</span>" +
         '<span class="am">' + a.lines.length + " line" + (a.lines.length === 1 ? "" : "s") +
         " · " + per + (p.broken_lines ? " · " + p.broken_lines + " to fix" : "") +
@@ -1802,15 +1807,6 @@
     if (!asm) return;
 
     if ($("asm-name").value !== asm.name) $("asm-name").value = asm.name;
-    if ($("asm-fav")) {
-      var favBtnEl = $("asm-fav");
-      favBtnEl.classList.toggle("on", !!asm.favorite);
-      favBtnEl.setAttribute("aria-pressed", asm.favorite ? "true" : "false");
-      var favLabel = asm.favorite ? "Remove from favorites" : "Mark as a favorite";
-      favBtnEl.title = favLabel;
-      favBtnEl.setAttribute("aria-label", favLabel);
-    }
-
     var area = $("area").value;
     var p = L.priceAssembly(asm, ITEMS, area);
     var out = "";
@@ -1898,11 +1894,240 @@
   // must not run on every keystroke of a search. It is cheap and self-guarding either way.
   function paint() {
     renderItems(); renderFilterBar(); renderVendors(); renderList(); renderPanel();
+    renderDefaultTakeoff(); renderDefaultLabor();
+  }
+
+  /** The three conditions the Takeoff step carries, as defaults.
+   *
+   *  THEY ARE NOT ROWS, and the table says so in its Kind column rather than by hiding them
+   *  somewhere else. An assembly or a material is a line a new estimate OPENS WITH; a condition is
+   *  a question it opens ANSWERED. Both are things somebody set once and every bid then starts
+   *  from, which is what this tab is for.
+   *
+   *  READ FROM polish-bid-core's freshModel, never re-typed, for the same reason Travel is read
+   *  from travelSeed: the answer a new estimate actually opens with lives there, and a second copy
+   *  on this page would go stale the first time somebody changed one and not the other. That is
+   *  not hypothetical -- joint_filler ships ON and dye ships off, and a page claiming the reverse
+   *  would be telling an estimator the opposite of what their next bid does. */
+  /** The markup lines that are one rule everywhere, as this page last read them.
+   *
+   *  FETCHED, NEVER STORED HERE. Bond's rate belongs to the Markup page's Global tab, and
+   *  markup.py enforces ONE HOME PER LINE for exactly the reason that rule exists: two rows for
+   *  one line is a precedence question, and that question decides a price. So this tab READS it
+   *  and says where it lives. Editing it here would be the second home the whole split was written
+   *  to prevent.
+   *
+   *  Empty until the fetch lands, and empty forever if it fails. A bond rate this page invented
+   *  because a request timed out would be worse than a row that is not there. */
+  var GLOBAL_MARKUP = [];
+
+  function takeoffConditionDefaults() {
+    var B = window.TWPolishBid;
+    if (!B || !B.freshModel) return [];
+    var c = (B.freshModel() || {}).conditions || {};
+    return [
+      { label: "Joint filler", on: !!c.joint_filler, cell: "Polish!E29",
+        why: "One kit per 3,500 sq ft, counted by the workbook" },
+      { label: "Remove existing joint filler", on: !!c.remove_existing_jf, cell: "Polish!F29",
+        why: "A fourth hand on the joint-filler line" },
+      { label: "Dye", on: !!c.dye, cell: "Polish!E25",
+        why: "Two coats across the polished area" }
+    ];
+  }
+
+  /** The Takeoff defaults: what a new estimate opens holding, and what it opens having answered.
+   *
+   *  THE SWITCHED-ON LIBRARY ROWS COME FIRST because they are the ones somebody chose here. The
+   *  conditions follow because they are built in -- nobody set them on this page and nobody can
+   *  unset them here either, which is why they carry no switch and say "Built in" the way Travel
+   *  does under Labor. */
+  /** The Defaults tab's own way in, which is what lets the switches come off the other two tabs.
+   *
+   *  THE SEARCH IS THE CONTROL, not a filter over what is already listed. Hanz asked for it "for
+   *  when entering the defaults", and with the row switches gone it is the only way a library row
+   *  becomes a default at all -- so it has to ADD, and the results have to be things not already
+   *  on the list.
+   *
+   *  Assemblies before materials, and both capped: a library of 200 items behind a two-character
+   *  query is a wall, not a picker. The cap is stated on screen rather than silently applied,
+   *  because a result somebody expected and cannot see reads as the search being broken. */
+  /** Edit and Remove, on the rows that can have them.
+   *
+   *  THIS IS AN ADMIN SCREEN, not a viewport -- Hanz, and he is right: a list you can only look at
+   *  makes you go somewhere else to change anything it shows.
+   *
+   *  EDIT GOES TO THE ROW ITSELF rather than editing here. What you would want to change about a
+   *  default assembly -- its lines, its unit, a material's cost -- is the assembly, not the fact
+   *  that it is a default. Two places to edit one thing is how they come to disagree, and this
+   *  page already has the good version of that argument written into markup.py.
+   *
+   *  REMOVE MEANS "STOP BEING A DEFAULT". It does not delete the assembly, which would be a very
+   *  different and much worse button to put on this screen, so it says Remove and not the bin
+   *  glyph the Items tab uses for actual deletion. */
+  /** On or off, for either kind, with the optimistic flip and the put-it-back both in one place.
+   *
+   *  ONE FUNCTION FOR ADD AND REMOVE because they are the same write: `favorite` true or false.
+   *  Two functions would be two places to forget the rollback, and a default that looks removed
+   *  and comes back on the next reload is worse than one that refuses. */
+  async function setDefault(kind, id, on) {
+    var list = kind === "assemblies" ? ASMS : ITEMS;
+    var row = null;
+    for (var i = 0; i < list.length; i++) if (list[i].id === id) { row = list[i]; break; }
+    if (!row) return;
+    var was = !!row.favorite;
+    row.favorite = !!on;
+    paint();
+    try {
+      await patchDefault(kind, id, !!on);
+    } catch (err) {
+      row.favorite = was;
+      paint();
+      say("Couldn't save that. " + err.message);
+    }
+  }
+
+  function defaultRowActions(kind, id, name) {
+    return '<button class="linkish" type="button" data-def-edit="' + esc(kind) +
+      '" data-def-id="' + esc(id) + '">Edit</button>' +
+      '<button class="linkish danger" type="button" data-def-off="' + esc(kind) +
+      '" data-def-id="' + esc(id) + '" aria-label="Stop ' + esc(name) +
+      ' being a default">Remove</button>';
+  }
+
+  var DEFAULT_Q = "";
+  var DEFAULT_MAX = 8;
+  // BROWSE MODE. The search answers "I know what it is called"; this answers "show me what
+  // there is". Sitting down to set the defaults up is the second one, and an empty query
+  // returning nothing made the Add button below the list have nothing to open.
+  var DEFAULT_BROWSE = false;
+
+  function defaultCandidates() {
+    var q = DEFAULT_Q.trim().toLowerCase();
+    if (!q && !DEFAULT_BROWSE) return { rows: [], more: 0 };
+    var hits = [];
+    ASMS.forEach(function (a) {
+      if (!a.favorite && (!q || String(a.name || "").toLowerCase().indexOf(q) !== -1)) {
+        hits.push({ kind: "assemblies", id: a.id, name: a.name, what: "Assembly" });
+      }
+    });
+    ITEMS.forEach(function (it) {
+      if (!it.favorite && (!q || String(it.name || "").toLowerCase().indexOf(q) !== -1)) {
+        hits.push({ kind: "items", id: it.id, name: it.name, what: "Material" });
+      }
+    });
+    return { rows: hits.slice(0, DEFAULT_MAX), more: Math.max(0, hits.length - DEFAULT_MAX) };
+  }
+
+  // NAMED, NOT INLINE IN THE LISTENERS, because this harness can only read a listener body
+  // and not run it -- its own doc says anything with a decision in it belongs in a function.
+  // Both of these have one: whether the results box opens at all.
+  function setDefaultQuery(value) {
+    DEFAULT_Q = value == null ? "" : String(value);
+    renderDefaultSearch();
+  }
+
+  function openDefaultBrowse() {
+    DEFAULT_BROWSE = true;
+    renderDefaultSearch();
+    var abox = $("default-q");
+    if (abox) abox.focus();
+  }
+
+  function renderDefaultSearch() {
+    var box = $("default-hits");
+    if (!box) return;
+    var res = defaultCandidates();
+    if (!DEFAULT_Q.trim() && !DEFAULT_BROWSE) {
+      box.hidden = true; box.innerHTML = ""; return;
+    }
+    box.hidden = false;
+    if (!res.rows.length) {
+      box.innerHTML = '<p class="nores">' + (DEFAULT_Q.trim()
+        ? "Nothing left to add by that name. Anything already a default is not offered twice."
+        : "Every material and assembly in the library is already a default.") + "</p>";
+      return;
+    }
+    box.innerHTML = res.rows.map(function (r) {
+      return '<button class="defhit" type="button" data-def-add="' + esc(r.kind) +
+        '" data-def-id="' + esc(r.id) + '">' + esc(r.name) +
+        '<span class="k">' + esc(r.what) + "</span></button>";
+    }).join("") + (res.more
+      ? '<p class="nores">' + res.more + " more match" + (res.more === 1 ? "" : "es") +
+        " — keep typing.</p>"
+      : "");
+  }
+
+  function renderDefaultTakeoff() {
+    var body = $("default-takeoff-body");
+    if (!body) return;
+    var out = "";
+    ASMS.filter(function (a) { return a.favorite; }).forEach(function (a) {
+      out += "<tr><td>" + esc(a.name) + "</td><td>Assembly</td>" +
+        "<td>" + (a.lines || []).length + " item line" +
+        ((a.lines || []).length === 1 ? "" : "s") + " · per " + esc(a.unit || "SF") + "</td>" +
+        '<td class="rowact">' + defaultRowActions("assemblies", a.id, a.name) + "</td></tr>";
+    });
+    ITEMS.filter(function (it) { return it.favorite; }).forEach(function (it) {
+      out += "<tr><td>" + esc(it.name) + "</td><td>Material</td>" +
+        "<td>" + (L.num(it.unit_cost) != null
+          ? esc(L.money(it.unit_cost)) + " per " + esc(it.unit || "unit")
+          : "No cost in the library yet") + "</td>" +
+        '<td class="rowact">' + defaultRowActions("items", it.id, it.name) + "</td></tr>";
+    });
+    GLOBAL_MARKUP.forEach(function (g) {
+      out += "<tr><td>" + esc(g.label) + "</td><td>Markup</td>" +
+        "<td>" + esc(g.formula || "not set") +
+        " · set on the Markup page's Global tab</td>" +
+        '<td class="rowact"><span class="builtin">Read only</span></td></tr>';
+    });
+    takeoffConditionDefaults().forEach(function (c) {
+      out += "<tr><td>" + esc(c.label) + "</td><td>Condition</td>" +
+        "<td>" + esc(c.why) + " · " + esc(c.cell) + " = " + (c.on ? "Yes" : "No") + "</td>" +
+        '<td class="rowact"><span class="builtin">Built in</span></td></tr>';
+    });
+    body.innerHTML = out;
+    if ($("default-takeoff-empty")) $("default-takeoff-empty").hidden = out !== "";
+  }
+
+  /** The Labor defaults. Travel is in here before anybody adds anything.
+   *
+   *  IT IS NOT A NEW DEFAULT, it is the one that was always there and never shown. Every new
+   *  estimate is seeded with a Travel row and every older draft has one appended on migration, so
+   *  the bid has behaved this way for months -- what was missing is anywhere to SEE that, which is
+   *  what made it read as hardcoded rather than as a default somebody chose.
+   *
+   *  READ FROM THE SHARED MODULE, never re-typed. travelSeed's own comment records the two copies
+   *  that existed before drifting within a day; a third on this page would drift unseen, because
+   *  nothing here prices anything and a stale rate would look exactly like a fresh one.
+   *
+   *  BUILT IN, so it carries no remove control. Taking it off is a change to what every bid opens
+   *  with, and the estimate has no way to express "no travel row at all" -- the row dims itself on
+   *  a local job instead, which is the behaviour that replaces deleting it. */
+  function renderDefaultLabor() {
+    var body = $("default-labor-body");
+    if (!body) return;
+    var B = window.TWPolishBid;
+    var rows = B && B.travelSeed ? [B.travelSeed()] : [];
+    var out = "";
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      out += "<tr>" +
+        "<td>" + esc(r.label) + "</td>" +
+        '<td class="n">' + esc(L.money(r.rate)) + (r.unit === "hours" ? " / hr" : "") + "</td>" +
+        "<td>" + (r.guys_auto
+          ? "Man-days come off the crew rows above it"
+          : "Typed on the estimate") + "</td>" +
+        '<td class="rowact"><span class="builtin">Built in</span></td>' +
+        "</tr>";
+    }
+    body.innerHTML = out;
+    if ($("default-labor-empty")) $("default-labor-empty").hidden = rows.length > 0;
   }
 
   // ── view switch ────────────────────────────────────────────────────────────
-  var PANES = ["items", "asm", "vendors"];
-  var TAB_OF = { items: "tab-items", asm: "tab-asm", vendors: "tab-vendors" };
+  var PANES = ["items", "asm", "vendors", "defaults"];
+  var TAB_OF = { items: "tab-items", asm: "tab-asm", vendors: "tab-vendors",
+                 defaults: "tab-defaults" };
   function showView(which) {
     view = which;
     PANES.forEach(function (p) {
@@ -2079,6 +2304,18 @@
   $("bulk-add").addEventListener("click", bulkCommit);
 
   $("bulk-q").addEventListener("input", function () { BULK.q = this.value; bulkPaint(); });
+
+  // THE DEFAULTS TAB SEARCH. It shipped on 2026-09-17 with nothing bound to it: DEFAULT_Q
+  // was declared, read and reset, but never assigned, so the query could not become
+  // non-empty, defaultCandidates() took its early return every time and the results box
+  // stayed hidden forever. The tab that had just become the only way to set a default had
+  // no working way to set one. Typing also leaves browse mode on, so clearing the box
+  // returns you to the full list rather than to nothing.
+  if ($("default-q")) {
+    $("default-q").addEventListener("input", function () {
+      setDefaultQuery(this.value);
+    });
+  }
   // Escape in the search box clears it before it closes the dialog — the same two-stage behaviour
   // the Items tab's box has, so a typo does not cost you the whole selection.
   $("bulk-q").addEventListener("keydown", function (e) {
@@ -2611,21 +2848,47 @@
     // Reading it off e.target would make the button dead over most of its own area. The
     // pointer-events rule on `.icon svg` also prevents it; this is the half that survives
     // somebody tidying the stylesheet.
-    var favBtn = t.closest && t.closest("[data-fav-item]");
-    var favId = favBtn && favBtn.getAttribute("data-fav-item");
-    if (favId) {
-      var favIt = itemOf(favId);
-      if (!favIt) return;
-      var wantFav = !favIt.favorite;
-      favIt.favorite = wantFav;         // optimistic -- a star press is not worth a spinner
-      renderItems();
-      try {
-        await patchFavorite("items", favId, wantFav);
-      } catch (err) {
-        favIt.favorite = !wantFav;      // the server said no; put the star back
-        renderItems();
-        say("Couldn't save that. " + err.message);
-      }
+    // ── the Defaults tab owns defaults now ────────────────────────────────────────────────────
+    // The switch came off the item rows and the assembly editor on 2026-09-17, at Hanz's ask:
+    // "all the default items in assemblies should be handled in default items in assemblies tab".
+    // These three are what replaced it, and they had to land in the same change -- a tab that
+    // lists defaults but cannot set them would have left no way to set one at all.
+    // THE ADD BUTTON UNDER EACH LIST. It shipped as markup with no handler on 2026-09-17,
+    // and the search box shipped with no input listener, so between them there was NO WAY
+    // LEFT to make a default -- the same change had just taken the switch off the item rows.
+    // Takeoff opens the list in browse mode, which is what the button is for: you do not
+    // have to already know the name. Labor is NOT wired, deliberately: renderDefaultLabor
+    // draws one built-in row out of travelSeed() and nothing anywhere stores a custom labor
+    // line, so a handler here could only pretend. That needs a place to put one first.
+    var addDef = t.closest && t.closest("[data-add-default]");
+    if (addDef) {
+      if (addDef.getAttribute("data-add-default") === "takeoff") openDefaultBrowse();
+      return;
+    }
+    var addBtn = t.closest && t.closest("[data-def-add]");
+    if (addBtn) {
+      await setDefault(addBtn.getAttribute("data-def-add"),
+                       addBtn.getAttribute("data-def-id"), true);
+      DEFAULT_Q = "";                      // the row has moved to the list; the hit is spent
+      var qbox = $("default-q");
+      if (qbox) qbox.value = "";
+      renderDefaultSearch();
+      return;
+    }
+    var offBtn = t.closest && t.closest("[data-def-off]");
+    if (offBtn) {
+      await setDefault(offBtn.getAttribute("data-def-off"),
+                       offBtn.getAttribute("data-def-id"), false);
+      return;
+    }
+    // EDIT GOES TO THE ROW, not to an editor here. What you want to change about a default is the
+    // assembly or the material, and this page already has screens for both.
+    var edBtn = t.closest && t.closest("[data-def-edit]");
+    if (edBtn) {
+      var ek = edBtn.getAttribute("data-def-edit");
+      var eid = edBtn.getAttribute("data-def-id");
+      if (ek === "assemblies") { openId = eid; showView("asm"); paint(); }
+      else { showView("items"); paint(); focusItemRow(eid); }
       return;
     }
 
@@ -2836,22 +3099,6 @@
         VENDORS = VENDORS.filter(function (x) { return x.id !== dv; });
         paint();
       } catch (err) { say("Couldn't remove that vendor. " + err.message); }
-      return;
-    }
-
-    if (t.closest && t.closest("#asm-fav")) {
-      var favAsm = current();
-      if (!favAsm) return;
-      var wantAsmFav = !favAsm.favorite;
-      favAsm.favorite = wantAsmFav;      // optimistic, same as the item star
-      renderPanel(); renderList();
-      try {
-        await patchFavorite("assemblies", favAsm.id, wantAsmFav);
-      } catch (err) {
-        favAsm.favorite = !wantAsmFav;
-        renderPanel(); renderList();
-        say("Couldn't save that. " + err.message);
-      }
       return;
     }
 

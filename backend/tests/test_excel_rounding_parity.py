@@ -130,7 +130,12 @@ def test_the_override_loads_after_hyperformula_and_before_the_page_script(page):
     assert hf < ovr, "the override runs before HyperFormula is defined"
 
     # The page's own script, whichever it is, must come after.
-    own = re.search(r'<script src="/js/(estimate-review|info-sheet|polish-estimate)\.js"', html)
+    #
+    # `[^>]*` and not a bare `<script src=`: both engine pages carry `defer` on every tag now
+    # (see test_frontend_boot_order.py for why), and a literal match failed with "assert None"
+    # instead of with anything about ordering -- a test that stops being able to FIND the thing
+    # it orders is worse than one that finds it in the wrong place.
+    own = re.search(r'<script[^>]*\ssrc="/js/(estimate-review|info-sheet|polish-estimate)\.js"', html)
     assert own, page
     assert ovr < own.start(), "a page script could build an engine before the override registers"
 

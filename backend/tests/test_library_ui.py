@@ -44,11 +44,276 @@ def ran():
     return json.loads(proc.stdout.strip().splitlines()[-1])
 
 
+def ran_defaults():
+    """The harness payload, for the one test that also reads the source and so takes no fixture."""
+    proc = subprocess.run(["node", str(HARNESS), str(FRONTEND)],
+                          capture_output=True, text=True, encoding="utf-8", timeout=120)
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout.strip().splitlines()[-1])["defaultsTakeoffList"]
+
+
 # ── the page says what it is ──────────────────────────────────────────
 @needs_node
 def test_the_page_is_called_items_and_assemblies(ran):
     assert ran["page"]["h1"] == "Items and Assemblies"
     assert ran["page"]["title"].startswith("Items and Assemblies")
+
+
+@needs_node
+def test_a_fourth_tab_holds_the_defaults_that_are_not_built_yet(ran):
+    """Hanz, 2026-09-16, asked for a tab beside Administration called "Default Items & Assemblies".
+
+    It is EMPTY, and it says so. The favourite star came off this page the same day because what a
+    default should mean had not been settled; the answer will live here once it is. An empty tab
+    that explains itself is the honest version of that. Guessing at the feature and shipping a
+    control nobody agreed to is the thing being undone, so it is not done again here.
+
+    THE ORDER IS PART OF THE ASK. "Beside Administration" is where he put it, so the strip's order
+    is asserted rather than left to whichever end a later edit appends to.
+
+    Mutation: drop `defaults` from PANES in library.js. The tab still renders and still looks like
+    the other three, and clicking it does nothing at all — which is why the pane's own wiring is
+    checked below rather than only the button's presence."""
+    page = ran["page"]
+    assert page["defaultsTab"], "the Default Items & Assemblies tab is not on the page"
+    assert page["defaultsTabLabel"] == "Default Items &amp; Assemblies", (
+        "the tab reads %r" % page["defaultsTabLabel"])
+    assert page["defaultsTabIsLast"], "the tab is not beside Administration, where it was asked for"
+    assert page["defaultsPaneStartsHidden"], (
+        "the new pane is not hidden at rest, so it would show under whichever tab is open")
+    assert page["defaultsPaneExplainsItself"], (
+        "the empty tab says nothing, so it reads as broken rather than as unbuilt")
+
+
+@needs_node
+def test_the_defaults_tab_splits_by_the_estimates_steps_not_the_librarys(ran):
+    """Hanz, 2026-09-16: "two categories one for takeoff and labor".
+
+    THOSE ARE THE ESTIMATE'S STEPS, NOT THIS PAGE'S. The obvious wrong move is to mirror the tabs
+    overhead and offer Default Items and Default Assemblies, because that is the split the rest of
+    the page is built on. But a default is what a NEW BID opens holding, and a bid is built as a
+    takeoff and then as labor. Materials-you-buy vs systems-built-from-them is a different
+    question, and it already has two tabs of its own.
+
+    The container is Administration's, which is what was asked for: an .admin-grid of
+    .admin-section blocks, each a heading over a card. It is this page's established shape for a
+    list an admin curates, and both of these are that.
+
+    Mutation: rename either heading, or drop a section."""
+    c = ran["page"]["defaultsCategories"]
+    assert c["takeoff"] and c["labor"], "the two categories are not both on the pane"
+    assert c["headings"] == ["Takeoff", "Labor"], (
+        "expected Takeoff then Labor, found %s" % c["headings"])
+    assert c["usesAdminGrid"], "the pane does not use Administration's container, as asked"
+    assert c["sectionCount"] == 2, (
+        "expected exactly two categories, found %s" % c["sectionCount"])
+
+
+@needs_node
+def test_the_defaults_tab_has_a_search_for_entering_them(ran):
+    """Hanz, 2026-09-16: "make sure there is a search bar as well ... for when entering the
+    defaults."
+
+    A WAY IN, NOT A FILTER, and the difference is the whole test. The same box worded the other
+    way is a different feature that looks identical: one searches the LIBRARY so a result can be
+    switched on, the other narrows the two lists already on the pane. Those lists are short by
+    design -- a default is something chosen on purpose -- so a box that only narrowed them would
+    be more chrome than the thing it searched.
+
+    It sits ABOVE the lists because it adds to them. Below, it reads as filtering what it follows.
+
+    Mutation: reword the placeholder to "Search the defaults", or move the box under the grid."""
+    c = ran["page"]["defaultsCategories"]
+    assert c["search"], "the defaults tab has no search box"
+    assert c["searchIsForAdding"], (
+        "the search reads as a filter over the lists rather than a way to add to them")
+    assert c["searchAboveTheLists"], (
+        "the search sits under the lists, where it reads as narrowing them")
+
+
+@needs_node
+def test_each_defaults_category_has_its_own_add_button(ran):
+    """Three ways in, and they are not redundant. The switch on a row needs you to find the row.
+    The search needs you to name what you are after. This is the one for sitting down to set the
+    defaults up in the first place.
+
+    LABOR'S IS NOT OPTIONAL. Labor lines are not library rows -- there is no Labor tab to switch
+    anything on from, and nothing for the search above to return -- so typing here is the only way
+    a labor default ever gets made. A Labor section without this button is a category nobody can
+    put anything into.
+
+    Same .addrow/.addbtn the Administration lists use, which is the container that was asked for.
+
+    Mutation: drop either button."""
+    c = ran["page"]["defaultsCategories"]
+    assert c["addButtons"] == ["takeoff", "labor"], (
+        "expected an add button in each category, found %s" % c["addButtons"])
+    assert c["addUsesTheAdminPattern"], (
+        "the add rows do not use Administration's .addrow/.addbtn container")
+
+
+@needs_node
+def test_the_takeoff_defaults_list_what_a_new_estimate_starts_with(ran):
+    """EXECUTED, not read. The renderer is lifted into the harness and run against a real fixture,
+    because a source-text assertion cannot catch an unbound identifier -- which is how this repo
+    took production down once already.
+
+    FOUR KINDS IN ONE LIST, and that is deliberate. An assembly and a material are lines a new
+    estimate OPENS WITH. A condition is a question it opens ANSWERED. A markup line is a rate it
+    opens applying. They are not the same kind of thing, which is what the Kind column is for;
+    splitting them into four sections would say they are unrelated, when what they have in common
+    is the only thing that matters here -- somebody set them once and every bid starts from them.
+
+    ONLY THE SWITCHED-ON ONES. A list that showed the whole library would make the Default switch
+    decorative, which is what the favourite star was.
+
+    Mutation: drop the `.favorite` filter and `skipsTheRest` goes red."""
+    t = ran["defaultsTakeoffList"]
+    assert t["namesTheDefaults"], "the switched-on assembly and material are not listed"
+    assert t["skipsTheRest"], (
+        "the list shows rows nobody switched on, which makes the switch decorative")
+    assert t["kinds"] == ["Assembly", "Material", "Markup", "Condition", "Condition", "Condition"], (
+        "the kinds or their order changed: %s" % t["kinds"])
+
+
+@needs_node
+def test_the_add_a_takeoff_default_button_actually_adds_one(ran):
+    """Hanz, 2026-09-17, from staging: "the add a take off default button and add label line
+    does not allow me to add line items".
+
+    He was right, and it was worse than the button. DEFAULT_Q was declared, read and reset but
+    NEVER ASSIGNED -- nothing was bound to the search box -- so the query could not become
+    non-empty, defaultCandidates() took its empty-query early return every time, and the results
+    box stayed hidden no matter what anyone typed or clicked. The same change had just taken the
+    default switch off the item rows and the assembly editor, so for two days there was NO WAY
+    AT ALL to make something a default.
+
+    IT SHIPPED GREEN because the only test over it matched the markup for data-add-default,
+    which two dead buttons satisfy perfectly. These assertions run the code instead: every one
+    of them fails against what was on staging.
+    """
+    a = ran["defaultsAddPath"]
+    assert a["browseOffersNonDefaults"], (
+        "the Add button opens onto nothing -- browse must offer what is not already a default")
+    assert a["browseSkipsExistingDefaults"], (
+        "browse offers rows that are already defaults, so they could be added twice")
+    assert a["browseRowsAreAddButtons"], (
+        "the browse rows are not add buttons, so clicking one cannot set a default")
+    assert a["typingFilters"], "typing in the search box no longer narrows the list"
+    assert a["clearingReturnsToBrowse"], (
+        "clearing the box leaves a hidden panel with no way back to the list")
+    assert a["focusesTheSearch"], "the button does not put the caret anywhere you can type"
+
+
+@needs_node
+def test_the_results_appear_with_the_rows_not_beside_the_search_box(ran):
+    """Hanz, 2026-09-17: "can we have the add take off default within the line item instead of
+    up above".
+
+    The box was a <span class="hits"> inside .itemsearch, and .itemsearch is a flex ROW -- so
+    the list of rows you were about to add rendered beside the input, floating clear of the
+    table it was adding to. Nothing was wrong with the markup in isolation, which is why only a
+    POSITION assertion catches it.
+    """
+    c = ran["page"]["defaultsCategories"]
+    assert c["resultsInsideTakeoffSection"], (
+        "the results box is outside the Takeoff section, so picks render away from the rows")
+    assert c["resultsFollowTheAddButton"], (
+        "the results box renders before the Add button that opens it")
+    assert c["resultsNotBesideTheSearchInput"], (
+        "the results box is back up beside the search input, which is what Hanz asked to change")
+    assert c["onlyOneResultsBox"], (
+        "there are two #default-hits containers; renderDefaultSearch writes to whichever the DOM "
+        "hands back first and the other stays stale")
+
+
+@needs_node
+def test_bond_is_shown_here_but_still_lives_on_the_markup_page():
+    """Will asked for bond on this tab. It is here, and it is READ ONLY.
+
+    ONE HOME PER LINE is not a style rule, it is what markup.py enforces and why: two rows for one
+    line is a precedence question, and that question decides a price. Bond's rate belongs to the
+    Markup page's Global tab, so this tab shows it and says so. Making it editable here would
+    create the second home that whole split was written to prevent, and the two would disagree the
+    first time somebody changed one.
+
+    IT IS FETCHED, NOT COPIED, and the fetch sits outside the try that guards items and
+    assemblies: a markup service having a bad afternoon must not take Items and Assemblies down
+    with it. A failure leaves the row absent, which is the honest answer -- a bond rate this page
+    invented because a request timed out would be worse than a row that is not there.
+
+    Mutation: give the bond row an editable control, or store its rate on this page."""
+    t = ran_defaults()
+    assert t["showsBond"], "bond is not on the Defaults tab, which Will asked for"
+    assert t["saysWhereBondLives"], (
+        "the bond row does not say the Markup page owns it, so this reads as a second home")
+    js = (FRONTEND / "js" / "library.js").read_text(encoding="utf-8", errors="replace")
+    assert "/api/markup/rules" in js, "the rate is not read from the markup service"
+    start = js.index("function renderDefaultTakeoff")
+    body = js[start:js.index("The Labor defaults", start)]
+    assert "data-" not in body.split("GLOBAL_MARKUP")[1].split("});")[0], (
+        "the bond row carries a control, which would make this page a second home for the rate")
+
+
+@needs_node
+def test_travel_shows_as_the_labor_default_it_already_was(ran):
+    """Hanz, 2026-09-16: "for labor we already have 1 default which is the travel so that should
+    reflect under labor."
+
+    IT IS NOT A NEW DEFAULT. Every new estimate is seeded with a Travel row and every older draft
+    gets one appended on migration, so the bid has behaved this way for months. What was missing
+    was anywhere to SEE it, which is what made it read as hardcoded rather than as a default
+    somebody chose.
+
+    Mutation: drop the tbody, and Travel has nowhere to render."""
+    c = ran["page"]["defaultsCategories"]
+    assert c["laborTable"], "the Labor category has no table for Travel to render into"
+    assert c["laborEmptyState"], (
+        "the Labor category has no empty state, so a future removal would leave a bare table head")
+
+
+def test_the_labor_default_is_read_from_the_estimate_not_retyped():
+    """THE WHOLE POINT OF THE WIRING, and the reason it is asserted at the source.
+
+    `travelSeed` carries its own warning: it was written out twice, and the two copies drifted
+    within a day. A third copy on THIS page would have drifted unseen — nothing here prices
+    anything, so a stale rate looks exactly like a fresh one and no total would ever disagree.
+
+    So the renderer must go through the shared module, and must not carry Travel's label or its
+    rate as literals of its own.
+
+    Mutation: replace `B.travelSeed()` with a typed-out row."""
+    js = (FRONTEND / "js" / "library.js").read_text(encoding="utf-8", errors="replace")
+    start = js.index("function renderDefaultLabor")
+    body = js[start:js.index("view switch", start)]
+    assert "B.travelSeed()" in body, (
+        "the Labor default is not read from the shared module")
+    assert '"Travel"' not in body and "33" not in body, (
+        "the renderer carries Travel's own label or rate as a literal, which is the copy that "
+        "drifts")
+    html = (FRONTEND / "library.html").read_text(encoding="utf-8", errors="replace")
+    assert "/js/polish-bid-core.js" in html, (
+        "the shared module is not loaded, so travelSeed is unreachable and the list renders empty")
+    core = (FRONTEND / "js" / "polish-bid-core.js").read_text(encoding="utf-8", errors="replace")
+    assert "travelSeed: travelSeed" in core, (
+        "travelSeed is no longer exported, so this page cannot reach it")
+
+
+@needs_node
+def test_the_new_tab_is_wired_to_its_pane_and_not_just_drawn():
+    """A button in the tab strip with no entry in PANES renders identically to a working one and
+    does nothing when pressed. That is the failure worth a test here, because nothing else on the
+    page would look wrong.
+
+    Asserted against the two structures that do the switching, both of which have to name it:
+    `PANES` drives the loop that hides every other pane, and `TAB_OF` maps the pane to its button.
+
+    Mutation: remove "defaults" from either one."""
+    js = (FRONTEND / "js" / "library.js").read_text(encoding="utf-8", errors="replace")
+    assert '"vendors", "defaults"' in js, (
+        "PANES does not list the defaults pane, so its tab switches nothing")
+    assert "defaults: \"tab-defaults\"" in js, (
+        "TAB_OF has no entry for the defaults tab, so showView would throw on it")
 
 
 @needs_node
@@ -1323,7 +1588,11 @@ def test_the_create_control_sits_in_the_container_it_adds_rows_to(ran):
     # card, which is the failure this page has form for. Moving a row must not change the count,
     # and neither may a COMMENT: quoting either attribute in full adds a phantom to it, which is
     # exactly what the note beside #asm-addrow now warns about because it happened writing it.
-    assert c["addRowCount"] == c["addBtnCount"] == 5, (
+    # SEVEN from 2026-09-16, not five: the Defaults tab's Takeoff and Labor categories each got
+    # one. The number is not the point -- the two counts AGREEING is. A wrapper without its button,
+    # or a button that escaped its wrapper, is how the create control ended up in the tab strip in
+    # the first place, which is what this whole test exists about.
+    assert c["addRowCount"] == c["addBtnCount"] == 7, (
         "the add rows disagree in number: %s wrappers, %s buttons"
         % (c["addRowCount"], c["addBtnCount"]))
 
@@ -1367,8 +1636,12 @@ def test_the_controls_are_drawn_glyphs_not_typed_emoji(ran):
     Read off the REAL rendered rows, so a glyph left behind in any one renderer fails."""
     ic = ran["icons"]
     assert ic["oldGlyphsGone"] and ic["noEmojiInRenderedRows"]
-    assert ic["glyphCount"] == 5, (
-        "expected favorite, duplicate, delete, list-delete and line-delete; found %s"
+    # FOUR, not five. The favourite star was pulled on 2026-09-16 -- Hanz is revising what
+    # "default" should mean, and a control nobody had settled the meaning of was better off
+    # the page than on it. The stored flag survives on both library rows, so nothing anyone
+    # had starred was lost; only the UI went.
+    assert ic["glyphCount"] == 4, (
+        "expected duplicate, delete, list-delete and line-delete; found %s"
         % ic["glyphCount"])
     assert ic["allAreLucideShaped"], (
         "a glyph does not match the house geometry: 24 box, no fill, currentColor, width 2, round")

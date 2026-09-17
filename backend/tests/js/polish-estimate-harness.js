@@ -776,9 +776,39 @@ const rendered = [];      // every string the page put on screen, for the Labour
       }),
       // The toggle lives in the header (before the fields grid starts), on Travel's own card
       // (card index 2, the auto-appended row) -- not the old inline hint link.
-      toggleInHeader: /class="labtoggle" data-lab-manual="2"/.test(
+      toggleInHeader: /class="mw-sw labsw" role="switch"[^>]*data-lab-manual="2"/.test(
         (panels.innerHTML.split('class="tk lab')[3] || "").split('class="tk-g')[0]),
       linkishGone: panels.innerHTML.indexOf("linkish") === -1,
+      // A SWITCH REPORTS ITS STATE, which is the whole reason this stopped being a button
+      // whose words flipped. Off while the figure is derived, on once it is typed --
+      // and the label stays the same sentence in both, so it describes what IS rather
+      // than what clicking would do.
+      // BOTH POSITIONS, because the fixture only ever renders one. Travel boots in AUTO, so
+      // a check that reads the page as-built inspects a single branch of the ternary --
+      // flipping the OTHER branch back to "Back to auto" then changes nothing any
+      // assertion can see. The manual state has to be entered before it can be asserted.
+      toggleSaysItsState: await (async () => {
+        const k = build();
+        await k.api.init();
+        k.api.go(1);
+        const kp = k.dom.get("panels");
+        const ti = k.api.model().labor.findIndex((r) => r.id === "travel");
+        const headOf = () => (kp.innerHTML.split('class="tk lab')[ti + 1] || "")
+          .split('class="tk-g')[0];
+        const offHead = headOf();                 // derived: switch off
+        clickOn(k, '[data-lab-manual="' + ti + '"]');
+        const onHead = headOf();                  // typed: switch on
+        const read = (h, want) => ({
+          checked: h.indexOf('aria-checked="' + want + '"') !== -1,
+          labelOnce: (h.match(/Type my own/g) || []).length,
+          backToAutoGone: h.indexOf("Back to auto") === -1,
+          hasTrack: h.indexOf('<span class="track">') !== -1,
+        });
+        return { off: read(offHead, "false"), on: read(onHead, "true") };
+      })(),
+      // Still a <button>: the `.mw-sw` conditions are spans with no keydown handler, so
+      // matching them visually must not cost this control its keyboard.
+      toggleIsAButton: /<button[^>]*class="mw-sw labsw"/.test(panels.innerHTML),
     };
 
     // ── the derived Guys figure, and the two ways across the auto/manual line ──
@@ -1291,6 +1321,143 @@ const rendered = [];      // every string the page put on screen, for the Labour
 
     // A draft that arrived WITH a worksheet map: recorded, not asserted on — the page adds none of
     // its own, and what Object.assign carries through from getState is reported for the record.
+  // ── a material row: one product, priced straight off the library ───────────────────────────
+  {
+    const m = build();
+    // BOOT FIRST. Without init() the library fetch never happens, ITEMS stays empty, and a
+    // material name resolves to nothing -- which reads exactly like a broken picker. The
+    // first version of this probe skipped it and spent its evidence blaming setMaterial.
+    await m.api.init();
+    m.api.go(0);
+    clickOn(m, "[data-add-mat]");
+    const idx = m.api.model().takeoff.length - 1;
+    const row = () => m.api.model().takeoff[idx];
+    const card = () => (m.dom.get("panels").innerHTML.split('class="tk mat"')[1] || "")
+      .split("</div></div>")[0];
+
+    const seeded = clone(row());
+    typeInto(m, '[data-tk="' + idx + '"][data-k="item_name"]', "Densifier");
+    typeInto(m, '[data-tk="' + idx + '"][data-k="measurement"]', "10000");
+    const pickedUnit = row().unit;                    // must stay SF, NOT the item's "Pail"
+    const afterPick = clone(row());
+
+    // THE MONEY, against library-core's own engine rather than a number typed into this file.
+    // Densifier: $100 a pail, 1,000 SF a pail, no waste, roundup on. 10,000 SF is 10 pails.
+    const expected = L.priceLine({ item_id: "i4" }, ITEMS, 10000);
+    // READ THE NODE, NOT THE MARKUP. `changed(false)` repaints through textContent on the
+    // cost element; the panel innerHTML captured at render time never moves, so a regex over
+    // it reports the figure from before the keystroke -- em dash forever, which reads as a
+    // row that will not price.
+    const costCell = () => txt(m, '[data-cost-for="' + idx + '"]');
+    const costWithLibraryCoverage = costCell();
+
+    // A COVERAGE TYPED ON THE ROW WINS over the item's default, which is the whole reason the box
+    // is there: the same product goes further in one system than another.
+    typeInto(m, '[data-tk="' + idx + '"][data-k="coverage"]', "500");
+    const expectedTyped = L.priceLine({ item_id: "i4", coverage: 500 }, ITEMS, 10000);
+    const costWithTypedCoverage = costCell();
+
+    out.materialRow = {
+      seeded: seeded,
+      isItemKind: seeded.kind === "item",
+      // The card, not the model: an assembly row and a material row must not look the same.
+      saysMaterial: /MATERIAL/.test(m.dom.get("panels").innerHTML),
+      hasCoverageField: /data-k="coverage"/.test(m.dom.get("panels").innerHTML),
+      resolvedId: afterPick.item_id,
+      // NO UNIT ADOPTION. An item's unit is what it is BOUGHT in (Pail), not how the floor is
+      // measured. Copying it onto the row would price a 10,000 SF area in pails.
+      unitStayedSF: pickedUnit === "SF",
+      costWithLibraryCoverage: costWithLibraryCoverage,
+      expectedLibraryCost: expected.cost,
+      costWithTypedCoverage: costWithTypedCoverage,
+      expectedTypedCost: expectedTyped.cost,
+      // An assembly row beside it is untouched and still an assembly row.
+      assemblyRowsUnchanged: m.api.model().takeoff.slice(0, idx)
+        .every((r) => !r.item_id && r.kind !== "item"),
+    };
+  }
+
+  // ── the three that moved here, and the two things nothing was pinning ──────────────────────
+  {
+    // 1. THE SWITCHES ARE ON THE TAKEOFF STEP. Nothing asserted this: wrapping the whole block in
+    //    `if (false)` -- deleting all three from the product -- left every test in this file green,
+    //    because they all probe the MODEL and the CELLS, which a deleted control still writes
+    //    correctly from its defaults. A feature nobody can see is not a feature.
+    const s = build();
+    s.api.go(0);                                         // the Takeoff step
+    // READS THE PANEL FRESH ON EVERY CALL, below. Closing over one innerHTML snapshot is the
+    // trap this repo already has a name for: the gate re-renders, and a closed-over string
+    // reports the markup from BEFORE it, so a broken gate reads as a working one. Caught by
+    // the probe disagreeing with itself -- joint filler off AND remove-existing not dimmed
+    // in the same read, which cannot both be true.
+    const sw = (key) => {
+      const m = new RegExp('<span class="mw-sw([^"]*)" data-cond="' + key + '"').exec(s.dom.get("panels").innerHTML);
+      return m ? { there: true, on: / on/.test(m[1]), inert: /inert/.test(m[1]) } : { there: false };
+    };
+    // 2. THE GATE. remove_existing_jf dims while joint filler is off -- its `needs` rule from the
+    //    intake form. Dimmed, NOT hidden and NOT disabled: it adds a fourth hand to a crew that is
+    //    not there, so it moves nothing, but its answer still has to reach Polish!F29 either way.
+    s.api.model().conditions.joint_filler = false;
+    s.api.go(0);
+    const gatedOff = sw("remove_existing_jf");
+    s.api.model().conditions.joint_filler = true;
+    s.api.go(0);
+    const gatedOn = (function () {
+      const m = /<span class="mw-sw([^"]*)" data-cond="remove_existing_jf"/.exec(
+        s.dom.get("panels").innerHTML);
+      return m ? { inert: /inert/.test(m[1]) } : { inert: null };
+    })();
+    out.movedToTakeoff = {
+      onTheTakeoffStep: { joint_filler: sw("joint_filler"), dye: sw("dye"),
+                          remove_existing_jf: sw("remove_existing_jf") },
+      gatedWhenJointFillerOff: gatedOff.inert,
+      ungatedWhenJointFillerOn: gatedOn.inert === false,
+      // Not on the Labor step, where they would read as priced labor.
+      // THE CONTAINER. Hanz: "at least make it a container the same as the assemblie". Three bare
+      // switches under a column of cards read as page furniture -- something that configures the
+      // list rather than something in it.
+      cards: (function () {
+        var h = s.dom.get("panels").innerHTML;
+        return {
+          count: (h.match(/class="tk cond/g) || []).length,
+          // The card must NOT claim a cost. An assembly row comes to a number; these come to a
+          // Yes/No that only Kyle's workbook reads, and printing "$0" beside one would be a
+          // figure, and would be wrong.
+          noCostBox: !/class="tk cond[^"]*"[\s\S]{0,600}?costbox/.test(h),
+          // It names the cell it sets, which is the only thing it actually does.
+          namesItsCell: /Polish!E29/.test(h) && /Polish!F29/.test(h) && /Polish!E25/.test(h),
+        };
+      })(),
+      notOnTheLaborStep: (function () {
+        const t = build(); t.api.go(1);
+        return !/data-cond="joint_filler"/.test(t.dom.get("panels").innerHTML);
+      })(),
+    };
+  }
+
+  {
+    // THE CELL WINS OVER THE MODEL, on this page as on intake. A draft whose blob never stated
+    // these keys -- every draft written before they were model keys -- must take the estimator's
+    // real answer out of cell_values rather than freshModel's default. Before the shared
+    // conditionsFromCells reader, this page read the model alone: it would have shown joint filler
+    // ON for a project where somebody turned it off, then written that Yes back over their No.
+    const h = build({ blob: blob({
+      polish_estimate: (function () { const m = clone(MODEL); delete m.conditions; return m; })(),
+      cell_values: { "Polish!E29": "No", "Polish!E25": "Yes", "Polish!F29": "Yes" },
+    }) });
+    out.hydratedFromCells = {
+      joint_filler: h.api.model().conditions.joint_filler,   // No  -> false, NOT freshModel's true
+      dye: h.api.model().conditions.dye,                     // Yes -> true
+      remove_existing_jf: h.api.model().conditions.remove_existing_jf,
+      // A BLANK IS NOT AN ANSWER: an absent cell leaves the model's value alone, because every
+      // save writes both literals and a blank therefore means nobody has answered yet.
+      blankLeavesTheDefault: (function () {
+        const k = build({ blob: blob({ cell_values: { "Polish!E29": "" } }) });
+        return k.api.model().conditions.joint_filler === true;
+      })(),
+    };
+  }
+
     const legacy = build({ blob: blob({ cell_values: { "Polish!D82": 41000 } }) });
     await legacy.api.init();
     typeInto(legacy, '[data-tk="0"][data-k="measurement"]', "9000");

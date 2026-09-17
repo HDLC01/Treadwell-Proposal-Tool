@@ -525,6 +525,108 @@ let sheets = [];
 let activeSheet = null;
 let sheetCache = {};  // name → fetched cell data
 
+// ─── A read that needs the TOKEN but not the PROFILE ─────────────────
+//
+// Fires as soon as auth.js has the Supabase session, which is BEFORE /api/me comes back and
+// so before `TWAuth.ready` settles. On this page that is worth a full round trip -- ~250ms
+// from Manila -- because the workbook list has nothing to learn from the profile.
+//
+// Nothing here relaxes the /api/default-notes 401 race (#124): that bug was a fetch with NO
+// token, and `tokenReady` is the promise that says a token exists. The rest of init() still
+// waits on `ready` before it touches the DOM, the state or the engine, which is what keeps a
+// REFUSED page silent -- showRefusal never settles `ready`, on purpose.
+function bootFetch(path) {
+  const p = (async () => {
+    try { if (window.TWAuth && window.TWAuth.tokenReady) await window.TWAuth.tokenReady; } catch {}
+    const r = await fetch(path, { headers: TW.authHeaders() });
+    return r.json();
+  })();
+  // A prefetch is fired well before anything awaits it, and on the paths where init() returns
+  // early nothing awaits it at all. Park a handler so a failure reaches the code that asked
+  // for it rather than the console as an unhandled rejection; `await p` still throws, because
+  // this attaches to p and discards the derived promise.
+  p.catch(() => {});
+  return p;
+}
+
+// ─── The four tabs the screen does not need in order to open ─────────
+//
+// init() used to fetch all sixteen worksheets before the grid was usable. Measured off the
+// shipped estimate_sheet_5.7.xlsx: that is 482 KB gzipped (6.4 MB of JSON to parse) across
+// sixteen requests, and proposals.wetreadwell.com speaks HTTP/1.1, so six connections per
+// host means THREE waves of round trips rather than two. These four are 72 KB of the gzip
+// and 910 KB of the JSON, and dropping them takes the wave count from three to two.
+//
+// ONLY FOUR, AND WHY EACH ONE QUALIFIES IS THE ENTIRE SAFETY ARGUMENT.
+//
+//  * NO FORMULA ANYWHERE REACHES THEM. Every cross-sheet reference in the workbook was
+//    mapped: 'Epoxy blank', 'Leveling', 'Specs+Dwgs+Addn' and 'Unit Layouts' are cited by
+//    nothing. A sheet the engine is never asked about is a sheet it does not need loaded.
+//    test_deferred_workbook_tabs.py re-derives that from the real file on every run, so the
+//    day Kyle adds the first reference the suite goes red instead of a bid going wrong.
+//  * NONE CARRIES A PRICED ROLE. roleFor() answers "other" for all four -- BASE_ROLE covers
+//    Epoxy, Polish, the five gyp variants and the two seal sheets -- so pricedTabs(),
+//    renderBidOptions() and updateTotalBarFromHF() never read them.
+//  * NONE CAN BE THE OPENING TAB. defaultBaseSheet() answers Epoxy, Polish or the gyp base.
+//
+// The other eleven were refused: the gyp variants, Seal, Seal (+Jnts), Takeoff, Stnd Alts and
+// validation are each either cited by a live formula or priced.
+//
+// 'Epoxy blank' and 'Leveling' ARE WRITTEN TO -- applyJobFlags, applyMarkupRates and
+// applyRemodelRateOverride all stamp cells on them at load. That is handled rather than
+// wished away: every one of those writers records its write in `cellValues` BEFORE it touches
+// the engine, and loadDeferredIntoEngine replays this sheet's own keys after the late
+// setSheetContent (which would otherwise wipe them). The downloaded .xlsx never depended on
+// the engine at all -- /api/generate fills from the saved draft's cell_values.
+const DEFERRABLE_TABS = new Set(["Epoxy blank", "Leveling", "Specs+Dwgs+Addn", "Unit Layouts"]);
+
+// Which of those four THIS draft may actually defer, and the one exception.
+//
+// A COPIED TAB IS REHYDRATED FROM ITS SOURCE'S CACHED GRID (`sheetCache[c.source]`, init step
+// 3b). Defer a sheet somebody has copied and that rehydrate finds no source, gives up on it as
+// an orphan, and leaves a tab on the bar with no worksheet behind it -- clicking it fetches
+// /api/sheet/Copy3, gets a 404, and paints "Failed to load Copy3" over a priced option. So a
+// source keeps its eager load however little else reads it.
+//
+// The copy BUTTON needs no such guard: it copies `activeSheet` (see the #copy-tab handler), so
+// its source is by definition a tab showSheet has already fetched.
+function deferrableNow() {
+  const sources = new Set((state.tab_copies || []).map((c) => c && c.source).filter(Boolean));
+  const out = new Set();
+  for (const name of DEFERRABLE_TABS) if (!sources.has(name)) out.add(name);
+  return out;
+}
+
+// The tabs THIS load actually deferred. Emptied one at a time, as each is opened.
+let deferredTabs = new Set();
+
+/** Put a tab that init() skipped into the formula engine, once, after showSheet fetched it.
+ *
+ *  `HF.loadSheet` calls setSheetContent, which REPLACES the sheet -- so anything written into
+ *  it while it was still empty is gone. applyJobFlags (Leveling!B6, Leveling!D6),
+ *  applyMarkupRates ('Epoxy blank'!B72/B73/B81) and applyRemodelRateOverride ('Epoxy blank'!B78,
+ *  Leveling!B77) all write while these tabs hold nothing. Each records its write in
+ *  `cellValues` first, so replaying this sheet's own keys puts all three back -- along with the
+ *  saved draft's own overrides, which is the same replay init() does for every sheet at once.
+ *
+ *  A no-op for every other tab, and that is the guard rather than an accident. A copy never
+ *  arrives here (it always has a cache, so showSheet's fetch branch is not taken), and a base
+ *  tab init() DID load must never be re-loaded: setSheetContent would throw away every edit the
+ *  estimator has typed since. */
+function loadDeferredIntoEngine(name) {
+  if (!deferredTabs.has(name)) return false;
+  deferredTabs.delete(name);
+  const data = sheetCache[name];
+  if (!data || !HF || !HF.ready) return false;
+  HF.loadSheet(name, data.cells);
+  for (const key in cellValues) {
+    const cut = key.indexOf("!");
+    if (cut <= 0 || key.slice(0, cut) !== name) continue;
+    HF.setCellValue(name, key.slice(cut + 1), cellValues[key]);
+  }
+  return true;
+}
+
 // ─── Worksheet tabs: rename + true copy ──────────────────────────────
 // The user can RENAME any worksheet tab and DUPLICATE one ("copy with all of
 // its contents"). To keep the many places that hardcode "Epoxy!"/"Polish!"
@@ -1219,21 +1321,33 @@ function deriveNotes(id) {
 }
 
 async function init() {
+  // 0a. THE WORKBOOK LIST, ON THE WIRE BEFORE THE PROFILE COMES BACK.
+  //
+  //     Both of these are auth-gated GETs that read nothing off the signed-in user, and both
+  //     used to sit behind `await TWAuth.ready` -- which settles only once /api/me has
+  //     answered, a round trip made AFTER the bearer token they need was already in hand.
+  //     bootFetch waits on TWAuth.tokenReady instead, so they overlap /api/me rather than
+  //     queue behind it. The await below is unchanged and still gates every write.
+  const _sheetsReady = bootFetch("/api/sheets");
+  // 0b. And the named expressions, which are AWAITED at step 2b and were FETCHED there too --
+  //     after `await /api/sheets`, although they depend on nothing that call returns. That is
+  //     a second full round trip serialised behind the first for no reason. Only REGISTERING
+  //     them needs the sheet ids, and that still happens at 2b where it always did.
+  const _namedReady = bootFetch("/api/named-expressions");
   // Wait for the Supabase session/token to be ready before any /api/* call —
   // every endpoint is auth-gated, so firing before the token is set 401s and
   // the grid shows "Failed to load …".
   try { if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready; } catch {}
-  // 0b. The markup rates an admin filed, fetched now and AWAITED at step 3d. Fired
+  // 0c. The markup rates an admin filed, fetched now and AWAITED at step 3d. Fired
   //     here rather than awaited here so it overlaps the sheet load instead of
   //     adding a round trip to a page that already makes four; it must be after the
   //     auth await because every /api/* response is gated and a 401 would price
   //     nothing. loadMarkupRules never rejects — a failure is "no rules", which
   //     leaves every rate cell exactly as Kyle's template has it.
   const _markupRulesReady = loadMarkupRules();
-  // 1. Tab bar + sheet list
+  // 1. Tab bar + sheet list — fired at 0a, landing here.
   try {
-    const res = await fetch("/api/sheets", { headers: TW.authHeaders() });
-    const j = await res.json();
+    const j = await _sheetsReady;
     sheets = j.sheets || [];
   } catch (err) {
     sheetGrid.textContent = "Could not load sheets: " + err;
@@ -1250,8 +1364,7 @@ async function init() {
   // 2b. Register the workbook's named expressions (e.g. AT_Clear_Satin_w_Grit)
   //    so formulas referencing them resolve instead of throwing #NAME?
   try {
-    const nameRes = await fetch("/api/named-expressions", { headers: TW.authHeaders() });
-    const nameData = await nameRes.json();
+    const nameData = await _namedReady;
     // HyperFormula rejects names shaped like a cell reference — letters then
     // only digits, e.g. "Glaze4" (used by the MACRO Flake / quartz systems).
     // Alias those to a valid form ("Glaze4" -> "Glaze_4") and remember the map
@@ -1290,11 +1403,15 @@ async function init() {
     console.warn("Failed to load named expressions:", err);
   }
 
-  // 3. Fetch + load all sheets into HF up front. This is a one-time
+  // 3. Fetch + load the sheets into HF up front. This is a one-time
   //    cost (~1-2 seconds) but lets formulas recompute live with no
   //    further server round-trips. Apply any saved cell_values overrides.
+  //
+  //    NOT ALL SIXTEEN — see DEFERRABLE_TABS for which four sit this out and the proof that
+  //    they can. They arrive through showSheet the first time somebody opens one.
   sheetGrid.textContent = "Loading workbook into formula engine…";
-  await Promise.all(sheets.map(async (name) => {
+  deferredTabs = deferrableNow();
+  await Promise.all(sheets.filter((name) => !deferredTabs.has(name)).map(async (name) => {
     try {
       const r = await fetch("/api/sheet/" + encodeURIComponent(name), { headers: TW.authHeaders() });
       const data = await r.json();
@@ -1646,15 +1763,42 @@ async function showSheet(name) {
     try {
       const r = await fetch("/api/sheet/" + encodeURIComponent(name), { headers: TW.authHeaders() });
       if (!r.ok) {
-        sheetGrid.textContent = "Failed to load " + name;
+        if (activeSheet === name) sheetGrid.textContent = "Failed to load " + name;
         return;
       }
       sheetCache[name] = await r.json();
+      // A tab init() deferred has nothing in the formula engine yet, and renderSheet paints
+      // its formula cells out of HF. Load it HERE, before the render, or the grid comes up
+      // holding blanks where the template has numbers. No-ops for every other tab.
+      loadDeferredIntoEngine(name);
     } catch (err) {
-      sheetGrid.textContent = "Failed to load " + name + ": " + err;
+      if (activeSheet === name) sheetGrid.textContent = "Failed to load " + name + ": " + err;
       return;
     }
   }
+  // STALENESS GUARD, AND IT DECIDES WHICH SHEET AN EDIT LANDS ON.
+  //
+  // activeSheet is set at the top of this function, but the fetch above is awaited -- so a
+  // second showSheet() can run to completion while the first is still on the wire. Without
+  // this line the slow one comes back and renderSheet paints ITS grid over the tab the
+  // estimator actually switched to, while the tab bar, the badge and activeSheet all still
+  // say the other one.
+  //
+  // That is not a cosmetic mismatch. Every structural op reads activeSheet: right-click
+  // "Delete row 55" on the grid in front of you and applyStructOp deletes row 55 from the
+  // OTHER sheet -- rekeying its cell values and lock overrides and persisting the result.
+  // Silent corruption of an estimator's priced tab.
+  //
+  // Latent until 2026-09-17, when deferring four worksheets made this branch reachable by
+  // clicking a tab: before that every tab was already cached and the await never ran. The
+  // window is the sheet fetch, measured at 425-925 ms on throttled 4G.
+  //
+  // IT GOES HERE, AFTER THE CACHE FILL AND THE ENGINE LOAD, not before them. Returning
+  // earlier would leave sheetCache[name] populated while loadDeferredIntoEngine never ran,
+  // and the NEXT showSheet(name) would skip this whole block as already-cached and paint a
+  // deferred tab with blanks where the template has numbers. The fetched work is kept; only
+  // the paint is dropped.
+  if (activeSheet !== name) return;
   renderSheet(sheetCache[name]);
 }
 

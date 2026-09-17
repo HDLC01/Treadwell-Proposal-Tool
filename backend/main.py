@@ -55,7 +55,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
@@ -123,6 +123,66 @@ app.add_middleware(
 
 
 # ─── Conditional-GET helper (ETag / 304) ──────────────────────────────
+def _json_fallback(o: Any) -> Any:
+    """What `json.dumps` should do with a value it has no encoder for.
+
+    `json.dumps` only reaches this for a LEAF it cannot serialize, so the whole
+    payload is never walked — which is the entire point of it replacing the
+    eager `jsonable_encoder` pass below.
+
+    Two layers, deliberately:
+
+      1. `jsonable_encoder` on the single offending value. It is FastAPI's own
+         table, so anything it used to convert on the way out still converts to
+         exactly the same JSON — a `datetime.timedelta`, the one openpyxl type
+         that can genuinely reach here, still becomes `total_seconds()` and not
+         a string. openpyxl hands back a timedelta for a duration-formatted
+         cell ([h]:mm), and no cell in today's template carries that format —
+         but Kyle edits the template, and a number format changed in Excel must
+         not be able to turn a rendered sheet into a 500.
+
+      2. `str(o)` if even that raises. This is STRICTLY safer than what shipped
+         before: the old eager encoder raised out of the handler, so an
+         unconvertible value anywhere in a grid took the whole sheet down. Now
+         the worst case is one cell rendering as its repr.
+
+    THE ONE PLACE THIS IS NOT A SUPERSET OF THE OLD BEHAVIOUR: dict KEYS.
+    `json.dumps` calls `default=` for values only; a key that is not
+    str/int/float/bool/None is a TypeError it never offers to anybody, while the
+    eager encoder used to stringify it on the way past. No payload served
+    through `_versioned_json` has such a key today — `row_heights` and
+    `col_widths` are keyed by row and column NUMBER, which `json.dumps` writes
+    as decimal strings exactly as the old path did, and all six endpoints are
+    asserted byte-identical in test_versioned_json_encoding.py. Worth knowing
+    before adding a payload keyed by anything stranger.
+    """
+    try:
+        return jsonable_encoder(o)
+    except Exception:  # noqa: BLE001 — a weird cell is never worth a 500
+        return str(o)
+
+
+class _CompactJSONResponse(JSONResponse):
+    """Starlette's JSONResponse plus `default=_json_fallback`.
+
+    Starlette's `render` hardcodes its `json.dumps` call, so the only way to add
+    a `default=` is to override it. Every other argument is copied verbatim from
+    the base class — same separators, same `ensure_ascii=False`, same
+    `allow_nan=False` — so the bytes are identical to what JSONResponse
+    produced, for every value that has an encoder.
+    """
+
+    def render(self, content: Any) -> bytes:
+        return json.dumps(
+            content,
+            ensure_ascii=False,
+            allow_nan=False,
+            indent=None,
+            separators=(",", ":"),
+            default=_json_fallback,
+        ).encode("utf-8")
+
+
 def _versioned_json(request: Request, payload: Any, *, version: str) -> Response:
     """Serve `payload` as JSON with an ETag derived from `version`, honoring
     `If-None-Match` so the browser revalidates cheaply (304, no body) instead
@@ -131,12 +191,43 @@ def _versioned_json(request: Request, payload: Any, *, version: str) -> Response
     `Cache-Control: no-cache` = the browser MAY cache but must revalidate every
     time. Because `version` embeds the source file's mtime, a deploy that
     changes the template/recipes changes the ETag and busts the cache safely.
+
+    NO `jsonable_encoder` HERE, AND THAT IS THE POINT. It used to wrap `payload`
+    on the way into the response, and on this payload it was a pure no-op that
+    cost more than the serialization it preceded: it rebuilt every dict and list
+    in a 1.2 MB Epoxy grid to hand `json.dumps` a structure that was already
+    JSON-native, because `_normalize_cell_value` in estimate_writer.py has
+    already turned openpyxl's dates into strings by the time a grid gets here.
+    Measured 2026-09-17 through the real ASGI stack, grids already cached: a
+    16-tab estimate-review load spent 385 ms of its 634 ms inside
+    `jsonable_encoder` — 61% of the request time, for byte-identical output
+    (asserted on all 16 tabs in test_versioned_json_encoding.py).
+
+    The safety it was providing is not lost, it is just paid lazily: see
+    `_json_fallback`, which is now the only thing that ever calls it.
+
+    THE WIN IS ON COLD LOADS ONLY. An `If-None-Match` hit returns two lines
+    above this, so the warm steady state — a browser revalidating tabs it
+    already holds — never reached the encoder in the first place. What got
+    faster is the first estimate-review after a deploy, and any tab a browser
+    has not cached yet.
+
+    NOT DONE ON PURPOSE: this does not gzip the body itself and cache the
+    result. gzip is not the expensive part (70 ms for all 16 tabs at level 9,
+    measured), so pre-compressing only wins anything if the compressed bytes are
+    cached — and a body cache needs a key. The obvious key, the ETag, is NOT
+    safe today: `/api/sheets` and `/api/named-expressions` both pass
+    `version=_template_version()`, so they already share an ETag. That is
+    harmless for HTTP, where an ETag means nothing outside its own URL, but a
+    server-side cache keyed on it would serve one endpoint's body from the
+    other. A cache here has to be keyed on (path, query, version), and that is
+    a bigger change than the measured ~170 ms it would buy.
     """
     etag = 'W/"' + hashlib.md5(version.encode()).hexdigest()[:16] + '"'
     headers = {"ETag": etag, "Cache-Control": "no-cache"}
     if etag in (request.headers.get("if-none-match") or ""):
         return Response(status_code=304, headers=headers)
-    return JSONResponse(content=jsonable_encoder(payload), headers=headers)
+    return _CompactJSONResponse(content=payload, headers=headers)
 
 
 def _template_version() -> str:
@@ -2681,7 +2772,10 @@ def api_admin_proposal_pdf(draft_id: str, request: Request,
     # not 500 the render the portal waits on; now the letter is page 1 of the proposal, and a
     # customer whose PDF quietly lost the page the estimator approved is the worse of the two
     # failures. Builds it, and refuses loudly if it cannot.
-    out = _generate(GenerateIn(**pp), request, persist=False)
+    # want_estimate=False — the next line reads the DOCX token and this handler never touches the
+    # workbook. Building one cost the customer ~3.2s of the ~3.5s they spent on a spinner, to
+    # produce a file cached under a token that was never requested and expired unread.
+    out = _generate(GenerateIn(**pp), request, persist=False, want_estimate=False)
     tok = (out.docx_download_url or "").rsplit("/", 1)[-1]
     entry = _FILE_CACHE.get(tok)
     if not entry:
@@ -4426,6 +4520,38 @@ def api_proposal_template(request: Request, work_type: str = "epoxy", audience: 
     if not template_path.exists():
         raise HTTPException(404, f"Proposal template not found: {template_path.name}")
 
+    # ── Cache/ETag key ────────────────────────────────────────────────────
+    # This string is the ONE input to both the ETag and the block cache, so the
+    # two can never disagree about what "unchanged" means. That matters more
+    # than the speed: `_apply_paragraph_overrides` resolves an override back
+    # onto the template BY POSITION (the id is `iter_editable_blocks`'s walk
+    # index), so serving blocks from a stale template would land an
+    # estimator's edits on the wrong paragraphs or drop them silently.
+    #   * `_template_proposal_version` is the .docx mtime_ns — a re-annotated
+    #     or redeployed template changes it, and the cache misses.
+    #   * `_BLOCK_SCHEMA_VERSION` covers a change to the block SHAPE in code.
+    #   * work_type/audience are included even though they only select the
+    #     file, because the payload echoes them back.
+    # Read once, not twice: two `stat()` calls could straddle a template
+    # rewrite and produce a payload whose `template_version` disagrees with
+    # its own ETag — exactly the mismatch the frontend uses to decide an id
+    # set is stale.
+    tver = _template_proposal_version(template_path)
+    version = f"{work_type}:{audience}:{tver}:s{_BLOCK_SCHEMA_VERSION}"
+    etag = _etag_of(version)
+    headers = {"ETag": etag, "Cache-Control": "no-cache"}
+    # Answer the revalidation BEFORE opening the .docx. This endpoint used to
+    # re-parse the template and rebuild all ~172 blocks and then send no body:
+    # 109 ms of CPU per 304 on a warm process, 84-99 ms on the other Direct
+    # templates (measured at the handler, medians of 4 alternating A/B rounds).
+    if etag in (request.headers.get("if-none-match") or ""):
+        return Response(status_code=304, headers=headers)
+
+    with _PROPOSAL_TEMPLATE_LOCK:
+        cached = _PROPOSAL_TEMPLATE_CACHE.get(version)
+    if cached is not None:
+        return Response(content=cached, media_type="application/json", headers=headers)
+
     d = docx.Document(str(template_path))
     # Original templates differ on whether the value after a WORK label colon
     # inherits bold. Normalize preview metadata to the generated DOCX.
@@ -4475,12 +4601,19 @@ def api_proposal_template(request: Request, work_type: str = "epoxy", audience: 
         "work_type": work_type,
         "audience": audience,
         "template_name": template_path.name,
-        "template_version": _template_proposal_version(template_path),
+        "template_version": tver,
         "geometry": proposal_writer.template_geometry(d),
         "blocks": blocks,
     }
-    return _versioned_json(request, payload,
-                           version=f"{work_type}:{audience}:{payload['template_version']}:s{_BLOCK_SCHEMA_VERSION}")
+    # Built through JSONResponse so the cached bytes ARE the bytes this
+    # endpoint has always sent — same encoder, same separators, same
+    # content-type — and a cache hit is byte-identical to a miss by
+    # construction rather than by resemblance. Bytes are immutable, so no
+    # caller can mutate a later response by editing an earlier one.
+    body = JSONResponse(content=jsonable_encoder(payload)).body
+    with _PROPOSAL_TEMPLATE_LOCK:
+        _PROPOSAL_TEMPLATE_CACHE[version] = body
+    return Response(content=body, media_type="application/json", headers=headers)
 
 
 # Media (letterhead artwork) served straight out of the template package.
@@ -4507,6 +4640,16 @@ def api_proposal_template_media(request: Request, work_type: str = "epoxy",
     template_path = proposal_writer.pick_template(work_type, audience or None)
     if not template_path.exists():
         raise HTTPException(404, f"Proposal template not found: {template_path.name}")
+    version = f"{work_type}:{audience}:{name}:{_template_proposal_version(template_path)}"
+    etag = _etag_of(version)
+    headers = {"ETag": etag, "Cache-Control": "no-cache"}
+    # Before the unzip, not after: the old order inflated a ~90 KB PNG out of
+    # the package and then threw it away on every revalidation. The name is
+    # already inside `version`, so a client can only be holding a matching tag
+    # for a name this package actually served — an unknown name has no tag to
+    # match and still falls through to the 404 below.
+    if etag in (request.headers.get("if-none-match") or ""):
+        return Response(status_code=304, headers=headers)
     try:
         with zipfile.ZipFile(str(template_path)) as z:
             allowed = {n.rsplit("/", 1)[-1]: n for n in z.namelist()
@@ -4519,11 +4662,6 @@ def api_proposal_template_media(request: Request, work_type: str = "epoxy",
         raise HTTPException(500, "Template package is unreadable.") from exc
     ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
     ctype = _MEDIA_CONTENT_TYPES.get(ext, "application/octet-stream")
-    version = f"{work_type}:{audience}:{name}:{_template_proposal_version(template_path)}"
-    etag = 'W/"' + hashlib.md5(version.encode()).hexdigest()[:16] + '"'
-    headers = {"ETag": etag, "Cache-Control": "no-cache"}
-    if etag in (request.headers.get("if-none-match") or ""):
-        return Response(status_code=304, headers=headers)
     return Response(content=data, media_type=ctype, headers=headers)
 
 
@@ -4555,6 +4693,35 @@ def _template_proposal_version(path: Path) -> str:
         return str(path.stat().st_mtime_ns)
     except OSError:
         return "0"
+
+
+def _etag_of(version: str) -> str:
+    """The weak ETag for a cache-version string — the SAME formula
+    `_versioned_json` uses, so an endpoint that serves a pre-serialized body
+    still revalidates against the identical tag. (Kept as its own function
+    rather than folded into `_versioned_json`: `api_proposal_template` needs the
+    tag before it has a payload to hand that helper. `test_proposal_template_cache`
+    pins the two to each other so they cannot drift.)"""
+    return 'W/"' + hashlib.md5(version.encode()).hexdigest()[:16] + '"'
+
+
+# Parsed-and-serialized /api/proposal-template responses, keyed on the SAME
+# string the ETag is derived from (see the endpoint). Rebuilding the block
+# list costs 84-118 ms of CPU per request depending on the template, and the
+# templates only change on a deploy — so this is the whole server cost of a
+# Proposal Review load after the first.
+#
+# Bounded: `work_type` comes off the query string and `pick_template` FALLS
+# BACK rather than raising, so every unmapped spelling would otherwise mint a
+# fresh ~106 KB entry holding the Direct Epoxy body. There are 11 real
+# (work_type, audience) pairs; 16 holds them all and evicts the junk.
+_PROPOSAL_TEMPLATE_CACHE: cachetools.LRUCache = cachetools.LRUCache(maxsize=16)
+# cachetools caches are documented as NOT thread-safe, and FastAPI runs a sync
+# endpoint in a threadpool — two concurrent Proposal Review loads really can
+# touch this at the same moment. The lock covers only the dict bookkeeping, never
+# the ~100 ms build, so a miss still parses in parallel; the loser just stores a
+# second identical body.
+_PROPOSAL_TEMPLATE_LOCK = threading.Lock()
 
 
 def _cover_letter_template_version(work_type: str, audience: Optional[str]) -> str:
@@ -4671,7 +4838,8 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
 
 
 def _generate(payload: GenerateIn, request: Request, *,
-              persist: bool = True) -> GenerateOut:
+              persist: bool = True,
+              want_estimate: bool = True) -> GenerateOut:
     """Final generate: fill xlsx + docx, return download links (xlsx / docx /
     on-demand pdf). The estimator downloads + files them manually.
 
@@ -4680,6 +4848,21 @@ def _generate(payload: GenerateIn, request: Request, *,
     moment; writing its values back would push that moment over the live draft (an old revision's
     replay is literally time travel). Only a browser POST, which carries the current state,
     persists.
+
+    `want_estimate=False` SKIPS THE .xlsx ENTIRELY, and exactly one caller passes it: the
+    customer's on-demand PDF at /api/admin/proposal-pdf, which reads `docx_download_url` and
+    nothing else. It was filling a 653 KB workbook, caching it under a token nobody would ever
+    request, and throwing it away — about 3.2 s of the ~3.5 s a customer spent staring at a
+    spinner. The other two persist=False callers genuinely need the file: the revision download
+    RETURNS the xlsx link, and To-Dropbox uploads the xlsx by name.
+
+    DO NOT READ THIS AS THE `want_cover_letter` FLAG COMING BACK. That one changed the DOCUMENT —
+    a customer received a proposal whose first page was missing, and could not tell. This changes
+    no document at all: the .docx and the PDF rendered from it are byte-for-byte what they were,
+    and `totals` comes off `payload.computed_bid`, never off the workbook. The only difference is
+    an artefact nobody asked for is not built. A caller that DOES need the xlsx and passes False
+    gets an empty `xlsx_download_url`, which its own `_FILE_CACHE.get` already turns into a
+    refusal rather than a wrong file.
 
     THERE IS NO LONGER A WAY TO ASK FOR THE PROPOSAL WITHOUT THE LETTER, and that is the point.
     Three callers used to pass `want_cover_letter=False` — the customer PDF, a revision's file
@@ -5065,22 +5248,25 @@ def _generate(payload: GenerateIn, request: Request, *,
     if _ppo:
         values["_phase_price_override"] = _ppo
 
-    # Fill estimate workbook
-    try:
-        xlsx_bytes = estimate_writer.fill_estimate(
-            values,
-            cell_values=payload.cell_values,
-            extras=payload.extras,
-            alternate=alternate_arg,
-            tab_copies=payload.tab_copies,
-            tab_labels=payload.tab_labels,
-            tab_order=payload.tab_order,
-            tab_structs=payload.tab_structs,
-            lock_overrides=payload.lock_overrides,
-        )
-    except Exception as exc:
-        log.exception("Estimate fill failed")
-        raise HTTPException(500, "Failed to generate the estimate. Please try again.") from exc
+    # Fill estimate workbook — unless the caller has said it will not read it. See the
+    # `want_estimate` paragraph in this function's docstring for why exactly one caller does.
+    xlsx_bytes: Optional[bytes] = None
+    if want_estimate:
+        try:
+            xlsx_bytes = estimate_writer.fill_estimate(
+                values,
+                cell_values=payload.cell_values,
+                extras=payload.extras,
+                alternate=alternate_arg,
+                tab_copies=payload.tab_copies,
+                tab_labels=payload.tab_labels,
+                tab_order=payload.tab_order,
+                tab_structs=payload.tab_structs,
+                lock_overrides=payload.lock_overrides,
+            )
+        except Exception as exc:
+            log.exception("Estimate fill failed")
+            raise HTTPException(500, "Failed to generate the estimate. Please try again.") from exc
 
     # Version guard for the document editor's paragraph_overrides. Their ids are
     # positions in iter_editable_blocks over a SPECIFIC template file; a re-annotation
@@ -5253,7 +5439,10 @@ def _generate(payload: GenerateIn, request: Request, *,
     # The docx token doubles as the PDF source: /api/file/{docx_token}/pdf renders
     # it on demand via LibreOffice.
     safe_name = (project_name or "proposal").replace(" ", "_")[:80]
-    xlsx_token = _cache_file(
+    # No workbook was built, so there is nothing to hand a token to. Caching b"" under a real
+    # token would be worse than an empty string: the caller's `_FILE_CACHE.get` would SUCCEED and
+    # the estimator would download a zero-byte .xlsx named after their project.
+    xlsx_token = "" if xlsx_bytes is None else _cache_file(
         xlsx_bytes,
         f"{safe_name}_estimate.xlsx",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -5319,7 +5508,9 @@ def _generate(payload: GenerateIn, request: Request, *,
     return GenerateOut(
         work_type=payload.work_type,
         audience=payload.audience,
-        xlsx_download_url=f"/api/file/{xlsx_token}",
+        # Empty, not "/api/file/", when no workbook was built. A bare prefix would be a URL that
+        # looks real, 404s on click, and reads as a broken download rather than an absent one.
+        xlsx_download_url=f"/api/file/{xlsx_token}" if xlsx_token else "",
         docx_download_url=f"/api/file/{docx_token}",
         pdf_download_url=f"/api/file/{docx_token}/pdf",
         # Authoritative totals from the 5.7-recipe engine (computed on
@@ -5433,23 +5624,99 @@ def _start_basisboard_refresher() -> None:
         log.warning("Basisboard analytics refresher failed to start: %s", exc)
 
 
+# The three tabs a deploy used to warm, and still the three worth building
+# first. Epoxy is the default tab estimate-review opens on and the most
+# expensive grid in the workbook; Polish and the USG 1-8" gypsum tab are the
+# next two anyone actually lands on. Everything else in the workbook follows
+# them, in whatever order the template lists it — see _warm_sheet_cache.
+_WARM_FIRST: Tuple[str, ...] = ("Epoxy", "Polish", 'Gyp (USG 1-8")')
+
+
+def _warm_all_sheets() -> None:
+    """Build every grid in the estimate template into estimate_writer's cache.
+
+    A module-level function rather than a closure inside the startup hook below,
+    so a test can run the warm itself instead of racing a daemon thread it has
+    no handle on — the hook's job is to spawn it, and those are two claims worth
+    failing separately.
+
+    Nothing here raises. It runs on a thread nobody joins, so an exception would
+    be logged by the interpreter and lost; every failure mode has to end with
+    the request path still able to build the tab on demand, which it always can.
+    """
+    t0 = time.time()
+    try:
+        names = estimate_writer.list_sheet_names()
+    except Exception as exc:  # noqa: BLE001 — a warm cache is never worth a failed boot
+        log.warning("Sheet warm could not list the tabs: %s", exc)
+        return
+    # THE WARM STOPS AT THREE, AND THAT IS THE WHOLE MEMORY STORY.
+    #
+    # Warming all sixteen took the container's boot working set from 182.3 MB to 337.8 MB.
+    # Measured on the VPS on 2026-09-17: 1,967 MB total, 399 MB available, 1,591 MB ALREADY
+    # IN SWAP, eighteen containers, and no mem_limit on this service. estimate_writer's
+    # _SHEET_GRID_CACHE has no eviction, so a boot-time warm of every tab is a permanent
+    # floor, not a peak. We have taken production down on this box before.
+    #
+    # None of the speed came from here. The 206 ms -> 4 ms on /api/sheets and 809 ms -> 268 ms
+    # on sixteen grids are the jsonable_encoder fix and the name cache, both of which cost
+    # nothing. Warming the other thirteen only bought the FIRST request after a deploy, and it
+    # bought it with 156 MB this box does not have.
+    #
+    # So this stays at the three tabs a deploy has always warmed. The cache still fills as tabs
+    # are actually opened, exactly as it does today -- unbounded growth on use is pre-existing
+    # behaviour and is not what this change adds.
+    #
+    # list_sheet_names() above is still called and still wanted: it fills the name cache, which
+    # is the half of the /api/sheets win that has nothing to do with grids.
+    ordered = [n for n in _WARM_FIRST if n in names]
+    warmed = 0
+    for name in ordered:
+        try:
+            estimate_writer.read_sheet_grid(name)  # populates _SHEET_GRID_CACHE
+            warmed += 1
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Sheet warm failed for %s: %s", name, exc)
+    log.info("Warmed sheet cache: %d/%d tabs in %.1fs",
+             warmed, len(ordered), time.time() - t0)
+
+
 @app.on_event("startup")
 def _warm_sheet_cache() -> None:
-    """Pre-build + cache the heavy grids in a background thread so the first
-    real user after a deploy doesn't pay the ~7 s cold serialization cost.
+    """Pre-build + cache EVERY grid in a background thread so the first real
+    user after a deploy doesn't pay the cold build cost.
     Runs off-thread so it never blocks startup / the health check.
+
+    IT USED TO WARM THREE TABS OF SIXTEEN, and the other thirteen were the
+    problem. Measured 2026-09-17 on the dev box, cold process: building all
+    sixteen grids costs 7,469 ms, of which the warmed three are 3,872 ms (Epoxy
+    alone is 3,134 of that) — so the first estimate-review after every deploy
+    still spent ~3.6 s building grids for tabs nobody had touched yet, and it
+    spent it inside the estimator's request rather than in the seconds after the
+    container came up. The tab bar lists all sixteen, so "the tabs people use"
+    was never a useful filter: the page fetches whichever one gets clicked, and
+    the unwarmed ones were exactly the slow ones.
+
+    Priority order, not template order. A grid built on a background thread is
+    only a win if it lands before someone asks for it, and somebody opening
+    estimate-review fifteen seconds after a deploy is going to ask for Epoxy.
+    _WARM_FIRST goes first; the rest follow in whatever order the workbook
+    lists them.
+
+    The `list_sheet_names()` that opens _warm_all_sheets does double duty: the
+    warm loop needs the names, and calling it fills estimate_writer's name
+    cache, so the `/api/sheets` that gates the whole page is already answered
+    from memory by the time a browser asks. That is the head-of-line request —
+    no grid is fetched until the tab bar renders — so warming it is worth more
+    than its 236 bytes suggest.
+
+    STILL DOES NOT BLOCK STARTUP, which is the constraint that matters on a box
+    running thirteen containers: this is a daemon thread, /healthz answers
+    immediately, and nothing waits on the result. A tab that fails to build is
+    logged and skipped — the request path rebuilds it on demand, exactly as it
+    did before any of this existed.
     """
-    import threading
-
-    def _warm() -> None:
-        for name in ("Epoxy", "Polish", 'Gyp (USG 1-8")'):
-            try:
-                estimate_writer.read_sheet_grid(name)  # populates _SHEET_GRID_CACHE
-                log.info("Warmed sheet cache: %s", name)
-            except Exception as exc:  # noqa: BLE001
-                log.warning("Sheet warm failed for %s: %s", name, exc)
-
-    threading.Thread(target=_warm, daemon=True).start()
+    threading.Thread(target=_warm_all_sheets, daemon=True).start()
 
 
 @app.put("/api/draft/{draft_id}")
@@ -6779,11 +7046,12 @@ def api_lead_create_estimate(message_id: str, request: Request) -> Dict[str, Any
 # Serve the 4 HTML pages from ../frontend. Mount AFTER the API routes
 # so /api/* takes precedence.
 #
-# We intentionally disable HTTP caching on the static files because this
-# tool is iterating frequently (filename fixes, layout tweaks). A
-# browser sitting on a stale done.html would miss the fetch+Blob
-# downloader and downloads would still come down with UUID names —
-# don't make users hard-refresh every time.
+# Every static file is revalidated with us on EVERY request, because this tool
+# iterates frequently (filename fixes, layout tweaks) and a browser sitting on a
+# stale done.html would miss the fetch+Blob downloader and downloads would still
+# come down with UUID names — don't make users hard-refresh every time. See
+# NoCacheStaticFiles below for how that guarantee is kept without re-sending a
+# file that has not changed.
 # Frontend dir — handle BOTH layouts:
 #   local dev:  backend/main.py + frontend/  → parent.parent/frontend
 #   Docker:     /app/main.py   + /app/frontend/ → parent/frontend
@@ -6798,24 +7066,78 @@ FRONTEND_DIR = next(
 
 
 class NoCacheStaticFiles(StaticFiles):
-    """Serve static files with `Cache-Control: no-store, must-revalidate`
-    so the browser always re-fetches HTML/JS/CSS during dev + early
-    production. Cheap because the files are tiny."""
+    """Serve the frontend with `Cache-Control: no-cache, must-revalidate`: the browser
+    asks us about EVERY file on EVERY request, and only re-downloads the ones that
+    actually changed.
 
-    def is_not_modified(self, response_headers, request_headers) -> bool:
-        # Disable If-Modified-Since / ETag short-circuit
-        return False
+    THE GUARANTEE THIS CLASS EXISTS FOR IS UNCHANGED. It was written because a browser
+    sitting on a stale done.html missed the fetch+Blob downloader and proposals came
+    down named after their UUID. The tool still ships several times a day, so a
+    deployed file has to reach the estimator on their next page load — not on their
+    next hard refresh. That is still exactly what happens here.
+
+    WHY `no-cache` IS NOT `no-store`, AND WHY THE NAME IS MISLEADING. `no-cache` does
+    not mean "do not cache"; it means "you may store this, but you MUST ask the origin
+    before you reuse it, every single time". So the freshness rule above holds
+    unchanged: the browser still comes to us for done.html on every load, and if the
+    file moved it gets the new body. The only thing that changes is our answer when it
+    did NOT move — `304 Not Modified` with no body, instead of the whole file again.
+    `no-store` forbade the storing, so there was never a copy to validate against and
+    every reply had to be a full 200. That cost the boot chain shared by all ~23 pages
+    (/js/icons.js, /auth.js, /shared.js, /styles.css — 211 KB raw, ~69 KB gzipped) a
+    complete re-transfer on every one of the four wizard steps.
+
+    THE VALIDATOR IS WHAT MAKES IT SAFE, so be explicit about it. Starlette's
+    FileResponse sets `ETag: md5(st_mtime-st_size)` from the file on disk. A deploy is
+    `git pull` + `docker compose up -d --build`; git rewrites the mtime of every file
+    it changes and Docker's COPY carries that mtime into the image. A changed file
+    therefore gets a new ETag, `is_not_modified()` says no, and the browser is sent a
+    200 with the new bytes on its very next request. Staleness would need a changed
+    file whose mtime AND size both survived the deploy unchanged, which the pull
+    itself rules out.
+
+    `is_not_modified` is deliberately NOT overridden here any more. The override this
+    replaced returned False unconditionally, which killed the 304 at its source: the
+    browser dutifully sent `If-None-Match`, and we ignored it and shipped the full
+    body regardless. Re-adding it would silently undo this whole change while every
+    header below still read correctly — which is why
+    tests/test_static_asset_caching.py asserts the 304 and not just the header.
+
+    `must-revalidate` stays, and it is not the redundancy it looks like next to
+    `no-cache`: `no-cache` governs the ordinary path, `must-revalidate` additionally
+    forbids falling back to the stored copy when the revalidation itself FAILS —
+    offline, or a 5xx from us mid-deploy. Serving a stale page when we are unreachable
+    is precisely the failure this class was written for, so it keeps its braces.
+
+    `Pragma: no-cache` and `Expires: 0` are gone. Neither says anything to a cache that
+    understands `Cache-Control`: `Expires` is ignored whenever `Cache-Control` is
+    present, and `Pragma` has no defined meaning in a RESPONSE at all (RFC 9111 makes
+    it a request directive). The only listener left for them is an HTTP/1.0-era cache,
+    and to that cache `Expires: 0` reads "never reuse this" — making it the one header
+    whose sole remaining effect could be to defeat the conditional GET this change is
+    for. They were belt-and-braces for `no-store`; under `no-cache` they are two
+    headers on every asset response that can only subtract.
+    """
 
     async def get_response(self, path, scope):
         resp = await super().get_response(path, scope)
-        resp.headers["Cache-Control"] = "no-store, must-revalidate, max-age=0"
-        resp.headers["Pragma"] = "no-cache"
-        resp.headers["Expires"] = "0"
+        resp.headers["Cache-Control"] = "no-cache, must-revalidate"
         return resp
 
 
+# The static mount, held on a module global so `_root` can serve a page THROUGH it
+# rather than beside it. Assigned at the bottom of this file, read at request time.
+#
+# `_root` could just FileResponse the file, and that is what the ?new branch does — but
+# FileResponse alone answers every conditional GET with the whole body: Starlette puts the
+# ETag on the response and leaves the If-None-Match comparison to StaticFiles. Going
+# through the mount gets that comparison, and NoCacheStaticFiles' Cache-Control with it,
+# so the bare domain answers exactly as /portal.html does instead of nearly.
+_frontend_files: Optional[StaticFiles] = None
+
+
 @app.get("/", include_in_schema=False)
-def _root(request: Request) -> Response:
+async def _root(request: Request) -> Response:
     """Home is Active Projects. The intake ("New Project") screen is served only when a
     project is explicitly being created (?new) or edited (?edit) — so hitting the bare
     domain, or an old ?d=… link left in browser history, lands on a board instead of a
@@ -6829,24 +7151,42 @@ def _root(request: Request) -> Response:
     moved in the same commit, because two places deciding one landing page is how they end
     up disagreeing.
 
-    THE ?new / ?edit BRANCH IS LOAD-BEARING and must stay above the redirect. Both the
-    Database and the board's + New button navigate to `/?new=1`; redirecting that would
-    bounce somebody straight back to a board instead of the intake form, and there would be
-    no way to start a proposal at all."""
+    THE ?new / ?edit BRANCH IS LOAD-BEARING and must stay above everything else. Both the
+    Database and the board's + New button navigate to `/?new=1`; serving the board for that
+    would bounce somebody straight back to a board instead of the intake form, and there
+    would be no way to start a proposal at all.
+
+    IT SERVES THE BOARD'S BYTES; IT USED TO 307 TO /portal.html. The redirect was a round
+    trip that bought nothing and could never be cached — a 307 with no Cache-Control is
+    revalidated every single time — so every visit to the bare domain, which is how staff
+    open this app, paid a full request before the first byte of the page moved. Now the
+    board comes back on the first request.
+
+    THE PATHNAME IS THE TRAP, and the page closes it, not this function. `auth.js`
+    reads `location.pathname` three times: HOME_PAGE comparisons, the DENIED_PAGES
+    permission lookup, and the sidebar's active-row test in navItem(), which is an
+    `endsWith(href)` against "/portal.html". After a 307 the browser's pathname WAS
+    "/portal.html"; served here it would be "/", and the Active Projects row would quietly
+    stop being highlighted while nothing looked broken enough to investigate.
+    frontend/js/root-path.js rewrites the address bar, and portal.html loads it ahead of
+    auth.js, so every one of those reads sees exactly the string it saw before. Its header
+    explains the rest: why the query string is deliberately dropped (the 307 dropped it too,
+    and shared.js would otherwise adopt a stale `?d=`), and why it is a separate file that
+    only this page loads rather than an inline tag or a line in auth.js.
+    """
     q = request.query_params
     if "new" in q or "edit" in q:
         return FileResponse(
             str(FRONTEND_DIR / "index.html"),
             headers={"Cache-Control": "no-store, must-revalidate, max-age=0"},
         )
-    return RedirectResponse(url="/portal.html", status_code=307)
+    if _frontend_files is None:                 # no frontend dir (API-only deployment)
+        raise HTTPException(404, "Frontend not available")
+    return await _frontend_files.get_response("portal.html", request.scope)
 
 
 if FRONTEND_DIR.exists():
-    app.mount(
-        "/",
-        NoCacheStaticFiles(directory=str(FRONTEND_DIR), html=True),
-        name="frontend",
-    )
+    _frontend_files = NoCacheStaticFiles(directory=str(FRONTEND_DIR), html=True)
+    app.mount("/", _frontend_files, name="frontend")
 else:
     log.warning("Frontend dir not found at %s", FRONTEND_DIR)
