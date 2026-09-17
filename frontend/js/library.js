@@ -1996,33 +1996,55 @@
 
   var DEFAULT_Q = "";
   var DEFAULT_MAX = 8;
+  // BROWSE MODE. The search answers "I know what it is called"; this answers "show me what
+  // there is". Sitting down to set the defaults up is the second one, and an empty query
+  // returning nothing made the Add button below the list have nothing to open.
+  var DEFAULT_BROWSE = false;
 
   function defaultCandidates() {
     var q = DEFAULT_Q.trim().toLowerCase();
-    if (!q) return { rows: [], more: 0 };
+    if (!q && !DEFAULT_BROWSE) return { rows: [], more: 0 };
     var hits = [];
     ASMS.forEach(function (a) {
-      if (!a.favorite && String(a.name || "").toLowerCase().indexOf(q) !== -1) {
+      if (!a.favorite && (!q || String(a.name || "").toLowerCase().indexOf(q) !== -1)) {
         hits.push({ kind: "assemblies", id: a.id, name: a.name, what: "Assembly" });
       }
     });
     ITEMS.forEach(function (it) {
-      if (!it.favorite && String(it.name || "").toLowerCase().indexOf(q) !== -1) {
+      if (!it.favorite && (!q || String(it.name || "").toLowerCase().indexOf(q) !== -1)) {
         hits.push({ kind: "items", id: it.id, name: it.name, what: "Material" });
       }
     });
     return { rows: hits.slice(0, DEFAULT_MAX), more: Math.max(0, hits.length - DEFAULT_MAX) };
   }
 
+  // NAMED, NOT INLINE IN THE LISTENERS, because this harness can only read a listener body
+  // and not run it -- its own doc says anything with a decision in it belongs in a function.
+  // Both of these have one: whether the results box opens at all.
+  function setDefaultQuery(value) {
+    DEFAULT_Q = value == null ? "" : String(value);
+    renderDefaultSearch();
+  }
+
+  function openDefaultBrowse() {
+    DEFAULT_BROWSE = true;
+    renderDefaultSearch();
+    var abox = $("default-q");
+    if (abox) abox.focus();
+  }
+
   function renderDefaultSearch() {
     var box = $("default-hits");
     if (!box) return;
     var res = defaultCandidates();
-    if (!DEFAULT_Q.trim()) { box.hidden = true; box.innerHTML = ""; return; }
+    if (!DEFAULT_Q.trim() && !DEFAULT_BROWSE) {
+      box.hidden = true; box.innerHTML = ""; return;
+    }
     box.hidden = false;
     if (!res.rows.length) {
-      box.innerHTML = '<p class="nores">Nothing left to add by that name. Anything already a ' +
-        "default is not offered twice.</p>";
+      box.innerHTML = '<p class="nores">' + (DEFAULT_Q.trim()
+        ? "Nothing left to add by that name. Anything already a default is not offered twice."
+        : "Every material and assembly in the library is already a default.") + "</p>";
       return;
     }
     box.innerHTML = res.rows.map(function (r) {
@@ -2282,6 +2304,18 @@
   $("bulk-add").addEventListener("click", bulkCommit);
 
   $("bulk-q").addEventListener("input", function () { BULK.q = this.value; bulkPaint(); });
+
+  // THE DEFAULTS TAB SEARCH. It shipped on 2026-09-17 with nothing bound to it: DEFAULT_Q
+  // was declared, read and reset, but never assigned, so the query could not become
+  // non-empty, defaultCandidates() took its early return every time and the results box
+  // stayed hidden forever. The tab that had just become the only way to set a default had
+  // no working way to set one. Typing also leaves browse mode on, so clearing the box
+  // returns you to the full list rather than to nothing.
+  if ($("default-q")) {
+    $("default-q").addEventListener("input", function () {
+      setDefaultQuery(this.value);
+    });
+  }
   // Escape in the search box clears it before it closes the dialog — the same two-stage behaviour
   // the Items tab's box has, so a typo does not cost you the whole selection.
   $("bulk-q").addEventListener("keydown", function (e) {
@@ -2819,6 +2853,18 @@
     // "all the default items in assemblies should be handled in default items in assemblies tab".
     // These three are what replaced it, and they had to land in the same change -- a tab that
     // lists defaults but cannot set them would have left no way to set one at all.
+    // THE ADD BUTTON UNDER EACH LIST. It shipped as markup with no handler on 2026-09-17,
+    // and the search box shipped with no input listener, so between them there was NO WAY
+    // LEFT to make a default -- the same change had just taken the switch off the item rows.
+    // Takeoff opens the list in browse mode, which is what the button is for: you do not
+    // have to already know the name. Labor is NOT wired, deliberately: renderDefaultLabor
+    // draws one built-in row out of travelSeed() and nothing anywhere stores a custom labor
+    // line, so a handler here could only pretend. That needs a place to put one first.
+    var addDef = t.closest && t.closest("[data-add-default]");
+    if (addDef) {
+      if (addDef.getAttribute("data-add-default") === "takeoff") openDefaultBrowse();
+      return;
+    }
     var addBtn = t.closest && t.closest("[data-def-add]");
     if (addBtn) {
       await setDefault(addBtn.getAttribute("data-def-add"),

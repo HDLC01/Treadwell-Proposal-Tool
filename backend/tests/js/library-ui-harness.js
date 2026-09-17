@@ -304,6 +304,18 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   // renderer no longer just prints names.
   ${fn("defaultRowActions")}
   ${fn("renderDefaultTakeoff")}
+  // THE ADD-A-DEFAULT PATH, lifted so it is EXECUTED. It shipped on 2026-09-17 as two
+  // buttons and a search box with nothing bound to any of them, and the only test over it
+  // regex-matched the markup for data-add-default="..." -- which the dead buttons satisfied
+  // perfectly. The declarations come from library.js rather than being restated here, so a
+  // renamed flag cannot pass as a working one.
+  ${grab(/^  var DEFAULT_Q = "";$/m, "the DEFAULT_Q declaration")}
+  ${grab(/^  var DEFAULT_MAX = \d+;$/m, "the DEFAULT_MAX declaration")}
+  ${grab(/^  var DEFAULT_BROWSE = false;$/m, "the DEFAULT_BROWSE declaration")}
+  ${fn("defaultCandidates")}
+  ${fn("renderDefaultSearch")}
+  ${fn("setDefaultQuery")}
+  ${fn("openDefaultBrowse")}
   ${fn("adminList")}
   ${fn("usageFor")}
   ${fn("singular")}
@@ -437,6 +449,9 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
            // The Defaults tab's Takeoff list, EXECUTED rather than read. GLOBAL_MARKUP is handed
            // in so a test can supply the Markup page's answer without a second fetch stub.
            renderDefaultTakeoff, takeoffConditionDefaults,
+           // THE ADD PATH, EXECUTED. A test that only read the markup could not tell a
+           // wired button from a dead one, and for two days could not.
+           defaultCandidates, renderDefaultSearch, setDefaultQuery, openDefaultBrowse,
            setGlobalMarkup: function (g) { GLOBAL_MARKUP = g; },
            snapshotOf: function (id) { return itemBefore[id]; } };
 `);
@@ -3373,6 +3388,32 @@ out.serverOwnedItemFields = build().api.SERVER_OWNED_ITEM_FIELDS;
     // The conditions, read from freshModel rather than typed here: joint filler ships ON.
     jointFillerYes: /Joint filler[\s\S]*?Polish!E29 = Yes/.test(h),
     dyeNo: /Dye[\s\S]*?Polish!E25 = No/.test(h),
+  };
+
+  // THE ADD PATH, DRIVEN. Every assertion here fails against the 2026-09-17 shipping code,
+  // where the button had no handler and DEFAULT_Q was never assigned: the box stayed hidden
+  // whatever you did, so a default could not be made at all once the row switch came off.
+  api.openDefaultBrowse();
+  const browse = d.nodes["default-hits"].innerHTML;
+  api.setDefaultQuery("Also");
+  const typed = d.nodes["default-hits"].innerHTML;
+  api.setDefaultQuery("");
+  const cleared = d.nodes["default-hits"].innerHTML;
+  out.defaultsAddPath = {
+    // BROWSE OFFERS THE LIBRARY WITHOUT BEING NAMED. This is the whole point of the
+    // button: the search needs you to know the name, and setting defaults up is when you
+    // do not. Only the rows that are NOT already defaults, or it would offer them twice.
+    browseOffersNonDefaults: /Not a default/.test(browse) && /Also not/.test(browse),
+    browseSkipsExistingDefaults: !/Polish 800/.test(browse) && !/Densifier/.test(browse),
+    browseRowsAreAddButtons: /data-def-add="items"/.test(browse) &&
+                             /data-def-add="assemblies"/.test(browse),
+    // TYPING STILL NARROWS. Browse must not have replaced the search.
+    typingFilters: /Also not/.test(typed) && !/Not a default/.test(typed),
+    // AND CLEARING GOES BACK TO THE LIST, not to nothing -- emptying the box mid-session
+    // used to leave you staring at a hidden panel with no way to reopen it.
+    clearingReturnsToBrowse: /Not a default/.test(cleared) && /Also not/.test(cleared),
+    // THE CARET LANDS IN THE BOX, so the button leads somewhere you can type.
+    focusesTheSearch: d.focused[d.focused.length - 1] === "default-q",
   };
 }
 
