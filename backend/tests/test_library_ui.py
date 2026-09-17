@@ -16,6 +16,7 @@ disagrees with the pricing engine.
 """
 import json
 import pathlib
+import re
 import shutil
 import subprocess
 
@@ -3097,3 +3098,110 @@ def test_the_work_type_tabs_narrow_the_defaults_without_hiding_what_was_already_
     assert w["gypLaborOnlyOnGyp"], "a gyp-only labor line is showing on other tabs"
     assert w["travelOnEveryTab"], (
         "Travel was filtered out; it is seeded into every bid whatever tab it sits on")
+
+
+# ── the Takeoff conditions stopped being "built in" ────────────────────
+@needs_node
+def test_the_takeoff_conditions_are_editable_and_say_no_such_thing_as_built_in(ran):
+    """Hanz, twice. First: "All line items and the default items in assemblies should be editable
+    please don't put in a hard coded or built in line items." Then, seeing the three conditions
+    still carrying the chip: "I told you to remove the built-in and keep and make everything
+    editable in the takeoff."
+
+    EXECUTED, not read. These assertions come off the RENDERED row, because a regex over the
+    renderer's source cannot tell a wired control from a dead one -- which is exactly how the
+    "+ Add a labor line" button shipped green on this same tab and Hanz had to report it twice.
+    The change itself is DRIVEN in the next test.
+
+    THE ANSWER IS EDITABLE; THE CELL IS NOT. Polish!E29 is a fact about the workbook Kyle
+    maintains. A second box pointing the joint-filler answer somewhere else would write a Yes/No
+    literal over one of his formulas, and nothing on any screen would say so -- so the cell is
+    printed beside the control rather than offered as an input.
+
+    Mutation: put `actions: '<span class="builtin">Built in</span>'` back on the Conditions group
+    and drop `conditionControl` from `how`."""
+    t = ran["defaultsTakeoffList"]
+    assert t["conditionsCarryAControl"], (
+        "the three Takeoff conditions render nothing to press, so they are still built in")
+    assert t["noBuiltInChip"], (
+        "a 'Built in' chip is still on the Takeoff defaults table")
+    assert t["saysWhichCellItWrites"], (
+        "the row no longer says which workbook cell the answer lands in")
+    assert t["cellIsNotAnInput"], (
+        "the workbook cell is offered as an editable field; re-pointing an answer would write a "
+        "Yes/No literal over one of Kyle's formulas")
+    # The shipped answers, read out of the REAL freshModel by the harness rather than typed into
+    # a fixture. A page that got these backwards would be telling an estimator the opposite of
+    # what their next bid does.
+    assert t["jointFillerOpensYes"], "joint filler ships ON and the control does not say so"
+    assert t["dyeOpensNo"], "dye ships off and the control does not say so"
+
+
+@needs_node
+def test_changing_a_condition_default_saves_it_and_a_refusal_puts_it_back(ran):
+    """DRIVEN THROUGH THE HANDLER the select's `change` calls, not asserted off the markup.
+
+    THE STORED ANSWER IS AN OVERRIDE OF THE SHIPPED ONE, merged through the ESTIMATE'S OWN
+    seedConditionDefaults rather than a second merge written on this page. Two merges is two
+    chances for the Library page to describe a bid it does not agree with, and a page claiming
+    joint filler ships off while every new bid opens with it on is worse than no page at all.
+
+    A REFUSED SAVE PUTS THE CONTROL BACK and says why, which is this page's standing rule for a
+    failed write: a switch that keeps the new value after the server said no tells an admin every
+    new bid now opens differently when it does not, and they would find that out from a bid.
+
+    Mutation: drop the `renderDefaultTakeoff()` from setConditionDefault's catch. The refused save
+    leaves the wrong answer on screen and `refusedSavePutsItBack` goes red."""
+    c = ran["conditionDefaults"]
+    assert c["storedOverrideWins"], (
+        "a stored 'off' for joint filler did not beat the shipped 'on', so the tab is showing an "
+        "answer no new bid actually opens with")
+    assert c["untouchedOnesKeepShipped"], (
+        "overriding one condition moved the two nobody touched")
+    assert c["startsFromShipped"] and c["pressFlipsTheRow"], (
+        "the change did not reach the rendered row; a handler that wrote the variable and forgot "
+        "to repaint looks identical until the next reload")
+    assert c["wroteTheServer"], (
+        "the press sent no write, or sent the wrong body -- a dead control renders exactly like a "
+        "live one")
+    assert c["keepsOneRowPerCondition"], (
+        "the press appended a second row for the same condition instead of replacing it")
+    assert c["refusedSavePutsItBack"], "a refused save left the new answer on screen"
+    assert c["refusedSaveSaysSo"], "a refused save said nothing"
+    assert c["refusedSaveDropsTheOptimisticRow"], (
+        "a refused save left its optimistic row in the page's list, so the next repaint shows an "
+        "answer the server never took")
+
+
+def test_the_condition_vocabulary_is_the_same_three_on_both_sides():
+    """ONE LIST OF KEYS, STATED IN THREE PLACES THAT MUST AGREE, and asserted at the source
+    because a mismatch is silent in the worst possible way: a condition filed under a key no
+    reader knows saves with a green tick, reaches nothing, and writes to no cell.
+
+      * `CONDITION_CELLS` in polish-bid-core.js decides which workbook cell each answer writes.
+      * `takeoffConditionDefaults()` in library.js is what the Defaults tab offers.
+      * `KEYS` in backend/condition_defaults.py is what the endpoint will accept.
+
+    Mutation: rename one key in condition_defaults.KEYS. The endpoint then 400s every save the
+    page makes for that condition, and nothing in the product would have said which of the three
+    files was wrong."""
+    js = (FRONTEND / "js" / "library.js").read_text(encoding="utf-8", errors="replace")
+    core = (FRONTEND / "js" / "polish-bid-core.js").read_text(encoding="utf-8", errors="replace")
+    py = (pathlib.Path(__file__).resolve().parents[1] / "condition_defaults.py").read_text(
+        encoding="utf-8", errors="replace")
+
+    page_keys = set(re.findall(r'\{ key: "([a-z_]+)"', js))
+    api_keys = set(re.findall(r'KEYS = \(([^)]*)\)', py)[0].replace('"', "").split(","))
+    api_keys = {k.strip() for k in api_keys if k.strip()}
+    assert page_keys == api_keys == {"joint_filler", "remove_existing_jf", "dye"}, (
+        "the Defaults tab and the endpoint no longer offer the same three conditions:\n"
+        " page: %r\n  api: %r" % (sorted(page_keys), sorted(api_keys)))
+    # …and every one of them is a key CONDITION_CELLS actually writes, or the answer reaches no
+    # cell in Kyle's workbook at all.
+    for key in sorted(api_keys):
+        assert re.search(r"^\s*%s:\s*\{ cells:" % key, core, re.M), (
+            "%s is offered as an editable default but CONDITION_CELLS does not write it, so the "
+            "answer reaches no cell in the workbook" % key)
+    # The seeder and its gate are both exported, or the estimate cannot read either.
+    assert "seedConditionDefaults: seedConditionDefaults" in core
+    assert "conditionsUnstated: conditionsUnstated" in core

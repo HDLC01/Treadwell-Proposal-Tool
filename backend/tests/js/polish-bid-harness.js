@@ -516,4 +516,126 @@ out.savedLaborIsUntouchable = {
     .map(function (r) { return r.id; })
 };
 
+// ── the condition defaults: the merge, the gate, and the bid that must not move ───────────────
+//
+// The three Takeoff conditions stopped being "built in" on 2026-09-18 (Hanz, twice). Their
+// answers for a NEW bid are editable on the Library page's Defaults tab and stored in
+// `condition_defaults`; freshModel() still states what the tool SHIPS, and a stored row is an
+// override of one key.
+//
+// EVERY LIBRARY ROW HERE DISAGREES WITH THE SHIPPED ANSWER, deliberately. joint filler ships ON
+// and this says off; dye and remove-existing ship off and this says on. A fixture that agreed
+// with freshModel could not tell a merge that works from one that does nothing at all.
+const COND_ROWS = [
+  { key: "joint_filler", on: false },
+  { key: "dye", on: true },
+  { key: "remove_existing_jf", on: true }
+];
+
+const condInput = P.freshModel().conditions;
+const condInputBefore = JSON.stringify(condInput);
+P.seedConditionDefaults(condInput, COND_ROWS);
+
+out.conditionDefaults = {
+  shipped: P.freshModel().conditions,
+  seeded: P.seedConditionDefaults(P.freshModel().conditions, COND_ROWS),
+  // The five conditions answered on Intake are not in the vocabulary and must come through
+  // untouched — the merge writes the three it was handed and nothing else.
+  intakeFiveUntouched: (function () {
+    const a = P.freshModel().conditions;
+    const b = P.seedConditionDefaults(a, COND_ROWS);
+    return ["local", "hard_bid", "prevailing_wage", "taxable", "remodel_tax", "bond"]
+      .every(function (k) { return a[k] === b[k]; });
+  })(),
+  // A NEW OBJECT. Seeding the conditions the page is holding must not rewrite the object it was
+  // handed — the same rule seedLibraryLabor follows for its array.
+  inputUntouched: JSON.stringify(condInput) === condInputBefore,
+  isANewObject: P.seedConditionDefaults(condInput, COND_ROWS) !== condInput,
+  // A KEY THE MODEL DOES NOT CARRY IS SKIPPED, not added. migrateModel whitelists condition keys
+  // against freshModel().conditions and DROPS every other one, so a key seeded here would look
+  // applied on screen and come back missing on the next load.
+  offVocabularyIgnored: (function () {
+    const m = P.seedConditionDefaults(P.freshModel().conditions,
+      [{ key: "reno", on: true }, { key: "made_up", on: true }]);
+    return !("reno" in m) && !("made_up" in m) &&
+      JSON.stringify(m) === JSON.stringify(P.freshModel().conditions);
+  })(),
+  // Nothing to apply, in every shape "nothing" arrives in — including a row with no key at all
+  // and a null in the list, which is what a half-written response looks like.
+  emptyList: P.seedConditionDefaults(P.freshModel().conditions, []),
+  missingList: P.seedConditionDefaults(P.freshModel().conditions, null),
+  rowsWithoutKeys: P.seedConditionDefaults(P.freshModel().conditions,
+    [{ on: true }, null, { key: "", on: true }])
+};
+
+// ── the gate: is there any saved work to protect? ─────────────────────────────────────────────
+//
+// conditionsUnstated is the ONLY thing standing between a Defaults-tab edit and an estimator's
+// saved answers, and it is STRICTER than laborUnstated on purpose. An empty `labor` array is a
+// shape a real model holds and genuinely means "no rows chosen"; `conditions` has no equivalent,
+// because migrateModel backfills every key from freshModel on the way out — so a saved v2 blob
+// that omitted `conditions` was still SHOWN an answer and its next save wrote that answer into
+// Kyle's workbook. Only "nothing saved whatsoever" is seedable.
+out.conditionsUnstated = [
+  { label: "nothing saved at all", saved: undefined },
+  { label: "null", saved: null },
+  { label: "an empty blob", saved: {} },
+  { label: "a v2 model that states no conditions", saved: { version: 2, labor: [] } },
+  { label: "a v2 model with conditions on it",
+    saved: { version: 2, conditions: { joint_filler: false } } },
+  { label: "a v1 draft, whose conditions predate these three", saved: V1 },
+  { label: "the beta intake's first save: conditions and no version",
+    saved: { conditions: { taxable: false } } },
+  { label: "a string", saved: "not a model" }
+].map(function (c) { return { label: c.label, unstated: P.conditionsUnstated(c.saved) }; });
+
+// ── AN EXISTING ESTIMATE'S ANSWERS ARE THE ESTIMATOR'S WORK ───────────────────────────────────
+//
+// Hanz's rule for this feature, verbatim: changing a default must not change any estimate that
+// already exists. Stated here as a round trip through the real migration.
+//
+// EVERY ONE OF THE THREE SAVED ANSWERS DISAGREES WITH THE LIBRARY ROW ABOVE, which is what makes
+// this non-vacuous: `wouldHaveChanged` applies the same rows to the same model and shows all
+// three moving. The library has answers that COULD have landed on this bid; the gate is what
+// stops them. Without that counterexample "nothing changed" would also pass against a library
+// that happened to agree, which proves nothing.
+//
+// joint_filler is the one that bites either way: it SHIPS on, so a bid where somebody
+// deliberately turned it off is exactly the bid a careless default would quietly turn back on —
+// and the downloaded workbook would then say Yes in Polish!E29.
+const SAVED_WITH_CONDITIONS = {
+  version: 2,
+  takeoff: [{ assembly_id: "a1", assembly_name: "Salt & Pepper polish", measurement: 9000,
+              unit: "SF" }],
+  labor: [
+    { id: "polishing", label: "Polishing", guys: 4, days: 6, rate: 33.0 },
+    { id: "mockup", label: "Mock-up", guys: 3, days: 0.5, rate: 33.0 },
+    { id: "jointfill", label: "Joint filler", guys: 2, days: 3, rate: 33.0 },
+    { id: "travel", label: "Travel", guys: 18, days: 2, rate: 33.0,
+      unit: "hours", guys_auto: true }
+  ],
+  conditions: { local: false, hard_bid: true, prevailing_wage: true, taxable: false,
+                remodel_tax: true, bond: true,
+                joint_filler: true, dye: false, remove_existing_jf: false },
+  contingency: 500,
+  fees: 0,
+  totals: {}
+};
+const savedClone = function () {
+  return JSON.parse(JSON.stringify(SAVED_WITH_CONDITIONS));
+};
+out.savedConditionsAreUntouchable = {
+  unstated: P.conditionsUnstated(SAVED_WITH_CONDITIONS),
+  saved: SAVED_WITH_CONDITIONS.conditions,
+  afterMigrate: P.migrateModel(savedClone()).conditions,
+  // THE COUNTEREXAMPLE. The same three rows applied to the same model move all three answers, so
+  // "afterMigrate equals saved" is a fact about the gate and not about the fixture.
+  wouldHaveChanged: P.seedConditionDefaults(P.migrateModel(savedClone()).conditions, COND_ROWS),
+  // …and a brand new bid DOES take them, or the feature does nothing at all.
+  freshTakesThem: P.seedConditionDefaults(P.freshModel().conditions, COND_ROWS),
+  // Migrating twice is migrating once, for conditions as for everything else this model carries.
+  migrationIsIdempotent: JSON.stringify(P.migrateModel(P.migrateModel(savedClone())).conditions)
+    === JSON.stringify(P.migrateModel(savedClone()).conditions)
+};
+
 console.log(JSON.stringify(out));

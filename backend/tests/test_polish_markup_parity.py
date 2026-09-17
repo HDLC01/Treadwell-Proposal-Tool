@@ -1123,3 +1123,119 @@ def test_a_saved_bids_labor_is_never_touched_by_the_defaults(ran):
         "deleting the default took it off a bid that was already holding it: %r"
         % s["survivesAnEmptyLibrary"])
     assert len(s["survivesAnEmptyLibrary"]) == len(s["saved"])
+
+
+@needs_node
+def test_a_stored_condition_answer_wins_over_the_one_the_tool_ships(ran):
+    """The three Takeoff conditions stopped being "built in" on 2026-09-18 (Hanz, twice:
+    "don't put in a hard coded or built in line items", then "I told you to remove the built-in
+    and keep and make everything editable in the takeoff"). freshModel() still states what the
+    tool SHIPS; a row in `condition_defaults` is an override of ONE key, and seedConditionDefaults
+    is where the two meet.
+
+    EVERY ROW IN THE FIXTURE DISAGREES WITH THE SHIPPED ANSWER, which is what makes this
+    non-vacuous: joint filler ships ON and the library says off, dye and remove-existing ship off
+    and the library says on. A fixture that agreed with freshModel could not tell a merge that
+    works from one that does nothing at all.
+
+    Mutation: `return out;` immediately after the Object.assign in seedConditionDefaults. The
+    Defaults tab then shows the shipped answers back whatever anybody sets, and an admin who
+    switched joint filler off finds it on in the next bid."""
+    c = ran["conditionDefaults"]
+    assert c["shipped"]["joint_filler"] is True and c["shipped"]["dye"] is False, (
+        "freshModel no longer ships joint filler on and dye off, so this fixture is no longer a "
+        "counterexample to anything: %r" % c["shipped"])
+    assert c["seeded"]["joint_filler"] is False, "the stored answer did not beat the shipped one"
+    assert c["seeded"]["dye"] is True and c["seeded"]["remove_existing_jf"] is True
+    assert c["intakeFiveUntouched"], (
+        "the merge moved a condition nobody stored an answer for; only the three keys it was "
+        "handed may change")
+    assert c["inputUntouched"], "the merge mutated the conditions object it was handed"
+    assert c["isANewObject"], "the merge returned the same object it was handed"
+    # A key the model does not carry is skipped rather than added: migrateModel whitelists
+    # condition keys against freshModel().conditions and DROPS every other one, so a seeded
+    # stranger would look applied on screen and come back missing on the next load.
+    assert c["offVocabularyIgnored"], (
+        "an off-vocabulary condition was written onto the model, where migrateModel will drop it")
+    # Nothing to apply, in every shape "nothing" arrives in -- an unpromoted table, a read that
+    # could not answer, and a half-written row.
+    assert c["emptyList"] == c["shipped"]
+    assert c["missingList"] == c["shipped"]
+    assert c["rowsWithoutKeys"] == c["shipped"]
+
+
+@needs_node
+def test_the_gate_on_the_condition_defaults_only_opens_on_a_blank_bid(ran):
+    """conditionsUnstated is the only thing standing between a Defaults-tab edit and an
+    estimator's saved answers, and it is STRICTER than laborUnstated on purpose.
+
+    An empty `labor` array is a shape a real model holds and genuinely means "no rows chosen".
+    `conditions` has no equivalent: migrateModel backfills every key from freshModel on the way
+    out, so a saved v2 blob that omitted `conditions` was still SHOWN an answer, and its next save
+    wrote that answer into Kyle's workbook through conditionCellWrites. Reading that as unstated
+    would move a Yes/No literal on a bid somebody has already worked on.
+
+    The beta intake's first save is the row to read twice. It is `{conditions: {...}}` with no
+    version at all, and it carries the estimator's own intake answers -- so it must read as
+    STATED, or a company-wide default would land on top of them.
+
+    Mutation: return `true` from conditionsUnstated for anything that is not a v2 model (copy
+    laborUnstated's shape). The intake's first save then reads as blank and the defaults overwrite
+    the answers the estimator just gave."""
+    says = {c["label"]: c["unstated"] for c in ran["conditionsUnstated"]}
+    assert says["nothing saved at all"] is True
+    assert says["null"] is True
+    assert says["an empty blob"] is True
+    assert says["a v2 model that states no conditions"] is False, (
+        "a saved v2 bid read as blank; migrateModel has already shown it answers for every "
+        "condition, and its next save writes them into Kyle's workbook")
+    assert says["a v2 model with conditions on it"] is False
+    assert says["a v1 draft, whose conditions predate these three"] is False
+    assert says["the beta intake's first save: conditions and no version"] is False, (
+        "the intake's own save read as blank, so a library default would land on top of the "
+        "answers the estimator just gave on the intake step")
+    assert says["a string"] is True
+
+
+@needs_node
+def test_a_saved_bids_conditions_are_never_touched_by_the_defaults(ran):
+    """THE HARD CONSTRAINT, and the assertion this whole feature is judged on. Hanz, verbatim:
+    changing a default must not change any estimate that already exists, because an estimator's
+    saved answers are their work.
+
+    A bid that has been worked on comes back EXACTLY as it was saved, whatever the library says
+    today. joint_filler is the one that bites: it SHIPS on, so a bid where somebody deliberately
+    turned it off is exactly the bid a careless default would quietly turn back on -- and the
+    downloaded workbook would then say Yes in Polish!E29 with nothing on screen admitting it.
+
+    NOT VACUOUS. `wouldHaveChanged` applies the same library rows to the same migrated model and
+    shows all three answers moving, so "it came back as saved" is a fact about the gate and not
+    about a fixture that happened to agree. `freshTakesThem` is the other half: a brand new bid
+    DOES take the stored answers, or the feature does nothing at all and this test would pass
+    against a seeder that was never wired up.
+
+    Mutation: call seedConditionDefaults unconditionally in polish-estimate.js's init instead of
+    behind `conditionDefaults`. Every reopened bid then adopts today's defaults, and the next save
+    writes them over the estimator's answers in Polish!E25/E29/F29."""
+    s = ran["savedConditionsAreUntouchable"]
+    assert s["unstated"] is False, (
+        "a bid with nine answered conditions read as never having stated one")
+    assert s["afterMigrate"] == s["saved"], (
+        "a saved bid's conditions came back changed:\n saved: %r\n after: %r"
+        % (s["saved"], s["afterMigrate"]))
+    # Named rather than left to the deep compare above, because these three are the ones the
+    # Defaults tab can move and the ones whose literals reach Kyle's workbook.
+    assert s["afterMigrate"]["joint_filler"] is True
+    assert s["afterMigrate"]["dye"] is False
+    assert s["afterMigrate"]["remove_existing_jf"] is False
+    moved = [k for k in ("joint_filler", "dye", "remove_existing_jf")
+             if s["wouldHaveChanged"][k] != s["saved"][k]]
+    assert len(moved) == 3, (
+        "the library's answers agree with this bid's, so 'it came back unchanged' proves "
+        "nothing -- only %r would have moved" % moved)
+    took = [k for k in ("joint_filler", "dye", "remove_existing_jf")
+            if s["freshTakesThem"][k] != ran["conditionDefaults"]["shipped"][k]]
+    assert len(took) == 3, (
+        "a brand new bid does not take the stored answers either, so nothing is being gated: %r"
+        % s["freshTakesThem"])
+    assert s["migrationIsIdempotent"], "migrating twice reshapes the conditions again"

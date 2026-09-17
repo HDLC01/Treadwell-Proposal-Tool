@@ -270,6 +270,11 @@ const scope = new Function("$", "TW", "SB", "document", "window", "clock", "fetc
   ${fn("repaintCondition")}
   ${fn("toggleCondition")}
   ${fn("loadCounties")}
+  // LIFTED, not stubbed, and BEFORE boot() which awaits it. This page mints the first
+  // polish_estimate, so it is where a company-wide condition default has to land -- by the
+  // time polish-estimate.html opens, migrateModel has already stated all nine conditions and
+  // that page's own gate correctly refuses to touch them.
+  ${fn("loadConditionDefaults")}
   ${fn("countyStateOf")}
   ${fn("countyRowRate")}
   ${fn("countyRowLabel")}
@@ -414,6 +419,17 @@ function build(opts) {
     // through a path that bypasses the sandbox's draft check entirely.
     if (init && init.method) throw new Error("the intake page must not " + init.method + " " + url);
     if (init && init.body) throw new Error("the intake page must not send a body to " + url);
+    // GET /api/condition-defaults -- the company's answers for the three Takeoff
+    // conditions. Answered separately because this page has to survive it failing:
+    // `condition_defaults` is applied to NEITHER database yet, so today it has no table
+    // behind it anywhere. Default [] rather than a fixture list, so a page that seeded
+    // when it had no business to shows up as an empty answer rather than silently
+    // rewriting an estimator's conditions.
+    if (/condition-defaults/.test(String(url))) {
+      if (opts.conditionFetchFails) throw new Error("the table is not there");
+      return { ok: true, json: async () => ({ ok: true,
+        conditions: JSON.parse(JSON.stringify(opts.conditionDefaults || [])) }) };
+    }
     return { ok: true, json: async () => ({ counties: JSON.parse(JSON.stringify(COUNTIES)) }) };
   };
 
@@ -1519,6 +1535,78 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
       keptLabor: kept.labor,
       keptCalculatorWouldSeed: P.laborUnstated(JSON.parse(JSON.stringify(kept))),
       keptTaxable: kept.conditions.taxable,
+    };
+  }
+
+
+  // -- the Takeoff conditions' company answers are minted HERE ----------------
+  //
+  // The three conditions moved OFF this form on 2026-09-16 and it draws none of them. It still
+  // has to seed them, and the reason is the seam: THIS PAGE MINTS THE MODEL. A brand-new project
+  // has no polish_estimate; the first save here writes a well-formed v2 through migrateModel,
+  // which fills all nine conditions in from freshModel -- so by the time polish-estimate.html
+  // opens, the three are STATED and its own gate correctly refuses to touch them. Seed only there
+  // and the Defaults tab reaches nothing but a project that skipped intake.
+  {
+    // Every stored answer disagrees with what the tool ships, or this proves nothing about the
+    // seed: joint filler ships ON and the library says off, the other two the other way round.
+    const COND = [{ key: "joint_filler", on: false },
+                  { key: "dye", on: true },
+                  { key: "remove_existing_jf", on: true }];
+
+    const fresh = build({ blob: { __draft_id: "brand-new-cond", project_name: "Fresh beta job" },
+                          conditionDefaults: COND });
+    await fresh.api.boot();
+    clickSwitch(fresh, "prevailing_wage");
+    fresh.clock.fire();
+    const mintedCond = fresh.rec.saves[fresh.rec.saves.length - 1].polish_estimate.conditions;
+    const mintedCells = fresh.rec.saves[fresh.rec.saves.length - 1].cell_values;
+
+    // A PROJECT SOMEBODY HAS ALREADY WORKED ON, with all three answered the opposite way.
+    const worked = build({ blob: { __draft_id: "worked-cond", project_name: "Worked job",
+      polish_estimate: { version: 2,
+        takeoff: [{ assembly_id: "", assembly_name: "", measurement: 9000, unit: "SF" }],
+        conditions: { local: true, hard_bid: false, prevailing_wage: false, taxable: true,
+                      remodel_tax: false, bond: false,
+                      joint_filler: true, dye: false, remove_existing_jf: false },
+        contingency: 0, fees: 0, totals: {} } },
+      conditionDefaults: COND });
+    await worked.api.boot();
+    clickSwitch(worked, "taxable");
+    worked.clock.fire();
+    const keptCond = worked.rec.saves[worked.rec.saves.length - 1].polish_estimate.conditions;
+
+    // THE CELL WINS. An answer already in Polish!E25 -- from the AI autofill or an earlier visit
+    // -- must not be replaced by a company default on a project with no polish_estimate yet.
+    const celled = build({ blob: { __draft_id: "celled-cond", project_name: "Autofilled job",
+                                   cell_values: { "Polish!E25": "No" } },
+                           conditionDefaults: COND });
+    await celled.api.boot();
+    clickSwitch(celled, "prevailing_wage");
+    celled.clock.fire();
+    const celledCond = celled.rec.saves[celled.rec.saves.length - 1].polish_estimate.conditions;
+
+    // PRODUCTION TODAY: the table is not there.
+    const down = build({ blob: { __draft_id: "down-cond", project_name: "No table" },
+                         conditionFetchFails: true });
+    await down.api.boot();
+    clickSwitch(down, "prevailing_wage");
+    down.clock.fire();
+    const downCond = down.rec.saves[down.rec.saves.length - 1].polish_estimate.conditions;
+
+    out.conditionDefaults = {
+      minted: mintedCond,
+      // The literals reach Kyle's workbook on the same save, through the one writer both screens
+      // use -- a seeded answer the cells did not carry would be reverted on the next load.
+      mintedCells: { "Polish!E29": mintedCells["Polish!E29"],
+                     "Polish!E25": mintedCells["Polish!E25"],
+                     "Polish!F29": mintedCells["Polish!F29"] },
+      fetched: fresh.rec.fetched.some((f) => /condition-defaults/.test(f.url)),
+      // A worked project is left strictly alone, and never even asks.
+      kept: keptCond,
+      keptFetched: worked.rec.fetched.some((f) => /condition-defaults/.test(f.url)),
+      celled: { dye: celledCond.dye, jointFiller: celledCond.joint_filler },
+      down: { conditions: downCond, shipped: P.freshModel().conditions },
     };
   }
 

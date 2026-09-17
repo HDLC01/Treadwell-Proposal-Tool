@@ -63,6 +63,7 @@ import analytics_export
 import audit
 import basisboard_client
 import calendar_events
+import condition_defaults
 import cover_letter_writer
 import docx_merge
 import digest_worker
@@ -1329,6 +1330,52 @@ def api_markup_rule_delete(rule_id: str, request: Request) -> Dict[str, Any]:
     # Soft — the chain falls back to its hardcoded constant for a line with no rule, so this is
     # "stop overriding" rather than "charge nothing", and it has to be recoverable.
     return {"ok": True, "deleted": rule_id}
+
+
+# ── Takeoff condition defaults ────────────────────────────────────────────────
+# What a NEW Polish estimate opens ANSWERED for the three Yes/No questions the Takeoff step
+# carries — joint filler, remove existing joint filler, dye. See backend/condition_defaults.py for
+# why the key vocabulary is closed, why a row is an OVERRIDE of the literal in
+# frontend/js/polish-bid-core.js rather than a copy of it, and why the workbook CELL each answer
+# writes is not editable.
+#
+# GATED LIKE MARKUP AND VENDORS, NOT LIKE ITEMS. WRITING is admin-only: this decides what every
+# new bid in the company opens holding. READING is open to every signed-in user, because the
+# ESTIMATE reads it to seed a blank bid — a gate on the read would stop an estimator halfway
+# through, silently, which is the reasoning nav_access.py records for the empty `api` tuple.
+class ConditionDefaultIn(BaseModel):
+    """Loose on purpose, the same call MarkupRuleIn makes: condition_defaults._boolean() is the
+    single authority on what "yes" means, so the answer cannot drift between a Pydantic coercion
+    and the writer. `on` is `Any` rather than `bool` because a checkbox posts the STRING "false",
+    and Pydantic reading that as True would hide it from the one function that knows better."""
+    on: Optional[Any] = None
+
+
+@app.get("/api/condition-defaults")
+def api_condition_defaults() -> Dict[str, Any]:
+    # ANSWERS 200 WITH AN EMPTY LIST WHEN THE TABLE DOES NOT EXIST, which as of this commit is
+    # both databases. list_defaults() never raises; see its docstring. An empty list is not a
+    # failure here — it means "nobody has overridden anything", and the caller falls back to the
+    # shipped literals, which is exactly what every estimate does today.
+    #
+    # The vocabulary rides along so the page does not keep a second copy of it to drift.
+    return {"ok": True, "conditions": condition_defaults.list_defaults(),
+            "keys": list(condition_defaults.KEYS)}
+
+
+@app.put("/api/condition-defaults/{condition_key}")
+def api_condition_default_set(condition_key: str, payload: ConditionDefaultIn,
+                              request: Request) -> Dict[str, Any]:
+    _require_admin(request)
+    try:
+        row = condition_defaults.set_default(condition_key,
+                                             payload.model_dump(exclude_unset=True),
+                                             _user_email(request))
+    except condition_defaults.ValidationError as exc:
+        # A 400 carrying the words, not a bare 422: an off-vocabulary key is a caller naming a
+        # condition nothing reads, and the message says which three there are.
+        raise HTTPException(400, str(exc))
+    return {"ok": True, "condition": row}
 
 
 # ─── Customer Portal integration (server-side proxy to the portal admin API) ───

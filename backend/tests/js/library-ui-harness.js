@@ -239,6 +239,21 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   // The Markup page's Global lines. Declared here rather than lifted because the page fills it
   // from its own fetch inside load(), which this sandbox does not run -- a test hands it in.
   var GLOBAL_MARKUP = state.GLOBAL_MARKUP || [];
+  // The Takeoff conditions' STORED answers, handed in the same way. Only the overrides live
+  // here: what a new estimate ships answering comes from the REAL polish-bid-core below, so a
+  // fixture cannot make this page agree with itself about an answer the bid does not hold.
+  // Reassigned by setConditionDefault, so tests read it back through condDefaultsNow().
+  var COND_DEFAULTS = state.COND_DEFAULTS || [];
+  // THE NETWORK, AND ONLY THE NETWORK -- the same split the labor stubs below take. Everything
+  // on the way to the request is the page's code: the optimistic flip, the repaint and the
+  // put-it-back on a refusal.
+  var COND_CALLS = [];
+  var COND_FAIL = state.COND_FAIL || false;
+  async function putConditionDefault(key, on) {
+    COND_CALLS.push({ key: key, on: on });
+    if (COND_FAIL) throw new Error("the server said no");
+    return { ok: true };
+  }
   // The estimate's shared module, which the page reaches through the window object. Declared
   // rather than
   // stubbed away: takeoffConditionDefaults must read freshModel's REAL answers -- joint filler
@@ -317,8 +332,18 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   ${grab(/^  var DEFAULT_WT = .*$/m, "the DEFAULT_WT declaration")}
   ${fn("appliesToWorkType")}
   ${fn("workTypeLabel")}
+  // conditionControl BEFORE takeoffDefaultGroups, which calls it for every condition row. The
+  // conditions stopped being read-only on 2026-09-18 -- each one now draws a Yes/No select that
+  // writes condition_defaults -- and a missing lift here is a ReferenceError that reds every
+  // scenario in this file at once with nothing pointing at the cause.
+  ${fn("conditionControl")}
   ${fn("takeoffDefaultGroups")}
   ${fn("renderDefaultTakeoff")}
+  // AFTER the renderer it repaints and after the network stub it awaits. This is the handler the
+  // select presses, lifted so a test CHANGES the answer rather than reading that a box exists --
+  // a markup assertion cannot tell a wired control from a dead one, and this page has shipped a
+  // dead one behind a green test twice.
+  ${fn("setConditionDefault")}
   // THE ADD-A-DEFAULT PATH, lifted so it is EXECUTED. It shipped on 2026-09-17 as two
   // buttons and a search box with nothing bound to any of them, and the only test over it
   // regex-matched the markup for data-add-default="..." -- which the dead buttons satisfied
@@ -522,6 +547,14 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
            // The Defaults tab's Takeoff list, EXECUTED rather than read. GLOBAL_MARKUP is handed
            // in so a test can supply the Markup page's answer without a second fetch stub.
            renderDefaultTakeoff, takeoffConditionDefaults, takeoffDefaultGroups,
+           // THE CONDITIONS, EXECUTED. conditionControl draws one row's control;
+           // setConditionDefault is what the select's change calls. COND_CALLS is what would
+           // have gone to the server, and condDefaultsNow reads the list BACK -- the handler
+           // reassigns it (a new array, not a splice), so a test handed the value itself would
+           // be reading the one from before the press it is testing.
+           conditionControl, setConditionDefault, COND_CALLS,
+           condDefaultsNow: function () { return COND_DEFAULTS; },
+           setCondDefaults: function (c) { COND_DEFAULTS = c; },
            // THE ADD PATH, EXECUTED. A test that only read the markup could not tell a
            // wired button from a dead one, and for two days could not.
            defaultCandidates, renderDefaultSearch, setDefaultQuery, openDefaultBrowse,
@@ -3434,9 +3467,30 @@ out.serverOwnedItemFields = build().api.SERVER_OWNED_ITEM_FIELDS;
       return row !== "" && /data-markup-formula="[^"]+"/.test(row) &&
         !/data-def-(edit|off|add)/.test(row);
     })(),
-    // The conditions, read from freshModel rather than typed here: joint filler ships ON.
-    jointFillerYes: /Joint filler[\s\S]*?Polish!E29 = Yes/.test(h),
-    dyeNo: /Dye[\s\S]*?Polish!E25 = No/.test(h),
+    // ── THE CONDITIONS ARE NOT "BUILT IN" ANY MORE ───────────────────────────────────────
+    // Hanz, twice: "don't put in a hard coded or built in line items", then "I told you to
+    // remove the built-in and keep and make everything editable in the takeoff." These read
+    // the RENDERED row, not the renderer's source, because a regex over markup cannot tell a
+    // wired control from a dead one -- which is exactly how the Labor add button shipped green
+    // on this same tab. The change is DRIVEN in conditionDefaults below.
+    conditionsCarryAControl: /data-cond-key="joint_filler"/.test(h) &&
+      /data-cond-key="dye"/.test(h) && /data-cond-key="remove_existing_jf"/.test(h),
+    // The chip is gone from the conditions, and gone from the whole table: the Labor tab's
+    // Travel row is the only "Built in" left in this page, and it is a different renderer.
+    noBuiltInChip: !/Built in/.test(h),
+    // THE SHIPPED ANSWER IS STILL THE ANSWER when nothing has been overridden, and it is read
+    // out of the REAL freshModel rather than typed here: joint filler ships ON, dye ships off.
+    // A page that got this backwards would be telling an estimator the opposite of what their
+    // next bid does.
+    jointFillerOpensYes: /data-cond-key="joint_filler"[^>]*>\s*<option value="yes" selected>/
+      .test(h),
+    dyeOpensNo: /data-cond-key="dye"[^>]*><option value="yes">Yes<\/option><option value="no" selected>/
+      .test(h),
+    // THE CELL IS SHOWN AND NOT OFFERED. Polish!E29 is a fact about Kyle's workbook; a second
+    // box pointing the answer somewhere else would write a Yes/No literal over one of his
+    // formulas with nothing on screen saying so.
+    saysWhichCellItWrites: /writes Polish!E29/.test(h) && /writes Polish!E25/.test(h),
+    cellIsNotAnInput: !/data-cond-cell/.test(h) && !/value="Polish!E29"/.test(h),
   };
 
   // THE ADD PATH, DRIVEN. Every assertion here fails against the 2026-09-17 shipping code,
@@ -3913,6 +3967,68 @@ out.page = {
   noRoleHeader: !/<th[^>]*>Role<\/th>/.test(html),
 };
 
+
+// ── the conditions, CHANGED rather than read ─────────────────────────────────
+//
+// Every assertion here fails against the code that was on staging before 2026-09-18, where the
+// three conditions rendered a "Built in" chip and there was nothing to press at all.
+async function conditionChecks() {
+  const seed = (extra) => Object.assign({
+    // THE REAL MODULE. The whole claim is that this list shows what a new estimate opens
+    // ANSWERING, so a made-up freshModel would prove the opposite of what it looks like it proves.
+    window: { TWPolishBid: require(path.join(ROOT, "js", "polish-bid-core.js")) },
+    ITEMS: [], ASMS: [],
+  }, extra || {});
+
+  // 1. A STORED ANSWER BEATS THE SHIPPED ONE. joint_filler ships ON; an admin who has turned it
+  //    off must see Off here, or this page is describing a bid that does not exist.
+  const stored = build(seed({ COND_DEFAULTS: [{ key: "joint_filler", on: false }] }));
+  stored.api.renderDefaultTakeoff();
+  const storedHtml = stored.dom.nodes["default-takeoff-body"].innerHTML;
+
+  // 2. THE CHANGE, DRIVEN through the handler the select's `change` calls.
+  const live = build(seed({}));
+  live.api.renderDefaultTakeoff();
+  const beforeHtml = live.dom.nodes["default-takeoff-body"].innerHTML;
+  await live.api.setConditionDefault("joint_filler", false);
+  const afterHtml = live.dom.nodes["default-takeoff-body"].innerHTML;
+
+  // 3. A REFUSED SAVE PUTS IT BACK. A control that keeps the new value after the write was
+  //    refused tells an admin every new bid now opens differently when it does not.
+  const failing = build(seed({ COND_FAIL: true }));
+  failing.api.renderDefaultTakeoff();
+  await failing.api.setConditionDefault("dye", true);
+  const failedHtml = failing.dom.nodes["default-takeoff-body"].innerHTML;
+
+  const yes = (html, key) =>
+    new RegExp('data-cond-key="' + key + '"[^>]*>\\s*<option value="yes" selected>').test(html);
+
+  out.conditionDefaults = {
+    // The merge, through the ESTIMATE'S OWN seedConditionDefaults rather than a second one
+    // written on this page: a stored `off` wins over the shipped `on`.
+    storedOverrideWins: !yes(storedHtml, "joint_filler"),
+    // …and leaves the two nobody overrode exactly as the tool ships them.
+    untouchedOnesKeepShipped: !yes(storedHtml, "dye") &&
+      !yes(storedHtml, "remove_existing_jf"),
+
+    // The press. It is the RENDERED row that changes, so a handler that wrote the variable and
+    // forgot to repaint fails here rather than looking fine.
+    startsFromShipped: yes(beforeHtml, "joint_filler"),
+    pressFlipsTheRow: !yes(afterHtml, "joint_filler"),
+    // …and the write actually goes, keyed by the condition and carrying the answer.
+    wroteTheServer: JSON.stringify(live.api.COND_CALLS) ===
+      JSON.stringify([{ key: "joint_filler", on: false }]),
+    // ONE ROW PER CONDITION in the page's own list, whatever the press. A handler that appended
+    // instead of replacing would send the right body and then render the stale answer next to it.
+    keepsOneRowPerCondition: live.api.condDefaultsNow().length === 1,
+
+    // The refusal.
+    refusedSavePutsItBack: !yes(failedHtml, "dye"),
+    refusedSaveSaysSo: /Couldn't save that/.test(failing.dom.nodes["alert"].textContent || ""),
+    refusedSaveDropsTheOptimisticRow: failing.api.condDefaultsNow().length === 0,
+  };
+}
+
 // A WATCHDOG, because the alternative failure mode is silence. These scenarios await dialogs and
 // held requests, so a change that opens one more dialog than a test answers leaves a flush waiting
 // forever: node's loop empties, the process exits 0, and nothing is printed — which the fixture
@@ -3925,6 +4041,7 @@ const watchdog = setTimeout(() => {
   process.exit(1);
 }, 30000);
 
-Promise.all([conflictChecks(), dialogChecks(), laborChecks()]).then(
+Promise.all([conflictChecks(), dialogChecks(), laborChecks(),
+             conditionChecks()]).then(
   () => { clearTimeout(watchdog); console.log(JSON.stringify(out)); },
   (err) => { clearTimeout(watchdog); console.error(err); process.exit(1); });

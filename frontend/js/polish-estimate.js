@@ -1342,6 +1342,25 @@
     }
   }
 
+  /** The library's answers for the three Takeoff conditions, or [] when the read cannot answer.
+   *  NEVER THROWS.
+   *
+   *  The same posture as loadLaborDefaults directly above, and for a sharper reason:
+   *  `condition_defaults` is applied to NEITHER database as of 2026-09-18 — it is written into
+   *  both schema files and waiting on Hanz — so today this request has no table behind it
+   *  anywhere. An estimate that refused to open over a table nobody has promoted would be a far
+   *  worse outcome than one that opens with the answers the tool ships, which is exactly what []
+   *  produces: seedConditionDefaults writes nothing and freshModel's literals stand. */
+  async function loadConditionDefaults() {
+    try {
+      var res = await api("/api/condition-defaults");
+      var j = await res.json();
+      return (j && j.conditions instanceof Array) ? j.conditions : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
   async function init() {
     try { if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready; } catch (e) {}
     // shared.js is still deciding which draft this page is on (it can even hydrate and reload),
@@ -1369,6 +1388,19 @@
     // landed. Null, not an empty array, for "not asked": an empty array is a real answer (the
     // table exists and holds nothing) and the two must not be confused.
     var laborDefaults = B.laborUnstated(state.polish_estimate) ? loadLaborDefaults() : null;
+
+    // THE CONDITION DEFAULTS, ON THE SAME TERMS AND WITH A STRICTER GATE. B.conditionsUnstated is
+    // true only when NOTHING has ever been saved for this estimate, because Hanz's rule for this
+    // feature is that changing a default must not change any estimate that already exists — an
+    // estimator's saved answers are their work. Decided here, on the saved blob, for the reason
+    // the labor block above gives: adopt() has already run migrateModel, which answers every
+    // condition from freshModel, so M cannot be asked the question.
+    //
+    // Started here so it overlaps the library read instead of queueing behind it, and awaited
+    // below. Null, not [], for "not asked" — [] is a real answer (nobody has overridden anything)
+    // and the two must not be confused.
+    var conditionDefaults = B.conditionsUnstated(state.polish_estimate)
+      ? loadConditionDefaults() : null;
 
     $("proj-line").textContent = [state.project_name, state.city && state.state
       ? state.city + ", " + state.state : ""].filter(Boolean).join(" · ") || "Untitled project";
@@ -1406,6 +1438,24 @@
       // A default can carry guys_auto, exactly as Travel does. Re-run for the same reason adopt()
       // runs it: before the first paint, not on the first edit.
       syncAutoGuys();
+    }
+
+    // The library's answers for joint filler, remove-existing and dye, written over the shipped
+    // ones — on a brand new bid and on nothing else.
+    //
+    // THE CELL STILL WINS, so conditionsFromCells runs AFTER the seed rather than only in adopt().
+    // A project that came through the beta intake has its answers in cell_values and no
+    // polish_estimate at all, which is precisely the blob conditionsUnstated calls seedable; if
+    // the seed ran last it would write a company-wide default over the answer the estimator gave
+    // on intake, and their next save would put that default into Kyle's workbook. Seed first, then
+    // let the cell win, which is the order every other reader of these three already uses.
+    //
+    // Nothing is written to the draft here, exactly as with the labor defaults above: the seeded
+    // answers are persisted by the first edit, which is what makes changing a default later leave
+    // the bids already holding it alone.
+    if (conditionDefaults) {
+      M.conditions = B.conditionsFromCells(
+        B.seedConditionDefaults(M.conditions, await conditionDefaults), state.cell_values);
     }
 
     // Seed the measurement from intake if nothing has been measured here yet, so the page opens
