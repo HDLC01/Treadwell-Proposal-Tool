@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Bid Calendar · Treadwell Proposal Generator</title>
   <link rel="icon" type="image/svg+xml" href="/img/treadwell-bison.svg" />
+  <!-- Warm the jsdelivr connection (DNS + TLS, no bytes) before the parser reaches the CDN script tag below. -->
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
   <!-- Styles itself, like followups.html and portal.html, so it needs its own opt-out:
        without it Chromium synthesizes a dark theme, which flattens the urgency stripe
        and the stage dots into each other. There is no dark theme in this repo. -->

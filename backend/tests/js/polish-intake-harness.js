@@ -231,7 +231,12 @@ const scope = new Function("$", "TW", "SB", "document", "window", "clock", "fetc
   // is now an alias, and it resolves through the window.TWPolishBid binding lifted above --
   // which is why that grab has to stay ahead of this one.
   ${grab(/^  var CONDITION_CELLS = B\.CONDITION_CELLS;$/m, "CONDITION_CELLS")}
-  // Added 2026-09-11 with the four carry-through toggles. Same rule as the cell map above: the
+  // Added 2026-09-11 with the four carry-through toggles, and down to ONE of them since
+  // 2026-09-16 -- dye, joint filler and remove-existing moved onto the Takeoff step and into the
+  // model, leaving reno, which still cannot live there. NO BACKTICKS IN THIS COMMENT, and none in
+  // any of its neighbours: every line from here to the return below is inside the template literal
+  // that builds the page's scope, so a quoted identifier ends the string and node reports a
+  // SyntaxError pointing at a line nobody touched. Same rule as the cell map above: the
   // list, the helpers over it AND the carry binding all have to be in this scope, because
   // adoptModel/conditionCells/switchHtml every one of them reaches for it and a name the lifted
   // function cannot see is a ReferenceError at boot -- which is what happened first try.
@@ -243,9 +248,9 @@ const scope = new Function("$", "TW", "SB", "document", "window", "clock", "fetc
   // Who settled each of the five. A real binding rather than a stub: a click through onClick has
   // to land in humanConditions, which is what stops a second verbal run overriding it.
   var humanConditions = {};
-  // The carry four's on/off. A real binding, not a stub, for the same reason humanConditions is:
-  // a click has to land in it and adoptModel has to reassign it, and a probe that read a stub
-  // would agree with itself instead of with the page.
+  // The carried conditions' on/off -- Renovation alone since 2026-09-16. A real binding, not a
+  // stub, for the same reason humanConditions is: a click has to land in it and adoptModel has to
+  // reassign it, and a probe that read a stub would agree with itself instead of with the page.
   var carry = {};
   var saveTimer = null;
   var counties = [];
@@ -423,10 +428,16 @@ function build(opts) {
  *  is greyed out. */
 function readSwitches(markup) {
   return String(markup).split('<div class="sw').slice(1).map((chunk) => {
-    // The rest of the class attribute, tokenised. It is no longer just " on": a dependent switch
-    // greys itself with `inert`, so "sw on inert" has to keep reading as ON. The old prefix test
+    // The rest of the class attribute, tokenised rather than prefix-matched. A dependent switch
+    // greys itself with `inert`, so "sw on inert" has to keep reading as ON; the old prefix test
     // matched the first word and would have called that switch off -- a harness bug that would
     // have looked exactly like a page bug.
+    //
+    // NO SWITCH ON THIS FORM IS INERT TODAY: Remove existing joint filler was the only one, and it
+    // moved to the Takeoff step on 2026-09-16. The tokeniser stays because it is the correct way
+    // to read a class list whatever is in it, and because CARRY_CONDITIONS is a list somebody will
+    // add a `needs` to again -- at which point this reading has to already be right, not be
+    // rediscovered by watching a green test describe an off switch that is on.
     const rest = (/^([^"]*)"/.exec(chunk) || ["", ""])[1];
     const words = rest.split(/\s+/).filter(Boolean);
     return {
@@ -580,118 +591,246 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
       .map((s) => [s.key, s.on]);
   }
 
-  // ── the four carried through from the live intake ───────────────────────────
+  // ── renovation, the one condition this page still carries ───────────────────
   //
-  // These cannot live on the model, and that is the point of probing them separately.
-  // migrateModel() whitelists condition keys against freshModel().conditions and drops the rest,
-  // so a key stored in polish_estimate.conditions would look saved and come back missing.
-  // cell_values is their one home, and the only way to see what lands in it is to run the writer.
+  // THREE OF THE FOUR LEFT THIS BLOCK ON 2026-09-16. Dye, joint filler and remove-existing moved
+  // onto the Takeoff step, and into freshModel().conditions with it, so their probe is about the
+  // MODEL now and lives in the next block. What is left is `reno` on its own, and it is still
+  // here for the reason the other three no longer are: migrateModel() whitelists condition keys
+  // against freshModel().conditions and drops the rest, and `reno` is not one of them. So it
+  // cannot live on the model, cell_values is its one home, and the only way to see what lands in
+  // it is to run the writer.
   {
     const b = build();
     await b.api.boot();
-    const before = b.rec.saves.length;
-    clickSwitch(b, "dye");
+    // A save this page makes for an UNRELATED reason, BEFORE Renovation is ever touched. Both its
+    // cells still have to come out of it, carrying the word "New" rather than a blank.
+    clickSwitch(b, "prevailing_wage");
     b.clock.fire();
-    const afterDye = b.rec.saves[b.rec.saves.length - 1];
+    const untouched = b.rec.saves[b.rec.saves.length - 1];
+    const before = b.rec.saves.length;
+    clickSwitch(b, "reno");
+    b.clock.fire();
+    const afterReno = b.rec.saves[b.rec.saves.length - 1];
     out.carry = {
       keys: b.api.CARRY_CONDITIONS.map((c) => c.key),
-      flippedInCarry: b.api.carry().dye,
-      notInTheModel: !("dye" in b.api.model().conditions),
+      flippedInCarry: b.api.carry().reno,
+      notInTheModel: !("reno" in b.api.model().conditions),
       savedOnce: b.rec.saves.length - before === 1,
-      // Every one of the four, both literals, on one save -- not just the one that was clicked.
-      // A page that only wrote the toggle it touched would leave Kyle's IF(B10="New",…) reading a
-      // blank on a brand-new project and triple the patch rate with nothing on screen.
-      cells: {
-        "Epoxy!B10": afterDye.cell_values["Epoxy!B10"],
-        "Polish!B10": afterDye.cell_values["Polish!B10"],
-        "Polish!E25": afterDye.cell_values["Polish!E25"],
-        "Polish!E29": afterDye.cell_values["Polish!E29"],
-        "Polish!F29": afterDye.cell_values["Polish!F29"],
+      // BOTH literals, and BOTH cells, on EVERY save -- not only the save that touched it. A page
+      // that wrote Renovation only when Renovation was clicked would leave Kyle's
+      // IF(B10="New",0.05,0.15) reading a blank on a brand-new project, which takes the Reno
+      // branch and triples the patch material rate with nothing on screen to say so.
+      offCells: {
+        "Epoxy!B10": untouched.cell_values["Epoxy!B10"],
+        "Polish!B10": untouched.cell_values["Polish!B10"],
+      },
+      onCells: {
+        "Epoxy!B10": afterReno.cell_values["Epoxy!B10"],
+        "Polish!B10": afterReno.cell_values["Polish!B10"],
       },
       // The engine five still land in both homes, unchanged by any of this.
       engineCells: {
-        "Epoxy!B4": afterDye.cell_values["Epoxy!B4"],
-        "Polish!B4": afterDye.cell_values["Polish!B4"],
-        "Epoxy!B6": afterDye.cell_values["Epoxy!B6"],
+        "Epoxy!B4": afterReno.cell_values["Epoxy!B4"],
+        "Polish!B4": afterReno.cell_values["Polish!B4"],
+        "Epoxy!B6": afterReno.cell_values["Epoxy!B6"],
       },
-      savedConditionKeys: Object.keys(afterDye.polish_estimate.conditions),
-      savedConditions: afterDye.polish_estimate.conditions,
-      takeoffKept: (afterDye.polish_estimate.takeoff || []).length,
-      // What the calculator gets back on the next load. The carry keys must be absent from it --
-      // that is migrateModel's whitelist doing its job, and the reason cell_values is their home.
+      savedConditionKeys: Object.keys(afterReno.polish_estimate.conditions),
+      takeoffKept: (afterReno.polish_estimate.takeoff || []).length,
+      // What the calculator gets handed back on the next load. `reno` must be absent from it --
+      // that is migrateModel's whitelist doing its job, and the reason cell_values is its home.
       readBackConditionKeys: Object.keys(
-        P.migrateModel(JSON.parse(JSON.stringify(afterDye.polish_estimate))).conditions),
+        P.migrateModel(JSON.parse(JSON.stringify(afterReno.polish_estimate))).conditions),
     };
 
-    // MOVES NO MONEY, proven against the engine rather than asserted in a comment. The same
-    // markup chain, over the conditions this page saved before and after a carry flip, to the
-    // last cent. Dye is priced on the estimate screen as a starred default assembly instead.
+    // MOVES NO MONEY -- ASKED OF THE ENGINE, NOT OF THE TWO SAVES. Comparing the model this page
+    // wrote before the flip with the one it wrote after would be vacuous by construction: `reno`
+    // is not a model key, so those two objects are equal whatever happens on screen, and the
+    // comparison would stay green after somebody taught markupChain to read it. So the probe adds
+    // the key to the saved conditions and prices both. In the workbook B10 really does move a
+    // price -- Polish!C17 reads it -- but the beta prices from the Items & Assemblies library, and
+    // polish-bid-core.js has no notion of renovation at all.
     const priced = (conds) => P.markupChain({ sf: 12500, material: 8000, labor: 30000,
                                               conditions: conds, remodel_rate: null });
-    const bare = build();
-    await bare.api.boot();
-    bare.clock.fire();
-    const beforeAnyFlip = bare.rec.saves.length
-      ? bare.rec.saves[bare.rec.saves.length - 1].polish_estimate.conditions
-      : bare.api.model().conditions;
-    out.carry.priceIdentical =
-      JSON.stringify(priced(beforeAnyFlip)) ===
-      JSON.stringify(priced(afterDye.polish_estimate.conditions));
-    out.carry.priceTotal = priced(afterDye.polish_estimate.conditions).total;
+    // ONE CONDITION VECTOR IS A HIDING PLACE, so the pair is priced twice. The save above has
+    // Prevailing wage ON, because flipping it is what triggered the save -- and a branch written
+    // as `prevailing_wage || reno` moves no money at all while prevailing wage is on. Pricing the
+    // same pair again with the engine six turned the other way takes that hiding place away:
+    // whichever half a masked read is hiding behind, one of the two runs has it the other way.
+    const ENGINE = ["local", "hard_bid", "prevailing_wage", "taxable", "remodel_tax", "bond"];
+    const invert = (conds) => ENGINE.reduce(
+      (acc, k) => { acc[k] = !acc[k]; return acc; }, Object.assign({}, conds));
+    const withReno = (conds) => Object.assign({}, conds, { reno: true });
+    const same = (conds) =>
+      JSON.stringify(priced(conds)) === JSON.stringify(priced(withReno(conds)));
+    out.carry.priceIdentical = same(afterReno.polish_estimate.conditions);
+    out.carry.priceIdenticalInverted = same(invert(afterReno.polish_estimate.conditions));
+    out.carry.priceTotal = priced(afterReno.polish_estimate.conditions).total;
 
-    // ── the dependent one greys out, and stays a real answer while it does ────
-    clickSwitch(b, "joint_filler");
-    b.clock.fire();
-    const greyed = readSwitches(b.dom.nodes["conditions"].innerHTML);
-    const rej = greyed.filter((sw) => sw.key === "remove_existing_jf")[0];
-    const jfSave = b.rec.saves[b.rec.saves.length - 1];
-    out.carry.dependent = {
-      jointFillerOff: b.api.carry().joint_filler === false,
-      cls: rej.cls,
-      inert: rej.inert,
-      why: rej.why,
-      // Greyed, not gone and not un-clickable: still a switch, still keyed, still explained.
-      stillARealSwitch: rej.hasTrack && rej.id === "cond-remove_existing_jf",
-      stillNine: greyed.length,
-      // The re-render Joint filler forces costs the caret; the page puts it back.
-      focusWentBack: b.dom.focusedId(),
-      // And the greyed switch's cell is still written, because "greyed" is about the price, not
-      // about the answer having stopped existing.
-      cellStillWritten: jfSave.cell_values["Polish!F29"],
-      jfCell: jfSave.cell_values["Polish!E29"],
-    };
-
-    // Answered while greyed: it records, and it stays greyed.
-    //
-    // READ OFF THE NODE, NOT THE CONTAINER. A key with no dependents takes the cheap path and
-    // repaints one element's class; the container's innerHTML is still the string the last
-    // re-render produced. Reading that string here said the switch was OFF while the cell said
-    // Yes -- a harness artefact that reads exactly like a page bug, and the reason paintCondition
-    // has to be checked where it actually writes.
-    clickSwitch(b, "remove_existing_jf");
-    b.clock.fire();
-    const rejNode = b.dom.nodes["cond-remove_existing_jf"];
-    out.carry.dependent.answeredWhileGreyed =
-      b.rec.saves[b.rec.saves.length - 1].cell_values["Polish!F29"];
-    out.carry.dependent.onWhileGreyed = {
-      cls: rejNode.className,
-      aria: rejNode.getAttribute("aria-checked"),
-      // The container is deliberately NOT re-rendered for a key nothing depends on, so the
-      // sentence under Remove existing joint filler is unchanged and the caret is undisturbed.
-      containerUntouched: readSwitches(b.dom.nodes["conditions"].innerHTML)
-        .filter((sw) => sw.key === "remove_existing_jf")[0].cls,
-      focusUnmoved: b.dom.focusedId(),
-    };
-
-    // ── and they come back from the cells on the next load ───────────────────
-    const h = build({ blob: { __draft_id: "v1-cells", cell_values: {
-      "Epoxy!B10": "Reno", "Polish!B10": "Reno", "Polish!E25": "Yes",
-      "Polish!E29": "No", "Polish!F29": "Yes" } } });
+    // And it comes back off its cell on the next load, because it has nowhere else to come back
+    // from. "Reno" rather than "New", so a hydrate that quietly fell through to the documented
+    // default cannot produce the same screen.
+    const h = build({ blob: { __draft_id: "reno-from-cells", cell_values: {
+      "Epoxy!B10": "Reno", "Polish!B10": "Reno" } } });
     await h.api.boot();
-    const hydrated = readSwitches(h.dom.nodes["conditions"].innerHTML);
-    out.carry.hydrated = hydrated.map((sw) => [sw.key, sw.on]);
-    out.carry.hydratedInert = hydrated.filter((sw) => sw.inert).map((sw) => sw.key);
+    out.carry.hydrated = readSwitches(h.dom.nodes["conditions"].innerHTML)
+      .map((sw) => [sw.key, sw.on]);
+  }
 
+  // ── THE THREE THAT MOVED STILL REACH THE WORKBOOK FROM HERE ─────────────────
+  //
+  // THIS IS THE RISK THE 2026-09-16 MOVE CARRIES, and this block is the only place a test can see
+  // it. Dye, joint filler and remove-existing used to be written into cell_values by this page's
+  // own `carry` loop, from this page alone. That loop is gone. Nothing on screen would notice if
+  // nothing had replaced it: the questions would still be ASKED (on Takeoff), still be SAVED (on
+  // the model) and still be shown back there -- and Polish!E25/E29/F29 would quietly go blank in
+  // every workbook a save from THIS page touched. A blank Yes/No cell is not "No" to Kyle's
+  // formulas, it is whatever his IF() falls through to, so the bid would come back wrong with the
+  // screen still right.
+  //
+  // What replaced the loop is B.conditionCellWrites -- the one writer both screens call, driven by
+  // M.conditions. So the probe has to be a round trip through the product: answer them on the
+  // OTHER screen, arrive here, save for an unrelated reason, and read the cells that came out.
+  {
+    /** One visit to this page by a project whose three moved answers were settled on Takeoff.
+     *
+     *  Saved by touching a DIFFERENT switch, which is both the realistic visit and the only one
+     *  that proves anything: the estimator came back to fix the address or to set Prevailing wage,
+     *  not to re-answer these. A page that wrote a condition cell only when that condition was
+     *  clicked would sail through a test that clicked it. */
+    const visitAfterTakeoff = async (id, answers) => {
+      const pg = build({ blob: { __draft_id: id, polish_estimate: {
+        version: 2, takeoff: [], labor: [],
+        conditions: Object.assign({ local: true, hard_bid: false, prevailing_wage: false,
+                                    taxable: true, remodel_tax: false, bond: false },
+                                  answers) } } });
+      await pg.api.boot();
+      clickSwitch(pg, "prevailing_wage");
+      pg.clock.fire();
+      return { page: pg, wrote: pg.rec.saves[pg.rec.saves.length - 1] };
+    };
+
+    // As Kyle's sheet ships: joint filler on, the other two off.
+    const shipped = await visitAfterTakeoff("takeoff-as-shipped",
+      { dye: false, joint_filler: true, remove_existing_jf: false });
+    // All three the other way. Remove-existing is YES while joint filler is OFF, which is exactly
+    // the combination the Takeoff step dims -- and a dimmed switch's answer still has to reach the
+    // workbook, because dimming says "this moves no money here", not "nobody answered".
+    const flipped = await visitAfterTakeoff("takeoff-all-flipped",
+      { dye: true, joint_filler: false, remove_existing_jf: true });
+    // Nothing to remove, and nothing to do the removing. F29's "No" here is the write a tidy-up
+    // deletes on the grounds that it changes nothing; it is the one that must not go missing.
+    const nothing = await visitAfterTakeoff("takeoff-nothing-to-remove",
+      { dye: false, joint_filler: false, remove_existing_jf: false });
+
+    const CELLS = ["Polish!E25", "Polish!E29", "Polish!F29"];
+    const KEYS = ["dye", "joint_filler", "remove_existing_jf"];
+    // PRESENT, not merely equal to "No". Once a key stops being written, `undefined` is what every
+    // downstream reader sees, and it is falsy in exactly the places "No" is -- so the way this
+    // fails is invisible to a check that only compares values.
+    const written = (save) => CELLS.filter(
+      (c) => Object.prototype.hasOwnProperty.call(save.cell_values, c));
+    const literals = (save) => CELLS.reduce(
+      (acc, c) => { acc[c] = save.cell_values[c]; return acc; }, {});
+
+    out.moved = {
+      shippedCells: literals(shipped.wrote),
+      flippedCells: literals(flipped.wrote),
+      nothingCells: literals(nothing.wrote),
+      shippedWritten: written(shipped.wrote),
+      flippedWritten: written(flipped.wrote),
+      nothingWritten: written(nothing.wrote),
+      // ON THE MODEL NOW, which is the inversion this change made. They were deliberately kept OFF
+      // it before -- migrateModel would have dropped them -- and the whole move was into it.
+      inTheModel: KEYS.filter((k) => k in shipped.page.api.model().conditions),
+      savedConditions: shipped.wrote.polish_estimate.conditions,
+      // AND THEY SURVIVE THE READ-BACK. migrateModel whitelists against freshModel().conditions,
+      // which is the exact mechanism that used to drop them. Run over the blob the page just
+      // saved rather than a hand-built one, so this is the trip the estimator's next visit takes.
+      readBack: KEYS.map((k) => [k, P.migrateModel(
+        JSON.parse(JSON.stringify(flipped.wrote.polish_estimate))).conditions[k]]),
+      // The intake form no longer renders any of the three. Asked rather than assumed, because
+      // "they moved" is only true if they left.
+      stillOnScreen: readSwitches(shipped.page.dom.nodes["conditions"].innerHTML)
+        .map((sw) => sw.key).filter((k) => KEYS.indexOf(k) >= 0),
+    };
+
+    // MOVES NO MONEY, AND THAT IS A NEW RISK RATHER THAN AN OLD REASSURANCE. Until today these
+    // three were physically incapable of changing the beta price: they were not on the model, and
+    // the model is what markupChain() is handed. They are on it now, so "they price nothing" has
+    // stopped being a fact about the data shape and become a claim about the engine -- proven here
+    // over two saves this page really wrote, which differ in nothing but these three keys.
+    const priced = (conds) => P.markupChain({ sf: 12500, material: 8000, labor: 30000,
+                                              conditions: conds, remodel_rate: null });
+    out.moved.priceIdentical =
+      JSON.stringify(priced(shipped.wrote.polish_estimate.conditions)) ===
+      JSON.stringify(priced(flipped.wrote.polish_estimate.conditions));
+    out.moved.priceTotal = priced(shipped.wrote.polish_estimate.conditions).total;
+    // ONE CONDITION VECTOR IS A HIDING PLACE, so the pair is priced twice. Both saves have
+    // Prevailing wage ON, because flipping it is what triggered them -- and a branch written as
+    // `prevailing_wage || joint_filler` moves no money at all while prevailing wage is on.
+    // Pricing the same pair again with the engine six turned the other way takes that hiding place
+    // away: whichever half a masked read is hiding behind, one of the two runs has it the other
+    // way round. Found by mutation: the first version of this probe stayed green with the engine
+    // reading joint_filler.
+    const ENGINE = ["local", "hard_bid", "prevailing_wage", "taxable", "remodel_tax", "bond"];
+    const invert = (conds) => ENGINE.reduce(
+      (acc, k) => { acc[k] = !acc[k]; return acc; }, Object.assign({}, conds));
+    out.moved.priceIdenticalInverted =
+      JSON.stringify(priced(invert(shipped.wrote.polish_estimate.conditions))) ===
+      JSON.stringify(priced(invert(flipped.wrote.polish_estimate.conditions)));
+    // NOT A VACUOUS PAIR. The two saved condition sets have to really disagree about these three,
+    // or "the price did not move" is a statement about two identical inputs.
+    out.moved.pricedInputsDiffer = KEYS.filter(
+      (k) => shipped.wrote.polish_estimate.conditions[k] !==
+             flipped.wrote.polish_estimate.conditions[k]);
+
+    // ── and they come back off their cells, through the SAME loop the engine five use ──
+    // Their read-back used to be a second loop, over CARRY_CONDITIONS, sitting next to the engine
+    // five's. It is one loop over CONDITION_CELLS now, which is what makes "the cell wins where
+    // there is one" true of all eight rather than of five. A draft with cells and no model at all
+    // is the case that proves the loop runs: every answer here is the opposite of freshModel's.
+    const fromCells = build({ blob: { __draft_id: "moved-from-cells", cell_values: {
+      "Polish!E25": "Yes", "Polish!E29": "No", "Polish!F29": "Yes" } } });
+    await fromCells.api.boot();
+    out.moved.hydrated = KEYS.map((k) => [k, fromCells.api.model().conditions[k]]);
+  }
+
+  // ── the caret, which a browser walk found once already ──────────────────────
+  //
+  // repaintCondition has two paths: repaint ONE element's class, or re-render the whole block and
+  // put the caret back afterwards. The block path exists because Joint filler changed the SENTENCE
+  // inside Remove existing joint filler, and greying is a class on a sibling rather than on the
+  // switch that was clicked -- and both of those left this form on 2026-09-16, taking the only
+  // `needs` rule in CARRY_CONDITIONS with them.
+  //
+  // WHAT THAT LEAVES WORTH PINNING is the cheap path, which is now the only one this form can
+  // take: a switch flipped here must not throw away a caret the estimator tabbed somewhere else.
+  // The block branch is kept rather than deleted because the rule it implements is generic and
+  // CARRY_CONDITIONS is a list somebody will add to again; what is recorded here is that no entry
+  // currently asks for it.
+  {
+    const b = build();
+    await b.api.boot();
+    // The estimator has tabbed to Local job and is reading it. The click below lands somewhere
+    // else entirely, the way a mouse does.
+    b.dom.nodes["cond-local"].focus();
+    const beforeFlip = b.dom.nodes["conditions"].innerHTML;
+    clickSwitch(b, "taxable");
+    b.clock.fire();
+    out.caret = {
+      // Nothing on this form greys itself out because of another switch, so nothing takes the
+      // re-render path. Read off the real list rather than asserted in a comment.
+      dependsOn: b.api.CARRY_CONDITIONS.map((c) => c.needs || null).filter(Boolean),
+      focusUnmoved: b.dom.focusedId(),
+      // The container is deliberately NOT re-rendered, so its string still carries the pre-click
+      // markup while the element itself has had its class repainted in place.
+      containerUntouched: beforeFlip === b.dom.nodes["conditions"].innerHTML,
+      elementRepainted: b.dom.nodes["cond-taxable"].className,
+    };
+  }
+
+  {
     // ── AN ANSWER GIVEN ON THE REVIEW STEP SURVIVES ARRIVING HERE ────────────
     // The exact blob the Estimate page writes when its Sales tax switch is turned off: the model
     // says taxable=false AND the cell says "No", because that page writes both. Before it wrote
@@ -972,9 +1111,16 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
     const b = build({ copyBlob: { __draft_id: "proj-1-beta",
       project_name: "Nearman Creek (beta test)", city: "Bonner Springs", state: "KS",
       beta_sandbox_of: "proj-1",
-      // The carried four's answers, in the only place they live. Both of these are the OPPOSITE
-      // of the documented default, so "the page read the copy" and "the page read nothing" cannot
+      // The cell-borne answers, in the only place the copy states them. Both are the OPPOSITE of
+      // the documented default, so "the page read the copy" and "the page read nothing" cannot
       // produce the same screen.
+      //
+      // THE TWO NOW LAND IN DIFFERENT PLACES, which is why the probe below reads both. Renovation
+      // comes back into the `carry` binding and shows as a switch; joint filler came off this form
+      // on 2026-09-16 and comes back onto M.conditions instead, where it is invisible to the
+      // rendered block. adoptModel reassigns BOTH bindings, and a page that switched drafts mid-
+      // boot and only re-read one of them would carry the source project's answer into the copy's
+      // workbook with nothing on screen to show for it.
       cell_values: { "Epoxy!B10": "Reno", "Polish!B10": "Reno", "Polish!E29": "No" },
       polish_estimate: { takeoff: [{ area: "Copy bay", sf: 500 }],
                          conditions: { local: false, hard_bid: true, prevailing_wage: false,
@@ -986,6 +1132,16 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
       hydratedIntoTheForm: b.rec.written.length ? b.rec.written[0].isForm : false,
       projLine: b.dom.nodes["proj-line"].textContent,
       rendered: readSwitches(b.dom.nodes["conditions"].innerHTML).map((s) => [s.key, s.on]),
+      // The half of the re-read that no longer shows on this screen. Polish!E29 says "No" on the
+      // copy and joint filler ships ON, so a model still carrying the source project's answer is
+      // the visible failure -- visible here, that is, and nowhere on the page.
+      //
+      // COPIED, NOT REFERENCED. api.model() hands back the page's LIVE M, and the remodel_tax
+      // click below mutates it in place -- so a bare reference here is serialised at the end of
+      // the run, after the click, and reports a condition this line never saw. Everything else in
+      // this file reads out of rec.saves, which build() already deep-copies; this is the one probe
+      // that reaches into the page's own object.
+      modelConds: JSON.parse(JSON.stringify(b.api.model().conditions)),
     };
     // And a save lands on the copy's model, with the copy's takeoff intact.
     clickSwitch(b, "remodel_tax");

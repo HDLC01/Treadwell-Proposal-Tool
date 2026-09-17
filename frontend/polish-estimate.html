@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Polish estimate · Treadwell Proposal Generator</title>
   <link rel="icon" type="image/svg+xml" href="/img/treadwell-bison.svg" />
+  <!-- Warm the jsdelivr connection (DNS + TLS, no bytes) before the parser reaches the CDN script tag below. -->
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
   <!-- Styles itself, like library.html and followup-settings.html, so it needs its own opt-out. -->
   <meta name="color-scheme" content="only light" />
   <style>
@@ -104,6 +106,18 @@
     .tk-h .tag{font:700 10.5px var(--mono);letter-spacing:.06em;color:var(--ink-v)}
     .tk-sub{margin-left:auto;font:600 13px var(--mono);font-variant-numeric:tabular-nums}
     .tk-g{display:grid;gap:14px;grid-template-columns:2.1fr 1fr .75fr 1.15fr;align-items:start}
+    /* A material row carries one more field than an assembly row -- coverage, which an assembly
+       keeps on its own lines. Its own column template rather than a fifth column on the shared
+       one, so an assembly row does not grow an empty gap where coverage would go. */
+    .tk-g.matg{grid-template-columns:1.9fr .9fr .7fr .85fr 1.05fr}
+    /* Marked, not restyled. It is the same kind of thing as the row above it -- something the job
+       buys -- so it reads as one list. The tag says which kind it is; the card does not need to. */
+    .tk.mat .tag{background:var(--surf-low);color:var(--ink-v)}
+    /* Two ways to add, side by side. Which kind you want is known before you reach for either, so
+       a dropdown would add a click to both paths to save one button. */
+    .addrow2{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+    @media (max-width:640px){ .addrow2{grid-template-columns:1fr}
+      .tk-g.matg{grid-template-columns:1fr} }
     @media (max-width:760px){ .tk-g{grid-template-columns:1fr} }
     .x{background:none;border:0;color:var(--ink-3);cursor:pointer;flex:none;display:inline-flex;align-items:center;justify-content:center;padding:2px}
     .x:hover{color:var(--red)}
@@ -136,15 +150,45 @@
        rather than tucked under the Guys box as a link. Flex:none so it keeps its own width
        instead of being squeezed by .labname's flex:1 1 auto; nowrap so its two words never break
        and grow the header a second line. */
-    .labtoggle{flex:none;white-space:nowrap;background:transparent;color:var(--red);
-       border:1px solid var(--red);border-radius:var(--r-s);padding:4px 9px;
-       font:600 11.5px var(--sans);cursor:pointer}
-    .labtoggle:hover{color:var(--red-dark);border-color:var(--red-dark)}
+    /* The Guys switch. Borrows `.mw-sw`'s track and knob so it reads as the same family as
+       the Review step's switches, and wraps them in a pill of its own.
+
+       THE PILL IS NOT DECORATION. The control it replaced was a red-bordered button, and
+       that loudness was the entire point of the change that put it here: it had been an
+       underlined link in the small print under Guys, and nobody found it. A bare track and
+       label sitting in a busy card header is quieter than the link was, which walks the
+       same mistake backwards.
+
+       It stays a <button> rather than the <span role="switch"> the conditions use, because
+       a span has no keyboard behaviour and this control had some. */
+    .labsw{flex:none;white-space:nowrap;cursor:pointer;
+       border:1px solid var(--line);border-radius:999px;padding:4px 11px 4px 8px;
+       background:var(--card);font:600 11.5px var(--sans);color:var(--ink-v)}
+    .labsw:hover{border-color:var(--red);color:var(--red)}
+    /* ON IS THE LOUD ONE, and that is the right way round: off is the resting state every
+       Travel card sits in, so shouting there would be 23 cards shouting at once. On means
+       this row's Guys is a typed number that no longer follows the tasks above -- the one
+       state worth spotting from across the card. */
+    .labsw.on{background:var(--red-tint);border-color:var(--red);color:var(--red-dark)}
+    .labsw:focus-visible{outline:2px solid var(--red);outline-offset:2px}
     /* NOT APPLICABLE RIGHT NOW, AND STILL TYPEABLE -- `.sw.inert`'s convention in styles.css, and
        its reasoning: say plainly that an input is not affecting the price rather than disabling it
        and losing what somebody set. The house rule keeps a real `disabled` at .38-.5 and never
        dims a live control by opacity alone, so this stays at .55 with nothing disabled under it. */
     .tk.inert{opacity:.55}
+    /* The three that came off the intake form. Grouped under the takeoff rows rather than mixed
+       into them: they are not rows, they price nothing, and a switch sitting in a list of priced
+       lines reads as though it changes one. */
+    /* A condition card. The same `.tk` box as a takeoff row, marked so it cannot be mistaken for
+       one: a row comes to a number, and these come to a Yes or No that only Kyle's workbook
+       reads. The left rule is the whole distinction, drawn rather than written. */
+    .tk.cond{background:var(--card);border-left:3px solid var(--line)}
+    .tk.cond .tk-h{margin:0 0 7px}
+    .tk.cond .tk-sub{margin-left:auto;font:600 10.5px var(--mono);color:var(--ink-3);
+      letter-spacing:.02em}
+    .tk.cond .hint{margin:0}
+    /* Dimmed, still clickable. Same rule and same reason as .tk.inert above. */
+    .mw-sw.inert{opacity:.5}
     .inertline{color:var(--ink-v);font-style:italic;font-size:11.5px;margin:9px 0 0}
     /* Rendered unconditionally on every hours row; the card's OWN class decides whether it shows,
        so there is one source of truth for the dimming and the caption instead of two keyed
@@ -276,6 +320,10 @@
   <!-- Populated from the assemblies in the Items &amp; Assemblies library. A list= input searches
        anywhere in the name, which is how somebody who remembers "grind" finds the assembly. -->
   <datalist id="dl-assemblies"></datalist>
+  <!-- The materials a takeoff row can point at directly. A separate list from the assemblies on
+       purpose: they are different things and a row is one or the other, so one merged list would
+       let somebody pick a system into a field that prices a single product. -->
+  <datalist id="dl-items"></datalist>
 
   <div class="bid" id="bidbar" hidden>
     <div class="bid-in">

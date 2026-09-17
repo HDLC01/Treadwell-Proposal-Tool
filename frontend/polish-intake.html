@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Polish intake (beta) · Treadwell Proposal Generator</title>
   <link rel="icon" type="image/svg+xml" href="/img/treadwell-bison.svg" />
+  <!-- Warm the jsdelivr connection (DNS + TLS, no bytes) before the parser reaches the CDN script tag below. -->
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
   <!-- THE SHARED STYLESHEET, adopted 2026-09-10. Hanz: "the whole intake form in beta should look
        like" the live intake at /. This page used to style itself end to end -- its own :root of
        nine tokens, its own .wrap/.head/.sec/.f vocabulary, its own .sw switches and its own .c-*

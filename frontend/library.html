@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Items and Assemblies · Treadwell Proposal Generator</title>
   <link rel="icon" type="image/svg+xml" href="/img/treadwell-bison.svg" />
+  <!-- Warm the jsdelivr connection (DNS + TLS, no bytes) before the parser reaches the CDN script tag below. -->
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
   <!-- Styles itself, like calendar.html and followups.html, so it needs its own opt-out:
        without it Chromium synthesizes a dark theme and flattens the amber "material
        removed" warning into the ordinary row background. There is no dark theme here. -->
@@ -89,15 +91,23 @@
       justify-content:center; transition:background .12s ease, color .12s ease; }
     .icon:hover { color:var(--red); background:var(--surf-low); }
     .icon.danger:hover { color:var(--red-dark); background:var(--red-tint); }
-    /* Starred, and stays gold whether or not the pointer is over it -- unlike danger/hover above,
-       "favorited" is a standing state of the row, not something only visible on hover. The SVG's
-       own fill="none" is a presentation ATTRIBUTE, which CSS fill always outranks regardless of
-       selector weight, so toggling the class is enough -- no need to touch the markup itself. */
-    .icon.fav.on { color:#e6a817; }
-    .icon.fav.on svg { fill:currentColor; }
-    .icon.fav:hover { color:#e6a817; }
-    /* The rail's read-only echo of the same state -- see the comment at its markup in library.js. */
-    .arow-fav { color:#e6a817; vertical-align:-2px; margin-left:4px; flex:none; }
+    /* The Defaults tab's search results, which are the way a library row becomes a default now
+       that the switch has come off the item rows and the assembly editor. A result is a button
+       because pressing it CHANGES something -- it is not a link to somewhere else. */
+    .defhit { display:flex; align-items:center; gap:10px; width:100%; text-align:left;
+       border:0; border-top:1px solid var(--line-soft); background:var(--card);
+       padding:9px 13px; font:600 12.5px var(--ui); color:var(--ink); cursor:pointer; }
+    .defhit:first-child { border-top:0; }
+    .defhit:hover { background:var(--surf-low); color:var(--red); }
+    .defhit .k { margin-left:auto; font:600 10.5px var(--ui); color:var(--ink-v);
+       letter-spacing:.04em; text-transform:uppercase; }
+    .nores { margin:0; padding:9px 13px; color:var(--ink-v); font-size:12px; }
+    /* IT SITS UNDER THE ADD BUTTON, inside the Takeoff section, so the rows you are picking
+       from appear where the rows you already have are -- not beside the search box two
+       hundred pixels north of the table. Flush to the section edges for the same reason:
+       it is a continuation of that list, not a floating panel over it. */
+    #default-hits { border-top:1px solid var(--line); background:var(--card);
+       margin:0; overflow:hidden; }
     /* THE GLYPH IS NOT A CLICK TARGET. The delete and duplicate handlers read their data-
        attribute off the element that was clicked, and an <svg> child would answer null and
        swallow the press. The handlers now resolve through closest() as well, so this rule is
@@ -570,6 +580,8 @@
               aria-controls="pane-asm">Assemblies<span class="n" id="n-asm"></span></button>
       <button type="button" role="tab" id="tab-vendors" aria-selected="false"
               aria-controls="pane-vendors">Administration</button>
+      <button type="button" role="tab" id="tab-defaults" aria-selected="false"
+              aria-controls="pane-defaults">Default Items &amp; Assemblies</button>
       <!-- "+ New assembly" USED TO SIT HERE, in a .tabaction wrapper pinned to the right-hand end
            of this strip. Hanz, 2026-08-27: "I dont like the New assembly button up top." It now
            lives at the TOP OF THE ASSEMBLY RAIL, which is the list it actually appends to — see
@@ -653,7 +665,12 @@
                 <!-- "Dates" until 2026-09-04. The cell now names who added the material and who
                      last changed it, not only when, so the heading had to stop promising only
                      dates. No test pinned the old string. -->
-                <th class="n">Cost</th><th>Vendor</th><th>History</th><th class="w-act"></th>
+                <th class="n">Cost</th><th>Vendor</th><th>History</th>
+                <!-- NO DEFAULT COLUMN. It lived here for one day. Hanz, 2026-09-17: "all the
+                     default items in assemblies should be handled in default items in assemblies
+                     tab" -- one screen owns defaults, and a switch here would be a second place to
+                     set the same thing. The Defaults tab's own search adds them now. -->
+                <th class="w-act"></th>
               </tr>
             </thead>
             <tbody id="items-body"></tbody>
@@ -762,6 +779,116 @@
     </section>
 
     <!-- ── Assemblies ─────────────────────────────────────────────────── -->
+    <!-- EMPTY ON PURPOSE, AND SAYING SO. The favourite star came off Items and Assemblies on
+         2026-09-16 because what "default" should mean had not been settled; this tab is where the
+         answer will live once it is. An empty tab that explains itself is honest about that. What
+         it must NOT do is guess at the feature and ship a control nobody agreed to — that is the
+         thing being undone. -->
+    <section id="pane-defaults" role="tabpanel" aria-labelledby="tab-defaults" hidden>
+      <!-- TWO CATEGORIES, AND THEY ARE THE ESTIMATE'S OWN TWO STEPS rather than the library's.
+           Hanz, 2026-09-16: "one for takeoff and labor". That is why this is not Items and
+           Assemblies again under a second heading — a default is something a NEW BID starts
+           holding, and a bid is built as a takeoff and then as labor. The library's own split
+           (materials you buy vs systems built from them) is a different question and already has
+           its own two tabs.
+
+           Same container as Administration on purpose: .admin-grid of .admin-section, each a
+           heading over a card. It is the page's established shape for "a list an admin curates",
+           which is what both of these are. -->
+      <!-- A WAY IN, NOT A FILTER OVER WHAT IS ALREADY HERE. Hanz: "for when entering the
+           defaults". The switch on an item or assembly row is one way to make something a
+           default; this is the other, and it is the one that works when you know what you want
+           and do not want to go and find its row first.
+
+           The two lists below are short by design -- a default is something chosen on purpose --
+           so a box that only narrowed them would be more chrome than the thing it searched. This
+           searches the LIBRARY, and picking a result switches that row on. -->
+      <div class="itemsearch" id="default-search">
+        <span class="searchbox">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
+               focusable="false"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.6-3.6"></path></svg>
+          <input id="default-q" type="search" placeholder="Search materials and assemblies to add"
+                 aria-label="Search the library for a material or assembly to make a default"
+                 autocomplete="off" />
+        </span>
+      </div>
+
+      <div class="admin-grid">
+        <div class="admin-section" id="default-takeoff">
+          <h2>Takeoff</h2>
+          <div class="card">
+            <div class="tw">
+              <table>
+                <thead><tr><th>Line</th><th>Kind</th><th>How it is priced</th>
+                  <th class="w-act"></th></tr></thead>
+                <!-- FILLED BY renderDefaultTakeoff(). Three things end up here and they are not
+                     the same kind of thing, which is why the Kind column exists rather than three
+                     separate tables: an assembly and a material are rows a new estimate OPENS
+                     WITH, and a condition is a Yes/No it opens ANSWERED. Splitting them into
+                     sections would say they are unrelated; a column says they are the same list
+                     read three ways, which is what they are. -->
+                <tbody id="default-takeoff-body"></tbody>
+              </table>
+            </div>
+            <div id="default-takeoff-empty" class="empty" hidden>
+              <h3>Nothing set yet</h3>
+              <p>The takeoff lines a new estimate opens with. Switch a material or assembly on
+                under Items or Assemblies and it appears here.</p>
+            </div>
+            <!-- THE THIRD WAY IN, and it exists because the other two both assume you already
+                 know the thing. The row switch needs you to find the row; the search needs you to
+                 name what you are after. This is for sitting down to set the defaults up. -->
+            <div class="addrow" data-addrow-default="takeoff">
+              <button class="addbtn" type="button" data-add-default="takeoff">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                     aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"></path></svg>
+                Add a takeoff default</button>
+            </div>
+            <!-- THE RESULTS LAND HERE, NOT BESIDE THE SEARCH BOX. Hanz, 2026-09-17: "can we
+                 have the add take off default within the line item instead of up above". It
+                 was a <span class="hits"> inside .itemsearch, which is a flex ROW -- so the
+                 list rendered alongside the input, floating clear of the table it was about
+                 to add a row to. Under the Add button it reads as what it is: the next rows
+                 of this list, waiting to be picked. The search box above still drives it. -->
+            <div id="default-hits" hidden></div>
+          </div>
+        </div>
+
+        <div class="admin-section" id="default-labor">
+          <h2>Labor</h2>
+          <div class="card">
+            <div class="tw">
+              <table>
+                <thead><tr><th>Line</th><th class="n">Rate</th><th>How it is priced</th>
+                  <th class="w-act"></th></tr></thead>
+                <!-- FILLED BY renderDefaultLabor(). Travel is already in here before anybody adds
+                     anything: it is the labor default the estimate has always had, seeded into
+                     every new bid and appended to every old one. It was just never SHOWN as a
+                     default, which is what made it look hardcoded rather than chosen. -->
+                <tbody id="default-labor-body"></tbody>
+              </table>
+            </div>
+            <div id="default-labor-empty" class="empty" hidden>
+              <h3>Nothing set yet</h3>
+              <p>The labor lines a new estimate opens with.</p>
+            </div>
+            <!-- NOT OPTIONAL ON THIS ONE. Labor lines are not library rows -- there is no Labor
+                 tab to switch anything on from, and nothing for the search above to return. They
+                 are typed here, so this button is the only way a labor default gets made. -->
+            <div class="addrow" data-addrow-default="labor">
+              <button class="addbtn" type="button" data-add-default="labor">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                     aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"></path></svg>
+                Add a labor line</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <section id="pane-asm" role="tabpanel" aria-labelledby="tab-asm">
       <p class="paneintro"><b>Assemblies are how we estimate them.</b> Build a system out of the
         items - a primer, a body coat, a top coat - and see what it costs per square foot at a
@@ -895,14 +1022,6 @@
               <option value="SF">per SF</option>
               <option value="LF">per LF</option>
             </select>
-            <!-- renderPanel() sets the "on" class, aria-pressed, title and the star's own fill
-                 per the open assembly -- static here only for the shape and the click target. -->
-            <button class="icon fav" type="button" id="asm-fav" title="Mark as a favorite"
-                    aria-pressed="false" aria-label="Mark this assembly as a favorite">
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
-                   stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
-                   aria-hidden="true" focusable="false"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
-            </button>
             <button class="icon danger" type="button" id="asm-del" title="Delete this assembly"
                     aria-label="Delete this assembly">
               <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
@@ -1059,6 +1178,12 @@
   <script src="/auth.js"></script>
   <script src="/shared.js"></script>
   <!-- The pricing maths. Must precede the page script, which reads window.TWLib as it runs. -->
+  <!-- The estimate's own model, for ONE row: Travel is the labor default that already exists, and
+       the Defaults tab lists it. Loaded rather than re-typed because travelSeed's own comment
+       records the two copies that existed before drifting within a day -- and a third here would
+       have drifted unseen, since nothing on this page prices anything. It touches no DOM and runs
+       nothing on load; it is 14.6 KB gzipped of pure arithmetic. -->
+  <script src="/js/polish-bid-core.js"></script>
   <script src="/js/library-core.js"></script>
   <!-- ONE FUNCTION out of this file, and the eighteenth page to load it: TWCrm.nameOf, which is
        the app's single email→display-name convention ("kyle.loseke@…" → "Kyle Loseke"). The

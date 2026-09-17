@@ -53,6 +53,8 @@
 
   window.TWAuth = {
     ready: null,
+    // Settles EARLIER than `ready` -- the moment the bearer token exists. Built below.
+    tokenReady: null,
     client: () => sb,
     user: () => currentUser,
     token: () => window.__TW_TOKEN || null,
@@ -77,6 +79,33 @@
   };
 
   function apiBase() { return window.TW_API_BASE || ""; }
+
+  // ── The token, without waiting for the profile ──
+  //
+  // `ready` means two things at once: a token exists AND /api/me has come back AND this page
+  // was not refused. That is the right gate for anything that paints, saves, or reads
+  // TWAuth.user() -- and showRefusal leaving it permanently unsettled is the whole mechanism
+  // that stops a denied member's page module (see showRefusal).
+  //
+  // But /api/me is a round trip made AFTER the token it authenticates with was already in
+  // hand. A page that only wants to START FETCHING therefore sits through a whole extra
+  // round trip -- ~250ms from Manila, on every estimate-review, info-sheet and library open --
+  // waiting for a profile it is not going to read. `tokenReady` is that earlier moment and
+  // nothing else: it says a token EXISTS.
+  //
+  // THIS DOES NOT REOPEN THE /api/default-notes 401 RACE (#124). That bug was a fetch firing
+  // with NO TOKEN AT ALL, which silently dropped a new project's boilerplate notes; the fix
+  // was to wait for one. `tokenReady` is precisely the promise that says one is there, so a
+  // caller gated on it cannot 401 for want of a token. What a caller MUST still do is keep
+  // its DOM and state work behind `ready`, or a refused page would paint over the refusal
+  // card that showRefusal just put up.
+  //
+  // Deliberately NEVER SETTLES on the paths where there is no token to have: no session
+  // (we are redirecting to /login.html), a non-@wetreadwell.com account, or a missing
+  // Supabase config. A token-gated fetch should not fire when there is no token, and every
+  // one of those paths is either navigating away or already showing a fatal.
+  let _tokenIsReady = function () {};
+  window.TWAuth.tokenReady = new Promise(function (resolve) { _tokenIsReady = resolve; });
 
   async function init() {
     let cfg = {};
@@ -106,6 +135,9 @@
       location.replace(LOGIN_PAGE + "?denied=1");
       return;
     }
+    // The token is in hand and this is a Treadwell account. Anything that needs only the
+    // token may go NOW, in parallel with the /api/me below rather than behind it.
+    _tokenIsReady(window.__TW_TOKEN);
     // Identify the user (role/name) + ensure the profile row exists.
     try {
       const me = await (await fetch(apiBase() + "/api/me",
