@@ -102,8 +102,12 @@
     .defhit .k { margin-left:auto; font:600 10.5px var(--ui); color:var(--ink-v);
        letter-spacing:.04em; text-transform:uppercase; }
     .nores { margin:0; padding:9px 13px; color:var(--ink-v); font-size:12px; }
-    #default-hits { border:1px solid var(--line); border-radius:var(--r-s);
-       background:var(--card); margin:0 0 14px; overflow:hidden; }
+    /* IT SITS UNDER THE ADD BUTTON, inside the Takeoff section, so the rows you are picking
+       from appear where the rows you already have are -- not beside the search box two
+       hundred pixels north of the table. Flush to the section edges for the same reason:
+       it is a continuation of that list, not a floating panel over it. */
+    #default-hits { border-top:1px solid var(--line); background:var(--card);
+       margin:0; overflow:hidden; }
     /* THE GLYPH IS NOT A CLICK TARGET. The delete and duplicate handlers read their data-
        attribute off the element that was clicked, and an <svg> child would answer null and
        swallow the press. The handlers now resolve through closest() as well, so this rule is
@@ -808,7 +812,6 @@
                  aria-label="Search the library for a material or assembly to make a default"
                  autocomplete="off" />
         </span>
-        <span class="hits" id="default-hits" hidden></span>
       </div>
 
       <div class="admin-grid">
@@ -843,6 +846,13 @@
                      aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"></path></svg>
                 Add a takeoff default</button>
             </div>
+            <!-- THE RESULTS LAND HERE, NOT BESIDE THE SEARCH BOX. Hanz, 2026-09-17: "can we
+                 have the add take off default within the line item instead of up above". It
+                 was a <span class="hits"> inside .itemsearch, which is a flex ROW -- so the
+                 list rendered alongside the input, floating clear of the table it was about
+                 to add a row to. Under the Add button it reads as what it is: the next rows
+                 of this list, waiting to be picked. The search box above still drives it. -->
+            <div id="default-hits" hidden></div>
           </div>
         </div>
 
