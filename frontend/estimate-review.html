@@ -8,12 +8,27 @@
 <!-- Warm the jsdelivr connection (DNS + TLS, no bytes) before the parser reaches the CDN script tag below. -->
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
 <link rel="stylesheet" href="/styles.css">
-<!-- HyperFormula — Excel-compatible formula engine for live recompute -->
-<script src="https://cdn.jsdelivr.net/npm/hyperformula@2.7.1/dist/hyperformula.full.min.js" integrity="sha384-mL8xIzdJNHBlFY+1tgjim6oUyvoCQpvhxipvuvmbN6xCaJzrausWuA16r/ktXKcm" crossorigin="anonymous"></script>
+<!-- HyperFormula — Excel-compatible formula engine for live recompute.
+
+     EVERY external script on this page is `defer`, and that is one decision rather than eight.
+     Without it this tag sat in the <head> as a classic script, so the parser stopped dead here
+     and the estimator saw NOTHING until 153 KB of formula engine had crossed the Pacific.
+     Measured on a throttled cold load (Slow 4G, 4x CPU): first contentful paint at 3.68 s with
+     HyperFormula's response finishing at 3.47 s -- the paint was waiting on it, not on the
+     workbook. With `defer` the paint stops waiting; the engine still lands before any page
+     script asks for it.
+
+     `defer` does not reorder anything: deferred scripts run in DOCUMENT order, after parsing,
+     before DOMContentLoaded. xl-excel-rounding still registers before any engine is built,
+     supabase-js is still present before auth.js mints a token, crm-core still precedes the
+     page's own script. That is exactly why the tags at the bottom of the body carry `defer`
+     too -- leave one of them classic and it would run BEFORE the engine arrived here, and
+     xl-excel-rounding's own guard (`typeof HyperFormula === "undefined"`) would fire. -->
+<script defer src="https://cdn.jsdelivr.net/npm/hyperformula@2.7.1/dist/hyperformula.full.min.js" integrity="sha384-mL8xIzdJNHBlFY+1tgjim6oUyvoCQpvhxipvuvmbN6xCaJzrausWuA16r/ktXKcm" crossorigin="anonymous"></script>
   <!-- Excel-compatible ROUNDUP/CEILING. Must load after HyperFormula and before any page
        script builds an engine: registration is global and one-time. Without it every
        ROUNDUP in the workbook can read a dollar or more high. See the file header. -->
-  <script src="/js/xl-excel-rounding.js"></script>
+  <script defer src="/js/xl-excel-rounding.js"></script>
 <style>
   /* Full-viewport layout — the estimate review uses the whole window,
      not the standard centred 1200px container. */
@@ -874,14 +889,14 @@
   <form id="estimate-form" style="display:none;"></form>
 </main>
 
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0" integrity="sha384-NNePyabYRaJyedI6EQAY7SV5Z8/0sQkuQ5WVfhKm0H+j0KSugkI2ZMNzw/QtzAWz" crossorigin="anonymous"></script>
-<script src="/js/icons.js"></script>
-<script src="/auth.js"></script>
-<script src="/shared.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0" integrity="sha384-NNePyabYRaJyedI6EQAY7SV5Z8/0sQkuQ5WVfhKm0H+j0KSugkI2ZMNzw/QtzAWz" crossorigin="anonymous"></script>
+<script defer src="/js/icons.js"></script>
+<script defer src="/auth.js"></script>
+<script defer src="/shared.js"></script>
 <!-- Shared person rendering (names, initials, avatar colours) — one source of
      truth so an estimator looks identical on every page. Must precede the page's
      own script, which reads window.TWCrm as it runs. -->
-<script src="/js/crm-core.js"></script>
-<script src="/js/estimate-review.js"></script>
+<script defer src="/js/crm-core.js"></script>
+<script defer src="/js/estimate-review.js"></script>
 </body>
 </html>
