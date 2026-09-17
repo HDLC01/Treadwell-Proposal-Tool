@@ -14,13 +14,17 @@ can now move a number on a screen somebody is reading.
 Still standalone in the direction that matters: this module imports nothing from `pricing.py`, and
 nothing on the LIVE intake / estimate / proposal path reads these tables.
 
-THREE TABLES, AND NO LINES TABLE.
+FOUR TABLES, AND NO LINES TABLE.
 
     library_items       one purchasable material, and the single source of truth for its price
     library_assemblies  a named system; its lines live in a `lines` JSONB column
     library_vendors     who Treadwell buys from — a list, so the Items tab can offer a dropdown
                         instead of a free-text box that grows three spellings of one supplier.
                         Managing the list is admin-only; picking from it is not.
+    library_labor       the labor lines an estimator can add to a bid besides the built-in
+                        ones — a rate typed once here instead of on every job. Travel is NOT
+                        one of these rows and stays built in; see the section at the foot of
+                        this file.
 
 Lines are JSONB rather than their own table because they are ordered, always read and written
 as a whole, and never queried across assemblies — the same call already made for
@@ -55,6 +59,7 @@ ASSEMBLIES = "library_assemblies"
 VENDORS = "library_vendors"
 DIVISION_REFS = "library_divisions"
 UNIT_REFS = "library_units"
+LABOR = "library_labor"
 
 # What a caller may set. Anything else in the payload is ignored rather than stored: an unknown
 # key is a client bug, and persisting it makes the row shape unpredictable for later readers.
@@ -72,6 +77,7 @@ ITEM_WRITABLE = ("name", "category", "divisions", "unit", "buy_qty", "unit_cost"
 ASM_WRITABLE = ("name", "category", "description", "unit", "lines")
 VENDOR_WRITABLE = ("name", "notes")
 REF_WRITABLE = ("name", "notes")
+LABOR_WRITABLE = ("name", "rate", "unit", "guys_auto", "sort", "notes")
 
 DEFAULT_ITEM_UNIT = "Gallon"    # what Kyle's sheet buys most things by
 DEFAULT_ASM_UNIT = "SF"         # what a system is priced per
@@ -105,12 +111,29 @@ ITEM_UNITS = ("Gallon", "Kit", "Bag")
 # "Each" and must stay loadable and correctable rather than uneditable.
 ASM_UNITS = ("SF", "LF")
 
+# What a DEFAULT LABOR LINE is billed by — and this is the ONE list in this module that
+# is ENFORCED rather than merely offered.
+#
+# DIVISIONS, ITEM_UNITS and ASM_UNITS are all offered-not-enforced because they describe
+# what somebody bought: a legacy row holds whatever was typed, and refusing to save it
+# would make that row uneditable. This one is arithmetic. The estimate multiplies a rate
+# by HOURS or by DAYS and has no third multiplier, so a labor line saying "weeks" would
+# not price high or low — it would price as nothing, on a screen still showing the rate
+# somebody typed.
+#
+# Lower-case because that is what `TWPolishBid.travelSeed()` already puts on an estimate's
+# own labor row (`unit: "hours"`), and the two have to compare equal at the seam.
+LABOR_UNITS = ("hours", "days")
+DEFAULT_LABOR_UNIT = "hours"
+
 _MAX_TEXT = 200
 _MAX_NOTES = 4000
 _MAX_LINES = 60                 # a system with 60 coats is a mistake, not a system
 _MAX_UNIT_COST = 1e7            # $10M for one gallon is a typo
 _MAX_COVERAGE = 1e6             # SF covered by one unit
 _MAX_BUY_QTY = 1e5              # a 100,000-unit pack is a typo, not a pallet
+_MAX_LABOR_RATE = 1e5           # $100,000 an hour is a typo (numeric(10,2) holds it)
+_MAX_SORT = 10000               # a position in a short list, not a quantity
 
 
 class ValidationError(ValueError):
@@ -972,3 +995,195 @@ def unit_usage() -> Dict[str, int]:
         if key:
             counts[key] = counts.get(key, 0) + 1
     return counts
+
+
+# ── default labor lines ───────────────────────────────────────────────────────
+# The labor rows the Defaults tab offers an estimator BESIDE the ones the estimate builds in —
+# "Mobilization", "Night shift", a second crew rate — typed once here instead of into every bid.
+#
+# TRAVEL IS NOT A ROW IN THIS TABLE, is not migrated into it, and must not be written into it by
+# anything. It stays `TWPolishBid.travelSeed()` in frontend/js/polish-bid-core.js and keeps
+# rendering as "Built in" with no Edit and no Remove; a row here is an ADDITION beside it. The two
+# shapes differ on purpose and the names differ with them — an estimate's labor row calls it
+# `label` and carries the guys/days somebody typed for THAT job, while this table calls it `name`
+# and carries only what is the same on every job. The mapping between the two lives in ONE place
+# on the frontend, for the reason travelSeed's own comment records: two copies of it drifted
+# within a day.
+#
+# THE TABLE MAY NOT EXIST, and that is the case this section is mostly written for. It was applied
+# to the staging Postgres on 2026-09-17; production does not have it yet, by Hanz's decision that
+# this ships staging first. So the READ degrades to "no custom labor lines" instead of raising —
+# see list_labor — which is both the truth on a box where nobody has added one and the difference
+# between a Library page that loads and a Library page that 500s over a section of a tab that
+# mostly shows something else. The WRITES deliberately do NOT degrade; see create_labor.
+def validate_labor(payload: Dict[str, Any], *, partial: bool = False) -> Dict[str, Any]:
+    """Shape and check a labor payload; returns only the columns we intend to write.
+
+    Same contract as validate_item and validate_ref: unknown keys are dropped rather than stored,
+    and `partial=True` touches only the fields the caller actually named, so a debounced
+    one-field PATCH cannot blank the rest of the row."""
+    if not isinstance(payload, dict):
+        raise ValidationError("Nothing to save.")
+
+    out: Dict[str, Any] = {}
+
+    if "name" in payload or not partial:
+        name = _clean_text(payload.get("name"))
+        if not name:
+            raise ValidationError("Give the labor line a name so it can be found later.")
+        out["name"] = name
+
+    if "rate" in payload or not partial:
+        # NOT NULLABLE, unlike an item's `unit_cost`. A blank rate means zero and the row says so
+        # on screen; storing it as "not set" would let a line price a bid at nothing while looking
+        # complete. `_number` is what refuses the negative, the NaN and the non-number, with the
+        # readable message every other field in this module already uses.
+        rate = _number(payload.get("rate"), field="A rate", maximum=_MAX_LABOR_RATE)
+        out["rate"] = 0.0 if rate is None else rate
+
+    if "unit" in payload or not partial:
+        # The one CLOSED list here — see LABOR_UNITS for why this one is enforced when the others
+        # are not. Case is folded first, so "Hours" saves rather than being refused for its shift
+        # key; blank means the column default rather than an error, because a client clearing a
+        # field is asking for the default, not proposing a third unit.
+        unit = _canonical(_clean_text(payload.get("unit"), 24), LABOR_UNITS) or DEFAULT_LABOR_UNIT
+        if unit not in LABOR_UNITS:
+            raise ValidationError(
+                "A labor line is billed by hours or by days — \"%s\" is neither." % unit)
+        out["unit"] = unit
+
+    if "guys_auto" in payload or not partial:
+        # Coerced, not validated: any truthy/falsy value means exactly what it says and there is
+        # no invalid value to reject. Same posture as an item's `favorite`.
+        out["guys_auto"] = bool(payload.get("guys_auto"))
+
+    if "sort" in payload or not partial:
+        # A position, so a whole number. `_number` already refuses a negative and a NaN, and the
+        # int() is what keeps a dragged "2.5" from becoming a fractional position the column
+        # cannot hold.
+        pos = _number(payload.get("sort"), field="Position", maximum=_MAX_SORT)
+        out["sort"] = int(pos) if pos is not None else 0
+
+    if "notes" in payload or not partial:
+        out["notes"] = _clean_text(payload.get("notes"), _MAX_NOTES) or None
+
+    return out
+
+
+def _shape_labor(row: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "id": row.get("id"),
+        "name": row.get("name") or "Untitled",
+        # A float, not a string: the estimate multiplies by it. PostgREST returns numeric(10,2) as
+        # a string, so the coercion happens here rather than in every caller — the same reason
+        # _shape_item coerces unit_cost.
+        "rate": _as_float(row.get("rate")) or 0.0,
+        "unit": row.get("unit") or DEFAULT_LABOR_UNIT,
+        "guys_auto": bool(row.get("guys_auto")),
+        "sort": int(_as_float(row.get("sort")) or 0),
+        "notes": row.get("notes") or "",
+        "owner_email": row.get("owner_email") or "",
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+    }
+
+
+def _labor_order(row: Dict[str, Any]) -> tuple:
+    """`sort` then `name`, which is the order the contract promises every reader.
+
+    Case-folded on the name so "night shift" and "Night Shift" do not sit either side of
+    "Overtime" purely because of a capital letter."""
+    return (row.get("sort") or 0, str(row.get("name") or "").casefold())
+
+
+def list_labor() -> List[Dict[str, Any]]:
+    """Every live custom labor line, sorted by `sort` then `name`. NEVER RAISES.
+
+    A missing `library_labor` reads as "no custom labor lines". That is the honest answer on
+    production until Hanz promotes the table, and on any box where the DDL has not run — and the
+    alternative is a Library page that 500s on load over a feature nobody there has used yet. It
+    is the call `calendar_events.list_events()` already makes for the same reason: a broken read
+    of one section must not take down a page that mostly shows something else.
+
+    Deliberately broad, because "the table is absent" reaches Python as an ordinary APIError from
+    PostgREST (PGRST205) and an unconfigured store reaches it as something else again; the caller
+    can do nothing useful with either, and both mean the same thing to the page.
+
+    Sorted HERE as well as in the query: the query's ORDER BY is what the database does, and this
+    is what the contract says — a reader should not have to trust that those two agree."""
+    try:
+        sb = get_client()
+        res = (sb.table(LABOR).select("*")
+               .is_("deleted_at", "null")
+               .order("sort")
+               .limit(500).execute())
+        rows = [_shape_labor(r) for r in (res.data or [])]
+    except Exception as exc:  # noqa: BLE001
+        log.warning("library_labor unreadable (table not promoted yet?): %s", exc)
+        return []
+    return sorted(rows, key=_labor_order)
+
+
+def get_labor(labor_id: str) -> Optional[Dict[str, Any]]:
+    sb = get_client()
+    res = (sb.table(LABOR).select("*")
+           .eq("id", labor_id).is_("deleted_at", "null").limit(1).execute())
+    rows = res.data or []
+    return _shape_labor(rows[0]) if rows else None
+
+
+def create_labor(payload: Dict[str, Any], owner_email: Optional[str]) -> Dict[str, Any]:
+    """Add a custom labor line.
+
+    DOES NOT DEGRADE when the table is missing, and the asymmetry with list_labor is the whole
+    point of both. A read of a table that is not there is honestly empty; a WRITE that quietly
+    does nothing tells an admin they saved a rate they did not save, and they find out when a bid
+    is short. So this one fails loudly.
+
+    A DUPLICATE NAME IS ALLOWED, unlike a vendor or a division. Those lists exist to stop one
+    supplier having three spellings. This one is a list of things to do, and two lines both called
+    "Mobilization" at different rates is a real thing to want on a job with two crews — the DDL's
+    index on the live name is not unique, so the store agrees."""
+    row = validate_labor(payload)
+    row["id"] = str(uuid.uuid4())
+    row["owner_email"] = _actor(owner_email)
+    row["created_at"] = row["updated_at"] = _now_iso()
+    sb = get_client()
+    sb.table(LABOR).insert(row).execute()
+    # Read back rather than answering with the dict we just built. `rate` is numeric(10,2), so
+    # a figure typed with more precision is rounded BY THE STORE — and a create that replies
+    # with the number it wished for would show a rate that silently changes on the next reload.
+    # update_labor already returns the stored row; this is create agreeing with it rather than
+    # a new idea. The fallback covers a store that answers a read differently from a write.
+    return get_labor(row["id"]) or _shape_labor(row)
+
+
+def update_labor(labor_id: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Patch one labor line. Returns None when it is gone, so the caller can 404 rather than
+    reporting a successful write to nothing — the row may have been removed in another tab."""
+    patch = validate_labor(payload, partial=True)
+    if not patch:
+        return get_labor(labor_id)
+    sb = get_client()
+    cur = (sb.table(LABOR).select("id")
+           .eq("id", labor_id).is_("deleted_at", "null").limit(1).execute())
+    if not (cur.data or []):
+        return None
+    patch["updated_at"] = _now_iso()
+    sb.table(LABOR).update(patch).eq("id", labor_id).execute()
+    return get_labor(labor_id)
+
+
+def delete_labor(labor_id: str) -> bool:
+    """Soft-delete, as everywhere else in this module: `deleted_at` hides the row.
+
+    A rate somebody typed by hand is reference data, and an estimate that already used this line
+    carries its own copy of the number — so removing it from the list must not, and does not,
+    reach back into a bid that was built with it."""
+    sb = get_client()
+    cur = (sb.table(LABOR).select("id")
+           .eq("id", labor_id).is_("deleted_at", "null").limit(1).execute())
+    if not (cur.data or []):
+        return False
+    sb.table(LABOR).update({"deleted_at": _now_iso()}).eq("id", labor_id).execute()
+    return True

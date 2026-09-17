@@ -375,6 +375,85 @@
              unit: "hours", guys_auto: true };
   }
 
+  /** One row of `public.library_labor`, read as one of THIS model's labor rows.
+   *
+   *  THE TWO SHAPES DIFFER, AND NEITHER IS RENAMED TO MATCH THE OTHER. The table calls the line's
+   *  text `name`, the way every other library table does; a labor row on this model calls it
+   *  `label`, the way the three crew rows and Travel above have since the model existed. Renaming
+   *  the column would break the library page and the API contract three tracks agreed on; renaming
+   *  `label` would blank the Labor step's names on every bid already saved. So the difference is
+   *  kept and bridged, once, here.
+   *
+   *  ONE DEFINITION, and the note on travelSeed directly above says why it is stated only once:
+   *  that row written out twice drifted within a day. This is the same row with one more source.
+   *
+   *  GUYS AND DAYS START EMPTY on purpose. A default says what the line IS and what it costs per
+   *  unit; how much of it THIS job needs is the estimator's to type, and a seeded quantity would
+   *  be a number nobody chose sitting inside a customer's price. `rate` is Number(), not num():
+   *  the endpoint refuses a non-numeric rate with a 400, so there is nothing here for a coercion
+   *  to rescue, and laborCost already reads a NaN as 0 rather than poisoning the bid. */
+  function libraryLaborRow(row) {
+    var r = row || {};
+    return { id: r.id, label: r.name, guys: "", days: "", rate: Number(r.rate),
+             unit: r.unit, guys_auto: !!r.guys_auto };
+  }
+
+  /** `labor` with the library's default lines standing beside it. A NEW array; the one handed in
+   *  is never touched, and neither are the rows inside it.
+   *
+   *  TRAVEL STAYS BUILT IN. It is not a row in library_labor, it is not migrated into one, and
+   *  nothing here can replace it: an id already on the model wins outright. That guard is not
+   *  theoretical -- a library row that somehow carried the id "travel" would otherwise displace
+   *  the built-in row and take migrateModel's Travel backfill (which finds the row by that exact
+   *  id) with it. `id` is not a writable field on the endpoint, so this is a cheap guard against
+   *  something that should never arrive rather than a case anybody can produce today.
+   *
+   *  ORDER IS THE SERVER'S. GET /api/library/labor sorts by `sort` then `name`; re-sorting here
+   *  would be a second opinion on the order the estimator arranged them in on the library page.
+   *
+   *  WHO IS ALLOWED TO CALL THIS is the whole safety question, and the answer is laborUnstated
+   *  below -- never this function, which will happily add rows to a finished bid if asked. */
+  function seedLibraryLabor(labor, rows) {
+    var out = (labor instanceof Array) ? labor.slice() : [];
+    if (!(rows instanceof Array)) return out;
+    var seen = {};
+    var i;
+    for (i = 0; i < out.length; i++) {
+      if (out[i] && out[i].id !== null && out[i].id !== undefined) seen[String(out[i].id)] = true;
+    }
+    for (i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      if (!r || r.id === null || r.id === undefined || seen[String(r.id)]) continue;
+      seen[String(r.id)] = true;
+      out.push(libraryLaborRow(r));
+    }
+    return out;
+  }
+
+  /** Does this SAVED blob state no labor rows of its own?
+   *
+   *  THE GATE ON THE DEFAULTS, and the only thing standing between a library edit and somebody's
+   *  finished bid. True means exactly one thing: nobody has ever stated a labor row for this
+   *  estimate, so there is no estimator's work for a default to land on top of.
+   *
+   *  IT READS THE SAVED BLOB, NOT A MODEL, and it has to. migrateModel fills a missing `labor` in
+   *  from freshModel() before it hands the model back, so by the time a model exists the question
+   *  can no longer be asked of it -- every model has four labor rows whether or not anybody chose
+   *  them. Ask it of the blob or do not ask it at all.
+   *
+   *  ANYTHING THAT IS NOT A v2 MODEL ANSWERS FALSE, which is the conservative direction. A v1
+   *  draft keeps its crew under `labour` (see V1_LABOUR_KEY) and has no `labor` at all, so reading
+   *  the absence as "never stated" would inject defaults into a bid that has real crew numbers on
+   *  it -- the one outcome this gate exists to prevent. A version-less partial blob is treated the
+   *  same way for the same reason: it is not ours to judge. Only "nothing saved whatsoever" and
+   *  "a v2 model that states no rows" are seedable. `version !== 2` is the identical strict
+   *  comparison migrateModel makes, so the two cannot disagree about what a v2 model is. */
+  function laborUnstated(saved) {
+    if (!saved || typeof saved !== "object") return true;
+    if (saved.version !== 2) return false;
+    return !(saved.labor instanceof Array) || !saved.labor.length;
+  }
+
   /** The five conditions that ALSO live as Yes/No literals in Kyle's workbook.
    *
    *  HERE, IN THE SHARED MODULE, BECAUSE THERE ARE NOW TWO SCREENS THAT CAN CHANGE A CONDITION.
@@ -772,6 +851,16 @@
     // written above travelSeed itself -- the two copies that existed before drifted within a day,
     // and a third on another page would have drifted unseen, because nothing on the library page
     // prices anything and nobody would have noticed the rate go stale.
-    travelSeed: travelSeed
+    travelSeed: travelSeed,
+    // AND THE SAME ARGUMENT AGAIN, 2026-09-17, for the library's CUSTOM labor lines. The seam
+    // between a library_labor row and an estimate labor row lives in libraryLaborRow and nowhere
+    // else -- the table says "name", the estimate says "label", and a second hand-written mapping
+    // is exactly how travelSeed came to have two copies that disagreed.
+    //
+    // The conflict resolved here was the seed branch replacing travelSeed's export rather than
+    // joining it: that branch was cut from main, which did not have the 2026-09-16 export yet.
+    // Both belong -- Travel is built in, the library rows are additions beside it.
+    libraryLaborRow: libraryLaborRow, seedLibraryLabor: seedLibraryLabor,
+    laborUnstated: laborUnstated
   };
 });

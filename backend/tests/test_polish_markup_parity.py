@@ -993,3 +993,133 @@ def test_what_blocks_a_price_is_said_in_words_an_estimator_can_act_on(ran):
     # Neither is half-filled, and neither should stop a bid.
     assert says["ready to price: a switched-off labor row is not half-filled"] == []
     assert says["a model that is not a model at all"], "a broken model is not ready to price"
+
+
+# ── the library's default labor lines ─────────────────────────────────────────
+# Library -> Default Items & Assemblies grew a real table (public.library_labor) on 2026-09-17,
+# because "+ Add a labor line" had shipped with nothing behind it. These four tests are the seam
+# between that table and this model, and the third one is the one that matters: a default is a
+# starting point for a bid nobody has worked on yet, and NOTHING about it may reach a bid that
+# somebody has.
+@needs_node
+def test_a_library_labor_line_is_read_onto_the_model_by_one_mapping(ran):
+    """`name` on the table, `label` on the model -- the two shapes differ and neither is renamed
+    to match the other, so exactly one mapping bridges them. travelSeed's own note directly above
+    it records why that mapping is stated once: the same row written out twice drifted within a
+    day, and the migration's copy went on handing out the old shape after the seed had moved on.
+
+    Mutation: change `label: r.name` to `label: r.label` in libraryLaborRow -- every default lands
+    on the Labor step with a blank name, which is what a second copy of this mapping looks like
+    after the column is renamed on one side."""
+    lib = ran["libraryLabor"]
+    assert [r["label"] for r in lib["mapped"]] == ["Densify", "Night shift premium"], (
+        "the table's `name` did not become the model's `label`: %r" % lib["mapped"])
+    assert [r["id"] for r in lib["mapped"]] == ["lab-densify", "lab-night"]
+    assert [r["unit"] for r in lib["mapped"]] == ["days", "hours"]
+    assert [r["guys_auto"] for r in lib["mapped"]] == [False, True], (
+        "guys_auto did not survive as a real boolean")
+    # PostgREST hands numeric back as TEXT. A rate left as a string prices correctly today (num()
+    # coerces it) and then sits on the saved draft as "40.00" for the life of the bid.
+    assert lib["rateType"] == "number", "the rate stayed a string off the API"
+    assert [r["rate"] for r in lib["mapped"]] == [40.0, 12.5]
+    # THE ESTIMATOR'S OWN BOXES START EMPTY. A default says what the line is and what it costs per
+    # unit; how much of it this job needs is nobody's to guess, and a seeded quantity would be a
+    # number no one chose sitting inside a customer's price.
+    assert [r["guys"] for r in lib["mapped"]] == ["", ""]
+    assert [r["days"] for r in lib["mapped"]] == ["", ""]
+
+
+@needs_node
+def test_the_defaults_stand_beside_travel_and_can_never_replace_it(ran):
+    """TRAVEL STAYS BUILT IN. It is not a row in library_labor, it is not migrated into one, and a
+    default is an addition beside it -- never a substitution for it or for any of the three crew
+    rows off Kyle's own Polish tab.
+
+    Mutation: drop the `seen[String(r.id)]` guard from seedLibraryLabor's second loop. A library
+    row carrying the id "travel" then lands as a fifth row with the same id, and migrateModel --
+    which finds Travel by that exact id -- starts backfilling fields onto whichever one it reaches
+    first."""
+    lib = ran["libraryLabor"]
+    assert lib["seededIds"] == ["polishing", "mockup", "jointfill", "travel",
+                                "lab-densify", "lab-night"], (
+        "the defaults did not land after the four built-in rows, in the server's order: %r"
+        % lib["seededIds"])
+    assert lib["builtInsUntouched"], "seeding rewrote one of the four built-in rows"
+    assert lib["inputUntouched"], "seeding mutated the array it was handed"
+    assert lib["isANewArray"], "seeding returned the same array it was handed"
+    # An id already on the model wins outright: one Travel, still the sheet's own $33 row, and the
+    # library's "Drive time" is not on the bid at all.
+    dup = lib["travelCannotBeReplaced"]
+    assert dup["count"] == 1 and dup["rowCount"] == 4, (
+        "a library row took the built-in Travel row's place: %r" % dup)
+    assert dup["label"] == "Travel" and dup["rate"] == 33.0
+    # Nothing to add, in all three shapes "nothing" arrives in -- an empty table, a read that
+    # could not answer, and a row the API should never have served.
+    built_in = ["polishing", "mockup", "jointfill", "travel"]
+    assert lib["emptyList"] == built_in
+    assert lib["missingList"] == built_in
+    assert lib["rowsWithoutIds"] == built_in
+
+
+@needs_node
+def test_the_gate_on_the_defaults_only_opens_where_no_labor_was_ever_stated(ran):
+    """laborUnstated is the only thing standing between an admin editing the default list and an
+    estimator's finished bid, and it is asked of the SAVED BLOB rather than of a model. It has to
+    be: migrateModel fills a missing `labor` in from freshModel() before it hands the model back,
+    so every model has four labor rows whether or not anybody chose them.
+
+    The v1 row is the one to read twice. A v1 draft keeps its crew under `labour`, so its `labor`
+    is missing for a reason that has nothing to do with the estimator not having worked on it.
+
+    Mutation: drop the `saved.version !== 2` line. Every v1 draft on staging then reads as
+    unstated, and opening one on the calculator appends the library's defaults to crew rows its
+    estimator typed months ago."""
+    says = {c["label"]: c["unstated"] for c in ran["laborUnstated"]}
+    assert says["nothing saved at all"] is True
+    assert says["null"] is True
+    assert says["a v2 model that states no labor"] is True, (
+        "the model the beta intake now mints does not read as seedable, so the defaults are "
+        "unreachable in the normal flow")
+    assert says["a v2 model with an empty labor array"] is True
+    assert says["a v2 model with labor on it"] is False
+    assert says["a v1 draft, whose crew lives under `labour`"] is False, (
+        "a v1 draft reads as having no labor, so the defaults would land on top of its crew rows")
+    assert says["a version-less partial blob"] is False
+    assert says["a string"] is True
+
+
+@needs_node
+def test_a_saved_bids_labor_is_never_touched_by_the_defaults(ran):
+    """THE HARD CONSTRAINT. An estimator's saved labor rows are their work. A bid that has been
+    worked on comes back EXACTLY as it was saved -- the same rows, the same order, the same typed
+    numbers -- no matter what the default list says today.
+
+    The fixture is a real visit's worth of work: the four built-in rows with their own numbers, and
+    one library default the estimator kept and then re-rated from $40 to $55.
+
+    NOT VACUOUS. `wouldHaveAdded` seeds that same array with that same library list and shows a row
+    arriving, so the library demonstrably holds something that COULD have landed here. Without it,
+    "nothing was added" would pass just as happily against an empty library and prove nothing.
+
+    Mutation: make laborUnstated return `true` for a v2 model that states rows (drop the final
+    `!saved.labor.length` clause and invert it). Every reopened bid then grows the defaults again
+    on every load, and the $55 the estimator typed sits next to a $40 duplicate."""
+    s = ran["savedLaborIsUntouchable"]
+    assert s["unstated"] is False, "a bid with five labor rows on it read as never having stated any"
+    assert s["afterMigrate"] == s["saved"], (
+        "a saved bid's labor came back changed:\n saved: %r\n after: %r"
+        % (s["saved"], s["afterMigrate"]))
+    # The estimator's own re-rate, named rather than left to the deep compare above, because this
+    # is the number a default overwriting a kept row would quietly put back.
+    kept = [r for r in s["afterMigrate"] if r["id"] == "lab-densify"]
+    assert len(kept) == 1 and kept[0]["rate"] == 55, (
+        "the library's rate was written back over the estimator's own: %r" % kept)
+    assert len(s["wouldHaveAdded"]) > len(s["saved"]), (
+        "the library list holds nothing this bid is missing, so 'nothing was added' proves "
+        "nothing: %r" % s["wouldHaveAdded"])
+    # REQUIREMENT 3: removing a default from the library must not remove it from bids already
+    # holding it. Once saved, the row is the BID's -- nothing consults the library about it again.
+    assert "lab-densify" in s["survivesAnEmptyLibrary"], (
+        "deleting the default took it off a bid that was already holding it: %r"
+        % s["survivesAnEmptyLibrary"])
+    assert len(s["survivesAnEmptyLibrary"]) == len(s["saved"])

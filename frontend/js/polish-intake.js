@@ -754,6 +754,25 @@
     // sent the project back to the spreadsheet intake. Both of those were silent.
     var model = B.migrateModel(existing);
     model.conditions = Object.assign({}, model.conditions, M.conditions);
+    // LABOR IS NOT THIS PAGE'S TO STATE -- and until 2026-09-17 it stated it anyway, by accident.
+    // This page has no labor UI at all; the line above says out loud that only `conditions` is
+    // its own. But migrateModel fills a missing `labor` in from freshModel() before it hands the
+    // model back, so the FIRST save on a brand-new project persisted four crew rows nobody had
+    // been shown, let alone typed.
+    //
+    // That was enough to make the Labor step's own defaults unreachable in the normal flow. The
+    // calculator adds the library's default labor lines to a bid whose labor has never been
+    // stated (B.laborUnstated, and the seeding block in js/polish-estimate.js); a model minted
+    // here had already stated it, seconds before the estimator ever reached the Labor step. Every
+    // beta project starts on this page, so every beta project arrived pre-disqualified.
+    //
+    // So the key is dropped back off -- ONLY when it was not already there. The guard reads what
+    // is ALREADY SAVED, which means the moment the calculator writes a real labor array this
+    // leaves it strictly alone; flipping a toggle here can never delete an estimator's crew rows.
+    // Nothing on screen changes either way: reopening the calculator fills the display copy in
+    // from freshModel() exactly as it did before, because that is what migrateModel does with a
+    // model that states no labor.
+    if (B.laborUnstated(cur.polish_estimate)) delete model.labor;
 
     // The county's four keys ride along as TOP-LEVEL draft keys, not inside polish_estimate: they
     // are the live estimate screen's own, and js/polish-estimate.js reads county_remodel_rate off

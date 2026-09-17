@@ -197,6 +197,33 @@ create table if not exists public.library_units (
 create index if not exists library_units_live_name_idx
   on public.library_units (name) where deleted_at is null;
 
+-- Custom labor defaults, 2026-09-17. The "+ Add a labor line" button on the Defaults tab had
+-- no handler because there was nowhere to put one: renderDefaultLabor drew a single built-in
+-- row out of travelSeed() and nothing stored anything else.
+--
+-- TRAVEL IS NOT IN HERE. It stays built in -- seeded into every new bid and appended to every
+-- old one -- and these rows are additions beside it. Migrating it into this table would turn a
+-- guarantee every estimate already relies on into a row somebody can delete.
+--
+-- Soft delete like every other library table, so removing a default cannot take it out of the
+-- bids already holding it. rate is numeric(10,2) and NOT NULL: a labor line without a rate is
+-- a line that prices at nothing, which is worse than one that refuses to be saved.
+create table if not exists public.library_labor (
+  id           text primary key,
+  name         text not null,
+  rate         numeric(10,2) not null default 0,
+  unit         text not null default 'hours',
+  guys_auto    boolean not null default false,
+  sort         integer not null default 0,
+  notes        text,
+  owner_email  text,
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now(),
+  deleted_at   timestamptz
+);
+create index if not exists library_labor_live_name_idx
+  on public.library_labor (name) where deleted_at is null;
+
 -- Items and Assemblies, 2026-08-15. Additive, and safe against a volume already holding BETA
 -- rows. buy_qty is the "5" of "5 Gal" (so unit_cost can mean what the pail costs); existing rows
 -- get 1, which prices exactly as they did before the column existed. cost_updated_at marks a

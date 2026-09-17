@@ -1199,6 +1199,69 @@ def api_library_unit_delete(unit_id: str, request: Request) -> Dict[str, Any]:
     return {"ok": True, "deleted": unit_id}
 
 
+class LibraryLaborIn(BaseModel):
+    """Loose on purpose — library.validate_labor() is the single authority on what is
+    acceptable, so the rules can't drift between a Pydantic model and the writer."""
+    name: Optional[str] = None
+    # `Any`, because a rate is typed into a text box and arrives as "33" or "$33.00"; and `sort`
+    # arrives as a string from a drag handle. Coercion belongs to validate_labor, not here.
+    rate: Optional[Any] = None
+    unit: Optional[str] = None
+    guys_auto: Optional[bool] = None
+    sort: Optional[Any] = None
+    notes: Optional[str] = None
+
+
+# Default labor lines — the rows an estimator can add to a bid beside the built-in ones.
+#
+# GATED LIKE VENDORS AND MARKUP, NOT LIKE ITEMS. WRITING is admin-only: these rows carry a rate,
+# and a rate is what a job sells for. READING is open to every signed-in user, because the estimate
+# has to offer the lines mid-bid — a gate on the read would stop a bid halfway through, silently,
+# which is the same reasoning the empty `api` tuple for /library.html records in nav_access.py.
+@app.get("/api/library/labor")
+def api_library_labor() -> Dict[str, Any]:
+    # ANSWERS 200 WITH AN EMPTY LIST WHEN THE TABLE DOES NOT EXIST. `library_labor` was applied to
+    # staging on 2026-09-17 and production does not have it yet, so on prod today this route is
+    # the difference between the Library page loading and the Library page 500ing. list_labor()
+    # never raises; see its docstring.
+    return {"ok": True, "labor": library.list_labor()}
+
+
+@app.post("/api/library/labor")
+def api_library_labor_create(payload: LibraryLaborIn, request: Request) -> Dict[str, Any]:
+    _require_admin(request)
+    try:
+        row = library.create_labor(payload.model_dump(exclude_unset=True), _user_email(request))
+    except library.ValidationError as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True, "row": row}
+
+
+@app.patch("/api/library/labor/{labor_id}")
+def api_library_labor_update(labor_id: str, payload: LibraryLaborIn,
+                             request: Request) -> Dict[str, Any]:
+    _require_admin(request)
+    try:
+        row = library.update_labor(labor_id, payload.model_dump(exclude_unset=True))
+    except library.ValidationError as exc:
+        raise HTTPException(400, str(exc))
+    if row is None:
+        # 404 rather than a cheerful 200: the line may have been removed in another tab, and
+        # reporting a successful write to nothing is how two people overwrite silently.
+        raise HTTPException(404, "That labor line is no longer on the list.")
+    return {"ok": True, "row": row}
+
+
+@app.delete("/api/library/labor/{labor_id}")
+def api_library_labor_delete(labor_id: str, request: Request) -> Dict[str, Any]:
+    _require_admin(request)
+    if not library.delete_labor(labor_id):
+        raise HTTPException(404, "That labor line is no longer on the list.")
+    # Soft, like every other library delete. An estimate built with this line carries its own copy
+    # of the rate, so removing it from the list does not reach back into a bid.
+    return {"ok": True}
+
+
 # ── Markup rules ──────────────────────────────────────────────────────────────
 # The markup chain's rates as editable expressions, per sheet layout. See backend/markup.py for
 # why the key is the TAB, why `applies=false` is not the same as a zero formula, and why the four

@@ -1268,3 +1268,71 @@ def test_a_brand_new_project_is_flagged_for_the_beta_intake_on_resume(ran):
     assert _polish_beta(ran["seam"]["routingFlagSees"]) is True, (
         "a project created in the beta intake would resume on the live intake"
     )
+
+
+@needs_node
+def test_this_page_does_not_state_labor_it_has_no_screen_for(ran):
+    """THE THIRD SEAM BUG, and the same shape as the two above it: this page writing something it
+    has no business writing, and the calculator reading it.
+
+    save() says out loud that only `conditions` is this page's to state -- there is no labor UI
+    here at all. It stated labor anyway until 2026-09-17, by accident: `B.migrateModel(existing)`
+    fills a missing `labor` in from freshModel() before handing the model back, so the very first
+    save on a brand-new project persisted four crew rows nobody had been shown.
+
+    Harmless on its own. Not harmless in the seam: js/polish-estimate.js adds the library's
+    default labor lines to a bid whose labor has never been stated (B.laborUnstated), and a model
+    minted here had already stated it -- so "+ Add a labor line" on Library -> Default Items &
+    Assemblies could never reach a project that started where every beta project starts.
+
+    ABSENT, NOT EMPTY, and asked of the real core rather than restated here: `calculatorWouldSeed`
+    is B.laborUnstated run on what this page actually saved, which is the same call the calculator
+    makes. Checked after a SECOND save too, because this page saves on every keystroke and the
+    guard reads what is already saved.
+
+    Mutation: drop the `if (B.laborUnstated(cur.polish_estimate)) delete model.labor;` line.
+    `mintedHasLaborKey` goes true and `calculatorWouldSeed` goes false."""
+    ln = ran["laborNotStated"]
+    assert ln["mintedHasLaborKey"] is False, (
+        "the beta intake stated labor rows for a project whose estimator has never seen a labor "
+        "screen, which disqualifies it from its own defaults")
+    assert ln["secondSaveHasLaborKey"] is False, "the second save put the labor rows back"
+    assert ln["calculatorWouldSeed"] is True and ln["calculatorWouldSeedAfterTwoSaves"] is True, (
+        "the calculator will not seed the library's defaults onto a project this page minted")
+    # Everything this page IS responsible for still lands. Dropping the key must not turn into
+    # dropping the model: without the version stamp the project reopens on the live spreadsheet
+    # intake (see the two seam tests above), and without conditions it prices at defaults.
+    assert ln["mintedVersion"] == 2 and ln["mintedStillHasConditions"] and ln["mintedHasTakeoff"]
+    # NOTHING IS LOST ON SCREEN. The calculator fills the display copy in from freshModel(),
+    # which is exactly what it did with the rows this page used to persist -- the three crew rows
+    # off Kyle's Polish tab at $33, and Travel.
+    assert [r[0] for r in ran["laborNotStated"]["readBackLabor"]] == \
+        ["polishing", "mockup", "jointfill", "travel"], (
+            "the calculator no longer reads back the built-in rows: %r" % ln["readBackLabor"])
+    assert [r[2] for r in ln["readBackLabor"]] == [33, 33, 33, 33]
+
+
+@needs_node
+def test_a_bid_that_has_been_worked_on_keeps_its_labor_through_a_toggle(ran):
+    """The guard's other direction, and the expensive one. The moment the calculator writes a real
+    labor array -- an estimator's crew numbers, and any default line they kept and re-rated --
+    flipping a switch on this page must leave it strictly alone. `takeoff` and `labor` live under
+    the same key as `conditions`, which is why save() merges rather than replaces; a blanket
+    `delete model.labor` would be that same regression wearing a new hat.
+
+    Mutation: drop the `B.laborUnstated(...)` guard and delete unconditionally. The estimator
+    comes back from setting prevailing wage to find their crew rows reset to the seed."""
+    ln = ran["laborNotStated"]
+    assert ln["keptHasLaborKey"] is True, (
+        "flipping a toggle deleted the labor rows off a bid that had been priced")
+    saved = ln["keptLabor"]
+    assert [r["id"] for r in saved][:2] == ["polishing", "lab-densify"], (
+        "the saved labor rows came back changed: %r" % saved)
+    assert saved[0]["guys"] == 4 and saved[0]["days"] == 6, (
+        "an estimator's crew numbers were reset to the seed: %r" % saved[0])
+    assert saved[1]["rate"] == 55, (
+        "a kept default was written back to the library's own rate: %r" % saved[1])
+    assert ln["keptCalculatorWouldSeed"] is False, (
+        "a worked-on bid reads as seedable, so opening it would append the defaults again")
+    # The toggle that was actually clicked still landed.
+    assert ln["keptTaxable"] is False

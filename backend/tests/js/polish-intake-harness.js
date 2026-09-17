@@ -1462,5 +1462,65 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
     };
   }
 
+  // -- labor is not this page's to state -------------------------------------
+  //
+  // This page has no labor UI at all, and its save() says out loud that only `conditions` is its
+  // own. It stated labor anyway until 2026-09-17, by accident: migrateModel fills a missing
+  // `labor` in from freshModel() before it hands the model back, so the first save on a brand-new
+  // project persisted four crew rows nobody had been shown.
+  //
+  // Harmless on its own, and not harmless at all in the seam: js/polish-estimate.js adds the
+  // library's default labor lines to a bid whose labor has never been stated (B.laborUnstated),
+  // and a model minted here had already stated it -- so "+ Add a labor line" on the library page
+  // could never reach a project that started where every project starts.
+  {
+    // A brand-new beta project, saved by flipping a toggle, exactly as the seam probe above does.
+    const fresh = build({ blob: { __draft_id: "brand-new-labor", project_name: "Fresh beta job" } });
+    await fresh.api.boot();
+    clickSwitch(fresh, "prevailing_wage");
+    fresh.clock.fire();
+    const minted = fresh.rec.saves[fresh.rec.saves.length - 1].polish_estimate;
+
+    // Saved again, because this page saves on every keystroke and the guard reads what is ALREADY
+    // SAVED. A second save that re-stated labor would close the door just as firmly as the first.
+    clickSwitch(fresh, "local");
+    fresh.clock.fire();
+    const mintedAgain = fresh.rec.saves[fresh.rec.saves.length - 1].polish_estimate;
+
+    // An estimator's own rows, arriving here from the calculator. Flipping a toggle on this page
+    // must not touch them -- this is the guard's other direction, and the expensive one.
+    const worked = build({ blob: { __draft_id: "worked-on", project_name: "Worked on",
+      polish_estimate: { version: 2, takeoff: JSON.parse(JSON.stringify(TAKEOFF)),
+        labor: [{ id: "polishing", label: "Polishing", guys: 4, days: 6, rate: 33 },
+                { id: "lab-densify", label: "Densify", guys: 2, days: 1, rate: 55,
+                  unit: "days", guys_auto: false }],
+        conditions: { local: true } } } });
+    await worked.api.boot();
+    clickSwitch(worked, "taxable");
+    worked.clock.fire();
+    const kept = worked.rec.saves[worked.rec.saves.length - 1].polish_estimate;
+
+    out.laborNotStated = {
+      // The key is absent, not empty: absent is what B.laborUnstated reads as "never stated".
+      mintedHasLaborKey: Object.prototype.hasOwnProperty.call(minted, "labor"),
+      mintedStillHasConditions: !!minted.conditions,
+      mintedVersion: minted.version,
+      mintedHasTakeoff: minted.takeoff instanceof Array,
+      secondSaveHasLaborKey: Object.prototype.hasOwnProperty.call(mintedAgain, "labor"),
+      // THE SEAM, asked of the real core the calculator gates on.
+      calculatorWouldSeed: P.laborUnstated(JSON.parse(JSON.stringify(minted))),
+      calculatorWouldSeedAfterTwoSaves: P.laborUnstated(JSON.parse(JSON.stringify(mintedAgain))),
+      // NOTHING IS LOST ON SCREEN: the calculator fills the display copy in from freshModel(),
+      // which is what it did with the rows this page used to persist.
+      readBackLabor: P.migrateModel(JSON.parse(JSON.stringify(minted))).labor
+        .map((r) => [r.id, r.guys, r.rate]),
+      // …and a bid that HAS been worked on is left strictly alone.
+      keptHasLaborKey: Object.prototype.hasOwnProperty.call(kept, "labor"),
+      keptLabor: kept.labor,
+      keptCalculatorWouldSeed: P.laborUnstated(JSON.parse(JSON.stringify(kept))),
+      keptTaxable: kept.conditions.taxable,
+    };
+  }
+
   console.log(JSON.stringify(out));
 })().catch((err) => { console.error(err); process.exit(1); });
