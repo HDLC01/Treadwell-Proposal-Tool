@@ -251,7 +251,11 @@ def test_the_row_shape_is_exactly_what_the_other_tracks_were_built_against(store
     the estimate's own labor-row shape. A key that is not here is a `undefined` on a bid."""
     row = _mk(notes="two trucks", guys_auto=True, sort=3)
     assert set(row) == {"id", "name", "rate", "unit", "guys_auto", "sort", "notes",
-                        "owner_email", "created_at", "updated_at"}
+                        "owner_email", "created_at", "updated_at", "default_work_types"}
+    # EMPTY MEANS EVERY WORK TYPE, which is what keeps the column backwards compatible:
+    # a row written before it existed still applies everywhere, exactly as it did when
+    # `favorite` was the whole story.
+    assert row["default_work_types"] == []
     assert isinstance(row["rate"], float)
     assert isinstance(row["sort"], int)
     assert row["guys_auto"] is True
@@ -453,3 +457,50 @@ def test_writing_to_something_that_is_gone_is_a_404(store, as_admin):
 def test_hostile_payloads_never_500(store, as_admin, payload):
     r = client.post("/api/library/labor", json=payload)
     assert r.status_code in (200, 400, 422), (payload, r.status_code, r.text)
+
+
+# ── which work types a default belongs to ─────────────────────────
+def test_the_work_types_come_from_markup_not_a_fourth_copy():
+    """A hand-typed list is how a default ends up filed under a name nothing looks up -- which
+    on screen is indistinguishable from a default that is simply switched off.
+
+    And `combo` is NOT one: it is what detect_work_type() returns for which PROPOSAL to write,
+    not a sheet tab. A combo job runs on epoxy AND polish, so it inherits both lists."""
+    import markup
+    assert library.WORK_TYPES is markup.TABS, (
+        "the library keeps its own copy of the work types; it will drift from markup's")
+    assert "combo" not in library.WORK_TYPES
+    assert "global" not in library.WORK_TYPES, (
+        "global is markup's word for every tab; a default says that by naming none")
+
+
+def test_empty_means_every_work_type_so_nothing_already_set_stops_applying():
+    """THE BACKWARDS-COMPATIBILITY GUARANTEE, and the reason no data migration was written.
+    Every row that predates the column reads [] and still applies everywhere."""
+    assert library._coerce_work_types(None) == []
+    assert library._coerce_work_types([]) == []
+    assert library._coerce_work_types("") == []
+
+
+def test_an_off_list_work_type_is_refused_rather_than_dropped():
+    """Dropped, it would save as "applies everywhere" -- the opposite of what was asked for,
+    silently. markup.py refuses an off-list layout for exactly this reason."""
+    for bad in ("combo", "Polish!", "sealer", "global", "epoxy2"):
+        with pytest.raises(library.ValidationError) as exc:
+            library._coerce_work_types([bad])
+        assert "work type" in str(exc.value)
+
+
+def test_work_types_are_a_set_in_the_sheets_own_order():
+    """Duplicates collapse and order is the workbook's, not the order somebody clicked: this is
+    a set of tabs, and two orderings of the same set must compare equal."""
+    assert (library._coerce_work_types(["epoxy", "polish", "epoxy"])
+            == library._coerce_work_types(["polish", "epoxy"]))
+    assert library._coerce_work_types(["gyp", "polish"]) == ["polish", "gyp"]
+    assert library._coerce_work_types(["EPOXY", " Polish "]) == ["polish", "epoxy"]
+
+
+def test_a_labor_line_carries_its_work_types_through_a_write(store):
+    """The column is useless if validate_labor drops it on the way to the store."""
+    row = _mk(default_work_types=["epoxy", "polish"])
+    assert row["default_work_types"] == ["polish", "epoxy"]

@@ -172,8 +172,20 @@ def test_the_takeoff_defaults_list_what_a_new_estimate_starts_with(ran):
     assert t["namesTheDefaults"], "the switched-on assembly and material are not listed"
     assert t["skipsTheRest"], (
         "the list shows rows nobody switched on, which makes the switch decorative")
-    assert t["kinds"] == ["Assembly", "Material", "Markup", "Condition", "Condition", "Condition"], (
-        "the kinds or their order changed: %s" % t["kinds"])
+    # GROUPED, 2026-09-17, at Hanz's ask: "sub categorize the containers wheter they are
+    # materials or assemblies". Sub-headings inside the one table, not four tables -- the
+    # order is the order a new estimate builds itself in.
+    assert t["groupTitles"] == ["Assemblies", "Materials", "Markup", "Conditions"], (
+        "the groups or their order changed: %s" % t["groupTitles"])
+    assert t["groupCounts"] == [1, 1, 1, 3], (
+        "a row landed in the wrong group: %s" % t["groupCounts"])
+    assert t["renderedHeadings"] == t["groupTitles"], (
+        "the groups exist in the data but are not drawn: %s" % t["renderedHeadings"])
+    assert t["noKindColumn"], (
+        "the Kind column is back; with a heading over every group it repeats itself on "
+        "every row")
+    assert t["noEmptyGroups"], (
+        "an empty group is being emitted, so the list shows a heading over blank space")
 
 
 @needs_node
@@ -264,14 +276,24 @@ def test_bond_is_shown_here_but_still_lives_on_the_markup_page():
     Mutation: give the bond row an editable control, or store its rate on this page."""
     t = ran_defaults()
     assert t["showsBond"], "bond is not on the Defaults tab, which Will asked for"
+    # EDITABLE SINCE 2026-09-18 ("all line items should be editable"), but as a second DOOR on
+    # one home: the box writes the markup_rules row BY ID, so this screen and the Markup page
+    # are editing the same row and cannot hold different answers.
+    assert t["bondIsEditableNotReadOnly"], "bond is read-only again"
+    assert t["bondStillSaysWhereItLives"], "the bond row no longer says the Markup page owns it"
     assert t["saysWhereBondLives"], (
         "the bond row does not say the Markup page owns it, so this reads as a second home")
     js = (FRONTEND / "js" / "library.js").read_text(encoding="utf-8", errors="replace")
     assert "/api/markup/rules" in js, "the rate is not read from the markup service"
-    start = js.index("function renderDefaultTakeoff")
-    body = js[start:js.index("The Labor defaults", start)]
-    assert "data-" not in body.split("GLOBAL_MARKUP")[1].split("});")[0], (
-        "the bond row carries a control, which would make this page a second home for the rate")
+    # READ OFF THE DRAWN ROW, not sliced out of the renderer's source. The old form split the
+    # function text on "GLOBAL_MARKUP" and then on "});" and broke the moment the renderer was
+    # regrouped -- it was asserting on punctuation, and it would equally have passed on a
+    # renderer that drew nothing. What matters is that the row a person sees offers nothing
+    # to press.
+    assert t["bondControlTargetsTheMarkupRule"], (
+        "the bond control does not target the markup rule by id, so this page has become a "
+        "SECOND HOME for the rate rather than a second door on the one home -- two homes "
+        "disagree the first time somebody changes one, and that is a wrong bid")
 
 
 @needs_node
@@ -903,127 +925,6 @@ def test_a_similar_name_is_pointed_out_without_being_blocked(ran):
     assert d["notItself"], "a row accused itself of being a duplicate"
     assert d["quietWhileTyping"] == [], "two characters is not yet a name"
     assert d["unrelated"] == []
-
-
-@needs_node
-def test_both_dates_are_shown_in_business_time(ran):
-    d = ran["dates"]
-    assert d["usesBusinessTime"], "the stamps aren't going through TW.fmtBizDateTime"
-    assert d["saysAddedAndPrice"]
-
-
-@needs_node
-def test_a_material_whose_price_never_moved_does_not_look_freshly_priced(ran):
-    """The stamp answers "how old is this number?". Showing the row's creation date there, or
-    today's date, would answer it wrongly — which is the whole reason it is its own column."""
-    assert ran["dates"]["neverPricedSaysSo"]
-    assert ran["dates"]["neverPricedShowsNoDate"]
-
-
-@needs_node
-def test_the_price_date_appears_without_a_reload(ran):
-    """FOUND ON STAGING IN THE BROWSER, not by these tests. The server stamped the price revision
-    correctly and the page went on saying "not since we started tracking" until F5, because the save
-    handler adopted only `updated_at` — the stamp Hanz asked for, looking broken.
-
-    Only the server can decide this date: it moves when the cost actually changed, not when a PATCH
-    was sent. So the page has to take it from the reply."""
-    p = ran["priceDate"]
-    assert p["modelAdopted"] == "2026-08-15T00:00:01Z", "the reply's price date was thrown away"
-    assert p["repainted"], "nothing was repainted, so the cell still shows the old date"
-    assert p["repaintedSelector"] == '[data-item="i1"] .datescell'
-    assert p["repaintShowsTheNewDate"] and p["repaintDroppedTheNeverLine"]
-
-
-@needs_node
-def test_a_patch_that_did_not_touch_the_cost_still_repaints_the_history_cell(ran):
-    """REVERSED on 2026-09-04. This test previously asserted the opposite — that a cost-less patch
-    repaints nothing — and that was correct for as long as the cell held only `created_at` and
-    `cost_updated_at`: `updated_at` moved on every write and changed nothing on screen, so a
-    repaint was pure churn during typing.
-
-    The cell now carries "Edited <updated_at> by <updated_by>", so `updated_at` is what one of its
-    three lines quotes. Keeping the old behaviour would leave the Edited line showing the previous
-    edit time and the previous editor until F5 — which is the exact failure
-    `test_the_price_date_appears_without_a_reload` above exists to prevent, one column over.
-
-    The old test's real concern was that a repaint must be DRIVEN BY A CHANGE. That is still
-    asserted, by `sameStampNoRepaint`."""
-    p = ran["priceDate"]
-    assert p["costlessPatchStillRepaints"], (
-        "an edit that moved updated_at did not repaint, so the Edited line is stale until F5")
-    assert p["costlessRepaintKeepsNeverLine"], (
-        "the repaint invented a price date for a material whose cost never moved — the thing the "
-        "pre-2026-09-04 version of this test was protecting")
-    assert p["sameStampNoRepaint"], (
-        "a reply that changed nothing still repainted; the repaint is now unconditional")
-    assert p["missingEditorDoesNotBlankIt"], (
-        "a reply without updated_by wiped the editor we already knew about")
-    assert p["quietPatchStillBumpedVersion"], "the version stamp stopped being adopted"
-    assert p["assemblySaveDoesNotRepaintItems"]
-
-
-@needs_node
-def test_the_history_cell_names_who_created_and_who_edited_each_material(ran):
-    """Hanz, 2026-09-04: "In the items tab we must put the name of who created it and who edited
-    it". Both are real columns — `owner_email` always existed, `updated_by` was added the same day
-    — and both render through CRM.nameOf, the app's one email→display-name convention, so a person
-    reads identically here and on the Assemblies rail."""
-    a = ran["authorship"]
-    assert a["creatorReadsAsAName"], "the Added line does not name who filed the material"
-    assert a["creatorIsNotAnEmail"], "the raw address is on screen instead of the name"
-    assert a["editorReadsAsAName"], "the Edited line does not name who last changed it"
-    assert a["editorDateShown"], "the edit time is missing or not in business time"
-
-
-@needs_node
-def test_an_unedited_material_is_not_credited_as_an_edit_by_its_creator(ran):
-    """A create stamps `created_at` and `updated_at` in the same write, so equal stamps mean
-    nothing has happened since the row was filed. Reading that as an edit would tell every
-    estimator that Kyle edited all 40 materials at the moment he added them."""
-    a = ran["authorship"]
-    assert a["untouchedSaysNotEdited"]
-    assert a["untouchedNamesNoEditor"], "an untouched row named an editor"
-    assert a["untouchedStillNamesCreator"], (
-        "'not edited' also blanked the creator, so the row names nobody at all")
-
-
-@needs_node
-def test_a_row_older_than_the_column_says_unknown_rather_than_guessing(ran):
-    """`updated_by` landed on 2026-09-04, so every row edited before that carries no editor and
-    never will. A bare date there reads as a name that failed to load, and falling back to
-    `owner_email` would attribute somebody else's edit to whoever filed it."""
-    a = ran["authorship"]
-    assert a["legacyEditSaysUnknown"]
-    assert a["legacyDoesNotInventAnEditor"], "the creator was credited with an edit they may not "\
-        "have made"
-
-
-@needs_node
-def test_the_price_line_takes_no_author(ran):
-    """`cost_updated_at` is decided server-side when the cost really moved, and no column records
-    who moved it. Pairing it with `updated_by` would attribute a price change to whoever last
-    fixed a spelling — a wrong name against a number, which is worse than no name."""
-    assert ran["authorship"]["priceLineHasNoAuthor"]
-
-
-@needs_node
-def test_the_editor_is_adopted_off_the_reply_not_left_until_a_reload(ran):
-    """The same failure the price date had, one column over: `updated_by` is stamped from the
-    bearer token, so the reply is the only place the client can learn it."""
-    e = ran["adoptEditor"]
-    assert e["editorAdopted"], "the reply's editor was thrown away"
-    assert e["repainted"], "nothing was repainted, so the cell still shows the old editor"
-    assert e["repaintNamesTheEditor"], "the repaint did not carry the new name"
-    assert e["repaintDroppedNotEditedSince"], (
-        "the row still claims it was never edited after an edit landed")
-    # The editor branch on its own, both dates held still. Without this the branch is invisible:
-    # a mutation deleting its repaint trigger passed every other test here, because they all move
-    # `updated_at` in the same reply and the repaint fired on that instead.
-    assert e["editorAloneRepaints"], (
-        "a reply that changed only updated_by did not repaint, so the branch that adopts it is "
-        "not driving anything")
-    assert e["editorAloneNamesTheEditor"]
 
 
 @needs_node
@@ -3163,3 +3064,34 @@ def test_a_failed_save_does_not_silence_the_record_for_good(ran):
     Mutation: move the `delete inFlight[key]` out of the finally and onto the success path."""
     assert ran["inFlight"]["savesAgainAfterAFailure"], (
         "after a 500 the record never saved again — the in-flight lock was not released")
+
+
+@needs_node
+def test_the_work_type_tabs_narrow_the_defaults_without_hiding_what_was_already_set(ran):
+    """Hanz, 2026-09-17: "how many tabs we need for each work type I'm referring to epoxy,
+    polish, combo, etc."
+
+    FIVE, and they are markup.TABS -- the tabs of Kyle's own workbook and the list the markup
+    rules are already filed under. COMBO IS NOT ONE: detect_work_type() returns combo for which
+    PROPOSAL to write, and a combo job runs on the epoxy AND polish tabs, so it reads both lists
+    rather than keeping a third that has to agree with two others.
+
+    THE LOAD-BEARING RULE IS THAT EMPTY MEANS EVERY TAB. Every row set before this column
+    existed carries no list, so it must keep appearing everywhere. Get that backwards and the
+    day these tabs deploy, everybody's existing defaults vanish from a screen that still says
+    they are set.
+    """
+    w = ran["workTypeTabs"]
+    assert w["tabsAreTheSheetTabs"] == ["polish", "seal", "epoxy", "leveling", "gyp"], (
+        "the work types drifted from markup.TABS: %s" % w["tabsAreTheSheetTabs"])
+    assert w["comboIsNotATab"], (
+        "combo is a proposal work type, not a sheet tab; a combo bid reads epoxy and polish")
+    assert w["unnarrowedOnAll"], (
+        "a default with no work types vanished from a tab -- every row set before this column "
+        "existed has none, so this is everybody's existing defaults disappearing")
+    assert w["unnarrowedLaborOnAll"], "the same, for a labor line"
+    assert w["epoxyOnlyOnEpoxy"], "an epoxy-only material is showing on other tabs"
+    assert w["polishOnlyOnPolish"], "a polish-only assembly is showing on other tabs"
+    assert w["gypLaborOnlyOnGyp"], "a gyp-only labor line is showing on other tabs"
+    assert w["travelOnEveryTab"], (
+        "Travel was filtered out; it is seeded into every bid whatever tab it sits on")

@@ -151,7 +151,11 @@
           GLOBAL_MARKUP = (mj.rules || []).filter(function (r) {
             return r.layout === "global" && r.applies;
           }).map(function (r) {
-            return { label: (r.line_key || "").replace(/_/g, " "), formula: r.formula };
+            // id AND line_key KEPT. The Defaults tab can now edit these, and an edit here
+            // PUTs the same markup_rules row the Markup page edits -- one home, two doors.
+            // Dropping the id was what made this list read-only in the first place.
+            return { id: r.id, line_key: r.line_key, layout: r.layout,
+                     label: (r.line_key || "").replace(/_/g, " "), formula: r.formula };
           });
         }
       } catch (e) { GLOBAL_MARKUP = []; }
@@ -252,15 +256,6 @@
     if (kind === "items" && moved) paintDates(known);
   }
 
-  /** Rewrite one row's Dates cell in place.
-   *
-   *  In place, not renderItems(): the debounce fires 600ms after the last keystroke, so the reply
-   *  routinely lands while somebody is still in the field. Rebuilding the row would move their
-   *  caret to the end of it. The Dates cell holds no inputs, so replacing it is safe. */
-  function paintDates(it) {
-    var cell = document.querySelector('[data-item="' + it.id + '"] .datescell');
-    if (cell) cell.innerHTML = datesHtml(it);
-  }
 
   // Somebody else got there first. Show THEIR version rather than leaving a screen that quietly
   // disagrees with the database - and say so, because a silent redraw mid-edit is worse than the
@@ -881,6 +876,8 @@
     return '<div class="dupe">Already in the list: ' + esc(names.join(", ")) + "</div>";
   }
 
+
+
   /** "by Hanz" for a row that names someone, and an honest "by unknown" for one that cannot.
    *
    *  `CRM.nameOf` is the app's single email→display-name convention (crm-core.js) — the same one
@@ -893,9 +890,7 @@
   function byHtml(email) {
     var n = CRM.nameOf(String(email || ""));
     return n ? 'by <b>' + esc(n) + "</b>" : 'by <span class="never">unknown</span>';
-  }
-
-  /** Who added it, when the price last moved, and who last changed it.
+  }  /** Who added it, when the price last moved, and who last changed it.
    *
    *  Three lines rather than the original two, because Hanz asked for the NAMES on this tab and
    *  "when" without "who" answers half the question people bring to a shared library.
@@ -908,22 +903,38 @@
    *  `updated_at === created_at` is the server's own way of saying nothing has happened since the
    *  row was filed, because a create stamps both columns in one write. So that case reads as "not
    *  edited since" rather than as an edit by the creator — the same distinction the price line
-   *  already draws with "not since we started tracking". */
+   *  already drew with "not since we started tracking" -- a line this cell no longer prints.
+   *
+   *  TWO LINES, NOT THREE, since 2026-09-18. The price line came out ("too much clutter"): it
+   *  answered "how old is this number?" for a number sitting in the very next column along,
+   *  and it was the third stacked line on every row of a dense editing table. cost_updated_at
+   *  is still stored, still returned, and still what the Price-updated sort orders by. */
   function datesHtml(it) {
     var made = it.created_at ? TW.fmtBizDateTime(it.created_at) : "—";
-    var priced = it.cost_updated_at
-      ? esc(TW.fmtBizDateTime(it.cost_updated_at))
-      : '<span class="never">not since we started tracking</span>';
     var edited = (it.updated_at && it.updated_at !== it.created_at)
       ? "Edited <b>" + esc(TW.fmtBizDateTime(it.updated_at)) + "</b> " + byHtml(it.updated_by)
       : '<span class="never">not edited since</span>';
     return '<div class="dates"><div>Added <b>' + esc(made) + "</b> " +
              byHtml(it.owner_email) + "</div>" +
-           "<div>Price " + priced + "</div>" +
+           // NO PRICE LINE. Hanz, 2026-09-18: "too much clutter" -- three stacked lines on
+           // every row of a dense editing table was two more than anyone reads, and the price
+           // one was the least of them: it answered "how old is this number?" for a number
+           // shown in the very next column along.
+           //
+           // cost_updated_at IS STILL STORED, still returned by the API, and still what the
+           // Price-updated sort orders by. Only the printing went.
            "<div>" + edited + "</div></div>";
   }
 
-  /** The library's own comparison form of a name: case, spacing and punctuation all ignored.
+  /** Rewrite one row's Dates cell in place.
+   *
+   *  In place, not renderItems(): the debounce fires 600ms after the last keystroke, so the reply
+   *  routinely lands while somebody is still in the field. Rebuilding the row would move their
+   *  caret to the end of it. The Dates cell holds no inputs, so replacing it is safe. */
+  function paintDates(it) {
+    var cell = document.querySelector('[data-item="' + it.id + '"] .datescell');
+    if (cell) cell.innerHTML = datesHtml(it);
+  }  /** The library's own comparison form of a name: case, spacing and punctuation all ignored.
    *
    *  Mirrors `_item_key` in backend/library.py, which is what actually REFUSES a duplicate. It is
    *  a mirror rather than the authority, and the two differ on one point worth knowing: Python's
@@ -2040,6 +2051,31 @@
   // returning nothing made the Add button below the list have nothing to open.
   var DEFAULT_BROWSE = false;
 
+  // WHICH WORK TYPE THE DEFAULTS TAB IS SHOWING. The five are markup.TABS -- the tabs of
+  // Kyle's workbook and the list the markup rules are already filed under. `combo` is not
+  // among them: a combo job runs on the epoxy AND polish tabs, so it reads both lists.
+  var WORK_TYPES = ["polish", "seal", "epoxy", "leveling", "gyp"];
+  var DEFAULT_WT = WORK_TYPES[0];
+
+  /** Does this default belong on the tab currently showing?
+   *
+   *  AN EMPTY LIST MEANS EVERY WORK TYPE, and that is the whole backwards-compatibility
+   *  story: every row set before these tabs existed has no list, so it keeps appearing
+   *  everywhere exactly as it did. Nobody opens this tab to find their defaults gone. */
+  function appliesToWorkType(row, wt) {
+    var list = row && row.default_work_types;
+    if (!list || !list.length) return true;
+    return list.indexOf(wt) !== -1;
+  }
+
+  /** What a row says about where it applies, so the list can be read without clicking
+   *  through all five tabs to find out. */
+  function workTypeLabel(row) {
+    var list = (row && row.default_work_types) || [];
+    if (!list.length) return '<span class="wtall">All work types</span>';
+    return esc(list.join(", "));
+  }
+
   function defaultCandidates() {
     var q = DEFAULT_Q.trim().toLowerCase();
     if (!q && !DEFAULT_BROWSE) return { rows: [], more: 0 };
@@ -2111,33 +2147,83 @@
       : "");
   }
 
+  // GROUPED, NOT A KIND COLUMN, and the comment in library.html that argued the other way is
+  // replaced rather than ignored. Hanz, 2026-09-17: "for the take off please sub categorize the
+  // containers wheter they are materials or assemblies". The old reasoning was that a column
+  // says "one list read three ways" while sections would say the three are unrelated. That
+  // reasoning survives here: these are SUB-HEADINGS INSIDE ONE TABLE, not four tables. One
+  // list, one scroll, signposted -- which is what he asked for and what that comment wanted.
+  //
+  // The Kind column goes, because with a heading over every group it repeated itself on every
+  // row, and an empty group renders NOTHING rather than a heading over blank space.
+  //
+  // SEPARATE FROM THE RENDERER so a test can execute the grouping and read it back as data.
+  // This page has already shipped a dead button behind a green markup regex once.
+  function takeoffDefaultGroups() {
+    var groups = [
+      { title: "Assemblies",
+        rows: ASMS.filter(function (a) {
+          return a.favorite && appliesToWorkType(a, DEFAULT_WT);
+        }).map(function (a) {
+          var n = (a.lines || []).length;
+          return { name: a.name,
+                   how: n + " item line" + (n === 1 ? "" : "s") + " \u00b7 per " + (a.unit || "SF"),
+                   actions: defaultRowActions("assemblies", a.id, a.name) };
+        }) },
+      { title: "Materials",
+        rows: ITEMS.filter(function (it) {
+          return it.favorite && appliesToWorkType(it, DEFAULT_WT);
+        }).map(function (it) {
+          return { name: it.name,
+                   how: L.num(it.unit_cost) != null
+                     ? L.money(it.unit_cost) + " per " + (it.unit || "unit")
+                     : "No cost in the library yet",
+                   actions: defaultRowActions("items", it.id, it.name) };
+        }) },
+      { title: "Markup",
+        rows: GLOBAL_MARKUP.map(function (g) {
+          // EDITABLE HERE, STORED THERE. Hanz asked for no read-only rows on this tab. The
+          // danger with a rate is TWO HOMES: markup.py enforces one home per line because
+          // two places to set one price disagree the first time somebody changes one, and a
+          // disagreement between them is a wrong bid, not a cosmetic bug.
+          //
+          // So this is a second DOOR, not a second home. The box writes the same
+          // markup_rules row the Markup page writes, by id. There is still exactly one
+          // place the number lives, and it is impossible for the two screens to hold
+          // different answers because they are holding the same row.
+          return { name: g.label,
+                   how: '<input class="mkin" type="text" data-markup-formula="' +
+                     esc(g.id) + '" value="' + esc(g.formula || "") +
+                     '" aria-label="Formula for ' + esc(g.label) +
+                     '" placeholder="not set" /> <span class="wtall">also on the Markup ' +
+                     'page\u2019s Global tab</span>',
+                   rawHow: true,
+                   actions: '<span class="builtin">Saved to Markup</span>' };
+        }) },
+      { title: "Conditions",
+        rows: takeoffConditionDefaults().map(function (c) {
+          return { name: c.label,
+                   how: c.why + " \u00b7 " + c.cell + " = " + (c.on ? "Yes" : "No"),
+                   actions: '<span class="builtin">Built in</span>' };
+        }) },
+    ];
+    return groups.filter(function (g) { return g.rows.length > 0; });
+  }
+
   function renderDefaultTakeoff() {
     var body = $("default-takeoff-body");
     if (!body) return;
     var out = "";
-    ASMS.filter(function (a) { return a.favorite; }).forEach(function (a) {
-      out += "<tr><td>" + esc(a.name) + "</td><td>Assembly</td>" +
-        "<td>" + (a.lines || []).length + " item line" +
-        ((a.lines || []).length === 1 ? "" : "s") + " · per " + esc(a.unit || "SF") + "</td>" +
-        '<td class="rowact">' + defaultRowActions("assemblies", a.id, a.name) + "</td></tr>";
-    });
-    ITEMS.filter(function (it) { return it.favorite; }).forEach(function (it) {
-      out += "<tr><td>" + esc(it.name) + "</td><td>Material</td>" +
-        "<td>" + (L.num(it.unit_cost) != null
-          ? esc(L.money(it.unit_cost)) + " per " + esc(it.unit || "unit")
-          : "No cost in the library yet") + "</td>" +
-        '<td class="rowact">' + defaultRowActions("items", it.id, it.name) + "</td></tr>";
-    });
-    GLOBAL_MARKUP.forEach(function (g) {
-      out += "<tr><td>" + esc(g.label) + "</td><td>Markup</td>" +
-        "<td>" + esc(g.formula || "not set") +
-        " · set on the Markup page's Global tab</td>" +
-        '<td class="rowact"><span class="builtin">Read only</span></td></tr>';
-    });
-    takeoffConditionDefaults().forEach(function (c) {
-      out += "<tr><td>" + esc(c.label) + "</td><td>Condition</td>" +
-        "<td>" + esc(c.why) + " · " + esc(c.cell) + " = " + (c.on ? "Yes" : "No") + "</td>" +
-        '<td class="rowact"><span class="builtin">Built in</span></td></tr>';
+    takeoffDefaultGroups().forEach(function (g) {
+      out += '<tr class="grouphead"><th scope="colgroup" colspan="3">' +
+        esc(g.title) + "</th></tr>";
+      g.rows.forEach(function (r) {
+        // rawHow ONLY for the rows that build their own control. Everything else stays
+        // escaped -- a material name is somebody typed text and must never render as HTML.
+        out += "<tr><td>" + esc(r.name) + "</td><td>" +
+          (r.rawHow ? r.how : esc(r.how)) + "</td>" +
+          '<td class="rowact">' + r.actions + "</td></tr>";
+      });
     });
     body.innerHTML = out;
     if ($("default-takeoff-empty")) $("default-takeoff-empty").hidden = out !== "";
@@ -2369,8 +2455,11 @@
     // the same thing: stop being a default. Travel gets neither, because it is not a row of this
     // table -- it is what every estimate is seeded with, and there is no way to express "no
     // travel row at all" for it to be taken off of.
-    for (var k = 0; k < LABOR.length; k++) {
-      var c = LABOR[k];
+    // FILTERED BY THE WORK-TYPE TAB, like the Takeoff list above it. Travel is not filtered:
+    // it is seeded into every bid whatever tab it sits on.
+    var shown = LABOR.filter(function (r) { return appliesToWorkType(r, DEFAULT_WT); });
+    for (var k = 0; k < shown.length; k++) {
+      var c = shown[k];
       out += "<tr>" +
         "<td>" + esc(c.name) + "</td>" +
         '<td class="n">' + esc(L.money(c.rate)) +
@@ -2387,7 +2476,7 @@
     // once there is a typed line to show. Travel is normally in `rows`, which is why this read
     // correctly while it was the only thing that could be.
     if ($("default-labor-empty")) {
-      $("default-labor-empty").hidden = (rows.length + LABOR.length) > 0;
+      $("default-labor-empty").hidden = (rows.length + shown.length) > 0;
     }
     // The add control is a write, and writes here are admin-only on the server. Hidden the same
     // way renderRefSection hides Administration's, rather than rendered and left to 403.
@@ -3158,6 +3247,24 @@
     // have to already know the name. LABOR NOW OPENS A FORM -- it was left unwired on purpose
     // because nothing stored a custom labor line and a handler could only have pretended, and
     // Hanz said twice that the button does not work. `library_labor` is where one goes now.
+    // THE WORK-TYPE STRIP. It narrows both lists at once, because a work type is the one
+    // question "what does a polish bid open holding?" and Takeoff and Labor are two halves
+    // of that answer. Repainting both is the point, not an accident.
+    var wtBtn = t.closest && t.closest("[data-work-type]");
+    if (wtBtn) {
+      var wt = wtBtn.getAttribute("data-work-type");
+      if (WORK_TYPES.indexOf(wt) !== -1) {
+        DEFAULT_WT = wt;
+        WORK_TYPES.forEach(function (k) {
+          var b = $("wt-" + k);
+          if (b) b.setAttribute("aria-selected", String(k === wt));
+        });
+        renderDefaultTakeoff();
+        renderDefaultLabor();
+        renderDefaultSearch();
+      }
+      return;
+    }
     var addDef = t.closest && t.closest("[data-add-default]");
     if (addDef) {
       openDefaultAdd(addDef.getAttribute("data-add-default"));
