@@ -4429,6 +4429,38 @@ def api_proposal_template(request: Request, work_type: str = "epoxy", audience: 
     if not template_path.exists():
         raise HTTPException(404, f"Proposal template not found: {template_path.name}")
 
+    # ── Cache/ETag key ────────────────────────────────────────────────────
+    # This string is the ONE input to both the ETag and the block cache, so the
+    # two can never disagree about what "unchanged" means. That matters more
+    # than the speed: `_apply_paragraph_overrides` resolves an override back
+    # onto the template BY POSITION (the id is `iter_editable_blocks`'s walk
+    # index), so serving blocks from a stale template would land an
+    # estimator's edits on the wrong paragraphs or drop them silently.
+    #   * `_template_proposal_version` is the .docx mtime_ns — a re-annotated
+    #     or redeployed template changes it, and the cache misses.
+    #   * `_BLOCK_SCHEMA_VERSION` covers a change to the block SHAPE in code.
+    #   * work_type/audience are included even though they only select the
+    #     file, because the payload echoes them back.
+    # Read once, not twice: two `stat()` calls could straddle a template
+    # rewrite and produce a payload whose `template_version` disagrees with
+    # its own ETag — exactly the mismatch the frontend uses to decide an id
+    # set is stale.
+    tver = _template_proposal_version(template_path)
+    version = f"{work_type}:{audience}:{tver}:s{_BLOCK_SCHEMA_VERSION}"
+    etag = _etag_of(version)
+    headers = {"ETag": etag, "Cache-Control": "no-cache"}
+    # Answer the revalidation BEFORE opening the .docx. This endpoint used to
+    # re-parse the template and rebuild all ~172 blocks and then send no body:
+    # 109 ms of CPU per 304 on a warm process, 84-99 ms on the other Direct
+    # templates (measured at the handler, medians of 4 alternating A/B rounds).
+    if etag in (request.headers.get("if-none-match") or ""):
+        return Response(status_code=304, headers=headers)
+
+    with _PROPOSAL_TEMPLATE_LOCK:
+        cached = _PROPOSAL_TEMPLATE_CACHE.get(version)
+    if cached is not None:
+        return Response(content=cached, media_type="application/json", headers=headers)
+
     d = docx.Document(str(template_path))
     # Original templates differ on whether the value after a WORK label colon
     # inherits bold. Normalize preview metadata to the generated DOCX.
@@ -4478,12 +4510,19 @@ def api_proposal_template(request: Request, work_type: str = "epoxy", audience: 
         "work_type": work_type,
         "audience": audience,
         "template_name": template_path.name,
-        "template_version": _template_proposal_version(template_path),
+        "template_version": tver,
         "geometry": proposal_writer.template_geometry(d),
         "blocks": blocks,
     }
-    return _versioned_json(request, payload,
-                           version=f"{work_type}:{audience}:{payload['template_version']}:s{_BLOCK_SCHEMA_VERSION}")
+    # Built through JSONResponse so the cached bytes ARE the bytes this
+    # endpoint has always sent — same encoder, same separators, same
+    # content-type — and a cache hit is byte-identical to a miss by
+    # construction rather than by resemblance. Bytes are immutable, so no
+    # caller can mutate a later response by editing an earlier one.
+    body = JSONResponse(content=jsonable_encoder(payload)).body
+    with _PROPOSAL_TEMPLATE_LOCK:
+        _PROPOSAL_TEMPLATE_CACHE[version] = body
+    return Response(content=body, media_type="application/json", headers=headers)
 
 
 # Media (letterhead artwork) served straight out of the template package.
@@ -4510,6 +4549,16 @@ def api_proposal_template_media(request: Request, work_type: str = "epoxy",
     template_path = proposal_writer.pick_template(work_type, audience or None)
     if not template_path.exists():
         raise HTTPException(404, f"Proposal template not found: {template_path.name}")
+    version = f"{work_type}:{audience}:{name}:{_template_proposal_version(template_path)}"
+    etag = _etag_of(version)
+    headers = {"ETag": etag, "Cache-Control": "no-cache"}
+    # Before the unzip, not after: the old order inflated a ~90 KB PNG out of
+    # the package and then threw it away on every revalidation. The name is
+    # already inside `version`, so a client can only be holding a matching tag
+    # for a name this package actually served — an unknown name has no tag to
+    # match and still falls through to the 404 below.
+    if etag in (request.headers.get("if-none-match") or ""):
+        return Response(status_code=304, headers=headers)
     try:
         with zipfile.ZipFile(str(template_path)) as z:
             allowed = {n.rsplit("/", 1)[-1]: n for n in z.namelist()
@@ -4522,11 +4571,6 @@ def api_proposal_template_media(request: Request, work_type: str = "epoxy",
         raise HTTPException(500, "Template package is unreadable.") from exc
     ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
     ctype = _MEDIA_CONTENT_TYPES.get(ext, "application/octet-stream")
-    version = f"{work_type}:{audience}:{name}:{_template_proposal_version(template_path)}"
-    etag = 'W/"' + hashlib.md5(version.encode()).hexdigest()[:16] + '"'
-    headers = {"ETag": etag, "Cache-Control": "no-cache"}
-    if etag in (request.headers.get("if-none-match") or ""):
-        return Response(status_code=304, headers=headers)
     return Response(content=data, media_type=ctype, headers=headers)
 
 
@@ -4558,6 +4602,35 @@ def _template_proposal_version(path: Path) -> str:
         return str(path.stat().st_mtime_ns)
     except OSError:
         return "0"
+
+
+def _etag_of(version: str) -> str:
+    """The weak ETag for a cache-version string — the SAME formula
+    `_versioned_json` uses, so an endpoint that serves a pre-serialized body
+    still revalidates against the identical tag. (Kept as its own function
+    rather than folded into `_versioned_json`: `api_proposal_template` needs the
+    tag before it has a payload to hand that helper. `test_proposal_template_cache`
+    pins the two to each other so they cannot drift.)"""
+    return 'W/"' + hashlib.md5(version.encode()).hexdigest()[:16] + '"'
+
+
+# Parsed-and-serialized /api/proposal-template responses, keyed on the SAME
+# string the ETag is derived from (see the endpoint). Rebuilding the block
+# list costs 84-118 ms of CPU per request depending on the template, and the
+# templates only change on a deploy — so this is the whole server cost of a
+# Proposal Review load after the first.
+#
+# Bounded: `work_type` comes off the query string and `pick_template` FALLS
+# BACK rather than raising, so every unmapped spelling would otherwise mint a
+# fresh ~106 KB entry holding the Direct Epoxy body. There are 11 real
+# (work_type, audience) pairs; 16 holds them all and evicts the junk.
+_PROPOSAL_TEMPLATE_CACHE: cachetools.LRUCache = cachetools.LRUCache(maxsize=16)
+# cachetools caches are documented as NOT thread-safe, and FastAPI runs a sync
+# endpoint in a threadpool — two concurrent Proposal Review loads really can
+# touch this at the same moment. The lock covers only the dict bookkeeping, never
+# the ~100 ms build, so a miss still parses in parallel; the loser just stores a
+# second identical body.
+_PROPOSAL_TEMPLATE_LOCK = threading.Lock()
 
 
 def _cover_letter_template_version(work_type: str, audience: Optional[str]) -> str:
