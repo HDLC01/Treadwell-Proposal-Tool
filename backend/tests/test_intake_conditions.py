@@ -406,3 +406,54 @@ def test_none_of_these_cells_are_locked_against_the_estimator(sheet):
             # to be able to change a tax answer in the workbook after it is downloaded.
             "Leveling!B6", 'Gyp (USG 1-8")!B8', "Gyp (FR)!B8"}
     assert not (ours & locked), sorted(ours & locked)
+
+
+# ── the admin default and the workbook cell, on the LIVE intake screen ─────
+#
+# dye / joint_filler / remove_existing_jf are the SAME three keys the Polish beta already lets
+# an admin override on the Library's Defaults tab (see test_condition_defaults.py and
+# test_polish_estimate_page.py / test_polish_intake_page.py). This screen carried its OWN
+# hardcoded default for the same three questions and never asked GET /api/condition-defaults,
+# so the moment an estimator touched ANY of the ten step-1 toggles, conditionCells() baked the
+# STALE hardcoded default into Kyle's workbook rather than the admin's real answer -- with the
+# Defaults tab still showing the admin's choice as saved. These two tests are the regression
+# coverage for that fix.
+@needs_node
+def test_a_cell_answer_still_beats_the_admin_default(cond):
+    """THE CELL WINS. All three workbook cells present, exactly as a real step-1 save leaves
+    them, and the admin default set to the OPPOSITE of every one of them -- proving the admin
+    default cannot move an estimate that has already answered these questions, not just that it
+    usually agrees with one that has.
+
+    Mutation: read the admin default ahead of the cell (or unconditionally) in
+    hydrateConditions(). All three then come back flipped."""
+    c = cond["cellBeatsAdminDefault"]
+    assert c["fetched"] is True, "the admin default was never asked for"
+    assert c["jointFiller"] is True, "Polish!E29 said Yes; the admin's 'off' overwrote it"
+    assert c["dye"] is False, "Polish!E25 said No; the admin's 'on' overwrote it"
+    assert c["removeExistingJf"] is False, "Polish!F29 said No; the admin's 'on' overwrote it"
+
+
+@needs_node
+def test_the_admin_default_reaches_a_genuinely_fresh_load(cond):
+    """THE CONFIRMED GAP, closed. No cell_values at all -- nothing typed, no autofill, no prior
+    visit -- is the exact case the bug broke: hydrateConditions() fell back to the hardcoded
+    c.def no matter what the Library's Defaults tab said, so the FIRST toggle an estimator
+    touched baked the wrong answer into Kyle's workbook. The admin default has to reach
+    condState here, and touching one UNRELATED switch (`local`) has to carry it into the cells
+    conditionCells() writes -- because that write is exactly what the report describes: every
+    in-scope condition's cells move the moment any ONE of the ten does.
+
+    Mutation: delete the ADMIN_CONDITION_KEYS gate (or the admin-default read) from
+    hydrateConditions(). All three keys then answer with the shipped literal regardless of what
+    the Defaults tab says, and this test is the one that would have caught it before this
+    branch shipped."""
+    c = cond["adminDefaultReachesFreshLoad"]
+    assert c["fetched"] is True, "a fresh load never asked for the admin default"
+    assert c["jointFiller"] is False, "ships True; the admin's False never reached condState"
+    assert c["dye"] is True, "ships False; the admin's True never reached condState"
+    assert c["removeExistingJf"] is True, "ships False; the admin's True never reached condState"
+    assert c["cells"]["Polish!E29"] == "No", "joint filler's admin default never reached the cell"
+    assert c["cells"]["Polish!E25"] == "Yes", "dye's admin default never reached the cell"
+    assert c["cells"]["Polish!F29"] == "Yes", (
+        "remove-existing-jf's admin default never reached the cell")

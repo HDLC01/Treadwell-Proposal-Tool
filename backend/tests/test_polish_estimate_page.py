@@ -1482,7 +1482,7 @@ def test_the_page_loads_no_formula_engine_and_the_modules_in_order(html):
     # /js/icons.js is FIRST, ahead of auth.js: the sidebar auth.js draws asks it for every glyph
     # in the rail. See the house rule at the top of frontend/js/icons.js.
     assert srcs == ["https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0",
-                    "/js/icons.js", "/auth.js", "/shared.js",
+                    "/js/icons.js", "/auth.js", "/shared.js", "/js/tab-memo.js",
                     "/js/library-core.js", "/js/polish-bid-core.js", "/js/polish-sandbox.js",
                     "/js/polish-estimate.js"], (
         "the page's script list has changed: %r" % srcs)
@@ -1880,3 +1880,106 @@ def test_a_default_that_still_needs_numbers_says_which_one(ran):
     # …and the built-in rows are still named the way they always were, so the defaults have not
     # drowned them out.
     assert "Add the days for Polishing" in says
+
+
+# ── the Takeoff conditions' company answers ───────────────────────────────────
+THREE = ("joint_filler", "dye", "remove_existing_jf")
+
+
+@needs_node
+def test_a_brand_new_bid_opens_with_the_conditions_the_library_says(ran):
+    """The three Takeoff conditions stopped being "built in" on 2026-09-18 (Hanz, twice). Their
+    answers for a new bid are set on the Library page's Defaults tab, and this is the page that
+    has to take them.
+
+    EVERY STORED ANSWER IN THE FIXTURE DISAGREES WITH WHAT THE TOOL SHIPS -- joint filler ships ON
+    and the library says off, dye and remove-existing ship off and the library says on. A fixture
+    that agreed with freshModel would pass just as happily against a seeder that was never wired
+    up at all.
+
+    Mutation: delete the `if (conditionDefaults)` block from init(). Every new bid then opens with
+    the shipped literals whatever anybody sets, and the Defaults tab is decoration."""
+    c = ran["conditionDefaults"]["brandNew"]
+    assert c["fetched"], "a blank bid never asked for the stored answers"
+    assert c["conditions"]["joint_filler"] is False, (
+        "the library's 'off' did not reach a brand new bid, so the Defaults tab changes nothing")
+    assert c["conditions"]["dye"] is True
+    assert c["conditions"]["remove_existing_jf"] is True
+    # The five answered on Intake are not this tab's to move.
+    assert c["conditions"]["taxable"] is True and c["conditions"]["local"] is True
+
+
+@needs_node
+def test_a_bid_that_has_been_worked_on_keeps_its_own_conditions(ran):
+    """THE HARD CONSTRAINT, at the page level. Hanz, verbatim: changing a default must not change
+    any estimate that already exists, because an estimator's saved answers are their work.
+
+    joint_filler is the one that bites: it SHIPS on, so a bid where somebody deliberately turned
+    it off is exactly the bid a careless default would quietly turn back on -- and because
+    conditionCellWrites puts all eight literals back on every save, the downloaded workbook would
+    then say Yes in Polish!E29 with nothing on any screen admitting it.
+
+    THE GATE IS OBSERVABLE, not inferred: a saved bid never even asks for the defaults, so
+    `fetched` is False. And NOT VACUOUS -- `wouldHaveChanged` applies the same stored answers to
+    the same migrated model and shows all three moving.
+
+    Mutation: drop the `B.conditionsUnstated(...) ?` gate in init() and always load. Every
+    reopened bid then adopts today's defaults on the next save."""
+    w = ran["conditionDefaults"]["worked"]
+    assert w["fetched"] is False, (
+        "a bid that has been worked on asked for the condition defaults; the gate is not being "
+        "asked before the read")
+    for key in THREE:
+        assert w["after"][key] == w["saved"][key], (
+            "%s came back as %r on a saved bid that had %r"
+            % (key, w["after"][key], w["saved"][key]))
+    moved = [k for k in THREE if w["wouldHaveChanged"][k] != w["saved"][k]]
+    assert len(moved) == 3, (
+        "the stored answers agree with this bid's, so 'it came back unchanged' proves nothing -- "
+        "only %r would have moved" % moved)
+
+
+@needs_node
+def test_a_cell_answer_still_beats_the_library_on_a_blank_bid(ran):
+    """THE CELL WINS WHERE THERE IS ONE, which is why conditionsFromCells runs AFTER the seed
+    rather than only in adopt().
+
+    A project that came through the live intake has no polish_estimate at all -- exactly the blob
+    conditionsUnstated calls seedable -- while the answers the estimator or the AI autofill gave
+    sit in cell_values. If the seed ran last it would write a company-wide default over one of
+    those, and the next save would make it permanent in Kyle's workbook.
+
+    ALL THREE CELLS ANSWERED, not one -- exactly what a real step-1 save on the live intake screen
+    leaves behind (Polish!E29=Yes, Polish!E25=No, Polish!F29=No), and the library's stored default
+    is the OPPOSITE of every one of them. A fixture that answered only one of the three could pass
+    against a page that seeded the other two from the library regardless of what their cells said.
+
+    Mutation: swap the two calls in init() so seedConditionDefaults runs outermost. All three then
+    come back flipped and every cell answer the estimator gave is gone."""
+    c = ran["conditionDefaults"]["celled"]
+    assert c["fetched"], "the library was never asked for its stored answers"
+    assert c["dye"] is False, (
+        "the library's answer was written over the 'No' already in Polish!E25")
+    assert c["jointFiller"] is True, (
+        "the library's answer was written over the 'Yes' already in Polish!E29")
+    assert c["removeExistingJf"] is False, (
+        "the library's answer was written over the 'No' already in Polish!F29")
+
+
+@needs_node
+def test_the_defaults_table_being_absent_opens_the_bid_anyway(ran):
+    """`condition_defaults` is applied to NEITHER database as of 2026-09-18, and production will
+    be behind staging even after it is. A bid that refused to open over a table nobody has
+    promoted would be a far worse outcome than one that opens with the answers the tool ships.
+
+    AND SAYS NOTHING ABOUT IT. A default nobody has defined yet is not an error to report to an
+    estimator mid-bid.
+
+    Mutation: let the exception out of loadConditionDefaults. The page dies on boot on production
+    the day this ships."""
+    d = ran["conditionDefaults"]["down"]
+    assert d["mainShown"], "the estimate did not open when the defaults read failed"
+    assert d["alert"] == "", "the page reported a table nobody has promoted as an error"
+    for key in THREE:
+        assert d["conditions"][key] == d["shipped"][key], (
+            "%s did not fall back to what the tool ships" % key)

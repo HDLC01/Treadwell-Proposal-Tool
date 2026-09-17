@@ -471,3 +471,50 @@ grant select, insert, update, delete on public.library_vendors to service_role;
 grant select, insert, update, delete on public.library_divisions to service_role;
 grant select, insert, update, delete on public.library_units to service_role;
 grant select, insert, update, delete on public.markup_rules to service_role;
+
+-- ── Takeoff condition defaults ────────────────────────────────────────────
+-- What a NEW Polish estimate opens ANSWERED, for the three Yes/No questions the Takeoff step
+-- carries: joint filler, remove existing joint filler, and dye. See backend/condition_defaults.py.
+--
+-- NOT APPLIED. Written 2026-09-18 and deliberately left unrun on both databases until Hanz says
+-- go. Until then backend/condition_defaults.list_defaults() answers with an empty list by design
+-- and every estimate opens with the literals in frontend/js/polish-bid-core.js, exactly as today.
+-- BOTH databases or neither: the one that misses this answers 502 on the first save.
+--
+-- AN OVERRIDE, NOT THE ANSWER. A row here says "the shipped default for this key is wrong for
+-- us"; no row means the shipped literal in freshModel() stands. That is why this table carries no
+-- copy of "joint filler ships on" — that fact lives once, in the JavaScript, and a second
+-- statement of it here is a thing that drifts.
+--
+-- IT REACHES A BRAND-NEW BID AND NOTHING ELSE. An estimate that has already been saved keeps the
+-- answers it was saved with, forever, whatever this table later says — the seeding is gated on
+-- there being no saved estimate at all (conditionsUnstated in polish-bid-core.js). An estimator's
+-- answers are their work; a default is what the next blank bid starts from.
+create table if not exists public.condition_defaults (
+  id            text primary key,
+  -- joint_filler | remove_existing_jf | dye. The keys of CONDITION_CELLS in
+  -- frontend/js/polish-bid-core.js, which is what decides the workbook cell each answer writes
+  -- (Polish!E29 / Polish!F29 / Polish!E25). Checked in condition_defaults.py rather than by a
+  -- CHECK constraint, for the reason this project has already paid for twice: an unapplied CHECK
+  -- surfaces as a 502 on whichever database missed it, and this vocabulary will grow.
+  condition_key text not null,
+  -- The whole of what is editable. The CELL is not: Polish!E29 is a fact about the workbook Kyle
+  -- maintains, and re-pointing an answer would put a Yes/No literal over one of his formulas.
+  on_by_default boolean not null default false,
+  owner_email   text,
+  updated_by    text,
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz
+);
+-- ONE ROW PER CONDITION, and PLAIN rather than partial because there is deliberately no
+-- deleted_at here. Everywhere else in this schema a soft delete protects something that cannot be
+-- retyped — a hand-entered price, a markup formula. A row here is one boolean standing in front of
+-- a constant that is still in the source: putting it back is one click on the same switch.
+create unique index if not exists condition_defaults_key_idx
+  on public.condition_defaults (condition_key);
+
+-- Same posture as drafts/events/library_*: RLS on, no policies here; the proposal tool holds the
+-- service-role key. Beside the table rather than in a shared block at the foot of the file — a
+-- blanket grant only covers the tables that exist when it runs.
+alter table public.condition_defaults enable row level security;
+grant select, insert, update, delete on public.condition_defaults to service_role;

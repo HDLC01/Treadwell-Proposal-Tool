@@ -171,6 +171,19 @@
           LABOR = lj.labor || [];
         }
       } catch (e) { LABOR = []; }
+      // The Takeoff conditions' stored answers, on exactly the same terms and for a
+      // sharper version of the same reason: `condition_defaults` is applied to NEITHER
+      // database yet, so today this answers with nothing everywhere. Empty is not a
+      // failure -- it means nobody has overridden anything, the shipped literals stand,
+      // and the switches below show them. Its own try, outside the `throw` above,
+      // because a table Hanz has not promoted must not cost an estimator the Items tab.
+      try {
+        var cd = await api("/api/condition-defaults");
+        if (cd.ok) {
+          var cj = await cd.json();
+          COND_DEFAULTS = cj.conditions || [];
+        }
+      } catch (e) { COND_DEFAULTS = []; }
       if (!openId || !current()) openId = ASMS.length ? ASMS[0].id : null;
       say("");
       paint();
@@ -697,6 +710,25 @@
     var r = await api("/api/library/labor/" + encodeURIComponent(id), {
       method: "PATCH", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body) });
+    var j = await r.json().catch(function () { return {}; });
+    if (!r.ok) throw new Error(j.detail || j.error || ("HTTP " + r.status));
+    return j;
+  }
+
+  /** One condition's default answer, sent on the change.
+
+   *  A PUT, NOT A PATCH, because the row IS the answer: there is one editable field and the
+   *  request states it in full. `set_default` upserts on the key, so the first press creates the
+   *  row and every press after it moves the same one -- which is what keeps "one live row per
+   *  condition" true without the client knowing whether a row exists.
+
+   *  BESIDE patchDefault RATHER THAN THROUGH IT, the same call patchLabor makes: that one sends
+   *  `{ favorite }` against /api/library/<kind>/<id>, and a condition has no library row and no
+   *  id. Widening it would put a body behind a control that can never produce one. */
+  async function putConditionDefault(key, on) {
+    var r = await api("/api/condition-defaults/" + encodeURIComponent(key), {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ on: !!on }) });
     var j = await r.json().catch(function () { return {}; });
     if (!r.ok) throw new Error(j.detail || j.error || ("HTTP " + r.status));
     return j;
@@ -1935,18 +1967,6 @@
     renderDefaultTakeoff(); renderDefaultLabor();
   }
 
-  /** The three conditions the Takeoff step carries, as defaults.
-   *
-   *  THEY ARE NOT ROWS, and the table says so in its Kind column rather than by hiding them
-   *  somewhere else. An assembly or a material is a line a new estimate OPENS WITH; a condition is
-   *  a question it opens ANSWERED. Both are things somebody set once and every bid then starts
-   *  from, which is what this tab is for.
-   *
-   *  READ FROM polish-bid-core's freshModel, never re-typed, for the same reason Travel is read
-   *  from travelSeed: the answer a new estimate actually opens with lives there, and a second copy
-   *  on this page would go stale the first time somebody changed one and not the other. That is
-   *  not hypothetical -- joint_filler ships ON and dye ships off, and a page claiming the reverse
-   *  would be telling an estimator the opposite of what their next bid does. */
   /** The markup lines that are one rule everywhere, as this page last read them.
    *
    *  FETCHED, NEVER STORED HERE. Bond's rate belongs to the Markup page's Global tab, and
@@ -1971,26 +1991,121 @@
    *  this table -- see the renderer below, and the note on it. */
   var LABOR = [];
 
+  /** The answers an admin has already set for the Takeoff conditions, as this page last read them.
+
+   *  ONLY THE OVERRIDES, never the whole answer. What a new estimate opens answering for joint
+   *  filler, remove-existing and dye lives in freshModel() in polish-bid-core.js; a row in here
+   *  says somebody changed one of those three on this tab. takeoffConditionDefaults() merges the
+   *  two through the estimate's OWN seedConditionDefaults, so this page cannot arrive at a
+   *  different answer from the bid it is describing.
+
+   *  EMPTY WHEN THE READ CANNOT ANSWER, and today that is everywhere: `condition_defaults` is
+   *  written into both schema files and applied to neither, pending Hanz. Empty is the honest
+   *  answer -- the shipped literals stand and the switches show them -- and a tab that 500s over a
+   *  table nobody has promoted would take Items and Assemblies down with it. */
+  var COND_DEFAULTS = [];
+
+  /** The three conditions the Takeoff step carries, and what a new estimate answers for each.
+   *
+   *  THEY WERE "BUILT IN" AND THEY ARE NOT ANY MORE. Hanz, twice: "All line items and the default
+   *  items in assemblies should be editable please don't put in a hard coded or built in line
+   *  items", and then, seeing the chip still there: "I told you to remove the built-in and keep and
+   *  make everything editable in the takeoff." Each row now carries a Yes/No control that writes
+   *  `condition_defaults`, and changing one changes what the NEXT blank bid opens answering.
+   *
+   *  WHAT IS EDITABLE IS THE ANSWER, NOT THE CELL. Polish!E29 is a fact about the workbook Kyle
+   *  maintains -- pointing the joint-filler answer somewhere else would put a Yes/No literal over
+   *  one of his formulas and nothing on any screen would say so. So the cell is printed beside the
+   *  control rather than offered as a second box.
+   *
+   *  THE SHIPPED ANSWER IS STILL READ FROM freshModel, and the stored overrides are written over
+   *  it through the ESTIMATE'S OWN seedConditionDefaults rather than a merge written again here.
+   *  Two merges is two chances for this page to describe a bid it does not agree with -- and the
+   *  page claiming joint filler ships off while every new bid opens with it on is worse than no
+   *  page at all. `B.seedConditionDefaults` is guarded because window.TWPolishBid is a script tag
+   *  that can fail to load, and a Defaults tab that throws would take Items and Assemblies with it.
+   *
+   *  THIS LIST IS THE VOCABULARY, and backend/condition_defaults.KEYS is the same three.
+   *  test_condition_defaults.py reads both files and pins them together, so a key renamed on one
+   *  side cannot quietly become a row that saves and is read by nothing. */
   function takeoffConditionDefaults() {
     var B = window.TWPolishBid;
     if (!B || !B.freshModel) return [];
-    var c = (B.freshModel() || {}).conditions || {};
+    var shipped = (B.freshModel() || {}).conditions || {};
+    var c = B.seedConditionDefaults ? B.seedConditionDefaults(shipped, COND_DEFAULTS) : shipped;
     return [
-      { label: "Joint filler", on: !!c.joint_filler, cell: "Polish!E29",
+      { key: "joint_filler", label: "Joint filler", on: !!c.joint_filler, cell: "Polish!E29",
         why: "One kit per 3,500 sq ft, counted by the workbook" },
-      { label: "Remove existing joint filler", on: !!c.remove_existing_jf, cell: "Polish!F29",
+      { key: "remove_existing_jf", label: "Remove existing joint filler",
+        on: !!c.remove_existing_jf, cell: "Polish!F29",
         why: "A fourth hand on the joint-filler line" },
-      { label: "Dye", on: !!c.dye, cell: "Polish!E25",
+      { key: "dye", label: "Dye", on: !!c.dye, cell: "Polish!E25",
         why: "Two coats across the polished area" }
     ];
   }
 
+  /** One condition's Yes/No control, plus the sentence that says what the answer means.
+   *
+   *  A SELECT, NOT A CHECKBOX, and the reason is the same one the labor form's unit box gives: a
+   *  `change` on a select is one event in every browser, while a checkbox arrives as a click AND a
+   *  change and the page's click delegation already runs over this table. Two handlers racing to
+   *  write one answer is how a switch ends up saving the value it had before the press.
+   *
+   *  SEPARATE FROM THE GROUPING so a test can execute it and read the markup for one row back,
+   *  rather than regex-matching a control out of the whole table. This page has already shipped a
+   *  dead button behind a green markup assertion. */
+  function conditionControl(c) {
+    return '<select class="mkin" data-cond-key="' + esc(c.key) +
+      '" aria-label="What a new estimate opens answering for ' + esc(c.label) + '">' +
+      '<option value="yes"' + (c.on ? " selected" : "") + ">Yes</option>" +
+      '<option value="no"' + (c.on ? "" : " selected") + ">No</option>" +
+      "</select> " +
+      '<span class="wtall">' + esc(c.why) + " · writes " + esc(c.cell) + "</span>";
+  }
+
+  /** One condition's answer, sent on the change, with the optimistic flip and the put-it-back in
+   *  one place -- the split setDefault's own note argues for and for the same reason: two
+   *  functions is two places to forget the rollback.
+   *
+   *  IT REPAINTS THE TAKEOFF LIST AND NOTHING ELSE. `paint()` would rebuild the Items tab, the
+   *  assembly rail and the open panel, none of which a condition answer touches -- and one of
+   *  which may have a half-typed labor line in it (see the note on LABOR_FORM).
+   *
+   *  A FAILED SAVE PUTS THE SELECT BACK and says why. A control that keeps the new value after the
+   *  write was refused tells an admin every new bid now opens differently when it does not, and
+   *  they would find that out from a bid. */
+  async function setConditionDefault(key, on) {
+    var was = COND_DEFAULTS;
+    var next = [];
+    var found = false;
+    for (var i = 0; i < was.length; i++) {
+      if (was[i] && was[i].key === key) { next.push({ key: key, on: !!on }); found = true; }
+      else next.push(was[i]);
+    }
+    if (!found) next.push({ key: key, on: !!on });
+    COND_DEFAULTS = next;
+    renderDefaultTakeoff();
+    try {
+      await putConditionDefault(key, !!on);
+    } catch (err) {
+      COND_DEFAULTS = was;
+      renderDefaultTakeoff();
+      say("Couldn't save that. " + err.message);
+    }
+  }
+
+
   /** The Takeoff defaults: what a new estimate opens holding, and what it opens having answered.
    *
-   *  THE SWITCHED-ON LIBRARY ROWS COME FIRST because they are the ones somebody chose here. The
-   *  conditions follow because they are built in -- nobody set them on this page and nobody can
-   *  unset them here either, which is why they carry no switch and say "Built in" the way Travel
-   *  does under Labor. */
+   *  THE SWITCHED-ON LIBRARY ROWS COME FIRST because they are the ones somebody chose here.
+   *  The conditions come last because they are the odd kind out: an assembly or a material is a
+   *  line a new estimate OPENS WITH, and a condition is a question it opens ANSWERED.
+   *
+   *  NOT because they are built in. They were, until 2026-09-18, and this comment used to say
+   *  so -- "nobody set them on this page and nobody can unset them here either". Hanz twice
+   *  asked for that to stop being true, and it has: every condition carries a Yes/No control
+   *  that writes condition_defaults. Travel under Labor is the one row on this tab that is
+   *  still built in, and its own note says why. */
   /** The Defaults tab's own way in, which is what lets the switches come off the other two tabs.
    *
    *  THE SEARCH IS THE CONTROL, not a filter over what is already listed. Hanz asked for it "for
@@ -2201,10 +2316,15 @@
                    actions: '<span class="builtin">Saved to Markup</span>' };
         }) },
       { title: "Conditions",
+        // NO "BUILT IN" CHIP. It used to sit in the actions column and it was the whole
+        // complaint -- Hanz: "I told you to remove the built-in and keep and make
+        // everything editable in the takeoff." The row carries a Yes/No control now, and
+        // the column that held the chip says what pressing it changes instead.
         rows: takeoffConditionDefaults().map(function (c) {
           return { name: c.label,
-                   how: c.why + " \u00b7 " + c.cell + " = " + (c.on ? "Yes" : "No"),
-                   actions: '<span class="builtin">Built in</span>' };
+                   how: conditionControl(c),
+                   rawHow: true,
+                   actions: '<span class="wtall">Every new bid</span>' };
         }) },
     ];
     return groups.filter(function (g) { return g.rows.length > 0; });
@@ -2494,10 +2614,59 @@
       $(TAB_OF[p]).setAttribute("aria-selected", String(p === which));
       $("pane-" + p).hidden = p !== which;
     });
+    // AND THE ADDRESS BAR SAYS SO. Hanz, on staging: "when I reload the page, why does it
+    // automatically land on assemblies? and not on the tab that I have under items and
+    // assemblies". `view` above is a module variable that dies with the page; the fragment is
+    // the only part of this that a reload still has.
+    //
+    // WRITTEN HERE, not in the click listener, because the tab strip is not the only thing that
+    // switches tabs — there are seven other call sites. The Defaults tab's Edit buttons jump to
+    // the material or the assembly behind a default (`showView("items"); paint();
+    // focusItemRow(id)`), and creating a material, an assembly or a vendor lands you on its tab.
+    // A reload after any of those has to come back to where it put you, and a listener-only write
+    // would send you to Assemblies instead.
+    //
+    // `typeof window` rather than a bare read: the test harnesses run these functions in scopes
+    // that bind only what the page itself declares, and an unbound identifier is a ReferenceError
+    // that reds every scenario at once. The script tag is what guarantees the module is there,
+    // and a test asserts the tag, because no amount of executing this can see a missing <script>.
+    if (typeof window !== "undefined" && window.TWTabMemo) {
+      window.TWTabMemo.write(window, { tab: which });
+    }
+  }
+  /** Show one work type's defaults: the strip's own state, and nothing else.
+   *
+   *  Split out of the click listener so restoreView below can reach it. It deliberately does NOT
+   *  repaint the two lists — at restore time nothing has been fetched yet and there is nothing to
+   *  draw, and load()'s paint() is what draws them a moment later. The listener repaints because
+   *  by the time somebody can click, there is something to repaint. */
+  function setWorkType(wt) {
+    DEFAULT_WT = wt;
+    WORK_TYPES.forEach(function (k) {
+      var b = $("wt-" + k);
+      if (b) b.setAttribute("aria-selected", String(k === wt));
+    });
+  }
+  /** Open on the tab — and the work type — the URL names.
+   *
+   *  A REMEMBERED TAB THAT NO LONGER EXISTS FALLS BACK, which is the whole of what `pick` is for:
+   *  a link carrying `#tab=rooms` from some later shape of this page has to show Assemblies, not
+   *  an empty pane. The fallbacks are the page's own declared defaults, read out of `view` and
+   *  `DEFAULT_WT` rather than retyped here, so this cannot disagree with them.
+   *
+   *  Runs before load(), and costs nothing: showView only flips `hidden` and `aria-selected`, and
+   *  setWorkType only moves the strip. No pane fetches anything it was not going to fetch, which
+   *  is the rule that keeps this from turning one tab's page into four tabs' worth of requests. */
+  function restoreView() {
+    if (typeof window === "undefined" || !window.TWTabMemo) return;
+    var M = window.TWTabMemo;
+    showView(M.pick(M.read(window, "tab"), PANES, view));
+    setWorkType(M.pick(M.read(window, "wt"), WORK_TYPES, DEFAULT_WT));
   }
   PANES.forEach(function (p) {
     $(TAB_OF[p]).addEventListener("click", function () { showView(p); });
   });
+  restoreView();
 
   // ── add from library: the modal ────────────────────────────────────────────
   // The DECISIONS are the four pure functions above; this is wiring, and it is kept apart from them
@@ -2674,6 +2843,21 @@
   if ($("default-q")) {
     $("default-q").addEventListener("input", function () {
       setDefaultQuery(this.value);
+    });
+  }
+
+  // THE CONDITIONS' Yes/No, bound to the TBODY and not to each select, because
+  // renderDefaultTakeoff replaces that element's innerHTML and not the element -- a listener
+  // on a control it drew would die on the very first save's repaint. Same rule the labor
+  // listeners below and the bulk-divisions one follow, for the same reason.
+  //
+  // `change`, NOT the page's click delegation. A click on a select opens it; the answer is not
+  // known until the change, and reading it on the click would save the value it had before.
+  if ($("default-takeoff-body")) {
+    $("default-takeoff-body").addEventListener("change", function (e) {
+      var t = e.target;
+      var key = t && t.getAttribute && t.getAttribute("data-cond-key");
+      if (key) setConditionDefault(key, t.value === "yes");
     });
   }
 
@@ -3254,11 +3438,13 @@
     if (wtBtn) {
       var wt = wtBtn.getAttribute("data-work-type");
       if (WORK_TYPES.indexOf(wt) !== -1) {
-        DEFAULT_WT = wt;
-        WORK_TYPES.forEach(function (k) {
-          var b = $("wt-" + k);
-          if (b) b.setAttribute("aria-selected", String(k === wt));
-        });
+        setWorkType(wt);
+        // REMEMBERED BESIDE THE TAB, not instead of it. Landing on Defaults and showing the wrong
+        // one of the five work types is the same reload bug one level down, so the fragment
+        // carries both: `#tab=defaults&wt=epoxy`.
+        if (typeof window !== "undefined" && window.TWTabMemo) {
+          window.TWTabMemo.write(window, { wt: wt });
+        }
         renderDefaultTakeoff();
         renderDefaultLabor();
         renderDefaultSearch();

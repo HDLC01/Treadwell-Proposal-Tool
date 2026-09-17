@@ -2060,6 +2060,10 @@
     var lay = btn.getAttribute("data-layout");
     if (!lay || lay === LAYOUT) return;
     LAYOUT = lay;
+    // So a reload comes back to the tab whose rates you were reading, instead of to Epoxy.
+    if (typeof window !== "undefined" && window.TWTabMemo) {
+      window.TWTabMemo.write(window, { tab: lay });
+    }
     say("");
     render();
   });
@@ -2238,6 +2242,22 @@
 
   // ── loading ────────────────────────────────────────────────────────────────
 
+  /** Which sheet layout this page opens on.
+   *
+   *  THE TABS COME FROM THE API, so the answer has to be checked against the set THIS load
+   *  received: a link carrying `#tab=combo` names a layout markup.py refuses by name, and one
+   *  carrying a layout a later server stopped serving would leave the page with no tab selected
+   *  and a chain rendered for nothing. Either falls back to the first tab, which is where this
+   *  page went before it remembered anything.
+   *
+   *  Without the module the answer is the old one, unchanged — see the note in library.js's
+   *  showView on why that guard is a `typeof` and what the script tag test is for. */
+  function openingLayout(layouts) {
+    var first = layouts[0] || "";
+    if (typeof window === "undefined" || !window.TWTabMemo) return first;
+    return window.TWTabMemo.pick(window.TWTabMemo.read(window, "tab"), layouts, first);
+  }
+
   async function reload() {
     LOADFAIL = "";
     LOADED = false;
@@ -2261,7 +2281,10 @@
       LAYOUTS = (json.layouts || []).filter(function (l) {
         return l && String(l).toLowerCase() !== "combo";
       });
-      if (LAYOUTS.indexOf(LAYOUT) < 0) LAYOUT = LAYOUTS[0] || "";
+      // ONLY WHEN THE TAB ON SCREEN IS NOT ON OFFER, which on a first load is always (LAYOUT
+      // opens ""). A reload is that first load, so this is where the remembered tab comes back.
+      // A retry after a failed fetch leaves the tab somebody is standing on alone.
+      if (LAYOUTS.indexOf(LAYOUT) < 0) LAYOUT = openingLayout(LAYOUTS);
       LOADED = true;
       render();
     } catch (err) {

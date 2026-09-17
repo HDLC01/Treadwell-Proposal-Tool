@@ -558,6 +558,64 @@
     return out;
   }
 
+  /** `conditions` with the library's stored answers written over it. A NEW object; the one handed
+   *  in is never touched.
+   *
+   *  AN OVERRIDE OF A LITERAL, NOT A SECOND COPY OF IT. freshModel() still states what the tool
+   *  SHIPS answering -- joint filler on, dye and remove-existing off -- and a row only arrives
+   *  here for a condition somebody has deliberately changed on the Defaults tab. That is why
+   *  neither this file nor backend/condition_defaults.py holds a second statement of the shipped
+   *  answer: the note above travelSeed records what two copies of one fact did within a day.
+   *
+   *  ONLY A KEY THE MODEL ALREADY CARRIES. migrateModel whitelists condition keys against
+   *  freshModel().conditions and DROPS every other one, so a key seeded here that the model does
+   *  not have would look applied on screen and come back missing on the next load -- the exact
+   *  trap polish-intake.js records for `reno`. An off-vocabulary row is skipped rather than
+   *  thrown over: the endpoint already refuses one on the way in, and a page that died over a row
+   *  it could ignore would cost an estimator the whole Takeoff step.
+   *
+   *  WHO IS ALLOWED TO CALL THIS is the whole safety question, and the answer is
+   *  conditionsUnstated below -- never this function, which will happily rewrite the answers on a
+   *  finished bid if asked. The same split seedLibraryLabor and laborUnstated already take. */
+  function seedConditionDefaults(conditions, rows) {
+    var out = Object.assign({}, conditions || {});
+    if (!(rows instanceof Array)) return out;
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      if (!r || !r.key) continue;
+      if (!Object.prototype.hasOwnProperty.call(out, r.key)) continue;
+      out[r.key] = !!r.on;
+    }
+    return out;
+  }
+
+  /** Has NOTHING been saved for this estimate at all?
+   *
+   *  THE GATE ON THE CONDITION DEFAULTS, and deliberately stricter than laborUnstated. Hanz's
+   *  rule for this feature, verbatim: changing a default must not change any estimate that
+   *  already exists, because an estimator's saved answers are their work. So the one seedable
+   *  case is the one with no work to protect -- nothing saved whatsoever, or a blob that states
+   *  literally nothing.
+   *
+   *  WHY NOT laborUnstated's "a v2 model stating an empty array" CLAUSE. An empty `labor` array is
+   *  a shape a real model can hold and genuinely means "no rows chosen". `conditions` has no
+   *  equivalent: migrateModel backfills every key from freshModel on the way out, so a saved v2
+   *  blob that omitted `conditions` was still SHOWN an answer, and its next save wrote that answer
+   *  into Kyle's workbook through conditionCellWrites. Reading that as unstated would move a
+   *  Yes/No literal on a bid somebody has already worked on -- which is the one thing this gate
+   *  exists to prevent.
+   *
+   *  IT READS THE SAVED BLOB, NOT A MODEL, for the reason laborUnstated gives: by the time a model
+   *  exists every condition has an answer whether or not anybody chose it. Ask it of the blob or
+   *  do not ask it at all. */
+  function conditionsUnstated(saved) {
+    if (!saved || typeof saved !== "object") return true;
+    for (var k in saved) {
+      if (Object.prototype.hasOwnProperty.call(saved, k)) return false;
+    }
+    return true;
+  }
+
   /** The labor rows the template itself seeds: A37 = 3 guys at C37 = $33.00/hr, the mock-up at
    *  B40 = half a day, and joint filling at C44 = $33.00. Days are left blank on the two an
    *  estimator has to judge.
@@ -841,6 +899,12 @@
     gpPct: gpPct, hardBidPct: hardBidPct,
     CONDITION_CELLS: CONDITION_CELLS, conditionCellWrites: conditionCellWrites,
     conditionsFromCells: conditionsFromCells,
+    // The library's answer for a condition, and the gate that decides whether it may be
+    // applied at all. Exported as a PAIR on purpose: seedConditionDefaults will rewrite the
+    // answers on a finished bid if a caller asks it to, and conditionsUnstated is the only
+    // thing standing between a Defaults-tab edit and somebody's saved work.
+    seedConditionDefaults: seedConditionDefaults,
+    conditionsUnstated: conditionsUnstated,
     laborCost: laborCost, laborTotal: laborTotal, travelManDays: travelManDays,
     filledIn: filledIn,
     takeoffSf: takeoffSf,

@@ -1336,3 +1336,98 @@ def test_a_bid_that_has_been_worked_on_keeps_its_labor_through_a_toggle(ran):
         "a worked-on bid reads as seedable, so opening it would append the defaults again")
     # The toggle that was actually clicked still landed.
     assert ln["keptTaxable"] is False
+
+
+# ── the Takeoff conditions' company answers are minted here ───────────────────
+@needs_node
+def test_a_brand_new_project_is_minted_with_the_librarys_condition_answers(ran):
+    """WHY THIS PAGE SEEDS CONDITIONS IT NO LONGER DRAWS, and it is the seam rather than the form.
+
+    The three Takeoff conditions moved off this screen on 2026-09-16 and it shows none of them.
+    But THIS PAGE MINTS THE MODEL: a brand-new project has no polish_estimate, and the first save
+    here writes a well-formed v2 through migrateModel, which fills all nine conditions in from
+    freshModel. By the time polish-estimate.html opens they are STATED, and its own gate
+    (conditionsUnstated) correctly refuses to touch them. Seed only there and the Library page's
+    Defaults tab reaches nothing but a project that skipped intake -- which is not the normal flow
+    and is barely any flow at all. This is the same shape of gap as the labor one above, from the
+    other end.
+
+    EVERY STORED ANSWER DISAGREES WITH WHAT THE TOOL SHIPS -- joint filler ships ON and the
+    library says off -- so a seeder that was never wired up fails here rather than passing.
+
+    Mutation: delete the `B.conditionsUnstated(...)` block from boot(). The minted model carries
+    freshModel's literals, the estimate page then reads them as stated, and nothing an admin sets
+    ever reaches a bid."""
+    c = ran["conditionDefaults"]
+    assert c["fetched"], "a brand new project never asked for the stored answers"
+    assert c["minted"]["joint_filler"] is False, (
+        "the library's 'off' did not reach the model this page mints, so the Defaults tab is "
+        "unreachable from the normal flow")
+    assert c["minted"]["dye"] is True
+    assert c["minted"]["remove_existing_jf"] is True
+    # AND THE CELLS AGREE ON THE SAME SAVE. Both screens read these back with the CELL winning,
+    # so a seeded answer the cells did not carry would be reverted on the very next load.
+    assert c["mintedCells"] == {"Polish!E29": "No", "Polish!E25": "Yes", "Polish!F29": "Yes"}, (
+        "the seeded answers did not reach Kyle's workbook cells: %r" % c["mintedCells"])
+
+
+@needs_node
+def test_a_project_that_has_been_worked_on_keeps_its_own_conditions(ran):
+    """THE HARD CONSTRAINT, on the page that mints the model. Hanz, verbatim: changing a default
+    must not change any estimate that already exists.
+
+    THE GATE IS OBSERVABLE, not inferred: a project that already has a polish_estimate never even
+    asks for the defaults.
+
+    Mutation: seed unconditionally in boot(). Flipping any switch on a worked project then writes
+    today's defaults over the three answers somebody already gave, and conditionCellWrites puts
+    them into Polish!E25/E29/F29 on the same save."""
+    c = ran["conditionDefaults"]
+    assert c["keptFetched"] is False, (
+        "a project with a saved estimate asked for the condition defaults")
+    assert c["kept"]["joint_filler"] is True, (
+        "a saved 'on' was replaced by the library's 'off'")
+    assert c["kept"]["dye"] is False
+    assert c["kept"]["remove_existing_jf"] is False
+    # …and the switch that was actually pressed did move, or this would pass against a save that
+    # never happened.
+    assert c["kept"]["taxable"] is False
+
+
+@needs_node
+def test_an_answer_already_in_a_cell_beats_the_library(ran):
+    """THE CELL WINS WHERE THERE IS ONE, which is the rule both screens already follow and the
+    reason conditionsFromCells runs OUTSIDE the seed rather than before it.
+
+    A project that reached this page from the live intake has no polish_estimate at all -- exactly
+    the blob conditionsUnstated calls seedable -- while an answer the AI autofill or an earlier
+    visit gave sits in cell_values. Seeding last would overwrite it and the next save would make
+    that permanent.
+
+    ALL THREE CELLS ANSWERED, not one -- exactly what a real step-1 save on the live intake screen
+    leaves behind (Polish!E29=Yes, Polish!E25=No, Polish!F29=No), and the library's stored default
+    is the OPPOSITE of every one of them. A fixture that answered only one of the three could pass
+    against a page that seeded the other two from the library regardless of what their cells said.
+
+    Mutation: swap the two calls so seedConditionDefaults runs outermost. All three come back
+    flipped and every cell answer already given is gone."""
+    c = ran["conditionDefaults"]["celled"]
+    assert c["fetched"], "the library was never asked for its stored answers"
+    assert c["dye"] is False, "the library's answer was written over the 'No' in Polish!E25"
+    assert c["jointFiller"] is True, "the library's answer was written over the 'Yes' in Polish!E29"
+    assert c["removeExistingJf"] is False, (
+        "the library's answer was written over the 'No' in Polish!F29")
+
+
+@needs_node
+def test_the_defaults_table_being_absent_mints_the_model_anyway(ran):
+    """`condition_defaults` is applied to NEITHER database as of 2026-09-18. A project that could
+    not be created because a table nobody has promoted is missing would be a far worse outcome
+    than one created with the answers the tool ships.
+
+    Mutation: let the exception out of loadConditionDefaults. boot() then throws before hydrate(),
+    and the intake form never appears on production."""
+    d = ran["conditionDefaults"]["down"]
+    for key in ("joint_filler", "dye", "remove_existing_jf"):
+        assert d["conditions"][key] == d["shipped"][key], (
+            "%s did not fall back to what the tool ships" % key)

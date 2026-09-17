@@ -316,3 +316,33 @@ grant all on all tables in schema public to service_role;
 grant all on all sequences in schema public to service_role;
 alter default privileges in schema public grant all on tables to service_role;
 alter default privileges in schema public grant all on sequences to service_role;
+
+-- ── Takeoff condition defaults ──────────────────────────────────────────
+-- What a NEW Polish estimate opens ANSWERED for the three Yes/No questions the Takeoff step
+-- carries. Mirrors supabase_schema.sql; see backend/condition_defaults.py for why the key
+-- vocabulary is closed and checked in Python rather than by a CHECK constraint, and why the
+-- workbook CELL each answer writes is not editable.
+--
+-- NOT APPLIED on either database as of 2026-09-18 — it needs Hanz's go, and it has to land on
+-- BOTH or the one that misses it answers 502 on the first save. Until then list_defaults()
+-- answers empty by design and every estimate opens with the literals in polish-bid-core.js.
+--
+-- A row is an OVERRIDE of a shipped constant, and it reaches a BRAND-NEW bid only: a saved
+-- estimate keeps the answers it was saved with whatever this table later says.
+create table if not exists public.condition_defaults (
+  id            text primary key,
+  condition_key text not null,                   -- joint_filler | remove_existing_jf | dye
+  on_by_default boolean not null default false,  -- the whole of what is editable
+  owner_email   text,
+  updated_by    text,
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz
+);
+-- One row per condition. PLAIN, not partial: there is deliberately no deleted_at here, because a
+-- row is one boolean in front of a constant that is still in the source — the undo is the switch.
+create unique index if not exists condition_defaults_key_idx
+  on public.condition_defaults (condition_key);
+-- Beside the table, per the measured lesson this file already records: the blanket grant above
+-- only covers tables that existed when it ran, so a table added later reads fine and every write
+-- fails.
+grant select, insert, update, delete on public.condition_defaults to service_role;

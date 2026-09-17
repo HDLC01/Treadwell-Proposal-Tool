@@ -99,10 +99,15 @@ def test_the_deposit_reminder_and_the_sent_email_both_get_a_tab():
     // The two declarations and the merge block, lifted out of the IIFE.
     const decl = src.slice(src.indexOf("var LABELS = {"), src.indexOf("var TOKENS"));
     const merge = src.slice(src.indexOf("if (j.labels &&"), src.indexOf("$(\\"loading\\")"));
+    // AND openingEmail, LIFTED BEFORE THE MERGE BLOCK THAT CALLS IT. The merge grew a second
+    // line on 2026-09-18 ("and then the email the URL names"), and without this lift the scope
+    // dies on a ReferenceError that says nothing about tabs at all.
+    const memoAt = src.indexOf("function openingEmail(");
+    const memo = src.slice(memoAt, src.indexOf("\\n  }", memoAt) + 4);
     const j = %s;
     let KEY = "not_viewed";
     const run = new Function("j", "KEY",
-      decl + "\\n" + merge + "\\nreturn { keys: Object.keys(LABELS), labels: LABELS, KEY: KEY };");
+      decl + "\\n" + memo + "\\n" + merge + "\\nreturn { keys: Object.keys(LABELS), labels: LABELS, KEY: KEY };");
     console.log(JSON.stringify(run(j, KEY)));
     """ % (json.dumps(str(EDITOR)), json.dumps({"labels": SERVED, "editor_titles": {}}))
     proc = subprocess.run(["node", "-e", script], capture_output=True, text=True, encoding="utf-8", timeout=60)
@@ -122,10 +127,13 @@ def test_a_template_the_editor_has_never_heard_of_still_gets_a_tab():
     const src = require("fs").readFileSync(%s, "utf8");
     const decl = src.slice(src.indexOf("var LABELS = {"), src.indexOf("var TOKENS"));
     const merge = src.slice(src.indexOf("if (j.labels &&"), src.indexOf("$(\\"loading\\")"));
+    // openingEmail again, and for the same reason as the scenario above it.
+    const memoAt = src.indexOf("function openingEmail(");
+    const memo = src.slice(memoAt, src.indexOf("\\n  }", memoAt) + 4);
     const j = { labels: { not_viewed: "Not opened yet", brand_new: "Something added later" } };
     let KEY = "not_viewed";
     const run = new Function("j", "KEY",
-      decl + "\\n" + merge + "\\nreturn Object.keys(LABELS);");
+      decl + "\\n" + memo + "\\n" + merge + "\\nreturn Object.keys(LABELS);");
     console.log(JSON.stringify(run(j, KEY)));
     """ % json.dumps(str(EDITOR))
     proc = subprocess.run(["node", "-e", script], capture_output=True, text=True, encoding="utf-8", timeout=60)

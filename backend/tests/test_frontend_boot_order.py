@@ -62,7 +62,8 @@ def test_every_external_script_is_deferred(page):
 @pytest.mark.parametrize("page,expected", [
     ("estimate-review.html", [
         "hyperformula", "/js/xl-excel-rounding.js", "supabase-js", "/js/icons.js",
-        "/auth.js", "/shared.js", "/js/crm-core.js", "/js/estimate-review.js",
+        "/auth.js", "/shared.js", "/js/tab-memo.js", "/js/crm-core.js",
+        "/js/estimate-review.js",
     ]),
     ("info-sheet.html", [
         "hyperformula", "/js/xl-excel-rounding.js", "supabase-js", "/shared.js",

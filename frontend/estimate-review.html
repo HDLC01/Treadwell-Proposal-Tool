@@ -893,6 +893,10 @@
 <script defer src="/js/icons.js"></script>
 <script defer src="/auth.js"></script>
 <script defer src="/shared.js"></script>
+<!-- Which worksheet tab a reload lands on. Pure functions over location.hash, no DOM and no
+     fetch; deferred like every other tag on this page (see test_frontend_boot_order) and placed
+     before the page script, which reads window.TWTabMemo as it picks the opening tab. -->
+<script defer src="/js/tab-memo.js"></script>
 <!-- Shared person rendering (names, initials, avatar colours) — one source of
      truth so an estimator looks identical on every page. Must precede the page's
      own script, which reads window.TWCrm as it runs. -->

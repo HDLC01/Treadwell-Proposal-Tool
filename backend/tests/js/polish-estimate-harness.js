@@ -421,6 +421,18 @@ function build(opts) {
     // list of rows -- a 404's JSON, an { ok: false } -- and neither may cost the page its Labor
     // step. Default [] rather than the fixture list, so a page that fetched this when it had no
     // business to shows up as an empty answer rather than silently seeding.
+    // GET /api/condition-defaults -- the company's answers for the three Takeoff
+    // conditions. Its own arm for the same reason the labor one has one: the table is
+    // applied to NEITHER database yet, so on both of them today this read has nothing
+    // behind it, and a page that could not open without it would be unusable. Default []
+    // rather than a fixture list, so a page that asked when it had no business to shows
+    // up as an empty answer rather than as a silent rewrite of somebody's conditions.
+    if (/condition-defaults/.test(url)) {
+      if (opts.conditionFetchFails) throw new Error("the defaults table is not there");
+      return { json: async () => ({ ok: true,
+        conditions: clone(opts.conditionDefaults === undefined
+          ? [] : opts.conditionDefaults) }) };
+    }
     if (/\/labor/.test(url)) {
       if (opts.laborFails) throw new Error("the defaults table is not there");
       return { json: async () => (opts.laborBody !== undefined
@@ -1927,6 +1939,83 @@ const rendered = [];      // every string the page put on screen, for the Labour
               costCells: down.doc.querySelectorAll("[data-lcost-for]").length },
       notRows: { ids: ids(notRows), mainShown: notRows.dom.get("main").hidden === false,
                  alert: notRows.dom.get("alert").textContent },
+    };
+  }
+
+
+  // ── the Takeoff condition defaults, at the page level ──────────────────────
+  //
+  // The three conditions stopped being "built in" on 2026-09-18. What is proved here is the half
+  // the shared module cannot prove on its own: which blobs this PAGE decides to seed.
+  {
+    // Every stored answer disagrees with what the tool ships — joint filler ships ON and this says
+    // off; dye and remove-existing ship off and this says on. A fixture that agreed with
+    // freshModel could not tell a seeder that works from one that was never wired up.
+    const COND = [{ key: "joint_filler", on: false },
+                  { key: "dye", on: true },
+                  { key: "remove_existing_jf", on: true }];
+    const conds = (built) => built.api.model().conditions;
+
+    // A brand-new project: no polish_estimate on the draft at all. This is the sidebar door and a
+    // project that reached this page without going through the beta intake.
+    const noKey = blob();
+    delete noKey.polish_estimate;
+    const brandNew = build({ blob: noKey, conditionDefaults: COND });
+    await brandNew.api.init();
+
+    // AN ESTIMATOR'S OWN ANSWERS, every one of them the opposite of the stored default. joint
+    // filler is the one that bites: it SHIPS on, so a bid where somebody deliberately turned it
+    // off is exactly the bid a careless default would quietly turn back on — and the downloaded
+    // workbook would then say Yes in Polish!E29.
+    const WORKED = {
+      version: 2,
+      takeoff: clone(MODEL.takeoff),
+      labor: clone(MODEL.labor),
+      conditions: Object.assign({}, MODEL.conditions,
+        { joint_filler: true, dye: false, remove_existing_jf: false }),
+      contingency: 0, fees: 0, totals: {},
+    };
+    const worked = build({ blob: blob({ polish_estimate: clone(WORKED) }),
+                           conditionDefaults: COND });
+    await worked.api.init();
+
+    // THE CELL STILL WINS. A project off the live intake has no polish_estimate and its answers
+    // sit in cell_values — seeding last would put a company default over the answer the estimator
+    // already gave, and the next save would make that permanent in Kyle's workbook.
+    //
+    // ALL THREE CELLS, not one -- exactly what a real step-1 save on the live intake screen
+    // leaves behind, and each one the OPPOSITE of what COND above says. A fixture that answered
+    // only one of the three could pass against a page that seeds the other two from the admin
+    // default regardless of what their cells said.
+    const fromCells = (() => { const b = blob(); delete b.polish_estimate;
+                               b.cell_values = { "Polish!E29": "Yes", "Polish!E25": "No",
+                                                 "Polish!F29": "No" };
+                               return b; })();
+    const celled = build({ blob: fromCells, conditionDefaults: COND });
+    await celled.api.init();
+
+    // PRODUCTION TODAY: the table is not there, so the read cannot answer.
+    const down = build({ blob: (() => { const b = blob();
+                                        delete b.polish_estimate; return b; })(),
+                         conditionFetchFails: true });
+    await down.api.init();
+
+    out.conditionDefaults = {
+      brandNew: { conditions: conds(brandNew),
+                  fetched: brandNew.rec.fetches.some((u) => /condition-defaults/.test(u)) },
+      // THE PROOF THAT THE GATE RAN AT ALL: a saved bid never even asks for the defaults.
+      worked: { saved: WORKED.conditions, after: conds(worked),
+                fetched: worked.rec.fetches.some((u) => /condition-defaults/.test(u)),
+                // …and NOT VACUOUS: the same rows applied to the same model move all three.
+                wouldHaveChanged: B.seedConditionDefaults(conds(worked), COND) },
+      celled: { dye: conds(celled).dye, jointFiller: conds(celled).joint_filler,
+                removeExistingJf: conds(celled).remove_existing_jf,
+                fetched: celled.rec.fetches.some((u) => /condition-defaults/.test(u)) },
+      // Never a blank step and never a word about it: a default nobody has defined yet is not an
+      // error to report to an estimator.
+      down: { conditions: conds(down), shipped: B.freshModel().conditions,
+              mainShown: down.dom.get("main").hidden === false,
+              alert: down.dom.get("alert").textContent },
     };
   }
 
