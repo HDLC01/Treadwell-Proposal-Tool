@@ -19,7 +19,20 @@ comment above the list:
   2. IT CARRIES NO PRICED ROLE. `roleFor()` answers "other" for all four, so `pricedTabs()`,
      `renderBidOptions()` and `updateTotalBarFromHF()` never read them. Checked by lifting the
      shipped `BASE_ROLE` in the harness, not by retyping it.
-  3. IT CANNOT BE THE OPENING TAB. `defaultBaseSheet()` answers Epoxy, Polish or the gyp base.
+  3. IT IS NOT THE DEFAULT OPENING TAB. `defaultBaseSheet()` answers Epoxy, Polish or the gyp base.
+
+     THAT IS NO LONGER THE WHOLE STORY, and the difference is worth stating rather than leaving
+     this paragraph to go quietly stale. Since 2026-09-18 the opening tab is `openingSheet()`: the
+     worksheet the URL remembers when that tab still exists on the draft, and `defaultBaseSheet()`
+     otherwise (see test_tabs_survive_a_reload). So an estimator who was last on Leveling reloads
+     onto Leveling, and that tab IS one of the deferred four.
+
+     It costs exactly one fetch, and it is the fetch that estimator was about to make: showSheet's
+     `!sheetCache[name]` branch is the same path a click takes, `loadDeferredIntoEngine` runs
+     inside it, and by the time init() calls showSheet the cellValues replay, `applyJobFlags` and
+     `applyMarkupRates` have all finished — so the late load replays over a complete set of keys,
+     which is what section 3 below is about. What condition 3 still means is that the DEFAULT never
+     pays for a deferred tab, so a fresh open of any draft is unchanged.
 
 WHAT DEFERRAL DOES NOT EXCUSE. 'Epoxy blank' and 'Leveling' are written to at load --
 `applyJobFlags`, `applyMarkupRates` and `applyRemodelRateOverride` all stamp cells on them. Those
@@ -143,8 +156,11 @@ def test_no_deferred_tab_carries_a_priced_role(result):
 
 @needs_node
 def test_no_deferred_tab_can_be_the_opening_one(result, deferred_names):
-    """`defaultBaseSheet()` answers Epoxy, Polish or the gyp base and nothing else, so the tab the
-    page paints first is never one that has not been fetched."""
+    """`defaultBaseSheet()` answers Epoxy, Polish or the gyp base and nothing else, so the tab a
+    draft opens on BY DEFAULT is never one that has not been fetched.
+
+    A tab the URL remembers can be — see the note in this module's docstring. This is the default,
+    which is what a fresh open of any draft pays."""
     opening = {result["CANONICAL_SHEET"], "Polish", result["GYP_BASE"]}
     assert opening.isdisjoint(set(deferred_names)), sorted(opening & set(deferred_names))
 

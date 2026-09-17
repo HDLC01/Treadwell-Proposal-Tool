@@ -2494,10 +2494,59 @@
       $(TAB_OF[p]).setAttribute("aria-selected", String(p === which));
       $("pane-" + p).hidden = p !== which;
     });
+    // AND THE ADDRESS BAR SAYS SO. Hanz, on staging: "when I reload the page, why does it
+    // automatically land on assemblies? and not on the tab that I have under items and
+    // assemblies". `view` above is a module variable that dies with the page; the fragment is
+    // the only part of this that a reload still has.
+    //
+    // WRITTEN HERE, not in the click listener, because the tab strip is not the only thing that
+    // switches tabs — there are seven other call sites. The Defaults tab's Edit buttons jump to
+    // the material or the assembly behind a default (`showView("items"); paint();
+    // focusItemRow(id)`), and creating a material, an assembly or a vendor lands you on its tab.
+    // A reload after any of those has to come back to where it put you, and a listener-only write
+    // would send you to Assemblies instead.
+    //
+    // `typeof window` rather than a bare read: the test harnesses run these functions in scopes
+    // that bind only what the page itself declares, and an unbound identifier is a ReferenceError
+    // that reds every scenario at once. The script tag is what guarantees the module is there,
+    // and a test asserts the tag, because no amount of executing this can see a missing <script>.
+    if (typeof window !== "undefined" && window.TWTabMemo) {
+      window.TWTabMemo.write(window, { tab: which });
+    }
+  }
+  /** Show one work type's defaults: the strip's own state, and nothing else.
+   *
+   *  Split out of the click listener so restoreView below can reach it. It deliberately does NOT
+   *  repaint the two lists — at restore time nothing has been fetched yet and there is nothing to
+   *  draw, and load()'s paint() is what draws them a moment later. The listener repaints because
+   *  by the time somebody can click, there is something to repaint. */
+  function setWorkType(wt) {
+    DEFAULT_WT = wt;
+    WORK_TYPES.forEach(function (k) {
+      var b = $("wt-" + k);
+      if (b) b.setAttribute("aria-selected", String(k === wt));
+    });
+  }
+  /** Open on the tab — and the work type — the URL names.
+   *
+   *  A REMEMBERED TAB THAT NO LONGER EXISTS FALLS BACK, which is the whole of what `pick` is for:
+   *  a link carrying `#tab=rooms` from some later shape of this page has to show Assemblies, not
+   *  an empty pane. The fallbacks are the page's own declared defaults, read out of `view` and
+   *  `DEFAULT_WT` rather than retyped here, so this cannot disagree with them.
+   *
+   *  Runs before load(), and costs nothing: showView only flips `hidden` and `aria-selected`, and
+   *  setWorkType only moves the strip. No pane fetches anything it was not going to fetch, which
+   *  is the rule that keeps this from turning one tab's page into four tabs' worth of requests. */
+  function restoreView() {
+    if (typeof window === "undefined" || !window.TWTabMemo) return;
+    var M = window.TWTabMemo;
+    showView(M.pick(M.read(window, "tab"), PANES, view));
+    setWorkType(M.pick(M.read(window, "wt"), WORK_TYPES, DEFAULT_WT));
   }
   PANES.forEach(function (p) {
     $(TAB_OF[p]).addEventListener("click", function () { showView(p); });
   });
+  restoreView();
 
   // ── add from library: the modal ────────────────────────────────────────────
   // The DECISIONS are the four pure functions above; this is wiring, and it is kept apart from them
@@ -3254,11 +3303,13 @@
     if (wtBtn) {
       var wt = wtBtn.getAttribute("data-work-type");
       if (WORK_TYPES.indexOf(wt) !== -1) {
-        DEFAULT_WT = wt;
-        WORK_TYPES.forEach(function (k) {
-          var b = $("wt-" + k);
-          if (b) b.setAttribute("aria-selected", String(k === wt));
-        });
+        setWorkType(wt);
+        // REMEMBERED BESIDE THE TAB, not instead of it. Landing on Defaults and showing the wrong
+        // one of the five work types is the same reload bug one level down, so the fragment
+        // carries both: `#tab=defaults&wt=epoxy`.
+        if (typeof window !== "undefined" && window.TWTabMemo) {
+          window.TWTabMemo.write(window, { wt: wt });
+        }
         renderDefaultTakeoff();
         renderDefaultLabor();
         renderDefaultSearch();

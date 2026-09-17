@@ -434,8 +434,36 @@
     });
   }
 
+  /** The step keys, in rail order — what the URL is allowed to name. */
+  function stepKeys() {
+    return STEPS.map(function (s) { return s.key; });
+  }
+
+  /** Which step this estimate opens on, as an index.
+   *
+   *  BY KEY, NEVER BY NUMBER. "Step 2" would mean Labor today and something else the day a step
+   *  is added or reordered, and a link somebody sent last week would then open the wrong screen.
+   *  `pick` also makes a removed step fall back rather than leaving `at` pointing past the end of
+   *  PANELS, which renders nothing at all.
+   *
+   *  Without the module this answers the caller's own default. See library.js's showView on why
+   *  the guard is a `typeof`. */
+  function openingStep(fallbackIndex) {
+    if (typeof window === "undefined" || !window.TWTabMemo) return fallbackIndex;
+    var keys = stepKeys();
+    var want = window.TWTabMemo.pick(window.TWTabMemo.read(window, "step"), keys,
+                                     keys[fallbackIndex]);
+    var i = keys.indexOf(want);
+    return i < 0 ? fallbackIndex : i;
+  }
+
   function go(i) {
     at = Math.max(0, Math.min(STEPS.length - 1, i));
+    // So a reload comes back to the step you were on. Written after the clamp, so what the URL
+    // records is the step actually shown rather than the number that was asked for.
+    if (typeof window !== "undefined" && window.TWTabMemo) {
+      window.TWTabMemo.write(window, { step: STEPS[at].key });
+    }
     paintRail();
     renderPanel();
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -1390,6 +1418,9 @@
     $("loading").hidden = true;
     $("main").hidden = false;
     paintBid();
+    // The step the URL names, decided BEFORE the first paint so the rail and the panel come up
+    // agreeing. Setting `at` after paintRail would light one step and render another.
+    at = openingStep(at);
     paintRail();
     renderPanel();
   }
