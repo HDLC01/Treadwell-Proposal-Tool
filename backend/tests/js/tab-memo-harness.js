@@ -98,6 +98,62 @@ function makeDoc(ids) {
   return { els, getElementById: (id) => els[id] || null };
 }
 
+/** A synthetic click target whose `closest` answers one attribute selector and nothing else --
+ *  enough to drive a delegated listener's `e.target.closest("[data-foo]")` dispatch without a
+ *  real DOM. Every OTHER selector answers null, so a listener with several `t.closest(...)`
+ *  guards ahead of the one under test falls through every one of them undisturbed. */
+function fakeTarget(attr, value) {
+  return {
+    closest(sel) {
+      return sel === "[" + attr + "]"
+        ? { getAttribute: (k) => (k === attr ? value : null) }
+        : null;
+    },
+  };
+}
+
+/** One `<ownerExpr>.addEventListener("<event>", function (...) { ... })` callback, braces
+ *  balanced, wrapped into a standalone function expression so it can be CALLED -- the shipped
+ *  listener itself, not a description of it. Mirrors `lift()` above, for a listener that has no
+ *  name of its own to search for.
+ *
+ *  Scans past any occurrence of the needle that is not actually followed by a function
+ *  expression -- library.js also mentions this exact call in a comment, above the real one. */
+function liftListener(src, ownerExpr, event, whose) {
+  const needle = ownerExpr + '.addEventListener("' + event + '", ';
+  let at = -1;
+  let fnStart = -1;
+  for (let from = 0; ; ) {
+    const found = src.indexOf(needle, from);
+    if (found < 0) break;
+    const j = found + needle.length;
+    const asyncHere = src.slice(j, j + 6) === "async ";
+    const k = asyncHere ? j + 6 : j;
+    if (src.slice(k, k + 8) === "function") { at = found; fnStart = k; break; }
+    from = found + needle.length;
+  }
+  if (at < 0) {
+    throw new Error("the " + event + " listener on " + ownerExpr + " is gone from " + whose +
+      " -- rewrite this harness, don't stub it");
+  }
+  const isAsync = src.slice(at + needle.length, fnStart) === "async ";
+  const parenOpen = src.indexOf("(", fnStart);
+  const parenClose = src.indexOf(")", parenOpen);
+  const params = src.slice(parenOpen + 1, parenClose);
+  const braceOpen = src.indexOf("{", parenClose);
+  let depth = 0, braceClose = -1;
+  for (let j = braceOpen; j < src.length; j++) {
+    if (src[j] === "{") depth++;
+    else if (src[j] === "}" && --depth === 0) { braceClose = j; break; }
+  }
+  if (braceClose < 0) {
+    throw new Error("unbalanced braces reading the " + event + " listener on " + ownerExpr +
+      " in " + whose);
+  }
+  return (isAsync ? "async " : "") + "function(" + params + ") " +
+    src.slice(braceOpen, braceClose + 1);
+}
+
 const out = {};
 
 // ── 1. the module itself ─────────────────────────────────────────────────────
@@ -165,14 +221,21 @@ const out = {};
     lift(src, "showView", "library.js"),
     lift(src, "setWorkType", "library.js"),
     lift(src, "restoreView", "library.js"),
-    "return { showView, setWorkType, restoreView, view: () => view, wt: () => DEFAULT_WT," +
-      " PANES, WORK_TYPES };",
+    // The work-type strip's write lives inside document's own delegated click listener
+    // (library.js's onClick, around the "[data-work-type]" branch), not inside a named function
+    // -- lifted whole so the WIRING is what runs (does a click still call TWTabMemo.write),
+    // not a restatement of it.
+    "const __onWtClick = " + liftListener(src, "document", "click", "library.js") + ";",
+    "return { showView, setWorkType, restoreView, onWtClick: __onWtClick, view: () => view," +
+      " wt: () => DEFAULT_WT, PANES, WORK_TYPES };",
   ].join("\n");
-  const scope = new Function("window", "document", "$", body);
+  const scope = new Function("window", "document", "$",
+    "renderDefaultTakeoff", "renderDefaultLabor", "renderDefaultSearch", body);
+  const noop = () => {};
   const run = (hash) => {
     const win = makeWin(hash, { pathname: "/library.html" });
     const doc = makeDoc(ids);
-    const api = scope(win, doc, doc.getElementById);
+    const api = scope(win, doc, doc.getElementById, noop, noop, noop);
     return { win, doc, api };
   };
 
@@ -208,20 +271,23 @@ const out = {};
     out.libUnknown = { view: api.view(), wt: api.wt(),
                        shown: api.PANES.filter((p) => !doc.els["pane-" + p].hidden) };
   }
-  // And the other half: switching a tab records it.
+  // And the other half: switching a tab records it. showView's write is afterTab; the
+  // work-type strip's is a SEPARATE write inside document's own click listener, so it is driven
+  // through THAT REAL LISTENER -- onWtClick, lifted whole above -- instead of calling M.write()
+  // by hand. Calling M.write() ourselves would prove M.write() works, which four other tests
+  // already prove, and nothing about whether the page's own listener still calls it.
   {
     const { win, api } = run("");
     api.showView("vendors");
     const afterTab = win.location.hash;
-    api.setWorkType("epoxy");            // the strip alone — the listener writes the fragment
-    M.write(win, { wt: "epoxy" });
+    api.onWtClick({ target: fakeTarget("data-work-type", "epoxy") });
     out.libWrites = { afterTab, afterWt: win.location.hash };
   }
   // Without the module the page behaves exactly as it did before this feature existed.
   {
     const win = makeWin("#tab=defaults", { noModule: true });
     const doc = makeDoc(ids);
-    const api = scope(win, doc, doc.getElementById);
+    const api = scope(win, doc, doc.getElementById, noop, noop, noop);
     api.restoreView();
     out.libNoModule = { view: api.view(), hash: win.location.hash };
   }
@@ -242,6 +308,23 @@ const out = {};
     noneAtAll: scope(makeWin("#tab=gyp")).openingLayout([]),
     noModule: scope(makeWin("#tab=gyp", { noModule: true })).openingLayout(LAYOUTS),
   };
+
+  // The write half: the REAL #mk-tabs click listener, lifted whole -- not window.TWTabMemo.write()
+  // called by hand. The opening-tab scenarios above prove openingLayout() works and prove
+  // nothing about whether a tab click still records one.
+  const clickBody = [
+    decl(src, "var", "LAYOUT", "markup.js"),
+    "const __onTabClick = " + liftListener(src, '$("mk-tabs")', "click", "markup.js") + ";",
+    "return { onTabClick: __onTabClick, layout: () => LAYOUT };",
+  ].join("\n");
+  const clickScope = new Function("window", "say", "render", clickBody);
+  {
+    const win = makeWin("", { pathname: "/markup.html" });
+    const noop = () => {};
+    const api = clickScope(win, noop, noop);
+    api.onTabClick({ target: fakeTarget("data-layout", "gyp") });
+    out.markupWrites = { afterTab: win.location.hash, layout: api.layout() };
+  }
 }
 
 // ── 4. the cadence editor: one tab per customer email ────────────────────────
@@ -259,6 +342,23 @@ const out = {};
     retired: scope(makeWin("#tab=old_nudge")).openingEmail(KEYS, "not_viewed"),
     noModule: scope(makeWin("#tab=checkin", { noModule: true })).openingEmail(KEYS, "not_viewed"),
   };
+
+  // The write half: the REAL #tabs click listener, lifted whole -- same gap as markup's tab
+  // strip, and the same reason a call to window.TWTabMemo.write() by hand would not find it.
+  const clickBody = [
+    decl(src, "var", "KEY", "followup-settings.js"),
+    "const __onTabClick = " + liftListener(src, '$("tabs")', "click", "followup-settings.js") + ";",
+    "return { onTabClick: __onTabClick, key: () => KEY };",
+  ].join("\n");
+  const clickScope = new Function("window", "collect", "paintTabs", "fillTemplate",
+    "schedulePreview", clickBody);
+  {
+    const win = makeWin("", { pathname: "/followup-settings.html" });
+    const noop = () => {};
+    const api = clickScope(win, noop, noop, noop, noop);
+    api.onTabClick({ target: fakeTarget("data-key", "deposit_nudge") });
+    out.cadenceWrites = { afterTab: win.location.hash, key: api.key() };
+  }
 }
 
 // ── 5. the Polish beta: three steps ──────────────────────────────────────────
@@ -381,6 +481,11 @@ const out = {};
     // `sec` is deliberately NOT written — defaultSection routes a fresh open by what needs a
     // human — but a deep link that carries one is left alone.
     leavesSecAlone: drive("?open=p-1&sec=chat", "", "p-42"),
+    // Opening a drawer must not cost library.js's or markup's or the estimate sheet's own
+    // fragment its value. Every scenario above starts from an empty hash, so a mutation dropping
+    // `+ location.hash` from markDrawerInUrl's replaceState call would leave every one of them
+    // green -- the fragment it would have dropped was already empty.
+    keepsTheFragment: drive("", "#sheet=Copy1", "p-77"),
   };
 }
 

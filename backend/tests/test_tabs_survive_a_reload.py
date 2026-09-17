@@ -237,11 +237,47 @@ def test_a_fresh_open_still_lands_on_assemblies_and_says_so(result):
 def test_switching_a_tab_is_what_records_it(result):
     """Restoring is half the feature; the other half is that anything which switches tabs writes
     the fragment. showView is the funnel — the Defaults tab's Edit buttons switch tabs too, and a
-    reload after one of those has to come back to the material it opened.
+    reload after one of those has to come back to the material it opened. That write is afterTab.
 
-    Mutation: remove the write from showView()."""
+    afterWt is a SEPARATE write, inside document's own delegated click listener rather than
+    inside a named function, so tab-memo-harness.js drives the REAL listener for it (onWtClick,
+    the shipped callback lifted whole) instead of calling M.write() by hand. Calling M.write()
+    ourselves would prove M.write() works, which four other tests already prove, and nothing
+    about whether the page's own listener still calls it — which is exactly the mutation that
+    left this scenario green before the harness drove the real listener.
+
+    Mutation: remove the write from showView(), or the window.TWTabMemo.write() call from the
+    work-type block of document's click listener."""
     assert result["libWrites"]["afterTab"] == "#tab=vendors"
     assert result["libWrites"]["afterWt"] == "#tab=vendors&wt=epoxy"
+
+
+def test_restoreview_is_actually_invoked_when_the_page_loads():
+    """restoreView() is a pure decision, proven directly above in every scenario — the harness
+    lifts the function and calls it by hand, which proves it works and nothing about whether
+    library.js's own module code still calls it once, on load. This is the bug as it actually
+    shipped in the review that found it: the function stayed correct, the one statement that
+    invoked it went missing, and every scenario above stayed green, because none of them can see
+    a module-scope statement that was never there to call.
+
+    Read out of the source for that reason — there is no return value a deleted top-level
+    statement changes. Bounded at the next section comment so this cannot match some unrelated
+    mention of restoreView() elsewhere in the file (there is one, in a comment), and checked for
+    brace depth so a call moved INSIDE the tab-click listener just above it — which would run it
+    only on a click, never on load — is caught too.
+
+    Mutation: delete the top-level `restoreView();` statement below the tab-strip listeners."""
+    src = (FRONTEND / "js" / "library.js").read_text(encoding="utf-8")
+    restore_fn = fn_body(src, "function restoreView(")
+    tail_start = src.index(restore_fn) + len(restore_fn)
+    end = src.index("\n  // ── add from library", tail_start)
+    wiring = src[tail_start:end]
+    assert re.search(r"(^|\n)\s*restoreView\(\);", wiring), (
+        "restoreView() is defined but nothing at module scope calls it")
+    before = wiring[:wiring.index("restoreView();")]
+    assert before.count("{") == before.count("}"), (
+        "restoreView() is called from inside another block (e.g. the click listener), not "
+        "unconditionally at module scope")
 
 
 def test_without_the_module_the_page_behaves_exactly_as_it_did_before(result):
@@ -266,6 +302,39 @@ def test_the_markup_page_opens_on_the_layout_you_were_reading(result):
     assert result["markup"]["noModule"] == "epoxy"
 
 
+def test_reload_actually_asks_openinglayout_for_the_tab_to_open():
+    """openingLayout() is proven directly above against the tab set THIS load received — proven
+    by calling it by hand, which says nothing about whether reload() still asks it. A neutered
+    `LAYOUT = LAYOUTS[0]` decides the same thing as the real call on a fresh page (nothing is
+    remembered yet) and leaves every scenario above green.
+
+    Read out of the source because reload() is async and fetches — the same reason
+    test_opening_a_drawer_is_what_records_it below reads openDetail's call site rather than
+    running it.
+
+    Mutation: replace `LAYOUT = openingLayout(LAYOUTS)` with `LAYOUT = LAYOUTS[0]`."""
+    src = (FRONTEND / "js" / "markup.js").read_text(encoding="utf-8")
+    body = fn_body(src, "async function reload(")
+    assert "LAYOUT = openingLayout(LAYOUTS)" in body, (
+        "reload() no longer asks openingLayout() for the tab to open")
+    # GUARDED, not unconditional: a retry after a failed fetch must leave the tab somebody is
+    # already standing on alone, which is what `LAYOUTS.indexOf(LAYOUT) < 0` is for.
+    assert "if (LAYOUTS.indexOf(LAYOUT) < 0)" in body
+    assert body.index("LAYOUT = openingLayout(LAYOUTS)") < body.index("LOADED = true")
+
+
+def test_the_markup_tab_strip_click_is_what_records_it(result):
+    """The opening-tab tests above prove openingLayout() works; neither runs the #mk-tabs click
+    listener that is supposed to write the fragment on every switch, so a deleted write there —
+    exactly the shape of bug already proven for library.js's work-type strip — would leave them
+    all green. Driven through the REAL listener, lifted whole, not through window.TWTabMemo.write()
+    called by hand.
+
+    Mutation: remove the window.TWTabMemo.write() call from the #mk-tabs click listener."""
+    assert result["markupWrites"]["afterTab"] == "#tab=gyp"
+    assert result["markupWrites"]["layout"] == "gyp"
+
+
 # ── 4. the cadence editor ────────────────────────────────────────────────────
 
 def test_the_cadence_editor_opens_on_the_email_you_were_writing(result):
@@ -279,6 +348,35 @@ def test_the_cadence_editor_opens_on_the_email_you_were_writing(result):
     assert result["cadence"]["remembered"] == "deposit_nudge"
     assert result["cadence"]["retired"] == "not_viewed"
     assert result["cadence"]["noModule"] == "not_viewed"
+
+
+def test_load_actually_asks_openingemail_for_the_tab_to_open():
+    """Same gap as markup's reload(): openingEmail() is proven directly above with the keys THIS
+    response served, never through load()'s own call to it. A neutered `KEY = KEY` leaves KEY
+    exactly where the guard above it already put it on a fresh load and every scenario above
+    stays green.
+
+    Read out of the source for the same reason as reload() — load() is async and fetches.
+
+    Mutation: replace `KEY = openingEmail(Object.keys(LABELS), KEY)` with `KEY = KEY`."""
+    src = (FRONTEND / "js" / "followup-settings.js").read_text(encoding="utf-8")
+    body = fn_body(src, "async function load(")
+    assert "KEY = openingEmail(Object.keys(LABELS), KEY)" in body, (
+        "load() no longer asks openingEmail() for the tab to open")
+    # AFTER the guard for a server that stopped serving the remembered default — otherwise a bad
+    # link could land ahead of the fallback meant to catch a server that dropped `not_viewed`.
+    assert body.index("if (!LABELS[KEY])") < body.index("KEY = openingEmail(")
+    assert body.index("KEY = openingEmail(") < body.index("paintTabs()")
+
+
+def test_the_cadence_tab_click_is_what_records_it(result):
+    """Same gap as the markup tab strip: openingEmail() is proven above; nothing runs the #tabs
+    click listener that is supposed to write the fragment on every switch. Driven through the
+    REAL listener, lifted whole, not through window.TWTabMemo.write() called by hand.
+
+    Mutation: remove the window.TWTabMemo.write() call from the #tabs click listener."""
+    assert result["cadenceWrites"]["afterTab"] == "#tab=deposit_nudge"
+    assert result["cadenceWrites"]["key"] == "deposit_nudge"
 
 
 # ── 5. the Polish beta ───────────────────────────────────────────────────────
@@ -308,6 +406,26 @@ def test_the_polish_step_recorded_is_the_one_on_screen(result):
         "the step asked for was recorded rather than the step shown")
     assert w["at"] == 0
     assert w["keptDraft"] == "?d=proj-1"
+
+
+def test_init_actually_asks_openingstep_for_the_step_to_open():
+    """openingStep() is proven directly above against a fabricated step list; `go()` is proven
+    directly above too. Neither runs init()'s own `at = openingStep(at)` — a neutered
+    `at = at` would leave `at` at its own literal default (0) on every scenario above, which is
+    indistinguishable from the correct answer on a fresh load.
+
+    Read out of the source because init() fetches the whole library and the estimate. Position
+    matters as much as presence: decided BEFORE paintRail()/renderPanel() paint, or the rail and
+    the panel light two different steps on the same first paint.
+
+    Mutation: replace `at = openingStep(at)` with `at = at`, or move it after paintRail()."""
+    src = (FRONTEND / "js" / "polish-estimate.js").read_text(encoding="utf-8")
+    body = fn_body(src, "async function init(")
+    assert "at = openingStep(at)" in body, (
+        "init() no longer asks openingStep() for the step to open")
+    assert body.index("paintBid()") < body.index("at = openingStep(at)")
+    assert body.index("at = openingStep(at)") < body.index("paintRail()")
+    assert body.index("at = openingStep(at)") < body.index("renderPanel()")
 
 
 # ── 6. the estimate sheet ────────────────────────────────────────────────────
@@ -352,15 +470,39 @@ def test_restoring_a_worksheet_tab_loads_that_one_and_not_the_others():
 
 
 def test_the_opening_tab_is_still_decided_after_the_copies_are_rehydrated():
-    """`openingSheet` asks `tabs`, and step 3b of init() is what puts a copied tab in it. Ask
-    before that and every remembered copy silently falls back to the base bid.
+    """`openingSheet` asks `tabs`, and `tabs` is already filled by buildTabs() at step 1 of
+    init() — before this file's own tab_copies loop (step 3b) ever runs. What step 3b actually
+    gates is HyperFormula: it rehydrates each copy's CELLS into the engine, and asking before
+    that finishes would pick a copy id `tabs` already names but HF cannot yet compute — showSheet
+    would have nothing to paint.
 
     Mutation: move `const initialSheet = openingSheet()` above the tab_copies loop."""
     src = (FRONTEND / "js" / "estimate-review.js").read_text(encoding="utf-8")
     body = src[src.index("async function init()"):src.index("\nfunction renderTabs()")]
     assert body.index("tab_copies.filter") < body.index("openingSheet()"), (
-        "the opening tab is decided before the copied tabs exist")
+        "the opening tab is decided before the copies are rehydrated into HyperFormula")
     assert body.index("openingSheet()") < body.index("showSheet(initialSheet)")
+
+
+def test_showsheet_actually_writes_the_remembered_tab():
+    """openingSheet() picks a name, proven above; showSheet() is what is supposed to record it —
+    every way of opening a tab funnels through this one function, so its write is the ONLY write
+    for the whole screen's sixteen-plus tabs. A deleted write here means the estimate sheet never
+    remembers a reload again, on any tab, and nothing above can see it: the sheet-opening tests
+    call `openingSheet()` directly, never `showSheet()`.
+
+    Read out of the source because showSheet is async and fetches the sheet over the network —
+    the same reason reload() and load() are read rather than run above.
+
+    Mutation: remove the `window.TWTabMemo.write(window, { sheet: name })` call from showSheet()."""
+    src = (FRONTEND / "js" / "estimate-review.js").read_text(encoding="utf-8")
+    body = fn_body(src, "async function showSheet(")
+    assert 'window.TWTabMemo.write(window, { sheet: name })' in body, (
+        "showSheet() no longer records the tab it just opened")
+    # Written from `name`, the argument just given, not from a module variable read back later —
+    # and before the tab bar repaints, so a mutation reordering the two cannot pass by accident.
+    assert body.index("activeSheet = name;") < body.index("window.TWTabMemo.write")
+    assert body.index("window.TWTabMemo.write") < body.index("for (const btn of tabBar")
 
 
 # ── 7. the CRM board's drawer ────────────────────────────────────────────────
@@ -378,6 +520,19 @@ def test_the_open_project_is_in_the_url_so_a_reload_comes_back_to_it(result):
     assert result["drawer"]["opened"]["path"] == "/portal.html"
     assert result["drawer"]["keepsOthers"]["search"] == "?est=kyle%40wetreadwell.com&open=p-42", (
         "opening a drawer dropped the rest of the query string")
+
+
+def test_opening_a_drawer_does_not_drop_an_existing_fragment(result):
+    """Every scenario above starts from an empty `location.hash`, so a mutation dropping
+    `+ location.hash` from markDrawerInUrl's replaceState call would leave every one of them
+    green — the fragment it would have dropped was already empty. This is the one library.js,
+    markup.js and estimate-review.js all rely on: whichever of their own tabs is open lives in
+    that same fragment, and opening a project's drawer must not wipe it out from under them.
+
+    Mutation: drop `+ location.hash` from the `next` string markDrawerInUrl builds."""
+    assert result["drawer"]["keepsTheFragment"]["hash"] == "#sheet=Copy1", (
+        "opening the drawer dropped the page's own tab fragment")
+    assert result["drawer"]["keepsTheFragment"]["search"] == "?open=p-77"
 
 
 def test_opening_a_drawer_is_what_records_it():
