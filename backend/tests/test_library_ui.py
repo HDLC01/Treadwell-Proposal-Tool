@@ -177,6 +177,35 @@ def test_the_takeoff_defaults_list_what_a_new_estimate_starts_with(ran):
 
 
 @needs_node
+def test_the_add_a_takeoff_default_button_actually_adds_one(ran):
+    """Hanz, 2026-09-17, from staging: "the add a take off default button and add label line
+    does not allow me to add line items".
+
+    He was right, and it was worse than the button. DEFAULT_Q was declared, read and reset but
+    NEVER ASSIGNED -- nothing was bound to the search box -- so the query could not become
+    non-empty, defaultCandidates() took its empty-query early return every time, and the results
+    box stayed hidden no matter what anyone typed or clicked. The same change had just taken the
+    default switch off the item rows and the assembly editor, so for two days there was NO WAY
+    AT ALL to make something a default.
+
+    IT SHIPPED GREEN because the only test over it matched the markup for data-add-default,
+    which two dead buttons satisfy perfectly. These assertions run the code instead: every one
+    of them fails against what was on staging.
+    """
+    a = ran["defaultsAddPath"]
+    assert a["browseOffersNonDefaults"], (
+        "the Add button opens onto nothing -- browse must offer what is not already a default")
+    assert a["browseSkipsExistingDefaults"], (
+        "browse offers rows that are already defaults, so they could be added twice")
+    assert a["browseRowsAreAddButtons"], (
+        "the browse rows are not add buttons, so clicking one cannot set a default")
+    assert a["typingFilters"], "typing in the search box no longer narrows the list"
+    assert a["clearingReturnsToBrowse"], (
+        "clearing the box leaves a hidden panel with no way back to the list")
+    assert a["focusesTheSearch"], "the button does not put the caret anywhere you can type"
+
+
+@needs_node
 def test_bond_is_shown_here_but_still_lives_on_the_markup_page():
     """Will asked for bond on this tab. It is here, and it is READ ONLY.
 
