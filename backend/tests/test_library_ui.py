@@ -206,6 +206,28 @@ def test_the_add_a_takeoff_default_button_actually_adds_one(ran):
 
 
 @needs_node
+def test_the_results_appear_with_the_rows_not_beside_the_search_box(ran):
+    """Hanz, 2026-09-17: "can we have the add take off default within the line item instead of
+    up above".
+
+    The box was a <span class="hits"> inside .itemsearch, and .itemsearch is a flex ROW -- so
+    the list of rows you were about to add rendered beside the input, floating clear of the
+    table it was adding to. Nothing was wrong with the markup in isolation, which is why only a
+    POSITION assertion catches it.
+    """
+    c = ran["page"]["defaultsCategories"]
+    assert c["resultsInsideTakeoffSection"], (
+        "the results box is outside the Takeoff section, so picks render away from the rows")
+    assert c["resultsFollowTheAddButton"], (
+        "the results box renders before the Add button that opens it")
+    assert c["resultsNotBesideTheSearchInput"], (
+        "the results box is back up beside the search input, which is what Hanz asked to change")
+    assert c["onlyOneResultsBox"], (
+        "there are two #default-hits containers; renderDefaultSearch writes to whichever the DOM "
+        "hands back first and the other stays stale")
+
+
+@needs_node
 def test_bond_is_shown_here_but_still_lives_on_the_markup_page():
     """Will asked for bond on this tab. It is here, and it is READ ONLY.
 

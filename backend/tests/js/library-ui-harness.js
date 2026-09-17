@@ -3465,6 +3465,20 @@ out.page = {
       search: /id="default-q"/.test(pane),
       searchIsForAdding: /placeholder="Search materials and assemblies to add"/.test(pane),
       searchAboveTheLists: pane.indexOf('id="default-q"') < pane.indexOf('class="admin-grid"'),
+      // THE RESULTS BOX LIVES WITH THE ROWS, not with the input. It shipped as a
+      // <span class="hits"> inside .itemsearch -- a flex ROW -- so the list of things you were
+      // about to add rendered beside the search box, clear of the table it was adding to.
+      // Hanz asked for it "within the line item instead of up above". Position is the whole
+      // fix, so position is what is asserted.
+      resultsInsideTakeoffSection: (function () {
+        var sec = (pane.split('id="default-takeoff"')[1] || "").split('class="admin-section"')[0];
+        return sec.indexOf('id="default-hits"') !== -1;
+      })(),
+      resultsFollowTheAddButton:
+        pane.indexOf('data-add-default="takeoff"') < pane.indexOf('id="default-hits"'),
+      resultsNotBesideTheSearchInput:
+        pane.indexOf('id="default-hits"') > pane.indexOf('class="admin-grid"'),
+      onlyOneResultsBox: (pane.match(/id="default-hits"/g) || []).length === 1,
       // AN ADD BUTTON IN EACH, on the same .addrow the Administration lists use. Labor's is not
       // optional: labor lines are not library rows, so there is nothing to switch on and nothing
       // for the search to return -- typing here is the only way one gets made.
