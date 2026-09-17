@@ -1404,12 +1404,19 @@ def test_an_answer_already_in_a_cell_beats_the_library(ran):
     visit gave sits in cell_values. Seeding last would overwrite it and the next save would make
     that permanent.
 
-    Mutation: swap the two calls so seedConditionDefaults runs outermost. `dye` comes back Yes and
-    the 'No' in Polish!E25 is gone."""
+    ALL THREE CELLS ANSWERED, not one -- exactly what a real step-1 save on the live intake screen
+    leaves behind (Polish!E29=Yes, Polish!E25=No, Polish!F29=No), and the library's stored default
+    is the OPPOSITE of every one of them. A fixture that answered only one of the three could pass
+    against a page that seeded the other two from the library regardless of what their cells said.
+
+    Mutation: swap the two calls so seedConditionDefaults runs outermost. All three come back
+    flipped and every cell answer already given is gone."""
     c = ran["conditionDefaults"]["celled"]
+    assert c["fetched"], "the library was never asked for its stored answers"
     assert c["dye"] is False, "the library's answer was written over the 'No' in Polish!E25"
-    assert c["jointFiller"] is False, (
-        "nothing was seeded at all, so this would pass against a page that never loads them")
+    assert c["jointFiller"] is True, "the library's answer was written over the 'Yes' in Polish!E29"
+    assert c["removeExistingJf"] is False, (
+        "the library's answer was written over the 'No' in Polish!F29")
 
 
 @needs_node

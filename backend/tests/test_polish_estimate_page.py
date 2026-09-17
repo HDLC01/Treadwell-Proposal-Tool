@@ -1949,16 +1949,21 @@ def test_a_cell_answer_still_beats_the_library_on_a_blank_bid(ran):
     sit in cell_values. If the seed ran last it would write a company-wide default over one of
     those, and the next save would make it permanent in Kyle's workbook.
 
-    Mutation: swap the two calls in init() so seedConditionDefaults runs outermost. `dye` then
-    comes back True and the estimator's "No" in Polish!E25 is gone."""
+    ALL THREE CELLS ANSWERED, not one -- exactly what a real step-1 save on the live intake screen
+    leaves behind (Polish!E29=Yes, Polish!E25=No, Polish!F29=No), and the library's stored default
+    is the OPPOSITE of every one of them. A fixture that answered only one of the three could pass
+    against a page that seeded the other two from the library regardless of what their cells said.
+
+    Mutation: swap the two calls in init() so seedConditionDefaults runs outermost. All three then
+    come back flipped and every cell answer the estimator gave is gone."""
     c = ran["conditionDefaults"]["celled"]
+    assert c["fetched"], "the library was never asked for its stored answers"
     assert c["dye"] is False, (
         "the library's answer was written over the 'No' already in Polish!E25")
-    # …and the library still reaches the ones no cell answers, or the ordering fix would have
-    # disabled the whole feature rather than ordered it.
-    assert c["jointFiller"] is False, (
-        "nothing was seeded at all, so this test would pass against a page that never loads the "
-        "defaults")
+    assert c["jointFiller"] is True, (
+        "the library's answer was written over the 'Yes' already in Polish!E29")
+    assert c["removeExistingJf"] is False, (
+        "the library's answer was written over the 'No' already in Polish!F29")
 
 
 @needs_node

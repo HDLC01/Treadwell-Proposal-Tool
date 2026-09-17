@@ -1982,8 +1982,15 @@ const rendered = [];      // every string the page put on screen, for the Labour
     // THE CELL STILL WINS. A project off the live intake has no polish_estimate and its answers
     // sit in cell_values — seeding last would put a company default over the answer the estimator
     // already gave, and the next save would make that permanent in Kyle's workbook.
+    //
+    // ALL THREE CELLS, not one -- exactly what a real step-1 save on the live intake screen
+    // leaves behind, and each one the OPPOSITE of what COND above says. A fixture that answered
+    // only one of the three could pass against a page that seeds the other two from the admin
+    // default regardless of what their cells said.
     const fromCells = (() => { const b = blob(); delete b.polish_estimate;
-                               b.cell_values = { "Polish!E25": "No" }; return b; })();
+                               b.cell_values = { "Polish!E29": "Yes", "Polish!E25": "No",
+                                                 "Polish!F29": "No" };
+                               return b; })();
     const celled = build({ blob: fromCells, conditionDefaults: COND });
     await celled.api.init();
 
@@ -2001,7 +2008,9 @@ const rendered = [];      // every string the page put on screen, for the Labour
                 fetched: worked.rec.fetches.some((u) => /condition-defaults/.test(u)),
                 // …and NOT VACUOUS: the same rows applied to the same model move all three.
                 wouldHaveChanged: B.seedConditionDefaults(conds(worked), COND) },
-      celled: { dye: conds(celled).dye, jointFiller: conds(celled).joint_filler },
+      celled: { dye: conds(celled).dye, jointFiller: conds(celled).joint_filler,
+                removeExistingJf: conds(celled).remove_existing_jf,
+                fetched: celled.rec.fetches.some((u) => /condition-defaults/.test(u)) },
       // Never a blank step and never a word about it: a default nobody has defined yet is not an
       // error to report to an estimator.
       down: { conditions: conds(down), shipped: B.freshModel().conditions,

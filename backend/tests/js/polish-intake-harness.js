@@ -1576,10 +1576,16 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
     worked.clock.fire();
     const keptCond = worked.rec.saves[worked.rec.saves.length - 1].polish_estimate.conditions;
 
-    // THE CELL WINS. An answer already in Polish!E25 -- from the AI autofill or an earlier visit
-    // -- must not be replaced by a company default on a project with no polish_estimate yet.
+    // THE CELL WINS. An answer already in a cell -- from the AI autofill or an earlier visit --
+    // must not be replaced by a company default on a project with no polish_estimate yet.
+    //
+    // ALL THREE CELLS, not one -- exactly what a real step-1 save on the live intake screen
+    // leaves behind, and each one the OPPOSITE of what COND above says. A fixture that answered
+    // only one of the three could pass against a page that seeds the other two from the company
+    // default regardless of what their cells said.
     const celled = build({ blob: { __draft_id: "celled-cond", project_name: "Autofilled job",
-                                   cell_values: { "Polish!E25": "No" } },
+                                   cell_values: { "Polish!E29": "Yes", "Polish!E25": "No",
+                                                  "Polish!F29": "No" } },
                            conditionDefaults: COND });
     await celled.api.boot();
     clickSwitch(celled, "prevailing_wage");
@@ -1605,7 +1611,9 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
       // A worked project is left strictly alone, and never even asks.
       kept: keptCond,
       keptFetched: worked.rec.fetched.some((f) => /condition-defaults/.test(f.url)),
-      celled: { dye: celledCond.dye, jointFiller: celledCond.joint_filler },
+      celled: { dye: celledCond.dye, jointFiller: celledCond.joint_filler,
+                removeExistingJf: celledCond.remove_existing_jf,
+                fetched: celled.rec.fetched.some((f) => /condition-defaults/.test(f.url)) },
       down: { conditions: downCond, shipped: P.freshModel().conditions },
     };
   }
