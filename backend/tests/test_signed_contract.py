@@ -366,8 +366,10 @@ def test_the_certificate_page_carries_the_statute_sentence(wired):
     # CodeQL's py/incomplete-url-substring-sanitization pattern-matches on the
     # shape `"host" in some_string` wherever it appears -- this is a plain text
     # assertion on a rendered PDF page, not a URL host check gating anything, so
-    # there is no arbitrary-position bypass to have.
-    assert "portal.wetreadwell.com" in text  # lgtm[py/incomplete-url-substring-sanitization]
+    # there is no arbitrary-position bypass to have. An inline lgtm[] suppression
+    # here did not stick; dismissed as a false positive on the alert itself
+    # instead (code-scanning alert #91, 2026-09-18).
+    assert "portal.wetreadwell.com" in text
     assert "15 U.S.C." in text and "7001" in text
     assert "16-1601" in text
 
@@ -407,20 +409,27 @@ def test_the_real_render_is_one_page():
 # echoed str(exc) straight into the 400 response body, which is an information
 # exposure risk for a library exception whose message is not meant for a caller.
 def test_log_safe_strips_control_characters_and_caps_length():
-    """The unit itself: every control byte the class targets becomes the same
-    placeholder, and a value past the cap is truncated rather than flooding a
-    log line."""
+    """The unit itself: repr() is the actual mechanism (CodeQL recognizes it as a
+    sanitizer for py/log-injection; a hand-rolled character replace was tried
+    first and kept getting flagged), so what lands in a log line is the escaped
+    two-character sequence, never the raw byte -- and a value past the cap is
+    truncated rather than flooding a log line."""
     forged = "real-id\r\n2026-01-01 ERROR fake admin login succeeded"
     safe = main._log_safe(forged)
     assert "\r" not in safe and "\n" not in safe
+    # The escape sequences themselves show up as visible text -- that is the
+    # point, not an accident: a log reader sees exactly what was sent.
+    assert "\\r\\n" in safe
     # The forged line's own text survives (it is not secret), just unable to
     # start a new log record -- \r and \n are the only bytes that matter here.
     assert "fake admin login succeeded" in safe
 
-    assert main._log_safe(None) == ""
+    assert main._log_safe(None) == "''"
     long_value = "x" * 500
     capped = main._log_safe(long_value, limit=50)
-    assert len(capped) == 51 and capped.endswith("…")  # 50 chars + the ellipsis mark
+    # 50 chars + the ellipsis mark, then repr()'s own quoting around all of it.
+    assert capped.startswith("'") and capped.endswith("…'")
+    assert len(capped) == 50 + len("…") + 2  # + the two quote characters repr() adds
 
 
 def test_a_forged_proposal_id_cannot_inject_a_second_log_line(monkeypatch, caplog):

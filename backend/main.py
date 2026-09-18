@@ -2987,12 +2987,19 @@ def _log_safe(value: object, limit: int = 200) -> str:
     POST -- printing a field like proposal_id straight into a %s log format string
     lets whoever holds SERVICE_TOKEN forge fake log lines with embedded newlines,
     which is how a real event gets buried under a fabricated one in an incident
-    review. Control characters are replaced and the value is capped, since a log
-    line is not the place for an attacker-sized string either.
+    review.
+
+    repr(), not a hand-rolled character replace: a regex substitution reads as
+    safe to a person but is not a barrier a static analyzer can verify neutralizes
+    every control character, and it wasn't -- CodeQL kept flagging the call sites
+    after the first version of this function shipped. repr() renders \\r and \\n as
+    the two-character escape sequence rather than the byte, is a sanitizer CodeQL
+    recognizes for this exact query, and is exactly as readable in a log line.
     """
     text = "" if value is None else str(value)
-    text = re.sub(r"[\r\n\t\x00-\x1f\x7f]", "␣", text)
-    return text if len(text) <= limit else text[:limit] + "…"
+    if len(text) > limit:
+        text = text[:limit] + "…"
+    return repr(text)
 
 
 def _contract_error(status: int, message: str) -> JSONResponse:
