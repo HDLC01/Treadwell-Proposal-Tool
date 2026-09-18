@@ -1459,31 +1459,76 @@ const rendered = [];      // every string the page put on screen, for the Labour
       // list rather than something in it.
       cards: (function () {
         var h = s.dom.get("panels").innerHTML;
-        // Each card's own slice of the panel markup, from its "<div class=\"tk cond" open tag
-        // up to the next one -- so a check against one card cannot accidentally read markup
-        // that belongs to a different one.
+        // Each card's own slice of the panel markup, from its own opening tag up to the next
+        // card's -- so a check against one card cannot accidentally read markup belonging to a
+        // different one. The anchor is `<div class="tk ` WITH THE TRAILING SPACE: it matches
+        // `tk mat` and `tk cond` and does NOT match `tk-h` or `tk-g` inside the card, which a
+        // bare `<div class="tk` anchor would find first and slice from.
         function cardHtml(tag) {
           var i = h.indexOf(">" + tag + "<");
           if (i < 0) return "";
-          var start = h.lastIndexOf('<div class="tk cond', i);
-          var next = h.indexOf('<div class="tk cond', i + 1);
+          var start = h.lastIndexOf('<div class="tk ', i);
+          var next = h.indexOf('<div class="tk ', i + 1);
           return h.slice(start, next < 0 ? h.length : next);
         }
-        function costOf(block) {
-          var m = /class="cond-cost([^"]*)">([^<]*)</.exec(block);
-          return m ? { empty: / empty/.test(m[1]), text: m[2] } : null;
+        // A `.costbox` addressed by the data-condfig the page repaints it through, with its
+        // class, so "$2,500" and "the greyed-out em dash" are told apart.
+        function boxOf(block, key, part) {
+          var m = new RegExp('<div class="costbox([^"]*)" data-condfig="' + key + '\\.' + part +
+                             '">([^<]*)<').exec(block);
+          return m ? { cls: m[1], empty: / empty/.test(m[1]), text: m[2] } : null;
+        }
+        function textOf(block, key, part) {
+          var m = new RegExp('data-condfig="' + key + '\\.' + part + '">([^<]*)<').exec(block);
+          return m ? m[1] : null;
+        }
+        // THE SHAPE HANZ ASKED FOR, read off the rendered markup rather than off the model:
+        // a material card, four columns, a measurement and a unit and a total cost, and not one
+        // box in it that takes typing.
+        function probe(tag, key) {
+          var block = cardHtml(tag);
+          return {
+            isMaterialCard: /^<div class="tk mat">/.test(block),
+            usesTheAssemblyGrid: /<div class="tk-g">/.test(block),
+            name: (/<div class="costbox txt">([^<]*)</.exec(block) || [])[1] || null,
+            measurement: boxOf(block, key, "qty"),
+            unit: boxOf(block, key, "unit"),
+            cost: boxOf(block, key, "cost"),
+            rate: textOf(block, key, "rate"),
+            measureHint: textOf(block, key, "qtyhint"),
+            headerSummary: textOf(block, key, "sub"),
+            labels: (block.match(/<label>([^<]*)</g) || []).map(function (m) {
+              return m.slice(7, -1);
+            }),
+            // NOTHING ON THE CARD IS TYPEABLE, which is the honest half of the redesign. A
+            // Measurement box that accepted keystrokes and threw them away would be worse than
+            // the switch-and-a-sentence card it replaced.
+            nothingTypeable: !/<input|<select/.test(block),
+            // The switch does the row's remove button's job, so it sits where that button sits:
+            // after the header's right-hand summary, not bolted on beside the tag.
+            switchAfterTheSummary:
+              block.indexOf('data-cond="' + key + '"') >
+              block.indexOf('data-condfig="' + key + '.sub"'),
+          };
         }
         return {
+          // ONE switch-shaped card left, Remove Existing's. Joint Filler and Dye are `.tk mat`.
           count: (h.match(/class="tk cond/g) || []).length,
-          // JOINT FILLER AND DYE NOW CLAIM A COST, since 2026-09-18 -- each shows the real
-          // dollar figure it adds to the Material total when it is ON, and the unpriced-row
-          // dash when it is OFF, never "$0" for either -- see moneyAuto/rowCost's convention.
-          jointFillerCost: costOf(cardHtml("JOINT FILLER")),
-          dyeCost: costOf(cardHtml("DYE")),
-          // REMOVE EXISTING MUST STILL CLAIM NO COST -- it is a labor modifier, priced on the
-          // Labor step, and the one card this feature must leave exactly as it was.
-          removeExistingHasNoCostBox: !/cond-cost/.test(cardHtml("REMOVE EXISTING")),
-          // It names the cell it sets, which is the only thing every one of them always does.
+          jointFiller: probe("JOINT FILLER", "joint_filler"),
+          dye: probe("DYE", "dye"),
+          // REMOVE EXISTING IS THE CARD THIS CHANGE MUST NOT TOUCH -- it is a labor modifier,
+          // priced on the Labor step, and Hanz named it out of scope by name.
+          removeExisting: (function () {
+            var block = cardHtml("REMOVE EXISTING");
+            return {
+              stillASwitchCard: /^<div class="tk cond/.test(block),
+              noCostBox: !/costbox/.test(block),
+              noMeasurement: !/data-condfig/.test(block),
+              namesItsCell: /Polish!F29/.test(block),
+              saysWhereItIsPriced: /Labor step/.test(block),
+            };
+          })(),
+          // Each card names the cell it sets, which is the one thing every one of them does.
           namesItsCell: /Polish!E29/.test(h) && /Polish!F29/.test(h) && /Polish!E25/.test(h),
         };
       })(),
@@ -1491,6 +1536,74 @@ const rendered = [];      // every string the page put on screen, for the Labour
         const t = build(); t.api.go(1);
         return !/data-cond="joint_filler"/.test(t.dom.get("panels").innerHTML);
       })(),
+    };
+  }
+
+  {
+    // THE PRICED CARDS FOLLOW THE TAKEOFF, LIVE. Every figure on them is derived from the area,
+    // and typing a measurement takes `changed(false)` -- the in-place repaint, never a rebuild --
+    // so a card the repaint does not know about goes stale the moment anybody types. It DID:
+    // before 2026-09-19 nothing in repaintNumbers touched them, and the dollar figure beside the
+    // switch stayed at whatever the last full render worked out.
+    //
+    // READ THE NODES, NOT THE MARKUP. A regex over the panel's innerHTML reports the string from
+    // render time, so it would pass with the whole repaint block deleted.
+    const s = build();
+    await s.api.init();
+    s.api.go(0);
+    const fig = (key) => ({
+      qty: txt(s, '[data-condfig="' + key + '.qty"]'),
+      unit: txt(s, '[data-condfig="' + key + '.unit"]'),
+      cost: txt(s, '[data-condfig="' + key + '.cost"]'),
+      sub: txt(s, '[data-condfig="' + key + '.sub"]'),
+      rate: txt(s, '[data-condfig="' + key + '.rate"]'),
+      hint: txt(s, '[data-condfig="' + key + '.qtyhint"]'),
+    });
+    const panels = s.dom.get("panels");
+    const rebuilds = panels.htmlWrites;
+    const before = { jf: fig("joint_filler"), dye: fig("dye") };
+    // Row 0 is 12,500 SF of the fixture's 17,500. Down to 3,000 the whole area is 8,000, which
+    // is 3 kits rather than 5 -- a change the kit count cannot express by accident.
+    typeInto(s, '[data-tk="0"][data-k="measurement"]', "3000");
+    out.condCardsRepaint = {
+      noRebuild: panels.htmlWrites === rebuilds,
+      before: before,
+      after: { jf: fig("joint_filler"), dye: fig("dye") },
+      // What the real engine says about the area that is now on the screen, so the expectation
+      // is polish-bid-core's answer rather than a number typed into this file.
+      expectedArea: 8000,
+      expectedJfCost: B.jointFillerCost(8000, true),
+      expectedDyeCost: B.dyeCost(8000, true),
+    };
+  }
+
+  {
+    // TOGGLING MOVES THE MATERIAL TOTAL BY EXACTLY THE FORMULA'S AMOUNT, AND NOTHING ELSE MOVES.
+    // The guarantee the old cond-cost tests were really protecting, kept across the markup
+    // change: the card is a new shape, the arithmetic behind the switch is not.
+    const s = build();
+    await s.api.init();
+    s.api.go(0);
+    const area = B.takeoffSf(s.api.model().takeoff);
+    const read = () => ({
+      material: s.api.materialTotal(),
+      labor: B.laborTotal(s.api.model().labor),
+      cost: txt(s, '[data-condfig="dye.cost"]'),
+      matTotal: txt(s, "[data-mat-total]"),
+    });
+    const off = read();                                  // dye ships OFF
+    need(s, '[data-cond="dye"]');
+    s.doc.fire("click", { target: s.doc.querySelector('[data-cond="dye"]') });
+    const on = read();
+    out.dyeToggleMovesTheTotal = {
+      area: area,
+      materialOff: off.material,
+      materialOn: on.material,
+      expectedDelta: B.dyeCost(area, true),
+      laborUnmoved: off.labor === on.labor,
+      costBoxOff: off.cost,
+      costBoxOn: on.cost,
+      matTotalOn: on.matTotal,
     };
   }
 

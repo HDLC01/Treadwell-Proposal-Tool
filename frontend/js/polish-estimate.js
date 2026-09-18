@@ -554,35 +554,177 @@
     return B.num(r.measurement) ? B.fmtSf(r.measurement) + " " + (r.unit || "SF") : "";
   }
 
-  /** The three conditions that describe the work, as cards rather than as bare switches.
+  /** The three that came off the intake form, as cards rather than as bare switches.
    *
    *  A SPEC RATHER THAN THREE COPIES OF THE SAME MARKUP, and the `cell` is on it deliberately:
    *  the main thing every one of these does is set that cell, so naming it on screen is the
    *  difference between a control whose effect you can see and one you have to be told about.
    *  The star this page's library replaced got that wrong for two years.
    *
-   *  `cost`, ADDED 2026-09-18, is the other thing an entry can carry: Joint Filler and Dye also
-   *  move the Material total (polish-bid-core.js's dyeCost/jointFillerCost), and a card with
-   *  `cost` shows that dollar figure -- see the render loop below. Remove Existing has none: it
-   *  prices on the Labor step, not here.
+   *  TWO SHAPES NOW, DECIDED BY `cost`. Joint Filler and Dye BUY something: they move the
+   *  Material total through polish-bid-core.js's jointFillerCost/dyeCost. Since 2026-09-19 they
+   *  render as material rows -- the same `.tk.mat` card, the same Material / Measurement / Unit /
+   *  Total cost columns, the same `.costbox` -- as the rows above them. Hanz, on staging: "joint
+   *  filler and die should have a measurement a unit in a total cost and they should be a
+   *  material not an assembly." One dollar figure beside a switch is not a material row; a line
+   *  that says what is bought, how much of it, and what it comes to, is.
    *
-   *  `needs` is the gate remove_existing_jf carried on the intake form. It adds a fourth hand to
-   *  the joint-filler crew, so with no joint filler there is no crew for it to be the fourth hand
-   *  of -- dimmed, never hidden, and its answer still reaches Polish!F29 either way. */
+   *  REMOVE EXISTING HAS NO `cost` and keeps the old switch-and-sentence card, untouched. It buys
+   *  nothing: it adds a fourth hand to the joint-filler crew and is priced on the Labor step, so
+   *  giving it a Measurement and a Total cost would invent a purchase that does not exist.
+   *
+   *  `needs` is the gate remove_existing_jf carried on the intake form. With no joint filler there
+   *  is no crew for it to be the fourth hand of -- dimmed, never hidden, and its answer still
+   *  reaches Polish!F29 either way.
+   *
+   *  WHY NOTHING ON THESE TWO CARDS IS TYPEABLE. A real material row's measurement is the
+   *  estimator's own number. These have none of their own: the area is always
+   *  `B.takeoffSf(M.takeoff)`, the same figure materialTotal() prices and divides by, and the kit
+   *  count is recomputed from it on every render. A box that accepted typing and then threw it
+   *  away would be a lie, so all four columns are `.costbox` -- this page's own "a field's
+   *  answer, never an input" box, which is exactly what the Total cost column beside them has
+   *  always been. The tell an estimator already reads is the hover: `.f input` takes a red border
+   *  under the cursor and a `.costbox` does not.
+   *
+   *  `qty` READS THE PRICE BACK rather than restating the formula. "One kit per 3,500 sq ft" lives
+   *  in polish-bid-core.js and nowhere else; dividing the cost by the kit rate cannot drift from
+   *  it, and a second copy of 3500 on this page could. */
   var CONDITION_CARDS = [
-    { key: "joint_filler", tag: "JOINT FILLER", label: "Filling the joints", cell: "Polish!E29",
+    { key: "joint_filler", tag: "JOINT FILLER", label: "In the bid", cell: "Polish!E29",
+      material: "Joint filler, 10 gal kit",
+      matHint: "Polish!E29 · a fixed kit price, not a library item.",
       cost: function (area) { return B.jointFillerCost(area, true); },
-      why: "One kit per 3,500 sq ft, at $500 a kit — Polish!C29's own rate, added " +
-           "to the Material total above when this is on." },
+      qty: function (area) {
+        return B.jointFillerCost(area, true) / B.RATES.JOINT_FILLER_KIT_COST;
+      },
+      unit: function (n) { return n === 1 ? "kit" : "kits"; },
+      qtyHint: function (area) {
+        return B.fmtSf(area) + " sq ft, at one kit per 3,500, rounded up.";
+      },
+      unitHint: "Kits are what the job buys." },
     { key: "remove_existing_jf", tag: "REMOVE EXISTING", label: "Taking the old filler out",
       cell: "Polish!F29", needs: "joint_filler",
       why: "Adds a fourth hand to the joint-filler line. Priced on the Labor step, where that " +
            "line is." },
-    { key: "dye", tag: "DYE", label: "Two coats of dye", cell: "Polish!E25",
+    { key: "dye", tag: "DYE", label: "In the bid", cell: "Polish!E25",
+      material: "Dye, two coats",
+      matHint: "Polish!E25 · a flat rate, not a library item.",
       cost: function (area) { return B.dyeCost(area, true); },
-      why: "$0.14 a square foot across the polished area — Polish!C25's own rate, " +
-           "added to the Material total above when this is on." }
+      qty: function (area) { return B.num(area); },
+      unit: function () { return "SF"; },
+      qtyHint: function () { return "The polished area from the rows above."; },
+      unitHint: "Priced across the area, not by the pack." }
   ];
+
+  /** Everything a priced condition card SHOWS, worked out once.
+   *
+   *  ONE FUNCTION FOR BOTH PAINTS, which is the lesson the Travel card's Guys box already taught
+   *  this file: if the first render and repaintNumbers each work a figure out their own way, the
+   *  screen ends up disagreeing with itself about a number the estimator is looking at.
+   *
+   *  AND IT WAS DISAGREEING. Until now the condition cards' dollar figure was rendered once and
+   *  never repainted. Typing into a takeoff row takes `changed(false)`, which refreshes the row
+   *  costs and the Material total in place, and nothing in that path knew about these cards --
+   *  so the Joint Filler line sat there quoting an area that was no longer on the screen.
+   *
+   *  AN UNMEASURED JOB GETS THE EM DASH a takeoff row with no measurement gets, in the same
+   *  `.costbox.empty`. Never "0 SF" and never "$0": both read as a computed answer of nothing,
+   *  when the truth is that nobody has measured anything yet. rowCost()'s own rule.
+   *
+   *  THE RATE SHOWS EITHER WAY. It is Kyle's C25/C29 and is true whether the line is in the bid
+   *  or not, unlike a takeoff row's per-unit, which has no value until somebody types a
+   *  measurement. `cost` here is always what the line WOULD come to; `on` decides only whether
+   *  the Total cost box says it. */
+  function condFigures(c) {
+    var area = B.takeoffSf(M.takeoff);
+    var qty = B.num(c.qty(area));
+    var unit = c.unit(qty);
+    var cost = B.num(c.cost(area));
+    var on = !!(M.conditions || {})[c.key];
+    return {
+      on: on, unit: unit,
+      qty: qty > 0 ? B.fmtSf(qty) : "\u2014",
+      qtyEmpty: !(qty > 0),
+      sub: qty > 0 ? B.fmtSf(qty) + " " + unit : "",
+      cost: (on && cost > 0) ? moneyAuto(cost) : "\u2014",
+      costEmpty: !(on && cost > 0),
+      // SINGULAR, always: "$500.00 / kit" is the price of one, which is what a per-unit line
+      // says. `unit` beside the Measurement is plural because five of them is what the job buys.
+      rate: qty > 0 ? B.money2(cost / qty) + " / " + c.unit(1) : "",
+      qtyHint: c.qtyHint(area)
+    };
+  }
+
+  /** A condition that buys something, drawn as the material row it is.
+   *
+   *  THE SWITCH SITS WHERE THE ROW'S REMOVE BUTTON SITS -- top right of the header -- because it
+   *  does that button's job: it is what decides whether this line is in the takeoff at all.
+   *  Hanging it off the card as a fifth thing that is not one of the four columns is the failure
+   *  this shape exists to avoid.
+   *
+   *  ITS LABEL NAMES THE STATE, not the action, which is `.labsw`'s rule and for `.labsw`'s
+   *  reason: "In the bid" reads true against both switch positions, where "Include" would
+   *  describe the state you are leaving.
+   *
+   *  FOUR COLUMNS, `.tk-g` UNCHANGED -- the assembly row's template, not `.matg`'s five. There is
+   *  no Coverage, because neither of these is bought by the pack. Sharing the template is what
+   *  puts the Measurement, Unit and Total cost of these lines in the same place down the page as
+   *  every row above them, which is the whole point of them being rows. */
+  function condMaterialCard(c) {
+    var f = condFigures(c);
+    var box = function (part, empty, text) {
+      return '<div class="costbox' + (empty ? " empty" : "") + '" data-condfig="' +
+        esc(c.key) + "." + part + '">' + esc(text) + "</div>";
+    };
+    var hint = function (part, text) {
+      return '<p class="hint" data-condfig="' + esc(c.key) + "." + part + '">' + esc(text) +
+        "</p>";
+    };
+    return '<div class="tk mat">' +
+      '<div class="tk-h">' +
+      '<span class="tag">' + esc(c.tag) + "</span>" +
+      '<span class="tk-sub" data-condfig="' + esc(c.key) + '.sub">' + esc(f.sub) + "</span>" +
+      condSwitch(c.key, c.label) +
+      "</div>" +
+      '<div class="tk-g">' +
+
+      '<div class="f"><label>Material</label>' +
+      '<div class="costbox txt">' + esc(c.material) + "</div>" +
+      '<p class="hint">' + esc(c.matHint) + "</p></div>" +
+
+      '<div class="f"><label>Measurement</label>' +
+      box("qty", f.qtyEmpty, f.qty) +
+      hint("qtyhint", f.qtyHint) + "</div>" +
+
+      '<div class="f"><label>Unit</label>' +
+      '<div class="costbox txt" data-condfig="' + esc(c.key) + '.unit">' + esc(f.unit) +
+      "</div>" +
+      '<p class="hint">' + esc(c.unitHint) + "</p></div>" +
+
+      '<div class="f"><label>Total cost</label>' +
+      box("cost", f.costEmpty, f.cost) +
+      hint("rate", f.rate) + "</div>" +
+
+      "</div></div>";
+  }
+
+  /** A condition that buys nothing: Remove Existing, and only Remove Existing.
+   *
+   *  It must never grow a Measurement or a Total cost, because it has neither. An assembly row
+   *  carries a measurement and comes to a number; this carries a Yes or a No and comes to nothing
+   *  on THIS screen, since the fourth hand it adds is priced on the Labor step. A "$0" here would
+   *  be a figure, and it would be wrong. */
+  function condSwitchCard(c) {
+    var inert = c.needs && !M.conditions[c.needs];
+    return '<div class="tk cond' + (inert ? " inert" : "") + '">' +
+      '<div class="tk-h">' +
+      '<span class="tag">' + esc(c.tag) + "</span>" +
+      condSwitch(c.key, c.label, inert) +
+      '<span class="tk-sub">' + esc(c.cell) + "</span>" +
+      "</div>" +
+      '<p class="hint">' + esc(c.why) + "</p>" +
+      "</div>";
+  }
 
   function takeoffPanel() {
     var html = M.takeoff.map(function (r, i) {
@@ -660,57 +802,19 @@
     // questions about the building and the bid, where an estimator answered them before opening a
     // takeoff at all.
     //
-    // DIMMED, NOT HIDDEN AND NOT DISABLED -- `.mw-sw.inert`'s rule, and Travel's. Only
-    // remove_existing_jf moves no number in the beta engine; it sets Yes/No in Kyle's
-    // workbook and nothing else. Joint Filler and Dye ARE priced, since 2026-09-18 (Hanz:
-    // "die and joint filler are supposed to be materials not something that is default") --
-    // see materialTotal() and polish-bid-core.js's dyeCost/jointFillerCost. Greying still
-    // says "not affecting the figure above it" for whichever card is actually inert, while
-    // leaving the answer typeable, because the answer still has to reach the downloaded
-    // .xlsx whichever way it points.
+    // NOT ONE SHAPE BUT TWO, and which one a card gets is decided by whether it BUYS anything --
+    // see CONDITION_CARDS above. Joint Filler and Dye are material rows, columns and all, because
+    // that is what they are: Hanz, 2026-09-19, "joint filler and die should have a measurement a
+    // unit in a total cost and they should be a material not an assembly." Remove Existing is a
+    // switch and a sentence, because it buys nothing on this screen.
     //
     // remove_existing_jf IS GATED ON joint_filler, which is the `needs` rule it carried on intake.
     // It adds a fourth hand to the joint-filler crew, so with no joint filler there is no crew for
-    // it to be the fourth hand of. Gated, still written: a blank cell is not "No" to Kyle.
-    // A CARD EACH, the same `.tk` container the assembly rows above use. Hanz asked for it and he
-    // is right: three bare switches under a column of cards read as page furniture -- something
-    // that configures the list rather than something IN it. These describe the work the same way a
-    // takeoff row does, so they get the same box.
-    //
-    // WHAT A CARD WITHOUT A `cost` FUNCTION IS NOT -- true only of Remove Existing today -- is a
-    // row, and the card has to be honest about that or it is worse than the switches were. An
-    // assembly row carries a measurement and comes to a number; Remove Existing carries a Yes
-    // or No and comes to nothing on THIS screen, because the fourth hand it adds is priced on
-    // the Labor step instead. So its card states its own cost as "not priced here" rather than
-    // "$0", which would be a figure and would be wrong.
-    //
-    // JOINT FILLER AND DYE LEFT THIS PARAGRAPH ON 2026-09-18: one kit per 3,500 sq ft at $500,
-    // and $0.14 a square foot, are both formulas this engine now runs itself -- see
-    // polish-bid-core.js's dyeCost/jointFillerCost -- so their cards show the real dollar
-    // figure the switch adds, not a promise that something elsewhere is pricing it.
+    // it to be the fourth hand of. Gated, still written: a blank cell is not "No" to Kyle. DIMMED,
+    // NOT HIDDEN AND NOT DISABLED -- `.mw-sw.inert`'s rule, and Travel's -- because the answer
+    // still has to reach the downloaded .xlsx whichever way it points.
     html += CONDITION_CARDS.map(function (c) {
-      var inert = c.needs && !M.conditions[c.needs];
-      // Priced cards (joint_filler, dye) get a dollar figure beside the switch, the SAME
-      // moneyAuto() the takeoff rows use above -- ON shows what it added to the Material
-      // total, OFF shows the unpriced-row dash from rowCost() rather than a "$0" that would
-      // read as a computed answer of nothing. remove_existing_jf has no `cost` and gets
-      // neither span, unchanged from before.
-      var costHtml = "";
-      if (c.cost) {
-        var on = !!M.conditions[c.key];
-        var text = on ? moneyAuto(c.cost(B.takeoffSf(M.takeoff))) : "—";
-        costHtml = '<span class="cond-cost' + (on ? "" : " empty") + '">' + esc(text) +
-          "</span>";
-      }
-      return '<div class="tk cond' + (inert ? " inert" : "") + '">' +
-        '<div class="tk-h">' +
-        '<span class="tag">' + esc(c.tag) + "</span>" +
-        condSwitch(c.key, c.label, inert) +
-        costHtml +
-        '<span class="tk-sub">' + esc(c.cell) + "</span>" +
-        "</div>" +
-        '<p class="hint">' + esc(c.why) + "</p>" +
-        "</div>";
+      return c.cost ? condMaterialCard(c) : condSwitchCard(c);
     }).join("");
 
     html += '<p class="cap">Material total <b data-mat-total>' +
@@ -1109,6 +1213,33 @@
       var r = M.labor[parseInt(el.getAttribute("data-lab-card"), 10)];
       if (!r) return;
       el.className = "tk lab" + (laborInert(r) ? " inert" : "");
+    });
+    // The two condition cards that price. Every figure on them is derived from the takeoff area,
+    // which is exactly what a keystroke in a takeoff row changes -- and a keystroke takes
+    // `changed(false)`, which repaints in place and never rebuilds the panel. Before 2026-09-19
+    // nothing in this function knew they existed, so typing 9,000 into row 1 moved the Material
+    // total while the Joint Filler line went on quoting the kits and the dollars of an area that
+    // had left the screen. A stale figure on a priced line is worse than no figure.
+    //
+    // condFigures() is the SAME function condMaterialCard uses for the first paint, so the two
+    // cannot work the same number out two ways.
+    CONDITION_CARDS.forEach(function (c) {
+      if (!c.cost) return;
+      var f = condFigures(c);
+      var put = function (part, txt, cls) {
+        var el = document.querySelector('[data-condfig="' + c.key + "." + part + '"]');
+        if (!el) return;
+        el.textContent = txt;
+        // Whole-className assignment, and condMaterialCard is the only other writer of this
+        // string -- the same discipline the labor card's dim state is repainted with.
+        if (cls != null) el.className = cls;
+      };
+      put("sub", f.sub);
+      put("qty", f.qty, "costbox" + (f.qtyEmpty ? " empty" : ""));
+      put("unit", f.unit);
+      put("qtyhint", f.qtyHint);
+      put("cost", f.cost, "costbox" + (f.costEmpty ? " empty" : ""));
+      put("rate", f.rate);
     });
 
     var one = function (sel, txt) {
