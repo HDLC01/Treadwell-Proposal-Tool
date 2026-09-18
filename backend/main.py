@@ -6634,7 +6634,22 @@ def api_to_dropbox(payload: ToDropboxIn, request: Request) -> Dict[str, Any]:
 
     Regenerates the files from the saved proposal_payload (same pipeline as the
     portal PDF path) so the Dropbox copy always matches the latest estimate +
-    proposal. Best-effort — never raises to the user; degrades to a message."""
+    proposal. Best-effort — never raises to the user; degrades to a message.
+
+    THAT PROMISE USED TO BE FALSE. Kyle, 2026-09: revised an estimate, filed to
+    Dropbox, and the file that landed there still quoted the ORIGINAL price — the
+    correct one only showed up through Download PDF. `proposal_payload` is only
+    refreshed by the Proposal step's own Continue button (see
+    generate-result-is-a-stale-artefact in project memory); this route trusted it
+    unconditionally whenever it existed, with no check against the live draft it
+    was supposedly still describing. The publish path already has a name for
+    exactly this disagreement — `_publish_digest` / `_stale_document_refusal`,
+    built after a customer received $29,104 where the estimator's screen said
+    $27,721 — so this route now asks the same question before trusting the
+    payload, and falls back to the SAME reconstruction-from-the-live-draft path
+    already used for a project with no `proposal_payload` at all. There is
+    nothing for an estimator to notice or retry: the file that reaches Dropbox is
+    simply built from whichever source is actually current."""
     # Resolve via the LIVE listing first (a folder added in Dropbox is filable
     # right away), falling back to the constants. Looking the key up only in
     # ESTIMATING_DESTINATIONS would reject any newly-listed folder.
@@ -6653,13 +6668,25 @@ def api_to_dropbox(payload: ToDropboxIn, request: Request) -> Dict[str, Any]:
         raise HTTPException(404, "Draft not found")
     data = row.get("data") or {}
     pp = data.get("proposal_payload")
-    if isinstance(pp, dict) and pp.get("values"):
+    # STALE, NOT JUST ABSENT, SENDS US TO THE SAME FALLBACK BELOW. A payload that
+    # disagrees with the live draft on base bid, price or option count is exactly
+    # as untrustworthy as no payload at all — reusing `_stale_document_refusal`
+    # rather than re-deriving "does this disagree" a second way, since two
+    # answers to the same question is how a page and a document drifted apart in
+    # the first place. `_publish_digest` reads `has_document` off `pp` itself, so
+    # this costs nothing extra when `pp` is already absent.
+    stale = bool(pp) and _stale_document_refusal(_publish_digest(data)) is not None
+    if isinstance(pp, dict) and pp.get("values") and not stale:
         gi = GenerateIn(**pp)
     else:
+        if stale:
+            log.warning("to-dropbox: stored proposal_payload for draft %s disagreed with the "
+                       "live estimate — filing from the live draft instead", payload.draft_id)
         # Existing/older projects may not carry a stored proposal_payload (never
-        # generated through Screen 3, or a prior save dropped it). Reconstruct the
-        # generate payload from the draft's saved intake/estimate data so
-        # "To Dropbox" still works for them (this is the common existing-project case).
+        # generated through Screen 3, or a prior save dropped it) -- OR the one
+        # they carry is stale (see above). Either way, reconstruct the generate
+        # payload from the draft's saved intake/estimate data so "To Dropbox"
+        # still works and always describes what is actually on the estimate now.
         _list = lambda x: x if isinstance(x, list) else []
         _dict = lambda x: x if isinstance(x, dict) else {}
         # Same read the folder picker uses, so the name we file under and the name
