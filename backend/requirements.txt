@@ -21,6 +21,13 @@ python-docx==1.2.0
 # so the merge's dependency is the merge's own, not a side effect of somebody else's pin.
 lxml>=5.2.0
 dropbox==12.0.2
+# Concatenates the signed proposal PDF with its signature certificate page
+# (backend/certificate_writer.py + /api/admin/signed-contract). Chosen over
+# re-rendering the proposal because the certificate prints that PDF's SHA-256:
+# the pages that come out have to be the pages that went in, object for object.
+# Pinned, not floated -- a page-copy that started re-encoding content streams
+# would break the byte-identity guarantee silently.
+pypdf==6.19.0
 pydantic>=2.13.4
 anthropic>=0.111.0
 supabase>=2.4
