@@ -332,11 +332,12 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   ${grab(/^  var DEFAULT_WT = .*$/m, "the DEFAULT_WT declaration")}
   ${fn("appliesToWorkType")}
   ${fn("workTypeLabel")}
-  // conditionControl BEFORE takeoffDefaultGroups, which calls it for every condition row. The
-  // conditions stopped being read-only on 2026-09-18 -- each one now draws a Yes/No select that
-  // writes condition_defaults -- and a missing lift here is a ReferenceError that reds every
-  // scenario in this file at once with nothing pointing at the cause.
-  ${fn("conditionControl")}
+  // conditionPriceCell BEFORE takeoffDefaultGroups, which calls it for every condition row. It
+  // was conditionControl until 2026-09-19, when the Yes/No select came off (Hanz: "remove these
+  // yes and no what are these for?") and the cell became what the column is headed: a price. A
+  // stale lift here is not a soft failure -- fn() THROWS on a name it cannot find, so it reds
+  // every scenario in this file at once with nothing pointing at the cause.
+  ${fn("conditionPriceCell")}
   // conditionRowActions BEFORE takeoffDefaultGroups too. The three conditions moved INTO the
   // Materials group on 2026-09-18 -- Hanz: "just put these 3 in the materials section with the
   // same buttons" -- so the grouping now calls this for every condition row, and a missing lift
@@ -552,12 +553,13 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
            // The Defaults tab's Takeoff list, EXECUTED rather than read. GLOBAL_MARKUP is handed
            // in so a test can supply the Markup page's answer without a second fetch stub.
            renderDefaultTakeoff, takeoffConditionDefaults, takeoffDefaultGroups,
-           // THE CONDITIONS, EXECUTED. conditionControl draws one row's control;
-           // setConditionDefault is what the select's change calls. COND_CALLS is what would
-           // have gone to the server, and condDefaultsNow reads the list BACK -- the handler
-           // reassigns it (a new array, not a splice), so a test handed the value itself would
-           // be reading the one from before the press it is testing.
-           conditionControl, setConditionDefault, COND_CALLS,
+           // THE CONDITIONS, EXECUTED. conditionPriceCell draws one row's priced cell;
+           // setConditionDefault is what BOTH directions call now -- Remove on a listed row and
+           // Add on a removed one. COND_CALLS is what would have gone to the server, and
+           // condDefaultsNow reads the list BACK -- the handler reassigns it (a new array, not a
+           // splice), so a test handed the value itself would be reading the one from before the
+           // press it is testing.
+           conditionPriceCell, setConditionDefault, COND_CALLS,
            condDefaultsNow: function () { return COND_DEFAULTS; },
            setCondDefaults: function (c) { COND_DEFAULTS = c; },
            // THE ADD PATH, EXECUTED. A test that only read the markup could not tell a
@@ -3415,6 +3417,12 @@ out.serverOwnedItemFields = build().api.SERVER_OWNED_ITEM_FIELDS;
     ASMS: [{ id: "a1", name: "Polish 800", unit: "SF", favorite: true,
              lines: [{ item_id: "i1" }, { item_id: "i2" }] },
            { id: "a2", name: "Also not", unit: "SF", favorite: false, lines: [] }],
+    // ALL THREE SWITCHED ON, BY OVERRIDE, because from 2026-09-19 all three SHIP off and a
+    // listed row is what "on" means -- so a fixture without these renders no condition rows at
+    // all and every assertion below would be reading an empty table. What the tool ships is
+    // asserted separately, in shippedOffMeansUnlisted, against a fixture with no overrides.
+    COND_DEFAULTS: [{ key: "joint_filler", on: true }, { key: "dye", on: true },
+                    { key: "remove_existing_jf", on: true }],
   });
   // WITH ITS REAL id AND line_key, because the row now carries an editable control and the
   // control is keyed by id -- an idless fixture would render a box that writes nowhere and
@@ -3478,19 +3486,28 @@ out.serverOwnedItemFields = build().api.SERVER_OWNED_ITEM_FIELDS;
     // the RENDERED row, not the renderer's source, because a regex over markup cannot tell a
     // wired control from a dead one -- which is exactly how the Labor add button shipped green
     // on this same tab. The change is DRIVEN in conditionDefaults below.
-    conditionsCarryAControl: /data-cond-key="joint_filler"/.test(h) &&
-      /data-cond-key="dye"/.test(h) && /data-cond-key="remove_existing_jf"/.test(h),
+    conditionsAreListedWhenOn: /data-cond-off="joint_filler"/.test(h) &&
+      /data-cond-off="dye"/.test(h) && /data-cond-off="remove_existing_jf"/.test(h),
     // The chip is gone from the conditions, and gone from the whole table: the Labor tab's
     // Travel row is the only "Built in" left in this page, and it is a different renderer.
     noBuiltInChip: !/Built in/.test(h),
-    // THE SHIPPED ANSWER IS STILL THE ANSWER when nothing has been overridden, and it is read
-    // out of the REAL freshModel rather than typed here: joint filler ships ON, dye ships off.
-    // A page that got this backwards would be telling an estimator the opposite of what their
-    // next bid does.
-    jointFillerOpensYes: /data-cond-key="joint_filler"[^>]*>\s*<option value="yes" selected>/
-      .test(h),
-    dyeOpensNo: /data-cond-key="dye"[^>]*><option value="yes">Yes<\/option><option value="no" selected>/
-      .test(h),
+    // ── AND THE YES/NO IS GONE ────────────────────────────────────────────────────────────
+    // Hanz, 2026-09-19: "remove these yes and no what are these for?" Asserted as the ABSENCE
+    // of the control anywhere in the table, not just on one row -- a select that survived on a
+    // single condition is the same complaint again.
+    noYesNoSelect: !/data-cond-key=/.test(h) && !/<option value="yes"/.test(h),
+    // ── THE COLUMN SAYS WHAT THE LINE COSTS ───────────────────────────────────────────────
+    // It is headed "How it is priced" and every other row in it answers that. These figures
+    // are the REAL RATES.JOINT_FILLER_KIT_COST and RATES.DYE_PER_SF, reached through the real
+    // module -- the page reads them rather than restating them, so a rate that moved in
+    // polish-bid-core has to move here too or this goes red.
+    jointFillerShowsItsKitPrice: /\$500\.00 per kit/.test(h),
+    jointFillerSaysWhatTheKitCovers: /one kit per 3,500 sq ft/.test(h),
+    dyeShowsItsRate: /\$0\.14 per SF/.test(h),
+    // AND THE ONE WITH NO PRICE SAYS SO rather than showing an invented $0.00, which would read
+    // as free. It is a labor modifier and the Labor step is where it is priced.
+    removeExistingSaysItHasNoMaterialCost:
+      /No material cost[^<]*a labor modifier, priced on the Labor step/.test(h),
     // THE CELL IS SHOWN AND NOT OFFERED. Polish!E29 is a fact about Kyle's workbook; a second
     // box pointing the answer somewhere else would write a Yes/No literal over one of his
     // formulas with nothing on screen saying so.
@@ -3504,28 +3521,32 @@ out.serverOwnedItemFields = build().api.SERVER_OWNED_ITEM_FIELDS;
     conditionsSitUnderMaterials: (function () {
       var after = h.split(/<tr class="grouphead">[^]*?Materials<\/th><\/tr>/)[1] || "";
       var section = after.split('<tr class="grouphead">')[0];
-      return /data-cond-key="joint_filler"/.test(section) &&
-             /data-cond-key="remove_existing_jf"/.test(section) &&
-             /data-cond-key="dye"/.test(section);
+      return /data-cond-off="joint_filler"/.test(section) &&
+             /data-cond-off="remove_existing_jf"/.test(section) &&
+             /data-cond-off="dye"/.test(section);
     })(),
-    // THE SAME PAIR, not a lookalike: same classes, same words, same order as defaultRowActions
-    // draws for a material two rows above. A condition row that read "Delete" or dropped the
-    // danger class would be the inconsistency he was pointing at.
-    conditionsCarryTheSameButtons: (function () {
+    // THE SAME REMOVE, not a lookalike: same classes, same word as defaultRowActions draws for
+    // a material two rows above. A condition row that read "Delete" or dropped the danger class
+    // would be the inconsistency he was pointing at.
+    conditionsCarryTheSameRemove: (function () {
       var keys = ["joint_filler", "remove_existing_jf", "dye"];
       return keys.every(function (k) {
         var rows = h.split("</tr>");
         var row = "";
         for (var i = 0; i < rows.length; i++) {
-          if (rows[i].indexOf('data-cond-key="' + k + '"') !== -1) { row = rows[i]; break; }
+          if (rows[i].indexOf('data-cond-off="' + k + '"') !== -1) { row = rows[i]; break; }
         }
         return row !== "" &&
-          new RegExp('<button class="btn ghost sm" type="button" data-cond-edit="' + k +
-                     '"[^>]*>Edit</button>').test(row) &&
           new RegExp('<button class="btn ghost sm danger" type="button" data-cond-off="' + k +
                      '"[^>]*>Remove</button>').test(row);
       });
     })(),
+    // AND NO EDIT, because there is nowhere for it to go. Edit on this table means "go to where
+    // this is defined": an assembly's panel, a material's Items row. A condition's rate lives in
+    // Kyle's workbook and in RATES, with no screen behind it. The Edit this row used to carry
+    // focused the select beside it; with the select gone it would open nothing, and a button
+    // that opens nothing is the complaint that started this whole thread.
+    noDeadEditOnAConditionRow: !/data-cond-edit/.test(h),
     // THE CHIP IS GONE. "Every new bid" sat where the buttons now are, and it was the thing
     // there was nothing to press on.
     noEveryNewBidChip: !/Every new bid/.test(h),
@@ -3539,9 +3560,46 @@ out.serverOwnedItemFields = build().api.SERVER_OWNED_ITEM_FIELDS;
     // no handler at all; this is the cheapest assertion that catches that again.
     removeIsRoutedToTheSaver: /data-cond-off/.test(src) &&
       /setConditionDefault\(\s*condOff\.getAttribute\("data-cond-off"\),\s*false\s*\)/.test(src),
-    editIsRoutedToTheAnswer: /data-cond-edit/.test(src) &&
-      /select\[data-cond-key="/.test(src),
+    // AND THE WAY BACK ON IS ROUTED TOO, through the SAME add button the materials use. Without
+    // this arm a removed condition could never be restored, which would be a worse control than
+    // the select it replaced -- and it would be invisible, because the button renders identically
+    // whether or not the router knows what to do with "conditions".
+    addIsRoutedToTheSaver:
+      /addKind === "conditions"[\s\S]{0,140}setConditionDefault\([\s\S]{0,80}?,\s*true\)/
+        .test(src),
+    // THE LISTENER THE SELECT NEEDED IS GONE WITH IT. A `change` handler whose only arm reads
+    // data-cond-key would now be waiting on an attribute this page never renders -- dead wiring
+    // that reads exactly like live wiring.
+    noStaleChangeListener: !/getAttribute\("data-cond-key"\)/.test(src),
   };
+
+  // ── WHAT THE TOOL SHIPS, against a fixture that overrides NOTHING ──────────────────────────
+  // The scenario above switches all three on so there are rows to read; this is the other half,
+  // and it is the half that pins Hanz's pricing decision. All three ship OFF from 2026-09-19 --
+  // joint filler moved, because since 2026-09-18 it carries a real $500 kit per 3,500 sq ft and
+  // shipping it on added $2,500 to a 17,500 SF bid nobody had asked for.
+  //
+  // READ THROUGH THE REAL freshModel, not typed here, so a literal that moved back in
+  // polish-bid-core reds this rather than passing against a restated copy.
+  {
+    const bare = build({
+      window: { TWPolishBid: require(path.join(ROOT, "js", "polish-bid-core.js")) },
+      ITEMS: [], ASMS: [],
+    });
+    bare.api.renderDefaultTakeoff();
+    const bh = bare.dom.nodes["default-takeoff-body"].innerHTML;
+    out.defaultsShippedConditions = {
+      shippedOffMeansUnlisted: !/data-cond-off=/.test(bh),
+      // NOT VACUOUS: the same renderer with the same fixture DOES list them once they are
+      // switched on, which the scenario above proves -- so an empty table here is the answer
+      // and not a renderer that draws nothing.
+      andTheListIsEmptyRatherThanBroken: bh === "",
+      // The three keys the page offers, read off the function rather than the markup, so this
+      // still says something when nothing is listed.
+      offersTheThree: bare.api.takeoffConditionDefaults().map((c) => c.key).sort().join(","),
+      noneOfThemOn: bare.api.takeoffConditionDefaults().every((c) => c.on === false),
+    };
+  }
 
   // THE ADD PATH, DRIVEN. Every assertion here fails against the 2026-09-17 shipping code,
   // where the button had no handler and DEFAULT_Q was never assigned: the box stayed hidden
@@ -4030,41 +4088,65 @@ async function conditionChecks() {
     ITEMS: [], ASMS: [],
   }, extra || {});
 
-  // 1. A STORED ANSWER BEATS THE SHIPPED ONE. joint_filler ships ON; an admin who has turned it
-  //    off must see Off here, or this page is describing a bid that does not exist.
-  const stored = build(seed({ COND_DEFAULTS: [{ key: "joint_filler", on: false }] }));
+  // LISTED IS THE ANSWER, from 2026-09-19. The Yes/No select is gone (Hanz: "remove these yes
+  // and no what are these for?"), so "on" is the row being in the table and "off" is it not
+  // being there -- exactly how a favourited material says the same thing. Keyed on the Remove
+  // button's own attribute, which is the only thing a condition row carries that a material row
+  // does not, so this cannot accidentally match a neighbour.
+  const listed = (html, key) => new RegExp('data-cond-off="' + key + '"').test(html);
+
+  // 1. A STORED ANSWER BEATS THE SHIPPED ONE. All three ship OFF now; an admin who has turned
+  //    joint filler on must see it listed here, or this page is describing a bid that does not
+  //    exist. The fixture DISAGREES with freshModel on purpose -- one that agreed would pass
+  //    just as happily against a page that ignored COND_DEFAULTS entirely.
+  const stored = build(seed({ COND_DEFAULTS: [{ key: "joint_filler", on: true }] }));
   stored.api.renderDefaultTakeoff();
   const storedHtml = stored.dom.nodes["default-takeoff-body"].innerHTML;
 
-  // 2. THE CHANGE, DRIVEN through the handler the select's `change` calls.
-  const live = build(seed({}));
+  // 2. REMOVE, DRIVEN through the handler the button presses. Starts from a condition that IS
+  //    listed, because that is the only state Remove is offered in.
+  const live = build(seed({ COND_DEFAULTS: [{ key: "joint_filler", on: true }] }));
   live.api.renderDefaultTakeoff();
   const beforeHtml = live.dom.nodes["default-takeoff-body"].innerHTML;
   await live.api.setConditionDefault("joint_filler", false);
   const afterHtml = live.dom.nodes["default-takeoff-body"].innerHTML;
 
-  // 3. A REFUSED SAVE PUTS IT BACK. A control that keeps the new value after the write was
-  //    refused tells an admin every new bid now opens differently when it does not.
-  const failing = build(seed({ COND_FAIL: true }));
-  failing.api.renderDefaultTakeoff();
-  await failing.api.setConditionDefault("dye", true);
-  const failedHtml = failing.dom.nodes["default-takeoff-body"].innerHTML;
+  // 3. AND THE WAY BACK ON, which is the half that did not exist while the select did the work.
+  //    Same saver, other direction, reached from the Add path's own button. Without this a
+  //    condition could be removed and never restored.
+  const adding = build(seed({}));
+  adding.api.renderDefaultTakeoff();
+  const beforeAddHtml = adding.dom.nodes["default-takeoff-body"].innerHTML;
+  await adding.api.setConditionDefault("dye", true);
+  const afterAddHtml = adding.dom.nodes["default-takeoff-body"].innerHTML;
 
-  const yes = (html, key) =>
-    new RegExp('data-cond-key="' + key + '"[^>]*>\\s*<option value="yes" selected>').test(html);
+  // 4. AND THE ADD BUTTON IS ACTUALLY OFFERED for a condition that is off -- a saver nothing
+  //    can reach is the same as no saver. Browse rather than a typed query, because sitting
+  //    down to put one back is exactly the "show me what there is" case.
+  const browsing = build(seed({}));
+  browsing.api.openDefaultBrowse();
+  const browseHtml = browsing.dom.nodes["default-hits"].innerHTML;
+
+  // 5. A REFUSED SAVE PUTS IT BACK. A list that keeps the new state after the write was refused
+  //    tells an admin every new bid now opens differently when it does not.
+  const failing = build(seed({ COND_DEFAULTS: [{ key: "joint_filler", on: true }],
+                               COND_FAIL: true }));
+  failing.api.renderDefaultTakeoff();
+  await failing.api.setConditionDefault("joint_filler", false);
+  const failedHtml = failing.dom.nodes["default-takeoff-body"].innerHTML;
 
   out.conditionDefaults = {
     // The merge, through the ESTIMATE'S OWN seedConditionDefaults rather than a second one
-    // written on this page: a stored `off` wins over the shipped `on`.
-    storedOverrideWins: !yes(storedHtml, "joint_filler"),
-    // …and leaves the two nobody overrode exactly as the tool ships them.
-    untouchedOnesKeepShipped: !yes(storedHtml, "dye") &&
-      !yes(storedHtml, "remove_existing_jf"),
+    // written on this page: a stored `on` wins over the shipped `off`.
+    storedOverrideWins: listed(storedHtml, "joint_filler"),
+    // …and leaves the two nobody overrode exactly as the tool ships them, which is off.
+    untouchedOnesKeepShipped: !listed(storedHtml, "dye") &&
+      !listed(storedHtml, "remove_existing_jf"),
 
-    // The press. It is the RENDERED row that changes, so a handler that wrote the variable and
+    // REMOVE. It is the RENDERED table that changes, so a handler that wrote the variable and
     // forgot to repaint fails here rather than looking fine.
-    startsFromShipped: yes(beforeHtml, "joint_filler"),
-    pressFlipsTheRow: !yes(afterHtml, "joint_filler"),
+    startsListed: listed(beforeHtml, "joint_filler"),
+    removeTakesTheRowOff: !listed(afterHtml, "joint_filler"),
     // …and the write actually goes, keyed by the condition and carrying the answer.
     wroteTheServer: JSON.stringify(live.api.COND_CALLS) ===
       JSON.stringify([{ key: "joint_filler", on: false }]),
@@ -4072,10 +4154,41 @@ async function conditionChecks() {
     // instead of replacing would send the right body and then render the stale answer next to it.
     keepsOneRowPerCondition: live.api.condDefaultsNow().length === 1,
 
+    // ADD. The other direction, and the one the select used to cover.
+    startsUnlisted: !listed(beforeAddHtml, "dye"),
+    addPutsTheRowBack: listed(afterAddHtml, "dye"),
+    addWroteTheServer: JSON.stringify(adding.api.COND_CALLS) ===
+      JSON.stringify([{ key: "dye", on: true }]),
+    // AND IT PRICES ITSELF THE MOMENT IT IS BACK, rather than arriving as a bare name.
+    addedRowIsPriced: /\$0\.14 per SF/.test(afterAddHtml),
+
+    // THE OFFER. A removed condition is browsable by name, with the same add button a material
+    // carries, filed as a Condition so it is not mistaken for a library row.
+    browseOffersTheConditions: /data-def-add="conditions"/.test(browseHtml) &&
+      /data-def-id="joint_filler"/.test(browseHtml) && /data-def-id="dye"/.test(browseHtml),
+    browseNamesThemAsConditions: /Condition/.test(browseHtml),
+    // AND ONLY THE ONES THAT ARE OFF, or the list would offer to add what is already added --
+    // the same rule the materials follow two lines above it in defaultCandidates.
+    browseSkipsAConditionAlreadyOn: (function () {
+      const on = build(seed({ COND_DEFAULTS: [{ key: "dye", on: true }] }));
+      on.api.openDefaultBrowse();
+      const oh = on.dom.nodes["default-hits"].innerHTML;
+      return !/data-def-id="dye"/.test(oh) && /data-def-id="joint_filler"/.test(oh);
+    })(),
+    // A TYPED QUERY FINDS ONE TOO, so the search box is not a dead end for these three.
+    searchFindsACondition: (function () {
+      const s = build(seed({}));
+      s.api.setDefaultQuery("dye");
+      return /data-def-id="dye"/.test(s.dom.nodes["default-hits"].innerHTML);
+    })(),
+
     // The refusal.
-    refusedSavePutsItBack: !yes(failedHtml, "dye"),
+    refusedSavePutsItBack: listed(failedHtml, "joint_filler"),
     refusedSaveSaysSo: /Couldn't save that/.test(failing.dom.nodes["alert"].textContent || ""),
-    refusedSaveDropsTheOptimisticRow: failing.api.condDefaultsNow().length === 0,
+    refusedSaveDropsTheOptimisticRow: (function () {
+      const rows = failing.api.condDefaultsNow();
+      return rows.length === 1 && rows[0].key === "joint_filler" && rows[0].on === true;
+    })(),
   };
 }
 

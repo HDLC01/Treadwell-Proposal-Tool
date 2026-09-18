@@ -1549,8 +1549,8 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
   // and the Defaults tab reaches nothing but a project that skipped intake.
   {
     // Every stored answer disagrees with what the tool ships, or this proves nothing about the
-    // seed: joint filler ships ON and the library says off, the other two the other way round.
-    const COND = [{ key: "joint_filler", on: false },
+    // seed. All three ship OFF from 2026-09-19, so all three rows say on.
+    const COND = [{ key: "joint_filler", on: true },
                   { key: "dye", on: true },
                   { key: "remove_existing_jf", on: true }];
 
@@ -1566,9 +1566,11 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
     const worked = build({ blob: { __draft_id: "worked-cond", project_name: "Worked job",
       polish_estimate: { version: 2,
         takeoff: [{ assembly_id: "", assembly_name: "", measurement: 9000, unit: "SF" }],
+        // All three the opposite of COND above, so the library has an answer for every one that
+        // COULD have landed on this project and the gate is the only thing stopping it.
         conditions: { local: true, hard_bid: false, prevailing_wage: false, taxable: true,
                       remodel_tax: false, bond: false,
-                      joint_filler: true, dye: false, remove_existing_jf: false },
+                      joint_filler: false, dye: false, remove_existing_jf: false },
         contingency: 0, fees: 0, totals: {} } },
       conditionDefaults: COND });
     await worked.api.boot();
@@ -1583,10 +1585,17 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
     // leaves behind, and each one the OPPOSITE of what COND above says. A fixture that answered
     // only one of the three could pass against a page that seeds the other two from the company
     // default regardless of what their cells said.
+    //
+    // AND A NARROWED LIST FOR THIS ONE CASE. With all three shipping OFF, a row saying "on"
+    // against a cell saying "No" leaves false -- which is also what a page that read NEITHER
+    // would show, so that pairing alone cannot prove the cell was read. Two of the three are
+    // that pairing (they prove the cell BEATS the default); remove_existing_jf is left OUT of
+    // the list with its cell saying Yes, so `true` there can only have come from the cell.
+    const COND_FOR_CELLS = [{ key: "joint_filler", on: true }, { key: "dye", on: true }];
     const celled = build({ blob: { __draft_id: "celled-cond", project_name: "Autofilled job",
-                                   cell_values: { "Polish!E29": "Yes", "Polish!E25": "No",
-                                                  "Polish!F29": "No" } },
-                           conditionDefaults: COND });
+                                   cell_values: { "Polish!E29": "No", "Polish!E25": "No",
+                                                  "Polish!F29": "Yes" } },
+                           conditionDefaults: COND_FOR_CELLS });
     await celled.api.boot();
     clickSwitch(celled, "prevailing_wage");
     celled.clock.fire();

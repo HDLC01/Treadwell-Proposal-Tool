@@ -665,12 +665,27 @@
         { id: "jointfill", label: "Joint filler", guys: 3, days: "", rate: 33.0 },
         travelSeed()
       ],
-      // joint_filler ships ON, which is how Kyle's sheet ships and what the intake toggle
-      // defaulted to. The other two ship off. migrateModel's generic backfill carries all three
-      // onto every draft saved before they lived here.
+      // ALL THREE TAKEOFF CONDITIONS SHIP OFF, and joint_filler is the one that moved.
+      //
+      // It shipped ON until 2026-09-19 because Kyle's template ships Polish!E29 = "Yes". That was
+      // a faithful transcription of the workbook and the wrong default for this tool, and the
+      // difference is that the workbook is a thing Kyle fills in while this is a thing that
+      // prices a bid on its own. Since 2026-09-18 the condition carries real money --
+      // jointFillerCost charges one $500 kit per 3,500 sq ft -- so shipping it on added $2,500 to
+      // a 17,500 SF bid that nobody had asked for and no screen made anybody decide. Hanz's call:
+      // all three start off and the estimator switches on what the job actually needs, on the
+      // estimate's own Takeoff step.
+      //
+      // THE WORKBOOK STILL GETS ITS LITERAL. conditionCellWrites writes both Yes and No
+      // unconditionally, so Polish!E29 lands as "No" rather than blank -- a blank Yes/No cell is
+      // not "No" to Kyle's formulas, it is whatever his IF() falls through to.
+      //
+      // AN ADMIN OVERRIDE STILL WINS over every one of these: seedConditionDefaults writes a
+      // stored condition_defaults row over this literal on a brand new bid. This is what the tool
+      // SHIPS answering, not the last word on it.
       conditions: { local: true, hard_bid: false, prevailing_wage: false,
                     taxable: true, remodel_tax: false, bond: false,
-                    dye: false, joint_filler: true, remove_existing_jf: false },
+                    dye: false, joint_filler: false, remove_existing_jf: false },
       contingency: 0,
       // D77, the Fees + Textura line. Seeded from RATES.FEES rather than a bare 0 so the constant
       // stays the one place that says what the workbook ships -- the parity test pins B77×C77 as
