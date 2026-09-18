@@ -148,6 +148,8 @@
     SALES_TAX: 0.09475,   // B74, when the job is taxable
     BOND: 0,              // B78 — the sheet ships it at zero
     FEES: 0,              // D77 — B77 and C77 are blank, so the line is zero
+    DYE_PER_SF: 0.14,            // C25 — Dye, a flat rate across the polished area
+    JOINT_FILLER_KIT_COST: 500,  // C29 — Joint Filler (10 gal kit), per kit
 
     /* THE ONE PLACE THIS ENGINE DELIBERATELY DEPARTS FROM KYLE'S SHEET.
      *
@@ -252,6 +254,30 @@
       if (r.unit === "SF") t += num(r.measurement);
     }
     return t;
+  }
+
+  /** B25 `=IF(E25="Yes",E18)`, C25 `0.14`, D25 `=B25*C25` — the Dye line. A flat rate
+   *  across the whole polished area, charged only when the condition is on.
+   *
+   *  Not a library item: dye has no coverage, no pack size, no vendor — nothing a real
+   *  material row has. Forcing it through priceLine/priceAssembly would mean inventing a fake
+   *  catalog item for a fixed formula that is not one, so it prices from RATES.DYE_PER_SF
+   *  directly instead. 0 when the condition is off or the area is not yet a positive number. */
+  function dyeCost(area, on) {
+    var a = num(area);
+    if (!on || !(a > 0)) return 0;
+    return a * RATES.DYE_PER_SF;
+  }
+
+  /** B29 `=ROUNDUP(IF(E29="yes",(E18/3500),0),0)`, C29 `500`, D29 `=B29*C29` — Joint
+   *  Filler (10 gal kit). One kit per 3,500 SF of polished area, ROUNDED UP to a whole kit —
+   *  this file's own roundUp(), not a second rounding function — charged only when the
+   *  condition is on. Same 0-guard as dyeCost above. */
+  function jointFillerCost(area, on) {
+    var a = num(area);
+    if (!on || !(a > 0)) return 0;
+    var kits = roundUp(a / 3500);
+    return kits * RATES.JOINT_FILLER_KIT_COST;
   }
 
   /** THE CHAIN. Materials and labor in, a bid out, one key per cell of Kyle's markup column.
@@ -908,6 +934,7 @@
     laborCost: laborCost, laborTotal: laborTotal, travelManDays: travelManDays,
     filledIn: filledIn,
     takeoffSf: takeoffSf,
+    dyeCost: dyeCost, jointFillerCost: jointFillerCost,
     markupChain: markupChain,
     freshModel: freshModel, migrateModel: migrateModel, blockers: blockers,
     // EXPORTED 2026-09-16 for a THIRD reader: the library page's Defaults tab lists Travel as the

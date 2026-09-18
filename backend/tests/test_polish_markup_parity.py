@@ -126,6 +126,15 @@ PINNED = {
     "C81": "=B35",
     "B35": "=E18",
     "C82": "=D82/C81",
+    # dye (row 25) and joint filler (row 29), added 2026-09-18 -- Hanz: "die and joint
+    # filler are supposed to be materials not something that is default". Transcribed into
+    # polish-bid-core.js's dyeCost/jointFillerCost.
+    "B25": '=IF(E25="Yes",E18)',
+    "C25": 0.14,
+    "D25": "=B25*C25",
+    "B29": '=ROUNDUP(IF(E29="yes",(E18/3500),0),0)',
+    "C29": 500,
+    "D29": "=B29*C29",
 }
 
 
@@ -218,6 +227,84 @@ def test_the_flat_rates_come_from_the_cells_that_hold_them(ran, polish):
         assert _rate_in(polish[addr].value) == pytest.approx(rates[key]), (
             "Polish!%s is %s but RATES.%s is %r — %s"
             % (addr, polish[addr].value, key, rates[key], fix))
+
+
+@needs_node
+def test_the_dye_and_joint_filler_rates_come_from_the_cells_that_hold_them(ran, polish):
+    """C25 (Dye, $/SF) and C29 (Joint Filler, $/kit) are hardcoded constants on the sheet,
+    exactly like B32/C47/B69/B70/B78 above -- the same drift check, not a special case."""
+    rates = ran["constants"]["rates"]
+    for addr, key in [("C25", "DYE_PER_SF"), ("C29", "JOINT_FILLER_KIT_COST")]:
+        assert float(polish[addr].value) == pytest.approx(rates[key]), (
+            "Polish!%s is %r but RATES.%s is %r — %s"
+            % (addr, polish[addr].value, key, rates[key], FIX_BOTH))
+
+
+def _dye_cost(area, on):
+    """B25 `=IF(E25="Yes",E18)`, C25 `0.14`, D25 `=B25*C25`. 0 when off or the area is not a
+    positive number -- Excel's IF with no ELSE (E25 not "Yes") returns FALSE, which multiplies
+    as 0 rather than raising, so the 0-guard here is not inventing a rule the sheet lacks."""
+    a = _num(area)
+    if not on or not (a > 0):
+        return 0.0
+    return a * 0.14
+
+
+def _joint_filler_cost(area, on):
+    """B29 `=ROUNDUP(IF(E29="yes",(E18/3500),0),0)`, C29 `500`, D29 `=B29*C29`."""
+    a = _num(area)
+    if not on or not (a > 0):
+        return 0.0
+    return round_up(a / 3500) * 500
+
+
+@needs_node
+def test_dye_and_joint_filler_price_by_the_sheets_own_formula(ran):
+    """THE INVARIANT this feature is judged on: toggling either ON moves the Material total by
+    EXACTLY what Kyle's formula says for that area, and toggling it OFF removes exactly that and
+    nothing else. Every vector here is cross-checked against the REAL dyeCost/jointFillerCost run
+    under node (ran["dyeJointFiller"]), so a JS-side typo in the rate or the rounding cannot hide
+    behind a Python re-derivation that happens to make the same mistake.
+
+    Mutations this proves red: RATES.DYE_PER_SF or RATES.JOINT_FILLER_KIT_COST off by a cent or a
+    dollar; a bare Math.ceil in place of roundUp (would move on_3500 and on_7000, which sit
+    exactly on the kit boundary); the ON check inverted or dropped; the area-positivity guard
+    dropped (turns a null/undefined area into NaN, or a negative area into a negative price)."""
+    d = ran["dyeJointFiller"]["dye"]
+    j = ran["dyeJointFiller"]["jointFiller"]
+
+    dye_vectors = [
+        ("on_3500", 3500, True), ("on_12500", 12500, True), ("on_0", 0, True),
+        ("on_null", None, True), ("on_undefined", None, True), ("off_3500", 3500, False),
+    ]
+    for key, area, on in dye_vectors:
+        want = _dye_cost(area, on)
+        assert d[key] == pytest.approx(want), (
+            "dyeCost(%r, %r) is %r in JS, %r in Python — %s"
+            % (area, on, d[key], want, FIX_BOTH))
+
+    jf_vectors = [
+        ("on_3500", 3500, True), ("on_3501", 3501, True), ("on_7000", 7000, True),
+        ("on_0", 0, True), ("on_null", None, True), ("on_undefined", None, True),
+        ("off_3500", 3500, False), ("off_7000", 7000, False),
+    ]
+    for key, area, on in jf_vectors:
+        want = _joint_filler_cost(area, on)
+        assert j[key] == pytest.approx(want), (
+            "jointFillerCost(%r, %r) is %r in JS, %r in Python — %s"
+            % (area, on, j[key], want, FIX_BOTH))
+
+    # THE SPECIFIC NUMBERS, named rather than only cross-checked above -- a wrong Python
+    # re-derivation that agreed with an equally wrong JS one would pass every assertion so far.
+    assert d["on_3500"] == pytest.approx(490), "3,500 SF of dye at $0.14/SF should be $490"
+    assert j["on_3500"] == 500, "an area that divides evenly into 3,500 is exactly one $500 kit"
+    assert j["on_3501"] == 1000, (
+        "one SF over 3,500 must round UP to a second kit, not price the first alone")
+    assert j["on_7000"] == 1000, (
+        "7,000 SF divides evenly into exactly two kits -- float dust must not buy a third")
+    assert d["on_0"] == 0 and j["on_0"] == 0, "no area prices at nothing, not a negative or NaN"
+    assert d["off_3500"] == 0 and j["off_3500"] == 0, (
+        "the condition being off must zero the line even where the area would otherwise price it")
 
 
 @needs_node
