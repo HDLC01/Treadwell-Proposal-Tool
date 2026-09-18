@@ -2159,6 +2159,32 @@
       ' being a default">Remove</button>';
   }
 
+  /** A condition's Edit and Remove, in the same pair every other row on this table carries.
+   *
+   *  THE SAME BUTTONS, LITERALLY. Hanz, 2026-09-18, looking at the three of them sitting under a
+   *  Conditions heading with a chip where the buttons should be: "just put these 3 in the
+   *  materials section with the same buttons." So they are the same two classes, in the same
+   *  order, with the same words -- a row that looked like the others but read differently would
+   *  be the thing he was pointing at.
+   *
+   *  REMOVE IS THE ANSWER GOING TO NO, not the row going away. Un-favouriting a material takes it
+   *  off this list because the library still holds it; there is no library row behind a condition
+   *  -- what "stop this being a default" means for one is that the next blank bid opens answering
+   *  No. The select flipping is the confirmation, and the row stays because it is always offered.
+   *
+   *  EDIT PUTS THE CARET IN THE ANSWER. For a material, Edit goes to where the thing is defined,
+   *  which is its Items row. A condition is defined in Kyle's workbook -- the cell is printed
+   *  beside the control and deliberately not offered as a box (see takeoffConditionDefaults) --
+   *  so the only thing here that is ours to change is the answer, and Edit goes to it. */
+  function conditionRowActions(c) {
+    return '<button class="btn ghost sm" type="button" data-cond-edit="' + esc(c.key) +
+      '" aria-label="Change what a new bid opens answering for ' + esc(c.label) +
+      '">Edit</button>' +
+      '<button class="btn ghost sm danger" type="button" data-cond-off="' + esc(c.key) +
+      '" aria-label="Stop ' + esc(c.label) +
+      ' being on every new bid">Remove</button>';
+  }
+
   var DEFAULT_Q = "";
   var DEFAULT_MAX = 8;
   // BROWSE MODE. The search answers "I know what it is called"; this answers "show me what
@@ -2286,6 +2312,12 @@
                    actions: defaultRowActions("assemblies", a.id, a.name) };
         }) },
       { title: "Materials",
+        // JOINT FILLER, REMOVE-EXISTING AND DYE ARE IN HERE, not in a Conditions section of
+        // their own. Hanz, 2026-09-18: "die and joint filler are supposed to be materials not
+        // something that is default", then "just put these 3 in the materials section with the
+        // same buttons." They are what a bid buys, so they are listed with the rest of what a
+        // bid buys, and they carry the Edit/Remove pair every other row on this table carries
+        // instead of a chip that could not be pressed.
         rows: ITEMS.filter(function (it) {
           return it.favorite && appliesToWorkType(it, DEFAULT_WT);
         }).map(function (it) {
@@ -2294,7 +2326,12 @@
                      ? L.money(it.unit_cost) + " per " + (it.unit || "unit")
                      : "No cost in the library yet",
                    actions: defaultRowActions("items", it.id, it.name) };
-        }) },
+        }).concat(takeoffConditionDefaults().map(function (c) {
+          return { name: c.label,
+                   how: conditionControl(c),
+                   rawHow: true,
+                   actions: conditionRowActions(c) };
+        })) },
       { title: "Markup",
         rows: GLOBAL_MARKUP.map(function (g) {
           // EDITABLE HERE, STORED THERE. Hanz asked for no read-only rows on this tab. The
@@ -2314,17 +2351,6 @@
                      'page\u2019s Global tab</span>',
                    rawHow: true,
                    actions: '<span class="builtin">Saved to Markup</span>' };
-        }) },
-      { title: "Conditions",
-        // NO "BUILT IN" CHIP. It used to sit in the actions column and it was the whole
-        // complaint -- Hanz: "I told you to remove the built-in and keep and make
-        // everything editable in the takeoff." The row carries a Yes/No control now, and
-        // the column that held the chip says what pressing it changes instead.
-        rows: takeoffConditionDefaults().map(function (c) {
-          return { name: c.label,
-                   how: conditionControl(c),
-                   rawHow: true,
-                   actions: '<span class="wtall">Every new bid</span>' };
         }) },
     ];
     return groups.filter(function (g) { return g.rows.length > 0; });
@@ -3472,6 +3498,23 @@
       var qbox = $("default-q");
       if (qbox) qbox.value = "";
       renderDefaultSearch();
+      return;
+    }
+    // THE CONDITION PAIR, HANDLED BEFORE THE MATERIAL PAIR so neither can swallow the other:
+    // they sit in the same column of the same table now and the selectors must not overlap.
+    var condOff = t.closest && t.closest("[data-cond-off]");
+    if (condOff) {
+      await setConditionDefault(condOff.getAttribute("data-cond-off"), false);
+      return;
+    }
+    // EDIT IS THE CARET, not a second editor. The answer is the only part of a condition that is
+    // ours to change, and it is already a control in the row beside this button -- so Edit goes
+    // to it rather than opening a panel that would hold the same one select.
+    var condEd = t.closest && t.closest("[data-cond-edit]");
+    if (condEd) {
+      var ck = condEd.getAttribute("data-cond-edit");
+      var sel = document.querySelector('select[data-cond-key="' + ck + '"]');
+      if (sel && sel.focus) sel.focus();
       return;
     }
     var offBtn = t.closest && t.closest("[data-def-off]");

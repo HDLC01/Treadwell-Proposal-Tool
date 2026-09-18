@@ -337,6 +337,11 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   // writes condition_defaults -- and a missing lift here is a ReferenceError that reds every
   // scenario in this file at once with nothing pointing at the cause.
   ${fn("conditionControl")}
+  // conditionRowActions BEFORE takeoffDefaultGroups too. The three conditions moved INTO the
+  // Materials group on 2026-09-18 -- Hanz: "just put these 3 in the materials section with the
+  // same buttons" -- so the grouping now calls this for every condition row, and a missing lift
+  // here is a ReferenceError that reds every scenario in this file at once.
+  ${fn("conditionRowActions")}
   ${fn("takeoffDefaultGroups")}
   ${fn("renderDefaultTakeoff")}
   // AFTER the renderer it repaints and after the network stub it awaits. This is the handler the
@@ -3491,6 +3496,51 @@ out.serverOwnedItemFields = build().api.SERVER_OWNED_ITEM_FIELDS;
     // formulas with nothing on screen saying so.
     saysWhichCellItWrites: /writes Polish!E29/.test(h) && /writes Polish!E25/.test(h),
     cellIsNotAnInput: !/data-cond-cell/.test(h) && !/value="Polish!E29"/.test(h),
+    // ── AND THEY LIVE UNDER MATERIALS, WITH THE SAME TWO BUTTONS ─────────────────────────
+    // Hanz, 2026-09-18, pointing at the three of them under a Conditions heading with a chip
+    // where the buttons should be: "just put these 3 in the materials section with the same
+    // buttons." Sliced out of the RENDERED table between the Materials heading and whatever
+    // heading follows it, so a row that merely exists somewhere cannot pass this.
+    conditionsSitUnderMaterials: (function () {
+      var after = h.split(/<tr class="grouphead">[^]*?Materials<\/th><\/tr>/)[1] || "";
+      var section = after.split('<tr class="grouphead">')[0];
+      return /data-cond-key="joint_filler"/.test(section) &&
+             /data-cond-key="remove_existing_jf"/.test(section) &&
+             /data-cond-key="dye"/.test(section);
+    })(),
+    // THE SAME PAIR, not a lookalike: same classes, same words, same order as defaultRowActions
+    // draws for a material two rows above. A condition row that read "Delete" or dropped the
+    // danger class would be the inconsistency he was pointing at.
+    conditionsCarryTheSameButtons: (function () {
+      var keys = ["joint_filler", "remove_existing_jf", "dye"];
+      return keys.every(function (k) {
+        var rows = h.split("</tr>");
+        var row = "";
+        for (var i = 0; i < rows.length; i++) {
+          if (rows[i].indexOf('data-cond-key="' + k + '"') !== -1) { row = rows[i]; break; }
+        }
+        return row !== "" &&
+          new RegExp('<button class="btn ghost sm" type="button" data-cond-edit="' + k +
+                     '"[^>]*>Edit</button>').test(row) &&
+          new RegExp('<button class="btn ghost sm danger" type="button" data-cond-off="' + k +
+                     '"[^>]*>Remove</button>').test(row);
+      });
+    })(),
+    // THE CHIP IS GONE. "Every new bid" sat where the buttons now are, and it was the thing
+    // there was nothing to press on.
+    noEveryNewBidChip: !/Every new bid/.test(h),
+    // NO CONDITIONS HEADING LEFT, because the three of them are the only rows it ever held.
+    noConditionsHeading: !/>Conditions</.test(h),
+    // THE TWO BUTTONS ARE ROUTED. Read off the SOURCE and labelled as such: the page's click
+    // delegation is one long async handler that is not lifted here, so this is the same level of
+    // proof the material Edit/Remove pair beside it has -- the markup above is executed, the
+    // routing is read, and the thing Remove calls (setConditionDefault) is DRIVEN end to end in
+    // the conditionDefaults scenario below. "+ Add a labor line" shipped green as a button with
+    // no handler at all; this is the cheapest assertion that catches that again.
+    removeIsRoutedToTheSaver: /data-cond-off/.test(src) &&
+      /setConditionDefault\(\s*condOff\.getAttribute\("data-cond-off"\),\s*false\s*\)/.test(src),
+    editIsRoutedToTheAnswer: /data-cond-edit/.test(src) &&
+      /select\[data-cond-key="/.test(src),
   };
 
   // THE ADD PATH, DRIVEN. Every assertion here fails against the 2026-09-17 shipping code,

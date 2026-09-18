@@ -159,11 +159,15 @@ def test_the_takeoff_defaults_list_what_a_new_estimate_starts_with(ran):
     because a source-text assertion cannot catch an unbound identifier -- which is how this repo
     took production down once already.
 
-    FOUR KINDS IN ONE LIST, and that is deliberate. An assembly and a material are lines a new
-    estimate OPENS WITH. A condition is a question it opens ANSWERED. A markup line is a rate it
-    opens applying. They are not the same kind of thing, which is what the Kind column is for;
-    splitting them into four sections would say they are unrelated, when what they have in common
-    is the only thing that matters here -- somebody set them once and every bid starts from them.
+    ONE LIST, SIGNPOSTED. An assembly and a material are lines a new estimate OPENS WITH. A markup
+    line is a rate it opens applying. Sub-headings inside the one table say which is which without
+    claiming they are unrelated -- what they have in common is the only thing that matters here:
+    somebody set them once and every bid starts from them.
+
+    JOINT FILLER, REMOVE-EXISTING AND DYE ARE MATERIALS, counted in the Materials group since
+    2026-09-18. Hanz: "die and joint filler are supposed to be materials not something that is
+    default." They are what a bid buys, so they sit with the rest of what a bid buys; the test
+    below pins the buttons they carry there.
 
     ONLY THE SWITCHED-ON ONES. A list that showed the whole library would make the Default switch
     decorative, which is what the favourite star was.
@@ -176,9 +180,13 @@ def test_the_takeoff_defaults_list_what_a_new_estimate_starts_with(ran):
     # GROUPED, 2026-09-17, at Hanz's ask: "sub categorize the containers wheter they are
     # materials or assemblies". Sub-headings inside the one table, not four tables -- the
     # order is the order a new estimate builds itself in.
-    assert t["groupTitles"] == ["Assemblies", "Materials", "Markup", "Conditions"], (
+    #
+    # THREE GROUPS, NOT FOUR, since 2026-09-18: joint filler, remove-existing and dye moved into
+    # Materials. Hanz: "die and joint filler are supposed to be materials not something that is
+    # default", then "just put these 3 in the materials section with the same buttons."
+    assert t["groupTitles"] == ["Assemblies", "Materials", "Markup"], (
         "the groups or their order changed: %s" % t["groupTitles"])
-    assert t["groupCounts"] == [1, 1, 1, 3], (
+    assert t["groupCounts"] == [1, 4, 1], (
         "a row landed in the wrong group: %s" % t["groupCounts"])
     assert t["renderedHeadings"] == t["groupTitles"], (
         "the groups exist in the data but are not drawn: %s" % t["renderedHeadings"])
@@ -3135,6 +3143,40 @@ def test_the_takeoff_conditions_are_editable_and_say_no_such_thing_as_built_in(r
     # what their next bid does.
     assert t["jointFillerOpensYes"], "joint filler ships ON and the control does not say so"
     assert t["dyeOpensNo"], "dye ships off and the control does not say so"
+
+
+@needs_node
+def test_the_three_conditions_are_materials_with_the_same_two_buttons(ran):
+    """Hanz, 2026-09-18, with the tab open: "die and joint filler are supposed to be materials not
+    something that is default", and then, pointing at the three rows sitting under their own
+    Conditions heading with a chip where the buttons should be: "just put these 3 in the materials
+    section with the same buttons."
+
+    They are what a bid BUYS, so they are listed with the rest of what a bid buys. A separate
+    heading said they were a different kind of thing, and the chip in the actions column said the
+    row was not yours to change -- which is the "built in" complaint over again in a different
+    word.
+
+    SLICED OUT OF THE RENDERED TABLE, between the Materials heading and the next one, so a row
+    that merely exists somewhere in the list cannot pass. And the buttons are matched CHARACTER
+    FOR CHARACTER against what defaultRowActions draws for a material -- same classes, same words,
+    same order -- because "the same buttons" is the request, and a lookalike that read "Delete" or
+    dropped the danger class is the inconsistency he was pointing at.
+
+    Mutation: put the Conditions group back in takeoffDefaultGroups, or swap conditionRowActions
+    for the old '<span class="wtall">Every new bid</span>'."""
+    t = ran["defaultsTakeoffList"]
+    assert t["conditionsSitUnderMaterials"], (
+        "the three conditions are not under the Materials heading")
+    assert t["noConditionsHeading"], "a Conditions heading is still drawn"
+    assert t["conditionsCarryTheSameButtons"], (
+        "a condition row does not carry the same Edit/Remove pair a material row does")
+    assert t["noEveryNewBidChip"], (
+        "the 'Every new bid' chip is still in the actions column, where the buttons go")
+    assert t["removeIsRoutedToTheSaver"], (
+        "Remove has no handler -- a button with nothing behind it renders exactly like a live "
+        "one, which is how '+ Add a labor line' shipped green")
+    assert t["editIsRoutedToTheAnswer"], "Edit has no handler"
 
 
 @needs_node
