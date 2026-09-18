@@ -1023,34 +1023,200 @@ def test_the_three_that_moved_render_as_switches_on_the_takeoff_step(ran):
         assert t[key]["there"], "%s does not render on the Takeoff step" % key
     assert ran["movedToTakeoff"]["notOnTheLaborStep"], (
         "the moved conditions render on the Labor step, where they read as priced labor")
-    # A CARD EACH, the same `.tk` container the assembly rows use. Hanz: "at least make it a
-    # container the same as the assemblie". Three bare switches under a column of cards read as
-    # page furniture -- something that configures the list rather than something in it.
     c = ran["movedToTakeoff"]["cards"]
-    assert c["count"] == 3, "expected three condition cards, found %s" % c["count"]
-    # JOINT FILLER AND DYE CLAIM A COST, SINCE 2026-09-18. Before that date this said the
-    # opposite -- "the card must not claim a cost" -- because neither priced anything: Hanz,
-    # on staging, pointing at this exact step: "die and joint filler are supposed to be
-    # materials not something that is default". The kits ARE charged, by Polish!E29, and now
-    # by this screen too, so the card has to say so or the Material total above it disagrees
-    # with its own line items. Joint Filler ships ON: 17,500 SF (this fixture's takeoff) is
-    # exactly 5 kits of 3,500 at $500 -- $2,500. Dye ships OFF and gets the SAME unpriced-row
-    # dash rowCost() already uses -- never "$0", which would read as a computed zero rather
-    # than "not currently included".
-    jf = c["jointFillerCost"]
-    assert jf and not jf["empty"] and jf["text"] == "$2,500", (
-        "Joint Filler ships on and prices 17,500 SF at one kit per 3,500 -- the card should "
-        "read $2,500, got %r" % jf)
-    dy = c["dyeCost"]
-    assert dy and dy["empty"] and dy["text"] == "\u2014", (
-        "Dye ships off and must show the unpriced-row dash, not a figure: %r" % dy)
-    # REMOVE EXISTING IS THE ONE CARD THIS FEATURE MUST LEAVE ALONE -- it is a labor
-    # modifier priced on the Labor step, and claims no dollar figure of its own here.
-    assert c["removeExistingHasNoCostBox"], (
-        "Remove Existing renders a cost box, which says it priced something it did not -- "
-        "its price is on the Labor step")
     assert c["namesItsCell"], (
         "the cards do not name the cells they set, which is one of the things they do")
+
+
+@needs_node
+def test_joint_filler_and_dye_render_as_material_rows(ran):
+    """WHAT HANZ ASKED FOR, IN HIS OWN TERMS: "joint filler and die should have a measurement a
+    unit in a total cost and they should be a material not an assembly" (staging, 2026-09-19).
+
+    They were already priced -- 2026-09-18 put a dollar figure beside each switch -- and that was
+    not what he was pointing at. A line the bid buys has four things to say: what it is, how much
+    of it, in what, and what it comes to. A switch with one number beside it can say the last of
+    those and nothing else, and the estimator is then left to take the Material total on trust.
+    So these two now render as `.tk mat` cards over the assembly row's own four-column `.tk-g`,
+    with the same `.costbox` in the Total cost column that every row above them uses.
+
+    THE UNIT IS THE THING THAT MAKES THIS NOT A RELABEL. Dye is bought across the area, so its
+    measurement IS the area in SF. Joint filler is bought in 10 gallon KITS -- ROUNDUP(area/3500)
+    of them -- so quoting 17,500 SF against a $2,500 line would misname what the money buys. The
+    fixture's 17,500 SF is exactly 5 kits at $500, and the card says five kits.
+
+    Mutation: swap joint_filler's `qty` for `B.num(area)` and its `unit` for a fixed "SF"."""
+    c = ran["movedToTakeoff"]["cards"]
+    jf, dy = c["jointFiller"], c["dye"]
+    for name, card in (("joint filler", jf), ("dye", dy)):
+        assert card["isMaterialCard"], (
+            "%s is not rendered as a material card -- Hanz asked for a material, not an "
+            "assembly and not a switch" % name)
+        assert card["usesTheAssemblyGrid"], (
+            "%s does not use the takeoff row's own column template, so its figures do not line "
+            "up with the rows above it" % name)
+        assert card["labels"] == ["Material", "Measurement", "Unit", "Total cost"], (
+            "%s does not carry the four columns that were asked for: %r" % (name, card["labels"]))
+    # JOINT FILLER IS BOUGHT IN KITS, and the count is the one the price was worked out from.
+    assert jf["name"] == "Joint filler, 10 gal kit", jf["name"]
+    assert jf["measurement"] == {"cls": "", "empty": False, "text": "5"}, (
+        "17,500 SF is five kits of 3,500, and the Measurement column has to say five: %r"
+        % jf["measurement"])
+    assert jf["unit"]["text"] == "kits", (
+        "joint filler's unit is kits, not the square feet it was derived from: %r" % jf["unit"])
+    assert jf["measureHint"] == "17,500 sq ft, at one kit per 3,500, rounded up.", (
+        "the kit count does not show its working, so five reads as a number from nowhere: %r"
+        % jf["measureHint"])
+    # DYE IS BOUGHT ACROSS THE AREA, so its measurement is the area itself.
+    assert dy["name"] == "Dye, two coats", dy["name"]
+    assert dy["measurement"]["text"] == "17,500", dy["measurement"]
+    assert dy["unit"]["text"] == "SF", dy["unit"]
+    # THE PER-UNIT HINT IS KYLE'S OWN RATE, C29 and C25, arrived at by the page rather than typed
+    # into it -- which is the check that the measurement and the money agree about what is bought.
+    assert jf["rate"] == "$500.00 / kit", jf["rate"]
+    assert dy["rate"] == "$0.14 / SF", dy["rate"]
+
+
+@needs_node
+def test_nothing_on_the_priced_condition_cards_takes_typing(ran):
+    """THE HONEST HALF OF THE REDESIGN.
+
+    A material row's Measurement is the estimator's own number. Neither of these has one: the area
+    is always `B.takeoffSf(M.takeoff)` -- the same figure materialTotal() prices and divides by,
+    which is what stops the Material total and the price-per-SF disagreeing about what "the area"
+    is -- and the kit count is recomputed from it on every render. An `<input>` in that column
+    would take keystrokes and silently throw them away, which is a worse lie than the switch-and-
+    a-sentence card this replaced.
+
+    So all four columns are `.costbox`: the page's own "a field's answer, never an input" box,
+    which is exactly what the Total cost column beside them has always been. FULL CONTRAST, not
+    disabled-grey -- read-only and disabled are different states, and only an absent value greys.
+
+    Mutation: render the Measurement column as `<input class="n" ...>`."""
+    c = ran["movedToTakeoff"]["cards"]
+    for name in ("jointFiller", "dye"):
+        assert c[name]["nothingTypeable"], (
+            "%s renders an input or a select, which invites typing into a figure the page "
+            "derives and would discard" % name)
+        assert not c[name]["measurement"]["empty"], (
+            "%s's measurement is greyed on a measured job -- a derived fact keeps full "
+            "contrast, only a missing value goes grey" % name)
+
+
+@needs_node
+def test_the_switch_sits_where_the_row_delete_sits(ran):
+    """WHERE THE ON/OFF WENT, and why it is not a fifth thing bolted onto a four-column card.
+
+    A takeoff row's header ends with the button that takes the row out of the bid. On these two
+    the switch does that same job -- off means this line is not in the takeoff -- so it takes that
+    slot, after the header's right-hand summary rather than crowding in beside the tag.
+
+    ITS LABEL NAMES THE STATE. "In the bid" is readable against both switch positions; "Include"
+    would name the action and therefore describe the state being left, which is the mistake the
+    labor card's old "Type my own" button made and had corrected.
+
+    Mutation: move condSwitch back above the .tk-sub summary in condMaterialCard."""
+    c = ran["movedToTakeoff"]["cards"]
+    for name in ("jointFiller", "dye"):
+        assert c[name]["switchAfterTheSummary"], (
+            "%s's switch is not in the slot a takeoff row's remove button occupies" % name)
+        assert c[name]["headerSummary"], (
+            "%s's header does not summarise what is bought, which is what a takeoff row's "
+            "header does" % name)
+    assert ran["movedToTakeoff"]["cards"]["jointFiller"]["headerSummary"] == "5 kits"
+    assert ran["movedToTakeoff"]["cards"]["dye"]["headerSummary"] == "17,500 SF"
+
+
+@needs_node
+def test_the_total_cost_column_keeps_the_takeoff_rows_own_convention(ran):
+    """SAME BOX, SAME moneyAuto, SAME EM DASH. Confirmed rather than reinvented.
+
+    Joint Filler ships ON and 17,500 SF is five kits at $500, so it reads $2,500. Dye ships OFF
+    and gets the unpriced-row dash `rowCost()` already uses, in `.costbox.empty` -- never "$0",
+    which would read as a computed answer of nothing rather than "not currently in the bid".
+
+    Mutation: render the off state as moneyAuto(0)."""
+    c = ran["movedToTakeoff"]["cards"]
+    jf = c["jointFiller"]["cost"]
+    assert jf == {"cls": "", "empty": False, "text": "$2,500"}, (
+        "Joint Filler ships on and prices 17,500 SF at one kit per 3,500 -- the Total cost "
+        "column should read $2,500, got %r" % jf)
+    dy = c["dye"]["cost"]
+    assert dy and dy["empty"] and dy["text"] == "\u2014", (
+        "Dye ships off and must show the unpriced-row dash, not a figure: %r" % dy)
+
+
+@needs_node
+def test_remove_existing_is_untouched(ran):
+    """THE CARD THIS CHANGE WAS TOLD TO LEAVE ALONE, pinned so a later tidy-up cannot sweep it
+    into the same shape for symmetry.
+
+    Hanz named joint filler and dye. Remove Existing is not a material and buys nothing here: it
+    adds a fourth hand to the joint-filler crew and is priced on the Labor step. A Measurement and
+    a Total cost on it would be inventing a purchase, and a "$0" would be a figure that is wrong.
+
+    Mutation: give remove_existing_jf a `cost` in CONDITION_CARDS."""
+    r = ran["movedToTakeoff"]["cards"]["removeExisting"]
+    assert r["stillASwitchCard"], "Remove Existing was rebuilt as a material card"
+    assert r["noCostBox"], (
+        "Remove Existing renders a cost box, which says it priced something it did not")
+    assert r["noMeasurement"], "Remove Existing grew a measurement it does not have"
+    assert r["namesItsCell"] and r["saysWhereItIsPriced"], (
+        "Remove Existing no longer names Polish!F29 or says where its price lives")
+    # And it is the only switch-shaped card left: the other two are material rows now.
+    assert ran["movedToTakeoff"]["cards"]["count"] == 1, (
+        "expected one switch-shaped condition card, found %s"
+        % ran["movedToTakeoff"]["cards"]["count"])
+
+
+@needs_node
+def test_the_priced_cards_follow_the_takeoff_area_live(ran):
+    """A STALE FIGURE ON A PRICED LINE IS WORSE THAN NO FIGURE, and this one was stale.
+
+    Every number on these cards is derived from the takeoff area, and typing a measurement takes
+    `changed(false)` -- the in-place repaint, never a panel rebuild. Nothing in repaintNumbers
+    knew these cards existed, so from 2026-09-18 to 2026-09-19 typing 3,000 into row 1 moved the
+    Material total at the bottom of the screen while the Joint Filler line above it went on
+    quoting the kits and the dollars of an area that had left the page.
+
+    READ THROUGH THE NODES. A regex over the panel's innerHTML reports the markup from render
+    time and would pass with the whole repaint block deleted.
+
+    Mutation: delete the CONDITION_CARDS loop from repaintNumbers."""
+    r = ran["condCardsRepaint"]
+    assert r["noRebuild"], (
+        "typing rebuilt the panel, so this proves nothing about the in-place repaint")
+    assert r["before"]["jf"]["qty"] == "5" and r["before"]["jf"]["cost"] == "$2,500", r["before"]
+    # 12,500 down to 3,000 leaves 8,000 SF of polished area: three kits, not five.
+    a = r["after"]
+    assert a["jf"]["qty"] == "3", (
+        "the kit count did not follow the area down to 8,000 sq ft: %r" % a["jf"])
+    assert a["jf"]["cost"] == "$1,500" and r["expectedJfCost"] == 1500, (
+        "the joint-filler figure disagrees with polish-bid-core's own jointFillerCost: %r" % a)
+    assert a["jf"]["sub"] == "3 kits", a["jf"]["sub"]
+    assert a["jf"]["hint"] == "8,000 sq ft, at one kit per 3,500, rounded up.", a["jf"]["hint"]
+    assert a["dye"]["qty"] == "8,000" and a["dye"]["sub"] == "8,000 SF", a["dye"]
+
+
+@needs_node
+def test_switching_dye_on_moves_the_material_total_by_exactly_the_dye(ran):
+    """THE GUARANTEE UNDER THE MARKUP, which outlived two card designs and has to outlive this one.
+
+    Flipping the switch adds `dyeCost(area)` to the Material total and moves nothing else. The
+    figure is polish-bid-core's, not one typed into this file, so a page that quietly priced the
+    dye a second time -- or priced it off a different area than the one the bid divides by -- is
+    caught here rather than in a proposal.
+
+    Mutation: add the dye into materialTotal() twice, or drop it from materialTotal()."""
+    d = ran["dyeToggleMovesTheTotal"]
+    delta = d["materialOn"] - d["materialOff"]
+    assert abs(delta - d["expectedDelta"]) < 0.005, (
+        "switching dye on moved the Material total by %s, but dyeCost(%s) is %s"
+        % (delta, d["area"], d["expectedDelta"]))
+    assert d["laborUnmoved"], "switching dye on moved the labor total, which it does not touch"
+    assert d["costBoxOff"] == "\u2014" and d["costBoxOn"] == "$2,450", (
+        "the card's own Total cost box did not follow the switch: %r -> %r"
+        % (d["costBoxOff"], d["costBoxOn"]))
 
 
 @needs_node
