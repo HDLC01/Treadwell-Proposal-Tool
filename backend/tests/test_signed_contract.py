@@ -363,13 +363,13 @@ def test_both_hashes_appear_in_full_on_the_certificate_page(wired):
 def test_the_certificate_page_carries_the_statute_sentence(wired):
     page = pypdf.PdfReader(io.BytesIO(_post().content)).pages[-1]
     text = page.extract_text()
-    # CodeQL's py/incomplete-url-substring-sanitization pattern-matches on the
-    # shape `"host" in some_string` wherever it appears -- this is a plain text
-    # assertion on a rendered PDF page, not a URL host check gating anything, so
-    # there is no arbitrary-position bypass to have. An inline lgtm[] suppression
-    # here did not stick; dismissed as a false positive on the alert itself
-    # instead (code-scanning alert #91, 2026-09-18).
-    assert "portal.wetreadwell.com" in text
+    # A word-boundary regex search, not `"host" in text` -- CodeQL's
+    # py/incomplete-url-substring-sanitization pattern-matches that exact shape
+    # regardless of whether the right-hand side is a URL being validated (it
+    # isn't here; `text` is a rendered PDF page). Dismissing the resulting alert
+    # worked once but re-numbers on every rescan of this file, so this avoids
+    # the shape entirely instead of dismissing it again on every future push.
+    assert re.search(r"\bportal\.wetreadwell\.com\b", text)
     assert "15 U.S.C." in text and "7001" in text
     assert "16-1601" in text
 
