@@ -228,6 +228,14 @@
       var p = rowPrice(r);
       if (p) sum += p.total;
     });
+    // Dye and Joint Filler are fixed formulas keyed on the polished area (Polish!E25/E29),
+    // not library items -- see polish-bid-core.js's dyeCost/jointFillerCost for why they
+    // are not a priceLine call. `area` is the SAME B.takeoffSf(M.takeoff) that bid() below
+    // uses for the sheet's SF, so the Material total and the price-per-SF divisor can never
+    // disagree about what "the area" is.
+    var area = B.takeoffSf(M.takeoff);
+    sum += B.dyeCost(area, M.conditions.dye);
+    sum += B.jointFillerCost(area, M.conditions.joint_filler);
     return sum;
   }
 
@@ -548,24 +556,32 @@
 
   /** The three conditions that describe the work, as cards rather than as bare switches.
    *
-   *  A SPEC RATHER THAN THREE COPIES OF THE SAME MARKUP, and the `cell` is on it deliberately: the
-   *  only thing these actually do is set that cell, so naming it on screen is the difference
-   *  between a control whose effect you can see and one you have to be told about. The star this
-   *  page's library replaced got that wrong for two years.
+   *  A SPEC RATHER THAN THREE COPIES OF THE SAME MARKUP, and the `cell` is on it deliberately:
+   *  the main thing every one of these does is set that cell, so naming it on screen is the
+   *  difference between a control whose effect you can see and one you have to be told about.
+   *  The star this page's library replaced got that wrong for two years.
+   *
+   *  `cost`, ADDED 2026-09-18, is the other thing an entry can carry: Joint Filler and Dye also
+   *  move the Material total (polish-bid-core.js's dyeCost/jointFillerCost), and a card with
+   *  `cost` shows that dollar figure -- see the render loop below. Remove Existing has none: it
+   *  prices on the Labor step, not here.
    *
    *  `needs` is the gate remove_existing_jf carried on the intake form. It adds a fourth hand to
    *  the joint-filler crew, so with no joint filler there is no crew for it to be the fourth hand
    *  of -- dimmed, never hidden, and its answer still reaches Polish!F29 either way. */
   var CONDITION_CARDS = [
     { key: "joint_filler", tag: "JOINT FILLER", label: "Filling the joints", cell: "Polish!E29",
-      why: "One kit per 3,500 sq ft. The kits are counted by the workbook, not by this screen — " +
-           "there is no joint-filler assembly in the library for it to price from." },
+      cost: function (area) { return B.jointFillerCost(area, true); },
+      why: "One kit per 3,500 sq ft, at $500 a kit — Polish!C29's own rate, added " +
+           "to the Material total above when this is on." },
     { key: "remove_existing_jf", tag: "REMOVE EXISTING", label: "Taking the old filler out",
       cell: "Polish!F29", needs: "joint_filler",
       why: "Adds a fourth hand to the joint-filler line. Priced on the Labor step, where that " +
            "line is." },
     { key: "dye", tag: "DYE", label: "Two coats of dye", cell: "Polish!E25",
-      why: "Across the polished area. Carried to the workbook; nothing on this screen prices it." }
+      cost: function (area) { return B.dyeCost(area, true); },
+      why: "$0.14 a square foot across the polished area — Polish!C25's own rate, " +
+           "added to the Material total above when this is on." }
   ];
 
   function takeoffPanel() {
@@ -644,10 +660,14 @@
     // questions about the building and the bid, where an estimator answered them before opening a
     // takeoff at all.
     //
-    // DIMMED, NOT HIDDEN AND NOT DISABLED -- `.mw-sw.inert`'s rule, and Travel's. None of these
-    // three moves a number in the beta engine; they set Yes/No in Kyle's workbook and nothing
-    // else. Greying says that out loud while leaving the answer typeable, because the answer
-    // still has to reach the downloaded .xlsx whichever way it points.
+    // DIMMED, NOT HIDDEN AND NOT DISABLED -- `.mw-sw.inert`'s rule, and Travel's. Only
+    // remove_existing_jf moves no number in the beta engine; it sets Yes/No in Kyle's
+    // workbook and nothing else. Joint Filler and Dye ARE priced, since 2026-09-18 (Hanz:
+    // "die and joint filler are supposed to be materials not something that is default") --
+    // see materialTotal() and polish-bid-core.js's dyeCost/jointFillerCost. Greying still
+    // says "not affecting the figure above it" for whichever card is actually inert, while
+    // leaving the answer typeable, because the answer still has to reach the downloaded
+    // .xlsx whichever way it points.
     //
     // remove_existing_jf IS GATED ON joint_filler, which is the `needs` rule it carried on intake.
     // It adds a fourth hand to the joint-filler crew, so with no joint filler there is no crew for
@@ -657,18 +677,36 @@
     // that configures the list rather than something IN it. These describe the work the same way a
     // takeoff row does, so they get the same box.
     //
-    // WHAT THEY ARE NOT is a row, and the card has to be honest about that or it is worse than the
-    // switches were. An assembly row carries a measurement and comes to a number. These carry a
-    // Yes or No and come to nothing on this screen: the arithmetic they drive -- one kit per 3,500
-    // sq ft -- lives in Kyle's workbook, off Polish!E29, and the beta has no assembly to price it
-    // from. So the card states its own cost as "not priced here" rather than "$0", which would be
-    // a figure and would be wrong.
+    // WHAT A CARD WITHOUT A `cost` FUNCTION IS NOT -- true only of Remove Existing today -- is a
+    // row, and the card has to be honest about that or it is worse than the switches were. An
+    // assembly row carries a measurement and comes to a number; Remove Existing carries a Yes
+    // or No and comes to nothing on THIS screen, because the fourth hand it adds is priced on
+    // the Labor step instead. So its card states its own cost as "not priced here" rather than
+    // "$0", which would be a figure and would be wrong.
+    //
+    // JOINT FILLER AND DYE LEFT THIS PARAGRAPH ON 2026-09-18: one kit per 3,500 sq ft at $500,
+    // and $0.14 a square foot, are both formulas this engine now runs itself -- see
+    // polish-bid-core.js's dyeCost/jointFillerCost -- so their cards show the real dollar
+    // figure the switch adds, not a promise that something elsewhere is pricing it.
     html += CONDITION_CARDS.map(function (c) {
       var inert = c.needs && !M.conditions[c.needs];
+      // Priced cards (joint_filler, dye) get a dollar figure beside the switch, the SAME
+      // moneyAuto() the takeoff rows use above -- ON shows what it added to the Material
+      // total, OFF shows the unpriced-row dash from rowCost() rather than a "$0" that would
+      // read as a computed answer of nothing. remove_existing_jf has no `cost` and gets
+      // neither span, unchanged from before.
+      var costHtml = "";
+      if (c.cost) {
+        var on = !!M.conditions[c.key];
+        var text = on ? moneyAuto(c.cost(B.takeoffSf(M.takeoff))) : "—";
+        costHtml = '<span class="cond-cost' + (on ? "" : " empty") + '">' + esc(text) +
+          "</span>";
+      }
       return '<div class="tk cond' + (inert ? " inert" : "") + '">' +
         '<div class="tk-h">' +
         '<span class="tag">' + esc(c.tag) + "</span>" +
         condSwitch(c.key, c.label, inert) +
+        costHtml +
         '<span class="tk-sub">' + esc(c.cell) + "</span>" +
         "</div>" +
         '<p class="hint">' + esc(c.why) + "</p>" +
