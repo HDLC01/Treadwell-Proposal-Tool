@@ -179,10 +179,15 @@
     /* The three that came off the intake form. Grouped under the takeoff rows rather than mixed
        into them: they are not rows, they price nothing, and a switch sitting in a list of priced
        lines reads as though it changes one. */
-    /* A condition card. The same `.tk` box as a takeoff row, marked so it cannot be mistaken for
-       one: a row comes to a number, and these come to a Yes or No that only Kyle's workbook
-       reads. The left rule is the whole distinction, drawn rather than written. */
-    .tk.cond{background:var(--card);border-left:3px solid var(--line)}
+    /* A condition card, styled IDENTICALLY to the takeoff row above it -- Hanz, 2026-09-18,
+       pointing at Row 1: "can we make it or make the containers look like row one on the
+       assembly container". The white-card-plus-left-rule treatment tried to draw the
+       distinction visually (a row prices to a number; these price to a Yes or No that only
+       Kyle's workbook reads) but read instead as the condition being SEPARATE FURNITURE below
+       the real takeoff, which is the opposite of "these describe the work the same way a
+       takeoff row does" a few lines up in takeoffPanel(). The distinction now lives only in
+       the tag text (JOINT FILLER / DYE vs ROW n) and the hint line, not in a different card. */
+    .tk.cond{}
     .tk.cond .tk-h{margin:0 0 7px}
     .tk.cond .tk-sub{margin-left:auto;font:600 10.5px var(--mono);color:var(--ink-3);
       letter-spacing:.02em}
