@@ -1028,13 +1028,29 @@ def test_the_three_that_moved_render_as_switches_on_the_takeoff_step(ran):
     # page furniture -- something that configures the list rather than something in it.
     c = ran["movedToTakeoff"]["cards"]
     assert c["count"] == 3, "expected three condition cards, found %s" % c["count"]
-    # AND THE CARD MUST NOT CLAIM A COST. An assembly row comes to a number; these come to a
-    # Yes/No that only Kyle's workbook reads. Printing "$0" beside one would be a figure, and a
-    # figure is a claim -- the kits ARE charged, by Polish!E29, just not by this screen.
-    assert c["noCostBox"], (
-        "a condition card renders a cost box, which says it priced something it did not")
+    # JOINT FILLER AND DYE CLAIM A COST, SINCE 2026-09-18. Before that date this said the
+    # opposite -- "the card must not claim a cost" -- because neither priced anything: Hanz,
+    # on staging, pointing at this exact step: "die and joint filler are supposed to be
+    # materials not something that is default". The kits ARE charged, by Polish!E29, and now
+    # by this screen too, so the card has to say so or the Material total above it disagrees
+    # with its own line items. Joint Filler ships ON: 17,500 SF (this fixture's takeoff) is
+    # exactly 5 kits of 3,500 at $500 -- $2,500. Dye ships OFF and gets the SAME unpriced-row
+    # dash rowCost() already uses -- never "$0", which would read as a computed zero rather
+    # than "not currently included".
+    jf = c["jointFillerCost"]
+    assert jf and not jf["empty"] and jf["text"] == "$2,500", (
+        "Joint Filler ships on and prices 17,500 SF at one kit per 3,500 -- the card should "
+        "read $2,500, got %r" % jf)
+    dy = c["dyeCost"]
+    assert dy and dy["empty"] and dy["text"] == "\u2014", (
+        "Dye ships off and must show the unpriced-row dash, not a figure: %r" % dy)
+    # REMOVE EXISTING IS THE ONE CARD THIS FEATURE MUST LEAVE ALONE -- it is a labor
+    # modifier priced on the Labor step, and claims no dollar figure of its own here.
+    assert c["removeExistingHasNoCostBox"], (
+        "Remove Existing renders a cost box, which says it priced something it did not -- "
+        "its price is on the Labor step")
     assert c["namesItsCell"], (
-        "the cards do not name the cells they set, which is the only thing they do")
+        "the cards do not name the cells they set, which is one of the things they do")
 
 
 @needs_node
@@ -1617,8 +1633,10 @@ def test_the_remodel_tax_uses_the_countys_real_rate_not_the_sheets_ten_percent(r
     c = ran["remodelRate"]["county"]
     assert c["pct"] == "7.975%", "a Johnson County job is not charged the county rate: %r" % c["pct"]
     assert c["pct"] == c["expectedPct"]
-    assert c["money"] == "$1,529" and c["expectedMoney"] == 1529
-    assert c["total"] == "$33,239" and c["expectedTotal"] == 33239, (
+    # $1,529 before 2026-09-18 -- joint_filler ships ON and now adds $2,500 to the material
+    # this fixture prices, which moves the sub-total and, through it, GP and this remodel line.
+    assert c["money"] == "$1,715" and c["expectedMoney"] == 1715
+    assert c["total"] == "$38,541" and c["expectedTotal"] == 38541, (
         "the total does not follow the county rate through the chain")
     assert c["rowNamesTheCounty"], (
         "the row does not say which county the rate came from; an estimator who knows the workbook "
@@ -1633,7 +1651,8 @@ def test_with_no_county_it_falls_back_to_the_state_rate_and_says_so(ran):
     it matches the sheet, while being wrong everywhere."""
     f = ran["remodelRate"]["fallback"]
     assert f["pct"] == "6.5%", "the no-county fallback is not the Kansas state rate: %r" % f["pct"]
-    assert f["money"] == "$1,247" and f["expectedMoney"] == 1247
+    # $1,247 before 2026-09-18 -- same joint_filler-priced-by-default shift as the county case.
+    assert f["money"] == "$1,398" and f["expectedMoney"] == 1398
     assert f["expectedMoney"] != f["whatTenPercentWouldBe"], (
         "the fallback charges what the sheet's 10% would have charged (%s), so this test proves "
         "nothing" % f["whatTenPercentWouldBe"])

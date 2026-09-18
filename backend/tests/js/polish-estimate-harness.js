@@ -326,12 +326,27 @@ function blob(over) {
 /** `remodelRate` is the project's county rate off the draft, which the page reads from
  *  `state.county_remodel_rate`. Passing it here too keeps this expectation and the page computing
  *  the same thing; leaving it out would let a page that ignored the county still match. */
+/** Dye + Joint Filler's dollar contribution to a model's material total, exactly how the real
+ *  page's materialTotal() computes it: off `B.takeoffSf` and the model's OWN conditions,
+ *  merged onto freshModel()'s defaults the same way migrateModel merges them (a fixture below
+ *  states only the keys it cares about, and joint_filler ships ON -- an omitted key must NOT
+ *  silently read as off here, or this expectation would agree with a page that dropped the
+ *  seeded condition entirely). Shared by expectedChain and the two raw-material expectations
+ *  below that never reach markupChain at all, so the three cannot drift from each other about
+ *  what counts as "the area" or "the merged conditions". */
+function extraMaterial(model) {
+  const cond = Object.assign({}, B.freshModel().conditions, (model || {}).conditions || {});
+  const area = B.takeoffSf((model || {}).takeoff);
+  return B.dyeCost(area, cond.dye) + B.jointFillerCost(area, cond.joint_filler);
+}
+
 function expectedChain(model, asms, items, remodelRate) {
   let material = 0;
   (model.takeoff || []).forEach((r) => {
     const asm = (asms || []).filter((a) => a.id === r.assembly_id)[0];
     if (asm) material += L.priceAssembly(asm, items, B.num(r.measurement)).total;
   });
+  material += extraMaterial(model);
   return B.markupChain({
     material: material,
     labor: B.laborTotal(model.labor),
@@ -571,7 +586,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
       rows: rows,
       matTotal: txt(b, "[data-mat-total]"),
       areaTotal: txt(b, "[data-area-total]"),
-      expectedMaterial: rows.reduce((s, r) => s + r.expectedTotal, 0),
+      expectedMaterial: rows.reduce((s, r) => s + r.expectedTotal, 0) + extraMaterial(MODEL),
       // LF rows are priced but must not count toward the area the price-per-SF divides by.
       expectedArea: B.takeoffSf(MODEL.takeoff),
       bidTotal: b.dom.get("bid-total").textContent,
@@ -679,9 +694,9 @@ const rendered = [];      // every string the page put on screen, for the Labour
     const was = [0, 1, 2].map((i) => txt(b, '[data-cost-for="' + i + '"]'));
 
     typeInto(b, '[data-tk="0"][data-k="measurement"]', "20000");
-    const chain = expectedChain(
-      Object.assign(clone(MODEL), { takeoff: clone(MODEL.takeoff).map(
-        (r, i) => (i === 0 ? Object.assign(r, { measurement: "20000" }) : r)) }), ASMS, ITEMS);
+    const typedModel = Object.assign(clone(MODEL), { takeoff: clone(MODEL.takeoff).map(
+      (r, i) => (i === 0 ? Object.assign(r, { measurement: "20000" }) : r)) });
+    const chain = expectedChain(typedModel, ASMS, ITEMS);
     const p0 = L.priceAssembly(ASMS[0], ITEMS, 20000);
     out.typing = {
       noRebuild: panels.htmlWrites === rebuilds,
@@ -707,7 +722,8 @@ const rendered = [];      // every string the page put on screen, for the Labour
     out.typing.expectedMaterialSum =
       L.priceAssembly(ASMS[0], ITEMS, 20000).total +
       L.priceAssembly(ASMS[1], ITEMS, 200).total +
-      L.priceAssembly(ASMS[2], ITEMS, 5000).total;
+      L.priceAssembly(ASMS[2], ITEMS, 5000).total +
+      extraMaterial(typedModel);
 
     // LEAVING the assembly field must not rebuild the row either. `change` fires when the
     // estimator tabs out of it, and the field they tab INTO is Measurement — so a rebuild here
@@ -1443,13 +1459,31 @@ const rendered = [];      // every string the page put on screen, for the Labour
       // list rather than something in it.
       cards: (function () {
         var h = s.dom.get("panels").innerHTML;
+        // Each card's own slice of the panel markup, from its "<div class=\"tk cond" open tag
+        // up to the next one -- so a check against one card cannot accidentally read markup
+        // that belongs to a different one.
+        function cardHtml(tag) {
+          var i = h.indexOf(">" + tag + "<");
+          if (i < 0) return "";
+          var start = h.lastIndexOf('<div class="tk cond', i);
+          var next = h.indexOf('<div class="tk cond', i + 1);
+          return h.slice(start, next < 0 ? h.length : next);
+        }
+        function costOf(block) {
+          var m = /class="cond-cost([^"]*)">([^<]*)</.exec(block);
+          return m ? { empty: / empty/.test(m[1]), text: m[2] } : null;
+        }
         return {
           count: (h.match(/class="tk cond/g) || []).length,
-          // The card must NOT claim a cost. An assembly row comes to a number; these come to a
-          // Yes/No that only Kyle's workbook reads, and printing "$0" beside one would be a
-          // figure, and would be wrong.
-          noCostBox: !/class="tk cond[^"]*"[\s\S]{0,600}?costbox/.test(h),
-          // It names the cell it sets, which is the only thing it actually does.
+          // JOINT FILLER AND DYE NOW CLAIM A COST, since 2026-09-18 -- each shows the real
+          // dollar figure it adds to the Material total when it is ON, and the unpriced-row
+          // dash when it is OFF, never "$0" for either -- see moneyAuto/rowCost's convention.
+          jointFillerCost: costOf(cardHtml("JOINT FILLER")),
+          dyeCost: costOf(cardHtml("DYE")),
+          // REMOVE EXISTING MUST STILL CLAIM NO COST -- it is a labor modifier, priced on the
+          // Labor step, and the one card this feature must leave exactly as it was.
+          removeExistingHasNoCostBox: !/cond-cost/.test(cardHtml("REMOVE EXISTING")),
+          // It names the cell it sets, which is the only thing every one of them always does.
           namesItsCell: /Polish!E29/.test(h) && /Polish!F29/.test(h) && /Polish!E25/.test(h),
         };
       })(),

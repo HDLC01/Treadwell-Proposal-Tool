@@ -237,6 +237,36 @@ out.hardBidProbe = [];
   });
 });
 
+// ── dye and joint filler: fixed formulas keyed on the polished area (Polish!E25/E29) ──
+//
+// Neither is a library item -- no coverage, no pack size, no vendor -- so they are not routed
+// through priceAssembly/priceLine. dyeCost is a flat rate times the area; jointFillerCost is
+// ROUNDUP(area / 3500) kits at a flat rate per kit. The vectors below cover: an area that
+// divides evenly into 3500 (exactly one kit, and separately exactly two, so a false ceiling
+// could not slip a kit in on a round number), an area that does NOT divide evenly (needs the
+// round-up), an area of 0, and area not yet entered (null/undefined) -- each read against the
+// condition both ON and OFF, since OFF must price at exactly 0 whatever the area is.
+out.dyeJointFiller = {
+  dye: {
+    on_3500: P.dyeCost(3500, true),
+    on_12500: P.dyeCost(12500, true),
+    on_0: P.dyeCost(0, true),
+    on_null: P.dyeCost(null, true),
+    on_undefined: P.dyeCost(undefined, true),
+    off_3500: P.dyeCost(3500, false),
+  },
+  jointFiller: {
+    on_3500: P.jointFillerCost(3500, true),     // divides evenly -- exactly one kit
+    on_3501: P.jointFillerCost(3501, true),     // one SF over -- must round UP to two kits
+    on_7000: P.jointFillerCost(7000, true),     // divides evenly -- exactly two, not three
+    on_0: P.jointFillerCost(0, true),
+    on_null: P.jointFillerCost(null, true),
+    on_undefined: P.jointFillerCost(undefined, true),
+    off_3500: P.jointFillerCost(3500, false),
+    off_7000: P.jointFillerCost(7000, false),
+  },
+};
+
 // ── the model: fresh, migrated, and what is blocking it ──────────────────────
 out.fresh = P.freshModel();
 
