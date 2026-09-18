@@ -363,7 +363,11 @@ def test_both_hashes_appear_in_full_on_the_certificate_page(wired):
 def test_the_certificate_page_carries_the_statute_sentence(wired):
     page = pypdf.PdfReader(io.BytesIO(_post().content)).pages[-1]
     text = page.extract_text()
-    assert "portal.wetreadwell.com" in text
+    # CodeQL's py/incomplete-url-substring-sanitization pattern-matches on the
+    # shape `"host" in some_string` wherever it appears -- this is a plain text
+    # assertion on a rendered PDF page, not a URL host check gating anything, so
+    # there is no arbitrary-position bypass to have.
+    assert "portal.wetreadwell.com" in text  # lgtm[py/incomplete-url-substring-sanitization]
     assert "15 U.S.C." in text and "7001" in text
     assert "16-1601" in text
 
@@ -393,3 +397,74 @@ def test_the_real_render_is_one_page():
     does); skipped elsewhere rather than faked."""
     pdf = cw.build_certificate_pdf(CERT, TEMPLATE)
     assert len(pypdf.PdfReader(io.BytesIO(pdf)).pages) == 1
+
+
+# ── a caller-controlled value cannot forge a log line or leak an exception ────
+# CodeQL flagged this route: `cert` is arbitrary JSON off an authenticated but
+# still external POST, and three log calls used to print `cert["proposal_id"]`
+# straight into a %s slot -- an embedded CRLF would let anyone holding
+# SERVICE_TOKEN write a fabricated log line under a real one. Two other spots
+# echoed str(exc) straight into the 400 response body, which is an information
+# exposure risk for a library exception whose message is not meant for a caller.
+def test_log_safe_strips_control_characters_and_caps_length():
+    """The unit itself: every control byte the class targets becomes the same
+    placeholder, and a value past the cap is truncated rather than flooding a
+    log line."""
+    forged = "real-id\r\n2026-01-01 ERROR fake admin login succeeded"
+    safe = main._log_safe(forged)
+    assert "\r" not in safe and "\n" not in safe
+    # The forged line's own text survives (it is not secret), just unable to
+    # start a new log record -- \r and \n are the only bytes that matter here.
+    assert "fake admin login succeeded" in safe
+
+    assert main._log_safe(None) == ""
+    long_value = "x" * 500
+    capped = main._log_safe(long_value, limit=50)
+    assert len(capped) == 51 and capped.endswith("…")  # 50 chars + the ellipsis mark
+
+
+def test_a_forged_proposal_id_cannot_inject_a_second_log_line(monkeypatch, caplog):
+    """DRIVEN THROUGH THE REAL ENDPOINT, not the helper in isolation -- a sanitizer
+    that exists but is never called on the actual request path protects nothing.
+
+    Forces the render itself to fail (rather than a field-validation refusal,
+    which never reaches the proposal_id log line at all) so this actually
+    exercises the "certificate render failed for proposal %s" site -- one of
+    the three that used to log proposal_id unsanitized."""
+    monkeypatch.setenv("SERVICE_TOKEN", TOKEN)
+
+    def _boom(docx_bytes, **kw):
+        raise RuntimeError("render exploded")
+
+    monkeypatch.setattr(pdf_writer, "docx_to_pdf", _boom)
+    caplog.set_level("WARNING")
+    forged_id = "legit-1\r\nCRITICAL admin_override=true"
+    bad_cert = dict(CERT)
+    bad_cert["proposal_id"] = forged_id
+    resp = _post(cert=bad_cert)
+    assert resp.status_code == 502
+    assert any("render failed" in r.getMessage() for r in caplog.records), (
+        "this test did not actually reach the log line it means to check")
+    for record in caplog.records:
+        assert "\r" not in record.getMessage()
+        assert "\n" not in record.getMessage()
+
+
+def test_a_bad_certificate_json_does_not_echo_the_parser_exception(wired):
+    """400, but the body says what is wrong in one plain sentence -- not whatever
+    text json.JSONDecodeError happened to compose (position, line/column, quoted
+    fragments of the bad input)."""
+    resp = _post(raw_cert="{not json")
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["error"] == "certificate is not valid JSON"
+    assert "line" not in body["error"] and "column" not in body["error"]
+
+
+def test_an_unreadable_proposal_pdf_does_not_echo_the_reader_exception(wired):
+    """Same guarantee for the other exception-message site: pypdf's own error text
+    (which can quote raw bytes) never reaches the response body."""
+    resp = _post(pdf_bytes=b"not a pdf at all")
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["error"] == "proposal_pdf is not a readable PDF"

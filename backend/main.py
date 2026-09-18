@@ -2980,6 +2980,21 @@ async def api_admin_deposit_invoice(request: Request) -> Response:
 _SIGNED_CONTRACT_MAX_BYTES = 40 * 1024 * 1024
 
 
+def _log_safe(value: object, limit: int = 200) -> str:
+    """A caller-controlled value, made safe to interpolate into a log line.
+
+    The certificate body is arbitrary JSON off an authenticated but still external
+    POST -- printing a field like proposal_id straight into a %s log format string
+    lets whoever holds SERVICE_TOKEN forge fake log lines with embedded newlines,
+    which is how a real event gets buried under a fabricated one in an incident
+    review. Control characters are replaced and the value is capped, since a log
+    line is not the place for an attacker-sized string either.
+    """
+    text = "" if value is None else str(value)
+    text = re.sub(r"[\r\n\t\x00-\x1f\x7f]", "␣", text)
+    return text if len(text) <= limit else text[:limit] + "…"
+
+
 def _contract_error(status: int, message: str) -> JSONResponse:
     """The refusal shape the portal codes against: {"ok": false, "error": "..."}.
 
@@ -3047,7 +3062,7 @@ async def api_admin_signed_contract(request: Request) -> Response:
         cert = json.loads(raw_cert)
     except Exception as exc:  # noqa: BLE001
         log.warning("signed-contract: certificate JSON (%s: %s)", type(exc).__name__, exc)
-        return _contract_error(400, "certificate is not valid JSON: " + str(exc))
+        return _contract_error(400, "certificate is not valid JSON")
 
     problems = certificate_writer.field_problems(cert)
     if problems:
@@ -3063,8 +3078,7 @@ async def api_admin_signed_contract(request: Request) -> Response:
     except Exception as exc:  # noqa: BLE001
         log.warning("signed-contract: proposal_pdf is not a readable PDF (%s: %s)",
                     type(exc).__name__, exc)
-        return _contract_error(400, "proposal_pdf is not a readable PDF ("
-                               + type(exc).__name__ + ": " + str(exc) + ")")
+        return _contract_error(400, "proposal_pdf is not a readable PDF")
     if not proposal_pages:
         return _contract_error(400, "proposal_pdf has no pages")
 
@@ -3085,7 +3099,7 @@ async def api_admin_signed_contract(request: Request) -> Response:
         # container probe before, and LibreOffice's failures all look alike from
         # the outside.
         log.exception("signed-contract: certificate render failed for proposal %s (%s: %s)",
-                      (cert.get("proposal_id") if isinstance(cert, dict) else "?"),
+                      _log_safe(cert.get("proposal_id") if isinstance(cert, dict) else "?"),
                       type(exc).__name__, exc)
         return _contract_error(502, "render_failed")
 
@@ -3096,7 +3110,7 @@ async def api_admin_signed_contract(request: Request) -> Response:
         # means a field arrived far longer than anything seen so far.
         log.warning("signed-contract: the certificate rendered to %d pages, not 1, for proposal "
                     "%s — all of them are appended, but the one-page budget is blown",
-                    len(cert_pages), cert.get("proposal_id"))
+                    len(cert_pages), _log_safe(cert.get("proposal_id")))
 
     try:
         writer = pypdf.PdfWriter()
@@ -3109,7 +3123,7 @@ async def api_admin_signed_contract(request: Request) -> Response:
         merged = out.getvalue()
     except Exception as exc:  # noqa: BLE001
         log.exception("signed-contract: merge failed for proposal %s (%s: %s)",
-                      cert.get("proposal_id"), type(exc).__name__, exc)
+                      _log_safe(cert.get("proposal_id")), type(exc).__name__, exc)
         return _contract_error(502, "render_failed")
 
     name = re.sub(r"[^\x20-\x7e]", "_", str(cert.get("project_name") or "Treadwell"))
