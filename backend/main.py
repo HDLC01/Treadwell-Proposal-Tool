@@ -19,6 +19,7 @@ from __future__ import annotations
 import base64
 import calendar
 import hashlib
+import io
 import json
 import logging
 import math
@@ -51,6 +52,7 @@ except ImportError:
 
 import docx
 from docx.text.paragraph import Paragraph
+import pypdf
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
@@ -63,6 +65,7 @@ import analytics_export
 import audit
 import basisboard_client
 import calendar_events
+import certificate_writer
 import condition_defaults
 import cover_letter_writer
 import docx_merge
@@ -251,7 +254,10 @@ _AUTH_PUBLIC_PATHS = {"/healthz", "/api/public-config",
                       "/api/admin/proposal-pdf",
                       # same deal for the deposit invoice — the portal owns deposits
                       # but has no LibreOffice, so it renders here.
-                      "/api/admin/deposit-invoice"}
+                      "/api/admin/deposit-invoice",
+                      # and for the signed contract: the portal holds the signature
+                      # facts, this repo holds the document generator.
+                      "/api/admin/signed-contract"}
 
 
 def _auth_is_public(path: str, method: str) -> bool:
@@ -2947,6 +2953,190 @@ async def api_admin_deposit_invoice(request: Request) -> Response:
     no = re.sub(r"[^A-Za-z0-9._-]", "", str(body.get("invoice_no") or "deposit")) or "deposit"
     return Response(content=blob, media_type=media,
                     headers={"Content-Disposition": f'inline; filename="Treadwell Invoice {no}.{ext}"'})
+
+
+# ─── Signed contract (the proposal + its signature certificate) ───────
+# The portal owns the SIGNATURE: it shows the consent sentence, takes the typed
+# name, and records the address, browser and timestamps. It does not own
+# DOCUMENTS — it ships without python-docx, LibreOffice or pypdf — so the paper
+# is made here, the same split as the proposal PDF and the deposit invoice.
+#
+# WHY THE PROPOSAL IS UPLOADED RATHER THAN RE-RENDERED, which is the whole point
+# of the endpoint: the customer signed one specific PDF, and the certificate
+# prints that PDF's SHA-256. If this handler rebuilt those pages from the draft
+# it could produce a document that does not hash to the value printed beside it,
+# and the certificate would then be evidence against us rather than for us. The
+# uploaded bytes are the source of truth; pypdf copies their pages across
+# object-for-object and nothing re-flows them.
+#
+# WHY NOT `docx_merge`. Its own header says it: it can put a document in FRONT of
+# the proposal safely, and appending after the body would mean relocating the
+# body-level `w:sectPr` in Kyle's fragile templates. Joining two already-rendered
+# PDFs never opens that XML at all.
+
+# A proposal PDF is a few hundred KB; the largest seen with photo attachments is
+# under 8 MB. The ceiling is a guard against a runaway upload filling memory, not
+# a product limit — it refuses by name rather than dying on an OOM.
+_SIGNED_CONTRACT_MAX_BYTES = 40 * 1024 * 1024
+
+
+def _log_safe(value: object, limit: int = 200) -> str:
+    """A caller-controlled value, made safe to interpolate into a log line.
+
+    The certificate body is arbitrary JSON off an authenticated but still external
+    POST -- printing a field like proposal_id straight into a %s log format string
+    lets whoever holds SERVICE_TOKEN forge fake log lines with embedded newlines,
+    which is how a real event gets buried under a fabricated one in an incident
+    review.
+
+    repr(), not a hand-rolled character replace: a regex substitution reads as
+    safe to a person but is not a barrier a static analyzer can verify neutralizes
+    every control character, and it wasn't -- CodeQL kept flagging the call sites
+    after the first version of this function shipped. repr() renders \\r and \\n as
+    the two-character escape sequence rather than the byte, is a sanitizer CodeQL
+    recognizes for this exact query, and is exactly as readable in a log line.
+    """
+    text = "" if value is None else str(value)
+    if len(text) > limit:
+        text = text[:limit] + "…"
+    return repr(text)
+
+
+def _contract_error(status: int, message: str) -> JSONResponse:
+    """The refusal shape the portal codes against: {"ok": false, "error": "..."}.
+
+    A refusal names the thing refused in a sentence the portal can put in front of
+    a human as-is. The customer is sitting on an "approving…" spinner when this
+    fires, and "400 Bad Request" tells whoever is paged exactly nothing.
+    """
+    return JSONResponse(status_code=status, content={"ok": False, "error": message})
+
+
+@app.post("/api/admin/signed-contract")
+async def api_admin_signed_contract(request: Request) -> Response:
+    """Proposal PDF + Electronic Signature Certificate, as one PDF.
+
+    multipart/form-data, SERVICE_TOKEN-gated (in `_AUTH_PUBLIC_PATHS`, so it skips
+    the Google gate):
+      * `proposal_pdf` — the exact bytes of the PDF the customer opened. Its
+        Terms & Conditions are already in it; nothing is added to the proposal.
+      * `certificate`  — JSON, the signing facts. See
+        `certificate_writer.REQUIRED_FIELDS`.
+
+    200 → application/pdf: every page of `proposal_pdf`, unchanged, then the one
+    certificate page. 401 unauthorized · 400 a named fault in the request ·
+    502 {"ok": false, "error": "render_failed"} if the document could not be made.
+
+    EVERYTHING IS VALIDATED BEFORE ANYTHING IS BUILT. A publish here once wrote
+    the row, refused the attachment afterwards and still returned 200 — the
+    estimator read "Sent" and the customer got an empty email. The portal will
+    write "signed" against a 200 from this route, so a 200 has to mean the whole
+    document exists.
+    """
+    import hmac
+    presented = request.headers.get("x-service-token") or ""
+    token_env = (os.environ.get("SERVICE_TOKEN") or "").strip()
+    if not token_env or not hmac.compare_digest(presented, token_env):
+        raise HTTPException(401, "unauthorized")
+
+    try:
+        form = await request.form()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("signed-contract: unreadable body (%s: %s)", type(exc).__name__, exc)
+        return _contract_error(400, "the request body is not readable multipart/form-data")
+
+    part = form.get("proposal_pdf")
+    if part is None:
+        return _contract_error(400, "proposal_pdf is required (the PDF the customer signed)")
+    try:
+        proposal_bytes = await part.read() if hasattr(part, "read") else str(part).encode()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("signed-contract: proposal_pdf unreadable (%s: %s)", type(exc).__name__, exc)
+        return _contract_error(400, "proposal_pdf could not be read from the request")
+    if not proposal_bytes:
+        return _contract_error(400, "proposal_pdf is empty")
+    if len(proposal_bytes) > _SIGNED_CONTRACT_MAX_BYTES:
+        return _contract_error(
+            400, "proposal_pdf is " + str(len(proposal_bytes)) + " bytes, over the "
+            + str(_SIGNED_CONTRACT_MAX_BYTES) + "-byte limit")
+
+    raw_cert = form.get("certificate")
+    if raw_cert is None:
+        return _contract_error(400, "certificate is required (the signing facts, as JSON)")
+    if hasattr(raw_cert, "read"):                 # sent as a file part rather than a field
+        raw_cert = (await raw_cert.read()).decode("utf-8", "replace")
+    try:
+        cert = json.loads(raw_cert)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("signed-contract: certificate JSON (%s: %s)", type(exc).__name__, exc)
+        return _contract_error(400, "certificate is not valid JSON")
+
+    problems = certificate_writer.field_problems(cert)
+    if problems:
+        log.warning("signed-contract: refused — %s", "; ".join(problems))
+        return _contract_error(400, "; ".join(problems))
+
+    # Read the uploaded PDF BEFORE rendering anything: a corrupt upload is the
+    # caller's fault (400), not a render failure (502), and the two get paged
+    # very differently.
+    try:
+        reader = pypdf.PdfReader(io.BytesIO(proposal_bytes))
+        proposal_pages = list(reader.pages)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("signed-contract: proposal_pdf is not a readable PDF (%s: %s)",
+                    type(exc).__name__, exc)
+        return _contract_error(400, "proposal_pdf is not a readable PDF")
+    if not proposal_pages:
+        return _contract_error(400, "proposal_pdf has no pages")
+
+    template = proposal_writer.TEMPLATES_ROOT / certificate_writer.TEMPLATE_NAME
+    if not template.is_file():
+        log.error("signed-contract: %s is missing from templates/", certificate_writer.TEMPLATE_NAME)
+        return _contract_error(502, "render_failed")
+
+    try:
+        with _PDF_RENDER_SEM:
+            cert_pdf = certificate_writer.build_certificate_pdf(cert, template)
+        cert_reader = pypdf.PdfReader(io.BytesIO(cert_pdf))
+        cert_pages = list(cert_reader.pages)
+        if not cert_pages:
+            raise RuntimeError("the certificate render produced a PDF with no pages")
+    except Exception as exc:  # noqa: BLE001
+        # Type AND message: "refused" on its own has cost an SSH session and a
+        # container probe before, and LibreOffice's failures all look alike from
+        # the outside.
+        log.exception("signed-contract: certificate render failed for proposal %s (%s: %s)",
+                      _log_safe(cert.get("proposal_id") if isinstance(cert, dict) else "?"),
+                      type(exc).__name__, exc)
+        return _contract_error(502, "render_failed")
+
+    if len(cert_pages) != 1:
+        # Contained, not hidden. Every page is appended — dropping a page of the
+        # evidence record would be the worse failure — but the template is budgeted
+        # for one page (see prepare_signature_certificate_template) and a second one
+        # means a field arrived far longer than anything seen so far.
+        log.warning("signed-contract: the certificate rendered to %d pages, not 1, for proposal "
+                    "%s — all of them are appended, but the one-page budget is blown",
+                    len(cert_pages), _log_safe(cert.get("proposal_id")))
+
+    try:
+        writer = pypdf.PdfWriter()
+        for page in proposal_pages:
+            writer.add_page(page)
+        for page in cert_pages:
+            writer.add_page(page)
+        out = io.BytesIO()
+        writer.write(out)
+        merged = out.getvalue()
+    except Exception as exc:  # noqa: BLE001
+        log.exception("signed-contract: merge failed for proposal %s (%s: %s)",
+                      _log_safe(cert.get("proposal_id")), type(exc).__name__, exc)
+        return _contract_error(502, "render_failed")
+
+    name = re.sub(r"[^\x20-\x7e]", "_", str(cert.get("project_name") or "Treadwell"))
+    return Response(content=merged, media_type="application/pdf",
+                    headers={"Content-Disposition":
+                             'inline; filename="' + name + ' - Signed Contract.pdf"'})
 
 
 @app.post("/api/detect-work-type", response_model=DetectWorkTypeOut)
