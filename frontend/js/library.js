@@ -2001,7 +2001,7 @@
 
    *  EMPTY WHEN THE READ CANNOT ANSWER, and today that is everywhere: `condition_defaults` is
    *  written into both schema files and applied to neither, pending Hanz. Empty is the honest
-   *  answer -- the shipped literals stand and the switches show them -- and a tab that 500s over a
+   *  answer -- the shipped literals stand and the rows show them -- and a tab that 500s over a
    *  table nobody has promoted would take Items and Assemblies down with it. */
   var COND_DEFAULTS = [];
 
@@ -2010,13 +2010,28 @@
    *  THEY WERE "BUILT IN" AND THEY ARE NOT ANY MORE. Hanz, twice: "All line items and the default
    *  items in assemblies should be editable please don't put in a hard coded or built in line
    *  items", and then, seeing the chip still there: "I told you to remove the built-in and keep and
-   *  make everything editable in the takeoff." Each row now carries a Yes/No control that writes
-   *  `condition_defaults`, and changing one changes what the NEXT blank bid opens answering.
+   *  make everything editable in the takeoff." Changing one changes what the NEXT blank bid opens
+   *  answering, and the row leaves this list when it is off.
+   *
+   *  THE YES/NO SELECT IS GONE, 2026-09-19. Hanz, looking at the three of them: "remove these yes
+   *  and no what are these for?" -- and the honest answer was that the column they sat in is
+   *  headed "How it is priced", where every other row says what the line costs. A Yes/No in that
+   *  column answers a question the column is not asking. So the cell now reads like the material
+   *  rows above it -- $500.00 per kit, $0.14 per SF -- and the on/off is the row's PRESENCE, the
+   *  same as it is for a favourited material: listed means a new bid buys it, removed means it
+   *  does not. See conditionPriceCell and takeoffDefaultGroups.
    *
    *  WHAT IS EDITABLE IS THE ANSWER, NOT THE CELL. Polish!E29 is a fact about the workbook Kyle
    *  maintains -- pointing the joint-filler answer somewhere else would put a Yes/No literal over
    *  one of his formulas and nothing on any screen would say so. So the cell is printed beside the
-   *  control rather than offered as a second box.
+   *  price rather than offered as a box.
+   *
+   *  AND NOT THE RATE EITHER, today. $500 a kit is Kyle's C29 and $0.14 a square foot is his C25,
+   *  and this page reads both out of RATES rather than restating them -- a second copy of a rate
+   *  is the one thing on an estimating screen that can go stale without looking stale. Making
+   *  them typeable means giving them a home to be typed into, which is a store this tab does not
+   *  have; it is the next thing to build here, not something to fake with a box that writes
+   *  nowhere.
    *
    *  THE SHIPPED ANSWER IS STILL READ FROM freshModel, and the stored overrides are written over
    *  it through the ESTIMATE'S OWN seedConditionDefaults rather than a merge written again here.
@@ -2033,34 +2048,51 @@
     if (!B || !B.freshModel) return [];
     var shipped = (B.freshModel() || {}).conditions || {};
     var c = B.seedConditionDefaults ? B.seedConditionDefaults(shipped, COND_DEFAULTS) : shipped;
+    // READ OFF RATES, NEVER RETYPED. These are the same two constants jointFillerCost and
+    // dyeCost price from, so a figure shown here cannot disagree with the figure charged. The
+    // guard is the same one `B` carries above: a page that threw because the shared module did
+    // not load would take Items and Assemblies down with it, and an em dash is a better answer
+    // than a blank screen.
+    var R = (B.RATES || {});
+    var kit = L.num(R.JOINT_FILLER_KIT_COST) != null ? L.money(R.JOINT_FILLER_KIT_COST) : null;
+    var dye = L.num(R.DYE_PER_SF) != null ? L.money(R.DYE_PER_SF) : null;
     return [
       { key: "joint_filler", label: "Joint filler", on: !!c.joint_filler, cell: "Polish!E29",
-        why: "One kit per 3,500 sq ft, counted by the workbook" },
+        priced: kit ? kit + " per kit \u00b7 one kit per 3,500 sq ft"
+                    : "No rate loaded for the kit" },
       { key: "remove_existing_jf", label: "Remove existing joint filler",
         on: !!c.remove_existing_jf, cell: "Polish!F29",
-        why: "A fourth hand on the joint-filler line" },
+        // NO PRICE ON THIS SCREEN, and saying so is the point. It is a fourth hand on the
+        // joint-filler line -- a labor modifier the estimator prices on the Labor step -- so a
+        // dollar figure here would be an invention. "Nothing here" is a real answer; a made-up
+        // $0.00 would read as free.
+        priced: "No material cost \u00b7 a labor modifier, priced on the Labor step" },
       { key: "dye", label: "Dye", on: !!c.dye, cell: "Polish!E25",
-        why: "Two coats across the polished area" }
+        priced: dye ? dye + " per SF \u00b7 two coats across the polished area"
+                    : "No rate loaded for dye" }
     ];
   }
 
-  /** One condition's Yes/No control, plus the sentence that says what the answer means.
+  /** What one condition COSTS, for the column headed "How it is priced".
    *
-   *  A SELECT, NOT A CHECKBOX, and the reason is the same one the labor form's unit box gives: a
-   *  `change` on a select is one event in every browser, while a checkbox arrives as a click AND a
-   *  change and the page's click delegation already runs over this table. Two handlers racing to
-   *  write one answer is how a switch ends up saving the value it had before the press.
+   *  IT WAS A YES/NO SELECT UNTIL 2026-09-19. Hanz: "remove these yes and no what are these
+   *  for?" The column asks what the line costs and every other row in it answers that; these
+   *  three answered a different question, in a control that made the row look like a form. Now
+   *  they read like the material rows they sit among -- the rate, the unit, and what the rate is
+   *  charged against -- and whether a new bid buys the line is said by the row being listed at
+   *  all, which is how a favourited material says it too.
    *
-   *  SEPARATE FROM THE GROUPING so a test can execute it and read the markup for one row back,
-   *  rather than regex-matching a control out of the whole table. This page has already shipped a
-   *  dead button behind a green markup assertion. */
-  function conditionControl(c) {
-    return '<select class="mkin" data-cond-key="' + esc(c.key) +
-      '" aria-label="What a new estimate opens answering for ' + esc(c.label) + '">' +
-      '<option value="yes"' + (c.on ? " selected" : "") + ">Yes</option>" +
-      '<option value="no"' + (c.on ? "" : " selected") + ">No</option>" +
-      "</select> " +
-      '<span class="wtall">' + esc(c.why) + " · writes " + esc(c.cell) + "</span>";
+   *  STILL SEPARATE FROM THE GROUPING so a test can execute it and read one row's cell back,
+   *  rather than regex-matching it out of the whole table. This page has already shipped a dead
+   *  button behind a green markup assertion.
+   *
+   *  RENAMED WITH THE CHANGE, from conditionControl. A function called `control` that returns a
+   *  sentence is the near-miss naming this repo pays for elsewhere -- library-ui-harness.js lifts
+   *  it by name, so the rename has to be made there in the same breath or every scenario in that
+   *  file dies on a ReferenceError at once. */
+  function conditionPriceCell(c) {
+    return esc(c.priced) +
+      ' <span class="wtall">writes ' + esc(c.cell) + "</span>";
   }
 
   /** One condition's answer, sent on the change, with the optimistic flip and the put-it-back in
@@ -2071,9 +2103,11 @@
    *  assembly rail and the open panel, none of which a condition answer touches -- and one of
    *  which may have a half-typed labor line in it (see the note on LABOR_FORM).
    *
-   *  A FAILED SAVE PUTS THE SELECT BACK and says why. A control that keeps the new value after the
-   *  write was refused tells an admin every new bid now opens differently when it does not, and
-   *  they would find that out from a bid. */
+   *  A FAILED SAVE PUTS THE ROW BACK and says why. Since 2026-09-19 the row's PRESENCE is the
+   *  answer -- Remove takes it off the list, Add puts it back -- so a refused write that left the
+   *  list alone would be showing an admin a set of defaults no new bid actually opens with, and
+   *  they would find that out from a bid. The rollback is the same reassign-and-repaint either
+   *  way round, which is why add and remove share this one function. */
   async function setConditionDefault(key, on) {
     var was = COND_DEFAULTS;
     var next = [];
@@ -2103,9 +2137,9 @@
    *
    *  NOT because they are built in. They were, until 2026-09-18, and this comment used to say
    *  so -- "nobody set them on this page and nobody can unset them here either". Hanz twice
-   *  asked for that to stop being true, and it has: every condition carries a Yes/No control
-   *  that writes condition_defaults. Travel under Labor is the one row on this tab that is
-   *  still built in, and its own note says why. */
+   *  asked for that to stop being true, and it has: a condition is listed when a new bid buys it
+   *  and removed when it does not, and both directions write condition_defaults. Travel under
+   *  Labor is the one row on this tab that is still built in, and its own note says why. */
   /** The Defaults tab's own way in, which is what lets the switches come off the other two tabs.
    *
    *  THE SEARCH IS THE CONTROL, not a filter over what is already listed. Hanz asked for it "for
@@ -2159,28 +2193,33 @@
       ' being a default">Remove</button>';
   }
 
-  /** A condition's Edit and Remove, in the same pair every other row on this table carries.
+  /** A condition's Remove, in the same button a material row carries, meaning the same thing.
    *
-   *  THE SAME BUTTONS, LITERALLY. Hanz, 2026-09-18, looking at the three of them sitting under a
+   *  THE SAME BUTTON, LITERALLY. Hanz, 2026-09-18, looking at the three of them sitting under a
    *  Conditions heading with a chip where the buttons should be: "just put these 3 in the
-   *  materials section with the same buttons." So they are the same two classes, in the same
-   *  order, with the same words -- a row that looked like the others but read differently would
-   *  be the thing he was pointing at.
+   *  materials section with the same buttons." Same class, same word -- a row that looked like
+   *  the others but read differently would be the thing he was pointing at.
    *
-   *  REMOVE IS THE ANSWER GOING TO NO, not the row going away. Un-favouriting a material takes it
-   *  off this list because the library still holds it; there is no library row behind a condition
-   *  -- what "stop this being a default" means for one is that the next blank bid opens answering
-   *  No. The select flipping is the confirmation, and the row stays because it is always offered.
+   *  REMOVE NOW REALLY REMOVES THE ROW, which it did not before. While the Yes/No select was in
+   *  the priced column, Remove wrote the answer to No and left the row sitting there saying No --
+   *  two controls for one answer, and the row stayed on a list of what a new bid opens with while
+   *  saying a new bid does not open with it. With the select gone, "off" is expressed the way a
+   *  material expresses it: the row is not on the list. Remove writes the No and the row goes.
    *
-   *  EDIT PUTS THE CARET IN THE ANSWER. For a material, Edit goes to where the thing is defined,
-   *  which is its Items row. A condition is defined in Kyle's workbook -- the cell is printed
-   *  beside the control and deliberately not offered as a box (see takeoffConditionDefaults) --
-   *  so the only thing here that is ours to change is the answer, and Edit goes to it. */
+   *  AND THE WAY BACK ON IS THE WAY EVERYTHING ELSE COMES ON. A removed condition becomes a
+   *  candidate in this tab's own "Add a takeoff default" search and browse -- see
+   *  defaultCandidates -- so turning one back on is the same motion as making a material a
+   *  default, rather than a second mechanism invented for three rows.
+   *
+   *  THERE IS NO EDIT, AND THAT IS DELIBERATE. Edit on this table means "go to where this thing
+   *  is defined so you can change it": an assembly's panel, a material's Items row. A condition's
+   *  two facts are its answer -- which Remove and the Add path already own -- and its rate, which
+   *  lives in Kyle's workbook and in RATES, with no screen behind it to go to. The Edit this row
+   *  used to carry put the caret in the select beside it; with the select gone it would open
+   *  nothing, and a button that opens nothing is the exact complaint that started this thread. A
+   *  row with one button that works beats a row with one that works and one that lies. */
   function conditionRowActions(c) {
-    return '<button class="btn ghost sm" type="button" data-cond-edit="' + esc(c.key) +
-      '" aria-label="Change what a new bid opens answering for ' + esc(c.label) +
-      '">Edit</button>' +
-      '<button class="btn ghost sm danger" type="button" data-cond-off="' + esc(c.key) +
+    return '<button class="btn ghost sm danger" type="button" data-cond-off="' + esc(c.key) +
       '" aria-label="Stop ' + esc(c.label) +
       ' being on every new bid">Remove</button>';
   }
@@ -2229,6 +2268,20 @@
     ITEMS.forEach(function (it) {
       if (!it.favorite && (!q || String(it.name || "").toLowerCase().indexOf(q) !== -1)) {
         hits.push({ kind: "items", id: it.id, name: it.name, what: "Material" });
+      }
+    });
+    // THE CONDITIONS THAT ARE OFF, AND THIS IS THE WAY BACK ON. With the Yes/No select gone,
+    // Remove is the only thing that turns one off, and without this a condition could be removed
+    // and never restored -- which would be a worse control than the select it replaced.
+    //
+    // THE SAME OFFER THE OTHER TWO KINDS MAKE, on purpose: something not currently a default,
+    // found by name or by browsing, added with one press. `kind` is the plural the click router
+    // already switches on, so a condition is added by the same button that adds a material.
+    // LAST, after the library rows, because a search for a real material should not have three
+    // fixed rows sitting above it.
+    takeoffConditionDefaults().forEach(function (c) {
+      if (!c.on && (!q || String(c.label || "").toLowerCase().indexOf(q) !== -1)) {
+        hits.push({ kind: "conditions", id: c.key, name: c.label, what: "Condition" });
       }
     });
     return { rows: hits.slice(0, DEFAULT_MAX), more: Math.max(0, hits.length - DEFAULT_MAX) };
@@ -2316,8 +2369,9 @@
         // their own. Hanz, 2026-09-18: "die and joint filler are supposed to be materials not
         // something that is default", then "just put these 3 in the materials section with the
         // same buttons." They are what a bid buys, so they are listed with the rest of what a
-        // bid buys, and they carry the Edit/Remove pair every other row on this table carries
-        // instead of a chip that could not be pressed.
+        // bid buys, they price themselves in the same column, and they carry the same Remove --
+        // rather than the chip that could not be pressed. Only the ones a new bid actually buys
+        // are listed; see the filter below.
         rows: ITEMS.filter(function (it) {
           return it.favorite && appliesToWorkType(it, DEFAULT_WT);
         }).map(function (it) {
@@ -2326,9 +2380,15 @@
                      ? L.money(it.unit_cost) + " per " + (it.unit || "unit")
                      : "No cost in the library yet",
                    actions: defaultRowActions("items", it.id, it.name) };
-        }).concat(takeoffConditionDefaults().map(function (c) {
+        }).concat(takeoffConditionDefaults().filter(function (c) {
+          // ONLY THE ONES THAT ARE ON, exactly like `it.favorite` two lines above. This list is
+          // what a new estimate opens with; a condition answering No is not something it opens
+          // with, and listing it anyway was what made the row need a Yes/No of its own to explain
+          // itself. Off means absent here and offered under "Add a takeoff default" instead.
+          return c.on;
+        }).map(function (c) {
           return { name: c.label,
-                   how: conditionControl(c),
+                   how: conditionPriceCell(c),
                    rawHow: true,
                    actions: conditionRowActions(c) };
         })) },
@@ -2872,20 +2932,12 @@
     });
   }
 
-  // THE CONDITIONS' Yes/No, bound to the TBODY and not to each select, because
-  // renderDefaultTakeoff replaces that element's innerHTML and not the element -- a listener
-  // on a control it drew would die on the very first save's repaint. Same rule the labor
-  // listeners below and the bulk-divisions one follow, for the same reason.
-  //
-  // `change`, NOT the page's click delegation. A click on a select opens it; the answer is not
-  // known until the change, and reading it on the click would save the value it had before.
-  if ($("default-takeoff-body")) {
-    $("default-takeoff-body").addEventListener("change", function (e) {
-      var t = e.target;
-      var key = t && t.getAttribute && t.getAttribute("data-cond-key");
-      if (key) setConditionDefault(key, t.value === "yes");
-    });
-  }
+  // NO `change` LISTENER ON THE TAKEOFF TBODY ANY MORE. One lived here for the conditions'
+  // Yes/No selects; the selects came off on 2026-09-19 (Hanz: "remove these yes and no what are
+  // these for?") and a listener whose only arm read `data-cond-key` would now be reading an
+  // attribute this page never renders. Both writes to condition_defaults go through the click
+  // delegation instead -- Remove on a listed row, Add on a removed one -- and both land in
+  // setConditionDefault, which is still the one place that writes them.
 
   // THE LABOR FORM'S TYPING, bound to the tbody rather than to the inputs. renderDefaultLabor
   // replaces that element's innerHTML and not the element, so one listener here outlives every
@@ -3492,8 +3544,16 @@
     if (labDel) { await removeLaborDefault(labDel.getAttribute("data-labor-del")); return; }
     var addBtn = t.closest && t.closest("[data-def-add]");
     if (addBtn) {
-      await setDefault(addBtn.getAttribute("data-def-add"),
-                       addBtn.getAttribute("data-def-id"), true);
+      // TWO SAVERS, ONE BUTTON, because a condition is not a library row: `favorite` is a column
+      // on an items/assemblies row and a condition has no row to carry one. The write is
+      // condition_defaults either way round, and routing here rather than teaching setDefault a
+      // third store keeps each saver owning one table.
+      var addKind = addBtn.getAttribute("data-def-add");
+      if (addKind === "conditions") {
+        await setConditionDefault(addBtn.getAttribute("data-def-id"), true);
+      } else {
+        await setDefault(addKind, addBtn.getAttribute("data-def-id"), true);
+      }
       DEFAULT_Q = "";                      // the row has moved to the list; the hit is spent
       var qbox = $("default-q");
       if (qbox) qbox.value = "";
@@ -3505,16 +3565,6 @@
     var condOff = t.closest && t.closest("[data-cond-off]");
     if (condOff) {
       await setConditionDefault(condOff.getAttribute("data-cond-off"), false);
-      return;
-    }
-    // EDIT IS THE CARET, not a second editor. The answer is the only part of a condition that is
-    // ours to change, and it is already a control in the row beside this button -- so Edit goes
-    // to it rather than opening a panel that would hold the same one select.
-    var condEd = t.closest && t.closest("[data-cond-edit]");
-    if (condEd) {
-      var ck = condEd.getAttribute("data-cond-edit");
-      var sel = document.querySelector('select[data-cond-key="' + ck + '"]');
-      if (sel && sel.focus) sel.focus();
       return;
     }
     var offBtn = t.closest && t.closest("[data-def-off]");

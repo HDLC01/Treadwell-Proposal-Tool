@@ -885,13 +885,15 @@ def test_a_v1_draft_opens_as_a_v2_model(ran):
     #
     # THE BACKFILL IS WHAT MATTERS, NOT THE COUNT. markupChain reads these keys; a draft that
     # simply lacked them would hand it `undefined`, which is falsy and so silently answers "No" to
-    # a question nobody asked. joint_filler in particular ships ON, so an absent key would flip a
-    # real workbook cell the wrong way on every draft written before today.
+    # a question nobody asked. an absent key would flip a real workbook cell the wrong
+    # way on every draft written before today, whichever way the literal points.
     assert (set(after["conditions"]) - set(before["conditions"])
             == {"bond", "dye", "joint_filler", "remove_existing_jf"})
     assert after["conditions"]["bond"] is False
-    assert after["conditions"]["joint_filler"] is True, (
-        "joint filler must arrive ON, the way Kyle's sheet ships and the intake toggle defaulted")
+    assert after["conditions"]["joint_filler"] is False, (
+        "joint filler must arrive OFF. It shipped ON until 2026-09-19 -- the way Kyle's sheet "
+        "ships and the way the intake toggle defaulted -- and moved when the line started "
+        "costing $500 a kit per 3,500 sq ft")
     assert after["conditions"]["dye"] is False
     assert after["conditions"]["remove_existing_jf"] is False
     assert after["contingency"] == 0
@@ -1054,11 +1056,14 @@ def test_the_fresh_model_carries_the_templates_own_labor_seeds(ran):
     # They are stored so the Takeoff step's switches have somewhere to write, and so the one shared
     # cell writer can put their Yes/No into Kyle's workbook from either screen.
     #
-    # joint_filler SHIPS ON. Kyle's sheet ships it on and the intake toggle defaulted to it, so a
-    # new estimate that started it off would quietly drop a kit per 3,500 sq ft from the download.
+    # ALL THREE TAKEOFF CONDITIONS SHIP OFF since 2026-09-19. joint_filler shipped ON before
+    # that, because Kyle's sheet ships Polish!E29 = "Yes" and the intake toggle followed it. That
+    # stopped being a harmless transcription on 2026-09-18, when the condition started charging a
+    # $500 kit per 3,500 sq ft: a 17,500 SF bid opened $2,500 higher than anybody had asked for.
+    # Hanz's call is that all three start off and the estimator switches on what the job needs.
     assert fresh["conditions"] == {"local": True, "hard_bid": False, "prevailing_wage": False,
                                   "taxable": True, "remodel_tax": False, "bond": False,
-                                  "dye": False, "joint_filler": True,
+                                  "dye": False, "joint_filler": False,
                                   "remove_existing_jf": False}
     assert len(fresh["takeoff"]) == 1 and fresh["takeoff"][0]["unit"] == "SF"
 
@@ -1229,10 +1234,10 @@ def test_a_stored_condition_answer_wins_over_the_one_the_tool_ships(ran):
     Defaults tab then shows the shipped answers back whatever anybody sets, and an admin who
     switched joint filler off finds it on in the next bid."""
     c = ran["conditionDefaults"]
-    assert c["shipped"]["joint_filler"] is True and c["shipped"]["dye"] is False, (
-        "freshModel no longer ships joint filler on and dye off, so this fixture is no longer a "
-        "counterexample to anything: %r" % c["shipped"])
-    assert c["seeded"]["joint_filler"] is False, "the stored answer did not beat the shipped one"
+    assert not any(c["shipped"][k] for k in ("joint_filler", "dye", "remove_existing_jf")), (
+        "freshModel no longer ships all three Takeoff conditions off, so this fixture -- which "
+        "sets every one of them ON -- is no longer a counterexample to anything: %r" % c["shipped"])
+    assert c["seeded"]["joint_filler"] is True, "the stored answer did not beat the shipped one"
     assert c["seeded"]["dye"] is True and c["seeded"]["remove_existing_jf"] is True
     assert c["intakeFiveUntouched"], (
         "the merge moved a condition nobody stored an answer for; only the three keys it was "
@@ -1312,7 +1317,7 @@ def test_a_saved_bids_conditions_are_never_touched_by_the_defaults(ran):
         % (s["saved"], s["afterMigrate"]))
     # Named rather than left to the deep compare above, because these three are the ones the
     # Defaults tab can move and the ones whose literals reach Kyle's workbook.
-    assert s["afterMigrate"]["joint_filler"] is True
+    assert s["afterMigrate"]["joint_filler"] is False
     assert s["afterMigrate"]["dye"] is False
     assert s["afterMigrate"]["remove_existing_jf"] is False
     moved = [k for k in ("joint_filler", "dye", "remove_existing_jf")

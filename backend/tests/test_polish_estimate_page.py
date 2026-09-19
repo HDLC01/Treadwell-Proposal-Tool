@@ -1329,7 +1329,9 @@ def test_the_save_writes_the_condition_cells_and_no_others(ran):
         # remove_existing_jf's "No" while joint filler is on: a blank Yes/No cell is not "No" to
         # Kyle's formulas, it is whatever his IF() falls through to.
         "Polish!E25": "No",                         # dye
-        "Polish!E29": "Yes",                        # joint_filler
+        # OFF SINCE 2026-09-19, and the literal is still WRITTEN rather than omitted: a blank
+        # Yes/No cell is not "No" to Kyle's formulas, it is whatever his IF() falls through to.
+        "Polish!E29": "No",                         # joint_filler
         "Polish!F29": "No",                         # remove_existing_jf
     }, "the condition literals do not match the model: %r" % (ran["save"]["cellValues"],)
     # A draft that already carried a worksheet map keeps it, and gains only those same five.
@@ -1443,7 +1445,9 @@ def test_a_v1_model_becomes_v2_with_its_areas_as_measurements(ran):
     # migration that reset a v1 job's answers would change a bid that has already been sent.
     assert m["conditions"] == {"local": False, "hard_bid": True, "prevailing_wage": True,
                               "taxable": False, "remodel_tax": True, "bond": False,
-                              "dye": False, "joint_filler": True,
+                              # Not in the v1 blob, so it comes from freshModel -- which ships
+                              # it off since 2026-09-19.
+                              "dye": False, "joint_filler": False,
                               "remove_existing_jf": False}, (
         "the v1 job conditions were not preserved: %r" % m["conditions"])
     assert m["contingency"] == 0 and m["totals"] == {}
@@ -1799,10 +1803,13 @@ def test_the_remodel_tax_uses_the_countys_real_rate_not_the_sheets_ten_percent(r
     c = ran["remodelRate"]["county"]
     assert c["pct"] == "7.975%", "a Johnson County job is not charged the county rate: %r" % c["pct"]
     assert c["pct"] == c["expectedPct"]
-    # $1,529 before 2026-09-18 -- joint_filler ships ON and now adds $2,500 to the material
-    # this fixture prices, which moves the sub-total and, through it, GP and this remodel line.
-    assert c["money"] == "$1,715" and c["expectedMoney"] == 1715
-    assert c["total"] == "$38,541" and c["expectedTotal"] == 38541, (
+    # BACK TO $1,529 ON 2026-09-19. It was $1,529 before 2026-09-18, then $1,715 while
+    # joint_filler shipped ON and added $2,500 of material to this fixture, and now $1,529 again
+    # because the condition ships off. The $2,500 is not the whole of the $186 swing -- it moves
+    # the sub-total, and GP, shipping and the taxes all follow it -- which is exactly why the
+    # figure is worth pinning rather than recomputing in the test.
+    assert c["money"] == "$1,529" and c["expectedMoney"] == 1529
+    assert c["total"] == "$33,239" and c["expectedTotal"] == 33239, (
         "the total does not follow the county rate through the chain")
     assert c["rowNamesTheCounty"], (
         "the row does not say which county the rate came from; an estimator who knows the workbook "
@@ -1817,8 +1824,9 @@ def test_with_no_county_it_falls_back_to_the_state_rate_and_says_so(ran):
     it matches the sheet, while being wrong everywhere."""
     f = ran["remodelRate"]["fallback"]
     assert f["pct"] == "6.5%", "the no-county fallback is not the Kansas state rate: %r" % f["pct"]
-    # $1,247 before 2026-09-18 -- same joint_filler-priced-by-default shift as the county case.
-    assert f["money"] == "$1,398" and f["expectedMoney"] == 1398
+    # $1,247 before 2026-09-18 and again from 2026-09-19 -- the same joint-filler-by-default
+    # shift as the county case above, in reverse.
+    assert f["money"] == "$1,247" and f["expectedMoney"] == 1247
     assert f["expectedMoney"] != f["whatTenPercentWouldBe"], (
         "the fallback charges what the sheet's 10% would have charged (%s), so this test proves "
         "nothing" % f["whatTenPercentWouldBe"])
@@ -2077,17 +2085,16 @@ def test_a_brand_new_bid_opens_with_the_conditions_the_library_says(ran):
     answers for a new bid are set on the Library page's Defaults tab, and this is the page that
     has to take them.
 
-    EVERY STORED ANSWER IN THE FIXTURE DISAGREES WITH WHAT THE TOOL SHIPS -- joint filler ships ON
-    and the library says off, dye and remove-existing ship off and the library says on. A fixture
-    that agreed with freshModel would pass just as happily against a seeder that was never wired
-    up at all.
+    EVERY STORED ANSWER IN THE FIXTURE DISAGREES WITH WHAT THE TOOL SHIPS. All three ship OFF
+    since 2026-09-19 and the library says on for all three. A fixture that agreed with freshModel
+    would pass just as happily against a seeder that was never wired up at all.
 
     Mutation: delete the `if (conditionDefaults)` block from init(). Every new bid then opens with
     the shipped literals whatever anybody sets, and the Defaults tab is decoration."""
     c = ran["conditionDefaults"]["brandNew"]
     assert c["fetched"], "a blank bid never asked for the stored answers"
-    assert c["conditions"]["joint_filler"] is False, (
-        "the library's 'off' did not reach a brand new bid, so the Defaults tab changes nothing")
+    assert c["conditions"]["joint_filler"] is True, (
+        "the library's 'on' did not reach a brand new bid, so the Defaults tab changes nothing")
     assert c["conditions"]["dye"] is True
     assert c["conditions"]["remove_existing_jf"] is True
     # The five answered on Intake are not this tab's to move.
@@ -2135,20 +2142,29 @@ def test_a_cell_answer_still_beats_the_library_on_a_blank_bid(ran):
     those, and the next save would make it permanent in Kyle's workbook.
 
     ALL THREE CELLS ANSWERED, not one -- exactly what a real step-1 save on the live intake screen
-    leaves behind (Polish!E29=Yes, Polish!E25=No, Polish!F29=No), and the library's stored default
-    is the OPPOSITE of every one of them. A fixture that answered only one of the three could pass
-    against a page that seeded the other two from the library regardless of what their cells said.
+    leaves behind (Polish!E29=No, Polish!E25=No, Polish!F29=Yes). A fixture that answered only one
+    of the three could pass against a page that seeded the other two from the library regardless
+    of what their cells said.
 
-    Mutation: swap the two calls in init() so seedConditionDefaults runs outermost. All three then
-    come back flipped and every cell answer the estimator gave is gone."""
+    AND THE LIBRARY LIST IS NARROWED ON PURPOSE, which is the part that keeps this honest now that
+    all three conditions SHIP OFF. joint_filler and dye have a library row saying ON against a
+    cell saying "No": `False` there can only mean the cell beat the library. remove_existing_jf
+    has NO library row and a cell saying "Yes": `True` there can only mean the cell was read at
+    all. The first pair alone could not show that second thing -- `False` is also what a page that
+    read neither the cell nor the library would produce -- and before 2026-09-19 it did not need
+    to, because the shipped answer for joint_filler was the opposite of the cell's.
+
+    Mutation: swap the two calls in init() so seedConditionDefaults runs outermost. joint_filler
+    and dye come back flipped and every cell answer the estimator gave is gone."""
     c = ran["conditionDefaults"]["celled"]
     assert c["fetched"], "the library was never asked for its stored answers"
     assert c["dye"] is False, (
-        "the library's answer was written over the 'No' already in Polish!E25")
-    assert c["jointFiller"] is True, (
-        "the library's answer was written over the 'Yes' already in Polish!E29")
-    assert c["removeExistingJf"] is False, (
-        "the library's answer was written over the 'No' already in Polish!F29")
+        "the library's 'on' was written over the 'No' already in Polish!E25")
+    assert c["jointFiller"] is False, (
+        "the library's 'on' was written over the 'No' already in Polish!E29")
+    assert c["removeExistingJf"] is True, (
+        "the 'Yes' already in Polish!F29 never reached the model, so the cells are not being "
+        "read at all")
 
 
 @needs_node

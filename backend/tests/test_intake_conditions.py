@@ -124,16 +124,37 @@ def test_the_five_original_flags_are_asked_of_every_work_type(cond):
 
 # ── the defaults match the template, which is the point of them ────────────
 @needs_node
-def test_joint_filler_defaults_on_because_the_template_ships_it_on(cond, sheet):
-    """The sharpest regression risk in this change.
+def test_joint_filler_defaults_off_even_though_the_template_ships_it_on(cond, sheet):
+    """THIS TEST USED TO ASSERT THE OPPOSITE, and the reversal is the whole of what changed.
 
-    The beta's condition defaults are `local:true, taxable:true` and everything else false. Carry
-    that convention to `joint_filler` and the form starts writing ``Polish!E29 = "No"`` to every
-    polish job -- silently REMOVING joint filler from jobs that get it today. The template's own
-    value is the authority, so it is read here rather than restated.
+    It read: "the template's own value is the authority", and on that reasoning joint_filler
+    defaulted ON because Kyle's Polish!E29 ships "Yes". The template still says Yes -- asserted
+    below, because that fact has not changed and a silent drift in the workbook should still be
+    caught here.
+
+    WHAT CHANGED IS THAT THE LINE STARTED COSTING MONEY. On 2026-09-18 the beta engine began
+    charging joint filler at a $500 kit per 3,500 sq ft (jointFillerCost, Kyle's C29), so "on by
+    default" stopped being a harmless transcription of a Yes/No cell and became $2,500 on a
+    17,500 SF bid that nobody had chosen and no screen had made anybody decide. Hanz's call on
+    2026-09-19: all three Takeoff conditions start off, and the estimator switches on what the
+    job actually needs.
+
+    THE TEMPLATE IS STILL THE AUTHORITY ON THE OTHER FIVE -- see the test directly below, which
+    reads local/hard_bid/taxable straight off the sheet. It is this one condition where a cell
+    that is only a flag in Kyle's hands is a priced line in ours.
+
+    THE WORKBOOK STILL GETS ITS LITERAL either way: conditionCells writes "No" rather than
+    leaving E29 blank, because a blank Yes/No cell is not "No" to Kyle's formulas.
+
+    Mutation: set `def: true` back on joint_filler in index.js. This goes red, and so do the
+    remodel-tax dollar figures in test_polish_estimate_page.
     """
-    assert str(sheet["Polish"]["E29"].value).strip().lower() == "yes"
-    assert cond["defaults"]["joint_filler"] is True
+    assert str(sheet["Polish"]["E29"].value).strip().lower() == "yes", (
+        "Kyle's template no longer ships Polish!E29 as Yes -- this test's whole premise is that "
+        "it does and that we deliberately differ from it")
+    assert cond["defaults"]["joint_filler"] is False, (
+        "joint filler is on by default again. It charges a $500 kit per 3,500 sq ft, so that is "
+        "$2,500 on a 17,500 SF bid nobody asked for")
 
 
 @needs_node
@@ -340,6 +361,9 @@ def test_removing_existing_filler_goes_inert_when_there_is_no_filler(cond):
     estimator an input is not affecting the price instead of removing it and losing what was set.
     """
     i = cond["inert"]
+    # SWITCHED ON FIRST BY THE FIXTURE. joint filler ships off since 2026-09-19, so remove-existing
+    # is inert the moment the step opens; the harness turns joint filler on to build the
+    # precondition and then off again, which is the transition this test is about.
     assert i["beforeInert"] is False
     assert i["afterInert"] is True
     assert i["afterStillRendered"] is True, "hiding it loses the setting; grey it out instead"
@@ -450,10 +474,12 @@ def test_the_admin_default_reaches_a_genuinely_fresh_load(cond):
     branch shipped."""
     c = cond["adminDefaultReachesFreshLoad"]
     assert c["fetched"] is True, "a fresh load never asked for the admin default"
-    assert c["jointFiller"] is False, "ships True; the admin's False never reached condState"
+    # ALL THREE SHIP FALSE since 2026-09-19 and the fixture sets all three ON, so every one of
+    # these can only be explained by the admin row having been read.
+    assert c["jointFiller"] is True, "ships False; the admin's True never reached condState"
     assert c["dye"] is True, "ships False; the admin's True never reached condState"
     assert c["removeExistingJf"] is True, "ships False; the admin's True never reached condState"
-    assert c["cells"]["Polish!E29"] == "No", "joint filler's admin default never reached the cell"
+    assert c["cells"]["Polish!E29"] == "Yes", "joint filler's admin default never reached the cell"
     assert c["cells"]["Polish!E25"] == "Yes", "dye's admin default never reached the cell"
     assert c["cells"]["Polish!F29"] == "Yes", (
         "remove-existing-jf's admin default never reached the cell")

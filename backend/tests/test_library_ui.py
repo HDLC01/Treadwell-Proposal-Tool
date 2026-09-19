@@ -3116,6 +3116,18 @@ def test_the_takeoff_conditions_are_editable_and_say_no_such_thing_as_built_in(r
     still carrying the chip: "I told you to remove the built-in and keep and make everything
     editable in the takeoff."
 
+    AND THE YES/NO WENT WITH IT, 2026-09-19. Hanz, looking at the three selects: "remove these
+    yes and no what are these for?" The column they sat in is headed "How it is priced" and every
+    other row in it answers that question; a Yes/No answers a different one, in a control that
+    made the row read like a form. So the cell now says what the line costs -- $500.00 a kit,
+    $0.14 a square foot -- and whether a new bid buys it is said by the row being listed at all,
+    exactly as a favourited material says it.
+
+    THE FIGURES ARE THE ENGINE'S OWN. RATES.JOINT_FILLER_KIT_COST and RATES.DYE_PER_SF are what
+    jointFillerCost and dyeCost charge, reached here through the real module, so a page showing a
+    rate the bid does not charge cannot pass. A second copy of a rate is the one thing on an
+    estimating screen that goes stale without looking stale.
+
     EXECUTED, not read. These assertions come off the RENDERED row, because a regex over the
     renderer's source cannot tell a wired control from a dead one -- which is exactly how the
     "+ Add a labor line" button shipped green on this same tab and Hanz had to report it twice.
@@ -3124,25 +3136,68 @@ def test_the_takeoff_conditions_are_editable_and_say_no_such_thing_as_built_in(r
     THE ANSWER IS EDITABLE; THE CELL IS NOT. Polish!E29 is a fact about the workbook Kyle
     maintains. A second box pointing the joint-filler answer somewhere else would write a Yes/No
     literal over one of his formulas, and nothing on any screen would say so -- so the cell is
-    printed beside the control rather than offered as an input.
+    printed beside the price rather than offered as an input.
 
-    Mutation: put `actions: '<span class="builtin">Built in</span>'` back on the Conditions group
-    and drop `conditionControl` from `how`."""
+    Mutation: put `actions: '<span class="builtin">Built in</span>'` back on the Conditions group,
+    or put the select back in conditionPriceCell."""
     t = ran["defaultsTakeoffList"]
-    assert t["conditionsCarryAControl"], (
-        "the three Takeoff conditions render nothing to press, so they are still built in")
+    assert t["conditionsAreListedWhenOn"], (
+        "a condition an admin has switched on is not listed among the defaults, so the Defaults "
+        "tab is not showing what a new bid opens with")
     assert t["noBuiltInChip"], (
         "a 'Built in' chip is still on the Takeoff defaults table")
+    assert t["noYesNoSelect"], (
+        "a Yes/No select is still in the priced column -- Hanz: \"remove these yes and no what "
+        "are these for?\"")
     assert t["saysWhichCellItWrites"], (
         "the row no longer says which workbook cell the answer lands in")
     assert t["cellIsNotAnInput"], (
         "the workbook cell is offered as an editable field; re-pointing an answer would write a "
         "Yes/No literal over one of Kyle's formulas")
-    # The shipped answers, read out of the REAL freshModel by the harness rather than typed into
-    # a fixture. A page that got these backwards would be telling an estimator the opposite of
-    # what their next bid does.
-    assert t["jointFillerOpensYes"], "joint filler ships ON and the control does not say so"
-    assert t["dyeOpensNo"], "dye ships off and the control does not say so"
+    # THE COLUMN ANSWERS ITS OWN HEADING. These figures come out of the REAL RATES through the
+    # real module -- a rate restated on the page instead of read from the engine would pass a
+    # test that typed the number here and fail an estimator reading the bid.
+    assert t["jointFillerShowsItsKitPrice"], (
+        "joint filler does not say what a kit costs, in a column headed 'How it is priced'")
+    assert t["jointFillerSaysWhatTheKitCovers"], (
+        "the kit price is shown with nothing to divide it by, so the row says $500 without "
+        "saying $500 of what")
+    assert t["dyeShowsItsRate"], "dye does not say what it costs per square foot"
+    assert t["removeExistingSaysItHasNoMaterialCost"], (
+        "remove-existing shows a material cost it does not have, or shows nothing at all; it is "
+        "a labor modifier and the row has to say where it IS priced")
+
+
+@needs_node
+def test_all_three_takeoff_conditions_ship_off_and_are_therefore_unlisted(ran):
+    """THE PRICING HALF OF Hanz's 2026-09-19 decision, and the reason the selects could go.
+
+    joint_filler shipped ON until today, transcribed faithfully from Kyle's template, which has
+    Polish!E29 = "Yes". That was right while the condition moved no money and wrong from the
+    moment it did: since 2026-09-18 jointFillerCost charges one $500 kit per 3,500 sq ft, so
+    every new polish bid was quietly carrying $2,500 on a 17,500 SF floor that nobody had asked
+    for and no screen had made anybody decide. All three now start off and the estimator switches
+    on what the job needs, on the estimate's own Takeoff step.
+
+    READ THROUGH THE REAL freshModel, never restated here, so a literal put back in
+    polish-bid-core reds this rather than passing against a copy. And asserted on a fixture that
+    overrides NOTHING -- the test above switches all three on so there are rows to look at, which
+    is the other half of the same claim.
+
+    Mutation: set `joint_filler: true` in freshModel().conditions. `noneOfThemOn` goes red, and
+    so does the $2,500 that moves through test_polish_estimate_page's remodel-tax figures."""
+    s = ran["defaultsShippedConditions"]
+    assert s["offersTheThree"] == "dye,joint_filler,remove_existing_jf", (
+        "the Defaults tab no longer offers the same three conditions: %r" % s["offersTheThree"])
+    assert s["noneOfThemOn"], (
+        "a Takeoff condition still ships ON. joint_filler is the one that costs money: it adds a "
+        "$500 kit per 3,500 sq ft to a bid nobody has priced yet")
+    assert s["shippedOffMeansUnlisted"], (
+        "a condition that ships off is still listed among the defaults; the list is supposed to "
+        "be what a new bid opens WITH")
+    assert s["andTheListIsEmptyRatherThanBroken"], (
+        "the takeoff defaults table rendered something unexpected for a library with no "
+        "favourites and no overrides")
 
 
 @needs_node
@@ -3158,10 +3213,18 @@ def test_the_three_conditions_are_materials_with_the_same_two_buttons(ran):
     word.
 
     SLICED OUT OF THE RENDERED TABLE, between the Materials heading and the next one, so a row
-    that merely exists somewhere in the list cannot pass. And the buttons are matched CHARACTER
-    FOR CHARACTER against what defaultRowActions draws for a material -- same classes, same words,
-    same order -- because "the same buttons" is the request, and a lookalike that read "Delete" or
-    dropped the danger class is the inconsistency he was pointing at.
+    that merely exists somewhere in the list cannot pass. And Remove is matched CHARACTER FOR
+    CHARACTER against what defaultRowActions draws for a material -- same classes, same word --
+    because "the same buttons" is the request, and a lookalike that read "Delete" or dropped the
+    danger class is the inconsistency he was pointing at.
+
+    EDIT IS GONE, AND THAT IS THE FIX RATHER THAN A GAP. Edit on this table means "go to where
+    this thing is defined so you can change it": an assembly's panel, a material's Items row. A
+    condition's answer is what Remove and the Add path already own, and its rate lives in Kyle's
+    workbook and in RATES with no screen behind it to go to. The Edit it used to carry put the
+    caret in the select beside it; with the select gone it would open nothing -- and a button that
+    opens nothing is the complaint that started this entire thread. One button that works beats
+    one that works and one that lies.
 
     Mutation: put the Conditions group back in takeoffDefaultGroups, or swap conditionRowActions
     for the old '<span class="wtall">Every new bid</span>'."""
@@ -3169,14 +3232,22 @@ def test_the_three_conditions_are_materials_with_the_same_two_buttons(ran):
     assert t["conditionsSitUnderMaterials"], (
         "the three conditions are not under the Materials heading")
     assert t["noConditionsHeading"], "a Conditions heading is still drawn"
-    assert t["conditionsCarryTheSameButtons"], (
-        "a condition row does not carry the same Edit/Remove pair a material row does")
+    assert t["conditionsCarryTheSameRemove"], (
+        "a condition row does not carry the same Remove button a material row does")
+    assert t["noDeadEditOnAConditionRow"], (
+        "an Edit button is still on a condition row. There is nowhere for it to go now that the "
+        "select it used to focus is gone, so it would open nothing")
     assert t["noEveryNewBidChip"], (
         "the 'Every new bid' chip is still in the actions column, where the buttons go")
     assert t["removeIsRoutedToTheSaver"], (
         "Remove has no handler -- a button with nothing behind it renders exactly like a live "
         "one, which is how '+ Add a labor line' shipped green")
-    assert t["editIsRoutedToTheAnswer"], "Edit has no handler"
+    assert t["addIsRoutedToTheSaver"], (
+        "the Add path does not route a condition to setConditionDefault, so a condition that was "
+        "removed could never be put back -- a worse control than the select it replaced")
+    assert t["noStaleChangeListener"], (
+        "a `change` listener is still reading data-cond-key, an attribute this page no longer "
+        "renders; dead wiring reads exactly like live wiring")
 
 
 @needs_node
@@ -3188,27 +3259,52 @@ def test_changing_a_condition_default_saves_it_and_a_refusal_puts_it_back(ran):
     chances for the Library page to describe a bid it does not agree with, and a page claiming
     joint filler ships off while every new bid opens with it on is worse than no page at all.
 
-    A REFUSED SAVE PUTS THE CONTROL BACK and says why, which is this page's standing rule for a
-    failed write: a switch that keeps the new value after the server said no tells an admin every
+    BOTH DIRECTIONS, BECAUSE BOTH ARE NOW BUTTONS. With the Yes/No select gone, "on" is the row
+    being listed and "off" is it not being there, so Remove takes it off and the Add path puts it
+    back. The second half is the one that did not exist while the select did the work, and without
+    it a condition could be removed and never restored -- which would be a worse control than the
+    one it replaced.
+
+    A REFUSED SAVE PUTS THE ROW BACK and says why, which is this page's standing rule for a
+    failed write: a list that keeps the new state after the server said no tells an admin every
     new bid now opens differently when it does not, and they would find that out from a bid.
 
     Mutation: drop the `renderDefaultTakeoff()` from setConditionDefault's catch. The refused save
-    leaves the wrong answer on screen and `refusedSavePutsItBack` goes red."""
+    leaves the wrong list on screen and `refusedSavePutsItBack` goes red."""
     c = ran["conditionDefaults"]
     assert c["storedOverrideWins"], (
-        "a stored 'off' for joint filler did not beat the shipped 'on', so the tab is showing an "
-        "answer no new bid actually opens with")
+        "a stored 'on' for joint filler did not beat the shipped 'off', so the tab is showing a "
+        "set of defaults no new bid actually opens with")
     assert c["untouchedOnesKeepShipped"], (
         "overriding one condition moved the two nobody touched")
-    assert c["startsFromShipped"] and c["pressFlipsTheRow"], (
-        "the change did not reach the rendered row; a handler that wrote the variable and forgot "
+    assert c["startsListed"] and c["removeTakesTheRowOff"], (
+        "Remove did not reach the rendered table; a handler that wrote the variable and forgot "
         "to repaint looks identical until the next reload")
     assert c["wroteTheServer"], (
         "the press sent no write, or sent the wrong body -- a dead control renders exactly like a "
         "live one")
     assert c["keepsOneRowPerCondition"], (
         "the press appended a second row for the same condition instead of replacing it")
-    assert c["refusedSavePutsItBack"], "a refused save left the new answer on screen"
+    # THE WAY BACK ON. Remove is the only thing that turns a condition off now, so a missing add
+    # arm is not an inconvenience -- it is a default that can be destroyed and not rebuilt.
+    assert c["startsUnlisted"] and c["addPutsTheRowBack"], (
+        "adding a condition back did not reach the rendered table, so Remove is a one-way door")
+    assert c["addWroteTheServer"], "adding a condition back sent no write, or the wrong body"
+    assert c["addedRowIsPriced"], (
+        "a condition put back shows no price, so the row it returns as is not the row it left as")
+    assert c["browseOffersTheConditions"], (
+        "the Add-a-default browse does not offer the conditions that are off, so there is no way "
+        "to turn one back on at all")
+    assert c["browseNamesThemAsConditions"], (
+        "a condition in the add list is not labelled as one, so it reads as a library row that "
+        "could be opened and edited")
+    assert c["browseSkipsAConditionAlreadyOn"], (
+        "the add list offers a condition that is already a default; nothing else on this list is "
+        "offered twice")
+    assert c["searchFindsACondition"], (
+        "typing a condition's name into the defaults search finds nothing, so the box is a dead "
+        "end for exactly the three rows that have no other way in")
+    assert c["refusedSavePutsItBack"], "a refused save left the new state on screen"
     assert c["refusedSaveSaysSo"], "a refused save said nothing"
     assert c["refusedSaveDropsTheOptimisticRow"], (
         "a refused save left its optimistic row in the page's list, so the next repaint shows an "

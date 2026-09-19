@@ -177,8 +177,21 @@
       why: "Two coats of dye across the polished area.",
       def: false, cells: ["Polish!E25"], on: "Yes", off: "No" },
     { key: "joint_filler", label: "Joint filler", scope: ["polish", "combo"],
-      why: "One kit per 3,500 sq ft. On by default, which is how the sheet ships.",
-      def: true,  cells: ["Polish!E29"], on: "Yes", off: "No" },
+      // OFF BY DEFAULT SINCE 2026-09-19, and it was `def: true` until then -- "On by default,
+      // which is how the sheet ships", which was a faithful reading of Kyle's template
+      // (Polish!E29 ships "Yes") and the wrong default for a tool that prices the line itself.
+      // The beta charges a $500 kit per 3,500 sq ft for it, so on a 17,500 SF floor "on by
+      // default" was $2,500 nobody had chosen. Hanz's call was all three of these start off.
+      //
+      // FLIPPED HERE TOO, AND THAT IS THE POINT. polish-bid-core's freshModel() is the other
+      // place this answer is stated, and the two must agree: this screen writes Polish!E29 the
+      // instant any of the ten switches is touched, so a `true` left here would put the $2,500
+      // back into Kyle's workbook on the live intake path while the beta showed it off. Two
+      // copies of one fact is what this repo keeps paying for; they are kept in step by hand
+      // because the two screens' condition lists are genuinely different shapes -- this one
+      // carries ten questions with per-job answers, that one carries nine model keys.
+      why: "One kit per 3,500 sq ft. Off until the job needs it.",
+      def: false, cells: ["Polish!E29"], on: "Yes", off: "No" },
     { key: "remove_existing_jf", label: "Remove existing joint filler", scope: ["polish", "combo"],
       why: "Adds a fourth hand to the joint-filler crew.",
       def: false, cells: ["Polish!F29"], on: "Yes", off: "No", needs: "joint_filler" },
