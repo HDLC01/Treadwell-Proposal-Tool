@@ -61,6 +61,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
+import acceptance_signature
 import analytics_export
 import audit
 import basisboard_client
@@ -2955,24 +2956,41 @@ async def api_admin_deposit_invoice(request: Request) -> Response:
                     headers={"Content-Disposition": f'inline; filename="Treadwell Invoice {no}.{ext}"'})
 
 
-# ─── Signed contract (the proposal + its signature certificate) ───────
+# ─── Signed contract (the proposal, signed on its own acceptance block) ──
 # The portal owns the SIGNATURE: it shows the consent sentence, takes the typed
 # name, and records the address, browser and timestamps. It does not own
 # DOCUMENTS — it ships without python-docx, LibreOffice or pypdf — so the paper
 # is made here, the same split as the proposal PDF and the deposit invoice.
 #
-# WHY THE PROPOSAL IS UPLOADED RATHER THAN RE-RENDERED, which is the whole point
-# of the endpoint: the customer signed one specific PDF, and the certificate
-# prints that PDF's SHA-256. If this handler rebuilt those pages from the draft
-# it could produce a document that does not hash to the value printed beside it,
-# and the certificate would then be evidence against us rather than for us. The
-# uploaded bytes are the source of truth; pypdf copies their pages across
-# object-for-object and nothing re-flows them.
+# NO CERTIFICATE PAGE ANY MORE (2026-09-19). This used to append an Electronic
+# Signature Certificate carrying the signer, both timestamps, the IP address, the
+# browser string, the consent paragraph and two SHA-256 digests. Hanz read one:
+# "we dont need another page for the signatory", "I think the signature goes
+# here?" — pointing at the ACCEPTANCE / SIGNATURE / DATE / PRINTED NAME / TOTAL
+# row Kyle already prints on the form — and "this is too much information... Just
+# the basic information is what we need". So four values go onto the row that was
+# always there and the page is gone. NONE of the evidence is lost: every field is
+# still required and still validated by `certificate_writer.field_problems`, and
+# the portal still stores the whole record on its approval row. It is only no
+# longer printed.
 #
-# WHY NOT `docx_merge`. Its own header says it: it can put a document in FRONT of
-# the proposal safely, and appending after the body would mean relocating the
-# body-level `w:sectPr` in Kyle's fragile templates. Joining two already-rendered
-# PDFs never opens that XML at all.
+# WHY THE PROPOSAL IS UPLOADED RATHER THAN RE-RENDERED, which is still the whole
+# point of the endpoint: the customer signed one specific PDF, and the portal
+# stores that PDF's SHA-256 against the approval. If this handler rebuilt those
+# pages from the draft it could produce a document that does not hash to the
+# value recorded beside it, and the record would then be evidence against us
+# rather than for us. The uploaded bytes are the source of truth; pypdf copies
+# their pages across object-for-object, and the one page that is written on keeps
+# its own content stream byte-for-byte with the four values appended after it
+# (see `acceptance_signature`).
+#
+# NOT THE LAST PAGE. A Direct Epoxy proposal is four pages: the FORM is page 1
+# and pages 2-4 are Terms & Conditions on blank letterhead. Signing "the last
+# page" would put the customer's name on the back of the Terms, on blank paper,
+# and every naive test would still pass. The index is not fixed either — the
+# cover letter is prepended into the proposal's own bytes — so it is derived from
+# the draft this PDF was rendered from and then CHECKED against the document
+# itself before anything is drawn.
 
 # A proposal PDF is a few hundred KB; the largest seen with photo attachments is
 # under 8 MB. The ceiling is a guard against a runaway upload filling memory, not
@@ -3014,18 +3032,29 @@ def _contract_error(status: int, message: str) -> JSONResponse:
 
 @app.post("/api/admin/signed-contract")
 async def api_admin_signed_contract(request: Request) -> Response:
-    """Proposal PDF + Electronic Signature Certificate, as one PDF.
+    """The proposal, signed on its own acceptance block. Same pages in and out.
 
     multipart/form-data, SERVICE_TOKEN-gated (in `_AUTH_PUBLIC_PATHS`, so it skips
-    the Google gate):
+    the Google gate). THE WIRE FORMAT IS UNCHANGED — the portal is deployed
+    against it:
       * `proposal_pdf` — the exact bytes of the PDF the customer opened. Its
         Terms & Conditions are already in it; nothing is added to the proposal.
       * `certificate`  — JSON, the signing facts. See
-        `certificate_writer.REQUIRED_FIELDS`.
+        `certificate_writer.REQUIRED_FIELDS`. Every field is still required and
+        still validated; four of them are printed.
 
-    200 → application/pdf: every page of `proposal_pdf`, unchanged, then the one
-    certificate page. 401 unauthorized · 400 a named fault in the request ·
-    502 {"ok": false, "error": "render_failed"} if the document could not be made.
+    200 → application/pdf: every page of `proposal_pdf`, with SIGNATURE, DATE,
+    PRINTED NAME and TOTAL written onto the acceptance row of the form page.
+    401 unauthorized · 400 a named fault in the request, including a proposal
+    whose form has no acceptance block · 502 with a sentence when we could not
+    produce the document.
+
+    ONLY THE DIRECT FORM CAN BE SIGNED. Kyle's GC and Gyp forms have no
+    acceptance row, so those proposals approve exactly as they always did and no
+    signed contract is produced — the same treatment Budget Pricing already gets
+    for having no Terms and Conditions. The portal decides this before it calls
+    (`signing.signing_blocked_reason`); the check here is the guard that stops a
+    stale portal from getting a signature drawn on blank letterhead.
 
     EVERYTHING IS VALIDATED BEFORE ANYTHING IS BUILT. A publish here once wrote
     the row, refused the attachment afterwards and still returned 200 — the
@@ -3089,52 +3118,95 @@ async def api_admin_signed_contract(request: Request) -> Response:
     if not proposal_pages:
         return _contract_error(400, "proposal_pdf has no pages")
 
-    template = proposal_writer.TEMPLATES_ROOT / certificate_writer.TEMPLATE_NAME
-    if not template.is_file():
-        log.error("signed-contract: %s is missing from templates/", certificate_writer.TEMPLATE_NAME)
-        return _contract_error(502, "render_failed")
-
+    # WHICH PAGE CARRIES THE BLOCK IS A PROPERTY OF THE DRAFT, NOT OF THE UPLOAD.
+    # `proposal_id` IS the draft id — the portal passes the same string to
+    # /api/admin/proposal-pdf?draft_id= — so the payload that BUILT this PDF is
+    # readable here, and it is the only thing that knows both which template was
+    # filled and whether a cover letter was prepended in front of it. Read at the
+    # same revision the PDF was rendered at, for the same reason that endpoint
+    # takes one: the live draft may have moved on since the customer opened it.
+    draft_id = str(cert.get("proposal_id") or "")
+    rev_no = cert.get("revision_no")
     try:
-        with _PDF_RENDER_SEM:
-            cert_pdf = certificate_writer.build_certificate_pdf(cert, template)
-        cert_reader = pypdf.PdfReader(io.BytesIO(cert_pdf))
-        cert_pages = list(cert_reader.pages)
-        if not cert_pages:
-            raise RuntimeError("the certificate render produced a PDF with no pages")
+        row = (drafts.get_revision(draft_id, int(rev_no)) if rev_no
+               else drafts.load_draft(draft_id))
+    except Exception as exc:  # noqa: BLE001
+        log.exception("signed-contract: could not read proposal %s (%s: %s)",
+                      _log_safe(draft_id), type(exc).__name__, exc)
+        return _contract_error(
+            502, "We could not look up the proposal this signature belongs to. "
+                 "Nothing was signed; please try again shortly.")
+    if not row:
+        log.warning("signed-contract: no draft/revision on file for proposal %s revision %s",
+                    _log_safe(draft_id), _log_safe(rev_no))
+        return _contract_error(
+            400, "We have no proposal on file under that id, so there is no form to sign.")
+
+    payload = (row.get("data") or {}).get("proposal_payload")
+    if not (isinstance(payload, dict) and payload.get("values")):
+        log.error("signed-contract: proposal %s has no generated proposal_payload — "
+                  "cannot tell which template was filled", _log_safe(draft_id))
+        return _contract_error(
+            502, "This proposal has no generated document on file, so we cannot tell which "
+                 "form was signed. Nothing was signed.")
+
+    work_type = payload.get("work_type")
+    audience = payload.get("audience")
+    try:
+        signable = acceptance_signature.template_has_acceptance_block(work_type, audience)
+    except acceptance_signature.AcceptanceError as exc:
+        log.warning("signed-contract: refused proposal %s — %s", _log_safe(draft_id), exc)
+        return _contract_error(400, str(exc))
+    if not signable:
+        # NAMED, not a code. The customer is on an "approving…" spinner and the
+        # portal renders this sentence unchanged.
+        log.info("signed-contract: %s/%s has no acceptance block — refusing proposal %s",
+                 _log_safe(work_type), _log_safe(audience), _log_safe(draft_id))
+        return _contract_error(
+            400, "This proposal form has no signature line on it — only Treadwell's "
+                 "direct-to-owner proposals carry one — so it cannot be signed as a contract. "
+                 "Send us a message in this project's thread and we will get you a signable copy.")
+
+    # The cover letter is page 1 of the proposal's own bytes when it is on, so the
+    # form is index 1 rather than 0. `verify_acceptance_page` re-derives this from
+    # the document and refuses if the two disagree.
+    page_index = 1 if payload.get("cover_letter_enabled") else 0
+
+    # The SAME field shaping the certificate used: one cleaner, one money format.
+    # A second one here is how the total on the contract comes to disagree with
+    # the total on the approval row.
+    fields = certificate_writer.certificate_fields(cert)
+    try:
+        signed = acceptance_signature.sign_acceptance_page(
+            proposal_bytes, page_index,
+            signer_name=fields["signer_name"],
+            date_text=acceptance_signature.acceptance_date(fields["signed_at_central"]),
+            total_text=fields["total"])
+    except acceptance_signature.AcceptanceError as exc:
+        # OUR sentence, written for a person — not library text. It names the page
+        # it would not sign, which is the one fact an on-call needs.
+        log.warning("signed-contract: refused to sign proposal %s at page %d (%s: %s)",
+                    _log_safe(draft_id), page_index + 1, type(exc).__name__, exc)
+        return _contract_error(502, str(exc))
     except Exception as exc:  # noqa: BLE001
         # Type AND message: "refused" on its own has cost an SSH session and a
-        # container probe before, and LibreOffice's failures all look alike from
-        # the outside.
-        log.exception("signed-contract: certificate render failed for proposal %s (%s: %s)",
-                      _log_safe(cert.get("proposal_id") if isinstance(cert, dict) else "?"),
-                      type(exc).__name__, exc)
+        # container probe before.
+        log.exception("signed-contract: signing failed for proposal %s (%s: %s)",
+                      _log_safe(draft_id), type(exc).__name__, exc)
         return _contract_error(502, "render_failed")
 
-    if len(cert_pages) != 1:
-        # Contained, not hidden. Every page is appended — dropping a page of the
-        # evidence record would be the worse failure — but the template is budgeted
-        # for one page (see prepare_signature_certificate_template) and a second one
-        # means a field arrived far longer than anything seen so far.
-        log.warning("signed-contract: the certificate rendered to %d pages, not 1, for proposal "
-                    "%s — all of them are appended, but the one-page budget is blown",
-                    len(cert_pages), _log_safe(cert.get("proposal_id")))
-
-    try:
-        writer = pypdf.PdfWriter()
-        for page in proposal_pages:
-            writer.add_page(page)
-        for page in cert_pages:
-            writer.add_page(page)
-        out = io.BytesIO()
-        writer.write(out)
-        merged = out.getvalue()
-    except Exception as exc:  # noqa: BLE001
-        log.exception("signed-contract: merge failed for proposal %s (%s: %s)",
-                      _log_safe(cert.get("proposal_id")), type(exc).__name__, exc)
-        return _contract_error(502, "render_failed")
+    # CHECKED BEFORE A 200, not asserted in a test and hoped for in production.
+    # The portal writes "signed" against a 200 from this route.
+    signed_pages = len(pypdf.PdfReader(io.BytesIO(signed)).pages)
+    if signed_pages != len(proposal_pages):
+        log.error("signed-contract: signing proposal %s turned %d pages into %d",
+                  _log_safe(draft_id), len(proposal_pages), signed_pages)
+        return _contract_error(
+            502, "The signed contract came back with a different number of pages than the "
+                 "proposal it was made from. Nothing was signed.")
 
     name = re.sub(r"[^\x20-\x7e]", "_", str(cert.get("project_name") or "Treadwell"))
-    return Response(content=merged, media_type="application/pdf",
+    return Response(content=signed, media_type="application/pdf",
                     headers={"Content-Disposition":
                              'inline; filename="' + name + ' - Signed Contract.pdf"'})
 
