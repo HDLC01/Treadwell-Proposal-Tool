@@ -1550,6 +1550,11 @@ const rendered = [];      // every string the page put on screen, for the Labour
     // render time, so it would pass with the whole repaint block deleted.
     const s = build();
     await s.api.init();
+    // SWITCHED ON HERE, because all three conditions ship OFF from 2026-09-19 and a card for a
+    // line the bid is not buying shows an em dash. The claim under test is that a card which HAS
+    // a figure keeps it in step with the area, so it needs a figure.
+    s.api.model().conditions.joint_filler = true;
+    s.api.model().conditions.dye = true;
     s.api.go(0);
     const fig = (key) => ({
       qty: txt(s, '[data-condfig="' + key + '.qty"]'),
@@ -1623,8 +1628,17 @@ const rendered = [];      // every string the page put on screen, for the Labour
       remove_existing_jf: h.api.model().conditions.remove_existing_jf,
       // A BLANK IS NOT AN ANSWER: an absent cell leaves the model's value alone, because every
       // save writes both literals and a blank therefore means nobody has answered yet.
+      //
+      // THE SAVED MODEL SAYS `true` ON PURPOSE. joint_filler ships OFF from 2026-09-19, so a
+      // fixture that left the model at its default would read `false` whether the blank was
+      // ignored (right) or taken as a No (wrong) -- the two answers would be the same
+      // observation and this would prove nothing. A stated `true` is the only value that can
+      // tell them apart.
       blankLeavesTheDefault: (function () {
-        const k = build({ blob: blob({ cell_values: { "Polish!E29": "" } }) });
+        const stated = clone(MODEL);
+        stated.conditions = Object.assign({}, MODEL.conditions, { joint_filler: true });
+        const k = build({ blob: blob({ polish_estimate: stated,
+                                       cell_values: { "Polish!E29": "" } }) });
         return k.api.model().conditions.joint_filler === true;
       })(),
     };
@@ -2095,10 +2109,10 @@ const rendered = [];      // every string the page put on screen, for the Labour
   // The three conditions stopped being "built in" on 2026-09-18. What is proved here is the half
   // the shared module cannot prove on its own: which blobs this PAGE decides to seed.
   {
-    // Every stored answer disagrees with what the tool ships — joint filler ships ON and this says
-    // off; dye and remove-existing ship off and this says on. A fixture that agreed with
-    // freshModel could not tell a seeder that works from one that was never wired up.
-    const COND = [{ key: "joint_filler", on: false },
+    // Every stored answer disagrees with what the tool ships. All three ship OFF from
+    // 2026-09-19, so all three rows say on. A fixture that agreed with freshModel could not tell
+    // a seeder that works from one that was never wired up.
+    const COND = [{ key: "joint_filler", on: true },
                   { key: "dye", on: true },
                   { key: "remove_existing_jf", on: true }];
     const conds = (built) => built.api.model().conditions;
@@ -2110,16 +2124,17 @@ const rendered = [];      // every string the page put on screen, for the Labour
     const brandNew = build({ blob: noKey, conditionDefaults: COND });
     await brandNew.api.init();
 
-    // AN ESTIMATOR'S OWN ANSWERS, every one of them the opposite of the stored default. joint
-    // filler is the one that bites: it SHIPS on, so a bid where somebody deliberately turned it
-    // off is exactly the bid a careless default would quietly turn back on — and the downloaded
-    // workbook would then say Yes in Polish!E29.
+    // AN ESTIMATOR'S OWN ANSWERS, every one of them the opposite of the stored default, so the
+    // library has something that COULD have landed here and the gate is the only thing stopping
+    // it. joint_filler's direction reversed on 2026-09-19: it now SHIPS off, so the bid at risk
+    // is one where somebody deliberately turned it ON, and a careless default would take the
+    // $500-a-kit line back out with the workbook saying No in Polish!E29.
     const WORKED = {
       version: 2,
       takeoff: clone(MODEL.takeoff),
       labor: clone(MODEL.labor),
       conditions: Object.assign({}, MODEL.conditions,
-        { joint_filler: true, dye: false, remove_existing_jf: false }),
+        { joint_filler: false, dye: false, remove_existing_jf: false }),
       contingency: 0, fees: 0, totals: {},
     };
     const worked = build({ blob: blob({ polish_estimate: clone(WORKED) }),
@@ -2134,11 +2149,20 @@ const rendered = [];      // every string the page put on screen, for the Labour
     // leaves behind, and each one the OPPOSITE of what COND above says. A fixture that answered
     // only one of the three could pass against a page that seeds the other two from the admin
     // default regardless of what their cells said.
+    //
+    // AND A NARROWED LIST FOR THIS ONE CASE, which is the part that has to be right rather than
+    // tidy. Since all three ship OFF, a library row saying "on" against a cell saying "No"
+    // leaves false -- and false is ALSO what a page that read neither would show, so that
+    // pairing on its own cannot prove the cell was read at all. Two of the three are that
+    // pairing (they prove the cell BEATS the default); remove_existing_jf is deliberately left
+    // OUT of the list with its cell saying Yes, so `true` there can only have come from the
+    // cell. Between them the two shapes pin both halves of "the cell wins".
+    const COND_FOR_CELLS = [{ key: "joint_filler", on: true }, { key: "dye", on: true }];
     const fromCells = (() => { const b = blob(); delete b.polish_estimate;
-                               b.cell_values = { "Polish!E29": "Yes", "Polish!E25": "No",
-                                                 "Polish!F29": "No" };
+                               b.cell_values = { "Polish!E29": "No", "Polish!E25": "No",
+                                                 "Polish!F29": "Yes" };
                                return b; })();
-    const celled = build({ blob: fromCells, conditionDefaults: COND });
+    const celled = build({ blob: fromCells, conditionDefaults: COND_FOR_CELLS });
     await celled.api.init();
 
     // PRODUCTION TODAY: the table is not there, so the read cannot answer.

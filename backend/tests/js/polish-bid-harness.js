@@ -553,11 +553,12 @@ out.savedLaborIsUntouchable = {
 // `condition_defaults`; freshModel() still states what the tool SHIPS, and a stored row is an
 // override of one key.
 //
-// EVERY LIBRARY ROW HERE DISAGREES WITH THE SHIPPED ANSWER, deliberately. joint filler ships ON
-// and this says off; dye and remove-existing ship off and this says on. A fixture that agreed
-// with freshModel could not tell a merge that works from one that does nothing at all.
+// EVERY LIBRARY ROW HERE DISAGREES WITH THE SHIPPED ANSWER, deliberately. All three ship OFF
+// since 2026-09-19 -- joint filler moved that day, because it had started carrying a real $500
+// kit per 3,500 sq ft -- so all three rows here say on. A fixture that agreed with freshModel
+// could not tell a merge that works from one that does nothing at all.
 const COND_ROWS = [
-  { key: "joint_filler", on: false },
+  { key: "joint_filler", on: true },
   { key: "dye", on: true },
   { key: "remove_existing_jf", on: true }
 ];
@@ -630,9 +631,10 @@ out.conditionsUnstated = [
 // stops them. Without that counterexample "nothing changed" would also pass against a library
 // that happened to agree, which proves nothing.
 //
-// joint_filler is the one that bites either way: it SHIPS on, so a bid where somebody
-// deliberately turned it off is exactly the bid a careless default would quietly turn back on —
-// and the downloaded workbook would then say Yes in Polish!E29.
+// joint_filler is the one that bites either way, and the direction reversed on 2026-09-19 when
+// it stopped shipping on. It now SHIPS off, so the bid at risk is one where somebody deliberately
+// turned it ON -- a careless default would quietly take a $500 kit per 3,500 sq ft back out, and
+// the downloaded workbook would say No in Polish!E29 with nothing on screen admitting it.
 const SAVED_WITH_CONDITIONS = {
   version: 2,
   takeoff: [{ assembly_id: "a1", assembly_name: "Salt & Pepper polish", measurement: 9000,
@@ -644,9 +646,13 @@ const SAVED_WITH_CONDITIONS = {
     { id: "travel", label: "Travel", guys: 18, days: 2, rate: 33.0,
       unit: "hours", guys_auto: true }
   ],
+  // ALL THREE THE OPPOSITE OF COND_ROWS ABOVE, which is what keeps `wouldHaveChanged`
+  // meaningful: the library has an answer for every one of them that COULD have landed on this
+  // bid, and the gate is the only thing stopping it. joint_filler flipped here on 2026-09-19 to
+  // stay opposite when the library row flipped.
   conditions: { local: false, hard_bid: true, prevailing_wage: true, taxable: false,
                 remodel_tax: true, bond: true,
-                joint_filler: true, dye: false, remove_existing_jf: false },
+                joint_filler: false, dye: false, remove_existing_jf: false },
   contingency: 500,
   fees: 0,
   totals: {}

@@ -691,8 +691,12 @@ function runHandler(which) {
       allHaveRole: b.switches().every((s) => s.role === "switch"),
       allFocusable: b.switches().every((s) => s.tabindex === "0"),
     };
-    // Defaults, on screen. joint_filler MUST be on: Kyle's template ships Polish!E29 = "Yes",
-    // so a default of off would quietly remove filler from jobs that get it today.
+    // Defaults, on screen. joint_filler MUST now be OFF, and it was the opposite claim until
+    // 2026-09-19: "Kyle's template ships Polish!E29 = Yes, so a default of off would quietly
+    // remove filler from jobs that get it today". What changed is that the line started costing
+    // money -- a $500 kit per 3,500 sq ft -- so "on by default" stopped being a harmless
+    // transcription of the workbook and became $2,500 nobody had chosen. Hanz's call: all three
+    // start off. index.js's `def` and polish-bid-core's freshModel() both say so and must agree.
     out.conditions.defaults = {};
     b.switches().forEach((s) => { out.conditions.defaults[s.key] = s.on; });
   }
@@ -769,12 +773,17 @@ function runHandler(which) {
   }
 
   // remove_existing_jf is inert while joint_filler is off, and SAYS so rather than vanishing.
+  //
+  // JOINT FILLER IS SWITCHED ON FIRST, because it ships OFF since 2026-09-19 -- so remove-existing
+  // is inert from the moment the step opens and "before" would already be the state under test.
+  // The press below is the one that matters; the press above only builds the precondition.
   {
     const b = build();
     await tick();
     b.setWorkType("polish");
+    b.clickSwitch("joint_filler");               // ships off -> on, the precondition
     const before = b.switchFor("remove_existing_jf");
-    b.clickSwitch("joint_filler");               // default on -> off
+    b.clickSwitch("joint_filler");               // on -> off, the change under test
     const after = b.switchFor("remove_existing_jf");
     out.conditions.inert = {
       beforeInert: before.inert,
@@ -892,6 +901,9 @@ function runHandler(which) {
       { key: "dye", on: true },                // opposite of the cell
       { key: "remove_existing_jf", on: true },  // opposite of the cell
     ] });
+    // (These stay as they are: every cell is PRESENT here, so each switch's answer can only have
+    // come from its cell or from the admin row, and the two disagree on all three. What the tool
+    // ships does not enter into it.)
     await tick();
     b.setWorkType("polish");
     out.conditions.cellBeatsAdminDefault = {
@@ -908,8 +920,12 @@ function runHandler(which) {
   // switches baked the wrong answer into the workbook. The admin default has to reach
   // condState here, and therefore the cells conditionCells() writes.
   {
+    // EVERY ROW THE OPPOSITE OF WHAT SHIPS, or this case proves nothing: with no cells at all
+    // the only two candidate answers are the hardcoded `def` and the admin row, so a row that
+    // agreed with `def` would pass against a page that never read the endpoint. joint_filler
+    // flipped here on 2026-09-19 when its `def` went to false.
     const b = build(null, null, { rows: [
-      { key: "joint_filler", on: false },       // ships true; admin says false
+      { key: "joint_filler", on: true },        // ships false; admin says true
       { key: "dye", on: true },                 // ships false; admin says true
       { key: "remove_existing_jf", on: true },  // ships false; admin says true
     ] });

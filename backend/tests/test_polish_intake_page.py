@@ -167,10 +167,15 @@ def test_the_documented_defaults_are_what_a_new_project_shows(ran):
 
     Mutation: default everything to false, and every beta bid quietly loses its sales tax — and
     with joint_filler flipped, every polish bid loses a kit per 3,500 sq ft."""
+    # joint_filler moved to False on 2026-09-19, with index.js's own `def` and freshModel's
+    # literal flipped together: the line charges a $500 kit per 3,500 sq ft, and leaving it on by
+    # default put $2,500 nobody had chosen into a 17,500 SF bid. The two copies of this answer
+    # MUST agree -- this screen writes Polish!E29 the instant any switch is touched, so a stale
+    # True here would put the kit back into Kyle's workbook on the live intake path alone.
     assert ran["conditions"]["defaults"] == {
         "local": True, "hard_bid": False, "prevailing_wage": False,
         "taxable": True, "remodel_tax": False, "bond": False,
-        "dye": False, "joint_filler": True, "remove_existing_jf": False}
+        "dye": False, "joint_filler": False, "remove_existing_jf": False}
     # Local + Taxable on, the other five off — the live intake's defaults, which are how Kyle's
     # sheet ships. Bond off matches B78 shipping at zero.
     assert ran["conditions"]["freshRender"] == [
@@ -934,7 +939,7 @@ def test_choosing_a_county_does_not_delete_the_takeoff(ran):
     assert c["conditionsKept"] == {
         "local": True, "hard_bid": False, "prevailing_wage": False,
         "taxable": True, "remodel_tax": False, "bond": False,
-        "dye": False, "joint_filler": True, "remove_existing_jf": False}, (
+        "dye": False, "joint_filler": False, "remove_existing_jf": False}, (
         "the job conditions did not survive picking a county")
     assert c["debounced"] and c["savedOnce"], (
         "a pick does not go through the page's own 600ms debounce, so it either writes on every "
@@ -1360,14 +1365,17 @@ def test_a_brand_new_project_is_minted_with_the_librarys_condition_answers(ran):
     ever reaches a bid."""
     c = ran["conditionDefaults"]
     assert c["fetched"], "a brand new project never asked for the stored answers"
-    assert c["minted"]["joint_filler"] is False, (
-        "the library's 'off' did not reach the model this page mints, so the Defaults tab is "
-        "unreachable from the normal flow")
+    assert c["minted"]["joint_filler"] is True, (
+        "the library's 'on' did not reach the model this page mints, so the Defaults tab is "
+        "unreachable from the normal flow. All three ship OFF since 2026-09-19, so the fixture "
+        "sets all three ON -- one that agreed with freshModel would prove nothing")
     assert c["minted"]["dye"] is True
     assert c["minted"]["remove_existing_jf"] is True
     # AND THE CELLS AGREE ON THE SAME SAVE. Both screens read these back with the CELL winning,
     # so a seeded answer the cells did not carry would be reverted on the very next load.
-    assert c["mintedCells"] == {"Polish!E29": "No", "Polish!E25": "Yes", "Polish!F29": "Yes"}, (
+    # All three "Yes": the fixture's library rows set all three ON, and all three SHIP off since
+    # 2026-09-19, so each literal here can only have come from the seed.
+    assert c["mintedCells"] == {"Polish!E29": "Yes", "Polish!E25": "Yes", "Polish!F29": "Yes"}, (
         "the seeded answers did not reach Kyle's workbook cells: %r" % c["mintedCells"])
 
 
@@ -1385,8 +1393,8 @@ def test_a_project_that_has_been_worked_on_keeps_its_own_conditions(ran):
     c = ran["conditionDefaults"]
     assert c["keptFetched"] is False, (
         "a project with a saved estimate asked for the condition defaults")
-    assert c["kept"]["joint_filler"] is True, (
-        "a saved 'on' was replaced by the library's 'off'")
+    assert c["kept"]["joint_filler"] is False, (
+        "a saved 'off' was replaced by the library's 'on'")
     assert c["kept"]["dye"] is False
     assert c["kept"]["remove_existing_jf"] is False
     # …and the switch that was actually pressed did move, or this would pass against a save that
@@ -1411,12 +1419,19 @@ def test_an_answer_already_in_a_cell_beats_the_library(ran):
 
     Mutation: swap the two calls so seedConditionDefaults runs outermost. All three come back
     flipped and every cell answer already given is gone."""
+    # THE FIXTURE IS TWO SHAPES, because one shape cannot prove both halves now that all three
+    # ship OFF. joint_filler and dye have a library row saying ON against a cell saying "No", so
+    # `False` here can only mean the cell beat the library. remove_existing_jf has NO library row
+    # and a cell saying "Yes", so `True` there can only have come from the cell being read at
+    # all -- which the first pair cannot show, because `False` is also what a page that read
+    # neither would produce.
     c = ran["conditionDefaults"]["celled"]
     assert c["fetched"], "the library was never asked for its stored answers"
-    assert c["dye"] is False, "the library's answer was written over the 'No' in Polish!E25"
-    assert c["jointFiller"] is True, "the library's answer was written over the 'Yes' in Polish!E29"
-    assert c["removeExistingJf"] is False, (
-        "the library's answer was written over the 'No' in Polish!F29")
+    assert c["dye"] is False, "the library's 'on' was written over the 'No' in Polish!E25"
+    assert c["jointFiller"] is False, (
+        "the library's 'on' was written over the 'No' in Polish!E29")
+    assert c["removeExistingJf"] is True, (
+        "the 'Yes' in Polish!F29 never reached the model, so the cells are not being read")
 
 
 @needs_node
