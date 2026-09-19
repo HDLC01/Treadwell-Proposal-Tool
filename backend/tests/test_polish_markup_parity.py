@@ -1122,15 +1122,13 @@ def test_a_library_labor_line_is_read_onto_the_model_by_one_mapping(ran):
 
 
 @needs_node
-def test_the_defaults_stand_beside_travel_and_can_never_replace_it(ran):
-    """TRAVEL STAYS BUILT IN. It is not a row in library_labor, it is not migrated into one, and a
-    default is an addition beside it -- never a substitution for it or for any of the three crew
-    rows off Kyle's own Polish tab.
+def test_the_defaults_stand_beside_travel_and_never_double_it(ran):
+    """A default is an addition BESIDE the four rows off Kyle's own Polish tab -- never a
+    substitution for one. `travel` is the single reserved exception and it is the subject of the
+    test below; everything else here is the rule it is an exception to.
 
-    Mutation: drop the `seen[String(r.id)]` guard from seedLibraryLabor's second loop. A library
-    row carrying the id "travel" then lands as a fifth row with the same id, and migrateModel --
-    which finds Travel by that exact id -- starts backfilling fields onto whichever one it reaches
-    first."""
+    Mutation: drop the `seen[rid]` guard from seedLibraryLabor's second loop, and a library row
+    whose id is already on the model lands a second time."""
     lib = ran["libraryLabor"]
     assert lib["seededIds"] == ["polishing", "mockup", "jointfill", "travel",
                                 "lab-densify", "lab-night"], (
@@ -1139,18 +1137,188 @@ def test_the_defaults_stand_beside_travel_and_can_never_replace_it(ran):
     assert lib["builtInsUntouched"], "seeding rewrote one of the four built-in rows"
     assert lib["inputUntouched"], "seeding mutated the array it was handed"
     assert lib["isANewArray"], "seeding returned the same array it was handed"
-    # An id already on the model wins outright: one Travel, still the sheet's own $33 row, and the
-    # library's "Drive time" is not on the bid at all.
-    dup = lib["travelCannotBeReplaced"]
-    assert dup["count"] == 1 and dup["rowCount"] == 4, (
-        "a library row took the built-in Travel row's place: %r" % dup)
-    assert dup["label"] == "Travel" and dup["rate"] == 33.0
     # Nothing to add, in all three shapes "nothing" arrives in -- an empty table, a read that
     # could not answer, and a row the API should never have served.
     built_in = ["polishing", "mockup", "jointfill", "travel"]
     assert lib["emptyList"] == built_in
     assert lib["missingList"] == built_in
     assert lib["rowsWithoutIds"] == built_in
+
+
+@needs_node
+def test_travel_is_overridden_in_place_and_never_becomes_a_second_row(ran):
+    """TRAVEL IS EDITABLE FROM 2026-09-19 AND STILL CANNOT BE DUPLICATED OR LOST. Hanz, on the
+    BUILT IN chip the Defaults tab drew beside it: "again this too how can we edit this?", and
+    twice before that, "don't put in a hard coded or built in line items". The rate was a literal
+    inside travelSeed() with no row behind it, so nothing on the page could change it.
+
+    THE TWO FAILURE MODES THIS PINS ARE OPPOSITE ONES, which is why one test holds both:
+
+      * A stored `travel` row SKIPPED is an edit that silently does nothing -- the admin types
+        $41.50, the list shows $41.50, and every bid still prices at $33.00.
+      * A stored `travel` row PUSHED BESIDE the built-in one puts two rows carrying the id
+        `travel` on the estimate. migrateModel's backfill finds Travel by that exact id, so it
+        would start filling fields onto whichever it reached first, and the row an admin typed a
+        rate into is not the row that prices the job.
+
+    AND THE THIRD CASE IS PRODUCTION. `library_labor` does not exist there yet; list_labor()
+    answers [] and never raises, so Travel must be the sheet's own $33.00/hr row exactly as it
+    was. That arm is not hypothetical -- it is the only state prod is in until the DDL runs.
+
+    Mutation: restore the old `seen[String(r.id)]` skip for the travel arm, and the override case
+    comes back as Travel/$33.00 -- the edit reaches nothing. Or push instead of overlaying, and
+    `count` is 2."""
+    lib = ran["libraryLabor"]
+    over = lib["travelIsOverriddenInPlace"]
+    assert over["count"] == 1 and over["rowCount"] == 4, (
+        "the stored travel row was pushed beside the built-in one instead of onto it: %r" % over)
+    assert over["label"] == "Drive time" and over["rate"] == 99, (
+        "the stored travel row did not reach the model -- the Defaults tab edit prices nothing:"
+        " %r" % over)
+    assert over["unit"] == "days" and over["guysAuto"] is False, (
+        "unit and guys_auto did not come off the stored row: %r" % over)
+    # IN PLACE. Travel is the sheet's fourth labor row; re-ordering it would move the line the
+    # estimator reads under Joint Filler.
+    assert over["at"] == 3 and over["ids"] == ["polishing", "mockup", "jointfill", "travel"], (
+        "Travel moved position when its stored row was applied: %r" % over["ids"])
+
+    # PRODUCTION: no travel row in the library at all. The constant stands and Travel is untouched.
+    none = lib["travelWithNoStoredRow"]
+    assert none["count"] == 1, "Travel is not on the bid when the library has no row for it"
+    assert none["label"] == "Travel" and none["rate"] == 33.0, (
+        "a library with no travel row did not leave Travel on the shipped rate: %r" % none)
+    assert none["unit"] == "hours" and none["guysAuto"] is True
+
+    # THE FALLBACK ITSELF, which everything above is an override of.
+    shipped = lib["shippedTravel"]
+    assert shipped == {"id": "travel", "label": "Travel", "guys": "", "days": "",
+                       "rate": 33.0, "unit": "hours", "guys_auto": True}, (
+        "travelSeed() with no row is no longer the sheet's own row: %r" % shipped)
+
+    # numeric(10,2) commonly arrives as TEXT off PostgREST. A rate left as a string would price
+    # (num() coerces it) and then sit on the saved draft as "41.50" for the life of the bid.
+    text = lib["storedTravelFromText"]
+    assert text["rate"] == 41.5 and isinstance(text["rate"], float), (
+        "a rate served as text did not become a number: %r" % text)
+    assert text["id"] == "travel", "the id came off the payload rather than being the reserved one"
+
+    # ZERO IS AN ANSWER. Travel written off for local work is a thing an admin can mean, and
+    # reading it as blank would quietly put 33.00 back into every new bid.
+    assert lib["storedTravelAtZero"]["rate"] == 0, (
+        "a stored rate of zero fell back to the shipped 33.00: %r" % lib["storedTravelAtZero"])
+    # …but a rate that is not a number at all falls back rather than becoming NaN on the model.
+    assert lib["storedTravelWithJunkRate"]["rate"] == 33.0, (
+        "an unparseable rate reached the model: %r" % lib["storedTravelWithJunkRate"])
+    # A BLANK RATE IS NOT ZERO, and this is a different question from the one above rather than a
+    # restatement of it. `Number("")` and `Number(null)` are both 0 and both isFinite, so a guard
+    # written as `!isFinite(rate)` alone reads an empty rate as travel being FREE -- silently, on
+    # every new bid, with the row still showing a line. `isBlank` is what separates "nobody filled
+    # this in" from the deliberate zero asserted directly above.
+    for shape in ("storedTravelWithEmptyRate", "storedTravelWithNullRate",
+                  "storedTravelWithNoRateKey"):
+        assert lib[shape]["rate"] == 33.0, (
+            "%s priced travel at %r instead of falling back to the shipped rate"
+            % (shape, lib[shape]["rate"]))
+    # THE RESERVED ID IS RESERVED. Everything else here hands travelSeed a row already carrying
+    # `travel`, where "use the reserved id" and "copy the row's id" cannot disagree. This is the
+    # one input that separates them, and it matters because `travel` is the only handle anything
+    # has on this line: migrateModel's backfill finds it by that exact string on every draft ever
+    # saved, and the Defaults tab addresses its PATCH to it.
+    assert lib["travelSeedIgnoresAForeignId"]["id"] == "travel", (
+        "travelSeed took the id off the row (%r) -- the line stops being the one migrateModel "
+        "backfills and the one the library can edit"
+        % lib["travelSeedIgnoresAForeignId"]["id"])
+    assert lib["travelSeedIgnoresAForeignId"]["rate"] == 44, (
+        "the rest of the row stopped being read while the id was being reserved")
+
+    # And blank TEXT falls back too: an unnamed line, or a unit the estimate has no branch for.
+    blank = lib["storedTravelWithBlankText"]
+    assert blank["label"] == "Travel" and blank["unit"] == "hours", (
+        "a row with a blank name or unit drew an anonymous line or an unpriceable one: %r"
+        % blank)
+    assert blank["rate"] == 44, "the rate was lost while falling back on the text fields"
+
+    # GUYS AND DAYS ARE THE BID'S. Editing a rate in the library has no business touching how much
+    # of the line this job needs.
+    q = lib["travelKeepsItsQuantities"]
+    assert q["guys"] == 6 and q["days"] == 2 and q["rate"] == 44, (
+        "applying the stored rate wiped the quantities on the row: %r" % q)
+
+
+@needs_node
+def test_both_schema_files_seed_the_travel_row_the_engine_actually_ships(ran):
+    """THE ROW AND THE FALLBACK HAVE TO AGREE, and they live in three files.
+
+    `travelSeed()` states what Travel costs when no row answers. `supabase_schema.sql` and
+    `backend/staging/schema_pg.sql` each seed the row that overrides it. Nothing at runtime
+    compares them: a seed of 35.00 against a fallback of 33.00 would price a bid differently on a
+    database that has the DDL from one that does not, both would look right on screen, and the
+    disagreement would surface as two estimators quoting different travel for the same job. This
+    is the only place the three can be held together, and it is exactly the drift the note above
+    travelSeed already records happening once.
+
+    DDL LANDS TWICE HERE. Prod Supabase and the staging Postgres are different databases with
+    different files; a seed added to one only is how a feature works on staging and does nothing
+    on prod. So BOTH files are read and both are required to say the same thing.
+
+    IDEMPOTENT, and that is not decoration: these files are re-run by hand. Without `on conflict
+    (id) do nothing` the second run raises on the primary key, halfway through a migration.
+
+    THE ENGINE'S SIDE IS EXECUTED, not grepped — `shippedTravel` is a real `P.travelSeed()` call
+    in the harness. A regex over the literal `33.0` in the source could not tell you what the
+    function returns.
+
+    Mutation: change the rate in either .sql file, or in travelSeed(), and this names which two
+    disagree."""
+    shipped = ran["libraryLabor"]["shippedTravel"]
+    files = {
+        "backend/supabase_schema.sql": ROOT / "backend" / "supabase_schema.sql",
+        "backend/staging/schema_pg.sql": ROOT / "backend" / "staging" / "schema_pg.sql",
+    }
+    seeds = {}
+    for name, path in files.items():
+        # COMMENTS STRIPPED FIRST. Both files are mostly prose -- every statement here has a
+        # paragraph above it -- and without this the regex happily matches a seed somebody has
+        # commented OUT. Proven: commenting the first line of the insert in supabase_schema.sql
+        # left this test green while the row would never have been created on production.
+        sql = re.sub(r"--[^\n]*", "", path.read_text(encoding="utf-8"))
+        m = re.search(
+            r"insert into public\.library_labor\s*\(([^)]*)\)\s*values\s*\(([^)]*)\)\s*"
+            r"on conflict \(id\) do nothing;", sql, re.I)
+        assert m, (
+            "%s does not seed the travel row with an idempotent insert. Without it the row does "
+            "not exist, so the Defaults tab has nothing to address and Travel goes back to being "
+            "a literal nobody can edit." % name)
+        cols = [c.strip() for c in m.group(1).split(",")]
+        vals = [v.strip().strip("'") for v in m.group(2).split(",")]
+        seeds[name] = dict(zip(cols, vals))
+        # EXACTLY ONE. A second insert for the same id is two statements of one row, which is the
+        # shape this whole line of work exists to stop.
+        assert len(re.findall(r"insert into public\.library_labor", sql, re.I)) == 1, (
+            "%s seeds library_labor more than once" % name)
+
+    a, bfile = list(seeds.values())
+    assert a == bfile, (
+        "the two schema files seed DIFFERENT travel rows, so prod and staging would price travel "
+        "differently: %r vs %r" % (a, bfile))
+
+    seed = a
+    assert seed["id"] == shipped["id"], (
+        "the seeded id is %r but migrateModel and seedLibraryLabor find Travel by %r — the row "
+        "would be an ordinary extra labor line on every bid" % (seed["id"], shipped["id"]))
+    assert seed["name"] == shipped["label"], (
+        "the seeded name %r is not what travelSeed() calls the line (%r)"
+        % (seed["name"], shipped["label"]))
+    assert float(seed["rate"]) == shipped["rate"], (
+        "the schema seeds Travel at %s and travelSeed() falls back to %s — a database with the "
+        "DDL prices travel differently from one without it"
+        % (seed["rate"], shipped["rate"]))
+    assert seed["unit"] == shipped["unit"], (
+        "the seeded unit %r is not travelSeed()'s %r, so the rate would multiply the wrong thing"
+        % (seed["unit"], shipped["unit"]))
+    assert (seed["guys_auto"].lower() == "true") == shipped["guys_auto"], (
+        "the seeded guys_auto disagrees with travelSeed(), so Travel stops following the crew's "
+        "man-days on any database that has the row")
 
 
 @needs_node

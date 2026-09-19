@@ -416,6 +416,9 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   ${fn("validateLaborForm")}
   ${fn("submitLaborForm")}
   ${fn("removeLaborDefault")}
+  // Travel's own write, and NOT removeLaborDefault: it PATCHes the reserved row back to the
+  // shipped rate rather than deleting the one id anything can address Travel by.
+  ${fn("resetTravelDefault")}
   // AFTER BOTH ARMS IT CALLS. This is the routing the Add buttons press, pulled out of the page's
   // anonymous click listener precisely so it can be reached from here -- the same move
   // placeNewAssembly made, and for the same reason.
@@ -572,7 +575,8 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
            // file could not tell: a source assertion cannot separate a wired control from a
            // dead one, which is exactly how it shipped green.
            renderDefaultLabor, openLaborForm, closeLaborForm, setLaborField, validateLaborForm,
-           submitLaborForm, removeLaborDefault, laborRowActions, laborFormRow, LABOR_UNITS,
+           submitLaborForm, removeLaborDefault, resetTravelDefault, laborRowActions, laborFormRow,
+           LABOR_UNITS,
            LABOR_CALLS,
            // GETTERS, because removeLaborDefault REASSIGNS LABOR (filter, not splice) and
            // submitLaborForm puts LABOR_FORM back to null -- a test handed either value itself
@@ -3666,11 +3670,18 @@ async function laborChecks() {
     const rows = rowsOf(h);
     out.laborDefaultsList = {
       rowCount: rows.length,
-      // Travel FIRST and BUILT IN. It is not a row of library_labor, it is what every estimate is
-      // seeded with, and there is no way to express "no travel row at all" to remove it to.
+      // Travel FIRST, and on the rate the tool ships with -- this fixture's LABOR holds NO row
+      // with the reserved id, which is the state PRODUCTION is in (library_labor does not exist
+      // there) and the state any database is in before the seed row is inserted.
       travelIsFirst: /Travel/.test(rows[0] || ""),
-      travelIsBuiltIn: /Built in/.test(rows[0] || ""),
-      travelCarriesNoControls: !/data-labor-(edit|del)/.test(rows[0] || ""),
+      travelShowsTheShippedRate: /\$33\.00/.test(rows[0] || ""),
+      // NO "BUILT IN" CHIP. Hanz, twice: "don't put in a hard coded or built in line items", and
+      // then on this very row: "again this too how can we edit this?".
+      noBuiltInChip: !/Built in/.test(rows[0] || ""),
+      // AND NO CONTROLS EITHER, while there is no row to address. An Edit here would open a form
+      // whose Save has nothing to PATCH -- a dead button, which is worse than the chip it
+      // replaced, not better. The scenarios below are where the controls appear.
+      travelCarriesNoControls: !/data-labor-(edit|del|reset)/.test(rows[0] || ""),
       // The stored line, which the old renderer could not draw at all.
       listsTheStoredLine: /Prevailing wage/.test(rows[1] || ""),
       storedLineShowsItsRate: /\$58\.25/.test(rows[1] || ""),
@@ -3678,6 +3689,155 @@ async function laborChecks() {
       storedLineCanBeEdited: /data-labor-edit="L1"/.test(rows[1] || ""),
       storedLineCanBeRemoved: /data-labor-del="L1"/.test(rows[1] || ""),
       addRowOfferedToAnAdmin: d.nodes["default-labor-addrow"].hidden === false,
+    };
+  }
+
+  // ── TRAVEL IS EDITABLE, 2026-09-19 ─────────────────────────────────────────
+  //
+  // The row carrying the reserved id `travel` is seeded by both schema files. Everything below
+  // is what an admin sees once it exists, and every one of these fails against the renderer that
+  // drew `<span class="builtin">Built in</span>` and nothing else.
+  const TRAVEL_EDITED = { id: "travel", name: "Travel", rate: 41.50, unit: "hours",
+                          guys_auto: true, sort: -1, notes: null,
+                          owner_email: "hanz@wetreadwell.com" };
+  const TRAVEL_SHIPPED = { id: "travel", name: "Travel", rate: 33.00, unit: "hours",
+                           guys_auto: true, sort: -1, notes: null, owner_email: null };
+
+  // THE EDITED ROW: one Travel line, showing the STORED rate, with Edit and Reset.
+  {
+    const { api, dom: d } = build(seed({ LABOR: [TRAVEL_EDITED,
+      { id: "L1", name: "Prevailing wage", rate: 58.25, unit: "hours", guys_auto: false }] }));
+    api.renderDefaultLabor();
+    const h = d.nodes["default-labor-body"].innerHTML;
+    const rows = rowsOf(h);
+    out.laborTravelStored = {
+      // ONE Travel row, not two. The stored row is drawn THROUGH travelSeed and then excluded
+      // from the custom list -- left in, an admin would see the same name twice, each with its
+      // own controls, and no way to tell which one prices a bid.
+      travelRowCount: rows.filter((r) => /Travel/.test(r)).length,
+      rowCount: rows.length,
+      // The stored rate, NOT the shipped one. This is the assertion that fails if the row is
+      // stored, listed, edited -- and ignored.
+      showsTheStoredRate: /\$41\.50/.test(rows[0] || ""),
+      doesNotShowTheShippedRate: !/\$33\.00/.test(h),
+      canBeEdited: /data-labor-edit="travel"/.test(rows[0] || ""),
+      // RESET, NOT REMOVE. Removing Travel is not a thing that can happen -- freshModel() seeds
+      // it into every new bid -- so the word on the button is the word for what it does.
+      offersReset: /data-labor-reset="travel"/.test(rows[0] || ""),
+      neverOffersRemove: !/data-labor-del="travel"/.test(h),
+      resetSaysReset: />Reset</.test(rows[0] || ""),
+      // The custom line is untouched by any of it.
+      stillListsTheCustomLine: /Prevailing wage/.test(h),
+    };
+  }
+
+  // THE UNEDITED ROW: editable, but nothing to reset it TO, so no Reset button at all. A control
+  // that would change nothing is a control that reads as broken the moment somebody presses it.
+  {
+    const { api, dom: d } = build(seed({ LABOR: [TRAVEL_SHIPPED] }));
+    api.renderDefaultLabor();
+    const h = d.nodes["default-labor-body"].innerHTML;
+    out.laborTravelUnedited = {
+      canBeEdited: /data-labor-edit="travel"/.test(h),
+      noResetOffered: !/data-labor-reset/.test(h),
+      showsTheShippedRate: /\$33\.00/.test(h),
+    };
+  }
+  // …and a RENAME alone brings Reset back, because the Edit form writes the name too and a
+  // renamed Travel with the shipped rate would otherwise have no way home.
+  {
+    const { api, dom: d } = build(seed({
+      LABOR: [Object.assign({}, TRAVEL_SHIPPED, { name: "Drive time" })] }));
+    api.renderDefaultLabor();
+    const h = d.nodes["default-labor-body"].innerHTML;
+    out.laborTravelRenamed = {
+      showsTheStoredName: /Drive time/.test(h),
+      offersReset: /data-labor-reset/.test(h),
+    };
+  }
+
+  // EDITING IT IS A PATCH TO THE RESERVED ID, never a POST. A POST would mint a uuid and leave a
+  // SECOND row called Travel that overrides nothing -- the double-Travel hazard, arriving through
+  // the form instead of through the seed.
+  {
+    const { api, dom: d } = build(seed({ LABOR: [TRAVEL_EDITED] }));
+    api.openLaborForm("travel");
+    const opened = d.nodes["default-labor-body"].innerHTML;
+    api.setLaborField("rate", "37.25");
+    await api.submitLaborForm();
+    const after = d.nodes["default-labor-body"].innerHTML;
+    out.laborTravelEdit = {
+      // The form opens holding what is stored, not blank -- a blank form is an ADD form, and
+      // pressing Save on one is how the second row gets made.
+      preloadsTheName: /value="Travel"/.test(opened),
+      preloadsTheRate: /value="41.5"/.test(opened),
+      op: (api.LABOR_CALLS[0] || {}).op,
+      patchedTravel: (api.LABOR_CALLS[0] || {}).id === "travel",
+      body: (api.LABOR_CALLS[0] || {}).body,
+      rowShowsTheNewRate: /\$37\.25/.test(after),
+      // ONE ROW IN, ONE ROW OUT. An edit that added a line is the bug this is here for.
+      storedLineCount: api.laborNow().length,
+      idsAfter: api.laborNow().map(function (r) { return r.id; }),
+    };
+  }
+
+  // RESET PUTS THE SHIPPED RATE BACK -- as a PATCH, and deliberately NOT as a DELETE. A soft
+  // delete would also read correctly on screen (list_labor stops answering, travelSeed falls
+  // back) but it takes the only id anything can address Travel by with it: LibraryLaborIn has no
+  // id field and create_labor mints a uuid, both on purpose, so nothing on this page could ever
+  // make the row again. One press would cost the editability permanently.
+  {
+    const { api, dom: d } = build(seed({ LABOR: [TRAVEL_EDITED] }));
+    api.renderDefaultLabor();
+    await api.resetTravelDefault();
+    const h = d.nodes["default-labor-body"].innerHTML;
+    out.laborTravelReset = {
+      op: (api.LABOR_CALLS[0] || {}).op,
+      neverDeletes: api.LABOR_CALLS.every(function (c) { return c.op !== "DELETE"; }),
+      sentToTravel: (api.LABOR_CALLS[0] || {}).id === "travel",
+      // The SHIPPED figures, read out of travelSeed rather than typed on this page -- the second
+      // copy of Travel's rate is exactly what drifted within a day the last time it existed.
+      body: (api.LABOR_CALLS[0] || {}).body,
+      showsTheShippedRate: /\$33\.00/.test(h),
+      // The button retires itself: there is nothing left to reset.
+      resetGoneAfterwards: !/data-labor-reset/.test(h),
+      stillEditable: /data-labor-edit="travel"/.test(h),
+      // THE ROW SURVIVES. It is what keeps Travel editable tomorrow.
+      rowStillInTheModel: api.laborNow().some(function (r) { return r.id === "travel"; }),
+      travelStillListed: /Travel/.test(h),
+    };
+  }
+
+  // A REFUSED RESET PUTS IT BACK AND SAYS WHY, like both writes beside it. A rate that looks
+  // reset and returns on the next reload is worse than one that refuses out loud.
+  {
+    const { api, dom: d } = build(seed({ LABOR: [TRAVEL_EDITED], LABOR_FAIL: { patch: true } }));
+    api.renderDefaultLabor();
+    await api.resetTravelDefault();
+    const h = d.nodes["default-labor-body"].innerHTML;
+    out.laborTravelResetFails = {
+      putTheStoredRateBack: /\$41\.50/.test(h),
+      notLeftOnTheShippedRate: !/\$33\.00/.test(h),
+      saidSo: /Couldn't reset/.test(d.nodes["alert"].textContent),
+      saysWhy: /the server said no/.test(d.nodes["alert"].textContent),
+      rowStillInTheModel: api.laborNow().length === 1,
+      rateStillInTheModel: (api.laborNow()[0] || {}).rate,
+      // And the way back is still on screen rather than having retired itself on a write that
+      // did not happen.
+      resetStillOffered: /data-labor-reset/.test(h),
+    };
+  }
+
+  // NOT FOR A NON-ADMIN, even with the row stored. The writes are admin-only on the server, so
+  // neither control is offered -- the rule the rest of this page already follows.
+  {
+    const { api, dom: d } = build(seed({ LABOR: [TRAVEL_EDITED], ADMIN: false }));
+    api.renderDefaultLabor();
+    const h = d.nodes["default-labor-body"].innerHTML;
+    out.laborTravelReadOnly = {
+      stillListsTravel: /Travel/.test(h),
+      showsTheStoredRate: /\$41\.50/.test(h),
+      noControls: !/data-labor-(edit|del|reset)/.test(h),
     };
   }
 

@@ -315,9 +315,22 @@ create index if not exists library_units_live_name_idx
 -- no handler because there was nowhere to put one: renderDefaultLabor drew a single built-in
 -- row out of travelSeed() and nothing stored anything else.
 --
--- TRAVEL IS NOT IN HERE. It stays built in -- seeded into every new bid and appended to every
--- old one -- and these rows are additions beside it. Migrating it into this table would turn a
--- guarantee every estimate already relies on into a row somebody can delete.
+-- TRAVEL IS IN HERE, AS ONE RESERVED ROW, since 2026-09-19. Hanz, on the BUILT IN chip the
+-- Defaults tab drew beside it: "again this too how can we edit this?" -- and twice before that,
+-- "don't put in a hard coded or built in line items". Its rate was a literal in travelSeed() and
+-- there was no row to address, so nothing on the page could change it.
+--
+-- NOBODY CAN DELETE IT, which is what the earlier note here was protecting and what is still
+-- true. `travel` is the id migrateModel finds Travel by, and freshModel() seeds a Travel row into
+-- every new bid whether or not this table answers -- so a row here OVERRIDES the shipped rate, it
+-- does not supply it. list_labor() answering nothing (a soft-deleted row, or a database where
+-- this table does not exist at all) puts Travel back on the $33.00/hr in travelSeed() rather than
+-- taking it off anybody's estimate. That is why the Defaults tab labels the control Reset and not
+-- Remove: Remove is not a thing this row can do.
+--
+-- SEEDED HERE RATHER THAN CREATED THROUGH THE API on purpose. POST /api/library/labor mints a
+-- uuid and `LibraryLaborIn` has no id field, deliberately -- letting a caller name a row is how
+-- a second row would come to hold the reserved id. Naming a row is the schema's job, once.
 --
 -- Soft delete like every other library table, so removing a default cannot take it out of the
 -- bids already holding it. rate is numeric(10,2) and NOT NULL: a labor line without a rate is
@@ -337,6 +350,13 @@ create table if not exists public.library_labor (
 );
 create index if not exists library_labor_live_name_idx
   on public.library_labor (name) where deleted_at is null;
+
+-- The one row this table ships with. `on conflict (id) do nothing` so re-running the file leaves
+-- an edited rate alone -- the whole point of the row is that somebody can change it. sort = -1
+-- puts it first in list_labor()'s order, which is where the Defaults tab has always drawn it.
+insert into public.library_labor (id, name, rate, unit, guys_auto, sort)
+values ('travel', 'Travel', 33.00, 'hours', true, -1)
+on conflict (id) do nothing;
 
 -- WHICH WORK TYPES A DEFAULT BELONGS TO, 2026-09-17. `favorite` says a row IS a default;
 -- this says which of the five sheet tabs it opens on.
@@ -459,17 +479,27 @@ create index if not exists markup_rules_live_layout_idx
 
 -- Same posture as drafts/events/calendar_events: RLS on, no policies here; the proposal tool
 -- holds the service-role key.
+--
+-- library_labor WAS MISSING FROM THIS BLOCK until 2026-09-19, and the reason is worth keeping:
+-- the table is created ~130 lines ABOVE here, so it read as already handled, and the only
+-- database anyone had run it against was staging -- self-hosted Postgres, connected to as the
+-- owner, where RLS is off for every table and the omission is invisible. On PROD it is Supabase,
+-- every other table has RLS on, and a table without it is reachable through the REST API by anon
+-- and authenticated. It was caught before the table existed on production at all, so nothing was
+-- ever exposed. test_schema_rls.py now fails if a new public table is added without both lines.
 alter table public.library_items enable row level security;
 alter table public.library_assemblies enable row level security;
 alter table public.library_vendors enable row level security;
 alter table public.library_divisions enable row level security;
 alter table public.library_units enable row level security;
+alter table public.library_labor enable row level security;
 alter table public.markup_rules enable row level security;
 grant select, insert, update, delete on public.library_items to service_role;
 grant select, insert, update, delete on public.library_assemblies to service_role;
 grant select, insert, update, delete on public.library_vendors to service_role;
 grant select, insert, update, delete on public.library_divisions to service_role;
 grant select, insert, update, delete on public.library_units to service_role;
+grant select, insert, update, delete on public.library_labor to service_role;
 grant select, insert, update, delete on public.markup_rules to service_role;
 
 -- ── Takeoff condition defaults ────────────────────────────────────────────

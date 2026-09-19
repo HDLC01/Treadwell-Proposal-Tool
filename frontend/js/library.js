@@ -2585,6 +2585,58 @@
     }
   }
 
+  /** Put Travel back on the rate the tool ships with.
+
+   *  A PATCH, NOT A DELETE, and that is a deliberate difference from Remove above. A soft delete
+   *  would also work on screen -- list_labor() would stop answering with the row and travelSeed()
+   *  would fall back to the shipped rate -- but it would take the row's ID with it, and the id is
+   *  the only thing anything can address Travel by. `LibraryLaborIn` has no id field and
+   *  create_labor mints a uuid, both on purpose, so nothing reachable from this page could ever
+   *  make a row called `travel` again: one press of Reset would cost the editability the rest of
+   *  this change is about, permanently, and the button that did it would then vanish too. PATCHing
+   *  the row back to the shipped figures says exactly the same thing to a reader of the list and
+   *  leaves Travel editable tomorrow.
+
+   *  THE SHIPPED FIGURES COME FROM travelSeed(), not from three literals here. This page has no
+   *  business holding a second copy of Travel's rate -- see the note above travelSeed for what
+   *  happened the last time two copies existed.
+
+   *  OPTIMISTIC, WITH THE ROW PUT BACK ON A FAILURE, like both writes above it: a rate that looks
+   *  reset and returns on the next reload is worse than one that refuses out loud. */
+  async function resetTravelDefault() {
+    var B = window.TWPolishBid;
+    var shipped = B && B.travelSeed ? B.travelSeed() : null;
+    if (!shipped) return;
+    var at = -1;
+    for (var i = 0; i < LABOR.length; i++) {
+      if (LABOR[i] && LABOR[i].id === shipped.id) { at = i; break; }
+    }
+    // Nothing stored means nothing overridden: the line is already on the shipped rate and there
+    // is no row to patch. The button is not drawn in that state, so this is the second tab case.
+    if (at === -1) return;
+    var was = LABOR[at];
+    var body = { name: shipped.label, rate: shipped.rate, unit: shipped.unit };
+    LABOR[at] = Object.assign({}, was, body);
+    renderDefaultLabor();
+    try {
+      var pj = await patchLabor(shipped.id, body);
+      for (var k = 0; k < LABOR.length; k++) {
+        if (LABOR[k] && LABOR[k].id === shipped.id) {
+          LABOR[k] = pj.row || Object.assign({}, was, body);
+          break;
+        }
+      }
+      say("");
+      renderDefaultLabor();
+    } catch (err) {
+      for (var j = 0; j < LABOR.length; j++) {
+        if (LABOR[j] && LABOR[j].id === shipped.id) { LABOR[j] = was; break; }
+      }
+      renderDefaultLabor();
+      say("Couldn't reset " + shipped.label + ". " + (err.message || ""));
+    }
+  }
+
   /** Edit and Remove on a custom labor line, for an admin and nobody else.
 
    *  THE WRITES ARE ADMIN-ONLY ON THE SERVER, so this does not offer a control that 403s on press.
@@ -2592,10 +2644,42 @@
    *  the one the Administration lists follow when they render text instead of inputs.
 
    *  REMOVE MEANS "STOP BEING A DEFAULT", not "delete the line out of every bid that has one", so
-   *  it says the word rather than wearing the bin glyph the Items tab deletes rows with. */
-  function laborRowActions(id, name) {
+   *  it says the word rather than wearing the bin glyph the Items tab deletes rows with.
+
+   *  TRAVEL IS THE ONE ROW THAT CANNOT SAY REMOVE, and `travel` is what it is handed: the stored
+   *  library_labor row with the reserved id, or null when there is none. Three things follow from
+   *  it and each is the honest answer rather than a convenience:
+   *
+   *    * NO STORED ROW, NO CONTROLS. Every estimate is seeded with Travel from travelSeed()
+   *      whether or not this table answers, so on a database where `library_labor` has not been
+   *      created the line is real and its rate is genuinely not editable -- there is nothing to
+   *      PATCH. An Edit button there would open a form whose Save 500s, which is the dead control
+   *      this whole change is about; it would be worse than the chip it replaced, not better.
+   *    * RESET, NOT REMOVE. Removing Travel is not a thing that can happen: freshModel() seeds it
+   *      into every new bid and migrateModel appends it to every old one. What this button does
+   *      is put the rate back to the one the tool ships with, and the word on it says that.
+   *    * AND ONLY WHEN THERE IS SOMETHING TO RESET. `travelSeed(row)` with no row IS the shipped
+   *      row, so an unedited default compares equal to it and offers no Reset at all -- a control
+   *      that would change nothing is a control that reads as broken when it appears to do
+   *      nothing. Name, rate and unit are compared because those are the three the Edit form
+   *      writes; a renamed Travel with the shipped rate still has a way back. */
+  function laborRowActions(id, name, travel) {
     if (!ADMIN) return "";
-    return '<button class="btn ghost sm" type="button" data-labor-edit="' + esc(id) + '">Edit</button>' +
+    var B = window.TWPolishBid;
+    var shipped = B && B.travelSeed ? B.travelSeed() : null;
+    var edit = '<button class="btn ghost sm" type="button" data-labor-edit="' + esc(id) +
+      '">Edit</button>';
+    if (shipped && id === shipped.id) {
+      if (!travel) return "";
+      var now = B.travelSeed(travel);
+      var changed = now.label !== shipped.label || now.rate !== shipped.rate ||
+                    now.unit !== shipped.unit;
+      if (!changed) return edit;
+      return edit + '<button class="btn ghost sm danger" type="button" data-labor-reset="' +
+        esc(shipped.id) + '" aria-label="Reset ' + esc(shipped.label) +
+        ' to the rate the tool ships with">Reset</button>';
+    }
+    return edit +
       '<button class="btn ghost sm danger" type="button" data-labor-del="' + esc(id) +
       '" aria-label="Remove ' + esc(name) + ' from the labor defaults">Remove</button>';
   }
@@ -2634,36 +2718,51 @@
    *
    *  READ FROM THE SHARED MODULE, never re-typed. travelSeed's own comment records the two copies
    *  that existed before drifting within a day; a third on this page would drift unseen, because
-   *  nothing here prices anything and a stale rate would look exactly like a fresh one.
+   *  nothing here prices anything and a stale rate would look exactly like a fresh one. That is
+   *  also why the id it looks the stored row up by is `travelSeed().id` rather than a string typed
+   *  here: one statement of what Travel is called in a model, still.
    *
-   *  BUILT IN, so it carries no remove control. Taking it off is a change to what every bid opens
-   *  with, and the estimate has no way to express "no travel row at all" -- the row dims itself on
-   *  a local job instead, which is the behaviour that replaces deleting it. */
+   *  ONE TRAVEL ROW, MERGED, NOT TWO. The stored row carrying the reserved id is drawn THROUGH
+   *  travelSeed and then excluded from the list below. Left in, it would appear a second time,
+   *  under the same name, with its own Edit and Remove -- and an admin would have two rows to
+   *  choose between with no way to tell which one prices a bid. */
   function renderDefaultLabor() {
     var body = $("default-labor-body");
     if (!body) return;
     var B = window.TWPolishBid;
-    var rows = B && B.travelSeed ? [B.travelSeed()] : [];
+    var shipped = B && B.travelSeed ? B.travelSeed() : null;
+    // The stored override, or null on a database where this table does not exist yet -- in which
+    // case travelSeed(null) hands back the shipped row and the line renders exactly as it did
+    // before any of this, which is what production sees until the DDL runs.
+    var storedTravel = null;
+    if (shipped) {
+      for (var s = 0; s < LABOR.length; s++) {
+        if (LABOR[s] && LABOR[s].id === shipped.id) { storedTravel = LABOR[s]; break; }
+      }
+    }
+    var rows = shipped ? [B.travelSeed(storedTravel)] : [];
     var out = "";
     for (var i = 0; i < rows.length; i++) {
       var r = rows[i];
       out += "<tr>" +
         "<td>" + esc(r.label) + "</td>" +
-        '<td class="n">' + esc(L.money(r.rate)) + (r.unit === "hours" ? " / hr" : "") + "</td>" +
+        '<td class="n">' + esc(L.money(r.rate)) + (r.unit === "hours" ? " / hr" : " / day") +
+        "</td>" +
         "<td>" + (r.guys_auto
           ? "Man-days come off the crew rows above it"
           : "Typed on the estimate") + "</td>" +
-        '<td class="rowact"><span class="builtin">Built in</span></td>' +
+        '<td class="rowact">' + laborRowActions(r.id, r.label, storedTravel) + "</td>" +
         "</tr>";
     }
     // THE LINES SOMEBODY TYPED, beside the one that was always there. Each carries Edit and
     // Remove for an admin, matching the Takeoff list beside it, and Remove there and here mean
-    // the same thing: stop being a default. Travel gets neither, because it is not a row of this
-    // table -- it is what every estimate is seeded with, and there is no way to express "no
-    // travel row at all" for it to be taken off of.
-    // FILTERED BY THE WORK-TYPE TAB, like the Takeoff list above it. Travel is not filtered:
-    // it is seeded into every bid whatever tab it sits on.
-    var shown = LABOR.filter(function (r) { return appliesToWorkType(r, DEFAULT_WT); });
+    // the same thing: stop being a default.
+    // FILTERED BY THE WORK-TYPE TAB, like the Takeoff list above it. Travel is neither filtered
+    // nor listed here: it is seeded into every bid whatever tab it sits on, and it has already
+    // been drawn above -- listing it again is the double-Travel row this merge exists to prevent.
+    var shown = LABOR.filter(function (r) {
+      return (!shipped || r.id !== shipped.id) && appliesToWorkType(r, DEFAULT_WT);
+    });
     for (var k = 0; k < shown.length; k++) {
       var c = shown[k];
       out += "<tr>" +
@@ -3542,6 +3641,9 @@
     if (labEd) { openLaborForm(labEd.getAttribute("data-labor-edit")); return; }
     var labDel = t.closest && t.closest("[data-labor-del]");
     if (labDel) { await removeLaborDefault(labDel.getAttribute("data-labor-del")); return; }
+    // ITS OWN ARM, not the Remove one. The two say different words to an admin and send different
+    // requests -- a DELETE here would soft-delete the only row anything can address Travel by.
+    if (t.closest && t.closest("[data-labor-reset]")) { await resetTravelDefault(); return; }
     var addBtn = t.closest && t.closest("[data-def-add]");
     if (addBtn) {
       // TWO SAVERS, ONE BUTTON, because a condition is not a library row: `favorite` is a column

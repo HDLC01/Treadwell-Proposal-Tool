@@ -23,9 +23,14 @@ WHAT THESE TESTS ARE ACTUALLY DEFENDING:
     still showing the rate somebody typed. Everything else here (divisions, item units, assembly
     units) is offered-not-enforced, so the exception has to be held down.
 
-  * **Travel is not in this table.** It stays built in. A test asserts the table starts empty and
-    nothing seeds it, because "migrate Travel into the new table" is the obvious-looking change
-    that would put an Edit and a Remove on a row that must not have them.
+  * **Travel is ONE RESERVED ROW in this table, seeded by the schema and by nothing else.** It
+    stopped being a literal on 2026-09-19 ("again this too how can we edit this?" -- Hanz, on the
+    BUILT IN chip the Defaults tab drew beside it). Two rules hold it down and both are tested
+    here: the row is named by the SQL, never by the API (`LibraryLaborIn` has no `id` and
+    `create_labor` mints a uuid, so no caller can make a second row claiming the reserved id),
+    and an absent or soft-deleted row falls back to `travelSeed()`'s own $33.00/hr rather than
+    taking Travel off anybody's estimate. Nothing seeds the table in Python: `_ref_defaults` is
+    empty for it, because a Python-side default would be a second statement of Kyle's rate.
 
   * **The row shape is a contract.** Three tracks were built against it at once. The exact key set
     is pinned so the frontend's one mapping at the seam cannot be fed a key that is not there.
@@ -369,16 +374,102 @@ def test_deleting_twice_is_a_no_op_not_a_second_success(store):
     assert library.delete_labor(row["id"]) is False
 
 
-# ── Travel stays built in ─────────────────────────────────────────────
-def test_an_empty_table_stays_empty_rather_than_seeding_travel(store):
+# ── Travel: one reserved row, named by the schema and by nothing else ─────────
+def test_nothing_in_python_seeds_travel_into_this_table(store):
     """`_list_refs` deliberately hands back DEFAULTS when its table is empty — that is how the
-    Divisions and Units lists ship with something in them. Copying that shape here would seed a
-    "Travel" row into the CUSTOM list, and a custom row carries an Edit and a Remove that Travel
-    must never have. Travel stays `TWPolishBid.travelSeed()`, rendered as "Built in"."""
+    Divisions and Units lists ship with something in them. Copying that shape here would put a
+    SECOND statement of Travel's rate in Python, beside the one in `travelSeed()` — and the note
+    above travelSeed records what two copies of that row did within a day of existing.
+
+    THE ROW IS SEEDED BY THE SQL, once, in both schema files. An empty table is therefore the
+    honest answer everywhere the DDL has not run, and the frontend falls back to travelSeed()'s
+    own constant there rather than showing nothing."""
     assert library.list_labor() == []
     assert store["library_labor"] == []
     assert library._ref_defaults(library.LABOR) == (), \
         "library_labor must not be given seeded defaults the way the reference lists are"
+
+
+def test_the_api_can_never_name_a_row_so_the_reserved_id_cannot_be_forged(store, as_admin):
+    """THE DOUBLE-TRAVEL HAZARD, SHUT AT THE DOOR. `travel` is the id `migrateModel` finds the
+    Travel row by on every draft ever saved, and `seedLibraryLabor` treats it as the one id that
+    may overwrite a row already on the model. A second row holding it would be applied to bids
+    depending on which the server listed first.
+
+    So a caller does not get to choose. `LibraryLaborIn` has no `id` field and `create_labor`
+    does `row["id"] = str(uuid.uuid4())` unconditionally — an id in the body is dropped like any
+    other unknown key, exactly the way `validate_item` drops one.
+
+    EXECUTED THROUGH THE ENDPOINT, not read off the source: "the field is not on the model" and
+    "the field is ignored" are different claims and only the second one matters.
+
+    Mutation: add `id` to LibraryLaborIn and let create_labor honour it. The POST below then
+    stores a row whose id is `travel`, and the Defaults tab lists two Travels."""
+    r = client.post("/api/library/labor",
+                    json={"id": "travel", "name": "Drive time", "rate": 99, "unit": "days"})
+    assert r.status_code == 200, r.text
+    made = r.json()["row"]
+    assert made["id"] != "travel", (
+        "the API let a caller name a row `travel` — that row now competes with the seeded one "
+        "for every bid")
+    assert len(made["id"]) >= 32, "the id is not the uuid create_labor is supposed to mint"
+    assert [x["id"] for x in store["library_labor"]] == [made["id"]]
+
+
+def test_editing_travel_leaves_the_fields_the_form_does_not_write_alone(store, as_admin):
+    """THE CONTRACT THE Reset BUTTON AND THE Edit FORM BOTH RELY ON. Both send `name`, `rate` and
+    `unit` and nothing else; `guys_auto` is what keeps Travel's Guys column tracking the crew's
+    man-days, and `sort` is what keeps it first in the list. A PATCH that blanked either would
+    silently change how every new bid prices travel, or move the line.
+
+    `validate_labor(partial=True)` is what guarantees it — it touches only the keys the caller
+    actually named — and this is that guarantee run against the store rather than read.
+
+    Mutation: drop the `partial=True` from update_labor's validate call. `guys_auto` then comes
+    back False (the column default for a key nobody sent) and Travel stops following the crew."""
+    store["library_labor"].append({
+        "id": "travel", "name": "Travel", "rate": 33.0, "unit": "hours", "guys_auto": True,
+        "sort": -1, "notes": "seeded by the schema", "owner_email": None,
+        "created_at": "2026-09-19T00:00:00Z", "updated_at": "2026-09-19T00:00:00Z",
+        "deleted_at": None})
+    r = client.patch("/api/library/labor/travel",
+                     json={"name": "Travel", "rate": 41.5, "unit": "hours"})
+    assert r.status_code == 200, r.text
+    row = r.json()["row"]
+    assert row["rate"] == 41.5, "the edit did not land"
+    assert row["guys_auto"] is True, (
+        "a rate edit turned Travel's guys_auto off — its Guys column stops following the crew")
+    assert row["sort"] == -1, "a rate edit moved Travel's position in the list"
+    assert row["notes"] == "seeded by the schema", "a rate edit blanked the notes"
+    # One row, still. An edit is not an insert.
+    assert [x["id"] for x in store["library_labor"]] == ["travel"]
+
+
+def test_a_reset_that_deleted_the_row_would_take_the_only_handle_travel_has(store, as_admin):
+    """WHY Reset IS A PATCH AND NOT A DELETE, said at the level where it is a fact about the API
+    rather than about a button.
+
+    A soft delete reads fine on screen: list_labor() stops answering with the row and the page
+    falls back to travelSeed()'s $33.00/hr, so Travel neither disappears from the list nor from a
+    bid. What it also does is take the id with it — `update_labor` and `get_labor` both filter on
+    `deleted_at is null`, so the row becomes unaddressable, and the only way to make a row called
+    `travel` again is by hand in SQL (the test above pins that the API cannot). The Edit control
+    would go with it and Travel would be exactly as uneditable as it was before.
+
+    This is that door, shown shut: after a delete the PATCH the page would send is a 404."""
+    store["library_labor"].append({
+        "id": "travel", "name": "Travel", "rate": 41.5, "unit": "hours", "guys_auto": True,
+        "sort": -1, "notes": None, "owner_email": None,
+        "created_at": "2026-09-19T00:00:00Z", "updated_at": "2026-09-19T00:00:00Z",
+        "deleted_at": None})
+    assert library.delete_labor("travel") is True
+    # The bid is unharmed — the row simply stops being an override, which is the safe direction.
+    assert library.list_labor() == []
+    # …but it can never be edited again from anything a browser can reach.
+    r = client.patch("/api/library/labor/travel", json={"rate": 33.0})
+    assert r.status_code == 404, (
+        "a soft-deleted travel row is still patchable, which would make Reset-as-delete safe — "
+        "if that becomes true, revisit resetTravelDefault")
 
 
 # ── endpoints ─────────────────────────────────────────────────────────

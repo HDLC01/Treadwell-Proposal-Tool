@@ -467,15 +467,75 @@ out.libraryLabor = {
   // A new array. Seeding the model the page is holding must not rewrite the array it was handed.
   inputUntouched: JSON.stringify(inputArray) === inputBefore,
   isANewArray: seeded !== inputArray,
-  // TRAVEL CANNOT BE DISPLACED. An id already on the model wins, which matters most for this one:
-  // migrateModel finds Travel by that exact id, so a library row that took it would take the
-  // Travel backfill with it.
-  travelCannotBeReplaced: (function () {
+  // TRAVEL IS OVERRIDDEN IN PLACE, NEVER DUPLICATED, and `travel` is the one reserved id that
+  // beats the "already on the model wins" rule. The row the Defaults tab edits carries that id;
+  // skipped, the edit would do nothing, and pushed, migrateModel -- which finds Travel by that
+  // exact id -- would start backfilling onto whichever of two rows it reached first.
+  travelIsOverriddenInPlace: (function () {
     const rows = P.seedLibraryLabor(P.freshModel().labor,
       [{ id: "travel", name: "Drive time", rate: 99, unit: "days", guys_auto: false }]);
     const travel = rows.filter(function (r) { return r.id === "travel"; });
     return { count: travel.length, label: travel[0].label, rate: travel[0].rate,
-             rowCount: rows.length };
+             unit: travel[0].unit, guysAuto: travel[0].guys_auto,
+             rowCount: rows.length,
+             // The sheet's own position, which is where the estimator reads it.
+             at: rows.map(function (r) { return r.id; }).indexOf("travel"),
+             ids: rows.map(function (r) { return r.id; }) };
+  })(),
+  // PRODUCTION, WHERE THE TABLE DOES NOT EXIST. list_labor() answers [] and never raises, so the
+  // library hands back nothing and Travel has to be the sheet's own $33.00/hr row exactly as it
+  // was before any of this. This is the state prod is in until the DDL runs.
+  travelWithNoStoredRow: (function () {
+    const rows = P.seedLibraryLabor(P.freshModel().labor,
+      [{ id: "lab-densify", name: "Densify", rate: 40, unit: "days", guys_auto: false }]);
+    const t = rows.filter(function (r) { return r.id === "travel"; })[0];
+    return { count: rows.filter(function (r) { return r.id === "travel"; }).length,
+             label: t.label, rate: t.rate, unit: t.unit, guysAuto: t.guys_auto };
+  })(),
+  // travelSeed WITH NOTHING IS THE SHIPPED ROW. Everything above rests on this: a stored row is
+  // an OVERRIDE of it, so the two have to be the same shape and the no-row answer has to be the
+  // figure off Kyle's Polish tab.
+  shippedTravel: P.travelSeed(),
+  // …and a stored row is read the way the API actually serves one: numeric as TEXT.
+  storedTravelFromText: P.travelSeed({ id: "travel", name: "Travel", rate: "41.50",
+                                       unit: "hours", guys_auto: true }),
+  // A RATE OF ZERO IS AN ANSWER, not a blank. Travel written off on local work is a thing an
+  // admin can mean, and falling back to 33.00 there would quietly re-price every new bid.
+  storedTravelAtZero: P.travelSeed({ id: "travel", name: "Travel", rate: 0, unit: "hours",
+                                     guys_auto: true }),
+  // A rate that is not a number at all falls back rather than poisoning the row with NaN.
+  storedTravelWithJunkRate: P.travelSeed({ id: "travel", name: "Travel", rate: "not a number",
+                                           unit: "hours", guys_auto: true }),
+  // AND A BLANK ONE IS NOT ZERO, which is a different check from the one above and the reason
+  // `isBlank` is there at all: Number("") and Number(null) are both 0 and both isFinite, so a
+  // guard written as `!isFinite(rate)` alone reads an empty rate as travel being FREE and prices
+  // every new bid's travel at nothing. Three shapes, because a row can arrive short in three ways.
+  storedTravelWithEmptyRate: P.travelSeed({ id: "travel", name: "Travel", rate: "",
+                                            unit: "hours", guys_auto: true }),
+  storedTravelWithNullRate: P.travelSeed({ id: "travel", name: "Travel", rate: null,
+                                           unit: "hours", guys_auto: true }),
+  storedTravelWithNoRateKey: P.travelSeed({ id: "travel", name: "Travel", unit: "hours" }),
+  // …and a blank NAME or UNIT falls back the same way rather than drawing an anonymous line or
+  // multiplying by a unit the estimate has no branch for.
+  storedTravelWithBlankText: P.travelSeed({ id: "travel", name: "   ", rate: 44, unit: "" }),
+  // THE ID IS NEVER READ OFF THE ROW, and this is the fixture that can tell. Every other one
+  // here hands in `id: "travel"`, where "reserve the id" and "copy the row's id" agree and a
+  // mutation between them is invisible. `travel` is what migrateModel's backfill finds this line
+  // by on every draft ever saved: a row that arrived with another id -- a caller's mistake, a
+  // renamed primary key -- must still produce THE Travel row rather than a stray labor line with
+  // no backfill and no way for the Defaults tab to address it.
+  travelSeedIgnoresAForeignId: P.travelSeed({ id: "lab-7f3a", name: "Drive time", rate: 44,
+                                              unit: "hours", guys_auto: true }),
+  // QUANTITIES ARE THE BID'S. Overlaying the library's rate onto Travel must not touch what
+  // somebody typed for how much of it this job needs.
+  travelKeepsItsQuantities: (function () {
+    const model = P.freshModel().labor.map(function (r) {
+      return r.id === "travel" ? Object.assign({}, r, { guys: 6, days: 2 }) : r;
+    });
+    const t = P.seedLibraryLabor(model,
+      [{ id: "travel", name: "Travel", rate: 44, unit: "hours", guys_auto: true }])
+      .filter(function (r) { return r.id === "travel"; })[0];
+    return { guys: t.guys, days: t.days, rate: t.rate };
   })(),
   // Nothing to add, in all three shapes "nothing" arrives in.
   emptyList: P.seedLibraryLabor(P.freshModel().labor, []).map(function (r) { return r.id; }),

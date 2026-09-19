@@ -543,9 +543,167 @@ def test_removing_a_labor_default_takes_it_off_and_leaves_travel(ran):
     assert r["othersSurvive"], "removing one labor line took the others with it"
     assert r["idsLeftInTheModel"] == ["L2", "L3"], (
         "the wrong lines are left after removing L1: %s" % r["idsLeftInTheModel"])
+    # AND TRAVEL IS NOT IN THAT LIST AT ALL. This fixture holds no row with the reserved id, so
+    # the line is drawn from travelSeed()'s own constant and carries no Remove for a removal to
+    # reach. (What it DOES carry once the row exists is the next four tests.)
     assert ran["laborDefaultsList"]["travelCarriesNoControls"], (
-        "Travel is offered Edit and Remove, and it is neither this table's row nor removable")
-    assert ran["laborDefaultsList"]["travelIsBuiltIn"], "Travel no longer reads as built in"
+        "Travel is offered a control while there is no stored row to address -- pressing it can "
+        "only 404")
+    assert ran["laborDefaultsList"]["noBuiltInChip"], (
+        "the 'Built in' chip is back on Travel: \"don't put in a hard coded or built in line "
+        "items\" -- Hanz, twice")
+    assert ran["laborDefaultsList"]["travelShowsTheShippedRate"], (
+        "Travel is not on the rate travelSeed() ships with when nothing overrides it")
+
+
+# ── Travel became editable, 2026-09-19 ────────────────────────────────────────
+# "again this too how can we edit this?" -- Hanz, on the BUILT IN chip this table drew beside
+# Travel, after twice asking for no built-in line items anywhere. It could not be edited because
+# the rate was a literal inside travelSeed() and there was no row behind it to address. There is
+# one now: `public.library_labor` ships a row with the reserved id `travel` in both schema files,
+# and travelSeed(row) overlays it.
+#
+# THE FOUR TESTS BELOW ARE THE FOUR STATES THAT ROW CAN BE IN -- absent (production, today),
+# stored-and-shipped, stored-and-edited, and mid-write -- because the interesting failures are
+# each in a different one.
+@needs_node
+def test_a_stored_travel_row_is_shown_once_with_its_own_rate(ran):
+    """THE EDIT HAS TO REACH THE SCREEN, AND EXACTLY ONE ROW OF IT.
+
+    Two opposite bugs live here and a single-row fixture can only see one of them. If the stored
+    row is ignored, an admin types $41.50, the list shows $33.00, and nothing they do has any
+    effect. If it is LISTED BESIDE the built-in line instead of merged into it, "Travel" appears
+    twice -- same name, two sets of controls, and no way to tell which one prices a bid. So the
+    count and the rate are both asserted, and the shipped figure is asserted ABSENT.
+
+    REMOVE IS NEVER OFFERED. Travel cannot be removed: freshModel() seeds it into every new bid
+    and migrateModel appends it to every old one, so a button saying Remove would be the dead
+    control this whole thread has been about. Reset is what the row can actually do.
+
+    Mutation: drop the `r.id !== shipped.id` filter from renderDefaultLabor's `shown` list and
+    travelRowCount becomes 2. Or pass `null` instead of `storedTravel` to travelSeed and the rate
+    falls back to the shipped one with the stored row ignored."""
+    t = ran["laborTravelStored"]
+    assert t["travelRowCount"] == 1, (
+        "Travel is listed %s times -- the stored row is being drawn beside the built-in line "
+        "instead of onto it" % t["travelRowCount"])
+    assert t["rowCount"] == 2, "the merged Travel row and the one custom line are not what is drawn"
+    assert t["showsTheStoredRate"], "the stored rate never reached the screen"
+    assert t["doesNotShowTheShippedRate"], (
+        "the shipped $33.00 is still on the page, so the stored row was ignored or doubled")
+    assert t["canBeEdited"], "Travel still cannot be edited, which is what Hanz asked for"
+    assert t["offersReset"] and t["resetSaysReset"], (
+        "the way back to the shipped rate is not offered, or does not say Reset")
+    assert t["neverOffersRemove"], (
+        "Travel is offered Remove, which is a button that cannot do what it says: the row is "
+        "seeded into every bid whatever this table holds")
+    assert t["stillListsTheCustomLine"], "merging Travel took the custom labor lines off the list"
+
+
+@needs_node
+def test_reset_is_only_offered_while_there_is_something_to_reset(ran):
+    """A CONTROL THAT WOULD CHANGE NOTHING MUST NOT BE DRAWN. Pressing Reset on a Travel row
+    already holding the shipped rate does nothing visible, which is indistinguishable from a
+    broken button -- and a broken-looking button is the report that started this work.
+
+    NAME AND UNIT COUNT, NOT ONLY THE RATE. The Edit form writes all three, so a Travel renamed
+    to "Drive time" at the same rate has been edited and needs a way home. Comparing the rate
+    alone would strand it under a name nobody can undo.
+
+    Mutation: compare only `now.rate !== shipped.rate` and the renamed case loses its Reset. Drop
+    the comparison entirely and the unedited case grows one."""
+    un = ran["laborTravelUnedited"]
+    assert un["canBeEdited"], "a stored Travel row at the shipped rate cannot be edited"
+    assert un["noResetOffered"], (
+        "Reset is offered on a Travel row that is already on the shipped rate -- pressing it "
+        "changes nothing, which is how a control comes to read as dead")
+    assert un["showsTheShippedRate"]
+    rn = ran["laborTravelRenamed"]
+    assert rn["showsTheStoredName"], "a renamed Travel row still shows the shipped name"
+    assert rn["offersReset"], (
+        "a Travel row renamed at the shipped rate has no way back -- the Edit form writes the "
+        "name, so the comparison has to read it")
+
+
+@needs_node
+def test_editing_travel_patches_the_reserved_row_and_never_creates_a_second(ran):
+    """THE DOUBLE-TRAVEL HAZARD, ARRIVING THROUGH THE FORM. `LibraryLaborIn` has no `id` field and
+    `create_labor` mints a uuid unconditionally, both deliberately -- so a POST from this form
+    would store a SECOND labor line called "Travel" whose id is a uuid. It would list beside the
+    real one, override nothing, and price nothing: seedLibraryLabor matches the built-in row by
+    the id `travel` and would read the uuid row as an ordinary extra line on every bid.
+
+    So the form has to open on the STORED row (which is what makes it a PATCH) rather than blank.
+    An add form and an edit form are the same markup; the difference is entirely whether `f.id`
+    was set, and that is what is asserted here.
+
+    Mutation: have openLaborForm ignore the reserved id and open blank -- `op` becomes POST and
+    `storedLineCount` becomes 2."""
+    e = ran["laborTravelEdit"]
+    assert e["preloadsTheName"] and e["preloadsTheRate"], (
+        "the Edit form opened blank on Travel, so Save would POST a second row")
+    assert e["op"] == "PATCH", (
+        "editing Travel went out as %s -- a POST mints a uuid and leaves a second Travel that "
+        "overrides nothing" % e["op"])
+    assert e["patchedTravel"], "the edit was addressed to something other than the reserved id"
+    assert e["body"] == {"name": "Travel", "rate": 37.25, "unit": "hours"}, (
+        "the patch body is %s" % e["body"])
+    assert e["rowShowsTheNewRate"], "the list still shows the old rate after saving"
+    assert e["storedLineCount"] == 1 and e["idsAfter"] == ["travel"], (
+        "editing Travel changed how many labor lines exist: %s" % e["idsAfter"])
+
+
+@needs_node
+def test_reset_patches_the_row_back_rather_than_deleting_it(ran):
+    """RESET IS A PATCH ON PURPOSE, and this is the assertion that says why.
+
+    A soft DELETE would look identical on this screen -- list_labor() stops answering with the
+    row, travelSeed() falls back, and Travel reads $33.00/hr again. It would also be a one-way
+    door. The row's id is the only handle anything has on Travel; `LibraryLaborIn` has no id
+    field and create_labor mints a uuid, so once `travel` is soft-deleted nothing reachable from
+    a browser can make it again. The Edit button would disappear with it and Travel would be
+    exactly as uneditable as it was before this work, with no way back short of hand-written SQL.
+
+    THE SHIPPED FIGURES ARE READ FROM travelSeed, not typed on the library page. The note above
+    travelSeed records what happened the last time two copies of that row existed: they disagreed
+    within a day.
+
+    Mutation: send a DELETE instead and `neverDeletes` fails; or hardcode the body here and
+    `body` stops matching the moment Kyle's rate changes in one place only."""
+    r = ran["laborTravelReset"]
+    assert r["op"] == "PATCH" and r["neverDeletes"], (
+        "Reset went out as %s -- a delete takes the only id Travel can be addressed by with it, "
+        "permanently" % r["op"])
+    assert r["sentToTravel"], "Reset was addressed to something other than the reserved id"
+    assert r["body"] == {"name": "Travel", "rate": 33.0, "unit": "hours"}, (
+        "Reset did not send the figures travelSeed() ships: %s" % r["body"])
+    assert r["showsTheShippedRate"], "the list still shows the edited rate after a reset"
+    assert r["resetGoneAfterwards"], (
+        "Reset is still offered after a reset, so pressing it again would do nothing")
+    assert r["stillEditable"] and r["rowStillInTheModel"], (
+        "the row did not survive its own reset -- Travel is now uneditable for good")
+    assert r["travelStillListed"], "Travel vanished from the defaults list"
+
+    # AND A REFUSED RESET PUTS IT BACK, like both writes beside it. A rate that looks reset and
+    # returns on the next reload is worse than one that refuses out loud -- and the server's own
+    # reason reaches the screen, because "couldn't" with no cause sends somebody to ask why.
+    f = ran["laborTravelResetFails"]
+    assert f["putTheStoredRateBack"] and f["notLeftOnTheShippedRate"], (
+        "a refused Reset left the shipped rate on screen while the database still holds the "
+        "edited one")
+    assert f["rateStillInTheModel"] == 41.5, (
+        "the page's own row was left on %s after a refused reset" % f["rateStillInTheModel"])
+    assert f["saidSo"] and f["saysWhy"], (
+        "a refused Reset says nothing, or does not say what the server said")
+    assert f["rowStillInTheModel"], "a refused Reset dropped the row"
+    assert f["resetStillOffered"], "a refused Reset retired the button that would retry it"
+
+    # NOT FOR A NON-ADMIN. The writes are admin-only on the server, so neither control is drawn --
+    # the rule the rest of this page follows rather than offering a button that 403s.
+    ro = ran["laborTravelReadOnly"]
+    assert ro["stillListsTravel"] and ro["showsTheStoredRate"], (
+        "a non-admin cannot see what Travel costs, which is reference an estimator needs")
+    assert ro["noControls"], "a non-admin is offered Edit or Reset on Travel"
 
 
 @needs_node
