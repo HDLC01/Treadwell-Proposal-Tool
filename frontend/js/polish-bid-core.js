@@ -392,13 +392,40 @@
   // ── the model the page holds ────────────────────────────────────────────────
   /** The Travel row as the sheet has it, built fresh each call so no two models share an object.
    *
-   *  ONE DEFINITION, TWO CALLERS: `freshModel` seeds it into a new sandbox, and `migrateModel`
-   *  appends it to a draft saved before it existed. Written out twice, the two drifted within a
-   *  day — the migration's copy was still handing out the blank-rate version after the seed had
-   *  moved on. */
-  function travelSeed() {
-    return { id: "travel", label: "Travel", guys: "", days: "", rate: 33.0,
-             unit: "hours", guys_auto: true };
+   *  ONE DEFINITION, THREE CALLERS: `freshModel` seeds it into a new sandbox, `migrateModel`
+   *  appends it to a draft saved before it existed, and the library page's Defaults tab draws it.
+   *  Written out twice, the two drifted within a day — the migration's copy was still handing out
+   *  the blank-rate version after the seed had moved on.
+   *
+   *  `row` IS THE STORED library_labor ROW WITH THE RESERVED ID `travel`, OR NOTHING. Hanz on the
+   *  BUILT IN chip the Defaults tab used to draw beside this line: "again this too how can we
+   *  edit this?", and twice before that, "don't put in a hard coded or built in line items". So
+   *  the rate is a row somebody can type over — and the 33.0 below is what stands when there is
+   *  no row to read: a database where `library_labor` has not been created (production, until the
+   *  DDL runs), a row the Defaults tab's Reset has put back, or a read that could not answer. It
+   *  is a FALLBACK, not a second source of truth; the stored row is an override of it, which is
+   *  the same shape `seedConditionDefaults` takes over `freshModel().conditions`.
+   *
+   *  THE ID NEVER COMES FROM THE ROW. `travel` is what migrateModel's backfill finds this line by
+   *  on every draft ever saved, and an id read off a payload is an id that can arrive wrong.
+   *
+   *  ONLY THE FOUR FIELDS THE DEFAULTS TAB CAN EDIT are taken. `guys` and `days` are what THIS
+   *  job needs and stay empty for the reason libraryLaborRow gives: a seeded quantity is a number
+   *  nobody chose sitting inside a customer's price.
+   *
+   *  A BLANK RATE FALLS BACK RATHER THAN READING AS FREE, and `isFinite` is what catches the
+   *  string PostgREST hands numeric back as when it is something other than a number. 0 is NOT
+   *  blank: a rate somebody deliberately set to zero is an answer, and `isBlank` agrees. */
+  function travelSeed(row) {
+    var r = row || {};
+    var rate = Number(r.rate);
+    return { id: "travel",
+             label: isBlank(r.name) ? "Travel" : String(r.name),
+             guys: "", days: "",
+             rate: (isBlank(r.rate) || !isFinite(rate)) ? 33.0 : rate,
+             unit: isBlank(r.unit) ? "hours" : String(r.unit),
+             guys_auto: Object.prototype.hasOwnProperty.call(r, "guys_auto")
+               ? !!r.guys_auto : true };
   }
 
   /** One row of `public.library_labor`, read as one of THIS model's labor rows.
@@ -427,15 +454,27 @@
   /** `labor` with the library's default lines standing beside it. A NEW array; the one handed in
    *  is never touched, and neither are the rows inside it.
    *
-   *  TRAVEL STAYS BUILT IN. It is not a row in library_labor, it is not migrated into one, and
-   *  nothing here can replace it: an id already on the model wins outright. That guard is not
-   *  theoretical -- a library row that somehow carried the id "travel" would otherwise displace
-   *  the built-in row and take migrateModel's Travel backfill (which finds the row by that exact
-   *  id) with it. `id` is not a writable field on the endpoint, so this is a cheap guard against
-   *  something that should never arrive rather than a case anybody can produce today.
+   *  `travel` IS A RESERVED ID AND THE ONE EXCEPTION. Every other id already on the model wins
+   *  outright, so a default can never displace a row the bid is holding. Travel is the other way
+   *  round on purpose: it is the ONE built-in line the Defaults tab can now edit, so its stored
+   *  row is APPLIED ONTO the model's own Travel row rather than skipped or pushed beside it.
+   *  Skipping it would make the edit do nothing. Pushing it would put TWO rows carrying the id
+   *  `travel` on the bid, and migrateModel's backfill finds Travel by that exact id -- it would
+   *  start filling fields onto whichever one it reached first. Either way the row an admin typed
+   *  a rate into is not the row that prices the job.
+   *
+   *  GUYS AND DAYS SURVIVE THE OVERLAY. They are quantities for THIS job, not a property of the
+   *  default, and editing a rate in the library has no business touching them. The gate below
+   *  already means this only runs on a bid with no stated labor at all, so today they are always
+   *  blank -- carrying them across is what keeps that true if the gate is ever widened.
+   *
+   *  A TRAVEL ROW THE MODEL DOES NOT HAVE IS ADDED, not dropped. Every model minted by
+   *  freshModel() carries one, so that is the short-fixture case rather than a real bid -- and
+   *  the safe direction is the one where Travel is on the estimate either way.
    *
    *  ORDER IS THE SERVER'S. GET /api/library/labor sorts by `sort` then `name`; re-sorting here
    *  would be a second opinion on the order the estimator arranged them in on the library page.
+   *  Travel keeps the POSITION IT ALREADY HAD on the model, which is the sheet's own.
    *
    *  WHO IS ALLOWED TO CALL THIS is the whole safety question, and the answer is laborUnstated
    *  below -- never this function, which will happily add rows to a finished bid if asked. */
@@ -449,8 +488,26 @@
     }
     for (i = 0; i < rows.length; i++) {
       var r = rows[i];
-      if (!r || r.id === null || r.id === undefined || seen[String(r.id)]) continue;
-      seen[String(r.id)] = true;
+      if (!r || r.id === null || r.id === undefined) continue;
+      var rid = String(r.id);
+      if (rid === "travel") {
+        var travel = travelSeed(r);
+        var at = -1;
+        for (var t = 0; t < out.length; t++) {
+          if (out[t] && String(out[t].id) === "travel") { at = t; break; }
+        }
+        if (at === -1) {
+          out.push(travel);
+        } else {
+          travel.guys = out[at].guys;
+          travel.days = out[at].days;
+          out[at] = travel;
+        }
+        seen[rid] = true;
+        continue;
+      }
+      if (seen[rid]) continue;
+      seen[rid] = true;
       out.push(libraryLaborRow(r));
     }
     return out;
