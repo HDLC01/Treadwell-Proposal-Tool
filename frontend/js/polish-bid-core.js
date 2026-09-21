@@ -148,6 +148,8 @@
     SALES_TAX: 0.09475,   // B74, when the job is taxable
     BOND: 0,              // B78 — the sheet ships it at zero
     FEES: 0,              // D77 — B77 and C77 are blank, so the line is zero
+    DYE_PER_SF: 0.14,            // C25 — Dye, a flat rate across the polished area
+    JOINT_FILLER_KIT_COST: 500,  // C29 — Joint Filler (10 gal kit), per kit
 
     /* THE ONE PLACE THIS ENGINE DELIBERATELY DEPARTS FROM KYLE'S SHEET.
      *
@@ -252,6 +254,30 @@
       if (r.unit === "SF") t += num(r.measurement);
     }
     return t;
+  }
+
+  /** B25 `=IF(E25="Yes",E18)`, C25 `0.14`, D25 `=B25*C25` — the Dye line. A flat rate
+   *  across the whole polished area, charged only when the condition is on.
+   *
+   *  Not a library item: dye has no coverage, no pack size, no vendor — nothing a real
+   *  material row has. Forcing it through priceLine/priceAssembly would mean inventing a fake
+   *  catalog item for a fixed formula that is not one, so it prices from RATES.DYE_PER_SF
+   *  directly instead. 0 when the condition is off or the area is not yet a positive number. */
+  function dyeCost(area, on) {
+    var a = num(area);
+    if (!on || !(a > 0)) return 0;
+    return a * RATES.DYE_PER_SF;
+  }
+
+  /** B29 `=ROUNDUP(IF(E29="yes",(E18/3500),0),0)`, C29 `500`, D29 `=B29*C29` — Joint
+   *  Filler (10 gal kit). One kit per 3,500 SF of polished area, ROUNDED UP to a whole kit —
+   *  this file's own roundUp(), not a second rounding function — charged only when the
+   *  condition is on. Same 0-guard as dyeCost above. */
+  function jointFillerCost(area, on) {
+    var a = num(area);
+    if (!on || !(a > 0)) return 0;
+    var kits = roundUp(a / 3500);
+    return kits * RATES.JOINT_FILLER_KIT_COST;
   }
 
   /** THE CHAIN. Materials and labor in, a bid out, one key per cell of Kyle's markup column.
@@ -366,13 +392,149 @@
   // ── the model the page holds ────────────────────────────────────────────────
   /** The Travel row as the sheet has it, built fresh each call so no two models share an object.
    *
-   *  ONE DEFINITION, TWO CALLERS: `freshModel` seeds it into a new sandbox, and `migrateModel`
-   *  appends it to a draft saved before it existed. Written out twice, the two drifted within a
-   *  day — the migration's copy was still handing out the blank-rate version after the seed had
-   *  moved on. */
-  function travelSeed() {
-    return { id: "travel", label: "Travel", guys: "", days: "", rate: 33.0,
-             unit: "hours", guys_auto: true };
+   *  ONE DEFINITION, THREE CALLERS: `freshModel` seeds it into a new sandbox, `migrateModel`
+   *  appends it to a draft saved before it existed, and the library page's Defaults tab draws it.
+   *  Written out twice, the two drifted within a day — the migration's copy was still handing out
+   *  the blank-rate version after the seed had moved on.
+   *
+   *  `row` IS THE STORED library_labor ROW WITH THE RESERVED ID `travel`, OR NOTHING. Hanz on the
+   *  BUILT IN chip the Defaults tab used to draw beside this line: "again this too how can we
+   *  edit this?", and twice before that, "don't put in a hard coded or built in line items". So
+   *  the rate is a row somebody can type over — and the 33.0 below is what stands when there is
+   *  no row to read: a database where `library_labor` has not been created (production, until the
+   *  DDL runs), a row the Defaults tab's Reset has put back, or a read that could not answer. It
+   *  is a FALLBACK, not a second source of truth; the stored row is an override of it, which is
+   *  the same shape `seedConditionDefaults` takes over `freshModel().conditions`.
+   *
+   *  THE ID NEVER COMES FROM THE ROW. `travel` is what migrateModel's backfill finds this line by
+   *  on every draft ever saved, and an id read off a payload is an id that can arrive wrong.
+   *
+   *  ONLY THE FOUR FIELDS THE DEFAULTS TAB CAN EDIT are taken. `guys` and `days` are what THIS
+   *  job needs and stay empty for the reason libraryLaborRow gives: a seeded quantity is a number
+   *  nobody chose sitting inside a customer's price.
+   *
+   *  A BLANK RATE FALLS BACK RATHER THAN READING AS FREE, and `isFinite` is what catches the
+   *  string PostgREST hands numeric back as when it is something other than a number. 0 is NOT
+   *  blank: a rate somebody deliberately set to zero is an answer, and `isBlank` agrees. */
+  function travelSeed(row) {
+    var r = row || {};
+    var rate = Number(r.rate);
+    return { id: "travel",
+             label: isBlank(r.name) ? "Travel" : String(r.name),
+             guys: "", days: "",
+             rate: (isBlank(r.rate) || !isFinite(rate)) ? 33.0 : rate,
+             unit: isBlank(r.unit) ? "hours" : String(r.unit),
+             guys_auto: Object.prototype.hasOwnProperty.call(r, "guys_auto")
+               ? !!r.guys_auto : true };
+  }
+
+  /** One row of `public.library_labor`, read as one of THIS model's labor rows.
+   *
+   *  THE TWO SHAPES DIFFER, AND NEITHER IS RENAMED TO MATCH THE OTHER. The table calls the line's
+   *  text `name`, the way every other library table does; a labor row on this model calls it
+   *  `label`, the way the three crew rows and Travel above have since the model existed. Renaming
+   *  the column would break the library page and the API contract three tracks agreed on; renaming
+   *  `label` would blank the Labor step's names on every bid already saved. So the difference is
+   *  kept and bridged, once, here.
+   *
+   *  ONE DEFINITION, and the note on travelSeed directly above says why it is stated only once:
+   *  that row written out twice drifted within a day. This is the same row with one more source.
+   *
+   *  GUYS AND DAYS START EMPTY on purpose. A default says what the line IS and what it costs per
+   *  unit; how much of it THIS job needs is the estimator's to type, and a seeded quantity would
+   *  be a number nobody chose sitting inside a customer's price. `rate` is Number(), not num():
+   *  the endpoint refuses a non-numeric rate with a 400, so there is nothing here for a coercion
+   *  to rescue, and laborCost already reads a NaN as 0 rather than poisoning the bid. */
+  function libraryLaborRow(row) {
+    var r = row || {};
+    return { id: r.id, label: r.name, guys: "", days: "", rate: Number(r.rate),
+             unit: r.unit, guys_auto: !!r.guys_auto };
+  }
+
+  /** `labor` with the library's default lines standing beside it. A NEW array; the one handed in
+   *  is never touched, and neither are the rows inside it.
+   *
+   *  `travel` IS A RESERVED ID AND THE ONE EXCEPTION. Every other id already on the model wins
+   *  outright, so a default can never displace a row the bid is holding. Travel is the other way
+   *  round on purpose: it is the ONE built-in line the Defaults tab can now edit, so its stored
+   *  row is APPLIED ONTO the model's own Travel row rather than skipped or pushed beside it.
+   *  Skipping it would make the edit do nothing. Pushing it would put TWO rows carrying the id
+   *  `travel` on the bid, and migrateModel's backfill finds Travel by that exact id -- it would
+   *  start filling fields onto whichever one it reached first. Either way the row an admin typed
+   *  a rate into is not the row that prices the job.
+   *
+   *  GUYS AND DAYS SURVIVE THE OVERLAY. They are quantities for THIS job, not a property of the
+   *  default, and editing a rate in the library has no business touching them. The gate below
+   *  already means this only runs on a bid with no stated labor at all, so today they are always
+   *  blank -- carrying them across is what keeps that true if the gate is ever widened.
+   *
+   *  A TRAVEL ROW THE MODEL DOES NOT HAVE IS ADDED, not dropped. Every model minted by
+   *  freshModel() carries one, so that is the short-fixture case rather than a real bid -- and
+   *  the safe direction is the one where Travel is on the estimate either way.
+   *
+   *  ORDER IS THE SERVER'S. GET /api/library/labor sorts by `sort` then `name`; re-sorting here
+   *  would be a second opinion on the order the estimator arranged them in on the library page.
+   *  Travel keeps the POSITION IT ALREADY HAD on the model, which is the sheet's own.
+   *
+   *  WHO IS ALLOWED TO CALL THIS is the whole safety question, and the answer is laborUnstated
+   *  below -- never this function, which will happily add rows to a finished bid if asked. */
+  function seedLibraryLabor(labor, rows) {
+    var out = (labor instanceof Array) ? labor.slice() : [];
+    if (!(rows instanceof Array)) return out;
+    var seen = {};
+    var i;
+    for (i = 0; i < out.length; i++) {
+      if (out[i] && out[i].id !== null && out[i].id !== undefined) seen[String(out[i].id)] = true;
+    }
+    for (i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      if (!r || r.id === null || r.id === undefined) continue;
+      var rid = String(r.id);
+      if (rid === "travel") {
+        var travel = travelSeed(r);
+        var at = -1;
+        for (var t = 0; t < out.length; t++) {
+          if (out[t] && String(out[t].id) === "travel") { at = t; break; }
+        }
+        if (at === -1) {
+          out.push(travel);
+        } else {
+          travel.guys = out[at].guys;
+          travel.days = out[at].days;
+          out[at] = travel;
+        }
+        seen[rid] = true;
+        continue;
+      }
+      if (seen[rid]) continue;
+      seen[rid] = true;
+      out.push(libraryLaborRow(r));
+    }
+    return out;
+  }
+
+  /** Does this SAVED blob state no labor rows of its own?
+   *
+   *  THE GATE ON THE DEFAULTS, and the only thing standing between a library edit and somebody's
+   *  finished bid. True means exactly one thing: nobody has ever stated a labor row for this
+   *  estimate, so there is no estimator's work for a default to land on top of.
+   *
+   *  IT READS THE SAVED BLOB, NOT A MODEL, and it has to. migrateModel fills a missing `labor` in
+   *  from freshModel() before it hands the model back, so by the time a model exists the question
+   *  can no longer be asked of it -- every model has four labor rows whether or not anybody chose
+   *  them. Ask it of the blob or do not ask it at all.
+   *
+   *  ANYTHING THAT IS NOT A v2 MODEL ANSWERS FALSE, which is the conservative direction. A v1
+   *  draft keeps its crew under `labour` (see V1_LABOUR_KEY) and has no `labor` at all, so reading
+   *  the absence as "never stated" would inject defaults into a bid that has real crew numbers on
+   *  it -- the one outcome this gate exists to prevent. A version-less partial blob is treated the
+   *  same way for the same reason: it is not ours to judge. Only "nothing saved whatsoever" and
+   *  "a v2 model that states no rows" are seedable. `version !== 2` is the identical strict
+   *  comparison migrateModel makes, so the two cannot disagree about what a v2 model is. */
+  function laborUnstated(saved) {
+    if (!saved || typeof saved !== "object") return true;
+    if (saved.version !== 2) return false;
+    return !(saved.labor instanceof Array) || !saved.labor.length;
   }
 
   /** The five conditions that ALSO live as Yes/No literals in Kyle's workbook.
@@ -479,6 +641,64 @@
     return out;
   }
 
+  /** `conditions` with the library's stored answers written over it. A NEW object; the one handed
+   *  in is never touched.
+   *
+   *  AN OVERRIDE OF A LITERAL, NOT A SECOND COPY OF IT. freshModel() still states what the tool
+   *  SHIPS answering -- joint filler on, dye and remove-existing off -- and a row only arrives
+   *  here for a condition somebody has deliberately changed on the Defaults tab. That is why
+   *  neither this file nor backend/condition_defaults.py holds a second statement of the shipped
+   *  answer: the note above travelSeed records what two copies of one fact did within a day.
+   *
+   *  ONLY A KEY THE MODEL ALREADY CARRIES. migrateModel whitelists condition keys against
+   *  freshModel().conditions and DROPS every other one, so a key seeded here that the model does
+   *  not have would look applied on screen and come back missing on the next load -- the exact
+   *  trap polish-intake.js records for `reno`. An off-vocabulary row is skipped rather than
+   *  thrown over: the endpoint already refuses one on the way in, and a page that died over a row
+   *  it could ignore would cost an estimator the whole Takeoff step.
+   *
+   *  WHO IS ALLOWED TO CALL THIS is the whole safety question, and the answer is
+   *  conditionsUnstated below -- never this function, which will happily rewrite the answers on a
+   *  finished bid if asked. The same split seedLibraryLabor and laborUnstated already take. */
+  function seedConditionDefaults(conditions, rows) {
+    var out = Object.assign({}, conditions || {});
+    if (!(rows instanceof Array)) return out;
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      if (!r || !r.key) continue;
+      if (!Object.prototype.hasOwnProperty.call(out, r.key)) continue;
+      out[r.key] = !!r.on;
+    }
+    return out;
+  }
+
+  /** Has NOTHING been saved for this estimate at all?
+   *
+   *  THE GATE ON THE CONDITION DEFAULTS, and deliberately stricter than laborUnstated. Hanz's
+   *  rule for this feature, verbatim: changing a default must not change any estimate that
+   *  already exists, because an estimator's saved answers are their work. So the one seedable
+   *  case is the one with no work to protect -- nothing saved whatsoever, or a blob that states
+   *  literally nothing.
+   *
+   *  WHY NOT laborUnstated's "a v2 model stating an empty array" CLAUSE. An empty `labor` array is
+   *  a shape a real model can hold and genuinely means "no rows chosen". `conditions` has no
+   *  equivalent: migrateModel backfills every key from freshModel on the way out, so a saved v2
+   *  blob that omitted `conditions` was still SHOWN an answer, and its next save wrote that answer
+   *  into Kyle's workbook through conditionCellWrites. Reading that as unstated would move a
+   *  Yes/No literal on a bid somebody has already worked on -- which is the one thing this gate
+   *  exists to prevent.
+   *
+   *  IT READS THE SAVED BLOB, NOT A MODEL, for the reason laborUnstated gives: by the time a model
+   *  exists every condition has an answer whether or not anybody chose it. Ask it of the blob or
+   *  do not ask it at all. */
+  function conditionsUnstated(saved) {
+    if (!saved || typeof saved !== "object") return true;
+    for (var k in saved) {
+      if (Object.prototype.hasOwnProperty.call(saved, k)) return false;
+    }
+    return true;
+  }
+
   /** The labor rows the template itself seeds: A37 = 3 guys at C37 = $33.00/hr, the mock-up at
    *  B40 = half a day, and joint filling at C44 = $33.00. Days are left blank on the two an
    *  estimator has to judge.
@@ -502,12 +722,27 @@
         { id: "jointfill", label: "Joint filler", guys: 3, days: "", rate: 33.0 },
         travelSeed()
       ],
-      // joint_filler ships ON, which is how Kyle's sheet ships and what the intake toggle
-      // defaulted to. The other two ship off. migrateModel's generic backfill carries all three
-      // onto every draft saved before they lived here.
+      // ALL THREE TAKEOFF CONDITIONS SHIP OFF, and joint_filler is the one that moved.
+      //
+      // It shipped ON until 2026-09-19 because Kyle's template ships Polish!E29 = "Yes". That was
+      // a faithful transcription of the workbook and the wrong default for this tool, and the
+      // difference is that the workbook is a thing Kyle fills in while this is a thing that
+      // prices a bid on its own. Since 2026-09-18 the condition carries real money --
+      // jointFillerCost charges one $500 kit per 3,500 sq ft -- so shipping it on added $2,500 to
+      // a 17,500 SF bid that nobody had asked for and no screen made anybody decide. Hanz's call:
+      // all three start off and the estimator switches on what the job actually needs, on the
+      // estimate's own Takeoff step.
+      //
+      // THE WORKBOOK STILL GETS ITS LITERAL. conditionCellWrites writes both Yes and No
+      // unconditionally, so Polish!E29 lands as "No" rather than blank -- a blank Yes/No cell is
+      // not "No" to Kyle's formulas, it is whatever his IF() falls through to.
+      //
+      // AN ADMIN OVERRIDE STILL WINS over every one of these: seedConditionDefaults writes a
+      // stored condition_defaults row over this literal on a brand new bid. This is what the tool
+      // SHIPS answering, not the last word on it.
       conditions: { local: true, hard_bid: false, prevailing_wage: false,
                     taxable: true, remodel_tax: false, bond: false,
-                    dye: false, joint_filler: true, remove_existing_jf: false },
+                    dye: false, joint_filler: false, remove_existing_jf: false },
       contingency: 0,
       // D77, the Fees + Textura line. Seeded from RATES.FEES rather than a bare 0 so the constant
       // stays the one place that says what the workbook ships -- the parity test pins B77×C77 as
@@ -762,9 +997,16 @@
     gpPct: gpPct, hardBidPct: hardBidPct,
     CONDITION_CELLS: CONDITION_CELLS, conditionCellWrites: conditionCellWrites,
     conditionsFromCells: conditionsFromCells,
+    // The library's answer for a condition, and the gate that decides whether it may be
+    // applied at all. Exported as a PAIR on purpose: seedConditionDefaults will rewrite the
+    // answers on a finished bid if a caller asks it to, and conditionsUnstated is the only
+    // thing standing between a Defaults-tab edit and somebody's saved work.
+    seedConditionDefaults: seedConditionDefaults,
+    conditionsUnstated: conditionsUnstated,
     laborCost: laborCost, laborTotal: laborTotal, travelManDays: travelManDays,
     filledIn: filledIn,
     takeoffSf: takeoffSf,
+    dyeCost: dyeCost, jointFillerCost: jointFillerCost,
     markupChain: markupChain,
     freshModel: freshModel, migrateModel: migrateModel, blockers: blockers,
     // EXPORTED 2026-09-16 for a THIRD reader: the library page's Defaults tab lists Travel as the
@@ -772,6 +1014,16 @@
     // written above travelSeed itself -- the two copies that existed before drifted within a day,
     // and a third on another page would have drifted unseen, because nothing on the library page
     // prices anything and nobody would have noticed the rate go stale.
-    travelSeed: travelSeed
+    travelSeed: travelSeed,
+    // AND THE SAME ARGUMENT AGAIN, 2026-09-17, for the library's CUSTOM labor lines. The seam
+    // between a library_labor row and an estimate labor row lives in libraryLaborRow and nowhere
+    // else -- the table says "name", the estimate says "label", and a second hand-written mapping
+    // is exactly how travelSeed came to have two copies that disagreed.
+    //
+    // The conflict resolved here was the seed branch replacing travelSeed's export rather than
+    // joining it: that branch was cut from main, which did not have the 2026-09-16 export yet.
+    // Both belong -- Travel is built in, the library rows are additions beside it.
+    libraryLaborRow: libraryLaborRow, seedLibraryLabor: seedLibraryLabor,
+    laborUnstated: laborUnstated
   };
 });

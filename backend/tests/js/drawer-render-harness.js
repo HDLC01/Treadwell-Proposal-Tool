@@ -208,6 +208,14 @@ const FN_NAMES = [
   // the 2026-08-12 production outage this whole harness exists to prevent. So it is lifted, and
   // test_drawer_renders drives it with a row that takes that branch.
   "renderPortalUnknown",
+  // `?open=<pid>` in the address bar (2026-09-18), so a reload comes back to the drawer that was
+  // open instead of to the bare board. EIGHTH addition to this list for the same reason as the
+  // seven above: the lifted openDetail calls it on every open, so leaving it out is a
+  // ReferenceError on the FIRST line of every drawer scenario in this file. Its own body is
+  // wrapped in a try, and this harness binds no `history`, so here it is a no-op that proves
+  // nothing — what it is doing is keeping openDetail runnable. The behaviour is executed in
+  // backend/tests/js/tab-memo-harness.js, which gives it a location and a history to write to.
+  "markDrawerInUrl",
 ];
 
 // openDetail, RENAMED so the module can hold both it and the stub the action helpers call.

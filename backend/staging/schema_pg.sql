@@ -197,6 +197,67 @@ create table if not exists public.library_units (
 create index if not exists library_units_live_name_idx
   on public.library_units (name) where deleted_at is null;
 
+-- Custom labor defaults, 2026-09-17. The "+ Add a labor line" button on the Defaults tab had
+-- no handler because there was nowhere to put one: renderDefaultLabor drew a single built-in
+-- row out of travelSeed() and nothing stored anything else.
+--
+-- TRAVEL IS IN HERE, AS ONE RESERVED ROW, since 2026-09-19. Hanz, on the BUILT IN chip the
+-- Defaults tab drew beside it: "again this too how can we edit this?" -- and twice before that,
+-- "don't put in a hard coded or built in line items". Its rate was a literal in travelSeed() and
+-- there was no row to address, so nothing on the page could change it.
+--
+-- NOBODY CAN DELETE IT, which is what the earlier note here was protecting and what is still
+-- true. `travel` is the id migrateModel finds Travel by, and freshModel() seeds a Travel row into
+-- every new bid whether or not this table answers -- so a row here OVERRIDES the shipped rate, it
+-- does not supply it. list_labor() answering nothing (a soft-deleted row, or a database where
+-- this table does not exist at all) puts Travel back on the $33.00/hr in travelSeed() rather than
+-- taking it off anybody's estimate. That is why the Defaults tab labels the control Reset and not
+-- Remove: Remove is not a thing this row can do.
+--
+-- SEEDED HERE RATHER THAN CREATED THROUGH THE API on purpose. POST /api/library/labor mints a
+-- uuid and `LibraryLaborIn` has no id field, deliberately -- letting a caller name a row is how
+-- a second row would come to hold the reserved id. Naming a row is the schema's job, once.
+--
+-- Soft delete like every other library table, so removing a default cannot take it out of the
+-- bids already holding it. rate is numeric(10,2) and NOT NULL: a labor line without a rate is
+-- a line that prices at nothing, which is worse than one that refuses to be saved.
+create table if not exists public.library_labor (
+  id           text primary key,
+  name         text not null,
+  rate         numeric(10,2) not null default 0,
+  unit         text not null default 'hours',
+  guys_auto    boolean not null default false,
+  sort         integer not null default 0,
+  notes        text,
+  owner_email  text,
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now(),
+  deleted_at   timestamptz
+);
+create index if not exists library_labor_live_name_idx
+  on public.library_labor (name) where deleted_at is null;
+
+-- The one row this table ships with. `on conflict (id) do nothing` so re-running the file leaves
+-- an edited rate alone -- the whole point of the row is that somebody can change it. sort = -1
+-- puts it first in list_labor()'s order, which is where the Defaults tab has always drawn it.
+insert into public.library_labor (id, name, rate, unit, guys_auto, sort)
+values ('travel', 'Travel', 33.00, 'hours', true, -1)
+on conflict (id) do nothing;
+
+-- WHICH WORK TYPES A DEFAULT BELONGS TO, 2026-09-17. `favorite` says a row IS a default;
+-- this says which of the five sheet tabs it opens on.
+--
+-- EMPTY MEANS EVERY ONE, and that is what makes this additive rather than a migration: every
+-- row written before the column existed comes back [] and still applies everywhere, exactly as
+-- it did when favorite was the whole story. Nobody wakes up to defaults that stopped appearing.
+--
+-- The vocabulary is markup.TABS (polish, seal, epoxy, leveling, gyp), imported in library.py
+-- rather than retyped. `combo` is NOT one of them: a combo job runs on the epoxy AND polish
+-- tabs, so it inherits both lists instead of keeping a third that has to agree with two others.
+alter table public.library_items      add column if not exists default_work_types jsonb not null default '[]'::jsonb;
+alter table public.library_assemblies add column if not exists default_work_types jsonb not null default '[]'::jsonb;
+alter table public.library_labor      add column if not exists default_work_types jsonb not null default '[]'::jsonb;
+
 -- Items and Assemblies, 2026-08-15. Additive, and safe against a volume already holding BETA
 -- rows. buy_qty is the "5" of "5 Gal" (so unit_cost can mean what the pail costs); existing rows
 -- get 1, which prices exactly as they did before the column existed. cost_updated_at marks a
@@ -275,3 +336,33 @@ grant all on all tables in schema public to service_role;
 grant all on all sequences in schema public to service_role;
 alter default privileges in schema public grant all on tables to service_role;
 alter default privileges in schema public grant all on sequences to service_role;
+
+-- ── Takeoff condition defaults ──────────────────────────────────────────
+-- What a NEW Polish estimate opens ANSWERED for the three Yes/No questions the Takeoff step
+-- carries. Mirrors supabase_schema.sql; see backend/condition_defaults.py for why the key
+-- vocabulary is closed and checked in Python rather than by a CHECK constraint, and why the
+-- workbook CELL each answer writes is not editable.
+--
+-- NOT APPLIED on either database as of 2026-09-18 — it needs Hanz's go, and it has to land on
+-- BOTH or the one that misses it answers 502 on the first save. Until then list_defaults()
+-- answers empty by design and every estimate opens with the literals in polish-bid-core.js.
+--
+-- A row is an OVERRIDE of a shipped constant, and it reaches a BRAND-NEW bid only: a saved
+-- estimate keeps the answers it was saved with whatever this table later says.
+create table if not exists public.condition_defaults (
+  id            text primary key,
+  condition_key text not null,                   -- joint_filler | remove_existing_jf | dye
+  on_by_default boolean not null default false,  -- the whole of what is editable
+  owner_email   text,
+  updated_by    text,
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz
+);
+-- One row per condition. PLAIN, not partial: there is deliberately no deleted_at here, because a
+-- row is one boolean in front of a constant that is still in the source — the undo is the switch.
+create unique index if not exists condition_defaults_key_idx
+  on public.condition_defaults (condition_key);
+-- Beside the table, per the measured lesson this file already records: the blanket grant above
+-- only covers tables that existed when it ran, so a table added later reads fine and every write
+-- fails.
+grant select, insert, update, delete on public.condition_defaults to service_role;

@@ -103,14 +103,21 @@ COMMERCIAL = dc.ESTIMATING_DESTINATIONS["commercial"]
 XLSX, DOCX, PDF = b"the-estimate-xlsx", b"the-proposal-docx", b"%PDF-1.4 the-proposal-pdf"
 
 
-def _stub_route(monkeypatch, *, owner_subfolder=""):
+def _stub_route(monkeypatch, *, owner_subfolder="", data=None, gi_log=None):
     """Stub everything /api/to-dropbox needs except the upload, which records its
-    kwargs into the returned dict."""
+    kwargs into the returned dict.
+
+    `data` lets a test supply its own draft — the staleness tests below need a
+    draft where the top-level fields disagree with `proposal_payload`, which the
+    default fixture below can't express. `gi_log`, when passed a list, gets the
+    actual GenerateIn the route built appended to it, so a test can tell whether
+    the route trusted the stored payload or reconstructed from the live draft."""
     captured: dict = {}
-    data = {"proposal_payload": {
-        "work_type": "polish", "audience": "GC",
-        "values": {"project_name": "Trabon Group", "deadline": "2026-09-01",
-                   "bid_date": "2026-08-14"}}}
+    if data is None:
+        data = {"proposal_payload": {
+            "work_type": "polish", "audience": "GC",
+            "values": {"project_name": "Trabon Group", "deadline": "2026-09-01",
+                       "bid_date": "2026-08-14"}}}
     monkeypatch.setattr(main.drafts, "load_draft", lambda i: {"id": i, "data": data})
     monkeypatch.setattr(main.drafts, "save_draft", lambda i, d, **k: None)
     monkeypatch.setattr(main.drafts, "log_event", lambda *a, **k: None)
@@ -124,6 +131,8 @@ def _stub_route(monkeypatch, *, owner_subfolder=""):
     # Estimating folder is the same one the customer gets, letter included, and there is no longer
     # a knob to turn it off.
     def fake_generate(gi, request, persist=True):
+        if gi_log is not None:
+            gi_log.append(gi)
         return main.GenerateOut(
             work_type=gi.work_type, audience=gi.audience, xlsx_download_url="/api/files/x",
             docx_download_url="/api/files/d", pdf_download_url="/api/files/d/pdf", totals={})
@@ -217,3 +226,89 @@ def test_dropbox_events_become_bell_notifications(monkeypatch):
     assert "Gyp Estimates" in it["body"]
     assert it["link"] == "https://www.dropbox.com/xyz"   # opens the Dropbox folder
     assert it["ts"] == "2026-07-06T12:00:00+00:00"       # drives unread
+
+# ── a stale proposal_payload must not be trusted ─────────────────────────────────────────────────────
+def test_a_stale_proposal_payload_falls_back_to_the_live_draft(monkeypatch):
+    """Kyle, 2026-09: revised an estimate, filed to Dropbox, and the file that
+    landed there still quoted the ORIGINAL price -- Download PDF showed the
+    correct one. proposal_payload is only refreshed by the Proposal step's own
+    Continue button, and this route trusted it even when the live draft had
+    since moved on. It must now notice and file from the live draft instead.
+
+    Mutation: drop the `and not stale` from the route's condition and this goes
+    red -- the stale $12,000 payload gets used as-is."""
+    live_rooms = [{"name": "Base", "is_base": True, "bid": {"total": 15000}}]
+    stale_rooms = [{"name": "Base", "is_base": True, "bid": {"total": 12000}}]
+    data = {
+        "rooms": live_rooms,
+        "proposal_lump_sum": 15000,
+        "proposal_payload": {
+            "work_type": "polish", "audience": "GC",
+            # polish_sf IS the stale measurement -- it's what makes this look like a real
+            # payload rather than one so empty the "no estimate yet" guard fires first,
+            # which would pass this test for the wrong reason.
+            "values": {"project_name": "Trabon Group", "deadline": "2026-09-01",
+                       "bid_date": "2026-08-14", "proposal_lump_sum": 12000, "polish_sf": 1000},
+            "rooms": stale_rooms,
+        },
+    }
+    gi_log = []
+    captured = _stub_route(monkeypatch, data=data, gi_log=gi_log)
+    r = TestClient(main.app).post("/api/to-dropbox",
+                                  json={"draft_id": "d1", "destination": "gyp"})
+    assert r.status_code == 200 and r.json().get("ok") is True, r.text
+    assert len(gi_log) == 1
+    # The reconstructed payload carries the LIVE rooms, not the stale $12,000 ones.
+    assert gi_log[0].rooms == live_rooms
+    assert captured["base_path"] == GYP  # the route still ran to completion
+
+
+def test_a_fresh_proposal_payload_is_still_used_directly(monkeypatch):
+    """The common case: nothing has drifted, so the route takes the fast path and
+    trusts the stored payload as it always has -- this pins that the staleness
+    check does not fire on an ordinary, unchanged project.
+
+    Mutation: make `stale` always True and this goes red -- the route would
+    reconstruct from the live draft even when the payload already agrees with it,
+    which is wasted work today and a behavior change waiting to bite the day the
+    reconstruction and the payload disagree on something the digest cannot see."""
+    rooms = [{"name": "Base", "is_base": True, "bid": {"total": 15000}}]
+    data = {
+        "rooms": rooms,
+        "proposal_lump_sum": 15000,
+        "proposal_payload": {
+            "work_type": "polish", "audience": "GC",
+            "values": {"project_name": "Trabon Group", "deadline": "2026-09-01",
+                       "bid_date": "2026-08-14", "proposal_lump_sum": 15000},
+            "rooms": rooms,
+        },
+    }
+    gi_log = []
+    _stub_route(monkeypatch, data=data, gi_log=gi_log)
+    r = TestClient(main.app).post("/api/to-dropbox",
+                                  json={"draft_id": "d1", "destination": "gyp"})
+    assert r.status_code == 200 and r.json().get("ok") is True, r.text
+    assert len(gi_log) == 1
+    assert gi_log[0].rooms == rooms  # came straight off proposal_payload, not rebuilt
+
+
+def test_a_stale_payload_is_logged_not_silently_swapped(monkeypatch, caplog):
+    """An estimator who reports "the Dropbox copy looked wrong" needs this to be
+    findable in the logs by draft id -- the whole reason the earlier version of
+    this bug took a WhatsApp screenshot and a code read to diagnose."""
+    data = {
+        "rooms": [{"name": "Base", "is_base": True, "bid": {"total": 15000}}],
+        "proposal_lump_sum": 15000,
+        "proposal_payload": {
+            "work_type": "polish", "audience": "GC",
+            "values": {"project_name": "Trabon Group", "deadline": "2026-09-01",
+                       "bid_date": "2026-08-14", "proposal_lump_sum": 12000, "polish_sf": 1000},
+            "rooms": [{"name": "Base", "is_base": True, "bid": {"total": 12000}}],
+        },
+    }
+    _stub_route(monkeypatch, data=data)
+    with caplog.at_level("WARNING"):
+        r = TestClient(main.app).post("/api/to-dropbox",
+                                      json={"draft_id": "d-stale-1", "destination": "gyp"})
+    assert r.status_code == 200 and r.json().get("ok") is True, r.text
+    assert any("d-stale-1" in rec.getMessage() for rec in caplog.records)

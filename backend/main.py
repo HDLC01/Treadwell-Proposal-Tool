@@ -19,6 +19,7 @@ from __future__ import annotations
 import base64
 import calendar
 import hashlib
+import io
 import json
 import logging
 import math
@@ -51,6 +52,7 @@ except ImportError:
 
 import docx
 from docx.text.paragraph import Paragraph
+import pypdf
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
@@ -59,10 +61,13 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
+import acceptance_signature
 import analytics_export
 import audit
 import basisboard_client
 import calendar_events
+import certificate_writer
+import condition_defaults
 import cover_letter_writer
 import docx_merge
 import digest_worker
@@ -250,7 +255,10 @@ _AUTH_PUBLIC_PATHS = {"/healthz", "/api/public-config",
                       "/api/admin/proposal-pdf",
                       # same deal for the deposit invoice — the portal owns deposits
                       # but has no LibreOffice, so it renders here.
-                      "/api/admin/deposit-invoice"}
+                      "/api/admin/deposit-invoice",
+                      # and for the signed contract: the portal holds the signature
+                      # facts, this repo holds the document generator.
+                      "/api/admin/signed-contract"}
 
 
 def _auth_is_public(path: str, method: str) -> bool:
@@ -962,6 +970,22 @@ class LibraryItemIn(BaseModel):
     notes: Optional[str] = None
     # Shared/team-wide, not per-user -- see library.validate_item's note.
     favorite: Optional[bool] = None
+    # WHICH WORK TYPES THIS DEFAULT IS OFFERED FOR. `Any`, like the fields above, because
+    # library._coerce_work_types accepts a list, a JSON string or a bare name and is the
+    # single authority on the answer.
+    #
+    # NAMED HERE OR IT IS SILENTLY DISCARDED, which is the whole reason this line exists.
+    # The docstring above says the model is "loose on purpose" so validate_* can be the
+    # only authority -- but Pydantic DROPS a field a model does not declare, and drops it
+    # without a word. So library.py accepted, coerced and stored default_work_types from
+    # the day the column landed, ITEM_WRITABLE listed it, validate_item passed it through,
+    # and the API could still never write it: the PATCH arrived, model_dump returned {},
+    # validate_item returned {}, update_item early-returned the unchanged row, and the
+    # route answered 200. Every row in the library therefore read [] -- "applies to every
+    # work type" -- and the five work-type chips over the Defaults tab filtered nothing.
+    # Hanz, 2026-09-21: "the filters in items in assemblies on the default items in
+    # assemblies. Is not working."
+    default_work_types: Optional[Any] = None
 
 
 class LibraryAssemblyIn(BaseModel):
@@ -974,6 +998,8 @@ class LibraryAssemblyIn(BaseModel):
     # The version the editor believes it is changing. A line edit rewrites the WHOLE lines array,
     # so without this two people with the same assembly open silently overwrite each other.
     expected_updated_at: Optional[str] = None
+    # See the note on LibraryItemIn.default_work_types: undeclared means silently discarded.
+    default_work_types: Optional[Any] = None
 
 
 @app.get("/api/library/items")
@@ -1199,6 +1225,71 @@ def api_library_unit_delete(unit_id: str, request: Request) -> Dict[str, Any]:
     return {"ok": True, "deleted": unit_id}
 
 
+class LibraryLaborIn(BaseModel):
+    """Loose on purpose — library.validate_labor() is the single authority on what is
+    acceptable, so the rules can't drift between a Pydantic model and the writer."""
+    name: Optional[str] = None
+    # `Any`, because a rate is typed into a text box and arrives as "33" or "$33.00"; and `sort`
+    # arrives as a string from a drag handle. Coercion belongs to validate_labor, not here.
+    rate: Optional[Any] = None
+    unit: Optional[str] = None
+    guys_auto: Optional[bool] = None
+    sort: Optional[Any] = None
+    notes: Optional[str] = None
+    # See the note on LibraryItemIn.default_work_types: undeclared means silently discarded.
+    default_work_types: Optional[Any] = None
+
+
+# Default labor lines — the rows an estimator can add to a bid beside the built-in ones.
+#
+# GATED LIKE VENDORS AND MARKUP, NOT LIKE ITEMS. WRITING is admin-only: these rows carry a rate,
+# and a rate is what a job sells for. READING is open to every signed-in user, because the estimate
+# has to offer the lines mid-bid — a gate on the read would stop a bid halfway through, silently,
+# which is the same reasoning the empty `api` tuple for /library.html records in nav_access.py.
+@app.get("/api/library/labor")
+def api_library_labor() -> Dict[str, Any]:
+    # ANSWERS 200 WITH AN EMPTY LIST WHEN THE TABLE DOES NOT EXIST. `library_labor` was applied to
+    # staging on 2026-09-17 and production does not have it yet, so on prod today this route is
+    # the difference between the Library page loading and the Library page 500ing. list_labor()
+    # never raises; see its docstring.
+    return {"ok": True, "labor": library.list_labor()}
+
+
+@app.post("/api/library/labor")
+def api_library_labor_create(payload: LibraryLaborIn, request: Request) -> Dict[str, Any]:
+    _require_admin(request)
+    try:
+        row = library.create_labor(payload.model_dump(exclude_unset=True), _user_email(request))
+    except library.ValidationError as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True, "row": row}
+
+
+@app.patch("/api/library/labor/{labor_id}")
+def api_library_labor_update(labor_id: str, payload: LibraryLaborIn,
+                             request: Request) -> Dict[str, Any]:
+    _require_admin(request)
+    try:
+        row = library.update_labor(labor_id, payload.model_dump(exclude_unset=True))
+    except library.ValidationError as exc:
+        raise HTTPException(400, str(exc))
+    if row is None:
+        # 404 rather than a cheerful 200: the line may have been removed in another tab, and
+        # reporting a successful write to nothing is how two people overwrite silently.
+        raise HTTPException(404, "That labor line is no longer on the list.")
+    return {"ok": True, "row": row}
+
+
+@app.delete("/api/library/labor/{labor_id}")
+def api_library_labor_delete(labor_id: str, request: Request) -> Dict[str, Any]:
+    _require_admin(request)
+    if not library.delete_labor(labor_id):
+        raise HTTPException(404, "That labor line is no longer on the list.")
+    # Soft, like every other library delete. An estimate built with this line carries its own copy
+    # of the rate, so removing it from the list does not reach back into a bid.
+    return {"ok": True}
+
+
 # ── Markup rules ──────────────────────────────────────────────────────────────
 # The markup chain's rates as editable expressions, per sheet layout. See backend/markup.py for
 # why the key is the TAB, why `applies=false` is not the same as a zero formula, and why the four
@@ -1266,6 +1357,52 @@ def api_markup_rule_delete(rule_id: str, request: Request) -> Dict[str, Any]:
     # Soft — the chain falls back to its hardcoded constant for a line with no rule, so this is
     # "stop overriding" rather than "charge nothing", and it has to be recoverable.
     return {"ok": True, "deleted": rule_id}
+
+
+# ── Takeoff condition defaults ────────────────────────────────────────────────
+# What a NEW Polish estimate opens ANSWERED for the three Yes/No questions the Takeoff step
+# carries — joint filler, remove existing joint filler, dye. See backend/condition_defaults.py for
+# why the key vocabulary is closed, why a row is an OVERRIDE of the literal in
+# frontend/js/polish-bid-core.js rather than a copy of it, and why the workbook CELL each answer
+# writes is not editable.
+#
+# GATED LIKE MARKUP AND VENDORS, NOT LIKE ITEMS. WRITING is admin-only: this decides what every
+# new bid in the company opens holding. READING is open to every signed-in user, because the
+# ESTIMATE reads it to seed a blank bid — a gate on the read would stop an estimator halfway
+# through, silently, which is the reasoning nav_access.py records for the empty `api` tuple.
+class ConditionDefaultIn(BaseModel):
+    """Loose on purpose, the same call MarkupRuleIn makes: condition_defaults._boolean() is the
+    single authority on what "yes" means, so the answer cannot drift between a Pydantic coercion
+    and the writer. `on` is `Any` rather than `bool` because a checkbox posts the STRING "false",
+    and Pydantic reading that as True would hide it from the one function that knows better."""
+    on: Optional[Any] = None
+
+
+@app.get("/api/condition-defaults")
+def api_condition_defaults() -> Dict[str, Any]:
+    # ANSWERS 200 WITH AN EMPTY LIST WHEN THE TABLE DOES NOT EXIST, which as of this commit is
+    # both databases. list_defaults() never raises; see its docstring. An empty list is not a
+    # failure here — it means "nobody has overridden anything", and the caller falls back to the
+    # shipped literals, which is exactly what every estimate does today.
+    #
+    # The vocabulary rides along so the page does not keep a second copy of it to drift.
+    return {"ok": True, "conditions": condition_defaults.list_defaults(),
+            "keys": list(condition_defaults.KEYS)}
+
+
+@app.put("/api/condition-defaults/{condition_key}")
+def api_condition_default_set(condition_key: str, payload: ConditionDefaultIn,
+                              request: Request) -> Dict[str, Any]:
+    _require_admin(request)
+    try:
+        row = condition_defaults.set_default(condition_key,
+                                             payload.model_dump(exclude_unset=True),
+                                             _user_email(request))
+    except condition_defaults.ValidationError as exc:
+        # A 400 carrying the words, not a bare 422: an off-vocabulary key is a caller naming a
+        # condition nothing reads, and the message says which three there are.
+        raise HTTPException(400, str(exc))
+    return {"ok": True, "condition": row}
 
 
 # ─── Customer Portal integration (server-side proxy to the portal admin API) ───
@@ -2837,6 +2974,261 @@ async def api_admin_deposit_invoice(request: Request) -> Response:
     no = re.sub(r"[^A-Za-z0-9._-]", "", str(body.get("invoice_no") or "deposit")) or "deposit"
     return Response(content=blob, media_type=media,
                     headers={"Content-Disposition": f'inline; filename="Treadwell Invoice {no}.{ext}"'})
+
+
+# ─── Signed contract (the proposal, signed on its own acceptance block) ──
+# The portal owns the SIGNATURE: it shows the consent sentence, takes the typed
+# name, and records the address, browser and timestamps. It does not own
+# DOCUMENTS — it ships without python-docx, LibreOffice or pypdf — so the paper
+# is made here, the same split as the proposal PDF and the deposit invoice.
+#
+# NO CERTIFICATE PAGE ANY MORE (2026-09-19). This used to append an Electronic
+# Signature Certificate carrying the signer, both timestamps, the IP address, the
+# browser string, the consent paragraph and two SHA-256 digests. Hanz read one:
+# "we dont need another page for the signatory", "I think the signature goes
+# here?" — pointing at the ACCEPTANCE / SIGNATURE / DATE / PRINTED NAME / TOTAL
+# row Kyle already prints on the form — and "this is too much information... Just
+# the basic information is what we need". So four values go onto the row that was
+# always there and the page is gone. NONE of the evidence is lost: every field is
+# still required and still validated by `certificate_writer.field_problems`, and
+# the portal still stores the whole record on its approval row. It is only no
+# longer printed.
+#
+# WHY THE PROPOSAL IS UPLOADED RATHER THAN RE-RENDERED, which is still the whole
+# point of the endpoint: the customer signed one specific PDF, and the portal
+# stores that PDF's SHA-256 against the approval. If this handler rebuilt those
+# pages from the draft it could produce a document that does not hash to the
+# value recorded beside it, and the record would then be evidence against us
+# rather than for us. The uploaded bytes are the source of truth; pypdf copies
+# their pages across object-for-object, and the one page that is written on keeps
+# its own content stream byte-for-byte with the four values appended after it
+# (see `acceptance_signature`).
+#
+# NOT THE LAST PAGE. A Direct Epoxy proposal is four pages: the FORM is page 1
+# and pages 2-4 are Terms & Conditions on blank letterhead. Signing "the last
+# page" would put the customer's name on the back of the Terms, on blank paper,
+# and every naive test would still pass. The index is not fixed either — the
+# cover letter is prepended into the proposal's own bytes — so it is derived from
+# the draft this PDF was rendered from and then CHECKED against the document
+# itself before anything is drawn.
+
+# A proposal PDF is a few hundred KB; the largest seen with photo attachments is
+# under 8 MB. The ceiling is a guard against a runaway upload filling memory, not
+# a product limit — it refuses by name rather than dying on an OOM.
+_SIGNED_CONTRACT_MAX_BYTES = 40 * 1024 * 1024
+
+
+def _log_safe(value: object, limit: int = 200) -> str:
+    """A caller-controlled value, made safe to interpolate into a log line.
+
+    The certificate body is arbitrary JSON off an authenticated but still external
+    POST -- printing a field like proposal_id straight into a %s log format string
+    lets whoever holds SERVICE_TOKEN forge fake log lines with embedded newlines,
+    which is how a real event gets buried under a fabricated one in an incident
+    review.
+
+    repr(), not a hand-rolled character replace: a regex substitution reads as
+    safe to a person but is not a barrier a static analyzer can verify neutralizes
+    every control character, and it wasn't -- CodeQL kept flagging the call sites
+    after the first version of this function shipped. repr() renders \\r and \\n as
+    the two-character escape sequence rather than the byte, is a sanitizer CodeQL
+    recognizes for this exact query, and is exactly as readable in a log line.
+    """
+    text = "" if value is None else str(value)
+    if len(text) > limit:
+        text = text[:limit] + "…"
+    return repr(text)
+
+
+def _contract_error(status: int, message: str) -> JSONResponse:
+    """The refusal shape the portal codes against: {"ok": false, "error": "..."}.
+
+    A refusal names the thing refused in a sentence the portal can put in front of
+    a human as-is. The customer is sitting on an "approving…" spinner when this
+    fires, and "400 Bad Request" tells whoever is paged exactly nothing.
+    """
+    return JSONResponse(status_code=status, content={"ok": False, "error": message})
+
+
+@app.post("/api/admin/signed-contract")
+async def api_admin_signed_contract(request: Request) -> Response:
+    """The proposal, signed on its own acceptance block. Same pages in and out.
+
+    multipart/form-data, SERVICE_TOKEN-gated (in `_AUTH_PUBLIC_PATHS`, so it skips
+    the Google gate). THE WIRE FORMAT IS UNCHANGED — the portal is deployed
+    against it:
+      * `proposal_pdf` — the exact bytes of the PDF the customer opened. Its
+        Terms & Conditions are already in it; nothing is added to the proposal.
+      * `certificate`  — JSON, the signing facts. See
+        `certificate_writer.REQUIRED_FIELDS`. Every field is still required and
+        still validated; four of them are printed.
+
+    200 → application/pdf: every page of `proposal_pdf`, with SIGNATURE, DATE,
+    PRINTED NAME and TOTAL written onto the acceptance row of the form page.
+    401 unauthorized · 400 a named fault in the request, including a proposal
+    whose form has no acceptance block · 502 with a sentence when we could not
+    produce the document.
+
+    ONLY THE DIRECT FORM CAN BE SIGNED. Kyle's GC and Gyp forms have no
+    acceptance row, so those proposals approve exactly as they always did and no
+    signed contract is produced — the same treatment Budget Pricing already gets
+    for having no Terms and Conditions. The portal decides this before it calls
+    (`signing.signing_blocked_reason`); the check here is the guard that stops a
+    stale portal from getting a signature drawn on blank letterhead.
+
+    EVERYTHING IS VALIDATED BEFORE ANYTHING IS BUILT. A publish here once wrote
+    the row, refused the attachment afterwards and still returned 200 — the
+    estimator read "Sent" and the customer got an empty email. The portal will
+    write "signed" against a 200 from this route, so a 200 has to mean the whole
+    document exists.
+    """
+    import hmac
+    presented = request.headers.get("x-service-token") or ""
+    token_env = (os.environ.get("SERVICE_TOKEN") or "").strip()
+    if not token_env or not hmac.compare_digest(presented, token_env):
+        raise HTTPException(401, "unauthorized")
+
+    try:
+        form = await request.form()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("signed-contract: unreadable body (%s: %s)", type(exc).__name__, exc)
+        return _contract_error(400, "the request body is not readable multipart/form-data")
+
+    part = form.get("proposal_pdf")
+    if part is None:
+        return _contract_error(400, "proposal_pdf is required (the PDF the customer signed)")
+    try:
+        proposal_bytes = await part.read() if hasattr(part, "read") else str(part).encode()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("signed-contract: proposal_pdf unreadable (%s: %s)", type(exc).__name__, exc)
+        return _contract_error(400, "proposal_pdf could not be read from the request")
+    if not proposal_bytes:
+        return _contract_error(400, "proposal_pdf is empty")
+    if len(proposal_bytes) > _SIGNED_CONTRACT_MAX_BYTES:
+        return _contract_error(
+            400, "proposal_pdf is " + str(len(proposal_bytes)) + " bytes, over the "
+            + str(_SIGNED_CONTRACT_MAX_BYTES) + "-byte limit")
+
+    raw_cert = form.get("certificate")
+    if raw_cert is None:
+        return _contract_error(400, "certificate is required (the signing facts, as JSON)")
+    if hasattr(raw_cert, "read"):                 # sent as a file part rather than a field
+        raw_cert = (await raw_cert.read()).decode("utf-8", "replace")
+    try:
+        cert = json.loads(raw_cert)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("signed-contract: certificate JSON (%s: %s)", type(exc).__name__, exc)
+        return _contract_error(400, "certificate is not valid JSON")
+
+    problems = certificate_writer.field_problems(cert)
+    if problems:
+        log.warning("signed-contract: refused — %s", "; ".join(problems))
+        return _contract_error(400, "; ".join(problems))
+
+    # Read the uploaded PDF BEFORE rendering anything: a corrupt upload is the
+    # caller's fault (400), not a render failure (502), and the two get paged
+    # very differently.
+    try:
+        reader = pypdf.PdfReader(io.BytesIO(proposal_bytes))
+        proposal_pages = list(reader.pages)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("signed-contract: proposal_pdf is not a readable PDF (%s: %s)",
+                    type(exc).__name__, exc)
+        return _contract_error(400, "proposal_pdf is not a readable PDF")
+    if not proposal_pages:
+        return _contract_error(400, "proposal_pdf has no pages")
+
+    # WHICH PAGE CARRIES THE BLOCK IS A PROPERTY OF THE DRAFT, NOT OF THE UPLOAD.
+    # `proposal_id` IS the draft id — the portal passes the same string to
+    # /api/admin/proposal-pdf?draft_id= — so the payload that BUILT this PDF is
+    # readable here, and it is the only thing that knows both which template was
+    # filled and whether a cover letter was prepended in front of it. Read at the
+    # same revision the PDF was rendered at, for the same reason that endpoint
+    # takes one: the live draft may have moved on since the customer opened it.
+    draft_id = str(cert.get("proposal_id") or "")
+    rev_no = cert.get("revision_no")
+    try:
+        row = (drafts.get_revision(draft_id, int(rev_no)) if rev_no
+               else drafts.load_draft(draft_id))
+    except Exception as exc:  # noqa: BLE001
+        log.exception("signed-contract: could not read proposal %s (%s: %s)",
+                      _log_safe(draft_id), type(exc).__name__, exc)
+        return _contract_error(
+            502, "We could not look up the proposal this signature belongs to. "
+                 "Nothing was signed; please try again shortly.")
+    if not row:
+        log.warning("signed-contract: no draft/revision on file for proposal %s revision %s",
+                    _log_safe(draft_id), _log_safe(rev_no))
+        return _contract_error(
+            400, "We have no proposal on file under that id, so there is no form to sign.")
+
+    payload = (row.get("data") or {}).get("proposal_payload")
+    if not (isinstance(payload, dict) and payload.get("values")):
+        log.error("signed-contract: proposal %s has no generated proposal_payload — "
+                  "cannot tell which template was filled", _log_safe(draft_id))
+        return _contract_error(
+            502, "This proposal has no generated document on file, so we cannot tell which "
+                 "form was signed. Nothing was signed.")
+
+    work_type = payload.get("work_type")
+    audience = payload.get("audience")
+    try:
+        signable = acceptance_signature.template_has_acceptance_block(work_type, audience)
+    except acceptance_signature.AcceptanceError as exc:
+        log.warning("signed-contract: refused proposal %s — %s", _log_safe(draft_id), exc)
+        return _contract_error(400, str(exc))
+    if not signable:
+        # NAMED, not a code. The customer is on an "approving…" spinner and the
+        # portal renders this sentence unchanged.
+        log.info("signed-contract: %s/%s has no acceptance block — refusing proposal %s",
+                 _log_safe(work_type), _log_safe(audience), _log_safe(draft_id))
+        return _contract_error(
+            400, "This proposal form has no signature line on it — only Treadwell's "
+                 "direct-to-owner proposals carry one — so it cannot be signed as a contract. "
+                 "Send us a message in this project's thread and we will get you a signable copy.")
+
+    # The cover letter is page 1 of the proposal's own bytes when it is on, so the
+    # form is index 1 rather than 0. `verify_acceptance_page` re-derives this from
+    # the document and refuses if the two disagree.
+    page_index = 1 if payload.get("cover_letter_enabled") else 0
+
+    # The SAME field shaping the certificate used: one cleaner, one money format.
+    # A second one here is how the total on the contract comes to disagree with
+    # the total on the approval row.
+    fields = certificate_writer.certificate_fields(cert)
+    try:
+        signed = acceptance_signature.sign_acceptance_page(
+            proposal_bytes, page_index,
+            signer_name=fields["signer_name"],
+            date_text=acceptance_signature.acceptance_date(fields["signed_at_central"]),
+            total_text=fields["total"])
+    except acceptance_signature.AcceptanceError as exc:
+        # OUR sentence, written for a person — not library text. It names the page
+        # it would not sign, which is the one fact an on-call needs.
+        log.warning("signed-contract: refused to sign proposal %s at page %d (%s: %s)",
+                    _log_safe(draft_id), page_index + 1, type(exc).__name__, exc)
+        return _contract_error(502, str(exc))
+    except Exception as exc:  # noqa: BLE001
+        # Type AND message: "refused" on its own has cost an SSH session and a
+        # container probe before.
+        log.exception("signed-contract: signing failed for proposal %s (%s: %s)",
+                      _log_safe(draft_id), type(exc).__name__, exc)
+        return _contract_error(502, "render_failed")
+
+    # CHECKED BEFORE A 200, not asserted in a test and hoped for in production.
+    # The portal writes "signed" against a 200 from this route.
+    signed_pages = len(pypdf.PdfReader(io.BytesIO(signed)).pages)
+    if signed_pages != len(proposal_pages):
+        log.error("signed-contract: signing proposal %s turned %d pages into %d",
+                  _log_safe(draft_id), len(proposal_pages), signed_pages)
+        return _contract_error(
+            502, "The signed contract came back with a different number of pages than the "
+                 "proposal it was made from. Nothing was signed.")
+
+    name = re.sub(r"[^\x20-\x7e]", "_", str(cert.get("project_name") or "Treadwell"))
+    return Response(content=signed, media_type="application/pdf",
+                    headers={"Content-Disposition":
+                             'inline; filename="' + name + ' - Signed Contract.pdf"'})
 
 
 @app.post("/api/detect-work-type", response_model=DetectWorkTypeOut)
@@ -6334,7 +6726,22 @@ def api_to_dropbox(payload: ToDropboxIn, request: Request) -> Dict[str, Any]:
 
     Regenerates the files from the saved proposal_payload (same pipeline as the
     portal PDF path) so the Dropbox copy always matches the latest estimate +
-    proposal. Best-effort — never raises to the user; degrades to a message."""
+    proposal. Best-effort — never raises to the user; degrades to a message.
+
+    THAT PROMISE USED TO BE FALSE. Kyle, 2026-09: revised an estimate, filed to
+    Dropbox, and the file that landed there still quoted the ORIGINAL price — the
+    correct one only showed up through Download PDF. `proposal_payload` is only
+    refreshed by the Proposal step's own Continue button (see
+    generate-result-is-a-stale-artefact in project memory); this route trusted it
+    unconditionally whenever it existed, with no check against the live draft it
+    was supposedly still describing. The publish path already has a name for
+    exactly this disagreement — `_publish_digest` / `_stale_document_refusal`,
+    built after a customer received $29,104 where the estimator's screen said
+    $27,721 — so this route now asks the same question before trusting the
+    payload, and falls back to the SAME reconstruction-from-the-live-draft path
+    already used for a project with no `proposal_payload` at all. There is
+    nothing for an estimator to notice or retry: the file that reaches Dropbox is
+    simply built from whichever source is actually current."""
     # Resolve via the LIVE listing first (a folder added in Dropbox is filable
     # right away), falling back to the constants. Looking the key up only in
     # ESTIMATING_DESTINATIONS would reject any newly-listed folder.
@@ -6353,13 +6760,25 @@ def api_to_dropbox(payload: ToDropboxIn, request: Request) -> Dict[str, Any]:
         raise HTTPException(404, "Draft not found")
     data = row.get("data") or {}
     pp = data.get("proposal_payload")
-    if isinstance(pp, dict) and pp.get("values"):
+    # STALE, NOT JUST ABSENT, SENDS US TO THE SAME FALLBACK BELOW. A payload that
+    # disagrees with the live draft on base bid, price or option count is exactly
+    # as untrustworthy as no payload at all — reusing `_stale_document_refusal`
+    # rather than re-deriving "does this disagree" a second way, since two
+    # answers to the same question is how a page and a document drifted apart in
+    # the first place. `_publish_digest` reads `has_document` off `pp` itself, so
+    # this costs nothing extra when `pp` is already absent.
+    stale = bool(pp) and _stale_document_refusal(_publish_digest(data)) is not None
+    if isinstance(pp, dict) and pp.get("values") and not stale:
         gi = GenerateIn(**pp)
     else:
+        if stale:
+            log.warning("to-dropbox: stored proposal_payload for draft %s disagreed with the "
+                       "live estimate — filing from the live draft instead", payload.draft_id)
         # Existing/older projects may not carry a stored proposal_payload (never
-        # generated through Screen 3, or a prior save dropped it). Reconstruct the
-        # generate payload from the draft's saved intake/estimate data so
-        # "To Dropbox" still works for them (this is the common existing-project case).
+        # generated through Screen 3, or a prior save dropped it) -- OR the one
+        # they carry is stale (see above). Either way, reconstruct the generate
+        # payload from the draft's saved intake/estimate data so "To Dropbox"
+        # still works and always describes what is actually on the estimate now.
         _list = lambda x: x if isinstance(x, list) else []
         _dict = lambda x: x if isinstance(x, dict) else {}
         # Same read the folder picker uses, so the name we file under and the name

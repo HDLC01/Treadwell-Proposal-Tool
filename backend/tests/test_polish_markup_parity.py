@@ -126,6 +126,15 @@ PINNED = {
     "C81": "=B35",
     "B35": "=E18",
     "C82": "=D82/C81",
+    # dye (row 25) and joint filler (row 29), added 2026-09-18 -- Hanz: "die and joint
+    # filler are supposed to be materials not something that is default". Transcribed into
+    # polish-bid-core.js's dyeCost/jointFillerCost.
+    "B25": '=IF(E25="Yes",E18)',
+    "C25": 0.14,
+    "D25": "=B25*C25",
+    "B29": '=ROUNDUP(IF(E29="yes",(E18/3500),0),0)',
+    "C29": 500,
+    "D29": "=B29*C29",
 }
 
 
@@ -218,6 +227,84 @@ def test_the_flat_rates_come_from_the_cells_that_hold_them(ran, polish):
         assert _rate_in(polish[addr].value) == pytest.approx(rates[key]), (
             "Polish!%s is %s but RATES.%s is %r — %s"
             % (addr, polish[addr].value, key, rates[key], fix))
+
+
+@needs_node
+def test_the_dye_and_joint_filler_rates_come_from_the_cells_that_hold_them(ran, polish):
+    """C25 (Dye, $/SF) and C29 (Joint Filler, $/kit) are hardcoded constants on the sheet,
+    exactly like B32/C47/B69/B70/B78 above -- the same drift check, not a special case."""
+    rates = ran["constants"]["rates"]
+    for addr, key in [("C25", "DYE_PER_SF"), ("C29", "JOINT_FILLER_KIT_COST")]:
+        assert float(polish[addr].value) == pytest.approx(rates[key]), (
+            "Polish!%s is %r but RATES.%s is %r — %s"
+            % (addr, polish[addr].value, key, rates[key], FIX_BOTH))
+
+
+def _dye_cost(area, on):
+    """B25 `=IF(E25="Yes",E18)`, C25 `0.14`, D25 `=B25*C25`. 0 when off or the area is not a
+    positive number -- Excel's IF with no ELSE (E25 not "Yes") returns FALSE, which multiplies
+    as 0 rather than raising, so the 0-guard here is not inventing a rule the sheet lacks."""
+    a = _num(area)
+    if not on or not (a > 0):
+        return 0.0
+    return a * 0.14
+
+
+def _joint_filler_cost(area, on):
+    """B29 `=ROUNDUP(IF(E29="yes",(E18/3500),0),0)`, C29 `500`, D29 `=B29*C29`."""
+    a = _num(area)
+    if not on or not (a > 0):
+        return 0.0
+    return round_up(a / 3500) * 500
+
+
+@needs_node
+def test_dye_and_joint_filler_price_by_the_sheets_own_formula(ran):
+    """THE INVARIANT this feature is judged on: toggling either ON moves the Material total by
+    EXACTLY what Kyle's formula says for that area, and toggling it OFF removes exactly that and
+    nothing else. Every vector here is cross-checked against the REAL dyeCost/jointFillerCost run
+    under node (ran["dyeJointFiller"]), so a JS-side typo in the rate or the rounding cannot hide
+    behind a Python re-derivation that happens to make the same mistake.
+
+    Mutations this proves red: RATES.DYE_PER_SF or RATES.JOINT_FILLER_KIT_COST off by a cent or a
+    dollar; a bare Math.ceil in place of roundUp (would move on_3500 and on_7000, which sit
+    exactly on the kit boundary); the ON check inverted or dropped; the area-positivity guard
+    dropped (turns a null/undefined area into NaN, or a negative area into a negative price)."""
+    d = ran["dyeJointFiller"]["dye"]
+    j = ran["dyeJointFiller"]["jointFiller"]
+
+    dye_vectors = [
+        ("on_3500", 3500, True), ("on_12500", 12500, True), ("on_0", 0, True),
+        ("on_null", None, True), ("on_undefined", None, True), ("off_3500", 3500, False),
+    ]
+    for key, area, on in dye_vectors:
+        want = _dye_cost(area, on)
+        assert d[key] == pytest.approx(want), (
+            "dyeCost(%r, %r) is %r in JS, %r in Python — %s"
+            % (area, on, d[key], want, FIX_BOTH))
+
+    jf_vectors = [
+        ("on_3500", 3500, True), ("on_3501", 3501, True), ("on_7000", 7000, True),
+        ("on_0", 0, True), ("on_null", None, True), ("on_undefined", None, True),
+        ("off_3500", 3500, False), ("off_7000", 7000, False),
+    ]
+    for key, area, on in jf_vectors:
+        want = _joint_filler_cost(area, on)
+        assert j[key] == pytest.approx(want), (
+            "jointFillerCost(%r, %r) is %r in JS, %r in Python — %s"
+            % (area, on, j[key], want, FIX_BOTH))
+
+    # THE SPECIFIC NUMBERS, named rather than only cross-checked above -- a wrong Python
+    # re-derivation that agreed with an equally wrong JS one would pass every assertion so far.
+    assert d["on_3500"] == pytest.approx(490), "3,500 SF of dye at $0.14/SF should be $490"
+    assert j["on_3500"] == 500, "an area that divides evenly into 3,500 is exactly one $500 kit"
+    assert j["on_3501"] == 1000, (
+        "one SF over 3,500 must round UP to a second kit, not price the first alone")
+    assert j["on_7000"] == 1000, (
+        "7,000 SF divides evenly into exactly two kits -- float dust must not buy a third")
+    assert d["on_0"] == 0 and j["on_0"] == 0, "no area prices at nothing, not a negative or NaN"
+    assert d["off_3500"] == 0 and j["off_3500"] == 0, (
+        "the condition being off must zero the line even where the area would otherwise price it")
 
 
 @needs_node
@@ -798,13 +885,15 @@ def test_a_v1_draft_opens_as_a_v2_model(ran):
     #
     # THE BACKFILL IS WHAT MATTERS, NOT THE COUNT. markupChain reads these keys; a draft that
     # simply lacked them would hand it `undefined`, which is falsy and so silently answers "No" to
-    # a question nobody asked. joint_filler in particular ships ON, so an absent key would flip a
-    # real workbook cell the wrong way on every draft written before today.
+    # a question nobody asked. an absent key would flip a real workbook cell the wrong
+    # way on every draft written before today, whichever way the literal points.
     assert (set(after["conditions"]) - set(before["conditions"])
             == {"bond", "dye", "joint_filler", "remove_existing_jf"})
     assert after["conditions"]["bond"] is False
-    assert after["conditions"]["joint_filler"] is True, (
-        "joint filler must arrive ON, the way Kyle's sheet ships and the intake toggle defaulted")
+    assert after["conditions"]["joint_filler"] is False, (
+        "joint filler must arrive OFF. It shipped ON until 2026-09-19 -- the way Kyle's sheet "
+        "ships and the way the intake toggle defaulted -- and moved when the line started "
+        "costing $500 a kit per 3,500 sq ft")
     assert after["conditions"]["dye"] is False
     assert after["conditions"]["remove_existing_jf"] is False
     assert after["contingency"] == 0
@@ -967,11 +1056,14 @@ def test_the_fresh_model_carries_the_templates_own_labor_seeds(ran):
     # They are stored so the Takeoff step's switches have somewhere to write, and so the one shared
     # cell writer can put their Yes/No into Kyle's workbook from either screen.
     #
-    # joint_filler SHIPS ON. Kyle's sheet ships it on and the intake toggle defaulted to it, so a
-    # new estimate that started it off would quietly drop a kit per 3,500 sq ft from the download.
+    # ALL THREE TAKEOFF CONDITIONS SHIP OFF since 2026-09-19. joint_filler shipped ON before
+    # that, because Kyle's sheet ships Polish!E29 = "Yes" and the intake toggle followed it. That
+    # stopped being a harmless transcription on 2026-09-18, when the condition started charging a
+    # $500 kit per 3,500 sq ft: a 17,500 SF bid opened $2,500 higher than anybody had asked for.
+    # Hanz's call is that all three start off and the estimator switches on what the job needs.
     assert fresh["conditions"] == {"local": True, "hard_bid": False, "prevailing_wage": False,
                                   "taxable": True, "remodel_tax": False, "bond": False,
-                                  "dye": False, "joint_filler": True,
+                                  "dye": False, "joint_filler": False,
                                   "remove_existing_jf": False}
     assert len(fresh["takeoff"]) == 1 and fresh["takeoff"][0]["unit"] == "SF"
 
@@ -993,3 +1085,417 @@ def test_what_blocks_a_price_is_said_in_words_an_estimator_can_act_on(ran):
     # Neither is half-filled, and neither should stop a bid.
     assert says["ready to price: a switched-off labor row is not half-filled"] == []
     assert says["a model that is not a model at all"], "a broken model is not ready to price"
+
+
+# ── the library's default labor lines ─────────────────────────────────────────
+# Library -> Default Items & Assemblies grew a real table (public.library_labor) on 2026-09-17,
+# because "+ Add a labor line" had shipped with nothing behind it. These four tests are the seam
+# between that table and this model, and the third one is the one that matters: a default is a
+# starting point for a bid nobody has worked on yet, and NOTHING about it may reach a bid that
+# somebody has.
+@needs_node
+def test_a_library_labor_line_is_read_onto_the_model_by_one_mapping(ran):
+    """`name` on the table, `label` on the model -- the two shapes differ and neither is renamed
+    to match the other, so exactly one mapping bridges them. travelSeed's own note directly above
+    it records why that mapping is stated once: the same row written out twice drifted within a
+    day, and the migration's copy went on handing out the old shape after the seed had moved on.
+
+    Mutation: change `label: r.name` to `label: r.label` in libraryLaborRow -- every default lands
+    on the Labor step with a blank name, which is what a second copy of this mapping looks like
+    after the column is renamed on one side."""
+    lib = ran["libraryLabor"]
+    assert [r["label"] for r in lib["mapped"]] == ["Densify", "Night shift premium"], (
+        "the table's `name` did not become the model's `label`: %r" % lib["mapped"])
+    assert [r["id"] for r in lib["mapped"]] == ["lab-densify", "lab-night"]
+    assert [r["unit"] for r in lib["mapped"]] == ["days", "hours"]
+    assert [r["guys_auto"] for r in lib["mapped"]] == [False, True], (
+        "guys_auto did not survive as a real boolean")
+    # PostgREST hands numeric back as TEXT. A rate left as a string prices correctly today (num()
+    # coerces it) and then sits on the saved draft as "40.00" for the life of the bid.
+    assert lib["rateType"] == "number", "the rate stayed a string off the API"
+    assert [r["rate"] for r in lib["mapped"]] == [40.0, 12.5]
+    # THE ESTIMATOR'S OWN BOXES START EMPTY. A default says what the line is and what it costs per
+    # unit; how much of it this job needs is nobody's to guess, and a seeded quantity would be a
+    # number no one chose sitting inside a customer's price.
+    assert [r["guys"] for r in lib["mapped"]] == ["", ""]
+    assert [r["days"] for r in lib["mapped"]] == ["", ""]
+
+
+@needs_node
+def test_the_defaults_stand_beside_travel_and_never_double_it(ran):
+    """A default is an addition BESIDE the four rows off Kyle's own Polish tab -- never a
+    substitution for one. `travel` is the single reserved exception and it is the subject of the
+    test below; everything else here is the rule it is an exception to.
+
+    Mutation: drop the `seen[rid]` guard from seedLibraryLabor's second loop, and a library row
+    whose id is already on the model lands a second time."""
+    lib = ran["libraryLabor"]
+    assert lib["seededIds"] == ["polishing", "mockup", "jointfill", "travel",
+                                "lab-densify", "lab-night"], (
+        "the defaults did not land after the four built-in rows, in the server's order: %r"
+        % lib["seededIds"])
+    assert lib["builtInsUntouched"], "seeding rewrote one of the four built-in rows"
+    assert lib["inputUntouched"], "seeding mutated the array it was handed"
+    assert lib["isANewArray"], "seeding returned the same array it was handed"
+    # Nothing to add, in all three shapes "nothing" arrives in -- an empty table, a read that
+    # could not answer, and a row the API should never have served.
+    built_in = ["polishing", "mockup", "jointfill", "travel"]
+    assert lib["emptyList"] == built_in
+    assert lib["missingList"] == built_in
+    assert lib["rowsWithoutIds"] == built_in
+
+
+@needs_node
+def test_travel_is_overridden_in_place_and_never_becomes_a_second_row(ran):
+    """TRAVEL IS EDITABLE FROM 2026-09-19 AND STILL CANNOT BE DUPLICATED OR LOST. Hanz, on the
+    BUILT IN chip the Defaults tab drew beside it: "again this too how can we edit this?", and
+    twice before that, "don't put in a hard coded or built in line items". The rate was a literal
+    inside travelSeed() with no row behind it, so nothing on the page could change it.
+
+    THE TWO FAILURE MODES THIS PINS ARE OPPOSITE ONES, which is why one test holds both:
+
+      * A stored `travel` row SKIPPED is an edit that silently does nothing -- the admin types
+        $41.50, the list shows $41.50, and every bid still prices at $33.00.
+      * A stored `travel` row PUSHED BESIDE the built-in one puts two rows carrying the id
+        `travel` on the estimate. migrateModel's backfill finds Travel by that exact id, so it
+        would start filling fields onto whichever it reached first, and the row an admin typed a
+        rate into is not the row that prices the job.
+
+    AND THE THIRD CASE IS PRODUCTION. `library_labor` does not exist there yet; list_labor()
+    answers [] and never raises, so Travel must be the sheet's own $33.00/hr row exactly as it
+    was. That arm is not hypothetical -- it is the only state prod is in until the DDL runs.
+
+    Mutation: restore the old `seen[String(r.id)]` skip for the travel arm, and the override case
+    comes back as Travel/$33.00 -- the edit reaches nothing. Or push instead of overlaying, and
+    `count` is 2."""
+    lib = ran["libraryLabor"]
+    over = lib["travelIsOverriddenInPlace"]
+    assert over["count"] == 1 and over["rowCount"] == 4, (
+        "the stored travel row was pushed beside the built-in one instead of onto it: %r" % over)
+    assert over["label"] == "Drive time" and over["rate"] == 99, (
+        "the stored travel row did not reach the model -- the Defaults tab edit prices nothing:"
+        " %r" % over)
+    assert over["unit"] == "days" and over["guysAuto"] is False, (
+        "unit and guys_auto did not come off the stored row: %r" % over)
+    # IN PLACE. Travel is the sheet's fourth labor row; re-ordering it would move the line the
+    # estimator reads under Joint Filler.
+    assert over["at"] == 3 and over["ids"] == ["polishing", "mockup", "jointfill", "travel"], (
+        "Travel moved position when its stored row was applied: %r" % over["ids"])
+
+    # PRODUCTION: no travel row in the library at all. The constant stands and Travel is untouched.
+    none = lib["travelWithNoStoredRow"]
+    assert none["count"] == 1, "Travel is not on the bid when the library has no row for it"
+    assert none["label"] == "Travel" and none["rate"] == 33.0, (
+        "a library with no travel row did not leave Travel on the shipped rate: %r" % none)
+    assert none["unit"] == "hours" and none["guysAuto"] is True
+
+    # THE FALLBACK ITSELF, which everything above is an override of.
+    shipped = lib["shippedTravel"]
+    assert shipped == {"id": "travel", "label": "Travel", "guys": "", "days": "",
+                       "rate": 33.0, "unit": "hours", "guys_auto": True}, (
+        "travelSeed() with no row is no longer the sheet's own row: %r" % shipped)
+
+    # numeric(10,2) commonly arrives as TEXT off PostgREST. A rate left as a string would price
+    # (num() coerces it) and then sit on the saved draft as "41.50" for the life of the bid.
+    text = lib["storedTravelFromText"]
+    assert text["rate"] == 41.5 and isinstance(text["rate"], float), (
+        "a rate served as text did not become a number: %r" % text)
+    assert text["id"] == "travel", "the id came off the payload rather than being the reserved one"
+
+    # ZERO IS AN ANSWER. Travel written off for local work is a thing an admin can mean, and
+    # reading it as blank would quietly put 33.00 back into every new bid.
+    assert lib["storedTravelAtZero"]["rate"] == 0, (
+        "a stored rate of zero fell back to the shipped 33.00: %r" % lib["storedTravelAtZero"])
+    # …but a rate that is not a number at all falls back rather than becoming NaN on the model.
+    assert lib["storedTravelWithJunkRate"]["rate"] == 33.0, (
+        "an unparseable rate reached the model: %r" % lib["storedTravelWithJunkRate"])
+    # A BLANK RATE IS NOT ZERO, and this is a different question from the one above rather than a
+    # restatement of it. `Number("")` and `Number(null)` are both 0 and both isFinite, so a guard
+    # written as `!isFinite(rate)` alone reads an empty rate as travel being FREE -- silently, on
+    # every new bid, with the row still showing a line. `isBlank` is what separates "nobody filled
+    # this in" from the deliberate zero asserted directly above.
+    for shape in ("storedTravelWithEmptyRate", "storedTravelWithNullRate",
+                  "storedTravelWithNoRateKey"):
+        assert lib[shape]["rate"] == 33.0, (
+            "%s priced travel at %r instead of falling back to the shipped rate"
+            % (shape, lib[shape]["rate"]))
+    # THE RESERVED ID IS RESERVED. Everything else here hands travelSeed a row already carrying
+    # `travel`, where "use the reserved id" and "copy the row's id" cannot disagree. This is the
+    # one input that separates them, and it matters because `travel` is the only handle anything
+    # has on this line: migrateModel's backfill finds it by that exact string on every draft ever
+    # saved, and the Defaults tab addresses its PATCH to it.
+    assert lib["travelSeedIgnoresAForeignId"]["id"] == "travel", (
+        "travelSeed took the id off the row (%r) -- the line stops being the one migrateModel "
+        "backfills and the one the library can edit"
+        % lib["travelSeedIgnoresAForeignId"]["id"])
+    assert lib["travelSeedIgnoresAForeignId"]["rate"] == 44, (
+        "the rest of the row stopped being read while the id was being reserved")
+
+    # And blank TEXT falls back too: an unnamed line, or a unit the estimate has no branch for.
+    blank = lib["storedTravelWithBlankText"]
+    assert blank["label"] == "Travel" and blank["unit"] == "hours", (
+        "a row with a blank name or unit drew an anonymous line or an unpriceable one: %r"
+        % blank)
+    assert blank["rate"] == 44, "the rate was lost while falling back on the text fields"
+
+    # GUYS AND DAYS ARE THE BID'S. Editing a rate in the library has no business touching how much
+    # of the line this job needs.
+    q = lib["travelKeepsItsQuantities"]
+    assert q["guys"] == 6 and q["days"] == 2 and q["rate"] == 44, (
+        "applying the stored rate wiped the quantities on the row: %r" % q)
+
+
+@needs_node
+def test_both_schema_files_seed_the_travel_row_the_engine_actually_ships(ran):
+    """THE ROW AND THE FALLBACK HAVE TO AGREE, and they live in three files.
+
+    `travelSeed()` states what Travel costs when no row answers. `supabase_schema.sql` and
+    `backend/staging/schema_pg.sql` each seed the row that overrides it. Nothing at runtime
+    compares them: a seed of 35.00 against a fallback of 33.00 would price a bid differently on a
+    database that has the DDL from one that does not, both would look right on screen, and the
+    disagreement would surface as two estimators quoting different travel for the same job. This
+    is the only place the three can be held together, and it is exactly the drift the note above
+    travelSeed already records happening once.
+
+    DDL LANDS TWICE HERE. Prod Supabase and the staging Postgres are different databases with
+    different files; a seed added to one only is how a feature works on staging and does nothing
+    on prod. So BOTH files are read and both are required to say the same thing.
+
+    IDEMPOTENT, and that is not decoration: these files are re-run by hand. Without `on conflict
+    (id) do nothing` the second run raises on the primary key, halfway through a migration.
+
+    THE ENGINE'S SIDE IS EXECUTED, not grepped — `shippedTravel` is a real `P.travelSeed()` call
+    in the harness. A regex over the literal `33.0` in the source could not tell you what the
+    function returns.
+
+    Mutation: change the rate in either .sql file, or in travelSeed(), and this names which two
+    disagree."""
+    shipped = ran["libraryLabor"]["shippedTravel"]
+    files = {
+        "backend/supabase_schema.sql": ROOT / "backend" / "supabase_schema.sql",
+        "backend/staging/schema_pg.sql": ROOT / "backend" / "staging" / "schema_pg.sql",
+    }
+    seeds = {}
+    for name, path in files.items():
+        # COMMENTS STRIPPED FIRST. Both files are mostly prose -- every statement here has a
+        # paragraph above it -- and without this the regex happily matches a seed somebody has
+        # commented OUT. Proven: commenting the first line of the insert in supabase_schema.sql
+        # left this test green while the row would never have been created on production.
+        sql = re.sub(r"--[^\n]*", "", path.read_text(encoding="utf-8"))
+        m = re.search(
+            r"insert into public\.library_labor\s*\(([^)]*)\)\s*values\s*\(([^)]*)\)\s*"
+            r"on conflict \(id\) do nothing;", sql, re.I)
+        assert m, (
+            "%s does not seed the travel row with an idempotent insert. Without it the row does "
+            "not exist, so the Defaults tab has nothing to address and Travel goes back to being "
+            "a literal nobody can edit." % name)
+        cols = [c.strip() for c in m.group(1).split(",")]
+        vals = [v.strip().strip("'") for v in m.group(2).split(",")]
+        seeds[name] = dict(zip(cols, vals))
+        # EXACTLY ONE. A second insert for the same id is two statements of one row, which is the
+        # shape this whole line of work exists to stop.
+        assert len(re.findall(r"insert into public\.library_labor", sql, re.I)) == 1, (
+            "%s seeds library_labor more than once" % name)
+
+    a, bfile = list(seeds.values())
+    assert a == bfile, (
+        "the two schema files seed DIFFERENT travel rows, so prod and staging would price travel "
+        "differently: %r vs %r" % (a, bfile))
+
+    seed = a
+    assert seed["id"] == shipped["id"], (
+        "the seeded id is %r but migrateModel and seedLibraryLabor find Travel by %r — the row "
+        "would be an ordinary extra labor line on every bid" % (seed["id"], shipped["id"]))
+    assert seed["name"] == shipped["label"], (
+        "the seeded name %r is not what travelSeed() calls the line (%r)"
+        % (seed["name"], shipped["label"]))
+    assert float(seed["rate"]) == shipped["rate"], (
+        "the schema seeds Travel at %s and travelSeed() falls back to %s — a database with the "
+        "DDL prices travel differently from one without it"
+        % (seed["rate"], shipped["rate"]))
+    assert seed["unit"] == shipped["unit"], (
+        "the seeded unit %r is not travelSeed()'s %r, so the rate would multiply the wrong thing"
+        % (seed["unit"], shipped["unit"]))
+    assert (seed["guys_auto"].lower() == "true") == shipped["guys_auto"], (
+        "the seeded guys_auto disagrees with travelSeed(), so Travel stops following the crew's "
+        "man-days on any database that has the row")
+
+
+@needs_node
+def test_the_gate_on_the_defaults_only_opens_where_no_labor_was_ever_stated(ran):
+    """laborUnstated is the only thing standing between an admin editing the default list and an
+    estimator's finished bid, and it is asked of the SAVED BLOB rather than of a model. It has to
+    be: migrateModel fills a missing `labor` in from freshModel() before it hands the model back,
+    so every model has four labor rows whether or not anybody chose them.
+
+    The v1 row is the one to read twice. A v1 draft keeps its crew under `labour`, so its `labor`
+    is missing for a reason that has nothing to do with the estimator not having worked on it.
+
+    Mutation: drop the `saved.version !== 2` line. Every v1 draft on staging then reads as
+    unstated, and opening one on the calculator appends the library's defaults to crew rows its
+    estimator typed months ago."""
+    says = {c["label"]: c["unstated"] for c in ran["laborUnstated"]}
+    assert says["nothing saved at all"] is True
+    assert says["null"] is True
+    assert says["a v2 model that states no labor"] is True, (
+        "the model the beta intake now mints does not read as seedable, so the defaults are "
+        "unreachable in the normal flow")
+    assert says["a v2 model with an empty labor array"] is True
+    assert says["a v2 model with labor on it"] is False
+    assert says["a v1 draft, whose crew lives under `labour`"] is False, (
+        "a v1 draft reads as having no labor, so the defaults would land on top of its crew rows")
+    assert says["a version-less partial blob"] is False
+    assert says["a string"] is True
+
+
+@needs_node
+def test_a_saved_bids_labor_is_never_touched_by_the_defaults(ran):
+    """THE HARD CONSTRAINT. An estimator's saved labor rows are their work. A bid that has been
+    worked on comes back EXACTLY as it was saved -- the same rows, the same order, the same typed
+    numbers -- no matter what the default list says today.
+
+    The fixture is a real visit's worth of work: the four built-in rows with their own numbers, and
+    one library default the estimator kept and then re-rated from $40 to $55.
+
+    NOT VACUOUS. `wouldHaveAdded` seeds that same array with that same library list and shows a row
+    arriving, so the library demonstrably holds something that COULD have landed here. Without it,
+    "nothing was added" would pass just as happily against an empty library and prove nothing.
+
+    Mutation: make laborUnstated return `true` for a v2 model that states rows (drop the final
+    `!saved.labor.length` clause and invert it). Every reopened bid then grows the defaults again
+    on every load, and the $55 the estimator typed sits next to a $40 duplicate."""
+    s = ran["savedLaborIsUntouchable"]
+    assert s["unstated"] is False, "a bid with five labor rows on it read as never having stated any"
+    assert s["afterMigrate"] == s["saved"], (
+        "a saved bid's labor came back changed:\n saved: %r\n after: %r"
+        % (s["saved"], s["afterMigrate"]))
+    # The estimator's own re-rate, named rather than left to the deep compare above, because this
+    # is the number a default overwriting a kept row would quietly put back.
+    kept = [r for r in s["afterMigrate"] if r["id"] == "lab-densify"]
+    assert len(kept) == 1 and kept[0]["rate"] == 55, (
+        "the library's rate was written back over the estimator's own: %r" % kept)
+    assert len(s["wouldHaveAdded"]) > len(s["saved"]), (
+        "the library list holds nothing this bid is missing, so 'nothing was added' proves "
+        "nothing: %r" % s["wouldHaveAdded"])
+    # REQUIREMENT 3: removing a default from the library must not remove it from bids already
+    # holding it. Once saved, the row is the BID's -- nothing consults the library about it again.
+    assert "lab-densify" in s["survivesAnEmptyLibrary"], (
+        "deleting the default took it off a bid that was already holding it: %r"
+        % s["survivesAnEmptyLibrary"])
+    assert len(s["survivesAnEmptyLibrary"]) == len(s["saved"])
+
+
+@needs_node
+def test_a_stored_condition_answer_wins_over_the_one_the_tool_ships(ran):
+    """The three Takeoff conditions stopped being "built in" on 2026-09-18 (Hanz, twice:
+    "don't put in a hard coded or built in line items", then "I told you to remove the built-in
+    and keep and make everything editable in the takeoff"). freshModel() still states what the
+    tool SHIPS; a row in `condition_defaults` is an override of ONE key, and seedConditionDefaults
+    is where the two meet.
+
+    EVERY ROW IN THE FIXTURE DISAGREES WITH THE SHIPPED ANSWER, which is what makes this
+    non-vacuous: joint filler ships ON and the library says off, dye and remove-existing ship off
+    and the library says on. A fixture that agreed with freshModel could not tell a merge that
+    works from one that does nothing at all.
+
+    Mutation: `return out;` immediately after the Object.assign in seedConditionDefaults. The
+    Defaults tab then shows the shipped answers back whatever anybody sets, and an admin who
+    switched joint filler off finds it on in the next bid."""
+    c = ran["conditionDefaults"]
+    assert not any(c["shipped"][k] for k in ("joint_filler", "dye", "remove_existing_jf")), (
+        "freshModel no longer ships all three Takeoff conditions off, so this fixture -- which "
+        "sets every one of them ON -- is no longer a counterexample to anything: %r" % c["shipped"])
+    assert c["seeded"]["joint_filler"] is True, "the stored answer did not beat the shipped one"
+    assert c["seeded"]["dye"] is True and c["seeded"]["remove_existing_jf"] is True
+    assert c["intakeFiveUntouched"], (
+        "the merge moved a condition nobody stored an answer for; only the three keys it was "
+        "handed may change")
+    assert c["inputUntouched"], "the merge mutated the conditions object it was handed"
+    assert c["isANewObject"], "the merge returned the same object it was handed"
+    # A key the model does not carry is skipped rather than added: migrateModel whitelists
+    # condition keys against freshModel().conditions and DROPS every other one, so a seeded
+    # stranger would look applied on screen and come back missing on the next load.
+    assert c["offVocabularyIgnored"], (
+        "an off-vocabulary condition was written onto the model, where migrateModel will drop it")
+    # Nothing to apply, in every shape "nothing" arrives in -- an unpromoted table, a read that
+    # could not answer, and a half-written row.
+    assert c["emptyList"] == c["shipped"]
+    assert c["missingList"] == c["shipped"]
+    assert c["rowsWithoutKeys"] == c["shipped"]
+
+
+@needs_node
+def test_the_gate_on_the_condition_defaults_only_opens_on_a_blank_bid(ran):
+    """conditionsUnstated is the only thing standing between a Defaults-tab edit and an
+    estimator's saved answers, and it is STRICTER than laborUnstated on purpose.
+
+    An empty `labor` array is a shape a real model holds and genuinely means "no rows chosen".
+    `conditions` has no equivalent: migrateModel backfills every key from freshModel on the way
+    out, so a saved v2 blob that omitted `conditions` was still SHOWN an answer, and its next save
+    wrote that answer into Kyle's workbook through conditionCellWrites. Reading that as unstated
+    would move a Yes/No literal on a bid somebody has already worked on.
+
+    The beta intake's first save is the row to read twice. It is `{conditions: {...}}` with no
+    version at all, and it carries the estimator's own intake answers -- so it must read as
+    STATED, or a company-wide default would land on top of them.
+
+    Mutation: return `true` from conditionsUnstated for anything that is not a v2 model (copy
+    laborUnstated's shape). The intake's first save then reads as blank and the defaults overwrite
+    the answers the estimator just gave."""
+    says = {c["label"]: c["unstated"] for c in ran["conditionsUnstated"]}
+    assert says["nothing saved at all"] is True
+    assert says["null"] is True
+    assert says["an empty blob"] is True
+    assert says["a v2 model that states no conditions"] is False, (
+        "a saved v2 bid read as blank; migrateModel has already shown it answers for every "
+        "condition, and its next save writes them into Kyle's workbook")
+    assert says["a v2 model with conditions on it"] is False
+    assert says["a v1 draft, whose conditions predate these three"] is False
+    assert says["the beta intake's first save: conditions and no version"] is False, (
+        "the intake's own save read as blank, so a library default would land on top of the "
+        "answers the estimator just gave on the intake step")
+    assert says["a string"] is True
+
+
+@needs_node
+def test_a_saved_bids_conditions_are_never_touched_by_the_defaults(ran):
+    """THE HARD CONSTRAINT, and the assertion this whole feature is judged on. Hanz, verbatim:
+    changing a default must not change any estimate that already exists, because an estimator's
+    saved answers are their work.
+
+    A bid that has been worked on comes back EXACTLY as it was saved, whatever the library says
+    today. joint_filler is the one that bites: it SHIPS on, so a bid where somebody deliberately
+    turned it off is exactly the bid a careless default would quietly turn back on -- and the
+    downloaded workbook would then say Yes in Polish!E29 with nothing on screen admitting it.
+
+    NOT VACUOUS. `wouldHaveChanged` applies the same library rows to the same migrated model and
+    shows all three answers moving, so "it came back as saved" is a fact about the gate and not
+    about a fixture that happened to agree. `freshTakesThem` is the other half: a brand new bid
+    DOES take the stored answers, or the feature does nothing at all and this test would pass
+    against a seeder that was never wired up.
+
+    Mutation: call seedConditionDefaults unconditionally in polish-estimate.js's init instead of
+    behind `conditionDefaults`. Every reopened bid then adopts today's defaults, and the next save
+    writes them over the estimator's answers in Polish!E25/E29/F29."""
+    s = ran["savedConditionsAreUntouchable"]
+    assert s["unstated"] is False, (
+        "a bid with nine answered conditions read as never having stated one")
+    assert s["afterMigrate"] == s["saved"], (
+        "a saved bid's conditions came back changed:\n saved: %r\n after: %r"
+        % (s["saved"], s["afterMigrate"]))
+    # Named rather than left to the deep compare above, because these three are the ones the
+    # Defaults tab can move and the ones whose literals reach Kyle's workbook.
+    assert s["afterMigrate"]["joint_filler"] is False
+    assert s["afterMigrate"]["dye"] is False
+    assert s["afterMigrate"]["remove_existing_jf"] is False
+    moved = [k for k in ("joint_filler", "dye", "remove_existing_jf")
+             if s["wouldHaveChanged"][k] != s["saved"][k]]
+    assert len(moved) == 3, (
+        "the library's answers agree with this bid's, so 'it came back unchanged' proves "
+        "nothing -- only %r would have moved" % moved)
+    took = [k for k in ("joint_filler", "dye", "remove_existing_jf")
+            if s["freshTakesThem"][k] != ran["conditionDefaults"]["shipped"][k]]
+    assert len(took) == 3, (
+        "a brand new bid does not take the stored answers either, so nothing is being gated: %r"
+        % s["freshTakesThem"])
+    assert s["migrationIsIdempotent"], "migrating twice reshapes the conditions again"

@@ -926,6 +926,40 @@
   function syncScrim() {
     $("scrim").style.display = $("drawer").classList.contains("open") ? "block" : "none";
   }
+  /** Which project the address bar says is open — `?open=<proposal_id>`, or nothing.
+   *
+   *  THE DRAWER IS WHERE YOU WERE, and until now a reload put every rep back on the board. The
+   *  board's own tab, its filters and its sort already survive one (sessionStorage), so the drawer
+   *  was the last thing on this page that did not.
+   *
+   *  It reuses the deep link a staff notification already sends (`/portal.html?open=<pid>`) rather
+   *  than inventing a second way of saying the same thing, which also means the URL in the address
+   *  bar is now a link a rep can paste to a colleague and have it open the project they are talking
+   *  about.
+   *
+   *  `sec` is DELIBERATELY NOT WRITTEN. Which of the five tabs a drawer opens on is routed by
+   *  defaultSection — unread first, then a submitted deposit, then the conversation — and the note
+   *  there records why remembering it would be wrong: the board is one session a rep keeps open all
+   *  day, and a remembered tab would permanently defeat that routing. A notification may still ask
+   *  for one, and openDetail still honours that, once.
+   *
+   *  replaceState, never pushState: opening a card is not a page a rep wants Back to walk through.
+   *  Silent on failure — a drawer that opens is worth more than a URL that records it. */
+  function markDrawerInUrl(pid) {
+    try {
+      // URLSearchParams over location.search, not `new URL(location.href)`: this file has never
+      // constructed a URL and its harnesses stub the global down to two object-URL methods, so
+      // reaching for the constructor here would break the drawer tests rather than the drawer.
+      const q = new URLSearchParams(location.search);
+      if (pid) q.set("open", pid);
+      else q.delete("open");
+      const search = q.toString();
+      const next = location.pathname + (search ? "?" + search : "") + location.hash;
+      if (next !== location.pathname + location.search + location.hash) {
+        history.replaceState(null, "", next);
+      }
+    } catch { /* an old browser, or a sandboxed frame — the drawer still opens */ }
+  }
   function closeDrawer() {
     $("drawer").classList.remove("open"); syncScrim();
     // Clear the tab so the NEXT open routes by what needs attention again.
@@ -933,6 +967,7 @@
     // And the signature, or reopening the same proposal with unchanged data would be skipped as
     // "already showing that" — leaving an empty drawer and skipping defaultSection's routing.
     DRAWER_SIG = "";
+    markDrawerInUrl(null);
   }
   function closeAll() { closeDrawer(); }
   // Delegated on #drawer: renderDetail replaces its innerHTML, never the node
@@ -970,6 +1005,11 @@
       const want = new URLSearchParams(location.search).get("sec");
       if (want && SEC_TABS[want]) ACTIVE_SEC = want;
     }
+    // Written on EVERY open, deep-linked or clicked, so a reload comes back to the project that
+    // was on screen. load()'s own read of `?open` is guarded by DEEPLINK_USED — set just above,
+    // and set before any of the early returns below — so stamping it here cannot make the poll
+    // re-open a drawer the rep has closed.
+    markDrawerInUrl(pid);
     $("scrim").style.display = "block";
     const d = $("drawer"); d.classList.add("open");
 

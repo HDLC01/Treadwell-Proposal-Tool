@@ -124,16 +124,37 @@ def test_the_five_original_flags_are_asked_of_every_work_type(cond):
 
 # ── the defaults match the template, which is the point of them ────────────
 @needs_node
-def test_joint_filler_defaults_on_because_the_template_ships_it_on(cond, sheet):
-    """The sharpest regression risk in this change.
+def test_joint_filler_defaults_off_even_though_the_template_ships_it_on(cond, sheet):
+    """THIS TEST USED TO ASSERT THE OPPOSITE, and the reversal is the whole of what changed.
 
-    The beta's condition defaults are `local:true, taxable:true` and everything else false. Carry
-    that convention to `joint_filler` and the form starts writing ``Polish!E29 = "No"`` to every
-    polish job -- silently REMOVING joint filler from jobs that get it today. The template's own
-    value is the authority, so it is read here rather than restated.
+    It read: "the template's own value is the authority", and on that reasoning joint_filler
+    defaulted ON because Kyle's Polish!E29 ships "Yes". The template still says Yes -- asserted
+    below, because that fact has not changed and a silent drift in the workbook should still be
+    caught here.
+
+    WHAT CHANGED IS THAT THE LINE STARTED COSTING MONEY. On 2026-09-18 the beta engine began
+    charging joint filler at a $500 kit per 3,500 sq ft (jointFillerCost, Kyle's C29), so "on by
+    default" stopped being a harmless transcription of a Yes/No cell and became $2,500 on a
+    17,500 SF bid that nobody had chosen and no screen had made anybody decide. Hanz's call on
+    2026-09-19: all three Takeoff conditions start off, and the estimator switches on what the
+    job actually needs.
+
+    THE TEMPLATE IS STILL THE AUTHORITY ON THE OTHER FIVE -- see the test directly below, which
+    reads local/hard_bid/taxable straight off the sheet. It is this one condition where a cell
+    that is only a flag in Kyle's hands is a priced line in ours.
+
+    THE WORKBOOK STILL GETS ITS LITERAL either way: conditionCells writes "No" rather than
+    leaving E29 blank, because a blank Yes/No cell is not "No" to Kyle's formulas.
+
+    Mutation: set `def: true` back on joint_filler in index.js. This goes red, and so do the
+    remodel-tax dollar figures in test_polish_estimate_page.
     """
-    assert str(sheet["Polish"]["E29"].value).strip().lower() == "yes"
-    assert cond["defaults"]["joint_filler"] is True
+    assert str(sheet["Polish"]["E29"].value).strip().lower() == "yes", (
+        "Kyle's template no longer ships Polish!E29 as Yes -- this test's whole premise is that "
+        "it does and that we deliberately differ from it")
+    assert cond["defaults"]["joint_filler"] is False, (
+        "joint filler is on by default again. It charges a $500 kit per 3,500 sq ft, so that is "
+        "$2,500 on a 17,500 SF bid nobody asked for")
 
 
 @needs_node
@@ -340,6 +361,9 @@ def test_removing_existing_filler_goes_inert_when_there_is_no_filler(cond):
     estimator an input is not affecting the price instead of removing it and losing what was set.
     """
     i = cond["inert"]
+    # SWITCHED ON FIRST BY THE FIXTURE. joint filler ships off since 2026-09-19, so remove-existing
+    # is inert the moment the step opens; the harness turns joint filler on to build the
+    # precondition and then off again, which is the transition this test is about.
     assert i["beforeInert"] is False
     assert i["afterInert"] is True
     assert i["afterStillRendered"] is True, "hiding it loses the setting; grey it out instead"
@@ -406,3 +430,56 @@ def test_none_of_these_cells_are_locked_against_the_estimator(sheet):
             # to be able to change a tax answer in the workbook after it is downloaded.
             "Leveling!B6", 'Gyp (USG 1-8")!B8', "Gyp (FR)!B8"}
     assert not (ours & locked), sorted(ours & locked)
+
+
+# ── the admin default and the workbook cell, on the LIVE intake screen ─────
+#
+# dye / joint_filler / remove_existing_jf are the SAME three keys the Polish beta already lets
+# an admin override on the Library's Defaults tab (see test_condition_defaults.py and
+# test_polish_estimate_page.py / test_polish_intake_page.py). This screen carried its OWN
+# hardcoded default for the same three questions and never asked GET /api/condition-defaults,
+# so the moment an estimator touched ANY of the ten step-1 toggles, conditionCells() baked the
+# STALE hardcoded default into Kyle's workbook rather than the admin's real answer -- with the
+# Defaults tab still showing the admin's choice as saved. These two tests are the regression
+# coverage for that fix.
+@needs_node
+def test_a_cell_answer_still_beats_the_admin_default(cond):
+    """THE CELL WINS. All three workbook cells present, exactly as a real step-1 save leaves
+    them, and the admin default set to the OPPOSITE of every one of them -- proving the admin
+    default cannot move an estimate that has already answered these questions, not just that it
+    usually agrees with one that has.
+
+    Mutation: read the admin default ahead of the cell (or unconditionally) in
+    hydrateConditions(). All three then come back flipped."""
+    c = cond["cellBeatsAdminDefault"]
+    assert c["fetched"] is True, "the admin default was never asked for"
+    assert c["jointFiller"] is True, "Polish!E29 said Yes; the admin's 'off' overwrote it"
+    assert c["dye"] is False, "Polish!E25 said No; the admin's 'on' overwrote it"
+    assert c["removeExistingJf"] is False, "Polish!F29 said No; the admin's 'on' overwrote it"
+
+
+@needs_node
+def test_the_admin_default_reaches_a_genuinely_fresh_load(cond):
+    """THE CONFIRMED GAP, closed. No cell_values at all -- nothing typed, no autofill, no prior
+    visit -- is the exact case the bug broke: hydrateConditions() fell back to the hardcoded
+    c.def no matter what the Library's Defaults tab said, so the FIRST toggle an estimator
+    touched baked the wrong answer into Kyle's workbook. The admin default has to reach
+    condState here, and touching one UNRELATED switch (`local`) has to carry it into the cells
+    conditionCells() writes -- because that write is exactly what the report describes: every
+    in-scope condition's cells move the moment any ONE of the ten does.
+
+    Mutation: delete the ADMIN_CONDITION_KEYS gate (or the admin-default read) from
+    hydrateConditions(). All three keys then answer with the shipped literal regardless of what
+    the Defaults tab says, and this test is the one that would have caught it before this
+    branch shipped."""
+    c = cond["adminDefaultReachesFreshLoad"]
+    assert c["fetched"] is True, "a fresh load never asked for the admin default"
+    # ALL THREE SHIP FALSE since 2026-09-19 and the fixture sets all three ON, so every one of
+    # these can only be explained by the admin row having been read.
+    assert c["jointFiller"] is True, "ships False; the admin's True never reached condState"
+    assert c["dye"] is True, "ships False; the admin's True never reached condState"
+    assert c["removeExistingJf"] is True, "ships False; the admin's True never reached condState"
+    assert c["cells"]["Polish!E29"] == "Yes", "joint filler's admin default never reached the cell"
+    assert c["cells"]["Polish!E25"] == "Yes", "dye's admin default never reached the cell"
+    assert c["cells"]["Polish!F29"] == "Yes", (
+        "remove-existing-jf's admin default never reached the cell")

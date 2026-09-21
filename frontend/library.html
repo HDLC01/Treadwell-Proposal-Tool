@@ -108,6 +108,85 @@
        it is a continuation of that list, not a floating panel over it. */
     #default-hits { border-top:1px solid var(--line); background:var(--card);
        margin:0; overflow:hidden; }
+    /* THE DEFAULTS TAB'S ROW CONTROLS, 2026-09-18. .linkish measured 9.29:1 -- past AAA --
+       so a contrast fix would not have helped. The real problem was a COLLISION: .linkish
+       (600 12px, --ink-v) and .builtin (600 10.5px, --ink-v) drew a control and a read-only
+       chip in the same colour at the same weight, 1.5px of type size apart, so Edit read as
+       a label. Edit and Remove now use .btn.ghost.sm, which four other controls on this app
+       already draw -- the search box's siblings, .wtab, #items-addrow .addbtn. No new class,
+       no new token. .linkish is deleted; this was its last use anywhere in the frontend.
+
+       WORDS, NOT THE BIN GLYPH, still the reasoning: Remove here means "stop being a
+       default"; the trash can on the Items tab means the row is gone from the library. Two
+       different destructions must not wear one picture -- so a worded button, not a glyph,
+       and the danger colour appears on hover only, matching how .icon.danger already
+       behaves. A resting red column down a list of healthy defaults would read as a warning
+       column, and none of these rows is in trouble. */
+    .btn.ghost.danger:hover { color:var(--red-dark); border-color:var(--red);
+       background:var(--red-tint); }
+    /* .linkish carried its own margin-right; .btn does not. Scoped to the Defaults pane so
+       the Items tab's icon-button pairs (already spaced by their own gap) are untouched. */
+    #pane-defaults .rowact .btn + .btn { margin-left:6px; }
+    /* What a row nobody can change here says instead of an empty cell. Travel and the three
+       takeoff conditions are built in; bond is read only because the Markup page owns it. */
+    .builtin { font:600 10.5px var(--ui); color:var(--ink-v); letter-spacing:.04em;
+       text-transform:uppercase; }
+    /* THE LABOR FORM, WHICH IS A ROW IN THE TABLE rather than a panel above it. Hanz asked
+       on 2026-09-17 for the takeoff picker to open "within the line item instead of up
+       above", and a form for a labor line has the same answer only louder: it opens where
+       the line will be, with the columns it will fill, so what you type is laid out as what
+       you will read back. A modal would say the opposite -- that this is a trip elsewhere. */
+    .defform > td { background:var(--surf-low); }
+    .defform input, .defform select { width:100%; font-size:12.5px; padding:5px 8px; }
+    .defform .n input { text-align:right; }
+    .deferr { margin:0; padding:2px 0 0; color:var(--red-dark); font-size:12px; }
+    /* A SUB-HEADING INSIDE THE TABLE, not a row pretending to be one. Left-aligned and
+       quiet: it is a signpost over rows that carry the actual content, so it must not
+       out-shout the names beneath it. The first one drops its top border -- a rule directly
+       under the <thead> reads as a double rule. */
+    /* THE WORK-TYPE STRIP. Quieter than the page's main tabs on purpose: those switch what
+       you are looking at entirely, these narrow one list. A second row of loud tabs under
+       the first reads as two navigations competing. */
+    /* .wtrow HOLDS THE BOTTOM MARGIN NOW, since the visible label sits beside the strip
+       rather than the strip sitting alone -- .wtabs keeps margin:0 so the two do not stack
+       two gaps into one big one. */
+    .wtrow { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin:0 0 14px; }
+    .wtabs { display:flex; gap:4px; flex-wrap:wrap; margin:0; }
+    .wtab { border:1px solid var(--line); background:var(--card); border-radius:999px;
+       padding:5px 13px; font:600 12px var(--ui); color:var(--ink-v); cursor:pointer; }
+    .wtab:hover { border-color:var(--red); color:var(--red); }
+    .wtab[aria-selected="true"] { background:var(--red-tint); border-color:var(--red);
+       color:var(--red-dark); }
+    .wtab:focus-visible { outline:2px solid var(--red); outline-offset:2px; }
+    /* What a row says when it applies to every work type rather than a chosen few. */
+    .wtall { font:600 10.5px var(--ui); color:var(--ink-v); letter-spacing:.04em;
+       text-transform:uppercase; }
+    /* THE SAME CHIP AS .wtab ABOVE, ONE SIZE DOWN, and deliberately so: the strip over the table
+       picks which work type you are LOOKING AT, and these pick which ones a row IS FOR. Same
+       shape because it is the same vocabulary of five; smaller because there are five per row
+       rather than five per page, and a row control that competed with the page control would
+       read as a second filter.
+
+       aria-pressed, NOT aria-selected. These are independent toggles -- a row can be for polish
+       and epoxy at once -- where the strip above is a one-of-five choice. The click handler reads
+       this same attribute, so there is no second copy of the state to fall out of step. */
+    .wtchips { display:flex; gap:3px; flex-wrap:wrap; }
+    .wtchip { border:1px solid var(--line); background:var(--card); border-radius:999px;
+       padding:2px 8px; font:600 10.5px var(--ui); color:var(--ink-v); cursor:pointer;
+       text-transform:uppercase; letter-spacing:.03em; }
+    .wtchip:hover { border-color:var(--red); color:var(--red); }
+    .wtchip[aria-pressed="true"] { background:var(--red-tint); border-color:var(--red);
+       color:var(--red-dark); }
+    .wtchip:focus-visible { outline:2px solid var(--red); outline-offset:2px; }
+    /* The chips and the "all work types" note stack, and the note collapses to nothing when a
+       row has chosen some -- so a scoped row is not carrying an empty line under it. */
+    .wtcell { white-space:normal; }
+    .wtcell .wtall:empty { display:none; }
+    .wtcell .wtall { display:block; margin-top:3px; }
+    tr.grouphead th { text-align:left; padding:9px 13px 5px; background:var(--surf-low);
+       border-top:1px solid var(--line); font:600 10.5px var(--ui); color:var(--ink-v);
+       letter-spacing:.06em; text-transform:uppercase; }
+    tr.grouphead:first-child th { border-top:0; }
     /* THE GLYPH IS NOT A CLICK TARGET. The delete and duplicate handlers read their data-
        attribute off the element that was clicked, and an <svg> child would answer null and
        swallow the press. The handlers now resolve through closest() as well, so this rule is
@@ -531,9 +610,20 @@
     @media (max-width:560px) {
       .bulk-dlg { margin-top:0; max-height:100%; border-radius:0; border:0; }
       .bulk-ov { padding:0; }
+      /* Edit and Remove are now bordered buttons, not inline text, so two of them no
+         longer fit on one line beside a row's name at phone width. Let them wrap and stack
+         instead of forcing the row to scroll sideways. */
+      #pane-defaults .rowact { white-space:normal; }
+      #pane-defaults .rowact .btn { margin-bottom:4px; }
     }
 
     .admin-grid { display:grid; gap:18px; }
+    /* THE MEASURE CAP. .wrap runs to max-width:1660px because the Items table needs eight
+       columns; the Defaults tab's tables have three. Uncapped, a row's name and its Remove
+       button end up roughly fifteen hundred pixels apart on a wide monitor, so the eye has
+       to cross empty table to get from one to the other. This puts the controls back beside
+       the rows they act on and changes nothing on any other tab. */
+    #pane-defaults .admin-grid { max-width:980px; }
     .admin-section h2 { margin:0 0 8px; font:700 14px var(--ui); letter-spacing:-.01em; }
 
     /* Vendors: readable by everyone, editable by admins. The read-only state is a real state, not
@@ -662,9 +752,15 @@
               <tr>
                 <th>Materials <span class="th-sub">(how the manufacturer names it)</span></th>
                 <th>Division</th><th class="n">Order Quantity</th><th>Unit</th>
-                <!-- "Dates" until 2026-09-04. The cell now names who added the material and who
-                     last changed it, not only when, so the heading had to stop promising only
-                     dates. No test pinned the old string. -->
+                <!-- "Dates" until 2026-09-04. The cell names who added the material and who
+                     last changed it, not only when, so the heading stopped promising only
+                     dates.
+
+                     THE PRICE LINE CAME OUT on 2026-09-18 -- Hanz: "too much clutter".
+                     Three stacked lines on every row of a dense editing table was two more
+                     than anyone reads. Added-and-by and Edited-and-by stay; "Price not since
+                     we started tracking" went. cost_updated_at is STILL stored, still
+                     returned, and still what the Price-updated sort orders by. -->
                 <th class="n">Cost</th><th>Vendor</th><th>History</th>
                 <!-- NO DEFAULT COLUMN. It lived here for one day. Hanz, 2026-09-17: "all the
                      default items in assemblies should be handled in default items in assemblies
@@ -803,6 +899,10 @@
            The two lists below are short by design -- a default is something chosen on purpose --
            so a box that only narrowed them would be more chrome than the thing it searched. This
            searches the LIBRARY, and picking a result switches that row on. -->
+      <!-- THE PANE'S OWN RATIONALE, said once rather than left in HTML comments. The
+         Assemblies and Administration panes both open with a .paneintro; this one did not. -->
+      <p class="paneintro"><b>Defaults are what a new bid opens holding.</b> Pick a work
+        type, then set the takeoff lines and the labor lines an estimate starts with.</p>
       <div class="itemsearch" id="default-search">
         <span class="searchbox">
           <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
@@ -814,28 +914,50 @@
         </span>
       </div>
 
+      <!-- ONE STRIP FOR BOTH SECTIONS, not one each. A work type is the question "what does
+           a polish bid open holding?", and Takeoff and Labor are two halves of that one
+           answer -- two strips could be left disagreeing, showing a polish takeoff beside
+           an epoxy labor list, which is a screen that describes no bid that exists.
+
+           FIVE, AND WHICH FIVE: markup.TABS, the closed list the markup rules are already
+           filed under, and the tabs of Kyle's own workbook. `combo` is NOT here -- it is
+           what detect_work_type() returns for which PROPOSAL to write, and a combo job
+           runs on the epoxy AND polish tabs, so it reads both lists rather than keeping a
+           third that has to agree with two others.
+
+           A ROW THAT NAMES NO WORK TYPE APPEARS UNDER EVERY TAB, which is what every row
+           written before this existed does -- so nothing anybody already set disappears
+           the day these tabs arrive. -->
+      <!-- VISIBLE, matching the Division facet's pattern (Items tab, #f-div-label): a
+           .flabel span the strip is aria-labelledby, not just an aria-label nobody sighted
+           can read. Five unexplained pills between a search box and two cards needed a
+           name on screen, not only for a screen reader. -->
+      <div class="wtrow">
+        <span class="flabel" id="wt-strip-label">Work type</span>
+        <div class="wtabs" role="tablist" aria-labelledby="wt-strip-label">
+          <button class="wtab" type="button" role="tab" data-work-type="polish"
+                  id="wt-polish" aria-selected="true">Polish</button>
+          <button class="wtab" type="button" role="tab" data-work-type="seal"
+                  id="wt-seal" aria-selected="false">Seal</button>
+          <button class="wtab" type="button" role="tab" data-work-type="epoxy"
+                  id="wt-epoxy" aria-selected="false">Epoxy</button>
+          <button class="wtab" type="button" role="tab" data-work-type="leveling"
+                  id="wt-leveling" aria-selected="false">Leveling</button>
+          <button class="wtab" type="button" role="tab" data-work-type="gyp"
+                  id="wt-gyp" aria-selected="false">Gyp</button>
+        </div>
+      </div>
+
       <div class="admin-grid">
         <div class="admin-section" id="default-takeoff">
           <h2>Takeoff</h2>
           <div class="card">
-            <div class="tw">
-              <table>
-                <thead><tr><th>Line</th><th>Kind</th><th>How it is priced</th>
-                  <th class="w-act"></th></tr></thead>
-                <!-- FILLED BY renderDefaultTakeoff(). Three things end up here and they are not
-                     the same kind of thing, which is why the Kind column exists rather than three
-                     separate tables: an assembly and a material are rows a new estimate OPENS
-                     WITH, and a condition is a Yes/No it opens ANSWERED. Splitting them into
-                     sections would say they are unrelated; a column says they are the same list
-                     read three ways, which is what they are. -->
-                <tbody id="default-takeoff-body"></tbody>
-              </table>
-            </div>
-            <div id="default-takeoff-empty" class="empty" hidden>
-              <h3>Nothing set yet</h3>
-              <p>The takeoff lines a new estimate opens with. Switch a material or assembly on
-                under Items or Assemblies and it appears here.</p>
-            </div>
+            <!-- THE ADD CONTROL SITS AT THE TOP, 2026-09-17: "all buttons should be at the
+                 top". It was under the table, which meant scrolling past every existing
+                 default to reach the way to add another -- and the more defaults you had
+                 set, the further away the button that sets them got. The picker opens
+                 directly beneath it, so what you are choosing from appears where the
+                 rows will land rather than at the far end of the list. -->
             <!-- THE THIRD WAY IN, and it exists because the other two both assume you already
                  know the thing. The row switch needs you to find the row; the search needs you to
                  name what you are after. This is for sitting down to set the defaults up. -->
@@ -853,12 +975,59 @@
                  to add a row to. Under the Add button it reads as what it is: the next rows
                  of this list, waiting to be picked. The search box above still drives it. -->
             <div id="default-hits" hidden></div>
+            <div class="tw">
+              <table>
+                <thead><tr><th>Line</th><th>How it is priced</th>
+                  <!-- THE COLUMN THE WORK-TYPE CHIPS ABOVE FILTER ON. It was missing, and so was
+                       any control that could set it: library.py has stored default_work_types
+                       since the column landed, library.js only ever READ it, so every row sat at
+                       [] -- which appliesToWorkType reads as "applies everywhere" -- and all five
+                       chips rendered one identical list. -->
+                  <th>Work types</th>
+                  <th class="w-act"></th></tr></thead>
+                <!-- FILLED BY renderDefaultTakeoff(), GROUPED. Hanz, 2026-09-17: "sub
+                     categorize the containers wheter they are materials or assemblies".
+
+                     A Kind column used to stand here instead, and its reasoning was that an
+                     assembly and a material are rows a new estimate OPENS WITH while a
+                     condition is a Yes/No it opens ANSWERED -- so splitting them into separate
+                     sections would say they are unrelated, where a column says they are one
+                     list read three ways.
+
+                     THAT REASONING IS KEPT, not discarded. These are sub-headings INSIDE ONE
+                     TABLE -- one list, one scroll, signposted -- rather than four tables. What
+                     goes is the column, which repeated itself on every row once a heading sat
+                     over each group. An empty group renders nothing at all. -->
+                <tbody id="default-takeoff-body"></tbody>
+              </table>
+            </div>
+            <div id="default-takeoff-empty" class="empty" hidden>
+              <h3>Nothing set yet</h3>
+              <p>The takeoff lines a new estimate opens with. Switch a material or assembly on
+                under Items or Assemblies and it appears here.</p>
+            </div>
           </div>
         </div>
 
         <div class="admin-section" id="default-labor">
           <h2>Labor</h2>
           <div class="card">
+            <!-- AT THE TOP, same ask and same reason as Takeoff above: the control that adds
+                 a line should not be behind every line already added. -->
+            <!-- NOT OPTIONAL ON THIS ONE. Labor lines are not library rows -- there is no Labor
+                 tab to switch anything on from, and nothing for the search above to return. They
+                 are typed here, so this button is the only way a labor default gets made.
+
+                 IT OPENS A FORM IN THE TABLE ABOVE, not a dialog. It shipped with no handler at
+                 all on 2026-09-17 because nothing stored a custom labor line; library_labor does
+                 now, and renderDefaultLabor draws the form as the row it is about to become. -->
+            <div class="addrow" id="default-labor-addrow" data-addrow-default="labor">
+              <button class="addbtn" type="button" data-add-default="labor">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                     aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"></path></svg>
+                Add a labor line</button>
+            </div>
             <div class="tw">
               <table>
                 <thead><tr><th>Line</th><th class="n">Rate</th><th>How it is priced</th>
@@ -873,16 +1042,6 @@
             <div id="default-labor-empty" class="empty" hidden>
               <h3>Nothing set yet</h3>
               <p>The labor lines a new estimate opens with.</p>
-            </div>
-            <!-- NOT OPTIONAL ON THIS ONE. Labor lines are not library rows -- there is no Labor
-                 tab to switch anything on from, and nothing for the search above to return. They
-                 are typed here, so this button is the only way a labor default gets made. -->
-            <div class="addrow" data-addrow-default="labor">
-              <button class="addbtn" type="button" data-add-default="labor">
-                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
-                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
-                     aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"></path></svg>
-                Add a labor line</button>
             </div>
           </div>
         </div>
@@ -1177,6 +1336,9 @@
   <script src="/js/icons.js"></script>
   <script src="/auth.js"></script>
   <script src="/shared.js"></script>
+  <!-- Which tab a reload lands on. Pure functions over location.hash, no DOM and no fetch; it
+       must precede the page script, which reads window.TWTabMemo as it restores the open tab. -->
+  <script src="/js/tab-memo.js"></script>
   <!-- The pricing maths. Must precede the page script, which reads window.TWLib as it runs. -->
   <!-- The estimate's own model, for ONE row: Travel is the labor default that already exists, and
        the Defaults tab lists it. Loaded rather than re-typed because travelSeed's own comment

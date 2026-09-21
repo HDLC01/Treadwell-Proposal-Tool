@@ -326,12 +326,27 @@ function blob(over) {
 /** `remodelRate` is the project's county rate off the draft, which the page reads from
  *  `state.county_remodel_rate`. Passing it here too keeps this expectation and the page computing
  *  the same thing; leaving it out would let a page that ignored the county still match. */
+/** Dye + Joint Filler's dollar contribution to a model's material total, exactly how the real
+ *  page's materialTotal() computes it: off `B.takeoffSf` and the model's OWN conditions,
+ *  merged onto freshModel()'s defaults the same way migrateModel merges them (a fixture below
+ *  states only the keys it cares about, and joint_filler ships ON -- an omitted key must NOT
+ *  silently read as off here, or this expectation would agree with a page that dropped the
+ *  seeded condition entirely). Shared by expectedChain and the two raw-material expectations
+ *  below that never reach markupChain at all, so the three cannot drift from each other about
+ *  what counts as "the area" or "the merged conditions". */
+function extraMaterial(model) {
+  const cond = Object.assign({}, B.freshModel().conditions, (model || {}).conditions || {});
+  const area = B.takeoffSf((model || {}).takeoff);
+  return B.dyeCost(area, cond.dye) + B.jointFillerCost(area, cond.joint_filler);
+}
+
 function expectedChain(model, asms, items, remodelRate) {
   let material = 0;
   (model.takeoff || []).forEach((r) => {
     const asm = (asms || []).filter((a) => a.id === r.assembly_id)[0];
     if (asm) material += L.priceAssembly(asm, items, B.num(r.measurement)).total;
   });
+  material += extraMaterial(model);
   return B.markupChain({
     material: material,
     labor: B.laborTotal(model.labor),
@@ -414,6 +429,31 @@ function build(opts) {
     rec.fetches.push(url);
     log.push("fetch:" + url);
     if (opts.libraryFails) throw new Error("the network went away");
+    // GET /api/library/labor -- the estimator's own default labor lines. Answered separately from
+    // the two below because the page has to survive it failing: public.library_labor is on staging
+    // and NOT on production, so on prod today this endpoint has no table behind it. `laborFails`
+    // is that read going down on its own, `laborBody` is it answering with something that is not a
+    // list of rows -- a 404's JSON, an { ok: false } -- and neither may cost the page its Labor
+    // step. Default [] rather than the fixture list, so a page that fetched this when it had no
+    // business to shows up as an empty answer rather than silently seeding.
+    // GET /api/condition-defaults -- the company's answers for the three Takeoff
+    // conditions. Its own arm for the same reason the labor one has one: the table is
+    // applied to NEITHER database yet, so on both of them today this read has nothing
+    // behind it, and a page that could not open without it would be unusable. Default []
+    // rather than a fixture list, so a page that asked when it had no business to shows
+    // up as an empty answer rather than as a silent rewrite of somebody's conditions.
+    if (/condition-defaults/.test(url)) {
+      if (opts.conditionFetchFails) throw new Error("the defaults table is not there");
+      return { json: async () => ({ ok: true,
+        conditions: clone(opts.conditionDefaults === undefined
+          ? [] : opts.conditionDefaults) }) };
+    }
+    if (/\/labor/.test(url)) {
+      if (opts.laborFails) throw new Error("the defaults table is not there");
+      return { json: async () => (opts.laborBody !== undefined
+        ? clone(opts.laborBody)
+        : { ok: true, labor: clone(opts.labor === undefined ? [] : opts.labor) }) };
+    }
     if (/assemblies/.test(url)) {
       return { json: async () => ({ assemblies: clone(opts.asms === undefined ? ASMS
                                                                              : opts.asms) }) };
@@ -546,7 +586,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
       rows: rows,
       matTotal: txt(b, "[data-mat-total]"),
       areaTotal: txt(b, "[data-area-total]"),
-      expectedMaterial: rows.reduce((s, r) => s + r.expectedTotal, 0),
+      expectedMaterial: rows.reduce((s, r) => s + r.expectedTotal, 0) + extraMaterial(MODEL),
       // LF rows are priced but must not count toward the area the price-per-SF divides by.
       expectedArea: B.takeoffSf(MODEL.takeoff),
       bidTotal: b.dom.get("bid-total").textContent,
@@ -654,9 +694,9 @@ const rendered = [];      // every string the page put on screen, for the Labour
     const was = [0, 1, 2].map((i) => txt(b, '[data-cost-for="' + i + '"]'));
 
     typeInto(b, '[data-tk="0"][data-k="measurement"]', "20000");
-    const chain = expectedChain(
-      Object.assign(clone(MODEL), { takeoff: clone(MODEL.takeoff).map(
-        (r, i) => (i === 0 ? Object.assign(r, { measurement: "20000" }) : r)) }), ASMS, ITEMS);
+    const typedModel = Object.assign(clone(MODEL), { takeoff: clone(MODEL.takeoff).map(
+      (r, i) => (i === 0 ? Object.assign(r, { measurement: "20000" }) : r)) });
+    const chain = expectedChain(typedModel, ASMS, ITEMS);
     const p0 = L.priceAssembly(ASMS[0], ITEMS, 20000);
     out.typing = {
       noRebuild: panels.htmlWrites === rebuilds,
@@ -682,7 +722,8 @@ const rendered = [];      // every string the page put on screen, for the Labour
     out.typing.expectedMaterialSum =
       L.priceAssembly(ASMS[0], ITEMS, 20000).total +
       L.priceAssembly(ASMS[1], ITEMS, 200).total +
-      L.priceAssembly(ASMS[2], ITEMS, 5000).total;
+      L.priceAssembly(ASMS[2], ITEMS, 5000).total +
+      extraMaterial(typedModel);
 
     // LEAVING the assembly field must not rebuild the row either. `change` fires when the
     // estimator tabs out of it, and the field they tab INTO is Measurement — so a rebuild here
@@ -1418,13 +1459,76 @@ const rendered = [];      // every string the page put on screen, for the Labour
       // list rather than something in it.
       cards: (function () {
         var h = s.dom.get("panels").innerHTML;
+        // Each card's own slice of the panel markup, from its own opening tag up to the next
+        // card's -- so a check against one card cannot accidentally read markup belonging to a
+        // different one. The anchor is `<div class="tk ` WITH THE TRAILING SPACE: it matches
+        // `tk mat` and `tk cond` and does NOT match `tk-h` or `tk-g` inside the card, which a
+        // bare `<div class="tk` anchor would find first and slice from.
+        function cardHtml(tag) {
+          var i = h.indexOf(">" + tag + "<");
+          if (i < 0) return "";
+          var start = h.lastIndexOf('<div class="tk ', i);
+          var next = h.indexOf('<div class="tk ', i + 1);
+          return h.slice(start, next < 0 ? h.length : next);
+        }
+        // A `.costbox` addressed by the data-condfig the page repaints it through, with its
+        // class, so "$2,500" and "the greyed-out em dash" are told apart.
+        function boxOf(block, key, part) {
+          var m = new RegExp('<div class="costbox([^"]*)" data-condfig="' + key + '\\.' + part +
+                             '">([^<]*)<').exec(block);
+          return m ? { cls: m[1], empty: / empty/.test(m[1]), text: m[2] } : null;
+        }
+        function textOf(block, key, part) {
+          var m = new RegExp('data-condfig="' + key + '\\.' + part + '">([^<]*)<').exec(block);
+          return m ? m[1] : null;
+        }
+        // THE SHAPE HANZ ASKED FOR, read off the rendered markup rather than off the model:
+        // a material card, four columns, a measurement and a unit and a total cost, and not one
+        // box in it that takes typing.
+        function probe(tag, key) {
+          var block = cardHtml(tag);
+          return {
+            isMaterialCard: /^<div class="tk mat">/.test(block),
+            usesTheAssemblyGrid: /<div class="tk-g">/.test(block),
+            name: (/<div class="costbox txt">([^<]*)</.exec(block) || [])[1] || null,
+            measurement: boxOf(block, key, "qty"),
+            unit: boxOf(block, key, "unit"),
+            cost: boxOf(block, key, "cost"),
+            rate: textOf(block, key, "rate"),
+            measureHint: textOf(block, key, "qtyhint"),
+            headerSummary: textOf(block, key, "sub"),
+            labels: (block.match(/<label>([^<]*)</g) || []).map(function (m) {
+              return m.slice(7, -1);
+            }),
+            // NOTHING ON THE CARD IS TYPEABLE, which is the honest half of the redesign. A
+            // Measurement box that accepted keystrokes and threw them away would be worse than
+            // the switch-and-a-sentence card it replaced.
+            nothingTypeable: !/<input|<select/.test(block),
+            // The switch does the row's remove button's job, so it sits where that button sits:
+            // after the header's right-hand summary, not bolted on beside the tag.
+            switchAfterTheSummary:
+              block.indexOf('data-cond="' + key + '"') >
+              block.indexOf('data-condfig="' + key + '.sub"'),
+          };
+        }
         return {
+          // ONE switch-shaped card left, Remove Existing's. Joint Filler and Dye are `.tk mat`.
           count: (h.match(/class="tk cond/g) || []).length,
-          // The card must NOT claim a cost. An assembly row comes to a number; these come to a
-          // Yes/No that only Kyle's workbook reads, and printing "$0" beside one would be a
-          // figure, and would be wrong.
-          noCostBox: !/class="tk cond[^"]*"[\s\S]{0,600}?costbox/.test(h),
-          // It names the cell it sets, which is the only thing it actually does.
+          jointFiller: probe("JOINT FILLER", "joint_filler"),
+          dye: probe("DYE", "dye"),
+          // REMOVE EXISTING IS THE CARD THIS CHANGE MUST NOT TOUCH -- it is a labor modifier,
+          // priced on the Labor step, and Hanz named it out of scope by name.
+          removeExisting: (function () {
+            var block = cardHtml("REMOVE EXISTING");
+            return {
+              stillASwitchCard: /^<div class="tk cond/.test(block),
+              noCostBox: !/costbox/.test(block),
+              noMeasurement: !/data-condfig/.test(block),
+              namesItsCell: /Polish!F29/.test(block),
+              saysWhereItIsPriced: /Labor step/.test(block),
+            };
+          })(),
+          // Each card names the cell it sets, which is the one thing every one of them does.
           namesItsCell: /Polish!E29/.test(h) && /Polish!F29/.test(h) && /Polish!E25/.test(h),
         };
       })(),
@@ -1432,6 +1536,79 @@ const rendered = [];      // every string the page put on screen, for the Labour
         const t = build(); t.api.go(1);
         return !/data-cond="joint_filler"/.test(t.dom.get("panels").innerHTML);
       })(),
+    };
+  }
+
+  {
+    // THE PRICED CARDS FOLLOW THE TAKEOFF, LIVE. Every figure on them is derived from the area,
+    // and typing a measurement takes `changed(false)` -- the in-place repaint, never a rebuild --
+    // so a card the repaint does not know about goes stale the moment anybody types. It DID:
+    // before 2026-09-19 nothing in repaintNumbers touched them, and the dollar figure beside the
+    // switch stayed at whatever the last full render worked out.
+    //
+    // READ THE NODES, NOT THE MARKUP. A regex over the panel's innerHTML reports the string from
+    // render time, so it would pass with the whole repaint block deleted.
+    const s = build();
+    await s.api.init();
+    // SWITCHED ON HERE, because all three conditions ship OFF from 2026-09-19 and a card for a
+    // line the bid is not buying shows an em dash. The claim under test is that a card which HAS
+    // a figure keeps it in step with the area, so it needs a figure.
+    s.api.model().conditions.joint_filler = true;
+    s.api.model().conditions.dye = true;
+    s.api.go(0);
+    const fig = (key) => ({
+      qty: txt(s, '[data-condfig="' + key + '.qty"]'),
+      unit: txt(s, '[data-condfig="' + key + '.unit"]'),
+      cost: txt(s, '[data-condfig="' + key + '.cost"]'),
+      sub: txt(s, '[data-condfig="' + key + '.sub"]'),
+      rate: txt(s, '[data-condfig="' + key + '.rate"]'),
+      hint: txt(s, '[data-condfig="' + key + '.qtyhint"]'),
+    });
+    const panels = s.dom.get("panels");
+    const rebuilds = panels.htmlWrites;
+    const before = { jf: fig("joint_filler"), dye: fig("dye") };
+    // Row 0 is 12,500 SF of the fixture's 17,500. Down to 3,000 the whole area is 8,000, which
+    // is 3 kits rather than 5 -- a change the kit count cannot express by accident.
+    typeInto(s, '[data-tk="0"][data-k="measurement"]', "3000");
+    out.condCardsRepaint = {
+      noRebuild: panels.htmlWrites === rebuilds,
+      before: before,
+      after: { jf: fig("joint_filler"), dye: fig("dye") },
+      // What the real engine says about the area that is now on the screen, so the expectation
+      // is polish-bid-core's answer rather than a number typed into this file.
+      expectedArea: 8000,
+      expectedJfCost: B.jointFillerCost(8000, true),
+      expectedDyeCost: B.dyeCost(8000, true),
+    };
+  }
+
+  {
+    // TOGGLING MOVES THE MATERIAL TOTAL BY EXACTLY THE FORMULA'S AMOUNT, AND NOTHING ELSE MOVES.
+    // The guarantee the old cond-cost tests were really protecting, kept across the markup
+    // change: the card is a new shape, the arithmetic behind the switch is not.
+    const s = build();
+    await s.api.init();
+    s.api.go(0);
+    const area = B.takeoffSf(s.api.model().takeoff);
+    const read = () => ({
+      material: s.api.materialTotal(),
+      labor: B.laborTotal(s.api.model().labor),
+      cost: txt(s, '[data-condfig="dye.cost"]'),
+      matTotal: txt(s, "[data-mat-total]"),
+    });
+    const off = read();                                  // dye ships OFF
+    need(s, '[data-cond="dye"]');
+    s.doc.fire("click", { target: s.doc.querySelector('[data-cond="dye"]') });
+    const on = read();
+    out.dyeToggleMovesTheTotal = {
+      area: area,
+      materialOff: off.material,
+      materialOn: on.material,
+      expectedDelta: B.dyeCost(area, true),
+      laborUnmoved: off.labor === on.labor,
+      costBoxOff: off.cost,
+      costBoxOn: on.cost,
+      matTotalOn: on.matTotal,
     };
   }
 
@@ -1451,8 +1628,17 @@ const rendered = [];      // every string the page put on screen, for the Labour
       remove_existing_jf: h.api.model().conditions.remove_existing_jf,
       // A BLANK IS NOT AN ANSWER: an absent cell leaves the model's value alone, because every
       // save writes both literals and a blank therefore means nobody has answered yet.
+      //
+      // THE SAVED MODEL SAYS `true` ON PURPOSE. joint_filler ships OFF from 2026-09-19, so a
+      // fixture that left the model at its default would read `false` whether the blank was
+      // ignored (right) or taken as a No (wrong) -- the two answers would be the same
+      // observation and this would prove nothing. A stated `true` is the only value that can
+      // tell them apart.
       blankLeavesTheDefault: (function () {
-        const k = build({ blob: blob({ cell_values: { "Polish!E29": "" } }) });
+        const stated = clone(MODEL);
+        stated.conditions = Object.assign({}, MODEL.conditions, { joint_filler: true });
+        const k = build({ blob: blob({ polish_estimate: stated,
+                                       cell_values: { "Polish!E29": "" } }) });
         return k.api.model().conditions.joint_filler === true;
       })(),
     };
@@ -1768,6 +1954,240 @@ const rendered = [];      // every string the page put on screen, for the Labour
     await d.api.init();
     d.win.fire("pagehide");
     out.pagehideFlush.quietWhenNothingArmed = d.rec.saves.length === 0 && d.rec.flushed === 0;
+  }
+
+  // ── J. the library's default labor lines ──────────────────────────────────
+  //
+  // "+ Add a labor line" on Library -> Default Items & Assemblies shipped wired to nothing,
+  // because nothing stored a custom labor line. public.library_labor now does, and this step is
+  // what reads it. Every case below is the page BOOTED and its Labor step RENDERED, because the
+  // way this feature fails is invisible to a source assertion: a gate that reads the wrong thing
+  // still contains the word laborUnstated, and rows that never reach the panel are still on a
+  // model somebody could print.
+  {
+    // Shaped the way GET /api/library/labor returns them: `name` not `label`, a numeric that can
+    // arrive as TEXT out of PostgREST, and a `sort` the server has already ordered by.
+    const LIB = [
+      { id: "lab-densify", name: "Densify", rate: "40.00", unit: "days", guys_auto: false,
+        sort: 0, notes: null, owner_email: "hanz@wetreadwell.com" },
+      { id: "lab-night", name: "Night shift premium", rate: 12.5, unit: "hours", guys_auto: true,
+        sort: 1, notes: "after 6pm", owner_email: "hanz@wetreadwell.com" },
+    ];
+    /** The names the LABOR STEP actually put on screen, read off the inputs it rendered. */
+    const onScreen = (built) => built.doc.querySelectorAll('[data-lab][data-k="label"]')
+      .map((el) => el.value);
+    const ids = (built) => built.api.model().labor.map((r) => r.id);
+
+    // A brand-new project: no polish_estimate on the draft at all, which is what the sidebar door
+    // and a project that reached this page without going through the beta intake both look like.
+    const noKey = blob();
+    delete noKey.polish_estimate;
+    const brandNew = build({ blob: noKey, labor: LIB });
+    await brandNew.api.init();
+    brandNew.api.go(1);
+
+    // THE NORMAL FLOW, and the case that decides whether any of this is reachable at all. Every
+    // beta project starts on polish-intake.html, and its save mints the first polish_estimate --
+    // this exact blob: version, takeoff, conditions, and no labor, because labor is not that
+    // page's to state. If this one does not seed, the feature only works for people who skipped
+    // the intake step.
+    const fromIntake = build({ blob: blob({ polish_estimate: {
+      version: 2,
+      takeoff: [{ assembly_id: "", assembly_name: "", measurement: "", unit: "SF" }],
+      conditions: { local: true, hard_bid: false, prevailing_wage: false, taxable: true,
+                    remodel_tax: false, bond: false },
+      contingency: 0, fees: 0, totals: {} } }), labor: LIB });
+    await fromIntake.api.init();
+    fromIntake.api.go(1);
+
+    // AN ESTIMATOR'S OWN WORK. Four rows with their own numbers, Travel already in its current
+    // shape and switched to manual (so neither migrateModel nor syncAutoGuys has anything
+    // legitimate to change), and a library default they kept and re-rated from $40 to $55.
+    const WORKED = {
+      version: 2,
+      takeoff: clone(MODEL.takeoff),
+      labor: [
+        { id: "polishing", label: "Polishing", guys: 4, days: 6, rate: 33 },
+        { id: "mockup", label: "Mock-up", guys: 3, days: 0.5, rate: 33 },
+        { id: "travel", label: "Travel", guys: 18, days: 2, rate: 33,
+          unit: "hours", guys_auto: false },
+        { id: "lab-densify", label: "Densify", guys: 2, days: 1, rate: 55, unit: "days",
+          guys_auto: false },
+      ],
+      conditions: clone(MODEL.conditions),
+      contingency: 0, fees: 0, totals: {},
+    };
+    const worked = build({ blob: blob({ polish_estimate: clone(WORKED) }), labor: LIB });
+    await worked.api.init();
+    worked.api.go(1);
+
+    // The same saved bid, opened on a day when the default has been DELETED from the library.
+    const deleted = build({ blob: blob({ polish_estimate: clone(WORKED) }), labor: [] });
+    await deleted.api.init();
+    deleted.api.go(1);
+
+    // A v1 draft off staging: its crew lives under `labour`, so it has no `labor` key for a
+    // reason that has nothing to do with the estimator not having worked on it.
+    const v1 = build({ blob: blob({ polish_estimate: {
+      areas: [{ name: "Main sales floor", sf: 9000 }],
+      labour: { polishing: { crew: 4, days: 6, rate: 32.2 } },
+      conditions: { local: false } } }), labor: LIB });
+    await v1.api.init();
+    v1.api.go(1);
+
+    // PRODUCTION TODAY: the table is not there, so the read cannot answer.
+    const down = build({ blob: (() => { const b = blob(); delete b.polish_estimate; return b; })(),
+                         labor: LIB, laborFails: true });
+    await down.api.init();
+    down.api.go(1);
+
+    // …and the same read answering with something that is not a list of rows.
+    const notRows = build({ blob: (() => { const b = blob(); delete b.polish_estimate; return b; })(),
+                            laborBody: { ok: false, error: "relation library_labor does not exist" } });
+    await notRows.api.init();
+    notRows.api.go(1);
+
+    out.laborDefaults = {
+      brandNew: {
+        ids: ids(brandNew),
+        onScreen: onScreen(brandNew),
+        rates: brandNew.api.model().labor.map((r) => r.rate),
+        // Nothing an estimator has to judge is filled in for them.
+        guys: brandNew.api.model().labor.map((r) => r.guys),
+        days: brandNew.api.model().labor.map((r) => r.days),
+        // A default carrying guys_auto is filled from the man-day sum before the first paint,
+        // exactly as Travel is -- 4×6 polishing days is not the point, the point is that it is
+        // the same figure Travel got rather than a blank.
+        autoGuys: brandNew.api.model().labor
+          .filter((r) => r.id === "lab-night").map((r) => r.guys),
+        travelGuys: brandNew.api.model().labor
+          .filter((r) => r.id === "travel").map((r) => r.guys),
+        // A default must not quietly put money on the bid.
+        laborTotal: B.laborTotal(brandNew.api.model().labor),
+        builtInTotal: B.laborTotal(B.freshModel().labor),
+        costCells: brandNew.doc.querySelectorAll("[data-lcost-for]").length,
+        // What the page says is stopping this bid being priced. A default arrives with its rate
+        // and no quantity, so a `days` line has two empty boxes and blockers() reads it the way
+        // it reads Polishing and Joint filler off Kyle's own sheet -- named, in words, not
+        // silently blocking and not silently priced at nothing.
+        blockers: B.blockers(brandNew.api.model()),
+        fetches: brandNew.rec.fetches,
+        mainShown: brandNew.dom.get("main").hidden === false,
+      },
+      fromIntake: { ids: ids(fromIntake), onScreen: onScreen(fromIntake),
+                    fetched: fromIntake.rec.fetches.some((u) => /\/labor/.test(u)) },
+      worked: {
+        saved: WORKED.labor,
+        after: worked.api.model().labor,
+        onScreen: onScreen(worked),
+        // THE PROOF THAT THE GATE RAN AT ALL: a saved bid never even asks for the defaults.
+        fetches: worked.rec.fetches,
+        // …and NOT VACUOUS: those two library rows exist and one of them is missing from this
+        // bid, so there was something for the gate to keep out.
+        wouldHaveAdded: B.seedLibraryLabor(WORKED.labor, LIB).map((r) => r.id),
+      },
+      // A default deleted from the library is still on the bid that was holding it.
+      deleted: { ids: ids(deleted), onScreen: onScreen(deleted),
+                 densifyRate: deleted.api.model().labor
+                   .filter((r) => r.id === "lab-densify").map((r) => r.rate) },
+      v1: { ids: ids(v1), fetched: v1.rec.fetches.some((u) => /\/labor/.test(u)) },
+      // Never a blank Labor step. Travel is there, the page is open, and nothing says anything is
+      // wrong -- a default nobody has defined yet is not an error to report to an estimator.
+      down: { ids: ids(down), onScreen: onScreen(down),
+              mainShown: down.dom.get("main").hidden === false,
+              loadingHidden: down.dom.get("loading").hidden,
+              alert: down.dom.get("alert").textContent,
+              costCells: down.doc.querySelectorAll("[data-lcost-for]").length },
+      notRows: { ids: ids(notRows), mainShown: notRows.dom.get("main").hidden === false,
+                 alert: notRows.dom.get("alert").textContent },
+    };
+  }
+
+
+  // ── the Takeoff condition defaults, at the page level ──────────────────────
+  //
+  // The three conditions stopped being "built in" on 2026-09-18. What is proved here is the half
+  // the shared module cannot prove on its own: which blobs this PAGE decides to seed.
+  {
+    // Every stored answer disagrees with what the tool ships. All three ship OFF from
+    // 2026-09-19, so all three rows say on. A fixture that agreed with freshModel could not tell
+    // a seeder that works from one that was never wired up.
+    const COND = [{ key: "joint_filler", on: true },
+                  { key: "dye", on: true },
+                  { key: "remove_existing_jf", on: true }];
+    const conds = (built) => built.api.model().conditions;
+
+    // A brand-new project: no polish_estimate on the draft at all. This is the sidebar door and a
+    // project that reached this page without going through the beta intake.
+    const noKey = blob();
+    delete noKey.polish_estimate;
+    const brandNew = build({ blob: noKey, conditionDefaults: COND });
+    await brandNew.api.init();
+
+    // AN ESTIMATOR'S OWN ANSWERS, every one of them the opposite of the stored default, so the
+    // library has something that COULD have landed here and the gate is the only thing stopping
+    // it. joint_filler's direction reversed on 2026-09-19: it now SHIPS off, so the bid at risk
+    // is one where somebody deliberately turned it ON, and a careless default would take the
+    // $500-a-kit line back out with the workbook saying No in Polish!E29.
+    const WORKED = {
+      version: 2,
+      takeoff: clone(MODEL.takeoff),
+      labor: clone(MODEL.labor),
+      conditions: Object.assign({}, MODEL.conditions,
+        { joint_filler: false, dye: false, remove_existing_jf: false }),
+      contingency: 0, fees: 0, totals: {},
+    };
+    const worked = build({ blob: blob({ polish_estimate: clone(WORKED) }),
+                           conditionDefaults: COND });
+    await worked.api.init();
+
+    // THE CELL STILL WINS. A project off the live intake has no polish_estimate and its answers
+    // sit in cell_values — seeding last would put a company default over the answer the estimator
+    // already gave, and the next save would make that permanent in Kyle's workbook.
+    //
+    // ALL THREE CELLS, not one -- exactly what a real step-1 save on the live intake screen
+    // leaves behind, and each one the OPPOSITE of what COND above says. A fixture that answered
+    // only one of the three could pass against a page that seeds the other two from the admin
+    // default regardless of what their cells said.
+    //
+    // AND A NARROWED LIST FOR THIS ONE CASE, which is the part that has to be right rather than
+    // tidy. Since all three ship OFF, a library row saying "on" against a cell saying "No"
+    // leaves false -- and false is ALSO what a page that read neither would show, so that
+    // pairing on its own cannot prove the cell was read at all. Two of the three are that
+    // pairing (they prove the cell BEATS the default); remove_existing_jf is deliberately left
+    // OUT of the list with its cell saying Yes, so `true` there can only have come from the
+    // cell. Between them the two shapes pin both halves of "the cell wins".
+    const COND_FOR_CELLS = [{ key: "joint_filler", on: true }, { key: "dye", on: true }];
+    const fromCells = (() => { const b = blob(); delete b.polish_estimate;
+                               b.cell_values = { "Polish!E29": "No", "Polish!E25": "No",
+                                                 "Polish!F29": "Yes" };
+                               return b; })();
+    const celled = build({ blob: fromCells, conditionDefaults: COND_FOR_CELLS });
+    await celled.api.init();
+
+    // PRODUCTION TODAY: the table is not there, so the read cannot answer.
+    const down = build({ blob: (() => { const b = blob();
+                                        delete b.polish_estimate; return b; })(),
+                         conditionFetchFails: true });
+    await down.api.init();
+
+    out.conditionDefaults = {
+      brandNew: { conditions: conds(brandNew),
+                  fetched: brandNew.rec.fetches.some((u) => /condition-defaults/.test(u)) },
+      // THE PROOF THAT THE GATE RAN AT ALL: a saved bid never even asks for the defaults.
+      worked: { saved: WORKED.conditions, after: conds(worked),
+                fetched: worked.rec.fetches.some((u) => /condition-defaults/.test(u)),
+                // …and NOT VACUOUS: the same rows applied to the same model move all three.
+                wouldHaveChanged: B.seedConditionDefaults(conds(worked), COND) },
+      celled: { dye: conds(celled).dye, jointFiller: conds(celled).joint_filler,
+                removeExistingJf: conds(celled).remove_existing_jf,
+                fetched: celled.rec.fetches.some((u) => /condition-defaults/.test(u)) },
+      // Never a blank step and never a word about it: a default nobody has defined yet is not an
+      // error to report to an estimator.
+      down: { conditions: conds(down), shipped: B.freshModel().conditions,
+              mainShown: down.dom.get("main").hidden === false,
+              alert: down.dom.get("alert").textContent },
+    };
   }
 
   console.log(JSON.stringify(out));
