@@ -675,6 +675,27 @@
   .att-img:hover, .att-file:hover { background:rgba(0,0,0,.11); }
   .msg.staff .att-img, .msg.staff .att-file { background:rgba(255,255,255,.16); }
   .msg.staff .att-img:hover, .msg.staff .att-file:hover { background:rgba(255,255,255,.28); }
+
+  /* ── the chip's EDGE, because the wash alone cannot carry it ─────────────────
+     Hanz, 2026-09-21, on the signed contract in the thread: "can we make this contrast though
+     so its just more visible". The text was never the problem -- the name measures 6.6:1 and the
+     size line 5.2:1 (table above). The SURFACE is: 1.29:1 against the bubble, so a chip that is
+     nothing but a wash reads as words floating on the red rather than a thing to click.
+
+     RAISING THE WASH IS THE WRONG LEVER and the numbers say so: white@.26 gets the surface to
+     1.59:1 but takes the size line down to 4.4:1, under the 4.5 floor for 12px. A border buys the
+     edge without moving what the text sits on, so both stay measured:
+                    border vs bubble      (surface and text unchanged)
+       theirs       rgba(0,0,0,.45)   3.2:1
+       ours         rgba(255,255,255,.55) 3.2:1
+     Both clear the 3:1 WCAG 1.4.11 floor for a control's boundary.
+
+     .att-file ONLY, not .att-img: a photo tile already has a defined edge -- its own image --
+     and .att-well is sized in px, so a border there would shift a layout that is not broken. */
+  .att-file { border:1px solid rgba(0,0,0,.45); }
+  .att-file:hover { border-color:rgba(0,0,0,.62); }
+  .msg.staff .att-file { border-color:rgba(255,255,255,.55); }
+  .msg.staff .att-file:hover { border-color:rgba(255,255,255,.78); }
   /* The queue above the composer, before anything is sent. */
   .att-strip { display:flex; flex-wrap:wrap; gap:6px; }
   .att-chip { display:inline-flex; align-items:center; gap:6px; padding:4px 6px 4px 4px;
