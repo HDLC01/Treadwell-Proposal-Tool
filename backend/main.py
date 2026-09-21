@@ -970,6 +970,22 @@ class LibraryItemIn(BaseModel):
     notes: Optional[str] = None
     # Shared/team-wide, not per-user -- see library.validate_item's note.
     favorite: Optional[bool] = None
+    # WHICH WORK TYPES THIS DEFAULT IS OFFERED FOR. `Any`, like the fields above, because
+    # library._coerce_work_types accepts a list, a JSON string or a bare name and is the
+    # single authority on the answer.
+    #
+    # NAMED HERE OR IT IS SILENTLY DISCARDED, which is the whole reason this line exists.
+    # The docstring above says the model is "loose on purpose" so validate_* can be the
+    # only authority -- but Pydantic DROPS a field a model does not declare, and drops it
+    # without a word. So library.py accepted, coerced and stored default_work_types from
+    # the day the column landed, ITEM_WRITABLE listed it, validate_item passed it through,
+    # and the API could still never write it: the PATCH arrived, model_dump returned {},
+    # validate_item returned {}, update_item early-returned the unchanged row, and the
+    # route answered 200. Every row in the library therefore read [] -- "applies to every
+    # work type" -- and the five work-type chips over the Defaults tab filtered nothing.
+    # Hanz, 2026-09-21: "the filters in items in assemblies on the default items in
+    # assemblies. Is not working."
+    default_work_types: Optional[Any] = None
 
 
 class LibraryAssemblyIn(BaseModel):
@@ -982,6 +998,8 @@ class LibraryAssemblyIn(BaseModel):
     # The version the editor believes it is changing. A line edit rewrites the WHOLE lines array,
     # so without this two people with the same assembly open silently overwrite each other.
     expected_updated_at: Optional[str] = None
+    # See the note on LibraryItemIn.default_work_types: undeclared means silently discarded.
+    default_work_types: Optional[Any] = None
 
 
 @app.get("/api/library/items")
@@ -1218,6 +1236,8 @@ class LibraryLaborIn(BaseModel):
     guys_auto: Optional[bool] = None
     sort: Optional[Any] = None
     notes: Optional[str] = None
+    # See the note on LibraryItemIn.default_work_types: undeclared means silently discarded.
+    default_work_types: Optional[Any] = None
 
 
 # Default labor lines — the rows an estimator can add to a bid beside the built-in ones.
