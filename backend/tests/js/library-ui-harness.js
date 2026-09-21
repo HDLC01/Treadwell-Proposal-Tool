@@ -254,6 +254,17 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
     if (COND_FAIL) throw new Error("the server said no");
     return { ok: true };
   }
+  // THE WORK-TYPE WRITE, same split again: everything before the request is the page's own code.
+  // This one is the half that did not exist until 2026-09-21 -- library.py stored
+  // default_work_types from the day the column landed and library.js only ever read it, so every
+  // row sat at [] and all five chips above the table rendered one identical list.
+  var WT_CALLS = [];
+  var WT_FAIL = state.WT_FAIL || false;
+  async function patchWorkTypes(kind, id, list) {
+    WT_CALLS.push({ kind: kind, id: id, list: list });
+    if (WT_FAIL) throw new Error("the server said no");
+    return { ok: true };
+  }
   // The estimate's shared module, which the page reaches through the window object. Declared
   // rather than
   // stubbed away: takeoffConditionDefaults must read freshModel's REAL answers -- joint filler
@@ -332,6 +343,10 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   ${grab(/^  var DEFAULT_WT = .*$/m, "the DEFAULT_WT declaration")}
   ${fn("appliesToWorkType")}
   ${fn("workTypeLabel")}
+  // workTypeCell BEFORE takeoffDefaultGroups, which calls it for every assembly and material
+  // row. Missing, this is a ReferenceError that reds every scenario in this file at once with
+  // nothing pointing at the cause -- which is how it announced itself when the column landed.
+  ${fn("workTypeCell")}
   // conditionPriceCell BEFORE takeoffDefaultGroups, which calls it for every condition row. It
   // was conditionControl until 2026-09-19, when the Yes/No select came off (Hanz: "remove these
   // yes and no what are these for?") and the cell became what the column is headed: a price. A
@@ -350,6 +365,10 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   // a markup assertion cannot tell a wired control from a dead one, and this page has shipped a
   // dead one behind a green test twice.
   ${fn("setConditionDefault")}
+  // THE CHIP'S HANDLER, lifted so a test PRESSES it. Named setRowWorkType in library.js and not
+  // setWorkType, because this scope already exports a setWorkType that switches which work type
+  // the TAB is showing -- two things by one name in one file is how a test drives the wrong one.
+  ${fn("setRowWorkType")}
   // THE ADD-A-DEFAULT PATH, lifted so it is EXECUTED. It shipped on 2026-09-17 as two
   // buttons and a search box with nothing bound to any of them, and the only test over it
   // regex-matched the markup for data-add-default="..." -- which the dead buttons satisfied
@@ -569,6 +588,12 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
            // wired button from a dead one, and for two days could not.
            defaultCandidates, renderDefaultSearch, setDefaultQuery, openDefaultBrowse,
            appliesToWorkType, workTypeLabel, WORK_TYPES,
+           // THE PER-ROW CHIPS, EXECUTED. workTypeCell draws them, setRowWorkType is what a press
+           // runs, and WT_CALLS is the body that would have gone to the server -- the three
+           // together are the difference between a filter that works and five chips over a column
+           // nothing could write. Note the two different work-type setters: setWorkType below
+           // moves the TAB, setRowWorkType scopes a ROW.
+           workTypeCell, setRowWorkType, WT_CALLS,
            setWorkType: function (wt) { DEFAULT_WT = wt; },
            workTypeNow: function () { return DEFAULT_WT; },
            // THE LABOR DEFAULTS, EXECUTED. The add button had no handler for a day and this
@@ -3593,11 +3618,23 @@ out.serverOwnedItemFields = build().api.SERVER_OWNED_ITEM_FIELDS;
     bare.api.renderDefaultTakeoff();
     const bh = bare.dom.nodes["default-takeoff-body"].innerHTML;
     out.defaultsShippedConditions = {
-      shippedOffMeansUnlisted: !/data-cond-off=/.test(bh),
-      // NOT VACUOUS: the same renderer with the same fixture DOES list them once they are
-      // switched on, which the scenario above proves -- so an empty table here is the answer
-      // and not a renderer that draws nothing.
-      andTheListIsEmptyRatherThanBroken: bh === "",
+      // ALL THREE ARE ON SCREEN THOUGH ALL THREE ARE OFF, which is the 2026-09-21 change and the
+      // reverse of what this scenario asserted for two days. Hanz looked at a Materials list with
+      // none of them in it: "Joint filler and Dye do not appear as materials in the deafult?"
+      allThreeListedThoughAllThreeAreOff:
+        /Joint filler/.test(bh) && /Dye/.test(bh) && /Remove existing joint filler/.test(bh),
+      // …each offering the direction it can move in, and none offering Remove, since none is on.
+      andEachOffersAnAdd:
+        /data-def-add="conditions" data-def-id="joint_filler"/.test(bh) &&
+        /data-def-add="conditions" data-def-id="dye"/.test(bh) &&
+        /data-def-add="conditions" data-def-id="remove_existing_jf"/.test(bh),
+      noneOffersRemove: !/data-cond-off=/.test(bh),
+      // …and each SAYS it is not in a new bid, rather than leaving a priced row in a list headed
+      // "what a new bid opens holding" to be read as included.
+      andEachSaysItIsNotInABid: (bh.match(/not in a new bid/g) || []).length === 3,
+      // NOT VACUOUS: this fixture has no items and no assemblies at all, so the three rows in
+      // this table are the three conditions and nothing else.
+      andNothingElseIsInTheTable: !/data-def-edit=/.test(bh),
       // The three keys the page offers, read off the function rather than the markup, so this
       // still says something when nothing is listed.
       offersTheThree: bare.api.takeoffConditionDefaults().map((c) => c.key).sort().join(","),
@@ -4245,14 +4282,20 @@ async function conditionChecks() {
     // THE REAL MODULE. The whole claim is that this list shows what a new estimate opens
     // ANSWERING, so a made-up freshModel would prove the opposite of what it looks like it proves.
     window: { TWPolishBid: require(path.join(ROOT, "js", "polish-bid-core.js")) },
-    ITEMS: [], ASMS: [],
+    // ONE NON-FAVOURITE LIBRARY ROW, so the browse list has something in it that is NOT a
+    // condition. It was [] until 2026-09-21, which was fine while the browse offered the three
+    // conditions -- the list had them to show. Now that it must NOT offer them, an empty fixture
+    // would let "no conditions here" pass against a browse that offers nothing at all.
+    ITEMS: [{ id: "i9", name: "Not a default", unit: "Gal", unit_cost: 50, favorite: false }],
+    ASMS: [],
   }, extra || {});
 
-  // LISTED IS THE ANSWER, from 2026-09-19. The Yes/No select is gone (Hanz: "remove these yes
-  // and no what are these for?"), so "on" is the row being in the table and "off" is it not
-  // being there -- exactly how a favourited material says the same thing. Keyed on the Remove
-  // button's own attribute, which is the only thing a condition row carries that a material row
-  // does not, so this cannot accidentally match a neighbour.
+  // LISTED MEANS ON, not present. Until 2026-09-21 those were the same thing -- the Yes/No
+  // select had gone (Hanz: "remove these yes and no what are these for?") and "on" was the row
+  // being in the table. Now every condition is a permanent row and this tests for the REMOVE
+  // BUTTON, which is what a row carries only while a new bid buys it. Named as it is so the
+  // assertions above stay honest about which of the two they mean: a !listed() that reads as
+  // "the row is gone" is the exact drift this comment exists to stop.
   const listed = (html, key) => new RegExp('data-cond-off="' + key + '"').test(html);
 
   // 1. A STORED ANSWER BEATS THE SHIPPED ONE. All three ship OFF now; an admin who has turned
@@ -4306,7 +4349,13 @@ async function conditionChecks() {
     // REMOVE. It is the RENDERED table that changes, so a handler that wrote the variable and
     // forgot to repaint fails here rather than looking fine.
     startsListed: listed(beforeHtml, "joint_filler"),
-    removeTakesTheRowOff: !listed(afterHtml, "joint_filler"),
+    // REMOVE FLIPS THE BUTTON; IT NO LONGER TAKES THE ROW AWAY. `listed` tests for a Remove
+    // button, so the old !listed() assertion kept passing through the 2026-09-21 change while
+    // meaning something different -- the row is still there, it is the state that moved. Both
+    // halves are asserted so neither can drift: no Remove, and an Add in its place.
+    removeFlipsTheRowToAdd: !listed(afterHtml, "joint_filler") &&
+      /data-def-add="conditions" data-def-id="joint_filler"/.test(afterHtml),
+    andTheRowStaysOnScreen: /Joint filler/.test(afterHtml),
     // …and the write actually goes, keyed by the condition and carrying the answer.
     wroteTheServer: JSON.stringify(live.api.COND_CALLS) ===
       JSON.stringify([{ key: "joint_filler", on: false }]),
@@ -4315,31 +4364,42 @@ async function conditionChecks() {
     keepsOneRowPerCondition: live.api.condDefaultsNow().length === 1,
 
     // ADD. The other direction, and the one the select used to cover.
-    startsUnlisted: !listed(beforeAddHtml, "dye"),
+    // LISTED BUT OFF, which is the state Add is offered in. Named for what it checks: `listed`
+    // is "carries a Remove", so this says dye is off, NOT that it is missing from the table.
+    startsOffAndOffersAnAdd: !listed(beforeAddHtml, "dye") &&
+      /data-def-add="conditions" data-def-id="dye"/.test(beforeAddHtml),
     addPutsTheRowBack: listed(afterAddHtml, "dye"),
     addWroteTheServer: JSON.stringify(adding.api.COND_CALLS) ===
       JSON.stringify([{ key: "dye", on: true }]),
     // AND IT PRICES ITSELF THE MOMENT IT IS BACK, rather than arriving as a bare name.
     addedRowIsPriced: /\$0\.14 per SF/.test(afterAddHtml),
 
-    // THE OFFER. A removed condition is browsable by name, with the same add button a material
-    // carries, filed as a Condition so it is not mistaken for a library row.
-    browseOffersTheConditions: /data-def-add="conditions"/.test(browseHtml) &&
-      /data-def-id="joint_filler"/.test(browseHtml) && /data-def-id="dye"/.test(browseHtml),
-    browseNamesThemAsConditions: /Condition/.test(browseHtml),
+    // THE OFFER IS GONE FROM HERE, and that is the other half of 2026-09-21. While an off
+    // condition was unlisted this was the only way back on, and its absence would have made
+    // Remove a one-way door. Now that all three are permanent rows carrying their own Add,
+    // offering them here too would put the same three names twice on one screen -- and a search
+    // for "dye" would answer with a row already six lines up the page.
+    browseNoLongerOffersConditions: !/data-def-add="conditions"/.test(browseHtml),
+    // NOT VACUOUS: the browse is not simply empty. It still offers the library rows, so the
+    // three conditions are absent by the filter and not by a dead renderer.
+    andStillOffersTheLibrary: /data-def-add="items"/.test(browseHtml) ||
+      /data-def-add="assemblies"/.test(browseHtml),
     // AND ONLY THE ONES THAT ARE OFF, or the list would offer to add what is already added --
     // the same rule the materials follow two lines above it in defaultCandidates.
-    browseSkipsAConditionAlreadyOn: (function () {
-      const on = build(seed({ COND_DEFAULTS: [{ key: "dye", on: true }] }));
-      on.api.openDefaultBrowse();
-      const oh = on.dom.nodes["default-hits"].innerHTML;
-      return !/data-def-id="dye"/.test(oh) && /data-def-id="joint_filler"/.test(oh);
-    })(),
-    // A TYPED QUERY FINDS ONE TOO, so the search box is not a dead end for these three.
-    searchFindsACondition: (function () {
+    // GONE: browseSkipsAConditionAlreadyOn and searchFindsACondition. Both asserted that the
+    // add list handled conditions correctly, and with conditions no longer offered there at all
+    // the first would pass against a list that offered nothing and the second would have to
+    // assert a "dye" hit that must not exist. Deleted rather than inverted -- the fact that
+    // matters is browseNoLongerOffersConditions above, and a vacuously-green key beside it would
+    // read as extra coverage.
+    //
+    // THE TYPED SEARCH IS COVERED, in searchFindsNoCondition below: searching for one of the
+    // three by name must not turn up a hit, because the row it would add is already on screen.
+    searchFindsNoCondition: (function () {
       const s = build(seed({}));
       s.api.setDefaultQuery("dye");
-      return /data-def-id="dye"/.test(s.dom.nodes["default-hits"].innerHTML);
+      const sh = s.dom.nodes["default-hits"].innerHTML;
+      return !/data-def-add="conditions"/.test(sh) && !/data-def-id="dye"/.test(sh);
     })(),
 
     // The refusal.
@@ -4349,6 +4409,100 @@ async function conditionChecks() {
       const rows = failing.api.condDefaultsNow();
       return rows.length === 1 && rows[0].key === "joint_filler" && rows[0].on === true;
     })(),
+  };
+
+  // ── THE WORK-TYPE CHIPS, PRESSED ──────────────────────────────────────────────────────────
+  // Hanz, 2026-09-21: "the filters in items in assemblies on the default items in assemblies. Is
+  // not working." It was not: library.py had stored default_work_types since the column landed,
+  // library.js only ever READ it, workTypeLabel was written and never called, and so every row in
+  // the library sat at [] -- which appliesToWorkType reads as "applies everywhere" -- and all
+  // five chips above the table rendered one identical list.
+  //
+  // EVERY ASSERTION BELOW IS DRIVEN, for the reason this file keeps learning: a chip rendered
+  // over a column nothing can write looks exactly like a chip that works, and a markup assertion
+  // cannot separate the two. The one before it on this tab was the labor Add button.
+  const wtSeed = (extra) => Object.assign({
+    window: { TWPolishBid: require(path.join(ROOT, "js", "polish-bid-core.js")) },
+    // TWO FAVOURITES, because the claim is about one row moving and the other staying. With a
+    // single row "scoped the right one" and "scoped all of them" cannot disagree.
+    ITEMS: [{ id: "i1", name: "Densifier", unit: "Pail", unit_cost: 100, favorite: true,
+              default_work_types: [] },
+            { id: "i2", name: "Gyp primer", unit: "Gal", unit_cost: 50, favorite: true,
+              default_work_types: [] }],
+    ASMS: [{ id: "a1", name: "Polish 800", unit: "SF", favorite: true,
+             default_work_types: [], lines: [{ item_id: "i1" }] }],
+  }, extra || {});
+
+  const wt = build(wtSeed({}));
+  wt.api.renderDefaultTakeoff();
+  const wtBefore = wt.dom.nodes["default-takeoff-body"].innerHTML;
+  // Scope the Gyp primer to gyp, from the Polish tab -- which is where an admin would be doing
+  // it, and which is the press that must make it leave the list they are looking at.
+  await wt.api.setRowWorkType("items", "i2", "gyp", true);
+  const wtAfter = wt.dom.nodes["default-takeoff-body"].innerHTML;
+
+  // BACK TO ALL FIVE, not to none. Pressing the last chip off empties the list, and an empty
+  // list is what appliesToWorkType has always read as "every work type" -- so the row returns to
+  // the polish tab rather than vanishing from all five with no way back.
+  const back = build(wtSeed({ ITEMS: [
+    { id: "i1", name: "Densifier", unit: "Pail", unit_cost: 100, favorite: true,
+      default_work_types: ["gyp"] }] }));
+  back.api.renderDefaultTakeoff();
+  const backBefore = back.dom.nodes["default-takeoff-body"].innerHTML;
+  await back.api.setRowWorkType("items", "i1", "gyp", false);
+  const backAfter = back.dom.nodes["default-takeoff-body"].innerHTML;
+
+  // A REFUSED WRITE PUTS THE SCOPE BACK, this page's standing rule: a row that keeps the new
+  // scope after the server said no tells an admin the Polish tab no longer offers something it
+  // still offers, and they find that out from a bid.
+  const wtFail = build(wtSeed({ WT_FAIL: true }));
+  wtFail.api.renderDefaultTakeoff();
+  await wtFail.api.setRowWorkType("items", "i2", "gyp", true);
+  const wtFailHtml = wtFail.dom.nodes["default-takeoff-body"].innerHTML;
+
+  const rowOf = (html, name) => {
+    const rows = html.split("<tr");
+    for (const r of rows) if (r.indexOf(name) !== -1) return r;
+    return "";
+  };
+
+  out.rowWorkTypes = {
+    // FIVE CHIPS ON EVERY LIBRARY ROW, materials and assemblies alike, and none pressed to start
+    // -- which is the [] every existing row carries.
+    fiveChipsOnAMaterial:
+      (rowOf(wtBefore, "Densifier").match(/data-wt-toggle="items"/g) || []).length === 5,
+    fiveChipsOnAnAssembly:
+      (rowOf(wtBefore, "Polish 800").match(/data-wt-toggle="assemblies"/g) || []).length === 5,
+    nonePressedToStart: !/aria-pressed="true"/.test(wtBefore),
+    // …and the row SAYS what an empty list means, rather than leaving five unpressed chips to be
+    // read as "applies to nothing".
+    saysAllWorkTypes: /All work types/.test(rowOf(wtBefore, "Densifier")),
+
+    // THE PRESS REACHES THE SERVER, with the whole list and not a delta -- the endpoint replaces
+    // the column, so a body carrying only the chip that moved would wipe the others.
+    wroteTheServer: JSON.stringify(wt.api.WT_CALLS) ===
+      JSON.stringify([{ kind: "items", id: "i2", list: ["gyp"] }]),
+    // THE PRESS REACHES THE SCREEN. This is the half the feature never had: the filter now has
+    // something to filter on, so a row scoped away from the tab in view LEAVES the list.
+    scopedRowLeavesThePolishList: /Gyp primer/.test(wtBefore) && !/Gyp primer/.test(wtAfter),
+    // …and the row nobody touched stays exactly where it was.
+    theOtherRowsStay: /Densifier/.test(wtAfter) && /Polish 800/.test(wtAfter),
+
+    // EMPTY MEANS ALL FIVE, both directions of it.
+    scopedRowIsAbsentBefore: !/Densifier/.test(backBefore),
+    andComesBackWhenTheLastChipComesOff: /Densifier/.test(backAfter),
+    andSaysAllWorkTypesAgain: /All work types/.test(rowOf(backAfter, "Densifier")),
+    unscopedWroteAnEmptyList: JSON.stringify(back.api.WT_CALLS) ===
+      JSON.stringify([{ kind: "items", id: "i1", list: [] }]),
+
+    // THE REFUSAL.
+    refusedWritePutsItBack: /Gyp primer/.test(wtFailHtml),
+    refusedWriteSaysSo: /Couldn't save that/.test(wtFail.dom.nodes["alert"].textContent || ""),
+
+    // NOT ON THE ROWS THAT HAVE NO COLUMN TO WRITE. A condition is not a library row and neither
+    // is a markup line, so a chip there would be a control over a field that does not exist.
+    noChipsOnACondition: rowOf(wtBefore, "Joint filler").indexOf("data-wt-toggle") === -1,
+    andTheConditionSaysWhereItApplies: /Polish takeoff/.test(rowOf(wtBefore, "Joint filler")),
   };
 }
 

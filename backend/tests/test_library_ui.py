@@ -3327,7 +3327,7 @@ def test_the_takeoff_conditions_are_editable_and_say_no_such_thing_as_built_in(r
 
 
 @needs_node
-def test_all_three_takeoff_conditions_ship_off_and_are_therefore_unlisted(ran):
+def test_all_three_takeoff_conditions_ship_off_and_are_listed_saying_so(ran):
     """THE PRICING HALF OF Hanz's 2026-09-19 decision, and the reason the selects could go.
 
     joint_filler shipped ON until today, transcribed faithfully from Kyle's template, which has
@@ -3336,6 +3336,15 @@ def test_all_three_takeoff_conditions_ship_off_and_are_therefore_unlisted(ran):
     every new polish bid was quietly carrying $2,500 on a 17,500 SF floor that nobody had asked
     for and no screen had made anybody decide. All three now start off and the estimator switches
     on what the job needs, on the estimate's own Takeoff step.
+
+    AND ALL THREE ARE STILL LISTED, which is the 2026-09-21 correction and the reverse of what
+    this test asserted for two days. Off used to mean absent from the table, by analogy with an
+    item that is not a favourite, and Hanz found the Materials list with none of them in it:
+    "Joint filler and Dye do not appear as materials in the deafult?" -- then "list them but they
+    are also materials". The analogy was wrong: a non-favourite material is one of forty rows in
+    a library and hiding it is how the list stays readable, where these are a fixed, named set of
+    three that every polish bid has an opinion about. So each row is permanent, states which way
+    it is set, and carries the button for the direction it can move in.
 
     READ THROUGH THE REAL freshModel, never restated here, so a literal put back in
     polish-bid-core reds this rather than passing against a copy. And asserted on a fixture that
@@ -3350,12 +3359,21 @@ def test_all_three_takeoff_conditions_ship_off_and_are_therefore_unlisted(ran):
     assert s["noneOfThemOn"], (
         "a Takeoff condition still ships ON. joint_filler is the one that costs money: it adds a "
         "$500 kit per 3,500 sq ft to a bid nobody has priced yet")
-    assert s["shippedOffMeansUnlisted"], (
-        "a condition that ships off is still listed among the defaults; the list is supposed to "
-        "be what a new bid opens WITH")
-    assert s["andTheListIsEmptyRatherThanBroken"], (
-        "the takeoff defaults table rendered something unexpected for a library with no "
-        "favourites and no overrides")
+    assert s["allThreeListedThoughAllThreeAreOff"], (
+        "a condition that ships off is not on the Defaults tab at all; this is the state Hanz "
+        "reported, where the Materials list had none of the three in it")
+    assert s["andEachOffersAnAdd"], (
+        "a listed-but-off condition offers no way to turn it on, so the row is a read-only "
+        "statement about a default nobody can change from the tab that owns defaults")
+    assert s["noneOffersRemove"], (
+        "a condition that is OFF is offering Remove, which would send on=false for something "
+        "already off and tell an admin it had been on")
+    assert s["andEachSaysItIsNotInABid"], (
+        "a priced row sits in a list headed 'what a new bid opens holding' without saying it is "
+        "not in one, so an admin reads three charges into every new bid that are not there")
+    assert s["andNothingElseIsInTheTable"], (
+        "the fixture has no favourites, so anything else in this table means the rows above were "
+        "not the three conditions and the assertions are reading something else")
 
 
 @needs_node
@@ -3409,6 +3427,75 @@ def test_the_three_conditions_are_materials_with_the_same_two_buttons(ran):
 
 
 @needs_node
+def test_the_work_type_chips_actually_scope_a_row_and_the_filter_actually_filters(ran):
+    """Hanz, 2026-09-21: "the filters in items in assemblies on the default items in assemblies.
+    Is not working."
+
+    IT WAS NOT. `default_work_types` was a column with a reader and no writer: library.py has
+    accepted, coerced and returned it on items, assemblies AND labor since the day it landed;
+    library.js only ever READ it, in appliesToWorkType and in a workTypeLabel that was never
+    called. So every row in the library carried `[]`, appliesToWorkType reads `[]` as "applies
+    everywhere", and all five work-type chips over the table rendered one identical list -- which
+    is why a material named gYP sat under Polish in his screenshot.
+
+    A FILTER OVER A FIELD NOTHING CAN SET IS A DEAD CONTROL, and the whole reason this file drives
+    everything is that a dead one renders exactly like a live one. So every assertion below
+    presses the chip and reads the rendered table back: the write that would go, the row leaving
+    the list it no longer belongs to, and the row nobody touched staying put.
+
+    EMPTY MEANS ALL FIVE, and it is asserted in both directions. That is not a rule invented here
+    -- it is what appliesToWorkType has always read `[]` as, and what every row configured before
+    the column existed relies on -- so pressing the last chip off returns a row to all five rather
+    than stranding it in none.
+
+    Mutations, all five run and all five red -- NOT on patchWorkTypes, which this harness stubs
+    (the network and only the network, as everywhere else in this file), so breaking library.js's
+    copy of it would prove nothing:
+      * send `[wt]` instead of `next`            -> wroteTheServer
+      * drop renderDefaultTakeoff() on success   -> scopedRowLeavesThePolishList, and ONLY that
+        one, which is the exact shape of the bug being fixed: the write lands, the screen does not
+      * drop the rollback on refusal             -> refusedWritePutsItBack
+      * appliesToWorkType always returns true    -> scopedRowLeavesThePolishList
+      * draw four chips instead of five          -> fiveChipsOnAMaterial"""
+    w = ran["rowWorkTypes"]
+    assert w["fiveChipsOnAMaterial"] and w["fiveChipsOnAnAssembly"], (
+        "a library row does not carry the five work-type chips, so there is no way to scope it "
+        "and the filter above the table has nothing to filter on")
+    assert w["nonePressedToStart"], (
+        "a chip is pressed on a row whose default_work_types is [], so the cell disagrees with "
+        "the column")
+    assert w["saysAllWorkTypes"], (
+        "an unscoped row shows five unpressed chips and no words, which reads as applying to "
+        "nothing when it applies to everything")
+    assert w["wroteTheServer"], (
+        "the chip press sent no write, or sent a delta instead of the whole list -- the endpoint "
+        "REPLACES the column, so a body carrying only the chip that moved wipes the others")
+    assert w["scopedRowLeavesThePolishList"], (
+        "scoping a row to gyp left it on the polish list; this is the defect itself -- the press "
+        "reached the server and not the screen")
+    assert w["theOtherRowsStay"], (
+        "scoping one row moved the others, so the press is not specific to the row it was on")
+    assert w["scopedRowIsAbsentBefore"] and w["andComesBackWhenTheLastChipComesOff"], (
+        "taking the last chip off did not return the row to every work type, so a row can be "
+        "scoped into a corner it cannot come back from")
+    assert w["andSaysAllWorkTypesAgain"], (
+        "a row back to every work type does not say so, so an admin cannot tell it from a row "
+        "scoped to the tab they happen to be on")
+    assert w["unscopedWroteAnEmptyList"], (
+        "taking the last chip off sent something other than [], which is the one value "
+        "appliesToWorkType reads as every work type")
+    assert w["refusedWritePutsItBack"], (
+        "a refused write left the new scope on screen, telling an admin the Polish tab no longer "
+        "offers something it still offers")
+    assert w["refusedWriteSaysSo"], "a refused write said nothing"
+    assert w["noChipsOnACondition"], (
+        "a condition carries work-type chips; it is not a library row and has no "
+        "default_work_types column for the press to write")
+    assert w["andTheConditionSaysWhereItApplies"], (
+        "a condition's work-type cell is blank, which reads as a row whose chips failed to draw")
+
+
+@needs_node
 def test_changing_a_condition_default_saves_it_and_a_refusal_puts_it_back(ran):
     """DRIVEN THROUGH THE HANDLER the select's `change` calls, not asserted off the markup.
 
@@ -3417,11 +3504,17 @@ def test_changing_a_condition_default_saves_it_and_a_refusal_puts_it_back(ran):
     chances for the Library page to describe a bid it does not agree with, and a page claiming
     joint filler ships off while every new bid opens with it on is worse than no page at all.
 
-    BOTH DIRECTIONS, BECAUSE BOTH ARE NOW BUTTONS. With the Yes/No select gone, "on" is the row
-    being listed and "off" is it not being there, so Remove takes it off and the Add path puts it
-    back. The second half is the one that did not exist while the select did the work, and without
-    it a condition could be removed and never restored -- which would be a worse control than the
-    one it replaced.
+    BOTH DIRECTIONS, BECAUSE BOTH ARE NOW BUTTONS. With the Yes/No select gone, "on" and "off"
+    are which button the row carries -- Remove on a condition a new bid buys, Add on one it does
+    not. Since 2026-09-21 the ROW ITSELF IS PERMANENT either way, so Remove flips the button
+    rather than taking the line away, and both halves of that are asserted: no Remove left, and
+    an Add in its place. The old assertion read `!listed(...)` alone, which kept passing through
+    that change while quietly meaning something else, because `listed` tests for a Remove button
+    and not for the row.
+
+    THE ADD LIST NO LONGER OFFERS THEM. It was the only way back on while an off condition was
+    unlisted; now that every row carries its own Add, offering them there too would put the same
+    three names twice on one screen.
 
     A REFUSED SAVE PUTS THE ROW BACK and says why, which is this page's standing rule for a
     failed write: a list that keeps the new state after the server said no tells an admin every
@@ -3435,33 +3528,37 @@ def test_changing_a_condition_default_saves_it_and_a_refusal_puts_it_back(ran):
         "set of defaults no new bid actually opens with")
     assert c["untouchedOnesKeepShipped"], (
         "overriding one condition moved the two nobody touched")
-    assert c["startsListed"] and c["removeTakesTheRowOff"], (
+    assert c["startsListed"] and c["removeFlipsTheRowToAdd"], (
         "Remove did not reach the rendered table; a handler that wrote the variable and forgot "
         "to repaint looks identical until the next reload")
+    assert c["andTheRowStaysOnScreen"], (
+        "Remove took the whole line away instead of flipping its button, which is the behaviour "
+        "Hanz reported as the three conditions being missing from Materials")
     assert c["wroteTheServer"], (
         "the press sent no write, or sent the wrong body -- a dead control renders exactly like a "
         "live one")
     assert c["keepsOneRowPerCondition"], (
         "the press appended a second row for the same condition instead of replacing it")
-    # THE WAY BACK ON. Remove is the only thing that turns a condition off now, so a missing add
-    # arm is not an inconvenience -- it is a default that can be destroyed and not rebuilt.
-    assert c["startsUnlisted"] and c["addPutsTheRowBack"], (
+    # THE WAY BACK ON, which is now the row's own Add rather than a trip through the add list.
+    # A missing add arm is not an inconvenience -- it is a default that can be destroyed and not
+    # rebuilt.
+    assert c["startsOffAndOffersAnAdd"] and c["addPutsTheRowBack"], (
         "adding a condition back did not reach the rendered table, so Remove is a one-way door")
     assert c["addWroteTheServer"], "adding a condition back sent no write, or the wrong body"
     assert c["addedRowIsPriced"], (
         "a condition put back shows no price, so the row it returns as is not the row it left as")
-    assert c["browseOffersTheConditions"], (
-        "the Add-a-default browse does not offer the conditions that are off, so there is no way "
-        "to turn one back on at all")
-    assert c["browseNamesThemAsConditions"], (
-        "a condition in the add list is not labelled as one, so it reads as a library row that "
-        "could be opened and edited")
-    assert c["browseSkipsAConditionAlreadyOn"], (
-        "the add list offers a condition that is already a default; nothing else on this list is "
-        "offered twice")
-    assert c["searchFindsACondition"], (
-        "typing a condition's name into the defaults search finds nothing, so the box is a dead "
-        "end for exactly the three rows that have no other way in")
+    # AND THE ADD LIST NO LONGER CARRIES THEM, because the row does. Two offers of one default on
+    # one screen is the duplicate this asserts against -- a search for "dye" answering with a row
+    # already six lines up the page.
+    assert c["browseNoLongerOffersConditions"], (
+        "the Add-a-default browse still offers the three conditions, which are permanent rows "
+        "now, so the same name appears twice on one screen")
+    assert c["andStillOffersTheLibrary"], (
+        "the browse offers nothing at all, so the assertion above passes against a dead list "
+        "rather than against conditions being filtered out of a live one")
+    assert c["searchFindsNoCondition"], (
+        "typing a condition's name into the defaults search offers to add it, and it is already "
+        "listed on the tab -- the same row twice")
     assert c["refusedSavePutsItBack"], "a refused save left the new state on screen"
     assert c["refusedSaveSaysSo"], "a refused save said nothing"
     assert c["refusedSaveDropsTheOptimisticRow"], (

@@ -700,6 +700,24 @@
     return j;
   }
 
+  /** Which work types a default is offered for, sent on every chip press.
+   *
+   *  BESIDE patchDefault RATHER THAN THROUGH IT, for the reason the labor patch below gives:
+   *  that one sends `{ favorite }` and nothing else. library.py has accepted, coerced and
+   *  returned `default_work_types` on items, assemblies AND labor since the column landed --
+   *  this is the half that was missing, and its absence is why the work-type chips filtered
+   *  nothing. Every row in the library carried `[]`, appliesToWorkType reads `[]` as "applies
+   *  everywhere", so all five chips rendered one identical list. Hanz, 2026-09-21: "the filters
+   *  in items in assemblies on the default items in assemblies. Is not working." */
+  async function patchWorkTypes(kind, id, list) {
+    var r = await api("/api/library/" + kind + "/" + encodeURIComponent(id), {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ default_work_types: list }) });
+    var j = await r.json().catch(function () { return {}; });
+    if (!r.ok) throw new Error(j.detail || j.error || ("HTTP " + r.status));
+    return j;
+  }
+
   /** One labor default's typed fields, sent on Save.
 
    *  BESIDE patchDefault RATHER THAN THROUGH IT. That one sends `{ favorite }` and nothing else,
@@ -2091,8 +2109,13 @@
    *  it by name, so the rename has to be made there in the same breath or every scenario in that
    *  file dies on a ReferenceError at once. */
   function conditionPriceCell(c) {
+    // THE STATE IS SPELT OUT, not left to the button. Since 2026-09-21 all three are listed
+    // whether or not a new bid buys them (see takeoffDefaultGroups), so the row's PRESENCE no
+    // longer carries the answer the way it did for two days -- and a priced row sitting in a
+    // list headed "what a new bid opens holding" reads as included unless it says otherwise.
     return esc(c.priced) +
-      ' <span class="wtall">writes ' + esc(c.cell) + "</span>";
+      ' <span class="wtall">writes ' + esc(c.cell) + " · " +
+      (c.on ? "in every new bid" : "not in a new bid") + "</span>";
   }
 
   /** One condition's answer, sent on the change, with the optimistic flip and the put-it-back in
@@ -2185,6 +2208,61 @@
     }
   }
 
+  /** Toggle one work type on one library row. OPTIMISTIC, WITH THE ROLLBACK IN HERE, exactly
+   *  like setDefault above and setConditionDefault below -- the same argument applies: two
+   *  functions is two places to forget to put the row back.
+   *
+   *  EMPTY MEANS EVERY WORK TYPE and that is not a special case invented here -- it is what
+   *  appliesToWorkType has always read `[]` as, and what every row in the library currently
+   *  relies on. So pressing the last one off returns the row to all five rather than to none,
+   *  and the cell says which of the two it is on every render.
+   *
+   *  renderDefaultTakeoff(), NOT paint(), for the reason setConditionDefault gives below: this
+   *  field is read by this one table and nothing else, and paint() would rebuild the Items tab,
+   *  the assembly rail and the open panel -- one of which may be holding a half-typed labor line.
+   *  The row dropping out of the list when it stops applying to the work type on screen happens
+   *  in that one render. */
+  async function setRowWorkType(kind, id, wt, on) {
+    var list = kind === "assemblies" ? ASMS : ITEMS;
+    var row = null;
+    for (var i = 0; i < list.length; i++) if (list[i].id === id) { row = list[i]; break; }
+    if (!row) return;
+    var was = (row.default_work_types || []).slice();
+    var next = [];
+    for (var j = 0; j < was.length; j++) if (was[j] !== wt) next.push(was[j]);
+    if (on) next.push(wt);
+    row.default_work_types = next;
+    renderDefaultTakeoff();
+    try {
+      await patchWorkTypes(kind, id, next);
+    } catch (err) {
+      row.default_work_types = was;
+      renderDefaultTakeoff();
+      say("Couldn't save that. " + err.message);
+    }
+  }
+
+  /** The five work types as pressable chips, so the filter above the table has something to
+   *  filter ON. Rendered in the row rather than behind an Edit, because Edit leaves this tab
+   *  for the Items table -- which is eight columns wide already -- and because this field is
+   *  read by nothing except the chips a few lines up the same screen.
+   *
+   *  THE CELL STATES THE CONSEQUENCE, not just the state. Going from "all work types" to one
+   *  pressed chip NARROWS the row from five lists to one, which is a bigger move than a chip
+   *  press looks like, so the line under the chips says which it is. */
+  function workTypeCell(kind, row) {
+    var list = (row && row.default_work_types) || [];
+    var chips = WORK_TYPES.map(function (wt) {
+      var on = list.indexOf(wt) !== -1;
+      return '<button class="wtchip" type="button" aria-pressed="' + (on ? "true" : "false") +
+        '" data-wt-toggle="' + esc(kind) + '" data-wt-id="' + esc(row.id) +
+        '" data-wt="' + esc(wt) + '" aria-label="' + esc(row.name || "This line") +
+        (on ? " applies to " : " does not apply to ") + esc(wt) + '">' + esc(wt) + "</button>";
+    }).join("");
+    return '<span class="wtchips">' + chips + "</span>" +
+      '<span class="wtall">' + (list.length ? "" : "All work types") + "</span>";
+  }
+
   function defaultRowActions(kind, id, name) {
     return '<button class="btn ghost sm" type="button" data-def-edit="' + esc(kind) +
       '" data-def-id="' + esc(id) + '">Edit</button>' +
@@ -2219,6 +2297,19 @@
    *  nothing, and a button that opens nothing is the exact complaint that started this thread. A
    *  row with one button that works beats a row with one that works and one that lies. */
   function conditionRowActions(c) {
+    // ADD OR REMOVE, because the row is on screen either way now. Hanz, 2026-09-21, looking at a
+    // Materials list with none of the three in it: "Joint filler and Dye do not appear as
+    // materials in the deafult?" -- then "list them but they are also materials". They are all
+    // three permanent rows from here, so each needs the button for the direction it can move in.
+    //
+    // THE ADD ARM REUSES data-def-add, which the click router already routes by `kind`: an Add
+    // here and an Add in the candidate list are the same write to the same table, and a second
+    // attribute meaning the same thing is a second place to forget.
+    if (!c.on) {
+      return '<button class="btn ghost sm" type="button" data-def-add="conditions"' +
+        ' data-def-id="' + esc(c.key) + '" aria-label="Put ' + esc(c.label) +
+        ' on every new bid">Add</button>';
+    }
     return '<button class="btn ghost sm danger" type="button" data-cond-off="' + esc(c.key) +
       '" aria-label="Stop ' + esc(c.label) +
       ' being on every new bid">Remove</button>';
@@ -2270,20 +2361,11 @@
         hits.push({ kind: "items", id: it.id, name: it.name, what: "Material" });
       }
     });
-    // THE CONDITIONS THAT ARE OFF, AND THIS IS THE WAY BACK ON. With the Yes/No select gone,
-    // Remove is the only thing that turns one off, and without this a condition could be removed
-    // and never restored -- which would be a worse control than the select it replaced.
-    //
-    // THE SAME OFFER THE OTHER TWO KINDS MAKE, on purpose: something not currently a default,
-    // found by name or by browsing, added with one press. `kind` is the plural the click router
-    // already switches on, so a condition is added by the same button that adds a material.
-    // LAST, after the library rows, because a search for a real material should not have three
-    // fixed rows sitting above it.
-    takeoffConditionDefaults().forEach(function (c) {
-      if (!c.on && (!q || String(c.label || "").toLowerCase().indexOf(q) !== -1)) {
-        hits.push({ kind: "conditions", id: c.key, name: c.label, what: "Condition" });
-      }
-    });
+    // NO CONDITIONS IN HERE, and that is a change from 2026-09-19. While an off condition was
+    // unlisted, this was the only way back on and its absence would have made Remove a one-way
+    // door. Now that all three are permanent rows under Materials with their own Add, offering
+    // them here as well would put the same three names in two places on one screen -- and a
+    // search for "dye" would answer with a row that is already six lines up.
     return { rows: hits.slice(0, DEFAULT_MAX), more: Math.max(0, hits.length - DEFAULT_MAX) };
   }
 
@@ -2362,6 +2444,7 @@
           var n = (a.lines || []).length;
           return { name: a.name,
                    how: n + " item line" + (n === 1 ? "" : "s") + " \u00b7 per " + (a.unit || "SF"),
+                   wt: workTypeCell("assemblies", a),
                    actions: defaultRowActions("assemblies", a.id, a.name) };
         }) },
       { title: "Materials",
@@ -2369,9 +2452,9 @@
         // their own. Hanz, 2026-09-18: "die and joint filler are supposed to be materials not
         // something that is default", then "just put these 3 in the materials section with the
         // same buttons." They are what a bid buys, so they are listed with the rest of what a
-        // bid buys, they price themselves in the same column, and they carry the same Remove --
-        // rather than the chip that could not be pressed. Only the ones a new bid actually buys
-        // are listed; see the filter below.
+        // bid buys, they price themselves in the same column, and they carry the same buttons --
+        // rather than the chip that could not be pressed. ALL THREE ARE LISTED, on or off; the
+        // paragraph below this says why, and it used to say the opposite.
         rows: ITEMS.filter(function (it) {
           return it.favorite && appliesToWorkType(it, DEFAULT_WT);
         }).map(function (it) {
@@ -2379,17 +2462,27 @@
                    how: L.num(it.unit_cost) != null
                      ? L.money(it.unit_cost) + " per " + (it.unit || "unit")
                      : "No cost in the library yet",
+                   wt: workTypeCell("items", it),
                    actions: defaultRowActions("items", it.id, it.name) };
-        }).concat(takeoffConditionDefaults().filter(function (c) {
-          // ONLY THE ONES THAT ARE ON, exactly like `it.favorite` two lines above. This list is
-          // what a new estimate opens with; a condition answering No is not something it opens
-          // with, and listing it anyway was what made the row need a Yes/No of its own to explain
-          // itself. Off means absent here and offered under "Add a takeoff default" instead.
-          return c.on;
-        }).map(function (c) {
+        }).concat(takeoffConditionDefaults().map(function (c) {
+          // ALL THREE, ON OR OFF. For two days this filtered on `c.on`, by analogy with
+          // `it.favorite` two lines above, and offered the off ones under "Add a takeoff default"
+          // instead. Hanz found the Materials list with none of them in it and asked where they
+          // were -- which is the answer: the analogy is wrong. A material that is not a favourite
+          // is one of forty rows in a library, and hiding it is how the list stays readable.
+          // These three are a FIXED, NAMED set of three that every polish bid has an opinion
+          // about, so "absent" reads as "gone" rather than "not chosen", and the place he looked
+          // for them is the place they belong. Each row says which way it is set and carries the
+          // button for the direction it can move in; see conditionPriceCell and
+          // conditionRowActions.
+
           return { name: c.label,
                    how: conditionPriceCell(c),
                    rawHow: true,
+                   // NO CHIPS: a condition is not a library row and has no default_work_types
+                   // to press. It is a question the polish takeoff asks, and scoping it to a
+                   // work type would be a control over a column that does not exist.
+                   wt: '<span class="wtall">Polish takeoff</span>',
                    actions: conditionRowActions(c) };
         })) },
       { title: "Markup",
@@ -2421,13 +2514,18 @@
     if (!body) return;
     var out = "";
     takeoffDefaultGroups().forEach(function (g) {
-      out += '<tr class="grouphead"><th scope="colgroup" colspan="3">' +
+      out += '<tr class="grouphead"><th scope="colgroup" colspan="4">' +
         esc(g.title) + "</th></tr>";
       g.rows.forEach(function (r) {
         // rawHow ONLY for the rows that build their own control. Everything else stays
         // escaped -- a material name is somebody typed text and must never render as HTML.
+        //
+        // `wt` IS ALWAYS MARKUP, from workTypeCell or from a literal in the group above, and is
+        // never a name somebody typed. A row that supplies none gets an empty cell rather than
+        // the string "undefined" -- the Markup group is the one that does.
         out += "<tr><td>" + esc(r.name) + "</td><td>" +
           (r.rawHow ? r.how : esc(r.how)) + "</td>" +
+          '<td class="wtcell">' + (r.wt || "") + "</td>" +
           '<td class="rowact">' + r.actions + "</td></tr>";
       });
     });
@@ -3660,6 +3758,18 @@
       var qbox = $("default-q");
       if (qbox) qbox.value = "";
       renderDefaultSearch();
+      return;
+    }
+    // THE WORK-TYPE CHIPS, FIRST of the row controls: they sit in the same row as the Edit and
+    // Remove pair and `closest` walks up, so a selector that could also match must not run
+    // before this one. Reads aria-pressed rather than a data flag -- the attribute the button
+    // already has to carry for a screen reader is the same fact, and two copies of one state is
+    // how a control ends up disagreeing with itself.
+    var wtBtn = t.closest && t.closest("[data-wt-toggle]");
+    if (wtBtn) {
+      await setRowWorkType(wtBtn.getAttribute("data-wt-toggle"), wtBtn.getAttribute("data-wt-id"),
+                        wtBtn.getAttribute("data-wt"),
+                        wtBtn.getAttribute("aria-pressed") !== "true");
       return;
     }
     // THE CONDITION PAIR, HANDLED BEFORE THE MATERIAL PAIR so neither can swallow the other:
