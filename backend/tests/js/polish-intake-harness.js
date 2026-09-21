@@ -270,6 +270,11 @@ const scope = new Function("$", "TW", "SB", "document", "window", "clock", "fetc
   ${fn("repaintCondition")}
   ${fn("toggleCondition")}
   ${fn("loadCounties")}
+  // LIFTED, not stubbed, and BEFORE boot() which awaits it. This page mints the first
+  // polish_estimate, so it is where a company-wide condition default has to land -- by the
+  // time polish-estimate.html opens, migrateModel has already stated all nine conditions and
+  // that page's own gate correctly refuses to touch them.
+  ${fn("loadConditionDefaults")}
   ${fn("countyStateOf")}
   ${fn("countyRowRate")}
   ${fn("countyRowLabel")}
@@ -414,6 +419,17 @@ function build(opts) {
     // through a path that bypasses the sandbox's draft check entirely.
     if (init && init.method) throw new Error("the intake page must not " + init.method + " " + url);
     if (init && init.body) throw new Error("the intake page must not send a body to " + url);
+    // GET /api/condition-defaults -- the company's answers for the three Takeoff
+    // conditions. Answered separately because this page has to survive it failing:
+    // `condition_defaults` is applied to NEITHER database yet, so today it has no table
+    // behind it anywhere. Default [] rather than a fixture list, so a page that seeded
+    // when it had no business to shows up as an empty answer rather than silently
+    // rewriting an estimator's conditions.
+    if (/condition-defaults/.test(String(url))) {
+      if (opts.conditionFetchFails) throw new Error("the table is not there");
+      return { ok: true, json: async () => ({ ok: true,
+        conditions: JSON.parse(JSON.stringify(opts.conditionDefaults || [])) }) };
+    }
     return { ok: true, json: async () => ({ counties: JSON.parse(JSON.stringify(COUNTIES)) }) };
   };
 
@@ -1459,6 +1475,155 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
       afterSandbox: run("proj-1-beta", stamped),
       // No draft at all: nothing to stamp, and nothing invented.
       withNoDraft: run(null, stamped),
+    };
+  }
+
+  // -- labor is not this page's to state -------------------------------------
+  //
+  // This page has no labor UI at all, and its save() says out loud that only `conditions` is its
+  // own. It stated labor anyway until 2026-09-17, by accident: migrateModel fills a missing
+  // `labor` in from freshModel() before it hands the model back, so the first save on a brand-new
+  // project persisted four crew rows nobody had been shown.
+  //
+  // Harmless on its own, and not harmless at all in the seam: js/polish-estimate.js adds the
+  // library's default labor lines to a bid whose labor has never been stated (B.laborUnstated),
+  // and a model minted here had already stated it -- so "+ Add a labor line" on the library page
+  // could never reach a project that started where every project starts.
+  {
+    // A brand-new beta project, saved by flipping a toggle, exactly as the seam probe above does.
+    const fresh = build({ blob: { __draft_id: "brand-new-labor", project_name: "Fresh beta job" } });
+    await fresh.api.boot();
+    clickSwitch(fresh, "prevailing_wage");
+    fresh.clock.fire();
+    const minted = fresh.rec.saves[fresh.rec.saves.length - 1].polish_estimate;
+
+    // Saved again, because this page saves on every keystroke and the guard reads what is ALREADY
+    // SAVED. A second save that re-stated labor would close the door just as firmly as the first.
+    clickSwitch(fresh, "local");
+    fresh.clock.fire();
+    const mintedAgain = fresh.rec.saves[fresh.rec.saves.length - 1].polish_estimate;
+
+    // An estimator's own rows, arriving here from the calculator. Flipping a toggle on this page
+    // must not touch them -- this is the guard's other direction, and the expensive one.
+    const worked = build({ blob: { __draft_id: "worked-on", project_name: "Worked on",
+      polish_estimate: { version: 2, takeoff: JSON.parse(JSON.stringify(TAKEOFF)),
+        labor: [{ id: "polishing", label: "Polishing", guys: 4, days: 6, rate: 33 },
+                { id: "lab-densify", label: "Densify", guys: 2, days: 1, rate: 55,
+                  unit: "days", guys_auto: false }],
+        conditions: { local: true } } } });
+    await worked.api.boot();
+    clickSwitch(worked, "taxable");
+    worked.clock.fire();
+    const kept = worked.rec.saves[worked.rec.saves.length - 1].polish_estimate;
+
+    out.laborNotStated = {
+      // The key is absent, not empty: absent is what B.laborUnstated reads as "never stated".
+      mintedHasLaborKey: Object.prototype.hasOwnProperty.call(minted, "labor"),
+      mintedStillHasConditions: !!minted.conditions,
+      mintedVersion: minted.version,
+      mintedHasTakeoff: minted.takeoff instanceof Array,
+      secondSaveHasLaborKey: Object.prototype.hasOwnProperty.call(mintedAgain, "labor"),
+      // THE SEAM, asked of the real core the calculator gates on.
+      calculatorWouldSeed: P.laborUnstated(JSON.parse(JSON.stringify(minted))),
+      calculatorWouldSeedAfterTwoSaves: P.laborUnstated(JSON.parse(JSON.stringify(mintedAgain))),
+      // NOTHING IS LOST ON SCREEN: the calculator fills the display copy in from freshModel(),
+      // which is what it did with the rows this page used to persist.
+      readBackLabor: P.migrateModel(JSON.parse(JSON.stringify(minted))).labor
+        .map((r) => [r.id, r.guys, r.rate]),
+      // …and a bid that HAS been worked on is left strictly alone.
+      keptHasLaborKey: Object.prototype.hasOwnProperty.call(kept, "labor"),
+      keptLabor: kept.labor,
+      keptCalculatorWouldSeed: P.laborUnstated(JSON.parse(JSON.stringify(kept))),
+      keptTaxable: kept.conditions.taxable,
+    };
+  }
+
+
+  // -- the Takeoff conditions' company answers are minted HERE ----------------
+  //
+  // The three conditions moved OFF this form on 2026-09-16 and it draws none of them. It still
+  // has to seed them, and the reason is the seam: THIS PAGE MINTS THE MODEL. A brand-new project
+  // has no polish_estimate; the first save here writes a well-formed v2 through migrateModel,
+  // which fills all nine conditions in from freshModel -- so by the time polish-estimate.html
+  // opens, the three are STATED and its own gate correctly refuses to touch them. Seed only there
+  // and the Defaults tab reaches nothing but a project that skipped intake.
+  {
+    // Every stored answer disagrees with what the tool ships, or this proves nothing about the
+    // seed. All three ship OFF from 2026-09-19, so all three rows say on.
+    const COND = [{ key: "joint_filler", on: true },
+                  { key: "dye", on: true },
+                  { key: "remove_existing_jf", on: true }];
+
+    const fresh = build({ blob: { __draft_id: "brand-new-cond", project_name: "Fresh beta job" },
+                          conditionDefaults: COND });
+    await fresh.api.boot();
+    clickSwitch(fresh, "prevailing_wage");
+    fresh.clock.fire();
+    const mintedCond = fresh.rec.saves[fresh.rec.saves.length - 1].polish_estimate.conditions;
+    const mintedCells = fresh.rec.saves[fresh.rec.saves.length - 1].cell_values;
+
+    // A PROJECT SOMEBODY HAS ALREADY WORKED ON, with all three answered the opposite way.
+    const worked = build({ blob: { __draft_id: "worked-cond", project_name: "Worked job",
+      polish_estimate: { version: 2,
+        takeoff: [{ assembly_id: "", assembly_name: "", measurement: 9000, unit: "SF" }],
+        // All three the opposite of COND above, so the library has an answer for every one that
+        // COULD have landed on this project and the gate is the only thing stopping it.
+        conditions: { local: true, hard_bid: false, prevailing_wage: false, taxable: true,
+                      remodel_tax: false, bond: false,
+                      joint_filler: false, dye: false, remove_existing_jf: false },
+        contingency: 0, fees: 0, totals: {} } },
+      conditionDefaults: COND });
+    await worked.api.boot();
+    clickSwitch(worked, "taxable");
+    worked.clock.fire();
+    const keptCond = worked.rec.saves[worked.rec.saves.length - 1].polish_estimate.conditions;
+
+    // THE CELL WINS. An answer already in a cell -- from the AI autofill or an earlier visit --
+    // must not be replaced by a company default on a project with no polish_estimate yet.
+    //
+    // ALL THREE CELLS, not one -- exactly what a real step-1 save on the live intake screen
+    // leaves behind, and each one the OPPOSITE of what COND above says. A fixture that answered
+    // only one of the three could pass against a page that seeds the other two from the company
+    // default regardless of what their cells said.
+    //
+    // AND A NARROWED LIST FOR THIS ONE CASE. With all three shipping OFF, a row saying "on"
+    // against a cell saying "No" leaves false -- which is also what a page that read NEITHER
+    // would show, so that pairing alone cannot prove the cell was read. Two of the three are
+    // that pairing (they prove the cell BEATS the default); remove_existing_jf is left OUT of
+    // the list with its cell saying Yes, so `true` there can only have come from the cell.
+    const COND_FOR_CELLS = [{ key: "joint_filler", on: true }, { key: "dye", on: true }];
+    const celled = build({ blob: { __draft_id: "celled-cond", project_name: "Autofilled job",
+                                   cell_values: { "Polish!E29": "No", "Polish!E25": "No",
+                                                  "Polish!F29": "Yes" } },
+                           conditionDefaults: COND_FOR_CELLS });
+    await celled.api.boot();
+    clickSwitch(celled, "prevailing_wage");
+    celled.clock.fire();
+    const celledCond = celled.rec.saves[celled.rec.saves.length - 1].polish_estimate.conditions;
+
+    // PRODUCTION TODAY: the table is not there.
+    const down = build({ blob: { __draft_id: "down-cond", project_name: "No table" },
+                         conditionFetchFails: true });
+    await down.api.boot();
+    clickSwitch(down, "prevailing_wage");
+    down.clock.fire();
+    const downCond = down.rec.saves[down.rec.saves.length - 1].polish_estimate.conditions;
+
+    out.conditionDefaults = {
+      minted: mintedCond,
+      // The literals reach Kyle's workbook on the same save, through the one writer both screens
+      // use -- a seeded answer the cells did not carry would be reverted on the next load.
+      mintedCells: { "Polish!E29": mintedCells["Polish!E29"],
+                     "Polish!E25": mintedCells["Polish!E25"],
+                     "Polish!F29": mintedCells["Polish!F29"] },
+      fetched: fresh.rec.fetched.some((f) => /condition-defaults/.test(f.url)),
+      // A worked project is left strictly alone, and never even asks.
+      kept: keptCond,
+      keptFetched: worked.rec.fetched.some((f) => /condition-defaults/.test(f.url)),
+      celled: { dye: celledCond.dye, jointFiller: celledCond.joint_filler,
+                removeExistingJf: celledCond.remove_existing_jf,
+                fetched: celled.rec.fetched.some((f) => /condition-defaults/.test(f.url)) },
+      down: { conditions: downCond, shipped: P.freshModel().conditions },
     };
   }
 

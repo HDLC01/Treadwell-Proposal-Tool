@@ -476,6 +476,34 @@
   // four off the draft, so what a reopened project shows is what a fresh pick would have written.
   var countyPick = null;
 
+  /** The library's stored answers for the three Takeoff conditions, or [] when the read cannot
+   *  answer. NEVER THROWS, and never blocks the form.
+   *
+   *  WHY THIS PAGE SEEDS THEM AT ALL, when the three moved to the Takeoff step on 2026-09-16 and
+   *  this form no longer shows any of them. THIS PAGE IS WHAT MINTS THE MODEL. A brand-new project
+   *  has no polish_estimate; the first save here writes a well-formed v2 through migrateModel, and
+   *  that fills all nine conditions in from freshModel -- so by the time polish-estimate.html
+   *  opens, the three are STATED, and its own gate (conditionsUnstated) correctly refuses to touch
+   *  them. Seeding only there would make the Defaults tab reach nothing but a project that skipped
+   *  intake, which is not the normal flow and is barely any flow at all.
+   *
+   *  So the default is applied where the model is CREATED, which is here, and the answer this page
+   *  saves is the company's answer rather than freshModel's. After that it is the bid's, and
+   *  nothing reaches back into it -- which is the whole of Hanz's rule for this feature.
+   *
+   *  `condition_defaults` is applied to NEITHER database as of 2026-09-18, so today this answers
+   *  with nothing everywhere and the shipped literals stand, exactly as they do now. */
+  async function loadConditionDefaults() {
+    try {
+      var res = await fetch(TW.resolveApiBase() + "/api/condition-defaults",
+                            { headers: TW.authHeaders() });
+      var body = await res.json();
+      return (body && body.conditions instanceof Array) ? body.conditions : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
   async function loadCounties() {
     try {
       if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready;
@@ -754,6 +782,25 @@
     // sent the project back to the spreadsheet intake. Both of those were silent.
     var model = B.migrateModel(existing);
     model.conditions = Object.assign({}, model.conditions, M.conditions);
+    // LABOR IS NOT THIS PAGE'S TO STATE -- and until 2026-09-17 it stated it anyway, by accident.
+    // This page has no labor UI at all; the line above says out loud that only `conditions` is
+    // its own. But migrateModel fills a missing `labor` in from freshModel() before it hands the
+    // model back, so the FIRST save on a brand-new project persisted four crew rows nobody had
+    // been shown, let alone typed.
+    //
+    // That was enough to make the Labor step's own defaults unreachable in the normal flow. The
+    // calculator adds the library's default labor lines to a bid whose labor has never been
+    // stated (B.laborUnstated, and the seeding block in js/polish-estimate.js); a model minted
+    // here had already stated it, seconds before the estimator ever reached the Labor step. Every
+    // beta project starts on this page, so every beta project arrived pre-disqualified.
+    //
+    // So the key is dropped back off -- ONLY when it was not already there. The guard reads what
+    // is ALREADY SAVED, which means the moment the calculator writes a real labor array this
+    // leaves it strictly alone; flipping a toggle here can never delete an estimator's crew rows.
+    // Nothing on screen changes either way: reopening the calculator fills the display copy in
+    // from freshModel() exactly as it did before, because that is what migrateModel does with a
+    // model that states no labor.
+    if (B.laborUnstated(cur.polish_estimate)) delete model.labor;
 
     // The county's four keys ride along as TOP-LEVEL draft keys, not inside polish_estimate: they
     // are the live estimate screen's own, and js/polish-estimate.js reads county_remodel_rate off
@@ -911,6 +958,28 @@
     // this line writes to a test project. It returns false when it could not settle that safely,
     // and then the page stays on its loading message rather than risk a real bid.
     if (!(await SB.enterSandbox(adoptModel))) return;
+
+    // THE TAKEOFF CONDITIONS' COMPANY ANSWERS, on a brand-new project and on nothing else.
+    //
+    // ASKED OF THE SAVED BLOB, AFTER THE SANDBOX HAS SETTLED which draft this page is on, and
+    // before anything can be typed. B.conditionsUnstated is true only when NOTHING has ever been
+    // saved for this estimate -- Hanz's rule is that changing a default must not change any
+    // estimate that already exists, and an estimator's saved answers are their work.
+    //
+    // THE CELL STILL WINS, so the read-back runs again over the seeded answers rather than the
+    // seed running last. A project that reached this page from the live intake has its answers in
+    // cell_values and no polish_estimate at all, which is exactly the blob conditionsUnstated
+    // calls seedable; seeding last would put a company default over an answer the AI autofill or a
+    // previous visit had already written into Kyle's workbook.
+    //
+    // AWAITED, unlike loadCounties. This decides what the first save writes, and that save can be
+    // triggered by the first keystroke -- a seed that landed after it would either be lost or
+    // arrive as a second, different answer on a bid already in flight.
+    if (B.conditionsUnstated(state.polish_estimate)) {
+      M.conditions = B.conditionsFromCells(
+        B.seedConditionDefaults(M.conditions, await loadConditionDefaults()),
+        state.cell_values);
+    }
 
     form = $("intake-form");
     hydrate();

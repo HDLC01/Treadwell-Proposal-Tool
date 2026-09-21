@@ -16,6 +16,7 @@ disagrees with the pricing engine.
 """
 import json
 import pathlib
+import re
 import shutil
 import subprocess
 
@@ -158,11 +159,15 @@ def test_the_takeoff_defaults_list_what_a_new_estimate_starts_with(ran):
     because a source-text assertion cannot catch an unbound identifier -- which is how this repo
     took production down once already.
 
-    FOUR KINDS IN ONE LIST, and that is deliberate. An assembly and a material are lines a new
-    estimate OPENS WITH. A condition is a question it opens ANSWERED. A markup line is a rate it
-    opens applying. They are not the same kind of thing, which is what the Kind column is for;
-    splitting them into four sections would say they are unrelated, when what they have in common
-    is the only thing that matters here -- somebody set them once and every bid starts from them.
+    ONE LIST, SIGNPOSTED. An assembly and a material are lines a new estimate OPENS WITH. A markup
+    line is a rate it opens applying. Sub-headings inside the one table say which is which without
+    claiming they are unrelated -- what they have in common is the only thing that matters here:
+    somebody set them once and every bid starts from them.
+
+    JOINT FILLER, REMOVE-EXISTING AND DYE ARE MATERIALS, counted in the Materials group since
+    2026-09-18. Hanz: "die and joint filler are supposed to be materials not something that is
+    default." They are what a bid buys, so they sit with the rest of what a bid buys; the test
+    below pins the buttons they carry there.
 
     ONLY THE SWITCHED-ON ONES. A list that showed the whole library would make the Default switch
     decorative, which is what the favourite star was.
@@ -172,8 +177,24 @@ def test_the_takeoff_defaults_list_what_a_new_estimate_starts_with(ran):
     assert t["namesTheDefaults"], "the switched-on assembly and material are not listed"
     assert t["skipsTheRest"], (
         "the list shows rows nobody switched on, which makes the switch decorative")
-    assert t["kinds"] == ["Assembly", "Material", "Markup", "Condition", "Condition", "Condition"], (
-        "the kinds or their order changed: %s" % t["kinds"])
+    # GROUPED, 2026-09-17, at Hanz's ask: "sub categorize the containers wheter they are
+    # materials or assemblies". Sub-headings inside the one table, not four tables -- the
+    # order is the order a new estimate builds itself in.
+    #
+    # THREE GROUPS, NOT FOUR, since 2026-09-18: joint filler, remove-existing and dye moved into
+    # Materials. Hanz: "die and joint filler are supposed to be materials not something that is
+    # default", then "just put these 3 in the materials section with the same buttons."
+    assert t["groupTitles"] == ["Assemblies", "Materials", "Markup"], (
+        "the groups or their order changed: %s" % t["groupTitles"])
+    assert t["groupCounts"] == [1, 4, 1], (
+        "a row landed in the wrong group: %s" % t["groupCounts"])
+    assert t["renderedHeadings"] == t["groupTitles"], (
+        "the groups exist in the data but are not drawn: %s" % t["renderedHeadings"])
+    assert t["noKindColumn"], (
+        "the Kind column is back; with a heading over every group it repeats itself on "
+        "every row")
+    assert t["noEmptyGroups"], (
+        "an empty group is being emitted, so the list shows a heading over blank space")
 
 
 @needs_node
@@ -228,6 +249,25 @@ def test_the_results_appear_with_the_rows_not_beside_the_search_box(ran):
 
 
 @needs_node
+def test_both_add_buttons_sit_above_their_lists(ran):
+    """Hanz, 2026-09-17: "all buttons should be at the top".
+
+    They were under their tables, which meant the control that adds a default got further away
+    the more defaults you had -- scroll past everything you already set to reach the way to set
+    another. Nothing about the markup was wrong, only where it sat, so only a POSITION assertion
+    catches it going back.
+    """
+    c = ran["page"]["defaultsCategories"]
+    assert c["takeoffAddIsAboveTheTable"], (
+        "Add a takeoff default is back underneath the list it adds to")
+    assert c["laborAddIsAboveTheTable"], (
+        "Add a labor line is back underneath the list it adds to")
+    assert c["resultsStillFollowTheirButton"], (
+        "the picker no longer opens between the button and the rows, so what you are choosing "
+        "from renders away from where it will land")
+
+
+@needs_node
 def test_bond_is_shown_here_but_still_lives_on_the_markup_page():
     """Will asked for bond on this tab. It is here, and it is READ ONLY.
 
@@ -245,14 +285,24 @@ def test_bond_is_shown_here_but_still_lives_on_the_markup_page():
     Mutation: give the bond row an editable control, or store its rate on this page."""
     t = ran_defaults()
     assert t["showsBond"], "bond is not on the Defaults tab, which Will asked for"
+    # EDITABLE SINCE 2026-09-18 ("all line items should be editable"), but as a second DOOR on
+    # one home: the box writes the markup_rules row BY ID, so this screen and the Markup page
+    # are editing the same row and cannot hold different answers.
+    assert t["bondIsEditableNotReadOnly"], "bond is read-only again"
+    assert t["bondStillSaysWhereItLives"], "the bond row no longer says the Markup page owns it"
     assert t["saysWhereBondLives"], (
         "the bond row does not say the Markup page owns it, so this reads as a second home")
     js = (FRONTEND / "js" / "library.js").read_text(encoding="utf-8", errors="replace")
     assert "/api/markup/rules" in js, "the rate is not read from the markup service"
-    start = js.index("function renderDefaultTakeoff")
-    body = js[start:js.index("The Labor defaults", start)]
-    assert "data-" not in body.split("GLOBAL_MARKUP")[1].split("});")[0], (
-        "the bond row carries a control, which would make this page a second home for the rate")
+    # READ OFF THE DRAWN ROW, not sliced out of the renderer's source. The old form split the
+    # function text on "GLOBAL_MARKUP" and then on "});" and broke the moment the renderer was
+    # regrouped -- it was asserting on punctuation, and it would equally have passed on a
+    # renderer that drew nothing. What matters is that the row a person sees offers nothing
+    # to press.
+    assert t["bondControlTargetsTheMarkupRule"], (
+        "the bond control does not target the markup rule by id, so this page has become a "
+        "SECOND HOME for the rate rather than a second door on the one home -- two homes "
+        "disagree the first time somebody changes one, and that is a wrong bid")
 
 
 @needs_node
@@ -300,6 +350,449 @@ def test_the_labor_default_is_read_from_the_estimate_not_retyped():
 
 
 @needs_node
+def test_the_add_a_labor_line_button_opens_a_form_where_the_row_goes(ran):
+    """"the add labor line does not work" -- Hanz, twice, on 2026-09-17.
+
+    HE WAS RIGHT AND IT WAS DELIBERATE. The button shipped as markup with no handler, because
+    nothing stored a custom labor line: the renderer drew one hardcoded row out of travelSeed()
+    and there was nowhere for a second to live. `library_labor` is that place now, so the button
+    does the thing it says.
+
+    IT OPENS IN THE TABLE, WHERE THE ROW GOES. Hanz asked the same day for the takeoff picker to
+    appear "within the line item instead of up above", and a form for a labor line has the same
+    answer only louder -- the form IS the row, the name typing into the Line column and the rate
+    into the Rate column, so what is being typed is laid out as what will be read back. A modal,
+    or a panel up beside the search box, says the opposite: that this is a trip somewhere else.
+
+    EXECUTED, NOT GREPPED, and that is not a preference here -- a regex over the markup is exactly
+    what let this ship green the first time. `data-add-default="labor"` was in the pane the whole
+    time it did nothing.
+
+    Mutation: have laborFormRow() return "" and the Add button opens onto nothing, which is what
+    it did for a day."""
+    f = ran["laborAddForm"]
+    assert f["shutUntilPressed"], "the form is open before anybody asks for it"
+    assert f["opensInTheLaborTable"], (
+        "pressing Add opens no name, rate and unit -- this is the dead button Hanz reported")
+    assert f["notInTheSearchResults"], "the form opened in the search box, which is 'up above'"
+    assert f["belowTheExistingRows"], (
+        "the form draws above the lines it is joining rather than where the new row lands")
+    assert f["unitIsAList"] and f["unitOptions"] == ["hours", "days"], (
+        "the unit is not the estimate's own two, so a line could be priced by a word nothing "
+        "multiplies: found %s" % f["unitOptions"])
+    assert f["focusesTheNameBox"], "the form opens nowhere you can type"
+    assert f["hasSaveAndCancel"], "the form cannot be finished or abandoned"
+    assert f["cancelShutsIt"], "Cancel leaves the form open"
+
+
+@needs_node
+def test_the_add_buttons_route_to_the_right_thing(ran):
+    """THE WIRING ITSELF, which is the half that was missing and the half a regex cannot see.
+
+    Every other test here proves the form works. This one proves the control Hanz pressed reaches
+    it. That distinction is not academic: for a day the form did not exist, the button did, and
+    the only test over it matched the pane for data-add-default="labor" -- which a button with no
+    handler carries perfectly. It shipped green and he reported it twice.
+
+    THE DECISION LIVES IN A NAMED FUNCTION so this can call it. The page's click listener is
+    top-level wiring inside its IIFE and no test can execute it, which is exactly why the harness's
+    own doc says anything with a decision in it belongs in a function -- the same move
+    placeNewAssembly and openDefaultBrowse already made on this page.
+
+    BOTH ARMS, because a router that opened the form for everything would pass a one-armed test
+    and break the Takeoff button standing next to it.
+
+    Mutation: drop the `labor` arm of openDefaultAdd, which is precisely the state Hanz reported;
+    or point the `takeoff` arm at the labor form and watch this catch it from the other side."""
+    r = ran["laborAddButtonRouting"]
+    assert r["laborOpensTheForm"], (
+        "+ Add a labor line still opens nothing -- this is the button Hanz reported twice")
+    assert r["takeoffOpensBrowse"], "the Takeoff add button stopped opening the browse list"
+    assert r["takeoffDoesNotOpenTheLaborForm"], (
+        "the Takeoff button opens the labor form as well, so the two arms are not separate")
+    assert r["unknownOpensNothing"], (
+        "a third category would fall through into one of these two rather than doing nothing")
+    assert r["listenerCallsTheRouter"], (
+        "the click listener no longer calls openDefaultAdd, so the routing is unreachable from "
+        "the button however well it is tested here")
+    assert r["listenerWiresTheForm"], (
+        "Save, Cancel, Edit or Remove is not dispatched from the click listener, so it is a "
+        "control with nothing behind it -- the exact shape of the bug being fixed")
+
+
+@needs_node
+def test_a_typed_labor_line_is_saved_and_then_listed(ran):
+    """The whole round trip, driven: type, save, see it.
+
+    THE RATE GOES AS A NUMBER. A string "72.5" reaches the sheet and the next multiplication
+    concatenates -- the same hazard the item coercion list exists for, and the reason that one is
+    asserted by execution too.
+
+    THE NAME IS TRIMMED, because "Night shift " and "Night shift" are one line to a person and two
+    rows to a unique index.
+
+    Mutation: send `f.rate` instead of `Number(f.rate)` in submitLaborForm, or drop the trim."""
+    s = ran["laborAddSaves"]
+    assert s["callCount"] == 1, "expected exactly one write, got %s" % s["callCount"]
+    assert s["op"] == "POST" and s["kind"] == "labor", (
+        "the line went to %s %s, not POST /api/library/labor" % (s["op"], s["kind"]))
+    assert s["body"] == {"name": "Night shift", "rate": 72.5, "unit": "days"}, (
+        "the body is %s -- the name must be trimmed and the rate must be a number" % s["body"])
+    assert s["rateIsANumber"], "the rate was sent as a string, which the next multiplier will join"
+    assert s["rendersTheNewLine"], "the saved line is not on the list"
+    assert s["saysPerDay"], "the line reads per hour although days was picked"
+    assert s["formClosedAfterSaving"], "the form stays open over the row it just made"
+    # THE NEW LINE JOINS THE STORED ONES, it does not replace them. The fixture holds three
+    # so that a save which clobbers the list cannot pass as a save which appends.
+    assert s["inTheModel"] == ["Prevailing wage", "Supervisor", "Mobilization",
+                               "Night shift"], (
+        "the page's own list is %s" % s["inTheModel"])
+
+
+@needs_node
+def test_a_rate_that_arrives_as_a_string_still_reads_as_money(ran):
+    """`rate numeric(10,2)` is not promised to come back as a JSON number.
+
+    PostgREST commonly serialises numeric as "41.00", and the staging store IS PostgREST while
+    production is Supabase -- so the two environments can hand this page different types for the
+    same column. A row that printed the raw string would be cosmetic; a row that printed an em
+    dash, which is what money() answers to something it cannot read, says the line has no price.
+    Kyle would read that as a default nobody finished setting up.
+
+    The list is drawn through the same money() the rest of the page prices with, which already
+    copes with both -- this pins that it is still being asked.
+
+    Mutation: print `esc(c.rate)` instead of `esc(L.money(c.rate))` and the rate loses its dollar
+    sign on one environment and keeps it on the other."""
+    s = ran["laborStringRate"]
+    assert s["readsAsMoney"], (
+        "a rate that came back as a string is not rendered as money, so it reads as unpriced")
+    assert s["notTheRawString"], "the raw string is printed into the cell"
+    assert s["guysAutoIsExplained"], (
+        "a line whose man-days come off the crew rows does not say so")
+
+
+@needs_node
+def test_the_labor_form_refuses_what_the_api_would(ran):
+    """The same three rules, said before the request instead of after it.
+
+    THE SERVER IS STILL THE ONE THAT DECIDES -- a rule here it did not have would let any other
+    caller write what this form refuses -- but a 400 dug out of a response body is a poor way to
+    learn the name box is empty.
+
+    AND THE TYPING SURVIVES A REFUSAL. A form that cleared itself on a rejection would make
+    somebody retype the line to find out it fails a second time.
+
+    ZERO IS AN ANSWER, not a missing one: a line that costs nothing is a thing Kyle can mean.
+
+    Mutation: return "" from validateLaborForm, and the nameless line is POSTed."""
+    r = ran["laborFormRefuses"]
+    assert r["nothingWasSent"], "a refused line still reached the server"
+    assert r["namelessSaysWhy"], "a nameless line is refused silently"
+    assert r["negativeSaysWhy"], "a negative rate is accepted, which the API answers 400 to"
+    assert r["notANumberSaysWhy"], "a typo in the rate box is accepted"
+    assert r["keepsWhatWasTyped"], "the refusal threw away what was typed"
+    assert r["unitOffTheListRefused"], (
+        "a unit off the list passes, so a line could be priced by a word nothing multiplies")
+    assert r["aGoodOnePasses"], "a free line is refused, but zero is an answer and not a gap"
+
+
+@needs_node
+def test_editing_a_labor_default_goes_to_that_row(ran):
+    """Edit opens the row's own values and PATCHes the row it opened.
+
+    THIS IS THE ONE THAT SILENTLY DOUBLES. An edit that POSTed instead would look right on screen
+    -- the new rate is there -- and leave two lines behind it, which the next estimate opens
+    holding. So the request and its id are asserted, not just what the table then says.
+
+    NOT THE TAKEOFF LIST'S EDIT, which sends you to the assembly. There is nowhere else for a
+    labor line to be edited: it has no row anywhere but here.
+
+    Mutation: drop the `f.id` branch in submitLaborForm so every save posts."""
+    e = ran["laborEdit"]
+    assert e["preloadsTheName"] and e["preloadsTheRate"], (
+        "Edit opens an empty form, so saving it would rename the line to nothing")
+    assert e["op"] == "PATCH", "the edit went out as %s, which would add a second line" % e["op"]
+    assert e["patchedThatRow"], "the edit was sent to a different row"
+    assert e["body"] == {"name": "Prevailing wage", "rate": 61.0, "unit": "hours"}, (
+        "the patch body is %s" % e["body"])
+    assert e["rowShowsTheNewRate"], "the list still shows the old rate after saving"
+    assert e["storedLineCount"] == 3, (
+        "editing changed how many labor lines exist: %s" % e["storedLineCount"])
+
+
+@needs_node
+def test_removing_a_labor_default_takes_it_off_and_leaves_travel(ran):
+    """Remove means STOP BEING A DEFAULT, the same as it does on the Takeoff list beside it.
+
+    TRAVEL IS NOT REMOVABLE AND MUST NOT BE COLLATERAL. It is not a row of this table -- it is
+    what travelSeed puts in every new estimate and what migration appends to every old one -- so
+    it carries no controls, and taking a typed line off must leave it exactly where it was.
+
+    Mutation: have removeLaborDefault clear the whole list instead of filtering by id, and Travel
+    survives anyway (it is not in the list) while every other custom line vanishes -- which is why
+    the model's own length is asserted and not only what the table shows."""
+    r = ran["laborRemove"]
+    assert r["op"] == "DELETE", "Remove sent %s" % r["op"]
+    assert r["removedThatOne"], "Remove was sent for a different row"
+    assert r["goneFromTheList"], "the removed line is still listed"
+    assert r["travelSurvives"], "removing a typed line took the built-in Travel row with it"
+    # THE SURVIVORS ARE THE POINT. A one-row fixture could not tell "removed the right one"
+    # from "removed all of them" -- the reviewer proved that by mutating removeLaborDefault to
+    # wipe the list and watching the suite stay green.
+    assert r["othersSurvive"], "removing one labor line took the others with it"
+    assert r["idsLeftInTheModel"] == ["L2", "L3"], (
+        "the wrong lines are left after removing L1: %s" % r["idsLeftInTheModel"])
+    # AND TRAVEL IS NOT IN THAT LIST AT ALL. This fixture holds no row with the reserved id, so
+    # the line is drawn from travelSeed()'s own constant and carries no Remove for a removal to
+    # reach. (What it DOES carry once the row exists is the next four tests.)
+    assert ran["laborDefaultsList"]["travelCarriesNoControls"], (
+        "Travel is offered a control while there is no stored row to address -- pressing it can "
+        "only 404")
+    assert ran["laborDefaultsList"]["noBuiltInChip"], (
+        "the 'Built in' chip is back on Travel: \"don't put in a hard coded or built in line "
+        "items\" -- Hanz, twice")
+    assert ran["laborDefaultsList"]["travelShowsTheShippedRate"], (
+        "Travel is not on the rate travelSeed() ships with when nothing overrides it")
+
+
+# ── Travel became editable, 2026-09-19 ────────────────────────────────────────
+# "again this too how can we edit this?" -- Hanz, on the BUILT IN chip this table drew beside
+# Travel, after twice asking for no built-in line items anywhere. It could not be edited because
+# the rate was a literal inside travelSeed() and there was no row behind it to address. There is
+# one now: `public.library_labor` ships a row with the reserved id `travel` in both schema files,
+# and travelSeed(row) overlays it.
+#
+# THE FOUR TESTS BELOW ARE THE FOUR STATES THAT ROW CAN BE IN -- absent (production, today),
+# stored-and-shipped, stored-and-edited, and mid-write -- because the interesting failures are
+# each in a different one.
+@needs_node
+def test_a_stored_travel_row_is_shown_once_with_its_own_rate(ran):
+    """THE EDIT HAS TO REACH THE SCREEN, AND EXACTLY ONE ROW OF IT.
+
+    Two opposite bugs live here and a single-row fixture can only see one of them. If the stored
+    row is ignored, an admin types $41.50, the list shows $33.00, and nothing they do has any
+    effect. If it is LISTED BESIDE the built-in line instead of merged into it, "Travel" appears
+    twice -- same name, two sets of controls, and no way to tell which one prices a bid. So the
+    count and the rate are both asserted, and the shipped figure is asserted ABSENT.
+
+    REMOVE IS NEVER OFFERED. Travel cannot be removed: freshModel() seeds it into every new bid
+    and migrateModel appends it to every old one, so a button saying Remove would be the dead
+    control this whole thread has been about. Reset is what the row can actually do.
+
+    Mutation: drop the `r.id !== shipped.id` filter from renderDefaultLabor's `shown` list and
+    travelRowCount becomes 2. Or pass `null` instead of `storedTravel` to travelSeed and the rate
+    falls back to the shipped one with the stored row ignored."""
+    t = ran["laborTravelStored"]
+    assert t["travelRowCount"] == 1, (
+        "Travel is listed %s times -- the stored row is being drawn beside the built-in line "
+        "instead of onto it" % t["travelRowCount"])
+    assert t["rowCount"] == 2, "the merged Travel row and the one custom line are not what is drawn"
+    assert t["showsTheStoredRate"], "the stored rate never reached the screen"
+    assert t["doesNotShowTheShippedRate"], (
+        "the shipped $33.00 is still on the page, so the stored row was ignored or doubled")
+    assert t["canBeEdited"], "Travel still cannot be edited, which is what Hanz asked for"
+    assert t["offersReset"] and t["resetSaysReset"], (
+        "the way back to the shipped rate is not offered, or does not say Reset")
+    assert t["neverOffersRemove"], (
+        "Travel is offered Remove, which is a button that cannot do what it says: the row is "
+        "seeded into every bid whatever this table holds")
+    assert t["stillListsTheCustomLine"], "merging Travel took the custom labor lines off the list"
+
+
+@needs_node
+def test_reset_is_only_offered_while_there_is_something_to_reset(ran):
+    """A CONTROL THAT WOULD CHANGE NOTHING MUST NOT BE DRAWN. Pressing Reset on a Travel row
+    already holding the shipped rate does nothing visible, which is indistinguishable from a
+    broken button -- and a broken-looking button is the report that started this work.
+
+    NAME AND UNIT COUNT, NOT ONLY THE RATE. The Edit form writes all three, so a Travel renamed
+    to "Drive time" at the same rate has been edited and needs a way home. Comparing the rate
+    alone would strand it under a name nobody can undo.
+
+    Mutation: compare only `now.rate !== shipped.rate` and the renamed case loses its Reset. Drop
+    the comparison entirely and the unedited case grows one."""
+    un = ran["laborTravelUnedited"]
+    assert un["canBeEdited"], "a stored Travel row at the shipped rate cannot be edited"
+    assert un["noResetOffered"], (
+        "Reset is offered on a Travel row that is already on the shipped rate -- pressing it "
+        "changes nothing, which is how a control comes to read as dead")
+    assert un["showsTheShippedRate"]
+    rn = ran["laborTravelRenamed"]
+    assert rn["showsTheStoredName"], "a renamed Travel row still shows the shipped name"
+    assert rn["offersReset"], (
+        "a Travel row renamed at the shipped rate has no way back -- the Edit form writes the "
+        "name, so the comparison has to read it")
+
+
+@needs_node
+def test_editing_travel_patches_the_reserved_row_and_never_creates_a_second(ran):
+    """THE DOUBLE-TRAVEL HAZARD, ARRIVING THROUGH THE FORM. `LibraryLaborIn` has no `id` field and
+    `create_labor` mints a uuid unconditionally, both deliberately -- so a POST from this form
+    would store a SECOND labor line called "Travel" whose id is a uuid. It would list beside the
+    real one, override nothing, and price nothing: seedLibraryLabor matches the built-in row by
+    the id `travel` and would read the uuid row as an ordinary extra line on every bid.
+
+    So the form has to open on the STORED row (which is what makes it a PATCH) rather than blank.
+    An add form and an edit form are the same markup; the difference is entirely whether `f.id`
+    was set, and that is what is asserted here.
+
+    Mutation: have openLaborForm ignore the reserved id and open blank -- `op` becomes POST and
+    `storedLineCount` becomes 2."""
+    e = ran["laborTravelEdit"]
+    assert e["preloadsTheName"] and e["preloadsTheRate"], (
+        "the Edit form opened blank on Travel, so Save would POST a second row")
+    assert e["op"] == "PATCH", (
+        "editing Travel went out as %s -- a POST mints a uuid and leaves a second Travel that "
+        "overrides nothing" % e["op"])
+    assert e["patchedTravel"], "the edit was addressed to something other than the reserved id"
+    assert e["body"] == {"name": "Travel", "rate": 37.25, "unit": "hours"}, (
+        "the patch body is %s" % e["body"])
+    assert e["rowShowsTheNewRate"], "the list still shows the old rate after saving"
+    assert e["storedLineCount"] == 1 and e["idsAfter"] == ["travel"], (
+        "editing Travel changed how many labor lines exist: %s" % e["idsAfter"])
+
+
+@needs_node
+def test_reset_patches_the_row_back_rather_than_deleting_it(ran):
+    """RESET IS A PATCH ON PURPOSE, and this is the assertion that says why.
+
+    A soft DELETE would look identical on this screen -- list_labor() stops answering with the
+    row, travelSeed() falls back, and Travel reads $33.00/hr again. It would also be a one-way
+    door. The row's id is the only handle anything has on Travel; `LibraryLaborIn` has no id
+    field and create_labor mints a uuid, so once `travel` is soft-deleted nothing reachable from
+    a browser can make it again. The Edit button would disappear with it and Travel would be
+    exactly as uneditable as it was before this work, with no way back short of hand-written SQL.
+
+    THE SHIPPED FIGURES ARE READ FROM travelSeed, not typed on the library page. The note above
+    travelSeed records what happened the last time two copies of that row existed: they disagreed
+    within a day.
+
+    Mutation: send a DELETE instead and `neverDeletes` fails; or hardcode the body here and
+    `body` stops matching the moment Kyle's rate changes in one place only."""
+    r = ran["laborTravelReset"]
+    assert r["op"] == "PATCH" and r["neverDeletes"], (
+        "Reset went out as %s -- a delete takes the only id Travel can be addressed by with it, "
+        "permanently" % r["op"])
+    assert r["sentToTravel"], "Reset was addressed to something other than the reserved id"
+    assert r["body"] == {"name": "Travel", "rate": 33.0, "unit": "hours"}, (
+        "Reset did not send the figures travelSeed() ships: %s" % r["body"])
+    assert r["showsTheShippedRate"], "the list still shows the edited rate after a reset"
+    assert r["resetGoneAfterwards"], (
+        "Reset is still offered after a reset, so pressing it again would do nothing")
+    assert r["stillEditable"] and r["rowStillInTheModel"], (
+        "the row did not survive its own reset -- Travel is now uneditable for good")
+    assert r["travelStillListed"], "Travel vanished from the defaults list"
+
+    # AND A REFUSED RESET PUTS IT BACK, like both writes beside it. A rate that looks reset and
+    # returns on the next reload is worse than one that refuses out loud -- and the server's own
+    # reason reaches the screen, because "couldn't" with no cause sends somebody to ask why.
+    f = ran["laborTravelResetFails"]
+    assert f["putTheStoredRateBack"] and f["notLeftOnTheShippedRate"], (
+        "a refused Reset left the shipped rate on screen while the database still holds the "
+        "edited one")
+    assert f["rateStillInTheModel"] == 41.5, (
+        "the page's own row was left on %s after a refused reset" % f["rateStillInTheModel"])
+    assert f["saidSo"] and f["saysWhy"], (
+        "a refused Reset says nothing, or does not say what the server said")
+    assert f["rowStillInTheModel"], "a refused Reset dropped the row"
+    assert f["resetStillOffered"], "a refused Reset retired the button that would retry it"
+
+    # NOT FOR A NON-ADMIN. The writes are admin-only on the server, so neither control is drawn --
+    # the rule the rest of this page follows rather than offering a button that 403s.
+    ro = ran["laborTravelReadOnly"]
+    assert ro["stillListsTravel"] and ro["showsTheStoredRate"], (
+        "a non-admin cannot see what Travel costs, which is reference an estimator needs")
+    assert ro["noControls"], "a non-admin is offered Edit or Reset on Travel"
+
+
+@needs_node
+def test_a_refused_labor_write_is_put_back_and_said_out_loud(ran):
+    """Both writes are optimistic, and both put it back.
+
+    A ROW THAT LOOKS REMOVED AND RETURNS ON THE NEXT RELOAD IS WORSE THAN ONE THAT REFUSES --
+    setDefault's own argument, and it holds harder here because this one also holds typing.
+
+    THE SERVER'S OWN REASON REACHES THE SCREEN. "Couldn't save that" with no cause sends somebody
+    to ask why; the message the API sent is the answer they would have had to go and find.
+
+    Mutation: drop the catch in removeLaborDefault, and the row stays gone on screen while the
+    database still has it."""
+    rm = ran["laborRemoveFails"]
+    assert rm["putBackOnTheList"], "a refused Remove leaves the row gone from the screen only"
+    assert rm["stillInTheModel"], "the page's own list dropped a row the server kept"
+    assert rm["idsStillInTheModel"] == ["L1", "L2", "L3"], (
+        "a refused Remove left the list as %s" % rm["idsStillInTheModel"])
+    assert rm["saidSo"], "a refused Remove says nothing, so it reads as having worked"
+    sv = ran["laborSaveFails"]
+    assert sv["keepsTheTypedLine"], "a refused Save threw away the typed line"
+    assert sv["saysWhy"], "a refused Save does not say why, or does not say what the server said"
+    assert sv["notAddedToTheList"], "a line the server refused was added to the list anyway"
+    assert sv["saveIsPressableAgain"], "the form is stuck on Saving and cannot be retried"
+
+
+@needs_node
+def test_the_labor_list_is_read_apart_from_items_and_assemblies(ran):
+    """`library_labor` IS ON STAGING AND NOT ON PRODUCTION, by Hanz's decision: staging first,
+    prod when he promotes it.
+
+    So on production today this endpoint answers with nothing, and that has to leave a page that
+    works. A missing table is "no custom labor lines", never a broken tab -- the day Items and
+    Assemblies 500s over a list which is empty by design is the day an estimator cannot open a
+    material.
+
+    THE PRECEDENT IS ALREADY IN THIS FILE: the GLOBAL_MARKUP fetch sits outside the throw that
+    guards items and assemblies for the same reason, and says so in its own comment. This follows
+    it rather than inventing a second shape.
+
+    Mutation: move the labor fetch into the Promise.all at the top of load(), and a 404 on an
+    environment without the table takes the whole page down with it."""
+    js = (FRONTEND / "js" / "library.js").read_text(encoding="utf-8", errors="replace")
+    head = js[js.index("async function load()"):js.index("function current()")]
+    guarded = head[head.index("Promise.all(["):]
+    guarded = guarded[:guarded.index("]);")]
+    assert "/api/library/labor" not in guarded, (
+        "the labor list is fetched inside the Promise.all that items and assemblies throw on")
+    assert head.index("/api/library/labor") > head.index("if (!rs[0].ok"), (
+        "the labor fetch runs before the guard it must sit outside of")
+    assert "} catch (e) { LABOR = []; }" in head, (
+        "the labor fetch has no catch of its own, so its failure reaches the page's")
+    e = ran["laborEndpointEmpty"]
+    assert e["travelStillListed"], "with no custom lines the Labor list lost Travel too"
+    assert e["noCustomRows"], "custom rows are drawn with nothing behind them"
+    assert e["takeoffStillRenders"], (
+        "an empty labor list took the Takeoff defaults down with it")
+    assert e["emptyStateStaysHidden"], (
+        "the empty state shows over a table that has Travel in it")
+    assert e["canStillAdd"], "with nothing stored there is no way to store the first line"
+
+
+@needs_node
+def test_only_an_admin_is_offered_the_labor_controls(ran):
+    """The writes are admin-only on the server, so the page does not hand anybody a control that
+    403s on press.
+
+    THAT IS THIS PAGE'S OWN RULE, not a new one: load() resolves the role BEFORE the first paint
+    precisely because "a wrong first render would offer buttons that 403 on click", and the
+    Administration lists render text instead of inputs for the same reason.
+
+    THE LIST ITSELF STAYS VISIBLE. What a new estimate opens holding is worth reading whether or
+    not you may change it -- hiding the rows would answer a permissions question with a lie about
+    what the bid does.
+
+    Mutation: drop the ADMIN guard from laborRowActions, and a non-admin gets an Edit button that
+    cannot save."""
+    ro = ran["laborDefaultsReadOnly"]
+    assert ro["stillListsTheLine"], "a non-admin cannot see what a new estimate opens holding"
+    assert ro["noRowControls"], "a non-admin is offered Edit and Remove, which the server refuses"
+    assert ro["addRowHidden"], "a non-admin is offered an Add button that cannot save"
+    full = ran["laborDefaultsList"]
+    assert full["storedLineCanBeEdited"] and full["storedLineCanBeRemoved"], (
+        "an admin is not offered the controls either, so this is not a permissions rule")
+    assert full["addRowOfferedToAnAdmin"], "the Add button is hidden from an admin as well"
+
+
+@needs_node
 def test_the_new_tab_is_wired_to_its_pane_and_not_just_drawn():
     """A button in the tab strip with no entry in PANES renders identically to a working one and
     does nothing when pressed. That is the failure worth a test here, because nothing else on the
@@ -336,10 +829,12 @@ def test_the_items_tab_no_longer_explains_itself(ran):
         "the Items explainer is back - Hanz asked for it gone on 2026-08-27")
     assert page["assembliesIntro"], "the Assemblies pane lost its intro, which was not asked for"
     assert page["adminIntro"], "the Administration pane lost its intro, which was not asked for"
-    # The CLASS stays, because two panes still use it. A rule with no caller is what to delete;
-    # this is not one.
-    assert page["paneintroStillUsed"] == 2, (
-        "expected Assemblies and Administration to still carry .paneintro, found %s"
+    # The CLASS stays, because it now has THREE callers. A rule with no caller is what to
+    # delete; this is the opposite of one. Defaults gained its own .paneintro on 2026-09-18,
+    # reusing the class rather than inventing a new one -- the same reasoning that kept it
+    # alive for Assemblies and Administration.
+    assert page["paneintroStillUsed"] == 3, (
+        "expected Assemblies, Administration and Defaults to carry .paneintro, found %s"
         % page["paneintroStillUsed"])
 
 
@@ -599,127 +1094,6 @@ def test_a_similar_name_is_pointed_out_without_being_blocked(ran):
     assert d["notItself"], "a row accused itself of being a duplicate"
     assert d["quietWhileTyping"] == [], "two characters is not yet a name"
     assert d["unrelated"] == []
-
-
-@needs_node
-def test_both_dates_are_shown_in_business_time(ran):
-    d = ran["dates"]
-    assert d["usesBusinessTime"], "the stamps aren't going through TW.fmtBizDateTime"
-    assert d["saysAddedAndPrice"]
-
-
-@needs_node
-def test_a_material_whose_price_never_moved_does_not_look_freshly_priced(ran):
-    """The stamp answers "how old is this number?". Showing the row's creation date there, or
-    today's date, would answer it wrongly — which is the whole reason it is its own column."""
-    assert ran["dates"]["neverPricedSaysSo"]
-    assert ran["dates"]["neverPricedShowsNoDate"]
-
-
-@needs_node
-def test_the_price_date_appears_without_a_reload(ran):
-    """FOUND ON STAGING IN THE BROWSER, not by these tests. The server stamped the price revision
-    correctly and the page went on saying "not since we started tracking" until F5, because the save
-    handler adopted only `updated_at` — the stamp Hanz asked for, looking broken.
-
-    Only the server can decide this date: it moves when the cost actually changed, not when a PATCH
-    was sent. So the page has to take it from the reply."""
-    p = ran["priceDate"]
-    assert p["modelAdopted"] == "2026-08-15T00:00:01Z", "the reply's price date was thrown away"
-    assert p["repainted"], "nothing was repainted, so the cell still shows the old date"
-    assert p["repaintedSelector"] == '[data-item="i1"] .datescell'
-    assert p["repaintShowsTheNewDate"] and p["repaintDroppedTheNeverLine"]
-
-
-@needs_node
-def test_a_patch_that_did_not_touch_the_cost_still_repaints_the_history_cell(ran):
-    """REVERSED on 2026-09-04. This test previously asserted the opposite — that a cost-less patch
-    repaints nothing — and that was correct for as long as the cell held only `created_at` and
-    `cost_updated_at`: `updated_at` moved on every write and changed nothing on screen, so a
-    repaint was pure churn during typing.
-
-    The cell now carries "Edited <updated_at> by <updated_by>", so `updated_at` is what one of its
-    three lines quotes. Keeping the old behaviour would leave the Edited line showing the previous
-    edit time and the previous editor until F5 — which is the exact failure
-    `test_the_price_date_appears_without_a_reload` above exists to prevent, one column over.
-
-    The old test's real concern was that a repaint must be DRIVEN BY A CHANGE. That is still
-    asserted, by `sameStampNoRepaint`."""
-    p = ran["priceDate"]
-    assert p["costlessPatchStillRepaints"], (
-        "an edit that moved updated_at did not repaint, so the Edited line is stale until F5")
-    assert p["costlessRepaintKeepsNeverLine"], (
-        "the repaint invented a price date for a material whose cost never moved — the thing the "
-        "pre-2026-09-04 version of this test was protecting")
-    assert p["sameStampNoRepaint"], (
-        "a reply that changed nothing still repainted; the repaint is now unconditional")
-    assert p["missingEditorDoesNotBlankIt"], (
-        "a reply without updated_by wiped the editor we already knew about")
-    assert p["quietPatchStillBumpedVersion"], "the version stamp stopped being adopted"
-    assert p["assemblySaveDoesNotRepaintItems"]
-
-
-@needs_node
-def test_the_history_cell_names_who_created_and_who_edited_each_material(ran):
-    """Hanz, 2026-09-04: "In the items tab we must put the name of who created it and who edited
-    it". Both are real columns — `owner_email` always existed, `updated_by` was added the same day
-    — and both render through CRM.nameOf, the app's one email→display-name convention, so a person
-    reads identically here and on the Assemblies rail."""
-    a = ran["authorship"]
-    assert a["creatorReadsAsAName"], "the Added line does not name who filed the material"
-    assert a["creatorIsNotAnEmail"], "the raw address is on screen instead of the name"
-    assert a["editorReadsAsAName"], "the Edited line does not name who last changed it"
-    assert a["editorDateShown"], "the edit time is missing or not in business time"
-
-
-@needs_node
-def test_an_unedited_material_is_not_credited_as_an_edit_by_its_creator(ran):
-    """A create stamps `created_at` and `updated_at` in the same write, so equal stamps mean
-    nothing has happened since the row was filed. Reading that as an edit would tell every
-    estimator that Kyle edited all 40 materials at the moment he added them."""
-    a = ran["authorship"]
-    assert a["untouchedSaysNotEdited"]
-    assert a["untouchedNamesNoEditor"], "an untouched row named an editor"
-    assert a["untouchedStillNamesCreator"], (
-        "'not edited' also blanked the creator, so the row names nobody at all")
-
-
-@needs_node
-def test_a_row_older_than_the_column_says_unknown_rather_than_guessing(ran):
-    """`updated_by` landed on 2026-09-04, so every row edited before that carries no editor and
-    never will. A bare date there reads as a name that failed to load, and falling back to
-    `owner_email` would attribute somebody else's edit to whoever filed it."""
-    a = ran["authorship"]
-    assert a["legacyEditSaysUnknown"]
-    assert a["legacyDoesNotInventAnEditor"], "the creator was credited with an edit they may not "\
-        "have made"
-
-
-@needs_node
-def test_the_price_line_takes_no_author(ran):
-    """`cost_updated_at` is decided server-side when the cost really moved, and no column records
-    who moved it. Pairing it with `updated_by` would attribute a price change to whoever last
-    fixed a spelling — a wrong name against a number, which is worse than no name."""
-    assert ran["authorship"]["priceLineHasNoAuthor"]
-
-
-@needs_node
-def test_the_editor_is_adopted_off_the_reply_not_left_until_a_reload(ran):
-    """The same failure the price date had, one column over: `updated_by` is stamped from the
-    bearer token, so the reply is the only place the client can learn it."""
-    e = ran["adoptEditor"]
-    assert e["editorAdopted"], "the reply's editor was thrown away"
-    assert e["repainted"], "nothing was repainted, so the cell still shows the old editor"
-    assert e["repaintNamesTheEditor"], "the repaint did not carry the new name"
-    assert e["repaintDroppedNotEditedSince"], (
-        "the row still claims it was never edited after an edit landed")
-    # The editor branch on its own, both dates held still. Without this the branch is invisible:
-    # a mutation deleting its repaint trigger passed every other test here, because they all move
-    # `updated_at` in the same reply and the repaint fired on that instead.
-    assert e["editorAloneRepaints"], (
-        "a reply that changed only updated_by did not repaint, so the branch that adopts it is "
-        "not driving anything")
-    assert e["editorAloneNamesTheEditor"]
 
 
 @needs_node
@@ -2859,3 +3233,368 @@ def test_a_failed_save_does_not_silence_the_record_for_good(ran):
     Mutation: move the `delete inFlight[key]` out of the finally and onto the success path."""
     assert ran["inFlight"]["savesAgainAfterAFailure"], (
         "after a 500 the record never saved again — the in-flight lock was not released")
+
+
+@needs_node
+def test_the_work_type_tabs_narrow_the_defaults_without_hiding_what_was_already_set(ran):
+    """Hanz, 2026-09-17: "how many tabs we need for each work type I'm referring to epoxy,
+    polish, combo, etc."
+
+    FIVE, and they are markup.TABS -- the tabs of Kyle's own workbook and the list the markup
+    rules are already filed under. COMBO IS NOT ONE: detect_work_type() returns combo for which
+    PROPOSAL to write, and a combo job runs on the epoxy AND polish tabs, so it reads both lists
+    rather than keeping a third that has to agree with two others.
+
+    THE LOAD-BEARING RULE IS THAT EMPTY MEANS EVERY TAB. Every row set before this column
+    existed carries no list, so it must keep appearing everywhere. Get that backwards and the
+    day these tabs deploy, everybody's existing defaults vanish from a screen that still says
+    they are set.
+    """
+    w = ran["workTypeTabs"]
+    assert w["tabsAreTheSheetTabs"] == ["polish", "seal", "epoxy", "leveling", "gyp"], (
+        "the work types drifted from markup.TABS: %s" % w["tabsAreTheSheetTabs"])
+    assert w["comboIsNotATab"], (
+        "combo is a proposal work type, not a sheet tab; a combo bid reads epoxy and polish")
+    assert w["unnarrowedOnAll"], (
+        "a default with no work types vanished from a tab -- every row set before this column "
+        "existed has none, so this is everybody's existing defaults disappearing")
+    assert w["unnarrowedLaborOnAll"], "the same, for a labor line"
+    assert w["epoxyOnlyOnEpoxy"], "an epoxy-only material is showing on other tabs"
+    assert w["polishOnlyOnPolish"], "a polish-only assembly is showing on other tabs"
+    assert w["gypLaborOnlyOnGyp"], "a gyp-only labor line is showing on other tabs"
+    assert w["travelOnEveryTab"], (
+        "Travel was filtered out; it is seeded into every bid whatever tab it sits on")
+
+
+# ── the Takeoff conditions stopped being "built in" ────────────────────
+@needs_node
+def test_the_takeoff_conditions_are_editable_and_say_no_such_thing_as_built_in(ran):
+    """Hanz, twice. First: "All line items and the default items in assemblies should be editable
+    please don't put in a hard coded or built in line items." Then, seeing the three conditions
+    still carrying the chip: "I told you to remove the built-in and keep and make everything
+    editable in the takeoff."
+
+    AND THE YES/NO WENT WITH IT, 2026-09-19. Hanz, looking at the three selects: "remove these
+    yes and no what are these for?" The column they sat in is headed "How it is priced" and every
+    other row in it answers that question; a Yes/No answers a different one, in a control that
+    made the row read like a form. So the cell now says what the line costs -- $500.00 a kit,
+    $0.14 a square foot -- and whether a new bid buys it is said by the row being listed at all,
+    exactly as a favourited material says it.
+
+    THE FIGURES ARE THE ENGINE'S OWN. RATES.JOINT_FILLER_KIT_COST and RATES.DYE_PER_SF are what
+    jointFillerCost and dyeCost charge, reached here through the real module, so a page showing a
+    rate the bid does not charge cannot pass. A second copy of a rate is the one thing on an
+    estimating screen that goes stale without looking stale.
+
+    EXECUTED, not read. These assertions come off the RENDERED row, because a regex over the
+    renderer's source cannot tell a wired control from a dead one -- which is exactly how the
+    "+ Add a labor line" button shipped green on this same tab and Hanz had to report it twice.
+    The change itself is DRIVEN in the next test.
+
+    THE ANSWER IS EDITABLE; THE CELL IS NOT. Polish!E29 is a fact about the workbook Kyle
+    maintains. A second box pointing the joint-filler answer somewhere else would write a Yes/No
+    literal over one of his formulas, and nothing on any screen would say so -- so the cell is
+    printed beside the price rather than offered as an input.
+
+    Mutation: put `actions: '<span class="builtin">Built in</span>'` back on the Conditions group,
+    or put the select back in conditionPriceCell."""
+    t = ran["defaultsTakeoffList"]
+    assert t["conditionsAreListedWhenOn"], (
+        "a condition an admin has switched on is not listed among the defaults, so the Defaults "
+        "tab is not showing what a new bid opens with")
+    assert t["noBuiltInChip"], (
+        "a 'Built in' chip is still on the Takeoff defaults table")
+    assert t["noYesNoSelect"], (
+        "a Yes/No select is still in the priced column -- Hanz: \"remove these yes and no what "
+        "are these for?\"")
+    assert t["saysWhichCellItWrites"], (
+        "the row no longer says which workbook cell the answer lands in")
+    assert t["cellIsNotAnInput"], (
+        "the workbook cell is offered as an editable field; re-pointing an answer would write a "
+        "Yes/No literal over one of Kyle's formulas")
+    # THE COLUMN ANSWERS ITS OWN HEADING. These figures come out of the REAL RATES through the
+    # real module -- a rate restated on the page instead of read from the engine would pass a
+    # test that typed the number here and fail an estimator reading the bid.
+    assert t["jointFillerShowsItsKitPrice"], (
+        "joint filler does not say what a kit costs, in a column headed 'How it is priced'")
+    assert t["jointFillerSaysWhatTheKitCovers"], (
+        "the kit price is shown with nothing to divide it by, so the row says $500 without "
+        "saying $500 of what")
+    assert t["dyeShowsItsRate"], "dye does not say what it costs per square foot"
+    assert t["removeExistingSaysItHasNoMaterialCost"], (
+        "remove-existing shows a material cost it does not have, or shows nothing at all; it is "
+        "a labor modifier and the row has to say where it IS priced")
+
+
+@needs_node
+def test_all_three_takeoff_conditions_ship_off_and_are_listed_saying_so(ran):
+    """THE PRICING HALF OF Hanz's 2026-09-19 decision, and the reason the selects could go.
+
+    joint_filler shipped ON until today, transcribed faithfully from Kyle's template, which has
+    Polish!E29 = "Yes". That was right while the condition moved no money and wrong from the
+    moment it did: since 2026-09-18 jointFillerCost charges one $500 kit per 3,500 sq ft, so
+    every new polish bid was quietly carrying $2,500 on a 17,500 SF floor that nobody had asked
+    for and no screen had made anybody decide. All three now start off and the estimator switches
+    on what the job needs, on the estimate's own Takeoff step.
+
+    AND ALL THREE ARE STILL LISTED, which is the 2026-09-21 correction and the reverse of what
+    this test asserted for two days. Off used to mean absent from the table, by analogy with an
+    item that is not a favourite, and Hanz found the Materials list with none of them in it:
+    "Joint filler and Dye do not appear as materials in the deafult?" -- then "list them but they
+    are also materials". The analogy was wrong: a non-favourite material is one of forty rows in
+    a library and hiding it is how the list stays readable, where these are a fixed, named set of
+    three that every polish bid has an opinion about. So each row is permanent, states which way
+    it is set, and carries the button for the direction it can move in.
+
+    READ THROUGH THE REAL freshModel, never restated here, so a literal put back in
+    polish-bid-core reds this rather than passing against a copy. And asserted on a fixture that
+    overrides NOTHING -- the test above switches all three on so there are rows to look at, which
+    is the other half of the same claim.
+
+    Mutation: set `joint_filler: true` in freshModel().conditions. `noneOfThemOn` goes red, and
+    so does the $2,500 that moves through test_polish_estimate_page's remodel-tax figures."""
+    s = ran["defaultsShippedConditions"]
+    assert s["offersTheThree"] == "dye,joint_filler,remove_existing_jf", (
+        "the Defaults tab no longer offers the same three conditions: %r" % s["offersTheThree"])
+    assert s["noneOfThemOn"], (
+        "a Takeoff condition still ships ON. joint_filler is the one that costs money: it adds a "
+        "$500 kit per 3,500 sq ft to a bid nobody has priced yet")
+    assert s["allThreeListedThoughAllThreeAreOff"], (
+        "a condition that ships off is not on the Defaults tab at all; this is the state Hanz "
+        "reported, where the Materials list had none of the three in it")
+    assert s["andEachOffersAnAdd"], (
+        "a listed-but-off condition offers no way to turn it on, so the row is a read-only "
+        "statement about a default nobody can change from the tab that owns defaults")
+    assert s["noneOffersRemove"], (
+        "a condition that is OFF is offering Remove, which would send on=false for something "
+        "already off and tell an admin it had been on")
+    assert s["andEachSaysItIsNotInABid"], (
+        "a priced row sits in a list headed 'what a new bid opens holding' without saying it is "
+        "not in one, so an admin reads three charges into every new bid that are not there")
+    assert s["andNothingElseIsInTheTable"], (
+        "the fixture has no favourites, so anything else in this table means the rows above were "
+        "not the three conditions and the assertions are reading something else")
+
+
+@needs_node
+def test_the_three_conditions_are_materials_with_the_same_two_buttons(ran):
+    """Hanz, 2026-09-18, with the tab open: "die and joint filler are supposed to be materials not
+    something that is default", and then, pointing at the three rows sitting under their own
+    Conditions heading with a chip where the buttons should be: "just put these 3 in the materials
+    section with the same buttons."
+
+    They are what a bid BUYS, so they are listed with the rest of what a bid buys. A separate
+    heading said they were a different kind of thing, and the chip in the actions column said the
+    row was not yours to change -- which is the "built in" complaint over again in a different
+    word.
+
+    SLICED OUT OF THE RENDERED TABLE, between the Materials heading and the next one, so a row
+    that merely exists somewhere in the list cannot pass. And Remove is matched CHARACTER FOR
+    CHARACTER against what defaultRowActions draws for a material -- same classes, same word --
+    because "the same buttons" is the request, and a lookalike that read "Delete" or dropped the
+    danger class is the inconsistency he was pointing at.
+
+    EDIT IS GONE, AND THAT IS THE FIX RATHER THAN A GAP. Edit on this table means "go to where
+    this thing is defined so you can change it": an assembly's panel, a material's Items row. A
+    condition's answer is what Remove and the Add path already own, and its rate lives in Kyle's
+    workbook and in RATES with no screen behind it to go to. The Edit it used to carry put the
+    caret in the select beside it; with the select gone it would open nothing -- and a button that
+    opens nothing is the complaint that started this entire thread. One button that works beats
+    one that works and one that lies.
+
+    Mutation: put the Conditions group back in takeoffDefaultGroups, or swap conditionRowActions
+    for the old '<span class="wtall">Every new bid</span>'."""
+    t = ran["defaultsTakeoffList"]
+    assert t["conditionsSitUnderMaterials"], (
+        "the three conditions are not under the Materials heading")
+    assert t["noConditionsHeading"], "a Conditions heading is still drawn"
+    assert t["conditionsCarryTheSameRemove"], (
+        "a condition row does not carry the same Remove button a material row does")
+    assert t["noDeadEditOnAConditionRow"], (
+        "an Edit button is still on a condition row. There is nowhere for it to go now that the "
+        "select it used to focus is gone, so it would open nothing")
+    assert t["noEveryNewBidChip"], (
+        "the 'Every new bid' chip is still in the actions column, where the buttons go")
+    assert t["removeIsRoutedToTheSaver"], (
+        "Remove has no handler -- a button with nothing behind it renders exactly like a live "
+        "one, which is how '+ Add a labor line' shipped green")
+    assert t["addIsRoutedToTheSaver"], (
+        "the Add path does not route a condition to setConditionDefault, so a condition that was "
+        "removed could never be put back -- a worse control than the select it replaced")
+    assert t["noStaleChangeListener"], (
+        "a `change` listener is still reading data-cond-key, an attribute this page no longer "
+        "renders; dead wiring reads exactly like live wiring")
+
+
+@needs_node
+def test_the_work_type_chips_actually_scope_a_row_and_the_filter_actually_filters(ran):
+    """Hanz, 2026-09-21: "the filters in items in assemblies on the default items in assemblies.
+    Is not working."
+
+    IT WAS NOT. `default_work_types` was a column with a reader and no writer: library.py has
+    accepted, coerced and returned it on items, assemblies AND labor since the day it landed;
+    library.js only ever READ it, in appliesToWorkType and in a workTypeLabel that was never
+    called. So every row in the library carried `[]`, appliesToWorkType reads `[]` as "applies
+    everywhere", and all five work-type chips over the table rendered one identical list -- which
+    is why a material named gYP sat under Polish in his screenshot.
+
+    A FILTER OVER A FIELD NOTHING CAN SET IS A DEAD CONTROL, and the whole reason this file drives
+    everything is that a dead one renders exactly like a live one. So every assertion below
+    presses the chip and reads the rendered table back: the write that would go, the row leaving
+    the list it no longer belongs to, and the row nobody touched staying put.
+
+    EMPTY MEANS ALL FIVE, and it is asserted in both directions. That is not a rule invented here
+    -- it is what appliesToWorkType has always read `[]` as, and what every row configured before
+    the column existed relies on -- so pressing the last chip off returns a row to all five rather
+    than stranding it in none.
+
+    Mutations, all five run and all five red -- NOT on patchWorkTypes, which this harness stubs
+    (the network and only the network, as everywhere else in this file), so breaking library.js's
+    copy of it would prove nothing:
+      * send `[wt]` instead of `next`            -> wroteTheServer
+      * drop renderDefaultTakeoff() on success   -> scopedRowLeavesThePolishList, and ONLY that
+        one, which is the exact shape of the bug being fixed: the write lands, the screen does not
+      * drop the rollback on refusal             -> refusedWritePutsItBack
+      * appliesToWorkType always returns true    -> scopedRowLeavesThePolishList
+      * draw four chips instead of five          -> fiveChipsOnAMaterial"""
+    w = ran["rowWorkTypes"]
+    assert w["fiveChipsOnAMaterial"] and w["fiveChipsOnAnAssembly"], (
+        "a library row does not carry the five work-type chips, so there is no way to scope it "
+        "and the filter above the table has nothing to filter on")
+    assert w["nonePressedToStart"], (
+        "a chip is pressed on a row whose default_work_types is [], so the cell disagrees with "
+        "the column")
+    assert w["saysAllWorkTypes"], (
+        "an unscoped row shows five unpressed chips and no words, which reads as applying to "
+        "nothing when it applies to everything")
+    assert w["wroteTheServer"], (
+        "the chip press sent no write, or sent a delta instead of the whole list -- the endpoint "
+        "REPLACES the column, so a body carrying only the chip that moved wipes the others")
+    assert w["scopedRowLeavesThePolishList"], (
+        "scoping a row to gyp left it on the polish list; this is the defect itself -- the press "
+        "reached the server and not the screen")
+    assert w["theOtherRowsStay"], (
+        "scoping one row moved the others, so the press is not specific to the row it was on")
+    assert w["scopedRowIsAbsentBefore"] and w["andComesBackWhenTheLastChipComesOff"], (
+        "taking the last chip off did not return the row to every work type, so a row can be "
+        "scoped into a corner it cannot come back from")
+    assert w["andSaysAllWorkTypesAgain"], (
+        "a row back to every work type does not say so, so an admin cannot tell it from a row "
+        "scoped to the tab they happen to be on")
+    assert w["unscopedWroteAnEmptyList"], (
+        "taking the last chip off sent something other than [], which is the one value "
+        "appliesToWorkType reads as every work type")
+    assert w["refusedWritePutsItBack"], (
+        "a refused write left the new scope on screen, telling an admin the Polish tab no longer "
+        "offers something it still offers")
+    assert w["refusedWriteSaysSo"], "a refused write said nothing"
+    assert w["noChipsOnACondition"], (
+        "a condition carries work-type chips; it is not a library row and has no "
+        "default_work_types column for the press to write")
+    assert w["andTheConditionSaysWhereItApplies"], (
+        "a condition's work-type cell is blank, which reads as a row whose chips failed to draw")
+
+
+@needs_node
+def test_changing_a_condition_default_saves_it_and_a_refusal_puts_it_back(ran):
+    """DRIVEN THROUGH THE HANDLER the select's `change` calls, not asserted off the markup.
+
+    THE STORED ANSWER IS AN OVERRIDE OF THE SHIPPED ONE, merged through the ESTIMATE'S OWN
+    seedConditionDefaults rather than a second merge written on this page. Two merges is two
+    chances for the Library page to describe a bid it does not agree with, and a page claiming
+    joint filler ships off while every new bid opens with it on is worse than no page at all.
+
+    BOTH DIRECTIONS, BECAUSE BOTH ARE NOW BUTTONS. With the Yes/No select gone, "on" and "off"
+    are which button the row carries -- Remove on a condition a new bid buys, Add on one it does
+    not. Since 2026-09-21 the ROW ITSELF IS PERMANENT either way, so Remove flips the button
+    rather than taking the line away, and both halves of that are asserted: no Remove left, and
+    an Add in its place. The old assertion read `!listed(...)` alone, which kept passing through
+    that change while quietly meaning something else, because `listed` tests for a Remove button
+    and not for the row.
+
+    THE ADD LIST NO LONGER OFFERS THEM. It was the only way back on while an off condition was
+    unlisted; now that every row carries its own Add, offering them there too would put the same
+    three names twice on one screen.
+
+    A REFUSED SAVE PUTS THE ROW BACK and says why, which is this page's standing rule for a
+    failed write: a list that keeps the new state after the server said no tells an admin every
+    new bid now opens differently when it does not, and they would find that out from a bid.
+
+    Mutation: drop the `renderDefaultTakeoff()` from setConditionDefault's catch. The refused save
+    leaves the wrong list on screen and `refusedSavePutsItBack` goes red."""
+    c = ran["conditionDefaults"]
+    assert c["storedOverrideWins"], (
+        "a stored 'on' for joint filler did not beat the shipped 'off', so the tab is showing a "
+        "set of defaults no new bid actually opens with")
+    assert c["untouchedOnesKeepShipped"], (
+        "overriding one condition moved the two nobody touched")
+    assert c["startsListed"] and c["removeFlipsTheRowToAdd"], (
+        "Remove did not reach the rendered table; a handler that wrote the variable and forgot "
+        "to repaint looks identical until the next reload")
+    assert c["andTheRowStaysOnScreen"], (
+        "Remove took the whole line away instead of flipping its button, which is the behaviour "
+        "Hanz reported as the three conditions being missing from Materials")
+    assert c["wroteTheServer"], (
+        "the press sent no write, or sent the wrong body -- a dead control renders exactly like a "
+        "live one")
+    assert c["keepsOneRowPerCondition"], (
+        "the press appended a second row for the same condition instead of replacing it")
+    # THE WAY BACK ON, which is now the row's own Add rather than a trip through the add list.
+    # A missing add arm is not an inconvenience -- it is a default that can be destroyed and not
+    # rebuilt.
+    assert c["startsOffAndOffersAnAdd"] and c["addPutsTheRowBack"], (
+        "adding a condition back did not reach the rendered table, so Remove is a one-way door")
+    assert c["addWroteTheServer"], "adding a condition back sent no write, or the wrong body"
+    assert c["addedRowIsPriced"], (
+        "a condition put back shows no price, so the row it returns as is not the row it left as")
+    # AND THE ADD LIST NO LONGER CARRIES THEM, because the row does. Two offers of one default on
+    # one screen is the duplicate this asserts against -- a search for "dye" answering with a row
+    # already six lines up the page.
+    assert c["browseNoLongerOffersConditions"], (
+        "the Add-a-default browse still offers the three conditions, which are permanent rows "
+        "now, so the same name appears twice on one screen")
+    assert c["andStillOffersTheLibrary"], (
+        "the browse offers nothing at all, so the assertion above passes against a dead list "
+        "rather than against conditions being filtered out of a live one")
+    assert c["searchFindsNoCondition"], (
+        "typing a condition's name into the defaults search offers to add it, and it is already "
+        "listed on the tab -- the same row twice")
+    assert c["refusedSavePutsItBack"], "a refused save left the new state on screen"
+    assert c["refusedSaveSaysSo"], "a refused save said nothing"
+    assert c["refusedSaveDropsTheOptimisticRow"], (
+        "a refused save left its optimistic row in the page's list, so the next repaint shows an "
+        "answer the server never took")
+
+
+def test_the_condition_vocabulary_is_the_same_three_on_both_sides():
+    """ONE LIST OF KEYS, STATED IN THREE PLACES THAT MUST AGREE, and asserted at the source
+    because a mismatch is silent in the worst possible way: a condition filed under a key no
+    reader knows saves with a green tick, reaches nothing, and writes to no cell.
+
+      * `CONDITION_CELLS` in polish-bid-core.js decides which workbook cell each answer writes.
+      * `takeoffConditionDefaults()` in library.js is what the Defaults tab offers.
+      * `KEYS` in backend/condition_defaults.py is what the endpoint will accept.
+
+    Mutation: rename one key in condition_defaults.KEYS. The endpoint then 400s every save the
+    page makes for that condition, and nothing in the product would have said which of the three
+    files was wrong."""
+    js = (FRONTEND / "js" / "library.js").read_text(encoding="utf-8", errors="replace")
+    core = (FRONTEND / "js" / "polish-bid-core.js").read_text(encoding="utf-8", errors="replace")
+    py = (pathlib.Path(__file__).resolve().parents[1] / "condition_defaults.py").read_text(
+        encoding="utf-8", errors="replace")
+
+    page_keys = set(re.findall(r'\{ key: "([a-z_]+)"', js))
+    api_keys = set(re.findall(r'KEYS = \(([^)]*)\)', py)[0].replace('"', "").split(","))
+    api_keys = {k.strip() for k in api_keys if k.strip()}
+    assert page_keys == api_keys == {"joint_filler", "remove_existing_jf", "dye"}, (
+        "the Defaults tab and the endpoint no longer offer the same three conditions:\n"
+        " page: %r\n  api: %r" % (sorted(page_keys), sorted(api_keys)))
+    # …and every one of them is a key CONDITION_CELLS actually writes, or the answer reaches no
+    # cell in Kyle's workbook at all.
+    for key in sorted(api_keys):
+        assert re.search(r"^\s*%s:\s*\{ cells:" % key, core, re.M), (
+            "%s is offered as an editable default but CONDITION_CELLS does not write it, so the "
+            "answer reaches no cell in the workbook" % key)
+    # The seeder and its gate are both exported, or the estimate cannot read either.
+    assert "seedConditionDefaults: seedConditionDefaults" in core
+    assert "conditionsUnstated: conditionsUnstated" in core

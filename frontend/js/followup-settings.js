@@ -62,6 +62,20 @@
     el.className = "alert" + (ok ? " ok" : "");
   }
 
+  /** Which of the cadence emails this page opens on: the one the URL names when the server still
+   *  offers it, `fallback` otherwise.
+   *
+   *  A reload used to drop the estimator back on "Not opened yet" whichever email they were
+   *  editing — and this is a page somebody sits on, retyping a sentence and watching the preview
+   *  redraw, so it is the screen a reload costs most.
+   *
+   *  Without the module this answers `fallback`, which is exactly what the page did before. See
+   *  the note in library.js's showView on why that guard is a `typeof`. */
+  function openingEmail(keys, fallback) {
+    if (typeof window === "undefined" || !window.TWTabMemo) return fallback;
+    return window.TWTabMemo.pick(window.TWTabMemo.read(window, "tab"), keys, fallback);
+  }
+
   // Who last changed this, and when. ONE function, because there are three ways the answer
   // changes — first load, a save, and a reset — and for a while only the first of them updated
   // the line. Saving then left "Never changed — this is the cadence as shipped" on screen
@@ -126,6 +140,12 @@
       // `not_viewed` would leave KEY pointing at nothing: no tab selected, and fillTemplate
       // writing into a template nobody can see.
       if (!LABELS[KEY]) KEY = Object.keys(LABELS)[0];
+      // AND THEN THE EMAIL THE URL NAMES, if it is one the server just offered. Second, not
+      // instead: the line above is the guard for a server that stopped serving `not_viewed`, and
+      // it is what leaves a sane fallback for openingEmail to land on. Checked against the keys
+      // from THIS response, so a link to an email the portal no longer edits opens the first tab
+      // rather than an editor writing into a template nobody can see.
+      KEY = openingEmail(Object.keys(LABELS), KEY);
 
       // Longer when-it-fires wording for the heading under the tabs, same server-owns-it rule.
       if (j.editor_titles && typeof j.editor_titles === "object") {
@@ -302,6 +322,10 @@
     if (!b) return;
     collect();                       // keep what was typed before switching away
     KEY = b.getAttribute("data-key");
+    // So a reload comes back to the email you were writing.
+    if (typeof window !== "undefined" && window.TWTabMemo) {
+      window.TWTabMemo.write(window, { tab: KEY });
+    }
     paintTabs();
     fillTemplate();
     schedulePreview();

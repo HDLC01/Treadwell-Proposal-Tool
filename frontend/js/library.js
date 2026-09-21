@@ -151,10 +151,39 @@
           GLOBAL_MARKUP = (mj.rules || []).filter(function (r) {
             return r.layout === "global" && r.applies;
           }).map(function (r) {
-            return { label: (r.line_key || "").replace(/_/g, " "), formula: r.formula };
+            // id AND line_key KEPT. The Defaults tab can now edit these, and an edit here
+            // PUTs the same markup_rules row the Markup page edits -- one home, two doors.
+            // Dropping the id was what made this list read-only in the first place.
+            return { id: r.id, line_key: r.line_key, layout: r.layout,
+                     label: (r.line_key || "").replace(/_/g, " "), formula: r.formula };
           });
         }
       } catch (e) { GLOBAL_MARKUP = []; }
+      // The Defaults tab's own labor lines, on the same terms and for a sharper reason: the
+      // table behind this endpoint exists on staging and NOT on production, so the request that
+      // answers here answers with nothing there. Its own try, outside the `throw` above, because
+      // the day this page 500s over a list that is empty by design is the day an estimator cannot
+      // open a material. A failure leaves the custom rows absent and Travel still listed.
+      try {
+        var lb = await api("/api/library/labor");
+        if (lb.ok) {
+          var lj = await lb.json();
+          LABOR = lj.labor || [];
+        }
+      } catch (e) { LABOR = []; }
+      // The Takeoff conditions' stored answers, on exactly the same terms and for a
+      // sharper version of the same reason: `condition_defaults` is applied to NEITHER
+      // database yet, so today this answers with nothing everywhere. Empty is not a
+      // failure -- it means nobody has overridden anything, the shipped literals stand,
+      // and the switches below show them. Its own try, outside the `throw` above,
+      // because a table Hanz has not promoted must not cost an estimator the Items tab.
+      try {
+        var cd = await api("/api/condition-defaults");
+        if (cd.ok) {
+          var cj = await cd.json();
+          COND_DEFAULTS = cj.conditions || [];
+        }
+      } catch (e) { COND_DEFAULTS = []; }
       if (!openId || !current()) openId = ASMS.length ? ASMS[0].id : null;
       say("");
       paint();
@@ -240,15 +269,6 @@
     if (kind === "items" && moved) paintDates(known);
   }
 
-  /** Rewrite one row's Dates cell in place.
-   *
-   *  In place, not renderItems(): the debounce fires 600ms after the last keystroke, so the reply
-   *  routinely lands while somebody is still in the field. Rebuilding the row would move their
-   *  caret to the end of it. The Dates cell holds no inputs, so replacing it is safe. */
-  function paintDates(it) {
-    var cell = document.querySelector('[data-item="' + it.id + '"] .datescell');
-    if (cell) cell.innerHTML = datesHtml(it);
-  }
 
   // Somebody else got there first. Show THEIR version rather than leaving a screen that quietly
   // disagrees with the database - and say so, because a silent redraw mid-edit is worse than the
@@ -680,6 +700,58 @@
     return j;
   }
 
+  /** Which work types a default is offered for, sent on every chip press.
+   *
+   *  BESIDE patchDefault RATHER THAN THROUGH IT, for the reason the labor patch below gives:
+   *  that one sends `{ favorite }` and nothing else. library.py has accepted, coerced and
+   *  returned `default_work_types` on items, assemblies AND labor since the column landed --
+   *  this is the half that was missing, and its absence is why the work-type chips filtered
+   *  nothing. Every row in the library carried `[]`, appliesToWorkType reads `[]` as "applies
+   *  everywhere", so all five chips rendered one identical list. Hanz, 2026-09-21: "the filters
+   *  in items in assemblies on the default items in assemblies. Is not working." */
+  async function patchWorkTypes(kind, id, list) {
+    var r = await api("/api/library/" + kind + "/" + encodeURIComponent(id), {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ default_work_types: list }) });
+    var j = await r.json().catch(function () { return {}; });
+    if (!r.ok) throw new Error(j.detail || j.error || ("HTTP " + r.status));
+    return j;
+  }
+
+  /** One labor default's typed fields, sent on Save.
+
+   *  BESIDE patchDefault RATHER THAN THROUGH IT. That one sends `{ favorite }` and nothing else,
+   *  which is the whole of what a takeoff default is. A labor line has a name, a rate and a unit,
+   *  and widening the function every takeoff row presses so it could also carry them would put a
+   *  body behind a control that can never produce one. Adding beside beats editing working. */
+  async function patchLabor(id, body) {
+    var r = await api("/api/library/labor/" + encodeURIComponent(id), {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body) });
+    var j = await r.json().catch(function () { return {}; });
+    if (!r.ok) throw new Error(j.detail || j.error || ("HTTP " + r.status));
+    return j;
+  }
+
+  /** One condition's default answer, sent on the change.
+
+   *  A PUT, NOT A PATCH, because the row IS the answer: there is one editable field and the
+   *  request states it in full. `set_default` upserts on the key, so the first press creates the
+   *  row and every press after it moves the same one -- which is what keeps "one live row per
+   *  condition" true without the client knowing whether a row exists.
+
+   *  BESIDE patchDefault RATHER THAN THROUGH IT, the same call patchLabor makes: that one sends
+   *  `{ favorite }` against /api/library/<kind>/<id>, and a condition has no library row and no
+   *  id. Widening it would put a body behind a control that can never produce one. */
+  async function putConditionDefault(key, on) {
+    var r = await api("/api/condition-defaults/" + encodeURIComponent(key), {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ on: !!on }) });
+    var j = await r.json().catch(function () { return {}; });
+    if (!r.ok) throw new Error(j.detail || j.error || ("HTTP " + r.status));
+    return j;
+  }
+
   // ── items ──────────────────────────────────────────────────────────────────
   /** A dropdown that never loses what the row already says.
    *
@@ -854,6 +926,8 @@
     return '<div class="dupe">Already in the list: ' + esc(names.join(", ")) + "</div>";
   }
 
+
+
   /** "by Hanz" for a row that names someone, and an honest "by unknown" for one that cannot.
    *
    *  `CRM.nameOf` is the app's single email→display-name convention (crm-core.js) — the same one
@@ -866,9 +940,7 @@
   function byHtml(email) {
     var n = CRM.nameOf(String(email || ""));
     return n ? 'by <b>' + esc(n) + "</b>" : 'by <span class="never">unknown</span>';
-  }
-
-  /** Who added it, when the price last moved, and who last changed it.
+  }  /** Who added it, when the price last moved, and who last changed it.
    *
    *  Three lines rather than the original two, because Hanz asked for the NAMES on this tab and
    *  "when" without "who" answers half the question people bring to a shared library.
@@ -881,22 +953,38 @@
    *  `updated_at === created_at` is the server's own way of saying nothing has happened since the
    *  row was filed, because a create stamps both columns in one write. So that case reads as "not
    *  edited since" rather than as an edit by the creator — the same distinction the price line
-   *  already draws with "not since we started tracking". */
+   *  already drew with "not since we started tracking" -- a line this cell no longer prints.
+   *
+   *  TWO LINES, NOT THREE, since 2026-09-18. The price line came out ("too much clutter"): it
+   *  answered "how old is this number?" for a number sitting in the very next column along,
+   *  and it was the third stacked line on every row of a dense editing table. cost_updated_at
+   *  is still stored, still returned, and still what the Price-updated sort orders by. */
   function datesHtml(it) {
     var made = it.created_at ? TW.fmtBizDateTime(it.created_at) : "—";
-    var priced = it.cost_updated_at
-      ? esc(TW.fmtBizDateTime(it.cost_updated_at))
-      : '<span class="never">not since we started tracking</span>';
     var edited = (it.updated_at && it.updated_at !== it.created_at)
       ? "Edited <b>" + esc(TW.fmtBizDateTime(it.updated_at)) + "</b> " + byHtml(it.updated_by)
       : '<span class="never">not edited since</span>';
     return '<div class="dates"><div>Added <b>' + esc(made) + "</b> " +
              byHtml(it.owner_email) + "</div>" +
-           "<div>Price " + priced + "</div>" +
+           // NO PRICE LINE. Hanz, 2026-09-18: "too much clutter" -- three stacked lines on
+           // every row of a dense editing table was two more than anyone reads, and the price
+           // one was the least of them: it answered "how old is this number?" for a number
+           // shown in the very next column along.
+           //
+           // cost_updated_at IS STILL STORED, still returned by the API, and still what the
+           // Price-updated sort orders by. Only the printing went.
            "<div>" + edited + "</div></div>";
   }
 
-  /** The library's own comparison form of a name: case, spacing and punctuation all ignored.
+  /** Rewrite one row's Dates cell in place.
+   *
+   *  In place, not renderItems(): the debounce fires 600ms after the last keystroke, so the reply
+   *  routinely lands while somebody is still in the field. Rebuilding the row would move their
+   *  caret to the end of it. The Dates cell holds no inputs, so replacing it is safe. */
+  function paintDates(it) {
+    var cell = document.querySelector('[data-item="' + it.id + '"] .datescell');
+    if (cell) cell.innerHTML = datesHtml(it);
+  }  /** The library's own comparison form of a name: case, spacing and punctuation all ignored.
    *
    *  Mirrors `_item_key` in backend/library.py, which is what actually REFUSES a duplicate. It is
    *  a mirror rather than the authority, and the two differ on one point worth knowing: Python's
@@ -1897,18 +1985,6 @@
     renderDefaultTakeoff(); renderDefaultLabor();
   }
 
-  /** The three conditions the Takeoff step carries, as defaults.
-   *
-   *  THEY ARE NOT ROWS, and the table says so in its Kind column rather than by hiding them
-   *  somewhere else. An assembly or a material is a line a new estimate OPENS WITH; a condition is
-   *  a question it opens ANSWERED. Both are things somebody set once and every bid then starts
-   *  from, which is what this tab is for.
-   *
-   *  READ FROM polish-bid-core's freshModel, never re-typed, for the same reason Travel is read
-   *  from travelSeed: the answer a new estimate actually opens with lives there, and a second copy
-   *  on this page would go stale the first time somebody changed one and not the other. That is
-   *  not hypothetical -- joint_filler ships ON and dye ships off, and a page claiming the reverse
-   *  would be telling an estimator the opposite of what their next bid does. */
   /** The markup lines that are one rule everywhere, as this page last read them.
    *
    *  FETCHED, NEVER STORED HERE. Bond's rate belongs to the Markup page's Global tab, and
@@ -1921,26 +1997,172 @@
    *  because a request timed out would be worse than a row that is not there. */
   var GLOBAL_MARKUP = [];
 
+  /** The labor lines somebody typed on the Defaults tab, as this page last read them.
+
+   *  FETCHED, AND EMPTY WHEN THE FETCH CANNOT ANSWER. `library_labor` was applied to staging on
+   *  2026-09-17 and production does not have it yet, by decision -- staging first, prod when Hanz
+   *  promotes it. So on prod today this request answers with nothing, and it has to leave a page
+   *  that works: a tab that 500s over a list which is legitimately empty there would take Items
+   *  and Assemblies down with it. No custom lines is the honest answer; a broken tab is not.
+
+   *  TRAVEL IS NOT IN HERE. It is seeded into every estimate by travelSeed and it is not a row of
+   *  this table -- see the renderer below, and the note on it. */
+  var LABOR = [];
+
+  /** The answers an admin has already set for the Takeoff conditions, as this page last read them.
+
+   *  ONLY THE OVERRIDES, never the whole answer. What a new estimate opens answering for joint
+   *  filler, remove-existing and dye lives in freshModel() in polish-bid-core.js; a row in here
+   *  says somebody changed one of those three on this tab. takeoffConditionDefaults() merges the
+   *  two through the estimate's OWN seedConditionDefaults, so this page cannot arrive at a
+   *  different answer from the bid it is describing.
+
+   *  EMPTY WHEN THE READ CANNOT ANSWER, and today that is everywhere: `condition_defaults` is
+   *  written into both schema files and applied to neither, pending Hanz. Empty is the honest
+   *  answer -- the shipped literals stand and the rows show them -- and a tab that 500s over a
+   *  table nobody has promoted would take Items and Assemblies down with it. */
+  var COND_DEFAULTS = [];
+
+  /** The three conditions the Takeoff step carries, and what a new estimate answers for each.
+   *
+   *  THEY WERE "BUILT IN" AND THEY ARE NOT ANY MORE. Hanz, twice: "All line items and the default
+   *  items in assemblies should be editable please don't put in a hard coded or built in line
+   *  items", and then, seeing the chip still there: "I told you to remove the built-in and keep and
+   *  make everything editable in the takeoff." Changing one changes what the NEXT blank bid opens
+   *  answering, and the row leaves this list when it is off.
+   *
+   *  THE YES/NO SELECT IS GONE, 2026-09-19. Hanz, looking at the three of them: "remove these yes
+   *  and no what are these for?" -- and the honest answer was that the column they sat in is
+   *  headed "How it is priced", where every other row says what the line costs. A Yes/No in that
+   *  column answers a question the column is not asking. So the cell now reads like the material
+   *  rows above it -- $500.00 per kit, $0.14 per SF -- and the on/off is the row's PRESENCE, the
+   *  same as it is for a favourited material: listed means a new bid buys it, removed means it
+   *  does not. See conditionPriceCell and takeoffDefaultGroups.
+   *
+   *  WHAT IS EDITABLE IS THE ANSWER, NOT THE CELL. Polish!E29 is a fact about the workbook Kyle
+   *  maintains -- pointing the joint-filler answer somewhere else would put a Yes/No literal over
+   *  one of his formulas and nothing on any screen would say so. So the cell is printed beside the
+   *  price rather than offered as a box.
+   *
+   *  AND NOT THE RATE EITHER, today. $500 a kit is Kyle's C29 and $0.14 a square foot is his C25,
+   *  and this page reads both out of RATES rather than restating them -- a second copy of a rate
+   *  is the one thing on an estimating screen that can go stale without looking stale. Making
+   *  them typeable means giving them a home to be typed into, which is a store this tab does not
+   *  have; it is the next thing to build here, not something to fake with a box that writes
+   *  nowhere.
+   *
+   *  THE SHIPPED ANSWER IS STILL READ FROM freshModel, and the stored overrides are written over
+   *  it through the ESTIMATE'S OWN seedConditionDefaults rather than a merge written again here.
+   *  Two merges is two chances for this page to describe a bid it does not agree with -- and the
+   *  page claiming joint filler ships off while every new bid opens with it on is worse than no
+   *  page at all. `B.seedConditionDefaults` is guarded because window.TWPolishBid is a script tag
+   *  that can fail to load, and a Defaults tab that throws would take Items and Assemblies with it.
+   *
+   *  THIS LIST IS THE VOCABULARY, and backend/condition_defaults.KEYS is the same three.
+   *  test_condition_defaults.py reads both files and pins them together, so a key renamed on one
+   *  side cannot quietly become a row that saves and is read by nothing. */
   function takeoffConditionDefaults() {
     var B = window.TWPolishBid;
     if (!B || !B.freshModel) return [];
-    var c = (B.freshModel() || {}).conditions || {};
+    var shipped = (B.freshModel() || {}).conditions || {};
+    var c = B.seedConditionDefaults ? B.seedConditionDefaults(shipped, COND_DEFAULTS) : shipped;
+    // READ OFF RATES, NEVER RETYPED. These are the same two constants jointFillerCost and
+    // dyeCost price from, so a figure shown here cannot disagree with the figure charged. The
+    // guard is the same one `B` carries above: a page that threw because the shared module did
+    // not load would take Items and Assemblies down with it, and an em dash is a better answer
+    // than a blank screen.
+    var R = (B.RATES || {});
+    var kit = L.num(R.JOINT_FILLER_KIT_COST) != null ? L.money(R.JOINT_FILLER_KIT_COST) : null;
+    var dye = L.num(R.DYE_PER_SF) != null ? L.money(R.DYE_PER_SF) : null;
     return [
-      { label: "Joint filler", on: !!c.joint_filler, cell: "Polish!E29",
-        why: "One kit per 3,500 sq ft, counted by the workbook" },
-      { label: "Remove existing joint filler", on: !!c.remove_existing_jf, cell: "Polish!F29",
-        why: "A fourth hand on the joint-filler line" },
-      { label: "Dye", on: !!c.dye, cell: "Polish!E25",
-        why: "Two coats across the polished area" }
+      { key: "joint_filler", label: "Joint filler", on: !!c.joint_filler, cell: "Polish!E29",
+        priced: kit ? kit + " per kit \u00b7 one kit per 3,500 sq ft"
+                    : "No rate loaded for the kit" },
+      { key: "remove_existing_jf", label: "Remove existing joint filler",
+        on: !!c.remove_existing_jf, cell: "Polish!F29",
+        // NO PRICE ON THIS SCREEN, and saying so is the point. It is a fourth hand on the
+        // joint-filler line -- a labor modifier the estimator prices on the Labor step -- so a
+        // dollar figure here would be an invention. "Nothing here" is a real answer; a made-up
+        // $0.00 would read as free.
+        priced: "No material cost \u00b7 a labor modifier, priced on the Labor step" },
+      { key: "dye", label: "Dye", on: !!c.dye, cell: "Polish!E25",
+        priced: dye ? dye + " per SF \u00b7 two coats across the polished area"
+                    : "No rate loaded for dye" }
     ];
   }
 
+  /** What one condition COSTS, for the column headed "How it is priced".
+   *
+   *  IT WAS A YES/NO SELECT UNTIL 2026-09-19. Hanz: "remove these yes and no what are these
+   *  for?" The column asks what the line costs and every other row in it answers that; these
+   *  three answered a different question, in a control that made the row look like a form. Now
+   *  they read like the material rows they sit among -- the rate, the unit, and what the rate is
+   *  charged against -- and whether a new bid buys the line is said by the row being listed at
+   *  all, which is how a favourited material says it too.
+   *
+   *  STILL SEPARATE FROM THE GROUPING so a test can execute it and read one row's cell back,
+   *  rather than regex-matching it out of the whole table. This page has already shipped a dead
+   *  button behind a green markup assertion.
+   *
+   *  RENAMED WITH THE CHANGE, from conditionControl. A function called `control` that returns a
+   *  sentence is the near-miss naming this repo pays for elsewhere -- library-ui-harness.js lifts
+   *  it by name, so the rename has to be made there in the same breath or every scenario in that
+   *  file dies on a ReferenceError at once. */
+  function conditionPriceCell(c) {
+    // THE STATE IS SPELT OUT, not left to the button. Since 2026-09-21 all three are listed
+    // whether or not a new bid buys them (see takeoffDefaultGroups), so the row's PRESENCE no
+    // longer carries the answer the way it did for two days -- and a priced row sitting in a
+    // list headed "what a new bid opens holding" reads as included unless it says otherwise.
+    return esc(c.priced) +
+      ' <span class="wtall">writes ' + esc(c.cell) + " · " +
+      (c.on ? "in every new bid" : "not in a new bid") + "</span>";
+  }
+
+  /** One condition's answer, sent on the change, with the optimistic flip and the put-it-back in
+   *  one place -- the split setDefault's own note argues for and for the same reason: two
+   *  functions is two places to forget the rollback.
+   *
+   *  IT REPAINTS THE TAKEOFF LIST AND NOTHING ELSE. `paint()` would rebuild the Items tab, the
+   *  assembly rail and the open panel, none of which a condition answer touches -- and one of
+   *  which may have a half-typed labor line in it (see the note on LABOR_FORM).
+   *
+   *  A FAILED SAVE PUTS THE ROW BACK and says why. Since 2026-09-19 the row's PRESENCE is the
+   *  answer -- Remove takes it off the list, Add puts it back -- so a refused write that left the
+   *  list alone would be showing an admin a set of defaults no new bid actually opens with, and
+   *  they would find that out from a bid. The rollback is the same reassign-and-repaint either
+   *  way round, which is why add and remove share this one function. */
+  async function setConditionDefault(key, on) {
+    var was = COND_DEFAULTS;
+    var next = [];
+    var found = false;
+    for (var i = 0; i < was.length; i++) {
+      if (was[i] && was[i].key === key) { next.push({ key: key, on: !!on }); found = true; }
+      else next.push(was[i]);
+    }
+    if (!found) next.push({ key: key, on: !!on });
+    COND_DEFAULTS = next;
+    renderDefaultTakeoff();
+    try {
+      await putConditionDefault(key, !!on);
+    } catch (err) {
+      COND_DEFAULTS = was;
+      renderDefaultTakeoff();
+      say("Couldn't save that. " + err.message);
+    }
+  }
+
+
   /** The Takeoff defaults: what a new estimate opens holding, and what it opens having answered.
    *
-   *  THE SWITCHED-ON LIBRARY ROWS COME FIRST because they are the ones somebody chose here. The
-   *  conditions follow because they are built in -- nobody set them on this page and nobody can
-   *  unset them here either, which is why they carry no switch and say "Built in" the way Travel
-   *  does under Labor. */
+   *  THE SWITCHED-ON LIBRARY ROWS COME FIRST because they are the ones somebody chose here.
+   *  The conditions come last because they are the odd kind out: an assembly or a material is a
+   *  line a new estimate OPENS WITH, and a condition is a question it opens ANSWERED.
+   *
+   *  NOT because they are built in. They were, until 2026-09-18, and this comment used to say
+   *  so -- "nobody set them on this page and nobody can unset them here either". Hanz twice
+   *  asked for that to stop being true, and it has: a condition is listed when a new bid buys it
+   *  and removed when it does not, and both directions write condition_defaults. Travel under
+   *  Labor is the one row on this tab that is still built in, and its own note says why. */
   /** The Defaults tab's own way in, which is what lets the switches come off the other two tabs.
    *
    *  THE SEARCH IS THE CONTROL, not a filter over what is already listed. Hanz asked for it "for
@@ -1986,12 +2208,111 @@
     }
   }
 
+  /** Toggle one work type on one library row. OPTIMISTIC, WITH THE ROLLBACK IN HERE, exactly
+   *  like setDefault above and setConditionDefault below -- the same argument applies: two
+   *  functions is two places to forget to put the row back.
+   *
+   *  EMPTY MEANS EVERY WORK TYPE and that is not a special case invented here -- it is what
+   *  appliesToWorkType has always read `[]` as, and what every row in the library currently
+   *  relies on. So pressing the last one off returns the row to all five rather than to none,
+   *  and the cell says which of the two it is on every render.
+   *
+   *  renderDefaultTakeoff(), NOT paint(), for the reason setConditionDefault gives below: this
+   *  field is read by this one table and nothing else, and paint() would rebuild the Items tab,
+   *  the assembly rail and the open panel -- one of which may be holding a half-typed labor line.
+   *  The row dropping out of the list when it stops applying to the work type on screen happens
+   *  in that one render. */
+  async function setRowWorkType(kind, id, wt, on) {
+    var list = kind === "assemblies" ? ASMS : ITEMS;
+    var row = null;
+    for (var i = 0; i < list.length; i++) if (list[i].id === id) { row = list[i]; break; }
+    if (!row) return;
+    var was = (row.default_work_types || []).slice();
+    var next = [];
+    for (var j = 0; j < was.length; j++) if (was[j] !== wt) next.push(was[j]);
+    if (on) next.push(wt);
+    row.default_work_types = next;
+    renderDefaultTakeoff();
+    try {
+      await patchWorkTypes(kind, id, next);
+    } catch (err) {
+      row.default_work_types = was;
+      renderDefaultTakeoff();
+      say("Couldn't save that. " + err.message);
+    }
+  }
+
+  /** The five work types as pressable chips, so the filter above the table has something to
+   *  filter ON. Rendered in the row rather than behind an Edit, because Edit leaves this tab
+   *  for the Items table -- which is eight columns wide already -- and because this field is
+   *  read by nothing except the chips a few lines up the same screen.
+   *
+   *  THE CELL STATES THE CONSEQUENCE, not just the state. Going from "all work types" to one
+   *  pressed chip NARROWS the row from five lists to one, which is a bigger move than a chip
+   *  press looks like, so the line under the chips says which it is. */
+  function workTypeCell(kind, row) {
+    var list = (row && row.default_work_types) || [];
+    var chips = WORK_TYPES.map(function (wt) {
+      var on = list.indexOf(wt) !== -1;
+      return '<button class="wtchip" type="button" aria-pressed="' + (on ? "true" : "false") +
+        '" data-wt-toggle="' + esc(kind) + '" data-wt-id="' + esc(row.id) +
+        '" data-wt="' + esc(wt) + '" aria-label="' + esc(row.name || "This line") +
+        (on ? " applies to " : " does not apply to ") + esc(wt) + '">' + esc(wt) + "</button>";
+    }).join("");
+    return '<span class="wtchips">' + chips + "</span>" +
+      '<span class="wtall">' + (list.length ? "" : "All work types") + "</span>";
+  }
+
   function defaultRowActions(kind, id, name) {
-    return '<button class="linkish" type="button" data-def-edit="' + esc(kind) +
+    return '<button class="btn ghost sm" type="button" data-def-edit="' + esc(kind) +
       '" data-def-id="' + esc(id) + '">Edit</button>' +
-      '<button class="linkish danger" type="button" data-def-off="' + esc(kind) +
+      '<button class="btn ghost sm danger" type="button" data-def-off="' + esc(kind) +
       '" data-def-id="' + esc(id) + '" aria-label="Stop ' + esc(name) +
       ' being a default">Remove</button>';
+  }
+
+  /** A condition's Remove, in the same button a material row carries, meaning the same thing.
+   *
+   *  THE SAME BUTTON, LITERALLY. Hanz, 2026-09-18, looking at the three of them sitting under a
+   *  Conditions heading with a chip where the buttons should be: "just put these 3 in the
+   *  materials section with the same buttons." Same class, same word -- a row that looked like
+   *  the others but read differently would be the thing he was pointing at.
+   *
+   *  REMOVE NOW REALLY REMOVES THE ROW, which it did not before. While the Yes/No select was in
+   *  the priced column, Remove wrote the answer to No and left the row sitting there saying No --
+   *  two controls for one answer, and the row stayed on a list of what a new bid opens with while
+   *  saying a new bid does not open with it. With the select gone, "off" is expressed the way a
+   *  material expresses it: the row is not on the list. Remove writes the No and the row goes.
+   *
+   *  AND THE WAY BACK ON IS THE WAY EVERYTHING ELSE COMES ON. A removed condition becomes a
+   *  candidate in this tab's own "Add a takeoff default" search and browse -- see
+   *  defaultCandidates -- so turning one back on is the same motion as making a material a
+   *  default, rather than a second mechanism invented for three rows.
+   *
+   *  THERE IS NO EDIT, AND THAT IS DELIBERATE. Edit on this table means "go to where this thing
+   *  is defined so you can change it": an assembly's panel, a material's Items row. A condition's
+   *  two facts are its answer -- which Remove and the Add path already own -- and its rate, which
+   *  lives in Kyle's workbook and in RATES, with no screen behind it to go to. The Edit this row
+   *  used to carry put the caret in the select beside it; with the select gone it would open
+   *  nothing, and a button that opens nothing is the exact complaint that started this thread. A
+   *  row with one button that works beats a row with one that works and one that lies. */
+  function conditionRowActions(c) {
+    // ADD OR REMOVE, because the row is on screen either way now. Hanz, 2026-09-21, looking at a
+    // Materials list with none of the three in it: "Joint filler and Dye do not appear as
+    // materials in the deafult?" -- then "list them but they are also materials". They are all
+    // three permanent rows from here, so each needs the button for the direction it can move in.
+    //
+    // THE ADD ARM REUSES data-def-add, which the click router already routes by `kind`: an Add
+    // here and an Add in the candidate list are the same write to the same table, and a second
+    // attribute meaning the same thing is a second place to forget.
+    if (!c.on) {
+      return '<button class="btn ghost sm" type="button" data-def-add="conditions"' +
+        ' data-def-id="' + esc(c.key) + '" aria-label="Put ' + esc(c.label) +
+        ' on every new bid">Add</button>';
+    }
+    return '<button class="btn ghost sm danger" type="button" data-cond-off="' + esc(c.key) +
+      '" aria-label="Stop ' + esc(c.label) +
+      ' being on every new bid">Remove</button>';
   }
 
   var DEFAULT_Q = "";
@@ -2000,6 +2321,31 @@
   // there is". Sitting down to set the defaults up is the second one, and an empty query
   // returning nothing made the Add button below the list have nothing to open.
   var DEFAULT_BROWSE = false;
+
+  // WHICH WORK TYPE THE DEFAULTS TAB IS SHOWING. The five are markup.TABS -- the tabs of
+  // Kyle's workbook and the list the markup rules are already filed under. `combo` is not
+  // among them: a combo job runs on the epoxy AND polish tabs, so it reads both lists.
+  var WORK_TYPES = ["polish", "seal", "epoxy", "leveling", "gyp"];
+  var DEFAULT_WT = WORK_TYPES[0];
+
+  /** Does this default belong on the tab currently showing?
+   *
+   *  AN EMPTY LIST MEANS EVERY WORK TYPE, and that is the whole backwards-compatibility
+   *  story: every row set before these tabs existed has no list, so it keeps appearing
+   *  everywhere exactly as it did. Nobody opens this tab to find their defaults gone. */
+  function appliesToWorkType(row, wt) {
+    var list = row && row.default_work_types;
+    if (!list || !list.length) return true;
+    return list.indexOf(wt) !== -1;
+  }
+
+  /** What a row says about where it applies, so the list can be read without clicking
+   *  through all five tabs to find out. */
+  function workTypeLabel(row) {
+    var list = (row && row.default_work_types) || [];
+    if (!list.length) return '<span class="wtall">All work types</span>';
+    return esc(list.join(", "));
+  }
 
   function defaultCandidates() {
     var q = DEFAULT_Q.trim().toLowerCase();
@@ -2015,6 +2361,11 @@
         hits.push({ kind: "items", id: it.id, name: it.name, what: "Material" });
       }
     });
+    // NO CONDITIONS IN HERE, and that is a change from 2026-09-19. While an off condition was
+    // unlisted, this was the only way back on and its absence would have made Remove a one-way
+    // door. Now that all three are permanent rows under Materials with their own Add, offering
+    // them here as well would put the same three names in two places on one screen -- and a
+    // search for "dye" would answer with a row that is already six lines up.
     return { rows: hits.slice(0, DEFAULT_MAX), more: Math.max(0, hits.length - DEFAULT_MAX) };
   }
 
@@ -2031,6 +2382,21 @@
     renderDefaultSearch();
     var abox = $("default-q");
     if (abox) abox.focus();
+  }
+
+  /** Which "add a default" was pressed, and what that opens. NAMED FOR THE SAME REASON THE TWO
+   *  ABOVE ARE: the harness can read a listener body and cannot run one, and its own doc says
+   *  anything with a decision in it belongs in a function a test can call.
+
+   *  THIS IS THE DECISION THAT WAS MISSING. For a day the Labor arm of it did not exist -- the
+   *  button was markup with no handler -- and every test over it passed, because they matched the
+   *  pane for data-add-default="labor" and a dead button carries that attribute perfectly. Hanz
+   *  found it instead, twice. The two arms differ because the two categories do: a takeoff default
+   *  is a library row that already exists and has to be FOUND, and a labor line does not exist
+   *  until somebody TYPES it, so one opens a browser and the other opens a form. */
+  function openDefaultAdd(which) {
+    if (which === "takeoff") openDefaultBrowse();
+    else if (which === "labor") openLaborForm(null);
   }
 
   function renderDefaultSearch() {
@@ -2057,36 +2423,388 @@
       : "");
   }
 
+  // GROUPED, NOT A KIND COLUMN, and the comment in library.html that argued the other way is
+  // replaced rather than ignored. Hanz, 2026-09-17: "for the take off please sub categorize the
+  // containers wheter they are materials or assemblies". The old reasoning was that a column
+  // says "one list read three ways" while sections would say the three are unrelated. That
+  // reasoning survives here: these are SUB-HEADINGS INSIDE ONE TABLE, not four tables. One
+  // list, one scroll, signposted -- which is what he asked for and what that comment wanted.
+  //
+  // The Kind column goes, because with a heading over every group it repeated itself on every
+  // row, and an empty group renders NOTHING rather than a heading over blank space.
+  //
+  // SEPARATE FROM THE RENDERER so a test can execute the grouping and read it back as data.
+  // This page has already shipped a dead button behind a green markup regex once.
+  function takeoffDefaultGroups() {
+    var groups = [
+      { title: "Assemblies",
+        rows: ASMS.filter(function (a) {
+          return a.favorite && appliesToWorkType(a, DEFAULT_WT);
+        }).map(function (a) {
+          var n = (a.lines || []).length;
+          return { name: a.name,
+                   how: n + " item line" + (n === 1 ? "" : "s") + " \u00b7 per " + (a.unit || "SF"),
+                   wt: workTypeCell("assemblies", a),
+                   actions: defaultRowActions("assemblies", a.id, a.name) };
+        }) },
+      { title: "Materials",
+        // JOINT FILLER, REMOVE-EXISTING AND DYE ARE IN HERE, not in a Conditions section of
+        // their own. Hanz, 2026-09-18: "die and joint filler are supposed to be materials not
+        // something that is default", then "just put these 3 in the materials section with the
+        // same buttons." They are what a bid buys, so they are listed with the rest of what a
+        // bid buys, they price themselves in the same column, and they carry the same buttons --
+        // rather than the chip that could not be pressed. ALL THREE ARE LISTED, on or off; the
+        // paragraph below this says why, and it used to say the opposite.
+        rows: ITEMS.filter(function (it) {
+          return it.favorite && appliesToWorkType(it, DEFAULT_WT);
+        }).map(function (it) {
+          return { name: it.name,
+                   how: L.num(it.unit_cost) != null
+                     ? L.money(it.unit_cost) + " per " + (it.unit || "unit")
+                     : "No cost in the library yet",
+                   wt: workTypeCell("items", it),
+                   actions: defaultRowActions("items", it.id, it.name) };
+        }).concat(takeoffConditionDefaults().map(function (c) {
+          // ALL THREE, ON OR OFF. For two days this filtered on `c.on`, by analogy with
+          // `it.favorite` two lines above, and offered the off ones under "Add a takeoff default"
+          // instead. Hanz found the Materials list with none of them in it and asked where they
+          // were -- which is the answer: the analogy is wrong. A material that is not a favourite
+          // is one of forty rows in a library, and hiding it is how the list stays readable.
+          // These three are a FIXED, NAMED set of three that every polish bid has an opinion
+          // about, so "absent" reads as "gone" rather than "not chosen", and the place he looked
+          // for them is the place they belong. Each row says which way it is set and carries the
+          // button for the direction it can move in; see conditionPriceCell and
+          // conditionRowActions.
+
+          return { name: c.label,
+                   how: conditionPriceCell(c),
+                   rawHow: true,
+                   // NO CHIPS: a condition is not a library row and has no default_work_types
+                   // to press. It is a question the polish takeoff asks, and scoping it to a
+                   // work type would be a control over a column that does not exist.
+                   wt: '<span class="wtall">Polish takeoff</span>',
+                   actions: conditionRowActions(c) };
+        })) },
+      { title: "Markup",
+        rows: GLOBAL_MARKUP.map(function (g) {
+          // EDITABLE HERE, STORED THERE. Hanz asked for no read-only rows on this tab. The
+          // danger with a rate is TWO HOMES: markup.py enforces one home per line because
+          // two places to set one price disagree the first time somebody changes one, and a
+          // disagreement between them is a wrong bid, not a cosmetic bug.
+          //
+          // So this is a second DOOR, not a second home. The box writes the same
+          // markup_rules row the Markup page writes, by id. There is still exactly one
+          // place the number lives, and it is impossible for the two screens to hold
+          // different answers because they are holding the same row.
+          return { name: g.label,
+                   how: '<input class="mkin" type="text" data-markup-formula="' +
+                     esc(g.id) + '" value="' + esc(g.formula || "") +
+                     '" aria-label="Formula for ' + esc(g.label) +
+                     '" placeholder="not set" /> <span class="wtall">also on the Markup ' +
+                     'page\u2019s Global tab</span>',
+                   rawHow: true,
+                   actions: '<span class="builtin">Saved to Markup</span>' };
+        }) },
+    ];
+    return groups.filter(function (g) { return g.rows.length > 0; });
+  }
+
   function renderDefaultTakeoff() {
     var body = $("default-takeoff-body");
     if (!body) return;
     var out = "";
-    ASMS.filter(function (a) { return a.favorite; }).forEach(function (a) {
-      out += "<tr><td>" + esc(a.name) + "</td><td>Assembly</td>" +
-        "<td>" + (a.lines || []).length + " item line" +
-        ((a.lines || []).length === 1 ? "" : "s") + " · per " + esc(a.unit || "SF") + "</td>" +
-        '<td class="rowact">' + defaultRowActions("assemblies", a.id, a.name) + "</td></tr>";
-    });
-    ITEMS.filter(function (it) { return it.favorite; }).forEach(function (it) {
-      out += "<tr><td>" + esc(it.name) + "</td><td>Material</td>" +
-        "<td>" + (L.num(it.unit_cost) != null
-          ? esc(L.money(it.unit_cost)) + " per " + esc(it.unit || "unit")
-          : "No cost in the library yet") + "</td>" +
-        '<td class="rowact">' + defaultRowActions("items", it.id, it.name) + "</td></tr>";
-    });
-    GLOBAL_MARKUP.forEach(function (g) {
-      out += "<tr><td>" + esc(g.label) + "</td><td>Markup</td>" +
-        "<td>" + esc(g.formula || "not set") +
-        " · set on the Markup page's Global tab</td>" +
-        '<td class="rowact"><span class="builtin">Read only</span></td></tr>';
-    });
-    takeoffConditionDefaults().forEach(function (c) {
-      out += "<tr><td>" + esc(c.label) + "</td><td>Condition</td>" +
-        "<td>" + esc(c.why) + " · " + esc(c.cell) + " = " + (c.on ? "Yes" : "No") + "</td>" +
-        '<td class="rowact"><span class="builtin">Built in</span></td></tr>';
+    takeoffDefaultGroups().forEach(function (g) {
+      out += '<tr class="grouphead"><th scope="colgroup" colspan="4">' +
+        esc(g.title) + "</th></tr>";
+      g.rows.forEach(function (r) {
+        // rawHow ONLY for the rows that build their own control. Everything else stays
+        // escaped -- a material name is somebody typed text and must never render as HTML.
+        //
+        // `wt` IS ALWAYS MARKUP, from workTypeCell or from a literal in the group above, and is
+        // never a name somebody typed. A row that supplies none gets an empty cell rather than
+        // the string "undefined" -- the Markup group is the one that does.
+        out += "<tr><td>" + esc(r.name) + "</td><td>" +
+          (r.rawHow ? r.how : esc(r.how)) + "</td>" +
+          '<td class="wtcell">' + (r.wt || "") + "</td>" +
+          '<td class="rowact">' + r.actions + "</td></tr>";
+      });
     });
     body.innerHTML = out;
     if ($("default-takeoff-empty")) $("default-takeoff-empty").hidden = out !== "";
+  }
+
+  // -- the Labor defaults are typed here and nowhere else ------------------------------------
+  /** What a labor line may be measured in.
+
+   *  A LIST RATHER THAN A FREE BOX, because `unit` is not a label: it decides whether the rate
+   *  multiplies hours or man-days, and a third value typed here would price at whichever branch
+   *  the estimate's `else` happens to be. The API refuses anything off this list with a 400; the
+   *  control declines to offer it in the first place, so the refusal is not something an estimator
+   *  has to read out of a response body. */
+  var LABOR_UNITS = ["hours", "days"];
+
+  /** The form, while it is open. `null` when it is not, and that is the whole of the open/shut
+   *  state -- there is no second flag to fall out of step with it.
+
+   *  THE TYPED VALUES LIVE HERE, NOT IN THE INPUTS. This tab's renderer runs from paint(), and
+   *  paint() runs whenever anything else on the page changes -- switching a takeoff default on
+   *  while this form is open would otherwise rebuild the row and throw the half-typed line away.
+   *  The input listener writes here and deliberately does NOT re-render: a re-render on every
+   *  keystroke is exactly how this repo has stolen the focus somebody just tabbed into. */
+  var LABOR_FORM = null;
+
+  /** Open the form to ADD (id null) or to EDIT the line with that id.
+
+   *  IN THE TABLE, WHERE THE ROW GOES. Hanz asked on the same day for the takeoff picker to open
+   *  "within the line item instead of up above"; a labor line has the same answer and a stronger
+   *  one, because the form IS the row -- the name types into the Line column and the rate into the
+   *  Rate column, so what is being typed is laid out as what will be read back. A modal would say
+   *  the opposite: that setting a default is a trip somewhere else. */
+  function openLaborForm(id) {
+    var row = null;
+    for (var i = 0; i < LABOR.length; i++) if (LABOR[i].id === id) { row = LABOR[i]; break; }
+    LABOR_FORM = {
+      id: row ? row.id : null,
+      name: row ? String(row.name == null ? "" : row.name) : "",
+      rate: row ? String(row.rate == null ? "" : row.rate) : "",
+      unit: row && LABOR_UNITS.indexOf(row.unit) !== -1 ? row.unit : LABOR_UNITS[0],
+      err: "",
+      busy: false
+    };
+    renderDefaultLabor();
+    // The caret lands in the name box, for the reason openDefaultBrowse puts it in the search:
+    // a control that opens somewhere you cannot type reads as having done nothing.
+    var box = $("labor-f-name");
+    if (box) box.focus();
+  }
+
+  function closeLaborForm() {
+    LABOR_FORM = null;
+    renderDefaultLabor();
+  }
+
+  /** One typed character, remembered and NOT re-rendered. See the note on LABOR_FORM.
+
+   *  The field name is checked against the three the form has rather than assigned straight
+   *  through, so a stray `data-labor-f` somewhere else on the page cannot write `id` or `busy`
+   *  into the object the save reads. */
+  function setLaborField(field, value) {
+    if (!LABOR_FORM) return;
+    if (field !== "name" && field !== "rate" && field !== "unit") return;
+    LABOR_FORM[field] = value == null ? "" : String(value);
+  }
+
+  /** What is wrong with the form, in words a person can act on, or "" when nothing is.
+
+   *  THE SAME THREE RULES THE API ENFORCES, said before the request instead of after it. The
+   *  server is still the one that decides -- a rule here that it did not have would let any other
+   *  caller write what this form refuses -- but a 400 dug out of a response body is a poor way to
+   *  find out the name box is empty. */
+  function validateLaborForm(f) {
+    if (!f) return "";
+    var name = String(f.name == null ? "" : f.name).trim();
+    if (!name) return "Give the line a name. That is what the estimate will call it.";
+    if (name.length > 200) return "That name is too long. Two hundred characters is the limit.";
+    var raw = String(f.rate == null ? "" : f.rate).trim();
+    var rate = Number(raw);
+    // !isFinite, NOT isNaN. Infinity and 1e400 are both numbers as far as isNaN is concerned,
+    // and JSON.stringify turns either into a literal null -- which then lands in a NOT NULL
+    // numeric(10,2) column and comes back as a bare 500 with the typed line still on screen.
+    if (!raw || !isFinite(rate)) return "The rate has to be a number.";
+    if (rate < 0) return "The rate cannot be less than zero.";
+    // The same ceiling the server enforces (_MAX_LABOR_RATE), so an implausible figure is
+    // refused where it was typed rather than coming back as a 400 from a round trip.
+    if (rate > 100000) return "That rate is implausibly large - check the figure.";
+    if (LABOR_UNITS.indexOf(f.unit) === -1) return "Pick hours or days.";
+    return "";
+  }
+
+  /** Save the open form: a new line, or the one being edited.
+
+   *  ONE FUNCTION FOR BOTH, because they are the same form, the same validation and the same
+   *  rollback, and the only thing that differs is which request carries the body. Two would be two
+   *  places to forget the put-it-back -- the argument setDefault's own note makes about add and
+   *  remove, and it holds harder here because this form holds typing.
+
+   *  A FAILED SAVE LEAVES THE TYPED LINE ON SCREEN and says why underneath it. Clearing the form
+   *  on a failure would make somebody type the line a second time to discover it fails a second
+   *  time, which is the page's standing rule for a failed write. */
+  async function submitLaborForm() {
+    if (!LABOR_FORM || LABOR_FORM.busy) return;
+    var f = LABOR_FORM;
+    var bad = validateLaborForm(f);
+    if (bad) { f.err = bad; renderDefaultLabor(); return; }
+    var body = { name: String(f.name).trim(), rate: Number(String(f.rate).trim()), unit: f.unit };
+    f.busy = true;
+    f.err = "";
+    renderDefaultLabor();
+    try {
+      if (f.id) {
+        var pj = await patchLabor(f.id, body);
+        for (var i = 0; i < LABOR.length; i++) {
+          if (LABOR[i].id === f.id) {
+            LABOR[i] = pj.row || Object.assign({}, LABOR[i], body);
+            break;
+          }
+        }
+      } else {
+        var cj = await post("labor", body);
+        if (cj.row) LABOR.push(cj.row);
+      }
+      LABOR_FORM = null;
+      say("");
+      renderDefaultLabor();
+    } catch (err) {
+      f.busy = false;
+      f.err = "Couldn't save that. " + (err.message || "");
+      renderDefaultLabor();
+    }
+  }
+
+  /** Take a labor line off the defaults. SOFT on the server, and off this page either way.
+
+   *  NO CONFIRMATION, the same as Remove on a takeoff default. It stops a line being something a
+   *  new bid opens with; it does not reach into a bid that already holds one, and it is a soft
+   *  delete besides. A dialog in front of a reversible single press reads as a warning about a
+   *  danger that is not there, which is how people learn to click through the ones that matter.
+
+   *  OPTIMISTIC, WITH THE LIST PUT BACK ON A FAILURE -- a row that looks removed and returns on
+   *  the next reload is worse than one that refuses out loud. */
+  async function removeLaborDefault(id) {
+    var was = LABOR.slice();
+    LABOR = LABOR.filter(function (r) { return r.id !== id; });
+    renderDefaultLabor();
+    try {
+      await del("labor", id);
+    } catch (err) {
+      LABOR = was;
+      renderDefaultLabor();
+      say("Couldn't remove that. " + (err.message || ""));
+    }
+  }
+
+  /** Put Travel back on the rate the tool ships with.
+
+   *  A PATCH, NOT A DELETE, and that is a deliberate difference from Remove above. A soft delete
+   *  would also work on screen -- list_labor() would stop answering with the row and travelSeed()
+   *  would fall back to the shipped rate -- but it would take the row's ID with it, and the id is
+   *  the only thing anything can address Travel by. `LibraryLaborIn` has no id field and
+   *  create_labor mints a uuid, both on purpose, so nothing reachable from this page could ever
+   *  make a row called `travel` again: one press of Reset would cost the editability the rest of
+   *  this change is about, permanently, and the button that did it would then vanish too. PATCHing
+   *  the row back to the shipped figures says exactly the same thing to a reader of the list and
+   *  leaves Travel editable tomorrow.
+
+   *  THE SHIPPED FIGURES COME FROM travelSeed(), not from three literals here. This page has no
+   *  business holding a second copy of Travel's rate -- see the note above travelSeed for what
+   *  happened the last time two copies existed.
+
+   *  OPTIMISTIC, WITH THE ROW PUT BACK ON A FAILURE, like both writes above it: a rate that looks
+   *  reset and returns on the next reload is worse than one that refuses out loud. */
+  async function resetTravelDefault() {
+    var B = window.TWPolishBid;
+    var shipped = B && B.travelSeed ? B.travelSeed() : null;
+    if (!shipped) return;
+    var at = -1;
+    for (var i = 0; i < LABOR.length; i++) {
+      if (LABOR[i] && LABOR[i].id === shipped.id) { at = i; break; }
+    }
+    // Nothing stored means nothing overridden: the line is already on the shipped rate and there
+    // is no row to patch. The button is not drawn in that state, so this is the second tab case.
+    if (at === -1) return;
+    var was = LABOR[at];
+    var body = { name: shipped.label, rate: shipped.rate, unit: shipped.unit };
+    LABOR[at] = Object.assign({}, was, body);
+    renderDefaultLabor();
+    try {
+      var pj = await patchLabor(shipped.id, body);
+      for (var k = 0; k < LABOR.length; k++) {
+        if (LABOR[k] && LABOR[k].id === shipped.id) {
+          LABOR[k] = pj.row || Object.assign({}, was, body);
+          break;
+        }
+      }
+      say("");
+      renderDefaultLabor();
+    } catch (err) {
+      for (var j = 0; j < LABOR.length; j++) {
+        if (LABOR[j] && LABOR[j].id === shipped.id) { LABOR[j] = was; break; }
+      }
+      renderDefaultLabor();
+      say("Couldn't reset " + shipped.label + ". " + (err.message || ""));
+    }
+  }
+
+  /** Edit and Remove on a custom labor line, for an admin and nobody else.
+
+   *  THE WRITES ARE ADMIN-ONLY ON THE SERVER, so this does not offer a control that 403s on press.
+   *  That is the rule load() already follows when it resolves the role BEFORE the first paint, and
+   *  the one the Administration lists follow when they render text instead of inputs.
+
+   *  REMOVE MEANS "STOP BEING A DEFAULT", not "delete the line out of every bid that has one", so
+   *  it says the word rather than wearing the bin glyph the Items tab deletes rows with.
+
+   *  TRAVEL IS THE ONE ROW THAT CANNOT SAY REMOVE, and `travel` is what it is handed: the stored
+   *  library_labor row with the reserved id, or null when there is none. Three things follow from
+   *  it and each is the honest answer rather than a convenience:
+   *
+   *    * NO STORED ROW, NO CONTROLS. Every estimate is seeded with Travel from travelSeed()
+   *      whether or not this table answers, so on a database where `library_labor` has not been
+   *      created the line is real and its rate is genuinely not editable -- there is nothing to
+   *      PATCH. An Edit button there would open a form whose Save 500s, which is the dead control
+   *      this whole change is about; it would be worse than the chip it replaced, not better.
+   *    * RESET, NOT REMOVE. Removing Travel is not a thing that can happen: freshModel() seeds it
+   *      into every new bid and migrateModel appends it to every old one. What this button does
+   *      is put the rate back to the one the tool ships with, and the word on it says that.
+   *    * AND ONLY WHEN THERE IS SOMETHING TO RESET. `travelSeed(row)` with no row IS the shipped
+   *      row, so an unedited default compares equal to it and offers no Reset at all -- a control
+   *      that would change nothing is a control that reads as broken when it appears to do
+   *      nothing. Name, rate and unit are compared because those are the three the Edit form
+   *      writes; a renamed Travel with the shipped rate still has a way back. */
+  function laborRowActions(id, name, travel) {
+    if (!ADMIN) return "";
+    var B = window.TWPolishBid;
+    var shipped = B && B.travelSeed ? B.travelSeed() : null;
+    var edit = '<button class="btn ghost sm" type="button" data-labor-edit="' + esc(id) +
+      '">Edit</button>';
+    if (shipped && id === shipped.id) {
+      if (!travel) return "";
+      var now = B.travelSeed(travel);
+      var changed = now.label !== shipped.label || now.rate !== shipped.rate ||
+                    now.unit !== shipped.unit;
+      if (!changed) return edit;
+      return edit + '<button class="btn ghost sm danger" type="button" data-labor-reset="' +
+        esc(shipped.id) + '" aria-label="Reset ' + esc(shipped.label) +
+        ' to the rate the tool ships with">Reset</button>';
+    }
+    return edit +
+      '<button class="btn ghost sm danger" type="button" data-labor-del="' + esc(id) +
+      '" aria-label="Remove ' + esc(name) + ' from the labor defaults">Remove</button>';
+  }
+
+  /** The open form, as the row it is about to become. "" when the form is shut. */
+  function laborFormRow() {
+    var f = LABOR_FORM;
+    if (!f) return "";
+    var opts = "";
+    for (var i = 0; i < LABOR_UNITS.length; i++) {
+      opts += '<option value="' + esc(LABOR_UNITS[i]) + '"' +
+        (f.unit === LABOR_UNITS[i] ? " selected" : "") + ">" + esc(LABOR_UNITS[i]) + "</option>";
+    }
+    return '<tr class="defform">' +
+      '<td><input id="labor-f-name" data-labor-f="name" value="' + esc(f.name) +
+        '" maxlength="200" placeholder="What the estimate calls this line"' +
+        ' aria-label="Labor line name"></td>' +
+      '<td class="n"><input id="labor-f-rate" data-labor-f="rate" value="' + esc(f.rate) +
+        '" inputmode="decimal" placeholder="0.00" aria-label="Rate"></td>' +
+      '<td><select id="labor-f-unit" data-labor-f="unit" aria-label="Priced per">' + opts +
+        "</select>" +
+        (f.err ? '<p class="deferr">' + esc(f.err) + "</p>" : "") + "</td>" +
+      '<td class="rowact">' +
+        '<button class="btn sm" type="button" data-labor-save' + (f.busy ? " disabled" : "") +
+        ">" + (f.busy ? "Saving" : "Save") + "</button> " +
+        '<button class="btn ghost sm" type="button" data-labor-cancel>Cancel</button>' +
+      "</td></tr>";
   }
 
   /** The Labor defaults. Travel is in here before anybody adds anything.
@@ -2098,30 +2816,75 @@
    *
    *  READ FROM THE SHARED MODULE, never re-typed. travelSeed's own comment records the two copies
    *  that existed before drifting within a day; a third on this page would drift unseen, because
-   *  nothing here prices anything and a stale rate would look exactly like a fresh one.
+   *  nothing here prices anything and a stale rate would look exactly like a fresh one. That is
+   *  also why the id it looks the stored row up by is `travelSeed().id` rather than a string typed
+   *  here: one statement of what Travel is called in a model, still.
    *
-   *  BUILT IN, so it carries no remove control. Taking it off is a change to what every bid opens
-   *  with, and the estimate has no way to express "no travel row at all" -- the row dims itself on
-   *  a local job instead, which is the behaviour that replaces deleting it. */
+   *  ONE TRAVEL ROW, MERGED, NOT TWO. The stored row carrying the reserved id is drawn THROUGH
+   *  travelSeed and then excluded from the list below. Left in, it would appear a second time,
+   *  under the same name, with its own Edit and Remove -- and an admin would have two rows to
+   *  choose between with no way to tell which one prices a bid. */
   function renderDefaultLabor() {
     var body = $("default-labor-body");
     if (!body) return;
     var B = window.TWPolishBid;
-    var rows = B && B.travelSeed ? [B.travelSeed()] : [];
+    var shipped = B && B.travelSeed ? B.travelSeed() : null;
+    // The stored override, or null on a database where this table does not exist yet -- in which
+    // case travelSeed(null) hands back the shipped row and the line renders exactly as it did
+    // before any of this, which is what production sees until the DDL runs.
+    var storedTravel = null;
+    if (shipped) {
+      for (var s = 0; s < LABOR.length; s++) {
+        if (LABOR[s] && LABOR[s].id === shipped.id) { storedTravel = LABOR[s]; break; }
+      }
+    }
+    var rows = shipped ? [B.travelSeed(storedTravel)] : [];
     var out = "";
     for (var i = 0; i < rows.length; i++) {
       var r = rows[i];
       out += "<tr>" +
         "<td>" + esc(r.label) + "</td>" +
-        '<td class="n">' + esc(L.money(r.rate)) + (r.unit === "hours" ? " / hr" : "") + "</td>" +
+        '<td class="n">' + esc(L.money(r.rate)) + (r.unit === "hours" ? " / hr" : " / day") +
+        "</td>" +
         "<td>" + (r.guys_auto
           ? "Man-days come off the crew rows above it"
           : "Typed on the estimate") + "</td>" +
-        '<td class="rowact"><span class="builtin">Built in</span></td>' +
+        '<td class="rowact">' + laborRowActions(r.id, r.label, storedTravel) + "</td>" +
         "</tr>";
     }
+    // THE LINES SOMEBODY TYPED, beside the one that was always there. Each carries Edit and
+    // Remove for an admin, matching the Takeoff list beside it, and Remove there and here mean
+    // the same thing: stop being a default.
+    // FILTERED BY THE WORK-TYPE TAB, like the Takeoff list above it. Travel is neither filtered
+    // nor listed here: it is seeded into every bid whatever tab it sits on, and it has already
+    // been drawn above -- listing it again is the double-Travel row this merge exists to prevent.
+    var shown = LABOR.filter(function (r) {
+      return (!shipped || r.id !== shipped.id) && appliesToWorkType(r, DEFAULT_WT);
+    });
+    for (var k = 0; k < shown.length; k++) {
+      var c = shown[k];
+      out += "<tr>" +
+        "<td>" + esc(c.name) + "</td>" +
+        '<td class="n">' + esc(L.money(c.rate)) +
+          (c.unit === "days" ? " / day" : " / hr") + "</td>" +
+        "<td>" + (c.guys_auto
+          ? "Man-days come off the crew rows above it"
+          : "Typed on the estimate") + "</td>" +
+        '<td class="rowact">' + laborRowActions(c.id, c.name) + "</td>" +
+        "</tr>";
+    }
+    out += laborFormRow();
     body.innerHTML = out;
-    if ($("default-labor-empty")) $("default-labor-empty").hidden = rows.length > 0;
+    // Counts BOTH, so a page that could not reach the shared module still hides the empty state
+    // once there is a typed line to show. Travel is normally in `rows`, which is why this read
+    // correctly while it was the only thing that could be.
+    if ($("default-labor-empty")) {
+      $("default-labor-empty").hidden = (rows.length + shown.length) > 0;
+    }
+    // The add control is a write, and writes here are admin-only on the server. Hidden the same
+    // way renderRefSection hides Administration's, rather than rendered and left to 403.
+    var addrow = $("default-labor-addrow");
+    if (addrow) addrow.hidden = !ADMIN;
   }
 
   // ── view switch ────────────────────────────────────────────────────────────
@@ -2134,10 +2897,59 @@
       $(TAB_OF[p]).setAttribute("aria-selected", String(p === which));
       $("pane-" + p).hidden = p !== which;
     });
+    // AND THE ADDRESS BAR SAYS SO. Hanz, on staging: "when I reload the page, why does it
+    // automatically land on assemblies? and not on the tab that I have under items and
+    // assemblies". `view` above is a module variable that dies with the page; the fragment is
+    // the only part of this that a reload still has.
+    //
+    // WRITTEN HERE, not in the click listener, because the tab strip is not the only thing that
+    // switches tabs — there are seven other call sites. The Defaults tab's Edit buttons jump to
+    // the material or the assembly behind a default (`showView("items"); paint();
+    // focusItemRow(id)`), and creating a material, an assembly or a vendor lands you on its tab.
+    // A reload after any of those has to come back to where it put you, and a listener-only write
+    // would send you to Assemblies instead.
+    //
+    // `typeof window` rather than a bare read: the test harnesses run these functions in scopes
+    // that bind only what the page itself declares, and an unbound identifier is a ReferenceError
+    // that reds every scenario at once. The script tag is what guarantees the module is there,
+    // and a test asserts the tag, because no amount of executing this can see a missing <script>.
+    if (typeof window !== "undefined" && window.TWTabMemo) {
+      window.TWTabMemo.write(window, { tab: which });
+    }
+  }
+  /** Show one work type's defaults: the strip's own state, and nothing else.
+   *
+   *  Split out of the click listener so restoreView below can reach it. It deliberately does NOT
+   *  repaint the two lists — at restore time nothing has been fetched yet and there is nothing to
+   *  draw, and load()'s paint() is what draws them a moment later. The listener repaints because
+   *  by the time somebody can click, there is something to repaint. */
+  function setWorkType(wt) {
+    DEFAULT_WT = wt;
+    WORK_TYPES.forEach(function (k) {
+      var b = $("wt-" + k);
+      if (b) b.setAttribute("aria-selected", String(k === wt));
+    });
+  }
+  /** Open on the tab — and the work type — the URL names.
+   *
+   *  A REMEMBERED TAB THAT NO LONGER EXISTS FALLS BACK, which is the whole of what `pick` is for:
+   *  a link carrying `#tab=rooms` from some later shape of this page has to show Assemblies, not
+   *  an empty pane. The fallbacks are the page's own declared defaults, read out of `view` and
+   *  `DEFAULT_WT` rather than retyped here, so this cannot disagree with them.
+   *
+   *  Runs before load(), and costs nothing: showView only flips `hidden` and `aria-selected`, and
+   *  setWorkType only moves the strip. No pane fetches anything it was not going to fetch, which
+   *  is the rule that keeps this from turning one tab's page into four tabs' worth of requests. */
+  function restoreView() {
+    if (typeof window === "undefined" || !window.TWTabMemo) return;
+    var M = window.TWTabMemo;
+    showView(M.pick(M.read(window, "tab"), PANES, view));
+    setWorkType(M.pick(M.read(window, "wt"), WORK_TYPES, DEFAULT_WT));
   }
   PANES.forEach(function (p) {
     $(TAB_OF[p]).addEventListener("click", function () { showView(p); });
   });
+  restoreView();
 
   // ── add from library: the modal ────────────────────────────────────────────
   // The DECISIONS are the four pure functions above; this is wiring, and it is kept apart from them
@@ -2314,6 +3126,40 @@
   if ($("default-q")) {
     $("default-q").addEventListener("input", function () {
       setDefaultQuery(this.value);
+    });
+  }
+
+  // NO `change` LISTENER ON THE TAKEOFF TBODY ANY MORE. One lived here for the conditions'
+  // Yes/No selects; the selects came off on 2026-09-19 (Hanz: "remove these yes and no what are
+  // these for?") and a listener whose only arm read `data-cond-key` would now be reading an
+  // attribute this page never renders. Both writes to condition_defaults go through the click
+  // delegation instead -- Remove on a listed row, Add on a removed one -- and both land in
+  // setConditionDefault, which is still the one place that writes them.
+
+  // THE LABOR FORM'S TYPING, bound to the tbody rather than to the inputs. renderDefaultLabor
+  // replaces that element's innerHTML and not the element, so one listener here outlives every
+  // row it draws -- the same rule the bulk-divisions listener follows for the same reason.
+  //
+  // IT RECORDS AND DOES NOT RENDER. The values have to survive a paint() somebody else on this
+  // page triggers, which is why they are held in LABOR_FORM; re-rendering on each keystroke to
+  // show them back would take the caret out of the box being typed into.
+  if ($("default-labor-body")) {
+    $("default-labor-body").addEventListener("input", function (e) {
+      var f = e.target && e.target.getAttribute && e.target.getAttribute("data-labor-f");
+      if (f) setLaborField(f, e.target.value);
+    });
+    // A <select> is answered with `change` in every browser and with `input` in most; both land
+    // on the same setter, and setting the same value twice is not a decision.
+    $("default-labor-body").addEventListener("change", function (e) {
+      var f = e.target && e.target.getAttribute && e.target.getAttribute("data-labor-f");
+      if (f) setLaborField(f, e.target.value);
+    });
+    // Enter saves and Escape shuts it, because a three-field row that can only be finished by
+    // aiming at a button is a form that reads as heavier than the line it is adding.
+    $("default-labor-body").addEventListener("keydown", function (e) {
+      if (!LABOR_FORM) return;
+      if (e.key === "Enter") { e.preventDefault(); submitLaborForm(); }
+      else if (e.key === "Escape") { e.stopPropagation(); closeLaborForm(); }
     });
   }
   // Escape in the search box clears it before it closes the dialog — the same two-stage behaviour
@@ -2857,22 +3703,80 @@
     // and the search box shipped with no input listener, so between them there was NO WAY
     // LEFT to make a default -- the same change had just taken the switch off the item rows.
     // Takeoff opens the list in browse mode, which is what the button is for: you do not
-    // have to already know the name. Labor is NOT wired, deliberately: renderDefaultLabor
-    // draws one built-in row out of travelSeed() and nothing anywhere stores a custom labor
-    // line, so a handler here could only pretend. That needs a place to put one first.
-    var addDef = t.closest && t.closest("[data-add-default]");
-    if (addDef) {
-      if (addDef.getAttribute("data-add-default") === "takeoff") openDefaultBrowse();
+    // have to already know the name. LABOR NOW OPENS A FORM -- it was left unwired on purpose
+    // because nothing stored a custom labor line and a handler could only have pretended, and
+    // Hanz said twice that the button does not work. `library_labor` is where one goes now.
+    // THE WORK-TYPE STRIP. It narrows both lists at once, because a work type is the one
+    // question "what does a polish bid open holding?" and Takeoff and Labor are two halves
+    // of that answer. Repainting both is the point, not an accident.
+    var wtBtn = t.closest && t.closest("[data-work-type]");
+    if (wtBtn) {
+      var wt = wtBtn.getAttribute("data-work-type");
+      if (WORK_TYPES.indexOf(wt) !== -1) {
+        setWorkType(wt);
+        // REMEMBERED BESIDE THE TAB, not instead of it. Landing on Defaults and showing the wrong
+        // one of the five work types is the same reload bug one level down, so the fragment
+        // carries both: `#tab=defaults&wt=epoxy`.
+        if (typeof window !== "undefined" && window.TWTabMemo) {
+          window.TWTabMemo.write(window, { wt: wt });
+        }
+        renderDefaultTakeoff();
+        renderDefaultLabor();
+        renderDefaultSearch();
+      }
       return;
     }
+    var addDef = t.closest && t.closest("[data-add-default]");
+    if (addDef) {
+      openDefaultAdd(addDef.getAttribute("data-add-default"));
+      return;
+    }
+    // THE FORM'S OWN FOUR. Delegated with the rest because renderDefaultLabor replaces every one
+    // of these controls on each render, and a listener bound to a replaced button dies with it.
+    if (t.closest && t.closest("[data-labor-save]")) { await submitLaborForm(); return; }
+    if (t.closest && t.closest("[data-labor-cancel]")) { closeLaborForm(); return; }
+    var labEd = t.closest && t.closest("[data-labor-edit]");
+    if (labEd) { openLaborForm(labEd.getAttribute("data-labor-edit")); return; }
+    var labDel = t.closest && t.closest("[data-labor-del]");
+    if (labDel) { await removeLaborDefault(labDel.getAttribute("data-labor-del")); return; }
+    // ITS OWN ARM, not the Remove one. The two say different words to an admin and send different
+    // requests -- a DELETE here would soft-delete the only row anything can address Travel by.
+    if (t.closest && t.closest("[data-labor-reset]")) { await resetTravelDefault(); return; }
     var addBtn = t.closest && t.closest("[data-def-add]");
     if (addBtn) {
-      await setDefault(addBtn.getAttribute("data-def-add"),
-                       addBtn.getAttribute("data-def-id"), true);
+      // TWO SAVERS, ONE BUTTON, because a condition is not a library row: `favorite` is a column
+      // on an items/assemblies row and a condition has no row to carry one. The write is
+      // condition_defaults either way round, and routing here rather than teaching setDefault a
+      // third store keeps each saver owning one table.
+      var addKind = addBtn.getAttribute("data-def-add");
+      if (addKind === "conditions") {
+        await setConditionDefault(addBtn.getAttribute("data-def-id"), true);
+      } else {
+        await setDefault(addKind, addBtn.getAttribute("data-def-id"), true);
+      }
       DEFAULT_Q = "";                      // the row has moved to the list; the hit is spent
       var qbox = $("default-q");
       if (qbox) qbox.value = "";
       renderDefaultSearch();
+      return;
+    }
+    // THE WORK-TYPE CHIPS, FIRST of the row controls: they sit in the same row as the Edit and
+    // Remove pair and `closest` walks up, so a selector that could also match must not run
+    // before this one. Reads aria-pressed rather than a data flag -- the attribute the button
+    // already has to carry for a screen reader is the same fact, and two copies of one state is
+    // how a control ends up disagreeing with itself.
+    var wtBtn = t.closest && t.closest("[data-wt-toggle]");
+    if (wtBtn) {
+      await setRowWorkType(wtBtn.getAttribute("data-wt-toggle"), wtBtn.getAttribute("data-wt-id"),
+                        wtBtn.getAttribute("data-wt"),
+                        wtBtn.getAttribute("aria-pressed") !== "true");
+      return;
+    }
+    // THE CONDITION PAIR, HANDLED BEFORE THE MATERIAL PAIR so neither can swallow the other:
+    // they sit in the same column of the same table now and the selectors must not overlap.
+    var condOff = t.closest && t.closest("[data-cond-off]");
+    if (condOff) {
+      await setConditionDefault(condOff.getAttribute("data-cond-off"), false);
       return;
     }
     var offBtn = t.closest && t.closest("[data-def-off]");

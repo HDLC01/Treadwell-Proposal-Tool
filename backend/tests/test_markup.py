@@ -840,8 +840,50 @@ def test_both_schema_files_declare_the_table_and_the_live_unique_key():
         assert ("grant select, insert, update, delete on public.markup_rules to service_role"
                 in flat), "%s: PostgREST connects as service_role; writes would all fail" % path.name
         assert "applies boolean not null default true" in flat, path.name
-        # The column that must NOT exist: Gyp's soft costs is an expression, not a number.
-        assert "rate numeric" not in flat, "%s grew a numeric rate column" % path.name
+        # The column that must NOT exist ON markup_rules: Gyp's soft costs is an expression,
+        # not a number.
+        #
+        # SCOPED TO THE TABLE, as the test below already scopes its own check. This searched
+        # the WHOLE FILE, so on 2026-09-17 it failed on library_labor.rate -- a different
+        # table, where a numeric rate is exactly right, since a labor line IS a number per
+        # hour. A guard that fires on an unrelated table teaches people to edit the guard.
+        block = flat[flat.index("create table if not exists public.markup_rules"):]
+        block = block[:block.index("create unique index")]
+        assert "rate numeric" not in block, "%s grew a numeric rate column" % path.name
+
+
+def test_both_schema_files_declare_library_labor():
+    """Same rule as the test above, for the table the Add-a-labor-line button writes to.
+
+    It was created BY HAND on staging on 2026-09-17 and existed in neither schema file, so a
+    rebuilt staging volume would have come up without it -- and list_labor swallows every
+    exception, so the page would have looked fine and every save would have returned a bare 500.
+    A table that lives only in somebody's terminal history is not a schema.
+
+    SOFT DELETE IS PART OF THE CONTRACT, not decoration: removing a default must not take the
+    line out of bids already holding it.
+    """
+    for path in (BACKEND / "supabase_schema.sql", BACKEND / "staging" / "schema_pg.sql"):
+        sql = path.read_text(encoding="utf-8")
+        flat = re.sub(r"\s+", " ", sql)
+        assert "create table if not exists public.library_labor" in flat, (
+            "%s does not declare library_labor; the database that misses it answers every "
+            "save with a 500" % path.name)
+        block = flat[flat.index("create table if not exists public.library_labor"):]
+        block = block[:block.index(");") + 2]
+        for col in ("id text primary key", "name text not null", "rate numeric(10,2) not null",
+                    "unit text not null", "guys_auto boolean not null",
+                    "sort integer not null", "deleted_at timestamptz"):
+            assert col in block, "%s: library_labor is missing %r" % (path.name, col)
+
+        # AND THE WORK-TYPE COLUMN ON ALL THREE TABLES. Same rule, same reason: the database
+        # that misses it answers every default-work-type write with a 500, and because the read
+        # degrades the page looks fine while nothing saves. Asserted per table rather than by
+        # counting, so a copy-paste that adds it twice to one table and never to another fails.
+        for table in ("library_items", "library_assemblies", "library_labor"):
+            needle = ("alter table public.%s add column if not exists default_work_types" % table)
+            assert needle in re.sub(r" +", " ", flat), (
+                "%s does not add default_work_types to %s" % (path.name, table))
 
 
 def test_both_schema_files_say_global_is_a_layout_and_no_migration_was_written():

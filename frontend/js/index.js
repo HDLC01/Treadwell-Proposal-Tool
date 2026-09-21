@@ -177,8 +177,21 @@
       why: "Two coats of dye across the polished area.",
       def: false, cells: ["Polish!E25"], on: "Yes", off: "No" },
     { key: "joint_filler", label: "Joint filler", scope: ["polish", "combo"],
-      why: "One kit per 3,500 sq ft. On by default, which is how the sheet ships.",
-      def: true,  cells: ["Polish!E29"], on: "Yes", off: "No" },
+      // OFF BY DEFAULT SINCE 2026-09-19, and it was `def: true` until then -- "On by default,
+      // which is how the sheet ships", which was a faithful reading of Kyle's template
+      // (Polish!E29 ships "Yes") and the wrong default for a tool that prices the line itself.
+      // The beta charges a $500 kit per 3,500 sq ft for it, so on a 17,500 SF floor "on by
+      // default" was $2,500 nobody had chosen. Hanz's call was all three of these start off.
+      //
+      // FLIPPED HERE TOO, AND THAT IS THE POINT. polish-bid-core's freshModel() is the other
+      // place this answer is stated, and the two must agree: this screen writes Polish!E29 the
+      // instant any of the ten switches is touched, so a `true` left here would put the $2,500
+      // back into Kyle's workbook on the live intake path while the beta showed it off. Two
+      // copies of one fact is what this repo keeps paying for; they are kept in step by hand
+      // because the two screens' condition lists are genuinely different shapes -- this one
+      // carries ten questions with per-job answers, that one carries nine model keys.
+      why: "One kit per 3,500 sq ft. Off until the job needs it.",
+      def: false, cells: ["Polish!E29"], on: "Yes", off: "No" },
     { key: "remove_existing_jf", label: "Remove existing joint filler", scope: ["polish", "combo"],
       why: "Adds a fourth hand to the joint-filler crew.",
       def: false, cells: ["Polish!F29"], on: "Yes", off: "No", needs: "joint_filler" },
@@ -210,6 +223,52 @@
   const condBox = document.getElementById("conditions");
   const condState = {};
 
+  // ── The admin-set answers for three of these same ten questions ────────────
+  //
+  // dye / joint_filler / remove_existing_jf ALSO ship on the Polish beta's own Takeoff step
+  // (frontend/js/polish-bid-core.js CONDITION_CELLS), where their default is no longer the
+  // literal below but GET /api/condition-defaults (backend/condition_defaults.py) -- Hanz,
+  // twice: "I told you to remove the built-in and keep and make everything editable in the
+  // takeoff." THIS PAGE carried its own hardcoded c.def for the same three keys and never
+  // asked that endpoint, so the moment an estimator touched ANY of the ten switches below,
+  // conditionCells() wrote EVERY in-scope condition's cells from condState -- baking the stale
+  // hardcoded default into Kyle's workbook, even though the Defaults tab showed the admin's
+  // real choice as saved. Fixed by threading the same admin answer into hydrateConditions()
+  // below, for these three keys and no others -- the other seven are answered per job from the
+  // lead notes and the AI autofill, not a company-wide setting, and stay exactly as they were.
+  const ADMIN_CONDITION_KEYS = { dye: true, joint_filler: true, remove_existing_jf: true };
+
+  /** The library's admin-set answer for each of the three keys above, as { key: boolean },
+   *  or {} when the read cannot answer. NEVER THROWS.
+   *
+   *  The SAME posture loadConditionDefaults already has on the Polish beta pages
+   *  (polish-intake.js, polish-estimate.js): `condition_defaults` is unapplied on both
+   *  databases as of this commit (see condition_defaults.py), so today this answers with {}
+   *  everywhere and every one of the three falls back to its own c.def below, exactly as it
+   *  does today. An unreachable endpoint must not block or break this screen -- every work
+   *  type's estimator opens it every day. */
+  async function loadConditionDefaults() {
+    try {
+      const res = await fetch(TW.resolveApiBase() + "/api/condition-defaults",
+                              { headers: TW.authHeaders() });
+      const body = await res.json();
+      const rows = (body && body.conditions instanceof Array) ? body.conditions : [];
+      const out = {};
+      for (let i = 0; i < rows.length; i++) {
+        const r = rows[i];
+        if (r && r.key) out[r.key] = !!r.on;
+      }
+      return out;
+    } catch (e) {
+      return {};
+    }
+  }
+  // KICKED OFF HERE, well before hydrateConditions() first runs near the bottom of this
+  // section, so this request overlaps the rest of this script's synchronous setup instead of
+  // queueing behind it -- the same "fetch early, non-blocking" shape loadLaborDefaults and
+  // loadConditionDefaults already use on the Polish beta pages.
+  const conditionDefaultsPromise = loadConditionDefaults();
+
   function condScope() {
     return (form.querySelector("[name='work_type']:checked") || {}).value || "epoxy";
   }
@@ -220,14 +279,20 @@
    *  straight into the estimate grid shows up here as the switch it is -- and a draft
    *  returning through Back shows what the sheet actually says, not what this page
    *  last thought. */
-  function hydrateConditions() {
+  function hydrateConditions(adminDefaults) {
+    const ad = adminDefaults || {};
     const cv = (TW.getState() || {}).cell_values || {};
     for (let i = 0; i < CONDITIONS.length; i++) {
       const c = CONDITIONS[i];
       const cell = cv[c.cells[0]];
-      condState[c.key] = (cell == null || cell === "")
-        ? c.def
-        : String(cell).trim().toLowerCase() === String(c.on).trim().toLowerCase();
+      if (cell == null || cell === "") {
+        // Admin default only for the three it exists for, and only when nobody -- the AI
+        // autofill, the estimate grid, or a previous visit -- has already answered this cell.
+        condState[c.key] = (ADMIN_CONDITION_KEYS[c.key] &&
+          Object.prototype.hasOwnProperty.call(ad, c.key)) ? ad[c.key] : c.def;
+      } else {
+        condState[c.key] = String(cell).trim().toLowerCase() === String(c.on).trim().toLowerCase();
+      }
     }
   }
 
@@ -387,16 +452,25 @@
     if (county) county.renderNote();
   }
 
-  hydrateConditions();
   form.querySelectorAll("[name='work_type']").forEach(
     r => r.addEventListener("change", syncConditionsToWorkType));
-  renderConditions();
-  if (county) {
-    county.hydrate(TW.getState() || {});   // a county chosen on the estimate screen shows here
-    county.wire(true);                     // true: this page has no delegated click router
-    county.load();                         // async; a failed fetch costs the rows, not the form
-    paintCounty();                         // hydrate() may have found a pick to reveal
-  }
+  // SEQUENCED, not just started: conditionDefaultsPromise never throws (see
+  // loadConditionDefaults above), so this await settles quickly either way, and it is what
+  // keeps the very first paint of dye / joint filler / remove-existing joint filler correct --
+  // rather than correct only by the time something gets saved. Nothing else in this script
+  // waits on it: the work-type listener above is already live, and everything below this IIFE
+  // keeps running immediately.
+  (async function hydrateAndRenderConditions() {
+    const adminDefaults = await conditionDefaultsPromise;
+    hydrateConditions(adminDefaults);
+    renderConditions();
+    if (county) {
+      county.hydrate(TW.getState() || {});   // a county chosen on the estimate screen shows here
+      county.wire(true);                     // true: this page has no delegated click router
+      county.load();                         // async; a failed fetch costs the rows, not the form
+      paintCounty();                         // hydrate() may have found a pick to reveal
+    }
+  })();
 
   // Default the bid date to today so users don't have to think about it.
   const bidInput = form.querySelector("[name='bid_date']");

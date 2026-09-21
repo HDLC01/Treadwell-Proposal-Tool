@@ -173,7 +173,7 @@ function parseSystems(html) {
 
 // `seed` is the draft the page loads INTO -- how a project coming back through Back, or one
 // the AI autofill has already written flags for, actually arrives.
-function build(seed, countyOpts) {
+function build(seed, countyOpts, condOpts) {
   const NAV = [];
   const SAVES = [];
   const STATE = JSON.parse(JSON.stringify(seed || {}));
@@ -415,13 +415,36 @@ const documentStub = {
     authHeaders: () => ({}),
   };
 
+  // The admin-set answers for dye / joint_filler / remove_existing_jf, the same three the
+  // Polish beta pages already fetch through this endpoint. Recorded rather than counted, the
+  // same reason countyFetches is, so a second, wasteful load would show. `condOpts.rows` is
+  // the `conditions` array GET /api/condition-defaults answers with; undefined means "nobody
+  // has overridden anything" -- an empty list, which is production truth on both databases as
+  // of this commit -- and `condOpts.fail` makes the request reject, the unreachable-endpoint
+  // case the loadConditionDefaults() in index.js has to survive.
+  const conditionFetches = [];
+  const cndOpts = condOpts || {};
+  const conditionFetchStub = async function (url) {
+    conditionFetches.push(String(url));
+    if (cndOpts.fail) throw new Error("network");
+    return { json: async () => ({ ok: true,
+                                  conditions: cndOpts.rows === undefined ? [] : cndOpts.rows }) };
+  };
+
   // THE REAL SCRIPT TAGS, in the order index.html loads them. county-picker.js goes first
   // because the page script calls TWCounty.mount() as it boots; loading it second would leave
   // the mount guarded away and the whole control untested while every assertion below still ran.
   windowStub.TW = TW;        // county-picker.js reads window.TW, not the injected parameter
   new Function("document", "window", "fetch", countyJs)(documentStub, windowStub, fetchStub);
   // THE REAL PAGE SCRIPT, top to bottom. An unbound identifier anywhere in it throws here.
-  new Function("document", "window", "TW", indexJs)(documentStub, windowStub, TW);
+  //
+  // `fetch` IS BOUND, unlike before this comment existed. index.js now calls it itself (the
+  // admin condition-defaults read below), and `new Function` resolves an unbound identifier
+  // against Node's own global scope rather than raising a ReferenceError -- and on this Node
+  // version that global `fetch` is real, not nothing. Leaving this unbound would have every test
+  // below firing a genuine network request at a relative URL the instant index.js loads.
+  new Function("document", "window", "TW", "fetch", indexJs)(
+    documentStub, windowStub, TW, conditionFetchStub);
 
   function fire(el, type, ev) {
     const fns = (el.listeners || {})[type] || [];
@@ -480,7 +503,7 @@ const documentStub = {
   }
   return { NAV, SAVES, STATE, nodes, flags, form, radios, systems, documentStub,
            condBox, switches, switchFor, press, clickSwitch,
-           countyFetches, typeCounty, pressCounty, countyRowList, pageClick,
+           countyFetches, conditionFetches, typeCounty, pressCounty, countyRowList, pageClick,
            fire, setWorkType, fill, byName };
 }
 
@@ -638,20 +661,23 @@ function runHandler(which) {
 //   * Space and Enter are a listener that either exists or does not. The beta's switches
 //     carried role="switch" tabindex="0" and bound click only, so they announced themselves
 //     as switches and ignored both keys -- exactly the bug a source read misses.
-{
+(async function () {
+  const tick = () => new Promise((r) => setImmediate(r));
   const cells = (b) => (b.STATE.cell_values || {});
 
   // Which questions each work type is asked. Read off the rendered nodes, in order.
   out.conditions = { byWorkType: {}, shape: null, defaults: null };
-  ["epoxy", "polish", "combo", "gyp"].forEach((wt) => {
+  for (const wt of ["epoxy", "polish", "combo", "gyp"]) {
     const b = build();
+    await tick();          // let the admin-defaults gate settle before the first paint
     b.setWorkType(wt);
     out.conditions.byWorkType[wt] = b.switches().map((s) => s.key);
-  });
+  }
 
   // The switch shape, and whether the labels say what the toggle does.
   {
     const b = build();
+    await tick();
     b.setWorkType("polish");
     const dye = b.switchFor("dye");
     out.conditions.shape = {
@@ -665,8 +691,12 @@ function runHandler(which) {
       allHaveRole: b.switches().every((s) => s.role === "switch"),
       allFocusable: b.switches().every((s) => s.tabindex === "0"),
     };
-    // Defaults, on screen. joint_filler MUST be on: Kyle's template ships Polish!E29 = "Yes",
-    // so a default of off would quietly remove filler from jobs that get it today.
+    // Defaults, on screen. joint_filler MUST now be OFF, and it was the opposite claim until
+    // 2026-09-19: "Kyle's template ships Polish!E29 = Yes, so a default of off would quietly
+    // remove filler from jobs that get it today". What changed is that the line started costing
+    // money -- a $500 kit per 3,500 sq ft -- so "on by default" stopped being a harmless
+    // transcription of the workbook and became $2,500 nobody had chosen. Hanz's call: all three
+    // start off. index.js's `def` and polish-bid-core's freshModel() both say so and must agree.
     out.conditions.defaults = {};
     b.switches().forEach((s) => { out.conditions.defaults[s.key] = s.on; });
   }
@@ -674,6 +704,7 @@ function runHandler(which) {
   // Nothing is written until something is touched -- a work type alone must not create a row.
   {
     const b = build();
+    await tick();
     b.setWorkType("polish");
     out.conditions.savesOnWorkTypeAlone = b.SAVES.length;
     out.conditions.cellsOnWorkTypeAlone = Object.keys(cells(b)).length;
@@ -682,6 +713,7 @@ function runHandler(which) {
   // A flip, and the literals it lands. Both tabs for local; Epoxy only for the three formulas.
   {
     const b = build();
+    await tick();
     b.setWorkType("polish");
     b.clickSwitch("dye");
     out.conditions.afterDyeOn = cells(b);
@@ -693,6 +725,7 @@ function runHandler(which) {
   // reno OFF is an explicit "New", not an absent key. The trap this whole section exists for.
   {
     const b = build();
+    await tick();
     b.setWorkType("polish");
     b.clickSwitch("reno");                       // on  -> "Reno"
     const on = cells(b)["Epoxy!B10"];
@@ -712,6 +745,7 @@ function runHandler(which) {
   // The bulk discount, byte for byte against the sheet's own V136/V137.
   {
     const b = build();
+    await tick();
     b.setWorkType("epoxy");
     b.clickSwitch("bulk_discount");
     out.conditions.bulkOn = cells(b)["Epoxy!D41"];
@@ -723,6 +757,7 @@ function runHandler(which) {
   // epoxy must not carry Polish!E25 = "Yes" into a bid with no polish in it.
   {
     const b = build();
+    await tick();
     b.setWorkType("polish");
     b.clickSwitch("dye");
     b.clickSwitch("joint_filler");               // -> "No"
@@ -738,11 +773,17 @@ function runHandler(which) {
   }
 
   // remove_existing_jf is inert while joint_filler is off, and SAYS so rather than vanishing.
+  //
+  // JOINT FILLER IS SWITCHED ON FIRST, because it ships OFF since 2026-09-19 -- so remove-existing
+  // is inert from the moment the step opens and "before" would already be the state under test.
+  // The press below is the one that matters; the press above only builds the precondition.
   {
     const b = build();
+    await tick();
     b.setWorkType("polish");
+    b.clickSwitch("joint_filler");               // ships off -> on, the precondition
     const before = b.switchFor("remove_existing_jf");
-    b.clickSwitch("joint_filler");               // default on -> off
+    b.clickSwitch("joint_filler");               // on -> off, the change under test
     const after = b.switchFor("remove_existing_jf");
     out.conditions.inert = {
       beforeInert: before.inert,
@@ -755,6 +796,7 @@ function runHandler(which) {
   // KEYBOARD. Space and Enter operate a focused switch; a plain letter does not.
   {
     const b = build();
+    await tick();
     b.setWorkType("polish");
     const space = b.press("dye", " ");
     const onAfterSpace = b.switchFor("dye").on;
@@ -780,6 +822,7 @@ function runHandler(which) {
   // refocus a keyboard user is thrown back to the top of the page on every press.
   {
     const b = build();
+    await tick();
     b.setWorkType("polish");
     b.press("dye", " ");
     out.conditions.focusKept = b.switchFor("dye").focused;
@@ -795,6 +838,7 @@ function runHandler(which) {
       "Polish!E29": "No",                // joint filler defaults true
       "Epoxy!B4": "no",                  // lower case, as a human might type into the grid
     } });
+    await tick();
     b.setWorkType("polish");
     const read = {};
     b.switches().forEach((s) => { read[s.key] = s.on; });
@@ -806,6 +850,7 @@ function runHandler(which) {
   // because leaving a stale out-of-scope flag behind is the bug the cleanup exists for.
   {
     const b = build({ cell_values: { "Polish!E25": "Yes" } });
+    await tick();
     b.setWorkType("epoxy");
     out.conditions.seededCleanup = {
       saves: b.SAVES.length,
@@ -817,6 +862,7 @@ function runHandler(which) {
   // with every cell the estimator edited by hand on the grid; a fresh object would drop them.
   {
     const b = build({ cell_values: { "Epoxy!E20": 4200, "Polish!E19": 3100 } });
+    await tick();
     b.setWorkType("polish");
     b.clickSwitch("dye");
     const cv = cells(b);
@@ -827,6 +873,7 @@ function runHandler(which) {
   // writing a cell for a condition this work type was never asked.
   {
     const b = build();
+    await tick();
     b.setWorkType("epoxy");
     const fake = { closest: () => fake, getAttribute: () => "dye" };
     b.fire(b.condBox, "click", { target: fake, preventDefault() {} });
@@ -835,29 +882,96 @@ function runHandler(which) {
       dyeWritten: "Polish!E25" in (b.STATE.cell_values || {}),
     };
   }
-}
 
-// ── the county picker, on the LIVE intake form ───────────────────────────────
-//
-// The county moved here from the polish beta's own step 1, which is being retired. It is a job
-// condition rather than a project field because it exists for the Remodel tax toggle directly
-// above it: Kansas taxes commercial remodel labor at the combined rate at the job site, and
-// Kyle's workbook hardcodes a flat 10% that is not a real rate anywhere.
-//
-// EXECUTED, because every way this can break is invisible to a source read:
-//
-//   * The mount is guarded (window.TWCounty ? … : null) so a script that failed to load degrades
-//     to a hidden field instead of a dead form. A grep sees the guard and cannot tell you which
-//     side of it the browser took. If the script tag were missing from index.html, or ordered
-//     after the page script, every assertion below would go quiet — so the harness loads the two
-//     files in the page's own order and asserts the control is actually alive.
-//   * The four draft keys are written by the module and merged by TW.setState. Whether the intake
-//     blob the Continue handlers save is UNCHANGED by all of this is a claim about what is in
-//     form.elements, and #county-input deliberately carries no `name`.
-//   * Enter inside a search list sits inside a form whose submit handler navigates. Whether it is
-//     swallowed is a fact about preventDefault at runtime.
-(async function () {
-  const tick = () => new Promise((r) => setImmediate(r));
+  // == THE CONFIRMED GAP, closed. dye / joint_filler / remove_existing_jf now consult the
+  // == SAME admin default the Polish beta already fetches (GET /api/condition-defaults), for
+  // == these three keys only -- every other condition above keeps its own hardcoded c.def.
+  //
+  // THE CELL STILL WINS. All three workbook cells present, exactly as a real step-1 save
+  // leaves them (Polish!E29=Yes, Polish!E25=No, Polish!F29=No), and the admin default set to
+  // the OPPOSITE of every one of them. If the admin default ran ahead of the cell read (or
+  // replaced it outright) every one of these three would come back flipped.
+  {
+    const b = build({ cell_values: {
+      "Polish!E29": "Yes",                 // joint filler ON
+      "Polish!E25": "No",                  // dye OFF
+      "Polish!F29": "No",                  // remove existing jf OFF
+    } }, null, { rows: [
+      { key: "joint_filler", on: false },      // opposite of the cell
+      { key: "dye", on: true },                // opposite of the cell
+      { key: "remove_existing_jf", on: true },  // opposite of the cell
+    ] });
+    // (These stay as they are: every cell is PRESENT here, so each switch's answer can only have
+    // come from its cell or from the admin row, and the two disagree on all three. What the tool
+    // ships does not enter into it.)
+    await tick();
+    b.setWorkType("polish");
+    out.conditions.cellBeatsAdminDefault = {
+      fetched: b.conditionFetches.length > 0,
+      jointFiller: b.switchFor("joint_filler").on,
+      dye: b.switchFor("dye").on,
+      removeExistingJf: b.switchFor("remove_existing_jf").on,
+    };
+  }
+
+  // A GENUINELY FRESH LOAD -- no cell_values at all, no autofill, nothing typed yet. THIS is
+  // the case the bug actually broke: hydrateConditions() fell back to the hardcoded c.def for
+  // these three no matter what the Defaults tab said, so the FIRST touch of any of the ten
+  // switches baked the wrong answer into the workbook. The admin default has to reach
+  // condState here, and therefore the cells conditionCells() writes.
+  {
+    // EVERY ROW THE OPPOSITE OF WHAT SHIPS, or this case proves nothing: with no cells at all
+    // the only two candidate answers are the hardcoded `def` and the admin row, so a row that
+    // agreed with `def` would pass against a page that never read the endpoint. joint_filler
+    // flipped here on 2026-09-19 when its `def` went to false.
+    const b = build(null, null, { rows: [
+      { key: "joint_filler", on: true },        // ships false; admin says true
+      { key: "dye", on: true },                 // ships false; admin says true
+      { key: "remove_existing_jf", on: true },  // ships false; admin says true
+    ] });
+    await tick();
+    b.setWorkType("polish");
+    // Touch an UNRELATED switch -- exactly the mechanism the report describes:
+    // conditionCells() writes EVERY in-scope condition's cells the instant any ONE of the
+    // ten is flipped, so this is what actually bakes the three into cell_values.
+    b.clickSwitch("local");
+    const written = cells(b);
+    out.conditions.adminDefaultReachesFreshLoad = {
+      fetched: b.conditionFetches.length > 0,
+      jointFiller: b.switchFor("joint_filler").on,
+      dye: b.switchFor("dye").on,
+      removeExistingJf: b.switchFor("remove_existing_jf").on,
+      cells: {
+        "Polish!E29": written["Polish!E29"],
+        "Polish!E25": written["Polish!E25"],
+        "Polish!F29": written["Polish!F29"],
+      },
+    };
+  }
+
+  // ── the county picker, on the LIVE intake form ─────────────────────────────
+  //
+  // Continues inside this SAME async IIFE, sharing its `tick`, rather than opening a second one
+  // of its own: two independent async IIFEs both feeding `out` would race the final
+  // console.log(JSON.stringify(out)) below against whichever one happened to finish last.
+  //
+  // The county moved here from the polish beta's own step 1, which is being retired. It is a job
+  // condition rather than a project field because it exists for the Remodel tax toggle directly
+  // above it: Kansas taxes commercial remodel labor at the combined rate at the job site, and
+  // Kyle's workbook hardcodes a flat 10% that is not a real rate anywhere.
+  //
+  // EXECUTED, because every way this can break is invisible to a source read:
+  //
+  //   * The mount is guarded (window.TWCounty ? … : null) so a script that failed to load
+  //     degrades to a hidden field instead of a dead form. A grep sees the guard and cannot tell
+  //     you which side of it the browser took. If the script tag were missing from index.html,
+  //     or ordered after the page script, every assertion below would go quiet — so the harness
+  //     loads the two files in the page's own order and asserts the control is actually alive.
+  //   * The four draft keys are written by the module and merged by TW.setState. Whether the
+  //     intake blob the Continue handlers save is UNCHANGED by all of this is a claim about what
+  //     is in form.elements, and #county-input deliberately carries no `name`.
+  //   * Enter inside a search list sits inside a form whose submit handler navigates. Whether it
+  //     is swallowed is a fact about preventDefault at runtime.
   out.county = {};
 
   // Boot: is the control alive, and does it stay out of the way until it matters?

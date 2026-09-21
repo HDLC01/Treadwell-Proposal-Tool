@@ -237,6 +237,36 @@ out.hardBidProbe = [];
   });
 });
 
+// ── dye and joint filler: fixed formulas keyed on the polished area (Polish!E25/E29) ──
+//
+// Neither is a library item -- no coverage, no pack size, no vendor -- so they are not routed
+// through priceAssembly/priceLine. dyeCost is a flat rate times the area; jointFillerCost is
+// ROUNDUP(area / 3500) kits at a flat rate per kit. The vectors below cover: an area that
+// divides evenly into 3500 (exactly one kit, and separately exactly two, so a false ceiling
+// could not slip a kit in on a round number), an area that does NOT divide evenly (needs the
+// round-up), an area of 0, and area not yet entered (null/undefined) -- each read against the
+// condition both ON and OFF, since OFF must price at exactly 0 whatever the area is.
+out.dyeJointFiller = {
+  dye: {
+    on_3500: P.dyeCost(3500, true),
+    on_12500: P.dyeCost(12500, true),
+    on_0: P.dyeCost(0, true),
+    on_null: P.dyeCost(null, true),
+    on_undefined: P.dyeCost(undefined, true),
+    off_3500: P.dyeCost(3500, false),
+  },
+  jointFiller: {
+    on_3500: P.jointFillerCost(3500, true),     // divides evenly -- exactly one kit
+    on_3501: P.jointFillerCost(3501, true),     // one SF over -- must round UP to two kits
+    on_7000: P.jointFillerCost(7000, true),     // divides evenly -- exactly two, not three
+    on_0: P.jointFillerCost(0, true),
+    on_null: P.jointFillerCost(null, true),
+    on_undefined: P.jointFillerCost(undefined, true),
+    off_3500: P.jointFillerCost(3500, false),
+    off_7000: P.jointFillerCost(7000, false),
+  },
+};
+
 // ── the model: fresh, migrated, and what is blocking it ──────────────────────
 out.fresh = P.freshModel();
 
@@ -399,5 +429,309 @@ out.blockers = [
       conditions: {}, contingency: 0 }) },
   { label: "a model that is not a model at all", says: P.blockers(null) }
 ];
+
+// ── the library's default labor lines ────────────────────────────────────────
+//
+// public.library_labor is what Library -> Default Items & Assemblies writes, and what
+// GET /api/library/labor hands back. Its rows are shaped the way that endpoint returns them --
+// `name` not `label`, a PostgREST numeric that can arrive as TEXT, and the audit columns -- so a
+// mapping that only works on a hand-tidied row shows up here rather than on staging.
+const LIB_ROWS = [
+  { id: "lab-densify", name: "Densify", rate: "40.00", unit: "days", guys_auto: false,
+    sort: 0, notes: null, owner_email: "hanz@wetreadwell.com",
+    created_at: "2026-09-17T14:00:00Z", updated_at: "2026-09-17T14:00:00Z" },
+  { id: "lab-night", name: "Night shift premium", rate: 12.5, unit: "hours", guys_auto: true,
+    sort: 1, notes: "after 6pm", owner_email: "hanz@wetreadwell.com",
+    created_at: "2026-09-17T14:01:00Z", updated_at: "2026-09-17T14:01:00Z" }
+];
+
+const seeded = P.seedLibraryLabor(P.freshModel().labor, LIB_ROWS);
+const inputArray = P.freshModel().labor;
+const inputBefore = JSON.stringify(inputArray);
+P.seedLibraryLabor(inputArray, LIB_ROWS);
+
+out.libraryLabor = {
+  // THE SEAM, both halves of it: the table's `name` becomes the model's `label`, and everything
+  // an estimator types starts empty.
+  mapped: LIB_ROWS.map(function (r) { return P.libraryLaborRow(r); }),
+  // PostgREST hands numeric back as a string. A rate that stayed a string would price fine
+  // (num() coerces) and then read back as a string off the saved draft forever.
+  rateType: typeof P.libraryLaborRow(LIB_ROWS[0]).rate,
+  // ADDED BESIDE. The four built-in rows come first, in their own order, then the library's in
+  // the order the server sent them.
+  seededIds: seeded.map(function (r) { return r.id; }),
+  seededLabels: seeded.map(function (r) { return r.label; }),
+  // …and the built-in four are the same objects' worth of data they always were.
+  builtInsUntouched:
+    JSON.stringify(seeded.slice(0, 4)) === JSON.stringify(P.freshModel().labor),
+  // A new array. Seeding the model the page is holding must not rewrite the array it was handed.
+  inputUntouched: JSON.stringify(inputArray) === inputBefore,
+  isANewArray: seeded !== inputArray,
+  // TRAVEL IS OVERRIDDEN IN PLACE, NEVER DUPLICATED, and `travel` is the one reserved id that
+  // beats the "already on the model wins" rule. The row the Defaults tab edits carries that id;
+  // skipped, the edit would do nothing, and pushed, migrateModel -- which finds Travel by that
+  // exact id -- would start backfilling onto whichever of two rows it reached first.
+  travelIsOverriddenInPlace: (function () {
+    const rows = P.seedLibraryLabor(P.freshModel().labor,
+      [{ id: "travel", name: "Drive time", rate: 99, unit: "days", guys_auto: false }]);
+    const travel = rows.filter(function (r) { return r.id === "travel"; });
+    return { count: travel.length, label: travel[0].label, rate: travel[0].rate,
+             unit: travel[0].unit, guysAuto: travel[0].guys_auto,
+             rowCount: rows.length,
+             // The sheet's own position, which is where the estimator reads it.
+             at: rows.map(function (r) { return r.id; }).indexOf("travel"),
+             ids: rows.map(function (r) { return r.id; }) };
+  })(),
+  // PRODUCTION, WHERE THE TABLE DOES NOT EXIST. list_labor() answers [] and never raises, so the
+  // library hands back nothing and Travel has to be the sheet's own $33.00/hr row exactly as it
+  // was before any of this. This is the state prod is in until the DDL runs.
+  travelWithNoStoredRow: (function () {
+    const rows = P.seedLibraryLabor(P.freshModel().labor,
+      [{ id: "lab-densify", name: "Densify", rate: 40, unit: "days", guys_auto: false }]);
+    const t = rows.filter(function (r) { return r.id === "travel"; })[0];
+    return { count: rows.filter(function (r) { return r.id === "travel"; }).length,
+             label: t.label, rate: t.rate, unit: t.unit, guysAuto: t.guys_auto };
+  })(),
+  // travelSeed WITH NOTHING IS THE SHIPPED ROW. Everything above rests on this: a stored row is
+  // an OVERRIDE of it, so the two have to be the same shape and the no-row answer has to be the
+  // figure off Kyle's Polish tab.
+  shippedTravel: P.travelSeed(),
+  // …and a stored row is read the way the API actually serves one: numeric as TEXT.
+  storedTravelFromText: P.travelSeed({ id: "travel", name: "Travel", rate: "41.50",
+                                       unit: "hours", guys_auto: true }),
+  // A RATE OF ZERO IS AN ANSWER, not a blank. Travel written off on local work is a thing an
+  // admin can mean, and falling back to 33.00 there would quietly re-price every new bid.
+  storedTravelAtZero: P.travelSeed({ id: "travel", name: "Travel", rate: 0, unit: "hours",
+                                     guys_auto: true }),
+  // A rate that is not a number at all falls back rather than poisoning the row with NaN.
+  storedTravelWithJunkRate: P.travelSeed({ id: "travel", name: "Travel", rate: "not a number",
+                                           unit: "hours", guys_auto: true }),
+  // AND A BLANK ONE IS NOT ZERO, which is a different check from the one above and the reason
+  // `isBlank` is there at all: Number("") and Number(null) are both 0 and both isFinite, so a
+  // guard written as `!isFinite(rate)` alone reads an empty rate as travel being FREE and prices
+  // every new bid's travel at nothing. Three shapes, because a row can arrive short in three ways.
+  storedTravelWithEmptyRate: P.travelSeed({ id: "travel", name: "Travel", rate: "",
+                                            unit: "hours", guys_auto: true }),
+  storedTravelWithNullRate: P.travelSeed({ id: "travel", name: "Travel", rate: null,
+                                           unit: "hours", guys_auto: true }),
+  storedTravelWithNoRateKey: P.travelSeed({ id: "travel", name: "Travel", unit: "hours" }),
+  // …and a blank NAME or UNIT falls back the same way rather than drawing an anonymous line or
+  // multiplying by a unit the estimate has no branch for.
+  storedTravelWithBlankText: P.travelSeed({ id: "travel", name: "   ", rate: 44, unit: "" }),
+  // THE ID IS NEVER READ OFF THE ROW, and this is the fixture that can tell. Every other one
+  // here hands in `id: "travel"`, where "reserve the id" and "copy the row's id" agree and a
+  // mutation between them is invisible. `travel` is what migrateModel's backfill finds this line
+  // by on every draft ever saved: a row that arrived with another id -- a caller's mistake, a
+  // renamed primary key -- must still produce THE Travel row rather than a stray labor line with
+  // no backfill and no way for the Defaults tab to address it.
+  travelSeedIgnoresAForeignId: P.travelSeed({ id: "lab-7f3a", name: "Drive time", rate: 44,
+                                              unit: "hours", guys_auto: true }),
+  // QUANTITIES ARE THE BID'S. Overlaying the library's rate onto Travel must not touch what
+  // somebody typed for how much of it this job needs.
+  travelKeepsItsQuantities: (function () {
+    const model = P.freshModel().labor.map(function (r) {
+      return r.id === "travel" ? Object.assign({}, r, { guys: 6, days: 2 }) : r;
+    });
+    const t = P.seedLibraryLabor(model,
+      [{ id: "travel", name: "Travel", rate: 44, unit: "hours", guys_auto: true }])
+      .filter(function (r) { return r.id === "travel"; })[0];
+    return { guys: t.guys, days: t.days, rate: t.rate };
+  })(),
+  // Nothing to add, in all three shapes "nothing" arrives in.
+  emptyList: P.seedLibraryLabor(P.freshModel().labor, []).map(function (r) { return r.id; }),
+  missingList: P.seedLibraryLabor(P.freshModel().labor, null)
+    .map(function (r) { return r.id; }),
+  rowsWithoutIds: P.seedLibraryLabor(P.freshModel().labor,
+    [{ name: "No id at all", rate: 5 }, null]).map(function (r) { return r.id; })
+};
+
+// ── the gate: whose labor is it? ─────────────────────────────────────────────
+//
+// laborUnstated is the ONLY thing standing between an admin editing the default list and an
+// estimator's finished bid. Every shape a saved blob actually arrives in is asked here, and the
+// v1 row is the one that matters most: a v1 draft keeps its crew under `labour`, so reading the
+// missing `labor` as "never stated" would inject defaults into a bid with real crew numbers.
+out.laborUnstated = [
+  { label: "nothing saved at all", saved: undefined },
+  { label: "null", saved: null },
+  { label: "a v2 model that states no labor", saved: { version: 2, conditions: {} } },
+  { label: "a v2 model with an empty labor array", saved: { version: 2, labor: [] } },
+  { label: "a v2 model with labor on it",
+    saved: { version: 2, labor: [{ id: "polishing", label: "Polishing", guys: 3 }] } },
+  { label: "a v1 draft, whose crew lives under `labour`", saved: V1 },
+  { label: "a version-less partial blob", saved: { conditions: { taxable: false } } },
+  { label: "a string", saved: "not a model" }
+].map(function (c) { return { label: c.label, unstated: P.laborUnstated(c.saved) }; });
+
+// ── AN EXISTING ESTIMATE MUST NOT CHANGE ─────────────────────────────────────
+//
+// The hard constraint, stated as a round trip. SAVED_WITH_LIB_ROW is a real estimator's work: the
+// four built-in rows with their own numbers typed in, Travel already in its current shape (so the
+// migration has nothing legitimate to do), and one library default they kept and then edited --
+// its rate is 55, not the library's 40, and its hours are typed.
+//
+// NOT VACUOUS: `wouldHaveAdded` seeds the very same array with the very same library list and
+// shows two rows arriving. The library has rows that COULD have landed on this bid; the gate is
+// what stops them. Without that counterexample "nothing was added" would also pass against an
+// empty library, which proves nothing at all.
+const SAVED_WITH_LIB_ROW = {
+  version: 2,
+  takeoff: [{ assembly_id: "a1", assembly_name: "Salt & Pepper polish", measurement: 9000,
+              unit: "SF" }],
+  labor: [
+    { id: "polishing", label: "Polishing", guys: 4, days: 6, rate: 33.0 },
+    { id: "mockup", label: "Mock-up", guys: 3, days: 0.5, rate: 33.0 },
+    { id: "jointfill", label: "Joint filler", guys: 2, days: 3, rate: 33.0 },
+    { id: "travel", label: "Travel", guys: 18, days: 2, rate: 33.0,
+      unit: "hours", guys_auto: true },
+    { id: "lab-densify", label: "Densify", guys: 2, days: 1, rate: 55, unit: "days",
+      guys_auto: false }
+  ],
+  conditions: { taxable: false },
+  contingency: 500,
+  fees: 0,
+  totals: {}
+};
+out.savedLaborIsUntouchable = {
+  unstated: P.laborUnstated(SAVED_WITH_LIB_ROW),
+  saved: SAVED_WITH_LIB_ROW.labor,
+  afterMigrate: P.migrateModel(JSON.parse(JSON.stringify(SAVED_WITH_LIB_ROW))).labor,
+  wouldHaveAdded: P.seedLibraryLabor(SAVED_WITH_LIB_ROW.labor, LIB_ROWS)
+    .map(function (r) { return r.id; }),
+  // REQUIREMENT 3, at the only level this module can answer it: the row is the BID's now. Nothing
+  // in the migration or the seeding consults the library about a row already on the model, so a
+  // default deleted from the library (the empty list here) leaves it exactly where it is.
+  survivesAnEmptyLibrary: P.seedLibraryLabor(
+    P.migrateModel(JSON.parse(JSON.stringify(SAVED_WITH_LIB_ROW))).labor, [])
+    .map(function (r) { return r.id; })
+};
+
+// ── the condition defaults: the merge, the gate, and the bid that must not move ───────────────
+//
+// The three Takeoff conditions stopped being "built in" on 2026-09-18 (Hanz, twice). Their
+// answers for a NEW bid are editable on the Library page's Defaults tab and stored in
+// `condition_defaults`; freshModel() still states what the tool SHIPS, and a stored row is an
+// override of one key.
+//
+// EVERY LIBRARY ROW HERE DISAGREES WITH THE SHIPPED ANSWER, deliberately. All three ship OFF
+// since 2026-09-19 -- joint filler moved that day, because it had started carrying a real $500
+// kit per 3,500 sq ft -- so all three rows here say on. A fixture that agreed with freshModel
+// could not tell a merge that works from one that does nothing at all.
+const COND_ROWS = [
+  { key: "joint_filler", on: true },
+  { key: "dye", on: true },
+  { key: "remove_existing_jf", on: true }
+];
+
+const condInput = P.freshModel().conditions;
+const condInputBefore = JSON.stringify(condInput);
+P.seedConditionDefaults(condInput, COND_ROWS);
+
+out.conditionDefaults = {
+  shipped: P.freshModel().conditions,
+  seeded: P.seedConditionDefaults(P.freshModel().conditions, COND_ROWS),
+  // The five conditions answered on Intake are not in the vocabulary and must come through
+  // untouched — the merge writes the three it was handed and nothing else.
+  intakeFiveUntouched: (function () {
+    const a = P.freshModel().conditions;
+    const b = P.seedConditionDefaults(a, COND_ROWS);
+    return ["local", "hard_bid", "prevailing_wage", "taxable", "remodel_tax", "bond"]
+      .every(function (k) { return a[k] === b[k]; });
+  })(),
+  // A NEW OBJECT. Seeding the conditions the page is holding must not rewrite the object it was
+  // handed — the same rule seedLibraryLabor follows for its array.
+  inputUntouched: JSON.stringify(condInput) === condInputBefore,
+  isANewObject: P.seedConditionDefaults(condInput, COND_ROWS) !== condInput,
+  // A KEY THE MODEL DOES NOT CARRY IS SKIPPED, not added. migrateModel whitelists condition keys
+  // against freshModel().conditions and DROPS every other one, so a key seeded here would look
+  // applied on screen and come back missing on the next load.
+  offVocabularyIgnored: (function () {
+    const m = P.seedConditionDefaults(P.freshModel().conditions,
+      [{ key: "reno", on: true }, { key: "made_up", on: true }]);
+    return !("reno" in m) && !("made_up" in m) &&
+      JSON.stringify(m) === JSON.stringify(P.freshModel().conditions);
+  })(),
+  // Nothing to apply, in every shape "nothing" arrives in — including a row with no key at all
+  // and a null in the list, which is what a half-written response looks like.
+  emptyList: P.seedConditionDefaults(P.freshModel().conditions, []),
+  missingList: P.seedConditionDefaults(P.freshModel().conditions, null),
+  rowsWithoutKeys: P.seedConditionDefaults(P.freshModel().conditions,
+    [{ on: true }, null, { key: "", on: true }])
+};
+
+// ── the gate: is there any saved work to protect? ─────────────────────────────────────────────
+//
+// conditionsUnstated is the ONLY thing standing between a Defaults-tab edit and an estimator's
+// saved answers, and it is STRICTER than laborUnstated on purpose. An empty `labor` array is a
+// shape a real model holds and genuinely means "no rows chosen"; `conditions` has no equivalent,
+// because migrateModel backfills every key from freshModel on the way out — so a saved v2 blob
+// that omitted `conditions` was still SHOWN an answer and its next save wrote that answer into
+// Kyle's workbook. Only "nothing saved whatsoever" is seedable.
+out.conditionsUnstated = [
+  { label: "nothing saved at all", saved: undefined },
+  { label: "null", saved: null },
+  { label: "an empty blob", saved: {} },
+  { label: "a v2 model that states no conditions", saved: { version: 2, labor: [] } },
+  { label: "a v2 model with conditions on it",
+    saved: { version: 2, conditions: { joint_filler: false } } },
+  { label: "a v1 draft, whose conditions predate these three", saved: V1 },
+  { label: "the beta intake's first save: conditions and no version",
+    saved: { conditions: { taxable: false } } },
+  { label: "a string", saved: "not a model" }
+].map(function (c) { return { label: c.label, unstated: P.conditionsUnstated(c.saved) }; });
+
+// ── AN EXISTING ESTIMATE'S ANSWERS ARE THE ESTIMATOR'S WORK ───────────────────────────────────
+//
+// Hanz's rule for this feature, verbatim: changing a default must not change any estimate that
+// already exists. Stated here as a round trip through the real migration.
+//
+// EVERY ONE OF THE THREE SAVED ANSWERS DISAGREES WITH THE LIBRARY ROW ABOVE, which is what makes
+// this non-vacuous: `wouldHaveChanged` applies the same rows to the same model and shows all
+// three moving. The library has answers that COULD have landed on this bid; the gate is what
+// stops them. Without that counterexample "nothing changed" would also pass against a library
+// that happened to agree, which proves nothing.
+//
+// joint_filler is the one that bites either way, and the direction reversed on 2026-09-19 when
+// it stopped shipping on. It now SHIPS off, so the bid at risk is one where somebody deliberately
+// turned it ON -- a careless default would quietly take a $500 kit per 3,500 sq ft back out, and
+// the downloaded workbook would say No in Polish!E29 with nothing on screen admitting it.
+const SAVED_WITH_CONDITIONS = {
+  version: 2,
+  takeoff: [{ assembly_id: "a1", assembly_name: "Salt & Pepper polish", measurement: 9000,
+              unit: "SF" }],
+  labor: [
+    { id: "polishing", label: "Polishing", guys: 4, days: 6, rate: 33.0 },
+    { id: "mockup", label: "Mock-up", guys: 3, days: 0.5, rate: 33.0 },
+    { id: "jointfill", label: "Joint filler", guys: 2, days: 3, rate: 33.0 },
+    { id: "travel", label: "Travel", guys: 18, days: 2, rate: 33.0,
+      unit: "hours", guys_auto: true }
+  ],
+  // ALL THREE THE OPPOSITE OF COND_ROWS ABOVE, which is what keeps `wouldHaveChanged`
+  // meaningful: the library has an answer for every one of them that COULD have landed on this
+  // bid, and the gate is the only thing stopping it. joint_filler flipped here on 2026-09-19 to
+  // stay opposite when the library row flipped.
+  conditions: { local: false, hard_bid: true, prevailing_wage: true, taxable: false,
+                remodel_tax: true, bond: true,
+                joint_filler: false, dye: false, remove_existing_jf: false },
+  contingency: 500,
+  fees: 0,
+  totals: {}
+};
+const savedClone = function () {
+  return JSON.parse(JSON.stringify(SAVED_WITH_CONDITIONS));
+};
+out.savedConditionsAreUntouchable = {
+  unstated: P.conditionsUnstated(SAVED_WITH_CONDITIONS),
+  saved: SAVED_WITH_CONDITIONS.conditions,
+  afterMigrate: P.migrateModel(savedClone()).conditions,
+  // THE COUNTEREXAMPLE. The same three rows applied to the same model move all three answers, so
+  // "afterMigrate equals saved" is a fact about the gate and not about the fixture.
+  wouldHaveChanged: P.seedConditionDefaults(P.migrateModel(savedClone()).conditions, COND_ROWS),
+  // …and a brand new bid DOES take them, or the feature does nothing at all.
+  freshTakesThem: P.seedConditionDefaults(P.freshModel().conditions, COND_ROWS),
+  // Migrating twice is migrating once, for conditions as for everything else this model carries.
+  migrationIsIdempotent: JSON.stringify(P.migrateModel(P.migrateModel(savedClone())).conditions)
+    === JSON.stringify(P.migrateModel(savedClone()).conditions)
+};
 
 console.log(JSON.stringify(out));

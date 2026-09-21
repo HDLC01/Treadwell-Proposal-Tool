@@ -215,6 +215,9 @@
   <script src="/js/icons.js"></script>
   <script src="/auth.js"></script>
   <script src="/shared.js"></script>
+  <!-- Which tab a reload lands on. Pure functions over location.hash, no DOM and no fetch; it
+       must precede the page script, which reads window.TWTabMemo as it restores the open tab. -->
+  <script src="/js/tab-memo.js"></script>
   <script src="/js/followup-settings.js"></script>
 </body>
 </html>

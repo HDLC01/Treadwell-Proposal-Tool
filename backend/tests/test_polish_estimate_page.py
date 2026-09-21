@@ -1023,18 +1023,200 @@ def test_the_three_that_moved_render_as_switches_on_the_takeoff_step(ran):
         assert t[key]["there"], "%s does not render on the Takeoff step" % key
     assert ran["movedToTakeoff"]["notOnTheLaborStep"], (
         "the moved conditions render on the Labor step, where they read as priced labor")
-    # A CARD EACH, the same `.tk` container the assembly rows use. Hanz: "at least make it a
-    # container the same as the assemblie". Three bare switches under a column of cards read as
-    # page furniture -- something that configures the list rather than something in it.
     c = ran["movedToTakeoff"]["cards"]
-    assert c["count"] == 3, "expected three condition cards, found %s" % c["count"]
-    # AND THE CARD MUST NOT CLAIM A COST. An assembly row comes to a number; these come to a
-    # Yes/No that only Kyle's workbook reads. Printing "$0" beside one would be a figure, and a
-    # figure is a claim -- the kits ARE charged, by Polish!E29, just not by this screen.
-    assert c["noCostBox"], (
-        "a condition card renders a cost box, which says it priced something it did not")
     assert c["namesItsCell"], (
-        "the cards do not name the cells they set, which is the only thing they do")
+        "the cards do not name the cells they set, which is one of the things they do")
+
+
+@needs_node
+def test_joint_filler_and_dye_render_as_material_rows(ran):
+    """WHAT HANZ ASKED FOR, IN HIS OWN TERMS: "joint filler and die should have a measurement a
+    unit in a total cost and they should be a material not an assembly" (staging, 2026-09-19).
+
+    They were already priced -- 2026-09-18 put a dollar figure beside each switch -- and that was
+    not what he was pointing at. A line the bid buys has four things to say: what it is, how much
+    of it, in what, and what it comes to. A switch with one number beside it can say the last of
+    those and nothing else, and the estimator is then left to take the Material total on trust.
+    So these two now render as `.tk mat` cards over the assembly row's own four-column `.tk-g`,
+    with the same `.costbox` in the Total cost column that every row above them uses.
+
+    THE UNIT IS THE THING THAT MAKES THIS NOT A RELABEL. Dye is bought across the area, so its
+    measurement IS the area in SF. Joint filler is bought in 10 gallon KITS -- ROUNDUP(area/3500)
+    of them -- so quoting 17,500 SF against a $2,500 line would misname what the money buys. The
+    fixture's 17,500 SF is exactly 5 kits at $500, and the card says five kits.
+
+    Mutation: swap joint_filler's `qty` for `B.num(area)` and its `unit` for a fixed "SF"."""
+    c = ran["movedToTakeoff"]["cards"]
+    jf, dy = c["jointFiller"], c["dye"]
+    for name, card in (("joint filler", jf), ("dye", dy)):
+        assert card["isMaterialCard"], (
+            "%s is not rendered as a material card -- Hanz asked for a material, not an "
+            "assembly and not a switch" % name)
+        assert card["usesTheAssemblyGrid"], (
+            "%s does not use the takeoff row's own column template, so its figures do not line "
+            "up with the rows above it" % name)
+        assert card["labels"] == ["Material", "Measurement", "Unit", "Total cost"], (
+            "%s does not carry the four columns that were asked for: %r" % (name, card["labels"]))
+    # JOINT FILLER IS BOUGHT IN KITS, and the count is the one the price was worked out from.
+    assert jf["name"] == "Joint filler, 10 gal kit", jf["name"]
+    assert jf["measurement"] == {"cls": "", "empty": False, "text": "5"}, (
+        "17,500 SF is five kits of 3,500, and the Measurement column has to say five: %r"
+        % jf["measurement"])
+    assert jf["unit"]["text"] == "kits", (
+        "joint filler's unit is kits, not the square feet it was derived from: %r" % jf["unit"])
+    assert jf["measureHint"] == "17,500 sq ft, at one kit per 3,500, rounded up.", (
+        "the kit count does not show its working, so five reads as a number from nowhere: %r"
+        % jf["measureHint"])
+    # DYE IS BOUGHT ACROSS THE AREA, so its measurement is the area itself.
+    assert dy["name"] == "Dye, two coats", dy["name"]
+    assert dy["measurement"]["text"] == "17,500", dy["measurement"]
+    assert dy["unit"]["text"] == "SF", dy["unit"]
+    # THE PER-UNIT HINT IS KYLE'S OWN RATE, C29 and C25, arrived at by the page rather than typed
+    # into it -- which is the check that the measurement and the money agree about what is bought.
+    assert jf["rate"] == "$500.00 / kit", jf["rate"]
+    assert dy["rate"] == "$0.14 / SF", dy["rate"]
+
+
+@needs_node
+def test_nothing_on_the_priced_condition_cards_takes_typing(ran):
+    """THE HONEST HALF OF THE REDESIGN.
+
+    A material row's Measurement is the estimator's own number. Neither of these has one: the area
+    is always `B.takeoffSf(M.takeoff)` -- the same figure materialTotal() prices and divides by,
+    which is what stops the Material total and the price-per-SF disagreeing about what "the area"
+    is -- and the kit count is recomputed from it on every render. An `<input>` in that column
+    would take keystrokes and silently throw them away, which is a worse lie than the switch-and-
+    a-sentence card this replaced.
+
+    So all four columns are `.costbox`: the page's own "a field's answer, never an input" box,
+    which is exactly what the Total cost column beside them has always been. FULL CONTRAST, not
+    disabled-grey -- read-only and disabled are different states, and only an absent value greys.
+
+    Mutation: render the Measurement column as `<input class="n" ...>`."""
+    c = ran["movedToTakeoff"]["cards"]
+    for name in ("jointFiller", "dye"):
+        assert c[name]["nothingTypeable"], (
+            "%s renders an input or a select, which invites typing into a figure the page "
+            "derives and would discard" % name)
+        assert not c[name]["measurement"]["empty"], (
+            "%s's measurement is greyed on a measured job -- a derived fact keeps full "
+            "contrast, only a missing value goes grey" % name)
+
+
+@needs_node
+def test_the_switch_sits_where_the_row_delete_sits(ran):
+    """WHERE THE ON/OFF WENT, and why it is not a fifth thing bolted onto a four-column card.
+
+    A takeoff row's header ends with the button that takes the row out of the bid. On these two
+    the switch does that same job -- off means this line is not in the takeoff -- so it takes that
+    slot, after the header's right-hand summary rather than crowding in beside the tag.
+
+    ITS LABEL NAMES THE STATE. "In the bid" is readable against both switch positions; "Include"
+    would name the action and therefore describe the state being left, which is the mistake the
+    labor card's old "Type my own" button made and had corrected.
+
+    Mutation: move condSwitch back above the .tk-sub summary in condMaterialCard."""
+    c = ran["movedToTakeoff"]["cards"]
+    for name in ("jointFiller", "dye"):
+        assert c[name]["switchAfterTheSummary"], (
+            "%s's switch is not in the slot a takeoff row's remove button occupies" % name)
+        assert c[name]["headerSummary"], (
+            "%s's header does not summarise what is bought, which is what a takeoff row's "
+            "header does" % name)
+    assert ran["movedToTakeoff"]["cards"]["jointFiller"]["headerSummary"] == "5 kits"
+    assert ran["movedToTakeoff"]["cards"]["dye"]["headerSummary"] == "17,500 SF"
+
+
+@needs_node
+def test_the_total_cost_column_keeps_the_takeoff_rows_own_convention(ran):
+    """SAME BOX, SAME moneyAuto, SAME EM DASH. Confirmed rather than reinvented.
+
+    Joint Filler ships ON and 17,500 SF is five kits at $500, so it reads $2,500. Dye ships OFF
+    and gets the unpriced-row dash `rowCost()` already uses, in `.costbox.empty` -- never "$0",
+    which would read as a computed answer of nothing rather than "not currently in the bid".
+
+    Mutation: render the off state as moneyAuto(0)."""
+    c = ran["movedToTakeoff"]["cards"]
+    jf = c["jointFiller"]["cost"]
+    assert jf == {"cls": "", "empty": False, "text": "$2,500"}, (
+        "Joint Filler ships on and prices 17,500 SF at one kit per 3,500 -- the Total cost "
+        "column should read $2,500, got %r" % jf)
+    dy = c["dye"]["cost"]
+    assert dy and dy["empty"] and dy["text"] == "\u2014", (
+        "Dye ships off and must show the unpriced-row dash, not a figure: %r" % dy)
+
+
+@needs_node
+def test_remove_existing_is_untouched(ran):
+    """THE CARD THIS CHANGE WAS TOLD TO LEAVE ALONE, pinned so a later tidy-up cannot sweep it
+    into the same shape for symmetry.
+
+    Hanz named joint filler and dye. Remove Existing is not a material and buys nothing here: it
+    adds a fourth hand to the joint-filler crew and is priced on the Labor step. A Measurement and
+    a Total cost on it would be inventing a purchase, and a "$0" would be a figure that is wrong.
+
+    Mutation: give remove_existing_jf a `cost` in CONDITION_CARDS."""
+    r = ran["movedToTakeoff"]["cards"]["removeExisting"]
+    assert r["stillASwitchCard"], "Remove Existing was rebuilt as a material card"
+    assert r["noCostBox"], (
+        "Remove Existing renders a cost box, which says it priced something it did not")
+    assert r["noMeasurement"], "Remove Existing grew a measurement it does not have"
+    assert r["namesItsCell"] and r["saysWhereItIsPriced"], (
+        "Remove Existing no longer names Polish!F29 or says where its price lives")
+    # And it is the only switch-shaped card left: the other two are material rows now.
+    assert ran["movedToTakeoff"]["cards"]["count"] == 1, (
+        "expected one switch-shaped condition card, found %s"
+        % ran["movedToTakeoff"]["cards"]["count"])
+
+
+@needs_node
+def test_the_priced_cards_follow_the_takeoff_area_live(ran):
+    """A STALE FIGURE ON A PRICED LINE IS WORSE THAN NO FIGURE, and this one was stale.
+
+    Every number on these cards is derived from the takeoff area, and typing a measurement takes
+    `changed(false)` -- the in-place repaint, never a panel rebuild. Nothing in repaintNumbers
+    knew these cards existed, so from 2026-09-18 to 2026-09-19 typing 3,000 into row 1 moved the
+    Material total at the bottom of the screen while the Joint Filler line above it went on
+    quoting the kits and the dollars of an area that had left the page.
+
+    READ THROUGH THE NODES. A regex over the panel's innerHTML reports the markup from render
+    time and would pass with the whole repaint block deleted.
+
+    Mutation: delete the CONDITION_CARDS loop from repaintNumbers."""
+    r = ran["condCardsRepaint"]
+    assert r["noRebuild"], (
+        "typing rebuilt the panel, so this proves nothing about the in-place repaint")
+    assert r["before"]["jf"]["qty"] == "5" and r["before"]["jf"]["cost"] == "$2,500", r["before"]
+    # 12,500 down to 3,000 leaves 8,000 SF of polished area: three kits, not five.
+    a = r["after"]
+    assert a["jf"]["qty"] == "3", (
+        "the kit count did not follow the area down to 8,000 sq ft: %r" % a["jf"])
+    assert a["jf"]["cost"] == "$1,500" and r["expectedJfCost"] == 1500, (
+        "the joint-filler figure disagrees with polish-bid-core's own jointFillerCost: %r" % a)
+    assert a["jf"]["sub"] == "3 kits", a["jf"]["sub"]
+    assert a["jf"]["hint"] == "8,000 sq ft, at one kit per 3,500, rounded up.", a["jf"]["hint"]
+    assert a["dye"]["qty"] == "8,000" and a["dye"]["sub"] == "8,000 SF", a["dye"]
+
+
+@needs_node
+def test_switching_dye_on_moves_the_material_total_by_exactly_the_dye(ran):
+    """THE GUARANTEE UNDER THE MARKUP, which outlived two card designs and has to outlive this one.
+
+    Flipping the switch adds `dyeCost(area)` to the Material total and moves nothing else. The
+    figure is polish-bid-core's, not one typed into this file, so a page that quietly priced the
+    dye a second time -- or priced it off a different area than the one the bid divides by -- is
+    caught here rather than in a proposal.
+
+    Mutation: add the dye into materialTotal() twice, or drop it from materialTotal()."""
+    d = ran["dyeToggleMovesTheTotal"]
+    delta = d["materialOn"] - d["materialOff"]
+    assert abs(delta - d["expectedDelta"]) < 0.005, (
+        "switching dye on moved the Material total by %s, but dyeCost(%s) is %s"
+        % (delta, d["area"], d["expectedDelta"]))
+    assert d["laborUnmoved"], "switching dye on moved the labor total, which it does not touch"
+    assert d["costBoxOff"] == "\u2014" and d["costBoxOn"] == "$2,450", (
+        "the card's own Total cost box did not follow the switch: %r -> %r"
+        % (d["costBoxOff"], d["costBoxOn"]))
 
 
 @needs_node
@@ -1147,7 +1329,9 @@ def test_the_save_writes_the_condition_cells_and_no_others(ran):
         # remove_existing_jf's "No" while joint filler is on: a blank Yes/No cell is not "No" to
         # Kyle's formulas, it is whatever his IF() falls through to.
         "Polish!E25": "No",                         # dye
-        "Polish!E29": "Yes",                        # joint_filler
+        # OFF SINCE 2026-09-19, and the literal is still WRITTEN rather than omitted: a blank
+        # Yes/No cell is not "No" to Kyle's formulas, it is whatever his IF() falls through to.
+        "Polish!E29": "No",                         # joint_filler
         "Polish!F29": "No",                         # remove_existing_jf
     }, "the condition literals do not match the model: %r" % (ran["save"]["cellValues"],)
     # A draft that already carried a worksheet map keeps it, and gains only those same five.
@@ -1261,7 +1445,9 @@ def test_a_v1_model_becomes_v2_with_its_areas_as_measurements(ran):
     # migration that reset a v1 job's answers would change a bid that has already been sent.
     assert m["conditions"] == {"local": False, "hard_bid": True, "prevailing_wage": True,
                               "taxable": False, "remodel_tax": True, "bond": False,
-                              "dye": False, "joint_filler": True,
+                              # Not in the v1 blob, so it comes from freshModel -- which ships
+                              # it off since 2026-09-19.
+                              "dye": False, "joint_filler": False,
                               "remove_existing_jf": False}, (
         "the v1 job conditions were not preserved: %r" % m["conditions"])
     assert m["contingency"] == 0 and m["totals"] == {}
@@ -1482,7 +1668,7 @@ def test_the_page_loads_no_formula_engine_and_the_modules_in_order(html):
     # /js/icons.js is FIRST, ahead of auth.js: the sidebar auth.js draws asks it for every glyph
     # in the rail. See the house rule at the top of frontend/js/icons.js.
     assert srcs == ["https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0",
-                    "/js/icons.js", "/auth.js", "/shared.js",
+                    "/js/icons.js", "/auth.js", "/shared.js", "/js/tab-memo.js",
                     "/js/library-core.js", "/js/polish-bid-core.js", "/js/polish-sandbox.js",
                     "/js/polish-estimate.js"], (
         "the page's script list has changed: %r" % srcs)
@@ -1617,6 +1803,11 @@ def test_the_remodel_tax_uses_the_countys_real_rate_not_the_sheets_ten_percent(r
     c = ran["remodelRate"]["county"]
     assert c["pct"] == "7.975%", "a Johnson County job is not charged the county rate: %r" % c["pct"]
     assert c["pct"] == c["expectedPct"]
+    # BACK TO $1,529 ON 2026-09-19. It was $1,529 before 2026-09-18, then $1,715 while
+    # joint_filler shipped ON and added $2,500 of material to this fixture, and now $1,529 again
+    # because the condition ships off. The $2,500 is not the whole of the $186 swing -- it moves
+    # the sub-total, and GP, shipping and the taxes all follow it -- which is exactly why the
+    # figure is worth pinning rather than recomputing in the test.
     assert c["money"] == "$1,529" and c["expectedMoney"] == 1529
     assert c["total"] == "$33,239" and c["expectedTotal"] == 33239, (
         "the total does not follow the county rate through the chain")
@@ -1633,6 +1824,8 @@ def test_with_no_county_it_falls_back_to_the_state_rate_and_says_so(ran):
     it matches the sheet, while being wrong everywhere."""
     f = ran["remodelRate"]["fallback"]
     assert f["pct"] == "6.5%", "the no-county fallback is not the Kansas state rate: %r" % f["pct"]
+    # $1,247 before 2026-09-18 and again from 2026-09-19 -- the same joint-filler-by-default
+    # shift as the county case above, in reverse.
     assert f["money"] == "$1,247" and f["expectedMoney"] == 1247
     assert f["expectedMoney"] != f["whatTenPercentWouldBe"], (
         "the fallback charges what the sheet's 10% would have charged (%s), so this test proves "
@@ -1699,3 +1892,295 @@ def test_the_county_is_printed_as_stored_not_with_County_appended(ran):
     that read "Johnson County, KS County" beside the remodel row."""
     assert not ran["remodelRate"]["county"]["doubledCountyWord"], (
         "the county name is printed with 'County' appended to a value that already contains it")
+
+
+# -- the library's default labor lines ----------------------------------------
+# "+ Add a labor line" on Library -> Default Items & Assemblies shipped wired to nothing, because
+# nothing stored a custom labor line. public.library_labor now does, and this step is what reads
+# it. Every test below BOOTS the page and RENDERS its Labor step: a gate that reads the wrong
+# thing still contains the word laborUnstated, and a row that never reaches the panel is still on
+# a model somebody could print. That is exactly how the dead button shipped green.
+@needs_node
+def test_a_brand_new_bid_opens_holding_travel_and_every_default_line(ran):
+    """A default that nothing consumes is a settings screen that lies. A new estimate opens with
+    the three crew rows off Kyle's Polish tab, Travel, and then every line the estimator set up
+    under Items & Assemblies -- named, rendered, and editable.
+
+    THE TABLE AND THE MODEL DISAGREE ON PURPOSE: the row is `name` in the database and `label` on
+    the model. One mapping bridges them (B.libraryLaborRow), and this is the test that would see
+    it come apart -- the defaults would render with blank name boxes.
+
+    Mutation: delete the `M.labor = B.seedLibraryLabor(...)` line from init(). The page still
+    opens, still prices, and every test that existed before this one still passes."""
+    n = ran["laborDefaults"]["brandNew"]
+    assert n["ids"] == ["polishing", "mockup", "jointfill", "travel",
+                        "lab-densify", "lab-night"], (
+        "a new bid did not open holding Travel AND the library's lines, in that order: %r"
+        % n["ids"])
+    # RENDERED, not merely on the model: these are the values in the boxes the Labor step drew.
+    assert n["onScreen"] == ["Polishing", "Mock-up", "Joint filler", "Travel",
+                             "Densify", "Night shift premium"], (
+        "the Labor step did not put the defaults on screen: %r" % n["onScreen"])
+    assert n["costCells"] == 6, "the panel drew %r cost cells for 6 rows" % n["costCells"]
+    assert n["rates"] == [33, 33, 33, 33, 40, 12.5], (
+        "a default's rate did not come across as a number: %r" % n["rates"])
+    # The estimator's own boxes are left for the estimator. A default says what the line is and
+    # what it costs per unit, never how much of it this job needs.
+    assert n["days"][4:] == ["", ""], "a default arrived with days already typed in"
+    # ...with the one documented exception, which is not a typed figure at all: a default that
+    # carries guys_auto gets the derived man-day sum before the first paint, exactly as Travel
+    # does. Compared to Travel's own rather than to a literal, because the point is that the two
+    # went through the same sync, not that today's fixture sums to any particular number.
+    assert n["autoGuys"] == n["travelGuys"] and n["travelGuys"] != [""], (
+        "a guys_auto default was not filled the way Travel is: %r vs %r"
+        % (n["autoGuys"], n["travelGuys"]))
+    # A default must not quietly put money on a bid nobody has priced yet.
+    assert n["laborTotal"] == n["builtInTotal"], (
+        "seeding the defaults changed the labor total before anything was typed: %r vs %r"
+        % (n["laborTotal"], n["builtInTotal"]))
+    assert n["mainShown"]
+
+
+@needs_node
+def test_a_project_that_came_through_the_beta_intake_gets_the_defaults_too(ran):
+    """THE CASE THAT DECIDES WHETHER ANY OF THIS IS REACHABLE. Every beta project starts on
+    polish-intake.html, whose save mints the first `polish_estimate` -- version, takeoff,
+    conditions, and no labor, because labor is not that page's to state.
+
+    Until 2026-09-17 that save stated labor anyway: migrateModel fills a missing `labor` in from
+    freshModel() before handing the model back, so the first keystroke on the intake form
+    persisted four crew rows nobody had been shown. That was enough to disqualify every beta
+    project from its own defaults, seconds before the estimator ever reached the Labor step.
+
+    THIS TEST OWNS THE CALCULATOR'S HALF ONLY, and its fixture is that blob written out by
+    hand. The intake page's half -- that this really is what it mints -- is pinned next door by
+    test_this_page_does_not_state_labor_it_has_no_screen_for, which asks the real
+    B.laborUnstated() the same question about what that page actually saved. Verified: dropping
+    the `delete model.labor` line from js/polish-intake.js turns that test red and leaves this one
+    green, because a hand-built fixture cannot notice the other page changing.
+
+    Mutation: delete the `M.labor = B.seedLibraryLabor(...)` line from init() -- the calculator
+    stops seeding the one blob shape every beta project arrives in."""
+    f = ran["laborDefaults"]["fromIntake"]
+    assert f["fetched"], "a project minted by the beta intake never even asked for the defaults"
+    assert f["ids"] == ["polishing", "mockup", "jointfill", "travel",
+                        "lab-densify", "lab-night"], (
+        "the normal flow does not get the defaults: %r" % f["ids"])
+    assert f["onScreen"][-2:] == ["Densify", "Night shift premium"]
+
+
+@needs_node
+def test_a_saved_bid_opens_exactly_as_it_was_saved(ran):
+    """THE HARD CONSTRAINT. An estimator's labor rows are their work. A bid that has been worked
+    on comes back row for row, number for number, no matter what the default list says today --
+    including a default they kept and then re-rated from $40 to $55.
+
+    The defaults are not filtered out late; they are never asked for. `fetches` carries no
+    /api/library/labor at all, which is the only way to tell "the gate ran" from "the gate
+    happened to add nothing today".
+
+    NOT VACUOUS: `wouldHaveAdded` seeds that same saved array with that same library list and a
+    row arrives. There was something to keep out.
+
+    Mutation: replace the gate in init() with `true` (seed unconditionally). `after` grows a fifth
+    row and the estimator's $55 sits next to a $40 duplicate."""
+    w = ran["laborDefaults"]["worked"]
+    assert w["after"] == w["saved"], (
+        "a saved bid's labor came back changed:\n saved: %r\n opened: %r"
+        % (w["saved"], w["after"]))
+    assert w["onScreen"] == ["Polishing", "Mock-up", "Travel", "Densify"], (
+        "the Labor step drew something other than the saved rows: %r" % w["onScreen"])
+    assert not [u for u in w["fetches"] if "/labor" in u], (
+        "a saved bid asked the server for the default labor lines: %r" % w["fetches"])
+    assert len(w["wouldHaveAdded"]) > len(w["saved"]), (
+        "the library holds nothing this bid is missing, so 'nothing was added' proves nothing: %r"
+        % w["wouldHaveAdded"])
+    # A v1 draft keeps its crew under `labour` and so has no `labor` key at all. Reading that
+    # absence as "never worked on" would append the defaults to crew rows typed months ago.
+    v1 = ran["laborDefaults"]["v1"]
+    assert not v1["fetched"], "a v1 draft asked for the defaults"
+    assert v1["ids"] == ["polishing", "mockup", "jointfill", "travel"], (
+        "a v1 draft was given the library's default lines: %r" % v1["ids"])
+
+
+@needs_node
+def test_deleting_a_default_leaves_the_bids_already_holding_it_alone(ran):
+    """Once seeded and saved, the row is the BID's. The library is not consulted about it again,
+    so an admin tidying the default list cannot reach into a bid that was priced with one -- which
+    would move a customer's number after it had been quoted.
+
+    Mutation: make the seeding an intersection instead of an addition -- rebuild `M.labor` from
+    the library list on every load. The kept row disappears off a saved bid the moment somebody
+    deletes the default."""
+    d = ran["laborDefaults"]["deleted"]
+    assert "lab-densify" in d["ids"], (
+        "deleting the default took it off a bid already holding it: %r" % d["ids"])
+    assert d["onScreen"] == ["Polishing", "Mock-up", "Travel", "Densify"]
+    assert d["densifyRate"] == [55], (
+        "the kept row lost the estimator's own rate: %r" % d["densifyRate"])
+
+
+@needs_node
+def test_a_missing_defaults_table_is_no_defaults_and_never_a_broken_step(ran):
+    """public.library_labor is on STAGING and not on production, by Hanz's decision. So on prod
+    today this endpoint has no table behind it, and it has to read as "no custom labor lines"
+    rather than as a broken page. A new bid that opened with no Labor step at all would be far
+    worse than one that opened without a default nobody has defined yet.
+
+    Both shapes the failure arrives in are covered: the read going down, and it answering with
+    something that is not a list of rows (a 404's JSON body, an { ok: false }).
+
+    Mutation: put the labor read inside the assemblies/items Promise.all. Both cases then land on
+    "Couldn't load the item library" with #main still hidden -- a blank screen on production."""
+    for key in ("down", "notRows"):
+        case = ran["laborDefaults"][key]
+        assert case["ids"] == ["polishing", "mockup", "jointfill", "travel"], (
+            "%s: the built-in rows did not survive the defaults read failing: %r"
+            % (key, case["ids"]))
+        assert case["mainShown"], "%s: the page never opened" % key
+        assert case["alert"] == "", (
+            "%s: an estimator was told something was wrong about a table that is simply not "
+            "there yet: %r" % (key, case["alert"]))
+    down = ran["laborDefaults"]["down"]
+    assert down["loadingHidden"], "the page stayed on its loading message"
+    assert down["onScreen"] == ["Polishing", "Mock-up", "Joint filler", "Travel"], (
+        "the Labor step came up without Travel on it: %r" % down["onScreen"])
+    assert down["costCells"] == 4
+
+
+@needs_node
+def test_a_default_that_still_needs_numbers_says_which_one(ran):
+    """A default states what the line IS and what it COSTS per unit -- never how much of it this
+    job needs. So on a `days` line it arrives with a rate and two empty boxes, and blockers()
+    reads a row with one or two of its three boxes empty as half-filled. That is exactly the
+    treatment Polishing and Joint filler already get off Kyle's own sheet: a default the estimator
+    does not need on this job is removed with the row's own x, not left sitting at nothing.
+
+    Both ways that could go wrong are pinned. It must not block the bid WITHOUT naming the row --
+    the estimator would be hunting through six rows for the empty box. And an HOURS default must
+    take the same "no hours means unused" carve-out Travel does, or every local job would open
+    demanding drive time it is never going to need.
+
+    Mutation: hardcode `unit: "days"` in libraryLaborRow. The hours default stops taking Travel's
+    carve-out and every new bid opens demanding numbers for a line nobody has switched on."""
+    n = ran["laborDefaults"]["brandNew"]
+    says = n["blockers"]
+    assert "Add the guys and days for Densify" in says, (
+        "a default that needs numbers does not say which row or which box: %r" % says)
+    assert not [s for s in says if "Night shift" in s], (
+        "an hours default did not take Travel's own 'no hours means unused' carve-out, so a bid "
+        "nobody is driving to opens blocked: %r" % says)
+    # …and the built-in rows are still named the way they always were, so the defaults have not
+    # drowned them out.
+    assert "Add the days for Polishing" in says
+
+
+# ── the Takeoff conditions' company answers ───────────────────────────────────
+THREE = ("joint_filler", "dye", "remove_existing_jf")
+
+
+@needs_node
+def test_a_brand_new_bid_opens_with_the_conditions_the_library_says(ran):
+    """The three Takeoff conditions stopped being "built in" on 2026-09-18 (Hanz, twice). Their
+    answers for a new bid are set on the Library page's Defaults tab, and this is the page that
+    has to take them.
+
+    EVERY STORED ANSWER IN THE FIXTURE DISAGREES WITH WHAT THE TOOL SHIPS. All three ship OFF
+    since 2026-09-19 and the library says on for all three. A fixture that agreed with freshModel
+    would pass just as happily against a seeder that was never wired up at all.
+
+    Mutation: delete the `if (conditionDefaults)` block from init(). Every new bid then opens with
+    the shipped literals whatever anybody sets, and the Defaults tab is decoration."""
+    c = ran["conditionDefaults"]["brandNew"]
+    assert c["fetched"], "a blank bid never asked for the stored answers"
+    assert c["conditions"]["joint_filler"] is True, (
+        "the library's 'on' did not reach a brand new bid, so the Defaults tab changes nothing")
+    assert c["conditions"]["dye"] is True
+    assert c["conditions"]["remove_existing_jf"] is True
+    # The five answered on Intake are not this tab's to move.
+    assert c["conditions"]["taxable"] is True and c["conditions"]["local"] is True
+
+
+@needs_node
+def test_a_bid_that_has_been_worked_on_keeps_its_own_conditions(ran):
+    """THE HARD CONSTRAINT, at the page level. Hanz, verbatim: changing a default must not change
+    any estimate that already exists, because an estimator's saved answers are their work.
+
+    joint_filler is the one that bites: it SHIPS on, so a bid where somebody deliberately turned
+    it off is exactly the bid a careless default would quietly turn back on -- and because
+    conditionCellWrites puts all eight literals back on every save, the downloaded workbook would
+    then say Yes in Polish!E29 with nothing on any screen admitting it.
+
+    THE GATE IS OBSERVABLE, not inferred: a saved bid never even asks for the defaults, so
+    `fetched` is False. And NOT VACUOUS -- `wouldHaveChanged` applies the same stored answers to
+    the same migrated model and shows all three moving.
+
+    Mutation: drop the `B.conditionsUnstated(...) ?` gate in init() and always load. Every
+    reopened bid then adopts today's defaults on the next save."""
+    w = ran["conditionDefaults"]["worked"]
+    assert w["fetched"] is False, (
+        "a bid that has been worked on asked for the condition defaults; the gate is not being "
+        "asked before the read")
+    for key in THREE:
+        assert w["after"][key] == w["saved"][key], (
+            "%s came back as %r on a saved bid that had %r"
+            % (key, w["after"][key], w["saved"][key]))
+    moved = [k for k in THREE if w["wouldHaveChanged"][k] != w["saved"][k]]
+    assert len(moved) == 3, (
+        "the stored answers agree with this bid's, so 'it came back unchanged' proves nothing -- "
+        "only %r would have moved" % moved)
+
+
+@needs_node
+def test_a_cell_answer_still_beats_the_library_on_a_blank_bid(ran):
+    """THE CELL WINS WHERE THERE IS ONE, which is why conditionsFromCells runs AFTER the seed
+    rather than only in adopt().
+
+    A project that came through the live intake has no polish_estimate at all -- exactly the blob
+    conditionsUnstated calls seedable -- while the answers the estimator or the AI autofill gave
+    sit in cell_values. If the seed ran last it would write a company-wide default over one of
+    those, and the next save would make it permanent in Kyle's workbook.
+
+    ALL THREE CELLS ANSWERED, not one -- exactly what a real step-1 save on the live intake screen
+    leaves behind (Polish!E29=No, Polish!E25=No, Polish!F29=Yes). A fixture that answered only one
+    of the three could pass against a page that seeded the other two from the library regardless
+    of what their cells said.
+
+    AND THE LIBRARY LIST IS NARROWED ON PURPOSE, which is the part that keeps this honest now that
+    all three conditions SHIP OFF. joint_filler and dye have a library row saying ON against a
+    cell saying "No": `False` there can only mean the cell beat the library. remove_existing_jf
+    has NO library row and a cell saying "Yes": `True` there can only mean the cell was read at
+    all. The first pair alone could not show that second thing -- `False` is also what a page that
+    read neither the cell nor the library would produce -- and before 2026-09-19 it did not need
+    to, because the shipped answer for joint_filler was the opposite of the cell's.
+
+    Mutation: swap the two calls in init() so seedConditionDefaults runs outermost. joint_filler
+    and dye come back flipped and every cell answer the estimator gave is gone."""
+    c = ran["conditionDefaults"]["celled"]
+    assert c["fetched"], "the library was never asked for its stored answers"
+    assert c["dye"] is False, (
+        "the library's 'on' was written over the 'No' already in Polish!E25")
+    assert c["jointFiller"] is False, (
+        "the library's 'on' was written over the 'No' already in Polish!E29")
+    assert c["removeExistingJf"] is True, (
+        "the 'Yes' already in Polish!F29 never reached the model, so the cells are not being "
+        "read at all")
+
+
+@needs_node
+def test_the_defaults_table_being_absent_opens_the_bid_anyway(ran):
+    """`condition_defaults` is applied to NEITHER database as of 2026-09-18, and production will
+    be behind staging even after it is. A bid that refused to open over a table nobody has
+    promoted would be a far worse outcome than one that opens with the answers the tool ships.
+
+    AND SAYS NOTHING ABOUT IT. A default nobody has defined yet is not an error to report to an
+    estimator mid-bid.
+
+    Mutation: let the exception out of loadConditionDefaults. The page dies on boot on production
+    the day this ships."""
+    d = ran["conditionDefaults"]["down"]
+    assert d["mainShown"], "the estimate did not open when the defaults read failed"
+    assert d["alert"] == "", "the page reported a table nobody has promoted as an error"
+    for key in THREE:
+        assert d["conditions"][key] == d["shipped"][key], (
+            "%s did not fall back to what the tool ships" % key)

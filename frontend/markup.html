@@ -410,6 +410,9 @@
   <script src="/js/icons.js"></script>
   <script src="/auth.js"></script>
   <script src="/shared.js"></script>
+  <!-- Which tab a reload lands on. Pure functions over location.hash, no DOM and no fetch; it
+       must precede the page script, which reads window.TWTabMemo as it restores the open tab. -->
+  <script src="/js/tab-memo.js"></script>
   <!-- The expression engine. Must precede the page script, which reads window.TWMarkup as it
        runs. Hand-rolled parser, not eval: prod's CSP has no unsafe-eval. -->
   <script src="/js/markup-core.js"></script>

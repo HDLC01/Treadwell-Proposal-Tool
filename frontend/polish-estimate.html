@@ -121,12 +121,23 @@
     @media (max-width:760px){ .tk-g{grid-template-columns:1fr} }
     .x{background:none;border:0;color:var(--ink-3);cursor:pointer;flex:none;display:inline-flex;align-items:center;justify-content:center;padding:2px}
     .x:hover{color:var(--red)}
-    /* The row's own money. A box rather than bare text so it reads as a field's answer, but
-       never an input: it is the library's price for the measurement beside it. */
+    /* A figure the page worked out, in a field's slot. A box rather than bare text so it reads
+       as that field's answer, but never an input: it is the library's price for the measurement
+       beside it, or -- on the Joint Filler and Dye cards since 2026-09-19 -- the derived
+       measurement and unit themselves. What tells it apart from a box you type in is the hover:
+       `.f input` takes a red border under the cursor, this does not.
+
+       FULL CONTRAST, NEVER DIMMED. Read-only and disabled are different states: disabled sits
+       at .38-.5 and says "not available", read-only says "a fact, not yours to change". Only
+       `.empty` greys, and that is about the VALUE being absent, not the box being inert. */
     .costbox{padding:8px 10px;border:1px solid var(--line);border-radius:var(--r-s);
         background:var(--card);text-align:right;font:600 14px var(--mono);
         font-variant-numeric:tabular-nums;min-height:37px}
     .costbox.empty{color:var(--ink-3);font-weight:400}
+    /* The same box holding a WORD rather than a figure -- a material's name, a unit. Right-aligned
+       tabular mono is money typography and says the wrong thing about "Joint filler, 10 gal kit".
+       A modifier rather than a second class, because a fifth way to draw a box is a bug. */
+    .costbox.txt{text-align:left;font:600 13.5px var(--sans);font-variant-numeric:normal}
 
     /* ── labor cards ──────────────────────────────────────────────────────────
        One card per task, reusing the takeoff row's `.tk` shell so the two steps read as the same
@@ -179,14 +190,26 @@
     /* The three that came off the intake form. Grouped under the takeoff rows rather than mixed
        into them: they are not rows, they price nothing, and a switch sitting in a list of priced
        lines reads as though it changes one. */
-    /* A condition card. The same `.tk` box as a takeoff row, marked so it cannot be mistaken for
-       one: a row comes to a number, and these come to a Yes or No that only Kyle's workbook
-       reads. The left rule is the whole distinction, drawn rather than written. */
-    .tk.cond{background:var(--card);border-left:3px solid var(--line)}
+    /* A condition card, styled IDENTICALLY to the takeoff row above it -- Hanz, 2026-09-18,
+       pointing at Row 1: "can we make it or make the containers look like row one on the
+       assembly container". The white-card-plus-left-rule treatment tried to draw the
+       distinction visually (a row prices to a number; these price to a Yes or No that only
+       Kyle's workbook reads) but read instead as the condition being SEPARATE FURNITURE below
+       the real takeoff, which is the opposite of "these describe the work the same way a
+       takeoff row does" a few lines up in takeoffPanel(). The distinction now lives only in
+       the tag text (JOINT FILLER / DYE vs ROW n) and the hint line, not in a different card. */
+    .tk.cond{}
     .tk.cond .tk-h{margin:0 0 7px}
     .tk.cond .tk-sub{margin-left:auto;font:600 10.5px var(--mono);color:var(--ink-3);
       letter-spacing:.02em}
     .tk.cond .hint{margin:0}
+    /* `.cond-cost` lived here from 2026-09-18 to 2026-09-19: one dollar figure beside the switch,
+       which was the most a switch-shaped card could say. Joint Filler and Dye are material rows
+       now and their money is in a real `.costbox` in the Total cost column, so the class is gone
+       rather than left behind for something to reach for by mistake. */
+    /* The switch in a card header, wherever it sits. flex:none so it keeps its own width against
+       .tk-sub's margin-left:auto, nowrap so its label never breaks and grows the header a line. */
+    .tk-h .mw-sw{flex:none;white-space:nowrap}
     /* Dimmed, still clickable. Same rule and same reason as .tk.inert above. */
     .mw-sw.inert{opacity:.5}
     .inertline{color:var(--ink-v);font-style:italic;font-size:11.5px;margin:9px 0 0}
@@ -342,6 +365,9 @@
   <script src="/js/icons.js"></script>
   <script src="/auth.js"></script>
   <script src="/shared.js"></script>
+  <!-- Which tab a reload lands on. Pure functions over location.hash, no DOM and no fetch; it
+       must precede the page script, which reads window.TWTabMemo as it restores the open tab. -->
+  <script src="/js/tab-memo.js"></script>
   <!-- library-core before the page script: the page does `var L = window.TWLib` at parse time.
        Same reason library.html loads it first. polish-bid-core is the markup chain; it is pinned
        to Kyle's worksheet by backend/tests/test_polish_markup_parity.py. -->

@@ -805,6 +805,23 @@ function defaultBaseSheet() {
   const wt = (state.work_type || "epoxy").toLowerCase();
   return wt === "gyp" ? GYP_BASE : wt === "polish" ? "Polish" : "Epoxy";
 }
+// The worksheet tab this draft OPENS on: the one the URL names while that tab still exists on
+// this draft, and the work type's base sheet otherwise.
+//
+// CHECKED AGAINST `tabs`, WHICH IS THE LIVE STRIP, not against the sixteen template names. A
+// copied tab is a real tab here and its id is a copy id, so `#sheet=Copy1` has to be honoured —
+// and the day somebody deletes Copy1 and reloads an old link, the check is what sends them to the
+// base bid instead of to "Failed to load Copy1" with an empty grid.
+//
+// Restoring one does NOT load the others. showSheet fetches the single tab it is opening and
+// nothing else, exactly as a click does, so a remembered tab that init() deferred costs the one
+// request a click would have cost — and it is the request the estimator was going to make anyway.
+function openingSheet() {
+  const fallback = defaultBaseSheet();
+  if (typeof window === "undefined" || !window.TWTabMemo) return fallback;
+  return window.TWTabMemo.pick(window.TWTabMemo.read(window, "sheet"),
+                               tabs.map(t => t.id), fallback);
+}
 function resolveBaseTab() {
   // `!isOptionOnlyRole` as well as `isPricedRole`: a draft can name a base that is priced but may
   // never be one, and honouring it would price the bid off a seal sheet under the epoxy template.
@@ -1469,8 +1486,10 @@ async function init() {
   try { await _markupRulesReady; } catch {}
   const _ratesApplied = applyMarkupRates();
 
-  // 4. Open the right starting tab (gyp → the gyp base, polish → Polish, else Epoxy)
-  const initialSheet = defaultBaseSheet();
+  // 4. Open the tab the estimator was last on — or, failing that, the right starting one
+  //    (gyp → the gyp base, polish → Polish, else Epoxy). Asked here, after 3b has rehydrated
+  //    the copied tabs, so a remembered copy is in `tabs` to be found.
+  const initialSheet = openingSheet();
   badge.textContent = labelFor(initialSheet).toUpperCase();
   showSheet(initialSheet);
 
@@ -1741,6 +1760,14 @@ wireBidBar();   // base-bid toggles + per-tab option controls (delegated, once)
 
 async function showSheet(name) {
   activeSheet = name;
+  // AND THE ADDRESS BAR SAYS SO, so a reload comes back to this tab rather than to the base bid.
+  // Here rather than in the tab bar's click handler because every way of opening a tab funnels
+  // through this one function — a rename, a delete, a lock toggle and a structural op all re-open
+  // a sheet, and every one of them is somewhere a reload has to land. Repeats cost nothing: the
+  // write is a no-op when the fragment already says this.
+  if (typeof window !== "undefined" && window.TWTabMemo) {
+    window.TWTabMemo.write(window, { sheet: name });
+  }
   for (const btn of tabBar.querySelectorAll("button")) {
     btn.classList.toggle("active", btn.dataset.sheet === name);
   }
