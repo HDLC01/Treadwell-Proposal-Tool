@@ -161,6 +161,28 @@
     /* What a row says when it applies to every work type rather than a chosen few. */
     .wtall { font:600 10.5px var(--ui); color:var(--ink-v); letter-spacing:.04em;
        text-transform:uppercase; }
+    /* THE SAME CHIP AS .wtab ABOVE, ONE SIZE DOWN, and deliberately so: the strip over the table
+       picks which work type you are LOOKING AT, and these pick which ones a row IS FOR. Same
+       shape because it is the same vocabulary of five; smaller because there are five per row
+       rather than five per page, and a row control that competed with the page control would
+       read as a second filter.
+
+       aria-pressed, NOT aria-selected. These are independent toggles -- a row can be for polish
+       and epoxy at once -- where the strip above is a one-of-five choice. The click handler reads
+       this same attribute, so there is no second copy of the state to fall out of step. */
+    .wtchips { display:flex; gap:3px; flex-wrap:wrap; }
+    .wtchip { border:1px solid var(--line); background:var(--card); border-radius:999px;
+       padding:2px 8px; font:600 10.5px var(--ui); color:var(--ink-v); cursor:pointer;
+       text-transform:uppercase; letter-spacing:.03em; }
+    .wtchip:hover { border-color:var(--red); color:var(--red); }
+    .wtchip[aria-pressed="true"] { background:var(--red-tint); border-color:var(--red);
+       color:var(--red-dark); }
+    .wtchip:focus-visible { outline:2px solid var(--red); outline-offset:2px; }
+    /* The chips and the "all work types" note stack, and the note collapses to nothing when a
+       row has chosen some -- so a scoped row is not carrying an empty line under it. */
+    .wtcell { white-space:normal; }
+    .wtcell .wtall:empty { display:none; }
+    .wtcell .wtall { display:block; margin-top:3px; }
     tr.grouphead th { text-align:left; padding:9px 13px 5px; background:var(--surf-low);
        border-top:1px solid var(--line); font:600 10.5px var(--ui); color:var(--ink-v);
        letter-spacing:.06em; text-transform:uppercase; }
@@ -956,6 +978,12 @@
             <div class="tw">
               <table>
                 <thead><tr><th>Line</th><th>How it is priced</th>
+                  <!-- THE COLUMN THE WORK-TYPE CHIPS ABOVE FILTER ON. It was missing, and so was
+                       any control that could set it: library.py has stored default_work_types
+                       since the column landed, library.js only ever READ it, so every row sat at
+                       [] -- which appliesToWorkType reads as "applies everywhere" -- and all five
+                       chips rendered one identical list. -->
+                  <th>Work types</th>
                   <th class="w-act"></th></tr></thead>
                 <!-- FILLED BY renderDefaultTakeoff(), GROUPED. Hanz, 2026-09-17: "sub
                      categorize the containers wheter they are materials or assemblies".
