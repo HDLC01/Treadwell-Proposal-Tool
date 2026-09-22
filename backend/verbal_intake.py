@@ -11,20 +11,24 @@ Claude call. main.py keeps the one line that runs the CLI.
 
 THE THREE RULES THAT MATTER, in the order they cost money if broken:
 
-  1. **A MONEY FLAG NEEDS EVIDENCE, AND THE ESTIMATOR SEES THE TRANSCRIPT'S OWN WORDS.** The five
-     condition toggles — local, hard_bid, prevailing_wage, taxable, remodel_tax — each change what
-     the job is priced at. An extraction model asked "is this prevailing wage?" will happily infer
-     one from a school district in the project name. So a flag is only accepted when the model
-     returns a VERBATIM QUOTE and the server can still find that quote, as a consecutive run of
-     WORDS, in the transcript it sent.
+  1. **A MONEY FLAG NEEDS EVIDENCE, AND THE ESTIMATOR SEES THE TRANSCRIPT'S OWN WORDS.** The four
+     condition toggles — local, prevailing_wage, taxable, remodel_tax — each change what the job
+     is priced at. hard_bid was a fifth until 2026-09-22 (Hanz: "remove all hard bids from the
+     polish intake form. And also on the markups"); there is no longer a switch on the page for
+     it to fill, so it left this list with the toggle. An extraction model asked "is this
+     prevailing wage?" will happily infer one from a school district in the project name. So a
+     flag is only accepted when the model returns a VERBATIM QUOTE and the server can still find
+     that quote, as a consecutive run of WORDS, in the transcript it sent.
 
      What comes back with the accepted flag is `context` — the transcript's own text around where
      the match landed — and NOT the model's quote. That difference is the whole of the second
-     half of this gate, and it was bought with a live defect: a transcript saying "it is not a
-     hard bid" plus a model quoting the three words "a hard bid" passed the old substring check,
-     and the panel then printed the model's crop next to the word "because". The estimator read
-     back the inverted claim as their own words. Widening the display to the surrounding sentence
-     puts "…it is not a hard bid…" beside the flag, where a human catches it in one glance.
+     half of this gate, and it was bought with a live defect: a transcript saying "it is not
+     prevailing wage" plus a model quoting the three words "is prevailing wage" passed the old
+     substring check, and the panel then printed the model's crop next to the word "because". The
+     estimator read back the inverted claim as their own words. Widening the display to the
+     surrounding sentence puts "…it is not prevailing wage…" beside the flag, where a human
+     catches it in one glance. (The original defect was found against hard_bid's own "it is not a
+     hard bid" transcript; the mechanism it is named for is unchanged by the line's removal.)
 
      Machine-judging RELEVANCE is out of scope and always was — a keyword rule would reject real
      evidence phrased unexpectedly. What is in scope is that the words on screen are the
@@ -63,8 +67,9 @@ TEXT_FIELDS = (
     "contact_name", "contact_email", "bid_date",
 )
 
-# The five toggles that move money. Each needs a quote — see rule 1 above.
-MONEY_CONDITIONS = ("local", "hard_bid", "prevailing_wage", "taxable", "remodel_tax")
+# The four toggles that move money. Each needs a quote — see rule 1 above. hard_bid was a fifth
+# until 2026-09-22, when Hanz asked for it removed from the Polish beta entirely.
+MONEY_CONDITIONS = ("local", "prevailing_wage", "taxable", "remodel_tax")
 
 # Never written from AI, at any confidence, for any reason. See rule 2. Not enforced by a pop —
 # TEXT_FIELDS is the whitelist and none of these is on it. This tuple is what the test asserts
@@ -321,7 +326,6 @@ SYSTEM_PROMPT = (
     '  "conditions": {\n'
     '     "local":            {"value": true|false, "quote": "<verbatim words from the '
     'transcript>"},\n'
-    '     "hard_bid":         {"value": true|false, "quote": "<verbatim>"},\n'
     '     "prevailing_wage":  {"value": true|false, "quote": "<verbatim>"},\n'
     '     "taxable":          {"value": true|false, "quote": "<verbatim>"},\n'
     '     "remodel_tax":      {"value": true|false, "quote": "<verbatim>"}\n'
@@ -336,7 +340,7 @@ SYSTEM_PROMPT = (
     "searches the transcript for it and throws the flag away if it is not there, so a paraphrase, "
     "a summary, or a sentence you composed yourself is the same as omitting the condition. If the "
     "estimator did not say it, leave the condition out and put its name in `missing`.\n"
-    "- These five conditions change what the customer is charged. Never infer one from context — "
+    "- These four conditions change what the customer is charged. Never infer one from context — "
     "not from a school or government name for prevailing_wage, not from the word 'renovation' for "
     "remodel_tax, not from a city name for local. Only from words that were actually said.\n"
     "- NEVER return a county, a tax rate or a remodel rate, under any key name. The estimator "

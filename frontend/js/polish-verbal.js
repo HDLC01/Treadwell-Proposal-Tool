@@ -49,7 +49,7 @@
   var FIELD_LABELS = {
     project_name: "Project name", address: "Address", city: "City", state: "State",
     zip: "ZIP", contact_name: "Contact", contact_email: "Contact email", bid_date: "Bid date",
-    local: "Local job", hard_bid: "Hard bid", prevailing_wage: "Prevailing wage",
+    local: "Local job", prevailing_wage: "Prevailing wage",
     taxable: "Taxable", remodel_tax: "Remodel tax",
     // The four the polish page carries through from the live intake, now that applyVerbal accepts
     // them. label() falls back to the raw key, so without these a widened extraction would print

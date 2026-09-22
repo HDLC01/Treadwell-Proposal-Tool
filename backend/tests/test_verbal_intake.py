@@ -6,12 +6,16 @@ and if they do not have it they carry on. Reaching the normal intake form stays 
 WHAT THIS FILE IS DEFENDING, and it is one thing above all others: **an extraction model must not
 be able to move a price by inferring something nobody said.**
 
-Five toggles on this form change what the customer is charged — local, hard_bid, prevailing_wage,
-taxable, remodel_tax — and every one of them is exactly the sort of thing a helpful model will
-deduce. A school district in the project name looks like prevailing wage. The word "renovation"
-looks like remodel tax. A Kansas City address looks local. Each of those inferences is plausible,
-none of them was said, and all of them are invisible once the toggle is on: the estimator sees a
-filled-in form, not a guess.
+Four toggles on this form change what the customer is charged — local, prevailing_wage, taxable,
+remodel_tax — and every one of them is exactly the sort of thing a helpful model will deduce. A
+school district in the project name looks like prevailing wage. The word "renovation" looks like
+remodel tax. A Kansas City address looks local. Each of those inferences is plausible, none of
+them was said, and all of them are invisible once the toggle is on: the estimator sees a
+filled-in form, not a guess. hard_bid was a fifth toggle until 2026-09-22, when Hanz asked for it
+removed from the Polish beta entirely; the examples below still quote transcripts that mention a
+"hard bid" here and there — real words an estimator might still say — but nothing on this page
+turns them into a price any more, so the quotes below are filed under whichever of the four real
+toggles the test is actually about.
 
 So a flag is only accepted when the model returns a VERBATIM QUOTE and the server can still find
 that quote in the transcript IT sent, as a consecutive run of whole words. The model supplies the
@@ -82,10 +86,10 @@ def test_a_paraphrase_is_not_a_quote():
     """A gate that accepted a close paraphrase would not be a gate: the model could write down
     what it inferred, phrase it like the transcript, and have it accepted as what it heard."""
     out = V.clean({"conditions": {
-        "hard_bid": {"value": True, "quote": "this is a competitively bid project"},
+        "remodel_tax": {"value": True, "quote": "this is a competitively bid project"},
     }}, TRANSCRIPT)
     assert out["conditions"] == {}
-    assert out["unsupported"] == ["hard_bid"]
+    assert out["unsupported"] == ["remodel_tax"]
 
 
 def test_a_one_word_quote_cannot_unlock_anything():
@@ -134,15 +138,16 @@ def test_a_quote_cropped_out_of_its_own_negation_shows_the_negation_too():
 
     What it CAN do is refuse to let the model choose which words the estimator reads back. The
     accepted flag carries the transcript's text around the match, so "not a hard bid" arrives on
-    screen next to a switch that says Hard bid — and the person who said it sees the contradiction
-    immediately. That is the human check working, not a hole in the gate."""
+    screen next to whichever switch the flag was filed under (remodel_tax here, since hard_bid
+    itself has had no switch since 2026-09-22) — and the person who said it sees the
+    contradiction immediately. That is the human check working, not a hole in the gate."""
     transcript = ("This one is the Olathe fire station on Ridgeview. It is not a hard bid, they "
                   "just want a number by Friday for budgeting.")
     out = V.clean({"conditions": {
-        "hard_bid": {"value": True, "quote": "a hard bid"}}}, transcript)
-    assert out["conditions"]["hard_bid"]["value"] is True, (
+        "remodel_tax": {"value": True, "quote": "a hard bid"}}}, transcript)
+    assert out["conditions"]["remodel_tax"]["value"] is True, (
         "the gate started judging meaning — see the docstring for why it must not")
-    assert "not a hard bid" in out["conditions"]["hard_bid"]["context"], (
+    assert "not a hard bid" in out["conditions"]["remodel_tax"]["context"], (
         "the panel would print the model's crop and the estimator would read their own words back "
         "with the negation cut off it")
 
@@ -158,7 +163,7 @@ def test_a_quote_cannot_match_in_the_middle_of_a_word():
     transcript = ("We are pouring over a shard bidding floor at the Prevailing Wages Cafe on "
                   "Locally Grown Road, and the slab is taxable to the penny.")
     for quote in ("hard bid", "prevailing wage", "local job"):
-        out = V.clean({"conditions": {"hard_bid": {"value": True, "quote": quote}}}, transcript)
+        out = V.clean({"conditions": {"remodel_tax": {"value": True, "quote": quote}}}, transcript)
         assert out["conditions"] == {}, "%r was matched inside a longer word" % quote
 
 
@@ -174,8 +179,8 @@ def test_a_quote_cannot_be_stitched_across_a_full_stop():
     matcher knows it is here."""
     transcript = "Talked to Dana this morning. It is not local. Hard bid though, due Friday."
     out = V.clean({"conditions": {
-        "hard_bid": {"value": True, "quote": "not local hard bid"}}}, transcript)
-    assert "not local. Hard bid" in out["conditions"]["hard_bid"]["context"], (
+        "remodel_tax": {"value": True, "quote": "not local hard bid"}}}, transcript)
+    assert "not local. Hard bid" in out["conditions"]["remodel_tax"]["context"], (
         "the flag was accepted on words spanning two sentences with nothing on screen to show it")
 
 
@@ -194,8 +199,8 @@ def test_the_context_is_the_transcript_and_not_a_normalised_copy_of_it():
     — so a context that began or ended mid-sentence reads as one either way."""
     transcript = "Bid is\nhard,   like  it always is here.\nDue Friday."
     out = V.clean({"conditions": {
-        "hard_bid": {"value": True, "quote": "bid is hard"}}}, transcript)
-    ctx = out["conditions"]["hard_bid"]["context"]
+        "remodel_tax": {"value": True, "quote": "bid is hard"}}}, transcript)
+    ctx = out["conditions"]["remodel_tax"]["context"]
     assert ctx == "Bid is hard, like it always is here. Due Friday", ctx
 
 
@@ -207,9 +212,9 @@ def test_punctuation_and_case_do_not_break_a_real_quote():
     What survives normalisation is the sequence of WORDS, which is what makes a quote evidence.
     Stemming or fuzzy matching would go too far the other way; see evidence_key."""
     out = V.clean({"conditions": {
-        "hard_bid": {"value": True, "quote": "It's a HARD BID, going out through the district"},
+        "remodel_tax": {"value": True, "quote": "It's a HARD BID, going out through the district"},
     }}, TRANSCRIPT)
-    assert out["conditions"]["hard_bid"]["value"] is True
+    assert out["conditions"]["remodel_tax"]["value"] is True
 
 
 def test_a_quote_from_a_different_conversation_does_not_count():
@@ -225,8 +230,8 @@ def test_a_false_flag_still_needs_evidence():
     """Turning a flag OFF moves money too — `taxable` defaults on, so an unsupported False is a
     tax silently dropped off the bid. The gate is about whether it was SAID, not which way."""
     said = V.clean({"conditions": {
-        "hard_bid": {"value": False, "quote": "It's a hard bid"}}}, TRANSCRIPT)
-    assert said["conditions"]["hard_bid"]["value"] is False
+        "remodel_tax": {"value": False, "quote": "It's a hard bid"}}}, TRANSCRIPT)
+    assert said["conditions"]["remodel_tax"]["value"] is False
     guessed = V.clean({"conditions": {
         "taxable": {"value": False, "quote": "schools are tax exempt"}}}, TRANSCRIPT)
     assert guessed["conditions"] == {}
@@ -361,12 +366,13 @@ def test_only_the_known_condition_names_are_accepted():
 def test_the_carried_four_never_come_back_from_the_server():
     """THIS IS WHY A GREEN CLIENT SUITE DOES NOT MEAN THE FEATURE SHIPPED.
 
-    The polish page renders nine switches, and applyVerbal now sets all nine — the engine five
+    The polish page renders eight switches, and applyVerbal now sets all eight — the engine four
     plus the four carried through from the live intake (Renovation, Dye, Joint filler, Remove
-    existing joint filler). backend/tests/test_verbal_apply.py proves that half works. Read on
-    its own it reads like dictation can set them, and it cannot: `clean()` builds its
-    `conditions` by looping over MONEY_CONDITIONS, so a key outside that tuple is not filtered
-    out, it is never looked at. The prompt asks for those same five by name.
+    existing joint filler). hard_bid was a fifth engine switch until 2026-09-22; removed with the
+    toggle itself. backend/tests/test_verbal_apply.py proves the carried half works. Read on its
+    own it reads like dictation can set them, and it cannot: `clean()` builds its `conditions` by
+    looping over MONEY_CONDITIONS, so a key outside that tuple is not filtered out, it is never
+    looked at. The prompt asks for those same four by name.
 
     So the client is ready and the server is the decision. `reno` is a real candidate — Kyle's
     C17 is IF(B10="New",0.05,0.15), so New-versus-Reno triples the patch material rate, which
@@ -377,7 +383,7 @@ def test_the_carried_four_never_come_back_from_the_server():
     lands here; and the behaviour through `clean()` with a quote that IS in the transcript, so
     the reason nothing comes back is the loop and not a failed evidence check."""
     assert V.MONEY_CONDITIONS == (
-        "local", "hard_bid", "prevailing_wage", "taxable", "remodel_tax"), (
+        "local", "prevailing_wage", "taxable", "remodel_tax"), (
         "MONEY_CONDITIONS changed. If a carried-through key was added, the prompt has to ask "
         "for it, `missing` has to accept it, and polish-verbal.js needs its label: %r"
         % (V.MONEY_CONDITIONS,))
@@ -386,14 +392,14 @@ def test_the_carried_four_never_come_back_from_the_server():
     out = V.clean({"conditions": {
         "reno": {"value": True, "quote": "it is a remodel, existing floor"},
         "joint_filler": {"value": False, "quote": "they do not want any joint filler"},
-        "hard_bid": {"value": True, "quote": "It's a hard bid, going out through the district"},
+        "remodel_tax": {"value": True, "quote": "It's a hard bid, going out through the district"},
     }}, transcript)
     # The KEYS are the claim. What the accepted flag's context reads is quote_context's business
     # and is pinned by its own tests -- it widens a quote to the surrounding sentence, so asserting
     # the string here would couple this test to a window size that has nothing to do with it.
-    assert sorted(out["conditions"]) == ["hard_bid"], (
+    assert sorted(out["conditions"]) == ["remodel_tax"], (
         "a carried-through key came back from the server: %r" % (sorted(out["conditions"]),))
-    assert out["conditions"]["hard_bid"]["value"] is True
+    assert out["conditions"]["remodel_tax"]["value"] is True
     # And not as an "I heard it but could not prove it" either -- unsupported is for a flag whose
     # quote is absent from the transcript. These two were quoted verbatim and are simply not
     # part of the conversation the server is having.

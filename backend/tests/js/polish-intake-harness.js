@@ -336,7 +336,7 @@ function blob(over) {
       version: 2,
       takeoff: JSON.parse(JSON.stringify(TAKEOFF)),
       labor: JSON.parse(JSON.stringify(LABOR)),
-      conditions: { local: true, hard_bid: false, prevailing_wage: false,
+      conditions: { local: true, prevailing_wage: false,
                     taxable: true, remodel_tax: false },
     },
   }, over || {});
@@ -671,9 +671,9 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
     // ONE CONDITION VECTOR IS A HIDING PLACE, so the pair is priced twice. The save above has
     // Prevailing wage ON, because flipping it is what triggered the save -- and a branch written
     // as `prevailing_wage || reno` moves no money at all while prevailing wage is on. Pricing the
-    // same pair again with the engine six turned the other way takes that hiding place away:
+    // same pair again with the engine five turned the other way takes that hiding place away:
     // whichever half a masked read is hiding behind, one of the two runs has it the other way.
-    const ENGINE = ["local", "hard_bid", "prevailing_wage", "taxable", "remodel_tax", "bond"];
+    const ENGINE = ["local", "prevailing_wage", "taxable", "remodel_tax", "bond"];
     const invert = (conds) => ENGINE.reduce(
       (acc, k) => { acc[k] = !acc[k]; return acc; }, Object.assign({}, conds));
     const withReno = (conds) => Object.assign({}, conds, { reno: true });
@@ -717,7 +717,7 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
     const visitAfterTakeoff = async (id, answers) => {
       const pg = build({ blob: { __draft_id: id, polish_estimate: {
         version: 2, takeoff: [], labor: [],
-        conditions: Object.assign({ local: true, hard_bid: false, prevailing_wage: false,
+        conditions: Object.assign({ local: true, prevailing_wage: false,
                                     taxable: true, remodel_tax: false, bond: false },
                                   answers) } } });
       await pg.api.boot();
@@ -785,11 +785,11 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
     // ONE CONDITION VECTOR IS A HIDING PLACE, so the pair is priced twice. Both saves have
     // Prevailing wage ON, because flipping it is what triggered them -- and a branch written as
     // `prevailing_wage || joint_filler` moves no money at all while prevailing wage is on.
-    // Pricing the same pair again with the engine six turned the other way takes that hiding place
-    // away: whichever half a masked read is hiding behind, one of the two runs has it the other
-    // way round. Found by mutation: the first version of this probe stayed green with the engine
-    // reading joint_filler.
-    const ENGINE = ["local", "hard_bid", "prevailing_wage", "taxable", "remodel_tax", "bond"];
+    // Pricing the same pair again with the engine five turned the other way takes that hiding
+    // place away: whichever half a masked read is hiding behind, one of the two runs has it the
+    // other way round. Found by mutation: the first version of this probe stayed green with the
+    // engine reading joint_filler.
+    const ENGINE = ["local", "prevailing_wage", "taxable", "remodel_tax", "bond"];
     const invert = (conds) => ENGINE.reduce(
       (acc, k) => { acc[k] = !acc[k]; return acc; }, Object.assign({}, conds));
     out.moved.priceIdenticalInverted =
@@ -855,7 +855,7 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
     // it, making the revert permanent.
     const fromReview = build({ blob: { __draft_id: "review-said-no",
       polish_estimate: { version: 2, takeoff: [], labor: [],
-        conditions: { local: true, hard_bid: false, prevailing_wage: false,
+        conditions: { local: true, prevailing_wage: false,
                       taxable: false, remodel_tax: false, bond: false } },
       cell_values: { "Epoxy!B4": "Yes", "Polish!B4": "Yes", "Epoxy!B5": "No", "Polish!B5": "No",
                      "Epoxy!D5": "No", "Epoxy!B6": "No", "Epoxy!D6": "No" } } });
@@ -883,7 +883,7 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
     // rule is not actually running and the assertions prove nothing.
     const stale = build({ blob: { __draft_id: "review-said-no-cell-stale",
       polish_estimate: { version: 2, takeoff: [], labor: [],
-        conditions: { local: true, hard_bid: false, prevailing_wage: false,
+        conditions: { local: true, prevailing_wage: false,
                       taxable: false, remodel_tax: false, bond: false } },
       cell_values: { "Epoxy!B6": "Yes" } } });
     await stale.api.boot();
@@ -912,9 +912,8 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
       takeoffKept: JSON.stringify(save.polish_estimate.takeoff),
       laborKept: JSON.stringify(save.polish_estimate.labor),
       versionKept: save.polish_estimate.version,
-      // The other four are untouched by flipping the third.
+      // The other three are untouched by flipping the fourth.
       siblingConditions: [["local", save.polish_estimate.conditions.local],
-                          ["hard_bid", save.polish_estimate.conditions.hard_bid],
                           ["taxable", save.polish_estimate.conditions.taxable],
                           ["remodel_tax", save.polish_estimate.conditions.remodel_tax]],
       workType: save.work_type,
@@ -931,16 +930,17 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
       .polish_estimate.conditions.prevailing_wage;
     out.toggle.repaintedOff = b.dom.nodes["cond-prevailing_wage"].className;
 
-    // Two flips inside one debounce window send ONE save carrying both.
+    // Two flips inside one debounce window send ONE save carrying both. remodel_tax and bond,
+    // not hard_bid (removed 2026-09-22) -- both ship false, so both flip true, same proof.
     const c = build();
     await c.api.boot();
     const n = c.rec.saves.length;
-    clickSwitch(c, "hard_bid");
     clickSwitch(c, "remodel_tax");
+    clickSwitch(c, "bond");
     c.clock.fire();
     out.toggle.coalesced = c.rec.saves.length - n;
     const last = c.rec.saves[c.rec.saves.length - 1].polish_estimate.conditions;
-    out.toggle.coalescedBoth = last.hard_bid === true && last.remodel_tax === true;
+    out.toggle.coalescedBoth = last.remodel_tax === true && last.bond === true;
   }
 
   // ── a model whose only content is a takeoff ─────────────────────────────────
@@ -1139,7 +1139,7 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
       // workbook with nothing on screen to show for it.
       cell_values: { "Epoxy!B10": "Reno", "Polish!B10": "Reno", "Polish!E29": "No" },
       polish_estimate: { takeoff: [{ area: "Copy bay", sf: 500 }],
-                         conditions: { local: false, hard_bid: true, prevailing_wage: false,
+                         conditions: { local: false, prevailing_wage: false,
                                        taxable: true, remodel_tax: false } } } });
     await b.api.boot();
     out.copyAdopted = {
@@ -1165,7 +1165,6 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
     const save = b.rec.saves[b.rec.saves.length - 1];
     out.copyAdopted.savedTakeoff = JSON.stringify(save.polish_estimate.takeoff);
     out.copyAdopted.savedRemodel = save.polish_estimate.conditions.remodel_tax;
-    out.copyAdopted.savedHardBid = save.polish_estimate.conditions.hard_bid;
   }
 
   // ── the bid date defaults to today, and a stated one is left alone ──────────
@@ -1318,12 +1317,12 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
     const b = build({ blob: blob(Object.assign({}, picked, { polish_estimate: {
       version: 2, takeoff: JSON.parse(JSON.stringify(TAKEOFF)),
       labor: JSON.parse(JSON.stringify(LABOR)),
-      conditions: { local: true, hard_bid: false, prevailing_wage: false,
+      conditions: { local: true, prevailing_wage: false,
                     taxable: true, remodel_tax: true } } })) });
     await b.api.boot();
     out.countyHydrated = { field: readCountyField(b) };
-    // An unrelated toggle, whose save rewrites the whole blob.
-    clickSwitch(b, "hard_bid");
+    // An unrelated toggle, whose save rewrites the whole blob. Not hard_bid, which is gone.
+    clickSwitch(b, "prevailing_wage");
     b.clock.fire();
     out.countyHydrated.keysAfterAnUnrelatedToggle = countyOf(b.rec.saves[b.rec.saves.length - 1]);
 
@@ -1568,7 +1567,7 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
         takeoff: [{ assembly_id: "", assembly_name: "", measurement: 9000, unit: "SF" }],
         // All three the opposite of COND above, so the library has an answer for every one that
         // COULD have landed on this project and the gate is the only thing stopping it.
-        conditions: { local: true, hard_bid: false, prevailing_wage: false, taxable: true,
+        conditions: { local: true, prevailing_wage: false, taxable: true,
                       remodel_tax: false, bond: false,
                       joint_filler: false, dye: false, remove_existing_jf: false },
         contingency: 0, fees: 0, totals: {} } },

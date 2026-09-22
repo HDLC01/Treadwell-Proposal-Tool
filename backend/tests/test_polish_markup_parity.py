@@ -22,9 +22,6 @@ THE FAILURES THIS IS SHAPED AROUND.
 
   * **A GP band off by one dollar.** B67 uses strictly `<`, so a $6,500 sub-total is a 45% job,
     not a 52% one — a $520 swing on a small floor. Every edge is tested from both sides.
-  * **ROUNDUP the wrong way on a negative.** The hard-bid line (D68) is a give-back. Excel's
-    ROUNDUP goes AWAY from zero, so -1,234.2 becomes -1,235; `Math.ceil` would make it -1,234 and
-    silently raise every hard bid.
   * **The two tax bases swapped.** Sales tax is on MATERIALS only; the remodel tax is on the
     labor side plus the markups and never on materials. Both bases are exercised with real
     material and real labor on the job, so swapping them moves the total instead of cancelling.
@@ -43,6 +40,12 @@ THE FAILURES THIS IS SHAPED AROUND.
     through GP, super/PTO, soft costs and the remodel tax.
   * **A ten-hour day.** D37 multiplies by `IF($E$35="8 hour days",8,10)`. Kyle's own screenshot —
     3 guys x 5 days x $32.20 = $3,864 — is what pins the 8.
+
+Hard bid was a SECOND cell the engine deliberately departs from, alongside B75/remodel-tax,
+since 2026-09-22: Hanz, "remove all hard bids from the polish intake form. And also on the
+markups" — Polish beta scope, controls and stored rules both. B68's formula is still pinned
+below because it is still what Kyle's real workbook says; nothing in this engine transcribes it
+any more, so there is no Layer 2 to compare it against.
 
 Skipped when node isn't installed; it's on the dev box and in the Docker image.
 """
@@ -101,7 +104,10 @@ PINNED = {
     # gross profit: a margin divided up to, not a mark-on added
     "B67": "=IF(D64<6500,0.52,IF(D64<15000,0.45,IF(D64<22500,0.35,IF(D64<32500,0.32,0.3))))",
     "D67": "=ROUNDUP(SUM(D64,D74,D77)/(1-B67),0)-ROUNDUP(SUM(D64,D74,D77),0)",
-    # the hard-bid give-back, negative, with an else-less inner IF
+    # the hard-bid give-back, negative, with an else-less inner IF -- still real in Kyle's
+    # workbook, and pinned here for that reason alone. Nothing in the beta engine reads it since
+    # 2026-09-22 (Hanz: remove hard bid from the Polish beta, controls and rules both), which
+    # makes this the second cell -- alongside B75 -- the engine deliberately does not transcribe.
     "B68": '=IF(B5="yes",IF(D64>=60000,-0.04,IF(B4="yes",IF(D64>=13000,-0.025,0))))',
     "D68": "=ROUNDUP(SUM(D64,D67)*B68,0)",
     # supervision/PTO and soft costs
@@ -187,7 +193,7 @@ def ran():
 @needs_node
 def test_the_module_loads_and_priced_every_vector(ran):
     """A syntax error would otherwise surface as thirty identical opaque failures."""
-    assert len(ran["vectors"]) >= 35, "the vector list has shrunk"
+    assert len(ran["vectors"]) >= 27, "the vector list has shrunk"
     for v in ran["vectors"]:
         assert isinstance(v["out"]["total"], (int, float)), v["label"]
 
@@ -342,33 +348,10 @@ def test_the_gp_bands_are_the_ones_written_in_b67(ran, polish):
             % (edge, rates[i + 1], rate))
 
 
-@needs_node
-def test_the_hard_bid_gate_is_the_one_written_in_b68(ran, polish):
-    """`=IF(B5="yes",IF(D64>=60000,-0.04,IF(B4="yes",IF(D64>=13000,-0.025,0))))` — B5 hard bid,
-    B4 local. Four behaviours, all of them checked against the executed function: the 60k rule
-    ignores local, the 13k rule requires it, the innermost IF has no else (Excel's FALSE, which
-    sums as 0), and no hard bid means no give-back at any size."""
-    f = polish["B68"].value
-    gates = [(int(t), float(r)) for t, r in re.findall(r"D64>=(\d+),(-?\d*\.?\d+)", f)]
-    assert len(gates) == 2, "B68 no longer has two thresholds: %s" % f
-    (big_at, big_rate), (local_at, local_rate) = gates
-
-    for row in ran["hardBidProbe"]:
-        sub, hb, loc, got = row["sub"], row["hard_bid"], row["local"], row["pct"]
-        if not hb:
-            want = 0
-        elif sub >= big_at:
-            want = big_rate
-        elif loc and sub >= local_at:
-            want = local_rate
-        else:
-            want = 0
-        assert got == pytest.approx(want), (
-            "hard bid %s, local %s at a sub-total of %d gave %r, B68 says %r — %s"
-            % (hb, loc, sub, got, want, FIX_BOTH))
-
-    # And the two gates are genuinely different rules, or the test above proves less than it looks.
-    assert big_rate < local_rate < 0, "both hard-bid rates should be give-backs: %s" % f
+# B68's gate used to be pinned here, executed against the engine's own hardBidPct(). Both the
+# probe and the function are gone since 2026-09-22 -- the engine no longer transcribes B68 at
+# all, so there is nothing left to run it against. The formula string itself stays pinned above,
+# because it is still what Kyle's real workbook says.
 
 
 # ── Layer 2: the same twenty-six cells, re-derived in Python ───────────────────
@@ -433,17 +416,6 @@ def _remodel_pct(inp, cond):
     return _num(given)
 
 
-def _hard_bid_pct(sub_total, cond):
-    """B68. The else-less inner IF yields Excel's FALSE, which sums as 0."""
-    if not cond.get("hard_bid"):
-        return 0.0
-    if sub_total >= 60000:
-        return -0.04
-    if cond.get("local") and sub_total >= 13000:
-        return -0.025
-    return 0.0
-
-
 def chain(inp):
     """Kyle's markup column, cell by cell, in Python."""
     cond = inp.get("conditions") or {}
@@ -468,34 +440,35 @@ def chain(inp):
     gp_pct = _gp_pct(sub_total)                                                 # B67
     gp = (round_up((sub_total + sales_tax + fees) / (1 - gp_pct))                # D67
           - round_up(sub_total + sales_tax + fees))
-    hard_bid_pct = _hard_bid_pct(sub_total, cond)                               # B68
-    hard_bid = round_up((sub_total + gp) * hard_bid_pct)                        # D68
+    # B68/D68, the hard-bid give-back, is not transcribed here at all -- removed 2026-09-22
+    # alongside the engine's own hardBidPct(). D69/D70's SUM(D64:D68) reduces to D64+D67+D68 in
+    # Kyle's sheet, and with D68 out of this reckoning it is D64+D67 on this side of the mirror.
     contingency = _num(inp.get("contingency"))                                  # D71
 
-    # D69/D70: SUM(D64:D68) is D64+D67+D68 — D65 empty, D66 the text "Totals".
-    super_pto = round_up((sub_total + gp + hard_bid + contingency + sales_tax + fees) * 0.027)
+    # D69/D70: SUM(D64:D68) is D64+D67 here — D65 empty, D66 the text "Totals", D68 not charged.
+    super_pto = round_up((sub_total + gp + contingency + sales_tax + fees) * 0.027)
     soft_costs = round_up(
-        (sub_total + gp + hard_bid + super_pto + contingency + sales_tax + fees) * 0.16)
+        (sub_total + gp + super_pto + contingency + sales_tax + fees) * 0.16)
 
     remodel_pct = _remodel_pct(inp, cond)                                       # B75, the county's
     remodel_tax = round_up(                                                     # D75
-        (labor + escalation + burden + gp + hard_bid + super_pto + soft_costs + contingency + fees)
+        (labor + escalation + burden + gp + super_pto + soft_costs + contingency + fees)
         * remodel_pct)
     taxes = sales_tax + remodel_tax                                             # D76
 
     bond_pct = 0.0                                                              # B78
-    bond = round_up((sub_total + gp + hard_bid + super_pto + soft_costs + contingency             # D78
+    bond = round_up((sub_total + gp + super_pto + soft_costs + contingency                        # D78
                      + sales_tax + remodel_tax + taxes + fees) * bond_pct)
     fees_and_bond = round_up(fees + bond)                                       # D79
 
-    total = (sub_total + gp + hard_bid + super_pto + soft_costs                 # D82
+    total = (sub_total + gp + super_pto + soft_costs                            # D82
              + contingency + taxes + fees_and_bond)
 
     return {
         "material": material, "shipping": shipping, "material_total": material_total,
         "labor": labor, "escalation": escalation, "burden": burden, "labor_total": labor_total,
         "sub_total": sub_total,
-        "gp_pct": gp_pct, "gp": gp, "hard_bid_pct": hard_bid_pct, "hard_bid": hard_bid,
+        "gp_pct": gp_pct, "gp": gp,
         "super_pto": super_pto, "soft_costs": soft_costs, "contingency": contingency,
         "sales_tax_pct": sales_tax_pct, "sales_tax": sales_tax,
         "remodel_pct": remodel_pct, "remodel_tax": remodel_tax, "taxes": taxes,
@@ -541,7 +514,7 @@ def _remodel_base(out):
     """D75's base: `SUM(D45:D47,D55,D61,D67:D71,D77)` — the labor side and every markup. D33 is
     deliberately absent; D55 (tooling) and D61 (travel) are zero in the beta. Note the base does
     not depend on the RATE, which is what lets these tests re-price it at a different one."""
-    return (out["labor"] + out["escalation"] + out["burden"] + out["gp"] + out["hard_bid"]
+    return (out["labor"] + out["escalation"] + out["burden"] + out["gp"]
             + out["super_pto"] + out["soft_costs"] + out["contingency"] + out["fees"])
 
 
@@ -558,20 +531,6 @@ def test_both_sides_of_every_gp_edge_are_covered(ran):
             "no vector lands on %d and %d, so the %s/%s edge is untested"
             % (edge - 1, edge, below, above))
         assert seen[edge - 1] == below and seen[edge] == above
-
-
-@needs_node
-def test_the_hard_bid_line_is_negative_and_rounds_away_from_zero(ran):
-    """The give-back. `Math.ceil` on -2.5% of a $22,000 base would round TOWARDS zero and hand
-    back less than Kyle's sheet does, on every hard bid, for ever."""
-    out = _by(ran, "exactly 13,000: -2.5%")
-    assert out["hard_bid_pct"] == -0.025
-    assert out["hard_bid"] < 0, "the hard-bid line is a give-back, not an addition"
-    raw = (out["sub_total"] + out["gp"]) * out["hard_bid_pct"]
-    assert out["hard_bid"] == round_up(raw) <= math.floor(raw), (
-        "%r is ROUNDUP-towards-zero of %r; Excel rounds away from it" % (out["hard_bid"], raw))
-    # …and the give-back genuinely lowers the bid.
-    assert out["total"] < _by(ran, "sub-total 13,000: the local gate withholds it")["total"]
 
 
 @needs_node
@@ -1061,7 +1020,7 @@ def test_the_fresh_model_carries_the_templates_own_labor_seeds(ran):
     # stopped being a harmless transcription on 2026-09-18, when the condition started charging a
     # $500 kit per 3,500 sq ft: a 17,500 SF bid opened $2,500 higher than anybody had asked for.
     # Hanz's call is that all three start off and the estimator switches on what the job needs.
-    assert fresh["conditions"] == {"local": True, "hard_bid": False, "prevailing_wage": False,
+    assert fresh["conditions"] == {"local": True, "prevailing_wage": False,
                                   "taxable": True, "remodel_tax": False, "bond": False,
                                   "dye": False, "joint_filler": False,
                                   "remove_existing_jf": False}

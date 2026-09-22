@@ -613,8 +613,8 @@ def test_the_markup_block_is_the_chain_line_for_line(ran):
     Kyle's estimate_sheet_5.7.xlsx by tests/test_polish_markup_parity.py. So the screen is pinned to
     his workbook through that chain rather than by a number typed into this file.
 
-    The fixture has prevailing wage, hard bid, sales tax and the remodel tax all ON, so no line of
-    the chain is dark.
+    The fixture has prevailing wage, sales tax and the remodel tax all ON, so no line of the chain
+    is dark.
 
     Mutation: in bid(), pass `material: roundUp(materialTotal())`. D31 already rounds up, and
     rounding twice drifts the sub-total, which then drifts GP, super/PTO, soft costs and both
@@ -629,23 +629,25 @@ def test_the_markup_block_is_the_chain_line_for_line(ran):
     # rather than computed, so neither has a keyed money cell to compare -- they are boxes. The
     # Fees line joined them on 2026-09-16; its own coverage is
     # test_the_fees_line_is_typed_and_marked_up_the_way_the_sheet_marks_it_up.
+    # hard_bid used to be a line in this list too -- B68/D68 in Kyle's sheet, and a NEGATIVE
+    # give-back on screen (ROUNDUP away from zero makes it bigger, not smaller). Removed with the
+    # line itself on 2026-09-22, so there is no hard_bid money cell left to pin here or to check
+    # the sign of.
     for key in ("material", "shipping", "material_total", "labor", "escalation", "burden",
-                "labor_total", "sub_total", "gp", "hard_bid", "super_pto", "soft_costs",
+                "labor_total", "sub_total", "gp", "super_pto", "soft_costs",
                 "sales_tax", "remodel_tax", "taxes", "bond", "fees_and_bond", "total"):
         assert key in r["rendered"]["money"], "the review block has lost its %r line" % key
     assert r["rendered"]["persf"] == r["expectedPerSf"], (
         "the price per SF beside the lump sum is %r, not %r"
         % (r["rendered"]["persf"], r["expectedPerSf"]))
-    # The hard-bid give-back is NEGATIVE. ROUNDUP away from zero makes it bigger, not smaller.
-    assert dollars(r["rendered"]["money"]["hard_bid"]) < 0, (
-        "the hard-bid discount is not a give-back: %r" % r["rendered"]["money"]["hard_bid"])
 
 
 @needs_node
 def test_the_percentage_column_is_the_chains_own_rates(ran):
-    """Four of the rates move with the job — the GP band with the sub-total, the hard-bid discount
-    with the sub-total and the Local flag, and the two taxes with their toggles. They are rendered
-    from the chain's own output, not from RATES.
+    """Three of the rates move with the job — the GP band with the sub-total, and the two taxes
+    with their toggles. hard_bid's own discount used to be a fourth, moving with the sub-total
+    and the Local flag; removed with the line on 2026-09-22. They are rendered from the chain's
+    own output, not from RATES.
 
     Mutation: render `B.pct(B.RATES.SALES_TAX)` for the sales-tax row. It reads 9.475% on a job that
     is not taxable, beside a $0 amount."""
@@ -719,13 +721,9 @@ def test_the_two_taxes_switched_off_are_zeroed_and_marked_off(ran):
     # in Intake" link instead, which is a signpost where a control belongs.
     assert o["switches"]["taxable"]["on"] is False
     assert o["switches"]["remodel_tax"]["on"] is False
-    assert o["rowClasses"]["hard_bid"] == "off"
-    # Hard bid OFF says nothing — the switch beside it already did. Hard bid ON with the bid still
-    # under the threshold is the case that reads like a bug, so that is the case that gets words.
-    assert not o["thresholdNoteWhenOff"], (
-        "the hard bid row explains a threshold that is not why the discount is missing")
-    assert o["thresholdNoteWhenOnButZero"], (
-        "hard bid is on and the discount is zero, and the row does not say why")
+    # hard_bid used to have its own row here, with a "threshold" note distinguishing OFF (says
+    # nothing) from ON-but-still-zero (explains the $13,000 gate). Removed with the line itself
+    # on 2026-09-22, along with the note -- no other condition has a threshold shaped like it.
     # …and the whole block still agrees with the chain for that model.
     for key, cell in o["rendered"]["money"].items():
         money_is(cell, o["expected"][key], "review line %r with the taxes off" % key)
@@ -774,7 +772,8 @@ def test_every_condition_review_talks_about_is_a_real_switch_here(ran):
     Review named five conditions and could set none of them — Sales tax and Remodel tax carried an
     "off · edit in Intake" link, Hard bid and Labor escalation carried a bare "off"/"prevailing
     wage off", and Bond carried nothing at all. An estimator reading the markup block and spotting
-    a wrong flag had to leave the page, flip it, and come back.
+    a wrong flag had to leave the page, flip it, and come back. hard_bid itself is gone since
+    2026-09-22, so what is left to name is four conditions, not five.
 
     `local` is deliberately NOT here: it is an Intake toggle Review never mentions (it dims the
     Travel row on the Labor step), so it fails the "present in both" test this exists to satisfy.
@@ -782,7 +781,7 @@ def test_every_condition_review_talks_about_is_a_real_switch_here(ran):
     Mutation: render the label without `data-cond`. Every switch still draws, and not one of them
     does anything when clicked."""
     sw = ran["review"]["switches"]
-    assert sorted(sw) == ["bond", "hard_bid", "prevailing_wage", "remodel_tax", "taxable"], (
+    assert sorted(sw) == ["bond", "prevailing_wage", "remodel_tax", "taxable"], (
         "the Review step's switches are not the conditions it talks about: %r" % sorted(sw))
     for key, s in sw.items():
         assert s["hasTrack"], "%r rendered as a label with no toggle track" % key
@@ -1302,9 +1301,12 @@ def test_the_save_writes_the_condition_cells_and_no_others(ran):
     seven-step beta, which did write Polish!* cells — rides through untouched. Generating that
     project would fill the worksheet from the old beta's figures while this screen shows the new
     ones. Clearing a stale one would be an improvement and would still pass."""
-    # EIGHT CONDITIONS' CELLS NOW, and nothing else. local and hard_bid each carry a Polish
-    # mirror; prevailing_wage, taxable and remodel_tax are formulas on the Polish tab and must NOT
-    # be written there.
+    # SEVEN CONDITIONS' CELLS NOW, EIGHT KEYS, and nothing else. local carries a Polish mirror
+    # (two keys); prevailing_wage, taxable and remodel_tax are formulas on the Polish tab and must
+    # NOT be written there. hard_bid was an eighth condition and a ninth/tenth key, Epoxy!B5 and
+    # Polish!B5 -- removed with the line itself on 2026-09-22. Kyle's own `=IF(B5="yes",...)`
+    # reads a cell nobody ever writes the same way it reads "No", so there is nothing to write in
+    # its place; see the note over CONDITION_CELLS in polish-bid-core.js.
     #
     # E25/E29/F29 joined on 2026-09-16, when dye, joint filler and remove-existing moved off the
     # intake form onto the Takeoff step. Their cells did not change and neither did their
@@ -1312,15 +1314,14 @@ def test_the_save_writes_the_condition_cells_and_no_others(ran):
     # `carry` loop before, from exactly one page; they go through the shared writer now because
     # two screens can answer them.
     assert ran["save"]["cellValueKeys"] == [
-        "Epoxy!B4", "Epoxy!B5", "Epoxy!B6", "Epoxy!D5", "Epoxy!D6",
-        "Polish!B4", "Polish!B5", "Polish!E25", "Polish!E29", "Polish!F29"], (
-        "the save's worksheet cells are not exactly the eight conditions': %r"
+        "Epoxy!B4", "Epoxy!B6", "Epoxy!D5", "Epoxy!D6",
+        "Polish!B4", "Polish!E25", "Polish!E29", "Polish!F29"], (
+        "the save's worksheet cells are not exactly the seven conditions': %r"
         % ran["save"]["cellValueKeys"])
     # And the literals are the model's own answers. The fixture has local and taxable on, the other
-    # three off, so a mapping written backwards cannot pass this.
+    # two off, so a mapping written backwards cannot pass this.
     assert ran["save"]["cellValues"] == {
         "Epoxy!B4": "Yes", "Polish!B4": "Yes",      # local
-        "Epoxy!B5": "No", "Polish!B5": "No",        # hard_bid
         "Epoxy!D5": "No",                           # prevailing_wage
         "Epoxy!B6": "Yes",                          # taxable
         "Epoxy!D6": "No",                           # remodel_tax
@@ -1334,12 +1335,12 @@ def test_the_save_writes_the_condition_cells_and_no_others(ran):
         "Polish!E29": "No",                         # joint_filler
         "Polish!F29": "No",                         # remove_existing_jf
     }, "the condition literals do not match the model: %r" % (ran["save"]["cellValues"],)
-    # A draft that already carried a worksheet map keeps it, and gains only those same five.
+    # A draft that already carried a worksheet map keeps it, and gains only those same four.
     carried = ran["save"]["legacyCellValues"] or {}
-    assert set(carried) == {"Polish!D82", "Epoxy!B4", "Epoxy!B5", "Epoxy!B6", "Epoxy!D5",
-                            "Epoxy!D6", "Polish!B4", "Polish!B5",
+    assert set(carried) == {"Polish!D82", "Epoxy!B4", "Epoxy!B6", "Epoxy!D5",
+                            "Epoxy!D6", "Polish!B4",
                             "Polish!E25", "Polish!E29", "Polish!F29"}, (
-        "the page added a worksheet cell beyond the five conditions', or dropped a carried one: %r"
+        "the page added a worksheet cell beyond the four conditions', or dropped a carried one: %r"
         % carried)
     assert carried["Polish!D82"] == 41000, "a cell the draft already carried was overwritten"
 
@@ -1441,9 +1442,12 @@ def test_a_v1_model_becomes_v2_with_its_areas_as_measurements(ran):
     # three sat in a separate `carry` object on the intake page, deliberately outside what the
     # engine is handed. migrateModel's generic conditions loop fills each from freshModel.
     #
-    # The five the draft DID state come across untouched, which is the half that matters: a
+    # The four the draft DID state come across untouched, which is the half that matters: a
     # migration that reset a v1 job's answers would change a bid that has already been sent.
-    assert m["conditions"] == {"local": False, "hard_bid": True, "prevailing_wage": True,
+    # hard_bid was a fifth stated condition until 2026-09-22; freshModel no longer declares the
+    # key, so migrateModel's whitelist drops it from an old draft the same way it would drop any
+    # other stranger -- an obsolete answer, not a preserved one.
+    assert m["conditions"] == {"local": False, "prevailing_wage": True,
                               "taxable": False, "remodel_tax": True, "bond": False,
                               # Not in the v1 blob, so it comes from freshModel -- which ships
                               # it off since 2026-09-19.
@@ -1583,7 +1587,7 @@ def test_there_are_exactly_three_steps(ran):
     Mutation: a literal "of 3" in shell(). It is right until the next time a step is added."""
     sh = ran["shell"]
     assert sh["stepKeys"] == ["takeoff", "labor", "review"], sh["stepKeys"]
-    assert sh["stepLabels"] == ["Takeoff and Material", "Labor", "Review"]
+    assert sh["stepLabels"] == ["Material", "Labor", "Review"]
     assert [s["stepOf"] for s in sh["steps"]] == ["Step 1 of 3", "Step 2 of 3", "Step 3 of 3"]
     assert [s["railCount"] for s in sh["steps"]] == [3, 3, 3], (
         "the rail does not show one entry per step: %r" % sh["steps"][0]["railCount"])

@@ -23,8 +23,11 @@
 //   D77 fees            =ROUNDUP(B77*C77,0)                   B77/C77 are blank, so 0 in the beta
 //   B67 gp_pct          =IF(D64<6500,0.52,IF(D64<15000,0.45,IF(D64<22500,0.35,IF(D64<32500,0.32,0.3))))
 //   D67 gp              =ROUNDUP(SUM(D64,D74,D77)/(1-B67),0)-ROUNDUP(SUM(D64,D74,D77),0)
-//   B68 hard_bid_pct    =IF(B5="yes",IF(D64>=60000,-0.04,IF(B4="yes",IF(D64>=13000,-0.025,0))))
-//   D68 hard_bid        =ROUNDUP(SUM(D64,D67)*B68,0)          NEGATIVE — a hard-bid give-back
+//   B68/D68 hard_bid    REMOVED 2026-09-22 -- Hanz: "remove all hard bids from the polish
+//                       intake form. And also on the markups." This file no longer models the
+//                       give-back at all; the row stays in this comment only as the reason
+//                       D69/D70/D75/D78/D82 below are each one D-cell short of Kyle's literal
+//                       SUM range, on purpose, everywhere in this file.
 //   D71 contingency     a typed constant
 //   D69 super_pto       =ROUNDUP(SUM(D64:D68,D71,D74,D77)*B69,0)     B69 = 2.7%
 //   D70 soft_costs      =(ROUNDUP(SUM(D64:D69,D71,D74,D77)*B70,0))+0 B70 = 16%
@@ -181,19 +184,13 @@
     return GP_BANDS[GP_BANDS.length - 1][1];
   }
 
-  /** B68 `=IF(B5="yes",IF(D64>=60000,-0.04,IF(B4="yes",IF(D64>=13000,-0.025,0))))`
-   *
-   *  B5 is Hard Bid, B4 is Local. Negative on purpose: it is money given back to win a hard bid.
-   *  The innermost IF has no else branch, so Excel returns FALSE, which sums as 0 — a hard bid
-   *  that is neither big nor local gets no adjustment. */
-  function hardBidPct(subTotal, conditions) {
-    var c = conditions || {};
-    var v = num(subTotal);
-    if (!c.hard_bid) return 0;
-    if (v >= 60000) return -0.04;
-    if (c.local && v >= 13000) return -0.025;
-    return 0;
-  }
+  // NO hardBidPct(). Hanz, 2026-09-22: "remove all hard bids from the polish intake form. And
+  // also on the markups" -- confirmed to the Polish beta specifically. This used to be B68
+  // `=IF(B5="yes",IF(D64>=60000,-0.04,IF(B4="yes",IF(D64>=13000,-0.025,0))))`, money given back
+  // to win a competitive bid; deleted rather than pinned at zero, because leaving a function
+  // that only ever returns 0 is a comment claiming a feature that is not there. Kyle's real
+  // sheet is untouched and still carries B68/D68 -- this beta simply no longer writes a "Yes"
+  // to B5, so his own formula reads it as not-hard-bid, which is the same outcome.
 
   /** One labor row's cost. D37: guys × days × hourly rate × 8 hours.
    *
@@ -328,16 +325,19 @@
     // cost, so 32% GP is 32% OF THE BID, not 32% added to the cost.
     var gp = roundUp((sub_total + sales_tax + fees) / (1 - gp_pct))
            - roundUp(sub_total + sales_tax + fees);
-    var hard_bid_pct = hardBidPct(sub_total, cond);                      // B68
-    var hard_bid = roundUp((sub_total + gp) * hard_bid_pct);             // D68 — negative
+    // NO hard_bid TERM. It was B68/D68 in Kyle's real sheet -- see the note above hardBidPct's
+    // old home for why it is gone rather than pinned at zero. Every SUM below is one D-cell
+    // short of his literal range for exactly that reason; this file has diverged from his
+    // ranges on purpose, and it is the only place that has.
     var contingency = num(input.contingency);                            // D71
 
-    // D69 `=ROUNDUP(SUM(D64:D68,D71,D74,D77)*B69,0)` — D65 empty, D66 the text "Totals".
+    // D69 `=ROUNDUP(SUM(D64:D68,D71,D74,D77)*B69,0)` — D65 empty, D66 the text "Totals", D68 no
+    // longer a term this file computes.
     var super_pto = roundUp(
-      (sub_total + gp + hard_bid + contingency + sales_tax + fees) * RATES.SUPER_PTO);
+      (sub_total + gp + contingency + sales_tax + fees) * RATES.SUPER_PTO);
     // D70 `=(ROUNDUP(SUM(D64:D69,D71,D74,D77)*B70,0))+0` — same collapse, plus super/PTO.
     var soft_costs = roundUp(
-      (sub_total + gp + hard_bid + super_pto + contingency + sales_tax + fees) * RATES.SOFT_COSTS);
+      (sub_total + gp + super_pto + contingency + sales_tax + fees) * RATES.SOFT_COSTS);
 
     // ── the remodel tax, on the labor side and the markups. NEVER on materials. ──
     //
@@ -358,7 +358,7 @@
         : num(given);
     }
     var remodel_tax = roundUp(
-      (labor + escalation + burden + gp + hard_bid + super_pto + soft_costs + contingency + fees)
+      (labor + escalation + burden + gp + super_pto + soft_costs + contingency + fees)
       * remodel_pct);                                                    // D75
     var taxes = sales_tax + remodel_tax;                                 // D76
 
@@ -366,18 +366,18 @@
     var bond_pct = RATES.BOND;                                           // B78
     // D78. The sheet's range double-counts D74/D75 through D76; kept as written, because B78 is
     // zero and quietly "fixing" his arithmetic is how the two files stop agreeing.
-    var bond = roundUp((sub_total + gp + hard_bid + super_pto + soft_costs + contingency
+    var bond = roundUp((sub_total + gp + super_pto + soft_costs + contingency
                         + sales_tax + remodel_tax + taxes + fees) * bond_pct);
     var fees_and_bond = roundUp(fees + bond);                            // D79
 
-    var total = sub_total + gp + hard_bid + super_pto + soft_costs       // D82
+    var total = sub_total + gp + super_pto + soft_costs                  // D82
               + contingency + taxes + fees_and_bond;
 
     return {
       material: material, shipping: shipping, material_total: material_total,
       labor: labor, escalation: escalation, burden: burden, labor_total: labor_total,
       sub_total: sub_total,
-      gp_pct: gp_pct, gp: gp, hard_bid_pct: hard_bid_pct, hard_bid: hard_bid,
+      gp_pct: gp_pct, gp: gp,
       super_pto: super_pto, soft_costs: soft_costs, contingency: contingency,
       sales_tax_pct: sales_tax_pct, sales_tax: sales_tax,
       remodel_pct: remodel_pct, remodel_tax: remodel_tax, taxes: taxes,
@@ -560,7 +560,9 @@
    *  them would replace a live reference with a literal. */
   var CONDITION_CELLS = {
     local:           { cells: ["Epoxy!B4", "Polish!B4"], on: "Yes", off: "No" },
-    hard_bid:        { cells: ["Epoxy!B5", "Polish!B5"], on: "Yes", off: "No" },
+    // NO hard_bid ENTRY. It used to write Epoxy!B5/Polish!B5; a cell this beta never writes to
+    // is a blank cell, and Kyle's own =IF(B5="yes",...) reads a blank the same way it reads
+    // "No" -- so leaving the entry out is enough, with nothing to change in his real sheet.
     prevailing_wage: { cells: ["Epoxy!D5"],              on: "Yes", off: "No" },
     taxable:         { cells: ["Epoxy!B6"],              on: "Yes", off: "No" },
     remodel_tax:     { cells: ["Epoxy!D6"],              on: "Yes", off: "No" },
@@ -740,7 +742,7 @@
       // AN ADMIN OVERRIDE STILL WINS over every one of these: seedConditionDefaults writes a
       // stored condition_defaults row over this literal on a brand new bid. This is what the tool
       // SHIPS answering, not the last word on it.
-      conditions: { local: true, hard_bid: false, prevailing_wage: false,
+      conditions: { local: true, prevailing_wage: false,
                     taxable: true, remodel_tax: false, bond: false,
                     dye: false, joint_filler: false, remove_existing_jf: false },
       contingency: 0,
@@ -994,7 +996,7 @@
     num: num, roundUp: roundUp,
     money: money, money2: money2, pct: pct, fmtSf: fmtSf,
     HOURS_PER_DAY: HOURS_PER_DAY, RATES: RATES, GP_BANDS: GP_BANDS,
-    gpPct: gpPct, hardBidPct: hardBidPct,
+    gpPct: gpPct,
     CONDITION_CELLS: CONDITION_CELLS, conditionCellWrites: conditionCellWrites,
     conditionsFromCells: conditionsFromCells,
     // The library's answer for a condition, and the gate that decides whether it may be

@@ -192,7 +192,8 @@ const MK = (() => {
   // ships rather than against a retyped copy of them.
   const BUILTIN = new Function(
     g(/^  var GP_5_BANDS = .*$/m, "GP_5_BANDS") + NL +
-    g(/^  var HARD_BID = "IF\(hard_bid_on[\s\S]*?;$/m, "HARD_BID") + NL +
+    // HARD_BID was lifted here too, until the constant it names left markup.js with the line
+    // itself on 2026-09-22.
     g(/^  var GYP_SOFT_COSTS = '[\s\S]*?;$/m, "GYP_SOFT_COSTS") + NL +
     g(/^  var F = function \(formula\) .*$/m, "F") + NL +
     g(/^  var NOT_ON_TAB = .*$/m, "NOT_ON_TAB") + NL +

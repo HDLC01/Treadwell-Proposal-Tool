@@ -303,7 +303,7 @@ const MODEL = {
     { id: "polishing", label: "Polishing", guys: 3, days: 5, rate: 32.2 },
     { id: "mockup", label: "Mock-up", guys: 3, days: 0.5, rate: 32.2 },
   ],
-  conditions: { local: true, hard_bid: false, prevailing_wage: false, taxable: true,
+  conditions: { local: true, prevailing_wage: false, taxable: true,
                 remodel_tax: false },
   contingency: 0,
   totals: {},
@@ -1085,7 +1085,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
   // ── E. review: the markup block IS the chain, gated by the conditions ──────
   {
     const live = clone(MODEL);
-    live.conditions = { local: true, hard_bid: true, prevailing_wage: true, taxable: true,
+    live.conditions = { local: true, prevailing_wage: true, taxable: true,
                         remodel_tax: true, bond: true };
     const b = build({ blob: blob({ polish_estimate: clone(live) }) });
     await b.api.init();
@@ -1098,7 +1098,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
       expected: expectedChain(live, ASMS, ITEMS),
       expectedPct: (function () {
         const c = expectedChain(live, ASMS, ITEMS);
-        return { gp_pct: B.pct(c.gp_pct), hard_bid_pct: B.pct(c.hard_bid_pct),
+        return { gp_pct: B.pct(c.gp_pct),
                  sales_tax_pct: B.pct(c.sales_tax_pct), remodel_pct: B.pct(c.remodel_pct),
                  bond_pct: B.pct(c.bond_pct) };
       })(),
@@ -1215,8 +1215,13 @@ const rendered = [];      // every string the page put on screen, for the Labour
     };
 
     // ── the two taxes switched off in the model ──────────────────────────────
+    // hard_bid used to have its own row here too -- ON but still no discount under the $13,000
+    // threshold was the one case that read like a bug and got its own note ("under the discount
+    // threshold"). B68's gate left with the line on 2026-09-22, and no other condition has a
+    // threshold shaped like it, so that note and the fixture built only to reach it are both
+    // gone rather than pointed at a different key.
     const off = clone(MODEL);
-    off.conditions = { local: true, hard_bid: false, prevailing_wage: false, taxable: false,
+    off.conditions = { local: true, prevailing_wage: false, taxable: false,
                        remodel_tax: false, bond: false };
     const o = build({ blob: blob({ polish_estimate: clone(off) }) });
     await o.api.init();
@@ -1229,28 +1234,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
       // The rows that are off carry their own switch, so the state is not just readable, it is
       // reachable -- this used to be an "off · edit in Intake" link back to the other step.
       switches: switches(o.dom.get("panels").innerHTML),
-      // Hard bid ON but still no discount is the case that reads like a bug, so it is the case
-      // that gets words. Off says nothing, because the switch beside it already did.
-      thresholdNoteWhenOff: /under the discount threshold/.test(o.dom.get("panels").innerHTML),
     };
-    {
-      // Hard bid ON, and the bid still under the threshold: the one row that must explain itself.
-      // hardBidPct() gives a local job nothing under a $13,000 sub-total, so the takeoff and labor
-      // are cut right down -- the point is a priced job whose discount is legitimately zero, not
-      // an empty model.
-      const ht = clone(off);
-      ht.conditions.hard_bid = true;
-      ht.takeoff = [{ assembly_id: "a5", assembly_name: "Densifier Only", measurement: 200,
-                      unit: "SF" }];
-      ht.labor = [{ id: "polishing", label: "Polishing", guys: 1, days: 1, rate: 33 }];
-      const h = build({ blob: blob({ polish_estimate: clone(ht) }) });
-      await h.api.init();
-      h.api.go(2);
-      const hc = expectedChain(ht, ASMS, ITEMS);
-      out.review.off.thresholdNoteWhenOnButZero =
-        /under the discount threshold/.test(h.dom.get("panels").innerHTML) &&
-        hc.hard_bid_pct === 0 && hc.sub_total > 0 && hc.sub_total < 13000;
-    }
   }
 
   // ── E2. the Review step's switches are real controls ──────────────────────
@@ -1258,10 +1242,10 @@ const rendered = [];      // every string the page put on screen, for the Labour
   // goes through the page's own delegated listener, so this exercises the shipped path.
   {
     const start = clone(MODEL);
-    start.conditions = { local: true, hard_bid: false, prevailing_wage: false, taxable: true,
+    start.conditions = { local: true, prevailing_wage: false, taxable: true,
                          remodel_tax: false, bond: false };
     out.review.clicks = {};
-    for (const key of ["hard_bid", "prevailing_wage", "taxable", "remodel_tax", "bond"]) {
+    for (const key of ["prevailing_wage", "taxable", "remodel_tax", "bond"]) {
       const c = build({ blob: blob({ polish_estimate: clone(start) }) });
       await c.api.init();
       c.api.go(2);
@@ -1667,7 +1651,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
                 joint_filler: { crew: 5, days: 2, rate: 31 } },
       adds: { saw_cut: 1 },
       options: [{ name: "Cove", price: 900 }],
-      conditions: { local: false, hard_bid: true, prevailing_wage: true, taxable: false,
+      conditions: { local: false, prevailing_wage: true, taxable: false,
                     remodel_tax: true },
     };
     const b = build({ blob: blob({ polish_estimate: clone(V1), polish_sf: 777 }) });
@@ -1757,7 +1741,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
         // Remodel tax on with no county picked is what makes remodelSource() render its "pick a
         // county" link -- the one link the Review step still builds at RENDER time, and so the
         // one that proves withDraft was asked for the id the page SETTLED on.
-        conditions: { local: true, hard_bid: false, prevailing_wage: false, taxable: true,
+        conditions: { local: true, prevailing_wage: false, taxable: true,
                       remodel_tax: true, bond: false },
         takeoff: [{ assembly_id: "a5", assembly_name: "Densifier Only", measurement: 500,
                     unit: "SF" }] }) }) });
@@ -1994,7 +1978,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
     const fromIntake = build({ blob: blob({ polish_estimate: {
       version: 2,
       takeoff: [{ assembly_id: "", assembly_name: "", measurement: "", unit: "SF" }],
-      conditions: { local: true, hard_bid: false, prevailing_wage: false, taxable: true,
+      conditions: { local: true, prevailing_wage: false, taxable: true,
                     remodel_tax: false, bond: false },
       contingency: 0, fees: 0, totals: {} } }), labor: LIB });
     await fromIntake.api.init();

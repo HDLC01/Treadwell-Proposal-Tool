@@ -16,9 +16,9 @@
 //
 // WHAT IT WRITES, AND WHAT IT MUST NOT WRITE.
 //
-// The five toggles land in `state.polish_estimate.conditions`, where js/polish-bid-core.js's
-// markupChain() reads them by key to decide the hard-bid discount, the labor escalation and the
-// two taxes. The takeoff and labor rows live under the SAME key, so every save merges — see save().
+// The toggles land in `state.polish_estimate.conditions`, where js/polish-bid-core.js's
+// markupChain() reads them by key to decide the labor escalation and the two taxes. The takeoff
+// and labor rows live under the SAME key, so every save merges — see save().
 //
 // The county is the sixth thing that moves the price and the only one that is not a toggle. It
 // writes FOUR TOP-LEVEL keys — `county`, `county_tax_rate`, `county_remodel_rate`, `county_notes` —
@@ -59,8 +59,12 @@
   var CONDITIONS = [
     { key: "local", label: "Local job",
       why: "Under 70 miles. Off means travel and lodging get added." },
-    { key: "hard_bid", label: "Hard bid",
-      why: "Competitive bid. Tightens the margin the sheet applies." },
+    // NO HARD BID. Hanz, 2026-09-22: "remove all hard bids from the polish intake form. And
+    // also on the markups" -- confirmed to mean the Polish beta specifically (its intake,
+    // Review step and the Markup admin page), leaving the live v1 Intake, the AI Autofill
+    // flag, the verbal-AI parser and pricing.py's own engine untouched; those never read this
+    // list. The keys are still the contract with polish-bid-core.js's markupChain(), which no
+    // longer offers hard_bid either -- see that file's own note on the removal.
     { key: "prevailing_wage", label: "Prevailing wage",
       why: "Raises every labor line to the prevailing rate." },
     { key: "taxable", label: "Taxable",
