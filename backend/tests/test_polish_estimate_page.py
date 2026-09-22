@@ -1587,7 +1587,7 @@ def test_there_are_exactly_three_steps(ran):
     Mutation: a literal "of 3" in shell(). It is right until the next time a step is added."""
     sh = ran["shell"]
     assert sh["stepKeys"] == ["takeoff", "labor", "review"], sh["stepKeys"]
-    assert sh["stepLabels"] == ["Takeoff and Material", "Labor", "Review"]
+    assert sh["stepLabels"] == ["Material", "Labor", "Review"]
     assert [s["stepOf"] for s in sh["steps"]] == ["Step 1 of 3", "Step 2 of 3", "Step 3 of 3"]
     assert [s["railCount"] for s in sh["steps"]] == [3, 3, 3], (
         "the rail does not show one entry per step: %r" % sh["steps"][0]["railCount"])

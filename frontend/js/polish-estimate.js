@@ -91,7 +91,7 @@
   adopt(TW.getState());
 
   var STEPS = [
-    { key: "takeoff", label: "Takeoff and Material" },
+    { key: "takeoff", label: "Material" },
     { key: "labor",   label: "Labor" },
     { key: "review",  label: "Review" },
   ];
@@ -822,7 +822,7 @@
       esc(B.fmtSf(B.takeoffSf(M.takeoff))) + ' SF</b>. LF rows are priced like any other but do ' +
       'not count toward the square footage the price-per-SF is divided by.</p>';
 
-    return shell("Takeoff and material",
+    return shell("Material",
       "One row per assembly. The library prices it against the measurement you give it.", html);
   }
 
