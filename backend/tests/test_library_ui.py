@@ -3427,72 +3427,34 @@ def test_the_three_conditions_are_materials_with_the_same_two_buttons(ran):
 
 
 @needs_node
-def test_the_work_type_chips_actually_scope_a_row_and_the_filter_actually_filters(ran):
-    """Hanz, 2026-09-21: "the filters in items in assemblies on the default items in assemblies.
-    Is not working."
+def test_the_work_type_strip_still_filters_though_the_row_chips_are_gone(ran):
+    """Hanz, 2026-09-22: "remove the worktype section because this is not looking good" -- five
+    chips on every row, wrapping to two lines, over a table whose other two columns are a name
+    and a sentence. The per-row chips (and the column they lived in) are gone from this table.
 
-    IT WAS NOT. `default_work_types` was a column with a reader and no writer: library.py has
-    accepted, coerced and returned it on items, assemblies AND labor since the day it landed;
-    library.js only ever READ it, in appliesToWorkType and in a workTypeLabel that was never
-    called. So every row in the library carried `[]`, appliesToWorkType reads `[]` as "applies
-    everywhere", and all five work-type chips over the table rendered one identical list -- which
-    is why a material named gYP sat under Polish in his screenshot.
+    WHAT DID NOT GO: the strip of five tabs ABOVE the table (Polish/Seal/Epoxy/Leveling/Gyp),
+    which still filters takeoffDefaultGroups by appliesToWorkType. That mechanism was never the
+    dead half of yesterday's bug -- the READER always worked; only the WRITER (the per-row
+    chips) was missing, then briefly present, and is now removed again pending a home on the
+    Items tab. So this seeds default_work_types directly on the fixture, the way the API writes
+    it, and proves the strip still honours it with no row-level control in this table at all.
 
-    A FILTER OVER A FIELD NOTHING CAN SET IS A DEAD CONTROL, and the whole reason this file drives
-    everything is that a dead one renders exactly like a live one. So every assertion below
-    presses the chip and reads the rendered table back: the write that would go, the row leaving
-    the list it no longer belongs to, and the row nobody touched staying put.
+    Mutation: make appliesToWorkType always return true. `scopedRowIsAbsentFromPolish` goes red."""
+    s = ran["stripStillFilters"]
+    assert s["scopedRowIsAbsentFromPolish"], (
+        "a material scoped to gyp still appears on the Polish tab -- the strip filter is not "
+        "reading default_work_types")
+    assert s["scopedRowIsPresentOnGyp"], (
+        "a material scoped to gyp does not appear on the Gyp tab -- appliesToWorkType is refusing "
+        "a work type the row is actually scoped to")
+    assert s["unscopedRowIsOnEveryTab"], (
+        "a row with no default_work_types is missing from a tab; [] is supposed to mean every "
+        "work type, and this is what every row saved before the column existed relies on")
+    assert s["noChipMarkupAnywhereInTheTable"], (
+        "data-wt-toggle is still in the rendered table; the row-level control was supposed to "
+        "come out with the column")
 
-    EMPTY MEANS ALL FIVE, and it is asserted in both directions. That is not a rule invented here
-    -- it is what appliesToWorkType has always read `[]` as, and what every row configured before
-    the column existed relies on -- so pressing the last chip off returns a row to all five rather
-    than stranding it in none.
 
-    Mutations, all five run and all five red -- NOT on patchWorkTypes, which this harness stubs
-    (the network and only the network, as everywhere else in this file), so breaking library.js's
-    copy of it would prove nothing:
-      * send `[wt]` instead of `next`            -> wroteTheServer
-      * drop renderDefaultTakeoff() on success   -> scopedRowLeavesThePolishList, and ONLY that
-        one, which is the exact shape of the bug being fixed: the write lands, the screen does not
-      * drop the rollback on refusal             -> refusedWritePutsItBack
-      * appliesToWorkType always returns true    -> scopedRowLeavesThePolishList
-      * draw four chips instead of five          -> fiveChipsOnAMaterial"""
-    w = ran["rowWorkTypes"]
-    assert w["fiveChipsOnAMaterial"] and w["fiveChipsOnAnAssembly"], (
-        "a library row does not carry the five work-type chips, so there is no way to scope it "
-        "and the filter above the table has nothing to filter on")
-    assert w["nonePressedToStart"], (
-        "a chip is pressed on a row whose default_work_types is [], so the cell disagrees with "
-        "the column")
-    assert w["saysAllWorkTypes"], (
-        "an unscoped row shows five unpressed chips and no words, which reads as applying to "
-        "nothing when it applies to everything")
-    assert w["wroteTheServer"], (
-        "the chip press sent no write, or sent a delta instead of the whole list -- the endpoint "
-        "REPLACES the column, so a body carrying only the chip that moved wipes the others")
-    assert w["scopedRowLeavesThePolishList"], (
-        "scoping a row to gyp left it on the polish list; this is the defect itself -- the press "
-        "reached the server and not the screen")
-    assert w["theOtherRowsStay"], (
-        "scoping one row moved the others, so the press is not specific to the row it was on")
-    assert w["scopedRowIsAbsentBefore"] and w["andComesBackWhenTheLastChipComesOff"], (
-        "taking the last chip off did not return the row to every work type, so a row can be "
-        "scoped into a corner it cannot come back from")
-    assert w["andSaysAllWorkTypesAgain"], (
-        "a row back to every work type does not say so, so an admin cannot tell it from a row "
-        "scoped to the tab they happen to be on")
-    assert w["unscopedWroteAnEmptyList"], (
-        "taking the last chip off sent something other than [], which is the one value "
-        "appliesToWorkType reads as every work type")
-    assert w["refusedWritePutsItBack"], (
-        "a refused write left the new scope on screen, telling an admin the Polish tab no longer "
-        "offers something it still offers")
-    assert w["refusedWriteSaysSo"], "a refused write said nothing"
-    assert w["noChipsOnACondition"], (
-        "a condition carries work-type chips; it is not a library row and has no "
-        "default_work_types column for the press to write")
-    assert w["andTheConditionSaysWhereItApplies"], (
-        "a condition's work-type cell is blank, which reads as a row whose chips failed to draw")
 
 
 @needs_node
