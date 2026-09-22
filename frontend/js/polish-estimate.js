@@ -156,6 +156,33 @@
     return hits.length === 1 ? hits[0] : null;
   }
 
+  /** setMaterial's own rule, lifted out so the merged picker can ask the question without
+   *  writing to a row: an exact, case-insensitive name match against the library's items.
+   *
+   *  Deliberately NOT assemblyByName's two-pass rule. An assembly resolves on an exact hit first
+   *  and only then on a unique case-insensitive one, because two assemblies differing by case is
+   *  a library problem this page must not resolve by choosing. Items never had that rule and
+   *  inventing it here would change what setMaterial does. */
+  function itemByName(text) {
+    var want = String(text == null ? "" : text).trim().toLowerCase();
+    if (!want) return null;
+    for (var i = 0; i < ITEMS.length; i++) {
+      if (String(ITEMS[i].name == null ? "" : ITEMS[i].name).trim().toLowerCase() === want) {
+        return ITEMS[i];
+      }
+    }
+    return null;
+  }
+
+  /** What the library has under this name: an assembly, an item, both, or neither.
+   *
+   *  BOTH IS REAL, not a hypothetical. "Grout Compound - Test" and "Plastic - Test" each exist as
+   *  an item AND an assembly on production today, with different ids and the same name. Whoever
+   *  asks this question has to handle that answer; nothing here picks one. */
+  function lineMatches(text) {
+    return { asm: assemblyByName(text), item: itemByName(text) };
+  }
+
   /** What one takeoff row costs: the library's own price for that assembly at that measurement.
    *  null when the row has no assembly picked yet — which is not an error, just unfinished. */
   /** A takeoff row is EITHER an assembly or a single material, and this is where that forks.
@@ -410,8 +437,13 @@
     var priced = 0, half = 0;
     M.takeoff.forEach(function (r) {
       var measured = B.num(r.measurement) > 0;
-      if (r.assembly_id && measured) priced += 1;
-      else if (r.assembly_id || measured) half += 1;
+      // EITHER ID COUNTS. A picked, measured material row is a finished row by every definition
+      // this page uses -- it prices, it reaches the Material total, it prints on Review -- and
+      // reading `assembly_id` alone left the takeoff pip blank on a bid made entirely of
+      // materials, which has been possible since 2026-09-19.
+      var picked = !!(r.assembly_id || r.item_id);
+      if (picked && measured) priced += 1;
+      else if (picked || measured) half += 1;
     });
     var lab = 0;
     M.labor.forEach(function (r) { if (B.laborCost(r) > 0) lab += 1; });
@@ -529,6 +561,57 @@
       return "No material by that name — pick one from the list.";
     }
     return "A single product, priced straight off the library.";
+  }
+
+  /** A name that is two things at once, on a row that has not decided yet. */
+  function ambiguous(row) {
+    var r = row || {};
+    if (rowKind(r) !== "new") return false;
+    var hit = lineMatches(r.pick_name);
+    return !!(hit.asm && hit.item);
+  }
+
+  /** Enough of each candidate to tell them apart on a button. Shorter than asmHint/matHint on
+   *  purpose -- these sit two-to-a-line inside a hint, not under a field of their own. */
+  function asmPickLabel(a) {
+    var n = ((a || {}).lines || []).length;
+    return n + " item line" + (n === 1 ? "" : "s");
+  }
+
+  function matPickLabel(it) {
+    var c = B.num((it || {}).unit_cost);
+    return c != null
+      ? B.money2(c) + " per " + esc((it || {}).unit || "unit")
+      : "no cost in the library yet";
+  }
+
+  /** The line under the one picker, which has four things to say instead of two.
+   *
+   *  A ROW THAT HAS RESOLVED reads exactly as it did before -- asmHint or matHint, untouched --
+   *  because what an estimator wants from a finished row did not change.
+   *
+   *  A NAME THAT IS TWO THINGS IS THE ONE QUESTION THIS PAGE ASKS. It would be easy to resolve it
+   *  by order (items first, say) and never mention it; that is precisely the silent wrong answer
+   *  the merged list makes possible, and the whole reason the old two-list split existed. So the
+   *  row holds what was typed, prices nothing, and offers the two candidates with enough of each
+   *  to choose by. It is the only place a takeoff row asks the estimator anything. */
+  function pickHint(row, i) {
+    var r = row || {};
+    var k = rowKind(r);
+    if (k === "item") return matHint(r);
+    if (k === "asm") return asmHint(r);
+    var hit = lineMatches(r.pick_name);
+    if (hit.asm && hit.item) {
+      return "Two things in the library are called that. " +
+        '<button class="kindpick" data-kind-pick="item" data-kind-row="' + i + '">Material · ' +
+        matPickLabel(hit.item) + "</button>" +
+        '<button class="kindpick" data-kind-pick="asm" data-kind-row="' + i + '">Assembly · ' +
+        asmPickLabel(hit.asm) + "</button>";
+    }
+    if (String(r.pick_name || "").trim()) {
+      return "Nothing in the library goes by that name — pick one from the list.";
+    }
+    return "Search the Items &amp; Assemblies library. Picking a material adds a coverage box.";
   }
 
   /** WHAT THE BOX WILL USE IF IT IS LEFT EMPTY, shown as the placeholder rather than typed into
@@ -726,76 +809,157 @@
       "</div>";
   }
 
+  /** WHICH OF THE THREE KINDS a takeoff row is, in one place.
+   *
+   *  `item` first, and off `item_id` OR `kind` -- the old two-part test kept whole, for the reason
+   *  it was written: a material row that has not been pointed at anything yet has an empty
+   *  item_id, and inferring from that alone would redraw it as an assembly row the moment somebody
+   *  cleared the field, taking their measurement and coverage with it.
+   *
+   *  `new` is the third kind, added 2026-09-23 with the single add button. A row nobody has
+   *  searched on yet is not an assembly and not a material, and it no longer has to pretend to be
+   *  one before the estimator has typed anything. A row saved before that date carries no `kind`
+   *  at all and comes back an assembly, which is what it was. */
+  function rowKind(row) {
+    var r = row || {};
+    if (r.item_id || r.kind === "item") return "item";
+    if (r.kind === "new") return "new";
+    return "asm";
+  }
+
+  /** The name the row's one search box shows, out of whichever field its kind owns. */
+  function rowName(row) {
+    var r = row || {};
+    var k = rowKind(r);
+    return k === "item" ? r.item_name : (k === "new" ? r.pick_name : r.assembly_name);
+  }
+
+  /** A row nobody has pointed at anything yet: the shape the add button pushes, and the shape the
+   *  delete guard refills an emptied takeoff with. No assembly_id and no item_id, so rowPrice
+   *  returns null and the cost box reads as unpriced rather than as free. */
+  function newTakeoffRow() {
+    return { kind: "new", pick_name: "", measurement: "", unit: "SF" };
+  }
+
+  /** One takeoff row, as its own card -- a named function beside laborCard, and for the same
+   *  reason that one is: a row now has to be redrawn on its own.
+   *
+   *  Since 2026-09-23 the picker decides the row's KIND, and a material's card is not an
+   *  assembly's -- it carries a Coverage field and a fifth column. Showing that the moment a name
+   *  resolves means redrawing the card mid-keystroke, and rebuilding the whole PANEL to do it
+   *  would take the caret out of the box being typed in, which is the bug
+   *  test_leaving_the_assembly_field_does_not_destroy_the_box_you_tabbed_into pins. `data-row-card`
+   *  is what repaintRow addresses, and `i` is the row's real index in M.takeoff, which is what the
+   *  delete splices by. */
+  function takeoffRowCard(r, i) {
+    return '<div class="' + rowCardClass(r) + '" data-row-card="' + i + '">' +
+      rowCardInner(r, i) + '</div>';
+  }
+
+  function rowCardClass(r) { return "tk" + (rowKind(r) === "item" ? " mat" : ""); }
+
+  function rowCardInner(r, i) {
+    var rc = rowCost(r);
+    var p = rc.price;
+    var warn = "";
+    if (p && p.broken_lines) {
+      warn = '<p class="warnline" data-broken-for="' + i + '">' + p.broken_lines + ' line' +
+        (p.broken_lines === 1 ? '' : 's') + ' in this assembly cannot price yet — check the ' +
+        'cost and coverage of its items in the library.</p>';
+    }
+    // A MATERIAL ROW IS THE SAME CARD with a different first field and one extra, not a second
+    // kind of card. An estimator reading the takeoff should see one list of things the job
+    // buys; which of them happen to be systems and which are single products is a detail of how
+    // the library stores them, not a distinction worth two layouts.
+    //
+    // AND A ROW THAT HAS NOT BEEN SEARCHED ON YET IS NEITHER -- the third state the single add
+    // button brought with it. It draws as the assembly card minus Coverage, because Coverage is
+    // the one field that would be a lie before anybody knows what is being bought.
+    var kind = rowKind(r);
+    var mat = kind === "item";
+    var pending = kind === "new";
+    return '<div class="tk-h">' +
+      '<span class="tag">' + (mat ? "MATERIAL " : "ROW ") + (i + 1) + '</span>' +
+      // Amber, and only while the row is undecided: the app's own mark for "this one is waiting on
+      // a person". It leaves as soon as a name resolves, so a finished takeoff carries none.
+      (pending ? '<span class="tk-mark" data-mark-for="' + i + '">' +
+        (ambiguous(r) ? "pick one" : "new") + '</span>' : '') +
+      '<span class="tk-sub" data-measure-for="' + i + '">' + esc(measureText(r)) + '</span>' +
+      (M.takeoff.length > 1
+        ? '<button class="x" data-del-row="' + i + '" title="Remove this row">' + icon("x", 12) + '</button>'
+        : '') +
+      '</div><div class="tk-g' + (mat ? " matg" : "") + '">' +
+
+      // ONE FIELD AND ONE LIST, whichever kind the row turns out to be. Hanz, 2026-09-23: "These
+      // two buttons should be combined to one and then it should just auto categorize based off
+      // the item or assemblie we want to add." The label names what the field is holding NOW, so
+      // it reads as an answer once there is one and as a question while there is not.
+      '<div class="f"><label>' +
+      (mat ? "Material" : (pending ? "Assembly or material" : "Assembly")) + '</label>' +
+      '<input list="dl-lines" data-tk="' + i + '" data-k="pick" ' +
+      'placeholder="Search assemblies and materials…" value="' + esc(nv(rowName(r))) + '">' +
+      '<p class="hint" data-asmhint-for="' + i + '">' + pickHint(r, i) + '</p></div>' +
+
+      '<div class="f"><label>Measurement</label>' +
+      '<input class="n" data-tk="' + i + '" data-k="measurement" value="' +
+      esc(nv(r.measurement)) + '">' +
+      '<p class="hint">How much of it there is.</p></div>' +
+
+      '<div class="f"><label>Unit</label><select data-tk="' + i + '" data-k="unit">' +
+      UNITS.map(function (u) {
+        return '<option value="' + u + '"' + (r.unit === u ? " selected" : "") + '>' + u +
+          '</option>';
+      }).join("") + '</select>' +
+      '<p class="hint">SF or LF.</p></div>' +
+
+      (mat
+        ? '<div class="f"><label>Coverage</label>' +
+          '<input class="n" data-tk="' + i + '" data-k="coverage" value="' +
+          esc(nv(r.coverage)) + '" placeholder="' + esc(covPlaceholder(r)) + '">' +
+          '<p class="hint">' + esc(covHint(r)) + '</p></div>'
+        : "") +
+
+      '<div class="f"><label>Total cost</label>' +
+      '<div class="costbox' + (rc.empty ? " empty" : "") + '" data-cost-for="' + i + '">' +
+      esc(rc.text) + '</div>' +
+      '<p class="hint" data-perunit-for="' + i + '">' +
+      esc(p && p.per_unit != null ? B.money2(p.per_unit) + " / " + (r.unit || "SF") : "") +
+      '</p></div>' +
+
+      '</div>' + warn;
+  }
+
+  /** Redraw ONE row card, in place, class and inside.
+   *
+   *  THE PANEL IS WHAT MUST NOT BE REBUILT -- see the `change` handler's note, and the test it
+   *  names. One card can be, and has to be: a kind change adds or removes a whole field, which no
+   *  amount of repainting text can do. Addressed by `data-row-card`, never by position.
+   *
+   *  innerHTML plus className rather than outerHTML, because the node has to survive: everything
+   *  keyed inside it is queried again by repaintNumbers straight afterwards. */
+  function repaintRow(i) {
+    var card = document.querySelector('[data-row-card="' + i + '"]');
+    if (!card) return;
+    card.className = rowCardClass(M.takeoff[i]);
+    card.innerHTML = rowCardInner(M.takeoff[i], i);
+  }
+
   function takeoffPanel() {
-    var html = M.takeoff.map(function (r, i) {
-      var rc = rowCost(r);
-      var p = rc.price;
-      var warn = "";
-      if (p && p.broken_lines) {
-        warn = '<p class="warnline" data-broken-for="' + i + '">' + p.broken_lines + ' line' +
-          (p.broken_lines === 1 ? '' : 's') + ' in this assembly cannot price yet — check the ' +
-          'cost and coverage of its items in the library.</p>';
-      }
-      // A MATERIAL ROW IS THE SAME CARD with a different first field and one extra, not a second
-      // kind of card. An estimator reading the takeoff should see one list of things the job
-      // buys; which of them happen to be systems and which are single products is a detail of how
-      // the library stores them, not a distinction worth two layouts.
-      var mat = !!r.item_id || r.kind === "item";
-      return '<div class="tk' + (mat ? " mat" : "") + '"><div class="tk-h">' +
-        '<span class="tag">' + (mat ? "MATERIAL " : "ROW ") + (i + 1) + '</span>' +
-        '<span class="tk-sub" data-measure-for="' + i + '">' + esc(measureText(r)) + '</span>' +
-        (M.takeoff.length > 1
-          ? '<button class="x" data-del-row="' + i + '" title="Remove this row">' + icon("x", 12) + '</button>'
-          : '') +
-        '</div><div class="tk-g' + (mat ? " matg" : "") + '">' +
-
-        (mat
-          ? '<div class="f"><label>Material</label>' +
-            '<input list="dl-items" data-tk="' + i + '" data-k="item_name" ' +
-            'placeholder="Search materials…" value="' + esc(nv(r.item_name)) + '">' +
-            '<p class="hint" data-asmhint-for="' + i + '">' + matHint(r) + '</p></div>'
-          : '<div class="f"><label>Assembly</label>' +
-            '<input list="dl-assemblies" data-tk="' + i + '" data-k="assembly_name" ' +
-            'placeholder="Search assemblies…" value="' + esc(nv(r.assembly_name)) + '">' +
-            '<p class="hint" data-asmhint-for="' + i + '">' + asmHint(r) + '</p></div>') +
-
-        '<div class="f"><label>Measurement</label>' +
-        '<input class="n" data-tk="' + i + '" data-k="measurement" value="' +
-        esc(nv(r.measurement)) + '">' +
-        '<p class="hint">How much of it there is.</p></div>' +
-
-        '<div class="f"><label>Unit</label><select data-tk="' + i + '" data-k="unit">' +
-        UNITS.map(function (u) {
-          return '<option value="' + u + '"' + (r.unit === u ? " selected" : "") + '>' + u +
-            '</option>';
-        }).join("") + '</select>' +
-        '<p class="hint">SF or LF.</p></div>' +
-
-        (mat
-          ? '<div class="f"><label>Coverage</label>' +
-            '<input class="n" data-tk="' + i + '" data-k="coverage" value="' +
-            esc(nv(r.coverage)) + '" placeholder="' + esc(covPlaceholder(r)) + '">' +
-            '<p class="hint">' + esc(covHint(r)) + '</p></div>'
-          : "") +
-
-        '<div class="f"><label>Total cost</label>' +
-        '<div class="costbox' + (rc.empty ? " empty" : "") + '" data-cost-for="' + i + '">' +
-        esc(rc.text) + '</div>' +
-        '<p class="hint" data-perunit-for="' + i + '">' +
-        esc(p && p.per_unit != null ? B.money2(p.per_unit) + " / " + (r.unit || "SF") : "") +
-        '</p></div>' +
-
-        '</div>' + warn + '</div>';
-    }).join("");
-
-    html += '<div class="addrow2">' +
-      '<button class="addbtn" data-add-row="1">' + icon("plus", 13)
-      + ' Add another assembly</button>' +
-      // TWO BUTTONS, NOT A DROPDOWN. Which kind of row you want is known before you reach for
-      // anything, so making it a choice inside a menu adds a click to both paths to save a button.
-      '<button class="addbtn" data-add-mat="1">' + icon("plus", 13)
-      + ' Add a material</button>' +
-      "</div>";
+    // ONE BUTTON, AT THE TOP, IN THE PAGE'S OWN PRIMARY STYLE. It was two dashed buttons under
+    // the last row until 2026-09-23 -- "+ Add another assembly" and "+ Add a material" -- on the
+    // argument that which kind you want is known before you reach for either, so a menu would add
+    // a click to both paths to save a button. Hanz: "These two buttons should be combined to one
+    // and then it should just auto categorize based off the item or assemblie we want to add.
+    // Also that button should be at the top and make it more visible." The argument was wrong in
+    // the way that matters: you cannot know which kind you want before you have searched, and
+    // guessing wrong quietly halved the library you were allowed to search.
+    //
+    // The row it adds still lands at the BOTTOM of the list, so the list keeps the order it was
+    // built in and ROW n keeps meaning what it says. The caret goes with it -- see the handler --
+    // which is what makes a button at the top and a row at the bottom read as one action.
+    var html = '<button class="btn addline" data-add-row="1">' + icon("plus", 16) +
+      ' Add assembly or material</button>';
+    html += M.takeoff.map(takeoffRowCard).join("");
 
     // ── the three that came off the intake form, 2026-09-16 ─────────────────────────────────
     // They are questions about the WORK, and the work is described here. On intake they sat among
@@ -929,7 +1093,9 @@
   function laborPanel() {
     var html = M.labor.map(laborCard).join("");
 
-    html += '<button class="addbtn" data-add-lab="1">' + icon("plus", 13)
+    // Same control as the takeoff step's, below the list rather than above it: this one adds a
+    // row you then name yourself, so there is nothing to search and nothing to scroll back to.
+    html += '<button class="btn addline below" data-add-lab="1">' + icon("plus", 16)
       + ' Add a labor line</button>';
     html += '<p class="cap">Labor total <b data-labor-total>' +
       esc(moneyAuto(B.laborTotal(M.labor))) + '</b>.</p>';
@@ -985,8 +1151,11 @@
     // Takeoff and material
     var tkRows = [];
     M.takeoff.forEach(function (r) {
-      if (!r.assembly_id && !B.num(r.measurement)) return;
-      tkRows.push([r.assembly_name || "(no assembly picked)", measureText(r),
+      // A MATERIAL ROW HAS A NAME TOO, and it is in a different field. Reading assembly_name only
+      // printed a fully priced material row as "(no assembly picked)" beside its own cost, which
+      // reads as a fault in a row that has nothing wrong with it.
+      if (!r.assembly_id && !r.item_id && !B.num(r.measurement)) return;
+      tkRows.push([r.assembly_name || r.item_name || "(nothing picked yet)", measureText(r),
                    esc(rowCost(r).text)]);
     });
     if (!tkRows.length) tkRows.push(["Nothing measured yet", "", ""]);
@@ -1136,22 +1305,43 @@
 
   function renderPanel() { $("panels").innerHTML = PANELS[at](); }
 
+  /** ONE LIST, BOTH COLLECTIONS, sorted by name.
+   *
+   *  THE DECISION CHANGED ON 2026-09-23. This was two lists, and the note here said so: "Kept
+   *  apart from the assemblies rather than merged: a row is one or the other, and a merged list
+   *  would let somebody pick a system into the field that prices a single product." What it did
+   *  in practice was decide, at the moment the row was created, which half of the library the
+   *  estimator was allowed to search -- and the half they did not pick was simply missing, which
+   *  is what "the dropdown search only pulls assemblies" was describing. The row picks its own
+   *  kind now, so the list does not have to be picked first.
+   *
+   *  The guard the old note was right about is kept, one step later: a name that is BOTH an item
+   *  and an assembly is never resolved by guessing. See pickHint.
+   *
+   *  `label` is the browser's own second column on a datalist option, which is how each name can
+   *  say which collection it came from without this page drawing a listbox of its own -- keyboard
+   *  handling, filtering and all. Deduped by EXACT name: two entries differing only by case stay
+   *  two options, because collapsing them would hide a library problem this page must not
+   *  resolve, and the same string in both collections is the one real collision. */
   function renderDatalist() {
-    var dl = $("dl-assemblies");
-    if (dl) {
-      dl.innerHTML = ASMS.map(function (a) {
-        return '<option value="' + esc(a.name) + '"></option>';
-      }).join("");
+    var dl = $("dl-lines");
+    if (!dl) return;
+    var seen = {};
+    var names = [];
+    function add(name, kind) {
+      var n = String(name == null ? "" : name);
+      if (!n) return;
+      if (!seen[n]) { seen[n] = {}; names.push(n); }
+      seen[n][kind] = true;
     }
-    // The materials list, filled from the same load. Kept apart from the assemblies rather than
-    // merged: a row is one or the other, and a merged list would let somebody pick a system into
-    // the field that prices a single product.
-    var dli = $("dl-items");
-    if (dli) {
-      dli.innerHTML = ITEMS.map(function (it) {
-        return '<option value="' + esc(it.name) + '"></option>';
-      }).join("");
-    }
+    ASMS.forEach(function (a) { add(a.name, "asm"); });
+    ITEMS.forEach(function (it) { add(it.name, "item"); });
+    names.sort(function (x, y) { return x.localeCompare(y); });
+    dl.innerHTML = names.map(function (n) {
+      var k = seen[n];
+      var label = (k.asm && k.item) ? "Material or assembly" : (k.item ? "Material" : "Assembly");
+      return '<option value="' + esc(n) + '" label="' + label + '"></option>';
+    }).join("");
   }
 
   /** Refresh every computed figure in place, without rebuilding the panel.
@@ -1177,8 +1367,16 @@
     document.querySelectorAll("[data-measure-for]").forEach(function (el) {
       el.textContent = measureText(M.takeoff[parseInt(el.getAttribute("data-measure-for"), 10)]);
     });
+    // The undecided row's mark, which changes the moment a typed name turns out to be two
+    // things. It exists only while the row is undecided; the pick that ends that redraws the card
+    // and takes the mark with it.
+    document.querySelectorAll("[data-mark-for]").forEach(function (el) {
+      el.textContent = ambiguous(M.takeoff[parseInt(el.getAttribute("data-mark-for"), 10)])
+        ? "pick one" : "new";
+    });
     document.querySelectorAll("[data-asmhint-for]").forEach(function (el) {
-      el.innerHTML = asmHint(M.takeoff[parseInt(el.getAttribute("data-asmhint-for"), 10)]);
+      var hi = parseInt(el.getAttribute("data-asmhint-for"), 10);
+      el.innerHTML = pickHint(M.takeoff[hi], hi);
     });
     document.querySelectorAll("[data-lcost-for]").forEach(function (el) {
       el.textContent = moneyAuto(B.laborCost(M.labor[parseInt(
@@ -1275,27 +1473,38 @@
     var go_ = t.closest("[data-go]");
     if (go_) { e.preventDefault(); go(parseInt(go_.getAttribute("data-go"), 10)); return; }
 
+    // THE CARET GOES WITH THE ROW. The button is at the top of the list and the row lands at the
+    // bottom of it, so without this the estimator presses Add and nothing they can see happens.
+    // focus() scrolls the box into view as a side effect, which is the whole trick.
     if (t.closest("[data-add-row]")) {
-      M.takeoff.push({ assembly_id: "", assembly_name: "", measurement: "", unit: "SF" });
+      M.takeoff.push(newTakeoffRow());
       changed(true);
+      refocus('[data-tk="' + (M.takeoff.length - 1) + '"][data-k="pick"]');
       return;
     }
-    // `kind` IS ON THE ROW, not inferred from item_id being set. A material row that has not been
-    // pointed at anything yet has an empty item_id, and inferring from that alone would redraw it
-    // as an assembly row the moment somebody cleared the field -- taking their measurement and
-    // coverage with it.
-    if (t.closest("[data-add-mat]")) {
-      M.takeoff.push({ kind: "item", item_id: "", item_name: "", measurement: "", unit: "SF",
-                       coverage: "" });
+    // The answer to the only question a takeoff row asks -- see pickHint. The typed name is read
+    // off the row BEFORE becomeKind clears it, then replayed through the setter for the kind that
+    // was chosen, so the id lands exactly the way typing the name would have landed it.
+    //
+    // The caret moves to Measurement rather than nowhere: this button is about to be removed from
+    // the page by its own click, and focus left on a destroyed node falls to <body>.
+    var kp = t.closest("[data-kind-pick]");
+    if (kp) {
+      var ki = parseInt(kp.getAttribute("data-kind-row"), 10);
+      var krow = M.takeoff[ki];
+      if (krow) {
+        var kname = krow.pick_name;
+        becomeKind(krow, kp.getAttribute("data-kind-pick"));
+        if (rowKind(krow) === "item") setMaterial(ki, kname); else setAssembly(ki, kname);
+      }
       changed(true);
+      refocus('[data-tk="' + ki + '"][data-k="measurement"]');
       return;
     }
     var dr = t.closest("[data-del-row]");
     if (dr) {
       M.takeoff.splice(parseInt(dr.getAttribute("data-del-row"), 10), 1);
-      if (!M.takeoff.length) {
-        M.takeoff.push({ assembly_id: "", assembly_name: "", measurement: "", unit: "SF" });
-      }
+      if (!M.takeoff.length) M.takeoff.push(newTakeoffRow());
       changed(true);
       return;
     }
@@ -1389,6 +1598,70 @@
     return !!hit;
   }
 
+  /** Move a row across the line between the kinds, clearing what it is leaving behind.
+   *
+   *  A LEFTOVER item_id WOULD DECIDE THE ROW, because rowKind reads it first: an assembly row
+   *  still carrying the id of the material it used to be would draw as a material for ever. So
+   *  the crossing is explicit rather than additive. Coverage goes with the item fields because
+   *  coverage is a material's field -- an assembly keeps coverage on its own lines in the
+   *  library, and a stale one on the row would be read by nothing and believed by everybody. */
+  function becomeKind(row, kind) {
+    if (!row) return;
+    delete row.pick_name;
+    if (kind === "item") {
+      row.kind = "item";
+      row.item_id = ""; row.item_name = "";
+      if (row.coverage == null) row.coverage = "";
+      delete row.assembly_id; delete row.assembly_name;
+      return;
+    }
+    if (kind === "asm") {
+      row.kind = "asm";
+      row.assembly_id = ""; row.assembly_name = "";
+      delete row.item_id; delete row.item_name; delete row.coverage;
+      return;
+    }
+    row.kind = "new"; row.pick_name = "";
+    delete row.assembly_id; delete row.assembly_name;
+    delete row.item_id; delete row.item_name; delete row.coverage;
+  }
+
+  /** Point a takeoff row at whatever was typed or picked, and let the pick decide what kind of
+   *  row it is. The auto-categorising half of Hanz's one button.
+   *
+   *  IT DELEGATES rather than reimplements: once the kind is settled, setAssembly and setMaterial
+   *  do exactly what they did before, including setAssembly adopting the assembly's SF/LF and
+   *  setMaterial pointedly not adopting the item's Gal/Pail. Their rules are tested; a second
+   *  copy of them here would be a second opinion.
+   *
+   *  THE KIND CHANGES ONLY ON A RESOLVED PICK. Clearing the box leaves the row exactly the kind it
+   *  already was -- the rule the two-button version carried, for its reason: a material row whose
+   *  name is cleared must not silently become an assembly row and lose its measurement and
+   *  coverage.
+   *
+   *  A NAME THAT IS BOTH IS NOT GUESSED. A row that already has a kind keeps it and is not asked;
+   *  a row that does not stays undecided and pickHint asks. Returns true when the kind actually
+   *  moved, which is the only case a caller has to redraw the card for. */
+  function setPick(i, text) {
+    var row = M.takeoff[i];
+    if (!row) return false;
+    var was = rowKind(row);
+    var hit = lineMatches(text);
+    var want = was;
+    // BOTH IS A REFUSAL, not a choice: `want` stays whatever the row already was. On a row that
+    // has a kind that means it keeps it; on an undecided row it means it stays undecided, and
+    // pickHint puts the question on screen. It is written out rather than left implicit because
+    // the silent alternative -- falling through to one of the two branches below -- is the bug.
+    if (hit.asm && hit.item) want = was;
+    else if (hit.asm) want = "asm";
+    else if (hit.item) want = "item";
+    if (want !== was) becomeKind(row, want);
+    if (want === "item") setMaterial(i, text);
+    else if (want === "asm") setAssembly(i, text);
+    else row.pick_name = text;        // still undecided: hold what was typed, price nothing
+    return want !== was;
+  }
+
   document.addEventListener("input", function (e) {
     var el = e.target;
     if (!el || !el.matches) return;
@@ -1411,9 +1684,24 @@
     var ti = el.getAttribute("data-tk");
     if (ti !== null && k) {
       var i = parseInt(ti, 10);
-      if (k === "assembly_name") setAssembly(i, el.value);
-      if (k === "item_name") setMaterial(i, el.value);
-      else if (M.takeoff[i]) M.takeoff[i][k] = el.value;
+      // THE CARD IS REBUILT HERE AND NOWHERE ELSE. A pick that changes the row's kind adds or
+      // removes the Coverage field, which repainting text cannot do -- so the one card is redrawn
+      // and the caret put back at the end of the name being typed. Same trade as the Guys switch
+      // above: one rebuild, mid-keystroke, with the caret carried, because the alternative is a
+      // field that appears only after the next unrelated render.
+      //
+      // It is deliberately NOT done in `change`: by the time that fires the estimator has tabbed
+      // into Measurement, and rebuilding then destroys the box they are standing in.
+      if (k === "pick") {
+        var flipped = setPick(i, el.value);
+        changed(false);
+        if (flipped) {
+          repaintRow(i);
+          refocus('[data-tk="' + i + '"][data-k="pick"]');
+        }
+        return;
+      }
+      if (M.takeoff[i]) M.takeoff[i][k] = el.value;
       changed(false);
       return;
     }
@@ -1465,7 +1753,7 @@
       changed(false);
       return;
     }
-    if (k === "assembly_name") {
+    if (k === "pick") {
       // Committed — blurred, or picked off the list. A TARGETED repaint, not a re-render.
       //
       // `change` on this field fires when the estimator leaves it, and the ordinary way to leave it
@@ -1477,7 +1765,11 @@
       // Nothing is lost by repainting instead: the hint, the per-unit line, the measurement label
       // and the cost are all keyed and refreshed by repaintNumbers, and setAssembly already syncs
       // the unit select in place.
-      setAssembly(i, el.value);
+      // NO REBUILD, not even when the kind moved. Typing or picking already fired `input`, which
+      // redrew the card and kept the caret; the only way here without that is a value set by
+      // something other than a person, and a Coverage box that waits for the next render beats a
+      // caret thrown on the floor.
+      setPick(i, el.value);
       changed(false);
     }
   });
