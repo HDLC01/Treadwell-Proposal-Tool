@@ -948,7 +948,12 @@
     for (var i = 0; i < m.takeoff.length; i++) {
       var r = m.takeoff[i] || {};
       var measured = num(r.measurement);
-      var picked = !!r.assembly_id;
+      // EITHER ID IS A PICK. A takeoff row has been able to be one material rather than an
+      // assembly since 2026-09-19, and reading assembly_id alone told a bid made of materials it
+      // had nothing picked -- which kept the Review step's pip grey and its blocker list shouting
+      // at rows that were finished. The MESSAGE is left exactly as it was: it is the text two
+      // test files pin, and it is still the right sentence for a row with nothing picked at all.
+      var picked = !!(r.assembly_id || r.item_id);
       if (!picked && measured <= 0) continue;          // an untouched row is not a problem
       used += 1;
       if (!picked) out.push("Pick an assembly for takeoff row " + (i + 1));

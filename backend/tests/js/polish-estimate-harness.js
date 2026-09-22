@@ -72,6 +72,7 @@ const EXPORTS = `
   return {
     init: init, adopt: adopt, go: go, changed: changed, saveSoon: saveSoon,
     assemblyByName: assemblyByName, setAssembly: setAssembly,
+    itemByName: itemByName, setPick: setPick, rowKind: rowKind,
     rowPrice: rowPrice, materialTotal: materialTotal, bid: bid,
     moneyAuto: moneyAuto, measureText: measureText, asmHint: asmHint,
     repaintNumbers: repaintNumbers, renderPanel: renderPanel, stepStatus: stepStatus,
@@ -271,6 +272,10 @@ const ITEMS = [
   { id: "i3", name: "Armor Top Satin", unit: "Kit", buy_qty: 1, unit_cost: 382.4475,
     coverage: 775 },
   { id: "i4", name: "Densifier", unit: "Pail", buy_qty: 1, unit_cost: 100, coverage: 1000 },
+  // ONE NAME, TWO THINGS. Not a hypothetical: "Grout Compound - Test" and "Plastic - Test" each
+  // exist as an item AND an assembly in the live library, different ids, identical names. The
+  // merged picker has to refuse to guess between them, so the fixture has to be able to trap it.
+  { id: "i5", name: "Grout Compound", unit: "Pail", buy_qty: 1, unit_cost: 46.2, coverage: 800 },
 ];
 const ASMS = [
   { id: "a1", name: "Polish 800 Grit", unit: "SF", lines: [
@@ -286,6 +291,11 @@ const ASMS = [
     { item_id: "i4", coverage: 1000, waste_pct: 0, roundup: true }] },
   { id: "a4", name: "GRIND & SEAL", unit: "SF", lines: [
     { item_id: "i1", coverage: 275, waste_pct: 0, roundup: true }] },
+  // The assembly half of the collision above. Its lines are its own, so picking the wrong one of
+  // the two prices the row at something visibly different — which is what makes "resolved to the
+  // wrong kind" a thing a test can catch rather than a thing only a reader would notice.
+  { id: "a6", name: "Grout Compound", unit: "SF", lines: [
+    { item_id: "i2", coverage: 400, waste_pct: 0, roundup: false }] },
   // Its material has been deleted from the library, so it cannot price.
   { id: "a9", name: "Orphaned System", unit: "SF", lines: [
     { item_id: "deleted-material", coverage: 275, waste_pct: 5, roundup: true }] },
@@ -735,7 +745,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
       const cPanels = c.dom.get("panels");
       const before = cPanels.htmlWrites;
       const measureBefore = need(c, '[data-tk="0"][data-k="measurement"]');
-      const asmField = need(c, '[data-tk="0"][data-k="assembly_name"]');
+      const asmField = need(c, '[data-tk="0"][data-k="pick"]');
       asmField.value = ASMS[1].name;                 // retyped by hand, then tabbed away
       c.doc.fire("change", { target: asmField });
       const measureAfter = need(c, '[data-tk="0"][data-k="measurement"]');
@@ -1071,7 +1081,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
                                     cells: t2.doc.querySelectorAll("[data-cost-for]").length,
                                     row: t2.api.model().takeoff[0] };
 
-    // Add a takeoff row: it appears empty, priced at nothing, and says why.
+    // Add a takeoff row: it appears empty, priced at nothing, and says where to search.
     const t3 = build();
     await t3.api.init();
     clickOn(t3, "[data-add-row]");
@@ -1354,14 +1364,17 @@ const rendered = [];      // every string the page put on screen, for the Labour
     // first version of this probe skipped it and spent its evidence blaming setMaterial.
     await m.api.init();
     m.api.go(0);
-    clickOn(m, "[data-add-mat]");
+    clickOn(m, "[data-add-row]");
     const idx = m.api.model().takeoff.length - 1;
     const row = () => m.api.model().takeoff[idx];
-    const card = () => (m.dom.get("panels").innerHTML.split('class="tk mat"')[1] || "")
-      .split("</div></div>")[0];
+    // READ THE CARD, NOT THE PANEL. Since 2026-09-23 a row that changes kind is redrawn on its
+    // own, precisely so the panel is not rebuilt under the estimator's caret -- which means the
+    // panel's innerHTML is still the snapshot from the last full render and shows this row as it
+    // was BEFORE the pick. Asking it whether the row says "MATERIAL" would answer about the past.
+    const cardEl = () => need(m, '[data-row-card="' + idx + '"]');
 
-    const seeded = clone(row());
-    typeInto(m, '[data-tk="' + idx + '"][data-k="item_name"]', "Densifier");
+    const seeded = clone(row());        // as the button pushes it: undecided, not a material yet
+    typeInto(m, '[data-tk="' + idx + '"][data-k="pick"]', "Densifier");
     typeInto(m, '[data-tk="' + idx + '"][data-k="measurement"]', "10000");
     const pickedUnit = row().unit;                    // must stay SF, NOT the item's "Pail"
     const afterPick = clone(row());
@@ -1384,10 +1397,15 @@ const rendered = [];      // every string the page put on screen, for the Labour
 
     out.materialRow = {
       seeded: seeded,
-      isItemKind: seeded.kind === "item",
+      // IT BECOMES a material by being pointed at one, rather than being born one. The button
+      // that knew the answer in advance is gone; `kind` is still written on the row, and still
+      // not inferred from item_id alone, so clearing the name cannot flip it back.
+      seededKind: seeded.kind,
+      isItemKind: m.api.rowKind(row()) === "item",
       // The card, not the model: an assembly row and a material row must not look the same.
-      saysMaterial: /MATERIAL/.test(m.dom.get("panels").innerHTML),
-      hasCoverageField: /data-k="coverage"/.test(m.dom.get("panels").innerHTML),
+      saysMaterial: /MATERIAL/.test(cardEl().innerHTML),
+      cardClass: cardEl().className,
+      hasCoverageField: !!cardEl().querySelector('[data-k="coverage"]'),
       resolvedId: afterPick.item_id,
       // NO UNIT ADOPTION. An item's unit is what it is BOUGHT in (Pail), not how the floor is
       // measured. Copying it onto the row would price a 10,000 SF area in pails.
@@ -1861,19 +1879,191 @@ const rendered = [];      // every string the page put on screen, for the Labour
     };
   }
 
-  // ── I. the datalist, filled from the assemblies ────────────────────────────
+  // ── I. the one list, filled from BOTH collections ──────────────────────────
   {
     const b = build();
     await b.api.init();
-    const dl = b.dom.get("dl-assemblies");
+    const dl = b.dom.get("dl-lines");
+    const opts = dl.children.filter((c) => c.tag === "option");
+    const merged = ASMS.map((a) => a.name).concat(ITEMS.map((i) => i.name));
     out.datalist = {
-      options: dl.children.filter((c) => c.tag === "option").map((c) => dec(c.attrs.value)),
-      expected: ASMS.map((a) => a.name),
-      // The assembly box is a searchable list input, not a <select>: the library will get long.
-      pickerIsAList: /<input list="dl-assemblies" data-tk="0" data-k="assembly_name"/
+      options: opts.map((c) => dec(c.attrs.value)),
+      labels: opts.map((c) => c.attrs.label),
+      expected: merged.filter((n, i) => merged.indexOf(n) === i)
+        .sort((x, y) => x.localeCompare(y)),
+      // The box is a searchable list input, not a <select>: the library will get long.
+      pickerIsAList: /<input list="dl-lines" data-tk="0" data-k="pick"/
         .test(b.dom.get("panels").innerHTML),
-      pickerIsNotASelect: !/<select[^>]*data-k="assembly_name"/.test(
-        b.dom.get("panels").innerHTML),
+      pickerIsNotASelect: !/<select[^>]*data-k="pick"/.test(b.dom.get("panels").innerHTML),
+      // The name that is in both collections appears ONCE and says so.
+      collision: opts.filter((c) => dec(c.attrs.value) === "Grout Compound")
+        .map((c) => c.attrs.label),
+      // Two assemblies differing only by case stay two options: collapsing them would hide a
+      // library problem this page is not allowed to resolve.
+      caseTwins: opts.filter((c) => dec(c.attrs.value).toLowerCase() === "grind & seal").length,
+    };
+  }
+
+  // ── J. one add control, and a row that categorises itself ──────────────────
+  {
+    const a = build();
+    await a.api.init();
+    a.api.go(0);
+    const panels = a.dom.get("panels");
+    const opening = panels.innerHTML;
+    out.addControl = {
+      addButtons: (opening.match(/data-add-row/g) || []).length,
+      oldMaterialButton: /data-add-mat/.test(opening),
+      dashedGhost: /class="addbtn"/.test(opening),
+      isThePrimaryButton: /<button class="btn addline" data-add-row="1"/.test(opening),
+      label: ((/data-add-row="1">\s*([^<]*)/.exec(opening) || [])[1] || "").trim(),
+      // Above the rows, not under the last one.
+      aboveTheRows: opening.indexOf("data-add-row") < opening.indexOf("data-row-card"),
+    };
+
+    clickOn(a, "[data-add-row]");
+    const idx = a.api.model().takeoff.length - 1;
+    const row = () => a.api.model().takeoff[idx];
+    const q = (k) => a.doc.querySelector('[data-tk="' + idx + '"][data-k="' + k + '"]');
+    out.pendingRow = {
+      seeded: clone(row()),
+      kind: a.api.rowKind(row()),
+      searchable: !!q("pick"),
+      // NO COVERAGE BOX YET. It is a material's field, and nobody has said this is a material.
+      hasCoverage: !!q("coverage"),
+      cost: txt(a, '[data-cost-for="' + idx + '"]'),
+      hint: txt(a, '[data-asmhint-for="' + idx + '"]'),
+      mark: txt(a, '[data-mark-for="' + idx + '"]'),
+      // It is a row like any other: it can be measured and it can be deleted.
+      measurable: !!q("measurement"),
+      deletable: !!a.doc.querySelector('[data-del-row="' + idx + '"]'),
+    };
+
+    // TYPING A MATERIAL NAME MAKES IT A MATERIAL ROW, coverage box and all — and only that card
+    // is redrawn. A panel rebuild here is the focus bug this page already shipped once.
+    const panelWrites = panels.htmlWrites;
+    const cardBefore = a.doc.querySelector('[data-row-card="' + idx + '"]');
+    typeInto(a, '[data-tk="' + idx + '"][data-k="pick"]', "Densifier");
+    typeInto(a, '[data-tk="' + idx + '"][data-k="measurement"]', "10000");
+    out.autoCategorise = {
+      kind: a.api.rowKind(row()),
+      row: clone(row()),
+      // ASKED OF THE CARD, not of the document: the stub's #panels holds a flat copy of every
+      // element the last full render made, and repaintRow replaces the card's children only.
+      coverageAppeared: !!cardBefore.querySelector('[data-k="coverage"]'),
+      markGone: !cardBefore.querySelector("[data-mark-for]"),
+      labelNow: (cardBefore.querySelectorAll("label")[0] || {}).textContent,
+      panelRebuilt: panels.htmlWrites !== panelWrites,
+      sameCardNode: cardBefore === a.doc.querySelector('[data-row-card="' + idx + '"]'),
+      cardRedrawn: cardBefore.htmlWrites,
+      // THE MONEY, against library-core rather than a literal: 10,000 SF of a $100 pail that
+      // covers 1,000 SF, rounded up, is 10 pails.
+      cost: txt(a, '[data-cost-for="' + idx + '"]'),
+      expectedCost: L.priceLine({ item_id: "i4" }, ITEMS, 10000).cost,
+      unitStayedSF: row().unit,
+      hint: txt(a, '[data-asmhint-for="' + idx + '"]'),
+    };
+
+    // An ASSEMBLY name in the same box flips it the other way, and the material's own fields go
+    // with it — a leftover item_id would decide the row for ever, since rowKind reads it first.
+    typeInto(a, '[data-tk="' + idx + '"][data-k="pick"]', "Cove Base");
+    out.flipToAssembly = {
+      kind: a.api.rowKind(row()),
+      row: clone(row()),
+      coverageGone: !cardBefore.querySelector('[data-k="coverage"]'),
+      unitAdopted: row().unit,
+      cost: txt(a, '[data-cost-for="' + idx + '"]'),
+    };
+
+    // CLEARING THE NAME DOES NOT TAKE THE KIND BACK, on either side of the line. The row stays
+    // what it is, holding the measurement and the coverage somebody typed.
+    const mc = build();
+    await mc.api.init();
+    clickOn(mc, "[data-add-row]");
+    const mi = mc.api.model().takeoff.length - 1;
+    typeInto(mc, '[data-tk="' + mi + '"][data-k="pick"]', "Densifier");
+    typeInto(mc, '[data-tk="' + mi + '"][data-k="measurement"]', "2000");
+    typeInto(mc, '[data-tk="' + mi + '"][data-k="coverage"]', "500");
+    typeInto(mc, '[data-tk="' + mi + '"][data-k="pick"]', "");
+    out.clearedMaterial = {
+      kind: mc.api.rowKind(mc.api.model().takeoff[mi]),
+      row: clone(mc.api.model().takeoff[mi]),
+      coverageBoxStayed: !!mc.doc.querySelector(
+        '[data-tk="' + mi + '"][data-k="coverage"]'),
+    };
+  }
+
+  // ── K. a name that is two things is never guessed ──────────────────────────
+  {
+    const q = build();
+    await q.api.init();
+    clickOn(q, "[data-add-row]");
+    const qi = q.api.model().takeoff.length - 1;
+    typeInto(q, '[data-tk="' + qi + '"][data-k="pick"]', "Grout Compound");
+    const choices = () => q.doc.querySelectorAll("[data-kind-pick]");
+    out.ambiguous = {
+      kind: q.api.rowKind(q.api.model().takeoff[qi]),
+      row: clone(q.api.model().takeoff[qi]),
+      // It prices NOTHING while it is undecided. Picking one of two costs by accident is the
+      // failure this whole branch exists to prevent.
+      cost: txt(q, '[data-cost-for="' + qi + '"]'),
+      asked: txt(q, '[data-asmhint-for="' + qi + '"]'),
+      offered: choices().map((e) => e.getAttribute("data-kind-pick")),
+      mark: txt(q, '[data-mark-for="' + qi + '"]'),
+    };
+
+    clickOn(q, '[data-kind-pick="item"]');
+    typeInto(q, '[data-tk="' + qi + '"][data-k="measurement"]', "1000");
+    out.ambiguous.afterChoosingMaterial = {
+      kind: q.api.rowKind(q.api.model().takeoff[qi]),
+      row: clone(q.api.model().takeoff[qi]),
+      cost: txt(q, '[data-cost-for="' + qi + '"]'),
+      expected: L.priceLine({ item_id: "i5" }, ITEMS, 1000).cost,
+      stillAsking: q.doc.querySelectorAll("[data-kind-pick]").length,
+    };
+
+    // The other button, on its own build, resolves to the ASSEMBLY of that name — a different
+    // id, different lines and a different number, which is what makes the choice real.
+    const w = build();
+    await w.api.init();
+    clickOn(w, "[data-add-row]");
+    const wi = w.api.model().takeoff.length - 1;
+    typeInto(w, '[data-tk="' + wi + '"][data-k="pick"]', "Grout Compound");
+    clickOn(w, '[data-kind-pick="asm"]');
+    typeInto(w, '[data-tk="' + wi + '"][data-k="measurement"]', "1000");
+    out.ambiguous.afterChoosingAssembly = {
+      kind: w.api.rowKind(w.api.model().takeoff[wi]),
+      row: clone(w.api.model().takeoff[wi]),
+      cost: txt(w, '[data-cost-for="' + wi + '"]'),
+      expected: L.priceAssembly(ASMS[5], ITEMS, 1000).total,
+    };
+
+    // A row that already IS something keeps what it is, and is never asked.
+    const s = build();
+    await s.api.init();
+    typeInto(s, '[data-tk="0"][data-k="pick"]', "Grout Compound");
+    out.ambiguous.settledRowIsNotAsked = {
+      kind: s.api.rowKind(s.api.model().takeoff[0]),
+      assemblyId: s.api.model().takeoff[0].assembly_id,
+      itemId: s.api.model().takeoff[0].item_id,
+      asked: s.doc.querySelectorAll("[data-kind-pick]").length,
+    };
+  }
+
+  // ── L. a bid made of materials is a finished bid ───────────────────────────
+  {
+    const mo = build({ blob: blob({ polish_estimate: Object.assign(clone(MODEL), {
+      takeoff: [{ kind: "item", item_id: "i4", item_name: "Densifier", measurement: 10000,
+                  unit: "SF", coverage: "" }] }) }) });
+    await mo.api.init();
+    mo.api.go(2);
+    const first = (/<table class="rev-t">[\s\S]*?<\/table>/.exec(
+      mo.dom.get("panels").innerHTML) || [""])[0];
+    out.materialOnly = {
+      pip: mo.api.stepStatus().takeoff,
+      reviewPip: mo.api.stepStatus().review,
+      blockers: B.blockers(mo.api.model()),
+      names: (first.match(/<td>[^<]*</g) || []).map((s) => s.slice(4, -1)),
     };
   }
 
