@@ -11,9 +11,10 @@
  *
  *   * BOTH SIDES OF EVERY GP EDGE. B67 uses strictly `<`, so 6,500 belongs to the 45% band, not
  *     the 52% one. Each edge vector lands the sub-total EXACTLY on the boundary — the material
- *     figures below are back-solved for that, which is why they look arbitrary.
- *   * THE HARD-BID GATE, all four ways: the 60k rule, the local-and-13k rule, the else-less IF
- *     that yields nothing, and a line that is genuinely NEGATIVE (ROUNDUP away from zero).
+ *     figures below are back-solved for that, which is why they look arbitrary. There is no
+ *     hard-bid gate here any more — Hanz, 2026-09-22: "remove all hard bids from the polish
+ *     intake form. And also on the markups" — so a sub-total no longer buys a give-back at any
+ *     size; the vectors that used to prove the 60k/13k thresholds are gone with it.
  *   * THE TWO TAX BASES. Sales tax on materials only; the remodel tax on the labor side and the
  *     markups and never on materials. Every tax vector carries real materials AND real labor, so
  *     swapping the two bases moves the answer instead of cancelling out.
@@ -33,7 +34,7 @@ const path = require("path");
 const CORE = path.join(__dirname, "..", "..", "..", "frontend", "js", "polish-bid-core.js");
 const P = require(CORE);
 
-const OFF = { local: false, hard_bid: false, prevailing_wage: false,
+const OFF = { local: false, prevailing_wage: false,
               taxable: false, remodel_tax: false };
 function cond(over) { return Object.assign({}, OFF, over || {}); }
 
@@ -62,31 +63,6 @@ const VECTORS = [
     input: { material: 31861, labor: 0, contingency: 0, conditions: cond(), sf: 10000 } },
   { label: "GP 30%: sub-total exactly 32,500",
     input: { material: 31862, labor: 0, contingency: 0, conditions: cond(), sf: 10000 } },
-  { label: "GP 30% at 60,000 with hard bid OFF, so no give-back",
-    input: { material: 58823, labor: 0, contingency: 0, conditions: cond(), sf: 40000 } },
-
-  // ── the hard-bid gate ──────────────────────────────────────────────────────
-  { label: "hard bid + local, sub-total 12,999: one dollar under the 13k rule",
-    input: { material: 8351, labor: 4000, contingency: 0,
-             conditions: cond({ hard_bid: true, local: true }), sf: 9000 } },
-  { label: "hard bid + local, sub-total exactly 13,000: -2.5%, a NEGATIVE line",
-    input: { material: 8352, labor: 4000, contingency: 0,
-             conditions: cond({ hard_bid: true, local: true }), sf: 9000 } },
-  { label: "hard bid, NOT local, sub-total 13,000: the local gate withholds it",
-    input: { material: 8352, labor: 4000, contingency: 0,
-             conditions: cond({ hard_bid: true }), sf: 9000 } },
-  { label: "hard bid, not local, sub-total 59,999: the else-less IF, so nothing",
-    input: { material: 36861, labor: 20000, contingency: 0,
-             conditions: cond({ hard_bid: true }), sf: 30000 } },
-  { label: "hard bid, not local, sub-total exactly 60,000: -4%",
-    input: { material: 36862, labor: 20000, contingency: 0,
-             conditions: cond({ hard_bid: true }), sf: 30000 } },
-  { label: "hard bid + local at 60,000: the bigger give-back wins, not -2.5%",
-    input: { material: 36862, labor: 20000, contingency: 0,
-             conditions: cond({ hard_bid: true, local: true }), sf: 30000 } },
-  { label: "local, no hard bid, sub-total 70,000: local alone gives nothing back",
-    input: { material: 46666, labor: 20000, contingency: 0,
-             conditions: cond({ local: true }), sf: 30000 } },
 
   // ── sales tax on and off, same job otherwise ───────────────────────────────
   { label: "taxable: 9.475% on the MATERIAL total only",
@@ -154,7 +130,7 @@ const VECTORS = [
   // ── a whole realistic job, every condition on, raw sums with cents on them ─
   { label: "everything on, unrounded takeoff and labor sums",
     input: { material: 18450.75, labor: 15467.2, contingency: 2500, remodel_rate: 0.07975,
-             conditions: { local: true, hard_bid: true, prevailing_wage: true,
+             conditions: { local: true, prevailing_wage: true,
                            taxable: true, remodel_tax: true }, sf: 14200 } },
 
   // ── the states the screen opens and closes in ──────────────────────────────
@@ -213,29 +189,25 @@ out.formats = {
   pct: [P.pct(0.027), P.pct(0.45), P.pct(-0.025), P.pct(0), P.pct(0.09475), P.pct(0.16),
         P.pct(-0.04), P.pct(0.07975)],
   sf: [P.fmtSf(12500), P.fmtSf(0), P.fmtSf("1,632.5")],
-  // ROUNDUP is away from zero, which is the only reason the negative hard-bid line is right.
+  // ROUNDUP is away from zero — Excel's rule for every rounded cell, this engine's negative
+  // numbers included wherever one shows up (a give-back cancellation, a credit line).
   roundUp: [P.roundUp(1.2), P.roundUp(-1.2), P.roundUp(1), P.roundUp(-1), P.roundUp(0),
             P.roundUp(110.00000000000001), P.roundUp(0.0001), P.roundUp("")],
   num: [P.num("1,200"), P.num("$32.20"), P.num(""), P.num(null), P.num("abc"), P.num(true)]
 };
 
-// ── the constants, and the two banded rates, PROBED rather than read ─────────
-// The pytest pulls the sheet's own numbers out of the B67/B68/B74/B75/C46 formula text and checks
+// ── the constants, and the GP band rate, PROBED rather than read ─────────────
+// The pytest pulls the sheet's own numbers out of the B67/B74/B75/C46 formula text and checks
 // them against these. A constant that agrees with the workbook and a function that ignores it
-// would both pass a source read, so the bands are answered by the real gpPct/hardBidPct at every
-// threshold the formulas name. RATES.SHEET_REMODEL is the exception that proves the rule: it is
-// pinned to B75's 10% and nothing prices from it, which the remodel vectors above demonstrate.
+// would both pass a source read, so the bands are answered by the real gpPct at every threshold
+// the formula names. RATES.SHEET_REMODEL is the exception that proves the rule: it is pinned to
+// B75's 10% and nothing prices from it, which the remodel vectors above demonstrate. B68's
+// hard-bid gate was the second such cell -- pinned in Layer 1 as a formula that still lives in
+// Kyle's workbook, and priced by nothing here at all since 2026-09-22.
 out.constants = { rates: P.RATES, gpBands: P.GP_BANDS, hoursPerDay: P.HOURS_PER_DAY };
 out.gpProbe = {};
 [0, 1, 6499, 6500, 6501, 14999, 15000, 15001, 22499, 22500, 22501, 32499, 32500, 32501,
  60000, 100000].forEach(function (v) { out.gpProbe[v] = P.gpPct(v); });
-out.hardBidProbe = [];
-[[false, false], [false, true], [true, false], [true, true]].forEach(function (pair) {
-  [0, 12999, 13000, 13001, 59999, 60000, 60001].forEach(function (v) {
-    out.hardBidProbe.push({ hard_bid: pair[0], local: pair[1], sub: v,
-                            pct: P.hardBidPct(v, { hard_bid: pair[0], local: pair[1] }) });
-  });
-});
 
 // ── dye and joint filler: fixed formulas keyed on the polished area (Polish!E25/E29) ──
 //
@@ -276,7 +248,7 @@ const V1 = {
   areas: [{ name: "Main sales floor", sf: 9000 }, { name: "Back of house", sf: "3,500" }],
   system: "S&P",
   tooling: "traditional",
-  conditions: { local: false, hard_bid: true, prevailing_wage: true,
+  conditions: { local: false, prevailing_wage: true,
                 taxable: true, remodel_tax: true },
   materials: { 17: { qty: 12500, cost: 0.15 }, 29: { qty: 4, cost: 500 } },
   added: [{ name: "Stair nosing infill", qty: 46, cost: 12.5 }],
@@ -630,12 +602,12 @@ P.seedConditionDefaults(condInput, COND_ROWS);
 out.conditionDefaults = {
   shipped: P.freshModel().conditions,
   seeded: P.seedConditionDefaults(P.freshModel().conditions, COND_ROWS),
-  // The five conditions answered on Intake are not in the vocabulary and must come through
-  // untouched — the merge writes the three it was handed and nothing else.
+  // The four conditions answered on Intake, plus Bond, are not in the vocabulary and must come
+  // through untouched — the merge writes the three it was handed and nothing else.
   intakeFiveUntouched: (function () {
     const a = P.freshModel().conditions;
     const b = P.seedConditionDefaults(a, COND_ROWS);
-    return ["local", "hard_bid", "prevailing_wage", "taxable", "remodel_tax", "bond"]
+    return ["local", "prevailing_wage", "taxable", "remodel_tax", "bond"]
       .every(function (k) { return a[k] === b[k]; });
   })(),
   // A NEW OBJECT. Seeding the conditions the page is holding must not rewrite the object it was
@@ -710,7 +682,7 @@ const SAVED_WITH_CONDITIONS = {
   // meaningful: the library has an answer for every one of them that COULD have landed on this
   // bid, and the gate is the only thing stopping it. joint_filler flipped here on 2026-09-19 to
   // stay opposite when the library row flipped.
-  conditions: { local: false, hard_bid: true, prevailing_wage: true, taxable: false,
+  conditions: { local: false, prevailing_wage: true, taxable: false,
                 remodel_tax: true, bond: true,
                 joint_filler: false, dye: false, remove_existing_jf: false },
   contingency: 500,

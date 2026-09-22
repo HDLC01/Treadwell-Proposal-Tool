@@ -1,29 +1,31 @@
 """Markup rules — the storage layer and its endpoints.
 
 The markup chain's rates live as hardcoded constants in frontend/js/polish-bid-core.js today
-(`RATES`, `GP_BANDS`, literals inside `hardBidPct`), transcribed by hand off Kyle's workbook.
-`markup.py` is where an admin edits them instead. The engine that evaluates a formula and the
-page that shows it are separate; these tests only pin the row.
+(`RATES`, `GP_BANDS`), transcribed by hand off Kyle's workbook. `markup.py` is where an admin
+edits them instead. The engine that evaluates a formula and the page that shows it are separate;
+these tests only pin the row.
 
 What these tests are actually protecting:
 
-  * **`applies=false` is not a zero.** The Gyp tabs have NO hard-bid rate — the workbook cell is
-    EMPTY. "this tab has no such line" and "it has one and it prices to nothing" are different
-    facts, and the chain treats them differently. Conflating them is the one mistake this table
-    is shaped to prevent, so the source is mutated BOTH ways below (writer and reader) to prove
-    the guard is real rather than incidental.
+  * **`applies=false` is not a zero.** "this tab has no such line" and "it has one and it prices
+    to nothing" are different facts, and the chain treats them differently. Conflating them is
+    the one mistake this table is shaped to prevent, so the source is mutated BOTH ways below
+    (writer and reader) to prove the guard is real rather than incidental. Until 2026-09-22 the
+    Gyp tabs' own hard-bid rate was the live example — the workbook cell was EMPTY, not 0; the
+    line is gone, and travel_lodging switched off is the example the tests below use instead.
   * **A formula is text.** Gyp's soft-costs cell is a whole expression that returns the string
     "error" rather than guess a rate. A numeric column could not hold it, and the point of the
     text column is that it comes back byte-for-byte.
   * **The key is the TAB.** Seal, Epoxy blank and Leveling are tabs a bid sits on that no work
     type names. There is deliberately no 'combo' — a combo job is two option lines, each priced
     off its own tab — so 'combo' is refused BY NAME, not merely as an unknown value.
-  * **…except for the four lines that are the same rule on every tab, which have ONE home.**
-    Bond is 0 on every priced sheet, the hard-bid rule is one formula on all six sheets that have
-    one, and travel lodging/food are $70 a night and $45 a day on all eleven — so they are filed
-    once, under the reserved `global` layout, and a tab-side copy is refused BY NAME. Not a
-    default-with-override: two rows for one line is a precedence question, and the answer to a
-    precedence question is a price nobody chose.
+  * **…except for the three lines that are the same rule on every tab, which have ONE home.**
+    Bond is 0 on every priced sheet, and travel lodging/food are $70 a night and $45 a day on all
+    eleven — so they are filed once, under the reserved `global` layout, and a tab-side copy is
+    refused BY NAME. Not a default-with-override: two rows for one line is a precedence question,
+    and the answer to a precedence question is a price nobody chose. hard_bid used to be a fourth
+    Global line, and the one that actually compounded into a tab's own chain; removed 2026-09-22
+    (Hanz: "remove all hard bids from the polish intake form. And also on the markups").
   * **A row filed before a line moved home is still returned.** Production carries exactly one
     (polish / bond / 1%). It is unreadable by the new rule and it is NOT filtered out of
     list_rules, because a rule nothing reads and nobody can see is one that stays wrong forever.
@@ -169,8 +171,7 @@ def test_the_two_homes_are_disjoint_and_together_are_the_api_vocabulary():
     line?" reader answered yes too."""
     assert set(markup.GLOBAL_LINE_KEYS) & set(markup.TAB_LINE_KEYS) == set()
     assert set(markup.LINE_KEYS) == set(markup.GLOBAL_LINE_KEYS) | set(markup.TAB_LINE_KEYS)
-    assert set(markup.GLOBAL_LINE_KEYS) == {"hard_bid", "bond", "travel_lodging",
-                                            "travel_per_diem"}
+    assert set(markup.GLOBAL_LINE_KEYS) == {"bond", "travel_lodging", "travel_per_diem"}
     assert set(markup.TAB_LINE_KEYS) == {"gp", "super_pto", "soft_costs"}
     # And neither half may claim a line the module refuses by name outright, or a key would be
     # offered to the editor that _check_line_key rejects two lines later.
@@ -308,9 +309,9 @@ def test_a_line_that_is_not_in_the_chain_still_gets_a_default_sort(store, admin,
 
 # ── applies=false vs formula='0' — THE distinction ────────────────────────────
 def test_a_line_that_does_not_apply_stores_no_formula(store):
-    """Switched off: the line does not exist. Filed on Global, which is where hard_bid lives —
-    and where switching it off means no sheet layout charges it at all."""
-    row = _mk(layout="global", line_key="hard_bid", applies=False)
+    """Switched off: the line does not exist. Filed on Global, which is where travel_lodging
+    lives — and where switching it off means no sheet layout charges it at all."""
+    row = _mk(layout="global", line_key="travel_lodging", applies=False)
     assert row["applies"] is False
     assert row["formula"] is None, "an absent line was given a formula"
     stored = store["markup_rules"][0]
@@ -329,9 +330,9 @@ def test_a_line_that_prices_to_nothing_keeps_its_zero(store):
 def test_absent_and_zero_are_distinct_in_the_row_and_in_the_json(store, admin):
     """THE test. Both halves asserted, because the two ways to break this live in different
     places: the WRITER could store '0' for a line that does not apply, and the READER could
-    re-derive `applies` from whether a formula is present. Either one loses Kyle's distinction
-    between "this tab has no hard-bid rate" and "its hard-bid rate is nothing", and the second
-    one loses it without touching the database, so a round-trip through the store cannot see it.
+    re-derive `applies` from whether a formula is present. Either one loses the distinction
+    between "this tab has no such line" and "its rate here is nothing", and the second one loses
+    it without touching the database, so a round-trip through the store cannot see it.
 
     Mutating the WRITER (store "0" for a line that does not apply) fails the first half. Mutating
     the READER is NOT caught here and cannot be: both rows below have `applies` agreeing with
@@ -342,26 +343,26 @@ def test_absent_and_zero_are_distinct_in_the_row_and_in_the_json(store, admin):
 
     Both rows sit on `global` now, because that is where both lines live — so they are keyed by
     LINE KEY below rather than by layout."""
-    absent = _mk(layout="global", line_key="hard_bid", applies=False)
+    absent = _mk(layout="global", line_key="travel_lodging", applies=False)
     zero = _mk(layout="global", line_key="bond", applies=True, formula="0")
 
     # The stored shape.
     rows = {r["line_key"]: r for r in store["markup_rules"]}
-    assert rows["hard_bid"]["applies"] is False and rows["hard_bid"]["formula"] is None
+    assert rows["travel_lodging"]["applies"] is False and rows["travel_lodging"]["formula"] is None
     assert rows["bond"]["applies"] is True and rows["bond"]["formula"] == "0"
-    assert rows["hard_bid"]["formula"] != rows["bond"]["formula"]
-    assert rows["hard_bid"]["applies"] != rows["bond"]["applies"]
+    assert rows["travel_lodging"]["formula"] != rows["bond"]["formula"]
+    assert rows["travel_lodging"]["applies"] != rows["bond"]["applies"]
 
     # The JSON shape, straight off the endpoint the page and the pricing path both read.
     body = client.get("/api/markup/rules").json()
     served = {r["line_key"]: r for r in body["rules"]}
-    assert served["hard_bid"]["applies"] is False, "the absent line reads as applying"
-    assert served["hard_bid"]["formula"] is None, "the absent line was served a formula"
+    assert served["travel_lodging"]["applies"] is False, "the absent line reads as applying"
+    assert served["travel_lodging"]["formula"] is None, "the absent line was served a formula"
     assert served["bond"]["applies"] is True, "the zero line reads as absent"
     assert served["bond"]["formula"] == "0", "the zero was served as %r" % (
         served["bond"]["formula"],)
     # And the two rows are not interchangeable on EITHER field, in either direction.
-    assert (served["hard_bid"]["applies"], served["hard_bid"]["formula"]) \
+    assert (served["travel_lodging"]["applies"], served["travel_lodging"]["formula"]) \
         != (served["bond"]["applies"], served["bond"]["formula"])
     assert absent["id"] != zero["id"]
 
@@ -375,7 +376,7 @@ def test_a_reader_never_infers_applies_from_the_formula(store):
         "id": "r1", "layout": "global", "line_key": "bond",
         "formula": "0", "applies": True, "sort": 60})
     store["markup_rules"].append({
-        "id": "r2", "layout": "global", "line_key": "hard_bid",
+        "id": "r2", "layout": "global", "line_key": "travel_lodging",
         "formula": None, "applies": False, "sort": 10})
     served = {r["id"]: r for r in markup.list_rules()}
     assert served["r1"]["applies"] is True, "a '0' formula was read as a line that does not apply"
@@ -397,7 +398,7 @@ def test_a_hand_edited_row_is_served_as_stored_when_the_two_fields_disagree(stor
 
     Mutation: `applies = formula is not None` in _shape_rule. Either direction fails."""
     store["markup_rules"].append({
-        "id": "off-but-typed", "layout": "global", "line_key": "hard_bid",
+        "id": "off-but-typed", "layout": "global", "line_key": "travel_lodging",
         "formula": "-0.04", "applies": False, "sort": 10})
     store["markup_rules"].append({
         "id": "on-but-empty", "layout": "global", "line_key": "bond",
@@ -420,7 +421,7 @@ def test_serving_a_contradictory_row_says_so_out_loud(store, caplog):
 
     Mutation: delete the log.warning call in _shape_rule."""
     store["markup_rules"].append({
-        "id": "off-but-typed", "layout": "global", "line_key": "hard_bid",
+        "id": "off-but-typed", "layout": "global", "line_key": "travel_lodging",
         "formula": "-0.04", "applies": False, "sort": 10})
     with caplog.at_level(logging.WARNING, logger="markup"):
         markup.list_rules()
@@ -462,8 +463,8 @@ def test_a_line_that_applies_must_carry_a_formula():
 def test_switching_a_line_off_drops_the_formula_visibly(store):
     """Dropped rather than refused, so the toggle works without clearing the box by hand — and
     the returned row says so, which is the difference between visible and silent."""
-    _mk(layout="global", line_key="hard_bid", formula="-0.04")
-    off = markup.upsert_rule({"layout": "global", "line_key": "hard_bid",
+    _mk(layout="global", line_key="travel_lodging", formula="-0.04")
+    off = markup.upsert_rule({"layout": "global", "line_key": "travel_lodging",
                               "applies": False, "formula": "-0.04"}, None)
     assert off["applies"] is False and off["formula"] is None
     assert store["markup_rules"][0]["formula"] is None

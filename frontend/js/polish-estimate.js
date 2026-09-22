@@ -1033,7 +1033,7 @@
    *  other page carrying its own tokens), so this is `.mw-sw`, not `.sw`.
    *
    *  Returns the switch + label only -- callers compose it with whatever extra context that
-   *  SPECIFIC row still needs (remodelSource()'s county note, hard_bid's threshold note, ...),
+   *  SPECIFIC row still needs (remodelSource()'s county note, ...),
    *  so nothing those already said gets lost by routing through here. */
   function condSwitch(key, label, inert) {
     var on = !!(M.conditions || {})[key];
@@ -1093,13 +1093,9 @@
 
     r += '<tr class="band"><td colspan="3">Markup</td></tr>';
     r += row("GP <span class=\"note\">before the lines below</span>", keyedPct("gp_pct"), "gp");
-    // Only the surprising case still needs words. Hard bid OFF and no discount is what the switch
-    // beside it already says; hard bid ON and STILL no discount is the one that reads like a bug,
-    // so that is the one that gets explained.
-    r += row(condSwitch("hard_bid", "Hard bid discount") +
-      (!b.hard_bid_pct && (M.conditions || {}).hard_bid
-        ? ' <span class="note">under the discount threshold</span>' : ''),
-      keyedPct("hard_bid_pct"), "hard_bid", b.hard_bid_pct ? "" : "off");
+    // NO HARD BID ROW. Hanz, 2026-09-22: "remove all hard bids from the polish intake form. And
+    // also on the markups" -- the switch and its row came out with the condition itself; see
+    // polish-bid-core.js's note on bid() for where the arithmetic went.
     r += row("Superintendent &amp; PTO", esc(B.pct(B.RATES.SUPER_PTO)), "super_pto");
     r += row("Soft costs", esc(B.pct(B.RATES.SOFT_COSTS)), "soft_costs");
     r += '<tr><td>Contingency <span class="note">yours to set</span></td>' +
