@@ -80,69 +80,20 @@
   // and the calculator cannot open a new project on two different sets of defaults.
   var DEFAULT_CONDITIONS = B.freshModel().conditions;
 
-  /** The ONE polish-only condition the live intake also asks, carried through and not priced.
-   *
-   *  WHY THIS LIST EXISTS. Hanz, 2026-09-11: "ytou didnt follow this on the beta polish, the
-   *  toggle buttons are different for each work type." He is right. js/index.js scopes TEN
-   *  toggles by work type and hands a polish job NINE of them; this page shipped a flat five, so
-   *  an estimator who set Renovation or Dye on the live intake arrived here to find the questions
-   *  missing and the two screens describing the same job differently. All four of the polish-only
-   *  toggles went on, in this list, because not one of them could live on the model.
-   *
-   *  THREE OF THE FOUR LEFT ON 2026-09-16, and the difference between them and the one that
-   *  stayed is worth naming rather than leaving to be rediscovered. Dye, joint filler and
-   *  remove-existing describe the WORK, so Hanz asked for them on the Takeoff step, where the work
-   *  is described. Getting them there meant adding them to freshModel().conditions -- which is
-   *  what a key needs in order to be storable at all -- and the shared writer puts their cells in
-   *  from either screen. Renovation is not a description of the work: it is a fact about the
-   *  building, an existing floor rather than new construction, asked once before anybody opens a
-   *  takeoff.
-   *
-   *  CARRIED, NOT PRICED, and that is the whole difference from the six above. In the workbook
-   *  Renovation IS a cell -- Polish!B10, and Epoxy!B10 -- and Kyle's formulas price it. The beta
-   *  prices from the Items & Assemblies library instead, and js/polish-bid-core.js has no notion
-   *  of renovation (grep it and nothing comes back). So it is written to cell_values, where the
-   *  generated .xlsx and the proposal read it, and it is deliberately NOT handed to markupChain:
-   *  a key the chain does not read must not pretend to move money.
-   *
-   *  AND NOT IN polish_estimate.conditions, which is not an oversight. migrateModel() whitelists
-   *  condition keys against freshModel().conditions and DROPS every other one, so a key stored
-   *  there would look saved and come back missing on the next load. Adding `reno` to freshModel is
-   *  the way to change that, the way the other three were changed; until somebody does, cell_values
-   *  is its one home. Both literals are always written, so the read-back in adoptModel can never
-   *  find a blank it has to guess about.
-   *
-   *  The literals and the defaults are the live intake's, cell for cell. Renovation is Reno/New
-   *  rather than Yes/No because Polish!C17 is IF(B10="New",0.05,0.15): a blank B10 silently takes
-   *  the Reno branch and triples the patch material rate.
-   *
-   *  Renovation writes BOTH B10s, and Epoxy!B10 is deliberately first. It is where the live
-   *  intake hydrates the switch from (js/index.js reads cells[0]) and where the AI autofill puts
-   *  its New/Reno answer, so writing only the Polish one would leave this page agreeing with the
-   *  workbook and disagreeing with the two screens either side of it -- the same complaint, in
-   *  the other direction. It costs nothing on a polish bid: Epoxy!C17 multiplies an epoxy area
-   *  this job does not have. */
-  var CARRY_CONDITIONS = [
-    { key: "reno", label: "Renovation",
-      why: "Existing floor, not new construction. Triples the patch material rate.",
-      def: false, cells: ["Epoxy!B10", "Polish!B10"], on: "Reno", off: "New" },
-  ];
-
-  // Dye, joint filler and remove-existing were the other three entries until 2026-09-16; their
-  // keys are in freshModel().conditions now and their cells go through CONDITION_CELLS in
-  // polish-bid-core.js. The docblock above says why.
-
-  /** Every toggle on screen, in the order the live intake shows them for a polish job. */
-  function allConditions() { return CONDITIONS.concat(CARRY_CONDITIONS); }
-
-  /** The carry spec for a key, or null if the key is one of the engine five. The two lists are
-   *  kept apart everywhere precisely because only one of them reaches the pricing engine. */
-  function carrySpec(key) {
-    for (var i = 0; i < CARRY_CONDITIONS.length; i++) {
-      if (CARRY_CONDITIONS[i].key === key) return CARRY_CONDITIONS[i];
-    }
-    return null;
-  }
+  // NO CARRIED CONDITIONS. Dye, joint filler and remove-existing left this list on 2026-09-16 for
+  // the Takeoff step, where the work they describe is described. Renovation was the last one --
+  // it never described the work, only a fact about the building ("existing floor, not new
+  // construction"), which is why it stayed here rather than moving with them -- and it left
+  // entirely on 2026-09-23: Hanz, "Remove Renovation Toggle button from the polish beta intake
+  // form," confirmed to mean the toggle AND the cell-write, not a relocation. Every future beta
+  // job's downloaded .xlsx now writes Polish!B10 / Epoxy!B10 as "New" unconditionally -- the same
+  // literal an untouched Renovation switch already defaulted to, so no download that was correct
+  // yesterday becomes wrong today; a job that IS a renovation simply has no way to say so from
+  // this screen any more. js/polish-bid-core.js still has no notion of renovation and never did.
+  //
+  // If a carry-only condition is ever needed again, CARRY_CONDITIONS existed as a parallel array
+  // to CONDITIONS with its own `cells`/`on`/`off`/`def` shape (see git history) -- do not
+  // reintroduce it as a single-purpose special case a second time.
 
   /** The spreadsheet cells these five conditions ARE, so this page and the live intake
    *  cannot answer the same question two different ways.
@@ -184,16 +135,7 @@
     // is what the generated .xlsx is filled from and a save that left them out would blank them.
     // That includes remove_existing_jf's literal while Joint filler is off: it greys out over
     // there because it changes no price, not because its answer stopped existing.
-    var out = B.conditionCellWrites(M.conditions, (TW.getState() || {}).cell_values);
-    // Renovation, whose ONLY home this is. Written unconditionally for the same reason: a blank
-    // Polish!B10 is not "New" to Kyle's IF(B10="New",0.05,0.15), it takes the Reno branch and
-    // triples the patch material rate.
-    for (var c = 0; c < CARRY_CONDITIONS.length; c++) {
-      var cc = CARRY_CONDITIONS[c];
-      var clit = carry[cc.key] ? cc.on : cc.off;
-      for (var j = 0; j < cc.cells.length; j++) out[cc.cells[j]] = clit;
-    }
-    return out;
+    return B.conditionCellWrites(M.conditions, (TW.getState() || {}).cell_values);
   }
 
   // The draft this page is working ON, and the model derived from it. Reassigned together by
@@ -203,11 +145,6 @@
   var state = {};
   var M = null;
   var form = null;
-
-  // Renovation's on/off, kept OFF the model on purpose: M is what the pricing engine is
-  // handed, and migrateModel would strip the key out of it anyway. Reassigned by adoptModel
-  // for the same reason M is -- the page can switch drafts mid-boot.
-  var carry = {};
 
   // WHICH OF THE FIVE THE ESTIMATOR SETTLED THEMSELVES. Hanz, 2026-08-27: the verbal panel must
   // respect the human. The panel is allowed to fill an empty form; it is not allowed to argue with
@@ -249,22 +186,6 @@
       M.conditions[ck] =
         String(cell).trim().toLowerCase() === String(CONDITION_CELLS[ck].on).toLowerCase();
     }
-    // Renovation, out of the same cell_values, because it has nowhere else to come back
-    // from. A blank means nobody has answered yet -- every save writes both literals -- so the
-    // documented default applies rather than a silent "off".
-    //
-    // The three that moved to the Takeoff step come back through the CONDITION_CELLS loop above
-    // instead, now that they are model keys: ONE read-back rule for all eight cells rather than
-    // two side by side. That matters more than it looks -- the loop above lets the cell win over
-    // the model, and a second loop could only have agreed with it by copying the rule.
-    carry = {};
-    for (var i = 0; i < CARRY_CONDITIONS.length; i++) {
-      var cc = CARRY_CONDITIONS[i];
-      var v = cv[cc.cells[0]];
-      carry[cc.key] = (v == null || v === "")
-        ? cc.def
-        : String(v).trim().toLowerCase() === String(cc.on).trim().toLowerCase();
-    }
   }
 
   function isCondition(key) {
@@ -274,62 +195,26 @@
 
   // ── the toggles ─────────────────────────────────────────────────────────────
 
-  /** One read for both lists, so nothing on screen has to know which of the two a key came out
-   *  of. The engine six live on the model; Renovation cannot (see CARRY_CONDITIONS). */
   function condOn(key) {
-    return carrySpec(key) ? !!carry[key] : !!M.conditions[key];
+    return !!M.conditions[key];
   }
 
+  // NO `needs`/inert HANDLING. It existed only for remove_existing_jf's dependency on Joint
+  // filler while both were carry conditions; that pair moved to the Takeoff step on 2026-09-16
+  // and Renovation -- the one entry ever left behind -- named no `needs` of its own. Nothing on
+  // CONDITIONS uses it today, pinned by test_polish_intake_page.py, and there is no longer a
+  // carry list to justify keeping the machinery for a future entry that has not been written.
   function switchHtml(c) {
     var on = condOn(c.key);
-    // Greyed, not hidden and not disabled, for any entry that names a `needs`. A condition that
-    // costs nothing while another is off is still a real answer about the job, and the live
-    // intake says the same thing through the same class -- styles.css `.sw.inert`.
-    //
-    // NO ENTRY NAMES ONE TODAY. Remove existing joint filler was the only one, and on 2026-09-16
-    // it left for the Takeoff step along with Joint filler, the switch it depended on. The rule is
-    // kept rather than deleted because CARRY_CONDITIONS is a list somebody will add to again, and
-    // because re-deriving it from scratch is how the two intake forms come to grey different
-    // things. That it currently has no user is pinned in test_polish_intake_page.py, not left to
-    // be noticed.
-    var needed = c.needs ? carrySpec(c.needs) : null;
-    var inert = !!(c.needs && !condOn(c.needs));
-    var why = inert
-      ? c.why + " Not affecting the price while " + ((needed && needed.label) || c.needs) +
-        " is off."
-      : c.why;
-    return '<div class="sw' + (on ? " on" : "") + (inert ? " inert" : "") + '" id="cond-' +
+    return '<div class="sw' + (on ? " on" : "") + '" id="cond-' +
       esc(c.key) + '" data-cond="' + esc(c.key) + '" role="switch" tabindex="0" aria-checked="' +
       (on ? "true" : "false") + '">' +
       '<span class="track"></span><span><span class="t">' + esc(c.label) + '</span>' +
-      '<span class="c">' + esc(why) + '</span></span></div>';
+      '<span class="c">' + esc(c.why) + '</span></span></div>';
   }
 
   function renderConditions() {
-    $("conditions").innerHTML = allConditions().map(switchHtml).join("");
-  }
-
-  /** Does anything on screen grey itself out because of this key? */
-  function hasDependents(key) {
-    for (var i = 0; i < CARRY_CONDITIONS.length; i++) {
-      if (CARRY_CONDITIONS[i].needs === key) return true;
-    }
-    return false;
-  }
-
-  /** Show a flip: one switch where that is enough, the whole block where it is not.
-   *
-   *  A key that another switch greys itself out for changes the SENTENCE inside that other switch,
-   *  not just its class, so it has to re-render -- and re-rendering costs the keyboard caret,
-   *  which is put back the way the live intake puts it back. Every other key takes the cheap path
-   *  below, and since 2026-09-16 every key on this form is one of those: Joint filler and the
-   *  switch that depended on it both moved to the Takeoff step. See switchHtml for why the branch
-   *  is kept anyway. */
-  function repaintCondition(key) {
-    if (!hasDependents(key)) { paintCondition(key); return; }
-    renderConditions();
-    var again = $("cond-" + key);
-    if (again && again.focus) again.focus();
+    $("conditions").innerHTML = CONDITIONS.map(switchHtml).join("");
   }
 
   /** Repaint ONE switch rather than the block.
@@ -340,10 +225,8 @@
   function paintCondition(key) {
     var el = $("cond-" + key);
     if (!el) return;
-    var spec = carrySpec(key);
     var on = condOn(key);
-    var inert = !!(spec && spec.needs && !condOn(spec.needs));
-    el.className = "sw" + (on ? " on" : "") + (inert ? " inert" : "");
+    el.className = "sw" + (on ? " on" : "");
     el.setAttribute("aria-checked", on ? "true" : "false");
   }
 
@@ -354,13 +237,11 @@
    *  directions: forgetting the flag costs the panel one re-fill, while getting it wrong the other
    *  way would let the AI overwrite a decision a person had already made. */
   function toggleCondition(key, fromVerbal) {
-    var cc = carrySpec(key);
-    // Only the seven this page renders; a stray data-cond invents nothing.
-    if (!cc && !isCondition(key)) return;
+    // Only the five this page renders; a stray data-cond invents nothing.
+    if (!isCondition(key)) return;
     if (!fromVerbal) humanConditions[key] = true;
-    if (cc) carry[key] = !carry[key];
-    else M.conditions[key] = !M.conditions[key];
-    repaintCondition(key);
+    M.conditions[key] = !M.conditions[key];
+    paintCondition(key);
     // The county note quotes the Remodel tax toggle by name, so it is stale the moment one of these
     // flips. Repainted for any of the five rather than just that one: it costs a string, and a
     // note that describes the price has to describe the price as it is now.
@@ -404,20 +285,12 @@
     });
     var conditions = (res && res.conditions) || {};
     Object.keys(conditions).forEach(function (key) {
-      // ALL SEVEN THIS PAGE RENDERS, not just the five that reach the pricing engine.
-      // toggleCondition has taken a carried key since the carried ones shipped -- `if (!cc &&
-      // !isCondition(key)) return;` -- while this gate still asked only the engine five, so the
-      // two halves of the same page disagreed about what counts as a condition.
-      //
-      // NOT REACHABLE END-TO-END YET, AND READY ON PURPOSE. backend/verbal_intake.py builds its
-      // `conditions` by looping over MONEY_CONDITIONS -- five literals -- and its prompt asks for
-      // those five by name, so the server cannot hand back a carried key today; see
-      // test_the_carried_four_never_come_back_from_the_server. The seven-flag list that DOES
-      // include B10 New/Reno belongs to /api/autofill, a different route that writes cell keys
-      // and never calls this function. Widening the SERVER is a product decision -- whether a
-      // spoken "it's a renovation" may triple the patch rate on its own evidence. Widening the
-      // CLIENT is just making this page agree with itself, and it is where the trap below lives.
-      if (!carrySpec(key) && !isCondition(key)) return;
+      // ONLY THE FIVE THIS PAGE RENDERS. Renovation was accepted here too until 2026-09-23, back
+      // when it was the one carried key this form still asked; it never actually arrived --
+      // backend/verbal_intake.py builds its `conditions` by looping over MONEY_CONDITIONS, four
+      // literals, and its prompt never asked for `reno` by name. That gap is moot now: the switch
+      // is gone from this page, so there is nothing left to widen the gate for.
+      if (!isCondition(key)) return;
       var item = conditions[key];
       if (!item || typeof item.value !== "boolean") return;
       // THE HUMAN WINS. An estimator who corrected this switch after the first run is not asked to
