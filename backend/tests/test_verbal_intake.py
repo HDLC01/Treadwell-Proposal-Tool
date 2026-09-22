@@ -363,34 +363,42 @@ def test_only_the_known_condition_names_are_accepted():
     assert out["conditions"] == {}
 
 
-def test_the_carried_four_never_come_back_from_the_server():
-    """THIS IS WHY A GREEN CLIENT SUITE DOES NOT MEAN THE FEATURE SHIPPED.
+def test_a_condition_outside_money_conditions_never_comes_back_from_the_server():
+    """THIS IS WHY A GREEN CLIENT SUITE DOES NOT MEAN THE FEATURE SHIPPED -- OR, SINCE
+    2026-09-23, WHY IT NO LONGER HAS TO.
 
-    The polish page renders eight switches, and applyVerbal now sets all eight — the engine four
-    plus the four carried through from the live intake (Renovation, Dye, Joint filler, Remove
-    existing joint filler). hard_bid was a fifth engine switch until 2026-09-22; removed with the
-    toggle itself. backend/tests/test_verbal_apply.py proves the carried half works. Read on its
-    own it reads like dictation can set them, and it cannot: `clean()` builds its `conditions` by
-    looping over MONEY_CONDITIONS, so a key outside that tuple is not filtered out, it is never
-    looked at. The prompt asks for those same four by name.
+    The polish page renders FIVE switches now, not eight: the four MONEY_CONDITIONS below
+    plus Bond, which markupChain() never looks up by key (bond_pct is RATES.BOND
+    unconditionally). Dye, Joint filler and Remove existing joint filler moved onto the
+    Takeoff step on 2026-09-16 and are answered there, on the model, not here. Renovation
+    was the last condition this page carried without pricing it, and it left the page
+    entirely on 2026-09-23 (Hanz: "Remove Renovation Toggle button from the polish beta
+    intake form") -- not relocated, gone, along with the client-side mechanism
+    (carrySpec(), hasDependents(), repaintCondition()) that used to let a carried key reach
+    a switch at all. See backend/tests/test_verbal_apply.py for what that removal left
+    behind on the client.
 
-    So the client is ready and the server is the decision. `reno` is a real candidate — Kyle's
-    C17 is IF(B10="New",0.05,0.15), so New-versus-Reno triples the patch material rate, which
-    is exactly the kind of flag this module demands a verbatim quote for. Whether a spoken "it's
-    a remodel" is allowed to do that on its own evidence is Hanz's call, not this file's.
+    So there is no live path left for dye/joint_filler/remove_existing_jf to reach this
+    route AT ALL any more -- they are asked on a different screen now, and Renovation is
+    asked on no screen -- but the SERVER's rule is the one this test actually pins, and it
+    does not depend on which page asks what: `clean()` builds its `conditions` by looping
+    over MONEY_CONDITIONS, so a key outside that tuple is not filtered out, it is never
+    looked at, whatever a future page decides to call it.
 
-    Asserted two ways on purpose. The tuple itself, so widening it is a deliberate edit that
-    lands here; and the behaviour through `clean()` with a quote that IS in the transcript, so
-    the reason nothing comes back is the loop and not a failed evidence check."""
+    Asserted two ways on purpose. The tuple itself, so widening it is a deliberate edit
+    that lands here; and the behaviour through `clean()` with quotes that ARE in the
+    transcript, so the reason nothing comes back is the loop and not a failed evidence
+    check."""
     assert V.MONEY_CONDITIONS == (
         "local", "prevailing_wage", "taxable", "remodel_tax"), (
-        "MONEY_CONDITIONS changed. If a carried-through key was added, the prompt has to ask "
-        "for it, `missing` has to accept it, and polish-verbal.js needs its label: %r"
-        % (V.MONEY_CONDITIONS,))
+        "MONEY_CONDITIONS changed. If a condition outside it needs the AI to set it, the "
+        "prompt has to ask for it, `missing` has to accept it, and polish-verbal.js needs "
+        "its label: %r" % (V.MONEY_CONDITIONS,))
 
-    transcript = TRANSCRIPT + " Oh and it is a remodel, existing floor, and they do not want any joint filler."
+    transcript = (TRANSCRIPT + " Oh and they do not want any joint filler, and there is no "
+                  "dye on this one.")
     out = V.clean({"conditions": {
-        "reno": {"value": True, "quote": "it is a remodel, existing floor"},
+        "dye": {"value": False, "quote": "no dye on this one"},
         "joint_filler": {"value": False, "quote": "they do not want any joint filler"},
         "remodel_tax": {"value": True, "quote": "It's a hard bid, going out through the district"},
     }}, transcript)
@@ -398,15 +406,17 @@ def test_the_carried_four_never_come_back_from_the_server():
     # and is pinned by its own tests -- it widens a quote to the surrounding sentence, so asserting
     # the string here would couple this test to a window size that has nothing to do with it.
     assert sorted(out["conditions"]) == ["remodel_tax"], (
-        "a carried-through key came back from the server: %r" % (sorted(out["conditions"]),))
+        "a condition outside MONEY_CONDITIONS came back from the server: %r"
+        % (sorted(out["conditions"]),))
     assert out["conditions"]["remodel_tax"]["value"] is True
     # And not as an "I heard it but could not prove it" either -- unsupported is for a flag whose
     # quote is absent from the transcript. These two were quoted verbatim and are simply not
     # part of the conversation the server is having.
     assert out["unsupported"] == [], (
-        "a quoted carried key was reported as unsupported, which reads as a transcript problem "
-        "rather than a route that does not carry it: %r" % (out["unsupported"],))
-    assert "reno" not in out.get("missing", []), (
+        "a quoted condition outside MONEY_CONDITIONS was reported as unsupported, which reads "
+        "as a transcript problem rather than a route that does not carry it: %r"
+        % (out["unsupported"],))
+    assert "dye" not in out.get("missing", []) and "joint_filler" not in out.get("missing", []), (
         "the panel would ask the estimator for a flag this route cannot accept")
 
 

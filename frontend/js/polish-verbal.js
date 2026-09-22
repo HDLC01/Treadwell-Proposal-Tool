@@ -51,12 +51,11 @@
     zip: "ZIP", contact_name: "Contact", contact_email: "Contact email", bid_date: "Bid date",
     local: "Local job", prevailing_wage: "Prevailing wage",
     taxable: "Taxable", remodel_tax: "Remodel tax",
-    // The four the polish page carries through from the live intake, now that applyVerbal accepts
-    // them. label() falls back to the raw key, so without these a widened extraction would print
-    // "reno on" at an estimator. The words are the switches' own labels from CARRY_CONDITIONS:
-    // this panel's whole job is to name a switch that is on screen, and naming it differently
-    // from the switch is describing something the screen does not show.
-    reno: "Renovation", dye: "Dye", joint_filler: "Joint filler",
+    // Dye, joint filler and remove-existing moved to the Takeoff step on 2026-09-16; Renovation,
+    // the intake page's own last carried condition, left with its toggle on 2026-09-23. None of
+    // the four is a key applyVerbal accepts here any more -- the entries stayed only as label()
+    // fallbacks for a widened extraction that never shipped, and there is nothing left to widen.
+    dye: "Dye", joint_filler: "Joint filler",
     remove_existing_jf: "Remove existing joint filler",
   };
 
