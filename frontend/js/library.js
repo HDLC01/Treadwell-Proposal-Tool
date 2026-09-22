@@ -2444,7 +2444,6 @@
           var n = (a.lines || []).length;
           return { name: a.name,
                    how: n + " item line" + (n === 1 ? "" : "s") + " \u00b7 per " + (a.unit || "SF"),
-                   wt: workTypeCell("assemblies", a),
                    actions: defaultRowActions("assemblies", a.id, a.name) };
         }) },
       { title: "Materials",
@@ -2462,7 +2461,6 @@
                    how: L.num(it.unit_cost) != null
                      ? L.money(it.unit_cost) + " per " + (it.unit || "unit")
                      : "No cost in the library yet",
-                   wt: workTypeCell("items", it),
                    actions: defaultRowActions("items", it.id, it.name) };
         }).concat(takeoffConditionDefaults().map(function (c) {
           // ALL THREE, ON OR OFF. For two days this filtered on `c.on`, by analogy with
@@ -2479,10 +2477,6 @@
           return { name: c.label,
                    how: conditionPriceCell(c),
                    rawHow: true,
-                   // NO CHIPS: a condition is not a library row and has no default_work_types
-                   // to press. It is a question the polish takeoff asks, and scoping it to a
-                   // work type would be a control over a column that does not exist.
-                   wt: '<span class="wtall">Polish takeoff</span>',
                    actions: conditionRowActions(c) };
         })) },
       { title: "Markup",
@@ -2514,18 +2508,24 @@
     if (!body) return;
     var out = "";
     takeoffDefaultGroups().forEach(function (g) {
-      out += '<tr class="grouphead"><th scope="colgroup" colspan="4">' +
+      out += '<tr class="grouphead"><th scope="colgroup" colspan="3">' +
         esc(g.title) + "</th></tr>";
       g.rows.forEach(function (r) {
         // rawHow ONLY for the rows that build their own control. Everything else stays
         // escaped -- a material name is somebody typed text and must never render as HTML.
         //
-        // `wt` IS ALWAYS MARKUP, from workTypeCell or from a literal in the group above, and is
-        // never a name somebody typed. A row that supplies none gets an empty cell rather than
-        // the string "undefined" -- the Markup group is the one that does.
+        // NO WORK-TYPES COLUMN. It lived here for one day. Hanz, 2026-09-22: "remove the
+        // worktype section because this is not looking good" -- five chips on every row, wrapping
+        // to two lines, over a table whose other two columns are a name and a sentence.
+        //
+        // THE SCOPING DID NOT GO WITH IT. The chips were the only writer for
+        // default_work_types, and deleting them outright would put the work-type filter above
+        // this table straight back to filtering nothing, which is the defect he reported the same
+        // morning. The control moves to the material's own row on the Items tab in a follow-up
+        // (the coverage/waste/roundup work in flight) -- until then Edit already reaches the row
+        // that owns the flag.
         out += "<tr><td>" + esc(r.name) + "</td><td>" +
           (r.rawHow ? r.how : esc(r.how)) + "</td>" +
-          '<td class="wtcell">' + (r.wt || "") + "</td>" +
           '<td class="rowact">' + r.actions + "</td></tr>";
       });
     });

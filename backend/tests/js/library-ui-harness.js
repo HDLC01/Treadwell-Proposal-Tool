@@ -4411,98 +4411,36 @@ async function conditionChecks() {
     })(),
   };
 
-  // ── THE WORK-TYPE CHIPS, PRESSED ──────────────────────────────────────────────────────────
-  // Hanz, 2026-09-21: "the filters in items in assemblies on the default items in assemblies. Is
-  // not working." It was not: library.py had stored default_work_types since the column landed,
-  // library.js only ever READ it, workTypeLabel was written and never called, and so every row in
-  // the library sat at [] -- which appliesToWorkType reads as "applies everywhere" -- and all
-  // five chips above the table rendered one identical list.
-  //
-  // EVERY ASSERTION BELOW IS DRIVEN, for the reason this file keeps learning: a chip rendered
-  // over a column nothing can write looks exactly like a chip that works, and a markup assertion
-  // cannot separate the two. The one before it on this tab was the labor Add button.
-  const wtSeed = (extra) => Object.assign({
+  // ── THE WORK-TYPE STRIP STILL FILTERS, WITH NO ROW-LEVEL CHIPS LEFT ──────────────────────
+  // Hanz, 2026-09-22: "remove the worktype section because this is not looking good" -- the
+  // per-row chips (and the column) came out of this table one day after they were fixed. What
+  // this scenario proves is that the READER survived the writer's removal: appliesToWorkType
+  // still filters takeoffDefaultGroups correctly when default_work_types is set the way the API
+  // sets it, with nothing in this table able to press a chip any more.
+  const stripSeed = {
     window: { TWPolishBid: require(path.join(ROOT, "js", "polish-bid-core.js")) },
-    // TWO FAVOURITES, because the claim is about one row moving and the other staying. With a
-    // single row "scoped the right one" and "scoped all of them" cannot disagree.
-    ITEMS: [{ id: "i1", name: "Densifier", unit: "Pail", unit_cost: 100, favorite: true,
-              default_work_types: [] },
-            { id: "i2", name: "Gyp primer", unit: "Gal", unit_cost: 50, favorite: true,
-              default_work_types: [] }],
-    ASMS: [{ id: "a1", name: "Polish 800", unit: "SF", favorite: true,
-             default_work_types: [], lines: [{ item_id: "i1" }] }],
-  }, extra || {});
-
-  const wt = build(wtSeed({}));
-  wt.api.renderDefaultTakeoff();
-  const wtBefore = wt.dom.nodes["default-takeoff-body"].innerHTML;
-  // Scope the Gyp primer to gyp, from the Polish tab -- which is where an admin would be doing
-  // it, and which is the press that must make it leave the list they are looking at.
-  await wt.api.setRowWorkType("items", "i2", "gyp", true);
-  const wtAfter = wt.dom.nodes["default-takeoff-body"].innerHTML;
-
-  // BACK TO ALL FIVE, not to none. Pressing the last chip off empties the list, and an empty
-  // list is what appliesToWorkType has always read as "every work type" -- so the row returns to
-  // the polish tab rather than vanishing from all five with no way back.
-  const back = build(wtSeed({ ITEMS: [
-    { id: "i1", name: "Densifier", unit: "Pail", unit_cost: 100, favorite: true,
-      default_work_types: ["gyp"] }] }));
-  back.api.renderDefaultTakeoff();
-  const backBefore = back.dom.nodes["default-takeoff-body"].innerHTML;
-  await back.api.setRowWorkType("items", "i1", "gyp", false);
-  const backAfter = back.dom.nodes["default-takeoff-body"].innerHTML;
-
-  // A REFUSED WRITE PUTS THE SCOPE BACK, this page's standing rule: a row that keeps the new
-  // scope after the server said no tells an admin the Polish tab no longer offers something it
-  // still offers, and they find that out from a bid.
-  const wtFail = build(wtSeed({ WT_FAIL: true }));
-  wtFail.api.renderDefaultTakeoff();
-  await wtFail.api.setRowWorkType("items", "i2", "gyp", true);
-  const wtFailHtml = wtFail.dom.nodes["default-takeoff-body"].innerHTML;
-
-  const rowOf = (html, name) => {
-    const rows = html.split("<tr");
-    for (const r of rows) if (r.indexOf(name) !== -1) return r;
-    return "";
+    ITEMS: [
+      { id: "i1", name: "Densifier", unit: "Pail", unit_cost: 100, favorite: true,
+        default_work_types: [] },
+      { id: "i2", name: "Gyp primer", unit: "Gal", unit_cost: 50, favorite: true,
+        default_work_types: ["gyp"] },
+    ],
+    ASMS: [],
   };
+  const strip = build(stripSeed);
+  strip.api.setWorkType("polish");
+  strip.api.renderDefaultTakeoff();
+  const stripPolish = strip.dom.nodes["default-takeoff-body"].innerHTML;
+  strip.api.setWorkType("gyp");
+  strip.api.renderDefaultTakeoff();
+  const stripGyp = strip.dom.nodes["default-takeoff-body"].innerHTML;
 
-  out.rowWorkTypes = {
-    // FIVE CHIPS ON EVERY LIBRARY ROW, materials and assemblies alike, and none pressed to start
-    // -- which is the [] every existing row carries.
-    fiveChipsOnAMaterial:
-      (rowOf(wtBefore, "Densifier").match(/data-wt-toggle="items"/g) || []).length === 5,
-    fiveChipsOnAnAssembly:
-      (rowOf(wtBefore, "Polish 800").match(/data-wt-toggle="assemblies"/g) || []).length === 5,
-    nonePressedToStart: !/aria-pressed="true"/.test(wtBefore),
-    // …and the row SAYS what an empty list means, rather than leaving five unpressed chips to be
-    // read as "applies to nothing".
-    saysAllWorkTypes: /All work types/.test(rowOf(wtBefore, "Densifier")),
-
-    // THE PRESS REACHES THE SERVER, with the whole list and not a delta -- the endpoint replaces
-    // the column, so a body carrying only the chip that moved would wipe the others.
-    wroteTheServer: JSON.stringify(wt.api.WT_CALLS) ===
-      JSON.stringify([{ kind: "items", id: "i2", list: ["gyp"] }]),
-    // THE PRESS REACHES THE SCREEN. This is the half the feature never had: the filter now has
-    // something to filter on, so a row scoped away from the tab in view LEAVES the list.
-    scopedRowLeavesThePolishList: /Gyp primer/.test(wtBefore) && !/Gyp primer/.test(wtAfter),
-    // …and the row nobody touched stays exactly where it was.
-    theOtherRowsStay: /Densifier/.test(wtAfter) && /Polish 800/.test(wtAfter),
-
-    // EMPTY MEANS ALL FIVE, both directions of it.
-    scopedRowIsAbsentBefore: !/Densifier/.test(backBefore),
-    andComesBackWhenTheLastChipComesOff: /Densifier/.test(backAfter),
-    andSaysAllWorkTypesAgain: /All work types/.test(rowOf(backAfter, "Densifier")),
-    unscopedWroteAnEmptyList: JSON.stringify(back.api.WT_CALLS) ===
-      JSON.stringify([{ kind: "items", id: "i1", list: [] }]),
-
-    // THE REFUSAL.
-    refusedWritePutsItBack: /Gyp primer/.test(wtFailHtml),
-    refusedWriteSaysSo: /Couldn't save that/.test(wtFail.dom.nodes["alert"].textContent || ""),
-
-    // NOT ON THE ROWS THAT HAVE NO COLUMN TO WRITE. A condition is not a library row and neither
-    // is a markup line, so a chip there would be a control over a field that does not exist.
-    noChipsOnACondition: rowOf(wtBefore, "Joint filler").indexOf("data-wt-toggle") === -1,
-    andTheConditionSaysWhereItApplies: /Polish takeoff/.test(rowOf(wtBefore, "Joint filler")),
+  out.stripStillFilters = {
+    scopedRowIsAbsentFromPolish: !/Gyp primer/.test(stripPolish),
+    scopedRowIsPresentOnGyp: /Gyp primer/.test(stripGyp),
+    unscopedRowIsOnEveryTab: /Densifier/.test(stripPolish) && /Densifier/.test(stripGyp),
+    noChipMarkupAnywhereInTheTable: !/data-wt-toggle/.test(stripPolish) &&
+      !/data-wt-toggle/.test(stripGyp),
   };
 }
 
