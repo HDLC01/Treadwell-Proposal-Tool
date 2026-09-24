@@ -506,7 +506,7 @@ const LIFTED = [
   fn("runsEqual"), fn("selectionInSurface"),
   fn("ensureFmtBar"), fn("showFmtBar"), fn("idleFmtBar"),
   topConst("overrideKey"), fn("mergeOverrideEntry"), topConst("liveKey"),
-  fn("savedOverridesFor"), fn("restoreSavedOverrides"), fn("collectOverrides"),
+  fn("savedOverridesFor"), fn("savedVersionMatches"), fn("restoreSavedOverrides"), fn("collectOverrides"),
   // BOTH of those reach isNumberedClause: neither will ship or replay an override that empties a
   // numbered TERMS clause. Left out, it is not a lift-time failure — it is a ReferenceError in
   // the middle of a persist, which is the failure mode the note above fitOffer describes.
@@ -550,6 +550,7 @@ const api = new Function(
   let flowMode = false;
   let fmtBar = null, fmtBlock = null, fmtRange = null, fmtRangeText = null;   // the page's own bindings, verbatim
   let templateVersion = "tv-1";
+  let templateLegacyFloorS = 0;
   const blockById = new Map();      // id -> the template's block record
   const pristineById = new Map();   // id -> the block's pristine plain text
   const paraById = new Map();       // the page's own store, see proposal-review.js

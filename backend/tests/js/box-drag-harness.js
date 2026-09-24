@@ -281,7 +281,7 @@ const LIFTED = [
   fn("zoomScale"), fn("ptFromClientPx"), fn("clampPt"), fn("dragBoxRect"),
   fn("boxOverrideEntry"), fn("boxReadout"), fn("effectiveBoxRect"), fn("applyBoxGeom"),
   fn("addBoxTools"), fn("showBoxReadout"), fn("setBoxOverride"), fn("wireBoxDrag"),
-  fn("savedBoxOverridesFor"), fn("loadBoxOverrides"), fn("collectBoxOverrides"),
+  fn("savedBoxOverridesFor"), fn("savedVersionMatches"), fn("loadBoxOverrides"), fn("collectBoxOverrides"),
   // The growth family. Two reasons it belongs in THIS harness and not only in the labels one:
   // fitTxbx calls fitOffer, and wireBoxDrag — lifted above — now carries the "Fit to text"
   // click handler, which calls growBoxToFit. Both throw ReferenceError at first use rather
@@ -329,7 +329,7 @@ const api = new Function(
   "overrideKey", "mergeOverrideEntry", "schedulePersistOverrides", "TW", "STORE",
   `const state = TW.getState();
   const liveKey = (name) => { try { return (TW.getState() || {})[name]; } catch { return undefined; } };
-  let templateVersion = "TV1"; let boxOverrides = new Map(); let boxLimits = null;
+  let templateVersion = "TV1"; let templateLegacyFloorS = 0; let boxOverrides = new Map(); let boxLimits = null;
 ` + LIFTED + `
   wireBoxDrag();
   wireOverflowExpand();

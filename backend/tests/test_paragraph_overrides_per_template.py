@@ -250,9 +250,31 @@ def test_the_flat_field_still_describes_the_current_template(src):
 
 def test_restore_still_checks_the_template_version(src):
     """Guard against the fix loosening the invariant it inherited: an entry from another
-    version of the same template must not be replayed."""
+    version of the same template must not be replayed. The comparison lives in
+    savedVersionMatches (shared with the box and rich-run restores), so the restore has to
+    route through it and the helper has to refuse a different version, which it is RUN to show."""
     body = _extract(src, "restoreSavedOverrides")
-    assert "template_version" in body and "templateVersion" in body
+    assert "savedVersionMatches(saved.template_version)" in body
+    helper = _extract(src, "savedVersionMatches")
+    script = helper + """
+let templateVersion = "sha256:aaaaaaaaaaaaaaaa";
+let templateLegacyFloorS = 1784143397;
+const got = [
+  savedVersionMatches("sha256:aaaaaaaaaaaaaaaa"),   // this content
+  savedVersionMatches("sha256:bbbbbbbbbbbbbbbb"),   // another version of the template
+  savedVersionMatches("1788531288000000000"),       // pre-hash stamp taken after this content landed
+  savedVersionMatches("1784143396999999999"),       // pre-hash stamp from one ns before it landed
+  savedVersionMatches(""),                          // no stamp at all
+  savedVersionMatches("v1"),
+];
+templateLegacyFloorS = 0;                          // the content changed: no legacy stamp is ours
+got.push(savedVersionMatches("1788531288000000000"));
+console.log(JSON.stringify(got));
+"""
+    proc = subprocess.run(["node", "-e", script], capture_output=True, text=True,
+                          encoding="utf-8", timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout.strip()) == [True, False, True, False, False, False, False]
 
 
 def test_the_merge_keeps_siblings(src):

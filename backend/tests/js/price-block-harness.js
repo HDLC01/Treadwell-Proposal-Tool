@@ -137,6 +137,8 @@ function scopeFor(c) {
     price_overrides: { lines: {} },
     cell_values: {},
   };
+  // Narrative fields a case wants set (or explicitly blank) — the price cases never pass any.
+  Object.assign(state, c.state || {});
   const body = UNITS + NL +
     "return { refreshPriceDisplay, computeTokenValues, printedTaxRows, baseBidFigure };";
   const api = new Function("state", "document", "form", "TW", "window", "templateBlocks",
@@ -179,6 +181,14 @@ const out = CASES.map((c) => {
       tax_amount_formatted: tv.tax_amount_formatted,
       total_formatted: tv.total_formatted,
       base_tax_phrase: tv.base_tax_phrase,
+    },
+    // The narrative tokens a blank field used to turn into a printed "0".
+    narrative: {
+      texture: tv.texture, system_name: tv.system_name, system_name_epoxy: tv.system_name_epoxy,
+      system_name_polish: tv.system_name_polish, city_state: tv.city_state, address: tv.address,
+      work_description: tv.work_description, scope_notes: tv.scope_notes,
+      schedule_notes: tv.schedule_notes, exclusions: tv.exclusions, bid_date: tv.bid_date,
+      site_visit_date: tv.site_visit_date, work_type: tv.work_type,
     },
   };
 });
