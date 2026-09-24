@@ -149,6 +149,7 @@
   let toggleEl = null;         // the ribbon checkbox
   let blocks = null;           // the template's block records
   let templateVersion = "";
+  let templateLegacyFloorS = 0; // oldest pre-hash stamp still this content (see clVersionMatches)
   let pristine = new Map();    // block id -> the template's own rendering, the edit baseline
   let loadedFor = "";          // "wt:audience:v" of what is currently on screen
   let loading = false;
@@ -491,13 +492,27 @@
     pg.addEventListener("input", onInput);
   }
 
+  /** `"<variant>@<stamp>"` saved against the letter now on screen? The stamp is a content hash;
+   *  one saved before that is the file's mtime, which every deploy moved without changing a byte.
+   *  A pre-hash stamp for the SAME variant still counts when it was taken at or after the second
+   *  this content landed. The backend's `template_versions.accepts_prefixed` is the same rule. */
+  function clVersionMatches(v) {
+    const s = String(v || "");
+    if (s === templateVersion) return true;
+    const at = templateVersion.indexOf("@");
+    if (at < 0 || templateLegacyFloorS <= 0) return false;
+    const head = templateVersion.slice(0, at + 1);
+    const stamp = s.startsWith(head) ? s.slice(head.length) : "";
+    return /^\d{10,}$/.test(stamp) && Number(stamp.slice(0, -9)) >= templateLegacyFloorS;
+  }
+
   /** Replay the estimator's saved edits — only when they were captured against THIS template
    *  file. A block id is a position in a walk over one .docx, so a version mismatch means the
    *  saved entry describes different paragraphs; replaying it would put the estimator's sentence
    *  on somebody else's line. The backend applies the identical gate on the way out. */
   function restoreSaved(wt, audience) {
     const saved = clSavedFor(wt, audience);
-    if (!saved || String(saved.template_version || "") !== templateVersion) return;
+    if (!saved || !clVersionMatches(saved.template_version)) return;
     for (const rawId of Object.keys(saved.items || {})) {
       const entry = saved.items[rawId];
       if (!entry || typeof entry.text !== "string") continue;
@@ -669,6 +684,7 @@
       const j = await res.json();
       blocks = Array.isArray(j.blocks) ? j.blocks : [];
       templateVersion = String(j.template_version || "");
+      templateLegacyFloorS = Number(j.template_version_legacy_floor_s) || 0;
       pristine = new Map();
       render(j.geometry || {}, clTokens());
       loadedFor = want;

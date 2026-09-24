@@ -44,10 +44,12 @@ def test_work_description_falls_back_to_address():
     assert v["work_description"] == "123 Demo St"
 
 
-def test_work_description_falls_back_to_city_when_no_address():
+def test_work_description_never_repeats_the_city_when_no_address():
+    """The Epoxy Direct header prints {{work_description}} directly above {{city_state}}, so
+    falling back to the city printed it twice. A blank address is a blank line."""
     v = {"city_state": "Olathe, KS"}
     main._ensure_value_aliases(v)
-    assert v["work_description"] == "Olathe, KS"
+    assert v["work_description"] == ""
 
 
 def test_site_visit_date_falls_back_to_bid_date():
