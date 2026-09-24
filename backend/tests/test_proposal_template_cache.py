@@ -12,8 +12,8 @@ paragraphs or vanish — on a document a customer reads. So the cache key has to
 on exactly what the ETag busts on, and these tests are mostly about proving it does.
 
 Everything here drives a COPY of a real template through a repointed
-`pick_template`, so the invalidation runs on the genuine mechanism (the file's own
-`st_mtime_ns`), not on a stubbed version token that could agree with itself.
+`pick_template`, so the invalidation runs on the genuine mechanism (the file's own content
+hash, re-read when its mtime moves), not on a stubbed version token that could agree with itself.
 """
 import io
 import os
@@ -93,7 +93,8 @@ def test_the_payload_still_carries_the_template_version_its_etag_was_cut_from():
     a stale id set would look fresh."""
     r = _get()
     tver = r.json()["template_version"]
-    expected = main._etag_of("epoxy:Direct:%s:s%s" % (tver, main._BLOCK_SCHEMA_VERSION))
+    expected = main._etag_of("epoxy:Direct:%s:s%s:c%s" % (
+        tver, main._BLOCK_SCHEMA_VERSION, main._BLOCK_CODE_VERSION))
     assert r.headers["etag"] == expected
 
 
@@ -150,6 +151,20 @@ def test_bumping_the_block_schema_version_busts_the_cache(monkeypatch):
     assert second.headers["etag"] != first.headers["etag"]
     assert len(main._PROPOSAL_TEMPLATE_CACHE) == 2, "the bumped schema reused the old entry"
     assert _get(inm=first.headers["etag"]).status_code == 200
+
+
+def test_a_deploy_that_changes_the_block_builders_busts_the_etag(monkeypatch):
+    """The template version is a content hash now, so a redeploy of identical .docx bytes no longer
+    moves it. A deploy that changes the CODE building the response (template_geometry, the block
+    dict) must still reach the browser instead of a 304 against its old body."""
+    first = _get()
+    monkeypatch.setattr(main, "_BLOCK_CODE_VERSION", "code-changed-test")
+    assert _get().headers["etag"] != first.headers["etag"]
+    assert _get(inm=first.headers["etag"]).status_code == 200
+    cl = client.get("/api/coverletter-template?work_type=epoxy&audience=Direct")
+    monkeypatch.setattr(main, "_BLOCK_CODE_VERSION", "code-changed-again")
+    assert client.get("/api/coverletter-template?work_type=epoxy&audience=Direct",
+                      headers={"If-None-Match": cl.headers["etag"]}).status_code == 200
 
 
 def test_two_work_types_never_share_a_cache_entry():

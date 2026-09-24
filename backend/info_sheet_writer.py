@@ -41,6 +41,7 @@ from openpyxl.styles import PatternFill
 
 import estimate_writer as ew
 import leads
+import template_versions
 from estimate_writer import _coerce
 
 log = logging.getLogger("proposal_tool.info_sheet")
@@ -111,8 +112,13 @@ _POLISH_FLOORS = [
 # pass, which on SOV alone decides 189 of 323 cells. SOV is a bordered table,
 # so without it the tab renders visibly wrong.
 def template_version() -> str:
-    """ETag seed — changes whenever the committed template is replaced."""
-    return str(TEMPLATE_PATH.stat().st_mtime_ns)
+    """ETag seed and structural-edit guard — changes whenever the committed template's CONTENT
+    changes. It was the file's mtime, which every deploy rewrites without changing a byte, and
+    info-sheet.js discards the saved row/column edits whenever this moves, so each deploy would
+    have thrown them away (none were saved on prod when this changed, 2026-09-25)."""
+    # file_version, not content_version: these edits are row/column offsets in a workbook, not
+    # positions in the .docx paragraph walk, so a WALK_VERSION bump must not discard them.
+    return template_versions.file_version(TEMPLATE_PATH)
 
 
 def visible_sheets() -> list[str]:

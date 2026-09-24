@@ -351,7 +351,7 @@ const LIFTED = [
   fn("applyParaGeom"),
   fn("applyParaToEl"), fn("setParaState"),
   topConst("overrideKey"), fn("mergeOverrideEntry"), topConst("liveKey"),
-  fn("savedOverridesFor"), fn("restoreSavedOverrides"),
+  fn("savedOverridesFor"), fn("savedVersionMatches"), fn("restoreSavedOverrides"),
   fn("collectOverrides"), fn("preserveRichOverrides"),
   // The REAL writer. This is the function that overwrote good data with degraded data, so a
   // harness that imitated it would be testing the imitation.
@@ -393,6 +393,7 @@ function makePage(label) {
     let _fmtBusy = false;
     let flowMode = false;
     let templateVersion = "";
+    let templateLegacyFloorS = 0;
     let templateBlocks = null;
     let _overridesTimer = null, _fillsTimer = null;
     const blockById = new Map();
