@@ -84,6 +84,32 @@ def test_values_carry_the_documents_work_type_not_the_intake_echo():
     assert got["echo"]["narrative"]["work_type"] == "epoxy"
 
 
+def test_no_dates_at_all_prints_no_site_visit_on_screen_or_in_the_document():
+    """With no bid date and no site-visit date the screen says "per plans and specifications
+    provided". The header date defaults to TODAY, and the backend used to backfill a blank
+    site_visit_date from it, so the document said "per site visit on <today>", a visit nobody
+    made. The values the page really sends, straight into the real _generate. (Nothing is added
+    to the payload for this: a flag would be written back onto the draft as a ticked box.)"""
+    n = _run([_case("nodates", {"bid_date": "", "site_visit_date_display": ""})])["nodates"]["narrative"]
+    assert n["site_visit_phrase"] == "per plans and specifications provided"
+    assert not n.get("no_site_visit"), "the page must not invent a No-site-visit tick"
+    assert n["bid_date_formatted"], "the header date should still default"
+    values = {"job_name": "No Dates QA", "project_name": "No Dates QA", "bid_date": n["bid_date"],
+              "bid_date_formatted": n["bid_date_formatted"], "site_visit_date": n["site_visit_date"],
+              "area_description": "~1,000 sf of epoxy flooring"}
+    r = client.post("/api/generate", json={"work_type": "epoxy", "audience": "Direct", "values": values})
+    assert r.status_code == 200, r.text
+    text = "\n".join(_rendered(client.get(r.json()["docx_download_url"]).content))
+    assert "per plans and specifications provided" in text
+    assert "per site visit on" not in text
+
+
+def test_a_real_site_visit_date_still_prints():
+    n = _run([_case("visit", {"site_visit_date_display": "9/10/26"})])["visit"]["narrative"]
+    assert n["site_visit_phrase"] == "per site visit on 9/10/26"
+    assert not n.get("no_site_visit")
+
+
 def _rendered(docx_bytes):
     d = Document(io.BytesIO(docx_bytes))
     out = []

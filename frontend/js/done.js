@@ -145,6 +145,12 @@
     // Prefer the exact payload this project was generated from; otherwise
     // rebuild one from the saved values (backend backfills job_name etc.).
     const pp = s.proposal_payload;
+    // The saved box layout belongs to ONE template file. Carried only when it was captured on the
+    // template this rebuild renders: a stamp is a content hash now, but one saved before that is a
+    // bare mtime that names no file, so a layout from another template would replay by id.
+    const _boxMeta = s.box_overrides_meta || {};
+    const _boxesFitThisTemplate = _boxMeta.work_type === (s.work_type || "epoxy")
+      && _boxMeta.audience === (s.audience || "Direct");
     const payload = (pp && pp.values) ? pp : {
       work_type: s.work_type || "epoxy",
       audience:  s.audience  || "Direct",
@@ -177,9 +183,9 @@
       // The version comes along so the backend can still drop a layout captured against an
       // older .docx — an empty template_version means "legacy caller, apply unchanged", which is
       // exactly the wrong answer for ids that may have shifted.
-      box_overrides: (s.box_overrides && typeof s.box_overrides === "object"
+      box_overrides: (_boxesFitThisTemplate && s.box_overrides && typeof s.box_overrides === "object"
                       && !Array.isArray(s.box_overrides)) ? s.box_overrides : {},
-      template_version: String((s.box_overrides_meta || {}).template_version || ""),
+      template_version: _boxesFitThisTemplate ? String(_boxMeta.template_version || "") : "",
       // Doc-editor per-line PRICE display overrides (base amount / tax phrase,
       // option + manual line label/amount). Display-only — never affects pricing.
       price_overrides: (s.price_overrides && typeof s.price_overrides === "object") ? s.price_overrides : {},
