@@ -4124,7 +4124,6 @@ _VALUE_ALIASES = (
 # field; now that a blank stays blank, a blank address prints a blank line.
 _VALUE_FALLBACKS = (
     ("work_description", ("address",)),
-    ("site_visit_date", ("bid_date_formatted", "bid_date")),
 )
 
 
@@ -4750,6 +4749,15 @@ def _ensure_value_aliases(values: Dict[str, Any], audience=None) -> None:
             values[target] = next(
                 (values[s] for s in sources if not _blank(values.get(s))), ""
             )
+    # A blank site-visit date falls back to the BID date, and only when there is one. The
+    # formatted header date is not evidence of a visit: the editor defaults it to TODAY when the
+    # bid date is blank, so falling back to it printed "per site visit on <today>" while the
+    # screen said "per plans and specifications provided". Unreachable while the browser sent
+    # "0" for a blank field.
+    if _blank(values.get("site_visit_date")):
+        values["site_visit_date"] = (
+            (values.get("bid_date_formatted") or values.get("bid_date") or "")
+            if not _blank(values.get("bid_date")) else "")
     # Audience-aware narrative fallbacks. GC jobs get the GC templates' verbatim
     # Scope/Schedule/Exclusions (keyed by work_type, mirroring pick_template:
     # polish -> GC Polish, sealer -> GC Sealer, epoxy/combo/anything else -> GC
@@ -4936,7 +4944,7 @@ def api_proposal_template(request: Request, work_type: str = "epoxy", audience: 
     # its own ETag — exactly the mismatch the frontend uses to decide an id
     # set is stale.
     tver = _template_proposal_version(template_path)
-    version = f"{work_type}:{audience}:{tver}:s{_BLOCK_SCHEMA_VERSION}"
+    version = f"{work_type}:{audience}:{tver}:s{_BLOCK_SCHEMA_VERSION}:c{_BLOCK_CODE_VERSION}"
     etag = _etag_of(version)
     headers = {"ETag": etag, "Cache-Control": "no-cache"}
     # Answer the revalidation BEFORE opening the .docx. This endpoint used to
@@ -5070,10 +5078,10 @@ def api_proposal_template_media(request: Request, work_type: str = "epoxy",
 
 
 # Block-model SCHEMA version for /api/proposal-template's ETag. The template
-# ETag is otherwise keyed on the .docx mtime, so a CODE change to the block
-# dict (new fields, changed semantics) wouldn't bust a browser's cached
-# response — it would 304 and keep rendering stale blocks. BUMP THIS whenever
-# the block shape changes. v2: added `price_flat` (flush/bullet-less PRICE rows).
+# ETag is otherwise keyed on the .docx content (and, since 2026-09-25, on the
+# builders' source via _BLOCK_CODE_VERSION below), so a CODE change to the block
+# dict (new fields, changed semantics) must not 304 into stale blocks. BUMP THIS
+# whenever the block shape changes; it is the explicit, reviewable signal. v2: added `price_flat` (flush/bullet-less PRICE rows).
 # v4: added `geometry.page.max_box` (the resize limit the drag handle must stop at). Nothing
 # reads it yet, so a stale cache is harmless today — but Phase 3's handle would find the field
 # missing on any browser holding a v3 response, which is a confusing way to learn about caching.
@@ -5087,6 +5095,16 @@ def api_proposal_template_media(request: Request, work_type: str = "epoxy",
 # degraded: with no `marker` the renderer falls back to `list`, which is what drew a red square
 # in front of all 27 numbered clauses in the first place.
 _BLOCK_SCHEMA_VERSION = "7"
+
+# The code that BUILDS a block response, fingerprinted once at import. The ETag used to move on
+# every deploy only by accident, because the template version was the file's mtime; now that it is
+# a content hash, a change to template_geometry or the block dict with no schema bump would be
+# answered 304 against a browser's old body. Folding the builders' own source in restores the
+# refetch on exactly the deploys that could change the response, and never touches the override
+# guard (template_version stays the template's content alone).
+_BLOCK_CODE_VERSION = hashlib.sha256(b"\0".join(
+    Path(_m).read_bytes() for _m in (__file__, proposal_writer.__file__, cover_letter_writer.__file__)
+)).hexdigest()[:12]
 
 
 def _template_proposal_version(path: Path) -> str:
@@ -5209,7 +5227,7 @@ def api_coverletter_template(request: Request, work_type: str = "epoxy",
     }
     return _versioned_json(
         request, payload,
-        version=f"cl:{payload['template_version']}:s{_BLOCK_SCHEMA_VERSION}")
+        version=f"cl:{payload['template_version']}:s{_BLOCK_SCHEMA_VERSION}:c{_BLOCK_CODE_VERSION}")
 
 
 @app.get("/api/coverletter-template/media")

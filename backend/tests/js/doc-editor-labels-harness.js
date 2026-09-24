@@ -581,9 +581,11 @@ ${BOX_LOOP}
            liveState: () => state,
            // ── the paragraph controls ──
            showFmtBar, idleFmtBar, paraAction, paraNow, paraPatch, collectOverrides,
-           restoreSavedOverrides, mergeOverrideEntry,
+           restoreSavedOverrides, mergeOverrideEntry, preserveRichOverrides,
            fmtBarEl: () => ensureFmtBar(),
            templateVersion: () => templateVersion,
+           setVersion: (v) => { templateVersion = v; },
+           setFloor: (f) => { templateLegacyFloorS = f; },
            /** Mount blocks the way renderBlock does — class from the record, no inline para
             *  styling — so an untouched paragraph starts out exactly as it does today. */
            mountBlocks: (records) => {
@@ -1151,6 +1153,40 @@ const elState = (el) => ({ li: el.classList.contains("tw-li"),
   const el = docSurface.querySelector('.tw-block[data-id="116"]');
   out.legacyOverride = { text: el.textContent, el: elState(el),
                          now: api.paraNow(116), patch: api.paraPatch(116) };
+}
+
+// 21b. A DRAFT SAVED BEFORE VERSIONS BECAME CONTENT HASHES. Its stamp is the file's mtime, which
+//     every deploy moved without changing a byte, so reopening the proposal after a deploy threw
+//     the edits away. Honoured when taken at or after the second this content landed; refused
+//     when older, and refused with no floor (the content changed since). The rich-run rescue
+//     reads the same stored entry, so it follows the same rule.
+{
+  const legacyStore = () => TWStub.setState({
+    paragraph_overrides_all: { "epoxy:Direct": { template_version: "1788531288000000000",
+      items: [{ id: 116, text: "Schedule:  saved before the deploy",
+                runs: [{ text: "Schedule:  saved before the deploy", bold: true }] }] } },
+    paragraph_overrides: [], paragraph_overrides_meta: null,
+  });
+  const restoredText = () => {
+    api.mountBlocks(BLOCK_RECORDS);
+    api.restoreSavedOverrides("epoxy", "Direct");
+    return docSurface.querySelector('.tw-block[data-id="116"]').textContent;
+  };
+  const rescuedRuns = () => {
+    const got = api.preserveRichOverrides([{ id: 116, text: "Schedule:  saved before the deploy" }]);
+    return !!(got[0] && Array.isArray(got[0].runs));
+  };
+  legacyStore();
+  api.setVersion("sha256:0dd6b2768e2fe68b");
+  api.setFloor(1784143397);
+  const afterFloor = { text: restoredText(), runs: rescuedRuns() };
+  api.setFloor(1788531289);
+  const beforeFloor = { text: restoredText(), runs: rescuedRuns() };
+  api.setFloor(0);
+  const noFloor = { text: restoredText(), runs: rescuedRuns() };
+  api.setVersion("tv-1");
+  TWStub.setState({ paragraph_overrides_all: null });
+  out.legacyStamp = { afterFloor, beforeFloor, noFloor };
 }
 
 // 22. A TEXT edit and a bullet change on the SAME paragraph travel together, in one entry, with

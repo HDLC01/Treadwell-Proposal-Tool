@@ -189,6 +189,8 @@ const out = CASES.map((c) => {
       work_description: tv.work_description, scope_notes: tv.scope_notes,
       schedule_notes: tv.schedule_notes, exclusions: tv.exclusions, bid_date: tv.bid_date,
       site_visit_date: tv.site_visit_date, work_type: tv.work_type,
+      site_visit_phrase: tv.site_visit_phrase, no_site_visit: tv.no_site_visit,
+      bid_date_formatted: tv.bid_date_formatted,
     },
   };
 });

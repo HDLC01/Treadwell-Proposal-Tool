@@ -276,8 +276,8 @@ out.samePriceSameTemplate = (() => {
            paragraphOverrides: pp.paragraph_overrides, totalFormatted: pp.values.total_formatted };
 })();
 
-// The editor may not be mounted (a flip before the template finishes loading). Better to leave the
-// previous overrides for the backend's version guard to drop than to throw and lose the save.
+// The editor may not be mounted (a flip before the template finishes loading). The save must not
+// throw, and the previous template's edits must not ride along onto the new one.
 out.editorUnavailable = (() => {
   const s = baseState();
   flipToEpoxy(s);
@@ -289,6 +289,8 @@ out.editorUnavailable = (() => {
   try { pp = sc.syncPayloadPricing(); } catch { threw = true; }
   return { threw, workType: pp && pp.work_type,
            paragraphOverrides: pp && pp.paragraph_overrides,
+           boxOverrides: pp && pp.box_overrides,
+           templateVersion: pp && pp.template_version,
            pricingStillSynced: pp && pp.values.total_formatted };
 })();
 
@@ -301,12 +303,13 @@ out.templateNotLoadedYet = (() => {
   s.proposal_payload.work_type = "polish";
   s.proposal_payload.template_version = "tpl-POLISH";
   s.proposal_payload.paragraph_overrides = [{ id: 1, text: "captured on polish" }];
+  s.proposal_payload.box_overrides = { "2": { h_pt: 300 } };
   const sc = scopeFor(s, { lumpText: "$18,670.00", form: { tax_inclusion: "INCLUDED" },
                            templateVersion: "" });
   const pp = sc.syncPayloadPricing();
   return { workType: pp.work_type, templateVersion: pp.template_version,
-           paragraphOverrides: pp.paragraph_overrides, calls: sc.calls,
-           pricingStillSynced: pp.values.total_formatted };
+           paragraphOverrides: pp.paragraph_overrides, boxOverrides: pp.box_overrides,
+           calls: sc.calls, pricingStillSynced: pp.values.total_formatted };
 })();
 
 // The WORK section's system rows resolve from the BASE tab's cells, so they move with a flip too.

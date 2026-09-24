@@ -53,9 +53,17 @@ def test_work_description_never_repeats_the_city_when_no_address():
 
 
 def test_site_visit_date_falls_back_to_bid_date():
-    v = {"bid_date_formatted": "6/9/26"}
+    v = {"bid_date": "2026-06-09", "bid_date_formatted": "6/9/26"}
     main._ensure_value_aliases(v)
     assert v["site_visit_date"] == "6/9/26"
+
+
+def test_the_header_date_alone_is_not_a_site_visit():
+    """The editor defaults the header date to TODAY when the bid date is blank. Falling back to it
+    printed "per site visit on <today>" for a visit nobody made."""
+    v = {"bid_date": "", "bid_date_formatted": "9/25/26"}
+    main._ensure_value_aliases(v)
+    assert v["site_visit_date"] == ""
 
 
 def test_missing_fallback_sources_yield_empty_not_raw_token():
