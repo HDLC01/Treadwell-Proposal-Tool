@@ -689,6 +689,20 @@ def test_a_draft_saved_before_this_feature_restores_exactly_as_it_did(ran):
     assert got["patch"] is None
 
 
+def test_edits_saved_before_content_versions_come_back_after_a_deploy(ran):
+    """The stamp used to be the file's mtime, which every deploy moved without changing a byte, so
+    reopening a proposal after a deploy threw Kyle's saved edits away and the next save made that
+    permanent. A pre-hash stamp is honoured from the second this content landed; an older one, or
+    one with no floor (the content changed since), is still refused. The rich-run rescue follows
+    the same rule, so it never grafts formatting from another version's paragraphs."""
+    got = ran["legacyStamp"]
+    assert got["afterFloor"] == {"text": "Schedule:  saved before the deploy", "runs": True}
+    assert got["beforeFloor"]["text"] != "Schedule:  saved before the deploy"
+    assert got["beforeFloor"]["runs"] is False
+    assert got["noFloor"]["text"] != "Schedule:  saved before the deploy"
+    assert got["noFloor"]["runs"] is False
+
+
 def test_a_text_edit_and_a_bullet_change_travel_in_one_entry(ran):
     """One paragraph, one override. `text` is present this time because this time they typed."""
     assert ran["textAndPara"]["payload"] == [

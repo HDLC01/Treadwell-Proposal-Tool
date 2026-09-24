@@ -89,6 +89,7 @@ import proposal_writer
 import pull_window
 import reference_tax
 import supabase_client
+import template_versions
 import verbal_intake
 
 _SUPER_ADMIN_EMAIL = (os.environ.get("SUPER_ADMIN_EMAIL") or "").strip().lower()
@@ -4116,9 +4117,13 @@ _VALUE_ALIASES = (
 # literal "{{token}}" in a customer-facing proposal. Mirrors the frontend's
 # fallbacks (work_description -> address; site_visit_date -> bid date) so any
 # caller / older payload still produces a clean doc.
+#
+# work_description does NOT fall back to city_state: the Epoxy Direct header prints
+# {{work_description}} on the line directly above {{city_state}}, so that fallback
+# printed the city twice. It was unreachable while the browser sent "0" for a blank
+# field; now that a blank stays blank, a blank address prints a blank line.
 _VALUE_FALLBACKS = (
-    ("work_description", ("address", "city_state")),
-    ("site_visit_date", ("bid_date_formatted", "bid_date")),
+    ("work_description", ("address",)),
 )
 
 
@@ -4744,6 +4749,15 @@ def _ensure_value_aliases(values: Dict[str, Any], audience=None) -> None:
             values[target] = next(
                 (values[s] for s in sources if not _blank(values.get(s))), ""
             )
+    # A blank site-visit date falls back to the BID date, and only when there is one. The
+    # formatted header date is not evidence of a visit: the editor defaults it to TODAY when the
+    # bid date is blank, so falling back to it printed "per site visit on <today>" while the
+    # screen said "per plans and specifications provided". Unreachable while the browser sent
+    # "0" for a blank field.
+    if _blank(values.get("site_visit_date")):
+        values["site_visit_date"] = (
+            (values.get("bid_date_formatted") or values.get("bid_date") or "")
+            if not _blank(values.get("bid_date")) else "")
     # Audience-aware narrative fallbacks. GC jobs get the GC templates' verbatim
     # Scope/Schedule/Exclusions (keyed by work_type, mirroring pick_template:
     # polish -> GC Polish, sealer -> GC Sealer, epoxy/combo/anything else -> GC
@@ -4919,8 +4933,9 @@ def api_proposal_template(request: Request, work_type: str = "epoxy", audience: 
     # onto the template BY POSITION (the id is `iter_editable_blocks`'s walk
     # index), so serving blocks from a stale template would land an
     # estimator's edits on the wrong paragraphs or drop them silently.
-    #   * `_template_proposal_version` is the .docx mtime_ns — a re-annotated
-    #     or redeployed template changes it, and the cache misses.
+    #   * `_template_proposal_version` hashes the .docx content — a re-annotated
+    #     template changes it and the cache misses; a redeploy of identical bytes
+    #     does not (it used to be the mtime, which every deploy moved).
     #   * `_BLOCK_SCHEMA_VERSION` covers a change to the block SHAPE in code.
     #   * work_type/audience are included even though they only select the
     #     file, because the payload echoes them back.
@@ -4929,7 +4944,7 @@ def api_proposal_template(request: Request, work_type: str = "epoxy", audience: 
     # its own ETag — exactly the mismatch the frontend uses to decide an id
     # set is stale.
     tver = _template_proposal_version(template_path)
-    version = f"{work_type}:{audience}:{tver}:s{_BLOCK_SCHEMA_VERSION}"
+    version = f"{work_type}:{audience}:{tver}:s{_BLOCK_SCHEMA_VERSION}:c{_BLOCK_CODE_VERSION}"
     etag = _etag_of(version)
     headers = {"ETag": etag, "Cache-Control": "no-cache"}
     # Answer the revalidation BEFORE opening the .docx. This endpoint used to
@@ -4994,6 +5009,11 @@ def api_proposal_template(request: Request, work_type: str = "epoxy", audience: 
         "audience": audience,
         "template_name": template_path.name,
         "template_version": tver,
+        # A draft saved before the version became a content hash carries the file's
+        # mtime. It still belongs to THIS content when it was taken at or after this
+        # second (see `template_versions`); 0 = no legacy stamp is. The editor's
+        # restore guards apply the same rule the backend's `_template_version_accepts` does.
+        "template_version_legacy_floor_s": template_versions.legacy_floor_s(template_path),
         "geometry": proposal_writer.template_geometry(d),
         "blocks": blocks,
     }
@@ -5058,10 +5078,10 @@ def api_proposal_template_media(request: Request, work_type: str = "epoxy",
 
 
 # Block-model SCHEMA version for /api/proposal-template's ETag. The template
-# ETag is otherwise keyed on the .docx mtime, so a CODE change to the block
-# dict (new fields, changed semantics) wouldn't bust a browser's cached
-# response — it would 304 and keep rendering stale blocks. BUMP THIS whenever
-# the block shape changes. v2: added `price_flat` (flush/bullet-less PRICE rows).
+# ETag is otherwise keyed on the .docx content (and, since 2026-09-25, on the
+# builders' source via _BLOCK_CODE_VERSION below), so a CODE change to the block
+# dict (new fields, changed semantics) must not 304 into stale blocks. BUMP THIS
+# whenever the block shape changes; it is the explicit, reviewable signal. v2: added `price_flat` (flush/bullet-less PRICE rows).
 # v4: added `geometry.page.max_box` (the resize limit the drag handle must stop at). Nothing
 # reads it yet, so a stale cache is harmless today — but Phase 3's handle would find the field
 # missing on any browser holding a v3 response, which is a confusing way to learn about caching.
@@ -5076,15 +5096,32 @@ def api_proposal_template_media(request: Request, work_type: str = "epoxy",
 # in front of all 27 numbered clauses in the first place.
 _BLOCK_SCHEMA_VERSION = "7"
 
+# The code that BUILDS a block response, fingerprinted once at import. The ETag used to move on
+# every deploy only by accident, because the template version was the file's mtime; now that it is
+# a content hash, a change to template_geometry or the block dict with no schema bump would be
+# answered 304 against a browser's old body. Folding the builders' own source in restores the
+# refetch on exactly the deploys that could change the response, and never touches the override
+# guard (template_version stays the template's content alone).
+_BLOCK_CODE_VERSION = hashlib.sha256(b"\0".join(
+    Path(_m).read_bytes() for _m in (__file__, proposal_writer.__file__, cover_letter_writer.__file__)
+)).hexdigest()[:12]
+
 
 def _template_proposal_version(path: Path) -> str:
-    """Cache-busting token for a proposal template file (mtime) — a deploy
-    that changes the .docx changes this, matching `_template_version`'s
-    pattern for the estimate sheet."""
-    try:
-        return str(path.stat().st_mtime_ns)
-    except OSError:
-        return "0"
+    """The version an editor override is pinned to: a hash of the template's CONTENT.
+
+    It was the file's mtime, and a deploy rewrites every mtime without changing a byte,
+    so each deploy silently dropped every saved edit, including the edits on proposals
+    customers had already been sent. `template_versions` explains the change and how a
+    stamp saved before it is still honoured (`_template_version_accepts`)."""
+    return template_versions.content_version(path)
+
+
+def _template_version_accepts(pinned: str, path: Path) -> bool:
+    """Whether overrides stamped `pinned` were captured against `path` as it is now.
+    Accepts the current content hash, and a pre-hash mtime stamp taken after this
+    content landed. An EMPTY stamp is the caller's decision (legacy caller = apply)."""
+    return template_versions.accepts(pinned, path)
 
 
 def _etag_of(version: str) -> str:
@@ -5118,15 +5155,16 @@ _PROPOSAL_TEMPLATE_LOCK = threading.Lock()
 
 def _cover_letter_template_version(work_type: str, audience: Optional[str]) -> str:
     """The version string a cover-letter override id is pinned to:
-    `"<work_type>:<audience>@<mtime_ns>"`.
+    `"<work_type>:<audience>@<content hash>"` (`@<mtime_ns>` before 2026-09-25,
+    still honoured by `template_versions.accepts_prefixed`).
 
-    NOT the bare mtime the proposal uses, and the difference is load-bearing. A
-    block id is a position in a walk over ONE file; the proposal's templates are
-    eight files Kyle edits one at a time, so their mtimes distinguish them in
-    practice. The seven cover letters are written by ONE generator run, so two
-    variants can share an mtime — and a guard that only compared mtimes would
-    accept a Direct/Combo override set against GC/Epoxy and rewrite whichever
-    sentence happened to sit at that index, in a document a customer reads.
+    NOT the bare file version the proposal uses, and the difference is load-bearing.
+    A block id is a position in a walk over ONE file, and the variant prefix makes
+    sure a stamp names which one. It dates from when the stamp was an mtime: the
+    seven cover letters are written by ONE generator run, so two variants could
+    share an mtime, and a guard that only compared mtimes would accept a
+    Direct/Combo override set against GC/Epoxy and rewrite whichever sentence
+    happened to sit at that index, in a document a customer reads.
 
     `cover_letter_writer.variant_key` resolves the pair the same way the picker
     does (epoxy fallback, audience-agnostic gyp), so the stamp always names the
@@ -5155,9 +5193,9 @@ def api_coverletter_template(request: Request, work_type: str = "epoxy",
     `id` is the paragraph's index in `proposal_writer.iter_editable_blocks` over
     THIS file — the walk `cover_letter_writer.fill_cover_letter` resolves
     `cover_letter_paragraph_overrides` against. `template_version` is
-    `"<work_type>:<audience>@<mtime>"` (see `_cover_letter_template_version`), so
-    a stale cached id set is detectable after a deploy AND after an
-    audience/work-type switch; `_generate` drops overrides that no longer match.
+    `"<work_type>:<audience>@<content hash>"` (see `_cover_letter_template_version`),
+    so a stale cached id set is detectable after the letter's content changes AND
+    after an audience/work-type switch; `_generate` drops overrides that no longer match.
 
     Every block comes back with `in_block: null` — a letter has no
     priced/repeatable regions, so every paragraph is freely editable. Exactly ONE
@@ -5181,12 +5219,15 @@ def api_coverletter_template(request: Request, work_type: str = "epoxy",
         "template_name": template_path.relative_to(
             cover_letter_writer.TEMPLATES_ROOT / "CoverLetter").as_posix(),
         "template_version": _cover_letter_template_version(work_type, audience or None),
+        # Pre-hash stamps at or after this second are still this content (see
+        # `template_versions`). 0 = none are. The editor applies the same rule.
+        "template_version_legacy_floor_s": template_versions.legacy_floor_s(template_path),
         "geometry": geometry,
         "blocks": blocks,
     }
     return _versioned_json(
         request, payload,
-        version=f"cl:{payload['template_version']}:s{_BLOCK_SCHEMA_VERSION}")
+        version=f"cl:{payload['template_version']}:s{_BLOCK_SCHEMA_VERSION}:c{_BLOCK_CODE_VERSION}")
 
 
 @app.get("/api/coverletter-template/media")
@@ -5666,14 +5707,18 @@ def _generate(payload: GenerateIn, request: Request, *,
     # draft captured against the old template could land an edit on the wrong
     # paragraph. If the client echoed a template_version and it no longer matches the
     # current template, drop the overrides (fail-safe). Empty = legacy caller = apply.
-    _cur_template_version = _template_proposal_version(
-        proposal_writer.pick_template(payload.work_type, payload.audience or None))
+    # "Matches" means the same CONTENT (`_template_version_accepts`), never the file's
+    # mtime: this path also re-renders pinned revisions for the portal, so a guard that
+    # tripped on every deploy stripped Kyle's edits out of proposals already sent.
+    _template_path = proposal_writer.pick_template(payload.work_type, payload.audience or None)
+    _cur_template_version = _template_proposal_version(_template_path)
     _para_overrides = payload.paragraph_overrides
     # box_overrides ids are positions in the same walk over the same template file, so they go
     # stale for exactly the same reason and are dropped by the same guard. Extending this block
     # rather than adding a second one keeps the two from drifting apart.
     _box_overrides = payload.box_overrides
-    if payload.template_version and payload.template_version != _cur_template_version:
+    if (payload.template_version
+            and not _template_version_accepts(payload.template_version, _template_path)):
         log.warning(
             "Dropping %d paragraph_override(s) and %d box_override(s): "
             "stale template_version %r != current %r",
@@ -5783,7 +5828,10 @@ def _generate(payload: GenerateIn, request: Request, *,
         _cl_cur_version = _cover_letter_template_version(payload.work_type, _cl_audience)
         _cl_overrides = payload.cover_letter_paragraph_overrides
         if (payload.cover_letter_template_version
-                and payload.cover_letter_template_version != _cl_cur_version):
+                and not template_versions.accepts_prefixed(
+                    payload.cover_letter_template_version,
+                    cover_letter_writer.variant_key(payload.work_type, _cl_audience),
+                    _cl_path)):
             # Same fail-safe as the proposal's template_version guard, plus the
             # variant: the ids are positions in a walk over a SPECIFIC file, so a
             # regenerated template — or a switch between Direct and GC, or

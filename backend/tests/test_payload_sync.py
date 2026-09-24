@@ -208,26 +208,36 @@ def test_a_plain_reprice_never_touches_the_narrative(ran):
 
 @needs_node
 def test_an_unmounted_editor_still_lets_the_pricing_through(ran):
-    """A flip can land before the template finishes loading. Leaving the previous overrides for
-    the backend's template_version guard to drop is recoverable; throwing out of the sidebar's
-    save is not."""
+    """A flip can land before the template finishes loading; throwing out of the sidebar's save is
+    not recoverable. Neither is leaving the previous template's edits in the payload: the old code
+    stamped the NEW version before collecting, so when the collect threw, the old template's
+    edits went out under the new template's own version and the guard APPLIED them by id. They are
+    cleared instead (the per-template store keeps them), and no version is paired with them."""
     e = ran["editorUnavailable"]
     assert e["threw"] is False
     assert e["workType"] == "epoxy"
     assert e["pricingStillSynced"] == "$18,670"
-    assert e["paragraphOverrides"] == [{"id": 1, "text": "from the old template"}]
+    assert e["paragraphOverrides"] == [], "the old template's edits rode along onto the new one"
+    assert e["boxOverrides"] == {}
+    assert e.get("templateVersion") != "tpl-v9", "the new version was stamped without its own edits"
 
 
 @needs_node
 def test_an_unloaded_template_never_blanks_the_version_stamp(ran):
     """`rebuildPricing` runs at PAGE INIT, before the editor resolves a template version. The
     backend reads an EMPTY `template_version` as "legacy caller — apply the overrides", so writing
-    "" here would land the previous template's edits on the new template's paragraphs. Leaving the
-    stored, now-mismatched version is what makes the backend drop them instead."""
+    "" here would land the previous template's edits on the new template's paragraphs.
+
+    Leaving them for the version guard to drop is not enough any more either: a stamp saved before
+    versions became content hashes is a bare mtime that names no file, and the guard honours one
+    taken after the content landed, so the polish edits would replay by id onto the epoxy template
+    (a Terms clause replaced, the audit's repro). The payload's edits are therefore CLEARED; the
+    per-template store keeps them, and the next Continue collects the new template's own."""
     t = ran["templateNotLoadedYet"]
     assert t["workType"] == "epoxy", "the template pick must still follow the base role"
     assert t["templateVersion"] == "tpl-POLISH", "the version stamp was blanked"
-    assert t["paragraphOverrides"] == [{"id": 1, "text": "captured on polish"}]
+    assert t["paragraphOverrides"] == [], "the polish edits rode along onto the epoxy template"
+    assert t["boxOverrides"] == {}, "the polish box layout rode along onto the epoxy template"
     assert t["calls"]["collectOverrides"] == 0
     assert t["pricingStillSynced"] == "$18,670"
 

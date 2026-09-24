@@ -834,25 +834,40 @@
     const audience = state.audience || "Direct";
     // Paragraph/box overrides are captured against ONE template's block ids, so when the template
     // changes they cannot be replayed onto the new one — the backend already drops them on a
-    // template_version mismatch. Re-collect from the live editor (reloadForWorkType has already
-    // swapped it) so the estimator's edits to the NEW template travel; an editor that hasn't
-    // loaded yields [], which renders the pristine new template. Either beats old-template text.
+    // template_version mismatch. Re-collect from the live editor, stamped with ITS version. On a
+    // base flip that editor is usually still the OLD template (the radio handler reprices before
+    // reloadForWorkType swaps it in), so what travels is the old template's edits under the old
+    // template's own content hash, which the backend refuses for the new file: the payload renders
+    // the pristine new template until the next Continue collects its edits. Either beats
+    // old-template text on new-template paragraphs.
     // Guarded on an actual change, so a plain re-price never goes near the narrative.
     // ONLY once the editor has actually loaded a template. `templateVersion` is "" until then —
     // and rebuildPricing runs at page init, before it resolves. Writing "" would be worse than
     // doing nothing: the backend reads an EMPTY version as "legacy caller, apply the overrides",
-    // so it would land the old template's edits on the new template's paragraphs. Leaving the
-    // stored (non-empty, now-mismatched) version is what makes it drop them instead.
+    // so it would land the old template's edits on the new template's paragraphs.
+    // And NOT left for the version guard to drop either: a stamp saved before versions became
+    // content hashes is a bare mtime that names no file, and the guard now honours it, so the old
+    // template's edits would replay by id onto the new one. They are cleared from the PAYLOAD
+    // only; the per-template store still holds them, and the next Continue collects the new
+    // template's own edits from the loaded editor.
     if (pp.work_type !== wt || pp.audience !== audience) {
       pp.work_type = wt;
       pp.audience = audience;
+      let collected = false;
       try {
         if (templateVersion) {
+          const paras = collectOverrides();
+          const boxes = collectBoxOverrides();
           pp.template_version = templateVersion;
-          pp.paragraph_overrides = collectOverrides();
-          pp.box_overrides = collectBoxOverrides();
+          pp.paragraph_overrides = paras;
+          pp.box_overrides = boxes;
+          collected = true;
         }
-      } catch { /* editor not mounted — leave what's there for the backend's version guard */ }
+      } catch { /* editor not mounted — cleared below */ }
+      if (!collected) {
+        pp.paragraph_overrides = [];
+        pp.box_overrides = {};
+      }
     }
     // `values` is also a spread of state (Continue builds it that way), so its mirrors of the
     // pricing state have to move too — anything reading values.rooms must not see the old bid.
@@ -1464,7 +1479,11 @@
     // print {{base_bid_formatted}} straight from here, which is why an unconditional
     // "total minus tax" here read $6,182 under a $6,307 estimate.
     const { base: baseBid, itemized: taxRowsPrint } = baseBidFigure(lumpSumNumber, salesTax, remodelTax);
-    const safe = (v) => (v === undefined || v === null || v === "" ? "0" : v);
+    // A blank TEXT field stays blank. This used to answer "0", and the document printed it:
+    // "Texture: 0" on 18 of 29 real proposals and "System: 0" on Viracor, while the editor's own
+    // Work rows (String(merged.texture || "")) showed nothing, so the estimator never saw it. Blank
+    // also lets the backend's `_blank()` backfills (scope, schedule, exclusions, job name) fire.
+    const safe = (v) => (v === undefined || v === null ? "" : v);
 
     // A generated proposal is persisted back into `mergedValues`.  Seed those
     // fields first, then let the current screen's computed values win below.
@@ -1487,6 +1506,11 @@
 
     const tokenValues = {
       ...mergedValues,
+      // The type the DOCUMENT is (the base tab's), not the intake field the spread above echoes.
+      // `_ensure_value_aliases` picks its default Scope/Schedule/Exclusions off values.work_type,
+      // and blank fields now reach it (see `safe`), so a stale "polish" here would put polish
+      // wording into an epoxy proposal.
+      work_type:          workType,
       job_name:           safe(mergedValues.project_name),
       project_name:       safe(mergedValues.project_name),
       // Signs the proposal — the field (pre-filled from the signed-in user),
@@ -1502,7 +1526,7 @@
       estimator_email:    ((window.TWAuth && TWAuth.user() && TWAuth.user().email) || ""),
       city_state:         safe(mergedValues.city_state),
       address:            safe(mergedValues.address),
-      work_description:   safe(mergedValues.work_description || mergedValues.address || "0"),
+      work_description:   safe(mergedValues.work_description || mergedValues.address || ""),
       proposal_date:      new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }),
       bid_date:           safe(mergedValues.bid_date),
       // M/D/YY for the header date that the template hardcoded as 1/1/26
@@ -1699,7 +1723,8 @@
 
   let templateBlocks  = null;   // blocks from the endpoint (null until loaded)
   let templateVersion = "";
-  let pageWpt         = 612;    // page width in pt, drives the zoom fit
+  let templateLegacyFloorS = 0; // oldest pre-hash stamp still this content (see savedVersionMatches)
+  let pageWpt        = 612;    // page width in pt, drives the zoom fit
   let flowMode        = false;  // true = geometry-less fallback rendering
   const blockById     = new Map();   // id -> block record
   const pristineById  = new Map();   // id -> plain-text pristine rendering
@@ -3533,13 +3558,26 @@
     return null;
   }
 
+  /** Was a saved entry captured against the template content now on screen? The version is a
+   *  hash of the .docx. Drafts saved before that carry the file's mtime instead, and a deploy moved
+   *  it without changing a byte, so every deploy threw Kyle's edits away when he reopened a
+   *  proposal. A pre-hash stamp still counts when it was taken at or after the second this content
+   *  landed (the server sends that floor); an older one described different paragraphs. Same rule
+   *  as the backend's `template_versions.accepts`. */
+  function savedVersionMatches(v) {
+    const s = String(v || "");
+    if (s === String(templateVersion)) return true;
+    return templateLegacyFloorS > 0 && /^\d{10,}$/.test(s)
+      && Number(s.slice(0, -9)) >= templateLegacyFloorS;
+  }
+
   // Saved document edits (persisted in state as they're typed, so a reload /
   // device switch keeps them) — reapplied only when they were made against
   // THIS template file (version + type/audience), otherwise the ids could
   // point at the wrong paragraphs.
   function restoreSavedOverrides(wt, audience, tokens) {
     const saved = savedOverridesFor(wt, audience);
-    if (!saved || String(saved.template_version || "") !== templateVersion) return;
+    if (!saved || !savedVersionMatches(saved.template_version)) return;
     const tk = tokens && typeof tokens === "object" ? tokens : {};
     for (const o of saved.items) {
       if (!o) continue;
@@ -3665,7 +3703,7 @@
       const all = liveKey("paragraph_overrides_all");
       const hit = all && typeof all === "object"
         ? all[overrideKey(effectiveWorkType(), state.audience || "Direct")] : null;
-      if (hit && String(hit.template_version || "") === String(templateVersion)
+      if (hit && savedVersionMatches(hit.template_version)
           && Array.isArray(hit.items)) prev = hit.items;
     } catch { return next; }
     if (!prev || !prev.length) return next;
@@ -4927,7 +4965,7 @@
     // unknown height is "somebody chose this size". Nothing to clear here — the "we grew this"
     // mark lives on the box element (see isAutoGrown), and renderPositioned builds new elements.
     const saved = savedBoxOverridesFor(wt, audience);
-    if (!saved || String(saved.template_version || "") !== templateVersion) return;
+    if (!saved || !savedVersionMatches(saved.template_version)) return;
     for (const key of Object.keys(saved.items || {})) {
       const id = Number(key);
       const spec = saved.items[key];
@@ -5384,6 +5422,7 @@
       const j = await res.json();
       templateBlocks = Array.isArray(j.blocks) ? j.blocks : [];
       templateVersion = String(j.template_version || "");
+      templateLegacyFloorS = Number(j.template_version_legacy_floor_s) || 0;
       annotateRegions(templateBlocks);
       blockById.clear();
       templateBlocks.forEach(b => blockById.set(b.id, b));

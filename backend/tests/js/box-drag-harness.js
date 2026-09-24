@@ -281,7 +281,7 @@ const LIFTED = [
   fn("zoomScale"), fn("ptFromClientPx"), fn("clampPt"), fn("dragBoxRect"),
   fn("boxOverrideEntry"), fn("boxReadout"), fn("effectiveBoxRect"), fn("applyBoxGeom"),
   fn("addBoxTools"), fn("showBoxReadout"), fn("setBoxOverride"), fn("wireBoxDrag"),
-  fn("savedBoxOverridesFor"), fn("loadBoxOverrides"), fn("collectBoxOverrides"),
+  fn("savedBoxOverridesFor"), fn("savedVersionMatches"), fn("loadBoxOverrides"), fn("collectBoxOverrides"),
   // The growth family. Two reasons it belongs in THIS harness and not only in the labels one:
   // fitTxbx calls fitOffer, and wireBoxDrag — lifted above — now carries the "Fit to text"
   // click handler, which calls growBoxToFit. Both throw ReferenceError at first use rather
@@ -329,7 +329,7 @@ const api = new Function(
   "overrideKey", "mergeOverrideEntry", "schedulePersistOverrides", "TW", "STORE",
   `const state = TW.getState();
   const liveKey = (name) => { try { return (TW.getState() || {})[name]; } catch { return undefined; } };
-  let templateVersion = "TV1"; let boxOverrides = new Map(); let boxLimits = null;
+  let templateVersion = "TV1"; let templateLegacyFloorS = 0; let boxOverrides = new Map(); let boxLimits = null;
 ` + LIFTED + `
   wireBoxDrag();
   wireOverflowExpand();
@@ -348,6 +348,7 @@ ${BOX_LOOP}
            snapshotKeys: () => Object.keys(state),
            getVersion: () => templateVersion,
            setVersion: (v) => { templateVersion = v; },
+           setFloor: (f) => { templateLegacyFloorS = f; },
            setBlocks: (b) => { templateBlocks = b; },
            clearOverrides: () => { boxOverrides = new Map(); },
            readOverrides: () => Array.from(boxOverrides.entries()) };
@@ -588,6 +589,23 @@ PERSIST_AS.wt = "epoxy";
 api.loadBoxOverrides("epoxy", "Direct");
 out.roundTrip = { keyed: Object.keys(st().box_overrides_all || {}),
                   epoxyBack: api.readOverrides() };
+
+// 13b. A layout saved before versions became content hashes carries the file's mtime, which every
+// deploy moved without changing a byte. It is still THIS template's when taken at or after the
+// second the content landed (the server's floor); one taken earlier described other boxes.
+api.setState({ box_overrides_all: { "epoxy:Direct":
+  { template_version: "1788531288000000000", items: { "3": { h_pt: 300 } } } } });
+api.setVersion("sha256:0dd6b2768e2fe68b");
+api.setFloor(1784143397);
+api.loadBoxOverrides("epoxy", "Direct");
+out.restoreLegacyAfterFloor = api.readOverrides();
+api.setFloor(1788531289);
+api.loadBoxOverrides("epoxy", "Direct");
+out.restoreLegacyBeforeFloor = api.readOverrides();
+api.setFloor(0);
+api.loadBoxOverrides("epoxy", "Direct");
+out.restoreLegacyNoFloor = api.readOverrides();
+api.setVersion("TV1");
 
 // 14. Garbage in the store reads as nothing saved, rather than breaking the page on load.
 api.setState({ box_overrides_all: { "epoxy:Direct": { template_version: "TV1", items: "nope" } } });
