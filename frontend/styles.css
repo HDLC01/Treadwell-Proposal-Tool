@@ -1375,6 +1375,15 @@ button {
   margin-left: 0;
   padding-left: 0;
 }
+/* The blank lines above the PRICE Options heading (price_overrides.options_gap), painted by
+   paintOptionsGap. REAL LINES the caret can sit on, not the 24pt margin the heading used to carry,
+   which nothing could click into or Backspace away. Same margin as a price row, and the height
+   comes from the placeholder break at the box's own font size, so one blank line is one price
+   row tall. The min-height only matters if a browser ever drops that break. */
+.tw-gap-line { margin: 0 0 2pt; min-height: 1em; cursor: text; }
+/* The template's own empty spacer paragraph directly above the heading (Gyp, GC). The writer
+   replaces it with the counted lines, so it must not draw a line of its own here. */
+.tw-block.tw-gap-absorbed { display: none; }
 
 /* Flow-fallback caption above a bare-token block (job name, date …): only
    in flow mode, where the letterhead artwork — which carries the real

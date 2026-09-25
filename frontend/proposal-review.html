@@ -734,12 +734,17 @@
        label nested at the END of the .docx {{#single_bid}} group. Mounted LAST
        in the single_bid region; shown iff there's ≥1 option or manual price
        line (toggled by renderOptionLinesPreview). -->
-  <!-- ~24pt top margin ≈ the 2 blank paragraphs the writer inserts before the
-       Options heading (_space_before_options), so the preview spacing after the
-       Total matches the generated .docx. -->
+  <!-- The blank lines ABOVE the heading are REAL LINES now, not a margin. Hanz, 2026-09-25:
+       "I cant edit this part" / "I cant back space before options". It was a 24pt top margin on
+       the heading, so there was nothing to click into and nothing Backspace could take, and the
+       document printed no gap at all on the Epoxy and Combo files. #options-gap holds
+       price_overrides.options_gap (default 2) empty lines the caret can sit on; the writer prints
+       exactly that many blank paragraphs (proposal_writer._apply_options_gap). Painted by
+       paintOptionsGap in proposal-review.js; mounted with the heading, directly above it. -->
+  <div id="options-gap" class="tw-options-gap" style="display:none;"></div>
   <p id="options-heading" class="tw-line-edit" spellcheck="false"
      data-po-kind="line" data-po-linekey="heading_options" data-computed="Options:"
-     style="font-weight:bold;display:none;margin:24pt 0 1pt;">Options:</p>
+     style="font-weight:bold;display:none;margin:0 0 1pt;">Options:</p>
   <!-- Per-room priced options (per-room jobs): read-only preview; manual
        notes are edited in the pricing-options rail. -->
   <div id="rooms-block"></div>

@@ -91,9 +91,12 @@ def test_polish_and_gyp_price_rows_flush_no_bullets():
 
 
 def test_double_spacing_before_options_heading():
-    # Kyle: double spacing after the base-bid Total. _space_before_options inserts
-    # 2 blank paragraphs immediately before each "Options" heading (both the
-    # mc:Choice and mc:Fallback copies of the text box).
+    # Kyle: double spacing after the base-bid Total. The writer prints the editor's count
+    # (price_overrides.options_gap, default 2) of blank 9pt paragraphs directly above the
+    # Options heading, in both text-box copies, on EVERY template -- not only on a heading
+    # reading exactly "Options", which is the old helper's rule and why Epoxy and Combo
+    # ("Options:") printed none. The cross-template contract is test_options_gap.py; this
+    # keeps the Polish case it always covered, now with the size the old bare <w:p/> lacked.
     pv = _vals(system_name="Polish", base_bid_formatted="$13,614.00",
                total_formatted="$14,973.00")
     out = pw.fill_proposal(work_type="polish", audience="Direct", values=pv, has_options=True,
@@ -103,13 +106,15 @@ def test_double_spacing_before_options_heading():
     W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
     paras = d.element.findall(".//" + W + "txbxContent//" + W + "p")
     txts = ["".join(t.text or "" for t in p.findall(".//" + W + "t")).strip() for p in paras]
-    found = False
+    found = 0
     for i, t in enumerate(txts):
         if t == "Options":
-            assert i >= 2 and txts[i - 1] == "" and txts[i - 2] == "", \
-                f"expected 2 blank paragraphs before 'Options' at {i}, got {txts[i-2:i]!r}"
-            found = True
-    assert found, "no 'Options' heading found to check spacing"
+            assert i >= 3 and txts[i - 1] == "" and txts[i - 2] == "" and txts[i - 3] != "", \
+                f"expected exactly 2 blank paragraphs before 'Options' at {i}, got {txts[i-3:i]!r}"
+            for blank in paras[i - 2:i]:
+                assert blank.find(W + "pPr/" + W + "rPr/" + W + "sz").get(W + "val") == "18"
+            found += 1
+    assert found == 2, "expected the 'Options' heading in both text-box copies"
 
 
 def test_polish_options_heading_precedes_option_lines():
