@@ -192,3 +192,15 @@ def test_the_publish_carries_when_the_checked_copy_was_saved(ran):
     assert c["puts"] == 0, c
     q = v["nobody"]
     assert q["versionSent"] == q["serverAtPublish"] == q["checked"], q
+
+def test_a_price_line_with_a_figure_of_its_own_is_asked_about_then_sent(ran):
+    """Hanz, 2026-09-25: "warn, then let him send." The document the Proposal step built lists the
+    price lines that print a dollar figure of the estimator's own (price_warnings); Send asks in his
+    words, Cancel sends nothing, OK sends. A document with no such line is not asked about.
+
+    Mutation: drop the confirm (done.js) — the cancelled send posts."""
+    w = ran["priceWarning"]
+    ask = "This line says $9,999 but the estimate says $12,500 — send anyway?"
+    assert w["cancel"] == {"asked": [ask], "posted": 0}, w
+    assert w["ok"] == {"asked": [ask], "posted": 1}, w
+    assert w["none"] == {"asked": [], "posted": 1}, w

@@ -171,6 +171,11 @@ class El {
     const i = sibs.indexOf(this);
     return i >= 0 && i < sibs.length - 1 ? sibs[i + 1] : null;
   }
+  get nextSibling() {
+    if (!this.parentNode) return null;
+    const kids = this.parentNode.childNodes;
+    return kids[kids.indexOf(this) + 1] || null;
+  }
   get className() { return Array.from(this._classes).join(" "); }
   set className(v) { this._classes = new Set(String(v).split(/\s+/).filter(Boolean)); this.attrs.class = v; }
   appendChild(c) {
@@ -232,6 +237,19 @@ class El {
     }
   }
   get innerHTML() { return ""; }
+  setAttribute(k, v) {
+    this.attrs[k] = String(v);
+    if (k === "style") this.style = parseStyle(v);
+    else if (k === "class") this.className = String(v);
+  }
+  getAttribute(k) {
+    if (k === "style") {
+      return Object.entries(this.style)
+        .map(([n, v]) => n.replace(/[A-Z]/g, (c) => "-" + c.toLowerCase()) + ":" + v).join(";");
+    }
+    return this.attrs[k] === undefined ? null : this.attrs[k];
+  }
+  removeAttribute(k) { delete this.attrs[k]; if (k === "title") this.title = ""; }
   matches(sel) { return matches(this, sel); }
   querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
   querySelectorAll(sel) {
@@ -330,10 +348,15 @@ const LIFTED = [
   topConst("escHtml"),
   fn("fmtAt"), topConst("sameFmt"), fn("segmentsOf"), fn("mergeSegs"), fn("editRuns"),
   fn("runStyleCss"), fn("runEditCss"), fn("renderRuns"), fn("serializeBlock"), fn("insertBreakAt"),
-  topConst("LINE_SEL"), fn("lineAt"), fn("lineAtSelection"), fn("lineTarget"),
+  topConst("LINE_SEL"), fn("lineAt"), fn("lineAtSelection"), fn("lineTarget"), fn("editingBox"),
+  topConst("focusInside"),
   topConst("REGION_MOUNTS"),
   "let _povTimer = null;",
   fn("queuePovSave"),
+  // The lines TYPED next to a price line (fix 5): a character typed on a blank gap line makes one
+  // (typeOnGapLine -> makeExtraLine), and the page's own Enter and Backspace handlers split and
+  // take away typed lines (splitPriceLine / mergePriceLine), so all of them are the real ones.
+  fn("_ensurePov"), fn("makeExtraLine"), fn("caretInto"), fn("splitPriceLine"), fn("mergePriceLine"),
 ].join("\n\n");
 
 function makePage(layout, stateIn) {
@@ -516,10 +539,7 @@ const out = {};
   out.arrowDown = key(p, "ArrowDown").defaultPrevented;
   out.arrowUp = key(p, "ArrowUp").defaultPrevented;
 
-  // TYPING on a blank line is refused (there is no channel for the text).
-  clickGapLine(p, 1);
-  const typed = key(p, "x");
-  out.typeOnGap = { refused: typed.defaultPrevented, lines: gapLines(p).length };
+  // (Typing ON a blank line is its own page below: it changes the count.)
 
   // BACKSPACE ON BLANK LINE 1: one fewer, caret up onto line 0.
   clickGapLine(p, 1);
@@ -550,11 +570,18 @@ const out = {};
   const en2 = key(p, "Enter");
   out.enterOnGap = Object.assign(snapshot(p), { defaulted: en2.defaultPrevented });
 
-  // ENTER IN THE MIDDLE OF THE BASE LINE is the page's own line break, as before.
+  // ENTER IN THE MIDDLE OF THE BASE LINE is the page's own Enter: the text after the caret moves
+  // to a line of its own under the base line (splitPriceLine), never a break inside the line. The
+  // gap is untouched.
   caretAt(p.els.base, 5);
   const mid = key(p, "Enter");
+  const under = p.els.base.nextElementSibling;
   out.enterMidBase = { lines: gapLines(p).length, defaulted: mid.defaultPrevented,
-                       baseHasBreak: p.api.serializeBlock(p.els.base).indexOf("\n") === 5 };
+                       baseHead: p.api.serializeBlock(p.els.base),
+                       under: under ? { kind: under.dataset.poKind, pos: under.dataset.poPos,
+                                        text: p.api.serializeBlock(under) } : null,
+                       headWas: before.slice(0, 5), tailWas: before.slice(5) };
+  if (under && under.dataset.poKind === "extra") under.remove();
   p.els.base.textContent = before;
 
   // BACKSPACE AT THE HEADING'S START: one fewer, caret stays at the heading's start, and the
@@ -599,12 +626,16 @@ const out = {};
   const p = makePage("direct", { __noOptions: true, price_overrides: { options_gap: 3 } });
   p.api.paintOptionsGap();
   out.noOptions = { lines: gapLines(p).length, shown: p.g("options-gap").style.display !== "none" };
-  // ...and Enter at the end of the base line is the page's own line break again.
+  // ...and Enter at the end of the base line is the page's own Enter again: a new line of its own
+  // under the base line, the base line itself untouched.
   const t = p.api.serializeBlock(p.els.base);
   caretAt(p.els.base, t.length);
   key(p, "Enter");
+  const under = p.els.base.nextElementSibling;
   out.noOptionsEnter = { lines: gapLines(p).length,
-                         baseGotBreak: p.api.serializeBlock(p.els.base) === t + "\n" };
+                         newLineUnderBase: !!under && under.dataset.poKind === "extra"
+                           && under.dataset.poPos === "after" && p.api.serializeBlock(under) === "",
+                         baseUnchanged: p.api.serializeBlock(p.els.base) === t };
 }
 
 // ═══ GC: the heading is a free paragraph; the template's spacer is absorbed ═══
@@ -648,6 +679,117 @@ const out = {};
   caretAt(p.els.mobil, m.length);
   key(p, "Enter");
   out.gypEnterAtMobil = snapshot(p);
+}
+
+// ═══ THE BLANK LINES TAKE TEXT (Hanz, 2026-09-26: "I cant write texts on this white space lines") ═
+const typedEls = (p) => p.docSurface.querySelectorAll(
+  '[data-po-kind="extra"][data-po-linekey="heading_options"][data-po-pos="before"]');
+const typedState = (p) => {
+  const pov = p.state.price_overrides || {};
+  return pov.before && Array.isArray(pov.before.heading_options) ? pov.before.heading_options : null;
+};
+const typedSnap = (p) => {
+  const els = typedEls(p);
+  return Object.assign(snapshot(p), {
+    typed: typedState(p),
+    drawn: els.map((n) => p.api.serializeBlock(n)),
+    // Top to bottom: the typed lines, then the blank lines, then the heading.
+    typedDirectlyAboveGap: els.length ? els[els.length - 1].nextElementSibling === p.g("options-gap") : null,
+    caretText: SEL && SEL.el ? p.api.serializeBlock(SEL.el) : null,
+    caretIsTyped: !!(SEL && (SEL.el || SEL.node) && ((SEL.el || SEL.node).dataset || {}).poKind === "extra"),
+  });
+};
+const typeKey = (p, ch) => fire(p.box, "keydown", { key: ch, ctrlKey: false, metaKey: false, altKey: false });
+{
+  // A character typed on blank line 1 of 2: that line becomes a typed line; the blank line above
+  // it becomes a typed blank line so it stays where it was typed; nothing is left in the count.
+  const p = makePage("direct", {});
+  p.api.paintOptionsGap();
+  clickGapLine(p, 1);
+  const e = typeKey(p, "x");
+  out.typeOnGap = Object.assign(typedSnap(p), { defaulted: e.defaultPrevented });
+  flushSaves(p);
+  out.typeOnGapSaved = p.saves.length ? (p.saves[p.saves.length - 1].price_overrides || {}) : null;
+}
+{
+  // On blank line 0 of 2: the typed line, then one blank line, then the heading.
+  const p = makePage("direct", {});
+  p.api.paintOptionsGap();
+  clickGapLine(p, 0);
+  typeKey(p, "a");
+  out.typeOnFirstGap = typedSnap(p);
+  const a = typedEls(p)[0];
+  // ENTER at the end of the typed line: one more BLANK line under it (the count), caret onto it.
+  caretAt(a, 1);
+  const en = key(p, "Enter");
+  out.enterAtEndOfTyped = Object.assign(typedSnap(p), { defaulted: en.defaultPrevented });
+  // DELETE at the end of the typed line: the blank line under it goes.
+  caretAt(a, 1);
+  const del = key(p, "Delete");
+  out.deleteAtEndOfTyped = Object.assign(typedSnap(p), { defaulted: del.defaultPrevented });
+  // BACKSPACE on the last blank line: none left, the caret at the end of the typed line above.
+  clickGapLine(p, 0);
+  const bs = key(p, "Backspace");
+  out.backspaceOntoTyped = Object.assign(typedSnap(p), { defaulted: bs.defaultPrevented });
+  // BACKSPACE AT THE START OF "Options:" with no blank line left and words right above it: the
+  // words stay, the caret goes to their end.
+  caretAt(p.els.heading, 0);
+  const bh = key(p, "Backspace");
+  out.backspaceHeadingUnderTyped = Object.assign(typedSnap(p), { defaulted: bh.defaultPrevented });
+}
+{
+  // BACKSPACE AT THE START OF "Options:" with an EMPTY typed line right above it: it goes.
+  const p = makePage("direct", { price_overrides: { options_gap: 0, before: { heading_options: ["kept", ""] } } });
+  p.api.paintOptionsGap();
+  out.reloadTyped = typedSnap(p);
+  caretAt(p.els.heading, 0);
+  const bh = key(p, "Backspace");
+  out.backspaceHeadingTakesEmptyTyped = Object.assign(typedSnap(p), { defaulted: bh.defaultPrevented });
+}
+{
+  // An empty typed line with a price row above it: Backspace takes it away and puts the caret at
+  // the end of the line SHOWN above -- the base line, not the hidden tax rows between them.
+  const p = makePage("direct", { price_overrides: { options_gap: 0, before: { heading_options: ["", "x"] } } });
+  p.api.paintOptionsGap();
+  const first = typedEls(p)[0];
+  caretAt(first, 0);
+  SEL = { node: first, offset: 0 };
+  const bs = key(p, "Backspace");
+  out.backspaceEmptyFirstTyped = Object.assign(typedSnap(p), { defaulted: bs.defaultPrevented,
+    baseLen: p.api.serializeBlock(p.els.base).length });
+}
+{
+  // A PASTE on a blank line: one typed line per line of the clipboard.
+  const p = makePage("direct", {});
+  p.api.paintOptionsGap();
+  clickGapLine(p, 0);
+  const e = fire(p.box, "paste", { clipboardData: { getData: (t) => (t === "text/plain" ? "first\r\nsecond\n" : "") } });
+  out.pasteOnGap = Object.assign(typedSnap(p), { defaulted: e.defaultPrevented });
+  // Text that arrives without a keystroke (an IME commit): lands the same way.
+  const q = makePage("direct", {});
+  q.api.paintOptionsGap();
+  clickGapLine(q, 1);
+  const bi = fire(q.box, "beforeinput", { inputType: "insertText", data: "q" });
+  out.beforeInputOnGap = Object.assign(typedSnap(q), { defaulted: bi.defaultPrevented });
+  // ...and a deletion by a route the keys do not cover is still refused, changing nothing.
+  const r = makePage("direct", {});
+  r.api.paintOptionsGap();
+  clickGapLine(r, 0);
+  const bd = fire(r.box, "beforeinput", { inputType: "deleteContentBackward" });
+  out.beforeInputDelete = Object.assign(typedSnap(r), { defaulted: bd.defaultPrevented });
+}
+{
+  // GC: the typed line sits between the template's spacer (still absorbed) and the blank lines.
+  const p = makePage("gc", {});
+  p.api.paintOptionsGap();
+  clickGapLine(p, 0);
+  typeKey(p, "G");
+  p.api.paintOptionsGap();
+  const els = typedEls(p);
+  out.gcTyped = Object.assign(typedSnap(p), {
+    spacerHidden: p.els.spacer.classList.contains("tw-gap-absorbed"),
+    spacerAboveTyped: els.length ? els[0].previousElementSibling === p.els.spacer : null,
+  });
 }
 
 console.log(JSON.stringify(out));

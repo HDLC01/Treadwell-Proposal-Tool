@@ -276,12 +276,15 @@ def test_a_failing_compute_does_not_break_the_save(ran):
 @pytest.mark.parametrize("mode,phrase", [
     ("INCLUDED", "(Remodel Tax AND material sales tax INCLUDED)"),
     ("BROKEN_OUT", ""),
-    ("EXCLUDED", "(tax exempt)"),
+    # A draft saved with the old "Tax exempt" on a job whose sheet charges both taxes ($420 sales,
+    # $900 remodel): exempt is the SHEET's answer now (Hanz, 2026-09-25), so this reads as the one
+    # line it printed, with the wording for the taxes the sheet says are in the bid.
+    ("EXCLUDED", "(Remodel Tax AND material sales tax INCLUDED)"),
 ])
 def test_the_tax_treatment_reaches_the_document(ran, mode, phrase):
-    """The dropdown changes the parenthetical a customer reads and which of the three price lines
-    the backend fills. It travels through the FORM, not through rooms — which is why the debounced
-    form persist syncs as well as the sidebar."""
+    """The layout changes the parenthetical a customer reads and which of the price lines the
+    backend fills — and the debounced form persist syncs it into the payload as well as the
+    sidebar does."""
     assert ran["taxFlip"][mode]["base_tax_phrase"] == phrase
     assert ran["taxFlip"][mode]["sales_tax_handling"] == mode
 
@@ -290,9 +293,9 @@ def test_the_tax_treatment_reaches_the_document(ran, mode, phrase):
 @pytest.mark.parametrize("mode,base", [
     # $13,265 total, $420 material sales tax, $900 remodel — a DIRECT template, whose tax rows
     # live inside {{#tax_breakout}} / {{#remodel}}.
-    ("INCLUDED",   "$13,265"),   # rows stripped: nothing prints for the base to be net of
+    ("INCLUDED",   "$13,265"),   # one line: nothing prints for the base to be net of
     ("BROKEN_OUT", "$11,945"),   # rows print: 11,945 + 420 + 900 = 13,265
-    ("EXCLUDED",   "$13,265"),   # rows stripped, and an exempt job owes no tax anyway
+    ("EXCLUDED",   "$13,265"),   # an old "exempt" draft: one line, as it printed
 ])
 def test_the_base_bid_is_the_total_less_whatever_tax_rows_print(ran, mode, base):
     """The rule the whole PRICE block hangs on, on the side of it the estimator SEES.
@@ -323,8 +326,11 @@ def test_narrowing_a_combo_to_one_base_clears_the_two_price_lines(ran):
     """A combo with no base prints BOTH systems as options. Choosing one base makes that block
     wrong, and leaving the old lines in the payload prints two prices in a one-price proposal."""
     c = ran["comboNarrowing"]
-    assert len(c["comboBefore"]) == 4, c["comboBefore"]
-    assert any("Option 1" in l for l in c["comboBefore"])
+    # One line each (INCLUDED on this draft), each system's own wording off its own tab.
+    assert c["comboBefore"] == [
+        "Option 1: Epoxy flooring as described above (material sales tax INCLUDED)",
+        "Option 2: Polished Concrete flooring as described above (material sales tax INCLUDED)",
+    ], c["comboBefore"]
     assert c["afterNarrowing"] == []
 
 
@@ -348,7 +354,8 @@ def test_hand_edited_price_lines_survive_the_sync(ran):
     """`price_overrides` are the estimator's own wording for a price line. Dropping them would
     restore computed text they deliberately replaced; a garbage value must not travel."""
     o = ran["overrides"]
-    assert o["kept"] == {"lines": {"base": "Flat fee, all in"}}
+    # Carried into the LIVE shape: no amount or tax wording in it to follow, so his words exactly.
+    assert o["kept"] == {"lines": {}, "lines2": {"base": "Flat fee, all in"}}
     assert o["garbageBecomes"] == {}
 
 
@@ -358,6 +365,11 @@ def test_stale_computed_tax_line_overrides_do_not_survive_the_sync(ran):
     o = ran["staleComputedTaxOverrides"]
     assert o["remainingLines"] == {}
     assert o["payloadLines"] == {}
+    # The three "$0" rows were phantoms of the old box-wide sweep and are gone. The base line kept
+    # only what differs from the computed one — its hyphen — and its amount and wording are LIVE:
+    # it prints today's broken-out $11,945 with no bracket, not the $13,265 it was frozen at.
+    assert o["remainingLines2"] == {
+        "base": "⟦amount⟧ - Polished Concrete Flooring as described above ⟦tax⟧"}
     assert (o["base"], o["material"], o["remodel"], o["total"]) == (
         "$11,945", "$420", "$900", "$13,265")
 
@@ -373,9 +385,13 @@ def test_a_real_hand_edit_survives_when_the_tax_mode_has_not_changed(ran):
     the SAME tax mode must survive: only a known tax-mode phrase that no longer matches today's
     mode (see test_stale_computed_tax_line_overrides_do_not_survive_the_sync above) is staleness."""
     o = ran["handEditedBaseSurvivesWhenTaxModeUnchanged"]
-    assert o["remainingLines"] == {"base": "$13,500 - Polished Concrete Flooring, per revised "
-                                            "scope as described above (material sales tax INCLUDED)"}
-    assert o["payloadLines"] == o["remainingLines"]
+    # His words and his $13,500 survive (a figure of his own: kept, marked, asked about at Send);
+    # the tax wording he left alone is live, so on this draft — Broken out by default, the sheet
+    # charges sales tax — the base line prints no bracket.
+    assert o["remainingLines"] == {} and o["payloadLines"] == {}
+    assert o["remainingLines2"] == {"base": "$13,500 - Polished Concrete Flooring, per revised "
+                                             "scope as described above ⟦tax⟧"}
+    assert o["payloadLines2"] == o["remainingLines2"]
 
 
 @needs_node
@@ -384,8 +400,9 @@ def test_a_hand_edited_tax_line_survives_unless_frozen_at_zero(ran):
     survive even though it still looks like the computed shape and differs from today's figure.
     Only a $0 override sitting next to a nonzero computed line is the KYLE-1 staleness signal."""
     o = ran["handEditedTaxLineSurvivesWhenNotZero"]
-    assert o["remainingLines"] == {"sales_tax": "$425 - Material Sales Tax"}
-    assert o["payloadLines"] == o["remainingLines"]
+    assert o["remainingLines"] == {} and o["payloadLines"] == {}
+    assert o["remainingLines2"] == {"sales_tax": "$425 - Material Sales Tax"}
+    assert o["payloadLines2"] == o["remainingLines2"]
 
 
 @needs_node

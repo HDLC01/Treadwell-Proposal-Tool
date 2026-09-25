@@ -66,6 +66,9 @@ const BUILT_AT = lift("builtAt");
 const DOWNLOAD = lift("downloadAs");
 const ERR_MSG = lift("portalErrMsg");
 const REFUSAL = lift("staleDocRefusal");
+// What Send asks about a price line carrying a figure of the estimator's own — the handler calls it
+// before every publish, so it is lifted with the handler (price-lines-harness.js tests its words).
+const PRICE_WARNING = lift("sendPriceWarning");
 const SEND = liftSendHandler();
 const STALE_CODE = (/const STALE_DOCUMENT_CODE\s*=\s*"([^"]+)"/.exec(SRC) || [])[1];
 if (!STALE_CODE) throw new Error("STALE_DOCUMENT_CODE moved in done.js");
@@ -182,6 +185,7 @@ async function tab(local, server, opts) {
   const portalErrMsg = new Function(...ERR_MSG.args, '"use strict"; ' + ERR_MSG.body);
   const staleDocRefusal = new Function(...REFUSAL.args, "STALE_DOCUMENT_CODE",
                                        '"use strict"; ' + REFUSAL.body);
+  const sendPriceWarning = new Function(...PRICE_WARNING.args, '"use strict"; ' + PRICE_WARNING.body);
   const portalBtn = { textContent: "Send", disabled: false, focus() {} };
   const portalRecip = { allEmails: () => ["customer@example.com"], noFollowupsToSend: () => [],
                         setErr: (m) => { rec.err = m; }, setBusy() {}, hasIntake: false };
@@ -189,10 +193,10 @@ async function tab(local, server, opts) {
     "TW", "portalBtn", "portalRecip", "readRequireDeposit", "readAssignedEstimator", "document",
     "alert", "sendAtts", "notifyPick", "showSaveBlocked", "showStaleDoc", "mountRevisions",
     "publishDrift", "staleDocRefusal", "portalErrMsg", "setTimeout", "window", "console",
-    "checkedDocument", '"use strict"; ' + SEND);
+    "checkedDocument", "sendPriceWarning", '"use strict"; ' + SEND);
 
   return {
-    TW, rec, checkedDocument, ls: sandbox.localStorage,
+    TW, rec, checkedDocument, ls: sandbox.localStorage, window: sandbox.window,
     /** Fire every timer shared.js queued — the 2.5 s autosave debounce among them. */
     elapse: () => { const due = timers.splice(0); due.forEach((fn) => { if (fn) fn(); }); },
     download: () => downloadAs(
@@ -210,7 +214,7 @@ async function tab(local, server, opts) {
       { adds: () => [], mutes: () => [] },
       () => false, () => {}, () => {}, () => "", (e) => staleDocRefusal(e, STALE_CODE),
       portalErrMsg, () => 0,
-      sandbox.window, { error() {} }, checkedDocument),
+      sandbox.window, { error() {} }, checkedDocument, sendPriceWarning),
   };
 }
 
@@ -408,6 +412,38 @@ function current() {
                  serverAtPublish: t.rec.versionAtPublish };
     }
     out.versionHeld = r;
+  }
+
+  // H. A price line prints a figure of the estimator's own (the Proposal step listed it in the
+  //    document it built). Send ASKS, in Hanz's words: Cancel sends nothing, OK sends. Hanz,
+  //    2026-09-25: "warn, then let him send."
+  {
+    const r = {};
+    for (const answer of [false, true]) {
+      const w = current();
+      const pp = JSON.parse(JSON.stringify(P2));
+      pp.price_warnings = [{ key: "base", says: "$9,999", estimate: "$12,500" }];
+      const mine = { project_name: "X", rooms: [{ name: "RJ's revision", is_base: true }], proposal_payload: pp };
+      w.local[STATE_KEY] = JSON.stringify(Object.assign({ [STAMP]: "d1" }, mine));
+      w.server.d1 = JSON.parse(JSON.stringify(mine));
+      const t = await tab(w.local, w.server);
+      const asked = [];
+      t.window.confirm = (msg) => { asked.push(msg); return answer; };
+      t.TW.setLocalState({ proposal_payload_key: t.TW.composeKey(t.TW.getState()) });
+      w.server.d1.proposal_payload_key = t.TW.composeKey(w.server.d1);
+      await t.send();
+      r[answer ? "ok" : "cancel"] = { asked, posted: t.rec.published.length };
+    }
+    // And a document with no such line is not asked about at all.
+    {
+      const w = current();
+      const t = await tab(w.local, w.server);
+      const asked = [];
+      t.window.confirm = (msg) => { asked.push(msg); return false; };
+      await t.send();
+      r.none = { asked, posted: t.rec.published.length };
+    }
+    out.priceWarning = r;
   }
 
   // G. The saved copy cannot be read at Send: nothing can be checked, so nothing is sent.

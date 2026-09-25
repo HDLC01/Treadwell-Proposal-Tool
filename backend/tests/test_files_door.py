@@ -1089,6 +1089,9 @@ def _render_served(blob, work_type, audience, remodel_amount=None):
     if remodel_amount:
         pp["remodel"] = [{"amount_formatted": remodel_amount}]
         pp["values"]["tax_amount_formatted"] = remodel_amount
+        # A remodel tax is the sheet's Remodel Tax? = Yes (Hanz, 2026-09-25): the page sends that
+        # answer beside the figure, and it is what decides the row.
+        pp["values"]["price_remodel_on"] = True
     r = client.post("/api/draft/d1/documents", json={})
     assert r.status_code == 200, r.text
     f = client.get(r.json()["docx_download_url"])
@@ -1110,8 +1113,8 @@ def test_remodel_off_broken_out_prints_material_tax_and_no_remodel_row(served, w
     remodel tax; rendered through every template family, no Remodel Tax row prints and the Material
     Sales Tax row does.
 
-    Mutation: pass `remodel_row=True` whatever the tax (main.py) — GC and Gyp print "$0 – Remodel
-    Tax" again."""
+    Mutation: pass `price_rows` with remodel True whatever the tax (main.py) — GC and Gyp print
+    "$0 – Remodel Tax" again."""
     assert served["proposal_payload"]["values"]["tax_inclusion"] == "BROKEN_OUT"
     assert served["proposal_payload"]["remodel"] == []
     text = _render_served(served, work_type, audience)
@@ -1122,11 +1125,13 @@ def test_remodel_off_broken_out_prints_material_tax_and_no_remodel_row(served, w
 @pytest.mark.parametrize("work_type,audience", [("epoxy", "GC"), ("gyp", "Direct")])
 def test_a_payload_with_a_remodel_figure_but_no_remodel_list_keeps_its_row(served, work_type,
                                                                            audience):
-    """Off is "no remodel line AND a remodel figure of nothing". A payload saved before the
-    `remodel` list existed, with a real figure, still prints the row it always printed.
+    """A payload saved before the `remodel` list existed — and before the page sent the sheet's
+    Remodel Tax? answer — with a real figure, still prints the row it always printed: with no flag
+    on the payload, the figure answers for it (price_rules.flag).
 
-    Mutation: decide off on the list alone (main.py `_remodel_off`) — the row disappears."""
+    Mutation: decide remodel on the list alone (main.py `_remodel_on`) — the row disappears."""
     served["proposal_payload"]["values"]["tax_amount_formatted"] = "$650"
+    served["proposal_payload"]["values"].pop("price_remodel_on", None)
     text = _render_served(served, work_type, audience)
     assert re.search(r"\$650 – (Kansas )?Remodel Tax", text), (work_type, audience, text[:3000])
 

@@ -51,6 +51,8 @@ const PROPOSAL = read(path.join("js", "proposal-review.js"));
 const DONE = read(path.join("js", "done.js"));
 const ESTIMATE = read(path.join("js", "estimate-review.js"));
 const HTML = read("proposal-review.html");
+// The price rule's page half, loaded as the page loads it (a script before proposal-review.js).
+const TWPRICE = require(path.join(FRONT, "js", "price-lines-core.js"));
 const NL = "\n";
 
 function gone(what, where) {
@@ -101,11 +103,15 @@ const PROPOSAL_UNITS = [
        "the base-role helpers", P),
   fn(PROPOSAL, "baseAreaFrom", P),
   fn(PROPOSAL, "rebuildPricing", P),
+  // The tax rule's page half: the base as one priced system, the layout, the rule itself.
+  fn(PROPOSAL, "basePriceSystem", P),
+  fn(PROPOSAL, "taxLayout", P),
   fn(PROPOSAL, "taxTreatmentMode", P),
+  fn(PROPOSAL, "baseTaxRule", P),
   fn(PROPOSAL, "printedTaxRows", P),
   fn(PROPOSAL, "baseBidFigure", P),
   grab(PROPOSAL, /^  const COMPUTED_PRICE_LINE_KEYS = .*$/m, "COMPUTED_PRICE_LINE_KEYS", P),
-  fn(PROPOSAL, "looksLikeComputedPriceLine", P),
+  fn(PROPOSAL, "priceWarnings", P),
   grab(PROPOSAL, /^  let _povTimer = .*$/m, "_povTimer", P),
   fn(PROPOSAL, "queuePovSave", P),
   fn(PROPOSAL, "lineOverride", P),
@@ -142,7 +148,7 @@ const PAGE_BODY = [
   "  armPersist: (write, ms) => { _persistTimer = setTimeout(write, ms); } };",
 ].join(NL);
 const makeProposalScope = new Function(
-  "state", "form", "document", "TW", "window", "TWAuth", "templateBlocks",
+  "TWPrice", "state", "form", "document", "TW", "window", "TWAuth", "templateBlocks",
   "collectOverrides", "collectBoxOverrides", "sheetSystems", "refreshPriceDisplay",
   "_firstDocLoad", "_notesReady", "setTimeout", "clearTimeout", "__tv0", "TWCoverLetter",
   PAGE_BODY);
@@ -448,7 +454,7 @@ async function openProposal(b, href, opts) {
   const firstDocLoad = o.never ? new Promise(() => {})
     : (o.gate || Promise.resolve()).then(() => { if (o.tpl !== "") scope.setTemplateVersion(o.tpl || "tpl-epoxy-direct"); });
   scope = makeProposalScope(
-    state, form, doc, TW, page.window, page.window.TWAuth,
+    TWPRICE, state, form, doc, TW, page.window, page.window.TWAuth,
     // A Direct template's PRICE rows, as /api/proposal-template serves them (see payload-sync).
     [{ id: 124, in_block: null, text: "{{base_bid_formatted}} – Epoxy flooring as described above {{base_tax_phrase}}" },
      { id: 126, in_block: "tax_breakout", text: "{{material_tax_formatted}} – Material Sales Tax" },
