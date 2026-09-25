@@ -190,11 +190,13 @@ function build(opts) {
   };
 
   const stored = [];
+  const saved = [];      // TW.setState: this browser's copy AND a PUT of the whole blob
   const TW = {
     getState: () => ({ project_name: "Fuel House", work_type: "gyp",
                        cell_values: { E20: 4200 },
                        dropbox_result: o.prevResult || undefined }),
-    setState: (patch) => stored.push(patch),
+    setLocalState: (patch) => stored.push(patch),
+    setState: (patch) => { saved.push(patch); stored.push(patch); },
     authHeaders: () => ({}),
     getDraftId: () => "d1",
     resolveApiBase: () => "",
@@ -206,7 +208,7 @@ function build(opts) {
       { escape: (s) => String(s) });
 
   return {
-    nodes, posts, stored,
+    nodes, posts, stored, saved,
     snap: () => {
       const radios = nodes["dbx-folders"].querySelectorAll(".dbx-radio");
       return {
@@ -244,6 +246,7 @@ async function main() {
   out.postsAfterFirst = s.posts.length;
   out.firstBody = s.posts[0] || null;
   out.mirrored = s.stored[s.stored.length - 1] || null;
+  out.serverSaves = s.saved.length;
 
   // 3 — the estimator switches destination. The choice is cleared and the request
   // for the new list goes out; the button must go dead in the same breath.

@@ -539,3 +539,22 @@ def test_the_token_tag_only_appears_on_runs_that_carry_a_token(ran):
     token, and tagging them would make the restore rewrite ordinary words."""
     runs = ran["tokenFresh"]["savedRuns"]
     assert [bool(r.get("tok")) for r in runs] == [False, False, True, False]
+
+
+# ══ the free Remodel Tax row ══════════════════════════════════════════════════════════════════
+def test_no_remodel_tax_means_no_remodel_row_on_screen_either(ran):
+    """Hanz: "If remodel tax is off then in the broken out option in the Proposal, there is no
+    remodel tax but there is material sales tax." The GC and Gyp files print their Remodel Tax row
+    as a plain paragraph, which the render now takes out with no remodel tax; the editor, which
+    draws the real template, leaves it out too — through the page's own renderBlock and
+    setBlockContent — keeps the Material Sales Tax and Total rows, and draws the row again when a
+    re-fill brings a remodel tax in. A hidden, untouched row sends no paragraph override.
+
+    Mutations: drop the display toggle in setBlockContent (the $0 row is drawn); set it only when
+    hiding (the row stays hidden after a re-fill with $650)."""
+    r = ran["remodelRow"]
+    assert r["whenOff"] == {"material": True, "remodel": False, "total": True}, r
+    assert r["afterFlipOn"]["remodel"] is True, r
+    assert r["afterFlipOn"]["text"].startswith("$650"), r
+    assert r["afterFlipOff"] is False and r["mountedOn"] is True, r
+    assert r["collectedOff"] == [], r

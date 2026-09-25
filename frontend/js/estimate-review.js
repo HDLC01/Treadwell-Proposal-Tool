@@ -3204,7 +3204,7 @@ function _afterBulkWrite(sheet) {
   try { updateTotalBarFromHF(); } catch {}
   try { refreshSystemName(); } catch {}
   clearTimeout(_cbTimer);
-  _cbTimer = setTimeout(() => { renderBidOptions(); persistTabState(); }, 300);
+  _cbTimer = setTimeout(() => { _cbTimer = null; renderBidOptions(); persistTabState(); }, 300);
 }
 // Spill TSV `text` from `origin`. Multi-cell → _commitCellWrite per target (full
 // edit path: HF + cellValues + % normalize), returning the skipped (locked /
@@ -4787,6 +4787,24 @@ document.getElementById("continue-btn").addEventListener("click", () => {
   persistTabState();
   window.location.assign(TW.withDraft("/proposal-review.html"));
 });
+// EVERY STEP PILL LEAVES WITH THE EDIT THE GRID IS STILL HOLDING. A cell edit lives in `cellValues`
+// and HyperFormula until the grid's `change` listener runs persistTabState 300ms later (`_cbTimer`),
+// and `change` only fires as the cell loses focus — which clicking a pill does, a moment before the
+// page is torn down. So "edit the price, click 4 · Files" left with the edit in neither the draft nor
+// the totals the Proposal step prices from, and the Files page built the old price. Delegated,
+// because the header folds the pills into itself (auth.js); the click still navigates as the link
+// says.
+//
+// ONLY THAT PENDING SAVE, run now instead of 300ms from now. persistTabState writes the page's
+// whole load-time snapshot, and a page opened before a colleague revised the project holds an
+// older one: a pill click with no edit waiting must write nothing, exactly as it did before this
+// listener existed, or merely walking through this step would put that old copy back over theirs.
+document.addEventListener("click", (e) => {
+  const pill = e.target && e.target.closest ? e.target.closest(".progress a.step[href]") : null;
+  if (!pill || !_cbTimer) return;
+  clearTimeout(_cbTimer); _cbTimer = null;
+  try { persistTabState(); } catch {}
+});
 
 // ── System-name helpers (live reads off the grid / HF for the auto System Name) ──
 const _cbNum = x => { const n = parseFloat(String(x).replace(/[$,]/g, "")); return isNaN(n) ? 0 : n; };
@@ -4923,7 +4941,7 @@ document.getElementById("sheet-grid").addEventListener("change", () => {
   if (_bulkWrite) return;   // bulk paste/clear coalesces into one _afterBulkWrite pass
   refreshSystemName();
   clearTimeout(_cbTimer);
-  _cbTimer = setTimeout(() => { renderBidOptions(); persistTabState(); }, 300);
+  _cbTimer = setTimeout(() => { _cbTimer = null; renderBidOptions(); persistTabState(); }, 300);
 });
 
 init();

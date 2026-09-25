@@ -517,6 +517,8 @@ function makePage(label) {
                  dirty: el.classList.contains("tw-dirty"),
                  empty: el.classList.contains("tw-empty"), text: serializeBlock(el) };
       },
+      /** Is the paragraph DRAWN? An inline display:none is how the page takes a row out. */
+      shown: (id) => { const el = blockEl(id); return el ? el.style.display !== "none" : null; },
       collect: () => collectOverrides(),
       restore: (wt, audience, tokens) => {
         if (tokens) TOKENS = tokens;
@@ -1114,6 +1116,32 @@ const TERMS = [BULLET_115, CLAUSE_51, CLAUSE_52, CLAUSE_53_V5];
     restored: restored,
     stored: JSON.parse(JSON.stringify(TW.getState().paragraph_overrides_all["epoxy:Direct"].items)),
   };
+}
+
+// 15 — NO REMODEL TAX, NO REMODEL ROW, on screen as in the document. The GC and Gyp files author
+// their Remodel Tax row as a plain paragraph, and the render takes it out when the job has no
+// remodel tax (main.py `_remodel_off`; Hanz's rule). The editor draws the real template, so it has
+// to leave the row out too, keep the Material Sales Tax row, and draw the row again when a fill
+// brings a remodel tax in (a base flip re-fills in place).
+{
+  STORE.blob = JSON.parse(JSON.stringify(SEED));
+  const GC_PRICE = [
+    { id: 57, in_block: null, text: "{{material_tax_formatted}} – Material Sales Tax" },
+    { id: 58, in_block: null, text: "{{tax_amount_formatted}} – Remodel Tax" },
+    { id: 59, in_block: null, text: "{{total_formatted}} – Total" },
+  ];
+  const off = { material_tax_formatted: "$400", tax_amount_formatted: "$0", total_formatted: "$12,500" };
+  const on = Object.assign({}, off, { tax_amount_formatted: "$650" });
+  const p = makePage("remodel-row");
+  p.mount(GC_PRICE, off, VER);
+  const whenOff = { material: p.shown(57), remodel: p.shown(58), total: p.shown(59) };
+  p.refreshFills(on);
+  const afterFlipOn = { remodel: p.shown(58), text: p.look(58).text };
+  p.refreshFills(off);
+  const q = makePage("remodel-row-on");
+  q.mount(GC_PRICE, on, VER);
+  out.remodelRow = { whenOff, afterFlipOn, afterFlipOff: p.shown(58), mountedOn: q.shown(58),
+                     collectedOff: p.collect() };
 }
 
 console.log(JSON.stringify(out));

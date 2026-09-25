@@ -357,14 +357,16 @@
     })();
   }
 
-  (function prefillNotes() {
+  // The boilerplate fetch is KEPT (`_notesReady`) so the Files page's door, composeForFiles below,
+  // can wait for the notes box to be filled before it builds the document off this page.
+  const _notesReady = (function prefillNotes() {
     const ta = document.getElementById("notes-text");
     if (!ta) return;
     const applyAndPreview = (text) => { ta.value = text; syncPhaseNote(); try { renderNotesPreview(); } catch {} };
     if (Array.isArray(state.notes) && state.notes.length) { applyAndPreview(state.notes.join("\n")); return; }
     if (String(ta.value || "").trim()) { syncPhaseNote(); return; }
     // Brand-new project: pull this work type's boilerplate scope/schedule/exclusions.
-    fetchDefaultNotes((text) => {
+    return fetchDefaultNotes((text) => {
       if (String(ta.value || "").trim()) return;   // user typed during the fetch
       applyAndPreview(text);
       _seededNotes = text;
@@ -388,13 +390,18 @@
 
   // Pre-fill the Estimator (signature) with the signed-in user's name unless
   // the project already carries one. Editable — they can change who signs.
+  // "Carries one" includes its saved document: the Files page's door rebuilds unattended for
+  // whoever opens View files, and a project whose own field was never filled in was re-signed as
+  // that colleague (review of fix 4, 2026-09-25).
   (function prefillEstimator() {
     const el = document.getElementById("estimator-name");
     if (!el || el.value) return;
     const apply = () => {
       if (el.value) return;
       const u = (window.TWAuth && TWAuth.user && TWAuth.user()) || null;
-      let name = (state.estimator_name || "").trim() || (u && u.name) || "";
+      const signed = ((state.proposal_payload && state.proposal_payload.values) || {}).estimator_name;
+      let name = (state.estimator_name || "").trim() || String(signed || "").trim()
+        || (u && u.name) || "";
       if (!name && u && u.email) {
         name = u.email.split("@")[0].replace(/[._]+/g, " ").replace(/\b\w/g, c => c.toUpperCase());
       }
@@ -1504,6 +1511,22 @@
       return `${d.getMonth()+1}/${d.getDate()}/${String(d.getFullYear()).slice(-2)}`;
     })();
 
+    // WHO SIGNS, AND AT WHICH ADDRESS. The name is the field's (pre-filled for the project, see
+    // prefillEstimator); the address used to be whoever was signed in, always. The Files page's
+    // door rebuilds this document unattended for whoever opens View files, so Troy opening Kyle's
+    // project printed "Kyle Loseke | Estimator troy@wetreadwell.com" on the customer's letter
+    // (review of fix 4, 2026-09-25). So the saved document's address stays while the same name
+    // signs; a document saved before the address existed keeps printing none unless its own signer
+    // is the one rebuilding it; and a new name — somebody typed one in — signs with the address
+    // of whoever typed it, as before.
+    const _viewer = (window.TWAuth && TWAuth.user && TWAuth.user()) || {};
+    const _signer = String(mergedValues.estimator_name || "").trim() || String(_viewer.name || "").trim();
+    const _signed = ((state.proposal_payload && state.proposal_payload.values) || {});
+    const _sameName = (a, b) => String(a || "").trim().toLowerCase() === String(b || "").trim().toLowerCase();
+    const _signerEmail = !_sameName(_signed.estimator_name, _signer) ? String(_viewer.email || "")
+      : String(_signed.estimator_email || "").trim()
+        || (_sameName(_viewer.name, _signer) ? String(_viewer.email || "") : "");
+
     const tokenValues = {
       ...mergedValues,
       // The type the DOCUMENT is (the base tab's), not the intake field the spread above echoes.
@@ -1515,15 +1538,14 @@
       project_name:       safe(mergedValues.project_name),
       // Signs the proposal — the field (pre-filled from the signed-in user),
       // else the signed-in user's name. Replaces the old hardcoded "Troy Holmes".
-      estimator_name:     (String(mergedValues.estimator_name || "").trim()
-                           || ((window.TWAuth && TWAuth.user() && TWAuth.user().name) || "")),
+      estimator_name:     _signer,
       // The cover letter's signature line. It printed a literal "[ESTIMATOR EMAIL]" to the
       // customer until 2026-09-09; cover_letter_writer turns this into the whole line and drops
       // the " | " when there is no address. Set HERE as well as backfilled in main.py so it rides
       // the frozen proposal_payload — a replay of a pinned revision has no signed-in user, so a
       // server-only resolution would sign the customer's re-opened document differently from the
-      // one they were sent.
-      estimator_email:    ((window.TWAuth && TWAuth.user() && TWAuth.user().email) || ""),
+      // one they were sent. Whose address: see _signerEmail above.
+      estimator_email:    _signerEmail,
       city_state:         safe(mergedValues.city_state),
       address:            safe(mergedValues.address),
       work_description:   safe(mergedValues.work_description || mergedValues.address || ""),
@@ -3306,6 +3328,16 @@
     const plain = fillPlain(b.text, tokens);
     pristineById.set(Number(el.dataset.id), plain);
     el.classList.toggle("tw-empty", !plain.trim());
+    // NO REMODEL TAX, NO REMODEL ROW — here as in the document. The GC and Gyp files author their
+    // Remodel Tax row as a plain paragraph (this one), and the render takes it out when the job has
+    // no remodel tax (main.py `_remodel_off`; Hanz: "If remodel tax is off then in the broken out
+    // option in the Proposal, there is no remodel tax but there is material sales tax"). Decided
+    // on every fill, so a base flip that brings a remodel tax in shows the row again. An inline
+    // style, not `hidden`: a class `display` rule beats the attribute.
+    if (/\{\{\s*(tax_amount_formatted|remodel\.amount_formatted)\s*\}\}/.test(String(b.text || ""))) {
+      const remodel = Number(String((tokens || {}).tax_amount_formatted || "").replace(/[^0-9.]/g, "")) || 0;
+      el.style.display = remodel ? "" : "none";
+    }
   }
 
   /** Is this block one of the NUMBERED Terms and Conditions clauses?
@@ -6831,7 +6863,9 @@
     panel.addEventListener("pointercancel", end);
   })();
 
-  initDocumentEditor();
+  // The FIRST template load, kept so the Files page's door (composeForFiles, below) can wait for the
+  // document to be on screen before it collects the estimator's edits off it.
+  const _firstDocLoad = initDocumentEditor();
 
   // Recompute base + options from the per-tab snapshot first (no-op for older
   // drafts without it), so the price display below reflects the current base.
@@ -6939,8 +6973,23 @@
     const btn = document.getElementById("generate-btn");
     btn.disabled = true;
     btn.textContent = "Generating…";
+    // The form's debounced persist (300ms) writes `syncPayloadPricing()` — a patch of the module
+    // snapshot's OLD payload object — so one still pending when this runs would land after the
+    // write below and put the previous document back. Everything it would have saved is read here
+    // anyway (TW.readForm), so it is cancelled rather than raced. In a try because the timer is
+    // declared near the bottom of this file, and the button is wired at the top precisely so that
+    // it still works when page init stops somewhere in between.
+    try { if (_persistTimer) { clearTimeout(_persistTimer); _persistTimer = null; } } catch {}
 
-    const mergedValues = Object.assign({}, state, TW.readForm(form));
+    // The cover-letter switch REPLACES a top-level primitive with setState, which the module-top
+    // `state` snapshot never sees (liveKey explains the mechanism). The payload below already reads
+    // it live; the spread of this object into the draft did not, so it wrote the load-time value
+    // back over the estimator's tick — and the next build, the Files page's door included, read the
+    // unticked box and left page 1 out of the customer's document. So it is taken live here too.
+    const _liveLetter = liveKey("cover_letter_enabled");
+    const mergedValues = Object.assign({}, state,
+      _liveLetter === undefined ? {} : { cover_letter_enabled: !!_liveLetter },
+      TW.readForm(form));
     const tokenValues = computeTokenValues(mergedValues);
     const lumpSumText = document.querySelector("#tb-total")?.textContent || "$0.00";
     const _fb = (state.computed_bid && state.computed_bid.full_bid) || {};
@@ -6968,7 +7017,18 @@
       liveKey("box_overrides_all"), effectiveWorkType(), state.audience || "Direct",
       templateVersion, boxOverridesOut);
 
-    TW.setState({
+    // THE DOCUMENT'S VALUES, NOT THE WHOLE DRAFT. `mergedValues` is a spread of the draft, so it
+    // carried the PREVIOUS proposal_payload (and its key), the last build's result, the Dropbox
+    // result and the per-tab pricing snapshot — and every Continue nested one more copy, three
+    // deep and 104 KB on a real draft. Nothing the document prints reads any of them, and the
+    // /api/generate write-back would have echoed the stale Dropbox result back onto the draft.
+    // `work_type` in here is the EFFECTIVE type (computeTokenValues sets it off the base tab),
+    // the same one this payload names as its template below.
+    const docValues = { ...mergedValues, ...tokenValues };
+    ["proposal_payload", "proposal_payload_key", "generate_result", "dropbox_result", "priced_tabs"]
+      .forEach((k) => { delete docValues[k]; });
+
+    const composed = {
       ...mergedValues,
       paragraph_overrides_all: _allOverrides,
       paragraph_overrides: paragraphOverrides,
@@ -6991,7 +7051,7 @@
         // The backend drops the overrides if this no longer matches the current
         // template (annotation shifts editable-block ids) — see api_generate.
         template_version: templateVersion,
-        values:    { ...mergedValues, ...tokenValues },
+        values:    docValues,
         cell_values: state.cell_values || {},
         // Custom material lines (Super Stick / edge-case adds) -> Epoxy spare rows
         extras: Array.isArray(state.extras) ? state.extras : [],
@@ -7099,7 +7159,24 @@
       ...(!!liveKey("cover_letter_enabled") !== !!((liveKey("proposal_payload") || {}).cover_letter_enabled)
           ? { generate_result: null }
           : {}),
+    };
+    // THE COVER LETTER'S OWN STORE, LIVE. coverletter-editor.js keeps the estimator's wording in
+    // four top-level keys it REPLACES with setState (persistNow), which the `state` snapshot never
+    // sees, so `...mergedValues` above wrote the wording from page load back over the wording just
+    // typed. The payload carried the new wording and the draft the old, and the next rebuild — the
+    // Files page's door rebuilds unattended — restored the old one into the customer's letter
+    // (review of fix 4, 2026-09-25). Read here, after payloadFields() has flushed its debounce.
+    ["cover_letter_paragraph_overrides", "cover_letter_paragraph_overrides_all",
+     "cover_letter_paragraph_overrides_meta", "cover_letter_template_version"].forEach((k) => {
+      const v = liveKey(k);
+      if (v !== undefined) composed[k] = v;
     });
+    // THE KEY THE FILES PAGE CHECKS THE DOCUMENT BY (TW.composeKey): the inputs this document was
+    // built from, and the document. Computed over exactly what setState is about to store — the
+    // live blob with this write merged in, as setState itself merges it — so the Files page, which
+    // recomputes it off the saved draft, gets the same answer until something changes.
+    composed.proposal_payload_key = TW.composeKey(Object.assign(TW.getState() || {}, composed));
+    TW.setState(composed);
     // Belt and braces on the same failure. The guard above covers the three refusals setState
     // knows about; this covers the one it does not -- writeBlob returning false on a full or
     // locked localStorage (private mode, quota), which setState ignores. Either way the payload
@@ -7120,7 +7197,28 @@
       }
       return;
     }
-    window.location.assign(TW.withDraft("/done.html"));
+    // AND ON THE SERVER, BEFORE THE FILES PAGE OPENS. That page renders the SERVER's copy of this
+    // draft (/api/draft/{id}/documents) and has no save of its own pending to wait for, so leaving
+    // the write to the 2.5s debounce, or to the keepalive PUT a navigation fires, let "View files"
+    // build the previous document in the moment before it landed.
+    if (!await TW.flushState()) {
+      btn.disabled = false; btn.textContent = "Continue to Done →";
+      repaintNote("Your changes could not be saved, so the document was not rebuilt.",
+                  "Check your connection, then press Continue to Done again. If it says this a second time, tell Hanz before you send anything.");
+      return;
+    }
+    // `composed=1` tells the Files page this document was built from this page a moment ago, so it
+    // does not send the estimator back through its door (done.js). Opened BY that door
+    // (?compose=files, see composeForFiles), this page REPLACES itself, so the Back button from
+    // Files returns to wherever the estimator came from rather than to a page that would only
+    // build the document again and bounce forward; and "View files" stays View files.
+    let _door = null;
+    try { _door = new URLSearchParams(window.location.search); } catch {}
+    const _viaDoor = !!_door && _door.get("compose") === "files";
+    const _files = TW.withDraft("/done.html?composed=1"
+      + (_viaDoor && _door.get("files") === "1" ? "&files=1" : ""));
+    if (_viaDoor) window.location.replace(_files);
+    else window.location.assign(_files);
   }
 
   form.addEventListener("submit", continueToDone);
@@ -7133,3 +7231,132 @@
   // rebuilt here, so the pill has to come through the same door as the button.
   const _filesPill = document.querySelector('a.step[href="/done.html"]');
   if (_filesPill) _filesPill.addEventListener("click", (e) => { e.preventDefault(); continueToDone(e); });
+
+  /** THE FILES PAGE'S DOOR, from this side: build the document from what is on screen, then go.
+   *
+   *  Hanz, 2026-09-25: "Clicking to Done should regenerate and make the proposal correctly." The
+   *  Files page sends the SAVED `proposal_payload`, and the one piece of code that composes it is
+   *  continueToDone above — computeTokenValues, the editor's paragraph and box edits, the WORK
+   *  system picks, the combo lines — none of which can run off this page, because the edits are
+   *  read off the mounted template. So when the Files page finds that its document was not built
+   *  from the draft as it stands (done.js, TW.composeKey), whichever way the estimator arrived —
+   *  a step pill from Intake or Estimate, the Polish beta's Files link, View files, a reload, a
+   *  typed URL — it sends them here with `?compose=files`, and this presses Continue for them
+   *  once the page has settled: the draft read, the template on screen with its saved edits
+   *  restored, the notes box filled.
+   *
+   *  NOT the `?resync=1` arrival (explainWhyYouAreHere), which deliberately never presses
+   *  Continue: that one follows a refused SEND, and its point is that the estimator looks at the
+   *  document before it goes. This door leads to the Files page, where nothing goes anywhere until
+   *  Send is pressed, and where Download hands over this very document to check.
+   *
+   *  ONLY WHEN THE TEMPLATE LOADED. With no template on screen collectOverrides falls back to the
+   *  last Continue's list and templateVersion is "", which the backend reads as "apply every
+   *  edit" — an unattended build could put one template's edits on another's paragraphs. So the
+   *  page stops, says why, and leaves Continue to the estimator; likewise when it has not settled
+   *  inside 20 seconds. A save that is refused is continueToDone's own business: it asks first and
+   *  says why. */
+  async function composeForFiles() {
+    let q = null;
+    try { q = new URLSearchParams(window.location.search); } catch { return; }
+    if (!q || q.get("compose") !== "files") return;
+    const btn = document.getElementById("generate-btn");
+    const label = btn ? btn.textContent : "";
+    if (btn) { btn.disabled = true; btn.textContent = "Updating the proposal…"; }
+    // ONLY FROM THE SERVER'S COPY, OR FROM THAT COPY PLUS CHANGES WHOSE SAVE NEVER LANDED. What
+    // this page composes from is the blob it was loaded with (TW.bootDigest), and it saves the
+    // whole of it: at Continue, and first as it loads (rebuildPricing's setState, 2.5 s later).
+    // So this is asked AT ONCE, before that first save can land and make the two copies equal.
+    // Asked after the template settled, "equal now" read as a yes, and that is how the page's own
+    // load save put an older copy over a colleague's $15,000 revision and was then built from
+    // (review of fix 4, 2026-09-25). The server holding what this page loaded is one yes; the
+    // server still holding what this browser last saw there (TW.bootSynced: nobody has saved it
+    // since) is the other. Anything else goes back to the Files page at once, which is where a copy
+    // that is not the server's is settled with the estimator.
+    //
+    // AND ASKED AGAIN AT EVERY SAVE (TW.holdServerSaves). A yes as the page opened said nothing
+    // about the 20 s after it: a colleague's Continue landing while the template loaded was put
+    // back to this page's copy by the load save, or by Continue, and the next Send froze the older
+    // document; and the cover letter's editor queues a save of its own when its template arrives,
+    // after a one-off cancel had run (review of fix 4, round 2). So nothing this page saves leaves
+    // it until the same question, asked again at that moment, is still a yes.
+    //
+    // GOING BACK GIVES BACK what this page wrote and never sent (TW.dropHeldChanges): its pricing
+    // rebuild, the letter's version, the document its Continue composed — all built on a copy the
+    // server no longer holds. Left in place, they read as changes that never reached the server:
+    // the Files page showed the "changed somewhere else" card for changes nobody made, and opening
+    // another project PUT them over the colleague's revision (review of fix 4, round 3). Never
+    // anything the estimator did here, which stays for the Files page to ask about.
+    let verdict = null;
+    let leaving = false;
+    let stopped = false;
+    const backToFiles = () => {
+      if (leaving) return;
+      leaving = true;
+      TW.dropHeldChanges();
+      window.location.replace(TW.withDraft("/done.html" + (q.get("files") === "1" ? "?files=1" : "")));
+    };
+    // The page's OWN save through the hold is the third yes: that copy is the one it put there, and
+    // a save of it being taken for a colleague's is what made the hold give way (TW.heldSaveDigest).
+    const ask = async () => {
+      const saved = await TW.readServerDraft();
+      if (!saved) return "unread";
+      const d = TW.draftDigest(saved);
+      const own = TW.heldSaveDigest();
+      return (d === TW.bootDigest() || d === TW.bootSynced() || (!!own && d === own))
+        ? "ok" : "not-the-saved-copy";
+    };
+    TW.holdServerSaves(async () => {
+      if (leaving) return false;
+      const v = await ask();
+      if (v === "not-the-saved-copy") backToFiles();
+      return v === "ok";
+    });
+    const asked = (async () => {
+      try { await TW.draftReady; } catch {}
+      try { if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready; } catch {}
+      if (TW.reloadPending && TW.reloadPending()) return;
+      verdict = await ask();
+      // Answered after the door stopped (a read slower than 20 s), it is not the last word: the
+      // stop asked again (releaseHeldSaves), and the page may already be the estimator's.
+      if (verdict === "not-the-saved-copy" && !stopped) backToFiles();
+    })();
+    const settled = Promise.all(
+      [TW.draftReady, window.TWAuth && window.TWAuth.ready, _firstDocLoad, _notesReady, asked]
+        .map((p) => Promise.resolve(p).catch(() => {})));
+    let timer = null;
+    const timedOut = await Promise.race([
+      settled.then(() => false),
+      new Promise((resolve) => { timer = setTimeout(() => resolve(true), 20000); }),
+    ]);
+    if (timer) clearTimeout(timer);
+    // initDraftSync found this browser holding ANOTHER project (a door reloaded after that one was
+    // opened in another tab, a restored tab, a pasted link) and is reloading onto this one. This
+    // page's `state` snapshot is that other project's, so building from it would put that project's
+    // name, scope and price into this one. The reload comes back through here and builds instead.
+    if (TW.reloadPending && TW.reloadPending()) return;
+    if (leaving) return;                                  // on its way back to the Files page
+    if (btn) { btn.disabled = false; btn.textContent = label; }
+    // Unasked (the 20 s ran out first) or unanswered is not a yes: the estimator is not told to
+    // press Continue, which would save this copy, until the server has said it may.
+    //
+    // AND THE PAGE IS THE ESTIMATOR'S FROM HERE (TW.releaseHeldSaves). It used to hold every save
+    // for as long as they worked on it, with nothing on screen to say so: no autosave, nothing as
+    // the tab closed, and the first Continue after any change on the server, even Troy marking the
+    // job Won, went back to a Files card whose one button dropped everything typed (review of fix
+    // 4, round 3). So the server is asked once more now; on a yes the page's copy is saved and it
+    // saves as every page does. Could it not be asked, the hold stays, and the note says so.
+    if (timedOut || !templateVersion || verdict !== "ok") {
+      stopped = true;
+      const freed = await TW.releaseHeldSaves();
+      if (leaving) return;                                // the server held another copy: gone back
+      repaintNote(freed
+        ? "The Files page needs this proposal rebuilt from your latest changes, and it could not be done for you."
+        : "The saved copy of this project could not be read, so the proposal was not rebuilt for you.",
+        freed ? "Check the document below, then press Continue to Done."
+              : "Check your connection, then reload this page. Until then, nothing you change on this page is saved.");
+      return;
+    }
+    await continueToDone(null);
+  }
+  composeForFiles();

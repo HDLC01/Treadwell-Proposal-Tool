@@ -26,6 +26,22 @@
     catch { return false; }
   })();
 
+  /** Did the estimator arrive here straight from the Proposal step's Continue, a moment ago?
+   *
+   *  continueToDone marks its navigation `composed=1`. The mark is taken off the address at once,
+   *  so a reload, a bookmark or a link copied out of the bar comes back through the door like any
+   *  other arrival. What it buys is a loop guard, nothing more: a page that has just been built
+   *  from the draft is never sent straight back to be built again. */
+  const composedHere = (() => {
+    try {
+      const u = new URL(location.href);
+      if (u.searchParams.get("composed") !== "1") return false;
+      u.searchParams.delete("composed");
+      history.replaceState(history.state, "", u.pathname + u.search + u.hash);
+      return true;
+    } catch { return false; }
+  })();
+
   /** The Total the document was actually filled with, off the payload being sent to /api/generate.
    *
    *  `values.total_formatted` and not `proposal_lump_sum`: this has to be the figure the DOCUMENT
@@ -113,7 +129,93 @@
   // files-mode can't POST /api/generate from the previous draft's data.
   (async () => {
     try { await (TW.draftReady || Promise.resolve()); } catch {}
-    const st = TW.getState();
+    // initDraftSync has adopted this project's own copy and is reloading the page onto it, so
+    // everything below would run on the blob it just replaced. The reload decides instead.
+    if (TW.reloadPending && TW.reloadPending()) return;
+    let st = TW.getState();
+    // ── THE DOOR ────────────────────────────────────────────────────────────────────────────
+    // Hanz, 2026-09-25: "Clicking to Done should regenerate and make the proposal correctly."
+    // Everything on this page — Download, Send, the customer's PDF — is built from the SERVER's
+    // saved `proposal_payload`, and only the Proposal step's Continue composes one. Every other
+    // way in (the Files pill from Intake or Estimate, the Polish beta's Files link, View files off
+    // the board, a reload, a typed URL) used to show the document from the LAST Continue,
+    // whatever had changed since: a texture picked on the Estimate step, a re-price, a note, the
+    // tax mode, a base flip. So the page asks first whether the document is the one the draft
+    // describes now (TW.documentHolds: the key TW.composeKey stamps at Continue), and when it is
+    // not, sends the estimator through the Proposal step to have it built (proposal-review.js
+    // composeForFiles), which comes straight back here. REPLACE, so Back from here is not a page
+    // that bounces forward again.
+    //
+    // ASKED OF THE SERVER'S COPY, because that is what Download and Send render — and never
+    // answered by building from this browser's copy when that is older. initDraftSync does not
+    // re-read a blob already stamped for this draft, so a colleague's revision, Troy marking the
+    // job Won or an Estimate-step edit on another machine never reaches it; composing from it and
+    // saving would put the old copy back over all of that. TW.reconcileWithServer reads the
+    // server first: a local copy with nothing the server lacks is REPLACED by the server's, and
+    // the question is then asked of that. A local copy that is the server's plus changes whose save
+    // never landed ("ahead": nobody has saved the server's since) goes through the door, which
+    // builds it and saves it — that loses nothing of anyone's. A current document is left alone
+    // and nothing is written. `composedHere` is the loop guard — a page built from this draft a
+    // moment ago is never sent round again, and a send is still checked against the key (see the
+    // Send button).
+    //
+    // AND NEVER THROUGH THE DOOR ON A COPY THAT IS NOT KNOWN TO BE SAFE TO SAVE. The Proposal step
+    // saves the page's whole copy as it loads (its pricing rebuild), so sending a copy there is
+    // saving it. Review of fix 4, 2026-09-25: Kyle's note went to the server as his tab closed,
+    // with nobody left to record that it had; RJ then re-priced to $15,000 and Troy marked the job
+    // Won; Kyle's View files found his copy "kept", sent it through the door, and the Proposal
+    // step's load put his $10,000 copy back over both. A copy where both sides have moved
+    // ("kept"), one with no record to tell ("unknown"), or one the server could not be asked about,
+    // stops here and says so. The one way on from "kept" or "unknown" is the estimator's own choice
+    // to load the saved copy.
+    if (st.project_name && !composedHere) {
+      const toDoor = () => location.replace(TW.withDraft("/proposal-review.html?compose=files"
+                                                         + (filesMode ? "&files=1" : "")));
+      const seen = await TW.reconcileWithServer();
+      if (seen.status === "adopted") {
+        // The server's copy now stands in this browser. Its document is current, or it goes
+        // through the door; either way this page's module-top snapshot is the old copy, so it is
+        // never shown — a current one is shown by a reload.
+        if (TW.documentHolds(seen.server)) location.reload(); else toDoor();
+        return;
+      }
+      // "unknown" is the same stop, in words that claim no more than is known: this browser has no
+      // record of the saved copy (every browser's on deploy day), so it cannot tell an older copy
+      // from one holding a save that never landed. Taking the server's copy unasked dropped such an
+      // edit with nothing on screen (review of fix 4, round 3).
+      if (seen.status === "kept" || seen.status === "unknown") {
+        const known = seen.status === "kept";
+        showDoorStop(known ? "This project was changed somewhere else"
+                           : "This browser's copy doesn't match the saved project",
+          known
+            ? "This browser has changes to it that never reached the server, and the saved project has "
+              + "changed since, maybe on someone else's computer. Nothing was rebuilt or saved. Load the "
+              + "saved copy to carry on from it. Changes that were only in this browser are dropped."
+            : "This browser holds a copy of this project that is not the one saved on the server, and "
+              + "it can't tell which of the two is newer. Nothing was rebuilt or saved. Load the saved "
+              + "copy to carry on from it. Anything that was only in this browser is dropped.",
+          "Load the saved copy",
+          async () => {
+            if (await TW.useServerCopy()) { location.reload(); return; }
+            const p = emptyEl.querySelector(".lede");   // a button that does nothing is no way on
+            if (p) p.textContent = "The saved copy could not be read, so nothing changed. Check "
+                                 + "your connection, then press Load the saved copy again.";
+          });
+        return;
+      }
+      // "unreachable" stops whatever this browser's own copy says. Carrying on from it was going on
+      // from a copy nobody had checked: the files shown are the server's, and this page's copy
+      // could be a day old (review of fix 4, round 2).
+      if (seen.status === "unreachable") {
+        showDoorStop("Couldn't check the saved project",
+          "The server could not be reached, so this page could not check its files against your "
+          + "latest changes. Check your connection, then reload this page.",
+          "Reload this page", () => location.reload());
+        return;
+      }
+      if (seen.status === "ahead" || !TW.documentHolds(seen.server)) { toDoor(); return; }
+      st = TW.getState();
+    }
     const res = st.generate_result;
     // Decided HERE rather than in proposal-review's Continue, where the cover-letter version of
     // this lives. Every route into this page has to be covered — the Files step pill, "View
@@ -122,7 +224,7 @@
     if (filesMode && (st.proposal_payload || st.project_name || st.job_name)) {
       viewFiles();                       // generate fresh + show downloads
     } else if (res && !stale) {
-      showPostGenerate(res);             // already generated — show download buttons
+      showPostGenerate(res);             // already generated — show the buttons, which build fresh
     } else if (st.proposal_payload && st.project_name) {
       showPreGenerate();                 // ready to generate — show review card
     } else if (res) {
@@ -132,6 +234,21 @@
     }
   })();
 
+  /** The door stopping: the empty-state card says why, and its one button is the way on. Nothing
+   *  is built, shown or written — until the estimator presses it. */
+  function showDoorStop(title, lede, label, onPress) {
+    emptyEl.style.display = "";
+    const h = emptyEl.querySelector("h1");
+    if (h) h.textContent = title;
+    const p = emptyEl.querySelector(".lede");
+    if (p) p.textContent = lede;
+    const a = emptyEl.querySelector(".actions a");
+    if (a) {
+      a.textContent = label;
+      a.addEventListener("click", (e) => { e.preventDefault(); onPress(); });
+    }
+  }
+
   // Generate the files for a saved project and jump straight to downloads.
   async function viewFiles() {
     emptyEl.style.display = "";
@@ -139,67 +256,10 @@
     const lede = emptyEl.querySelector(".lede");
     if (lede) lede.textContent = "Generating the estimate, proposal, and PDF for this project — a few seconds.";
     // viewFiles auto-runs on load; auth.js sets the bearer token asynchronously,
-    // so wait for it before the (auth-gated) /api/generate or we'd 401.
+    // so wait for it before the (auth-gated) render or we'd 401.
     try { if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready; } catch {}
-    const s = TW.getState();
-    // Prefer the exact payload this project was generated from; otherwise
-    // rebuild one from the saved values (backend backfills job_name etc.).
-    const pp = s.proposal_payload;
-    // The saved box layout belongs to ONE template file. Carried only when it was captured on the
-    // template this rebuild renders: a stamp is a content hash now, but one saved before that is a
-    // bare mtime that names no file, so a layout from another template would replay by id.
-    const _boxMeta = s.box_overrides_meta || {};
-    const _boxesFitThisTemplate = _boxMeta.work_type === (s.work_type || "epoxy")
-      && _boxMeta.audience === (s.audience || "Direct");
-    const payload = (pp && pp.values) ? pp : {
-      work_type: s.work_type || "epoxy",
-      audience:  s.audience  || "Direct",
-      values: s,
-      cell_values: s.cell_values || {},
-      extras: Array.isArray(s.extras) ? s.extras : [],
-      price_lines: Array.isArray(s.price_lines) ? s.price_lines : [],
-      computed_bid: s.computed_bid || null,
-      alternate_computed_bid: s.alternate_computed_bid || null,
-      alternate_label: (s.alternate && s.alternate.label) || s.alternate_label || "",
-      // Mirror the user's worksheet copies + tab renames + order into the .xlsx.
-      tab_copies: Array.isArray(s.tab_copies) ? s.tab_copies : [],
-      tab_labels: (s.tab_labels && typeof s.tab_labels === "object") ? s.tab_labels : {},
-      tab_order: Array.isArray(s.tab_order) ? s.tab_order : [],
-      // Structural edits + per-cell lock overrides into the .xlsx.
-      tab_structs: Array.isArray(s.tab_structs) ? s.tab_structs : [],
-      lock_overrides: (s.lock_overrides && typeof s.lock_overrides === "object") ? s.lock_overrides : {},
-      // Editable NOTES (one bullet per line) — carry them so the "View files"
-      // rebuild keeps the estimator's notes AND the substituted phase-price
-      // bullet (empty → backend uses the standard list, phase price from
-      // values.phase_price). NOTE: this fallback still drops paragraph_overrides
-      // / remodel / rooms — pre-existing lossiness; the primary path
-      // (proposal_payload above) carries them all.
-      notes: String(s.notes_text || "").replace(/\n+$/, "").split("\n").map(t => t.trim()),
-      system_overrides: Array.isArray(s.system_overrides) ? s.system_overrides : [],
-      // Boxes the estimator dragged or resized. Carried here as well as on the primary path,
-      // because this rebuild is what "View files" re-generates from: without it, a project whose
-      // boxes were laid out by hand would come back with them at the template's size, and the
-      // second download would disagree with the first one the estimator already checked.
-      // The version comes along so the backend can still drop a layout captured against an
-      // older .docx — an empty template_version means "legacy caller, apply unchanged", which is
-      // exactly the wrong answer for ids that may have shifted.
-      box_overrides: (_boxesFitThisTemplate && s.box_overrides && typeof s.box_overrides === "object"
-                      && !Array.isArray(s.box_overrides)) ? s.box_overrides : {},
-      template_version: _boxesFitThisTemplate ? String(_boxMeta.template_version || "") : "",
-      // Doc-editor per-line PRICE display overrides (base amount / tax phrase,
-      // option + manual line label/amount). Display-only — never affects pricing.
-      price_overrides: (s.price_overrides && typeof s.price_overrides === "object") ? s.price_overrides : {},
-      // The optional cover letter, carried here for the same reason box_overrides is: this
-      // rebuild is what "View files" regenerates from, and without it a project the estimator
-      // gave a letter would come back with the proposal alone — page 1 missing from the second
-      // download, disagreeing with the first one they already checked. Since 2026-09-09 the flag
-      // is the whole feature (the editor is gone), so it is read straight off the draft rather
-      // than through a helper on window.
-      cover_letter_enabled: !!s.cover_letter_enabled,
-    };
     try {
-      const out = await TW.postJSON("/api/generate", payload);
-      TW.setState({ generate_result: out, generated_lump_sum: builtAt(payload) });
+      const out = await freshDocuments();
       emptyEl.style.display = "none";
       showPostGenerate(out);
     } catch (err) {
@@ -207,6 +267,71 @@
       if (lede) lede.textContent = "Generating failed: " + (err.message || err) +
         ". Try “Open / Edit” from Projects instead.";
     }
+  }
+
+  /** The document the estimator CHECKED: the `render_id` of the last file downloaded on this page.
+   *
+   *  Send hands it back as `document_render_id`, and the server refuses the send unless the
+   *  document it is about to freeze has the same key — so a colleague's save, an older copy of
+   *  this page written back, or a deploy landing between the Download and the Send can no longer
+   *  freeze a document nobody looked at. Held in memory, for this page view only: a download is a
+   *  check of what was on screen then, and a key remembered across visits would refuse next
+   *  week's revised send for having changed, which is the point of revising. Empty until a
+   *  download succeeds, and then Send carries nothing and is checked as it always was. */
+  const checkedDocument = { renderId: "" };
+
+  /** THE FILES, BUILT WHEN THEY ARE ASKED FOR, FROM THE SAVED DRAFT.
+   *
+   *  Hanz, 2026-09-25: "Sending out the proposal should be the same PDF from the download button
+   *  in the last page." It was not. Download fetched the token kept in `generate_result` — files
+   *  built from whatever payload the last generate had been handed, alive in server memory for up
+   *  to an hour — while Send pinned the SAVED `proposal_payload`. Change the texture, the tax mode
+   *  or a note after a generate, press Continue, and the estimator downloaded and checked one
+   *  document while the customer was sent another.
+   *
+   *  So every button on this page asks for its files fresh: flush this page's pending save, then
+   *  POST /api/draft/{id}/documents, which renders the STORE'S copy of `proposal_payload` through
+   *  the same server function Send uses. What ties a Download to the Send after it is the
+   *  `render_id` the answer carries (which payload, templates and code built the file): downloadAs
+   *  keeps it in `checkedDocument`, Send hands it back, and the server refuses a send whose
+   *  document no longer has that key. Nothing on this page downloads from `generate_result`.
+   *
+   *  AND NOTHING ON THIS PATH WRITES THE DRAFT. This page's copy of the draft can be OLDER than
+   *  the server's — initDraftSync does not re-read a blob already stamped for this draft, so a
+   *  colleague's Continue on another computer never reaches it — and TW.setState PUTs the whole
+   *  blob. Recording the build with setState therefore wrote the colleague's revision away on
+   *  every Download press. The server records `has_files` itself (/documents), and this page only
+   *  remembers the build locally. The card's figure is the one the SERVER rendered
+   *  (`document_total`), not this page's copy of it.
+   *
+   *  NO SAVED PAYLOAD, NO FILES. There used to be a second builder here for a draft never taken
+   *  through the Proposal step's Continue: it posted the draft's own fields to /api/generate, and
+   *  its own comment said it "still drops paragraph_overrides / remodel / rooms". That was a way
+   *  to put a document in front of the estimator — and, through the files it recorded, in front of
+   *  a customer — that no Proposal step had ever composed. The page's door (the mode decider)
+   *  sends a draft with no document through the Proposal step first, so a press that still finds
+   *  none refuses instead. A draft with no id (never saved) has nothing for the server to read,
+   *  so its composed payload itself goes to /api/generate. */
+  async function freshDocuments() {
+    if (!await TW.flushState()) {
+      throw new Error("Couldn't save your latest changes, so the files were not built — "
+                      + "check your connection and try again.");
+    }
+    const st = TW.getState() || {};
+    const draftId = TW.getDraftId();
+    const pp = st.proposal_payload;
+    if (!pp || typeof pp !== "object" || !pp.values || typeof pp.values !== "object") {
+      throw new Error("This proposal hasn't been put together yet. Open the Proposal step and "
+                      + "press Continue to Done, then come back here.");
+    }
+    if (draftId) {
+      const out = await TW.postJSON("/api/draft/" + encodeURIComponent(draftId) + "/documents", {});
+      TW.setLocalState({ generate_result: out, generated_lump_sum: (out && out.document_total) || null });
+      return out;
+    }
+    const out = await TW.postJSON("/api/generate", pp);
+    TW.setState({ generate_result: out, generated_lump_sum: builtAt(pp) });
+    return out;
   }
 
   function fmtUSD(n) {
@@ -292,8 +417,9 @@
 
   // ── Sent versions (revisions) ───────────────────────────────────────────────
   // Each send snapshots the estimate, so a revised price reuses this project rather
-  // than forcing a duplicate — and every version stays downloadable. Documents are
-  // rebuilt from the snapshot on demand (nothing binary is stored per revision).
+  // than forcing a duplicate — and every version stays downloadable. A revision sent
+  // since 2026-09-25 hands back the proposal files it was SENT with (stored at send
+  // time); an older one, and every revision's workbook, is rebuilt from the snapshot.
   async function mountRevisions() {
     const box = document.getElementById("revisions-box");
     const list = document.getElementById("revisions-list");
@@ -352,8 +478,8 @@
     }
   }
 
-  /** Rebuild one revision's documents and download the requested one. Separate
-   *  from the main downloadAs(): that one reads generate_result off the live draft,
+  /** Fetch one revision's documents and download the requested one. Separate
+   *  from the main downloadAs(): that one renders the LIVE draft's saved payload,
    *  which is exactly what an old revision must NOT be rendered from. */
   async function downloadRevision(revNo, kind, button) {
     const draftId = TW.getDraftId();
@@ -1140,8 +1266,9 @@
     btn.disabled = true;
     btn.textContent = "Generating…";
     try {
-      const out = await TW.postJSON("/api/generate", state.proposal_payload);
-      TW.setState({ generate_result: out, generated_lump_sum: builtAt(state.proposal_payload) });
+      // The SAVED payload, through the render Send uses — not the module-top snapshot of it, which
+      // is whatever this page loaded with (see freshDocuments).
+      const out = await freshDocuments();
       // Swap views — pre → post
       preEl.style.display = "none";
       showPostGenerate(out);
@@ -1175,21 +1302,23 @@
       const orig = button.textContent;
       button.disabled = true;
       button.textContent = "Downloading…";
-      const latestUrl = () => TW.absoluteUrl(TW.getState().generate_result[urlKey]);
       try {
+        // BUILT NOW, from the saved draft, through the render Send uses — never a token kept from
+        // an earlier build. There used to be a 404 self-heal here that regenerated from the
+        // module-top snapshot of the payload after a restart expired the kept token, so a download
+        // could come from either of two payloads depending on server uptime. A token minted a
+        // moment ago has nothing to heal.
+        const out = await freshDocuments();
+        paintLumpSum();
+        const url = out && out[urlKey];
+        if (!url) throw new Error("That file isn't available for this project.");
         // Downloads now require the Supabase bearer (no longer a public
         // capability URL) — TW.authHeaders() carries Authorization: Bearer.
-        let resp = await fetch(latestUrl(), { headers: TW.authHeaders() });
-        // Download links live in server memory; a restart (deploy/crash/reboot)
-        // expires them with a 404. Self-heal: re-generate fresh files from the
-        // stashed payload, then retry — invisible to the user (no dead-end).
-        if (resp.status === 404 && state.proposal_payload) {
-          button.textContent = "Refreshing…";
-          const fresh = await TW.postJSON("/api/generate", state.proposal_payload);
-          TW.setState({ generate_result: fresh });
-          resp = await fetch(latestUrl(), { headers: TW.authHeaders() });
-        }
+        const resp = await fetch(TW.absoluteUrl(url), { headers: TW.authHeaders() });
         if (!resp.ok) throw new Error(resp.statusText || ("HTTP " + resp.status));
+        // This is the document the estimator is about to read, so it is the one Send must freeze.
+        // Recorded only once the file itself came back: a failed fetch checked nothing.
+        checkedDocument.renderId = (out && out.render_id) || "";
         // Force a generic type so the browser DOWNLOADS the file under our
         // `a.download` name. If we kept the real type (application/pdf), Chrome's
         // inline PDF viewer hijacks the click, ignores the filename, and saves
@@ -1379,6 +1508,52 @@
             throw new Error("Couldn't save your latest changes, so nothing was sent — "
                             + "check your connection and try again.");
           }
+          // ── …OR IF THE DRAFT HAS MOVED SINCE THIS PAGE BUILT ITS DOCUMENT ───────────────
+          // The door (the mode decider) checked the document against the draft when the page
+          // opened, and nothing this page writes is an input to it (TW.composeKey). So a key
+          // that no longer matches means the draft was changed somewhere else: a texture picked
+          // on the Estimate step in another tab, then Send here, froze the old texture, because
+          // the drift gate below compares only the price, the base and the number of options.
+          //
+          // Asked of BOTH copies. This browser's, for another tab whose save has not landed yet;
+          // and the SERVER's, because that is the one the publish freezes — a colleague's
+          // Estimate-step edit on another machine moves the server's draft and never this page's,
+          // so a check of this browser's copy alone passed it and sent the old document. Nothing
+          // is posted. A reload goes back through the door, which builds the document from the
+          // draft as it now stands.
+          //
+          // AND THE TWO MUST BE ONE COPY (TW.matchesServer). Review of fix 4: Kyle's page held
+          // his $10,000 copy, keyed by his own Continue; RJ revised to $15,000 and pressed Continue
+          // on his machine, so the server's copy was keyed too. Both held, the send went, and the
+          // customer was sent RJ's document from a page showing Kyle's — and the save this handler
+          // makes after a send then PUT Kyle's whole copy back over RJ's. Two copies that differ
+          // mean this page is not showing what would be frozen, so nothing is sent.
+          //
+          // AND THE PUBLISH IS HELD TO THE COPY CHECKED HERE. Between this read and the publish the
+          // page waits (encoding the attachments, the network), and the server reloads the draft
+          // when the publish arrives: a colleague's Continue landing in that gap was what the
+          // customer got, while this page said Sent (review of fix 4, round 2). So the read's
+          // `version` — when the server last stored the draft — travels with the publish as
+          // `draft_version`, and the server refuses a draft stored again since.
+          const _now = TW.getState() || {};
+          const _row = _now.project_name ? await TW.readServerRow() : null;
+          const _saved = _row ? _row.data : null;
+          const _moved = _now.project_name
+            && (!TW.documentHolds(_now)
+                || (_saved && (!TW.documentHolds(_saved) || !TW.matchesServer(_saved))));
+          if (_moved || (_now.project_name && !_saved)) {
+            portalBtn.disabled = false; portalBtn.textContent = orig;
+            if (portalRecip.setBusy) portalRecip.setBusy(false);
+            if (portalRecip.setErr) {
+              portalRecip.setErr(_moved
+                ? "This proposal changed after this page opened (in another tab, or by someone "
+                  + "else), so nothing was sent. Reload this page — the files are rebuilt from the "
+                  + "latest changes — check them, then send."
+                : "Couldn't check the saved proposal, so nothing was sent — check your connection "
+                  + "and try again.");
+            }
+            return;                            // NOTHING is posted. No portal row, no email.
+          }
           // ── THE SEND STOPS HERE IF THE PDF WOULD BE THE OLD ONE ──────────────────────
           // Checked AFTER the flush and BEFORE the publish, and that order is the whole
           // trick. The flush has just made this browser's blob and the server's copy the
@@ -1454,21 +1629,39 @@
                                         // from the standing roster, so an untouched send carries
                                         // nothing and behaves exactly as it always has.
                                         notify_add: notifyPick.adds(),
-                                        notify_mute: notifyPick.mutes() });
+                                        notify_mute: notifyPick.mutes(),
+                                        // The document the estimator downloaded and checked on
+                                        // this page, if any. The server refuses the send when
+                                        // the one it would freeze is not that document (see
+                                        // checkedDocument). Absent, it is not asked.
+                                        document_render_id: checkedDocument.renderId || undefined,
+                                        // When the server last stored the copy checked above.
+                                        // The server refuses a draft stored again since.
+                                        draft_version: (_row && _row.version) || undefined });
           if (j && j.ok === false) throw new Error(j.error || j.detail || "Send failed.");
           // Only now. Clearing before the request would lose the files on a failed send and leave
           // the estimator re-picking them with no idea they had gone.
           sendAtts.clear();
-          // Remember both for a re-send. require_deposit persists so a deliberate
-          // GC-with-deposit (or Direct-without) choice survives a reload instead of
-          // snapping back to the audience default.
-          TW.setState({ portal_message: message, require_deposit: requireDeposit,
-                        assigned_estimator: assignedEstimator });
-          // Persist only the EXTRAS (never the intake row) so they pre-fill next time.
-          // The intake is restored from contact_email on the next mount; persisting it
-          // here would re-add an edited/retargeted intake as a stray extra on reload.
-          const persistExtras = emails.filter(e => !portalRecip.hasIntake || e.toLowerCase() !== String(portalRecip.intake || "").toLowerCase());
-          TW.setState({ portal_emails: persistExtras });
+          // Remember both for a re-send — ONLY while the server still holds the copy this send
+          // was checked against. TW.setState PUTs this page's whole copy, and the publish takes
+          // seconds: a colleague's save landing inside them would be put back to this page's
+          // copy. When the server has moved, nothing is remembered (a convenience lost), and the
+          // next arrival here goes through the door onto the server's copy.
+          const _after = await TW.readServerDraft();
+          if (_after && TW.matchesServer(_after)) {
+            // require_deposit persists so a deliberate GC-with-deposit (or Direct-without) choice
+            // survives a reload instead of snapping back to the audience default.
+            // (assigned_estimator is this browser's copy only: the server keeps its own value on
+            // every save, and the publish has just recorded it on the draft.)
+            TW.setState({ portal_message: message, require_deposit: requireDeposit,
+                          assigned_estimator: assignedEstimator });
+            // Persist only the EXTRAS (never the intake row) so they pre-fill next time.
+            // The intake is restored from contact_email on the next mount; persisting it
+            // here would re-add an edited/retargeted intake as a stray extra on reload.
+            const persistExtras = emails.filter(e => !portalRecip.hasIntake || e.toLowerCase() !== String(portalRecip.intake || "").toLowerCase());
+            TW.setState({ portal_emails: persistExtras });
+            TW.flushState();          // sent now, not 2.5 s later, while the check above still holds
+          }
           if (portalRecip.setBusy) portalRecip.setBusy(false);
           portalBtn.textContent = "\u2713 Sent to customer portal";
           mountRevisions();   // the send just created a new version \u2014 show it

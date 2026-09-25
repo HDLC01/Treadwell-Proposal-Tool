@@ -178,7 +178,10 @@ def test_the_refresh_is_exported_and_cannot_write_over_local_work():
     # Only the named keys are copied, and only when the server actually has them.
     assert "hasOwnProperty.call(data, k)" in body, (
         "a key the server has never set would be merged as undefined")
-    assert "if (moved.length) setState(patch)" in body, (
+    # setLocalState, never setState: these values came from the server, and a setState PUTs this
+    # page's whole copy, which can be older than the server's (review of fix 4, round 2; executed
+    # in files-door-harness.js S3, test_files_door.py).
+    assert "if (moved.length) setLocalState(patch)" in body, (
         "state is written unconditionally, which marks the blob dirty on every page load")
     assert "isUnverified(id)" in body, (
         "a draft we could not read is re-read anyway, risking a merge over unsaved local work")

@@ -418,51 +418,16 @@ def test_the_payload_carries_box_overrides(ran):
         "the document")
 
 
-def test_the_view_files_rebuild_also_carries_the_layout():
-    """done.js rebuilds a payload from raw state when `proposal_payload` is missing — the path
-    "View files" re-generates an already-generated project through. Without the layout there, the
-    second download would put the boxes back at the template's size and disagree with the first
-    one the estimator already checked.
-
-    The template_version rides along on purpose: an empty one means "legacy caller, apply
-    unchanged", which is the wrong answer for box ids that may have shifted."""
-    done = (FRONTEND / "js" / "done.js").read_text(encoding="utf-8")
-    i = done.index("const payload = (pp && pp.values) ? pp : {")
-    block = done[i:done.index("};", i)]
-    assert re.search(r"(?m)^\s*box_overrides: ", block), (
-        "the View-files rebuild drops the dragged box layout")
-    assert "template_version:" in block, (
-        "the rebuild sends a layout with no version, so a stale one cannot be dropped")
-
-
-@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
-def test_the_view_files_rebuild_never_carries_another_templates_layout():
-    """RUN, not grepped: the real payload literal out of done.js, over two drafts. A stamp saved
-    before versions became content hashes is a bare mtime that names no file, so the backend guard
-    cannot tell an epoxy layout from a polish one. The rebuild renders `s.work_type`'s template,
-    so a layout captured on another template must not ride along with it."""
-    done = (FRONTEND / "js" / "done.js").read_text(encoding="utf-8")
-    start = done.index("    const _boxMeta = s.box_overrides_meta || {};")
-    lit = done.index("const payload = (pp && pp.values) ? pp : {")
-    code = done[start:done.index("};", lit) + 2]
-    draft = {"work_type": "epoxy", "audience": "Direct", "box_overrides": {"3": {"h_pt": 300}}}
-    same = dict(draft, box_overrides_meta={"template_version": "1788531288000000000",
-                                           "work_type": "epoxy", "audience": "Direct"})
-    other = dict(draft, box_overrides_meta={"template_version": "1788531288000000000",
-                                            "work_type": "polish", "audience": "Direct"})
-    other_aud = dict(draft, box_overrides_meta={"template_version": "1788531288000000000",
-                                                "work_type": "epoxy", "audience": "GC"})
-    script = ("function run(s) { const pp = null;\n" + code +
-              "\n return { box: payload.box_overrides, tv: payload.template_version }; }\n"
-              "console.log(JSON.stringify([run(%s), run(%s), run(%s)]));"
-              % (json.dumps(same), json.dumps(other), json.dumps(other_aud)))
-    proc = subprocess.run(["node", "-e", script], capture_output=True, text=True,
-                          encoding="utf-8", timeout=60)
-    assert proc.returncode == 0, proc.stderr
-    got_same, got_other, got_other_aud = json.loads(proc.stdout.strip())
-    assert got_same == {"box": {"3": {"h_pt": 300}}, "tv": "1788531288000000000"}
-    assert got_other == {"box": {}, "tv": ""}, "a polish layout rode along onto the epoxy rebuild"
-    assert got_other_aud == {"box": {}, "tv": ""}, "a GC layout rode along onto the Direct rebuild"
+# "View files" USED TO rebuild a payload of its own out of the draft's top-level fields when there
+# was no `proposal_payload` (done.js `payloadFromDraft`), and two tests here pinned that the
+# rebuild carried the dragged layout, and only one captured on the template it rendered. That
+# rebuild is deleted (2026-09-25, fix 4): its own comment said it dropped the paragraph edits, the
+# remodel line and the rooms, and it was a way to build a document no Proposal step had composed.
+# A draft whose document is not current now goes through the Proposal step's Continue — the Files
+# page's door — so the layout reaches View files the one way it reaches every document: the
+# `box_overrides: boxOverridesOut` line above, collected by the editor for the template on screen.
+# Executed in test_files_door.py (the door) and test_files_download_fresh.py
+# (test_a_draft_with_no_document_builds_nothing_and_writes_nothing).
 
 
 def test_both_writers_file_the_layout_under_this_template(ran):

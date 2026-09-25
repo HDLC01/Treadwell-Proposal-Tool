@@ -415,23 +415,34 @@
         // Remember it locally too, so returning to this page shows the green
         // state immediately (the backend also persisted it on the draft).
         //
+        // IN THIS BROWSER ONLY (setLocalState): the server has already recorded it on
+        // its own copy of the draft (main.py api_to_dropbox), and a setState would PUT
+        // this page's WHOLE copy to say so again. That copy can be older than the
+        // server's — a Files page left open while a colleague revised the project on
+        // another machine — and the PUT put it back over their revision, which the
+        // next Send then froze (review of fix 4, round 2).
+        //
         // EVERY key the server put on `dropbox_result` has to be mirrored here, not
-        // just the ones this page renders. shared.js PUTs the WHOLE state blob and
-        // drafts.save_draft replaces `data` outright (only _SERVER_OWNED_KEYS survive),
-        // so a partial object here DELETES the rest from the draft on the next autosave.
-        // `written_paths` is the one that costs: backend/main.py reads it back on the
-        // NEXT filing to know which files in Kyle's folder are ours to overwrite —
-        // without it our own estimate sheet looks like a human's and gets saved beside
-        // itself as "… (1).xlsx", every single send.
+        // just the ones this page renders. shared.js PUTs the WHOLE state blob on this
+        // page's next real edit and drafts.save_draft replaces `data` outright (only
+        // _SERVER_OWNED_KEYS survive), so a partial object here DELETES the rest from
+        // the draft then. `written_paths` is the one that costs: backend/main.py reads
+        // it back on the NEXT filing to know which files in Kyle's folder are ours to
+        // overwrite — without it our own estimate sheet looks like a human's and gets
+        // saved beside itself as "… (1).xlsx", every single send.
+        //
+        // `alreadyOnServer`: a copy in step with the server stays in step. Without it the
+        // record of what the server holds was left behind, and opening another project PUT
+        // this copy back over a colleague's later revision (review of fix 4, round 3).
         try {
-          TW.setState({ dropbox_result: {
+          TW.setLocalState({ dropbox_result: {
             destination: dest.value,
             folder_owner: ownerValue(),
             folder_path: j.folder_path || chosenPath, folder_url: j.folder_url,
             xlsx_url: j.xlsx_url, docx_url: j.docx_url, pdf_url: j.pdf_url,
             existing: !!j.existing,
             written_paths: Array.isArray(j.written_paths) ? j.written_paths : [],
-            renamed: Array.isArray(j.renamed) ? j.renamed : [] } });
+            renamed: Array.isArray(j.renamed) ? j.renamed : [] } }, { alreadyOnServer: true });
         } catch {}
       } catch (err) {
         result.style.display = "";

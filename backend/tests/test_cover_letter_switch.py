@@ -797,13 +797,17 @@ def test_the_portal_is_told_the_proposal_has_a_letter():
     # refused-save gate sits in exactly that gap, pushing it to 4572 and failing a test whose
     # CLAIM was still true. Both strings are unique in the file, so comparing their positions says
     # precisely what is meant and nothing more.
-    assert DONE_JS.count("await TW.flushState()") == 1, (
-        "a second flush site appeared — position alone no longer says which one runs first")
+    # WITHIN THE SEND HANDLER. The downloads flush too since 2026-09-25 (freshDocuments), so a
+    # whole-file count would name the wrong flush; the one that matters is the one between this
+    # button's click handler opening and its publish call.
     assert DONE_JS.count("/api/portal/publish") == 1, (
         "a second publish site appeared — this test is now checking the wrong one")
-    assert DONE_JS.index("await TW.flushState()") < m.start(), (
-        "the publish call moved ahead of the flush — a fresh TW.getState() read here would no "
-        "longer be guaranteed to match what create_revision is about to pin")
+    handler = DONE_JS.find('portalBtn.addEventListener("click"')
+    assert 0 <= handler < m.start(), "the Send handler moved — re-derive this check"
+    assert DONE_JS.count("await TW.flushState()", handler, m.start()) == 1, (
+        "the publish call is no longer preceded by exactly one flush inside the Send handler — a "
+        "fresh TW.getState() read here would no longer be guaranteed to match what "
+        "create_revision is about to pin")
     # The value, not just the key. `generate_result` / its download url would be the stale copy.
     src = re.search(r"const hasCoverLetter = [^;]+;", DONE_JS, re.S)
     assert src, "hasCoverLetter is not derived — the key may be hard-coded"
@@ -825,17 +829,12 @@ def test_the_portal_is_told_the_proposal_has_a_letter():
         "generate_result — which is how the portal came to disagree with the pinned snapshot")
 
 
-def test_the_files_page_rebuild_carries_the_letter_too():
-    """"View files" regenerates from a payload it rebuilds itself. Leave the letter out of it and a
-    project that had one comes back with page 1 missing — the second download disagreeing with the
-    first one the estimator already checked, and no way to see which is right without opening both.
-
-    Ported from test_cover_letter_ui.py, which asserted `TWCoverLetter.payloadFields()` here."""
-    m = re.search(r"async function viewFiles\(\)(.*?)\n  \}\n", DONE_JS, re.S)
-    assert m, "viewFiles moved — re-derive this check"
-    assert "cover_letter_enabled" in m.group(1), (
-        "the Files-page rebuild drops cover_letter_enabled, so regenerating a project that has a "
-        "letter hands back a proposal without its first page")
+# "View files" USED TO rebuild a payload of its own here (`payloadFromDraft`), and a test pinned
+# that the rebuild carried `cover_letter_enabled`. That rebuild is gone: the Files page builds no
+# document of its own any more, and a draft whose document is not current goes through the Proposal
+# step's Continue (the Files page's door), whose `cover_letter_enabled` line is executed by the
+# scenarios above. The letter riding that door's rebuild is executed end to end in
+# test_files_door.py::test_view_files_stays_view_files_through_the_door.
 
 
 # ══ the editor is gone, and stays gone ════════════════════════════════════════

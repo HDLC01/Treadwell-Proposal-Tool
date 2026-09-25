@@ -2191,6 +2191,37 @@ def free_tax_rows(d: Document) -> dict[str, bool]:
     return out
 
 
+def _free_remodel_rows(d: Document) -> list:
+    """Every `<w:p>` in `d` that is a FREE remodel-tax row — the row `free_tax_rows` counts as
+    `"remodel"` — in every copy the file carries: the body, table cells, and each text box's
+    `w:txbxContent`, the VML `mc:Fallback` twin included (a copy left behind there is what an
+    older reader prints).
+
+    Same block stack as `iter_editable_blocks`, per container, so a row inside a `{{#…}}` region
+    is never taken: that region already answers for itself. Text is the paragraph's OWN text, so a
+    body paragraph that merely anchors a text box is never mistaken for a row inside it."""
+    body = d.element.body
+    containers = [body] + list(body.iter(qn("w:tc"))) + list(body.iter(qn("w:txbxContent")))
+    pats = _TAX_ROW_TOKENS["remodel"]
+    rows = []
+    for container in containers:
+        stack: list[str] = []
+        for child in list(container):
+            if child.tag != qn("w:p"):
+                continue
+            txt = _own_text(child)
+            start_m = BLOCK_START_RE.search(txt)
+            if start_m:
+                stack.append(start_m.group(1))
+            in_block = stack[-1] if stack else None
+            end_m = BLOCK_END_RE.search(txt)
+            if end_m and stack and stack[-1] == end_m.group(1):
+                stack.pop()
+            if in_block is None and any(p.search(txt) for p in pats):
+                rows.append(child)
+    return rows
+
+
 @lru_cache(maxsize=64)
 def _free_tax_rows_cached(path_str: str, _mtime_ns: int) -> tuple[bool, bool]:
     """Memoized on the file's mtime, exactly like main._template_proposal_version's
@@ -3434,6 +3465,7 @@ def fill_proposal(
     has_options: bool = False,
     paragraph_overrides: list[Mapping[str, Any]] | None = None,
     box_overrides: Mapping[str, Any] | None = None,
+    remodel_row: bool = True,
 ) -> bytes:
     """Open the matching template, substitute tokens, return docx bytes.
 
@@ -3460,6 +3492,10 @@ def fill_proposal(
     `paragraph_overrides` — free-text edits from the Proposal Review document
     editor (Phase 0, runs BEFORE block expansion — see `_apply_paragraph_overrides`
     for why ids must be resolved against the pristine template).
+
+    `remodel_row=False` takes out a remodel-tax row the template authors as a FREE
+    paragraph (the GC and Gyp files — see `free_tax_rows`), for a job with no remodel
+    tax. A `{{#remodel}}` region needs no flag: an empty `remodel` list strips it.
     """
     template_path = pick_template(work_type, audience)
     log.info("Filling proposal: work_type=%s audience=%s template=%s systems=%d price_lines=%d alt=%d",
@@ -3473,6 +3509,13 @@ def fill_proposal(
 
     d = docx.Document(str(template_path))
 
+    # The free remodel rows, found by their token on the PRISTINE template and taken out only
+    # after Phase 0: removing a paragraph before the editor's overrides are applied would shift
+    # every id after it, and finding them afterwards would miss a row the estimator rewrote. A row
+    # of that kind is gone when there is no remodel tax, whatever it says — the same as the Direct
+    # files' {{#remodel}} region, which no edit can keep either.
+    _no_remodel_rows = [] if remodel_row else _free_remodel_rows(d)
+
     # Phase 0 — apply the document editor's paragraph overrides FIRST, against
     # the pristine (just-opened, unexpanded) template — the same document
     # `iter_editable_blocks` walked to hand the editor its ids. Doing this
@@ -3483,6 +3526,14 @@ def fill_proposal(
         n_over = _apply_paragraph_overrides(d, paragraph_overrides)
         if n_over:
             log.info("Applied %d paragraph override(s)", n_over)
+    _n_remodel_dropped = 0
+    for _row in _no_remodel_rows:
+        _parent = _row.getparent()
+        if _parent is not None:
+            _parent.remove(_row)
+            _n_remodel_dropped += 1
+    if _n_remodel_dropped:
+        log.info("Took out %d free Remodel Tax row(s): no remodel tax on this job", _n_remodel_dropped)
 
     # Phase 1 — expand repeatable blocks. All three always run so their markers
     # are stripped (zero rows when empty) rather than left as literal {{#…}} text
