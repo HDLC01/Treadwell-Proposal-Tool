@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import base64
 import calendar
+import copy
 import hashlib
 import io
 import json
@@ -630,6 +631,22 @@ def _cache_file(content: bytes, filename: str, content_type: str) -> str:
         "content_type": content_type,
     }
     return token
+
+
+def _entry_pdf(entry: Dict[str, Any]) -> bytes:
+    """The PDF of a cached .docx entry, rendered once and then the SAME bytes for every reader.
+
+    LibreOffice stamps a creation time into every PDF, so two renders of one .docx are never
+    byte-equal. The Files page's PDF button, Send and the customer's PDF all read through here, so
+    whichever renders first decides the bytes and the others reuse them. `setdefault` rather than a
+    plain write: when two requests render the same entry at once, the second keeps the first one's
+    bytes instead of replacing them after the first has already been handed out."""
+    pdf = entry.get("_pdf")
+    if pdf is None:
+        with _PDF_RENDER_SEM:   # cap concurrent LibreOffice renders
+            rendered = pdf_writer.docx_to_pdf(entry["content"])
+        pdf = entry.setdefault("_pdf", rendered)
+    return pdf
 
 
 # ─── Work-type detection rule ─────────────────────────────────────────
@@ -1817,18 +1834,71 @@ def api_portal_publish(draft_id: str, request: Request,
         # of a JSON dump. `code` + `page` + `document` are for the new page to act on.
         return JSONResponse(status_code=409, content=refusal)
 
+    # THE DOCUMENT THIS SEND WILL FREEZE, built BEFORE anything is written. From the same saved
+    # `proposal_payload` the snapshot below pins, through the same `_render_documents` the Files
+    # page's Download buttons use — so a Download pressed a moment ago hands back these exact bytes
+    # (the render and its PDF are memoised under the payload's hash) and this send is the same
+    # document the estimator just checked. A snapshot with no payload has no document at all; it is
+    # sent exactly as before, and the customer's PDF route answers "not generated yet" for it.
+    #
+    # A document that will not build refuses the send rather than going out without one: the
+    # customer would open a link to a PDF that fails, and the estimator would have read "Sent".
+    _pp = (row.get("data") or {}).get("proposal_payload")
+    sent_docs: Optional[Dict[str, Any]] = None
+    sent_pdf = b""
+    if isinstance(_pp, dict) and _pp.get("values"):
+        try:
+            sent_docs = _render_documents(_pp, request, want_estimate=False)
+            sent_pdf = _entry_pdf(sent_docs["docx"])
+        except HTTPException as exc:
+            log.warning("publish refused for draft %s: its document did not build: %s",
+                        draft_id, exc.detail)
+            raise HTTPException(exc.status_code, "Not sent — the proposal document could not be "
+                                                 "built: %s" % exc.detail) from exc
+        except Exception as exc:  # noqa: BLE001 — re-raised as a named refusal
+            log.exception("publish refused for draft %s: its PDF did not render", draft_id)
+            raise HTTPException(500, "Not sent — the proposal PDF could not be built. "
+                                     "Please try again.") from exc
+
     # Snapshot what we are about to send, AFTER every validation above — a 400 must
     # never mint a revision. The portal pins the customer's view to this exact
     # snapshot, so from here on editing the draft cannot change a proposal that has
     # already gone out, and the previous version stays readable.
     rev_no = drafts.create_revision(draft_id, row.get("data") or {}, by)
     body["revision_no"] = rev_no
+    if sent_docs is not None:
+        # AND THE FILES THE CUSTOMER WILL OPEN, stored against that revision, so their PDF never
+        # changes again whatever later code or template changes land. A revision that cannot keep
+        # its document is not sent: it would fall back to a re-render, which is exactly what this
+        # table exists to end.
+        try:
+            drafts.store_revision_documents(draft_id, rev_no,
+                                            payload_sha256=sent_docs["payload_sha256"],
+                                            docx=sent_docs["docx"]["content"], pdf=sent_pdf,
+                                            created_by=by)
+        except Exception as exc:  # noqa: BLE001 — re-raised as a named refusal
+            log.exception("publish refused for draft %s: revision %s's document could not be "
+                          "stored", draft_id, rev_no)
+            try:
+                drafts.delete_revision(draft_id, rev_no)
+            except Exception as exc2:  # noqa: BLE001 — a stranded snapshot is cosmetic
+                log.warning("could not roll back revision %s of %s: %s", rev_no, draft_id, exc2)
+            raise HTTPException(503, "Not sent — the proposal PDF could not be saved, so nothing "
+                                     "went to the customer. Please try again.") from exc
     try:
         out = _portal("/api/admin/publish", "POST", body)
     except Exception:
         # The send failed, so this snapshot represents nothing that was sent. Drop
         # it: the portal pins by explicit number, so an orphan would never be shown
         # to anyone, but leaving one would still misreport the history to staff.
+        # Its stored document goes with it, the same way and for the same reason; a row left behind
+        # is replaced by the next send that reuses the number (store_revision_documents).
+        if sent_docs is not None:
+            try:
+                drafts.delete_revision_documents(draft_id, rev_no)
+            except Exception as exc:  # noqa: BLE001 — replaced on the next send of this number
+                log.warning("could not roll back revision %s of %s's document: %s",
+                            rev_no, draft_id, exc)
         try:
             drafts.delete_revision(draft_id, rev_no)
         except Exception as exc:  # noqa: BLE001 — a stranded snapshot is cosmetic
@@ -2036,13 +2106,14 @@ def api_draft_revisions(draft_id: str) -> Dict[str, Any]:
 
 @app.post("/api/draft/{draft_id}/revisions/{revision_no}/files")
 def api_draft_revision_files(draft_id: str, revision_no: int, request: Request) -> GenerateOut:
-    """Regenerate the estimate + proposal for an OLD revision.
+    """The estimate + proposal for an OLD revision.
 
-    Nothing is stored per revision except the inputs, so the documents are rebuilt
-    from that snapshot's `proposal_payload` on demand — the same in-memory path a
-    fresh generate takes, returning the same short-lived download tokens. This is
-    what makes "what did we send them in March" answerable with a real file rather
-    than a number in a list."""
+    The proposal .docx and PDF are the ones the customer was SENT, when that revision stored them
+    (every send since draft_revision_documents existed): the same bytes the portal serves them.
+    The workbook is never stored, so it is rebuilt from the snapshot's `proposal_payload`, and so
+    are all three files for a revision sent before the table existed — the same in-memory path a
+    fresh generate takes, returning the same short-lived download tokens. This is what makes "what
+    did we send them in March" answerable with a real file rather than a number in a list."""
     draft_id = _safe_id(draft_id)
     rev = drafts.get_revision(draft_id, revision_no)
     if not rev:
@@ -2052,6 +2123,7 @@ def api_draft_revision_files(draft_id: str, revision_no: int, request: Request) 
         # Sent before the estimator ever generated documents — there is nothing to
         # replay, and inventing defaults would produce a file we never sent.
         raise HTTPException(422, "That revision has no generated documents to rebuild.")
+    stored = _stored_revision_documents(draft_id, revision_no)
     # persist=False: this replays a payload frozen at revision `revision_no`. Writing it back
     # would push an old revision's pricing over the live draft.
     #
@@ -2062,7 +2134,18 @@ def api_draft_revision_files(draft_id: str, revision_no: int, request: Request) 
     # regenerated can raise before the xlsx and docx are cached (see _generate) and 500 the whole
     # revision download — and it is the right trade: a refusal is reportable, a silently
     # incomplete contract is not.
-    return _generate(GenerateIn(**payload), request, persist=False)
+    out = _documents_out(_render_documents(payload, request, want_estimate=True))
+    if stored is None:
+        return out
+    # The sent files replace the rebuilt ones. The PDF is memoised on the entry, so the PDF link
+    # hands back the stored bytes and never re-renders them.
+    old = _FILE_CACHE.get(out.docx_download_url.rsplit("/", 1)[-1]) or {}
+    tok = _cache_file(stored["docx"],
+                      old.get("filename") or "proposal.docx",
+                      "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+    _FILE_CACHE[tok]["_pdf"] = stored["pdf"]
+    return out.model_copy(update={"docx_download_url": f"/api/file/{tok}",
+                                  "pdf_download_url": f"/api/file/{tok}/pdf"})
 
 
 @app.get("/api/portal/pipeline")
@@ -2885,45 +2968,46 @@ def api_admin_proposal_pdf(draft_id: str, request: Request,
     `revision_no` renders the snapshot that was SENT rather than the live draft.
     The portal passes the revision it pinned, so the PDF a customer downloads can
     never disagree with the prices on the page above it — which is what happened
-    while both were rendered from whatever the estimator had most recently saved."""
+    while both were rendered from whatever the estimator had most recently saved.
+
+    AND A REVISION SENT WITH STORED FILES IS NOT RENDERED AT ALL. Its PDF is the one frozen at
+    send time (draft_revision_documents), so no later code or template change can alter what that
+    customer was sent. Only a revision sent before the table existed is re-rendered, as before."""
     import hmac
     presented = request.headers.get("x-service-token") or ""
     token_env = (os.environ.get("SERVICE_TOKEN") or "").strip()
     if not token_env or not hmac.compare_digest(presented, token_env):
         raise HTTPException(401, "unauthorized")
+    stored = None
     if revision_no is not None:
         rev = drafts.get_revision(draft_id, revision_no)
         if not rev:
             raise HTTPException(404, "Revision not found")
         row = {"data": rev.get("data") or {}}
+        stored = _stored_revision_documents(draft_id, revision_no)
     else:
         row = drafts.load_draft(draft_id)
     if not row:
         raise HTTPException(404, "Draft not found")
-    pp = (row.get("data") or {}).get("proposal_payload")
-    if not (isinstance(pp, dict) and pp.get("values")):
-        raise HTTPException(422, "This proposal hasn't been generated yet.")
-    # persist=False — this is the CUSTOMER'S on-demand PDF render. It re-runs the payload frozen
-    # in the (possibly pinned, possibly superseded) revision; a customer opening an old link must
-    # never rewrite the estimator's draft.
-    # THE LETTER IS PART OF THIS PDF. It used to be skipped so a cover-letter fill failure could
-    # not 500 the render the portal waits on; now the letter is page 1 of the proposal, and a
-    # customer whose PDF quietly lost the page the estimator approved is the worse of the two
-    # failures. Builds it, and refuses loudly if it cannot.
-    # want_estimate=False — the next line reads the DOCX token and this handler never touches the
-    # workbook. Building one cost the customer ~3.2s of the ~3.5s they spent on a spinner, to
-    # produce a file cached under a token that was never requested and expired unread.
-    out = _generate(GenerateIn(**pp), request, persist=False, want_estimate=False)
-    tok = (out.docx_download_url or "").rsplit("/", 1)[-1]
-    entry = _FILE_CACHE.get(tok)
-    if not entry:
-        raise HTTPException(500, "Could not build the proposal document.")
-    pdf_bytes = entry.get("_pdf")
-    if pdf_bytes is None:
+    if stored is not None:
+        pdf_bytes = stored["pdf"]
+    else:
+        pp = (row.get("data") or {}).get("proposal_payload")
+        if not (isinstance(pp, dict) and pp.get("values")):
+            raise HTTPException(422, "This proposal hasn't been generated yet.")
+        # Through the ONE render (persist=False inside it) — this is the CUSTOMER'S on-demand PDF.
+        # It re-runs the payload frozen in the (possibly pinned, possibly superseded) revision; a
+        # customer opening an old link must never rewrite the estimator's draft.
+        # THE LETTER IS PART OF THIS PDF. It used to be skipped so a cover-letter fill failure
+        # could not 500 the render the portal waits on; now the letter is page 1 of the proposal,
+        # and a customer whose PDF quietly lost the page the estimator approved is the worse of
+        # the two failures. Builds it, and refuses loudly if it cannot.
+        # want_estimate=False — this handler reads the .docx and never touches the workbook.
+        # Building one cost the customer ~3.2s of the ~3.5s they spent on a spinner, to produce a
+        # file cached under a token that was never requested and expired unread.
+        docs = _render_documents(pp, request, want_estimate=False)
         try:
-            with _PDF_RENDER_SEM:
-                pdf_bytes = pdf_writer.docx_to_pdf(entry["content"])
-            entry["_pdf"] = pdf_bytes
+            pdf_bytes = _entry_pdf(docs["docx"])
         except Exception as exc:  # noqa: BLE001
             log.exception("Portal PDF render failed")
             raise HTTPException(500, "Failed to render the proposal PDF.") from exc
@@ -5266,8 +5350,49 @@ def api_coverletter_template_media(request: Request, work_type: str = "epoxy",
 
 @app.post("/api/generate", response_model=GenerateOut)
 def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
-    """The HTTP route. A real browser generate MAY write its values back to the draft."""
+    """The HTTP route. A real browser generate MAY write its values back to the draft.
+
+    Since the Files page renders a SAVED payload through /api/draft/{id}/documents, this route's
+    one browser caller is that page's rebuild for a draft with no payload at all, which builds its
+    body from the draft's own fields at click time. That is a composition, so it is signed as the
+    caller here, exactly as the browser signs the payloads it composes itself."""
+    _sign_as_caller(payload.values, request)
     return _generate(payload, request, persist=True)
+
+
+def _name_from_email(email: str) -> str:
+    """"kyle.smith@wetreadwell.com" -> "Kyle Smith". The signature line's last resort."""
+    return email.split("@")[0].replace(".", " ").replace("_", " ").title()
+
+
+def _sign_as_caller(values: Dict[str, Any], request: Request) -> None:
+    """Fill a blank estimator name and email from the signed-in caller — at COMPOSE time only.
+
+    It lived inside `_generate` until 2026-09-25, and that made every render depend on who was
+    signed in (see the signature block there). A composition is the one moment "who is doing this"
+    is the right answer: the browser does it in computeTokenValues, and `api_generate` does it
+    here for the body it is handed. Nothing that re-renders a saved payload calls this."""
+    if not str(values.get("estimator_name") or "").strip():
+        nm = ""
+        try:
+            claims = supabase_client.verify_token_claims(request.headers.get("authorization"))
+            meta = claims.get("user_metadata") or {}
+            nm = (meta.get("full_name") or meta.get("name") or "").strip()
+        except Exception:  # noqa: BLE001
+            nm = ""
+        if not nm:
+            em = (_user_email(request) or "").strip()
+            if em:
+                nm = _name_from_email(em)
+        if nm:
+            values["estimator_name"] = nm
+    # The signature's contact line: the letter printed a literal "[ESTIMATOR EMAIL]" at the
+    # customer until 2026-09-09. `cover_letter_writer` turns it into the whole line and drops the
+    # separator when there is no address.
+    if not str(values.get("estimator_email") or "").strip():
+        em = (_user_email(request) or "").strip()
+        if em:
+            values["estimator_email"] = em
 
 
 def _generate(payload: GenerateIn, request: Request, *,
@@ -5410,35 +5535,22 @@ def _generate(payload: GenerateIn, request: Request, *,
         a22 = str(payload.cell_values.get("Epoxy!A22") or "").strip()
         values["epoxy_system_name"] = a22 if (a22 and "Options" not in a22) else "Epoxy System"
 
-    # Sign the proposal with the logged-in estimator (the templates' old
-    # hardcoded "Troy Holmes" is now the {{estimator_name}} token). The frontend
-    # sets this from the signed-in user; backfill here so it's never blank or a
-    # raw token if a caller (e.g. "View files") omits it.
+    # Sign the proposal with the estimator THE PAYLOAD names (the templates' old hardcoded
+    # "Troy Holmes" is now the {{estimator_name}} token). The browser writes the name and the
+    # email from the signed-in user when it composes the payload (computeTokenValues), so both
+    # ride the saved draft and every revision snapshot; `api_generate` does the same for the one
+    # caller that composes on the server (`_sign_as_caller`).
+    #
+    # NEVER FROM THIS REQUEST. This used to backfill a blank name and email from whoever was
+    # signed in, which made the document depend on who pressed the button: the estimator's
+    # Download signed a payload with no email as themselves, while the customer's copy of the
+    # SAME pinned payload, rendered server-to-server with nobody signed in, printed no address.
+    # One payload, two documents — and a replay could never reproduce the send. A name missing
+    # beside a present email is derived from THAT email, which is a fact of the payload.
     if not str(values.get("estimator_name") or "").strip():
-        nm = ""
-        try:
-            claims = supabase_client.verify_token_claims(request.headers.get("authorization"))
-            meta = claims.get("user_metadata") or {}
-            nm = (meta.get("full_name") or meta.get("name") or "").strip()
-        except Exception:  # noqa: BLE001
-            nm = ""
-        if not nm:
-            em = (_user_email(request) or "").strip()
-            if em:
-                nm = em.split("@")[0].replace(".", " ").replace("_", " ").title()
-        if nm:
-            values["estimator_name"] = nm
-
-    # The signature's contact line, same idea as the name above it: the letter
-    # printed a literal "[ESTIMATOR EMAIL]" at the customer until 2026-09-09.
-    # The frontend sets this from the signed-in user so it rides the frozen
-    # payload; this backfills a caller that omitted it ("View files", a replay of
-    # a payload older than the token). `cover_letter_writer` turns it into the
-    # whole line and drops the separator when there is no address.
-    if not str(values.get("estimator_email") or "").strip():
-        em = (_user_email(request) or "").strip()
+        em = str(values.get("estimator_email") or "").strip()
         if em:
-            values["estimator_email"] = em
+            values["estimator_name"] = _name_from_email(em)
 
     # Doc-editor per-line DISPLAY overrides for the PRICE section (display TEXT
     # only — never touches cell_values, the .xlsx, or the totals; see
@@ -5993,15 +6105,13 @@ def api_get_file_pdf(token: str) -> Response:
     if not str(entry["filename"]).lower().endswith(".docx"):
         raise HTTPException(400, "Only .docx files can be converted to PDF")
 
-    pdf_bytes = entry.get("_pdf")
-    if pdf_bytes is None:
-        try:
-            with _PDF_RENDER_SEM:   # cap concurrent LibreOffice renders
-                pdf_bytes = pdf_writer.docx_to_pdf(entry["content"])
-        except Exception as exc:  # noqa: BLE001
-            log.exception("PDF conversion failed")
-            raise HTTPException(500, "Failed to render the PDF. Please try again.") from exc
-        entry["_pdf"] = pdf_bytes   # memoize for repeat downloads
+    try:
+        # Memoised on the entry, and shared: a Send of the same saved payload reads this entry's
+        # PDF too (see _render_documents), so the file downloaded here is the file sent.
+        pdf_bytes = _entry_pdf(entry)
+    except Exception as exc:  # noqa: BLE001
+        log.exception("PDF conversion failed")
+        raise HTTPException(500, "Failed to render the PDF. Please try again.") from exc
 
     fname = re.sub(r"\.docx$", ".pdf", str(entry["filename"]), flags=re.IGNORECASE)
     ascii_name = re.sub(r"[^\x20-\x7e]", "_", fname).replace('"', "'")
@@ -6011,6 +6121,150 @@ def api_get_file_pdf(token: str) -> Response:
         media_type="application/pdf",
         headers={"Content-Disposition": disposition},
     )
+
+
+# ─── ONE RENDER: the Files page's downloads, Send, and the customer's PDF ─────────────────────
+#
+# Hanz, 2026-09-25: "Sending out the proposal should be the same PDF from the download button in
+# the last page." It was not, by construction. Download served the files cached under a token
+# persisted in `generate_result` — built from whatever payload the last generate had been handed,
+# alive for up to an hour — while Send pinned the SAVED `proposal_payload` and the portal
+# re-rendered that on demand. Change the texture, the tax mode or a note after a generate, and the
+# estimator checked one document while the customer was sent another.
+#
+# Now there is one path from a saved payload to its files. /api/draft/{id}/documents (the Files
+# page's buttons), /api/portal/publish (Send), /api/admin/proposal-pdf (the customer) and a
+# revision's file links all call `_render_documents` with the payload they were given, and the
+# result is memoised under that payload's hash. So a Download and a Send of the same saved payload
+# hand out the same .docx and, through `_entry_pdf`, the same PDF bytes — LibreOffice stamps a
+# creation time into every PDF, so two renders are never byte-equal and reuse is the only way to be.
+#
+# In process memory, like _FILE_CACHE, and deliberately short-lived: it exists to make the Download
+# the estimator checks and the Send that follows it one render. What makes a SENT PDF permanent is
+# draft_revision_documents, not this. A deploy restarts the process, so no entry can outlive the
+# code or the templates that built it; the template hashes in the key are for a template edited
+# under a running process.
+_RENDER_CACHE: cachetools.TTLCache = cachetools.TTLCache(maxsize=24, ttl=3600)
+_RENDER_LOCKS: Dict[str, threading.Lock] = {}
+_RENDER_LOCKS_GUARD = threading.Lock()
+
+
+def _canonical_sha256(obj: Any) -> str:
+    """sha256 of `obj` as canonical JSON (sorted keys, no whitespace) — the payload's identity."""
+    blob = json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def _render_key(payload: Dict[str, Any], gi: GenerateIn) -> str:
+    """What decides the document: the payload, and the content of every template it fills."""
+    audience = gi.audience or None
+    parts = [_canonical_sha256(payload),
+             _template_proposal_version(proposal_writer.pick_template(gi.work_type, audience))]
+    if gi.cover_letter_enabled and cover_letter_writer.has_template(gi.work_type, audience):
+        parts.append(_cover_letter_template_version(gi.work_type, audience))
+    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
+
+
+def _render_lock(key: str) -> threading.Lock:
+    """One lock per payload, so a Download and a Send pressed together render it ONCE."""
+    with _RENDER_LOCKS_GUARD:
+        lock = _RENDER_LOCKS.get(key)
+        if lock is None:
+            if len(_RENDER_LOCKS) >= 256:
+                _RENDER_LOCKS.clear()
+            lock = _RENDER_LOCKS[key] = threading.Lock()
+        return lock
+
+
+def _render_documents(payload: Dict[str, Any], request: Request, *,
+                      want_estimate: bool) -> Dict[str, Any]:
+    """The files for `payload`: `{"docx": entry, "xlsx": entry | None, "payload_sha256", ...}`.
+
+    The entries are _FILE_CACHE-shaped dicts (`content`, `filename`, `content_type`, and a `_pdf`
+    once `_entry_pdf` has rendered one), shared by every caller that renders the same payload.
+
+    Always persist=False: this renders what it is handed and writes nothing back, whoever asks.
+    The payload is deep-copied before `_generate` mutates its values, so the caller's copy — the
+    one `create_revision` is about to pin, on the Send path — is untouched.
+
+    `want_estimate=False` builds no workbook (the customer's PDF and Send read the .docx only). A
+    later caller that wants the workbook gets it added to the SAME entry set, keeping the .docx
+    already handed out, because that .docx may already carry the PDF somebody downloaded."""
+    gi = GenerateIn(**copy.deepcopy(payload))
+    key = _render_key(payload, gi)
+    with _render_lock(key):
+        with _RENDER_LOCKS_GUARD:   # a TTLCache is not safe across threads on its own
+            docs = _RENDER_CACHE.get(key)
+        if docs is None or (want_estimate and docs.get("xlsx") is None):
+            out = _generate(gi, request, persist=False, want_estimate=want_estimate)
+            docx_entry = _FILE_CACHE.get((out.docx_download_url or "").rsplit("/", 1)[-1])
+            if not docx_entry:
+                raise HTTPException(500, "Could not build the proposal document.")
+            xlsx_entry = (_FILE_CACHE.get(out.xlsx_download_url.rsplit("/", 1)[-1])
+                          if out.xlsx_download_url else None)
+            if docs is None:
+                docs = {"docx": docx_entry, "xlsx": xlsx_entry,
+                        "work_type": out.work_type, "audience": out.audience,
+                        "totals": out.totals, "payload_sha256": _canonical_sha256(payload)}
+            else:
+                docs["xlsx"] = xlsx_entry
+            with _RENDER_LOCKS_GUARD:
+                _RENDER_CACHE[key] = docs
+    return docs
+
+
+def _cache_entry(entry: Dict[str, Any]) -> str:
+    """A fresh download token for an entry that already exists. Minted per request, so a token
+    _FILE_CACHE has expired can never be what a still-cached render hands out."""
+    token = uuid.uuid4().hex
+    _FILE_CACHE[token] = entry
+    return token
+
+
+def _documents_out(docs: Dict[str, Any]) -> GenerateOut:
+    """`_render_documents`' result as the GenerateOut every download page already reads."""
+    docx_tok = _cache_entry(docs["docx"])
+    xlsx_tok = _cache_entry(docs["xlsx"]) if docs.get("xlsx") else ""
+    return GenerateOut(
+        work_type=docs["work_type"], audience=docs["audience"],
+        xlsx_download_url=f"/api/file/{xlsx_tok}" if xlsx_tok else "",
+        docx_download_url=f"/api/file/{docx_tok}",
+        pdf_download_url=f"/api/file/{docx_tok}/pdf",
+        totals=docs.get("totals") or {},
+    )
+
+
+def _stored_revision_documents(draft_id: str, revision_no: int) -> Optional[Dict[str, Any]]:
+    """The files revision `revision_no` was SENT with, or None to re-render it.
+
+    None means it was sent before draft_revision_documents existed. An UNREADABLE table is also
+    None, logged: that is a database the migration has not reached yet, and re-rendering is exactly
+    how every revision was served before it. Writes are the strict half — a send that cannot store
+    its document is refused (api_portal_publish)."""
+    try:
+        return drafts.get_revision_documents(draft_id, revision_no)
+    except Exception as exc:  # noqa: BLE001 — see above
+        log.warning("stored documents for %s revision %s could not be read, re-rendering: %s",
+                    draft_id, revision_no, exc)
+        return None
+
+
+@app.post("/api/draft/{draft_id}/documents", response_model=GenerateOut)
+def api_draft_documents(draft_id: str, request: Request) -> GenerateOut:
+    """The Files page's Download buttons: the SAVED draft's document, through the one render.
+
+    Loads the draft from the store rather than taking a payload in the body, because the store's
+    copy is what Send pins — the page flushes its pending save first (TW.flushState), so the two
+    are the same blob. No write-back: rendering a saved payload is not an edit."""
+    draft_id = _safe_id(draft_id)
+    row = drafts.load_draft(draft_id)
+    if not row:
+        raise HTTPException(404, "Draft not found")
+    pp = (row.get("data") or {}).get("proposal_payload")
+    if not (isinstance(pp, dict) and pp.get("values")):
+        raise HTTPException(422, "This proposal hasn't been built yet — open the Proposal step "
+                                 "and press Continue.")
+    return _documents_out(_render_documents(pp, request, want_estimate=True))
 
 
 # ─── Project persistence (Supabase) ───────────────────────────────────

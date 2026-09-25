@@ -19,6 +19,8 @@ company view), attributed by owner_email.
 """
 from __future__ import annotations
 
+import base64
+import hashlib
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -816,6 +818,64 @@ def latest_revision_no(draft_id: str) -> Optional[int]:
            .eq("project_id", draft_id).order("revision_no", desc=True).limit(1).execute())
     rows = res.data or []
     return int(rows[0]["revision_no"]) if rows else None
+
+
+# ── revision documents: the exact files a sent revision's customer was given ──
+# A revision stores the INPUTS (above). This stores the OUTPUT: the .docx and the PDF rendered at
+# send time, so the customer's copy of revision N never changes again whatever later code or
+# template changes land. The portal still asks /api/admin/proposal-pdf for draft + revision; that
+# route now answers from here when a row exists and re-renders only for revisions sent before this
+# table did.
+#
+# BASE64 IN A TEXT COLUMN, NOT bytea. PostgREST carries bytea as a "\x…" hex string in JSON, so
+# every write and read would double the bytes on the wire and need hand-rolled hex on both sides;
+# base64 is a third larger, is plain JSON through supabase-py, the staging PostgREST and the test
+# fake alike, and decodes with one call. The sha256 columns say which bytes are meant.
+_REVISION_DOCUMENTS = "draft_revision_documents"
+
+
+def store_revision_documents(draft_id: str, revision_no: int, *, payload_sha256: str,
+                             docx: bytes, pdf: bytes, created_by: Optional[str] = None) -> None:
+    """Keep the files revision `revision_no` was sent with. Replaces any row already there.
+
+    A row can only pre-exist as an orphan: a failed rollback leaves one behind, and the next send
+    reuses the revision number (numbering is max + 1). Deleted first so that orphan can never be
+    served for the new revision — delete-then-insert rather than an upsert, because every store
+    this module talks to supports both calls and not all of them take an `on_conflict`."""
+    sb = get_client()
+    (sb.table(_REVISION_DOCUMENTS).delete()
+     .eq("project_id", draft_id).eq("revision_no", int(revision_no)).execute())
+    sb.table(_REVISION_DOCUMENTS).insert({
+        "project_id": draft_id, "revision_no": int(revision_no),
+        "payload_sha256": payload_sha256,
+        "docx_b64": base64.b64encode(docx).decode("ascii"),
+        "docx_sha256": hashlib.sha256(docx).hexdigest(),
+        "pdf_b64": base64.b64encode(pdf).decode("ascii"),
+        "pdf_sha256": hashlib.sha256(pdf).hexdigest(),
+        "created_by": created_by, "created_at": _now_iso(),
+    }).execute()
+
+
+def get_revision_documents(draft_id: str, revision_no: int) -> Optional[Dict[str, Any]]:
+    """`{"docx": bytes, "pdf": bytes, "payload_sha256": str}` for a revision sent with stored
+    files, None for one sent before they were stored. Raises when the store cannot be read: the
+    caller decides what an unreadable table means."""
+    res = (get_client().table(_REVISION_DOCUMENTS)
+           .select("payload_sha256, docx_b64, pdf_b64")
+           .eq("project_id", draft_id).eq("revision_no", int(revision_no))
+           .limit(1).execute())
+    rows = res.data or []
+    if not rows:
+        return None
+    row = rows[0]
+    return {"docx": base64.b64decode(row["docx_b64"]), "pdf": base64.b64decode(row["pdf_b64"]),
+            "payload_sha256": row.get("payload_sha256")}
+
+
+def delete_revision_documents(draft_id: str, revision_no: int) -> None:
+    """Undo `store_revision_documents` — the partner of `delete_revision` when a send fails."""
+    (get_client().table(_REVISION_DOCUMENTS).delete()
+     .eq("project_id", draft_id).eq("revision_no", int(revision_no)).execute())
 
 
 def list_events(limit: int = 100) -> List[Dict[str, Any]]:

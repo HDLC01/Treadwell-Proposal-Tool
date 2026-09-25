@@ -324,6 +324,25 @@ create index if not exists markup_rules_live_layout_idx
 -- exist when it runs, so a table added later reads fine and every write fails.
 grant select, insert, update, delete on public.markup_rules to service_role;
 
+-- ── The exact files each sent revision's customer was given ─────────────────
+-- Mirrors supabase_schema.sql (section 6b), which explains the table and why the files are base64
+-- text rather than bytea. Needs the notify-pgrst reload above when applied to a running stack, and
+-- the rest proxy's client_max_body_size (rest-proxy.conf): one row carries a .docx and a PDF, and
+-- nginx's 1 MB default is close to that.
+create table if not exists public.draft_revision_documents (
+  project_id     text not null references public.drafts(id) on delete cascade,
+  revision_no    int  not null,
+  payload_sha256 text not null,
+  docx_b64       text not null,
+  docx_sha256    text not null,
+  pdf_b64        text not null,
+  pdf_sha256     text not null,
+  created_by     text,
+  created_at     timestamptz not null default now(),
+  primary key (project_id, revision_no)
+);
+grant select, insert, update, delete on public.draft_revision_documents to service_role;
+
 grant select, insert, update, delete on public.library_items to service_role;
 grant select, insert, update, delete on public.library_assemblies to service_role;
 grant select, insert, update, delete on public.library_vendors to service_role;

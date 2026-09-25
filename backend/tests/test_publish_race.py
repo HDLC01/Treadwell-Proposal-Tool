@@ -529,6 +529,15 @@ class _Publish:
         monkeypatch.setattr(main.drafts, "log_event",
                             lambda *a, **k: self.writes.append("log_event"))
         monkeypatch.setattr(main, "_portal", self._portal)
+        # A SEND NOW FREEZES ITS DOCUMENT (draft_revision_documents): it renders the payload it is
+        # about to pin and stores the PDF against the new revision. The render is the real one;
+        # LibreOffice is not on a CI runner, so its PDF step is the identity, and the store is
+        # recorded like every other write so the refusal tests still prove nothing was written.
+        monkeypatch.setattr(main.pdf_writer, "docx_to_pdf", lambda b: b)
+        monkeypatch.setattr(main.drafts, "store_revision_documents",
+                            lambda *a, **k: self.writes.append("store_revision_documents"))
+        monkeypatch.setattr(main.drafts, "delete_revision_documents",
+                            lambda *a, **k: self.writes.append("delete_revision_documents"))
         self.portal_out = portal_out or {"ok": True, "url": "https://portal/x",
                                          "customer_email": "c@x.com"}
 
@@ -642,11 +651,14 @@ def test_the_refusal_is_LOGGED_with_the_reason_and_both_figures(monkeypatch, cap
 # ── and the ordinary send must be completely unaffected ──────────────────────
 def test_a_CLEAN_publish_still_succeeds(monkeypatch):
     """The gate is worthless if it costs the normal case. Both halves agree, so this must be the
-    byte-for-byte old behaviour: a revision, a portal call, an event, and the echo."""
+    old behaviour: a revision, a portal call, an event, and the echo — plus, since 2026-09-25,
+    the document frozen against that revision. The first event is the render's own "generated"
+    audit line, logged before anything is written, as every render logs one."""
     p = _Publish(monkeypatch, CLEAN)
     r = p.send()
     assert r.status_code == 200, r.text
-    assert p.writes == ["create_revision", "portal /api/admin/publish", "log_event"], p.writes
+    assert p.writes == ["log_event", "create_revision", "store_revision_documents",
+                        "portal /api/admin/publish", "log_event"], p.writes
     assert r.json()["revision_no"] == 1
     snap = r.json()["sent_snapshot"]
     assert snap["lump_sum"] == snap["doc_lump_sum"] == 27721

@@ -79,6 +79,12 @@ def test_rebuilds_documents_from_the_snapshot(monkeypatch):
     # `_generate`, not `api_generate`: the route is a thin wrapper that always persists, and the
     # replay callers deliberately go around it. Stubbing the wrapper intercepted nothing.
     monkeypatch.setattr(main, "_generate", fake_generate)
+    # The route hands out tokens for the files the render cached, so the double's tokens have to
+    # name real entries, as the real `_generate`'s always do.
+    monkeypatch.setitem(main._FILE_CACHE, "tok", {"content": b"docx", "filename": "W.docx",
+                                                  "content_type": "application/x"})
+    monkeypatch.setitem(main._FILE_CACHE, "x", {"content": b"xlsx", "filename": "W.xlsx",
+                                                "content_type": "application/x"})
     r = client.post("/api/draft/d1/revisions/1/files", json={})
     assert r.status_code == 200, r.text
     assert seen["values"]["project_name"] == "Westport"

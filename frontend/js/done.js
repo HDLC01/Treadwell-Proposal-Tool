@@ -122,7 +122,7 @@
     if (filesMode && (st.proposal_payload || st.project_name || st.job_name)) {
       viewFiles();                       // generate fresh + show downloads
     } else if (res && !stale) {
-      showPostGenerate(res);             // already generated — show download buttons
+      showPostGenerate(res);             // already generated — show the buttons, which build fresh
     } else if (st.proposal_payload && st.project_name) {
       showPreGenerate();                 // ready to generate — show review card
     } else if (res) {
@@ -139,11 +139,61 @@
     const lede = emptyEl.querySelector(".lede");
     if (lede) lede.textContent = "Generating the estimate, proposal, and PDF for this project — a few seconds.";
     // viewFiles auto-runs on load; auth.js sets the bearer token asynchronously,
-    // so wait for it before the (auth-gated) /api/generate or we'd 401.
+    // so wait for it before the (auth-gated) render or we'd 401.
     try { if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready; } catch {}
-    const s = TW.getState();
-    // Prefer the exact payload this project was generated from; otherwise
-    // rebuild one from the saved values (backend backfills job_name etc.).
+    try {
+      const out = await freshDocuments();
+      emptyEl.style.display = "none";
+      showPostGenerate(out);
+    } catch (err) {
+      emptyEl.querySelector("h1").textContent = "Couldn't load files";
+      if (lede) lede.textContent = "Generating failed: " + (err.message || err) +
+        ". Try “Open / Edit” from Projects instead.";
+    }
+  }
+
+  /** THE FILES, BUILT WHEN THEY ARE ASKED FOR, FROM THE SAVED DRAFT.
+   *
+   *  Hanz, 2026-09-25: "Sending out the proposal should be the same PDF from the download button
+   *  in the last page." It was not. Download fetched the token kept in `generate_result` — files
+   *  built from whatever payload the last generate had been handed, alive in server memory for up
+   *  to an hour — while Send pinned the SAVED `proposal_payload`. Change the texture, the tax mode
+   *  or a note after a generate, press Continue, and the estimator downloaded and checked one
+   *  document while the customer was sent another.
+   *
+   *  So every button on this page asks for its files fresh: flush this page's pending save, then
+   *  POST /api/draft/{id}/documents, which renders the STORE'S copy of `proposal_payload` through
+   *  the same server function Send uses, memoised under that payload's hash. A Download pressed
+   *  before Send is the file Send freezes, by construction rather than by timing. `generate_result`
+   *  is still written — the Projects list reads `has_files` off it — but nothing on this page
+   *  downloads from it any more.
+   *
+   *  A draft with NO saved payload (never Continued through the Proposal step) has nothing Send
+   *  could freeze either: its files are rebuilt from the draft's own fields, as View files always
+   *  rebuilt them. */
+  async function freshDocuments() {
+    if (!await TW.flushState()) {
+      throw new Error("Couldn't save your latest changes, so the files were not built — "
+                      + "check your connection and try again.");
+    }
+    const st = TW.getState() || {};
+    const draftId = TW.getDraftId();
+    const pp = st.proposal_payload;
+    let out, built;
+    if (draftId && pp && pp.values) {
+      out = await TW.postJSON("/api/draft/" + encodeURIComponent(draftId) + "/documents", {});
+      built = pp;
+    } else {
+      built = payloadFromDraft(st);
+      out = await TW.postJSON("/api/generate", built);
+    }
+    TW.setState({ generate_result: out, generated_lump_sum: builtAt(built) });
+    return out;
+  }
+
+  /** What /api/generate is handed for a draft with no saved payload: the payload itself when there
+   *  is one, otherwise one rebuilt from the saved values (backend backfills job_name etc.). */
+  function payloadFromDraft(s) {
     const pp = s.proposal_payload;
     // The saved box layout belongs to ONE template file. Carried only when it was captured on the
     // template this rebuild renders: a stamp is a content hash now, but one saved before that is a
@@ -197,16 +247,7 @@
       // than through a helper on window.
       cover_letter_enabled: !!s.cover_letter_enabled,
     };
-    try {
-      const out = await TW.postJSON("/api/generate", payload);
-      TW.setState({ generate_result: out, generated_lump_sum: builtAt(payload) });
-      emptyEl.style.display = "none";
-      showPostGenerate(out);
-    } catch (err) {
-      emptyEl.querySelector("h1").textContent = "Couldn't load files";
-      if (lede) lede.textContent = "Generating failed: " + (err.message || err) +
-        ". Try “Open / Edit” from Projects instead.";
-    }
+    return payload;
   }
 
   function fmtUSD(n) {
@@ -292,8 +333,9 @@
 
   // ── Sent versions (revisions) ───────────────────────────────────────────────
   // Each send snapshots the estimate, so a revised price reuses this project rather
-  // than forcing a duplicate — and every version stays downloadable. Documents are
-  // rebuilt from the snapshot on demand (nothing binary is stored per revision).
+  // than forcing a duplicate — and every version stays downloadable. A revision sent
+  // since 2026-09-25 hands back the proposal files it was SENT with (stored at send
+  // time); an older one, and every revision's workbook, is rebuilt from the snapshot.
   async function mountRevisions() {
     const box = document.getElementById("revisions-box");
     const list = document.getElementById("revisions-list");
@@ -352,8 +394,8 @@
     }
   }
 
-  /** Rebuild one revision's documents and download the requested one. Separate
-   *  from the main downloadAs(): that one reads generate_result off the live draft,
+  /** Fetch one revision's documents and download the requested one. Separate
+   *  from the main downloadAs(): that one renders the LIVE draft's saved payload,
    *  which is exactly what an old revision must NOT be rendered from. */
   async function downloadRevision(revNo, kind, button) {
     const draftId = TW.getDraftId();
@@ -1140,8 +1182,9 @@
     btn.disabled = true;
     btn.textContent = "Generating…";
     try {
-      const out = await TW.postJSON("/api/generate", state.proposal_payload);
-      TW.setState({ generate_result: out, generated_lump_sum: builtAt(state.proposal_payload) });
+      // The SAVED payload, through the render Send uses — not the module-top snapshot of it, which
+      // is whatever this page loaded with (see freshDocuments).
+      const out = await freshDocuments();
       // Swap views — pre → post
       preEl.style.display = "none";
       showPostGenerate(out);
@@ -1175,20 +1218,19 @@
       const orig = button.textContent;
       button.disabled = true;
       button.textContent = "Downloading…";
-      const latestUrl = () => TW.absoluteUrl(TW.getState().generate_result[urlKey]);
       try {
+        // BUILT NOW, from the saved draft, through the render Send uses — never a token kept from
+        // an earlier build. There used to be a 404 self-heal here that regenerated from the
+        // module-top snapshot of the payload after a restart expired the kept token, so a download
+        // could come from either of two payloads depending on server uptime. A token minted a
+        // moment ago has nothing to heal.
+        const out = await freshDocuments();
+        paintLumpSum();
+        const url = out && out[urlKey];
+        if (!url) throw new Error("That file isn't available for this project.");
         // Downloads now require the Supabase bearer (no longer a public
         // capability URL) — TW.authHeaders() carries Authorization: Bearer.
-        let resp = await fetch(latestUrl(), { headers: TW.authHeaders() });
-        // Download links live in server memory; a restart (deploy/crash/reboot)
-        // expires them with a 404. Self-heal: re-generate fresh files from the
-        // stashed payload, then retry — invisible to the user (no dead-end).
-        if (resp.status === 404 && state.proposal_payload) {
-          button.textContent = "Refreshing…";
-          const fresh = await TW.postJSON("/api/generate", state.proposal_payload);
-          TW.setState({ generate_result: fresh });
-          resp = await fetch(latestUrl(), { headers: TW.authHeaders() });
-        }
+        const resp = await fetch(TW.absoluteUrl(url), { headers: TW.authHeaders() });
         if (!resp.ok) throw new Error(resp.statusText || ("HTTP " + resp.status));
         // Force a generic type so the browser DOWNLOADS the file under our
         // `a.download` name. If we kept the real type (application/pdf), Chrome's
