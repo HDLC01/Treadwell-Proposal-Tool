@@ -112,7 +112,16 @@
    *  estimator checks a price on is worse than saying nothing. */
   function paintLumpSum() {
     const live = TW.getState() || {};
-    const lump = live.generated_lump_sum || live.lump_sum_display || "";
+    // THE SAVED DOCUMENT'S OWN TOTAL FIRST. Every Download and Send now builds from the saved
+    // proposal_payload, so its Total is the price in the files by construction. The stamp and
+    // the display are figures from an EARLIER moment: /documents records the build only the first
+    // time, and the pricing sidebar re-prices the payload without Continue ever rewriting
+    // lump_sum_display. Hanz, 2026-09-25, on staging: the base bid moved to $14,224 (the editor and
+    // the downloaded file both said so) and this card still read $7,447.
+    const pp = live.proposal_payload;
+    const docTotal = pp && pp.values && typeof pp.values.total_formatted === "string"
+      && money(pp.values.total_formatted) != null ? pp.values.total_formatted : "";
+    const lump = docTotal || live.generated_lump_sum || live.lump_sum_display || "";
     const row = document.getElementById("lump-row");
     const val = document.getElementById("lump-sum");
     if (!row || !val) return;
@@ -978,7 +987,12 @@
     document.getElementById("rv-location").textContent = [state.address, state.city_state, state.zip].filter(Boolean).join(" · ") || "—";
     document.getElementById("rv-worktype").textContent = (state.work_type || "epoxy").toUpperCase();
     document.getElementById("rv-audience").textContent = state.audience || "Direct";
-    document.getElementById("rv-lump").textContent     = state.lump_sum_display || "—";
+    // The total of the document Generate will build (the saved payload's), for the same reason
+    // paintLumpSum reads it: lump_sum_display is not rewritten when the sidebar re-prices.
+    const _rvPp = (TW.getState() || {}).proposal_payload;
+    const _rvTotal = _rvPp && _rvPp.values && typeof _rvPp.values.total_formatted === "string"
+      && money(_rvPp.values.total_formatted) != null ? _rvPp.values.total_formatted : "";
+    document.getElementById("rv-lump").textContent     = _rvTotal || state.lump_sum_display || "—";
     // PAGE 1, SAID OUT LOUD, BEFORE ANYTHING IS BUILT. Through `coverLetterCheck` so this row and
     // the post-generate banner cannot come to disagree — see that function for why the source is
     // `proposal_payload` and not the top-level flag. The row is hidden rather than showing "No",
