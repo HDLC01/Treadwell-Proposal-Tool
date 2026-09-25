@@ -442,3 +442,6 @@ def test_the_client_mirrors_the_whole_dropbox_result_it_was_sent(page):
                 "renamed"):
         assert key in stored, key + " is dropped from the draft on the next autosave"
     assert stored["written_paths"] == ["p"] and stored["existing"] is True
+    # Kept in this browser only: the server recorded it on its own copy, and a setState would PUT
+    # this page's whole copy, which can be older than the server's (review of fix 4, round 2).
+    assert page["serverSaves"] == 0, "the filing's result was saved with the page's whole copy"

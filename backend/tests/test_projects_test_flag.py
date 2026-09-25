@@ -265,3 +265,44 @@ def test_a_caller_that_MEANS_to_change_a_server_key_still_can(store):
     drafts.set_test_flag("p4", True)
     drafts.save_draft("p4", {"project_name": "X", "is_test": False})
     assert _blob(store, "p4")["is_test"] is False
+
+
+
+# ── ...nor put back what the CRM changed ──────────────────────────────────────
+# Review of fix 4, round 2. The carry-forward above only covers a blob that LEAVES a key out, and a
+# browser's blob never does: a hydrate writes the server's copy into it, so it carries whatever that
+# browser last read. A tab that read the project before Troy reassigned it to RJ and filed it as a
+# test put Kyle's name and "real bid" back with its next save — and the Files page's door makes
+# that save with nobody watching. The browser's save (PUT /api/draft/{id}) now keeps the stored
+# values; the server's own writers (set_* above, the generate write-back) are unchanged.
+def test_a_browser_save_cannot_put_back_what_the_crm_changed(store):
+    """Mutation: drop `keep_server_owned=True` from api_save_draft — all three are reverted."""
+    drafts.save_draft("p5", {"project_name": "Westport"})
+    drafts.set_assigned_estimator("p5", "rj@wetreadwell.com")
+    drafts.set_test_flag("p5", True)
+    drafts.set_archived("p5", True)
+    r = client.put("/api/draft/p5", json={"data": {
+        "project_name": "Westport", "sqft": 2,
+        "assigned_estimator": "kyle@wetreadwell.com", "is_test": False, "archived": False}})
+    assert r.status_code == 200 and r.json()["ok"] is True, r.text
+    data = _blob(store, "p5")
+    assert data["sqft"] == 2, "the save itself did not land"
+    assert data["assigned_estimator"] == "rj@wetreadwell.com"
+    assert data["is_test"] is True
+    assert data["archived"] is True
+
+
+def test_a_browser_save_still_seeds_a_key_the_project_never_had(store):
+    """The counterexample: a key the stored row has never had is the blob's to give — on a first
+    save (an insert) and on a later one. Without this the test above passes for a save that
+    drops every server-owned key.
+
+    Mutation: pop the server-owned keys from the blob whenever the row exists — p6's
+    assigned_estimator is gone."""
+    r = client.put("/api/draft/p6", json={"data": {"project_name": "New", "is_test": True}})
+    assert r.status_code == 200, r.text
+    assert _blob(store, "p6")["is_test"] is True
+    r = client.put("/api/draft/p6", json={"data": {"project_name": "New", "is_test": True,
+                                                  "assigned_estimator": "kyle@wetreadwell.com"}})
+    assert r.status_code == 200, r.text
+    assert _blob(store, "p6")["assigned_estimator"] == "kyle@wetreadwell.com"

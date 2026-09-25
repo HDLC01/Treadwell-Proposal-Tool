@@ -109,6 +109,7 @@ async function tab(local, server, opts) {
     }
     if (url.includes("/api/portal/publish")) {
       rec.published.push(JSON.parse(opts.body));
+      rec.versionAtPublish = server.version;          // the draft the server would reload now
       if (server.refuse) return json(409, server.refuse);
       // A colleague's save that lands while the publish is running.
       if (server.duringPublish) Object.assign(server.d1, server.duringPublish);
@@ -118,12 +119,14 @@ async function tab(local, server, opts) {
       const b = JSON.parse(opts.body);
       rec.puts.push(b.data);
       server.d1 = b.data;
+      if (typeof server.version === "string") server.version += "+";   // a stored save moves it
       return json(200, { ok: true });
     }
     if (url.includes("/api/file/")) return json(200, {});
     if (method === "GET" && url.includes("/api/draft/d1")) {
       if (server.failGet) return json(503, { detail: "down" });
-      return json(200, { data: server.d1 });
+      // `updated_at`, as api_load_draft answers it, when the scenario gives the row one.
+      return json(200, { data: server.d1, updated_at: server.version });
     }
     return json(200, {});
   };
@@ -200,7 +203,11 @@ async function tab(local, server, opts) {
       () => 0, () => "", { error: (e) => { rec.downloadError = String(e); } }, checkedDocument),
     send: () => send(
       TW, portalBtn, portalRecip, () => false, () => "kyle@wetreadwell.com", sandbox.document,
-      () => {}, { payload: async () => [], clear() {} }, { adds: () => [], mutes: () => [] },
+      () => {},
+      // The attachments being encoded: `duringEncode` is whatever lands on the server meanwhile.
+      { payload: async () => { if (opts && opts.duringEncode) opts.duringEncode(server); return []; },
+        clear() {} },
+      { adds: () => [], mutes: () => [] },
       () => false, () => {}, () => {}, () => "", (e) => staleDocRefusal(e, STALE_CODE),
       portalErrMsg, () => 0,
       sandbox.window, { error() {} }, checkedDocument),
@@ -373,6 +380,34 @@ function current() {
     await t.send();
     out.movedOnAnotherMachine = { posted: t.rec.published.length, puts: t.rec.puts.length,
                                   err: t.rec.err || null };
+  }
+
+  // N. Review of fix 4, round 2. A current page; Kyle presses Send with no Download, and while the
+  //    attachments encode RJ's Continue lands on the server (Broadcast Flake, keyed, saved). The
+  //    page's checks all passed against the copy it read; the publish then froze RJ's. The publish
+  //    now carries WHEN the checked copy was saved, which the server compares with the draft it
+  //    reloads (api_portal_publish; test_send_equals_download.py) — here, that it is the checked
+  //    copy's and not the one on the server by the time the publish is sent.
+  {
+    const r = {};
+    for (const who of ["colleagueDuringEncode", "nobody"]) {
+      const w = current();
+      w.server.version = "2026-09-25T15:00:00+00:00";
+      const checked = w.server.version;
+      const t = await tab(w.local, w.server, who === "nobody" ? {} : { duringEncode: (s) => {
+        s.d1 = JSON.parse(JSON.stringify(s.d1));
+        s.d1.proposal_payload.values.texture = "RJ Broadcast Flake";
+        s.d1.proposal_payload_key = t.TW.composeKey(s.d1);
+        s.version = "2026-09-25T15:00:07+00:00";
+      } });
+      await t.send();
+      const body = t.rec.published[0] || {};
+      r[who] = { posted: t.rec.published.length, puts: t.rec.puts.length, err: t.rec.err || null,
+                 renderIdSent: Object.prototype.hasOwnProperty.call(body, "document_render_id"),
+                 versionSent: body.draft_version || null, checked,
+                 serverAtPublish: t.rec.versionAtPublish };
+    }
+    out.versionHeld = r;
   }
 
   // G. The saved copy cannot be read at Send: nothing can be checked, so nothing is sent.

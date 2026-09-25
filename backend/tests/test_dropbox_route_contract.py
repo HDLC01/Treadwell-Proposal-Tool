@@ -598,10 +598,11 @@ def _js_object_after(marker):
 def test_the_client_mirrors_every_dropbox_result_key_the_server_reads_back():
     """shared.js PUTs the WHOLE state blob and drafts.save_draft replaces `data`
     wholesale (only _SERVER_OWNED_KEYS survive), so any key missing from this
-    literal is DELETED from the draft on the next autosave. `written_paths` is the
+    literal is DELETED from the draft on the page's next save. `written_paths` is the
     one that costs: without it the next re-file autorenames our own estimate sheet
-    instead of replacing it — see the round-trip test above."""
-    block = _js_object_after("TW.setState({ dropbox_result:")
+    instead of replacing it — see the round-trip test above. Kept with setLocalState:
+    the server has recorded it on its own copy already (review of fix 4, round 2)."""
+    block = _js_object_after("TW.setLocalState({ dropbox_result:")
     for key in SERVER_READS_BACK_FROM_DRAFT:
         assert key + ":" in block, (
             key + " is missing from the dropbox_result frontend/js/dropbox.js "

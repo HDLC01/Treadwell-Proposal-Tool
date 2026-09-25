@@ -260,11 +260,17 @@
       SERVER_OWNED_KEYS.forEach((k) => {
         if (Object.prototype.hasOwnProperty.call(data, k)) patch[k] = data[k];
       });
-      // Compare before writing: an unconditional setState would mark the blob dirty on every
-      // page load and schedule a PUT that changes nothing.
+      // Compare before writing: an unconditional write would rewrite the blob on every page load.
+      //
+      // AND IN THIS BROWSER ONLY (setLocalState). These values came FROM the server, so there is
+      // nothing to send it, and a setState would PUT this page's WHOLE copy to say it — a copy
+      // that can be older than the server's (see readServerDraft). Review of fix 4, round 2: a
+      // Files page left open while RJ revised the project and Troy reassigned it to him put
+      // Kyle's $10,000 copy back over RJ's revision the moment the estimator picker re-read the
+      // assignment, because the assignment had "moved".
       const cur = getState();
       const moved = Object.keys(patch).filter((k) => cur[k] !== patch[k]);
-      if (moved.length) setState(patch);
+      if (moved.length) setLocalState(patch);
       return patch;
     } catch {
       return {};
@@ -306,8 +312,9 @@
   }
 
   /** Keys the two copies may disagree on without either being out of date: the ownership stamp,
-   *  the server-owned keys (the server carries them forward on every save, and re-reads them for
-   *  the page), and the Files page's own record of its last build, which it keeps with
+   *  the server-owned keys (a browser's save cannot change them — /api/draft/{id} keeps the
+   *  server's own values on every save, drafts.save_draft `keep_server_owned` — and the page
+   *  re-reads them), and the Files page's own record of its last build, which it keeps with
    *  setLocalState while /api/draft/{id}/documents records its own on the server. */
   const DIGEST_IGNORED = [STAMP, "generate_result", "generated_lump_sum"].concat(SERVER_OWNED_KEYS);
 
@@ -337,9 +344,11 @@
     } catch { return null; }
   }
 
-  /** The SERVER's copy of this page's draft, or null when it cannot be read (no id, a draft this
-   *  session adopted blind, not found, offline). Reads only: nothing is merged or written. */
-  async function readServerDraft() {
+  /** The SERVER's copy of this page's draft, as `{data, version}`, or null when it cannot be read
+   *  (no id, a draft this session adopted blind, not found, offline). `version` is the time the
+   *  server last stored a save of it ("" when the row has none): Send hands it back, so the
+   *  publish can refuse a draft saved again after this read. Reads only: nothing is written. */
+  async function readServerRow() {
     const id = getDraftId();
     if (!id || isUnverified(id)) return null;
     try {
@@ -348,10 +357,17 @@
       if (!res.ok) return null;
       const body = await res.json();
       const data = body && body.data;
-      return (data && typeof data === "object" && !Array.isArray(data)) ? data : null;
+      if (!(data && typeof data === "object" && !Array.isArray(data))) return null;
+      return { data, version: (body && typeof body.updated_at === "string") ? body.updated_at : "" };
     } catch {
       return null;
     }
+  }
+
+  /** The SERVER's copy of this page's draft (readServerRow's `data`), or null. */
+  async function readServerDraft() {
+    const row = await readServerRow();
+    return row ? row.data : null;
   }
 
   /** Bring this browser's copy of the draft in line with the server's, when that loses nothing.
@@ -556,6 +572,7 @@
    *  the point is to be finished, not to be patient. Returns true when there was nothing
    *  to do (no id, nothing dirty) — "the server is in sync" is the honest answer then. */
   async function flushState() {
+    if (_hold) return flushHeld(_hold);
     if (_saveTimer) {
       clearTimeout(_saveTimer); _saveTimer = null;
       const id = getDraftId();
@@ -571,21 +588,73 @@
 
   /** Drop this page's queued server save, unsent. This browser's copy keeps the write; the server
    *  is not sent it, now or as the page closes (pagehide sends only a queued save). For a page
-   *  that has found its copy is not the server's: the Proposal step saves on load (its pricing
-   *  rebuild), and opened by the Files page's door on such a copy that save would put it over a
-   *  colleague's work (proposal-review.js composeForFiles). The next edit queues a save again. */
+   *  giving its copy up for the server's (useServerCopy). The next edit queues a save again — a
+   *  page that must not save until the server says so holds its saves instead (holdServerSaves). */
   function cancelPendingSave() {
     if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }
+  }
+
+  // ─── A page whose saves wait for the server's say-so ─────────────
+  // The Files page's door opens the Proposal step to build the document with nobody watching, and
+  // that page saves its whole copy as it loads (its pricing rebuild), whenever something on it
+  // writes (the cover letter's editor, as its template arrives), and at Continue. Asking the
+  // server once, as the page opened, left all of those free to land later over a colleague's
+  // revision saved in between (review of fix 4, round 2: RJ's $15,480 Continue landing while the
+  // template loaded was put back to Kyle's $10,000 copy, which the next Send then froze).
+  //
+  // So on that page every save is held: asked for, it is only remembered — no timer, so nothing
+  // goes on its own or as the page closes (pagehide sends only a queued save). flushState, which
+  // Continue and Ctrl+S call, asks the hold's `gate` at that very moment, and only a yes sends the
+  // page's copy; a no keeps it held and resolves false. Once a save has been stored through the
+  // gate, the hold is lifted and the page saves as every page does.
+  let _hold = null;
+
+  /** Hold this page's server saves behind `gate`, an async () => boolean asked just before each
+   *  one is sent. A save already queued is held with the rest, unsent. */
+  function holdServerSaves(gate) {
+    _hold = { gate, dirty: !!_saveTimer || !!(_hold && _hold.dirty) };
+    if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }
+  }
+
+  async function flushHeld(hold) {
+    if (!hold.dirty) {
+      if (!_inFlight) return true;
+      try { return await _inFlight; } catch { return false; }
+    }
+    let yes = false;
+    try { yes = !!(await hold.gate()); } catch { yes = false; }
+    if (!yes || _hold !== hold) return false;
+    const id = getDraftId();
+    const blob = getState();
+    // Same refusal rule as scheduleServerSave — never write a blob owned by another draft.
+    if (!id || (blob[STAMP] && blob[STAMP] !== id) || isUnverified(id)) return false;
+    hold.dirty = false;                    // an edit made while this is in flight sets it again
+    if (!await putDraft(id, blob)) { hold.dirty = true; return false; }
+    if (_hold === hold) {
+      _hold = null;
+      if (hold.dirty) scheduleServerSave(getState());
+    }
+    return true;
   }
 
   // Before we evict a FOREIGN blob from localStorage (adopting a different
   // draft), flush it to ITS OWN stamped id so another draft's unsynced edits
   // aren't destroyed. Correctly keyed by construction (only ever its own stamp).
+  //
+  // ONLY WHEN IT HOLDS SOMETHING THE SERVER WAS NEVER CONFIRMED TO HAVE. A blob whose digest is
+  // still the one this browser last saw the server store for that draft (SYNCED_KEY) has nothing
+  // to save — and PUTting it anyway puts yesterday's copy back over whatever has been saved there
+  // since. Review of fix 4, round 2: Kyle's browser still held project X from yesterday, in sync
+  // then; RJ re-priced X to $15,000 and Troy marked it Won; Kyle opened another project, and the
+  // eviction put his $10,000 copy back over both. A blob with no record (saved before the record
+  // existed, or another draft's record) is flushed as before: it may be the tail of a save that
+  // never landed — a large draft's pagehide keepalive fails outright — and this is its last chance.
   function flushEvictedBlob(blob) {
     const owner = blob && blob[STAMP];
     if (!owner) return;
     if (Object.keys(blob).filter((k) => k !== STAMP).length === 0) return;  // empty → nothing to save
     if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }         // its pending save is superseded
+    if (syncedDigest(owner) === draftDigest(blob)) return;                   // the server has all of it
     putDraft(owner, blob);
   }
 
@@ -602,6 +671,7 @@
       console.warn("[TW] refused server save: state stamped", state[STAMP], "≠ draft", id);
       return;
     }
+    if (_hold) { _hold.dirty = true; return; }   // waits for the gate (holdServerSaves)
     if (_saveTimer) clearTimeout(_saveTimer);
     _saveTimer = setTimeout(() => {
       _saveTimer = null;
@@ -1408,9 +1478,10 @@
     bootSynced: () => _bootSynced,
     reloadPending: () => _reloadPending,
     readServerDraft,
+    readServerRow,
     reconcileWithServer,
     matchesServer,
     useServerCopy,
-    cancelPendingSave,
+    holdServerSaves,
   };
 })();

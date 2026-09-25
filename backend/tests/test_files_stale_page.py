@@ -172,3 +172,23 @@ def test_a_send_that_cannot_read_the_saved_copy_is_not_sent(ran):
     m = ran["serverUnreadable"]
     assert m["posted"] == 0, m
     assert m["err"] and m["err"].startswith("Couldn't check the saved proposal"), m
+
+
+def test_the_publish_carries_when_the_checked_copy_was_saved(ran):
+    """Review of fix 4, round 2. Send checked this page's copy against the server's, then waited
+    (encoding attachments, the network) before the publish reached the server, which reloads the
+    draft: RJ's Continue landing in that gap was frozen and emailed while this page showed its own
+    version and said Sent. The publish now hands back the `updated_at` of the copy it checked — the
+    one read, not the one on the server when the publish is sent — so the server can refuse a
+    draft stored since (api_portal_publish, test_send_equals_download.py). A quiet send carries the
+    same version the server still has.
+
+    Mutation: send no `draft_version` (or read it after the encode) — versionSent is absent, or
+    is RJ's."""
+    v = ran["versionHeld"]
+    c = v["colleagueDuringEncode"]
+    assert c["versionSent"] == c["checked"] == "2026-09-25T15:00:00+00:00", c
+    assert c["serverAtPublish"] != c["versionSent"], "the scenario lost its point: nobody landed"
+    assert c["puts"] == 0, c
+    q = v["nobody"]
+    assert q["versionSent"] == q["serverAtPublish"] == q["checked"], q

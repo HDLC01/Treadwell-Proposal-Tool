@@ -477,12 +477,13 @@ def test_a_press_that_cannot_read_the_saved_copy_says_so(ran):
 def test_the_door_on_a_copy_that_is_not_the_servers_goes_back_and_saves_nothing(ran):
     """Finding 1, the Proposal step's half. Opened as the door on such a copy all the same, the page
     asks the server AT ONCE — before its own load save (2.5 s) could land and make the two copies
-    look equal, which is how the old check waved a stale build through — drops that save unsent,
-    and goes back to the Files page. Quick template or slow, nothing reaches the server.
+    look equal, which is how the old check waved a stale build through — holds that save unsent
+    (TW.holdServerSaves), and goes back to the Files page. Quick template or slow, nothing reaches
+    the server.
 
     Mutations: ask only after this page's own save has gone and accept "the server equals this
-    page now", as before (a PUT of Kyle's copy, then a build from it); build anyway (a PUT); do not
-    drop the queued load save (one PUT of Kyle's copy)."""
+    page now", as before (a PUT of Kyle's copy, then a build from it); build anyway (a PUT); hold
+    nothing in composeForFiles (one PUT of Kyle's copy)."""
     s = ran["doorOnBothMoved"]
     for case in ("quickTemplate", "slowTemplate"):
         assert s[case]["nav"] == [["replace", "/done.html?d=d1"]], (case, s[case])
@@ -577,6 +578,120 @@ def test_a_new_name_on_the_signature_line_signs_with_its_typists_address(ran):
     Mutation: keep the saved address whatever the name — kyle@ under Troy Holmes."""
     s = ran["signing"]["troySigns"]
     assert (s["name"], s["email"]) == ("Troy Holmes", "troy@wetreadwell.com"), s
+
+
+# ── the review of fix 4, round 2 (2026-09-25) ────────────────────────────────────────────────
+RJ_REVISION = {"texture": "RJ Orange Peel", "lump": 15000, "won": True,
+               "assigned": "rj@wetreadwell.com", "docTotal": "$15,480.00"}
+
+
+def test_opening_another_project_never_puts_an_in_sync_copy_back(ran):
+    """Finding 1 (on prod before this branch). Kyle's browser still held project X, in sync when he
+    last had it open. RJ then re-priced X to $15,000 and Troy marked it Won and gave it to RJ.
+    Kyle opened another project, and initDraftSync's eviction PUT his copy of X to X, putting his
+    $10,000 back over all of it. A copy that is still the one this browser last saw the server
+    store holds nothing to save: nothing is sent.
+
+    Mutation: drop the synced-record check in flushEvictedBlob — one PUT to X of "Smooth"."""
+    s = ran["evict"]["inSync"]
+    assert s["nav"] == [["reload"]], s
+    assert s["putsToX"] == [], s
+    assert s["server"] == RJ_REVISION, s
+
+
+def test_an_evicted_copy_with_a_change_the_server_never_got_is_still_saved(ran):
+    """The counterexample, and the reason the eviction exists: a change whose save never landed
+    (a large draft's pagehide keepalive fails outright) is saved under its own id before the copy
+    is replaced. So is a copy with no record at all, written before the record existed — the
+    trade-off stays where it was for those, and this pins it.
+
+    Mutation: never flush an evicted copy — both lose their PUT."""
+    e = ran["evict"]
+    assert e["unsavedEdit"]["putsToX"] == ["Kyle's edit that never reached the server"], e
+    assert e["noRecord"]["putsToX"] == ["Smooth"], e
+
+
+def test_to_dropbox_on_an_open_files_page_writes_nothing_over_a_revision(ran):
+    """Findings 2A and 7. Kyle's Files page for X was current and left open; RJ revised X on his
+    machine; Kyle pressed To Dropbox. The server filed RJ's document (and recorded the filing on
+    its own copy), then the page's TW.setState PUT Kyle's whole copy back, so the draft said
+    $10,000 while Dropbox held $15,480, and the next Send froze the $10,000 one. The real button
+    handler, lifted out of dropbox.js, now records the filing in this browser only.
+
+    Mutation: TW.setLocalState -> TW.setState in dropbox.js — one PUT of "Smooth"."""
+    s = ran["dropboxPress"]
+    assert s["arrival"] == ["showPostGenerate"], s
+    assert s["filed"] == ["RJ Orange Peel"], s
+    assert s["putsFromPress"] == [], s
+    assert s["server"] == RJ_REVISION, s
+    assert s["keptHere"] == "/Estimating/*Kyle/Door Test", "the green 'already filed' state is gone"
+
+
+def test_the_estimator_picker_rereading_the_assignment_writes_nothing(ran):
+    """Finding 2B. Every showPostGenerate re-reads the assignment (mountEstimatorPicker ->
+    TW.refreshServerOwned). Troy had given X to RJ, so it had "moved", and its setState PUT Kyle's
+    whole copy over RJ's revision. The picker still reads RJ; nothing is sent.
+
+    Mutation: setLocalState -> setState in refreshServerOwned — one PUT of "Smooth"."""
+    s = ran["pickerRefresh"]
+    assert s["patch"] == {"assigned_estimator": "rj@wetreadwell.com"}, s
+    assert s["pickerReads"] == "rj@wetreadwell.com"
+    assert s["puts"] == [], s
+    assert s["server"] == RJ_REVISION, s
+
+
+def test_a_server_that_cannot_be_read_stops_the_files_page_even_on_a_keyed_copy(ran):
+    """Finding 2C. With the server unreadable as the page opened and this browser's own copy
+    keyed, the page carried on from a copy nobody had checked. It now stops on the same card as
+    any other copy the server could not be asked about, writes nothing, and its button reloads.
+
+    Mutation: restore `!holds` on the "unreachable" stop — the page carries on to viewFiles."""
+    s = ran["unreachableKeyed"]
+    assert s["keyedHere"] is True, "the scenario lost its point: this copy is not keyed"
+    assert s["nav"] == [] and s["calls"] == [], s
+    assert s["card"]["title"] == "Couldn't check the saved project", s["card"]
+    assert s["puts"] == []
+    assert s["pressNav"] == [["reload"]]
+
+
+def test_the_door_asks_again_as_it_saves(ran):
+    """Finding 5. The door's first question was a yes (the server held the page's copy), and a yes
+    as the page opened said nothing about the 20 s after it: RJ's Continue landing while the
+    template loaded was put back to Kyle's copy by the page's 2.5 s load save or by Continue, and
+    the next Send froze Kyle's document. Every save the door page makes is now asked the same
+    question again as it is sent: either way round, nothing is PUT and the page goes back to the
+    Files page, with RJ's revision standing. With nobody landing, it builds and saves once.
+
+    Mutations: let scheduleServerSave queue a save while held (the load save lands); drop the gate
+    from flushState (Continue lands)."""
+    w = ran["doorWindow"]
+    for when in ("beforeLoadSave", "afterLoadSave"):
+        s = w[when]
+        assert s["nav"] == [["replace", "/done.html?d=d1"]], (when, s)
+        assert s["puts"] == [], (when, s)
+        assert (s["serverTexture"], s["docTexture"], s["docTotal"]) == (
+            "RJ Orange Peel", "RJ Orange Peel", "$15,480.00"), (when, s)
+    q = w["nobody"]
+    assert q["nav"] == [["replace", "/done.html?composed=1&d=d1"]], q
+    assert q["puts"] == ["Kyle Orange Peel"], q
+    assert q["docTexture"] == "Kyle Orange Peel", q
+
+
+def test_the_cover_letters_own_save_cannot_leave_a_door_that_found_another_copy(ran):
+    """Finding 6. The door page's one-off cancel of its queued save ran when the server read
+    answered. The REAL cover-letter editor queues a save of its own when its template arrives
+    (persistNow), and when that came after the read, the page's pagehide sent Kyle's whole copy
+    over RJ's revision and Troy's Won. Whichever answers first, the letter's save is made in this
+    browser (it did write) and nothing reaches the server, the page closing included.
+
+    Mutation: let scheduleServerSave queue a save while held — letterAfterTheRead makes one PUT."""
+    r = ran["letterAfterVerdict"]
+    for order in ("letterFirst", "letterAfterTheRead"):
+        s = r[order]
+        assert s["letterAsked"] is True and s["letterSavedHere"] is True, (order, s)
+        assert s["nav"] == [["replace", "/done.html?d=d1"]], (order, s)
+        assert s["puts"] == [], (order, s)
+        assert s["server"] == RJ_STANDS, (order, s)
 
 
 # ── the backend builds that document ─────────────────────────────────────────────────────────

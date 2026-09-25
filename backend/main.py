@@ -1639,6 +1639,12 @@ class PortalPublishIn(BaseModel):
     # so the customer is never frozen a document other than the one that was checked. Optional on
     # the same contract as the fields above: an older page sends nothing and sends as before.
     document_render_id: Optional[str] = None
+    # When the server last stored the draft, as the Files page read it for Send's checks (the
+    # draft row's `updated_at`, from GET /api/draft/{id}). When present, the send is refused unless
+    # the draft being frozen is still that save: the page checks one copy, then waits (encoding
+    # attachments, the network), and a colleague's save landing in between was what the customer
+    # got. Optional on the same contract: an older page sends nothing and sends as before.
+    draft_version: Optional[str] = None
 
 
 def _clean_estimator(raw: str) -> str:
@@ -1813,6 +1819,22 @@ def api_portal_publish(draft_id: str, request: Request,
     # but still BEFORE the snapshot below — a 400 must never mint a revision.
     body["assigned_estimator"] = _clean_estimator(payload.assigned_estimator if payload else "")
 
+    # THE DRAFT THE PAGE CHECKED, OR NOTHING. The Files page compares its copy with the server's,
+    # then waits (encoding attachments, the network) before this request arrives, and `row` above
+    # is read only now. A colleague's Continue landing in that gap was frozen and emailed while the
+    # page showed its own version and said Sent (review of fix 4, round 2). The page hands back the
+    # `updated_at` of the save it checked; a draft stored again since is refused, before anything
+    # is rendered or written. Server-side marks that are not saves (an assignment, Won, the files
+    # being built) do not move `updated_at`, and none of them changes the document.
+    _version = (payload.draft_version or "").strip() if payload else ""
+    if _version and _version != str(row.get("updated_at") or ""):
+        log.warning("publish refused for draft %s: it was saved again after the page checked it "
+                    "(checked %s, now %s)", draft_id, _version, row.get("updated_at"))
+        return JSONResponse(status_code=409, content={
+            "ok": False, "code": "document_changed",
+            "error": "Not sent — this proposal was saved again after this page checked it (from "
+                     "another page or computer). Reload this page, check the files, then send."})
+
     # THE LAST VALIDATION, and the only one about the SNAPSHOT rather than the request — so it
     # runs after the recipient/permission errors (they are more specific and they predate this)
     # and before the first byte is written.
@@ -1950,6 +1972,17 @@ def api_portal_publish(draft_id: str, request: Request,
         raise
     drafts.log_event(draft_id, by, "published", {"revision_no": rev_no,
                                                  "recipients": len(emails) or None})
+    # The draft's own copy of who owns the follow-up, which pre-fills the Files page's picker on the
+    # next send. The page used to record it with the save it makes after a send, but a browser's
+    # save no longer changes a server-owned key (api_save_draft), so it is written here, where the
+    # choice was made. A failure is only logged: the proposal has already gone to the customer.
+    _prev_est = str((row.get("data") or {}).get("assigned_estimator") or "").strip().lower()
+    if body["assigned_estimator"] != _prev_est:
+        try:
+            drafts.set_assigned_estimator(draft_id, body["assigned_estimator"], by)
+        except Exception as exc:  # noqa: BLE001 — the send itself succeeded
+            log.warning("publish: could not record %s's estimator on the draft: %s",
+                        draft_id, exc)
     if isinstance(out, dict):
         out.setdefault("revision_no", rev_no)
         # What the customer will actually see, echoed back so the sending page can check it
@@ -6550,10 +6583,15 @@ def _warm_sheet_cache() -> None:
 def api_save_draft(draft_id: str, payload: DraftIn, request: Request) -> Dict[str, Any]:
     """Upsert a draft's full state blob. Called on a debounce as the
     estimator types — so a tab close / device switch doesn't lose work.
-    Stamps the signed-in user as the project owner on first save."""
+    Stamps the signed-in user as the project owner on first save.
+
+    The server-owned keys (drafts._SERVER_OWNED_KEYS: assigned_estimator, is_test, archived) keep
+    their stored values whatever the blob says: they are set through their own routes, and a
+    browser's blob carries whatever that browser last read."""
     try:
         return {"ok": True, **drafts.save_draft(draft_id, payload.data,
-                                                owner_email=_user_email(request))}
+                                                owner_email=_user_email(request),
+                                                keep_server_owned=True)}
     except Exception as exc:  # noqa: BLE001
         log.warning("save_draft failed: %s", exc)
         return {"ok": False, "error": str(exc)}

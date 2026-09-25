@@ -55,10 +55,18 @@ _SERVER_OWNED_KEYS = ("is_test", "archived", "assigned_estimator")
 
 
 def save_draft(draft_id: str, data: Dict[str, Any],
-               owner_email: Optional[str] = None) -> Dict[str, str]:
+               owner_email: Optional[str] = None,
+               keep_server_owned: bool = False) -> Dict[str, str]:
     """Upsert a project. On first save, stamps owner_email + logs a `created`
     event. On update, preserves owner_email/created_at and the server-owned keys
-    listed in `_SERVER_OWNED_KEYS`. Returns {id, updated_at}."""
+    listed in `_SERVER_OWNED_KEYS`. Returns {id, updated_at}.
+
+    `keep_server_owned` is the browser's save (PUT /api/draft/{id}): there the STORED value of a
+    server-owned key wins even when the blob carries one. A browser's blob always does — a hydrate
+    writes the server's copy into it — so it carries whatever this browser last saw: a tab that
+    read the project before Troy reassigned it from the CRM put Kyle's name back on it with its
+    next save, and filed a project Troy had marked as a test back as real (review of fix 4, round
+    2). The blob may still seed a key the row has never had."""
     sb = get_client()
     now = _now_iso()
     existing = sb.table("drafts").select("id,data").eq("id", draft_id).limit(1).execute()
@@ -70,7 +78,7 @@ def save_draft(draft_id: str, data: Dict[str, Any],
         prior = existing.data[0].get("data") or {}
         data = dict(data)
         for key in _SERVER_OWNED_KEYS:
-            if key not in data and key in prior:
+            if key in prior and (keep_server_owned or key not in data):
                 data[key] = prior[key]
         sb.table("drafts").update({"data": data, "updated_at": now}).eq("id", draft_id).execute()
     else:

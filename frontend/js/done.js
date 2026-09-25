@@ -192,15 +192,17 @@
           });
         return;
       }
-      const holds = TW.documentHolds(seen.server || st);   // "unreachable": this copy is all there is
-      if (seen.status === "unreachable" && !holds) {
+      // "unreachable" stops whatever this browser's own copy says. Carrying on from it was going on
+      // from a copy nobody had checked: the files shown are the server's, and this page's copy
+      // could be a day old (review of fix 4, round 2).
+      if (seen.status === "unreachable") {
         showDoorStop("Couldn't check the saved project",
-          "The server could not be reached, so the files were not rebuilt from your latest "
-          + "changes. Check your connection, then reload this page.",
+          "The server could not be reached, so this page could not check its files against your "
+          + "latest changes. Check your connection, then reload this page.",
           "Reload this page", () => location.reload());
         return;
       }
-      if (seen.status === "ahead" || !holds) { toDoor(); return; }
+      if (seen.status === "ahead" || !TW.documentHolds(seen.server)) { toDoor(); return; }
       st = TW.getState();
     }
     const res = st.generate_result;
@@ -1515,8 +1517,16 @@
           // customer was sent RJ's document from a page showing Kyle's — and the save this handler
           // makes after a send then PUT Kyle's whole copy back over RJ's. Two copies that differ
           // mean this page is not showing what would be frozen, so nothing is sent.
+          //
+          // AND THE PUBLISH IS HELD TO THE COPY CHECKED HERE. Between this read and the publish the
+          // page waits (encoding the attachments, the network), and the server reloads the draft
+          // when the publish arrives: a colleague's Continue landing in that gap was what the
+          // customer got, while this page said Sent (review of fix 4, round 2). So the read's
+          // `version` — when the server last stored the draft — travels with the publish as
+          // `draft_version`, and the server refuses a draft stored again since.
           const _now = TW.getState() || {};
-          const _saved = _now.project_name ? await TW.readServerDraft() : null;
+          const _row = _now.project_name ? await TW.readServerRow() : null;
+          const _saved = _row ? _row.data : null;
           const _moved = _now.project_name
             && (!TW.documentHolds(_now)
                 || (_saved && (!TW.documentHolds(_saved) || !TW.matchesServer(_saved))));
@@ -1613,7 +1623,10 @@
                                         // this page, if any. The server refuses the send when
                                         // the one it would freeze is not that document (see
                                         // checkedDocument). Absent, it is not asked.
-                                        document_render_id: checkedDocument.renderId || undefined });
+                                        document_render_id: checkedDocument.renderId || undefined,
+                                        // When the server last stored the copy checked above.
+                                        // The server refuses a draft stored again since.
+                                        draft_version: (_row && _row.version) || undefined });
           if (j && j.ok === false) throw new Error(j.error || j.detail || "Send failed.");
           // Only now. Clearing before the request would lose the files on a failed send and leave
           // the estimator re-picking them with no idea they had gone.
@@ -1627,6 +1640,8 @@
           if (_after && TW.matchesServer(_after)) {
             // require_deposit persists so a deliberate GC-with-deposit (or Direct-without) choice
             // survives a reload instead of snapping back to the audience default.
+            // (assigned_estimator is this browser's copy only: the server keeps its own value on
+            // every save, and the publish has just recorded it on the draft.)
             TW.setState({ portal_message: message, require_deposit: requireDeposit,
                           assigned_estimator: assignedEstimator });
             // Persist only the EXTRAS (never the intake row) so they pre-fill next time.

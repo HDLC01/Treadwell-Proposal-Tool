@@ -515,6 +515,72 @@ def test_a_send_holding_a_key_for_a_draft_that_lost_its_document_is_refused(worl
     _nothing_written(world)
 
 
+# ── Send is held to the draft the page checked ───────────────────────────────
+def _save(data, clock, monkeypatch):
+    """A browser's save through the real PUT route, at the next tick of `clock`."""
+    clock.append(len(clock))
+    monkeypatch.setattr(drafts, "_now_iso", lambda: "2026-09-25T15:00:%02d+00:00" % clock[-1])
+    r = client.put("/api/draft/d1", json={"data": data})
+    assert r.status_code == 200 and r.json()["ok"] is True, r.text
+
+
+def test_a_send_refuses_a_draft_saved_again_after_the_page_checked_it(world, monkeypatch):
+    """Review of fix 4, round 2. Kyle's page flushes and reads the draft (GET /api/draft/d1) for
+    Send's checks, then encodes the attachments; RJ's Continue is stored meanwhile. The publish
+    reloads the draft and used to freeze RJ's document, emailed from a page showing Kyle's, with
+    no word to anybody. It carries the `updated_at` the page read, and a draft stored since is
+    refused before anything is rendered or written (files-stale-page-harness.js N: the page sends
+    the version it checked).
+
+    Mutation: drop the `draft_version` check in api_portal_publish — a 200, RJ's texture frozen."""
+    clock = []
+    kyles = copy.deepcopy(world.store["drafts"][0]["data"])
+    _save(kyles, clock, monkeypatch)                        # Kyle's own flush before the checks
+    checked = client.get("/api/draft/d1").json()["updated_at"]
+    rjs = copy.deepcopy(kyles)
+    rjs["proposal_payload"]["values"]["texture"] = "RJ Broadcast Flake"
+    _save(rjs, clock, monkeypatch)                          # RJ's Continue, during the encode
+    r = client.post("/api/portal/publish?draft_id=d1",
+                    json={"assigned_estimator": EST, "draft_version": checked})
+    assert r.status_code == 409, r.text
+    body = r.json()
+    assert body["code"] == "document_changed" and "Reload this page" in body["error"], body
+    _nothing_written(world)
+    assert world.renders == [], "a document was rendered for a send that was refused"
+
+
+def test_a_send_of_the_draft_it_checked_goes(world, monkeypatch):
+    """The counterexample: nothing saved between the read and the publish — the same version —
+    and the send goes, frozen from that draft. Without this, the test above passes for a publish
+    that refuses every version it is handed."""
+    clock = []
+    _save(copy.deepcopy(world.store["drafts"][0]["data"]), clock, monkeypatch)
+    checked = client.get("/api/draft/d1").json()["updated_at"]
+    assert checked, "the fixture's row has no version to check"
+    r = client.post("/api/portal/publish?draft_id=d1",
+                    json={"assigned_estimator": EST, "draft_version": checked})
+    assert r.status_code == 200, r.text
+    frozen = drafts.get_revision_documents("d1", r.json()["revision_no"])
+    assert "Orange Peel" in _text(frozen["docx"])
+
+
+def test_a_send_records_who_owns_the_follow_up_on_the_draft(world, monkeypatch):
+    """A browser's save can no longer change a server-owned key (api_save_draft keeps the stored
+    assigned_estimator, test_projects_test_flag.py), so the Files page's after-send save stopped
+    being what put the chosen estimator on the draft — the copy that pre-fills the picker on the
+    next send. The publish records it itself, and a later save from a tab holding an older name
+    does not undo it.
+
+    Mutation: drop the set_assigned_estimator call in api_portal_publish — the draft says nobody."""
+    r = _send()
+    assert r.status_code == 200, r.text
+    assert world.store["drafts"][0]["data"]["assigned_estimator"] == EST
+    stale = copy.deepcopy(world.store["drafts"][0]["data"])
+    stale["assigned_estimator"] = "troy@wetreadwell.com"
+    _save(stale, [], monkeypatch)
+    assert world.store["drafts"][0]["data"]["assigned_estimator"] == EST
+
+
 # ── the Files page's build is recorded by the server, not by the page ────────
 def test_documents_records_has_files_on_the_servers_copy(world):
     """Review of fix 3, finding 1. The page used to record `generate_result` with TW.setState,

@@ -7271,18 +7271,40 @@
     // load save put an older copy over a colleague's $15,000 revision and was then built from
     // (review of fix 4, 2026-09-25). The server holding what this page loaded is one yes; the
     // server still holding what this browser last saw there (TW.bootSynced: nobody has saved it
-    // since) is the other. Anything else drops the queued save unsent and goes back to the Files
-    // page, which is where a copy that is not the server's is settled with the estimator.
+    // since) is the other. Anything else goes back to the Files page at once, which is where a copy
+    // that is not the server's is settled with the estimator.
+    //
+    // AND ASKED AGAIN AT EVERY SAVE (TW.holdServerSaves). A yes as the page opened said nothing
+    // about the 20 s after it: a colleague's Continue landing while the template loaded was put
+    // back to this page's copy by the load save, or by Continue, and the next Send froze the older
+    // document; and the cover letter's editor queues a save of its own when its template arrives,
+    // after a one-off cancel had run (review of fix 4, round 2). So nothing this page saves leaves
+    // it until the same question, asked again at that moment, is still a yes.
     let verdict = null;
+    let leaving = false;
+    const backToFiles = () => {
+      if (leaving) return;
+      leaving = true;
+      window.location.replace(TW.withDraft("/done.html" + (q.get("files") === "1" ? "?files=1" : "")));
+    };
+    const ask = async () => {
+      const saved = await TW.readServerDraft();
+      if (!saved) return "unread";
+      const d = TW.draftDigest(saved);
+      return (d === TW.bootDigest() || d === TW.bootSynced()) ? "ok" : "not-the-saved-copy";
+    };
+    TW.holdServerSaves(async () => {
+      if (leaving) return false;
+      const v = await ask();
+      if (v === "not-the-saved-copy") backToFiles();
+      return v === "ok";
+    });
     const asked = (async () => {
       try { await TW.draftReady; } catch {}
       try { if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready; } catch {}
       if (TW.reloadPending && TW.reloadPending()) return;
-      const saved = await TW.readServerDraft();
-      const d = saved ? TW.draftDigest(saved) : "";
-      if (saved && (d === TW.bootDigest() || d === TW.bootSynced())) { verdict = "ok"; return; }
-      TW.cancelPendingSave();
-      verdict = saved ? "not-the-saved-copy" : "unread";
+      verdict = await ask();
+      if (verdict === "not-the-saved-copy") backToFiles();
     })();
     const settled = Promise.all(
       [TW.draftReady, window.TWAuth && window.TWAuth.ready, _firstDocLoad, _notesReady, asked]
@@ -7298,13 +7320,11 @@
     // page's `state` snapshot is that other project's, so building from it would put that project's
     // name, scope and price into this one. The reload comes back through here and builds instead.
     if (TW.reloadPending && TW.reloadPending()) return;
+    if (leaving) return;                                  // on its way back to the Files page
     if (btn) { btn.disabled = false; btn.textContent = label; }
-    if (verdict === "not-the-saved-copy") {
-      window.location.replace(TW.withDraft("/done.html" + (q.get("files") === "1" ? "?files=1" : "")));
-      return;
-    }
     // Unasked (the 20 s ran out first) or unanswered is not a yes: the estimator is not told to
-    // press Continue, which would save this copy, until the server has said it may.
+    // press Continue, which would save this copy, until the server has said it may. Their Continue
+    // is asked the same question again when it saves.
     if (timedOut || !templateVersion || verdict !== "ok") {
       repaintNote(verdict === "unread"
         ? "The saved copy of this project could not be read, so the proposal was not rebuilt for you."

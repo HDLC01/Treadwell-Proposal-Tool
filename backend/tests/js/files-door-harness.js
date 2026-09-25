@@ -14,6 +14,9 @@
 //     that is the server's plus unsaved edits is built and saved, one where both sides moved stops
 //     at the Files page, and a page initDraftSync is reloading onto another project writes nothing
 //     (the review of the door, 2026-09-25: scenarios D to D10; the review of fix 4: R1 to R6);
+//   * nothing a Files page or the door page does saves an older copy over the server's: an
+//     eviction, To Dropbox, the estimator picker, an unreadable server, and every save the door
+//     page makes is asked again as it is sent (the review of fix 4, round 2: S1 to S6);
 //   * the Estimate step's pills save an edit still waiting on the grid's debounce, and only that.
 //
 // EXECUTED, NOT READ. The real shared.js runs whole, one fresh vm context PER PAGE LOAD against one
@@ -137,6 +140,8 @@ const makeProposalScope = new Function(
 // The cover letter's editor, loaded whole into the page when a scenario asks for it (its DOM is
 // absent, so init() returns before rendering; its store and payloadFields() are the real ones).
 const COVER_LETTER = read(path.join("js", "coverletter-editor.js"));
+// The Files page's To Dropbox button, whose click handler is lifted verbatim (scenario S2).
+const DROPBOX = read(path.join("js", "dropbox.js"));
 
 // The page's own <form>: every named field, with the type and default value the markup gives it.
 const FORM_HTML = (() => {
@@ -261,6 +266,22 @@ async function load(b, href) {
       if (b.server.failGet) return json(503, { detail: "down" });
       return json(200, { data: copy(b.server.d1) });
     }
+    if (u.indexOf("/api/coverletter-template") === 0) {   // the cover letter's template, when asked
+      b.log.push("letter-template");
+      return (b.letterGate || Promise.resolve()).then(() => json(200, {
+        blocks: [], template_version: "cl-v1", geometry: {} }));
+    }
+    if (u === "/api/to-dropbox" && method === "POST") {
+      // Files the SERVER's document, and records the result on the server's own copy of the draft,
+      // as main.py api_to_dropbox does.
+      const body = JSON.parse(opts.body);
+      const res = { ok: true, folder_path: body.folder_path || "/Estimating/*Kyle/Door Test",
+                    folder_url: "https://dropbox/x", xlsx_url: "x", docx_url: "d", pdf_url: "p",
+                    existing: !!body.folder_path, written_paths: ["p"], renamed: [] };
+      b.server.filed = (b.server.filed || []).concat([b.server.d1.proposal_payload.values.texture]);
+      b.server.d1 = Object.assign(copy(b.server.d1), { dropbox_result: copy(res) });
+      return json(200, res);
+    }
     if (u === "/api/draft/d1/documents") {
       const pp = copy(b.server.d1.proposal_payload);
       b.server.rendered.push(pp);
@@ -280,8 +301,10 @@ async function load(b, href) {
     clearTimeout: (id) => { if (id) timers[id - 1] = null; },
     fetch,
   };
+  const listeners = [];
   sandbox.window = {
-    location: loc, history, addEventListener() {}, crypto: { randomUUID: () => "x" },
+    location: loc, history, crypto: { randomUUID: () => "x" },
+    addEventListener: (ev, h) => listeners.push([ev, h]),
     // Whoever is signed in on this browser: Kyle, unless the scenario says otherwise.
     TWAuth: { ready: Promise.resolve(), user: () => copy(b.user || KYLE) },
   };
@@ -298,7 +321,37 @@ async function load(b, href) {
   vm.runInContext(SHARED, sandbox);
   const TW = sandbox.window.TW;
   return { TW, nav, timers, loc, history, window: sandbox.window, sandbox,
-           elapse: () => { const due = timers.splice(0); due.forEach((f) => { if (f) f(); }); } };
+           elapse: () => { const due = timers.splice(0); due.forEach((f) => { if (f) f(); }); },
+           /** The page closing: every `pagehide` listener shared.js (and the page) added. */
+           pagehide: () => listeners.filter(([ev]) => ev === "pagehide").forEach(([, h]) => h()) };
+}
+
+/** A DOM node that accepts anything: every property is another such node, every call returns one.
+ *  For the cover letter's editor, which renders its template into the page (see `letterLive`). */
+function anyNode() {
+  const store = { style: {}, dataset: {}, children: [], childNodes: [], textContent: "",
+                  innerHTML: "", value: "",
+                  classList: { add() {}, remove() {}, toggle() {}, contains: () => false } };
+  return new Proxy(function () {}, {
+    get(t, k) {
+      if (k === Symbol.toPrimitive) return () => "";
+      if (k === Symbol.iterator) return function* () {};
+      if (k === "then") return undefined;
+      if (k === "length") return 0;
+      if (k in store) return store[k];
+      if (k === "querySelectorAll" || k === "getElementsByClassName"
+          || k === "getElementsByTagName") return () => [];
+      if (k === "closest" || k === "querySelector") return () => null;
+      if (k === "getBoundingClientRect") {
+        return () => ({ x: 0, y: 0, width: 0, height: 0, top: 0, left: 0, right: 0, bottom: 0 });
+      }
+      if (k === "contains") return () => false;
+      if (["offsetHeight", "offsetWidth", "scrollHeight", "clientHeight"].includes(k)) return 0;
+      return () => anyNode();
+    },
+    set(t, k, v) { store[k] = v; return true; },
+    apply() { return anyNode(); },
+  });
 }
 
 /** The Proposal step at `href`, initialised the way the page initialises, with the document
@@ -322,7 +375,25 @@ async function openProposal(b, href, opts) {
                                      style: {}, scrollIntoView() {}, focus() {} }; });
   nodes["generate-btn"].textContent = "Continue to Done →";
   nodes["estimator-name"] = form.elements.find((e) => e.name === "estimator_name");
-  if (o.letter) {                                     // coverletter-editor.js, as the page loads it
+  if (o.letterLive) {
+    // coverletter-editor.js on a page that HAS the letter's surface: it initialises, asks for its
+    // template (/api/coverletter-template, held by `b.letterGate`) and, when that arrives, renders
+    // it and saves the version it rendered (persistNow's TW.setState) — a save of its own, made
+    // whenever the template happens to answer.
+    const any = anyNode();
+    const d0 = page.sandbox.document;
+    d0.getElementById = () => any;
+    d0.querySelector = () => any;
+    d0.querySelectorAll = () => [];
+    d0.body = anyNode(); d0.createElement = () => anyNode(); d0.createTextNode = () => anyNode();
+    d0.createRange = () => anyNode();
+    page.sandbox.getSelection = () => anyNode();
+    page.window.getSelection = page.sandbox.getSelection;
+    page.sandbox.Event = function Event(type) { this.type = type; };
+    page.sandbox.document.readyState = "complete";
+    page.sandbox.TW = TW;
+    vm.runInContext(COVER_LETTER, page.sandbox);
+  } else if (o.letter) {                              // coverletter-editor.js, as the page loads it
     page.sandbox.document.readyState = "complete";
     page.sandbox.TW = TW;
     vm.runInContext(COVER_LETTER, page.sandbox);
@@ -336,8 +407,9 @@ async function openProposal(b, href, opts) {
   };
   const pageTimers = [];
   let scope = null;
+  // `gate`: the template arrives only when the scenario resolves it.
   const firstDocLoad = o.never ? new Promise(() => {})
-    : Promise.resolve().then(() => { if (o.tpl !== "") scope.setTemplateVersion(o.tpl || "tpl-epoxy-direct"); });
+    : (o.gate || Promise.resolve()).then(() => { if (o.tpl !== "") scope.setTemplateVersion(o.tpl || "tpl-epoxy-direct"); });
   scope = makeProposalScope(
     state, form, doc, TW, page.window, page.window.TWAuth,
     // A Direct template's PRICE rows, as /api/proposal-template serves them (see payload-sync).
@@ -947,8 +1019,8 @@ const mentionsY = (x) => /Other Project Y|Y texture|Y scope|Y note/.test(JSON.st
    *  typed a note on the Proposal step and closed the tab inside the 2.5 s: the pagehide keepalive
    *  PUT landed, but its .then never ran, so the record is one edit behind. RJ then re-priced to
    *  $15,000, picked a texture and pressed Continue on his own machine, and Troy marked it Won. */
-  async function bothMoved() {
-    const b = browser(draft());
+  async function bothMoved(extra) {
+    const b = browser(Object.assign(draft(), extra || {}));
     await lastContinue(b);
     const p = await load(b, "/proposal-review.html?d=d1");
     p.TW.setState({ notes_text: "Kyle's note, sent as the tab closed" });
@@ -1155,6 +1227,173 @@ const mentionsY = (x) => /Other Project Y|Y texture|Y scope|Y note/.test(JSON.st
       r.troySigns = signing(b);
     }
     out.signing = r;
+  }
+
+  // ── The review of fix 4, round 2 (2026-09-25) ───────────────────────────────────────────────
+  /** Kyle composed X on this browser and nothing has changed here since, so this browser's copy is
+   *  the one it last saw the server store. Then, elsewhere, RJ re-priced X to $15,000 and pressed
+   *  Continue on his machine, and Troy marked it Won and reassigned it to RJ from the CRM. */
+  async function colleagueRevised(b) {
+    const rj = copy(b.server.d1);
+    rj.texture = "RJ Orange Peel"; rj.priced_tabs = tabs(15000, 480);
+    rj.proposal_lump_sum = 15000; rj.proposal_sales_tax = 480;
+    rj.proposal_payload = copy(rj.proposal_payload);
+    rj.proposal_payload.values.texture = "RJ Orange Peel";
+    rj.proposal_payload.values.total_formatted = "$15,480.00";
+    rj.proposal_payload_key = await keyOf(rj);
+    rj.won = { at: "2026-09-25", by: "troy@wetreadwell.com" };
+    rj.assigned_estimator = "rj@wetreadwell.com";
+    b.server.d1 = rj;
+  }
+  const rjRevision = (b) => ({ texture: b.server.d1.texture, lump: b.server.d1.proposal_lump_sum,
+                               won: !!b.server.d1.won, assigned: b.server.d1.assigned_estimator,
+                               docTotal: b.server.d1.proposal_payload.values.total_formatted });
+  const putsTo = (b, n) => b.server.puts.slice(n).map((p) => p.texture);
+
+  // S1. Finding 1. Opening another project evicts this browser's copy of X, and the eviction used
+  //     to PUT it to X unconditionally: RJ's revision and the Won went back to Kyle's copy. A copy
+  //     that is still the one the server last stored is not sent; one with a change the server
+  //     never confirmed still is (a large draft's pagehide keepalive fails outright, and this is
+  //     that change's last chance), and so is one with no record at all (saved before the record
+  //     existed), as it always was.
+  {
+    const r = {};
+    for (const kind of ["inSync", "unsavedEdit", "noRecord"]) {
+      const b = browser(draft());
+      if (kind !== "noRecord") await lastContinue(b);
+      if (kind === "unsavedEdit") {
+        const p = await load(b, "/proposal-review.html?d=d1");
+        p.TW.setLocalState({ texture: "Kyle's edit that never reached the server" });
+      }
+      await colleagueRevised(b);
+      const before = b.server.puts.length;
+      const y = await load(b, "/done.html?d=d2&files=1");
+      await settle(); await settle();
+      r[kind] = { nav: y.nav, putsToX: putsTo(b, before), server: rjRevision(b) };
+    }
+    out.evict = r;
+  }
+
+  // S2. Findings 2A and 7. Kyle's Files page for X is open and current. RJ revises X on his machine.
+  //     Kyle presses To Dropbox: the server files RJ's document, and records the result on its own
+  //     copy. The page used to record it with TW.setState, whose PUT put Kyle's whole copy back.
+  {
+    const marker = 'go.addEventListener("click", async () => {';
+    const i = DROPBOX.indexOf(marker);
+    if (i < 0) gone("the To Dropbox button's click handler", "dropbox.js");
+    let depth = 1, j = i + marker.length;
+    for (; j < DROPBOX.length; j++) {
+      if (DROPBOX[j] === "{") depth++;
+      else if (DROPBOX[j] === "}" && --depth === 0) break;
+    }
+    const press = new (Object.getPrototypeOf(async function () {}).constructor)(
+      "TW", "dest", "DBX", "go", "result", "dbxGoDisabled", "ownerValue", "showUploaded",
+      "renderResult", "dbxGoLabel", "esc", "alert", "fetch", DROPBOX.slice(i + marker.length, j));
+    const b = browser(draft());
+    await lastContinue(b);
+    const d = await openDone(b, "/done.html?d=d1");
+    await colleagueRevised(b);
+    const before = b.server.puts.length;
+    await press(d.TW, { value: "commercial" }, { choice: "/Estimating/*Kyle/Door Test", error: null },
+                { classList: { add() {}, remove() {} }, disabled: false, textContent: "" },
+                { style: {}, innerHTML: "" }, () => false, () => "Kyle", () => {}, () => {},
+                () => "", String, () => { throw new Error("alert"); }, d.page.sandbox.fetch);
+    d.page.elapse(); await d.TW.flushState();
+    const mine = local(b);
+    out.dropboxPress = { arrival: d.calls, filed: b.server.filed, putsFromPress: putsTo(b, before),
+                         server: rjRevision(b),
+                         keptHere: (mine.dropbox_result || {}).folder_path || null };
+  }
+
+  // S3. Finding 2B. The same open page; the estimator picker re-reads the assignment (every
+  //     showPostGenerate does), which has moved to RJ. It used to setState it, and the PUT carried
+  //     Kyle's whole copy. The picker now shows RJ, and nothing is sent.
+  {
+    const b = browser(draft());
+    await lastContinue(b);
+    const d = await openDone(b, "/done.html?d=d1");
+    await colleagueRevised(b);
+    const before = b.server.puts.length;
+    const patch = await d.TW.refreshServerOwned();
+    d.page.elapse(); await d.TW.flushState();
+    out.pickerRefresh = { patch, puts: putsTo(b, before), server: rjRevision(b),
+                          pickerReads: local(b).assigned_estimator };
+  }
+
+  // S4. Finding 2C. The server cannot be read as the Files page opens, and this browser's own copy
+  //     is keyed. It used to carry on from that unchecked copy; it stops, like any other copy the
+  //     server could not be asked about, and writes nothing.
+  {
+    const b = browser(draft());
+    await lastContinue(b);
+    b.server.failGet = true;
+    const before = b.server.puts.length;
+    const d = await openDone(b, "/done.html?d=d1&files=1");
+    d.page.elapse(); await d.TW.flushState();
+    const r = { keyedHere: d.TW.documentHolds(local(b)), nav: d.nav.slice(), calls: d.calls,
+                card: d.card, puts: putsTo(b, before) };
+    await d.press();
+    r.pressNav = d.nav.slice(r.nav.length);
+    out.unreachableKeyed = r;
+  }
+
+  // S5. Finding 5. The door opens on a copy that IS the server's (an Estimate edit saved, no
+  //     Continue), so its first question is a yes. RJ's Continue lands while the template is still
+  //     loading — before the page's own 2.5 s load save would have gone, or after. Neither that
+  //     save nor Continue may put Kyle's copy back: each is asked again as it is sent. With nobody
+  //     landing, the door builds and saves exactly once.
+  {
+    const r = {};
+    for (const when of ["beforeLoadSave", "afterLoadSave", "nobody"]) {
+      const b = browser(draft());
+      await lastContinue(b);
+      await editElsewhere(b, { texture: "Kyle Orange Peel" });
+      let release;
+      const tpl = new Promise((res) => { release = res; });
+      const door = await openProposal(b, "/proposal-review.html?compose=files&d=d1", { gate: tpl });
+      const pending = door.scope.composeForFiles();
+      await settle(); await settle();                   // the first question has been answered
+      const before = b.server.puts.length;
+      if (when === "beforeLoadSave") { await colleagueRevised(b); door.page.elapse(); }
+      else if (when === "afterLoadSave") { door.page.elapse(); await settle(); await colleagueRevised(b); }
+      else door.page.elapse();
+      await settle();
+      release();
+      await pending;
+      door.page.elapse(); await door.TW.flushState(); await settle();
+      r[when] = { nav: door.page.nav, puts: putsTo(b, before),
+                  serverTexture: b.server.d1.texture,
+                  docTexture: b.server.d1.proposal_payload.values.texture,
+                  docTotal: b.server.d1.proposal_payload.values.total_formatted };
+    }
+    out.doorWindow = r;
+  }
+
+  // S6. Finding 6. The door on a copy both sides moved (R2), with the cover letter on, and the REAL
+  //     letter editor on the page. The editor asks for its template as it starts and saves the
+  //     version it rendered when the template answers — before the door's server read answers, or
+  //     after it, when a one-off cancel had already run. Then the page closes (pagehide).
+  {
+    const r = {};
+    for (const order of ["letterFirst", "letterAfterTheRead"]) {
+      const b = await bothMoved({ cover_letter_enabled: true });
+      const before = b.server.puts.length;
+      let releaseLetter;
+      b.letterGate = new Promise((res) => { releaseLetter = res; });
+      if (order === "letterFirst") releaseLetter();
+      const door = await openProposal(b, "/proposal-review.html?compose=files&d=d1",
+                                      { letterLive: true });
+      const pending = door.scope.composeForFiles();
+      await settle(); await settle(); await settle();
+      if (order === "letterAfterTheRead") { releaseLetter(); await settle(); await settle(); }
+      await pending;
+      door.page.pagehide();
+      door.page.elapse(); await door.TW.flushState(); await settle();
+      r[order] = { letterAsked: b.log.includes("letter-template"),
+                   letterSavedHere: local(b).cover_letter_template_version === "cl-v1",
+                   nav: door.page.nav, puts: putsTo(b, before), server: rjStands(b) };
+    }
+    out.letterAfterVerdict = r;
   }
 
   process.stdout.write(JSON.stringify(out));
