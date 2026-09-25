@@ -175,8 +175,8 @@
     // Won; Kyle's View files found his copy "kept", sent it through the door, and the Proposal
     // step's load put his $10,000 copy back over both. A copy where both sides have moved
     // ("kept"), one with no record to tell ("unknown"), or one the server could not be asked about,
-    // stops here and says so. The one way on from "kept" or "unknown" is the estimator's own choice
-    // to load the saved copy.
+    // stops here and says so. The way on from "kept" is the estimator's own choice to load the saved
+    // copy; from "unknown" it is theirs too, the saved copy or this browser's.
     if (st.project_name && !composedHere) {
       const toDoor = () => location.replace(TW.withDraft("/proposal-review.html?compose=files"
                                                          + (filesMode ? "&files=1" : "")));
@@ -191,9 +191,17 @@
       // "unknown" is the same stop, in words that claim no more than is known: this browser has no
       // record of the saved copy (every browser's on deploy day), so it cannot tell an older copy
       // from one holding a save that never landed. Taking the server's copy unasked dropped such an
-      // edit with nothing on screen (review of fix 4, round 3).
+      // edit with nothing on screen (review of fix 4, round 3). So the choice is the estimator's,
+      // and both ways are on the card: the saved copy, or this browser's. With only the first, an
+      // edit whose save went as its page closed was dropped by the card's one button, where the same
+      // edit with a record was built and saved (review of fix 4, round 4).
       if (seen.status === "kept" || seen.status === "unknown") {
         const known = seen.status === "kept";
+        const couldNotRead = () => {
+          const p = emptyEl.querySelector(".lede");     // a button that does nothing is no way on
+          if (p) p.textContent = "The saved copy could not be read, so nothing changed. Check "
+                               + "your connection, then press the button again.";
+        };
         showDoorStop(known ? "This project was changed somewhere else"
                            : "This browser's copy doesn't match the saved project",
           known
@@ -202,14 +210,19 @@
               + "saved copy to carry on from it. Changes that were only in this browser are dropped."
             : "This browser holds a copy of this project that is not the one saved on the server, and "
               + "it can't tell which of the two is newer. Nothing was rebuilt or saved. Load the saved "
-              + "copy to carry on from it. Anything that was only in this browser is dropped.",
+              + "copy to carry on from it, and anything that was only in this browser is dropped. Or "
+              + "keep this browser's copy: it is rebuilt and saved in place of the saved project, and "
+              + "anything saved on another computer since this browser last had it is lost.",
           "Load the saved copy",
           async () => {
             if (await TW.useServerCopy()) { location.reload(); return; }
-            const p = emptyEl.querySelector(".lede");   // a button that does nothing is no way on
-            if (p) p.textContent = "The saved copy could not be read, so nothing changed. Check "
-                                 + "your connection, then press Load the saved copy again.";
-          });
+            couldNotRead();
+          },
+          known ? null : { label: "Keep this browser's copy",
+                           onPress: async () => {
+                             if (await TW.keepLocalCopy()) { location.reload(); return; }
+                             couldNotRead();
+                           } });
         return;
       }
       // "unreachable" stops whatever this browser's own copy says. Carrying on from it was going on
@@ -243,9 +256,10 @@
     }
   })();
 
-  /** The door stopping: the empty-state card says why, and its one button is the way on. Nothing
-   *  is built, shown or written — until the estimator presses it. */
-  function showDoorStop(title, lede, label, onPress) {
+  /** The door stopping: the empty-state card says why, and its button is the way on — or its two
+   *  buttons, when `alt` ({label, onPress}) offers a second. Nothing is built, shown or written —
+   *  until the estimator presses one. */
+  function showDoorStop(title, lede, label, onPress, alt) {
     emptyEl.style.display = "";
     const h = emptyEl.querySelector("h1");
     if (h) h.textContent = title;
@@ -255,6 +269,12 @@
     if (a) {
       a.textContent = label;
       a.addEventListener("click", (e) => { e.preventDefault(); onPress(); });
+    }
+    const b = alt ? emptyEl.querySelector(".actions a.door-alt") : null;
+    if (b) {
+      b.textContent = alt.label;
+      b.style.display = "";
+      b.addEventListener("click", (e) => { e.preventDefault(); alt.onPress(); });
     }
   }
 

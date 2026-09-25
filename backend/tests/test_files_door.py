@@ -621,13 +621,29 @@ def test_opening_another_project_never_puts_an_in_sync_copy_back(ran):
 def test_an_evicted_copy_with_a_change_the_server_never_got_is_still_saved(ran):
     """The counterexample, and the reason the eviction exists: a change whose save never landed
     (a large draft's pagehide keepalive fails outright) is saved under its own id before the copy
-    is replaced. So is a copy with no record at all, written before the record existed — the
-    trade-off stays where it was for those, and this pins it.
+    is replaced — when nobody has saved the server's copy since this browser last saw it, so the
+    save loses nothing of anyone's.
 
-    Mutation: never flush an evicted copy — both lose their PUT."""
+    Mutation: never flush an evicted copy — the change loses its PUT."""
+    s = ran["evict"]["unsavedEditNobodyElse"]
+    assert s["putsToX"] == ["Kyle's edit that never reached the server"], s
+    assert s["server"]["texture"] == "Kyle's edit that never reached the server", s
+
+
+def test_an_evicted_copy_never_goes_over_a_server_copy_that_moved_on(ran):
+    """Review of fix 4, round 4, finding 1. The same eviction PUT a copy whatever the server held:
+    a change the server never got, or a copy with no record at all (every browser's on deploy day),
+    went back over RJ's $15,000 revision and Troy's Won. The eviction now asks the server first,
+    and a copy whose server copy has moved on since this browser last saw it, or that has no record
+    to tell, is left unsent: in a real conflict the saved copy stands.
+
+    Mutation: PUT whenever the record is not the copy's (the old flushEvictedBlob) — both kinds PUT
+    Kyle's copy over RJ's."""
     e = ran["evict"]
-    assert e["unsavedEdit"]["putsToX"] == ["Kyle's edit that never reached the server"], e
-    assert e["noRecord"]["putsToX"] == ["Smooth"], e
+    for kind in ("unsavedEdit", "noRecord"):
+        assert e[kind]["nav"] == [["reload"]], (kind, e[kind])
+        assert e[kind]["putsToX"] == [], (kind, e[kind])
+        assert e[kind]["server"] == RJ_REVISION, (kind, e[kind])
 
 
 def test_to_dropbox_on_an_open_files_page_writes_nothing_over_a_revision(ran):
@@ -747,10 +763,12 @@ def test_to_dropbox_keeps_an_in_sync_copy_in_sync(ran):
     re-priced X and Troy marked it Won, and Kyle opened another project: the eviction took the
     stale record for an unsaved change and PUT Kyle's copy back over both. The record now moves with
     a change the server already has (setLocalState's `alreadyOnServer`). The counterexample: a copy
-    that held an unsaved note before the filing still holds it, and the eviction still saves it.
+    that held an unsaved note before the filing still holds it — its record does not move. (Since
+    round 4 the eviction does not save that note over RJ's revision either: his save came after
+    this browser last saw the server, so the saved copy stands, as the Files page's card has it.)
 
-    Mutations: drop `{ alreadyOnServer: true }` from dropbox.js — inSync PUTs "Old note" over RJ's;
-    move the record whatever the copy held — unsavedEdit's note is never saved."""
+    Mutations: drop `{ alreadyOnServer: true }` from dropbox.js — inSync's record is left behind;
+    move the record whatever the copy held — unsavedEdit's record is the local copy's."""
     e = ran["dropboxThenEvict"]
     s = e["inSync"]
     assert s["localEqualsServer"] is True and s["recordIsLocal"] is True, s
@@ -758,7 +776,8 @@ def test_to_dropbox_keeps_an_in_sync_copy_in_sync(ran):
     assert s["server"] == RJ_REVISION, s
     u = e["unsavedEdit"]
     assert u["recordIsLocal"] is False, u
-    assert u["putsToX"] == ["Kyle's note that never saved"], u
+    assert u["putsToX"] == [], u
+    assert u["server"] == RJ_REVISION, u
 
 
 def test_a_door_sent_back_gives_back_what_it_wrote(ran):
@@ -788,7 +807,8 @@ def test_a_door_sent_back_gives_back_what_it_wrote(ran):
 def test_what_the_estimator_typed_on_the_door_stays_for_the_files_page_to_ask_about(ran):
     """The counterexample: Kyle typed on the door page before RJ's Continue landed. That is his, so
     nothing gives it back — this browser keeps it, and the Files page stops on the card that says
-    both copies moved, where the choice is his.
+    both copies moved, where the choice is his. Opening another project does not put it over RJ's
+    revision either (round 4: the eviction asks the server first).
 
     Mutation: give the page's copy back whatever real input it had (drop the touch count from
     dropHeldChanges) — his typing is gone and the Files page takes RJ's copy without a word."""
@@ -796,6 +816,7 @@ def test_what_the_estimator_typed_on_the_door_stays_for_the_files_page_to_ask_ab
     assert s["doorNav"] == [["replace", "/done.html?files=1&d=d1"]], s
     assert s["filesNav"] == [] and s["filesCard"] == "This project was changed somewhere else", s
     assert s["scopeAtFiles"] == "Kyle typed this here", s
+    assert s["putsToXOnSwitch"] == [] and s["server"] == RJ_REVISION, s
 
 
 def test_another_tabs_late_save_does_not_take_this_projects_record(ran):
@@ -898,6 +919,124 @@ def test_a_door_sent_back_never_drops_another_tabs_write(ran):
     assert b["doorNav"] == [["replace", "/done.html?d=d1"]], b
     assert b["notesHere"] == b["notesAtFiles"] == "The other tab's note", b
     assert b["card"] == "This project was changed somewhere else", b
+
+
+# ── the review of fix 4, round 4 (2026-09-25) ────────────────────────────────────────────────
+def test_a_colleagues_revision_survives_another_browsers_eviction(ran):
+    """Finding 1. RJ's revision was saved and his browser's copy was in step with its record. Kyle's
+    browser still held X from before — with no record (deploy day), or with a note whose save had
+    failed — and he opened another project. The eviction PUT his $10,000 copy over RJ's, and RJ's
+    next Files visit then took that server copy in place of his own ("adopted"), so the revision
+    was on neither the server nor any browser. The eviction now asks the server first and leaves a
+    copy that moved on standing: RJ's Files page finds its copy current and nothing is replaced.
+
+    Mutation: PUT whenever the record is not the copy's (the old flushEvictedBlob) — both kinds put
+    Smooth back, and RJ's browser takes it."""
+    r = ran["revisionSurvivesAnEviction"]
+    for kind in ("deployDayNoRecord", "unsavedNotePlusColleague"):
+        s = r[kind]
+        assert s["evictionPuts"] == [], (kind, s)
+        assert s["rjStops"] == ["done"] and s["rjCard"] is None, (kind, s)
+        assert s["server"] == {"texture": "RJ Orange Peel", "lump": 15000}, (kind, s)
+        assert s["rjLocal"] == {"texture": "RJ Orange Peel", "lump": 15000}, (kind, s)
+
+
+def test_two_tabs_loading_two_projects_at_once_write_nothing_over_either(ran):
+    """Finding 2 (on prod before this branch). Two tabs of one browser load two projects at the
+    same moment. Tab A's reload found tab B's project in the one slot, its loop guard stopped a
+    second read, and it wrote a stamped-empty blob for its own project — whose stamp then agreed
+    with the page. The page's snapshot was already tab B's, so the Proposal step's load save merged
+    that project's pricing into the empty blob and PUT eight keys over tab A's project. The slot is
+    now left as found: tab A's writes are refused as any tab's are once another tab has the keys,
+    its Continue says so, and tab B works on its own project.
+
+    Mutation: write the stamped-empty blob again in the guard branch — one PUT to X, and X is gone."""
+    s = ran["twoTabsAtOnce"]
+    assert s["firstLoads"] == [[["reload"]], [["reload"]]], "the scenario lost its race"
+    assert s["tabASnapshot"] == "Other Project Y", "the scenario lost its point: tab A did not lose"
+    assert s["slot"] == {"project": "Other Project Y", "stamp": "d2"}, s
+    assert s["putsToX"] == 0 and s["xUnchanged"] is True, s
+    assert s["tabAContinue"]["nav"] == [] and s["tabAContinue"]["putsToX"] == 0, s
+    assert "another tab" in s["tabAContinue"]["note"], s
+    assert s["tabBSnapshot"] == "Other Project Y" and s["tabBSaved"] == ["Other Project Y"], s
+
+
+def test_a_door_whose_own_continue_cannot_save_hands_the_page_over(ran):
+    """Finding 3. The door's first question was a yes, but its own Continue could not save — the
+    server could not be asked as it saved, or the save failed. It said "press Continue again" and
+    left the page holding every save: no autosave, nothing as the tab closed. Now it is handed over
+    as a stopped door's page is: asked once more, a yes saves the rebuilt copy and the page autosaves
+    what is typed next; a server still down is said plainly, and the first save it allows (Ctrl+S)
+    lifts the hold.
+
+    Mutation: return after a failed door Continue without handing over — no blip is saved, the
+    rewrite never autosaves, and the note still says press Continue."""
+    r = ran["failedDoorContinue"]
+    for kind in ("readBlip", "saveBlip"):
+        s = r[kind]
+        assert s["nav"] == [], (kind, s)
+        assert s["putsAtStop"] == ["Kyle Orange Peel"] and s["docTexture"] == "Kyle Orange Peel", (kind, s)
+        assert s["note"] == "Your changes are saved now, but the Files page could not be opened for you.", (kind, s)
+        assert s["noteDo"] == "Check the document below, then press Continue to Done.", (kind, s)
+        assert s["rewriteSaved"] is True and s["putsWhileWorking"] >= 1, (kind, s)
+    d = r["serverDown"]
+    assert d["nav"] == [] and d["putsAtStop"] == [] and d["docTexture"] == "Smooth", d
+    assert d["note"] == "Your changes could not be saved, so the proposal was not rebuilt for you.", d
+    assert "nothing you change on this page is saved" in d["noteDo"], d
+    assert d["putsWhileWorking"] == 0 and d["rewriteSaved"] is False, "a save left while unasked"
+    assert d["ctrlS"] is True and d["savedByCtrlS"] is True, d
+
+
+def test_a_key_or_click_that_cannot_edit_does_not_keep_the_doors_writes(ran):
+    """Finding 4. Any real key or click on the door page turned the give-back off, so a click while
+    it said "Updating the proposal…" (on the page, in the text, on the disabled button), Escape, an
+    arrow or Ctrl+C kept what the door wrote: the Files page said this browser had changes that
+    never reached the server. They now give back — the Files page takes RJ's copy — and a key that
+    can type or undo, a click on a control and a drag still keep the copy for the card.
+
+    Mutations: count every trusted event (the old watchTouches) — the first five show the card;
+    count nothing but input events — the last four take RJ's copy."""
+    r = ran["touchesThatCannotEdit"]
+    for kind in ("escapeKey", "arrowKey", "copyKey", "clickOnText", "clickOnDisabledButton"):
+        s = r[kind]
+        assert s["doorNav"] == [["replace", "/done.html?files=1&d=d1"]], (kind, s)
+        assert s["filesNav"] == [["reload"]] and s["filesCard"] is None, (kind, s)
+        assert s["textureAtFiles"] == "RJ Orange Peel", (kind, s)
+        assert s["putsToXOnSwitch"] == [] and s["server"] == RJ_REVISION, (kind, s)
+    for kind in ("enterKey", "undoKey", "ribbonButton", "boxDrag"):
+        s = r[kind]
+        assert s["filesNav"] == [] and s["filesCard"] == "This project was changed somewhere else", (kind, s)
+        assert s["textureAtFiles"] == "Kyle Orange Peel", (kind, s)
+        assert s["putsToXOnSwitch"] == [] and s["server"] == RJ_REVISION, (kind, s)
+
+
+def test_the_doesnt_match_card_can_keep_this_browsers_copy(ran):
+    """Finding 5. On deploy day no browser has a record, so a note whose save was refused as its page
+    closed reached the "doesn't match" card, whose one button put the server's copy over it. The card
+    now offers the other way: keep this browser's copy, which the door builds and saves. If RJ saves
+    in between, it does not go over him: the Files page stops on the "changed somewhere else" card.
+    Loading the saved copy is as it was. A "changed somewhere else" card offers only the saved copy.
+
+    Mutations: drop the second button from the "unknown" card — nothing presses it and the note is
+    never saved; keepLocalCopy writes no record — the reload stops on the same card again."""
+    r = ran["unknownCardCanKeep"]
+    for kind in ("keep", "keepButRjSavesFirst", "load"):
+        c = r[kind]["card"]
+        assert c["title"] == "This browser's copy doesn't match the saved project", (kind, c)
+        assert c["button"] == "Load the saved copy" and c["second"] == "Keep this browser's copy", (kind, c)
+        assert r[kind]["nav"] == [] and r[kind]["putsByPress"] == 0, (kind, r[kind])
+        assert r[kind]["pressNav"] == [["reload"]], (kind, r[kind])
+    k = r["keep"]
+    assert k["stops"] == ["done", "proposal", "done"] and k["card2"] is None, k
+    assert k["serverNotes"] == "Kyle's first note after the deploy" == k["localNotes"], k
+    assert k["docNotes"] == ["Kyle's first note after the deploy"], k
+    j = r["keepButRjSavesFirst"]
+    assert j["stops"] == ["done"] and j["card2"] == "This project was changed somewhere else", j
+    assert j["server"] == RJ_REVISION and j["serverNotes"] == "Old note", j
+    assert j["localNotes"] == "Kyle's first note after the deploy", j
+    ld = r["load"]
+    assert ld["stops"] == ["done"] and ld["localNotes"] == ld["serverNotes"] == "Old note", ld
+    assert ran["bothMoved"]["card"].get("second") is None, "a kept card offers a way over the colleague"
 
 
 # ── the backend builds that document ─────────────────────────────────────────────────────────

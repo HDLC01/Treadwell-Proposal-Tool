@@ -411,7 +411,8 @@
    *                  day). Nothing can tell an older copy from one holding a save that never
    *                  landed, so neither side is dropped or written: left exactly as it is, like
    *                  "kept". It used to be "adopted", which put the server's copy over an unsaved
-   *                  edit with nothing on screen (review of fix 4, round 3).
+   *                  edit with nothing on screen (review of fix 4, round 3). The estimator picks:
+   *                  the saved copy (useServerCopy) or this browser's (keepLocalCopy).
    *    "ahead"       they did not, and it is the SERVER's copy that is the one last seen there:
    *                  nobody has saved it since. So this browser's copy is that copy plus changes
    *                  whose save never landed (it failed, or went as the page closed and was too
@@ -469,9 +470,33 @@
     const server = await readServerDraft();
     if (!server) return false;
     const cur = getState();
-    if (cur[STAMP] && cur[STAMP] !== id) flushEvictedBlob(cur);   // another tab's project: its own id
+    if (cur[STAMP] && cur[STAMP] !== id) await flushEvictedBlob(cur);   // another tab's project: its own id
     if (!writeBlob(Object.assign({}, server, { [STAMP]: id }))) return false;
     markSynced(id, draftDigest(server));
+    return true;
+  }
+
+  /** The other way out of an "unknown" copy, on the estimator's say-so: THIS browser's copy goes on,
+   *  over the server's. It records the server's copy, read now, as the one this browser last saw
+   *  there, so the Files page reads this browser's copy as "ahead" of it, and the door builds it and
+   *  saves it. The door still asks the server again as it saves: a save landing in between sends it
+   *  back to the Files page, which then stops on the "changed somewhere else" card.
+   *
+   *  Review of fix 4, round 4: on deploy day no browser has a record yet, so an edit whose save went
+   *  out as a page closed (a keepalive, refused above 64 KB) reached the "doesn't match" card, and
+   *  that card's one button put the server's copy over it. With a record the same edit is built and
+   *  saved. Writes nothing to the draft; resolves true when the record is written, false when the
+   *  server's copy could not be read or this browser's copy is another project's. */
+  async function keepLocalCopy() {
+    const id = getDraftId();
+    if (!id || _reloadPending || _givenUp) return false;
+    const cur = getState();
+    if (!cur[STAMP] || cur[STAMP] !== id) return false;
+    const server = await readServerDraft();
+    if (!server) return false;
+    const theirs = draftDigest(server);
+    if (!theirs) return false;
+    markSynced(id, theirs);
     return true;
   }
 
@@ -664,16 +689,52 @@
     watchTouches();
   }
 
-  /** Count what the estimator does on a held page — a key, a paste, a tick, a click. Only real
+  /** Count what the estimator does on a held page that could have changed something. Only real
    *  input counts (isTrusted): the page's own writes as it loads are not the estimator's, and
-   *  dropHeldChanges may give those back, never these. Generous on purpose: a click that edited
-   *  nothing only costs the Files page's card, where a missed edit would be dropped unseen. */
+   *  dropHeldChanges may give those back, never these. Generous where it cannot tell — a key that
+   *  can type, delete, indent, undo or format; a click on a control (the ribbon, a box's buttons, a
+   *  tick); a drag (a box moved or resized); anything the page reports as input or a change — so
+   *  an edit is never dropped unseen. NOT a key or a click that cannot edit anything: Escape, an
+   *  arrow, a modifier on its own, a click that only puts the caret somewhere or lands on the page
+   *  itself. Those used to count, so a click while the page said "Updating the proposal…" kept the
+   *  door's own writes, the Files page said this browser had changes that never reached the server,
+   *  and opening another project PUT them over the colleague's revision (review of fix 4, round 4).
+   *  The keystroke rule is the Proposal step's own (proposal-review.js undoUnitForKey): what it
+   *  keeps an undo step for, plus Ctrl+Z and Ctrl+Y. */
+  let _pointerDown = null;
+  function mayEdit(e) {
+    if (e.type === "pointerdown") {
+      _pointerDown = { x: e.clientX, y: e.clientY };
+      return false;
+    }
+    if (e.type === "keydown") {
+      const k = String(e.key || "");
+      if (e.ctrlKey || e.metaKey) return /^[biuvxyz]$/i.test(k);
+      if (e.altKey) return false;
+      return k === "Enter" || k === "Tab" || k === "Backspace" || k === "Delete" || k.length === 1;
+    }
+    if (e.type === "pointerup") {
+      const down = _pointerDown;
+      _pointerDown = null;
+      const t = e.target;
+      // A disabled one does nothing: the door's own "Updating the proposal…" button is the one an
+      // impatient estimator clicks.
+      const c = (t && typeof t.closest === "function") ? t.closest(
+        "button, a, input, select, textarea, label, summary, [role='button'], [role='checkbox'], "
+        + "[role='switch'], [role='menuitem'], [role='option'], [role='tab']") : null;
+      const onControl = !!c && !c.disabled;
+      const dragged = !!down && typeof e.clientX === "number" && typeof down.x === "number"
+        && (Math.abs(e.clientX - down.x) > 3 || Math.abs(e.clientY - down.y) > 3);
+      return onControl || dragged;
+    }
+    return true;                                   // input, change, paste, cut, drop
+  }
   function watchTouches() {
     if (_watchingTouches) return;
     _watchingTouches = true;
-    const note = (e) => { if (_hold && e && e.isTrusted) _hold.touches++; };
+    const note = (e) => { if (_hold && e && e.isTrusted && mayEdit(e)) _hold.touches++; };
     try {
-      ["keydown", "input", "change", "paste", "cut", "drop", "pointerup"]
+      ["keydown", "input", "change", "paste", "cut", "drop", "pointerdown", "pointerup"]
         .forEach((t) => document.addEventListener(t, note, true));
     } catch {}
   }
@@ -779,16 +840,42 @@
   // to save — and PUTting it anyway puts yesterday's copy back over whatever has been saved there
   // since. Review of fix 4, round 2: Kyle's browser still held project X from yesterday, in sync
   // then; RJ re-priced X to $15,000 and Troy marked it Won; Kyle opened another project, and the
-  // eviction put his $10,000 copy back over both. A blob with no record (saved before the record
-  // existed, or another draft's record) is flushed as before: it may be the tail of a save that
-  // never landed — a large draft's pagehide keepalive fails outright — and this is its last chance.
-  function flushEvictedBlob(blob) {
+  // eviction put his $10,000 copy back over both.
+  //
+  // AND ONLY OVER A SERVER COPY NOBODY HAS SAVED SINCE THIS BROWSER LAST SAW IT, asked of the server
+  // first (reconcileWithServer's "ahead"). A blob with changes the server never confirmed may be the
+  // tail of a save that never landed — a large draft's pagehide keepalive fails outright — and this
+  // is its last chance, so it is saved when that loses nothing of anyone's: the server still holds
+  // the copy last seen there, or has no row for it at all. It used to be saved whatever the server
+  // held (review of fix 4, round 4): Kyle's deploy-day copy of X, with no record, went back over
+  // RJ's $15,000 revision and Troy's Won, and RJ's browser, whose copy was in step with its record,
+  // then took the server's copy in place of his own (reconcileWithServer's "adopted") — so the
+  // revision was gone from the server and from every browser. A blob whose server copy has moved
+  // on since ("kept"), or that has no record to tell ("unknown"), or whose server copy cannot be
+  // read, is not sent: in a real conflict the saved copy stands, as the Files page's own card has it.
+  async function flushEvictedBlob(blob) {
     const owner = blob && blob[STAMP];
     if (!owner) return;
     if (Object.keys(blob).filter((k) => k !== STAMP).length === 0) return;  // empty → nothing to save
     if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }         // its pending save is superseded
-    if (syncedDigest(owner) === draftDigest(blob)) return;                   // the server has all of it
-    putDraft(owner, blob);
+    const mine = draftDigest(blob);
+    const last = syncedDigest(owner);
+    if (last === mine) return;                                               // the server has all of it
+    let theirs = null;
+    try {
+      const res = await fetch(resolveApiBase() + "/api/draft/" + encodeURIComponent(owner),
+                              { headers: authHeaders() });
+      if (res.status === 404) { await putDraft(owner, blob); return; }       // no row: nothing to lose
+      if (!res.ok) return;
+      const body = await res.json();
+      const data = body && body.data;
+      if (!(data && typeof data === "object" && !Array.isArray(data))) return;
+      theirs = draftDigest(data);
+    } catch { return; }
+    if (theirs === mine) return;                                             // the server has all of it
+    if (last !== null && last === theirs) { await putDraft(owner, blob); return; }   // "ahead"
+    console.warn("[TW] left an evicted copy of draft", owner, "unsaved: the saved copy has changed "
+                 + "since this browser last saw it, or this browser has no record of seeing it");
   }
 
   let _saveTimer = null;
@@ -912,17 +999,25 @@
 
     // Blob belongs to a DIFFERENT draft → must hydrate.
     if (guardBlocks(urlId)) {
-      // Already hydrated+reloaded this id seconds ago and the stamp STILL
-      // mismatches (storage writes failing, e.g. private mode). Don't loop:
-      // drop a stamped-empty blob so we never render another draft as this one.
-      flushEvictedBlob(blob);
-      writeBlob({ [STAMP]: urlId });
-      setDraftId(urlId);
+      // Already hydrated+reloaded this id seconds ago and the stamp STILL mismatches: storage
+      // writes are failing (private mode), or another tab took the one slot in between — two tabs
+      // opening two projects at once (a restored session, two pasted links). Don't loop.
+      //
+      // AND LEAVE THE SLOT AS FOUND: this page reads another draft's blob, so every write from it is
+      // refused (setState's stamp check), as for any tab whose project another tab has since taken,
+      // and Continue says so. It used to drop a stamped-empty blob here, "so we never render another
+      // draft as this one" — but the page's snapshot was read before this ran, so it rendered the
+      // other draft anyway, and the empty blob's stamp AGREED with this page: its load save merged
+      // the other draft's pricing into it and PUT eight keys over this project, name, scope and
+      // document gone (review of fix 4, round 4). A later load then found that blob "owned" and
+      // opened a blank form over the project. With storage failing, the write never landed anyway.
+      // The draft-id key is left too, so it still names the draft the slot holds; this page's id is
+      // its URL's (getDraftId).
       console.error("[TW] hydration loop stopped for draft", urlId, "— local storage may be unavailable");
       return;
     }
 
-    flushEvictedBlob(blob);                        // save the OTHER draft's tail under its own id
+    await flushEvictedBlob(blob);                  // save the OTHER draft's tail under its own id
     const adoptAndReload = (data, seen) => {
       data[STAMP] = urlId;                         // force-stamp (server copy may carry a stale stamp)
       writeBlob(data);
@@ -1617,6 +1712,7 @@
     reconcileWithServer,
     matchesServer,
     useServerCopy,
+    keepLocalCopy,
     holdServerSaves,
     heldSaveDigest,
     releaseHeldSaves,
