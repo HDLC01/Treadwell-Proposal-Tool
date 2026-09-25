@@ -80,6 +80,50 @@ function bar(opts) {
   return text;
 }
 
+/** Pick a base bid through the REAL base-bid radio handler (wireBidBar's change listener), with the
+ *  real updateTotalBarFromHF wired in, and report the bar afterwards. Hanz's second report: base
+ *  put back to Epoxy $7,696, bar still read the copy's $15,149. */
+function pickBase(opts) {
+  const state = Object.assign({ work_type: "epoxy", base_tab_id: null, tab_copies: [], tab_structs: [],
+                                tab_opts: {} }, opts.state || {});
+  const values = opts.values || {};
+  const HF = { ready: true, getValue: (s, a) => (values[s] || {})[a] ?? null };
+  const nodes = {};
+  for (const id of ["tb-material", "tb-labor", "tb-tooling", "tb-total", "tb-psf"]) nodes[id] = { textContent: "<untouched>" };
+  const listeners = {};
+  const list = { addEventListener: (type, fn) => { listeners[type] = fn; } };
+  const document = { getElementById: (id) => (id === "bid-options-list" ? list : nodes[id] || null) };
+  const tabs = [];
+  const deps = { state, tabs, HF, document, GYP_BASE: VOCAB.GYP_BASE, BASE_ROLE: VOCAB.BASE_ROLE,
+                 PRICED_ROLES: VOCAB.PRICED_ROLES, OPTION_ONLY_ROLES: VOCAB.OPTION_ONLY_ROLES,
+                 TOTAL_CELLS: VOCAB.TOTAL_CELLS,
+                 renderBidOptions: () => {}, persistBidOptions: () => {},
+                 clearSingleBidDisplayOverride: () => {}, ensureOpt: () => ({}), TW: { setState: () => {} } };
+  deps._shiftIdx = lift("_shiftIdx", deps);
+  deps.structOpsFor = liftExpr(/^function structOpsFor\(sheetId\) .*$/m, "structOpsFor", { state });
+  deps.txAddr = lift("txAddr", deps);
+  deps.roleFor = lift("roleFor", deps);
+  deps.isPricedRole = liftExpr(/^const isPricedRole = .*$/m, "isPricedRole", { PRICED_ROLES: VOCAB.PRICED_ROLES });
+  deps.isOptionOnlyRole = liftExpr(/^const isOptionOnlyRole = .*$/m, "isOptionOnlyRole",
+                                   { OPTION_ONLY_ROLES: VOCAB.OPTION_ONLY_ROLES });
+  deps.pricedTabs = liftExpr(/^function pricedTabs\(\) .*$/m, "pricedTabs", { tabs, isPricedRole: deps.isPricedRole });
+  deps.basePricedTabs = liftExpr(/^const basePricedTabs = .*$/m, "basePricedTabs",
+                                 { pricedTabs: deps.pricedTabs, isOptionOnlyRole: deps.isOptionOnlyRole });
+  deps.totalCellsFor = lift("totalCellsFor", deps);
+  deps.resolveBaseTab = lift("resolveBaseTab", deps);
+  deps.fmtMoney = lift("fmtMoney", deps);
+  for (const id of ["Epoxy", "Polish", VOCAB.GYP_BASE, "Seal"]) tabs.push({ id, role: deps.roleFor(id), kind: "base" });
+  for (const c of state.tab_copies) tabs.push({ id: c.id, role: c.role || "epoxy", kind: "copy", source: c.source });
+  deps.updateTotalBarFromHF = lift("updateTotalBarFromHF", deps);
+  deps.updateTotalBarFromHF();                       // the bar as the page painted it on load
+  const before = nodes["tb-total"].textContent;
+  lift("wireBidBar", deps)();
+  const radio = { checked: true, value: opts.pick, classList: { contains: (c) => c === "bb-base" },
+                  closest: () => null };
+  listeners.change({ target: radio });
+  return { before, after: nodes["tb-total"].textContent, base: state.base_tab_id };
+}
+
 const E = VOCAB.TOTAL_CELLS.Epoxy, P = VOCAB.TOTAL_CELLS.Polish;
 const epoxyVals = { [E.total]: 7447, [E.material]: 1076, [E.labor]: 1584, [E.tooling]: 220, [E.psf]: 75.22 };
 const copyVals = { [E.total]: 14224, [E.material]: 2100, [E.labor]: 3000, [E.tooling]: 400, [E.psf]: 17.78 };
@@ -98,5 +142,10 @@ const out = {
                 values: { Epoxy: epoxyVals, Copy1: copyVals, Polish: polishVals } }),
   comboNoBase: bar({ state: { work_type: "combo" },
                      values: { Epoxy: epoxyVals, Polish: polishVals } }),
+  // Through the radio: from the copy back to Epoxy, and from Epoxy to the copy.
+  radioBackToEpoxy: pickBase({ state: { base_tab_id: "Copy1", tab_copies: copies }, pick: "Epoxy",
+                               values: { Epoxy: epoxyVals, Copy1: copyVals, Polish: polishVals } }),
+  radioToCopy: pickBase({ state: { base_tab_id: "Epoxy", tab_copies: copies }, pick: "Copy1",
+                          values: { Epoxy: epoxyVals, Copy1: copyVals, Polish: polishVals } }),
 };
 console.log(JSON.stringify(out));

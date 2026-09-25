@@ -40,6 +40,19 @@ def test_an_inverted_base_drives_the_bar(ran):
     assert ran["polishIsBase"]["tb-total"] == "$13,585.00", ran["polishIsBase"]
 
 
+def test_picking_a_base_bid_repaints_the_bar_at_once(ran):
+    """Hanz's second report: base put back to Epoxy $7,696 and the bar still read the copy's
+    $15,149, because the base-bid radio's handler never repainted it. Driven through the real
+    wireBidBar change listener.
+
+    Mutation: drop the updateTotalBarFromHF call from the radio branch. `after` stays `before`."""
+    back = ran["radioBackToEpoxy"]
+    assert back["base"] == "Epoxy"
+    assert back["before"] == "$14,224.00" and back["after"] == "$7,447.00", back
+    to = ran["radioToCopy"]
+    assert to["before"] == "$7,447.00" and to["after"] == "$14,224.00", to
+
+
 def test_with_no_designated_base_the_bar_is_unchanged(ran):
     assert ran["noBase"]["tb-total"] == "$7,447.00", ran["noBase"]
     assert ran["comboNoBase"]["tb-total"] == "$21,032.00", ran["comboNoBase"]

@@ -1051,6 +1051,10 @@ function wireBidBar() {
       if (state.base_tab_id !== priorBaseId) clearSingleBidDisplayOverride();
       renderBidOptions();
       persistBidOptions();
+      // The bottom Total bar follows the base tab, so a new base has to repaint it here: nothing
+      // else on this path does, and the bar kept the previous base's lump sum until the next cell
+      // edit or reload (Hanz, 2026-09-25: base back to Epoxy $7,696, bar still read $15,149).
+      try { if (HF && HF.ready) updateTotalBarFromHF(); } catch {}
       return;
     }
     const wrap = el.closest(".bb-opt"); if (!wrap || !wrap.dataset.id) return;
