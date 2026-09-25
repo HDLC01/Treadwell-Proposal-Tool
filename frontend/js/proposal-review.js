@@ -6969,7 +6969,10 @@
     // the caller no way to tell that apart from a success. Navigating on a refused write is what
     // closed RJ's loop: the document was never rebuilt, so the Files page refused the send again
     // and sent him back here. Say why, and go nowhere.
-    if (sayTheSaveIsBlocked()) return;
+    //
+    // RESOLVES TRUE ONLY WHEN IT LEFT FOR THE FILES PAGE, false when it stopped and said why: the
+    // Files page's door, which presses this unattended, has to know the page is still here.
+    if (sayTheSaveIsBlocked()) return false;
     const btn = document.getElementById("generate-btn");
     btn.disabled = true;
     btn.textContent = "Generating…";
@@ -7195,7 +7198,7 @@
         repaintNote("Your changes could not be saved, so the document was not rebuilt.",
                     "Reload this page and press Continue to Done again. If it says this a second time, tell Hanz before you send anything.");
       }
-      return;
+      return false;
     }
     // AND ON THE SERVER, BEFORE THE FILES PAGE OPENS. That page renders the SERVER's copy of this
     // draft (/api/draft/{id}/documents) and has no save of its own pending to wait for, so leaving
@@ -7205,7 +7208,7 @@
       btn.disabled = false; btn.textContent = "Continue to Done →";
       repaintNote("Your changes could not be saved, so the document was not rebuilt.",
                   "Check your connection, then press Continue to Done again. If it says this a second time, tell Hanz before you send anything.");
-      return;
+      return false;
     }
     // `composed=1` tells the Files page this document was built from this page a moment ago, so it
     // does not send the estimator back through its door (done.js). Opened BY that door
@@ -7219,6 +7222,7 @@
       + (_viaDoor && _door.get("files") === "1" ? "&files=1" : ""));
     if (_viaDoor) window.location.replace(_files);
     else window.location.assign(_files);
+    return true;
   }
 
   form.addEventListener("submit", continueToDone);
@@ -7346,17 +7350,29 @@
     // job Won, went back to a Files card whose one button dropped everything typed (review of fix
     // 4, round 3). So the server is asked once more now; on a yes the page's copy is saved and it
     // saves as every page does. Could it not be asked, the hold stays, and the note says so.
-    if (timedOut || !templateVersion || verdict !== "ok") {
+    const handOver = async (freedHead, unfreedHead) => {
       stopped = true;
       const freed = await TW.releaseHeldSaves();
       if (leaving) return;                                // the server held another copy: gone back
-      repaintNote(freed
-        ? "The Files page needs this proposal rebuilt from your latest changes, and it could not be done for you."
-        : "The saved copy of this project could not be read, so the proposal was not rebuilt for you.",
+      repaintNote(freed ? freedHead : unfreedHead,
         freed ? "Check the document below, then press Continue to Done."
               : "Check your connection, then reload this page. Until then, nothing you change on this page is saved.");
+    };
+    if (timedOut || !templateVersion || verdict !== "ok") {
+      await handOver("The Files page needs this proposal rebuilt from your latest changes, and it could not be done for you.",
+                     "The saved copy of this project could not be read, so the proposal was not rebuilt for you.");
       return;
     }
-    await continueToDone(null);
+    // THE DOOR'S OWN CONTINUE CAN STOP TOO: the server could not be asked as it saved (a deploy
+    // restarting, a Wi-Fi blip), or the save failed. The page is then the estimator's exactly as a
+    // stopped door's is. It used to be left holding every save with continueToDone's "press
+    // Continue again" on screen — no autosave, nothing as the tab closed, and a Files card later
+    // whose one button dropped what was typed (review of fix 4, round 4). A save refused for a
+    // reason of its own (another tab has the keys) keeps continueToDone's note: nothing here can
+    // save that page's copy.
+    if (await continueToDone(null) || leaving) return;
+    if (TW.saveBlocked && TW.saveBlocked()) return;
+    await handOver("Your changes are saved now, but the Files page could not be opened for you.",
+                   "Your changes could not be saved, so the proposal was not rebuilt for you.");
   }
   composeForFiles();

@@ -32,6 +32,7 @@ import json
 import pathlib
 import shutil
 import subprocess
+import time
 
 import pytest
 
@@ -147,8 +148,33 @@ def test_another_drafts_blob_still_hydrates():
     other = {"project_name": "Somebody else's bid", "__draft_id": "other-0003"}
     r = run(urlId=PID, local={"treadwell.proposal_tool.state": json.dumps(other)},
             session={}, server=dict(REAL_BID))
-    assert r["gets"] == 1
+    # Two reads: the evicted blob's own server copy is asked about before it is saved (review of
+    # fix 4, round 4 — an eviction no longer saves over a copy that has moved on), then this one.
+    assert r["gets"] == 2
     assert r["localAfter"]["project_name"] == "Nearman Creek Power Station"
+
+
+def test_a_stopped_hydration_loop_claims_nothing_and_saves_nothing():
+    """Review of fix 4, round 4, finding 2. The loop guard trips — this tab hydrated this project
+    seconds ago, and the slot holds another draft again (another tab opened it in between, or
+    storage writes are failing). It used to drop a stamped-empty blob for this project, whose stamp
+    then agreed with the page, so the first keystroke PUT a near-empty blob over the live bid —
+    and a later load found that blob "owned" and opened a blank form over it. The slot is now left
+    as found, and every write from this page is refused as for any tab whose project another tab
+    has taken.
+
+    Mutation: write `{__draft_id: urlId}` in the guard branch again — the keystroke is PUT."""
+    other = {"project_name": "Somebody else's bid", "__draft_id": "other-0003"}
+    guard = "%s:%d" % (PID, int(time.time() * 1000))
+    r = run(urlId=PID, local={"treadwell.proposal_tool.state": json.dumps(other)},
+            session={"treadwell.proposal_tool.hydrated_once": guard}, server=dict(REAL_BID),
+            type={"project_name": "typed while the loop was stopped"})
+    assert r["reloads"] == 0 and r["gets"] == 0, r
+    assert any("hydration loop stopped" in w for w in r["warns"]), r["warns"]
+    assert r["puts"] == [], "a page that never read this project saved over it"
+    assert r["serverAfter"] == REAL_BID
+    assert r["localAfter"] == other, "the other draft's blob was replaced"
+    assert r["saveBlocked"] == "foreign-blob", r["saveBlocked"]
 
 
 def test_the_other_drafts_edits_are_flushed_under_their_own_id_first():

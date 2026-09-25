@@ -22,6 +22,10 @@
 //     tab's), another tab's late save cannot take this project's record, a copy with no record is
 //     asked about rather than replaced, and a door that stops hands the page to the estimator once
 //     the server says so (round 3: S7 to S12, and D3);
+//   * an eviction never goes over a server copy that moved on, a key or click that cannot edit
+//     does not keep the door's writes, two tabs loading two projects at once write nothing over
+//     either, a door whose own Continue cannot save hands the page over, and the "doesn't match"
+//     card can keep this browser's copy (round 4: S13 to S17, and S1);
 //   * the Estimate step's pills save an edit still waiting on the grid's debounce, and only that.
 //
 // EXECUTED, NOT READ. The real shared.js runs whole, one fresh vm context PER PAGE LOAD against one
@@ -258,6 +262,7 @@ async function load(b, href) {
     if (u === "/api/draft/d1" && method === "PUT") {
       b.log.push("PUT");
       if (b.server.failPut) return json(500, { detail: "down" });
+      if (b.server.failPutOnce) { b.server.failPutOnce = false; return json(500, { detail: "blip" }); }
       const data = JSON.parse(opts.body).data;
       b.server.puts.push(copy(data));
       b.server.d1 = copy(data);
@@ -265,10 +270,15 @@ async function load(b, href) {
     }
     if (u === "/api/draft/d2" && method === "PUT") {          // another project, saved as it leaves
       b.server.d2Puts = (b.server.d2Puts || []).concat([JSON.parse(opts.body).data]);
+      if (b.server.d2) b.server.d2 = copy(JSON.parse(opts.body).data);
       return json(200, { ok: true });
+    }
+    if (u === "/api/draft/d2" && method === "GET") {          // asked before an eviction saves it
+      return b.server.d2 ? json(200, { data: copy(b.server.d2) }) : json(404, { detail: "Draft not found" });
     }
     if (u === "/api/draft/d1" && method === "GET") {
       if (b.server.failGet) return json(503, { detail: "down" });
+      if (b.server.failGetOnce) { b.server.failGetOnce = false; return json(503, { detail: "blip" }); }
       if (b.server.stallNextGet) {                  // this read is served only when the scenario says,
         const g = b.server.stallNextGet;            // with whatever the server holds by then
         b.server.stallNextGet = null;
@@ -343,9 +353,10 @@ async function load(b, href) {
            /** The page closing: every `pagehide` listener shared.js (and the page) added. */
            pagehide: () => listeners.filter(([ev]) => ev === "pagehide").forEach(([, h]) => h()),
            /** The estimator's own hand on the page: a real (trusted) event of `type`, as the
-            *  browser dispatches one to every listener the page put on `document`. */
-           input: (type) => docListeners.filter(([ev]) => ev === type)
-             .forEach(([, h]) => h({ type, isTrusted: true })) };
+            *  browser dispatches one to every listener the page put on `document`; `init` is the
+            *  rest of the event (its key, its target, where the pointer was). */
+           input: (type, init) => docListeners.filter(([ev]) => ev === type)
+             .forEach(([, h]) => h(Object.assign({ type, isTrusted: true }, init || {}))) };
 }
 
 /** A DOM node that accepts anything: every property is another such node, every call returns one.
@@ -468,19 +479,28 @@ async function openDone(b, href) {
   const presses = [];
   const link = { textContent: "← Go to Proposal Review",
                  addEventListener: (ev, h) => { if (ev === "click") presses.push(h); } };
+  // done.html's second link, hidden until a card offers a second way on.
+  const altPresses = [];
+  const alt = { textContent: "", style: { display: "none" },
+                addEventListener: (ev, h) => { if (ev === "click") altPresses.push(h); } };
   const emptyEl = { style: { display: "none" },
-                    querySelector: (sel) => ({ h1, ".lede": lede, ".actions a": link }[sel] || null) };
+                    querySelector: (sel) => ({ h1, ".lede": lede, ".actions a": link,
+                                               ".actions a.door-alt": alt }[sel] || null) };
   const scope = makeDoneScope(page.TW, page.loc, page.history,
     () => calls.push("viewFiles"), () => calls.push("showPostGenerate"),
     () => calls.push("showPreGenerate"), emptyEl, () => false);
   await scope.__decide();
   return { page, TW: page.TW, calls, scope, url: page.loc.pathname + page.loc.search,
            nav: page.nav, emptyShown: emptyEl.style.display === "",
-           card: { title: h1.textContent, lede: lede.textContent, button: link.textContent },
+           card: { title: h1.textContent, lede: lede.textContent, button: link.textContent,
+                   second: alt.style.display === "" ? alt.textContent : null },
            ledeNow: () => lede.textContent,
            /** The card's button, pressed; resolves once everything it started has settled. */
            press: () => { presses.forEach((h) => h({ preventDefault() {} }));
-                          return new Promise((r) => setImmediate(r)); } };
+                          return new Promise((r) => setImmediate(r)); },
+           /** Its second button, when it shows one. */
+           pressSecond: () => { altPresses.forEach((h) => h({ preventDefault() {} }));
+                                return new Promise((r) => setImmediate(r)); } };
 }
 
 // ── the draft ────────────────────────────────────────────────────────────────────────────────
@@ -1297,20 +1317,22 @@ const mentionsY = (x) => /Other Project Y|Y texture|Y scope|Y note/.test(JSON.st
 
   // S1. Finding 1. Opening another project evicts this browser's copy of X, and the eviction used
   //     to PUT it to X unconditionally: RJ's revision and the Won went back to Kyle's copy. A copy
-  //     that is still the one the server last stored is not sent; one with a change the server
-  //     never confirmed still is (a large draft's pagehide keepalive fails outright, and this is
-  //     that change's last chance), and so is one with no record at all (saved before the record
-  //     existed), as it always was.
+  //     that is still the one the server last stored is not sent. Since round 4, neither is one
+  //     over a server copy that has moved on — one with a change the server never confirmed, or
+  //     with no record at all (every browser's on deploy day): in a real conflict the saved copy
+  //     stands. The counterexample: the same unsaved change with nobody saving since (the server
+  //     still holds the copy last seen there) is saved, since that loses nothing of anyone's — a
+  //     large draft's pagehide keepalive fails outright, and this is that change's last chance.
   {
     const r = {};
-    for (const kind of ["inSync", "unsavedEdit", "noRecord"]) {
+    for (const kind of ["inSync", "unsavedEdit", "noRecord", "unsavedEditNobodyElse"]) {
       const b = browser(draft());
       if (kind !== "noRecord") await lastContinue(b);
-      if (kind === "unsavedEdit") {
+      if (kind === "unsavedEdit" || kind === "unsavedEditNobodyElse") {
         const p = await load(b, "/proposal-review.html?d=d1");
         p.TW.setLocalState({ texture: "Kyle's edit that never reached the server" });
       }
-      await colleagueRevised(b);
+      if (kind !== "unsavedEditNobodyElse") await colleagueRevised(b);
       const before = b.server.puts.length;
       const y = await load(b, "/done.html?d=d2&files=1");
       await settle(); await settle();
@@ -1545,7 +1567,8 @@ const mentionsY = (x) => /Other Project Y|Y texture|Y scope|Y note/.test(JSON.st
       const pending = door.scope.composeForFiles();
       await settle(); await settle();
       if (kind === "kyleTyped") {                        // a real key, into a real field
-        door.page.input("keydown");
+        door.page.input("keydown", { key: "K" });
+        door.page.input("input");
         door.form.elements.find((e) => e.name === "scope_notes").value = "Kyle typed this here";
         door.TW.setState({ scope_notes: "Kyle typed this here" });   // the form's persist
       }
@@ -1611,7 +1634,8 @@ const mentionsY = (x) => /Other Project Y|Y texture|Y scope|Y note/.test(JSON.st
     const r = {};
     const REWRITE = "Kyle's careful rewrite of the scope";
     const rewrite = (door) => {
-      door.page.input("keydown");
+      door.page.input("keydown", { key: "K" });
+      door.page.input("input");
       door.form.elements.find((e) => e.name === "scope_notes").value = REWRITE;
       door.TW.setState({ scope_notes: REWRITE });              // the form's persist
     };
@@ -1732,6 +1756,213 @@ const mentionsY = (x) => /Other Project Y|Y texture|Y scope|Y note/.test(JSON.st
       r[kind] = res;
     }
     out.doorKeepsOtherTabs = r;
+  }
+
+  // ── The review of fix 4, round 4 (2026-09-25) ───────────────────────────────────────────────
+  // S13. Finding 4. The door's give-back is turned off by anything the estimator does on the page —
+  //      and a key or click that cannot edit anything turned it off too: a click while the page
+  //      said "Updating the proposal…", Escape, an arrow. The door's own writes then stayed, the
+  //      Files page said this browser had changes that never reached the server, and opening
+  //      another project PUT them over RJ's revision. Those now give back; a key that can type,
+  //      delete, indent, undo or format, a click on a control, and a drag still keep the copy.
+  {
+    const r = {};
+    const at = (control, disabled) => ({   // an event target; `control`: it is inside a button
+      closest: (sel) => (control && /\bbutton\b/.test(sel) ? { disabled: !!disabled } : null) });
+    const GESTURES = {
+      escapeKey: (p) => p.input("keydown", { key: "Escape" }),
+      arrowKey: (p) => p.input("keydown", { key: "ArrowDown" }),
+      copyKey: (p) => p.input("keydown", { key: "c", ctrlKey: true }),
+      clickOnText: (p) => { p.input("pointerdown", { clientX: 40, clientY: 40, target: at(false) });
+                            p.input("pointerup", { clientX: 40, clientY: 40, target: at(false) }); },
+      clickOnDisabledButton: (p) => { p.input("pointerdown", { clientX: 5, clientY: 5, target: at(true, true) });
+                                      p.input("pointerup", { clientX: 5, clientY: 5, target: at(true, true) }); },
+      enterKey: (p) => p.input("keydown", { key: "Enter" }),
+      undoKey: (p) => p.input("keydown", { key: "z", ctrlKey: true }),
+      ribbonButton: (p) => { p.input("pointerdown", { clientX: 5, clientY: 5, target: at(true) });
+                             p.input("pointerup", { clientX: 5, clientY: 5, target: at(true) }); },
+      boxDrag: (p) => { p.input("pointerdown", { clientX: 10, clientY: 10, target: at(false) });
+                        p.input("pointerup", { clientX: 60, clientY: 10, target: at(false) }); },
+    };
+    for (const kind of Object.keys(GESTURES)) {
+      const b = browser(draft());
+      await lastContinue(b);
+      await editElsewhere(b, { texture: "Kyle Orange Peel" });  // saved, no Continue: doc stale
+      const arrive = await openDone(b, "/done.html?d=d1&files=1");
+      const doorUrl = ((arrive.nav[0] || [])[1] || "").replace(/^https?:\/\/[^/]+/, "");
+      let release;
+      const tpl = new Promise((res) => { release = res; });
+      const door = await openProposal(b, doorUrl, { gate: tpl });
+      const pending = door.scope.composeForFiles();
+      await settle(); await settle();
+      GESTURES[kind](door.page);                           // nothing typed, nothing written
+      await colleagueRevised(b);                           // RJ's Continue lands while the template loads
+      release(); await pending; await settle();
+      door.page.elapse(); await door.TW.flushState(); await settle();
+      const back = await openDone(b, (door.page.nav[door.page.nav.length - 1] || [])[1] || "/done.html?d=d1");
+      const atFiles = local(b);
+      const before = b.server.puts.length;
+      await load(b, "/done.html?d=d2&files=1");            // Kyle opens another project
+      await settle(); await settle();
+      r[kind] = { doorNav: door.page.nav, filesNav: back.nav,
+                  filesCard: back.emptyShown ? back.card.title : null,
+                  textureAtFiles: atFiles.texture,
+                  putsToXOnSwitch: putsTo(b, before), server: rjRevision(b) };
+    }
+    out.touchesThatCannotEdit = r;
+  }
+
+  // S14. Finding 2. Two tabs of one browser load two projects at the same moment (a restored
+  //      session, two pasted links). Tab A adopts X and reloads; tab B adopts Y; tab A's reload
+  //      then finds Y in the one slot, and its loop guard stops a second read. It used to write a
+  //      stamped-empty X blob and carry on with its snapshot of Y, so the Proposal step's load save
+  //      merged Y's pricing into it and PUT eight keys over X. The slot is now left as found: tab A
+  //      writes nothing, its Continue says the project is open in another tab, and tab B is Y's.
+  {
+    const bA = browser(draft());
+    bA.server.d2 = otherProject(); delete bA.server.d2[STAMP];
+    bA.ls.setItem(STATE_KEY, JSON.stringify({ project_name: "Z", [STAMP]: "d3" }));
+    bA.ls.setItem(DRAFT_ID_KEY, "d3");
+    const bB = { ls: bA.ls, ss: storage(), log: [], server: bA.server };   // one browser, two tabs
+    const xBefore = copy(bA.server.d1);
+    const A1 = await load(bA, "/proposal-review.html?d=d1"); await A1.TW.draftReady;
+    const B1 = await load(bB, "/proposal-review.html?d=d2"); await B1.TW.draftReady;
+    const A2 = await openProposal(bA, "/proposal-review.html?d=d1");   // tab A's reload, first
+    const B2 = await openProposal(bB, "/proposal-review.html?d=d2");   // then tab B's
+    const putsBefore = bA.server.puts.length;
+    A2.page.elapse(); B2.page.elapse(); await settle(); await settle();
+    const slot = local(bA);
+    const r = {
+      firstLoads: [A1.nav, B1.nav],
+      tabASnapshot: A2.state.project_name, tabBSnapshot: B2.state.project_name || null,
+      slot: { project: slot.project_name || null, stamp: slot[STAMP] },
+      putsToX: bA.server.puts.slice(putsBefore).length,
+      xUnchanged: JSON.stringify(bA.server.d1) === JSON.stringify(xBefore),
+      tabBSaved: (bA.server.d2Puts || []).map((p) => p.project_name || null),
+    };
+    await A2.scope.continueToDone(null);
+    r.tabAContinue = { nav: A2.page.nav, note: A2.nodes["resync-note-head"].textContent,
+                       putsToX: bA.server.puts.slice(putsBefore).length };
+    out.twoTabsAtOnce = r;
+  }
+
+  // S15. Finding 1. Two browsers, one server. RJ re-priced X to $15,000 and pressed Continue, so
+  //      his copy is in step with its record. Kyle's browser still holds X from before (with no
+  //      record — deploy day — or with a note whose save failed), and he opens another project.
+  //      The eviction used to PUT his $10,000 copy over RJ's, and RJ's next Files visit then took
+  //      that server copy in place of his own ("adopted"): the revision was gone everywhere. The
+  //      eviction now asks first, and a server copy that moved on since is left standing.
+  {
+    const r = {};
+    for (const kind of ["deployDayNoRecord", "unsavedNotePlusColleague"]) {
+      const bK = browser(draft());
+      await lastContinue(bK);
+      const s0 = copy(bK.server.d1);
+      const bR = browser(s0);                           // RJ's browser, on the same server
+      bR.server = bK.server;
+      await recordSynced(bR, s0);
+      await editElsewhere(bR, { texture: "RJ Orange Peel", priced_tabs: tabs(15000, 480),
+                                proposal_lump_sum: 15000, proposal_sales_tax: 480 });
+      await lastContinue(bR);
+      if (kind === "deployDayNoRecord") bK.ls.removeItem(SYNCED);
+      else {
+        const p = await load(bK, "/estimate-review.html?d=d1");
+        p.TW.setLocalState({ notes_text: "Kyle's note whose save failed" });
+      }
+      const before = bK.server.puts.length;
+      await load(bK, "/done.html?d=d2&files=1");        // Kyle opens another project
+      await settle(); await settle();
+      const evictionPuts = bK.server.puts.slice(before).map((p) => p.texture);
+      const trip = await arriveAtFiles(bR, "/done.html?d=d1&files=1");   // RJ comes back to X
+      const rj = local(bR);
+      r[kind] = { evictionPuts, rjStops: trip.stops.map((s) => s.page),
+                  rjCard: trip.done && trip.done.emptyShown ? trip.done.card.title : null,
+                  rjLocal: { texture: rj.texture, lump: rj.proposal_lump_sum },
+                  server: { texture: bK.server.d1.texture, lump: bK.server.d1.proposal_lump_sum } };
+    }
+    out.revisionSurvivesAnEviction = r;
+  }
+
+  // S16. Finding 3. The door's first question is a yes, but its own Continue cannot save: the
+  //      server cannot be asked as it saves (one blip), the save fails once, or the server stays
+  //      down. That Continue said "press Continue again" and left the page holding every save —
+  //      no autosave, nothing as the tab closed. Now the page is handed over as a stopped door's
+  //      is: the server is asked once more, and on a yes the page's copy is saved and it autosaves;
+  //      could it not be asked, the note says nothing on the page is saved until it can, and the
+  //      first save the server allows (Ctrl+S) lifts it.
+  {
+    const r = {};
+    const REWRITE = "Kyle's rewrite after the failed Continue";
+    for (const kind of ["readBlip", "saveBlip", "serverDown"]) {
+      const b = browser(draft());
+      await lastContinue(b);
+      await editElsewhere(b, { texture: "Kyle Orange Peel" });  // saved, no Continue: doc stale
+      let release;
+      const tpl = new Promise((res) => { release = res; });
+      const door = await openProposal(b, "/proposal-review.html?compose=files&d=d1", { gate: tpl });
+      const pending = door.scope.composeForFiles();
+      await settle(); await settle();                   // the first question has been answered
+      if (kind === "readBlip") b.server.failGetOnce = true;
+      else if (kind === "saveBlip") b.server.failPutOnce = true;
+      else b.server.failGet = true;
+      const before = b.server.puts.length;
+      release(); await pending; await settle();         // the door's Continue, which cannot save
+      const res = { nav: door.page.nav.slice(), putsAtStop: putsTo(b, before),
+                    docTexture: b.server.d1.proposal_payload.values.texture,
+                    note: door.nodes["resync-note-head"].textContent,
+                    noteDo: door.nodes["resync-note-do"].textContent };
+      door.page.input("keydown", { key: "K" }); door.page.input("input");
+      door.form.elements.find((e) => e.name === "scope_notes").value = REWRITE;
+      door.TW.setState({ scope_notes: REWRITE });       // the form's persist
+      const beforeWork = b.server.puts.length;
+      for (let i = 0; i < 3; i++) { door.page.elapse(); await settle(); await settle(); }
+      door.page.pagehide(); await settle();
+      res.putsWhileWorking = b.server.puts.length - beforeWork;
+      res.rewriteSaved = b.server.d1.scope_notes === REWRITE;
+      if (kind === "serverDown") {
+        b.server.failGet = false;                       // the connection is back
+        res.ctrlS = await door.TW.flushState();         // Ctrl+S
+        res.savedByCtrlS = b.server.d1.scope_notes === REWRITE;
+      }
+      r[kind] = res;
+    }
+    out.failedDoorContinue = r;
+  }
+
+  // S17. Finding 5. Deploy day: no browser has a record yet. Kyle edits a note on the Estimate step
+  //      and clicks Files at once; the save goes as the page closes and is refused (a keepalive over
+  //      64 KB). The Files page finds a copy it cannot place ("unknown"), and its card's one button
+  //      put the server's copy over the note. The card now offers the other way too: keep this
+  //      browser's copy, which the door builds and saves. If RJ saves in between, the door does not
+  //      save over him: the Files page stops on the "changed somewhere else" card instead.
+  {
+    const r = {};
+    const NOTE = "Kyle's first note after the deploy";
+    for (const kind of ["keep", "keepButRjSavesFirst", "load"]) {
+      const b = browser(draft());
+      await lastContinue(b);
+      b.ls.removeItem(SYNCED);                          // deploy day: this browser has no record
+      b.server.failPut = true;                          // the note's save is refused as the page closes
+      await editElsewhere(b, { notes_text: NOTE });
+      b.server.failPut = false;
+      const d = await openDone(b, "/done.html?d=d1&files=1");
+      const res = { nav: d.nav.slice(), card: d.card };
+      const before = b.server.puts.length;
+      if (kind === "load") await d.press();
+      else await d.pressSecond();
+      res.pressNav = d.nav.slice(res.nav.length);
+      res.putsByPress = b.server.puts.length - before;
+      if (kind === "keepButRjSavesFirst") await colleagueRevised(b);
+      const trip = await arriveAtFiles(b, "/done.html?d=d1&files=1");   // the reload it asked for
+      res.stops = trip.stops.map((s) => s.page);
+      res.card2 = trip.done && trip.done.emptyShown ? trip.done.card.title : null;
+      res.serverNotes = b.server.d1.notes_text;
+      res.docNotes = b.server.d1.proposal_payload.notes;
+      res.localNotes = local(b).notes_text;
+      res.server = rjRevision(b);
+      r[kind] = res;
+    }
+    out.unknownCardCanKeep = r;
   }
 
   process.stdout.write(JSON.stringify(out));
