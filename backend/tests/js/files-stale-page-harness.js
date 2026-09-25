@@ -11,7 +11,7 @@
 //
 // EXECUTED, NOT READ. shared.js runs whole, in a vm context, with only the browser and the network
 // stubbed — its real setState/flushState/scheduleServerSave/initDraftSync decide whether a PUT
-// happens. `freshDocuments`, `payloadFromDraft`, `builtAt`, `downloadAs` and the Send button's
+// happens. `freshDocuments`, `builtAt`, `downloadAs` and the Send button's
 // click handler are lifted verbatim out of done.js; every collaborator they reach that is not in
 // shared.js is bound explicitly, so a name the page expects and does not have is a thrown error
 // here. Timers are captured rather than slept, so "after the debounce" is a deterministic step.
@@ -56,7 +56,6 @@ function liftSendHandler() {
 
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 const FRESH = lift("freshDocuments");
-const FROM_DRAFT = lift("payloadFromDraft");
 const BUILT_AT = lift("builtAt");
 const DOWNLOAD = lift("downloadAs");
 const ERR_MSG = lift("portalErrMsg");
@@ -83,7 +82,7 @@ function storage(initial) {
 
 /** One browser tab on /done.html?d=d1 whose localStorage holds `local`, against a server holding
  *  `server`. Returns the tab's TW (real shared.js), the lifted page functions, and the record. */
-async function tab(local, server) {
+async function tab(local, server, opts) {
   const rec = { puts: [], published: [], renderedTexture: null };
   const timers = [];
   const json = (status, body) => Promise.resolve({
@@ -143,12 +142,16 @@ async function tab(local, server) {
   vm.runInContext(SHARED, sandbox);
   const TW = sandbox.window.TW;
   await TW.draftReady;
+  // The page's copy was built by a Continue on this machine, so it carries that Continue's key
+  // (TW.composeKey — see files-door-harness.js). Stamped locally only, as the Continue left it.
+  // `moved` is what another tab of this browser does afterwards: an edit, and no Continue.
+  TW.setLocalState({ proposal_payload_key: TW.composeKey(TW.getState()) });
+  if (opts && opts.moved) TW.setLocalState(opts.moved);
 
   const builtAt = new Function(...BUILT_AT.args, '"use strict"; ' + BUILT_AT.body);
-  const payloadFromDraft = new Function(...FROM_DRAFT.args, '"use strict"; ' + FROM_DRAFT.body);
   const freshDocuments = new AsyncFunction(
-    "TW", "payloadFromDraft", "builtAt", '"use strict"; ' + FRESH.body)
-    .bind(null, TW, payloadFromDraft, builtAt);
+    "TW", "builtAt", '"use strict"; ' + FRESH.body)
+    .bind(null, TW, builtAt);
   const checkedDocument = { renderId: "" };
   const downloadAs = new AsyncFunction(
     ...DOWNLOAD.args, "TW", "freshDocuments", "paintLumpSum", "fetch", "Blob", "URL", "document",
@@ -256,6 +259,17 @@ function staleWorld() {
     await t.download();
     await t.send();
     out.refused = { posted: t.rec.published.length, err: t.rec.err || null };
+  }
+
+  // E. The draft moved in ANOTHER tab of this browser after this page opened — a texture picked on
+  //    the Estimate step there, no Continue. The document this page would send no longer matches
+  //    the draft's key, and the drift gate cannot see a texture. Nothing is posted.
+  {
+    const w = staleWorld();
+    const t = await tab(w.local, w.server, { moved: { texture: "Orange Peel" } });
+    await t.send();
+    out.movedInAnotherTab = { posted: t.rec.published.length, puts: t.rec.puts.length,
+                              err: t.rec.err || null };
   }
 
   process.stdout.write(JSON.stringify(out));

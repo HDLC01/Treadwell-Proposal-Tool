@@ -4787,6 +4787,16 @@ document.getElementById("continue-btn").addEventListener("click", () => {
   persistTabState();
   window.location.assign(TW.withDraft("/proposal-review.html"));
 });
+// EVERY STEP PILL LEAVES THE WAY THE BUTTONS DO. A cell edit lives in `cellValues` and HyperFormula
+// until the grid's `change` listener runs persistTabState 300ms later, and `change` only fires as
+// the cell loses focus — which clicking a pill does, a moment before the page is torn down. So
+// "edit the price, click 4 · Files" left with the edit in neither the draft nor the totals the
+// Proposal step prices from, and the Files page built the old price. Delegated, because the
+// header folds the pills into itself (auth.js); the click still navigates as the link says.
+document.addEventListener("click", (e) => {
+  const pill = e.target && e.target.closest ? e.target.closest(".progress a.step[href]") : null;
+  if (pill) { try { persistTabState(); } catch {} }
+});
 
 // ── System-name helpers (live reads off the grid / HF for the auto System Name) ──
 const _cbNum = x => { const n = parseFloat(String(x).replace(/[$,]/g, "")); return isNaN(n) ? 0 : n; };

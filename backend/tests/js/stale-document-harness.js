@@ -493,8 +493,10 @@ out.proposalGuard = (() => {
   const iWrite = PROPOSAL.indexOf("proposal_payload:", iGuard > 0 ? iGuard : 0);
   const iLanded = PROPOSAL.indexOf("landed = !!(TW.getState() || {}).proposal_payload",
                                    iWrite > 0 ? iWrite : 0);
-  const iGo = PROPOSAL.indexOf("window.location.assign(TW.withDraft(\"/done.html\"))",
-                               iWrite > 0 ? iWrite : 0);
+  // The navigation to the Files page. Since the Files page's door (2026-09-25) it is built as
+  // `_files` (marked composed=1) and either replaces the page or assigns it; the first of the two
+  // is the one that must come after the checks.
+  const iGo = PROPOSAL.indexOf("window.location.replace(_files)", iWrite > 0 ? iWrite : 0);
   return {
     said: said,
     head: nodes["resync-note-head"].textContent,

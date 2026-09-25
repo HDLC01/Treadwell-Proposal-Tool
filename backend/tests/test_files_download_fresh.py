@@ -93,11 +93,18 @@ def test_a_download_that_failed_checked_nothing(ran):
     assert ran["notFound"]["checked"] == ""
 
 
-def test_a_draft_with_no_payload_is_recorded_as_before(ran):
-    """The /api/generate rebuild (no saved payload, so nothing Send could freeze) keeps its old
-    write: the page's own fields are what that route was handed and persisted anyway."""
-    n = ran["noPayload"]
-    assert "setState" in n["log"] and "setLocalState" not in n["log"], n["log"]
+def test_a_draft_with_no_document_builds_nothing_and_writes_nothing(ran):
+    """No saved payload (or one with no values): the press flushes, then refuses — nothing is
+    posted, nothing fetched, nothing written, and the button says it failed. The page's door sends
+    such a draft through the Proposal step before the page ever shows a button
+    (test_files_door.py), so this is the refusal behind it, not a route anybody walks.
+
+    Mutation: restore the rebuild from the draft's own fields (post `st` to /api/generate) — a
+    POST appears and a file is fetched."""
+    for name, n in ran["noPayload"].items():
+        assert n["log"] == ["flush"], (name, n["log"])
+        assert n["posted"] == [] and n["fetched"] == [] and n["clicked"] == [], (name, n)
+        assert n["button"] == "Failed — try again", (name, n["button"])
 
 
 def test_a_save_that_cannot_land_builds_nothing(ran):
@@ -114,16 +121,6 @@ def test_a_404_is_reported_and_nothing_is_rebuilt_from_elsewhere(ran):
     n = ran["notFound"]
     assert n["posted"] == ["/api/draft/d1/documents"], n["posted"]
     assert len(n["fetched"]) == 1 and n["button"] == "Failed — try again"
-
-
-def test_a_draft_with_no_saved_payload_is_rebuilt_from_its_own_fields(ran):
-    """Nothing saved to render, so nothing for Send to freeze either: the draft's own fields go to
-    /api/generate exactly as View files always sent them, letter flag and notes included."""
-    n = ran["noPayload"]
-    assert n["posted"] == ["/api/generate"]
-    assert (n["workType"], n["audience"], n["letter"]) == ("polish", "GC", True)
-    assert n["notes"] == ["one", "two"] and n["valuesName"] == "No Payload"
-    assert n["fetched"] == ["https://tool/api/file/NEW"], n["fetched"]
 
 
 def test_the_generate_button_renders_the_saved_payload(ran):

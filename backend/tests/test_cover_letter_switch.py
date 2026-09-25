@@ -829,18 +829,12 @@ def test_the_portal_is_told_the_proposal_has_a_letter():
         "generate_result — which is how the portal came to disagree with the pinned snapshot")
 
 
-def test_the_files_page_rebuild_carries_the_letter_too():
-    """"View files" regenerates from a payload it rebuilds itself. Leave the letter out of it and a
-    project that had one comes back with page 1 missing — the second download disagreeing with the
-    first one the estimator already checked, and no way to see which is right without opening both.
-
-    Ported from test_cover_letter_ui.py, which asserted `TWCoverLetter.payloadFields()` here."""
-    # The rebuild is `payloadFromDraft` since 2026-09-25, shared by View files and the downloads.
-    m = re.search(r"function payloadFromDraft\(s\)(.*?)\n  \}\r?\n", DONE_JS, re.S)
-    assert m, "payloadFromDraft moved — re-derive this check"
-    assert "cover_letter_enabled" in m.group(1), (
-        "the Files-page rebuild drops cover_letter_enabled, so regenerating a project that has a "
-        "letter hands back a proposal without its first page")
+# "View files" USED TO rebuild a payload of its own here (`payloadFromDraft`), and a test pinned
+# that the rebuild carried `cover_letter_enabled`. That rebuild is gone: the Files page builds no
+# document of its own any more, and a draft whose document is not current goes through the Proposal
+# step's Continue (the Files page's door), whose `cover_letter_enabled` line is executed by the
+# scenarios above. The letter riding that door's rebuild is executed end to end in
+# test_files_door.py::test_view_files_stays_view_files_through_the_door.
 
 
 # ══ the editor is gone, and stays gone ════════════════════════════════════════

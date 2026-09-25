@@ -357,14 +357,16 @@
     })();
   }
 
-  (function prefillNotes() {
+  // The boilerplate fetch is KEPT (`_notesReady`) so the Files page's door, composeForFiles below,
+  // can wait for the notes box to be filled before it builds the document off this page.
+  const _notesReady = (function prefillNotes() {
     const ta = document.getElementById("notes-text");
     if (!ta) return;
     const applyAndPreview = (text) => { ta.value = text; syncPhaseNote(); try { renderNotesPreview(); } catch {} };
     if (Array.isArray(state.notes) && state.notes.length) { applyAndPreview(state.notes.join("\n")); return; }
     if (String(ta.value || "").trim()) { syncPhaseNote(); return; }
     // Brand-new project: pull this work type's boilerplate scope/schedule/exclusions.
-    fetchDefaultNotes((text) => {
+    return fetchDefaultNotes((text) => {
       if (String(ta.value || "").trim()) return;   // user typed during the fetch
       applyAndPreview(text);
       _seededNotes = text;
@@ -6831,7 +6833,9 @@
     panel.addEventListener("pointercancel", end);
   })();
 
-  initDocumentEditor();
+  // The FIRST template load, kept so the Files page's door (composeForFiles, below) can wait for the
+  // document to be on screen before it collects the estimator's edits off it.
+  const _firstDocLoad = initDocumentEditor();
 
   // Recompute base + options from the per-tab snapshot first (no-op for older
   // drafts without it), so the price display below reflects the current base.
@@ -6939,6 +6943,13 @@
     const btn = document.getElementById("generate-btn");
     btn.disabled = true;
     btn.textContent = "Generating…";
+    // The form's debounced persist (300ms) writes `syncPayloadPricing()` — a patch of the module
+    // snapshot's OLD payload object — so one still pending when this runs would land after the
+    // write below and put the previous document back. Everything it would have saved is read here
+    // anyway (TW.readForm), so it is cancelled rather than raced. In a try because the timer is
+    // declared near the bottom of this file, and the button is wired at the top precisely so that
+    // it still works when page init stops somewhere in between.
+    try { if (_persistTimer) { clearTimeout(_persistTimer); _persistTimer = null; } } catch {}
 
     const mergedValues = Object.assign({}, state, TW.readForm(form));
     const tokenValues = computeTokenValues(mergedValues);
@@ -6968,7 +6979,18 @@
       liveKey("box_overrides_all"), effectiveWorkType(), state.audience || "Direct",
       templateVersion, boxOverridesOut);
 
-    TW.setState({
+    // THE DOCUMENT'S VALUES, NOT THE WHOLE DRAFT. `mergedValues` is a spread of the draft, so it
+    // carried the PREVIOUS proposal_payload (and its key), the last build's result, the Dropbox
+    // result and the per-tab pricing snapshot — and every Continue nested one more copy, three
+    // deep and 104 KB on a real draft. Nothing the document prints reads any of them, and the
+    // /api/generate write-back would have echoed the stale Dropbox result back onto the draft.
+    // `work_type` in here is the EFFECTIVE type (computeTokenValues sets it off the base tab),
+    // the same one this payload names as its template below.
+    const docValues = { ...mergedValues, ...tokenValues };
+    ["proposal_payload", "proposal_payload_key", "generate_result", "dropbox_result", "priced_tabs"]
+      .forEach((k) => { delete docValues[k]; });
+
+    const composed = {
       ...mergedValues,
       paragraph_overrides_all: _allOverrides,
       paragraph_overrides: paragraphOverrides,
@@ -6991,7 +7013,7 @@
         // The backend drops the overrides if this no longer matches the current
         // template (annotation shifts editable-block ids) — see api_generate.
         template_version: templateVersion,
-        values:    { ...mergedValues, ...tokenValues },
+        values:    docValues,
         cell_values: state.cell_values || {},
         // Custom material lines (Super Stick / edge-case adds) -> Epoxy spare rows
         extras: Array.isArray(state.extras) ? state.extras : [],
@@ -7099,7 +7121,13 @@
       ...(!!liveKey("cover_letter_enabled") !== !!((liveKey("proposal_payload") || {}).cover_letter_enabled)
           ? { generate_result: null }
           : {}),
-    });
+    };
+    // THE KEY THE FILES PAGE CHECKS THE DOCUMENT BY (TW.composeKey): the inputs this document was
+    // built from, and the document. Computed over exactly what setState is about to store — the
+    // live blob with this write merged in, as setState itself merges it — so the Files page, which
+    // recomputes it off the saved draft, gets the same answer until something changes.
+    composed.proposal_payload_key = TW.composeKey(Object.assign(TW.getState() || {}, composed));
+    TW.setState(composed);
     // Belt and braces on the same failure. The guard above covers the three refusals setState
     // knows about; this covers the one it does not -- writeBlob returning false on a full or
     // locked localStorage (private mode, quota), which setState ignores. Either way the payload
@@ -7120,7 +7148,28 @@
       }
       return;
     }
-    window.location.assign(TW.withDraft("/done.html"));
+    // AND ON THE SERVER, BEFORE THE FILES PAGE OPENS. That page renders the SERVER's copy of this
+    // draft (/api/draft/{id}/documents) and has no save of its own pending to wait for, so leaving
+    // the write to the 2.5s debounce, or to the keepalive PUT a navigation fires, let "View files"
+    // build the previous document in the moment before it landed.
+    if (!await TW.flushState()) {
+      btn.disabled = false; btn.textContent = "Continue to Done →";
+      repaintNote("Your changes could not be saved, so the document was not rebuilt.",
+                  "Check your connection, then press Continue to Done again. If it says this a second time, tell Hanz before you send anything.");
+      return;
+    }
+    // `composed=1` tells the Files page this document was built from this page a moment ago, so it
+    // does not send the estimator back through its door (done.js). Opened BY that door
+    // (?compose=files, see composeForFiles), this page REPLACES itself, so the Back button from
+    // Files returns to wherever the estimator came from rather than to a page that would only
+    // build the document again and bounce forward; and "View files" stays View files.
+    let _door = null;
+    try { _door = new URLSearchParams(window.location.search); } catch {}
+    const _viaDoor = !!_door && _door.get("compose") === "files";
+    const _files = TW.withDraft("/done.html?composed=1"
+      + (_viaDoor && _door.get("files") === "1" ? "&files=1" : ""));
+    if (_viaDoor) window.location.replace(_files);
+    else window.location.assign(_files);
   }
 
   form.addEventListener("submit", continueToDone);
@@ -7133,3 +7182,53 @@
   // rebuilt here, so the pill has to come through the same door as the button.
   const _filesPill = document.querySelector('a.step[href="/done.html"]');
   if (_filesPill) _filesPill.addEventListener("click", (e) => { e.preventDefault(); continueToDone(e); });
+
+  /** THE FILES PAGE'S DOOR, from this side: build the document from what is on screen, then go.
+   *
+   *  Hanz, 2026-09-25: "Clicking to Done should regenerate and make the proposal correctly." The
+   *  Files page sends the SAVED `proposal_payload`, and the one piece of code that composes it is
+   *  continueToDone above — computeTokenValues, the editor's paragraph and box edits, the WORK
+   *  system picks, the combo lines — none of which can run off this page, because the edits are
+   *  read off the mounted template. So when the Files page finds that its document was not built
+   *  from the draft as it stands (done.js, TW.composeKey), whichever way the estimator arrived —
+   *  a step pill from Intake or Estimate, the Polish beta's Files link, View files, a reload, a
+   *  typed URL — it sends them here with `?compose=files`, and this presses Continue for them
+   *  once the page has settled: the draft read, the template on screen with its saved edits
+   *  restored, the notes box filled.
+   *
+   *  NOT the `?resync=1` arrival (explainWhyYouAreHere), which deliberately never presses
+   *  Continue: that one follows a refused SEND, and its point is that the estimator looks at the
+   *  document before it goes. This door leads to the Files page, where nothing goes anywhere until
+   *  Send is pressed, and where Download hands over this very document to check.
+   *
+   *  ONLY WHEN THE TEMPLATE LOADED. With no template on screen collectOverrides falls back to the
+   *  last Continue's list and templateVersion is "", which the backend reads as "apply every
+   *  edit" — an unattended build could put one template's edits on another's paragraphs. So the
+   *  page stops, says why, and leaves Continue to the estimator; likewise when it has not settled
+   *  inside 20 seconds. A save that is refused is continueToDone's own business: it asks first and
+   *  says why. */
+  async function composeForFiles() {
+    let q = null;
+    try { q = new URLSearchParams(window.location.search); } catch { return; }
+    if (!q || q.get("compose") !== "files") return;
+    const btn = document.getElementById("generate-btn");
+    const label = btn ? btn.textContent : "";
+    if (btn) { btn.disabled = true; btn.textContent = "Updating the proposal…"; }
+    const settled = Promise.all(
+      [TW.draftReady, window.TWAuth && window.TWAuth.ready, _firstDocLoad, _notesReady]
+        .map((p) => Promise.resolve(p).catch(() => {})));
+    let timer = null;
+    const timedOut = await Promise.race([
+      settled.then(() => false),
+      new Promise((resolve) => { timer = setTimeout(() => resolve(true), 20000); }),
+    ]);
+    if (timer) clearTimeout(timer);
+    if (btn) { btn.disabled = false; btn.textContent = label; }
+    if (timedOut || !templateVersion) {
+      repaintNote("The Files page needs this proposal rebuilt from your latest changes, and it could not be done for you.",
+                  "Check the document below, then press Continue to Done.");
+      return;
+    }
+    await continueToDone(null);
+  }
+  composeForFiles();

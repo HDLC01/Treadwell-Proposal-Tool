@@ -1,6 +1,6 @@
 // Lifts the Files page's download path out of frontend/js/done.js and drives it.
 //
-// EXECUTED, NOT READ. `freshDocuments`, `payloadFromDraft`, `builtAt`, `doGenerate` and the
+// EXECUTED, NOT READ. `freshDocuments`, `builtAt`, `doGenerate` and the
 // `downloadAs` nested inside showPostGenerate are taken verbatim out of the shipped file and run in
 // a bare scope with every collaborator bound explicitly — so an identifier the page expects and does
 // not have is a thrown error here, not a green suite and a dead button.
@@ -44,7 +44,6 @@ function lift(name) {
 
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 const FRESH = lift("freshDocuments");
-const FROM_DRAFT = lift("payloadFromDraft");
 const BUILT_AT = lift("builtAt");
 const DOWNLOAD = lift("downloadAs");
 const GENERATE = lift("doGenerate");
@@ -93,10 +92,9 @@ function page(opts) {
   const URLStub = { createObjectURL: () => "blob:1", revokeObjectURL() {} };
   class BlobStub { constructor(parts, o) { this.type = o && o.type; } }
   const builtAt = new Function(...BUILT_AT.args, '"use strict"; ' + BUILT_AT.body);
-  const payloadFromDraft = new Function(...FROM_DRAFT.args, '"use strict"; ' + FROM_DRAFT.body);
   const freshDocuments = new AsyncFunction(
-    "TW", "payloadFromDraft", "builtAt", '"use strict"; ' + FRESH.body)
-    .bind(null, TW, payloadFromDraft, builtAt);
+    "TW", "builtAt", '"use strict"; ' + FRESH.body)
+    .bind(null, TW, builtAt);
   let painted = 0;
   // done.js's module-level record of the document the estimator downloaded (Send reads it).
   const checkedDocument = { renderId: "" };
@@ -151,18 +149,23 @@ const SAVED = { values: { total_formatted: "$41,250.00", project_name: "Niagara"
     out.flushFails = { log: p.log, fetched: p.fetched, button: b.textContent };
   }
 
-  // C. No saved payload: rebuilt from the draft's own fields, through /api/generate.
+  // C. No saved payload: NOTHING is built. There used to be a rebuild from the draft's own fields
+  //    here, which dropped the paragraph edits, the remodel line and the rooms. The page's door
+  //    sends a draft with no document through the Proposal step (files-door-harness.js), so a
+  //    press that still finds none refuses. Both shapes of "no document": none, and one with no
+  //    values.
   {
-    const p = page({ state: { project_name: "No Payload", work_type: "polish", audience: "GC",
-                              cover_letter_enabled: true, notes_text: "one\ntwo\n" } });
-    const b = button();
-    await p.download("docx_download_url", "x.docx", b);
-    const body = p.posted.length ? p.posted[0].body : {};
-    out.noPayload = { posted: p.posted.map((x) => x.path), fetched: p.fetched, log: p.log,
-                      stamp: p.state().generated_lump_sum,
-                      workType: body.work_type, audience: body.audience,
-                      letter: body.cover_letter_enabled, notes: body.notes,
-                      valuesName: body.values && body.values.project_name };
+    out.noPayload = {};
+    for (const [name, pp] of [["missing", undefined], ["noValues", { work_type: "polish" }]]) {
+      const st = { project_name: "No Payload", work_type: "polish", audience: "GC",
+                   cover_letter_enabled: true, notes_text: "one\ntwo\n" };
+      if (pp) st.proposal_payload = pp;
+      const p = page({ state: st });
+      const b = button();
+      await p.download("docx_download_url", "x.docx", b);
+      out.noPayload[name] = { posted: p.posted.map((x) => x.path), fetched: p.fetched,
+                              log: p.log, button: b.textContent, clicked: p.clicked };
+    }
   }
 
   // D. A 404 on a token minted a moment ago is a failure, not a cue to rebuild from elsewhere.

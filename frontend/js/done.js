@@ -26,6 +26,22 @@
     catch { return false; }
   })();
 
+  /** Did the estimator arrive here straight from the Proposal step's Continue, a moment ago?
+   *
+   *  continueToDone marks its navigation `composed=1`. The mark is taken off the address at once,
+   *  so a reload, a bookmark or a link copied out of the bar comes back through the door like any
+   *  other arrival. What it buys is a loop guard, nothing more: a page that has just been built
+   *  from the draft is never sent straight back to be built again. */
+  const composedHere = (() => {
+    try {
+      const u = new URL(location.href);
+      if (u.searchParams.get("composed") !== "1") return false;
+      u.searchParams.delete("composed");
+      history.replaceState(history.state, "", u.pathname + u.search + u.hash);
+      return true;
+    } catch { return false; }
+  })();
+
   /** The Total the document was actually filled with, off the payload being sent to /api/generate.
    *
    *  `values.total_formatted` and not `proposal_lump_sum`: this has to be the figure the DOCUMENT
@@ -114,6 +130,29 @@
   (async () => {
     try { await (TW.draftReady || Promise.resolve()); } catch {}
     const st = TW.getState();
+    // ── THE DOOR ────────────────────────────────────────────────────────────────────────────
+    // Hanz, 2026-09-25: "Clicking to Done should regenerate and make the proposal correctly."
+    // Everything on this page — Download, Send, the customer's PDF — is built from the SAVED
+    // `proposal_payload`, and only the Proposal step's Continue composes one. Every other way in
+    // (the Files pill from Intake or Estimate, the Polish beta's Files link, View files off the
+    // board, a reload, a typed URL) used to show the document from the LAST Continue, whatever
+    // had changed since: a texture picked on the Estimate step, a re-price, a note, the tax
+    // mode, a base flip. So the page asks first whether its document is the one the draft
+    // describes now (TW.composeKey: the inputs, and the document), and when it is not, sends
+    // the estimator through the Proposal step to have it built (proposal-review.js
+    // composeForFiles), which comes straight back here. REPLACE, so Back from here is not a page
+    // that bounces forward again.
+    //
+    // A document that is current is left alone, and nothing is written: opening a project's
+    // files on a machine whose copy of the draft is older than the server's must not put that
+    // copy back over a colleague's revision, and building from it would. `composedHere` is the
+    // loop guard — a page built from this draft a moment ago is never sent round again, and a
+    // send is still checked against the key (see the Send button).
+    if (st.project_name && !composedHere && st.proposal_payload_key !== TW.composeKey(st)) {
+      location.replace(TW.withDraft("/proposal-review.html?compose=files"
+                                    + (filesMode ? "&files=1" : "")));
+      return;
+    }
     const res = st.generate_result;
     // Decided HERE rather than in proposal-review's Continue, where the cover-letter version of
     // this lives. Every route into this page has to be covered — the Files step pill, "View
@@ -187,9 +226,14 @@
    *  remembers the build locally. The card's figure is the one the SERVER rendered
    *  (`document_total`), not this page's copy of it.
    *
-   *  A draft with NO saved payload (never Continued through the Proposal step) has nothing Send
-   *  could freeze either: its files are rebuilt from the draft's own fields, as View files always
-   *  rebuilt them, and recorded as they always were. */
+   *  NO SAVED PAYLOAD, NO FILES. There used to be a second builder here for a draft never taken
+   *  through the Proposal step's Continue: it posted the draft's own fields to /api/generate, and
+   *  its own comment said it "still drops paragraph_overrides / remodel / rooms". That was a way
+   *  to put a document in front of the estimator — and, through the files it recorded, in front of
+   *  a customer — that no Proposal step had ever composed. The page's door (the mode decider)
+   *  sends a draft with no document through the Proposal step first, so a press that still finds
+   *  none refuses instead. A draft with no id (never saved) has nothing for the server to read,
+   *  so its composed payload itself goes to /api/generate. */
   async function freshDocuments() {
     if (!await TW.flushState()) {
       throw new Error("Couldn't save your latest changes, so the files were not built — "
@@ -198,74 +242,18 @@
     const st = TW.getState() || {};
     const draftId = TW.getDraftId();
     const pp = st.proposal_payload;
-    if (draftId && pp && pp.values) {
+    if (!pp || typeof pp !== "object" || !pp.values || typeof pp.values !== "object") {
+      throw new Error("This proposal hasn't been put together yet. Open the Proposal step and "
+                      + "press Continue to Done, then come back here.");
+    }
+    if (draftId) {
       const out = await TW.postJSON("/api/draft/" + encodeURIComponent(draftId) + "/documents", {});
       TW.setLocalState({ generate_result: out, generated_lump_sum: (out && out.document_total) || null });
       return out;
     }
-    const built = payloadFromDraft(st);
-    const out = await TW.postJSON("/api/generate", built);
-    TW.setState({ generate_result: out, generated_lump_sum: builtAt(built) });
+    const out = await TW.postJSON("/api/generate", pp);
+    TW.setState({ generate_result: out, generated_lump_sum: builtAt(pp) });
     return out;
-  }
-
-  /** What /api/generate is handed for a draft with no saved payload: the payload itself when there
-   *  is one, otherwise one rebuilt from the saved values (backend backfills job_name etc.). */
-  function payloadFromDraft(s) {
-    const pp = s.proposal_payload;
-    // The saved box layout belongs to ONE template file. Carried only when it was captured on the
-    // template this rebuild renders: a stamp is a content hash now, but one saved before that is a
-    // bare mtime that names no file, so a layout from another template would replay by id.
-    const _boxMeta = s.box_overrides_meta || {};
-    const _boxesFitThisTemplate = _boxMeta.work_type === (s.work_type || "epoxy")
-      && _boxMeta.audience === (s.audience || "Direct");
-    const payload = (pp && pp.values) ? pp : {
-      work_type: s.work_type || "epoxy",
-      audience:  s.audience  || "Direct",
-      values: s,
-      cell_values: s.cell_values || {},
-      extras: Array.isArray(s.extras) ? s.extras : [],
-      price_lines: Array.isArray(s.price_lines) ? s.price_lines : [],
-      computed_bid: s.computed_bid || null,
-      alternate_computed_bid: s.alternate_computed_bid || null,
-      alternate_label: (s.alternate && s.alternate.label) || s.alternate_label || "",
-      // Mirror the user's worksheet copies + tab renames + order into the .xlsx.
-      tab_copies: Array.isArray(s.tab_copies) ? s.tab_copies : [],
-      tab_labels: (s.tab_labels && typeof s.tab_labels === "object") ? s.tab_labels : {},
-      tab_order: Array.isArray(s.tab_order) ? s.tab_order : [],
-      // Structural edits + per-cell lock overrides into the .xlsx.
-      tab_structs: Array.isArray(s.tab_structs) ? s.tab_structs : [],
-      lock_overrides: (s.lock_overrides && typeof s.lock_overrides === "object") ? s.lock_overrides : {},
-      // Editable NOTES (one bullet per line) — carry them so the "View files"
-      // rebuild keeps the estimator's notes AND the substituted phase-price
-      // bullet (empty → backend uses the standard list, phase price from
-      // values.phase_price). NOTE: this fallback still drops paragraph_overrides
-      // / remodel / rooms — pre-existing lossiness; the primary path
-      // (proposal_payload above) carries them all.
-      notes: String(s.notes_text || "").replace(/\n+$/, "").split("\n").map(t => t.trim()),
-      system_overrides: Array.isArray(s.system_overrides) ? s.system_overrides : [],
-      // Boxes the estimator dragged or resized. Carried here as well as on the primary path,
-      // because this rebuild is what "View files" re-generates from: without it, a project whose
-      // boxes were laid out by hand would come back with them at the template's size, and the
-      // second download would disagree with the first one the estimator already checked.
-      // The version comes along so the backend can still drop a layout captured against an
-      // older .docx — an empty template_version means "legacy caller, apply unchanged", which is
-      // exactly the wrong answer for ids that may have shifted.
-      box_overrides: (_boxesFitThisTemplate && s.box_overrides && typeof s.box_overrides === "object"
-                      && !Array.isArray(s.box_overrides)) ? s.box_overrides : {},
-      template_version: _boxesFitThisTemplate ? String(_boxMeta.template_version || "") : "",
-      // Doc-editor per-line PRICE display overrides (base amount / tax phrase,
-      // option + manual line label/amount). Display-only — never affects pricing.
-      price_overrides: (s.price_overrides && typeof s.price_overrides === "object") ? s.price_overrides : {},
-      // The optional cover letter, carried here for the same reason box_overrides is: this
-      // rebuild is what "View files" regenerates from, and without it a project the estimator
-      // gave a letter would come back with the proposal alone — page 1 missing from the second
-      // download, disagreeing with the first one they already checked. Since 2026-09-09 the flag
-      // is the whole feature (the editor is gone), so it is read straight off the draft rather
-      // than through a helper on window.
-      cover_letter_enabled: !!s.cover_letter_enabled,
-    };
-    return payload;
   }
 
   function fmtUSD(n) {
@@ -1441,6 +1429,25 @@
           if (!await TW.flushState()) {
             throw new Error("Couldn't save your latest changes, so nothing was sent — "
                             + "check your connection and try again.");
+          }
+          // ── …OR IF THE DRAFT HAS MOVED SINCE THIS PAGE BUILT ITS DOCUMENT ───────────────
+          // The door (the mode decider) checked the document against the draft when the page
+          // opened, and nothing this page writes is an input to it (TW.composeKey). So a key
+          // that no longer matches means the draft was changed from ANOTHER tab or window: a
+          // texture picked on the Estimate step over there, then Send here, froze the old
+          // texture, because the drift gate below compares only the price, the base and the
+          // number of options. Nothing is posted. A reload goes back through the door, which
+          // builds the document from the draft as it now stands.
+          const _now = TW.getState() || {};
+          if (_now.project_name && _now.proposal_payload_key !== TW.composeKey(_now)) {
+            portalBtn.disabled = false; portalBtn.textContent = orig;
+            if (portalRecip.setBusy) portalRecip.setBusy(false);
+            if (portalRecip.setErr) {
+              portalRecip.setErr("This proposal changed after this page opened (in another tab or "
+                + "window), so nothing was sent. Reload this page — the files are rebuilt from "
+                + "your latest changes — check them, then send.");
+            }
+            return;                            // NOTHING is posted. No portal row, no email.
           }
           // ── THE SEND STOPS HERE IF THE PDF WOULD BE THE OLD ONE ──────────────────────
           // Checked AFTER the flush and BEFORE the publish, and that order is the whole

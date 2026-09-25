@@ -84,3 +84,18 @@ def test_a_refused_send_says_why_in_the_servers_words(ran):
     assert r["posted"] == 1
     assert r["err"] and r["err"].startswith("Not sent — this proposal changed"), r
 
+
+def test_a_draft_moved_in_another_tab_is_not_sent(ran):
+    """The Files page opened on a current document; then another tab of this browser picked a new
+    texture on the Estimate step and left without Continue. The document Send would freeze no
+    longer matches the draft's key (TW.composeKey), and the price/base/options drift gate cannot
+    see a texture — so nothing is posted, nothing is written, and the estimator is told to reload,
+    which takes the page back through its door (test_files_door.py).
+
+    Mutation: drop the key check from the Send handler — one publish goes out with the old
+    texture."""
+    m = ran["movedInAnotherTab"]
+    assert m["posted"] == 0, m
+    assert m["puts"] == 0, m
+    assert m["err"] and "Reload this page" in m["err"], m
+

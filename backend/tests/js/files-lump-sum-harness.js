@@ -86,9 +86,14 @@ const priceMoved = new Function("st", "money",
 const paint = new Function("TW", "document", "money",
   '"use strict"; ' + PAINT.body);
 
+// `composedHere` and `location` belong to the page's DOOR, which runs first: a draft whose document
+// is not current is sent through the Proposal step before any of the choices below are made. That
+// branch is driven end to end in files-door-harness.js; here every scenario has just come back
+// through it (`composedHere` true), so what is under test is the choice AFTER the door. `location`
+// is bound to a stub that records a navigation, so a scenario that reached the door would show it.
 const runDecider = new AsyncFunction(
-  "TW", "filesMode", "viewFiles", "showPostGenerate", "showPreGenerate", "emptyEl",
-  "priceMovedSinceGenerate",
+  "TW", "filesMode", "composedHere", "location", "viewFiles", "showPostGenerate",
+  "showPreGenerate", "emptyEl", "priceMovedSinceGenerate",
   '"use strict";\n' + DECIDER);
 
 // ── the smallest DOM this touches ───────────────────────────────────────────
@@ -157,6 +162,8 @@ async function decide(st, opts) {
   await runDecider(
     Object.assign({ draftReady: Promise.resolve() }, store(st)),
     !!(opts || {}).filesMode,
+    true,
+    { replace: (u) => calls.push("door " + u), assign: (u) => calls.push("door " + u) },
     () => calls.push("viewFiles"),
     () => calls.push("showPostGenerate"),
     () => calls.push("showPreGenerate"),

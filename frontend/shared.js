@@ -1085,6 +1085,73 @@
     return rows;
   }
 
+  // ─── Was the document built from what the draft says now? ─────────
+  /** Keys that never reach the proposal, so a change to one of them leaves the document current.
+   *
+   *  Everything the Files page writes for itself (the files it last built, the message and the
+   *  recipients of a send, the deposit switch, the Dropbox copy), the three keys the SERVER owns
+   *  (SERVER_OWNED_KEYS), the Project Info Sheet's own workbook, the ownership stamp, and the
+   *  document and its key themselves. A key missing from this list costs a rebuild the proposal
+   *  did not need; a key WRONGLY on it would let a changed proposal through unrebuilt, so nothing
+   *  that any template prints may ever be added here. */
+  const COMPOSE_IGNORED = [STAMP, "proposal_payload", "proposal_payload_key",
+    "generate_result", "generated_lump_sum", "portal_message", "portal_emails",
+    "require_deposit", "dropbox_result",
+    "info_cell_values", "info_tab_structs", "info_template_version", "job_number",
+  ].concat(SERVER_OWNED_KEYS);
+
+  /** The key of a draft's document: which inputs it was built from, and which document it is.
+   *
+   *  Hanz, 2026-09-25: "Clicking to Done should regenerate and make the proposal correctly." The
+   *  Files page sends whatever `proposal_payload` is saved, and until now only the Proposal step's
+   *  Continue wrote one. A texture picked on the Estimate step, a re-price, a note, a tax mode or a
+   *  base flip left by any other door (a step pill, View files, a reload) reached the Files page
+   *  with the document from the last Continue, and the customer was sent that.
+   *
+   *  So Continue stamps the draft with this key as it writes the document (proposal-review.js
+   *  continueToDone), and the Files page recomputes it on arrival and before a send. Two halves,
+   *  and both must hold:
+   *    * the INPUTS: every key of the draft except COMPOSE_IGNORED. An edit anywhere changes it.
+   *    * the DOCUMENT: `proposal_payload` itself. A write that put an older document back (a
+   *      debounced save landing after Continue) changes this half while leaving the first alone.
+   *  "" when there is no document at all, which never equals a stored key.
+   *
+   *  Pure, and computed off a JSON round trip, so an object in memory and the same object read
+   *  back out of localStorage (undefined dropped, NaN as null) give one answer. Keys are sorted, so
+   *  the order a merge happened to leave them in cannot move it. The identity of whoever is signed
+   *  in and today's date are deliberately NOT inputs: opening a colleague's project on another day
+   *  is not a change to it. */
+  function composeKey(blob) {
+    let plain;
+    try { plain = JSON.parse(JSON.stringify(blob || {})); } catch { return ""; }
+    if (!plain || typeof plain !== "object" || Array.isArray(plain)) return "";
+    const doc = plain.proposal_payload;
+    if (!doc || typeof doc !== "object") return "";
+    const inputs = {};
+    Object.keys(plain).forEach((k) => { if (COMPOSE_IGNORED.indexOf(k) < 0) inputs[k] = plain[k]; });
+    const canon = (v) => {
+      if (Array.isArray(v)) return "[" + v.map(canon).join(",") + "]";
+      if (v && typeof v === "object") {
+        return "{" + Object.keys(v).sort()
+          .map((k) => JSON.stringify(k) + ":" + canon(v[k])).join(",") + "}";
+      }
+      return JSON.stringify(v);
+    };
+    // cyrb53: 53 bits, so two different drafts sharing a key is not a practical concern here.
+    const hash = (s) => {
+      let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+      for (let i = 0; i < s.length; i++) {
+        const c = s.charCodeAt(i);
+        h1 = Math.imul(h1 ^ c, 2654435761);
+        h2 = Math.imul(h2 ^ c, 1597334677);
+      }
+      h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+      h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+      return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+    };
+    return hash(canon(inputs)) + "." + hash(canon(doc));
+  }
+
 
   /** Keep a floating panel's REMEMBERED position on screen.
    *
@@ -1143,5 +1210,6 @@
     draftReady,
     publishDigest,
     docDrift,
+    composeKey,
   };
 })();
