@@ -3491,6 +3491,27 @@ function updateTotalBarFromHF() {
     setTB("tb-psf",      val("psf"));
     return;
   }
+  // A DESIGNATED BASE drives the bar, on exactly the condition it drives proposal_lump_sum (see
+  // the pricing snapshot's `state.base_tab_id && baseTab` branch): a copied tab ("Epoxy copy") or
+  // an inverted base IS the bid, and the Epoxy/Polish sums below are only the fallback when nothing
+  // is designated. Hanz, 2026-09-25: base = Epoxy copy at $14,224, the sheet's own Total Base Bid
+  // said $14,224, and this bar read the Epoxy tab's $7,447.
+  const _designated = state.base_tab_id ? resolveBaseTab() : null;
+  if (_designated) {
+    const bmap = totalCellsFor(_designated.id);
+    const bval = (key) => {
+      const v = HF.getValue(_designated.id, bmap[key]);
+      if (v && typeof v === "object" && "value" in v) return null;   // HF error
+      return typeof v === "number" ? v : null;
+    };
+    const setB = (id, v) => { document.getElementById(id).textContent = v == null ? "—" : fmtMoney(v); };
+    setB("tb-material", bval("material"));
+    setB("tb-labor",    bval("labor"));
+    setB("tb-tooling",  bval("tooling"));
+    setB("tb-total",    bval("total"));
+    setB("tb-psf",      bval("psf"));
+    return;
+  }
   // Sums numeric HF values, skipping errors / nulls
   const sumCells = (sources) => sources.reduce((acc, src) => {
     const v = HF.getValue(src.sheet, src.addr);
