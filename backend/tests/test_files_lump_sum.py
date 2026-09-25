@@ -218,6 +218,20 @@ def test_the_card_shows_the_price_that_is_in_the_files(ran):
 
 
 @needs_node
+def test_the_card_shows_the_saved_documents_total_over_any_older_figure(ran):
+    """Every Download and Send now builds from the saved proposal_payload, so the card must name
+    ITS Total. Hanz, 2026-09-25, on staging: the pricing sidebar moved the base bid to $14,224, the
+    editor and the downloaded file both said $14,224, and this card still read $7,447 — the stamp
+    from the first build (/documents records it once) and a lump_sum_display nothing had rewritten.
+
+    Mutation: drop `docTotal ||` from paintLumpSum. The card goes back to the stamp."""
+    r = ran["row"]
+    assert r["payloadWins"] == {"text": "$14,224", "hidden": False}, (
+        "the card showed an older figure than the document it builds: %r" % (r["payloadWins"],))
+    assert r["unreadablePayloadFallsBack"] == {"text": "$7,447", "hidden": False}
+
+
+@needs_node
 def test_no_figure_means_no_row_rather_than_a_dash(ran):
     """A "—" where money belongs invites being read as zero, on the one card whose job is to let
     somebody check a price. So the row goes away instead.

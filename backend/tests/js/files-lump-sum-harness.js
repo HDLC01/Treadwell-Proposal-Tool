@@ -213,6 +213,20 @@ out.row = {
   // THE STAMP WINS. Both are present here and they disagree on purpose: the figure shown has to
   // be the one inside the files, never the draft's newer idea of it.
   showsTheStamp: { text: stamped.val.textContent, hidden: stamped.row.hidden },
+  // THE SAVED DOCUMENT WINS OVER BOTH. Downloads build from the saved payload, so its Total is the
+  // figure in the files; the stamp and the display are from an earlier moment. Hanz's staging case:
+  // base moved to $14,224 by the pricing sidebar, stamp and display still $7,447.
+  payloadWins: (function () {
+    const p = painted({ proposal_payload: { values: { total_formatted: "$14,224" } },
+                        generated_lump_sum: "$7,447", lump_sum_display: "$7,447.00" });
+    return { text: p.val.textContent, hidden: p.row.hidden };
+  })(),
+  // A payload whose Total is not money does not blank the row: the older figures still stand.
+  unreadablePayloadFallsBack: (function () {
+    const p = painted({ proposal_payload: { values: { total_formatted: "—" } },
+                        generated_lump_sum: "$7,447" });
+    return { text: p.val.textContent, hidden: p.row.hidden };
+  })(),
   fallsBackToDisplay: (function () {
     const p = painted({ lump_sum_display: "$36,700.00" });
     return { text: p.val.textContent, hidden: p.row.hidden };
