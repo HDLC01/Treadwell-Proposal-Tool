@@ -113,7 +113,10 @@ async function tab(local, server, opts) {
       return json(200, { ok: true });
     }
     if (url.includes("/api/file/")) return json(200, {});
-    if (method === "GET" && url.includes("/api/draft/d1")) return json(200, { data: server.d1 });
+    if (method === "GET" && url.includes("/api/draft/d1")) {
+      if (server.failGet) return json(503, { detail: "down" });
+      return json(200, { data: server.d1 });
+    }
     return json(200, {});
   };
   const sandbox = {
@@ -147,6 +150,10 @@ async function tab(local, server, opts) {
   // `moved` is what another tab of this browser does afterwards: an edit, and no Continue.
   TW.setLocalState({ proposal_payload_key: TW.composeKey(TW.getState()) });
   if (opts && opts.moved) TW.setLocalState(opts.moved);
+  // The server's copy is RJ's, built by RJ's own Continue, so it carries RJ's key. `serverMoved` is
+  // what RJ did afterwards on his machine: an Estimate-step edit, saved, and no Continue.
+  server.d1.proposal_payload_key = TW.composeKey(server.d1);
+  if (opts && opts.serverMoved) Object.assign(server.d1, opts.serverMoved);
 
   const builtAt = new Function(...BUILT_AT.args, '"use strict"; ' + BUILT_AT.body);
   const freshDocuments = new AsyncFunction(
@@ -270,6 +277,28 @@ function staleWorld() {
     await t.send();
     out.movedInAnotherTab = { posted: t.rec.published.length, puts: t.rec.puts.length,
                               err: t.rec.err || null };
+  }
+
+  // F. Finding 3. The draft moved on ANOTHER MACHINE after this page opened: RJ picked Knockdown on
+  //    the Estimate step and left without Continue. This page's copy still holds by its own key, the
+  //    render-id gate sees the same payload, and the drift gate cannot see a texture — but the
+  //    SERVER's copy, which the publish freezes, no longer matches its document. Nothing is posted.
+  {
+    const w = staleWorld();
+    const t = await tab(w.local, w.server, { serverMoved: { texture: "Knockdown" } });
+    await t.download();
+    await t.send();
+    out.movedOnAnotherMachine = { posted: t.rec.published.length, puts: t.rec.puts.length,
+                                  err: t.rec.err || null };
+  }
+
+  // G. The saved copy cannot be read at Send: nothing can be checked, so nothing is sent.
+  {
+    const w = staleWorld();
+    const t = await tab(w.local, w.server);
+    w.server.failGet = true;
+    await t.send();
+    out.serverUnreadable = { posted: t.rec.published.length, err: t.rec.err || null };
   }
 
   process.stdout.write(JSON.stringify(out));

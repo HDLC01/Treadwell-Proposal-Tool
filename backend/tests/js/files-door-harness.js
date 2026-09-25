@@ -9,7 +9,11 @@
 //   * the Files page recomputes the key on arrival, and sends a draft whose document is not
 //     current through the Proposal step (`?compose=files`), which presses Continue for it and
 //     comes straight back (`composed=1`);
-//   * the Estimate step's pills save the sheet the way its buttons do.
+//   * both ask the SERVER's copy (TW.reconcileWithServer, TW.bootDigest): an older copy in this
+//     browser is replaced by the server's rather than built from and PUT back, one with changes
+//     the server never got is left for the estimator, and a page initDraftSync is reloading onto
+//     another project writes nothing (the review of the door, 2026-09-25: scenarios D to D10);
+//   * the Estimate step's pills save an edit still waiting on the grid's debounce, and only that.
 //
 // EXECUTED, NOT READ. The real shared.js runs whole, one fresh vm context PER PAGE LOAD against one
 // browser's localStorage and one stub server, so its real setState / flushState / composeKey /
@@ -152,9 +156,40 @@ const makeDoneScope = new Function(
   "TW", "location", "history", "viewFiles", "showPostGenerate", "showPreGenerate", "emptyEl",
   "priceMovedSinceGenerate", DONE_BODY);
 
-// ── the Estimate step's pill listener ───────────────────────────────────────────────────────
+// ── the Estimate step's pill listener, and the grid listener that arms its pending save ───────
 const PILL = grab(ESTIMATE, /^document\.addEventListener\("click", \(e\) => \{\n  const pill[\s\S]*?\n\}\);$/m,
                   "the step-pill listener", "estimate-review.js");
+const GRID_CHANGE = grab(ESTIMATE,
+  /^document\.getElementById\("sheet-grid"\)\.addEventListener\("change", \(\) => \{[\s\S]*?\n\}\);$/m,
+  "the grid's change listener", "estimate-review.js");
+/** Both listeners in one scope that shares the page's `_cbTimer`, with its collaborators stubbed
+ *  and counted. Timers are captured, so "the debounce fired" is a step the scenario takes. */
+function estimatePage() {
+  const listeners = [];
+  const timers = [];
+  const rec = { persisted: 0, rendered: 0 };
+  const grid = { addEventListener: (ev, h) => listeners.push(["grid:" + ev, h]) };
+  const doc = { addEventListener: (ev, h) => listeners.push([ev, h]),
+                getElementById: (id) => (id === "sheet-grid" ? grid : null) };
+  const scope = new Function(
+    "document", "persistTabState", "renderBidOptions", "refreshSystemName", "setTimeout",
+    "clearTimeout",
+    "let _cbTimer = null; let _bulkWrite = false;\n" + PILL + "\n" + GRID_CHANGE
+      + "\nreturn { pending: () => _cbTimer };")(
+    doc, () => { rec.persisted++; }, () => { rec.rendered++; }, () => {},
+    (f) => { timers.push(f); return timers.length; },
+    (id) => { if (id) timers[id - 1] = null; });
+  const fire = (name, arg) => listeners.filter(([ev]) => ev === name).forEach(([, h]) => h(arg));
+  const pill = { closest: (sel) => (sel === ".progress a.step[href]" ? pill : null) };
+  const cell = { closest: () => null };
+  return {
+    rec, scope, events: listeners.map(([ev]) => ev),
+    edit: () => fire("grid:change"),
+    clickPill: () => fire("click", { target: pill }),
+    clickCell: () => fire("click", { target: cell }),
+    debounce: () => { const due = timers.splice(0); due.forEach((f) => { if (f) f(); }); },
+  };
+}
 
 // ── one browser, one server ─────────────────────────────────────────────────────────────────
 const STAMP = (/const STAMP\s*=\s*"([^"]+)"/.exec(SHARED) || [])[1];
@@ -372,6 +407,50 @@ function summary(pp) {
   };
 }
 
+/** The key a Continue on ANOTHER machine would have stamped on `blob` (the real TW.composeKey). */
+async function keyOf(blob) {
+  const p = await load(browser(blob), "/x.html?d=d1");
+  return p.TW.composeKey(copy(blob));
+}
+
+/** Follow the Files page wherever it sends the estimator, the way the browser would, until it
+ *  settles on a page: through the Proposal step's door (which composes, or stops and says why)
+ *  and back, and through a reload. Returns every stop, and the settled Files page if there is one. */
+async function arriveAtFiles(b, href) {
+  const stops = [];
+  let url = href;
+  for (let hop = 0; hop < 6 && url; hop++) {
+    if (url.indexOf("/proposal-review.html") === 0) {
+      const door = await openProposal(b, url);
+      await door.scope.composeForFiles();
+      stops.push({ page: "proposal", nav: door.page.nav,
+                   note: door.nodes["resync-note-head"].textContent });
+      const next = door.page.nav[door.page.nav.length - 1];
+      url = next && next[0] === "reload" ? url : (next ? next[1] : null);
+      continue;
+    }
+    const done = await openDone(b, url);
+    stops.push({ page: "done", nav: done.nav, calls: done.calls });
+    const next = done.nav[done.nav.length - 1];
+    if (!next) return { stops, done };
+    url = next[0] === "reload" ? done.url : next[1];
+  }
+  return { stops, done: null };
+}
+
+/** Another project this browser opened in some other tab: its copy, stamped for ITS id. */
+function otherProject() {
+  return { project_name: "Other Project Y", job_name: "Other Project Y", texture: "Y texture",
+           scope_notes: "Y scope", notes_text: "Y note", work_type: "epoxy", audience: "Direct",
+           proposal_lump_sum: 777, priced_tabs: tabs(777, 7), base_tab_id: "Epoxy",
+           [STAMP]: "d2" };
+}
+function holdOther(b) {
+  b.ls.setItem(STATE_KEY, JSON.stringify(otherProject()));
+  b.ls.setItem(DRAFT_ID_KEY, "d2");
+}
+const mentionsY = (x) => /Other Project Y|Y texture|Y scope|Y note/.test(JSON.stringify(x));
+
 (async function () {
   const out = {};
 
@@ -451,22 +530,241 @@ function summary(pp) {
     out.flip = { arriveNav: arrive.nav, payload: summary(local(b).proposal_payload) };
   }
 
-  // D. THE SAFETY PROPERTY. Kyle's browser holds a CURRENT copy (keyed), and RJ has since sent a
-  //    revision from another machine. View files on Kyle's machine must neither rebuild nor write:
-  //    his copy is older than the server's, and writing it would put it back over RJ's work.
+  // D. THE SAFETY PROPERTY. Kyle's browser holds a copy that is current by its own key, and RJ has
+  //    since revised the project and pressed Continue on another machine (so RJ's copy is keyed
+  //    too). View files on Kyle's machine must neither rebuild nor write: it takes the server's copy
+  //    in place of Kyle's older one, reloads onto it, and renders RJ's document.
   {
     const b = browser(draft());
     await lastContinue(b);
     const rj = copy(b.server.d1);
     rj.texture = "RJ's texture";
     rj.proposal_payload.values.texture = "RJ's texture";
-    b.server.d1 = rj;                                           // RJ's Continue, elsewhere
+    rj.proposal_payload_key = await keyOf(rj);                 // RJ's Continue, elsewhere
+    b.server.d1 = rj;
     const puts = b.server.puts.length;
     const d = await openDone(b, "/done.html?d=d1&files=1");
-    await d.scope.freshDocuments();
-    out.staleLocal = { nav: d.nav, calls: d.calls, putsFromThisBrowser: b.server.puts.length - puts,
+    const again = await openDone(b, "/done.html?d=d1&files=1");   // the reload it asked for
+    await again.scope.freshDocuments();
+    out.staleLocal = { nav: d.nav, calls: d.calls, againNav: again.nav, againCalls: again.calls,
+                       putsFromThisBrowser: b.server.puts.length - puts,
                        rendered: b.server.rendered[b.server.rendered.length - 1].values.texture,
-                       serverTexture: b.server.d1.proposal_payload.values.texture };
+                       serverTexture: b.server.d1.proposal_payload.values.texture,
+                       localTexture: local(b).texture };
+  }
+
+  // D2. THE REVIEW'S CASE (findings 2 and 5). Kyle's copy was current, then Kyle edited a note on
+  //     the Estimate step and left (saved, no Continue), so his key no longer holds. RJ then
+  //     re-priced to $15,000 and picked a texture on his own machine without pressing Continue,
+  //     and Troy marked the job Won off the board. Kyle clicks View files. The door must build from
+  //     the SERVER's copy — RJ's price and texture, Troy's Won — and never from Kyle's.
+  {
+    const b = browser(draft());
+    await lastContinue(b);
+    await editElsewhere(b, { notes_text: "Kyle's later note" });     // Kyle, Estimate step, saved
+    const rj = copy(b.server.d1);
+    rj.texture = "RJ Orange Peel";
+    rj.priced_tabs = tabs(15000, 480);
+    rj.proposal_lump_sum = 15000;
+    rj.proposal_sales_tax = 480;
+    rj.won = { at: "2026-09-24", by: "troy@wetreadwell.com" };       // the board, server-side
+    rj.handed_off = false;
+    b.server.d1 = rj;
+    const putsBefore = b.server.puts.length;
+    const trip = await arriveAtFiles(b, "/done.html?d=d1&files=1");
+    const puts = b.server.puts.slice(putsBefore);
+    if (trip.done) await trip.done.scope.freshDocuments();
+    out.staleEdited = {
+      stops: trip.stops.map((s) => s.page + " " + JSON.stringify(s.nav)),
+      finalCalls: trip.done ? trip.done.calls : null,
+      puts: puts.length,
+      everyPutIsRJs: puts.every((p) => p.texture === "RJ Orange Peel" && p.proposal_lump_sum === 15000
+                                       && !!p.won && p.notes_text === "Kyle's later note"),
+      server: { texture: b.server.d1.texture, lump: b.server.d1.proposal_lump_sum,
+                won: b.server.d1.won || null, handedOff: b.server.d1.handed_off },
+      document: summary(b.server.d1.proposal_payload),
+      rendered: summary(trip.done ? b.server.rendered[b.server.rendered.length - 1] : null),
+    };
+  }
+
+  // D3. A copy saved BEFORE this deploy: a document, no key, and no record of when it last matched
+  //     the server. RJ has since revised the project elsewhere. Same answer: the server's copy wins,
+  //     and Kyle's is never written.
+  {
+    const b = browser(draft());
+    const rj = copy(draft());
+    rj.texture = "RJ Orange Peel";
+    rj.proposal_payload.values.texture = "RJ Orange Peel";
+    rj.proposal_payload_key = "stamped-by-rj-elsewhere";
+    b.server.d1 = rj;
+    const trip = await arriveAtFiles(b, "/done.html?d=d1&files=1");
+    out.legacyStale = {
+      stops: trip.stops.map((s) => s.page),
+      puts: b.server.puts.length,
+      everyPutIsRJs: b.server.puts.every((p) => p.texture === "RJ Orange Peel"),
+      serverTexture: b.server.d1.texture,
+      documentTexture: b.server.d1.proposal_payload.values.texture,
+      settled: !!trip.done,
+    };
+  }
+
+  // D4. Finding 3. Kyle's copy is current by its own key; RJ picked Knockdown on the Estimate step
+  //     on his machine and left without Continue, so the SERVER's draft says Knockdown under a
+  //     document that says Smooth. Kyle's key holds; the server's does not. The door asks the
+  //     server's, so View files builds Knockdown and Download renders it.
+  {
+    const b = browser(draft());
+    await lastContinue(b);
+    const rj = copy(b.server.d1);
+    rj.texture = "Knockdown";
+    b.server.d1 = rj;
+    const trip = await arriveAtFiles(b, "/done.html?d=d1&files=1");
+    if (trip.done) await trip.done.scope.freshDocuments();
+    const last = b.server.rendered[b.server.rendered.length - 1];
+    out.serverMoved = {
+      stops: trip.stops.map((s) => s.page),
+      documentTexture: b.server.d1.proposal_payload.values.texture,
+      renderedTexture: last ? last.values.texture : null,
+      keyHolds: b.server.d1.proposal_payload_key === (await keyOf(b.server.d1)),
+    };
+  }
+
+  // D5. This browser's copy has an edit the server never got (its save failed). The Files page
+  //     leaves that copy alone rather than replace it, and the Proposal step will not build from it
+  //     unattended: it says so and leaves Continue to the estimator, who can see what is on screen.
+  {
+    const b = browser(draft());
+    await lastContinue(b);
+    b.server.failPut = true;
+    await editElsewhere(b, { texture: "Unsaved Knockdown" });
+    b.server.failPut = false;
+    const putsBefore = b.server.puts.length;
+    const trip = await arriveAtFiles(b, "/done.html?d=d1");
+    out.unconfirmed = {
+      stops: trip.stops.map((s) => s.page),
+      note: (trip.stops[trip.stops.length - 1] || {}).note,
+      puts: b.server.puts.length - putsBefore,
+      localTexture: local(b).texture,
+      serverTexture: b.server.d1.texture,
+    };
+  }
+
+  // D6. The same edit, whose save is merely still in flight when the Files page asks (a pill click
+  //     sends it as the page goes). The Files page cannot see it yet, so it sends the estimator
+  //     through the door on this browser's own copy; by the time the Proposal step asks, the save
+  //     has landed, the two copies agree, and the document is built.
+  {
+    const b = browser(draft());
+    await lastContinue(b);
+    const e = await load(b, "/estimate-review.html?d=d1");
+    e.TW.setState({ texture: "Knockdown" });                    // queued; the page goes
+    const d = await openDone(b, "/done.html?d=d1");            // the server has not got it yet
+    b.server.d1 = copy(local(b));                               // …and now it has (keepalive)
+    const trip = await arriveAtFiles(b, (d.nav[0] || [])[1] || "");
+    out.inFlight = {
+      firstNav: d.nav,
+      stops: trip.stops.map((s) => s.page),
+      documentTexture: b.server.d1.proposal_payload.values.texture,
+    };
+  }
+
+  // D7. Finding 1. The door page is open on this project (X) when another tab opens project Y, so
+  //     this browser's copy becomes Y's. The door refuses ("open in another tab") and the estimator
+  //     reloads as it says. On that load the page's snapshot is Y's; initDraftSync adopts X and
+  //     reloads. Nothing may build from Y's snapshot on the way: X must never be written with Y.
+  {
+    const b = browser(draft());
+    await lastContinue(b);
+    await editElsewhere(b, { texture: "Orange Peel" });
+    const door = await openProposal(b, "/proposal-review.html?compose=files&d=d1");
+    holdOther(b);                                               // the other tab, after this loaded
+    await door.scope.composeForFiles();
+    const said = door.nodes["resync-note-head"].textContent;
+    const putsBefore = b.server.puts.length;
+    const reload1 = await openProposal(b, "/proposal-review.html?compose=files&d=d1");
+    await reload1.scope.composeForFiles();
+    const putsAfterFirst = b.server.puts.length - putsBefore;
+    const localAfterFirst = local(b);
+    const reload2 = await openProposal(b, "/proposal-review.html?compose=files&d=d1");
+    await reload2.scope.composeForFiles();
+    out.foreignReload = {
+      said, reload1Nav: reload1.page.nav, reload2Nav: reload2.page.nav, putsAfterFirst,
+      localAfterFirst: { project: localAfterFirst.project_name, texture: localAfterFirst.texture,
+                         lump: localAfterFirst.proposal_lump_sum },
+      serverMentionsY: mentionsY(b.server.d1),
+      putsMentioningY: b.server.puts.filter(mentionsY).length,
+      server: { project: b.server.d1.project_name, scope: b.server.d1.scope_notes,
+                docProject: b.server.d1.proposal_payload.values.project_name,
+                docTexture: b.server.d1.proposal_payload.values.texture },
+    };
+  }
+
+  // D8. The same thing from a plain load: this browser last held project Y, and the door's address
+  //     for X is opened (a restored tab, a pasted link, Back to a door that had stopped).
+  {
+    const b = browser(draft());
+    await lastContinue(b);
+    await editElsewhere(b, { texture: "Orange Peel" });
+    holdOther(b);
+    const putsBefore = b.server.puts.length;
+    const first = await openProposal(b, "/proposal-review.html?compose=files&d=d1");
+    await first.scope.composeForFiles();
+    const putsFromFirst = b.server.puts.length - putsBefore;
+    const second = await openProposal(b, "/proposal-review.html?compose=files&d=d1");
+    await second.scope.composeForFiles();
+    out.crossDraft = {
+      firstNav: first.page.nav, putsFromFirst, secondNav: second.page.nav,
+      serverMentionsY: mentionsY(b.server.d1),
+      putsMentioningY: b.server.puts.filter(mentionsY).length,
+      docTexture: b.server.d1.proposal_payload.values.texture,
+    };
+  }
+
+  // D10. A fresh hydrate records what it read. This browser last held another project, so opening X
+  //      reads the server's copy; then an edit here fails to save. The Files page must know that
+  //      copy has changes the server never got (and leave it alone), which it can only tell from
+  //      the record the hydrate left of what the server held.
+  {
+    const b = browser(draft());
+    await lastContinue(b);
+    holdOther(b);
+    b.ls.removeItem("treadwell.proposal_tool.synced");        // only the hydrate may record it
+    const hydrate = await load(b, "/estimate-review.html?d=d1");       // reads X, reloads
+    await hydrate.TW.draftReady;
+    b.server.failPut = true;
+    await editElsewhere(b, { texture: "Unsaved Knockdown" });
+    b.server.failPut = false;
+    const putsBefore = b.server.puts.length;
+    const trip = await arriveAtFiles(b, "/done.html?d=d1");
+    out.hydratedThenUnsaved = {
+      hydrateNav: hydrate.nav,
+      stops: trip.stops.map((s) => s.page),
+      puts: b.server.puts.length - putsBefore,
+      localTexture: local(b).texture,
+      serverTexture: b.server.d1.texture,
+    };
+  }
+
+  // D9. Finding 6. The draft already says cover_letter_enabled:false at the top level (the box was
+  //     unticked once). The estimator ticks it and presses Continue — the switch writes that one
+  //     key with setState, which the page's snapshot never sees — then later changes a note on the
+  //     Estimate step and clicks Files. The rebuilt document must still carry page 1.
+  {
+    const start = Object.assign(draft(), { cover_letter_enabled: false });
+    const b = browser(start);
+    const p = await openProposal(b, "/proposal-review.html?d=d1");
+    p.TW.setState({ cover_letter_enabled: true });              // wireCoverLetterSwitch's write
+    await p.scope.continueToDone(null);
+    const afterTick = local(b);
+    await editElsewhere(b, { notes_text: "A later note" });
+    await arriveAtFiles(b, "/done.html?d=d1");
+    out.coverLetter = {
+      afterTick: { topLevel: afterTick.cover_letter_enabled,
+                   payload: afterTick.proposal_payload.cover_letter_enabled },
+      afterDoor: { topLevel: b.server.d1.cover_letter_enabled,
+                   payload: b.server.d1.proposal_payload.cover_letter_enabled,
+                   notes: b.server.d1.proposal_payload.notes },
+    };
   }
 
   // E. The door never builds unattended when the template did not load, or the page never settles.
@@ -568,19 +866,40 @@ function summary(pp) {
     out.noProject = { nav: d.nav, calls: d.calls, emptyShown: d.emptyShown };
   }
 
-  // H. The Estimate step's pills save the sheet on the way out, as its buttons do.
+  // H. The Estimate step's pills save the sheet on the way out WHEN AN EDIT IS STILL WAITING on the
+  //    grid's 300ms debounce — and only then. persistTabState writes the page's whole load-time
+  //    snapshot, so a pill click on a page with nothing waiting (a stale page opened before a
+  //    colleague's revision, merely walked through) must write nothing.
   {
-    const listeners = [];
-    const doc = { addEventListener: (ev, h) => listeners.push([ev, h]) };
-    let persisted = 0;
-    new Function("document", "persistTabState", PILL)(doc, () => { persisted++; });
-    const click = (target) => listeners.filter(([ev]) => ev === "click").forEach(([, h]) => h({ target }));
-    const pill = { closest: (sel) => (sel === ".progress a.step[href]" ? pill : null) };
-    const cell = { closest: () => null };
-    click(pill);
-    const afterPill = persisted;
-    click(cell);
-    out.estimatePill = { events: listeners.map(([ev]) => ev), afterPill, afterCell: persisted };
+    const edited = estimatePage();
+    edited.edit();                                              // a cell edit: the debounce armed
+    const armed = !!edited.scope.pending();
+    edited.clickPill();
+    const afterPill = edited.rec.persisted;
+    const clearedByPill = edited.scope.pending() === null;
+    edited.debounce();                                          // the cancelled timer is gone
+    const afterDebounce = edited.rec.persisted;
+
+    const idle = estimatePage();
+    idle.clickPill();                                           // nothing edited on this page
+
+    const settled = estimatePage();
+    settled.edit();
+    settled.debounce();                                         // the debounce saved the edit itself
+    const settledSaves = settled.rec.persisted;
+    settled.clickPill();                                        // …so the pill has nothing to add
+
+    const elsewhere = estimatePage();
+    elsewhere.edit();
+    elsewhere.clickCell();                                      // not a pill
+
+    out.estimatePill = {
+      events: edited.events, armed, afterPill, clearedByPill, afterDebounce,
+      idle: idle.rec.persisted,
+      settledSaves, settledAfterPill: settled.rec.persisted,
+      settledPending: settled.scope.pending(),
+      elsewhere: elsewhere.rec.persisted,
+    };
   }
 
   process.stdout.write(JSON.stringify(out));

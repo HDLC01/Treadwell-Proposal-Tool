@@ -99,3 +99,25 @@ def test_a_draft_moved_in_another_tab_is_not_sent(ran):
     assert m["puts"] == 0, m
     assert m["err"] and "Reload this page" in m["err"], m
 
+
+def test_a_draft_moved_on_another_machine_is_not_sent(ran):
+    """Review finding 3. The Files page opened on a current document and it was downloaded; then RJ,
+    on his own machine, picked Knockdown on the Estimate step and left without Continue. THIS page's
+    copy still holds by its own key and the render-id gate sees the same payload, but the SERVER's
+    copy, the one the publish freezes, no longer matches its document. Checking only this browser's
+    copy sent the old texture; now nothing is posted and nothing is written.
+
+    Mutation: drop the server half of the check in the Send handler — one publish goes out."""
+    m = ran["movedOnAnotherMachine"]
+    assert m["posted"] == 0, m
+    assert m["puts"] == 0, m
+    assert m["err"] and "Reload this page" in m["err"], m
+
+
+def test_a_send_that_cannot_read_the_saved_copy_is_not_sent(ran):
+    """Nothing can be checked, so nothing goes: the saved copy is what the publish freezes.
+
+    Mutation: treat an unreadable server copy as current — one publish goes out."""
+    m = ran["serverUnreadable"]
+    assert m["posted"] == 0, m
+    assert m["err"] and m["err"].startswith("Couldn't check the saved proposal"), m

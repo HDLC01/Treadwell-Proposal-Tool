@@ -226,28 +226,36 @@ def docs():
 @pytest.mark.parametrize("figure", list(FIGURES))
 def test_the_gc_price_block_adds_up(docs, work_type, audience, figure):
     """The reported defect, in dollars, on all three GC files at every combination of the two
-    taxes. These templates print Material Sales Tax and Remodel Tax as plain paragraphs — there
-    is no layout in which they are hidden — so the base line has to be net of both."""
+    taxes. These templates print Material Sales Tax and Remodel Tax as plain paragraphs, which no
+    tax mode hides, so the base line has to be net of whichever of them prints.
+
+    The Remodel Tax row prints only when there IS a remodel tax. Hanz: "If remodel tax is off then
+    in the broken out option in the Proposal, there is no remodel tax but there is material sales
+    tax." These files used to print "$0 – Remodel Tax" on every job without one."""
     total, sales, remodel = FIGURES[figure]
     rows = docs[(work_type, audience, "INCLUDED", figure)]
-    for row in ("base", "material", "remodel", "total"):
+    for row in ("base", "material", "total") + (("remodel",) if remodel else ()):
         assert row in rows, f"{work_type}/{audience}: the {row} row did not print ({rows!r})"
-    assert rows["material"] == sales and rows["remodel"] == remodel
+    if not remodel:
+        assert "remodel" not in rows, (
+            f"{work_type}/{audience} {figure}: a Remodel Tax row printed with no remodel tax ({rows!r})")
+    assert rows["material"] == sales and rows.get("remodel", 0.0) == remodel
     assert rows["total"] == total
-    assert rows["base"] + rows["material"] + rows["remodel"] == rows["total"], (
+    printed = rows["base"] + rows["material"] + rows.get("remodel", 0.0)
+    assert printed == rows["total"], (
         f"{work_type}/{audience} {figure}: printed {rows['base']} + {rows['material']} + "
-        f"{rows['remodel']} = {rows['base'] + rows['material'] + rows['remodel']}, "
-        f"but the Total says {rows['total']}")
+        f"{rows.get('remodel', 0.0)} = {printed}, but the Total says {rows['total']}")
     assert rows["base"] == total - sales - remodel
 
 
 def test_kyles_gc_polish_block_reconciles_line_for_line(docs):
     """The exact block Kyle was shown, spelled out, because "it adds up" is a property and this
-    is the artefact. $6,307 tax-inclusive, $125 of material sales tax, no remodel."""
+    is the artefact. $6,307 tax-inclusive, $125 of material sales tax, no remodel — so, since
+    Hanz's remodel rule, no "$0.00 – Remodel Tax" row between them either."""
     rows = docs[("polish", "GC", "INCLUDED", "sales tax only")]
     assert rows["base"] == 6182.0 and rows["material"] == 125.0
-    assert rows["remodel"] == 0.0 and rows["total"] == 6307.0
-    assert rows["base"] + rows["material"] + rows["remodel"] == 6307.0
+    assert "remodel" not in rows and rows["total"] == 6307.0
+    assert rows["base"] + rows["material"] == 6307.0
     # And the base line no longer claims to include a tax that is itemised right below it.
     assert "INCLUDED" not in rows["base_line"], rows["base_line"]
 
@@ -298,7 +306,9 @@ def test_the_gyp_price_block_still_adds_up(docs, figure):
     the case that proves replacing it with the file's own shape kept gyp working."""
     total, sales, remodel = FIGURES[figure]
     rows = docs[("gyp", "Direct", "INCLUDED", figure)]
-    assert rows["base"] + rows["material"] + rows["remodel"] == rows["total"]
+    # No remodel tax, no "Kansas Remodel Tax" row (Hanz's rule; see the GC test above).
+    assert ("remodel" in rows) == bool(remodel), rows
+    assert rows["base"] + rows["material"] + rows.get("remodel", 0.0) == rows["total"]
     assert rows["base"] == total - sales - remodel
 
 

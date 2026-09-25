@@ -3308,6 +3308,16 @@
     const plain = fillPlain(b.text, tokens);
     pristineById.set(Number(el.dataset.id), plain);
     el.classList.toggle("tw-empty", !plain.trim());
+    // NO REMODEL TAX, NO REMODEL ROW — here as in the document. The GC and Gyp files author their
+    // Remodel Tax row as a plain paragraph (this one), and the render takes it out when the job has
+    // no remodel tax (main.py `_remodel_off`; Hanz: "If remodel tax is off then in the broken out
+    // option in the Proposal, there is no remodel tax but there is material sales tax"). Decided
+    // on every fill, so a base flip that brings a remodel tax in shows the row again. An inline
+    // style, not `hidden`: a class `display` rule beats the attribute.
+    if (/\{\{\s*(tax_amount_formatted|remodel\.amount_formatted)\s*\}\}/.test(String(b.text || ""))) {
+      const remodel = Number(String((tokens || {}).tax_amount_formatted || "").replace(/[^0-9.]/g, "")) || 0;
+      el.style.display = remodel ? "" : "none";
+    }
   }
 
   /** Is this block one of the NUMBERED Terms and Conditions clauses?
@@ -6951,7 +6961,15 @@
     // it still works when page init stops somewhere in between.
     try { if (_persistTimer) { clearTimeout(_persistTimer); _persistTimer = null; } } catch {}
 
-    const mergedValues = Object.assign({}, state, TW.readForm(form));
+    // The cover-letter switch REPLACES a top-level primitive with setState, which the module-top
+    // `state` snapshot never sees (liveKey explains the mechanism). The payload below already reads
+    // it live; the spread of this object into the draft did not, so it wrote the load-time value
+    // back over the estimator's tick — and the next build, the Files page's door included, read the
+    // unticked box and left page 1 out of the customer's document. So it is taken live here too.
+    const _liveLetter = liveKey("cover_letter_enabled");
+    const mergedValues = Object.assign({}, state,
+      _liveLetter === undefined ? {} : { cover_letter_enabled: !!_liveLetter },
+      TW.readForm(form));
     const tokenValues = computeTokenValues(mergedValues);
     const lumpSumText = document.querySelector("#tb-total")?.textContent || "$0.00";
     const _fb = (state.computed_bid && state.computed_bid.full_bid) || {};
@@ -7223,10 +7241,31 @@
       new Promise((resolve) => { timer = setTimeout(() => resolve(true), 20000); }),
     ]);
     if (timer) clearTimeout(timer);
+    // initDraftSync found this browser holding ANOTHER project (a door reloaded after that one was
+    // opened in another tab, a restored tab, a pasted link) and is reloading onto this one. This
+    // page's `state` snapshot is that other project's, so building from it would put that project's
+    // name, scope and price into this one. The reload comes back through here and builds instead.
+    if (TW.reloadPending && TW.reloadPending()) return;
     if (btn) { btn.disabled = false; btn.textContent = label; }
     if (timedOut || !templateVersion) {
       repaintNote("The Files page needs this proposal rebuilt from your latest changes, and it could not be done for you.",
                   "Check the document below, then press Continue to Done.");
+      return;
+    }
+    // ONLY FROM THE SERVER'S COPY. What this page composes from is the blob it was loaded with
+    // (TW.bootDigest), and Continue saves the whole of it. When that is not what the server holds
+    // — this browser's copy is older than a colleague's revision, or has edits whose save never
+    // landed — an unattended build would put it over the server's. The Files page's door replaces
+    // an older copy with the server's before it sends anyone here, so this only stops what that
+    // could not settle; the estimator, who can see what is on screen, presses Continue or not.
+    // Either digest will do: the page's own init may have saved something already.
+    const saved = await TW.readServerDraft();
+    const savedDigest = saved ? TW.draftDigest(saved) : "";
+    if (!saved || (savedDigest !== TW.bootDigest() && savedDigest !== TW.draftDigest(TW.getState()))) {
+      repaintNote(saved
+        ? "This page's copy of the project is not the one saved on the server, so the proposal was not rebuilt for you."
+        : "The saved copy of this project could not be read, so the proposal was not rebuilt for you.",
+        "Check the document below, then press Continue to Done.");
       return;
     }
     await continueToDone(null);

@@ -5539,8 +5539,18 @@ def _generate(payload: GenerateIn, request: Request, *,
     # `work_type == "gyp"` special case here was this same fact spelled as a string,
     # which is exactly why GC never got it).
     _free_rows = proposal_writer.template_free_tax_rows(payload.work_type, payload.audience)
+    # REMODEL OFF MEANS NO REMODEL ROW, whatever the template. Hanz: "If remodel tax is off then in
+    # the broken out option in the Proposal, there is no remodel tax but there is material sales
+    # tax." The Direct files get that from their {{#remodel}} region, which the browser fills only
+    # when there is a remodel tax; the three GC files and the Gyp file print the row as a plain
+    # paragraph, so they printed "$0 – Remodel Tax" ("$0 – Kansas Remodel Tax" on Gyp) on every job
+    # with none. Off is read off the payload itself — no remodel line AND a remodel figure of
+    # nothing — so a payload saved before `remodel` existed, with a real figure, keeps its row. The
+    # Material Sales Tax row is not touched: it follows its own rules.
+    _remodel_off = (not (payload.remodel or [])
+                    and not (_parse_usd(values.get("tax_amount_formatted")) or 0))
     _prints_material = _free_rows["material"] or _broken
-    _prints_remodel = _free_rows["remodel"] or bool(_remodel_lines)
+    _prints_remodel = (_free_rows["remodel"] and not _remodel_off) or bool(_remodel_lines)
 
     # The base line makes no "(… INCLUDED)" claim when the tax rows print their own
     # figures right underneath it: that sentence and that itemisation contradict each
@@ -5919,6 +5929,8 @@ def _generate(payload: GenerateIn, request: Request, *,
             alternates=alternates,
             systems=systems_arg,
             remodel=_remodel_lines,
+            # A template's FREE remodel row (GC, Gyp) is taken out when there is no remodel tax.
+            remodel_row=not _remodel_off,
             rooms=rooms_arg,
             # Base shows via {{#single_bid}} normally; suppressed for the combo
             # breakout (its Option 1/Option 2 lines are the base price).

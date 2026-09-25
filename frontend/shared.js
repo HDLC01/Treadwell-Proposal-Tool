@@ -18,6 +18,14 @@
   // stale (e.g. bfcache-restored) page write draft A's data under draft B's id.
   const STAMP = "__draft_id";
   const GUARD_WINDOW_MS = 15000;   // reload-loop guard: only blocks a re-hydrate of the SAME id within this window
+  // Set by initDraftSync the moment it adopts the URL's draft and calls reload(). From then on this
+  // page instance is a leftover: its module-top snapshots were read from the blob that was just
+  // replaced (another project's, or none), and the reload will run the page again on the right one.
+  // So every write from it is refused (setState / setLocalState below). Without that, anything this
+  // page did after TW.draftReady resolved — the Files page's door pressing Continue was the first
+  // to do it unattended — merged the OTHER project's snapshot into this one under this one's stamp,
+  // which nothing else refuses, and the reload then found the result "owned" and saved it.
+  let _reloadPending = false;
 
   /**
    * API base URL resolution (in priority order):
@@ -64,6 +72,10 @@
       console.warn("[TW] refused state write: blob owned by draft", cur[STAMP], "but page is on", id);
       return cur;
     }
+    if (_reloadPending) {
+      console.warn("[TW] refused state write: this page is reloading onto draft", id);
+      return cur;
+    }
     const merged = Object.assign(cur, partial || {});
     if (id) merged[STAMP] = id;   // force-stamp AFTER the merge (partials can carry a stale stamp)
     writeBlob(merged);
@@ -86,6 +98,7 @@
       console.warn("[TW] refused local state write: blob owned by draft", cur[STAMP], "but page is on", id);
       return cur;
     }
+    if (_reloadPending) return cur;             // a leftover page; see _reloadPending
     const merged = Object.assign(cur, partial || {});
     if (id) merged[STAMP] = id;
     writeBlob(merged);
@@ -258,6 +271,122 @@
     }
   }
 
+  // ─── Is this browser's copy the one the server holds? ─────────────
+  // initDraftSync keeps a blob already stamped for the URL's draft WITHOUT re-reading the server,
+  // so this browser's copy can be older than the server's (a colleague revised the project on
+  // another machine, Troy marked it Won) — or newer (a save of this browser's edits is still in
+  // flight, or failed). Anything that builds from the local copy and then PUTs the whole blob has
+  // to know which, and the Files page's door does both. So every time the two are known to be
+  // equal — a hydrate read the server, a PUT was stored — this browser remembers a digest of that
+  // copy (SYNCED_KEY). A local copy whose digest is still that one has nothing the server lacks;
+  // one whose digest has moved on holds changes the server has not confirmed.
+
+  /** A canonical string of a JSON value: keys sorted, so the order a merge happened to leave them
+   *  in cannot move a hash. */
+  function canonJSON(v) {
+    if (Array.isArray(v)) return "[" + v.map(canonJSON).join(",") + "]";
+    if (v && typeof v === "object") {
+      return "{" + Object.keys(v).sort()
+        .map((k) => JSON.stringify(k) + ":" + canonJSON(v[k])).join(",") + "}";
+    }
+    return JSON.stringify(v);
+  }
+
+  /** cyrb53: 53 bits, so two different drafts sharing a hash is not a practical concern here. */
+  function hash53(s) {
+    let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+    for (let i = 0; i < s.length; i++) {
+      const c = s.charCodeAt(i);
+      h1 = Math.imul(h1 ^ c, 2654435761);
+      h2 = Math.imul(h2 ^ c, 1597334677);
+    }
+    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+    return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+  }
+
+  /** Keys the two copies may disagree on without either being out of date: the ownership stamp,
+   *  the server-owned keys (the server carries them forward on every save, and re-reads them for
+   *  the page), and the Files page's own record of its last build, which it keeps with
+   *  setLocalState while /api/draft/{id}/documents records its own on the server. */
+  const DIGEST_IGNORED = [STAMP, "generate_result", "generated_lump_sum"].concat(SERVER_OWNED_KEYS);
+
+  /** A digest of a draft blob: everything but DIGEST_IGNORED, off a JSON round trip, so an object
+   *  in memory and the same object read back from localStorage or the server give one answer. */
+  function draftDigest(blob) {
+    let plain;
+    try { plain = JSON.parse(JSON.stringify(blob || {})); } catch { return ""; }
+    if (!plain || typeof plain !== "object" || Array.isArray(plain)) return "";
+    const keep = {};
+    Object.keys(plain).forEach((k) => { if (DIGEST_IGNORED.indexOf(k) < 0) keep[k] = plain[k]; });
+    return hash53(canonJSON(keep));
+  }
+
+  const SYNCED_KEY = "treadwell.proposal_tool.synced";
+  function markSynced(id, digest) {
+    if (!id || !digest) return;
+    try { localStorage.setItem(SYNCED_KEY, id + ":" + digest); } catch {}
+  }
+  /** The digest of this draft as last seen equal to the server's, or null when this browser has
+   *  never seen it so (a copy written before the marker existed, or another draft's marker). */
+  function syncedDigest(id) {
+    try {
+      const raw = localStorage.getItem(SYNCED_KEY) || "";
+      const i = raw.lastIndexOf(":");
+      return (i > 0 && raw.slice(0, i) === id) ? raw.slice(i + 1) : null;
+    } catch { return null; }
+  }
+
+  /** The SERVER's copy of this page's draft, or null when it cannot be read (no id, a draft this
+   *  session adopted blind, not found, offline). Reads only: nothing is merged or written. */
+  async function readServerDraft() {
+    const id = getDraftId();
+    if (!id || isUnverified(id)) return null;
+    try {
+      const res = await fetch(resolveApiBase() + "/api/draft/" + encodeURIComponent(id),
+                              { headers: authHeaders() });
+      if (!res.ok) return null;
+      const body = await res.json();
+      const data = body && body.data;
+      return (data && typeof data === "object" && !Array.isArray(data)) ? data : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Bring this browser's copy of the draft in line with the server's, when that loses nothing.
+   *
+   *  Resolves `{status, server}`, `server` being the server's copy (null when it was not read):
+   *    "same"        the two agree (DIGEST_IGNORED aside). Nothing is written.
+   *    "adopted"     they did not, and this browser's copy held nothing the server lacks: it is
+   *                  the copy last seen on the server, or one written before that was recorded.
+   *                  So the SERVER's copy is the newer one, and it now replaces this browser's —
+   *                  which is what stops an older copy being built from and put back over it.
+   *                  A page holding a module-top snapshot must reload to see it.
+   *    "kept"        they did not, and this browser's copy has changes the server has not
+   *                  confirmed (a save still in flight or one that failed), or it could not be
+   *                  replaced. Left exactly as it is: it may be this estimator's own work.
+   *    "unreachable" the server could not be read. Nothing is known and nothing is changed.
+   *  This page's own pending save is flushed first, so a "kept" is never merely that. */
+  async function reconcileWithServer() {
+    const id = getDraftId();
+    if (!id || _reloadPending) return { status: "unreachable", server: null };
+    await flushState();
+    const server = await readServerDraft();
+    if (!server) return { status: "unreachable", server: null };
+    const local = getState();
+    const mine = draftDigest(local);
+    const theirs = draftDigest(server);
+    if (mine === theirs) { markSynced(id, mine); return { status: "same", server }; }
+    const last = syncedDigest(id);
+    if ((last !== null && last !== mine) || (local[STAMP] && local[STAMP] !== id)) {
+      return { status: "kept", server };
+    }
+    if (!writeBlob(Object.assign({}, server, { [STAMP]: id }))) return { status: "kept", server };
+    markSynced(id, theirs);
+    return { status: "adopted", server };
+  }
+
   // The most recent server write, so flushState() can await it. A rejected promise is
   // never stored — callers get a boolean, never an unhandled rejection.
   let _inFlight = null;
@@ -274,6 +403,9 @@
   // and the PDF (regenerated from the live draft) showed Room 1. Both were "right".
   function putDraft(id, blob, keepalive = false) {
     try {
+      // Taken as the body is, before anything can change the blob, so a stored write records
+      // exactly the copy the server now holds (see SYNCED_KEY).
+      const sent = draftDigest(blob);
       const p = fetch(resolveApiBase() + "/api/draft/" + encodeURIComponent(id), {
         method: "PUT",
         headers: authHeaders(),
@@ -297,6 +429,9 @@
         // Only after the row exists: set_test_flag returns false on a missing draft, so filing
         // before the first save would be a silent no-op and the project would stay in Active.
         if (ok) applyPendingTestIntent(id);
+        // Only for the draft this page is on: an evicted blob flushed to its own id must not
+        // overwrite the marker of the draft being adopted in its place.
+        if (ok && id === getDraftId()) markSynced(id, sent);
         return ok;
       }).catch(() => false /* offline / backend down — local copy still safe */);
       _inFlight = p;
@@ -536,11 +671,13 @@
     }
 
     flushEvictedBlob(blob);                        // save the OTHER draft's tail under its own id
-    const adoptAndReload = (data) => {
+    const adoptAndReload = (data, seen) => {
       data[STAMP] = urlId;                         // force-stamp (server copy may carry a stale stamp)
       writeBlob(data);
+      if (seen) markSynced(urlId, draftDigest(data));    // this IS the server's copy
       setDraftId(urlId);
       setGuard(urlId);
+      _reloadPending = true;                       // this page's snapshots are the old blob's
       window.location.reload();                    // re-run page init with the right state
     };
     const attempt = async () => {
@@ -549,11 +686,11 @@
       if (res.ok) {
         const body = await res.json();
         clearUnverified();                                 // we have seen what the server holds
-        return adoptAndReload((body && body.data) || {});
+        return adoptAndReload((body && body.data) || {}, true);
       }
       if (res.status === 404) {
         clearUnverified();                                 // a real answer: there is nothing to lose
-        return adoptAndReload({});                         // brand-new / never-saved draft
+        return adoptAndReload({}, true);                   // brand-new / never-saved draft
       }
       throw new Error("HTTP " + res.status);
     };
@@ -570,6 +707,13 @@
       }
     }
   }
+
+  // The digest of the blob as this page FOUND it, taken before initDraftSync can touch it. Every
+  // page reads its module-top snapshot (`const state = TW.getState()`) in the same synchronous run
+  // right after this script, so this is the digest of what that snapshot was built from — before
+  // the page's own init mutates the snapshot in place. The Files page's door asks it: a page may
+  // only compose unattended when what it was built from is the server's copy.
+  const _bootDigest = (() => { try { return draftDigest(getState()); } catch { return ""; } })();
 
   // Kick off sync as soon as the script loads. Expose the promise so pages that
   // auto-act on load (done.js files-mode) can await a settled draft first.
@@ -1129,27 +1273,13 @@
     if (!doc || typeof doc !== "object") return "";
     const inputs = {};
     Object.keys(plain).forEach((k) => { if (COMPOSE_IGNORED.indexOf(k) < 0) inputs[k] = plain[k]; });
-    const canon = (v) => {
-      if (Array.isArray(v)) return "[" + v.map(canon).join(",") + "]";
-      if (v && typeof v === "object") {
-        return "{" + Object.keys(v).sort()
-          .map((k) => JSON.stringify(k) + ":" + canon(v[k])).join(",") + "}";
-      }
-      return JSON.stringify(v);
-    };
-    // cyrb53: 53 bits, so two different drafts sharing a key is not a practical concern here.
-    const hash = (s) => {
-      let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
-      for (let i = 0; i < s.length; i++) {
-        const c = s.charCodeAt(i);
-        h1 = Math.imul(h1 ^ c, 2654435761);
-        h2 = Math.imul(h2 ^ c, 1597334677);
-      }
-      h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
-      h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
-      return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
-    };
-    return hash(canon(inputs)) + "." + hash(canon(doc));
+    return hash53(canonJSON(inputs)) + "." + hash53(canonJSON(doc));
+  }
+
+  /** Does this blob's document hold, i.e. was it built from the inputs the blob now carries? */
+  function documentHolds(blob) {
+    const key = composeKey(blob);
+    return !!key && !!blob && blob.proposal_payload_key === key;
   }
 
 
@@ -1211,5 +1341,11 @@
     publishDigest,
     docDrift,
     composeKey,
+    documentHolds,
+    draftDigest,
+    bootDigest: () => _bootDigest,
+    reloadPending: () => _reloadPending,
+    readServerDraft,
+    reconcileWithServer,
   };
 })();

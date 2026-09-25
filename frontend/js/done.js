@@ -129,29 +129,50 @@
   // files-mode can't POST /api/generate from the previous draft's data.
   (async () => {
     try { await (TW.draftReady || Promise.resolve()); } catch {}
-    const st = TW.getState();
+    // initDraftSync has adopted this project's own copy and is reloading the page onto it, so
+    // everything below would run on the blob it just replaced. The reload decides instead.
+    if (TW.reloadPending && TW.reloadPending()) return;
+    let st = TW.getState();
     // ── THE DOOR ────────────────────────────────────────────────────────────────────────────
     // Hanz, 2026-09-25: "Clicking to Done should regenerate and make the proposal correctly."
-    // Everything on this page — Download, Send, the customer's PDF — is built from the SAVED
-    // `proposal_payload`, and only the Proposal step's Continue composes one. Every other way in
-    // (the Files pill from Intake or Estimate, the Polish beta's Files link, View files off the
-    // board, a reload, a typed URL) used to show the document from the LAST Continue, whatever
-    // had changed since: a texture picked on the Estimate step, a re-price, a note, the tax
-    // mode, a base flip. So the page asks first whether its document is the one the draft
-    // describes now (TW.composeKey: the inputs, and the document), and when it is not, sends
-    // the estimator through the Proposal step to have it built (proposal-review.js
+    // Everything on this page — Download, Send, the customer's PDF — is built from the SERVER's
+    // saved `proposal_payload`, and only the Proposal step's Continue composes one. Every other
+    // way in (the Files pill from Intake or Estimate, the Polish beta's Files link, View files off
+    // the board, a reload, a typed URL) used to show the document from the LAST Continue,
+    // whatever had changed since: a texture picked on the Estimate step, a re-price, a note, the
+    // tax mode, a base flip. So the page asks first whether the document is the one the draft
+    // describes now (TW.documentHolds: the key TW.composeKey stamps at Continue), and when it is
+    // not, sends the estimator through the Proposal step to have it built (proposal-review.js
     // composeForFiles), which comes straight back here. REPLACE, so Back from here is not a page
     // that bounces forward again.
     //
-    // A document that is current is left alone, and nothing is written: opening a project's
-    // files on a machine whose copy of the draft is older than the server's must not put that
-    // copy back over a colleague's revision, and building from it would. `composedHere` is the
-    // loop guard — a page built from this draft a moment ago is never sent round again, and a
-    // send is still checked against the key (see the Send button).
-    if (st.project_name && !composedHere && st.proposal_payload_key !== TW.composeKey(st)) {
-      location.replace(TW.withDraft("/proposal-review.html?compose=files"
-                                    + (filesMode ? "&files=1" : "")));
-      return;
+    // ASKED OF THE SERVER'S COPY, because that is what Download and Send render — and never
+    // answered by building from this browser's copy when that is older. initDraftSync does not
+    // re-read a blob already stamped for this draft, so a colleague's revision, Troy marking the
+    // job Won or an Estimate-step edit on another machine never reaches it; composing from it and
+    // saving would put the old copy back over all of that. TW.reconcileWithServer reads the
+    // server first: a local copy with nothing the server lacks is REPLACED by the server's, and
+    // the question is then asked of that. A local copy with changes the server has not confirmed
+    // is left alone (the Proposal step, sent through the door, will not build from it unattended
+    // either — see composeForFiles). A current document is left alone and nothing is written.
+    // `composedHere` is the loop guard — a page built from this draft a moment ago is never sent
+    // round again, and a send is still checked against the key (see the Send button).
+    if (st.project_name && !composedHere) {
+      const toDoor = () => location.replace(TW.withDraft("/proposal-review.html?compose=files"
+                                                         + (filesMode ? "&files=1" : "")));
+      const seen = await TW.reconcileWithServer();
+      if (seen.status === "adopted") {
+        // The server's copy now stands in this browser. Its document is current, or it goes
+        // through the door; either way this page's module-top snapshot is the old copy, so it is
+        // never shown — a current one is shown by a reload.
+        if (TW.documentHolds(seen.server)) location.reload(); else toDoor();
+        return;
+      }
+      const holds = seen.status === "kept"
+        ? TW.documentHolds(st) && TW.documentHolds(seen.server)
+        : TW.documentHolds(seen.server || st);        // "unreachable": this copy is all there is
+      if (!holds) { toDoor(); return; }
+      st = TW.getState();
     }
     const res = st.generate_result;
     // Decided HERE rather than in proposal-review's Continue, where the cover-letter version of
@@ -1433,19 +1454,30 @@
           // ── …OR IF THE DRAFT HAS MOVED SINCE THIS PAGE BUILT ITS DOCUMENT ───────────────
           // The door (the mode decider) checked the document against the draft when the page
           // opened, and nothing this page writes is an input to it (TW.composeKey). So a key
-          // that no longer matches means the draft was changed from ANOTHER tab or window: a
-          // texture picked on the Estimate step over there, then Send here, froze the old
-          // texture, because the drift gate below compares only the price, the base and the
-          // number of options. Nothing is posted. A reload goes back through the door, which
-          // builds the document from the draft as it now stands.
+          // that no longer matches means the draft was changed somewhere else: a texture picked
+          // on the Estimate step in another tab, then Send here, froze the old texture, because
+          // the drift gate below compares only the price, the base and the number of options.
+          //
+          // Asked of BOTH copies. This browser's, for another tab whose save has not landed yet;
+          // and the SERVER's, because that is the one the publish freezes — a colleague's
+          // Estimate-step edit on another machine moves the server's draft and never this page's,
+          // so a check of this browser's copy alone passed it and sent the old document. Nothing
+          // is posted. A reload goes back through the door, which builds the document from the
+          // draft as it now stands.
           const _now = TW.getState() || {};
-          if (_now.project_name && _now.proposal_payload_key !== TW.composeKey(_now)) {
+          const _saved = _now.project_name ? await TW.readServerDraft() : null;
+          const _moved = _now.project_name
+            && (!TW.documentHolds(_now) || (_saved && !TW.documentHolds(_saved)));
+          if (_moved || (_now.project_name && !_saved)) {
             portalBtn.disabled = false; portalBtn.textContent = orig;
             if (portalRecip.setBusy) portalRecip.setBusy(false);
             if (portalRecip.setErr) {
-              portalRecip.setErr("This proposal changed after this page opened (in another tab or "
-                + "window), so nothing was sent. Reload this page — the files are rebuilt from "
-                + "your latest changes — check them, then send.");
+              portalRecip.setErr(_moved
+                ? "This proposal changed after this page opened (in another tab, or by someone "
+                  + "else), so nothing was sent. Reload this page — the files are rebuilt from the "
+                  + "latest changes — check them, then send."
+                : "Couldn't check the saved proposal, so nothing was sent — check your connection "
+                  + "and try again.");
             }
             return;                            // NOTHING is posted. No portal row, no email.
           }

@@ -30,14 +30,14 @@ It also WARNS about a revision whose `template_version` the current template ref
 would drop that revision's paragraph edits. Fix 1 accepts every stamp taken against today's
 template content, so none is expected; read the dry run for them before applying.
 
-And it WARNS about a revision whose template prints a Remodel Tax row with Remodel off. The three
-GC templates and the Gyp template author their tax rows as plain paragraphs no flag can strip, so
-today they print "$0 – Remodel Tax" on a job with no remodel tax, against Hanz's rule ("If remodel
-tax is off then in the broken out option in the Proposal, there is no remodel tax but there is
-material sales tax"). Storing such a revision freezes that row for good; the only way to correct
-it afterwards is a revised send. Whether to run this before or after the remodel-row fix lands is
-Hanz's call (freeze what those customers were sent, or what the rule says), so the dry run lists
-them and the decision is made with the list in hand.
+And it WARNS about a revision on a template whose Remodel Tax row is a plain paragraph (the three
+GC templates and the Gyp template) with Remodel off. Until 2026-09-25 those printed "$0 – Remodel
+Tax" on a job with no remodel tax; since Hanz's rule ("If remodel tax is off then in the broken
+out option in the Proposal, there is no remodel tax but there is material sales tax") the render
+takes that row out. So the PDF this stores for such a revision has no $0 row, where the copy the
+customer saw in their portal before that deploy had one. Nothing else differs (the row carried no
+money), but the dry run lists them so that is known before anything is frozen. Freezing the old
+row instead would mean running this from a build without the rule.
 
     docker exec -w /app treadwell-proposal-tool python backfill_revision_documents.py           # dry run
     docker exec -w /app treadwell-proposal-tool python backfill_revision_documents.py --apply   # writes
@@ -92,17 +92,21 @@ def _stale_edits(main, payload: Dict[str, Any]) -> Optional[str]:
 
 
 def _remodel_row_while_off(main, payload: Dict[str, Any]) -> Optional[str]:
-    """Why this revision's stored render would print a Remodel Tax row with Remodel off, or None.
+    """Why this revision's stored render differs from what its customer saw before 2026-09-25 —
+    a template with a FREE Remodel Tax row, and Remodel off, so the row that used to print "$0" is
+    now taken out — or None.
 
-    Asked of the TEMPLATE, the same way the render asks it (`template_free_tax_rows`), so this
-    reports exactly the case the render cannot strip. No render needed, so the dry run can say it."""
+    Asked of the TEMPLATE, the same way the render asks it (`template_free_tax_rows`). No render
+    needed, so the dry run can say it."""
     gi = main.GenerateIn(**payload)
     if gi.remodel:
         return None
     if not main.proposal_writer.template_free_tax_rows(gi.work_type, gi.audience)["remodel"]:
         return None
-    return ("its %s/%s template prints a Remodel Tax row with Remodel off ($0) — storing it "
-            "freezes that row" % (gi.work_type, gi.audience))
+    if main._parse_usd((gi.values or {}).get("tax_amount_formatted")):
+        return None                      # a real remodel figure: the row still prints, unchanged
+    return ("its %s/%s template printed a $0 Remodel Tax row with Remodel off; the stored PDF "
+            "leaves it out (Hanz's remodel rule)" % (gi.work_type, gi.audience))
 
 
 def main(argv: List[str]) -> int:

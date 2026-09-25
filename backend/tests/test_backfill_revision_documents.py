@@ -111,23 +111,27 @@ def test_a_database_without_the_table_is_refused_up_front(db, monkeypatch, capsy
     assert "apply its DDL" in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("work_type, audience, remodel, warned", [
-    ("epoxy", "GC", [], True),                                    # GC prints a free $0 row
-    ("gyp", "Direct", [], True),                                  # so does the Gyp template
-    ("epoxy", "GC", [{"amount_formatted": "$125"}], False),       # Remodel on: the row is right
-    ("epoxy", "Direct", [], False),                               # Direct strips its own row
+@pytest.mark.parametrize("work_type, audience, remodel, figure, warned", [
+    ("epoxy", "GC", [], None, True),                              # GC printed a free $0 row
+    ("gyp", "Direct", [], None, True),                            # so did the Gyp template
+    ("epoxy", "GC", [{"amount_formatted": "$125"}], "$125", False),   # Remodel on: unchanged
+    ("epoxy", "GC", [], "$125", False),                           # a figure, saved before the list
+    ("epoxy", "Direct", [], None, False),                         # Direct strips its own row
 ])
 def test_a_revision_that_would_freeze_a_remodel_row_with_remodel_off_is_warned(
-        db, capsys, work_type, audience, remodel, warned):
+        db, capsys, work_type, audience, remodel, figure, warned):
     """Review of fix 3, finding 4. Hanz's rule: "If remodel tax is off then in the broken out
     option in the Proposal, there is no remodel tax but there is material sales tax." The GC and
-    Gyp templates print a "$0 – Remodel Tax" paragraph no flag can strip, and storing such a
-    revision freezes that row for good. Whether to store it before or after the row is fixed is
-    Hanz's call, so the dry run names every one — it renders nothing to do it.
+    Gyp templates printed a "$0 – Remodel Tax" paragraph with Remodel off until the render took
+    it out (2026-09-25), so the PDF stored for such a revision is missing a row the customer's
+    portal used to show. The dry run names every one — it renders nothing to do it.
 
-    Mutation: drop `_remodel_row_while_off` from the WARN reasons — the GC line reads STORE."""
+    Mutations: drop `_remodel_row_while_off` from the WARN reasons — the GC line reads STORE;
+    drop its remodel-figure check — the legacy GC line (a figure, no list) is warned."""
     pp = {"work_type": work_type, "audience": audience, "remodel": remodel,
           "values": {**PAYLOAD["values"], "tax_inclusion": "BROKEN_OUT"}}
+    if figure:
+        pp["values"]["tax_amount_formatted"] = figure
     db["portal_proposals"].append({"proposal_id": "gc", "current_revision_no": 1})
     db["draft_revisions"].append(_rev("gc", 1, payload=pp))
     assert backfill.main([]) == 0

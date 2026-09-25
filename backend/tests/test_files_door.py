@@ -14,11 +14,19 @@ THE DESIGN, and why not a second composer. The composition needs the Proposal st
 (computeTokenValues, the editor's paragraph and box edits read off the mounted template, the WORK
 system picks), so rather than a second copy of it on the Files page, the Files page has ONE DOOR:
 continueToDone stamps the draft with TW.composeKey (a hash of the inputs, and of the document) as
-it writes, the Files page recomputes the key on arrival, and a draft whose document is not current
-is sent through the Proposal step with `?compose=files`, which presses Continue for it once the page
+it writes, the Files page checks the key on arrival, and a draft whose document is not current is
+sent through the Proposal step with `?compose=files`, which presses Continue for it once the page
 has settled and comes straight back. A document that IS current is left alone and nothing is
-written, so opening a project's files on a machine holding an older copy of the draft cannot put
-that copy back over a colleague's revision.
+written.
+
+THE SERVER'S COPY DECIDES, never an older one in this browser (review of the door, 2026-09-25).
+initDraftSync keeps a localStorage copy already stamped for the draft without re-reading the
+server, so this browser can hold a copy older than a colleague's revision, or than Troy marking the
+job Won. The door used to build from that copy and PUT the whole of it back. Now the Files page asks
+the server first (TW.reconcileWithServer): a local copy with nothing the server lacks is replaced
+by the server's, one with changes the server never confirmed is left alone, and the Proposal step
+only composes unattended when what it loaded IS the server's copy. A page that initDraftSync is
+reloading onto another project writes nothing at all.
 
 EXECUTED, NOT READ: js/files-door-harness.js runs the real shared.js (one vm per page load, one
 browser, one stub server) with the real Proposal-step and Files-page code; see its header. The last
@@ -161,14 +169,144 @@ def test_view_files_stays_view_files_through_the_door(ran):
 
 def test_a_stale_copy_of_the_draft_is_not_written_back(ran):
     """THE SAFETY PROPERTY. Kyle's browser holds a copy that is current by its own key, while RJ
-    has since revised the project on another machine. View files must neither rebuild from Kyle's
-    copy nor write it: it renders the server's (RJ's) document and PUTs nothing.
+    has since revised the project and pressed Continue on another machine. View files must neither
+    rebuild nor write: it puts the server's (RJ's) copy in place of Kyle's older one, reloads onto
+    it, and renders RJ's document. Kyle's copy is gone from his browser too, so nothing on the page
+    can put it back later.
 
-    Mutation: always compose on arrival — the door runs and PUTs Kyle's copy over RJ's."""
+    Mutation: decide on this browser's copy instead of the server's (skip reconcileWithServer) —
+    the arrival shows Kyle's copy and his browser keeps it."""
     s = ran["staleLocal"]
-    assert s["nav"] == [] and s["calls"] == ["viewFiles"]
+    assert s["nav"] == [["reload"]] and s["calls"] == [], s
+    assert s["againNav"] == [] and s["againCalls"] == ["viewFiles"], s
     assert s["putsFromThisBrowser"] == 0
-    assert s["rendered"] == "RJ's texture" == s["serverTexture"]
+    assert s["rendered"] == "RJ's texture" == s["serverTexture"] == s["localTexture"]
+
+
+def test_view_files_never_builds_from_an_older_copy_over_a_colleagues_revision(ran):
+    """Review findings 2 and 5. Kyle's key did not hold (an Estimate-step note saved after his last
+    Continue), so the door did run — and it composed from Kyle's copy and PUT it: RJ's $15,000 and
+    texture reverted, Troy's Won erased. Now it composes from the SERVER's copy: the one write is
+    RJ's price, RJ's texture, Troy's Won and Kyle's own saved note, with a document built from them.
+
+    Mutations: skip the adopt in reconcileWithServer (every put is Kyle's $10,000 Smooth, Won
+    erased); drop the server check from composeForFiles (the same)."""
+    s = ran["staleEdited"]
+    assert s["finalCalls"] == ["viewFiles"], s["stops"]
+    assert s["puts"] == 1 and s["everyPutIsRJs"] is True, s
+    assert s["server"] == {"texture": "RJ Orange Peel", "lump": 15000,
+                           "won": {"at": "2026-09-24", "by": "troy@wetreadwell.com"},
+                           "handedOff": False}
+    for name in ("document", "rendered"):
+        assert (s[name]["texture"], s[name]["total"]) == ("RJ Orange Peel", "$15,000"), s[name]
+        assert s[name]["notes"] == ["Kyle's later note"]
+
+
+def test_a_copy_saved_before_this_deploy_is_not_written_back_either(ran):
+    """The same, for a copy with no key and no record of when it last matched the server — every
+    browser's copy on deploy day. The server's copy wins; Kyle's is never PUT.
+
+    Mutation: treat a missing sync record as "this browser has unsaved changes" — the page keeps
+    Kyle's copy, and the door stops instead of building."""
+    s = ran["legacyStale"]
+    assert s["settled"] is True and s["stops"] == ["done", "proposal", "done"], s
+    assert s["puts"] == 1 and s["everyPutIsRJs"] is True
+    assert s["serverTexture"] == "RJ Orange Peel" == s["documentTexture"]
+
+
+def test_the_door_asks_the_servers_copy_not_this_browsers(ran):
+    """Review finding 3. Kyle's copy holds by its own key; the SERVER's draft moved (RJ picked
+    Knockdown on another machine, no Continue), so its document says Smooth. Download and Send
+    render the server's copy, so the door has to ask that one: View files builds Knockdown.
+
+    Mutation: ask this browser's key only (the old door) — no trip, and Download renders Smooth."""
+    s = ran["serverMoved"]
+    assert s["stops"] == ["done", "proposal", "done"], s
+    assert s["documentTexture"] == "Knockdown" == s["renderedTexture"]
+    assert s["keyHolds"] is True
+
+
+def test_a_copy_with_edits_the_server_never_got_is_not_built_unattended(ran):
+    """This browser's copy has an edit whose save failed. It may be the estimator's own work, so the
+    Files page does not replace it — and the Proposal step will not build from it on its own
+    either, because Continue saves the whole copy. It says why and leaves Continue to the estimator.
+
+    Mutation: drop the server check from composeForFiles — the door builds and PUTs it unseen."""
+    s = ran["unconfirmed"]
+    assert s["stops"] == ["done", "proposal"], s
+    assert "not the one saved on the server" in s["note"], s["note"]
+    assert s["puts"] == 0
+    assert s["localTexture"] == "Unsaved Knockdown" and s["serverTexture"] == "Smooth"
+
+
+def test_an_edit_still_on_its_way_to_the_server_is_built_once_it_lands(ran):
+    """A pill click sends the Estimate step's save as the page goes, so the Files page can ask the
+    server before it has landed. It must not decide that the OLD document is current: it goes
+    through the door, and the Proposal step, asking once more, finds the two copies agreeing.
+
+    Mutation: decide "kept" on the server's key alone — the Files page shows the old document."""
+    s = ran["inFlight"]
+    assert s["firstNav"] == [["replace", "/proposal-review.html?compose=files&d=d1"]], s
+    assert s["stops"] == ["proposal", "done"], s
+    assert s["documentTexture"] == "Knockdown"
+
+
+def test_a_page_reloading_onto_this_project_never_builds_from_another(ran):
+    """Review finding 1. The door page is open on X when another tab opens Y. The door refuses
+    ("open in another tab") and the estimator reloads as told: that load's snapshot is Y's, and
+    initDraftSync adopts X and reloads. The door used to press Continue with Y's snapshot the moment
+    TW.draftReady resolved — X saved with Y's name, scope and price. Nothing is written from that
+    page now; the reload builds X from X.
+
+    Mutations: drop `_reloadPending` from setState and the reloadPending check in composeForFiles
+    together (Y reaches the server)."""
+    s = ran["foreignReload"]
+    assert "another tab" in s["said"]
+    assert s["reload1Nav"] == [["reload"]] and s["putsAfterFirst"] == 0, s
+    assert s["localAfterFirst"] == {"project": "Door Test", "texture": "Orange Peel", "lump": 10000}, (
+        "the leftover page's own init wrote the other project's price into this one")
+    assert s["reload2Nav"] == [["replace", "/done.html?composed=1&d=d1"]], s
+    assert s["serverMentionsY"] is False and s["putsMentioningY"] == 0
+    assert s["server"] == {"project": "Door Test", "scope": "Grind and coat.",
+                           "docProject": "Door Test", "docTexture": "Orange Peel"}
+
+
+def test_a_door_opened_while_this_browser_held_another_project_writes_nothing_of_it(ran):
+    """The same from a plain load: a restored tab, a pasted link, Back to a door that had stopped.
+
+    Mutation: as above."""
+    s = ran["crossDraft"]
+    assert s["firstNav"] == [["reload"]] and s["putsFromFirst"] == 0, s
+    assert s["secondNav"] == [["replace", "/done.html?composed=1&d=d1"]]
+    assert s["serverMentionsY"] is False and s["putsMentioningY"] == 0
+    assert s["docTexture"] == "Orange Peel"
+
+
+def test_a_copy_edited_after_a_fresh_hydrate_is_known_to_hold_unsaved_changes(ran):
+    """The record of what the server held is taken at the hydrate as well as at every stored save:
+    otherwise a copy read fresh from the server and then edited, with a save that failed, looks
+    like one that never changed, and the Files page puts the server's copy over the edit.
+
+    Mutation: record nothing at the hydrate (shared.js adoptAndReload) — the edit is replaced."""
+    s = ran["hydratedThenUnsaved"]
+    assert s["hydrateNav"] == [["reload"]], s
+    assert s["stops"] == ["done", "proposal"], s
+    assert s["puts"] == 0
+    assert s["localTexture"] == "Unsaved Knockdown" and s["serverTexture"] == "Smooth", s
+
+
+def test_the_cover_letter_ticked_on_this_visit_survives_the_next_rebuild(ran):
+    """Review finding 6. The switch writes a top-level primitive with setState; the page's snapshot
+    still said false, and Continue spread that snapshot back over the tick. The payload said true,
+    so the key held and nobody saw it — until the next build (the door, after a note changed on
+    the Estimate step) read the unticked box and dropped page 1 from the customer's document.
+
+    Mutation: build mergedValues from the snapshot alone — afterTick.topLevel is False and the
+    door's document has no letter."""
+    s = ran["coverLetter"]
+    assert s["afterTick"] == {"topLevel": True, "payload": True}, s
+    assert s["afterDoor"]["topLevel"] is True and s["afterDoor"]["payload"] is True, s
+    assert s["afterDoor"]["notes"] == ["A later note"]
 
 
 def test_an_older_document_put_back_goes_through_the_door_too(ran):
@@ -241,13 +379,30 @@ def test_a_pending_form_save_cannot_put_the_old_document_back(ran):
 
 def test_the_estimate_steps_pills_save_the_sheet_on_the_way_out(ran):
     """A cell edit reaches the draft only when the grid's `change` handler runs persistTabState
-    300ms later; clicking a pill fires `change` and navigates at once. The pills now save the
-    sheet first, as Back and Continue do; a click anywhere else does not.
+    300ms later; clicking a pill fires `change` and navigates at once. A pill clicked while that
+    save is waiting runs it now (once — the timer is cancelled); a click anywhere else does not.
 
-    Mutation: drop the listener — nothing is persisted."""
+    Mutation: drop the listener — the edited page's afterPill is 0."""
     p = ran["estimatePill"]
-    assert p["events"] == ["click"]
-    assert p["afterPill"] == 1 and p["afterCell"] == 1
+    assert p["events"] == ["click", "grid:change"]
+    assert p["armed"] is True and p["afterPill"] == 1 and p["clearedByPill"] is True
+    assert p["afterDebounce"] == 1, "the cancelled debounce still fired a second save"
+    assert p["elsewhere"] == 0
+
+
+def test_a_pill_click_with_no_edit_waiting_writes_nothing(ran):
+    """Review finding 5, its second path. persistTabState writes the page's whole load-time
+    snapshot, so a pill click on an Estimate page opened before a colleague's revision put that old
+    copy back over theirs — merely walking through the step. With no edit waiting it writes nothing,
+    as before the listener existed; once the debounce has saved an edit itself, there is nothing
+    left waiting either.
+
+    Mutations: persist on every pill click (idle is 1); leave `_cbTimer` set when the debounce
+    fires (settledAfterPill is 2)."""
+    p = ran["estimatePill"]
+    assert p["idle"] == 0
+    assert p["settledSaves"] == 1 and p["settledAfterPill"] == 1
+    assert p["settledPending"] is None
 
 
 # ── the backend builds that document ─────────────────────────────────────────────────────────
@@ -286,3 +441,70 @@ def test_the_server_builds_the_changed_proposal_and_the_send_gate_agrees(served)
     # there is no remodel tax but there is material sales tax." Remodel is $0 on this draft.
     assert "Remodel Tax" not in text, text[:2000]
     assert main._stale_document_refusal(main._publish_digest(served)) is None
+
+
+def _render_served(blob, work_type, audience, remodel_amount=None):
+    """The door's saved draft, re-pointed at another template (and optionally given a remodel
+    tax), through the REAL /api/draft/{id}/documents: the .docx text a customer would read."""
+    pp = blob["proposal_payload"]
+    pp["work_type"] = work_type
+    pp["audience"] = audience
+    pp["values"]["work_type"] = work_type
+    pp["values"]["audience"] = audience
+    blob["audience"] = audience
+    if remodel_amount:
+        pp["remodel"] = [{"amount_formatted": remodel_amount}]
+        pp["values"]["tax_amount_formatted"] = remodel_amount
+    r = client.post("/api/draft/d1/documents", json={})
+    assert r.status_code == 200, r.text
+    f = client.get(r.json()["docx_download_url"])
+    assert f.status_code == 200, f.text
+    return _docx_text(f.content)
+
+
+# Every template family: the three GC files and the Gyp file author their Remodel Tax row as a
+# plain paragraph (they printed "$0 – Remodel Tax" / "$0 – Kansas Remodel Tax"); the Direct files
+# wrap it in {{#remodel}}.
+REMODEL_TEMPLATES = [("epoxy", "GC"), ("polish", "GC"), ("sealer", "GC"), ("gyp", "Direct"),
+                     ("epoxy", "Direct"), ("polish", "Direct"), ("combo", "Direct")]
+
+
+@pytest.mark.parametrize("work_type,audience", REMODEL_TEMPLATES)
+def test_remodel_off_broken_out_prints_material_tax_and_no_remodel_row(served, work_type, audience):
+    """Hanz: "If remodel tax is off then in the broken out option in the Proposal, there is no
+    remodel tax but there is material sales tax." The draft the door built is Broken out with no
+    remodel tax; rendered through every template family, no Remodel Tax row prints and the Material
+    Sales Tax row does.
+
+    Mutation: pass `remodel_row=True` whatever the tax (main.py) — GC and Gyp print "$0 – Remodel
+    Tax" again."""
+    assert served["proposal_payload"]["values"]["tax_inclusion"] == "BROKEN_OUT"
+    assert served["proposal_payload"]["remodel"] == []
+    text = _render_served(served, work_type, audience)
+    assert "Remodel Tax" not in text, (work_type, audience, text[:3000])
+    assert "Material Sales Tax" in text, (work_type, audience, text[:3000])
+
+
+@pytest.mark.parametrize("work_type,audience", [("epoxy", "GC"), ("gyp", "Direct")])
+def test_a_payload_with_a_remodel_figure_but_no_remodel_list_keeps_its_row(served, work_type,
+                                                                           audience):
+    """Off is "no remodel line AND a remodel figure of nothing". A payload saved before the
+    `remodel` list existed, with a real figure, still prints the row it always printed.
+
+    Mutation: decide off on the list alone (main.py `_remodel_off`) — the row disappears."""
+    served["proposal_payload"]["values"]["tax_amount_formatted"] = "$650"
+    text = _render_served(served, work_type, audience)
+    assert re.search(r"\$650 – (Kansas )?Remodel Tax", text), (work_type, audience, text[:3000])
+
+
+@pytest.mark.parametrize("work_type,audience", [("epoxy", "GC"), ("gyp", "Direct"),
+                                                ("epoxy", "Direct")])
+def test_remodel_on_still_prints_its_row(served, work_type, audience):
+    """The counterexample: with a remodel tax the row is still there, with its figure, beside the
+    Material Sales Tax. Without this the test above passes for a writer that deletes every remodel
+    row.
+
+    Mutation: take the free rows out unconditionally (proposal_writer) — GC and Gyp lose the row."""
+    text = _render_served(served, work_type, audience, remodel_amount="$650")
+    assert re.search(r"\$650 – (Kansas )?Remodel Tax", text), (work_type, audience, text[:3000])
+    assert "Material Sales Tax" in text
