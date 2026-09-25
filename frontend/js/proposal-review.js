@@ -390,13 +390,18 @@
 
   // Pre-fill the Estimator (signature) with the signed-in user's name unless
   // the project already carries one. Editable — they can change who signs.
+  // "Carries one" includes its saved document: the Files page's door rebuilds unattended for
+  // whoever opens View files, and a project whose own field was never filled in was re-signed as
+  // that colleague (review of fix 4, 2026-09-25).
   (function prefillEstimator() {
     const el = document.getElementById("estimator-name");
     if (!el || el.value) return;
     const apply = () => {
       if (el.value) return;
       const u = (window.TWAuth && TWAuth.user && TWAuth.user()) || null;
-      let name = (state.estimator_name || "").trim() || (u && u.name) || "";
+      const signed = ((state.proposal_payload && state.proposal_payload.values) || {}).estimator_name;
+      let name = (state.estimator_name || "").trim() || String(signed || "").trim()
+        || (u && u.name) || "";
       if (!name && u && u.email) {
         name = u.email.split("@")[0].replace(/[._]+/g, " ").replace(/\b\w/g, c => c.toUpperCase());
       }
@@ -1506,6 +1511,22 @@
       return `${d.getMonth()+1}/${d.getDate()}/${String(d.getFullYear()).slice(-2)}`;
     })();
 
+    // WHO SIGNS, AND AT WHICH ADDRESS. The name is the field's (pre-filled for the project, see
+    // prefillEstimator); the address used to be whoever was signed in, always. The Files page's
+    // door rebuilds this document unattended for whoever opens View files, so Troy opening Kyle's
+    // project printed "Kyle Loseke | Estimator troy@wetreadwell.com" on the customer's letter
+    // (review of fix 4, 2026-09-25). So the saved document's address stays while the same name
+    // signs; a document saved before the address existed keeps printing none unless its own signer
+    // is the one rebuilding it; and a new name — somebody typed one in — signs with the address
+    // of whoever typed it, as before.
+    const _viewer = (window.TWAuth && TWAuth.user && TWAuth.user()) || {};
+    const _signer = String(mergedValues.estimator_name || "").trim() || String(_viewer.name || "").trim();
+    const _signed = ((state.proposal_payload && state.proposal_payload.values) || {});
+    const _sameName = (a, b) => String(a || "").trim().toLowerCase() === String(b || "").trim().toLowerCase();
+    const _signerEmail = !_sameName(_signed.estimator_name, _signer) ? String(_viewer.email || "")
+      : String(_signed.estimator_email || "").trim()
+        || (_sameName(_viewer.name, _signer) ? String(_viewer.email || "") : "");
+
     const tokenValues = {
       ...mergedValues,
       // The type the DOCUMENT is (the base tab's), not the intake field the spread above echoes.
@@ -1517,15 +1538,14 @@
       project_name:       safe(mergedValues.project_name),
       // Signs the proposal — the field (pre-filled from the signed-in user),
       // else the signed-in user's name. Replaces the old hardcoded "Troy Holmes".
-      estimator_name:     (String(mergedValues.estimator_name || "").trim()
-                           || ((window.TWAuth && TWAuth.user() && TWAuth.user().name) || "")),
+      estimator_name:     _signer,
       // The cover letter's signature line. It printed a literal "[ESTIMATOR EMAIL]" to the
       // customer until 2026-09-09; cover_letter_writer turns this into the whole line and drops
       // the " | " when there is no address. Set HERE as well as backfilled in main.py so it rides
       // the frozen proposal_payload — a replay of a pinned revision has no signed-in user, so a
       // server-only resolution would sign the customer's re-opened document differently from the
-      // one they were sent.
-      estimator_email:    ((window.TWAuth && TWAuth.user() && TWAuth.user().email) || ""),
+      // one they were sent. Whose address: see _signerEmail above.
+      estimator_email:    _signerEmail,
       city_state:         safe(mergedValues.city_state),
       address:            safe(mergedValues.address),
       work_description:   safe(mergedValues.work_description || mergedValues.address || ""),
@@ -7140,6 +7160,17 @@
           ? { generate_result: null }
           : {}),
     };
+    // THE COVER LETTER'S OWN STORE, LIVE. coverletter-editor.js keeps the estimator's wording in
+    // four top-level keys it REPLACES with setState (persistNow), which the `state` snapshot never
+    // sees, so `...mergedValues` above wrote the wording from page load back over the wording just
+    // typed. The payload carried the new wording and the draft the old, and the next rebuild — the
+    // Files page's door rebuilds unattended — restored the old one into the customer's letter
+    // (review of fix 4, 2026-09-25). Read here, after payloadFields() has flushed its debounce.
+    ["cover_letter_paragraph_overrides", "cover_letter_paragraph_overrides_all",
+     "cover_letter_paragraph_overrides_meta", "cover_letter_template_version"].forEach((k) => {
+      const v = liveKey(k);
+      if (v !== undefined) composed[k] = v;
+    });
     // THE KEY THE FILES PAGE CHECKS THE DOCUMENT BY (TW.composeKey): the inputs this document was
     // built from, and the document. Computed over exactly what setState is about to store — the
     // live blob with this write merged in, as setState itself merges it — so the Files page, which
@@ -7232,8 +7263,29 @@
     const btn = document.getElementById("generate-btn");
     const label = btn ? btn.textContent : "";
     if (btn) { btn.disabled = true; btn.textContent = "Updating the proposal…"; }
+    // ONLY FROM THE SERVER'S COPY, OR FROM THAT COPY PLUS CHANGES WHOSE SAVE NEVER LANDED. What
+    // this page composes from is the blob it was loaded with (TW.bootDigest), and it saves the
+    // whole of it: at Continue, and first as it loads (rebuildPricing's setState, 2.5 s later).
+    // So this is asked AT ONCE, before that first save can land and make the two copies equal.
+    // Asked after the template settled, "equal now" read as a yes, and that is how the page's own
+    // load save put an older copy over a colleague's $15,000 revision and was then built from
+    // (review of fix 4, 2026-09-25). The server holding what this page loaded is one yes; the
+    // server still holding what this browser last saw there (TW.bootSynced: nobody has saved it
+    // since) is the other. Anything else drops the queued save unsent and goes back to the Files
+    // page, which is where a copy that is not the server's is settled with the estimator.
+    let verdict = null;
+    const asked = (async () => {
+      try { await TW.draftReady; } catch {}
+      try { if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready; } catch {}
+      if (TW.reloadPending && TW.reloadPending()) return;
+      const saved = await TW.readServerDraft();
+      const d = saved ? TW.draftDigest(saved) : "";
+      if (saved && (d === TW.bootDigest() || d === TW.bootSynced())) { verdict = "ok"; return; }
+      TW.cancelPendingSave();
+      verdict = saved ? "not-the-saved-copy" : "unread";
+    })();
     const settled = Promise.all(
-      [TW.draftReady, window.TWAuth && window.TWAuth.ready, _firstDocLoad, _notesReady]
+      [TW.draftReady, window.TWAuth && window.TWAuth.ready, _firstDocLoad, _notesReady, asked]
         .map((p) => Promise.resolve(p).catch(() => {})));
     let timer = null;
     const timedOut = await Promise.race([
@@ -7247,25 +7299,18 @@
     // name, scope and price into this one. The reload comes back through here and builds instead.
     if (TW.reloadPending && TW.reloadPending()) return;
     if (btn) { btn.disabled = false; btn.textContent = label; }
-    if (timedOut || !templateVersion) {
-      repaintNote("The Files page needs this proposal rebuilt from your latest changes, and it could not be done for you.",
-                  "Check the document below, then press Continue to Done.");
+    if (verdict === "not-the-saved-copy") {
+      window.location.replace(TW.withDraft("/done.html" + (q.get("files") === "1" ? "?files=1" : "")));
       return;
     }
-    // ONLY FROM THE SERVER'S COPY. What this page composes from is the blob it was loaded with
-    // (TW.bootDigest), and Continue saves the whole of it. When that is not what the server holds
-    // — this browser's copy is older than a colleague's revision, or has edits whose save never
-    // landed — an unattended build would put it over the server's. The Files page's door replaces
-    // an older copy with the server's before it sends anyone here, so this only stops what that
-    // could not settle; the estimator, who can see what is on screen, presses Continue or not.
-    // Either digest will do: the page's own init may have saved something already.
-    const saved = await TW.readServerDraft();
-    const savedDigest = saved ? TW.draftDigest(saved) : "";
-    if (!saved || (savedDigest !== TW.bootDigest() && savedDigest !== TW.draftDigest(TW.getState()))) {
-      repaintNote(saved
-        ? "This page's copy of the project is not the one saved on the server, so the proposal was not rebuilt for you."
-        : "The saved copy of this project could not be read, so the proposal was not rebuilt for you.",
-        "Check the document below, then press Continue to Done.");
+    // Unasked (the 20 s ran out first) or unanswered is not a yes: the estimator is not told to
+    // press Continue, which would save this copy, until the server has said it may.
+    if (timedOut || !templateVersion || verdict !== "ok") {
+      repaintNote(verdict === "unread"
+        ? "The saved copy of this project could not be read, so the proposal was not rebuilt for you."
+        : "The Files page needs this proposal rebuilt from your latest changes, and it could not be done for you.",
+        verdict === "ok" ? "Check the document below, then press Continue to Done."
+                         : "Check your connection, then reload this page.");
       return;
     }
     await continueToDone(null);

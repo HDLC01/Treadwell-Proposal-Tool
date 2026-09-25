@@ -8,7 +8,9 @@ and the Send that followed froze Kyle's stale payload, a document nobody had dow
 
 Now the press writes nothing to the server (the server records has_files itself, see
 test_send_equals_download.py), and Send carries the render_id of the file that was downloaded, so
-the server can refuse to freeze anything else.
+the server can refuse to freeze anything else. And since the review of fix 4, Send itself refuses
+on a page whose copy is not the server's, and the save it makes after a send is made only while
+the server still holds the copy that was checked.
 
 EXECUTED, NOT READ: the harness runs the REAL shared.js in a vm and the shipped done.js functions,
 including the Send button's click handler (see its header).
@@ -56,15 +58,62 @@ def test_the_build_is_still_remembered_by_this_page(ran):
     assert d["stamp"] == "$12,500.00"
 
 
+def test_a_stale_page_sends_nothing_and_writes_nothing(ran):
+    """Review of fix 4, finding 2. This page's copy (Kyle's Orange Peel, keyed by his own Continue)
+    and the server's (RJ's, keyed by RJ's) BOTH hold their keys, so the key checks passed: the
+    publish froze RJ's document from a page showing Kyle's, and the save a send makes afterwards PUT
+    Kyle's whole copy back over RJ's. Now Send refuses because the two copies differ — with or
+    without a Download first — nothing is posted, nothing is PUT even once the debounce has run,
+    and RJ's copy stands.
+
+    Mutation: drop the one-copy check (`!TW.matchesServer(_saved)`) from the Send handler — one
+    publish goes out and one PUT puts Kyle's texture and rooms back."""
+    for name in ("staleSend", "staleDownloadThenSend"):
+        s = ran[name]
+        assert s["posted"] == 0, (name, s)
+        assert s["puts"] == 0, (name, s)
+        assert s["serverTexture"] == "Smooth Finish", (name, s)
+        assert s["serverRooms"] == [{"name": "RJ's revision", "is_base": True}], (name, s)
+        assert s["err"] and "Reload this page" in s["err"], (name, s)
+
+
+def test_after_a_send_the_draft_remembers_the_message_in_one_save(ran):
+    """A current page's send still remembers the message for a re-send, on the server, in one save.
+
+    Mutation: remove the remember block, or its flush — the message never reaches the server."""
+    r = ran["remembered"]
+    assert r["posted"] == 1 and r["err"] is None, r
+    assert r["puts"] == 1, r
+    assert r["serverMessage"] == "See the attached."
+    assert r["serverTexture"] == "Smooth Finish"
+
+
+def test_a_colleagues_save_during_the_publish_is_not_put_back(ran):
+    """The publish takes seconds. RJ's save landing inside them made this page's copy the older
+    one, so the remember-the-message save is skipped: no PUT, and RJ's Knockdown stands.
+
+    And the check before the send found the two copies equal, so that is recorded as the copy last
+    seen on the server (TW.matchesServer): the next Files visit can then tell RJ's save is simply
+    newer and take it, where a stale record would read both copies as moved and stop to ask.
+
+    Mutations: remember unconditionally (drop the re-read) — one PUT, the server's texture is gone;
+    record nothing in matchesServer — recordedAsSynced is False."""
+    c = ran["colleagueDuringPublish"]
+    assert c["posted"] == 1, c
+    assert c["puts"] == 0, c
+    assert c["serverTexture"] == "Knockdown"
+    assert c["serverMessage"] is None
+    assert c["recordedAsSynced"] is True
+
+
 def test_send_hands_back_the_document_that_was_downloaded(ran):
     """The real Send handler posts the render_id of the file the estimator downloaded, so the
     server can refuse to freeze a different one.
 
     Mutation: drop `document_render_id` from the publish body, or stop downloadAs recording it."""
-    d = ran["download"]
     s = ran["sendAfterDownload"]
     assert s["posted"] == 1, s
-    assert s["renderId"] == d["checked"] == "K:Smooth Finish", s
+    assert s["renderId"] == s["checked"] == "K:Smooth Finish", s
 
 
 def test_a_send_with_no_download_claims_nothing(ran):
@@ -92,8 +141,9 @@ def test_a_draft_moved_in_another_tab_is_not_sent(ran):
     see a texture — so nothing is posted, nothing is written, and the estimator is told to reload,
     which takes the page back through its door (test_files_door.py).
 
-    Mutation: drop the key check from the Send handler — one publish goes out with the old
-    texture."""
+    Mutation: drop the key check and the one-copy check from the Send handler (either alone
+    still refuses: this copy moved, so it is no longer the server's) — one publish goes out with
+    the old texture."""
     m = ran["movedInAnotherTab"]
     assert m["posted"] == 0, m
     assert m["puts"] == 0, m
@@ -107,7 +157,8 @@ def test_a_draft_moved_on_another_machine_is_not_sent(ran):
     copy, the one the publish freezes, no longer matches its document. Checking only this browser's
     copy sent the old texture; now nothing is posted and nothing is written.
 
-    Mutation: drop the server half of the check in the Send handler — one publish goes out."""
+    Mutation: drop the server's key check and the one-copy check in the Send handler (either
+    alone still refuses) — one publish goes out."""
     m = ran["movedOnAnotherMachine"]
     assert m["posted"] == 0, m
     assert m["puts"] == 0, m

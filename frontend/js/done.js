@@ -152,11 +152,21 @@
     // job Won or an Estimate-step edit on another machine never reaches it; composing from it and
     // saving would put the old copy back over all of that. TW.reconcileWithServer reads the
     // server first: a local copy with nothing the server lacks is REPLACED by the server's, and
-    // the question is then asked of that. A local copy with changes the server has not confirmed
-    // is left alone (the Proposal step, sent through the door, will not build from it unattended
-    // either — see composeForFiles). A current document is left alone and nothing is written.
-    // `composedHere` is the loop guard — a page built from this draft a moment ago is never sent
-    // round again, and a send is still checked against the key (see the Send button).
+    // the question is then asked of that. A local copy that is the server's plus changes whose save
+    // never landed ("ahead": nobody has saved the server's since) goes through the door, which
+    // builds it and saves it — that loses nothing of anyone's. A current document is left alone
+    // and nothing is written. `composedHere` is the loop guard — a page built from this draft a
+    // moment ago is never sent round again, and a send is still checked against the key (see the
+    // Send button).
+    //
+    // AND NEVER THROUGH THE DOOR ON A COPY THAT IS NOT KNOWN TO BE SAFE TO SAVE. The Proposal step
+    // saves the page's whole copy as it loads (its pricing rebuild), so sending a copy there is
+    // saving it. Review of fix 4, 2026-09-25: Kyle's note went to the server as his tab closed,
+    // with nobody left to record that it had; RJ then re-priced to $15,000 and Troy marked the job
+    // Won; Kyle's View files found his copy "kept", sent it through the door, and the Proposal
+    // step's load put his $10,000 copy back over both. A copy where both sides have moved
+    // ("kept"), or one the server could not be asked about, stops here and says so. The one way on
+    // from "kept" is the estimator's own choice to load the saved copy.
     if (st.project_name && !composedHere) {
       const toDoor = () => location.replace(TW.withDraft("/proposal-review.html?compose=files"
                                                          + (filesMode ? "&files=1" : "")));
@@ -168,10 +178,29 @@
         if (TW.documentHolds(seen.server)) location.reload(); else toDoor();
         return;
       }
-      const holds = seen.status === "kept"
-        ? TW.documentHolds(st) && TW.documentHolds(seen.server)
-        : TW.documentHolds(seen.server || st);        // "unreachable": this copy is all there is
-      if (!holds) { toDoor(); return; }
+      if (seen.status === "kept") {
+        showDoorStop("This project was changed somewhere else",
+          "This browser has changes to it that never reached the server, and the saved project has "
+          + "changed since, maybe on someone else's computer. Nothing was rebuilt or saved. Load the "
+          + "saved copy to carry on from it. Changes that were only in this browser are dropped.",
+          "Load the saved copy",
+          async () => {
+            if (await TW.useServerCopy()) { location.reload(); return; }
+            const p = emptyEl.querySelector(".lede");   // a button that does nothing is no way on
+            if (p) p.textContent = "The saved copy could not be read, so nothing changed. Check "
+                                 + "your connection, then press Load the saved copy again.";
+          });
+        return;
+      }
+      const holds = TW.documentHolds(seen.server || st);   // "unreachable": this copy is all there is
+      if (seen.status === "unreachable" && !holds) {
+        showDoorStop("Couldn't check the saved project",
+          "The server could not be reached, so the files were not rebuilt from your latest "
+          + "changes. Check your connection, then reload this page.",
+          "Reload this page", () => location.reload());
+        return;
+      }
+      if (seen.status === "ahead" || !holds) { toDoor(); return; }
       st = TW.getState();
     }
     const res = st.generate_result;
@@ -191,6 +220,21 @@
       emptyEl.style.display = "";        // no project in flight
     }
   })();
+
+  /** The door stopping: the empty-state card says why, and its one button is the way on. Nothing
+   *  is built, shown or written — until the estimator presses it. */
+  function showDoorStop(title, lede, label, onPress) {
+    emptyEl.style.display = "";
+    const h = emptyEl.querySelector("h1");
+    if (h) h.textContent = title;
+    const p = emptyEl.querySelector(".lede");
+    if (p) p.textContent = lede;
+    const a = emptyEl.querySelector(".actions a");
+    if (a) {
+      a.textContent = label;
+      a.addEventListener("click", (e) => { e.preventDefault(); onPress(); });
+    }
+  }
 
   // Generate the files for a saved project and jump straight to downloads.
   async function viewFiles() {
@@ -1464,10 +1508,18 @@
           // so a check of this browser's copy alone passed it and sent the old document. Nothing
           // is posted. A reload goes back through the door, which builds the document from the
           // draft as it now stands.
+          //
+          // AND THE TWO MUST BE ONE COPY (TW.matchesServer). Review of fix 4: Kyle's page held
+          // his $10,000 copy, keyed by his own Continue; RJ revised to $15,000 and pressed Continue
+          // on his machine, so the server's copy was keyed too. Both held, the send went, and the
+          // customer was sent RJ's document from a page showing Kyle's — and the save this handler
+          // makes after a send then PUT Kyle's whole copy back over RJ's. Two copies that differ
+          // mean this page is not showing what would be frozen, so nothing is sent.
           const _now = TW.getState() || {};
           const _saved = _now.project_name ? await TW.readServerDraft() : null;
           const _moved = _now.project_name
-            && (!TW.documentHolds(_now) || (_saved && !TW.documentHolds(_saved)));
+            && (!TW.documentHolds(_now)
+                || (_saved && (!TW.documentHolds(_saved) || !TW.matchesServer(_saved))));
           if (_moved || (_now.project_name && !_saved)) {
             portalBtn.disabled = false; portalBtn.textContent = orig;
             if (portalRecip.setBusy) portalRecip.setBusy(false);
@@ -1566,16 +1618,24 @@
           // Only now. Clearing before the request would lose the files on a failed send and leave
           // the estimator re-picking them with no idea they had gone.
           sendAtts.clear();
-          // Remember both for a re-send. require_deposit persists so a deliberate
-          // GC-with-deposit (or Direct-without) choice survives a reload instead of
-          // snapping back to the audience default.
-          TW.setState({ portal_message: message, require_deposit: requireDeposit,
-                        assigned_estimator: assignedEstimator });
-          // Persist only the EXTRAS (never the intake row) so they pre-fill next time.
-          // The intake is restored from contact_email on the next mount; persisting it
-          // here would re-add an edited/retargeted intake as a stray extra on reload.
-          const persistExtras = emails.filter(e => !portalRecip.hasIntake || e.toLowerCase() !== String(portalRecip.intake || "").toLowerCase());
-          TW.setState({ portal_emails: persistExtras });
+          // Remember both for a re-send — ONLY while the server still holds the copy this send
+          // was checked against. TW.setState PUTs this page's whole copy, and the publish takes
+          // seconds: a colleague's save landing inside them would be put back to this page's
+          // copy. When the server has moved, nothing is remembered (a convenience lost), and the
+          // next arrival here goes through the door onto the server's copy.
+          const _after = await TW.readServerDraft();
+          if (_after && TW.matchesServer(_after)) {
+            // require_deposit persists so a deliberate GC-with-deposit (or Direct-without) choice
+            // survives a reload instead of snapping back to the audience default.
+            TW.setState({ portal_message: message, require_deposit: requireDeposit,
+                          assigned_estimator: assignedEstimator });
+            // Persist only the EXTRAS (never the intake row) so they pre-fill next time.
+            // The intake is restored from contact_email on the next mount; persisting it
+            // here would re-add an edited/retargeted intake as a stray extra on reload.
+            const persistExtras = emails.filter(e => !portalRecip.hasIntake || e.toLowerCase() !== String(portalRecip.intake || "").toLowerCase());
+            TW.setState({ portal_emails: persistExtras });
+            TW.flushState();          // sent now, not 2.5 s later, while the check above still holds
+          }
           if (portalRecip.setBusy) portalRecip.setBusy(false);
           portalBtn.textContent = "\u2713 Sent to customer portal";
           mountRevisions();   // the send just created a new version \u2014 show it

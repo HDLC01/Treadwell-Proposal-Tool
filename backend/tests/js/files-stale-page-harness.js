@@ -9,6 +9,12 @@
 // stale copy (P1 and the old rooms) over the draft: RJ's revision gone, and the Send that followed
 // froze P1, a document Kyle never saw.
 //
+// AND THE SEND ITSELF (review of fix 4, 2026-09-25). With both copies keyed by their own Continue,
+// the page's Send went through, froze RJ's document from a page showing Kyle's, and the save a send
+// makes afterwards (the message and recipients, remembered for a re-send) PUT Kyle's whole copy back
+// over RJ's. Now Send refuses unless this page's copy IS the server's, and that later save is made
+// only while the server still holds the copy the send was checked against.
+//
 // EXECUTED, NOT READ. shared.js runs whole, in a vm context, with only the browser and the network
 // stubbed — its real setState/flushState/scheduleServerSave/initDraftSync decide whether a PUT
 // happens. `freshDocuments`, `builtAt`, `downloadAs` and the Send button's
@@ -104,6 +110,8 @@ async function tab(local, server, opts) {
     if (url.includes("/api/portal/publish")) {
       rec.published.push(JSON.parse(opts.body));
       if (server.refuse) return json(409, server.refuse);
+      // A colleague's save that lands while the publish is running.
+      if (server.duringPublish) Object.assign(server.d1, server.duringPublish);
       return json(200, { ok: true, revision_no: 1 });
     }
     if (method === "PUT" && url.includes("/api/draft/d1")) {
@@ -134,12 +142,15 @@ async function tab(local, server, opts) {
     TWAuth: { ready: Promise.resolve() },
   };
   sandbox.location = sandbox.window.location;
+  // The customer message the estimator typed, when the scenario gives one.
+  const msgEl = { value: (opts && opts.message) || "" };
   sandbox.document = {
     addEventListener() {}, removeEventListener() {}, querySelectorAll: () => [],
     createElement: () => ({ style: {}, appendChild() {}, setAttribute() {}, click() {},
                             classList: { add() {}, remove() {} } }),
     createTextNode: () => ({}), head: { appendChild() {} },
-    body: { appendChild() {}, removeChild() {} }, getElementById: () => null,
+    body: { appendChild() {}, removeChild() {} },
+    getElementById: (id) => (id === "portal-message" ? msgEl : null),
   };
   vm.createContext(sandbox);
   vm.runInContext(SHARED, sandbox);
@@ -178,7 +189,7 @@ async function tab(local, server, opts) {
     "checkedDocument", '"use strict"; ' + SEND);
 
   return {
-    TW, rec, checkedDocument,
+    TW, rec, checkedDocument, ls: sandbox.localStorage,
     /** Fire every timer shared.js queued — the 2.5 s autosave debounce among them. */
     elapse: () => { const due = timers.splice(0); due.forEach((fn) => { if (fn) fn(); }); },
     download: () => downloadAs(
@@ -209,6 +220,16 @@ function staleWorld() {
   return { local, server };
 }
 
+/** A page that is CURRENT: this browser and the server hold the same copy (RJ's P2). */
+function current() {
+  const w = staleWorld();
+  const mine = { project_name: "X", rooms: [{ name: "RJ's revision", is_base: true }],
+                 proposal_payload: P2 };
+  w.local[STATE_KEY] = JSON.stringify(Object.assign({ [STAMP]: "d1" }, mine));
+  w.server.d1 = JSON.parse(JSON.stringify(mine));
+  return w;
+}
+
 (async function () {
   const out = {};
 
@@ -231,10 +252,40 @@ function staleWorld() {
       error: t.rec.downloadError || null,
     };
 
-    // B. …and presses Send. The body carries the document that was downloaded.
+    // A2. …and presses Send. This page's copy (Orange Peel, the old rooms, keyed by Kyle's own
+    //     Continue) is not the server's (RJ's, keyed by RJ's): nothing is sent, and the save a
+    //     send makes afterwards never happens, so RJ's copy stays.
+    await t.send();
+    t.elapse();
+    await t.TW.flushState();
+    out.staleDownloadThenSend = {
+      posted: t.rec.published.length, puts: t.rec.puts.length, err: t.rec.err || null,
+      serverTexture: w.server.d1.proposal_payload.values.texture, serverRooms: w.server.d1.rooms,
+    };
+  }
+
+  // A3. The same stale page, Send with no Download first.
+  {
+    const w = staleWorld();
+    const t = await tab(w.local, w.server);
+    await t.send();
+    t.elapse();
+    await t.TW.flushState();
+    out.staleSend = {
+      posted: t.rec.published.length, puts: t.rec.puts.length, err: t.rec.err || null,
+      serverTexture: w.server.d1.proposal_payload.values.texture, serverRooms: w.server.d1.rooms,
+    };
+  }
+
+  // B. A CURRENT page presses Download, then Send. The body carries the document downloaded.
+  {
+    const w = current();
+    const t = await tab(w.local, w.server);
+    await t.download();
     await t.send();
     const body = t.rec.published[0] || {};
     out.sendAfterDownload = {
+      checked: t.checkedDocument.renderId,
       posted: t.rec.published.length,
       renderId: Object.prototype.hasOwnProperty.call(body, "document_render_id")
         ? body.document_render_id : "(absent)",
@@ -244,7 +295,7 @@ function staleWorld() {
 
   // C. Send with no download on this page view: nothing is claimed, so nothing is checked.
   {
-    const w = staleWorld();
+    const w = current();
     const t = await tab(w.local, w.server);
     await t.send();
     const body = t.rec.published[0] || {};
@@ -258,7 +309,7 @@ function staleWorld() {
   // D. The server refuses: the document changed after the download. The estimator reads the
   //    server's own sentence, and the page does not claim a send.
   {
-    const w = staleWorld();
+    const w = current();
     w.server.refuse = { ok: false, code: "document_changed",
                         error: "Not sent — this proposal changed after you downloaded it. "
                                + "Download it again, check it, then send." };
@@ -268,11 +319,43 @@ function staleWorld() {
     out.refused = { posted: t.rec.published.length, err: t.rec.err || null };
   }
 
+  // L. A current page sends, and the server still holds that copy afterwards: the message and the
+  //    recipients are remembered on the draft for a re-send, in ONE save made straight away.
+  {
+    const w = current();
+    const t = await tab(w.local, w.server, { message: "See the attached." });
+    await t.send();
+    out.remembered = { posted: t.rec.published.length, puts: t.rec.puts.length,
+                       serverMessage: w.server.d1.portal_message || null,
+                       serverTexture: w.server.d1.proposal_payload.values.texture,
+                       err: t.rec.err || null };
+  }
+
+  // M. A current page sends, and a colleague's save lands WHILE the publish runs (RJ picks
+  //    Knockdown). This page's copy is now the older one, so nothing is remembered and nothing is
+  //    PUT: RJ's save stands.
+  {
+    const w = current();
+    w.server.duringPublish = { texture: "Knockdown" };
+    const t = await tab(w.local, w.server, { message: "See the attached." });
+    await t.send();
+    t.elapse();
+    await t.TW.flushState();
+    out.colleagueDuringPublish = { posted: t.rec.published.length, puts: t.rec.puts.length,
+                                   serverTexture: w.server.d1.texture || null,
+                                   serverMessage: w.server.d1.portal_message || null,
+                                   // What this browser now records as the server's copy: the one
+                                   // the send found equal, so the next Files visit can tell RJ's
+                                   // save is simply newer (it takes it) rather than a conflict.
+                                   recordedAsSynced: t.ls.getItem("treadwell.proposal_tool.synced")
+                                     === "d1:" + t.TW.draftDigest(t.TW.getState()) };
+  }
+
   // E. The draft moved in ANOTHER tab of this browser after this page opened — a texture picked on
   //    the Estimate step there, no Continue. The document this page would send no longer matches
   //    the draft's key, and the drift gate cannot see a texture. Nothing is posted.
   {
-    const w = staleWorld();
+    const w = current();
     const t = await tab(w.local, w.server, { moved: { texture: "Orange Peel" } });
     await t.send();
     out.movedInAnotherTab = { posted: t.rec.published.length, puts: t.rec.puts.length,
@@ -284,7 +367,7 @@ function staleWorld() {
   //    render-id gate sees the same payload, and the drift gate cannot see a texture — but the
   //    SERVER's copy, which the publish freezes, no longer matches its document. Nothing is posted.
   {
-    const w = staleWorld();
+    const w = current();
     const t = await tab(w.local, w.server, { serverMoved: { texture: "Knockdown" } });
     await t.download();
     await t.send();
@@ -294,7 +377,7 @@ function staleWorld() {
 
   // G. The saved copy cannot be read at Send: nothing can be checked, so nothing is sent.
   {
-    const w = staleWorld();
+    const w = current();
     const t = await tab(w.local, w.server);
     w.server.failGet = true;
     await t.send();

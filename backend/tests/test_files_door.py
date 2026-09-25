@@ -24,9 +24,12 @@ initDraftSync keeps a localStorage copy already stamped for the draft without re
 server, so this browser can hold a copy older than a colleague's revision, or than Troy marking the
 job Won. The door used to build from that copy and PUT the whole of it back. Now the Files page asks
 the server first (TW.reconcileWithServer): a local copy with nothing the server lacks is replaced
-by the server's, one with changes the server never confirmed is left alone, and the Proposal step
-only composes unattended when what it loaded IS the server's copy. A page that initDraftSync is
-reloading onto another project writes nothing at all.
+by the server's; one that is the server's plus edits whose save never landed ("ahead") is built and
+saved; one where BOTH sides moved ("kept") stops at the Files page with a card offering the saved
+copy, because the Proposal step saves the copy it is opened on as it loads (review of fix 4). The
+Proposal step only composes unattended when what it loaded is the server's copy or "ahead" of it,
+asked before its own load save can land. A page that initDraftSync is reloading onto another
+project writes nothing at all.
 
 EXECUTED, NOT READ: js/files-door-harness.js runs the real shared.js (one vm per page load, one
 browser, one stub server) with the real Proposal-step and Files-page code; see its header. The last
@@ -226,17 +229,22 @@ def test_the_door_asks_the_servers_copy_not_this_browsers(ran):
     assert s["keyHolds"] is True
 
 
-def test_a_copy_with_edits_the_server_never_got_is_not_built_unattended(ran):
-    """This browser's copy has an edit whose save failed. It may be the estimator's own work, so the
-    Files page does not replace it — and the Proposal step will not build from it on its own
-    either, because Continue saves the whole copy. It says why and leaves Continue to the estimator.
+def test_a_copy_with_edits_the_server_never_got_is_built_and_saved(ran):
+    """This browser's copy has an edit whose save failed, and nobody has saved the server's copy
+    since this browser last saw it ("ahead"). The Files page does not replace the edit — it may be
+    the estimator's own work — and building from it and saving it loses nothing of anyone's, so the
+    door does: the edit reaches the server and the document. (Before the review of fix 4 the door
+    stopped here with a note, leaving the edit unsaved; with the "kept" case now stopping at the
+    Files page, that note would have been a copy nobody could get out of.)
 
-    Mutation: drop the server check from composeForFiles — the door builds and PUTs it unseen."""
+    Mutations: return "kept" for "ahead" in reconcileWithServer — the Files page stops and the
+    edit never reaches the server; leave "ahead" out of the door's routing (the server's own key
+    holds, so the Files page shows the old document); refuse the Proposal step an "ahead" copy
+    (TW.bootSynced) — it goes back and forth."""
     s = ran["unconfirmed"]
-    assert s["stops"] == ["done", "proposal"], s
-    assert "not the one saved on the server" in s["note"], s["note"]
-    assert s["puts"] == 0
-    assert s["localTexture"] == "Unsaved Knockdown" and s["serverTexture"] == "Smooth"
+    assert s["stops"] == ["done", "proposal", "done"], s
+    assert s["puts"] == 1
+    assert s["localTexture"] == "Unsaved Knockdown" == s["serverTexture"]
 
 
 def test_an_edit_still_on_its_way_to_the_server_is_built_once_it_lands(ran):
@@ -285,14 +293,15 @@ def test_a_door_opened_while_this_browser_held_another_project_writes_nothing_of
 def test_a_copy_edited_after_a_fresh_hydrate_is_known_to_hold_unsaved_changes(ran):
     """The record of what the server held is taken at the hydrate as well as at every stored save:
     otherwise a copy read fresh from the server and then edited, with a save that failed, looks
-    like one that never changed, and the Files page puts the server's copy over the edit.
+    like one that never changed, and the Files page puts the server's copy over the edit. With the
+    record, the Files page knows the server has not moved since, so the edit is built and saved.
 
     Mutation: record nothing at the hydrate (shared.js adoptAndReload) — the edit is replaced."""
     s = ran["hydratedThenUnsaved"]
     assert s["hydrateNav"] == [["reload"]], s
-    assert s["stops"] == ["done", "proposal"], s
-    assert s["puts"] == 0
-    assert s["localTexture"] == "Unsaved Knockdown" and s["serverTexture"] == "Smooth", s
+    assert s["stops"] == ["done", "proposal", "done"], s
+    assert s["puts"] == 1
+    assert s["localTexture"] == "Unsaved Knockdown" == s["serverTexture"], s
 
 
 def test_the_cover_letter_ticked_on_this_visit_survives_the_next_rebuild(ran):
@@ -403,6 +412,171 @@ def test_a_pill_click_with_no_edit_waiting_writes_nothing(ran):
     assert p["idle"] == 0
     assert p["settledSaves"] == 1 and p["settledAfterPill"] == 1
     assert p["settledPending"] is None
+
+
+# ── the review of fix 4 (2026-09-25) ─────────────────────────────────────────────────────────
+RJ_STANDS = {"texture": "RJ Orange Peel", "lump": 15000, "won": True,
+             "notes": "Kyle's note, sent as the tab closed", "docTotal": "$15,480.00"}
+
+
+def test_a_copy_where_both_sides_moved_stops_at_the_files_page(ran):
+    """Finding 1. Kyle's note reached the server as his tab closed, with nobody left to record that
+    it had; RJ then re-priced to $15,000 and pressed Continue on his machine, and Troy marked the job
+    Won. The Files page found Kyle's copy "kept" and sent it through the door, and the Proposal
+    step's load save put his $10,000 copy back over RJ's price, texture and the Won. Now the Files
+    page stops: no door, no PUT (even once the page's timers have run), and a card that says why
+    with one button, Load the saved copy.
+
+    Mutations: send a "kept" copy through the door (the page leaves for the Proposal step); decide
+    "adopted" for a copy both sides moved (Kyle's copy is dropped without asking)."""
+    s = ran["bothMoved"]
+    assert s["nav"] == [] and s["calls"] == [] and s["emptyShown"] is True, s
+    assert s["card"]["title"] == "This project was changed somewhere else", s["card"]
+    assert s["card"]["button"] == "Load the saved copy"
+    assert "Nothing was rebuilt or saved" in s["card"]["lede"]
+    assert s["putsByArrival"] == 0
+    assert s["keptKyles"] == {"texture": "Smooth", "notes": "Kyle's note, sent as the tab closed"}
+
+
+def test_loading_the_saved_copy_puts_the_colleagues_work_in_this_browser(ran):
+    """The card's button replaces this browser's copy with the server's and reloads. The reload finds
+    a current document (RJ's), shows the files, and writes nothing: RJ's $15,000 and the Won stand.
+
+    Mutation: have useServerCopy leave this browser's copy in place (it is still Kyle's)."""
+    s = ran["bothMoved"]
+    assert s["pressNav"] == [["reload"]], s
+    assert s["localAfterPress"] == {"texture": "RJ Orange Peel", "lump": 15000, "won": True}
+    assert s["afterReload"]["stops"] == ["done []"] and s["afterReload"]["calls"] == ["viewFiles"], s
+    assert s["putsFromKyle"] == 0
+    assert s["server"] == RJ_STANDS
+
+
+def test_loading_the_saved_copy_never_drops_another_tabs_project(ran):
+    """The card was up when another tab of this browser opened project Y, so the local copy is Y's.
+    Pressing Load the saved copy saves Y's copy under Y's own id before X's takes its place, the way
+    opening a project does.
+
+    Mutation: write the server's copy over the local one without saving Y's first (no PUT to Y)."""
+    s = ran["pressWhileAnotherTabHeldY"]
+    assert s["pressNav"] == [["reload"]], s
+    assert s["yPuts"] == ["Other Project Y"], s
+    assert s["local"] == {"project": "Door Test", "texture": "RJ Orange Peel", "stamp": "d1"}, s
+
+
+def test_a_press_that_cannot_read_the_saved_copy_says_so(ran):
+    """The server cannot be read at the press: this browser's copy stays, nothing reloads, and the
+    card says what happened, so the button is never one that silently does nothing.
+
+    Mutation: drop the card's failure line — the lede is still the first one."""
+    s = ran["pressWhileServerDown"]
+    assert s["nav"] == [], s
+    assert s["texture"] == "Smooth", s
+    assert s["lede"].startswith("The saved copy could not be read"), s
+
+
+def test_the_door_on_a_copy_that_is_not_the_servers_goes_back_and_saves_nothing(ran):
+    """Finding 1, the Proposal step's half. Opened as the door on such a copy all the same, the page
+    asks the server AT ONCE — before its own load save (2.5 s) could land and make the two copies
+    look equal, which is how the old check waved a stale build through — drops that save unsent,
+    and goes back to the Files page. Quick template or slow, nothing reaches the server.
+
+    Mutations: ask only after this page's own save has gone and accept "the server equals this
+    page now", as before (a PUT of Kyle's copy, then a build from it); build anyway (a PUT); do not
+    drop the queued load save (one PUT of Kyle's copy)."""
+    s = ran["doorOnBothMoved"]
+    for case in ("quickTemplate", "slowTemplate"):
+        assert s[case]["nav"] == [["replace", "/done.html?d=d1"]], (case, s[case])
+        assert s[case]["puts"] == 0, (case, s[case])
+        assert s[case]["server"] == RJ_STANDS, (case, s[case])
+
+
+def test_a_server_that_cannot_be_read_is_not_answered_by_the_door(ran):
+    """The server cannot be read at the Files page and the document is out of date. The Proposal
+    step saves as it loads, so it is not sent a copy nobody could check: the card says so, and its
+    button reloads.
+
+    Mutation: send an "unreachable" copy through the door."""
+    s = ran["unreachable"]
+    assert s["nav"] == [] and s["calls"] == [], s
+    assert s["card"]["title"] == "Couldn't check the saved project", s["card"]
+    assert s["puts"] == 0
+    assert s["pressNav"] == [["reload"]]
+
+
+def test_the_letters_new_wording_survives_continue_and_the_next_rebuild(ran):
+    """Finding 3. coverletter-editor.js (loaded whole) keeps the letter's wording in four top-level
+    keys it REPLACES with setState. Continue spread the page's load-time snapshot of them back over
+    the new wording: the payload said X1, the draft X0, and the door's unattended rebuild then put
+    X0 into the customer's letter. Now both say X1 after Continue, and so does the rebuild.
+
+    Mutation: drop the live read of the four keys in continueToDone — topLevel and the door's
+    payload read the first wording."""
+    s = ran["letterWording"]
+    x1 = {"3": {"text": "Dear Sam — the wording Kyle settled on."}}
+    a = s["afterContinue"]
+    assert a["payload"] == a["topLevel"] == a["store"] == x1, a
+    assert a["keyHolds"] is True
+    assert s["stops"] == ["done", "proposal", "done"], s
+    assert s["afterDoor"]["payload"] == s["afterDoor"]["topLevel"] == x1, s["afterDoor"]
+    assert s["afterDoor"]["notes"] == ["A later note"]
+
+
+def test_the_boards_marks_do_not_rebuild_the_proposal(ran):
+    """Finding 5. Who is told about a send, Lost, On hold, Won and Handed off are written into the
+    draft by the server from the CRM, and no template prints them. As proposal inputs, each one
+    made the next View files rebuild the proposal on whichever machine opened it. Troy's machine
+    now takes the server's copy (with the Won) and shows the files: no rebuild, no save, and the
+    letter still carries Kyle's address.
+
+    Mutation: take the board's marks off COMPOSE_IGNORED — Troy's View files rebuilds (a PUT)."""
+    s = ran["boardMarks"]
+    assert s["stops"] == ['done [["reload"]]', "done []"], s
+    assert s["finalCalls"] == ["viewFiles"]
+    assert s["puts"] == 0
+    assert s["won"] is True
+    assert s["email"] == "kyle@wetreadwell.com"
+
+
+def test_a_rebuild_on_a_colleagues_machine_is_still_signed_by_the_estimator(ran):
+    """Finding 5. computeTokenValues signed with whoever was signed in, so the door rebuilding
+    Kyle's project on Troy's machine printed "Kyle Loseke | Estimator troy@wetreadwell.com" on the
+    customer's letter. The saved document's address now stays while the same name signs.
+
+    Mutation: sign with the viewer's address always (the old line) — troy@ on Kyle's letter."""
+    s = ran["signing"]["rebuiltByTroy"]
+    assert s["puts"] == 1 and s["texture"] == "Orange Peel", s
+    assert (s["name"], s["email"]) == ("Kyle Loseke", "kyle@wetreadwell.com"), s
+
+
+def test_a_document_saved_without_an_address_gets_only_its_own_signers(ran):
+    """A document composed before the letter carried an address (2026-09-09) is signed Kyle with
+    none. Rebuilt on Troy's machine it still prints none — never Troy's; rebuilt by Kyle, his own.
+
+    Mutation: fall back to the viewer's address whenever the saved one is blank — troy@ on Kyle's."""
+    r = ran["signing"]
+    assert (r["legacyByTroy"]["name"], r["legacyByTroy"]["email"]) == ("Kyle Loseke", ""), r
+    assert (r["legacyByKyle"]["name"], r["legacyByKyle"]["email"]) == (
+        "Kyle Loseke", "kyle@wetreadwell.com"), r
+
+
+def test_a_blank_signature_field_takes_the_saved_documents_signer(ran):
+    """The project's own signature field was never filled in; its saved document says Kyle.
+    prefillEstimator (the page's own init, run by the harness) filled the field with the viewer,
+    so Troy's machine signed the whole proposal as Troy.
+
+    Mutation: drop the saved document's name from prefillEstimator — name and address are Troy's."""
+    s = ran["signing"]["blankFieldByTroy"]
+    assert (s["name"], s["email"]) == ("Kyle Loseke", "kyle@wetreadwell.com"), s
+
+
+def test_a_new_name_on_the_signature_line_signs_with_its_typists_address(ran):
+    """The counterexample: Troy types his own name on the line and presses Continue. That is a new
+    signer, so the document is his, at his address — the saved document's address does not follow
+    a name it no longer belongs to.
+
+    Mutation: keep the saved address whatever the name — kyle@ under Troy Holmes."""
+    s = ran["signing"]["troySigns"]
+    assert (s["name"], s["email"]) == ("Troy Holmes", "troy@wetreadwell.com"), s
 
 
 # ── the backend builds that document ─────────────────────────────────────────────────────────

@@ -363,9 +363,16 @@
    *                  So the SERVER's copy is the newer one, and it now replaces this browser's —
    *                  which is what stops an older copy being built from and put back over it.
    *                  A page holding a module-top snapshot must reload to see it.
-   *    "kept"        they did not, and this browser's copy has changes the server has not
-   *                  confirmed (a save still in flight or one that failed), or it could not be
-   *                  replaced. Left exactly as it is: it may be this estimator's own work.
+   *    "ahead"       they did not, and it is the SERVER's copy that is the one last seen there:
+   *                  nobody has saved it since. So this browser's copy is that copy plus changes
+   *                  whose save never landed (it failed, or went as the page closed and was too
+   *                  large or too late). Building from it and saving it loses nothing of anyone's.
+   *                  Left as it is.
+   *    "kept"        they did not, and BOTH have moved since this browser last saw the server:
+   *                  this copy has changes the server never confirmed, and someone has saved the
+   *                  server's since. Or this copy could not be replaced. Left exactly as it is,
+   *                  and nothing may build from it or save it unattended: a save would put it
+   *                  over a colleague's work, and dropping it could drop this estimator's.
    *    "unreachable" the server could not be read. Nothing is known and nothing is changed.
    *  This page's own pending save is flushed first, so a "kept" is never merely that. */
   async function reconcileWithServer() {
@@ -379,12 +386,45 @@
     const theirs = draftDigest(server);
     if (mine === theirs) { markSynced(id, mine); return { status: "same", server }; }
     const last = syncedDigest(id);
-    if ((last !== null && last !== mine) || (local[STAMP] && local[STAMP] !== id)) {
-      return { status: "kept", server };
+    if (local[STAMP] && local[STAMP] !== id) return { status: "kept", server };
+    if (last !== null && last !== mine) {
+      return { status: last === theirs ? "ahead" : "kept", server };
     }
     if (!writeBlob(Object.assign({}, server, { [STAMP]: id }))) return { status: "kept", server };
     markSynced(id, theirs);
     return { status: "adopted", server };
+  }
+
+  /** Is this browser's copy of the draft the same as `server`, the server's copy just read
+   *  (DIGEST_IGNORED aside)? When it is, that is recorded (SYNCED_KEY) as a stored save records it.
+   *  A save sent as the page closed (pagehide's keepalive) is stored with nobody left to record it,
+   *  so the record lags a step behind until the two are next read equal — which is here, or in
+   *  reconcileWithServer. Writes nothing else. */
+  function matchesServer(server) {
+    const id = getDraftId();
+    if (!id || !server) return false;
+    const mine = draftDigest(getState());
+    if (mine !== draftDigest(server)) return false;
+    markSynced(id, mine);
+    return true;
+  }
+
+  /** The server's copy in place of this browser's, on the estimator's say-so: the way out of a
+   *  "kept" copy, where nothing here can tell whose changes should win.
+   *  Nothing is flushed first — this page's queued save is the very copy being given up, so it is
+   *  dropped unsent. Resolves true when the server's copy now stands in this browser (the page
+   *  must reload to show it), false when it could not be read or written. */
+  async function useServerCopy() {
+    const id = getDraftId();
+    if (!id || _reloadPending) return false;
+    cancelPendingSave();
+    const server = await readServerDraft();
+    if (!server) return false;
+    const cur = getState();
+    if (cur[STAMP] && cur[STAMP] !== id) flushEvictedBlob(cur);   // another tab's project: its own id
+    if (!writeBlob(Object.assign({}, server, { [STAMP]: id }))) return false;
+    markSynced(id, draftDigest(server));
+    return true;
   }
 
   // The most recent server write, so flushState() can await it. A rejected promise is
@@ -527,6 +567,15 @@
     }
     if (!_inFlight) return true;
     try { return await _inFlight; } catch { return false; }
+  }
+
+  /** Drop this page's queued server save, unsent. This browser's copy keeps the write; the server
+   *  is not sent it, now or as the page closes (pagehide sends only a queued save). For a page
+   *  that has found its copy is not the server's: the Proposal step saves on load (its pricing
+   *  rebuild), and opened by the Files page's door on such a copy that save would put it over a
+   *  colleague's work (proposal-review.js composeForFiles). The next edit queues a save again. */
+  function cancelPendingSave() {
+    if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }
   }
 
   // Before we evict a FOREIGN blob from localStorage (adopting a different
@@ -714,6 +763,11 @@
   // the page's own init mutates the snapshot in place. The Files page's door asks it: a page may
   // only compose unattended when what it was built from is the server's copy.
   const _bootDigest = (() => { try { return draftDigest(getState()); } catch { return ""; } })();
+  // And, taken at the same moment, the digest this browser last saw the server hold for the draft
+  // (SYNCED_KEY) — before this page's own first save can land and move it. A server still holding
+  // exactly that has had nothing saved to it since, so a page built from this browser's copy is
+  // building on the server's (reconcileWithServer's "ahead").
+  const _bootSynced = (() => { try { return syncedDigest(getDraftId()); } catch { return null; } })();
 
   // Kick off sync as soon as the script loads. Expose the promise so pages that
   // auto-act on load (done.js files-mode) can await a settled draft first.
@@ -1237,11 +1291,18 @@
    *  (SERVER_OWNED_KEYS), the Project Info Sheet's own workbook, the ownership stamp, and the
    *  document and its key themselves. A key missing from this list costs a rebuild the proposal
    *  did not need; a key WRONGLY on it would let a changed proposal through unrebuilt, so nothing
-   *  that any template prints may ever be added here. */
+   *  that any template prints may ever be added here.
+   *
+   *  And the board's own marks, which the server writes into the draft from the CRM (drafts.py
+   *  set_notify_picks, set_close_lost, set_on_hold, set_won, set_handed_off): who hears about a
+   *  send, Lost, On hold, Won, Handed off. No template prints any of them. Counted as inputs, each
+   *  one made the next Files visit rebuild the proposal on whichever machine opened it — as
+   *  whoever was signed in there, often not the estimator who wrote it (review of fix 4). */
   const COMPOSE_IGNORED = [STAMP, "proposal_payload", "proposal_payload_key",
     "generate_result", "generated_lump_sum", "portal_message", "portal_emails",
     "require_deposit", "dropbox_result",
     "info_cell_values", "info_tab_structs", "info_template_version", "job_number",
+    "notify_picks", "closed_lost", "on_hold", "won", "handed_off",
   ].concat(SERVER_OWNED_KEYS);
 
   /** The key of a draft's document: which inputs it was built from, and which document it is.
@@ -1344,8 +1405,12 @@
     documentHolds,
     draftDigest,
     bootDigest: () => _bootDigest,
+    bootSynced: () => _bootSynced,
     reloadPending: () => _reloadPending,
     readServerDraft,
     reconcileWithServer,
+    matchesServer,
+    useServerCopy,
+    cancelPendingSave,
   };
 })();
