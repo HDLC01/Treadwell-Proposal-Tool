@@ -26,6 +26,11 @@
   // to do it unattended — merged the OTHER project's snapshot into this one under this one's stamp,
   // which nothing else refuses, and the reload then found the result "owned" and saved it.
   let _reloadPending = false;
+  // Set by dropHeldChanges when the Files page's door gives its copy back and leaves: this page's
+  // writes were built on a copy the server no longer holds, and it has put this browser's copy back
+  // to the last one the server did hold. A write landing after that (the cover letter's template
+  // arriving while the page unloads) would undo it, so every write from here is refused too.
+  let _givenUp = false;
 
   /**
    * API base URL resolution (in priority order):
@@ -57,8 +62,16 @@
     }
   }
 
+  // What this page last wrote to the blob, exactly. localStorage is shared by every tab of this
+  // browser, so when it no longer reads back as this, another tab has written since (dropHeldChanges).
+  let _lastWrittenRaw = null;
   function writeBlob(obj) {
-    try { localStorage.setItem(STATE_KEY, JSON.stringify(obj)); return true; }
+    try {
+      const raw = JSON.stringify(obj);
+      localStorage.setItem(STATE_KEY, raw);
+      _lastWrittenRaw = raw;
+      return true;
+    }
     catch { return false; /* quota / private mode */ }
   }
 
@@ -76,6 +89,10 @@
       console.warn("[TW] refused state write: this page is reloading onto draft", id);
       return cur;
     }
+    if (_givenUp) {
+      console.warn("[TW] refused state write: this page gave its copy of draft", id, "back");
+      return cur;
+    }
     const merged = Object.assign(cur, partial || {});
     if (id) merged[STAMP] = id;   // force-stamp AFTER the merge (partials can carry a stale stamp)
     writeBlob(merged);
@@ -90,18 +107,28 @@
    *  server's copy, because initDraftSync does not re-read a blob already stamped for this draft.
    *  That is how pressing Download on the Files page wrote a colleague's newer revision away: the
    *  press recorded `generate_result` with setState, and the PUT carried the page's stale proposal
-   *  along with it. The next real edit on this page still PUTs everything, this included. */
-  function setLocalState(partial) {
+   *  along with it. The next real edit on this page still PUTs everything, this included.
+   *
+   *  `opts.alreadyOnServer`: the server has stored this very change on its own copy (To Dropbox's
+   *  record of the filing, main.py api_to_dropbox). A copy that was the one this browser last saw
+   *  the server hold (SYNCED_KEY) is then still that copy, plus a change the server has too, so the
+   *  record moves with it. Left behind, the record said the copy held something the server never
+   *  got: opening another project PUT it back over a colleague's newer revision (flushEvictedBlob),
+   *  and the Files page showed the "changed somewhere else" card for a change nobody made (review of
+   *  fix 4, round 3). A copy that was already ahead of its record stays ahead. */
+  function setLocalState(partial, opts) {
     const id = getDraftId();
     const cur = getState();
     if (cur[STAMP] && id && cur[STAMP] !== id) {
       console.warn("[TW] refused local state write: blob owned by draft", cur[STAMP], "but page is on", id);
       return cur;
     }
-    if (_reloadPending) return cur;             // a leftover page; see _reloadPending
+    if (_reloadPending || _givenUp) return cur; // a leftover page; see _reloadPending and _givenUp
+    // Asked before the merge, which changes `cur` in place.
+    const inSync = !!(opts && opts.alreadyOnServer) && !!id && syncedDigest(id) === draftDigest(cur);
     const merged = Object.assign(cur, partial || {});
     if (id) merged[STAMP] = id;
-    writeBlob(merged);
+    if (writeBlob(merged) && inSync) markSynced(id, draftDigest(merged));
     return merged;
   }
 
@@ -375,10 +402,16 @@
    *  Resolves `{status, server}`, `server` being the server's copy (null when it was not read):
    *    "same"        the two agree (DIGEST_IGNORED aside). Nothing is written.
    *    "adopted"     they did not, and this browser's copy held nothing the server lacks: it is
-   *                  the copy last seen on the server, or one written before that was recorded.
-   *                  So the SERVER's copy is the newer one, and it now replaces this browser's —
-   *                  which is what stops an older copy being built from and put back over it.
-   *                  A page holding a module-top snapshot must reload to see it.
+   *                  the copy last seen on the server. So the SERVER's copy is the newer one, and
+   *                  it now replaces this browser's — which is what stops an older copy being
+   *                  built from and put back over it. A page holding a module-top snapshot must
+   *                  reload to see it.
+   *    "unknown"     they did not, and this browser has no record of seeing this draft on the
+   *                  server (a copy written before the record existed — every browser's on deploy
+   *                  day). Nothing can tell an older copy from one holding a save that never
+   *                  landed, so neither side is dropped or written: left exactly as it is, like
+   *                  "kept". It used to be "adopted", which put the server's copy over an unsaved
+   *                  edit with nothing on screen (review of fix 4, round 3).
    *    "ahead"       they did not, and it is the SERVER's copy that is the one last seen there:
    *                  nobody has saved it since. So this browser's copy is that copy plus changes
    *                  whose save never landed (it failed, or went as the page closed and was too
@@ -403,9 +436,8 @@
     if (mine === theirs) { markSynced(id, mine); return { status: "same", server }; }
     const last = syncedDigest(id);
     if (local[STAMP] && local[STAMP] !== id) return { status: "kept", server };
-    if (last !== null && last !== mine) {
-      return { status: last === theirs ? "ahead" : "kept", server };
-    }
+    if (last === null) return { status: "unknown", server };
+    if (last !== mine) return { status: last === theirs ? "ahead" : "kept", server };
     if (!writeBlob(Object.assign({}, server, { [STAMP]: id }))) return { status: "kept", server };
     markSynced(id, theirs);
     return { status: "adopted", server };
@@ -487,7 +519,13 @@
         if (ok) applyPendingTestIntent(id);
         // Only for the draft this page is on: an evicted blob flushed to its own id must not
         // overwrite the marker of the draft being adopted in its place.
-        if (ok && id === getDraftId()) markSynced(id, sent);
+        //
+        // AND ONLY WHILE THIS BROWSER'S COPY IS STILL THAT DRAFT'S. The record describes the one
+        // copy localStorage holds, and every tab shares it. Review of fix 4, round 3: tab B's
+        // queued save for project Y landed after tab A had opened X, and marked Y — tab B's URL
+        // still said Y — so X's record was gone, and the Files page then put the server's copy of
+        // X over an edit of Kyle's that had not saved.
+        if (ok && id === getDraftId() && getState()[STAMP] === id) markSynced(id, sent);
         return ok;
       }).catch(() => false /* offline / backend down — local copy still safe */);
       _inFlight = p;
@@ -605,15 +643,45 @@
   // So on that page every save is held: asked for, it is only remembered — no timer, so nothing
   // goes on its own or as the page closes (pagehide sends only a queued save). flushState, which
   // Continue and Ctrl+S call, asks the hold's `gate` at that very moment, and only a yes sends the
-  // page's copy; a no keeps it held and resolves false. Once a save has been stored through the
-  // gate, the hold is lifted and the page saves as every page does.
+  // page's copy; a no keeps it held and resolves false.
+  //
+  // FOR AS LONG AS THE PAGE IS UNATTENDED, a stored save does not lift the hold (review of fix 4,
+  // round 3). It used to: Kyle ticked the cover letter while the page said "Updating the
+  // proposal…", that save went through the gate and lifted it, RJ's Continue landed, and the
+  // door's own Continue then saved Kyle's $10,000 copy over RJ's with nothing asked. Instead the
+  // door's question also accepts the page's own last stored save (heldSaveDigest), so that save is
+  // never taken for a colleague's. Once the door has stopped and says so, the page is the estimator's:
+  // releaseHeldSaves asks once more, sends what is held on a yes, and lifts the hold.
   let _hold = null;
+  let _watchingTouches = false;
 
   /** Hold this page's server saves behind `gate`, an async () => boolean asked just before each
    *  one is sent. A save already queued is held with the rest, unsent. */
   function holdServerSaves(gate) {
-    _hold = { gate, dirty: !!_saveTimer || !!(_hold && _hold.dirty) };
+    _hold = { gate, dirty: !!_saveTimer || !!(_hold && _hold.dirty), handedOver: false,
+              saved: null, touches: 0 };
     if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }
+    watchTouches();
+  }
+
+  /** Count what the estimator does on a held page — a key, a paste, a tick, a click. Only real
+   *  input counts (isTrusted): the page's own writes as it loads are not the estimator's, and
+   *  dropHeldChanges may give those back, never these. Generous on purpose: a click that edited
+   *  nothing only costs the Files page's card, where a missed edit would be dropped unseen. */
+  function watchTouches() {
+    if (_watchingTouches) return;
+    _watchingTouches = true;
+    const note = (e) => { if (_hold && e && e.isTrusted) _hold.touches++; };
+    try {
+      ["keydown", "input", "change", "paste", "cut", "drop", "pointerup"]
+        .forEach((t) => document.addEventListener(t, note, true));
+    } catch {}
+  }
+
+  function liftHold(hold) {
+    if (_hold !== hold) return;
+    _hold = null;
+    if (hold.dirty) scheduleServerSave(getState());       // an edit made while it was being asked
   }
 
   async function flushHeld(hold) {
@@ -628,12 +696,77 @@
     const blob = getState();
     // Same refusal rule as scheduleServerSave — never write a blob owned by another draft.
     if (!id || (blob[STAMP] && blob[STAMP] !== id) || isUnverified(id)) return false;
+    const touches = hold.touches;          // what the estimator had done when the copy was read
     hold.dirty = false;                    // an edit made while this is in flight sets it again
     if (!await putDraft(id, blob)) { hold.dirty = true; return false; }
-    if (_hold === hold) {
-      _hold = null;
-      if (hold.dirty) scheduleServerSave(getState());
-    }
+    hold.saved = { raw: JSON.stringify(blob), digest: draftDigest(blob), touches };
+    if (hold.handedOver) liftHold(hold);  // the door has stopped: the server has now said yes
+    return true;
+  }
+
+  /** The digest of the copy this page last stored through its hold, or null. The server holding
+   *  it means nobody has saved since this page did. */
+  function heldSaveDigest() {
+    return (_hold && _hold.saved) ? _hold.saved.digest : null;
+  }
+
+  /** The door has stopped and says why, so the page is the estimator's from here. Asks the gate
+   *  once more; on a yes, sends what is held and lifts the hold, and the page saves as every page
+   *  does — its autosave, its pagehide save, and a Continue that is not asked again. It used to
+   *  hold for the page's whole life with nothing on screen to say so, and the first Continue after
+   *  any server-side change, even Troy marking the job Won, went back to a Files card whose one
+   *  button dropped everything typed (review of fix 4, round 3). Resolves true when the hold is
+   *  lifted; false leaves it held (the server could not be read, or the save failed — the gate has
+   *  already sent the page back if the server holds another copy), and then the first save the
+   *  gate does let through lifts it. */
+  async function releaseHeldSaves() {
+    const hold = _hold;
+    if (!hold) return true;
+    hold.handedOver = true;
+    if (hold.dirty) return (await flushHeld(hold)) && _hold !== hold;
+    let yes = false;
+    try { yes = !!(await hold.gate()); } catch { yes = false; }
+    if (!yes || _hold !== hold) return false;
+    liftHold(hold);
+    return true;
+  }
+
+  /** The door gives up: this browser's copy goes back to the last one the server held on this
+   *  page's watch — its own last stored save, else the copy it loaded — and what the page wrote
+   *  since and never sent is dropped.
+   *
+   *  Those writes were the page's own, built on a copy the server no longer holds: its pricing
+   *  rebuild as it loaded, the cover letter's template version, the document the automatic
+   *  Continue composed. Left in place they read as changes the server never got. The Files page
+   *  then showed the "changed somewhere else" card for changes nobody made, and opening another
+   *  project PUT them over the colleague's revision that had sent the door back (review of fix 4,
+   *  round 3).
+   *
+   *  NOT when anything here was the estimator's, or might have been: after any real input since
+   *  that copy (watchTouches), or when another tab of this browser has been at the copy since —
+   *  saved it (the record of what the server holds has moved off this page's), or written it after
+   *  this page last did. localStorage is every tab's, and what another tab typed is in it. Then the
+   *  copy is left as it is, and the Files page asks. Nor once the hold is lifted, when the page
+   *  saves as any page does. Keeps the hold, and refuses every later write from this page
+   *  (_givenUp). Returns true when this browser's copy was put back. */
+  function dropHeldChanges() {
+    const hold = _hold;
+    if (!hold || _reloadPending) return false;
+    const base = hold.saved || { raw: _bootRaw, touches: 0 };
+    if (hold.touches > base.touches) return false;
+    const id = getDraftId();
+    if (!id || syncedDigest(id) !== (hold.saved ? hold.saved.digest : _bootSynced)) return false;
+    let back = null;
+    try { back = JSON.parse(base.raw || "null"); } catch { back = null; }
+    if (!back || typeof back !== "object" || Array.isArray(back)) return false;
+    let now = null;
+    try { now = localStorage.getItem(STATE_KEY); } catch { return false; }
+    if (now !== (_lastWrittenRaw !== null ? _lastWrittenRaw : _bootRaw)) return false;
+    const cur = getState();
+    if ((cur[STAMP] && cur[STAMP] !== id) || (back[STAMP] && back[STAMP] !== id)) return false;
+    if (!writeBlob(Object.assign(back, { [STAMP]: id }))) return false;
+    hold.dirty = false;
+    _givenUp = true;
     return true;
   }
 
@@ -833,6 +966,8 @@
   // the page's own init mutates the snapshot in place. The Files page's door asks it: a page may
   // only compose unattended when what it was built from is the server's copy.
   const _bootDigest = (() => { try { return draftDigest(getState()); } catch { return ""; } })();
+  // And the blob itself, as found: the copy the door puts back when it gives up (dropHeldChanges).
+  const _bootRaw = (() => { try { return localStorage.getItem(STATE_KEY); } catch { return null; } })();
   // And, taken at the same moment, the digest this browser last saw the server hold for the draft
   // (SYNCED_KEY) — before this page's own first save can land and move it. A server still holding
   // exactly that has had nothing saved to it since, so a page built from this browser's copy is
@@ -1483,5 +1618,8 @@
     matchesServer,
     useServerCopy,
     holdServerSaves,
+    heldSaveDigest,
+    releaseHeldSaves,
+    dropHeldChanges,
   };
 })();

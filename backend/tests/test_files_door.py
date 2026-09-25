@@ -207,14 +207,25 @@ def test_view_files_never_builds_from_an_older_copy_over_a_colleagues_revision(r
 
 def test_a_copy_saved_before_this_deploy_is_not_written_back_either(ran):
     """The same, for a copy with no key and no record of when it last matched the server — every
-    browser's copy on deploy day. The server's copy wins; Kyle's is never PUT.
+    browser's copy on deploy day. Kyle's is never PUT. Nor is it dropped unasked (review of fix 4,
+    round 3): with no record, an older copy and one holding a save that never landed look the same,
+    and taking the server's copy put it over such an edit with nothing on screen. The page stops on
+    a card that says only what is known; its one button loads the saved copy, and the reload then
+    builds RJ's document through the door.
 
-    Mutation: treat a missing sync record as "this browser has unsaved changes" — the page keeps
-    Kyle's copy, and the door stops instead of building."""
+    Mutation: return "adopted" for a copy with no record (reconcileWithServer) — no card, the page
+    goes straight through the door."""
     s = ran["legacyStale"]
-    assert s["settled"] is True and s["stops"] == ["done", "proposal", "done"], s
-    assert s["puts"] == 1 and s["everyPutIsRJs"] is True
-    assert s["serverTexture"] == "RJ Orange Peel" == s["documentTexture"]
+    assert s["nav"] == [] and s["calls"] == [], s
+    assert s["card"]["title"] == "This browser's copy doesn't match the saved project", s["card"]
+    assert s["card"]["button"] == "Load the saved copy"
+    assert "Nothing was rebuilt or saved" in s["card"]["lede"]
+    assert "never reached the server" not in s["card"]["lede"], "the card claims more than is known"
+    assert s["puts"] == 0 and s["keptTexture"] == "Smooth"
+    assert s["pressNav"] == [["reload"]] and s["localAfterPress"] == "RJ Orange Peel"
+    a = s["afterPress"]
+    assert a["settled"] is True and a["stops"] == ["done", "proposal", "done"], a
+    assert a["everyPutIsRJs"] is True and a["documentTexture"] == "RJ Orange Peel"
 
 
 def test_the_door_asks_the_servers_copy_not_this_browsers(ran):
@@ -350,17 +361,25 @@ def test_no_project_means_the_empty_page_not_the_proposal_step(ran):
 def test_the_door_never_builds_unattended_without_the_template(ran):
     """With no template on screen the editor's edits cannot be read and the version is "" (which
     the backend reads as "apply every edit"), so the door stops and says why; the same when the
-    page never settles. Nothing navigates, nothing is written, Continue is handed back.
+    page never settles. Nothing navigates, nothing is built, Continue is handed back.
 
-    Mutations: drop the `!templateVersion` test (the no-template page navigates); drop the timeout
-    (the page that never settles waits forever and this scenario hangs)."""
+    Since round 3 of the review of fix 4, a stopped door is the estimator's page: the server is
+    asked once more and, as it still holds this copy, the page's own copy is saved (its load save)
+    and it saves as any page does from then on (test_a_stopped_door_is_the_estimators_page). What
+    goes is the page's copy under the LAST Continue's document: nothing is composed.
+
+    Mutations: drop the `!templateVersion` test (the no-template page navigates and composes); drop
+    the timeout (the page that never settles waits forever and this scenario hangs)."""
     u = ran["unattended"]
     for case in ("noTemplate", "neverSettles"):
         assert u[case]["nav"] == [], case
         assert "could not be done for you" in u[case]["note"], u[case]["note"]
     assert u["noTemplate"]["shown"] is True and u["noTemplate"]["disabled"] is False
     assert u["noTemplate"]["button"].startswith("Continue to Done")
-    assert u["putsFromEither"] == 0
+    assert u["putsFromEither"] == 2, u
+    assert u["savedInputs"] == ["Orange Peel", "Orange Peel"], u
+    assert u["savedDocuments"] == ["Smooth", "Smooth"], "the stopped door composed a document"
+    assert u["keyHolds"] is False
 
 
 def test_a_save_the_door_cannot_make_goes_nowhere(ran):
@@ -681,17 +700,204 @@ def test_the_cover_letters_own_save_cannot_leave_a_door_that_found_another_copy(
     """Finding 6. The door page's one-off cancel of its queued save ran when the server read
     answered. The REAL cover-letter editor queues a save of its own when its template arrives
     (persistNow), and when that came after the read, the page's pagehide sent Kyle's whole copy
-    over RJ's revision and Troy's Won. Whichever answers first, the letter's save is made in this
-    browser (it did write) and nothing reaches the server, the page closing included.
+    over RJ's revision and Troy's Won. Whichever answers first, the letter writes (it asked for its
+    template and saved the version) and nothing reaches the server, the page closing included.
+    And since round 3, going back gives that write back: this browser's copy is the one the page
+    loaded, so the Files page does not find a change nobody made (test_a_door_sent_back_gives_back).
 
     Mutation: let scheduleServerSave queue a save while held — letterAfterTheRead makes one PUT."""
     r = ran["letterAfterVerdict"]
     for order in ("letterFirst", "letterAfterTheRead"):
         s = r[order]
-        assert s["letterAsked"] is True and s["letterSavedHere"] is True, (order, s)
+        assert s["letterAsked"] is True and s["letterWrote"] is True, (order, s)
+        assert s["letterSavedHere"] is False and s["localIsWhatItLoaded"] is True, (order, s)
         assert s["nav"] == [["replace", "/done.html?d=d1"]], (order, s)
         assert s["puts"] == [], (order, s)
         assert s["server"] == RJ_STANDS, (order, s)
+
+
+# ── the review of fix 4, round 3 (2026-09-25) ────────────────────────────────────────────────
+def test_a_save_made_while_the_door_works_does_not_lift_its_hold(ran):
+    """Finding 5. While the door page still said "Updating the proposal…", Kyle ticked the cover
+    letter; the switch saves at once, the gate said yes, and that one stored save lifted the hold.
+    RJ's Continue landed next, and the door's own Continue saved Kyle's $10,000 copy over it with
+    nothing asked — and the Files page it went to (composed=1) never checks. The hold now stays
+    while the page is unattended: the door's Continue is asked again, finds RJ's copy, goes back,
+    and the Files page takes RJ's copy. The counterexample: with nobody landing, the page's own
+    stored save is not taken for a colleague's — the door builds and saves.
+
+    Mutations: lift the hold on any stored save (the old flushHeld) — rjLands PUTs Kyle's copy
+    again; drop TW.heldSaveDigest from the door's question — nobody goes back instead of building."""
+    t = ran["tickDoesNotLift"]
+    r = t["rjLands"]
+    assert r["putsAfterTick"] == ["Kyle Orange Peel"], r      # the tick itself did save
+    assert r["nav"] == [["replace", "/done.html?d=d1"]], r
+    assert r["puts"] == ["Kyle Orange Peel"], "the door's Continue saved over RJ's revision"
+    assert r["server"] == RJ_REVISION, r
+    assert r["backNav"] == [["reload"]] and r["backCard"] is None, r
+    n = t["nobody"]
+    assert n["nav"] == [["replace", "/done.html?composed=1&d=d1"]], n
+    assert n["puts"] == ["Kyle Orange Peel", "Kyle Orange Peel"], n
+
+
+def test_to_dropbox_keeps_an_in_sync_copy_in_sync(ran):
+    """Findings 1 and 4, To Dropbox. Kyle's current Files page filed the project; the server
+    recorded the filing on its own copy and the page mirrored it, so the two copies were equal —
+    but this browser's record of what the server held stayed at the copy before the filing. RJ then
+    re-priced X and Troy marked it Won, and Kyle opened another project: the eviction took the
+    stale record for an unsaved change and PUT Kyle's copy back over both. The record now moves with
+    a change the server already has (setLocalState's `alreadyOnServer`). The counterexample: a copy
+    that held an unsaved note before the filing still holds it, and the eviction still saves it.
+
+    Mutations: drop `{ alreadyOnServer: true }` from dropbox.js — inSync PUTs "Old note" over RJ's;
+    move the record whatever the copy held — unsavedEdit's note is never saved."""
+    e = ran["dropboxThenEvict"]
+    s = e["inSync"]
+    assert s["localEqualsServer"] is True and s["recordIsLocal"] is True, s
+    assert s["putsToX"] == [], s
+    assert s["server"] == RJ_REVISION, s
+    u = e["unsavedEdit"]
+    assert u["recordIsLocal"] is False, u
+    assert u["putsToX"] == ["Kyle's note that never saved"], u
+
+
+def test_a_door_sent_back_gives_back_what_it_wrote(ran):
+    """Findings 1 and 4, the door. Kyle's copy was the server's with a stale document, so View files
+    took him through the door, and RJ's Continue landed while that page worked — before its first
+    question, while the template loaded, or with the cover letter's template arriving after the
+    page had turned back. The gate rightly sent it back, but what it had written and never sent
+    (the document its Continue composed, the letter's template version) stayed in this browser: the
+    Files page said "changed somewhere else" of changes nobody made, and opening another project
+    PUT them over RJ's revision. Going back now puts this browser's copy back to the one the door
+    opened on: the Files page takes RJ's copy, and the eviction sends nothing.
+
+    Mutations: drop TW.dropHeldChanges from the door's way back — every case shows the card and PUTs
+    Kyle's copy; drop the _givenUp refusal from setState — letterAfterGoingBack does."""
+    r = ran["doorGivesBack"]
+    for kind in ("whileTemplateLoads", "letterBeforeFirstQuestion", "letterAfterGoingBack"):
+        s = r[kind]
+        assert s["arriveNav"] == [["replace", "/proposal-review.html?compose=files&files=1&d=d1"]], (kind, s)
+        assert s["doorNav"] == [["replace", "/done.html?files=1&d=d1"]], (kind, s)
+        assert s["doorWrote"] is True, (kind, "the scenario lost its point: the door wrote nothing")
+        assert s["filesNav"] == [["reload"]] and s["filesCard"] is None, (kind, s)
+        assert s["letterVersionAtFiles"] is None, (kind, s)
+        assert s["putsToXOnSwitch"] == [], (kind, s)
+        assert s["server"] == RJ_REVISION, (kind, s)
+
+
+def test_what_the_estimator_typed_on_the_door_stays_for_the_files_page_to_ask_about(ran):
+    """The counterexample: Kyle typed on the door page before RJ's Continue landed. That is his, so
+    nothing gives it back — this browser keeps it, and the Files page stops on the card that says
+    both copies moved, where the choice is his.
+
+    Mutation: give the page's copy back whatever real input it had (drop the touch count from
+    dropHeldChanges) — his typing is gone and the Files page takes RJ's copy without a word."""
+    s = ran["doorGivesBack"]["kyleTyped"]
+    assert s["doorNav"] == [["replace", "/done.html?files=1&d=d1"]], s
+    assert s["filesNav"] == [] and s["filesCard"] == "This project was changed somewhere else", s
+    assert s["scopeAtFiles"] == "Kyle typed this here", s
+
+
+def test_another_tabs_late_save_does_not_take_this_projects_record(ran):
+    """Finding 2. Tab B's queued save for project Y landed after tab A had opened project X, and
+    took this browser's one record of what the server held — tab B's URL still said Y — although
+    the copy here is X's. Kyle's X note then failed to save, and the Files page, finding no record
+    for X, put the server's copy over it unasked. A save now moves the record only while this
+    browser's copy is still that draft's, so X's stands: nobody has saved X since, and the door
+    builds and saves the note.
+
+    Mutation: drop the stamp check from putDraft's record — the record becomes Y's, and the Files
+    page stops on the "doesn't match" card with the note unsaved."""
+    s = ran["recordTakeover"]
+    assert s["tabBSaved"][-1] == "Y edit in tab B", "the scenario lost its point: tab B never saved"
+    assert s["recordAfterHydrate"] == "d1" and s["recordAfterTabB"] == "d1", s
+    assert s["stops"] == ["done", "proposal", "done"], s
+    assert s["puts"] == 1
+    assert s["localNotes"] == s["serverNotes"] == "Kyle's note that did not save", s
+    assert s["docNotes"] == ["Kyle's note that did not save"], s
+
+
+def test_a_stopped_door_is_the_estimators_page(ran):
+    """Finding 3. The door stopped (its template failed) and said to check the document and press
+    Continue — and then held every save for as long as Kyle worked there, with nothing on screen to
+    say so: no autosave, nothing as the tab closed, and a Continue after Troy marked the job Won went
+    back to a Files card whose one button dropped everything he had typed. The stop now asks the
+    server once more and, on a yes, saves the page's copy and lifts the hold: the rewrite goes out
+    on the page's own autosave and Continue takes it to the Files page, into the document.
+
+    Troy's Won is then saved over by that Continue, as it is by a save from any open Proposal page:
+    a whole-blob save, as on staging. The card that dropped the rewrite was the worse of the two.
+
+    Mutation: drop TW.releaseHeldSaves from the stop — the rewrite is never saved and Continue goes
+    back to the Files page."""
+    s = ran["stoppedDoorIsTheEstimators"]["released"]
+    assert s["nav"] == [], s
+    assert s["noteDo"] == "Check the document below, then press Continue to Done.", s
+    assert s["putsAtStop"] == ["Kyle Orange Peel"], s
+    assert s["rewriteSaved"] is True, s
+    assert s["continueNav"] == [["replace", "/done.html?composed=1&d=d1"]], s
+    assert s["continuePuts"] == 1
+    assert s["documentScope"] == "Kyle's careful rewrite of the scope", s
+
+
+def test_a_stopped_door_still_asks_before_it_saves(ran):
+    """The counterexamples. RJ's Continue landed after the door's first question and before it
+    stopped: the stop's question finds RJ's copy, so the page goes back with nothing saved and the
+    Files page takes RJ's. And a server that cannot be read keeps the hold — the note now says that
+    nothing typed there is saved until the page is reloaded — until the first save the server does
+    allow (Ctrl+S once the connection is back), which lifts it, so the next edit saves itself.
+
+    Mutations: lift the hold at the stop without asking (rjBeforeStop PUTs Kyle's copy over RJ's);
+    keep the hold after a stored save on a stopped page (autosaveAfterCtrlS is False)."""
+    r = ran["stoppedDoorIsTheEstimators"]
+    s = r["rjBeforeStop"]
+    assert s["nav"] == [["replace", "/done.html?d=d1"]] and s["putsAtStop"] == [], s
+    assert s["server"] == RJ_REVISION, s
+    assert s["backNav"] == [["reload"]] and s["backCard"] is None, s
+    u = r["unreadable"]
+    assert u["nav"] == [] and u["putsAtStop"] == [], u
+    assert u["note"].startswith("The saved copy of this project could not be read"), u
+    assert "nothing you change on this page is saved" in u["noteDo"], u
+    assert u["putsWhileUnreadable"] == [], "a save left a door that could not ask the server"
+    assert u["ctrlS"] is True and u["savedByCtrlS"] is True, u
+    assert u["autosaveAfterCtrlS"] is True, u
+
+
+def test_a_first_answer_that_comes_after_the_stop_does_not_send_the_page_away(ran):
+    """The door's first read was answered only after the 20 s ran out, by which time the stop had
+    asked again, saved the page's copy and handed the page over to the estimator, and his rewrite
+    had gone out on the page's autosave. That late answer sees his save — not the copy the page
+    loaded — and read as "not the saved copy", taking him back to the Files page from the middle
+    of his work on a page that is now his.
+
+    Mutation: drop `&& !stopped` from the door's first question — the page goes back to Files."""
+    s = ran["stoppedDoorIsTheEstimators"]["slowFirstRead"]
+    assert s["putsAtStop"] == ["Kyle Orange Peel"], s
+    assert s["noteDo"] == "Check the document below, then press Continue to Done.", s
+    assert s["rewriteSaved"] is True, "the scenario lost its point: the server never moved"
+    assert s["navAfterLateAnswer"] == [], s
+
+
+def test_a_door_sent_back_never_drops_another_tabs_write(ran):
+    """The door gives back only its own writes. Another tab of this browser has the project's
+    Estimate step open, and localStorage is every tab's, so that tab's note is in the copy the door
+    would put back. (a) The other tab saves the note while the door works: the door goes back (the
+    server moved) and leaves the copy alone, and the next trip through the door builds and saves it
+    with the note. (b) The note fails to save and is written here while the door is asking: the copy
+    is not the door's last write, so it stays for the Files page to ask about.
+
+    Mutations: drop the record check from dropHeldChanges — (a) loses the note on the server too;
+    drop the last-write check — (b) loses it here, and the Files page takes RJ's copy unasked."""
+    r = ran["doorKeepsOtherTabs"]
+    a = r["otherTabSaves"]
+    assert a["doorNav"] == [["replace", "/done.html?d=d1"]], a
+    assert a["notesHere"] == "The other tab's note", a
+    assert a["stops"] == ["done", "proposal", "done"], a
+    assert a["serverNotes"] == "The other tab's note", a
+    b = r["otherTabWritesWhileAsked"]
+    assert b["doorNav"] == [["replace", "/done.html?d=d1"]], b
+    assert b["notesHere"] == b["notesAtFiles"] == "The other tab's note", b
+    assert b["card"] == "This project was changed somewhere else", b
 
 
 # ── the backend builds that document ─────────────────────────────────────────────────────────

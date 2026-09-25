@@ -165,8 +165,9 @@
     // with nobody left to record that it had; RJ then re-priced to $15,000 and Troy marked the job
     // Won; Kyle's View files found his copy "kept", sent it through the door, and the Proposal
     // step's load put his $10,000 copy back over both. A copy where both sides have moved
-    // ("kept"), or one the server could not be asked about, stops here and says so. The one way on
-    // from "kept" is the estimator's own choice to load the saved copy.
+    // ("kept"), one with no record to tell ("unknown"), or one the server could not be asked about,
+    // stops here and says so. The one way on from "kept" or "unknown" is the estimator's own choice
+    // to load the saved copy.
     if (st.project_name && !composedHere) {
       const toDoor = () => location.replace(TW.withDraft("/proposal-review.html?compose=files"
                                                          + (filesMode ? "&files=1" : "")));
@@ -178,11 +179,21 @@
         if (TW.documentHolds(seen.server)) location.reload(); else toDoor();
         return;
       }
-      if (seen.status === "kept") {
-        showDoorStop("This project was changed somewhere else",
-          "This browser has changes to it that never reached the server, and the saved project has "
-          + "changed since, maybe on someone else's computer. Nothing was rebuilt or saved. Load the "
-          + "saved copy to carry on from it. Changes that were only in this browser are dropped.",
+      // "unknown" is the same stop, in words that claim no more than is known: this browser has no
+      // record of the saved copy (every browser's on deploy day), so it cannot tell an older copy
+      // from one holding a save that never landed. Taking the server's copy unasked dropped such an
+      // edit with nothing on screen (review of fix 4, round 3).
+      if (seen.status === "kept" || seen.status === "unknown") {
+        const known = seen.status === "kept";
+        showDoorStop(known ? "This project was changed somewhere else"
+                           : "This browser's copy doesn't match the saved project",
+          known
+            ? "This browser has changes to it that never reached the server, and the saved project has "
+              + "changed since, maybe on someone else's computer. Nothing was rebuilt or saved. Load the "
+              + "saved copy to carry on from it. Changes that were only in this browser are dropped."
+            : "This browser holds a copy of this project that is not the one saved on the server, and "
+              + "it can't tell which of the two is newer. Nothing was rebuilt or saved. Load the saved "
+              + "copy to carry on from it. Anything that was only in this browser is dropped.",
           "Load the saved copy",
           async () => {
             if (await TW.useServerCopy()) { location.reload(); return; }

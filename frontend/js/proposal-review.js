@@ -7280,18 +7280,31 @@
     // document; and the cover letter's editor queues a save of its own when its template arrives,
     // after a one-off cancel had run (review of fix 4, round 2). So nothing this page saves leaves
     // it until the same question, asked again at that moment, is still a yes.
+    //
+    // GOING BACK GIVES BACK what this page wrote and never sent (TW.dropHeldChanges): its pricing
+    // rebuild, the letter's version, the document its Continue composed — all built on a copy the
+    // server no longer holds. Left in place, they read as changes that never reached the server:
+    // the Files page showed the "changed somewhere else" card for changes nobody made, and opening
+    // another project PUT them over the colleague's revision (review of fix 4, round 3). Never
+    // anything the estimator did here, which stays for the Files page to ask about.
     let verdict = null;
     let leaving = false;
+    let stopped = false;
     const backToFiles = () => {
       if (leaving) return;
       leaving = true;
+      TW.dropHeldChanges();
       window.location.replace(TW.withDraft("/done.html" + (q.get("files") === "1" ? "?files=1" : "")));
     };
+    // The page's OWN save through the hold is the third yes: that copy is the one it put there, and
+    // a save of it being taken for a colleague's is what made the hold give way (TW.heldSaveDigest).
     const ask = async () => {
       const saved = await TW.readServerDraft();
       if (!saved) return "unread";
       const d = TW.draftDigest(saved);
-      return (d === TW.bootDigest() || d === TW.bootSynced()) ? "ok" : "not-the-saved-copy";
+      const own = TW.heldSaveDigest();
+      return (d === TW.bootDigest() || d === TW.bootSynced() || (!!own && d === own))
+        ? "ok" : "not-the-saved-copy";
     };
     TW.holdServerSaves(async () => {
       if (leaving) return false;
@@ -7304,7 +7317,9 @@
       try { if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready; } catch {}
       if (TW.reloadPending && TW.reloadPending()) return;
       verdict = await ask();
-      if (verdict === "not-the-saved-copy") backToFiles();
+      // Answered after the door stopped (a read slower than 20 s), it is not the last word: the
+      // stop asked again (releaseHeldSaves), and the page may already be the estimator's.
+      if (verdict === "not-the-saved-copy" && !stopped) backToFiles();
     })();
     const settled = Promise.all(
       [TW.draftReady, window.TWAuth && window.TWAuth.ready, _firstDocLoad, _notesReady, asked]
@@ -7323,14 +7338,23 @@
     if (leaving) return;                                  // on its way back to the Files page
     if (btn) { btn.disabled = false; btn.textContent = label; }
     // Unasked (the 20 s ran out first) or unanswered is not a yes: the estimator is not told to
-    // press Continue, which would save this copy, until the server has said it may. Their Continue
-    // is asked the same question again when it saves.
+    // press Continue, which would save this copy, until the server has said it may.
+    //
+    // AND THE PAGE IS THE ESTIMATOR'S FROM HERE (TW.releaseHeldSaves). It used to hold every save
+    // for as long as they worked on it, with nothing on screen to say so: no autosave, nothing as
+    // the tab closed, and the first Continue after any change on the server, even Troy marking the
+    // job Won, went back to a Files card whose one button dropped everything typed (review of fix
+    // 4, round 3). So the server is asked once more now; on a yes the page's copy is saved and it
+    // saves as every page does. Could it not be asked, the hold stays, and the note says so.
     if (timedOut || !templateVersion || verdict !== "ok") {
-      repaintNote(verdict === "unread"
-        ? "The saved copy of this project could not be read, so the proposal was not rebuilt for you."
-        : "The Files page needs this proposal rebuilt from your latest changes, and it could not be done for you.",
-        verdict === "ok" ? "Check the document below, then press Continue to Done."
-                         : "Check your connection, then reload this page.");
+      stopped = true;
+      const freed = await TW.releaseHeldSaves();
+      if (leaving) return;                                // the server held another copy: gone back
+      repaintNote(freed
+        ? "The Files page needs this proposal rebuilt from your latest changes, and it could not be done for you."
+        : "The saved copy of this project could not be read, so the proposal was not rebuilt for you.",
+        freed ? "Check the document below, then press Continue to Done."
+              : "Check your connection, then reload this page. Until then, nothing you change on this page is saved.");
       return;
     }
     await continueToDone(null);

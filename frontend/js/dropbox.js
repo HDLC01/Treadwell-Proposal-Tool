@@ -430,6 +430,10 @@
         // it back on the NEXT filing to know which files in Kyle's folder are ours to
         // overwrite — without it our own estimate sheet looks like a human's and gets
         // saved beside itself as "… (1).xlsx", every single send.
+        //
+        // `alreadyOnServer`: a copy in step with the server stays in step. Without it the
+        // record of what the server holds was left behind, and opening another project PUT
+        // this copy back over a colleague's later revision (review of fix 4, round 3).
         try {
           TW.setLocalState({ dropbox_result: {
             destination: dest.value,
@@ -438,7 +442,7 @@
             xlsx_url: j.xlsx_url, docx_url: j.docx_url, pdf_url: j.pdf_url,
             existing: !!j.existing,
             written_paths: Array.isArray(j.written_paths) ? j.written_paths : [],
-            renamed: Array.isArray(j.renamed) ? j.renamed : [] } });
+            renamed: Array.isArray(j.renamed) ? j.renamed : [] } }, { alreadyOnServer: true });
         } catch {}
       } catch (err) {
         result.style.display = "";
