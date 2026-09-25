@@ -1668,23 +1668,160 @@ def _flatten_price_bullets(d: Document) -> int:
     return n
 
 
-def _space_before_options(d: Document, n: int = 2) -> int:
-    """Insert `n` blank paragraphs before the PRICE "Options" heading so the
-    base-bid Total isn't cramped against the Options section (Kyle: double
-    spacing after the Total). Runs AFTER block expansion + substitution over
-    body + text-box paragraphs; targets the first standalone "Options" heading.
-    No-op for a bid with no options (no heading to anchor to). Blank paragraphs
-    inherit the document default height — enough to read as clean line breaks."""
-    # Insert before EVERY standalone "Options" heading — a floating text box is
-    # duplicated across mc:Choice (DrawingML) + mc:Fallback (VML), and different
-    # renderers (Word vs LibreOffice→PDF) pick different copies, so both need the
-    # spacing to stay consistent.
-    targets = [p for p in d.element.body.iter(qn("w:p"))
-               if "".join(t.text or "" for t in p.iter(qn("w:t"))).strip() == "Options"]
-    for target in targets:
+# ─── The blank lines above the PRICE "Options" heading ─────────────────────
+# Hanz, 2026-09-25, in the Proposal step's price box: "I cant edit this part" / "I cant back space
+# before options". The gap he was looking at was not there: the editor drew it as a 24pt top
+# MARGIN on the heading, so there was nothing to put a caret on and nothing for Backspace to take,
+# and the document printed no gap at all on the Epoxy and Combo Direct files. The helper this
+# replaces inserted its blank paragraphs only before a heading reading exactly "Options"; those two
+# templates say "Options:", so it matched nothing there, and on Polish (which says "Options ") it
+# added two bare <w:p/> at the 12pt document default instead of the box's 9pt.
+#
+# Now the gap is a NUMBER of real blank lines, `price_overrides.options_gap` on the draft, and the
+# editor draws exactly that many line elements the caret can sit on. A payload saved before the
+# key existed prints the 2 the editor has always shown.
+OPTIONS_GAP_DEFAULT = 2
+OPTIONS_GAP_MAX = 20
+
+# Where the heading is, marked on the PRISTINE template and carried through block expansion by
+# deepcopy (a clone keeps its attributes), then stripped again before the save
+# (`_apply_options_gap`), so it never reaches a file. Anchoring on the paragraph rather than on its
+# words is the whole point: the heading reads "Options:", "Options " or "Options & Unit Prices"
+# depending on the file, and the estimator can rewrite it.
+#
+# In the `w:` namespace, deliberately. An attribute in a namespace of its own makes lxml declare
+# that namespace ON the paragraph, and deleting the attribute leaves the declaration behind in the
+# customer's file. `w:` is declared on the document root, so nothing is added and nothing remains.
+_OPTIONS_HEADING_ATTR = qn("w:twOptionsHeading")
+# The GC files have no {{#has_options}} region: their heading is a plain paragraph that always
+# prints. Only consulted for a template with no such region anywhere.
+_OPTIONS_FREE_HEADING_RE = re.compile(r"^\s*options\b", re.IGNORECASE)
+# What makes a paragraph more than an empty line when it is printed.
+_NOT_BLANK_TAGS = tuple(qn(t) for t in (
+    "w:br", "w:cr", "w:tab", "w:sym", "w:drawing", "w:pict", "w:object", "w:txbxContent"))
+
+
+def options_heading_paragraphs(d: Document) -> list:
+    """Every PRICE "Options" heading `<w:p>` in `d`, in every copy the file carries (the body, table
+    cells, and each text box's `w:txbxContent`, the VML `mc:Fallback` twin included).
+
+    Call it on the PRISTINE template. A `{{#has_options}}` region's heading is the first paragraph
+    inside it with words of its own that is not a block marker. A template with no such region at
+    all (the GC files) has its heading as a free text-box paragraph starting with "Options" instead.
+    Same per-container block stack as `_free_remodel_rows`."""
+    body = d.element.body
+    containers = [body] + list(body.iter(qn("w:tc"))) + list(body.iter(qn("w:txbxContent")))
+    in_region: list = []
+    free: list = []
+    for container in containers:
+        in_txbx = container.tag == qn("w:txbxContent")
+        stack: list[str] = []
+        looking = False
+        for child in list(container):
+            if child.tag != qn("w:p"):
+                continue
+            txt = _own_text(child)
+            start_m = BLOCK_START_RE.search(txt)
+            end_m = BLOCK_END_RE.search(txt)
+            if start_m:
+                stack.append(start_m.group(1))
+                if start_m.group(1) == "has_options":
+                    looking = True
+            elif looking and "has_options" in stack and not end_m and txt.strip():
+                in_region.append(child)
+                looking = False
+            elif not stack and in_txbx and _OPTIONS_FREE_HEADING_RE.search(txt):
+                free.append(child)
+            if end_m and stack and stack[-1] == end_m.group(1):
+                if stack.pop() == "has_options":
+                    looking = False
+    return in_region if in_region else free
+
+
+def _mark_options_headings(d: Document) -> int:
+    """Tag each Options heading on the pristine template (see `_OPTIONS_HEADING_ATTR`)."""
+    heads = options_heading_paragraphs(d)
+    for p in heads:
+        p.set(_OPTIONS_HEADING_ATTR, "1")
+    return len(heads)
+
+
+def _is_blank_spacer(p_elem) -> bool:
+    """A paragraph that prints as one empty line: no words, and nothing else that draws or breaks."""
+    if p_elem is None or p_elem.tag != qn("w:p"):
+        return False
+    if _own_text(p_elem).strip():
+        return False
+    return not any(next(p_elem.iter(tag), None) is not None for tag in _NOT_BLANK_TAGS)
+
+
+def _blank_like(model) -> Any:
+    """An empty paragraph carrying `model`'s paragraph properties and its 9pt run properties.
+
+    Not a bare `<w:p/>`: that prints at the 12pt document default, so the gap came out taller
+    than the price rows around it and taller than the editor draws it. The paragraph MARK's run
+    properties (`w:pPr/w:rPr`) are what size an empty line in Word and LibreOffice alike, so they
+    are copied from the model row's own mark, or from its first text run when the mark has no
+    size. Numbering is taken off: a blank line with the row's bullet would print a lone bullet."""
+    p = OxmlElement("w:p")
+    src = model.find(qn("w:pPr")) if model is not None else None
+    ppr = copy.deepcopy(src) if src is not None else OxmlElement("w:pPr")
+    for tag in ("w:numPr", "w:sectPr", "w:pageBreakBefore", "w:pPrChange"):
+        for el in ppr.findall(qn(tag)):
+            ppr.remove(el)
+    mark = ppr.find(qn("w:rPr"))
+    if (mark is None or mark.find(qn("w:sz")) is None) and model is not None:
+        run_rpr = next((r.find(qn("w:rPr")) for r in model.findall(qn("w:r"))
+                        if r.find(qn("w:t")) is not None and r.find(qn("w:rPr")) is not None), None)
+        if run_rpr is not None:
+            if mark is not None:
+                ppr.remove(mark)
+            ppr.append(copy.deepcopy(run_rpr))      # last: sectPr/pPrChange were taken out above
+    p.append(ppr)
+    return p
+
+
+def options_gap_count(value) -> int:
+    """`price_overrides.options_gap` as the number of blank lines to print. Anything that is not a
+    whole number (absent included) is the default the editor has always shown; clamped to 0..MAX.
+    Same rule as the editor's `optionsGapCount`."""
+    n = None
+    if isinstance(value, bool):
+        n = None
+    elif isinstance(value, int):
+        n = value
+    elif isinstance(value, float) and value.is_integer():
+        n = int(value)
+    elif isinstance(value, str) and re.fullmatch(r"[0-9]+", value.strip()):
+        n = int(value.strip())
+    if n is None:
+        return OPTIONS_GAP_DEFAULT
+    return max(0, min(OPTIONS_GAP_MAX, n))
+
+
+def _apply_options_gap(d: Document, n) -> int:
+    """Print EXACTLY `n` blank lines directly above every marked Options heading, in every copy.
+
+    Runs after block expansion, substitution and the price-bullet flatten. A bid with no options
+    has no heading left (its `{{#has_options}}` region was stripped), so this does nothing there.
+    The blank spacer paragraphs a template already has directly above its heading (Gyp and the GC
+    files each carry one) are REPLACED, not added to, so the count is the editor's count. Each new
+    line is modelled on the price row above it (`_blank_like`). Returns the headings spaced."""
+    n = options_gap_count(n)
+    heads = [p for p in d.element.body.iter(qn("w:p")) if p.get(_OPTIONS_HEADING_ATTR) is not None]
+    for head in heads:
+        parent = head.getparent()
+        prev = head.getprevious()
+        while prev is not None and _is_blank_spacer(prev):
+            above = prev.getprevious()
+            parent.remove(prev)
+            prev = above
+        model = prev if (prev is not None and prev.tag == qn("w:p")) else head
         for _ in range(n):
-            target.addprevious(OxmlElement("w:p"))
-    return len(targets)
+            head.addprevious(_blank_like(model))
+    for p in heads:
+        del p.attrib[_OPTIONS_HEADING_ATTR]
+    return len(heads)
 
 
 def _is_total_row(p_elem) -> bool:
@@ -1983,6 +2120,10 @@ def _expand_named_block(container, block_name: str, items: list[Mapping[str, Any
                 # untouched.
                 if block_name == "price_line" and not str(item.get("amount_formatted") or "").strip():
                     _strip_leading_separator(clone)
+                # The combo breakout's restored "Options:" row (main.py) IS the Options heading
+                # on that layout, so it takes the same blank lines above it (_apply_options_gap).
+                if block_name == "price_line" and item.get("_options_heading"):
+                    clone.set(_OPTIONS_HEADING_ATTR, "1")
                 # Blank NOTES line — estimator's Word-style spacing. Drop the
                 # bullet so it renders as an empty line, not an empty bullet dot.
                 if block_name == "notes" and not str(item.get("text") or "").strip():
@@ -3466,6 +3607,7 @@ def fill_proposal(
     paragraph_overrides: list[Mapping[str, Any]] | None = None,
     box_overrides: Mapping[str, Any] | None = None,
     remodel_row: bool = True,
+    options_gap: int | None = None,
 ) -> bytes:
     """Open the matching template, substitute tokens, return docx bytes.
 
@@ -3496,6 +3638,9 @@ def fill_proposal(
     `remodel_row=False` takes out a remodel-tax row the template authors as a FREE
     paragraph (the GC and Gyp files — see `free_tax_rows`), for a job with no remodel
     tax. A `{{#remodel}}` region needs no flag: an empty `remodel` list strips it.
+
+    `options_gap` is how many blank lines print directly above the PRICE Options heading
+    (`price_overrides.options_gap`; None or anything invalid = 2, see `_apply_options_gap`).
     """
     template_path = pick_template(work_type, audience)
     log.info("Filling proposal: work_type=%s audience=%s template=%s systems=%d price_lines=%d alt=%d",
@@ -3508,6 +3653,11 @@ def fill_proposal(
         raise FileNotFoundError(f"Proposal template not found: {template_path}")
 
     d = docx.Document(str(template_path))
+
+    # The Options heading(s), tagged while the template is still pristine: the heading's words can
+    # be rewritten below (Phase 0 / 0.5) and its region is cloned by Phase 1, and the tag survives
+    # both. Adds no paragraph, so no editor id moves.
+    _mark_options_headings(d)
 
     # The free remodel rows, found by their token on the PRISTINE template and taken out only
     # after Phase 0: removing a paragraph before the editor's overrides are applied would shift
@@ -3622,9 +3772,11 @@ def fill_proposal(
     _n_flat = _flatten_price_bullets(d)
     if _n_flat:
         log.info("Flattened %d PRICE bullet row(s)", _n_flat)
-    # Double spacing after the base-bid Total, before the Options section (Kyle).
-    if _space_before_options(d, 2):
-        log.info("Added double spacing before the PRICE Options heading")
+    # The blank lines between the price rows and the Options heading: the estimator's count from
+    # the editor (default 2, Kyle's double spacing after the Total), replacing the template's own.
+    if _apply_options_gap(d, options_gap):
+        log.info("Printed %d blank line(s) before the PRICE Options heading",
+                 options_gap_count(options_gap))
     # Boxes the estimator dragged or resized, FIRST — before the padding and therefore before
     # the shrink, which re-reads template_geometry(d) to decide what overflows. Applying a
     # resize first is what lets the shrink stand down by itself on a box that is now big

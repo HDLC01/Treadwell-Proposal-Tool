@@ -1235,6 +1235,8 @@
         // "Options:" heading visible iff there's ≥1 option or manual price line.
         const oh = document.getElementById("options-heading");
         if (oh) oh.style.display = html.trim() ? "" : "none";
+        // ...and the blank lines above it with it: they print only where the heading does.
+        paintOptionsGap();
       }
       renderOptionLinesPreview();
 
@@ -1746,6 +1748,7 @@
   let templateBlocks  = null;   // blocks from the endpoint (null until loaded)
   let templateVersion = "";
   let templateLegacyFloorS = 0; // oldest pre-hash stamp still this content (see savedVersionMatches)
+  let templateOptionsHeadingIds = [];  // free-paragraph Options heading ids (GC), see paintOptionsGap
   let pageWpt        = 612;    // page width in pt, drives the zoom fit
   let flowMode        = false;  // true = geometry-less fallback rendering
   const blockById     = new Map();   // id -> block record
@@ -1824,7 +1827,8 @@
     notes:      () => [notesPreviewEl],
     room:       () => [document.getElementById("rooms-block")],
     single_bid: () => ["base-bid-heading", "combo-price-block", "base-bid-row",
-                       "sales-tax-row", "remodel-tax-row", "total-row", "options-heading"]
+                       "sales-tax-row", "remodel-tax-row", "total-row", "options-gap",
+                       "options-heading"]
                        .map(id => document.getElementById(id)),
     // Polish / GC templates DON'T wrap the base bid in {{#single_bid}} — "Base Bid"
     // + the base line are plain template blocks (already shown), and the tax lines
@@ -1837,7 +1841,9 @@
     tax_breakout: () => ["sales-tax-row", "remodel-tax-row", "total-row"]
                        .map(id => document.getElementById(id)),
     remodel:      () => [],
-    has_options:  () => [document.getElementById("options-heading")],
+    // The blank lines above the heading travel with it (#options-gap, see paintOptionsGap).
+    has_options:  () => [document.getElementById("options-gap"),
+                         document.getElementById("options-heading")],
     price_line: () => [document.getElementById("price-lines-block")],
     alternate:  () => [document.getElementById("alternate-block")],
   };
@@ -1863,7 +1869,7 @@
   // already in staging and moving them there again is a no-op.
   const ISLAND_IDS = ["rooms-block", "base-bid-heading", "combo-price-block",
                       "base-bid-row", "sales-tax-row", "remodel-tax-row", "total-row",
-                      "options-heading", "price-lines-block", "alternate-block"];
+                      "options-gap", "options-heading", "price-lines-block", "alternate-block"];
   const stagingHome = stagingPanel && stagingPanel.parentNode;
 
   /** Empty the document surface WITHOUT destroying the live price previews.
@@ -5455,6 +5461,10 @@
       templateBlocks = Array.isArray(j.blocks) ? j.blocks : [];
       templateVersion = String(j.template_version || "");
       templateLegacyFloorS = Number(j.template_version_legacy_floor_s) || 0;
+      // A GC file's Options heading is a plain paragraph (no {{#has_options}} region), so the
+      // backend names it; paintOptionsGap draws the blank lines above it there.
+      templateOptionsHeadingIds = Array.isArray(j.options_heading_ids)
+        ? j.options_heading_ids.map(Number).filter(Number.isFinite) : [];
       annotateRegions(templateBlocks);
       blockById.clear();
       templateBlocks.forEach(b => blockById.set(b.id, b));
@@ -6711,6 +6721,236 @@
     if (_povTimer) clearTimeout(_povTimer);
     _povTimer = setTimeout(() => { try { TW.setState({ price_overrides: state.price_overrides }); } catch {} }, 500);
   }
+
+  // ── THE BLANK LINES ABOVE THE OPTIONS HEADING (price_overrides.options_gap) ────────────────
+  /** Hanz, 2026-09-25, in the Proposal step's price box: "I cant edit this part" / "I cant back
+   *  space before options". The gap above "Options:" was a 24pt top MARGIN on the heading: there
+   *  was no line to put a caret on and nothing Backspace could take, and the document printed no
+   *  gap at all on the Epoxy and Combo Direct files, because the writer looked for a heading reading
+   *  exactly "Options" and those two say "Options:".
+   *
+   *  Now the gap is a COUNT of real lines: price_overrides.options_gap on the draft (absent = 2,
+   *  the gap this page has always shown), carried to Download and Send inside
+   *  proposal_payload.price_overrides like every other price edit. This page draws that many empty
+   *  line elements inside the box's editing host (#options-gap) and the writer prints exactly that
+   *  many blank 9pt paragraphs (proposal_writer._apply_options_gap), so what is counted here is what
+   *  prints.
+   *
+   *  The keys, the way Word treats empty paragraphs:
+   *    Backspace at the very start of the heading, or Backspace/Delete on a blank line: one fewer.
+   *    Enter at the end of the price line above the gap, or on a blank line: one more.
+   *  A blank line takes no text, because there is no channel that could carry it, so typing on one
+   *  is refused rather than lost on the next repaint. Nothing else in the box changes.
+   *
+   *  THE TEMPLATE'S OWN SPACER. Gyp and the GC files already carry one empty paragraph directly
+   *  above the heading. The writer REPLACES it with the counted lines, so it is hidden here while
+   *  the heading shows (`tw-gap-absorbed`). Otherwise this page would draw one line more than
+   *  prints. Same rule as the writer's: an empty paragraph, nothing typed in it.
+   *
+   *  The default (2) and the ceiling (20) are the writer's OPTIONS_GAP_DEFAULT and OPTIONS_GAP_MAX,
+   *  and both sides clamp to 0..20 by the same rule (test_options_gap.py checks they agree). */
+  function optionsGapCount() {
+    const pov = state.price_overrides;
+    const v = pov && typeof pov === "object" && !Array.isArray(pov) ? pov.options_gap : undefined;
+    let n = null;
+    if (typeof v === "number" && Number.isInteger(v)) n = v;
+    else if (typeof v === "string" && /^[0-9]+$/.test(v.trim())) n = Number(v.trim());
+    if (n === null) return 2;
+    return Math.max(0, Math.min(20, n));
+  }
+
+  /** The Options heading the gap sits directly above, or null when none is on the page.
+   *
+   *  #options-heading on every template with a {{#has_options}} region (shown only when the bid
+   *  has options, exactly like the document). On the GC files the heading is a plain template
+   *  paragraph that always prints, and the backend names it (`options_heading_ids`). */
+  function optionsHeadingEl() {
+    const oh = document.getElementById("options-heading");
+    if (oh && docSurface.contains(oh) && oh.style.display !== "none") return oh;
+    for (const id of templateOptionsHeadingIds) {
+      const el = docSurface.querySelector('.tw-block[data-id="' + Number(id) + '"]');
+      if (el) return el;
+    }
+    return null;
+  }
+
+  /** What sits above the gap on the page, nearest first. Steps out of a priced region when it runs
+   *  out: on Gyp the gap opens its {{#has_options}} region and the template's spacer is just above
+   *  the region. */
+  function aboveOptionsGap(gap) {
+    const out = [];
+    let node = gap.previousElementSibling;
+    let parent = gap.parentElement;
+    for (;;) {
+      for (; node; node = node.previousElementSibling) out.push(node);
+      if (!parent || !parent.classList || !parent.classList.contains("tw-priced-region")) break;
+      node = parent.previousElementSibling;
+      parent = parent.parentElement;
+    }
+    return out;
+  }
+
+  function gapShown(el) {
+    return !!el && !el.hidden && !(el.style && el.style.display === "none")
+      && !(el.classList && el.classList.contains("tw-gap-absorbed"));
+  }
+
+  /** The line the gap hangs from: the nearest shown line above it. Enter at its end adds a line. */
+  function lineAboveOptionsGap(gap) {
+    for (const n of aboveOptionsGap(gap)) {
+      if (!gapShown(n)) continue;
+      if (lineAt(n) === n) return n;
+      const inner = n.querySelectorAll ? Array.from(n.querySelectorAll(LINE_SEL)).filter(gapShown) : [];
+      if (inner.length) return inner[inner.length - 1];
+    }
+    return null;
+  }
+
+  /** Draw the gap: N empty lines directly above the heading, the template's own spacer hidden.
+   *  Rebuilds the lines only when the count changed, so a caret sitting on one survives the price
+   *  repaints that call this. */
+  function paintOptionsGap() {
+    const gap = document.getElementById("options-gap");
+    if (!gap || !docSurface) return;
+    docSurface.querySelectorAll(".tw-gap-absorbed").forEach(n => n.classList.remove("tw-gap-absorbed"));
+    const head = optionsHeadingEl();
+    if (!head) {
+      if (gap.childNodes.length) gap.innerHTML = "";
+      gap.style.display = "none";
+      return;
+    }
+    if (gap.parentNode !== head.parentNode || gap.nextElementSibling !== head) {
+      head.parentNode.insertBefore(gap, head);
+    }
+    for (const n of aboveOptionsGap(gap)) {
+      if (!gapShown(n)) continue;
+      if (n.classList.contains("tw-block") && /^[ ]*$/.test(serializeBlock(n))) {
+        n.classList.add("tw-gap-absorbed");
+        continue;
+      }
+      break;
+    }
+    const want = optionsGapCount();
+    if (gap.querySelectorAll(".tw-gap-line").length !== want) {
+      let html = "";
+      for (let i = 0; i < want; i++) html += '<p class="tw-gap-line" data-gap-line="' + i + '"><br></p>';
+      gap.innerHTML = html;
+    }
+    gap.style.display = want ? "" : "none";
+  }
+
+  /** The blank line the caret is on, or null. */
+  function caretGapLine() {
+    const sel = typeof window !== "undefined" && window.getSelection ? window.getSelection() : null;
+    if (!sel || !sel.rangeCount) return null;
+    const r = sel.getRangeAt(0);
+    let n = r && r.startContainer;
+    if (n && n.nodeType === 1 && n.id === "options-gap" && n.childNodes.length) {
+      n = n.childNodes[Math.min(r.startOffset || 0, n.childNodes.length - 1)];
+    }
+    if (n && n.nodeType !== 1) n = n.parentNode;
+    return n && n.closest ? n.closest(".tw-gap-line") : null;
+  }
+
+  /** Put the caret on blank line `i`: before its placeholder break, the one place a caret can sit
+   *  on a line with no text. */
+  function caretOntoGapLine(i) {
+    const gap = document.getElementById("options-gap");
+    const line = gap ? gap.querySelectorAll(".tw-gap-line")[i] : null;
+    if (!line) return false;
+    const r = document.createRange();
+    r.setStart(line, 0);
+    r.collapse(true);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(r);
+    return true;
+  }
+
+  /** Store a new count, redraw it, and re-fit the box it changed. Returns the count stored. */
+  function setOptionsGap(n) {
+    const want = Math.max(0, Math.min(20, Math.floor(Number(n) || 0)));
+    let pov = state.price_overrides;
+    if (!pov || typeof pov !== "object" || Array.isArray(pov)) pov = state.price_overrides = {};
+    pov.options_gap = want;
+    paintOptionsGap();
+    const head = optionsHeadingEl();
+    try { fitTxbx(head && head.closest ? head.closest(".tw-txbx") : null); } catch {}
+    queuePovSave();
+    return want;
+  }
+
+  /** The keys (see the section note above). CAPTURE phase, so it runs before the page's own Enter
+   *  and Backspace handlers. What keeps those from ALSO acting (Enter writing a line break into the
+   *  price line's override) is that this moves the caret first: they read the caret, find it on a
+   *  blank line or at the heading's start, and do nothing new. The stopPropagation on top is belt
+   *  and braces for a handler added later, not something today's handlers need; the harness shows
+   *  both outcomes are the same (options-gap-harness.js). */
+  function onOptionsGapKey(e) {
+    if (e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
+    const k = String(e.key || "");
+    const done = () => { e.preventDefault(); e.stopPropagation(); };
+    const gap = document.getElementById("options-gap");
+    const onLine = caretGapLine();
+    if (onLine && gap) {
+      const i = Array.prototype.indexOf.call(gap.querySelectorAll(".tw-gap-line"), onLine);
+      if (k === "Enter") {
+        done();
+        setOptionsGap(optionsGapCount() + 1);
+        caretOntoGapLine(i + 1);
+        return;
+      }
+      if (k === "Backspace" || k === "Delete") {
+        done();
+        const left = setOptionsGap(optionsGapCount() - 1);
+        if (k === "Delete" && i < left && caretOntoGapLine(i)) return;
+        if (k === "Backspace" && i > 0 && caretOntoGapLine(i - 1)) return;
+        // Nothing left on that side: Backspace lands at the end of the line above, Delete at the
+        // start of the heading, as Word leaves them.
+        const above = k === "Backspace" ? lineAboveOptionsGap(gap) : null;
+        const head = optionsHeadingEl();
+        if (above) {
+          const end = runsLength(editRuns(above));
+          placeSelection(above, end, end);
+        } else if (head) placeSelection(head, 0, 0);
+        return;
+      }
+      if (k.length === 1) done();            // a blank line takes no text
+      return;
+    }
+    if (k !== "Enter" && k !== "Backspace") return;
+    const head = optionsHeadingEl();
+    if (!head || !gap) return;
+    if (gap.nextElementSibling !== head) paintOptionsGap();
+    const sel = window.getSelection ? window.getSelection() : null;
+    if (!sel || !sel.rangeCount || !sel.getRangeAt(0).collapsed) return;
+    if (k === "Backspace") {
+      const at = selectionRange(head);
+      if (!at || at[0] !== 0 || at[1] !== 0) return;
+      const n = optionsGapCount();
+      if (n <= 0) return;                    // nothing to take: the page's own refusal stands
+      done();
+      setOptionsGap(n - 1);
+      placeSelection(head, 0, 0);
+      return;
+    }
+    const above = lineAboveOptionsGap(gap);
+    if (!above) return;
+    const at = selectionRange(above);
+    if (!at || at[0] !== at[1] || at[1] < runsLength(editRuns(above))) return;
+    done();
+    setOptionsGap(optionsGapCount() + 1);
+    caretOntoGapLine(0);
+  }
+
+  /** The routes to a blank line that are not a keystroke (an IME, a drop, a context-menu Delete):
+   *  refused, for the same reason typed text is. */
+  function onOptionsGapBeforeInput(e) {
+    if (!caretGapLine()) return;
+    if (/^(insert|delete)/.test(String(e.inputType || ""))) e.preventDefault();
+  }
+  docSurface.addEventListener("keydown", onOptionsGapKey, true);
+  docSurface.addEventListener("beforeinput", onOptionsGapBeforeInput, true);
 
   function _handlePoInput(e) {
     // WHOLE-LINE edit: the whole <p> is contenteditable (base / tax / total /

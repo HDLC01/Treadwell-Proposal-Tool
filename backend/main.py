@@ -4801,6 +4801,15 @@ def _sanitize_price_overrides(pov_in) -> dict:
             s = str(v)
             if s.strip():
                 out["lines"][str(k)[:120]] = s[:_PRICE_OVERRIDE_FIELD_MAXLEN]
+
+    # How many blank lines sit directly above the Options heading: a real count the editor draws as
+    # real lines and the writer prints as real paragraphs (proposal_writer._apply_options_gap).
+    # Kept only when the draft states one, so a payload saved before the key existed stays exactly
+    # as it was and prints the writer's default of 2 -- the gap the editor has always shown.
+    if "options_gap" in pov_in and pov_in.get("options_gap") is not None:
+        v = pov_in.get("options_gap")
+        if not isinstance(v, (dict, list)):
+            out["options_gap"] = proposal_writer.options_gap_count(v)
     return out
 
 
@@ -5124,8 +5133,16 @@ def api_proposal_template(request: Request, work_type: str = "epoxy", audience: 
     # Original templates differ on whether the value after a WORK label colon
     # inherits bold. Normalize preview metadata to the generated DOCX.
     proposal_writer._normalize_work_label_formatting(d)
+    # The Options heading(s) the writer spaces from above. Only a FREE one (the GC files, where the
+    # heading is a plain paragraph) is a block the editor renders itself; a {{#has_options}}
+    # heading is the editor's own #options-heading. Held as a set so the walk below keeps the
+    # same element proxies alive and membership is by element identity.
+    _options_heads = set(proposal_writer.options_heading_paragraphs(d))
+    options_heading_ids = []
     blocks = []
     for idx, kind, p_elem, in_block, text, txbx_idx in proposal_writer.iter_editable_blocks(d):
+        if in_block is None and p_elem in _options_heads:
+            options_heading_ids.append(idx)
         p = Paragraph(p_elem, d)
         style_name = None
         try:
@@ -5177,6 +5194,11 @@ def api_proposal_template(request: Request, work_type: str = "epoxy", audience: 
         "template_version_legacy_floor_s": template_versions.legacy_floor_s(template_path),
         "geometry": proposal_writer.template_geometry(d),
         "blocks": blocks,
+        # Ids of the free-paragraph Options heading(s), so the editor can draw the blank lines
+        # above it (price_overrides.options_gap) exactly where the writer prints them. Top-level
+        # rather than a per-block field: the block shape, which _BLOCK_SCHEMA_VERSION pins, is
+        # unchanged, and a browser holding an older body simply draws no gap lines on GC.
+        "options_heading_ids": options_heading_ids,
     }
     # Built through JSONResponse so the cached bytes ARE the bytes this
     # endpoint has always sent — same encoder, same separators, same
@@ -5775,7 +5797,10 @@ def _generate(payload: GenerateIn, request: Request, *,
         # there's nothing after the breakout — an empty "Options:" would have
         # nothing to introduce.
         if price_line_dicts:
-            _combo_lines = _combo_lines + [{"label": "Options:", "amount_formatted": ""}]
+            # `_options_heading`: this row IS the Options heading on this layout, so the blank
+            # lines the estimator set above the heading print above it (options_gap).
+            _combo_lines = _combo_lines + [{"label": "Options:", "amount_formatted": "",
+                                            "_options_heading": True}]
         price_line_dicts = _combo_lines + price_line_dicts
 
     # The {{#room}} block is unused now (options ride the price_line block) — strip it.
@@ -5979,6 +6004,8 @@ def _generate(payload: GenerateIn, request: Request, *,
             # Version-guarded above (stale template_version -> dropped).
             paragraph_overrides=_sanitize_paragraph_overrides(_para_overrides),
             box_overrides=_box_overrides,
+            # The blank lines above the Options heading, as the editor drew them (absent = 2).
+            options_gap=_pov.get("options_gap"),
         )
     except FileNotFoundError as exc:
         raise HTTPException(500, str(exc)) from exc
