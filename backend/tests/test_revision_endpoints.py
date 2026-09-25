@@ -67,6 +67,11 @@ def test_rebuilds_documents_from_the_snapshot(monkeypatch):
     snapshot_payload = {"values": {"project_name": "Westport"}, "work_type": "epoxy"}
     monkeypatch.setattr(main.drafts, "get_revision",
                         lambda did, no: {"revision_no": no, "data": {"proposal_payload": snapshot_payload}})
+    # A revision sent before draft_revision_documents existed: nothing stored, so it is rendered
+    # from its snapshot. Stubbed because these tests have no database — and an unreadable store is
+    # no longer read as "nothing stored" (that is kept for a missing TABLE; any other failure is a
+    # 503, see test_send_equals_download.py).
+    monkeypatch.setattr(main.drafts, "get_revision_documents", lambda did, no: None)
 
     # **kw, not a fixed signature: _generate grows keyword-only options (persist,
     # want_estimate) and a stub that enumerates them turns each new one into a TypeError
@@ -123,6 +128,11 @@ def test_proposal_pdf_renders_a_specific_revision(monkeypatch):
     monkeypatch.setitem(os.environ, "SERVICE_TOKEN", "svc-test")
     monkeypatch.setattr(main.drafts, "get_revision",
                         lambda did, no: {"data": {"proposal_payload": {"values": {"project_name": "Snap"}}}})
+    # A revision sent before draft_revision_documents existed: nothing stored, so it is rendered
+    # from its snapshot. Stubbed because these tests have no database — and an unreadable store is
+    # no longer read as "nothing stored" (that is kept for a missing TABLE; any other failure is a
+    # 503, see test_send_equals_download.py).
+    monkeypatch.setattr(main.drafts, "get_revision_documents", lambda did, no: None)
     monkeypatch.setattr(main.drafts, "load_draft",
                         lambda did: {"data": {"proposal_payload": {"values": {"project_name": "LIVE"}}}})
     seen = {}

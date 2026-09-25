@@ -57,13 +57,47 @@ def test_the_file_is_built_by_the_route_send_uses_after_the_save_lands(ran):
     assert s["body"] == {}, "the page sent its own copy of the payload: %r" % (s["body"],)
 
 
-def test_the_new_build_is_recorded_and_the_card_repainted(ran):
-    """`generate_result` stays as history (the Projects list reads has_files off it) and the card's
-    price is the figure of the payload just built."""
+def test_the_new_build_is_remembered_locally_and_never_written_to_the_draft(ran):
+    """The press remembers its build in THIS browser (setLocalState) and never calls setState,
+    which PUTs the page's whole blob — a blob that can be older than the server's copy (the proof
+    against the real shared.js is in test_files_stale_page.py). The server records has_files itself.
+
+    Mutation: record the build with TW.setState again — "setState" appears in the log."""
     s = ran["stale"]
+    assert "setState" not in s["log"], s["log"]
+    assert "setLocalState" in s["log"], s["log"]
     assert s["kept"]["pdf_download_url"] == "/api/file/NEW/pdf"
-    assert s["stamp"] == "$41,250.00"
     assert s["painted"] == 1
+
+
+def test_the_card_shows_the_total_the_server_rendered(ran):
+    """The server rendered ITS copy of the payload, which is not always the page's. The card's
+    figure is the one that copy printed ($44,000.00), not the page's own ($41,250.00).
+
+    Mutation: stamp builtAt(the page's payload) — the page's figure comes back."""
+    assert ran["stale"]["stamp"] == "$44,000.00"
+    assert ran["generate"]["stamp"] == "$44,000.00"
+
+
+def test_the_downloaded_file_is_the_document_send_will_be_checked_against(ran):
+    """downloadAs keeps the render_id of the file it fetched, for Send to hand back.
+
+    Mutation: drop the `checkedDocument.renderId =` line — it stays empty."""
+    assert ran["stale"]["checked"] == "K-NEW"
+
+
+def test_a_download_that_failed_checked_nothing(ran):
+    """Recorded only after the file came back: a 404 is not a document anybody read.
+
+    Mutation: record the id before the `resp.ok` check — the 404 scenario records it."""
+    assert ran["notFound"]["checked"] == ""
+
+
+def test_a_draft_with_no_payload_is_recorded_as_before(ran):
+    """The /api/generate rebuild (no saved payload, so nothing Send could freeze) keeps its old
+    write: the page's own fields are what that route was handed and persisted anyway."""
+    n = ran["noPayload"]
+    assert "setState" in n["log"] and "setLocalState" not in n["log"], n["log"]
 
 
 def test_a_save_that_cannot_land_builds_nothing(ran):
@@ -101,7 +135,8 @@ def test_the_generate_button_renders_the_saved_payload(ran):
     assert g["posted"] == ["/api/draft/d1/documents"], g["posted"]
     assert g["log"][0] == "flush"
     assert g["shown"] and g["shown"][0]["pdf_download_url"] == "/api/file/NEW/pdf"
-    assert g["pre"] == "none" and g["stamp"] == "$41,250.00"
+    assert g["pre"] == "none"
+    assert "setState" not in g["log"], g["log"]
 
 
 def test_no_draft_id_falls_back_to_the_pages_own_payload(ran):

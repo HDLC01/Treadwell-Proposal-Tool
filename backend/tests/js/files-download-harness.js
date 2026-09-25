@@ -8,7 +8,10 @@
 // WHAT IS PINNED: a Download press builds its file NOW, from the SAVED draft, through the server
 // route Send uses (/api/draft/{id}/documents), after the page's pending save is flushed — and never
 // fetches the token kept in `generate_result` from an earlier build. Hanz, 2026-09-25: "Sending out
-// the proposal should be the same PDF from the download button in the last page."
+// the proposal should be the same PDF from the download button in the last page." The press
+// records the build LOCALLY only (setLocalState, never setState) and keeps the render_id of the
+// file that came back in `checkedDocument`, which Send hands to the server. That the press writes
+// nothing to the server is proven against the REAL shared.js in files-stale-page-harness.js.
 "use strict";
 
 const fs = require("fs");
@@ -48,8 +51,11 @@ const GENERATE = lift("doGenerate");
 
 const OLD = { work_type: "epoxy", xlsx_download_url: "/api/file/OLDX",
               docx_download_url: "/api/file/OLD", pdf_download_url: "/api/file/OLD/pdf" };
+// `document_total` deliberately NOT the page's own figure ($41,250.00, below): the server rendered
+// ITS copy of the payload, and the card must show what that copy printed.
 const NEW = { work_type: "epoxy", xlsx_download_url: "/api/file/NEWX",
-              docx_download_url: "/api/file/NEW", pdf_download_url: "/api/file/NEW/pdf" };
+              docx_download_url: "/api/file/NEW", pdf_download_url: "/api/file/NEW/pdf",
+              render_id: "K-NEW", document_total: "$44,000.00" };
 
 /** One page's worth of collaborators. `log` is the order everything happened in. */
 function page(opts) {
@@ -62,6 +68,7 @@ function page(opts) {
     flushState: async () => { log.push("flush"); return opts.flushOk !== false; },
     getState: () => st,
     setState: (p) => { st = Object.assign({}, st, p); log.push("setState"); return st; },
+    setLocalState: (p) => { st = Object.assign({}, st, p); log.push("setLocalState"); return st; },
     getDraftId: () => (opts.draftId === undefined ? "d1" : opts.draftId),
     postJSON: async (p, body) => {
       log.push("post " + p);
@@ -91,9 +98,11 @@ function page(opts) {
     "TW", "payloadFromDraft", "builtAt", '"use strict"; ' + FRESH.body)
     .bind(null, TW, payloadFromDraft, builtAt);
   let painted = 0;
+  // done.js's module-level record of the document the estimator downloaded (Send reads it).
+  const checkedDocument = { renderId: "" };
   const downloadAs = new AsyncFunction(
     ...DOWNLOAD.args, "TW", "freshDocuments", "paintLumpSum", "fetch", "Blob", "URL", "document",
-    "setTimeout", "icon", "console", '"use strict"; ' + DOWNLOAD.body);
+    "setTimeout", "icon", "console", "checkedDocument", '"use strict"; ' + DOWNLOAD.body);
   const shown = [];
   const preEl = { style: { display: "" } };
   // `TW` and `state` are bound although doGenerate no longer reads them: the page has both at
@@ -106,9 +115,10 @@ function page(opts) {
     log, posted, fetched, clicked, shown, preEl,
     state: () => st,
     painted: () => painted,
+    checked: () => checkedDocument.renderId,
     download: (key, name, button) => downloadAs(
       key, name, button, TW, freshDocuments, () => { painted++; }, fetchStub, BlobStub, URLStub,
-      documentStub, () => 0, () => "", { error() {} }),
+      documentStub, () => 0, () => "", { error() {} }, checkedDocument),
     generate: () => doGenerate(documentStub, freshDocuments, preEl,
                                (r) => shown.push(r), () => {}, TW, st),
   };
@@ -130,7 +140,7 @@ const SAVED = { values: { total_formatted: "$41,250.00", project_name: "Niagara"
     out.stale = { log: p.log, fetched: p.fetched, posted: p.posted.map((x) => x.path),
                   body: p.posted.length ? p.posted[0].body : null, clicked: p.clicked,
                   kept: p.state().generate_result, stamp: p.state().generated_lump_sum,
-                  painted: p.painted(), html: b.innerHTML };
+                  painted: p.painted(), html: b.innerHTML, checked: p.checked() };
   }
 
   // B. A save that cannot land builds nothing.
@@ -148,7 +158,8 @@ const SAVED = { values: { total_formatted: "$41,250.00", project_name: "Niagara"
     const b = button();
     await p.download("docx_download_url", "x.docx", b);
     const body = p.posted.length ? p.posted[0].body : {};
-    out.noPayload = { posted: p.posted.map((x) => x.path), fetched: p.fetched,
+    out.noPayload = { posted: p.posted.map((x) => x.path), fetched: p.fetched, log: p.log,
+                      stamp: p.state().generated_lump_sum,
                       workType: body.work_type, audience: body.audience,
                       letter: body.cover_letter_enabled, notes: body.notes,
                       valuesName: body.values && body.values.project_name };
@@ -160,7 +171,7 @@ const SAVED = { values: { total_formatted: "$41,250.00", project_name: "Niagara"
     const b = button();
     await p.download("pdf_download_url", "x.pdf", b);
     out.notFound = { posted: p.posted.map((x) => x.path), fetched: p.fetched,
-                     button: b.textContent };
+                     button: b.textContent, checked: p.checked() };
   }
 
   // E. The Generate button renders the SAVED payload too.

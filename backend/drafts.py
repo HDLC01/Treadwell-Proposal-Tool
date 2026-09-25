@@ -269,6 +269,33 @@ def set_notify_picks(draft_id: str, add: List[str], mute: List[str],
     return True
 
 
+def record_generate_result(draft_id: str, result: Dict[str, Any]) -> bool:
+    """Record that this project's files have been built, when nothing has recorded it yet.
+
+    `generate_result` is what `has_files` reads (see `_build_summaries`), and `has_files` is what
+    puts a project in the Active Projects board's "Created but not sent" column. The Files page
+    used to record it with TW.setState, which PUTs the page's WHOLE blob — and that page can be
+    holding an older copy of the draft than the server's, so the write that recorded "files exist"
+    also wrote a colleague's newer revision away. /api/draft/{id}/documents records it here instead,
+    on the server's own copy, touching this one key.
+
+    Only when absent or null (a Continue that changed the cover letter nulls it on purpose, and a
+    build after that is a build). Never overwritten once present: only its existence is read.
+    Same posture as `set_won`: no `updated_at` bump, because building files is not an edit.
+    Returns True when it wrote."""
+    sb = get_client()
+    cur = sb.table("drafts").select("data").eq("id", draft_id).limit(1).execute()
+    if not cur.data:
+        return False
+    data = dict(cur.data[0].get("data") or {})
+    if data.get("generate_result"):
+        return False
+    data["generate_result"] = result
+    sb.table("drafts").update({"data": data}).eq("id", draft_id).execute()
+    _cache_clear()
+    return True
+
+
 def get_notify_picks(draft_id: str) -> Dict[str, Any]:
     """The stored deviations plus the project's owner: {"add": [...], "mute": [...], "owner_email"}.
 

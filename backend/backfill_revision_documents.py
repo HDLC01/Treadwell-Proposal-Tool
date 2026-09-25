@@ -30,6 +30,15 @@ It also WARNS about a revision whose `template_version` the current template ref
 would drop that revision's paragraph edits. Fix 1 accepts every stamp taken against today's
 template content, so none is expected; read the dry run for them before applying.
 
+And it WARNS about a revision whose template prints a Remodel Tax row with Remodel off. The three
+GC templates and the Gyp template author their tax rows as plain paragraphs no flag can strip, so
+today they print "$0 – Remodel Tax" on a job with no remodel tax, against Hanz's rule ("If remodel
+tax is off then in the broken out option in the Proposal, there is no remodel tax but there is
+material sales tax"). Storing such a revision freezes that row for good; the only way to correct
+it afterwards is a revised send. Whether to run this before or after the remodel-row fix lands is
+Hanz's call (freeze what those customers were sent, or what the rule says), so the dry run lists
+them and the decision is made with the list in hand.
+
     docker exec -w /app treadwell-proposal-tool python backfill_revision_documents.py           # dry run
     docker exec -w /app treadwell-proposal-tool python backfill_revision_documents.py --apply   # writes
 
@@ -82,6 +91,20 @@ def _stale_edits(main, payload: Dict[str, Any]) -> Optional[str]:
         stamp, path.name)
 
 
+def _remodel_row_while_off(main, payload: Dict[str, Any]) -> Optional[str]:
+    """Why this revision's stored render would print a Remodel Tax row with Remodel off, or None.
+
+    Asked of the TEMPLATE, the same way the render asks it (`template_free_tax_rows`), so this
+    reports exactly the case the render cannot strip. No render needed, so the dry run can say it."""
+    gi = main.GenerateIn(**payload)
+    if gi.remodel:
+        return None
+    if not main.proposal_writer.template_free_tax_rows(gi.work_type, gi.audience)["remodel"]:
+        return None
+    return ("its %s/%s template prints a Remodel Tax row with Remodel off ($0) — storing it "
+            "freezes that row" % (gi.work_type, gi.audience))
+
+
 def main(argv: List[str]) -> int:
     ap = argparse.ArgumentParser(
         description="Store the PDF of every portal proposal's current revision.")
@@ -125,8 +148,8 @@ def main(argv: List[str]) -> int:
             print("  SKIP  %-38s rev %-3d SIGNED — the portal's signed contract is the authority"
                   % (name, rev_no))
             continue
-        why = _stale_edits(app, pp)
-        print("  %s %-38s rev %-3d %s" % ("WARN " if why else "STORE", name, rev_no, why or ""))
+        why = "; ".join(r for r in (_stale_edits(app, pp), _remodel_row_while_off(app, pp)) if r)
+        print("  %s %-38s rev %-3d %s" % ("WARN " if why else "STORE", name, rev_no, why))
         todo.append((pid, rev_no, pp))
 
     print("\n%d pinned revisions; %d to store." % (len(pinned), len(todo)))

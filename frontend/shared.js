@@ -71,6 +71,27 @@
     return merged;
   }
 
+  /** setState for THIS BROWSER ONLY: the same merge and the same refusal, and NO server save.
+   *
+   *  For a fact the server has already recorded itself, which this page only needs to remember.
+   *  A setState would PUT the page's whole blob to say it — and the blob can be older than the
+   *  server's copy, because initDraftSync does not re-read a blob already stamped for this draft.
+   *  That is how pressing Download on the Files page wrote a colleague's newer revision away: the
+   *  press recorded `generate_result` with setState, and the PUT carried the page's stale proposal
+   *  along with it. The next real edit on this page still PUTs everything, this included. */
+  function setLocalState(partial) {
+    const id = getDraftId();
+    const cur = getState();
+    if (cur[STAMP] && id && cur[STAMP] !== id) {
+      console.warn("[TW] refused local state write: blob owned by draft", cur[STAMP], "but page is on", id);
+      return cur;
+    }
+    const merged = Object.assign(cur, partial || {});
+    if (id) merged[STAMP] = id;
+    writeBlob(merged);
+    return merged;
+  }
+
   function clearState() {
     // Start a fresh project: clear LOCAL state only. We intentionally do NOT
     // delete the server draft — projects are unified + persistent (shared with
@@ -1090,6 +1111,7 @@
     clampPanelPos,
     getState,
     setState,
+    setLocalState,
     flushState,
     saveBlocked,
     saveBlockedSay,

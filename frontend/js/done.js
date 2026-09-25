@@ -152,6 +152,17 @@
     }
   }
 
+  /** The document the estimator CHECKED: the `render_id` of the last file downloaded on this page.
+   *
+   *  Send hands it back as `document_render_id`, and the server refuses the send unless the
+   *  document it is about to freeze has the same key — so a colleague's save, an older copy of
+   *  this page written back, or a deploy landing between the Download and the Send can no longer
+   *  freeze a document nobody looked at. Held in memory, for this page view only: a download is a
+   *  check of what was on screen then, and a key remembered across visits would refuse next
+   *  week's revised send for having changed, which is the point of revising. Empty until a
+   *  download succeeds, and then Send carries nothing and is checked as it always was. */
+  const checkedDocument = { renderId: "" };
+
   /** THE FILES, BUILT WHEN THEY ARE ASKED FOR, FROM THE SAVED DRAFT.
    *
    *  Hanz, 2026-09-25: "Sending out the proposal should be the same PDF from the download button
@@ -163,14 +174,22 @@
    *
    *  So every button on this page asks for its files fresh: flush this page's pending save, then
    *  POST /api/draft/{id}/documents, which renders the STORE'S copy of `proposal_payload` through
-   *  the same server function Send uses, memoised under that payload's hash. A Download pressed
-   *  before Send is the file Send freezes, by construction rather than by timing. `generate_result`
-   *  is still written — the Projects list reads `has_files` off it — but nothing on this page
-   *  downloads from it any more.
+   *  the same server function Send uses. What ties a Download to the Send after it is the
+   *  `render_id` the answer carries (which payload, templates and code built the file): downloadAs
+   *  keeps it in `checkedDocument`, Send hands it back, and the server refuses a send whose
+   *  document no longer has that key. Nothing on this page downloads from `generate_result`.
+   *
+   *  AND NOTHING ON THIS PATH WRITES THE DRAFT. This page's copy of the draft can be OLDER than
+   *  the server's — initDraftSync does not re-read a blob already stamped for this draft, so a
+   *  colleague's Continue on another computer never reaches it — and TW.setState PUTs the whole
+   *  blob. Recording the build with setState therefore wrote the colleague's revision away on
+   *  every Download press. The server records `has_files` itself (/documents), and this page only
+   *  remembers the build locally. The card's figure is the one the SERVER rendered
+   *  (`document_total`), not this page's copy of it.
    *
    *  A draft with NO saved payload (never Continued through the Proposal step) has nothing Send
    *  could freeze either: its files are rebuilt from the draft's own fields, as View files always
-   *  rebuilt them. */
+   *  rebuilt them, and recorded as they always were. */
   async function freshDocuments() {
     if (!await TW.flushState()) {
       throw new Error("Couldn't save your latest changes, so the files were not built — "
@@ -179,14 +198,13 @@
     const st = TW.getState() || {};
     const draftId = TW.getDraftId();
     const pp = st.proposal_payload;
-    let out, built;
     if (draftId && pp && pp.values) {
-      out = await TW.postJSON("/api/draft/" + encodeURIComponent(draftId) + "/documents", {});
-      built = pp;
-    } else {
-      built = payloadFromDraft(st);
-      out = await TW.postJSON("/api/generate", built);
+      const out = await TW.postJSON("/api/draft/" + encodeURIComponent(draftId) + "/documents", {});
+      TW.setLocalState({ generate_result: out, generated_lump_sum: (out && out.document_total) || null });
+      return out;
     }
+    const built = payloadFromDraft(st);
+    const out = await TW.postJSON("/api/generate", built);
     TW.setState({ generate_result: out, generated_lump_sum: builtAt(built) });
     return out;
   }
@@ -1232,6 +1250,9 @@
         // capability URL) — TW.authHeaders() carries Authorization: Bearer.
         const resp = await fetch(TW.absoluteUrl(url), { headers: TW.authHeaders() });
         if (!resp.ok) throw new Error(resp.statusText || ("HTTP " + resp.status));
+        // This is the document the estimator is about to read, so it is the one Send must freeze.
+        // Recorded only once the file itself came back: a failed fetch checked nothing.
+        checkedDocument.renderId = (out && out.render_id) || "";
         // Force a generic type so the browser DOWNLOADS the file under our
         // `a.download` name. If we kept the real type (application/pdf), Chrome's
         // inline PDF viewer hijacks the click, ignores the filename, and saves
@@ -1496,7 +1517,12 @@
                                         // from the standing roster, so an untouched send carries
                                         // nothing and behaves exactly as it always has.
                                         notify_add: notifyPick.adds(),
-                                        notify_mute: notifyPick.mutes() });
+                                        notify_mute: notifyPick.mutes(),
+                                        // The document the estimator downloaded and checked on
+                                        // this page, if any. The server refuses the send when
+                                        // the one it would freeze is not that document (see
+                                        // checkedDocument). Absent, it is not asked.
+                                        document_render_id: checkedDocument.renderId || undefined });
           if (j && j.ok === false) throw new Error(j.error || j.detail || "Send failed.");
           // Only now. Clearing before the request would lose the files on a failed send and leave
           // the estimator re-picking them with no idea they had gone.
