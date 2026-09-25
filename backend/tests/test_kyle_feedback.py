@@ -110,15 +110,29 @@ def test_kyle2_remodel_tax_label_has_no_state_name():
 
 # ── #3 tax-exempt jobs print "(tax exempt)" — end-to-end ───────────────
 def test_kyle3_tax_exempt_phrase_end_to_end():
-    """A tax-exempt job (tax_inclusion in the exempt set) prints "(tax exempt)";
-    a taxable one prints the included-tax phrasing. Computed in api_generate."""
-    exempt = _generate_doc(_vals(tax_inclusion="EXEMPT"))
+    """A tax-exempt job prints "(tax exempt)"; a taxable one prints the included-tax phrasing.
+    Computed in api_generate.
+
+    Since 2026-09-25 "exempt" is the ESTIMATE SHEET's answer (Taxable? = No and Remodel Tax? = No,
+    carried as price_taxable / price_remodel_on), not a label picked on the proposal's tax control
+    (Hanz: "Taxable is where base bid and other options are taxable or not"). A draft saved with
+    the old EXEMPT label on a job whose sheet carries no tax still prints it."""
+    exempt = _generate_doc(_vals(tax_layout="ONE_LINE", price_taxable=False, price_remodel_on=False))
     assert "(tax exempt)" in exempt
     assert "(material sales tax INCLUDED)" not in exempt
+    legacy = _generate_doc(_vals(tax_inclusion="EXEMPT", material_tax_formatted="$0.00",
+                                 tax_amount_formatted="$0.00"))
+    assert "(tax exempt)" in legacy
+    assert "(material sales tax INCLUDED)" not in legacy
 
+    # _vals carries both taxes ($2,639 material sales tax AND $2,639 remodel tax), so one line
+    # says both are in the bid; with no remodel tax it names the material sales tax alone.
     taxable = _generate_doc(_vals(tax_inclusion="INCLUDED"))
     assert "(tax exempt)" not in taxable
-    assert "(material sales tax INCLUDED)" in taxable
+    assert "(Remodel Tax AND material sales tax INCLUDED)" in taxable
+    material = _generate_doc(_vals(tax_inclusion="INCLUDED", tax_amount_formatted="$0.00"))
+    assert "(tax exempt)" not in material
+    assert "(material sales tax INCLUDED)" in material
 
 
 # ── #4 no-site-visit reads "per plans and specifications provided" ─────

@@ -476,11 +476,11 @@
        hear "Saved" without the focus having to move. Empty and `hidden` until a key is pressed --
        a permanent save badge would be a standing claim about a page that has already moved on. -->
   <span id="save-state" class="save-state" role="status" aria-live="polite" hidden></span>
-  <!-- Compact tax-treatment control. The full "Proposal fields" sidebar is
-       hidden (redundant with inline editing), but tax treatment has no inline
-       equivalent and drives the PRICE line + {{base_tax_phrase}}, so it stays
-       here. Two-way synced with the hidden form's tax_inclusion field (see
-       proposal-review.js) so readForm + the doc repaint keep working. -->
+  <!-- Compact tax-LAYOUT control (below). The full "Proposal fields" sidebar is
+       hidden (redundant with inline editing), but the layout has no inline
+       equivalent and drives the PRICE rows + {{base_tax_phrase}}, so it stays
+       here. It is no longer synced to a hidden form field: a pick is stored as
+       `tax_layout` (proposal-review.js wireRibbonTax). -->
   <!-- OPTIONAL, AND OFF UNTIL SOMEBODY ASKS FOR IT. Most bids do not want a cover letter, and a
        customer-facing page that appeared without being asked for is a page nobody proofread.
        Ticking it reveals the letter's own editable page directly above the proposal's in the
@@ -492,12 +492,16 @@
     <input type="checkbox" id="cl-toggle">
     <span>Cover letter</span>
   </label>
-  <label class="ribbon-tax" title="Tax treatment on the base-bid price line">
+  <!-- LAYOUT ONLY (Hanz, 2026-09-25). Whether there IS tax is the estimate sheet's answer —
+       Taxable? for material sales tax, Remodel Tax? for remodel tax, per priced tab — so there is
+       no "Exempt" here any more: an exempt job is one whose sheet says No. This picks how the tax
+       is shown: on one line, or itemised (pre-tax line, the taxes that apply, Total). It defaults
+       to Broken out whenever either tax applies (proposal-review.js taxLayout). -->
+  <label class="ribbon-tax" title="How the tax is shown in the PRICE box. Whether there is tax comes from the estimate sheet's Taxable? and Remodel Tax? answers.">
     <span>Tax</span>
     <select id="tax-treatment-select">
-      <option value="INCLUDED">Included</option>
+      <option value="ONE_LINE">One line</option>
       <option value="BROKEN_OUT">Broken out</option>
-      <option value="EXEMPT">Exempt</option>
     </select>
   </label>
   <button type="button" id="back-btn" class="secondary">← Back to Estimate</button>
@@ -626,18 +630,12 @@
         placeholder="Job-specific WORK note (e.g. VCT &quot;ghosting&quot; warning) — prints as the WORK &quot;Notes:&quot; line"></textarea></div>
     </div>
 
-    <!-- Tax treatment drives {{base_tax_phrase}} + the PRICE layout in the
-         .docx: "Tax exempt" prints "(tax exempt)", "broken out" itemizes. -->
-    <div class="doc-bullet-row">
-      <div class="key">Tax treatment</div>
-      <div>
-        <select name="tax_inclusion" class="doc-input">
-          <option value="INCLUDED">Sales / Remodel tax included (one line)</option>
-          <option value="BROKEN_OUT">Sales tax broken out (itemized)</option>
-          <option value="EXEMPT">Tax exempt</option>
-        </select>
-      </div>
-    </div>
+    <!-- The tax LAYOUT used to live here as a form field (`tax_inclusion`), and the form's persist
+         wrote its first option into every draft that ever opened this page — which made "the
+         estimator never chose" indistinguishable from "the estimator chose one line", so the
+         default could not follow the estimate sheet. It is the ribbon's #tax-treatment-select now,
+         stored as `tax_layout` only when somebody actually picks one (proposal-review.js). -->
+
 
     <!-- NOTES boilerplate, one bullet per line -> the {{#notes}} block -->
     <div class="doc-bullet-row">
@@ -763,7 +761,10 @@
      own script, which reads window.TWCrm as it runs. -->
 <script src="/js/crm-core.js"></script>
 <script src="/js/proposal-format-core.js?v=20260805-1"></script>
-<script src="/js/proposal-review.js?v=20260902-1"></script>
+<!-- The price rule and the live price lines, shared with the document's half through the parity
+     test (backend/price_rules.py). Before the page's script, which reads window.TWPrice. -->
+<script src="/js/price-lines-core.js?v=20260926-1"></script>
+<script src="/js/proposal-review.js?v=20260926-1"></script>
 <!-- AFTER proposal-review.js, always. The cover letter borrows that file's token resolver and its
      "aim at nothing" call for the formatting ribbon, both of which are top-level functions in the
      shared script scope; loaded first it would find neither. Every borrow is feature-detected, so

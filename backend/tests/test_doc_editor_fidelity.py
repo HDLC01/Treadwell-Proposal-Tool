@@ -558,3 +558,33 @@ def test_no_remodel_tax_means_no_remodel_row_on_screen_either(ran):
     assert r["afterFlipOn"]["text"].startswith("$650"), r
     assert r["afterFlipOff"] is False and r["mountedOn"] is True, r
     assert r["collectedOff"] == [], r
+
+
+def test_a_price_row_saved_with_its_figure_frozen_in_follows_the_estimate_again(ran):
+    """Until 2026-09-26 an edited GC / Gyp price row was stored as the text on screen, so the
+    customer's document printed the figure from the day the words were changed. Reopened through
+    the page's own restoreSavedOverrides, a row still carrying TODAY's figure verbatim gets its
+    token back: it is stored as {{material_tax_formatted}} (so the document fills today's) and
+    re-prices on screen when the estimate moves. A row carrying a figure that is NOT today's keeps
+    it — his words, his figure — and is marked, measured against today's estimate, so the
+    estimator sees it and Send asks ("This line says $11,900 but the estimate says $12,560")."""
+    r = ran["frozenPriceRow"]
+    assert r["drawn"]["material"] == "$400 – Material Sales Tax (county rate)", r
+    assert r["drawn"]["materialCue"]["off"] is False, r
+    assert r["collected"][0] == {"id": 57, "text": "{{material_tax_formatted}} – Material Sales Tax (county rate)"}, r
+    assert r["repriced"] == "$460 – Material Sales Tax (county rate)", r
+    assert r["drawn"]["totalCue"]["off"] is True, r
+    assert "does not follow the estimate" in r["drawn"]["totalCue"]["title"], r
+    assert r["drawn"]["totalCue"]["amount"] == "$12,500", r
+    assert r["collected"][1] == {"id": 59, "text": "$11,900 – Total, as agreed"}, r
+    assert r["stillHis"] == "$11,900 – Total, as agreed", r
+    assert r["askedAgainst"] == "$12,560", r
+
+
+def test_a_price_row_frozen_with_cents_is_todays_figure_too(ran):
+    """"$400.00" saved when the preview still printed cents, against today's "$400": the same
+    figure, so it gets its token back and is not marked as a figure of his own. Mutation: match
+    only the verbatim string (the row stays frozen and Send asks about $400.00 vs $400)."""
+    r = ran["centsPriceRow"]
+    assert r["collected"] == [{"id": 57, "text": "{{material_tax_formatted}} – Material Sales Tax (county rate)"}], r
+    assert r["drawn"] == "$400 – Material Sales Tax (county rate)" and r["off"] is False, r

@@ -1279,6 +1279,32 @@ function renameTab(id, rawNew) {
   if (activeSheet === id) badge.textContent = newLabel.toUpperCase();
 }
 
+/** Re-key the Proposal step's PRICE line entries when the line they belong to goes away.
+ *
+ *  price_overrides.lines / .lines2 hold a price line's edited words and .before / .after the lines
+ *  the estimator typed above and below it, all keyed by the line: "option:<tab id>" (and that
+ *  option's own tax rows, "option:<tab id>:sales_tax" / ":remodel" / ":total") or "manual:<i>" by
+ *  position. Both keys get reused — a deleted copy's id goes to the NEXT copy (nextCopyId), and a
+ *  removed manual line moves every later line up one — so an entry left behind prints on an
+ *  unrelated line of the customer's proposal: the words typed under one option turning up under a
+ *  new one. `rename(key)` answers the entry's new key, or null to forget it. */
+function reKeyPriceLineOverrides(rename) {
+  const pov = state.price_overrides;
+  if (!pov || typeof pov !== "object" || Array.isArray(pov)) return;
+  for (const bucket of ["lines", "lines2", "before", "after"]) {
+    const m = pov[bucket];
+    if (!m || typeof m !== "object" || Array.isArray(m)) continue;
+    const moved = {};
+    for (const k of Object.keys(m)) {
+      const to = rename(k);
+      if (to === k) continue;
+      if (to != null) moved[to] = m[k];
+      delete m[k];
+    }
+    Object.assign(m, moved);
+  }
+}
+
 // Delete is offered for copied tabs only (base template tabs stay).
 async function deleteTab(id) {
   // Invariant: never delete a base template tab — it would break the hardcoded
@@ -1300,6 +1326,8 @@ async function deleteTab(id) {
   // price_overrides.options[id] would print this deleted tab's overridden
   // amount/label on the new (unrelated) option's customer proposal. Drop it.
   if (state.price_overrides && state.price_overrides.options) delete state.price_overrides.options[id];
+  // ...and the option's edited words and the lines typed around it and its own tax rows.
+  reKeyPriceLineOverrides(k => (k === "option:" + id || k.startsWith("option:" + id + ":")) ? null : k);
   if (state.base_tab_id === id) state.base_tab_id = null;   // fall back to auto-derive
   buildTabs();
   TW.setState({ ...state, tab_copies: state.tab_copies, tab_labels: state.tab_labels,
@@ -4642,6 +4670,30 @@ function snapshotLumpSumsToState() {
   const baseTab   = resolveBaseTab();
   const baseCells = baseTab ? totalCellsFor(baseTab.id) : TOTAL_CELLS.Epoxy;
   const baseTotal = baseTab ? num(baseTab.id, baseCells.total) : 0;
+  // THE SHEET'S TWO TAX ANSWERS, per tab, for the proposal (Hanz, 2026-09-25: "Remodel Tax should
+  // be triggered by remodel tax in the estimate form. Taxable is where base bid and other options
+  // are taxable or not."). Read off each tab's OWN flag cells — through its layout and its
+  // structural edits, exactly as the tax cells themselves read them (jobFlagAddrFor / txAddr), so
+  // a copy answers for itself. The same comparisons the sheet makes: sales tax is charged unless
+  // Taxable? says "no" (=IF($B$6="no",0,…)), remodel tax only when Remodel Tax? says "yes"
+  // (=IF(D6="yes",…)). A tab with no flag block answers nothing and the proposal falls back to its
+  // tax figures.
+  const taxFlagsFor = (id) => {
+    let layout;
+    try { layout = layoutIdFor(id); } catch (e) { return {}; }
+    if (JOB_FLAG_LAYOUTS.indexOf(layout) < 0) return {};
+    const read = (flag) => {
+      const a = txAddr(id, jobFlagAddrFor(layout, flag));
+      if (!a) return null;
+      const v = HF.getValue(id, a);
+      return v == null ? "" : String(v).trim().toLowerCase();
+    };
+    const tx = read("taxable"), rm = read("remodel");
+    const out = {};
+    if (tx !== null) out.taxable = tx !== "no";
+    if (rm !== null) out.remodel_on = rm === "yes";
+    return out;
+  };
   const gypLump   = (wt === "gyp" && baseTab) ? num(baseTab.id, baseCells.total) : 0;
   state.hf_lump_sums = {
     epoxy:    epoxyLump,
@@ -4658,10 +4710,14 @@ function snapshotLumpSumsToState() {
     state.proposal_lump_sum    = num(gid, gCells.total);
     state.proposal_sales_tax   = num(gid, gCells.sales_tax);
     state.proposal_remodel_tax = num(gid, gCells.remodel);
+    const f = taxFlagsFor(gid);
+    state.proposal_taxable = f.taxable; state.proposal_remodel_on = f.remodel_on;
   } else if (state.base_tab_id && baseTab) {
     state.proposal_lump_sum    = baseTotal;
     state.proposal_sales_tax   = num(baseTab.id, baseCells.sales_tax);
     state.proposal_remodel_tax = num(baseTab.id, baseCells.remodel);
+    const f = taxFlagsFor(baseTab.id);
+    state.proposal_taxable = f.taxable; state.proposal_remodel_on = f.remodel_on;
   } else {
     // Fallback (no explicit base): the single number the proposal shows, given
     // work_type; sheet's OWN sales tax (D80/D74) + remodel tax (D81/D75) so the
@@ -4675,6 +4731,12 @@ function snapshotLumpSumsToState() {
                                     num("Polish", totalCellsFor("Polish").sales_tax));
     state.proposal_remodel_tax = pick(num("Epoxy", totalCellsFor("Epoxy").remodel),
                                       num("Polish", totalCellsFor("Polish").remodel));
+    // A combined base is taxed if either sheet is.
+    const fe = taxFlagsFor("Epoxy"), fp = taxFlagsFor("Polish");
+    const either = (a, b) => (a === undefined && b === undefined) ? undefined : (a === true || b === true);
+    const f = wt === "epoxy" ? fe : wt === "polish" ? fp
+      : { taxable: either(fe.taxable, fp.taxable), remodel_on: either(fe.remodel_on, fp.remodel_on) };
+    state.proposal_taxable = f.taxable; state.proposal_remodel_on = f.remodel_on;
   }
 
   // Cost side + crew budget for the Project Info Sheet (its B58 / I58). Follows
@@ -4729,9 +4791,14 @@ function snapshotLumpSumsToState() {
     const total = isBase ? shownBase : num(t.id, c.total);
     const o = state.tab_opts[t.id] || {};
     const desc = deriveSystemNameFor(t.id) || labelFor(t.id);
+    // The option's OWN tab's tax answers; the base row carries the base's.
+    const f = isBase ? { taxable: state.proposal_taxable, remodel_on: state.proposal_remodel_on }
+                     : taxFlagsFor(t.id);
     return {
       id: t.id, name: labelFor(t.id), is_base: !!isBase,
-      bid: { total, sales_tax: num(t.id, c.sales_tax), remodel: num(t.id, c.remodel) },
+      bid: Object.assign({ total, sales_tax: num(t.id, c.sales_tax), remodel: num(t.id, c.remodel) },
+                         typeof f.taxable === "boolean" ? { taxable: f.taxable } : {},
+                         typeof f.remodel_on === "boolean" ? { remodel_on: f.remodel_on } : {}),
       base_total: shownBase,
       deduct_amount: shownBase - total,       // savings vs the shown base; <=0 ⇒ backend falls back to total
       price_mode: isBase ? "total" : (o.price_mode === "deduct" ? "deduct" : "total"),
@@ -4765,13 +4832,13 @@ function snapshotLumpSumsToState() {
   // resolved BASE tab (see state.sheet_area below).
   state.priced_tabs = pricedTabs().map(t => {
     const c = totalCellsFor(t.id);
-    return {
+    return Object.assign({
       id: t.id, name: labelFor(t.id), role: t.role, kind: t.kind,
       total: num(t.id, c.total), sales_tax: num(t.id, c.sales_tax), remodel: num(t.id, c.remodel),
       system_desc: deriveSystemNameFor(t.id), notes_auto: deriveNotes(t.id),
       sf: sfFieldsFor(t.id),
       sys_names: roleFor(t.id) === "polish" || roleFor(t.id) === "gyp" ? [] : sysNamesFor(t.id),
-    };
+    }, taxFlagsFor(t.id));   // {taxable, remodel_on}: the Proposal step's rebuildPricing reads them
   });
   // Area (SF / cove LF) for the proposal, sourced from the BASE tab(s) ONLY —
   // options never contribute. Mirrors the lump-sum base resolution above
@@ -4938,6 +5005,14 @@ function renderPriceLines() {
       // shift a later line's override onto the wrong line in the customer proposal.
       const _mo = state.price_overrides && state.price_overrides.manual;
       if (Array.isArray(_mo) && i < _mo.length) _mo.splice(i, 1);
+      // The whole-line and typed-line entries are positional too ("manual:<i>"): the removed
+      // line's go, and every later line's move up one with its line.
+      reKeyPriceLineOverrides(k => {
+        const m = /^manual:(\d+)$/.exec(k);
+        if (!m) return k;
+        const n = Number(m[1]);
+        return n === i ? null : n > i ? "manual:" + (n - 1) : k;
+      });
       persistPriceLines(); renderPriceLines();
     });
     wrap.appendChild(row);

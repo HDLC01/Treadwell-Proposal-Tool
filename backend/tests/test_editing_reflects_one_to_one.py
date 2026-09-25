@@ -94,24 +94,36 @@ def test_the_base_bid_line_still_works_too():
 def test_no_price_write_path_trims_the_stored_value():
     """The browser half, asserted against the shipped source rather than a copy of it.
 
-    FOUR sites write a stored override now: the two island handlers, the whole-line one, and
-    the box-wide PRICE sweep added when each text box became a single editing host (a Delete
-    across three price rows arrives as ONE input event, so a handler that only read the caret's
-    own row would leave the other two edited on screen and unedited in the draft).
+    FOUR sites write a stored override now: the two island handlers, the whole-line capture
+    (captureLineNode — both the keystroke handler and the box-wide PRICE sweep go through it; the
+    sweep exists because each text box became a single editing host, and a Delete across three
+    price rows arrives as ONE input event, so a handler that only read the caret's own row would
+    leave the other two edited on screen and unedited in the draft), and the lines typed above or
+    below a price line (captureExtrasIn, 2026-09-26: they are their own lines now, not text stored
+    inside the price line).
 
-    All four must collapse newlines only. A `.trim()` on any of them silently re-creates
-    Kyle's bug on that channel alone, which is exactly how it hid: one channel was right
-    and nothing compared them. The count is asserted so a FIFTH channel cannot appear
-    without somebody reading this rule first.
+    None of them may trim. A `.trim()` on any of them silently re-creates Kyle's bug on that
+    channel alone, which is exactly how it hid: one channel was right and nothing compared them.
+    The count is asserted so a FIFTH channel cannot appear without somebody reading this rule
+    first.
     """
     import pathlib
     js = (pathlib.Path(__file__).resolve().parents[2] / "frontend" / "js"
           / "proposal-review.js").read_text(encoding="utf-8")
-    writes = [ln.strip() for ln in js.split("\n")
-              if "serializeBlock(sp)" in ln or "serializeBlock(lineNode)" in ln]
+
+    def body(name):
+        start = js.index("  function " + name + "(")
+        return js[start:js.index("\n  }\n", start)]
+
+    writes = [ln.strip() for ln in js.split("\n") if "serializeBlock(sp)" in ln]
+    for name in ("captureLineNode", "captureExtrasIn"):
+        writes += [ln.strip() for ln in body(name).split("\n") if "serializeBlock(" in ln]
     assert len(writes) == 4, "the set of price write paths changed: %r" % writes
     for w in writes:
         assert ".trim()" not in w, "a price write path trims again: %s" % w
+    # Both whole-line entry points store through the one capture, so there is one rule to keep.
+    # (The sweep passes its spill map as a second argument: count the calls, not one spelling.)
+    assert js.count("captureLineNode(lineNode") == 2
 
 def test_the_islands_show_the_spaces_they_store():
     """The DISPLAY half, which the write-path test cannot see.
