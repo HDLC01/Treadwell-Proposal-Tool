@@ -356,14 +356,20 @@ def test_an_edited_line_prints_todays_amount_and_wording_and_a_typed_figure_as_t
     assert "$9,100 – Total" in texts
 
 
-def test_a_line_saved_before_the_live_shape_still_prints_as_it_was_saved():
-    """A payload frozen before this change: its whole-line override prints verbatim, as it always
-    did — including the typed breaks inside it."""
-    blob = _render(_payload(price_overrides={"lines": {
-        "base": "$7,447 – Epoxy flooring as described above (material sales tax INCLUDED)\n\nold note"}}))
+def test_a_line_saved_before_the_live_shape_still_prints_its_words_as_saved():
+    """A payload frozen before this change: its whole-line override prints verbatim, word for word
+    — laid out one line to a paragraph, the way the editor shows it (test_legacy_line_breaks.py):
+    the price line on its own with no break inside it, the blank line and the note typed under it
+    as lines of their own. It used to be one paragraph with <w:br/> breaks, which under the REBID
+    bullets put the note inside the bulleted price line."""
+    line = "$7,447 – Epoxy flooring as described above (material sales tax INCLUDED)"
+    blob = _render(_payload(price_overrides={"lines": {"base": line + "\n\nold note"}}))
     _d, paras = _paras(blob)
-    hit = [p for p in paras if _text(p).startswith("$7,447 – Epoxy flooring as described above")]
-    assert hit and "old note" in _text(hit[0]) and list(hit[0].iter(qn("w:br")))
+    texts = [_text(p) for p in paras]
+    i = texts.index(line)
+    assert texts[i + 1:i + 3] == ["", "old note"], texts[i:i + 4]
+    assert not list(paras[i].iter(qn("w:br")))
+    assert pw._para_num_ref(paras[i + 1]) is None and pw._para_num_ref(paras[i + 2]) == ("3", "1")
 
 
 def test_a_legacy_exempt_payload_reads_its_wording_off_the_sheet():
