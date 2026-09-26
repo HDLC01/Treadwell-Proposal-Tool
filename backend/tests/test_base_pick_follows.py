@@ -653,3 +653,89 @@ def test_the_tax_wording_the_base_line_prints_is_read_off_the_draft():
     assert outs[0].get("lines2", {}) == {}, outs[0]
     assert outs[1]["lines2"] == {"base": f"{AMT} – {_EPOXY}"}, outs[1]
     assert outs[2]["lines2"] == {"base": f"{AMT} – {_EPOXY}"}, outs[2]
+
+
+# ── the bullets ride with the line (2026-09-26 editor release) ──────────────────────────────────
+_W_NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+
+
+def _price_box_props(payload):
+    """The rendered PRICE box's paragraphs as {text: (bullet, level, left)}: whether the line prints
+    a bullet (its numbering level is a bullet), the list level, and where its text starts (its own
+    indent, else its list level's) -- what test_price_bullets reads, for the lines named here."""
+    p = dict(payload)
+    p["values"] = dict(_BASE_VALUES, **p["values"])
+    req = Request({"type": "http", "method": "POST", "path": "/t", "headers": [], "query_string": b""})
+    d = docx.Document(io.BytesIO(main._render_documents(p, req, want_estimate=False)["docx"]["content"]))
+    levels = pw._numbering_levels(d)
+    for tx in d.element.body.iter(_W_NS + "txbxContent"):
+        if any(True for _ in tx.iterancestors(f"{_MC}Fallback")):
+            continue
+        paras = tx.findall(_W_NS + "p")
+        if not any(pw._own_text(q).strip() == "Base Bid" for q in paras):
+            continue
+        out = {}
+        for q in paras:
+            text = pw._own_text(q).rstrip()
+            ref = pw._para_num_ref(q)
+            lv = levels.get(ref) if ref else None
+            bullet = bool(lv and lv.get("fmt") == "bullet") and bool(text.strip())
+            ppr = q.find(_W_NS + "pPr")
+            ind = ppr.find(_W_NS + "ind") if ppr is not None else None
+            own = {a: int(float(ind.get(_W_NS + a))) for a in ("left", "start")
+                   if ind is not None and ind.get(_W_NS + a) is not None}
+            lvl = {k: int(v) for k, v in ((lv or {}).get("ind") or {}).items()} if bullet else {}
+            left = own.get("start", own.get("left", lvl.get("start", lvl.get("left", 0))))
+            out.setdefault(text, (bullet, int(ref[1]) if bullet else None, left))
+        return out
+    raise AssertionError("no PRICE box in the rendered document")
+
+
+_PROPS = {"line_props": {"base": {"bullet": False, "indent": 576}, "total": {"level": 1}},
+          "after_props": {"base": [None, {"bullet": False, "indent": 864}]}}
+
+
+@pytest.mark.parametrize("leg", ["before", "strip", "sidebar", "deleteBase"])
+def test_a_bullet_or_indent_on_the_base_line_survives_every_base_pick(ran, leg):
+    """D stores a line's bullet and indent in price_overrides.line_props[key] and those of the lines
+    typed round it in before_props / after_props[key][i]. They belong to the line, so they follow
+    the base-pick rule the line follows (TWPrice.applyBasePick): the base line and its rows print
+    under every base, so no pick drops their bullets -- not the Estimate strip, not the Proposal
+    sidebar (which, on the bullets branch alone, deleted every non-alt key's props on a flip), not
+    deleting the base copy. Checked in the saved draft, in the editor (the override on the element
+    and what paintLineParas drew) and in the .docx the real renderer builds from what the page
+    sends. Mutation: the sidebar's own delete-every-bucket loop back in place of applyBasePick."""
+    r = ran["baseProps"][leg]
+    if "pov" in r:
+        assert {k: r["pov"].get(k) for k in _PROPS} == _PROPS, r["pov"]
+    # The editor right after the pick (the page's own state: a pick that deletes the bullets in
+    # place shows it at once, whatever it saves), and on the next visit.
+    for drawn in (r.get("drawn"), r.get("reopened")):
+        if drawn is None:
+            continue
+        by = [(x["key"], x["kind"], x["text"].split(" – ", 1)[-1]) for x in drawn]
+        props = {k: (x["pl"], x["li"], x["o"], x["left"]) for k, x in zip(by, drawn)}
+        base = next(v for k, v in props.items() if k[0] == "base" and k[1] == "line")
+        assert base == ({"bullet": False, "indent": 576}, False, False, "28.8pt"), props
+        note = next(v for k, v in props.items() if k[2] == "THis is a test send to Hanz")
+        assert note == ({"bullet": False, "indent": 864}, False, False, "43.2pt"), props
+        total = next(v for k, v in props.items() if k[0] == "total")
+        assert total[:3] == ({"level": 1}, True, True), props
+    doc = _price_box_props(r["doc"])
+    base_line = next(t for t in doc if " – " in t and "as described above, warehouse only" in t)
+    assert doc[base_line] == (False, None, 576), (base_line, doc)
+    assert doc["THis is a test send to Hanz"] == (False, None, 864), doc
+    total_line = next(t for t in doc if t.endswith(" – Total"))
+    assert doc[total_line][:2] == (True, 1), (total_line, doc)
+
+
+def test_the_rows_a_pick_splits_off_an_old_shape_line_carry_no_stale_bullet(ran):
+    """applyBasePick splits the lines typed inside an old-shape base line into rows of their own
+    (after[key]) only when there are none. Those rows are new and carry the default "o"; a bullet
+    list left behind with no rows under it (after_props[key]) would land on them by position, so
+    the pick clears it. The base line's own bullet stays: it is the same line. Mutation: the clear
+    taken out."""
+    pov = ran["baseProps"]["legacySplit"]["pov"]
+    assert pov["after"] == {"base": NOTE}, pov
+    assert (pov.get("after_props") or {}).get("base") is None, pov
+    assert pov["line_props"] == {"base": {"bullet": False, "indent": 576}}, pov

@@ -505,6 +505,11 @@
    *  single_bid's amount as the base figure outright, so keeping one would print the old base's
    *  price under the new base. No editor writes them now.
    *
+   *  THE BULLETS (line_props / before_props / after_props, the ribbon's per-line bullet and indent)
+   *  belong to the line they sit on and follow the same rule: kept with every line kept here, the
+   *  base line and its rows included -- they print under every base, so a pick never drops their
+   *  bullets. The rows an old-shape line gives up at the pick are new rows and carry the default.
+   *
    *  NOTHING ELSE IS TOUCHED: the lines typed above and below any price line, the combo lines (they
    *  print only under the combined base, whose tabs no pick changes, and are migrated when drawn),
    *  every option line -- those of the old and the new base tab included (an option line prints
@@ -556,7 +561,16 @@
             if (!rows || !rows.length) return;
             var b = pov[pair[0]];
             if (!b || typeof b !== "object" || Array.isArray(b)) b = pov[pair[0]] = {};
-            if (!Array.isArray(b[k]) || !b[k].length) b[k] = rows.slice();
+            if (!Array.isArray(b[k]) || !b[k].length) {
+              b[k] = rows.slice();
+              // The rows split off here are new: they carry the default bullet (the "o"), and a
+              // bullet list left behind with no rows under it would land on them by position.
+              var bp = pov[pair[0] + "_props"];
+              if (bp && typeof bp === "object" && !Array.isArray(bp) && own.call(bp, k)) {
+                delete bp[k];
+                changed = true;
+              }
+            }
           });
           var main = !m.drop && m.main != null && m.main.trim() ? m.main : null;
           var at = main && k !== "base" ? amountAt(main) : null;

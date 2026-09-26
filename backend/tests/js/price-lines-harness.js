@@ -818,7 +818,7 @@ function pickedThenOpened(draft, pick) {
 
 // 12. DELETING THE BASE COPY changes the base too, to the one the sheet derives: the Estimate step's
 //     real deleteTab (and the real resolveBaseTab it asks), then the Proposal step opens the draft.
-function deleteBaseCopy(baseLine, legacyBase, over, then) {
+function deleteBaseCopy(baseLine, legacyBase, over, then, props) {
   const draft = hanzFix(Object.assign({ base_tab_id: "Copy1", proposal_lump_sum: 15149, proposal_sales_tax: 195,
     priced_tabs: clone(HF_TABS), rooms: [], tab_copies: [{ id: "Copy1", role: "epoxy", source: "Epoxy" }],
     tab_labels: { Copy1: "Epoxy copy" }, tab_notes: {}, lock_overrides: {},
@@ -831,6 +831,7 @@ function deleteBaseCopy(baseLine, legacyBase, over, then) {
                 "option:Epoxy": TWPrice.AMOUNT + " – Epoxy as an option " + TWPrice.TAX }),
     }, legacyBase ? { lines: { base: legacyBase } } : { after: { base: NOTE_UNDER_BASE.slice() } }) },
     over || {}));
+  if (props) Object.assign(draft.price_overrides, clone(props));   // block 18: bullets on the base line
   const state = clone(draft);
   const sets = [];
   const src = (re, what) => { const m = re.exec(ER); if (!m) throw new Error(what + " is gone from estimate-review.js"); return m[0]; };
@@ -1030,6 +1031,65 @@ const COMBO_LEGACY = "$10,000 – Option 1: Epoxy flooring in the kitchen as des
   out.comboLegacy.payloadFirst = build(fresh).comboLinesForPayload();
 }
 
+// 18. A BULLET OR INDENT SET ON THE BASE LINE follows the line (2026-09-26 editor release). The
+//     bullets (price_overrides.line_props / before_props / after_props) belong to the line they
+//     sit on, so they follow the base-pick rule the line follows (TWPrice.applyBasePick): kept with
+//     a kept line, re-keyed with it, dropped only with it. The base line and its tax rows are never
+//     dropped by a pick -- they print under every base -- so their bullets are never dropped by one
+//     either: not by the Estimate strip, not by the sidebar (which used to delete every non-alt
+//     key's props on a flip), not by deleting the base copy (block 18's third leg, in the
+//     Promise.all below).
+const BASE_PROPS = {
+  line_props: { base: { bullet: false, indent: 576 }, total: { level: 1 } },
+  after_props: { base: [null, { bullet: false, indent: 864 }] },
+};
+/** The base line, the lines typed under it and the Total as the editor DRAWS them: the words, the
+ *  override on the element (data-pl) and what paintLineParas made of it. */
+function drawnProps(api) {
+  return api.pg.region.querySelectorAll("[data-po-linekey]")
+    .filter((n) => ["base", "total"].includes(n.dataset.poLinekey) && !(n.style && n.style.display === "none"))
+    .map((n) => ({ key: n.dataset.poLinekey, kind: n.dataset.poKind, text: api.serializeBlock(n),
+                   pl: n.dataset.pl ? JSON.parse(n.dataset.pl) : null,
+                   li: n.classList.contains("tw-li"), o: n.classList.contains("tw-lvl-o"),
+                   left: n.style.marginLeft || "" }));
+}
+function propsDraft(over) {
+  return hanzFix(Object.assign({
+    base_tab_id: "Epoxy", proposal_lump_sum: 7447, proposal_sales_tax: 96, proposal_remodel_tax: 0,
+    tax_layout: "BROKEN_OUT", priced_tabs: clone(HF_TABS), rooms: [],
+    tab_opts: { Copy1: { is_option: true, show: true, price_mode: "total" } },
+    price_overrides: Object.assign({
+      lines2: { base: TWPrice.AMOUNT + " – Epoxy flooring as described above, warehouse only " + TWPrice.TAX },
+      after: { base: NOTE_UNDER_BASE.slice() },
+    }, clone(BASE_PROPS)),
+  }, over || {}));
+}
+{
+  const draft = propsDraft();
+  const before = openProposal(draft);
+  out.baseProps = { before: { drawn: drawnProps(before.api), doc: docPayload(before.st, before.api) } };
+  // The Estimate step's bid strip: Epoxy -> Epoxy copy, then the Proposal step opens it.
+  const e = estimatePick(draft, "Copy1");
+  const pe = openProposal(e.saved);
+  out.baseProps.strip = { pov: clone(e.saved.price_overrides), drawn: drawnProps(pe.api), doc: docPayload(pe.st, pe.api) };
+  // The Proposal step's sidebar: Epoxy -> Polish (another work type), and the draft it leaves.
+  const ps = openProposal(draft);
+  const left = sidebarPick(ps, "Polish");
+  const pr = openProposal(left);
+  out.baseProps.sidebar = { pov: clone(left.price_overrides || {}), drawn: drawnProps(ps.api),
+                            reopened: drawnProps(pr.api), doc: docPayload(pr.st, pr.api) };
+  // An old-shape base line with the note typed inside it: the pick splits the note off into rows
+  // of their own, which carry no override (the "o" default) -- a stale after_props entry left
+  // behind with no rows under it must not land on the new rows, or row i is no longer row i.
+  const old = propsDraft({ price_overrides: {
+    lines: { base: "$7,351 – Epoxy flooring as described above\n\nTHis is a test send to Hanz" },
+    line_props: { base: { bullet: false, indent: 576 } },
+    after_props: { base: [{ bullet: false, indent: 2880 }, { bullet: false, indent: 2880 }] },
+  } });
+  const eo = estimatePick(old, "Copy1");
+  out.baseProps.legacySplit = { pov: clone(eo.saved.price_overrides) };
+}
+
 Promise.all([
   deleteBaseCopy("$15,000 – Epoxy flooring as described above " + TWPrice.TAX),
   deleteBaseCopy(TWPrice.AMOUNT + " – Epoxy flooring, whole building incl. mezzanine " + TWPrice.TAX),
@@ -1039,7 +1099,11 @@ Promise.all([
   // copy's pre-tax figure, the tool's own words; then the Proposal step opens under One line.
   deleteBaseCopy(null, "$14,954 – Epoxy flooring as described above",
                  { tax_layout: "BROKEN_OUT" }, { tax_layout: "ONE_LINE" }),
-]).then(([money, words, frozen, brokenOut]) => {
+  // 18, deleting the base copy with a bullet and an indent set on its base line and a typed row.
+  deleteBaseCopy(TWPrice.AMOUNT + " – Epoxy flooring as described above, warehouse only " + TWPrice.TAX,
+                 null, { tax_layout: "BROKEN_OUT" }, null, BASE_PROPS),
+]).then(([money, words, frozen, brokenOut, withProps]) => {
   out.deleteBase = { money, words, frozen, brokenOut };
+  out.baseProps.deleteBase = withProps;
   console.log(JSON.stringify(out));
 });

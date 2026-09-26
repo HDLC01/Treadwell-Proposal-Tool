@@ -463,7 +463,8 @@ def test_a_combo_line_reworded_under_included_migrates_live_and_adds_up(ran):
     assert [x[1] for x in c["lines"]] == [line]
     assert "tw-money-off" not in c["lines"][0][2] and c["warnings"] == []
     # Built into the payload before the page ever drew it: the same migration, the same line.
-    assert c["payloadFirst"] == [{"label": line, "amount_formatted": ""}]
+    # The payload line carries its key (the bullets branch: main.py reads the line's line_props by it).
+    assert c["payloadFirst"] == [{"label": line, "amount_formatted": "", "key": "combo:epoxy.flooring"}]
     assert c["broken"] == [
         ["combo:epoxy.flooring", "$9,900 – Option 1: Epoxy flooring in the kitchen as described above"],
         ["combo:epoxy.sales_tax", "$100 – Material Sales Tax"],
