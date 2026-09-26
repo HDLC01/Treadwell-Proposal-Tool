@@ -489,14 +489,18 @@ def test_a_base_bid_flip_keeps_the_gap_and_what_was_typed_on_it(ran):
     """The base-bid radio's own change handler, run. Typing on blank line 1 of 2 moved both lines
     out of the count into the typed lines; the flip cleared those with the old base's edits and
     kept the count, so the note was lost and the 2-line gap came back as 0. The gap and its lines
-    do not depend on the base. The old base's own edits still go. Mutation: the flip clears
-    before.heading_options again."""
+    do not depend on the base. Since the base-pick fix (Hanz, 2026-09-26: keep the words) the base
+    line's own words and the lines typed round it survive the flip too: one rule
+    (TWPrice.applyBasePick) for both pickers. Mutation: the flip clears before.heading_options
+    again."""
     f = ran["flipKeepsGap"]
-    assert f["typedBefore"] == {"typed": ["", "N"], "lines": 0, "stored": 0}
+    # Typing on the last blank line keeps a fresh one under it (the gap's floor of one line).
+    assert f["typedBefore"] == {"typed": ["", "N"], "lines": 1, "stored": 1}
     assert f["base"] == "Copy1"
     assert f["typed"] == ["", "N"] and f["drawn"] == ["", "N"], f
-    assert f["stored"] == 0 and f["lines"] == 0 and f["typedDirectlyAboveGap"]
-    assert f["oldBaseLine"] is None and f["oldBaseTyped"] is None
+    assert f["stored"] == 1 and f["lines"] == 1 and f["typedDirectlyAboveGap"]
+    assert f["oldBaseLine"] == "\u27e6amount\u27e7 – for the old base", f
+    assert f["oldBaseTyped"] == ["typed under the old base"], f
 
 
 def test_saved_typed_lines_are_drawn_above_the_blank_lines(ran):

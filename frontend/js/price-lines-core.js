@@ -355,7 +355,11 @@
         if (j >= 0) { main = main.slice(0, j) + TAX + main.slice(j + list[k].length); break; }
       }
     }
-    main = captureLine(main, "", parts.phrase, parts.slot);
+    // The marker at the end of an EMPTY slot (captureLine) only when the caller says what the slot
+    // prints now: "" is Broken out, where the tool printed no wording. A caller that names no
+    // phrase at all (applyBasePick with no basePhrase) does not know the layout, and gets no
+    // marker added. Every page caller passes a string.
+    main = captureLine(main, "", parts.phrase, parts.slot && parts.phrase != null);
     return { main: main, before: before, after: after, drop: false };
   }
 
@@ -528,8 +532,11 @@
       var text = hasLive ? live[k] : null;
       if (legacy && typeof legacy[k] === "string") {
         if (!hasLive) {
-          var m = migrateLine(legacy[k], k === "base" && typeof o.basePhrase === "string"
-            ? { others: figs, phrase: o.basePhrase, slot: true } : { others: figs });
+          // The base line always has a tax slot, so a wording this tool printed in it is the tool's
+          // (migrateLine); the tax rows and the Total have none, and a wording on them is his.
+          var m = migrateLine(legacy[k], k === "base"
+            ? { others: figs, phrase: typeof o.basePhrase === "string" ? o.basePhrase : undefined, slot: true }
+            : { others: figs });
           [["before", m.before], ["after", m.after]].forEach(function (pair) {
             var rows = pair[1];
             if (!rows || !rows.length) return;

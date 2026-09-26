@@ -35,6 +35,9 @@ const SRC = fs.readFileSync(path.join(FRONTEND, "js", "proposal-review.js"), "ut
 const HTML = fs.readFileSync(path.join(FRONTEND, "proposal-review.html"), "utf8")
   .replace(/\r\n/g, "\n");
 const F = require(path.join(FRONTEND, "js", "proposal-format-core.js"));
+// The base-bid radio hands the price edits to the ONE base-pick rule (TWPrice.applyBasePick),
+// the real one.
+const TWPrice = require(path.join(FRONTEND, "js", "price-lines-core.js"));
 
 // ── lifting the real source ──────────────────────────────────────────────────
 function fn(name) {
@@ -423,7 +426,7 @@ function makePage(layout, stateIn) {
   const state = JSON.parse(JSON.stringify(stateIn || {}));
   const api = new Function(
     "document", "window", "docSurface", "Node", "F", "state", "TW", "setTimeout", "clearTimeout",
-    "fitTxbx", "Event", "selectionRange", "placeSelection", "selectionLines",
+    "fitTxbx", "Event", "selectionRange", "placeSelection", "selectionLines", "TWPrice",
     `const RUN_KEYS = F.RUN_KEYS;
     const coalesce = F.coalesce, patchRuns = F.patchRuns, runsLength = F.runsLength;
     let templateOptionsHeadingIds = [];
@@ -442,6 +445,10 @@ function makePage(layout, stateIn) {
       const opts = state.tab_opts && typeof state.tab_opts === "object" ? state.tab_opts : (state.tab_opts = {});
       const applyAndRefresh = () => { paintOptionsGap(); };
       const reloadForWorkType = () => {};
+      // The tax wording the base line printed before the pick: it only matters to a base line
+      // still in the old shape, which this gap fixture never has, so the tax rule (another
+      // harness's world: price-lines-harness lifts it) is stood in for by "no wording".
+      const baseTaxRule = () => ({ phrase: "" });
       (` + FLIP_HANDLER + `)();
     }
     return {
@@ -458,7 +465,8 @@ function makePage(layout, stateIn) {
            return el === SEL.node || el.contains(SEL.node) ? [0, 0] : null;
          },
          (el, a, b) => { SEL = { el, a, b }; },
-         () => (SEL && SEL.el ? [{ el: SEL.el, start: SEL.a, end: SEL.b }] : []));
+         () => (SEL && SEL.el ? [{ el: SEL.el, start: SEL.a, end: SEL.b }] : []),
+         TWPrice);
 
   const box = new El("div");
   box.className = "tw-txbx";
@@ -859,8 +867,9 @@ const typeKey = (p, ch) => fire(p.box, "keydown", { key: ch, ctrlKey: false, met
 {
   // A BASE-BID FLIP (review, 2026-09-26). Typing on blank line 1 of 2 moves both lines out of the
   // count into the typed lines (options_gap 0). The flip used to clear those typed lines with the
-  // old base's edits and keep the count: the note was lost and the gap came back as 0 lines. The
-  // old base's own edits still go.
+  // old base's edits and keep the count: the note was lost and the gap came back as 0 lines.
+  // Since the base-pick fix (Hanz, 2026-09-26: keep the words) the base line's own words and the
+  // lines typed round it are kept too, by the one rule both pickers share (TWPrice.applyBasePick).
   const p = makePage("direct", { base_tab_id: "Epoxy", price_overrides: {
     lines2: { base: "\u27e6amount\u27e7 – for the old base" }, after: { base: ["typed under the old base"] } } });
   p.api.paintOptionsGap();
