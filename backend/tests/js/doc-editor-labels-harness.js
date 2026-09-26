@@ -513,7 +513,7 @@ const LIFTED = [
   fn("runsEqual"), fn("selectionInSurface"),
   fn("ensureFmtBar"), fn("showFmtBar"), fn("idleFmtBar"),
   topConst("overrideKey"), fn("mergeOverrideEntry"), topConst("liveKey"),
-  fn("savedOverridesFor"), fn("savedVersionMatches"), fn("restoreSavedOverrides"), fn("collectOverrides"),
+  fn("savedOverridesFor"), fn("savedVersionMatches"), fn("restoreSavedOverrides"), fn("lineBare"), fn("lineKeptEmpty"), fn("collectOverrides"),
   // A PRICE paragraph (a GC / Gyp tax row, polish Direct's base line) keeps its untouched figures
   // as {{tokens}} (storedText) and is marked only for a dollar figure of its own
   // (priceParagraphMoneyOff); setBlockContent shows or hides a free tax row by the rule
@@ -542,7 +542,7 @@ const LIFTED = [
   fn("syncNotesFromDom"),
   // collectOverrides sends a line the estimator DELETED as {id, removed: true} and
   // restoreSavedOverrides hides it again after a reload, so the removal family comes too.
-  fn("editingBox"), fn("boxLines"), fn("lineIsEmpty"), fn("lineRemovable"), fn("removeLine"),
+  fn("editingBox"), fn("boxLines"), fn("lineShown"), fn("lineIsEmpty"), fn("lineRemovable"), fn("removeLine"),
   fn("unremoveLine"), fn("removedBlockIds"),
 ].join("\n\n");
 

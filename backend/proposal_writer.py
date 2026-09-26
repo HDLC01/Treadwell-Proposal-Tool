@@ -1876,15 +1876,17 @@ def _apply_options_gap(d: Document, n, typed=None) -> int:
     The blank spacer paragraphs a template already has directly above its heading (Gyp and the GC
     files each carry one) are REPLACED, not added to, so the count is the editor's count. A line the
     estimator TYPED is never one of those: the walk stops at one (`_TYPED_LINE_ATTR`), a blank one
-    included, because the editor draws it. Returns the headings spaced."""
+    included, because the editor draws it. Nor is a template line he emptied and KEPT (Phase 0
+    registers it in `_kept_lines`). Returns the headings spaced."""
     n = options_gap_count(n)
     rows = [str(t) for t in (typed or []) if t is not None and not isinstance(t, (dict, list, bool))]
     heads = [p for p in d.element.body.iter(qn("w:p")) if p.get(_OPTIONS_HEADING_ATTR) is not None]
+    kept = _kept_lines(d)
     for head in heads:
         parent = head.getparent()
         prev = head.getprevious()
         while (prev is not None and _is_blank_spacer(prev)
-               and prev.get(_TYPED_LINE_ATTR) is None):
+               and prev.get(_TYPED_LINE_ATTR) is None and id(prev) not in kept):
             above = prev.getprevious()
             parent.remove(prev)
             prev = above
@@ -3524,6 +3526,17 @@ def _user_sized_paragraphs(d) -> dict:
     return _hand_formatted(d, "_tw_user_sized")
 
 
+def _kept_lines(d) -> dict:
+    """Template paragraphs the estimator emptied and KEPT (a `kept` override), per document.
+
+    `_apply_options_gap` never takes one of these for the template's blank spacer above the Options
+    heading: the editor draws it, so it prints (proposal-review.js lineKeptEmpty). A register on the
+    Document, not an attribute in the XML, for `_hand_formatted`'s reason -- and because the cover
+    letter fills through the same override pass and never reaches the gap, so a mark left in the XML
+    there would ride into the customer's file."""
+    return _hand_formatted(d, "_tw_kept_lines")
+
+
 def _user_sized_block_ids(d) -> dict:
     """`{id(paragraph): editor block id}` for the same paragraphs as `_user_sized_paragraphs`.
 
@@ -3835,6 +3848,12 @@ def _apply_paragraph_overrides(d: Document, overrides: list, doomed=()) -> int:
     # the paragraph EMPTY. It wins over anything else sent for the same id: a removed line has no
     # words or bullet left to apply.
     removed_ids: set[int] = set()
+    # A LINE HE EMPTIED AND KEPT: `{"id": n, "text": "", "kept": true}` (proposal-review.js
+    # lineKeptEmpty). It prints as the empty line it is, and it is HIS line, so the Options gap
+    # (`_apply_options_gap`) never takes it for the template's own blank spacer above the heading --
+    # it stops at it, as at a typed line (`_kept_lines`). Strictly `True`: a `text: ""` saved before the key existed
+    # is still a blank paragraph the gap may absorb, as it always was.
+    kept_ids: set[int] = set()
     for o in overrides or []:
         if not isinstance(o, dict):
             continue
@@ -3844,6 +3863,10 @@ def _apply_paragraph_overrides(d: Document, overrides: list, doomed=()) -> int:
         if o.get("removed") is True:
             removed_ids.add(pid)
             continue
+        if o.get("kept") is True:
+            kept_ids.add(pid)
+        else:
+            kept_ids.discard(pid)
         para = sanitize_para_props(o.get("para"))
         if para:
             para_by_id[pid] = para
@@ -3965,6 +3988,8 @@ def _apply_paragraph_overrides(d: Document, overrides: list, doomed=()) -> int:
                 # numbering identity rather than being re-homed onto the neighbouring list.
                 if blank and "bullet" not in para_by_id.get(idx, {}):
                     _strip_bullet(p_elem)
+                if blank and idx in kept_ids:
+                    _kept_lines(d)[id(p_elem)] = p_elem
         if idx in para_by_id:
             # Phase 0 runs long before `_shrink_overflowing_text_boxes`, which is required:
             # the shrink re-reads the box geometry to decide what overflows, and an indent

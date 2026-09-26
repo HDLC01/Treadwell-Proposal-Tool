@@ -1147,3 +1147,12 @@ def test_remodel_on_still_prints_its_row(served, work_type, audience):
     text = _render_served(served, work_type, audience, remodel_amount="$650")
     assert re.search(r"\$650 – (Kansas )?Remodel Tax", text), (work_type, audience, text[:3000])
     assert "Material Sales Tax" in text
+
+
+def test_the_composed_document_carries_the_price_warnings_send_reads(ran):
+    """The one composer (composeProposalPayload, which Continue and the fit request share) carries
+    `price_warnings`: done.js reads it off proposal_payload before Send, to ask about a line that
+    prints a dollar figure of the estimator's own. Merging the composer with #569's inline literal
+    could drop it silently -- Send would then ask nothing. This page has no such line, so it is an
+    empty list, not missing."""
+    assert ran["e2e"]["composed"]["priceWarnings"] == []

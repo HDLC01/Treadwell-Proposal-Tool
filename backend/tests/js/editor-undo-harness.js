@@ -439,7 +439,7 @@ const api = new Function(
     fn("fmtAt"), fn("segmentsOf"), fn("mergeSegs"), fn("serializeRuns"), fn("editRuns"),
     fn("runStyleCss"), fn("runEditCss"), fn("renderRuns"), fn("serializeBlock"),
     fn("runsEqual"), fn("pointAt"), fn("markEdited"),
-    fn("lineAt"), fn("lineAtSelection"), fn("editingBox"), fn("boxLines"),
+    fn("lineAt"), fn("lineAtSelection"), fn("editingBox"), fn("boxLines"), fn("lineShown"),
     fn("paraBase"), fn("paraNow"), fn("sanitizeParaPatch"), fn("applyParaGeom"),
     fn("applyParaToEl"), fn("setParaState"), fn("paraAction"),
     fn("paintBoxSel"), fn("clearBoxSel"), fn("clearBoxLine"), fn("selectRangeAcross"),

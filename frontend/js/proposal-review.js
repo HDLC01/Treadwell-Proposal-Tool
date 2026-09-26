@@ -359,7 +359,13 @@
   const _notesReady = (function prefillNotes() {
     const ta = document.getElementById("notes-text");
     if (!ta) return;
-    const applyAndPreview = (text) => { ta.value = text; syncPhaseNote(); try { renderNotesPreview(); } catch {} };
+    // The NOTES box now holds different words, so the size it prints at is asked again (scheduleFit;
+    // try: the synchronous call below runs before the fit's bookkeeping exists, and the editor's
+    // own first ask covers it).
+    const applyAndPreview = (text) => {
+      ta.value = text; syncPhaseNote(); try { renderNotesPreview(); } catch {}
+      try { scheduleFit(); } catch {}
+    };
     if (Array.isArray(state.notes) && state.notes.length) { applyAndPreview(state.notes.join("\n")); return; }
     if (String(ta.value || "").trim()) { syncPhaseNote(); return; }
     // Brand-new project: pull this work type's boilerplate scope/schedule/exclusions.
@@ -382,6 +388,8 @@
       ta.value = text; _seededNotes = text; syncPhaseNote();
       try { renderNotesPreview(); } catch {}
       try { TW.setState({ notes_text: ta.value }); } catch {}
+      // Arrives after the base flip's own fit was answered: ask again, for the new notes.
+      try { scheduleFit(); } catch {}
     });
   }
 
@@ -3129,7 +3137,29 @@
   function boxLines(el) {
     const box = editingBox(el);
     if (!box) return [];
-    return Array.from(box.querySelectorAll(LINE_SEL));
+    // ONLY THE LINES ON SCREEN. A box also holds lines nobody can see: the PRICE rows a tax layout
+    // hides, the Options heading on a bid with no options, the template spacer the Options gap
+    // replaces. Every caller here means the lines the estimator sees -- Ctrl+A, a drag across
+    // lines, the line above for Backspace, "a box keeps one line" -- and handing them a hidden one
+    // put the caret inside it (Backspace then let the browser merge paragraphs across it), let
+    // Ctrl+A then Delete empty and remove a row the tax rule hides, and let undo show that row.
+    return Array.from(box.querySelectorAll(LINE_SEL)).filter(lineShown);
+  }
+
+  /** Is `el` drawn? No for a line hidden by its own inline `display: none` (the tax rows a layout
+   *  does not print, setBlockContent's free tax rows, the Options heading with no options), the
+   *  `hidden` attribute, or a class that hides it (`tw-gap-absorbed`, `tw-block-removed`: the only
+   *  two class rules in styles.css that hide a line, test_line_removal.py keeps it that way) --
+   *  on the line or on anything between it and its box, like #options-gap. */
+  function lineShown(el) {
+    const box = editingBox(el);
+    for (let n = el; n && n !== box && n.nodeType === 1; n = n.parentNode) {
+      if (n.hidden) return false;
+      if (n.style && n.style.display === "none") return false;
+      if (n.classList && (n.classList.contains("tw-gap-absorbed")
+                          || n.classList.contains("tw-block-removed"))) return false;
+    }
+    return true;
   }
 
   /** Every editable line family, in one place so no selector can drift from another.
@@ -3420,6 +3450,30 @@
     return t === "" || t === "\n";
   }
 
+  /** Does `el` hold nothing but the placeholder break an emptied line keeps? The browser, and
+   *  renderRuns, leave one `<br>` in a line whose every character was deleted so it keeps its
+   *  height, and serializeBlock reads that as "\n". A "\n" that is real text (a saved entry
+   *  replayed as textContent) is not this. */
+  function lineBare(el) {
+    return serializeBlock(el) === "\n" && segmentsOf(el).every(s => !s.node);
+  }
+
+  /** A template paragraph the estimator emptied and KEPT: the words are gone, the line is not.
+   *
+   *  It prints as one empty line of its own. collectOverrides sends it as `{text: "", kept: true}`
+   *  and the writer then never takes it for the template's own blank spacer above the Options
+   *  heading (proposal_writer._apply_options_gap stops at it, as it does at a typed line), and
+   *  neither does paintOptionsGap. Without the flag the writer took it into the gap along with the
+   *  spacer above it and printed two lines fewer than this page draws. A paragraph that was already
+   *  blank in the template is not one: emptied again, it is that spacer as it always was. And
+   *  `text: ""` without the flag, which a draft saved before it can carry, keeps meaning what it
+   *  did, on both sides (restored as an empty textContent, it is not bare). */
+  function lineKeptEmpty(el) {
+    if (!el || !el.classList || !el.classList.contains("tw-block") || !lineBare(el)) return false;
+    const was = pristineById.get(Number(el.dataset.id));
+    return typeof was === "string" && was.trim() !== "";
+  }
+
   /** May `el` be taken out of the document, rather than kept as an empty line?
    *
    *  Only inside a text box (the terms flow is paginated around its letterhead anchors, and the
@@ -3474,6 +3528,13 @@
     el.classList.remove("tw-block-removed");
     el.classList.add("tw-block");
     el.style.display = "";
+    // ...unless it is a free tax / total row the tax rule does not print: asked again, with the
+    // values the page last drew, because refreshDocumentFills passed over it while it was out and
+    // the rule may have moved meanwhile. Shown outright, a "$0 – Remodel Tax" row the document does
+    // not print came back on screen.
+    const tk = typeof _lastTokens !== "undefined" ? _lastTokens : null;
+    const rec = tk ? blockById.get(Number(el.dataset.id)) : null;
+    if (rec) priceRowVisibility(el, rec, tk);
     return true;
   }
 
@@ -3488,16 +3549,32 @@
     return out.sort((a, b) => a - b);
   }
 
-  /** The line before (dir -1) or after (dir 1) `el` in its box, or null. */
+  /** The nearest line SHOWN before (dir -1) or after (dir 1) `el` in its box, or null.
+   *
+   *  Hidden lines are stepped over, not stopped at. On a Direct PRICE box with no options the
+   *  line above the blank lines is the hidden "Options:" heading, and landing the caret in it after
+   *  a Backspace left every later key acting on a line nobody could see: Enter saved "Options:\n"
+   *  into it, and the browser's own Backspace merged paragraphs across it, deleting the price
+   *  region and the record of the removed line. `el` itself may be hidden (caretToLine asks). */
   function adjacentLine(el, dir) {
-    const lines = boxLines(el);
-    const i = lines.indexOf(el);
-    return i < 0 ? null : (lines[i + dir] || null);
+    const box = editingBox(el);
+    if (!box || !box.querySelectorAll) return null;
+    const all = Array.from(box.querySelectorAll(LINE_SEL));
+    let i = all.indexOf(el);
+    if (i < 0) return null;
+    for (i += dir; i >= 0 && i < all.length; i += dir) if (lineShown(all[i])) return all[i];
+    return null;
   }
 
   /** A caret at the start or the end of `el`. An emptied line holds a lone `<br>` and no text node,
-   *  which placeSelection cannot stand in, so that case gets a caret on the element itself. */
+   *  which placeSelection cannot stand in, so that case gets a caret on the element itself.
+   *
+   *  Never INSIDE a hidden line: asked for one, the caret goes to the nearest line shown, looking
+   *  the way it was going first (up for the end of a line, down for its start). */
   function caretToLine(el, atEnd) {
+    if (el && !lineShown(el)) {
+      el = adjacentLine(el, atEnd ? -1 : 1) || adjacentLine(el, atEnd ? 1 : -1);
+    }
     if (!el) return;
     const pos = atEnd ? runsLength(editRuns(el)) : 0;
     if (pointAt(el, pos)) { placeSelection(el, pos, pos); return; }
@@ -4206,6 +4283,11 @@
         const _t = isPriceParagraph(o.id) ? migratePriceParagraphText(o.id, o.text, tk) : o.text;
         if (/\{\{\s*[a-zA-Z_][a-zA-Z0-9_]*\s*\}\}/.test(_t) && isPriceParagraph(o.id)) {
           el.innerHTML = fillHtml(_t, tk);
+        } else if (o.kept === true && o.text === "") {
+          // A line he emptied and kept, drawn as he left it -- holding the placeholder break -- so
+          // after a reload it is still his line (lineKeptEmpty), for the Options gap and the next
+          // save alike, and not the template spacer an empty textContent would make it.
+          el.innerHTML = "<br>";
         } else {
           el.textContent = o.text;   // pre-wrap CSS renders the \n line breaks
         }
@@ -4253,7 +4335,7 @@
       // which prints one empty line. Only the placeholder: a "\n" that is real text -- a saved
       // entry replayed as `textContent` -- is not a lone BR element and is sent as it always was.
       const raw = serializeBlock(el);
-      const bare = raw === "\n" && segmentsOf(el).every(s => !s.node);
+      const bare = lineBare(el);
       const cur = bare ? "" : raw;
       const runs = bare ? [] : serializeRuns(el);
       const textChanged = cur !== pristineById.get(id);
@@ -4276,6 +4358,9 @@
       else entry = runsArePlain(runs) && !fmtChanged
         ? { id: id, text: (isPriceParagraph(id) && !bare) ? storedText(el) : cur }
         : { id: id, text: cur, runs: bare ? [] : storedRuns(el, textChanged) };
+      // ...and one he KEPT says so, which is what tells the writer it is his line and not the
+      // template's blank spacer above the Options heading (see lineKeptEmpty).
+      if (entry.text === "" && lineKeptEmpty(el)) entry.kept = true;
       if (para) entry.para = para;
       out.push(entry);
     });
@@ -4968,8 +5053,9 @@
   let _fitSig = "";      // the last question ANSWERED, so an unchanged document asks nothing
 
   /** Ask again, soon. Called on every document edit (schedulePersistOverrides), every sidebar
-   *  change (refreshDocumentFills), a base-bid pick and a template load. Cheap to over-call: an
-   *  unchanged payload sends no request. */
+   *  change (refreshDocumentFills), every price_overrides change (queuePovSave: the Options gap's
+   *  keys send no `input`), the default notes arriving, a base-bid pick and a template load. Cheap
+   *  to over-call: an unchanged payload sends no request. */
   function scheduleFit(delay) {
     if (_fitTimer) clearTimeout(_fitTimer);
     _fitTimer = setTimeout(() => { _fitTimer = null; requestFit(); },
@@ -6943,6 +7029,8 @@
     // and half would vanish. One break inside one element is the only shape this editor can send.
     const el = lineTarget(e);
     if (!el) return;
+    // Nor a break in a line nobody can see (the Backspace handler below says why).
+    if (!lineShown(el)) { e.preventDefault(); caretToLine(el, true); return; }
     const lines = selectionLines();
     if (lines.length > 1) {                 // a break replacing a multi-line selection
       e.preventDefault();
@@ -7078,6 +7166,13 @@
     if ((!back && !fwd) || e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
     const el = lineTarget(e);
     if (!el) return;
+    // A CARET IN A LINE NOBODY CAN SEE edits nothing: there, the browser's own Backspace merges
+    // paragraphs across the hidden line and takes the PRICE box's rows with it (see adjacentLine,
+    // which is why the caret should never get there). It goes to the nearest line shown instead.
+    if (!lineShown(el)) {
+      if (!e.defaultPrevented) { e.preventDefault(); caretToLine(el, back); }
+      return;
+    }
     const sel = selectionRange(el);
     if (!sel) return;
     // A selection means "delete these characters" and mid-line is the browser's job; both fall
@@ -7614,6 +7709,11 @@
   function queuePovSave() {
     if (_povTimer) clearTimeout(_povTimer);
     _povTimer = setTimeout(() => { try { TW.setState({ price_overrides: state.price_overrides }); } catch {} }, 500);
+    // A price_overrides change is a change to what the PRICE box prints -- a blank line more or
+    // fewer above "Options:", a line typed there, an undo -- so the size it prints at is asked
+    // again. The Options gap's keys consume their keystroke, so no `input` ever carries these to
+    // schedulePersistOverrides. (try: this can run before the fit's own bookkeeping exists.)
+    try { scheduleFit(); } catch {}
   }
 
   // ── THE BLANK LINES ABOVE THE OPTIONS HEADING (price_overrides.options_gap) ────────────────
@@ -7759,7 +7859,10 @@
     for (const n of aboveOptionsGap(gap)) {
       if (!gapShown(n)) continue;
       if (isGapTyped(n)) continue;           // the typed lines sit between the spacer and the gap
-      if (n.classList.contains("tw-block") && /^[ ]*$/.test(serializeBlock(n))) {
+      // A blank template paragraph -- the placeholder break an emptied spacer holds included, as
+      // collectOverrides sends it -- but never a line he emptied and kept, which the writer prints.
+      if (n.classList.contains("tw-block") && !lineKeptEmpty(n)
+          && (/^[ ]*$/.test(serializeBlock(n)) || lineBare(n))) {
         n.classList.add("tw-gap-absorbed");
         continue;
       }

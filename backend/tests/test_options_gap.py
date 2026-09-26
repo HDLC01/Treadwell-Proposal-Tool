@@ -479,3 +479,39 @@ def test_the_editor_and_the_writer_agree_on_the_count_rule(ran):
     r = ran["reload"]
     assert [r[k]["counted"] for k in ("three", "zero", "string", "garbage", "negative", "huge",
                                       "fraction")] == [3, 0, 4, 2, 0, 20, 2]
+
+
+def test_a_line_emptied_and_kept_above_the_gap_is_not_taken_into_it(ran):
+    """The editor's half of test_line_removal.py's kept-line document test. The gap takes in a blank
+    template paragraph directly above the heading -- the placeholder break an emptied spacer holds
+    included, since collectOverrides sends that as no change at all -- but never a template line the
+    estimator emptied and KEPT: the writer prints that one (`kept`), so this page draws it. A
+    `text: ""` saved before the flag, restored as an empty line, is taken in on both sides."""
+    got = ran["keptAboveGap"]
+    assert got["kept"] == {"mobilShown": True, "spacerHidden": True, "lines": 2}
+    assert got["cleared"] == {"spacerHidden": True, "totalShown": True}
+    assert got["gcKept"] == {"totalShown": True, "spacerHidden": True}
+    assert got["legacy"] == {"mobilShown": False, "spacerHidden": True}
+
+
+def test_changing_the_gap_asks_for_the_size_again(ran):
+    """The review's case: Enter four times on the blank lines above "Options:" and the PRICE box kept
+    the scale it had (0.93) while the document printed it at 0.75. The gap's keys consume their
+    keystroke, so no `input` reached the page's refit; a price_overrides change now asks
+    POST /api/proposal-fit again (queuePovSave -> scheduleFit)."""
+    got = ran["gapAsksFit"]
+    assert got["before"] == 0
+    assert got["afterEnter"] == 1 and got["afterBackspace"] == 2
+    assert got["lines"] == 2
+
+
+def test_enter_in_the_hidden_options_heading_writes_nothing_there(ran):
+    """A caret inside the hidden "Options:" heading (a bid with no options) takes no Enter: no typed
+    line is made of it (it would print once options are added), the heading keeps its words and stays
+    hidden, and the caret goes to the end of the base line, the line shown above."""
+    got = ran["enterInHiddenHeading"]
+    assert got["defaulted"] is True
+    assert got["heading"] == "Options:" and got["headingHidden"] is True
+    assert got["extraLines"] == 0 and got["typedHeading"] is None
+    assert got["caretLine"] == "base-bid-row"
+    assert got["caretOffset"] == len("$36,763 – Epoxy flooring as described above (material sales tax INCLUDED)")

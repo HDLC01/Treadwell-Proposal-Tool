@@ -468,7 +468,7 @@ const api = new Function(
     fn("fmtAt"), fn("segmentsOf"), fn("mergeSegs"), fn("serializeRuns"), fn("editRuns"),
     fn("runStyleCss"), fn("runEditCss"), fn("renderRuns"), fn("serializeBlock"), fn("pointAt"),
     fn("markEdited"), fn("runsFromHtml"), fn("spliceLines"),
-    fn("lineAt"), fn("lineAtSelection"), fn("lineTarget"), fn("editingBox"), fn("boxLines"),
+    fn("lineAt"), fn("lineAtSelection"), fn("lineTarget"), fn("editingBox"), fn("boxLines"), fn("lineShown"),
     fn("noteLineHtml"), fn("renderNotesPreview"), fn("syncNotesFromDom"),
     // spliceLines takes out the lines a selection covered end to end (Word deletes them), so the
     // removal family comes with it; renderNotesPreview asks notesRowSizePt the size a note prints

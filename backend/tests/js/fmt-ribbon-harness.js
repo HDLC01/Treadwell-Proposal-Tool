@@ -470,7 +470,7 @@ const LIFTED = [
   // contenteditable fires its editing events at the host -- so leaving any of these out is not a
   // lift-time failure, it is the whole region silently doing nothing.
   topConst("LINE_SEL"),
-  fn("boxLines"), fn("lineAt"), fn("lineAtSelection"), fn("lineTarget"), fn("editingBox"),
+  fn("boxLines"), fn("lineShown"), fn("lineAt"), fn("lineAtSelection"), fn("lineTarget"), fn("editingBox"),
   fn("clearBoxLine"), fn("paintBoxSel"), fn("clearBoxSel"),
   // THE NATIVE RANGE, LIFTED RATHER THAN RECORDED. It used to be stubbed here — the stub wrote
   // down which line ids the widen asked for — and that is exactly why a real bug lived in it

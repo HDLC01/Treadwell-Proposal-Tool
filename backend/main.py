@@ -4609,6 +4609,11 @@ def _sanitize_paragraph_overrides(overrides_in: list) -> list:
         entry_t: Dict[str, Any] = {"id": pid, "text": str(text)}
         if para:
             entry_t["para"] = para
+        # A LINE HE EMPTIED AND KEPT (proposal-review.js lineKeptEmpty): the writer prints it as
+        # his own empty line and never folds it into the blank lines above the Options heading.
+        # Strictly True, so a `text: ""` saved before the key existed means what it meant.
+        if o.get("kept") is True:
+            entry_t["kept"] = True
         out.append(entry_t)
     return out
 

@@ -420,7 +420,35 @@ async function runAnswers(a) {
   return res;
 }
 
+/** THE NOTES THAT ARRIVE LATE ask for the size again. A brand-new project's boilerplate notes, and
+ *  a base flip's re-seeded ones, come back from /api/default-notes after the editor's first fit
+ *  question was already answered, so the NOTES box showed the size of the notes it no longer held.
+ *  Lifted: the page's prefill (the `_notesReady` IIFE, run here as the page runs it at load) and
+ *  reseedNotesForWorkType. The fetch is the one collaborator faked, answering at once; scheduleFit
+ *  is recorded, since what it then does is the `answers` scenario above. */
+function notesFit() {
+  const asks = [];
+  const ta = { value: "" };
+  const doc = { getElementById: (id) => (id === "notes-text" ? ta : null) };
+  const run = new Function("document", "asks", "ta",
+    `const state = { notes: [] };
+    let _seededNotes = "";
+    const fetchDefaultNotes = (onText) => { onText("Scope.\\nSchedule."); return Promise.resolve(); };
+    const syncPhaseNote = () => {};
+    const renderNotesPreview = () => {};
+    const TW = { setState: () => {} };
+    const scheduleFit = (d) => { asks.push(d == null ? null : d); };
+    ` + topConst("_notesReady") + `
+    ` + fn("reseedNotesForWorkType") + `
+    const afterPrefill = asks.length;
+    const seeded = ta.value;
+    reseedNotesForWorkType();
+    return { afterPrefill: afterPrefill, afterReseed: asks.length, seeded: seeded };`);
+  return run(doc, asks, ta);
+}
+
 (async () => {
+  out.notesFit = notesFit();
   if (CASES.answers) out.answers = await runAnswers(CASES.answers);
   process.stdout.write(JSON.stringify(out));
 })().catch((e) => { process.stderr.write(String(e && e.stack || e)); process.exit(1); });

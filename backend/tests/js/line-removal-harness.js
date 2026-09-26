@@ -67,6 +67,9 @@ const BOX_DELETE = region('  docSurface.addEventListener("keydown", (e) => {\n  
 // The page's Backspace/Delete boundary handler, whole: the one that now takes an empty line out.
 const BOUNDARY = region('  docSurface.addEventListener("keydown", (e) => {\n    const back = e.key === "Backspace"',
                         "  /** PASTE, for every editable family");
+// The page's Ctrl+A / B / I / U handler, whole: Ctrl+A is what puts a box selection there.
+const CTRL_KEYS = region('  docSurface.addEventListener("keydown", (e) => {\n    if (!(e.ctrlKey || e.metaKey) || e.altKey) return;\n    if (String(e.key).toLowerCase() === "a")',
+                         "  // Enter inside a template paragraph = ONE line break");
 
 // Copied from editor-undo-harness.js (see the header); only `defaultPrevented` is new.
 // ── the smallest DOM this code touches ───────────────────────────────────────
@@ -415,12 +418,21 @@ const api = new Function(
   const clearTimeout = () => {};
   const ISLAND_IDS = [];
   const stagingPanel = null, stagingHome = null;
+  // The values the document was last drawn with (refreshDocumentFills sets them): unremoveLine asks
+  // the tax rule again with them. B / I / U belong to fmt-ribbon-harness.js.
+  let _lastTokens = null;
+  const toggleFormat = () => {};
+  // #569's typed price lines ride the undo entry too (snap.po). Redrawing the price block from the
+  // restored maps is price-lines-harness.js's; here the redraw and the save are recorded.
+  const povRedraws = [];
+  const refreshPriceDisplay = () => { povRedraws.push("redraw"); };
+  const queuePovSave = () => { povRedraws.push("save"); };
 ` + [
     topConst("escHtml"), topConst("sameFmt"), topConst("LINE_SEL"), topConst("focusInside"),
     fn("fmtAt"), fn("segmentsOf"), fn("mergeSegs"), fn("serializeRuns"), fn("editRuns"),
     fn("runStyleCss"), fn("runEditCss"), fn("renderRuns"), fn("serializeBlock"),
     fn("runsEqual"), fn("pointAt"), fn("markEdited"),
-    fn("lineAt"), fn("lineAtSelection"), fn("lineTarget"), fn("editingBox"), fn("boxLines"),
+    fn("lineAt"), fn("lineAtSelection"), fn("lineTarget"), fn("editingBox"), fn("boxLines"), fn("lineShown"),
     fn("paraBase"), fn("paraNow"), fn("paraPatch"), fn("sanitizeParaPatch"), fn("applyParaGeom"),
     fn("applyParaToEl"), fn("setParaState"), fn("paraAction"),
     fn("paintBoxSel"), fn("clearBoxSel"), fn("clearBoxLine"), fn("selectRangeAcross"),
@@ -434,12 +446,13 @@ const api = new Function(
     // The Backspace handler hands a typed price line to mergePriceLine first.
     fn("makeExtraLine"), fn("caretInto"), fn("mergePriceLine"),
     topConst("overrideKey"), topConst("liveKey"), fn("savedVersionMatches"),
-    fn("savedOverridesFor"), fn("preserveRichOverrides"), fn("collectOverrides"),
-    fn("restoreSavedOverrides"),
+    fn("savedOverridesFor"), fn("preserveRichOverrides"), fn("lineBare"), fn("lineKeptEmpty"), fn("collectOverrides"),
+    fn("restoreSavedOverrides"), fn("priceRowVisibility"),
   ].join("\n") + `
 ` + BOX_DELETE + `
 ` + UNDO + `
 ` + BOUNDARY + `
+` + CTRL_KEYS + `
   notesPreviewEl.addEventListener("input", syncNotesFromDom);
   // Another handler that takes Backspace first, the way the Options gap's capture listener does.
   docSurface.addEventListener("keydown", (e) => { if (TAKE.on && e.key === "Backspace") e.preventDefault(); }, true);
@@ -455,6 +468,11 @@ const api = new Function(
     setBoxSel: (els) => { boxSel = els && els.length ? els : null; paintBoxSel(); },
     setFmtBlock: (el) => { fmtBlock = el; },
     forget: () => undoForget(),
+    setTokens: (t) => { _lastTokens = t; },
+    setPov: (o) => { state.price_overrides = o; },
+    pov: () => state.price_overrides,
+    povRedraws,
+    lineShown, lineKeptEmpty,
     notesPreviewEl,
   };`
 )(document, window, docSurface, F, Node, Ev, Clock, persisted, stateWrites, inputs, idled, readSel,
@@ -482,7 +500,9 @@ function mountBox(lines, opts) {
     if (ln.priceRow) {
       const p = new El("p");
       p.className = "tw-line-edit";
-      p.dataset.poLinekey = "base";
+      p.dataset.poLinekey = ln.key || "base";
+      if (ln.kind) p.dataset.poKind = ln.kind;
+      if (ln.hidden) p.style.display = "none";
       p.textContent = ln.text;
       box.appendChild(p);
       return p;
@@ -493,9 +513,17 @@ function mountBox(lines, opts) {
     el.dataset.id = String(id);
     if (ln.hidden) el.style.display = "none";
     el.innerHTML = ln.text ? '<span style="font-size:8pt">' + ln.text + "</span>" : "<br>";
-    box.appendChild(el);
+    // Inside something hidden, the way #options-gap hides the lines it holds.
+    if (ln.inHidden) {
+      const wrap = new El("div");
+      wrap.style.display = "none";
+      wrap.appendChild(el);
+      box.appendChild(wrap);
+    } else {
+      box.appendChild(el);
+    }
     api.pristine(id, ln.pristine == null ? ln.text : ln.pristine);
-    recs.push({ id: id, text: ln.text, txbx: 2, in_block: null,
+    recs.push({ id: id, text: ln.tpl != null ? ln.tpl : ln.text, txbx: 2, in_block: null,
                 para: ln.marker ? { marker: "1." } : null,
                 fit: { hp: 18, typed_hp: 16, typed_sized: true, removable: ln.removable !== false } });
     return el;
@@ -519,6 +547,13 @@ const caretAt = () => {
   if (SEL) return { line: SEL.line.dataset.id || null, at: SEL.range[0] };
   if (ACROSS && ACROSS.startContainer) return { line: ACROSS.startContainer.dataset ? ACROSS.startContainer.dataset.id : null, at: ACROSS.startOffset };
   return null;
+};
+/** Where the caret is, whichever family its line is, and whether that line is on screen. */
+const caretWhere = () => {
+  const el = SEL ? SEL.line : (ACROSS && ACROSS.startContainer ? ACROSS.startContainer : null);
+  if (!el || !el.dataset) return null;
+  return { line: el.dataset.id || el.dataset.poLinekey || null,
+           at: SEL ? SEL.range[0] : ACROSS.startOffset, shown: api.lineShown(el) };
 };
 const out = {};
 
@@ -737,6 +772,153 @@ const out = {};
   caret(els[1], 0);
   key(els[1], "Backspace");
   out.terms = { lines: els.map(lineState) };
+}
+
+// ═══ lines nobody can see: never landed on, never selected, never taken out ═══════════════════
+// 17. A Direct PRICE box on a bid with no options: under the base line, the "Options:" heading is
+//     there but hidden, then the blank lines. Backspace on the first blank line takes it out and the
+//     caret goes to the END OF THE BASE LINE -- the line above that is on screen -- not into the
+//     hidden heading. A second Backspace is then the browser's own, in a visible line.
+{
+  const { els } = mountBox([{ priceRow: true, text: "$6,767 – Epoxy flooring as described above" },
+                            { priceRow: true, key: "heading_options", text: "Options:", hidden: true },
+                            { text: "" }, { text: "" }, { text: "" }]);
+  caret(els[2], 0);
+  const e1 = key(els[2], "Backspace");
+  const first = { prevented: !!e1.defaultPrevented, caret: caretWhere(), removed: api.removedBlockIds() };
+  const e2 = key(els[0], "Backspace");
+  out.hiddenAbove = { first: first, secondPrevented: !!e2.defaultPrevented, caretAfter: caretWhere(),
+                      removedAfter: api.removedBlockIds(),
+                      heading: { text: api.serializeBlock(els[1]), display: els[1].style.display || "" } };
+}
+
+// 18. ...and a caret that is in a hidden line anyway does nothing there: the key is refused and
+//     the caret moves to the nearest line shown (Backspace looks up, Delete down).
+{
+  const { els } = mountBox([{ priceRow: true, text: "$6,767 – Epoxy flooring as described above" },
+                            { priceRow: true, key: "heading_options", text: "Options:", hidden: true },
+                            { text: "" }, { text: "Notes" }]);
+  caret(els[1], 8);
+  const back = key(els[1], "Backspace");
+  const afterBack = { prevented: !!back.defaultPrevented, caret: caretWhere() };
+  caret(els[1], 0);
+  const del = key(els[1], "Delete");
+  out.caretInHidden = { back: afterBack, del: { prevented: !!del.defaultPrevented, caret: caretWhere() },
+                        heading: api.serializeBlock(els[1]), removed: api.removedBlockIds() };
+}
+
+// 19. GC, no remodel tax: the free "$0 – Remodel Tax" row is hidden between the Material Sales Tax
+//     row and the Total. The Total emptied and Backspaced goes; the caret goes to the end of the
+//     Material Sales Tax row, and the hidden row is neither landed on nor touched.
+{
+  const { els } = mountBox([{ text: "$1,200 – Material Sales Tax" },
+                            { text: "$0 – Remodel Tax", hidden: true },
+                            { text: "", pristine: "$1,300 – Total" },
+                            { text: "Options & Unit Prices" }, { text: "" }]);
+  caret(els[2], 0);
+  const e = key(els[2], "Backspace");
+  out.gcHiddenRemodel = { prevented: !!e.defaultPrevented, caret: caretWhere(), lines: els.map(lineState) };
+}
+
+// 20. Delete on an empty line whose next line is inside a hidden container: the caret skips it.
+{
+  const { els } = mountBox([{ text: "Scope: x" }, { text: "" }, { text: "Gap", inHidden: true },
+                            { text: "Notes: z" }]);
+  caret(els[1], 0);
+  const e = key(els[1], "Delete");
+  out.hiddenBelow = { prevented: !!e.defaultPrevented, caret: caretWhere(), lines: els.map(lineState) };
+}
+
+// 21. CTRL+A THEN DELETE, AND UNDO, in a GC PRICE box with no remodel tax. Ctrl+A takes the lines
+//     on screen: the hidden Remodel row is not selected, not emptied, not taken out -- the
+//     document leaves it out on its own -- and Ctrl+Z does not bring it onto the screen.
+{
+  const { box, els } = mountBox([{ text: "Base Bid" }, { text: "$1,200 – Material Sales Tax" },
+                                 { text: "$0 – Remodel Tax", hidden: true }, { text: "$1,300 – Total" },
+                                 { text: "" }]);
+  caret(els[0], 2);
+  const a = key(els[0], "a", { ctrlKey: true });
+  const selected = els.map((el) => el.classList.contains("tw-boxsel"));
+  const d = key(els[0], "Delete");
+  const afterDelete = { lines: els.map(lineState), overrides: api.collectOverrides() };
+  tick();
+  key(els[0], "z", { ctrlKey: true });
+  out.ctrlAHidden = { ctrlAPrevented: !!a.defaultPrevented, selected: selected,
+                      deletePrevented: !!d.defaultPrevented, afterDelete: afterDelete,
+                      afterUndo: els.map(lineState), boxLines: box.querySelectorAll(".tw-block").length };
+}
+
+// 22. A tax row taken out while it showed, and the rule moved while it was out (the remodel tax
+//     switched off in the sidebar): Ctrl+Z brings it back HIDDEN, as the document prints it.
+{
+  const { els } = mountBox([{ text: "$1,200 – Material Sales Tax" },
+                            { text: "", tpl: "{{tax_amount_formatted}} – Remodel Tax",
+                              pristine: "$120 – Remodel Tax" },
+                            { text: "$1,320 – Total" }]);
+  api.setTokens({ price_rows_remodel: true, tax_amount_formatted: "$120" });
+  caret(els[1], 0);
+  key(els[1], "Backspace");
+  const gone = lineState(els[1]);
+  api.setTokens({ price_rows_remodel: false, tax_amount_formatted: "$0" });
+  tick();
+  key(els[0], "z", { ctrlKey: true });
+  const back = lineState(els[1]);
+  // ...and one whose rule still says it prints comes back shown.
+  api.setTokens({ price_rows_remodel: true, tax_amount_formatted: "$120" });
+  tick();
+  key(els[0], "y", { ctrlKey: true });
+  tick();
+  key(els[0], "z", { ctrlKey: true });
+  out.unremoveAsksTheRule = { gone: gone, backHidden: back, backShown: lineState(els[1]) };
+  api.setTokens(null);
+}
+
+// 23. A LINE EMPTIED AND KEPT, saved and reloaded: it is drawn as it was left (the placeholder
+//     break), so it is still his kept line and the next save says so again. A `text: ""` saved
+//     before the flag existed is restored as it always was (an empty line, no break), and saves
+//     back without the flag.
+{
+  const { els } = mountBox([{ text: "Scope: x" }, { text: "Exclusions: y" }, { text: "Notes: z" }]);
+  STORE.blob = { audience: "Direct", paragraph_overrides_all: {
+    "epoxy:Direct": { template_version: "tv-1", items: [{ id: 201, text: "", kept: true }] } } };
+  api.restoreSavedOverrides("epoxy", "Direct", {});
+  const kept = { children: els[1].childNodes.map((c) => c.tagName || "#text"),
+                 keptEmpty: api.lineKeptEmpty(els[1]), overrides: api.collectOverrides() };
+  const again = mountBox([{ text: "Scope: x" }, { text: "Exclusions: y" }, { text: "Notes: z" }]);
+  STORE.blob = { audience: "Direct", paragraph_overrides_all: {
+    "epoxy:Direct": { template_version: "tv-1", items: [{ id: 201, text: "" }] } } };
+  api.restoreSavedOverrides("epoxy", "Direct", {});
+  out.keptReload = { kept: kept,
+                     legacy: { children: again.els[1].childNodes.map((c) => c.tagName || "#text"),
+                               keptEmpty: api.lineKeptEmpty(again.els[1]),
+                               overrides: api.collectOverrides() } };
+  STORE.blob = { audience: "Direct" };
+}
+
+// 24. ONE UNDO HISTORY FOR BOTH: a line taken out, then the blank lines above "Options:" changed
+//     (price_overrides, #569). The first Ctrl+Z puts the count back and leaves the line out; the
+//     second brings the line back and leaves the count alone.
+{
+  const { els } = mountBox([{ priceRow: true, kind: "line", key: "base",
+                              text: "$6,767 – Epoxy flooring as described above" },
+                            { text: "" }, { text: "Notes: z" }]);
+  api.setPov({ options_gap: 2 });
+  caret(els[1], 0);
+  key(els[1], "Backspace");                       // the empty line goes (one undo entry)
+  const afterRemove = { removed: api.removedBlockIds(), gap: api.pov().options_gap };
+  tick();
+  key(els[2], "Enter");                           // the pre-image of the next edit (one entry)...
+  api.pov().options_gap = 3;                      // ...which is the gap's Enter: one line more
+  tick();
+  api.povRedraws.length = 0;
+  key(els[2], "z", { ctrlKey: true });
+  const first = { removed: api.removedBlockIds(), gap: api.pov().options_gap,
+                  redraws: api.povRedraws.slice() };
+  tick();
+  key(els[2], "z", { ctrlKey: true });
+  out.undoBoth = { afterRemove: afterRemove, first: first,
+                   second: { removed: api.removedBlockIds(), gap: api.pov().options_gap } };
+  api.setPov(undefined);
 }
 
 process.stdout.write(JSON.stringify(out));

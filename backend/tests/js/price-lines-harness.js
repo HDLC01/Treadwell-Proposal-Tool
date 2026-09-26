@@ -252,6 +252,8 @@ const UNITS = [
   "let templateOptionsHeadingIds = [];",
   fn("optionsGapCount"), fn("optionsGapTyped"), fn("isGapTyped"), fn("gapTypedEls"),
   fn("optionsHeadingEl"), fn("aboveOptionsGap"), fn("gapShown"), fn("paintOptionsGap"),
+  // ...which asks whether a blank template line above the heading is one he emptied and kept.
+  "const pristineById = new Map();", fn("lineBare"), fn("lineKeptEmpty"),
   fn("paintGapTyped"),
 ].join("\n");
 const ENTER = handlerAround("// A PRICE line (or a line typed next to one): a new line of its own");
@@ -299,7 +301,7 @@ function build(st, opts) {
     "const blockById = new Map();",
     "let fmtBlock = null; const idleFmtBar = () => { fmtBlock = null; };",
     "const undoPush = () => false; const notesPreviewEl = null;",
-    [fn("boxLines"), fn("pointAt"), fn("lineIsEmpty"), fn("lineRemovable"), fn("removeLine"),
+    [fn("boxLines"), fn("lineShown"), fn("pointAt"), fn("lineIsEmpty"), fn("lineRemovable"), fn("removeLine"),
      fn("adjacentLine"), fn("caretToLine"), fn("removeLineAt")].join("\n"),
     "docSurface.addEventListener('keydown', " + ENTER + ");",
     "docSurface.addEventListener('keydown', " + BACKSPACE + ");",

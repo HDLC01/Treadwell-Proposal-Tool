@@ -363,7 +363,7 @@ const LIFTED = [
   fn("applyParaToEl"), fn("setParaState"),
   topConst("overrideKey"), fn("mergeOverrideEntry"), topConst("liveKey"),
   fn("savedOverridesFor"), fn("savedVersionMatches"), fn("restoreSavedOverrides"),
-  fn("collectOverrides"), fn("preserveRichOverrides"),
+  fn("lineBare"), fn("lineKeptEmpty"), fn("collectOverrides"), fn("preserveRichOverrides"),
   // The REAL writer. This is the function that overwrote good data with degraded data, so a
   // harness that imitated it would be testing the imitation.
   fn("schedulePersistOverrides"),
@@ -376,7 +376,7 @@ const LIFTED = [
   fn("syncBlock"),
   // collectOverrides sends a line the estimator DELETED as {id, removed: true} and
   // restoreSavedOverrides hides it again after a reload, so the removal family comes too.
-  fn("boxLines"), fn("lineIsEmpty"), fn("lineRemovable"), fn("removeLine"),
+  fn("boxLines"), fn("lineShown"), fn("lineIsEmpty"), fn("lineRemovable"), fn("removeLine"),
   fn("unremoveLine"), fn("removedBlockIds"),
 ].join("\n\n");
 

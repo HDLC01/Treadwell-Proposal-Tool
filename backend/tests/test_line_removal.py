@@ -307,7 +307,7 @@ def test_ctrl_z_brings_the_line_back_and_ctrl_y_takes_it_out_again(ran):
     was removed), so the next save says "print this empty" -- the state before the Backspace."""
     assert _states(ran["undoRemoval"]["lines"]) == ["kept", "kept", "kept"]
     assert ran["undoRemoval"]["lines"][1]["display"] == ""
-    assert ran["undoRemoval"]["overrides"] == [{"id": 201, "text": ""}]
+    assert ran["undoRemoval"]["overrides"] == [{"id": 201, "text": "", "kept": True}]
     assert _states(ran["redoRemoval"]["lines"]) == ["kept", "removed", "kept"]
     assert ran["redoRemoval"]["overrides"] == [{"id": 201, "removed": True}]
 
@@ -360,7 +360,7 @@ def test_ctrl_a_then_delete_takes_out_every_line_but_one(ran):
     assert _states(got["lines"]) == ["kept", "removed", "removed"]
     assert got["lines"][0]["text"] == "\n"
     assert got["removedCount"] == 2
-    assert got["overrides"] == [{"id": 200, "text": ""}, {"id": 201, "removed": True},
+    assert got["overrides"] == [{"id": 200, "text": "", "kept": True}, {"id": 201, "removed": True},
                                 {"id": 202, "removed": True}]
     assert [ln["text"] for ln in ran["undoBoxWide"]["lines"]] == ["Scope: x", "Schedule: y", "Notes: z"]
     assert _states(ran["undoBoxWide"]["lines"]) == ["kept", "kept", "kept"]
@@ -403,13 +403,15 @@ def test_an_emptied_line_is_saved_as_an_empty_paragraph_not_a_line_break(ran):
     """An emptied line holds the placeholder `<br>` the browser leaves so the line keeps its height,
     and serializeBlock reads it as a newline. Sent like that, the writer printed a `<w:br/>` and the
     line came out two lines tall in the PDF (see the document test below) while the page drew one.
-    Now it goes as `text: ""`, with `runs: []` for a formatted line. A newline that is real text --
-    a pre-change draft's saved entry, replayed as textContent -- goes exactly as it was, so that
-    draft prints as it always did."""
+    Now it goes as `text: ""`, with `runs: []` for a formatted line, and `kept: true`: the line is
+    his, emptied and kept (see the Options-gap tests below). A newline that is real text -- a
+    pre-change draft's saved entry, replayed as textContent -- goes exactly as it was, so that draft
+    prints as it always did."""
     got = ran["emptiedIsEmpty"]
     assert got["placeholder"][1:] == [["BR"], ["BR"]], "the scenario did not build an emptied line"
     assert got["texts"][1:] == ["\n", "\n"], "serializeBlock no longer reads the placeholder as a break"
-    assert got["emptied"] == [{"id": 201, "text": ""}, {"id": 202, "text": "", "runs": []}]
+    assert got["emptied"] == [{"id": 201, "text": "", "kept": True},
+                              {"id": 202, "text": "", "runs": [], "kept": True}]
     assert got["legacy"][0] == {"id": 201, "text": "\n"}
 
 
@@ -484,3 +486,200 @@ def test_a_key_another_handler_already_took_removes_nothing(ran):
     """The Options gap's handler and the box-wide Delete both take Backspace first; the boundary
     handler reads `defaultPrevented` and stands down, so one keystroke is never two edits."""
     assert _states(ran["alreadyTaken"]["lines"]) == ["kept", "kept", "kept"]
+
+
+
+# ── lines nobody can see (review of a1aae58, 2026-09-26) ──────────────────────
+# A box holds lines the estimator cannot see: the PRICE rows a tax layout hides, the "Options:"
+# heading on a bid with no options, the free Remodel row on a job with no remodel tax, the template
+# spacer the Options gap replaces. Removing a line used to put the caret INTO the hidden line above
+# it, and from there the browser's own Backspace merged paragraphs across it -- deleting the price
+# region, the removed-line record and the rows after it.
+
+def _caret(c):
+    return (c["line"], c["at"], c["shown"]) if c else None
+
+
+def test_backspace_under_a_price_block_puts_the_caret_on_the_line_shown_not_the_hidden_heading(ran):
+    """Direct PRICE box, no options: base line, the hidden "Options:" heading, three blank lines.
+    Backspace on the first blank line takes it out and the caret lands at the END of the base line,
+    the line above that is on screen. The heading is not touched, and the next Backspace is the
+    browser's own inside a line that shows."""
+    got = ran["hiddenAbove"]
+    assert got["first"]["prevented"] and got["first"]["removed"] == [202]
+    assert _caret(got["first"]["caret"]) == ("base", 42, True)
+    assert got["secondPrevented"] is False
+    assert got["removedAfter"] == [202]
+    assert got["heading"] == {"text": "Options:", "display": "none"}
+
+
+def test_a_caret_in_a_hidden_line_edits_nothing_and_moves_to_a_line_shown(ran):
+    """However it got there, a caret inside a hidden line takes no key: Backspace moves it to the end
+    of the line shown above, Delete to the start of the line shown below, and nothing is removed."""
+    got = ran["caretInHidden"]
+    assert got["back"]["prevented"] and _caret(got["back"]["caret"]) == ("base", 42, True)
+    assert got["del"]["prevented"] and _caret(got["del"]["caret"]) == ("202", 0, True)
+    assert got["heading"] == "Options:" and got["removed"] == []
+
+
+def test_the_hidden_remodel_row_and_a_hidden_container_are_stepped_over(ran):
+    """GC, no remodel tax: the emptied Total goes on Backspace and the caret lands at the end of the
+    Material Sales Tax row, over the hidden Remodel row, which stays as it was. And Delete on an
+    empty line skips a line inside a hidden container (the way #options-gap hides its lines)."""
+    g = ran["gcHiddenRemodel"]
+    assert g["prevented"] and _caret(g["caret"]) == ("200", 27, True)
+    assert _states(g["lines"]) == ["kept", "kept", "removed", "kept", "kept"]
+    assert g["lines"][1]["display"] == "none" and g["lines"][1]["text"] == "$0 – Remodel Tax"
+    h = ran["hiddenBelow"]
+    assert h["prevented"] and _caret(h["caret"]) == ("203", 0, True)
+    assert _states(h["lines"]) == ["kept", "removed", "kept", "kept"]
+    assert h["lines"][2]["text"] == "Gap"
+
+
+def test_ctrl_a_then_delete_leaves_a_hidden_tax_row_alone_and_undo_does_not_show_it(ran):
+    """Ctrl+A in a GC PRICE box with no remodel tax selects the lines on screen: the hidden
+    "$0 – Remodel Tax" row is not selected, not emptied, not taken out (no override is sent for it:
+    the writer leaves it out by itself, and a saved removal would keep it out even once remodel tax
+    applies), and Ctrl+Z does not bring it onto the screen."""
+    got = ran["ctrlAHidden"]
+    assert got["ctrlAPrevented"] and got["deletePrevented"]
+    assert got["selected"] == [True, True, False, True, True]
+    remodel = got["afterDelete"]["lines"][2]
+    assert (remodel["block"], remodel["removed"], remodel["display"], remodel["text"]) == (
+        True, False, "none", "$0 – Remodel Tax")
+    assert 202 not in [o["id"] for o in got["afterDelete"]["overrides"]]
+    undone = got["afterUndo"][2]
+    assert (undone["block"], undone["display"], undone["text"]) == (True, "none", "$0 – Remodel Tax")
+    assert [ln["text"] for ln in got["afterUndo"]] == [
+        "Base Bid", "$1,200 – Material Sales Tax", "$0 – Remodel Tax", "$1,300 – Total", "\n"]
+
+
+def test_undo_brings_a_tax_row_back_as_the_tax_rule_now_says(ran):
+    """A Remodel row taken out while it showed, and the remodel tax switched off while it was out:
+    Ctrl+Z brings it back hidden, as the document prints it. With the tax back on, it comes back
+    shown."""
+    got = ran["unremoveAsksTheRule"]
+    assert got["gone"]["removed"] is True
+    assert (got["backHidden"]["block"], got["backHidden"]["display"]) == (True, "none")
+    assert (got["backShown"]["block"], got["backShown"]["display"]) == (True, "")
+
+
+def test_a_kept_line_reloads_kept_and_an_old_empty_entry_as_it_was(ran):
+    """`{text: "", kept: true}` is drawn with the placeholder break, so it is still a kept line and
+    saves back the same. A `text: ""` saved before the flag reloads as it always did (an empty line
+    with no break) and saves back without it -- so both the editor and the writer keep treating it
+    the way they did."""
+    k = ran["keptReload"]["kept"]
+    assert k["children"] == ["BR"] and k["keptEmpty"] is True
+    assert k["overrides"] == [{"id": 201, "text": "", "kept": True}]
+    old = ran["keptReload"]["legacy"]
+    assert old["children"] == [] and old["keptEmpty"] is False
+    assert old["overrides"] == [{"id": 201, "text": ""}]
+
+
+# What an editor line is, as a selector's last part names it: the template paragraphs, the computed
+# rows, the notes bullets, the typed price lines, the gap's blank lines, the staging rows by id.
+_LINE_MARKS = ("tw-block", "tw-line-edit", "tw-note-edit", "tw-priceline", "tw-po-extra", "tw-gap-line",
+               "#options-", "-row")
+
+
+def test_only_two_class_rules_hide_a_line():
+    """lineShown knows a line is hidden by its inline `display: none`, the `hidden` attribute, and
+    two classes. A new stylesheet rule that hides an editor line would slip past it, and the caret, a
+    Ctrl+A and a Backspace could land on a line nobody can see again: add it to lineShown too."""
+    css = _re.sub(r"/\*.*?\*/", "", _CSS, flags=_re.S)
+    hiding = set()
+    for sel, body in _re.findall(r"([^{}]+)\{([^{}]*)\}", css):
+        if not _re.search(r"display\s*:\s*none", body):
+            continue
+        for one in sel.split(","):
+            last = _re.split(r"[\s>+~]+", one.strip())[-1]
+            if any(m in last for m in _LINE_MARKS):
+                hiding.add(one.strip())
+    assert hiding == {".tw-block-removed", ".tw-block.tw-gap-absorbed"}, sorted(hiding)
+
+
+# ── a line emptied and KEPT above the Options gap prints as the editor draws it ──
+def _above_heading(docx_bytes):
+    """The PRICE box's lines from the last words above the Options heading down to the heading."""
+    for box in _boxes(docx_bytes):
+        for i, t in enumerate(box):
+            if t.strip().lower().startswith("options"):
+                j = i - 1
+                while j >= 0 and not box[j].strip():
+                    j -= 1
+                return box[j:i + 1]
+    raise AssertionError("no Options heading printed")
+
+
+@pytest.mark.parametrize("work_type,audience,token,kept_prints,old_prints", [
+    # Gyp: the free "1 Mobilization to Site." line, under the Total and the template spacer. Kept:
+    # the spacer, the kept line, the gap's two. The editor draws the same four (keptAboveGap: the
+    # line shown, the spacer below it absorbed, two gap lines, over the template's spacer above).
+    ("gyp", "Direct", "mobilizations_line",
+     ["$36,763 – Total", "", "", "", "", "Options:"], ["$36,763 – Total", "", "", "Options:"]),
+    # GC Resinous: the free Total row, over the template spacer the gap replaces. Kept: the kept
+    # line and the gap's two; the editor draws the same three (gcKept: the Total shown, the spacer
+    # absorbed, two gap lines).
+    ("epoxy", "GC", "total_formatted",
+     ["$0.00 – Material Sales Tax", "", "", "", "Options & Unit Prices"],
+     ["$0.00 – Material Sales Tax", "", "", "Options & Unit Prices"]),
+])
+def test_a_line_emptied_and_kept_above_the_gap_prints_and_is_not_taken_into_it(
+        work_type, audience, token, kept_prints, old_prints):
+    """The review's case: on Gyp the estimator deletes the words of "1 Mobilization to Site." and
+    keeps the line. The editor draws that empty line (and the template spacer above it) over the
+    gap's two lines; the writer took it into the gap, spacer and all, and printed two lines fewer.
+    Sent `kept`, it stops the gap there, as the editor does: it prints as one empty line, the lines
+    above it print, and the gap is still its count.
+
+    `text: ""` without the flag -- a draft saved before it -- prints exactly as it did: taken in."""
+    tpl = _template(work_type, audience)
+    b = next(x for x in _box_blocks(tpl) if token in x["text"] and x["in_block"] is None)
+    opts = {"price_lines": [{"label": "Add dye", "amount": 1500}]}
+    kept = _above_heading(_docx(work_type, audience, [{"id": b["id"], "text": "", "kept": True}], **opts))
+    old = _above_heading(_docx(work_type, audience, [{"id": b["id"], "text": ""}], **opts))
+    assert kept == kept_prints
+    assert old == old_prints
+
+
+def test_the_sanitizer_carries_kept_only_when_it_is_true():
+    """`kept` travels through the generate route's sanitizer to the writer (the document test above
+    goes through it), strictly True: anything else leaves the entry as a plain `text: ""`."""
+    got = main._sanitize_paragraph_overrides([
+        {"id": 1, "text": "", "kept": True}, {"id": 2, "text": "", "kept": "yes"},
+        {"id": 3, "text": "", "kept": 1}, {"id": 4, "text": ""}])
+    assert got == [{"id": 1, "text": "", "kept": True}, {"id": 2, "text": ""},
+                   {"id": 3, "text": ""}, {"id": 4, "text": ""}]
+
+
+def test_one_undo_history_carries_a_removed_line_and_the_price_lines(ran):
+    """The merge with #569 put two things on every undo entry of a PRICE box: the removed template
+    lines (this branch) and the typed price lines' maps with the Options gap's count (#569). A line
+    taken out, then the gap given one line more: the first Ctrl+Z puts the count back (and redraws
+    the price block from it) and leaves the line out; the second brings the line back."""
+    got = ran["undoBoth"]
+    assert got["afterRemove"] == {"removed": [201], "gap": 2}
+    assert got["first"]["gap"] == 2 and got["first"]["removed"] == [201]
+    assert got["first"]["redraws"] == ["redraw", "save"]
+    assert got["second"] == {"removed": [], "gap": 2}
+
+
+def test_a_kept_line_leaves_no_mark_of_ours_in_either_file():
+    """`kept` is remembered on the Document (proposal_writer._kept_lines), not written into the XML:
+    a `w:` attribute of our own is invalid OOXML, and the cover letter fills through the same
+    override pass without ever reaching the Options gap, which is where a mark would be taken out
+    again -- the letter is then merged in front of the proposal, mark and all."""
+    import zipfile
+    import cover_letter_writer as clw
+    tpl = _template("gyp", "Direct")
+    b = next(x for x in _box_blocks(tpl) if "mobilizations_line" in x["text"] and x["in_block"] is None)
+    blob = _docx("gyp", "Direct", [{"id": b["id"], "text": "", "kept": True}],
+                 price_lines=[{"label": "Add dye", "amount": 1500}])
+    xml = zipfile.ZipFile(io.BytesIO(blob)).read("word/document.xml").decode("utf-8")
+    assert not _re.search(r"w:tw[A-Za-z]+=", xml)
+    letter = clw.fill_cover_letter(work_type="epoxy", audience="Direct", values=dict(_VALS),
+                                   paragraph_overrides=[{"id": i, "text": "", "kept": True}
+                                                        for i in range(60)])
+    xml = zipfile.ZipFile(io.BytesIO(letter)).read("word/document.xml").decode("utf-8")
+    assert not _re.search(r"w:tw[A-Za-z]+=", xml)

@@ -395,6 +395,9 @@ const LIFTED = [
   // paragraph it belongs to. These four are that resolution, lifted rather than stubbed so the
   // handler's own "is this even a line" guard is the real one.
   topConst("LINE_SEL"), fn("lineAt"), fn("lineAtSelection"), fn("lineTarget"), fn("editingBox"),
+  // ...and its refusal to put a break in a line nobody can see, which moves the caret instead
+  // (line-removal-harness.js drives that; every line here is shown, so it stands down).
+  fn("lineShown"), fn("adjacentLine"), fn("caretToLine"),
 ].join("\n\n");
 
 const ENTER_HANDLER = delegated("  // Enter inside a template paragraph = ONE line break");

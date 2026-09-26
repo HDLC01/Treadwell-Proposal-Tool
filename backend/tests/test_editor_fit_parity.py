@@ -556,3 +556,14 @@ def test_the_route_says_which_template_it_answered_for():
                                     _req("/api/proposal-fit"))
         assert got["template_version"] == _template(wt, "Direct")["template_version"]
     assert _template("polish", "Direct")["template_version"] != _template("epoxy", "Direct")["template_version"]
+
+
+def test_notes_that_arrive_after_the_first_fit_ask_for_the_size_again():
+    """A brand-new project's boilerplate notes, and the notes a base flip re-seeds, come back from
+    /api/default-notes after the editor's first fit question was answered: the NOTES box kept the
+    size of notes it no longer held. The page's own prefill and reseedNotesForWorkType now ask again
+    (js/editor-fit-harness.js notesFit)."""
+    got = _harness_raw([])["notesFit"]
+    assert got["seeded"] == "Scope.\nSchedule."
+    assert got["afterPrefill"] == 1
+    assert got["afterReseed"] == 2
