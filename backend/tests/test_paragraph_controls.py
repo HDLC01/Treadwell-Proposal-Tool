@@ -432,10 +432,15 @@ def test_generate_survives_malformed_para_values():
 # ══ seam 2: the browser has to be able to READ the state ═════════════════════
 # The keys the frontend's paraBase() reads. Grown without the version bump, a browser replaying
 # a cached response has no `locked` and would happily offer to un-bullet a contract clause.
+# v8 (2026-09-26, the editor-parity branch) added `fit`: the size a paragraph's typed words print
+# at, its empty height, and whether Backspace on it emptied may take it out of the document (see
+# _FIT_KEYS_AT_V8). The bullets branch bumped to v8 the same day for `para`'s `level` / `glyph`
+# (below), so the merged release is v9, which carries both.
 _BLOCK_KEYS_AT_V8 = {
     "id", "kind", "text", "style", "in_block", "in_txbx", "txbx",
-    "align", "list", "price_flat", "para", "runs",
+    "align", "list", "price_flat", "para", "runs", "fit",
 }
+_FIT_KEYS_AT_V8 = {"hp", "typed_hp", "typed_sized", "removable"}
 # The keys INSIDE `para`. Asserted separately because the block dict's own key set does not move
 # when a nested one grows, and v6 grew a nested one: `marker`. A browser holding a v5 response has
 # every block's `para` without it, and the renderer's fallback for a marker-less list paragraph is
@@ -506,10 +511,14 @@ def test_block_schema_version_was_bumped_for_the_new_field(epoxy_blocks):
         "_BLOCK_KEYS_AT_V8 in the same commit")
     for b in epoxy_blocks:
         assert set(b["para"]) == _PARA_KEYS_AT_V8, (b["id"], b["para"])
-    assert main._BLOCK_SCHEMA_VERSION == "8", (
-        "`para` includes `level` and `glyph` but _BLOCK_SCHEMA_VERSION is %r; a browser holding a "
-        "v7 response has neither, so it draws every \"o\" in the price box as a square and steps "
-        "the ribbon's indent from the wrong level" % (main._BLOCK_SCHEMA_VERSION,))
+        assert set(b["fit"]) == _FIT_KEYS_AT_V8, (b["id"], b["fit"])
+    # v9: the two v8 bumps of 2026-09-26 at once (`para` gained `level` / `glyph`, the block gained
+    # `fit`). A browser holding EITHER branch's v8 body would otherwise replay it as current.
+    assert main._BLOCK_SCHEMA_VERSION == "9", (
+        "`para` includes `level` and `glyph` and every block has `fit`, but _BLOCK_SCHEMA_VERSION "
+        "is %r; a browser holding a v7 response has neither, so it draws every \"o\" in the price "
+        "box as a square, steps the ribbon's indent from the wrong level, shows typed words at the "
+        "page's 9pt and offers no line removal" % (main._BLOCK_SCHEMA_VERSION,))
 
 
 def test_the_schema_version_is_in_the_template_etag():

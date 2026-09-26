@@ -261,6 +261,8 @@ const UNITS = [
   "let templateOptionsHeadingIds = [];",
   fn("optionsGapCount"), fn("optionsGapTyped"), fn("isGapTyped"), fn("gapTypedEls"),
   fn("optionsHeadingEl"), fn("aboveOptionsGap"), fn("gapShown"), fn("paintOptionsGap"),
+  // ...which asks whether a blank template line above the heading is one he emptied and kept.
+  "const pristineById = new Map();", fn("lineBare"), fn("lineKeptEmpty"),
   fn("paintGapTyped"),
   // The pricing the page runs at init and on every base pick in its sidebar (the sidebar's radios
   // are drawn by renderProposalExtras, above, when there is an #options-panel to draw them in).
@@ -363,6 +365,15 @@ function build(st, opts) {
     // the ribbon is price-bullets-harness.js's, so a case here that reached it says so.
     "const fitTxbx = () => {};",
     "const showFmtBar = () => { throw new Error('showFmtBar reached: the ribbon is not modelled in price-lines-harness'); };",
+    // The page's Backspace handler takes an EMPTY template line out before it reaches the price
+    // lines' merge. The removal family is lifted whole; which lines it may take is the template
+    // record's answer (blockById), and this harness registers none, so no line here is taken out
+    // by that rule -- the typed price lines are mergePriceLine's.
+    "const blockById = new Map();",
+    "let fmtBlock = null; const idleFmtBar = () => { fmtBlock = null; };",
+    "const undoPush = () => false; const notesPreviewEl = null;",
+    [fn("boxLines"), fn("lineShown"), fn("pointAt"), fn("lineIsEmpty"), fn("lineRemovable"), fn("removeLine"),
+     fn("adjacentLine"), fn("caretToLine"), fn("removeLineAt")].join("\n"),
     "docSurface.addEventListener('keydown', " + ENTER + ");",
     "docSurface.addEventListener('keydown', " + BACKSPACE + ");",
     // The box sweep, as the page's delegated input handler runs it on the box.

@@ -4540,6 +4540,12 @@ def _sanitize_paragraph_overrides(overrides_in: list) -> list:
             pid = int(pid)
         except (TypeError, ValueError):
             continue
+        # A REMOVED LINE travels as nothing but its id and the flag (proposal_writer
+        # `paragraph_removable` decides whether it may go). Strictly True: an entry saved before the
+        # key existed, `text: ""` included, keeps meaning "print this paragraph empty".
+        if o.get("removed") is True:
+            out.append({"id": pid, "removed": True})
+            continue
         # PARAGRAPH properties — the bullet toggle and the indent controls. Delegated to
         # proposal_writer.sanitize_para_props rather than re-validated here: unlike `runs`
         # (whose duplication is deliberate, see above), the meaning of a paragraph property is
@@ -4603,6 +4609,11 @@ def _sanitize_paragraph_overrides(overrides_in: list) -> list:
         entry_t: Dict[str, Any] = {"id": pid, "text": str(text)}
         if para:
             entry_t["para"] = para
+        # A LINE HE EMPTIED AND KEPT (proposal-review.js lineKeptEmpty): the writer prints it as
+        # his own empty line and never folds it into the blank lines above the Options heading.
+        # Strictly True, so a `text: ""` saved before the key existed means what it meant.
+        if o.get("kept") is True:
+            entry_t["kept"] = True
         out.append(entry_t)
     return out
 
@@ -5225,6 +5236,9 @@ def api_proposal_template(request: Request, work_type: str = "epoxy", audience: 
     # reads the same paragraph properties — the same `para` its bullet / indent presses are
     # measured against and the writer applies them to. No paragraph is added or removed.
     proposal_writer._untuck_price_bullets(d)
+    # The same tag fill_proposal puts on the Options heading before Phase 0, so
+    # `paragraph_removable` answers here exactly as it will at generate time.
+    proposal_writer._mark_options_headings(d)
     # The Options heading(s) the writer spaces from above. Only a FREE one (the GC files, where the
     # heading is a plain paragraph) is a block the editor renders itself; a {{#has_options}}
     # heading is the editor's own #options-heading. Held as a set so the walk below keeps the
@@ -5272,8 +5286,17 @@ def api_proposal_template(request: Request, work_type: str = "epoxy", audience: 
             # `list` (which is True for the contract clauses too).
             "para": proposal_writer.para_props(d, p_elem),
             "runs": proposal_writer._block_runs(p_elem, p),
+            # What the writer does with this paragraph's SIZE, so the editor shows it at the size
+            # it prints (the per-box shrink itself comes from POST /api/proposal-fit):
+            #   hp         — the paragraph mark's size (`_fit_hp`): how tall it prints EMPTY,
+            #                which the shrink never scales;
+            #   typed_hp   — the size words typed into it print at (`typed_run_size`), and
+            #   typed_sized  whether that run carries a size of its own;
+            #   removable  — may a `removed` override take it out (`paragraph_removable`).
+            "fit": _block_fit(d, p_elem, in_block, txbx_idx),
         })
 
+    geometry = proposal_writer.template_geometry(d)
     payload = {
         "work_type": work_type,
         "audience": audience,
@@ -5284,7 +5307,7 @@ def api_proposal_template(request: Request, work_type: str = "epoxy", audience: 
         # second (see `template_versions`); 0 = no legacy stamp is. The editor's
         # restore guards apply the same rule the backend's `_template_version_accepts` does.
         "template_version_legacy_floor_s": template_versions.legacy_floor_s(template_path),
-        "geometry": proposal_writer.template_geometry(d),
+        "geometry": geometry,
         "blocks": blocks,
         # Ids of the free-paragraph Options heading(s), so the editor can draw the blank lines
         # above it (price_overrides.options_gap) exactly where the writer prints them. Top-level
@@ -5369,12 +5392,33 @@ def api_proposal_template_media(request: Request, work_type: str = "epoxy",
 # ("1." to "27." for the Terms and Conditions clauses). Stale is WRONG ON SCREEN, not merely
 # degraded: with no `marker` the renderer falls back to `list`, which is what drew a red square
 # in front of all 27 numbered clauses in the first place.
-# v8 (2026-09-26): the REBID price box. `para` gained `level` (w:ilvl) and `glyph` ("o" for the
-# hollow sub-bullet), and the PRICE rows' `para.bullet` / `indent` are read off the UNTUCKED
-# template (proposal_writer._untuck_price_bullets): the Direct files' rows used to report indent 0.
-# Stale is WRONG ON SCREEN: the editor would draw those rows flush while the document prints them
-# one bullet in, and measure its indent presses from the old 0.
-_BLOCK_SCHEMA_VERSION = "8"
+# v8 (2026-09-26, the bullets branch): the REBID price box. `para` gained `level` (w:ilvl) and
+# `glyph` ("o" for the hollow sub-bullet), and the PRICE rows' `para.bullet` / `indent` are read off
+# the UNTUCKED template (proposal_writer._untuck_price_bullets): the Direct files' rows used to
+# report indent 0. Stale is WRONG ON SCREEN: the editor would draw those rows flush while the
+# document prints them one bullet in, and measure its indent presses from the old 0.
+#
+# v8 (2026-09-26, the editor-parity branch): `fit` {hp, typed_hp, typed_sized, removable}, the sizes
+# the writer's override path and overflow shrink give each paragraph, so the editor shows every line
+# at the size the PDF prints it and knows which emptied lines Backspace may remove. A v7 body has no
+# `fit`: the editor would show typed words at the page's 9pt and offer no line removal.
+#
+# v9 (2026-09-26, the editor release): both v8s at once. Each branch bumped 7 -> 8 on its own, so a
+# browser holding EITHER branch's v8 body (staging served neither, but a local or review build did)
+# would replay it as current, missing the other half: no `fit`, or `para` measured off the tucked
+# template.
+_BLOCK_SCHEMA_VERSION = "9"
+
+
+def _block_fit(d, p_elem, in_block, txbx_idx) -> Dict[str, Any]:
+    """One block's `fit` record for /api/proposal-template (see the block dict)."""
+    typed_hp, typed_sized = proposal_writer.typed_run_size(d, p_elem)
+    return {
+        "hp": proposal_writer._fit_hp(p_elem),
+        "typed_hp": typed_hp,
+        "typed_sized": typed_sized,
+        "removable": proposal_writer.paragraph_removable(d, p_elem, in_block, txbx_idx),
+    }
 
 # The code that BUILDS a block response, fingerprinted once at import. The ETag used to move on
 # every deploy only by accident, because the template version was the file's mtime; now that it is
@@ -5556,6 +5600,36 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
     return _generate(payload, request, persist=True)
 
 
+@app.post("/api/proposal-fit")
+def api_proposal_fit(payload: GenerateIn, request: Request) -> Dict[str, Any]:
+    """The size every text box of this payload PRINTS at, for the Proposal step's editor.
+
+    Hanz, 2026-09-26: "please follow the text size of what is written in the proposal PDFs. Its
+    different on the editor and on the output". The writer shrinks an overflowing box's runs down
+    to a 0.60 floor; the editor ran its own browser-measured ladder that stopped at 0.75 and then
+    clipped. So the editor now sends the body Continue would build and shows what comes back.
+
+    Answered by the REAL fill (`_generate` with `fit_report`), not by a second estimate: which
+    paragraphs a box holds at print time depends on region expansion, the frame padding
+    `_pad_frame_boxes` keys on note text, the estimator's box overrides and the hand-sized
+    paragraphs the shrink leaves alone, and a copy of that in the browser would drift from it.
+    Writes nothing: no file, no event, no draft (see `_generate`).
+
+    `boxes`: one `{id, scale, default_hp, exempt, at_floor, content_pt, usable_pt}` per text box
+    (`proposal_writer._shrink_overflowing_text_boxes`), `id` being the box id in
+    /api/proposal-template's geometry. `template_version` is the file the answer was computed on,
+    so the editor can drop an answer that arrives after a base flip switched the template."""
+    report: list = []
+    _generate(payload, request, persist=False, want_estimate=False, fit_report=report)
+    template_path = proposal_writer.pick_template(payload.work_type, payload.audience or None)
+    return {
+        "work_type": payload.work_type,
+        "audience": payload.audience,
+        "template_version": _template_proposal_version(template_path),
+        "boxes": report,
+    }
+
+
 def _name_from_email(email: str) -> str:
     """"kyle.smith@wetreadwell.com" -> "Kyle Smith". The signature line's last resort."""
     return email.split("@")[0].replace(".", " ").replace("_", " ").title()
@@ -5593,7 +5667,8 @@ def _sign_as_caller(values: Dict[str, Any], request: Request) -> None:
 
 def _generate(payload: GenerateIn, request: Request, *,
               persist: bool = True,
-              want_estimate: bool = True) -> GenerateOut:
+              want_estimate: bool = True,
+              fit_report: Optional[list] = None) -> Optional[GenerateOut]:
     """Final generate: fill xlsx + docx, return download links (xlsx / docx /
     on-demand pdf). The estimator downloads + files them manually.
 
@@ -5625,7 +5700,13 @@ def _generate(payload: GenerateIn, request: Request, *,
     bytes (see the cover-letter block below), so "the proposal without the letter" is a document
     missing its first page, and every one of those three callers wants that page. The cost is a
     wider blast radius, stated plainly: a cover-letter template that cannot fill now refuses the
-    customer PDF and the Dropbox filing too, where before it refused only a live generate."""
+    customer PDF and the Dropbox filing too, where before it refused only a live generate.
+
+    `fit_report` (a list) is POST /api/proposal-fit's question: "what size does each text box of
+    THIS payload print at". The proposal is filled exactly as for a download, the writer's overflow
+    shrink records its decisions into the list, and the function returns None right after the
+    fill: no cover letter, no file cache, no audit event, no draft write. Pass it only with
+    persist=False and want_estimate=False, which is how the route calls it."""
     values = payload.values
     _ensure_state_name(values)
     # payload.work_type is authoritative; make sure it's in `values` so the
@@ -6215,12 +6296,15 @@ def _generate(payload: GenerateIn, request: Request, *,
             # ...each with its own bullet (a typed line on the gap is a heading's, so none by default).
             options_gap_typed_para=[_line_para("heading_options", "before", i, t) for i, t
                                     in enumerate(_pov["before"].get("heading_options") or [])],
+            fit_report=fit_report,
         )
     except FileNotFoundError as exc:
         raise HTTPException(500, str(exc)) from exc
     except Exception as exc:
         log.exception("Proposal fill failed")
         raise HTTPException(500, "Failed to generate the proposal. Please try again.") from exc
+    if fit_report is not None:
+        return None
 
     # ── The optional Cover Letter, merged onto the FRONT of the proposal ────
     #

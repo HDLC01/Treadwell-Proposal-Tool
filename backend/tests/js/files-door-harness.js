@@ -128,6 +128,8 @@ const PROPOSAL_UNITS = [
   fn(PROPOSAL, "repaintNote", P),
   fn(PROPOSAL, "sayTheSaveIsBlocked", P),
   grab(PROPOSAL, /^  let _persistTimer = .*$/m, "_persistTimer", P),
+  // continueToDone composes the document through the ONE composer it shares with the fit request.
+  fn(PROPOSAL, "composeProposalPayload", P),
   fn(PROPOSAL, "continueToDone", P),
   fn(PROPOSAL, "composeForFiles", P),
 ].join(NL);
@@ -565,6 +567,8 @@ function summary(pp) {
     materialTax: v.material_tax_formatted, notes: pp && pp.notes,
     nested: NESTED.filter((k) => Object.prototype.hasOwnProperty.call(v, k)),
     mentionsAncient: /ancient|older still|ANCIENT|\/api\/file\/OLD|Estimating\/old/.test(JSON.stringify(v)),
+    // What Send asks about before a hand-typed dollar figure goes out (done.js sendPriceWarning).
+    priceWarnings: pp ? pp.price_warnings : undefined,
   };
 }
 

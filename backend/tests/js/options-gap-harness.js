@@ -372,6 +372,12 @@ const LIFTED = [
   topConst("REGION_MOUNTS"),
   "let _povTimer = null;",
   fn("queuePovSave"),
+  // The page's Backspace handler now takes an EMPTY line out (Word's Backspace on an empty
+  // paragraph). The removal family is lifted whole; which lines it may take is decided by
+  // the template record in blockById, and this harness registers none, so every line here
+  // stays -- the gap lines and the GC spacers are the Options gap's to count, not this rule's.
+  fn("editingBox"), fn("boxLines"), fn("lineShown"), fn("pointAt"), fn("lineIsEmpty"), fn("lineRemovable"),
+  fn("removeLine"), fn("adjacentLine"), fn("caretToLine"), fn("removeLineAt"),
   // The lines TYPED next to a price line (fix 5): a character typed on a blank gap line makes one
   // (typeOnGapLine -> makeExtraLine), and the page's own Enter and Backspace handlers split and
   // take away typed lines (splitPriceLine / mergePriceLine), so all of them are the real ones.
@@ -379,6 +385,8 @@ const LIFTED = [
   fn("_ensurePov"), fn("linePropsOf"), fn("makeExtraLine"), fn("caretInto"), fn("splitPriceLine"), fn("mergePriceLine"),
   // The Backspace handler's question before its price-line ladder (review of fix 7, finding 6).
   fn("isPriceLine"),
+  // The gap takes in a blank template line above the heading, but never one he emptied and KEPT.
+  fn("lineBare"), fn("lineKeptEmpty"),
 ].join("\n\n");
 
 function makePage(layout, stateIn) {
@@ -427,10 +435,12 @@ function makePage(layout, stateIn) {
   const clearTimeout = (id) => { if (id) timers[id - 1] = null; };
   const fits = [];
   const fitTxbx = (box) => { fits.push(box ? box.className : null); };
+  const PRISTINE = new Map();
+  const FIT_ASKS = [];
   const state = JSON.parse(JSON.stringify(stateIn || {}));
   const api = new Function(
     "document", "window", "docSurface", "Node", "F", "state", "TW", "setTimeout", "clearTimeout",
-    "fitTxbx", "Event", "selectionRange", "placeSelection", "selectionLines", "TWPrice",
+    "fitTxbx", "Event", "selectionRange", "placeSelection", "selectionLines", "TWPrice", "PRISTINE", "FIT_ASKS",
     `const RUN_KEYS = F.RUN_KEYS;
     const coalesce = F.coalesce, patchRuns = F.patchRuns, runsLength = F.runsLength;
     let templateOptionsHeadingIds = [];
@@ -446,6 +456,16 @@ function makePage(layout, stateIn) {
     const showFmtBar = () => { throw new Error("showFmtBar reached: not modelled in options-gap-harness"); };
     const markEdited = (el) => { el.dispatchEvent(new Event("input", { bubbles: true })); };
     const spliceLines = () => { throw new Error("no multi-line selection is modelled here"); };
+    const blockById = new Map();
+    // The template text each paragraph was drawn with: what tells a line he emptied and KEPT
+    // (lineKeptEmpty) from the template's own blank spacer, which the gap takes in.
+    const pristineById = PRISTINE;
+    // The size-fit re-ask (scheduleFit), recorded: POST /api/proposal-fit is editor-fit-harness's.
+    const scheduleFit = (d) => { FIT_ASKS.push(d == null ? null : d); };
+    let fmtBlock = null;
+    const idleFmtBar = () => { fmtBlock = null; };
+    // Undo is editor-undo-harness.js's world; removeLineAt opens a step and nothing here reads it.
+    const undoPush = () => false;
 ` + LIFTED + "\n\n" + PAGE_ENTER + "\n\n" + PAGE_BACKSPACE + "\n\n" + GAP_SECTION + `
     // The radio the estimator ticks, and what the panel around the handler supplies: the tab
     // options it edits, and the repaint it ends with (here, the gap's own painter).
@@ -475,7 +495,7 @@ function makePage(layout, stateIn) {
          },
          (el, a, b) => { SEL = { el, a, b }; },
          () => (SEL && SEL.el ? [{ el: SEL.el, start: SEL.a, end: SEL.b }] : []),
-         TWPrice);
+         TWPrice, PRISTINE, FIT_ASKS);
 
   const box = new El("div");
   box.className = "tw-txbx";
@@ -521,7 +541,7 @@ function makePage(layout, stateIn) {
   // ...and what renderOptionLinesPreview does when the bid has options: the heading shows.
   if (layout !== "gc" && !(stateIn && stateIn.__noOptions)) els.heading.style.display = "";
   SEL = null;
-  return { api, state, saves, timers, fits, box, els, g, docSurface };
+  return { api, state, saves, timers, fits, box, els, g, docSurface, pristine: PRISTINE, fitAsks: FIT_ASKS };
 }
 
 // ── driving it the way a person does ────────────────────────────────────────
@@ -695,6 +715,27 @@ const out = {};
                          baseUnchanged: p.api.serializeBlock(p.els.base) === t };
 }
 
+// ═══ a caret inside the HIDDEN "Options:" heading (no options): Enter writes nothing there ═══
+// The review found the caret could land in it after a Backspace took the blank line below out; the
+// page's Enter then made a typed line of "Options:" that prints once options are added. Now the key
+// is refused and the caret goes to the line shown above (the base line), which then takes Enter.
+{
+  const p = makePage("direct", { __noOptions: true });
+  p.api.paintOptionsGap();
+  caretAt(p.els.heading, 8);
+  const en = key(p, "Enter");
+  const typed = (p.state.price_overrides || {}).after || {};
+  out.enterInHiddenHeading = {
+    defaulted: en.defaultPrevented,
+    heading: p.api.serializeBlock(p.els.heading),
+    headingHidden: p.els.heading.style.display === "none",
+    extraLines: p.box.querySelectorAll('[data-po-kind="extra"]').length,
+    typedHeading: typed.heading_options || null,
+    caretLine: SEL && SEL.el ? (SEL.el.id || null) : null,
+    caretOffset: SEL && SEL.el ? SEL.a : null,
+  };
+}
+
 // ═══ GC: the heading is a free paragraph; the template's spacer is absorbed ═══
 {
   const p = makePage("gc", {});
@@ -736,6 +777,57 @@ const out = {};
   caretAt(p.els.mobil, m.length);
   key(p, "Enter");
   out.gypEnterAtMobil = snapshot(p);
+}
+
+// ═══ A LINE HE EMPTIED AND KEPT, directly above the gap, is his: the gap never takes it in ═══
+// The writer takes a blank template paragraph directly above the heading into the gap
+// (_apply_options_gap). A line the estimator emptied and KEPT is sent as `kept` and the writer stops
+// at it, so this page must too -- live, where it holds the placeholder break, and after a reload,
+// where restoreSavedOverrides draws it the same way (line-removal-harness.js).
+{
+  const absorbed = (el) => el.classList.contains("tw-gap-absorbed");
+  const p = makePage("gyp", {});
+  p.pristine.set(10, "1 Mobilization to Site.");
+  p.pristine.set(11, "");
+  p.els.mobil.innerHTML = "<br>";            // every character deleted: the browser's placeholder
+  p.api.paintOptionsGap();
+  const kept = { mobilShown: !absorbed(p.els.mobil), spacerHidden: absorbed(p.els.spacer),
+                 lines: gapLines(p).length };
+  // The template's own spacer, typed in and emptied again, is that spacer as it always was.
+  const q = makePage("gc", {});
+  q.pristine.set(5, "$36,763 – Total");
+  q.pristine.set(6, "");
+  q.els.spacer.innerHTML = "<br>";
+  q.api.paintOptionsGap();
+  const cleared = { spacerHidden: absorbed(q.els.spacer), totalShown: !absorbed(q.els.total) };
+  // ...and the GC Total emptied and kept stays, with the spacer below it still taken in.
+  q.els.total.innerHTML = "<br>";
+  q.api.paintOptionsGap();
+  const gcKept = { totalShown: !absorbed(q.els.total), spacerHidden: absorbed(q.els.spacer) };
+  // A `text: ""` saved before the flag, restored as an empty textContent: taken in, exactly as the
+  // writer takes that entry in.
+  const r = makePage("gyp", {});
+  r.pristine.set(10, "1 Mobilization to Site.");
+  r.pristine.set(11, "");
+  r.els.mobil.textContent = "";
+  r.api.paintOptionsGap();
+  const legacy = { mobilShown: !absorbed(r.els.mobil), spacerHidden: absorbed(r.els.spacer) };
+  out.keptAboveGap = { kept, cleared, gcKept, legacy };
+}
+
+// ═══ THE SIZE IS ASKED AGAIN when the count moves ═══
+// The gap's keys consume their keystroke, so no `input` reaches the page's persist-and-refit; a
+// price_overrides change (queuePovSave) is what now asks POST /api/proposal-fit again.
+{
+  const p = makePage("direct", {});
+  p.api.paintOptionsGap();
+  const before = p.fitAsks.length;
+  clickGapLine(p, 1);
+  key(p, "Enter");
+  const afterEnter = p.fitAsks.length;
+  clickGapLine(p, 0);
+  key(p, "Backspace");
+  out.gapAsksFit = { before, afterEnter, afterBackspace: p.fitAsks.length, lines: gapLines(p).length };
 }
 
 // ═══ THE BLANK LINES TAKE TEXT (Hanz, 2026-09-26: "I cant write texts on this white space lines") ═

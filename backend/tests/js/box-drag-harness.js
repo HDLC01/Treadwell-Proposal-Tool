@@ -289,6 +289,10 @@ const LIFTED = [
   topConst("isAutoGrown"),
   fn("boxCeilingPt"), fn("growRoomPt"), fn("otherBoxRects"),
   fn("dropAutoGrownHeight"), fn("releaseAutoGrownHeight"), fn("growBoxToFit"), fn("fitOffer"),
+  // fitTxbx shows each box at the size the writer prints it (applyBoxFit, from boxFitById, which
+  // POST /api/proposal-fit fills). Lifted rather than stubbed: with no answer in the map the real
+  // applyBoxFit leaves the box at its design size, which is the page before its first answer.
+  topConst("boxFitById"), topConst("PAGE_HP"), fn("inlineHp"), fn("clearBoxFit"), fn("applyBoxFit"),
   fn("fitTxbx"), fn("wireOverflowExpand"),
   // wireOverflowExpand's click handler asks `lineAt(e.target)` -- "was this click meant for a
   // line, which should take the caret rather than expand the box". It used to ask with a
@@ -543,19 +547,15 @@ fire(grip(box, "se"), "click", {});
 const gripClickOpened = box.classList.contains("tw-notes-open");
 fire(box.querySelector("[data-box-reset]"), "click", {});
 const resetClickOpened = box.classList.contains("tw-notes-open");
-// …while the "Show all" button still peeks, so the guard did not disable the feature.
-//
-// It used to be a click on the box itself, and that is the gesture that went on 2026-08-26: a
-// click inside a text box has to land a caret, so the peek moved to a labelled control in the
-// tools layer (Hanz: "Editing from one text box to another is a bit clunky"). Both halves are
-// reported, because "the box no longer opens on a body click" and "the button opens it" are two
-// separate ways for this to be broken.
+// …and a click on the box body does not expand it either. There is nothing to expand: since
+// 2026-09-26 an over-long box is never clipped (it shows what the PDF prints, overflow and all),
+// so the Show all button that used to open one is gone as well.
 fire(box, "click", { clientX: 10, clientY: 10 });
 const bodyClickOpened = box.classList.contains("tw-notes-open");
-fire(box.querySelector("[data-box-peek]"), "click", {});
 out.peek = { gripClickOpened: gripClickOpened, resetClickOpened: resetClickOpened,
              bodyClickOpened: bodyClickOpened,
-             peekButtonOpened: box.classList.contains("tw-notes-open") };
+             hasPeek: !!box.querySelector("[data-box-peek]"),
+             clipped: box.style.maxHeight, overflowStyle: box.style.overflow };
 
 // 13. Persistence, the version guard, and the sibling-template store.
 api.setState({});

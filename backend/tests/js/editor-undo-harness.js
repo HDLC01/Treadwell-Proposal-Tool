@@ -95,6 +95,11 @@ const UNDO = region(
   "  // ══ UNDO AND REDO",
   "  // ── Wire the formatting ribbon to the focused block ");
 
+/** The page's box-selection Delete handler, whole, by the comment above it and the one after it. */
+const BOX_DELETE = region(
+  '  docSurface.addEventListener("keydown", (e) => {\n    if (!boxSel || e.ctrlKey',
+  "  /** TAB INDENTS THE PARAGRAPH.");
+
 /** The page's clearDocSurface body, so "a template reload forgets the history" is read off the
  *  real function rather than off a call to undoForget() a test made itself. */
 const CLEAR_DOC_SURFACE = fn("clearDocSurface");
@@ -400,6 +405,7 @@ const api = new Function(
   const blockById = new Map();      // id -> the template's block record
   const paraById  = new Map();      // id -> {bullet, indent} the estimator set
   const pristineById = new Map();
+  let templateBlocks = null;
   const TWIPS_PER_PT = 20;
   const INDENT_STEP_TW = 288;
   const INDENT_MAX_TW = 2880;
@@ -436,7 +442,7 @@ const api = new Function(
     fn("fmtAt"), fn("segmentsOf"), fn("mergeSegs"), fn("serializeRuns"), fn("editRuns"),
     fn("runStyleCss"), fn("runEditCss"), fn("renderRuns"), fn("serializeBlock"),
     fn("runsEqual"), fn("pointAt"), fn("markEdited"),
-    fn("lineAt"), fn("lineAtSelection"), fn("editingBox"), fn("boxLines"),
+    fn("lineAt"), fn("lineAtSelection"), fn("editingBox"), fn("boxLines"), fn("lineShown"),
     fn("paraBase"), fn("paraNow"), fn("sanitizeParaPatch"), fn("applyParaGeom"),
     fn("applyParaToEl"), fn("setParaState"), fn("paraAction"),
     // A PRICE LINE is a ribbon target too (the REBID price box): paraAction hands one to
@@ -447,23 +453,27 @@ const api = new Function(
     fn("paintBoxSel"), fn("clearBoxSel"), fn("clearBoxLine"), fn("selectRangeAcross"),
     fn("insertBreakAt"),
     topConst("focusInside"), fn("noteLineHtml"), fn("renderNotesPreview"), fn("syncNotesFromDom"),
+    // The line-removal family: Backspace on an empty line, a box-wide delete and an undo of either
+    // all go through it, and the undo entry records which template lines were gone.
+    fn("lineIsEmpty"), fn("lineRemovable"), fn("removeLine"), fn("unremoveLine"),
+    fn("removedBlockIds"), fn("adjacentLine"), fn("caretToLine"), fn("removeLineAt"),
+    // renderNotesPreview asks it the size a note prints at; no template is loaded here, so it
+    // answers null and the bullets carry no size, as before a template arrives.
+    fn("notesRowSizePt"),
     CLEAR_DOC_SURFACE,
   ].join("\n") + `
 
-  // ── the page's own delete-with-a-box-selection handler, verbatim ───────────
+  // ── the page's own delete-with-a-box-selection handler, LIFTED ───────────────
   // The gesture Hanz performed, and registered BEFORE the undo section below on purpose. In the
   // shipped file the undo listeners happen to come first, which would make a bubble-phase snapshot
   // work by accident and go on working right up until somebody moved a block of code. Here the
   // mutating handler is first, so the only thing that can still put the pre-image ahead of the
   // delete is the capture flag — which is the claim.
-  docSurface.addEventListener("keydown", (e) => {
-    if (!boxSel || e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
-    if (e.key !== "Backspace" && e.key !== "Delete") return;
-    e.preventDefault();
-    const els = boxSel.slice();
-    clearBoxSel();
-    els.forEach(clearBoxLine);
-  });
+  //
+  // Lifted rather than copied (2026-09-26): the handler now also takes the emptied lines OUT, and a
+  // copy that stopped at clearing them would have gone on proving an undo of a gesture the page no
+  // longer makes.
+` + BOX_DELETE + `
 ` + UNDO + `
   // The page's own two-way binding between the bullets and the textarea, verbatim.
   notesPreviewEl.addEventListener("input", syncNotesFromDom);
