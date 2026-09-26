@@ -360,7 +360,8 @@ const LIFTED = [
   // and the file's own line spacing. Lifted rather than stubbed: applyParaToEl delegates to it,
   // so a stub would leave the indent arithmetic (bullet at left-hanging) untested.
   fn("applyParaGeom"),
-  fn("applyParaToEl"), fn("setParaState"),
+  // applyParaToEl asks takesPriceStep whether a row is drawn as a PRICE-box row (the REBID price box).
+  fn("takesPriceStep"), fn("applyParaToEl"), fn("setParaState"),
   topConst("overrideKey"), fn("mergeOverrideEntry"), topConst("liveKey"),
   fn("savedOverridesFor"), fn("savedVersionMatches"), fn("restoreSavedOverrides"),
   fn("collectOverrides"), fn("preserveRichOverrides"),

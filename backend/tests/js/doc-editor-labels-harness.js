@@ -490,6 +490,12 @@ const LIFTED = [
   // so a stub would leave the indent arithmetic (bullet at left-hanging) untested.
   fn("applyParaGeom"),
   fn("applyParaToEl"), fn("setParaState"), fn("paraAction"),
+  // A PRICE LINE is a ribbon target too (the REBID price box): paraAction and renderFmtBar branch
+  // on isPriceLine, and paraAction hands such a line to priceLineAction.
+  fn("isPriceLine"), fn("priceLineAction"),
+  // ...and a TEMPLATE row in the price box takes the price step (paraAction, applyParaToEl,
+  // paraPatch and renderFmtBar all ask it).
+  fn("takesPriceStep"),
   // fmtTargetBlock / markFmtTarget / renderFmtBar are what showFmtBar became when the bar
   // stopped floating: it no longer positions anything, it re-checks its REMEMBERED block against
   // the live document and re-renders. Leaving any of them out is not a lift-time failure — it is

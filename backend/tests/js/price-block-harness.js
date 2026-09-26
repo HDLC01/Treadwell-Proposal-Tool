@@ -84,6 +84,10 @@ const UNITS = [
   fn("lineOverride"),
   fn("lineValue"),
   fn("lineCue"),
+  // The price box's bullets: the builders put a line's override on it (linePropsOf) and
+  // refreshPriceDisplay ends by drawing them (paintLineParas, a no-op on these element doubles).
+  fn("linePropsOf"),
+  fn("paintLineParas"),
   fn("extraLinesHtml"),
   fn("lineEl"),
   fn("paintExtras"),

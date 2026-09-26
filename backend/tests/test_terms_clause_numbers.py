@@ -438,9 +438,10 @@ def test_the_fixture_clause_is_the_shape_the_endpoint_really_sends():
     # `contextual` is True here and False on the WORK rows: these clauses inherit
     # contextualSpacing from their own style, which is why a numbered contract has no gaps
     # between consecutive clauses.
+    # v8 adds the list level and its glyph: a numbered clause is on level 0, and a number is no "o".
     assert clause["para"] == {
         "bullet": False, "indent": 540, "hanging": 360, "first_line": None,
-        "locked": True, "marker": "1.",
+        "locked": True, "marker": "1.", "level": 0, "glyph": "",
         "spacing": {"before": None, "after": None, "line": None,
                     "line_rule": None, "contextual": True},
     }
@@ -455,7 +456,7 @@ def test_the_fixture_clause_is_the_shape_the_endpoint_really_sends():
     wsp = work["para"].pop("spacing")
     assert work["para"] == {
         "bullet": True, "indent": 288, "hanging": 288, "first_line": None,
-        "locked": False, "marker": "",
+        "locked": False, "marker": "", "level": 0, "glyph": "",
     }
     assert wsp["before"] is None and wsp["after"] is None, wsp
     assert wsp["line_rule"] == "auto" and wsp["line"] in (276, 300), wsp

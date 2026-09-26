@@ -35,6 +35,9 @@ const SRC = fs.readFileSync(path.join(FRONTEND, "js", "proposal-review.js"), "ut
 const HTML = fs.readFileSync(path.join(FRONTEND, "proposal-review.html"), "utf8")
   .replace(/\r\n/g, "\n");
 const F = require(path.join(FRONTEND, "js", "proposal-format-core.js"));
+// The price rule's page half, as the page loads it before proposal-review.js: a typed line's
+// bullet override is read through TWPrice.cleanLineProps (linePropsOf).
+globalThis.TWPrice = require(path.join(FRONTEND, "js", "price-lines-core.js"));
 
 // ── lifting the real source ──────────────────────────────────────────────────
 function fn(name) {
@@ -356,7 +359,8 @@ const LIFTED = [
   // The lines TYPED next to a price line (fix 5): a character typed on a blank gap line makes one
   // (typeOnGapLine -> makeExtraLine), and the page's own Enter and Backspace handlers split and
   // take away typed lines (splitPriceLine / mergePriceLine), so all of them are the real ones.
-  fn("_ensurePov"), fn("makeExtraLine"), fn("caretInto"), fn("splitPriceLine"), fn("mergePriceLine"),
+  // linePropsOf: a typed line drawn from the draft carries its bullet override (paintGapTyped).
+  fn("_ensurePov"), fn("linePropsOf"), fn("makeExtraLine"), fn("caretInto"), fn("splitPriceLine"), fn("mergePriceLine"),
 ].join("\n\n");
 
 function makePage(layout, stateIn) {

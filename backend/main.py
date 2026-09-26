@@ -4752,7 +4752,8 @@ _PRICE_OVERRIDE_FIELD_MAXLEN = 500
 
 def _sanitize_price_overrides(pov_in) -> dict:
     out: Dict[str, Any] = {"options": {}, "manual": [], "single_bid": {}, "rows": {}, "alternate": {},
-                           "lines": {}, "lines2": {}, "before": {}, "after": {}}
+                           "lines": {}, "lines2": {}, "before": {}, "after": {},
+                           "line_props": {}, "before_props": {}, "after_props": {}}
     if not isinstance(pov_in, dict):
         return out
 
@@ -4866,6 +4867,29 @@ def _sanitize_price_overrides(pov_in) -> dict:
             rows = [str(x)[:_PRICE_OVERRIDE_FIELD_MAXLEN] for x in v[:_PRICE_EXTRA_LINES_MAX]
                     if x is not None and not isinstance(x, (dict, list, bool))]
             if rows:
+                out[bucket][str(k)[:120]] = rows
+
+    # THE BULLET, LEVEL AND INDENT the estimator set on a price line with the ribbon (2026-09-26,
+    # Hanz: "fix the indents and the bullets now"): `line_props[key]` for the line itself, and
+    # `before_props[key]` / `after_props[key]` — one entry per line in `before[key]` / `after[key]`,
+    # in the same order, null where he set nothing. Each is price_rules.clean_line_props'd; what
+    # the line prints is price_rules.resolve_line_props (the REBID default under his override). A
+    # draft saved before these keys existed has none of them and prints the default.
+    lp_in = pov_in.get("line_props")
+    if isinstance(lp_in, dict):
+        for k, v in list(lp_in.items())[:_PRICE_OVERRIDES_MAX]:
+            c = price_rules.clean_line_props(v)
+            if c:
+                out["line_props"][str(k)[:120]] = c
+    for bucket in ("before_props", "after_props"):
+        b_in = pov_in.get(bucket)
+        if not isinstance(b_in, dict):
+            continue
+        for k, v in list(b_in.items())[:_PRICE_OVERRIDES_MAX]:
+            if not isinstance(v, list):
+                continue
+            rows = [price_rules.clean_line_props(x) or None for x in v[:_PRICE_EXTRA_LINES_MAX]]
+            if any(rows):
                 out[bucket][str(k)[:120]] = rows
     return out
 
@@ -5196,6 +5220,11 @@ def api_proposal_template(request: Request, work_type: str = "epoxy", audience: 
     # Original templates differ on whether the value after a WORK label colon
     # inherits bold. Normalize preview metadata to the generated DOCX.
     proposal_writer._normalize_work_label_formatting(d)
+    # The PRICE rows Kyle tucked into the margin print their square in the column (the REBID
+    # layout); the render does this to the pristine template before anything else, so the editor
+    # reads the same paragraph properties — the same `para` its bullet / indent presses are
+    # measured against and the writer applies them to. No paragraph is added or removed.
+    proposal_writer._untuck_price_bullets(d)
     # The Options heading(s) the writer spaces from above. Only a FREE one (the GC files, where the
     # heading is a plain paragraph) is a block the editor renders itself; a {{#has_options}}
     # heading is the editor's own #options-heading. Held as a set so the walk below keeps the
@@ -5230,9 +5259,9 @@ def api_proposal_template(request: Request, work_type: str = "epoxy", audience: 
             # `para.bullet` / `para.marker` do that; this stays as the fallback for a level whose
             # definition cannot be read.
             "list": proposal_writer._para_is_list(p_elem),
-            # PRICE-list rows (numId=3) get their bullets stripped at generate
-            # time (_flatten_price_bullets); flag them so the on-screen editor
-            # renders them flush/bullet-less to match the generated .docx.
+            # PRICE-list rows (numId=3). They print their bullet since the REBID layout
+            # (2026-09-25; they were flattened before), and the ribbon's indent moves one between
+            # the list's two levels, square and "o" (proposal_writer._para_price_list).
             "price_flat": proposal_writer._para_price_list(p_elem),
             # The paragraph's own Word properties: {bullet, indent (twips), locked}. The
             # toolbar cannot render a bullet toggle without knowing whether the bullet is
@@ -5340,7 +5369,12 @@ def api_proposal_template_media(request: Request, work_type: str = "epoxy",
 # ("1." to "27." for the Terms and Conditions clauses). Stale is WRONG ON SCREEN, not merely
 # degraded: with no `marker` the renderer falls back to `list`, which is what drew a red square
 # in front of all 27 numbered clauses in the first place.
-_BLOCK_SCHEMA_VERSION = "7"
+# v8 (2026-09-26): the REBID price box. `para` gained `level` (w:ilvl) and `glyph` ("o" for the
+# hollow sub-bullet), and the PRICE rows' `para.bullet` / `indent` are read off the UNTUCKED
+# template (proposal_writer._untuck_price_bullets): the Direct files' rows used to report indent 0.
+# Stale is WRONG ON SCREEN: the editor would draw those rows flush while the document prints them
+# one bullet in, and measure its indent presses from the old 0.
+_BLOCK_SCHEMA_VERSION = "8"
 
 # The code that BUILDS a block response, fingerprinted once at import. The ETag used to move on
 # every deploy only by accident, because the template version was the file's mtime; now that it is
@@ -5729,18 +5763,27 @@ def _generate(payload: GenerateIn, request: Request, *,
             return price_rules.resolve_line(_pov["lines2"][key], amount, phrase)
         return _pov["lines"].get(key) or None
 
+    def _line_para(key: str, pos: Optional[str] = None, index: Optional[int] = None,
+                   text: str = "x") -> dict:
+        """What one PRICE line's bullet prints (Kyle's REBID layout, the estimator's override on
+        top): price_rules.resolve_line_props, the same rule the editor draws with."""
+        return price_rules.resolve_line_props(
+            key, pos, text, price_rules.line_props_for(_pov, key, pos, index))
+
     def _extra_rows(key: str, where: str) -> list:
         """The lines typed above (`before`) or below (`after`) one price line, as label-only
         {{#price_line}} rows: their own paragraphs, cloned from the price row itself, so they
         print in the price box's own font rather than the document default."""
-        return [{"label": t, "amount_formatted": "", "_typed": True}
-                for t in (_pov[where].get(key) or [])]
+        return [{"label": t, "amount_formatted": "", "_typed": True,
+                 "_para": _line_para(key, where, i, t)}
+                for i, t in enumerate(_pov[where].get(key) or [])]
 
     def _priced(key: str, amount: str, label: str, phrase: str = "") -> list:
         """One price line as {{#price_line}} rows: the lines above it, the line, the lines below."""
         own = _edited_line(key, amount, phrase)
         row = ({"label": own, "amount_formatted": ""} if own is not None
                else {"label": label, "amount_formatted": amount})
+        row["_para"] = _line_para(key, text=own if own is not None else label)
         return _extra_rows(key, "before") + [row] + _extra_rows(key, "after")
 
     # Structured PRICE option lines -> repeatable {{#price_line}} rows.
@@ -5759,7 +5802,7 @@ def _generate(payload: GenerateIn, request: Request, *,
             if _key in _pov["lines2"] or _pov["lines"].get(_key):
                 price_line_dicts.extend(_priced(_key, _fmt_usd(amt), label))
                 continue
-            row = {"label": label, "amount_formatted": _fmt_usd(amt)}
+            row = {"label": label, "amount_formatted": _fmt_usd(amt), "_para": _line_para(_key)}
             # Legacy per-field override (positional by ORIGINAL price_lines index).
             _mov = _pov["manual"][_i] if _i < len(_pov["manual"]) else None
             if _mov:
@@ -5847,12 +5890,14 @@ def _generate(payload: GenerateIn, request: Request, *,
                 if _oov.get("amount"):
                     _amount = _oov["amount"]
             _option_lines.extend((_extra_rows(_key, "before") if _oid else [])
-                                 + [{"label": _label, "amount_formatted": _amount}]
+                                 + [{"label": _label, "amount_formatted": _amount,
+                                     "_para": _line_para(_key)}]
                                  + (_extra_rows(_key, "after") if _oid else []))
         for _tr in _o.get("tax_rows") or []:
             _option_lines.extend(_priced(f"{_key}:{_tr['key']}", _tr["price_formatted"],
                                          _tr["price_desc"]) if _oid else
-                                 [{"label": _tr["price_desc"], "amount_formatted": _tr["price_formatted"]}])
+                                 [{"label": _tr["price_desc"], "amount_formatted": _tr["price_formatted"],
+                                   "_para": _line_para(f"{_key}:{_tr['key']}")}])
     # Options first, then the estimator's manual "Add for" price lines.
     price_line_dicts = _option_lines + price_line_dicts
 
@@ -5870,16 +5915,25 @@ def _generate(payload: GenerateIn, request: Request, *,
     for c in (payload.combo_options or [])[:50]:
         if not isinstance(c, dict):
             continue
+        # Which line this is, for its bullet: the page sends the line's key ("combo:epoxy.flooring")
+        # and, for a typed line, where it sits and which one it is. A payload composed before that
+        # carries none of it and gets the default for its kind — a typed line's "o", a money line's
+        # square — which is what an untouched line prints anyway.
+        _ck = str(c.get("key") or "combo:")[:120]
+        _cpos = c.get("pos") if c.get("pos") in ("before", "after") else None
+        _cidx = c.get("idx") if isinstance(c.get("idx"), int) and not isinstance(c.get("idx"), bool) else None
         if c.get("extra") is True:
             # A line the estimator typed above or below a combo price line: its own paragraph,
             # kept exactly as typed — a blank one included, which is the blank line he added.
-            _combo_lines.append({"label": str(c.get("label") or ""), "amount_formatted": "",
-                                 "_typed": True})
+            _t = str(c.get("label") or "")
+            _combo_lines.append({"label": _t, "amount_formatted": "", "_typed": True,
+                                 "_para": _line_para(_ck, _cpos or "after", _cidx, _t)})
             continue
         label = str(c.get("label") or "").strip()
         amount_formatted = str(c.get("amount_formatted") or "").strip()
         if label or amount_formatted:
-            _combo_lines.append({"label": label, "amount_formatted": amount_formatted})
+            _combo_lines.append({"label": label, "amount_formatted": amount_formatted,
+                                 "_para": _line_para(_ck)})
     if _combo_lines:
         # The combined single-bid line is suppressed below (single_bid=[]), but
         # the template's "Options:" heading is a {{#has_options}} block that
@@ -5898,7 +5952,8 @@ def _generate(payload: GenerateIn, request: Request, *,
             # under it -- because on this layout the template's own heading is gone.
             _combo_lines = (_combo_lines
                             + [{"label": _edited_line("heading_options", "") or "Options:",
-                                "amount_formatted": "", "_options_heading": True}]
+                                "amount_formatted": "", "_options_heading": True,
+                                "_para": _line_para("heading_options")}]
                             + _extra_rows("heading_options", "after"))
         price_line_dicts = _combo_lines + price_line_dicts
 
@@ -6007,12 +6062,24 @@ def _generate(payload: GenerateIn, request: Request, *,
     if _whole["alt_remodel"]:     values["_line_alt_remodel"] = _whole["alt_remodel"]
     if _whole["alt_total"]:       values["_line_alt_total"] = _whole["alt_total"]
     _extras = {}
-    for _k in ("base", "sales_tax", "remodel", "total", "heading_base", "heading_options"):
+    for _k in ("base", "sales_tax", "remodel", "total", "heading_base", "heading_options",
+               "alt_name", "alt_flooring", "alt_remodel", "alt_total"):
         if _k in ("base", "sales_tax", "remodel", "total") and not _rows_ok:
             continue
-        _b, _a = price_rules.extras_for(_pov, _k)
+        _b, _a = price_rules.extras_for(_pov, _k) if not _k.startswith("alt_") else ([], [])
+        _spec: Dict[str, Any] = {}
         if _b or _a:
-            _extras[_k] = {"before": _b, "after": _a}
+            _spec = {"before": _b, "after": _a,
+                     "before_para": [_line_para(_k, "before", i, t) for i, t in enumerate(_b)],
+                     "after_para": [_line_para(_k, "after", i, t) for i, t in enumerate(_a)]}
+        # The row's OWN bullet, only where the estimator set one: an untouched template row prints
+        # Kyle's own numbering, untucked (proposal_writer._untuck_price_bullets). The alternate's
+        # name is the exception — the file puts that heading on the PRICE list, and a heading
+        # carries no bullet (price_rules.HEADING_LINE_KEYS).
+        if _k in _pov["line_props"] or _k == "alt_name":
+            _spec["para"] = _line_para(_k)
+        if _spec:
+            _extras[_k] = _spec
 
     # GC additional-phase amount: force the estimator's cell value into the GC
     # Clarifications text ONLY when they changed it off the $4,500 default; else
@@ -6132,6 +6199,9 @@ def _generate(payload: GenerateIn, request: Request, *,
             # ...and the lines he typed ON that gap, printed above its blank lines (the editor's
             # typeOnGapLine): price_overrides.before.heading_options.
             options_gap_typed=_pov["before"].get("heading_options"),
+            # ...each with its own bullet (a typed line on the gap is a heading's, so none by default).
+            options_gap_typed_para=[_line_para("heading_options", "before", i, t) for i, t
+                                    in enumerate(_pov["before"].get("heading_options") or [])],
         )
     except FileNotFoundError as exc:
         raise HTTPException(500, str(exc)) from exc

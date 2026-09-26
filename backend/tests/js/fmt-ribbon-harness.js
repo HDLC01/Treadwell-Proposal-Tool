@@ -56,6 +56,9 @@ const FRONTEND = process.argv[2];
 const SRC = fs.readFileSync(path.join(FRONTEND, "js", "proposal-review.js"), "utf8")
   .replace(/\r\n/g, "\n");
 const F = require(path.join(FRONTEND, "js", "proposal-format-core.js"));
+// The price rule's page half, as the page loads it before proposal-review.js: a PRICE-list row's
+// indent steps between the square and the "o" through TWPrice.paraStep.
+globalThis.TWPrice = require(path.join(FRONTEND, "js", "price-lines-core.js"));
 
 // ── lifting the real source ──────────────────────────────────────────────────
 function fn(name) {
@@ -460,6 +463,12 @@ const LIFTED = [
   // so a stub would leave the indent arithmetic (bullet at left-hanging) untested.
   fn("applyParaGeom"),
   fn("applyParaToEl"), fn("setParaState"), fn("paraAction"),
+  // A PRICE LINE is a ribbon target too (the REBID price box): paraAction and renderFmtBar branch
+  // on isPriceLine, and paraAction hands such a line to priceLineAction.
+  fn("isPriceLine"), fn("priceLineAction"),
+  // ...and a TEMPLATE row in the price box takes the price step (paraAction, applyParaToEl,
+  // paraPatch and renderFmtBar all ask it).
+  fn("takesPriceStep"),
   // The ribbon itself. fmtTargetBlock / markFmtTarget / renderFmtBar are what showFmtBar became
   // when it stopped floating; leaving any of them out is not a lift-time failure but a
   // ReferenceError on the first focusin, which is every case below.

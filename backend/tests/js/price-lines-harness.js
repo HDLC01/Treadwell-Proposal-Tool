@@ -239,6 +239,9 @@ const UNITS = [
   fn("effectiveWorkType"), fn("basePriceSystem"), fn("taxLayout"), fn("taxTreatmentMode"),
   fn("baseTaxRule"), fn("printedTaxRows"), fn("baseBidFigure"),
   fn("lineOverride"), fn("lineValue"), fn("lineCue"), fn("extraLinesHtml"), fn("lineEl"),
+  // The price box's bullets: every builder above puts a line's override on it (linePropsOf) and
+  // refreshPriceDisplay ends by drawing them (paintLineParas).
+  fn("linePropsOf"), fn("paintLineParas"),
   fn("paintExtras"), fn("makeExtraLine"), fn("caretInto"), fn("splitPriceLine"), fn("mergePriceLine"),
   fn("paintLine"), fn("comboSystemLines"), fn("comboLinesForPayload"), fn("baseDescLabel"),
   fn("refreshPriceDisplay"), fn("renderProposalExtras"), fn("computeTokenValues"),

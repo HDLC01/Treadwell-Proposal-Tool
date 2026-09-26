@@ -1291,7 +1291,9 @@ function renameTab(id, rawNew) {
 function reKeyPriceLineOverrides(rename) {
   const pov = state.price_overrides;
   if (!pov || typeof pov !== "object" || Array.isArray(pov)) return;
-  for (const bucket of ["lines", "lines2", "before", "after"]) {
+  // ...and the bullets the estimator set on those lines (line_props) and on the lines typed around
+  // them (before_props / after_props), keyed exactly the same way.
+  for (const bucket of ["lines", "lines2", "before", "after", "line_props", "before_props", "after_props"]) {
     const m = pov[bucket];
     if (!m || typeof m !== "object" || Array.isArray(m)) continue;
     const moved = {};

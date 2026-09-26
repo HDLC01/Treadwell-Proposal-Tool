@@ -1316,6 +1316,16 @@ button {
    `.tw-num` (its real number, never a square) and cannot be emptied at all — so this rule can
    only ever reach a bullet row now, which is the only paragraph it was ever true of. */
 .tw-block.tw-empty.tw-li::before { content: none; }
+/* THE HOLLOW "o": a list level whose `w:lvlText` is "o" (Courier New in every template, in the
+   line's own colour — the level sets no colour of its own). Kyle's REBID price box puts an
+   option's sub-lines on it, the PRICE list's level 1, and the GC Polish "Note:" row is authored
+   there. The square is `.tw-li::before`; this swaps only the glyph, never the geometry, which
+   comes from the line's own inline indent (applyParaGeom / paintLineParas). */
+.tw-li.tw-lvl-o::before {
+  content: "o";
+  color: inherit;
+  font-family: "Courier New", Courier, monospace;
+}
 
 /* NUMBERED paragraphs: the 27 TERMS AND CONDITIONS clauses (numId 5). The number is the
    document's, not decoration — `data-marker` carries what the level prints ("1." to "27.",
@@ -1376,9 +1386,11 @@ button {
   white-space: nowrap;
   vertical-align: super;
 }
-/* PRICE lines read FLUSH-LEFT with NO bullet — the generated .docx flattens the
-   numId=3 PRICE list at generate time (_flatten_price_bullets, per Kyle), so the
-   on-screen preview must match: no red square, no hanging indent. */
+/* PRICE lines. Since the REBID layout (2026-09-25) they print Kyle's bullets — the red square on a
+   money line, the "o" on a sub-line (`.tw-li` / `.tw-lvl-o`) — and every line's indent is set
+   INLINE from what the document prints (paintLineParas for the lines the page composes,
+   applyParaGeom for the template's own PRICE rows), which beats this. What is left here is the
+   state of a price line nothing has painted yet: flush, as the staging markup holds it. */
 .tw-priceline {
   margin-left: 0;
   padding-left: 0;

@@ -183,3 +183,110 @@ def extras_for(pov: Mapping[str, Any], key: str) -> tuple[list, list]:
         v = m.get(key) if isinstance(m, Mapping) else None
         return [str(x) for x in v] if isinstance(v, list) else []
     return one("before"), one("after")
+
+
+# ── THE PRICE BOX'S BULLETS: Kyle's REBID layout ─────────────────────────────────────────────
+# Hanz, 2026-09-25, choosing it with the 2026-07-16 "no bullets in the pricing" rule in front of
+# him: the price box reads like Kyle's hand-made "Nickell RC Sustainment REBID" proposal. Every
+# money line (the base, its tax rows and Total, each option and its own tax rows and Total, the
+# manual and combo lines, the alternate's amounts) carries the template's own red square (the
+# PRICE list, numId 3, level 0); a line typed under or over one of them is its sub-line and
+# carries the hollow "o" (level 1). Headings ("Base Bid", "Options:", the alternate's name) and
+# blank lines carry nothing. Then: "fix the indents and the bullets now" (2026-09-26) — what the
+# estimator sets with the ribbon on any of those lines beats the default, and prints.
+#
+# ONE RULE, TWO LANGUAGES, like the tax rule above: this half says what a line prints when the
+# draft states nothing about it and how a stated override combines with that; its twin is
+# TWPrice.lineDefault / resolveLineProps in price-lines-core.js, and test_price_bullets.py runs
+# both over the same matrix.
+#
+# A RESOLVED line is {"bullet": True, "level": 0|1} or {"bullet": False, "indent": twips}. A
+# bulleted line states no indent of its own: the list level places it, exactly as Kyle's numbering
+# defines — square at 0 and text at 288 twips on level 0, "o" at 1080 and text at 1440 on level 1
+# (every template defines numId 3 that way; test_price_bullets.py reads them to be sure). An
+# unbulleted line states where its text starts. Switching a bullet off does not move the words
+# (the same rule the WORK rows follow, proposal_writer rule 1).
+LEVEL_LEFT_TW = (288, 1440)
+LEVEL_HANG_TW = (288, 360)
+LINE_INDENT_STEP_TW = 288
+LINE_INDENT_MAX_TW = 2880
+# Lines that are headings, never money: no bullet unless the estimator asks for one.
+HEADING_LINE_KEYS = frozenset({"heading_base", "heading_options", "alt_name"})
+
+
+def clean_line_props(raw: Any) -> dict:
+    """One stored override as {bullet?: bool, level?: 0|1, indent?: 0..2880 twips}; anything else
+    dropped. Never raises — a hand-built or stale draft must not 500 a render."""
+    if not isinstance(raw, Mapping):
+        return {}
+    out: dict = {}
+    b = raw.get("bullet")
+    if isinstance(b, bool):
+        out["bullet"] = b
+    lv = raw.get("level")
+    if isinstance(lv, int) and not isinstance(lv, bool) and lv in (0, 1):
+        out["level"] = lv
+    ind = raw.get("indent")
+    if isinstance(ind, (int, float)) and not isinstance(ind, bool):
+        try:
+            out["indent"] = int(max(0, min(LINE_INDENT_MAX_TW, round(float(ind)))))
+        except (TypeError, ValueError, OverflowError):
+            pass
+    return out
+
+
+def line_default(key: Any, pos: Optional[str] = None) -> dict:
+    """What one PRICE line prints when the draft states nothing about it (REBID).
+
+    `pos` is None for the line itself and "before" / "after" for a line typed above / below it."""
+    k = str(key or "")
+    if k in HEADING_LINE_KEYS:
+        return {"bullet": False, "indent": 0}
+    if pos in ("before", "after"):
+        return {"bullet": True, "level": 1}
+    return {"bullet": True, "level": 0}
+
+
+def line_intent(key: Any, pos: Optional[str] = None, override: Any = None) -> dict:
+    """The line as the estimator has set it, blank or not: {bullet, level, indent} all filled in —
+    `indent` is where the TEXT starts, so for a bulleted line the level's own left edge."""
+    d = line_default(key, pos)
+    o = clean_line_props(override)
+    level = o.get("level", d.get("level", 0))
+    bullet = o.get("bullet", d["bullet"])
+    if bullet:
+        return {"bullet": True, "level": level, "indent": LEVEL_LEFT_TW[level]}
+    if "indent" in o:
+        indent = o["indent"]
+    elif d["bullet"]:
+        indent = LEVEL_LEFT_TW[level]            # switched off: the words stay where they were
+    else:
+        indent = d.get("indent", 0)
+    return {"bullet": False, "level": level, "indent": indent}
+
+
+def resolve_line_props(key: Any, pos: Optional[str] = None, text: Any = "",
+                       override: Any = None) -> dict:
+    """What one PRICE line PRINTS: the default, the estimator's override on top, and a BLANK line
+    never carries a bullet — Word would print a lone square on an empty list paragraph, and the
+    editor draws none (Kyle's own test click under the options was exactly that, REBID hazard 2)."""
+    it = line_intent(key, pos, override)
+    if it["bullet"] and str(text if text is not None else "").strip():
+        return {"bullet": True, "level": it["level"]}
+    return {"bullet": False, "indent": it["indent"]}
+
+
+def line_props_for(pov: Any, key: str, pos: Optional[str] = None,
+                   index: Optional[int] = None) -> dict:
+    """The estimator's stored override for one line, or {}: `line_props[key]` for the line itself,
+    `before_props[key][i]` / `after_props[key][i]` for the i-th line typed above / below it."""
+    if not isinstance(pov, Mapping):
+        return {}
+    if pos is None:
+        m = pov.get("line_props")
+        return clean_line_props(m.get(key)) if isinstance(m, Mapping) else {}
+    m = pov.get(pos + "_props")
+    rows = m.get(key) if isinstance(m, Mapping) else None
+    if not isinstance(rows, list) or index is None or not (0 <= index < len(rows)):
+        return {}
+    return clean_line_props(rows[index])
