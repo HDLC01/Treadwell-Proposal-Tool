@@ -78,10 +78,10 @@ test_output_*.docx
 # Local SQLite drafts (runtime data — production uses a Docker volume)
 backend/data/
 
-# Fonts. Zetta Serif, the proposal typeface, is LICENSED and this repo is PUBLIC. It was tracked
-# in backend/fonts/ from 67942d0 (2026-06-20) until 2026-09-26, and raw.githubusercontent.com
-# served it to anyone. The server now supplies it at runtime (see backend/fonts/README.md), so
-# no font file of any kind belongs in git; backend/tests/test_proposal_fonts.py checks that.
+# Fonts. Zetta Serif, the proposal typeface, is LICENSED and this repo is PUBLIC. The server
+# supplies it at runtime (see backend/fonts/README.md), so no font file of any kind belongs in
+# git; backend/tests/test_proposal_fonts.py checks that. Name no commit here, or anywhere in the
+# tree, that still holds one: that test checks it too.
 *.otf
 *.otc
 *.ttf

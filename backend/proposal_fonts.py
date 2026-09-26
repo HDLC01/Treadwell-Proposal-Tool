@@ -45,8 +45,8 @@ out, and it keeps to that condition:
 The browser side is frontend/js/proposal-fonts.js, which fetches both files with the staff bearer
 token and registers them through the FontFace API.
 
-WHAT THIS DOES NOT UNDO. The files were tracked in git from 67942d0 (2026-06-20) until 2026-09-26,
-so the public repository's HISTORY still holds them, and every image built before that date carries
+WHAT THIS DOES NOT UNDO. The files were tracked in git until 2026-09-26, so the public
+repository's HISTORY still holds them, and every image built before that date carries
 them (at /usr/share/fonts/truetype/treadwell and /app/fonts) in GHCR. Making the GHCR package
 private and rewriting the history are repository and registry decisions for Hanz; nothing in this
 file can do either.

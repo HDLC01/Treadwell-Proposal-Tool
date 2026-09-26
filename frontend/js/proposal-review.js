@@ -809,23 +809,27 @@
       && (n.dataset.poKind === "line" || n.dataset.poKind === "extra"));
     const isExtra = (n) => same(n) && n.dataset.poKind === "extra";
     const fire = (n) => n.dispatchEvent(new Event("input", { bubbles: true }));
+    // A line's words. The placeholder break an emptied line keeps (lineBare) is no words: read as
+    // "\n", it made an empty line look full, and joining one onto the line above left that line
+    // ending in a line break, which the sweep then stored as a blank line the screen never shows.
+    const words = (n) => (lineBare(n) ? "" : serializeBlock(n));
     if (dir === "up") {
       const prev = el.previousElementSibling;
       if (isExtra(el) && same(prev)) {
-        const at = serializeBlock(prev).length;
-        prev.textContent = serializeBlock(prev) + serializeBlock(el);
+        const at = words(prev).length;
+        prev.textContent = words(prev) + words(el);
         el.remove();
         caretInto(prev, at);
         fire(prev);
         return true;
       }
-      if (isExtra(prev) && !serializeBlock(prev).length) {      // an empty typed line above: remove it
+      if (isExtra(prev) && !words(prev).length) {      // an empty typed line above: remove it
         prev.remove();
         caretInto(el, 0);
         fire(el);
         return true;
       }
-      if (isExtra(el) && !serializeBlock(el).length) {          // an empty typed line: remove it
+      if (isExtra(el) && !words(el).length) {          // an empty typed line: remove it
         const host = editingBox(el);
         // The caret goes to the end of the line SHOWN above: a row the layout hides (the tax rows
         // under one line) sits in the box too, and a caret put in it is a caret nobody can see.
@@ -844,14 +848,14 @@
     const next = el.nextElementSibling;
     if (isExtra(next) && (next.dataset.poPos === "after" || isExtra(el))) {
       if (!isExtra(el) && next.dataset.poPos !== "after") return false;
-      const at = serializeBlock(el).length;
-      el.textContent = serializeBlock(el) + serializeBlock(next);
+      const at = words(el).length;
+      el.textContent = words(el) + words(next);
       next.remove();
       caretInto(el, at);
       fire(el);
       return true;
     }
-    if (isExtra(el) && same(next) && !serializeBlock(el).length) {   // an empty line above its row
+    if (isExtra(el) && same(next) && !words(el).length) {   // an empty line above its row
       el.remove();
       caretInto(next, 0);
       fire(next);
@@ -4640,6 +4644,10 @@
       return Array.isArray(liveKey("paragraph_overrides")) ? liveKey("paragraph_overrides") : [];
     }
     const out = [];
+    // The paragraphs PUT BACK: each held an edit on this page (reported below, and marked then)
+    // and now reads as the template again -- Ctrl+Z, or the words typed back. preserveRichOverrides
+    // must not rescue their stored edit (see there).
+    const putBack = new Set();
     docSurface.querySelectorAll(".tw-block").forEach(el => {
       const id = Number(el.dataset.id);
       // AN EMPTIED LINE IS AN EMPTY PARAGRAPH, NOT A LINE BREAK. A line with every character
@@ -4657,7 +4665,11 @@
       const textChanged = cur !== pristineById.get(id);
       const fmtChanged = el.classList.contains("tw-fmt");
       const para = paraPatch(id);
-      if (!textChanged && !fmtChanged && !para) return;
+      if (!textChanged && !fmtChanged && !para) {
+        if (el.dataset && el.dataset.twEdited === "1") putBack.add(id);
+        return;
+      }
+      if (el.dataset) el.dataset.twEdited = "1";
       // A BULLET SWITCHED OFF IS NOT AN EDIT TO THE WORDS, so a paragraph whose text is
       // untouched ships `para` and NO text. Sending the text as well would look harmless and
       // would not be: a `text` override rebuilds the paragraph as one plain run, throwing away
@@ -4693,7 +4705,7 @@
     // pushes it back in for an id the DOM never reported. Without this the draft never heals — it
     // re-sends the blank clause on every persist for the life of the project, and only the
     // writer's own refusal keeps it out of the customer's document.
-    return preserveRichOverrides(out).filter(o => !blanksANumberedClause(o));
+    return preserveRichOverrides(out, putBack).filter(o => !blanksANumberedClause(o));
   }
 
   /** `next`, but never poorer than the entry already stored for this template.
@@ -4717,7 +4729,7 @@
    *  Only ever merged against a store entry captured against the SAME template file: paragraph
    *  ids belong to one template, so a version mismatch means the stored entry describes
    *  different paragraphs and must be left alone. */
-  function preserveRichOverrides(next) {
+  function preserveRichOverrides(next, putBack) {
     let prev = null;
     try {
       const all = liveKey("paragraph_overrides_all");
@@ -4744,8 +4756,18 @@
     // An id that dropped out of the list entirely keeps its whole stored entry — `para` and
     // all. Nothing should reach this today (a formatted block still reports itself), which is
     // exactly why it must not be the difference between keeping the work and losing it.
+    //
+    // EXCEPT A PARAGRAPH PUT BACK (`putBack`, from collectOverrides): one that held an edit on this
+    // page and now reads as the template. Its dropping out is the estimator's doing, not a loss.
+    // Review of the 2026-09-26 release: Shift+End and Delete in the WORK box's Exclusions line
+    // stored the edit with runs; Ctrl+Z put the line back on screen, and this rescue put the edit
+    // back into the draft, the fit and Continue: the PDF printed the deleted-first-line version
+    // and a reload drew it again. A block the page never saw holding the edit (a restore that lost
+    // it) is not in the set, so that is still rescued.
     for (const o of next) if (o) rich.delete(Number(o.id));
-    for (const o of rich.values()) out.push(o);
+    for (const o of rich.values()) {
+      if (!(putBack && putBack.has(Number(o.id)))) out.push(o);
+    }
     return out;
   }
 
@@ -8042,7 +8064,8 @@
     const key = el.dataset.poLinekey;
     if (!key) return false;
     const pov = _ensurePov();
-    let typed = serializeBlock(el);
+    // An emptied line keeps a placeholder break (lineBare), which is no words and no line below.
+    let typed = lineBare(el) ? "" : serializeBlock(el);
     let spill = [];
     if (typed.indexOf("\n") >= 0) {
       const parts = typed.split("\n");
@@ -8089,7 +8112,9 @@
       const aProps = after.map(() => null);
       root.querySelectorAll('[data-po-kind="extra"][data-po-linekey]').forEach(n => {
         if (n.dataset.poLinekey !== key) return;
-        const rows = serializeBlock(n).split("\n");
+        // One line on screen is one line on paper: an emptied line holds only the placeholder
+        // break (lineBare), read as "\n", which split into TWO blank lines saved for the one drawn.
+        const rows = lineBare(n) ? [""] : serializeBlock(n).split("\n");
         let pl = null;
         try { pl = n.dataset.pl ? TWPrice.cleanLineProps(JSON.parse(n.dataset.pl)) : null; } catch { pl = null; }
         if (pl && !Object.keys(pl).length) pl = null;

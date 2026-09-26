@@ -2924,6 +2924,73 @@ def template_alt_flooring_row(work_type: str, audience: str | None) -> str:
         return ""
 
 
+# ─── Which page-built PRICE lines the editor draws on a template ─────────
+# The editor draws the base line and the "Base Bid" heading as lines it builds itself
+# (#base-bid-row, #base-bid-heading) ONLY where the template wraps them in {{#single_bid}}:
+# REGION_MOUNTS in proposal-review.js mounts those two nodes from single_bid and from no other
+# region, and a region mounts by its OUTERMOST name (annotateRegions). Where the template writes
+# them as plain paragraphs -- Polish Direct, every GC file, Gyp -- the editor draws the TEMPLATE's
+# paragraph, edited through paragraph_overrides, and the page-built line is never on screen.
+#
+# Review of the 2026-09-26 release: a base pick keeps the words typed into the base line
+# (TWPrice.applyBasePick), so an Epoxy draft's "$15,000 – …, warehouse only" rode a pick onto the
+# Polish base. The editor showed Polish's own "$9,860 – …" paragraph and warned about nothing; the
+# customer's PDF printed his $15,000 and his typed lines. A line the editor cannot draw on this
+# template must not print on it: main.py asks this before it hands the writer the base line, the
+# heading and the lines typed round them. They stay in the draft, and print again under a base whose
+# template draws them. test_page_built_lines.py runs REGION_MOUNTS itself against this answer.
+_PAGE_BUILT_ANCHORS: dict[str, tuple[re.Pattern, ...] | str] = {
+    "base": _EXTRA_ANCHORS["base"],
+    "heading_base": _EXTRA_ANCHORS["heading_base"],
+}
+
+
+def page_built_lines(d: Document) -> dict[str, bool]:
+    """`{"base": bool, "heading_base": bool}`: True when that line's template paragraph sits in a
+    region whose OUTERMOST name is `single_bid`, i.e. the editor draws it as a page-built line.
+    The walk and the text are `iter_editable_blocks`', the ones /api/proposal-template hands the
+    editor; the outermost-name stack is annotateRegions'."""
+    out = {k: False for k in _PAGE_BUILT_ANCHORS}
+    stack: list[str] = []
+    for _idx, _kind, _p, _inner, text, _txbx in iter_editable_blocks(d):
+        txt = text or ""
+        start_m = BLOCK_START_RE.search(txt)
+        if start_m:
+            stack.append(start_m.group(1))
+        outer = stack[0] if stack else None
+        for key, anchor in _PAGE_BUILT_ANCHORS.items():
+            hit = (_heading_text_matches(txt, anchor) if isinstance(anchor, str)
+                   else any(p.search(txt) for p in anchor))
+            if hit and outer == "single_bid":
+                out[key] = True
+        end_m = BLOCK_END_RE.search(txt)
+        if end_m and stack and stack[-1] == end_m.group(1):
+            stack.pop()
+    return out
+
+
+@lru_cache(maxsize=64)
+def _page_built_lines_cached(path_str: str, _mtime_ns: int) -> tuple[bool, bool]:
+    """Memoized on the file's mtime (see _free_tax_rows_cached)."""
+    got = page_built_lines(docx.Document(path_str))
+    return got["base"], got["heading_base"]
+
+
+def template_page_built_lines(work_type: str, audience: str | None) -> dict[str, bool]:
+    """`page_built_lines` for the template `(work_type, audience)` picks. An unreadable template
+    answers True for both, which is what every fill did before this was asked: `fill_proposal` is
+    a moment away from raising on the same file, with the error worth surfacing."""
+    try:
+        p = pick_template(work_type, audience)
+        base, heading = _page_built_lines_cached(str(p), p.stat().st_mtime_ns)
+        return {"base": base, "heading_base": heading}
+    except Exception as exc:              # noqa: BLE001 — never fail a generate over a shape read
+        log.warning("Could not read which price lines the %s/%s proposal template draws "
+                    "(%s: %s); printing the page-built ones as before",
+                    work_type, audience, type(exc).__name__, exc)
+        return {"base": True, "heading_base": True}
+
+
 def template_free_tax_rows(work_type: str, audience: str | None) -> dict[str, bool]:
     """`free_tax_rows` for the template `(work_type, audience)` picks.
 

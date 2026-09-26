@@ -1281,4 +1281,40 @@ const TERMS = [BULLET_115, CLAUSE_51, CLAUSE_52, CLAUSE_53_V5];
   };
 }
 
+// 19 — AN EDIT PUT BACK leaves the draft too (review of the 2026-09-26 release). Block 115 has a
+// bold lead-in, so an edit to its words is stored WITH runs. Put back to the template's own words
+// (Ctrl+Z restores the runs; typing the word back does the same to the text), the paragraph reports
+// nothing, and preserveRichOverrides used to push the stored edit back into the list: the draft, the
+// fit and Continue kept an edit the screen no longer showed, the PDF printed it, and a reload drew
+// it again. The counterexample is the rescue's own case: a stored rich edit the page never drew (a
+// restore that lost it) is still kept.
+{
+  STORE.blob = JSON.parse(JSON.stringify(SEED));
+  const p = makePage("put-back");
+  p.mount(TEMPLATE, TOKENS_A, VER);
+  const pristine = p.snapshot(115);
+  p.typeInFill(115, "scope_notes", "and coat.");        // the first word of the value deleted
+  const edited = p.collect();
+  p.persist();
+  const storedEdit = JSON.parse(JSON.stringify(TW.getState().paragraph_overrides_all["epoxy:Direct"].items));
+  p.typeInFill(115, "scope_notes", "Grind and coat.");  // and put back
+  const back = p.snapshot(115);
+  const collected = p.collect();
+  p.persist();
+  const stored = JSON.parse(JSON.stringify(TW.getState().paragraph_overrides_all["epoxy:Direct"].items));
+  const q = makePage("put-back-reloaded");
+  q.mount(TEMPLATE, TOKENS_A, VER);
+  q.restore("epoxy", "Direct", TOKENS_A);
+  const reloaded = q.snapshot(115);
+  // The rescue's own case: the same rich edit stored, and a page that never drew it.
+  STORE.blob = Object.assign(JSON.parse(JSON.stringify(SEED)), {
+    paragraph_overrides_all: { "epoxy:Direct": { template_version: VER, items: storedEdit } },
+  });
+  const r = makePage("never-drawn");
+  r.mount(TEMPLATE, TOKENS_A, VER);
+  const neverDrawn = r.collect();
+  out.putBack = { pristine: pristine.text, edited, storedEdit, back: back.text, collected, stored,
+                  reloaded: reloaded.text, neverDrawn };
+}
+
 console.log(JSON.stringify(out));

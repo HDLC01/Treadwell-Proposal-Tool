@@ -68,37 +68,61 @@ def ran():
 # What the base line prints at each step of the flow, off Hanz Fix's own tabs. His words
 # (", warehouse only") ride every pick; the amount, the words for the tab's system and the tax
 # wording are the base's; his $15,000 is his until he types a figure a tab prices.
+#
+# EXCEPT ON POLISH (step 3). Polish Direct writes its base line as a plain template paragraph, not in
+# {{#single_bid}}, so the editor never draws the page's own base line there: the template's
+# paragraph is on screen, with the page's figures, and that is what prints (main.py asks
+# proposal_writer.page_built_lines). His words, his $15,000 and the note he typed under the line
+# stay in the draft, and are drawn, warned about and printed again back on Epoxy (step 4). Review
+# of the 2026-09-26 release: this harness used to mount the page's base line on every template, so
+# these tests believed Polish drew and asked about his $15,000, while the real Polish page showed
+# "$9,860 – …", asked nothing, and the customer's PDF printed "$15,000 – …".
 _EPOXY = "Epoxy flooring as described above"
 _POLISH = "Polished Concrete Flooring as described above"
 _W = ", warehouse only"
+ON_TEMPLATE = {"sidebar3", "revisit3"}
 EXPECT = {
     "ONE_LINE": {
         "proposal2": (f"$15,149 – {_EPOXY}{_W} (material sales tax INCLUDED)", [], "live"),
-        "sidebar3": (f"$15,000 – {_POLISH}{_W} (Remodel Tax AND material sales tax INCLUDED)", [], "money"),
-        "revisit3": (f"$15,000 – {_POLISH}{_W} (Remodel Tax AND material sales tax INCLUDED)", [], "money"),
+        "sidebar3": (f"$9,860 – {_POLISH} (Remodel Tax AND material sales tax INCLUDED)", [], None),
+        "revisit3": (f"$9,860 – {_POLISH} (Remodel Tax AND material sales tax INCLUDED)", [], None),
         "sidebar4": (f"$15,000 – {_EPOXY}{_W} (material sales tax INCLUDED)", [], "money"),
         "typed4": (f"$15,149 – {_EPOXY}{_W} (material sales tax INCLUDED)", [], "money"),
         "estimate5": (f"$15,149 – {_EPOXY}{_W} (material sales tax INCLUDED)", [], "live"),
     },
     "BROKEN_OUT": {
         "proposal2": (f"$14,954 – {_EPOXY}{_W}", ["$195 – Material Sales Tax", "$15,149 – Total, all in"], "live"),
-        "sidebar3": (f"$15,000 – {_POLISH}{_W}",
-                     ["$110 – Material Sales Tax", "$745 – Remodel Tax", "$9,860 – Total, all in"], "money"),
-        "revisit3": (f"$15,000 – {_POLISH}{_W}",
-                     ["$110 – Material Sales Tax", "$745 – Remodel Tax", "$9,860 – Total, all in"], "money"),
+        "sidebar3": (f"$9,005 – {_POLISH}",
+                     ["$110 – Material Sales Tax", "$745 – Remodel Tax", "$9,860 – Total, all in"], None),
+        "revisit3": (f"$9,005 – {_POLISH}",
+                     ["$110 – Material Sales Tax", "$745 – Remodel Tax", "$9,860 – Total, all in"], None),
         "sidebar4": (f"$15,000 – {_EPOXY}{_W}", ["$96 – Material Sales Tax", "$7,447 – Total, all in"], "money"),
         "typed4": (f"$14,954 – {_EPOXY}{_W}", ["$96 – Material Sales Tax", "$7,447 – Total, all in"], "money"),
         "estimate5": (f"$14,954 – {_EPOXY}{_W}", ["$195 – Material Sales Tax", "$15,149 – Total, all in"], "live"),
     },
 }
 # What Send, Download and To Dropbox ask about at each step: the figure on the line, and the one
-# the estimate has for it.
+# the estimate has for it. Nothing on Polish: no figure of his is on screen or on paper there.
 ASKS = {
-    "ONE_LINE": {"sidebar3": ("$15,000", "$9,860"), "revisit3": ("$15,000", "$9,860"),
+    "ONE_LINE": {"sidebar3": None, "revisit3": None,
                  "sidebar4": ("$15,000", "$7,447"), "typed4": ("$15,149", "$7,447")},
-    "BROKEN_OUT": {"sidebar3": ("$15,000", "$9,005"), "revisit3": ("$15,000", "$9,005"),
+    "BROKEN_OUT": {"sidebar3": None, "revisit3": None,
                    "sidebar4": ("$15,000", "$7,351"), "typed4": ("$14,954", "$7,351")},
 }
+
+
+def _template_line(work_type, token, values):
+    """The paragraph of the Direct template for `work_type` that carries {{token}}, as the editor
+    draws a template paragraph: every flat token filled from the page's own values (the payload the
+    page hands /api/generate carries exactly those, computeTokenValues)."""
+    d = docx.Document(str(pw.pick_template(work_type, "Direct")))
+    for _i, _k, _p, _b, text, _x in pw.iter_editable_blocks(d):
+        if re.search(r"\{\{\s*" + token + r"\s*\}\}", text or ""):
+            return re.sub(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}",
+                          lambda m: str(values.get(m.group(1), m.group(0))), text).rstrip()
+    raise AssertionError("no {{%s}} paragraph in the %s Direct template" % (token, work_type))
+
+
 # The flow: (step, the base it ends on). 1 Estimate strip Epoxy -> Epoxy copy, read by the Proposal
 # step (2), where he types $15,000 over the amount; 3 Proposal sidebar -> Polish (another work type)
 # and the next visit; 4 sidebar -> Epoxy, then he types the copy's own figure; 5 Estimate strip ->
@@ -127,17 +151,25 @@ def test_a_base_pick_keeps_his_words_and_moves_the_money_on_either_picker(ran, l
     visit after leaving it. The note he typed under the base line is still there. The $15,000 he
     typed is his through every pick (marked, and asked about), until he types a figure a tab prices
     and the next pick makes it the live amount.
+    ON POLISH the page draws no base line of its own: the Polish Direct template's paragraph is on
+    screen, filled with the page's figures, nothing is marked and nothing is asked; back on Epoxy
+    his words, his figure and his note are drawn and asked about again.
     Mutations: applyBasePick deletes the base lines again (the old rule: every step prints the
     computed line); its description swap off (Epoxy words under the Polish base); its own-figure
     step off (the typed copy's figure stays his, marked, after step 5)."""
     s = ran["basePick"][layout][step]
-    line, mark, typed, tax = _editor_rows(s)
     want_line, want_tax, want_mark = EXPECT[layout][step]
     assert s["base_tab_id"] == base, s["base_tab_id"]
+    if step in ON_TEMPLATE:
+        assert [r for r in s["rows"] if r["key"] == "base"] == [], (step, s["rows"])
+        line = _template_line(s["doc"]["work_type"], "base_bid_formatted", s["doc"]["values"])
+        tax = [r["text"] for r in s["rows"] if r["kind"] == "line"]
+    else:
+        line, mark, typed, tax = _editor_rows(s)
+        assert mark == want_mark, (step, mark)
+        assert typed == NOTE, (step, typed)
     assert line == want_line, (step, line)
-    assert mark == want_mark, (step, mark)
     assert tax == want_tax, (step, tax)
-    assert typed == NOTE, (step, typed)
     ask = ASKS[layout].get(step)
     assert s["warnings"] == ([{"key": "base", "says": ask[0], "estimate": ask[1]}] if ask else []), s["warnings"]
 
@@ -189,12 +221,13 @@ def test_the_sidebar_pick_keeps_his_figure_moves_the_words_and_saves_it(ran, lay
 def test_the_sidebars_pick_is_saved(ran):
     """The sidebar's pick changes only the base line's words for the system here (Epoxy copy ->
     Polish), and rebuildPricing's save carries the base and the money, not the price edits. What
-    the page leaves with has the Polish words, and the next visit prints them.
+    the page leaves with has the Polish words. The next visit is on Polish Direct, which draws its
+    base line from the template's own paragraph, so no line of the page's is drawn for it there
+    (the words come back under a base whose template draws the base line).
     Mutation: drop the sidebar's own save (the Epoxy words come back under the Polish base)."""
     s = ran["sidebarSave"]
     assert s["saved"] == {"base": f"{AMT} – {_POLISH}{_W} {TAX}"}, s["saved"]
-    assert s["rows"] == [{"key": "base", "kind": "line", "cue": True, "mark": "live",
-                          "text": f"$9,860 – {_POLISH}{_W} (Remodel Tax AND material sales tax INCLUDED)"}], s["rows"]
+    assert s["rows"] == [], s["rows"]
 
 
 def test_a_copy_picked_before_it_is_priced_takes_its_role_from_the_page(ran):
@@ -395,19 +428,26 @@ def test_the_customer_document_keeps_his_words_through_every_base_pick(ran, layo
     under "Base Bid" is his words with the picked tab's amount (or his own figure), words for the
     system and tax wording; his typed note prints under it as its own lines; the base's tax rows
     under that are that tab's, his "Total, all in" among them. On the Polish base the Polish
-    template renders it. Mutations: the old rule, and the description swap off, as the editor test
-    above. (The own-figure step changes nothing printed at step 5 -- the figure he typed IS the
-    tab's -- so the editor test's mark and warning are what catch that one.)"""
+    template renders it, and prints what the editor draws there: the template's own base line with
+    the base's figures, and none of his words, his figure or his note (they print again on Epoxy).
+    Mutations: the old rule, and the description swap off, as the editor test above; main.py
+    printing the base line the Polish page does not draw (his $15,000 and his note on the Polish PDF).
+    (The own-figure step changes nothing printed at step 5 -- the figure he typed IS the tab's --
+    so the editor test's mark and warning are what catch that one.)"""
     s = ran["basePick"][layout][step]
     want_line, want_tax, _ = EXPECT[layout][step]
     assert s["doc"]["work_type"] == ("polish" if base == "Polish" else "epoxy")
     texts = _document(s["doc"])
     i = texts.index("Base Bid")
     assert texts[i + 1].rstrip() == want_line, texts[i:i + 4]
-    assert texts[i + 2:i + 4] == NOTE, texts[i:i + 6]
+    if step in ON_TEMPLATE:
+        assert NOTE[1] not in texts and not any("$15,000" in t for t in texts), texts[i:i + 6]
+        j = i + 2
+    else:
+        assert texts[i + 2:i + 4] == NOTE, texts[i:i + 6]
+        j = i + 4
     # The base's own tax rows: every one straight after the note, and nothing past them (an
     # option's itemised rows sit under the Options heading, further down).
-    j = i + 4
     rows = []
     while j < len(texts) and _TAX_ROW.match(texts[j]):
         rows.append(texts[j])
@@ -725,6 +765,26 @@ def test_a_bullet_or_indent_on_the_base_line_survives_every_base_pick(ran, leg):
     base_line = next(t for t in doc if " – " in t and "as described above, warehouse only" in t)
     assert doc[base_line] == (False, None, 576), (base_line, doc)
     assert doc["THis is a test send to Hanz"] == (False, None, 864), doc
+    total_line = next(t for t in doc if t.endswith(" – Total"))
+    assert doc[total_line][:2] == (True, 1), (total_line, doc)
+
+
+def test_on_polish_the_base_line_is_the_templates_own_and_so_is_its_bullet(ran):
+    """The sidebar leg's stop on Polish (the next visit, before the pick back to Epoxy). Polish
+    Direct writes its base line as a plain template paragraph, so the editor draws no line of the
+    page's for it, and the document prints the template's own paragraph with Kyle's own square: the
+    bullet switched off on the Epoxy base line, his words and the note under it (with ITS indent)
+    are all kept in the draft for the way back, and none of them is on screen or on paper here.
+    The Total is the page's own line on Polish too, so its "o" still prints. Mutation: main.py
+    printing the page-built base line on a template that does not draw it (the base line comes out
+    unbulleted at 576 twips, and the note prints)."""
+    p = ran["baseProps"]["sidebar"]["onPolish"]
+    assert [x["key"] for x in p["drawn"]] == ["total"], p["drawn"]
+    doc = _price_box_props(p["doc"])
+    base_line = next(t for t in doc if t.startswith("$") and _POLISH in t)
+    assert base_line == _template_line("polish", "base_bid_formatted", p["doc"]["values"]), base_line
+    assert doc[base_line][:2] == (True, 0), (base_line, doc)
+    assert "THis is a test send to Hanz" not in doc and not any(_W in t for t in doc), doc
     total_line = next(t for t in doc if t.endswith(" – Total"))
     assert doc[total_line][:2] == (True, 1), (total_line, doc)
 

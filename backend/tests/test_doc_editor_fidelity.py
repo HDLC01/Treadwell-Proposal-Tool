@@ -709,3 +709,22 @@ def test_the_customer_document_prints_the_new_bases_broken_out_rows(ran):
     assert "$195 – Material Sales Tax (county rate)" in texts[i:i + 4], texts[i:i + 5]
     assert "$15,149 – Total" in texts[i:i + 5], texts[i:i + 5]
     assert not any("$7,447" in t or "$7,351" in t or "$96 " in t for t in texts)
+
+
+def test_an_edit_put_back_leaves_the_draft_and_the_rescue_still_keeps_what_the_page_lost(ran):
+    """Review of the 2026-09-26 release. A paragraph with a bold lead-in edited (its first word of
+    the value deleted) is stored with runs. Put back to the template's own words -- what Ctrl+Z does
+    -- it reports nothing, and preserveRichOverrides pushed the stored edit back: the draft, the fit
+    request and Continue carried an edit the screen no longer showed, the PDF printed it, and a
+    reload drew it again. Now the paragraph the page saw holding the edit and now reads as the
+    template is dropped, and a reload draws the template's words. The counterexample is what the
+    rescue is for: the same rich edit stored, on a page that never drew it (a restore that lost
+    it), is still kept.
+    Mutation: the rescue ignoring the put-back set (the stored edit comes back)."""
+    b = ran["putBack"]
+    assert b["pristine"] == b["back"] == "Scope:  Grind and coat."
+    assert [e["id"] for e in b["edited"]] == [115] and b["edited"][0]["runs"], b["edited"]
+    assert b["storedEdit"] == b["edited"], b["storedEdit"]
+    assert b["collected"] == [] and b["stored"] == [], (b["collected"], b["stored"])
+    assert b["reloaded"] == "Scope:  Grind and coat."
+    assert b["neverDrawn"] == b["storedEdit"], b["neverDrawn"]

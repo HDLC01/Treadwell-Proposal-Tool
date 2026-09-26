@@ -14,7 +14,7 @@ frontend/js/proposal-fonts.js fetches them with the bearer token and registers t
 and proposal-review.js re-fits every box once, when they are in.
 
 Zetta Serif is LICENSED. Hanz approved serving it to staff only if it stays behind the login, and
-then decided "Move font off GitHub": the repo is public, and it had carried the files since 67942d0.
+then decided "Move font off GitHub": the repo is public, and it had carried the files since June.
 So the files are in neither git nor any image any more; the host mounts them at runtime. Most of
 this file is about who does NOT get the bytes and where they must NOT be.
 
@@ -289,6 +289,37 @@ def test_git_tracks_no_font_file():
     assert sniffed == [], "font files tracked under other names: %s" % sniffed
 
 
+def test_no_tracked_file_names_a_commit_that_still_serves_the_font():
+    """The tip is clean, but git HISTORY still holds the files: any commit from the one that added
+    them up to the one that untracked them serves them at raw.githubusercontent.com/<repo>/<commit>/.
+    A comment that names such a commit is a download link in a public repo (review of the 2026-09-26
+    release: .gitignore, proposal_fonts.py and this file's own docstring each named the commit that
+    added them). So no tracked file may name, as a hash of 7 characters or more, a commit that ADDED a
+    font file. The commits are read out of history here, never written down, so this test names
+    none either. CI checks out with fetch-depth 0, so it has the history; a clone without it skips."""
+    tracked = _git_ls_files()
+    globs = ["*" + s for s in FONT_SUFFIXES]
+    proc = subprocess.run(["git", "-C", str(REPO), "log", "--all", "--diff-filter=A", "--format=%H", "--"]
+                          + globs, capture_output=True)
+    shas = sorted({s for s in proc.stdout.decode("ascii", "replace").split() if re.fullmatch(r"[0-9a-f]{40}", s)})
+    if proc.returncode != 0 or not shas:
+        pytest.skip("this clone holds no history of a font file")
+    token = re.compile(rb"(?<![0-9A-Fa-f])[0-9a-f]{7,40}(?![0-9A-Fa-f])")
+    named = []
+    for rel in tracked:
+        path = REPO / rel
+        if not path.is_file() or path.stat().st_size > 4_000_000:
+            continue
+        blob = path.read_bytes()
+        if b"\0" in blob[:8192]:
+            continue                                           # binary: no one reads a hash in it
+        for m in token.finditer(blob):
+            hexs = m.group(0).decode("ascii")
+            if any(sha.startswith(hexs) for sha in shas):
+                named.append((rel, hexs))
+    assert named == [], "tracked files name a commit that still serves the font: %s" % named
+
+
 def _dockerignore_rules():
     """.dockerignore as Docker's own matcher (moby/patternmatcher) reads it: `#` lines skipped,
     a leading `!` inverts, the pattern is cleaned and a leading `/` dropped, `**` spans any number
@@ -403,7 +434,55 @@ def _font_checks():
     m = re.search(r"""\n"\$\{SSH\[@\]\}" '(for f in [^']*done)'\n""", ship)
     assert m, "deploy/ship.sh no longer checks the font on the box"
     checks["ship.sh"] = (m.group(1), ship)
+    for key, script in _readme_box_deploys().items():
+        lines = script.splitlines()
+        start = next((i for i, ln in enumerate(lines) if ln.startswith("TW_FONT_DIR=")), None)
+        if start is None:
+            checks[key] = ("", script)
+            continue
+        end = next(i for i in range(start, len(lines)) if lines[i].strip() == "done")
+        checks[key] = ("\n".join(lines[start:end + 1]), script)
     return checks
+
+
+README_DEPLOYS = ["README /opt/treadwell", "README /opt/treadwell-staging"]
+
+
+def _readme_box_deploys():
+    """The deploys the README tells a person to run by hand on the VPS: every `bash <<'DEPLOY'`
+    body in a shell block, keyed by the checkout it pulls. Review of the 2026-09-26 release: the
+    README (and CLAUDE.md) still said `cd /opt/treadwell && git pull && docker compose up -d --build`,
+    and CD does miss a push now and then (#439). That pull is the one that deletes the checkout's
+    fonts, and nothing in it kept or checked them, so the box came up printing a substitute font."""
+    text = (REPO / "README.md").read_text(encoding="utf-8")
+    out = {}
+    for block in re.findall(r"```bash\n(.*?)```", text, re.S):
+        for body in re.findall(r"^bash -euo pipefail <<'DEPLOY'\n(.*?)^DEPLOY$", block, re.S | re.M):
+            m = re.search(r"^cd (/opt/treadwell\S*)\n", body, re.M)
+            if m:
+                out["README " + m.group(1)] = body
+    return out
+
+
+def test_the_readme_pulls_a_vps_checkout_only_where_the_font_is_kept_first():
+    """Every shell line in the README that pulls a VPS checkout sits inside a by-hand deploy the
+    font checks run (the executed tests below include both), and no README command builds an image
+    on the box. The two it documents are prod's and staging's."""
+    text = (REPO / "README.md").read_text(encoding="utf-8")
+    deploys = _readme_box_deploys()
+    assert sorted(deploys) == sorted(README_DEPLOYS), sorted(deploys)
+    for key, body in deploys.items():
+        code = [ln.split("#", 1)[0] for ln in body.splitlines()]
+        done = next((i for i, ln in enumerate(code) if ln.strip() == "done"), None)
+        pulls = [i for i, ln in enumerate(code) if re.search(r"\bgit pull\b", ln)]
+        assert done is not None and pulls and min(pulls) > done, "%s pulls before it keeps the font" % key
+    inside = "".join(deploys.values())
+    for block in re.findall(r"```bash\n(.*?)```", text, re.S):
+        for line in block.splitlines():
+            code = line.split("#", 1)[0]
+            if re.search(r"\bgit pull\b", code) and "/opt/treadwell" in block:
+                assert line in inside, "the README pulls a VPS checkout outside a font-checked deploy: " + line
+            assert not re.search(r"\bup\b[^#\n]*--build", code), "the README builds on the VPS: " + line
 
 
 def _seed(where, block, script):
@@ -437,7 +516,7 @@ def test_every_deploy_path_checks_the_font_before_it_changes_anything():
     before its `git pull` (which deletes the checkout's tracked copy, see the next test), before
     the first `docker compose` in the CI deploys, before the build in ship.sh."""
     checks = _font_checks()
-    assert set(checks) == {"staging", "production", "ship.sh"}
+    assert set(checks) == {"staging", "production", "ship.sh", *README_DEPLOYS}
     for where, (block, script) in checks.items():
         for filename in proposal_fonts.FONTS.values():
             assert '"%s"' % filename in block, (where, filename)
@@ -463,7 +542,7 @@ def _bash():
     return None
 
 
-@pytest.mark.parametrize("where", ["staging", "production", "ship.sh"])
+@pytest.mark.parametrize("where", ["staging", "production", "ship.sh"] + README_DEPLOYS)
 def test_the_deploy_font_check_refuses_a_box_without_the_files(where, tmp_path, synthetic_dir):
     """EXECUTED, with only the host path swapped for a temp one. A box missing either file, or
     holding an empty placeholder, stops the deploy; a box with both goes ahead."""
@@ -495,7 +574,7 @@ def test_the_deploy_font_check_refuses_a_box_without_the_files(where, tmp_path, 
     assert list(checkout.iterdir()) == [], "the check never writes into the checkout"
 
 
-@pytest.mark.parametrize("where", ["staging", "production", "ship.sh"])
+@pytest.mark.parametrize("where", ["staging", "production", "ship.sh"] + README_DEPLOYS)
 def test_the_first_deploy_keeps_the_checkouts_copy_before_its_pull_deletes_it(
         where, tmp_path, synthetic_dir):
     """Review, 2026-09-26: untracking the files deletes them from every checkout at its next pull,

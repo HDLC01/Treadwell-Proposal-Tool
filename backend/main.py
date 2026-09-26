@@ -6169,6 +6169,16 @@ def _generate(payload: GenerateIn, request: Request, *,
         "alt_remodel": ("", ""), "alt_total": ("", ""),
     }
     _whole = {k: _edited_line(k, *parts) for k, parts in _row_parts.items()}
+    # The base line and the "Base Bid" heading print his words only where the editor draws them as
+    # the page's own lines (a {{#single_bid}} template: Epoxy and Combo Direct). On Polish Direct,
+    # GC and Gyp the editor draws the TEMPLATE's paragraph there, so words that rode a base pick in
+    # from an Epoxy tab were printed while the screen showed the computed line, and nothing asked
+    # (review of the 2026-09-26 release). They stay in the draft for a base whose template draws
+    # them. proposal_writer.page_built_lines has the rule; the lines typed round them follow it too.
+    _drawn = proposal_writer.template_page_built_lines(payload.work_type, payload.audience)
+    for _k in ("base", "heading_base"):
+        if not _drawn[_k]:
+            _whole[_k] = None
     if _rows_ok:
         if _whole["base"]:      values["_line_base"] = _whole["base"]
         if _whole["sales_tax"]: values["_line_sales_tax"] = _whole["sales_tax"]
@@ -6191,6 +6201,8 @@ def _generate(payload: GenerateIn, request: Request, *,
                "alt_name", "alt_flooring", "alt_remodel", "alt_total"):
         if _k in ("base", "sales_tax", "remodel", "total") and not _rows_ok:
             continue
+        if _k in _drawn and not _drawn[_k]:
+            continue                       # a line the editor does not draw here: see _drawn above
         # The ALTERNATE rows' typed lines print too: the editor draws them (and makes them, with
         # Enter), so a line typed under "$30,000 – Total" that reached the screen and not the PDF was
         # a line the customer never read (review of fix 7, finding 4). They are cloned inside the

@@ -66,11 +66,43 @@ with **Let's Encrypt** SSL (auto-renews). The app lives at `/opt/treadwell`.
 The image bakes in Python + **Node + the Claude CLI** (for AI Autofill) +
 **LibreOffice** (for the `docx → PDF` export).
 
+Deploys are CD (`.github/workflows/deploy.yml`): a push to `main` builds the image on a GitHub
+runner and, once the `production` environment is approved, the VPS only pulls it. **A push that
+got no deploy** (it happens: #439 got no push event) is re-run from the Actions tab (**Deploy**,
+`workflow_dispatch`), or shipped with `bash deploy/ship.sh`. Never `docker compose up -d --build`
+on the VPS: building there browns out every site on the box.
+
+**The proposal font comes first.** Zetta Serif is licensed, so since 2026-09-26 neither git nor
+the image carries it: compose mounts `/opt/treadwell-fonts` from the host, and a checkout's first
+`git pull` past that change DELETES its `backend/fonts/*.otf`, the only copy on the box until then.
+With the host directory missing or empty the app still boots and passes `/healthz`, and every PDF
+prints in a substitute font. Every deploy path above keeps the checkout's copy and refuses to go on
+without the files; anything run by hand on the box must do the same, before its pull. This is the
+block `deploy.yml` runs, inside one `bash` so a refusal ends the deploy and not your SSH session:
+
 ```bash
-# on the VPS
-cd /opt/treadwell && git pull && docker compose up -d --build   # deploy / update
-docker compose restart                                          # restart
-docker compose logs -f                                          # tail logs
+# on the VPS: prod, by hand
+bash -euo pipefail <<'DEPLOY'
+TW_FONT_DIR=/opt/treadwell-fonts
+TW_FONT_SEED=/opt/treadwell/backend/fonts
+for f in "Zetta Serif-Book.otf" "Zetta Serif.otf"; do
+  if [ ! -s "$TW_FONT_DIR/$f" ] && [ -s "$TW_FONT_SEED/$f" ]; then
+    if mkdir -p "$TW_FONT_DIR" && cp "$TW_FONT_SEED/$f" "$TW_FONT_DIR/$f"; then
+      echo "Kept $TW_FONT_SEED/$f in $TW_FONT_DIR before the pull below deletes it."
+    fi
+  fi
+  if [ ! -s "$TW_FONT_DIR/$f" ]; then
+    echo "$TW_FONT_DIR/$f is missing on the VPS. Copy both Zetta Serif files there from the team Dropbox (see backend/fonts/README.md), then run this again."
+    exit 1
+  fi
+done
+cd /opt/treadwell
+git pull --ff-only
+docker compose pull proposal-tool
+docker compose up -d                  # NO --build
+DEPLOY
+cd /opt/treadwell && docker compose restart   # restart
+cd /opt/treadwell && docker compose logs -f   # tail logs
 ```
 
 ### Staging
@@ -80,9 +112,30 @@ A parallel stack at <https://staging.proposals.wetreadwell.com> — container
 `staging` branch. Staging uses a **self-hosted Postgres + PostgREST** for
 DATA and **cloud Supabase for AUTH only**, so test data never touches prod.
 
+A push to `staging` deploys it by CD, which also applies staging's schema. By hand on the box, the
+font comes first here too (both stacks mount the same `/opt/treadwell-fonts`):
+
 ```bash
-cd /opt/treadwell-staging && git pull origin staging \
-  && docker compose -f docker-compose.staging.yml up -d --build
+# on the VPS: staging, by hand (no schema step: re-run Deploy from the Actions tab for that)
+bash -euo pipefail <<'DEPLOY'
+TW_FONT_DIR=/opt/treadwell-fonts
+TW_FONT_SEED=/opt/treadwell-staging/backend/fonts
+for f in "Zetta Serif-Book.otf" "Zetta Serif.otf"; do
+  if [ ! -s "$TW_FONT_DIR/$f" ] && [ -s "$TW_FONT_SEED/$f" ]; then
+    if mkdir -p "$TW_FONT_DIR" && cp "$TW_FONT_SEED/$f" "$TW_FONT_DIR/$f"; then
+      echo "Kept $TW_FONT_SEED/$f in $TW_FONT_DIR before the pull below deletes it."
+    fi
+  fi
+  if [ ! -s "$TW_FONT_DIR/$f" ]; then
+    echo "$TW_FONT_DIR/$f is missing on the VPS. Copy both Zetta Serif files there from the team Dropbox (see backend/fonts/README.md), then run this again."
+    exit 1
+  fi
+done
+cd /opt/treadwell-staging
+git pull --ff-only origin staging
+docker compose -f docker-compose.staging.yml pull app
+docker compose -f docker-compose.staging.yml up -d     # NO --build
+DEPLOY
 ```
 
 **All changes hit `staging` first, then promote to `main` / prod.**

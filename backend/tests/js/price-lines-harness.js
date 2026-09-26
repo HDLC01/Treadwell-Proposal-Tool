@@ -234,8 +234,53 @@ function page() {
   const holder = new El("div");
   holder.innerHTML = staging.replace(/<!--[\s\S]*?-->/g, "");
   const ids = {};
-  for (const el of holder.children.slice()) { region.appendChild(el); if (el.attrs.id) ids[el.attrs.id] = el; }
-  return { docSurface, box, region, ids };
+  const order = [];
+  for (const el of holder.children.slice()) {
+    region.appendChild(el);
+    if (el.attrs.id) { ids[el.attrs.id] = el; order.push(el.attrs.id); }
+  }
+  // The hidden staging panel: an island no region of the template mounts stays here, off screen.
+  const offDoc = new El("div");
+  return { docSurface, box, region, ids, order, offDoc };
+}
+
+// ── WHICH ISLANDS THE TEMPLATE MOUNTS ────────────────────────────────────────
+// The real page moves the staging islands into the document through REGION_MOUNTS, once per region
+// the template has, and a region mounts by its OUTERMOST name (annotateRegions). An island no region
+// of the template mounts stays in the hidden staging panel and is not on screen. So on Polish Direct
+// (no {{#single_bid}}) the page's own "Base Bid" heading, base line and combo block are never drawn:
+// the template's own paragraphs are. This harness used to mount every island on every template, so
+// it showed a base line the real Polish page never shows, and the tests believed a base pick onto
+// Polish drew and warned about his words (review of the 2026-09-26 release).
+// TEMPLATE_REGIONS is each Direct template's outermost region names, in order, pinned against the
+// real files by test_page_built_lines.py. A work type it does not list mounts every island.
+const TEMPLATE_REGIONS = {
+  epoxy: ["system", "notes", "room", "single_bid", "price_line", "alternate"],
+  polish: ["tax_breakout", "remodel", "has_options", "price_line", "alternate", "notes"],
+  combo: ["notes", "room", "single_bid", "price_line", "alternate"],
+};
+/** {region: [the ids it mounts]}, off the REAL REGION_MOUNTS. */
+const REGION_IDS = (() => {
+  const table = new Function("document", "systemPreviewEl", "notesPreviewEl",
+                             topConst("REGION_MOUNTS") + "\nreturn REGION_MOUNTS;")(
+    { getElementById: (id) => ({ id }) }, { id: "system-preview-block" }, { id: "notes-preview-block" });
+  const ids = {};
+  for (const [name, mount] of Object.entries(table)) ids[name] = mount().filter(Boolean).map((e) => e.id);
+  return ids;
+})();
+/** Render the template for `workType` the way initDocumentEditor does: the surface is cleared (so
+ *  every line typed next to an island goes with it) and each island the template's regions mount
+ *  is placed; the rest stay in staging. */
+function mountTemplate(pg, workType) {
+  const regions = TEMPLATE_REGIONS[String(workType || "").toLowerCase()];
+  const shown = regions ? new Set([].concat(...regions.map((r) => REGION_IDS[r] || []))) : null;
+  for (const n of pg.region.childNodes.slice()) {
+    if (!(n.attrs && pg.ids[n.attrs.id] === n)) pg.region.removeChild(n);
+  }
+  for (const id of pg.order) {
+    const el = pg.ids[id];
+    if (!shown || shown.has(id)) pg.region.appendChild(el); else pg.offDoc.appendChild(el);
+  }
 }
 
 const UNITS = [
@@ -396,10 +441,21 @@ function build(st, opts) {
     // The page's debounced price save, fired at once: what it writes is what a step pill leaves with.
     () => { saves.push(1); sets.push({ price_overrides: clone(st.price_overrides) }); },
     F, Node, Ev, SEL,
-    // The template reload a work-type change makes (Phase B). It swaps the .docx on screen; the
-    // price lines are drawn by the functions above whatever template is mounted.
-    () => { reloads.push(1); },
+    // The template reload a work-type change makes (Phase B, reloadForWorkType): nothing when the
+    // work type is the one on screen; else the new template is rendered (mountTemplate: its regions
+    // decide which islands are in the document) and the price box repainted in it, as
+    // initDocumentEditor ends.
+    () => {
+      reloads.push(1);
+      const wt = api.effectiveWorkType();
+      if (wt === onScreen.wt) return;
+      onScreen.wt = wt;
+      mountTemplate(pg, wt);
+      api.refreshPriceDisplay();
+    },
     fitAsks);
+  const onScreen = { wt: api.effectiveWorkType() };
+  mountTemplate(pg, onScreen.wt);
   api.pg = pg; api.saves = saves; api.SEL = SEL; api.sets = sets; api.reloads = reloads;
   api.fitAsks = fitAsks;
   /** The draft as the page leaves it: `from` with every save the page made merged in, in order
@@ -1090,12 +1146,18 @@ function propsDraft(over) {
   const e = estimatePick(draft, "Copy1");
   const pe = openProposal(e.saved);
   out.baseProps.strip = { pov: clone(e.saved.price_overrides), drawn: drawnProps(pe.api), doc: docPayload(pe.st, pe.api) };
-  // The Proposal step's sidebar: Epoxy -> Polish (another work type), and the draft it leaves.
+  // The Proposal step's sidebar: Epoxy -> Polish (another work type), the draft it leaves and the
+  // next visit, on Polish; then back to Epoxy in the sidebar, in place and on the visit after. Polish
+  // Direct draws its base line from the template's own paragraph, not the page's line, so the base
+  // line's bullet is kept in the draft there and drawn again back on Epoxy.
   const ps = openProposal(draft);
   const left = sidebarPick(ps, "Polish");
   const pr = openProposal(left);
-  out.baseProps.sidebar = { pov: clone(left.price_overrides || {}), drawn: drawnProps(ps.api),
-                            reopened: drawnProps(pr.api), doc: docPayload(pr.st, pr.api) };
+  const onPolish = { drawn: drawnProps(pr.api), doc: docPayload(pr.st, pr.api) };
+  const back = sidebarPick(pr, "Epoxy");
+  const pb = openProposal(back);
+  out.baseProps.sidebar = { pov: clone(left.price_overrides || {}), drawn: drawnProps(pr.api),
+                            reopened: drawnProps(pb.api), doc: docPayload(pb.st, pb.api), onPolish };
   // An old-shape base line with the note typed inside it: the pick splits the note off into rows
   // of their own, which carry no override (the "o" default) -- a stale after_props entry left
   // behind with no rows under it must not land on the new rows, or row i is no longer row i.
@@ -1106,6 +1168,46 @@ function propsDraft(over) {
   } });
   const eo = estimatePick(old, "Copy1");
   out.baseProps.legacySplit = { pov: clone(eo.saved.price_overrides) };
+}
+
+// 19. AN EMPTIED LINE IS ONE LINE (review of the 2026-09-26 release). The browser leaves one <br>
+//     in a line whose every character went, so the line keeps its height, and serializeBlock reads
+//     that as "\n". The box sweep split it into TWO blank lines for the one on screen, and a
+//     Backspace that took the empty line away joined its "\n" onto the base line, which the sweep
+//     then stored as a blank line under it: blank lines on paper the editor did not show.
+function bareLine(el) { el.innerHTML = "<br>"; fire(el, "input", { bubbles: true }); }
+{
+  // Broken out; he typed "abc" under the base line, then pressed Backspace three times.
+  const st = hanzFix({ tax_layout: "BROKEN_OUT", price_overrides: { lines: {}, after: { base: ["abc"] } } });
+  const api = build(st);
+  api.refreshPriceDisplay();
+  const base = api.pg.ids["base-bid-row"];
+  const typed = base.nextElementSibling;
+  const was = typed && typed.dataset.poKind;
+  bareLine(typed);
+  const emptied = clone(st.price_overrides.after || {});
+  // A fourth Backspace, at the start of the empty line: the line goes, the base line is as it was.
+  api.SEL.el = typed; api.SEL.at = [0, 0];
+  api.key(typed, "Backspace");
+  out.bare = { was, emptied, gone: {
+    after: clone(st.price_overrides.after || {}), lines2: clone(st.price_overrides.lines2 || {}),
+    base: api.serializeBlock(base), rows: priceRows(api).filter((r) => r.key === "base") } };
+  // Triple-click and Delete on the first of two lines typed under the base line: one empty line is
+  // left on screen, then the second line.
+  const st2 = hanzFix({ tax_layout: "BROKEN_OUT",
+    price_overrides: { lines: {}, after: { base: ["Includes cove base", "Warranty 1 yr"] } } });
+  const api2 = build(st2);
+  api2.refreshPriceDisplay();
+  bareLine(api2.pg.ids["base-bid-row"].nextElementSibling);
+  out.bare.triple = { after: clone(st2.price_overrides.after || {}),
+                      rows: priceRows(api2).filter((r) => r.key === "base").map((r) => [r.kind, r.text]) };
+  // The base line itself emptied to the placeholder: no line is made up under it.
+  const st3 = hanzFix({ tax_layout: "BROKEN_OUT", price_overrides: { lines: {} } });
+  const api3 = build(st3);
+  api3.refreshPriceDisplay();
+  bareLine(api3.pg.ids["base-bid-row"]);
+  out.bare.baseEmptied = { after: clone(st3.price_overrides.after || {}),
+                           lines2: clone(st3.price_overrides.lines2 || {}) };
 }
 
 Promise.all([

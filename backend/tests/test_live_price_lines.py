@@ -129,6 +129,33 @@ def test_enter_makes_a_line_of_its_own_and_backspace_takes_an_empty_one_away(ran
 
 
 @needs_node
+def test_an_emptied_line_is_one_blank_line_and_backspace_leaves_no_blank_line_behind(ran):
+    """Review of the 2026-09-26 release. A line whose every character is deleted keeps one <br>
+    (the browser's placeholder, so the line keeps its height), and serializeBlock reads it as "\\n".
+      * "abc" typed under the base line, then Backspace three times: one blank line on screen, and
+        the draft saved TWO ("\\n" split in two), both printed.
+      * a fourth Backspace took the line off the screen but joined its "\\n" onto the base line,
+        which the sweep then saved as a blank line under it: printed, and back on screen after a
+        reload.
+      * triple-click and Delete on the first of two typed lines: one blank line then "Warranty 1
+        yr" on screen, and the draft saved two blank lines above it.
+      * the base line itself emptied made up a blank line under it.
+    Mutations: each of the three sites reading the placeholder as text again (captureExtrasIn,
+    mergePriceLine, captureLineNode)."""
+    b = ran["bare"]
+    assert b["was"] == "extra"
+    assert b["emptied"] == {"base": [""]}, b["emptied"]
+    g = b["gone"]
+    assert g["after"] == {} and g["lines2"] == {}, g
+    assert g["base"] == "$7,351 – Epoxy flooring as described above", repr(g["base"])
+    assert [(r["kind"], r["text"]) for r in g["rows"]] == [("line", g["base"])], g["rows"]
+    t = b["triple"]
+    assert t["after"] == {"base": ["", "Warranty 1 yr"]}, t["after"]
+    assert [k for k, _ in t["rows"]] == ["line", "extra", "extra"], t["rows"]
+    assert b["baseEmptied"] == {"after": {}, "lines2": {}}, b["baseEmptied"]
+
+
+@needs_node
 def test_options_are_itemised_off_their_own_tab_and_an_edited_one_keeps_following_it(ran):
     assert [(l["key"], l["text"]) for l in ran["brokenOptions"]] == [
         ("option:Copy1", "$7,597 – Treadwell 3/16\" Urethne Cement With Shop Floor and Armor Top as described above"),
