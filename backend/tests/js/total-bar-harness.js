@@ -15,6 +15,9 @@ const fs = require("fs");
 const path = require("path");
 
 const SRC = fs.readFileSync(path.join(process.argv[2], "js", "estimate-review.js"), "utf8");
+// The price rule the base radio applies to the Proposal step's saved edits (TWPrice.forgetBaseLines),
+// the real one: the page loads it before estimate-review.js.
+const TWPrice = require(path.join(process.argv[2], "js", "price-lines-core.js"));
 const NL = String.fromCharCode(10);
 
 function grab(re, what) {
@@ -97,8 +100,8 @@ function pickBase(opts) {
   const deps = { state, tabs, HF, document, GYP_BASE: VOCAB.GYP_BASE, BASE_ROLE: VOCAB.BASE_ROLE,
                  PRICED_ROLES: VOCAB.PRICED_ROLES, OPTION_ONLY_ROLES: VOCAB.OPTION_ONLY_ROLES,
                  TOTAL_CELLS: VOCAB.TOTAL_CELLS,
-                 renderBidOptions: () => {}, persistBidOptions: () => {},
-                 clearSingleBidDisplayOverride: () => {}, ensureOpt: () => ({}), TW: { setState: () => {} } };
+                 renderBidOptions: () => {}, persistBidOptions: () => {}, persistTabState: () => {},
+                 TWPrice, ensureOpt: () => ({}), TW: { setState: () => {} } };
   deps._shiftIdx = lift("_shiftIdx", deps);
   deps.structOpsFor = liftExpr(/^function structOpsFor\(sheetId\) .*$/m, "structOpsFor", { state });
   deps.txAddr = lift("txAddr", deps);

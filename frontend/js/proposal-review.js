@@ -561,12 +561,18 @@
     // in) and any tax wording this tool has printed become markers; a "$0 – Total" the old box-wide
     // sweep froze on a row nobody touched is dropped. What is left and still differs from the
     // computed line is the estimator's.
+    //
+    // "A figure the old code froze in" is any figure this draft's own tabs priced the line at, the
+    // OLD base's included (TWPrice.tabFigures): Hanz Fix's base line froze Epoxy's $7,447, the base
+    // then became Epoxy copy at $15,149, and the line went on printing $7,447 for every revision.
+    // Only a figure no tab ever priced is his.
     if (pov.lines && typeof pov.lines === "object" && typeof pov.lines[key] === "string"
         && !(pov.lines2 && typeof pov.lines2 === "object" && own.call(pov.lines2, key))
         && p.amount !== undefined) {
       const m = TWPrice.migrateLine(pov.lines[key], {
         amount: p.amount, phrase: p.phrase || "", slot: !!p.slot,
-        candidates: Array.isArray(p.candidates) ? p.candidates : [],
+        candidates: (Array.isArray(p.candidates) ? p.candidates : [])
+          .concat(TWPrice.tabFigures(state.priced_tabs, key)),
         zeroIsPhantom: COMPUTED_PRICE_LINE_KEYS.has(key) || /:(sales_tax|remodel|total)$/.test(key),
       });
       if (!pov.lines2 || typeof pov.lines2 !== "object" || Array.isArray(pov.lines2)) pov.lines2 = {};
@@ -1604,20 +1610,18 @@
             state.base_tab_id = rb.value || null;
             if (rb.value && opts[rb.value]) opts[rb.value].is_option = false;   // base can't also be an option
             if (state.base_tab_id !== priorBaseId) {
-              // A base/work-type change re-derives the base + tax rows + combo
-              // breakout, so their display overrides are stale — clear them (the
-              // base-independent alternate block's overrides are kept).
+              // A base change re-derives the base line, its tax rows and the combo breakout, so the
+              // edits made to those lines belong to the old base. THE SAME RULE as the Estimate
+              // step's bid strip (TWPrice.forgetBaseLines): the two pickers used to disagree, and a
+              // base picked on the Estimate page kept the old base's frozen line. The lines the
+              // estimator typed next to a price line are kept.
+              //
+              // And SAVED NOW. rebuildPricing's save below carries the base and the money, not the
+              // price edits, so leaving by a step pill (the pagehide save) put the old base's line
+              // back into the draft with the new base, and the next visit printed it again.
               const pov = state.price_overrides;
-              if (pov && typeof pov === "object" && !Array.isArray(pov)) {
-                pov.single_bid = {}; pov.rows = {}; pov.combo = {};
-                // Clear base-dependent whole-line overrides; keep the base-independent
-                // alternate block (alt_*).
-                // Both shapes, and the lines typed around them: they belong to the old base.
-                for (const bucket of ["lines", "lines2", "before", "after"]) {
-                  const m = pov[bucket];
-                  if (!m || typeof m !== "object") continue;
-                  for (const k of Object.keys(m)) if (!k.startsWith("alt_")) delete m[k];
-                }
+              if (TWPrice.forgetBaseLines(pov, priorBaseId, state.base_tab_id)) {
+                TW.setState({ price_overrides: pov });
               }
             }
             applyAndRefresh();
@@ -7322,6 +7326,14 @@
    *    Delete at the end of the line above the gap: one fewer.
    *    Enter at the end of the line above the gap, or on a blank line: one more.
    *
+   *  THE FLOOR IS ONE LINE. Hanz, 2026-09-26: "Base bid and options should always have atleast 1 or
+   *  2 spaces from each other". So there is always at least one blank line directly above the
+   *  heading: a key that would take the last one is refused and only moves the caret (Backspace on
+   *  it to the end of the line above, Delete on it to the start of the heading, Backspace at the
+   *  heading's start up onto it, Delete at the end of the line above down onto it), and typing on
+   *  the last one makes it a typed line with a fresh blank line kept under it. A saved count of 0
+   *  shows, and prints, one. The writer applies the same floor (options_gap_count).
+   *
    *  A BLANK LINE TAKES TEXT. Hanz, 2026-09-26: "I cant write texts on this white space lines" --
    *  every line in the box has to take words. A character typed (or pasted, or dropped) on blank
    *  line i turns it into a TYPED line: price_overrides.before.heading_options, the same storage as
@@ -7340,9 +7352,10 @@
    *  prints. Same rule as the writer's: an empty paragraph, nothing typed in it -- looked for above
    *  the typed lines, which sit between it and the gap.
    *
-   *  The default (2) and the ceiling (20) are the writer's OPTIONS_GAP_DEFAULT and OPTIONS_GAP_MAX,
-   *  and both sides clamp to 0..20 by the same rule (test_options_gap.py checks they agree). The
-   *  typed lines have the writer's own ceiling too (main._PRICE_EXTRA_LINES_MAX, 20). */
+   *  The default (2), the floor (1) and the ceiling (20) are the writer's OPTIONS_GAP_DEFAULT,
+   *  OPTIONS_GAP_MIN and OPTIONS_GAP_MAX, and both sides clamp to 1..20 by the same rule
+   *  (test_options_gap.py checks they agree). The typed lines have the writer's own ceiling too
+   *  (main._PRICE_EXTRA_LINES_MAX, 20). */
   function optionsGapCount() {
     const pov = state.price_overrides;
     const v = pov && typeof pov === "object" && !Array.isArray(pov) ? pov.options_gap : undefined;
@@ -7350,7 +7363,7 @@
     if (typeof v === "number" && Number.isInteger(v)) n = v;
     else if (typeof v === "string" && /^[0-9]+$/.test(v.trim())) n = Number(v.trim());
     if (n === null) return 2;
-    return Math.max(0, Math.min(20, n));
+    return Math.max(1, Math.min(20, n));
   }
 
   /** The lines typed ON the gap, above its blank lines, as saved: price_overrides.before
@@ -7482,7 +7495,8 @@
   /** Blank line `i` of the gap takes text -- typed, pasted or dropped on it (see the section note).
    *  It becomes a typed line holding `lines` (more than one for a multi-line paste), the blank lines
    *  above it in the gap become typed blank lines so it stays where it was typed, and the blank
-   *  lines below it stay the gap. The caret goes to the end of the last new line. Returns it. */
+   *  lines below it stay the gap -- never fewer than one: typed on the last blank line, a fresh one
+   *  is kept under it (the floor). The caret goes to the end of the last new line. Returns it. */
   function typeOnGapLine(i, lines) {
     let rows = (Array.isArray(lines) ? lines : [lines]).map(t => String(t == null ? "" : t));
     const n = optionsGapCount();
@@ -7495,7 +7509,7 @@
     const typed = had.concat(new Array(at).fill(""), rows);
     const pov = _ensurePov();
     pov.before.heading_options = typed;
-    pov.options_gap = Math.max(0, n - 1 - at);
+    pov.options_gap = Math.max(1, n - 1 - at);
     paintOptionsGap();
     const els = gapTypedEls();
     const into = els.length ? els[els.length - 1] : null;
@@ -7504,20 +7518,6 @@
     try { fitTxbx(head && head.closest ? head.closest(".tw-txbx") : null); } catch {}
     queuePovSave();
     return into;
-  }
-
-  /** Take typed line `el` away (it was empty): out of the draft and off the page. */
-  function dropGapTyped(el) {
-    const i = gapTypedEls().indexOf(el);
-    const typed = optionsGapTyped();
-    if (i >= 0 && i < typed.length) typed.splice(i, 1);
-    const pov = _ensurePov();
-    if (typed.length) pov.before.heading_options = typed;
-    else delete pov.before.heading_options;
-    el.remove();
-    const head = optionsHeadingEl();
-    try { fitTxbx(head && head.closest ? head.closest(".tw-txbx") : null); } catch {}
-    queuePovSave();
   }
 
   /** The blank line the caret is on, or null. */
@@ -7548,7 +7548,8 @@
     return true;
   }
 
-  /** Store a new count, redraw it, and re-fit the box it changed. Returns the count stored. */
+  /** Store a new count, redraw it, and re-fit the box it changed. Returns the count stored. The keys
+   *  below never ask for fewer than one (the floor). */
   function setOptionsGap(n) {
     const want = Math.max(0, Math.min(20, Math.floor(Number(n) || 0)));
     let pov = state.price_overrides;
@@ -7583,9 +7584,14 @@
       }
       if (k === "Backspace" || k === "Delete") {
         done();
-        const left = setOptionsGap(optionsGapCount() - 1);
-        if (k === "Delete" && i < left && caretOntoGapLine(i)) return;
-        if (k === "Backspace" && i > 0 && caretOntoGapLine(i - 1)) return;
+        // The last blank line is never taken (the floor): the key only moves the caret, to where
+        // it would have landed had the line gone.
+        const n = optionsGapCount();
+        if (n > 1) {
+          const left = setOptionsGap(n - 1);
+          if (k === "Delete" && i < left && caretOntoGapLine(i)) return;
+          if (k === "Backspace" && i > 0 && caretOntoGapLine(i - 1)) return;
+        }
         // Nothing left on that side: Backspace lands at the end of the line above, Delete at the
         // start of the heading, as Word leaves them.
         const above = k === "Backspace" ? lineAboveOptionsGap(gap) : null;
@@ -7613,23 +7619,14 @@
       const at = selectionRange(head);
       if (!at || at[0] !== 0 || at[1] !== 0) return;
       const n = optionsGapCount();
-      if (n <= 0) {
-        // No blank line left to take. A TYPED line right above the heading: an empty one goes, the
-        // way Word takes an empty paragraph; one with words keeps them and the caret moves to its
-        // end. A price row above instead: the page's own refusal stands (a row is never merged).
-        const above = lineAboveOptionsGap(gap);
-        if (!above || !isGapTyped(above)) return;
-        done();
-        if (!serializeBlock(above).length) {
-          dropGapTyped(above);
-          placeSelection(head, 0, 0);
-        } else {
-          const end = runsLength(editRuns(above));
-          placeSelection(above, end, end);
-        }
+      done();
+      if (n <= 1) {
+        // The last blank line above the heading stays (the floor): the caret goes up onto it, and
+        // the next Backspace there lands at the end of the line above the gap. Whatever sits above
+        // it -- a typed line, a price row -- is never reached from the heading.
+        caretOntoGapLine(n - 1);
         return;
       }
-      done();
       setOptionsGap(n - 1);
       placeSelection(head, 0, 0);
       return;
@@ -7639,10 +7636,14 @@
     const at = selectionRange(above);
     if (!at || at[0] !== at[1] || at[1] < runsLength(editRuns(above))) return;
     if (k === "Delete") {
-      // Delete at the end of the line above the gap takes the blank line under it, as in Word.
+      // Delete at the end of the line above the gap takes the blank line under it, as in Word --
+      // except the last one (the floor), where the caret moves down onto it instead.
       const n = optionsGapCount();
-      if (n <= 0) return;
       done();
+      if (n <= 1) {
+        caretOntoGapLine(0);
+        return;
+      }
       setOptionsGap(n - 1);
       placeSelection(above, at[1], at[1]);
       return;

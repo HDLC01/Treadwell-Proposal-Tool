@@ -866,11 +866,6 @@ function ensureOpt(id) {
 function persistBidOptions() {
   TW.setState({ ...state, base_tab_id: state.base_tab_id, tab_opts: state.tab_opts });
 }
-function clearSingleBidDisplayOverride() {
-  const pov = state.price_overrides;
-  if (!pov || typeof pov !== "object" || Array.isArray(pov) || !pov.single_bid) return;
-  pov.single_bid = {};
-}
 const _escBB = (s) => String(s).replace(/[&<>"]/g,
   c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const _moneyBB = (n) => "$" + Number(n || 0).toLocaleString(undefined, { maximumFractionDigits: 0 });
@@ -1048,9 +1043,22 @@ function wireBidBar() {
       const priorBaseId = state.base_tab_id;
       state.base_tab_id = el.value || null;
       if (el.value && state.tab_opts[el.value]) state.tab_opts[el.value].is_option = false;  // base ≠ option
-      if (state.base_tab_id !== priorBaseId) clearSingleBidDisplayOverride();
+      // The Proposal step's edits to the old base's lines go, by THE SAME RULE its own base picker
+      // applies (TWPrice.forgetBaseLines). This used to clear only price_overrides.single_bid, so
+      // Hanz, 2026-09-26: "the base bid was not updating". He picked another base here, and a base
+      // line the Proposal step had saved with the old tab's figure in it went on printing that
+      // figure, on screen and in the customer's document. The lines he typed stay.
+      if (state.base_tab_id !== priorBaseId) {
+        TWPrice.forgetBaseLines(state.price_overrides, priorBaseId, state.base_tab_id);
+      }
       renderBidOptions();
-      persistBidOptions();
+      // PRICED AND SAVED: persistTabState takes the pricing snapshot (priced_tabs, the lump sum, the
+      // rooms) and then saves, where persistBidOptions only saved. Picking a sheet the snapshot had
+      // not priced yet (a copy made a moment ago, no cell edited since) and leaving by a step pill
+      // sent the Proposal step a base it could not find, and it fell back to the Epoxy tab's price
+      // and wrote that over the pick. It also carries this page's cell edits (`cellValues`), which
+      // the `...state` in persistBidOptions put back to what they were when the page opened.
+      persistTabState();
       // The bottom Total bar follows the base tab, so a new base has to repaint it here: nothing
       // else on this path does, and the bar kept the previous base's lump sum until the next cell
       // edit or reload (Hanz, 2026-09-25: base back to Epoxy $7,696, bar still read $15,149).

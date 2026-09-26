@@ -231,10 +231,121 @@
     return { main: main, before: before, after: after, drop: false };
   }
 
+  /** A figure in the documents' own money style, from cents: "$7,447", "$1,870.50" (what the
+   *  editor's fmtUSDdoc and the backend's _fmt_usd print). */
+  function usd(c) {
+    c = Math.round(Number(c) || 0);
+    var neg = c < 0;
+    if (neg) c = -c;
+    var whole = String(Math.floor(c / 100)).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+    var frac = c % 100;
+    return (neg ? "-" : "") + "$" + whole + (frac ? "." + (frac < 10 ? "0" : "") + frac : "");
+  }
+
+  /** Every figure this tool has priced a line of this kind at, off ANY priced tab of the draft
+   *  (state.priced_tabs, the old base included), in the documents' money style.
+   *
+   *  A line saved before the markers froze the figure it was typed next to, and that was often not
+   *  today's base. Hanz, 2026-09-26, on the "Hanz Fix" staging project: he typed a note under the
+   *  base line while Epoxy ($7,447) was the base, then made "Epoxy copy" ($15,149) the base; the
+   *  note had frozen "$7,447" into the base line, and every revision after printed the Epoxy figure
+   *  as the base bid of a $15,149 job. That figure is one of THIS draft's own tabs, so the tool made
+   *  it, and migrateLine turns it into the live marker exactly like today's figure. A figure that is
+   *  no tab's at all is the estimator's own and stays his (the editor marks it, Send asks).
+   *
+   *  `key` is the line's: a base, option or combo line asks for each tab's total and its pre-tax
+   *  figure under any tax answer; a Material Sales Tax / Remodel Tax row for that tax; a Total for
+   *  the total. Anything else (a manual line, a heading, the alternate) is no tab's line: []. */
+  function tabFigures(tabs, key) {
+    var k = String(key == null ? "" : key);
+    var row = /(?:^|:)(sales_tax|remodel|total)$/.exec(k);
+    var kind = row ? row[1] : (/^(?:base$|option:|combo:)/.test(k) ? "line" : "");
+    if (!kind || !Array.isArray(tabs)) return [];
+    var seen = {}, out = [];
+    function add(c) { if (c > 0 && !seen[c]) { seen[c] = true; out.push(usd(c)); } }
+    for (var i = 0; i < tabs.length; i++) {
+      var t = tabs[i];
+      if (!t || typeof t !== "object") continue;
+      var tot = cents(t.total), s = cents(t.sales_tax), r = cents(t.remodel);
+      if (kind === "sales_tax") add(s);
+      else if (kind === "remodel") add(r);
+      else if (kind === "total") add(tot);
+      else { add(tot); add(tot - s); add(tot - r); add(tot - s - r); }
+    }
+    return out;
+  }
+
+  /** THE BASE-PICK RULE, one for both places a base bid is picked: the Estimate step's bid strip
+   *  (estimate-review.js) and the Proposal step's sidebar (proposal-review.js).
+   *
+   *  Hanz, 2026-09-26, on staging: "the base bid was not updating". He picked another base tab on
+   *  the Estimate page and the proposal went on quoting the old tab's price. The sidebar's pick
+   *  forgot the old base's edited lines; the Estimate page's pick forgot only the oldest bucket
+   *  (single_bid), so a base line saved with the old figure in it printed that figure under the new
+   *  base, on screen and in the customer's document.
+   *
+   *  The lines that print the base bid itself belong to the base that was picked before: the base
+   *  line (its words describe that tab's system), its tax rows and Total, and the combo lines. So
+   *  do the option lines of the two tabs the pick moves: the one that was the base and the one that
+   *  now is (it stops being an option). Their edited text is forgotten, both shapes, so the new
+   *  base's own lines print. Every other option keeps its edit: its amount is a live marker that
+   *  follows its own tab (an add/deduct amount follows the new base too), and its words are the
+   *  estimator's. Lines he TYPED above and below any price line are his own lines and stay; a line
+   *  saved in the old shape, with such lines inside it, gives them up to before / after first.
+   *  Lines no base changes (manual price lines, the Base Bid and Options headings and the lines
+   *  typed on the gap, the alternate system) are left alone.
+   *
+   *  `from` / `to` are the base tab ids before and after (null: the combined base). Mutates `pov`
+   *  in place; both pages save it. Returns whether a line went.
+   *
+   *  Page state only, like tabFigures: the document prints what the page saved, so price_rules.py
+   *  has no twin of either (the parity test covers the rule the two halves both run). */
+  function forgetBaseLines(pov, from, to) {
+    if (!pov || typeof pov !== "object" || Array.isArray(pov)) return false;
+    var changed = false;
+    function bound(key) {
+      var k = String(key);
+      if (/^(?:base|sales_tax|remodel|total)$/.test(k) || k.indexOf("combo:") === 0) return true;
+      var m = /^option:(.*?)(?::(?:sales_tax|remodel|total))?$/.exec(k);
+      return !!m && ((!!from && m[1] === from) || (!!to && m[1] === to));
+    }
+    ["single_bid", "rows", "combo"].forEach(function (b) {
+      var m = pov[b];
+      if (m && typeof m === "object" && Object.keys(m).length) changed = true;
+      pov[b] = {};
+    });
+    var legacy = pov.lines && typeof pov.lines === "object" && !Array.isArray(pov.lines) ? pov.lines : null;
+    if (legacy) {
+      Object.keys(legacy).forEach(function (k) {
+        if (!bound(k)) return;
+        if (typeof legacy[k] === "string") {
+          var m = migrateLine(legacy[k], {});
+          [["before", m.before], ["after", m.after]].forEach(function (pair) {
+            var rows = pair[1];
+            if (!rows || !rows.length) return;
+            var b = pov[pair[0]];
+            if (!b || typeof b !== "object" || Array.isArray(b)) b = pov[pair[0]] = {};
+            if (!Array.isArray(b[k]) || !b[k].length) b[k] = rows.slice();
+          });
+        }
+        delete legacy[k];
+        changed = true;
+      });
+    }
+    var live = pov.lines2 && typeof pov.lines2 === "object" && !Array.isArray(pov.lines2) ? pov.lines2 : null;
+    if (live) {
+      Object.keys(live).forEach(function (k) {
+        if (bound(k)) { delete live[k]; changed = true; }
+      });
+    }
+    return changed;
+  }
+
   return {
     AMOUNT: AMOUNT, TAX: TAX, PHRASE: PHRASE, KNOWN_PHRASES: KNOWN_PHRASES,
     cents: cents, flag: flag, phraseFor: phraseFor, taxRule: taxRule, layoutFor: layoutFor,
     amountIndex: amountIndex, resolveLine: resolveLine, captureLine: captureLine,
     moneyOff: moneyOff, firstDollar: firstDollar, sameAmountAt: sameAmountAt, migrateLine: migrateLine,
+    usd: usd, tabFigures: tabFigures, forgetBaseLines: forgetBaseLines,
   };
 });
