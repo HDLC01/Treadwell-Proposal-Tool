@@ -87,6 +87,7 @@ import pdf_writer
 import price_rules
 import pricing
 import profiles
+import proposal_fonts
 import proposal_writer
 import pull_window
 import reference_tax
@@ -5321,6 +5322,25 @@ def api_proposal_template_media(request: Request, work_type: str = "epoxy",
     ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
     ctype = _MEDIA_CONTENT_TYPES.get(ext, "application/octet-stream")
     return Response(content=data, media_type=ctype, headers=headers)
+
+
+@app.get("/api/proposal-font/{name}")
+def api_proposal_font(request: Request, name: str) -> Response:
+    """The proposal typeface (Zetta Serif) for the editor, to signed-in staff only.
+
+    Licensed, so it lives behind the login: this is an /api route, and `_auth_gate` refuses an
+    unauthenticated request with a 401 before it gets here. `name` is a public name looked up in
+    proposal_fonts.FONTS; it is never joined onto a path, and anything else is a 404. See
+    proposal_fonts.py for the why, and frontend/js/proposal-fonts.js for the page that asks."""
+    hit = proposal_fonts.load(name)
+    if hit is None:
+        raise HTTPException(404, "No such font")
+    data, etag = hit
+    headers = {"ETag": etag, "Cache-Control": proposal_fonts.CACHE_CONTROL,
+               "X-Content-Type-Options": "nosniff"}
+    if etag in (request.headers.get("if-none-match") or ""):
+        return Response(status_code=304, headers=headers)
+    return Response(content=data, media_type=proposal_fonts.MEDIA_TYPE, headers=headers)
 
 
 # Block-model SCHEMA version for /api/proposal-template's ETag. The template
