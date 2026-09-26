@@ -54,6 +54,13 @@ services:
       - claude_credentials:/root/.claude
       # Persist the SQLite drafts DB across restarts / rebuilds.
       - draft_data:/app/data
+      # The proposal typeface (Zetta Serif) is LICENSED, so it is in neither git nor the
+      # image: the host supplies it. Put "Zetta Serif-Book.otf" and "Zetta Serif.otf" in
+      # /opt/treadwell-fonts on the VPS (staging mounts the same directory). Read-only: the
+      # app never writes a font. A missing host directory is created EMPTY by Docker, which
+      # boots fine and prints substitute-font PDFs, so the app logs a WARNING and the deploy
+      # workflow refuses to deploy until both files are there. See backend/fonts/README.md.
+      - /opt/treadwell-fonts:/usr/share/fonts/truetype/treadwell:ro
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8888/healthz"]
       interval: 30s

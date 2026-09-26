@@ -26,11 +26,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 
-# Treadwell's brand font (Zetta Serif Book) — the proposal templates are typeset
-# in it. Install so the LibreOffice PDF export renders in the real font instead of
-# substituting a fallback serif (the .docx already carries the font name).
-COPY backend/fonts/ /usr/share/fonts/truetype/treadwell/
-RUN fc-cache -f
+# Treadwell's brand font (Zetta Serif) is NOT in this image. The proposal templates are
+# typeset in it, but it is LICENSED and this image is pushed to a registry, so the SERVER
+# supplies it at runtime: both compose files bind-mount the host's /opt/treadwell-fonts
+# read-only onto the directory made here, empty, as the mount point (.dockerignore also
+# keeps every font file out of the `COPY backend/` below).
+#
+# No fc-cache at container start. The cache built here records this directory EMPTY, with
+# its build-time mtime; a mount has a different mtime, and fontconfig rescans a directory
+# whose mtime no longer matches its cache. So LibreOffice sees the mounted files on its
+# first conversion, in every entry path (the CI smoke run overrides CMD). Checked in a real
+# container on 2026-09-26. Without the mount the app still boots and logs one WARNING
+# (backend/proposal_fonts.py).
+RUN mkdir -p /usr/share/fonts/truetype/treadwell \
+ && fc-cache -f
 
 WORKDIR /app
 

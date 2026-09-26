@@ -11,9 +11,9 @@
  * and descriptors the files really carry, that the refit runs exactly once, and that every failure
  * path ends in one console warning rather than a rejection. None of that is visible in the source.
  *
- * STUBBED, NOT LIFTED: fetch (answers from the real font files the backend whitelist points at, by
- * the public name in the URL), FontFace (records its arguments; load() resolves only for bytes that
- * start with an OpenType signature), document.fonts, and the page's two refit collaborators,
+ * STUBBED, NOT LIFTED: fetch (answers from the font files the test hands it -- synthetic ones, since
+ * the licensed files are in neither git nor CI -- by the public name in the URL), FontFace (records
+ * its arguments; load() resolves only for bytes that start with an OpenType signature), document.fonts, and the page's two refit collaborators,
  * scheduleRepaginate and fitNotesBox, which have their own harnesses.
  *
  * Usage: node proposal-fonts-harness.js <frontend-dir> <json {publicName: absolutePath}>

@@ -26,6 +26,14 @@ SSH=(ssh -i "$SSH_KEY" -o ConnectTimeout=20 "${VPS_USER}@${VPS_HOST}")
 
 cd "$(dirname "$0")/.."
 
+# The image carries no Zetta Serif (licensed; .dockerignore drops it even from this local
+# build context). Compose mounts it from /opt/treadwell-fonts, so check the box has it BEFORE
+# spending minutes on a build and a transfer. Same check as .github/workflows/deploy.yml.
+echo "==> Checking the proposal font is on the VPS…"
+"${SSH[@]}" 'for f in "Zetta Serif-Book.otf" "Zetta Serif.otf"; do
+  [ -s "/opt/treadwell-fonts/$f" ] || { echo "   /opt/treadwell-fonts/$f is missing: copy both Zetta Serif files there (backend/fonts/README.md)"; exit 1; }
+done'
+
 echo "==> Building $IMAGE locally (off the prod box)…"
 docker build --platform linux/amd64 -t "$IMAGE" .
 

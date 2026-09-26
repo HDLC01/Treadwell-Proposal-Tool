@@ -5343,6 +5343,21 @@ def api_proposal_font(request: Request, name: str) -> Response:
     return Response(content=data, media_type=proposal_fonts.MEDIA_TYPE, headers=headers)
 
 
+@app.on_event("startup")
+def _report_proposal_font() -> None:
+    """Say ONCE, loudly, when the licensed proposal font is not on this box.
+
+    Neither git nor the image carries Zetta Serif any more; compose mounts it from the host. A
+    host without the files gets an EMPTY mount from Docker, boots, passes /healthz and prints every
+    PDF in a substitute font, so this log line is the only thing on the box that says so. A log
+    line and nothing more: never a failed boot, and never /healthz, which must stay cheap and must
+    not flap (the Basisboard outage). See proposal_fonts.py."""
+    try:
+        proposal_fonts.report_once(log)
+    except Exception as exc:  # noqa: BLE001 — a font check is never worth a failed boot
+        log.warning("Proposal font check failed: %s", exc)
+
+
 # Block-model SCHEMA version for /api/proposal-template's ETag. The template
 # ETag is otherwise keyed on the .docx content (and, since 2026-09-25, on the
 # builders' source via _BLOCK_CODE_VERSION below), so a CODE change to the block

@@ -3,11 +3,11 @@
  * Hanz, 2026-09-26: "why are the fonts and font sizes still not fixed?" The page's CSS (.tw-page in
  * styles.css) and every run of the .docx name "Zetta Serif Book", but nothing ever LOADED it: there
  * was no @font-face anywhere, so on any machine without the font installed the editor drew Georgia
- * while the PDF (LibreOffice in the container, fonts from backend/fonts/) printed Zetta Serif.
+ * while the PDF (LibreOffice in the container, font mounted from the host) printed Zetta Serif.
  * Georgia is wider, so the editor also wrapped, shrank and clipped boxes the PDF does not.
  *
- * LICENSED, SO THE APP SERVES IT ONLY BEHIND THE LOGIN. (The files are also public on GitHub and in
- * the GHCR images, which this does not fix: see the end of backend/proposal_fonts.py's docstring.)
+ * LICENSED, SO THE APP SERVES IT ONLY BEHIND THE LOGIN, and neither git nor the image carries it:
+ * the server mounts it (backend/proposal_fonts.py, whose docstring also says what that leaves open).
  * The files come from /api/proposal-font/<name>, which the same auth middleware as every staff
  * /api route gates (backend/proposal_fonts.py). They are
  * fetched here with the staff bearer token and handed to the FontFace API as BYTES:
@@ -35,7 +35,7 @@
 (function (root) {
   "use strict";
 
-  // Bump when a file in backend/fonts/ changes. The responses are cached for a year
+  // Bump when a font file on the server changes. The responses are cached for a year
   // (Cache-Control: private, immutable), so this query string is the only thing that moves a
   // browser off the old bytes. test_proposal_fonts.py pins the files' hashes against it.
   const VERSION = "1";

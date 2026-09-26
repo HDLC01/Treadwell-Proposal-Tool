@@ -722,8 +722,8 @@ def test_the_ink_lands_on_kyles_rules_at_the_measured_coordinates(wired):
 
 
 def test_the_signature_is_an_italic_serif_that_needs_no_font_file(wired):
-    """There is no script font in the container — the Dockerfile installs Carlito,
-    Liberation and Zetta Serif and nothing else — so naming a cursive face would
+    """There is no script font in the container — the Dockerfile installs Carlito and
+    Liberation, the host mounts Zetta Serif, nothing else — so naming a cursive face would
     silently substitute and render one way in CI and another in production. The
     PDF base-14 faces need no font file on the box at all, so there is one code
     path, not two."""
