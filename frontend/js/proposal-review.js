@@ -6197,6 +6197,18 @@
   }
   window.addEventListener("resize", applyZoom);
 
+  // THE PROPOSAL'S TYPEFACE ARRIVES AFTER THE FIRST PAINT on any machine without it installed:
+  // js/proposal-fonts.js fetches it from behind the login once the token exists. Every box was
+  // fitted, and the terms paged, in the wider fallback serif until then, so measure it all again,
+  // ONCE, when the font is in -- the same pass the fonts.ready insurance in initDocumentEditor
+  // runs. Nothing is rebuilt (fitTxbx only sets a size and a clip), so typed text survives, and
+  // the pager goes through scheduleRepaginate, which waits out a caret in the terms.
+  function refitForProposalFont() {
+    scheduleRepaginate(0);
+    try { fitNotesBox(); } catch {}
+  }
+  if (window.TWProposalFonts) window.TWProposalFonts.whenLoaded(refitForProposalFont);
+
   // The Word-faithful view: the template's own full-page letterhead artwork
   // behind the floating text boxes at their real anchor positions — page 1 —
   // then the Terms & Conditions body flowing beneath as pages 2+ (tiled with

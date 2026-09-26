@@ -101,6 +101,27 @@ jobs:
           envs: TW_IMAGE,GHCR_TOKEN,GHCR_USER
           script: |
             set -euo pipefail
+            # THE FONT BEFORE THE IMAGE. Zetta Serif is licensed, so since 2026-09-26 no image
+            # carries it: compose bind-mounts it from the host. Without the files Docker mounts an
+            # EMPTY directory and every PDF prints in a substitute font with nothing failing. So
+            # stop here, before anything is pulled or restarted; the running container keeps serving.
+            # First, keep this checkout's copy: until its first pull past the change that untracked
+            # the files, git still has them here, and the pull below deletes them. Never over a
+            # file the box already has. (backend/tests/test_proposal_fonts.py runs this block
+            # against temp directories.)
+            TW_FONT_DIR=/opt/treadwell-fonts
+            TW_FONT_SEED=/opt/treadwell-staging/backend/fonts
+            for f in "Zetta Serif-Book.otf" "Zetta Serif.otf"; do
+              if [ ! -s "$TW_FONT_DIR/$f" ] && [ -s "$TW_FONT_SEED/$f" ]; then
+                if mkdir -p "$TW_FONT_DIR" && cp "$TW_FONT_SEED/$f" "$TW_FONT_DIR/$f"; then
+                  echo "Kept $TW_FONT_SEED/$f in $TW_FONT_DIR before the pull below deletes it."
+                fi
+              fi
+              if [ ! -s "$TW_FONT_DIR/$f" ]; then
+                echo "::error::$TW_FONT_DIR/$f is missing on the VPS. Copy both Zetta Serif files there from the team Dropbox (see backend/fonts/README.md), then re-run this deploy."
+                exit 1
+              fi
+            done
             cd /opt/treadwell-staging
             git pull --ff-only origin staging
             # Keep staging's self-hosted Postgres schema in step with the code. The
@@ -197,9 +218,12 @@ jobs:
           envs: TW_IMAGE
           script: |
             set -euo pipefail
+            # The font mount too: the image carries no Zetta Serif, and these tests measure how
+            # many lines LibreOffice fits in a box, which is a question about the real face.
             docker run --rm \
               -e PYTHONDONTWRITEBYTECODE=1 -e HOME=/tmp \
               -v /opt/treadwell-staging:/src:ro \
+              -v /opt/treadwell-fonts:/usr/share/fonts/truetype/treadwell:ro \
               "$TW_IMAGE" \
               sh -c 'pip install --quiet --no-input pytest pymupdf >/dev/null 2>&1 || {
                        echo "could not install pytest/pymupdf - skipping"; exit 0; }
@@ -280,6 +304,21 @@ jobs:
           envs: TW_IMAGE,GHCR_TOKEN,GHCR_USER
           script: |
             set -euo pipefail
+            # The font before the image: the same keep-then-check as the staging step, for the
+            # same reasons, from this step's own checkout.
+            TW_FONT_DIR=/opt/treadwell-fonts
+            TW_FONT_SEED=/opt/treadwell/backend/fonts
+            for f in "Zetta Serif-Book.otf" "Zetta Serif.otf"; do
+              if [ ! -s "$TW_FONT_DIR/$f" ] && [ -s "$TW_FONT_SEED/$f" ]; then
+                if mkdir -p "$TW_FONT_DIR" && cp "$TW_FONT_SEED/$f" "$TW_FONT_DIR/$f"; then
+                  echo "Kept $TW_FONT_SEED/$f in $TW_FONT_DIR before the pull below deletes it."
+                fi
+              fi
+              if [ ! -s "$TW_FONT_DIR/$f" ]; then
+                echo "::error::$TW_FONT_DIR/$f is missing on the VPS. Copy both Zetta Serif files there from the team Dropbox (see backend/fonts/README.md), then re-run this deploy."
+                exit 1
+              fi
+            done
             cd /opt/treadwell
             git pull --ff-only
             echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin

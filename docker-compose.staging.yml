@@ -52,6 +52,9 @@ services:
     volumes:
       - staging_claude:/root/.claude
       - staging_data:/app/data
+      # The licensed proposal typeface, from the host (the same directory prod mounts).
+      # Read-only; see docker-compose.yml and backend/fonts/README.md.
+      - /opt/treadwell-fonts:/usr/share/fonts/truetype/treadwell:ro
     depends_on:
       - rest
     healthcheck:
