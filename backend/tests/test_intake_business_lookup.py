@@ -26,7 +26,7 @@ def test_proposal_base_picker_has_no_noncombo_auto_default():
     assert "wt === \"combo\" ? `<label class=\"pr-baserow\"" in js
     # A base pick forgets the old base's price edits by the rule both pickers share (executed in
     # test_base_pick_follows.py; single_bid is one of the buckets it empties).
-    assert "TWPrice.forgetBaseLines(pov, priorBaseId, state.base_tab_id)" in js
+    assert "TWPrice.forgetBaseLines(pov, priorBaseId, state.base_tab_id, state.priced_tabs)" in js
 
 
 def test_broken_out_tax_preview_uses_current_total_and_total_label():

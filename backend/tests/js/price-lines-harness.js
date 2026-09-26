@@ -595,11 +595,12 @@ const snap = (p) => ({ base_tab_id: p.st.base_tab_id, lump: p.st.proposal_lump_s
                        pov: clone(p.st.price_overrides || {}), doc: docPayload(p.st, p.api),
                        warnings: p.api.priceWarnings().map((w) => ({ key: w.key, says: w.says })) });
 
-// 8. A LINE FROZEN AT THE OLD BASE'S FIGURE, as Hanz Fix's revisions 2-5 held it: the base is Epoxy
-//    copy at $15,149, the base line saved (before the live shape) with Epoxy's $7,447 and the note
-//    he typed under it inside it. The figure is one of this draft's own tabs, so it is the tool's:
-//    drawn once, it is live again and his note is a line of its own. Broken out, the tax rows a
-//    sweep froze at Epoxy's figures follow the same way.
+// 8. A LINE FROZEN AT THE OLD BASE'S FIGURE, as Hanz Fix held it the moment the base moved: the base
+//    is Epoxy copy at $15,149, the base line saved (before the live shape) with Epoxy's $7,447 and
+//    the note he typed under it inside it, while Epoxy still prices at $7,447. The figure is one a
+//    tab prices today, so it is the tool's: drawn once, it is live again and his note is a line of
+//    its own. Broken out, the tax rows a sweep froze at Epoxy's figures follow the same way. (By
+//    revision 2 Epoxy had been re-priced to $7,696; that state is block 11.)
 {
   const st = hanzFix({ base_tab_id: "Copy1", proposal_lump_sum: 15149, proposal_sales_tax: 195,
     priced_tabs: clone(HF_TABS), rooms: [],
@@ -691,4 +692,130 @@ function basePickFlow(layout) {
 }
 out.basePick = { ONE_LINE: basePickFlow("ONE_LINE"), BROKEN_OUT: basePickFlow("BROKEN_OUT") };
 
-console.log(JSON.stringify(out));
+/** The base line as the Proposal step draws it: every row keyed "base", in order, with its cue. */
+const baseRows = (api) => api.lines().filter((l) => l.key === "base")
+  .map((l) => ({ kind: l.kind, text: l.text, money: /tw-money-off/.test(l.cls) }));
+const warned = (api) => api.priceWarnings().map((w) => ({ key: w.key, says: w.says, estimate: w.estimate }));
+/** A draft picked away from its base on the Estimate step, then opened on the Proposal step. */
+function pickedThenOpened(draft, pick) {
+  const e = estimatePick(draft, pick);
+  const p = openProposal(e.saved);
+  return { pov: clone(e.saved.price_overrides), rows: baseRows(p.api), warnings: warned(p.api),
+           doc: docPayload(p.st, p.api) };
+}
+
+// 10. A LINE SAVED IN THE OLD SHAPE WITH A NOTE ABOVE ITS PRICE LINE that quotes a figure. Which of
+//     its lines is the price line decides what the customer reads: the note taken for it was
+//     printed with the base bid's amount, and the real price line kept as a typed line frozen at
+//     the old figure -- never re-priced, never forgotten on a later pick, never warned about.
+{
+  const PRICE = "$7,447 – Epoxy flooring as described above (material sales tax INCLUDED)";
+  const legacy = (text) => hanzFix({ base_tab_id: "Epoxy", proposal_lump_sum: 7447, proposal_sales_tax: 96,
+    priced_tabs: clone(HF_TABS), rooms: [], tab_opts: {}, price_overrides: { lines: { base: text } } });
+  out.oldShape = {
+    // (a) The Estimate step's pick, on a note carrying any figure ("Includes $500 cove allowance").
+    noteAbove: pickedThenOpened(legacy("Includes $500 cove allowance\n" + PRICE), "Copy1"),
+    // (b) ...and on a note that reads like a price line itself: only the tabs' figures tell them apart.
+    shapedNote: pickedThenOpened(legacy("$500 – cove allowance, included in the price below\n" + PRICE), "Copy1"),
+  };
+  // (c) A note quoting ANOTHER TAB's own figure (Polish's $9,860), drawn on the Proposal step, then
+  //     the base picked away on the Estimate step.
+  const quoted = legacy("Polish alternative quoted separately at $9,860\n" + PRICE);
+  const qa = build(quoted);
+  qa.refreshPriceDisplay();
+  out.oldShape.quotedTab = { rows: baseRows(qa), warnings: warned(qa), pov: clone(quoted.price_overrides),
+                             picked: pickedThenOpened(qa.saved(quoted), "Copy1") };
+  // (d) The same figure in the line's own WORDS, on a line frozen at a figure no tab prices: it is
+  //     his line and his figure (marked, Send asks), and the $9,860 in his words stays $9,860.
+  const inWords = hanzFix({ base_tab_id: "Copy1", proposal_lump_sum: 15149, proposal_sales_tax: 195,
+    priced_tabs: clone(HF_TABS), rooms: [],
+    price_overrides: { lines: {
+      base: "$7,000 – Epoxy flooring, Polish alternative $9,860 (material sales tax INCLUDED)" } } });
+  const wa = build(inWords);
+  wa.refreshPriceDisplay();
+  out.oldShape.inWords = { rows: baseRows(wa), warnings: warned(wa), pov: clone(inWords.price_overrides) };
+}
+
+// 11. HANZ FIX REVISION 5, as staging holds it (draft_revisions, 2026-09-26; product wording only):
+//     the base is Epoxy copy at $15,149, and the base line was frozen at Epoxy's $7,447 in revision
+//     1 -- but Epoxy had been re-priced to $7,696 by revision 2, so no tab prices $7,447 any more.
+//     Nothing on the page remembers a tab's old price: the line is his, marked, and Send asks. A
+//     base pick (away and back, on the Estimate step) forgets it.
+{
+  const REV5_TABS = [
+    { id: "Epoxy", name: "Epoxy", role: "epoxy", kind: "base", total: 7696, sales_tax: 102, remodel: 0, notes_auto: [] },
+    { id: "Copy1", name: "Epoxy copy", role: "epoxy", kind: "copy", total: 15149, sales_tax: 437, remodel: 0, notes_auto: [] },
+    { id: "Polish", name: "Polish", role: "polish", kind: "base", total: 13585, sales_tax: 0, remodel: 0, notes_auto: [] },
+    { id: "Seal", name: "Seal", role: "seal", kind: "base", total: 1476, sales_tax: 0, remodel: 0, notes_auto: [] },
+    { id: "Seal (+Jnts)", name: "Seal (+Jnts)", role: "seal", kind: "base", total: 2942, sales_tax: 0, remodel: 0, notes_auto: [] },
+  ];
+  const rev5 = hanzFix({ base_tab_id: "Copy1", proposal_lump_sum: 15149, proposal_sales_tax: 437,
+    priced_tabs: REV5_TABS, rooms: [],
+    tab_opts: { Epoxy: { show: true, is_option: true, show_diff: false, price_mode: "total", show_system: true },
+                Seal: { show: true, is_option: false, show_diff: false, price_mode: "total", show_system: true } },
+    price_overrides: { rows: {}, combo: {}, single_bid: {}, options_gap: 1, lines: {
+      base: "$7,447 – Epoxy flooring as described above (material sales tax INCLUDED)\n\nTHis is a test send to Hanz\n\n12312312312312a",
+      total: "$0 – Total", remodel: "$0 – Remodel Tax", sales_tax: "$0 – Material Sales Tax",
+    } } });
+  const p = openProposal(rev5);
+  const there = estimatePick(p.api.saved(rev5), "Epoxy").saved;
+  const back = pickedThenOpened(there, "Copy1");
+  out.rev5 = { rows: baseRows(p.api), warnings: warned(p.api), lines2: clone(p.st.price_overrides.lines2 || {}),
+               afterPicks: { rows: back.rows, warnings: back.warnings, lines2: back.pov.lines2 || {} } };
+}
+
+// 12. DELETING THE BASE COPY changes the base too, to the one the sheet derives: the Estimate step's
+//     real deleteTab (and the real resolveBaseTab it asks), then the Proposal step opens the draft.
+function deleteBaseCopy(baseLine) {
+  const draft = hanzFix({ base_tab_id: "Copy1", proposal_lump_sum: 15149, proposal_sales_tax: 195,
+    priced_tabs: clone(HF_TABS), rooms: [], tab_copies: [{ id: "Copy1", role: "epoxy", source: "Epoxy" }],
+    tab_labels: { Copy1: "Epoxy copy" }, tab_notes: {}, lock_overrides: {},
+    tab_opts: { Copy1: {}, Polish: { is_option: true, show: true, price_mode: "total" } },
+    price_lines: [{ label: "Joint filler", amount: 1500 }],
+    price_overrides: {
+      lines2: { base: baseLine, "manual:0": TWPrice.AMOUNT + " – Joint filler, per plan",
+                "option:Polish": TWPrice.AMOUNT + " – Polished Concrete, 800 grit, warehouse only " + TWPrice.TAX,
+                "option:Epoxy": TWPrice.AMOUNT + " – Epoxy as an option " + TWPrice.TAX },
+      after: { base: NOTE_UNDER_BASE.slice() },
+    } });
+  const state = clone(draft);
+  const sets = [];
+  const src = (re, what) => { const m = re.exec(ER); if (!m) throw new Error(what + " is gone from estimate-review.js"); return m[0]; };
+  const deleteTab = new Function("state", "HF", "TW", "TWPrice", [
+    "const BASE_ROLE = { Epoxy: 'epoxy', Polish: 'polish' }; const sheets = ['Epoxy', 'Polish'];",
+    "const cellValues = {}; const sheetCache = {}; let activeSheet = 'Epoxy';",
+    "const labelFor = (id) => id; const renderTabs = () => {}; const showSheet = () => {};",
+    "const defaultBaseSheet = () => 'Epoxy';",
+    // The tab list the page rebuilds from the draft (buildTabs), as the real one shapes it.
+    "let tabs = [];",
+    "function buildTabs() { tabs = sheets.map((id) => ({ id, role: BASE_ROLE[id], kind: 'base' }))",
+    "  .concat(state.tab_copies.map((c) => ({ id: c.id, role: c.role || 'epoxy', kind: 'copy' }))); }",
+    "buildTabs();",
+    src(/^const GYP_BASE = .*$/m, "GYP_BASE"), src(/^const PRICED_ROLES = .*$/m, "PRICED_ROLES"),
+    src(/^const OPTION_ONLY_ROLES = .*$/m, "OPTION_ONLY_ROLES"),
+    src(/^const isOptionOnlyRole = .*$/m, "isOptionOnlyRole"), src(/^const basePricedTabs = .*$/m, "basePricedTabs"),
+    src(/^const isPricedRole = .*$/m, "isPricedRole"), src(/^function pricedTabs\(\) .*$/m, "pricedTabs"),
+    src(/^function resolveBaseTab\(\) \{[\s\S]*?\n\}/m, "resolveBaseTab"),
+    src(/^function reKeyPriceLineOverrides\(rename\) \{[\s\S]*?\n\}/m, "reKeyPriceLineOverrides"),
+    src(/^async function deleteTab\(id\) \{[\s\S]*?\n\}/m, "deleteTab"),
+    "return deleteTab;",
+  ].join("\n"))(state, { removeSheet() {} },
+    { confirmDanger: async () => true, setState: (o) => { sets.push(clone(o)); } }, globalThis.TWPrice);
+  return deleteTab("Copy1").then(() => {
+    const saved = Object.assign(clone(draft), ...sets);
+    // What the Estimate step's next pricing snapshot holds: the copy is gone.
+    saved.priced_tabs = clone(HF_TABS).filter((t) => t.id !== "Copy1");
+    const p = openProposal(saved);
+    return { savedBase: saved.base_tab_id, pov: clone(saved.price_overrides), base: p.st.base_tab_id,
+             rows: baseRows(p.api), warnings: warned(p.api), doc: docPayload(p.st, p.api) };
+  });
+}
+const NOTE_UNDER_BASE = ["", "THis is a test send to Hanz"];
+
+Promise.all([
+  deleteBaseCopy("$15,000 – Epoxy flooring as described above " + TWPrice.TAX),
+  deleteBaseCopy(TWPrice.AMOUNT + " – Epoxy flooring, whole building incl. mezzanine " + TWPrice.TAX),
+]).then(([money, words]) => {
+  out.deleteBase = { money, words };
+  console.log(JSON.stringify(out));
+});

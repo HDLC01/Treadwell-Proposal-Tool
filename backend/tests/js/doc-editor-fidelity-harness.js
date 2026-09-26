@@ -1203,4 +1203,68 @@ const TERMS = [BULLET_115, CLAUSE_51, CLAUSE_52, CLAUSE_53_V5];
                         collected: p.collect() };
 }
 
+// 18 — A PRICE ROW FROZEN AT THE OLD BASE'S FIGURE follows the new base. Hanz, 2026-09-26: "the
+// base bid was not updating". On the GC, Gyp and polish Direct files the base bid is a free
+// paragraph, which neither base picker can reach (the Estimate step has no template). A row he
+// edited before the rows kept their tokens was frozen at the base of that day -- Epoxy's $7,447 --
+// and after the base moved to Epoxy copy ($15,149) it only knew today's figure, so it went on
+// printing $7,447. A figure the draft's tabs price the row at today is the tool's; only at the
+// row's amount (a tab's figure in his words stays his), and a figure no tab prices stays his.
+{
+  const TABS = [
+    { id: "Epoxy", role: "epoxy", kind: "base", total: 7447, sales_tax: 96, remodel: 0 },
+    { id: "Copy1", role: "epoxy", kind: "copy", total: 15149, sales_tax: 195, remodel: 0 },
+    { id: "Polish", role: "polish", kind: "base", total: 9860, sales_tax: 110, remodel: 745 },
+  ];
+  // The base rows of the three families, verbatim as their templates carry them
+  // (test_doc_editor_fidelity.py checks them against the .docx files), and a GC tax and total row.
+  const ROWS = [
+    { id: 70, in_block: null, text: "{{base_bid_formatted}} – Resinous floor & integral cove base as described above {{base_tax_phrase}}" },
+    { id: 71, in_block: null, text: "{{base_bid_formatted}} – Gypsum Underlayment System as described above {{base_tax_phrase}}" },
+    { id: 72, in_block: null, text: "{{base_bid_formatted}} – Polished Concrete Flooring as described above {{base_tax_phrase}}" },
+    { id: 73, in_block: null, text: "{{material_tax_formatted}} – Material Sales Tax" },
+    { id: 74, in_block: null, text: "{{total_formatted}} – Total" },
+    { id: 75, in_block: null, text: "{{total_label}}" },
+  ];
+  const one = { base_bid_formatted: "$15,149", base_tax_phrase: "(material sales tax INCLUDED)",
+                material_tax_formatted: "$195", tax_amount_formatted: "$0", total_formatted: "$15,149",
+                total_label: "$15,149 – Total" };
+  const broken = Object.assign({}, one, { base_bid_formatted: "$14,954", base_tax_phrase: "" });
+  function frozen(items, tokens) {
+    STORE.blob = JSON.parse(JSON.stringify(SEED));
+    STORE.blob.priced_tabs = TABS;
+    STORE.blob.base_tab_id = "Copy1";
+    STORE.blob.paragraph_overrides_all = { "epoxy:Direct": { template_version: VER, items: items } };
+    const p = makePage("frozen-at-old-base");
+    p.mount(ROWS, tokens, VER);
+    p.restore("epoxy", "Direct", tokens);
+    const shown = {};
+    for (const it of items) {
+      const el = p.blockEl(it.id);
+      shown[it.id] = { text: p.look(it.id).text, off: el.classList.contains("tw-money-off"),
+                       amount: el.dataset.amount || "" };
+    }
+    return { shown: shown, collected: p.collect() };
+  }
+  out.frozenAtOldBase = {
+    // One line: each family's base row, frozen at a tab's figure with his words in it.
+    oneLine: frozen([
+      { id: 70, text: "$7,447 – Resinous floor & integral cove base as described above, per plans dated 9/1 (material sales tax INCLUDED)" },
+      { id: 71, text: "$7,447 – Gypsum Underlayment System as described above, per plans dated 9/1 (material sales tax INCLUDED)" },
+      { id: 72, text: "$9,860 – Polished Concrete Flooring as described above, per plans dated 9/1 (Remodel Tax AND material sales tax INCLUDED)" },
+      { id: 75, text: "$7,447 – Total" },
+    ], one),
+    // Broken out: the pre-tax base, the tax row and the Total, all frozen at Epoxy's.
+    broken: frozen([
+      { id: 70, text: "$7,351 – Resinous floor & integral cove base as described above, per plans dated 9/1" },
+      { id: 73, text: "$96 – Material Sales Tax (county rate)" },
+      { id: 74, text: "$7,447 – Total" },
+    ], broken),
+    // His own figure (no tab prices $7,000), with a tab's figure in his words: both stay his.
+    his: frozen([
+      { id: 70, text: "$7,000 – Resinous floor & integral cove base as described above, Polish alternative $9,860 (material sales tax INCLUDED)" },
+    ], one),
+  };
+}
+
 console.log(JSON.stringify(out));

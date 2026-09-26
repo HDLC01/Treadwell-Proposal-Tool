@@ -1049,7 +1049,7 @@ function wireBidBar() {
       // line the Proposal step had saved with the old tab's figure in it went on printing that
       // figure, on screen and in the customer's document. The lines he typed stay.
       if (state.base_tab_id !== priorBaseId) {
-        TWPrice.forgetBaseLines(state.price_overrides, priorBaseId, state.base_tab_id);
+        TWPrice.forgetBaseLines(state.price_overrides, priorBaseId, state.base_tab_id, state.priced_tabs);
       }
       renderBidOptions();
       // PRICED AND SAVED: persistTabState takes the pricing snapshot (priced_tabs, the lump sum, the
@@ -1336,8 +1336,17 @@ async function deleteTab(id) {
   if (state.price_overrides && state.price_overrides.options) delete state.price_overrides.options[id];
   // ...and the option's edited words and the lines typed around it and its own tax rows.
   reKeyPriceLineOverrides(k => (k === "option:" + id || k.startsWith("option:" + id + ":")) ? null : k);
-  if (state.base_tab_id === id) state.base_tab_id = null;   // fall back to auto-derive
+  const wasBase = state.base_tab_id === id;
+  if (wasBase) state.base_tab_id = null;   // fall back to auto-derive
   buildTabs();
+  // Deleting the BASE copy changes the base, to the one the sheet derives (renderBidOptions
+  // persists it), so it forgets the copy's edited base lines by THE SAME RULE both base pickers
+  // apply (TWPrice.forgetBaseLines). Without it a base line he had edited under the copy -- its
+  // figure, or its words about the copy's system -- printed under the derived base's price.
+  if (wasBase) {
+    const next = (state.work_type || "epoxy").toLowerCase() === "combo" ? null : resolveBaseTab();
+    TWPrice.forgetBaseLines(state.price_overrides, id, next ? next.id : null, state.priced_tabs);
+  }
   TW.setState({ ...state, tab_copies: state.tab_copies, tab_labels: state.tab_labels,
                 tab_notes: state.tab_notes, tab_opts: state.tab_opts,
                 base_tab_id: state.base_tab_id, cell_values: cellValues });

@@ -14,9 +14,18 @@ WHAT WAS WRONG, three ways at once:
   * A LINE FROZEN AT THE OLD BASE'S FIGURE was read as his own. Hanz Fix's revisions 2-5 printed
     "$7,447 – Epoxy flooring as described above" as the base bid of a $15,149 job: he had typed a
     note under the base line while Epoxy was the base, the old editor froze Epoxy's figure into it,
-    and the migration to the live shape only recognised TODAY's figure. Every figure this draft's
-    own tabs priced the line at is the tool's (TWPrice.tabFigures) and becomes a live marker; a
-    figure no tab ever priced stays his, marked, and Send asks (Hanz: warn, then let him send).
+    and the migration to the live shape only recognised TODAY's base figure. Every figure this
+    draft's tabs price the line at TODAY is the tool's (TWPrice.tabFigures) and becomes a live
+    marker, at the line's amount only. A figure no tab prices today stays his, marked, and Send
+    asks (Hanz: warn, then let him send) -- and that includes Hanz Fix's own revisions 2-5, whose
+    Epoxy tab had been re-priced to $7,696: nothing on the page remembers a tab's old price, so
+    those are warned, not rewritten, until a base pick forgets the line.
+  * WHICH LINE OF AN OLD-SHAPE LINE IS THE PRICE LINE. A note typed above it that quotes a figure
+    ("Includes $500 cove allowance", "Polish alternative quoted separately at $9,860") used to be
+    taken for it -- printed with the base bid's amount, while the real price line was kept as a
+    typed line frozen at the old figure, never re-priced, never forgotten, never warned about. The
+    price line is the one that reads like one (its amount first, or the tool's tax wording).
+  * DELETING THE BASE COPY on the Estimate step is a base change too, and applies the same rule.
   * The sidebar's forgetting was never SAVED: the page's pricing save carries the base and the
     money, so leaving by a step pill put the old base's line back into the draft. And the Estimate
     strip's pick saved without re-pricing (a copy made a moment ago and picked at once was a base
@@ -154,10 +163,12 @@ def test_the_sidebar_pick_forgets_the_old_bases_lines_and_saves_it(ran, layout):
 
 # ── a line frozen at the OLD base's figure ───────────────────────────────────────────────────────
 def test_a_line_frozen_at_the_old_bases_figure_follows_the_estimate_again(ran):
-    """Hanz Fix's revisions 2-5, exactly: base Epoxy copy $15,149, the base line saved with Epoxy's
-    $7,447 and his note inside it. Drawn once: the computed line (nothing stored for it), his note
-    a line of its own, nothing marked, nothing for Send to ask. Mutation: migrate against today's
-    figure only (TWPrice.tabFigures dropped) -- the line stays at $7,447, marked, and Send asks."""
+    """Hanz Fix the moment the base moved: base Epoxy copy $15,149, the base line saved with
+    Epoxy's $7,447 and his note inside it, while Epoxy still prices at $7,447 (NOT revisions 2-5,
+    where Epoxy had been re-priced: see the revision-5 test below). Drawn once: the computed line
+    (nothing stored for it), his note a line of its own, nothing marked, nothing for Send to ask.
+    Mutation: migrate against today's figure only (TWPrice.tabFigures dropped) -- the line stays
+    at $7,447, marked, and Send asks."""
     f = ran["frozenAtOldBase"]
     assert [(r["kind"], r["text"], r["cue"]) for r in f["rows"]] == [
         ("line", f"$15,149 – {_EPOXY} (material sales tax INCLUDED)", False),
@@ -317,3 +328,116 @@ def test_the_customer_document_follows_every_base_pick(ran, layout, step, base):
         j += 1
     assert rows == want_tax, texts[i:j + 1]
     assert not any("$7,500" in t or "$15,000" in t for t in texts)
+
+
+# ── which line of a line saved in the old shape is the price line ────────────────────────────────
+_COPY_LINE = f"$15,149 – {_EPOXY} (material sales tax INCLUDED)"
+_EPOXY_LINE = f"$7,447 – {_EPOXY} (material sales tax INCLUDED)"
+
+
+def _base_block(texts):
+    """The paragraphs from "Base Bid" down to the Options heading (or the next four)."""
+    i = texts.index("Base Bid")
+    j = next((k for k in range(i + 1, len(texts)) if texts[k].rstrip().startswith("Options")), i + 5)
+    return [t.rstrip() for t in texts[i + 1:j] if t.strip()]
+
+
+@pytest.mark.parametrize("case,note", [
+    ("noteAbove", "Includes $500 cove allowance"),
+    ("shapedNote", "$500 – cove allowance, included in the price below"),
+])
+def test_a_note_above_an_old_shape_base_line_survives_an_estimate_pick(ran, case, note):
+    """Hanz's own path, the Estimate strip's radio, on a base line saved in the old shape with a
+    note typed ABOVE its price line that carries a figure. The pick forgets the price line and
+    keeps the note as a line of his own; the Proposal step and the customer's document print the
+    note, then the picked tab's line, once, with nothing to warn about. It used to take the note
+    for the price line (the first line with a "$"): the note was deleted, and the real price line
+    was saved as a typed line that printed "$7,447 – …" under the $15,149 one, unwarned.
+    Mutations: the migration's price-shape steps off (both cases); forgetBaseLines given no tab
+    figures (the note that reads like a price line itself)."""
+    r = ran["oldShape"][case]
+    assert r["pov"]["lines"] == {}, r["pov"]
+    assert r["pov"]["before"] == {"base": [note]}, r["pov"]
+    assert "base" not in (r["pov"].get("after") or {}), r["pov"]
+    assert r["rows"] == [{"kind": "extra", "text": note, "money": False},
+                         {"kind": "line", "text": _COPY_LINE, "money": False}], r["rows"]
+    assert r["warnings"] == []
+    block = _base_block(_document(r["doc"]))
+    assert block[:2] == [note, _COPY_LINE], block
+    assert not any("$7,447" in t for t in block), block
+
+
+def test_a_note_quoting_another_tabs_figure_is_not_taken_for_the_price_line(ran):
+    """"Polish alternative quoted separately at $9,860" -- Polish's own total -- typed above the
+    base line in the old shape. Drawn: the note is his line and the price line is the live one;
+    after an Estimate-step pick the note is still above the picked tab's line, in the editor and
+    the document, and no figure is frozen anywhere. It used to become the base line ("Polish
+    alternative quoted separately at $7,447"), and the pick then deleted it. Mutation: the build
+    this fixes (every tab's figure a candidate anywhere, no price-shape steps)."""
+    q = ran["oldShape"]["quotedTab"]
+    note = "Polish alternative quoted separately at $9,860"
+    assert q["rows"] == [{"kind": "extra", "text": note, "money": False},
+                         {"kind": "line", "text": _EPOXY_LINE, "money": False}], q["rows"]
+    assert q["warnings"] == [] and q["pov"]["lines2"] == {} and q["pov"]["before"] == {"base": [note]}, q
+    p = q["picked"]
+    assert p["rows"] == [{"kind": "extra", "text": note, "money": False},
+                         {"kind": "line", "text": _COPY_LINE, "money": False}], p["rows"]
+    assert p["warnings"] == []
+    assert _base_block(_document(p["doc"]))[:2] == [note, _COPY_LINE]
+
+
+def test_a_tabs_figure_in_the_lines_own_words_is_never_its_amount(ran):
+    """"$7,000 – Epoxy flooring, Polish alternative $9,860 (…)" on the $15,149 copy: no tab prices
+    $7,000, so it is his figure -- kept, marked, and Send asks -- and Polish's $9,860 in his words
+    stays $9,860. It used to be made the live amount: the line printed "…, Polish alternative
+    $15,149" beside his $7,000, and nothing warned (the stored line had a marker, so it was not
+    "his figure"). Mutation: a tab's figure matched anywhere in the line."""
+    w = ran["oldShape"]["inWords"]
+    assert w["pov"]["lines2"] == {"base": f"$7,000 – Epoxy flooring, Polish alternative $9,860 {TAX}"}, w["pov"]
+    assert w["rows"] == [{"kind": "line", "text": "$7,000 – Epoxy flooring, Polish alternative $9,860 "
+                                                  "(material sales tax INCLUDED)", "money": True}], w["rows"]
+    assert w["warnings"] == [{"key": "base", "says": "$7,000", "estimate": "$15,149"}]
+
+
+def test_hanz_fix_revision_5_is_warned_not_rewritten_and_a_pick_frees_it(ran):
+    """Revision 5 as staging holds it: base Epoxy copy $15,149, the base line frozen at Epoxy's
+    $7,447 in revision 1, and Epoxy re-priced to $7,696 since. No tab prices $7,447 today and
+    nothing on the page remembers a tab's old price, so the line is treated as a figure of his
+    own: kept, marked, and Send asks -- the tool does NOT silently re-price it. His notes are lines
+    of their own. A base pick away and back on the Estimate step forgets it: the copy's own line
+    prints, his notes under it, nothing to ask. Mutation: any first figure of an old-shape line
+    made the live amount (the line would be rewritten to $15,149 without asking)."""
+    r = ran["rev5"]
+    notes = [("extra", ""), ("extra", "THis is a test send to Hanz"), ("extra", ""), ("extra", "12312312312312a")]
+    assert [(x["kind"], x["text"]) for x in r["rows"]] == [("line", _EPOXY_LINE)] + notes, r["rows"]
+    assert r["rows"][0]["money"] is True
+    assert r["lines2"] == {"base": f"$7,447 – {_EPOXY} {TAX}"}, r["lines2"]
+    assert r["warnings"] == [{"key": "base", "says": "$7,447", "estimate": "$15,149"}]
+    a = r["afterPicks"]
+    assert [(x["kind"], x["text"]) for x in a["rows"]] == [("line", _COPY_LINE)] + notes, a["rows"]
+    assert not a["rows"][0]["money"] and a["warnings"] == [] and "base" not in a["lines2"], a
+
+
+@pytest.mark.parametrize("case", ["money", "words"])
+def test_deleting_the_base_copy_forgets_its_base_line_like_a_pick(ran, case):
+    """The base is Epoxy copy and he edited its base line on the Proposal step -- a figure of his
+    own ("$15,000 – …") or the copy's scope in its words ("… whole building incl. mezzanine").
+    Deleting the copy on the Estimate step moves the base to the one the sheet derives (Epoxy,
+    $7,447): its base line prints, the note he typed under the line stays, and so do the edits no
+    base pick touches (a manual line, another option); the option line of the tab that is now the
+    base goes, as on a radio pick. It used to carry the copy's line over: $15,000 under a $7,447
+    base (Download and To Dropbox do not ask), or the copy's scope words at Epoxy's price, silently.
+    Mutation: deleteTab without the rule (it nulled the base and nothing else)."""
+    r = ran["deleteBase"][case]
+    assert r["savedBase"] is None and r["base"] == "Epoxy", r
+    assert r["pov"]["lines2"] == {
+        "manual:0": f"{AMT} – Joint filler, per plan",
+        "option:Polish": f"{AMT} – Polished Concrete, 800 grit, warehouse only {TAX}"}, r["pov"]
+    assert r["pov"]["after"] == {"base": NOTE}, r["pov"]
+    assert r["rows"] == [{"kind": "line", "text": _EPOXY_LINE, "money": False},
+                         {"kind": "extra", "text": "", "money": False},
+                         {"kind": "extra", "text": "THis is a test send to Hanz", "money": False}], r["rows"]
+    assert r["warnings"] == []
+    block = _base_block(_document(r["doc"]))
+    assert block[:2] == [_EPOXY_LINE, "THis is a test send to Hanz"], block
+    assert not any("$15,000" in t or "mezzanine" in t for t in block), block

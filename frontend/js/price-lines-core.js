@@ -190,25 +190,89 @@
     return null;
   }
 
+  /** The line's AMOUNT, where the tool prints it: its first plain dollar figure ("$7,447" in
+   *  "$7,447 – …" and in "Add $7,447 – …"), as {at, len, text}, or null. */
+  function amountAt(s) {
+    s = String(s == null ? "" : s);
+    var re = /\$\s?[\d,]+(?:\.\d+)?/g, m;
+    while ((m = re.exec(s))) {
+      var before = m.index > 0 ? s.charAt(m.index - 1) : "";
+      if (/[\d$]/.test(before)) continue;
+      return { at: m.index, len: m[0].length, text: m[0] };
+    }
+    return null;
+  }
+
+  /** Is the line's amount (amountAt) the same figure as one of `figures`, in any money style? */
+  function amountIsOneOf(s, figures) {
+    var a = amountAt(s);
+    if (!a || !figures || !figures.length) return false;
+    var c = cents(a.text);
+    for (var i = 0; i < figures.length; i++) {
+      if (/^\$[\d,]+(?:\.\d+)?$/.test(String(figures[i] || "")) && cents(figures[i]) === c) return true;
+    }
+    return false;
+  }
+
+  /** Does a line read like one of the tool's own price lines: its amount first ("$7,447 – …",
+   *  "Add $3,189 – …", "($500) – …"), or a tax wording this tool has printed in it?
+   *
+   *  A line saved in the old shape holds the tool's line AND whatever was typed round it, and a
+   *  note may quote a figure too: "Includes $500 cove allowance" above the price line, or "Polish
+   *  alternative quoted separately at $9,860" (another tab's own total). Taking the first line with
+   *  a figure in it for the price line made the note the price line: its words were printed with
+   *  the base bid's amount, and the real price line was kept as a line he typed, frozen at the old
+   *  figure, never re-priced, never forgotten on a later base pick and never warned about. */
+  var PRICE_SHAPE = /^\s*(?:(?:add|deduct)\s+)?\(?\$\s?[\d,]+(?:\.\d+)?\)?\s*[–—-]/i;
+  function priceShaped(line, phrase) {
+    var s = String(line == null ? "" : line);
+    if (PRICE_SHAPE.test(s)) return true;
+    var list = (phrase ? [String(phrase)] : []).concat(KNOWN_PHRASES);
+    for (var k = 0; k < list.length; k++) if (s.indexOf(list[k]) >= 0) return true;
+    return false;
+  }
+
   /** A line saved before the markers existed: one string holding the whole line, frozen, and
    *  often more lines typed above or below it (Hanz's "\n\nTHis is a test send to Hanz").
    *
-   *  Returns {main, before, after, drop}: `main` is the line itself with markers where today's
-   *  amount (or any figure the old code froze into it — `parts.candidates`) and a known tax
-   *  wording stood; `before` / `after` are the lines around it, each its own line from now on;
-   *  `drop` means the line itself was a phantom — a "$0 – Total" the old box-wide sweep froze on
-   *  a row nobody had touched — and nothing about it is the estimator's. */
+   *  `parts` = {amount, phrase, slot, candidates, others, zeroIsPhantom}. `amount` and
+   *  `candidates` are the line's OWN figures today (its amount, and the page's other forms of it:
+   *  the total a broken-out base line froze under one line, say). `others` are the figures any tab
+   *  of the draft prices this kind of line at (tabFigures): the old code often froze one of those,
+   *  the old base's. They are weaker evidence -- a note can quote another tab's figure -- so they
+   *  only ever count at the line's own amount (amountAt), never in its words.
+   *
+   *  WHICH LINE IS THE PRICE LINE, in order: a price-shaped line carrying one of its own figures;
+   *  a price-shaped line whose amount is one a tab priced; the first price-shaped line; a line
+   *  carrying one of its own figures; the first line with a figure; the first line with anything.
+   *
+   *  Returns {main, before, after, drop}: `main` is the line itself with markers where its amount
+   *  (an own figure anywhere, or a tab's figure at its amount) and a known tax wording stood;
+   *  `before` / `after` are the lines around it, each its own line from now on; `drop` means the
+   *  line itself was a phantom — a "$0 – Total" the old box-wide sweep froze on a row nobody had
+   *  touched — and nothing about it is the estimator's. */
   function migrateLine(legacy, parts) {
     parts = parts || {};
     var lines = String(legacy == null ? "" : legacy).replace(/\r\n?/g, "\n").split("\n");
     var cands = [parts.amount].concat(parts.candidates || []).filter(function (a) { return !!a; });
-    var mi = -1;
-    for (var i = 0; i < lines.length && mi < 0; i++) {
-      for (var c = 0; c < cands.length; c++) if (amountIndex(lines[i], cands[c]) >= 0) { mi = i; break; }
+    var others = (parts.others || []).filter(function (a) { return !!a; });
+    function own(l) {
+      for (var c = 0; c < cands.length; c++) if (amountIndex(l, cands[c]) >= 0) return true;
+      return !!sameAmountAt(l, cands);
     }
-    if (mi < 0) for (var i1 = 0; i1 < lines.length; i1++) if (sameAmountAt(lines[i1], cands)) { mi = i1; break; }
-    if (mi < 0) for (var i2 = 0; i2 < lines.length; i2++) if (/\$\s?\d/.test(lines[i2])) { mi = i2; break; }
-    if (mi < 0) for (var i3 = 0; i3 < lines.length; i3++) if (lines[i3].trim()) { mi = i3; break; }
+    function shaped(l) { return priceShaped(l, parts.phrase); }
+    var steps = [
+      function (l) { return shaped(l) && own(l); },
+      function (l) { return shaped(l) && amountIsOneOf(l, others); },
+      shaped,
+      own,
+      function (l) { return /\$\s?\d/.test(l); },
+      function (l) { return !!l.trim(); },
+    ];
+    var mi = -1;
+    for (var st = 0; st < steps.length && mi < 0; st++) {
+      for (var i = 0; i < lines.length; i++) if (steps[st](lines[i])) { mi = i; break; }
+    }
     if (mi < 0) return { main: null, before: [], after: [], drop: true };
     var before = lines.slice(0, mi), after = lines.slice(mi + 1);
     var main = lines[mi];
@@ -227,6 +291,12 @@
       var same = sameAmountAt(main, cands);
       if (same) main = main.slice(0, same.at) + AMOUNT + main.slice(same.at + same.len);
     }
+    // A figure a tab of this draft priced the line at: only at the line's own amount, so a figure
+    // quoted in his words ("…, Polish alternative $9,860") is never made the base bid's amount.
+    if (main.indexOf(AMOUNT) < 0 && amountIsOneOf(main, others)) {
+      var am = amountAt(main);
+      main = main.slice(0, am.at) + AMOUNT + main.slice(am.at + am.len);
+    }
     main = captureLine(main, "", parts.phrase, parts.slot);
     return { main: main, before: before, after: after, drop: false };
   }
@@ -242,16 +312,22 @@
     return (neg ? "-" : "") + "$" + whole + (frac ? "." + (frac < 10 ? "0" : "") + frac : "");
   }
 
-  /** Every figure this tool has priced a line of this kind at, off ANY priced tab of the draft
+  /** Every figure the draft's tabs price a line of this kind at TODAY, off ANY priced tab
    *  (state.priced_tabs, the old base included), in the documents' money style.
    *
    *  A line saved before the markers froze the figure it was typed next to, and that was often not
    *  today's base. Hanz, 2026-09-26, on the "Hanz Fix" staging project: he typed a note under the
    *  base line while Epoxy ($7,447) was the base, then made "Epoxy copy" ($15,149) the base; the
-   *  note had frozen "$7,447" into the base line, and every revision after printed the Epoxy figure
-   *  as the base bid of a $15,149 job. That figure is one of THIS draft's own tabs, so the tool made
-   *  it, and migrateLine turns it into the live marker exactly like today's figure. A figure that is
-   *  no tab's at all is the estimator's own and stays his (the editor marks it, Send asks).
+   *  note had frozen "$7,447" into the base line, and revisions 2-5 printed that figure as the base
+   *  bid of a $15,149 job. While a tab still prices the line at the frozen figure, the tool made it,
+   *  and migrateLine turns it into the live marker (at the line's amount only, see there).
+   *
+   *  TODAY is the limit. Only today's tab figures are known: nothing on the page records what a
+   *  tab priced at before. On Hanz Fix itself, Epoxy was re-priced to $7,696 by revision 2, so its
+   *  frozen $7,447 is no tab's figure any more, and that line is treated as a figure of his own:
+   *  kept, marked in the editor, and Send asks ("says $7,447, the estimate says $15,149"). A pick
+   *  of the base on either page forgets it (forgetBaseLines); typing today's figure back into the
+   *  line makes it live again (captureLine).
    *
    *  `key` is the line's: a base, option or combo line asks for each tab's total and its pre-tax
    *  figure under any tax answer; a Material Sales Tax / Remodel Tax row for that tax; a Total for
@@ -295,12 +371,20 @@
    *  Lines no base changes (manual price lines, the Base Bid and Options headings and the lines
    *  typed on the gap, the alternate system) are left alone.
    *
-   *  `from` / `to` are the base tab ids before and after (null: the combined base). Mutates `pov`
-   *  in place; both pages save it. Returns whether a line went.
+   *  `from` / `to` are the base tab ids before and after (null: the combined base). `tabs` is the
+   *  draft's priced_tabs: a line in the old shape is split by migrateLine, and the figures those
+   *  tabs price the line at tell its price line from a note typed round it that quotes a figure of
+   *  its own ("$500 – cove allowance, included below"). Without them a note typed above the price
+   *  line could be taken for it: deleted with the old base's line, while the real price line was
+   *  kept as a typed line and printed its old figure under the new base, with no warning. Mutates
+   *  `pov` in place; both pages save it. Returns whether a line went.
+   *
+   *  THE THIRD WAY the base changes is deleting the base copy on the Estimate step (deleteTab):
+   *  the base falls back to the one the sheet derives, by this same rule.
    *
    *  Page state only, like tabFigures: the document prints what the page saved, so price_rules.py
    *  has no twin of either (the parity test covers the rule the two halves both run). */
-  function forgetBaseLines(pov, from, to) {
+  function forgetBaseLines(pov, from, to, tabs) {
     if (!pov || typeof pov !== "object" || Array.isArray(pov)) return false;
     var changed = false;
     function bound(key) {
@@ -319,7 +403,7 @@
       Object.keys(legacy).forEach(function (k) {
         if (!bound(k)) return;
         if (typeof legacy[k] === "string") {
-          var m = migrateLine(legacy[k], {});
+          var m = migrateLine(legacy[k], { others: tabFigures(tabs, k) });
           [["before", m.before], ["after", m.after]].forEach(function (pair) {
             var rows = pair[1];
             if (!rows || !rows.length) return;
@@ -346,6 +430,7 @@
     cents: cents, flag: flag, phraseFor: phraseFor, taxRule: taxRule, layoutFor: layoutFor,
     amountIndex: amountIndex, resolveLine: resolveLine, captureLine: captureLine,
     moneyOff: moneyOff, firstDollar: firstDollar, sameAmountAt: sameAmountAt, migrateLine: migrateLine,
+    amountAt: amountAt, amountIsOneOf: amountIsOneOf, priceShaped: priceShaped,
     usd: usd, tabFigures: tabFigures, forgetBaseLines: forgetBaseLines,
   };
 });

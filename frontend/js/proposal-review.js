@@ -562,17 +562,20 @@
     // sweep froze on a row nobody touched is dropped. What is left and still differs from the
     // computed line is the estimator's.
     //
-    // "A figure the old code froze in" is any figure this draft's own tabs priced the line at, the
-    // OLD base's included (TWPrice.tabFigures): Hanz Fix's base line froze Epoxy's $7,447, the base
-    // then became Epoxy copy at $15,149, and the line went on printing $7,447 for every revision.
-    // Only a figure no tab ever priced is his.
+    // "A figure the old code froze in" is also any figure this draft's tabs price the line at
+    // TODAY, the OLD base's included (TWPrice.tabFigures): a base line frozen at Epoxy's $7,447
+    // while Epoxy still prices at $7,447 follows the estimate again after the base moved to Epoxy
+    // copy. Those count at the line's amount only, never in its words, and never pick a note
+    // typed round it for the price line (migrateLine). A figure no tab prices today is his --
+    // including a tab's OLD price, which nothing on the page remembers (Hanz Fix revisions 2-5:
+    // Epoxy had been re-priced to $7,696): kept, marked, and Send asks.
     if (pov.lines && typeof pov.lines === "object" && typeof pov.lines[key] === "string"
         && !(pov.lines2 && typeof pov.lines2 === "object" && own.call(pov.lines2, key))
         && p.amount !== undefined) {
       const m = TWPrice.migrateLine(pov.lines[key], {
         amount: p.amount, phrase: p.phrase || "", slot: !!p.slot,
-        candidates: (Array.isArray(p.candidates) ? p.candidates : [])
-          .concat(TWPrice.tabFigures(state.priced_tabs, key)),
+        candidates: Array.isArray(p.candidates) ? p.candidates : [],
+        others: TWPrice.tabFigures(state.priced_tabs, key),
         zeroIsPhantom: COMPUTED_PRICE_LINE_KEYS.has(key) || /:(sales_tax|remodel|total)$/.test(key),
       });
       if (!pov.lines2 || typeof pov.lines2 !== "object" || Array.isArray(pov.lines2)) pov.lines2 = {};
@@ -1620,7 +1623,7 @@
               // price edits, so leaving by a step pill (the pagehide save) put the old base's line
               // back into the draft with the new base, and the next visit printed it again.
               const pov = state.price_overrides;
-              if (TWPrice.forgetBaseLines(pov, priorBaseId, state.base_tab_id)) {
+              if (TWPrice.forgetBaseLines(pov, priorBaseId, state.base_tab_id, state.priced_tabs)) {
                 TW.setState({ price_overrides: pov });
               }
             }
@@ -2232,14 +2235,29 @@
   /** A PRICE paragraph's saved text with its frozen figures turned back into tokens: wherever it
    *  still carries, verbatim, the figure one of its OWN row tokens shows today (or, for the tax
    *  wording, any wording this tool has printed), that place becomes the {{token}}. Text that
-   *  already carries tokens, and figures he typed that are not today's, are left as they are. */
+   *  already carries tokens, and figures he typed that are not today's, are left as they are.
+   *
+   *  "Today's" includes any figure a tab of this draft prices the row at today, the OLD base's
+   *  included (TWPrice.tabFigures), the same rule as a Direct price line (lineOverride). These are
+   *  the GC, Gyp and polish Direct price rows, and neither base picker can reach them (the
+   *  Estimate step has no template to find them in): a base row edited before the rows kept their
+   *  tokens, frozen at Epoxy's $7,447, went on printing $7,447 after the base moved to a $15,149
+   *  copy. Such a figure counts only at the row's own amount -- its first figure -- so a figure
+   *  quoted in his words is never taken for it, and only on a row whose template prints one amount.
+   *  A figure no tab prices today stays his: marked, and Send asks. */
   function migratePriceParagraphText(id, text, tk) {
     let t = String(text == null ? "" : text);
     if (/\{\{\s*[a-zA-Z_][a-zA-Z0-9_]*\s*\}\}/.test(t)) return t;
     const tpl = String((blockById.get(Number(id)) || {}).text || "");
     const vals = tk || {};
+    // Which of a tab's figures each row prints (TWPrice.tabFigures' kinds).
+    const PRICE_ROW_KIND = { base_bid_formatted: "base", material_tax_formatted: "sales_tax",
+                             tax_amount_formatted: "remodel", total_formatted: "total",
+                             total_label: "total" };
+    const has = (k) => new RegExp("\\{\\{\\s*" + k + "\\s*\\}\\}").test(tpl);
+    const oneAmount = PRICE_AMOUNT_TOKENS.filter(has).length === 1;
     for (const k of PRICE_TOKENS) {
-      if (!new RegExp("\\{\\{\\s*" + k + "\\s*\\}\\}").test(tpl)) continue;
+      if (!has(k)) continue;
       const cands = k === "base_tax_phrase" ? [vals[k]].concat(TWPrice.KNOWN_PHRASES) : [vals[k]];
       let done = false;
       for (const v of cands) {
@@ -2250,7 +2268,20 @@
       // Today's figure in the money style an older preview froze ("$1,870.00" for "$1,870").
       if (!done && k !== "base_tax_phrase") {
         const same = TWPrice.sameAmountAt(t, [vals[k]]);
-        if (same) t = t.slice(0, same.at) + "{{" + k + "}}" + t.slice(same.at + same.len);
+        if (same) { t = t.slice(0, same.at) + "{{" + k + "}}" + t.slice(same.at + same.len); done = true; }
+      }
+      // A figure a tab of this draft prices the row at, at the row's own amount (see above). The
+      // Total label is the whole "$X – Total", so it is only its figure AND the tool's own words.
+      if (!done && oneAmount && PRICE_ROW_KIND[k]) {
+        const am = TWPrice.amountAt(t);
+        if (am && TWPrice.amountIsOneOf(t, TWPrice.tabFigures(state.priced_tabs, PRICE_ROW_KIND[k]))) {
+          let len = am.len;
+          if (k === "total_label") {
+            const tail = /^ – Total/.exec(t.slice(am.at + am.len));
+            len = tail ? am.len + tail[0].length : -1;
+          }
+          if (len > 0) t = t.slice(0, am.at) + "{{" + k + "}}" + t.slice(am.at + len);
+        }
       }
     }
     return t;
