@@ -1749,6 +1749,12 @@ OPTIONS_GAP_MAX = 20
 # that namespace ON the paragraph, and deleting the attribute leaves the declaration behind in the
 # customer's file. `w:` is declared on the document root, so nothing is added and nothing remains.
 _OPTIONS_HEADING_ATTR = qn("w:twOptionsHeading")
+# A line the ESTIMATOR typed in the PRICE box (a line under a price row, an option's own lines, the
+# lines on the gap): set where such a paragraph is made (`_extra_line_paragraph`, a `_typed`
+# {{#price_line}} row) so `_apply_options_gap` never mistakes a blank one for a template spacer and
+# takes it out -- the editor draws it, so the document prints it. Stripped before the save, like
+# the heading's mark and in the same namespace for the same reason.
+_TYPED_LINE_ATTR = qn("w:twTypedLine")
 # The GC files have no {{#has_options}} region: their heading is a plain paragraph that always
 # prints. Only consulted for a template with no such region anywhere.
 _OPTIONS_FREE_HEADING_RE = re.compile(r"^\s*options\b", re.IGNORECASE)
@@ -1855,28 +1861,46 @@ def options_gap_count(value) -> int:
     return max(0, min(OPTIONS_GAP_MAX, n))
 
 
-def _apply_options_gap(d: Document, n) -> int:
-    """Print EXACTLY `n` blank lines directly above every marked Options heading, in every copy.
+def _apply_options_gap(d: Document, n, typed=None) -> int:
+    """Print the lines above every marked Options heading, in every copy: the estimator's TYPED
+    lines first, then EXACTLY `n` blank lines, then the heading -- the sequence the editor draws.
+
+    `typed` is `price_overrides.before.heading_options`: text the estimator put on the gap (Hanz,
+    2026-09-26: "I cant write texts on this white space lines"). Each prints as a paragraph of its
+    own modelled on the price row above it -- that row's font, size and colour (`_extra_line_
+    paragraph`), a blank one exactly like a gap line (`_blank_like`) -- never a bare run in the
+    document default.
 
     Runs after block expansion, substitution and the price-bullet flatten. A bid with no options
     has no heading left (its `{{#has_options}}` region was stripped), so this does nothing there.
     The blank spacer paragraphs a template already has directly above its heading (Gyp and the GC
-    files each carry one) are REPLACED, not added to, so the count is the editor's count. Each new
-    line is modelled on the price row above it (`_blank_like`). Returns the headings spaced."""
+    files each carry one) are REPLACED, not added to, so the count is the editor's count. A line the
+    estimator TYPED is never one of those: the walk stops at one (`_TYPED_LINE_ATTR`), a blank one
+    included, because the editor draws it. Returns the headings spaced."""
     n = options_gap_count(n)
+    rows = [str(t) for t in (typed or []) if t is not None and not isinstance(t, (dict, list, bool))]
     heads = [p for p in d.element.body.iter(qn("w:p")) if p.get(_OPTIONS_HEADING_ATTR) is not None]
     for head in heads:
         parent = head.getparent()
         prev = head.getprevious()
-        while prev is not None and _is_blank_spacer(prev):
+        while (prev is not None and _is_blank_spacer(prev)
+               and prev.get(_TYPED_LINE_ATTR) is None):
             above = prev.getprevious()
             parent.remove(prev)
             prev = above
         model = prev if (prev is not None and prev.tag == qn("w:p")) else head
+        for text in rows:
+            line = (_extra_line_paragraph(model, text, keep_numbering=False) if text
+                    else _blank_like(model))
+            head.addprevious(line)
         for _ in range(n):
             head.addprevious(_blank_like(model))
-    for p in heads:
-        del p.attrib[_OPTIONS_HEADING_ATTR]
+    # Neither mark reaches the customer's file: the headings', and the typed lines' (every one of
+    # them -- a typed line the walk never reached is marked all the same).
+    for p in d.element.body.iter(qn("w:p")):
+        for attr in (_OPTIONS_HEADING_ATTR, _TYPED_LINE_ATTR):
+            if p.get(attr) is not None:
+                del p.attrib[attr]
     return len(heads)
 
 
@@ -2065,7 +2089,9 @@ def _apply_line_overrides(d: Document, values) -> int:
             if p.find(".//" + _TXBX_CONTENT) is not None:
                 continue
             ptext = "".join(t.text or "" for t in p.iter(qn("w:t")))
-            hit = pat.search(ptext) if is_token else (ptext.strip() == anchor)
+            # A heading by its words, colon or not: Polish Direct's "Options " never matched
+            # "Options:", so a renamed Options heading never printed on Polish.
+            hit = pat.search(ptext) if is_token else _heading_text_matches(ptext, anchor)
             if hit:
                 _set_paragraph_text(p, text)
                 n += 1
@@ -2180,6 +2206,10 @@ def _expand_named_block(container, block_name: str, items: list[Mapping[str, Any
                 # on that layout, so it takes the same blank lines above it (_apply_options_gap).
                 if block_name == "price_line" and item.get("_options_heading"):
                     clone.set(_OPTIONS_HEADING_ATTR, "1")
+                # A line the estimator typed next to a price line (main._extra_rows): a blank one
+                # is his blank line, not a spacer _apply_options_gap may take out.
+                if block_name == "price_line" and item.get("_typed"):
+                    clone.set(_TYPED_LINE_ATTR, "1")
                 # Blank NOTES line — estimator's Word-style spacing. Drop the
                 # bullet so it renders as an empty line, not an empty bullet dot.
                 if block_name == "notes" and not str(item.get("text") or "").strip():
@@ -2417,6 +2447,177 @@ def _free_remodel_rows(d: Document) -> list:
             if in_block is None and any(p.search(txt) for p in pats):
                 rows.append(child)
     return rows
+
+
+# Every PRICE row the tax rule can take out, by the token that row carries. Material Sales Tax and
+# Remodel Tax are the rows `free_tax_rows` counts; the TOTAL is here too, because one line prints no
+# Total row on any template (the Direct files' {{#tax_breakout}} already strip theirs; the GC and
+# Gyp files author it as a plain paragraph). `alternate.*` tokens never match: the recommended
+# alternate's own rows are a different block with different figures.
+_PRICE_ROW_TOKENS: dict[str, tuple[re.Pattern, ...]] = {
+    "material": _TAX_ROW_TOKENS["material"],
+    "remodel": _TAX_ROW_TOKENS["remodel"],
+    "total": (re.compile(r"\{\{\s*total_formatted\s*\}\}"),
+              re.compile(r"\{\{\s*total_label\s*\}\}")),
+}
+
+
+def _price_row_paragraphs(d: Document, kinds) -> list:
+    """Every `<w:p>` in `d` that is one of the PRICE rows named in `kinds` ("material",
+    "remodel", "total"), FREE OR INSIDE A {{#block}}, in every copy the file carries: the body,
+    table cells, and each text box's `w:txbxContent` with its VML `mc:Fallback` twin (a copy left
+    behind there is what an older reader prints).
+
+    Found on the PRISTINE template, by the row's own token, and removed only after Phase 0 — for
+    the reason `_free_remodel_rows` gives: removing earlier shifts every paragraph id the editor's
+    overrides are keyed by, and finding them later would miss a row the estimator re-worded. A row
+    whose tax does not apply is gone whatever it says."""
+    pats = [p for k in kinds for p in _PRICE_ROW_TOKENS.get(k, ())]
+    if not pats:
+        return []
+    body = d.element.body
+    containers = [body] + list(body.iter(qn("w:tc"))) + list(body.iter(qn("w:txbxContent")))
+    rows = []
+    for container in containers:
+        for child in list(container):
+            if child.tag == qn("w:p") and any(p.search(_own_text(child)) for p in pats):
+                rows.append(child)
+    return rows
+
+
+# ── the lines typed above and below a PRICE line ──────────────────────────────────────────────
+# Hanz, 2026-09-25, on staging: he typed "THis is a test send to Hanz" under the base line and
+# "Test again 123" under an option, and both became text INSIDE the line above — stored in that
+# line's override (which froze its amount) and printed as <w:br/> breaks in one paragraph. They
+# are their own lines now: stored beside the line (price_overrides.before / .after) and printed
+# as their own paragraphs, each a clone of the row it sits next to, so it keeps that row's font,
+# size, colour and spacing instead of arriving in the document default (a bare <w:p/> prints at
+# 12pt in the theme font inside a 9pt Zetta Serif box).
+_EXTRA_ANCHORS: dict[str, tuple] = {
+    "base": (re.compile(r"\{\{\s*base_bid_formatted\s*\}\}"),),
+    "sales_tax": _PRICE_ROW_TOKENS["material"],
+    "remodel": _PRICE_ROW_TOKENS["remodel"],
+    "total": _PRICE_ROW_TOKENS["total"],
+    "heading_base": "Base Bid",
+}
+# The Options heading is found by the mark `_mark_options_headings` put on the pristine template,
+# not by its words: it reads "Options:", "Options " or "Options & Unit Prices" depending on the
+# file, and the estimator can rename it. Only the lines typed BELOW it are placed by
+# `_insert_line_extras`; the ones above it are the gap's typed lines (`_apply_options_gap`), which
+# sit above the counted blank lines rather than directly on the heading.
+_EXTRA_BY_MARK: dict[str, str] = {"heading_options": _OPTIONS_HEADING_ATTR}
+_MEDIA_TAGS_ANY = (qn("w:drawing"), qn("w:pict"), qn("w:object"))
+
+
+def _heading_text_matches(ptext: str, anchor: str) -> bool:
+    """A heading by its words, with or without a trailing colon: Epoxy and Combo Direct say
+    "Options:", Polish Direct says "Options " — an exact match found one and missed the other."""
+    norm = lambda s: re.sub(r"\s+", " ", str(s or "")).strip().rstrip(":").strip()
+    return bool(anchor) and norm(ptext) == norm(anchor)
+
+
+def _extra_line_paragraph(row_p, text: str, *, keep_numbering: bool = True):
+    """One typed line as its own paragraph, cloned from the PRICE row it sits next to.
+
+    The clone keeps the row's paragraph properties and its first run's font, size and colour. It
+    does not keep what belongs to the row's MEANING rather than its look: the bold of a heading,
+    the underline and review highlight Kyle put on the Remodel Tax row, any media or bookmark the
+    row happened to carry, and the Options heading's own mark (a clone of the heading is not a
+    heading, and the gap must not be printed above it too).
+
+    `keep_numbering=False` also takes the row's list numbering off. A line made before the price
+    bullets are flattened keeps it, so the flatten treats the line exactly like its row; a line
+    made after (the gap's) has nothing left to flatten it, and a bullet on it would print."""
+    p = copy.deepcopy(row_p)
+    if p.get(_OPTIONS_HEADING_ATTR) is not None:
+        del p.attrib[_OPTIONS_HEADING_ATTR]
+    p.set(_TYPED_LINE_ATTR, "1")
+    if not keep_numbering:
+        ppr = p.find(qn("w:pPr"))
+        if ppr is not None:
+            for el in ppr.findall(qn("w:numPr")):
+                ppr.remove(el)
+    for r in list(p.findall(qn("w:r"))):
+        if any(next(r.iter(tag), None) is not None for tag in _MEDIA_TAGS_ANY):
+            p.remove(r)
+    for tag in ("w:bookmarkStart", "w:bookmarkEnd"):
+        for el in list(p.iter(qn(tag))):
+            el.getparent().remove(el)
+    _set_paragraph_text(p, str(text))
+    for rpr in p.iter(qn("w:rPr")):
+        for tag in ("w:highlight", "w:u"):
+            for el in list(rpr.findall(qn(tag))):
+                rpr.remove(el)
+        for tag in ("w:b", "w:bCs"):
+            el = rpr.find(qn(tag))
+            if el is not None:
+                el.set(qn("w:val"), "0")
+    return p
+
+
+def _insert_line_extras(d: Document, extras) -> int:
+    """Put the lines typed above and below each PRICE row into the document as their own
+    paragraphs, next to every copy of that row (mc:Choice and its VML twin alike).
+
+    Runs in Phase 0.5, BEFORE `_apply_line_overrides` (which replaces a row's text and with it the
+    token this finds the row by) and before block expansion (so a row inside {{#single_bid}} or
+    {{#tax_breakout}} carries its lines with it, and a row the rule took out has none to carry).
+    `extras` is {line key: {"before": [text], "after": [text]}}; unknown keys are ignored."""
+    if not isinstance(extras, Mapping) or not extras:
+        return 0
+    n = 0
+    for key, spec in extras.items():
+        mark = _EXTRA_BY_MARK.get(key)
+        anchor = _EXTRA_ANCHORS.get(key)
+        if (anchor is None and mark is None) or not isinstance(spec, Mapping):
+            continue
+        # A marked heading's lines ABOVE it are not this function's (see _EXTRA_BY_MARK).
+        before = [] if mark else [str(t) for t in (spec.get("before") or []) if t is not None]
+        after = [str(t) for t in (spec.get("after") or []) if t is not None]
+        if not before and not after:
+            continue
+        hits = []
+        for p in d.element.body.iter(qn("w:p")):
+            if p.find(".//" + _TXBX_CONTENT) is not None:
+                continue                       # a text box's anchor paragraph, not a row
+            if mark:
+                if p.get(mark) is not None:
+                    hits.append(p)
+                continue
+            txt = "".join(t.text or "" for t in p.iter(qn("w:t")))
+            if isinstance(anchor, str):
+                if _heading_text_matches(txt, anchor):
+                    hits.append(p)
+            elif any(pat.search(txt) for pat in anchor):
+                hits.append(p)
+        for p in hits:
+            for t in before:
+                p.addprevious(_extra_line_paragraph(p, t))
+                n += 1
+            prev = p
+            for t in after:
+                clone = _extra_line_paragraph(p, t)
+                prev.addnext(clone)
+                prev = clone
+                n += 1
+    return n
+
+
+def _strip_highlights(d: Document) -> int:
+    """Take every `w:highlight` out of the customer's document, on every template.
+
+    Hanz, 2026-09-25: "Strip them all." They are Kyle's review markers — the yellow on the Direct
+    files' Remodel Tax row, the yellow / green / cyan on the GC files' "-or-" choices — not customer
+    content; the Gyp file had its own pass by hand in #151 for the same reason. Done at render so no
+    template file changes (their content hashes are what keeps a sent proposal's edits attached).
+    The editor never shows them either (`_fmt_of_run` reads no highlight)."""
+    n = 0
+    for el in list(d.element.body.iter(qn("w:highlight"))):
+        parent = el.getparent()
+        if parent is not None:
+            parent.remove(el)
+            n += 1
+    return n
 
 
 @lru_cache(maxsize=64)
@@ -3811,6 +4012,9 @@ def fill_proposal(
     box_overrides: Mapping[str, Any] | None = None,
     remodel_row: bool = True,
     options_gap: int | None = None,
+    options_gap_typed: list | None = None,
+    price_rows: Mapping[str, Any] | None = None,
+    line_extras: Mapping[str, Any] | None = None,
     fit_report: list | None = None,
 ) -> bytes:
     """Open the matching template, substitute tokens, return docx bytes.
@@ -3845,6 +4049,19 @@ def fill_proposal(
 
     `options_gap` is how many blank lines print directly above the PRICE Options heading
     (`price_overrides.options_gap`; None or anything invalid = 2, see `_apply_options_gap`).
+    `options_gap_typed` are the lines the estimator typed on that gap
+    (`price_overrides.before.heading_options`), printed above the blank ones.
+
+    `price_rows` — {"material", "remodel", "total"} → bool, main.py's answer from the tax rule
+    (price_rules.tax_rule). When given it supersedes `remodel_row`: every row marked False is
+    taken out, FREE OR INSIDE A BLOCK, in every copy (see `_price_row_paragraphs`), so the Direct,
+    GC and Gyp files all print exactly the rows the rule says. None keeps the old behaviour.
+
+    `line_extras` — {line key: {"before": [...], "after": [...]}}: lines the estimator typed
+    above and below the base / tax / total rows and the headings, each printed as its own
+    paragraph (`_insert_line_extras`).
+
+    Every `w:highlight` is taken out of the result (`_strip_highlights`).
 
     `fit_report`, when a list, receives the overflow shrink's per-box decisions (see
     `_shrink_overflowing_text_boxes`); the document is built exactly as without it.
@@ -3871,7 +4088,11 @@ def fill_proposal(
     # every id after it, and finding them afterwards would miss a row the estimator rewrote. A row
     # of that kind is gone when there is no remodel tax, whatever it says — the same as the Direct
     # files' {{#remodel}} region, which no edit can keep either.
-    _no_remodel_rows = [] if remodel_row else _free_remodel_rows(d)
+    if price_rows is not None:
+        _drop = [k for k in ("material", "remodel", "total") if not price_rows.get(k)]
+        _no_remodel_rows = _price_row_paragraphs(d, _drop)
+    else:
+        _no_remodel_rows = [] if remodel_row else _free_remodel_rows(d)
 
     # Phase 0 — apply the document editor's paragraph overrides FIRST, against
     # the pristine (just-opened, unexpanded) template — the same document
@@ -3890,7 +4111,7 @@ def fill_proposal(
             _parent.remove(_row)
             _n_remodel_dropped += 1
     if _n_remodel_dropped:
-        log.info("Took out %d free Remodel Tax row(s): no remodel tax on this job", _n_remodel_dropped)
+        log.info("Took out %d PRICE tax/total row(s) the tax rule does not print", _n_remodel_dropped)
 
     # Phase 1 — expand repeatable blocks. All three always run so their markers
     # are stripped (zero rows when empty) rather than left as literal {{#…}} text
@@ -3927,6 +4148,11 @@ def fill_proposal(
     # drop the token), then per-field LABEL overrides (a no-op on any line already
     # whole-line-replaced, since its anchor token is gone). No-op unless a private
     # `_line_*` / `_*_label_override` key is set.
+    # The lines typed above / below a row go in FIRST: they find their row by the token the
+    # whole-line override is about to replace.
+    _n_extra = _insert_line_extras(d, line_extras)
+    if _n_extra:
+        log.info("Inserted %d typed PRICE line(s) as their own paragraphs", _n_extra)
     _n_line = _apply_line_overrides(d, values)
     if _n_line:
         log.info("Applied %d whole-line PRICE override(s)", _n_line)
@@ -3981,7 +4207,7 @@ def fill_proposal(
         log.info("Flattened %d PRICE bullet row(s)", _n_flat)
     # The blank lines between the price rows and the Options heading: the estimator's count from
     # the editor (default 2, Kyle's double spacing after the Total), replacing the template's own.
-    if _apply_options_gap(d, options_gap):
+    if _apply_options_gap(d, options_gap, options_gap_typed):
         log.info("Printed %d blank line(s) before the PRICE Options heading",
                  options_gap_count(options_gap))
     # Boxes the estimator dragged or resized, FIRST — before the padding and therefore before
@@ -4007,6 +4233,9 @@ def fill_proposal(
     # forced break, so a short body — e.g. combo — spills T&C over the acceptance).
     if _force_terms_on_new_page(d):
         log.info("Forced a page break before the Terms & Conditions section")
+    _n_hl = _strip_highlights(d)
+    if _n_hl:
+        log.info("Took %d review highlight(s) out of the customer document", _n_hl)
     if total_subs == 0 and not systems:
         log.warning(
             "Template has no {{tokens}}: %s. Returning unmodified.",

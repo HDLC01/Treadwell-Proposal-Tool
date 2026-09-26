@@ -429,6 +429,10 @@ const api = new Function(
     fn("lineIsEmpty"), fn("lineRemovable"), fn("removeLine"), fn("unremoveLine"),
     fn("removedBlockIds"), fn("adjacentLine"), fn("caretToLine"), fn("removeLineAt"),
     fn("isNumberedClause"), fn("blanksANumberedClause"), fn("runsArePlain"), fn("storedRuns"),
+    // collectOverrides keeps an untouched PRICE figure of a free price paragraph as its token.
+    topConst("PRICE_TOKENS"), fn("storedText"), fn("isPriceParagraph"),
+    // The Backspace handler hands a typed price line to mergePriceLine first.
+    fn("makeExtraLine"), fn("caretInto"), fn("mergePriceLine"),
     topConst("overrideKey"), topConst("liveKey"), fn("savedVersionMatches"),
     fn("savedOverridesFor"), fn("preserveRichOverrides"), fn("collectOverrides"),
     fn("restoreSavedOverrides"),

@@ -55,6 +55,9 @@ const SRC = fs.readFileSync(path.join(FRONTEND, "js", "proposal-review.js"), "ut
 // The run algebra, the real module the page loads — collectOverrides reads runs off the DOM and
 // the format bar's own state summary comes out of it.
 const F = require(path.join(FRONTEND, "js", "proposal-format-core.js"));
+// The price rule's page half: restoreSavedOverrides reads it (as the bare global the page
+// has) when it migrates a PRICE paragraph saved with its figures frozen in.
+globalThis.TWPrice = require(path.join(FRONTEND, "js", "price-lines-core.js"));
 
 // ── lifting the real source ──────────────────────────────────────────────────
 function fn(name) {
@@ -511,6 +514,14 @@ const LIFTED = [
   fn("ensureFmtBar"), fn("showFmtBar"), fn("idleFmtBar"),
   topConst("overrideKey"), fn("mergeOverrideEntry"), topConst("liveKey"),
   fn("savedOverridesFor"), fn("savedVersionMatches"), fn("restoreSavedOverrides"), fn("collectOverrides"),
+  // A PRICE paragraph (a GC / Gyp tax row, polish Direct's base line) keeps its untouched figures
+  // as {{tokens}} (storedText) and is marked only for a dollar figure of its own
+  // (priceParagraphMoneyOff); setBlockContent shows or hides a free tax row by the rule
+  // (priceRowVisibility). Every one of them is reached from a lifted caller.
+  topConst("PRICE_TOKENS"), topConst("PRICE_AMOUNT_TOKENS"), topConst("_MONEY_TITLE"),
+  fn("storedText"), fn("isPriceParagraph"), fn("priceParagraphMoneyOff"), fn("priceRowVisibility"),
+  // restoreSavedOverrides migrates a PRICE paragraph saved with its figures frozen in.
+  fn("migratePriceParagraphText"),
   // BOTH of those reach isNumberedClause: neither will ship or replay an override that empties a
   // numbered TERMS clause. Left out, it is not a lift-time failure — it is a ReferenceError in
   // the middle of a persist, which is the failure mode the note above fitOffer describes.

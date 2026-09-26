@@ -41,6 +41,9 @@ const FRONTEND = process.argv[2];
 const SRC = fs.readFileSync(path.join(FRONTEND, "js", "proposal-review.js"), "utf8")
   .replace(/\r\n/g, "\n");
 const F = require(path.join(FRONTEND, "js", "proposal-format-core.js"));
+// The price rule's page half: restoreSavedOverrides reads it (as the bare global the page
+// has) when it migrates a PRICE paragraph saved with its figures frozen in.
+globalThis.TWPrice = require(path.join(FRONTEND, "js", "price-lines-core.js"));
 
 // ── lifting the real source ──────────────────────────────────────────────────
 function fn(name) {
@@ -332,6 +335,14 @@ const LIFTED = [
   fn("effectiveWorkType"),
   fn("fillHtml"), fn("fillPlain"), fn("runStyleCss"), fn("blockHtml"),
   fn("singleTokenHint"), fn("setBlockContent"),
+  // A PRICE paragraph (a GC / Gyp tax row, polish Direct's base line) keeps its untouched figures
+  // as {{tokens}} (storedText) and is marked only for a dollar figure of its own
+  // (priceParagraphMoneyOff); setBlockContent shows or hides a free tax row by the rule
+  // (priceRowVisibility). Every one of them is reached from a lifted caller.
+  topConst("PRICE_TOKENS"), topConst("PRICE_AMOUNT_TOKENS"), topConst("_MONEY_TITLE"),
+  fn("storedText"), fn("isPriceParagraph"), fn("priceParagraphMoneyOff"), fn("priceRowVisibility"),
+  // restoreSavedOverrides migrates a PRICE paragraph saved with its figures frozen in.
+  fn("migratePriceParagraphText"),
   // renderBlock reads `para.marker` to draw a numbered clause as its NUMBER, and the input
   // handler below reaches restoreEmptiedClause, which reaches isNumberedClause and the message
   // const. Every one of them has to be here: a callee left out of this list does not fail at
@@ -356,7 +367,7 @@ const LIFTED = [
   // The REAL writer. This is the function that overwrote good data with degraded data, so a
   // harness that imitated it would be testing the imitation.
   fn("schedulePersistOverrides"),
-  fn("refreshFillsInPlace"), fn("refreshDocumentFills"),
+  fn("refreshFillsInPlace"), fn("refreshPriceFillsInPlace"), fn("refreshDocumentFills"),
   // The input handler became a BOX SWEEP when the box became the editing host: one keystroke can
   // change several paragraphs, so it syncs the caret's own line and then every other line in the
   // box that has a pristine text recorded. syncBlock is the per-paragraph half, lifted; the four
@@ -1155,6 +1166,54 @@ const TERMS = [BULLET_115, CLAUSE_51, CLAUSE_52, CLAUSE_53_V5];
   q.mount(GC_PRICE, on, VER);
   out.remodelRow = { whenOff, afterFlipOn, afterFlipOff: p.shown(58), mountedOn: q.shown(58),
                      collectedOff: p.collect() };
+}
+
+// 16 — A PRICE ROW SAVED WITH ITS FIGURE FROZEN IN follows the estimate again. Until 2026-09-26 an
+// edited GC / Gyp price row was stored as the text on screen, so the customer's document printed
+// the figure from the day the words were changed (Omakase's options quoted $46,945 against
+// $51,916). Reopened, a row still carrying TODAY's figure verbatim gets its token back and
+// re-prices from then on; a row carrying a figure that is NOT today's keeps it, marked, so the
+// estimator sees it and Send asks about it.
+{
+  STORE.blob = JSON.parse(JSON.stringify(SEED));
+  const GC_ROWS = [
+    { id: 57, in_block: null, text: "{{material_tax_formatted}} – Material Sales Tax" },
+    { id: 59, in_block: null, text: "{{total_formatted}} – Total" },
+  ];
+  const now = { material_tax_formatted: "$400", tax_amount_formatted: "$0", total_formatted: "$12,500" };
+  STORE.blob.paragraph_overrides_all = { "epoxy:Direct": { template_version: VER, items: [
+    { id: 57, text: "$400 – Material Sales Tax (county rate)" },
+    { id: 59, text: "$11,900 – Total, as agreed" },
+  ] } };
+  const p = makePage("frozen-price-row");
+  p.mount(GC_ROWS, now, VER);
+  p.restore("epoxy", "Direct", now);
+  const cls = (id) => ({ off: p.blockEl(id).classList.contains("tw-money-off"),
+                         amount: p.blockEl(id).dataset.amount || "", title: p.blockEl(id).title || "" });
+  const drawn = { material: p.look(57).text, total: p.look(59).text,
+                  materialCue: cls(57), totalCue: cls(59) };
+  const collected = p.collect();
+  p.refreshFills(Object.assign({}, now, { material_tax_formatted: "$460", total_formatted: "$12,560" }));
+  out.frozenPriceRow = { drawn: drawn, collected: collected,
+                         repriced: p.look(57).text, stillHis: p.look(59).text,
+                         askedAgainst: p.blockEl(59).dataset.amount };
+}
+
+// 17 — ...and a row frozen in ANOTHER MONEY STYLE is the same figure: "$400.00" saved when the
+// preview still printed cents, against today's "$400". It gets its token back like a verbatim one,
+// and is not marked as a figure of his own.
+{
+  STORE.blob = JSON.parse(JSON.stringify(SEED));
+  const GC_ROWS = [{ id: 57, in_block: null, text: "{{material_tax_formatted}} – Material Sales Tax" }];
+  const now = { material_tax_formatted: "$400", tax_amount_formatted: "$0", total_formatted: "$12,500" };
+  STORE.blob.paragraph_overrides_all = { "epoxy:Direct": { template_version: VER, items: [
+    { id: 57, text: "$400.00 – Material Sales Tax (county rate)" },
+  ] } };
+  const p = makePage("cents-price-row");
+  p.mount(GC_ROWS, now, VER);
+  p.restore("epoxy", "Direct", now);
+  out.centsPriceRow = { drawn: p.look(57).text, off: p.blockEl(57).classList.contains("tw-money-off"),
+                        collected: p.collect() };
 }
 
 console.log(JSON.stringify(out));

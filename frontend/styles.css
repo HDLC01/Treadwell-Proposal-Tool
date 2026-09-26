@@ -817,6 +817,14 @@ button {
   vertical-align: super;
   cursor: help;
 }
+/* A PRICE line whose words were edited but whose amount and tax wording still follow the estimate
+   (the markers, proposal-review.js lineOverride) keeps the amber wash — the words are his — and
+   drops the warning mark, which now means one thing only on a price line: a dollar figure of his
+   own (.tw-money-off, with its tooltip, and Send asks). Hanz, 2026-09-25: both his test lines got
+   the mark and froze their amount. */
+.tw-line-edit.tw-overridden.tw-po-live::after { content: none; }
+/* A line typed above or below a price line is his own line, not an override of one. */
+.tw-line-edit.tw-po-extra { background: transparent; }
 
 /* Same reminder on an edited free paragraph that carries a price ($) or an SF/LF
    area measure (e.g. the gyp/GC tax rows, which edit as plain paragraphs). */

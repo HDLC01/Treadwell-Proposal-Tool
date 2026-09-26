@@ -173,7 +173,8 @@ def test_sanitize_price_overrides_caps_and_coerces():
     assert len(long_one["single_bid"]["amount"]) == main._PRICE_OVERRIDE_FIELD_MAXLEN
     # non-dict input never raises
     assert main._sanitize_price_overrides("nope") == {
-        "options": {}, "manual": [], "single_bid": {}, "rows": {}, "alternate": {}, "lines": {}}
+        "options": {}, "manual": [], "single_bid": {}, "rows": {}, "alternate": {}, "lines": {},
+        "lines2": {}, "before": {}, "after": {}}
 
 
 # ── unit: tax-row + alternate sanitize (new keys) ──────────────────────────

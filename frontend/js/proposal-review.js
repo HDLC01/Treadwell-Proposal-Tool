@@ -113,25 +113,22 @@
     return repaintNote(b.say, b.fix);
   }
 
-  // The "Proposal fields" sidebar is hidden (redundant with inline editing), but
-  // tax treatment has no inline equivalent and drives the price line, so a
-  // compact selector lives in the ribbon. Mirror it into the hidden form's
-  // tax_inclusion field and fire a bubbling 'input' so the form's existing
-  // listeners (refreshPriceDisplay + debounced persist) run — no duplicated logic.
+  // THE TAX CONTROL: LAYOUT ONLY. Hanz, 2026-09-25: the estimate sheet decides WHETHER there is
+  // tax (Taxable? for material sales tax, Remodel Tax? for remodel tax, per priced tab); this picks
+  // how it is shown, "One line" or "Broken out". It is stored as `tax_layout` only when somebody
+  // PICKS one here — until then taxLayout() defaults it off the sheet (Broken out whenever a tax
+  // applies) and keeps following the sheet. The select's shown value is painted by
+  // refreshPriceDisplay (the default needs the figures and, for a draft saved before this control,
+  // the template's shape, neither of which exists yet at this line). The bubbling `input` on the
+  // form runs the page's own listeners: the repaint, the document fills and the debounced persist.
   (function wireRibbonTax() {
     const sel = document.getElementById("tax-treatment-select");
-    const hidden = form && form.querySelector("[name='tax_inclusion']");
-    if (!sel || !hidden) return;
-    const norm = (v) => {
-      const u = String(v || "INCLUDED").trim().toUpperCase();
-      if (["EXCLUDED", "EXEMPT", "NOT INCLUDED", "NONE", "NO", "N/A"].includes(u)) return "EXEMPT";
-      if (["BROKEN_OUT", "BROKEN OUT", "BROKENOUT", "ITEMIZED", "BREAKOUT"].includes(u)) return "BROKEN_OUT";
-      return "INCLUDED";
-    };
-    sel.value = norm(hidden.value);                       // reflect the saved/default treatment
+    if (!sel) return;
     sel.addEventListener("change", () => {
-      hidden.value = sel.value;
-      hidden.dispatchEvent(new Event("input", { bubbles: true }));   // → form input listeners
+      const v = sel.value === "BROKEN_OUT" ? "BROKEN_OUT" : "ONE_LINE";
+      state.tax_layout = v;                       // the module snapshot, in place (a primitive)
+      try { TW.setState({ tax_layout: v }); } catch {}
+      if (form) form.dispatchEvent(new Event("input", { bubbles: true }));
     });
   })();
 
@@ -524,99 +521,269 @@
   // safe both inside an HTML title="" attribute and as an .title DOM property.
   const _OVERRIDE_TITLE = "Edited — the printed proposal differs from the computed estimate; the estimate sheet and totals are unchanged.";
 
-  // ── WHOLE-LINE display overrides (state.price_overrides.lines) ─────────────
-  // Every PRICE line is edited as ONE contenteditable line (click anywhere,
-  // rewrite the whole thing, keep spaces). Stored keyed by a stable line key:
+  // ── WHOLE-LINE display overrides — LIVE (state.price_overrides.lines2) ─────────
+  // Every PRICE line is edited as ONE line (click anywhere, rewrite the whole thing, keep spaces).
+  // Stored keyed by a stable line key:
   //   base · heading_base · sales_tax · remodel · total · heading_options
-  //   combo:<role.line> · option:<id> · manual:<idx> · alt_name/alt_flooring/…
-  // Display-only (backend price_overrides.lines) — never touches the .xlsx/totals.
+  //   combo:<role.line> · option:<id> · option:<id>:sales_tax|remodel|total · manual:<idx> · alt_*
+  // Display-only (backend price_overrides) — never touches the .xlsx/totals.
+  //
+  // THE ESTIMATOR'S WORDS, TODAY'S MONEY. Hanz, 2026-09-25, on staging: a line he typed in froze
+  // its dollar amount and its tax wording for good, and every sent revision needed every figure
+  // retyped by hand (Carson Ross rev 2). An edited line now keeps his WORDS while the amount and
+  // the tax wording stay live: wherever the typed line still carries today's computed amount and
+  // tax phrase verbatim, they are stored as TWPrice.AMOUNT / TWPrice.TAX markers in `lines2` and
+  // today's values go back in at every render — here (TWPrice.resolveLine) and in the document
+  // (price_rules.resolve_line), the same substitution. A line whose dollar figure he CHANGED keeps
+  // his figure: it is marked in the editor (tw-money-off, with a tooltip) and Send asks before it
+  // goes. `lines` is only ever a line saved before this shape; it is migrated the first time the
+  // line is drawn (below), and the document prints any it still meets verbatim, as it always did.
+  //
+  // LINES TYPED ABOVE AND BELOW A PRICE LINE ARE THEIR OWN LINES: price_overrides.before[key] /
+  // .after[key], arrays of strings, blank ones included. They print as their own paragraphs in the
+  // price row's own formatting and never freeze the line beside them.
   const COMPUTED_PRICE_LINE_KEYS = new Set(["base", "sales_tax", "remodel", "total"]);
-  function looksLikeComputedPriceLine(key, text) {
-    const s = String(text == null ? "" : text).trim().replace(/\s+/g, " ");
-    const money = "\\$[0-9][0-9,]*(?:\\.\\d{2})?";
-    if (key === "sales_tax") return new RegExp("^" + money + "\\s*[-–—]\\s*Material Sales Tax$", "i").test(s);
-    if (key === "remodel") return new RegExp("^" + money + "\\s*[-–—]\\s*Remodel Tax$", "i").test(s);
-    if (key === "total") return new RegExp("^" + money + "\\s*[-–—]\\s*Total$", "i").test(s);
-    if (key === "base") return new RegExp("^" + money + "\\s*[-–—]\\s*.+\\bas described above\\b(?:\\s*\\([^)]*\\))?$", "i").test(s);
-    return false;
-  }
-  function lineOverride(key, computed) {
+  const _LIVE_TITLE = "Edited — your words are kept; the amount and the tax wording still follow the estimate.";
+  const _MONEY_TITLE = "The amount on this line does not follow the estimate: it prints the figure typed here. Send will ask before it goes.";
+  /** The stored text for a line in the LIVE shape, resolved against today's parts, or null.
+   *
+   *  `parts` = {amount, phrase, slot, candidates}: today's computed amount string for this line,
+   *  its tax wording ("" when it has none), whether it has a place for tax wording at all, and —
+   *  for a line saved before the markers — the other figures the old code could have frozen into
+   *  it (the base line under either layout). */
+  function lineOverride(key, computed, parts) {
     const pov = state.price_overrides;
-    const lines = (pov && typeof pov === "object" && pov.lines && typeof pov.lines === "object") ? pov.lines : null;
-    const v = lines ? lines[key] : null;
-    if (computed != null && typeof v === "string" && v.trim()
-        && String(v) !== String(computed)
-        && COMPUTED_PRICE_LINE_KEYS.has(key)
-        && looksLikeComputedPriceLine(key, v)
-        && looksLikeComputedPriceLine(key, computed)) {
-      // KYLE-3 (2026-09-11): shape alone is not staleness. The base line's shape is "$X - anything
-      // - as described above (...)" -- almost every real hand edit keeps that ending, so shape
-      // matching deleted Kyle's own corrections on every revisit ("I went back to the proposal
-      // screen to make a correction and it didn't carry over"). Require an actual stale SIGNAL,
-      // not merely a resemblance:
-      //   - sales_tax / remodel / total: frozen at $0 while today's math says otherwise. Nobody
-      //     hand-types "$0 - Material Sales Tax" on a real bid; that shape only exists when tax
-      //     priced to nothing at capture time and the mode has since changed.
-      //   - base: still carries one of the three known tax-mode parentheticals, and that exact
-      //     parenthetical no longer matches today's mode. An edit with no parenthetical, or a
-      //     custom one, is never this signal -- only the boilerplate annotation self-heals.
-      let stale = false;
-      if (key === "base") {
-        const KNOWN_TAX_PHRASES = new Set([
-          "(material sales tax included)",
-          "(remodel tax and material sales tax included)",
-          "(tax exempt)",
-        ]);
-        const trailingTaxPhrase = (s) => {
-          const m = /\(([^)]*)\)\s*$/.exec(String(s == null ? "" : s).trim());
-          return m ? ("(" + m[1].trim().toLowerCase() + ")") : "";
-        };
-        const vPhrase = trailingTaxPhrase(v);
-        if (KNOWN_TAX_PHRASES.has(vPhrase)) stale = vPhrase !== trailingTaxPhrase(computed);
-      } else {
-        const isZeroDollarLine = (s) => {
-          const m = /\$[0-9][0-9,]*(?:\.\d{2})?/.exec(String(s == null ? "" : s));
-          return !!m && /^\$?0(\.00)?$/.test(m[0].replace(/,/g, ""));
-        };
-        stale = isZeroDollarLine(v) && !isZeroDollarLine(computed);
+    if (!pov || typeof pov !== "object") return null;
+    const p = parts || {};
+    const own = Object.prototype.hasOwnProperty;
+    // MIGRATE ON LOAD: a line saved before the live shape, the first time it is drawn. Split into
+    // the line itself and the lines typed around it; today's amount (or a figure the old code froze
+    // in) and any tax wording this tool has printed become markers; a "$0 – Total" the old box-wide
+    // sweep froze on a row nobody touched is dropped. What is left and still differs from the
+    // computed line is the estimator's.
+    if (pov.lines && typeof pov.lines === "object" && typeof pov.lines[key] === "string"
+        && !(pov.lines2 && typeof pov.lines2 === "object" && own.call(pov.lines2, key))
+        && p.amount !== undefined) {
+      const m = TWPrice.migrateLine(pov.lines[key], {
+        amount: p.amount, phrase: p.phrase || "", slot: !!p.slot,
+        candidates: Array.isArray(p.candidates) ? p.candidates : [],
+        zeroIsPhantom: COMPUTED_PRICE_LINE_KEYS.has(key) || /:(sales_tax|remodel|total)$/.test(key),
+      });
+      if (!pov.lines2 || typeof pov.lines2 !== "object" || Array.isArray(pov.lines2)) pov.lines2 = {};
+      if (!m.drop && m.main != null && m.main.trim()
+          && TWPrice.resolveLine(m.main, p.amount, p.phrase) !== String(computed)) {
+        pov.lines2[key] = m.main;
       }
-      if (stale) {
-        delete lines[key];
-        try { queuePovSave(); } catch {}
-        return null;
-      }
+      [["before", m.before], ["after", m.after]].forEach(([bucket, rows]) => {
+        if (!rows || !rows.length) return;
+        if (!pov[bucket] || typeof pov[bucket] !== "object" || Array.isArray(pov[bucket])) pov[bucket] = {};
+        if (!Array.isArray(pov[bucket][key]) || !pov[bucket][key].length) pov[bucket][key] = rows.slice();
+      });
+      delete pov.lines[key];
+      try { queuePovSave(); } catch {}
     }
-    return (typeof v === "string" && v.trim()) ? v : null;
+    const v = pov.lines2 && typeof pov.lines2 === "object" ? pov.lines2[key] : null;
+    if (typeof v === "string" && v.trim()) return TWPrice.resolveLine(v, p.amount, p.phrase);
+    const l = pov.lines && typeof pov.lines === "object" ? pov.lines[key] : null;
+    return (typeof l === "string" && l.trim()) ? l : null;
   }
-  function lineValue(key, computed) {
-    const ov = lineOverride(key, computed);
+  function lineValue(key, computed, parts) {
+    const ov = lineOverride(key, computed, parts);
     return ov != null ? ov : computed;
   }
-  // Markup for a JS-rendered whole-line (combo / option / manual / alternate).
+  /** Which cue an edited line carries: none, "live" (his words, today's money), "money" (a figure
+   *  of his own), or "legacy" (a line in the old verbatim shape, which the document prints as is). */
+  function lineCue(key, shown, computed) {
+    if (String(shown) === String(computed)) return "";
+    const pov = state.price_overrides || {};
+    const v = pov.lines2 && typeof pov.lines2 === "object" ? pov.lines2[key] : null;
+    if (typeof v === "string") return TWPrice.moneyOff(v) ? "money" : "live";
+    return "legacy";
+  }
+  const _escLine = (s) => String(s == null ? "" : s).replace(/[&<>"']/g,
+    c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  /** The lines typed above ("before") or below ("after") one price line, as markup. */
+  function extraLinesHtml(key, pos, style) {
+    const pov = state.price_overrides || {};
+    const rows = pov[pos] && typeof pov[pos] === "object" ? pov[pos][key] : null;
+    if (!Array.isArray(rows) || !rows.length) return "";
+    return rows.map(t => `<p class="tw-priceline tw-line-edit tw-po-extra" spellcheck="false"` +
+      ` data-po-kind="extra" data-po-linekey="${_escLine(key)}" data-po-pos="${pos}"` +
+      ` style="${_escLine(style || "margin:0 0 2pt;")}">${_escLine(t)}</p>`).join("");
+  }
+  // Markup for a JS-rendered whole-line (combo / option / manual / alternate), with the lines typed
+  // above and below it. `opts.parts` is what an edited line's markers resolve against.
   function lineEl(key, computed, opts) {
-    const e = (s) => String(s == null ? "" : s).replace(/[&<>"']/g,
-      c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-    const shown = lineValue(key, computed);
-    const ov = String(shown) !== String(computed);
+    const e = _escLine;
+    const parts = (opts && opts.parts) || {};
+    const shown = lineValue(key, computed, parts);
+    const cue = lineCue(key, shown, computed);
     const style = (opts && opts.style) || "margin:0 0 2pt;";
     const bold = (opts && opts.bold) ? "font-weight:bold;" : "";
+    const cls = cue ? " tw-overridden" + (cue === "live" ? " tw-po-live" : cue === "money" ? " tw-money-off" : "") : "";
+    const title = cue === "live" ? _LIVE_TITLE : cue === "money" ? _MONEY_TITLE : cue ? _OVERRIDE_TITLE : "";
     // No contenteditable of its own -- see renderBlock. The box is the host; this inherits.
-    return `<p class="tw-priceline tw-line-edit${ov ? " tw-overridden" : ""}" spellcheck="false"` +
+    return extraLinesHtml(key, "before", style) +
+           `<p class="tw-priceline tw-line-edit${cls}" spellcheck="false"` +
            ` data-po-kind="line" data-po-linekey="${e(key)}" data-computed="${e(computed)}"` +
-           (ov ? ` title="${_OVERRIDE_TITLE}"` : "") +
-           ` style="${style}${bold}">${e(shown)}</p>`;
+           ` data-amount="${e(parts.amount || "")}" data-phrase="${e(parts.phrase || "")}"` +
+           ` data-slot="${parts.slot ? "1" : ""}"` +
+           (title ? ` title="${title}"` : "") +
+           ` style="${style}${bold}">${e(shown)}</p>` +
+           extraLinesHtml(key, "after", style);
   }
-  // Repaint a static whole-line element (the base/tax/total/heading <p>s in the
-  // HTML staging): show the override or the freshly-computed line, flag ⚠, set
-  // data-computed for revert. Skip while the caret is inside (self-heals on blur).
-  function paintLine(el, key, computed) {
+  /** Keep a STATIC row's typed lines (above and below it) in the page next to it: drawn when the row
+   *  shows, taken away when it is hidden — a row that does not print has no lines to carry. */
+  function paintExtras(el, key) {
+    if (!el || !el.parentNode || typeof document === "undefined" || !document.createElement) return;
+    const parent = el.parentNode;
+    // The lines typed ABOVE the Options heading are the gap's typed lines: they sit above the
+    // counted blank lines, not directly on the heading, and paintOptionsGap draws them there.
+    const gapOwned = key === "heading_options";
+    const mine = Array.from(parent.children || []).filter(n => n !== el && n.dataset
+      && n.dataset.poKind === "extra" && n.dataset.poLinekey === key
+      && !(gapOwned && n.dataset.poPos === "before"));
+    if (mine.some(n => focusInside(n))) return;       // the caret is in one: self-heals on blur
+    mine.forEach(n => n.remove());
+    if (el.style && el.style.display === "none") return;
+    const pov = state.price_overrides || {};
+    const before = gapOwned ? []
+      : pov.before && Array.isArray(pov.before[key]) ? pov.before[key] : [];
+    const after = pov.after && Array.isArray(pov.after[key]) ? pov.after[key] : [];
+    before.forEach(t => parent.insertBefore(makeExtraLine(el, key, "before", t), el));
+    let at = el;
+    after.forEach(t => { const n = makeExtraLine(el, key, "after", t); parent.insertBefore(n, at.nextSibling); at = n; });
+  }
+  /** One typed line next to price line `el`, in that line's own spacing (never its bold). */
+  function makeExtraLine(el, key, pos, text) {
+    const n = document.createElement("p");
+    n.className = "tw-priceline tw-line-edit tw-po-extra";
+    n.spellcheck = false;
+    n.dataset.poKind = "extra";
+    n.dataset.poLinekey = key;
+    n.dataset.poPos = pos;
+    const style = el && el.getAttribute
+      ? (el.getAttribute("style") || "").replace(/display\s*:\s*none;?/g, "") : "";
+    n.setAttribute("style", style || "margin:0 0 2pt;");
+    n.style.fontWeight = "normal";
+    n.textContent = String(text == null ? "" : text);
+    return n;
+  }
+  /** The caret into `el` at `at`, an EMPTY line included (pointAt needs a text node to land in). */
+  function caretInto(el, at) {
+    if (serializeBlock(el).length) { placeSelection(el, at, at); return; }
+    try {
+      const r = document.createRange();
+      r.setStart(el, 0);
+      r.collapse(true);
+      const s = window.getSelection();
+      s.removeAllRanges();
+      s.addRange(r);
+    } catch {}
+  }
+  /** ENTER IN A PRICE LINE makes a new line of its own, the way Word does — never a break inside
+   *  the line. Hanz, 2026-09-25: what he typed under the base line and under an option became text
+   *  inside those lines, froze their amounts, and printed as line breaks in one paragraph. Now the
+   *  text after the caret moves to a new line under it (an empty one at the end of the line), and
+   *  Enter at the very start of a price line opens a blank line above it. The new line is stored
+   *  beside the price line (price_overrides.after / .before) by the box sweep. */
+  function splitPriceLine(el, start, end) {
+    if (!el || !el.parentNode) return false;
+    const key = el.dataset.poLinekey;
+    const isMain = el.dataset.poKind === "line";
+    const text = serializeBlock(el);
+    if (isMain && start === 0 && end === 0 && text.length) {
+      el.parentNode.insertBefore(makeExtraLine(el, key, "before", ""), el);
+      caretInto(el, 0);
+    } else {
+      const head = text.slice(0, start), tail = text.slice(end);
+      if (head !== text) el.textContent = head;
+      const n = makeExtraLine(el, key, isMain ? "after" : (el.dataset.poPos || "after"), tail);
+      el.parentNode.insertBefore(n, el.nextSibling);
+      caretInto(n, 0);
+    }
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    return true;
+  }
+  /** Backspace at the start / Delete at the end of a price line, across a TYPED line: the typed
+   *  line joins the one next to it, or, empty, simply goes. A price line itself is never merged
+   *  into another line — it is one row of the customer's price block. Returns true when handled. */
+  function mergePriceLine(el, dir) {
+    const key = el.dataset.poLinekey;
+    const same = (n) => !!(n && n.dataset && n.dataset.poLinekey === key
+      && (n.dataset.poKind === "line" || n.dataset.poKind === "extra"));
+    const isExtra = (n) => same(n) && n.dataset.poKind === "extra";
+    const fire = (n) => n.dispatchEvent(new Event("input", { bubbles: true }));
+    if (dir === "up") {
+      const prev = el.previousElementSibling;
+      if (isExtra(el) && same(prev)) {
+        const at = serializeBlock(prev).length;
+        prev.textContent = serializeBlock(prev) + serializeBlock(el);
+        el.remove();
+        caretInto(prev, at);
+        fire(prev);
+        return true;
+      }
+      if (isExtra(prev) && !serializeBlock(prev).length) {      // an empty typed line above: remove it
+        prev.remove();
+        caretInto(el, 0);
+        fire(el);
+        return true;
+      }
+      if (isExtra(el) && !serializeBlock(el).length) {          // an empty typed line: remove it
+        const host = editingBox(el);
+        // The caret goes to the end of the line SHOWN above: a row the layout hides (the tax rows
+        // under one line) sits in the box too, and a caret put in it is a caret nobody can see.
+        let back = prev;
+        while (back && ((back.style && back.style.display === "none") || back.hidden)) {
+          back = back.previousElementSibling;
+        }
+        back = back && back.classList && back.classList.contains("tw-line-edit") ? back : null;
+        el.remove();
+        if (back) { caretInto(back, serializeBlock(back).length); fire(back); }
+        else if (host) host.dispatchEvent(new Event("input", { bubbles: true }));
+        return true;
+      }
+      return false;
+    }
+    const next = el.nextElementSibling;
+    if (isExtra(next) && (next.dataset.poPos === "after" || isExtra(el))) {
+      if (!isExtra(el) && next.dataset.poPos !== "after") return false;
+      const at = serializeBlock(el).length;
+      el.textContent = serializeBlock(el) + serializeBlock(next);
+      next.remove();
+      caretInto(el, at);
+      fire(el);
+      return true;
+    }
+    if (isExtra(el) && same(next) && !serializeBlock(el).length) {   // an empty line above its row
+      el.remove();
+      caretInto(next, 0);
+      fire(next);
+      return true;
+    }
+    return false;
+  }
+  // Repaint a static whole-line element (the base/tax/total/heading <p>s in the HTML staging):
+  // show the override or the freshly-computed line, carry the cue, set data-computed (and the
+  // parts its markers resolve against) for the sweep. Skip while the caret is inside (self-heals
+  // on blur).
+  function paintLine(el, key, computed, parts) {
     if (!el || focusInside(el)) return;
+    const p = parts || {};
     el.dataset.computed = computed;
-    const shown = lineValue(key, computed);
+    el.dataset.amount = p.amount || "";
+    el.dataset.phrase = p.phrase || "";
+    el.dataset.slot = p.slot ? "1" : "";
+    const shown = lineValue(key, computed, p);
     el.textContent = shown;
-    const ov = String(shown) !== String(computed);
-    el.classList.toggle("tw-overridden", ov);
-    if (ov) el.title = _OVERRIDE_TITLE; else el.removeAttribute("title");
+    const cue = lineCue(key, shown, computed);
+    el.classList.toggle("tw-overridden", !!cue);
+    el.classList.toggle("tw-po-live", cue === "live");
+    el.classList.toggle("tw-money-off", cue === "money");
+    const title = cue === "live" ? _LIVE_TITLE : cue === "money" ? _MONEY_TITLE : cue ? _OVERRIDE_TITLE : "";
+    if (title) el.title = title; else el.removeAttribute("title");
+    paintExtras(el, key);
   }
 
   // Recompute the base bid + priced options from the per-tab totals snapshotted on
@@ -691,8 +858,16 @@
       }
     }
     let shownBase, salesTax, remodelTax;
+    // The sheet's Taxable? / Remodel Tax? answers for a tab, as the Estimate step snapshotted them
+    // (estimate-review.js snapshotLumpSumsToState). A snapshot from before they travelled has none,
+    // and the tab's own tax figure answers instead (TWPrice.taxRule: its cell is 0 exactly when the
+    // flag says No). A combined base is taxable if either sheet is.
+    const tFlag = (t, k) => (t && typeof t[k] === "boolean") ? t[k] : undefined;
+    const orFlag = (a, b) => (a === undefined && b === undefined) ? undefined : (a === true || b === true);
+    let baseTaxable, baseRemodelOn;
     if (baseTab) {
       shownBase = N(baseTab.total); salesTax = N(baseTab.sales_tax); remodelTax = N(baseTab.remodel);
+      baseTaxable = tFlag(baseTab, "taxable"); baseRemodelOn = tFlag(baseTab, "remodel_on");
     } else {
       // No explicit base: work_type fallback (combo = Epoxy + Polish base tabs;
       // gyp = the single gyp base tab).
@@ -707,18 +882,31 @@
       else if (wt === "polish") { baseTab = pB || null; shownBase = N(pB && pB.total); salesTax = N(pB && pB.sales_tax); remodelTax = N(pB && pB.remodel); }
       else if (wt === "combo") { baseTab = eB || null; shownBase = N(eB && eB.total) + N(pB && pB.total); salesTax = N(eB && eB.sales_tax) + N(pB && pB.sales_tax); remodelTax = N(eB && eB.remodel) + N(pB && pB.remodel); }
       else { baseTab = eB || null; shownBase = N(eB && eB.total); salesTax = N(eB && eB.sales_tax); remodelTax = N(eB && eB.remodel); }
+      if (wt === "combo") {
+        baseTaxable = orFlag(tFlag(eB, "taxable"), tFlag(pB, "taxable"));
+        baseRemodelOn = orFlag(tFlag(eB, "remodel_on"), tFlag(pB, "remodel_on"));
+      } else {
+        baseTaxable = tFlag(baseTab, "taxable"); baseRemodelOn = tFlag(baseTab, "remodel_on");
+      }
     }
     state.proposal_lump_sum = shownBase;
     state.proposal_sales_tax = salesTax;
     state.proposal_remodel_tax = remodelTax;
+    state.proposal_taxable = baseTaxable;
+    state.proposal_remodel_on = baseRemodelOn;
     const baseDesc = baseTab ? (baseTab.system_desc || "") : "";
     const mkRoom = (t, isBase) => {
       const total = isBase ? shownBase : N(t.total);
       const o = opts[t.id] || {};
       const desc = t.system_desc || t.name;
+      // Each option's OWN tab says whether it is taxed; the base row carries the base's answer.
+      const tx = isBase ? baseTaxable : tFlag(t, "taxable");
+      const rm = isBase ? baseRemodelOn : tFlag(t, "remodel_on");
       return {
         id: t.id, name: t.name, is_base: !!isBase,
-        bid: { total, sales_tax: N(t.sales_tax), remodel: N(t.remodel) },
+        bid: Object.assign({ total, sales_tax: N(t.sales_tax), remodel: N(t.remodel) },
+                           tx === undefined ? {} : { taxable: tx },
+                           rm === undefined ? {} : { remodel_on: rm }),
         base_total: shownBase, deduct_amount: shownBase - total,
         price_mode: isBase ? "total" : (o.price_mode === "deduct" ? "deduct" : "total"),
         show: isBase ? true : (o.show !== false),
@@ -754,6 +942,7 @@
     const _pp = syncPayloadPricing();
     TW.setState({ rooms: state.rooms, base_tab_id: state.base_tab_id, tab_opts: state.tab_opts,
       proposal_lump_sum: shownBase, proposal_sales_tax: salesTax, proposal_remodel_tax: remodelTax,
+      proposal_taxable: baseTaxable, proposal_remodel_on: baseRemodelOn,
       sheet_area: state.sheet_area, ...(_pp ? { proposal_payload: _pp } : {}) });
   }
 
@@ -777,6 +966,11 @@
     "total_formatted", "base_bid_formatted", "material_tax_formatted",
     // The parenthetical after the base-bid line — changes with the tax treatment.
     "base_tax_phrase", "tax_phrase", "sales_tax_handling", "tax_inclusion",
+    // The tax LAYOUT and the sheet's two tax answers the document's rule reads (price_rules): a
+    // base flip onto a tab with a different Taxable? / Remodel Tax? answer changes the wording and
+    // the rows, and the layout's default follows them.
+    "tax_layout", "price_taxable", "price_remodel_on",
+    "price_rows_material", "price_rows_remodel", "price_rows_total",
     // Area tokens: rebuildPricing re-derives state.sheet_area from the base tab, so a flip
     // changes the SF the proposal quotes.
     "epoxy_sf", "polish_sf", "cove_lf", "lf", "sqft", "area_description",
@@ -790,13 +984,21 @@
     "work_areas", "cover_system_line",
   ];
 
+  /** Bring the four computed rows' saved lines into the LIVE shape against the document's own
+   *  figures, before the payload goes: a line saved before the markers is migrated here if the page
+   *  has not drawn it yet (see lineOverride), so the payload never carries a frozen figure that the
+   *  screen has already turned live. */
   function pruneComputedPriceLineOverrides(values) {
     if (!values || typeof values !== "object") return;
     const phrase = values.base_tax_phrase ? ` ${values.base_tax_phrase}` : "";
-    lineOverride("base", `${values.base_bid_formatted} – ${baseDescLabel()}${phrase}`);
-    lineOverride("sales_tax", `${values.material_tax_formatted} – Material Sales Tax`);
-    lineOverride("remodel", `${values.tax_amount_formatted} – Remodel Tax`);
-    lineOverride("total", `${values.total_formatted} – Total`);
+    lineOverride("base", `${values.base_bid_formatted} – ${baseDescLabel()}${phrase}`,
+      { amount: values.base_bid_formatted, phrase: values.base_tax_phrase || "", slot: true,
+        candidates: [values.total_formatted] });
+    lineOverride("sales_tax", `${values.material_tax_formatted} – Material Sales Tax`,
+      { amount: values.material_tax_formatted });
+    lineOverride("remodel", `${values.tax_amount_formatted} – Remodel Tax`,
+      { amount: values.tax_amount_formatted });
+    lineOverride("total", `${values.total_formatted} – Total`, { amount: values.total_formatted });
   }
 
   /** Patch the stored generate payload's PRICING slice from current state. Returns the patched
@@ -884,6 +1086,8 @@
     pp.values.proposal_lump_sum = state.proposal_lump_sum;
     pp.values.proposal_sales_tax = state.proposal_sales_tax;
     pp.values.proposal_remodel_tax = state.proposal_remodel_tax;
+    pp.values.proposal_taxable = state.proposal_taxable;
+    pp.values.proposal_remodel_on = state.proposal_remodel_on;
     pp.values.sheet_area = state.sheet_area;
     // Payload-level pricing structures, mirroring continueToDone's own construction.
     const remodelTax = Number(state.proposal_remodel_tax) || 0;
@@ -891,6 +1095,8 @@
     pp.remodel = remodelTax > 0 ? [{ amount_formatted: fmtUSDdoc(remodelTax) }] : [];
     // Clears itself when a combo is narrowed to one base — comboLinesForPayload returns [] then.
     pp.combo_options = comboLinesForPayload();
+    // The lines that print a figure of the estimator's own, for Send to ask about (done.js).
+    pp.price_warnings = priceWarnings();
     // The WORK section's system rows are resolved from the BASE tab's own cells, so they follow a
     // base flip as much as the price does. Same filter as continueToDone.
     try {
@@ -902,85 +1108,90 @@
     return pp;
   }
 
-  // Tax-treatment mode, read from the sidebar's dropdown. Shared by the
-  // single-bid layout (refreshPriceDisplay) and the combo per-option breakout
-  // (comboSystemLines) so BOTH branches honor the same estimator choice — the
-  // combo branch used to hardcode "INCLUDED" wording and ignore this entirely.
+  /** The BASE bid as one priced system for the tax rule: the lump sum the page shows, the base
+   *  tab's own tax cells, and the sheet's Taxable? / Remodel Tax? answers for it (rebuildPricing /
+   *  the Estimate step's snapshot). A figure this draft never recorded stays null — the rule then
+   *  reads the job as taxable, which is what such a draft always printed. */
+  function basePriceSystem() {
+    const lumpSumText = document.querySelector("#tb-total")?.textContent || "$0.00";
+    const total = Number(String(lumpSumText).replace(/[^0-9.-]/g, "")) || 0;
+    const fb = (state.computed_bid && state.computed_bid.full_bid) || {};
+    const sales = state.proposal_sales_tax != null ? state.proposal_sales_tax : fb.sales_tax;
+    const remodel = state.proposal_remodel_tax != null ? state.proposal_remodel_tax : fb.remodel_tax;
+    return { total, sales_tax: sales == null ? null : Number(sales) || 0,
+             remodel: Number(remodel) || 0,
+             taxable: state.proposal_taxable, remodel_on: state.proposal_remodel_on };
+  }
+
+  /** "ONE_LINE" or "BROKEN_OUT" — the TAX control's answer (TWPrice.layoutFor has the table).
+   *
+   *  `tax_layout` is what the estimator picked in the ribbon. A draft from before that control
+   *  carries the old three-way `tax_inclusion` and is read by what it printed: Broken out stays
+   *  Broken out, Included and Exempt were one line (exempt now comes from the sheet) — except on a
+   *  template whose tax rows are plain paragraphs (GC, Gyp), which itemised whatever the box said
+   *  and so take the new default. A draft with neither takes the default Hanz asked for, Broken out
+   *  whenever the base tab's Taxable? or Remodel Tax? is Yes, and keeps following the sheet until
+   *  somebody picks. */
+  function taxLayout() {
+    const f = TWPrice.taxRule(basePriceSystem(), false);
+    let freeRows = false;
+    try {
+      freeRows = (templateBlocks || []).some(b => b && b.in_block == null
+        && /\{\{\s*(material_tax_formatted|tax_amount_formatted|remodel\.amount_formatted)\s*\}\}/.test(String(b.text || "")));
+    } catch { freeRows = false; }
+    return TWPrice.layoutFor(state.tax_layout, state.tax_inclusion, freeRows, f.taxable, f.remodel_on);
+  }
+
+  // The tax LAYOUT, as the rest of this page asks for it. `exempt` is always false now: whether a
+  // job is exempt is the sheet's answer (Taxable? = No, Remodel Tax? = No), and the wording that
+  // says so comes out of the rule (TWPrice.phraseFor), not out of this control.
   function taxTreatmentMode() {
-    const incl = String((form.querySelector("[name='tax_inclusion']") || {}).value || "INCLUDED").trim().toUpperCase();
-    const exempt = ["EXCLUDED", "EXEMPT", "NOT INCLUDED", "NONE", "NO", "N/A"].includes(incl);
-    const broken = ["BROKEN_OUT", "BROKEN OUT", "BROKENOUT", "ITEMIZED", "BREAKOUT"].includes(incl);
-    return { incl, exempt, broken };
+    const layout = taxLayout();
+    const broken = layout === "BROKEN_OUT";
+    return { incl: broken ? "BROKEN_OUT" : "INCLUDED", exempt: false, broken, layout };
   }
 
-  /** Which of the PRICE block's tax rows this proposal will ACTUALLY print:
-   *  `{material, remodel}`.
+  /** THE RULE for the base bid, as the page shows it and the document prints it. */
+  function baseTaxRule() {
+    return TWPrice.taxRule(basePriceSystem(), taxTreatmentMode().broken);
+  }
+
+  /** Which of the PRICE block's rows print: `{material, remodel, total}`.
    *
-   *  Two sources, one question. The estimator's tax mode fills or strips the
-   *  `{{#tax_breakout}}` / `{{#remodel}}` regions; the TEMPLATE'S OWN SHAPE decides
-   *  whether there is anything to strip. Kyle's Direct files wrap those rows in
-   *  those regions, so they print only in "Sales tax broken out"; the three GC files
-   *  and the Gyp file author the same rows as PLAIN paragraphs, which no flag can
-   *  strip — they print on every fill.
-   *
-   *  READ OFF THE SERVED BLOCK DATA, never off the audience or the work type:
-   *  /api/proposal-template already gives every paragraph its `text` and its
-   *  `in_block`, and `in_block === null` IS "outside every strippable region". A
-   *  hard-coded `audience === "GC"` list answers today's eight files and silently
-   *  mis-answers the next one Kyle re-authors with or without a wrapper — the same
-   *  layout-keyed-vs-label-keyed hole PR #432/#433 closed for the remodel rate.
-   *
-   *  Before the template loads `templateBlocks` is null, so the shape is unknown and
-   *  this answers "gated" — the right preview default for the four Direct files, and
-   *  harmless either way, because `_generate` re-derives all of this from the
-   *  template FILE and overwrites `base_bid_formatted`. The document is never at the
-   *  mercy of what the browser had loaded when Continue was pressed. */
+   *  THE SHEET AND THE LAYOUT, NOT THE TEMPLATE. Material Sales Tax prints only when the base tab
+   *  is taxable, Remodel Tax only when remodel is on, and both — with the Total — only when Broken
+   *  out. The template's shape no longer changes the answer: the render takes a row that does not
+   *  apply out of every template, the GC and Gyp files' plain paragraphs included (fill_proposal
+   *  `price_rows`), so "which rows print" is the same question on all eight. */
   function printedTaxRows() {
-    const { broken } = taxTreatmentMode();
-    let material = false, remodel = false;
-    for (const b of (templateBlocks || [])) {
-      if (b.in_block != null) continue;          // inside a region a fill can strip
-      const t = String(b.text || "");
-      if (/\{\{\s*material_tax_formatted\s*\}\}/.test(t)) material = true;
-      if (/\{\{\s*(tax_amount_formatted|remodel\.amount_formatted)\s*\}\}/.test(t)) remodel = true;
-    }
-    return { material: material || broken, remodel: remodel || broken };
+    const r = baseTaxRule();
+    return { material: r.material, remodel: r.remodel, total: r.total };
   }
 
-  /** THE base-bid figure — `{base, itemized}` — for the on-screen PRICE block AND
-   *  for the generated .docx. THE RULE: base = Total minus every tax row that prints.
+  /** THE base-bid figure — `{base, itemized, rule}` — for the on-screen PRICE block AND for the
+   *  generated .docx, and the pattern everything priced on this page follows: ONE rule, called by
+   *  every writer. `refreshPriceDisplay` paints the rows off it and `computeTokenValues` fills
+   *  {{base_bid_formatted}} off it, so the figure the estimator proofreads is the figure the
+   *  customer reads (Kyle, 2026-09-08: $6,182 on screen under a $6,307 estimate).
    *
-   *  ONE EXPRESSION, TWO CALLERS, and that is the whole point. This page used to
-   *  compute the displayed base twice: `refreshPriceDisplay` painted `Total` in the
-   *  default layout while `computeTokenValues` shipped `Total − sales − remodel` as
-   *  {{base_bid_formatted}} — and a template whose base line is a FREE paragraph
-   *  (polish Direct, every GC file) prints that token directly, so the two answers
-   *  were visibly different numbers for the same line. Kyle, 2026-09-08: a proposal
-   *  reading $6,182 under a $6,307 estimate. The GC block had the mirror-image fault,
-   *  printing 6,307 + 125 + 0 under a 6,307 Total. One rule fixes both, because it
-   *  asks what the page actually prints instead of who the proposal is for.
-   *
-   *  Rounded to CENTS before subtracting: cents are the precision the document prints
-   *  at, so base + tax rows equal the Total exactly rather than within a rounding
-   *  error (the backend reads the same figures back off the formatted strings).
-   *  `itemized` — "the tax rows print" — also drives the layout and the base line's
-   *  parenthetical, so those cannot disagree with the arithmetic either. */
+   *  The rule is TWPrice.taxRule, in cents: Broken out, the base is the Total less the tax rows that
+   *  print (the sheet's own tax cells, never a guessed rate — the bid is tax-inclusive and sales tax
+   *  compounds through markup); one line, it is the whole Total. `itemized` is "Broken out". The
+   *  arguments are the figures the caller already holds; the flags come off the base tab. */
   function baseBidFigure(total, salesTax, remodelTax) {
-    const cents = (n) => Math.round((Number(n) || 0) * 100) / 100;
-    const p = printedTaxRows();
-    const base = cents(total)
-               - (p.material ? cents(salesTax) : 0)
-               - (p.remodel ? cents(remodelTax) : 0);
-    return { base: Math.max(0, base), itemized: p.material || p.remodel };
+    const rule = TWPrice.taxRule({ total, sales_tax: salesTax, remodel: remodelTax,
+      taxable: state.proposal_taxable, remodel_on: state.proposal_remodel_on },
+      taxTreatmentMode().broken);
+    return { base: rule.base_cents / 100, itemized: rule.broken, rule };
   }
 
-  // Combo per-option price breakout: Option 1 (Epoxy) + Option 2 (Polish), each
-  // with its own flooring / tax line(s) / Total — from the per-tab totals
-  // snapshotted on the Estimate screen. Only for the combined-combo default (no
-  // single base picked). Options are numbered by RENDER ORDER (not a fixed
-  // epoxy=1/polish=2) so a zeroed-out epoxy tab doesn't leave a doc that jumps
-  // straight to "Option 2" with no "Option 1" anywhere. Returns pre-formatted
-  // {amount_formatted, label} lines.
+  // Combo per-option price breakout: Option 1 (Epoxy) + Option 2 (Polish), each off its own tab by
+  // the same rule as every other price line — one line carrying that system's own tax wording, or,
+  // Broken out, its pre-tax line, the tax rows its flags call for, and its Total, adding up. From
+  // the per-tab totals snapshotted on the Estimate screen. Only for the combined-combo default (no
+  // single base picked). Options are numbered by RENDER ORDER (not a fixed epoxy=1/polish=2) so a
+  // zeroed-out epoxy tab doesn't leave a doc that jumps straight to "Option 2" with no "Option 1"
+  // anywhere. Returns pre-formatted {key, amount_formatted, label, phrase, slot} lines.
   function comboSystemLines() {
     const wt = (state.work_type || "epoxy").toLowerCase();
     if (wt !== "combo" || state.base_tab_id) return [];
@@ -988,7 +1199,7 @@
     const eB = all.find(t => t.role === "epoxy" && t.kind === "base") || all.find(t => t.role === "epoxy");
     const pB = all.find(t => t.role === "polish" && t.kind === "base") || all.find(t => t.role === "polish");
     const N = (v) => Number(v) || 0;
-    const { exempt, broken } = taxTreatmentMode();
+    const { broken } = taxTreatmentMode();
     const lines = [];
     let optionNum = 0;
     // `role` ("epoxy"/"polish") gives each line a STABLE semantic key
@@ -997,32 +1208,16 @@
     const pushSys = (sys, noun, role) => {
       if (!sys) return;
       const total = N(sys.total); if (total <= 0) return;
-      const remodel = N(sys.remodel);
-      const salesTax = N(sys.sales_tax);
+      const rule = TWPrice.taxRule({ total, sales_tax: sys.sales_tax, remodel: sys.remodel,
+        taxable: sys.taxable, remodel_on: sys.remodel_on }, broken);
       optionNum += 1;
       const optLabel = `Option ${optionNum}`;
-      if (broken) {
-        // Broken out: base (pre-tax) + Material Sales Tax + Remodel Tax = Total —
-        // mirrors the non-combo broken-out layout, no "(…INCLUDED)" phrase.
-        const flooring = total - remodel - salesTax;
-        lines.push({ key: `${role}.flooring`, amount_formatted: fmtUSDdoc(flooring), label: `${optLabel}: ${noun} as described above` });
-        if (salesTax > 0) lines.push({ key: `${role}.sales_tax`, amount_formatted: fmtUSDdoc(salesTax), label: "Material Sales Tax" });
-        if (remodel > 0) lines.push({ key: `${role}.remodel`, amount_formatted: fmtUSDdoc(remodel), label: "Kansas Remodel Tax" });
-      } else if (exempt) {
-        // Tax exempt: the full total carries the "(tax exempt)" phrase — no sales
-        // tax is baked in to strip out. Remodel line only if the snapshot actually
-        // has one (normally zero on an exempt job).
-        lines.push({ key: `${role}.flooring`, amount_formatted: fmtUSDdoc(total), label: `${optLabel}: ${noun} as described above (tax exempt)` });
-        if (remodel > 0) lines.push({ key: `${role}.remodel`, amount_formatted: fmtUSDdoc(remodel), label: "Kansas Remodel Tax" });
-      } else {
-        // Included (default): one all-in flooring line + a separate remodel line
-        // when it applies — this is the pre-existing combo wording.
-        const flooring = total - remodel;
-        lines.push({ key: `${role}.flooring`, amount_formatted: fmtUSDdoc(flooring),
-          label: `${optLabel}: ${noun} as described above (material sales tax INCLUDED)` });
-        if (remodel > 0) lines.push({ key: `${role}.remodel`, amount_formatted: fmtUSDdoc(remodel), label: "Kansas Remodel Tax" });
-      }
-      lines.push({ key: `${role}.total`, amount_formatted: fmtUSDdoc(total), label: "Total" });
+      lines.push({ key: `${role}.flooring`, amount_formatted: fmtUSDdoc(rule.base_cents / 100),
+        label: `${optLabel}: ${noun} as described above` + (rule.phrase ? ` ${rule.phrase}` : ""),
+        phrase: rule.phrase, slot: true });
+      if (rule.material) lines.push({ key: `${role}.sales_tax`, amount_formatted: fmtUSDdoc(rule.sales_cents / 100), label: "Material Sales Tax", phrase: "" });
+      if (rule.remodel) lines.push({ key: `${role}.remodel`, amount_formatted: fmtUSDdoc(rule.remodel_cents / 100), label: "Remodel Tax", phrase: "" });
+      if (rule.total) lines.push({ key: `${role}.total`, amount_formatted: fmtUSDdoc(rule.total_cents / 100), label: "Total", phrase: "" });
     };
     pushSys(eB, "Epoxy flooring", "epoxy");
     pushSys(pB, "Polished Concrete flooring", "polish");
@@ -1030,16 +1225,49 @@
   }
 
   // Combo lines for the GENERATE payload. A whole-line override replaces the entire
-  // line: send it as the label with an empty amount so the backend's
-  // _strip_leading_separator drops the orphaned " – " and prints the exact line
-  // (combo docx lines come straight from payload.combo_options — see main._combo_lines
-  // — so preview and generated doc match).
+  // line: send it — resolved against today's amount and tax wording — as the label with an empty
+  // amount so the backend's _strip_leading_separator drops the orphaned " – " and prints the exact
+  // line (combo docx lines come straight from payload.combo_options — see main._combo_lines — so
+  // preview and generated doc match). The lines typed above and below each one travel as their own
+  // entries, flagged `extra`, so a blank one survives as the blank line it is.
   function comboLinesForPayload() {
-    return comboSystemLines().map(l => {
-      const ov = lineOverride("combo:" + l.key);
-      return ov != null ? { label: ov, amount_formatted: "" }
-                        : { amount_formatted: l.amount_formatted, label: l.label };
+    const pov = state.price_overrides || {};
+    const out = [];
+    comboSystemLines().forEach(l => {
+      const key = "combo:" + l.key;
+      const extra = (pos) => (pov[pos] && Array.isArray(pov[pos][key]) ? pov[pos][key] : [])
+        .map(t => ({ label: String(t), amount_formatted: "", extra: true }));
+      const ov = lineOverride(key, `${l.amount_formatted} – ${l.label}`,
+        { amount: l.amount_formatted, phrase: l.phrase || "", slot: !!l.slot });
+      out.push(...extra("before"));
+      out.push(ov != null ? { label: ov, amount_formatted: "" }
+                          : { amount_formatted: l.amount_formatted, label: l.label });
+      out.push(...extra("after"));
     });
+    return out;
+  }
+
+  /** Every price line on the page that prints a dollar figure of the estimator's own instead of
+   *  the estimate's, as [{key, says, estimate}] — what Send asks about before it goes (done.js).
+   *  Hanz, 2026-09-25: warn, then let him send. Read off the lines as drawn, so it is exactly what
+   *  the page is showing; empty before the document is on screen. */
+  function priceWarnings() {
+    if (typeof docSurface === "undefined" || !docSurface || !docSurface.querySelectorAll) return [];
+    const out = [];
+    const pov = state.price_overrides || {};
+    docSurface.querySelectorAll('[data-po-kind="line"][data-po-linekey]').forEach(el => {
+      if (!el.classList || !el.classList.contains("tw-money-off")) return;
+      if (el.style && el.style.display === "none") return;
+      const key = el.dataset.poLinekey;
+      const stored = pov.lines2 && typeof pov.lines2 === "object" ? pov.lines2[key] : "";
+      out.push({ key: key, says: TWPrice.firstDollar(TWPrice.resolveLine(stored, "", "")),
+                 estimate: el.dataset.amount || "", line: serializeBlock(el) });
+    });
+    docSurface.querySelectorAll(".tw-block.tw-money-off").forEach(el => {
+      out.push({ key: "p" + el.dataset.id, says: TWPrice.firstDollar(serializeBlock(el)),
+                 estimate: el.dataset.amount || "", line: serializeBlock(el) });
+    });
+    return out;
   }
 
   // Live update the inline $ amounts in the price preview. This preview MIRRORS
@@ -1063,27 +1291,21 @@
   }
 
   function refreshPriceDisplay() {
-    const lumpSumText = document.querySelector("#tb-total")?.textContent || "$0.00";
-    const lumpSumN = Number(String(lumpSumText).replace(/[^0-9.-]/g, "")) || 0;
-    // The Total Base Bid is TAX-INCLUSIVE — Kyle's sheet bakes sales tax (on
-    // materials) and remodel tax (on labor/service) into D88. The .docx itemizes
-    // it as: Base Bid (flooring, sales-tax incl) + Remodel Tax = Total, so the
-    // three lines sum to the lump. Prefer the sheet's own snapshotted tax cells
-    // (same precedence as the generate payload), fall back to the engine.
-    const fb = (state.computed_bid && state.computed_bid.full_bid) || {};
-    const remodelTax = Number((state.proposal_remodel_tax != null ? state.proposal_remodel_tax : fb.remodel_tax) || 0);
-    const salesTax   = Number((state.proposal_sales_tax   != null ? state.proposal_sales_tax   : fb.sales_tax)   || 0);
-    // THE ONE EXPRESSION, shared with computeTokenValues — see baseBidFigure. Not a
-    // second copy of "total minus tax": that second copy is what printed one number
-    // on this screen and a different one in the customer's document.
-    const { base: baseBid, itemized } = baseBidFigure(lumpSumN, salesTax, remodelTax);
+    // The Total Base Bid is TAX-INCLUSIVE — Kyle's sheet bakes sales tax (on materials) and remodel
+    // tax (on labor/service) into D88. THE ONE RULE (baseBidFigure → TWPrice.taxRule), shared with
+    // computeTokenValues and, through the parity test, with the document's price_rules: Broken out,
+    // the base line is the pre-tax figure with no bracket and the rows that apply print underneath
+    // and add up; one line, the whole bid carries the wording for the taxes the sheet says are in
+    // it. Not a second copy of "total minus tax": that second copy is what printed one number on
+    // this screen and a different one in the customer's document.
+    const sys = basePriceSystem();
+    const { rule } = baseBidFigure(sys.total, sys.sales_tax, sys.remodel);
 
-    // PRICE layout — mirror the .docx. Tax rows hidden (INCLUDED / exempt on a
-    // template that gates them): ONE all-in line, the flooring price = the full
-    // total + "(material sales tax INCLUDED)". Tax rows printing ("Sales tax broken
-    // out", or a template that always prints them): base (pre-tax) + Material Sales
-    // Tax + Remodel + Total, no INCLUDED label.
-    const { exempt } = taxTreatmentMode();
+    // The ribbon shows the layout in force — the estimator's pick, or the default off the sheet.
+    try {
+      const sel = document.getElementById("tax-treatment-select");
+      if (sel) sel.value = rule.broken ? "BROKEN_OUT" : "ONE_LINE";
+    } catch {}
 
     const salesRow   = document.getElementById("sales-tax-row");
     const remodelRow = document.getElementById("remodel-tax-row");
@@ -1095,6 +1317,8 @@
     const baseBidRow = document.getElementById("base-bid-row");
     const baseBidHeading = document.getElementById("base-bid-heading");
     const comboLines = comboSystemLines();
+    // A row that does not print is hidden, and takes the lines typed next to it along.
+    const hideRow = (el, key) => { if (!el) return; el.style.display = "none"; paintExtras(el, key); };
 
     if (comboLines.length && comboBlock) {
       // Combo: Option 1 (Epoxy) + Option 2 (Polish) as WHOLE-LINE rows; hide the
@@ -1103,49 +1327,42 @@
       comboBlock.style.display = "";
       if (!focusInside(comboBlock)) {
         comboBlock.innerHTML = comboLines.map(l =>
-          lineEl("combo:" + l.key, `${l.amount_formatted} – ${l.label}`)).join("");
+          lineEl("combo:" + l.key, `${l.amount_formatted} – ${l.label}`,
+                 { parts: { amount: l.amount_formatted, phrase: l.phrase || "", slot: !!l.slot } })).join("");
       }
-      if (baseBidHeading) baseBidHeading.style.display = "none";
-      if (baseBidRow) baseBidRow.style.display = "none";
-      if (salesRow)   salesRow.style.display = "none";
-      if (remodelRow) remodelRow.style.display = "none";
-      if (totalRow)   totalRow.style.display = "none";
+      hideRow(baseBidHeading, "heading_base");
+      hideRow(baseBidRow, "base");
+      hideRow(salesRow, "sales_tax");
+      hideRow(remodelRow, "remodel");
+      hideRow(totalRow, "total");
     } else {
       if (comboBlock) comboBlock.style.display = "none";
-      if (baseBidHeading) { baseBidHeading.style.display = ""; paintLine(baseBidHeading, "heading_base", "Base Bid"); }
+      if (baseBidHeading) { baseBidHeading.style.display = ""; paintLine(baseBidHeading, "heading_base", "Base Bid", { amount: "" }); }
       if (baseBidRow) baseBidRow.style.display = "";
       const desc = baseDescLabel();
-      // The base line's parenthetical, resolved by the SAME three-way rule as
-      // {{base_tax_phrase}} in computeTokenValues (which is the rule main.py applies):
-      // exempt describes the tax treatment and prints in either layout, and any
-      // "(… INCLUDED)" claim is dropped once the tax rows print their own figures
-      // underneath. Two expressions for one printed parenthetical is how the base
-      // FIGURE came to differ between this screen and the customer's document.
-      const computedPhrase = exempt ? "(tax exempt)"
-        : itemized ? ""
-        : remodelTax > 0 ? "(Remodel Tax AND material sales tax INCLUDED)"
-        : "(material sales tax INCLUDED)";
-      const baseLine = (amount) => `${fmtUSDdoc(amount)} – ${desc}` + (computedPhrase ? ` ${computedPhrase}` : "");
-      if (itemized) {
-        // Itemized: base (net of the printed tax) + Material Sales Tax + Remodel +
-        // Total. fmtUSDdoc, not fmtUSD, so the preview byte-matches the docx
-        // (base_bid_formatted / total_formatted) — which the backend prints through
-        // _fmt_usd. It drops a trailing ".00" and KEEPS a real fraction, so the
-        // lines still sum.
-        paintLine(baseBidRow, "base", baseLine(baseBid));
-        if (salesRow)   salesRow.style.display = "";
-        paintLine(salesRow, "sales_tax", `${fmtUSDdoc(salesTax)} – Material Sales Tax`);
-        if (remodelRow) remodelRow.style.display = remodelTax > 0 ? "" : "none";
-        paintLine(remodelRow, "remodel", `${fmtUSDdoc(remodelTax)} – Remodel Tax`);
-        if (totalRow)   totalRow.style.display = "";
-        paintLine(totalRow, "total", `${fmtUSDdoc(lumpSumN)} – Total`);
-      } else {
-        // No tax row prints: ONE all-in base line carrying the whole bid; tax rows hidden.
-        paintLine(baseBidRow, "base", baseLine(lumpSumN));
-        if (salesRow)   salesRow.style.display = "none";
-        if (remodelRow) remodelRow.style.display = "none";
-        if (totalRow)   totalRow.style.display = "none";
-      }
+      // fmtUSDdoc, not fmtUSD, so the preview byte-matches the docx (base_bid_formatted /
+      // total_formatted), which the backend prints through _fmt_usd: it drops a trailing ".00" and
+      // KEEPS a real fraction, so the lines still sum.
+      const amt = fmtUSDdoc(rule.base_cents / 100);
+      const total = fmtUSDdoc(rule.total_cents / 100);
+      paintLine(baseBidRow, "base", `${amt} – ${desc}` + (rule.phrase ? ` ${rule.phrase}` : ""),
+                // A line saved before the markers froze the base as it read THEN: the Total under
+                // one line, the pre-tax figure under Broken out. Either is today's base figure.
+                { amount: amt, phrase: rule.phrase, slot: true, candidates: [total] });
+      if (rule.material) {
+        const s = fmtUSDdoc(rule.sales_cents / 100);
+        if (salesRow) salesRow.style.display = "";
+        paintLine(salesRow, "sales_tax", `${s} – Material Sales Tax`, { amount: s });
+      } else hideRow(salesRow, "sales_tax");
+      if (rule.remodel) {
+        const r = fmtUSDdoc(rule.remodel_cents / 100);
+        if (remodelRow) remodelRow.style.display = "";
+        paintLine(remodelRow, "remodel", `${r} – Remodel Tax`, { amount: r });
+      } else hideRow(remodelRow, "remodel");
+      if (rule.total) {
+        if (totalRow) totalRow.style.display = "";
+        paintLine(totalRow, "total", `${total} – Total`, { amount: total });
+      } else hideRow(totalRow, "total");
     }
     renderProposalExtras();
   }
@@ -1170,9 +1387,12 @@
       const floorNoun = wt === "polish" ? "Polished Concrete Flooring"
                       : wt === "sealer" ? "Sealed Concrete"
                       : wt === "gyp"    ? "Gypsum Underlayment System" : "Epoxy flooring";
-      const taxPhrase = (r) => N(r.bid && r.bid.remodel) > 0
-        ? "(Remodel Tax AND material sales tax INCLUDED)"
-        : "(material sales tax INCLUDED)";
+      // EACH OPTION OFF ITS OWN TAB, by the same rule as the base (TWPrice.taxRule; the document's
+      // _build_options runs price_rules.tax_rule): one line with that tab's own tax wording, or,
+      // Broken out, its pre-tax line and — each its own line — the tax rows its flags call for and
+      // its own Total. These used to print "(material sales tax INCLUDED)" whatever the job, so
+      // Kyle typed "(material sales tax EXCLUDED)" onto every option of every exempt job by hand.
+      const { broken: optBroken } = taxTreatmentMode();
 
       // DOCUMENT preview — mirrors backend api_generate EXACTLY: the base bid is
       // shown ONLY by the single_bid group (#base-bid-row), so #rooms-block renders
@@ -1198,7 +1418,7 @@
                        && r.show !== false && !(comboBreakoutActive && r.is_base));
         // OPTION lines — same mode/label rules as main._build_options.
         let html = rooms.map((r) => {
-          let label, amount;
+          let label, amount, phrase = "", slot = false, rule = null;
           if (r.price_mode === "deduct") {
             // Auto add/deduct by sign: diff = option − base (Will's formula).
             // Negative → "Deduct ($3,200)"; positive/zero → "Add $2,232". The
@@ -1215,11 +1435,29 @@
             const desc = r.system_desc || r.option_desc || floorNoun;
             const notes = (Array.isArray(r.notes_auto) ? r.notes_auto : [])
               .concat(Array.isArray(r.notes_manual) ? r.notes_manual : []);
-            label = `${desc} as described above ${taxPhrase(r)}`;
+            rule = TWPrice.taxRule({ total: r.bid.total, sales_tax: r.bid.sales_tax,
+              remodel: r.bid.remodel, taxable: r.bid.taxable, remodel_on: r.bid.remodel_on }, optBroken);
+            phrase = rule.phrase;
+            slot = true;
+            label = `${desc} as described above` + (phrase ? ` ${phrase}` : "");
             if (notes.length) label += " — " + notes.join("; ");   // inline, matches main.py
-            amount = fmtUSDdoc(r.bid.total);
+            amount = fmtUSDdoc(rule.base_cents / 100);
           }
-          return lineEl("option:" + r.id, `${amount} – ${label}`);
+          const key = "option:" + r.id;
+          let out = lineEl(key, `${amount} – ${label}`,
+            { parts: { amount, phrase, slot,
+                       candidates: rule ? [fmtUSDdoc(rule.total_cents / 100)] : [] } });
+          // Broken out: the option's own tax rows and Total, each its own editable line.
+          if (rule && rule.broken) {
+            const row = (k, cents, words) => {
+              const a = fmtUSDdoc(cents / 100);
+              return lineEl(`${key}:${k}`, `${a} – ${words}`, { parts: { amount: a } });
+            };
+            if (rule.material) out += row("sales_tax", rule.sales_cents, "Material Sales Tax");
+            if (rule.remodel) out += row("remodel", rule.remodel_cents, "Remodel Tax");
+            if (rule.total) out += row("total", rule.total_cents, "Total");
+          }
+          return out;
         }).join("");
         // Manual {{#price_line}} rows AFTER the options. data-po-index is the
         // ORIGINAL price_lines index (not the filtered one) so a skipped/blank row
@@ -1229,12 +1467,20 @@
           const amt = Number(l.amount || 0);
           const label = (l.label || "").trim();
           if (!amt || !label) return "";
-          return lineEl("manual:" + i, `${fmtUSDdoc(amt)} – ${label}`);
+          const a = fmtUSDdoc(amt);
+          return lineEl("manual:" + i, `${a} – ${label}`, { parts: { amount: a } });
         }).join("");
         plBlock.innerHTML = html;
-        // "Options:" heading visible iff there's ≥1 option or manual price line.
+        // "Options:" heading visible iff there's ≥1 option or manual price line — and PAINTED FROM
+        // WHAT IS SAVED. It never was: a renamed heading showed as the static "Options:", so the
+        // box-wide sweep found its text equal to the computed one and deleted the saved heading on
+        // the next keystroke anywhere in the box (David Dyer rev 3 lost Kyle's typed heading that
+        // way, the same minute it gained three phantom $0 rows).
         const oh = document.getElementById("options-heading");
-        if (oh) oh.style.display = html.trim() ? "" : "none";
+        if (oh) {
+          if (html.trim()) { oh.style.display = ""; paintLine(oh, "heading_options", "Options:", { amount: "" }); }
+          else { oh.style.display = "none"; paintExtras(oh, "heading_options"); }
+        }
         // ...and the blank lines above it with it: they print only where the heading does.
         paintOptionsGap();
       }
@@ -1366,8 +1612,11 @@
                 pov.single_bid = {}; pov.rows = {}; pov.combo = {};
                 // Clear base-dependent whole-line overrides; keep the base-independent
                 // alternate block (alt_*).
-                if (pov.lines && typeof pov.lines === "object") {
-                  for (const k of Object.keys(pov.lines)) if (!k.startsWith("alt_")) delete pov.lines[k];
+                // Both shapes, and the lines typed around them: they belong to the old base.
+                for (const bucket of ["lines", "lines2", "before", "after"]) {
+                  const m = pov[bucket];
+                  if (!m || typeof m !== "object") continue;
+                  for (const k of Object.keys(m)) if (!k.startsWith("alt_")) delete m[k];
                 }
               }
             }
@@ -1487,7 +1736,10 @@
     // templates whose base line is a free paragraph (polish Direct, every GC file)
     // print {{base_bid_formatted}} straight from here, which is why an unconditional
     // "total minus tax" here read $6,182 under a $6,307 estimate.
-    const { base: baseBid, itemized: taxRowsPrint } = baseBidFigure(lumpSumNumber, salesTax, remodelTax);
+    // basePriceSystem's sales tax, not `salesTax` above: a draft that never recorded one is not an
+    // exempt job, and the rule has to be told the difference between 0 and unknown.
+    const { base: baseBid, rule: baseRule } = baseBidFigure(lumpSumNumber,
+      basePriceSystem().sales_tax, remodelTax);
     // A blank TEXT field stays blank. This used to answer "0", and the document printed it:
     // "Texture: 0" on 18 of 29 real proposals and "System: 0" on Viracor, while the editor's own
     // Work rows (String(merged.texture || "")) showed nothing, so the estimator never saw it. Blank
@@ -1596,22 +1848,26 @@
       tax_phrase: (mergedValues.sales_tax_handling || "INCLUDED") === "INCLUDED"
         ? "Sales and KS remodel tax are included in the lump sum above."
         : "Tax is NOT included and will be added at invoice.",
-      // Base-bid line's parenthetical tax phrase. Templates WITHOUT a
-      // {{#single_bid}} base-bid island (polish Direct, every GC template) use
-      // {{base_tax_phrase}} as a plain token — without this the on-page preview
-      // showed a raw "{{base_tax_phrase}}" even though the generated doc was
-      // correct (the backend fills it at generate time). Mirror that backend
-      // logic (broken out → no label; exempt → "(tax exempt)"; else INCLUDED,
-      // with the remodel note when remodel tax applies).
-      base_tax_phrase: (() => {
-        // Mirrors main.py's order exactly: exempt describes the tax TREATMENT and
-        // prints whatever the layout; otherwise a printing tax row makes any
-        // "(… INCLUDED)" claim contradict the itemisation right below it.
-        if (taxTreatmentMode().exempt) return "(tax exempt)";
-        if (taxRowsPrint) return "";
-        return remodelTax > 0 ? "(Remodel Tax AND material sales tax INCLUDED)"
-                              : "(material sales tax INCLUDED)";
-      })(),
+      // Base-bid line's parenthetical tax phrase — off THE RULE, the same call the painted row
+      // uses (baseBidFigure). Templates WITHOUT a {{#single_bid}} base-bid island (polish Direct,
+      // every GC template) print {{base_tax_phrase}} as a plain token, so this is also what the
+      // editor shows there. Broken out: nothing (the rows below say it). One line: the wording for
+      // the taxes the sheet says are in the bid — "(tax exempt)" when neither.
+      base_tax_phrase: baseRule.phrase,
+      // THE TAX MODEL, on the payload, for the document's half of the rule (main._generate ->
+      // price_rules): the layout, and the base tab's own Taxable? / Remodel Tax? answers as this
+      // page resolved them — so a draft whose flags were never snapshotted prints the same wording
+      // in the document as on this screen. `tax_inclusion` is the old field's closest meaning, kept
+      // for a reader that predates `tax_layout`.
+      tax_layout:         baseRule.broken ? "BROKEN_OUT" : "ONE_LINE",
+      tax_inclusion:      baseRule.broken ? "BROKEN_OUT" : "INCLUDED",
+      price_taxable:      baseRule.taxable,
+      price_remodel_on:   baseRule.remodel_on,
+      // Which rows print, for the editor's own free-paragraph rows (setBlockContent hides a GC /
+      // Gyp tax row that does not apply, as the render takes it out).
+      price_rows_material: baseRule.material,
+      price_rows_remodel:  baseRule.remodel,
+      price_rows_total:    baseRule.total,
     };
 
     // Area (SF / cove LF) tokens are sheet-first. Non-gyp only; the gyp block
@@ -1746,6 +2002,7 @@
   const stagingPanel = document.getElementById("price-preview-staging");
 
   let templateBlocks  = null;   // blocks from the endpoint (null until loaded)
+  let _lastTokens     = null;   // the token values the document was last drawn with
   let templateVersion = "";
   let templateLegacyFloorS = 0; // oldest pre-hash stamp still this content (see savedVersionMatches)
   let templateOptionsHeadingIds = [];  // free-paragraph Options heading ids (GC), see paintOptionsGap
@@ -1917,11 +2174,92 @@
       html += escHtml(templText.slice(last, m.index));
       const name = m[1];
       const known = Object.prototype.hasOwnProperty.call(tokens, name);
-      html += `<span class="tw-fill" data-token="${escHtml(name)}">` +
-              escHtml(known ? String(tokens[name]) : m[0]) + `</span>`;
+      const value = known ? String(tokens[name]) : m[0];
+      // data-v: the value this fill was drawn with. A PRICE figure still showing exactly it is
+      // untouched, and is stored as its {{token}} so the document fills TODAY's figure (storedText).
+      html += `<span class="tw-fill" data-token="${escHtml(name)}" data-v="${escHtml(value)}">` +
+              escHtml(value) + `</span>`;
       last = m.index + m[0].length;
     }
     return html + escHtml(templText.slice(last));
+  }
+
+  // The PRICE figures a free paragraph can carry (polish Direct's base line; every GC and Gyp price
+  // row). An edited paragraph used to store them as the text on screen, so the customer's document
+  // printed the figure from the day the words were changed. Where the figure is still exactly what
+  // was drawn, it is stored as its token instead, and the render's flat pass fills today's.
+  const PRICE_TOKENS = new Set(["base_bid_formatted", "base_tax_phrase", "material_tax_formatted",
+                                "tax_amount_formatted", "total_formatted", "total_label"]);
+  const PRICE_AMOUNT_TOKENS = ["base_bid_formatted", "material_tax_formatted", "tax_amount_formatted",
+                               "total_formatted", "total_label"];
+
+  /** serializeBlock, except that an untouched PRICE figure stays its {{token}}. */
+  function storedText(el) {
+    const walk = (node) => {
+      let out = "";
+      node.childNodes.forEach(n => {
+        if (n.nodeType === Node.TEXT_NODE) { out += n.nodeValue; return; }
+        if (n.nodeType !== Node.ELEMENT_NODE) return;
+        if (n.tagName === "BR") { out += "\n"; return; }
+        const d = n.dataset || {};
+        if (n.classList && n.classList.contains("tw-fill") && PRICE_TOKENS.has(d.token)
+            && d.v != null && n.textContent === d.v) {
+          out += "{{" + d.token + "}}";
+          return;
+        }
+        if (/^(DIV|P)$/.test(n.tagName) && out && !out.endsWith("\n")) out += "\n";
+        out += walk(n);
+      });
+      return out;
+    };
+    return walk(el).replace(/ /g, " ");
+  }
+
+  /** Does this edited free paragraph print a dollar figure of its own in a PRICE row's place?
+   *  Only asked of a paragraph whose template carries a PRICE amount token. Returns the token
+   *  whose figure it replaced, or "". */
+  function isPriceParagraph(id) {
+    const b = blockById.get(Number(id));
+    const t = String((b && b.text) || "");
+    for (const k of PRICE_TOKENS) if (new RegExp("\\{\\{\\s*" + k + "\\s*\\}\\}").test(t)) return true;
+    return false;
+  }
+
+  /** A PRICE paragraph's saved text with its frozen figures turned back into tokens: wherever it
+   *  still carries, verbatim, the figure one of its OWN row tokens shows today (or, for the tax
+   *  wording, any wording this tool has printed), that place becomes the {{token}}. Text that
+   *  already carries tokens, and figures he typed that are not today's, are left as they are. */
+  function migratePriceParagraphText(id, text, tk) {
+    let t = String(text == null ? "" : text);
+    if (/\{\{\s*[a-zA-Z_][a-zA-Z0-9_]*\s*\}\}/.test(t)) return t;
+    const tpl = String((blockById.get(Number(id)) || {}).text || "");
+    const vals = tk || {};
+    for (const k of PRICE_TOKENS) {
+      if (!new RegExp("\\{\\{\\s*" + k + "\\s*\\}\\}").test(tpl)) continue;
+      const cands = k === "base_tax_phrase" ? [vals[k]].concat(TWPrice.KNOWN_PHRASES) : [vals[k]];
+      let done = false;
+      for (const v of cands) {
+        const s = String(v == null ? "" : v);
+        const at = s ? (k === "base_tax_phrase" ? t.indexOf(s) : TWPrice.amountIndex(t, s)) : -1;
+        if (at >= 0) { t = t.slice(0, at) + "{{" + k + "}}" + t.slice(at + s.length); done = true; break; }
+      }
+      // Today's figure in the money style an older preview froze ("$1,870.00" for "$1,870").
+      if (!done && k !== "base_tax_phrase") {
+        const same = TWPrice.sameAmountAt(t, [vals[k]]);
+        if (same) t = t.slice(0, same.at) + "{{" + k + "}}" + t.slice(same.at + same.len);
+      }
+    }
+    return t;
+  }
+
+  function priceParagraphMoneyOff(el, b) {
+    const t = String((b && b.text) || "");
+    const own = PRICE_AMOUNT_TOKENS.filter(k => new RegExp("\\{\\{\\s*" + k + "\\s*\\}\\}").test(t));
+    if (!own.length) return "";
+    const stored = storedText(el);
+    const kept = own.some(k => stored.indexOf("{{" + k + "}}") >= 0);
+    if (kept) return "";
+    return /\$\s?\d/.test(stored.replace(/\{\{\s*[a-zA-Z_][a-zA-Z0-9_]*\s*\}\}/g, "")) ? own[0] : "";
   }
 
   // The same substitution as plain text — the block's PRISTINE rendering, the
@@ -2153,7 +2491,7 @@
     let html = "";
     for (const r of runs) {
       let inner = escHtml(String(r.text));
-      if (r.tok) inner = `<span class="tw-fill" data-token="${escHtml(r.tok)}">${inner}</span>`;
+      if (r.tok) inner = `<span class="tw-fill" data-token="${escHtml(r.tok)}" data-v="${inner}">${inner}</span>`;
       const css = runEditCss(r);
       html += css ? `<span style="${css}">${inner}</span>` : inner;
     }
@@ -3042,6 +3380,14 @@
       markEdited(el, false);
       return "cleared";
     }
+    // A line the estimator TYPED above or below a price line is his own, not the page's: clearing
+    // it takes it away, and the box sweep (dispatched on the box, since the line is gone) forgets it.
+    if (el.dataset && el.dataset.poKind === "extra") {
+      const host = editingBox(el);
+      el.remove();
+      if (host) host.dispatchEvent(new Event("input", { bubbles: true }));
+      return "removed";
+    }
     el.textContent = "";
     el.dispatchEvent(new Event("input", { bubbles: true }));
     return "reset-to-computed";
@@ -3487,16 +3833,36 @@
     const plain = fillPlain(b.text, tokens);
     pristineById.set(Number(el.dataset.id), plain);
     el.classList.toggle("tw-empty", !plain.trim());
-    // NO REMODEL TAX, NO REMODEL ROW — here as in the document. The GC and Gyp files author their
-    // Remodel Tax row as a plain paragraph (this one), and the render takes it out when the job has
-    // no remodel tax (main.py `_remodel_off`; Hanz: "If remodel tax is off then in the broken out
-    // option in the Proposal, there is no remodel tax but there is material sales tax"). Decided
-    // on every fill, so a base flip that brings a remodel tax in shows the row again. An inline
+    // A TAX ROW THAT DOES NOT APPLY IS NOT THERE — here as in the document. The GC and Gyp files
+    // author their Material Sales Tax / Remodel Tax / Total rows as plain paragraphs (this one), and
+    // the render takes out every row the tax rule does not print (main.py `_price_rows`; Hanz: "If
+    // remodel tax is off then in the broken out option in the Proposal, there is no remodel tax but
+    // there is material sales tax", and one line prints no Total). The rule's answer rides the
+    // tokens (computeTokenValues `price_rows_*`); a caller without it falls back to the old remodel
+    // test. Decided on every fill, so a base flip or a layout switch shows the row again. An inline
     // style, not `hidden`: a class `display` rule beats the attribute.
-    if (/\{\{\s*(tax_amount_formatted|remodel\.amount_formatted)\s*\}\}/.test(String(b.text || ""))) {
-      const remodel = Number(String((tokens || {}).tax_amount_formatted || "").replace(/[^0-9.]/g, "")) || 0;
-      el.style.display = remodel ? "" : "none";
+    priceRowVisibility(el, b, tokens);
+  }
+
+  /** Show or hide one FREE paragraph that is a PRICE tax / total row, by the rule (see
+   *  setBlockContent). Also asked of a paragraph the estimator edited: the render finds these rows
+   *  on the pristine template by their token and takes them out whatever they now say, so an edited
+   *  row that does not apply must not stay on screen either. */
+  function priceRowVisibility(el, b, tokens) {
+    const tk = tokens || {};
+    const t = String((b && b.text) || "");
+    const off = (flag) => flag === false;
+    let hide = null;
+    if (/\{\{\s*material_tax_formatted\s*\}\}/.test(t) && tk.price_rows_material !== undefined) {
+      hide = off(tk.price_rows_material);
+    } else if (/\{\{\s*(tax_amount_formatted|remodel\.amount_formatted)\s*\}\}/.test(t)) {
+      hide = tk.price_rows_remodel !== undefined ? off(tk.price_rows_remodel)
+        : !(Number(String(tk.tax_amount_formatted || "").replace(/[^0-9.]/g, "")) || 0);
+    } else if (/\{\{\s*(total_formatted|total_label)\s*\}\}/.test(t) && tk.price_rows_total !== undefined) {
+      hide = off(tk.price_rows_total);
     }
+    if (hide !== null) el.style.display = hide ? "none" : "";
+    return hide;
   }
 
   /** Is this block one of the NUMBERED Terms and Conditions clauses?
@@ -3831,9 +4197,30 @@
         el.classList.add("tw-fmt");
         el.classList.toggle("tw-empty", !serializeBlock(el).trim());
       } else if (typeof o.text === "string") {
-        el.textContent = o.text;   // pre-wrap CSS renders the \n line breaks
+        // A PRICE paragraph saved with its figures kept as {{tokens}} (collectOverrides) is drawn
+        // with TODAY's figures in those places — the same values the document will print. One
+        // saved before that, with the figures frozen into its words, is MIGRATED here: wherever
+        // it still carries the figure (or a tax wording this tool has printed) that its own row
+        // shows today, verbatim, that place becomes the token again, and follows the estimate
+        // from now on. A figure he typed that is not today's stays his.
+        const _t = isPriceParagraph(o.id) ? migratePriceParagraphText(o.id, o.text, tk) : o.text;
+        if (/\{\{\s*[a-zA-Z_][a-zA-Z0-9_]*\s*\}\}/.test(_t) && isPriceParagraph(o.id)) {
+          el.innerHTML = fillHtml(_t, tk);
+        } else {
+          el.textContent = o.text;   // pre-wrap CSS renders the \n line breaks
+        }
         el.classList.add("tw-dirty");
-        el.classList.toggle("tw-empty", !o.text.trim());
+        el.classList.toggle("tw-empty", !serializeBlock(el).trim());
+        // A PRICE paragraph still carrying a figure that is not today's is marked here, on load,
+        // exactly as a keystroke marks it (syncBlock) — so the estimator sees it, and Send asks.
+        const _pb = isPriceParagraph(o.id) ? blockById.get(Number(o.id)) : null;
+        const _off = _pb ? priceParagraphMoneyOff(el, _pb) : "";
+        if (_off) {
+          el.classList.add("tw-money-off");
+          el.classList.add("tw-dirty-warn");
+          el.dataset.amount = String(tk[_off] || "");
+          el.title = _MONEY_TITLE;
+        }
       }
       // The bullet / indent the estimator set. Restored even on an entry with NO text — a
       // formatting-only change is a whole override entry of its own (see collectOverrides), and
@@ -3882,8 +4269,12 @@
       // Send the plain shape whenever nothing is formatted: most edits are plain, the payload
       // stays as small as it was, and the writer keeps its simpler path. Runs only appear when
       // the estimator has actually applied formatting.
+      //
+      // A PRICE paragraph keeps its untouched figures as {{tokens}} (storedText), so a re-worded
+      // GC / Gyp price row or polish Direct base line still prints TODAY's amount and tax wording:
+      // the render applies this text before its flat pass, which fills them.
       else entry = runsArePlain(runs) && !fmtChanged
-        ? { id: id, text: cur }
+        ? { id: id, text: (isPriceParagraph(id) && !bare) ? storedText(el) : cur }
         : { id: id, text: cur, runs: bare ? [] : storedRuns(el, textChanged) };
       if (para) entry.para = para;
       out.push(entry);
@@ -4005,6 +4396,7 @@
     if (_fillsTimer) clearTimeout(_fillsTimer);
     _fillsTimer = setTimeout(() => {
       const tokens = computeTokenValues(Object.assign({}, state, TW.readForm(form)));
+      _lastTokens = tokens;
       const caretLine = lineAtSelection();
       docSurface.querySelectorAll(".tw-block").forEach(el => {
         // Don't re-fill the block the caret is currently in (a sidebar edit
@@ -4017,6 +4409,12 @@
         const b = blockById.get(Number(el.dataset.id));
         if (!b) return;
         if (el.classList.contains("tw-dirty")) {
+          // An edited tax / total row still shows or hides with the rule — see priceRowVisibility.
+          priceRowVisibility(el, b, tokens);
+          // …and its untouched figures still follow the estimate, as they do in the document.
+          if (!el.classList.contains("tw-fmt") && isPriceParagraph(el.dataset.id)) {
+            refreshPriceFillsInPlace(el, b, tokens);
+          }
           if (el.classList.contains("tw-fmt") && refreshFillsInPlace(el, b, tokens)) {
             schedulePersistOverrides();   // the stored runs carry the value; it just changed
           }
@@ -4053,6 +4451,31 @@
    *
    *  Moves the pristine baseline with the value it just wrote — without that, the next
    *  serialise would read the fresh number as a hand edit and freeze it after all. */
+  /** A PRICE paragraph the estimator TYPED in still re-prices where its figures are untouched. A
+   *  fill span still showing exactly the value it was drawn with (data-v) is stored as its token
+   *  (storedText), so the document prints today's figure there; this puts today's figure on the
+   *  screen too, instead of leaving it at the one drawn when the page opened. A figure he typed is
+   *  not a span showing its drawn value, and stays his. Returns whether anything changed. */
+  function refreshPriceFillsInPlace(el, b, tokens) {
+    let touched = false;
+    el.querySelectorAll(".tw-fill[data-token]").forEach(sp => {
+      const d = sp.dataset || {};
+      if (!PRICE_TOKENS.has(d.token) || d.v == null || sp.textContent !== d.v) return;
+      if (!Object.prototype.hasOwnProperty.call(tokens, d.token)) return;
+      const next = String(tokens[d.token]);
+      if (next === d.v) return;
+      sp.textContent = next;
+      sp.dataset.v = next;
+      touched = true;
+    });
+    // A line printing a figure of his own is asked about against TODAY's estimate.
+    if (el.classList.contains("tw-money-off")) {
+      const tok = priceParagraphMoneyOff(el, b);
+      if (tok) el.dataset.amount = String(tokens[tok] || "");
+    }
+    return touched;
+  }
+
   function refreshFillsInPlace(el, b, tokens) {
     const id = Number(el.dataset.id);
     if (serializeBlock(el) !== pristineById.get(id)) return false;
@@ -4067,6 +4490,7 @@
       const next = String(tokens[name]);
       if (sp.textContent === next) return;
       sp.textContent = next;
+      if (sp.dataset) sp.dataset.v = next;
       touched = true;
     });
     if (touched) pristineById.set(id, fillPlain(b.text, tokens));
@@ -5726,6 +6150,7 @@
       paraById.clear();
 
       const tokens = computeTokenValues(Object.assign({}, state, TW.readForm(form)));
+      _lastTokens = tokens;
       const geo = j.geometry || {};
       const hasBoxes = Array.isArray(geo.boxes) && geo.boxes.some(b => b.x_pt != null)
         && templateBlocks.some(b => b.txbx != null);
@@ -5818,8 +6243,21 @@
     el.classList.toggle("tw-dirty", changed);
     el.classList.toggle("tw-empty", !cur.trim());
     // ⚠ reminder when an edited free paragraph carries a price ($) or an SF/LF
-    // area measure (covers the gyp/GC price rows, which edit as plain paragraphs).
-    el.classList.toggle("tw-dirty-warn", changed && /\$\s?\d|\bSF\b|\bLF\b/i.test(cur));
+    // area measure. A PRICE paragraph (the gyp/GC price rows, polish Direct's base line) is asked
+    // the sharper question instead: its figures stay live while they are untouched (storedText), so
+    // the mark means only "this line prints a dollar figure of your own", and Send asks about it.
+    const b = blockById.get(Number(el.dataset.id));
+    const priceTok = changed && b ? priceParagraphMoneyOff(el, b) : "";
+    const isPrice = !!b && isPriceParagraph(el.dataset.id);
+    el.classList.toggle("tw-money-off", !!priceTok);
+    if (priceTok) {
+      const tk = (typeof _lastTokens !== "undefined" && _lastTokens) || {};
+      el.dataset.amount = String(tk[priceTok] || "");
+      el.title = _MONEY_TITLE;
+    } else if (el.title === _MONEY_TITLE) {
+      el.removeAttribute("title");
+    }
+    el.classList.toggle("tw-dirty-warn", changed && (isPrice ? !!priceTok : /\$\s?\d|\bSF\b|\bLF\b/i.test(cur)));
   }
 
   /** ONE EDIT, THE WHOLE BOX. Because the box is the editing host, a single keystroke can change
@@ -5852,7 +6290,11 @@
     // repaint. It also closes a gap that was already open: the combo breakout, the per-room lines
     // and the ALTERNATE block are rendered into containers that NEVER had a host, so typing in
     // one of those lines had nowhere to persist to.
-    if (box.querySelector("[data-po-kind=\"line\"][data-po-linekey]")) syncPriceLinesIn(box);
+    // ...and the box holding the blank lines above the Options heading, whose typed lines are price
+    // lines of their own even where the heading is a template paragraph (the GC files).
+    const _gapEl = document.getElementById("options-gap");
+    if (box.querySelector("[data-po-kind=\"line\"][data-po-linekey]")
+        || (_gapEl && box.contains(_gapEl))) syncPriceLinesIn(box);
     // A line re-rendered by this edit (a format, a paste, a splice, an Enter) has new children that
     // carry no printed size yet; the box is put back at the size it prints at before the next paint.
     if (box.classList.contains("tw-txbx")) { try { fitTxbx(box); } catch {} }
@@ -5928,6 +6370,14 @@
     const d = el.dataset || {};
     if (el.classList.contains("tw-block"))
       return d.id == null || d.id === "" ? null : "b:" + d.id;
+    // A line typed above or below a price line shares its line's key, so it is told apart by where
+    // it sits: a restore must never write the price line's words into the line under it.
+    if (d.poKind === "extra" && d.poLinekey) {
+      const sibs = el.parentNode ? Array.from(el.parentNode.children || []) : [];
+      const same = sibs.filter(n => n.dataset && n.dataset.poKind === "extra"
+        && n.dataset.poLinekey === d.poLinekey && n.dataset.poPos === d.poPos);
+      return "x:" + d.poLinekey + ":" + (d.poPos || "after") + ":" + Math.max(0, same.indexOf(el));
+    }
     if (d.poLinekey != null && d.poLinekey !== "") return "p:" + d.poLinekey;
     if (d.sysLine != null && d.sysLine !== "") return "s:" + d.sysIndex + ":" + d.sysLine;
     if (d.noteIndex != null && d.noteIndex !== "") return "n:" + d.noteIndex;
@@ -6013,12 +6463,36 @@
     const snap = undoSelectionRec(safe);
     snap.lines = lines;
     snap.notes = holdsNotes ? String(ta.value || "") : null;
+    // THE LINES TYPED NEXT TO THE PRICE LINES, for the same reason as the notes: Enter makes a new
+    // one and Backspace takes one away, so restoring by key alone cannot bring a removed one back
+    // or take an added one away. A PRICE box carries the two maps they are drawn from.
+    snap.po = undoPriceExtras(box);
     // WHICH TEMPLATE LINES WERE GONE, page-wide. A removed line is not in `lines` (it is not on the
     // page), so without this an undo of a Backspace that took a line out would find nothing to
     // restore -- and the entry would look like one that changed nothing, and be skipped.
     snap.removed = removedBlockIds();
-    snap.sig = JSON.stringify([lines, snap.notes, snap.removed]);
+    snap.sig = JSON.stringify([lines, snap.notes, snap.po, snap.removed]);
     return snap;
+  }
+
+  /** The before / after maps of the typed price lines, and the count of blank lines above the
+   *  Options heading, as JSON — only for a box that holds price lines or that gap, and only where
+   *  the page's state is in scope. The count rides along because typing on a blank line moves a
+   *  line from the count to the typed lines (typeOnGapLine): an undo has to move it back. */
+  function undoPriceExtras(box) {
+    const gap = typeof document !== "undefined" && document.getElementById
+      ? document.getElementById("options-gap") : null;
+    const holds = !!(box && box.querySelector && (box.querySelector('[data-po-kind="line"][data-po-linekey]')
+      || (gap && box.contains && box.contains(gap))));
+    const pov = holds && typeof state !== "undefined" && state ? state.price_overrides : null;
+    if (!holds || !pov || typeof pov !== "object") return null;
+    return undoPoJson(pov);
+  }
+
+  /** The part of price_overrides an undo entry restores, as JSON. */
+  function undoPoJson(pov) {
+    return JSON.stringify({ before: pov.before || {}, after: pov.after || {},
+                            gap: pov.options_gap === undefined ? null : pov.options_gap });
   }
 
   /** The document as an existing entry describes it, read LIVE.
@@ -6041,8 +6515,11 @@
     const out = undoSelectionRec(true);
     out.lines = lines;
     out.notes = snap.notes == null ? null : String((ta && ta.value) || "");
+    out.po = snap.po == null ? null : (typeof state !== "undefined" && state && state.price_overrides
+      ? undoPoJson(state.price_overrides)
+      : null);
     out.removed = removedBlockIds();
-    out.sig = JSON.stringify([lines, out.notes, out.removed]);
+    out.sig = JSON.stringify([lines, out.notes, out.po, out.removed]);
     return out;
   }
 
@@ -6115,6 +6592,22 @@
         ta.value = snap.notes;
         try { renderNotesPreview(); } catch {}
         try { TW.setState({ notes_text: ta.value }); } catch {}
+      }
+      // The typed price lines' maps back first, and the price block redrawn from them, so the lines
+      // the entry names by key exist again (or are gone again) before their text is put back.
+      if (snap.po != null && typeof state !== "undefined" && state && state.price_overrides) {
+        const pov = state.price_overrides;
+        const cur = undoPoJson(pov);
+        if (cur !== snap.po) {
+          try {
+            const was = JSON.parse(snap.po);
+            pov.before = was.before || {};
+            pov.after = was.after || {};
+            if (was.gap == null) delete pov.options_gap; else pov.options_gap = was.gap;
+            refreshPriceDisplay();
+            queuePovSave();
+          } catch {}
+        }
       }
       const fire = new Map();             // one editing host -> one line in it to dispatch from
       // THE REMOVED LINES FIRST, so a line this entry had on the page is back before its text is
@@ -6460,6 +6953,12 @@
     if (!sel) { e.preventDefault(); return; }   // caret unreadable: refuse rather than let the
                                                 // browser split the paragraph
     e.preventDefault();
+    // A PRICE line (or a line typed next to one): a new line of its own, never a break inside it.
+    const _po = el.dataset || {};
+    if ((_po.poKind === "line" || _po.poKind === "extra") && _po.poLinekey && !/^alt_/.test(_po.poLinekey)) {
+      splitPriceLine(el, sel[0], sel[1]);
+      return;
+    }
     const caret = insertBreakAt(el, sel[0], sel[1]);
     placeSelection(el, caret, caret);
     if (el.classList.contains("tw-block")) markEdited(el, false);   // a break is text, not format
@@ -6609,6 +7108,14 @@
       // change is allowed and reports it; only a change consumes the keystroke.
       const rung = now && !now.locked ? (now.bullet ? "bullet" : (now.indent > 0 ? "outdent" : null)) : null;
       if (rung && paraAction(el, rung)) { e.preventDefault(); return; }
+    }
+    // A line typed next to a price line joins its neighbour or, empty, goes (mergePriceLine).
+    const _po = el.dataset || {};
+    if ((_po.poKind === "line" || _po.poKind === "extra") && _po.poLinekey && !/^alt_/.test(_po.poLinekey)) {
+      if ((back && atStart && mergePriceLine(el, "up")) || (fwd && atEnd && mergePriceLine(el, "down"))) {
+        e.preventDefault();
+        return;
+      }
     }
     // INTO AN EMPTY NEIGHBOUR: Backspace at the start of a line whose line above is empty, or
     // Delete at the end of one whose line below is. Word merges the two, and merging into an empty
@@ -7009,24 +7516,98 @@
     if (!pov.combo || typeof pov.combo !== "object" || Array.isArray(pov.combo)) pov.combo = {};
     if (!pov.alternate || typeof pov.alternate !== "object" || Array.isArray(pov.alternate)) pov.alternate = {};
     if (!pov.lines || typeof pov.lines !== "object" || Array.isArray(pov.lines)) pov.lines = {};
+    for (const k of ["lines2", "before", "after"]) {
+      if (!pov[k] || typeof pov[k] !== "object" || Array.isArray(pov[k])) pov[k] = {};
+    }
     return pov;
   }
-  /** Every whole-line PRICE row in a container -> state.price_overrides.lines.
+
+  /** Is this price row one the estimator can have edited? NOT one that was never painted (its
+   *  data-computed is still the empty staging value) and NOT one that is hidden. Those two are the
+   *  hole the box-wide sweep fell through: in one line, the Material Sales Tax / Remodel Tax /
+   *  Total rows sit in the box hidden and unpainted, still reading "$0 – Total", and one keystroke
+   *  anywhere stored all three as the estimator's edits (money-verdict M3). */
+  function priceRowLive(el) {
+    if (!el || !el.dataset) return false;
+    if (el.dataset.computed == null || el.dataset.computed === "") return false;
+    return !(el.style && el.style.display === "none");
+  }
+
+  /** Store what one whole price line now says, in the LIVE shape: his words, with today's amount
+   *  and tax wording as markers where they are still there verbatim (TWPrice.captureLine). A line
+   *  break typed inside it becomes a line of its own below it. Back to the computed line, or empty,
+   *  means no override.
+   *
+   *  `spills` is the box sweep's: the text after such a break is handed back there, keyed by the
+   *  line, because the sweep then re-reads the typed lines from the page (captureExtrasIn), and the
+   *  page does not have this one as a line of its own until the next repaint. Written straight into
+   *  `after` here instead, that re-read wiped it on the same keystroke. */
+  function captureLineNode(el, spills) {
+    const key = el.dataset.poLinekey;
+    if (!key) return false;
+    const pov = _ensurePov();
+    let typed = serializeBlock(el);
+    let spill = [];
+    if (typed.indexOf("\n") >= 0) {
+      const parts = typed.split("\n");
+      typed = parts.shift();
+      spill = parts;
+    }
+    const amount = el.dataset.amount || "", phrase = el.dataset.phrase || "";
+    const computed = el.dataset.computed || "";
+    delete pov.lines[key];                         // anything saved in the old shape is superseded
+    if (!typed.trim()) {
+      delete pov.lines2[key];
+    } else {
+      const stored = TWPrice.captureLine(typed, amount, phrase, el.dataset.slot === "1");
+      if (TWPrice.resolveLine(stored, amount, phrase) === computed) delete pov.lines2[key];
+      else pov.lines2[key] = stored;
+    }
+    if (spill.length) {
+      if (spills) spills[key] = spill;
+      else pov.after[key] = spill.concat(Array.isArray(pov.after[key]) ? pov.after[key] : []);
+    }
+    return true;
+  }
+
+  /** The lines typed above and below each price line in `root`, back into before / after — for
+   *  every line that is showing (a hidden row's lines are not in the page, and must not be wiped).
+   *  `spills` (captureLineNode) go first under their line: they sit directly below it. */
+  function captureExtrasIn(root, keys, spills) {
+    const pov = _ensurePov();
+    keys.forEach(key => {
+      const before = [];
+      const after = spills && Array.isArray(spills[key]) ? spills[key].slice() : [];
+      root.querySelectorAll('[data-po-kind="extra"][data-po-linekey]').forEach(n => {
+        if (n.dataset.poLinekey !== key) return;
+        const rows = serializeBlock(n).split("\n");
+        (n.dataset.poPos === "before" ? before : after).push(...rows);
+      });
+      if (before.length) pov.before[key] = before; else delete pov.before[key];
+      if (after.length) pov.after[key] = after; else delete pov.after[key];
+    });
+  }
+
+  /** Every whole-line PRICE row in a container -> state.price_overrides.
    *
    *  The legacy per-field islands are deliberately not swept: the current UI does not emit them,
    *  and they key off the event target rather than the DOM, so there is nothing to re-read. */
   function syncPriceLinesIn(root) {
     if (!root || !root.querySelectorAll) return;
     let touched = false;
+    const keys = new Set();
+    const spills = {};
     root.querySelectorAll("[data-po-kind=\"line\"][data-po-linekey]").forEach(lineNode => {
-      const key = lineNode.dataset.poLinekey;
-      if (!key) return;
-      const v = serializeBlock(lineNode);
-      const pov = _ensurePov();
-      if (v.trim() === "" || v === (lineNode.dataset.computed || "")) delete pov.lines[key];
-      else pov.lines[key] = v;
-      touched = true;
+      if (!priceRowLive(lineNode)) return;
+      keys.add(lineNode.dataset.poLinekey);
+      if (captureLineNode(lineNode, spills)) touched = true;
     });
+    // The lines typed on the gap above the Options heading belong to the heading, which on the GC
+    // files is a template paragraph rather than a price line: asked of the heading itself, so the
+    // last typed line taken away there is forgotten too.
+    const head = optionsHeadingEl();
+    if (head && root.contains && root.contains(head)) keys.add("heading_options");
+    if (keys.size) { captureExtrasIn(root, keys, spills); touched = true; }
     if (touched) queuePovSave();
   }
 
@@ -7051,17 +7632,30 @@
    *
    *  The keys, the way Word treats empty paragraphs:
    *    Backspace at the very start of the heading, or Backspace/Delete on a blank line: one fewer.
-   *    Enter at the end of the price line above the gap, or on a blank line: one more.
-   *  A blank line takes no text, because there is no channel that could carry it, so typing on one
-   *  is refused rather than lost on the next repaint. Nothing else in the box changes.
+   *    Delete at the end of the line above the gap: one fewer.
+   *    Enter at the end of the line above the gap, or on a blank line: one more.
+   *
+   *  A BLANK LINE TAKES TEXT. Hanz, 2026-09-26: "I cant write texts on this white space lines" --
+   *  every line in the box has to take words. A character typed (or pasted, or dropped) on blank
+   *  line i turns it into a TYPED line: price_overrides.before.heading_options, the same storage as
+   *  a line typed under any price line, printed by the writer as a paragraph of its own in the price
+   *  rows' font (_apply_options_gap). The blank lines above it in the gap become typed blank lines
+   *  with it, so it stays where it was typed; the blank lines below it stay the gap. So the area
+   *  above the heading is, top to bottom, the typed lines and then the counted blank lines, and
+   *  every line on screen is exactly one of the two -- the count and the typed lines never both
+   *  claim a line, and the document prints the same sequence. A typed line is edited, split with
+   *  Enter and removed with Backspace like every other typed price line (splitPriceLine /
+   *  mergePriceLine), and the box sweep stores it (captureExtrasIn).
    *
    *  THE TEMPLATE'S OWN SPACER. Gyp and the GC files already carry one empty paragraph directly
    *  above the heading. The writer REPLACES it with the counted lines, so it is hidden here while
    *  the heading shows (`tw-gap-absorbed`). Otherwise this page would draw one line more than
-   *  prints. Same rule as the writer's: an empty paragraph, nothing typed in it.
+   *  prints. Same rule as the writer's: an empty paragraph, nothing typed in it -- looked for above
+   *  the typed lines, which sit between it and the gap.
    *
    *  The default (2) and the ceiling (20) are the writer's OPTIONS_GAP_DEFAULT and OPTIONS_GAP_MAX,
-   *  and both sides clamp to 0..20 by the same rule (test_options_gap.py checks they agree). */
+   *  and both sides clamp to 0..20 by the same rule (test_options_gap.py checks they agree). The
+   *  typed lines have the writer's own ceiling too (main._PRICE_EXTRA_LINES_MAX, 20). */
   function optionsGapCount() {
     const pov = state.price_overrides;
     const v = pov && typeof pov === "object" && !Array.isArray(pov) ? pov.options_gap : undefined;
@@ -7070,6 +7664,28 @@
     else if (typeof v === "string" && /^[0-9]+$/.test(v.trim())) n = Number(v.trim());
     if (n === null) return 2;
     return Math.max(0, Math.min(20, n));
+  }
+
+  /** The lines typed ON the gap, above its blank lines, as saved: price_overrides.before
+   *  .heading_options (see the section note). */
+  function optionsGapTyped() {
+    const pov = state.price_overrides;
+    const b = pov && typeof pov === "object" && !Array.isArray(pov) && pov.before
+      && typeof pov.before === "object" ? pov.before.heading_options : null;
+    return Array.isArray(b) ? b.map(t => String(t == null ? "" : t)) : [];
+  }
+
+  /** Is this one of those typed lines, as drawn? */
+  function isGapTyped(n) {
+    const d = n && n.dataset;
+    return !!d && d.poKind === "extra" && d.poLinekey === "heading_options" && d.poPos === "before";
+  }
+
+  /** The typed lines as drawn, top to bottom. */
+  function gapTypedEls() {
+    if (!docSurface || !docSurface.querySelectorAll) return [];
+    return Array.from(docSurface.querySelectorAll(
+      '[data-po-kind="extra"][data-po-linekey="heading_options"][data-po-pos="before"]'));
   }
 
   /** The Options heading the gap sits directly above, or null when none is on the page.
@@ -7119,9 +7735,10 @@
     return null;
   }
 
-  /** Draw the gap: N empty lines directly above the heading, the template's own spacer hidden.
-   *  Rebuilds the lines only when the count changed, so a caret sitting on one survives the price
-   *  repaints that call this. */
+  /** Draw the gap: the typed lines, then N empty lines, directly above the heading, the template's
+   *  own spacer hidden. Rebuilds the blank lines only when the count changed, and the typed lines
+   *  only when they differ from what is saved and the caret is not in one, so a caret sitting on
+   *  either survives the price repaints that call this. */
   function paintOptionsGap() {
     const gap = document.getElementById("options-gap");
     if (!gap || !docSurface) return;
@@ -7130,13 +7747,18 @@
     if (!head) {
       if (gap.childNodes.length) gap.innerHTML = "";
       gap.style.display = "none";
+      // The typed lines go with the heading: they print only where it does.
+      const typed = gapTypedEls();
+      if (!typed.some(n => focusInside(n))) typed.forEach(n => n.remove());
       return;
     }
     if (gap.parentNode !== head.parentNode || gap.nextElementSibling !== head) {
       head.parentNode.insertBefore(gap, head);
     }
+    paintGapTyped(gap);
     for (const n of aboveOptionsGap(gap)) {
       if (!gapShown(n)) continue;
+      if (isGapTyped(n)) continue;           // the typed lines sit between the spacer and the gap
       if (n.classList.contains("tw-block") && /^[ ]*$/.test(serializeBlock(n))) {
         n.classList.add("tw-gap-absorbed");
         continue;
@@ -7150,6 +7772,65 @@
       gap.innerHTML = html;
     }
     gap.style.display = want ? "" : "none";
+  }
+
+  /** The typed lines, drawn directly above the gap in their saved order. A line is moved only
+   *  when it is out of place: moving the node the caret is in would lose the caret. */
+  function paintGapTyped(gap) {
+    const want = optionsGapTyped();
+    let have = gapTypedEls();
+    const same = have.length === want.length && have.every((n, i) => serializeBlock(n) === want[i]);
+    if (!same && !have.some(n => focusInside(n))) {
+      have.forEach(n => n.remove());
+      have = want.map(t => makeExtraLine(null, "heading_options", "before", t));
+    }
+    let next = gap;
+    for (let i = have.length - 1; i >= 0; i--) {
+      const n = have[i];
+      if (n.parentNode !== gap.parentNode || n.nextElementSibling !== next) gap.parentNode.insertBefore(n, next);
+      next = n;
+    }
+  }
+
+  /** Blank line `i` of the gap takes text -- typed, pasted or dropped on it (see the section note).
+   *  It becomes a typed line holding `lines` (more than one for a multi-line paste), the blank lines
+   *  above it in the gap become typed blank lines so it stays where it was typed, and the blank
+   *  lines below it stay the gap. The caret goes to the end of the last new line. Returns it. */
+  function typeOnGapLine(i, lines) {
+    let rows = (Array.isArray(lines) ? lines : [lines]).map(t => String(t == null ? "" : t));
+    const n = optionsGapCount();
+    const at = Math.max(0, Math.min(Math.floor(Number(i) || 0), Math.max(0, n - 1)));
+    const had = optionsGapTyped();
+    // The writer prints at most 20 typed lines here; past that the text is refused rather than
+    // shown on screen and silently cut from the document.
+    rows = rows.slice(0, Math.max(0, 20 - had.length - at));
+    if (!rows.length) return null;
+    const typed = had.concat(new Array(at).fill(""), rows);
+    const pov = _ensurePov();
+    pov.before.heading_options = typed;
+    pov.options_gap = Math.max(0, n - 1 - at);
+    paintOptionsGap();
+    const els = gapTypedEls();
+    const into = els.length ? els[els.length - 1] : null;
+    if (into) caretInto(into, serializeBlock(into).length);
+    const head = optionsHeadingEl();
+    try { fitTxbx(head && head.closest ? head.closest(".tw-txbx") : null); } catch {}
+    queuePovSave();
+    return into;
+  }
+
+  /** Take typed line `el` away (it was empty): out of the draft and off the page. */
+  function dropGapTyped(el) {
+    const i = gapTypedEls().indexOf(el);
+    const typed = optionsGapTyped();
+    if (i >= 0 && i < typed.length) typed.splice(i, 1);
+    const pov = _ensurePov();
+    if (typed.length) pov.before.heading_options = typed;
+    else delete pov.before.heading_options;
+    el.remove();
+    const head = optionsHeadingEl();
+    try { fitTxbx(head && head.closest ? head.closest(".tw-txbx") : null); } catch {}
+    queuePovSave();
   }
 
   /** The blank line the caret is on, or null. */
@@ -7228,10 +7909,14 @@
         } else if (head) placeSelection(head, 0, 0);
         return;
       }
-      if (k.length === 1) done();            // a blank line takes no text
+      // A character on a blank line: that line becomes a typed line holding it (typeOnGapLine).
+      if (k.length === 1) {
+        done();
+        typeOnGapLine(i, [k]);
+      }
       return;
     }
-    if (k !== "Enter" && k !== "Backspace") return;
+    if (k !== "Enter" && k !== "Backspace" && k !== "Delete") return;
     const head = optionsHeadingEl();
     if (!head || !gap) return;
     if (gap.nextElementSibling !== head) paintOptionsGap();
@@ -7241,7 +7926,22 @@
       const at = selectionRange(head);
       if (!at || at[0] !== 0 || at[1] !== 0) return;
       const n = optionsGapCount();
-      if (n <= 0) return;                    // nothing to take: the page's own refusal stands
+      if (n <= 0) {
+        // No blank line left to take. A TYPED line right above the heading: an empty one goes, the
+        // way Word takes an empty paragraph; one with words keeps them and the caret moves to its
+        // end. A price row above instead: the page's own refusal stands (a row is never merged).
+        const above = lineAboveOptionsGap(gap);
+        if (!above || !isGapTyped(above)) return;
+        done();
+        if (!serializeBlock(above).length) {
+          dropGapTyped(above);
+          placeSelection(head, 0, 0);
+        } else {
+          const end = runsLength(editRuns(above));
+          placeSelection(above, end, end);
+        }
+        return;
+      }
       done();
       setOptionsGap(n - 1);
       placeSelection(head, 0, 0);
@@ -7251,19 +7951,57 @@
     if (!above) return;
     const at = selectionRange(above);
     if (!at || at[0] !== at[1] || at[1] < runsLength(editRuns(above))) return;
+    if (k === "Delete") {
+      // Delete at the end of the line above the gap takes the blank line under it, as in Word.
+      const n = optionsGapCount();
+      if (n <= 0) return;
+      done();
+      setOptionsGap(n - 1);
+      placeSelection(above, at[1], at[1]);
+      return;
+    }
     done();
     setOptionsGap(optionsGapCount() + 1);
     caretOntoGapLine(0);
   }
 
-  /** The routes to a blank line that are not a keystroke (an IME, a drop, a context-menu Delete):
-   *  refused, for the same reason typed text is. */
+  /** The routes to a blank line that are not a keystroke. Text arriving that way (an IME's commit,
+   *  autocorrect, a drop) lands as typed text does -- the line becomes a typed line; anything else
+   *  (a context-menu Delete, a line break with no key) is refused, because the key handler above is
+   *  what keeps the count and the typed lines in step. */
   function onOptionsGapBeforeInput(e) {
-    if (!caretGapLine()) return;
-    if (/^(insert|delete)/.test(String(e.inputType || ""))) e.preventDefault();
+    const onLine = caretGapLine();
+    if (!onLine) return;
+    const t = String(e.inputType || "");
+    if (!/^(insert|delete)/.test(t)) return;
+    e.preventDefault();
+    const data = (t === "insertText" || t === "insertReplacementText") ? e.data
+      : (t === "insertFromDrop" && e.dataTransfer ? e.dataTransfer.getData("text/plain") : "");
+    if (!data) return;
+    const gap = document.getElementById("options-gap");
+    const i = gap ? Array.prototype.indexOf.call(gap.querySelectorAll(".tw-gap-line"), onLine) : 0;
+    typeOnGapLine(i, String(data).replace(/\r\n?/g, "\n").split("\n"));
+  }
+
+  /** A PASTE on a blank line: the clipboard's text becomes typed lines there, one per line of it
+   *  (the leading and trailing newlines a copied line nearly always brings are dropped). The page's
+   *  own paste handler would refuse -- a blank line is not one of its editable families. */
+  function onOptionsGapPaste(e) {
+    const onLine = caretGapLine();
+    if (!onLine) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const dt = e.clipboardData;
+    const text = String((dt && dt.getData("text/plain")) || "").replace(/\r\n?/g, "\n")
+      .replace(/^\n+|\n+$/g, "");
+    if (!text) return;
+    const gap = document.getElementById("options-gap");
+    const i = gap ? Array.prototype.indexOf.call(gap.querySelectorAll(".tw-gap-line"), onLine) : 0;
+    typeOnGapLine(i, text.split("\n"));
   }
   docSurface.addEventListener("keydown", onOptionsGapKey, true);
   docSurface.addEventListener("beforeinput", onOptionsGapBeforeInput, true);
+  docSurface.addEventListener("paste", onOptionsGapPaste, true);
 
   function _handlePoInput(e) {
     // WHOLE-LINE edit: the whole <p> is contenteditable (base / tax / total /
@@ -7283,15 +8021,12 @@
     // there is any. An honest warning beats silently flattening what he typed.
     const lineNode = e.target && e.target.closest ? e.target.closest('[data-po-kind="line"][data-po-linekey]') : null;
     if (lineNode) {
-      const key = lineNode.dataset.poLinekey;
-      if (!key) return;
-      const v = serializeBlock(lineNode);
-      const pov = _ensurePov();
-      if (v.trim() === "" || v === (lineNode.dataset.computed || "")) delete pov.lines[key];
-      else pov.lines[key] = v;
-      queuePovSave();
+      if (!priceRowLive(lineNode)) return;
+      if (captureLineNode(lineNode)) queuePovSave();
       return;
     }
+    // A typed line above or below a price line is swept with the box (syncPriceLinesIn).
+    if (e.target && e.target.closest && e.target.closest('[data-po-kind="extra"]')) return;
     // Legacy per-field islands (retained for back-compat; not emitted by the
     // current whole-line UI).
     const sp = e.target && e.target.closest ? e.target.closest("[data-po-field]") : null;
@@ -7594,6 +8329,9 @@
       // amount / tax phrase, option + manual line label/amount). Display-only —
       // never affects pricing or the .xlsx (see backend _sanitize_price_overrides).
       price_overrides: (state.price_overrides && typeof state.price_overrides === "object") ? state.price_overrides : {},
+      // The lines that print a dollar figure of the estimator's own instead of the estimate's,
+      // so Send can ask before they go (done.js). The render ignores it.
+      price_warnings: priceWarnings(),
       // THE OPTIONAL COVER LETTER — the flag, and since 2026-09-11 once again the estimator's
       // own edits to its wording.
       //

@@ -211,7 +211,9 @@ const LIFTED = [
   topConst("LINE_SEL"), fn("lineAt"), fn("lineAtSelection"),
   topConst("boxFitById"), topConst("PAGE_HP"),
   fn("fillHtml"), fn("fillPlain"), fn("runStyleCss"), fn("blockHtml"), fn("singleTokenHint"),
-  fn("setBlockContent"), fn("isNumberedClause"), fn("applyParaGeom"), fn("renderBlock"),
+  // setBlockContent hides a free tax / total row the tax rule does not print (priceRowVisibility);
+  // none of the rows these fixtures fill carries the rule's answer, so it leaves them as they are.
+  fn("setBlockContent"), fn("priceRowVisibility"), fn("isNumberedClause"), fn("applyParaGeom"), fn("renderBlock"),
   fn("inlineHp"), fn("clearBoxFit"), fn("applyBoxFit"), fn("fitOffer"), fn("fitTxbx"),
   fn("notesRowSizePt"), fn("noteLineHtml"), fn("renderNotesPreview"),
   // THE PAGE'S OWN QUESTION-AND-ANSWER LOOP: the three bookkeeping lets, verbatim, and requestFit,

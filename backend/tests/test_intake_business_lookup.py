@@ -38,12 +38,12 @@ def test_broken_out_tax_preview_uses_current_total_and_total_label():
     # them, so a saved '(tax exempt)' phrase cannot survive broken-out tax.
     assert values.index("...mergedValues,") < values.index("total_label:")
     assert "total_label:        `${fmtUSDdoc(lumpSumNumber)} – Total`" in values
-    # The tax phrase drops the "(… INCLUDED)" claim as soon as the tax rows print — whether the
-    # estimator asked for the breakout or the template prints them regardless (`taxRowsPrint`,
-    # from baseBidFigure). This is the SOURCE half; the executed proof that flipping the dropdown
-    # moves the phrase is test_payload_sync.py::test_the_tax_treatment_reaches_the_document, which
-    # runs the real computeTokenValues in all three modes.
-    assert 'if (taxRowsPrint) return "";' in values
+    # The tax phrase is THE RULE's (baseTaxRule -> TWPrice.taxRule): "" as soon as the tax rows
+    # print, the sheet's wording on one line. This is the SOURCE half; the executed proofs are
+    # test_price_rules_parity.py (the rule itself, both languages) and
+    # test_payload_sync.py::test_the_tax_treatment_reaches_the_document, which runs the real
+    # computeTokenValues in every mode.
+    assert "base_tax_phrase: baseRule.phrase," in values
 
 
 def test_broken_out_tax_can_change_before_template_rows_mount():
@@ -57,7 +57,7 @@ def test_broken_out_tax_can_change_before_template_rows_mount():
         assert f'getElementById("{row_id}")' in js
     # Each whole-line row paints through paintLine, which no-ops when the element
     # is absent (or focused) — no unguarded .textContent write can throw.
-    assert "function paintLine(el, key, computed)" in js
+    assert "function paintLine(el, key, computed, parts)" in js
     assert "if (!el || focusInside(el)) return;" in js
 
 

@@ -156,6 +156,82 @@ def test_a_draft_saved_before_the_count_existed_prints_two(work_type, audience):
     assert "twOptionsHeading" not in xml and "urn:treadwell" not in xml
 
 
+def _run_look(p):
+    """(font, size, colour) of a paragraph's first run that carries text."""
+    for r in p.findall(qn("w:r")):
+        if not "".join(t.text or "" for t in r.iter(qn("w:t"))):
+            continue
+        rpr = r.find(qn("w:rPr"))
+        if rpr is None:
+            return (None, None, None)
+        f, z, c = rpr.find(qn("w:rFonts")), rpr.find(qn("w:sz")), rpr.find(qn("w:color"))
+        return (f.get(qn("w:ascii")) if f is not None else None,
+                z.get(qn("w:val")) if z is not None else None,
+                c.get(qn("w:val")) if c is not None else None)
+    return None
+
+
+def _above_heading(docx_bytes, typed=(), pattern=r"options\b"):
+    """Per text-box copy: the paragraphs between the heading and the nearest line above it that is
+    neither blank nor one of the `typed` texts (a price row; Gyp's mobilization line), top down."""
+    d = Document(io.BytesIO(docx_bytes))
+    out = {}
+    for tx in d.element.body.iter(qn("w:txbxContent")):
+        where = "fallback" if any(True for _ in tx.iterancestors(_MC + "Fallback")) else "choice"
+        ps = [p for p in tx if p.tag == qn("w:p")]
+        for i, p in enumerate(ps):
+            if not re.match(pattern, _text(p).strip(), re.IGNORECASE):
+                continue
+            j = i - 1
+            while j >= 0 and (_blank(ps[j]) or _text(ps[j]) in typed):
+                j -= 1
+            out[where] = {"row": ps[j] if j >= 0 else None, "lines": ps[j + 1:i]}
+    return out
+
+
+@pytest.mark.parametrize("work_type,audience", _TEMPLATES)
+def test_the_lines_typed_on_the_gap_print_above_its_blank_lines(work_type, audience):
+    """Hanz, 2026-09-26: "I cant write texts on this white space lines". What he typed on the gap
+    (price_overrides.before.heading_options) prints as paragraphs of their own ABOVE the counted
+    blank lines -- the order the editor draws -- in both copies, in the price row's own font, size
+    and colour (not a bare run at the document default), a typed BLANK line kept as the line it is,
+    and no working mark left in the file. Mutations: drop the typed lines between main.py and the
+    writer; let the spacer walk eat a typed blank line; print them as bare runs."""
+    typed = ["", "Pricing valid for 30 days", ""]
+    out = _docx(work_type, audience, 1, price_overrides={"before": {"heading_options": typed}})
+    seen = _above_heading(out, typed)
+    assert sorted(seen) == ["choice", "fallback"], sorted(seen)
+    for where, s in seen.items():
+        texts = [_text(p) for p in s["lines"]]
+        assert texts == ["", "Pricing valid for 30 days", "", ""], (where, texts)
+        row_look = _run_look(s["row"])
+        words = s["lines"][1]
+        # The row's own look, whatever this template sets it to (9pt Epoxy, 8pt Combo, 7.5pt GC...);
+        # a bare run would have no size at all and print at the 12pt default.
+        assert _run_look(words) == row_look and None not in row_look, (where, _run_look(words), row_look)
+        ppr = words.find(qn("w:pPr"))
+        assert ppr is None or ppr.find(qn("w:numPr")) is None, "a typed line carries a bullet"
+        for p in (s["lines"][0], s["lines"][2], s["lines"][3]):
+            assert _blank(p) and _mark_size(p) == "18", (where, _mark_size(p))
+    xml = _document_xml(out)
+    assert "twTypedLine" not in xml and "twOptionsHeading" not in xml
+
+
+def test_a_blank_line_typed_under_the_row_above_is_not_taken_for_a_spacer():
+    """The gap replaces the TEMPLATE's spacers above the heading. A blank line the estimator typed
+    under the Total row sits in the same place and looks the same, but it is his: the editor draws
+    it, so the document keeps it. Mutation: the walk stops only at text again."""
+    vals = dict(_VALS, tax_layout="BROKEN_OUT", material_tax_formatted="$1,000", price_taxable=True,
+                price_remodel_on=False)
+    out = _docx("epoxy", "Direct", 2, values=vals,
+                price_overrides={"after": {"total": ["Includes one mobilization", ""]}})
+    seen = _above_heading(out, ("Includes one mobilization",))
+    assert sorted(seen) == ["choice", "fallback"], sorted(seen)
+    for where, s in seen.items():
+        assert [_text(p) for p in s["lines"]] == ["Includes one mobilization", "", "", ""], where
+        assert _text(s["row"]).endswith("Total"), (where, _text(s["row"]))
+
+
 @pytest.mark.parametrize("work_type,audience", [("epoxy", "Direct"), ("polish", "Direct"),
                                                 ("combo", "Direct"), ("gyp", "Direct")])
 def test_no_options_prints_no_heading_and_no_gap(work_type, audience):
@@ -262,7 +338,6 @@ def test_a_legacy_draft_shows_two_real_lines_inside_the_editing_host(ran):
                                  "placeholder": ["BR"]}
     assert ran["clickLandsOnLine"] == 1
     assert ran["arrowDown"] is False and ran["arrowUp"] is False
-    assert ran["typeOnGap"] == {"refused": True, "lines": 2}
 
 
 def test_backspace_on_a_blank_line_removes_one(ran):
@@ -297,9 +372,80 @@ def test_enter_above_the_heading_adds_a_line_and_leaves_the_price_line_alone(ran
     assert e["baseUnchanged"], e["baseAfter"]
     g = ran["enterOnGap"]
     assert g["lines"] == 2 and g["stored"] == 2 and g["caretOnGapLine"] == 1
-    # Enter anywhere else in a price line is still the page's own line break.
-    assert ran["enterMidBase"] == {"lines": 2, "defaulted": True, "baseHasBreak": True}
-    assert ran["noOptionsEnter"] == {"lines": 0, "baseGotBreak": True}
+    # Enter anywhere else in a price line is the page's own Enter: the text after the caret moves
+    # to a line of its own under the price line (fix 5), never a break inside it -- and the gap is
+    # not touched.
+    m = ran["enterMidBase"]
+    assert m["lines"] == 2 and m["defaulted"] and m["baseHead"] == m["headWas"]
+    assert m["under"] == {"kind": "extra", "pos": "after", "text": m["tailWas"]}
+    assert ran["noOptionsEnter"] == {"lines": 0, "newLineUnderBase": True, "baseUnchanged": True}
+
+
+# ═══ the blank lines TAKE TEXT ═══════════════════════════════════════════════════════════════
+# Hanz, 2026-09-26: "I cant write texts on this white space lines" -- #568 refused typing on them.
+def test_a_character_typed_on_a_blank_line_makes_it_a_typed_line_where_it_was(ran):
+    """Typed on blank line 1 of 2: line 1 holds the text, line 0 above it is a typed BLANK line so
+    the text stays on the line it was typed on, and nothing is left in the count -- every line is
+    exactly one of the two. Stored as price_overrides.before.heading_options, the same storage as
+    a line typed under any price line, and saved. Mutation: refuse the key again (#568)."""
+    t = ran["typeOnGap"]
+    assert t["defaulted"] and t["typed"] == ["", "x"] and t["drawn"] == ["", "x"]
+    assert t["stored"] == 0 and t["lines"] == 0
+    assert t["typedDirectlyAboveGap"] and t["gapDirectlyAboveHeading"]
+    assert t["caretIsTyped"] and t["caretText"] == "x" and t["caretOffset"] == 1
+    assert ran["typeOnGapSaved"]["before"] == {"heading_options": ["", "x"]}
+    assert ran["typeOnGapSaved"]["options_gap"] == 0
+    # On blank line 0 of 2: the typed line, then the one blank line still in the count.
+    f = ran["typeOnFirstGap"]
+    assert f["typed"] == ["a"] and f["stored"] == 1 and f["lines"] == 1 and f["typedDirectlyAboveGap"]
+
+
+def test_the_keys_around_a_typed_line_behave_like_word(ran):
+    """Enter at the end of the typed line: one more blank line under it. Delete at its end: the
+    blank line under it goes. Backspace on the last blank line: the caret at the end of the typed
+    line. Backspace at the start of "Options:" with no blank line left: the words above stay and
+    the caret goes to their end; an EMPTY typed line there is taken away instead."""
+    e = ran["enterAtEndOfTyped"]
+    assert e["defaulted"] and e["typed"] == ["a"] and e["stored"] == 2 and e["caretOnGapLine"] == 0
+    d = ran["deleteAtEndOfTyped"]
+    assert d["defaulted"] and d["typed"] == ["a"] and d["stored"] == 1 and d["caretText"] == "a"
+    b = ran["backspaceOntoTyped"]
+    assert b["defaulted"] and b["stored"] == 0 and b["caretText"] == "a" and b["caretOffset"] == 1
+    h = ran["backspaceHeadingUnderTyped"]
+    assert h["defaulted"] and h["typed"] == ["a"] and h["caretText"] == "a" and h["caretOffset"] == 1
+    assert h["headingText"] == "Options:"
+    k = ran["backspaceHeadingTakesEmptyTyped"]
+    assert k["defaulted"] and k["typed"] == ["kept"] and k["drawn"] == ["kept"]
+    assert k["caretLine"] == "options-heading" and k["caretOffset"] == 0
+    # An empty typed line under the price rows: Backspace takes it, and the caret lands at the end
+    # of the line SHOWN above -- the base line, not the hidden tax rows between them.
+    x = ran["backspaceEmptyFirstTyped"]
+    assert x["defaulted"] and x["drawn"] == ["x"]
+    assert x["caretLine"] == "base-bid-row" and x["caretOffset"] == x["baseLen"]
+
+
+def test_paste_and_the_other_routes_land_as_typed_lines(ran):
+    p = ran["pasteOnGap"]
+    assert p["defaulted"] and p["typed"] == ["first", "second"] and p["stored"] == 1
+    assert p["caretText"] == "second" and p["caretOffset"] == 6
+    b = ran["beforeInputOnGap"]
+    assert b["defaulted"] and b["typed"] == ["", "q"] and b["stored"] == 0
+    # A deletion by a route the keys do not cover is refused and changes nothing.
+    r = ran["beforeInputDelete"]
+    assert r["defaulted"] and r["typed"] is None and r["lines"] == 2
+
+
+def test_saved_typed_lines_are_drawn_above_the_blank_lines(ran):
+    t = ran["reloadTyped"]
+    assert t["drawn"] == ["kept", ""] and t["lines"] == 0 and t["typedDirectlyAboveGap"]
+
+
+def test_gc_draws_the_typed_line_between_its_spacer_and_the_gap(ran):
+    """The writer takes the template's own spacer out and prints the typed lines, then the blank
+    lines: the spacer stays hidden here too, above the typed line."""
+    g = ran["gcTyped"]
+    assert g["typed"] == ["G"] and g["stored"] == 1 and g["typedDirectlyAboveGap"]
+    assert g["spacerHidden"] and g["spacerAboveTyped"]
 
 
 def test_the_count_is_saved_through_price_overrides_and_a_reload_restores_it(ran):
