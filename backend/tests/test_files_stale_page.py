@@ -204,3 +204,39 @@ def test_a_price_line_with_a_figure_of_its_own_is_asked_about_then_sent(ran):
     assert w["cancel"] == {"asked": [ask], "posted": 0}, w
     assert w["ok"] == {"asked": [ask], "posted": 1}, w
     assert w["none"] == {"asked": [], "posted": 1}, w
+
+
+# ── the copy that is built (review of dfcf589) ───────────────────────────────────────────────────
+_RJ_DOWNLOAD = "This line says $15,000 but the estimate says $12,500 — download anyway?"
+
+
+def test_download_asks_about_the_servers_copy_the_one_it_builds(ran):
+    """Kyle's Files page is current and clean; RJ types $15,000 over the base amount on his machine
+    and presses Continue. /documents renders the SERVER's copy, so Download asks about that one,
+    through the real shared.js reading GET /api/draft/{id}: Cancel renders nothing, OK renders
+    RJ's document and names the save it asked about. It used to ask about Kyle's own copy, find
+    nothing, and download RJ's $15,000 document unasked, while Send refused (below).
+
+    Mutation: confirmSavedCopy asks about this page's copy (TW.getState()) -- nothing is asked, and
+    the cancelled press renders RJ's document."""
+    r = ran["serverCopyAsked"]
+    assert r["cancel"]["asked"] == [_RJ_DOWNLOAD], r["cancel"]
+    assert r["cancel"]["rendered"] is None and r["cancel"]["bodies"] == [], r["cancel"]
+    assert r["ok"]["asked"] == [_RJ_DOWNLOAD], r["ok"]
+    assert r["ok"]["rendered"] == "RJ hand figure" and r["ok"]["checked"] == "K:RJ hand figure", r["ok"]
+    assert r["ok"]["bodies"] == [{"draft_version": "2026-09-26T10:05:00+00:00"}], r["ok"]
+    assert r["cancel"]["puts"] == r["ok"]["puts"] == 0
+    assert r["send"]["posted"] == 0 and "changed after this page opened" in r["send"]["err"], r["send"]
+
+
+def test_a_save_landing_under_the_question_is_not_what_gets_built(ran):
+    """The question sits on screen; RJ saves again meanwhile (now $18,000). Kyle's OK hands back the
+    save he was asked about, and the server builds nothing from the one stored since (its rule is
+    run for real in test_send_equals_download.py): no document, nothing marked checked.
+
+    Mutation: freshDocuments posts `{}` whatever it was handed -- RJ's $18,000 document is built."""
+    c = ran["serverCopyAsked"]["colleagueUnderTheQuestion"]
+    assert c["asked"] == [_RJ_DOWNLOAD], c
+    assert c["bodies"] == [{"draft_version": "2026-09-26T10:05:00+00:00"}], c
+    assert c["rendered"] is None and c["checked"] == "", c
+    assert c["error"], "the refused build was not reported"

@@ -1053,7 +1053,10 @@ function wireBidBar() {
       if (state.base_tab_id !== priorBaseId) {
         TWPrice.applyBasePick(state.price_overrides, priorBaseId, state.base_tab_id, state.priced_tabs,
                               { workType: state.work_type,
-                                roles: Object.fromEntries(tabs.map(t => [t.id, t.role])) });
+                                roles: Object.fromEntries(tabs.map(t => [t.id, t.role])),
+                                // The tax wording the base line prints before the pick, so a line
+                                // in the old shape is read as drawing it would read it.
+                                basePhrase: TWPrice.draftBasePhrase(state) });
       }
       renderBidOptions();
       // PRICED AND SAVED: persistTabState takes the pricing snapshot (priced_tabs, the lump sum, the
@@ -1354,7 +1357,8 @@ async function deleteTab(id) {
     const next = (state.work_type || "epoxy").toLowerCase() === "combo" ? null : resolveBaseTab();
     TWPrice.applyBasePick(state.price_overrides, id, next ? next.id : null, state.priced_tabs,
                           { workType: state.work_type,
-                            roles: Object.fromEntries(tabs.map(t => [t.id, t.role])) });
+                            roles: Object.fromEntries(tabs.map(t => [t.id, t.role])),
+                            basePhrase: TWPrice.draftBasePhrase(state) });
   }
   TW.setState({ ...state, tab_copies: state.tab_copies, tab_labels: state.tab_labels,
                 tab_notes: state.tab_notes, tab_opts: state.tab_opts,

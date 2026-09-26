@@ -373,6 +373,20 @@
   /** The lines that print the base bid itself, and the words each tax row prints after its amount. */
   var BASE_ROW_WORDS = { sales_tax: "Material Sales Tax", remodel: "Remodel Tax", total: "Total" };
 
+  /** The tax wording the BASE line prints for a draft as it stands, "" when Broken out: the layout
+   *  (layoutFor, off tax_layout / tax_inclusion) and the base's tax answers as the pages snapshot
+   *  them (proposal_sales_tax, proposal_remodel_tax, proposal_taxable, proposal_remodel_on). For the
+   *  Estimate step, which has no document to ask; the Proposal step's own is baseTaxRule, which
+   *  also knows a template whose tax rows are plain paragraphs (GC, Gyp: no base line in a price
+   *  box, so nothing for a pick to migrate). */
+  function draftBasePhrase(draft) {
+    var d = draft && typeof draft === "object" ? draft : {};
+    var sys = { total: d.proposal_lump_sum, sales_tax: d.proposal_sales_tax, remodel: d.proposal_remodel_tax,
+                taxable: d.proposal_taxable, remodel_on: d.proposal_remodel_on };
+    var f = taxRule(sys, false);
+    return taxRule(sys, layoutFor(d.tax_layout, d.tax_inclusion, false, f.taxable, f.remodel_on) === "BROKEN_OUT").phrase;
+  }
+
   /** THE BASE-PICK RULE, one for all three ways the base bid changes: the Estimate step's bid strip
    *  (estimate-review.js wireBidBar), the Proposal step's sidebar (proposal-review.js), and deleting
    *  the base copy on the Estimate step (deleteTab: the base falls back to the one the sheet
@@ -394,9 +408,18 @@
    *   * A LINE IN THE OLD SHAPE (lines) is migrated the same way HERE, while the figures of the tab
    *     it was frozen under are still on the draft (a deleted copy's leave it at the next pricing):
    *     migrateLine splits off the lines typed round it, and a tab's figure at its amount and a tax
-   *     wording this tool has printed become markers. It is not given a tax marker it did not have:
-   *     a line with no tax wording prints none after the pick, as it printed none before it. A "$0"
-   *     on a tax row or the Total is the old box-wide sweep's phantom and goes.
+   *     wording this tool has printed become markers. A "$0" on a tax row or the Total is the old
+   *     box-wide sweep's phantom and goes.
+   *     THE SAME PARTS AS DRAWING IT. The Proposal step migrates such a line the first time it draws
+   *     it (proposal-review.js lineOverride), with the base line's tax slot and the wording it
+   *     prints under the layout of the moment; a pick that meets the line first has to read it the
+   *     same way, or the two disagree about the same line (review of dfcf589). So the base line is
+   *     migrated with `opts.basePhrase`, the tax wording it prints right now (the old base's, "" when
+   *     Broken out). Under Broken out the tool printed NO wording, so a line with none gets the tax
+   *     marker at its end (captureLine) and a later One line brings the wording back; under One line
+   *     a line with none had its wording taken out, and prints none after the pick, as before it.
+   *     All three callers say (the Estimate step through draftBasePhrase, the sidebar through its
+   *     own baseTaxRule); a caller that does not gets no marker added.
    *   * THE WORDS FOR THE TAB'S SYSTEM (baseDesc) are the old base's wherever they still stand
    *     verbatim in the base line, and become the new base's. His own words round them stay,
    *     whatever they say.
@@ -416,8 +439,9 @@
    *  `from` / `to` are the base tab ids before and after (null: the combined or derived base).
    *  `tabs` is the draft's priced_tabs. `opts.workType` is the draft's work_type; `opts.roles`
    *  ({id: role}) names the tabs priced_tabs may not hold yet (the Estimate step passes its own tab
-   *  list: a copy made a moment ago and picked at once). Mutates `pov` in place; every caller saves
-   *  it. Returns whether anything changed.
+   *  list: a copy made a moment ago and picked at once); `opts.basePhrase` is the tax wording the
+   *  base line prints before the pick (draftBasePhrase; see THE SAME PARTS above). Mutates `pov` in
+   *  place; every caller saves it. Returns whether anything changed.
    *
    *  Page state only, like tabFigures: the document prints what the page saved, so price_rules.py
    *  has no twin of it (the parity test covers the rule the two halves both run). */
@@ -447,7 +471,8 @@
       var text = hasLive ? live[k] : null;
       if (legacy && typeof legacy[k] === "string") {
         if (!hasLive) {
-          var m = migrateLine(legacy[k], { others: figs });
+          var m = migrateLine(legacy[k], k === "base" && typeof o.basePhrase === "string"
+            ? { others: figs, phrase: o.basePhrase, slot: true } : { others: figs });
           [["before", m.before], ["after", m.after]].forEach(function (pair) {
             var rows = pair[1];
             if (!rows || !rows.length) return;
@@ -508,7 +533,9 @@
 
   /** THE CHECK all three ways out run before they build, file or send anything: ask the question
    *  when the draft's document has a price line with a figure of his own, and say whether to go on.
-   *  `draft` is the page's copy of the draft (TW.getState(), read at the press); `ask` puts the
+   *  `draft` is the copy that goes out: for Send this page's (TW.getState(), read at the press, once
+   *  Send has checked it IS the server's), for Download and To Dropbox the server's (through
+   *  confirmSavedCopy, below); `ask` puts the
    *  question to him (window.confirm) and is not called when there is nothing to ask. True: nothing
    *  to ask, or he said OK. False: he cancelled, and the caller does nothing at all. */
   function confirmOwnFigures(draft, act, ask) {
@@ -518,6 +545,40 @@
     return !!(typeof ask === "function" && ask(q));
   }
 
+  /** THE CHECK, ASKED OF THE COPY THAT IS BUILT: Download and To Dropbox.
+   *
+   *  Neither builds this page's copy of the draft. The server builds and files ITS copy (POST
+   *  /api/draft/{id}/documents, /api/to-dropbox), and a Files page's copy can be older than the
+   *  server's: initDraftSync does not re-read a copy already stamped for the draft. Review of
+   *  dfcf589: Kyle's Files page was current and clean; RJ typed $15,000 over the base amount on his
+   *  machine and pressed Continue; Kyle pressed Download PDF, was asked nothing (his copy had no
+   *  such line), and downloaded RJ's $15,000 document. Send was refused in the same case, because
+   *  it reads the server's copy (TW.readServerRow) and will not go when the two differ.
+   *
+   *  So: this page's pending save goes first (flushState: it would go by itself within seconds,
+   *  and the server must hold it before the server's copy is asked about), then the server's copy
+   *  is read and the question asked of IT, by confirmOwnFigures, the one check. A draft with no id
+   *  has no server copy; its own payload is what gets built, so it is the one asked about.
+   *
+   *  `tw` is the page's TW (shared.js). Resolves {go, failed, version}: `failed` when the save
+   *  could not land or the server's copy could not be read, so nothing could be asked and nothing
+   *  may be built; `go` false when he cancelled; `version`, when the server stored the copy asked
+   *  about, which the build hands back (draft_version) so the server refuses a draft stored again
+   *  since. The question can sit on screen a long while, and a colleague's save landing under it
+   *  would otherwise be what gets built. No fetch here: `tw` does it. */
+  function confirmSavedCopy(tw, act, ask) {
+    var none = { go: false, failed: true, version: "" };
+    return Promise.resolve(tw.flushState()).then(function (saved) {
+      if (!saved) return none;
+      if (!tw.getDraftId()) return { go: confirmOwnFigures(tw.getState(), act, ask), failed: false, version: "" };
+      return Promise.resolve(tw.readServerRow()).then(function (row) {
+        if (!row || !row.data || typeof row.data !== "object") return none;
+        return { go: confirmOwnFigures(row.data, act, ask), failed: false,
+                 version: typeof row.version === "string" ? row.version : "" };
+      });
+    });
+  }
+
   return {
     AMOUNT: AMOUNT, TAX: TAX, PHRASE: PHRASE, KNOWN_PHRASES: KNOWN_PHRASES,
     cents: cents, flag: flag, phraseFor: phraseFor, taxRule: taxRule, layoutFor: layoutFor,
@@ -525,6 +586,8 @@
     moneyOff: moneyOff, firstDollar: firstDollar, sameAmountAt: sameAmountAt, migrateLine: migrateLine,
     amountAt: amountAt, amountIsOneOf: amountIsOneOf, priceShaped: priceShaped,
     usd: usd, tabFigures: tabFigures, baseDesc: baseDesc, applyBasePick: applyBasePick,
+    draftBasePhrase: draftBasePhrase,
     ownFigureQuestion: ownFigureQuestion, confirmOwnFigures: confirmOwnFigures,
+    confirmSavedCopy: confirmSavedCopy,
   };
 });

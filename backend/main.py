@@ -6553,8 +6553,26 @@ def _stored_revision_documents(draft_id: str, revision_no: int) -> Optional[Dict
                                  "Please try again in a minute.") from exc
 
 
+class DocumentsIn(BaseModel):
+    # When the server stored the copy of the draft the Files page asked its question of (the
+    # draft row's `updated_at`, from GET /api/draft/{id}): TWPrice.confirmSavedCopy asks "This line
+    # says $X but the estimate says $Y — download anyway?" of the SERVER's copy, and the question
+    # can sit on screen while a colleague's save lands. Optional: the page's own builds (the files
+    # it shows on arrival) and an older page send nothing, and are built as before.
+    draft_version: Optional[str] = None
+
+
+def _stored_since(row: Dict[str, Any], version: Optional[str]) -> bool:
+    """Has the draft been stored again since the save a page checked (`version`, the row's
+    `updated_at` as that page read it)? False when the page named none. The publish makes the same
+    comparison inline (api_portal_publish); Download and To Dropbox ask it here."""
+    v = (version or "").strip()
+    return bool(v) and v != str(row.get("updated_at") or "")
+
+
 @app.post("/api/draft/{draft_id}/documents", response_model=GenerateOut)
-def api_draft_documents(draft_id: str, request: Request) -> GenerateOut:
+def api_draft_documents(draft_id: str, request: Request,
+                        payload: Optional[DocumentsIn] = None) -> GenerateOut:
     """The Files page's Download buttons: the SAVED draft's document, through the one render.
 
     Loads the draft from the store rather than taking a payload in the body, because the store's
@@ -6572,6 +6590,15 @@ def api_draft_documents(draft_id: str, request: Request) -> GenerateOut:
     row = drafts.load_draft(draft_id)
     if not row:
         raise HTTPException(404, "Draft not found")
+    # THE COPY HE WAS ASKED ABOUT, OR NOTHING (review of dfcf589). The page asked its question of
+    # the save it names; a draft stored again since may carry a figure nobody was asked about, so
+    # nothing is rendered or recorded. Pressing Download again asks about the copy stored now.
+    if _stored_since(row, payload.draft_version if payload else None):
+        log.warning("documents refused for draft %s: saved again after the page checked it "
+                    "(checked %s, now %s)", draft_id, payload.draft_version, row.get("updated_at"))
+        raise HTTPException(409, "Not built — this proposal was saved again after this page "
+                                 "checked it (from another page or computer). Press Download "
+                                 "again to check the copy saved now.")
     pp = (row.get("data") or {}).get("proposal_payload")
     if not (isinstance(pp, dict) and pp.get("values")):
         raise HTTPException(422, "This proposal hasn't been built yet — open the Proposal step "
@@ -7272,6 +7299,9 @@ class ToDropboxIn(BaseModel):
     # the folder his team already made instead of inventing a second one). When
     # set, nothing new is created. Blank/None keeps the old create-a-folder path.
     folder_path: str | None = None
+    # When the server stored the copy the page asked "… — file anyway?" of (DocumentsIn has the
+    # why). A draft stored again since is not filed. Absent (an older page): filed as before.
+    draft_version: str | None = None
 
 
 def _dropbox_project_vals(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -7383,6 +7413,15 @@ def api_to_dropbox(payload: ToDropboxIn, request: Request) -> Dict[str, Any]:
     row = drafts.load_draft(payload.draft_id)
     if not row:
         raise HTTPException(404, "Draft not found")
+    # THE COPY HE WAS ASKED ABOUT, OR NOTHING (review of dfcf589; api_draft_documents has the same).
+    if _stored_since(row, payload.draft_version):
+        log.warning("to-dropbox refused for draft %s: saved again after the page checked it "
+                    "(checked %s, now %s)", payload.draft_id, payload.draft_version,
+                    row.get("updated_at"))
+        return {"ok": False, "code": "document_changed",
+                "error": "Nothing was filed — this proposal was saved again after this page "
+                         "checked it (from another page or computer). Press the button again to "
+                         "check the copy saved now."}
     data = row.get("data") or {}
     pp = data.get("proposal_payload")
     # STALE, NOT JUST ABSENT, SENDS US TO THE SAME FALLBACK BELOW. A payload that

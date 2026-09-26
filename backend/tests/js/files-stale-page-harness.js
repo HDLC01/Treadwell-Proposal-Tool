@@ -101,6 +101,13 @@ async function tab(local, server, opts) {
   const fetch = (url, opts) => {
     const method = (opts && opts.method) || "GET";
     if (url.includes("/api/draft/d1/documents")) {
+      const sent = opts && opts.body ? JSON.parse(opts.body) : {};
+      rec.documentsBodies = (rec.documentsBodies || []).concat([sent]);
+      // api_draft_documents' own rule (test_send_equals_download.py runs the real one): a page that
+      // names the save it asked its question of gets nothing built from a draft stored since.
+      if (sent.draft_version && sent.draft_version !== String(server.version || "")) {
+        return json(409, { detail: "Not built — this proposal was saved again after this page checked it" });
+      }
       const pp = JSON.parse(JSON.stringify(server.d1.proposal_payload));
       rec.renderedTexture = pp.values.texture;
       // The render key the server would hand back: a function of what it rendered.
@@ -174,7 +181,7 @@ async function tab(local, server, opts) {
 
   const builtAt = new Function(...BUILT_AT.args, '"use strict"; ' + BUILT_AT.body);
   const freshDocuments = new AsyncFunction(
-    "TW", "builtAt", '"use strict"; ' + FRESH.body)
+    "TW", "builtAt", ...FRESH.args, '"use strict"; ' + FRESH.body)
     .bind(null, TW, builtAt);
   const checkedDocument = { renderId: "" };
   const downloadAs = new AsyncFunction(
@@ -445,6 +452,58 @@ function current() {
       r.none = { asked, posted: t.rec.published.length };
     }
     out.priceWarning = r;
+  }
+
+  // I. THE COPY THAT IS BUILT (review of dfcf589). Kyle's Files page is current and clean. RJ, on
+  //    another machine, types $15,000 over the base amount and presses Continue: the SERVER's copy
+  //    now lists it. Kyle presses Download PDF. It used to ask about Kyle's own copy (nothing to ask)
+  //    and download RJ's $15,000 document; Send, in the same case, refuses. Download asks about the
+  //    copy /documents renders now. Then the same press with RJ saving AGAIN while the question is
+  //    on screen (a different figure): the build names the save it asked about, and nothing is
+  //    built from the one stored since.
+  {
+    const r = {};
+    const rjs = (w, texture, says) => {
+      const pp = JSON.parse(JSON.stringify(P2));
+      pp.values.texture = texture;
+      pp.price_warnings = [{ key: "base", says, estimate: "$12,500" }];
+      w.server.d1 = Object.assign(JSON.parse(JSON.stringify(w.server.d1)), { proposal_payload: pp });
+    };
+    for (const answer of [false, true, "colleagueUnderTheQuestion"]) {
+      const w = current();
+      w.server.version = "2026-09-26T10:00:00+00:00";
+      const t = await tab(w.local, w.server);
+      rjs(w, "RJ hand figure", "$15,000");
+      w.server.d1.proposal_payload_key = t.TW.composeKey(w.server.d1);
+      w.server.version = "2026-09-26T10:05:00+00:00";
+      const asked = [];
+      t.window.confirm = (msg) => {
+        asked.push(msg);
+        if (answer === "colleagueUnderTheQuestion") {
+          rjs(w, "RJ again", "$18,000");
+          w.server.version = "2026-09-26T10:06:00+00:00";
+          return true;
+        }
+        return answer;
+      };
+      await t.download();
+      r[answer === true ? "ok" : answer === false ? "cancel" : answer] = {
+        asked, rendered: t.rec.renderedTexture, bodies: t.rec.documentsBodies || [],
+        checked: t.checkedDocument.renderId, error: t.rec.downloadError || null,
+        puts: t.rec.puts.length };
+    }
+    // Send, in the same case as the first: refused, as it always was.
+    {
+      const w = current();
+      const t = await tab(w.local, w.server);
+      rjs(w, "RJ hand figure", "$15,000");
+      w.server.d1.proposal_payload_key = t.TW.composeKey(w.server.d1);
+      const asked = [];
+      t.window.confirm = (msg) => { asked.push(msg); return true; };
+      await t.send();
+      r.send = { asked, posted: t.rec.published.length, err: t.rec.err || null };
+    }
+    out.serverCopyAsked = r;
   }
 
   // G. The saved copy cannot be read at Send: nothing can be checked, so nothing is sent.

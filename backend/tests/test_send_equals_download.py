@@ -564,6 +564,42 @@ def test_a_send_of_the_draft_it_checked_goes(world, monkeypatch):
     assert "Orange Peel" in _text(frozen["docx"])
 
 
+def test_a_download_builds_nothing_from_a_draft_saved_after_the_page_asked(world, monkeypatch):
+    """Review of dfcf589. The Files page asks "This line says $X … — download anyway?" of the
+    server's copy (GET /api/draft/d1), and the question can sit on screen while RJ's save lands.
+    The build names the save it asked about (draft_version); a draft stored since is refused, with
+    nothing rendered and nothing recorded (files-stale-page-harness.js I: the page sends it).
+
+    Mutation: drop the _stored_since check in api_draft_documents -- a 200, RJ's texture built."""
+    clock = []
+    kyles = copy.deepcopy(world.store["drafts"][0]["data"])
+    _save(kyles, clock, monkeypatch)
+    asked = client.get("/api/draft/d1").json()["updated_at"]
+    rjs = copy.deepcopy(kyles)
+    rjs["proposal_payload"]["values"]["texture"] = "RJ Broadcast Flake"
+    _save(rjs, clock, monkeypatch)                          # under the question
+    r = client.post("/api/draft/d1/documents", json={"draft_version": asked})
+    assert r.status_code == 409, r.text
+    assert "saved again" in r.json()["detail"], r.text
+    assert world.renders == [], "a document was rendered for a refused build"
+    assert not world.store["drafts"][0]["data"].get("generate_result"), "a refused build was recorded"
+
+
+@pytest.mark.parametrize("named", [True, False])
+def test_a_download_of_the_save_it_asked_about_builds_and_so_does_a_page_naming_none(world, monkeypatch,
+                                                                                       named):
+    """The counterexample: the save the page asked about builds, and so does a request naming no
+    save (the page's own builds on arrival, an older page). Without it, the test above passes for a
+    route that refuses every version."""
+    clock = []
+    _save(copy.deepcopy(world.store["drafts"][0]["data"]), clock, monkeypatch)
+    asked = client.get("/api/draft/d1").json()["updated_at"]
+    assert asked, "the fixture's row has no version to check"
+    r = client.post("/api/draft/d1/documents", json={"draft_version": asked} if named else {})
+    assert r.status_code == 200, r.text
+    assert "Orange Peel" in _text(client.get(r.json()["docx_download_url"]).content)
+
+
 def test_a_send_records_who_owns_the_follow_up_on_the_draft(world, monkeypatch):
     """A browser's save can no longer change a server-owned key (api_save_draft keeps the stored
     assigned_estimator, test_projects_test_flag.py), so the Files page's after-send save stopped

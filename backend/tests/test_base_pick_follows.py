@@ -16,8 +16,9 @@ the Proposal step's sidebar, deleting the base copy on the Estimate step):
     it today (TWPrice.tabFigures) -- the tool's figure. Any other figure stays his: kept, marked,
     and Send, Download and To Dropbox ask (Hanz: warn, then let him send).
   * A LINE IN THE OLD SHAPE is migrated the same way at the pick, while the old base's figures are
-    still on the draft; the lines typed inside it become lines of their own; a "$0" tax row the old
-    sweep froze is dropped.
+    still on the draft, and with the parts drawing it would use (the base line's tax slot and the
+    wording it prints before the pick), so a pick and a draw read one line alike; the lines typed
+    inside it become lines of their own; a "$0" tax row the old sweep froze is dropped.
   * THE WORDS FOR THE TAB'S SYSTEM ("Epoxy flooring as described above" / "Polished Concrete
     Flooring as described above") are the old base's where they still stand verbatim, and become
     the new base's (TWPrice.baseDesc, whose twin is the page's baseDescLabel).
@@ -557,3 +558,98 @@ def test_deleting_the_base_copy_migrates_a_line_frozen_at_the_copys_figure_while
     block = _base_block(_document(r["doc"]))
     assert block[:2] == [_EPOXY_LINE, "THis is a test send to Hanz"], block
     assert not any("$15,149" in t for t in block), block
+
+
+# ── an old-shape base line the tool printed under Broken out (review of dfcf589) ─────────────────
+_COPY_BROKEN = f"$14,954 – {_EPOXY}"
+_COPY_ONE = f"$15,149 – {_EPOXY} (material sales tax INCLUDED)"
+
+
+@pytest.mark.parametrize("case", ["broken", "undecided"])
+def test_a_pick_reads_an_old_shape_base_line_the_way_drawing_it_would(ran, case):
+    """"$7,351 – Epoxy flooring as described above": Epoxy's pre-tax figure and the tool's own
+    words, frozen by the old sweep under Broken out (set, or undecided on a taxable base), which
+    prints no tax wording. Drawn first, the Proposal step migrates it with the base line's tax slot
+    and it is no edit. The Estimate strip meeting it FIRST used to migrate it with no slot: kept as
+    an edit with no tax marker, so once the layout was One line the customer's base line printed
+    the tax-inclusive price with no tax wording. Both orders now agree: nothing kept, and the
+    picked tab's line under either layout, in the editor and the document.
+
+    Mutations: applyBasePick's base-line migration without the phrase and slot (the old one); the
+    strip's call without basePhrase; draftBasePhrase blind to the layout (always One line's)."""
+    r = ran["brokenOutLegacy"][case]
+    for order in ("pickedFirst", "drawnFirst"):
+        o = r[order]
+        assert o["lines2"] == {}, (order, o["lines2"])
+        assert not (o.get("lines") or {}).get("base"), (order, o.get("lines"))
+        assert o["broken"]["rows"] == [{"kind": "line", "text": _COPY_BROKEN, "money": False}], (order, o["broken"])
+        assert o["oneLine"]["rows"] == [{"kind": "line", "text": _COPY_ONE, "money": False}], (order, o["oneLine"])
+        assert o["oneLine"]["warnings"] == [] and o["broken"]["warnings"] == []
+    assert _base_block(_document(r["pickedFirst"]["oneLine"]["doc"]))[:1] == [_COPY_ONE]
+    assert _base_block(_document(r["pickedFirst"]["broken"]["doc"]))[:1] == [_COPY_BROKEN]
+
+
+def test_a_base_line_with_its_tax_wording_taken_out_under_one_line_keeps_none_through_a_pick(ran):
+    """The counterexample, the shape De Soto's prod draft holds: "$1,870.00 – Epoxy flooring as
+    described above" under One line, where the tool printed the wording, so its absence is his. A
+    pick keeps it without wording in both orders (his words, the new base's amount), under either
+    layout. Without this, the test above passes for a rule that gives every line the tax marker."""
+    r = ran["brokenOutLegacy"]["deSoto"]
+    for order in ("pickedFirst", "drawnFirst"):
+        o = r[order]
+        assert o["lines2"] == {"base": f"{AMT} – {_EPOXY}"}, (order, o["lines2"])
+        assert o["oneLine"]["rows"] == [{"kind": "line", "text": f"$15,149 – {_EPOXY}", "money": False}], o
+        assert o["asSaved"]["rows"] == o["oneLine"]["rows"], o
+    assert _base_block(_document(r["pickedFirst"]["oneLine"]["doc"]))[:1] == [f"$15,149 – {_EPOXY}"]
+
+
+def test_the_sidebar_reads_an_undrawn_old_shape_base_line_the_same_way(ran):
+    """The sidebar meets such a line only where the price box never drew it: a combined base (its
+    base row is hidden) with no document built yet. Picked to one tab under Broken out, the line
+    keeps its tax marker, and a later One line prints the wording.
+
+    Mutation: the sidebar's call without basePhrase (the marker is not added: no wording)."""
+    s = ran["brokenOutLegacy"]["sidebar"]
+    assert s["untouched"] == {"base": f"$7,351 – {_EPOXY}"}, "the scenario lost its point: it was drawn"
+    assert s["lines2"] == {"base": f"{AMT} – {_EPOXY} {TAX}"}, s["lines2"]
+    assert s["oneLine"]["rows"] == [{"kind": "line", "text": _COPY_ONE, "money": False}], s["oneLine"]
+
+
+def test_deleting_the_base_copy_reads_an_old_shape_line_printed_under_broken_out_alike(ran):
+    """The copy's base line in the old shape, "$14,954 – Epoxy flooring as described above" (its
+    pre-tax figure under Broken out, the tool's own words). Deleting the copy moves the base to
+    Epoxy; the Proposal step then opens under One line: Epoxy's line with its wording.
+
+    Mutation: deleteTab's call without basePhrase (the line is kept with no tax marker, and the
+    One-line document prints no wording)."""
+    r = ran["deleteBase"]["brokenOut"]
+    assert r["base"] == "Epoxy" and r["pov"]["lines"] == {}, r
+    assert "base" not in r["pov"]["lines2"], r["pov"]["lines2"]
+    assert r["rows"] == [{"kind": "line", "text": _EPOXY_LINE, "money": False}], r["rows"]
+    assert _base_block(_document(r["doc"]))[:1] == [_EPOXY_LINE]
+
+
+def test_the_tax_wording_the_base_line_prints_is_read_off_the_draft():
+    """TWPrice.draftBasePhrase, what the Estimate step hands the pick: "" under Broken out (chosen,
+    the old three-way answer, or undecided on a taxable base), the One-line wording otherwise --
+    including the four prod drafts' own shapes (EXEMPT on a zero-tax tab, INCLUDED on a taxed one).
+    And applyBasePick reading the same old-shape line under each."""
+    got = _node_core("""(P) => [
+        P.draftBasePhrase({ tax_layout: 'BROKEN_OUT', proposal_sales_tax: 96, proposal_taxable: true }),
+        P.draftBasePhrase({ tax_inclusion: 'BROKEN_OUT', proposal_sales_tax: 96 }),
+        P.draftBasePhrase({ proposal_sales_tax: 96, proposal_taxable: true }),
+        P.draftBasePhrase({ tax_inclusion: 'INCLUDED', proposal_sales_tax: 96, proposal_taxable: true }),
+        P.draftBasePhrase({ tax_inclusion: 'EXEMPT', proposal_sales_tax: 0, proposal_remodel_tax: 0 }),
+        P.draftBasePhrase({ tax_layout: 'ONE_LINE', proposal_sales_tax: 110, proposal_remodel_tax: 745 }),
+        P.draftBasePhrase({ proposal_sales_tax: 0, proposal_remodel_tax: 0, proposal_taxable: false }),
+        P.draftBasePhrase(null)]""")
+    assert got == ["", "", "", "(material sales tax INCLUDED)", "(tax exempt)",
+                   "(Remodel Tax AND material sales tax INCLUDED)", "(tax exempt)", ""], got
+    line = {"lines": {"base": f"$7,351 – {_EPOXY}"}}
+    outs = [_node_core(_PICK, line, "Epoxy", "Copy1", _TABS, opts)[1]
+            for opts in ({"workType": "epoxy", "basePhrase": ""},
+                         {"workType": "epoxy", "basePhrase": "(material sales tax INCLUDED)"},
+                         {"workType": "epoxy"})]
+    assert outs[0].get("lines2", {}) == {}, outs[0]
+    assert outs[1]["lines2"] == {"base": f"{AMT} – {_EPOXY}"}, outs[1]
+    assert outs[2]["lines2"] == {"base": f"{AMT} – {_EPOXY}"}, outs[2]

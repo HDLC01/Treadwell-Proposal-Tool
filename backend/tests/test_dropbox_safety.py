@@ -454,12 +454,12 @@ _FILE_ASK = "This line says $15,000 but the estimate says $9,860 — file anyway
 @needs_node
 def test_to_dropbox_asks_about_a_figure_of_his_own_and_cancel_files_nothing(page):
     """The page loaded on a document with no such line; by the press the draft's document has one.
-    To Dropbox asks Send's question in its own verb, of the draft as it stands AT THE PRESS, before
-    anything is filed. Cancel files nothing, saves nothing, and leaves the button armed and the
-    result hidden, exactly as they were.
+    To Dropbox asks Send's question in its own verb, of the draft as it stands AT THE PRESS (the
+    server's copy, which is this page's here: the copy that is filed), before anything is filed.
+    Cancel files nothing, saves nothing, and leaves the button armed and the result hidden,
+    exactly as they were.
 
-    Mutations: drop the check from the click handler (the cancelled press files); read this
-    file's load-time `state` instead of TW.getState() (nothing is asked, and it files)."""
+    Mutations: drop the check from the click handler (the cancelled press files)."""
     c = page["ownFigureCancel"]
     assert c["asked"] == [_FILE_ASK], c["asked"]
     assert c["posts"] == 0 and c["stored"] == 0, c
@@ -481,3 +481,88 @@ def test_to_dropbox_asks_nothing_when_every_line_follows_the_estimate(page):
     """No such line on the document: no question, and the filing goes."""
     c = page["ownFigureClean"]
     assert c["asked"] == [] and c["posts"] == 1, c
+
+
+# ── the copy that is filed (review of dfcf589) ───────────────────────────────────────────────────
+_RJ_FILE_ASK = "This line says $15,000 but the estimate says $12,500 — file anyway?"
+
+
+@needs_node
+def test_to_dropbox_asks_about_the_servers_copy_the_one_it_files(page):
+    """/api/to-dropbox files the SERVER's copy of the draft, and the POST carries only its id. Kyle's
+    Files page is clean; RJ's $15,000 is on the server's copy. The press used to ask about Kyle's
+    copy, find nothing, and file RJ's document unasked. It asks about the server's copy now (read
+    after this page's pending save goes): Cancel files and stores nothing and leaves the button as
+    it was; OK files, naming the save it asked about (draft_version), which the route refuses to
+    file past (below).
+
+    Mutation: confirmSavedCopy asks about this page's copy -- nothing is asked, and it files."""
+    s = page["serverCopy"]
+    c = s["cancel"]
+    assert c["asked"] == [_RJ_FILE_ASK], c
+    assert c["posts"] == 0 and c["stored"] == 0, c
+    assert c["flushes"] == 1 and c["reads"] == 1, c
+    assert c["go"] == {"disabled": False, "same": True}, c["go"]
+    o = s["ok"]
+    assert o["asked"] == [_RJ_FILE_ASK] and o["posts"] == 1, o
+    assert o["body"]["draft_version"] == "2026-09-26T10:05:00+00:00", o["body"]
+    assert o["body"]["folder_path"].endswith("/26.08.14 Fuel House"), o["body"]
+
+
+@needs_node
+def test_to_dropbox_does_not_ask_about_a_figure_only_this_page_still_holds(page):
+    """The counterexample: the figure is on this page's copy and gone from the server's, so the
+    document filed has nothing to ask about. Without it, the test above passes for a page that
+    asks about either copy."""
+    c = page["serverCopy"]["onlyLocal"]
+    assert c["asked"] == [] and c["posts"] == 1, c
+
+
+@needs_node
+def test_to_dropbox_files_nothing_when_the_servers_copy_cannot_be_read(page):
+    """Nothing can be asked, so nothing is filed, the button stays as it was, and the page says why.
+
+    Mutation: treat an unreadable server copy as nothing to ask (file anyway)."""
+    c = page["serverCopy"]["unreadable"]
+    assert c["asked"] == [] and c["posts"] == 0, c
+    assert "nothing was filed" in c["said"], c["said"]
+    assert c["go"] == {"disabled": False, "same": True}, c["go"]
+
+
+def _versioned(monkeypatch, dbx, stored_at):
+    """The route wired as above, its one draft stored at `stored_at` (the row's updated_at)."""
+    client = _wire(monkeypatch, dbx, _draft())
+    monkeypatch.setattr(main.drafts, "load_draft",
+                        lambda i: {"id": i, "data": _draft(), "updated_at": stored_at})
+    return client
+
+
+def test_the_route_files_nothing_from_a_draft_saved_after_the_page_asked(monkeypatch):
+    """The page asked "… — file anyway?" of the save stored at 10:05; the question sat on screen and
+    RJ's save landed at 10:06. The route files nothing, writes no history, and says why.
+
+    Mutation: drop the _stored_since check in api_to_dropbox -- RJ's copy is uploaded."""
+    dbx = RecordingDbx(tree={GYP: ["26.08.14 Fuel House"],
+                             KYLES_FOLDER: ["Numbers 8.10.26"], KYLES_NUMBERS: []})
+    client = _versioned(monkeypatch, dbx, "2026-09-26T10:06:00+00:00")
+    j = client.post("/api/to-dropbox", json={"draft_id": "d1", "destination": "gyp",
+                                             "folder_path": KYLES_FOLDER,
+                                             "draft_version": "2026-09-26T10:05:00+00:00"}).json()
+    assert j["ok"] is False and j["code"] == "document_changed", j
+    assert "saved again" in j["error"], j
+    assert dbx.uploaded() == [] and dbx.kinds("copy") == []
+
+
+@pytest.mark.parametrize("version", ["2026-09-26T10:05:00+00:00", None])
+def test_the_route_files_the_save_the_page_asked_about_and_an_older_page_as_before(monkeypatch, version):
+    """The counterexample: the same save the page asked about files; so does a request naming none
+    (an older page). Without it, the test above passes for a route that refuses everything."""
+    dbx = RecordingDbx(tree={GYP: ["26.08.14 Fuel House"],
+                             KYLES_FOLDER: ["Numbers 8.10.26"], KYLES_NUMBERS: []})
+    client = _versioned(monkeypatch, dbx, "2026-09-26T10:05:00+00:00")
+    body = {"draft_id": "d1", "destination": "gyp", "folder_path": KYLES_FOLDER}
+    if version:
+        body["draft_version"] = version
+    j = client.post("/api/to-dropbox", json=body).json()
+    assert j["ok"] is True, j
+    assert dbx.uploaded(), "the files were not uploaded"

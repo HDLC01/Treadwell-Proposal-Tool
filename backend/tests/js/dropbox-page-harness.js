@@ -195,12 +195,21 @@ function build(opts) {
   const stored = [];
   const saved = [];      // TW.setState: this browser's copy AND a PUT of the whole blob
   // The draft's document as it stands NOW: a scenario can change it after the page has loaded.
-  const live = { payload: o.payload };
+  // `live.server` is the SERVER's copy (GET /api/draft/{id}), the one /api/to-dropbox files: this
+  // page's own unless a scenario gives it one of its own; `live.row` false makes it unreadable.
+  const live = { payload: o.payload, server: null, row: true, flushes: 0, reads: 0 };
   const TW = {
     getState: () => ({ project_name: "Fuel House", work_type: "gyp",
                        cell_values: { E20: 4200 },
                        proposal_payload: live.payload,
                        dropbox_result: o.prevResult || undefined }),
+    flushState: async () => { live.flushes++; return true; },
+    readServerRow: async () => {
+      live.reads++;
+      if (!live.row) return null;
+      return { data: live.server ? JSON.parse(JSON.stringify(live.server)) : TW.getState(),
+               version: "2026-09-26T10:05:00+00:00" };
+    },
     setLocalState: (patch) => stored.push(patch),
     setState: (patch) => { saved.push(patch); stored.push(patch); },
     authHeaders: () => ({}),
@@ -348,6 +357,54 @@ async function main() {
   c.nodes["dbx-go"].fire("click");
   await drain();
   out.ownFigureClean = { asked: c.confirm.asked.slice(), posts: c.posts.length };
+
+  // ═══ the copy that is filed (review of dfcf589) ════════════════════════
+  // This page's copy is clean; the SERVER's -- the one /api/to-dropbox files -- carries RJ's
+  // $15,000 over the base amount. The press asks about the server's copy: Cancel files nothing, OK
+  // files naming the save it asked about. The reverse (a figure only this page still holds) is not
+  // asked about. The server's copy cannot be read: nothing is filed, and the page says why.
+  const armed = async (opts2) => {
+    const x = build(Object.assign({ payload: { values: {} }, folderResponses: {
+      gyp: { ok: true, folders: GYP_FOLDERS, suggested_new_name: "26.08.20 Fuel House" } } }, opts2 || {}));
+    await drain();
+    x.nodes["dbx-dest"].value = "gyp";
+    x.nodes["dbx-dest"].fire("change");
+    await drain();
+    return x;
+  };
+  const rj = { values: {}, price_warnings: [{ key: "base", says: "$15,000", estimate: "$12,500" }] };
+  out.serverCopy = {};
+  for (const answer of [false, true]) {
+    const x = await armed();
+    x.live.server = { project_name: "Fuel House", proposal_payload: rj };
+    x.confirm.answer = answer;
+    const label = x.nodes["dbx-go"].textContent;
+    x.nodes["dbx-go"].fire("click");
+    await drain();
+    out.serverCopy[answer ? "ok" : "cancel"] = {
+      asked: x.confirm.asked.slice(), posts: x.posts.length, body: x.posts[0] || null,
+      reads: x.live.reads, flushes: x.live.flushes, stored: x.stored.length,
+      go: { disabled: x.nodes["dbx-go"].disabled, same: x.nodes["dbx-go"].textContent === label } };
+  }
+  {
+    const x = await armed({ payload: rj });
+    x.live.server = { project_name: "Fuel House", proposal_payload: { values: {} } };
+    x.nodes["dbx-go"].fire("click");
+    await drain();
+    out.serverCopy.onlyLocal = { asked: x.confirm.asked.slice(), posts: x.posts.length };
+  }
+  {
+    const x = await armed();
+    x.live.row = false;
+    const label = x.nodes["dbx-go"].textContent;
+    x.nodes["dbx-go"].fire("click");
+    await drain();
+    out.serverCopy.unreadable = { asked: x.confirm.asked.slice(), posts: x.posts.length,
+                                  shown: x.nodes["dbx-result"].style.display || "",
+                                  said: x.nodes["dbx-result"].innerHTML,
+                                  go: { disabled: x.nodes["dbx-go"].disabled,
+                                        same: x.nodes["dbx-go"].textContent === label } };
+  }
 
   console.log(JSON.stringify(out));
 }

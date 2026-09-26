@@ -1622,9 +1622,14 @@
               // And SAVED NOW. rebuildPricing's save below carries the base and the money, not the
               // price edits, so leaving by a step pill (the pagehide save) put the old base's
               // words for its system back into the draft under the new base.
+              //
+              // `basePhrase`: the tax wording the base line prints before the pick (the page has
+              // not re-priced yet), so a line still in the old shape -- one a combined base never
+              // drew -- is read as drawing it would read it (TWPrice.applyBasePick, THE SAME PARTS).
               const pov = state.price_overrides;
               if (TWPrice.applyBasePick(pov, priorBaseId, state.base_tab_id, state.priced_tabs,
-                                        { workType: state.work_type })) {
+                                        { workType: state.work_type,
+                                          basePhrase: baseTaxRule().phrase })) {
                 TW.setState({ price_overrides: pov });
               }
             }

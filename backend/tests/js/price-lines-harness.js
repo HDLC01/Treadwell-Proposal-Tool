@@ -810,8 +810,8 @@ function pickedThenOpened(draft, pick) {
 
 // 12. DELETING THE BASE COPY changes the base too, to the one the sheet derives: the Estimate step's
 //     real deleteTab (and the real resolveBaseTab it asks), then the Proposal step opens the draft.
-function deleteBaseCopy(baseLine, legacyBase) {
-  const draft = hanzFix({ base_tab_id: "Copy1", proposal_lump_sum: 15149, proposal_sales_tax: 195,
+function deleteBaseCopy(baseLine, legacyBase, over, then) {
+  const draft = hanzFix(Object.assign({ base_tab_id: "Copy1", proposal_lump_sum: 15149, proposal_sales_tax: 195,
     priced_tabs: clone(HF_TABS), rooms: [], tab_copies: [{ id: "Copy1", role: "epoxy", source: "Epoxy" }],
     tab_labels: { Copy1: "Epoxy copy" }, tab_notes: {}, lock_overrides: {},
     tab_opts: { Copy1: {}, Polish: { is_option: true, show: true, price_mode: "total" } },
@@ -821,7 +821,8 @@ function deleteBaseCopy(baseLine, legacyBase) {
                 "manual:0": TWPrice.AMOUNT + " – Joint filler, per plan",
                 "option:Polish": TWPrice.AMOUNT + " – Polished Concrete, 800 grit, warehouse only " + TWPrice.TAX,
                 "option:Epoxy": TWPrice.AMOUNT + " – Epoxy as an option " + TWPrice.TAX }),
-    }, legacyBase ? { lines: { base: legacyBase } } : { after: { base: NOTE_UNDER_BASE.slice() } }) });
+    }, legacyBase ? { lines: { base: legacyBase } } : { after: { base: NOTE_UNDER_BASE.slice() } }) },
+    over || {}));
   const state = clone(draft);
   const sets = [];
   const src = (re, what) => { const m = re.exec(ER); if (!m) throw new Error(what + " is gone from estimate-review.js"); return m[0]; };
@@ -849,6 +850,7 @@ function deleteBaseCopy(baseLine, legacyBase) {
     const saved = Object.assign(clone(draft), ...sets);
     // What the Estimate step's next pricing snapshot holds: the copy is gone.
     saved.priced_tabs = clone(HF_TABS).filter((t) => t.id !== "Copy1");
+    Object.assign(saved, then || {});                    // what changed before the Proposal step
     const p = openProposal(saved);
     return { savedBase: saved.base_tab_id, pov: clone(saved.price_overrides), base: p.st.base_tab_id,
              rows: baseRows(p.api), warnings: warned(p.api), doc: docPayload(p.st, p.api) };
@@ -870,12 +872,65 @@ const NOTE_UNDER_BASE = ["", "THis is a test send to Hanz"];
   out.baseDesc = rows;
 }
 
+// 14. AN OLD-SHAPE BASE LINE THE TOOL PRINTED UNDER BROKEN OUT, met by a pick before the Proposal
+//     step has drawn it (review of dfcf589). Broken out prints no tax wording, so the old sweep froze
+//     "$7,351 – Epoxy flooring as described above": Epoxy's pre-tax figure, the tool's own words.
+//     Drawn first, the line is migrated with the base line's tax slot and is no edit; a pick that met
+//     it first used to migrate it with NO slot, keep it as an edit with no tax marker, and a later
+//     One line printed the base with no tax wording at all. Both orders, then the Proposal step
+//     opened under Broken out and under One line (the estimator switched). And the counterexample,
+//     the De Soto shape: a line with no wording under ONE LINE had its wording taken out, and keeps
+//     none through a pick, in both orders.
+{
+  const legacy = (text, over) => hanzFix(Object.assign({ base_tab_id: "Epoxy", proposal_lump_sum: 7447,
+    proposal_sales_tax: 96, priced_tabs: clone(HF_TABS), rooms: [], tab_opts: {},
+    price_overrides: { lines: { base: text } } }, over || {}));
+  const opened = (saved, layout) => {
+    const s = Object.assign(clone(saved), layout ? { tax_layout: layout } : {});
+    const p = openProposal(s);
+    return { rows: baseRows(p.api), warnings: warned(p.api), doc: docPayload(p.st, p.api) };
+  };
+  const both = (draft) => {
+    const picked = estimatePick(draft, "Copy1").saved;
+    const first = openProposal(draft);
+    const drawnThenPicked = estimatePick(first.api.saved(draft), "Copy1").saved;
+    return {
+      pickedFirst: { lines2: clone(picked.price_overrides.lines2 || {}), lines: clone(picked.price_overrides.lines || {}),
+                     broken: opened(picked, "BROKEN_OUT"), oneLine: opened(picked, "ONE_LINE"),
+                     asSaved: opened(picked) },
+      drawnFirst: { lines2: clone(drawnThenPicked.price_overrides.lines2 || {}),
+                    broken: opened(drawnThenPicked, "BROKEN_OUT"), oneLine: opened(drawnThenPicked, "ONE_LINE"),
+                    asSaved: opened(drawnThenPicked) },
+    };
+  };
+  out.brokenOutLegacy = {
+    broken: both(legacy("$7,351 – Epoxy flooring as described above", { tax_layout: "BROKEN_OUT" })),
+    // An undecided layout on a taxable base is Broken out too (Hanz's default), off the sheet.
+    undecided: both(legacy("$7,351 – Epoxy flooring as described above", { tax_inclusion: null })),
+    deSoto: both(legacy("$7,447.00 – Epoxy flooring as described above", { tax_inclusion: "INCLUDED" })),
+  };
+  // The sidebar meets such a line only where the price box never drew it: a combined base (the base
+  // row is hidden), no document built yet. Picked, Broken out, then switched to One line.
+  const combo = hanzFix({ work_type: "combo", base_tab_id: null, proposal_lump_sum: 17307, proposal_sales_tax: 206,
+    proposal_remodel_tax: 745, tax_layout: "BROKEN_OUT", priced_tabs: clone(HF_TABS), rooms: [], tab_opts: {},
+    price_overrides: { lines: { base: "$7,351 – Epoxy flooring as described above" } } });
+  const cp = openProposal(combo);
+  const untouched = clone(cp.st.price_overrides.lines || {});
+  const left = sidebarPick(cp, "Copy1");
+  out.brokenOutLegacy.sidebar = { untouched, lines2: clone((left.price_overrides || {}).lines2 || {}),
+                                  oneLine: opened(left, "ONE_LINE") };
+}
+
 Promise.all([
   deleteBaseCopy("$15,000 – Epoxy flooring as described above " + TWPrice.TAX),
   deleteBaseCopy(TWPrice.AMOUNT + " – Epoxy flooring, whole building incl. mezzanine " + TWPrice.TAX),
   // In the old shape, frozen at the COPY's figure, the note typed under it inside it.
   deleteBaseCopy(null, "$15,149 – Epoxy flooring as described above (material sales tax INCLUDED)\n\nTHis is a test send to Hanz"),
-]).then(([money, words, frozen]) => {
-  out.deleteBase = { money, words, frozen };
+  // 14, deleting the base copy: its base line in the old shape, frozen under Broken out at the
+  // copy's pre-tax figure, the tool's own words; then the Proposal step opens under One line.
+  deleteBaseCopy(null, "$14,954 – Epoxy flooring as described above",
+                 { tax_layout: "BROKEN_OUT" }, { tax_layout: "ONE_LINE" }),
+]).then(([money, words, frozen, brokenOut]) => {
+  out.deleteBase = { money, words, frozen, brokenOut };
   console.log(JSON.stringify(out));
 });
