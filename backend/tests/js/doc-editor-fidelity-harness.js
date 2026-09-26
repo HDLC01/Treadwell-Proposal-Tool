@@ -363,6 +363,10 @@ const LIFTED = [
   // resolvers are how it finds the caret's line now that the event target is the box.
   topConst("LINE_SEL"), fn("lineAt"), fn("lineAtSelection"), fn("lineTarget"), fn("editingBox"),
   fn("syncBlock"),
+  // collectOverrides sends a line the estimator DELETED as {id, removed: true} and
+  // restoreSavedOverrides hides it again after a reload, so the removal family comes too.
+  fn("boxLines"), fn("lineIsEmpty"), fn("lineRemovable"), fn("removeLine"),
+  fn("unremoveLine"), fn("removedBlockIds"),
 ].join("\n\n");
 
 const INPUT_HANDLER = delegated("  // Mark blocks dirty as they're edited (delegated");
@@ -418,6 +422,15 @@ function makePage(label) {
     // ribbon itself is fmt-ribbon-harness.js's world; a no-op is the truthful answer for a harness
     // that mounts no ribbon, and it still fails loudly if the page ever renames the function.
     const renderFmtBar = () => {};
+    // removeLine lets go of the ribbon when the line it takes out is the ribbon's target. The
+    // page's own bindings, with no ribbon mounted: nothing is ever its target here.
+    let fmtBlock = null;
+    const idleFmtBar = () => { fmtBlock = null; };
+    // schedulePersistOverrides and refreshDocumentFills ask the server what size each box
+    // prints at (POST /api/proposal-fit). A network question is not this harness's world, and
+    // the count proves the two writers still ask.
+    let fitAsks = 0;
+    const scheduleFit = () => { fitAsks += 1; };
     // Box geometry belongs to box-drag-harness.js, which builds that world; an empty collector
     // is the truthful answer for a harness that mounts no boxes.
     const collectBoxOverrides = () => ({});

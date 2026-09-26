@@ -1368,43 +1368,69 @@ _TXBX_INSET_TB_PT = 0.05 * 72 * 2     # top + bottom
 # Rough proportional-font metrics for Carlito/Calibri body text: average glyph
 # advance ≈ 0.5·fontSize, single line height ≈ 1.2·fontSize. Biased slightly
 # toward OVER-estimating height (wider glyph, taller line) so we err on the side
-# of shrinking a hair MORE rather than clipping. The floor mirrors the editor's
-# on-screen fitTxbx (0.60).
+# of shrinking a hair MORE rather than clipping.
 _TXBX_GLYPH_W = 0.50
 _TXBX_LINE_H = 1.20
 _TXBX_SCALE_FLOOR = 0.60
+# THE EDITOR DOES NOT RE-ESTIMATE ANY OF THIS, and must not. Hanz, 2026-09-26: "whatever is the font
+# size in the PDF should also be the same as in the Proposal Editor". The editor used to run its own
+# shrink (a browser measurement stepping down to 75%, then clipping), so a full box sat at full size
+# on screen and printed smaller. Now it asks: POST /api/proposal-fit runs the real fill for the
+# editor's current payload and hands back the `fit_report` `_shrink_overflowing_text_boxes` fills,
+# and the page applies each box's scale with `_scale_txbx_runs`' own per-run rule
+# (proposal-format-core.js `fitHp`). A second estimate in the browser would have to mirror the
+# region expansions, the frame padding keyed on note text, the box overrides and the hand-sized
+# exemptions below from the DOM, and would drift the first time any of them changed.
+
+
+def _fit_hp(p_elem) -> int | None:
+    """The half-point size `_estimate_txbx_scale` COUNTS a paragraph at: its first `w:sz` in
+    document order, which is the paragraph mark's (`w:pPr/w:rPr`) whenever it has one — it does in
+    every text-box paragraph of every template — and otherwise the first run's. None = no readable
+    size, which the estimate counts as 9pt. Served to the editor per block (/api/proposal-template
+    `fit.hp`) as the height an EMPTY paragraph prints at: the shrink scales runs, never the
+    paragraph mark, so an empty line keeps this size in every box."""
+    sz = p_elem.find(".//" + qn("w:sz"))
+    try:
+        return int(sz.get(qn("w:val"))) if sz is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _estimate_txbx_scale(txbx, box: dict | None) -> float:
     """Estimate the font scale (0.60–1.0) needed for a text box's content to fit
     its fixed design height. Returns 1.0 when it already fits or geometry is
     unknown. Pure estimate (no renderer) — see the metric constants above."""
+    return _estimate_txbx_fit(txbx, box)[0]
+
+
+def _estimate_txbx_fit(txbx, box: dict | None) -> tuple:
+    """`(scale, content_pt, usable_pt)` — `_estimate_txbx_scale`'s answer plus the two heights it
+    compared, so the editor can be told whether the box still runs past its bottom edge at the
+    floor (content_pt * 0.60 > usable_pt). The heights are 0.0 when geometry is unknown."""
     if not box:
-        return 1.0
+        return 1.0, 0.0, 0.0
     w_pt, h_pt = box.get("w_pt"), box.get("h_pt")
     if not w_pt or not h_pt or w_pt <= 0 or h_pt <= 0:
-        return 1.0
+        return 1.0, 0.0, 0.0
     lIns, rIns, tIns, bIns = _txbx_insets(txbx)   # actual box insets (padding must reduce usable height)
     usable_w = w_pt - (lIns + rIns) / _EMU_PER_PT
     usable_h = h_pt - (tIns + bIns) / _EMU_PER_PT
     if usable_w <= 0 or usable_h <= 0:
-        return 1.0
+        return 1.0, 0.0, 0.0
     content_h = 0.0
     for p in txbx.iter(qn("w:p")):
         text = "".join(t.text or "" for t in p.iter(qn("w:t")))
-        sz = p.find(".//" + qn("w:sz"))
-        try:
-            font_pt = int(sz.get(qn("w:val"))) / 2.0 if sz is not None else 9.0
-        except (TypeError, ValueError):
-            font_pt = 9.0
+        hp = _fit_hp(p)
+        font_pt = hp / 2.0 if hp is not None else 9.0
         if font_pt <= 0:
             font_pt = 9.0
         chars_per_line = max(1.0, usable_w / (_TXBX_GLYPH_W * font_pt))
         lines = max(1, math.ceil(len(text) / chars_per_line))   # empty para → 1 line of height
         content_h += lines * _TXBX_LINE_H * font_pt
     if content_h <= usable_h or content_h <= 0:
-        return 1.0
-    return max(_TXBX_SCALE_FLOOR, usable_h / content_h)
+        return 1.0, content_h, usable_h
+    return max(_TXBX_SCALE_FLOOR, usable_h / content_h), content_h, usable_h
 
 
 def _shape_of_txbx(txbx):
@@ -1441,6 +1467,16 @@ def _txbx_insets(txbx):
     return ins["lIns"], ins["rIns"], ins["tIns"], ins["bIns"]
 
 
+def _txbx_default_hp(txbx) -> int:
+    """The half-point size `_scale_txbx_runs` gives a run with no `w:sz` of its own: the box's
+    most common size, paragraph marks included; 18 (9pt) for a box with none. Reported to the
+    editor per box (`fit_report`), which needs it for the one kind of run that has no size: words
+    typed into a template line that had no run at all."""
+    sizes = [int(v) for sz in txbx.iter(qn("w:sz"))
+             if (v := sz.get(qn("w:val"))) and v.isdigit()]
+    return max(set(sizes), key=sizes.count) if sizes else 18   # half-points; 18 = 9pt
+
+
 def _scale_txbx_runs(txbx, scale: float, exempt: dict | None = None) -> None:
     """Directly shrink every run's font size in a text box by `scale`.
 
@@ -1456,9 +1492,7 @@ def _scale_txbx_runs(txbx, scale: float, exempt: dict | None = None) -> None:
     still clipped). It DOES always honor explicit run sizes (<w:sz>), so we scale
     those directly. Size-less runs inherit — we give them the box's most common
     size so they shrink too. Floored at 4pt so nothing vanishes."""
-    sizes = [int(v) for sz in txbx.iter(qn("w:sz"))
-             if (v := sz.get(qn("w:val"))) and v.isdigit()]
-    default_hp = max(set(sizes), key=sizes.count) if sizes else 18   # half-points; 18 = 9pt
+    default_hp = _txbx_default_hp(txbx)
     for r in txbx.iter(qn("w:r")):
         if exempt:
             # Walk up to the run's paragraph; if the estimator sized that paragraph, leave it.
@@ -1486,7 +1520,7 @@ def _scale_txbx_runs(txbx, scale: float, exempt: dict | None = None) -> None:
             el.set(qn("w:val"), str(new_hp))
 
 
-def _shrink_overflowing_text_boxes(d: Document) -> int:
+def _shrink_overflowing_text_boxes(d: Document, report: list | None = None) -> int:
     """Keep long text-box content from spilling past its fixed box (over the next
     box / the baked page-frame art) — e.g. a combo's two options + exclusions,
     whose last line ("*Assumes installation over…") was overdrawn by the PRICE
@@ -1496,10 +1530,18 @@ def _shrink_overflowing_text_boxes(d: Document) -> int:
     <a:normAutofit/> "shrink text on overflow" — is a NO-OP under LibreOffice-
     headless (it doesn't compute/apply DrawingML autofit, with or without an
     explicit fontScale). So for boxes we estimate to overflow, we shrink the RUN
-    sizes directly (which LibreOffice always honors), mirroring the editor's
-    on-screen `fitTxbx` so preview == generated doc. We still flip noAutofit→
+    sizes directly (which LibreOffice always honors). We still flip noAutofit→
     normAutofit (harmless; lets Word re-fit if the doc is opened there). Boxes
-    that already fit are untouched (byte-identical output)."""
+    that already fit are untouched (byte-identical output).
+
+    Nothing is cut: a box still over its height at the 0.60 floor keeps the floor size and the
+    rest of its text runs on past the box's bottom edge, because the box itself is never grown.
+
+    `report`, when given, gets one record per box this pass decided, which is what the editor
+    shows (POST /api/proposal-fit): `{id, scale, default_hp, exempt, at_floor, content_pt,
+    usable_pt}`. `scale` is the factor actually applied (1.0 when the box was left alone),
+    `exempt` the editor block ids whose sizes the estimator chose and this pass did not touch,
+    and `at_floor` whether the estimate still overflows at the floor."""
     NO, NORM = f"{{{_A_NS}}}noAutofit", f"{{{_A_NS}}}normAutofit"
     try:
         boxes = template_geometry(d).get("boxes", [])
@@ -1518,9 +1560,23 @@ def _shrink_overflowing_text_boxes(d: Document) -> int:
         af.tag = NORM
         af.attrib.pop("fontScale", None)    # empty normAutofit; we shrink runs directly below
         af.attrib.pop("lnSpcReduction", None)
-        scale = _estimate_txbx_scale(txbx, boxes[i] if i < len(boxes) else None)
-        if scale < 0.999:
+        scale, content_pt, usable_pt = _estimate_txbx_fit(txbx, boxes[i] if i < len(boxes) else None)
+        applied = scale < 0.999
+        # Read BEFORE the scaling below rewrites the sizes it is counted from.
+        default_hp = _txbx_default_hp(txbx) if report is not None else None
+        if applied:
             _scale_txbx_runs(txbx, scale, _user_sized_paragraphs(d))
+        if report is not None:
+            ids = _user_sized_block_ids(d)
+            report.append({
+                "id": i,
+                "scale": scale if applied else 1.0,
+                "default_hp": default_hp,
+                "exempt": sorted(ids[id(p)] for p in txbx.iter(qn("w:p")) if id(p) in ids),
+                "at_floor": bool(content_pt > 0 and usable_pt < content_pt * _TXBX_SCALE_FLOOR),
+                "content_pt": round(content_pt, 3),
+                "usable_pt": round(usable_pt, 3),
+            })
         n += 1
     # Straggler noAutofit not paired to a geometry box: preserve the old intent.
     for na in list(d.element.iter(NO)):
@@ -3267,6 +3323,23 @@ def _user_sized_paragraphs(d) -> dict:
     return _hand_formatted(d, "_tw_user_sized")
 
 
+def _user_sized_block_ids(d) -> dict:
+    """`{id(paragraph): editor block id}` for the same paragraphs as `_user_sized_paragraphs`.
+
+    Only ever filled next to that register, which holds the elements themselves, so every key
+    here stays the id of a live proxy for as long as the document does (see `_hand_formatted`).
+    The overflow shrink reports these ids to the editor (`fit_report`), which leaves those
+    paragraphs at their chosen size exactly as the shrink does."""
+    got = getattr(d, "_tw_user_sized_ids", None)
+    if got is None:
+        got = {}
+        try:
+            setattr(d, "_tw_user_sized_ids", got)
+        except Exception:  # noqa: BLE001 — a read-only Document reports no exemptions
+            return {}
+    return got
+
+
 def _user_bolded_runs(d) -> dict:
     """Runs whose WEIGHT the estimator stated explicitly, per document.
 
@@ -3447,7 +3520,84 @@ def _override_is_blank(val) -> bool:
     return not str(val or "").strip()
 
 
-def _apply_paragraph_overrides(d: Document, overrides: list) -> int:
+# What a `removed` override may never take out, even from a text box: anything that draws, anchors
+# another shape, or carries the section's page setup. Removing one of those deletes artwork or a
+# whole box from the customer's document, not a line.
+_REMOVE_BLOCKERS = tuple(qn(t) for t in (
+    "w:drawing", "w:pict", "w:object", "w:txbxContent", "w:sectPr"))
+
+
+def paragraph_removable(d: Document, p_elem, in_block, txbx_idx) -> bool:
+    """May a `{"id": n, "removed": true}` override take this paragraph out of the document?
+
+    Hanz, 2026-09-26, deleting a line in the WORK box: "This is also weird when I delete a line" —
+    the emptied line stayed, blank, with the edit bar on it, and printed as a blank line. In Word a
+    Backspace on an empty paragraph removes the paragraph. The editor now sends that as `removed`,
+    and this is the ONE rule both sides apply: /api/proposal-template serves it per block
+    (`fit.removable`) so the editor only offers what `_apply_paragraph_overrides` will honour.
+
+    Only a FREE paragraph inside a TEXT BOX (WORK, PRICE, NOTES, the header boxes): never a
+    `{{#block}}` region's paragraph (priced / engine-owned, the same refusal every override gets),
+    never a numbered Terms clause (removing one renumbers the contract, the reason emptying one is
+    already refused), never the Terms flow on the body (paginated around its letterhead anchors),
+    never the Options heading the blank-line gap is counted from, and never a paragraph that holds
+    artwork, another box or the section properties."""
+    if txbx_idx is None or in_block is not None:
+        return False
+    if p_elem.get(_OPTIONS_HEADING_ATTR) is not None:
+        return False
+    if _para_ordered_list(d, p_elem):
+        return False
+    return not any(next(p_elem.iter(t), None) is not None for t in _REMOVE_BLOCKERS)
+
+
+def typed_run_size(d: Document, p_elem) -> tuple[int, bool]:
+    """(half-points, sized): the size text typed into this paragraph PRINTS at, per the writer.
+
+    An override rewrites the paragraph through `_set_paragraph_text`, which keeps the FIRST text
+    run's `w:rPr` (or clones the first run's when there is no text run) — so typed words take
+    that run's `w:sz`, and `sized` is True. A paragraph with no run at all, which is what every
+    blank spacer line in these templates is, gets a bare run with no size of its own: it prints at
+    the paragraph style's size, and failing that at the document default (`w:docDefaults`, 12pt in
+    every template), not at the 9pt the editor used to show it at. `sized` False also tells the
+    editor that, in a box the overflow shrink scales, such a run is given the box's most common
+    size (`_scale_txbx_runs`), not a scaled copy of its own."""
+    media = (qn("w:drawing"), qn("w:pict"), qn("w:object"))
+    runs = p_elem.findall(qn("w:r"))
+    text_runs = [r for r in runs if not any(next(r.iter(t), None) is not None for t in media)]
+    src = text_runs[0] if text_runs else (runs[0] if runs else None)
+    rpr = src.find(qn("w:rPr")) if src is not None else None
+    sz = rpr.find(qn("w:sz")) if rpr is not None else None
+    if sz is not None:
+        try:
+            return int(sz.get(qn("w:val"))), True
+        except (TypeError, ValueError):
+            pass
+    try:
+        st = Paragraph(p_elem, d).style
+    except Exception:  # noqa: BLE001 — a style lookup failure falls through to the default
+        st = None
+    hops = 0
+    while st is not None and hops < 4:
+        try:
+            size = st.font.size
+        except Exception:  # noqa: BLE001
+            size = None
+        if size is not None:
+            return int(round(size.pt * 2)), False
+        st = getattr(st, "base_style", None)
+        hops += 1
+    try:
+        dd = d.styles.element.find(qn("w:docDefaults"))
+        dsz = dd.find(".//" + qn("w:rPrDefault") + "/" + qn("w:rPr") + "/" + qn("w:sz"))
+        if dsz is not None:
+            return int(dsz.get(qn("w:val"))), False
+    except Exception:  # noqa: BLE001
+        pass
+    return 20, False
+
+
+def _apply_paragraph_overrides(d: Document, overrides: list, doomed=()) -> int:
     """Apply the web editor's `paragraph_overrides` to the PRISTINE template —
     i.e. this MUST run before Phase 1 (block expansion) in `fill_proposal`,
     because block expansion inserts/removes paragraphs and would shift every
@@ -3478,11 +3628,20 @@ def _apply_paragraph_overrides(d: Document, overrides: list) -> int:
     # off is not an edit to the words, and requiring a text field to come with it would make a
     # formatting-only change either impossible or a silent rewrite of the paragraph.
     para_by_id: dict[int, dict] = {}
+    # A REMOVED paragraph: `{"id": n, "removed": true}`, the editor's Backspace on an emptied line
+    # (see `paragraph_removable`). Strictly `True` — nothing else means removed, so every entry saved
+    # before this key existed means exactly what it meant, including `text: ""`, which still prints
+    # the paragraph EMPTY. It wins over anything else sent for the same id: a removed line has no
+    # words or bullet left to apply.
+    removed_ids: set[int] = set()
     for o in overrides or []:
         if not isinstance(o, dict):
             continue
         pid = o.get("id")
         if isinstance(pid, bool) or not isinstance(pid, int):
+            continue
+        if o.get("removed") is True:
+            removed_ids.add(pid)
             continue
         para = sanitize_para_props(o.get("para"))
         if para:
@@ -3514,12 +3673,42 @@ def _apply_paragraph_overrides(d: Document, overrides: list) -> int:
             continue
         by_id[pid] = text   # last one wins on a duplicate id
 
-    if not by_id and not para_by_id:
+    for pid in removed_ids:
+        by_id.pop(pid, None)
+        para_by_id.pop(pid, None)
+    if not by_id and not para_by_id and not removed_ids:
         return 0
 
     applied = 0
     refused = 0
+    # Collected during the walk and taken out AFTER it: every id is resolved against the pristine
+    # template in this one pass, so the paragraphs after a removed one keep the ids the editor had.
+    to_remove: list = []
+    # How many FREE paragraphs (outside every {{#block}} region) each container holds. Block
+    # expansion can strip every region row a box has -- an empty {{#tax_breakout}}, no options --
+    # so a box asked to lose all its free paragraphs could print with no paragraph at all, and a
+    # text box with no paragraph is a file Word refuses. So the last free paragraph of a container
+    # stays, whatever is asked. The editor applies the same rule (proposal-review.js lineRemovable:
+    # a box keeps at least one `.tw-block`), so it only ever catches a request it did not build.
+    # The container is held in the value, which keeps its proxy -- and so its id() -- alive.
+    #
+    # `doomed` are the free paragraphs the fill will take out ANYWAY after this pass -- the free
+    # Remodel Tax rows on a job with no remodel tax (`_free_remodel_rows`) -- so they are not counted
+    # as the paragraph that keeps a box alive: on the Gyp PRICE box that row was the last one left.
+    free_in: dict = {}
     for idx, _kind, p_elem, in_block, _text, _txbx in iter_editable_blocks(d):
+        if in_block is None and not any(p_elem is x for x in doomed):
+            _par = p_elem.getparent()
+            if _par is not None:
+                free_in.setdefault(id(_par), [_par, 0])[1] += 1
+        if idx in removed_ids:
+            if paragraph_removable(d, p_elem, in_block, _txbx):
+                to_remove.append(p_elem)
+                applied += 1
+            elif in_block is None:
+                log.warning("Kept paragraph block %s the payload asked to remove: only a free "
+                            "text-box paragraph can be removed", idx)
+            continue
         if in_block is not None or (idx not in by_id and idx not in para_by_id):
             continue
         text_refused = False
@@ -3554,6 +3743,7 @@ def _apply_paragraph_overrides(d: Document, overrides: list) -> int:
                     if _set_paragraph_runs(p_elem, val, _user_bolded_runs(d)):
                         # Remember the box so the overflow shrink leaves this paragraph's sizes alone.
                         _user_sized_paragraphs(d)[id(p_elem)] = p_elem
+                        _user_sized_block_ids(d)[id(p_elem)] = idx
                 else:
                     _set_paragraph_text(p_elem, val)
                 # AN EMPTIED ROW KEEPS NO BULLET. `_strip_bullet` already did this for a blank
@@ -3585,6 +3775,19 @@ def _apply_paragraph_overrides(d: Document, overrides: list) -> int:
         if text_refused and idx not in para_by_id:
             continue
         applied += 1
+    for p_elem in to_remove:
+        parent = p_elem.getparent()
+        if parent is None:
+            continue
+        # The last free paragraph of its box stays (see `free_in` above).
+        slot = free_in.get(id(parent))
+        if slot is None or slot[1] <= 1:
+            applied -= 1
+            log.warning("Kept a paragraph the payload asked to remove: it is the last free "
+                        "paragraph of its text box")
+            continue
+        slot[1] -= 1
+        parent.remove(p_elem)
     if refused:
         log.warning("Kept %d numbered clause(s) the payload asked to empty", refused)
     return applied
@@ -3608,6 +3811,7 @@ def fill_proposal(
     box_overrides: Mapping[str, Any] | None = None,
     remodel_row: bool = True,
     options_gap: int | None = None,
+    fit_report: list | None = None,
 ) -> bytes:
     """Open the matching template, substitute tokens, return docx bytes.
 
@@ -3641,6 +3845,9 @@ def fill_proposal(
 
     `options_gap` is how many blank lines print directly above the PRICE Options heading
     (`price_overrides.options_gap`; None or anything invalid = 2, see `_apply_options_gap`).
+
+    `fit_report`, when a list, receives the overflow shrink's per-box decisions (see
+    `_shrink_overflowing_text_boxes`); the document is built exactly as without it.
     """
     template_path = pick_template(work_type, audience)
     log.info("Filling proposal: work_type=%s audience=%s template=%s systems=%d price_lines=%d alt=%d",
@@ -3673,7 +3880,7 @@ def fill_proposal(
     # paragraphs, which would shift ids computed afterward out from under the
     # editor's.
     if paragraph_overrides:
-        n_over = _apply_paragraph_overrides(d, paragraph_overrides)
+        n_over = _apply_paragraph_overrides(d, paragraph_overrides, doomed=_no_remodel_rows)
         if n_over:
             log.info("Applied %d paragraph override(s)", n_over)
     _n_remodel_dropped = 0
@@ -3793,7 +4000,7 @@ def fill_proposal(
         log.info("Padded %d framed box(es) top inset (clears the frame border)", _padded)
     # Shrink-to-fit: long content (esp. gyp's verbose WORK scope) would otherwise
     # overflow its fixed box and overlap the next box / frame art.
-    _shrunk = _shrink_overflowing_text_boxes(d)
+    _shrunk = _shrink_overflowing_text_boxes(d, fit_report)
     if _shrunk:
         log.info("Set %d text box(es) to shrink-on-overflow (normAutofit)", _shrunk)
     # Force the Terms & Conditions onto their own page (templates ship without a

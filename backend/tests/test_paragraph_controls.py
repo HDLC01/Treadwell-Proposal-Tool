@@ -431,10 +431,13 @@ def test_generate_survives_malformed_para_values():
 # ══ seam 2: the browser has to be able to READ the state ═════════════════════
 # The keys the frontend's paraBase() reads. Grown without the version bump, a browser replaying
 # a cached response has no `locked` and would happily offer to un-bullet a contract clause.
-_BLOCK_KEYS_AT_V7 = {
+# v8 (2026-09-26) added `fit`: the size a paragraph's typed words print at, its empty height, and
+# whether Backspace on it emptied may take it out of the document (see _FIT_KEYS_AT_V8).
+_BLOCK_KEYS_AT_V8 = {
     "id", "kind", "text", "style", "in_block", "in_txbx", "txbx",
-    "align", "list", "price_flat", "para", "runs",
+    "align", "list", "price_flat", "para", "runs", "fit",
 }
+_FIT_KEYS_AT_V8 = {"hp", "typed_hp", "typed_sized", "removable"}
 # The keys INSIDE `para`. Asserted separately because the block dict's own key set does not move
 # when a nested one grows, and v6 grew a nested one: `marker`. A browser holding a v5 response has
 # every block's `para` without it, and the renderer's fallback for a marker-less list paragraph is
@@ -495,12 +498,13 @@ def test_block_schema_version_was_bumped_for_the_new_field(epoxy_blocks):
     replays the old shape against the new frontend."""
     keys = set(epoxy_blocks[0])
     assert "para" in keys
-    assert keys == _BLOCK_KEYS_AT_V7, (
+    assert keys == _BLOCK_KEYS_AT_V8, (
         "the block dict shape changed — bump main._BLOCK_SCHEMA_VERSION and update "
-        "_BLOCK_KEYS_AT_V7 in the same commit")
+        "_BLOCK_KEYS_AT_V8 in the same commit")
     for b in epoxy_blocks:
         assert set(b["para"]) == _PARA_KEYS_AT_V7, (b["id"], b["para"])
-    assert main._BLOCK_SCHEMA_VERSION == "7", (
+        assert set(b["fit"]) == _FIT_KEYS_AT_V8, (b["id"], b["fit"])
+    assert main._BLOCK_SCHEMA_VERSION == "8", (
         "`para` includes `marker` but _BLOCK_SCHEMA_VERSION is %r; a browser holding a v5 "
         "response has no marker for any block, so it paints a red square in front of all 27 "
         "numbered contract clauses" % (main._BLOCK_SCHEMA_VERSION,))

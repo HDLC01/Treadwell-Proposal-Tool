@@ -760,7 +760,10 @@ def test_the_fields_ride_the_frozen_payload_and_not_merely_the_request():
 
     Ported from test_cover_letter_ui.py, which asserted `TWCoverLetter.payloadFields()` here. That
     helper is gone with the editor; the key is written directly now."""
-    m = re.search(r"proposal_payload:\s*\{(.*?)\n      \},", PR_JS, re.S)
+    # The literal is composeProposalPayload's return value since 2026-09-26, and continueToDone
+    # stores exactly that as `proposal_payload`.
+    assert re.search(r"proposal_payload: Object\.assign\(\s*composeProposalPayload\(", PR_JS)
+    m = re.search(r"\n  function composeProposalPayload\(.*?\n    return \{(.*?)\n    \};", PR_JS, re.S)
     assert m, "the proposal_payload literal moved — rewrite this check, do not delete it"
     assert "cover_letter_enabled" in m.group(1), (
         "cover_letter_enabled is outside proposal_payload, so a sent revision loses it and the "

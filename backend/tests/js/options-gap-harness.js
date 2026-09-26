@@ -334,6 +334,12 @@ const LIFTED = [
   topConst("REGION_MOUNTS"),
   "let _povTimer = null;",
   fn("queuePovSave"),
+  // The page's Backspace handler now takes an EMPTY line out (Word's Backspace on an empty
+  // paragraph). The removal family is lifted whole; which lines it may take is decided by
+  // the template record in blockById, and this harness registers none, so every line here
+  // stays -- the gap lines and the GC spacers are the Options gap's to count, not this rule's.
+  fn("editingBox"), fn("boxLines"), fn("pointAt"), fn("lineIsEmpty"), fn("lineRemovable"),
+  fn("removeLine"), fn("adjacentLine"), fn("caretToLine"), fn("removeLineAt"),
 ].join("\n\n");
 
 function makePage(layout, stateIn) {
@@ -396,6 +402,11 @@ function makePage(layout, stateIn) {
     const paraAction = () => false;
     const markEdited = (el) => { el.dispatchEvent(new Event("input", { bubbles: true })); };
     const spliceLines = () => { throw new Error("no multi-line selection is modelled here"); };
+    const blockById = new Map();
+    let fmtBlock = null;
+    const idleFmtBar = () => { fmtBlock = null; };
+    // Undo is editor-undo-harness.js's world; removeLineAt opens a step and nothing here reads it.
+    const undoPush = () => false;
 ` + LIFTED + "\n\n" + PAGE_ENTER + "\n\n" + PAGE_BACKSPACE + "\n\n" + GAP_SECTION + `
     return {
       paintOptionsGap, optionsGapCount, onOptionsGapKey, serializeBlock,

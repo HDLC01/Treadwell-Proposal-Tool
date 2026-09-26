@@ -451,6 +451,8 @@ const api = new Function(
   // worlds. Empty stubs are the truthful answer for a harness that mounts neither, and they still
   // fail loudly if the page renames one.
   const showFmtBar = () => {};
+  const idleFmtBar = () => { fmtBlock = null; };
+  let templateBlocks = null;
   const systemPreviewEl = null;
   // THE NOTES PREVIEW IS REAL. Its bullets have no store of their own -- the #notes-text textarea IS
   // their channel -- so a multi-line paste is the case that decides how the family behaves, and a
@@ -468,6 +470,12 @@ const api = new Function(
     fn("markEdited"), fn("runsFromHtml"), fn("spliceLines"),
     fn("lineAt"), fn("lineAtSelection"), fn("lineTarget"), fn("editingBox"), fn("boxLines"),
     fn("noteLineHtml"), fn("renderNotesPreview"), fn("syncNotesFromDom"),
+    // spliceLines takes out the lines a selection covered end to end (Word deletes them), so the
+    // removal family comes with it; renderNotesPreview asks notesRowSizePt the size a note prints
+    // at, which with no template loaded is null, as on the page before one arrives.
+    fn("lineIsEmpty"), fn("lineRemovable"), fn("removeLine"), fn("notesRowSizePt"),
+    // ...and when the selection took the FIRST line whole too, the caret moves onto the next line.
+    fn("caretToLine"),
   ].join("\n") + `
 ` + UNDO_PASTE + `
 ` + PASTE_AND_SAVE + `

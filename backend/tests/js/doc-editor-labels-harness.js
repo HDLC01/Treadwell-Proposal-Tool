@@ -471,6 +471,10 @@ const LIFTED = [
   // it fails as `ReferenceError: fitOffer is not defined` the first time a box overflows,
   // which took out all 86 tests in this module. Any function fitTxbx reaches has to be here.
   fn("fitOffer"),
+  // fitTxbx shows each box at the size the writer prints it (applyBoxFit, from boxFitById, which
+  // POST /api/proposal-fit fills). Lifted rather than stubbed: with no answer in the map the real
+  // applyBoxFit leaves the box at its design size, which is the page before its first answer.
+  topConst("boxFitById"), topConst("PAGE_HP"), fn("inlineHp"), fn("clearBoxFit"), fn("applyBoxFit"),
   fn("fitTxbx"), fn("fitNotesBox"), fn("wireOverflowExpand"),
   // ── the paragraph controls (bullet / indent) and everything they touch ──
   // The toolbar's own click handler reaches toggleFormat and applyFormat on the B/I/U buttons,
@@ -525,6 +529,10 @@ const LIFTED = [
   // leave the claim "typing in notes leaves the other boxes alone" untestable, which is how it got
   // shipped the other way round.
   fn("syncNotesFromDom"),
+  // collectOverrides sends a line the estimator DELETED as {id, removed: true} and
+  // restoreSavedOverrides hides it again after a reload, so the removal family comes too.
+  fn("editingBox"), fn("boxLines"), fn("lineIsEmpty"), fn("lineRemovable"), fn("removeLine"),
+  fn("unremoveLine"), fn("removedBlockIds"),
 ].join("\n\n");
 
 const BOX_LOOP = renderBoxLoop();
@@ -1253,8 +1261,11 @@ const elState = (el) => ({ li: el.classList.contains("tw-li"),
   const boxes = mountPage({ 2: 400, 5: 40 });   // WORK over capacity, NOTES comfortable
   api.fitNotesBox();
   const work = boxes.get(2);
-  // Expand WORK the way the estimator does: the labelled button, not a click on the box.
-  fire(work.querySelector("[data-box-peek]"), "click", {});
+  // A mark only a re-fit of WORK would take off: fitTxbx clears an inline z-index on every pass.
+  // This used to be WORK expanded through its Show all button. Nothing is clipped since
+  // 2026-09-26, so there is no expanded state left to fold shut, but a re-fit of a box whose
+  // content did not change is still the thing to catch.
+  work.style.zIndex = "30";
   const openBefore = {
     open: work.classList.contains("tw-notes-open"),
     maxHeight: work.style.maxHeight,

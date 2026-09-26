@@ -50,7 +50,10 @@ def test_template_load_and_media_use_effective_work_type():
 def test_generate_payload_work_type_is_effective():
     # The payload the Done page POSTs to /api/generate carries the EFFECTIVE work
     # type, so the backend picks the base role's template.
-    m = re.search(r"proposal_payload:\s*\{(.*?)\n      \}", _PROP_JS, re.S)
+    # composeProposalPayload's literal IS the proposal_payload since 2026-09-26 (continueToDone
+    # stores it; the fit request shares it).
+    assert re.search(r"proposal_payload: Object\.assign\(\s*composeProposalPayload\(", _PROP_JS)
+    m = re.search(r"\n  function composeProposalPayload\(.*?\n    return \{(.*?)\n    \};", _PROP_JS, re.S)
     assert m, "proposal_payload block not found"
     assert "work_type: effectiveWorkType()," in m.group(1)
 
