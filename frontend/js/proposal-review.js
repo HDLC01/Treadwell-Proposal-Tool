@@ -612,14 +612,78 @@
   }
   const _escLine = (s) => String(s == null ? "" : s).replace(/[&<>"']/g,
     c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  // ── THE PRICE BOX'S BULLETS AND INDENTS (Kyle's REBID layout) ────────────────────────────
+  // Hanz, 2026-09-26: "fix the indents and the bullets now" — and before it, "I couldnt add an
+  // indendt and bullet" / "also the bullet point and the indent are not working in the pricing
+  // box". The ribbon let go of every price line (they were a channel it could not reach) and the
+  // document stripped every PRICE bullet anyway. Now every money line carries the template's red
+  // square, a line typed under or over one carries the hollow "o", headings and blank lines carry
+  // nothing (TWPrice.lineDefault — the document's twin is price_rules.line_default), and the
+  // ribbon's Bullet / Indent / Outdent / Reset act on the price line the caret is on.
+  //
+  // WHERE A LINE'S OVERRIDE LIVES: in the draft, price_overrides.line_props[key] for the line
+  // itself and before_props[key][i] / after_props[key][i] for the i-th line typed above / below
+  // it — one list beside each list of typed lines. And, WHILE THE PAGE IS UP, on the line's own
+  // element (data-pl): every builder that draws a line from the draft puts its override there,
+  // the box sweep stores what the elements say (captureLineNode / captureExtrasIn), and a ribbon
+  // press writes the element. So Enter, Backspace and a paste that add or take away a typed line
+  // carry each line's bullet with the line, by position, the same way they carry its words.
+  /** The estimator's stored override for one price line, or null (see the note above). */
+  function linePropsOf(key, pos, idx) {
+    const pov = state.price_overrides;
+    if (!pov || typeof pov !== "object") return null;
+    let raw = null;
+    if (!pos) raw = pov.line_props && typeof pov.line_props === "object" ? pov.line_props[key] : null;
+    else {
+      const m = pov[pos + "_props"];
+      const rows = m && typeof m === "object" ? m[key] : null;
+      raw = Array.isArray(rows) ? rows[idx] : null;
+    }
+    const c = TWPrice.cleanLineProps(raw);
+    return Object.keys(c).length ? c : null;
+  }
+
+  /** Draw the bullet, level and indent of every price line in `root` (the document when omitted),
+   *  from what each line's element says: TWPrice.resolveLineProps over its key, whether it is the
+   *  line or a line typed next to it, its words, and its override. The same geometry the document
+   *  prints — a bulleted line's square sits `hanging` twips left of its text (Word puts the text at
+   *  `left` and the marker at `left - hanging`), an unbulleted line's text starts at its indent.
+   *  A blank line draws no bullet, as none prints. Cheap and idempotent; run after every repaint
+   *  and every edit in the box, so a line gets its bullet the moment it gets its first word. */
+  function paintLineParas(root) {
+    const scope = root && root.querySelectorAll ? root
+      : (typeof docSurface !== "undefined" ? docSurface : null);
+    if (!scope || !scope.querySelectorAll) return;
+    const L = TWPrice.LEVEL_LEFT, H = TWPrice.LEVEL_HANG;
+    const pt = (tw) => (tw / 20) + "pt";
+    scope.querySelectorAll("[data-po-linekey][data-po-kind]").forEach(el => {
+      const kind = el.dataset.poKind;
+      if (kind !== "line" && kind !== "extra") return;
+      let ov = null;
+      try { ov = el.dataset.pl ? JSON.parse(el.dataset.pl) : null; } catch { ov = null; }
+      const r = TWPrice.resolveLineProps(el.dataset.poLinekey,
+        kind === "extra" ? (el.dataset.poPos || "after") : null, serializeBlock(el), ov);
+      el.classList.toggle("tw-li", !!r.bullet);
+      el.classList.toggle("tw-lvl-o", !!r.bullet && r.level === 1);
+      if (!el.style) return;
+      if (r.bullet) { el.style.marginLeft = pt(L[r.level] - H[r.level]); el.style.paddingLeft = pt(H[r.level]); }
+      else { el.style.marginLeft = pt(r.indent); el.style.paddingLeft = "0pt"; }
+    });
+  }
+
   /** The lines typed above ("before") or below ("after") one price line, as markup. */
   function extraLinesHtml(key, pos, style) {
     const pov = state.price_overrides || {};
     const rows = pov[pos] && typeof pov[pos] === "object" ? pov[pos][key] : null;
     if (!Array.isArray(rows) || !rows.length) return "";
-    return rows.map(t => `<p class="tw-priceline tw-line-edit tw-po-extra" spellcheck="false"` +
-      ` data-po-kind="extra" data-po-linekey="${_escLine(key)}" data-po-pos="${pos}"` +
-      ` style="${_escLine(style || "margin:0 0 2pt;")}">${_escLine(t)}</p>`).join("");
+    return rows.map((t, i) => {
+      const pl = linePropsOf(key, pos, i);
+      return `<p class="tw-priceline tw-line-edit tw-po-extra" spellcheck="false"` +
+        ` data-po-kind="extra" data-po-linekey="${_escLine(key)}" data-po-pos="${pos}"` +
+        (pl ? ` data-pl="${_escLine(JSON.stringify(pl))}"` : "") +
+        ` style="${_escLine(style || "margin:0 0 2pt;")}">${_escLine(t)}</p>`;
+    }).join("");
   }
   // Markup for a JS-rendered whole-line (combo / option / manual / alternate), with the lines typed
   // above and below it. `opts.parts` is what an edited line's markers resolve against.
@@ -632,12 +696,14 @@
     const bold = (opts && opts.bold) ? "font-weight:bold;" : "";
     const cls = cue ? " tw-overridden" + (cue === "live" ? " tw-po-live" : cue === "money" ? " tw-money-off" : "") : "";
     const title = cue === "live" ? _LIVE_TITLE : cue === "money" ? _MONEY_TITLE : cue ? _OVERRIDE_TITLE : "";
+    const pl = linePropsOf(key, null);
     // No contenteditable of its own -- see renderBlock. The box is the host; this inherits.
     return extraLinesHtml(key, "before", style) +
            `<p class="tw-priceline tw-line-edit${cls}" spellcheck="false"` +
            ` data-po-kind="line" data-po-linekey="${e(key)}" data-computed="${e(computed)}"` +
            ` data-amount="${e(parts.amount || "")}" data-phrase="${e(parts.phrase || "")}"` +
            ` data-slot="${parts.slot ? "1" : ""}"` +
+           (pl ? ` data-pl="${e(JSON.stringify(pl))}"` : "") +
            (title ? ` title="${title}"` : "") +
            ` style="${style}${bold}">${e(shown)}</p>` +
            extraLinesHtml(key, "after", style);
@@ -660,18 +726,25 @@
     const before = gapOwned ? []
       : pov.before && Array.isArray(pov.before[key]) ? pov.before[key] : [];
     const after = pov.after && Array.isArray(pov.after[key]) ? pov.after[key] : [];
-    before.forEach(t => parent.insertBefore(makeExtraLine(el, key, "before", t), el));
+    before.forEach((t, i) => parent.insertBefore(makeExtraLine(el, key, "before", t,
+                                                               linePropsOf(key, "before", i)), el));
     let at = el;
-    after.forEach(t => { const n = makeExtraLine(el, key, "after", t); parent.insertBefore(n, at.nextSibling); at = n; });
+    after.forEach((t, i) => {
+      const n = makeExtraLine(el, key, "after", t, linePropsOf(key, "after", i));
+      parent.insertBefore(n, at.nextSibling);
+      at = n;
+    });
   }
-  /** One typed line next to price line `el`, in that line's own spacing (never its bold). */
-  function makeExtraLine(el, key, pos, text) {
+  /** One typed line next to price line `el`, in that line's own spacing (never its bold). `pl` is
+   *  its bullet override, if it has one (see paintLineParas). */
+  function makeExtraLine(el, key, pos, text, pl) {
     const n = document.createElement("p");
     n.className = "tw-priceline tw-line-edit tw-po-extra";
     n.spellcheck = false;
     n.dataset.poKind = "extra";
     n.dataset.poLinekey = key;
     n.dataset.poPos = pos;
+    if (pl && Object.keys(pl).length) n.dataset.pl = JSON.stringify(pl);
     const style = el && el.getAttribute
       ? (el.getAttribute("style") || "").replace(/display\s*:\s*none;?/g, "") : "";
     n.setAttribute("style", style || "margin:0 0 2pt;");
@@ -702,13 +775,17 @@
     const key = el.dataset.poLinekey;
     const isMain = el.dataset.poKind === "line";
     const text = serializeBlock(el);
+    // A typed line split in two: the new half keeps its bullet, as a paragraph split in Word does.
+    // A price line's own bullet stays with the price line; a new line under it is its sub-line.
+    let inherit = null;
+    if (!isMain && el.dataset.pl) { try { inherit = JSON.parse(el.dataset.pl); } catch { inherit = null; } }
     if (isMain && start === 0 && end === 0 && text.length) {
       el.parentNode.insertBefore(makeExtraLine(el, key, "before", ""), el);
       caretInto(el, 0);
     } else {
       const head = text.slice(0, start), tail = text.slice(end);
       if (head !== text) el.textContent = head;
-      const n = makeExtraLine(el, key, isMain ? "after" : (el.dataset.poPos || "after"), tail);
+      const n = makeExtraLine(el, key, isMain ? "after" : (el.dataset.poPos || "after"), tail, inherit);
       el.parentNode.insertBefore(n, el.nextSibling);
       caretInto(n, 0);
     }
@@ -793,6 +870,8 @@
     el.classList.toggle("tw-money-off", cue === "money");
     const title = cue === "live" ? _LIVE_TITLE : cue === "money" ? _MONEY_TITLE : cue ? _OVERRIDE_TITLE : "";
     if (title) el.title = title; else el.removeAttribute("title");
+    const pl = linePropsOf(key, null);
+    if (pl) el.dataset.pl = JSON.stringify(pl); else delete el.dataset.pl;
     paintExtras(el, key);
   }
 
@@ -1254,14 +1333,16 @@
     const out = [];
     comboSystemLines().forEach(l => {
       const key = "combo:" + l.key;
+      // `key` / `pos` / `idx` say which line each entry is, so the document can print its bullet
+      // (main.py resolves it from price_overrides.line_props / before_props / after_props).
       const extra = (pos) => (pov[pos] && Array.isArray(pov[pos][key]) ? pov[pos][key] : [])
-        .map(t => ({ label: String(t), amount_formatted: "", extra: true }));
+        .map((t, idx) => ({ label: String(t), amount_formatted: "", extra: true, key, pos, idx }));
       const ov = lineOverride(key, `${l.amount_formatted} – ${l.label}`,
         { amount: l.amount_formatted, phrase: l.phrase || "", slot: !!l.slot,
           candidates: l.candidates || [] });
       out.push(...extra("before"));
-      out.push(ov != null ? { label: ov, amount_formatted: "" }
-                          : { amount_formatted: l.amount_formatted, label: l.label });
+      out.push(ov != null ? { label: ov, amount_formatted: "", key }
+                          : { amount_formatted: l.amount_formatted, label: l.label, key });
       out.push(...extra("after"));
     });
     return out;
@@ -1387,6 +1468,8 @@
       } else hideRow(totalRow, "total");
     }
     renderProposalExtras();
+    // Every line just drawn, its bullet and indent (Kyle's REBID layout, the ribbon's overrides).
+    paintLineParas();
   }
 
   // Render the structured price lines + the recommended ALTERNATE system into
@@ -1717,9 +1800,22 @@
     // Mirrors the .docx {{#alternate}} block literally, each row a WHOLE-LINE
     // editable: header (system name), "$X – Flooring as described above (…)",
     // optional "$X – Remodel Tax", "$X – Total".
+    //
+    // The flooring row's tax wording is the TEMPLATE's (TWPrice.altFlooringPhrase): Epoxy Direct
+    // writes "(material sales tax INCLUDED)", Polish and Combo Direct print the base's own wording
+    // there. It is declared as the line's phrase, which is what its ⟦tax⟧ marker resolves to: with
+    // none declared, a keystroke or a ribbon press anywhere in the box stored this line with the
+    // wording turned into an empty marker, and the customer's document lost it (the screen kept
+    // showing it until the next repaint).
+    const altRow = (templateBlocks || []).find(b => b && /\{\{\s*alternate\.lump_sum_formatted\s*\}\}/.test(String(b.text || "")));
+    const altSys = basePriceSystem();
+    const altPhrase = altRow
+      ? TWPrice.altFlooringPhrase(altRow.text, baseBidFigure(altSys.total, altSys.sales_tax, altSys.remodel).rule.phrase)
+      : TWPrice.PHRASE.material;
     altBlock.innerHTML =
       lineEl("alt_name", `ALTERNATE SYSTEM — ${altLabel}`, { bold: true, style: "margin:6pt 0 2pt;" }) +
-      lineEl("alt_flooring", `${fmtUSDdoc(altFloor)} – Flooring as described above (material sales tax INCLUDED)`) +
+      lineEl("alt_flooring", `${fmtUSDdoc(altFloor)} – Flooring as described above` + (altPhrase ? ` ${altPhrase}` : ""),
+             { parts: { phrase: altPhrase, slot: true } }) +
       (altRemodel > 0 ? lineEl("alt_remodel", `${fmtUSDdoc(altRemodel)} – Remodel Tax`) : "") +
       lineEl("alt_total", `${fmtUSDdoc(altTotal)} – Total`);
   }
@@ -2124,8 +2220,14 @@
                        .map(id => document.getElementById(id)),
     remodel:      () => [],
     // The blank lines above the heading travel with it (#options-gap, see paintOptionsGap).
+    // ...and so do the option lines. On the Gyp file {{#price_line}} sits INSIDE {{#has_options}}
+    // (on every other file the two are siblings), and a region mounts by its OUTERMOST name
+    // (annotateRegions), so Gyp's option lines were never mounted: the editor showed "Options:"
+    // over nothing while the document printed every option under it. Where price_line is a
+    // sibling region its own mount comes next and re-appends the same node at the same place.
     has_options:  () => [document.getElementById("options-gap"),
-                         document.getElementById("options-heading")],
+                         document.getElementById("options-heading"),
+                         document.getElementById("price-lines-block")],
     price_line: () => [document.getElementById("price-lines-block")],
     alternate:  () => [document.getElementById("alternate-block")],
   };
@@ -2806,7 +2908,10 @@
     const b = blockById.get(Number(id));
     const p = b && b.para;
     if (!p || typeof p !== "object") return null;
-    return { bullet: !!p.bullet, indent: Math.max(0, Number(p.indent) || 0), locked: !!p.locked };
+    // `level` is the list level (w:ilvl) the template puts it on — 0 for a paragraph on no list,
+    // and 0 too for a record from before the field existed, which is what those rows are on.
+    return { bullet: !!p.bullet, indent: Math.max(0, Number(p.indent) || 0), locked: !!p.locked,
+             level: Math.max(0, Math.min(8, Math.round(Number(p.level) || 0))) };
   }
 
   /** Where the paragraph is NOW: what the estimator set, else the template's own state. */
@@ -2814,20 +2919,29 @@
     const base = paraBase(id);
     if (!base) return null;
     const set = paraById.get(Number(id));
-    return set ? { bullet: !!set.bullet, indent: Math.max(0, Number(set.indent) || 0), locked: base.locked }
-               : { bullet: base.bullet, indent: base.indent, locked: base.locked };
+    // A saved entry with no `level` (every one from before the REBID price box) keeps the
+    // template's level, which is what it always meant.
+    return set ? { bullet: !!set.bullet, indent: Math.max(0, Number(set.indent) || 0), locked: base.locked,
+                   level: Number.isInteger(set.level) ? set.level : base.level }
+               : { bullet: base.bullet, indent: base.indent, locked: base.locked, level: base.level };
   }
 
   /** The `para` patch for one block, or null when it still matches the template.
    *
    *  Comparing against the template rather than persisting every paragraph keeps an untouched
    *  document shipping an empty paragraph_overrides list, which is what makes the generated
-   *  .docx byte-identical to the one this feature did not exist for. */
+   *  .docx byte-identical to the one this feature did not exist for. `level` is sent only when it
+   *  moved, so every patch a WORK or NOTES row makes keeps the {bullet, indent} shape it always had. */
   function paraPatch(id) {
     const base = paraBase(id), now = paraNow(id);
     if (!base || !now) return null;
-    if (now.bullet === base.bullet && now.indent === base.indent) return null;
-    return { bullet: now.bullet, indent: now.indent };
+    if (now.bullet === base.bullet && now.indent === base.indent && now.level === base.level) return null;
+    const out = { bullet: now.bullet, indent: now.indent };
+    // A bulleted line in the PRICE box always says which level it is on. The document puts a
+    // bullet switched back on onto its SIBLINGS' list level (proposal_writer._sibling_bullet_ref),
+    // which is the "o" whenever the estimator has moved the first row of the box there first.
+    if (now.level !== base.level || (now.bullet && takesPriceStep(id))) out.level = now.level;
+    return out;
   }
 
   /** Coerce a `para` field read back off a saved draft. Mirrors sanitize_para_props: unknown
@@ -2840,7 +2954,8 @@
     if (raw.indent !== undefined && raw.indent !== null && Number.isFinite(n)) {
       out.indent = Math.max(0, Math.min(INDENT_MAX_TW, Math.round(n)));
     }
-    return ("bullet" in out || "indent" in out) ? out : null;
+    if (Number.isInteger(raw.level) && raw.level >= 0 && raw.level <= 8) out.level = raw.level;
+    return ("bullet" in out || "indent" in out || "level" in out) ? out : null;
   }
 
   /** Show one paragraph's properties on screen, so the preview matches what prints.
@@ -2898,7 +3013,32 @@
     // The template's own record, for the measurements the toolbar cannot change. Without it an
     // indent press would rebuild the geometry from `left` alone and undo the hanging indent.
     const rec = blockById.get(Number(el.dataset.id));
-    applyParaGeom(el, st, (rec && rec.para) || null);
+    let tpl = (rec && rec.para) || null;
+    const level = Number.isInteger(st.level) ? st.level : Number((tpl && tpl.level) || 0);
+    // A PRICE-LIST row (the REBID price box) that the ribbon moved to the other level, or gave a
+    // bullet the template did not: that level's own hanging places the square, as the document's
+    // numbering does, and its glyph is the level's (the "o" on level 1 of every template's price
+    // list). Every other paragraph keeps its record's measurements and glyph, exactly as before.
+    const priceRow = !!rec && takesPriceStep(rec.id);
+    if (priceRow && bullet && tpl && (level !== Number(tpl.level || 0) || tpl.hanging == null)) {
+      tpl = Object.assign({}, tpl, { hanging: TWPrice.LEVEL_HANG[level] != null ? TWPrice.LEVEL_HANG[level] : tpl.hanging,
+                                     first_line: null });
+    }
+    // A PRICE-box row the estimator left WITHOUT a bullet has no marker for a hanging indent to make
+    // room for, and prints none: the writer drops a PRICE-list row's hanging with its bullet, and an
+    // indent it writes for an unbulleted row carries no hanging or first-line indent
+    // (proposal_writer.apply_para_props / _write_left_indent). So its words start at its indent,
+    // every line of it. Drawn with the template's hanging instead, "Bullet off, then Outdent" (or
+    // Backspace twice) showed the words 0.2in in over a money line the PDF printed flush. Only a
+    // state that differs from the template's: an untouched row prints the template's own w:ind.
+    const base = priceRow ? paraBase(rec.id) : null;
+    if (priceRow && !bullet && tpl && base
+        && (base.bullet !== bullet || base.indent !== Math.max(0, Number(st.indent) || 0))) {
+      tpl = Object.assign({}, tpl, { hanging: 0, first_line: null });
+    }
+    const glyphO = priceRow ? level === 1 : !!(tpl && tpl.glyph === "o" && level === Number(tpl.level || 0));
+    el.classList.toggle("tw-lvl-o", bullet && glyphO);
+    applyParaGeom(el, st, tpl);
   }
 
   /** Record a paragraph's new properties and repaint it. Refuses a locked paragraph. */
@@ -2909,9 +3049,65 @@
     if (!clean) return false;
     const now = paraNow(id);
     const next = { bullet: "bullet" in clean ? clean.bullet : now.bullet,
-                   indent: "indent" in clean ? clean.indent : now.indent };
+                   indent: "indent" in clean ? clean.indent : now.indent,
+                   level: "level" in clean ? clean.level : now.level };
     paraById.set(Number(id), next);
     applyParaToEl(el, next);
+    return true;
+  }
+
+  /** Is this a PRICE LINE the page composes — the base, a tax row, the Total, an option, a manual
+   *  or combo line, a heading, or a line typed next to one — rather than a template paragraph? */
+  function isPriceLine(n) {
+    const d = n && n.dataset;
+    return !!d && !!d.poLinekey && (d.poKind === "line" || d.poKind === "extra")
+      && !(n.classList && n.classList.contains("tw-block"));
+  }
+
+  /** Does this TEMPLATE paragraph take the price box's step (TWPrice.paraStep: indent on a bulleted
+   *  line moves it to the "o" level, a bullet switched on takes its level's own place)?
+   *
+   *  A row on the PRICE list itself (numId 3: the GC / Gyp price rows, polish Direct's base line, the
+   *  budget sheet's rows) — and a paragraph on NO list in the same text box: the "Base Bid" /
+   *  "Options & Unit Prices" / "Add On's" headings. A bullet switched on there joins the PRICE list
+   *  in the document (proposal_writer._add_bullet takes its siblings' list), so it has to be drawn
+   *  and stepped as one of its rows, or the square the editor shows and the one the PDF prints
+   *  land in different places. A row on ANOTHER list in the price box (the WORK-list "$x – Add for
+   *  ram board" rows the GC files carry) keeps the step it has always had, like every WORK and
+   *  NOTES row. */
+  function takesPriceStep(id) {
+    const b = blockById.get(Number(id));
+    if (!b) return false;
+    if (b.price_flat) return true;
+    if (b.list || b.txbx == null) return false;
+    for (const o of blockById.values()) if (o.price_flat && o.txbx === b.txbx) return true;
+    return false;
+  }
+
+  /** One ribbon press (Bullet / Indent / Outdent / Reset) on a price line: the same step as the
+   *  template's own PRICE rows (TWPrice.paraStep), written onto the line's element and stored by
+   *  the box sweep, then drawn. Returns false when the press cannot change anything. */
+  function priceLineAction(el, action) {
+    if (!isPriceLine(el)) return false;
+    const key = el.dataset.poLinekey;
+    const pos = el.dataset.poKind === "extra" ? (el.dataset.poPos || "after") : null;
+    let ov = null;
+    try { ov = el.dataset.pl ? JSON.parse(el.dataset.pl) : null; } catch { ov = null; }
+    let next = null;
+    if (action !== "reset") {
+      const stepped = TWPrice.paraStep(TWPrice.lineIntent(key, pos, ov), action);
+      if (!stepped) return false;
+      next = TWPrice.overrideFor(key, pos, stepped);
+    } else if (!ov) {
+      return false;
+    }
+    if (next) el.dataset.pl = JSON.stringify(next); else delete el.dataset.pl;
+    const box = editingBox(el);
+    paintLineParas(box || el.parentNode);
+    // Stored by the same sweep a keystroke runs, which reads every line's element.
+    if (box) syncPriceLinesIn(box);
+    // A bullet or an indent changes how the line wraps.
+    try { fitTxbx(box); } catch {}
     return true;
   }
 
@@ -2922,11 +3118,22 @@
    *  has to be the margin itself. Indent puts it back. */
   function paraAction(el, action) {
     if (!el) return false;
+    // A price line the page composes has no paragraph record; its bullet lives in price_overrides.
+    if (isPriceLine(el)) return priceLineAction(el, action);
     const id = Number(el.dataset.id);
     const now = paraNow(id);
     if (!now || now.locked) return false;
     let next;
-    if (action === "bullet") next = { bullet: !now.bullet, indent: now.indent };
+    // A PRICE-LIST row of the template itself (the GC / Gyp price rows, polish Direct's base line,
+    // the budget sheet's rows), and a heading in the same box, take the price box's step, so one
+    // box has one ribbon: indent on a bulleted row moves it to the "o" level and outdent back, as
+    // Word's list buttons do (takesPriceStep). WORK and NOTES rows keep the step they always had.
+    if (takesPriceStep(id)) {
+      const stepped = TWPrice.paraStep(now, action);
+      if (!stepped) return false;
+      next = { bullet: stepped.bullet, indent: stepped.indent, level: stepped.level };
+    }
+    else if (action === "bullet") next = { bullet: !now.bullet, indent: now.indent };
     else if (action === "indent") next = { bullet: now.bullet, indent: Math.min(INDENT_MAX_TW, now.indent + INDENT_STEP_TW) };
     else if (action === "outdent") next = { bullet: now.bullet, indent: Math.max(0, now.indent - INDENT_STEP_TW) };
     else return false;
@@ -3047,6 +3254,13 @@
       const btn = e.target.closest("button[data-fmt]");
       if (!btn) return;
       e.preventDefault();
+      // A PRICE LINE takes Reset only: its bullet and indent back to the REBID default. (The run
+      // buttons are switched off on one — renderFmtBar.)
+      if (isPriceLine(el)) {
+        if (btn.dataset.fmt === "reset") priceLineAction(el, "reset");
+        showFmtBar(el);
+        return;
+      }
       // A box selection means the press is about every line in it, not just the caret's own. Each
       // block is formatted over its whole length -- there is no per-block range to remember,
       // because the estimator selected lines rather than characters.
@@ -3072,6 +3286,17 @@
       if (btn.dataset.fmt === "reset") {
         const f = selectionFormat(el, fmtRangeFor(el));
         applyFormat(el, { bold: null, italic: null, underline: null, size_pt: null }, f.range);
+        // A template PRICE-box row: its bullet, level and indent go back to the template's too, the
+        // way a price line's do. (A WORK / NOTES row's Reset is the run formatting only, as before.)
+        if (takesPriceStep(el.dataset.id)) {
+          const pid = Number(el.dataset.id);
+          const pnow = paraNow(pid);
+          if (pnow && !pnow.locked && paraById.has(pid)) {
+            paraById.delete(pid);
+            applyParaToEl(el, paraNow(pid));
+            schedulePersistOverrides();
+          }
+        }
         showFmtBar(el);
         return;
       }
@@ -3589,6 +3814,33 @@
       }
       return;
     }
+    // A PRICE LINE: Bullet, Indent, Outdent and Reset act on it; Bold, Italic, Underline and the size
+    // cannot — the line's channel stores its words, not runs, so a bold would show here and print
+    // plain. They are switched off rather than left to press into nothing.
+    if (isPriceLine(el)) {
+      fmtRange = null;
+      fmtRangeText = null;
+      bar.querySelectorAll("button[data-fmt]").forEach(b => {
+        b.classList.remove("on");
+        b.setAttribute("aria-pressed", "false");
+        if (b.dataset.fmt !== "reset") b.disabled = true;
+      });
+      const sz = bar.querySelector("input[data-fmt='size']");
+      if (sz) { sz.disabled = true; if (document.activeElement !== sz) sz.value = ""; }
+      bar.querySelectorAll("[data-para]").forEach(n => { n.style.visibility = ""; });
+      const key = el.dataset.poLinekey;
+      const pos = el.dataset.poKind === "extra" ? (el.dataset.poPos || "after") : null;
+      let ov = null;
+      try { ov = el.dataset.pl ? JSON.parse(el.dataset.pl) : null; } catch { ov = null; }
+      const it = TWPrice.lineIntent(key, pos, ov);
+      const pb = bar.querySelector("button[data-para='bullet']");
+      if (pb) { pb.classList.toggle("on", !!it.bullet); pb.setAttribute("aria-pressed", String(!!it.bullet)); }
+      const po = bar.querySelector("button[data-para='outdent']");
+      if (po) po.disabled = !TWPrice.paraStep(it, "outdent");
+      const pi = bar.querySelector("button[data-para='indent']");
+      if (pi) pi.disabled = !TWPrice.paraStep(it, "indent");
+      return;
+    }
     const f = selectionFormat(el, fmtRangeFor(el));
     // Stamped with the text it was measured in, so `fmtRangeFor` can tell later whether the
     // paragraph is still the one this range describes. See its note for what goes wrong without.
@@ -3633,10 +3885,12 @@
       bul.setAttribute("aria-pressed", String(showPara && pst.bullet));
     }
     if (showPara) {
+      // A PRICE-box row steps the way paraAction steps it (between the square and the "o").
+      const priceRow = takesPriceStep(el.dataset.id);
       const outd = bar.querySelector("button[data-para='outdent']");
-      if (outd) outd.disabled = pst.indent <= 0;
+      if (outd) outd.disabled = priceRow ? !TWPrice.paraStep(pst, "outdent") : pst.indent <= 0;
       const inn = bar.querySelector("button[data-para='indent']");
-      if (inn) inn.disabled = pst.indent >= INDENT_MAX_TW;
+      if (inn) inn.disabled = priceRow ? !TWPrice.paraStep(pst, "indent") : pst.indent >= INDENT_MAX_TW;
     }
   }
 
@@ -3845,10 +4099,15 @@
     // stop at one line and drew a little outline round whichever line had the caret. The box
     // (or, for the terms flow, the page) carries it now, and this inherits editability from it.
     el.spellcheck = false;
-    // PRICE-list rows (numId=3) are flattened to flush, bullet-less lines in the
-    // generated .docx (_flatten_price_bullets) — mirror that here so the on-screen
-    // editor matches (Kyle: no bullet points in the pricing).
-    if (b.price_flat) el.classList.add("tw-priceline");
+    // PRICE-list rows (numId=3) print their bullet since the REBID layout (2026-09-25): the red
+    // square on level 0, the "o" on level 1 (the GC Polish "Note:" row). They used to be flattened
+    // to flush, bullet-less lines, and drawn so. `.tw-priceline` still marks them: the ribbon's
+    // indent moves one between the two levels (paraAction), and its Reset puts the bullet back.
+    if (b.price_flat) {
+      el.classList.add("tw-priceline");
+      if (b.para ? b.para.bullet : b.list) el.classList.add("tw-li");
+      if (b.para && b.para.bullet && b.para.glyph === "o") el.classList.add("tw-lvl-o");
+    }
     // A NUMBERED CLAUSE SHOWS ITS NUMBER, not a red square. `b.list` only says the paragraph
     // carries Word numbering, which is true of a bulleted WORK row and of all 27 numbered TERMS
     // AND CONDITIONS clauses alike — so trusting it painted a Wingdings square in front of every
@@ -3860,7 +4119,11 @@
       el.classList.add("tw-num");
       el.dataset.marker = String(b.para.marker);
     }
-    else if (b.list) el.classList.add("tw-li");                  // real Word bullet
+    else if (b.list) {
+      el.classList.add("tw-li");                                 // real Word bullet
+      // ...and the level's own glyph where it prints the hollow "o" (Gyp's WORK sub-row).
+      if (b.para && b.para.glyph === "o") el.classList.add("tw-lvl-o");
+    }
     else if (b.style && b.style.name === "List Paragraph") el.classList.add("tw-list");
     if (b.align) el.style.textAlign = b.align;
     if (b.style && b.style.bold && !(Array.isArray(b.runs) && b.runs.length)) {
@@ -6094,7 +6357,11 @@
     // lines of their own even where the heading is a template paragraph (the GC files).
     const _gapEl = document.getElementById("options-gap");
     if (box.querySelector("[data-po-kind=\"line\"][data-po-linekey]")
-        || (_gapEl && box.contains(_gapEl))) syncPriceLinesIn(box);
+        || (_gapEl && box.contains(_gapEl))) {
+      syncPriceLinesIn(box);
+      // A line that just got its first word gets its bullet (a blank one carries none).
+      paintLineParas(box);
+    }
     schedulePersistOverrides();
     // A terms-page block can change height as it's edited; repaginate once
     // the caret leaves the terms flow (scheduleRepaginate defers on focus).
@@ -6197,10 +6464,13 @@
   function undoLineRec(el, key) {
     if (el.classList.contains("tw-block")) {
       const set = paraById.get(Number(el.dataset.id));
-      return { key: key, runs: editRuns(el), fmt: el.classList.contains("tw-fmt"),
-               para: set ? { bullet: !!set.bullet, indent: Number(set.indent) || 0 } : null };
+      const para = set ? { bullet: !!set.bullet, indent: Number(set.indent) || 0 } : null;
+      if (para && Number.isInteger(set.level)) para.level = set.level;
+      return { key: key, runs: editRuns(el), fmt: el.classList.contains("tw-fmt"), para: para };
     }
-    return { key: key, text: serializeBlock(el) };
+    // A price line's bullet override rides with its words, so undoing a ribbon press on it undoes it.
+    return el.dataset && el.dataset.pl ? { key: key, text: serializeBlock(el), pl: el.dataset.pl }
+                                       : { key: key, text: serializeBlock(el) };
   }
 
   /** The line the caret is in, by key. Cheap -- one closest() off the range's start container, no
@@ -6285,7 +6555,9 @@
   /** The part of price_overrides an undo entry restores, as JSON. */
   function undoPoJson(pov) {
     return JSON.stringify({ before: pov.before || {}, after: pov.after || {},
-                            gap: pov.options_gap === undefined ? null : pov.options_gap });
+                            gap: pov.options_gap === undefined ? null : pov.options_gap,
+                            // The typed lines' bullets, beside the lists they index into.
+                            bp: pov.before_props || {}, ap: pov.after_props || {} });
   }
 
   /** The document as an existing entry describes it, read LIVE.
@@ -6365,8 +6637,9 @@
       return true;
     }
     const indent = Number(para.indent) || 0;
-    if (now.bullet === !!para.bullet && now.indent === indent) return false;
-    return setParaState(id, { bullet: !!para.bullet, indent: indent }, el);
+    const level = Number.isInteger(para.level) ? para.level : now.level;
+    if (now.bullet === !!para.bullet && now.indent === indent && now.level === level) return false;
+    return setParaState(id, { bullet: !!para.bullet, indent: indent, level: level }, el);
   }
 
   /** Put one entry back on the page. */
@@ -6396,6 +6669,8 @@
             pov.before = was.before || {};
             pov.after = was.after || {};
             if (was.gap == null) delete pov.options_gap; else pov.options_gap = was.gap;
+            if (was.bp) pov.before_props = was.bp;
+            if (was.ap) pov.after_props = was.ap;
             refreshPriceDisplay();
             queuePovSave();
           } catch {}
@@ -6414,9 +6689,17 @@
             touched = true;
           }
           if (undoRestorePara(el, rec.para)) touched = true;
-        } else if (serializeBlock(el) !== rec.text) {
-          el.textContent = rec.text;      // the computed families' own channel: see clearBoxLine
-          touched = true;
+        } else {
+          if (serializeBlock(el) !== rec.text) {
+            el.textContent = rec.text;    // the computed families' own channel: see clearBoxLine
+            touched = true;
+          }
+          // A price line's bullet override (price-box REBID bullets): the input dispatched below
+          // runs the box sweep, which stores it, and repaints it.
+          if (el.dataset && (el.dataset.pl || "") !== (rec.pl || "")) {
+            if (rec.pl) el.dataset.pl = rec.pl; else delete el.dataset.pl;
+            touched = true;
+          }
         }
         if (!touched) continue;
         const host = editingBox(el) || docSurface;
@@ -6621,10 +6904,12 @@
     // nothing about which paragraph the ribbon should act on. (selectionchange, below, is what
     // keeps it aimed as the caret moves within a box that already has focus.)
     const line = lineTarget(e);
-    const el = line && line.classList.contains("tw-block") ? line : null;
-    // A non-block editable inside the document — a `.tw-line-edit` price line, a box tool — is a
-    // channel the run formatting cannot reach, so the ribbon lets go of its target rather than
-    // staying aimed at whichever paragraph came before it.
+    // A PRICE LINE is a target too (2026-09-26): the ribbon's Bullet, Indent, Outdent and Reset act
+    // on it, and renderFmtBar switches off the run buttons it cannot reach.
+    const el = line && (line.classList.contains("tw-block") || isPriceLine(line)) ? line : null;
+    // A non-block editable inside the document that is neither — a `.tw-line-edit` WORK row, a box
+    // tool — is a channel the run formatting cannot reach, so the ribbon lets go of its target
+    // rather than staying aimed at whichever paragraph came before it.
     if (el) showFmtBar(el);
     else idleFmtBar();
   });
@@ -6646,7 +6931,7 @@
     // no focus event fires at all, so this is the only place that can re-aim the ribbon. It aims
     // at the caret's own paragraph rather than re-checking the remembered one.
     const line = lineAtSelection();
-    if (line && line.classList.contains("tw-block") && docSurface.contains(line)) {
+    if (line && (line.classList.contains("tw-block") || isPriceLine(line)) && docSurface.contains(line)) {
       showFmtBar(line);
       return;
     }
@@ -6654,7 +6939,23 @@
     if (!el) return;
     const sel = window.getSelection();
     if (!sel || !sel.rangeCount) return;
-    if (!el.contains(sel.getRangeAt(0).startContainer)) return;
+    const r0 = sel.getRangeAt(0);
+    if (!el.contains(r0.startContainer)) {
+      // THE CARET ON A BLANK LINE OF THE OPTIONS GAP, arrowed onto inside a box that already has
+      // focus, so no focusin fires: let go, as focusin does for a line the ribbon cannot act on. A
+      // blank line takes no bullet and no indent; kept, the ribbon stayed aimed at the price line
+      // the caret had left, and Bullet took the Total's square off while the caret sat on the gap.
+      // (The caret is on the gap line itself, or on #options-gap at that line's offset.) A caret
+      // anywhere else outside the target keeps it, exactly as before: the Tax field, the ribbon's
+      // size box -- the ribbon outliving focus is the feature.
+      let at = r0.startContainer;
+      if (at && at.nodeType === 1 && at.id === "options-gap" && at.childNodes && at.childNodes.length) {
+        at = at.childNodes[Math.min(r0.startOffset || 0, at.childNodes.length - 1)];
+      }
+      if (at && at.nodeType !== 1) at = at.parentNode;
+      if (r0.collapsed && at && at.closest && at.closest(".tw-gap-line") && docSurface.contains(at)) idleFmtBar();
+      return;
+    }
     showFmtBar(el);
   });
 
@@ -6726,8 +7027,10 @@
                                                 // browser split the paragraph
     e.preventDefault();
     // A PRICE line (or a line typed next to one): a new line of its own, never a break inside it.
+    // The ALTERNATE rows too, now their typed lines print (they took a break inside the row before,
+    // and the sweep stored the text after it as a typed line the document then left out).
     const _po = el.dataset || {};
-    if ((_po.poKind === "line" || _po.poKind === "extra") && _po.poLinekey && !/^alt_/.test(_po.poLinekey)) {
+    if ((_po.poKind === "line" || _po.poKind === "extra") && _po.poLinekey) {
       splitPriceLine(el, sel[0], sel[1]);
       return;
     }
@@ -6832,6 +7135,17 @@
       return;
     }
     const el = lineTarget(e);
+    // A PRICE LINE the page composes (the base, a tax row, the Total, an option, a typed line):
+    // Tab moves it the ribbon's Indent step -- a square to the "o" -- and Shift+Tab back. It used to
+    // be handed to the browser, so focus left the document and nothing indented, while the
+    // template's own price rows in the same box took the Tab. A press that cannot move it (the
+    // "o" has no deeper level) is not consumed, as below.
+    if (el && isPriceLine(el)) {
+      if (!priceLineAction(el, rung)) return;
+      e.preventDefault();
+      showFmtBar(el);
+      return;
+    }
     if (!el || !el.classList.contains("tw-block")) return;
     if (!canMove(el)) return;                    // locked, at the margin, or already at the max
     if (!paraAction(el, rung)) return;
@@ -6859,9 +7173,25 @@
       const rung = now && !now.locked ? (now.bullet ? "bullet" : (now.indent > 0 ? "outdent" : null)) : null;
       if (rung && paraAction(el, rung)) { e.preventDefault(); return; }
     }
+    // THE SAME LADDER ON A PRICE LINE THE PAGE COMPOSES, the base, a tax row, the Total, an option
+    // and its rows, a typed line: the bullet first, then the indent a step at a time (the ribbon's
+    // own step, priceLineAction), and only a line at the margin with no bullet joins its
+    // neighbour. It used to go straight to the join, so Backspace at the start of a typed "o"
+    // sub-line glued its words onto the money line above ("…as described aboveNotes: …"), and on
+    // a money line did nothing at all -- while the template's own price rows in the same box
+    // followed Word. A line with no words keeps the join: it has no bullet to take (none prints on
+    // a blank line), and Backspace on an empty line takes the line.
+    if (back && atStart && isPriceLine(el) && /\S/.test(editRuns(el).map(r => r.text).join(""))) {
+      let ov = null;
+      try { ov = el.dataset.pl ? JSON.parse(el.dataset.pl) : null; } catch { ov = null; }
+      const it = TWPrice.lineIntent(el.dataset.poLinekey,
+        el.dataset.poKind === "extra" ? (el.dataset.poPos || "after") : null, ov);
+      const rung = it.bullet ? "bullet" : (it.indent > 0 ? "outdent" : null);
+      if (rung && priceLineAction(el, rung)) { e.preventDefault(); showFmtBar(el); return; }
+    }
     // A line typed next to a price line joins its neighbour or, empty, goes (mergePriceLine).
     const _po = el.dataset || {};
-    if ((_po.poKind === "line" || _po.poKind === "extra") && _po.poLinekey && !/^alt_/.test(_po.poLinekey)) {
+    if ((_po.poKind === "line" || _po.poKind === "extra") && _po.poLinekey) {
       if ((back && atStart && mergePriceLine(el, "up")) || (fwd && atEnd && mergePriceLine(el, "down"))) {
         e.preventDefault();
         return;
@@ -7256,7 +7586,7 @@
     if (!pov.combo || typeof pov.combo !== "object" || Array.isArray(pov.combo)) pov.combo = {};
     if (!pov.alternate || typeof pov.alternate !== "object" || Array.isArray(pov.alternate)) pov.alternate = {};
     if (!pov.lines || typeof pov.lines !== "object" || Array.isArray(pov.lines)) pov.lines = {};
-    for (const k of ["lines2", "before", "after"]) {
+    for (const k of ["lines2", "before", "after", "line_props", "before_props", "after_props"]) {
       if (!pov[k] || typeof pov[k] !== "object" || Array.isArray(pov[k])) pov[k] = {};
     }
     return pov;
@@ -7305,8 +7635,18 @@
     }
     if (spill.length) {
       if (spills) spills[key] = spill;
-      else pov.after[key] = spill.concat(Array.isArray(pov.after[key]) ? pov.after[key] : []);
+      else {
+        pov.after[key] = spill.concat(Array.isArray(pov.after[key]) ? pov.after[key] : []);
+        // The new lines go on top of the typed ones: their bullets shift down with them.
+        const ap = Array.isArray(pov.after_props[key]) ? pov.after_props[key] : [];
+        if (ap.some(Boolean)) pov.after_props[key] = spill.map(() => null).concat(ap);
+      }
     }
+    // The line's bullet and indent, as its element says (see paintLineParas).
+    let pl = null;
+    try { pl = el.dataset.pl ? TWPrice.cleanLineProps(JSON.parse(el.dataset.pl)) : null; } catch { pl = null; }
+    if (pl && Object.keys(pl).length) pov.line_props[key] = pl;
+    else delete pov.line_props[key];
     return true;
   }
 
@@ -7318,13 +7658,23 @@
     keys.forEach(key => {
       const before = [];
       const after = spills && Array.isArray(spills[key]) ? spills[key].slice() : [];
+      // Each typed line's bullet override, in the same order as its words (null = none).
+      const bProps = [];
+      const aProps = after.map(() => null);
       root.querySelectorAll('[data-po-kind="extra"][data-po-linekey]').forEach(n => {
         if (n.dataset.poLinekey !== key) return;
         const rows = serializeBlock(n).split("\n");
-        (n.dataset.poPos === "before" ? before : after).push(...rows);
+        let pl = null;
+        try { pl = n.dataset.pl ? TWPrice.cleanLineProps(JSON.parse(n.dataset.pl)) : null; } catch { pl = null; }
+        if (pl && !Object.keys(pl).length) pl = null;
+        const isBefore = n.dataset.poPos === "before";
+        (isBefore ? before : after).push(...rows);
+        (isBefore ? bProps : aProps).push(...rows.map(() => pl));
       });
       if (before.length) pov.before[key] = before; else delete pov.before[key];
       if (after.length) pov.after[key] = after; else delete pov.after[key];
+      if (bProps.some(Boolean)) pov.before_props[key] = bProps; else delete pov.before_props[key];
+      if (aProps.some(Boolean)) pov.after_props[key] = aProps; else delete pov.after_props[key];
     });
   }
 
@@ -7531,7 +7881,8 @@
     const same = have.length === want.length && have.every((n, i) => serializeBlock(n) === want[i]);
     if (!same && !have.some(n => focusInside(n))) {
       have.forEach(n => n.remove());
-      have = want.map(t => makeExtraLine(null, "heading_options", "before", t));
+      have = want.map((t, i) => makeExtraLine(null, "heading_options", "before", t,
+                                              linePropsOf("heading_options", "before", i)));
     }
     let next = gap;
     for (let i = have.length - 1; i >= 0; i--) {

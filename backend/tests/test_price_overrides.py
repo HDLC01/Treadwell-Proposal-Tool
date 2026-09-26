@@ -172,9 +172,12 @@ def test_sanitize_price_overrides_caps_and_coerces():
     long_one = main._sanitize_price_overrides({"single_bid": {"amount": "z" * 999}})
     assert len(long_one["single_bid"]["amount"]) == main._PRICE_OVERRIDE_FIELD_MAXLEN
     # non-dict input never raises
+    # ...with the price box's bullets (line_props / before_props / after_props) empty: the REBID
+    # default, which is what a draft saved before they existed prints.
     assert main._sanitize_price_overrides("nope") == {
         "options": {}, "manual": [], "single_bid": {}, "rows": {}, "alternate": {}, "lines": {},
-        "lines2": {}, "before": {}, "after": {}}
+        "lines2": {}, "before": {}, "after": {},
+        "line_props": {}, "before_props": {}, "after_props": {}}
 
 
 # ── unit: tax-row + alternate sanitize (new keys) ──────────────────────────

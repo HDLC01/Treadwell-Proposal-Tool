@@ -1096,7 +1096,19 @@ def para_props(d, p_elem) -> dict:
     `contextual`. All four were dropped before, which is why the editor rendered one flat
     `line-height` for a box whose rows are genuinely 1.15 and 1.25, and invented gaps between
     paragraphs the file spaces at zero.
+
+    `level` / `glyph` (2026-09-26) — the list level it is on (`w:ilvl`, 0 when it is on none) and
+    whether that level prints the hollow "o" rather than a square ("o" or ""). The GC Polish
+    "Note:" row is the PRICE list's level 1, an "o" one inch in, and Kyle's REBID sub-lines are the
+    same level; the editor drew a red square for all of them. The glyph is read off `w:lvlText`,
+    not assumed from the level: the WORK list's level 1 is a square on most of these files.
     """
+    ref = _para_num_ref(p_elem)
+    lvl_text = (_numbering_levels(d).get(ref) or {}).get("text") if ref is not None else None
+    try:
+        level = int(ref[1]) if ref is not None else 0
+    except (TypeError, ValueError):
+        level = 0
     return {
         "bullet": _num_fmt(d, p_elem) == "bullet",
         "indent": _effective_left_tw(d, p_elem),
@@ -1105,6 +1117,8 @@ def para_props(d, p_elem) -> dict:
         "spacing": _para_spacing(p_elem),
         "locked": _para_ordered_list(d, p_elem),
         "marker": _para_marker(d, p_elem),
+        "level": level,
+        "glyph": "o" if lvl_text == "o" else "",
     }
 
 
@@ -1240,19 +1254,72 @@ def _add_bullet(d, p_elem) -> bool:
     return True
 
 
+_IND_GEOMETRY_ATTRS = ("w:left", "w:start", "w:hanging", "w:firstLine", "w:leftChars",
+                       "w:startChars", "w:hangingChars", "w:firstLineChars")
+
+
+def _clear_own_indent(p_elem) -> None:
+    """Take the paragraph's OWN left / hanging / first-line indent off, so its list level places
+    it. The right indent is not this function's and stays. An emptied `w:ind` goes with it."""
+    ppr = p_elem.find(qn("w:pPr"))
+    ind = ppr.find(qn("w:ind")) if ppr is not None else None
+    if ind is None:
+        return
+    for a in _IND_GEOMETRY_ATTRS:
+        if ind.get(qn(a)) is not None:
+            del ind.attrib[qn(a)]
+    if not len(ind.attrib):
+        ppr.remove(ind)
+
+
+def _set_list_level(d, p_elem, level: int) -> bool:
+    """Move a BULLETED paragraph to `level` of the list it is on (`w:ilvl`), and let that level's
+    own indent place it: the paragraph's explicit left / hanging are taken off, because they
+    belonged to the level it was on. No-op (False) on an unbulleted paragraph, a paragraph already
+    on that level, or a level the list does not define — a level Word cannot find prints nothing."""
+    ref = _para_num_ref(p_elem)
+    if ref is None or _num_fmt(d, p_elem) != "bullet":
+        return False
+    want = str(int(level))
+    if ref[1] == want:
+        return False
+    info = _numbering_levels(d).get((ref[0], want))
+    if not info or info.get("fmt") != "bullet":
+        return False
+    numpr = p_elem.find(qn("w:pPr")).find(qn("w:numPr"))
+    ilvl = numpr.find(qn("w:ilvl"))
+    if ilvl is None:
+        ilvl = OxmlElement("w:ilvl")
+        numpr.insert(0, ilvl)
+    ilvl.set(qn("w:val"), want)
+    _clear_own_indent(p_elem)
+    return True
+
+
 def sanitize_para_props(raw) -> dict:
-    """Coerce one client-supplied paragraph-property dict to `{bullet?: bool, indent?: int}`.
+    """Coerce one client-supplied paragraph-property dict to
+    `{bullet?: bool, indent?: int, level?: int}`.
 
     Defensive like every other override sanitizer here: anything unrecognised is dropped, an
     out-of-range indent is CLAMPED rather than rejected (a clamp still does what the estimator
     asked for, as far as the page can go), and an empty result means "no paragraph change" so
-    the caller can skip the work. Never raises."""
+    the caller can skip the work. Never raises.
+
+    `level` (2026-09-26) is the LIST LEVEL a bulleted paragraph sits on — Word's `w:ilvl`, 0..8.
+    Kyle's REBID price box puts an option's sub-lines on the PRICE list's level 1, the hollow "o"
+    one inch in, and {bullet, indent} alone cannot say that: two indent presses on level 0 give a
+    square at 288 and text at 576, never an "o" (format-verdict REBID hazard 3). ADDITIVE: an entry
+    saved before it existed has no `level`, so its paragraph stays on the level the template gave
+    it and `{bullet, indent}` mean exactly what they always meant."""
     if not isinstance(raw, Mapping):
         return {}
     out: dict = {}
     b = raw.get("bullet")
     if isinstance(b, bool):
         out["bullet"] = b
+    lv = raw.get("level")
+    if isinstance(lv, int) and not isinstance(lv, bool) and 0 <= lv <= 8:
+        out["level"] = lv
     ind = raw.get("indent")
     if isinstance(ind, bool):       # bool is an int subclass; True would mean 1 twip
         ind = None
@@ -1297,8 +1364,22 @@ def apply_para_props(d, p_elem, props) -> int:
             if _add_bullet(d, p_elem):
                 n += 1
         elif not clean["bullet"] and _para_num_ref(p_elem) is not None:
+            price_row = _para_price_list(p_elem)
             if _remove_bullet_keep_indent(d, p_elem):
                 n += 1
+                # A PRICE-list row Kyle authored with its OWN hanging indent (the GC Polish "Note:"
+                # row: left 1170, hanging 180) keeps that hanging when the bullet goes, and a hanging
+                # with no bullet in front of it prints the first line 180 twips left of the rest —
+                # left of where the editor draws the words (applyParaGeom puts every line at `left`).
+                # The price box's rule is the WORK rows' rule 1: the words do not move. Scoped to
+                # the PRICE list (numId 3), so no WORK or NOTES row changes.
+                if price_row:
+                    ind = p_elem.find(qn("w:pPr")).find(qn("w:ind"))
+                    for gone in ("w:hanging", "w:hangingChars"):
+                        if ind is not None and ind.get(qn(gone)) is not None:
+                            del ind.attrib[qn(gone)]
+    if "level" in clean and _set_list_level(d, p_elem, clean["level"]):
+        n += 1
     if "indent" in clean:
         want = clean["indent"]
         # Read the bullet state AFTER the branch above: it may have just changed, and what a
@@ -1636,35 +1717,161 @@ def _pad_frame_boxes(d: Document, notes, work_type) -> int:
     return n
 
 
-def _flatten_price_bullets(d: Document) -> int:
-    """Remove list/bullet formatting from the PRICE section so amounts read as
-    clean flush-left lines (Kyle: no bullet points in the pricing). Every price
-    template puts its PRICE rows — base bid, Material Sales Tax, Remodel, Total,
-    {{#price_line}} options, {{#room}}, {{#alternate}} — on list numId=3 (verified
-    across all Direct/GC/Gyp templates); NOTES (numId 1), the WORK section
-    (numId 4) and Terms (numId 5) keep their bullets. Runs AFTER block expansion
-    (so cloned option/room/tax rows are covered) over body + text-box paragraphs.
-    Supersedes the older per-row _zero_list_indent hide-the-bullet trick."""
+# ─── The PRICE box's bullets: Kyle's REBID layout ─────────────────────────
+# Hanz, 2026-09-25, with the 2026-07-16 "no bullets in the pricing" rule (PR #132) in front of him:
+# the price box reads like Kyle's hand-made "Nickell RC Sustainment REBID" proposal — a red square
+# on every money line, the hollow "o" on an option's sub-lines. And 2026-09-26: "fix the indents and
+# the bullets now" — the ribbon's bullet and indent did nothing on a price line, because this module
+# stripped every PRICE-list bullet at render (`_flatten_price_bullets`, now gone) whatever anybody
+# set. The rule is in price_rules (line_default / resolve_line_props); this is the printing half.
+#
+# THREE THINGS THE FLATTEN WAS HIDING, each handled here (format-verdict, REBID hazards 1-4):
+#   1. Kyle's Direct files put every PRICE row on the list with an explicit `w:ind left=0 start=0` —
+#      the trick that tucked the square into the margin so it would not print. Deleting the flatten
+#      alone prints the square OUTSIDE the text column. `_untuck_price_bullets` takes those zeros off
+#      the pristine template, so the list level places the row (square at 0, text at 288).
+#   2. A blank row on the list prints a lone square. No blank paragraph on the PRICE list keeps its
+#      bullet (`_apply_price_line_props`), which is also what the editor draws.
+#   3. The "o" is the list's level 1, which the paragraph-props contract could not carry — see
+#      `sanitize_para_props` for `level`.
+#
+# THE LINES THE RENDER COMPOSES (the price rows, the option / manual / combo lines, the lines typed
+# around them, the gap's typed lines) arrive with their resolved props from main.py and are MARKED
+# with them where each paragraph is made; one pass at the end applies every mark. Marked in the `w:`
+# namespace for the reason `_OPTIONS_HEADING_ATTR` gives, and stripped before the save.
+_PRICE_LIST_NUM_ID = "3"
+_LINE_PROPS_ATTR = qn("w:twLineProps")
+
+
+def _untuck_price_bullets(d: Document) -> int:
+    """Take the tucked-into-the-margin zero indent off every PRICE-list paragraph (hazard 1 above).
+
+    A PRICE-list paragraph is one on numId 3 whose OWN `w:ind` states a left (or start) of 0 and no
+    hanging or first-line: exactly the rows Kyle authored that way (base, tax rows, Total, the
+    {{#price_line}} row and the alternate rows on the four Direct files). A row with any other
+    indent is left alone — it is where he put it. Adds and removes no paragraph, so no editor id
+    moves; run on the pristine template, by `fill_proposal` AND by /api/proposal-template, so the
+    editor reads the same paragraph properties the render starts from. Returns the rows untucked."""
     n = 0
     for p in d.element.body.iter(qn("w:p")):
-        ppr = p.find(qn("w:pPr"))
-        if ppr is None:
+        ref = _para_num_ref(p)
+        if ref is None or ref[0] != _PRICE_LIST_NUM_ID:
             continue
+        ind = p.find(qn("w:pPr")).find(qn("w:ind"))
+        if ind is None:
+            continue
+        lefts = [ind.get(qn(a)) for a in ("w:left", "w:start") if ind.get(qn(a)) is not None]
+        if not lefts or any(_tw_or_none(v) != 0 for v in lefts):
+            continue
+        if any(ind.get(qn(a)) is not None for a in ("w:hanging", "w:firstLine",
+                                                     "w:hangingChars", "w:firstLineChars")):
+            continue
+        _clear_own_indent(p)
+        n += 1
+    return n
+
+
+def _encode_line_props(props) -> str | None:
+    """A resolved line's props as the mark's value: "b1l0" / "b1l1" / "b0i288". None for garbage."""
+    if not isinstance(props, Mapping):
+        return None
+    if props.get("bullet") is True:
+        lv = props.get("level")
+        return "b1l%d" % (lv if isinstance(lv, int) and not isinstance(lv, bool) and 0 <= lv <= 8 else 0)
+    if props.get("bullet") is False:
+        ind = props.get("indent")
+        ind = ind if isinstance(ind, int) and not isinstance(ind, bool) else 0
+        return "b0i%d" % max(0, min(_INDENT_MAX_TW, ind))
+    return None
+
+
+def _decode_line_props(raw) -> dict | None:
+    m = re.fullmatch(r"b1l([0-8])|b0i([0-9]{1,5})", str(raw or ""))
+    if not m:
+        return None
+    if m.group(1) is not None:
+        return {"bullet": True, "level": int(m.group(1))}
+    return {"bullet": False, "indent": min(_INDENT_MAX_TW, int(m.group(2)))}
+
+
+def _mark_line_props(p_elem, props) -> None:
+    """Put one composed PRICE line's resolved props on its paragraph (applied at the end)."""
+    enc = _encode_line_props(props)
+    if enc is not None:
+        p_elem.set(_LINE_PROPS_ATTR, enc)
+
+
+def _set_price_line_props(d: Document, p_elem, props: Mapping) -> None:
+    """Make one paragraph print as `props` say: on the PRICE list at `level` with the level's own
+    indent, or off every list with its text at `indent` twips."""
+    ppr = _get_or_make_ppr(p_elem)
+    if props.get("bullet"):
+        level = str(props.get("level") or 0)
+        if (_PRICE_LIST_NUM_ID, level) not in _numbering_levels(d):
+            level = "0"
         numpr = ppr.find(qn("w:numPr"))
         if numpr is None:
-            continue
-        numid = numpr.find(qn("w:numId"))
-        if numid is None or numid.get(qn("w:val")) != "3":
-            continue
-        ppr.remove(numpr)
-        # No longer a list item — pin flush-left so no orphaned hanging indent remains.
-        ind = ppr.find(qn("w:ind"))
-        if ind is None:
-            ind = OxmlElement("w:ind")
+            numpr = OxmlElement("w:numPr")
+            style = ppr.find(qn("w:pStyle"))
+            if style is not None:
+                style.addnext(numpr)
+            else:
+                ppr.insert(0, numpr)
+        for el in list(numpr):
+            numpr.remove(el)
+        ilvl = OxmlElement("w:ilvl")
+        ilvl.set(qn("w:val"), level)
+        nid = OxmlElement("w:numId")
+        nid.set(qn("w:val"), _PRICE_LIST_NUM_ID)
+        numpr.append(ilvl)
+        numpr.append(nid)
+        _clear_own_indent(p_elem)
+        return
+    for el in ppr.findall(qn("w:numPr")):
+        ppr.remove(el)
+    _clear_own_indent(p_elem)
+    left = int(props.get("indent") or 0)
+    ind = ppr.find(qn("w:ind"))
+    if ind is None:
+        ind = OxmlElement("w:ind")
+        # w:ind's place in the w:pPr sequence: after w:spacing, before w:contextualSpacing / w:jc /
+        # the paragraph mark's w:rPr. Appending it after the w:rPr is what the older helpers did.
+        later = ("w:contextualSpacing", "w:mirrorIndents", "w:suppressOverlap", "w:jc",
+                 "w:textDirection", "w:textAlignment", "w:textboxTightWrap", "w:outlineLvl",
+                 "w:divId", "w:cnfStyle", "w:rPr", "w:sectPr", "w:pPrChange")
+        at = next((c for c in ppr if c.tag in {qn(t) for t in later}), None)
+        if at is not None:
+            at.addprevious(ind)
+        else:
             ppr.append(ind)
-        ind.set(qn("w:left"), "0")
-        ind.set(qn("w:start"), "0")
-        n += 1
+    ind.set(qn("w:left"), str(left))
+    ind.set(qn("w:start"), str(left))
+
+
+def _apply_price_line_props(d: Document) -> int:
+    """The last word on every PRICE-list bullet in the document, both text-box copies alike.
+
+    A MARKED paragraph (a line the render composed) prints its resolved props. Every paragraph on
+    the PRICE list that prints no words keeps no bullet (hazard 2) — the template's own spacer rows,
+    a blank line typed next to a price line, and an estimator's bullet on an empty row. Template
+    rows nobody composed keep Kyle's own numbering, untucked. The marks are taken out.
+    Returns the paragraphs changed."""
+    n = 0
+    for p in list(d.element.body.iter(qn("w:p"))):
+        raw = p.get(_LINE_PROPS_ATTR)
+        if raw is not None:
+            del p.attrib[_LINE_PROPS_ATTR]
+            props = _decode_line_props(raw)
+            if props is not None:
+                _set_price_line_props(d, p, props)
+                n += 1
+        ref = _para_num_ref(p)
+        if ref is not None and ref[0] == _PRICE_LIST_NUM_ID and not _own_text(p).strip() \
+                and p.find(".//" + _TXBX_CONTENT) is None:
+            ppr = p.find(qn("w:pPr"))
+            for el in ppr.findall(qn("w:numPr")):
+                ppr.remove(el)
+            n += 1
     return n
 
 
@@ -1812,7 +2019,7 @@ def options_gap_count(value) -> int:
     return max(OPTIONS_GAP_MIN, min(OPTIONS_GAP_MAX, n))
 
 
-def _apply_options_gap(d: Document, n, typed=None) -> int:
+def _apply_options_gap(d: Document, n, typed=None, typed_para=None) -> int:
     """Print the lines above every marked Options heading, in every copy: the estimator's TYPED
     lines first, then EXACTLY `n` blank lines (at least one: `options_gap_count`), then the
     heading -- the sequence the editor draws.
@@ -1823,14 +2030,19 @@ def _apply_options_gap(d: Document, n, typed=None) -> int:
     paragraph`), a blank one exactly like a gap line (`_blank_like`) -- never a bare run in the
     document default.
 
-    Runs after block expansion, substitution and the price-bullet flatten. A bid with no options
+    Runs after block expansion and substitution, and before the price box's bullets are set
+    (`_apply_price_line_props`, which applies the typed lines' marks). A bid with no options
     has no heading left (its `{{#has_options}}` region was stripped), so this does nothing there.
     The blank spacer paragraphs a template already has directly above its heading (Gyp and the GC
     files each carry one) are REPLACED, not added to, so the count is the editor's count. A line the
     estimator TYPED is never one of those: the walk stops at one (`_TYPED_LINE_ATTR`), a blank one
-    included, because the editor draws it. Returns the headings spaced."""
+    included, because the editor draws it. Returns the headings spaced.
+
+    `typed_para` is each typed line's resolved bullet props (price_rules.resolve_line_props), in
+    the same order; they are marked here and applied by `_apply_price_line_props`."""
     n = options_gap_count(n)
     rows = [str(t) for t in (typed or []) if t is not None and not isinstance(t, (dict, list, bool))]
+    paras = list(typed_para or [])
     heads = [p for p in d.element.body.iter(qn("w:p")) if p.get(_OPTIONS_HEADING_ATTR) is not None]
     for head in heads:
         parent = head.getparent()
@@ -1841,9 +2053,11 @@ def _apply_options_gap(d: Document, n, typed=None) -> int:
             parent.remove(prev)
             prev = above
         model = prev if (prev is not None and prev.tag == qn("w:p")) else head
-        for text in rows:
+        for i, text in enumerate(rows):
             line = (_extra_line_paragraph(model, text, keep_numbering=False) if text
                     else _blank_like(model))
+            if text and i < len(paras):
+                _mark_line_props(line, paras[i])
             head.addprevious(line)
         for _ in range(n):
             head.addprevious(_blank_like(model))
@@ -1854,32 +2068,6 @@ def _apply_options_gap(d: Document, n, typed=None) -> int:
             if p.get(attr) is not None:
                 del p.attrib[attr]
     return len(heads)
-
-
-def _is_total_row(p_elem) -> bool:
-    """True for the PRICE block's Total row — the `{{#tax_breakout}}` paragraph
-    carrying the `{{total_label}}` / `{{total_formatted}}` token (as opposed to
-    the sibling Material Sales Tax row that shares the same block name)."""
-    txt = _p_text(p_elem)
-    return "{{total_label}}" in txt or "{{total_formatted}}" in txt
-
-
-def _zero_list_indent(p_elem) -> None:
-    """Zero a list paragraph's left indent (`<w:ind w:left="0" w:start="0"/>`) so
-    the numbering level's hanging bullet tucks into the margin and doesn't print —
-    the same trick Kyle's other PRICE rows use to hide their bullet while keeping
-    the text flush left. Keeps `<w:numPr>` intact so spacing/style are unchanged.
-    Appended last (after `<w:rPr>`) to match the sibling rows' element order.
-    No-op without a pPr; idempotent where the indent is already zeroed."""
-    ppr = p_elem.find(qn("w:pPr"))
-    if ppr is None:
-        return
-    ind = ppr.find(qn("w:ind"))
-    if ind is None:
-        ind = OxmlElement("w:ind")
-        ppr.append(ind)
-    ind.set(qn("w:left"), "0")
-    ind.set(qn("w:start"), "0")
 
 
 # Base-bid line: `{{base_bid_formatted}} – <description> as described above {{base_tax_phrase}}`.
@@ -2162,18 +2350,17 @@ def _expand_named_block(container, block_name: str, items: list[Mapping[str, Any
                 # is his blank line, not a spacer _apply_options_gap may take out.
                 if block_name == "price_line" and item.get("_typed"):
                     clone.set(_TYPED_LINE_ATTR, "1")
+                # The line's bullet, level and indent, as main.py resolved them (price_rules): a
+                # money line on the PRICE list, a typed sub-line on its "o" level, a heading off it.
+                if block_name == "price_line" and item.get("_para"):
+                    _mark_line_props(clone, item["_para"])
                 # Blank NOTES line — estimator's Word-style spacing. Drop the
                 # bullet so it renders as an empty line, not an empty bullet dot.
                 if block_name == "notes" and not str(item.get("text") or "").strip():
                     _strip_bullet(clone)
-                # PRICE Total row: the sibling rows (base bid / Material Sales Tax /
-                # Remodel) zero their list indent so the numbering's hanging bullet
-                # tucks into the margin and doesn't print; the Polish template's
-                # Total row was missed and so shows a lone stray bullet. Match the
-                # siblings so the whole PRICE block formats consistently (no-op where
-                # the template already zeros it — e.g. the Epoxy template).
-                if block_name == "tax_breakout" and _is_total_row(clone):
-                    _zero_list_indent(clone)
+                # (The Total row used to have its list indent zeroed here, the tuck-the-square-
+                # into-the-margin trick its siblings used. Under the REBID layout the Total prints
+                # its square like every other money line: _untuck_price_bullets.)
                 new_elems.append(clone)
 
         for clone in new_elems:
@@ -2451,6 +2638,13 @@ _EXTRA_ANCHORS: dict[str, tuple] = {
     "remodel": _PRICE_ROW_TOKENS["remodel"],
     "total": _PRICE_ROW_TOKENS["total"],
     "heading_base": "Base Bid",
+    # The ALTERNATE SYSTEM block's rows: their bullets (the name is a heading, the three amounts are
+    # money lines) and the lines typed above and below them, which sit inside {{#alternate}} and so
+    # go with the block when there is no alternate.
+    "alt_name": (re.compile(r"\{\{\s*alternate\.system_name\s*\}\}"),),
+    "alt_flooring": (re.compile(r"\{\{\s*alternate\.lump_sum_formatted\s*\}\}"),),
+    "alt_remodel": (re.compile(r"\{\{\s*alternate\.remodel_tax\s*\}\}"),),
+    "alt_total": (re.compile(r"\{\{\s*alternate\.total_formatted\s*\}\}"),),
 }
 # The Options heading is found by the mark `_mark_options_headings` put on the pristine template,
 # not by its words: it reads "Options:", "Options " or "Options & Unit Prices" depending on the
@@ -2477,12 +2671,15 @@ def _extra_line_paragraph(row_p, text: str, *, keep_numbering: bool = True):
     row happened to carry, and the Options heading's own mark (a clone of the heading is not a
     heading, and the gap must not be printed above it too).
 
-    `keep_numbering=False` also takes the row's list numbering off. A line made before the price
-    bullets are flattened keeps it, so the flatten treats the line exactly like its row; a line
-    made after (the gap's) has nothing left to flatten it, and a bullet on it would print."""
+    `keep_numbering=False` also takes the row's list numbering off (the gap's typed lines: a
+    heading's lines, which carry no bullet unless the estimator gives one). Either way the line's
+    own bullet is set last, from the props its caller marks on it (`_mark_line_props`, applied by
+    `_apply_price_line_props`); a line with no mark keeps what it was cloned with."""
     p = copy.deepcopy(row_p)
-    if p.get(_OPTIONS_HEADING_ATTR) is not None:
-        del p.attrib[_OPTIONS_HEADING_ATTR]
+    # Neither the heading's mark nor the row's own bullet props: this line's props are its own.
+    for attr in (_OPTIONS_HEADING_ATTR, _LINE_PROPS_ATTR):
+        if p.get(attr) is not None:
+            del p.attrib[attr]
     p.set(_TYPED_LINE_ATTR, "1")
     if not keep_numbering:
         ppr = p.find(qn("w:pPr"))
@@ -2514,7 +2711,13 @@ def _insert_line_extras(d: Document, extras) -> int:
     Runs in Phase 0.5, BEFORE `_apply_line_overrides` (which replaces a row's text and with it the
     token this finds the row by) and before block expansion (so a row inside {{#single_bid}} or
     {{#tax_breakout}} carries its lines with it, and a row the rule took out has none to carry).
-    `extras` is {line key: {"before": [text], "after": [text]}}; unknown keys are ignored."""
+    `extras` is {line key: {"before": [text], "after": [text]}}; unknown keys are ignored.
+
+    Also carries the lines' BULLETS (the REBID layout, price_rules.resolve_line_props): each spec
+    may state "before_para" / "after_para" (one resolved props dict per typed line, in order) and
+    "para" (the row's own, which main.py sends only when the estimator set one — an untouched row
+    prints Kyle's own numbering, untucked). They are marked here and applied at the end
+    (`_apply_price_line_props`), after everything that could still move a paragraph."""
     if not isinstance(extras, Mapping) or not extras:
         return 0
     n = 0
@@ -2526,7 +2729,10 @@ def _insert_line_extras(d: Document, extras) -> int:
         # A marked heading's lines ABOVE it are not this function's (see _EXTRA_BY_MARK).
         before = [] if mark else [str(t) for t in (spec.get("before") or []) if t is not None]
         after = [str(t) for t in (spec.get("after") or []) if t is not None]
-        if not before and not after:
+        row_para = spec.get("para") if isinstance(spec.get("para"), Mapping) else None
+        b_para = [] if mark else list(spec.get("before_para") or [])
+        a_para = list(spec.get("after_para") or [])
+        if not before and not after and row_para is None:
             continue
         hits = []
         for p in d.element.body.iter(qn("w:p")):
@@ -2543,15 +2749,22 @@ def _insert_line_extras(d: Document, extras) -> int:
             elif any(pat.search(txt) for pat in anchor):
                 hits.append(p)
         for p in hits:
-            for t in before:
-                p.addprevious(_extra_line_paragraph(p, t))
+            for i, t in enumerate(before):
+                line = _extra_line_paragraph(p, t)
+                if i < len(b_para):
+                    _mark_line_props(line, b_para[i])
+                p.addprevious(line)
                 n += 1
             prev = p
-            for t in after:
+            for i, t in enumerate(after):
                 clone = _extra_line_paragraph(p, t)
+                if i < len(a_para):
+                    _mark_line_props(clone, a_para[i])
                 prev.addnext(clone)
                 prev = clone
                 n += 1
+            if row_para is not None:
+                _mark_line_props(p, row_para)
     return n
 
 
@@ -2579,6 +2792,33 @@ def _free_tax_rows_cached(path_str: str, _mtime_ns: int) -> tuple[bool, bool]:
     re-authors still gets re-read."""
     rows = free_tax_rows(docx.Document(path_str))
     return rows["material"], rows["remodel"]
+
+
+_ALT_FLOORING_ROW_RE = re.compile(r"\{\{\s*alternate\.lump_sum_formatted\s*\}\}")
+
+
+@lru_cache(maxsize=64)
+def _alt_flooring_row_cached(path_str: str, _mtime_ns: int) -> str:
+    """The ALTERNATE SYSTEM block's flooring row as the template writes it, tokens and all, or ""
+    on a template with no such block. Memoized on the file's mtime (see _free_tax_rows_cached)."""
+    for p in docx.Document(path_str).element.body.iter(qn("w:p")):
+        t = _own_text(p)
+        if _ALT_FLOORING_ROW_RE.search(t):
+            return t
+    return ""
+
+
+def template_alt_flooring_row(work_type: str, audience: str | None) -> str:
+    """`_alt_flooring_row_cached` for the template `(work_type, audience)` picks: what
+    price_rules.alt_flooring_phrase reads the row's tax wording off. "" when unreadable — the row's
+    whole-line override then resolves its marker to no wording, which is what it did before."""
+    try:
+        p = pick_template(work_type, audience)
+        return _alt_flooring_row_cached(str(p), p.stat().st_mtime_ns)
+    except Exception as exc:              # noqa: BLE001 — never fail a generate over a shape read
+        log.warning("Could not read the alternate flooring row of the %s/%s proposal template "
+                    "(%s: %s)", work_type, audience, type(exc).__name__, exc)
+        return ""
 
 
 def template_free_tax_rows(work_type: str, audience: str | None) -> dict[str, bool]:
@@ -3197,10 +3437,11 @@ def _para_is_list(p_elem) -> bool:
 
 
 def _para_price_list(p_elem) -> bool:
-    """True when the paragraph is on the PRICE list (numId=3) that
-    _flatten_price_bullets strips at generate time. The on-screen document
-    editor uses this to render those rows flush/bullet-less so the preview
-    matches the generated .docx (Kyle: no bullet points in the pricing)."""
+    """True when the paragraph is on the PRICE list (numId=3). Since the REBID layout
+    (2026-09-25) those rows PRINT their bullet — a red square on level 0, the "o" on
+    level 1 — so the editor draws it too, and the ribbon's indent moves such a row
+    between the two levels instead of shifting it (see `_apply_price_line_props`).
+    Until then the flag meant "flatten this": the rows printed flush and bullet-less."""
     ppr = p_elem.find(qn("w:pPr"))
     if ppr is None:
         return False
@@ -3820,6 +4061,7 @@ def fill_proposal(
     options_gap_typed: list | None = None,
     price_rows: Mapping[str, Any] | None = None,
     line_extras: Mapping[str, Any] | None = None,
+    options_gap_typed_para: list | None = None,
 ) -> bytes:
     """Open the matching template, substitute tokens, return docx bytes.
 
@@ -3863,7 +4105,12 @@ def fill_proposal(
 
     `line_extras` — {line key: {"before": [...], "after": [...]}}: lines the estimator typed
     above and below the base / tax / total rows and the headings, each printed as its own
-    paragraph (`_insert_line_extras`).
+    paragraph (`_insert_line_extras`). A spec may also carry "before_para" / "after_para" and
+    "para" — the lines' and the row's bullet props (see there).
+
+    THE PRICE BOX PRINTS KYLE'S REBID BULLETS (see `_untuck_price_bullets` and
+    `_apply_price_line_props`): a `price_lines` item may carry `_para` (its resolved props, from
+    main.py) and `options_gap_typed_para` gives the gap's typed lines theirs.
 
     Every `w:highlight` is taken out of the result (`_strip_highlights`).
     """
@@ -3878,6 +4125,11 @@ def fill_proposal(
         raise FileNotFoundError(f"Proposal template not found: {template_path}")
 
     d = docx.Document(str(template_path))
+
+    # The PRICE rows Kyle tucked into the margin (w:ind left=0 on the list) print their square in
+    # the column now — BEFORE Phase 0, so an estimator's saved bullet / indent is applied to the same
+    # paragraph properties /api/proposal-template showed him (it runs this too). No paragraph moves.
+    _untuck_price_bullets(d)
 
     # The Options heading(s), tagged while the template is still pristine: the heading's words can
     # be rewritten below (Phase 0 / 0.5) and its region is cloned by Phase 1, and the tag survives
@@ -3997,20 +4249,18 @@ def fill_proposal(
     _n_work_format = _normalize_work_label_formatting(d)
     if _n_work_format:
         log.info("Normalized %d WORK label/value run(s)", _n_work_format)
-    # PRICE section reads as clean flush-left lines — Kyle wants NO bullets in the
-    # pricing (confirmed by Hanz 2026-07-16, reversing the earlier "keep the red
-    # squares" read). _flatten_price_bullets strips the numId=3 list formatting off
-    # every PRICE row (base bid, Material Sales Tax, Remodel, Total, {{#price_line}}
-    # options, {{#room}}, {{#alternate}}) across all Direct/GC/Gyp templates; the
-    # WORK (numId 4), NOTES (numId 1) and Terms (numId 5) lists keep their bullets.
-    _n_flat = _flatten_price_bullets(d)
-    if _n_flat:
-        log.info("Flattened %d PRICE bullet row(s)", _n_flat)
     # The blank lines between the price rows and the Options heading: the estimator's count from
     # the editor (default 2, Kyle's double spacing after the Total), replacing the template's own.
-    if _apply_options_gap(d, options_gap, options_gap_typed):
+    if _apply_options_gap(d, options_gap, options_gap_typed, options_gap_typed_para):
         log.info("Printed %d blank line(s) before the PRICE Options heading",
                  options_gap_count(options_gap))
+    # THE PRICE BOX'S BULLETS, last, once every price paragraph exists: Kyle's REBID layout (a red
+    # square on every money line, the "o" on a sub-line, nothing on a heading or a blank line), with
+    # whatever the estimator set on a line beating it. This REVERSES the 2026-07-16 flush-left rule
+    # (PR #132's _flatten_price_bullets) at Hanz's direction, 2026-09-25 — see _untuck_price_bullets.
+    _n_bul = _apply_price_line_props(d)
+    if _n_bul:
+        log.info("Set the bullets on %d PRICE line(s)", _n_bul)
     # Boxes the estimator dragged or resized, FIRST — before the padding and therefore before
     # the shrink, which re-reads template_geometry(d) to decide what overflows. Applying a
     # resize first is what lets the shrink stand down by itself on a box that is now big

@@ -35,9 +35,10 @@ const SRC = fs.readFileSync(path.join(FRONTEND, "js", "proposal-review.js"), "ut
 const HTML = fs.readFileSync(path.join(FRONTEND, "proposal-review.html"), "utf8")
   .replace(/\r\n/g, "\n");
 const F = require(path.join(FRONTEND, "js", "proposal-format-core.js"));
-// The base-bid radio hands the price edits to the ONE base-pick rule (TWPrice.applyBasePick),
-// the real one.
-const TWPrice = require(path.join(FRONTEND, "js", "price-lines-core.js"));
+// The price rule's page half, as the page loads it before proposal-review.js: a typed line's
+// bullet override is read through TWPrice.cleanLineProps (linePropsOf), and the base-bid radio
+// hands the price edits to the ONE base-pick rule (TWPrice.applyBasePick), the real one.
+const TWPrice = globalThis.TWPrice = require(path.join(FRONTEND, "js", "price-lines-core.js"));
 
 // ── lifting the real source ──────────────────────────────────────────────────
 function fn(name) {
@@ -374,7 +375,10 @@ const LIFTED = [
   // The lines TYPED next to a price line (fix 5): a character typed on a blank gap line makes one
   // (typeOnGapLine -> makeExtraLine), and the page's own Enter and Backspace handlers split and
   // take away typed lines (splitPriceLine / mergePriceLine), so all of them are the real ones.
-  fn("_ensurePov"), fn("makeExtraLine"), fn("caretInto"), fn("splitPriceLine"), fn("mergePriceLine"),
+  // linePropsOf: a typed line drawn from the draft carries its bullet override (paintGapTyped).
+  fn("_ensurePov"), fn("linePropsOf"), fn("makeExtraLine"), fn("caretInto"), fn("splitPriceLine"), fn("mergePriceLine"),
+  // The Backspace handler's question before its price-line ladder (review of fix 7, finding 6).
+  fn("isPriceLine"),
 ].join("\n\n");
 
 function makePage(layout, stateIn) {
@@ -435,6 +439,11 @@ function makePage(layout, stateIn) {
     // have no para record, and the GC paragraphs here carry no bullet to take off.
     const paraNow = () => null;
     const paraAction = () => false;
+    // The page's Backspace handler asks isPriceLine (the real one, lifted below) before its ladder;
+    // the ladder itself (priceLineAction, then showFmtBar) is price-bullets-harness.js's to run, and
+    // a line here that reached it would be a case this harness does not model -- so it says so.
+    const priceLineAction = () => { throw new Error("priceLineAction reached: not modelled in options-gap-harness"); };
+    const showFmtBar = () => { throw new Error("showFmtBar reached: not modelled in options-gap-harness"); };
     const markEdited = (el) => { el.dispatchEvent(new Event("input", { bubbles: true })); };
     const spliceLines = () => { throw new Error("no multi-line selection is modelled here"); };
 ` + LIFTED + "\n\n" + PAGE_ENTER + "\n\n" + PAGE_BACKSPACE + "\n\n" + GAP_SECTION + `

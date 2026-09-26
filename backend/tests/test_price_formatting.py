@@ -1,13 +1,17 @@
-"""PRICE section formatting: NO bullets (flush-left), bold amounts.
+"""PRICE section formatting: Kyle's REBID bullets, bold amounts.
 
 Every proposal template authors its PRICE rows (base bid, Material Sales Tax,
 Remodel, Total, {{#price_line}} options, {{#room}}, {{#alternate}}) on list
-numId=3 — a RED SQUARE bullet (Wingdings filled square, #A71320). Kyle wants the
-PRICING to read as clean flush-left lines with NO bullets (confirmed by Hanz
-2026-07-16, reversing an earlier "keep the red squares" pass), so
-`_flatten_price_bullets` strips numId=3 at generate time. The WORK (numId 4) and
-Terms (numId 5) lists keep their bullets, and the amount runs stay bold (already
-bold in the templates; token fill preserves run formatting).
+numId=3 — a RED SQUARE bullet (Wingdings filled square, #A71320). From 2026-07-16
+to 2026-09-25 the render stripped it (`_flatten_price_bullets`, PR #132: "clean
+flush-left lines with NO bullets"). Hanz reversed that on 2026-09-25, with the
+rule in front of him: the price box reads like Kyle's hand-made "Nickell RC
+Sustainment REBID" proposal, a red square on every money line. So these tests now
+pin the OPPOSITE of what they used to — every money row prints on the PRICE list,
+placed by its level (not tucked into the margin with `w:ind left=0`, which is how
+the Direct files hid the square) — and the WORK (numId 4) and Terms (numId 5)
+lists keep theirs. The whole layout, the ribbon's overrides and the screen/paper
+parity are test_price_bullets.py. The amount runs stay bold.
 """
 import io
 import re
@@ -54,18 +58,50 @@ def _vals(**over):
     return v
 
 
-def test_epoxy_price_rows_flush_no_bullets_bold_amounts():
+def _price_rows_by_text(out):
+    """{first words: (numId, ilvl, own w:ind)} for every non-empty paragraph, mc:Fallback excluded."""
+    from docx import Document
+    d = Document(io.BytesIO(out))
+    rows = {}
+    for p in d.element.xpath("//w:p"):
+        if any(True for _ in p.iterancestors(f"{_MC}Fallback")):
+            continue
+        t = pw._own_text(p).strip()
+        if not t:
+            continue
+        ref = pw._para_num_ref(p)
+        ind = p.find(pw.qn("w:pPr") + "/" + pw.qn("w:ind")) if p.find(pw.qn("w:pPr")) is not None else None
+        own = {k.split("}")[1]: v for k, v in ind.attrib.items()} if ind is not None else {}
+        rows.setdefault(t, (ref, own))
+    return rows
+
+
+def _row(rows, start):
+    hit = [v for k, v in rows.items() if k.startswith(start)]
+    assert hit, (start, sorted(rows)[:40])
+    return hit[0]
+
+
+def test_epoxy_price_rows_carry_rebid_bullets_bold_amounts():
     vals = _vals()
     systems = main._build_epoxy_systems({}, vals, [{"name": "MACRO Flake", "sf": 12000, "lf": 250}])
     out = pw.fill_proposal(work_type="epoxy", audience="Direct", values=vals, systems=systems,
                            price_lines=[{"amount_formatted": "$2,500", "label": "Add VE"}])
     xml = _xml(out)
-    # PRICE rows are FLUSH — every numId=3 list bullet is stripped; the WORK (4)
-    # and Terms (5) lists keep theirs.
-    assert xml.count('<w:numId w:val="3"') == 0
+    # The PRICE rows are on the PRICE list (numId 3) again; the WORK (4) and Terms (5) lists
+    # keep theirs.
+    assert xml.count('<w:numId w:val="3"') > 0
     assert xml.count('<w:numId w:val="4"') > 0
     assert xml.count('<w:numId w:val="5"') > 0
-    # Amounts stay bold (base bid + option line) — flattening only removes numbering.
+    # Every money row: a square on level 0, placed by the level (no tucked `left=0`).
+    rows = _price_rows_by_text(out)
+    for start in ("$58,523.00 – Epoxy flooring", "$2,500 – Add VE"):
+        ref, own = _row(rows, start)
+        assert ref == ("3", "0"), (start, ref)
+        assert "left" not in own and "start" not in own, (start, own)
+    # ...and the headings carry none.
+    assert _row(rows, "Base Bid")[0] is None
+    # Amounts stay bold (base bid + option line).
     for amt in ("58,523", "2,500"):
         para = next(p for p in re.findall(r"<w:p\b.*?</w:p>", xml, re.S)
                     if amt in "".join(re.findall(r"<w:t[^>]*>([^<]*)</w:t>", p)))
@@ -73,13 +109,17 @@ def test_epoxy_price_rows_flush_no_bullets_bold_amounts():
         assert re.search(r"<w:b[ />]", run0), f"amount {amt} run not bold"
 
 
-def test_polish_and_gyp_price_rows_flush_no_bullets():
-    # Polish (option/alternate list) + Gyp (underlayment) both drop numId=3
-    # (the red-square PRICE list) so the pricing reads flush-left.
+def test_polish_and_gyp_price_rows_carry_rebid_bullets():
+    # Polish (its base line is a plain template paragraph, the option a {{#price_line}} row) and
+    # Gyp (underlayment: every price row a plain paragraph) print their money rows on the PRICE
+    # list, placed by its level.
     pv = _vals(base_bid_formatted="$14,391.00", total_formatted="$16,707.00")
     pout = pw.fill_proposal(work_type="polish", audience="Direct", values=pv,
                             price_lines=[{"amount_formatted": "$1,100", "label": "Polish Add Dye"}])
-    assert _xml(pout).count('<w:numId w:val="3"') == 0
+    prow = _price_rows_by_text(pout)
+    for start in ("$14,391.00 – Polished Con", "$1,100 – Polish Add Dye"):
+        ref, own = _row(prow, start)
+        assert ref == ("3", "0") and "left" not in own, (start, ref, own)
 
     gv = _vals(gyp_soft_sf="27,825", gyp_hard_sf="11,795", gyp_corridor_sf="5,655",
                gyp_soft_thickness='3/4"', gyp_hard_thickness='1"', gyp_corridor_thickness='3/4"',
@@ -87,7 +127,9 @@ def test_polish_and_gyp_price_rows_flush_no_bullets():
                base_bid_formatted="$98,000.00", tax_amount_formatted="$0.00",
                total_formatted="$103,364.00")
     gout = pw.fill_proposal(work_type="gyp", audience="Direct", values=gv)
-    assert _xml(gout).count('<w:numId w:val="3"') == 0
+    grow = _price_rows_by_text(gout)
+    for start in ("$98,000.00 – Gypsum Under", "1 Mobilization to Site."):
+        assert _row(grow, start)[0] == ("3", "0"), (start, _row(grow, start))
 
 
 def test_double_spacing_before_options_heading():

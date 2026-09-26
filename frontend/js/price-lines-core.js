@@ -159,6 +159,20 @@
     return s;
   }
 
+  /** The tax wording the ALTERNATE SYSTEM block's flooring row prints: whatever the template puts
+   *  there — Epoxy Direct's literal "(material sales tax INCLUDED)", or the base's own wording where
+   *  Polish and Combo Direct print {{base_tax_phrase}}. It is the line's PHRASE, what its ⟦tax⟧
+   *  marker resolves to; undeclared, the box sweep stored the wording as a marker that resolved to
+   *  nothing and the document lost it. Twin: price_rules.alt_flooring_phrase. */
+  function altFlooringPhrase(rowText, basePhrase) {
+    var t = String(rowText == null ? "" : rowText);
+    if (/\{\{\s*base_tax_phrase\s*\}\}/.test(t)) return basePhrase == null ? "" : String(basePhrase);
+    for (var k = 0; k < KNOWN_PHRASES.length; k++) {
+      if (t.indexOf(KNOWN_PHRASES[k]) >= 0) return KNOWN_PHRASES[k];
+    }
+    return "";
+  }
+
   /** What to STORE for one line the estimator typed: his words, with today's amount and tax
    *  phrase turned into markers wherever they are still there verbatim.
    *
@@ -643,6 +657,106 @@
     });
   }
 
+  // ── THE PRICE BOX'S BULLETS: Kyle's REBID layout ────────────────────────────────────────
+  // Hanz, 2026-09-25, choosing it over the 2026-07-16 "no bullets in the pricing" rule: every money
+  // line carries the template's red square (the PRICE list, numId 3, level 0), a line typed under or
+  // over one is its sub-line and carries the hollow "o" (level 1), and headings and blank lines
+  // carry nothing. 2026-09-26: "fix the indents and the bullets now" — what the ribbon sets on a
+  // line beats the default. The document's half is price_rules (line_default / resolve_line_props);
+  // test_price_bullets.py runs both over the same matrix.
+  //
+  // A RESOLVED line is {bullet: true, level} or {bullet: false, indent}: a bulleted line is placed
+  // by its list level (square at 0 / text at 288 twips on level 0; "o" at 1080 / text at 1440 on
+  // level 1 — every template defines numId 3 that way), an unbulleted one says where its text
+  // starts. Switching a bullet off does not move the words.
+  var LEVEL_LEFT = [288, 1440];
+  var LEVEL_HANG = [288, 360];
+  var INDENT_STEP = 288;
+  var INDENT_MAX = 2880;
+  var HEADING_KEYS = ["heading_base", "heading_options", "alt_name"];
+
+  /** One stored override as {bullet?, level?: 0|1, indent?: 0..2880}; anything else dropped. */
+  function cleanLineProps(raw) {
+    var out = {};
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
+    if (raw.bullet === true || raw.bullet === false) out.bullet = raw.bullet;
+    if (raw.level === 0 || raw.level === 1) out.level = raw.level;
+    if (typeof raw.indent === "number" && isFinite(raw.indent)) {
+      out.indent = Math.max(0, Math.min(INDENT_MAX, Math.round(raw.indent)));
+    }
+    return out;
+  }
+
+  /** What one PRICE line prints when the draft says nothing about it. `pos` is null for the line
+   *  itself and "before" / "after" for a line typed above / below it. */
+  function lineDefault(key, pos) {
+    if (HEADING_KEYS.indexOf(String(key == null ? "" : key)) >= 0) return { bullet: false, indent: 0 };
+    if (pos === "before" || pos === "after") return { bullet: true, level: 1 };
+    return { bullet: true, level: 0 };
+  }
+
+  /** The line as set, blank or not: {bullet, level, indent} all filled in, `indent` being where the
+   *  TEXT starts (a bulleted line's level's own left edge). */
+  function lineIntent(key, pos, override) {
+    var d = lineDefault(key, pos), o = cleanLineProps(override);
+    var level = "level" in o ? o.level : (d.level || 0);
+    var bullet = "bullet" in o ? o.bullet : d.bullet;
+    if (bullet) return { bullet: true, level: level, indent: LEVEL_LEFT[level] };
+    var indent = "indent" in o ? o.indent : (d.bullet ? LEVEL_LEFT[level] : (d.indent || 0));
+    return { bullet: false, level: level, indent: indent };
+  }
+
+  /** What one PRICE line PRINTS: a blank line never carries a bullet. */
+  function resolveLineProps(key, pos, text, override) {
+    var it = lineIntent(key, pos, override);
+    if (it.bullet && String(text == null ? "" : text).trim()) return { bullet: true, level: it.level };
+    return { bullet: false, indent: it.indent };
+  }
+
+  /** One ribbon press on a line of the PRICE box, Word's way: the bullet on or off (the words stay
+   *  where they are; a bullet switched on takes its level's own place), and on a bulleted line
+   *  indent / outdent move it between the square and the "o" — Word's Increase Indent on a list
+   *  item demotes it a level. On a line with no bullet they move the text a step (288 twips) at a
+   *  time, from the margin to two inches. `intent` is {bullet, level, indent}; returns the new one,
+   *  or null when the press cannot change anything (so the ribbon can say so). Shared by the
+   *  computed price lines and the template's own PRICE-list paragraphs, so one box has one ribbon. */
+  function paraStep(intent, action) {
+    var it = intent || {};
+    var bullet = !!it.bullet, level = it.level === 1 ? 1 : 0;
+    var indent = Math.max(0, Math.min(INDENT_MAX, Math.round(Number(it.indent) || 0)));
+    if (action === "bullet") {
+      if (bullet) return { bullet: false, level: level, indent: indent };
+      return { bullet: true, level: level, indent: LEVEL_LEFT[level] };
+    }
+    if (action === "indent") {
+      if (bullet) return level === 0 ? { bullet: true, level: 1, indent: LEVEL_LEFT[1] } : null;
+      return indent < INDENT_MAX ? { bullet: false, level: level, indent: Math.min(INDENT_MAX, indent + INDENT_STEP) } : null;
+    }
+    if (action === "outdent") {
+      if (bullet) return level === 1 ? { bullet: true, level: 0, indent: LEVEL_LEFT[0] } : null;
+      return indent > 0 ? { bullet: false, level: level, indent: Math.max(0, indent - INDENT_STEP) } : null;
+    }
+    return null;
+  }
+
+  /** What to STORE for a line whose intent is now `intent`: the smallest override that says it, or
+   *  null when it is the line's own default (an untouched line stores nothing). */
+  function overrideFor(key, pos, intent) {
+    var d = lineIntent(key, pos, null);
+    if (!intent) return null;
+    if (intent.bullet) {
+      if (d.bullet && d.level === intent.level) return null;
+      return { bullet: true, level: intent.level === 1 ? 1 : 0 };
+    }
+    if (!d.bullet && d.indent === intent.indent) return null;
+    // The level rides along when it is not the default one, so switching the bullet back on puts
+    // the line back on the level it was switched off from.
+    var off = { bullet: false, indent: intent.indent };
+    if ((intent.level === 1 ? 1 : 0) !== (d.level || 0)) off.level = intent.level === 1 ? 1 : 0;
+    return off;
+  }
+
+
   return {
     AMOUNT: AMOUNT, TAX: TAX, PHRASE: PHRASE, KNOWN_PHRASES: KNOWN_PHRASES,
     cents: cents, flag: flag, phraseFor: phraseFor, taxRule: taxRule, layoutFor: layoutFor,
@@ -654,5 +768,10 @@
     draftBasePhrase: draftBasePhrase,
     ownFigureQuestion: ownFigureQuestion, confirmOwnFigures: confirmOwnFigures,
     confirmSavedCopy: confirmSavedCopy,
+    altFlooringPhrase: altFlooringPhrase,
+    LEVEL_LEFT: LEVEL_LEFT, LEVEL_HANG: LEVEL_HANG, INDENT_STEP: INDENT_STEP, INDENT_MAX: INDENT_MAX,
+    HEADING_KEYS: HEADING_KEYS, cleanLineProps: cleanLineProps, lineDefault: lineDefault,
+    lineIntent: lineIntent, resolveLineProps: resolveLineProps, paraStep: paraStep,
+    overrideFor: overrideFor,
   };
 });

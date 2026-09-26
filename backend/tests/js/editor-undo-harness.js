@@ -46,6 +46,9 @@ const FRONTEND = process.argv[2];
 const SRC = fs.readFileSync(path.join(FRONTEND, "js", "proposal-review.js"), "utf8")
   .replace(/\r\n/g, "\n");
 const F = require(path.join(FRONTEND, "js", "proposal-format-core.js"));
+// The price rule's page half, as the page loads it before proposal-review.js: a PRICE-list row's
+// indent steps between the square and the "o" through TWPrice.paraStep.
+globalThis.TWPrice = require(path.join(FRONTEND, "js", "price-lines-core.js"));
 
 // ── lifting the real source ──────────────────────────────────────────────────
 function fn(name) {
@@ -436,6 +439,11 @@ const api = new Function(
     fn("lineAt"), fn("lineAtSelection"), fn("editingBox"), fn("boxLines"),
     fn("paraBase"), fn("paraNow"), fn("sanitizeParaPatch"), fn("applyParaGeom"),
     fn("applyParaToEl"), fn("setParaState"), fn("paraAction"),
+    // A PRICE LINE is a ribbon target too (the REBID price box): paraAction hands one to
+    // priceLineAction, after asking isPriceLine.
+    fn("isPriceLine"), fn("priceLineAction"),
+    // ...and a TEMPLATE row in the price box takes the price step (paraAction, applyParaToEl, paraPatch).
+    fn("takesPriceStep"),
     fn("paintBoxSel"), fn("clearBoxSel"), fn("clearBoxLine"), fn("selectRangeAcross"),
     fn("insertBreakAt"),
     topConst("focusInside"), fn("noteLineHtml"), fn("renderNotesPreview"), fn("syncNotesFromDom"),

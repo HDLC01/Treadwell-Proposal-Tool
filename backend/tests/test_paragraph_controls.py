@@ -156,9 +156,10 @@ def test_the_work_rows_are_bulleted_by_a_numbering_level_that_owns_their_indent(
         # file (1.15 on System/Texture/Scope, 1.25 on the rest), and pinning a single number
         # here would make the test about the wrong thing while breaking on the next row.
         sp = got.pop("spacing")
+        # `level` / `glyph` (v8): the list level it is on and whether that level prints the "o".
         assert got == {
             "bullet": True, "indent": 288, "hanging": 288, "first_line": None,
-            "locked": False, "marker": "",
+            "locked": False, "marker": "", "level": 0, "glyph": "",
         }
         assert sp["line_rule"] == "auto" and sp["line"] in (276, 300), sp
         assert sp["before"] is None and sp["after"] is None, (
@@ -245,7 +246,7 @@ def test_switching_the_bullet_back_on_hands_the_indent_back_to_the_list_level():
     sp = got.pop("spacing")
     assert got == {
         "bullet": True, "indent": 288, "hanging": 288, "first_line": None,
-        "locked": False, "marker": "",
+        "locked": False, "marker": "", "level": 0, "glyph": "",
     }
     assert sp["line_rule"] == "auto" and sp["line"] in (276, 300), sp
     assert sp["before"] is None and sp["after"] is None, (
@@ -431,7 +432,7 @@ def test_generate_survives_malformed_para_values():
 # ══ seam 2: the browser has to be able to READ the state ═════════════════════
 # The keys the frontend's paraBase() reads. Grown without the version bump, a browser replaying
 # a cached response has no `locked` and would happily offer to un-bullet a contract clause.
-_BLOCK_KEYS_AT_V7 = {
+_BLOCK_KEYS_AT_V8 = {
     "id", "kind", "text", "style", "in_block", "in_txbx", "txbx",
     "align", "list", "price_flat", "para", "runs",
 }
@@ -445,7 +446,12 @@ _BLOCK_KEYS_AT_V7 = {
 # paragraph's own before/after and its `line` with the `lineRule` that says what unit that
 # number is in. Without them the editor rendered one flat line-height over a box whose rows are
 # genuinely 1.15 and 1.25, and invented gaps between paragraphs the file spaces at zero.
-_PARA_KEYS_AT_V7 = {"bullet", "indent", "hanging", "first_line", "spacing", "locked", "marker"}
+# v8 grew two, for the REBID price box (2026-09-26): `level` (w:ilvl, the list level the paragraph
+# is on) and `glyph` ("o" where that level prints the hollow "o" rather than a square). The ribbon's
+# indent moves a PRICE row between the two levels, and a v7 body has neither, so a browser replaying
+# one would draw every "o" as a square and measure its presses from the wrong level.
+_PARA_KEYS_AT_V8 = {"bullet", "indent", "hanging", "first_line", "spacing", "locked", "marker",
+                    "level", "glyph"}
 
 
 @pytest.fixture
@@ -476,7 +482,7 @@ def test_the_endpoint_marks_the_work_rows_editable_and_the_terms_locked(epoxy_bl
     # Geometry compared exactly; the file gives this row 1.25 line spacing and no gaps.
     assert sched["para"] == {
         "bullet": True, "indent": 288, "hanging": 288, "first_line": None,
-        "locked": False, "marker": "",
+        "locked": False, "marker": "", "level": 0, "glyph": "",
         "spacing": {"before": None, "after": None, "line": 300,
                     "line_rule": "auto", "contextual": False},
     }
@@ -495,15 +501,15 @@ def test_block_schema_version_was_bumped_for_the_new_field(epoxy_blocks):
     replays the old shape against the new frontend."""
     keys = set(epoxy_blocks[0])
     assert "para" in keys
-    assert keys == _BLOCK_KEYS_AT_V7, (
+    assert keys == _BLOCK_KEYS_AT_V8, (
         "the block dict shape changed — bump main._BLOCK_SCHEMA_VERSION and update "
-        "_BLOCK_KEYS_AT_V7 in the same commit")
+        "_BLOCK_KEYS_AT_V8 in the same commit")
     for b in epoxy_blocks:
-        assert set(b["para"]) == _PARA_KEYS_AT_V7, (b["id"], b["para"])
-    assert main._BLOCK_SCHEMA_VERSION == "7", (
-        "`para` includes `marker` but _BLOCK_SCHEMA_VERSION is %r; a browser holding a v5 "
-        "response has no marker for any block, so it paints a red square in front of all 27 "
-        "numbered contract clauses" % (main._BLOCK_SCHEMA_VERSION,))
+        assert set(b["para"]) == _PARA_KEYS_AT_V8, (b["id"], b["para"])
+    assert main._BLOCK_SCHEMA_VERSION == "8", (
+        "`para` includes `level` and `glyph` but _BLOCK_SCHEMA_VERSION is %r; a browser holding a "
+        "v7 response has neither, so it draws every \"o\" in the price box as a square and steps "
+        "the ribbon's indent from the wrong level" % (main._BLOCK_SCHEMA_VERSION,))
 
 
 def test_the_schema_version_is_in_the_template_etag():
@@ -567,7 +573,7 @@ def test_the_toolbar_offers_all_three_controls_on_a_work_row(ran):
     """And each one reflects the paragraph's REAL state: the bullet button reads pressed because
     the row is bulleted, and outdent is live because the row is genuinely indented."""
     bar = ran["paraBarWork"]
-    assert ran["paraBarWorkNow"] == {"bullet": True, "indent": 288, "locked": False}
+    assert ran["paraBarWorkNow"] == {"bullet": True, "indent": 288, "locked": False, "level": 0}
     assert bar["bullet"]["on"] is True
     assert bar["bullet"]["pressed"] == "true"
     for key in ("bullet", "outdent", "indent"):
@@ -627,7 +633,7 @@ def test_the_bullet_comes_off_one_row_and_its_neighbours_keep_theirs(ran):
     assert got["target"]["paddingLeft"] == "0"
     assert got["before"] == {"li": True, "marginLeft": "", "paddingLeft": "", "dirty": False}
     assert got["after"] == {"li": True, "marginLeft": "", "paddingLeft": "", "dirty": False}
-    assert got["now"] == {"bullet": False, "indent": 288, "locked": False}
+    assert got["now"] == {"bullet": False, "indent": 288, "locked": False, "level": 0}
     # `para` and NO text: the words were not touched, and a text override would flatten the
     # template's own bold lead-in into one plain run.
     assert got["payload"] == [{"id": 116, "para": {"bullet": False, "indent": 288}}]
@@ -667,7 +673,7 @@ def test_the_control_remembers_what_you_set_across_a_reload(ran):
     trip = ran["roundTrip"]
     assert trip["sent"] == [{"id": 116, "para": {"bullet": False, "indent": 0}}]
     assert trip["stored"] == trip["sent"], "the draft did not keep what the toolbar sent"
-    assert trip["now"] == {"bullet": False, "indent": 0, "locked": False}
+    assert trip["now"] == {"bullet": False, "indent": 0, "locked": False, "level": 0}
     assert trip["el"]["li"] is False and trip["el"]["marginLeft"] == "0pt"
     assert trip["bar"]["bullet"]["on"] is False
     assert trip["bar"]["bullet"]["pressed"] == "false"
@@ -685,7 +691,7 @@ def test_a_draft_saved_before_this_feature_restores_exactly_as_it_did(ran):
     assert got["el"]["dirty"] is True
     assert got["el"]["li"] is True
     assert got["el"]["marginLeft"] == "", "a legacy override gained an inline indent"
-    assert got["now"] == {"bullet": True, "indent": 288, "locked": False}
+    assert got["now"] == {"bullet": True, "indent": 288, "locked": False, "level": 0}
     assert got["patch"] is None
 
 
