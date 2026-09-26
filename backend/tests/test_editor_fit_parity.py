@@ -567,3 +567,126 @@ def test_notes_that_arrive_after_the_first_fit_ask_for_the_size_again():
     assert got["seeded"] == "Scope.\nSchedule."
     assert got["afterPrefill"] == 1
     assert got["afterReseed"] == 2
+
+
+# ── the shrink counts indents: the reviewer's probe (2026-09-26 editor release) ──────────────────
+_LONG_O = ("Includes one mobilization, protection of adjacent finishes, all grinding dust control and "
+           "the moisture test described above; pricing holds for thirty days from the date shown.")
+
+
+def _probe(n):
+    """Epoxy Direct, Broken out, and `n` long lines typed under the Total: each prints Kyle's
+    hollow "o", its text one inch in (level 1, 1440 twips)."""
+    b = _body("epoxy", "Direct", "full")
+    b["values"].update({"tax_layout": "BROKEN_OUT", "price_taxable": True, "price_remodel_on": False,
+                        "material_tax_formatted": "$1,200", "total_formatted": "$36,763",
+                        "base_bid_formatted": "$35,563"})
+    b["price_overrides"] = {"after": {"total": [_LONG_O] * n}}
+    return b
+
+
+def _price_box(docx_bytes):
+    """(index, Document, txbxContent) of the PRICE box: the one holding "Base Bid"."""
+    d = Document(io.BytesIO(docx_bytes))
+    for i, tx in enumerate(pw._iter_txbx(d)):
+        if any(_text(p).strip() == "Base Bid" for p in tx.iter(qn("w:p"))):
+            return i, d, tx
+    raise AssertionError("no PRICE box")
+
+
+def _usable(d, tx, i):
+    geo = pw.template_geometry(d)["boxes"][i]
+    l, r, t, b = pw._txbx_insets(tx)
+    return geo["w_pt"] - (l + r) / pw._EMU_PER_PT, geo["h_pt"] - (t + b) / pw._EMU_PER_PT
+
+
+def test_the_shrink_counts_the_price_boxs_indents():
+    """Review of the bullets branch, finding 3: the writer measured every paragraph at the box's
+    full width, so the REBID indents (288 twips on a money line, 1440 on an "o" line) were free.
+    Three long "o" lines under the Total wrapped into more lines than the estimate counted: the box
+    was shrunk to 0.93 and still printed ~17pt past its bottom edge (laid out with Zetta Serif's
+    own glyphs, the test below). The estimate now counts each paragraph at its own width, so the
+    box it reports is the box that prints, and the editor, which applies that report, draws it the
+    same size.
+
+    Pinned: the PRICE box's reported content is the estimate's glyph model applied to each paragraph
+    AT ITS OWN WIDTH, read off the unscaled .docx (a model that ignores the indents cannot match),
+    the "o" lines are really one inch in, and more of them never shrink the box less. Mutation:
+    _fit_line_widths_pt handing back the box's width."""
+    scales = {}
+    for n in (0, 1, 2, 3):
+        body = _probe(n)
+        i, _, _ = _price_box(_docx(body))
+        box = next(b for b in _fit(body) if b["id"] == i)
+        _, du, txu = _price_box(_docx(body, unscaled=True))
+        uw, _ = _usable(du, txu, i)
+        want, inch_in = 0.0, 0
+        for p in txu.iter(qn("w:p")):
+            text = _text(p)
+            hp = pw._fit_hp(p)
+            fpt = hp / 2.0 if hp else 9.0
+            left = pw._effective_left_tw(du, p)
+            body_w = uw - left / 20.0
+            first_w = body_w
+            if pw._para_num_ref(p) is None:
+                first_w += ((pw._effective_ind_tw(du, p, "hanging") or 0)
+                            - (pw._effective_ind_tw(du, p, "firstLine") or 0)) / 20.0
+            if text.strip() and left >= 1440:
+                inch_in += 1
+            fc = first_w / (pw._TXBX_GLYPH_W * fpt)
+            bc = body_w / (pw._TXBX_GLYPH_W * fpt)
+            lines = 1 + (-(-(len(text) - fc) // bc) if len(text) > fc else 0)
+            want += lines * pw._TXBX_LINE_H * fpt
+        assert inch_in == n, (n, inch_in)
+        assert abs(box["content_pt"] - round(want, 3)) < 0.01, (n, box["content_pt"], want)
+        scales[n] = box["scale"]
+    assert scales[0] >= scales[1] >= scales[2] >= scales[3] and scales[3] < 0.8, scales
+
+
+_ZETTA_BOOK = pathlib.Path(pw.__file__).resolve().parent / "fonts" / "Zetta Serif-Book.otf"
+
+
+def _real_font_height(body):
+    """The PRICE box laid out with Zetta Serif Book's own advances (FreeType, through PIL) at each
+    paragraph's printed size and its own width, greedy word wrap, its w:spacing over the font's
+    ascent + descent. Independent of the estimate's glyph model. Returns (height, usable height)."""
+    from PIL import ImageFont
+    font = ImageFont.truetype(str(_ZETTA_BOOK), size=1000)
+    asc, desc = font.getmetrics()
+    i, d, tx = _price_box(_docx(body))
+    uw, uh = _usable(d, tx, i)
+    total = 0.0
+    for p in tx.iter(qn("w:p")):
+        runs = [(_text(rr), _sz(rr)) for rr in p.iter(qn("w:r"))]
+        text = "".join(s for s, _ in runs)
+        hp = next((h for s, h in runs if s.strip() and h), None) or pw._fit_hp(p) or 18
+        pt = hp / 2.0
+        ppr = p.find(qn("w:pPr"))
+        sp = ppr.find(qn("w:spacing")) if ppr is not None else None
+        before = int(sp.get(qn("w:before")) or 0) / 20.0 if sp is not None else 0.0
+        after = int(sp.get(qn("w:after")) or 0) / 20.0 if sp is not None else 0.0
+        line = sp.get(qn("w:line")) if sp is not None else None
+        rule = sp.get(qn("w:lineRule")) if sp is not None else None
+        one = (asc + desc) * pt / 1000.0
+        lh = one * int(line) / 240.0 if line and rule in (None, "auto") else (int(line) / 20.0 if line else one)
+        width = uw - pw._effective_left_tw(d, p) / 20.0
+        lines, cur = 1, ""
+        for w in text.split(" "):
+            cand = (cur + " " + w) if cur else w
+            if font.getlength(cand) * pt / 1000.0 <= width or not cur:
+                cur = cand
+            else:
+                lines, cur = lines + 1, w
+        total += before + lines * lh + after
+    return total, uh
+
+
+@pytest.mark.skipif(not _ZETTA_BOOK.exists(), reason="the licensed Zetta Serif files are not on this machine")
+def test_three_long_o_lines_under_the_total_no_longer_print_past_the_box():
+    """The reviewer's probe, measured with the real font rather than the estimate's model: long "o"
+    lines under the Total in epoxy Direct, Broken out. Before the shrink counted indents, three of
+    them printed ~17.5pt past the PRICE box and two ~1pt past; now the box holds them. Skipped where
+    the licensed font is absent (CI): the test above pins the estimate itself."""
+    for n in (2, 3):
+        height, usable = _real_font_height(_probe(n))
+        assert height <= usable, (n, height, usable)

@@ -1478,17 +1478,56 @@ def _fit_hp(p_elem) -> int | None:
         return None
 
 
-def _estimate_txbx_scale(txbx, box: dict | None) -> float:
+def _estimate_txbx_scale(txbx, box: dict | None, d=None) -> float:
     """Estimate the font scale (0.60–1.0) needed for a text box's content to fit
     its fixed design height. Returns 1.0 when it already fits or geometry is
-    unknown. Pure estimate (no renderer) — see the metric constants above."""
-    return _estimate_txbx_fit(txbx, box)[0]
+    unknown. Pure estimate (no renderer) — see the metric constants above.
+    `d`, the Document, lets a paragraph's list level supply its indent (`_fit_line_widths_pt`)."""
+    return _estimate_txbx_fit(txbx, box, d)[0]
 
 
-def _estimate_txbx_fit(txbx, box: dict | None) -> tuple:
+def _fit_line_widths_pt(d, p_elem, usable_w: float) -> tuple:
+    """`(first_w, body_w)`: the width in points the paragraph's FIRST line and its other lines have
+    for text inside a box whose usable width is `usable_w`.
+
+    THE SHRINK COUNTS INDENTS (the 2026-09-26 editor release). The estimate used to measure every
+    paragraph at the box's full width, so the REBID price box's indents (a money line's text at 288
+    twips, a typed "o" sub-line's at 1440, one inch) were free: three long "o" lines under the Total
+    wrapped into more lines than the estimate counted, the box was judged to fit (or shrunk too
+    little) and the lines printed past its bottom edge. The editor shows the writer's answer
+    (POST /api/proposal-fit), so it drew the same too-large size: one change here keeps both right.
+
+    The paragraph's own `w:ind` first, then its list level's (`_effective_left_tw` /
+    `_effective_ind_tw`, what the renderer applies; without `d` only the paragraph's own). The left
+    and right indents narrow every line. A bulleted or numbered paragraph's first line starts its
+    TEXT at the left indent too (the marker sits in the hanging), so it is no wider; any other
+    paragraph's first line starts `hanging` twips left of the rest (wider) or `firstLine` right of
+    it (narrower). Never narrower than one point, so a stray indent cannot divide by zero."""
+    def tw(attr):
+        if d is not None:
+            return _effective_ind_tw(d, p_elem, attr)
+        ppr = p_elem.find(qn("w:pPr"))
+        ind = ppr.find(qn("w:ind")) if ppr is not None else None
+        return _tw_or_none(ind.get(qn("w:" + attr))) if ind is not None else None
+    if d is not None:
+        left = _effective_left_tw(d, p_elem)
+    else:
+        left = tw("start")
+        left = tw("left") if left is None else left
+    right = tw("end")
+    right = tw("right") if right is None else right
+    body = usable_w - ((left or 0) + (right or 0)) / 20.0
+    first = body
+    if _para_num_ref(p_elem) is None:
+        first = body + ((tw("hanging") or 0) - (tw("firstLine") or 0)) / 20.0
+    return max(1.0, first), max(1.0, body)
+
+
+def _estimate_txbx_fit(txbx, box: dict | None, d=None) -> tuple:
     """`(scale, content_pt, usable_pt)` — `_estimate_txbx_scale`'s answer plus the two heights it
     compared, so the editor can be told whether the box still runs past its bottom edge at the
-    floor (content_pt * 0.60 > usable_pt). The heights are 0.0 when geometry is unknown."""
+    floor (content_pt * 0.60 > usable_pt). The heights are 0.0 when geometry is unknown. Each
+    paragraph is measured at its own width, indents counted (`_fit_line_widths_pt`)."""
     if not box:
         return 1.0, 0.0, 0.0
     w_pt, h_pt = box.get("w_pt"), box.get("h_pt")
@@ -1506,8 +1545,14 @@ def _estimate_txbx_fit(txbx, box: dict | None) -> tuple:
         font_pt = hp / 2.0 if hp is not None else 9.0
         if font_pt <= 0:
             font_pt = 9.0
-        chars_per_line = max(1.0, usable_w / (_TXBX_GLYPH_W * font_pt))
-        lines = max(1, math.ceil(len(text) / chars_per_line))   # empty para → 1 line of height
+        first_w, body_w = _fit_line_widths_pt(d, p, usable_w)
+        first_chars = max(1.0, first_w / (_TXBX_GLYPH_W * font_pt))
+        body_chars = max(1.0, body_w / (_TXBX_GLYPH_W * font_pt))
+        # The first line holds first_chars, every other line body_chars: 1 + ceil((n - first) / body)
+        # lines, written so a paragraph whose first line is as wide as the rest (no indent at all:
+        # the difference is exactly 0.0) counts exactly the old ceil(n / chars_per_line). An empty
+        # paragraph is one line of height.
+        lines = max(1, math.ceil((len(text) + body_chars - first_chars) / body_chars))
         content_h += lines * _TXBX_LINE_H * font_pt
     if content_h <= usable_h or content_h <= 0:
         return 1.0, content_h, usable_h
@@ -1641,7 +1686,7 @@ def _shrink_overflowing_text_boxes(d: Document, report: list | None = None) -> i
         af.tag = NORM
         af.attrib.pop("fontScale", None)    # empty normAutofit; we shrink runs directly below
         af.attrib.pop("lnSpcReduction", None)
-        scale, content_pt, usable_pt = _estimate_txbx_fit(txbx, boxes[i] if i < len(boxes) else None)
+        scale, content_pt, usable_pt = _estimate_txbx_fit(txbx, boxes[i] if i < len(boxes) else None, d)
         applied = scale < 0.999
         # Read BEFORE the scaling below rewrites the sizes it is counted from.
         default_hp = _txbx_default_hp(txbx) if report is not None else None
