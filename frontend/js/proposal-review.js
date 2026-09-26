@@ -543,7 +543,7 @@
   // .after[key], arrays of strings, blank ones included. They print as their own paragraphs in the
   // price row's own formatting and never freeze the line beside them.
   const COMPUTED_PRICE_LINE_KEYS = new Set(["base", "sales_tax", "remodel", "total"]);
-  const _LIVE_TITLE = "Edited — your words are kept; the amount and the tax wording still follow the estimate.";
+  const _LIVE_TITLE = "Edited — your words are kept. The amount follows the estimate, and the tax wording does too unless you typed your own.";
   const _MONEY_TITLE = "The amount on this line does not follow the estimate: it prints the figure typed here. Send will ask before it goes.";
   /** The stored text for a line in the LIVE shape, resolved against today's parts, or null.
    *
@@ -558,7 +558,8 @@
     const own = Object.prototype.hasOwnProperty;
     // MIGRATE ON LOAD: a line saved before the live shape, the first time it is drawn. Split into
     // the line itself and the lines typed around it; today's amount (or a figure the old code froze
-    // in) and any tax wording this tool has printed become markers; a "$0 – Total" the old box-wide
+    // in) where it is the line's price, and -- on a line with a place for tax wording -- any tax
+    // wording this tool has printed, become markers; a "$0 – Total" the old box-wide
     // sweep froze on a row nobody touched is dropped. What is left and still differs from the
     // computed line is the estimator's.
     if (pov.lines && typeof pov.lines === "object" && typeof pov.lines[key] === "string"
@@ -1212,9 +1213,18 @@
         taxable: sys.taxable, remodel_on: sys.remodel_on }, broken);
       optionNum += 1;
       const optLabel = `Option ${optionNum}`;
+      // `candidates`: every figure the page before the live shape could have frozen into this
+      // line when it was re-worded (see lineOverride's migration) -- the whole Total (tax
+      // exempt), the Total less remodel (Included, with the Remodel Tax and Total rows under it),
+      // the Total less both taxes (broken out). Without them a line re-worded under "Included"
+      // migrated with its old pre-remodel figure frozen, now worded as including remodel tax, and
+      // with the rows that made it add up gone: the customer quoted short by the remodel tax.
       lines.push({ key: `${role}.flooring`, amount_formatted: fmtUSDdoc(rule.base_cents / 100),
         label: `${optLabel}: ${noun} as described above` + (rule.phrase ? ` ${rule.phrase}` : ""),
-        phrase: rule.phrase, slot: true });
+        phrase: rule.phrase, slot: true,
+        candidates: [rule.total_cents, rule.total_cents - rule.remodel_cents,
+                     rule.total_cents - rule.remodel_cents - rule.sales_cents]
+          .map(c => fmtUSDdoc(c / 100)) });
       if (rule.material) lines.push({ key: `${role}.sales_tax`, amount_formatted: fmtUSDdoc(rule.sales_cents / 100), label: "Material Sales Tax", phrase: "" });
       if (rule.remodel) lines.push({ key: `${role}.remodel`, amount_formatted: fmtUSDdoc(rule.remodel_cents / 100), label: "Remodel Tax", phrase: "" });
       if (rule.total) lines.push({ key: `${role}.total`, amount_formatted: fmtUSDdoc(rule.total_cents / 100), label: "Total", phrase: "" });
@@ -1238,7 +1248,8 @@
       const extra = (pos) => (pov[pos] && Array.isArray(pov[pos][key]) ? pov[pos][key] : [])
         .map(t => ({ label: String(t), amount_formatted: "", extra: true }));
       const ov = lineOverride(key, `${l.amount_formatted} – ${l.label}`,
-        { amount: l.amount_formatted, phrase: l.phrase || "", slot: !!l.slot });
+        { amount: l.amount_formatted, phrase: l.phrase || "", slot: !!l.slot,
+          candidates: l.candidates || [] });
       out.push(...extra("before"));
       out.push(ov != null ? { label: ov, amount_formatted: "" }
                           : { amount_formatted: l.amount_formatted, label: l.label });
@@ -1328,7 +1339,8 @@
       if (!focusInside(comboBlock)) {
         comboBlock.innerHTML = comboLines.map(l =>
           lineEl("combo:" + l.key, `${l.amount_formatted} – ${l.label}`,
-                 { parts: { amount: l.amount_formatted, phrase: l.phrase || "", slot: !!l.slot } })).join("");
+                 { parts: { amount: l.amount_formatted, phrase: l.phrase || "", slot: !!l.slot,
+                            candidates: l.candidates || [] } })).join("");
       }
       hideRow(baseBidHeading, "heading_base");
       hideRow(baseBidRow, "base");
@@ -1613,10 +1625,18 @@
                 // Clear base-dependent whole-line overrides; keep the base-independent
                 // alternate block (alt_*).
                 // Both shapes, and the lines typed around them: they belong to the old base.
+                // NOT the lines typed on the gap above "Options:" (before.heading_options): they
+                // are the gap's, and the gap's count (options_gap) survives a flip. Typing on a
+                // blank line moves it out of that count into these lines, so clearing them here
+                // lost the note AND the blank lines it had taken (a 2-line gap came back as 0).
                 for (const bucket of ["lines", "lines2", "before", "after"]) {
                   const m = pov[bucket];
                   if (!m || typeof m !== "object") continue;
-                  for (const k of Object.keys(m)) if (!k.startsWith("alt_")) delete m[k];
+                  for (const k of Object.keys(m)) {
+                    if (k.startsWith("alt_")) continue;
+                    if (bucket === "before" && k === "heading_options") continue;
+                    delete m[k];
+                  }
                 }
               }
             }

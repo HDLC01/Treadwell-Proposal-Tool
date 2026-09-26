@@ -297,7 +297,7 @@ function build(st, opts) {
     // The box sweep, as the page's delegated input handler runs it on the box.
     "docSurface.addEventListener('input', (e) => { const b = editingBox(e.target); if (b) syncPriceLinesIn(b); });",
     SEND_WARNING,
-    "return { refreshPriceDisplay, syncPriceLinesIn, computeTokenValues, priceWarnings, sendPriceWarning, serializeBlock };",
+    "return { refreshPriceDisplay, syncPriceLinesIn, computeTokenValues, priceWarnings, sendPriceWarning, serializeBlock, comboLinesForPayload };",
   ].join("\n");
   const api = new Function("state", "document", "window", "form", "TW", "templateBlocks", "docSurface",
                            "focusInside", "queuePovSave", "F", "Node", "Event", "SEL", body)(
@@ -472,6 +472,107 @@ const out = {};
   // The next keystroke, on the repainted page, edits it as the line it now is.
   api.type(base.nextElementSibling, "Typed under it!");
   out.breakInside.next = JSON.parse(JSON.stringify(st.price_overrides.after || {}));
+}
+
+// 8. TAX WORDING OF HIS OWN IS HIS (review, 2026-09-26). Only TODAY's wording on a line with a place
+//    for tax wording becomes the live marker. A known wording typed on a line that has none of its
+//    own -- a manual line, the Total -- used to become the marker and resolve to nothing; "(tax
+//    exempt)" typed over a taxable job's wording used to resolve back to the computed wording, and
+//    the override was deleted as equal to the computed line.
+{
+  const st = hanzFix({ price_lines: [{ label: "Add for moisture mitigation", amount: 1200 }] });
+  const api = build(st);
+  api.refreshPriceDisplay();
+  const man = () => api.pg.region.querySelector('[data-po-linekey="manual:0"][data-po-kind="line"]');
+  const base = api.pg.ids["base-bid-row"];
+  api.type(man(), "$1,200 – Add for moisture mitigation (material sales tax INCLUDED)");
+  api.type(base, "$7,447 – Epoxy flooring as described above (tax exempt)");
+  api.refreshPriceDisplay();
+  out.ownPhrase = { stored: JSON.parse(JSON.stringify(st.price_overrides.lines2 || {})),
+                    manual: man().textContent, base: base.textContent, oneLine: api.lines() };
+  // Broken out: the Total takes a wording of his; the base line, whose slot is empty under this
+  // layout, takes one of his own too -- and a switch back to one line does not print a second.
+  st.tax_layout = "BROKEN_OUT";
+  api.refreshPriceDisplay();
+  const total = api.pg.ids["total-row"];
+  api.type(total, "$7,447 – Total (material sales tax INCLUDED)");
+  api.type(base, "$7,351 – Epoxy flooring as described above (material sales tax EXCLUDED)");
+  api.refreshPriceDisplay();
+  out.ownPhrase.broken = api.lines();
+  out.ownPhrase.brokenStored = JSON.parse(JSON.stringify(st.price_overrides.lines2 || {}));
+  st.tax_layout = "ONE_LINE";
+  api.refreshPriceDisplay();
+  out.ownPhrase.backToOneLine = base.textContent;
+  // A manual line saved before the live shape, with a wording of his in it: migrated, kept.
+  const old = hanzFix({ price_lines: [{ label: "Add for moisture mitigation", amount: 1200 }],
+                        price_overrides: { lines: { "manual:0": "$1,200 – Add for moisture mitigation (tax exempt)" } } });
+  const oldApi = build(old);
+  oldApi.refreshPriceDisplay();
+  out.ownPhrase.migrated = { lines2: JSON.parse(JSON.stringify(old.price_overrides.lines2 || {})),
+                             lines: JSON.parse(JSON.stringify(old.price_overrides.lines || {})),
+                             shown: oldApi.pg.region.querySelector('[data-po-linekey="manual:0"][data-po-kind="line"]').textContent };
+}
+
+// 9. A HAND-TYPED PRICE THAT QUOTES TODAY'S FIGURE (review, 2026-09-26): "$5,800 – … (discounted
+//    from $7,447)". The price is the line's first figure; today's figure further along is his
+//    quote. It used to become the live amount: no mark, no Send prompt, and the quote moved.
+{
+  const st = hanzFix();
+  const api = build(st);
+  api.refreshPriceDisplay();
+  const base = api.pg.ids["base-bid-row"];
+  api.type(base, "$5,800 – Epoxy flooring as described above (discounted from $7,447)");
+  api.refreshPriceDisplay();
+  const warn = api.priceWarnings();
+  out.quoted = { stored: st.price_overrides.lines2.base, cls: base.className, title: base.title,
+                 warnings: warn.map((w) => ({ key: w.key, says: w.says, estimate: w.estimate })),
+                 ask: api.sendPriceWarning(warn) };
+  st.proposal_lump_sum = 9100;
+  api.refreshPriceDisplay();
+  out.quoted.repriced = base.textContent;
+  // A line the previous build stored with the quote as the marker: its price is still his.
+  const prev = hanzFix({ price_overrides: { lines2: {
+    base: "$5,800 – Epoxy flooring as described above (discounted from ⟦amount⟧)" } } });
+  const prevApi = build(prev);
+  prevApi.refreshPriceDisplay();
+  const pb = prevApi.pg.ids["base-bid-row"];
+  out.quoted.previousBuild = { cls: pb.className,
+    warnings: prevApi.priceWarnings().map((w) => ({ key: w.key, says: w.says, estimate: w.estimate })) };
+}
+
+// 10. A COMBO "Option N" LINE RE-WORDED BEFORE THE LIVE SHAPE (review, 2026-09-26). Under
+//     "Included" the old page drew it as Total less remodel ($10,000), with "$500 – Kansas Remodel
+//     Tax" and "$10,500 – Total" under it. Migrated, that figure must become the live amount, or
+//     one line prints "$10,000 … (Remodel Tax AND material sales tax INCLUDED)" on a $10,500 bid.
+const COMBO_LEGACY = "$10,000 – Option 1: Epoxy flooring in the kitchen as described above (material sales tax INCLUDED)";
+{
+  const st = {
+    work_type: "combo", audience: "Direct", project_name: "Combo",
+    proposal_lump_sum: 10500, proposal_sales_tax: 100, proposal_remodel_tax: 500,
+    proposal_taxable: true, proposal_remodel_on: true, tax_inclusion: "INCLUDED",
+    priced_tabs: [{ id: "Epoxy", name: "Epoxy", role: "epoxy", kind: "base", total: 10500,
+                    sales_tax: 100, remodel: 500, taxable: true, remodel_on: true }],
+    cell_values: {}, sheet_area: {}, rooms: [],
+    price_overrides: { lines: { "combo:epoxy.flooring": COMBO_LEGACY } },
+  };
+  const api = build(st);
+  api.refreshPriceDisplay();
+  const warn = api.priceWarnings();
+  out.comboLegacy = {
+    lines2: JSON.parse(JSON.stringify(st.price_overrides.lines2 || {})),
+    lines: api.lines().map((l) => [l.key, l.text, l.cls]),
+    warnings: warn.map((w) => ({ key: w.key, says: w.says, estimate: w.estimate })),
+    payload: api.comboLinesForPayload(),
+  };
+  st.tax_layout = "BROKEN_OUT";
+  api.refreshPriceDisplay();
+  out.comboLegacy.broken = api.lines().map((l) => [l.key, l.text]);
+  out.comboLegacy.brokenPayload = api.comboLinesForPayload();
+  // The payload built BEFORE the line is ever drawn (Download from a draft the proposal step has
+  // not painted yet): the payload's own migration has to know the old figure too.
+  const fresh = JSON.parse(JSON.stringify(Object.assign({}, st, { tax_layout: undefined,
+    price_overrides: { lines: { "combo:epoxy.flooring": COMBO_LEGACY } } })));
+  out.comboLegacy.payloadFirst = build(fresh).comboLinesForPayload();
 }
 
 console.log(JSON.stringify(out));
