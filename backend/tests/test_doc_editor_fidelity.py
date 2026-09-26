@@ -588,3 +588,124 @@ def test_a_price_row_frozen_with_cents_is_todays_figure_too(ran):
     r = ran["centsPriceRow"]
     assert r["collected"] == [{"id": 57, "text": "{{material_tax_formatted}} – Material Sales Tax (county rate)"}], r
     assert r["drawn"] == "$400 – Material Sales Tax (county rate)" and r["off"] is False, r
+
+
+# ══ a price row frozen at the OLD base's figure (2026-09-26) ═════════════════════════════════
+# Hanz: "the base bid was not updating". On the GC, Gyp and polish Direct files the base bid is a
+# free paragraph that neither base picker reaches. Edited before the rows kept their tokens, it was
+# frozen at the base of that day, and after a pick it only knew TODAY's figure, so the customer's
+# document went on printing the old base's price. Today's figures of every priced tab are the tool's.
+_FROZEN_ROWS = {
+    # fixture id -> (template, the paragraph as the template carries it)
+    70: (("epoxy", "GC"), "{{base_bid_formatted}} – Resinous floor & integral cove base as described above {{base_tax_phrase}}"),
+    71: (("gyp", "Direct"), "{{base_bid_formatted}} – Gypsum Underlayment System as described above {{base_tax_phrase}}"),
+    72: (("polish", "Direct"), "{{base_bid_formatted}} – Polished Concrete Flooring as described above {{base_tax_phrase}}"),
+    73: (("epoxy", "GC"), "{{material_tax_formatted}} – Material Sales Tax"),
+}
+_WORDS = {70: "Resinous floor & integral cove base", 71: "Gypsum Underlayment System",
+          72: "Polished Concrete Flooring"}
+
+
+def _real_block_id(work_type, audience, text):
+    d = docx.Document(str(pw.pick_template(work_type, audience)))
+    ids = [i for i, _k, _p, in_block, t, _x in pw.iter_editable_blocks(d) if in_block is None and t == text]
+    assert ids, f"{work_type}/{audience} no longer carries a free paragraph {text!r}"
+    return ids[0]
+
+
+def _printed(work_type, audience, overrides, layout):
+    """The customer's document for base Epoxy copy ($15,149, $195 material sales tax, no remodel)
+    with these paragraph overrides, through the real renderer; its paragraphs' own text."""
+    import main
+    from starlette.requests import Request
+    values = {
+        "project_name": "Hanz Fix", "job_name": "Hanz Fix", "city_state": "Iloilo City, KS",
+        "sqft": "99", "epoxy_sf": "99", "polish_sf": "99", "cove_lf": "0", "estimator_name": "Hanz",
+        "bid_date_formatted": "9/26/26", "texture": "OP", "system_name": "MACRO", "scope_notes": "s",
+        "schedule_notes": "s", "exclusions": "e", "disposal": "d", "state_name": "Kansas",
+        "site_visit_phrase": "per site visit on 9/26", "work_description": "per plans",
+        "area_description": "~99 sf", "gyp_soft_sf": "99", "gyp_hard_sf": "0", "gyp_corridor_sf": "0",
+        "gyp_soft_thickness": '3/4"', "gyp_hard_thickness": '1"', "gyp_corridor_thickness": '3/4"',
+        "mobilizations_line": "1 Mobilization to Site.",
+        "total_formatted": "$15,149", "material_tax_formatted": "$195", "tax_amount_formatted": "$0",
+        "total_label": "$15,149 – Total", "base_bid_formatted": "$15,149",
+        "tax_layout": layout, "price_taxable": True, "price_remodel_on": False,
+    }
+    body = {"work_type": work_type, "audience": audience, "values": values, "remodel": [],
+            "paragraph_overrides": overrides}
+    req = Request({"type": "http", "method": "POST", "path": "/t", "headers": [], "query_string": b""})
+    blob = main._render_documents(body, req, want_estimate=False)["docx"]["content"]
+    d = docx.Document(io.BytesIO(blob))
+    mc = "{http://schemas.openxmlformats.org/markup-compatibility/2006}Fallback"
+    return [pw._own_text(p).strip() for p in d.element.xpath("//w:p")
+            if not any(True for _ in p.iterancestors(mc))]
+
+
+def test_the_frozen_rows_are_the_templates_own_paragraphs():
+    """The fixture rows are the three families' real base rows and the GC tax row, verbatim."""
+    for (wt, aud), text in _FROZEN_ROWS.values():
+        _real_block_id(wt, aud, text)
+
+
+def test_a_price_row_frozen_at_the_old_bases_figure_follows_the_new_base(ran):
+    """Base rows edited on the GC, Gyp and polish Direct files while Epoxy ($7,447) or Polish
+    ($9,860) was the base, reopened after the base moved to Epoxy copy ($15,149): each is drawn at
+    $15,149 with his words, nothing is marked, and the page sends it with its tokens back. Broken
+    out, the pre-tax base and the tax row frozen at Epoxy's follow too, and a Total that migrates
+    back to the template's own row stops being an override at all. Mutation: migrate against
+    today's figure only (the tab-figure step off) -- the rows stay at $7,447 / $9,860, marked."""
+    o = ran["frozenAtOldBase"]["oneLine"]
+    for i, words in _WORDS.items():
+        s = o["shown"][str(i)]
+        assert s == {"text": f"$15,149 – {words} as described above, per plans dated 9/1 (material sales tax INCLUDED)",
+                     "off": False, "amount": ""}, (i, s)
+    assert o["collected"] == [
+        {"id": i, "text": f"{{{{base_bid_formatted}}}} – {w} as described above, per plans dated 9/1 {{{{base_tax_phrase}}}}"}
+        for i, w in _WORDS.items()], o["collected"]
+    assert o["shown"]["75"]["text"] == "$15,149 – Total" and not o["shown"]["75"]["off"]
+    b = ran["frozenAtOldBase"]["broken"]
+    assert [b["shown"][k]["text"] for k in ("70", "73", "74")] == [
+        "$14,954 – Resinous floor & integral cove base as described above, per plans dated 9/1",
+        "$195 – Material Sales Tax (county rate)", "$15,149 – Total"], b["shown"]
+    assert not any(v["off"] for v in b["shown"].values()), b["shown"]
+    assert b["collected"] == [
+        {"id": 70, "text": "{{base_bid_formatted}} – Resinous floor & integral cove base as described above, per plans dated 9/1"},
+        {"id": 73, "text": "{{material_tax_formatted}} – Material Sales Tax (county rate)"}], b["collected"]
+
+
+def test_a_figure_no_tab_prices_stays_his_and_a_tabs_figure_in_his_words_is_not_the_amount(ran):
+    """"$7,000 – …, Polish alternative $9,860": no tab prices $7,000, so the row keeps it, marked
+    against today's $15,149 (Send asks), and the $9,860 in his words -- Polish's own total -- is
+    never taken for the row's amount. Mutation: look for a tab's figure anywhere in the row."""
+    h = ran["frozenAtOldBase"]["his"]
+    assert h["shown"]["70"] == {
+        "text": "$7,000 – Resinous floor & integral cove base as described above, Polish alternative $9,860 (material sales tax INCLUDED)",
+        "off": True, "amount": "$15,149"}, h
+    assert h["collected"] == [{"id": 70, "text": "$7,000 – Resinous floor & integral cove base as described above, "
+                                                 "Polish alternative $9,860 {{base_tax_phrase}}"}], h
+
+
+@pytest.mark.parametrize("fixture_id", sorted(_WORDS))
+def test_the_customer_document_prints_the_new_bases_figure_on_every_family(ran, fixture_id):
+    """What the page sends for each family's frozen base row, on that family's real template,
+    through the real renderer: the new base's $15,149 with his words, and no trace of the old
+    base's figure. Mutation: as above."""
+    (wt, aud), text = _FROZEN_ROWS[fixture_id]
+    sent = next(c for c in ran["frozenAtOldBase"]["oneLine"]["collected"] if c["id"] == fixture_id)
+    texts = _printed(wt, aud, [{"id": _real_block_id(wt, aud, text), "text": sent["text"]}], "ONE_LINE")
+    want = f"$15,149 – {_WORDS[fixture_id]} as described above, per plans dated 9/1 (material sales tax INCLUDED)"
+    assert want in texts, [t for t in texts if "as described above" in t]
+    assert not any("$7,447" in t or "$9,860" in t for t in texts), [t for t in texts if "$" in t]
+
+
+def test_the_customer_document_prints_the_new_bases_broken_out_rows(ran):
+    """Broken out on the GC resinous file: the base row and the tax row the page sends, frozen at
+    Epoxy's before, print the new base's pre-tax figure, its tax and its Total, adding up."""
+    wt, aud = "epoxy", "GC"
+    sent = ran["frozenAtOldBase"]["broken"]["collected"]
+    ov = [{"id": _real_block_id(wt, aud, _FROZEN_ROWS[c["id"]][1]), "text": c["text"]} for c in sent]
+    texts = _printed(wt, aud, ov, "BROKEN_OUT")
+    i = texts.index("$14,954 – Resinous floor & integral cove base as described above, per plans dated 9/1")
+    assert "$195 – Material Sales Tax (county rate)" in texts[i:i + 4], texts[i:i + 5]
+    assert "$15,149 – Total" in texts[i:i + 5], texts[i:i + 5]
+    assert not any("$7,447" in t or "$7,351" in t or "$96 " in t for t in texts)

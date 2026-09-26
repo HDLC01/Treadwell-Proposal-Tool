@@ -1680,7 +1680,13 @@ def _flatten_price_bullets(d: Document) -> int:
 # Now the gap is a NUMBER of real blank lines, `price_overrides.options_gap` on the draft, and the
 # editor draws exactly that many line elements the caret can sit on. A payload saved before the
 # key existed prints the 2 the editor has always shown.
+#
+# Never fewer than ONE. Hanz, 2026-09-26: "Base bid and options should always have atleast 1 or 2
+# spaces from each other". A saved count of 0, or a gap typed over to the last line, still prints one
+# blank line directly above the heading; the editor applies the same floor (optionsGapCount) and
+# refuses the key that would take the last line.
 OPTIONS_GAP_DEFAULT = 2
+OPTIONS_GAP_MIN = 1
 OPTIONS_GAP_MAX = 20
 
 # Where the heading is, marked on the PRISTINE template and carried through block expansion by
@@ -1789,8 +1795,9 @@ def _blank_like(model) -> Any:
 
 def options_gap_count(value) -> int:
     """`price_overrides.options_gap` as the number of blank lines to print. Anything that is not a
-    whole number (absent included) is the default the editor has always shown; clamped to 0..MAX.
-    Same rule as the editor's `optionsGapCount`."""
+    whole number (absent included) is the default the editor has always shown; clamped to MIN..MAX
+    (1..20: there is always one blank line between the price rows and the heading). Same rule as
+    the editor's `optionsGapCount`."""
     n = None
     if isinstance(value, bool):
         n = None
@@ -1802,12 +1809,13 @@ def options_gap_count(value) -> int:
         n = int(value.strip())
     if n is None:
         return OPTIONS_GAP_DEFAULT
-    return max(0, min(OPTIONS_GAP_MAX, n))
+    return max(OPTIONS_GAP_MIN, min(OPTIONS_GAP_MAX, n))
 
 
 def _apply_options_gap(d: Document, n, typed=None) -> int:
     """Print the lines above every marked Options heading, in every copy: the estimator's TYPED
-    lines first, then EXACTLY `n` blank lines, then the heading -- the sequence the editor draws.
+    lines first, then EXACTLY `n` blank lines (at least one: `options_gap_count`), then the
+    heading -- the sequence the editor draws.
 
     `typed` is `price_overrides.before.heading_options`: text the estimator put on the gap (Hanz,
     2026-09-26: "I cant write texts on this white space lines"). Each prints as a paragraph of its

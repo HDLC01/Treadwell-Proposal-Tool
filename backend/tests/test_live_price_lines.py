@@ -480,3 +480,122 @@ def test_a_combo_line_reworded_under_included_migrates_live_and_adds_up(ran):
         assert _price_box(blob, screen[0], screen[-1]) == screen, layout
     rows = [int(x[1].split(" – ")[0].replace("$", "").replace(",", "")) for x in c["broken"]]
     assert rows[0] + rows[1] + rows[2] == rows[3]
+
+
+# ── the one question all three ways out ask ──────────────────────────────────────────────────────
+def _core(expr, *args):
+    core = FRONTEND / "js" / "price-lines-core.js"
+    script = ("const P = require(process.argv[1]); const A = process.argv.slice(2).map(JSON.parse);"
+              "console.log(JSON.stringify((" + expr + ")(P, ...A)));")
+    p = subprocess.run(["node", "-e", script, str(core), *[json.dumps(a) for a in args]],
+                       capture_output=True, text=True, encoding="utf-8", timeout=60)
+    assert p.returncode == 0, p.stderr
+    return json.loads(p.stdout)
+
+
+def _core_async(expr, *args):
+    """_core for a rule that answers with a promise (confirmSavedCopy)."""
+    core = FRONTEND / "js" / "price-lines-core.js"
+    script = ("const P = require(process.argv[1]); const A = process.argv.slice(2).map(JSON.parse);"
+              "Promise.resolve((" + expr + ")(P, ...A)).then(v => console.log(JSON.stringify(v)),"
+              " e => { console.error(e && e.stack || e); process.exit(1); });")
+    p = subprocess.run(["node", "-e", script, str(core), *[json.dumps(a) for a in args]],
+                       capture_output=True, text=True, encoding="utf-8", timeout=60)
+    assert p.returncode == 0, p.stderr
+    return json.loads(p.stdout)
+
+
+@needs_node
+def test_download_and_to_dropbox_ask_the_copy_the_server_builds():
+    """TWPrice.confirmSavedCopy, the step Download and To Dropbox take before the one check (review
+    of dfcf589: they build and file the SERVER's copy, which can hold a colleague's figure this page
+    has never seen). In order: this page's pending save goes; with a draft id, the server's copy is
+    read and the question asked of IT, and the answer carries when that copy was stored; with none,
+    this page's own payload is what gets built and is asked. A save that cannot land, or a server
+    copy that cannot be read, asks nothing and says it failed.
+
+    Mutations: ask this page's copy with an id (the server's figure is not asked); read before the
+    flush (the order); an unreadable copy taken as nothing to ask (failed goes false)."""
+    got = _core_async("""(P) => {
+        const warns = (says) => ({ proposal_payload: { price_warnings: [{ says, estimate: "$12,500" }] } });
+        const run = (o, answer) => {
+          const log = [];
+          const tw = {
+            flushState: async () => { log.push("flush"); return o.flush !== false; },
+            getDraftId: () => (o.id === undefined ? "d1" : o.id),
+            getState: () => { log.push("local"); return o.local; },
+            readServerRow: async () => { log.push("read"); return o.row === undefined ? null : o.row; },
+          };
+          return P.confirmSavedCopy(tw, "download", (q) => { log.push(q); return answer; })
+            .then((r) => Object.assign({ log }, r));
+        };
+        return Promise.all([
+          run({ local: {}, row: { data: warns("$15,000"), version: "v9" } }, false),
+          run({ local: {}, row: { data: warns("$15,000"), version: "v9" } }, true),
+          run({ local: warns("$7,000"), row: { data: {}, version: "v9" } }, false),
+          run({ id: null, local: warns("$7,000") }, false),
+          run({ flush: false, local: {}, row: { data: warns("$15,000"), version: "v9" } }, true),
+          run({ local: {}, row: null }, true),
+        ]);
+    }""")
+    ask = "This line says %s but the estimate says $12,500 — download anyway?"
+    server_cancel, server_ok, only_local, no_id, unsaved, unreadable = got
+    assert server_cancel == {"log": ["flush", "read", ask % "$15,000"], "go": False, "failed": False,
+                             "version": "v9"}, server_cancel
+    assert server_ok == {"log": ["flush", "read", ask % "$15,000"], "go": True, "failed": False,
+                         "version": "v9"}, server_ok
+    assert only_local == {"log": ["flush", "read"], "go": True, "failed": False, "version": "v9"}, only_local
+    assert no_id == {"log": ["flush", "local", ask % "$7,000"], "go": False, "failed": False,
+                     "version": ""}, no_id
+    assert unsaved == {"log": ["flush"], "go": False, "failed": True, "version": ""}, unsaved
+    assert unreadable == {"log": ["flush", "read"], "go": False, "failed": True, "version": ""}, unreadable
+
+
+@needs_node
+def test_the_question_is_one_rule_in_three_verbs():
+    """TWPrice.ownFigureQuestion: Hanz's sentence per line, the verb of the way out, the list capped
+    at six with a count of the rest; nothing to ask, "". TWPrice.confirmOwnFigures asks it of the
+    draft's document and says whether to go on: nothing to ask never calls the question at all."""
+    w = [{"says": "$15,000", "estimate": "$9,860"}, {"says": "$9,999", "estimate": ""}]
+    got = _core("(P, w) => ['send', 'download', 'file'].map(v => P.ownFigureQuestion(w, v))", w)
+    assert got == [
+        "This line says $15,000 but the estimate says $9,860.\nThis line says $9,999, typed by hand — send anyway?",
+        "This line says $15,000 but the estimate says $9,860.\nThis line says $9,999, typed by hand — download anyway?",
+        "This line says $15,000 but the estimate says $9,860.\nThis line says $9,999, typed by hand — file anyway?",
+    ]
+    many = [{"says": f"${i},000", "estimate": "$1"} for i in range(1, 9)]
+    q = _core("(P, w) => P.ownFigureQuestion(w, 'file')", many)
+    assert q.count("This line says") == 6 and "…and 2 more line(s) like it — file anyway?" in q
+    assert _core("(P) => [P.ownFigureQuestion([], 'send'), P.ownFigureQuestion(null, 'send')]") == ["", ""]
+    asked = _core("""(P, w) => {
+        const seen = [];
+        const ask = (ans) => (q) => { seen.push(q); return ans; };
+        const d = { proposal_payload: { price_warnings: w } };
+        return { cancel: P.confirmOwnFigures(d, 'download', ask(false)),
+                 ok: P.confirmOwnFigures(d, 'download', ask(true)),
+                 clean: P.confirmOwnFigures({ proposal_payload: { price_warnings: [] } }, 'send', ask(false)),
+                 none: P.confirmOwnFigures(null, 'send', ask(false)),
+                 seen };
+    }""", w[:1])
+    assert asked == {"cancel": False, "ok": True, "clean": True, "none": True,
+                     "seen": ["This line says $15,000 but the estimate says $9,860 — download anyway?"] * 2}
+
+
+def test_send_download_and_to_dropbox_ask_through_the_one_check():
+    """No second copy of the rule: done.js (Send and the .docx / PDF downloads) and dropbox.js (To
+    Dropbox) all ask through TWPrice.confirmOwnFigures, neither keeps a wording of its own, and
+    done.html loads the rule before both. Send asks it of this page's copy, once it has checked
+    that copy IS the server's; Download and To Dropbox through confirmSavedCopy, of the server's
+    copy, the one they build and file (review of dfcf589). Each call is EXECUTED by its own harness
+    (files-stale-page, files-download, dropbox-page); this pins that there is one of it."""
+    done = (FRONTEND / "js" / "done.js").read_text(encoding="utf-8")
+    dbx = (FRONTEND / "js" / "dropbox.js").read_text(encoding="utf-8")
+    assert done.count('TWPrice.confirmOwnFigures(TW.getState(), "send",') == 1
+    assert done.count('TWPrice.confirmSavedCopy(TW, "download",') == 1
+    assert dbx.count('TWPrice.confirmSavedCopy(TW, "file",') == 1
+    assert done.count("confirmOwnFigures(") == 1 and "confirmOwnFigures(" not in dbx
+    for src in (done, dbx):
+        assert "anyway?" not in src and "This line says" not in src
+    html = (FRONTEND / "done.html").read_text(encoding="utf-8")
+    core = html.index('src="/js/price-lines-core.js')
+    assert core < html.index('src="/js/done.js"') < html.index('src="/js/dropbox.js"')

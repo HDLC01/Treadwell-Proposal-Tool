@@ -61,7 +61,9 @@ SERVER_SENDS_BODY = ["base_path", "folders", "ok", "previous_path",
 # Pydantic model accepts. Pydantic IGNORES unknown fields by default, so a
 # one-character difference in `folder_path` would silently drop the estimator's
 # folder choice and create the duplicate this whole feature exists to prevent.
-CLIENT_SENDS_POST = ["destination", "draft_id", "folder_owner", "folder_path"]
+# `draft_version`: when the server stored the copy the page asked "… — file anyway?" of (review of
+# dfcf589; the route refuses a draft stored since, test_dropbox_safety.py).
+CLIENT_SENDS_POST = ["destination", "draft_id", "draft_version", "folder_owner", "folder_path"]
 # ...and what the click handler (`ok`) and renderResult() read off a SUCCESSFUL
 # response. On failure it reads `error`/`detail` instead, which a 200 never carries.
 CLIENT_READS_POST = ["docx_url", "existing", "folder_path", "folder_url", "ok",
@@ -615,10 +617,13 @@ def test_the_client_builds_the_post_body_out_of_the_models_field_names():
     and the object the page actually sends."""
     block = _js_object_after("const body = { draft_id: draftId")
     for key in CLIENT_SENDS_POST:
-        if key == "folder_path":
+        if key in ("folder_path", "draft_version"):
             # Set on `body` conditionally, just after the literal.
             continue
         assert key + ":" in block, key + " left the POST body in dropbox.js"
     src = DROPBOX_JS.read_text(encoding="utf-8")
     assert "body.folder_path = chosenPath" in src, (
         "the estimator's folder choice is no longer posted as folder_path")
+    # Executed in test_dropbox_safety.py (the body carries the version the question was asked of).
+    assert "body.draft_version = asked.version" in src, (
+        "the save the question was asked of is no longer posted as draft_version")

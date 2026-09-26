@@ -7,7 +7,9 @@
 //
 // WHAT IS PINNED: a Download press builds its file NOW, from the SAVED draft, through the server
 // route Send uses (/api/draft/{id}/documents), after the page's pending save is flushed — and never
-// fetches the token kept in `generate_result` from an earlier build. Hanz, 2026-09-25: "Sending out
+// fetches the token kept in `generate_result` from an earlier build. The .docx and PDF buttons ask
+// their question of the SERVER's copy (TWPrice.confirmSavedCopy), the copy that route builds, and
+// hand back when it was stored (`draft_version`). Hanz, 2026-09-25: "Sending out
 // the proposal should be the same PDF from the download button in the last page." The press
 // records the build LOCALLY only (setLocalState, never setState) and keeps the render_id of the
 // file that came back in `checkedDocument`, which Send hands to the server. That the press writes
@@ -19,6 +21,9 @@ const path = require("path");
 
 const ROOT = path.resolve(__dirname, "..", "..", "..");
 const SRC = fs.readFileSync(path.join(ROOT, "frontend", "js", "done.js"), "utf8");
+// The price rule's page half, as done.html loads it before done.js: the one question Send,
+// Download and To Dropbox ask about a price line with a figure of his own (confirmOwnFigures).
+const TWPRICE = require(path.join(ROOT, "frontend", "js", "price-lines-core.js"));
 
 function balanced(startIndex) {
   let depth = 1;
@@ -69,6 +74,13 @@ function page(opts) {
     setState: (p) => { st = Object.assign({}, st, p); log.push("setState"); return st; },
     setLocalState: (p) => { st = Object.assign({}, st, p); log.push("setLocalState"); return st; },
     getDraftId: () => (opts.draftId === undefined ? "d1" : opts.draftId),
+    // The SERVER's copy (GET /api/draft/{id}): by default this page's own, stored at "v1". A
+    // scenario gives it a copy of its own (`server`), or none at all (`serverRow: null`).
+    readServerRow: async () => {
+      log.push("read");
+      if (opts.serverRow === null) return null;
+      return { data: opts.server ? JSON.parse(JSON.stringify(opts.server)) : st, version: "v1" };
+    },
     postJSON: async (p, body) => {
       log.push("post " + p);
       posted.push({ path: p, body: body });
@@ -93,14 +105,18 @@ function page(opts) {
   class BlobStub { constructor(parts, o) { this.type = o && o.type; } }
   const builtAt = new Function(...BUILT_AT.args, '"use strict"; ' + BUILT_AT.body);
   const freshDocuments = new AsyncFunction(
-    "TW", "builtAt", '"use strict"; ' + FRESH.body)
+    "TW", "builtAt", ...FRESH.args, '"use strict"; ' + FRESH.body)
     .bind(null, TW, builtAt);
   let painted = 0;
   // done.js's module-level record of the document the estimator downloaded (Send reads it).
   const checkedDocument = { renderId: "" };
   const downloadAs = new AsyncFunction(
     ...DOWNLOAD.args, "TW", "freshDocuments", "paintLumpSum", "fetch", "Blob", "URL", "document",
-    "setTimeout", "icon", "console", "checkedDocument", '"use strict"; ' + DOWNLOAD.body);
+    "setTimeout", "icon", "console", "checkedDocument", "TWPrice", "window",
+    '"use strict"; ' + DOWNLOAD.body);
+  // The page's window.confirm: every question asked, answered with `opts.confirm` (OK by default).
+  const asked = [];
+  const windowStub = { confirm: (q) => { asked.push(q); log.push("confirm"); return opts.confirm !== false; } };
   const shown = [];
   const preEl = { style: { display: "" } };
   // `TW` and `state` are bound although doGenerate no longer reads them: the page has both at
@@ -110,13 +126,13 @@ function page(opts) {
     "document", "freshDocuments", "preEl", "showPostGenerate", "alert", "TW", "state",
     '"use strict"; ' + GENERATE.body);
   return {
-    log, posted, fetched, clicked, shown, preEl,
+    log, posted, fetched, clicked, shown, preEl, asked,
     state: () => st,
     painted: () => painted,
     checked: () => checkedDocument.renderId,
     download: (key, name, button) => downloadAs(
       key, name, button, TW, freshDocuments, () => { painted++; }, fetchStub, BlobStub, URLStub,
-      documentStub, () => 0, () => "", { error() {} }, checkedDocument),
+      documentStub, () => 0, () => "", { error() {} }, checkedDocument, TWPRICE, windowStub),
     generate: () => doGenerate(documentStub, freshDocuments, preEl,
                                (r) => shown.push(r), () => {}, TW, st),
   };
@@ -192,6 +208,57 @@ const SAVED = { values: { total_formatted: "$41,250.00", project_name: "Niagara"
     await p.download("pdf_download_url", "x.pdf", button());
     out.noDraftId = { posted: p.posted.map((x) => x.path),
                       sentSaved: p.posted.length && p.posted[0].body === p.state().proposal_payload };
+  }
+
+  // G. A PRICE LINE WITH A FIGURE OF HIS OWN. Hanz, 2026-09-26: warn on all three -- Download asks
+  //    the question Send asks, in its own verb, BEFORE anything is built or fetched. Cancel does
+  //    nothing at all; OK downloads exactly as a press always has. The estimate sheet has no price
+  //    line and is not asked; a document with no such line is not asked either.
+  {
+    const warned = Object.assign({}, SAVED, {
+      price_warnings: [{ key: "base", says: "$15,000", estimate: "$9,860" },
+                       { key: "option:Copy1", says: "$9,999", estimate: "" }] });
+    out.ownFigure = {};
+    for (const [name, key, file, pp, answer] of [
+      ["pdfCancel", "pdf_download_url", "x.pdf", warned, false],
+      ["docxCancel", "docx_download_url", "x.docx", warned, false],
+      ["pdfOk", "pdf_download_url", "x.pdf", warned, true],
+      ["xlsx", "xlsx_download_url", "x.xlsx", warned, false],
+      ["clean", "pdf_download_url", "x.pdf", SAVED, false],
+    ]) {
+      const p = page({ confirm: answer, state: { proposal_payload: pp, project_name: "Niagara" } });
+      const b = button();
+      await p.download(key, file, b);
+      out.ownFigure[name] = { asked: p.asked, log: p.log, clicked: p.clicked, checked: p.checked(),
+                              button: { text: b.textContent, disabled: b.disabled },
+                              bodies: p.posted.map((x) => x.body) };
+    }
+  }
+
+  // H. THE COPY THAT IS BUILT (review of dfcf589). This page's copy is clean, and the SERVER's --
+  //    the one /documents renders -- carries RJ's $15,000 over the base amount. The press asks
+  //    about the server's copy, and the build names the save it was asked of. And the reverse: a
+  //    figure left in this page's copy and gone from the server's is not asked about. The server's
+  //    copy cannot be read: nothing is asked and nothing is built.
+  {
+    const rj = Object.assign({}, SAVED, {
+      price_warnings: [{ key: "base", says: "$15,000", estimate: "$12,500" }] });
+    out.serverCopy = {};
+    for (const [name, local, server, answer] of [
+      ["serverWarns", SAVED, rj, false], ["serverWarnsOk", SAVED, rj, true],
+      ["onlyLocalWarns", rj, SAVED, false],
+    ]) {
+      const p = page({ confirm: answer, server: { proposal_payload: server, project_name: "Niagara" },
+                       state: { proposal_payload: local, project_name: "Niagara" } });
+      const b = button();
+      await p.download("pdf_download_url", "x.pdf", b);
+      out.serverCopy[name] = { asked: p.asked, log: p.log, clicked: p.clicked,
+                               bodies: p.posted.map((x) => x.body) };
+    }
+    const p = page({ serverRow: null, state: { proposal_payload: SAVED, project_name: "Niagara" } });
+    const b = button();
+    await p.download("pdf_download_url", "x.pdf", b);
+    out.serverCopy.unreadable = { asked: p.asked, log: p.log, clicked: p.clicked, button: b.textContent };
   }
 
   process.stdout.write(JSON.stringify(out));

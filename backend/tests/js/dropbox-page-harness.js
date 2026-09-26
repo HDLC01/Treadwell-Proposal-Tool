@@ -26,6 +26,9 @@ const path = require("path");
 const ROOT = path.resolve(process.argv[2]);
 const SRC = fs.readFileSync(path.join(ROOT, "js", "dropbox.js"), "utf8")
   .replace(/\r\n/g, "\n");
+// The price rule's page half, as done.html loads it before this file: the one question Send,
+// Download and To Dropbox ask about a price line with a figure of his own (confirmOwnFigures).
+const TWPRICE = require(path.join(ROOT, "js", "price-lines-core.js"));
 
 // ── DOM stub ────────────────────────────────────────────────────────────────
 // Rows are built as an innerHTML string and then queried, so the radios the
@@ -191,10 +194,22 @@ function build(opts) {
 
   const stored = [];
   const saved = [];      // TW.setState: this browser's copy AND a PUT of the whole blob
+  // The draft's document as it stands NOW: a scenario can change it after the page has loaded.
+  // `live.server` is the SERVER's copy (GET /api/draft/{id}), the one /api/to-dropbox files: this
+  // page's own unless a scenario gives it one of its own; `live.row` false makes it unreadable.
+  const live = { payload: o.payload, server: null, row: true, flushes: 0, reads: 0 };
   const TW = {
     getState: () => ({ project_name: "Fuel House", work_type: "gyp",
                        cell_values: { E20: 4200 },
+                       proposal_payload: live.payload,
                        dropbox_result: o.prevResult || undefined }),
+    flushState: async () => { live.flushes++; return true; },
+    readServerRow: async () => {
+      live.reads++;
+      if (!live.row) return null;
+      return { data: live.server ? JSON.parse(JSON.stringify(live.server)) : TW.getState(),
+               version: "2026-09-26T10:05:00+00:00" };
+    },
     setLocalState: (patch) => stored.push(patch),
     setState: (patch) => { saved.push(patch); stored.push(patch); },
     authHeaders: () => ({}),
@@ -202,13 +217,16 @@ function build(opts) {
     resolveApiBase: () => "",
   };
 
-  const run = new Function("document", "TW", "fetch", "alert", "CSS", SRC);
+  // The page's window.confirm: every question asked, answered with `confirm.answer`.
+  const confirm = { asked: [], answer: false };
+  const windowStub = { confirm: (q) => { confirm.asked.push(q); return confirm.answer; } };
+  const run = new Function("document", "TW", "fetch", "alert", "CSS", "TWPrice", "window", SRC);
   run({ getElementById: (id) => nodes[id] || null }, TW, fetchStub,
       () => { throw new Error("alert() — no draft id"); },
-      { escape: (s) => String(s) });
+      { escape: (s) => String(s) }, TWPRICE, windowStub);
 
   return {
-    nodes, posts, stored, saved,
+    nodes, posts, stored, saved, live, confirm,
     snap: () => {
       const radios = nodes["dbx-folders"].querySelectorAll(".dbx-radio");
       return {
@@ -305,6 +323,88 @@ async function main() {
   await drain();
   out.revisitAfterList = v.snap();
   out.revisitPosts = v.posts.length;
+
+  // ═══ a price line with a figure of his own ════════════════════════════
+  // Hanz, 2026-09-26: warn on all three. The page loads on a document with no such line; by
+  // the press the draft's document has one (the Proposal step's Continue in another tab), so
+  // the question is asked of the draft as it stands AT THE PRESS. Cancel files nothing and
+  // leaves the button and the result as they were; OK files exactly as a press always has.
+  const w = build({ folderResponses: {
+    gyp: { ok: true, folders: GYP_FOLDERS, suggested_new_name: "26.08.20 Fuel House" } } });
+  await drain();
+  w.nodes["dbx-dest"].value = "gyp";
+  w.nodes["dbx-dest"].fire("change");
+  await drain();
+  const armedLabel = w.nodes["dbx-go"].textContent;
+  w.live.payload = { values: {}, price_warnings: [{ key: "base", says: "$15,000", estimate: "$9,860" }] };
+  w.nodes["dbx-go"].fire("click");
+  await drain();
+  out.ownFigureCancel = { asked: w.confirm.asked.slice(), posts: w.posts.length, stored: w.stored.length,
+                          go: { disabled: w.nodes["dbx-go"].disabled, label: w.nodes["dbx-go"].textContent },
+                          armedLabel, resultShown: w.nodes["dbx-result"].style.display || "" };
+  w.confirm.answer = true;
+  w.nodes["dbx-go"].fire("click");
+  await drain();
+  out.ownFigureOk = { asked: w.confirm.asked.slice(), posts: w.posts.length,
+                      body: w.posts[0] || null };
+  // No such line: no question at all, and the filing goes.
+  const c = build({ payload: { values: {} }, folderResponses: {
+    gyp: { ok: true, folders: GYP_FOLDERS, suggested_new_name: "26.08.20 Fuel House" } } });
+  await drain();
+  c.nodes["dbx-dest"].value = "gyp";
+  c.nodes["dbx-dest"].fire("change");
+  await drain();
+  c.nodes["dbx-go"].fire("click");
+  await drain();
+  out.ownFigureClean = { asked: c.confirm.asked.slice(), posts: c.posts.length };
+
+  // ═══ the copy that is filed (review of dfcf589) ════════════════════════
+  // This page's copy is clean; the SERVER's -- the one /api/to-dropbox files -- carries RJ's
+  // $15,000 over the base amount. The press asks about the server's copy: Cancel files nothing, OK
+  // files naming the save it asked about. The reverse (a figure only this page still holds) is not
+  // asked about. The server's copy cannot be read: nothing is filed, and the page says why.
+  const armed = async (opts2) => {
+    const x = build(Object.assign({ payload: { values: {} }, folderResponses: {
+      gyp: { ok: true, folders: GYP_FOLDERS, suggested_new_name: "26.08.20 Fuel House" } } }, opts2 || {}));
+    await drain();
+    x.nodes["dbx-dest"].value = "gyp";
+    x.nodes["dbx-dest"].fire("change");
+    await drain();
+    return x;
+  };
+  const rj = { values: {}, price_warnings: [{ key: "base", says: "$15,000", estimate: "$12,500" }] };
+  out.serverCopy = {};
+  for (const answer of [false, true]) {
+    const x = await armed();
+    x.live.server = { project_name: "Fuel House", proposal_payload: rj };
+    x.confirm.answer = answer;
+    const label = x.nodes["dbx-go"].textContent;
+    x.nodes["dbx-go"].fire("click");
+    await drain();
+    out.serverCopy[answer ? "ok" : "cancel"] = {
+      asked: x.confirm.asked.slice(), posts: x.posts.length, body: x.posts[0] || null,
+      reads: x.live.reads, flushes: x.live.flushes, stored: x.stored.length,
+      go: { disabled: x.nodes["dbx-go"].disabled, same: x.nodes["dbx-go"].textContent === label } };
+  }
+  {
+    const x = await armed({ payload: rj });
+    x.live.server = { project_name: "Fuel House", proposal_payload: { values: {} } };
+    x.nodes["dbx-go"].fire("click");
+    await drain();
+    out.serverCopy.onlyLocal = { asked: x.confirm.asked.slice(), posts: x.posts.length };
+  }
+  {
+    const x = await armed();
+    x.live.row = false;
+    const label = x.nodes["dbx-go"].textContent;
+    x.nodes["dbx-go"].fire("click");
+    await drain();
+    out.serverCopy.unreadable = { asked: x.confirm.asked.slice(), posts: x.posts.length,
+                                  shown: x.nodes["dbx-result"].style.display || "",
+                                  said: x.nodes["dbx-result"].innerHTML,
+                                  go: { disabled: x.nodes["dbx-go"].disabled,
+                                        same: x.nodes["dbx-go"].textContent === label } };
+  }
 
   console.log(JSON.stringify(out));
 }

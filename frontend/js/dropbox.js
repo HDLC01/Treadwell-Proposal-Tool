@@ -384,6 +384,23 @@
       // change the choice is null and this is the last thing between a stale click
       // and a duplicate folder (review 2026-08-20).
       if (dbxGoDisabled(DBX)) return;                    // no folder chosen yet
+      // A PRICE LINE WITH A FIGURE OF HIS OWN: the question Send asks, asked before anything is
+      // filed (Hanz, 2026-09-26: warn on all three -- Send, Download, To Dropbox). One check,
+      // TWPrice.confirmOwnFigures, asked of the copy the server files: ITS copy of the draft, which
+      // is not always this page's (TWPrice.confirmSavedCopy has the case). Cancel files nothing:
+      // the button, the result and the draft stay as they were.
+      const label = go.textContent;
+      go.disabled = true;
+      const asked = await TWPrice.confirmSavedCopy(TW, "file", (q) => window.confirm(q));
+      if (!asked.go) {
+        go.disabled = false; go.textContent = label;
+        if (asked.failed) {
+          result.style.display = "";
+          result.innerHTML = '<div class="dbx-err">' + esc("Couldn't save your latest changes or read "
+            + "the saved proposal, so nothing was filed — check your connection and try again.") + '</div>';
+        }
+        return;
+      }
       DBX.uploaded = false;                      // the button is ours again until it succeeds
       go.classList.remove("dbx-ok");             // reset from a prior success
       go.disabled = true; go.textContent = "Uploading to Dropbox…";
@@ -391,6 +408,9 @@
       const chosenPath = DBX.choice || "";
       try {
         const body = { draft_id: draftId, destination: dest.value, folder_owner: ownerValue() };
+        // When the server stored the copy the question was asked of: it files nothing from a draft
+        // stored again since (the question can sit on screen a long while).
+        if (asked.version) body.draft_version = asked.version;
         // Sent even when it is EMPTY. "" is the estimator deliberately choosing the
         // "Create a new folder" row, and the server has a fallback that re-files into
         // whatever folder this project went to last time whenever folder_path is absent —

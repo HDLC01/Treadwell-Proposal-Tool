@@ -571,16 +571,31 @@ const out = {};
   const bs = key(p, "Backspace");
   out.backspaceOnGap = Object.assign(snapshot(p), { defaulted: bs.defaultPrevented });
 
-  // BACKSPACE ON THE LAST BLANK LINE: none left, caret at the END of the base line above.
+  // BACKSPACE ON THE LAST BLANK LINE: refused -- the floor is one line (Hanz, 2026-09-26: "Base
+  // bid and options should always have atleast 1 or 2 spaces from each other"). The line stays,
+  // and the caret goes where it would have landed: the END of the base line above.
   const bs2 = key(p, "Backspace");
   out.backspaceLastGap = Object.assign(snapshot(p), { defaulted: bs2.defaultPrevented,
     baseLen: p.api.serializeBlock(p.els.base).length });
 
-  // BACKSPACE AT THE HEADING'S START with no gap left: nothing to take. The page's own refusal
-  // still stands (no merge), and the count does not go negative.
+  // DELETE ON THE LAST BLANK LINE: refused the same way; the caret goes to the heading's start.
+  clickGapLine(p, 0);
+  const dl = key(p, "Delete");
+  out.deleteLastGap = Object.assign(snapshot(p), { defaulted: dl.defaultPrevented });
+
+  // BACKSPACE AT THE HEADING'S START with one line left: refused, the caret goes up onto it. The
+  // page's own refusal still stands behind it (no merge into the line above), and nothing is
+  // taken.
   caretAt(p.els.heading, 0);
   const bs3 = key(p, "Backspace");
-  out.backspaceHeadingAtZero = Object.assign(snapshot(p), { defaulted: bs3.defaultPrevented });
+  out.backspaceHeadingAtFloor = Object.assign(snapshot(p), { defaulted: bs3.defaultPrevented });
+
+  // DELETE AT THE END OF THE BASE LINE with one line left: refused, the caret goes down onto it.
+  const endBase = p.api.serializeBlock(p.els.base).length;
+  caretAt(p.els.base, endBase);
+  const dl2 = key(p, "Delete");
+  out.deleteAboveAtFloor = Object.assign(snapshot(p), { defaulted: dl2.defaultPrevented,
+    baseUnchanged: p.api.serializeBlock(p.els.base).length === endBase });
 
   // ENTER AT THE END OF THE BASE LINE: one more blank line, caret onto it -- and the base line
   // itself is untouched (the page's own Enter handler would have written "\n" into it).
@@ -727,7 +742,8 @@ const typedSnap = (p) => {
 const typeKey = (p, ch) => fire(p.box, "keydown", { key: ch, ctrlKey: false, metaKey: false, altKey: false });
 {
   // A character typed on blank line 1 of 2: that line becomes a typed line; the blank line above
-  // it becomes a typed blank line so it stays where it was typed; nothing is left in the count.
+  // it becomes a typed blank line so it stays where it was typed; and, it having been the last
+  // blank line, a fresh one is kept under it (the floor).
   const p = makePage("direct", {});
   p.api.paintOptionsGap();
   clickGapLine(p, 1);
@@ -752,24 +768,47 @@ const typeKey = (p, ch) => fire(p.box, "keydown", { key: ch, ctrlKey: false, met
   caretAt(a, 1);
   const del = key(p, "Delete");
   out.deleteAtEndOfTyped = Object.assign(typedSnap(p), { defaulted: del.defaultPrevented });
-  // BACKSPACE on the last blank line: none left, the caret at the end of the typed line above.
+  // BACKSPACE on the last blank line: refused (the floor), the caret at the end of the typed line
+  // above.
   clickGapLine(p, 0);
   const bs = key(p, "Backspace");
   out.backspaceOntoTyped = Object.assign(typedSnap(p), { defaulted: bs.defaultPrevented });
-  // BACKSPACE AT THE START OF "Options:" with no blank line left and words right above it: the
-  // words stay, the caret goes to their end.
+  // BACKSPACE AT THE START OF "Options:" with one blank line left and words above it: the line
+  // stays, the words stay, the caret goes up onto the blank line.
   caretAt(p.els.heading, 0);
   const bh = key(p, "Backspace");
   out.backspaceHeadingUnderTyped = Object.assign(typedSnap(p), { defaulted: bh.defaultPrevented });
 }
 {
-  // BACKSPACE AT THE START OF "Options:" with an EMPTY typed line right above it: it goes.
+  // TYPED ON THE LAST REMAINING BLANK LINE: it becomes a typed line and a fresh blank line is kept
+  // under it, so "Options:" still has one above it.
+  const p = makePage("direct", { price_overrides: { options_gap: 1 } });
+  p.api.paintOptionsGap();
+  clickGapLine(p, 0);
+  const e = typeKey(p, "z");
+  out.typeOnLastGap = Object.assign(typedSnap(p), { defaulted: e.defaultPrevented });
+  flushSaves(p);
+  out.typeOnLastGapSaved = p.saves.length ? (p.saves[p.saves.length - 1].price_overrides || {}) : null;
+}
+{
+  // A draft saved with NO blank line left (options_gap 0, an empty typed line right above the
+  // heading, from before the floor): it is drawn with the one blank line the floor keeps, and the
+  // empty typed line is still Backspace's to take -- from the heading, up onto the blank line,
+  // up to the end of the empty typed line (the floor refuses the blank line), and then the page's
+  // own Backspace takes the empty line away.
   const p = makePage("direct", { price_overrides: { options_gap: 0, before: { heading_options: ["kept", ""] } } });
   p.api.paintOptionsGap();
   out.reloadTyped = typedSnap(p);
   caretAt(p.els.heading, 0);
   const bh = key(p, "Backspace");
-  out.backspaceHeadingTakesEmptyTyped = Object.assign(typedSnap(p), { defaulted: bh.defaultPrevented });
+  out.backspaceHeadingOverTyped = Object.assign(typedSnap(p), { defaulted: bh.defaultPrevented });
+  const bf = key(p, "Backspace");
+  out.backspaceFloorOntoEmptyTyped = Object.assign(typedSnap(p), { defaulted: bf.defaultPrevented,
+    caretOnEmptyTyped: !!(SEL && SEL.el && SEL.el === typedEls(p)[1]) });
+  const empty = typedEls(p)[1];
+  if (empty) { caretAt(empty, 0); SEL = { node: empty, offset: 0 }; }
+  const bt = key(p, "Backspace");
+  out.backspaceTakesEmptyTyped = Object.assign(typedSnap(p), { defaulted: bt.defaultPrevented });
 }
 {
   // An empty typed line with a price row above it: Backspace takes it away and puts the caret at
