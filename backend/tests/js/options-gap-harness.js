@@ -76,6 +76,21 @@ const GAP_SECTION = region(
 const PAGE_ENTER = region(
   "  // Enter inside a template paragraph = ONE line break",
   "  /** Backspace at the very start of a line takes the LIST FORMATTING off");
+// The base-bid radio's change handler, whole (renderProposalExtras binds it on every radio): a
+// flip clears the old base's price edits, and must leave the gap and what was typed on it alone.
+const FLIP_ANCHOR = 'optsPanel.querySelectorAll("input.pr-base").forEach(rb => rb.addEventListener("change", ';
+const FLIP_HANDLER = (() => {
+  const i = SRC.indexOf(FLIP_ANCHOR);
+  if (i < 0) throw new Error("the base-bid radio's change handler is gone -- rewrite this harness, don't delete it");
+  const start = i + FLIP_ANCHOR.length;
+  const open = SRC.indexOf("{", start);
+  let depth = 0;
+  for (let j = open; j < SRC.length; j++) {
+    if (SRC[j] === "{") depth++;
+    else if (SRC[j] === "}" && --depth === 0) return SRC.slice(start, j + 1);
+  }
+  throw new Error("unbalanced braces in the base-bid radio's change handler");
+})();
 // The page's own Backspace/Delete boundary refusal.
 const PAGE_BACKSPACE = region(
   '  docSurface.addEventListener("keydown", (e) => {\n    const back = e.key === "Backspace"',
@@ -420,7 +435,17 @@ function makePage(layout, stateIn) {
     const markEdited = (el) => { el.dispatchEvent(new Event("input", { bubbles: true })); };
     const spliceLines = () => { throw new Error("no multi-line selection is modelled here"); };
 ` + LIFTED + "\n\n" + PAGE_ENTER + "\n\n" + PAGE_BACKSPACE + "\n\n" + GAP_SECTION + `
+    // The radio the estimator ticks, and what the panel around the handler supplies: the tab
+    // options it edits, and the repaint it ends with (here, the gap's own painter).
+    function flipBaseTo(value) {
+      const rb = { checked: true, value: value };
+      const opts = state.tab_opts && typeof state.tab_opts === "object" ? state.tab_opts : (state.tab_opts = {});
+      const applyAndRefresh = () => { paintOptionsGap(); };
+      const reloadForWorkType = () => {};
+      (` + FLIP_HANDLER + `)();
+    }
     return {
+      flipBaseTo,
       paintOptionsGap, optionsGapCount, onOptionsGapKey, serializeBlock,
       setHeadingIds: (ids) => { templateOptionsHeadingIds = ids; },
       REGION_MOUNTS,
@@ -789,6 +814,27 @@ const typeKey = (p, ch) => fire(p.box, "keydown", { key: ch, ctrlKey: false, met
   out.gcTyped = Object.assign(typedSnap(p), {
     spacerHidden: p.els.spacer.classList.contains("tw-gap-absorbed"),
     spacerAboveTyped: els.length ? els[0].previousElementSibling === p.els.spacer : null,
+  });
+}
+
+{
+  // A BASE-BID FLIP (review, 2026-09-26). Typing on blank line 1 of 2 moves both lines out of the
+  // count into the typed lines (options_gap 0). The flip used to clear those typed lines with the
+  // old base's edits and keep the count: the note was lost and the gap came back as 0 lines. The
+  // old base's own edits still go.
+  const p = makePage("direct", { base_tab_id: "Epoxy", price_overrides: {
+    lines2: { base: "\u27e6amount\u27e7 – for the old base" }, after: { base: ["typed under the old base"] } } });
+  p.api.paintOptionsGap();
+  clickGapLine(p, 1);
+  typeKey(p, "N");
+  const typed = typedSnap(p);
+  p.api.flipBaseTo("Copy1");
+  const pov = p.state.price_overrides;
+  out.flipKeepsGap = Object.assign(typedSnap(p), {
+    typedBefore: { typed: typed.typed, lines: typed.lines, stored: typed.stored },
+    base: p.state.base_tab_id,
+    oldBaseLine: (pov.lines2 || {}).base || null,
+    oldBaseTyped: (pov.after || {}).base || null,
   });
 }
 

@@ -122,6 +122,30 @@
     }
   }
 
+  /** Where the line's first dollar figure starts ("$6,767", the "$" of "($6,000)"), or -1. */
+  function firstMoneyAt(s) {
+    var m = /\$\s?\d/.exec(String(s == null ? "" : s));
+    return m ? m.index : -1;
+  }
+
+  /** Where `amount` sits in `s` as the line's OWN PRICE: a whole figure (amountIndex) that holds
+   *  the line's first dollar figure. The price is the first figure on a price line; today's amount
+   *  anywhere further along is the estimator quoting it ("$5,800 – … (discounted from $6,307)"),
+   *  and marking THAT as the live amount would print his $5,800 as if it followed the estimate —
+   *  no warning, no Send prompt — while the figure he quoted moved with every re-price. */
+  function priceIndex(s, amount) {
+    s = String(s == null ? "" : s);
+    var i = amountIndex(s, amount);
+    if (i < 0) return -1;
+    var f = firstMoneyAt(s);
+    if (f < 0) return i;
+    return (f >= i && f < i + String(amount).length) ? i : -1;
+  }
+
+  /** Tax wording of the estimator's own in a line: a bracket that talks about tax, this tool's
+   *  wordings included ("(material sales tax EXCLUDED)", "(tax exempt)"). */
+  var OWN_TAX_WORDS = /\([^()]*\btax(?:es)?\b[^()]*\)/i;
+
   /** An edited line with today's amount and tax wording where its markers are. A phrase that is
    *  empty (Broken out) takes the one space in front of its marker with it. */
   function resolveLine(text, amount, phrase) {
@@ -137,31 +161,44 @@
   /** What to STORE for one line the estimator typed: his words, with today's amount and tax
    *  phrase turned into markers wherever they are still there verbatim.
    *
-   *  `slot` says the line has a place for tax wording (the base line, an option's own line, a
-   *  combo system line). When that place is EMPTY right now — Broken out prints no bracket — the
-   *  marker is put at the end of the line, which is where the template prints the phrase, so a
-   *  switch back to one line brings the wording back instead of losing it for good. */
+   *  The amount becomes the marker only where it is the line's own price (priceIndex). The tax
+   *  marker is only ever TODAY'S wording, and only on a line that has a place for tax wording
+   *  (`slot`: the base line, an option's own line, a combo system line). Any other wording is his:
+   *  "(tax exempt)" typed over a taxable job's "(material sales tax INCLUDED)" is his correction,
+   *  and "(material sales tax INCLUDED)" typed on a manual line, a Total or an Add/Deduct line —
+   *  lines with no tax wording of their own — is his words. Turned into the marker, the first came
+   *  back as the computed wording and the second as nothing, on screen and in the document.
+   *
+   *  When the slot is EMPTY right now — Broken out prints no bracket — the marker is put at the
+   *  end of the line, which is where the template prints the phrase, so a switch back to one line
+   *  brings the wording back instead of losing it for good. Not when the line already carries tax
+   *  wording of his own: that switch would print both. */
   function captureLine(typed, amount, phrase, slot) {
     var s = String(typed == null ? "" : typed);
     if (amount) {
-      var i = amountIndex(s, amount);
+      var i = priceIndex(s, amount);
       if (i >= 0) s = s.slice(0, i) + AMOUNT + s.slice(i + String(amount).length);
     }
-    var hasTax = false;
-    var list = (phrase ? [String(phrase)] : []).concat(KNOWN_PHRASES);
-    for (var k = 0; k < list.length && !hasTax; k++) {
-      var j = s.indexOf(list[k]);
-      if (j >= 0) { s = s.slice(0, j) + TAX + s.slice(j + list[k].length); hasTax = true; }
+    var hasTax = s.indexOf(TAX) >= 0;
+    if (!hasTax && slot && phrase) {
+      var j = s.indexOf(String(phrase));
+      if (j >= 0) { s = s.slice(0, j) + TAX + s.slice(j + String(phrase).length); hasTax = true; }
     }
-    if (!hasTax && slot && !phrase && s.trim()) s = (/[ \t]$/.test(s) ? s : s + " ") + TAX;
+    if (!hasTax && slot && !phrase && s.trim() && !OWN_TAX_WORDS.test(s)) {
+      s = (/[ \t]$/.test(s) ? s : s + " ") + TAX;
+    }
     return s;
   }
 
-  /** Does a stored line carry a dollar figure of its own, in place of the estimate's? */
+  /** Does a stored line carry a dollar figure of its own, in place of the estimate's? It does when
+   *  its first dollar figure is typed rather than the live amount: a line stored before priceIndex
+   *  can hold "$5,800 – … (discounted from ⟦amount⟧)", and that line's price is $5,800. */
   function moneyOff(stored) {
-    var s = String(stored == null ? "" : stored);
-    if (s.indexOf(AMOUNT) >= 0) return false;
-    return /\$\s?\d/.test(s.split(TAX).join(""));
+    var s = String(stored == null ? "" : stored).split(TAX).join("");
+    var f = firstMoneyAt(s);
+    if (f < 0) return false;
+    var a = s.indexOf(AMOUNT);
+    return a < 0 || f < a;
   }
 
   /** The first dollar figure in a line, as printed ("$21,260"), or "". */
@@ -202,11 +239,17 @@
     parts = parts || {};
     var lines = String(legacy == null ? "" : legacy).replace(/\r\n?/g, "\n").split("\n");
     var cands = [parts.amount].concat(parts.candidates || []).filter(function (a) { return !!a; });
+    // Today's figure in another money style, where it is the line's PRICE (its first figure) —
+    // the same rule as priceIndex: a figure further along is one he quoted.
+    var samePrice = function (s) {
+      var hit = sameAmountAt(s, cands);
+      return hit && hit.at === firstMoneyAt(s) ? hit : null;
+    };
     var mi = -1;
     for (var i = 0; i < lines.length && mi < 0; i++) {
-      for (var c = 0; c < cands.length; c++) if (amountIndex(lines[i], cands[c]) >= 0) { mi = i; break; }
+      for (var c = 0; c < cands.length; c++) if (priceIndex(lines[i], cands[c]) >= 0) { mi = i; break; }
     }
-    if (mi < 0) for (var i1 = 0; i1 < lines.length; i1++) if (sameAmountAt(lines[i1], cands)) { mi = i1; break; }
+    if (mi < 0) for (var i1 = 0; i1 < lines.length; i1++) if (samePrice(lines[i1])) { mi = i1; break; }
     if (mi < 0) for (var i2 = 0; i2 < lines.length; i2++) if (/\$\s?\d/.test(lines[i2])) { mi = i2; break; }
     if (mi < 0) for (var i3 = 0; i3 < lines.length; i3++) if (lines[i3].trim()) { mi = i3; break; }
     if (mi < 0) return { main: null, before: [], after: [], drop: true };
@@ -220,12 +263,23 @@
       }
     }
     for (var d = 0; d < cands.length; d++) {
-      var at = amountIndex(main, cands[d]);
+      var at = priceIndex(main, cands[d]);
       if (at >= 0) { main = main.slice(0, at) + AMOUNT + main.slice(at + String(cands[d]).length); break; }
     }
     if (main.indexOf(AMOUNT) < 0) {
-      var same = sameAmountAt(main, cands);
+      var same = samePrice(main);
       if (same) main = main.slice(0, same.at) + AMOUNT + main.slice(same.at + same.len);
+    }
+    // The tax wording the OLD code printed in the slot: any of this tool's wordings, since the
+    // layout and the flags that chose it may both have moved. Only in a slot: a line with no tax
+    // wording of its own (a manual line, an Add/Deduct line, a Total) never had one printed for
+    // it, so a wording there is the estimator's, and stays.
+    if (parts.slot) {
+      var list = (parts.phrase ? [String(parts.phrase)] : []).concat(KNOWN_PHRASES);
+      for (var k = 0; k < list.length; k++) {
+        var j = main.indexOf(list[k]);
+        if (j >= 0) { main = main.slice(0, j) + TAX + main.slice(j + list[k].length); break; }
+      }
     }
     main = captureLine(main, "", parts.phrase, parts.slot);
     return { main: main, before: before, after: after, drop: false };
@@ -234,7 +288,8 @@
   return {
     AMOUNT: AMOUNT, TAX: TAX, PHRASE: PHRASE, KNOWN_PHRASES: KNOWN_PHRASES,
     cents: cents, flag: flag, phraseFor: phraseFor, taxRule: taxRule, layoutFor: layoutFor,
-    amountIndex: amountIndex, resolveLine: resolveLine, captureLine: captureLine,
+    amountIndex: amountIndex, priceIndex: priceIndex, firstMoneyAt: firstMoneyAt,
+    resolveLine: resolveLine, captureLine: captureLine,
     moneyOff: moneyOff, firstDollar: firstDollar, sameAmountAt: sameAmountAt, migrateLine: migrateLine,
   };
 });
