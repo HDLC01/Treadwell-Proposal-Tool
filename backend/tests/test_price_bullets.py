@@ -1203,3 +1203,14 @@ def test_the_options_gap_is_one_model_on_screen_and_on_paper(review_runs, name):
         between = lines[typed + 1:head]
         assert between and all(c == ("", "blank") for c in between), (side, between)
         assert len(between) == 2, (side, "the typed blank line plus the floor's one", between)
+    # A blank line carries no bullet, read off the raw flags (the comparison above is blind to a
+    # blank line's bullet): the editor draws none on it, and on paper it is off the list.
+    ed = [ln for ln in run["editor"]["lines"] if not (ln["blank"] and ln.get("id") is not None)]
+    i = next(k for k, ln in enumerate(ed) if ln["text"].strip() == "Pricing valid 30 days")
+    j = next(k for k in range(i, len(ed)) if ed[k]["text"].strip().startswith("Options"))
+    assert ed[i]["bullet"] and all(not ln["drawn"] for ln in ed[i + 1:j]), ed[i:j + 1]
+    doc = run["doc"]
+    i = next(k for k, ln in enumerate(doc) if ln["text"].strip() == "Pricing valid 30 days")
+    j = next(k for k in range(i, len(doc)) if doc[k]["text"].strip().startswith("Options"))
+    assert doc[i]["numbered"] and not any(ln["numbered"] for ln in doc[i + 1:j]), [
+        (ln["text"], ln["numbered"]) for ln in doc[i:j + 1]]

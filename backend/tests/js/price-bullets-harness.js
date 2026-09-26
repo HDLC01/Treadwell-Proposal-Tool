@@ -440,6 +440,9 @@ function describe(pg, el) {
   return {
     text, blank,
     bullet: drawn && !blank,
+    // What the page DREW, blank line or not: the square / "o" of a price line that is not a
+    // template block shows on an empty line too, so a blank line with tw-li would show one.
+    drawn,
     level: drawn && !blank ? (el.classList.contains("tw-lvl-o") ? 1 : 0) : null,
     // Where the words start (margin + the padding the square sits in), and how far the FIRST line
     // starts from there (text-indent: a first-line indent, or a hanging one when negative).

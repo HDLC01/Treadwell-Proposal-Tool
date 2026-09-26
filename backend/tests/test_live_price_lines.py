@@ -600,3 +600,19 @@ def test_send_download_and_to_dropbox_ask_through_the_one_check():
     html = (FRONTEND / "done.html").read_text(encoding="utf-8")
     core = html.index('src="/js/price-lines-core.js')
     assert core < html.index('src="/js/done.js"') < html.index('src="/js/dropbox.js"')
+
+
+@needs_node
+def test_an_old_shape_line_is_read_by_the_figure_it_is_priced_at_not_one_it_quotes():
+    """The 2026-09-26 editor release merged the two rules for reading a line saved before the
+    markers: C's order of which of its lines is the price line (price-shaped first, then one of the
+    line's own figures, ...), and E's rule that a figure is the line's own only where it is its
+    PRICE, its first dollar figure ("$5,800 - ... (discounted from $6,307)" is not priced at the
+    $6,307 it quotes). Neither line here is price-shaped, so the "own figure" step decides: the note
+    quotes today's $7,447 after a $500 of its own and is not priced at it; the line under it is.
+    Mutation: the own-figure step back to "today's figure anywhere in the line" (amountIndex), which
+    made the note the price line and kept the real one as a line he typed."""
+    got = _core("""(P) => P.migrateLine("Includes $500 allowance, inside the $7,447\\nBase bid $7,447 for the warehouse",
+                                    { amount: "$7,447", phrase: "", slot: true })""")
+    assert got["main"] == "Base bid " + AMT + " for the warehouse " + TAX, got
+    assert got["before"] == ["Includes $500 allowance, inside the $7,447"] and got["after"] == [], got
