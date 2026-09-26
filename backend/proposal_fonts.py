@@ -18,6 +18,10 @@ SERVER supplies it at runtime.
   * On a dev box they sit in backend/fonts/, which .gitignore keeps out of git and .dockerignore
     keeps out of any image built from the working tree (deploy/ship.sh builds from it). In the
     image that directory is /app/fonts and holds only its README.
+  * The lasting copy is neither of those: it is the team Dropbox folder that backend/fonts/README.md
+    names, with the sha256 of each file. Git deletes the files from every checkout that moves past
+    the commit that untracked them, so each deploy path copies them from its own VPS checkout into
+    HOST_DIR before its first such pull, and a new box or dev checkout copies them from Dropbox.
 
 A MISSING FILE IS NOT AN ERROR ANYWHERE, and that is the danger. Docker creates a missing host
 directory as an EMPTY one, so a box without the files boots, passes its healthcheck and prints

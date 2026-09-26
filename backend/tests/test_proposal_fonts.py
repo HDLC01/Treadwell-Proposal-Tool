@@ -197,6 +197,22 @@ def test_the_whitelist_is_the_two_files_the_readme_tells_the_server_to_hold():
     assert proposal_fonts.HOST_DIR in readme
 
 
+# Treadwell's own kit in the team Dropbox. On 2026-09-26 both files there hashed to PINNED.
+DROPBOX_KIT = "/2023 Treadwell Team Folder/Office/Technology/Fonts/Zetta_ForText/"
+
+
+def test_the_readme_names_the_lasting_copy_and_the_hash_to_check_one_against():
+    """Review, 2026-09-26: once git stops tracking the files, every checkout loses them at its next
+    pull or checkout, and `git worktree remove` takes an ignored copy with it. "Ask Hanz" was the
+    README's only pointer to a copy that survives. It must name the Dropbox folder that holds the
+    kit, and give each file's hash in that file's own row: the hashes pinned in this module."""
+    readme = (BACKEND / "fonts" / "README.md").read_text(encoding="utf-8")
+    assert DROPBOX_KIT in readme
+    for name, filename in proposal_fonts.FONTS.items():
+        row = next(ln for ln in readme.splitlines() if ln.startswith("| `%s`" % filename))
+        assert "`%s`" % PINNED[name][0] in row, (filename, row)
+
+
 def test_the_synthetic_fonts_carry_what_the_tests_read(synthetic_dir):
     """Without this the synthetic files could be anything and every test below would still pass."""
     for name, filename in proposal_fonts.FONTS.items():
@@ -390,9 +406,36 @@ def _font_checks():
     return checks
 
 
+def _seed(where, block, script):
+    """The directory a deploy path copies a missing file from: the checkout it is about to pull,
+    plus /backend/fonts. Read from the script's own `cd` before its `git pull`, not pinned, so a
+    path that copied from some OTHER checkout (staging's from prod's) fails here."""
+    if where == "ship.sh":
+        pulled = re.search(r'^APP_DIR="([^"]+)"$', script, re.M).group(1)
+        assert re.search(r"^\s*cd \$APP_DIR\n\s*git pull\b", script, re.M), "ship.sh pulls elsewhere"
+    else:
+        pulled = re.search(r"^cd (\S+)\ngit pull\b", script, re.M).group(1)
+    seed = pulled + "/backend/fonts"
+    assert seed in block, "%s does not keep %s's copy before pulling it" % (where, pulled)
+    return seed
+
+
+def _runnable(where, host, checkout):
+    """A deploy path's font block as bash will run it, with the host dir and the checkout's
+    backend/fonts/ swapped for temp ones (and nothing else changed)."""
+    block, script = _font_checks()[where]
+    seed = _seed(where, block, script)
+    code = "set -euo pipefail\n" + (block.replace(proposal_fonts.HOST_DIR, host.as_posix())
+                                    .replace(seed, checkout.as_posix()))
+    assert proposal_fonts.HOST_DIR not in code and seed not in code
+    assert host.as_posix() in code and checkout.as_posix() in code
+    return code
+
+
 def test_every_deploy_path_checks_the_font_before_it_changes_anything():
     """The image needs the host's files, so each path that starts an image checks for them first:
-    before the first `docker compose` in the CI deploys, before the build in ship.sh."""
+    before its `git pull` (which deletes the checkout's tracked copy, see the next test), before
+    the first `docker compose` in the CI deploys, before the build in ship.sh."""
     checks = _font_checks()
     assert set(checks) == {"staging", "production", "ship.sh"}
     for where, (block, script) in checks.items():
@@ -401,6 +444,8 @@ def test_every_deploy_path_checks_the_font_before_it_changes_anything():
         assert proposal_fonts.HOST_DIR in block, where
         first = script.index("docker build" if where == "ship.sh" else "docker compose")
         assert script.index(block) < first, "%s checks the font after it has started" % where
+        pull = re.search(r"^\s*git pull\b", script, re.M).start()
+        assert script.index(block) < pull, "%s pulls before it keeps and checks the font" % where
 
 
 def _bash():
@@ -425,11 +470,11 @@ def test_the_deploy_font_check_refuses_a_box_without_the_files(where, tmp_path, 
     bash = _bash()
     if bash is None:
         pytest.skip("no bash to run the check with")
-    block, _script = _font_checks()[where]
     host = tmp_path / "treadwell-fonts"
     host.mkdir()
-    code = "set -euo pipefail\n" + block.replace(proposal_fonts.HOST_DIR, host.as_posix())
-    assert proposal_fonts.HOST_DIR not in code and host.as_posix() in code
+    checkout = tmp_path / "checkout" / "backend" / "fonts"     # already pulled: no font left
+    checkout.mkdir(parents=True)
+    code = _runnable(where, host, checkout)
 
     def run():
         return subprocess.run([bash, "-c", code], capture_output=True, text=True, timeout=60)
@@ -437,6 +482,7 @@ def test_the_deploy_font_check_refuses_a_box_without_the_files(where, tmp_path, 
     names = list(proposal_fonts.FONTS.values())
     empty = run()
     assert empty.returncode != 0 and names[0] in empty.stdout, (empty.stdout, empty.stderr)
+    assert "Dropbox" in empty.stdout, "the refusal must say where a lasting copy is"
     shutil.copy(synthetic_dir / names[0], host / names[0])
     one = run()
     assert one.returncode != 0 and names[1] in one.stdout, (one.stdout, one.stderr)
@@ -446,6 +492,51 @@ def test_the_deploy_font_check_refuses_a_box_without_the_files(where, tmp_path, 
     shutil.copy(synthetic_dir / names[1], host / names[1])
     both = run()
     assert both.returncode == 0, (both.stdout, both.stderr)
+    assert list(checkout.iterdir()) == [], "the check never writes into the checkout"
+
+
+@pytest.mark.parametrize("where", ["staging", "production", "ship.sh"])
+def test_the_first_deploy_keeps_the_checkouts_copy_before_its_pull_deletes_it(
+        where, tmp_path, synthetic_dir):
+    """Review, 2026-09-26: untracking the files deletes them from every checkout at its next pull,
+    the two VPS checkouts included, and before this change those checkouts were the only copies on
+    the box. So each deploy path copies a missing file from the checkout it is about to pull, before
+    it pulls. EXECUTED, with the host dir not made yet (a box that never had one) and the checkout
+    still tracking both files, which is every VPS checkout before its first pull past this change."""
+    bash = _bash()
+    if bash is None:
+        pytest.skip("no bash to run the check with")
+    host = tmp_path / "treadwell-fonts"
+    checkout = tmp_path / "checkout" / "backend" / "fonts"
+    checkout.mkdir(parents=True)
+    names = list(proposal_fonts.FONTS.values())
+    for filename in names:
+        shutil.copy(synthetic_dir / filename, checkout / filename)
+    code = _runnable(where, host, checkout)
+
+    def run():
+        return subprocess.run([bash, "-c", code], capture_output=True, text=True, timeout=60)
+
+    def is_real(filename):
+        return (host / filename).read_bytes() == (synthetic_dir / filename).read_bytes()
+
+    first = run()
+    assert first.returncode == 0, (first.stdout, first.stderr)
+    assert all(is_real(f) for f in names), sorted(p.name for p in host.iterdir())
+    # What the box already holds wins: the checkout's copy never replaces a file that is there...
+    (checkout / names[0]).write_bytes(b"OTTO but not the font the box holds")
+    again = run()
+    assert again.returncode == 0 and is_real(names[0]), (again.stdout, again.stderr)
+    # ...but an empty placeholder is no font, and the checkout's real file takes its place.
+    (host / names[1]).write_bytes(b"")
+    healed = run()
+    assert healed.returncode == 0 and is_real(names[1]), (healed.stdout, healed.stderr)
+    # Once the pull has deleted the checkout's copy, only a copy from Dropbox lets a deploy on.
+    for filename in names:
+        (host / filename).unlink()
+        (checkout / filename).unlink()
+    gone = run()
+    assert gone.returncode != 0 and "Dropbox" in gone.stdout, (gone.stdout, gone.stderr)
 
 
 # ═══ a box without the font ════════════════════════════════════════════════════════════
