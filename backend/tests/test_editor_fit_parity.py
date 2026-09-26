@@ -690,3 +690,25 @@ def test_three_long_o_lines_under_the_total_no_longer_print_past_the_box():
     for n in (2, 3):
         height, usable = _real_font_height(_probe(n))
         assert height <= usable, (n, height, usable)
+
+
+@needs_node
+@pytest.mark.parametrize("wt,aud", [("epoxy", "Direct"), ("gyp", "Direct")])
+def test_the_font_arriving_reapplies_the_writers_answer_and_clips_nothing(wt, aud):
+    """The Zetta branch hands the page one refit when the licensed font is in (refitForProposalFont:
+    the terms paged again, every box re-fitted); the editor-parity branch makes a box's size the
+    writer's, from the last /api/proposal-fit answer. Together: the font changes no word of the
+    document, so the refit asks nothing, applies no rule of its own, and puts back exactly the
+    printed sizes the answer gave -- executed through the real refitForProposalFont, fitNotesBox,
+    fitTxbx and applyBoxFit. A font that arrives before any answer leaves the design sizes. Nothing
+    is clipped either way. Mutations: the refit clearing the answer (a second rule: design sizes
+    after the font); fitTxbx clipping again."""
+    body = _body(wt, aud, "overflow")
+    report = _fit(body)
+    tpl = _template(wt, aud)
+    got = _harness_raw([], {"blocks": tpl["blocks"], "report": report, "tokens": body["values"]})["answers"]
+    assert any(got["applied"].values()), "nothing shrinks, so re-applying the answer is not being tested"
+    assert got["fontFirst"] == {"sizes": {k: None for k in got["applied"]}, "calls": 0, "clipped": 0}
+    assert got["fontAfter"]["sizes"] == got["applied"]
+    assert got["fontAfter"]["calls"] == 0 and got["fontAfter"]["clipped"] == 0
+    assert got["fontAfter"]["repaginate"] == [0]

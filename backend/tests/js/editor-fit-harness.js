@@ -202,6 +202,8 @@ const document = {
   createElement: (t) => new El(t),
   activeElement: null,
   getElementById: (id) => (id === "notes-text" ? NOTES_TA : null),
+  // fitNotesBox walks the page's boxes; they are the ones mounted on the surface below.
+  querySelectorAll: (sel) => DOC.querySelectorAll(sel),
 };
 const window = { getSelection: () => ({ rangeCount: 0 }) };
 
@@ -227,6 +229,12 @@ const LIFTED = [
     return SRC.slice(i, j);
   })(),
   fn("requestFit"),
+  // THE FONT ARRIVING (the Zetta branch): proposal-fonts.js hands the page ONE refit, which pages
+  // the terms again and re-fits every box through the real fitNotesBox -> fitTxbx. The terms pager
+  // is recorded (doc-editor-harness.js runs it); no box here was grown, so the release of a grown
+  // height returns at once, as it does on the page.
+  "const REPAGINATE = []; const scheduleRepaginate = (d) => { REPAGINATE.push(d); };",
+  topConst("isAutoGrown"), fn("releaseAutoGrownHeight"), fn("fitNotesBox"), fn("refitForProposalFont"),
 ].join("\n\n");
 
 // `fetch` is the one collaborator faked: each call is recorded and answered by whatever the
@@ -254,11 +262,10 @@ const api = new Function(
   let flowMode = false;
   let templateBlocks = null;
   const notesPreviewEl = document.createElement("div");
-  // The notes preview re-fits every box after a rebuild; the fit itself is exercised directly below.
-  const fitNotesBox = () => {};
 ` + LIFTED + `
   return {
     renderBlock, applyBoxFit, clearBoxFit, fitTxbx, notesRowSizePt, renderNotesPreview, requestFit,
+    refitForProposalFont, REPAGINATE,
     load: (blocks) => {
       templateBlocks = blocks;
       blockById.clear();
@@ -376,6 +383,11 @@ async function runAnswers(a) {
   const unshrunk = a.report.map((b) => Object.assign({}, b, { scale: 1.0 }));
   const res = {};
   FETCH.calls.length = 0;
+  const clipped = () => [...boxes.values()].filter((b) => b.style.overflow === "hidden" || !!b.style.maxHeight
+                                                     || !!b.style.transform || !!b.style.fontSize).length;
+  // 0. THE FONT ARRIVES BEFORE THE FIRST ANSWER: the design sizes stay, nothing is asked.
+  api.refitForProposalFont();
+  res.fontFirst = { sizes: snap(), calls: FETCH.calls.length, clipped: clipped() };
   // 1. An answer for the template on screen is applied.
   QUESTION.q = "q1";
   FETCH.reply = answer("tv-A", a.report);
@@ -383,6 +395,12 @@ async function runAnswers(a) {
   res.applied = snap();
   res.request = FETCH.calls[0] || null;
   res.calls = FETCH.calls.length;
+  // 1b. THE FONT ARRIVES AFTER IT: the answer the page holds goes back on every box, the same sizes,
+  //     with no second question and no second shrink, and nothing is clipped.
+  const asked = FETCH.calls.length, paged = api.REPAGINATE.length;
+  api.refitForProposalFont();
+  res.fontAfter = { sizes: snap(), calls: FETCH.calls.length - asked, clipped: clipped(),
+                    repaginate: api.REPAGINATE.slice(paged) };
   // 2. The same question again asks nothing.
   await api.requestFit();
   res.callsAfterRepeat = FETCH.calls.length;

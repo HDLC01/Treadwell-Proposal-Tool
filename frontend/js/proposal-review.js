@@ -6201,8 +6201,14 @@
   // js/proposal-fonts.js fetches it from behind the login once the token exists. Every box was
   // fitted, and the terms paged, in the wider fallback serif until then, so measure it all again,
   // ONCE, when the font is in -- the same pass the fonts.ready insurance in initDocumentEditor
-  // runs. Nothing is rebuilt (fitTxbx only sets a size and a clip), so typed text survives, and
-  // the pager goes through scheduleRepaginate, which waits out a caret in the terms.
+  // runs. Nothing is rebuilt, so typed text survives, and the pager goes through
+  // scheduleRepaginate, which waits out a caret in the terms.
+  //
+  // NO SECOND SHRINK RULE. The size a box shows is the writer's, from the last /api/proposal-fit
+  // answer (boxFitById), and the font arriving changes no word of the document, so it asks nothing
+  // new: fitTxbx puts that same answer back on every box and re-measures, in the real font, only
+  // whether the text still runs past the box's bottom edge. It never clips. A font that arrives
+  // before the first answer leaves the design sizes, and the answer applies when it lands.
   function refitForProposalFont() {
     scheduleRepaginate(0);
     try { fitNotesBox(); } catch {}
