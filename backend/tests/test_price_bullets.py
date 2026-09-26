@@ -404,15 +404,34 @@ CASES = {
 }
 
 
-def _case(work_type, audience):
-    spec = CASES[(work_type, audience)]
+def _case(work_type, audience, spec=None, name=None):
+    spec = CASES[(work_type, audience)] if spec is None else spec
     tj = _template_json(work_type, audience)
     st = _state(work_type, audience)
     for k, v in (spec.get("state") or {}).items():
         st[k] = copy.deepcopy(v)
-    return {"name": f"{work_type}/{audience}", "work_type": work_type, "audience": audience,
+    return {"name": name or f"{work_type}/{audience}", "work_type": work_type, "audience": audience,
             "blocks": _price_box(tj), "options_heading_ids": tj.get("options_heading_ids") or [],
             "state": st, "actions": spec.get("actions") or []}
+
+
+def _run_cases(cases):
+    """The editor (harness) and the document (renderer) for each case, in order."""
+    p = subprocess.run(["node", str(HARNESS), str(FRONTEND)], input=json.dumps(cases),
+                       capture_output=True, text=True, encoding="utf-8")
+    assert p.returncode == 0, "the harness itself failed:\n" + p.stderr
+    out = []
+    for c, r in zip(cases, json.loads(p.stdout)):
+        pl = r["payload"]
+        body = {"work_type": c["work_type"], "audience": c["audience"], "values": pl["values"],
+                "price_overrides": pl["price_overrides"],
+                "paragraph_overrides": pl["paragraph_overrides"],
+                "combo_options": pl["combo_options"], "rooms": c["state"]["rooms"],
+                "alternate_computed_bid": c["state"].get("alternate_computed_bid"),
+                "alternate_label": (c["state"].get("alternate") or {}).get("label", "")}
+        blob = _render(body)
+        out.append({"case": c, "editor": r, "doc": _doc_lines(blob), "blob": blob, "body": body})
+    return out
 
 
 _RUNS: dict = {}
@@ -425,21 +444,8 @@ def runs():
         pytest.skip("node is not installed")
     if _RUNS:
         return _RUNS
-    cases = [_case(wt, aud) for wt, aud in CASES]
-    p = subprocess.run(["node", str(HARNESS), str(FRONTEND)], input=json.dumps(cases),
-                       capture_output=True, text=True, encoding="utf-8")
-    assert p.returncode == 0, "the harness itself failed:\n" + p.stderr
-    for c, r in zip(cases, json.loads(p.stdout)):
-        pl = r["payload"]
-        body = {"work_type": c["work_type"], "audience": c["audience"], "values": pl["values"],
-                "price_overrides": pl["price_overrides"],
-                "paragraph_overrides": pl["paragraph_overrides"],
-                "combo_options": pl["combo_options"], "rooms": c["state"]["rooms"],
-                "alternate_computed_bid": c["state"].get("alternate_computed_bid"),
-                "alternate_label": (c["state"].get("alternate") or {}).get("label", "")}
-        blob = _render(body)
-        _RUNS[(c["work_type"], c["audience"])] = {"case": c, "editor": r, "doc": _doc_lines(blob),
-                                                  "blob": blob, "body": body}
+    for run in _run_cases([_case(wt, aud) for wt, aud in CASES]):
+        _RUNS[(run["case"]["work_type"], run["case"]["audience"])] = run
     return _RUNS
 
 
@@ -838,8 +844,9 @@ def test_hazard_4_blank_price_lines_are_the_price_rows_own_paragraphs():
 def test_the_alternate_system_block_prints_a_heading_and_three_money_lines():
     """The ALTERNATE SYSTEM block, on the Direct files: its name is a heading on the PRICE list in
     Kyle's file (so it would print a square) and prints none; its three rows are money lines; and a
-    line_props override on one of them prints. (Not in the screen/paper comparison above: the
-    editor's alternate row words differ from the Polish file's — see open questions.)"""
+    line_props override on one of them prints. (The screen-against-paper comparison of the block,
+    words included, is section (4): the editor now draws the flooring row's tax wording the way
+    each file prints it.)"""
     for wt in ("epoxy", "polish", "combo"):
         body = {"work_type": wt, "audience": "Direct", "values": _vals(),
                 "alternate_computed_bid": {"alternate_full_bid": {"total_base_bid": 30000, "remodel_tax": 1000},
@@ -867,3 +874,291 @@ def test_the_payload_keeps_line_props_and_drops_garbage():
     assert got["after_props"] == {"option:A": [{"bullet": False}, None, None]}
     old = main._sanitize_price_overrides({"lines": {"base": "x"}})
     assert old["line_props"] == {} and old["before_props"] == {} and old["after_props"] == {}
+
+
+# ── (4) THE REVIEW OF FIX 7: seven findings on the first cut, each run through both halves ──────
+# The same comparison as (2) — the editor's box through the page's own code, the payload through the
+# real renderer — over the cases the first cut's matrix never reached: the ALTERNATE SYSTEM block,
+# a template price row taken below its hanging, the keys (Backspace, Tab), and the caret moving
+# without a focus event.
+_ALT = {"alternate_computed_bid": {"alternate_full_bid": {"total_base_bid": 30000, "remodel_tax": 1000},
+                                   "alternate": {"label": "MACRO Flake"}},
+        "alternate": {"label": "MACRO Flake"}}
+_COMBO_TABS = CASES[("combo", "Direct")]["state"]["priced_tabs"]
+
+
+def _alt_state(**over):
+    st = copy.deepcopy(_ALT)
+    st.update(over)
+    return st
+
+
+def _block_id(work_type, audience, starts):
+    for b in _price_box(_template_json(work_type, audience)):
+        if (b.get("text") or "").startswith(starts):
+            return b["id"]
+    raise AssertionError((work_type, audience, starts))
+
+
+REVIEW = {
+    # FINDING 1. A keystroke anywhere in the box — here on the Base Bid heading, its words unchanged —
+    # and a ribbon press on the alternate's flooring line: the sweep stored that line with its tax
+    # wording turned into a marker that resolved to nothing, and the PDF printed "…as described
+    # above" while the screen still showed "(material sales tax INCLUDED)".
+    "alt-keystroke/epoxy": ("epoxy", "Direct", {"state": _alt_state(), "actions": [
+        {"input_on": {"key": "heading_base"}},
+        {"ribbon": {"key": "alt_flooring"}, "click": "indent"}]}),
+    "alt-keystroke/epoxy-one-line": ("epoxy", "Direct", {"state": _alt_state(tax_layout="ONE_LINE"),
+                                                         "actions": [{"input_on": {"key": "base"}}]}),
+    # Polish and Combo print the BASE's wording there ({{base_tax_phrase}}), not Epoxy's literal: the
+    # editor showed "(material sales tax INCLUDED)" on both whatever the base said.
+    "alt-keystroke/polish-one-line": ("polish", "Direct", {"state": _alt_state(tax_layout="ONE_LINE"),
+                                                           "actions": [{"input_on": {"key": "option:Alt1"}}]}),
+    "alt-keystroke/polish-broken": ("polish", "Direct", {"state": _alt_state(),
+                                                         "actions": [{"input_on": {"key": "total"}}]}),
+    "alt-keystroke/combo": ("combo", "Direct", {"state": _alt_state(rooms=[], priced_tabs=_COMBO_TABS),
+                                                "actions": [{"input_on": {"key": "combo:epoxy.flooring"}}]}),
+    # A draft the bug already reached: the stored empty marker now resolves to the wording again.
+    "alt-healed/epoxy": ("epoxy", "Direct", {"state": _alt_state(price_overrides={
+        "lines2": {"alt_flooring": "$29,000 – Flooring as described above ⟦tax⟧"}})}),
+    # FINDING 4. Lines typed around the ALTERNATE rows were drawn (with an "o") and never printed.
+    "alt-typed/epoxy": ("epoxy", "Direct", {"state": _alt_state(price_overrides={
+        "after": {"alt_name": ["Upgrade for the showroom"]}}), "actions": [
+        {"enter_after": {"key": "alt_total"}, "type": "Includes 2 coats of urethane"},
+        {"enter_after": {"key": "alt_flooring"}, "type": "Moisture test by others"},
+        # ...and an empty one opened under the remodel row goes again with Backspace, as on any
+        # other price line (the alternate rows were left out of the join, so it stayed as a blank).
+        {"enter_after": {"key": "alt_remodel"}, "type": ""},
+        {"key": "Backspace", "on": {"key": "alt_remodel", "kind": "extra", "pos": "after", "idx": 0}}]}),
+    "alt-typed/polish": ("polish", "Direct", {"state": _alt_state(), "actions": [
+        {"enter_after": {"key": "alt_total"}, "type": "Includes 2 coats of urethane"}]}),
+    # FINDINGS 2 AND 5. A template price row with its bullet off and then outdented (or Backspace
+    # twice at its start) was drawn 0.2in in over a money line the PDF printed flush.
+    "below-hanging/gc": ("epoxy", "GC", {"actions": [
+        {"on": {"starts": "$22,600"}, "press": "bullet"}, {"on": {"starts": "$22,600"}, "press": "outdent"},
+        {"on": {"starts": "$350"}, "press": "bullet"}, {"on": {"starts": "$350"}, "press": "outdent"},
+        # An unbulleted row Kyle authored with a first-line indent, moved and moved back: its state
+        # is the template's again, so it keeps the template's own geometry, as the PDF does.
+        {"on": {"starts": "Repairs and ma"}, "press": "indent"},
+        {"on": {"starts": "Repairs and ma"}, "press": "outdent"}]}),
+    "below-hanging/gyp": ("gyp", "Direct", {"actions": [
+        {"on": {"starts": "$350"}, "press": "bullet"}, {"on": {"starts": "$350"}, "press": "outdent"}]}),
+    "below-hanging/polish-backspace": ("polish", "Direct", {"actions": [
+        {"key": "Backspace", "on": {"starts": "$22,600"}}, {"key": "Backspace", "on": {"starts": "$22,600"}}]}),
+    "below-hanging/budget-saved": ("budget", "Direct", {"state": {"rooms": [], "price_overrides": {}}}),
+    # FINDING 3. The caret moved onto a blank line of the Options gap inside a box that already had
+    # focus: the ribbon stayed aimed at the Total, and Bullet took the Total's square off.
+    "gap-aim/epoxy": ("epoxy", "Direct", {"actions": [
+        {"select": {"key": "total"}}, {"select": {"gap": 0}}, {"press_ribbon": "bullet"},
+        {"select": {"key": "total"}}]}),
+    # FINDING 6. Backspace and Tab on the lines the page composes.
+    "keys/epoxy": ("epoxy", "Direct", {"actions": [
+        {"key": "Backspace", "on": {"key": "total"}},            # the square off, the words stay
+        {"key": "Backspace", "on": {"key": "total"}},            # then the indent, to the margin
+        {"key": "Backspace", "on": {"key": "total"}},            # then refused: a row is never merged
+        {"key": "Backspace", "on": _typed("after", 0)},          # the "o" off, NOT glued to the line above
+        {"key": "Tab", "on": {"key": "base"}},                   # a square to the "o"
+        {"key": "Tab", "on": {"key": "base"}},                   # nowhere deeper: handed back
+        {"key": "Tab", "shift": True, "on": {"key": "sales_tax"}},   # already the square: handed back
+        {"key": "Tab", "shift": True, "on": _typed("after", 2)},     # the "o" back to the square
+        {"key": "Backspace", "on": _typed("after", 1)},          # a blank typed line: it goes
+    ]}),
+}
+# The budget row's saved {bullet: false, indent: 0}, restored through setParaState as a reload does
+# — what the old editor's Bullet press stored on a row whose indent it read as the tucked 0.
+REVIEW["below-hanging/budget-saved"][2]["saved_paragraph_overrides"] = [
+    {"id": _block_id("budget", "Direct", "$1.50"), "para": {"bullet": False, "indent": 0}}]
+
+_REVIEW_RUNS: dict = {}
+
+
+@pytest.fixture(scope="module")
+def review_runs():
+    if shutil.which("node") is None:
+        pytest.skip("node is not installed")
+    if not _REVIEW_RUNS:
+        cases = []
+        for name, (wt, aud, spec) in REVIEW.items():
+            c = _case(wt, aud, spec, name)
+            c["saved_paragraph_overrides"] = spec.get("saved_paragraph_overrides") or []
+            cases.append(c)
+        for run in _run_cases(cases):
+            _REVIEW_RUNS[run["case"]["name"]] = run
+    return _REVIEW_RUNS
+
+
+@needs_node
+@pytest.mark.parametrize("name", list(REVIEW))
+def test_review_cases_the_editor_and_the_document_agree_line_for_line(review_runs, name):
+    """Every review case, the ALTERNATE SYSTEM block included: the words, the bullet, which one,
+    where the words start, and the blank lines between — the screen and the paper."""
+    run = review_runs[name]
+    shown, printed = _shown(run), _printed(run)
+    assert not [ln for ln in run["editor"]["lines"] if ln["unstyled"]]
+    assert shown == printed, name + "\n" + "\n".join(
+        f"{'  ' if a == b else '!!'} screen {a!r}\n{'  ' if a == b else '!!'} paper  {b!r}"
+        for a, b in itertools.zip_longest(shown, printed))
+
+
+def _line(run, starts, side="doc"):
+    lines = run["doc"] if side == "doc" else run["editor"]["lines"]
+    hits = [ln for ln in lines if ln["text"].startswith(starts)]
+    assert len(hits) == 1, (starts, [ln["text"] for ln in lines])
+    return hits[0]
+
+
+@needs_node
+def test_a_keystroke_or_a_press_in_the_box_keeps_the_alternate_flooring_wording(review_runs):
+    """Finding 1: the wording is the line's PHRASE now, on both halves, so the sweep's marker goes
+    back to it — nothing is stored for a line nobody re-worded, and the PDF keeps the wording."""
+    for name, want in (("alt-keystroke/epoxy", price_rules.PHRASE_MATERIAL),
+                       ("alt-keystroke/epoxy-one-line", price_rules.PHRASE_MATERIAL),
+                       ("alt-keystroke/polish-one-line", price_rules.PHRASE_BOTH),
+                       ("alt-keystroke/polish-broken", ""),
+                       ("alt-keystroke/combo", ""),
+                       ("alt-healed/epoxy", price_rules.PHRASE_MATERIAL)):
+        run = review_runs[name]
+        pov = run["editor"]["payload"]["price_overrides"]
+        if not name.startswith("alt-healed"):
+            assert "alt_flooring" not in (pov.get("lines2") or {}), (name, pov.get("lines2"))
+        paper = _line(run, "$29,000 – Flooring")["text"]
+        screen = _line(run, "$29,000 – Flooring", "editor")["text"]
+        assert paper == screen == ("$29,000 – Flooring as described above" + (" " + want if want else "")), (
+            name, screen, paper)
+    # ...and the ribbon press on it stored its bullet, not its words.
+    lp = review_runs["alt-keystroke/epoxy"]["editor"]["payload"]["price_overrides"]["line_props"]
+    assert lp == {"alt_flooring": {"bullet": True, "level": 1}}
+
+
+@needs_node
+def test_lines_typed_around_the_alternate_rows_print(review_runs):
+    """Finding 4: a line typed under "$30,000 – Total" (Enter, then words), under the flooring row
+    and under the alternate's name, each prints where the editor draws it, with its bullet."""
+    run = review_runs["alt-typed/epoxy"]
+    pov = run["editor"]["payload"]["price_overrides"]
+    assert pov["after"] == {"alt_name": ["Upgrade for the showroom"],
+                            "alt_total": ["Includes 2 coats of urethane"],
+                            "alt_flooring": ["Moisture test by others"]}
+    doc = [ln for ln in run["doc"] if not ln["blank"]]
+    at = next(i for i, ln in enumerate(doc) if ln["text"].startswith("ALTERNATE SYSTEM"))
+    got = [(ln["text"][:14], ln["bullet"], ln["level"], ln["indent_tw"]) for ln in doc[at:]]
+    assert got == [("ALTERNATE SYST", False, None, 0),
+                   ("Upgrade for th", False, None, 0),        # under a heading: a heading's line
+                   ("$29,000 – Floo", True, 0, 288),
+                   ("Moisture test ", True, 1, 1440),         # under a money line: its "o"
+                   ("$1,000 – Remod", True, 0, 288),
+                   ("$30,000 – Tota", True, 0, 288),
+                   ("Includes 2 coa", True, 1, 1440)], got
+    polish = [ln["text"] for ln in review_runs["alt-typed/polish"]["doc"] if ln["text"].strip()]
+    assert polish[-2:] == ["$30,000 – Total", "Includes 2 coats of urethane"], polish[-4:]
+
+
+def test_a_line_typed_under_an_alternate_row_goes_with_the_block_when_there_is_none():
+    """No alternate, no ALTERNATE block — and no stray line: the typed lines are cloned inside
+    {{#alternate}}, which the writer removes whole."""
+    body = {"work_type": "epoxy", "audience": "Direct",
+            "values": _vals(tax_layout="BROKEN_OUT", price_taxable=True),
+            "price_overrides": {"after": {"alt_total": ["Orphan typed line"], "alt_name": ["Orphan head"]},
+                                "before": {"alt_flooring": ["Orphan above"]}}}
+    lines = [ln["text"] for ln in _doc_lines(_render(body))]
+    # The base's own Total prints (broken out): a row these lines could wrongly attach to is there.
+    assert any(t.endswith("– Total") for t in lines), lines
+    text = "\n".join(lines)
+    assert "Orphan" not in text and "ALTERNATE SYSTEM" not in text
+
+
+@needs_node
+def test_a_template_price_row_below_its_hanging_is_drawn_where_it_prints(review_runs):
+    """Findings 2 and 5: {bullet: false, indent: 0} — Bullet off then Outdent, Backspace twice, or
+    a draft saved by the old editor — prints the words at the margin, and the editor now draws them
+    there instead of one hanging (0.2in) further in."""
+    for name, starts, pid_expected in (("below-hanging/gc", "$22,600", True), ("below-hanging/gc", "$350", True),
+                                       ("below-hanging/gyp", "$350", True),
+                                       ("below-hanging/polish-backspace", "$22,600", True),
+                                       ("below-hanging/budget-saved", "$1.50", True)):
+        run = review_runs[name]
+        paper = _line(run, starts)
+        screen = _line(run, starts, "editor")
+        assert (paper["bullet"], paper["indent_tw"]) == (False, 0), (name, starts, paper["indent_tw"])
+        assert (screen["bullet"], screen["indent_tw"], screen["first_tw"]) == (False, 0, 0), (name, starts, screen)
+    po = review_runs["below-hanging/polish-backspace"]["editor"]["payload"]["paragraph_overrides"]
+    assert [o["para"] for o in po] == [{"bullet": False, "indent": 0}]
+    # A row put BACK on its template state keeps the template's own geometry (Reset draws as before).
+    gyp = review_runs["below-hanging/gyp"]
+    assert _line(gyp, "$22,600", "editor")["indent_tw"] == _line(gyp, "$22,600")["indent_tw"] == 288
+
+
+@needs_node
+def test_the_ribbon_lets_go_when_the_caret_moves_onto_a_blank_gap_line(review_runs):
+    """Finding 3: arrowing from the Total onto the blank line above "Options:" fires no focusin; the
+    selectionchange listener now idles the ribbon, so Bullet cannot reach the line the caret left."""
+    run = review_runs["gap-aim/epoxy"]
+    r = run["editor"]["ribbon"]
+    assert r[0]["aimedAt"]["key"] == "total" and r[0]["bar"]["bullet"]["disabled"] is False
+    assert r[1]["aimedAt"] is None, r[1]["aimedAt"]
+    assert r[1]["bar"]["bullet"]["disabled"] is True and r[1]["bar"]["indent"]["disabled"] is True
+    assert r[2]["disabled"] is True and r[2]["aimedAt"] is None
+    assert r[3]["aimedAt"]["key"] == "total"            # back on a line: aimed again
+    assert not (run["editor"]["payload"]["price_overrides"].get("line_props") or {})
+    total = _line(run, "$24,700 – Total")
+    assert (total["bullet"], total["level"], total["indent_tw"]) == (True, 0, 288)
+
+
+@needs_node
+def test_backspace_and_tab_act_on_the_lines_the_page_composes(review_runs):
+    """Finding 6, Hanz 2026-08-25: "When I back space, it doesnt remove the bullet point." The
+    template rows follow Word; the page-built lines now do too — Backspace at the start takes the
+    bullet, then the indent, then (a row) refuses; a typed "o" line loses its "o" instead of being
+    glued onto the money line above; Tab and Shift+Tab move a line between the square and the "o",
+    and a Tab that cannot move it is handed back to the browser."""
+    run = review_runs["keys/epoxy"]
+    k = [p for p in run["editor"]["pressed"] if "key" in p]
+    j = lambda p: json.loads(p["pl"]) if p["pl"] else None   # noqa: E731
+    assert [(p["prevented"], j(p)) for p in k[:3]] == [
+        (True, {"bullet": False, "indent": 288}), (True, {"bullet": False, "indent": 0}),
+        (True, {"bullet": False, "indent": 0})]
+    assert all(p["text"] == "$24,700 – Total" for p in k[:3])
+    # The ribbon follows the key: aimed at the line, its Bullet no longer pressed.
+    assert k[0]["aimedAt"]["key"] == "total" and k[0]["bar"]["bullet"]["pressed"] == "false"
+    assert k[4]["aimedAt"]["key"] == "base" and k[4]["bar"]["indent"]["disabled"] is True
+    assert k[4]["bar"]["outdent"]["disabled"] is False
+    assert (k[3]["prevented"], j(k[3]), k[3]["text"]) == (
+        True, {"bullet": False, "indent": 1440}, "Notes: Areas per Schedule Note 1")
+    assert [(p["prevented"], j(p)) for p in k[4:8]] == [
+        (True, {"bullet": True, "level": 1}), (False, {"bullet": True, "level": 1}),
+        (False, None), (True, {"bullet": True, "level": 0})]
+    assert k[8]["prevented"] is True and k[8]["attached"] is False     # the blank typed line went
+    pov = run["editor"]["payload"]["price_overrides"]
+    assert "option:Alt1" not in (pov.get("lines2") or {}), "a typed line was glued into the option's line"
+    assert pov["after"]["option:Alt1"] == ["Notes: Areas per Schedule Note 1", "Schedule: same 2 mobs/phases"]
+    assert pov["line_props"] == {"total": {"bullet": False, "indent": 0}, "base": {"bullet": True, "level": 1}}
+    assert pov["after_props"] == {"option:Alt1": [{"bullet": False, "indent": 1440}, {"bullet": True, "level": 0}]}
+    assert (_line(run, "$24,700 – Total")["bullet"], _line(run, "$24,700 – Total")["indent_tw"]) == (False, 0)
+    assert _line(run, "$22,600 – Epoxy")["level"] == 1
+
+
+@needs_node
+def test_the_alternate_flooring_phrase_is_the_same_rule_in_both_languages():
+    rows = ["{{alternate.lump_sum_formatted}} – Flooring as described above (material sales tax INCLUDED)",
+            "{{alternate.lump_sum_formatted}} – Flooring as described above {{base_tax_phrase}}",
+            "{{alternate.lump_sum_formatted}} – Flooring as described above {{ base_tax_phrase }}",
+            "{{alternate.lump_sum_formatted}} – Flooring (Remodel Tax AND material sales tax INCLUDED)",
+            "{{alternate.lump_sum_formatted}} – Flooring (tax exempt)",
+            "{{alternate.lump_sum_formatted}} – Flooring", "", None]
+    bases = ["", price_rules.PHRASE_BOTH, price_rules.PHRASE_NONE, None]
+    cases = [{"row": r, "base": b} for r in rows for b in bases]
+    p = subprocess.run(["node", "-e", """
+      const P = require(process.argv[1]);
+      const cases = JSON.parse(require("fs").readFileSync(0, "utf8"));
+      console.log(JSON.stringify(cases.map(c => P.altFlooringPhrase(c.row, c.base))));
+    """, str(CORE)], input=json.dumps(cases), capture_output=True, text=True, encoding="utf-8")
+    assert p.returncode == 0, p.stderr
+    js = json.loads(p.stdout)
+    for c, j in zip(cases, js):
+        assert j == price_rules.alt_flooring_phrase(c["row"], c["base"]), c
+    assert price_rules.alt_flooring_phrase(rows[0], price_rules.PHRASE_NONE) == price_rules.PHRASE_MATERIAL
+    assert price_rules.alt_flooring_phrase(rows[1], price_rules.PHRASE_BOTH) == price_rules.PHRASE_BOTH
+    assert price_rules.alt_flooring_phrase(rows[3], "") == price_rules.PHRASE_BOTH
+    for wt in ("epoxy", "polish", "combo"):
+        row = pw.template_alt_flooring_row(wt, "Direct")
+        assert "alternate.lump_sum_formatted" in row, wt

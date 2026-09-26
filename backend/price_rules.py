@@ -55,6 +55,9 @@ PHRASE_BOTH = "(Remodel Tax AND material sales tax INCLUDED)"
 PHRASE_MATERIAL = "(material sales tax INCLUDED)"
 PHRASE_REMODEL = "(Remodel Tax INCLUDED)"
 PHRASE_NONE = "(tax exempt)"
+# Every wording this tool prints for the tax, longest first so a shorter one is never found inside
+# a longer one (TWPrice.KNOWN_PHRASES, in the same order).
+KNOWN_PHRASES = (PHRASE_BOTH, PHRASE_REMODEL, PHRASE_MATERIAL, PHRASE_NONE)
 
 ONE_LINE = "ONE_LINE"
 BROKEN_OUT = "BROKEN_OUT"
@@ -171,6 +174,29 @@ def resolve_line(text: Any, amount: Optional[str], phrase: Optional[str]) -> str
         ph = str(phrase or "")
         s = _TAX_MARK_RE.sub(lambda m: (m.group(1) + ph) if ph else "", s)
     return s
+
+
+_BASE_TAX_TOKEN_RE = re.compile(r"\{\{\s*base_tax_phrase\s*\}\}")
+
+
+def alt_flooring_phrase(row_text: Any, base_phrase: Any = "") -> str:
+    """The tax wording the ALTERNATE SYSTEM block's flooring row prints: whatever the TEMPLATE puts
+    there. Epoxy Direct writes "(material sales tax INCLUDED)" in so many words; Polish and Combo
+    Direct print the base's own {{base_tax_phrase}} in that place. `row_text` is the template's row
+    ("{{alternate.lump_sum_formatted}} – Flooring as described above …"), `base_phrase` today's
+    base wording.
+
+    It is the line's PHRASE, the thing its ⟦tax⟧ marker resolves to. Undeclared, the box sweep
+    turned the wording into a marker that resolved to nothing, and the customer's document lost
+    "(material sales tax INCLUDED)" on any keystroke in the price box (review of fix 7, finding 1).
+    Twin: TWPrice.altFlooringPhrase."""
+    t = str(row_text if row_text is not None else "")
+    if _BASE_TAX_TOKEN_RE.search(t):
+        return str(base_phrase or "")
+    for ph in KNOWN_PHRASES:
+        if ph in t:
+            return ph
+    return ""
 
 
 def extras_for(pov: Mapping[str, Any], key: str) -> tuple[list, list]:

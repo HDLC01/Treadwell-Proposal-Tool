@@ -361,6 +361,8 @@ const LIFTED = [
   // take away typed lines (splitPriceLine / mergePriceLine), so all of them are the real ones.
   // linePropsOf: a typed line drawn from the draft carries its bullet override (paintGapTyped).
   fn("_ensurePov"), fn("linePropsOf"), fn("makeExtraLine"), fn("caretInto"), fn("splitPriceLine"), fn("mergePriceLine"),
+  // The Backspace handler's question before its price-line ladder (review of fix 7, finding 6).
+  fn("isPriceLine"),
 ].join("\n\n");
 
 function makePage(layout, stateIn) {
@@ -421,6 +423,11 @@ function makePage(layout, stateIn) {
     // have no para record, and the GC paragraphs here carry no bullet to take off.
     const paraNow = () => null;
     const paraAction = () => false;
+    // The page's Backspace handler asks isPriceLine (the real one, lifted below) before its ladder;
+    // the ladder itself (priceLineAction, then showFmtBar) is price-bullets-harness.js's to run, and
+    // a line here that reached it would be a case this harness does not model -- so it says so.
+    const priceLineAction = () => { throw new Error("priceLineAction reached: not modelled in options-gap-harness"); };
+    const showFmtBar = () => { throw new Error("showFmtBar reached: not modelled in options-gap-harness"); };
     const markEdited = (el) => { el.dispatchEvent(new Event("input", { bubbles: true })); };
     const spliceLines = () => { throw new Error("no multi-line selection is modelled here"); };
 ` + LIFTED + "\n\n" + PAGE_ENTER + "\n\n" + PAGE_BACKSPACE + "\n\n" + GAP_SECTION + `

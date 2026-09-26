@@ -6041,7 +6041,16 @@ def _generate(payload: GenerateIn, request: Request, *,
         "remodel": ((_remodel_lines[0].get("amount_formatted") if _remodel_lines else _remodel_str) or "", ""),
         "total": (values.get("total_formatted") or "", ""),
         "heading_base": ("", ""), "heading_options": ("", ""),
-        "alt_name": ("", ""), "alt_flooring": ("", ""), "alt_remodel": ("", ""), "alt_total": ("", ""),
+        # The ALTERNATE flooring row's tax wording is the TEMPLATE's (price_rules.alt_flooring_phrase:
+        # Epoxy's literal "(material sales tax INCLUDED)", or {{base_tax_phrase}} on Polish and Combo)
+        # — the phrase its ⟦tax⟧ marker resolves to, the one the editor declares on the line too. With
+        # none declared, a keystroke anywhere in the price box stored the line with an empty marker
+        # and the customer's document dropped the wording (review of fix 7, finding 1).
+        "alt_name": ("", ""),
+        "alt_flooring": ("", price_rules.alt_flooring_phrase(
+            proposal_writer.template_alt_flooring_row(payload.work_type, payload.audience)
+            if alternates else "", values.get("base_tax_phrase") or "")),
+        "alt_remodel": ("", ""), "alt_total": ("", ""),
     }
     _whole = {k: _edited_line(k, *parts) for k, parts in _row_parts.items()}
     if _rows_ok:
@@ -6066,7 +6075,11 @@ def _generate(payload: GenerateIn, request: Request, *,
                "alt_name", "alt_flooring", "alt_remodel", "alt_total"):
         if _k in ("base", "sales_tax", "remodel", "total") and not _rows_ok:
             continue
-        _b, _a = price_rules.extras_for(_pov, _k) if not _k.startswith("alt_") else ([], [])
+        # The ALTERNATE rows' typed lines print too: the editor draws them (and makes them, with
+        # Enter), so a line typed under "$30,000 – Total" that reached the screen and not the PDF was
+        # a line the customer never read (review of fix 7, finding 4). They are cloned inside the
+        # {{#alternate}} block, so with no alternate they go with it.
+        _b, _a = price_rules.extras_for(_pov, _k)
         _spec: Dict[str, Any] = {}
         if _b or _a:
             _spec = {"before": _b, "after": _a,

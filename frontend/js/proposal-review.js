@@ -1777,9 +1777,22 @@
     // Mirrors the .docx {{#alternate}} block literally, each row a WHOLE-LINE
     // editable: header (system name), "$X – Flooring as described above (…)",
     // optional "$X – Remodel Tax", "$X – Total".
+    //
+    // The flooring row's tax wording is the TEMPLATE's (TWPrice.altFlooringPhrase): Epoxy Direct
+    // writes "(material sales tax INCLUDED)", Polish and Combo Direct print the base's own wording
+    // there. It is declared as the line's phrase, which is what its ⟦tax⟧ marker resolves to: with
+    // none declared, a keystroke or a ribbon press anywhere in the box stored this line with the
+    // wording turned into an empty marker, and the customer's document lost it (the screen kept
+    // showing it until the next repaint).
+    const altRow = (templateBlocks || []).find(b => b && /\{\{\s*alternate\.lump_sum_formatted\s*\}\}/.test(String(b.text || "")));
+    const altSys = basePriceSystem();
+    const altPhrase = altRow
+      ? TWPrice.altFlooringPhrase(altRow.text, baseBidFigure(altSys.total, altSys.sales_tax, altSys.remodel).rule.phrase)
+      : TWPrice.PHRASE.material;
     altBlock.innerHTML =
       lineEl("alt_name", `ALTERNATE SYSTEM — ${altLabel}`, { bold: true, style: "margin:6pt 0 2pt;" }) +
-      lineEl("alt_flooring", `${fmtUSDdoc(altFloor)} – Flooring as described above (material sales tax INCLUDED)`) +
+      lineEl("alt_flooring", `${fmtUSDdoc(altFloor)} – Flooring as described above` + (altPhrase ? ` ${altPhrase}` : ""),
+             { parts: { phrase: altPhrase, slot: true } }) +
       (altRemodel > 0 ? lineEl("alt_remodel", `${fmtUSDdoc(altRemodel)} – Remodel Tax`) : "") +
       lineEl("alt_total", `${fmtUSDdoc(altTotal)} – Total`);
   }
@@ -2959,6 +2972,18 @@
     if (priceRow && bullet && tpl && (level !== Number(tpl.level || 0) || tpl.hanging == null)) {
       tpl = Object.assign({}, tpl, { hanging: TWPrice.LEVEL_HANG[level] != null ? TWPrice.LEVEL_HANG[level] : tpl.hanging,
                                      first_line: null });
+    }
+    // A PRICE-box row the estimator left WITHOUT a bullet has no marker for a hanging indent to make
+    // room for, and prints none: the writer drops a PRICE-list row's hanging with its bullet, and an
+    // indent it writes for an unbulleted row carries no hanging or first-line indent
+    // (proposal_writer.apply_para_props / _write_left_indent). So its words start at its indent,
+    // every line of it. Drawn with the template's hanging instead, "Bullet off, then Outdent" (or
+    // Backspace twice) showed the words 0.2in in over a money line the PDF printed flush. Only a
+    // state that differs from the template's: an untouched row prints the template's own w:ind.
+    const base = priceRow ? paraBase(rec.id) : null;
+    if (priceRow && !bullet && tpl && base
+        && (base.bullet !== bullet || base.indent !== Math.max(0, Number(st.indent) || 0))) {
+      tpl = Object.assign({}, tpl, { hanging: 0, first_line: null });
     }
     const glyphO = priceRow ? level === 1 : !!(tpl && tpl.glyph === "o" && level === Number(tpl.level || 0));
     el.classList.toggle("tw-lvl-o", bullet && glyphO);
@@ -6863,7 +6888,23 @@
     if (!el) return;
     const sel = window.getSelection();
     if (!sel || !sel.rangeCount) return;
-    if (!el.contains(sel.getRangeAt(0).startContainer)) return;
+    const r0 = sel.getRangeAt(0);
+    if (!el.contains(r0.startContainer)) {
+      // THE CARET ON A BLANK LINE OF THE OPTIONS GAP, arrowed onto inside a box that already has
+      // focus, so no focusin fires: let go, as focusin does for a line the ribbon cannot act on. A
+      // blank line takes no bullet and no indent; kept, the ribbon stayed aimed at the price line
+      // the caret had left, and Bullet took the Total's square off while the caret sat on the gap.
+      // (The caret is on the gap line itself, or on #options-gap at that line's offset.) A caret
+      // anywhere else outside the target keeps it, exactly as before: the Tax field, the ribbon's
+      // size box -- the ribbon outliving focus is the feature.
+      let at = r0.startContainer;
+      if (at && at.nodeType === 1 && at.id === "options-gap" && at.childNodes && at.childNodes.length) {
+        at = at.childNodes[Math.min(r0.startOffset || 0, at.childNodes.length - 1)];
+      }
+      if (at && at.nodeType !== 1) at = at.parentNode;
+      if (r0.collapsed && at && at.closest && at.closest(".tw-gap-line") && docSurface.contains(at)) idleFmtBar();
+      return;
+    }
     showFmtBar(el);
   });
 
@@ -6935,8 +6976,10 @@
                                                 // browser split the paragraph
     e.preventDefault();
     // A PRICE line (or a line typed next to one): a new line of its own, never a break inside it.
+    // The ALTERNATE rows too, now their typed lines print (they took a break inside the row before,
+    // and the sweep stored the text after it as a typed line the document then left out).
     const _po = el.dataset || {};
-    if ((_po.poKind === "line" || _po.poKind === "extra") && _po.poLinekey && !/^alt_/.test(_po.poLinekey)) {
+    if ((_po.poKind === "line" || _po.poKind === "extra") && _po.poLinekey) {
       splitPriceLine(el, sel[0], sel[1]);
       return;
     }
@@ -7041,6 +7084,17 @@
       return;
     }
     const el = lineTarget(e);
+    // A PRICE LINE the page composes (the base, a tax row, the Total, an option, a typed line):
+    // Tab moves it the ribbon's Indent step -- a square to the "o" -- and Shift+Tab back. It used to
+    // be handed to the browser, so focus left the document and nothing indented, while the
+    // template's own price rows in the same box took the Tab. A press that cannot move it (the
+    // "o" has no deeper level) is not consumed, as below.
+    if (el && isPriceLine(el)) {
+      if (!priceLineAction(el, rung)) return;
+      e.preventDefault();
+      showFmtBar(el);
+      return;
+    }
     if (!el || !el.classList.contains("tw-block")) return;
     if (!canMove(el)) return;                    // locked, at the margin, or already at the max
     if (!paraAction(el, rung)) return;
@@ -7068,9 +7122,25 @@
       const rung = now && !now.locked ? (now.bullet ? "bullet" : (now.indent > 0 ? "outdent" : null)) : null;
       if (rung && paraAction(el, rung)) { e.preventDefault(); return; }
     }
+    // THE SAME LADDER ON A PRICE LINE THE PAGE COMPOSES, the base, a tax row, the Total, an option
+    // and its rows, a typed line: the bullet first, then the indent a step at a time (the ribbon's
+    // own step, priceLineAction), and only a line at the margin with no bullet joins its
+    // neighbour. It used to go straight to the join, so Backspace at the start of a typed "o"
+    // sub-line glued its words onto the money line above ("…as described aboveNotes: …"), and on
+    // a money line did nothing at all -- while the template's own price rows in the same box
+    // followed Word. A line with no words keeps the join: it has no bullet to take (none prints on
+    // a blank line), and Backspace on an empty line takes the line.
+    if (back && atStart && isPriceLine(el) && /\S/.test(editRuns(el).map(r => r.text).join(""))) {
+      let ov = null;
+      try { ov = el.dataset.pl ? JSON.parse(el.dataset.pl) : null; } catch { ov = null; }
+      const it = TWPrice.lineIntent(el.dataset.poLinekey,
+        el.dataset.poKind === "extra" ? (el.dataset.poPos || "after") : null, ov);
+      const rung = it.bullet ? "bullet" : (it.indent > 0 ? "outdent" : null);
+      if (rung && priceLineAction(el, rung)) { e.preventDefault(); showFmtBar(el); return; }
+    }
     // A line typed next to a price line joins its neighbour or, empty, goes (mergePriceLine).
     const _po = el.dataset || {};
-    if ((_po.poKind === "line" || _po.poKind === "extra") && _po.poLinekey && !/^alt_/.test(_po.poLinekey)) {
+    if ((_po.poKind === "line" || _po.poKind === "extra") && _po.poLinekey) {
       if ((back && atStart && mergePriceLine(el, "up")) || (fwd && atEnd && mergePriceLine(el, "down"))) {
         e.preventDefault();
         return;

@@ -2630,8 +2630,9 @@ _EXTRA_ANCHORS: dict[str, tuple] = {
     "remodel": _PRICE_ROW_TOKENS["remodel"],
     "total": _PRICE_ROW_TOKENS["total"],
     "heading_base": "Base Bid",
-    # The ALTERNATE SYSTEM block's rows, for their bullets only (main.py sends no typed lines for
-    # them): the name is a heading, the three amounts are money lines.
+    # The ALTERNATE SYSTEM block's rows: their bullets (the name is a heading, the three amounts are
+    # money lines) and the lines typed above and below them, which sit inside {{#alternate}} and so
+    # go with the block when there is no alternate.
     "alt_name": (re.compile(r"\{\{\s*alternate\.system_name\s*\}\}"),),
     "alt_flooring": (re.compile(r"\{\{\s*alternate\.lump_sum_formatted\s*\}\}"),),
     "alt_remodel": (re.compile(r"\{\{\s*alternate\.remodel_tax\s*\}\}"),),
@@ -2783,6 +2784,33 @@ def _free_tax_rows_cached(path_str: str, _mtime_ns: int) -> tuple[bool, bool]:
     re-authors still gets re-read."""
     rows = free_tax_rows(docx.Document(path_str))
     return rows["material"], rows["remodel"]
+
+
+_ALT_FLOORING_ROW_RE = re.compile(r"\{\{\s*alternate\.lump_sum_formatted\s*\}\}")
+
+
+@lru_cache(maxsize=64)
+def _alt_flooring_row_cached(path_str: str, _mtime_ns: int) -> str:
+    """The ALTERNATE SYSTEM block's flooring row as the template writes it, tokens and all, or ""
+    on a template with no such block. Memoized on the file's mtime (see _free_tax_rows_cached)."""
+    for p in docx.Document(path_str).element.body.iter(qn("w:p")):
+        t = _own_text(p)
+        if _ALT_FLOORING_ROW_RE.search(t):
+            return t
+    return ""
+
+
+def template_alt_flooring_row(work_type: str, audience: str | None) -> str:
+    """`_alt_flooring_row_cached` for the template `(work_type, audience)` picks: what
+    price_rules.alt_flooring_phrase reads the row's tax wording off. "" when unreadable — the row's
+    whole-line override then resolves its marker to no wording, which is what it did before."""
+    try:
+        p = pick_template(work_type, audience)
+        return _alt_flooring_row_cached(str(p), p.stat().st_mtime_ns)
+    except Exception as exc:              # noqa: BLE001 — never fail a generate over a shape read
+        log.warning("Could not read the alternate flooring row of the %s/%s proposal template "
+                    "(%s: %s)", work_type, audience, type(exc).__name__, exc)
+        return ""
 
 
 def template_free_tax_rows(work_type: str, audience: str | None) -> dict[str, bool]:

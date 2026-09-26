@@ -134,6 +134,20 @@
     return s;
   }
 
+  /** The tax wording the ALTERNATE SYSTEM block's flooring row prints: whatever the template puts
+   *  there — Epoxy Direct's literal "(material sales tax INCLUDED)", or the base's own wording where
+   *  Polish and Combo Direct print {{base_tax_phrase}}. It is the line's PHRASE, what its ⟦tax⟧
+   *  marker resolves to; undeclared, the box sweep stored the wording as a marker that resolved to
+   *  nothing and the document lost it. Twin: price_rules.alt_flooring_phrase. */
+  function altFlooringPhrase(rowText, basePhrase) {
+    var t = String(rowText == null ? "" : rowText);
+    if (/\{\{\s*base_tax_phrase\s*\}\}/.test(t)) return basePhrase == null ? "" : String(basePhrase);
+    for (var k = 0; k < KNOWN_PHRASES.length; k++) {
+      if (t.indexOf(KNOWN_PHRASES[k]) >= 0) return KNOWN_PHRASES[k];
+    }
+    return "";
+  }
+
   /** What to STORE for one line the estimator typed: his words, with today's amount and tax
    *  phrase turned into markers wherever they are still there verbatim.
    *
@@ -334,6 +348,7 @@
     AMOUNT: AMOUNT, TAX: TAX, PHRASE: PHRASE, KNOWN_PHRASES: KNOWN_PHRASES,
     cents: cents, flag: flag, phraseFor: phraseFor, taxRule: taxRule, layoutFor: layoutFor,
     amountIndex: amountIndex, resolveLine: resolveLine, captureLine: captureLine,
+    altFlooringPhrase: altFlooringPhrase,
     moneyOff: moneyOff, firstDollar: firstDollar, sameAmountAt: sameAmountAt, migrateLine: migrateLine,
     LEVEL_LEFT: LEVEL_LEFT, LEVEL_HANG: LEVEL_HANG, INDENT_STEP: INDENT_STEP, INDENT_MAX: INDENT_MAX,
     HEADING_KEYS: HEADING_KEYS, cleanLineProps: cleanLineProps, lineDefault: lineDefault,

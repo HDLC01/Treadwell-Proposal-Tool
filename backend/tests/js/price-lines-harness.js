@@ -241,7 +241,7 @@ const UNITS = [
   fn("lineOverride"), fn("lineValue"), fn("lineCue"), fn("extraLinesHtml"), fn("lineEl"),
   // The price box's bullets: every builder above puts a line's override on it (linePropsOf) and
   // refreshPriceDisplay ends by drawing them (paintLineParas).
-  fn("linePropsOf"), fn("paintLineParas"),
+  fn("linePropsOf"), fn("paintLineParas"), fn("isPriceLine"), fn("priceLineAction"),
   fn("paintExtras"), fn("makeExtraLine"), fn("caretInto"), fn("splitPriceLine"), fn("mergePriceLine"),
   fn("paintLine"), fn("comboSystemLines"), fn("comboLinesForPayload"), fn("baseDescLabel"),
   fn("refreshPriceDisplay"), fn("renderProposalExtras"), fn("computeTokenValues"),
@@ -295,6 +295,11 @@ function build(st, opts) {
     "const markEdited = () => {};",
     "const paraNow = () => null;",
     "const paraAction = () => false;",
+    // The Backspace handler's price-line ladder (review of fix 7, finding 6) takes a line's bullet
+    // and indent off through the ribbon's own step, and then re-aims the ribbon. The step is real;
+    // the ribbon is price-bullets-harness.js's, so a case here that reached it says so.
+    "const fitTxbx = () => {};",
+    "const showFmtBar = () => { throw new Error('showFmtBar reached: the ribbon is not modelled in price-lines-harness'); };",
     "docSurface.addEventListener('keydown', " + ENTER + ");",
     "docSurface.addEventListener('keydown', " + BACKSPACE + ");",
     // The box sweep, as the page's delegated input handler runs it on the box.

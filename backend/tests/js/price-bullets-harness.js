@@ -88,6 +88,19 @@ function handlerAround(anchor) {
   }
   throw new Error("unbalanced braces after " + anchor);
 }
+/** A delegated listener that takes no event (`() => { … }`), by a line inside it. */
+function listenerAround(anchor) {
+  const i = SRC.indexOf(anchor);
+  if (i < 0) throw new Error("the listener holding " + JSON.stringify(anchor) + " is gone");
+  const start = SRC.lastIndexOf("() => {", i);
+  const open = SRC.indexOf("{", start);
+  let depth = 0;
+  for (let j = open; j < SRC.length; j++) {
+    if (SRC[j] === "{") depth++;
+    else if (SRC[j] === "}" && --depth === 0) return "() => " + SRC.slice(open, j + 1);
+  }
+  throw new Error("unbalanced braces after " + anchor);
+}
 
 // ── the smallest DOM this code touches (price-lines-harness.js's shim) ──────────────────────────
 const Node = { ELEMENT_NODE: 1, TEXT_NODE: 3 };
@@ -244,7 +257,8 @@ const UNITS = [
   fn("refreshPriceDisplay"), fn("renderProposalExtras"), fn("computeTokenValues"),
   fn("_ensurePov"), fn("priceRowLive"), fn("captureLineNode"), fn("captureExtrasIn"),
   fn("syncPriceLinesIn"), fn("serializeBlock"),
-  fn("fmtAt"), fn("segmentsOf"), fn("mergeSegs"), fn("editRuns"),
+  // editRuns is what the keydown handlers measure a line by (Backspace's ladder, Delete at its end).
+  fn("fmtAt"), topConst("sameFmt"), fn("segmentsOf"), fn("mergeSegs"), fn("editRuns"),
   fn("lineAt"), fn("lineAtSelection"), fn("lineTarget"), fn("editingBox"),
   // The blank lines above the Options heading (drawn by the option writer).
   fn("optionsGapCount"), fn("optionsGapTyped"), fn("isGapTyped"), fn("gapTypedEls"),
@@ -268,6 +282,11 @@ const UNITS = [
 const ENTER = handlerAround("// A PRICE line (or a line typed next to one): a new line of its own");
 // The ribbon's aim: focus landing on a line is what points it there.
 const FOCUSIN = handlerAround("const el = line && (line.classList.contains(\"tw-block\") || isPriceLine(line)) ? line : null;");
+// ...and the caret moving within a box that already has focus (no focusin fires then).
+const SELCHANGE = listenerAround("MOVING THE CARET BETWEEN PARAGRAPHS IS NOW A SELECTION CHANGE");
+// Tab / Shift+Tab, and Backspace / Delete at a line's edge: the page's own keydown handlers.
+const TAB = handlerAround("const rung = e.shiftKey ? \"outdent\" : \"indent\";");
+const BACKSPACE = handlerAround("const back = e.key === \"Backspace\", fwd = e.key === \"Delete\";");
 
 /** The staging islands, as proposal-review.html declares them. */
 function stagingIslands() {
@@ -301,11 +320,13 @@ function build(c, st) {
     createRange: () => ({ setStart(n, k) { this.n = n; this.k = k; }, collapse() {} }),
     activeElement: null,
     body: new El("body"),
+    _listeners: {},
+    addEventListener(type, f) { (this._listeners[type] = this._listeners[type] || []).push(f); },
   };
   const win = {
     getSelection: () => ({
       rangeCount: SEL.el ? 1 : 0,
-      getRangeAt: () => ({ startContainer: SEL.el }),
+      getRangeAt: () => ({ startContainer: SEL.el, collapsed: SEL.at[0] === SEL.at[1] }),
       removeAllRanges() { SEL.el = null; },
       addRange(r) { SEL.el = r.n; SEL.at = [r.k, r.k]; },
     }),
@@ -338,12 +359,15 @@ function build(c, st) {
     "let _fmtBusy = false;",
     UNITS,
     "docSurface.addEventListener('keydown', " + ENTER + ");",
+    "docSurface.addEventListener('keydown', " + TAB + ");",
+    "docSurface.addEventListener('keydown', " + BACKSPACE + ");",
     "docSurface.addEventListener('focusin', " + FOCUSIN + ");",
+    "document.addEventListener('selectionchange', " + SELCHANGE + ");",
     // The box sweep and the bullets' repaint, as the page's delegated input handler runs them.
     "docSurface.addEventListener('input', (e) => { const b = editingBox(e.target); if (b) { syncPriceLinesIn(b); paintLineParas(b); } });",
     "return { refreshPriceDisplay, computeTokenValues, comboLinesForPayload, annotateRegions,",
     "         renderBlockList, serializeBlock, paraAction, paraPatch, setParaState, paintLineParas,",
-    "         blockById, paraById, bar: () => ensureFmtBar() };",
+    "         blockById, paraById, bar: () => ensureFmtBar(), aimedAt: () => fmtBlock };",
   ].join("\n");
   const api = new Function("state", "document", "window", "form", "TW", "templateBlocks", "docSurface",
                            "focusInside", "queuePovSave", "F", "Node", "Event", "SEL", "persists",
@@ -358,7 +382,13 @@ function build(c, st) {
   const tokens = api.computeTokenValues(Object.assign({}, st));
   api.renderBlockList(box, blocks, tokens);
   api.refreshPriceDisplay();
-  return { api, box, docSurface, SEL, tokens, persists };
+  // A draft saved earlier (before this change, say): its template rows' `para` go back through
+  // setParaState, the call restoreSavedOverrides makes for every saved entry.
+  for (const o of (c.saved_paragraph_overrides || [])) {
+    const el = box.querySelector('.tw-block[data-id="' + o.id + '"]');
+    if (el) api.setParaState(o.id, o.para, el);
+  }
+  return { api, box, docSurface, SEL, tokens, persists, document };
 }
 
 const pt = (v) => {
@@ -410,6 +440,15 @@ function describe(pg, el) {
   };
 }
 
+/** The line the ribbon is aimed at, as {key, kind, text, id}, or null when it is idle. */
+function aimOf(pg) {
+  const el = pg.api.aimedAt();
+  if (!el) return null;
+  const d = el.dataset || {};
+  return { key: d.poLinekey || null, kind: d.poKind || (el.classList.contains("tw-block") ? "block" : null),
+           text: pg.api.serializeBlock(el), id: el.classList.contains("tw-block") ? Number(d.id) : null };
+}
+
 /** The ribbon, as the estimator sees it: each control live or not, pressed or not. */
 function barState(pg) {
   const bar = pg.api.bar();
@@ -426,6 +465,11 @@ function barState(pg) {
 
 /** The line an action is aimed at. */
 function target(pg, on) {
+  if (on.gap != null) {
+    const gap = pg.box.querySelectorAll(".tw-gap-line")[on.gap];
+    if (!gap) throw new Error("no blank line " + on.gap + " in the Options gap");
+    return gap;
+  }
   const all = [];
   const walk = (n) => { for (const ch of n.children) { if (isLine(ch)) all.push(ch); walk(ch); } };
   walk(pg.box);
@@ -482,6 +526,48 @@ const out = CASES.map((c) => {
       fire(btn, "click", { target: btn });
       ribbon.push({ on: a.ribbon, click: a.click, aimed, after: barState(pg), before,
                     pl: el.dataset.pl || null });
+      continue;
+    }
+    if (a.key) {
+      // A key at the caret, through the page's own keydown handlers (Enter, Tab, Backspace): the
+      // caret is put on the line at `at` (its start when omitted, "end" for its end).
+      const el = target(pg, a.on);
+      const len = pg.api.serializeBlock(el).length;
+      const at = a.at == null ? 0 : (a.at === "end" ? len : a.at);
+      pg.SEL.el = el; pg.SEL.at = [at, at];
+      const e = fire(el, "keydown", { key: a.key, shiftKey: !!a.shift });
+      pressed.push({ key: a.key, shift: !!a.shift, on: a.on, prevented: !!e.defaulted,
+                     pl: el.dataset.pl || null, text: pg.api.serializeBlock(el),
+                     attached: pg.box.contains(el), aimedAt: aimOf(pg), bar: barState(pg) });
+      continue;
+    }
+    if (a.select) {
+      // The caret moved onto a line WITHOUT a focus event -- an arrow key inside a box that already
+      // has focus -- so only the page's selectionchange listener runs.
+      const el = target(pg, a.select);
+      pg.SEL.el = el; pg.SEL.at = [0, 0];
+      fire(pg.document, "selectionchange");
+      ribbon.push({ select: a.select, aimedAt: aimOf(pg), bar: barState(pg) });
+      continue;
+    }
+    if (a.press_ribbon) {
+      // A ribbon button pressed on whatever the ribbon is aimed at NOW, with no new aim first. A
+      // disabled button does not fire a click, so it is not pressed.
+      const btn = pg.api.bar().querySelector(a.press_ribbon === "reset" ? "button[data-fmt='reset']"
+                                                                         : "button[data-para='" + a.press_ribbon + "']");
+      if (!btn) throw new Error("no ribbon button " + a.press_ribbon);
+      const aimed = aimOf(pg);
+      if (!btn.disabled) fire(btn, "click", { target: btn });
+      ribbon.push({ press_ribbon: a.press_ribbon, aimedAt: aimed, disabled: !!btn.disabled });
+      continue;
+    }
+    if (a.input_on || a.settext) {
+      // A keystroke in the box: the line's words (unchanged for `input_on`, replaced for
+      // `settext`), then the input event the page's delegated handler sweeps the box on.
+      const el = target(pg, a.input_on || a.settext);
+      if (a.settext) el.textContent = a.text;
+      fire(el, "input", { bubbles: true });
+      pressed.push({ input: true, on: a.input_on || a.settext });
       continue;
     }
     if (a.enter_after) {
