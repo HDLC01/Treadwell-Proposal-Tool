@@ -969,6 +969,26 @@ REVIEW = {
 REVIEW["below-hanging/budget-saved"][2]["saved_paragraph_overrides"] = [
     {"id": _block_id("budget", "Direct", "$1.50"), "para": {"bullet": False, "indent": 0}}]
 
+# THE OPTIONS GAP, ONE MODEL (the 2026-09-26 editor release). Four branches each wrote part of it:
+# the gap never has fewer than ONE blank line (the base-pick branch; a draft saved with 0 draws and
+# prints one), the lines typed on it are the gap's and survive a base flip (the price-box branch,
+# options-gap-harness flipKeepsGap), an emptied template line he KEPT is not taken into it (the
+# editor-parity branch, test_line_removal / test_options_gap), and a blank line never carries a
+# bullet (this branch). Here the draft carries all of it at once: a count saved as 0, a line and a
+# blank line typed on the gap, and a bullet the ribbon set on each -- the words keep theirs, the
+# blank one prints none, and one blank line stands above "Options:". Screen and paper, line for line
+# (test_review_cases_the_editor_and_the_document_agree_line_for_line) and the gap itself
+# (test_the_options_gap_is_one_model_on_screen_and_on_paper).
+_GAP_STATE = {"price_overrides": {
+    "after": {"option:Alt1": ["Notes: Areas per Schedule Note 1"]},
+    "options_gap": 0,
+    "before": {"heading_options": ["Pricing valid 30 days", ""]},
+    "before_props": {"heading_options": [{"bullet": True, "level": 1}, {"bullet": True, "level": 1}]}}}
+# A keystroke in the box first, so its sweep reads every line back off the page: on the option
+# line the page composes (Direct), on the template's own base row (GC).
+REVIEW["gap-model/epoxy"] = ("epoxy", "Direct", {"state": _GAP_STATE, "actions": [{"input_on": {"key": "option:Alt1"}}]})
+REVIEW["gap-model/gc"] = ("epoxy", "GC", {"state": _GAP_STATE, "actions": [{"input_on": {"starts": "$22,600"}}]})
+
 _REVIEW_RUNS: dict = {}
 
 
@@ -1162,3 +1182,24 @@ def test_the_alternate_flooring_phrase_is_the_same_rule_in_both_languages():
     for wt in ("epoxy", "polish", "combo"):
         row = pw.template_alt_flooring_row(wt, "Direct")
         assert "alternate.lump_sum_formatted" in row, wt
+
+
+@needs_node
+@pytest.mark.parametrize("name", ["gap-model/epoxy", "gap-model/gc"])
+def test_the_options_gap_is_one_model_on_screen_and_on_paper(review_runs, name):
+    """The gap above "Options:" as all four branches define it, on both sides: the typed line keeps
+    the bullet set on it (an "o"), the typed BLANK line prints none although one was set on it, and
+    under them stands the gap's floor of one blank line (the draft said 0), then the heading.
+    Mutations: the floor back to 0 (optionsGapCount / options_gap_count); a blank line printing the
+    bullet set on it (resolveLineProps / resolve_line_props)."""
+    run = review_runs[name]
+    for side, lines in (("screen", _shown(run)), ("paper", _printed(run))):
+        texts = [c[0] for c in lines]
+        typed = texts.index("Pricing valid 30 days")
+        head = next(i for i in range(typed, len(texts)) if texts[i].startswith("Options"))
+        assert lines[typed][1:3] == (True, 1), (side, lines[typed])
+        # The typed blank line and the one blank line of the gap: nothing between them and the
+        # heading but blank lines, and no bullet on any of them.
+        between = lines[typed + 1:head]
+        assert between and all(c == ("", "blank") for c in between), (side, between)
+        assert len(between) == 2, (side, "the typed blank line plus the floor's one", between)

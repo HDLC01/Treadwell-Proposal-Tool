@@ -422,6 +422,7 @@ const api = new Function(
   // the tax rule again with them. B / I / U belong to fmt-ribbon-harness.js.
   let _lastTokens = null;
   const toggleFormat = () => {};
+  const priceLineAction = () => { throw new Error("priceLineAction reached: the price box's bullets are price-bullets-harness.js's"); };
   // #569's typed price lines ride the undo entry too (snap.po). Redrawing the price block from the
   // restored maps is price-lines-harness.js's; here the redraw and the save are recorded.
   const povRedraws = [];
@@ -445,6 +446,10 @@ const api = new Function(
     topConst("PRICE_TOKENS"), fn("storedText"), fn("isPriceParagraph"),
     // The Backspace handler hands a typed price line to mergePriceLine first.
     fn("makeExtraLine"), fn("caretInto"), fn("mergePriceLine"),
+    // ...after the bullets branch's ladder on a price line with words (isPriceLine asks). Its
+    // step (priceLineAction) is price-bullets-harness.js's: no case here reaches it, and one that
+    // did would say so.
+    fn("isPriceLine"),
     topConst("overrideKey"), topConst("liveKey"), fn("savedVersionMatches"),
     fn("savedOverridesFor"), fn("preserveRichOverrides"), fn("lineBare"), fn("lineKeptEmpty"), fn("collectOverrides"),
     fn("restoreSavedOverrides"), fn("priceRowVisibility"),

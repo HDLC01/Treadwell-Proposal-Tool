@@ -324,6 +324,7 @@ function build(st, opts) {
   // Every TW.setState the page makes, in order; queuePovSave's debounced save is one of them.
   const sets = [];
   const reloads = [];
+  const fitAsks = [];
   if (o.panel) {
     // The right-hand Pricing options panel (#options-panel): renderProposalExtras draws the
     // Base-bid radios into it and wires their real change handler.
@@ -364,6 +365,10 @@ function build(st, opts) {
     // and indent off through the ribbon's own step, and then re-aims the ribbon. The step is real;
     // the ribbon is price-bullets-harness.js's, so a case here that reached it says so.
     "const fitTxbx = () => {};",
+    // The sidebar's applyAndRefresh asks /api/proposal-fit for the sizes again after a base pick
+    // (the editor-parity branch). That request is editor-fit-harness.js's world; here it is
+    // counted, not run.
+    "const scheduleFit = () => { FIT_ASKS.push(1); };",
     "const showFmtBar = () => { throw new Error('showFmtBar reached: the ribbon is not modelled in price-lines-harness'); };",
     // The page's Backspace handler takes an EMPTY template line out before it reaches the price
     // lines' merge. The removal family is lifted whole; which lines it may take is the template
@@ -383,7 +388,7 @@ function build(st, opts) {
   ].join("\n");
   const clone = (x) => (x === undefined ? undefined : JSON.parse(JSON.stringify(x)));
   const api = new Function("state", "document", "window", "form", "TW", "templateBlocks", "docSurface",
-                           "focusInside", "queuePovSave", "F", "Node", "Event", "SEL", "reloadForWorkType",
+                           "focusInside", "queuePovSave", "F", "Node", "Event", "SEL", "reloadForWorkType", "FIT_ASKS",
                            body)(
     st, document, win, { querySelector: () => null },
     { readForm: () => ({}), setState: (x) => { sets.push(clone(x)); } }, o.blocks || null, pg.docSurface,
@@ -393,8 +398,10 @@ function build(st, opts) {
     F, Node, Ev, SEL,
     // The template reload a work-type change makes (Phase B). It swaps the .docx on screen; the
     // price lines are drawn by the functions above whatever template is mounted.
-    () => { reloads.push(1); });
+    () => { reloads.push(1); },
+    fitAsks);
   api.pg = pg; api.saves = saves; api.SEL = SEL; api.sets = sets; api.reloads = reloads;
+  api.fitAsks = fitAsks;
   /** The draft as the page leaves it: `from` with every save the page made merged in, in order
    *  (what the pagehide save and a step pill carry). */
   api.saved = (from) => Object.assign(clone(from), ...sets);

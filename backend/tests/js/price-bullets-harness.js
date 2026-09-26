@@ -264,6 +264,9 @@ const UNITS = [
   fn("optionsGapCount"), fn("optionsGapTyped"), fn("isGapTyped"), fn("gapTypedEls"),
   fn("optionsHeadingEl"), fn("aboveOptionsGap"), fn("gapShown"), fn("paintOptionsGap"),
   fn("paintGapTyped"),
+  // The gap takes in a blank template line above the heading, never one he emptied and KEPT
+  // (the editor-parity branch).
+  fn("lineBare"), fn("lineKeptEmpty"),
   // The template's own paragraphs, mounted the way a page load mounts them: the free paragraphs
   // through renderBlock, the priced regions through their staging islands.
   topConst("REGION_MOUNTS"),
@@ -278,6 +281,12 @@ const UNITS = [
   // of renderFmtBar, so the run-formatting half (selectionFormat and friends) is never reached here.
   topConst("SIZE_CHOICES"), fn("icon"), fn("ensureFmtBar"), fn("fmtTargetBlock"), fn("markFmtTarget"),
   fn("renderFmtBar"), fn("showFmtBar"), fn("idleFmtBar"),
+  // The Backspace / Delete handler asks the editor-parity branch's line-removal family first: a
+  // caret in a hidden line moves to one shown (lineShown / caretToLine), and an EMPTY line may be
+  // taken out (lineRemovable reads the block's `fit.removable`, removeLineAt does it). Lifted,
+  // not stubbed, so a price-box Backspace here meets the rule the page applies.
+  fn("boxLines"), fn("lineShown"), fn("pointAt"), fn("lineIsEmpty"), fn("lineRemovable"), fn("removeLine"),
+  fn("adjacentLine"), fn("caretToLine"), fn("removeLineAt"),
 ].join("\n\n");
 const ENTER = handlerAround("// A PRICE line (or a line typed next to one): a new line of its own");
 // The ribbon's aim: focus landing on a line is what points it there.
@@ -357,6 +366,8 @@ function build(c, st) {
     "let fmtBar = null, fmtBlock = null, fmtRange = null, fmtRangeText = null;",
     "let boxSel = null;",
     "let _fmtBusy = false;",
+    // The undo stack is editor-undo-harness.js's; a removal here records nothing.
+    "const undoPush = () => false;",
     UNITS,
     "docSurface.addEventListener('keydown', " + ENTER + ");",
     "docSurface.addEventListener('keydown', " + TAB + ");",
