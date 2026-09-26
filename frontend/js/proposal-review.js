@@ -544,7 +544,7 @@
   // price row's own formatting and never freeze the line beside them.
   const COMPUTED_PRICE_LINE_KEYS = new Set(["base", "sales_tax", "remodel", "total"]);
   const _LIVE_TITLE = "Edited — your words are kept; the amount and the tax wording still follow the estimate.";
-  const _MONEY_TITLE = "The amount on this line does not follow the estimate: it prints the figure typed here. Send will ask before it goes.";
+  const _MONEY_TITLE = "The amount on this line does not follow the estimate: it prints the figure typed here. Send, Download and To Dropbox will ask before it goes.";
   /** The stored text for a line in the LIVE shape, resolved against today's parts, or null.
    *
    *  `parts` = {amount, phrase, slot, candidates}: today's computed amount string for this line,
@@ -1257,7 +1257,8 @@
   }
 
   /** Every price line on the page that prints a dollar figure of the estimator's own instead of
-   *  the estimate's, as [{key, says, estimate}] — what Send asks about before it goes (done.js).
+   *  the estimate's, as [{key, says, estimate}] — what Send, Download and To Dropbox ask about
+   *  before anything goes (TWPrice.confirmOwnFigures, off proposal_payload.price_warnings).
    *  Hanz, 2026-09-25: warn, then let him send. Read off the lines as drawn, so it is exactly what
    *  the page is showing; empty before the document is on screen. */
   function priceWarnings() {
@@ -1613,17 +1614,17 @@
             state.base_tab_id = rb.value || null;
             if (rb.value && opts[rb.value]) opts[rb.value].is_option = false;   // base can't also be an option
             if (state.base_tab_id !== priorBaseId) {
-              // A base change re-derives the base line, its tax rows and the combo breakout, so the
-              // edits made to those lines belong to the old base. THE SAME RULE as the Estimate
-              // step's bid strip (TWPrice.forgetBaseLines): the two pickers used to disagree, and a
-              // base picked on the Estimate page kept the old base's frozen line. The lines the
-              // estimator typed next to a price line are kept.
+              // THE SAME RULE as the Estimate step's bid strip (TWPrice.applyBasePick). Hanz,
+              // 2026-09-26: keep the words. A base line he re-worded keeps his words; its amount,
+              // its words for the tab's system and its tax wording become the new base's, and a
+              // figure no tab prices stays his (marked, and Send, Download and To Dropbox ask).
               //
               // And SAVED NOW. rebuildPricing's save below carries the base and the money, not the
-              // price edits, so leaving by a step pill (the pagehide save) put the old base's line
-              // back into the draft with the new base, and the next visit printed it again.
+              // price edits, so leaving by a step pill (the pagehide save) put the old base's
+              // words for its system back into the draft under the new base.
               const pov = state.price_overrides;
-              if (TWPrice.forgetBaseLines(pov, priorBaseId, state.base_tab_id, state.priced_tabs)) {
+              if (TWPrice.applyBasePick(pov, priorBaseId, state.base_tab_id, state.priced_tabs,
+                                        { workType: state.work_type })) {
                 TW.setState({ price_overrides: pov });
               }
             }

@@ -140,3 +140,44 @@ def test_no_draft_id_falls_back_to_the_pages_own_payload(ran):
     """Nothing to ask the server about; the page's payload itself is what gets built."""
     f = ran["noDraftId"]
     assert f["posted"] == ["/api/generate"] and f["sentSaved"] is True
+
+
+# ── a price line with a figure of his own ────────────────────────────────────────────────────────
+_ASK = ("This line says $15,000 but the estimate says $9,860.\n"
+        "This line says $9,999, typed by hand — download anyway?")
+
+
+@pytest.mark.parametrize("case", ["pdfCancel", "docxCancel"])
+def test_download_asks_about_a_figure_of_his_own_and_cancel_does_nothing(ran, case):
+    """Hanz, 2026-09-26: warn on all three. The document lists two price lines printing a figure of
+    the estimator's own; the PDF and .docx buttons ask Send's question in their own verb BEFORE
+    anything happens, and Cancel does nothing at all: no save flushed, nothing built, nothing
+    fetched or saved, the button as it was.
+
+    Mutation: drop the check from downloadAs (the cancelled press flushes, builds and downloads)."""
+    c = ran["ownFigure"][case]
+    assert c["asked"] == [_ASK], c["asked"]
+    assert c["log"] == ["confirm"], c["log"]
+    assert c["clicked"] == [] and c["checked"] == "", c
+    assert c["button"] == {"text": "Download PDF", "disabled": False}, c["button"]
+
+
+def test_download_ok_proceeds_exactly_as_a_press_always_has(ran):
+    """OK: the question first, then the same flush, build, fetch and save as any press."""
+    c = ran["ownFigure"]["pdfOk"]
+    assert c["asked"] == [_ASK]
+    assert c["log"] == ["confirm", "flush", "post /api/draft/d1/documents", "setLocalState",
+                        "fetch https://tool/api/file/NEW/pdf"], c["log"]
+    assert c["clicked"] == ["x.pdf"] and c["checked"] == "K-NEW"
+
+
+@pytest.mark.parametrize("case", ["xlsx", "clean"])
+def test_no_question_for_the_estimate_sheet_or_a_document_that_follows_the_estimate(ran, case):
+    """The estimate sheet prints no price line, and a document whose lines all follow the estimate
+    has nothing to ask about: both download straight away, with no prompt at all.
+
+    Mutation: ask on every button (the sheet's press asks); ask whether or not a line warns."""
+    c = ran["ownFigure"][case]
+    assert c["asked"] == [], c["asked"]
+    assert c["log"][:2] == ["flush", "post /api/draft/d1/documents"], c["log"]
+    assert len(c["clicked"]) == 1

@@ -1043,13 +1043,17 @@ function wireBidBar() {
       const priorBaseId = state.base_tab_id;
       state.base_tab_id = el.value || null;
       if (el.value && state.tab_opts[el.value]) state.tab_opts[el.value].is_option = false;  // base ≠ option
-      // The Proposal step's edits to the old base's lines go, by THE SAME RULE its own base picker
-      // applies (TWPrice.forgetBaseLines). This used to clear only price_overrides.single_bid, so
-      // Hanz, 2026-09-26: "the base bid was not updating". He picked another base here, and a base
-      // line the Proposal step had saved with the old tab's figure in it went on printing that
-      // figure, on screen and in the customer's document. The lines he typed stay.
+      // The Proposal step's edits to the base's lines follow the new base, by THE SAME RULE its own
+      // base picker applies (TWPrice.applyBasePick). This used to clear only
+      // price_overrides.single_bid, so Hanz, 2026-09-26: "the base bid was not updating" -- a base
+      // line saved with the old tab's figure went on printing it. And then: keep the words. His
+      // words stay; the amount, the words for the tab's system and the tax wording are the new
+      // base's. `roles` from this page's own tab list: a copy made a moment ago is not in
+      // priced_tabs until persistTabState below prices it.
       if (state.base_tab_id !== priorBaseId) {
-        TWPrice.forgetBaseLines(state.price_overrides, priorBaseId, state.base_tab_id, state.priced_tabs);
+        TWPrice.applyBasePick(state.price_overrides, priorBaseId, state.base_tab_id, state.priced_tabs,
+                              { workType: state.work_type,
+                                roles: Object.fromEntries(tabs.map(t => [t.id, t.role])) });
       }
       renderBidOptions();
       // PRICED AND SAVED: persistTabState takes the pricing snapshot (priced_tabs, the lump sum, the
@@ -1340,12 +1344,17 @@ async function deleteTab(id) {
   if (wasBase) state.base_tab_id = null;   // fall back to auto-derive
   buildTabs();
   // Deleting the BASE copy changes the base, to the one the sheet derives (renderBidOptions
-  // persists it), so it forgets the copy's edited base lines by THE SAME RULE both base pickers
-  // apply (TWPrice.forgetBaseLines). Without it a base line he had edited under the copy -- its
-  // figure, or its words about the copy's system -- printed under the derived base's price.
+  // persists it), so the copy's edited base lines follow it by THE SAME RULE both base pickers
+  // apply (TWPrice.applyBasePick): his words stay, the amount, the words for the tab's system and
+  // the tax wording are the derived base's. Applied NOW, while priced_tabs still holds the copy: a
+  // base line frozen at the copy's figure is the tool's while a tab prices it, and the next pricing
+  // takes the copy's figure off the draft. Without it the copy's figure printed under the derived
+  // base's price, unasked. `roles`: the copy has left this page's tab list, not priced_tabs.
   if (wasBase) {
     const next = (state.work_type || "epoxy").toLowerCase() === "combo" ? null : resolveBaseTab();
-    TWPrice.forgetBaseLines(state.price_overrides, id, next ? next.id : null, state.priced_tabs);
+    TWPrice.applyBasePick(state.price_overrides, id, next ? next.id : null, state.priced_tabs,
+                          { workType: state.work_type,
+                            roles: Object.fromEntries(tabs.map(t => [t.id, t.role])) });
   }
   TW.setState({ ...state, tab_copies: state.tab_copies, tab_labels: state.tab_labels,
                 tab_notes: state.tab_notes, tab_opts: state.tab_opts,

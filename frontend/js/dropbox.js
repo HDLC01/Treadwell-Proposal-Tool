@@ -384,6 +384,12 @@
       // change the choice is null and this is the last thing between a stale click
       // and a duplicate folder (review 2026-08-20).
       if (dbxGoDisabled(DBX)) return;                    // no folder chosen yet
+      // A PRICE LINE WITH A FIGURE OF HIS OWN: the question Send asks, asked before anything is
+      // filed (Hanz, 2026-09-26: warn on all three -- Send, Download, To Dropbox). One check,
+      // TWPrice.confirmOwnFigures, over the draft as it stands NOW (TW.getState(), not this file's
+      // load-time `state`). Cancel does nothing: the button, the result and the draft stay as
+      // they were.
+      if (!TWPrice.confirmOwnFigures(TW.getState(), "file", (q) => window.confirm(q))) return;
       DBX.uploaded = false;                      // the button is ours again until it succeeds
       go.classList.remove("dbx-ok");             // reset from a prior success
       go.disabled = true; go.textContent = "Uploading to Dropbox…";

@@ -30,6 +30,9 @@ const vm = require("vm");
 const ROOT = path.resolve(__dirname, "..", "..", "..");
 const SHARED = fs.readFileSync(path.join(ROOT, "frontend", "shared.js"), "utf8");
 const SRC = fs.readFileSync(path.join(ROOT, "frontend", "js", "done.js"), "utf8");
+// The price rule's page half, as done.html loads it before done.js: Send and Download ask its one
+// question (TWPrice.confirmOwnFigures) before a price line with a figure of his own goes out.
+const TWPRICE = require(path.join(ROOT, "frontend", "js", "price-lines-core.js"));
 
 function balanced(startIndex) {
   let depth = 1;
@@ -66,9 +69,6 @@ const BUILT_AT = lift("builtAt");
 const DOWNLOAD = lift("downloadAs");
 const ERR_MSG = lift("portalErrMsg");
 const REFUSAL = lift("staleDocRefusal");
-// What Send asks about a price line carrying a figure of the estimator's own — the handler calls it
-// before every publish, so it is lifted with the handler (price-lines-harness.js tests its words).
-const PRICE_WARNING = lift("sendPriceWarning");
 const SEND = liftSendHandler();
 const STALE_CODE = (/const STALE_DOCUMENT_CODE\s*=\s*"([^"]+)"/.exec(SRC) || [])[1];
 if (!STALE_CODE) throw new Error("STALE_DOCUMENT_CODE moved in done.js");
@@ -179,13 +179,13 @@ async function tab(local, server, opts) {
   const checkedDocument = { renderId: "" };
   const downloadAs = new AsyncFunction(
     ...DOWNLOAD.args, "TW", "freshDocuments", "paintLumpSum", "fetch", "Blob", "URL", "document",
-    "setTimeout", "icon", "console", "checkedDocument", '"use strict"; ' + DOWNLOAD.body);
+    "setTimeout", "icon", "console", "checkedDocument", "TWPrice", "window",
+    '"use strict"; ' + DOWNLOAD.body);
 
   // The handler's error path is real too: what the estimator reads is what these two decide.
   const portalErrMsg = new Function(...ERR_MSG.args, '"use strict"; ' + ERR_MSG.body);
   const staleDocRefusal = new Function(...REFUSAL.args, "STALE_DOCUMENT_CODE",
                                        '"use strict"; ' + REFUSAL.body);
-  const sendPriceWarning = new Function(...PRICE_WARNING.args, '"use strict"; ' + PRICE_WARNING.body);
   const portalBtn = { textContent: "Send", disabled: false, focus() {} };
   const portalRecip = { allEmails: () => ["customer@example.com"], noFollowupsToSend: () => [],
                         setErr: (m) => { rec.err = m; }, setBusy() {}, hasIntake: false };
@@ -193,7 +193,7 @@ async function tab(local, server, opts) {
     "TW", "portalBtn", "portalRecip", "readRequireDeposit", "readAssignedEstimator", "document",
     "alert", "sendAtts", "notifyPick", "showSaveBlocked", "showStaleDoc", "mountRevisions",
     "publishDrift", "staleDocRefusal", "portalErrMsg", "setTimeout", "window", "console",
-    "checkedDocument", "sendPriceWarning", '"use strict"; ' + SEND);
+    "checkedDocument", "TWPrice", '"use strict"; ' + SEND);
 
   return {
     TW, rec, checkedDocument, ls: sandbox.localStorage, window: sandbox.window,
@@ -204,7 +204,8 @@ async function tab(local, server, opts) {
       { textContent: "Download PDF", disabled: false, innerHTML: "" },
       TW, freshDocuments, () => {}, fetch, class { constructor() {} },
       { createObjectURL: () => "blob:1", revokeObjectURL() {} }, sandbox.document,
-      () => 0, () => "", { error: (e) => { rec.downloadError = String(e); } }, checkedDocument),
+      () => 0, () => "", { error: (e) => { rec.downloadError = String(e); } }, checkedDocument,
+      TWPRICE, sandbox.window),
     send: () => send(
       TW, portalBtn, portalRecip, () => false, () => "kyle@wetreadwell.com", sandbox.document,
       () => {},
@@ -214,7 +215,7 @@ async function tab(local, server, opts) {
       { adds: () => [], mutes: () => [] },
       () => false, () => {}, () => {}, () => "", (e) => staleDocRefusal(e, STALE_CODE),
       portalErrMsg, () => 0,
-      sandbox.window, { error() {} }, checkedDocument, sendPriceWarning),
+      sandbox.window, { error() {} }, checkedDocument, TWPRICE),
   };
 }
 

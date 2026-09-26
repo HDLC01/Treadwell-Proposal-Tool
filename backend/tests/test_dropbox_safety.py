@@ -445,3 +445,39 @@ def test_the_client_mirrors_the_whole_dropbox_result_it_was_sent(page):
     # Kept in this browser only: the server recorded it on its own copy, and a setState would PUT
     # this page's whole copy, which can be older than the server's (review of fix 4, round 2).
     assert page["serverSaves"] == 0, "the filing's result was saved with the page's whole copy"
+
+
+# ── a price line with a figure of his own (Hanz, 2026-09-26: warn on all three) ────────────────
+_FILE_ASK = "This line says $15,000 but the estimate says $9,860 — file anyway?"
+
+
+@needs_node
+def test_to_dropbox_asks_about_a_figure_of_his_own_and_cancel_files_nothing(page):
+    """The page loaded on a document with no such line; by the press the draft's document has one.
+    To Dropbox asks Send's question in its own verb, of the draft as it stands AT THE PRESS, before
+    anything is filed. Cancel files nothing, saves nothing, and leaves the button armed and the
+    result hidden, exactly as they were.
+
+    Mutations: drop the check from the click handler (the cancelled press files); read this
+    file's load-time `state` instead of TW.getState() (nothing is asked, and it files)."""
+    c = page["ownFigureCancel"]
+    assert c["asked"] == [_FILE_ASK], c["asked"]
+    assert c["posts"] == 0 and c["stored"] == 0, c
+    assert c["go"] == {"disabled": False, "label": c["armedLabel"]}, c["go"]
+    assert c["resultShown"] == "", c
+
+
+@needs_node
+def test_to_dropbox_ok_files_exactly_as_a_press_always_has(page):
+    """OK: the same filing into the folder he picked."""
+    o = page["ownFigureOk"]
+    assert o["asked"] == [_FILE_ASK, _FILE_ASK], o["asked"]
+    assert o["posts"] == 1, o
+    assert o["body"]["folder_path"].endswith("/26.08.14 Fuel House"), o["body"]
+
+
+@needs_node
+def test_to_dropbox_asks_nothing_when_every_line_follows_the_estimate(page):
+    """No such line on the document: no question, and the filing goes."""
+    c = page["ownFigureClean"]
+    assert c["asked"] == [] and c["posts"] == 1, c

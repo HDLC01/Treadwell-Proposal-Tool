@@ -347,3 +347,61 @@ def test_no_review_highlight_reaches_the_customer_on_any_template(work_type, aud
     out = docx.Document(io.BytesIO(blob))
     assert len(list(out.element.body.iter(qn("w:highlight")))) == 0, (
         f"{work_type}/{audience}: {authored} authored highlights, some reached the document")
+
+
+# ── the one question all three ways out ask ──────────────────────────────────────────────────────
+def _core(expr, *args):
+    core = FRONTEND / "js" / "price-lines-core.js"
+    script = ("const P = require(process.argv[1]); const A = process.argv.slice(2).map(JSON.parse);"
+              "console.log(JSON.stringify((" + expr + ")(P, ...A)));")
+    p = subprocess.run(["node", "-e", script, str(core), *[json.dumps(a) for a in args]],
+                       capture_output=True, text=True, encoding="utf-8", timeout=60)
+    assert p.returncode == 0, p.stderr
+    return json.loads(p.stdout)
+
+
+@needs_node
+def test_the_question_is_one_rule_in_three_verbs():
+    """TWPrice.ownFigureQuestion: Hanz's sentence per line, the verb of the way out, the list capped
+    at six with a count of the rest; nothing to ask, "". TWPrice.confirmOwnFigures asks it of the
+    draft's document and says whether to go on: nothing to ask never calls the question at all."""
+    w = [{"says": "$15,000", "estimate": "$9,860"}, {"says": "$9,999", "estimate": ""}]
+    got = _core("(P, w) => ['send', 'download', 'file'].map(v => P.ownFigureQuestion(w, v))", w)
+    assert got == [
+        "This line says $15,000 but the estimate says $9,860.\nThis line says $9,999, typed by hand — send anyway?",
+        "This line says $15,000 but the estimate says $9,860.\nThis line says $9,999, typed by hand — download anyway?",
+        "This line says $15,000 but the estimate says $9,860.\nThis line says $9,999, typed by hand — file anyway?",
+    ]
+    many = [{"says": f"${i},000", "estimate": "$1"} for i in range(1, 9)]
+    q = _core("(P, w) => P.ownFigureQuestion(w, 'file')", many)
+    assert q.count("This line says") == 6 and "…and 2 more line(s) like it — file anyway?" in q
+    assert _core("(P) => [P.ownFigureQuestion([], 'send'), P.ownFigureQuestion(null, 'send')]") == ["", ""]
+    asked = _core("""(P, w) => {
+        const seen = [];
+        const ask = (ans) => (q) => { seen.push(q); return ans; };
+        const d = { proposal_payload: { price_warnings: w } };
+        return { cancel: P.confirmOwnFigures(d, 'download', ask(false)),
+                 ok: P.confirmOwnFigures(d, 'download', ask(true)),
+                 clean: P.confirmOwnFigures({ proposal_payload: { price_warnings: [] } }, 'send', ask(false)),
+                 none: P.confirmOwnFigures(null, 'send', ask(false)),
+                 seen };
+    }""", w[:1])
+    assert asked == {"cancel": False, "ok": True, "clean": True, "none": True,
+                     "seen": ["This line says $15,000 but the estimate says $9,860 — download anyway?"] * 2}
+
+
+def test_send_download_and_to_dropbox_ask_through_the_one_check():
+    """No second copy of the rule: done.js (Send and the .docx / PDF downloads) and dropbox.js (To
+    Dropbox) all ask through TWPrice.confirmOwnFigures, neither keeps a wording of its own, and
+    done.html loads the rule before both. Each call is EXECUTED by its own harness
+    (files-stale-page, files-download, dropbox-page); this pins that there is one of it."""
+    done = (FRONTEND / "js" / "done.js").read_text(encoding="utf-8")
+    dbx = (FRONTEND / "js" / "dropbox.js").read_text(encoding="utf-8")
+    assert done.count('TWPrice.confirmOwnFigures(TW.getState(), "send",') == 1
+    assert done.count('TWPrice.confirmOwnFigures(TW.getState(), "download",') == 1
+    assert dbx.count('TWPrice.confirmOwnFigures(TW.getState(), "file",') == 1
+    for src in (done, dbx):
+        assert "anyway?" not in src and "This line says" not in src
+    html = (FRONTEND / "done.html").read_text(encoding="utf-8")
+    core = html.index('src="/js/price-lines-core.js')
+    assert core < html.index('src="/js/done.js"') < html.index('src="/js/dropbox.js"')

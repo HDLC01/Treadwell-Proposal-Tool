@@ -19,7 +19,8 @@
 // live. Where the typed line still carries today's computed amount and tax phrase verbatim, they
 // are stored as ⟦amount⟧ and ⟦tax⟧ and today's values go back in at render — on screen here, in
 // the document in price_rules.resolve_line. A line with a DIFFERENT dollar figure keeps it: the
-// editor marks it, Send asks, and then it is the estimator's to send.
+// editor marks it, Send, Download and To Dropbox ask (confirmOwnFigures), and then it is the
+// estimator's to send.
 (function (root, factory) {
   var api = factory();
   root.TWPrice = api;
@@ -325,9 +326,9 @@
    *  TODAY is the limit. Only today's tab figures are known: nothing on the page records what a
    *  tab priced at before. On Hanz Fix itself, Epoxy was re-priced to $7,696 by revision 2, so its
    *  frozen $7,447 is no tab's figure any more, and that line is treated as a figure of his own:
-   *  kept, marked in the editor, and Send asks ("says $7,447, the estimate says $15,149"). A pick
-   *  of the base on either page forgets it (forgetBaseLines); typing today's figure back into the
-   *  line makes it live again (captureLine).
+   *  kept, marked in the editor, and Send, Download and To Dropbox ask ("says $7,447, the estimate
+   *  says $15,149"). A base pick keeps it as his too (applyBasePick: Hanz, 2026-09-26, keep the
+   *  words); typing today's figure back into the line makes it live again (captureLine).
    *
    *  `key` is the line's: a base, option or combo line asks for each tab's total and its pre-tax
    *  figure under any tax answer; a Material Sales Tax / Remodel Tax row for that tax; a Total for
@@ -351,59 +352,102 @@
     return out;
   }
 
-  /** THE BASE-PICK RULE, one for both places a base bid is picked: the Estimate step's bid strip
-   *  (estimate-review.js) and the Proposal step's sidebar (proposal-review.js).
+  /** The base line's words for the system it prices, after its amount, by the work type the base
+   *  tab gives the job: "Epoxy flooring as described above", "Polished Concrete Flooring as
+   *  described above", ... Its twin is proposal-review.js baseDescLabel (with effectiveWorkType,
+   *  which picks the work type): test_base_pick_follows.py runs both over every work type and base
+   *  role and demands the same words. `role` is the base tab's; none (the combined base, or a tab
+   *  nothing on the draft names) leaves the draft's own work type. */
+  function baseDesc(workType, role) {
+    var wt = String(workType || "epoxy").toLowerCase();
+    var r = String(role || "").toLowerCase();
+    var eff = wt === "combo" ? "combo" : (r === "epoxy" || r === "polish" || r === "gyp") ? r : wt;
+    var noun = eff === "polish" ? "Polished Concrete Flooring"
+             : eff === "combo" ? "Epoxy & Polished Concrete flooring"
+             : eff === "sealer" ? "Sealed Concrete"
+             : eff === "gyp" ? "Gypsum Underlayment System"
+             : "Epoxy flooring";
+    return noun + " as described above";
+  }
+
+  /** The lines that print the base bid itself, and the words each tax row prints after its amount. */
+  var BASE_ROW_WORDS = { sales_tax: "Material Sales Tax", remodel: "Remodel Tax", total: "Total" };
+
+  /** THE BASE-PICK RULE, one for all three ways the base bid changes: the Estimate step's bid strip
+   *  (estimate-review.js wireBidBar), the Proposal step's sidebar (proposal-review.js), and deleting
+   *  the base copy on the Estimate step (deleteTab: the base falls back to the one the sheet
+   *  derives).
    *
-   *  Hanz, 2026-09-26, on staging: "the base bid was not updating". He picked another base tab on
-   *  the Estimate page and the proposal went on quoting the old tab's price. The sidebar's pick
-   *  forgot the old base's edited lines; the Estimate page's pick forgot only the oldest bucket
-   *  (single_bid), so a base line saved with the old figure in it printed that figure under the new
-   *  base, on screen and in the customer's document.
+   *  Hanz, 2026-09-26, twice. First, "the base bid was not updating": a base picked on the Estimate
+   *  page went on printing the old tab's figure. Then, on the rule that fixed it by forgetting his
+   *  edits: KEEP THE WORDS. A base price line he re-worded keeps his words through a pick; its
+   *  amount, its words for the tab's system and its tax wording become the new base's.
    *
-   *  The lines that print the base bid itself belong to the base that was picked before: the base
-   *  line (its words describe that tab's system), its tax rows and Total, and the combo lines. So
-   *  do the option lines of the two tabs the pick moves: the one that was the base and the one that
-   *  now is (it stops being an option). Their edited text is forgotten, both shapes, so the new
-   *  base's own lines print. Every other option keeps its edit: its amount is a live marker that
-   *  follows its own tab (an add/deduct amount follows the new base too), and its words are the
-   *  estimator's. Lines he TYPED above and below any price line are his own lines and stay; a line
-   *  saved in the old shape, with such lines inside it, gives them up to before / after first.
-   *  Lines no base changes (manual price lines, the Base Bid and Options headings and the lines
-   *  typed on the gap, the alternate system) are left alone.
+   *  WHAT A PICK DOES to the lines that print the base bid (the base line, its Material Sales Tax
+   *  and Remodel Tax rows, its Total):
+   *   * A LIVE line (lines2, carrying the amount marker) is kept as it is. It resolves against the
+   *     new base when it is drawn and when the document is built.
+   *   * A FIGURE OF HIS OWN (lines2, no marker) whose amount is a figure one of this draft's tabs
+   *     prices that line at today (tabFigures: the old base's, a copy being deleted, the new base's)
+   *     becomes the live marker: the figure is the tool's. Any other figure stays his -- kept,
+   *     marked in the editor, and Send, Download and To Dropbox ask before it goes.
+   *   * A LINE IN THE OLD SHAPE (lines) is migrated the same way HERE, while the figures of the tab
+   *     it was frozen under are still on the draft (a deleted copy's leave it at the next pricing):
+   *     migrateLine splits off the lines typed round it, and a tab's figure at its amount and a tax
+   *     wording this tool has printed become markers. It is not given a tax marker it did not have:
+   *     a line with no tax wording prints none after the pick, as it printed none before it. A "$0"
+   *     on a tax row or the Total is the old box-wide sweep's phantom and goes.
+   *   * THE WORDS FOR THE TAB'S SYSTEM (baseDesc) are the old base's wherever they still stand
+   *     verbatim in the base line, and become the new base's. His own words round them stay,
+   *     whatever they say.
+   *   * A line that now reads exactly as the tool prints it is no edit, and is not kept.
    *
-   *  `from` / `to` are the base tab ids before and after (null: the combined base). `tabs` is the
-   *  draft's priced_tabs: a line in the old shape is split by migrateLine, and the figures those
-   *  tabs price the line at tell its price line from a note typed round it that quotes a figure of
-   *  its own ("$500 – cove allowance, included below"). Without them a note typed above the price
-   *  line could be taken for it: deleted with the old base's line, while the real price line was
-   *  kept as a typed line and printed its old figure under the new base, with no warning. Mutates
-   *  `pov` in place; both pages save it. Returns whether a line went.
+   *  WHAT STILL RESETS: the per-field buckets of the oldest editor (single_bid, rows, combo). They
+   *  froze an amount, a tax phrase or a description with no marker, and the document applies
+   *  single_bid's amount as the base figure outright, so keeping one would print the old base's
+   *  price under the new base. No editor writes them now.
    *
-   *  THE THIRD WAY the base changes is deleting the base copy on the Estimate step (deleteTab):
-   *  the base falls back to the one the sheet derives, by this same rule.
+   *  NOTHING ELSE IS TOUCHED: the lines typed above and below any price line, the combo lines (they
+   *  print only under the combined base, whose tabs no pick changes, and are migrated when drawn),
+   *  every option line -- those of the old and the new base tab included (an option line prints
+   *  only while its tab is an option, and his words for it come back if it is one again) -- manual
+   *  lines, both headings, the lines typed on the gap, the alternate.
+   *
+   *  `from` / `to` are the base tab ids before and after (null: the combined or derived base).
+   *  `tabs` is the draft's priced_tabs. `opts.workType` is the draft's work_type; `opts.roles`
+   *  ({id: role}) names the tabs priced_tabs may not hold yet (the Estimate step passes its own tab
+   *  list: a copy made a moment ago and picked at once). Mutates `pov` in place; every caller saves
+   *  it. Returns whether anything changed.
    *
    *  Page state only, like tabFigures: the document prints what the page saved, so price_rules.py
-   *  has no twin of either (the parity test covers the rule the two halves both run). */
-  function forgetBaseLines(pov, from, to, tabs) {
+   *  has no twin of it (the parity test covers the rule the two halves both run). */
+  function applyBasePick(pov, from, to, tabs, opts) {
     if (!pov || typeof pov !== "object" || Array.isArray(pov)) return false;
+    var o = opts && typeof opts === "object" ? opts : {};
     var changed = false;
-    function bound(key) {
-      var k = String(key);
-      if (/^(?:base|sales_tax|remodel|total)$/.test(k) || k.indexOf("combo:") === 0) return true;
-      var m = /^option:(.*?)(?::(?:sales_tax|remodel|total))?$/.exec(k);
-      return !!m && ((!!from && m[1] === from) || (!!to && m[1] === to));
-    }
+    var own = Object.prototype.hasOwnProperty;
     ["single_bid", "rows", "combo"].forEach(function (b) {
       var m = pov[b];
       if (m && typeof m === "object" && Object.keys(m).length) changed = true;
       pov[b] = {};
     });
+    function roleOf(id) {
+      if (id == null || id === "") return "";
+      if (o.roles && typeof o.roles === "object" && own.call(o.roles, id) && o.roles[id]) return o.roles[id];
+      var list = Array.isArray(tabs) ? tabs : [];
+      for (var i = 0; i < list.length; i++) if (list[i] && list[i].id === id) return list[i].role || "";
+      return "";
+    }
+    var descFrom = baseDesc(o.workType, roleOf(from)), descTo = baseDesc(o.workType, roleOf(to));
     var legacy = pov.lines && typeof pov.lines === "object" && !Array.isArray(pov.lines) ? pov.lines : null;
-    if (legacy) {
-      Object.keys(legacy).forEach(function (k) {
-        if (!bound(k)) return;
-        if (typeof legacy[k] === "string") {
-          var m = migrateLine(legacy[k], { others: tabFigures(tabs, k) });
+    var live = pov.lines2 && typeof pov.lines2 === "object" && !Array.isArray(pov.lines2) ? pov.lines2 : null;
+    ["base", "sales_tax", "remodel", "total"].forEach(function (k) {
+      var figs = tabFigures(tabs, k);
+      var hasLive = !!live && typeof live[k] === "string" && !!live[k].trim();
+      var text = hasLive ? live[k] : null;
+      if (legacy && typeof legacy[k] === "string") {
+        if (!hasLive) {
+          var m = migrateLine(legacy[k], { others: figs });
           [["before", m.before], ["after", m.after]].forEach(function (pair) {
             var rows = pair[1];
             if (!rows || !rows.length) return;
@@ -411,18 +455,67 @@
             if (!b || typeof b !== "object" || Array.isArray(b)) b = pov[pair[0]] = {};
             if (!Array.isArray(b[k]) || !b[k].length) b[k] = rows.slice();
           });
+          var main = !m.drop && m.main != null && m.main.trim() ? m.main : null;
+          var at = main && k !== "base" ? amountAt(main) : null;
+          if (at && cents(at.text) === 0) main = null;          // the old sweep's "$0 – Total"
+          text = main;
         }
         delete legacy[k];
         changed = true;
-      });
-    }
-    var live = pov.lines2 && typeof pov.lines2 === "object" && !Array.isArray(pov.lines2) ? pov.lines2 : null;
-    if (live) {
-      Object.keys(live).forEach(function (k) {
-        if (bound(k)) { delete live[k]; changed = true; }
-      });
-    }
+      }
+      if (text == null) return;
+      var next = text;
+      if (next.indexOf(AMOUNT) < 0 && amountIsOneOf(next, figs)) {
+        var am = amountAt(next);
+        next = next.slice(0, am.at) + AMOUNT + next.slice(am.at + am.len);
+      }
+      if (k === "base" && descFrom !== descTo && next.indexOf(descFrom) >= 0) {
+        next = next.split(descFrom).join(descTo);
+      }
+      var canon = k === "base" ? AMOUNT + " – " + descTo + " " + TAX : AMOUNT + " – " + BASE_ROW_WORDS[k];
+      if (next === canon) {
+        if (hasLive) { delete live[k]; changed = true; }
+        return;
+      }
+      if (!hasLive || live[k] !== next) {
+        if (!live) live = pov.lines2 = {};
+        live[k] = next;
+        changed = true;
+      }
+    });
     return changed;
+  }
+
+  /** THE QUESTION a price line with a dollar figure of the estimator's own asks before the document
+   *  leaves, one sentence per line, in Hanz's words: "This line says $X but the estimate says $Y —
+   *  send anyway?" -- or "" when there is none. Hanz, 2026-09-25: warn, then let him send; and
+   *  2026-09-26: the same on all three ways out. `act` is the verb: "send" (Send), "download" (the
+   *  Files page's .docx and PDF buttons), "file" (To Dropbox). `warnings` is the document's own list
+   *  (proposal-review.js priceWarnings, carried on proposal_payload.price_warnings). */
+  function ownFigureQuestion(warnings, act) {
+    var list = Array.isArray(warnings) ? warnings.filter(function (w) { return w && typeof w === "object"; }) : [];
+    if (!list.length) return "";
+    function one(w) {
+      var says = String(w.says || "").trim() || "a figure of its own";
+      var est = String(w.estimate || "").trim();
+      return est ? "This line says " + says + " but the estimate says " + est
+                 : "This line says " + says + ", typed by hand";
+    }
+    var lines = list.slice(0, 6).map(one);
+    if (list.length > 6) lines.push("…and " + (list.length - 6) + " more line(s) like it");
+    return lines.join(".\n") + " — " + (String(act || "").trim() || "send") + " anyway?";
+  }
+
+  /** THE CHECK all three ways out run before they build, file or send anything: ask the question
+   *  when the draft's document has a price line with a figure of his own, and say whether to go on.
+   *  `draft` is the page's copy of the draft (TW.getState(), read at the press); `ask` puts the
+   *  question to him (window.confirm) and is not called when there is nothing to ask. True: nothing
+   *  to ask, or he said OK. False: he cancelled, and the caller does nothing at all. */
+  function confirmOwnFigures(draft, act, ask) {
+    var pp = draft && typeof draft === "object" ? draft.proposal_payload : null;
+    var q = ownFigureQuestion(pp && typeof pp === "object" ? pp.price_warnings : null, act);
+    if (!q) return true;
+    return !!(typeof ask === "function" && ask(q));
   }
 
   return {
@@ -431,6 +524,7 @@
     amountIndex: amountIndex, resolveLine: resolveLine, captureLine: captureLine,
     moneyOff: moneyOff, firstDollar: firstDollar, sameAmountAt: sameAmountAt, migrateLine: migrateLine,
     amountAt: amountAt, amountIsOneOf: amountIsOneOf, priceShaped: priceShaped,
-    usd: usd, tabFigures: tabFigures, forgetBaseLines: forgetBaseLines,
+    usd: usd, tabFigures: tabFigures, baseDesc: baseDesc, applyBasePick: applyBasePick,
+    ownFigureQuestion: ownFigureQuestion, confirmOwnFigures: confirmOwnFigures,
   };
 });

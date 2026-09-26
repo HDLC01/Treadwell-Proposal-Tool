@@ -1360,11 +1360,14 @@ const mentionsY = (x) => /Other Project Y|Y texture|Y scope|Y note/.test(JSON.st
     }
     const press = new (Object.getPrototypeOf(async function () {}).constructor)(
       "TW", "dest", "DBX", "go", "result", "dbxGoDisabled", "ownerValue", "showUploaded",
-      "renderResult", "dbxGoLabel", "esc", "alert", "fetch", DROPBOX.slice(i + marker.length, j));
+      "renderResult", "dbxGoLabel", "esc", "alert", "fetch", "TWPrice", "window",
+      DROPBOX.slice(i + marker.length, j));
     return (d) => press(d.TW, { value: "commercial" }, { choice: "/Estimating/*Kyle/Door Test", error: null },
                         { classList: { add() {}, remove() {} }, disabled: false, textContent: "" },
                         { style: {}, innerHTML: "" }, () => false, () => "Kyle", () => {}, () => {},
-                        () => "", String, () => { throw new Error("alert"); }, d.page.sandbox.fetch);
+                        () => "", String, () => { throw new Error("alert"); }, d.page.sandbox.fetch,
+                        // The page's TWPrice; a question asked here would be a thrown error.
+                        TWPRICE, { confirm: () => { throw new Error("confirm"); } });
   })();
 
   // S2. Findings 2A and 7. Kyle's Files page for X is open and current. RJ revises X on his machine.

@@ -1200,23 +1200,6 @@
     try { box.scrollIntoView({ block: "center", behavior: "smooth" }); } catch {}
     return true;
   }
-  /** What Send asks before a proposal goes out with a price line that prints a dollar figure of
-   *  the estimator's own instead of the estimate's — one sentence per line, in Hanz's words:
-   *  "This line says $X but the estimate says $Y — send anyway?" — or "" when there is none.
-   *  `warnings` is the document's own list (proposal-review.js priceWarnings). */
-  function sendPriceWarning(warnings) {
-    const list = Array.isArray(warnings) ? warnings.filter(w => w && typeof w === "object") : [];
-    if (!list.length) return "";
-    const one = (w) => {
-      const says = String(w.says || "").trim() || "a figure of its own";
-      const est = String(w.estimate || "").trim();
-      return est ? `This line says ${says} but the estimate says ${est}`
-                 : `This line says ${says}, typed by hand`;
-    };
-    const lines = list.slice(0, 6).map(one);
-    if (list.length > 6) lines.push(`…and ${list.length - 6} more line(s) like it`);
-    return lines.join(".\n") + " — send anyway?";
-  }
   function showStaleDoc(rows, mode) {
     const box = document.getElementById("stale-doc");
     if (!box) return;
@@ -1350,6 +1333,12 @@
       .slice(0, 60);
 
     async function downloadAs(urlKey, filename, button) {
+      // A PRICE LINE WITH A FIGURE OF HIS OWN: the question Send asks, asked BEFORE anything is
+      // built or fetched (Hanz, 2026-09-26: warn on all three -- Send, Download, To Dropbox). One
+      // check, TWPrice.confirmOwnFigures, over the document's own list. Cancel does nothing at
+      // all. The estimate sheet carries no price line, so its button is not asked.
+      if (urlKey !== "xlsx_download_url"
+          && !TWPrice.confirmOwnFigures(TW.getState(), "download", (q) => window.confirm(q))) return;
       const orig = button.textContent;
       button.disabled = true;
       button.textContent = "Downloading…";
@@ -1641,8 +1630,8 @@
           // estimate unless the estimator typed a DIFFERENT dollar figure into it; the Proposal
           // step marks those lines, and the document it built lists them (price_warnings, read
           // off the same flushed blob the publish is about to freeze). Cancel sends nothing.
-          const _warn = sendPriceWarning(((TW.getState() || {}).proposal_payload || {}).price_warnings);
-          if (_warn && !window.confirm(_warn)) {
+          // THE ONE CHECK (TWPrice.confirmOwnFigures) that Download and To Dropbox ask too.
+          if (!TWPrice.confirmOwnFigures(TW.getState(), "send", (q) => window.confirm(q))) {
             portalBtn.disabled = false; portalBtn.textContent = orig;
             if (portalRecip.setBusy) portalRecip.setBusy(false);
             return;                            // NOTHING is posted. No portal row, no email.

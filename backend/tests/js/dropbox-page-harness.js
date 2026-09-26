@@ -26,6 +26,9 @@ const path = require("path");
 const ROOT = path.resolve(process.argv[2]);
 const SRC = fs.readFileSync(path.join(ROOT, "js", "dropbox.js"), "utf8")
   .replace(/\r\n/g, "\n");
+// The price rule's page half, as done.html loads it before this file: the one question Send,
+// Download and To Dropbox ask about a price line with a figure of his own (confirmOwnFigures).
+const TWPRICE = require(path.join(ROOT, "js", "price-lines-core.js"));
 
 // ── DOM stub ────────────────────────────────────────────────────────────────
 // Rows are built as an innerHTML string and then queried, so the radios the
@@ -191,9 +194,12 @@ function build(opts) {
 
   const stored = [];
   const saved = [];      // TW.setState: this browser's copy AND a PUT of the whole blob
+  // The draft's document as it stands NOW: a scenario can change it after the page has loaded.
+  const live = { payload: o.payload };
   const TW = {
     getState: () => ({ project_name: "Fuel House", work_type: "gyp",
                        cell_values: { E20: 4200 },
+                       proposal_payload: live.payload,
                        dropbox_result: o.prevResult || undefined }),
     setLocalState: (patch) => stored.push(patch),
     setState: (patch) => { saved.push(patch); stored.push(patch); },
@@ -202,13 +208,16 @@ function build(opts) {
     resolveApiBase: () => "",
   };
 
-  const run = new Function("document", "TW", "fetch", "alert", "CSS", SRC);
+  // The page's window.confirm: every question asked, answered with `confirm.answer`.
+  const confirm = { asked: [], answer: false };
+  const windowStub = { confirm: (q) => { confirm.asked.push(q); return confirm.answer; } };
+  const run = new Function("document", "TW", "fetch", "alert", "CSS", "TWPrice", "window", SRC);
   run({ getElementById: (id) => nodes[id] || null }, TW, fetchStub,
       () => { throw new Error("alert() — no draft id"); },
-      { escape: (s) => String(s) });
+      { escape: (s) => String(s) }, TWPRICE, windowStub);
 
   return {
-    nodes, posts, stored, saved,
+    nodes, posts, stored, saved, live, confirm,
     snap: () => {
       const radios = nodes["dbx-folders"].querySelectorAll(".dbx-radio");
       return {
@@ -305,6 +314,40 @@ async function main() {
   await drain();
   out.revisitAfterList = v.snap();
   out.revisitPosts = v.posts.length;
+
+  // ═══ a price line with a figure of his own ════════════════════════════
+  // Hanz, 2026-09-26: warn on all three. The page loads on a document with no such line; by
+  // the press the draft's document has one (the Proposal step's Continue in another tab), so
+  // the question is asked of the draft as it stands AT THE PRESS. Cancel files nothing and
+  // leaves the button and the result as they were; OK files exactly as a press always has.
+  const w = build({ folderResponses: {
+    gyp: { ok: true, folders: GYP_FOLDERS, suggested_new_name: "26.08.20 Fuel House" } } });
+  await drain();
+  w.nodes["dbx-dest"].value = "gyp";
+  w.nodes["dbx-dest"].fire("change");
+  await drain();
+  const armedLabel = w.nodes["dbx-go"].textContent;
+  w.live.payload = { values: {}, price_warnings: [{ key: "base", says: "$15,000", estimate: "$9,860" }] };
+  w.nodes["dbx-go"].fire("click");
+  await drain();
+  out.ownFigureCancel = { asked: w.confirm.asked.slice(), posts: w.posts.length, stored: w.stored.length,
+                          go: { disabled: w.nodes["dbx-go"].disabled, label: w.nodes["dbx-go"].textContent },
+                          armedLabel, resultShown: w.nodes["dbx-result"].style.display || "" };
+  w.confirm.answer = true;
+  w.nodes["dbx-go"].fire("click");
+  await drain();
+  out.ownFigureOk = { asked: w.confirm.asked.slice(), posts: w.posts.length,
+                      body: w.posts[0] || null };
+  // No such line: no question at all, and the filing goes.
+  const c = build({ payload: { values: {} }, folderResponses: {
+    gyp: { ok: true, folders: GYP_FOLDERS, suggested_new_name: "26.08.20 Fuel House" } } });
+  await drain();
+  c.nodes["dbx-dest"].value = "gyp";
+  c.nodes["dbx-dest"].fire("change");
+  await drain();
+  c.nodes["dbx-go"].fire("click");
+  await drain();
+  out.ownFigureClean = { asked: c.confirm.asked.slice(), posts: c.posts.length };
 
   console.log(JSON.stringify(out));
 }

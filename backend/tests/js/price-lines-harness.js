@@ -17,10 +17,11 @@
  *     a hidden, never-painted row is not an edit.
  *   * the Enter and Backspace/Delete handlers, lifted whole — Enter at the end of a price line makes
  *     a new line of its own below it; Backspace takes an empty one away.
- *   * priceWarnings + done.js sendPriceWarning — what Send asks.
+ *   * priceWarnings + TWPrice.confirmOwnFigures — what Send (and Download and To Dropbox) ask.
  *   * the two base-bid pickers (2026-09-26, "the base bid was not updating"): the Estimate step's
  *     wireBidBar change handler and savers, lifted out of estimate-review.js, and the Proposal
- *     step's sidebar radios (drawn and wired by renderProposalExtras) over its real rebuildPricing.
+ *     step's sidebar radios (drawn and wired by renderProposalExtras) over its real rebuildPricing,
+ *     and what they keep of his words (Hanz, 2026-09-26: keep the words).
  *
  * THE DOM IS A SHIM, the same one editor-paste-and-save-harness.js uses (a full DOM lets a missing
  * binding hide behind a stub), extended with the sibling operations the typed lines need.
@@ -32,7 +33,6 @@ const path = require("path");
 
 const FRONTEND = process.argv[2];
 const SRC = fs.readFileSync(path.join(FRONTEND, "js", "proposal-review.js"), "utf8").replace(/\r\n/g, "\n");
-const DONE = fs.readFileSync(path.join(FRONTEND, "js", "done.js"), "utf8").replace(/\r\n/g, "\n");
 const F = require(path.join(FRONTEND, "js", "proposal-format-core.js"));
 globalThis.TWPrice = require(path.join(FRONTEND, "js", "price-lines-core.js"));
 
@@ -282,8 +282,9 @@ function erLift(name, deps) {
  *  `cellValues` the copy the page edits (`edits`: cells changed this visit). The pricing snapshot
  *  is the one thing counted rather than run: it needs the whole sheet engine, and what the Proposal
  *  step prices from on its way in is its own rebuildPricing over priced_tabs, which runs for real.
+ *  `pageTabs` is the page's own tab list (`tabs`: id, role, kind); by default the priced tabs.
  *  Returns the draft as the Proposal step then reads it: the saves merged in order. */
-function estimatePick(draft, pick, edits) {
+function estimatePick(draft, pick, edits, pageTabs) {
   const state = JSON.parse(JSON.stringify(draft));
   const cellValues = Object.assign({}, state.cell_values || {}, edits || {});
   const sets = [];
@@ -292,6 +293,7 @@ function estimatePick(draft, pick, edits) {
   const list = { addEventListener: (type, f) => { listeners[type] = f; } };
   const deps = {
     state, cellValues, TWPrice: globalThis.TWPrice, HF: { ready: true },
+    tabs: pageTabs || (state.priced_tabs || []).map((t) => ({ id: t.id, role: t.role, kind: t.kind })),
     TW: { setState: (o) => { sets.push(JSON.parse(JSON.stringify(o))); } },
     document: { getElementById: (id) => (id === "bid-options-list" ? list : null) },
     renderBidOptions: () => {}, updateTotalBarFromHF: () => {},
@@ -308,7 +310,6 @@ function estimatePick(draft, pick, edits) {
 }
 const ENTER = handlerAround("// A PRICE line (or a line typed next to one): a new line of its own");
 const BACKSPACE = handlerAround("const back = e.key === \"Backspace\", fwd = e.key === \"Delete\";");
-const SEND_WARNING = fnIn(DONE, "sendPriceWarning", "done.js");
 
 /** One page, one draft. `st` is the draft; the page's own functions run against it. */
 function build(st, opts) {
@@ -358,9 +359,8 @@ function build(st, opts) {
     "docSurface.addEventListener('keydown', " + BACKSPACE + ");",
     // The box sweep, as the page's delegated input handler runs it on the box.
     "docSurface.addEventListener('input', (e) => { const b = editingBox(e.target); if (b) syncPriceLinesIn(b); });",
-    SEND_WARNING,
-    "return { refreshPriceDisplay, syncPriceLinesIn, computeTokenValues, priceWarnings, sendPriceWarning, serializeBlock,",
-    "         rebuildPricing, effectiveWorkType, renderProposalExtras };",
+    "return { refreshPriceDisplay, syncPriceLinesIn, computeTokenValues, priceWarnings, serializeBlock,",
+    "         rebuildPricing, effectiveWorkType, renderProposalExtras, baseDescLabel };",
   ].join("\n");
   const clone = (x) => (x === undefined ? undefined : JSON.parse(JSON.stringify(x)));
   const api = new Function("state", "document", "window", "form", "TW", "templateBlocks", "docSurface",
@@ -450,7 +450,10 @@ const out = {};
   out.handTyped = { stored: st.price_overrides.lines2.base, shown: base.textContent,
                     cls: base.className, title: base.title,
                     warnings: api.priceWarnings().map((w) => ({ key: w.key, says: w.says, estimate: w.estimate })) };
-  out.handTyped.ask = api.sendPriceWarning(api.priceWarnings());
+  // What Send asks, through the one check all three ways out run (TWPrice.confirmOwnFigures),
+  // over the document's own list as Continue carries it (proposal_payload.price_warnings).
+  TWPrice.confirmOwnFigures({ proposal_payload: { price_warnings: api.priceWarnings() } }, "send",
+                            (q) => { out.handTyped.ask = q; return false; });
 }
 
 // 3. ONE KEYSTROKE IN THE BOX DOES NOT FREEZE ROWS NOBODY TOUCHED. One line: the tax rows and the
@@ -562,8 +565,9 @@ const HF_TABS = [
     taxable: true, remodel_on: true, system_desc: "Polished Concrete, 800 grit", notes_auto: [] },
 ];
 const clone = (x) => JSON.parse(JSON.stringify(x));
+const markOf = (cls) => (/tw-money-off/.test(cls) ? "money" : /tw-po-live/.test(cls) ? "live" : "");
 const priceRows = (api) => api.lines().filter((l) => ["base", "sales_tax", "remodel", "total"].includes(l.key))
-  .map((l) => ({ key: l.key, kind: l.kind, text: l.text, cue: /tw-overridden/.test(l.cls) }));
+  .map((l) => ({ key: l.key, kind: l.kind, text: l.text, cue: /tw-overridden/.test(l.cls), mark: markOf(l.cls) }));
 /** What Continue hands /api/generate for the price box: the page's own token values, its rooms, the
  *  draft's price edits (proposal-review.js's composer builds it the same way). */
 function docPayload(st, api) {
@@ -593,7 +597,7 @@ function sidebarPick(p, id) {
 }
 const snap = (p) => ({ base_tab_id: p.st.base_tab_id, lump: p.st.proposal_lump_sum, rows: priceRows(p.api),
                        pov: clone(p.st.price_overrides || {}), doc: docPayload(p.st, p.api),
-                       warnings: p.api.priceWarnings().map((w) => ({ key: w.key, says: w.says })) });
+                       warnings: p.api.priceWarnings().map((w) => ({ key: w.key, says: w.says, estimate: w.estimate })) });
 
 // 8. A LINE FROZEN AT THE OLD BASE'S FIGURE, as Hanz Fix held it the moment the base moved: the base
 //    is Epoxy copy at $15,149, the base line saved (before the live shape) with Epoxy's $7,447 and
@@ -634,12 +638,17 @@ const snap = (p) => ({ base_tab_id: p.st.base_tab_id, lump: p.st.proposal_lump_s
 }
 
 // 9. BASE PICKS BOTH WAYS, on both pickers, the Proposal step reading what the Estimate step saved
-//    and the other way round. The draft starts where Hanz's did: base Epoxy, the base line holding a
-//    figure of his own under the words it had, the sweep's frozen tax rows, an option line saved
-//    with lines typed inside it -- and the things no base pick may touch: a manual price line he
-//    re-worded, a line typed on the gap above "Options:", a total-priced option he re-worded, the
-//    note he typed under the base line.
+//    and the other way round. Hanz, 2026-09-26: KEEP THE WORDS -- a base line he re-worded keeps
+//    his words through a pick; its amount, its words for the tab's system and its tax wording are
+//    the new base's. The draft starts on base Epoxy with the base line re-worded ("…, warehouse
+//    only", its amount and tax wording live) and the Total re-worded ("Total, all in"), the sweep's
+//    Material Sales Tax row frozen at Epoxy's figure and a phantom "$0 – Remodel Tax", both in the
+//    old shape, an option line saved with lines typed inside it -- and the things no base pick
+//    touches: a manual price line he re-worded, a line typed on the gap above "Options:", a
+//    total-priced option he re-worded, the note he typed under the base line.
+const OPT_COPY1_LEGACY = "\n\n$15,149 – Treadwell 3/16\" Urethne Cement With Shop Floor as described above (material sales tax INCLUDED)\nTest again 123";
 function basePickFlow(layout) {
+  const broken = layout === "BROKEN_OUT";
   const draft = hanzFix({
     base_tab_id: "Epoxy", proposal_lump_sum: 7447, proposal_sales_tax: 96, proposal_remodel_tax: 0,
     priced_tabs: clone(HF_TABS), rooms: [],
@@ -649,11 +658,12 @@ function basePickFlow(layout) {
     cell_values: { "Epoxy!E20": 2000 },
     price_overrides: {
       lines: {
-        sales_tax: "$96 – Material Sales Tax", total: "$7,447 – Total",
-        "option:Copy1": "\n\n$15,149 – Treadwell 3/16\" Urethne Cement With Shop Floor as described above (material sales tax INCLUDED)\nTest again 123",
+        sales_tax: "$96 – Material Sales Tax", remodel: "$0 – Remodel Tax",
+        "option:Copy1": OPT_COPY1_LEGACY,
       },
       lines2: {
-        base: "$7,500 – Epoxy flooring as described above " + TWPrice.TAX,
+        base: TWPrice.AMOUNT + " – Epoxy flooring as described above, warehouse only " + TWPrice.TAX,
+        total: TWPrice.AMOUNT + " – Total, all in",
         "manual:0": TWPrice.AMOUNT + " – Joint filler, per plan",
         "option:Polish": TWPrice.AMOUNT + " – Polished Concrete, 800 grit, warehouse only " + TWPrice.TAX,
       },
@@ -661,36 +671,70 @@ function basePickFlow(layout) {
       before: { heading_options: ["TEST123"] },
     },
   }, {});
-  if (layout === "BROKEN_OUT") draft.tax_layout = "BROKEN_OUT";
+  if (broken) draft.tax_layout = "BROKEN_OUT";
   const flow = {};
   // (1) ESTIMATE STEP: Epoxy -> Epoxy copy, with a cell edited this visit.
   const e1 = estimatePick(draft, "Copy1", { "Epoxy!E20": 2400 });
   flow.estimate1 = { base: e1.saved.base_tab_id, snapshots: e1.snapshots,
                      cellValues: e1.saved.cell_values, pov: clone(e1.saved.price_overrides) };
-  // (2) the Proposal step opens it.
+  // (2) the Proposal step opens it; he types a figure of his own over the base line's amount.
   const p2 = openProposal(e1.saved);
   flow.proposal2 = snap(p2);
-  // He types a figure of his own into the base line there.
   const base = p2.api.pg.ids["base-bid-row"];
   p2.api.type(base, base.textContent.replace(/^\$[\d,]+/, "$15,000"));
   flow.proposal2.typed = clone(p2.st.price_overrides.lines2 || {}).base || null;
-  // (3) PROPOSAL SIDEBAR: Epoxy copy -> Polish, another work type (the description changes too),
-  //     and he leaves by a step pill: what the page saved is what the next visit reads.
+  // (3) PROPOSAL SIDEBAR: Epoxy copy -> Polish, another work type (the words for the system change
+  //     too), and he leaves by a step pill: what the page saved is what the next visit reads.
   const left3 = sidebarPick(p2, "Polish");
   flow.sidebar3 = Object.assign(snap(p2), { reloads: p2.api.reloads.length,
     savedPov: clone(left3.price_overrides || {}) });
   const p3 = openProposal(left3);
   flow.revisit3 = snap(p3);
-  // (4) PROPOSAL SIDEBAR again: Polish -> Epoxy.
-  const left4 = sidebarPick(p3, "Epoxy");
+  // (4) PROPOSAL SIDEBAR again: Polish -> Epoxy. Then he types the COPY's own figure into the base
+  //     line: under Epoxy it is a figure of his own.
+  sidebarPick(p3, "Epoxy");
   flow.sidebar4 = snap(p3);
-  // (5) ESTIMATE STEP again, on what the Proposal step saved: Epoxy -> Epoxy copy.
+  const b4 = p3.api.pg.ids["base-bid-row"];
+  p3.api.type(b4, b4.textContent.replace(/^\$[\d,]+/, broken ? "$14,954" : "$15,149"));
+  flow.typed4 = snap(p3);
+  const left4 = p3.api.saved(p3.draft);
+  // (5) ESTIMATE STEP again, on what the Proposal step saved: Epoxy -> Epoxy copy. His figure is
+  //     now the one a tab prices the line at, so it is the tool's again: the live amount.
   const e5 = estimatePick(left4, "Copy1");
+  flow.estimate5pov = clone(e5.saved.price_overrides.lines2 || {});
   const p5 = openProposal(e5.saved);
   flow.estimate5 = snap(p5);
   return flow;
 }
 out.basePick = { ONE_LINE: basePickFlow("ONE_LINE"), BROKEN_OUT: basePickFlow("BROKEN_OUT") };
+
+// 9b. THE SIDEBAR'S PICK IS SAVED. The only thing it changes here is the base line's words for the
+//     system (Epoxy copy -> Polish), and rebuildPricing's save carries the base and the money, not
+//     the price edits: without its own save, leaving by a step pill put the Epoxy words back under
+//     the Polish base.
+{
+  const draft = hanzFix({ base_tab_id: "Copy1", proposal_lump_sum: 15149, proposal_sales_tax: 195,
+    priced_tabs: clone(HF_TABS), rooms: [], tab_opts: {},
+    price_overrides: { lines2: {
+      base: TWPrice.AMOUNT + " – Epoxy flooring as described above, warehouse only " + TWPrice.TAX } } });
+  const p = openProposal(draft);
+  const left = sidebarPick(p, "Polish");
+  const again = openProposal(left);
+  out.sidebarSave = { saved: clone((left.price_overrides || {}).lines2 || {}), rows: priceRows(again.api) };
+}
+
+// 9c. A COPY MADE A MOMENT AGO AND PICKED AT ONCE on the Estimate step: priced_tabs does not hold it
+//     yet (this pick is what prices it), so its role comes from the page's own tab list. A Polish
+//     copy on an epoxy job: the base line's words for the system become the Polish ones.
+{
+  const draft = hanzFix({ base_tab_id: "Epoxy", priced_tabs: clone(HF_TABS), rooms: [], tab_opts: {},
+    price_overrides: { lines2: {
+      base: TWPrice.AMOUNT + " – Epoxy flooring as described above, warehouse only " + TWPrice.TAX } } });
+  const pageTabs = HF_TABS.map((t) => ({ id: t.id, role: t.role, kind: t.kind }))
+    .concat([{ id: "Copy2", role: "polish", kind: "copy" }]);
+  const e = estimatePick(draft, "Copy2", null, pageTabs);
+  out.newCopyPick = { base: e.saved.base_tab_id, lines2: clone(e.saved.price_overrides.lines2 || {}) };
+}
 
 /** The base line as the Proposal step draws it: every row keyed "base", in order, with its cue. */
 const baseRows = (api) => api.lines().filter((l) => l.key === "base")
@@ -766,18 +810,18 @@ function pickedThenOpened(draft, pick) {
 
 // 12. DELETING THE BASE COPY changes the base too, to the one the sheet derives: the Estimate step's
 //     real deleteTab (and the real resolveBaseTab it asks), then the Proposal step opens the draft.
-function deleteBaseCopy(baseLine) {
+function deleteBaseCopy(baseLine, legacyBase) {
   const draft = hanzFix({ base_tab_id: "Copy1", proposal_lump_sum: 15149, proposal_sales_tax: 195,
     priced_tabs: clone(HF_TABS), rooms: [], tab_copies: [{ id: "Copy1", role: "epoxy", source: "Epoxy" }],
     tab_labels: { Copy1: "Epoxy copy" }, tab_notes: {}, lock_overrides: {},
     tab_opts: { Copy1: {}, Polish: { is_option: true, show: true, price_mode: "total" } },
     price_lines: [{ label: "Joint filler", amount: 1500 }],
-    price_overrides: {
-      lines2: { base: baseLine, "manual:0": TWPrice.AMOUNT + " – Joint filler, per plan",
+    price_overrides: Object.assign({
+      lines2: Object.assign(baseLine ? { base: baseLine } : {}, {
+                "manual:0": TWPrice.AMOUNT + " – Joint filler, per plan",
                 "option:Polish": TWPrice.AMOUNT + " – Polished Concrete, 800 grit, warehouse only " + TWPrice.TAX,
-                "option:Epoxy": TWPrice.AMOUNT + " – Epoxy as an option " + TWPrice.TAX },
-      after: { base: NOTE_UNDER_BASE.slice() },
-    } });
+                "option:Epoxy": TWPrice.AMOUNT + " – Epoxy as an option " + TWPrice.TAX }),
+    }, legacyBase ? { lines: { base: legacyBase } } : { after: { base: NOTE_UNDER_BASE.slice() } }) });
   const state = clone(draft);
   const sets = [];
   const src = (re, what) => { const m = re.exec(ER); if (!m) throw new Error(what + " is gone from estimate-review.js"); return m[0]; };
@@ -812,10 +856,26 @@ function deleteBaseCopy(baseLine) {
 }
 const NOTE_UNDER_BASE = ["", "THis is a test send to Hanz"];
 
+// 13. THE WORDS FOR THE TAB'S SYSTEM, both halves: the page's baseDescLabel (through its own
+//     effectiveWorkType) and TWPrice.baseDesc, which the base-pick rule applies on either page.
+{
+  const rows = [];
+  for (const wt of ["epoxy", "polish", "combo", "gyp", "sealer"]) {
+    for (const role of ["epoxy", "polish", "gyp", "seal", ""]) {
+      const st = hanzFix({ work_type: wt, base_tab_id: role ? "T" : null,
+                           priced_tabs: role ? [{ id: "T", role }] : [] });
+      rows.push({ wt, role, page: build(st).baseDescLabel(), core: TWPrice.baseDesc(wt, role) });
+    }
+  }
+  out.baseDesc = rows;
+}
+
 Promise.all([
   deleteBaseCopy("$15,000 – Epoxy flooring as described above " + TWPrice.TAX),
   deleteBaseCopy(TWPrice.AMOUNT + " – Epoxy flooring, whole building incl. mezzanine " + TWPrice.TAX),
-]).then(([money, words]) => {
-  out.deleteBase = { money, words };
+  // In the old shape, frozen at the COPY's figure, the note typed under it inside it.
+  deleteBaseCopy(null, "$15,149 – Epoxy flooring as described above (material sales tax INCLUDED)\n\nTHis is a test send to Hanz"),
+]).then(([money, words, frozen]) => {
+  out.deleteBase = { money, words, frozen };
   console.log(JSON.stringify(out));
 });

@@ -15,7 +15,7 @@ const fs = require("fs");
 const path = require("path");
 
 const SRC = fs.readFileSync(path.join(process.argv[2], "js", "estimate-review.js"), "utf8");
-// The price rule the base radio applies to the Proposal step's saved edits (TWPrice.forgetBaseLines),
+// The price rule the base radio applies to the Proposal step's saved edits (TWPrice.applyBasePick),
 // the real one: the page loads it before estimate-review.js.
 const TWPrice = require(path.join(process.argv[2], "js", "price-lines-core.js"));
 const NL = String.fromCharCode(10);
