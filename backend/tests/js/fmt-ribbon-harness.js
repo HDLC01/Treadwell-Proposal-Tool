@@ -56,6 +56,9 @@ const FRONTEND = process.argv[2];
 const SRC = fs.readFileSync(path.join(FRONTEND, "js", "proposal-review.js"), "utf8")
   .replace(/\r\n/g, "\n");
 const F = require(path.join(FRONTEND, "js", "proposal-format-core.js"));
+// The price rule's page half, as the page loads it before proposal-review.js: a PRICE-list row's
+// indent steps between the square and the "o" through TWPrice.paraStep.
+globalThis.TWPrice = require(path.join(FRONTEND, "js", "price-lines-core.js"));
 
 // ── lifting the real source ──────────────────────────────────────────────────
 function fn(name) {
@@ -460,6 +463,12 @@ const LIFTED = [
   // so a stub would leave the indent arithmetic (bullet at left-hanging) untested.
   fn("applyParaGeom"),
   fn("applyParaToEl"), fn("setParaState"), fn("paraAction"),
+  // A PRICE LINE is a ribbon target too (the REBID price box): paraAction and renderFmtBar branch
+  // on isPriceLine, and paraAction hands such a line to priceLineAction.
+  fn("isPriceLine"), fn("priceLineAction"),
+  // ...and a TEMPLATE row in the price box takes the price step (paraAction, applyParaToEl,
+  // paraPatch and renderFmtBar all ask it).
+  fn("takesPriceStep"),
   // The ribbon itself. fmtTargetBlock / markFmtTarget / renderFmtBar are what showFmtBar became
   // when it stopped floating; leaving any of them out is not a lift-time failure but a
   // ReferenceError on the first focusin, which is every case below.
@@ -470,7 +479,7 @@ const LIFTED = [
   // contenteditable fires its editing events at the host -- so leaving any of these out is not a
   // lift-time failure, it is the whole region silently doing nothing.
   topConst("LINE_SEL"),
-  fn("boxLines"), fn("lineAt"), fn("lineAtSelection"), fn("lineTarget"), fn("editingBox"),
+  fn("boxLines"), fn("lineShown"), fn("lineAt"), fn("lineAtSelection"), fn("lineTarget"), fn("editingBox"),
   fn("clearBoxLine"), fn("paintBoxSel"), fn("clearBoxSel"),
   // THE NATIVE RANGE, LIFTED RATHER THAN RECORDED. It used to be stubbed here — the stub wrote
   // down which line ids the widen asked for — and that is exactly why a real bug lived in it
@@ -486,6 +495,12 @@ const LIFTED = [
   // The real splice. This is the function that keeps a multi-line edit from merging two Word
   // paragraphs into one, so a harness that imitated it would be testing the imitation.
   fn("spliceLines"),
+  // spliceLines, the box-wide delete and Backspace on an empty line take lines OUT now (Word's
+  // delete). The removal family is lifted whole: which lines may go is the template record's call
+  // (blockById, fit.removable), so a scenario says so by registering one.
+  fn("serializeBlock"),
+  fn("lineIsEmpty"), fn("lineRemovable"), fn("removeLine"), fn("unremoveLine"),
+  fn("removedBlockIds"), fn("adjacentLine"), fn("caretToLine"), fn("removeLineAt"),
   // The marker arithmetic, on its own. selectionLines can only run against a live browser Range,
   // so it is stubbed below -- which would leave the one purely arithmetic part of the change, and
   // the part where two real off-by-ones already lived, as the part nothing executes.
@@ -519,6 +534,10 @@ const api = new Function(
   let lastSelectAll = null;
   const blockById = new Map();      // id -> the template's block record
   const paraById = new Map();       // the page's own store, see proposal-review.js
+  // removeLineAt opens its own undo step. The stack is editor-undo-harness.js's world; the units
+  // are recorded so a test can see a removal asked for one.
+  const undoUnits = [];
+  const undoPush = (unit) => { undoUnits.push(String(unit)); return true; };
   const schedulePersistOverrides = () => { persisted.push(1); };
   const scheduleRepaginate = () => { repaginated.push(1); };
   // Modelled, not lifted — see the header. The CONTRACT is what matters: offsets when the

@@ -24,7 +24,9 @@ def test_proposal_base_picker_has_no_noncombo_auto_default():
 
     assert "Auto (work-type default)" not in js
     assert "wt === \"combo\" ? `<label class=\"pr-baserow\"" in js
-    assert "pov.single_bid = {}" in js
+    # A base pick applies the rule both pickers share to the old base's price edits (executed in
+    # test_base_pick_follows.py; single_bid is one of the buckets it empties).
+    assert "TWPrice.applyBasePick(pov, priorBaseId, state.base_tab_id, state.priced_tabs," in js
 
 
 def test_broken_out_tax_preview_uses_current_total_and_total_label():

@@ -606,10 +606,11 @@ def test_typing_in_notes_leaves_another_boxs_expanded_state_alone(ran):
     bullet re-ran the shrink ladder on WORK and PRICE and folded shut any box the estimator had
     expanded to read. Only the notes box's content changed, so only the notes box is re-measured.
 
-    The WORK box here is genuinely over capacity (400pt of content in Kyle's 171pt box) and
-    genuinely expanded through its own button, so there is something real to destroy."""
+    The WORK box here is genuinely over capacity (400pt of content in Kyle's 171pt box). Boxes are
+    not expanded any more (nothing is clipped since 2026-09-26), so the fixture marks WORK with an
+    inline z-index that only a re-fit would clear."""
     got = ran["notesRefitScope"]
-    assert got["before"]["open"] is True, "the fixture never expanded the other box"
+    assert got["before"]["zIndex"] == "30", "the fixture never marked the other box"
     assert got["after"] == got["before"], (
         "typing in a notes bullet changed another box: %r -> %r" % (got["before"], got["after"]))
     assert got["notesFitted"], "the notes box itself was not re-measured, which is the point of it"
@@ -829,10 +830,9 @@ def test_a_box_with_nowhere_to_go_still_clips_and_says_so(ran):
 
 
 def test_the_blocked_badge_is_on_screen_and_not_only_in_a_tooltip():
-    """A tooltip is not a warning if nobody hovers. The clipped-and-cannot-grow badge is its own
-    CSS rule, more specific than the generic one so it wins wherever they are written, and it
-    stands down while the box is expanded (that state has its own message)."""
-    sel = r"\.tw-txbx\.tw-notes-overflow\.tw-grow-blocked:not\(\.tw-notes-open\)::after"
+    """A tooltip is not a warning if nobody hovers. The too-long-and-cannot-grow badge is its own
+    CSS rule, more specific than the generic one so it wins wherever they are written."""
+    sel = r"\.tw-txbx\.tw-notes-overflow\.tw-grow-blocked::after"
     m = re.search(r"(?m)^" + sel + r"\s*\{([^}]*)\}", CSS)
     assert m, "the grow-blocked badge has no top-level rule in styles.css"
     assert "cannot grow" in m.group(1)
@@ -889,14 +889,13 @@ def test_reset_box_stays_reset(ran):
     assert got["grown"]["boxHPt"] == "170.25"
     assert got["reset"]["boxHPt"] == "164.5"
     assert got["afterRefit"]["boxHPt"] == "164.5", "the box re-grew itself after Reset"
-    # And the text is still handled honestly at that size rather than silently spilling: 170pt of
-    # content in a 164.5pt box is only 3% over, so fitTxbx's first step — stepping the type down —
-    # absorbs it, which is exactly what it is for. (The older version of this test asserted the
-    # overflow BADGE instead, using a box 36% over capacity where shrinking cannot save it. That
-    # box was NOTES, which is now correctly refused growth altogether, so the scenario moved to
-    # PRICE and the observable moved with it.)
-    assert got["afterRefit"]["fontSize"] == "95%", (
-        "reset to a size its text does not fit, and neither shrank the type nor warned")
+    # And the text is still handled honestly at that size: 170pt of content in a 164.5pt box is
+    # marked as running past the box, which is what the document prints. The page no longer
+    # shrinks the type by a browser ladder of its own (2026-09-26): the size a box prints at is the
+    # writer's answer (POST /api/proposal-fit), and this harness asks no server, so none arrives.
+    assert got["afterRefit"]["overflow"] is True, (
+        "reset to a size its text does not fit, and nothing said so")
+    assert got["afterRefit"]["fontSize"] == "", "a browser-side shrink is back on the box"
     assert got["payload"] == {}
 
 # ══ the editor's geometry against the template's own numbers ══════════════════

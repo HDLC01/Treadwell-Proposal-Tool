@@ -63,7 +63,7 @@ def test_every_external_script_is_deferred(page):
     ("estimate-review.html", [
         "hyperformula", "/js/xl-excel-rounding.js", "supabase-js", "/js/icons.js",
         "/auth.js", "/shared.js", "/js/tab-memo.js", "/js/crm-core.js",
-        "/js/estimate-review.js",
+        "/js/price-lines-core.js", "/js/estimate-review.js",
     ]),
     ("info-sheet.html", [
         "hyperformula", "/js/xl-excel-rounding.js", "supabase-js", "/shared.js",
@@ -77,7 +77,8 @@ def test_the_script_order_is_the_one_every_file_assumes(page, expected):
     at load and refuses loudly if the global is absent) and must precede anything that builds an
     engine, because registration is global and one-time. supabase-js must precede auth.js, which
     mints no token without it. crm-core must precede the page's own script, which reads
-    window.TWCrm as it runs.
+    window.TWCrm as it runs, and so must price-lines-core (window.TWPrice), whose base-pick rule
+    the bid strip applies.
     """
     got = [src for src, _ in scripts(page)]
     assert len(got) == len(expected), (page, got)

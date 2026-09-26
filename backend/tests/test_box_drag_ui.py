@@ -254,13 +254,14 @@ def test_only_the_axes_that_changed_are_sent(ran):
 
 # ── the two existing behaviours a new gesture could break ────────────────────
 def test_enlarging_a_box_stands_the_overflow_notice_down(ran):
-    """THE point of the feature. Today a long WORK scope shrinks its own font and then gets
-    clipped with a "Too long for this box" badge; the estimator's actual fix is a taller box, and
-    the badge has to notice. fitTxbx reads the height out of dataset.boxHPt, which applyBoxGeom
-    writes, so the notice follows the drag without either knowing about the other."""
+    """THE point of the feature. A long WORK scope is marked "longer than this box"; the
+    estimator's actual fix is a taller box, and the marker has to notice. fitTxbx reads the height
+    out of dataset.boxHPt, which applyBoxGeom writes, so the notice follows the drag without either
+    knowing about the other. Never CLIPPED, before the drag or after it (2026-09-26): the writer
+    prints the lines that do not fit past the box's bottom edge, so the page shows them too."""
     assert ran["overflow"]["atDesign"]["marked"] is True, (
         "the fixture's content already fits the design box, so this proves nothing")
-    assert ran["overflow"]["atDesign"]["clipped"], "fitTxbx did not clip at the design height"
+    assert ran["overflow"]["atDesign"]["clipped"] == "", "an over-long box was clipped"
     assert ran["overflow"]["afterGrow"]["marked"] is False, (
         "the box was made taller than its content and still claims the text is cut off")
     assert ran["overflow"]["afterGrow"]["clipped"] == "", "the clip survived the resize"
@@ -275,20 +276,16 @@ def test_releasing_a_grip_does_not_open_the_overflow_peek(ran):
     assert ran["peek"]["resetClickOpened"] is False
 
 
-def test_the_overflow_peek_still_works_but_only_from_its_own_button(ran):
-    """The guard above must skip the grips, not disable the feature — and since 2026-08-26 the
-    feature is a labelled control rather than a click on the box.
-
-    A click on the box body opened it until then, guarded by "unless the click landed on a line",
-    which meant the padding, the gaps between paragraphs and the strip under the last one all
-    expanded the box. Those are the pixels a Word user clicks to start typing (Hanz: "Editing from
-    one text box to another is a bit clunky"), so they now land a caret and the peek is "Show
-    all", beside Collapse in the tools layer."""
+def test_a_click_on_the_box_body_expands_nothing_and_there_is_no_peek(ran):
+    """A click on the box body lands a caret (Hanz, 2026-08-26: "Editing from one text box to
+    another is a bit clunky"), and since 2026-09-26 there is no clipped box to peek into at all:
+    the over-long box shows every line the document prints, so Show all went with the clip."""
     assert ran["peek"]["bodyClickOpened"] is False, (
         "a click on the box body expands it again, so a click meant for the text does something "
         "else instead")
-    assert ran["peek"]["peekButtonOpened"] is True, (
-        "the Show all button does not open the box, so the hidden text cannot be read at all")
+    assert ran["peek"]["hasPeek"] is False, "the Show all button is back"
+    assert ran["peek"]["clipped"] == "" and ran["peek"]["overflowStyle"] == "", (
+        "an over-long box was clipped")
 
 
 def _css_rule(selector):
@@ -411,8 +408,12 @@ def test_the_payload_carries_box_overrides(ran):
 
     Matched as a LIVE line, not as a substring: `// box_overrides: boxOverridesOut,` contains the
     substring too, and commenting the line out is exactly how this would get broken."""
-    i = JS.index("proposal_payload: {")
-    block = JS[i:i + 6000]
+    # The literal lives in composeProposalPayload (shared with the fit request since 2026-09-26),
+    # and Continue hands it the dict it collected.
+    i = JS.index("  function composeProposalPayload(mergedValues, paragraphOverrides, boxOverridesOut) {")
+    block = JS[i:JS.index("\n  }\n", i)]
+    c = JS.index("  async function continueToDone(e) {")
+    assert "composeProposalPayload(mergedValues, paragraphOverrides, boxOverridesOut)" in JS[c:c + 12000]
     assert re.search(r"(?m)^\s*box_overrides: boxOverridesOut,\s*$", block), (
         "the generate payload does not carry box_overrides — the drag reaches the draft and never "
         "the document")

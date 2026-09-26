@@ -78,6 +78,17 @@ test_output_*.docx
 # Local SQLite drafts (runtime data — production uses a Docker volume)
 backend/data/
 
+# Fonts. Zetta Serif, the proposal typeface, is LICENSED and this repo is PUBLIC. The server
+# supplies it at runtime (see backend/fonts/README.md), so no font file of any kind belongs in
+# git; backend/tests/test_proposal_fonts.py checks that. Name no commit here, or anywhere in the
+# tree, that still holds one: that test checks it too.
+*.otf
+*.otc
+*.ttf
+*.ttc
+*.woff
+*.woff2
+
 # Kyle's trailing-12 workbook: real win rates and revenue by trade. This repo is public.
 # A sanitized copy of its LAYOUT lives at backend/tests/fixtures/trailing12_layout.xlsx.
 Trailing 12TH MONTH.xlsx

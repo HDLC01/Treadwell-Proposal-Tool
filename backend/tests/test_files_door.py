@@ -1147,3 +1147,44 @@ def test_remodel_on_still_prints_its_row(served, work_type, audience):
     text = _render_served(served, work_type, audience, remodel_amount="$650")
     assert re.search(r"\$650 – (Kansas )?Remodel Tax", text), (work_type, audience, text[:3000])
     assert "Material Sales Tax" in text
+
+
+def test_the_composed_document_carries_the_price_warnings_send_reads(ran):
+    """The one composer (composeProposalPayload, which Continue and the fit request share) carries
+    `price_warnings`: done.js reads it off proposal_payload before Send, to ask about a line that
+    prints a dollar figure of the estimator's own. Merging the composer with #569's inline literal
+    could drop it silently -- Send would then ask nothing. This page has no such line, so it is an
+    empty list, not missing."""
+    assert ran["e2e"]["composed"]["priceWarnings"] == []
+
+
+# ── the one composer: Continue's document is the fit request's question (2026-09-26 release) ──
+_WORKBOOK_ONLY = ("extras", "tab_copies", "tab_labels", "tab_order", "tab_structs", "lock_overrides")
+
+
+def test_continue_and_the_fit_request_compose_the_same_document(ran):
+    """composeProposalPayload is the ONE builder of the document: Continue stores it
+    (proposal_payload) and requestFit posts it to /api/proposal-fit to learn what size each box
+    prints at. The fit question is Continue's body minus the workbook's own inputs (they change no
+    word in the document) with the cover letter off (the answer is computed before page 1 is
+    built), and NOTHING else may differ. Run on a draft that carries every field the release's four
+    editor branches added: the typed price lines and the lines around them, each line's bullet and
+    indent, the tax layout, the Options gap and the lines typed on it, a removed line and an
+    emptied line kept, the price warnings. Mutations: a field dropped from the composer (either
+    side then lacks it); fitPayload building its own literal."""
+    got = ran["oneComposer"]
+    fit, stored, draft = got["fit"], dict(got["stored"]), got["draft"]
+    for k in _WORKBOOK_ONLY:
+        stored.pop(k, None)
+    stored["cover_letter_enabled"] = False
+    assert fit == stored, sorted(k for k in set(fit) | set(stored) if fit.get(k) != stored.get(k))
+    # ...and the document both carry is the draft's, every field of it.
+    pov = fit["price_overrides"]
+    for k in ("lines2", "before", "after", "line_props", "before_props", "after_props", "options_gap"):
+        assert pov[k] == draft["price_overrides"][k], k
+    assert fit["values"]["tax_layout"] == "BROKEN_OUT"
+    assert {"id": 181, "removed": True} in fit["paragraph_overrides"]
+    assert {"id": 182, "text": "", "kept": True} in fit["paragraph_overrides"]
+    # The warnings ride both (the equality above); what priceWarnings finds is read off the painted
+    # price box, which this harness does not mount -- price-lines-harness.js executes that half.
+    assert "price_warnings" in fit and "price_warnings" in got["stored"]

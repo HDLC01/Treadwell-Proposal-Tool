@@ -19,6 +19,11 @@ key handlers). The writer prints EXACTLY N blank 9pt paragraphs directly above t
 template that has one, in both text-box copies, REPLACING the template's own spacer
 (proposal_writer._apply_options_gap), anchored on the heading paragraph, not on its words.
 
+AND NEVER FEWER THAN ONE. Hanz, 2026-09-26: "Base bid and options should always have atleast 1 or 2
+spaces from each other". Both sides clamp the count to 1..20: a saved 0, or a gap typed over to its
+last line, still shows and prints one blank line directly above the heading, and the key that would
+take the last line only moves the caret.
+
 Every document test here goes through the real `main._generate`, the function Download, Send and the
 customer PDF all render through. LibreOffice is not installed on the dev box, so the checks are made
 on the .docx itself, in both the mc:Choice copy (Word) and the mc:Fallback copy (what LibreOffice
@@ -141,8 +146,9 @@ def _document_xml(docx_bytes):
 def test_exactly_n_blank_lines_print_above_the_options_heading(work_type, audience, gap):
     """Mutations: anchor the heading on its exact words again (Epoxy/Combo go to 0); stop replacing
     the template's own spacer (Gyp/GC print one extra); build the blank lines as bare <w:p/> (the
-    size check fails); drop options_gap between main.py and the writer (N != 2 goes to 2)."""
-    _assert_gap(_docx(work_type, audience, gap), gap)
+    size check fails); drop options_gap between main.py and the writer (N != 2 goes to 2); take the
+    floor off (a saved 0 prints none)."""
+    _assert_gap(_docx(work_type, audience, gap), max(1, gap))
 
 
 @pytest.mark.parametrize("work_type,audience", _TEMPLATES)
@@ -217,6 +223,22 @@ def test_the_lines_typed_on_the_gap_print_above_its_blank_lines(work_type, audie
     assert "twTypedLine" not in xml and "twOptionsHeading" not in xml
 
 
+@pytest.mark.parametrize("work_type,audience", _TEMPLATES)
+def test_a_gap_typed_over_still_prints_one_blank_line_above_the_heading(work_type, audience):
+    """Hanz, 2026-09-26: "Base bid and options should always have atleast 1 or 2 spaces from each
+    other". A payload whose gap was typed over to its last line (options_gap 0, saved before the
+    floor) prints the typed lines and then ONE blank line, never the heading straight under his
+    words, in both copies. Mutation: take the floor off options_gap_count."""
+    typed = ["Pricing valid for 30 days"]
+    out = _docx(work_type, audience, 0, price_overrides={"before": {"heading_options": typed}})
+    seen = _above_heading(out, typed)
+    assert sorted(seen) == ["choice", "fallback"], sorted(seen)
+    for where, s in seen.items():
+        texts = [_text(p) for p in s["lines"]]
+        assert texts == ["Pricing valid for 30 days", ""], (where, texts)
+        assert _blank(s["lines"][-1]) and _mark_size(s["lines"][-1]) == "18", where
+
+
 def test_a_blank_line_typed_under_the_row_above_is_not_taken_for_a_spacer():
     """The gap replaces the TEMPLATE's spacers above the heading. A blank line the estimator typed
     under the Total row sits in the same place and looks the same, but it is his: the editor draws
@@ -250,7 +272,7 @@ def test_the_combo_breakout_heading_takes_the_gap_too():
     combo = [{"label": "Epoxy flooring as described above", "amount_formatted": "$20,000"},
              {"label": "Polished concrete as described above", "amount_formatted": "$16,763"}]
     for gap in (0, 3):
-        found = _assert_gap(_docx("combo", "Direct", gap, combo_options=combo), gap)
+        found = _assert_gap(_docx("combo", "Direct", gap, combo_options=combo), max(1, gap))
         assert all("Polished concrete" in f["above"] for f in found), found
 
 
@@ -301,9 +323,10 @@ def test_the_sanitizer_keeps_the_count_and_only_when_it_was_stated():
     assert "options_gap" not in s({})
     assert "options_gap" not in s({"options_gap": None})
     assert s({"options_gap": 3})["options_gap"] == 3
-    assert s({"options_gap": 0})["options_gap"] == 0
+    # The floor: never fewer than one blank line above the heading.
+    assert s({"options_gap": 0})["options_gap"] == pw.OPTIONS_GAP_MIN == 1
     assert s({"options_gap": "4"})["options_gap"] == 4
-    assert s({"options_gap": -2})["options_gap"] == 0
+    assert s({"options_gap": -2})["options_gap"] == 1
     assert s({"options_gap": 99})["options_gap"] == pw.OPTIONS_GAP_MAX == 20
     assert s({"options_gap": 3.0})["options_gap"] == 3
     for junk in ("lots", 2.5, True):
@@ -343,23 +366,40 @@ def test_a_legacy_draft_shows_two_real_lines_inside_the_editing_host(ran):
 def test_backspace_on_a_blank_line_removes_one(ran):
     b = ran["backspaceOnGap"]
     assert b["defaulted"] and b["lines"] == 1 and b["stored"] == 1 and b["caretOnGapLine"] == 0
-    last = ran["backspaceLastGap"]
-    assert last["lines"] == 0 and last["stored"] == 0 and not last["gapShown"]
-    # Word's landing spot: the end of the line above.
-    assert last["caretLine"] == "base-bid-row" and last["caretOffset"] == last["baseLen"]
     d = ran["deleteOnGap"]
     assert d["defaulted"] and d["lines"] == 2 and d["stored"] == 2 and d["caretOnGapLine"] == 0
 
 
-def test_backspace_at_the_heading_start_removes_one_and_never_goes_below_zero(ran):
+def test_the_last_blank_line_is_never_taken_and_the_caret_just_moves(ran):
+    """Hanz, 2026-09-26: "Base bid and options should always have atleast 1 or 2 spaces from each
+    other". Backspace on the last blank line lands at the end of the line above, Delete on it at the
+    start of the heading, Backspace at the heading's start goes up onto it, Delete at the end of the
+    line above goes down onto it -- and the line is still there after every one of them. Mutation:
+    let the keys take the last line again (the count goes to 0 and the gap is hidden)."""
+    last = ran["backspaceLastGap"]
+    assert last["defaulted"] and last["lines"] == 1 and last["stored"] == 1 and last["gapShown"]
+    # Word's landing spot: the end of the line above.
+    assert last["caretLine"] == "base-bid-row" and last["caretOffset"] == last["baseLen"]
+    d = ran["deleteLastGap"]
+    assert d["defaulted"] and d["lines"] == 1 and d["stored"] == 1
+    assert d["caretLine"] == "options-heading" and d["caretOffset"] == 0
+    h = ran["backspaceHeadingAtFloor"]
+    assert h["defaulted"] and h["lines"] == 1 and h["stored"] == 1 and h["caretOnGapLine"] == 0
+    assert h["headingText"] == "Options:"
+    a = ran["deleteAboveAtFloor"]
+    assert a["defaulted"] and a["lines"] == 1 and a["stored"] == 1 and a["caretOnGapLine"] == 0
+    assert a["baseUnchanged"]
+
+
+def test_backspace_at_the_heading_start_removes_one_and_never_goes_below_one(ran):
     h = ran["backspaceHeadingStart"]
-    assert h["defaulted"] and h["lines"] == 1 and h["stored"] == 1
+    assert h["defaulted"] and h["lines"] == 2 and h["stored"] == 2
     assert h["caretLine"] == "options-heading" and h["caretOffset"] == 0
     assert h["headingText"] == "Options:"
-    zero = ran["backspaceHeadingAtZero"]
-    assert zero["lines"] == 0 and zero["stored"] == 0 and zero["defaulted"]   # the page's refusal
-    assert zero["headingText"] == "Options:"
-    assert ran["backspaceMidHeading"] == {"lines": 1, "defaulted": False}
+    floor = ran["backspaceHeadingAtFloor"]
+    assert floor["lines"] == 1 and floor["stored"] == 1 and floor["defaulted"]
+    assert floor["headingText"] == "Options:"
+    assert ran["backspaceMidHeading"] == {"lines": 2, "defaulted": False}
 
 
 def test_enter_above_the_heading_adds_a_line_and_leaves_the_price_line_alone(ran):
@@ -368,15 +408,15 @@ def test_enter_above_the_heading_adds_a_line_and_leaves_the_price_line_alone(ran
     (Dropping the handler's stopPropagation changes nothing: it moves the caret onto the new blank
     line first, and the page's handler finds no line there to break.)"""
     e = ran["enterAtEndOfBase"]
-    assert e["defaulted"] and e["lines"] == 1 and e["stored"] == 1 and e["caretOnGapLine"] == 0
+    assert e["defaulted"] and e["lines"] == 2 and e["stored"] == 2 and e["caretOnGapLine"] == 0
     assert e["baseUnchanged"], e["baseAfter"]
     g = ran["enterOnGap"]
-    assert g["lines"] == 2 and g["stored"] == 2 and g["caretOnGapLine"] == 1
+    assert g["lines"] == 3 and g["stored"] == 3 and g["caretOnGapLine"] == 1
     # Enter anywhere else in a price line is the page's own Enter: the text after the caret moves
     # to a line of its own under the price line (fix 5), never a break inside it -- and the gap is
     # not touched.
     m = ran["enterMidBase"]
-    assert m["lines"] == 2 and m["defaulted"] and m["baseHead"] == m["headWas"]
+    assert m["lines"] == 3 and m["defaulted"] and m["baseHead"] == m["headWas"]
     assert m["under"] == {"kind": "extra", "pos": "after", "text": m["tailWas"]}
     assert ran["noOptionsEnter"] == {"lines": 0, "newLineUnderBase": True, "baseUnchanged": True}
 
@@ -385,16 +425,17 @@ def test_enter_above_the_heading_adds_a_line_and_leaves_the_price_line_alone(ran
 # Hanz, 2026-09-26: "I cant write texts on this white space lines" -- #568 refused typing on them.
 def test_a_character_typed_on_a_blank_line_makes_it_a_typed_line_where_it_was(ran):
     """Typed on blank line 1 of 2: line 1 holds the text, line 0 above it is a typed BLANK line so
-    the text stays on the line it was typed on, and nothing is left in the count -- every line is
-    exactly one of the two. Stored as price_overrides.before.heading_options, the same storage as
-    a line typed under any price line, and saved. Mutation: refuse the key again (#568)."""
+    the text stays on the line it was typed on, and -- it was the last blank line -- a fresh one is
+    kept under it, so the heading still has one above it (the floor). Every line is exactly one of
+    the two. Stored as price_overrides.before.heading_options, the same storage as a line typed
+    under any price line, and saved. Mutation: refuse the key again (#568)."""
     t = ran["typeOnGap"]
     assert t["defaulted"] and t["typed"] == ["", "x"] and t["drawn"] == ["", "x"]
-    assert t["stored"] == 0 and t["lines"] == 0
+    assert t["stored"] == 1 and t["lines"] == 1
     assert t["typedDirectlyAboveGap"] and t["gapDirectlyAboveHeading"]
     assert t["caretIsTyped"] and t["caretText"] == "x" and t["caretOffset"] == 1
     assert ran["typeOnGapSaved"]["before"] == {"heading_options": ["", "x"]}
-    assert ran["typeOnGapSaved"]["options_gap"] == 0
+    assert ran["typeOnGapSaved"]["options_gap"] == 1
     # On blank line 0 of 2: the typed line, then the one blank line still in the count.
     f = ran["typeOnFirstGap"]
     assert f["typed"] == ["a"] and f["stored"] == 1 and f["lines"] == 1 and f["typedDirectlyAboveGap"]
@@ -402,21 +443,30 @@ def test_a_character_typed_on_a_blank_line_makes_it_a_typed_line_where_it_was(ra
 
 def test_the_keys_around_a_typed_line_behave_like_word(ran):
     """Enter at the end of the typed line: one more blank line under it. Delete at its end: the
-    blank line under it goes. Backspace on the last blank line: the caret at the end of the typed
-    line. Backspace at the start of "Options:" with no blank line left: the words above stay and
-    the caret goes to their end; an EMPTY typed line there is taken away instead."""
+    blank line under it goes. Backspace on the last blank line: refused (the floor), the caret at
+    the end of the typed line. Backspace at the start of "Options:" with one blank line left: the
+    line and the words above it stay, the caret goes up onto the blank line. An EMPTY typed line
+    above is still Backspace's to take, from its own start."""
     e = ran["enterAtEndOfTyped"]
     assert e["defaulted"] and e["typed"] == ["a"] and e["stored"] == 2 and e["caretOnGapLine"] == 0
     d = ran["deleteAtEndOfTyped"]
     assert d["defaulted"] and d["typed"] == ["a"] and d["stored"] == 1 and d["caretText"] == "a"
     b = ran["backspaceOntoTyped"]
-    assert b["defaulted"] and b["stored"] == 0 and b["caretText"] == "a" and b["caretOffset"] == 1
+    assert b["defaulted"] and b["stored"] == 1 and b["lines"] == 1
+    assert b["caretText"] == "a" and b["caretOffset"] == 1
     h = ran["backspaceHeadingUnderTyped"]
-    assert h["defaulted"] and h["typed"] == ["a"] and h["caretText"] == "a" and h["caretOffset"] == 1
+    assert h["defaulted"] and h["typed"] == ["a"] and h["lines"] == 1 and h["caretOnGapLine"] == 0
     assert h["headingText"] == "Options:"
-    k = ran["backspaceHeadingTakesEmptyTyped"]
-    assert k["defaulted"] and k["typed"] == ["kept"] and k["drawn"] == ["kept"]
-    assert k["caretLine"] == "options-heading" and k["caretOffset"] == 0
+    # A draft saved with no blank line left (0, an empty typed line right above the heading) shows
+    # the one the floor keeps; Backspace walks up from the heading onto it, then (refused) to the end
+    # of the empty typed line, which the page's own Backspace then takes away.
+    o = ran["backspaceHeadingOverTyped"]
+    assert o["defaulted"] and o["lines"] == 1 and o["caretOnGapLine"] == 0 and o["drawn"] == ["kept", ""]
+    f = ran["backspaceFloorOntoEmptyTyped"]
+    assert f["defaulted"] and f["lines"] == 1 and f["caretOnEmptyTyped"] and f["caretOffset"] == 0
+    k = ran["backspaceTakesEmptyTyped"]
+    assert k["defaulted"] and k["drawn"] == ["kept"] and k["lines"] == 1
+    assert k["caretText"] == "kept" and k["caretOffset"] == 4
     # An empty typed line under the price rows: Backspace takes it, and the caret lands at the end
     # of the line SHOWN above -- the base line, not the hidden tax rows between them.
     x = ran["backspaceEmptyFirstTyped"]
@@ -429,15 +479,45 @@ def test_paste_and_the_other_routes_land_as_typed_lines(ran):
     assert p["defaulted"] and p["typed"] == ["first", "second"] and p["stored"] == 1
     assert p["caretText"] == "second" and p["caretOffset"] == 6
     b = ran["beforeInputOnGap"]
-    assert b["defaulted"] and b["typed"] == ["", "q"] and b["stored"] == 0
+    assert b["defaulted"] and b["typed"] == ["", "q"] and b["stored"] == 1 and b["lines"] == 1
     # A deletion by a route the keys do not cover is refused and changes nothing.
     r = ran["beforeInputDelete"]
     assert r["defaulted"] and r["typed"] is None and r["lines"] == 2
 
 
+def test_a_base_bid_flip_keeps_the_gap_and_what_was_typed_on_it(ran):
+    """The base-bid radio's own change handler, run. Typing on blank line 1 of 2 moved both lines
+    out of the count into the typed lines; the flip cleared those with the old base's edits and
+    kept the count, so the note was lost and the 2-line gap came back as 0. The gap and its lines
+    do not depend on the base. Since the base-pick fix (Hanz, 2026-09-26: keep the words) the base
+    line's own words and the lines typed round it survive the flip too: one rule
+    (TWPrice.applyBasePick) for both pickers. Mutation: the flip clears before.heading_options
+    again."""
+    f = ran["flipKeepsGap"]
+    # Typing on the last blank line keeps a fresh one under it (the gap's floor of one line).
+    assert f["typedBefore"] == {"typed": ["", "N"], "lines": 1, "stored": 1}
+    assert f["base"] == "Copy1"
+    assert f["typed"] == ["", "N"] and f["drawn"] == ["", "N"], f
+    assert f["stored"] == 1 and f["lines"] == 1 and f["typedDirectlyAboveGap"]
+    assert f["oldBaseLine"] == "\u27e6amount\u27e7 – for the old base", f
+    assert f["oldBaseTyped"] == ["typed under the old base"], f
+
+
 def test_saved_typed_lines_are_drawn_above_the_blank_lines(ran):
+    # Saved with options_gap 0, from before the floor: drawn with the one blank line it keeps.
     t = ran["reloadTyped"]
-    assert t["drawn"] == ["kept", ""] and t["lines"] == 0 and t["typedDirectlyAboveGap"]
+    assert t["drawn"] == ["kept", ""] and t["lines"] == 1 and t["typedDirectlyAboveGap"]
+
+
+def test_typing_on_the_last_blank_line_keeps_a_fresh_one_under_it(ran):
+    """The one blank line left takes text like any other, and the floor keeps one more under it, so
+    "Options:" never ends up directly under a line. Mutation: store n - 1 - at unfloored (0)."""
+    t = ran["typeOnLastGap"]
+    assert t["defaulted"] and t["typed"] == ["z"] and t["drawn"] == ["z"]
+    assert t["lines"] == 1 and t["stored"] == 1 and t["typedDirectlyAboveGap"]
+    assert t["gapDirectlyAboveHeading"] and t["caretText"] == "z" and t["caretOffset"] == 1
+    assert ran["typeOnLastGapSaved"]["options_gap"] == 1
+    assert ran["typeOnLastGapSaved"]["before"] == {"heading_options": ["z"]}
 
 
 def test_gc_draws_the_typed_line_between_its_spacer_and_the_gap(ran):
@@ -453,9 +533,10 @@ def test_the_count_is_saved_through_price_overrides_and_a_reload_restores_it(ran
     assert ran["refitted"] >= 1
     r = ran["reload"]
     assert r["three"] == {"lines": 3, "shown": True, "counted": 3}
-    assert r["zero"] == {"lines": 0, "shown": False, "counted": 0}
+    # A saved 0 (or less) is drawn at the floor: one line.
+    assert r["zero"] == {"lines": 1, "shown": True, "counted": 1}
     assert r["string"]["lines"] == 4 and r["garbage"]["lines"] == 2
-    assert r["negative"]["lines"] == 0 and r["huge"]["lines"] == 20 and r["fraction"]["lines"] == 2
+    assert r["negative"]["lines"] == 1 and r["huge"]["lines"] == 20 and r["fraction"]["lines"] == 2
     assert ran["noOptions"] == {"lines": 0, "shown": False}
 
 
@@ -474,8 +555,44 @@ def test_gc_and_gyp_hide_the_template_spacer_the_writer_replaces(ran):
 
 def test_the_editor_and_the_writer_agree_on_the_count_rule(ran):
     """Same input, same count, both sides: optionsGapCount in the page vs options_gap_count here."""
-    for v, want in ((3, 3), (0, 0), ("4", 4), ("lots", 2), (-2, 0), (99, 20), (2.5, 2)):
+    for v, want in ((3, 3), (0, 1), ("4", 4), ("lots", 2), (-2, 1), (99, 20), (2.5, 2)):
         assert pw.options_gap_count(v) == want, v
     r = ran["reload"]
     assert [r[k]["counted"] for k in ("three", "zero", "string", "garbage", "negative", "huge",
-                                      "fraction")] == [3, 0, 4, 2, 0, 20, 2]
+                                      "fraction")] == [3, 1, 4, 2, 1, 20, 2]
+
+
+def test_a_line_emptied_and_kept_above_the_gap_is_not_taken_into_it(ran):
+    """The editor's half of test_line_removal.py's kept-line document test. The gap takes in a blank
+    template paragraph directly above the heading -- the placeholder break an emptied spacer holds
+    included, since collectOverrides sends that as no change at all -- but never a template line the
+    estimator emptied and KEPT: the writer prints that one (`kept`), so this page draws it. A
+    `text: ""` saved before the flag, restored as an empty line, is taken in on both sides."""
+    got = ran["keptAboveGap"]
+    assert got["kept"] == {"mobilShown": True, "spacerHidden": True, "lines": 2}
+    assert got["cleared"] == {"spacerHidden": True, "totalShown": True}
+    assert got["gcKept"] == {"totalShown": True, "spacerHidden": True}
+    assert got["legacy"] == {"mobilShown": False, "spacerHidden": True}
+
+
+def test_changing_the_gap_asks_for_the_size_again(ran):
+    """The review's case: Enter four times on the blank lines above "Options:" and the PRICE box kept
+    the scale it had (0.93) while the document printed it at 0.75. The gap's keys consume their
+    keystroke, so no `input` reached the page's refit; a price_overrides change now asks
+    POST /api/proposal-fit again (queuePovSave -> scheduleFit)."""
+    got = ran["gapAsksFit"]
+    assert got["before"] == 0
+    assert got["afterEnter"] == 1 and got["afterBackspace"] == 2
+    assert got["lines"] == 2
+
+
+def test_enter_in_the_hidden_options_heading_writes_nothing_there(ran):
+    """A caret inside the hidden "Options:" heading (a bid with no options) takes no Enter: no typed
+    line is made of it (it would print once options are added), the heading keeps its words and stays
+    hidden, and the caret goes to the end of the base line, the line shown above."""
+    got = ran["enterInHiddenHeading"]
+    assert got["defaulted"] is True
+    assert got["heading"] == "Options:" and got["headingHidden"] is True
+    assert got["extraLines"] == 0 and got["typedHeading"] is None
+    assert got["caretLine"] == "base-bid-row"
+    assert got["caretOffset"] == len("$36,763 – Epoxy flooring as described above (material sales tax INCLUDED)")

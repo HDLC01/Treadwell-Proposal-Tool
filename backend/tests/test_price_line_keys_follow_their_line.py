@@ -52,15 +52,24 @@ def test_removing_a_manual_line_takes_its_entries_and_moves_the_later_ones_up(ra
     assert "manual:1" not in pov["after"], "the removed line's typed line stayed behind"
     # Nothing that is not a manual line moved.
     assert pov["after"]["option:Copy1"] == ["Test again 123"] and pov["after"]["base"] == ["under the base"]
+    # ...and the BULLETS on those lines (the REBID price box's line_props / before_props /
+    # after_props) went with their lines: the removed line's are gone, the later line's moved up.
+    assert pov["line_props"] == {"manual:1": {"bullet": True, "level": 1},
+                                 "option:Copy1": {"bullet": False, "indent": 288},
+                                 "option:Copy10": {"bullet": True, "level": 1}}, pov["line_props"]
+    assert pov["before_props"] == {"manual:1": [{"bullet": False, "indent": 576}]}, pov["before_props"]
+    assert "manual:1" not in pov["after_props"], "the removed line's typed-line bullet stayed behind"
 
 
 def test_deleting_a_copy_takes_its_option_entries_and_only_its_own(ran):
     t = ran["tab"]
     assert t["copies"] == ["Copy10"]
     pov = t["saved"]
-    for bucket in ("lines", "lines2", "before", "after"):
+    for bucket in ("lines", "lines2", "before", "after", "line_props", "before_props", "after_props"):
         left = [k for k in pov.get(bucket, {}) if k == "option:Copy1" or k.startswith("option:Copy1:")]
         assert not left, (bucket, left)
+    assert pov["line_props"]["option:Copy10"] == {"bullet": True, "level": 1}
+    assert pov["after_props"]["option:Copy10"] == [{"bullet": False, "indent": 1440}]
     # "Copy10" shares the prefix and is a different option.
     assert pov["lines2"]["option:Copy10"] == "⟦amount⟧ – kept"
     assert pov["after"]["option:Copy10"] == ["under copy 10"]

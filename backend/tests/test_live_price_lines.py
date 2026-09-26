@@ -129,6 +129,33 @@ def test_enter_makes_a_line_of_its_own_and_backspace_takes_an_empty_one_away(ran
 
 
 @needs_node
+def test_an_emptied_line_is_one_blank_line_and_backspace_leaves_no_blank_line_behind(ran):
+    """Review of the 2026-09-26 release. A line whose every character is deleted keeps one <br>
+    (the browser's placeholder, so the line keeps its height), and serializeBlock reads it as "\\n".
+      * "abc" typed under the base line, then Backspace three times: one blank line on screen, and
+        the draft saved TWO ("\\n" split in two), both printed.
+      * a fourth Backspace took the line off the screen but joined its "\\n" onto the base line,
+        which the sweep then saved as a blank line under it: printed, and back on screen after a
+        reload.
+      * triple-click and Delete on the first of two typed lines: one blank line then "Warranty 1
+        yr" on screen, and the draft saved two blank lines above it.
+      * the base line itself emptied made up a blank line under it.
+    Mutations: each of the three sites reading the placeholder as text again (captureExtrasIn,
+    mergePriceLine, captureLineNode)."""
+    b = ran["bare"]
+    assert b["was"] == "extra"
+    assert b["emptied"] == {"base": [""]}, b["emptied"]
+    g = b["gone"]
+    assert g["after"] == {} and g["lines2"] == {}, g
+    assert g["base"] == "$7,351 – Epoxy flooring as described above", repr(g["base"])
+    assert [(r["kind"], r["text"]) for r in g["rows"]] == [("line", g["base"])], g["rows"]
+    t = b["triple"]
+    assert t["after"] == {"base": ["", "Warranty 1 yr"]}, t["after"]
+    assert [k for k, _ in t["rows"]] == ["line", "extra", "extra"], t["rows"]
+    assert b["baseEmptied"] == {"after": {}, "lines2": {}}, b["baseEmptied"]
+
+
+@needs_node
 def test_options_are_itemised_off_their_own_tab_and_an_edited_one_keeps_following_it(ran):
     assert [(l["key"], l["text"]) for l in ran["brokenOptions"]] == [
         ("option:Copy1", "$7,597 – Treadwell 3/16\" Urethne Cement With Shop Floor and Armor Top as described above"),
@@ -200,6 +227,28 @@ _REAL_SHAPES = [
      {"main": None, "before": [], "after": [], "drop": True}),
     ("a real $0 row", "$0 – Remodel Tax", {"amount": "$0", "zeroIsPhantom": True},
      {"main": f"{AMT} – Remodel Tax", "before": [], "after": [], "drop": False}),
+    # A tax wording on a line with no tax wording of its own is his (review, 2026-09-26): the old
+    # page never printed one there, so migrating it into the marker deleted his words for good.
+    ("a manual line with a wording of his", "$1,200 – Add for moisture mitigation (material sales tax INCLUDED)",
+     {"amount": "$1,200", "phrase": "", "slot": False},
+     {"main": f"{AMT} – Add for moisture mitigation (material sales tax INCLUDED)",
+      "before": [], "after": [], "drop": False}),
+    ("an add line with a wording of his", "Add $3,189 – Upgrade to decorative quartz broadcast (tax exempt)",
+     {"amount": "Add $3,189", "phrase": "", "slot": False},
+     {"main": f"{AMT} – Upgrade to decorative quartz broadcast (tax exempt)",
+      "before": [], "after": [], "drop": False}),
+    # His price first, today's figure quoted after it: the price stays his (review, 2026-09-26).
+    ("his price quoting today's", "$5,800 – Epoxy flooring as described above (discounted from $6,307)",
+     {"amount": "$6,307", "phrase": "(material sales tax INCLUDED)", "slot": True},
+     {"main": "$5,800 – Epoxy flooring as described above (discounted from $6,307)",
+      "before": [], "after": [], "drop": False}),
+    # A combo "Option N" line the old page drew as Total less remodel under "Included".
+    ("combo line frozen at total less remodel",
+     "$10,000 – Option 1: Epoxy flooring in the kitchen as described above (material sales tax INCLUDED)",
+     {"amount": "$10,500", "phrase": "(Remodel Tax AND material sales tax INCLUDED)", "slot": True,
+      "candidates": ["$10,500", "$10,000", "$9,900"]},
+     {"main": f"{AMT} – Option 1: Epoxy flooring in the kitchen as described above {TAX}",
+      "before": [], "after": [], "drop": False}),
 ]
 
 
@@ -347,3 +396,250 @@ def test_no_review_highlight_reaches_the_customer_on_any_template(work_type, aud
     out = docx.Document(io.BytesIO(blob))
     assert len(list(out.element.body.iter(qn("w:highlight")))) == 0, (
         f"{work_type}/{audience}: {authored} authored highlights, some reached the document")
+
+
+# ── the review of 2026-09-26: his words, his price, a combo line, and screen == document ─────────
+_OPT_DESC = "Treadwell 3/16\" Urethne Cement With Shop Floor and Armor Top"
+
+
+def _screen_payload(**over):
+    """The harness's own draft as a payload: the same rooms, the same manual line."""
+    return _payload(
+        rooms=[{"id": "Epoxy", "name": "Epoxy", "is_base": True, "bid": {"total": 7447, "sales_tax": 96, "remodel": 0}},
+               {"id": "Copy1", "name": "Epoxy copy", "is_base": False, "show": True, "price_mode": "total",
+                "system_desc": _OPT_DESC, "option_desc": _OPT_DESC, "base_total": 7447,
+                "bid": {"total": 7696, "sales_tax": 99, "remodel": 0, "taxable": True, "remodel_on": False}}],
+        price_lines=[{"label": "Add for moisture mitigation", "amount": 1200}], **over)
+
+
+def _price_box(blob, first, last):
+    """The PRICE box as printed: its non-empty paragraphs from `first` through `last`."""
+    t = [x for x in (_text(p) for p in _paras(blob)[1]) if x.strip()]
+    i = t.index(first)
+    j = t.index(last, i)
+    return t[i:j + 1]
+
+
+@needs_node
+def test_a_tax_wording_of_his_own_is_kept_on_screen(ran):
+    """Only TODAY's wording on a line with a place for tax wording becomes the live marker. A known
+    wording on a line with none of its own (a manual line, the Total) used to become the marker and
+    show as nothing; "(tax exempt)" typed over a taxable job's wording used to resolve back to the
+    computed wording, the override deleted as equal to it. Mutations: every known wording a marker
+    on every line again (the pre-review captureLine); the marker added behind his own wording."""
+    o = ran["ownPhrase"]
+    assert o["stored"] == {
+        "manual:0": f"{AMT} – Add for moisture mitigation (material sales tax INCLUDED)",
+        "base": f"{AMT} – Epoxy flooring as described above (tax exempt)"}, o["stored"]
+    assert o["manual"] == "$1,200 – Add for moisture mitigation (material sales tax INCLUDED)"
+    assert o["base"] == "$7,447 – Epoxy flooring as described above (tax exempt)"
+    assert o["brokenStored"]["total"] == f"{AMT} – Total (material sales tax INCLUDED)"
+    # A wording of his in the base line's empty (Broken out) slot: no marker added behind it, so
+    # a switch back to one line does not print a second wording after his.
+    assert o["brokenStored"]["base"] == f"{AMT} – Epoxy flooring as described above (material sales tax EXCLUDED)"
+    assert o["backToOneLine"] == "$7,447 – Epoxy flooring as described above (material sales tax EXCLUDED)"
+    # Saved before the live shape: migrated with his wording in it, not deleted from the draft.
+    assert o["migrated"] == {"lines2": {"manual:0": f"{AMT} – Add for moisture mitigation (tax exempt)"},
+                             "lines": {}, "shown": "$1,200 – Add for moisture mitigation (tax exempt)"}
+
+
+@needs_node
+@pytest.mark.parametrize("layout", ["ONE_LINE", "BROKEN_OUT"])
+def test_a_tax_wording_of_his_own_prints_as_the_screen_shows_it(ran, layout):
+    """Screen == document: what the editor stored for those lines, through the real renderer, is
+    the PRICE box the editor showed, line for line."""
+    o = ran["ownPhrase"]
+    stored, screen = ((o["stored"], o["oneLine"]) if layout == "ONE_LINE"
+                      else (o["brokenStored"], o["broken"]))
+    blob = _render(_screen_payload(values={"tax_layout": layout},
+                                   price_overrides={"lines2": stored}))
+    want = [l["text"] for l in screen if l["text"].strip()]
+    assert _price_box(blob, "Base Bid", want[-1]) == want
+
+
+@needs_node
+def test_his_price_that_quotes_todays_figure_is_marked_and_asked_about(ran):
+    """"$5,800 – … (discounted from $7,447)": the price is the line's first figure. Today's figure
+    further along is his quote, and used to become the live amount -- no mark, no Send prompt, the
+    $5,800 printed as if it followed the estimate while the quote moved with every re-price.
+    Mutations: the amount marker anywhere in the line (amountIndex for priceIndex); moneyOff back
+    to "any marker means it follows"."""
+    q = ran["quoted"]
+    assert q["stored"] == "$5,800 – Epoxy flooring as described above (discounted from $7,447)"
+    assert "tw-money-off" in q["cls"] and "does not follow the estimate" in q["title"]
+    assert q["warnings"] == [{"key": "base", "says": "$5,800", "estimate": "$7,447"}]
+    assert q["ask"] == "This line says $5,800 but the estimate says $7,447 — send anyway?"
+    assert q["repriced"] == "$5,800 – Epoxy flooring as described above (discounted from $7,447)"
+    # A line the previous build stored with the quote as the marker is still his price.
+    assert "tw-money-off" in q["previousBuild"]["cls"]
+    assert q["previousBuild"]["warnings"] == [{"key": "base", "says": "$5,800", "estimate": "$7,447"}]
+
+
+@needs_node
+def test_a_combo_line_reworded_under_included_migrates_live_and_adds_up(ran):
+    """Under "Included" the old page drew a combo Option line as Total less remodel ($10,000) with
+    the Remodel Tax and Total rows under it. Migrated with that figure frozen, one line printed
+    "$10,000 … (Remodel Tax AND material sales tax INCLUDED)" on a $10,500 bid, no rows under it.
+    Now the old figure is recognised as the estimate's and follows it; his words stay. Mutations:
+    no `candidates` on the combo line; not passed on by the painter; not passed on by the payload."""
+    c = ran["comboLegacy"]
+    assert c["lines2"] == {"combo:epoxy.flooring":
+                           f"{AMT} – Option 1: Epoxy flooring in the kitchen as described above {TAX}"}
+    line = ("$10,500 – Option 1: Epoxy flooring in the kitchen as described above "
+            "(Remodel Tax AND material sales tax INCLUDED)")
+    assert [x[1] for x in c["lines"]] == [line]
+    assert "tw-money-off" not in c["lines"][0][2] and c["warnings"] == []
+    # Built into the payload before the page ever drew it: the same migration, the same line.
+    # The payload line carries its key (the bullets branch: main.py reads the line's line_props by it).
+    assert c["payloadFirst"] == [{"label": line, "amount_formatted": "", "key": "combo:epoxy.flooring"}]
+    assert c["broken"] == [
+        ["combo:epoxy.flooring", "$9,900 – Option 1: Epoxy flooring in the kitchen as described above"],
+        ["combo:epoxy.sales_tax", "$100 – Material Sales Tax"],
+        ["combo:epoxy.remodel", "$500 – Remodel Tax"],
+        ["combo:epoxy.total", "$10,500 – Total"]]
+    # The document: the same lines, and Broken out they add up.
+    for layout, payload_lines, screen in (("ONE_LINE", c["payload"], [line]),
+                                          ("BROKEN_OUT", c["brokenPayload"], [x[1] for x in c["broken"]])):
+        blob = _render({"work_type": "combo", "audience": "Direct", "combo_options": payload_lines,
+                        "remodel": [{"amount_formatted": "$500"}],
+                        "values": _payload()["values"] | {
+                            "tax_layout": layout, "price_remodel_on": True, "total_formatted": "$10,500",
+                            "material_tax_formatted": "$100", "tax_amount_formatted": "$500"}})
+        assert _price_box(blob, screen[0], screen[-1]) == screen, layout
+    rows = [int(x[1].split(" – ")[0].replace("$", "").replace(",", "")) for x in c["broken"]]
+    assert rows[0] + rows[1] + rows[2] == rows[3]
+
+
+# ── the one question all three ways out ask ──────────────────────────────────────────────────────
+def _core(expr, *args):
+    core = FRONTEND / "js" / "price-lines-core.js"
+    script = ("const P = require(process.argv[1]); const A = process.argv.slice(2).map(JSON.parse);"
+              "console.log(JSON.stringify((" + expr + ")(P, ...A)));")
+    p = subprocess.run(["node", "-e", script, str(core), *[json.dumps(a) for a in args]],
+                       capture_output=True, text=True, encoding="utf-8", timeout=60)
+    assert p.returncode == 0, p.stderr
+    return json.loads(p.stdout)
+
+
+def _core_async(expr, *args):
+    """_core for a rule that answers with a promise (confirmSavedCopy)."""
+    core = FRONTEND / "js" / "price-lines-core.js"
+    script = ("const P = require(process.argv[1]); const A = process.argv.slice(2).map(JSON.parse);"
+              "Promise.resolve((" + expr + ")(P, ...A)).then(v => console.log(JSON.stringify(v)),"
+              " e => { console.error(e && e.stack || e); process.exit(1); });")
+    p = subprocess.run(["node", "-e", script, str(core), *[json.dumps(a) for a in args]],
+                       capture_output=True, text=True, encoding="utf-8", timeout=60)
+    assert p.returncode == 0, p.stderr
+    return json.loads(p.stdout)
+
+
+@needs_node
+def test_download_and_to_dropbox_ask_the_copy_the_server_builds():
+    """TWPrice.confirmSavedCopy, the step Download and To Dropbox take before the one check (review
+    of dfcf589: they build and file the SERVER's copy, which can hold a colleague's figure this page
+    has never seen). In order: this page's pending save goes; with a draft id, the server's copy is
+    read and the question asked of IT, and the answer carries when that copy was stored; with none,
+    this page's own payload is what gets built and is asked. A save that cannot land, or a server
+    copy that cannot be read, asks nothing and says it failed.
+
+    Mutations: ask this page's copy with an id (the server's figure is not asked); read before the
+    flush (the order); an unreadable copy taken as nothing to ask (failed goes false)."""
+    got = _core_async("""(P) => {
+        const warns = (says) => ({ proposal_payload: { price_warnings: [{ says, estimate: "$12,500" }] } });
+        const run = (o, answer) => {
+          const log = [];
+          const tw = {
+            flushState: async () => { log.push("flush"); return o.flush !== false; },
+            getDraftId: () => (o.id === undefined ? "d1" : o.id),
+            getState: () => { log.push("local"); return o.local; },
+            readServerRow: async () => { log.push("read"); return o.row === undefined ? null : o.row; },
+          };
+          return P.confirmSavedCopy(tw, "download", (q) => { log.push(q); return answer; })
+            .then((r) => Object.assign({ log }, r));
+        };
+        return Promise.all([
+          run({ local: {}, row: { data: warns("$15,000"), version: "v9" } }, false),
+          run({ local: {}, row: { data: warns("$15,000"), version: "v9" } }, true),
+          run({ local: warns("$7,000"), row: { data: {}, version: "v9" } }, false),
+          run({ id: null, local: warns("$7,000") }, false),
+          run({ flush: false, local: {}, row: { data: warns("$15,000"), version: "v9" } }, true),
+          run({ local: {}, row: null }, true),
+        ]);
+    }""")
+    ask = "This line says %s but the estimate says $12,500 — download anyway?"
+    server_cancel, server_ok, only_local, no_id, unsaved, unreadable = got
+    assert server_cancel == {"log": ["flush", "read", ask % "$15,000"], "go": False, "failed": False,
+                             "version": "v9"}, server_cancel
+    assert server_ok == {"log": ["flush", "read", ask % "$15,000"], "go": True, "failed": False,
+                         "version": "v9"}, server_ok
+    assert only_local == {"log": ["flush", "read"], "go": True, "failed": False, "version": "v9"}, only_local
+    assert no_id == {"log": ["flush", "local", ask % "$7,000"], "go": False, "failed": False,
+                     "version": ""}, no_id
+    assert unsaved == {"log": ["flush"], "go": False, "failed": True, "version": ""}, unsaved
+    assert unreadable == {"log": ["flush", "read"], "go": False, "failed": True, "version": ""}, unreadable
+
+
+@needs_node
+def test_the_question_is_one_rule_in_three_verbs():
+    """TWPrice.ownFigureQuestion: Hanz's sentence per line, the verb of the way out, the list capped
+    at six with a count of the rest; nothing to ask, "". TWPrice.confirmOwnFigures asks it of the
+    draft's document and says whether to go on: nothing to ask never calls the question at all."""
+    w = [{"says": "$15,000", "estimate": "$9,860"}, {"says": "$9,999", "estimate": ""}]
+    got = _core("(P, w) => ['send', 'download', 'file'].map(v => P.ownFigureQuestion(w, v))", w)
+    assert got == [
+        "This line says $15,000 but the estimate says $9,860.\nThis line says $9,999, typed by hand — send anyway?",
+        "This line says $15,000 but the estimate says $9,860.\nThis line says $9,999, typed by hand — download anyway?",
+        "This line says $15,000 but the estimate says $9,860.\nThis line says $9,999, typed by hand — file anyway?",
+    ]
+    many = [{"says": f"${i},000", "estimate": "$1"} for i in range(1, 9)]
+    q = _core("(P, w) => P.ownFigureQuestion(w, 'file')", many)
+    assert q.count("This line says") == 6 and "…and 2 more line(s) like it — file anyway?" in q
+    assert _core("(P) => [P.ownFigureQuestion([], 'send'), P.ownFigureQuestion(null, 'send')]") == ["", ""]
+    asked = _core("""(P, w) => {
+        const seen = [];
+        const ask = (ans) => (q) => { seen.push(q); return ans; };
+        const d = { proposal_payload: { price_warnings: w } };
+        return { cancel: P.confirmOwnFigures(d, 'download', ask(false)),
+                 ok: P.confirmOwnFigures(d, 'download', ask(true)),
+                 clean: P.confirmOwnFigures({ proposal_payload: { price_warnings: [] } }, 'send', ask(false)),
+                 none: P.confirmOwnFigures(null, 'send', ask(false)),
+                 seen };
+    }""", w[:1])
+    assert asked == {"cancel": False, "ok": True, "clean": True, "none": True,
+                     "seen": ["This line says $15,000 but the estimate says $9,860 — download anyway?"] * 2}
+
+
+def test_send_download_and_to_dropbox_ask_through_the_one_check():
+    """No second copy of the rule: done.js (Send and the .docx / PDF downloads) and dropbox.js (To
+    Dropbox) all ask through TWPrice.confirmOwnFigures, neither keeps a wording of its own, and
+    done.html loads the rule before both. Send asks it of this page's copy, once it has checked
+    that copy IS the server's; Download and To Dropbox through confirmSavedCopy, of the server's
+    copy, the one they build and file (review of dfcf589). Each call is EXECUTED by its own harness
+    (files-stale-page, files-download, dropbox-page); this pins that there is one of it."""
+    done = (FRONTEND / "js" / "done.js").read_text(encoding="utf-8")
+    dbx = (FRONTEND / "js" / "dropbox.js").read_text(encoding="utf-8")
+    assert done.count('TWPrice.confirmOwnFigures(TW.getState(), "send",') == 1
+    assert done.count('TWPrice.confirmSavedCopy(TW, "download",') == 1
+    assert dbx.count('TWPrice.confirmSavedCopy(TW, "file",') == 1
+    assert done.count("confirmOwnFigures(") == 1 and "confirmOwnFigures(" not in dbx
+    for src in (done, dbx):
+        assert "anyway?" not in src and "This line says" not in src
+    html = (FRONTEND / "done.html").read_text(encoding="utf-8")
+    core = html.index('src="/js/price-lines-core.js')
+    assert core < html.index('src="/js/done.js"') < html.index('src="/js/dropbox.js"')
+
+
+@needs_node
+def test_an_old_shape_line_is_read_by_the_figure_it_is_priced_at_not_one_it_quotes():
+    """The 2026-09-26 editor release merged the two rules for reading a line saved before the
+    markers: C's order of which of its lines is the price line (price-shaped first, then one of the
+    line's own figures, ...), and E's rule that a figure is the line's own only where it is its
+    PRICE, its first dollar figure ("$5,800 - ... (discounted from $6,307)" is not priced at the
+    $6,307 it quotes). Neither line here is price-shaped, so the "own figure" step decides: the note
+    quotes today's $7,447 after a $500 of its own and is not priced at it; the line under it is.
+    Mutation: the own-figure step back to "today's figure anywhere in the line" (amountIndex), which
+    made the note the price line and kept the real one as a line he typed."""
+    got = _core("""(P) => P.migrateLine("Includes $500 allowance, inside the $7,447\\nBase bid $7,447 for the warehouse",
+                                    { amount: "$7,447", phrase: "", slot: true })""")
+    assert got["main"] == "Base bid " + AMT + " for the warehouse " + TAX, got
+    assert got["before"] == ["Includes $500 allowance, inside the $7,447"] and got["after"] == [], got

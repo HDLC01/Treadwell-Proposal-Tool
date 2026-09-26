@@ -360,10 +360,11 @@ const LIFTED = [
   // and the file's own line spacing. Lifted rather than stubbed: applyParaToEl delegates to it,
   // so a stub would leave the indent arithmetic (bullet at left-hanging) untested.
   fn("applyParaGeom"),
-  fn("applyParaToEl"), fn("setParaState"),
+  // applyParaToEl asks takesPriceStep whether a row is drawn as a PRICE-box row (the REBID price box).
+  fn("takesPriceStep"), fn("applyParaToEl"), fn("setParaState"),
   topConst("overrideKey"), fn("mergeOverrideEntry"), topConst("liveKey"),
   fn("savedOverridesFor"), fn("savedVersionMatches"), fn("restoreSavedOverrides"),
-  fn("collectOverrides"), fn("preserveRichOverrides"),
+  fn("lineBare"), fn("lineKeptEmpty"), fn("collectOverrides"), fn("preserveRichOverrides"),
   // The REAL writer. This is the function that overwrote good data with degraded data, so a
   // harness that imitated it would be testing the imitation.
   fn("schedulePersistOverrides"),
@@ -374,6 +375,10 @@ const LIFTED = [
   // resolvers are how it finds the caret's line now that the event target is the box.
   topConst("LINE_SEL"), fn("lineAt"), fn("lineAtSelection"), fn("lineTarget"), fn("editingBox"),
   fn("syncBlock"),
+  // collectOverrides sends a line the estimator DELETED as {id, removed: true} and
+  // restoreSavedOverrides hides it again after a reload, so the removal family comes too.
+  fn("boxLines"), fn("lineShown"), fn("lineIsEmpty"), fn("lineRemovable"), fn("removeLine"),
+  fn("unremoveLine"), fn("removedBlockIds"),
 ].join("\n\n");
 
 const INPUT_HANDLER = delegated("  // Mark blocks dirty as they're edited (delegated");
@@ -429,6 +434,15 @@ function makePage(label) {
     // ribbon itself is fmt-ribbon-harness.js's world; a no-op is the truthful answer for a harness
     // that mounts no ribbon, and it still fails loudly if the page ever renames the function.
     const renderFmtBar = () => {};
+    // removeLine lets go of the ribbon when the line it takes out is the ribbon's target. The
+    // page's own bindings, with no ribbon mounted: nothing is ever its target here.
+    let fmtBlock = null;
+    const idleFmtBar = () => { fmtBlock = null; };
+    // schedulePersistOverrides and refreshDocumentFills ask the server what size each box
+    // prints at (POST /api/proposal-fit). A network question is not this harness's world, and
+    // the count proves the two writers still ask.
+    let fitAsks = 0;
+    const scheduleFit = () => { fitAsks += 1; };
     // Box geometry belongs to box-drag-harness.js, which builds that world; an empty collector
     // is the truthful answer for a harness that mounts no boxes.
     const collectBoxOverrides = () => ({});
@@ -1201,6 +1215,106 @@ const TERMS = [BULLET_115, CLAUSE_51, CLAUSE_52, CLAUSE_53_V5];
   p.restore("epoxy", "Direct", now);
   out.centsPriceRow = { drawn: p.look(57).text, off: p.blockEl(57).classList.contains("tw-money-off"),
                         collected: p.collect() };
+}
+
+// 18 — A PRICE ROW FROZEN AT THE OLD BASE'S FIGURE follows the new base. Hanz, 2026-09-26: "the
+// base bid was not updating". On the GC, Gyp and polish Direct files the base bid is a free
+// paragraph, which neither base picker can reach (the Estimate step has no template). A row he
+// edited before the rows kept their tokens was frozen at the base of that day -- Epoxy's $7,447 --
+// and after the base moved to Epoxy copy ($15,149) it only knew today's figure, so it went on
+// printing $7,447. A figure the draft's tabs price the row at today is the tool's; only at the
+// row's amount (a tab's figure in his words stays his), and a figure no tab prices stays his.
+{
+  const TABS = [
+    { id: "Epoxy", role: "epoxy", kind: "base", total: 7447, sales_tax: 96, remodel: 0 },
+    { id: "Copy1", role: "epoxy", kind: "copy", total: 15149, sales_tax: 195, remodel: 0 },
+    { id: "Polish", role: "polish", kind: "base", total: 9860, sales_tax: 110, remodel: 745 },
+  ];
+  // The base rows of the three families, verbatim as their templates carry them
+  // (test_doc_editor_fidelity.py checks them against the .docx files), and a GC tax and total row.
+  const ROWS = [
+    { id: 70, in_block: null, text: "{{base_bid_formatted}} – Resinous floor & integral cove base as described above {{base_tax_phrase}}" },
+    { id: 71, in_block: null, text: "{{base_bid_formatted}} – Gypsum Underlayment System as described above {{base_tax_phrase}}" },
+    { id: 72, in_block: null, text: "{{base_bid_formatted}} – Polished Concrete Flooring as described above {{base_tax_phrase}}" },
+    { id: 73, in_block: null, text: "{{material_tax_formatted}} – Material Sales Tax" },
+    { id: 74, in_block: null, text: "{{total_formatted}} – Total" },
+    { id: 75, in_block: null, text: "{{total_label}}" },
+  ];
+  const one = { base_bid_formatted: "$15,149", base_tax_phrase: "(material sales tax INCLUDED)",
+                material_tax_formatted: "$195", tax_amount_formatted: "$0", total_formatted: "$15,149",
+                total_label: "$15,149 – Total" };
+  const broken = Object.assign({}, one, { base_bid_formatted: "$14,954", base_tax_phrase: "" });
+  function frozen(items, tokens) {
+    STORE.blob = JSON.parse(JSON.stringify(SEED));
+    STORE.blob.priced_tabs = TABS;
+    STORE.blob.base_tab_id = "Copy1";
+    STORE.blob.paragraph_overrides_all = { "epoxy:Direct": { template_version: VER, items: items } };
+    const p = makePage("frozen-at-old-base");
+    p.mount(ROWS, tokens, VER);
+    p.restore("epoxy", "Direct", tokens);
+    const shown = {};
+    for (const it of items) {
+      const el = p.blockEl(it.id);
+      shown[it.id] = { text: p.look(it.id).text, off: el.classList.contains("tw-money-off"),
+                       amount: el.dataset.amount || "" };
+    }
+    return { shown: shown, collected: p.collect() };
+  }
+  out.frozenAtOldBase = {
+    // One line: each family's base row, frozen at a tab's figure with his words in it.
+    oneLine: frozen([
+      { id: 70, text: "$7,447 – Resinous floor & integral cove base as described above, per plans dated 9/1 (material sales tax INCLUDED)" },
+      { id: 71, text: "$7,447 – Gypsum Underlayment System as described above, per plans dated 9/1 (material sales tax INCLUDED)" },
+      { id: 72, text: "$9,860 – Polished Concrete Flooring as described above, per plans dated 9/1 (Remodel Tax AND material sales tax INCLUDED)" },
+      { id: 75, text: "$7,447 – Total" },
+    ], one),
+    // Broken out: the pre-tax base, the tax row and the Total, all frozen at Epoxy's.
+    broken: frozen([
+      { id: 70, text: "$7,351 – Resinous floor & integral cove base as described above, per plans dated 9/1" },
+      { id: 73, text: "$96 – Material Sales Tax (county rate)" },
+      { id: 74, text: "$7,447 – Total" },
+    ], broken),
+    // His own figure (no tab prices $7,000), with a tab's figure in his words: both stay his.
+    his: frozen([
+      { id: 70, text: "$7,000 – Resinous floor & integral cove base as described above, Polish alternative $9,860 (material sales tax INCLUDED)" },
+    ], one),
+  };
+}
+
+// 19 — AN EDIT PUT BACK leaves the draft too (review of the 2026-09-26 release). Block 115 has a
+// bold lead-in, so an edit to its words is stored WITH runs. Put back to the template's own words
+// (Ctrl+Z restores the runs; typing the word back does the same to the text), the paragraph reports
+// nothing, and preserveRichOverrides used to push the stored edit back into the list: the draft, the
+// fit and Continue kept an edit the screen no longer showed, the PDF printed it, and a reload drew
+// it again. The counterexample is the rescue's own case: a stored rich edit the page never drew (a
+// restore that lost it) is still kept.
+{
+  STORE.blob = JSON.parse(JSON.stringify(SEED));
+  const p = makePage("put-back");
+  p.mount(TEMPLATE, TOKENS_A, VER);
+  const pristine = p.snapshot(115);
+  p.typeInFill(115, "scope_notes", "and coat.");        // the first word of the value deleted
+  const edited = p.collect();
+  p.persist();
+  const storedEdit = JSON.parse(JSON.stringify(TW.getState().paragraph_overrides_all["epoxy:Direct"].items));
+  p.typeInFill(115, "scope_notes", "Grind and coat.");  // and put back
+  const back = p.snapshot(115);
+  const collected = p.collect();
+  p.persist();
+  const stored = JSON.parse(JSON.stringify(TW.getState().paragraph_overrides_all["epoxy:Direct"].items));
+  const q = makePage("put-back-reloaded");
+  q.mount(TEMPLATE, TOKENS_A, VER);
+  q.restore("epoxy", "Direct", TOKENS_A);
+  const reloaded = q.snapshot(115);
+  // The rescue's own case: the same rich edit stored, and a page that never drew it.
+  STORE.blob = Object.assign(JSON.parse(JSON.stringify(SEED)), {
+    paragraph_overrides_all: { "epoxy:Direct": { template_version: VER, items: storedEdit } },
+  });
+  const r = makePage("never-drawn");
+  r.mount(TEMPLATE, TOKENS_A, VER);
+  const neverDrawn = r.collect();
+  out.putBack = { pristine: pristine.text, edited, storedEdit, back: back.text, collected, stored,
+                  reloaded: reloaded.text, neverDrawn };
 }
 
 console.log(JSON.stringify(out));

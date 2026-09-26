@@ -901,6 +901,10 @@
      truth so an estimator looks identical on every page. Must precede the page's
      own script, which reads window.TWCrm as it runs. -->
 <script defer src="/js/crm-core.js"></script>
+<!-- The price rule's page half (window.TWPrice). The bid strip's Base-bid pick applies its
+     applyBasePick, the same rule the Proposal step's own base picker applies, so it must precede
+     the page's own script. -->
+<script defer src="/js/price-lines-core.js?v=20260926-rel"></script>
 <script defer src="/js/estimate-review.js"></script>
 </body>
 </html>

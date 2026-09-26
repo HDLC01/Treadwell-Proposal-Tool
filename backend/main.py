@@ -87,6 +87,7 @@ import pdf_writer
 import price_rules
 import pricing
 import profiles
+import proposal_fonts
 import proposal_writer
 import pull_window
 import reference_tax
@@ -4540,6 +4541,12 @@ def _sanitize_paragraph_overrides(overrides_in: list) -> list:
             pid = int(pid)
         except (TypeError, ValueError):
             continue
+        # A REMOVED LINE travels as nothing but its id and the flag (proposal_writer
+        # `paragraph_removable` decides whether it may go). Strictly True: an entry saved before the
+        # key existed, `text: ""` included, keeps meaning "print this paragraph empty".
+        if o.get("removed") is True:
+            out.append({"id": pid, "removed": True})
+            continue
         # PARAGRAPH properties — the bullet toggle and the indent controls. Delegated to
         # proposal_writer.sanitize_para_props rather than re-validated here: unlike `runs`
         # (whose duplication is deliberate, see above), the meaning of a paragraph property is
@@ -4603,6 +4610,11 @@ def _sanitize_paragraph_overrides(overrides_in: list) -> list:
         entry_t: Dict[str, Any] = {"id": pid, "text": str(text)}
         if para:
             entry_t["para"] = para
+        # A LINE HE EMPTIED AND KEPT (proposal-review.js lineKeptEmpty): the writer prints it as
+        # his own empty line and never folds it into the blank lines above the Options heading.
+        # Strictly True, so a `text: ""` saved before the key existed means what it meant.
+        if o.get("kept") is True:
+            entry_t["kept"] = True
         out.append(entry_t)
     return out
 
@@ -4752,7 +4764,8 @@ _PRICE_OVERRIDE_FIELD_MAXLEN = 500
 
 def _sanitize_price_overrides(pov_in) -> dict:
     out: Dict[str, Any] = {"options": {}, "manual": [], "single_bid": {}, "rows": {}, "alternate": {},
-                           "lines": {}, "lines2": {}, "before": {}, "after": {}}
+                           "lines": {}, "lines2": {}, "before": {}, "after": {},
+                           "line_props": {}, "before_props": {}, "after_props": {}}
     if not isinstance(pov_in, dict):
         return out
 
@@ -4866,6 +4879,29 @@ def _sanitize_price_overrides(pov_in) -> dict:
             rows = [str(x)[:_PRICE_OVERRIDE_FIELD_MAXLEN] for x in v[:_PRICE_EXTRA_LINES_MAX]
                     if x is not None and not isinstance(x, (dict, list, bool))]
             if rows:
+                out[bucket][str(k)[:120]] = rows
+
+    # THE BULLET, LEVEL AND INDENT the estimator set on a price line with the ribbon (2026-09-26,
+    # Hanz: "fix the indents and the bullets now"): `line_props[key]` for the line itself, and
+    # `before_props[key]` / `after_props[key]` — one entry per line in `before[key]` / `after[key]`,
+    # in the same order, null where he set nothing. Each is price_rules.clean_line_props'd; what
+    # the line prints is price_rules.resolve_line_props (the REBID default under his override). A
+    # draft saved before these keys existed has none of them and prints the default.
+    lp_in = pov_in.get("line_props")
+    if isinstance(lp_in, dict):
+        for k, v in list(lp_in.items())[:_PRICE_OVERRIDES_MAX]:
+            c = price_rules.clean_line_props(v)
+            if c:
+                out["line_props"][str(k)[:120]] = c
+    for bucket in ("before_props", "after_props"):
+        b_in = pov_in.get(bucket)
+        if not isinstance(b_in, dict):
+            continue
+        for k, v in list(b_in.items())[:_PRICE_OVERRIDES_MAX]:
+            if not isinstance(v, list):
+                continue
+            rows = [price_rules.clean_line_props(x) or None for x in v[:_PRICE_EXTRA_LINES_MAX]]
+            if any(rows):
                 out[bucket][str(k)[:120]] = rows
     return out
 
@@ -5196,6 +5232,14 @@ def api_proposal_template(request: Request, work_type: str = "epoxy", audience: 
     # Original templates differ on whether the value after a WORK label colon
     # inherits bold. Normalize preview metadata to the generated DOCX.
     proposal_writer._normalize_work_label_formatting(d)
+    # The PRICE rows Kyle tucked into the margin print their square in the column (the REBID
+    # layout); the render does this to the pristine template before anything else, so the editor
+    # reads the same paragraph properties — the same `para` its bullet / indent presses are
+    # measured against and the writer applies them to. No paragraph is added or removed.
+    proposal_writer._untuck_price_bullets(d)
+    # The same tag fill_proposal puts on the Options heading before Phase 0, so
+    # `paragraph_removable` answers here exactly as it will at generate time.
+    proposal_writer._mark_options_headings(d)
     # The Options heading(s) the writer spaces from above. Only a FREE one (the GC files, where the
     # heading is a plain paragraph) is a block the editor renders itself; a {{#has_options}}
     # heading is the editor's own #options-heading. Held as a set so the walk below keeps the
@@ -5230,9 +5274,9 @@ def api_proposal_template(request: Request, work_type: str = "epoxy", audience: 
             # `para.bullet` / `para.marker` do that; this stays as the fallback for a level whose
             # definition cannot be read.
             "list": proposal_writer._para_is_list(p_elem),
-            # PRICE-list rows (numId=3) get their bullets stripped at generate
-            # time (_flatten_price_bullets); flag them so the on-screen editor
-            # renders them flush/bullet-less to match the generated .docx.
+            # PRICE-list rows (numId=3). They print their bullet since the REBID layout
+            # (2026-09-25; they were flattened before), and the ribbon's indent moves one between
+            # the list's two levels, square and "o" (proposal_writer._para_price_list).
             "price_flat": proposal_writer._para_price_list(p_elem),
             # The paragraph's own Word properties: {bullet, indent (twips), locked}. The
             # toolbar cannot render a bullet toggle without knowing whether the bullet is
@@ -5243,8 +5287,17 @@ def api_proposal_template(request: Request, work_type: str = "epoxy", audience: 
             # `list` (which is True for the contract clauses too).
             "para": proposal_writer.para_props(d, p_elem),
             "runs": proposal_writer._block_runs(p_elem, p),
+            # What the writer does with this paragraph's SIZE, so the editor shows it at the size
+            # it prints (the per-box shrink itself comes from POST /api/proposal-fit):
+            #   hp         — the paragraph mark's size (`_fit_hp`): how tall it prints EMPTY,
+            #                which the shrink never scales;
+            #   typed_hp   — the size words typed into it print at (`typed_run_size`), and
+            #   typed_sized  whether that run carries a size of its own;
+            #   removable  — may a `removed` override take it out (`paragraph_removable`).
+            "fit": _block_fit(d, p_elem, in_block, txbx_idx),
         })
 
+    geometry = proposal_writer.template_geometry(d)
     payload = {
         "work_type": work_type,
         "audience": audience,
@@ -5255,7 +5308,7 @@ def api_proposal_template(request: Request, work_type: str = "epoxy", audience: 
         # second (see `template_versions`); 0 = no legacy stamp is. The editor's
         # restore guards apply the same rule the backend's `_template_version_accepts` does.
         "template_version_legacy_floor_s": template_versions.legacy_floor_s(template_path),
-        "geometry": proposal_writer.template_geometry(d),
+        "geometry": geometry,
         "blocks": blocks,
         # Ids of the free-paragraph Options heading(s), so the editor can draw the blank lines
         # above it (price_overrides.options_gap) exactly where the writer prints them. Top-level
@@ -5323,6 +5376,40 @@ def api_proposal_template_media(request: Request, work_type: str = "epoxy",
     return Response(content=data, media_type=ctype, headers=headers)
 
 
+@app.get("/api/proposal-font/{name}")
+def api_proposal_font(request: Request, name: str) -> Response:
+    """The proposal typeface (Zetta Serif) for the editor, to signed-in staff only.
+
+    Licensed, so it lives behind the login: this is an /api route, and `_auth_gate` refuses an
+    unauthenticated request with a 401 before it gets here. `name` is a public name looked up in
+    proposal_fonts.FONTS; it is never joined onto a path, and anything else is a 404. See
+    proposal_fonts.py for the why, and frontend/js/proposal-fonts.js for the page that asks."""
+    hit = proposal_fonts.load(name)
+    if hit is None:
+        raise HTTPException(404, "No such font")
+    data, etag = hit
+    headers = {"ETag": etag, "Cache-Control": proposal_fonts.CACHE_CONTROL,
+               "X-Content-Type-Options": "nosniff"}
+    if etag in (request.headers.get("if-none-match") or ""):
+        return Response(status_code=304, headers=headers)
+    return Response(content=data, media_type=proposal_fonts.MEDIA_TYPE, headers=headers)
+
+
+@app.on_event("startup")
+def _report_proposal_font() -> None:
+    """Say ONCE, loudly, when the licensed proposal font is not on this box.
+
+    Neither git nor the image carries Zetta Serif any more; compose mounts it from the host. A
+    host without the files gets an EMPTY mount from Docker, boots, passes /healthz and prints every
+    PDF in a substitute font, so this log line is the only thing on the box that says so. A log
+    line and nothing more: never a failed boot, and never /healthz, which must stay cheap and must
+    not flap (the Basisboard outage). See proposal_fonts.py."""
+    try:
+        proposal_fonts.report_once(log)
+    except Exception as exc:  # noqa: BLE001 — a font check is never worth a failed boot
+        log.warning("Proposal font check failed: %s", exc)
+
+
 # Block-model SCHEMA version for /api/proposal-template's ETag. The template
 # ETag is otherwise keyed on the .docx content (and, since 2026-09-25, on the
 # builders' source via _BLOCK_CODE_VERSION below), so a CODE change to the block
@@ -5340,7 +5427,33 @@ def api_proposal_template_media(request: Request, work_type: str = "epoxy",
 # ("1." to "27." for the Terms and Conditions clauses). Stale is WRONG ON SCREEN, not merely
 # degraded: with no `marker` the renderer falls back to `list`, which is what drew a red square
 # in front of all 27 numbered clauses in the first place.
-_BLOCK_SCHEMA_VERSION = "7"
+# v8 (2026-09-26, the bullets branch): the REBID price box. `para` gained `level` (w:ilvl) and
+# `glyph` ("o" for the hollow sub-bullet), and the PRICE rows' `para.bullet` / `indent` are read off
+# the UNTUCKED template (proposal_writer._untuck_price_bullets): the Direct files' rows used to
+# report indent 0. Stale is WRONG ON SCREEN: the editor would draw those rows flush while the
+# document prints them one bullet in, and measure its indent presses from the old 0.
+#
+# v8 (2026-09-26, the editor-parity branch): `fit` {hp, typed_hp, typed_sized, removable}, the sizes
+# the writer's override path and overflow shrink give each paragraph, so the editor shows every line
+# at the size the PDF prints it and knows which emptied lines Backspace may remove. A v7 body has no
+# `fit`: the editor would show typed words at the page's 9pt and offer no line removal.
+#
+# v9 (2026-09-26, the editor release): both v8s at once. Each branch bumped 7 -> 8 on its own, so a
+# browser holding EITHER branch's v8 body (staging served neither, but a local or review build did)
+# would replay it as current, missing the other half: no `fit`, or `para` measured off the tucked
+# template.
+_BLOCK_SCHEMA_VERSION = "9"
+
+
+def _block_fit(d, p_elem, in_block, txbx_idx) -> Dict[str, Any]:
+    """One block's `fit` record for /api/proposal-template (see the block dict)."""
+    typed_hp, typed_sized = proposal_writer.typed_run_size(d, p_elem)
+    return {
+        "hp": proposal_writer._fit_hp(p_elem),
+        "typed_hp": typed_hp,
+        "typed_sized": typed_sized,
+        "removable": proposal_writer.paragraph_removable(d, p_elem, in_block, txbx_idx),
+    }
 
 # The code that BUILDS a block response, fingerprinted once at import. The ETag used to move on
 # every deploy only by accident, because the template version was the file's mtime; now that it is
@@ -5522,6 +5635,36 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
     return _generate(payload, request, persist=True)
 
 
+@app.post("/api/proposal-fit")
+def api_proposal_fit(payload: GenerateIn, request: Request) -> Dict[str, Any]:
+    """The size every text box of this payload PRINTS at, for the Proposal step's editor.
+
+    Hanz, 2026-09-26: "please follow the text size of what is written in the proposal PDFs. Its
+    different on the editor and on the output". The writer shrinks an overflowing box's runs down
+    to a 0.60 floor; the editor ran its own browser-measured ladder that stopped at 0.75 and then
+    clipped. So the editor now sends the body Continue would build and shows what comes back.
+
+    Answered by the REAL fill (`_generate` with `fit_report`), not by a second estimate: which
+    paragraphs a box holds at print time depends on region expansion, the frame padding
+    `_pad_frame_boxes` keys on note text, the estimator's box overrides and the hand-sized
+    paragraphs the shrink leaves alone, and a copy of that in the browser would drift from it.
+    Writes nothing: no file, no event, no draft (see `_generate`).
+
+    `boxes`: one `{id, scale, default_hp, exempt, at_floor, content_pt, usable_pt}` per text box
+    (`proposal_writer._shrink_overflowing_text_boxes`), `id` being the box id in
+    /api/proposal-template's geometry. `template_version` is the file the answer was computed on,
+    so the editor can drop an answer that arrives after a base flip switched the template."""
+    report: list = []
+    _generate(payload, request, persist=False, want_estimate=False, fit_report=report)
+    template_path = proposal_writer.pick_template(payload.work_type, payload.audience or None)
+    return {
+        "work_type": payload.work_type,
+        "audience": payload.audience,
+        "template_version": _template_proposal_version(template_path),
+        "boxes": report,
+    }
+
+
 def _name_from_email(email: str) -> str:
     """"kyle.smith@wetreadwell.com" -> "Kyle Smith". The signature line's last resort."""
     return email.split("@")[0].replace(".", " ").replace("_", " ").title()
@@ -5559,7 +5702,8 @@ def _sign_as_caller(values: Dict[str, Any], request: Request) -> None:
 
 def _generate(payload: GenerateIn, request: Request, *,
               persist: bool = True,
-              want_estimate: bool = True) -> GenerateOut:
+              want_estimate: bool = True,
+              fit_report: Optional[list] = None) -> Optional[GenerateOut]:
     """Final generate: fill xlsx + docx, return download links (xlsx / docx /
     on-demand pdf). The estimator downloads + files them manually.
 
@@ -5591,7 +5735,13 @@ def _generate(payload: GenerateIn, request: Request, *,
     bytes (see the cover-letter block below), so "the proposal without the letter" is a document
     missing its first page, and every one of those three callers wants that page. The cost is a
     wider blast radius, stated plainly: a cover-letter template that cannot fill now refuses the
-    customer PDF and the Dropbox filing too, where before it refused only a live generate."""
+    customer PDF and the Dropbox filing too, where before it refused only a live generate.
+
+    `fit_report` (a list) is POST /api/proposal-fit's question: "what size does each text box of
+    THIS payload print at". The proposal is filled exactly as for a download, the writer's overflow
+    shrink records its decisions into the list, and the function returns None right after the
+    fill: no cover letter, no file cache, no audit event, no draft write. Pass it only with
+    persist=False and want_estimate=False, which is how the route calls it."""
     values = payload.values
     _ensure_state_name(values)
     # payload.work_type is authoritative; make sure it's in `values` so the
@@ -5729,18 +5879,27 @@ def _generate(payload: GenerateIn, request: Request, *,
             return price_rules.resolve_line(_pov["lines2"][key], amount, phrase)
         return _pov["lines"].get(key) or None
 
+    def _line_para(key: str, pos: Optional[str] = None, index: Optional[int] = None,
+                   text: str = "x") -> dict:
+        """What one PRICE line's bullet prints (Kyle's REBID layout, the estimator's override on
+        top): price_rules.resolve_line_props, the same rule the editor draws with."""
+        return price_rules.resolve_line_props(
+            key, pos, text, price_rules.line_props_for(_pov, key, pos, index))
+
     def _extra_rows(key: str, where: str) -> list:
         """The lines typed above (`before`) or below (`after`) one price line, as label-only
         {{#price_line}} rows: their own paragraphs, cloned from the price row itself, so they
         print in the price box's own font rather than the document default."""
-        return [{"label": t, "amount_formatted": "", "_typed": True}
-                for t in (_pov[where].get(key) or [])]
+        return [{"label": t, "amount_formatted": "", "_typed": True,
+                 "_para": _line_para(key, where, i, t)}
+                for i, t in enumerate(_pov[where].get(key) or [])]
 
     def _priced(key: str, amount: str, label: str, phrase: str = "") -> list:
         """One price line as {{#price_line}} rows: the lines above it, the line, the lines below."""
         own = _edited_line(key, amount, phrase)
         row = ({"label": own, "amount_formatted": ""} if own is not None
                else {"label": label, "amount_formatted": amount})
+        row["_para"] = _line_para(key, text=own if own is not None else label)
         return _extra_rows(key, "before") + [row] + _extra_rows(key, "after")
 
     # Structured PRICE option lines -> repeatable {{#price_line}} rows.
@@ -5759,7 +5918,7 @@ def _generate(payload: GenerateIn, request: Request, *,
             if _key in _pov["lines2"] or _pov["lines"].get(_key):
                 price_line_dicts.extend(_priced(_key, _fmt_usd(amt), label))
                 continue
-            row = {"label": label, "amount_formatted": _fmt_usd(amt)}
+            row = {"label": label, "amount_formatted": _fmt_usd(amt), "_para": _line_para(_key)}
             # Legacy per-field override (positional by ORIGINAL price_lines index).
             _mov = _pov["manual"][_i] if _i < len(_pov["manual"]) else None
             if _mov:
@@ -5847,12 +6006,14 @@ def _generate(payload: GenerateIn, request: Request, *,
                 if _oov.get("amount"):
                     _amount = _oov["amount"]
             _option_lines.extend((_extra_rows(_key, "before") if _oid else [])
-                                 + [{"label": _label, "amount_formatted": _amount}]
+                                 + [{"label": _label, "amount_formatted": _amount,
+                                     "_para": _line_para(_key)}]
                                  + (_extra_rows(_key, "after") if _oid else []))
         for _tr in _o.get("tax_rows") or []:
             _option_lines.extend(_priced(f"{_key}:{_tr['key']}", _tr["price_formatted"],
                                          _tr["price_desc"]) if _oid else
-                                 [{"label": _tr["price_desc"], "amount_formatted": _tr["price_formatted"]}])
+                                 [{"label": _tr["price_desc"], "amount_formatted": _tr["price_formatted"],
+                                   "_para": _line_para(f"{_key}:{_tr['key']}")}])
     # Options first, then the estimator's manual "Add for" price lines.
     price_line_dicts = _option_lines + price_line_dicts
 
@@ -5870,16 +6031,25 @@ def _generate(payload: GenerateIn, request: Request, *,
     for c in (payload.combo_options or [])[:50]:
         if not isinstance(c, dict):
             continue
+        # Which line this is, for its bullet: the page sends the line's key ("combo:epoxy.flooring")
+        # and, for a typed line, where it sits and which one it is. A payload composed before that
+        # carries none of it and gets the default for its kind — a typed line's "o", a money line's
+        # square — which is what an untouched line prints anyway.
+        _ck = str(c.get("key") or "combo:")[:120]
+        _cpos = c.get("pos") if c.get("pos") in ("before", "after") else None
+        _cidx = c.get("idx") if isinstance(c.get("idx"), int) and not isinstance(c.get("idx"), bool) else None
         if c.get("extra") is True:
             # A line the estimator typed above or below a combo price line: its own paragraph,
             # kept exactly as typed — a blank one included, which is the blank line he added.
-            _combo_lines.append({"label": str(c.get("label") or ""), "amount_formatted": "",
-                                 "_typed": True})
+            _t = str(c.get("label") or "")
+            _combo_lines.append({"label": _t, "amount_formatted": "", "_typed": True,
+                                 "_para": _line_para(_ck, _cpos or "after", _cidx, _t)})
             continue
         label = str(c.get("label") or "").strip()
         amount_formatted = str(c.get("amount_formatted") or "").strip()
         if label or amount_formatted:
-            _combo_lines.append({"label": label, "amount_formatted": amount_formatted})
+            _combo_lines.append({"label": label, "amount_formatted": amount_formatted,
+                                 "_para": _line_para(_ck)})
     if _combo_lines:
         # The combined single-bid line is suppressed below (single_bid=[]), but
         # the template's "Options:" heading is a {{#has_options}} block that
@@ -5898,7 +6068,8 @@ def _generate(payload: GenerateIn, request: Request, *,
             # under it -- because on this layout the template's own heading is gone.
             _combo_lines = (_combo_lines
                             + [{"label": _edited_line("heading_options", "") or "Options:",
-                                "amount_formatted": "", "_options_heading": True}]
+                                "amount_formatted": "", "_options_heading": True,
+                                "_para": _line_para("heading_options")}]
                             + _extra_rows("heading_options", "after"))
         price_line_dicts = _combo_lines + price_line_dicts
 
@@ -5986,9 +6157,28 @@ def _generate(payload: GenerateIn, request: Request, *,
         "remodel": ((_remodel_lines[0].get("amount_formatted") if _remodel_lines else _remodel_str) or "", ""),
         "total": (values.get("total_formatted") or "", ""),
         "heading_base": ("", ""), "heading_options": ("", ""),
-        "alt_name": ("", ""), "alt_flooring": ("", ""), "alt_remodel": ("", ""), "alt_total": ("", ""),
+        # The ALTERNATE flooring row's tax wording is the TEMPLATE's (price_rules.alt_flooring_phrase:
+        # Epoxy's literal "(material sales tax INCLUDED)", or {{base_tax_phrase}} on Polish and Combo)
+        # — the phrase its ⟦tax⟧ marker resolves to, the one the editor declares on the line too. With
+        # none declared, a keystroke anywhere in the price box stored the line with an empty marker
+        # and the customer's document dropped the wording (review of fix 7, finding 1).
+        "alt_name": ("", ""),
+        "alt_flooring": ("", price_rules.alt_flooring_phrase(
+            proposal_writer.template_alt_flooring_row(payload.work_type, payload.audience)
+            if alternates else "", values.get("base_tax_phrase") or "")),
+        "alt_remodel": ("", ""), "alt_total": ("", ""),
     }
     _whole = {k: _edited_line(k, *parts) for k, parts in _row_parts.items()}
+    # The base line and the "Base Bid" heading print his words only where the editor draws them as
+    # the page's own lines (a {{#single_bid}} template: Epoxy and Combo Direct). On Polish Direct,
+    # GC and Gyp the editor draws the TEMPLATE's paragraph there, so words that rode a base pick in
+    # from an Epoxy tab were printed while the screen showed the computed line, and nothing asked
+    # (review of the 2026-09-26 release). They stay in the draft for a base whose template draws
+    # them. proposal_writer.page_built_lines has the rule; the lines typed round them follow it too.
+    _drawn = proposal_writer.template_page_built_lines(payload.work_type, payload.audience)
+    for _k in ("base", "heading_base"):
+        if not _drawn[_k]:
+            _whole[_k] = None
     if _rows_ok:
         if _whole["base"]:      values["_line_base"] = _whole["base"]
         if _whole["sales_tax"]: values["_line_sales_tax"] = _whole["sales_tax"]
@@ -6007,12 +6197,30 @@ def _generate(payload: GenerateIn, request: Request, *,
     if _whole["alt_remodel"]:     values["_line_alt_remodel"] = _whole["alt_remodel"]
     if _whole["alt_total"]:       values["_line_alt_total"] = _whole["alt_total"]
     _extras = {}
-    for _k in ("base", "sales_tax", "remodel", "total", "heading_base", "heading_options"):
+    for _k in ("base", "sales_tax", "remodel", "total", "heading_base", "heading_options",
+               "alt_name", "alt_flooring", "alt_remodel", "alt_total"):
         if _k in ("base", "sales_tax", "remodel", "total") and not _rows_ok:
             continue
+        if _k in _drawn and not _drawn[_k]:
+            continue                       # a line the editor does not draw here: see _drawn above
+        # The ALTERNATE rows' typed lines print too: the editor draws them (and makes them, with
+        # Enter), so a line typed under "$30,000 – Total" that reached the screen and not the PDF was
+        # a line the customer never read (review of fix 7, finding 4). They are cloned inside the
+        # {{#alternate}} block, so with no alternate they go with it.
         _b, _a = price_rules.extras_for(_pov, _k)
+        _spec: Dict[str, Any] = {}
         if _b or _a:
-            _extras[_k] = {"before": _b, "after": _a}
+            _spec = {"before": _b, "after": _a,
+                     "before_para": [_line_para(_k, "before", i, t) for i, t in enumerate(_b)],
+                     "after_para": [_line_para(_k, "after", i, t) for i, t in enumerate(_a)]}
+        # The row's OWN bullet, only where the estimator set one: an untouched template row prints
+        # Kyle's own numbering, untucked (proposal_writer._untuck_price_bullets). The alternate's
+        # name is the exception — the file puts that heading on the PRICE list, and a heading
+        # carries no bullet (price_rules.HEADING_LINE_KEYS).
+        if _k in _pov["line_props"] or _k == "alt_name":
+            _spec["para"] = _line_para(_k)
+        if _spec:
+            _extras[_k] = _spec
 
     # GC additional-phase amount: force the estimator's cell value into the GC
     # Clarifications text ONLY when they changed it off the $4,500 default; else
@@ -6132,12 +6340,18 @@ def _generate(payload: GenerateIn, request: Request, *,
             # ...and the lines he typed ON that gap, printed above its blank lines (the editor's
             # typeOnGapLine): price_overrides.before.heading_options.
             options_gap_typed=_pov["before"].get("heading_options"),
+            # ...each with its own bullet (a typed line on the gap is a heading's, so none by default).
+            options_gap_typed_para=[_line_para("heading_options", "before", i, t) for i, t
+                                    in enumerate(_pov["before"].get("heading_options") or [])],
+            fit_report=fit_report,
         )
     except FileNotFoundError as exc:
         raise HTTPException(500, str(exc)) from exc
     except Exception as exc:
         log.exception("Proposal fill failed")
         raise HTTPException(500, "Failed to generate the proposal. Please try again.") from exc
+    if fit_report is not None:
+        return None
 
     # ── The optional Cover Letter, merged onto the FRONT of the proposal ────
     #
@@ -6553,8 +6767,26 @@ def _stored_revision_documents(draft_id: str, revision_no: int) -> Optional[Dict
                                  "Please try again in a minute.") from exc
 
 
+class DocumentsIn(BaseModel):
+    # When the server stored the copy of the draft the Files page asked its question of (the
+    # draft row's `updated_at`, from GET /api/draft/{id}): TWPrice.confirmSavedCopy asks "This line
+    # says $X but the estimate says $Y — download anyway?" of the SERVER's copy, and the question
+    # can sit on screen while a colleague's save lands. Optional: the page's own builds (the files
+    # it shows on arrival) and an older page send nothing, and are built as before.
+    draft_version: Optional[str] = None
+
+
+def _stored_since(row: Dict[str, Any], version: Optional[str]) -> bool:
+    """Has the draft been stored again since the save a page checked (`version`, the row's
+    `updated_at` as that page read it)? False when the page named none. The publish makes the same
+    comparison inline (api_portal_publish); Download and To Dropbox ask it here."""
+    v = (version or "").strip()
+    return bool(v) and v != str(row.get("updated_at") or "")
+
+
 @app.post("/api/draft/{draft_id}/documents", response_model=GenerateOut)
-def api_draft_documents(draft_id: str, request: Request) -> GenerateOut:
+def api_draft_documents(draft_id: str, request: Request,
+                        payload: Optional[DocumentsIn] = None) -> GenerateOut:
     """The Files page's Download buttons: the SAVED draft's document, through the one render.
 
     Loads the draft from the store rather than taking a payload in the body, because the store's
@@ -6572,6 +6804,15 @@ def api_draft_documents(draft_id: str, request: Request) -> GenerateOut:
     row = drafts.load_draft(draft_id)
     if not row:
         raise HTTPException(404, "Draft not found")
+    # THE COPY HE WAS ASKED ABOUT, OR NOTHING (review of dfcf589). The page asked its question of
+    # the save it names; a draft stored again since may carry a figure nobody was asked about, so
+    # nothing is rendered or recorded. Pressing Download again asks about the copy stored now.
+    if _stored_since(row, payload.draft_version if payload else None):
+        log.warning("documents refused for draft %s: saved again after the page checked it "
+                    "(checked %s, now %s)", draft_id, payload.draft_version, row.get("updated_at"))
+        raise HTTPException(409, "Not built — this proposal was saved again after this page "
+                                 "checked it (from another page or computer). Press Download "
+                                 "again to check the copy saved now.")
     pp = (row.get("data") or {}).get("proposal_payload")
     if not (isinstance(pp, dict) and pp.get("values")):
         raise HTTPException(422, "This proposal hasn't been built yet — open the Proposal step "
@@ -7272,6 +7513,9 @@ class ToDropboxIn(BaseModel):
     # the folder his team already made instead of inventing a second one). When
     # set, nothing new is created. Blank/None keeps the old create-a-folder path.
     folder_path: str | None = None
+    # When the server stored the copy the page asked "… — file anyway?" of (DocumentsIn has the
+    # why). A draft stored again since is not filed. Absent (an older page): filed as before.
+    draft_version: str | None = None
 
 
 def _dropbox_project_vals(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -7383,6 +7627,15 @@ def api_to_dropbox(payload: ToDropboxIn, request: Request) -> Dict[str, Any]:
     row = drafts.load_draft(payload.draft_id)
     if not row:
         raise HTTPException(404, "Draft not found")
+    # THE COPY HE WAS ASKED ABOUT, OR NOTHING (review of dfcf589; api_draft_documents has the same).
+    if _stored_since(row, payload.draft_version):
+        log.warning("to-dropbox refused for draft %s: saved again after the page checked it "
+                    "(checked %s, now %s)", payload.draft_id, payload.draft_version,
+                    row.get("updated_at"))
+        return {"ok": False, "code": "document_changed",
+                "error": "Nothing was filed — this proposal was saved again after this page "
+                         "checked it (from another page or computer). Press the button again to "
+                         "check the copy saved now."}
     data = row.get("data") or {}
     pp = data.get("proposal_payload")
     # STALE, NOT JUST ABSENT, SENDS US TO THE SAME FALLBACK BELOW. A payload that

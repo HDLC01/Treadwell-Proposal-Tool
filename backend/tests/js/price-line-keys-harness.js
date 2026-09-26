@@ -71,6 +71,12 @@ function draft() {
       after: { "manual:0": ["under the mockup"], "manual:1": ["under night work"],
                "option:Copy1": ["Test again 123"], "option:Copy1:sales_tax": ["x"],
                "option:Copy10": ["under copy 10"], base: ["under the base"] },
+      // The bullets set on those lines with the ribbon (the REBID price box), keyed the same way.
+      line_props: { "manual:1": { bullet: false, indent: 288 }, "manual:2": { bullet: true, level: 1 },
+                    "option:Copy1": { bullet: false, indent: 288 }, "option:Copy10": { bullet: true, level: 1 } },
+      before_props: { "manual:2": [{ bullet: false, indent: 576 }] },
+      after_props: { "manual:1": [{ bullet: false, indent: 1440 }], "option:Copy1:sales_tax": [{ bullet: true, level: 0 }],
+                     "option:Copy10": [{ bullet: false, indent: 1440 }] },
     },
   };
 }

@@ -385,12 +385,19 @@ const LIFTED = [
   fn("fillHtml"), fn("runStyleCss"), fn("blockHtml"),
   fn("fmtAt"), fn("segmentsOf"), fn("mergeSegs"), fn("serializeRuns"), fn("editRuns"),
   fn("runEditCss"), fn("renderRuns"), fn("serializeBlock"), fn("insertBreakAt"), fn("pointAt"),
-  fn("addBoxTools"), fn("fitTxbx"), fn("wireOverflowExpand"),
+  fn("addBoxTools"), // fitTxbx shows each box at the size the writer prints it (applyBoxFit, from boxFitById, which
+  // POST /api/proposal-fit fills). Lifted rather than stubbed: with no answer in the map the real
+  // applyBoxFit leaves the box at its design size, which is the page before its first answer.
+  topConst("boxFitById"), topConst("PAGE_HP"), fn("inlineHp"), fn("clearBoxFit"), fn("applyBoxFit"),
+  fn("fitTxbx"), fn("wireOverflowExpand"),
   // The Enter handler no longer trusts the event target: the box is the editing host now, so the
   // browser fires the keystroke at the box and the caret is the only thing that says which
   // paragraph it belongs to. These four are that resolution, lifted rather than stubbed so the
   // handler's own "is this even a line" guard is the real one.
   topConst("LINE_SEL"), fn("lineAt"), fn("lineAtSelection"), fn("lineTarget"), fn("editingBox"),
+  // ...and its refusal to put a break in a line nobody can see, which moves the caret instead
+  // (line-removal-harness.js drives that; every line here is shown, so it stands down).
+  fn("lineShown"), fn("adjacentLine"), fn("caretToLine"),
 ].join("\n\n");
 
 const ENTER_HANDLER = delegated("  // Enter inside a template paragraph = ONE line break");
@@ -456,11 +463,9 @@ const api = new Function(
 
 const out = {};
 
-// ═══ (d) getting OUT of an expanded text box ═════════════════════════════════
+// ═══ the text box fixture ══════════════════════════════════════════════════
 // 183.75pt is box 3 of Kyle's GC Resinous template, measured from the file rather than
 // invented; 400pt of content in it is the real complaint (a long WORK scope).
-// The clipped height is deliberately NOT computed here — test_doc_editor_ux.py states it
-// independently, so a harness that got the arithmetic wrong cannot agree with itself.
 const DESIGN_H = 183.75;
 
 function mountBox(naturalPt, lineCount) {
@@ -504,73 +509,43 @@ const state = (box) => ({
 });
 
 const collapseBtn = (box) => box.querySelector("[data-box-collapse]");
-/** The way IN, since 2026-08-26. Opening used to be a click on the box itself, and every scenario
- *  below opened one that way — which is exactly the gesture that was taken away, because a click
- *  inside a text box has to land a caret. */
 const peekBtn = (box) => box.querySelector("[data-box-peek]");
-const openBox = (box) => fire(peekBtn(box), "click", {});
 
-// 1. The box really is over capacity, and the tools carry a labelled way out.
+// ═══ (d) a box too long for its template height is NOT CLIPPED (2026-09-26) ══════════════════
+// Hanz: "whatever is the font size in the PDF should also be the same as in the Proposal Editor".
+// The writer prints an over-long box at its shrink floor and lets the rest run past the box's
+// bottom edge; it never cuts a line. fitTxbx used to clip the box and hide those lines behind a
+// "Show all" button, so the page showed less than the PDF printed. Now it shows all of it.
+
+// 1. Over capacity: marked, NOT clipped, and nothing left to open or collapse.
 {
   const { box } = mountBox(400);
-  out.clipped = state(box);
-  const btn = collapseBtn(box);
-  const peek = peekBtn(box);
+  out.overflowing = state(box);
   out.tools = {
-    hasCollapse: !!btn,
-    label: btn ? btn.textContent : null,
-    title: btn ? btn.title : null,
-    inToolsLayer: !!(btn && btn.closest(".tw-box-tools")),
-    isNotAGrip: !!(btn && btn.attrs["data-grip"] === undefined),
-    // The way IN, held to the same three rules as the way out: a word, in the tools layer, that
-    // cannot be mistaken for a drag handle.
-    hasPeek: !!peek,
-    peekLabel: peek ? peek.textContent : null,
-    peekTitle: peek ? peek.title : null,
-    peekInToolsLayer: !!(peek && peek.closest(".tw-box-tools")),
-    peekIsNotAGrip: !!(peek && peek.attrs["data-grip"] === undefined),
-    // The order the tools are written in, so adding one can be seen not to have displaced the
+    hasCollapse: !!collapseBtn(box),
+    hasPeek: !!peekBtn(box),
+    title: box.title,
+    // The order the tools are written in, so removing two can be seen not to have displaced the
     // grips box-drag-harness.js asserts the order of.
     order: box.querySelector(".tw-box-tools").children.map((c) => c.className),
   };
 }
 
-// 2. The "Show all" button opens it, and the Collapse button closes it again.
+// 2. A re-fit -- what every edit and repagination does -- leaves it that way.
 {
   const { box } = mountBox(400);
-  openBox(box);
-  const opened = state(box);
-  fire(collapseBtn(box), "click", {});
-  out.collapseButton = { opened: opened, closed: state(box) };
+  api.fitTxbx(box);
+  out.refit = state(box);
 }
 
-// 3. THE TRAP: a click on the editable content of an OPEN box must not close it — you are
-//    typing. This is why the button/Escape/outside click had to exist.
+// 3. A box whose text fits says nothing at all.
 {
-  const { box, block } = mountBox(400);
-  openBox(box);
-  fire(block, "click", {});
-  const afterBlockClick = state(box);
-  // The nested case: a click on a `.tw-fill` island inside the paragraph.
-  const fill = new El("span");
-  fill.className = "tw-fill";
-  block.appendChild(fill);
-  fire(fill, "click", {});
-  out.typingKeepsItOpen = { afterBlockClick: afterBlockClick, afterFillClick: state(box) };
+  const { box } = mountBox(120);
+  out.fits = Object.assign(state(box), { title: box.title });
 }
 
-// 4. Escape, with the caret inside the box's own paragraph.
-{
-  const { box, block } = mountBox(400);
-  openBox(box);
-  document.activeElement = block;
-  const e = fire(block, "keydown", { key: "Escape" });
-  out.escape = { closed: state(box), blurred: document.activeElement === null,
-                 defaultPrevented: !!e.defaulted };
-}
-
-// 5. Escape when nothing is open must not swallow the key — Escape means other things on this
-//    page, and a handler that always preventDefaults steals them.
+// 4. Escape is not taken by the box any more: there is nothing open to close, and Escape means
+//    other things on this page.
 {
   const { box } = mountBox(400);
   const e = fire(box, "keydown", { key: "Escape" });
@@ -578,75 +553,11 @@ const openBox = (box) => fire(peekBtn(box), "click", {});
                            defaultPrevented: !!e.defaulted };
 }
 
-// 6. Escape must not blur a field OUTSIDE the box (the sidebar is full of them).
+// 5. A click on the page outside the box changes nothing about it.
 {
   const { box } = mountBox(400);
-  openBox(box);
-  const elsewhere = new El("input");
-  pageBackground.appendChild(elsewhere);
-  document.activeElement = elsewhere;
-  fire(elsewhere, "keydown", { key: "Escape" });
-  out.escapeFromElsewhere = { closed: state(box),
-                              stillFocused: document.activeElement === elsewhere };
-  document.activeElement = null;
-}
-
-// 7. A click on the page outside the box collapses it.
-{
-  const { box } = mountBox(400);
-  openBox(box);
   fire(pageBackground, "click", {});
   out.outsideClick = state(box);
-}
-
-// 7b. …but a click on the formatting ribbon does NOT, even though ensureFmtBar mounts it in the
-//     page's top chrome (#fmt-ribbon since 2026-08-24, document.body before that) and it is
-//     therefore "outside the box" in the DOM either way. It is chrome for the paragraph being
-//     edited, and now that it never moves it is the one control that is ALWAYS outside the box.
-{
-  const { box } = mountBox(400);
-  openBox(box);
-  const host = new El("div");
-  host.attrs.id = "fmt-ribbon";
-  const bar = new El("div");
-  bar.className = "tw-fmtbar";
-  const boldBtn = new El("button");
-  boldBtn.attrs["data-fmt"] = "bold";
-  bar.appendChild(boldBtn);
-  host.appendChild(bar);
-  document.body.appendChild(host);
-  fire(boldBtn, "click", {});
-  out.formatBarClick = state(box);
-}
-
-// 8. …and a click on ANOTHER expanded box does not leave the first one open behind it.
-{
-  docSurface.childNodes = [];
-  const boxes = [];
-  for (const id of ["3", "5"]) {
-    const box = new El("div");
-    box.className = "tw-txbx";
-    box.dataset.boxId = id;
-    box.dataset.boxHPt = String(DESIGN_H);
-    docSurface.appendChild(box);
-    api.addBoxTools(box);
-    box._naturalPx = Math.round(400 * PX_PER_PT);
-    api.fitTxbx(box);
-    openBox(box);
-    boxes.push(box);
-  }
-  const bothOpen = boxes.map((b) => b.classList.contains("tw-notes-open"));
-  fire(pageBackground, "click", {});
-  out.manyBoxes = { bothOpen: bothOpen, afterOutside: boxes.map((b) => state(b)) };
-}
-
-// 9. Re-fitting (what every edit and repagination does) must also put it back, or a box left
-//    open would stay open across a render with a stale maxHeight.
-{
-  const { box } = mountBox(400);
-  openBox(box);
-  api.fitTxbx(box);
-  out.refitCollapses = state(box);
 }
 
 // ═══ (e) a click INSIDE a box lands a caret, and does nothing else ═══════════

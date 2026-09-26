@@ -359,7 +359,13 @@
   const _notesReady = (function prefillNotes() {
     const ta = document.getElementById("notes-text");
     if (!ta) return;
-    const applyAndPreview = (text) => { ta.value = text; syncPhaseNote(); try { renderNotesPreview(); } catch {} };
+    // The NOTES box now holds different words, so the size it prints at is asked again (scheduleFit;
+    // try: the synchronous call below runs before the fit's bookkeeping exists, and the editor's
+    // own first ask covers it).
+    const applyAndPreview = (text) => {
+      ta.value = text; syncPhaseNote(); try { renderNotesPreview(); } catch {}
+      try { scheduleFit(); } catch {}
+    };
     if (Array.isArray(state.notes) && state.notes.length) { applyAndPreview(state.notes.join("\n")); return; }
     if (String(ta.value || "").trim()) { syncPhaseNote(); return; }
     // Brand-new project: pull this work type's boilerplate scope/schedule/exclusions.
@@ -382,6 +388,8 @@
       ta.value = text; _seededNotes = text; syncPhaseNote();
       try { renderNotesPreview(); } catch {}
       try { TW.setState({ notes_text: ta.value }); } catch {}
+      // Arrives after the base flip's own fit was answered: ask again, for the new notes.
+      try { scheduleFit(); } catch {}
     });
   }
 
@@ -543,8 +551,8 @@
   // .after[key], arrays of strings, blank ones included. They print as their own paragraphs in the
   // price row's own formatting and never freeze the line beside them.
   const COMPUTED_PRICE_LINE_KEYS = new Set(["base", "sales_tax", "remodel", "total"]);
-  const _LIVE_TITLE = "Edited — your words are kept; the amount and the tax wording still follow the estimate.";
-  const _MONEY_TITLE = "The amount on this line does not follow the estimate: it prints the figure typed here. Send will ask before it goes.";
+  const _LIVE_TITLE = "Edited — your words are kept. The amount follows the estimate, and the tax wording does too unless you typed your own.";
+  const _MONEY_TITLE = "The amount on this line does not follow the estimate: it prints the figure typed here. Send, Download and To Dropbox will ask before it goes.";
   /** The stored text for a line in the LIVE shape, resolved against today's parts, or null.
    *
    *  `parts` = {amount, phrase, slot, candidates}: today's computed amount string for this line,
@@ -558,15 +566,25 @@
     const own = Object.prototype.hasOwnProperty;
     // MIGRATE ON LOAD: a line saved before the live shape, the first time it is drawn. Split into
     // the line itself and the lines typed around it; today's amount (or a figure the old code froze
-    // in) and any tax wording this tool has printed become markers; a "$0 – Total" the old box-wide
+    // in) where it is the line's price, and -- on a line with a place for tax wording -- any tax
+    // wording this tool has printed, become markers; a "$0 – Total" the old box-wide
     // sweep froze on a row nobody touched is dropped. What is left and still differs from the
     // computed line is the estimator's.
+    //
+    // "A figure the old code froze in" is also any figure this draft's tabs price the line at
+    // TODAY, the OLD base's included (TWPrice.tabFigures): a base line frozen at Epoxy's $7,447
+    // while Epoxy still prices at $7,447 follows the estimate again after the base moved to Epoxy
+    // copy. Those count at the line's amount only, never in its words, and never pick a note
+    // typed round it for the price line (migrateLine). A figure no tab prices today is his --
+    // including a tab's OLD price, which nothing on the page remembers (Hanz Fix revisions 2-5:
+    // Epoxy had been re-priced to $7,696): kept, marked, and Send asks.
     if (pov.lines && typeof pov.lines === "object" && typeof pov.lines[key] === "string"
         && !(pov.lines2 && typeof pov.lines2 === "object" && own.call(pov.lines2, key))
         && p.amount !== undefined) {
       const m = TWPrice.migrateLine(pov.lines[key], {
         amount: p.amount, phrase: p.phrase || "", slot: !!p.slot,
         candidates: Array.isArray(p.candidates) ? p.candidates : [],
+        others: TWPrice.tabFigures(state.priced_tabs, key),
         zeroIsPhantom: COMPUTED_PRICE_LINE_KEYS.has(key) || /:(sales_tax|remodel|total)$/.test(key),
       });
       if (!pov.lines2 || typeof pov.lines2 !== "object" || Array.isArray(pov.lines2)) pov.lines2 = {};
@@ -602,14 +620,78 @@
   }
   const _escLine = (s) => String(s == null ? "" : s).replace(/[&<>"']/g,
     c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  // ── THE PRICE BOX'S BULLETS AND INDENTS (Kyle's REBID layout) ────────────────────────────
+  // Hanz, 2026-09-26: "fix the indents and the bullets now" — and before it, "I couldnt add an
+  // indendt and bullet" / "also the bullet point and the indent are not working in the pricing
+  // box". The ribbon let go of every price line (they were a channel it could not reach) and the
+  // document stripped every PRICE bullet anyway. Now every money line carries the template's red
+  // square, a line typed under or over one carries the hollow "o", headings and blank lines carry
+  // nothing (TWPrice.lineDefault — the document's twin is price_rules.line_default), and the
+  // ribbon's Bullet / Indent / Outdent / Reset act on the price line the caret is on.
+  //
+  // WHERE A LINE'S OVERRIDE LIVES: in the draft, price_overrides.line_props[key] for the line
+  // itself and before_props[key][i] / after_props[key][i] for the i-th line typed above / below
+  // it — one list beside each list of typed lines. And, WHILE THE PAGE IS UP, on the line's own
+  // element (data-pl): every builder that draws a line from the draft puts its override there,
+  // the box sweep stores what the elements say (captureLineNode / captureExtrasIn), and a ribbon
+  // press writes the element. So Enter, Backspace and a paste that add or take away a typed line
+  // carry each line's bullet with the line, by position, the same way they carry its words.
+  /** The estimator's stored override for one price line, or null (see the note above). */
+  function linePropsOf(key, pos, idx) {
+    const pov = state.price_overrides;
+    if (!pov || typeof pov !== "object") return null;
+    let raw = null;
+    if (!pos) raw = pov.line_props && typeof pov.line_props === "object" ? pov.line_props[key] : null;
+    else {
+      const m = pov[pos + "_props"];
+      const rows = m && typeof m === "object" ? m[key] : null;
+      raw = Array.isArray(rows) ? rows[idx] : null;
+    }
+    const c = TWPrice.cleanLineProps(raw);
+    return Object.keys(c).length ? c : null;
+  }
+
+  /** Draw the bullet, level and indent of every price line in `root` (the document when omitted),
+   *  from what each line's element says: TWPrice.resolveLineProps over its key, whether it is the
+   *  line or a line typed next to it, its words, and its override. The same geometry the document
+   *  prints — a bulleted line's square sits `hanging` twips left of its text (Word puts the text at
+   *  `left` and the marker at `left - hanging`), an unbulleted line's text starts at its indent.
+   *  A blank line draws no bullet, as none prints. Cheap and idempotent; run after every repaint
+   *  and every edit in the box, so a line gets its bullet the moment it gets its first word. */
+  function paintLineParas(root) {
+    const scope = root && root.querySelectorAll ? root
+      : (typeof docSurface !== "undefined" ? docSurface : null);
+    if (!scope || !scope.querySelectorAll) return;
+    const L = TWPrice.LEVEL_LEFT, H = TWPrice.LEVEL_HANG;
+    const pt = (tw) => (tw / 20) + "pt";
+    scope.querySelectorAll("[data-po-linekey][data-po-kind]").forEach(el => {
+      const kind = el.dataset.poKind;
+      if (kind !== "line" && kind !== "extra") return;
+      let ov = null;
+      try { ov = el.dataset.pl ? JSON.parse(el.dataset.pl) : null; } catch { ov = null; }
+      const r = TWPrice.resolveLineProps(el.dataset.poLinekey,
+        kind === "extra" ? (el.dataset.poPos || "after") : null, serializeBlock(el), ov);
+      el.classList.toggle("tw-li", !!r.bullet);
+      el.classList.toggle("tw-lvl-o", !!r.bullet && r.level === 1);
+      if (!el.style) return;
+      if (r.bullet) { el.style.marginLeft = pt(L[r.level] - H[r.level]); el.style.paddingLeft = pt(H[r.level]); }
+      else { el.style.marginLeft = pt(r.indent); el.style.paddingLeft = "0pt"; }
+    });
+  }
+
   /** The lines typed above ("before") or below ("after") one price line, as markup. */
   function extraLinesHtml(key, pos, style) {
     const pov = state.price_overrides || {};
     const rows = pov[pos] && typeof pov[pos] === "object" ? pov[pos][key] : null;
     if (!Array.isArray(rows) || !rows.length) return "";
-    return rows.map(t => `<p class="tw-priceline tw-line-edit tw-po-extra" spellcheck="false"` +
-      ` data-po-kind="extra" data-po-linekey="${_escLine(key)}" data-po-pos="${pos}"` +
-      ` style="${_escLine(style || "margin:0 0 2pt;")}">${_escLine(t)}</p>`).join("");
+    return rows.map((t, i) => {
+      const pl = linePropsOf(key, pos, i);
+      return `<p class="tw-priceline tw-line-edit tw-po-extra" spellcheck="false"` +
+        ` data-po-kind="extra" data-po-linekey="${_escLine(key)}" data-po-pos="${pos}"` +
+        (pl ? ` data-pl="${_escLine(JSON.stringify(pl))}"` : "") +
+        ` style="${_escLine(style || "margin:0 0 2pt;")}">${_escLine(t)}</p>`;
+    }).join("");
   }
   // Markup for a JS-rendered whole-line (combo / option / manual / alternate), with the lines typed
   // above and below it. `opts.parts` is what an edited line's markers resolve against.
@@ -622,12 +704,14 @@
     const bold = (opts && opts.bold) ? "font-weight:bold;" : "";
     const cls = cue ? " tw-overridden" + (cue === "live" ? " tw-po-live" : cue === "money" ? " tw-money-off" : "") : "";
     const title = cue === "live" ? _LIVE_TITLE : cue === "money" ? _MONEY_TITLE : cue ? _OVERRIDE_TITLE : "";
+    const pl = linePropsOf(key, null);
     // No contenteditable of its own -- see renderBlock. The box is the host; this inherits.
     return extraLinesHtml(key, "before", style) +
            `<p class="tw-priceline tw-line-edit${cls}" spellcheck="false"` +
            ` data-po-kind="line" data-po-linekey="${e(key)}" data-computed="${e(computed)}"` +
            ` data-amount="${e(parts.amount || "")}" data-phrase="${e(parts.phrase || "")}"` +
            ` data-slot="${parts.slot ? "1" : ""}"` +
+           (pl ? ` data-pl="${e(JSON.stringify(pl))}"` : "") +
            (title ? ` title="${title}"` : "") +
            ` style="${style}${bold}">${e(shown)}</p>` +
            extraLinesHtml(key, "after", style);
@@ -650,18 +734,25 @@
     const before = gapOwned ? []
       : pov.before && Array.isArray(pov.before[key]) ? pov.before[key] : [];
     const after = pov.after && Array.isArray(pov.after[key]) ? pov.after[key] : [];
-    before.forEach(t => parent.insertBefore(makeExtraLine(el, key, "before", t), el));
+    before.forEach((t, i) => parent.insertBefore(makeExtraLine(el, key, "before", t,
+                                                               linePropsOf(key, "before", i)), el));
     let at = el;
-    after.forEach(t => { const n = makeExtraLine(el, key, "after", t); parent.insertBefore(n, at.nextSibling); at = n; });
+    after.forEach((t, i) => {
+      const n = makeExtraLine(el, key, "after", t, linePropsOf(key, "after", i));
+      parent.insertBefore(n, at.nextSibling);
+      at = n;
+    });
   }
-  /** One typed line next to price line `el`, in that line's own spacing (never its bold). */
-  function makeExtraLine(el, key, pos, text) {
+  /** One typed line next to price line `el`, in that line's own spacing (never its bold). `pl` is
+   *  its bullet override, if it has one (see paintLineParas). */
+  function makeExtraLine(el, key, pos, text, pl) {
     const n = document.createElement("p");
     n.className = "tw-priceline tw-line-edit tw-po-extra";
     n.spellcheck = false;
     n.dataset.poKind = "extra";
     n.dataset.poLinekey = key;
     n.dataset.poPos = pos;
+    if (pl && Object.keys(pl).length) n.dataset.pl = JSON.stringify(pl);
     const style = el && el.getAttribute
       ? (el.getAttribute("style") || "").replace(/display\s*:\s*none;?/g, "") : "";
     n.setAttribute("style", style || "margin:0 0 2pt;");
@@ -692,13 +783,17 @@
     const key = el.dataset.poLinekey;
     const isMain = el.dataset.poKind === "line";
     const text = serializeBlock(el);
+    // A typed line split in two: the new half keeps its bullet, as a paragraph split in Word does.
+    // A price line's own bullet stays with the price line; a new line under it is its sub-line.
+    let inherit = null;
+    if (!isMain && el.dataset.pl) { try { inherit = JSON.parse(el.dataset.pl); } catch { inherit = null; } }
     if (isMain && start === 0 && end === 0 && text.length) {
       el.parentNode.insertBefore(makeExtraLine(el, key, "before", ""), el);
       caretInto(el, 0);
     } else {
       const head = text.slice(0, start), tail = text.slice(end);
       if (head !== text) el.textContent = head;
-      const n = makeExtraLine(el, key, isMain ? "after" : (el.dataset.poPos || "after"), tail);
+      const n = makeExtraLine(el, key, isMain ? "after" : (el.dataset.poPos || "after"), tail, inherit);
       el.parentNode.insertBefore(n, el.nextSibling);
       caretInto(n, 0);
     }
@@ -714,23 +809,27 @@
       && (n.dataset.poKind === "line" || n.dataset.poKind === "extra"));
     const isExtra = (n) => same(n) && n.dataset.poKind === "extra";
     const fire = (n) => n.dispatchEvent(new Event("input", { bubbles: true }));
+    // A line's words. The placeholder break an emptied line keeps (lineBare) is no words: read as
+    // "\n", it made an empty line look full, and joining one onto the line above left that line
+    // ending in a line break, which the sweep then stored as a blank line the screen never shows.
+    const words = (n) => (lineBare(n) ? "" : serializeBlock(n));
     if (dir === "up") {
       const prev = el.previousElementSibling;
       if (isExtra(el) && same(prev)) {
-        const at = serializeBlock(prev).length;
-        prev.textContent = serializeBlock(prev) + serializeBlock(el);
+        const at = words(prev).length;
+        prev.textContent = words(prev) + words(el);
         el.remove();
         caretInto(prev, at);
         fire(prev);
         return true;
       }
-      if (isExtra(prev) && !serializeBlock(prev).length) {      // an empty typed line above: remove it
+      if (isExtra(prev) && !words(prev).length) {      // an empty typed line above: remove it
         prev.remove();
         caretInto(el, 0);
         fire(el);
         return true;
       }
-      if (isExtra(el) && !serializeBlock(el).length) {          // an empty typed line: remove it
+      if (isExtra(el) && !words(el).length) {          // an empty typed line: remove it
         const host = editingBox(el);
         // The caret goes to the end of the line SHOWN above: a row the layout hides (the tax rows
         // under one line) sits in the box too, and a caret put in it is a caret nobody can see.
@@ -749,14 +848,14 @@
     const next = el.nextElementSibling;
     if (isExtra(next) && (next.dataset.poPos === "after" || isExtra(el))) {
       if (!isExtra(el) && next.dataset.poPos !== "after") return false;
-      const at = serializeBlock(el).length;
-      el.textContent = serializeBlock(el) + serializeBlock(next);
+      const at = words(el).length;
+      el.textContent = words(el) + words(next);
       next.remove();
       caretInto(el, at);
       fire(el);
       return true;
     }
-    if (isExtra(el) && same(next) && !serializeBlock(el).length) {   // an empty line above its row
+    if (isExtra(el) && same(next) && !words(el).length) {   // an empty line above its row
       el.remove();
       caretInto(next, 0);
       fire(next);
@@ -783,6 +882,8 @@
     el.classList.toggle("tw-money-off", cue === "money");
     const title = cue === "live" ? _LIVE_TITLE : cue === "money" ? _MONEY_TITLE : cue ? _OVERRIDE_TITLE : "";
     if (title) el.title = title; else el.removeAttribute("title");
+    const pl = linePropsOf(key, null);
+    if (pl) el.dataset.pl = JSON.stringify(pl); else delete el.dataset.pl;
     paintExtras(el, key);
   }
 
@@ -1212,9 +1313,18 @@
         taxable: sys.taxable, remodel_on: sys.remodel_on }, broken);
       optionNum += 1;
       const optLabel = `Option ${optionNum}`;
+      // `candidates`: every figure the page before the live shape could have frozen into this
+      // line when it was re-worded (see lineOverride's migration) -- the whole Total (tax
+      // exempt), the Total less remodel (Included, with the Remodel Tax and Total rows under it),
+      // the Total less both taxes (broken out). Without them a line re-worded under "Included"
+      // migrated with its old pre-remodel figure frozen, now worded as including remodel tax, and
+      // with the rows that made it add up gone: the customer quoted short by the remodel tax.
       lines.push({ key: `${role}.flooring`, amount_formatted: fmtUSDdoc(rule.base_cents / 100),
         label: `${optLabel}: ${noun} as described above` + (rule.phrase ? ` ${rule.phrase}` : ""),
-        phrase: rule.phrase, slot: true });
+        phrase: rule.phrase, slot: true,
+        candidates: [rule.total_cents, rule.total_cents - rule.remodel_cents,
+                     rule.total_cents - rule.remodel_cents - rule.sales_cents]
+          .map(c => fmtUSDdoc(c / 100)) });
       if (rule.material) lines.push({ key: `${role}.sales_tax`, amount_formatted: fmtUSDdoc(rule.sales_cents / 100), label: "Material Sales Tax", phrase: "" });
       if (rule.remodel) lines.push({ key: `${role}.remodel`, amount_formatted: fmtUSDdoc(rule.remodel_cents / 100), label: "Remodel Tax", phrase: "" });
       if (rule.total) lines.push({ key: `${role}.total`, amount_formatted: fmtUSDdoc(rule.total_cents / 100), label: "Total", phrase: "" });
@@ -1235,20 +1345,24 @@
     const out = [];
     comboSystemLines().forEach(l => {
       const key = "combo:" + l.key;
+      // `key` / `pos` / `idx` say which line each entry is, so the document can print its bullet
+      // (main.py resolves it from price_overrides.line_props / before_props / after_props).
       const extra = (pos) => (pov[pos] && Array.isArray(pov[pos][key]) ? pov[pos][key] : [])
-        .map(t => ({ label: String(t), amount_formatted: "", extra: true }));
+        .map((t, idx) => ({ label: String(t), amount_formatted: "", extra: true, key, pos, idx }));
       const ov = lineOverride(key, `${l.amount_formatted} – ${l.label}`,
-        { amount: l.amount_formatted, phrase: l.phrase || "", slot: !!l.slot });
+        { amount: l.amount_formatted, phrase: l.phrase || "", slot: !!l.slot,
+          candidates: l.candidates || [] });
       out.push(...extra("before"));
-      out.push(ov != null ? { label: ov, amount_formatted: "" }
-                          : { amount_formatted: l.amount_formatted, label: l.label });
+      out.push(ov != null ? { label: ov, amount_formatted: "", key }
+                          : { amount_formatted: l.amount_formatted, label: l.label, key });
       out.push(...extra("after"));
     });
     return out;
   }
 
   /** Every price line on the page that prints a dollar figure of the estimator's own instead of
-   *  the estimate's, as [{key, says, estimate}] — what Send asks about before it goes (done.js).
+   *  the estimate's, as [{key, says, estimate}] — what Send, Download and To Dropbox ask about
+   *  before anything goes (TWPrice.confirmOwnFigures, off proposal_payload.price_warnings).
    *  Hanz, 2026-09-25: warn, then let him send. Read off the lines as drawn, so it is exactly what
    *  the page is showing; empty before the document is on screen. */
   function priceWarnings() {
@@ -1328,7 +1442,8 @@
       if (!focusInside(comboBlock)) {
         comboBlock.innerHTML = comboLines.map(l =>
           lineEl("combo:" + l.key, `${l.amount_formatted} – ${l.label}`,
-                 { parts: { amount: l.amount_formatted, phrase: l.phrase || "", slot: !!l.slot } })).join("");
+                 { parts: { amount: l.amount_formatted, phrase: l.phrase || "", slot: !!l.slot,
+                            candidates: l.candidates || [] } })).join("");
       }
       hideRow(baseBidHeading, "heading_base");
       hideRow(baseBidRow, "base");
@@ -1365,6 +1480,8 @@
       } else hideRow(totalRow, "total");
     }
     renderProposalExtras();
+    // Every line just drawn, its bullet and indent (Kyle's REBID layout, the ribbon's overrides).
+    paintLineParas();
   }
 
   // Render the structured price lines + the recommended ALTERNATE system into
@@ -1596,7 +1713,7 @@
           });
 
           const ensureOpt = (id) => { if (!opts[id]) opts[id] = { show_system: true, show_diff: false, is_option: false, show: true, price_mode: "total" }; return opts[id]; };
-          const applyAndRefresh = () => { rebuildPricing(); refreshPriceDisplay(); };
+          const applyAndRefresh = () => { rebuildPricing(); refreshPriceDisplay(); scheduleFit(); };
           // Base-bid radios — turning one on sets the base.
           optsPanel.querySelectorAll("input.pr-base").forEach(rb => rb.addEventListener("change", () => {
             if (!rb.checked) return;
@@ -1604,20 +1721,23 @@
             state.base_tab_id = rb.value || null;
             if (rb.value && opts[rb.value]) opts[rb.value].is_option = false;   // base can't also be an option
             if (state.base_tab_id !== priorBaseId) {
-              // A base/work-type change re-derives the base + tax rows + combo
-              // breakout, so their display overrides are stale — clear them (the
-              // base-independent alternate block's overrides are kept).
+              // THE SAME RULE as the Estimate step's bid strip (TWPrice.applyBasePick). Hanz,
+              // 2026-09-26: keep the words. A base line he re-worded keeps his words; its amount,
+              // its words for the tab's system and its tax wording become the new base's, and a
+              // figure no tab prices stays his (marked, and Send, Download and To Dropbox ask).
+              //
+              // And SAVED NOW. rebuildPricing's save below carries the base and the money, not the
+              // price edits, so leaving by a step pill (the pagehide save) put the old base's
+              // words for its system back into the draft under the new base.
+              //
+              // `basePhrase`: the tax wording the base line prints before the pick (the page has
+              // not re-priced yet), so a line still in the old shape -- one a combined base never
+              // drew -- is read as drawing it would read it (TWPrice.applyBasePick, THE SAME PARTS).
               const pov = state.price_overrides;
-              if (pov && typeof pov === "object" && !Array.isArray(pov)) {
-                pov.single_bid = {}; pov.rows = {}; pov.combo = {};
-                // Clear base-dependent whole-line overrides; keep the base-independent
-                // alternate block (alt_*).
-                // Both shapes, and the lines typed around them: they belong to the old base.
-                for (const bucket of ["lines", "lines2", "before", "after"]) {
-                  const m = pov[bucket];
-                  if (!m || typeof m !== "object") continue;
-                  for (const k of Object.keys(m)) if (!k.startsWith("alt_")) delete m[k];
-                }
+              if (TWPrice.applyBasePick(pov, priorBaseId, state.base_tab_id, state.priced_tabs,
+                                        { workType: state.work_type,
+                                          basePhrase: baseTaxRule().phrase })) {
+                TW.setState({ price_overrides: pov });
               }
             }
             applyAndRefresh();
@@ -1692,9 +1812,22 @@
     // Mirrors the .docx {{#alternate}} block literally, each row a WHOLE-LINE
     // editable: header (system name), "$X – Flooring as described above (…)",
     // optional "$X – Remodel Tax", "$X – Total".
+    //
+    // The flooring row's tax wording is the TEMPLATE's (TWPrice.altFlooringPhrase): Epoxy Direct
+    // writes "(material sales tax INCLUDED)", Polish and Combo Direct print the base's own wording
+    // there. It is declared as the line's phrase, which is what its ⟦tax⟧ marker resolves to: with
+    // none declared, a keystroke or a ribbon press anywhere in the box stored this line with the
+    // wording turned into an empty marker, and the customer's document lost it (the screen kept
+    // showing it until the next repaint).
+    const altRow = (templateBlocks || []).find(b => b && /\{\{\s*alternate\.lump_sum_formatted\s*\}\}/.test(String(b.text || "")));
+    const altSys = basePriceSystem();
+    const altPhrase = altRow
+      ? TWPrice.altFlooringPhrase(altRow.text, baseBidFigure(altSys.total, altSys.sales_tax, altSys.remodel).rule.phrase)
+      : TWPrice.PHRASE.material;
     altBlock.innerHTML =
       lineEl("alt_name", `ALTERNATE SYSTEM — ${altLabel}`, { bold: true, style: "margin:6pt 0 2pt;" }) +
-      lineEl("alt_flooring", `${fmtUSDdoc(altFloor)} – Flooring as described above (material sales tax INCLUDED)`) +
+      lineEl("alt_flooring", `${fmtUSDdoc(altFloor)} – Flooring as described above` + (altPhrase ? ` ${altPhrase}` : ""),
+             { parts: { phrase: altPhrase, slot: true } }) +
       (altRemodel > 0 ? lineEl("alt_remodel", `${fmtUSDdoc(altRemodel)} – Remodel Tax`) : "") +
       lineEl("alt_total", `${fmtUSDdoc(altTotal)} – Total`);
   }
@@ -2099,8 +2232,14 @@
                        .map(id => document.getElementById(id)),
     remodel:      () => [],
     // The blank lines above the heading travel with it (#options-gap, see paintOptionsGap).
+    // ...and so do the option lines. On the Gyp file {{#price_line}} sits INSIDE {{#has_options}}
+    // (on every other file the two are siblings), and a region mounts by its OUTERMOST name
+    // (annotateRegions), so Gyp's option lines were never mounted: the editor showed "Options:"
+    // over nothing while the document printed every option under it. Where price_line is a
+    // sibling region its own mount comes next and re-appends the same node at the same place.
     has_options:  () => [document.getElementById("options-gap"),
-                         document.getElementById("options-heading")],
+                         document.getElementById("options-heading"),
+                         document.getElementById("price-lines-block")],
     price_line: () => [document.getElementById("price-lines-block")],
     alternate:  () => [document.getElementById("alternate-block")],
   };
@@ -2228,14 +2367,29 @@
   /** A PRICE paragraph's saved text with its frozen figures turned back into tokens: wherever it
    *  still carries, verbatim, the figure one of its OWN row tokens shows today (or, for the tax
    *  wording, any wording this tool has printed), that place becomes the {{token}}. Text that
-   *  already carries tokens, and figures he typed that are not today's, are left as they are. */
+   *  already carries tokens, and figures he typed that are not today's, are left as they are.
+   *
+   *  "Today's" includes any figure a tab of this draft prices the row at today, the OLD base's
+   *  included (TWPrice.tabFigures), the same rule as a Direct price line (lineOverride). These are
+   *  the GC, Gyp and polish Direct price rows, and neither base picker can reach them (the
+   *  Estimate step has no template to find them in): a base row edited before the rows kept their
+   *  tokens, frozen at Epoxy's $7,447, went on printing $7,447 after the base moved to a $15,149
+   *  copy. Such a figure counts only at the row's own amount -- its first figure -- so a figure
+   *  quoted in his words is never taken for it, and only on a row whose template prints one amount.
+   *  A figure no tab prices today stays his: marked, and Send asks. */
   function migratePriceParagraphText(id, text, tk) {
     let t = String(text == null ? "" : text);
     if (/\{\{\s*[a-zA-Z_][a-zA-Z0-9_]*\s*\}\}/.test(t)) return t;
     const tpl = String((blockById.get(Number(id)) || {}).text || "");
     const vals = tk || {};
+    // Which of a tab's figures each row prints (TWPrice.tabFigures' kinds).
+    const PRICE_ROW_KIND = { base_bid_formatted: "base", material_tax_formatted: "sales_tax",
+                             tax_amount_formatted: "remodel", total_formatted: "total",
+                             total_label: "total" };
+    const has = (k) => new RegExp("\\{\\{\\s*" + k + "\\s*\\}\\}").test(tpl);
+    const oneAmount = PRICE_AMOUNT_TOKENS.filter(has).length === 1;
     for (const k of PRICE_TOKENS) {
-      if (!new RegExp("\\{\\{\\s*" + k + "\\s*\\}\\}").test(tpl)) continue;
+      if (!has(k)) continue;
       const cands = k === "base_tax_phrase" ? [vals[k]].concat(TWPrice.KNOWN_PHRASES) : [vals[k]];
       let done = false;
       for (const v of cands) {
@@ -2246,7 +2400,20 @@
       // Today's figure in the money style an older preview froze ("$1,870.00" for "$1,870").
       if (!done && k !== "base_tax_phrase") {
         const same = TWPrice.sameAmountAt(t, [vals[k]]);
-        if (same) t = t.slice(0, same.at) + "{{" + k + "}}" + t.slice(same.at + same.len);
+        if (same) { t = t.slice(0, same.at) + "{{" + k + "}}" + t.slice(same.at + same.len); done = true; }
+      }
+      // A figure a tab of this draft prices the row at, at the row's own amount (see above). The
+      // Total label is the whole "$X – Total", so it is only its figure AND the tool's own words.
+      if (!done && oneAmount && PRICE_ROW_KIND[k]) {
+        const am = TWPrice.amountAt(t);
+        if (am && TWPrice.amountIsOneOf(t, TWPrice.tabFigures(state.priced_tabs, PRICE_ROW_KIND[k]))) {
+          let len = am.len;
+          if (k === "total_label") {
+            const tail = /^ – Total/.exec(t.slice(am.at + am.len));
+            len = tail ? am.len + tail[0].length : -1;
+          }
+          if (len > 0) t = t.slice(0, am.at) + "{{" + k + "}}" + t.slice(am.at + len);
+        }
       }
     }
     return t;
@@ -2753,7 +2920,10 @@
     const b = blockById.get(Number(id));
     const p = b && b.para;
     if (!p || typeof p !== "object") return null;
-    return { bullet: !!p.bullet, indent: Math.max(0, Number(p.indent) || 0), locked: !!p.locked };
+    // `level` is the list level (w:ilvl) the template puts it on — 0 for a paragraph on no list,
+    // and 0 too for a record from before the field existed, which is what those rows are on.
+    return { bullet: !!p.bullet, indent: Math.max(0, Number(p.indent) || 0), locked: !!p.locked,
+             level: Math.max(0, Math.min(8, Math.round(Number(p.level) || 0))) };
   }
 
   /** Where the paragraph is NOW: what the estimator set, else the template's own state. */
@@ -2761,20 +2931,29 @@
     const base = paraBase(id);
     if (!base) return null;
     const set = paraById.get(Number(id));
-    return set ? { bullet: !!set.bullet, indent: Math.max(0, Number(set.indent) || 0), locked: base.locked }
-               : { bullet: base.bullet, indent: base.indent, locked: base.locked };
+    // A saved entry with no `level` (every one from before the REBID price box) keeps the
+    // template's level, which is what it always meant.
+    return set ? { bullet: !!set.bullet, indent: Math.max(0, Number(set.indent) || 0), locked: base.locked,
+                   level: Number.isInteger(set.level) ? set.level : base.level }
+               : { bullet: base.bullet, indent: base.indent, locked: base.locked, level: base.level };
   }
 
   /** The `para` patch for one block, or null when it still matches the template.
    *
    *  Comparing against the template rather than persisting every paragraph keeps an untouched
    *  document shipping an empty paragraph_overrides list, which is what makes the generated
-   *  .docx byte-identical to the one this feature did not exist for. */
+   *  .docx byte-identical to the one this feature did not exist for. `level` is sent only when it
+   *  moved, so every patch a WORK or NOTES row makes keeps the {bullet, indent} shape it always had. */
   function paraPatch(id) {
     const base = paraBase(id), now = paraNow(id);
     if (!base || !now) return null;
-    if (now.bullet === base.bullet && now.indent === base.indent) return null;
-    return { bullet: now.bullet, indent: now.indent };
+    if (now.bullet === base.bullet && now.indent === base.indent && now.level === base.level) return null;
+    const out = { bullet: now.bullet, indent: now.indent };
+    // A bulleted line in the PRICE box always says which level it is on. The document puts a
+    // bullet switched back on onto its SIBLINGS' list level (proposal_writer._sibling_bullet_ref),
+    // which is the "o" whenever the estimator has moved the first row of the box there first.
+    if (now.level !== base.level || (now.bullet && takesPriceStep(id))) out.level = now.level;
+    return out;
   }
 
   /** Coerce a `para` field read back off a saved draft. Mirrors sanitize_para_props: unknown
@@ -2787,7 +2966,8 @@
     if (raw.indent !== undefined && raw.indent !== null && Number.isFinite(n)) {
       out.indent = Math.max(0, Math.min(INDENT_MAX_TW, Math.round(n)));
     }
-    return ("bullet" in out || "indent" in out) ? out : null;
+    if (Number.isInteger(raw.level) && raw.level >= 0 && raw.level <= 8) out.level = raw.level;
+    return ("bullet" in out || "indent" in out || "level" in out) ? out : null;
   }
 
   /** Show one paragraph's properties on screen, so the preview matches what prints.
@@ -2845,7 +3025,32 @@
     // The template's own record, for the measurements the toolbar cannot change. Without it an
     // indent press would rebuild the geometry from `left` alone and undo the hanging indent.
     const rec = blockById.get(Number(el.dataset.id));
-    applyParaGeom(el, st, (rec && rec.para) || null);
+    let tpl = (rec && rec.para) || null;
+    const level = Number.isInteger(st.level) ? st.level : Number((tpl && tpl.level) || 0);
+    // A PRICE-LIST row (the REBID price box) that the ribbon moved to the other level, or gave a
+    // bullet the template did not: that level's own hanging places the square, as the document's
+    // numbering does, and its glyph is the level's (the "o" on level 1 of every template's price
+    // list). Every other paragraph keeps its record's measurements and glyph, exactly as before.
+    const priceRow = !!rec && takesPriceStep(rec.id);
+    if (priceRow && bullet && tpl && (level !== Number(tpl.level || 0) || tpl.hanging == null)) {
+      tpl = Object.assign({}, tpl, { hanging: TWPrice.LEVEL_HANG[level] != null ? TWPrice.LEVEL_HANG[level] : tpl.hanging,
+                                     first_line: null });
+    }
+    // A PRICE-box row the estimator left WITHOUT a bullet has no marker for a hanging indent to make
+    // room for, and prints none: the writer drops a PRICE-list row's hanging with its bullet, and an
+    // indent it writes for an unbulleted row carries no hanging or first-line indent
+    // (proposal_writer.apply_para_props / _write_left_indent). So its words start at its indent,
+    // every line of it. Drawn with the template's hanging instead, "Bullet off, then Outdent" (or
+    // Backspace twice) showed the words 0.2in in over a money line the PDF printed flush. Only a
+    // state that differs from the template's: an untouched row prints the template's own w:ind.
+    const base = priceRow ? paraBase(rec.id) : null;
+    if (priceRow && !bullet && tpl && base
+        && (base.bullet !== bullet || base.indent !== Math.max(0, Number(st.indent) || 0))) {
+      tpl = Object.assign({}, tpl, { hanging: 0, first_line: null });
+    }
+    const glyphO = priceRow ? level === 1 : !!(tpl && tpl.glyph === "o" && level === Number(tpl.level || 0));
+    el.classList.toggle("tw-lvl-o", bullet && glyphO);
+    applyParaGeom(el, st, tpl);
   }
 
   /** Record a paragraph's new properties and repaint it. Refuses a locked paragraph. */
@@ -2856,9 +3061,65 @@
     if (!clean) return false;
     const now = paraNow(id);
     const next = { bullet: "bullet" in clean ? clean.bullet : now.bullet,
-                   indent: "indent" in clean ? clean.indent : now.indent };
+                   indent: "indent" in clean ? clean.indent : now.indent,
+                   level: "level" in clean ? clean.level : now.level };
     paraById.set(Number(id), next);
     applyParaToEl(el, next);
+    return true;
+  }
+
+  /** Is this a PRICE LINE the page composes — the base, a tax row, the Total, an option, a manual
+   *  or combo line, a heading, or a line typed next to one — rather than a template paragraph? */
+  function isPriceLine(n) {
+    const d = n && n.dataset;
+    return !!d && !!d.poLinekey && (d.poKind === "line" || d.poKind === "extra")
+      && !(n.classList && n.classList.contains("tw-block"));
+  }
+
+  /** Does this TEMPLATE paragraph take the price box's step (TWPrice.paraStep: indent on a bulleted
+   *  line moves it to the "o" level, a bullet switched on takes its level's own place)?
+   *
+   *  A row on the PRICE list itself (numId 3: the GC / Gyp price rows, polish Direct's base line, the
+   *  budget sheet's rows) — and a paragraph on NO list in the same text box: the "Base Bid" /
+   *  "Options & Unit Prices" / "Add On's" headings. A bullet switched on there joins the PRICE list
+   *  in the document (proposal_writer._add_bullet takes its siblings' list), so it has to be drawn
+   *  and stepped as one of its rows, or the square the editor shows and the one the PDF prints
+   *  land in different places. A row on ANOTHER list in the price box (the WORK-list "$x – Add for
+   *  ram board" rows the GC files carry) keeps the step it has always had, like every WORK and
+   *  NOTES row. */
+  function takesPriceStep(id) {
+    const b = blockById.get(Number(id));
+    if (!b) return false;
+    if (b.price_flat) return true;
+    if (b.list || b.txbx == null) return false;
+    for (const o of blockById.values()) if (o.price_flat && o.txbx === b.txbx) return true;
+    return false;
+  }
+
+  /** One ribbon press (Bullet / Indent / Outdent / Reset) on a price line: the same step as the
+   *  template's own PRICE rows (TWPrice.paraStep), written onto the line's element and stored by
+   *  the box sweep, then drawn. Returns false when the press cannot change anything. */
+  function priceLineAction(el, action) {
+    if (!isPriceLine(el)) return false;
+    const key = el.dataset.poLinekey;
+    const pos = el.dataset.poKind === "extra" ? (el.dataset.poPos || "after") : null;
+    let ov = null;
+    try { ov = el.dataset.pl ? JSON.parse(el.dataset.pl) : null; } catch { ov = null; }
+    let next = null;
+    if (action !== "reset") {
+      const stepped = TWPrice.paraStep(TWPrice.lineIntent(key, pos, ov), action);
+      if (!stepped) return false;
+      next = TWPrice.overrideFor(key, pos, stepped);
+    } else if (!ov) {
+      return false;
+    }
+    if (next) el.dataset.pl = JSON.stringify(next); else delete el.dataset.pl;
+    const box = editingBox(el);
+    paintLineParas(box || el.parentNode);
+    // Stored by the same sweep a keystroke runs, which reads every line's element.
+    if (box) syncPriceLinesIn(box);
+    // A bullet or an indent changes how the line wraps.
+    try { fitTxbx(box); } catch {}
     return true;
   }
 
@@ -2869,11 +3130,22 @@
    *  has to be the margin itself. Indent puts it back. */
   function paraAction(el, action) {
     if (!el) return false;
+    // A price line the page composes has no paragraph record; its bullet lives in price_overrides.
+    if (isPriceLine(el)) return priceLineAction(el, action);
     const id = Number(el.dataset.id);
     const now = paraNow(id);
     if (!now || now.locked) return false;
     let next;
-    if (action === "bullet") next = { bullet: !now.bullet, indent: now.indent };
+    // A PRICE-LIST row of the template itself (the GC / Gyp price rows, polish Direct's base line,
+    // the budget sheet's rows), and a heading in the same box, take the price box's step, so one
+    // box has one ribbon: indent on a bulleted row moves it to the "o" level and outdent back, as
+    // Word's list buttons do (takesPriceStep). WORK and NOTES rows keep the step they always had.
+    if (takesPriceStep(id)) {
+      const stepped = TWPrice.paraStep(now, action);
+      if (!stepped) return false;
+      next = { bullet: stepped.bullet, indent: stepped.indent, level: stepped.level };
+    }
+    else if (action === "bullet") next = { bullet: !now.bullet, indent: now.indent };
     else if (action === "indent") next = { bullet: now.bullet, indent: Math.min(INDENT_MAX_TW, now.indent + INDENT_STEP_TW) };
     else if (action === "outdent") next = { bullet: now.bullet, indent: Math.max(0, now.indent - INDENT_STEP_TW) };
     else return false;
@@ -2994,6 +3266,13 @@
       const btn = e.target.closest("button[data-fmt]");
       if (!btn) return;
       e.preventDefault();
+      // A PRICE LINE takes Reset only: its bullet and indent back to the REBID default. (The run
+      // buttons are switched off on one — renderFmtBar.)
+      if (isPriceLine(el)) {
+        if (btn.dataset.fmt === "reset") priceLineAction(el, "reset");
+        showFmtBar(el);
+        return;
+      }
       // A box selection means the press is about every line in it, not just the caret's own. Each
       // block is formatted over its whole length -- there is no per-block range to remember,
       // because the estimator selected lines rather than characters.
@@ -3019,6 +3298,17 @@
       if (btn.dataset.fmt === "reset") {
         const f = selectionFormat(el, fmtRangeFor(el));
         applyFormat(el, { bold: null, italic: null, underline: null, size_pt: null }, f.range);
+        // A template PRICE-box row: its bullet, level and indent go back to the template's too, the
+        // way a price line's do. (A WORK / NOTES row's Reset is the run formatting only, as before.)
+        if (takesPriceStep(el.dataset.id)) {
+          const pid = Number(el.dataset.id);
+          const pnow = paraNow(pid);
+          if (pnow && !pnow.locked && paraById.has(pid)) {
+            paraById.delete(pid);
+            applyParaToEl(el, paraNow(pid));
+            schedulePersistOverrides();
+          }
+        }
         showFmtBar(el);
         return;
       }
@@ -3129,7 +3419,29 @@
   function boxLines(el) {
     const box = editingBox(el);
     if (!box) return [];
-    return Array.from(box.querySelectorAll(LINE_SEL));
+    // ONLY THE LINES ON SCREEN. A box also holds lines nobody can see: the PRICE rows a tax layout
+    // hides, the Options heading on a bid with no options, the template spacer the Options gap
+    // replaces. Every caller here means the lines the estimator sees -- Ctrl+A, a drag across
+    // lines, the line above for Backspace, "a box keeps one line" -- and handing them a hidden one
+    // put the caret inside it (Backspace then let the browser merge paragraphs across it), let
+    // Ctrl+A then Delete empty and remove a row the tax rule hides, and let undo show that row.
+    return Array.from(box.querySelectorAll(LINE_SEL)).filter(lineShown);
+  }
+
+  /** Is `el` drawn? No for a line hidden by its own inline `display: none` (the tax rows a layout
+   *  does not print, setBlockContent's free tax rows, the Options heading with no options), the
+   *  `hidden` attribute, or a class that hides it (`tw-gap-absorbed`, `tw-block-removed`: the only
+   *  two class rules in styles.css that hide a line, test_line_removal.py keeps it that way) --
+   *  on the line or on anything between it and its box, like #options-gap. */
+  function lineShown(el) {
+    const box = editingBox(el);
+    for (let n = el; n && n !== box && n.nodeType === 1; n = n.parentNode) {
+      if (n.hidden) return false;
+      if (n.style && n.style.display === "none") return false;
+      if (n.classList && (n.classList.contains("tw-gap-absorbed")
+                          || n.classList.contains("tw-block-removed"))) return false;
+    }
+    return true;
   }
 
   /** Every editable line family, in one place so no selector can drift from another.
@@ -3302,7 +3614,7 @@
    *  `setStartBefore` / `setEndAfter` need no node inside the line at all.
    *
    *  NOT `selectNodeContents(box)`, which reads as the obvious one-liner: `.tw-box-tools` is the
-   *  box's LAST child (see addBoxTools), so its button labels -- "Collapse", "Reset box",
+   *  box's LAST child (see addBoxTools), so its button labels -- "Reset box",
    *  "Fit to text" -- would land inside the selection and inside anything copied out of it. */
   function selectRangeAcross(lines) {
     if (!lines || !lines.length) return;
@@ -3327,14 +3639,36 @@
    *  which is exactly what an emptied override already means everywhere else in this editor. */
   function spliceLines(lines, ins) {
     if (!lines.length) return;
+    // Which lines after the first the selection covers END TO END, measured before anything moves.
+    // Those are lines the estimator selected and deleted outright, and in Word they are gone; the
+    // first line stays, holding whatever was typed and the caret (removeLine keeps the ones that
+    // cannot go -- a priced row, a contract clause -- as the empty lines they always were).
+    const whole = lines.map((part, k) =>
+      k > 0 && part.start === 0 && part.end >= runsLength(editRuns(part.el)));
+    // THE FIRST LINE GOES TOO when the selection starts at its very beginning and runs on into a
+    // later line: it then covers that line's paragraph mark as well -- a triple-click, Shift+Down
+    // from the start of a line, a drag from one line's start into the next -- and Word deletes that
+    // paragraph whole rather than leaving it behind empty. Only for a delete: typed text or a paste
+    // has to land somewhere, and the first line is where it lands.
+    const headWhole = !runsLength(ins) && lines.length > 1 && lines[0].start === 0;
     lines.forEach((part, k) => {
       const put = k === 0 ? ins : [];
       if (part.start === part.end && !put.length) return;       // nothing to do on this line
       renderRuns(part.el, F.spliceRuns(editRuns(part.el), part.start, part.end, put));
     });
-    const first = lines[0];
-    const caret = first.start + runsLength(ins);
-    placeSelection(first.el, caret, caret);
+    lines.forEach((part, k) => { if (whole[k] && lineIsEmpty(part.el)) removeLine(part.el); });
+    let first = lines[0];
+    // ...but only onto a later line of the selection that is still on the page, which then takes
+    // the caret at its start: a box never loses its last line (removeLine refuses that anyway).
+    const onto = headWhole && lineIsEmpty(first.el) ? lines.slice(1).find((part) =>
+      part.el.parentNode && !part.el.classList.contains("tw-block-removed")) : null;
+    if (onto && removeLine(first.el)) {
+      first = onto;
+      caretToLine(onto.el, false);
+    } else {
+      const caret = first.start + runsLength(ins);
+      placeSelection(first.el, caret, caret);
+    }
     // ONE dispatch. Every persistence sweep below is box-wide, so a single event carries all N
     // lines -- and N events would each re-do the same sweep.
     first.el.dispatchEvent(new Event("input", { bubbles: true }));
@@ -3369,6 +3703,184 @@
     el.textContent = "";
     el.dispatchEvent(new Event("input", { bubbles: true }));
     return "reset-to-computed";
+  }
+
+  // ── DELETING A LINE REMOVES THE LINE ─────────────────────────────────────────────────────────
+  // Hanz, 2026-09-26, deleting a line in the WORK box: "This is also weird when I delete a line."
+  // Emptying a paragraph left it on the page -- an empty row wearing the edit bar and the ribbon's
+  // wash -- and in the document, where it printed as a blank line. In Word, Backspace on an empty
+  // paragraph takes the paragraph away. So does this editor now, for the lines that can go:
+  //
+  //   * a free template paragraph in a text box whose template record says `fit.removable`
+  //     (proposal_writer.paragraph_removable: never a {{#block}} region's row, a numbered Terms
+  //     clause, the Options heading, or a paragraph that anchors artwork or another box). It is
+  //     HIDDEN, not deleted -- its element keeps its id and its place, and trades `tw-block` for
+  //     `tw-block-removed`, so every walk over `.tw-block` (the overrides, the fills, the undo
+  //     snapshot, Ctrl+A, the caret) stops seeing it without being told. collectOverrides sends it
+  //     as `{id, removed: true}`, which the writer honours against the pristine template, so no
+  //     other paragraph's id moves. Undo puts the class back.
+  //   * a NOTES bullet, whose channel is the #notes-text textarea, one line per note: the element
+  //     goes and the textarea loses the line. A blank note is otherwise a spacer the document
+  //     prints.
+  //
+  // `text: ""` keeps meaning what it always meant, "print this paragraph empty": a removed line is
+  // a separate instruction, so a draft saved before this change prints exactly as it did.
+
+  /** Is this line empty -- nothing in it, or only the placeholder break an emptied line holds? */
+  function lineIsEmpty(el) {
+    const t = serializeBlock(el);
+    return t === "" || t === "\n";
+  }
+
+  /** Does `el` hold nothing but the placeholder break an emptied line keeps? The browser, and
+   *  renderRuns, leave one `<br>` in a line whose every character was deleted so it keeps its
+   *  height, and serializeBlock reads that as "\n". A "\n" that is real text (a saved entry
+   *  replayed as textContent) is not this. */
+  function lineBare(el) {
+    return serializeBlock(el) === "\n" && segmentsOf(el).every(s => !s.node);
+  }
+
+  /** A template paragraph the estimator emptied and KEPT: the words are gone, the line is not.
+   *
+   *  It prints as one empty line of its own. collectOverrides sends it as `{text: "", kept: true}`
+   *  and the writer then never takes it for the template's own blank spacer above the Options
+   *  heading (proposal_writer._apply_options_gap stops at it, as it does at a typed line), and
+   *  neither does paintOptionsGap. Without the flag the writer took it into the gap along with the
+   *  spacer above it and printed two lines fewer than this page draws. A paragraph that was already
+   *  blank in the template is not one: emptied again, it is that spacer as it always was. And
+   *  `text: ""` without the flag, which a draft saved before it can carry, keeps meaning what it
+   *  did, on both sides (restored as an empty textContent, it is not bare). */
+  function lineKeptEmpty(el) {
+    if (!el || !el.classList || !el.classList.contains("tw-block") || !lineBare(el)) return false;
+    const was = pristineById.get(Number(el.dataset.id));
+    return typeof was === "string" && was.trim() !== "";
+  }
+
+  /** May `el` be taken out of the document, rather than kept as an empty line?
+   *
+   *  Only inside a text box (the terms flow is paginated around its letterhead anchors, and the
+   *  writer refuses it), and never the last line a box shows: the caret has to have somewhere to
+   *  stand. A template paragraph also needs ANOTHER template paragraph left in its box, which is
+   *  the writer's own rule (proposal_writer._apply_paragraph_overrides, `free_in`): the region rows
+   *  around it -- the PRICE lines, the notes -- can all be stripped at print time, and a text box
+   *  left with no paragraph is a file Word refuses. A line setBlockContent has hidden does not
+   *  count: that is the free Remodel Tax row on a job with no remodel tax, which the writer takes
+   *  out itself (`doomed` there). */
+  function lineRemovable(el) {
+    if (!el || !el.classList) return false;
+    const box = editingBox(el);
+    if (!box || !box.classList || !box.classList.contains("tw-txbx")) return false;
+    if (boxLines(el).length <= 1) return false;
+    if (el.classList.contains("tw-block")) {
+      const b = blockById.get(Number(el.dataset.id));
+      if (!(b && b.fit && b.fit.removable === true)) return false;
+      return Array.prototype.some.call(box.querySelectorAll(".tw-block"),
+                                       (n) => n !== el && !(n.style && n.style.display === "none"));
+    }
+    return el.classList.contains("tw-note-edit");
+  }
+
+  /** Take one line out. Returns true when it went. Persistence is the caller's `input` event. */
+  function removeLine(el) {
+    if (!lineRemovable(el)) return false;
+    if (el.classList.contains("tw-block")) {
+      // The ribbon must not stay aimed at a paragraph that is no longer on the page.
+      if (fmtBlock === el) idleFmtBar();
+      el.classList.remove("tw-block");
+      el.classList.remove("tw-fmt-target");
+      el.classList.remove("tw-boxsel");
+      el.classList.add("tw-block-removed");
+      el.style.display = "none";
+      return true;
+    }
+    const parent = el.parentNode;
+    if (!parent) return false;
+    parent.removeChild(el);
+    // The bullets after it move up a line, and their index is what names them to the undo stack.
+    if (notesPreviewEl && notesPreviewEl.querySelectorAll) {
+      Array.prototype.forEach.call(notesPreviewEl.querySelectorAll("[data-note-index]"),
+                                   (p, i) => { p.dataset.noteIndex = String(i); });
+    }
+    return true;
+  }
+
+  /** Put a removed template paragraph back where it always was (undo, redo). */
+  function unremoveLine(el) {
+    if (!el || !el.classList || !el.classList.contains("tw-block-removed")) return false;
+    el.classList.remove("tw-block-removed");
+    el.classList.add("tw-block");
+    el.style.display = "";
+    // ...unless it is a free tax / total row the tax rule does not print: asked again, with the
+    // values the page last drew, because refreshDocumentFills passed over it while it was out and
+    // the rule may have moved meanwhile. Shown outright, a "$0 – Remodel Tax" row the document does
+    // not print came back on screen.
+    const tk = typeof _lastTokens !== "undefined" ? _lastTokens : null;
+    const rec = tk ? blockById.get(Number(el.dataset.id)) : null;
+    if (rec) priceRowVisibility(el, rec, tk);
+    return true;
+  }
+
+  /** The ids of every removed template paragraph on the page, ascending. */
+  function removedBlockIds() {
+    const out = [];
+    if (!docSurface || !docSurface.querySelectorAll) return out;
+    docSurface.querySelectorAll(".tw-block-removed").forEach((el) => {
+      const id = Number(el.dataset.id);
+      if (Number.isFinite(id)) out.push(id);
+    });
+    return out.sort((a, b) => a - b);
+  }
+
+  /** The nearest line SHOWN before (dir -1) or after (dir 1) `el` in its box, or null.
+   *
+   *  Hidden lines are stepped over, not stopped at. On a Direct PRICE box with no options the
+   *  line above the blank lines is the hidden "Options:" heading, and landing the caret in it after
+   *  a Backspace left every later key acting on a line nobody could see: Enter saved "Options:\n"
+   *  into it, and the browser's own Backspace merged paragraphs across it, deleting the price
+   *  region and the record of the removed line. `el` itself may be hidden (caretToLine asks). */
+  function adjacentLine(el, dir) {
+    const box = editingBox(el);
+    if (!box || !box.querySelectorAll) return null;
+    const all = Array.from(box.querySelectorAll(LINE_SEL));
+    let i = all.indexOf(el);
+    if (i < 0) return null;
+    for (i += dir; i >= 0 && i < all.length; i += dir) if (lineShown(all[i])) return all[i];
+    return null;
+  }
+
+  /** A caret at the start or the end of `el`. An emptied line holds a lone `<br>` and no text node,
+   *  which placeSelection cannot stand in, so that case gets a caret on the element itself.
+   *
+   *  Never INSIDE a hidden line: asked for one, the caret goes to the nearest line shown, looking
+   *  the way it was going first (up for the end of a line, down for its start). */
+  function caretToLine(el, atEnd) {
+    if (el && !lineShown(el)) {
+      el = adjacentLine(el, atEnd ? -1 : 1) || adjacentLine(el, atEnd ? 1 : -1);
+    }
+    if (!el) return;
+    const pos = atEnd ? runsLength(editRuns(el)) : 0;
+    if (pointAt(el, pos)) { placeSelection(el, pos, pos); return; }
+    try {
+      const r = document.createRange();
+      r.setStart(el, 0);
+      r.collapse(true);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(r);
+    } catch {}
+  }
+
+  /** Remove `el` as ONE undo step, put the caret on `caretLine` (at its end when `atEnd`, at its
+   *  start when false, left where it is when null), and persist through the page's own input. */
+  function removeLineAt(el, caretLine, atEnd) {
+    // Its own step: Ctrl+Z gives back the line, not the characters deleted from it just before.
+    undoPush("remove:" + Date.now(), el);
+    const box = editingBox(el);
+    if (!removeLine(el)) return false;
+    if (caretLine && atEnd !== null) caretToLine(caretLine, atEnd);
+    const from = caretLine || (box && box.querySelector ? box.querySelector(LINE_SEL) : null);
+    if (from) from.dispatchEvent(new Event("input", { bubbles: true }));
+    return true;
   }
 
   function paintBoxSel() {
@@ -3536,6 +4048,33 @@
       }
       return;
     }
+    // A PRICE LINE: Bullet, Indent, Outdent and Reset act on it; Bold, Italic, Underline and the size
+    // cannot — the line's channel stores its words, not runs, so a bold would show here and print
+    // plain. They are switched off rather than left to press into nothing.
+    if (isPriceLine(el)) {
+      fmtRange = null;
+      fmtRangeText = null;
+      bar.querySelectorAll("button[data-fmt]").forEach(b => {
+        b.classList.remove("on");
+        b.setAttribute("aria-pressed", "false");
+        if (b.dataset.fmt !== "reset") b.disabled = true;
+      });
+      const sz = bar.querySelector("input[data-fmt='size']");
+      if (sz) { sz.disabled = true; if (document.activeElement !== sz) sz.value = ""; }
+      bar.querySelectorAll("[data-para]").forEach(n => { n.style.visibility = ""; });
+      const key = el.dataset.poLinekey;
+      const pos = el.dataset.poKind === "extra" ? (el.dataset.poPos || "after") : null;
+      let ov = null;
+      try { ov = el.dataset.pl ? JSON.parse(el.dataset.pl) : null; } catch { ov = null; }
+      const it = TWPrice.lineIntent(key, pos, ov);
+      const pb = bar.querySelector("button[data-para='bullet']");
+      if (pb) { pb.classList.toggle("on", !!it.bullet); pb.setAttribute("aria-pressed", String(!!it.bullet)); }
+      const po = bar.querySelector("button[data-para='outdent']");
+      if (po) po.disabled = !TWPrice.paraStep(it, "outdent");
+      const pi = bar.querySelector("button[data-para='indent']");
+      if (pi) pi.disabled = !TWPrice.paraStep(it, "indent");
+      return;
+    }
     const f = selectionFormat(el, fmtRangeFor(el));
     // Stamped with the text it was measured in, so `fmtRangeFor` can tell later whether the
     // paragraph is still the one this range describes. See its note for what goes wrong without.
@@ -3580,10 +4119,12 @@
       bul.setAttribute("aria-pressed", String(showPara && pst.bullet));
     }
     if (showPara) {
+      // A PRICE-box row steps the way paraAction steps it (between the square and the "o").
+      const priceRow = takesPriceStep(el.dataset.id);
       const outd = bar.querySelector("button[data-para='outdent']");
-      if (outd) outd.disabled = pst.indent <= 0;
+      if (outd) outd.disabled = priceRow ? !TWPrice.paraStep(pst, "outdent") : pst.indent <= 0;
       const inn = bar.querySelector("button[data-para='indent']");
-      if (inn) inn.disabled = pst.indent >= INDENT_MAX_TW;
+      if (inn) inn.disabled = priceRow ? !TWPrice.paraStep(pst, "indent") : pst.indent >= INDENT_MAX_TW;
     }
   }
 
@@ -3792,10 +4333,15 @@
     // stop at one line and drew a little outline round whichever line had the caret. The box
     // (or, for the terms flow, the page) carries it now, and this inherits editability from it.
     el.spellcheck = false;
-    // PRICE-list rows (numId=3) are flattened to flush, bullet-less lines in the
-    // generated .docx (_flatten_price_bullets) — mirror that here so the on-screen
-    // editor matches (Kyle: no bullet points in the pricing).
-    if (b.price_flat) el.classList.add("tw-priceline");
+    // PRICE-list rows (numId=3) print their bullet since the REBID layout (2026-09-25): the red
+    // square on level 0, the "o" on level 1 (the GC Polish "Note:" row). They used to be flattened
+    // to flush, bullet-less lines, and drawn so. `.tw-priceline` still marks them: the ribbon's
+    // indent moves one between the two levels (paraAction), and its Reset puts the bullet back.
+    if (b.price_flat) {
+      el.classList.add("tw-priceline");
+      if (b.para ? b.para.bullet : b.list) el.classList.add("tw-li");
+      if (b.para && b.para.bullet && b.para.glyph === "o") el.classList.add("tw-lvl-o");
+    }
     // A NUMBERED CLAUSE SHOWS ITS NUMBER, not a red square. `b.list` only says the paragraph
     // carries Word numbering, which is true of a bulleted WORK row and of all 27 numbered TERMS
     // AND CONDITIONS clauses alike — so trusting it painted a Wingdings square in front of every
@@ -3807,7 +4353,11 @@
       el.classList.add("tw-num");
       el.dataset.marker = String(b.para.marker);
     }
-    else if (b.list) el.classList.add("tw-li");                  // real Word bullet
+    else if (b.list) {
+      el.classList.add("tw-li");                                 // real Word bullet
+      // ...and the level's own glyph where it prints the hollow "o" (Gyp's WORK sub-row).
+      if (b.para && b.para.glyph === "o") el.classList.add("tw-lvl-o");
+    }
     else if (b.style && b.style.name === "List Paragraph") el.classList.add("tw-list");
     if (b.align) el.style.textAlign = b.align;
     if (b.style && b.style.bold && !(Array.isArray(b.runs) && b.runs.length)) {
@@ -3819,6 +4369,21 @@
     // the file's real numbers. Blocks with no `para` (a pre-v5 cached response) keep the class
     // fallback, which is what it was always for.
     if (b.para) applyParaGeom(el, b.para, b.para);
+    // THE SIZE THIS LINE'S OWN WORDS PRINT AT, for a text-box paragraph. Its template runs carry
+    // their sizes as spans; what does not is text that lands in the paragraph itself -- a line
+    // restored from a plain-text override, words typed after its last span was deleted, words
+    // typed into a blank line -- and that used to inherit `.tw-page`'s 9pt while the writer printed
+    // it at the paragraph's first run size (`fit.typed_hp`, 12pt for a blank line: the document
+    // default). The paragraph MARK's size (`fit.hp`) is how tall the line prints when it is empty,
+    // which a rule in styles.css applies to `.tw-empty`. On the element, not a span, so fmtAt --
+    // which stops at the block -- never reads either back into the estimator's formatting.
+    if (b.txbx != null && b.fit) {
+      if (Number(b.fit.typed_hp) > 0) el.style.fontSize = (Number(b.fit.typed_hp) / 2) + "pt";
+      if (Number(b.fit.hp) > 0 && el.style.setProperty) {
+        el.dataset.markPt = String(Number(b.fit.hp) / 2);
+        el.style.setProperty("--tw-mark-pt", (Number(b.fit.hp) / 2) + "pt");
+      }
+    }
     if (flowMode) {
       // The positioned view's letterhead artwork carries the real DATE:/JOB
       // NAME: labels; only the flow fallback needs synthetic captions.
@@ -3987,6 +4552,14 @@
       if (!o) continue;
       const el = docSurface.querySelector(`.tw-block[data-id="${Number(o.id)}"]`);
       if (!el) continue;
+      // A LINE THE ESTIMATOR DELETED stays deleted after a reload -- if this template still lets
+      // it go. An entry for a line that may not be removed is ignored rather than drawn empty,
+      // the same answer the writer gives it.
+      if (o.removed === true) {
+        const rec = blockById.get(Number(o.id));
+        if (rec && rec.fit && rec.fit.removable === true) removeLine(el);
+        continue;
+      }
       const runs = Array.isArray(o.runs) && o.runs.length ? o.runs : null;
       // A SAVED ENTRY THAT EMPTIES A NUMBERED CLAUSE IS NOT REPLAYED. Drafts saved while that
       // was possible still carry one, and replaying it would show a blank clause on screen while
@@ -4030,6 +4603,11 @@
         const _t = isPriceParagraph(o.id) ? migratePriceParagraphText(o.id, o.text, tk) : o.text;
         if (/\{\{\s*[a-zA-Z_][a-zA-Z0-9_]*\s*\}\}/.test(_t) && isPriceParagraph(o.id)) {
           el.innerHTML = fillHtml(_t, tk);
+        } else if (o.kept === true && o.text === "") {
+          // A line he emptied and kept, drawn as he left it -- holding the placeholder break -- so
+          // after a reload it is still his line (lineKeptEmpty), for the Options gap and the next
+          // save alike, and not the template spacer an empty textContent would make it.
+          el.innerHTML = "<br>";
         } else {
           el.textContent = o.text;   // pre-wrap CSS renders the \n line breaks
         }
@@ -4066,14 +4644,32 @@
       return Array.isArray(liveKey("paragraph_overrides")) ? liveKey("paragraph_overrides") : [];
     }
     const out = [];
+    // The paragraphs PUT BACK: each held an edit on this page (reported below, and marked then)
+    // and now reads as the template again -- Ctrl+Z, or the words typed back. preserveRichOverrides
+    // must not rescue their stored edit (see there).
+    const putBack = new Set();
     docSurface.querySelectorAll(".tw-block").forEach(el => {
       const id = Number(el.dataset.id);
-      const cur = serializeBlock(el);
-      const runs = serializeRuns(el);
+      // AN EMPTIED LINE IS AN EMPTY PARAGRAPH, NOT A LINE BREAK. A line with every character
+      // deleted holds the placeholder `<br>` the browser (or renderRuns) leaves so the line keeps
+      // its height, and serializeBlock reads that as "\n". Sent as it is, the writer puts a
+      // `<w:br/>` in the paragraph (_write_t_text) and the PDF prints the line TWO lines tall,
+      // while this page draws one -- a kept empty line that is taller in the document than on
+      // screen. So a line whose only content is that placeholder goes as "" (and `runs: []`),
+      // which prints one empty line. Only the placeholder: a "\n" that is real text -- a saved
+      // entry replayed as `textContent` -- is not a lone BR element and is sent as it always was.
+      const raw = serializeBlock(el);
+      const bare = lineBare(el);
+      const cur = bare ? "" : raw;
+      const runs = bare ? [] : serializeRuns(el);
       const textChanged = cur !== pristineById.get(id);
       const fmtChanged = el.classList.contains("tw-fmt");
       const para = paraPatch(id);
-      if (!textChanged && !fmtChanged && !para) return;
+      if (!textChanged && !fmtChanged && !para) {
+        if (el.dataset && el.dataset.twEdited === "1") putBack.add(id);
+        return;
+      }
+      if (el.dataset) el.dataset.twEdited = "1";
       // A BULLET SWITCHED OFF IS NOT AN EDIT TO THE WORDS, so a paragraph whose text is
       // untouched ships `para` and NO text. Sending the text as well would look harmless and
       // would not be: a `text` override rebuilds the paragraph as one plain run, throwing away
@@ -4088,11 +4684,18 @@
       // GC / Gyp price row or polish Direct base line still prints TODAY's amount and tax wording:
       // the render applies this text before its flat pass, which fills them.
       else entry = runsArePlain(runs) && !fmtChanged
-        ? { id: id, text: isPriceParagraph(id) ? storedText(el) : cur }
-        : { id: id, text: cur, runs: storedRuns(el, textChanged) };
+        ? { id: id, text: (isPriceParagraph(id) && !bare) ? storedText(el) : cur }
+        : { id: id, text: cur, runs: bare ? [] : storedRuns(el, textChanged) };
+      // ...and one he KEPT says so, which is what tells the writer it is his line and not the
+      // template's blank spacer above the Options heading (see lineKeptEmpty).
+      if (entry.text === "" && lineKeptEmpty(el)) entry.kept = true;
       if (para) entry.para = para;
       out.push(entry);
     });
+    // A LINE THE ESTIMATOR DELETED goes as nothing but its id and the flag: the writer takes the
+    // paragraph out of the pristine template (proposal_writer._apply_paragraph_overrides), and
+    // there is no text or bullet left to send for a line that is not there.
+    removedBlockIds().forEach((id) => { out.push({ id: id, removed: true }); });
     // Never hand back less than what is already saved. Here rather than at the persist, so the
     // guard also covers the list Continue puts straight into the generate payload.
     //
@@ -4102,7 +4705,7 @@
     // pushes it back in for an id the DOM never reported. Without this the draft never heals — it
     // re-sends the blank clause on every persist for the life of the project, and only the
     // writer's own refusal keeps it out of the customer's document.
-    return preserveRichOverrides(out).filter(o => !blanksANumberedClause(o));
+    return preserveRichOverrides(out, putBack).filter(o => !blanksANumberedClause(o));
   }
 
   /** `next`, but never poorer than the entry already stored for this template.
@@ -4126,7 +4729,7 @@
    *  Only ever merged against a store entry captured against the SAME template file: paragraph
    *  ids belong to one template, so a version mismatch means the stored entry describes
    *  different paragraphs and must be left alone. */
-  function preserveRichOverrides(next) {
+  function preserveRichOverrides(next, putBack) {
     let prev = null;
     try {
       const all = liveKey("paragraph_overrides_all");
@@ -4142,7 +4745,9 @@
     }
     if (!rich.size) return next;
     const out = next.map(o => {
-      if (!o || Array.isArray(o.runs)) return o;
+      // A removed line keeps no runs: it prints nothing, and a restore that saw runs on it would
+      // be tempted to draw it.
+      if (!o || o.removed === true || Array.isArray(o.runs)) return o;
       const keep = rich.get(Number(o.id));
       if (!keep) return o;
       rich.delete(Number(o.id));
@@ -4151,13 +4756,25 @@
     // An id that dropped out of the list entirely keeps its whole stored entry — `para` and
     // all. Nothing should reach this today (a formatted block still reports itself), which is
     // exactly why it must not be the difference between keeping the work and losing it.
+    //
+    // EXCEPT A PARAGRAPH PUT BACK (`putBack`, from collectOverrides): one that held an edit on this
+    // page and now reads as the template. Its dropping out is the estimator's doing, not a loss.
+    // Review of the 2026-09-26 release: Shift+End and Delete in the WORK box's Exclusions line
+    // stored the edit with runs; Ctrl+Z put the line back on screen, and this rescue put the edit
+    // back into the draft, the fit and Continue: the PDF printed the deleted-first-line version
+    // and a reload drew it again. A block the page never saw holding the edit (a restore that lost
+    // it) is not in the set, so that is still rescued.
     for (const o of next) if (o) rich.delete(Number(o.id));
-    for (const o of rich.values()) out.push(o);
+    for (const o of rich.values()) {
+      if (!(putBack && putBack.has(Number(o.id)))) out.push(o);
+    }
     return out;
   }
 
   let _overridesTimer = null;
   function schedulePersistOverrides() {
+    // Every document edit changes what the boxes hold, so the size they print at is asked again.
+    scheduleFit();
     if (_overridesTimer) clearTimeout(_overridesTimer);
     _overridesTimer = setTimeout(() => {
       try {
@@ -4231,6 +4848,7 @@
       renderSystemPreview();
       renderNotesPreview();
       scheduleRepaginate();
+      scheduleFit();              // a changed field is changed words in a box
       // The ribbon's buttons are read off the remembered range, and the loop above may have just
       // rewritten the paragraph that range was measured in. `fmtRangeFor` already makes the PRESS
       // safe wherever the rewrite came from; this is the cosmetic other half, so the lit state
@@ -4554,6 +5172,19 @@
     return escHtml(l);
   }
 
+  /** The point size a note prints at: the `{{notes.text}}` run of the template's {{#notes}} row,
+   *  or null for a template with no such row (the GC files, whose notes are plain paragraphs). */
+  function notesRowSizePt() {
+    for (const b of (templateBlocks || [])) {
+      if (!/\{\{\s*notes\.text\s*\}\}/.test(String((b && b.text) || ""))) continue;
+      const runs = Array.isArray(b.runs) ? b.runs : [];
+      const tok = runs.find(r => r && r.size_pt && /\{\{\s*notes\.text\s*\}\}/.test(String(r.text)));
+      const any = tok || runs.find(r => r && r.size_pt);
+      return any ? Number(any.size_pt) : null;
+    }
+    return null;
+  }
+
   function renderNotesPreview() {
     // Don't rebuild the bullets while the estimator is typing in one.
     if (focusInside(notesPreviewEl)) return;
@@ -4564,43 +5195,135 @@
     // docx (see _notes_for + the notes block's blank handling). One trailing
     // newline (a common textarea artifact) is dropped so it can't creep.
     const lines = String((ta && ta.value) || "").replace(/\n$/, "").split("\n");
+    // AT THE SIZE THE {{#notes}} ROW PRINTS. Each note is written into a clone of that row, so it
+    // takes the row's run size -- 7.5pt on the Epoxy file, 8pt on Polish and Combo -- and these
+    // bullets, which state none, used to inherit `.tw-page`'s 9pt: a NOTES box drawn a size and a
+    // half larger than the document it previews. A blank note prints as that row emptied, i.e. at
+    // the same size.
+    const rowPt = notesRowSizePt();
+    const style = "margin:0 0 1pt;" + (rowPt ? "font-size:" + rowPt + "pt;" : "");
     // Bullets are editable in place and two-way bound to the #notes-text
     // textarea (the single source of truth; the generate payload's `notes`
     // still derives from it).
     notesPreviewEl.innerHTML = lines.map((l, i) => {
       if (l.trim() === "")
         return `<p class="tw-note-edit tw-note-blank" spellcheck="false"` +
-               ` data-note-index="${i}" style="margin:0 0 1pt;"></p>`;
+               ` data-note-index="${i}" style="${style}"></p>`;
       return `<p class="tw-li tw-note-edit" spellcheck="false"` +
-             ` data-note-index="${i}" style="margin:0 0 1pt;">${noteLineHtml(l.trim())}</p>`;
+             ` data-note-index="${i}" style="${style}">${noteLineHtml(l.trim())}</p>`;
     }).join("");
     try { fitNotesBox(); } catch {}
   }
 
-  // Shrink the NOTES text box's font just enough to fit its DESIGN height so a
-  // long notes list ({{#notes}}, ~12 bullets) can't overflow onto the
-  // ACCEPTANCE frame baked into the page-1 letterhead PNG below it (that frame
-  // is part of the art and can't move in the DOM). The real docx fits every
-  // bullet at full size on tighter Word metrics; the preview's looser metrics
-  // overflow, so we step the font down until the measured box fits. Every
-  // bullet stays visible + editable (clipping would hide bullets that really
-  // print). Short notes get NO inline font-size — byte-identical to today and
-  // the generated docx is untouched (this only styles the preview wrapper).
-  // Box id differs per template (epoxy 3, polish 5), so we never hardcode it —
-  // we find the box from the mounted notes element. offsetHeight is used (like
-  // applyZoom) so the #doc-zoom transform doesn't skew the measurement.
-  // Shrink ONE positioned text box's font until its content fits the box's
-  // design height (mirrors the .docx normAutofit "shrink text on overflow").
-  // Boxes that already fit get NO inline font-size (byte-identical to the design
-  // + the generated docx). Applies to EVERY box — WORK, PRICE, NOTES — so long
-  // content (e.g. gyp's verbose WORK scope) can't grow past its region and
-  // overlap the next box / the baked page-frame art.
+  // ── THE SIZE EACH TEXT BOX PRINTS AT ───────────────────────────────────────────────────────
+  //
+  // Hanz, 2026-09-26: "please follow the text size of what is written in the proposal PDFs. Its
+  // different on the editor and on the output" / "whatever is the font size in the PDF should also
+  // be the same as in the Proposal Editor".
+  //
+  // It was different by construction. The writer (proposal_writer._shrink_overflowing_text_boxes)
+  // estimates each box's content and scales an overflowing box's runs down to a 0.60 floor; this
+  // page ran a second, unrelated shrink off a browser measurement that stopped at 0.75 and then put
+  // the box back at full size and CLIPPED it behind a "Show all" button. A full box therefore
+  // showed full-size text on screen and printed smaller, and the lines past the clip printed but
+  // could not be seen.
+  //
+  // Now there is ONE rule and the writer owns it. requestFit posts the payload Continue would send
+  // to /api/proposal-fit, which runs the real fill and returns what the shrink decided per box; this
+  // page applies that scale to every run with the writer's own per-run arithmetic (F.fitHp: half
+  // points, Python rounding, the 4pt floor) and leaves the paragraphs the writer exempts alone. A
+  // browser-side estimate would have had to mirror the region expansions, the frame padding the
+  // writer keys on note text, the dragged boxes and the exemptions, and would have drifted.
+  //
+  // Nothing is clipped. A box still too long at the floor prints its remaining lines past the box's
+  // bottom edge (the writer never grows a box and never cuts text), and that is what is shown.
+
+  /** Per box id: what the writer's shrink decided for the payload last asked about.
+   *  {scale, default_hp, exempt: Set<block id>, at_floor}. A box with no entry prints as designed. */
+  const boxFitById = new Map();
+  /** What text with no size of its own inherits on this page (`.tw-page { font-size: 9pt }`), in
+   *  half points. Every text run in every template's boxes carries its own `w:sz`, so only text the
+   *  editor itself draws without a size (the PRICE rows, 9pt in the file too) falls back to it. */
+  const PAGE_HP = 18;
+
+  /** An element's OWN inline font-size in half points, or null when it states none. */
+  function inlineHp(el) {
+    const m = /^([\d.]+)pt$/.exec(el && el.style ? String(el.style.fontSize || "") : "");
+    return m ? Math.round(Number(m[1]) * 2) : null;
+  }
+
+  /** Take every size applyBoxFit put on this box off again, so the box shows its design sizes.
+   *  The marks are remembered on the box itself rather than found with a selector: a line re-rendered
+   *  since has new children, and the old ones are simply detached. */
+  function clearBoxFit(box) {
+    const prev = box && box.__twFitMarks;
+    if (!prev) return;
+    prev.forEach((el) => {
+      if (el.dataset) delete el.dataset.twFit;
+      if (el.style && el.style.removeProperty) el.style.removeProperty("--tw-fit-pt");
+    });
+    box.__twFitMarks = null;
+  }
+
+  /** Show ONE box at the size the writer prints it, from boxFitById. Returns true when it shrank.
+   *
+   *  The printed size goes on as a custom property that a `!important` rule in styles.css turns
+   *  into the font-size, and never into the inline `font-size` itself: that inline value is the run
+   *  formatting fmtAt reads back into the estimator's overrides, and writing a shrunk size there
+   *  would save the shrink as a size the estimator chose.
+   *
+   *  What gets a size, following _scale_txbx_runs run by run:
+   *    * the box itself, for text with no size of its own anywhere above it (PAGE_HP);
+   *    * every element that states a size inline -- a run span, a WORK system row, a NOTES bullet,
+   *      a paragraph's own base size;
+   *    * a template paragraph that had NO text run: words typed into it get a bare run in the
+   *      document, which the shrink gives the box's most common size (`default_hp`) rather than a
+   *      scaled copy of the size it prints at unshrunk;
+   *  and nothing inside a paragraph the writer exempts (a size the estimator set by hand). */
+  function applyBoxFit(box) {
+    clearBoxFit(box);
+    if (!box || !box.dataset) return false;
+    const fit = boxFitById.get(Number(box.dataset.boxId));
+    const scale = fit ? Number(fit.scale) : 1;
+    if (!(scale < 0.999)) return false;
+    const exempt = fit.exempt instanceof Set ? fit.exempt : new Set();
+    const marks = [];
+    const mark = (el, hp) => {
+      if (!el.style || !el.style.setProperty) return;
+      el.dataset.twFit = "1";
+      el.style.setProperty("--tw-fit-pt", (F.fitHp(hp, scale) / 2) + "pt");
+      marks.push(el);
+    };
+    mark(box, PAGE_HP);
+    const walk = (node) => {
+      Array.prototype.forEach.call(node.childNodes || [], (c) => {
+        if (!c || c.nodeType !== 1 || !c.classList) return;
+        if (c.classList.contains("tw-box-tools")) return;          // the grips, not the text
+        if (c.classList.contains("tw-block")) {
+          const id = Number(c.dataset.id);
+          if (exempt.has(id)) return;                              // the estimator's own sizes
+          const b = blockById.get(id);
+          if (b && b.fit && b.fit.typed_sized === false) mark(c, Number(fit.default_hp) || PAGE_HP);
+          else { const own = inlineHp(c); if (own != null) mark(c, own); }
+        } else {
+          const own = inlineHp(c);
+          if (own != null) mark(c, own);
+        }
+        walk(c);
+      });
+    };
+    walk(box);
+    box.__twFitMarks = marks;
+    return true;
+  }
+
+  // Fit ONE positioned text box (WORK / PRICE / NOTES / ...): show it at the size it prints, then
+  // say whether its text still runs past the box's bottom edge.
   function fitTxbx(box) {
     if (!box || !box.dataset.boxHPt) return;
-    // Reset EVERYTHING this function can set. fitTxbx re-runs after every edit and
-    // repagination, so a property left behind would keep a box clipped (or shrunk) after
-    // the estimator had already trimmed the text that caused it.
-    box.style.fontSize = "";                                   // reset to the design size
+    // Reset EVERYTHING an older version of this function set. The clip and the percentage shrink
+    // are gone, but a box restored from a page that had them must not keep one.
+    box.style.fontSize = "";
     box.style.transform = "";
     box.style.transformOrigin = "";
     box.style.maxHeight = "";
@@ -4608,60 +5331,27 @@
     box.style.zIndex = "";
     box.classList.remove("tw-notes-open");
     const target = parseFloat(box.dataset.boxHPt) * 96 / 72 + 1;   // design height in px (+1 slack)
-    if (!(target > 0)) return;
-    // Clearing the two GROWTH markers is part of clearing the overflow, and it has to happen on
-    // every pass. They are recomputed below from a live measurement, so a box that was blocked and
-    // has since been dragged taller — or trimmed — must not keep a badge and a tooltip describing
-    // the page it used to be on. (This is exactly the stale badge the review caught: the old code
-    // set `tw-grow-blocked` from a different function and nothing anywhere took it off again.)
+    // Clearing the growth markers is part of every pass. They are recomputed below from a live
+    // measurement, so a box that was blocked and has since been dragged taller -- or trimmed --
+    // must not keep a badge and a tooltip describing the page it used to be on.
     const clear = () => {
       box.classList.remove("tw-notes-overflow");
       box.classList.remove("tw-grow-blocked");
       box.classList.remove("tw-can-grow");
       box.title = "";
     };
-    if (box.offsetHeight <= target) { clear(); return; }       // fits at full size — no inline size
-    // 1) Font-size shrink first — keeps the full box width and matches the .docx
-    //    normAutofit "shrink text on overflow". Handles the common moderate case.
-    //
-    //    The floor is 75%, not 60%. Below about three-quarters this stops being a
-    //    preview: the GC templates carry a long "Options & Unit Prices" block and a
-    //    dozen exclusion lines, and at 60% — then scaled again by the step that used
-    //    to follow — the result was genuinely unreadable on screen. The old code
-    //    scaled to 45% and its comment claimed that "never becomes unreadable",
-    //    which was simply wrong.
-    for (let k = 0.95; k >= 0.75 - 1e-9; k -= 0.05) {
-      box.style.fontSize = Math.round(k * 100) + "%";
-      if (box.offsetHeight <= target) { clear(); return; }
-    }
-    // 2) Still over at 75%, so shrinking has failed — and shrinking that fails is the
-    //    worst of both worlds: it clips ANYWAY and makes what's left hard to read.
-    //    Measured on a real GC proposal, three boxes were 45-80% over capacity; the old
-    //    code scaled them to 0.556-0.676, i.e. 6.7-8.1px text, and a 75% floor only got
-    //    that to 9px while still clipping.
-    //
-    //    So go back to the DESIGN size (12px, readable), clip to the box, and say so.
-    //    The estimator gets a legible preview of as much as fits, an obvious marker where
-    //    it stops, and a click to see the rest. Clipping also keeps the box in register
-    //    with the page frame, which is baked into the artwork at full size — a scaled box
-    //    drifted out of alignment with it, which is what made the old rendering look
-    //    like overlapping garbage.
-    //
-    //    The underlying fact is a content problem, not a rendering one: this text does not
-    //    fit the box Kyle designed, and Word's own normAutofit will cramp the generated
-    //    .docx too. Saying so beats hiding it behind a scale transform.
-    box.style.fontSize = "";
-    // Measured HERE, and only here: the design font size is back and the clip below has not been
-    // applied yet, so this is the one moment `offsetHeight` is the box's real content height.
-    // fitOffer sets classes, never geometry — it decides whether the "Fit to text" button is
-    // offered on this box and, when it is not, which of the two reasons to say out loud.
-    const offer = fitOffer(box);
-    box.style.maxHeight = Math.round(target) + "px";
-    box.style.overflow = "hidden";
+    if (!(target > 0)) { applyBoxFit(box); clear(); return; }
+    // "Fit to text" is decided at the DESIGN size, so measured with the writer's shrink off: a box
+    // grown to fit its text stops being shrunk, and then shows that text at the size it was
+    // measured at. fitOffer sets classes, never geometry.
+    clearBoxFit(box);
+    const offer = box.offsetHeight > target ? fitOffer(box) : "";
+    const shrunk = applyBoxFit(box);
+    if (box.offsetHeight <= target) { clear(); return; }      // fits at the size it prints
+    // STILL LONGER THAN THE BOX, at the size it prints. The document prints the rest of it past
+    // the box's bottom edge, over whatever is below, so the page shows exactly that: no clip, no
+    // "Show all". The marker is the box's own bottom edge and a badge, both drawn in styles.css.
     box.classList.add("tw-notes-overflow");
-    // Say what can be done about it, which is not the same sentence on every box. Without this
-    // the estimator sees a box that offers to grow on one job and refuses on the next with no
-    // explanation.
     const advice =
       offer === "grow"
         ? " Fit to text will make the box taller — the generated document gets that size too, and "
@@ -4674,52 +5364,101 @@
           + "against, and what sits under it is part of the letterhead picture — so a bigger box "
           + "would print over artwork that cannot move."
         : "";
-    box.title = "This section is longer than the box on the template, so the rest is hidden "
-              + "here — and Word will cramp it in the generated document too. Click to see "
-              + "all of it; trim it to fix it properly." + advice;
+    box.title = "This section is longer than the box on the template. "
+              + (shrunk ? "The document prints it at the smaller size shown here, and the lines "
+                          + "that still do not fit run past the bottom of the box, as they do here. "
+                        : "The lines that do not fit print past the bottom of the box, as they "
+                          + "do here. ")
+              + "Trim it to fix it properly." + advice;
   }
 
-  /** Let a clipped box be opened to read the hidden part — and let it be closed again.
+  /** The question requestFit asks: the body Continue would store, minus what reaches no text box.
+   *  The cover letter is left out because the answer is computed before page 1 is built, and the
+   *  workbook's own inputs because a sheet edit changes no word in the document. */
+  function fitPayload() {
+    const live = liveKey("cover_letter_enabled");
+    const merged = Object.assign({}, state,
+      live === undefined ? {} : { cover_letter_enabled: !!live }, TW.readForm(form));
+    const pp = composeProposalPayload(merged, collectOverrides(), collectBoxOverrides());
+    ["extras", "tab_copies", "tab_labels", "tab_order", "tab_structs", "lock_overrides"]
+      .forEach((k) => { delete pp[k]; });
+    pp.cover_letter_enabled = false;
+    return pp;
+  }
+
+  let _fitTimer = null;
+  let _fitSeq = 0;       // the newest question asked; an older answer is dropped
+  let _fitSig = "";      // the last question ANSWERED, so an unchanged document asks nothing
+
+  /** Ask again, soon. Called on every document edit (schedulePersistOverrides), every sidebar
+   *  change (refreshDocumentFills), every price_overrides change (queuePovSave: the Options gap's
+   *  keys send no `input`), the default notes arriving, a base-bid pick and a template load. Cheap
+   *  to over-call: an unchanged payload sends no request. */
+  function scheduleFit(delay) {
+    if (_fitTimer) clearTimeout(_fitTimer);
+    _fitTimer = setTimeout(() => { _fitTimer = null; requestFit(); },
+                           delay == null ? 350 : delay);
+  }
+
+  /** POST /api/proposal-fit and show every box at the size the answer says it prints at.
    *
-   *  Delegated on the surface, because boxes are re-created on every render. Opening
-   *  breaks the page layout on purpose — you are looking past the design to check content,
-   *  and the marker stays so it is obvious this is not how it prints.
+   *  Nothing on the page waits for this. Until the first answer the boxes show their design sizes;
+   *  a failed or late answer leaves the last good one in place. An answer computed for a template
+   *  that is no longer on screen (a base flip in between) is thrown away, as is one overtaken by a
+   *  newer question. Applying it rewrites custom properties only, so the caret and the selection
+   *  are untouched. */
+  async function requestFit() {
+    if (!templateBlocks || flowMode) return;
+    let body;
+    try { body = JSON.stringify(fitPayload()); } catch { return; }
+    if (body === _fitSig) return;
+    const seq = ++_fitSeq;
+    let j = null;
+    try {
+      const res = await fetch("/api/proposal-fit", {
+        method: "POST",
+        headers: Object.assign({ "Content-Type": "application/json" }, TW.authHeaders()),
+        body: body,
+      });
+      if (!res.ok) return;
+      j = await res.json();
+    } catch { return; }
+    if (seq !== _fitSeq || !j || !Array.isArray(j.boxes)) return;
+    if (String(j.template_version || "") !== String(templateVersion)) return;
+    _fitSig = body;
+    boxFitById.clear();
+    j.boxes.forEach((b) => {
+      if (!b || !Number.isFinite(Number(b.id))) return;
+      boxFitById.set(Number(b.id), {
+        scale: Number(b.scale) || 1,
+        default_hp: Number(b.default_hp) || PAGE_HP,
+        exempt: new Set((Array.isArray(b.exempt) ? b.exempt : []).map(Number)),
+        at_floor: !!b.at_floor,
+      });
+    });
+    docSurface.querySelectorAll(".tw-txbx").forEach((box) => { try { fitTxbx(box); } catch {} });
+  }
+
+  /** A click inside a text box lands a caret in it -- and nothing else.
    *
-   *  NEITHER GESTURE IS A CLICK ON THE BOX ANY MORE, and that is the change of 2026-08-26.
+   *  Delegated on the surface, because boxes are re-created on every render.
    *
-   *  Kyle, 2026-08-19: "He is confused on how to get out of that Textbox view." That was answered
-   *  with a labelled Collapse button, Escape, and a click outside — three ways out, none of them a
-   *  click on the text. Opening, though, stayed a click on the box, guarded by "unless the click
-   *  landed on a line". Hanz, 2026-08-26: "Editing from one text box to another is a bit clunky,
-   *  it doesnt automatically transfer to the next text box when I click to edit a section." The
-   *  guard was the fault: everything that is not a line — the box's padding, the gap between two
-   *  paragraphs, the strip under the last one, a priced region's padding — is exactly where a Word
-   *  user clicks to start typing, and there it expanded the box instead of placing a caret.
+   *  THERE IS NOTHING TO OPEN ANY MORE (2026-09-26). This function used to wire the "Show all" /
+   *  Collapse / Escape / outside-click gestures of a box fitTxbx had CLIPPED. fitTxbx no longer clips:
+   *  a box shows the size the document prints it at, and text the box cannot hold runs on past its
+   *  bottom edge exactly as it does in the PDF (Hanz: "whatever is the font size in the PDF should
+   *  also be the same as in the Proposal Editor"). A hidden line was a line that printed and could
+   *  not be read, so all four gestures went with the clip. What stays is the reason 2026-08-26 added
+   *  the button in the first place: Hanz, "Editing from one text box to another is a bit clunky, it
+   *  doesnt automatically transfer to the next text box when I click to edit a section" -- the
+   *  box's padding, the gap between two paragraphs and the strip under the last one are where a
+   *  Word user clicks to start typing, so a click there must place a caret (`caretIntoBox`).
    *
-   *  So the ways IN and OUT are now:
-   *    * the "Show all" button in `.tw-box-tools` opens a clipped box;
-   *    * the Collapse button in the same layer closes it;
-   *    * Escape, from anywhere on the page;
-   *    * a click on the page outside the box.
-   *  and any other click inside a box only has to land a caret (`caretIntoBox`).
-   *
-   *  Escape and the outside click are bound on `window` rather than on `document` so this
-   *  function stays reachable with the same collaborators the drag gestures already use. */
+   *  The name is kept because three harnesses lift it by name. */
   function wireOverflowExpand() {
     if (docSurface.dataset.expandWired) return;
     docSurface.dataset.expandWired = "1";
 
-    /** Open or clip ONE box. The clipped height is re-derived from dataset.boxHPt (which
-     *  applyBoxGeom keeps current through a resize), so collapsing restores exactly the height
-     *  fitTxbx clipped to rather than a height remembered from before a drag. */
-    const setOpen = (box, open) => {
-      if (!box) return;
-      box.classList.toggle("tw-notes-open", !!open);
-      box.style.maxHeight = open ? "none" : Math.round(
-        parseFloat(box.dataset.boxHPt) * 96 / 72 + 1) + "px";
-      box.style.overflow = open ? "visible" : "hidden";
-      box.style.zIndex = open ? "30" : "";
-    };
     /** Make sure a click inside `box` leaves a caret in it. Nothing else: no geometry, no
      *  expansion, no formatting, and no `preventDefault` -- where the browser is already right
      *  this must not overrule it.
@@ -4772,65 +5511,12 @@
       sel.removeAllRanges();
       sel.addRange(r);
     };
-    const openBoxes = () => docSurface.querySelectorAll(".tw-txbx.tw-notes-open");
-    // Every open box, not just one: WORK and NOTES can both be expanded, and one left behind
-    // keeps a deliberately broken layout on a page the estimator has stopped looking at.
-    const collapseAll = () =>
-      Array.prototype.forEach.call(openBoxes(), (box) => setOpen(box, false));
-
     docSurface.addEventListener("click", (e) => {
       const box = e.target.closest(".tw-txbx");
       if (!box) return;
-      // The two explicit gestures, tested BEFORE anything else -- both buttons live in the tools
-      // layer, so an exclusion for that layer would otherwise swallow its own controls.
-      const peek = e.target.closest("[data-box-peek]");
-      if (peek || e.target.closest("[data-box-collapse]")) {
-        e.preventDefault();
-        e.stopPropagation();
-        setOpen(box, !!peek);
-        return;
-      }
-      // EVERY OTHER CLICK INSIDE A BOX IS A CLICK FOR THE TEXT. Hanz, 2026-08-26: a click meant to
-      // start editing a section must not do something else instead.
-      //
-      // This used to toggle the box open whenever the click missed a line -- the padding, the gap
-      // between two paragraphs, the strip under the last one, a priced region's own padding -- and
-      // those are the pixels a Word user aims at. Expanding is now the "Show all" button above,
-      // Collapse/Esc/an outside click are the ways back, and this handler's only remaining job is
-      // to make sure the click lands a caret.
+      // EVERY CLICK INSIDE A BOX IS A CLICK FOR THE TEXT. Hanz, 2026-08-26: a click meant to start
+      // editing a section must not do something else instead.
       caretIntoBox(box, e);
-    });
-
-    window.addEventListener("keydown", (e) => {
-      if (e.key !== "Escape" && e.key !== "Esc") return;
-      const boxes = openBoxes();
-      if (!boxes.length) return;
-      // Blur BEFORE collapsing, and only when the caret really is inside one of these boxes.
-      // A collapsed box is `overflow: hidden`, so leaving the caret in the clipped part makes
-      // the browser scroll the box back to it — which reads as the collapse not working. The
-      // edit itself is already in the DOM and already marked dirty, so blurring loses nothing.
-      const a = document.activeElement;
-      if (a && typeof a.blur === "function"
-          && Array.prototype.some.call(boxes, (box) => box.contains(a))) {
-        try { a.blur(); } catch { /* a detached node mid-render */ }
-      }
-      collapseAll();
-      e.preventDefault();
-    });
-
-    window.addEventListener("click", (e) => {
-      // Inside a box, its own handler above already decided. Outside one, the estimator has
-      // moved on: put every expanded box back.
-      const t = e.target;
-      if (!t || !t.closest) return;
-      if (t.closest(".tw-txbx")) return;
-      // …except the formatting ribbon, which lives in the page's top chrome (#fmt-ribbon) and
-      // never inside the box — it has to escape the box's clipping to be visible at all, and
-      // since 2026-08-24 it does not move at all. It is chrome FOR the paragraph being edited,
-      // so bolding a word inside an expanded box must not close the box out from under the
-      // selection.
-      if (t.closest(".tw-fmtbar")) return;
-      collapseAll();
     });
   }
   wireOverflowExpand();
@@ -4839,7 +5525,7 @@
   //
   // THIS CHANGES NO GEOMETRY, and that is the whole point of the function. It runs on first paint,
   // on every repagination and on every NOTES keystroke — i.e. with no gesture behind it — so all
-  // it is allowed to do is what fitTxbx does: pick a font size, clip, and mark the box. A box gets
+  // it is allowed to do is what fitTxbx does: show the printed size and mark the box. A box gets
   // TALLER only when somebody presses "Fit to text" (growBoxToFit), drags a resize grip, or the
   // saved layout is loaded. An earlier version of this function grew an overflowing box here and
   // persisted the new height into box_overrides — from where proposal_writer writes it into the
@@ -4880,6 +5566,8 @@
     box.classList.remove("tw-box-grown");
     applyBoxGeom(box);
     box.style.fontSize = ""; box.style.maxHeight = ""; box.style.overflow = "";
+    // At the DESIGN size, like the grow it undoes: fitTxbx puts the printed size back after.
+    clearBoxFit(box);
     if (box.offsetHeight > (Number(design.h_pt) * 96 / 72) + 1) {
       // Still does not fit at the template's size, so the height was doing a job. Put it back
       // exactly as it was — releasing it here would silently undo the estimator's Fit to text.
@@ -5026,18 +5714,13 @@
     return r;
   }
 
-  /** The grips + the size readout + the "Grown to fit" note + Reset + Collapse. Absolutely
+  /** The grips + the size readout + the "Grown to fit" note + Fit to text + Reset. Absolutely
    *  positioned, so they add no
    *  height: fitTxbx measures offsetHeight to decide what overflows, and a grip in the flow
    *  would make every box look taller than its text.
    *
-   *  Collapse is the way OUT of an expanded box. Kyle, 2026-08-19: "He is confused on how to
-   *  get out of that Textbox view." Expanding was a click on the box, but the click handler
-   *  ignores clicks that land on editable content (see wireOverflowExpand) — and an expanded
-   *  box is almost entirely editable content, so there was often nothing left to click. A
-   *  labelled button that is NOT inside the editable text is the only way out that cannot be
-   *  swallowed by the paragraph editor. It is a word, not a grip, so it does not read as a
-   *  drag handle; CSS shows it only while the box is open. */
+   *  There is no Collapse and no Show all any more (2026-09-26): they opened and closed a box
+   *  fitTxbx had clipped, and nothing is clipped now. */
   function addBoxTools(el) {
     const tools = document.createElement("div");
     tools.className = "tw-box-tools";
@@ -5063,20 +5746,8 @@
       '<button type="button" class="tw-box-fit" data-box-fit="1" ' +
         'title="Make this box tall enough for all of its text. The generated document gets the ' +
         'same size; drag the bottom edge or press Reset box to undo.">Fit to text</button>' +
-      // THE WAY IN, and it is a labelled control for the same reason Collapse is one.
-      // Hanz, 2026-08-26: "Editing from one text box to another is a bit clunky, it doesnt
-      // automatically transfer to the next text box when I click to edit a section." Opening a
-      // clipped box used to be a click on the box itself, and the exclusion that kept such a
-      // click for the paragraph editor had been narrowed to "did it land on a LINE" -- so a click
-      // on the box's padding, on the gap between two paragraphs, or on the strip under the last
-      // one expanded the box instead of putting a caret in it. That is exactly where a Word user
-      // clicks to start typing. A button in the tools layer cannot be confused with the text.
-      '<button type="button" class="tw-box-peek" data-box-peek="1" ' +
-        'title="Show the text this box is too small to fit. Nothing is changed: the box goes ' +
-        'back with Collapse, Esc, or a click outside it.">Show all</button>' +
-      '<button type="button" class="tw-box-collapse" data-box-collapse="1" ' +
-        'title="Put this box back to the size the template gives it. Esc does the same, and so ' +
-        'does clicking the page outside the box.">Collapse</button>' +
+      // NO "Show all" AND NO "Collapse" (2026-09-26): nothing in a box is hidden any more, so there
+      // is nothing to open. fitTxbx shows the text at its printed size, overflow and all.
       '<button type="button" class="tw-box-reset" data-box-reset="1" ' +
         'title="Put this box back where the template has it">Reset box</button>' +
       '<span class="tw-grip tw-grip-e" data-grip="e" title="Drag to change the width"></span>' +
@@ -5102,8 +5773,8 @@
   // ── a box that GROWS instead of clipping ─────────────────────────────────────
   // Kyle, 2026-08-19: "instead of it being a textbox why not make it editable like a word
   // document?" A Word user who types more than fits expects the box to get bigger. Until now
-  // over-long content shrank its own font (fitTxbx's ladder) and, when that failed, was CLIPPED
-  // behind a "Too long for this box" badge — a preview that hides text the .docx also cramps.
+  // over-long content shrank its own font (fitTxbx's ladder, since replaced by the writer's own
+  // scale) and, when that failed, was clipped — a preview that hid text the .docx still prints.
   // Growing is the honest answer, and the plumbing already existed: a dragged height reaches the
   // .docx through box_overrides → proposal_writer._apply_box_overrides, which runs BEFORE
   // _shrink_overflowing_text_boxes and therefore stops the server shrinking a box that is now
@@ -5266,10 +5937,12 @@
     if (prevH !== null && !wasAuto) return false;                    // their own drag wins
     if (wasAuto && dropAutoGrownHeight(box, id)) applyBoxGeom(box);
     box.classList.remove("tw-box-grown");
-    // Measure the CONTENT, not the last fit: fitTxbx may have left a font-size and a clip on it.
+    // Measure the CONTENT at its DESIGN size, not the last fit: a box grown to fit its text is no
+    // longer shrunk by the writer, so the design size is the size that text will print at.
     box.style.fontSize = "";
     box.style.maxHeight = "";
     box.style.overflow = "";
+    clearBoxFit(box);
     const rect = effectiveBoxRect(id);
     const target = rect.h / PT_PER_CSS_PX + 1;            // the same +1px slack fitTxbx allows
     if (!(target > 0)) return false;
@@ -5277,7 +5950,7 @@
     const needPt = Math.ceil(box.offsetHeight * PT_PER_CSS_PX * 100) / 100;
     const room = growRoomPt(rect, otherBoxRects(id), boxLimits);
     if (needPt > room + BOX_EPS_PT) {
-      box.classList.add("tw-grow-blocked");               // fitTxbx clips; the badge says why
+      box.classList.add("tw-grow-blocked");               // the badge says why
       return false;
     }
     // Through the drag's own clamp, so an auto-grown rect is never one the server would refuse.
@@ -5347,7 +6020,7 @@
       box.style.zIndex = "";
       showBoxReadout(box, "", null);
       // A height the estimator set by hand stops being ours to recompute — growBoxToFit will
-      // leave it alone from here, even if the text still overflows (it clips and warns instead).
+      // leave it alone from here, even if the text still overflows (fitTxbx warns instead).
       if (moved && (mode === "s" || mode === "se")) box.classList.remove("tw-box-grown");
       // Re-measure the overflow badge against the new height: a box just made big enough must
       // stop saying its text is cut off, and one made smaller must start.
@@ -5545,6 +6218,24 @@
     }
   }
   window.addEventListener("resize", applyZoom);
+
+  // THE PROPOSAL'S TYPEFACE ARRIVES AFTER THE FIRST PAINT on any machine without it installed:
+  // js/proposal-fonts.js fetches it from behind the login once the token exists. Every box was
+  // fitted, and the terms paged, in the wider fallback serif until then, so measure it all again,
+  // ONCE, when the font is in -- the same pass the fonts.ready insurance in initDocumentEditor
+  // runs. Nothing is rebuilt, so typed text survives, and the pager goes through
+  // scheduleRepaginate, which waits out a caret in the terms.
+  //
+  // NO SECOND SHRINK RULE. The size a box shows is the writer's, from the last /api/proposal-fit
+  // answer (boxFitById), and the font arriving changes no word of the document, so it asks nothing
+  // new: fitTxbx puts that same answer back on every box and re-measures, in the real font, only
+  // whether the text still runs past the box's bottom edge. It never clips. A font that arrives
+  // before the first answer leaves the design sizes, and the answer applies when it lands.
+  function refitForProposalFont() {
+    scheduleRepaginate(0);
+    try { fitNotesBox(); } catch {}
+  }
+  if (window.TWProposalFonts) window.TWProposalFonts.whenLoaded(refitForProposalFont);
 
   // The Word-faithful view: the template's own full-page letterhead artwork
   // behind the floating text boxes at their real anchor positions — page 1 —
@@ -5892,6 +6583,9 @@
       annotateRegions(templateBlocks);
       blockById.clear();
       templateBlocks.forEach(b => blockById.set(b.id, b));
+      // The printed sizes belong to the template they were computed on; this one has none yet.
+      boxFitById.clear();
+      _fitSig = "";
       // Ids belong to ONE template file. Carrying a bullet/indent across a base-bid switch
       // would land it on whatever paragraph happens to hold that id in the other template;
       // restoreSavedOverrides re-reads the new template's own saved entry below.
@@ -5919,6 +6613,7 @@
       repaginateTerms();
       refreshPriceDisplay();   // repaint now that the preview els live in the page
       applyZoom();
+      scheduleFit(0);          // and ask what size each box prints at
       // Cheap insurance: if a locally-installed proposal font activates late,
       // re-measure once fonts settle.
       try { if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => { scheduleRepaginate(0); try { fitNotesBox(); } catch {} }); } catch {}
@@ -6041,7 +6736,14 @@
     // lines of their own even where the heading is a template paragraph (the GC files).
     const _gapEl = document.getElementById("options-gap");
     if (box.querySelector("[data-po-kind=\"line\"][data-po-linekey]")
-        || (_gapEl && box.contains(_gapEl))) syncPriceLinesIn(box);
+        || (_gapEl && box.contains(_gapEl))) {
+      syncPriceLinesIn(box);
+      // A line that just got its first word gets its bullet (a blank one carries none).
+      paintLineParas(box);
+    }
+    // A line re-rendered by this edit (a format, a paste, a splice, an Enter) has new children that
+    // carry no printed size yet; the box is put back at the size it prints at before the next paint.
+    if (box.classList.contains("tw-txbx")) { try { fitTxbx(box); } catch {} }
     schedulePersistOverrides();
     // A terms-page block can change height as it's edited; repaginate once
     // the caret leaves the terms flow (scheduleRepaginate defers on focus).
@@ -6144,10 +6846,13 @@
   function undoLineRec(el, key) {
     if (el.classList.contains("tw-block")) {
       const set = paraById.get(Number(el.dataset.id));
-      return { key: key, runs: editRuns(el), fmt: el.classList.contains("tw-fmt"),
-               para: set ? { bullet: !!set.bullet, indent: Number(set.indent) || 0 } : null };
+      const para = set ? { bullet: !!set.bullet, indent: Number(set.indent) || 0 } : null;
+      if (para && Number.isInteger(set.level)) para.level = set.level;
+      return { key: key, runs: editRuns(el), fmt: el.classList.contains("tw-fmt"), para: para };
     }
-    return { key: key, text: serializeBlock(el) };
+    // A price line's bullet override rides with its words, so undoing a ribbon press on it undoes it.
+    return el.dataset && el.dataset.pl ? { key: key, text: serializeBlock(el), pl: el.dataset.pl }
+                                       : { key: key, text: serializeBlock(el) };
   }
 
   /** The line the caret is in, by key. Cheap -- one closest() off the range's start container, no
@@ -6211,7 +6916,11 @@
     // one and Backspace takes one away, so restoring by key alone cannot bring a removed one back
     // or take an added one away. A PRICE box carries the two maps they are drawn from.
     snap.po = undoPriceExtras(box);
-    snap.sig = JSON.stringify([lines, snap.notes, snap.po]);
+    // WHICH TEMPLATE LINES WERE GONE, page-wide. A removed line is not in `lines` (it is not on the
+    // page), so without this an undo of a Backspace that took a line out would find nothing to
+    // restore -- and the entry would look like one that changed nothing, and be skipped.
+    snap.removed = removedBlockIds();
+    snap.sig = JSON.stringify([lines, snap.notes, snap.po, snap.removed]);
     return snap;
   }
 
@@ -6232,7 +6941,9 @@
   /** The part of price_overrides an undo entry restores, as JSON. */
   function undoPoJson(pov) {
     return JSON.stringify({ before: pov.before || {}, after: pov.after || {},
-                            gap: pov.options_gap === undefined ? null : pov.options_gap });
+                            gap: pov.options_gap === undefined ? null : pov.options_gap,
+                            // The typed lines' bullets, beside the lists they index into.
+                            bp: pov.before_props || {}, ap: pov.after_props || {} });
   }
 
   /** The document as an existing entry describes it, read LIVE.
@@ -6258,7 +6969,8 @@
     out.po = snap.po == null ? null : (typeof state !== "undefined" && state && state.price_overrides
       ? undoPoJson(state.price_overrides)
       : null);
-    out.sig = JSON.stringify([lines, out.notes, out.po]);
+    out.removed = removedBlockIds();
+    out.sig = JSON.stringify([lines, out.notes, out.po, out.removed]);
     return out;
   }
 
@@ -6312,8 +7024,9 @@
       return true;
     }
     const indent = Number(para.indent) || 0;
-    if (now.bullet === !!para.bullet && now.indent === indent) return false;
-    return setParaState(id, { bullet: !!para.bullet, indent: indent }, el);
+    const level = Number.isInteger(para.level) ? para.level : now.level;
+    if (now.bullet === !!para.bullet && now.indent === indent && now.level === level) return false;
+    return setParaState(id, { bullet: !!para.bullet, indent: indent, level: level }, el);
   }
 
   /** Put one entry back on the page. */
@@ -6343,13 +7056,35 @@
             pov.before = was.before || {};
             pov.after = was.after || {};
             if (was.gap == null) delete pov.options_gap; else pov.options_gap = was.gap;
+            if (was.bp) pov.before_props = was.bp;
+            if (was.ap) pov.after_props = was.ap;
             refreshPriceDisplay();
             queuePovSave();
           } catch {}
         }
       }
-      const live = undoLiveLines();
       const fire = new Map();             // one editing host -> one line in it to dispatch from
+      // THE REMOVED LINES FIRST, so a line this entry had on the page is back before its text is
+      // put back into it, and a line this entry did not have goes again (a redo of a removal).
+      if (Array.isArray(snap.removed)) {
+        const want = new Set(snap.removed.map(Number));
+        const moved = [];
+        docSurface.querySelectorAll(".tw-block-removed").forEach((el) => {
+          if (!want.has(Number(el.dataset.id)) && unremoveLine(el)) moved.push(el);
+        });
+        docSurface.querySelectorAll(".tw-block").forEach((el) => {
+          if (!want.has(Number(el.dataset.id))) return;
+          const host = editingBox(el);
+          const stay = host && host.querySelector ? Array.prototype.find.call(
+            host.querySelectorAll(LINE_SEL), (n) => n !== el) : null;
+          if (removeLine(el) && stay) moved.push(stay);
+        });
+        moved.forEach((el) => {
+          const host = editingBox(el) || docSurface;
+          if (!fire.has(host)) fire.set(host, el);
+        });
+      }
+      const live = undoLiveLines();
       for (const rec of snap.lines) {
         const el = live.get(rec.key);
         if (!el) continue;                // that line is not on the page any more; skip it
@@ -6361,9 +7096,17 @@
             touched = true;
           }
           if (undoRestorePara(el, rec.para)) touched = true;
-        } else if (serializeBlock(el) !== rec.text) {
-          el.textContent = rec.text;      // the computed families' own channel: see clearBoxLine
-          touched = true;
+        } else {
+          if (serializeBlock(el) !== rec.text) {
+            el.textContent = rec.text;    // the computed families' own channel: see clearBoxLine
+            touched = true;
+          }
+          // A price line's bullet override (price-box REBID bullets): the input dispatched below
+          // runs the box sweep, which stores it, and repaints it.
+          if (el.dataset && (el.dataset.pl || "") !== (rec.pl || "")) {
+            if (rec.pl) el.dataset.pl = rec.pl; else delete el.dataset.pl;
+            touched = true;
+          }
         }
         if (!touched) continue;
         const host = editingBox(el) || docSurface;
@@ -6568,10 +7311,12 @@
     // nothing about which paragraph the ribbon should act on. (selectionchange, below, is what
     // keeps it aimed as the caret moves within a box that already has focus.)
     const line = lineTarget(e);
-    const el = line && line.classList.contains("tw-block") ? line : null;
-    // A non-block editable inside the document — a `.tw-line-edit` price line, a box tool — is a
-    // channel the run formatting cannot reach, so the ribbon lets go of its target rather than
-    // staying aimed at whichever paragraph came before it.
+    // A PRICE LINE is a target too (2026-09-26): the ribbon's Bullet, Indent, Outdent and Reset act
+    // on it, and renderFmtBar switches off the run buttons it cannot reach.
+    const el = line && (line.classList.contains("tw-block") || isPriceLine(line)) ? line : null;
+    // A non-block editable inside the document that is neither — a `.tw-line-edit` WORK row, a box
+    // tool — is a channel the run formatting cannot reach, so the ribbon lets go of its target
+    // rather than staying aimed at whichever paragraph came before it.
     if (el) showFmtBar(el);
     else idleFmtBar();
   });
@@ -6593,7 +7338,7 @@
     // no focus event fires at all, so this is the only place that can re-aim the ribbon. It aims
     // at the caret's own paragraph rather than re-checking the remembered one.
     const line = lineAtSelection();
-    if (line && line.classList.contains("tw-block") && docSurface.contains(line)) {
+    if (line && (line.classList.contains("tw-block") || isPriceLine(line)) && docSurface.contains(line)) {
       showFmtBar(line);
       return;
     }
@@ -6601,7 +7346,23 @@
     if (!el) return;
     const sel = window.getSelection();
     if (!sel || !sel.rangeCount) return;
-    if (!el.contains(sel.getRangeAt(0).startContainer)) return;
+    const r0 = sel.getRangeAt(0);
+    if (!el.contains(r0.startContainer)) {
+      // THE CARET ON A BLANK LINE OF THE OPTIONS GAP, arrowed onto inside a box that already has
+      // focus, so no focusin fires: let go, as focusin does for a line the ribbon cannot act on. A
+      // blank line takes no bullet and no indent; kept, the ribbon stayed aimed at the price line
+      // the caret had left, and Bullet took the Total's square off while the caret sat on the gap.
+      // (The caret is on the gap line itself, or on #options-gap at that line's offset.) A caret
+      // anywhere else outside the target keeps it, exactly as before: the Tax field, the ribbon's
+      // size box -- the ribbon outliving focus is the feature.
+      let at = r0.startContainer;
+      if (at && at.nodeType === 1 && at.id === "options-gap" && at.childNodes && at.childNodes.length) {
+        at = at.childNodes[Math.min(r0.startOffset || 0, at.childNodes.length - 1)];
+      }
+      if (at && at.nodeType !== 1) at = at.parentNode;
+      if (r0.collapsed && at && at.closest && at.closest(".tw-gap-line") && docSurface.contains(at)) idleFmtBar();
+      return;
+    }
     showFmtBar(el);
   });
 
@@ -6662,6 +7423,8 @@
     // and half would vanish. One break inside one element is the only shape this editor can send.
     const el = lineTarget(e);
     if (!el) return;
+    // Nor a break in a line nobody can see (the Backspace handler below says why).
+    if (!lineShown(el)) { e.preventDefault(); caretToLine(el, true); return; }
     const lines = selectionLines();
     if (lines.length > 1) {                 // a break replacing a multi-line selection
       e.preventDefault();
@@ -6673,8 +7436,10 @@
                                                 // browser split the paragraph
     e.preventDefault();
     // A PRICE line (or a line typed next to one): a new line of its own, never a break inside it.
+    // The ALTERNATE rows too, now their typed lines print (they took a break inside the row before,
+    // and the sweep stored the text after it as a typed line the document then left out).
     const _po = el.dataset || {};
-    if ((_po.poKind === "line" || _po.poKind === "extra") && _po.poLinekey && !/^alt_/.test(_po.poLinekey)) {
+    if ((_po.poKind === "line" || _po.poKind === "extra") && _po.poLinekey) {
       splitPriceLine(el, sel[0], sel[1]);
       return;
     }
@@ -6725,6 +7490,12 @@
     const els = boxSel.slice();
     clearBoxSel();
     els.forEach(clearBoxLine);
+    // AND THE LINES GO, like Ctrl+A then Delete in a Word text box: one line is left for the caret,
+    // and every other line that could be taken out is. What cannot go stays, as it always did.
+    const gone = els.slice(1).filter((el) => lineIsEmpty(el) && removeLine(el));
+    if (gone.length && els[0] && els[0].dispatchEvent) {
+      els[0].dispatchEvent(new Event("input", { bubbles: true }));
+    }
     if (els.length) scheduleRepaginate();
   });
 
@@ -6779,6 +7550,17 @@
       return;
     }
     const el = lineTarget(e);
+    // A PRICE LINE the page composes (the base, a tax row, the Total, an option, a typed line):
+    // Tab moves it the ribbon's Indent step -- a square to the "o" -- and Shift+Tab back. It used to
+    // be handed to the browser, so focus left the document and nothing indented, while the
+    // template's own price rows in the same box took the Tab. A press that cannot move it (the
+    // "o" has no deeper level) is not consumed, as below.
+    if (el && isPriceLine(el)) {
+      if (!priceLineAction(el, rung)) return;
+      e.preventDefault();
+      showFmtBar(el);
+      return;
+    }
     if (!el || !el.classList.contains("tw-block")) return;
     if (!canMove(el)) return;                    // locked, at the margin, or already at the max
     if (!paraAction(el, rung)) return;
@@ -6791,14 +7573,37 @@
     if ((!back && !fwd) || e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
     const el = lineTarget(e);
     if (!el) return;
+    // A CARET IN A LINE NOBODY CAN SEE edits nothing: there, the browser's own Backspace merges
+    // paragraphs across the hidden line and takes the PRICE box's rows with it (see adjacentLine,
+    // which is why the caret should never get there). It goes to the nearest line shown instead.
+    if (!lineShown(el)) {
+      if (!e.defaultPrevented) { e.preventDefault(); caretToLine(el, back); }
+      return;
+    }
     const sel = selectionRange(el);
     if (!sel) return;
     // A selection means "delete these characters" and mid-line is the browser's job; both fall
     // through. What must NOT fall through is a collapsed caret at a line BOUNDARY, which is where
     // the browser would merge this paragraph into its neighbour.
     if (sel[0] !== sel[1]) return;
+    // Another handler already acted on this key (a box-wide delete, the Options gap). Taking a
+    // second line out behind it would be two edits for one keystroke.
+    if (e.defaultPrevented) return;
     const atStart = sel[0] === 0;
     const atEnd = sel[1] >= runsLength(editRuns(el));
+    // AN EMPTY LINE GOES, the way Word takes an empty paragraph out on Backspace: the caret lands at
+    // the end of the line above it (Delete: the start of the line below), and the line is gone from
+    // the page and from the document. Before the bullet ladder below, deliberately -- an emptied
+    // bulleted line shows no square (styles.css .tw-block.tw-empty.tw-li), so a Backspace that took
+    // its invisible bullet off first would look like a keystroke that did nothing.
+    if (lineIsEmpty(el)) {
+      const to = adjacentLine(el, back ? -1 : 1);
+      if (to && lineRemovable(el)) {
+        e.preventDefault();
+        removeLineAt(el, to, back);
+        return;
+      }
+    }
     if (back && atStart && el.classList.contains("tw-block")) {
       const now = paraNow(Number(el.dataset.id));
       // The ladder: bullet first, then the indent, then stop. `paraAction` decides whether the
@@ -6806,13 +7611,39 @@
       const rung = now && !now.locked ? (now.bullet ? "bullet" : (now.indent > 0 ? "outdent" : null)) : null;
       if (rung && paraAction(el, rung)) { e.preventDefault(); return; }
     }
+    // THE SAME LADDER ON A PRICE LINE THE PAGE COMPOSES, the base, a tax row, the Total, an option
+    // and its rows, a typed line: the bullet first, then the indent a step at a time (the ribbon's
+    // own step, priceLineAction), and only a line at the margin with no bullet joins its
+    // neighbour. It used to go straight to the join, so Backspace at the start of a typed "o"
+    // sub-line glued its words onto the money line above ("…as described aboveNotes: …"), and on
+    // a money line did nothing at all -- while the template's own price rows in the same box
+    // followed Word. A line with no words keeps the join: it has no bullet to take (none prints on
+    // a blank line), and Backspace on an empty line takes the line.
+    if (back && atStart && isPriceLine(el) && /\S/.test(editRuns(el).map(r => r.text).join(""))) {
+      let ov = null;
+      try { ov = el.dataset.pl ? JSON.parse(el.dataset.pl) : null; } catch { ov = null; }
+      const it = TWPrice.lineIntent(el.dataset.poLinekey,
+        el.dataset.poKind === "extra" ? (el.dataset.poPos || "after") : null, ov);
+      const rung = it.bullet ? "bullet" : (it.indent > 0 ? "outdent" : null);
+      if (rung && priceLineAction(el, rung)) { e.preventDefault(); showFmtBar(el); return; }
+    }
     // A line typed next to a price line joins its neighbour or, empty, goes (mergePriceLine).
     const _po = el.dataset || {};
-    if ((_po.poKind === "line" || _po.poKind === "extra") && _po.poLinekey && !/^alt_/.test(_po.poLinekey)) {
+    if ((_po.poKind === "line" || _po.poKind === "extra") && _po.poLinekey) {
       if ((back && atStart && mergePriceLine(el, "up")) || (fwd && atEnd && mergePriceLine(el, "down"))) {
         e.preventDefault();
         return;
       }
+    }
+    // INTO AN EMPTY NEIGHBOUR: Backspace at the start of a line whose line above is empty, or
+    // Delete at the end of one whose line below is. Word merges the two, and merging into an empty
+    // paragraph is the one merge that loses nothing -- it is the empty line going. So that is what
+    // happens, and the caret stays where it is.
+    const into = back && atStart ? adjacentLine(el, -1) : (fwd && atEnd ? adjacentLine(el, 1) : null);
+    if (into && lineIsEmpty(into) && lineRemovable(into)) {
+      e.preventDefault();
+      removeLineAt(into, el, null);
+      return;
     }
     // NO MERGE, EVER, and this is the load-bearing line of the whole change. A .tw-block IS one
     // Word paragraph, identified by an id the backend's walk produced and applied by POSITION to a
@@ -7203,7 +8034,7 @@
     if (!pov.combo || typeof pov.combo !== "object" || Array.isArray(pov.combo)) pov.combo = {};
     if (!pov.alternate || typeof pov.alternate !== "object" || Array.isArray(pov.alternate)) pov.alternate = {};
     if (!pov.lines || typeof pov.lines !== "object" || Array.isArray(pov.lines)) pov.lines = {};
-    for (const k of ["lines2", "before", "after"]) {
+    for (const k of ["lines2", "before", "after", "line_props", "before_props", "after_props"]) {
       if (!pov[k] || typeof pov[k] !== "object" || Array.isArray(pov[k])) pov[k] = {};
     }
     return pov;
@@ -7233,7 +8064,8 @@
     const key = el.dataset.poLinekey;
     if (!key) return false;
     const pov = _ensurePov();
-    let typed = serializeBlock(el);
+    // An emptied line keeps a placeholder break (lineBare), which is no words and no line below.
+    let typed = lineBare(el) ? "" : serializeBlock(el);
     let spill = [];
     if (typed.indexOf("\n") >= 0) {
       const parts = typed.split("\n");
@@ -7252,8 +8084,18 @@
     }
     if (spill.length) {
       if (spills) spills[key] = spill;
-      else pov.after[key] = spill.concat(Array.isArray(pov.after[key]) ? pov.after[key] : []);
+      else {
+        pov.after[key] = spill.concat(Array.isArray(pov.after[key]) ? pov.after[key] : []);
+        // The new lines go on top of the typed ones: their bullets shift down with them.
+        const ap = Array.isArray(pov.after_props[key]) ? pov.after_props[key] : [];
+        if (ap.some(Boolean)) pov.after_props[key] = spill.map(() => null).concat(ap);
+      }
     }
+    // The line's bullet and indent, as its element says (see paintLineParas).
+    let pl = null;
+    try { pl = el.dataset.pl ? TWPrice.cleanLineProps(JSON.parse(el.dataset.pl)) : null; } catch { pl = null; }
+    if (pl && Object.keys(pl).length) pov.line_props[key] = pl;
+    else delete pov.line_props[key];
     return true;
   }
 
@@ -7265,13 +8107,25 @@
     keys.forEach(key => {
       const before = [];
       const after = spills && Array.isArray(spills[key]) ? spills[key].slice() : [];
+      // Each typed line's bullet override, in the same order as its words (null = none).
+      const bProps = [];
+      const aProps = after.map(() => null);
       root.querySelectorAll('[data-po-kind="extra"][data-po-linekey]').forEach(n => {
         if (n.dataset.poLinekey !== key) return;
-        const rows = serializeBlock(n).split("\n");
-        (n.dataset.poPos === "before" ? before : after).push(...rows);
+        // One line on screen is one line on paper: an emptied line holds only the placeholder
+        // break (lineBare), read as "\n", which split into TWO blank lines saved for the one drawn.
+        const rows = lineBare(n) ? [""] : serializeBlock(n).split("\n");
+        let pl = null;
+        try { pl = n.dataset.pl ? TWPrice.cleanLineProps(JSON.parse(n.dataset.pl)) : null; } catch { pl = null; }
+        if (pl && !Object.keys(pl).length) pl = null;
+        const isBefore = n.dataset.poPos === "before";
+        (isBefore ? before : after).push(...rows);
+        (isBefore ? bProps : aProps).push(...rows.map(() => pl));
       });
       if (before.length) pov.before[key] = before; else delete pov.before[key];
       if (after.length) pov.after[key] = after; else delete pov.after[key];
+      if (bProps.some(Boolean)) pov.before_props[key] = bProps; else delete pov.before_props[key];
+      if (aProps.some(Boolean)) pov.after_props[key] = aProps; else delete pov.after_props[key];
     });
   }
 
@@ -7301,6 +8155,11 @@
   function queuePovSave() {
     if (_povTimer) clearTimeout(_povTimer);
     _povTimer = setTimeout(() => { try { TW.setState({ price_overrides: state.price_overrides }); } catch {} }, 500);
+    // A price_overrides change is a change to what the PRICE box prints -- a blank line more or
+    // fewer above "Options:", a line typed there, an undo -- so the size it prints at is asked
+    // again. The Options gap's keys consume their keystroke, so no `input` ever carries these to
+    // schedulePersistOverrides. (try: this can run before the fit's own bookkeeping exists.)
+    try { scheduleFit(); } catch {}
   }
 
   // ── THE BLANK LINES ABOVE THE OPTIONS HEADING (price_overrides.options_gap) ────────────────
@@ -7322,6 +8181,14 @@
    *    Delete at the end of the line above the gap: one fewer.
    *    Enter at the end of the line above the gap, or on a blank line: one more.
    *
+   *  THE FLOOR IS ONE LINE. Hanz, 2026-09-26: "Base bid and options should always have atleast 1 or
+   *  2 spaces from each other". So there is always at least one blank line directly above the
+   *  heading: a key that would take the last one is refused and only moves the caret (Backspace on
+   *  it to the end of the line above, Delete on it to the start of the heading, Backspace at the
+   *  heading's start up onto it, Delete at the end of the line above down onto it), and typing on
+   *  the last one makes it a typed line with a fresh blank line kept under it. A saved count of 0
+   *  shows, and prints, one. The writer applies the same floor (options_gap_count).
+   *
    *  A BLANK LINE TAKES TEXT. Hanz, 2026-09-26: "I cant write texts on this white space lines" --
    *  every line in the box has to take words. A character typed (or pasted, or dropped) on blank
    *  line i turns it into a TYPED line: price_overrides.before.heading_options, the same storage as
@@ -7340,9 +8207,10 @@
    *  prints. Same rule as the writer's: an empty paragraph, nothing typed in it -- looked for above
    *  the typed lines, which sit between it and the gap.
    *
-   *  The default (2) and the ceiling (20) are the writer's OPTIONS_GAP_DEFAULT and OPTIONS_GAP_MAX,
-   *  and both sides clamp to 0..20 by the same rule (test_options_gap.py checks they agree). The
-   *  typed lines have the writer's own ceiling too (main._PRICE_EXTRA_LINES_MAX, 20). */
+   *  The default (2), the floor (1) and the ceiling (20) are the writer's OPTIONS_GAP_DEFAULT,
+   *  OPTIONS_GAP_MIN and OPTIONS_GAP_MAX, and both sides clamp to 1..20 by the same rule
+   *  (test_options_gap.py checks they agree). The typed lines have the writer's own ceiling too
+   *  (main._PRICE_EXTRA_LINES_MAX, 20). */
   function optionsGapCount() {
     const pov = state.price_overrides;
     const v = pov && typeof pov === "object" && !Array.isArray(pov) ? pov.options_gap : undefined;
@@ -7350,7 +8218,7 @@
     if (typeof v === "number" && Number.isInteger(v)) n = v;
     else if (typeof v === "string" && /^[0-9]+$/.test(v.trim())) n = Number(v.trim());
     if (n === null) return 2;
-    return Math.max(0, Math.min(20, n));
+    return Math.max(1, Math.min(20, n));
   }
 
   /** The lines typed ON the gap, above its blank lines, as saved: price_overrides.before
@@ -7446,7 +8314,10 @@
     for (const n of aboveOptionsGap(gap)) {
       if (!gapShown(n)) continue;
       if (isGapTyped(n)) continue;           // the typed lines sit between the spacer and the gap
-      if (n.classList.contains("tw-block") && /^[ ]*$/.test(serializeBlock(n))) {
+      // A blank template paragraph -- the placeholder break an emptied spacer holds included, as
+      // collectOverrides sends it -- but never a line he emptied and kept, which the writer prints.
+      if (n.classList.contains("tw-block") && !lineKeptEmpty(n)
+          && (/^[ ]*$/.test(serializeBlock(n)) || lineBare(n))) {
         n.classList.add("tw-gap-absorbed");
         continue;
       }
@@ -7469,7 +8340,8 @@
     const same = have.length === want.length && have.every((n, i) => serializeBlock(n) === want[i]);
     if (!same && !have.some(n => focusInside(n))) {
       have.forEach(n => n.remove());
-      have = want.map(t => makeExtraLine(null, "heading_options", "before", t));
+      have = want.map((t, i) => makeExtraLine(null, "heading_options", "before", t,
+                                              linePropsOf("heading_options", "before", i)));
     }
     let next = gap;
     for (let i = have.length - 1; i >= 0; i--) {
@@ -7482,7 +8354,8 @@
   /** Blank line `i` of the gap takes text -- typed, pasted or dropped on it (see the section note).
    *  It becomes a typed line holding `lines` (more than one for a multi-line paste), the blank lines
    *  above it in the gap become typed blank lines so it stays where it was typed, and the blank
-   *  lines below it stay the gap. The caret goes to the end of the last new line. Returns it. */
+   *  lines below it stay the gap -- never fewer than one: typed on the last blank line, a fresh one
+   *  is kept under it (the floor). The caret goes to the end of the last new line. Returns it. */
   function typeOnGapLine(i, lines) {
     let rows = (Array.isArray(lines) ? lines : [lines]).map(t => String(t == null ? "" : t));
     const n = optionsGapCount();
@@ -7495,7 +8368,7 @@
     const typed = had.concat(new Array(at).fill(""), rows);
     const pov = _ensurePov();
     pov.before.heading_options = typed;
-    pov.options_gap = Math.max(0, n - 1 - at);
+    pov.options_gap = Math.max(1, n - 1 - at);
     paintOptionsGap();
     const els = gapTypedEls();
     const into = els.length ? els[els.length - 1] : null;
@@ -7504,20 +8377,6 @@
     try { fitTxbx(head && head.closest ? head.closest(".tw-txbx") : null); } catch {}
     queuePovSave();
     return into;
-  }
-
-  /** Take typed line `el` away (it was empty): out of the draft and off the page. */
-  function dropGapTyped(el) {
-    const i = gapTypedEls().indexOf(el);
-    const typed = optionsGapTyped();
-    if (i >= 0 && i < typed.length) typed.splice(i, 1);
-    const pov = _ensurePov();
-    if (typed.length) pov.before.heading_options = typed;
-    else delete pov.before.heading_options;
-    el.remove();
-    const head = optionsHeadingEl();
-    try { fitTxbx(head && head.closest ? head.closest(".tw-txbx") : null); } catch {}
-    queuePovSave();
   }
 
   /** The blank line the caret is on, or null. */
@@ -7548,7 +8407,8 @@
     return true;
   }
 
-  /** Store a new count, redraw it, and re-fit the box it changed. Returns the count stored. */
+  /** Store a new count, redraw it, and re-fit the box it changed. Returns the count stored. The keys
+   *  below never ask for fewer than one (the floor). */
   function setOptionsGap(n) {
     const want = Math.max(0, Math.min(20, Math.floor(Number(n) || 0)));
     let pov = state.price_overrides;
@@ -7583,9 +8443,14 @@
       }
       if (k === "Backspace" || k === "Delete") {
         done();
-        const left = setOptionsGap(optionsGapCount() - 1);
-        if (k === "Delete" && i < left && caretOntoGapLine(i)) return;
-        if (k === "Backspace" && i > 0 && caretOntoGapLine(i - 1)) return;
+        // The last blank line is never taken (the floor): the key only moves the caret, to where
+        // it would have landed had the line gone.
+        const n = optionsGapCount();
+        if (n > 1) {
+          const left = setOptionsGap(n - 1);
+          if (k === "Delete" && i < left && caretOntoGapLine(i)) return;
+          if (k === "Backspace" && i > 0 && caretOntoGapLine(i - 1)) return;
+        }
         // Nothing left on that side: Backspace lands at the end of the line above, Delete at the
         // start of the heading, as Word leaves them.
         const above = k === "Backspace" ? lineAboveOptionsGap(gap) : null;
@@ -7613,23 +8478,14 @@
       const at = selectionRange(head);
       if (!at || at[0] !== 0 || at[1] !== 0) return;
       const n = optionsGapCount();
-      if (n <= 0) {
-        // No blank line left to take. A TYPED line right above the heading: an empty one goes, the
-        // way Word takes an empty paragraph; one with words keeps them and the caret moves to its
-        // end. A price row above instead: the page's own refusal stands (a row is never merged).
-        const above = lineAboveOptionsGap(gap);
-        if (!above || !isGapTyped(above)) return;
-        done();
-        if (!serializeBlock(above).length) {
-          dropGapTyped(above);
-          placeSelection(head, 0, 0);
-        } else {
-          const end = runsLength(editRuns(above));
-          placeSelection(above, end, end);
-        }
+      done();
+      if (n <= 1) {
+        // The last blank line above the heading stays (the floor): the caret goes up onto it, and
+        // the next Backspace there lands at the end of the line above the gap. Whatever sits above
+        // it -- a typed line, a price row -- is never reached from the heading.
+        caretOntoGapLine(n - 1);
         return;
       }
-      done();
       setOptionsGap(n - 1);
       placeSelection(head, 0, 0);
       return;
@@ -7639,10 +8495,14 @@
     const at = selectionRange(above);
     if (!at || at[0] !== at[1] || at[1] < runsLength(editRuns(above))) return;
     if (k === "Delete") {
-      // Delete at the end of the line above the gap takes the blank line under it, as in Word.
+      // Delete at the end of the line above the gap takes the blank line under it, as in Word --
+      // except the last one (the floor), where the caret moves down onto it instead.
       const n = optionsGapCount();
-      if (n <= 0) return;
       done();
+      if (n <= 1) {
+        caretOntoGapLine(0);
+        return;
+      }
       setOptionsGap(n - 1);
       placeSelection(above, at[1], at[1]);
       return;
@@ -7933,6 +8793,115 @@
     window.location.assign(TW.withDraft("/estimate-review.html"));
   });
 
+  /** The body /api/generate is sent for the document on screen, composed ONCE.
+   *
+   *  Continue stores it as `proposal_payload` (plus the cover letter's edits, see there); requestFit
+   *  posts it to /api/proposal-fit to learn what size each text box prints at. Two copies of this
+   *  literal would be two answers to "what does the document hold" the first time one of them gained
+   *  a field, and the one the estimator sees would be the one that was wrong. */
+  function composeProposalPayload(mergedValues, paragraphOverrides, boxOverridesOut) {
+    const tokenValues = computeTokenValues(mergedValues);
+    const _fb = (state.computed_bid && state.computed_bid.full_bid) || {};
+    const remodelTax = Number((state.proposal_remodel_tax != null ? state.proposal_remodel_tax : _fb.remodel_tax) || 0);
+    // THE DOCUMENT'S VALUES, NOT THE WHOLE DRAFT. `mergedValues` is a spread of the draft, so it
+    // carried the PREVIOUS proposal_payload (and its key), the last build's result, the Dropbox
+    // result and the per-tab pricing snapshot — and every Continue nested one more copy, three
+    // deep and 104 KB on a real draft. Nothing the document prints reads any of them, and the
+    // /api/generate write-back would have echoed the stale Dropbox result back onto the draft.
+    // `work_type` in here is the EFFECTIVE type (computeTokenValues sets it off the base tab),
+    // the same one this payload names as its template below.
+    const docValues = { ...mergedValues, ...tokenValues };
+    ["proposal_payload", "proposal_payload_key", "generate_result", "dropbox_result", "priced_tabs"]
+      .forEach((k) => { delete docValues[k]; });
+
+    return {
+      work_type: effectiveWorkType(),
+      audience:  state.audience  || "Direct",
+      // The template version the paragraph_overrides ids were captured against.
+      // The backend drops the overrides if this no longer matches the current
+      // template (annotation shifts editable-block ids) — see api_generate.
+      template_version: templateVersion,
+      values:    docValues,
+      cell_values: state.cell_values || {},
+      // Custom material lines (Super Stick / edge-case adds) -> Epoxy spare rows
+      extras: Array.isArray(state.extras) ? state.extras : [],
+      // Structured proposal price lines (options / unit prices) -> {{#price_line}} rows
+      price_lines: Array.isArray(state.price_lines) ? state.price_lines : [],
+      // Combo per-option breakout (Option 1 Epoxy / Option 2 Polish, each w/ tax +
+      // total) -> leads the PRICE section, suppresses the combined single-bid line.
+      // Display overrides pre-applied to the line strings (see comboLinesForPayload).
+      combo_options: comboLinesForPayload(),
+      // Authoritative bid from the 5.7-recipe engine — the generate
+      // response echoes this so nothing downstream shows a stale total.
+      computed_bid: state.computed_bid || null,
+      // Recommended alternate system (2nd bid) -> {{#alternate}} block + 2nd estimate tab
+      alternate_computed_bid: state.alternate_computed_bid || null,
+      alternate_label: (state.alternate && state.alternate.label) || "",
+      // Conditional Kansas Remodel Tax line — only when remodel tax applies.
+      remodel: remodelTax > 0 ? [{ amount_formatted: fmtUSDdoc(remodelTax) }] : [],
+      // Optional per-sheet priced options -> {{#room}} block (empty unless the
+      // estimate side opts in; copy/rename itself is a pure sheet operation).
+      rooms: Array.isArray(state.rooms) ? state.rooms : [],
+      // Duplicated worksheets + display labels + drag order -> the downloaded
+      // .xlsx mirrors the user's copies, tab renames, and tab order.
+      tab_copies: Array.isArray(state.tab_copies) ? state.tab_copies : [],
+      tab_labels: (state.tab_labels && typeof state.tab_labels === "object") ? state.tab_labels : {},
+      tab_order: Array.isArray(state.tab_order) ? state.tab_order : [],
+      // Structural edits (insert/delete rows & columns) -> replayed onto the
+      // downloaded .xlsx with formula/merge/lock translation.
+      tab_structs: Array.isArray(state.tab_structs) ? state.tab_structs : [],
+      // Per-sheet cell-lock overrides ("Lock cell" toolbar) -> merged over the
+      // default rate/markup/tax locks in the generated .xlsx sheet protection.
+      lock_overrides: (state.lock_overrides && typeof state.lock_overrides === "object") ? state.lock_overrides : {},
+      // Editable NOTES (one bullet per line); empty -> backend uses the standard list.
+      notes: String(mergedValues.notes_text || "").replace(/\n+$/, "").split("\n").map(s => s.trim()),
+      // Document-editor edits -> proposal_writer paragraph overrides,
+      // applied to the pristine template BEFORE block expansion (id-safe).
+      paragraph_overrides: paragraphOverrides,
+      // Boxes the estimator dragged or resized -> proposal_writer._apply_box_overrides, which
+      // writes size and anchor offset into BOTH the DrawingML anchor and its VML fallback.
+      // Guarded by the same template_version as the paragraph overrides above: a box id is a
+      // position in the same walk over the same file.
+      box_overrides: boxOverridesOut,
+      // Doc-editor per-option DISPLAY overrides for the WORK {{#system}}
+      // rows (epoxy only) — edit the shown system name/texture/area without
+      // touching cell_values or the price.
+      system_overrides: Array.isArray(state.system_overrides) ? state.system_overrides : [],
+      // WORK {{#system}} picks resolved from the BASE tab's sheet cells (name +
+      // SF + cove LF per system) so the docx Area matches the on-screen preview
+      // even when the base is a copy tab. Empty -> backend keeps its legacy
+      // Epoxy!-cell reads (stale drafts / fallback path).
+      sheet_systems: (sheetSystems() || []).filter(s => (s.name && !s.name.includes("Options")) || s.sf > 0 || s.lf > 0),
+      // Doc-editor per-line DISPLAY overrides for the PRICE section (base bid
+      // amount / tax phrase, option + manual line label/amount). Display-only —
+      // never affects pricing or the .xlsx (see backend _sanitize_price_overrides).
+      price_overrides: (state.price_overrides && typeof state.price_overrides === "object") ? state.price_overrides : {},
+      // The lines that print a dollar figure of the estimator's own instead of the estimate's,
+      // so Send can ask before they go (done.js). The render ignores it.
+      price_warnings: priceWarnings(),
+      // THE OPTIONAL COVER LETTER — the flag, and since 2026-09-11 once again the estimator's
+      // own edits to its wording.
+      //
+      // Inside proposal_payload, not merely on the POST body, because the payload is what gets
+      // FROZEN into a sent revision: /api/admin/proposal-pdf re-renders a customer's document
+      // from the pinned copy and reads pp["cover_letter_enabled"] to decide whether to build
+      // page 1, so a letter that rode only the request would vanish the first time a customer
+      // re-opened their proposal.
+      //
+      // THROUGH liveKey, NOT off `state`, and the reason is a bug this shipped with for the
+      // length of one review: `state` is the module-top one-shot snapshot, and
+      // wireCoverLetterSwitch (above) writes cover_letter_enabled as a TOP-LEVEL key, which
+      // TW.setState REPLACES on a freshly parsed object rather than mutating in place. So a
+      // snapshot read here returns the value from page load: tick the box, press Continue in
+      // the same visit, and the payload ships `false`, create_revision pins `false`, and the
+      // customer's document has no page 1 — while the box stays ticked after a reload, because
+      // localStorage was right all along and only this read was wrong. Untick-then-Continue
+      // fails the same way in reverse. Twelve other keys on this page go through liveKey for
+      // exactly this reason; the note at its definition spells the mechanism out.
+      cover_letter_enabled: !!liveKey("cover_letter_enabled"),
+    };
+  }
+
   // The visible Continue button sits in the ribbon, outside the intentionally
   // hidden fields form. Wire it directly instead of relying on the browser's
   // cross-form submit behavior, which can be skipped when the hidden template
@@ -7968,10 +8937,7 @@
     const mergedValues = Object.assign({}, state,
       _liveLetter === undefined ? {} : { cover_letter_enabled: !!_liveLetter },
       TW.readForm(form));
-    const tokenValues = computeTokenValues(mergedValues);
     const lumpSumText = document.querySelector("#tb-total")?.textContent || "$0.00";
-    const _fb = (state.computed_bid && state.computed_bid.full_bid) || {};
-    const remodelTax = Number((state.proposal_remodel_tax != null ? state.proposal_remodel_tax : _fb.remodel_tax) || 0);
 
     // Document edits: every paragraph whose text differs from its pristine
     // rendering, as {id, text} against the pristine template's ids. Persisted
@@ -7995,17 +8961,6 @@
       liveKey("box_overrides_all"), effectiveWorkType(), state.audience || "Direct",
       templateVersion, boxOverridesOut);
 
-    // THE DOCUMENT'S VALUES, NOT THE WHOLE DRAFT. `mergedValues` is a spread of the draft, so it
-    // carried the PREVIOUS proposal_payload (and its key), the last build's result, the Dropbox
-    // result and the per-tab pricing snapshot — and every Continue nested one more copy, three
-    // deep and 104 KB on a real draft. Nothing the document prints reads any of them, and the
-    // /api/generate write-back would have echoed the stale Dropbox result back onto the draft.
-    // `work_type` in here is the EFFECTIVE type (computeTokenValues sets it off the base tab),
-    // the same one this payload names as its template below.
-    const docValues = { ...mergedValues, ...tokenValues };
-    ["proposal_payload", "proposal_payload_key", "generate_result", "dropbox_result", "priced_tabs"]
-      .forEach((k) => { delete docValues[k]; });
-
     const composed = {
       ...mergedValues,
       paragraph_overrides_all: _allOverrides,
@@ -8022,99 +8977,12 @@
         work_type: effectiveWorkType(),
         audience: state.audience || "Direct",
       },
-      proposal_payload: {
-        work_type: effectiveWorkType(),
-        audience:  state.audience  || "Direct",
-        // The template version the paragraph_overrides ids were captured against.
-        // The backend drops the overrides if this no longer matches the current
-        // template (annotation shifts editable-block ids) — see api_generate.
-        template_version: templateVersion,
-        values:    docValues,
-        cell_values: state.cell_values || {},
-        // Custom material lines (Super Stick / edge-case adds) -> Epoxy spare rows
-        extras: Array.isArray(state.extras) ? state.extras : [],
-        // Structured proposal price lines (options / unit prices) -> {{#price_line}} rows
-        price_lines: Array.isArray(state.price_lines) ? state.price_lines : [],
-        // Combo per-option breakout (Option 1 Epoxy / Option 2 Polish, each w/ tax +
-        // total) -> leads the PRICE section, suppresses the combined single-bid line.
-        // Display overrides pre-applied to the line strings (see comboLinesForPayload).
-        combo_options: comboLinesForPayload(),
-        // Authoritative bid from the 5.7-recipe engine — the generate
-        // response echoes this so nothing downstream shows a stale total.
-        computed_bid: state.computed_bid || null,
-        // Recommended alternate system (2nd bid) -> {{#alternate}} block + 2nd estimate tab
-        alternate_computed_bid: state.alternate_computed_bid || null,
-        alternate_label: (state.alternate && state.alternate.label) || "",
-        // Conditional Kansas Remodel Tax line — only when remodel tax applies.
-        remodel: remodelTax > 0 ? [{ amount_formatted: fmtUSDdoc(remodelTax) }] : [],
-        // Optional per-sheet priced options -> {{#room}} block (empty unless the
-        // estimate side opts in; copy/rename itself is a pure sheet operation).
-        rooms: Array.isArray(state.rooms) ? state.rooms : [],
-        // Duplicated worksheets + display labels + drag order -> the downloaded
-        // .xlsx mirrors the user's copies, tab renames, and tab order.
-        tab_copies: Array.isArray(state.tab_copies) ? state.tab_copies : [],
-        tab_labels: (state.tab_labels && typeof state.tab_labels === "object") ? state.tab_labels : {},
-        tab_order: Array.isArray(state.tab_order) ? state.tab_order : [],
-        // Structural edits (insert/delete rows & columns) -> replayed onto the
-        // downloaded .xlsx with formula/merge/lock translation.
-        tab_structs: Array.isArray(state.tab_structs) ? state.tab_structs : [],
-        // Per-sheet cell-lock overrides ("Lock cell" toolbar) -> merged over the
-        // default rate/markup/tax locks in the generated .xlsx sheet protection.
-        lock_overrides: (state.lock_overrides && typeof state.lock_overrides === "object") ? state.lock_overrides : {},
-        // Editable NOTES (one bullet per line); empty -> backend uses the standard list.
-        notes: String(mergedValues.notes_text || "").replace(/\n+$/, "").split("\n").map(s => s.trim()),
-        // Document-editor edits -> proposal_writer paragraph overrides,
-        // applied to the pristine template BEFORE block expansion (id-safe).
-        paragraph_overrides: paragraphOverrides,
-        // Boxes the estimator dragged or resized -> proposal_writer._apply_box_overrides, which
-        // writes size and anchor offset into BOTH the DrawingML anchor and its VML fallback.
-        // Guarded by the same template_version as the paragraph overrides above: a box id is a
-        // position in the same walk over the same file.
-        box_overrides: boxOverridesOut,
-        // Doc-editor per-option DISPLAY overrides for the WORK {{#system}}
-        // rows (epoxy only) — edit the shown system name/texture/area without
-        // touching cell_values or the price.
-        system_overrides: Array.isArray(state.system_overrides) ? state.system_overrides : [],
-        // WORK {{#system}} picks resolved from the BASE tab's sheet cells (name +
-        // SF + cove LF per system) so the docx Area matches the on-screen preview
-        // even when the base is a copy tab. Empty -> backend keeps its legacy
-        // Epoxy!-cell reads (stale drafts / fallback path).
-        sheet_systems: (sheetSystems() || []).filter(s => (s.name && !s.name.includes("Options")) || s.sf > 0 || s.lf > 0),
-        // Doc-editor per-line DISPLAY overrides for the PRICE section (base bid
-        // amount / tax phrase, option + manual line label/amount). Display-only —
-        // never affects pricing or the .xlsx (see backend _sanitize_price_overrides).
-        price_overrides: (state.price_overrides && typeof state.price_overrides === "object") ? state.price_overrides : {},
-        // The lines that print a dollar figure of the estimator's own instead of the estimate's,
-        // so Send can ask before they go (done.js). The render ignores it.
-        price_warnings: priceWarnings(),
-        // THE OPTIONAL COVER LETTER — the flag, and since 2026-09-11 once again the estimator's
-        // own edits to its wording.
-        //
-        // Inside proposal_payload, not merely on the POST body, because the payload is what gets
-        // FROZEN into a sent revision: /api/admin/proposal-pdf re-renders a customer's document
-        // from the pinned copy and reads pp["cover_letter_enabled"] to decide whether to build
-        // page 1, so a letter that rode only the request would vanish the first time a customer
-        // re-opened their proposal.
-        //
-        // THROUGH liveKey, NOT off `state`, and the reason is a bug this shipped with for the
-        // length of one review: `state` is the module-top one-shot snapshot, and
-        // wireCoverLetterSwitch (above) writes cover_letter_enabled as a TOP-LEVEL key, which
-        // TW.setState REPLACES on a freshly parsed object rather than mutating in place. So a
-        // snapshot read here returns the value from page load: tick the box, press Continue in
-        // the same visit, and the payload ships `false`, create_revision pins `false`, and the
-        // customer's document has no page 1 — while the box stays ticked after a reload, because
-        // localStorage was right all along and only this read was wrong. Untick-then-Continue
-        // fails the same way in reverse. Twelve other keys on this page go through liveKey for
-        // exactly this reason; the note at its definition spells the mechanism out.
-        cover_letter_enabled: !!liveKey("cover_letter_enabled"),
-        // The letter's own paragraph edits + the template version their ids were captured
-        // against — restored 2026-09-11 in coverletter-editor.js, which reads the SAME liveKey
-        // pattern this file does for exactly the reason above. Read through the ONE helper on
-        // window rather than duplicated here, so this file and that one cannot come to disagree
-        // about what the estimator asked for; an empty object when that script did not load,
-        // which the backend already treats as "no edits".
-        ...(window.TWCoverLetter ? TWCoverLetter.payloadFields() : {}),
-      },
+      // THE ONE COMPOSITION (composeProposalPayload), plus the cover letter's own edits, which only
+      // Continue collects: payloadFields() flushes that editor's pending save, and the fit request
+      // that shares the composer must not.
+      proposal_payload: Object.assign(
+        composeProposalPayload(mergedValues, paragraphOverrides, boxOverridesOut),
+        window.TWCoverLetter ? TWCoverLetter.payloadFields() : {}),
       // Also persist the lump sum string so Done can show it without
       // re-reading from HF (which lives on the Estimate Review page).
       lump_sum_display: lumpSumText,

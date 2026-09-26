@@ -271,7 +271,7 @@ def test_the_paragraph_controls_still_work_after_focus_left(ran):
     got = ran["bulletAfterBlur"]
     assert got["pressed"]["disabled"] is False
     assert got["li"] is False, "the bullet did not come off"
-    assert got["now"] == {"bullet": False, "indent": 288, "locked": False}
+    assert got["now"] == {"bullet": False, "indent": 288, "locked": False, "level": 0}
     assert got["persisted"] is True, "the change was never handed to the override persistence"
     assert got["bar"]["controls"]["bullet"]["on"] is False
 
@@ -563,7 +563,7 @@ def test_backspace_at_the_margin_changes_nothing_and_merges_nothing(ran):
     What must still hold is that the paragraph is untouched — the refusal is a refusal, not a
     silent edit."""
     g = ran["backspaceAtTheMargin"]
-    assert g["after"] == {"bullet": False, "indent": 0, "locked": False}
+    assert g["after"] == {"bullet": False, "indent": 0, "locked": False, "level": 0}
     assert g["prevented"], "the keystroke fell through, and the browser would have merged"
 
 

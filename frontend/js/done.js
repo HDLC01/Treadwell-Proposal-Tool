@@ -341,7 +341,7 @@
    *  sends a draft with no document through the Proposal step first, so a press that still finds
    *  none refuses instead. A draft with no id (never saved) has nothing for the server to read,
    *  so its composed payload itself goes to /api/generate. */
-  async function freshDocuments() {
+  async function freshDocuments(draftVersion) {
     if (!await TW.flushState()) {
       throw new Error("Couldn't save your latest changes, so the files were not built — "
                       + "check your connection and try again.");
@@ -354,7 +354,11 @@
                       + "press Continue to Done, then come back here.");
     }
     if (draftId) {
-      const out = await TW.postJSON("/api/draft/" + encodeURIComponent(draftId) + "/documents", {});
+      // `draftVersion`, when a Download asked the question of the server's copy first
+      // (TWPrice.confirmSavedCopy): when the server stored that copy. The server builds nothing
+      // from a draft stored again since, so the file is the copy he was asked about.
+      const out = await TW.postJSON("/api/draft/" + encodeURIComponent(draftId) + "/documents",
+                                    draftVersion ? { draft_version: draftVersion } : {});
       TW.setLocalState({ generate_result: out, generated_lump_sum: (out && out.document_total) || null });
       return out;
     }
@@ -1200,23 +1204,6 @@
     try { box.scrollIntoView({ block: "center", behavior: "smooth" }); } catch {}
     return true;
   }
-  /** What Send asks before a proposal goes out with a price line that prints a dollar figure of
-   *  the estimator's own instead of the estimate's — one sentence per line, in Hanz's words:
-   *  "This line says $X but the estimate says $Y — send anyway?" — or "" when there is none.
-   *  `warnings` is the document's own list (proposal-review.js priceWarnings). */
-  function sendPriceWarning(warnings) {
-    const list = Array.isArray(warnings) ? warnings.filter(w => w && typeof w === "object") : [];
-    if (!list.length) return "";
-    const one = (w) => {
-      const says = String(w.says || "").trim() || "a figure of its own";
-      const est = String(w.estimate || "").trim();
-      return est ? `This line says ${says} but the estimate says ${est}`
-                 : `This line says ${says}, typed by hand`;
-    };
-    const lines = list.slice(0, 6).map(one);
-    if (list.length > 6) lines.push(`…and ${list.length - 6} more line(s) like it`);
-    return lines.join(".\n") + " — send anyway?";
-  }
   function showStaleDoc(rows, mode) {
     const box = document.getElementById("stale-doc");
     if (!box) return;
@@ -1352,14 +1339,30 @@
     async function downloadAs(urlKey, filename, button) {
       const orig = button.textContent;
       button.disabled = true;
-      button.textContent = "Downloading…";
       try {
+        // A PRICE LINE WITH A FIGURE OF HIS OWN: the question Send asks, asked BEFORE anything is
+        // built or fetched (Hanz, 2026-09-26: warn on all three -- Send, Download, To Dropbox). One
+        // check, TWPrice.confirmOwnFigures, asked of the copy the server is about to build, which
+        // is not always this page's (TWPrice.confirmSavedCopy has the case). The estimate sheet
+        // carries no price line, so its button is not asked. Cancel builds and fetches nothing.
+        let checkedVersion = "";
+        if (urlKey !== "xlsx_download_url") {
+          const asked = await TWPrice.confirmSavedCopy(TW, "download", (q) => window.confirm(q));
+          if (asked.failed) {
+            throw new Error("Couldn't save your latest changes or read the saved proposal, so "
+                            + "nothing was downloaded — check your connection and try again.");
+          }
+          if (!asked.go) { button.disabled = false; return; }
+          checkedVersion = asked.version;
+        }
+        button.textContent = "Downloading…";
         // BUILT NOW, from the saved draft, through the render Send uses — never a token kept from
         // an earlier build. There used to be a 404 self-heal here that regenerated from the
         // module-top snapshot of the payload after a restart expired the kept token, so a download
         // could come from either of two payloads depending on server uptime. A token minted a
-        // moment ago has nothing to heal.
-        const out = await freshDocuments();
+        // moment ago has nothing to heal. `checkedVersion`: the server builds nothing from a draft
+        // saved again since the copy the question was asked of.
+        const out = await freshDocuments(checkedVersion);
         paintLumpSum();
         const url = out && out[urlKey];
         if (!url) throw new Error("That file isn't available for this project.");
@@ -1641,8 +1644,8 @@
           // estimate unless the estimator typed a DIFFERENT dollar figure into it; the Proposal
           // step marks those lines, and the document it built lists them (price_warnings, read
           // off the same flushed blob the publish is about to freeze). Cancel sends nothing.
-          const _warn = sendPriceWarning(((TW.getState() || {}).proposal_payload || {}).price_warnings);
-          if (_warn && !window.confirm(_warn)) {
+          // THE ONE CHECK (TWPrice.confirmOwnFigures) that Download and To Dropbox ask too.
+          if (!TWPrice.confirmOwnFigures(TW.getState(), "send", (q) => window.confirm(q))) {
             portalBtn.disabled = false; portalBtn.textContent = orig;
             if (portalRecip.setBusy) portalRecip.setBusy(false);
             return;                            // NOTHING is posted. No portal row, no email.

@@ -128,6 +128,10 @@ const PROPOSAL_UNITS = [
   fn(PROPOSAL, "repaintNote", P),
   fn(PROPOSAL, "sayTheSaveIsBlocked", P),
   grab(PROPOSAL, /^  let _persistTimer = .*$/m, "_persistTimer", P),
+  // continueToDone composes the document through the ONE composer it shares with the fit request.
+  fn(PROPOSAL, "composeProposalPayload", P),
+  // ...and the question the fit request asks, built by the same composer (scenario ONE).
+  fn(PROPOSAL, "fitPayload", P),
   fn(PROPOSAL, "continueToDone", P),
   fn(PROPOSAL, "composeForFiles", P),
 ].join(NL);
@@ -141,7 +145,7 @@ const PAGE_BODY = [
   PROPOSAL_UNITS,
   "function __initLump() {" + LUMP + "}",
   "function __prefillEstimator() {" + PREFILL + "}",
-  "return { rebuildPricing, continueToDone, composeForFiles, __initLump, __prefillEstimator,",
+  "return { rebuildPricing, continueToDone, composeForFiles, fitPayload, __initLump, __prefillEstimator,",
   "  setTemplateVersion: (v) => { templateVersion = v; },",
   // The form's debounced persist, as the page arms it: it writes a patch of the module snapshot's
   // payload. Armed from here so the scenario can put one in flight when Continue runs.
@@ -460,7 +464,9 @@ async function openProposal(b, href, opts) {
      { id: 126, in_block: "tax_breakout", text: "{{material_tax_formatted}} – Material Sales Tax" },
      { id: 129, in_block: "remodel", text: "{{remodel.amount_formatted}} – Remodel Tax" },
      { id: 132, in_block: "tax_breakout", text: "{{total_label}}" }],
-    () => [], () => ({}),
+    // The document editor's own collectors: what a scenario says the editor holds (`overrides`:
+    // the paragraph entries, removed and kept-empty lines included), else nothing.
+    () => (o.overrides ? JSON.parse(JSON.stringify(o.overrides)) : []), () => ({}),
     () => [{ name: (state.system_name || "System"), sf: 1000, lf: 0 }],
     () => {},
     firstDocLoad, Promise.resolve(),
@@ -565,6 +571,8 @@ function summary(pp) {
     materialTax: v.material_tax_formatted, notes: pp && pp.notes,
     nested: NESTED.filter((k) => Object.prototype.hasOwnProperty.call(v, k)),
     mentionsAncient: /ancient|older still|ANCIENT|\/api\/file\/OLD|Estimating\/old/.test(JSON.stringify(v)),
+    // What Send asks about before a hand-typed dollar figure goes out (done.js sendPriceWarning).
+    priceWarnings: pp ? pp.price_warnings : undefined,
   };
 }
 
@@ -1360,11 +1368,14 @@ const mentionsY = (x) => /Other Project Y|Y texture|Y scope|Y note/.test(JSON.st
     }
     const press = new (Object.getPrototypeOf(async function () {}).constructor)(
       "TW", "dest", "DBX", "go", "result", "dbxGoDisabled", "ownerValue", "showUploaded",
-      "renderResult", "dbxGoLabel", "esc", "alert", "fetch", DROPBOX.slice(i + marker.length, j));
+      "renderResult", "dbxGoLabel", "esc", "alert", "fetch", "TWPrice", "window",
+      DROPBOX.slice(i + marker.length, j));
     return (d) => press(d.TW, { value: "commercial" }, { choice: "/Estimating/*Kyle/Door Test", error: null },
                         { classList: { add() {}, remove() {} }, disabled: false, textContent: "" },
                         { style: {}, innerHTML: "" }, () => false, () => "Kyle", () => {}, () => {},
-                        () => "", String, () => { throw new Error("alert"); }, d.page.sandbox.fetch);
+                        () => "", String, () => { throw new Error("alert"); }, d.page.sandbox.fetch,
+                        // The page's TWPrice; a question asked here would be a thrown error.
+                        TWPRICE, { confirm: () => { throw new Error("confirm"); } });
   })();
 
   // S2. Findings 2A and 7. Kyle's Files page for X is open and current. RJ revises X on his machine.
@@ -1969,6 +1980,39 @@ const mentionsY = (x) => /Other Project Y|Y texture|Y scope|Y note/.test(JSON.st
       r[kind] = res;
     }
     out.unknownCardCanKeep = r;
+  }
+
+  // ONE. THE ONE COMPOSER (the 2026-09-26 editor release). Continue stores the document it
+  //    composes; the fit request (POST /api/proposal-fit) asks what size that same document prints
+  //    at. Both come from composeProposalPayload, and every field the four branches added to the
+  //    document has to reach both, or the editor would be sized for a document nobody sends: the
+  //    typed price lines and the lines around them (lines2 / before / after), each line's bullet
+  //    (line_props / before_props / after_props), the tax layout, the Options gap and the lines
+  //    typed on it, a removed line and an emptied line kept, and the price warnings.
+  {
+    const A = TWPRICE.AMOUNT, T = TWPRICE.TAX;
+    const d = draft();
+    d.tax_layout = "BROKEN_OUT";
+    d.proposal_taxable = true;
+    d.price_lines = [{ label: "Joint filler", amount: 1500 }];
+    d.price_overrides = {
+      lines: {},
+      lines2: { base: A + " \u2013 Epoxy flooring as described above, warehouse only " + T,
+                "manual:0": "$1,900 \u2013 Joint filler, per plan", total: A + " \u2013 Total, all in" },
+      before: { heading_options: ["Pricing valid 30 days", ""], base: ["Phase 1"] },
+      after: { base: ["", "THis is a test send to Hanz"] },
+      line_props: { base: { bullet: false, indent: 576 }, total: { level: 1 } },
+      before_props: { heading_options: [{ bullet: true, level: 1 }, null] },
+      after_props: { base: [null, { bullet: false, indent: 864 }] },
+      options_gap: 3,
+    };
+    const b = browser(d);
+    const overrides = [{ id: 181, removed: true }, { id: 182, text: "", kept: true },
+                       { id: 190, text: "Scope: grind and coat, two coats" }];
+    const p = await openProposal(b, "/proposal-review.html?d=d1", { overrides });
+    const fit = p.scope.fitPayload();
+    await p.scope.continueToDone(null);
+    out.oneComposer = { fit, stored: local(b).proposal_payload, draft: d };
   }
 
   process.stdout.write(JSON.stringify(out));
