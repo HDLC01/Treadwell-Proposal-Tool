@@ -176,7 +176,9 @@ def test_nobody_signed_out_gets_the_font(signed_out, name, auth):
     "/api/proposal-font/zetta-serif", "/api/proposal-font/zetta-serif-book",
     "/api/proposal-font/zetta-serif?v=1", "/api/proposal-template/media?name=Zetta%20Serif.otf",
 ])
-def test_no_public_url_returns_the_font_bytes(signed_out, url):
+def test_no_url_of_the_app_returns_the_font_bytes_signed_out(signed_out, url):
+    """This app's own URLs only. The same bytes are public on GitHub and in the GHCR images,
+    which no test here can reach: see the end of the proposal_fonts.py docstring."""
     r = client.get(url)
     fonts = {p.read_bytes() for p in FONT_FILES.values()}
     assert r.content not in fonts and not r.content.startswith(b"OTTO"), url

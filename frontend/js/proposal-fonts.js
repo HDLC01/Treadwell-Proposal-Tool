@@ -6,8 +6,10 @@
  * while the PDF (LibreOffice in the container, fonts from backend/fonts/) printed Zetta Serif.
  * Georgia is wider, so the editor also wrapped, shrank and clipped boxes the PDF does not.
  *
- * LICENSED, SO IT STAYS BEHIND THE LOGIN. The files come from /api/proposal-font/<name>, which the
- * same auth middleware as every staff /api route gates (backend/proposal_fonts.py). They are
+ * LICENSED, SO THE APP SERVES IT ONLY BEHIND THE LOGIN. (The files are also public on GitHub and in
+ * the GHCR images, which this does not fix: see the end of backend/proposal_fonts.py's docstring.)
+ * The files come from /api/proposal-font/<name>, which the same auth middleware as every staff
+ * /api route gates (backend/proposal_fonts.py). They are
  * fetched here with the staff bearer token and handed to the FontFace API as BYTES:
  *   * a CSS url() font load cannot carry the Authorization header, so it would 401;
  *   * a blob: URL would be refused by nginx's CSP, which says `font-src 'self'`;

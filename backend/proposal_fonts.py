@@ -1,4 +1,4 @@
-"""Treadwell's licensed proposal typeface, served to signed-in staff and to nobody else.
+"""Treadwell's licensed proposal typeface, which the app serves to signed-in staff only.
 
 Hanz, 2026-09-26: "why are the fonts and font sizes still not fixed?" The proposal templates are
 typeset in Zetta Serif, and the PDF prints in it (LibreOffice in the container, fonts installed from
@@ -7,11 +7,12 @@ never LOADED it, so on every machine without the font installed it drew Georgia 
 wider, so the editor also wrapped, shrank and clipped boxes that the PDF does not.
 
 Zetta Serif is a LICENSED font. Hanz approved serving it to staff from the app on the condition that
-it stays behind the login, so:
+it stays behind the login. This route is the only way the app hands the files out, and it keeps to
+that condition:
 
   * it is served from an /api route, which puts it behind the Supabase auth middleware every other
     staff route sits behind (`_auth_gate` in main.py) -- an unauthenticated request is refused
-    before routing, so no public URL returns these bytes;
+    before routing, so no URL of THIS APP returns these bytes to a signed-out caller;
   * the files live in backend/fonts/, outside the frontend/ directory the static mount serves;
   * the request names a font by a fixed PUBLIC NAME, and that name is looked up in `FONTS` below.
     Nothing a request carries is ever joined onto a path: a name that is not a key there resolves
@@ -19,6 +20,18 @@ it stays behind the login, so:
 
 The browser side is frontend/js/proposal-fonts.js, which fetches both files with the staff bearer
 token and registers them through the FontFace API.
+
+WHAT THIS FILE DOES NOT CLOSE (found in review on 2026-09-26; it predates this route). The same two
+files are public in two other places, with no login:
+  * git. backend/fonts/ has been tracked since 67942d0, and the GitHub repo is PUBLIC, so
+    raw.githubusercontent.com serves both files to anyone.
+  * the images. The prod and staging images on GHCR carry the files (at
+    /usr/share/fonts/truetype/treadwell for LibreOffice and at /app/fonts), and GHCR hands an
+    anonymous caller a pull token for them.
+No code here can fix either. It is a repository and registry decision for Hanz: make the repo and
+the GHCR package private (the VPS then needs a pull credential for `docker compose pull`), or take
+the files out of git history and give the image build a private source for them. Until that is
+done, "behind the login" describes this route only. It does not mean the font is private.
 """
 import hashlib
 import pathlib
