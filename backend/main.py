@@ -4214,6 +4214,10 @@ def _base_bid_less_printed_tax(total_formatted, printed_tax) -> Optional[str]:
     is about the strings on the page, so the arithmetic is done at the cent precision
     the page prints at.
 
+    Under Tax exempt (Hanz, 2026-09-28) `_generate` hands this the taxes the sheet put in the bid
+    although none of them prints — the one layout where the base line is net of rows that do not
+    print, deliberately: the customer pays no tax.
+
     A figure it cannot read is named in the log, with what that costs — a
     "refused"-style warning that does not say which figure buys an SSH session and a
     container probe. It never raises: half a price block is still a sendable proposal,
@@ -4358,7 +4362,7 @@ def _flooring_noun(work_type: str) -> str:
 
 
 def _build_options(rooms_in: list, values: Dict[str, Any], work_type: str = "epoxy",
-                   broken: bool = False) -> list:
+                   exempt: bool = False, base_pre_tax_cents: Optional[int] = None) -> list:
     """NON-base priced options for the proposal PRICE section ({{#room}} block).
 
     The base bid is rendered by {{#single_bid}}, so it is EXCLUDED here. Each input
@@ -4366,27 +4370,51 @@ def _build_options(rooms_in: list, values: Dict[str, Any], work_type: str = "epo
     {name, is_base, base_total, deduct_amount, price_mode, show, option_desc,
      base_desc, system_desc, bid:{total, sales_tax, remodel, taxable?, remodel_on?},
      notes_auto, notes_manual}.
+
+    AN OPTION IS ALWAYS ONE LINE. Hanz, 2026-09-28: "Options should only be total amount, cannot
+    be broken out. Only the base bid would be broken out or one line." (He had picked an itemised
+    shape from previews on 2026-09-25; it printed for three days.) The TAX control's Broken out
+    is the base bid's alone, so nothing here ever returns a tax row.
+
+    `exempt` is the whole job under Tax exempt (price_rules EXEMPT): every option prints its own
+    pre-tax figure with "(tax exempt)". `base_pre_tax_cents` is the base line's own pre-tax figure,
+    the one the PRICE block prints (_generate passes its rule's), for Add/Deduct under exempt.
+
     A shown option (show != False, positive total) renders in one of two modes:
       • total      → the option's OWN tab decides its tax (price_rules.tax_rule, the same rule
-                     as the base): one line "$8,310 – <system> as described above (<tax>)", or,
-                     BROKEN OUT, its pre-tax line with no bracket plus its own Material Sales
-                     Tax / Remodel Tax rows as its flags say and its own Total, in `tax_rows`.
-                     Hanz picked the itemised shape from previews, 2026-09-25.
-      • add/deduct → diff = option_total − base_total (both tax-inclusive), and the
-                     line SELF-LABELS by the sign (Will's spec):
+                     as the base): "$8,310 – <system> as described above (<tax>)" — its whole
+                     total and its own tab's wording; under exempt, its total less the taxes its
+                     own flags put in it, and "(tax exempt)".
+      • add/deduct → diff = option − base, and the line SELF-LABELS by the sign (Will's spec):
                        diff < 0  → "Deduct ($3,200)" + "VE for <option>, in lieu of <base>."
                        diff ≥ 0  → "Add $2,232" + "<option>" (a costlier option is an ADD,
                                    not a silent fall-back to its own total as before)
-                     A difference of two tax-inclusive totals has no tax of its own to show,
-                     so this line never itemises.
+                     Both tax-inclusive totals, as the base prints tax-inclusive; under exempt the
+                     two PRE-TAX figures, because the base prints pre-tax and base less the deduct
+                     has to be the option's price. The two differences can disagree in amount and
+                     in sign. No tax wording on this line in any layout.
     Each option also reports `amount` and `tax_phrase` — the parts an edited line's markers are
-    resolved against. Returns [] when there are no shown options (the block then strips)."""
+    resolved against — and `candidates`, the other figures an old-shape line could have frozen in
+    (its tax-inclusive total; the editor offers migrateLine the same list). Returns [] when there
+    are no shown options (the block then strips)."""
     def num(x) -> float:
         try:
             return float(str(x).replace(",", "").replace("$", "").strip() or 0)
         except (TypeError, ValueError):
             return 0.0
 
+    def pre_tax_cents(bid: Dict[str, Any]) -> int:
+        return price_rules.tax_rule(bid.get("total"), bid.get("sales_tax"), bid.get("remodel"),
+                                    taxable=bid.get("taxable"), remodel_on=bid.get("remodel_on"),
+                                    layout=price_rules.EXEMPT)["base_cents"]
+
+    if exempt and base_pre_tax_cents is None:
+        # A caller that did not say what the base line prints: the base room, by the same rule.
+        # With none, its tax-inclusive total — nothing says what tax is inside it.
+        _b = next((r for r in (rooms_in or []) if isinstance(r, dict) and r.get("is_base")), None)
+        if _b is not None and isinstance(_b.get("bid"), dict):
+            base_pre_tax_cents = pre_tax_cents(_b["bid"])
+    layout = price_rules.EXEMPT if exempt else price_rules.ONE_LINE
     noun = _flooring_noun(work_type)
     out = []
     for r in (rooms_in or []):
@@ -4399,10 +4427,19 @@ def _build_options(rooms_in: list, values: Dict[str, Any], work_type: str = "epo
         if total <= 0:                                # un-snapshotted / empty sheet
             continue
         option_desc = str(r.get("option_desc") or r.get("system_desc") or r.get("name") or "").strip()
-        diff = total - num(r.get("base_total"))       # option − base (Will's formula)
+        rule = price_rules.tax_rule(total, bid.get("sales_tax"), bid.get("remodel"),
+                                    taxable=bid.get("taxable"),
+                                    remodel_on=bid.get("remodel_on"), layout=layout)
+        if exempt:
+            # Option − base, both PRE-TAX (the twin: renderOptionLinesPreview's exemptJob diff).
+            _base_c = (base_pre_tax_cents if base_pre_tax_cents is not None
+                       else int(round(num(r.get("base_total")) * 100)))
+            diff = (rule["base_cents"] - _base_c) / 100
+        else:
+            diff = total - num(r.get("base_total"))   # option − base (Will's formula)
 
         tax_phrase = ""
-        tax_rows: list = []
+        candidates: list = []
         if str(r.get("price_mode")) == "deduct":
             # Auto add/deduct by sign; the Add/Deduct word rides INSIDE the amount
             # island so the docx row reads "Add $2,232 – <label>" / "Deduct ($3,200) – <label>".
@@ -4414,22 +4451,11 @@ def _build_options(rooms_in: list, values: Dict[str, Any], work_type: str = "epo
                 price_formatted = "Add " + _fmt_usd(diff)
                 price_desc = option_desc or noun
         else:                                         # total mode: the option's own price
-            rule = price_rules.tax_rule(total, bid.get("sales_tax"), bid.get("remodel"),
-                                        taxable=bid.get("taxable"),
-                                        remodel_on=bid.get("remodel_on"), broken=broken)
             tax_phrase = rule["phrase"]
             price_formatted = _fmt_usd(rule["base_cents"] / 100)
             price_desc = f"{option_desc or noun} as described above" + (
                 f" {tax_phrase}" if tax_phrase else "")
-            if rule["material"]:
-                tax_rows.append({"key": "sales_tax", "price_formatted": _fmt_usd(rule["sales_cents"] / 100),
-                                 "price_desc": "Material Sales Tax"})
-            if rule["remodel"]:
-                tax_rows.append({"key": "remodel", "price_formatted": _fmt_usd(rule["remodel_cents"] / 100),
-                                 "price_desc": "Remodel Tax"})
-            if rule["total"]:
-                tax_rows.append({"key": "total", "price_formatted": _fmt_usd(rule["total_cents"] / 100),
-                                 "price_desc": "Total"})
+            candidates = [_fmt_usd(rule["total_cents"] / 100)]
 
         lines = [str(n).strip()
                  for n in (list(r.get("notes_auto") or []) + list(r.get("notes_manual") or []))
@@ -4446,8 +4472,10 @@ def _build_options(rooms_in: list, values: Dict[str, Any], work_type: str = "epo
             # What an edited line's ⟦amount⟧ / ⟦tax⟧ resolve to today.
             "amount": price_formatted,
             "tax_phrase": tax_phrase,
-            # Broken out: this option's own tax rows and Total, in print order.
-            "tax_rows": tax_rows,
+            # The other figures a line re-worded before the markers could have frozen in: the
+            # option's tax-inclusive total (under one line it IS the amount; under Tax exempt it is
+            # not). Empty for an Add/Deduct line — the editor offers migrateLine the same list.
+            "candidates": candidates,
         })
     return out
 
@@ -5794,7 +5822,8 @@ def _generate(payload: GenerateIn, request: Request, *,
     # THE PRICE BLOCK, BY THE RULE (price_rules.tax_rule — the editor runs the same rule, and
     # test_price_rules_parity.py runs both). Hanz, 2026-09-25: the estimate sheet decides WHETHER
     # there is tax — Taxable? for material sales tax, Remodel Tax? for remodel tax — and the TAX
-    # control decides only the layout, "One line" or "Broken out". So the base line, the
+    # control decides the layout, "One line" or "Broken out" — or, 2026-09-28, "Tax exempt": the
+    # pre-tax figure, "(tax exempt)", and no row at all. So the base line, the
     # parenthetical and which rows print all come out of one call, on every template: the Direct
     # files' {{#tax_breakout}} / {{#remodel}} regions and the GC / Gyp files' plain paragraphs are
     # told the same thing, and a row whose tax does not apply is taken out of either kind
@@ -5814,12 +5843,12 @@ def _generate(payload: GenerateIn, request: Request, *,
                                 (_sales_v > 0) if _sales_known else True)
     _remodel_on = price_rules.flag(values.get("price_remodel_on"),
                                    _remodel_v > 0 or bool(_remodel_amt))
-    _broken = price_rules.layout_is_broken(
+    _layout = price_rules.layout_for(
         values.get("tax_layout"), values.get("tax_inclusion"),
         free_rows=bool(_free_rows["material"] or _free_rows["remodel"]),
         taxable=_taxable, remodel_on=_remodel_on)
     _rule = price_rules.tax_rule(_total_v, _sales_v, _remodel_v, taxable=_taxable,
-                                 remodel_on=_remodel_on, broken=_broken)
+                                 remodel_on=_remodel_on, layout=_layout)
     # The remodel row's printed amount, spelled the way the page sent it.
     _remodel_str = (_remodel_amt or str(values.get("tax_amount_formatted") or "").strip()
                     or _fmt_usd(_remodel_v))
@@ -5830,13 +5859,19 @@ def _generate(payload: GenerateIn, request: Request, *,
     _price_rows = {"material": _rule["material"], "remodel": _rule["remodel"],
                    "total": _rule["total"]}
     values["base_tax_phrase"] = _rule["phrase"]
-    # The base line equals the Total minus the tax rows that print — in the Total's own money style.
-    _printed_tax = []
-    if _rule["material"]:
-        _printed_tax.append(values.get("material_tax_formatted"))
-    if _rule["remodel"]:
-        _printed_tax.append(values.get("tax_amount_formatted") if _free_rows["remodel"] else _remodel_str)
-    _base_line = _base_bid_less_printed_tax(values.get("total_formatted"), _printed_tax)
+    # The base line equals the Total minus the taxes backed out of it — in the Total's own money
+    # style. Broken out, those are exactly the tax rows that print. TAX EXEMPT IS THE ONE LAYOUT
+    # THAT BACKS OUT TAXES IT DOES NOT PRINT, and on purpose (Hanz, 2026-09-28): the customer pays
+    # none, so the base line is the same pre-tax figure with no row under it. Subtracting only the
+    # rows that print, as this did, would have printed the whole tax-inclusive Total beside "(tax
+    # exempt)". One line backs out nothing.
+    _backed_out = []
+    if _rule["broken"] or _rule["exempt"]:
+        if _rule["taxable"]:
+            _backed_out.append(values.get("material_tax_formatted"))
+        if _rule["remodel_on"]:
+            _backed_out.append(values.get("tax_amount_formatted") if _free_rows["remodel"] else _remodel_str)
+    _base_line = _base_bid_less_printed_tax(values.get("total_formatted"), _backed_out)
     if _base_line is not None:
         values["base_bid_formatted"] = _base_line
 
@@ -6006,10 +6041,16 @@ def _generate(payload: GenerateIn, request: Request, *,
     # {{#has_options}}.)
     #
     # EACH OPTION FOLLOWS ITS OWN TAB (price_rules.tax_rule, the same rule as the base): one line
-    # carrying its own tax wording, or, broken out, its pre-tax line and its own tax rows and Total
-    # underneath — keys "option:<id>:sales_tax" / ":remodel" / ":total" for the rows, so each can
-    # be re-worded like any other price line and still follow the estimate.
-    _options = _build_options(payload.rooms, values, payload.work_type, broken=_broken)
+    # carrying its total and its own tax wording.
+    #
+    # ALWAYS ONE LINE. Hanz, 2026-09-28: "Options should only be total amount, cannot be broken
+    # out ... Only the base bid would be broken out or one line." Broken out is the base bid's
+    # alone, so an option has no tax rows of its own under any layout. Tax exempt is the WHOLE
+    # job's: each option prints its own pre-tax figure and "(tax exempt)", and an Add/Deduct line
+    # is taken off the base line's own pre-tax figure (`_rule`, the call that printed it). The
+    # screen's twin is renderOptionLinesPreview (optLayout / exemptJob) in proposal-review.js.
+    _options = _build_options(payload.rooms, values, payload.work_type, exempt=_rule["exempt"],
+                              base_pre_tax_cents=_rule["base_cents"] if _rule["exempt"] else None)
     _option_lines = []
     for _o in _options:
         _label = _o["price_desc"]
@@ -6021,12 +6062,10 @@ def _generate(payload: GenerateIn, request: Request, *,
         if _oid and (_key in _pov["lines2"] or _pov["lines"].get(_key)):
             # WHOLE-LINE override wins (whole line in the label, blank amount → the
             # writer strips the orphaned separator and prints it verbatim).
-            # The option's Total, which an old-shape line could have frozen in (the editor's
-            # candidates for it): its Total row Broken out; under one line it IS the amount.
+            # The option's tax-inclusive total, which an old-shape line could have frozen in (the
+            # editor's candidates for it): under one line it IS the amount, under Tax exempt not.
             _option_lines.extend(_priced(_key, _o.get("amount") or _amount, _label,
-                                         _o.get("tax_phrase") or "",
-                                         [_tr["price_formatted"] for _tr in _o.get("tax_rows") or []
-                                          if _tr.get("key") == "total"]))
+                                         _o.get("tax_phrase") or "", _o.get("candidates") or []))
         else:
             # Legacy per-field override, keyed by the option's id.
             _oov = _pov["options"].get(_oid) if _oid else None
@@ -6039,11 +6078,6 @@ def _generate(payload: GenerateIn, request: Request, *,
                                  + [{"label": _label, "amount_formatted": _amount,
                                      "_para": _line_para(_key)}]
                                  + (_extra_rows(_key, "after") if _oid else []))
-        for _tr in _o.get("tax_rows") or []:
-            _option_lines.extend(_priced(f"{_key}:{_tr['key']}", _tr["price_formatted"],
-                                         _tr["price_desc"]) if _oid else
-                                 [{"label": _tr["price_desc"], "amount_formatted": _tr["price_formatted"],
-                                   "_para": _line_para(f"{_key}:{_tr['key']}")}])
     # Options first, then the estimator's manual "Add for" price lines.
     price_line_dicts = _option_lines + price_line_dicts
 

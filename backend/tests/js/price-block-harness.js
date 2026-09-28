@@ -3,11 +3,13 @@
  *
  * THE RULE BEING PROVED (Hanz, 2026-09-25): the estimate sheet decides WHETHER there is tax —
  * Taxable? for material sales tax, Remodel Tax? for remodel tax, per priced tab — and the proposal's
- * TAX control decides only the layout, "One line" or "Broken out". Broken out: the base line is the
- * pre-tax figure with no bracket, a Material Sales Tax row only if taxable, a Remodel Tax row only if
- * remodel, then the Total, and the rows add up ("$6,767 – Epoxy flooring as described above / $72 –
- * Material Sales Tax / $6,839 – Total"). One line: the whole bid, with the wording for the taxes the
- * sheet says are in it. Every option the same way, off its own tab.
+ * TAX control decides the layout, "One line", "Broken out" or (2026-09-28) "Tax exempt". Broken out:
+ * the base line is the pre-tax figure with no bracket, a Material Sales Tax row only if taxable, a
+ * Remodel Tax row only if remodel, then the Total, and the rows add up ("$6,767 – Epoxy flooring as
+ * described above / $72 – Material Sales Tax / $6,839 – Total"). One line: the whole bid, with the
+ * wording for the taxes the sheet says are in it. Tax exempt: the pre-tax figure, "(tax exempt)",
+ * no row at all. Every option off its own tab, and always on ONE line (Hanz, 2026-09-28) — pre-tax
+ * with "(tax exempt)" when the job is exempt, an Add/Deduct off the two pre-tax figures.
  *
  * THE PAGE HAS SEVERAL WRITERS FOR ONE PRICE BLOCK — refreshPriceDisplay paints the mounted rows,
  * computeTokenValues fills the {{tokens}} the free-paragraph templates print and the payload carries,
@@ -25,9 +27,15 @@
  * proposal_writer.iter_editable_blocks and hands the blocks in on stdin, exactly as
  * /api/proposal-template serves them to the browser.
  *
+ * THE TAX CONTROL ITSELF. A case with `pick` also runs the ribbon's wiring — the real wireRibbonTax
+ * IIFE, verbatim — against a <select> double holding the options the real proposal-review.html
+ * offers (`select_options`; a value it does not offer reads back "", as a browser's does): it paints,
+ * picks, repaints, and paints again from what the pick saved, as a reload would.
+ *
  * Usage: node price-block-harness.js <frontend-dir> < cases.json   →  one line of JSON
  *   cases.json: [{ name, work_type, audience, blocks, total, sales_tax, remodel_tax,
- *                  taxable?, remodel_on?, tax_layout?, tax_inclusion?, rooms?, state? }]
+ *                  taxable?, remodel_on?, tax_layout?, tax_inclusion?, rooms?, state?,
+ *                  pick?, select_options? }]
  */
 const fs = require("fs");
 const path = require("path");
@@ -106,6 +114,39 @@ const UNITS = [
   fn("priceRowVisibility"),
 ].join(NL);
 
+/** The ribbon's wiring: `(function wireRibbonTax() { ... })();` exactly as the page runs it on load. */
+function iife(name) {
+  const m = new RegExp("\\n  \\(function " + name + "\\s*\\(\\s*\\)\\s*\\{").exec(SRC);
+  if (!m) throw new Error(name + " is gone — rewrite this harness, don't stub it");
+  const i = SRC.indexOf("{", m.index + m[0].length - 1);
+  let depth = 0;
+  for (let j = i; j < SRC.length; j++) {
+    if (SRC[j] === "{") depth++;
+    else if (SRC[j] === "}" && --depth === 0) {
+      const tail = /^\)\(\);/.exec(SRC.slice(j + 1));
+      if (!tail) throw new Error(name + " is no longer an IIFE — rewrite this harness, don't stub it");
+      return SRC.slice(m.index + 1, j + 1 + tail[0].length);
+    }
+  }
+  throw new Error("unbalanced braces reading " + name);
+}
+const WIRE_TAX = iife("wireRibbonTax");
+
+/** A <select> double: `value` reads back only an option it offers ("" otherwise, as a browser's
+ *  does), and `change` listeners run when the case picks. */
+function select(id, options) {
+  const listeners = {};
+  let v = "";
+  return {
+    id, options: options.slice(),
+    get value() { return v; },
+    set value(x) { v = options.indexOf(String(x)) >= 0 ? String(x) : ""; },
+    addEventListener(type, f) { (listeners[type] = listeners[type] || []).push(f); },
+    fire(type) { (listeners[type] || []).forEach((f) => f({ type, target: this })); },
+    listening(type) { return (listeners[type] || []).length; },
+  };
+}
+
 /** A <p> double carrying only what paintLine touches: text, the computed baseline, the cue
  *  classes, the tooltip, and a display style refreshPriceDisplay show/hides. */
 function el(id) {
@@ -152,7 +193,10 @@ function scopeFor(c) {
     querySelector: (sel) => (sel === "#tb-total" ? { textContent: c.total_text } : null),
     getElementById: (id) => rows[id] || null,
   };
-  const form = { querySelector: () => null };
+  const inputs = [];
+  const form = { querySelector: () => null, dispatchEvent: (e) => { inputs.push(e.type); return true; } };
+  if (c.pick !== undefined) rows["tax-treatment-select"] = select("tax-treatment-select", c.select_options || []);
+  const sets = [];
   const state = {
     work_type: c.work_type, audience: c.audience,
     project_name: "Viracor", priced_tabs: [], rooms: c.rooms || [],
@@ -168,18 +212,52 @@ function scopeFor(c) {
   if (c.tax_inclusion !== undefined) state.tax_inclusion = c.tax_inclusion;
   // Narrative fields a case wants set (or explicitly blank) — the price cases never pass any.
   Object.assign(state, c.state || {});
-  const body = UNITS + NL +
+  const body = UNITS + NL + (c.pick !== undefined ? WIRE_TAX + NL : "") +
     "return { refreshPriceDisplay, computeTokenValues, printedTaxRows, baseBidFigure, taxLayout, priceRowVisibility, comboLinesForPayload };";
   const api = new Function("state", "document", "form", "TW", "window", "templateBlocks",
                            "focusInside", "lineAtSelection", body)(
-    state, document, form, { readForm: () => ({}), setState: () => {} }, { TWAuth: null },
-    c.blocks, () => false, () => null);
-  return { api, rows, state };
+    state, document, form,
+    { readForm: () => ({}), setState: (patch) => { sets.push(JSON.parse(JSON.stringify(patch))); } },
+    { TWAuth: null }, c.blocks, () => false, () => null);
+  return { api, rows, state, sets, inputs };
+}
+
+/** Paint, pick, repaint, and paint again from what the pick saved (a reload). */
+function pickFlow(c) {
+  const first = scopeFor(c);
+  const sel = first.rows["tax-treatment-select"];
+  const cellsBefore = JSON.stringify(first.state.cell_values);
+  const wired = sel.listening("change");
+  first.api.refreshPriceDisplay();
+  const painted = sel.value;
+  sel.value = c.pick;
+  sel.fire("change");
+  const saved = first.sets.slice();
+  // The form's `input` runs the page's own repaint.
+  first.api.refreshPriceDisplay();
+  const repainted = sel.value;
+  const tv = first.api.computeTokenValues(Object.assign({}, first.state));
+  // A reload: the draft as the pick left it, drawn by a fresh page.
+  const reload = scopeFor(Object.assign({}, c, { tax_layout: Object.assign({}, ...saved).tax_layout }));
+  reload.api.refreshPriceDisplay();
+  return {
+    options: sel.options, wired, painted, picked: sel.value === "" ? "" : c.pick, saved,
+    moduleState: first.state.tax_layout, inputs: first.inputs, repainted,
+    reloaded: reload.rows["tax-treatment-select"].value,
+    base: first.rows["base-bid-row"].textContent,
+    rowsShown: ["sales-tax-row", "remodel-tax-row", "total-row"]
+      .filter((id) => first.rows[id].style.display !== "none"),
+    tokens: { tax_layout: tv.tax_layout, tax_inclusion: tv.tax_inclusion,
+              base_bid_formatted: tv.base_bid_formatted, base_tax_phrase: tv.base_tax_phrase },
+    cellsUntouched: JSON.stringify(first.state.cell_values) === cellsBefore
+      && !saved.some((p) => "cell_values" in p),
+  };
 }
 
 const CASES = JSON.parse(fs.readFileSync(0, "utf8"));
 const out = CASES.map((c) => {
   c.total_text = "$" + Number(c.total).toFixed(2);
+  if (c.pick !== undefined) return { name: c.name, pick: pickFlow(c) };
   const { api, rows, state } = scopeFor(c);
 
   // THE SCREEN. refreshPriceDisplay paints the mounted rows and renders the option lines.

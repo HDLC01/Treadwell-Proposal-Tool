@@ -272,9 +272,11 @@ def test_old_shape_base_tax_rows_and_total_print_one_line_to_a_paragraph():
         assert got[at - 1] == ("", None), got
 
 
-def test_an_old_shape_manual_line_and_an_options_total_row_print_one_line_to_a_paragraph():
-    """The {{#price_line}} rows other than an option's own line: a manual "Add for" line and, Broken
-    out, an option's own Total."""
+def test_an_old_shape_manual_line_prints_one_line_to_a_paragraph():
+    """The {{#price_line}} rows other than an option's own line: a manual "Add for" line. Broken out
+    here, as the base is — an option's own Total row went with the rule that options are one line
+    (Hanz, 2026-09-28), so a line stored under one (`option:Copy1:total`) prints nothing and leaves
+    no lone square behind; no saved draft holds one."""
     blob = _render(_payload(
         {"manual:0": "\n$1,200 – Add for moisture mitigation\nif RH exceeds 75%",
          "option:Copy1:total": "\n$23,115 – Total for the hybrid"},
@@ -285,9 +287,7 @@ def test_an_old_shape_manual_line_and_an_options_total_row_print_one_line_to_a_p
         _i, got = _run(rows, "$1,200 – Add for moisture mitigation")
         at = got.index(("$1,200 – Add for moisture mitigation", 0))
         assert got[at - 1] == ("", None) and got[at + 1] == ("if RH exceeds 75%", 1), got
-        _i, got = _run(rows, "$23,115 – Total for the hybrid")
-        at = got.index(("$23,115 – Total for the hybrid", 0))
-        assert got[at - 1] == ("", None), got
+        assert not [t for t, _r in rows if "Total for the hybrid" in t], rows
 
 
 def test_an_old_shape_alternate_row_prints_one_line_to_a_paragraph():

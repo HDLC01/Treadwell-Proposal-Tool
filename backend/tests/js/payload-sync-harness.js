@@ -452,7 +452,30 @@ out.taxFlip = (() => {
                   base_bid_formatted: pp.values.base_bid_formatted,
                   material_tax_formatted: pp.values.material_tax_formatted,
                   tax_amount_formatted: pp.values.tax_amount_formatted,
-                  total_formatted: pp.values.total_formatted };
+                  total_formatted: pp.values.total_formatted,
+                  tax_layout: pp.values.tax_layout, tax_inclusion: pp.values.tax_inclusion,
+                  price_rows: [pp.values.price_rows_material, pp.values.price_rows_remodel,
+                               pp.values.price_rows_total] };
+  }
+  // THE TAX EXEMPT PICK (Hanz, 2026-09-28). Not a form value: the ribbon stores it as the draft's
+  // top-level `tax_layout` (wireRibbonTax), and the form keeps its hidden sales_tax_handling.
+  {
+    const s = baseState();
+    s.proposal_remodel_tax = 900;
+    s.tax_layout = "EXEMPT";
+    const sc = scopeFor(s, { lumpText: "$13,265.00", form: { sales_tax_handling: "INCLUDED" } });
+    const pp = sc.syncPayloadPricing();
+    res.EXEMPT = { base_tax_phrase: pp.values.base_tax_phrase,
+                   tax_phrase: pp.values.tax_phrase,
+                   sales_tax_handling: pp.values.sales_tax_handling,
+                   remodelLines: pp.remodel,
+                   base_bid_formatted: pp.values.base_bid_formatted,
+                   material_tax_formatted: pp.values.material_tax_formatted,
+                   tax_amount_formatted: pp.values.tax_amount_formatted,
+                   total_formatted: pp.values.total_formatted,
+                   tax_layout: pp.values.tax_layout, tax_inclusion: pp.values.tax_inclusion,
+                   price_rows: [pp.values.price_rows_material, pp.values.price_rows_remodel,
+                                pp.values.price_rows_total] };
   }
   return res;
 })();
