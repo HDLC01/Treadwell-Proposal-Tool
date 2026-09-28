@@ -240,8 +240,7 @@ def _statements(fn):
     return "\n".join(l.split("#")[0] for l in lines)
 
 
-@pytest.mark.parametrize("caller", ["api_admin_proposal_pdf", "api_draft_revision_files",
-                                    "api_to_dropbox"])
+@pytest.mark.parametrize("caller", ["_render_documents", "api_to_dropbox"])
 def test_every_replay_caller_opts_out_of_persisting(caller):
     """These three re-run a payload frozen at some earlier moment. Named individually because each
     one is a separate route somebody could add a fourth sibling to — and because the customer PDF
@@ -256,6 +255,19 @@ def test_every_replay_caller_opts_out_of_persisting(caller):
     src = _statements(getattr(main, caller))
     assert "_generate(" in src, f"{caller} no longer calls _generate — recheck this guard"
     assert "persist=False" in src, f"{caller} replays a stored payload AND persists it"
+
+
+@pytest.mark.parametrize("caller", ["api_admin_proposal_pdf", "api_draft_revision_files",
+                                    "api_portal_publish", "api_draft_documents"])
+def test_the_saved_payload_readers_all_go_through_the_one_render(caller):
+    """Since 2026-09-25 the customer PDF, a revision's files, Send and the Files page's downloads
+    render through `_render_documents`, which is the persist=False replay the guard above pins.
+    A route that called `_generate` directly would be a second render: its bytes would stop
+    matching the others', and it would have to remember persist=False on its own."""
+    src = _statements(getattr(main, caller))
+    assert "_render_documents(" in src, f"{caller} no longer renders through _render_documents"
+    assert "_generate(" not in src.replace("_render_documents(", ""), (
+        f"{caller} calls _generate directly — a second render beside the one Send uses")
 
 
 def test_to_dropbox_replays_read_only(monkeypatch):

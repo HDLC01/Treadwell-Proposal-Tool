@@ -84,6 +84,17 @@
     .btn.ghost{background:transparent;color:var(--ink-v);border:1px solid var(--line)}
     .btn.ghost:hover{color:var(--red);border-color:var(--red)}
     .btn[disabled]{opacity:.5;cursor:not-allowed}
+    /* THE STEP'S OWN PRIMARY ACTION, and nothing more than `.btn` plus a layout. Adding a row is
+       what this step is for, so it wears the button the rest of the app presses -- no fifth
+       shape, no new colour, no radius that exists nowhere else. It replaced a pair of dashed
+       ghosts under the last row on 2026-09-23: Hanz, "that button should be at the top and make
+       it more visible". Above the list, because that is where the thing it makes appears from.
+       `.below` is the same control under a list instead, which is where the Labor step's sits. */
+    .addline{display:inline-flex;align-items:center;gap:7px;margin:0 0 13px;padding:10px 16px;
+       line-height:1;cursor:pointer}
+    .addline.below{margin:11px 0 0}
+    .addline:active{transform:translateY(1px)}
+    .addline svg{flex:none}
 
     .grid{display:grid;gap:15px;grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}
     .f label{display:flex;align-items:baseline;gap:6px;font:600 12.5px var(--sans);
@@ -104,6 +115,21 @@
     .tk-h{display:flex;align-items:center;gap:9px;margin:0 0 13px}
     @media (max-width:760px){ .tk-h{flex-wrap:wrap} }
     .tk-h .tag{font:700 10.5px var(--mono);letter-spacing:.06em;color:var(--ink-v)}
+    /* A row nobody has searched on yet. Amber because that is this app's "waiting on a person"
+       colour -- the sandbox note, the rail's att pip -- and a pill because it labels. It leaves
+       the moment a name resolves, so a finished takeoff shows none of them. */
+    .tk-mark{font:700 10px var(--sans);letter-spacing:.06em;text-transform:uppercase;
+       background:var(--warn-bg);border:1px solid #e8d9a8;color:var(--warn);border-radius:20px;
+       padding:2px 9px;white-space:nowrap}
+    /* The two candidates, when one name is both an item and an assembly. Borrows `.labsw`'s pill
+       geometry on purpose: this page already has one small pill-shaped button and a second shape
+       for the same weight of control would be a fifth way to draw a button. Sits inside the hint
+       line under the picker, which is where the question is being asked. */
+    .kindpick{display:inline-flex;align-items:center;gap:5px;cursor:pointer;margin:4px 4px 0 0;
+       border:1px solid var(--line);border-radius:999px;padding:3px 10px;background:var(--card);
+       font:600 11.5px var(--sans);color:var(--ink-v)}
+    .kindpick:hover{border-color:var(--red);color:var(--red)}
+    .kindpick:active{transform:translateY(1px)}
     .tk-sub{margin-left:auto;font:600 13px var(--mono);font-variant-numeric:tabular-nums}
     .tk-g{display:grid;gap:14px;grid-template-columns:2.1fr 1fr .75fr 1.15fr;align-items:start}
     /* A material row carries one more field than an assembly row -- coverage, which an assembly
@@ -113,11 +139,8 @@
     /* Marked, not restyled. It is the same kind of thing as the row above it -- something the job
        buys -- so it reads as one list. The tag says which kind it is; the card does not need to. */
     .tk.mat .tag{background:var(--surf-low);color:var(--ink-v)}
-    /* Two ways to add, side by side. Which kind you want is known before you reach for either, so
-       a dropdown would add a click to both paths to save one button. */
-    .addrow2{display:grid;grid-template-columns:1fr 1fr;gap:9px}
-    @media (max-width:640px){ .addrow2{grid-template-columns:1fr}
-      .tk-g.matg{grid-template-columns:1fr} }
+    /* `.addrow2` held the two add buttons side by side and went with them on 2026-09-23. */
+    @media (max-width:640px){ .tk-g.matg{grid-template-columns:1fr} }
     @media (max-width:760px){ .tk-g{grid-template-columns:1fr} }
     .x{background:none;border:0;color:var(--ink-3);cursor:pointer;flex:none;display:inline-flex;align-items:center;justify-content:center;padding:2px}
     .x:hover{color:var(--red)}
@@ -236,11 +259,9 @@
     .flag{color:var(--amber-ink);font-weight:700;cursor:help}
     .sum-row td{border-top:2px solid var(--line);font-weight:700;font-family:var(--mono);
        font-variant-numeric:tabular-nums}
-    .addbtn{margin-top:11px;background:transparent;border:1px dashed var(--line);
-       color:var(--ink-v);border-radius:var(--r-s);padding:8px 13px;font:600 12.5px var(--sans);
-       cursor:pointer;width:100%}
-    .addbtn:hover:not([disabled]){border-color:var(--red);color:var(--red)}
-    .addbtn[disabled]{opacity:.5;cursor:not-allowed}
+    /* `.addbtn`, the dashed full-width ghost, drew every add button on this page until
+       2026-09-23. Both of its consumers now use `.addline`, so the rules are gone rather than
+       left behind for something to reach for by mistake. library.html has its own, unrelated. */
     .cap{color:var(--ink-3);font-size:11.5px;margin:8px 0 0}
     .warnline{color:var(--warn);font-size:11.5px;margin:6px 0 0}
 
@@ -340,13 +361,16 @@
     </div>
   </div>
 
-  <!-- Populated from the assemblies in the Items &amp; Assemblies library. A list= input searches
-       anywhere in the name, which is how somebody who remembers "grind" finds the assembly. -->
-  <datalist id="dl-assemblies"></datalist>
-  <!-- The materials a takeoff row can point at directly. A separate list from the assemblies on
-       purpose: they are different things and a row is one or the other, so one merged list would
-       let somebody pick a system into a field that prices a single product. -->
-  <datalist id="dl-items"></datalist>
+  <!-- Every assembly AND every material, in one list. A list= input searches anywhere in the
+       name, which is how somebody who remembers "grind" finds the assembly, and each option
+       carries a label saying which collection it came from.
+
+       IT WAS TWO LISTS UNTIL 2026-09-23, deliberately: a row is one thing or the other, and a
+       merged list can offer a system to a field that prices a single product. What that cost in
+       practice was worse than what it prevented -- the row's kind was fixed when the row was
+       created, so half the library was missing from the box before anybody had typed. The row
+       decides its own kind now; see renderDatalist and pickHint in js/polish-estimate.js. -->
+  <datalist id="dl-lines"></datalist>
 
   <div class="bid" id="bidbar" hidden>
     <div class="bid-in">

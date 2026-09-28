@@ -2,9 +2,10 @@
 
 WHAT THIS IS FOR. The Polish beta's on-screen price comes out of one choke point,
 `markupChain()` in frontend/js/polish-bid-core.js, which walks a chain of markup lines over a
-subtotal — gp → hard_bid → contingency → super_pto → soft_costs → remodel_tax → bond — each
-line's base being the running sum ABOVE it. It compounds; it does not add. Those rates are
-hardcoded constants in that file (`RATES`, `GP_BANDS`, and literals inside `hardBidPct`),
+subtotal — gp → contingency → super_pto → soft_costs → remodel_tax → bond — each line's base
+being the running sum ABOVE it (hard_bid, removed 2026-09-22, used to sit between gp and
+contingency; see polish-bid-core.js's bid() for the note on where it went). It compounds; it
+does not add. Those rates are hardcoded constants in that file (`RATES`, `GP_BANDS`),
 transcribed by hand off Kyle's workbook. This table is where an admin edits them instead.
 
 STORAGE AND API ONLY. Nothing here evaluates a formula — the expression grammar and the engine
@@ -38,10 +39,9 @@ the wrong home is refused BY NAME with the right one, exactly as `combo` and the
 below are. The per-tab fact those four lines still carry is `applies=false`, which already says
 "this tab has no such line" without needing a rate of its own.
 
-THE GYP EXCEPTION SURVIVES THE MOVE, and it is the one thing that must. `Gyp!B73` is EMPTY, not 0
-— the gypsum tabs have no hard-bid line at all. That is a fact about the TAB, it is held on the
-tab (markup.js's `gyp: { hard_bid: NOT_ON_TAB }`), and no Global row can hand those tabs a
-hard-bid rate.
+THE GYP EXCEPTION IS HISTORY. `Gyp!B73` was EMPTY, not 0 -- the gypsum tabs never had a
+hard-bid line, held on the tab as markup.js's `gyp: { hard_bid: NOT_ON_TAB }`. Both the fact and
+the exception it carved out of Global went with hard_bid itself on 2026-09-22.
 
 THERE IS DELIBERATELY NO `combo`. A combo job renders as two independent option lines, each
 priced off its own tab; the word is a document-composition label and has no markup of its own.
@@ -121,7 +121,7 @@ LAYOUTS = TABS + (GLOBAL,)
 # The chain, in the order it compounds. The order is load-bearing — each line's base is the
 # running sum above it — so it is also the default `sort`, and a caller that does not care about
 # ordering still gets rows in the order the money is actually applied.
-CHAIN = ("gp", "hard_bid", "contingency", "super_pto", "soft_costs", "remodel_tax", "bond")
+CHAIN = ("gp", "contingency", "super_pto", "soft_costs", "remodel_tax", "bond")
 
 # The subset of CHAIN an admin can actually file a rule against. `contingency` and `remodel_tax`
 # stay in CHAIN (their place in the compounding order is real) but are refused here BY NAME, not
@@ -137,16 +137,17 @@ _NOT_EDITABLE = {
     ),
 }
 
-# WHERE EACH LINE LIVES. Three rates differ per tab and are filed per tab; four are one rule for
-# every sheet and are filed once, on `global`. Split rather than shared, for the reason the module
-# docstring gives: two rows for one line is a precedence question, and a precedence question here
-# is a price changing without anybody choosing it.
+# WHERE EACH LINE LIVES. Three rates differ per tab and are filed per tab; three are one rule
+# for every sheet and are filed once, on `global` (a fourth, hard_bid, was here until
+# 2026-09-22). Split rather than shared, for the reason the module docstring gives: two rows for
+# one line is a precedence question, and a precedence question here is a price changing without
+# anybody choosing it.
 #
 # `travel_lodging` and `travel_per_diem` are NOT in CHAIN, and that is not an oversight — they are
 # per-night and per-day costs on the travel block, not markup on a running total. They are here
 # because the Global tab is where an admin edits a number that is the same on every sheet, which
 # is a different question from "does it compound".
-GLOBAL_LINE_KEYS = ("hard_bid", "bond", "travel_lodging", "travel_per_diem")
+GLOBAL_LINE_KEYS = ("bond", "travel_lodging", "travel_per_diem")
 TAB_LINE_KEYS = ("gp", "super_pto", "soft_costs")
 
 # The order rows come back in, and the default `sort`: the chain first, because it compounds and

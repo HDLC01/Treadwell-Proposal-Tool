@@ -131,6 +131,49 @@ def test_build_options_deduct_equal_totals_is_add_zero():
     assert o["price_formatted"] == "Add $0"
 
 
+def test_build_options_is_one_line_with_each_options_whole_total():
+    """Options are ALWAYS one line (Hanz, 2026-09-28): nothing here returns a tax row of its own, and
+    no layout reaches here. A total-mode option prints its whole tax-inclusive total with its own
+    tab's wording — "(tax exempt)" on the tab that says No to both taxes; the room with no sales
+    figure reads as taxable — and an Add/Deduct option is option − base, both tax-inclusive
+    ($10,100 − $10,000 is "Add $100"; #573 took the pre-tax pair under its Tax exempt pick, $8,900 −
+    $9,050, "Deduct ($150)"). The `exempt=` and `base_pre_tax_cents=` arguments it added are gone.
+
+    Mutation: _build_options printing an option on a tab with no tax without "(tax exempt)"."""
+    rooms_in = [
+        {"is_base": True, "bid": {"total": 10000, "sales_tax": 950, "remodel": 0}},
+        {"id": "A", "name": "Epoxy copy", "is_base": False, "base_total": 10000, "price_mode": "total",
+         "option_desc": "Treadwell MACRO Flake", "bid": {"total": 8310, "remodel": 0}},
+        {"id": "B", "name": "Remodel opt", "is_base": False, "base_total": 10000, "price_mode": "total",
+         "option_desc": "Sealed Concrete", "bid": {"total": 15035, "remodel": 120}},
+        {"id": "N", "name": "No tax", "is_base": False, "base_total": 10000, "price_mode": "total",
+         "option_desc": "Polished Concrete",
+         "bid": {"total": 4200, "sales_tax": 0, "remodel": 0, "taxable": False, "remodel_on": False}},
+        {"id": "Q", "name": "Quartz", "is_base": False, "base_total": 10000, "price_mode": "deduct",
+         "option_desc": "Quartz", "base_desc": "Epoxy flooring",
+         "bid": {"total": 10100, "sales_tax": 1200, "remodel": 0, "taxable": True}},
+    ]
+    out = main._build_options(rooms_in, {}, "epoxy")
+    assert [(o["price_formatted"], o["price_desc"], o["tax_phrase"]) for o in out] == [
+        ("$8,310", "Treadwell MACRO Flake as described above (material sales tax INCLUDED)",
+         "(material sales tax INCLUDED)"),
+        ("$15,035", "Sealed Concrete as described above (Remodel Tax AND material sales tax INCLUDED)",
+         "(Remodel Tax AND material sales tax INCLUDED)"),
+        ("$4,200", "Polished Concrete as described above (tax exempt)", "(tax exempt)"),
+        ("Add $100", "Quartz", "")]
+    for o in out:
+        assert "tax_rows" not in o, o
+    # The figure an old-shape line could have frozen in: the option's tax-inclusive total.
+    assert [o["candidates"] for o in out] == [["$8,310"], ["$15,035"], ["$4,200"], []]
+    # #573's exempt= is gone, not ignored: a caller still passing it fails loudly.
+    try:
+        main._build_options(rooms_in, {}, "epoxy", exempt=True)
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("_build_options still takes #573's exempt=")
+
+
 def test_build_options_show_gate_and_base_excluded():
     rooms = [
         {"is_base": True, "bid": {"total": 50000}},

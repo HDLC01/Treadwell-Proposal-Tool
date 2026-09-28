@@ -3,8 +3,10 @@
 //
 // WHAT THIS PAGE IS. backend/markup.py's module docstring is the authority on the domain; read it
 // first. In short: the Polish beta's price walks one compounding chain over a subtotal —
-// gp → hard_bid → contingency → super_pto → soft_costs → remodel_tax → bond — each line's base
-// being the running sum ABOVE it. Those rates are hardcoded constants in polish-bid-core.js. The
+// gp → contingency → super_pto → soft_costs → remodel_tax → bond -- each line's base being
+// the running sum ABOVE it (hard_bid, removed 2026-09-22, used to sit between gp and
+// contingency; see polish-bid-core.js's bid() for the note on where it went). Those rates are
+// hardcoded constants in polish-bid-core.js. The
 // markup_rules table is where an admin overrides them, and this is that table's screen.
 //
 // A LINE WHOSE ANSWER IS ONE NUMBER GETS ONE NUMBER BOX. This page used to ask an estimator to
@@ -16,8 +18,11 @@
 //
 //   flat     `2.7%`, `16%`, `MARKUP(30%)`, `500`  → one number box and a % or $ affordance
 //   bands    `MARKUP(BAND(subtotal, 6500,52%, …))` → a short editable ladder, one row per band
-//   ladder   `IF(hard_bid_on, IF(subtotal>=60000, -4%, IF(local, …)))` → the same, stepping up,
-//            with Kyle's local-jobs-only rule as a checkbox on the step it belongs to
+//   ladder   was hard_bid's shape, `IF(hard_bid_on, IF(subtotal>=60000, -4%, IF(local,
+//            …)))` -- gone with hard_bid on 2026-09-22, but the parser and the step-editor
+//            that read it are shared with `bands` (see ladderFrom/ladderTo) and stay, since
+//            nothing else about bands changed and a formula can never parse into this shape
+//            again now that no line offers it
 //
 // and anything else — Gyp's soft-costs expression, a hand-written formula — opens in ADVANCED, the
 // original expression box, which is still reachable on every row and still round-trips. A row the
@@ -37,10 +42,13 @@
 //                      placeholder shows which. A ladder cannot be empty (ten blank boxes would
 //                      mean filling all ten to change one), so it is seeded from the built-in and
 //                      says so — and an untouched seeded ladder saves nothing.
-//   ABSENT             `applies === false`, `formula === null`. Gyp has NO hard-bid rate: the
-//                      workbook cell is EMPTY, not 0. Rendered as a greyed row with a caption
-//                      naming the tab and NO control at all — an empty editable box invites
-//                      somebody to fill it in, and "0%" reads as a discount that was declined.
+//   ABSENT             `applies === false`, `formula === null`. Rendered as a greyed row
+//                      with a caption naming the tab and NO control at all — an empty
+//                      editable box invites somebody to fill it in, and "0%" reads as a
+//                      discount that was declined. Until 2026-09-22 a built-in could be
+//                      structurally absent too — Gyp's hard-bid cell was EMPTY, not 0 —
+//                      but no line's built-in is absent on any layout any more, so this
+//                      state now only exists when an admin switches a line off on purpose.
 //   context            `contingency` and `remodel_tax`. In CHAIN, excluded from LINE_KEYS,
 //                      refused by name if posted. They are context the chain includes, not
 //                      markup rules: tinted, chipped "Set elsewhere", no control, and
@@ -50,17 +58,17 @@
 // "error" sentinel, makes its own line and every line below it read "Unpriceable" — which is
 // markup-core.js's stated safety property carried up into the screen.
 //
-// THE SIXTH TAB IS NOT A SHEET, AND IT IS NOT THE CHAIN. Four lines are the same rule on every
-// priced sheet — bond is 0 everywhere, the hard-bid give-back is one formula on all six sheets
-// that have one, travel lodging is $70 a night and travel food $45 a day on all eleven — so they
-// are filed ONCE, on Global, and every sheet tab reads them from there. Two of the four are not
-// chain lines at all, so that tab has no compounding, no running total and no lump sum; each row
-// says what it comes to on its own.
+// THE SIXTH TAB IS NOT A SHEET, AND IT IS NOT THE CHAIN. Three lines are the same rule on
+// every priced sheet — bond is 0 everywhere, travel lodging is $70 a night and travel food
+// $45 a day on all eleven — so they are filed ONCE, on Global, and every sheet tab reads
+// them from there. hard_bid used to be the fourth of these, the one line here that actually
+// compounded into a tab's chain; removed 2026-09-22, and every line left on this tab is
+// context rather than something a bid is computed from — so that tab has no compounding,
+// no running total and no lump sum; each row says what it comes to on its own.
 //
-// ONE HOME PER LINE, NOT A DEFAULT WITH AN OVERRIDE. A sheet tab shows hard_bid and bond
-// READ-ONLY, because a second box on five tabs is five ways to disagree with the one rule. The
-// exception that survives all of it is Gyp: Gyp!B73 is EMPTY, not 0, so the gypsum tabs have no
-// hard-bid line — a fact about the TAB, held on the tab, and it wins over any Global row.
+// ONE HOME PER LINE, NOT A DEFAULT WITH AN OVERRIDE. A sheet tab shows bond READ-ONLY,
+// because a second box on five tabs is five ways to disagree with the one rule. hard_bid used
+// to be the other Global read-only line here; removed 2026-09-22 -- see BUILTIN below.
 (function () {
   "use strict";
 
@@ -87,7 +95,7 @@
    *  fails there rather than on somebody's bid. Anything the API offers that is not in this list
    *  is appended rather than dropped — a line silently missing from the chain is worse than one
    *  in the wrong place. */
-  var CHAIN = ["gp", "hard_bid", "contingency", "super_pto", "soft_costs", "remodel_tax", "bond"];
+  var CHAIN = ["gp", "contingency", "super_pto", "soft_costs", "remodel_tax", "bond"];
 
   /** markup.py's reserved layout. Not a sheet tab: the one home for the lines that are the same
    *  rule on every sheet. The string is compared in a dozen places, so it is named once. */
@@ -107,7 +115,6 @@
 
   var LABELS = {
     gp: "GP",
-    hard_bid: "Hard bid discount",
     contingency: "Contingency",
     super_pto: "Superintendent & PTO",
     soft_costs: "Soft costs",
@@ -121,7 +128,6 @@
    *  DOES column that was worth having in the grid. */
   var SUBS = {
     gp: "steps down as the job gets bigger",
-    hard_bid: "money given back to win a competitive bid",
     contingency: "typed per job, on the bid",
     super_pto: "a flat rate on everything above",
     soft_costs: "overhead the field never sees",
@@ -141,8 +147,6 @@
     gp: "Divide-up margin, not a mark-on: the base is divided up by (1 - rate) and the base " +
       "taken back off. That is why the preview shows dollars and no percentage — $36,429 on " +
       "$85,000 back-derives to 42.858%, a number nobody typed.",
-    hard_bid: "Only applied when the bid is marked hard bid, so the rate is negative. A job " +
-      "that is neither big enough nor local gets nothing taken off.",
     super_pto: "Supervision and paid time off, charged as one rate on the running total above " +
       "this line.",
     soft_costs: "Overhead the field never sees. On the Gyp tab this line is a whole expression " +
@@ -184,8 +188,9 @@
 
   // ── the built-in constants, per tab ────────────────────────────────────────
   // What the chain uses TODAY for a line with no row filed. Transcribed from
-  // frontend/js/polish-bid-core.js (RATES, GP_BANDS, hardBidPct) and backend/markup.py's audit of
-  // estimate_sheet_5.7.xlsx, and from nowhere else.
+  // frontend/js/polish-bid-core.js (RATES, GP_BANDS) and backend/markup.py's audit of
+  // estimate_sheet_5.7.xlsx, and from nowhere else. hardBidPct was a third source here until
+  // it left polish-bid-core.js with the line itself on 2026-09-22.
   //
   // WHERE A NUMBER IS NOT ON RECORD, THERE IS NO ENTRY. markup.py's audit says Seal has a SIXTH
   // GP tier topping out at 0.28 and Gyp has SEVEN tiers on different edges, but it does not give
@@ -197,11 +202,10 @@
    *  0.3))))`, wrapped in MARKUP because GP is a divide-up (D67), not a rate on the base. */
   var GP_5_BANDS = "MARKUP(BAND(subtotal, 6500,52%, 15000,45%, 22500,35%, 32500,32%, 30%))";
 
-  /** B68 `=IF(B5="yes",IF(D64>=60000,-0.04,IF(B4="yes",IF(D64>=13000,-0.025,0))))`, with the
-   *  innermost else written out. Excel returns a bare FALSE there and sums it as 0; markup-core
-   *  refuses to do arithmetic on a FALSE on purpose, so the branch is explicit. */
-  var HARD_BID = "IF(hard_bid_on, IF(subtotal>=60000, -4%, " +
-    "IF(local, IF(subtotal>=13000, -2.5%, 0), 0)), 0)";
+  // NO HARD_BID CONSTANT. It was B68 `=IF(B5="yes",IF(D64>=60000,-0.04,IF(B4="yes",
+  // IF(D64>=13000,-0.025,0))))`, removed 2026-09-22 along with the last BUILTIN entry that
+  // read it. ladderFrom/ladderTo (below) can still PARSE a string in this shape if one is ever
+  // typed into Advanced by hand, but nothing in this file writes one any more.
 
   /** Gyp's soft-costs cell, verbatim from markup.py's docstring — string sentinel and all. */
   var GYP_SOFT_COSTS = 'IF(OR(B5="Yes",B5="No"), IF(B5="Yes",.09,.1) - ' +
@@ -214,33 +218,25 @@
   var NOT_ON_TAB = { applies: false };
 
   var BUILTIN = {
-    polish: { gp: F(GP_5_BANDS), hard_bid: F(HARD_BID), super_pto: F("2.7%"),
-              soft_costs: F("16%"), bond: F("0%") },
+    polish: { gp: F(GP_5_BANDS), super_pto: F("2.7%"), soft_costs: F("16%"), bond: F("0%") },
     // Same rates as Polish; its GP tiers are the sixth-tier set and are not on record here.
-    seal: { hard_bid: F(HARD_BID), super_pto: F("2.7%"), soft_costs: F("16%"), bond: F("0%") },
-    epoxy: { gp: F(GP_5_BANDS), hard_bid: F(HARD_BID), super_pto: F("3%"),
-             soft_costs: F("13%"), bond: F("0%") },
-    leveling: { gp: F(GP_5_BANDS), hard_bid: F(HARD_BID), super_pto: F("3%"),
-                soft_costs: F("13%"), bond: F("0%") },
-    // A different species: 7 GP tiers on edges not on record, NO hard-bid rate at all, and soft
-    // costs is an expression rather than a rate.
-    //
-    // `hard_bid: NOT_ON_TAB` STAYS HERE, on the tab, now that the line is filed on Global. It is
-    // a fact about Kyle's gypsum sheets — B73 is EMPTY, not 0 — and a rule filed once for every
-    // layout cannot give those tabs a line the workbook does not have. rowState checks it BEFORE
-    // it looks at the Global row, which is the whole of that exception in code.
-    gyp: { hard_bid: NOT_ON_TAB, super_pto: F("4.1%"), soft_costs: F(GYP_SOFT_COSTS),
-           bond: F("0%") },
-    // THE FOUR LINES THAT DO NOT DIFFER PER TAB, which is what the Global tab is for. bond and
-    // hard_bid are the SAME strings the tabs above carry, deliberately: Global is where they are
-    // edited now, and a tab with nothing filed falls back to its own copy, so the two have to
-    // agree or the same line would price differently depending on which row was read.
+    seal: { super_pto: F("2.7%"), soft_costs: F("16%"), bond: F("0%") },
+    epoxy: { gp: F(GP_5_BANDS), super_pto: F("3%"), soft_costs: F("13%"), bond: F("0%") },
+    leveling: { gp: F(GP_5_BANDS), super_pto: F("3%"), soft_costs: F("13%"), bond: F("0%") },
+    // A different species: 7 GP tiers on edges not on record, and soft costs is an expression
+    // rather than a rate. Used to also carry `hard_bid: NOT_ON_TAB` -- Kyle's gypsum sheets
+    // never had a hard-bid cell (B73 was EMPTY, not 0), and now nothing on any tab does.
+    gyp: { super_pto: F("4.1%"), soft_costs: F(GYP_SOFT_COSTS), bond: F("0%") },
+    // THE THREE LINES THAT DO NOT DIFFER PER TAB, which is what the Global tab is for. bond is
+    // the SAME string the tabs above carry, deliberately: Global is where it is edited now, and
+    // a tab with nothing filed falls back to its own copy, so the two have to agree or the same
+    // line would price differently depending on which row was read. hard_bid used to be the
+    // fourth of these; removed 2026-09-22.
     //
     // The travel figures are Kyle's own literals off all eleven priced sheets, and they are
     // DOLLARS, not rates — written bare for that reason, the same way priceChain and the box's
     // own $ / % affordance read a bare number of 1 or more.
-    global: { hard_bid: F(HARD_BID), bond: F("0%"),
-              travel_lodging: F("70"), travel_per_diem: F("45") }
+    global: { bond: F("0%"), travel_lodging: F("70"), travel_per_diem: F("45") }
   };
 
   // ── which rows actually reach the estimate workbook ────────────────────────
@@ -259,10 +255,11 @@
   // simply import this — markup.js is not loaded there, and loading it would run this
   // whole IIFE against a DOM it does not have.
   //
-  // gp and hard_bid are on NO layout: gp's built-in returns dollars from a tier ladder and
-  // hard_bid keys on a frozen "No" on four of seven layouts. soft_costs is missing from gyp
-  // alone, where Kyle's cell is an expression with a local/away branch, a job-size taper and
-  // his own "error" sentinel. estimate-review.js explains each exclusion in full.
+  // gp IS ON NO LAYOUT: its built-in returns dollars from a tier ladder, not a rate the
+  // writer has an address for. soft_costs is missing from gyp alone, where Kyle's cell is an
+  // expression with a local/away branch, a job-size taper and his own "error" sentinel.
+  // hard_bid used to be excluded here too, on the same grounds; removed with the line itself
+  // on 2026-09-22. estimate-review.js explains each remaining exclusion in full.
   // MUST MIRROR estimate-review.js's MARKUP_RATE_TARGETS, and a test asserts the two
   // agree key for key. If this list claims a line prices the bid when the writer has
   // no address for it, the page tells an admin their rate took effect and it did not.
@@ -273,11 +270,11 @@
   // what would first expose it — as an over-charge. His formula, his fix; see the
   // note over MARKUP_RATE_TARGETS.
   //
-  // `global` IS ABSENT TOO, and it is the whole tab rather than one line: hard_bid and bond have
-  // no address on any layout (above), and the two travel lines have none either — reaching a bid
-  // with them needs a dollars-only parser, a 22-cell target table and a decision about
-  // 'Stnd Alts', which is a change that moves money and is not this one. So every row on that tab
-  // reads "The estimate workbook does not read this line yet", which is exactly true today.
+  // `global` IS ABSENT TOO, and it is the whole tab rather than one line: bond has no address
+  // on any layout (above), and the two travel lines have none either — reaching a bid with them
+  // needs a dollars-only parser, a 22-cell target table and a decision about 'Stnd Alts', which
+  // is a change that moves money and is not this one. So every row on that tab reads "The
+  // estimate workbook does not read this line yet", which is exactly true today.
   var PRICES_THE_BID = {
     polish:   ["super_pto", "soft_costs"],
     seal:     ["super_pto", "soft_costs"],
@@ -705,9 +702,9 @@
    *  contingency, super_pto, soft_costs and remodel_tax on a tab that sets none of them, under a
    *  running total that would be arithmetic on unrelated numbers.
    *
-   *  A global line is NOT appended to a sheet tab from `line_keys`: hard_bid and bond are already
-   *  in CHAIN, where the compounding order puts them, and the travel lines are not chain lines and
-   *  have nothing to do with a sheet tab's price. */
+   *  A global line is NOT appended to a sheet tab from `line_keys`: bond is already in CHAIN,
+   *  where the compounding order puts it, and the travel lines are not chain lines and have
+   *  nothing to do with a sheet tab's price. */
   function displayOrder() {
     var out, i;
     if (LAYOUT === GLOBAL) {
@@ -745,9 +742,11 @@
    *  THREE ANSWERS TO "WHOSE ROW IS THIS", not two:
    *    editable    typed here. gp / super_pto / soft_costs on a sheet tab; the four global lines
    *                on Global.
-   *    elsewhere   a global line seen from a sheet tab. It still PRICES this tab's chain — the
-   *                hard-bid give-back compounds here whatever tab you are on — it is just read
-   *                from its one home and not typed here.
+  *    elsewhere   a global line seen from a sheet tab, read from its one home and not typed
+  *                here. hard_bid used to be the one elsewhere line that actually compounded
+  *                into this tab's chain; removed 2026-09-22, and every remaining global line
+  *                (bond, the two travel figures) is context the workbook does not read from
+  *                this page at all -- see MARKUP_RATE_TARGETS in estimate-review.js.
    *    context     contingency and remodel_tax, which nobody sets on this page at all.
    *  `priced` is the first two: the rows that resolve to a value. */
   function rowState(lineKey) {
@@ -778,10 +777,12 @@
     var b = (BUILTIN[LAYOUT] || {})[lineKey];
     if (b && b.formula) st.builtin = b.formula;
 
-    // THE TAB'S OWN ABSENCE WINS, and it is checked FIRST for exactly one reason: Gyp!B73 is
-    // EMPTY, not 0, so the gypsum tabs have no hard-bid line — and a rule filed once for every
-    // layout must not hand them one. No line an admin can type here has an absent built-in, so
-    // this order changes nothing else; it is the whole of the Gyp exception.
+    // THE TAB'S OWN ABSENCE WINS, checked FIRST -- history rather than a live need since
+    // 2026-09-22: Gyp!B73 was EMPTY, not 0, so a hard-bid rule filed once for every layout
+    // could not hand the gypsum tabs a line they had no cell for, and this branch let the
+    // tab's own absence win over what Global said. No line an admin can type here has an
+    // absent built-in any more, so the branch is unreachable in practice; kept because the
+    // ORDER it encodes would still be correct the day a line like it exists again.
     if (b && b.applies === false) {
       st.applies = false;
       st.source = "builtin";
@@ -898,9 +899,9 @@
       if (!r.applies) { out[k] = { state: "absent" }; continue; }
 
       // A CHAIN line the backend has stopped offering at all and that has no sample value here.
-      // `priced`, not `editable`: hard_bid and bond are read-only on a sheet tab now and they
-      // still compound through it. Unreachable today and deliberately does NOT break the chain —
-      // a vocabulary change on the server should not read as a broken formula on somebody's tab.
+      // `priced`, not `editable`: bond is read-only on a sheet tab now and still compounds
+      // through it. Unreachable today and deliberately does NOT break the chain — a vocabulary
+      // change on the server should not read as a broken formula on somebody's tab.
       if (!r.priced && k !== "contingency" && k !== "remodel_tax") {
         out[k] = { state: "unknownline" };
         continue;
@@ -1163,11 +1164,13 @@
       "</span></span>";
   }
 
-  /** Why a greyed row has no figure, in the words that are true of THIS row. Three different
-   *  facts wear the same absent state and only one of them is about a cell: Kyle's hard-bid cell
-   *  is EMPTY on the gypsum tabs; somebody switched a Global line off, which is every layout at
-   *  once; or somebody switched this tab's own line off. Saying "the cell is empty on this tab"
-   *  for the second one would send a reader to the workbook to find a cell that is fine. */
+  /** Why a greyed row has no figure, in the words that are true of THIS row. Two live facts
+   *  wear the same absent state now: somebody switched a Global line off, which is every
+   *  layout at once; or somebody switched this tab's own line off. A third used to exist --
+   *  Kyle's hard-bid cell was EMPTY on the gypsum tabs, a built-in absence rather than
+   *  anybody's decision -- and the fallback sentence below stays reachable in theory the same
+   *  way rowState's own ABSENCE-WINS branch does. Saying "the cell is empty on this tab" for
+   *  the Global-off case would send a reader to the workbook to find a cell that is fine. */
   function absentWhy(r) {
     if (LAYOUT === GLOBAL) {
       return "No sheet layout charges this line, which is not the same as 0%.";
@@ -1182,9 +1185,11 @@
   /** A line whose home is the Global tab, seen from a sheet tab.
    *
    *  READ-ONLY IS NOT A REDACTION. The rate, or the whole ladder, is right here: what this tab
-   *  charges is the fact somebody came to the row for, and the give-back genuinely compounds
-   *  through this tab's chain. What is not here is a box — five boxes for one rule is five ways
-   *  to disagree with it, and whichever of the two rows won would be deciding a price. */
+   *  charges is the fact somebody came to the row for. hard_bid used to be the one line here
+   *  that genuinely compounded through this tab's chain; removed 2026-09-22, and what remains
+   *  (bond, the two travel figures) is shown for the same reason without pricing anything.
+   *  What is not here is a box — five boxes for one rule is five ways to disagree with it,
+   *  and whichever of the two rows won would be deciding a price. */
   function elsewhereCellHtml(r, p) {
     var shown = r.filedText || (r.simple ? simpleTo(r.simple) : "") || r.builtin;
     var out = (r.simple && r.simple.kind !== "flat")
@@ -1385,8 +1390,9 @@
 
     // ── ABSENT ──────────────────────────────────────────────────────────────
     // No control, no empty box, no zero. A caption that names the tab, and nothing to type into.
-    // `priced`, not `editable`: Gyp's hard-bid row is absent AND read-only now, and it is the row
-    // this state was designed for.
+    // `priced`, not `editable`: an `elsewhere` row switched off on Global is absent AND
+    // read-only here, which is the shape this state now covers -- Gyp's hard-bid row, absent
+    // by built-in default, was the row it was designed for until 2026-09-22.
     if (r.priced && !r.applies) {
       // THE REACH NOTE BELONGS ON THIS ROW MOST OF ALL. Switching a line off here files
       // `applies=false`, which markup.py keeps apart from a filed zero on purpose — so the
@@ -1446,9 +1452,10 @@
 
   function appliesCellHtml(r) {
     // A global line seen from a sheet tab gets the same two words the switch shows, without the
-    // switch. Whether THIS tab charges the line is a real fact about this tab — Gyp has no
-    // hard-bid line at all — it is just not a decision taken from here. "Always" would be a
-    // flat lie on the Gyp row.
+    // switch. Whether THIS tab charges the line is a real fact about this tab, not a decision
+    // taken from here -- Gyp's hard-bid row used to be the one that could say "Not used" here
+    // while every other tab said "Yes"; gone with the line on 2026-09-22, but "Always" would
+    // still be a flat lie the day a tab-specific absence exists again.
     if (r.elsewhere) return '<span class="swro">' + (r.applies ? "Yes" : "Not used") + "</span>";
     if (!r.editable) return '<span class="swro">Always</span>';
     if (!ADMIN) {
@@ -1593,9 +1600,10 @@
    *  percentage of. A "Total" row here would be a figure made of unrelated numbers, printed in
    *  the same red box the tabs print a real bid in.
    *
-   *  The job-size box stays, and only for the hard-bid give-back: which rung of it applies IS the
-   *  thing being checked, and a ladder you cannot read against a job size is a ladder you have to
-   *  do arithmetic on. It prices nothing, on this tab least of all. */
+   *  THERE IS NO JOB-SIZE BOX HERE ANY MORE. It used to exist for hard_bid's give-back alone —
+   *  which rung of it applied depended on the job size, and every other Global line is a flat
+   *  figure that does not. Removed with the line itself on 2026-09-22; the sheet tabs keep
+   *  their own box, for GP's bands, which still is job-size-dependent. */
   function globalHtml() {
     var rows = rowStates();
     if (!rows.length) {
@@ -1607,20 +1615,6 @@
     var out = '<div class="mkrow head">' +
       "<div>Line</div><div>Rate</div><div>Applies</div>" +
       '<div class="prev">What it comes to</div></div>';
-
-    out += '<div class="mkrow ctx"><div class="line">' +
-      '<span class="nm">Job size<span class="chip">A what-if</span></span>' +
-      '<span class="sub">only the hard-bid give-back reads it</span></div>' +
-      '<div class="rate"><span class="ftext locked">These lines don\'t compound — each one ' +
-      "stands on its own</span></div>" +
-      '<div class="applies"><span class="swro">&mdash;</span></div>' +
-      // The `</div>` closes `.mkrow ctx`, opened at the top of this expression. It is here and
-      // not inside subtotalBoxHtml because the row is opened here: a builder that closed a div it
-      // did not open is how this broke. Extracting the box into a helper dropped this one tag,
-      // and since `.mkrow` is itself a four-column grid, every row below became a COLUMN of the
-      // unclosed context row instead of a row of the table. The browser auto-closes, so nothing
-      // threw and no string assertion noticed — see the balance test in test_markup_page.py.
-      subtotalBoxHtml("try a job size") + "</div>";
 
     for (var i = 0; i < rows.length; i++) {
       out += rowHtml(rows[i], priced[rows[i].line_key], globalPreviewHtml);
@@ -1727,10 +1721,9 @@
           " can't be generated until it's fixed.";
 
     $("mk-foot").textContent = LAYOUT === GLOBAL
-      ? "Each figure is what that line comes to on its own — these lines don't compound, so " +
-        "there is no running total and no lump sum on this tab. The job size above only decides " +
-        "which rung of the hard-bid give-back is read; it prices nothing real. Every sheet tab " +
-        "reads these same rows."
+      ? "Each figure is what that line comes to on its own — these lines don't compound, " +
+        "so there is no running total and no lump sum on this tab. Every sheet tab reads " +
+        "these same rows."
       : "Preview figures are computed against a sample " +
         money(SAMPLE_SUBTOTAL) + " job with a " + pct(SAMPLE_COUNTY_RATE) + " county remodel " +
         "rate, so a rate's effect is visible the moment it's typed — they price nothing real. " +

@@ -166,10 +166,36 @@
     return f;
   }
 
+  /** Python's `round()` of a float: the nearest integer, a tie going to the EVEN one.
+   *
+   *  Decided on the exact double, which is what Python does too, so 10.5 goes to 10 and
+   *  10.499999999999998 (what 15 * 0.7 is) goes to 10 as well. `Math.round` sends a tie up and
+   *  would print some runs half a point larger on screen than in the document. `x - floor(x)` is
+   *  exact for every size this is asked about. */
+  function roundHalfEven(x) {
+    var f = Math.floor(x), d = x - f;
+    if (d > 0.5) return f + 1;
+    if (d < 0.5) return f;
+    return (f % 2 === 0) ? f : f + 1;
+  }
+
+  /** The half-point size a run of `hp` half-points PRINTS at in a text box the writer shrank by
+   *  `scale` — `proposal_writer._scale_txbx_runs`: `max(8, int(round(hp * scale)))`, the 8 being
+   *  its 4pt floor. A box the writer did not shrink (it only scales below 0.999, and then reports
+   *  1.0) is left exactly as designed, even a run smaller than 4pt. */
+  function fitHp(hp, scale) {
+    hp = Number(hp);
+    scale = Number(scale);
+    if (!(hp > 0)) return hp;
+    if (!(scale < 0.999)) return hp;
+    return Math.max(8, roundHalfEven(hp * scale));
+  }
+
   return {
     RUN_KEYS: RUN_KEYS,
     runsLength: runsLength, coalesce: coalesce, sliceRuns: sliceRuns,
     patchRuns: patchRuns, spliceRuns: spliceRuns, summarize: summarize,
     nextToggle: nextToggle, parseSizePt: parseSizePt, fmtFromPasted: fmtFromPasted,
+    roundHalfEven: roundHalfEven, fitHp: fitHp,
   };
 });

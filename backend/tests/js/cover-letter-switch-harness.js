@@ -94,11 +94,16 @@ if (!LIVEKEY_M) {
 const LIVEKEY_SRC = "const liveKey = (name) => {"
   + balanced(LIVEKEY_M.index + LIVEKEY_M[0].length, "{", "}") + "};";
 
-// The payload line, from inside continueToDone's `proposal_payload` literal. Anchored on the
-// literal first, so a `cover_letter_enabled:` written somewhere else on the page (there is one,
-// in the switch's own setState call) cannot be picked up instead.
-const LITERAL_M = /proposal_payload:\s*\{/.exec(SRC);
+// The payload line, from inside the `proposal_payload` literal -- which since 2026-09-26 is the
+// object composeProposalPayload returns (continueToDone stores that as `proposal_payload`, and the
+// fit request shares it). Anchored on the literal first, so a `cover_letter_enabled:` written
+// somewhere else on the page (there is one, in the switch's own setState call) cannot be picked up.
+const LITERAL_M = /\n  function composeProposalPayload\([^)]*\)\s*\{[\s\S]*?\n    return \{/.exec(SRC);
 if (!LITERAL_M) gone("the `proposal_payload` literal", "It is what a sent revision freezes.");
+if (!/proposal_payload: Object\.assign\(\s*composeProposalPayload\(/.test(SRC)) {
+  gone("continueToDone's `proposal_payload: Object.assign(composeProposalPayload(...))`",
+       "Without it the composer's literal is not what a sent revision freezes.");
+}
 const LITERAL = balanced(LITERAL_M.index + LITERAL_M[0].length, "{", "}");
 const FIELD_M = /^[ \t]*cover_letter_enabled:.*$/m.exec(LITERAL);
 if (!FIELD_M) {

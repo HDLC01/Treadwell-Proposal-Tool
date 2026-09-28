@@ -779,3 +779,21 @@ def test_an_in_flight_draft_heals_itself_on_reopen_and_only_once(result):
     assert s["written"] == {"Epoxy!B6": "No", "Leveling!B6": "No", 'Gyp (USG 1-8")!B8': "No",
                             "Gyp (FR)!B8": "No", "Copy1!B6": "No"}
     assert s["copyEngine"] == "No"
+
+
+@needs_node
+def test_the_proposal_reads_each_tabs_own_two_answers(result):
+    """Hanz, 2026-09-25: "Remodel Tax should be triggered by remodel tax in the estimate form.
+    Taxable is where base bid and other options are taxable or not." The proposal's price block
+    now follows the sheet, so snapshotLumpSumsToState hands it each priced tab's Taxable? and
+    Remodel Tax? answers -- read off that tab's OWN flag cells, the same comparisons the sheet's
+    tax cells make (sales tax unless Taxable? says "no"; remodel tax only when Remodel Tax? says
+    "yes", however it is spelled), a copy answering for itself and a gyp tab from its lower row.
+    A tab with no flag block answers nothing, and the proposal falls back to its tax figures."""
+    f = result["proposalFlags"]
+    assert f["shipped"] == {"taxable": True, "remodel_on": False}
+    assert f["flipped"] == {"taxable": False, "remodel_on": True}
+    assert f["copy"] == {"taxable": False, "remodel_on": False}
+    assert f["copySource"] == {"taxable": True, "remodel_on": False}
+    assert f["gyp"] == {"taxable": False, "remodel_on": True}
+    assert f["noBlock"] == {}

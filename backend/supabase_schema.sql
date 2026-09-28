@@ -164,6 +164,36 @@ create index if not exists draft_revisions_project_idx
 alter table public.draft_revisions enable row level security;
 grant select, insert, update, delete on public.draft_revisions to service_role;
 
+-- ── 6b) draft_revision_documents: the exact files each sent revision's customer was given ─────
+-- A revision stores the INPUTS of the proposal (draft_revisions.data). This stores the OUTPUT, as
+-- rendered at send time: the .docx and the PDF. /api/admin/proposal-pdf serves the stored PDF for
+-- draft + revision when a row exists, so a customer's copy of revision N never changes again,
+-- whatever later code or template changes land. Revisions sent before this table existed have no
+-- row and keep being re-rendered from their snapshot. backfill_revision_documents.py stores the
+-- CURRENT pinned revision of every portal proposal once (read its docstring before running it).
+--
+-- BASE64 TEXT, NOT bytea. PostgREST carries bytea as a "\x..." hex string in JSON (twice the
+-- bytes on the wire, hand-rolled hex both ways through supabase-py); base64 is a third larger and
+-- round-trips as plain JSON through both PostgREST instances. The *_sha256 columns say which bytes
+-- are meant; payload_sha256 is sha256 of the canonical JSON of the revision's proposal_payload.
+--
+-- Written only by the proposal tool (service role). The portal never reads it: it still asks the
+-- tool for /api/admin/proposal-pdf, so it needs no grant here.
+create table if not exists public.draft_revision_documents (
+  project_id     text not null references public.drafts(id) on delete cascade,
+  revision_no    int  not null,
+  payload_sha256 text not null,
+  docx_b64       text not null,
+  docx_sha256    text not null,
+  pdf_b64        text not null,
+  pdf_sha256     text not null,
+  created_by     text,
+  created_at     timestamptz not null default now(),
+  primary key (project_id, revision_no)
+);
+alter table public.draft_revision_documents enable row level security;
+grant select, insert, update, delete on public.draft_revision_documents to service_role;
+
 -- 7) Bid Calendar — Treadwell's own entries ---------------------------
 -- The calendar draws two sources on one grid. Basisboard bids are a READ-ONLY mirror:
 -- our integration never writes upstream, so an edit there could not be pushed and would

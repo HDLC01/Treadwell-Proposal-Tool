@@ -143,15 +143,22 @@ def test_no_workbook_means_no_download_url_rather_than_a_broken_one():
 
 
 def test_only_the_customer_pdf_opts_out_of_the_workbook():
-    """The other two persist=False callers NEED the file: the revision download returns its link,
-    and To-Dropbox uploads it by name. If either ever passes want_estimate=False it would file an
-    empty-named download or upload nothing, so the opt-out is pinned to one call site.
+    """The revision download returns the workbook's link, To-Dropbox uploads it by name and the
+    Files page's downloads offer it. If any of them ever passed want_estimate=False it would file
+    an empty-named download or upload nothing, so the opt-out is pinned to the two call sites that
+    read the .docx alone: the customer's PDF, and Send, which freezes that PDF (2026-09-25).
 
-    Mutation: add want_estimate=False to the revision or To-Dropbox caller."""
+    Mutation: add want_estimate=False to the revision, To-Dropbox or Files-page caller."""
     import pathlib
     src = pathlib.Path(main.__file__).read_text(encoding="utf-8", errors="replace")
     # The trailing paren is what makes this count CALL SITES. Without it this docstring and the
     # comment above the call match too, and the test passes at 3 while meaning nothing.
-    assert src.count("want_estimate=False)") == 1, (
-        "expected exactly one caller to skip the workbook, found %d"
+    assert src.count("want_estimate=False)") == 2, (
+        "expected exactly two callers to skip the workbook, found %d"
         % src.count("want_estimate=False)"))
+    import inspect
+    for name in ("api_admin_proposal_pdf", "api_portal_publish"):
+        assert "want_estimate=False)" in inspect.getsource(getattr(main, name)), name
+    for name in ("api_draft_revision_files", "api_to_dropbox", "api_draft_documents"):
+        assert "want_estimate=False)" not in inspect.getsource(getattr(main, name)), (
+            "%s skips the workbook it hands out" % name)

@@ -67,6 +67,11 @@ def test_rebuilds_documents_from_the_snapshot(monkeypatch):
     snapshot_payload = {"values": {"project_name": "Westport"}, "work_type": "epoxy"}
     monkeypatch.setattr(main.drafts, "get_revision",
                         lambda did, no: {"revision_no": no, "data": {"proposal_payload": snapshot_payload}})
+    # A revision sent before draft_revision_documents existed: nothing stored, so it is rendered
+    # from its snapshot. Stubbed because these tests have no database — and an unreadable store is
+    # no longer read as "nothing stored" (that is kept for a missing TABLE; any other failure is a
+    # 503, see test_send_equals_download.py).
+    monkeypatch.setattr(main.drafts, "get_revision_documents", lambda did, no: None)
 
     # **kw, not a fixed signature: _generate grows keyword-only options (persist,
     # want_estimate) and a stub that enumerates them turns each new one into a TypeError
@@ -79,6 +84,12 @@ def test_rebuilds_documents_from_the_snapshot(monkeypatch):
     # `_generate`, not `api_generate`: the route is a thin wrapper that always persists, and the
     # replay callers deliberately go around it. Stubbing the wrapper intercepted nothing.
     monkeypatch.setattr(main, "_generate", fake_generate)
+    # The route hands out tokens for the files the render cached, so the double's tokens have to
+    # name real entries, as the real `_generate`'s always do.
+    monkeypatch.setitem(main._FILE_CACHE, "tok", {"content": b"docx", "filename": "W.docx",
+                                                  "content_type": "application/x"})
+    monkeypatch.setitem(main._FILE_CACHE, "x", {"content": b"xlsx", "filename": "W.xlsx",
+                                                "content_type": "application/x"})
     r = client.post("/api/draft/d1/revisions/1/files", json={})
     assert r.status_code == 200, r.text
     assert seen["values"]["project_name"] == "Westport"
@@ -117,6 +128,11 @@ def test_proposal_pdf_renders_a_specific_revision(monkeypatch):
     monkeypatch.setitem(os.environ, "SERVICE_TOKEN", "svc-test")
     monkeypatch.setattr(main.drafts, "get_revision",
                         lambda did, no: {"data": {"proposal_payload": {"values": {"project_name": "Snap"}}}})
+    # A revision sent before draft_revision_documents existed: nothing stored, so it is rendered
+    # from its snapshot. Stubbed because these tests have no database — and an unreadable store is
+    # no longer read as "nothing stored" (that is kept for a missing TABLE; any other failure is a
+    # 503, see test_send_equals_download.py).
+    monkeypatch.setattr(main.drafts, "get_revision_documents", lambda did, no: None)
     monkeypatch.setattr(main.drafts, "load_draft",
                         lambda did: {"data": {"proposal_payload": {"values": {"project_name": "LIVE"}}}})
     seen = {}

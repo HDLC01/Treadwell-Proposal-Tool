@@ -35,12 +35,6 @@ import pytest
 FRONTEND = pathlib.Path(__file__).resolve().parents[2] / "frontend"
 HARNESS = pathlib.Path(__file__).resolve().parent / "js" / "verbal-apply-harness.js"
 
-# Where the carried four start on a project whose cells are blank: hydrate() falls back to each
-# spec's `def`, and Joint filler ships ON -- one kit per 3,500 sq ft is how the sheet is built.
-# Named here because "it did not move" and "it moved to false" are the same assertion against
-# an empty dict, and telling those apart is the whole point of the two tests that use it.
-CARRY_BASE = {"reno": False, "dye": False, "joint_filler": True, "remove_existing_jf": False}
-
 BASE = {"local": True, "hard_bid": False, "prevailing_wage": False,
         "taxable": True, "remodel_tax": False}
 
@@ -147,104 +141,54 @@ def test_a_condition_nobody_wired_up_sets_nothing(ran):
     assert g["saves"] == 0
 
 
-def test_a_carried_through_flag_from_the_ai_reaches_its_switch(ran):
-    """THE PAGE NOW AGREES WITH ITSELF ABOUT WHAT A CONDITION IS.
+def test_a_key_this_page_used_to_carry_is_now_treated_like_any_other_stranger(ran):
+    """THE CARRIED-FOUR MECHANISM IS GONE, NOT JUST TRIMMED.
 
-    The polish page renders nine switches: the engine five that move money, and four carried
-    through from the live intake so both screens agree — Renovation, Dye, Joint filler, Remove
-    existing joint filler. `toggleCondition` has taken a carried key since those nine shipped,
-    and `applyVerbal` was still gating on `isCondition` alone — the engine five. Two halves of
-    one page disagreeing about the same list.
+    Until 2026-09-23 this page rendered nine switches -- the engine five plus Renovation, Dye,
+    Joint filler and Remove existing joint filler, carried through from the live intake without
+    moving money -- and `toggleCondition` reached carrySpec(key) before deciding what to do with
+    a key outside CONDITIONS. Hanz asked for Renovation removed entirely, not relocated, and the
+    product diff took the whole mechanism with it: carrySpec(), hasDependents() and
+    repaintCondition() no longer exist in polish-intake.js, and `toggleCondition` and
+    `applyVerbal` both gate on `isCondition(key)` alone now -- the same five keys the switches
+    themselves are built from.
 
-    THE COMPARISON MOVED IN THE SAME EDIT, AND HAD TO. applyVerbal calls toggleCondition only
-    when the flag DIFFERS, and it used to test that with `!!M.conditions[key]`. A carried key is
-    never on the model — `migrateModel` whitelists condition keys against
-    `freshModel().conditions` — so that read `undefined` for all four, and every carried flag
-    looked like a change from off. The `joint_filler: false` below is what catches it: Joint
-    filler ships ON, `!!undefined !== false` is false, so the old read would call it handled and
-    leave the switch on while the panel said it had set it. `condOn(key)` knows which of the two
-    bindings a key lives in, and for the engine five it returns exactly `!!M.conditions[key]`.
+    So a former carried key reaching applyVerbal today is exactly as unwired as `union_job` in
+    the test above: `isCondition` says no before anything else runs. THE VERBAL PANEL NEVER
+    ACTUALLY SENT ONE OF THESE -- `verbal_intake.py` builds `conditions` by looping over
+    `MONEY_CONDITIONS`, four literals, and never asked the AI for `reno` or `joint_filler` by
+    name (test_verbal_intake.py owns that half) -- so this fixture is deliberately synthetic,
+    the same way the old carried-key tests it replaces were: it proves the CLIENT gate holds
+    even if a caller handed it one.
 
-    NOT REACHABLE FROM DICTATION YET, AND GREEN HERE DOES NOT SAY OTHERWISE. `verbal_intake.py`
-    builds its response by looping over `MONEY_CONDITIONS` — five literals — so the server
-    cannot hand back one of these four today. That is pinned in test_verbal_intake.py, not left
-    to this file to imply. The seven-flag list that does include B10 New/Reno belongs to
-    `/api/autofill`, which writes cell names and never calls this function."""
-    g = ran["carryFromVerbal"]
-    assert g["applied"]["applied"] == ["reno", "joint_filler"], (
-        "a carried-through key did not reach toggleCondition")
-    assert g["carryAfter"] == {**CARRY_BASE, "reno": True, "joint_filler": False}, (
-        "the transcript said renovation and no joint filler; the switches say otherwise")
-    assert g["conditionsAfter"] == BASE, (
-        "a carried key was written onto the model, where migrateModel will drop it")
-    # THE ONE THAT SEPARATES condOn FROM THE MODEL READ. Reading the model leaves Joint filler
-    # reading "sw on" -- the crew filling joints on a job the transcript said had none -- and the
-    # dependent switch below never greys out, because nothing turned its parent off.
-    assert g["classesAfter"]["joint_filler"] == "sw", (
-        "Joint filler is still ON after a transcript that said there is none: %r"
-        % (g["classesAfter"],))
-    assert g["classesAfter"]["remove_existing_jf"] == "sw inert", (
-        "its dependent did not grey out, so the parent never actually moved")
-    assert g["classesAfter"]["reno"] == "sw on"
-    assert g["saves"] == 2, "cell_values is the only home these four have"
-    assert g["humanOwned"] == [], "a verbal fill must not claim to be the estimator's answer"
-    assert g["rerenders"] == 1, (
-        "only Joint filler has a dependent, so only it pays for the full re-render; got %d"
-        % g["rerenders"])
-    assert g["focuses"] == ["joint_filler"], (
-        "the re-render cost the caret and it was not put back: %r" % (g["focuses"],))
+    Mutation: bring back `if (!carrySpec(key) && !isCondition(key)) return;` without restoring
+    carrySpec itself. This goes red with a ReferenceError, not a silent pass -- which is exactly
+    the failure this file existed to catch once already."""
+    g = ran["formerCarryKeys"]
+    assert g["applied"]["applied"] == [], (
+        "a key outside CONDITIONS reached toggleCondition: %r" % g["applied"])
+    assert g["conditionsAfter"] == BASE, "a former carried key was written onto the model"
+    assert g["saves"] == 0, "applyVerbal saved a change nothing on screen asked for"
+    assert g["painted"] == [] and g["rerenders"] == 0, (
+        "a switch this page does not render was somehow repainted")
 
 
-def test_a_carried_through_flag_that_is_already_right_is_left_alone(ran):
-    """The same rule as the engine five, and the reason the gate could not be widened
-    on its own.
+def test_a_click_on_a_former_carry_key_does_nothing(ran):
+    """The click path, straight through `toggleCondition` with no second argument -- exactly
+    what the delegated handler does for every click, real or synthetic. Before 2026-09-23 this
+    reached a real switch through carrySpec(); now there is no switch and no carrySpec to find
+    one with, so the click has to be a complete no-op rather than a ReferenceError or a silent
+    write.
 
-    `toggleCondition` flips; it does not set. Both keys here are handed back at the value the
-    page already holds — no dye, joints filled — which is the common case, since the transcript
-    is usually describing a job the estimator already keyed in. A loop that called
-    toggleCondition for everything the server accepted would turn Joint filler off on a job that
-    needs it, and the only trace would be a kit missing from the estimate.
-
-    Joint filler is the discriminating fixture in the other direction too: it is the one carried
-    key whose default is ON, so a comparison reading `!!M.conditions.joint_filler` sees false
-    against a true value here and toggles. Zero saves is the proof."""
-    g = ran["carryAlreadyRight"]
-    assert g["carryAfter"] == CARRY_BASE, "a switch that was already right was flipped"
-    assert g["saves"] == 0, "it saved a change it did not need to make"
-    assert g["painted"] == [] and g["rerenders"] == 0, "it repainted a switch that had not moved"
-    assert g["applied"]["applied"] == ["dye", "joint_filler"], (
-        "the panel must still report these as set — the estimator asked about them and the "
-        "answer is that the form already agrees")
-
-
-def test_a_click_on_a_carried_through_switch_still_works(ran):
-    """The click path, straight through `toggleCondition` with no second argument — exactly what the
-    delegated handler does. This is the path that broke: `toggleCondition` now asks `carrySpec(key)`
-    first, and every test in this file errored with `ReferenceError: carrySpec is not defined`
-    because the lifted scope had none of the carried-four machinery. None of those thirteen tests
-    was about the carried four; a harness that lifts a function inherits everything that function
-    starts reaching for.
-
-    Three things have to hold. The answer lands on `carry`, NEVER on the model — `migrateModel`
-    whitelists condition keys against `freshModel().conditions` and silently drops the rest, so a
-    carried key stored there would look saved and come back missing. The click is the estimator's,
-    so it is theirs from then on. And the draft is scheduled, because `cell_values` is the only
-    place these four survive.
-
-    Joint filler is clicked first on purpose: something depends on it, so it pays for the full
-    re-render — all nine switches repainted and the caret put back. Dye has no dependents and takes
-    the cheap one-node repaint, which is why the count below is one re-render and not two."""
-    g = ran["carryClicked"]
-    assert g["carryAfter"] == {**CARRY_BASE, "joint_filler": False, "dye": True}, (
-        "a click has to move a carried switch from where hydrate() left it, not from empty")
-    assert g["conditionsAfter"] == BASE, "a carried key was written onto the model"
-    assert sorted(g["humanOwned"]) == ["dye", "joint_filler"], (
-        "a real click did not mark the key as the estimator's")
-    assert g["saves"] == 2, "cell_values is the only home these four have"
-    assert g["rerenders"] == 1, (
-        "only the key with a dependent should force a re-render; got %d" % g["rerenders"])
-    assert g["focuses"] == ["joint_filler"], (
-        "the re-render cost the caret and it was not put back: %r" % (g["focuses"],))
+    Mutation: drop the `isCondition` guard from toggleCondition, or reintroduce `carry` without
+    reintroducing carrySpec. Either turns a click on a key this page no longer renders into
+    either a crash or a value stored nowhere the next load will read it back from."""
+    g = ran["formerCarryKeyClicked"]
+    assert g["conditionsAfter"] == BASE, "a click on a former carry key reached the model"
+    assert g["humanOwned"] == [], "toggleCondition recorded a click it never acted on"
+    assert g["saves"] == 0, "a no-op click still scheduled a save"
+    assert g["rerenders"] == 0 and g["painted"] == [], (
+        "a click on a key this page does not render still touched the DOM")
 
 
 def test_a_value_that_is_not_a_boolean_is_not_a_decision(ran):

@@ -125,6 +125,19 @@ def _clear_profile_cache():
     main._profile_cache_clear()
 
 
+@pytest.fixture(autouse=True)
+def _clear_render_cache():
+    """main.py memoises every document render under its payload's hash (_RENDER_CACHE), so a
+    Download and a Send of one payload hand out the same bytes. Across tests that is a leak: two
+    tests rendering the same small fixture payload would share one render, and the second would
+    read the first one's stubs — a writer it monkeypatched, a PDF renderer it replaced — as its
+    own. Cleared around every test, like the drafts and profile caches above."""
+    import main
+    main._RENDER_CACHE.clear()
+    yield
+    main._RENDER_CACHE.clear()
+
+
 @pytest.fixture
 def real_verify_token():
     """The genuine verify_token (un-bypassed) for the auth tests."""

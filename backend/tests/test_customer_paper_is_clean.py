@@ -117,7 +117,9 @@ _CALLER_DATA_TOKENS = {
     "polish_sf":          "polish square feet, off the estimate sheet",
     "sqft":               "area, off the estimate sheet",
     "system_name":        "the picked system (Epoxy!A22 dropdown)",
-    "tax_amount_formatted": "remodel tax -- money, never invented",
+    # (`tax_amount_formatted` was listed here: the GC and Gyp files' free Remodel Tax row printed
+    # it raw when a payload carried no remodel figure. With no remodel tax that row is now taken
+    # out of the document altogether — Hanz's remodel rule — so nothing is left to print raw.)
     "texture":            "the picked texture",
     "total_formatted":    "the bid -- money, never invented",
     # These two ARE derived (that is what this file fixed), but they are derived

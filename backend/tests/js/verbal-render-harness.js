@@ -180,10 +180,10 @@ out.staleQuoteOnly = render(
 
 // ═══ 4. the switches the estimator set themselves ═══════════════════════════
 out.respected = render(
-  { conditions: { hard_bid: {
+  { conditions: { remodel_tax: {
       value: true,
       context: "the district told us it is not a hard bid this time around" } } },
-  { filled: [], applied: [], respected: ["hard_bid"] });
+  { filled: [], applied: [], respected: ["remodel_tax"] });
 
 // ═══ 5. the filled fields, and the whole panel at once ══════════════════════
 out.filled = render(
