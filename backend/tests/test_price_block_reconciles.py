@@ -222,6 +222,15 @@ DEDUCT_PRICE_LINES = [{"label": "Add for moisture mitigation", "amount": 1200}]
 # the base ROOM would be taken off $9,500 instead of the $9,050 the page prints.
 DEDUCT_ROOMS_COMBINED = [dict(DEDUCT_ROOMS[0], bid={"total": 10000, "sales_tax": 500, "remodel": 0})] + DEDUCT_ROOMS[1:]
 _DEDUCT_WORDS = ("Quartz broadcast", "Sealed Concrete", "Urethane cement", "moisture mitigation")
+# A combo with no single base picked: the page prices Option 1 (Epoxy) and Option 2 (Polish) off
+# these two tabs instead of drawing a base line. They sum to "both, to the cent" — $6,307.50 with
+# $125.25 of sales tax (the epoxy tab's alone: polish is not Taxable?) and $471.13 of remodel tax.
+COMBO_TABS = [
+    {"id": "Epoxy", "role": "epoxy", "kind": "base", "total": 5000.00, "sales_tax": 125.25,
+     "remodel": 300.00, "taxable": True, "remodel_on": True},
+    {"id": "Polish", "role": "polish", "kind": "base", "total": 1307.50, "sales_tax": 0.00,
+     "remodel": 171.13, "taxable": False, "remodel_on": True},
+]
 
 _DOCS: dict = {}
 
@@ -545,6 +554,12 @@ def screen():
                   "blocks": _template_blocks("combo", "Direct"), "tax_layout": "EXEMPT",
                   "taxable": dtx, "remodel_on": drm, "total": dt, "sales_tax": ds, "remodel_tax": dr,
                   "rooms": DEDUCT_ROOMS_COMBINED, "state": {"price_lines": DEDUCT_PRICE_LINES}})
+    total, sales, remodel, tx, rm = FIGURES["both, to the cent"]
+    for layout in LAYOUTS:
+        cases.append({"name": f"combo-lines/{layout}", "work_type": "combo", "audience": "Direct",
+                      "blocks": _template_blocks("combo", "Direct"), "tax_layout": layout,
+                      "taxable": tx, "remodel_on": rm, "total": total, "sales_tax": sales,
+                      "remodel_tax": remodel, "state": {"priced_tabs": COMBO_TABS}})
     p = subprocess.run(["node", str(HARNESS), str(FRONTEND)],
                        input=json.dumps(cases), capture_output=True, text=True, encoding="utf-8")
     assert p.returncode == 0, p.stderr
@@ -649,6 +664,110 @@ def test_a_combined_combo_base_takes_the_deduct_off_the_base_line_not_the_base_r
                        "$1,200 – Add for moisture mitigation"], printed
     shown = [ln["text"] for ln in screen["deduct/combo/Direct/EXEMPT/combined"]["options"]]
     assert shown == printed, f"screen {shown} vs document {printed}"
+
+
+# ── (4b) the payload the PAGE composes prints what the page shows ──────────────────────────────
+# Every comparison above renders the document from `_values`, figures and flags this file writes
+# itself. That proves the two rules agree; it does not prove the page SENDS what it shows. A page
+# that painted $7,600 "(tax exempt)" and told the server "not taxable" would print $8,000 "(tax
+# exempt)" on the customer's copy while each half passed on its own. So here the document is
+# rendered from the harness's `payload` — computeTokenValues' tokens over the draft, and
+# comboLinesForPayload's lines, exactly as composeProposalPayload hands them to /api/generate —
+# with only narrative text added, and every price line the page draws must print, verbatim.
+_NARRATIVE = {k: v for k, v in _values(0, 0, 0, False, False, "ONE_LINE").items()
+              if not re.search(r"formatted|label|tax_layout|price_", k)}
+_FROM_PAGE: dict = {}
+
+
+def _from_page(r):
+    """The .docx rendered from the payload the page composed for screen case `r`, read back."""
+    if r["name"] not in _FROM_PAGE:
+        body = json.loads(json.dumps(r["payload"]))
+        body["values"] = dict(_NARRATIVE, **body["values"])
+        _FROM_PAGE[r["name"]] = _price_rows(_render(body))
+    return _FROM_PAGE[r["name"]]
+
+
+def _drawn(r):
+    """The price lines the page draws, as text: the combo's Option lines where it draws them,
+    else the base line and the rows shown under it — where the file MOUNTS those rows (a GC or Gyp
+    file words its own free rows, "Kansas Remodel Tax", and is judged by figure and wording
+    instead); then the option and manual lines."""
+    if r["combo"]:
+        lines = [ln["text"] for ln in r["combo"]]
+    elif r["freeRows"]:
+        lines = []
+    else:
+        p = r["painted"]
+        lines = [p["base"]] + [p[k] for k, on in (("sales_tax", p["salesRowShown"]),
+                                                  ("remodel", p["remodelRowShown"]),
+                                                  ("total", p["totalRowShown"])) if on]
+    return lines + [ln["text"] for ln in r["options"]]
+
+
+@needs_node
+@pytest.mark.parametrize("work_type,audience", TEMPLATES)
+@pytest.mark.parametrize("layout", LAYOUTS)
+@pytest.mark.parametrize("figure", TAXED)
+def test_the_payload_the_page_composes_prints_the_price_block_it_shows(screen, work_type, audience,
+                                                                        layout, figure):
+    """The loop closed: the page's own payload, through the real renderer, prints the base line,
+    its wording and the rows the page shows — on every template and all three layouts, on the TAXED
+    sheets (where Tax exempt and one line part). The payload keeps the SHEET's answers and figures
+    under Tax exempt too: they are what tells the server which taxes to back out of the Total.
+
+    Mutation: computeTokenValues sends price_taxable / price_remodel_on false under Tax exempt (the
+    document prints the tax-inclusive Total beside "(tax exempt)"; every other test stays green)."""
+    total, sales, remodel, tx, rm = FIGURES[figure]
+    r = screen[f"block/{work_type}/{audience}/{layout}/{figure}"]
+    rows = _from_page(r)
+    where = f"{work_type}/{audience} {layout} {figure}: {rows['all']!r}"
+    tk = r["payload"]["values"]
+    assert (tk["price_taxable"], tk["price_remodel_on"]) == (tx, rm), where
+    assert (tk["material_tax_formatted"], tk["tax_amount_formatted"], tk["total_formatted"]) == (
+        main._fmt_usd(sales), main._fmt_usd(remodel), main._fmt_usd(total)), where
+    p = r["painted"]
+    assert rows["base"] == _usd(p["base"]), f"screen {p['base']!r} vs document — {where}"
+    assert rows["base_line"].endswith(tk["base_tax_phrase"] or "as described above"), where
+    doc_rows = {k for k in ("material", "remodel", "total") if k in rows}
+    shown = {k for k in ("material", "remodel", "total") if tk[f"price_rows_{k}"]}
+    assert doc_rows == shown, f"screen rows {shown} vs document {doc_rows} — {where}"
+    for k, tok in (("material", "material_tax_formatted"), ("remodel", "tax_amount_formatted"),
+                   ("total", "total_formatted")):
+        if k in doc_rows:
+            assert rows[k] == _usd(tk[tok]), f"{k} row — {where}"
+    # Where the file mounts the rows the page paints, each prints as painted, word for word.
+    missing = [ln for ln in _drawn(r) if ln not in rows["all"]]
+    assert not missing, f"drawn but not printed: {missing} — {where}"
+
+
+@needs_node
+@pytest.mark.parametrize("case", [f"{kind}/{wt}/{aud}/{lay}" for kind in ("options", "deduct")
+                                  for wt, aud in OPTION_TEMPLATES for lay in LAYOUTS]
+                         + ["deduct/combo/Direct/EXEMPT/combined"]
+                         + [f"combo-lines/{lay}" for lay in LAYOUTS])
+def test_the_payload_the_page_composes_prints_every_line_it_draws(screen, case):
+    """The same loop over the lines under and instead of the base: each option (one line, its own
+    tab, pre-tax under Tax exempt), each Add/Deduct (off the base line's own pre-tax figure under
+    Tax exempt), the manual line, and a combo's Option 1 / Option 2 lines off the priced tabs, which
+    follow the layout as the base does — each one the page draws prints, word for word, and Tax
+    exempt prints no tax row anywhere.
+
+    Mutation: as above — the Add/Deduct lines and the base line move with it."""
+    r = screen[case]
+    rows = _from_page(r)
+    # Each case draws what it is about, or it proves nothing.
+    assert (len(r["combo"]) >= 2) if case.startswith("combo-lines/") else r["options"], (case, r["combo"], r["options"])
+    if case == "combo-lines/EXEMPT":
+        # Each system's own pre-tax figure: $5,000 less $125.25 and $300; $1,307.50 less $171.13.
+        assert [ln["text"] for ln in r["combo"]] == [
+            "$4,574.75 – Option 1: Epoxy flooring as described above (tax exempt)",
+            "$1,136.37 – Option 2: Polished Concrete flooring as described above (tax exempt)"], r["combo"]
+    missing = [ln for ln in _drawn(r) if ln not in rows["all"]]
+    assert not missing, f"{case}: drawn but not printed: {missing} — document {rows['all']!r}"
+    if case.endswith("EXEMPT") or "/EXEMPT/" in case:
+        taxed = [ln for ln in rows["all"] if re.search(r"–\s*(Material Sales Tax|(Kansas\s+)?Remodel Tax|Total)$", ln)]
+        assert not taxed, f"{case}: Tax exempt printed {taxed}"
 
 
 @needs_node

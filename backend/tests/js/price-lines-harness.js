@@ -627,6 +627,21 @@ const out = {};
   api.refreshPriceDisplay();
   out.exemptJob = { lines: api.lines().map((l) => [l.key, l.text]) };
 }
+// 6b. AN OPTION RE-WORDED BEFORE THE MARKERS EXISTED, frozen at its tax-inclusive Total ($7,696),
+//     on a job now picked Tax exempt — and the option's tab is not among the priced tabs, so no tab
+//     figure says $7,696 is the estimate's: only the line's own `candidates` do.
+{
+  const st = hanzFix({ tax_layout: "EXEMPT", price_overrides: { lines: {
+    "option:Copy1": OPT_LINE.replace("as described above", "as described above, shop floor") } } });
+  const api = build(st);
+  api.refreshPriceDisplay();
+  out.exemptLegacyOption = {
+    lines: api.lines().filter((l) => l.key === "option:Copy1")
+      .map((l) => ({ kind: l.kind, text: l.text, money: /tw-money-off/.test(l.cls), live: /tw-po-live/.test(l.cls) })),
+    pov: JSON.parse(JSON.stringify(st.price_overrides)),
+    warnings: api.priceWarnings().map((w) => ({ key: w.key, says: w.says, estimate: w.estimate })),
+  };
+}
 
 // 7. A LINE BREAK THAT LANDS INSIDE A PRICE LINE by a route other than Enter at a caret (Enter over
 //    a selection that spans lines, say): the text after the break is a line of its own below the

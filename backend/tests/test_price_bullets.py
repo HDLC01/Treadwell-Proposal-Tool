@@ -346,8 +346,9 @@ CASES = {
             {"on": {"starts": "$22,600"}, "press": "indent"},              # the TEMPLATE base line
             {"on": {"key": "total"}, "press": "bullet"},
             {"on": _typed("after", 2), "press": "outdent"},
-            # Enter after the option's last typed line (an option has no Total row of its own).
-            {"enter_after": _typed("after", 2), "type": "Exclusions: wall coating"},
+            # Enter after the option's own line, its one money line (it has no Total row since
+            # 2026-09-28): the new line is its first "o" sub-line, above the lines typed there already.
+            {"enter_after": {"key": "option:Alt1"}, "type": "Exclusions: wall coating"},
         ],
     },
     ("combo", "Direct"): {
@@ -606,9 +607,9 @@ EXPECTED = {
         ("$24,700 – Tota", "-", 288),
         ("Options", "-", 0),
         ("$85,500 – Alte", "sq", 288),
+        ("Exclusions: wa", "o", 1440),         # Enter under the option's own line: its sub-line
         ("Notes: Areas p", "o", 1440),
         ("Schedule: same", "sq", 288),
-        ("Exclusions: wa", "sq", 288),         # Enter on the outdented line: its level
     ],
     ("combo", "Direct"): [
         ("$22,600 – Opti", "sq", 288),

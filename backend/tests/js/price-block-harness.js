@@ -32,6 +32,11 @@
  * offers (`select_options`; a value it does not offer reads back "", as a browser's does): it paints,
  * picks, repaints, and paints again from what the pick saved, as a reload would.
  *
+ * THE PAGE'S OWN PAYLOAD. Each case also reports `payload`, the price half of what Continue hands
+ * /api/generate (composeProposalPayload's composition over computeTokenValues' tokens), so a test
+ * can render the document from what the page SENDS, not only from figures of its own: the screen
+ * could agree with a hand-built payload while the one the page composes prints another price.
+ *
  * Usage: node price-block-harness.js <frontend-dir> < cases.json   →  one line of JSON
  *   cases.json: [{ name, work_type, audience, blocks, total, sales_tax, remodel_tax,
  *                  taxable?, remodel_on?, tax_layout?, tax_inclusion?, rooms?, state?,
@@ -213,7 +218,8 @@ function scopeFor(c) {
   // Narrative fields a case wants set (or explicitly blank) — the price cases never pass any.
   Object.assign(state, c.state || {});
   const body = UNITS + NL + (c.pick !== undefined ? WIRE_TAX + NL : "") +
-    "return { refreshPriceDisplay, computeTokenValues, printedTaxRows, baseBidFigure, taxLayout, priceRowVisibility, comboLinesForPayload };";
+    "return { refreshPriceDisplay, computeTokenValues, printedTaxRows, baseBidFigure, taxLayout, priceRowVisibility, comboLinesForPayload,\n" +
+    "         effectiveWorkType, fmtUSDdoc };";
   const api = new Function("state", "document", "form", "TW", "window", "templateBlocks",
                            "focusInside", "lineAtSelection", body)(
     state, document, form,
@@ -251,6 +257,26 @@ function pickFlow(c) {
               base_bid_formatted: tv.base_bid_formatted, base_tax_phrase: tv.base_tax_phrase },
     cellsUntouched: JSON.stringify(first.state.cell_values) === cellsBefore
       && !saved.some((p) => "cell_values" in p),
+  };
+}
+
+/** The price half of what composeProposalPayload hands /api/generate, field for field: `values`
+ *  is the draft (with the form, empty here) spread UNDER computeTokenValues' tokens, less the keys
+ *  it deletes; `combo_options` is comboLinesForPayload's; `remodel` the one conditional row off
+ *  the draft's remodel tax; rooms, manual price lines and the line edits as the draft holds them.
+ *  The narrative a test adds on top is text, never a figure or a flag. */
+function payloadOf(api, state, tv) {
+  const values = Object.assign({}, state, tv);
+  ["proposal_payload", "proposal_payload_key", "generate_result", "dropbox_result", "priced_tabs"]
+    .forEach((k) => { delete values[k]; });
+  const remodelTax = Number(state.proposal_remodel_tax || 0);
+  return {
+    work_type: api.effectiveWorkType(), audience: state.audience || "Direct", values,
+    price_lines: Array.isArray(state.price_lines) ? state.price_lines : [],
+    combo_options: api.comboLinesForPayload(),
+    remodel: remodelTax > 0 ? [{ amount_formatted: api.fmtUSDdoc(remodelTax) }] : [],
+    rooms: Array.isArray(state.rooms) ? state.rooms : [],
+    price_overrides: (state.price_overrides && typeof state.price_overrides === "object") ? state.price_overrides : {},
   };
 }
 
@@ -292,6 +318,11 @@ const out = CASES.map((c) => {
       baseClasses: Array.from(rows["base-bid-row"]._classes),
     },
     options: linesOf(rows["price-lines-block"].innerHTML),
+    // Combo's Option 1 / Option 2 lines, where the page draws them instead of the base line.
+    combo: rows["combo-price-block"].style.display !== "none" ? linesOf(rows["combo-price-block"].innerHTML) : [],
+    // WHAT CONTINUE HANDS /api/generate for the price block, so the document can be rendered from
+    // the page's OWN output rather than from figures a test writes itself (payloadOf).
+    payload: payloadOf(api, state, tv),
     freeRows,
     tokens: {
       base_bid_formatted: tv.base_bid_formatted,

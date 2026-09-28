@@ -287,14 +287,21 @@ def test_under_tax_exempt_both_cards_name_the_pre_tax_base_the_document_prints(r
     backs the taxes out of the Total, and the staleness check compares the stamp with the
     tax-inclusive lump_sum_display — a pre-tax Total would report every exempt job as moved.
 
+    An OLD payload whose `tax_inclusion` said EXEMPT is not the new layout: a GC or Gyp one holds
+    a base below its Total ($6,767 against $6,839 — the tax rows always printed there), the
+    document reads it as Broken out and prints the Total, and both cards show the Total. Its base
+    differs from its Total ON PURPOSE: with the two equal, a card reading the old field would pass.
+
     Mutations: drop the tax_layout test from documentPrice (both cards show $6,839); the #rv-lump
     line back on its own read of total_formatted (the pre-generate card shows $6,839); builtAt on
-    the printed figure (the exempt job reads as a moved price)."""
+    the printed figure (the exempt job reads as a moved price); documentPrice reads the old
+    tax_inclusion as well (`|| v.tax_inclusion === "EXEMPT"`) or instead (the legacy cards show
+    $6,767)."""
     e = ran["exempt"]
     assert e["card"] == {"text": "$6,767", "hidden": False}, e["card"]
     assert e["preCard"] == "$6,767", e["preCard"]
     # Every other layout, and an OLD payload whose tax_inclusion said EXEMPT: the Total, as before.
     assert e["oneLine"] == "$6,839" and e["preCardOneLine"] == "$6,839", e
-    assert e["legacyExempt"] == "$6,839", e["legacyExempt"]
+    assert e["legacyExempt"] == "$6,839" and e["preCardLegacyExempt"] == "$6,839", e
     assert e["unreadableBase"] == "$6,839", e["unreadableBase"]
     assert e["stamp"] == "$6,839" and e["movedAfterExemptGenerate"] is False, e

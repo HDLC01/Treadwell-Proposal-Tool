@@ -279,6 +279,7 @@ out.row = {
 // tax-inclusive lump_sum_display — so the cards read the base through documentPrice instead.
 const EXEMPT_VALUES = { tax_layout: "EXEMPT", tax_inclusion: "EXEMPT",
                         base_bid_formatted: "$6,767", total_formatted: "$6,839" };
+const LEGACY_GC_EXEMPT = { tax_inclusion: "EXEMPT", base_bid_formatted: "$6,767", total_formatted: "$6,839" };
 const preCard = (st) => {
   const d = doc(["rv-lump"]);
   rvLump(store(st), st, d, money, documentPrice);
@@ -295,8 +296,12 @@ out.exempt = {
   oneLine: painted({ proposal_payload: { values: Object.assign({}, EXEMPT_VALUES, { tax_layout: "ONE_LINE",
                                                                                    tax_inclusion: "INCLUDED" }) } })
     .val.textContent,
-  legacyExempt: painted({ proposal_payload: { values: { tax_inclusion: "EXEMPT", total_formatted: "$6,839",
-                                                        base_bid_formatted: "$6,839" } } }).val.textContent,
+  // The old field's EXEMPT with a base that is NOT the Total: what a GC or Gyp payload saved by the
+  // page before 2026-09-25 holds (its base less the tax rows that always printed there). The
+  // document reads it as Broken out and prints its $6,839 Total, so the card must too — a card
+  // that took tax_inclusion for the new layout would show the $6,767 base instead.
+  legacyExempt: painted({ proposal_payload: { values: LEGACY_GC_EXEMPT } }).val.textContent,
+  preCardLegacyExempt: preCard({ proposal_payload: { values: LEGACY_GC_EXEMPT }, lump_sum_display: "$6,839.00" }),
   preCardOneLine: preCard({ proposal_payload: { values: { tax_layout: "BROKEN_OUT", total_formatted: "$6,839",
                                                           base_bid_formatted: "$6,767" } } }),
   // A base the page cannot read is not a price: the older figures stand, as for an unreadable Total.

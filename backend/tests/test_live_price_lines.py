@@ -207,6 +207,29 @@ def test_tax_exempt_draws_the_base_and_every_option_pre_tax_and_no_tax_row(ran):
 
 
 @needs_node
+def test_an_option_frozen_at_its_total_follows_the_estimate_when_the_job_goes_tax_exempt(ran):
+    """An option line re-worded before the markers existed froze the figure it showed then: its
+    whole $7,696, which under one line IS its amount. Picked Tax exempt, the option prints its own
+    pre-tax $7,597, and that frozen $7,696 is still the estimate's figure, not his — the line's
+    `candidates` (its tax-inclusive total) say so even when no priced tab does. So the line migrates
+    to the live marker: his words, today's $7,597 and "(tax exempt)", no warning mark, nothing for
+    Send to ask about. Without them it kept "$7,696 … (tax exempt)" beside a $7,597 option, marked
+    as his own price. The saved line prints the same in the document.
+
+    Mutation: the option line's `candidates` empty in renderOptionLinesPreview."""
+    e = ran["exemptLegacyOption"]
+    want = f"$7,597 – {_OPT_DESC} as described above, shop floor (tax exempt)"
+    assert e["lines"] == [{"kind": "line", "text": want, "money": False, "live": True}], e["lines"]
+    assert e["warnings"] == [], e["warnings"]
+    assert "option:Copy1" not in (e["pov"].get("lines") or {}), e["pov"]
+    stored = e["pov"]["lines2"]["option:Copy1"]
+    assert stored == f"{AMT} – {_OPT_DESC} as described above, shop floor {TAX}", stored
+    blob = _render(_screen_payload(values={"tax_layout": "EXEMPT", "tax_inclusion": "EXEMPT"},
+                                   price_overrides={"lines2": {"option:Copy1": stored}}))
+    assert want in [_text(p) for p in _paras(blob)[1]]
+
+
+@needs_node
 def test_a_break_inside_a_price_line_becomes_a_line_of_its_own_and_is_kept(ran):
     """Enter at a caret is handled (splitPriceLine), but a break can still land inside a price line
     another way -- Enter over a selection that spans lines puts one there. The text after it is a
