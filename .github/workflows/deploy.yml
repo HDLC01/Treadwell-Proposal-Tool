@@ -97,6 +97,7 @@ jobs:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || '22' }}   # SSH moved off 22 on 2026-09-28
           script_stop: true          # abort on the first failing command
           envs: TW_IMAGE,GHCR_TOKEN,GHCR_USER
           script: |
@@ -214,6 +215,7 @@ jobs:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || '22' }}   # SSH moved off 22 on 2026-09-28
           script_stop: true
           envs: TW_IMAGE
           script: |
@@ -300,6 +302,7 @@ jobs:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || '22' }}   # SSH moved off 22 on 2026-09-28
           script_stop: true
           envs: TW_IMAGE,GHCR_TOKEN,GHCR_USER
           script: |
