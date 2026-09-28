@@ -156,16 +156,77 @@ def test_an_emptied_line_is_one_blank_line_and_backspace_leaves_no_blank_line_be
 
 
 @needs_node
-def test_options_are_itemised_off_their_own_tab_and_an_edited_one_keeps_following_it(ran):
+def test_an_option_is_one_line_off_its_own_tab_and_an_edited_one_keeps_following_it(ran):
+    """Hanz, 2026-09-28: "Options should only be total amount, cannot be broken out. Only the base
+    bid would be broken out or one line." With the base Broken out (its rows drawn), the option is
+    still its whole total and its own tab's wording, and no tax row of its own. Re-worded, it keeps
+    his words and follows the estimate: re-priced, and — picked Tax exempt — its own pre-tax figure
+    ($8,696 − $99) with "(tax exempt)" in the marker's place."""
+    assert ran["brokenBase"] == ["base", "sales_tax", "total"], ran["brokenBase"]
     assert [(l["key"], l["text"]) for l in ran["brokenOptions"]] == [
-        ("option:Copy1", "$7,597 – Treadwell 3/16\" Urethne Cement With Shop Floor and Armor Top as described above"),
-        ("option:Copy1:sales_tax", "$99 – Material Sales Tax"),
-        ("option:Copy1:total", "$7,696 – Total"),
+        ("option:Copy1", "$7,696 – Treadwell 3/16\" Urethne Cement With Shop Floor and Armor Top as described above "
+                         "(material sales tax INCLUDED)"),
     ]
     ed = ran["editedOption"]
     assert ed["stored"].startswith(AMT) and ed["stored"].endswith(TAX)
-    assert ed["lines"][0]["text"].startswith("$8,597 – ") and ", shop floor" in ed["lines"][0]["text"]
-    assert ed["lines"][2]["text"] == "$8,696 – Total"
+    assert [l["text"] for l in ed["lines"]] == [
+        "$8,696 – Treadwell 3/16\" Urethne Cement With Shop Floor and Armor Top as described above, shop floor "
+        "(material sales tax INCLUDED)"]
+    assert ed["exempt"] == [
+        "$8,597 – Treadwell 3/16\" Urethne Cement With Shop Floor and Armor Top as described above, shop floor "
+        "(tax exempt)"]
+
+
+@needs_node
+def test_the_add_deduct_hint_says_what_the_line_will_print_under_tax_exempt(ran):
+    """The Pricing options panel's "Costs more than the base — will print as an Add." hint, over a
+    copy that is $53 dearer than the base WITH its tax and $51 cheaper WITHOUT it. One line: the
+    line prints "Add $53" and the hint shows. Tax exempt: the line prints "Deduct ($51)" (pre-tax
+    option less pre-tax base) and the hint must not promise an Add — where the panel draws it and
+    where the Price-as select's change handler sets it.
+
+    Mutations: either of the two `savings` back on the tax-inclusive pair under Tax exempt."""
+    h = ran["deductHint"]
+    assert h["ONE_LINE"] == {"drawn": True, "changed": True, "line": ["Add $53 – Treadwell Seal Coat"]}, h
+    assert h["EXEMPT"] == {"drawn": False, "changed": False, "line": [
+        "Deduct ($51) – VE for Treadwell Seal Coat, in lieu of Treadwell 3/16\" Urethne Cement."]}, h
+
+
+@needs_node
+def test_tax_exempt_draws_the_base_and_every_option_pre_tax_and_no_tax_row(ran):
+    """The Tax exempt pick on a taxed job ($7,447 with $96 sales tax; the option $7,696 with $99):
+    the base line $7,351 and the option $7,597, each "(tax exempt)", and no Material Sales Tax,
+    Remodel Tax or Total line anywhere in the box."""
+    assert ran["exemptJob"]["lines"] == [
+        ["heading_base", "Base Bid"],
+        ["base", "$7,351 – Epoxy flooring as described above (tax exempt)"],
+        ["heading_options", "Options:"],
+        ["option:Copy1", "$7,597 – Treadwell 3/16\" Urethne Cement With Shop Floor and Armor Top as described "
+                         "above (tax exempt)"],
+    ], ran["exemptJob"]
+
+
+@needs_node
+def test_an_option_frozen_at_its_total_follows_the_estimate_when_the_job_goes_tax_exempt(ran):
+    """An option line re-worded before the markers existed froze the figure it showed then: its
+    whole $7,696, which under one line IS its amount. Picked Tax exempt, the option prints its own
+    pre-tax $7,597, and that frozen $7,696 is still the estimate's figure, not his — the line's
+    `candidates` (its tax-inclusive total) say so even when no priced tab does. So the line migrates
+    to the live marker: his words, today's $7,597 and "(tax exempt)", no warning mark, nothing for
+    Send to ask about. Without them it kept "$7,696 … (tax exempt)" beside a $7,597 option, marked
+    as his own price. The saved line prints the same in the document.
+
+    Mutation: the option line's `candidates` empty in renderOptionLinesPreview."""
+    e = ran["exemptLegacyOption"]
+    want = f"$7,597 – {_OPT_DESC} as described above, shop floor (tax exempt)"
+    assert e["lines"] == [{"kind": "line", "text": want, "money": False, "live": True}], e["lines"]
+    assert e["warnings"] == [], e["warnings"]
+    assert "option:Copy1" not in (e["pov"].get("lines") or {}), e["pov"]
+    stored = e["pov"]["lines2"]["option:Copy1"]
+    assert stored == f"{AMT} – {_OPT_DESC} as described above, shop floor {TAX}", stored
+    blob = _render(_screen_payload(values={"tax_layout": "EXEMPT", "tax_inclusion": "EXEMPT"},
+                                   price_overrides={"lines2": {"option:Copy1": stored}}))
+    assert want in [_text(p) for p in _paras(blob)[1]]
 
 
 @needs_node
@@ -336,7 +397,10 @@ def test_typed_lines_print_as_their_own_paragraphs_in_the_price_rows_formatting(
 
 def test_an_edited_line_prints_todays_amount_and_wording_and_a_typed_figure_as_typed():
     """Markers resolve to TODAY's figures in the document too. Broken out here: the base line has
-    no bracket, the Total is the re-priced bid, and the option he re-worded quotes its new price."""
+    no bracket, the Total is the re-priced bid, and the option he re-worded quotes its new price —
+    on one line, its whole total with its own wording (options never break out, 2026-09-28). A
+    figure he typed himself on a row that prints is kept as typed. A line stored under an option's
+    old Total row prints nothing: the row is gone from both halves (no saved draft holds one)."""
     blob = _render(_payload(
         values={"total_formatted": "$9,100", "tax_layout": "BROKEN_OUT", "material_tax_formatted": "$96"},
         rooms=[{"id": "Epoxy", "name": "Epoxy", "is_base": True, "bid": {"total": 9100, "sales_tax": 96, "remodel": 0}},
@@ -346,14 +410,17 @@ def test_an_edited_line_prints_todays_amount_and_wording_and_a_typed_figure_as_t
         price_overrides={"lines2": {
             "base": f"{AMT} – Epoxy flooring in the warehouse only as described above {TAX}",
             "option:Copy1": f"{AMT} – Treadwell 3/16\" Urethane Cement, shop floor {TAX}",
+            "sales_tax": "$90 – Material Sales Tax, as agreed",
             "option:Copy1:total": "$8,000 – Total, as agreed",
         }}))
     _d, paras = _paras(blob)
     texts = [_text(p) for p in paras]
     assert "$9,004 – Epoxy flooring in the warehouse only as described above" in texts, texts
-    assert "$8,597 – Treadwell 3/16\" Urethane Cement, shop floor" in texts
-    assert "$8,000 – Total, as agreed" in texts          # his own figure, kept
+    assert "$8,696 – Treadwell 3/16\" Urethane Cement, shop floor (material sales tax INCLUDED)" in texts, texts
+    assert "$90 – Material Sales Tax, as agreed" in texts      # his own figure, kept
     assert "$9,100 – Total" in texts
+    assert not [t for t in texts if "as agreed" in t and "Total" in t], texts
+    assert not [t for t in texts if t in ("$99 – Material Sales Tax", "$8,696 – Total")], texts
 
 
 def test_a_line_saved_before_the_live_shape_still_prints_its_words_as_saved():
@@ -385,6 +452,23 @@ def test_a_legacy_exempt_payload_reads_its_wording_off_the_sheet():
     t2 = [_text(p) for p in _paras(exempt)[1]]
     assert "$7,447 – Epoxy flooring as described above (material sales tax INCLUDED)" in t1
     assert "$7,447 – Epoxy flooring as described above (tax exempt)" in t2
+    # The same old payload's option: one line, tax-inclusive, as it printed — not the new layout.
+    assert "$7,696 – Treadwell 3/16\" Urethane Cement as described above (material sales tax INCLUDED)" in t1
+
+
+def test_tax_exempt_prints_the_base_and_the_option_without_their_tax():
+    """The Tax exempt PICK (`tax_layout` "EXEMPT", Hanz 2026-09-28) on the same taxed payload: the
+    base is $7,447 − $96 = $7,351, the option $7,696 − $99 = $7,597, both "(tax exempt)", and no
+    Material Sales Tax, Remodel Tax or Total row. The payload's own base_bid_formatted ($7,447 here)
+    is not what prints: the document re-derives it. Mutation: the base backed out of only the rows
+    that print (it prints $7,447 beside "(tax exempt)")."""
+    blob = _render(_payload(values={"tax_layout": "EXEMPT", "tax_inclusion": "EXEMPT"}))
+    texts = [_text(p) for p in _paras(blob)[1]]
+    assert "$7,351 – Epoxy flooring as described above (tax exempt)" in texts, texts
+    assert "$7,597 – Treadwell 3/16\" Urethane Cement as described above (tax exempt)" in texts, texts
+    assert not [t for t in texts if t.endswith("– Material Sales Tax") or t.endswith("– Total")
+                or t.endswith("Remodel Tax")], texts
+    assert not [t for t in texts if "$7,447" in t or "$7,696" in t], texts
 
 
 @pytest.mark.parametrize("work_type,audience", [("epoxy", "Direct"), ("polish", "Direct"), ("combo", "Direct"),
@@ -450,6 +534,26 @@ def test_a_tax_wording_of_his_own_is_kept_on_screen(ran):
 
 
 @needs_node
+def test_under_tax_exempt_its_wording_is_todays_and_follows_the_layout(ran):
+    """Picked Tax exempt, "(tax exempt)" IS the base line's computed wording, and the pre-tax $7,351
+    its computed amount — so a line re-worded over them stores both as markers, like any line that
+    kept today's parts. A switch back to one line then prints today's one-line parts, the whole bid
+    and the sheet's "(material sales tax INCLUDED)", with his words. (On a TAXABLE job under One line
+    or Broken out the same "(tax exempt)" is HIS wording, kept as typed: the test above.)"""
+    e = ran["ownPhrase"]["exempt"]
+    assert e["stored"] == f"{AMT} – Epoxy flooring in the warehouse as described above {TAX}", e
+    assert e["shown"] == "$7,351 – Epoxy flooring in the warehouse as described above (tax exempt)", e
+    assert "tw-money-off" not in e["cls"], e
+    assert e["backToOneLine"] == ("$7,447 – Epoxy flooring in the warehouse as described above "
+                                  "(material sales tax INCLUDED)"), e
+    # Screen == document: the stored line, through the real renderer, under both layouts.
+    for layout, want in (("EXEMPT", e["shown"]), ("ONE_LINE", e["backToOneLine"])):
+        blob = _render(_screen_payload(values={"tax_layout": layout},
+                                       price_overrides={"lines2": {"base": e["stored"]}}))
+        assert want in [_text(p) for p in _paras(blob)[1]], layout
+
+
+@needs_node
 @pytest.mark.parametrize("layout", ["ONE_LINE", "BROKEN_OUT"])
 def test_a_tax_wording_of_his_own_prints_as_the_screen_shows_it(ran, layout):
     """Screen == document: what the editor stored for those lines, through the real renderer, is
@@ -503,9 +607,15 @@ def test_a_combo_line_reworded_under_included_migrates_live_and_adds_up(ran):
         ["combo:epoxy.sales_tax", "$100 – Material Sales Tax"],
         ["combo:epoxy.remodel", "$500 – Remodel Tax"],
         ["combo:epoxy.total", "$10,500 – Total"]]
+    # Tax exempt: this line IS the base price (no single base is picked), so it follows the base's
+    # layout like the rows above — its own pre-tax $9,900 (10,500 − 100 − 500), "(tax exempt)", and
+    # no row under it (Hanz, 2026-09-28).
+    exempt_line = "$9,900 – Option 1: Epoxy flooring in the kitchen as described above (tax exempt)"
+    assert c["exempt"] == [["combo:epoxy.flooring", exempt_line]], c["exempt"]
     # The document: the same lines, and Broken out they add up.
     for layout, payload_lines, screen in (("ONE_LINE", c["payload"], [line]),
-                                          ("BROKEN_OUT", c["brokenPayload"], [x[1] for x in c["broken"]])):
+                                          ("BROKEN_OUT", c["brokenPayload"], [x[1] for x in c["broken"]]),
+                                          ("EXEMPT", c["exemptPayload"], [exempt_line])):
         blob = _render({"work_type": "combo", "audience": "Direct", "combo_options": payload_lines,
                         "remodel": [{"amount_formatted": "$500"}],
                         "values": _payload()["values"] | {

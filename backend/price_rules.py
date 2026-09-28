@@ -14,8 +14,7 @@ So there are two questions and they have two different owners:
   * WHETHER there is tax is the ESTIMATE SHEET's answer, per priced tab: Taxable? (Epoxy!B6, a
     gyp tab's B8) decides material sales tax, Remodel Tax? (D6 / D8) decides remodel tax. The
     base bid and every option are asked separately, each off its own tab.
-  * HOW it is shown is the proposal's TAX control, and it only has two answers: "One line" or
-    "Broken out".
+  * HOW it is shown is the proposal's TAX control: "One line", "Broken out" or "Tax exempt".
 
 Broken out itemises: the pre-tax line with no bracket wording, a Material Sales Tax row only when
 the tab is taxable, a Remodel Tax row only when remodel is on, then the Total. The rows add up —
@@ -30,6 +29,17 @@ One line carries the whole bid and says which taxes are in it:
   taxable only      -> "(material sales tax INCLUDED)"
   remodel only      -> "(Remodel Tax INCLUDED)"
   neither           -> "(tax exempt)"
+
+Tax exempt (Hanz, 2026-09-28) is a fact about the CUSTOMER, not the sheet: the job is quoted
+without the taxes the sheet put in it. The line prints the same pre-tax figure Broken out prints on
+its base line — the taxes the sheet's flags say are in the bid backed out — followed by "(tax
+exempt)", and NO row at all: no Material Sales Tax, no Remodel Tax, no Total. The estimate sheet is
+not changed. It is never a default (`layout_for`): only an explicit pick reads as it. On a sheet
+with no tax it prints exactly what one line prints.
+
+OPTIONS ARE ALWAYS ONE LINE (Hanz, 2026-09-28: "Options should only be total amount, cannot be
+broken out. Only the base bid would be broken out or one line."). An option asks this rule for One
+line, or for Tax exempt when the whole job is exempt; never for Broken out.
 
 WHY TWO FILES AND ONE TEST. The editor has to show the estimator this figure before anything is
 generated, and the document has to print it from a payload that may have been frozen weeks ago;
@@ -62,6 +72,8 @@ KNOWN_PHRASES = (PHRASE_BOTH, PHRASE_REMODEL, PHRASE_MATERIAL, PHRASE_NONE)
 
 ONE_LINE = "ONE_LINE"
 BROKEN_OUT = "BROKEN_OUT"
+EXEMPT = "EXEMPT"
+LAYOUTS = (ONE_LINE, BROKEN_OUT, EXEMPT)
 
 _BROKEN_ALIASES = {"BROKEN_OUT", "BROKEN OUT", "BROKENOUT", "ITEMIZED", "BREAKOUT"}
 
@@ -109,61 +121,91 @@ def _known(v: Any) -> bool:
     return v is not None and not (isinstance(v, str) and not v.strip())
 
 
+def _layout_of(broken: Any, layout: Any) -> str:
+    """The layout one call asks the rule for. `layout` — "ONE_LINE", "BROKEN_OUT" or "EXEMPT", any
+    case — is the answer when it is given; anything else it says is one line. Without it, the
+    yes/no `broken` the older callers pass. TWPrice.taxRule reads its second argument the same way
+    (a string is a layout, anything else a yes/no)."""
+    if isinstance(layout, str):
+        lay = layout.strip().upper()
+        return lay if lay in (BROKEN_OUT, EXEMPT) else ONE_LINE
+    return BROKEN_OUT if broken else ONE_LINE
+
+
 def tax_rule(total: Any, sales_tax: Any = None, remodel: Any = None, *,
-             taxable: Any = None, remodel_on: Any = None, broken: bool = False) -> dict:
+             taxable: Any = None, remodel_on: Any = None, broken: bool = False,
+             layout: Optional[str] = None) -> dict:
     """THE RULE for one priced system (the base, or one option), off its own tab's figures.
 
+    `layout` is the TAX control's answer (ONE_LINE / BROKEN_OUT / EXEMPT) and wins when given;
+    `broken` is the yes/no form of it.
+
     Returns every figure in CENTS plus which rows print:
+      layout       the layout it was asked for; `broken` and `exempt` say it as two yes/nos
       base         the amount on the system's own line
-      phrase       the bracket wording after it ("" when broken out)
+      phrase       the bracket wording after it ("" when broken out, "(tax exempt)" when exempt)
       material     a Material Sales Tax row prints
       remodel      a Remodel Tax row prints
       total        a Total row prints
+
+    `taxable` / `remodel_on` in the answer stay the SHEET's flags under every layout: they are what
+    says which taxes are inside the total, and so what Tax exempt backs out of it.
 
     With no flag, the figure answers (see `flag`). With no flag AND no sales-tax figure at all —
     a hand-built payload, a room from before the tab snapshot carried one — nothing says the job
     is exempt, so it is read as taxable, which is what every such document printed before.
     """
+    lay = _layout_of(broken, layout)
     t, s, r = _cents(total), _cents(sales_tax), _cents(remodel)
     tx = flag(taxable, (s > 0) if _known(sales_tax) else True)
     rm = flag(remodel_on, r > 0)
-    out = {"broken": bool(broken), "taxable": tx, "remodel_on": rm,
+    out = {"layout": lay, "broken": lay == BROKEN_OUT, "exempt": lay == EXEMPT,
+           "taxable": tx, "remodel_on": rm,
            "total_cents": t, "sales_cents": s, "remodel_cents": r}
-    if broken:
+    if lay == BROKEN_OUT:
         base = t - (s if tx else 0) - (r if rm else 0)
         out.update(base_cents=max(0, base), phrase="", material=tx, remodel=rm, total=True)
+    elif lay == EXEMPT:
+        # The figure Broken out prints on its base line, and not one row: the customer pays no tax,
+        # so nothing on the page may say there is any.
+        base = t - (s if tx else 0) - (r if rm else 0)
+        out.update(base_cents=max(0, base), phrase=PHRASE_NONE, material=False, remodel=False,
+                   total=False)
     else:
         out.update(base_cents=t, phrase=phrase_for(tx, rm), material=False, remodel=False,
                    total=False)
     return out
 
 
-def layout_is_broken(tax_layout: Any, tax_inclusion: Any, *, free_rows: bool,
-                     taxable: bool, remodel_on: bool) -> bool:
-    """Broken out or one line, for a payload.
+def layout_for(tax_layout: Any, tax_inclusion: Any, *, free_rows: bool,
+               taxable: bool, remodel_on: bool) -> str:
+    """ONE_LINE, BROKEN_OUT or EXEMPT, for a payload. Its twin is TWPrice.layoutFor.
 
-    `tax_layout` is the new control's answer, and when present it is the answer. A payload
-    composed before it existed carries only the old three-way `tax_inclusion`, which is read by
-    what it PRINTED, so a re-render of an untouched payload keeps its layout:
+    `tax_layout` is the new control's answer, and when present it is the answer. EXEMPT is only
+    ever that — an explicit pick of "Tax exempt" — and never a default or a legacy reading: whether
+    a customer is exempt is not something the sheet or an old field can say, and reading an old
+    payload as exempt would print it without the taxes it was sent with.
+
+    A payload composed before `tax_layout` existed carries only the old three-way `tax_inclusion`,
+    which is read by what it PRINTED, so a re-render of an untouched payload keeps its layout:
 
       * "Sales tax broken out" itemised on every template -> Broken out.
       * "Included" and "Tax exempt" printed one line on the templates whose tax rows sit in a
-        {{#tax_breakout}} region (the Direct files) -> One line; exempt now comes from the sheet.
+        {{#tax_breakout}} region (the Direct files) -> One line, with the sheet's wording. The old
+        "Tax exempt" printed the FULL tax-inclusive figure, and so does this.
       * The GC and Gyp files author their tax rows as plain paragraphs, so they itemised whatever
         that box said; the choice was never theirs, and the new default answers for it — Broken
         out when a tax applies, one line when none does.
     """
     lay = str(tax_layout or "").strip().upper()
-    if lay == BROKEN_OUT:
-        return True
-    if lay == ONE_LINE:
-        return False
+    if lay in LAYOUTS:
+        return lay
     legacy = str(tax_inclusion if tax_inclusion is not None else "INCLUDED").strip().upper()
     if legacy in _BROKEN_ALIASES:
-        return True
+        return BROKEN_OUT
     if free_rows:
-        return bool(taxable or remodel_on)
-    return False
+        return BROKEN_OUT if (taxable or remodel_on) else ONE_LINE
+    return ONE_LINE
 
 
 def resolve_line(text: Any, amount: Optional[str], phrase: Optional[str]) -> str:
@@ -353,8 +395,8 @@ def split_legacy_line(legacy: Any, amount: Any = None, phrase: Any = None,
 # ── THE PRICE BOX'S BULLETS: Kyle's REBID layout ─────────────────────────────────────────────
 # Hanz, 2026-09-25, choosing it with the 2026-07-16 "no bullets in the pricing" rule in front of
 # him: the price box reads like Kyle's hand-made "Nickell RC Sustainment REBID" proposal. Every
-# money line (the base, its tax rows and Total, each option and its own tax rows and Total, the
-# manual and combo lines, the alternate's amounts) carries the template's own red square (the
+# money line (the base, its tax rows and Total, each option's one line, the manual and combo
+# lines, the alternate's amounts) carries the template's own red square (the
 # PRICE list, numId 3, level 0); a line typed under or over one of them is its sub-line and
 # carries the hollow "o" (level 1). Headings ("Base Bid", "Options:", the alternate's name) and
 # blank lines carry nothing. Then: "fix the indents and the bullets now" (2026-09-26) — what the

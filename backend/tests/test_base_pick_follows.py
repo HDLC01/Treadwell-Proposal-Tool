@@ -447,7 +447,7 @@ def test_the_customer_document_keeps_his_words_through_every_base_pick(ran, layo
         assert texts[i + 2:i + 4] == NOTE, texts[i:i + 6]
         j = i + 4
     # The base's own tax rows: every one straight after the note, and nothing past them (an
-    # option's itemised rows sit under the Options heading, further down).
+    # option's one line sits under the Options heading, further down).
     rows = []
     while j < len(texts) and _TAX_ROW.match(texts[j]):
         rows.append(texts[j])
@@ -673,6 +673,9 @@ def test_the_tax_wording_the_base_line_prints_is_read_off_the_draft():
     """TWPrice.draftBasePhrase, what the Estimate step hands the pick: "" under Broken out (chosen,
     the old three-way answer, or undecided on a taxable base), the One-line wording otherwise --
     including the four prod drafts' own shapes (EXEMPT on a zero-tax tab, INCLUDED on a taxed one).
+    The Tax exempt PICK (`tax_layout` "EXEMPT", 2026-09-28) answers "(tax exempt)" on a taxed base —
+    the Proposal step's baseTaxRule says the same, so a pick migrates a base line alike from either
+    page — while the OLD `tax_inclusion` "EXEMPT" on a taxed base still answers the sheet's wording.
     And applyBasePick reading the same old-shape line under each."""
     got = _node_core("""(P) => [
         P.draftBasePhrase({ tax_layout: 'BROKEN_OUT', proposal_sales_tax: 96, proposal_taxable: true }),
@@ -682,9 +685,12 @@ def test_the_tax_wording_the_base_line_prints_is_read_off_the_draft():
         P.draftBasePhrase({ tax_inclusion: 'EXEMPT', proposal_sales_tax: 0, proposal_remodel_tax: 0 }),
         P.draftBasePhrase({ tax_layout: 'ONE_LINE', proposal_sales_tax: 110, proposal_remodel_tax: 745 }),
         P.draftBasePhrase({ proposal_sales_tax: 0, proposal_remodel_tax: 0, proposal_taxable: false }),
-        P.draftBasePhrase(null)]""")
+        P.draftBasePhrase(null),
+        P.draftBasePhrase({ tax_layout: 'EXEMPT', proposal_sales_tax: 96, proposal_taxable: true }),
+        P.draftBasePhrase({ tax_inclusion: 'EXEMPT', proposal_sales_tax: 96, proposal_taxable: true })]""")
     assert got == ["", "", "", "(material sales tax INCLUDED)", "(tax exempt)",
-                   "(Remodel Tax AND material sales tax INCLUDED)", "(tax exempt)", ""], got
+                   "(Remodel Tax AND material sales tax INCLUDED)", "(tax exempt)", "",
+                   "(tax exempt)", "(material sales tax INCLUDED)"], got
     line = {"lines": {"base": f"$7,351 – {_EPOXY}"}}
     outs = [_node_core(_PICK, line, "Epoxy", "Copy1", _TABS, opts)[1]
             for opts in ({"workType": "epoxy", "basePhrase": ""},

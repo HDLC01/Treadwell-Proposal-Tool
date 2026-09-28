@@ -9,9 +9,10 @@ anybody set (`_flatten_price_bullets`, PR #132, the 2026-07-16 "no bullets in th
 
 Hanz reversed that rule on 2026-09-25, with it in front of him: the price box reads like Kyle's
 hand-made "Nickell RC Sustainment REBID" proposal. A red square on every money line (the base, its
-tax rows and Total, each option and its own rows, the manual and combo lines), the hollow "o" on an
+tax rows and Total, each option's one line, the manual and combo lines), the hollow "o" on an
 option's sub-lines, nothing on a heading or a blank line — and what the estimator sets with the
-ribbon on any line beats that default and prints.
+ribbon on any line beats that default and prints. (An option is one line with no rows of its own
+since 2026-09-28: "Only the base bid would be broken out or one line.")
 
 WHAT THIS FILE PROVES, BY RUNNING BOTH HALVES:
 
@@ -52,7 +53,7 @@ MC = "{http://schemas.openxmlformats.org/markup-compatibility/2006}"
 
 
 # ── (1) ONE RULE, TWO LANGUAGES ──────────────────────────────────────────────────────────────────
-KEYS = ["base", "sales_tax", "total", "option:Alt1", "option:Alt1:total", "manual:0",
+KEYS = ["base", "sales_tax", "total", "option:Alt1", "combo:epoxy.total", "manual:0",
         "combo:epoxy.flooring", "heading_base", "heading_options", "alt_name", "alt_total"]
 POSITIONS = [None, "before", "after"]
 TEXTS = ["$22,600 – Resinous flooring", "", "   "]
@@ -345,7 +346,9 @@ CASES = {
             {"on": {"starts": "$22,600"}, "press": "indent"},              # the TEMPLATE base line
             {"on": {"key": "total"}, "press": "bullet"},
             {"on": _typed("after", 2), "press": "outdent"},
-            {"enter_after": {"key": "option:Alt1:total"}, "type": "Exclusions: wall coating"},
+            # Enter after the option's own line, its one money line (it has no Total row since
+            # 2026-09-28): the new line is its first "o" sub-line, above the lines typed there already.
+            {"enter_after": {"key": "option:Alt1"}, "type": "Exclusions: wall coating"},
         ],
     },
     ("combo", "Direct"): {
@@ -592,11 +595,9 @@ EXPECTED = {
         ("Includes 1 gal", "o", 1440),         # Enter + typed under the Total: a sub-line
         ("Pricing valid ", "-", 0),            # typed on the gap: a heading's line
         ("Options:", "sq", 288),               # a heading given a bullet
-        ("$85,000 – Alte", "sq", 288),
+        ("$85,500 – Alte", "sq", 288),         # the option: one line, its whole total
         ("Notes: Areas p", "-", 1728),         # "o" off (words stay at 1440) then indent a step
         ("Schedule: same", "sq", 288),         # outdent: "o" back to the square
-        ("$500 – Materia", "sq", 288),
-        ("$85,500 – Tota", "sq", 288),
     ],
     ("polish", "Direct"): [
         ("Base Bid", "-", 0),
@@ -605,12 +606,10 @@ EXPECTED = {
         ("$1,750 – Remod", "sq", 288),
         ("$24,700 – Tota", "-", 288),
         ("Options", "-", 0),
-        ("$85,000 – Alte", "sq", 288),
+        ("$85,500 – Alte", "sq", 288),
+        ("Exclusions: wa", "o", 1440),         # Enter under the option's own line: its sub-line
         ("Notes: Areas p", "o", 1440),
         ("Schedule: same", "sq", 288),
-        ("$500 – Materia", "sq", 288),
-        ("$85,500 – Tota", "sq", 288),
-        ("Exclusions: wa", "o", 1440),
     ],
     ("combo", "Direct"): [
         ("$22,600 – Opti", "sq", 288),
@@ -674,11 +673,9 @@ EXPECTED = {
         ("$24,700 – Tota", "sq", 288),
         ("1 Mobilization", "sq", 288),
         ("Options:", "-", 0),
-        ("$85,000 – Alte", "-", 288),
+        ("$85,500 – Alte", "-", 288),
         ("Notes: Areas p", "o", 1440),
         ("Schedule: same", "sq", 288),
-        ("$500 – Materia", "sq", 288),
-        ("$85,500 – Tota", "sq", 288),
     ],
 }
 

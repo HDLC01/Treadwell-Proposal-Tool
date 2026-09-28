@@ -60,6 +60,20 @@ const MOVED = liftDecl("priceMovedSinceGenerate",
   "It is the only thing standing between a moved price and a card that names the wrong one.");
 const PAINT = liftDecl("paintLumpSum",
   "It is the row that shows an estimator the price before they send it.");
+const DOC_PRICE = liftDecl("documentPrice",
+  "It is the one reading of the price the saved document prints, which both cards show.");
+
+// The pre-generate card's figure: three statements inside showPreGenerate, which is hundreds of
+// lines of page the rest of this file does not need. Lifted VERBATIM, from its payload read to the
+// #rv-lump write, and evaluated with every binding it names — so the second card cannot quietly
+// stop asking documentPrice while the first one still does.
+const RV_LUMP = (function () {
+  const start = SRC.indexOf("const _rvPp = ");
+  const write = SRC.indexOf('document.getElementById("rv-lump").textContent', start);
+  if (start < 0 || write < 0) gone("the #rv-lump card", "It is the price the pre-generate card shows.");
+  const end = SRC.indexOf(";", write);
+  return SRC.slice(start, end + 1);
+})();
 
 // The mode decider is an anonymous async IIFE, so it is anchored on its own heading comment
 // rather than a name. Losing the anchor must be loud: the decider is what keeps a priced-out
@@ -83,8 +97,13 @@ const builtAt = build(BUILT_AT);
 // reference is an error here and not a silently-never-stale check.
 const priceMoved = new Function("st", "money",
   '"use strict"; ' + MOVED.body);
-const paint = new Function("TW", "document", "money",
+const documentPriceFn = new Function(...DOC_PRICE.args, "money", '"use strict"; ' + DOC_PRICE.body);
+const documentPrice = (values) => documentPriceFn(values, money);
+const paintRaw = new Function("TW", "document", "money", "documentPrice",
   '"use strict"; ' + PAINT.body);
+const paint = (TW, document, m) => paintRaw(TW, document, m, documentPrice);
+const rvLump = new Function("TW", "state", "document", "money", "documentPrice",
+  '"use strict"; ' + RV_LUMP);
 
 // `composedHere` and `location` belong to the page's DOOR, which runs first: a draft whose document
 // is not current is sent through the Proposal step before any of the choices below are made. That
@@ -251,6 +270,49 @@ out.row = {
     try { painted({ generated_lump_sum: "$1.00" }, []); return true; }
     catch (e) { return String(e); }
   })(),
+};
+
+// ── F. TAX EXEMPT: both cards name the figure the document prints ───────────
+// Hanz, 2026-09-28. Under Tax exempt the document prints the Base Bid WITHOUT its tax and no Total,
+// so the one price on the paper is values.base_bid_formatted. values.total_formatted stays the
+// tax-inclusive Total — builtAt stamps it and priceMovedSinceGenerate compares it with the
+// tax-inclusive lump_sum_display — so the cards read the base through documentPrice instead.
+const EXEMPT_VALUES = { tax_layout: "EXEMPT", tax_inclusion: "EXEMPT",
+                        base_bid_formatted: "$6,767", total_formatted: "$6,839" };
+const LEGACY_GC_EXEMPT = { tax_inclusion: "EXEMPT", base_bid_formatted: "$6,767", total_formatted: "$6,839" };
+const preCard = (st) => {
+  const d = doc(["rv-lump"]);
+  rvLump(store(st), st, d, money, documentPrice);
+  return d.nodes["rv-lump"].textContent;
+};
+out.exempt = {
+  card: (function () {
+    const p = painted({ proposal_payload: { values: EXEMPT_VALUES },
+                        generated_lump_sum: "$6,839", lump_sum_display: "$6,839.00" });
+    return { text: p.val.textContent, hidden: p.row.hidden };
+  })(),
+  preCard: preCard({ proposal_payload: { values: EXEMPT_VALUES }, lump_sum_display: "$6,839.00" }),
+  // One line / Broken out, and an OLD payload whose tax_inclusion said EXEMPT: the Total, as ever.
+  oneLine: painted({ proposal_payload: { values: Object.assign({}, EXEMPT_VALUES, { tax_layout: "ONE_LINE",
+                                                                                   tax_inclusion: "INCLUDED" }) } })
+    .val.textContent,
+  // The old field's EXEMPT with a base that is NOT the Total: what a GC or Gyp payload saved by the
+  // page before 2026-09-25 holds (its base less the tax rows that always printed there). The
+  // document reads it as Broken out and prints its $6,839 Total, so the card must too — a card
+  // that took tax_inclusion for the new layout would show the $6,767 base instead.
+  legacyExempt: painted({ proposal_payload: { values: LEGACY_GC_EXEMPT } }).val.textContent,
+  preCardLegacyExempt: preCard({ proposal_payload: { values: LEGACY_GC_EXEMPT }, lump_sum_display: "$6,839.00" }),
+  preCardOneLine: preCard({ proposal_payload: { values: { tax_layout: "BROKEN_OUT", total_formatted: "$6,839",
+                                                          base_bid_formatted: "$6,767" } } }),
+  // A base the page cannot read is not a price: the older figures stand, as for an unreadable Total.
+  unreadableBase: painted({ proposal_payload: { values: { tax_layout: "EXEMPT", base_bid_formatted: "—",
+                                                          total_formatted: "$6,839" } },
+                            generated_lump_sum: "$6,839" }).val.textContent,
+  // The stamp stays the tax-inclusive Total under Tax exempt too: both sides of the staleness check
+  // are tax-inclusive, so an exempt job is not read as a moved price.
+  stamp: builtAt({ values: EXEMPT_VALUES }),
+  movedAfterExemptGenerate: priceMoved({ generated_lump_sum: builtAt({ values: EXEMPT_VALUES }),
+                                         lump_sum_display: "$6,839.00" }, money),
 };
 
 process.stdout.write(JSON.stringify(out));
