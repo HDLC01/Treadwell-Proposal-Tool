@@ -350,7 +350,17 @@ async def _nav_gate(request: Request, call_next):
     if _auth_is_public(request.url.path, request.method):
         return await call_next(request)
     try:
-        role = (_caller_profile(request) or {}).get("role") or "user"
+        prof = _caller_profile(request) or {}
+        role = prof.get("role") or "user"
+        # A PAUSED OR BANNED ACCOUNT IS STOPPED ON ITS NEXT REQUEST (security audit, 2026-09-28).
+        # Pausing someone on the Admin page used to change a label only: their open session kept
+        # working until its token expired, and a ban only blocked their NEXT sign-in. /api/me stays
+        # open so the page can still say who is signed in. The profile cache lives 30 s and is
+        # cleared on every status change, so this takes effect within seconds.
+        if (prof.get("status") or "active") in ("paused", "banned") and request.url.path != "/api/me":
+            return JSONResponse(status_code=403, content={
+                "ok": False, "account_paused": True,
+                "error": "Your account is paused. Ask an admin to turn it back on."})
         denied = nav_access.is_api_denied(role, request.url.path)
     except Exception as exc:  # noqa: BLE001
         # FAIL OPEN. This is an internal tool with three accounts where a lockout is an outage the
