@@ -45,6 +45,7 @@ estimator is warned in the editor and again at Send, and then it is his to send.
 """
 from __future__ import annotations
 
+import math
 import re
 from typing import Any, Mapping, Optional
 
@@ -209,6 +210,144 @@ def extras_for(pov: Mapping[str, Any], key: str) -> tuple[list, list]:
         v = m.get(key) if isinstance(m, Mapping) else None
         return [str(x) for x in v] if isinstance(v, list) else []
     return one("before"), one("after")
+
+
+# ── A LINE SAVED IN THE OLD SHAPE, LAID OUT ─────────────────────────────────────────────────────
+# The editor of before 2026-09-25 stored a re-worded line, and whatever was typed round it, as ONE
+# string in `price_overrides.lines`: "\n$23,115 – … — Includes 6\" Cove Base\n\n" on Carson Ross,
+# "\n$24,911 – …" on David Dyer. The document printed each as one paragraph with <w:br/> breaks,
+# which read fine while the price box had no bullets. Under Kyle's REBID layout every money line
+# carries the red square: a leading break left the square ALONE on a blank first line, the price on
+# the line under it unbulleted, and trailing breaks sat inside the bulleted paragraph.
+#
+# The editor lays such a line out when it loads it (TWPrice.migrateLine): the lines typed round it
+# become lines of their own, and the price line keeps only itself. A document built from a payload
+# the editor never re-saved — the portal's customer PDF, a pinned revision, To Dropbox of an old
+# payload — lays it out the same way, with this. LAYOUT ONLY: every character of every line prints
+# exactly as saved and in the same order (a pinned payload prints word for word); no marker goes
+# in, no figure is re-priced, no phantom "$0 – Total" is dropped. Only where the breaks fall
+# changes: each line of the string is its own paragraph, and only the price line is the money line.
+#
+# WHICH LINE IS THE PRICE LINE is migrateLine's answer, step for step, so the document bullets the
+# line the editor draws as the price line; test_legacy_line_breaks.py runs this beside the real
+# migrateLine over the same strings. The one input a document cannot have is migrateLine's `others`
+# (the figures the draft's tabs price the line at on the page today, off state.priced_tabs, which
+# no proposal payload carries). It only ever chooses between two price-shaped lines, and every old-
+# shape line on production (2026-09-26) holds at most one line with anything on it.
+_JS_WS = "\t\n\x0b\x0c\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"   # JS \s
+_JS_TRIM_RE = re.compile("^[" + _JS_WS + "]+|[" + _JS_WS + "]+\\Z")
+_PRICE_SHAPE_RE = re.compile("^[" + _JS_WS + "]*(?:(?:add|deduct)[" + _JS_WS + "]+)?\\(?\\$["
+                             + _JS_WS + "]?[0-9,]+(?:\\.[0-9]+)?\\)?[" + _JS_WS + "]*[–—-]",
+                             re.IGNORECASE)
+_MONEY_AT_RE = re.compile("\\$[" + _JS_WS + "]?[0-9]")
+_MONEY_RE = re.compile("\\$[" + _JS_WS + "]?[0-9,]+(?:\\.[0-9]+)?")
+_PLAIN_AMOUNT_RE = re.compile(r"\$[0-9,]+(?:\.[0-9]+)?")
+_JS_CENTS_STRIP_RE = re.compile("[$," + _JS_WS + "]")
+
+
+def _js_cents(v: Any) -> int:
+    """TWPrice's `cents` (Number(), then Math.round) for the money strings the layout compares:
+    digits, commas and a fraction. Not `_cents`: that rounds half to even, Math.round half up."""
+    s = _JS_CENTS_STRIP_RE.sub("", str(v if v is not None else ""))
+    if not s:
+        return 0
+    if not re.fullmatch(r"[0-9]*\.?[0-9]*", s) or s == ".":
+        return 0
+    n = float(s)
+    return int(math.floor(n * 100 + 0.5)) if math.isfinite(n) else 0
+
+
+def _first_money_at(s: str) -> int:
+    m = _MONEY_AT_RE.search(s)
+    return m.start() if m else -1
+
+
+def _amount_index(s: str, amount: str) -> int:
+    """TWPrice's amountIndex: where `amount` sits in `s` as a whole figure, or -1."""
+    if not amount:
+        return -1
+    start = 0
+    while True:
+        i = s.find(amount, start)
+        if i < 0:
+            return -1
+        after = s[i + len(amount):i + len(amount) + 2]
+        ends_mid = bool(re.match(r"[0-9]|[.,][0-9]", after))
+        before = s[i - 1] if i > 0 else ""
+        starts_mid = bool(before) and before in "0123456789$" and bool(re.match(r"[0-9]", amount))
+        if not ends_mid and not starts_mid:
+            return i
+        start = i + 1
+
+
+def _price_index(s: str, amount: str) -> int:
+    """TWPrice's priceIndex: `amount` as the line's own price, its first dollar figure, or -1."""
+    i = _amount_index(s, amount)
+    if i < 0:
+        return -1
+    f = _first_money_at(s)
+    return i if f < 0 or i <= f < i + len(amount) else -1
+
+
+def _money_hits(s: str):
+    """Each dollar figure in `s` not glued to a digit or a "$" in front of it, as (at, text)."""
+    for m in _MONEY_RE.finditer(s):
+        before = s[m.start() - 1] if m.start() > 0 else ""
+        if before and before in "0123456789$":
+            continue
+        yield m.start(), m.group(0)
+
+
+def _plain(figures) -> list:
+    return [str(a) for a in figures if a and _PLAIN_AMOUNT_RE.fullmatch(str(a))]
+
+
+def split_legacy_line(legacy: Any, amount: Any = None, phrase: Any = None,
+                      candidates=(), others=()) -> Optional[tuple]:
+    """A line saved in the old shape as `(before, main, after)`: the lines typed above it, the price
+    line, the lines typed below it, each exactly as saved. None when there is nothing to lay out —
+    no line break in it, or no line with anything on it — and it prints as it always has.
+
+    The split TWPrice.migrateLine makes for the same `amount`, `phrase`, `candidates` and `others`
+    (its order: a price-shaped line priced at one of the line's own figures; a price-shaped line at
+    a figure a tab prices; the first price-shaped line; a line priced at its own figure; the first
+    line with a figure; the first line with anything). `"\\n".join(before + [main] + after)` is the
+    saved string, its "\\r\\n" and "\\r" read as "\\n" as migrateLine reads them."""
+    s = str(legacy if legacy is not None else "")
+    if "\n" not in s and "\r" not in s:
+        return None
+    lines = re.sub(r"\r\n?", "\n", s).split("\n")
+    cands = [str(a) for a in [amount, *(candidates or ())] if a]
+    figs = _plain(a for a in (others or ()) if a)
+    plain_cands = _plain(cands)
+
+    def shaped(line):
+        if _PRICE_SHAPE_RE.search(line):
+            return True
+        return any(ph in line for ph in ([str(phrase)] if phrase else []) + list(KNOWN_PHRASES))
+
+    def own(line):
+        if any(_price_index(line, c) >= 0 for c in cands):
+            return True
+        same = next((at for at, text in _money_hits(line)
+                     if any(_js_cents(q) == _js_cents(text) for q in plain_cands)), -1)
+        return same >= 0 and same == _first_money_at(line)
+
+    def at_tab_figure(line):
+        hit = next(_money_hits(line), None)
+        return hit is not None and any(_js_cents(f) == _js_cents(hit[1]) for f in figs)
+
+    steps = (lambda l: shaped(l) and own(l),
+             lambda l: shaped(l) and at_tab_figure(l),
+             shaped,
+             own,
+             lambda l: bool(_MONEY_AT_RE.search(l)),
+             lambda l: bool(_JS_TRIM_RE.sub("", l)))
+    for step in steps:
+        for i, line in enumerate(lines):
+            if step(line):
+                return lines[:i], lines[i], lines[i + 1:]
+    return None
 
 
 # ── THE PRICE BOX'S BULLETS: Kyle's REBID layout ─────────────────────────────────────────────

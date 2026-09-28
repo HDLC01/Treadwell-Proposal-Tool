@@ -16,7 +16,11 @@ work.
 """
 from __future__ import annotations
 
+import io
+
 import pytest
+from docx import Document
+from docx.oxml.ns import qn
 
 import main
 from tests.test_price_overrides import _VALS, _rendered, _xml, client
@@ -184,10 +188,15 @@ def test_the_writer_would_accept_a_newline_in_a_price_line_too():
     Enter to a space there is a deliberate choice in the browser handler ("a price line is
     one line"), NOT a limitation of the .docx. Recorded so that if Kyle asks for Enter to
     work in Base Bid and Options, whoever picks it up knows it is a one-line client change
-    and not a writer rewrite."""
-    body = {"work_type": "epoxy", "audience": "Direct", "values": dict(_VALS),
-            "price_overrides": {"lines": {"base": "$1 - first\nsecond"}}}
-    assert _xml(_docx(body)).count("<w:br/>") >= 1
+    and not a writer rewrite.
+
+    In the live shape (`lines2`, what the editor stores now). A line in the OLD shape (`lines`) is
+    laid out one line to a paragraph instead, the way the editor shows it on load: a break there
+    was a line typed next to the price line (test_legacy_line_breaks.py)."""
+    def breaks(pov):
+        return _xml(_docx({"work_type": "epoxy", "audience": "Direct", "values": dict(_VALS),
+                           "price_overrides": pov})).count("<w:br/>")
+    assert breaks({"lines2": {"base": "$1 - first\nsecond"}}) >= breaks({}) + 1
 
 
 def test_two_blank_lines_mean_two_blank_lines():
@@ -195,10 +204,14 @@ def test_two_blank_lines_mean_two_blank_lines():
     lines." The editor used to flatten every newline in a price line to a single space, so
     the count was always zero. Measured: three newlines produce three breaks per copy of
     the line (the row exists twice in the file, as the modern shape and its legacy
-    fallback), so the assertion is on the RATIO rather than a raw count."""
+    fallback), so the assertion is on the RATIO rather than a raw count.
+
+    That is the live shape (`lines2`). In the OLD shape (`lines`) each line is its own paragraph,
+    the way the editor shows it on load (test_legacy_line_breaks.py), so there the two blank lines
+    are two blank paragraphs between the price line and the words under it, in every copy."""
     def breaks(val):
         body = {"work_type": "epoxy", "audience": "Direct", "values": dict(_VALS),
-                "price_overrides": {"lines": {"base": val}}}
+                "price_overrides": {"lines2": {"base": val}}}
         return _xml(_docx(body)).count("<w:br/>")
     one  = breaks("$1 - a" + chr(10) + "b")
     three = breaks("$1 - a" + chr(10) * 3 + "b")
@@ -206,4 +219,19 @@ def test_two_blank_lines_mean_two_blank_lines():
     assert three == one * 3, (
         "three newlines gave %d breaks where one gave %d - runs are being collapsed"
         % (three, one))
+
+    def gaps(val):
+        d = Document(io.BytesIO(_docx({"work_type": "epoxy", "audience": "Direct", "values": dict(_VALS),
+                                       "price_overrides": {"lines": {"base": val}}})))
+        texts = ["".join(t.text or "" for t in p.iter(qn("w:t"))) for p in d.element.body.iter(qn("w:p"))
+                 if p.find(".//" + qn("w:txbxContent")) is None]
+        out = []
+        for i, t in enumerate(texts):
+            if t == "$1 - a":
+                j = texts.index("b", i)
+                assert all(not x for x in texts[i + 1:j]), texts[i:j + 1]
+                out.append(j - i - 1)
+        return out
+    assert gaps("$1 - a" + chr(10) + "b") == [0, 0]
+    assert gaps("$1 - a" + chr(10) * 3 + "b") == [2, 2]
 

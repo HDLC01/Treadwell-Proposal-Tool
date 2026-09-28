@@ -5894,13 +5894,39 @@ def _generate(payload: GenerateIn, request: Request, *,
                  "_para": _line_para(key, where, i, t)}
                 for i, t in enumerate(_pov[where].get(key) or [])]
 
-    def _priced(key: str, amount: str, label: str, phrase: str = "") -> list:
+    def _legacy_split(key: str, amount: str, phrase: str = "", candidates=()) -> Optional[tuple]:
+        """A line saved in the OLD shape (`lines`), laid out the way the editor lays it out on load:
+        (the lines typed above it, the price line, the lines typed below it), each exactly as saved
+        — or None: a line in the live shape, no old-shape line, or nothing to lay out (no line
+        break in it). price_rules.split_legacy_line has the rule, with the parts the editor passes
+        migrateLine for the same line (`candidates`: the other figures an old line could have frozen
+        in, the Total for a base or an option line)."""
+        if key in _pov["lines2"] or not _pov["lines"].get(key):
+            return None
+        return price_rules.split_legacy_line(_pov["lines"][key], amount, phrase, candidates)
+
+    def _split_rows(key: str, where: str, texts: list) -> list:
+        """The lines an old-shape line typed above (`before`) or below (`after`) itself, as the
+        same label-only rows `_extra_rows` makes. The editor makes them the line's `before` /
+        `after` when it has none there yet (so a stored bullet for that position is theirs); with
+        some there already they are extra, and print the default."""
+        has_own = bool(_pov[where].get(key))
+        return [{"label": t, "amount_formatted": "", "_typed": True,
+                 "_para": _line_para(key, where, None if has_own else i, t)}
+                for i, t in enumerate(texts)]
+
+    def _priced(key: str, amount: str, label: str, phrase: str = "", candidates=()) -> list:
         """One price line as {{#price_line}} rows: the lines above it, the line, the lines below."""
         own = _edited_line(key, amount, phrase)
+        split = _legacy_split(key, amount, phrase, candidates) if own is not None else None
+        above = below = []
+        if split:
+            above, below = _split_rows(key, "before", split[0]), _split_rows(key, "after", split[2])
+            own = split[1]
         row = ({"label": own, "amount_formatted": ""} if own is not None
                else {"label": label, "amount_formatted": amount})
         row["_para"] = _line_para(key, text=own if own is not None else label)
-        return _extra_rows(key, "before") + [row] + _extra_rows(key, "after")
+        return _extra_rows(key, "before") + above + [row] + below + _extra_rows(key, "after")
 
     # Structured PRICE option lines -> repeatable {{#price_line}} rows.
     price_line_dicts = []
@@ -5995,8 +6021,12 @@ def _generate(payload: GenerateIn, request: Request, *,
         if _oid and (_key in _pov["lines2"] or _pov["lines"].get(_key)):
             # WHOLE-LINE override wins (whole line in the label, blank amount → the
             # writer strips the orphaned separator and prints it verbatim).
+            # The option's Total, which an old-shape line could have frozen in (the editor's
+            # candidates for it): its Total row Broken out; under one line it IS the amount.
             _option_lines.extend(_priced(_key, _o.get("amount") or _amount, _label,
-                                         _o.get("tax_phrase") or ""))
+                                         _o.get("tax_phrase") or "",
+                                         [_tr["price_formatted"] for _tr in _o.get("tax_rows") or []
+                                          if _tr.get("key") == "total"]))
         else:
             # Legacy per-field override, keyed by the option's id.
             _oov = _pov["options"].get(_oid) if _oid else None
@@ -6047,9 +6077,21 @@ def _generate(payload: GenerateIn, request: Request, *,
             continue
         label = str(c.get("label") or "").strip()
         amount_formatted = str(c.get("amount_formatted") or "").strip()
+        # An OLD-SHAPE combo line: the page composed its label from the old-shape line itself
+        # (`lines`), breaks and all, before the combo lines carried their key — or its key still
+        # holds one. Laid out like every other old-shape line (_legacy_split): the lines round it
+        # print as its typed lines, and only the line itself is the money line.
+        _cs = (price_rules.split_legacy_line(c.get("label"), amount_formatted)
+               if isinstance(c.get("label"), str) and (
+                   not c.get("key") or (_ck not in _pov["lines2"] and _pov["lines"].get(_ck)))
+               else None)
+        if _cs:
+            label = _cs[1].strip()
         if label or amount_formatted:
+            _combo_lines.extend(_split_rows(_ck, "before", _cs[0]) if _cs else [])
             _combo_lines.append({"label": label, "amount_formatted": amount_formatted,
                                  "_para": _line_para(_ck)})
+            _combo_lines.extend(_split_rows(_ck, "after", _cs[2]) if _cs else [])
     if _combo_lines:
         # The combined single-bid line is suppressed below (single_bid=[]), but
         # the template's "Options:" heading is a {{#has_options}} block that
@@ -6169,6 +6211,18 @@ def _generate(payload: GenerateIn, request: Request, *,
         "alt_remodel": ("", ""), "alt_total": ("", ""),
     }
     _whole = {k: _edited_line(k, *parts) for k, parts in _row_parts.items()}
+    # An OLD-SHAPE line on one of these rows is laid out the way the editor lays it out on load
+    # (_legacy_split): the row prints the line itself, and the lines typed round it ride `_extras`
+    # below like the ones typed there since. Not the headings: a heading carries no bullet, so a
+    # break in one prints as the blank line it always was.
+    _split = {}
+    for _k, (_amt, _ph) in _row_parts.items():
+        if _k in price_rules.HEADING_LINE_KEYS or _whole[_k] is None:
+            continue
+        _s = _legacy_split(_k, _amt, _ph, [values.get("total_formatted") or ""] if _k == "base" else ())
+        if _s:
+            _split[_k] = _s
+            _whole[_k] = _s[1]
     # The base line and the "Base Bid" heading print his words only where the editor draws them as
     # the page's own lines (a {{#single_bid}} template: Epoxy and Combo Direct). On Polish Direct,
     # GC and Gyp the editor draws the TEMPLATE's paragraph there, so words that rode a base pick in
@@ -6209,10 +6263,16 @@ def _generate(payload: GenerateIn, request: Request, *,
         # {{#alternate}} block, so with no alternate they go with it.
         _b, _a = price_rules.extras_for(_pov, _k)
         _spec: Dict[str, Any] = {}
-        if _b or _a:
-            _spec = {"before": _b, "after": _a,
-                     "before_para": [_line_para(_k, "before", i, t) for i, t in enumerate(_b)],
-                     "after_para": [_line_para(_k, "after", i, t) for i, t in enumerate(_a)]}
+        # Nearest the row, the lines its old-shape line typed round it (_split, _split_rows).
+        _sb = _split_rows(_k, "before", _split[_k][0]) if _k in _split else []
+        _sa = _split_rows(_k, "after", _split[_k][2]) if _k in _split else []
+        if _b or _a or _sb or _sa:
+            _spec = {"before": _b + [r["label"] for r in _sb],
+                     "after": [r["label"] for r in _sa] + _a,
+                     "before_para": [_line_para(_k, "before", i, t) for i, t in enumerate(_b)]
+                                    + [r["_para"] for r in _sb],
+                     "after_para": [r["_para"] for r in _sa]
+                                   + [_line_para(_k, "after", i, t) for i, t in enumerate(_a)]}
         # The row's OWN bullet, only where the estimator set one: an untouched template row prints
         # Kyle's own numbering, untucked (proposal_writer._untuck_price_bullets). The alternate's
         # name is the exception — the file puts that heading on the PRICE list, and a heading
