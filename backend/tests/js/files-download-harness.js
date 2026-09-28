@@ -88,6 +88,9 @@ function page(opts) {
     },
     absoluteUrl: (u) => "https://tool" + u,
     authHeaders: () => ({ Authorization: "Bearer t" }),
+    // THE POP-UP (TWPrice.ownFigureDialog): shared.js's confirmDanger, answered by the page's
+    // window.confirm stub below and handed what the estimator reads -- title | message | button.
+    confirmDanger: (o) => Promise.resolve(windowStub.confirm([o.title, o.message, o.confirmText].join(" | "))),
   };
   const fetchStub = async (url) => {
     log.push("fetch " + url);

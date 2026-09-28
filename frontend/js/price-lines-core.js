@@ -628,13 +628,57 @@
    *  `draft` is the copy that goes out: for Send this page's (TW.getState(), read at the press, once
    *  Send has checked it IS the server's), for Download and To Dropbox the server's (through
    *  confirmSavedCopy, below); `ask` puts the
-   *  question to him (window.confirm) and is not called when there is nothing to ask. True: nothing
-   *  to ask, or he said OK. False: he cancelled, and the caller does nothing at all. */
+   *  question to him (ownFigureDialog's pop-up, or window.confirm) and is not called when there is
+   *  nothing to ask. True: nothing to ask, or he said OK. False: he cancelled, and the caller does
+   *  nothing at all. An `ask` that answers with a promise (the pop-up) gets a promise back, so a
+   *  caller awaits the answer; one that answers at once still gets a plain boolean. */
   function confirmOwnFigures(draft, act, ask) {
     var pp = draft && typeof draft === "object" ? draft.proposal_payload : null;
     var q = ownFigureQuestion(pp && typeof pp === "object" ? pp.price_warnings : null, act);
     if (!q) return true;
-    return !!(typeof ask === "function" && ask(q));
+    var a = typeof ask === "function" ? ask(q) : false;
+    if (a && typeof a.then === "function") return Promise.resolve(a).then(function (v) { return !!v; });
+    return !!a;
+  }
+
+  /** THE QUESTION AS A POP-UP. Hanz, 2026-09-28: "the warning should be a pop up" -- the Treadwell
+   *  dialog (TW.confirmDanger, amber) in place of the browser's grey confirm box, on all three ways
+   *  out. Returns the `ask` confirmOwnFigures and confirmSavedCopy take. The title and the button say
+   *  what happens, so the message is the question's sentences without its "— download anyway?" tail.
+   *  A page with no confirmDanger (a harness's bare TW) falls back to window.confirm with the whole
+   *  question, as before. Resolves true for "… anyway", false for Cancel, Escape or the backdrop. */
+  var OWN_FIGURE_DIALOG = {
+    send: { title: "Send with a different price?", go: "Send anyway" },
+    download: { title: "Download with a different price?", go: "Download anyway" },
+    file: { title: "File with a different price?", go: "File anyway" },
+  };
+  function ownFigureDialog(tw, act) {
+    var d = OWN_FIGURE_DIALOG[act] || OWN_FIGURE_DIALOG.send;
+    return function (q) {
+      if (tw && typeof tw.confirmDanger === "function") {
+        var s = String(q == null ? "" : q);
+        var cut = s.lastIndexOf(" — ");
+        var msg = (cut >= 0 ? s.slice(0, cut) : s).split(".\n").join(". ") + ".";
+        return tw.confirmDanger({ tone: "warn", icon: "warning", title: d.title, message: msg,
+                                  cancelText: "Cancel", confirmText: d.go });
+      }
+      return typeof window !== "undefined" && typeof window.confirm === "function" ? window.confirm(q) : false;
+    };
+  }
+
+  /** A line put back on the estimate's figure: `text` with its first dollar figure -- the one he
+   *  typed, which is what makes a line moneyOff -- replaced by the dollar figure in `amount`, every
+   *  other word kept. "Add $9,999 – Rubber base" with the amount "Add $4,757" reads "Add $4,757 –
+   *  Rubber base": only the figure moves, so the words around it are never doubled. What the editor's
+   *  "Use the estimate" button stores, through the same capture as the figure typed by hand. The text
+   *  comes back unchanged when either has no figure. */
+  function withEstimateFigure(text, amount) {
+    var s = String(text == null ? "" : text);
+    var fig = /\$\s?[\d,]+(?:\.\d+)?/;
+    var est = fig.exec(String(amount == null ? "" : amount));
+    var m = fig.exec(s);
+    if (!est || !m) return s;
+    return s.slice(0, m.index) + est[0] + s.slice(m.index + m[0].length);
   }
 
   /** THE CHECK, ASKED OF THE COPY THAT IS BUILT: Download and To Dropbox.
@@ -662,11 +706,18 @@
     var none = { go: false, failed: true, version: "" };
     return Promise.resolve(tw.flushState()).then(function (saved) {
       if (!saved) return none;
-      if (!tw.getDraftId()) return { go: confirmOwnFigures(tw.getState(), act, ask), failed: false, version: "" };
+      // The answer is awaited: the pop-up answers with a promise (ownFigureDialog).
+      if (!tw.getDraftId()) {
+        return Promise.resolve(confirmOwnFigures(tw.getState(), act, ask)).then(function (go) {
+          return { go: go, failed: false, version: "" };
+        });
+      }
       return Promise.resolve(tw.readServerRow()).then(function (row) {
         if (!row || !row.data || typeof row.data !== "object") return none;
-        return { go: confirmOwnFigures(row.data, act, ask), failed: false,
-                 version: typeof row.version === "string" ? row.version : "" };
+        var version = typeof row.version === "string" ? row.version : "";
+        return Promise.resolve(confirmOwnFigures(row.data, act, ask)).then(function (go) {
+          return { go: go, failed: false, version: version };
+        });
       });
     });
   }
@@ -781,7 +832,8 @@
     usd: usd, tabFigures: tabFigures, baseDesc: baseDesc, applyBasePick: applyBasePick,
     draftBasePhrase: draftBasePhrase,
     ownFigureQuestion: ownFigureQuestion, confirmOwnFigures: confirmOwnFigures,
-    confirmSavedCopy: confirmSavedCopy,
+    confirmSavedCopy: confirmSavedCopy, ownFigureDialog: ownFigureDialog,
+    withEstimateFigure: withEstimateFigure,
     altFlooringPhrase: altFlooringPhrase,
     LEVEL_LEFT: LEVEL_LEFT, LEVEL_HANG: LEVEL_HANG, INDENT_STEP: INDENT_STEP, INDENT_MAX: INDENT_MAX,
     HEADING_KEYS: HEADING_KEYS, cleanLineProps: cleanLineProps, lineDefault: lineDefault,
