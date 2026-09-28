@@ -287,6 +287,17 @@ function harness(opts) {
     fn({ target: { value: newVal } });
   }
 
+  // The PROPOSAL's read of the same two answers: the closure inside snapshotLumpSumsToState,
+  // grabbed verbatim (the function around it needs the whole totals engine) and bound to the same
+  // lifted helpers the fan-out above uses, so it reads each tab's flags exactly where they live.
+  const taxFlagsFor = (() => {
+    const m = /const taxFlagsFor = (\(id\) => \{[\s\S]*?\n  \});/.exec(SRC);
+    if (!m) throw new Error("snapshotLumpSumsToState's taxFlagsFor moved -- rewrite this harness");
+    const names = ["layoutIdFor", "JOB_FLAG_LAYOUTS", "txAddr", "jobFlagAddrFor", "HF"];
+    return new Function(...names, "return " + m[1] + ";")(
+      deps.layoutIdFor, VOCAB.JOB_FLAG_LAYOUTS, deps.txAddr, deps.jobFlagAddrFor, HF);
+  })();
+
   return {
     state, cellValues, sheetCache, tabs, hfCalls, hfValues, setStateCalls, alerts, shown,
     refreshCalls, remodelCalls: deps.remodelCalls, copyTab, typeInto,
@@ -294,6 +305,7 @@ function harness(opts) {
     jobFlagKindFor: deps.jobFlagKindFor, applyJobFlags: deps.applyJobFlags,
     applyJobFlag: deps.applyJobFlag, canonicalTarget: deps.canonicalTarget,
     hfAt: (s, a) => HF.getValue(s, a),
+    taxFlagsFor,
   };
 }
 
@@ -596,6 +608,28 @@ out.flagAddr = VOCAB.JOB_FLAG_ADDR;
     changed: changed, changedOnSecondOpen: again,
     written: h.cellValues,
     copyEngine: h.hfAt("Copy1", "B6"),
+  };
+}
+
+// ── 15. the PROPOSAL reads the same two answers, per tab ────────────────────
+// Hanz, 2026-09-25: "Remodel Tax should be triggered by remodel tax in the estimate form. Taxable
+// is where base bid and other options are taxable or not." snapshotLumpSumsToState hands the
+// proposal each priced tab's Taxable? / Remodel Tax? answer, read the way the sheet's own tax
+// cells read them: sales tax unless Taxable? says "no", remodel tax only when Remodel Tax? says
+// "yes". A tab with no flag block answers nothing, and the proposal falls back to its figures.
+{
+  const shipped = harness();                                   // the template's own Yes / No
+  const flipped = harness({ cellValues: { "Epoxy!B6": "No", "Epoxy!D6": " YES " } });
+  const copy = harness({ cellValues: { "Copy1!B6": "no" },
+                         tabCopies: [{ id: "Copy1", source: "Epoxy", role: "epoxy" }] });
+  const gyp = harness({ cellValues: { [VOCAB.GYP_BASE + "!B8"]: "No", [VOCAB.GYP_BASE + "!D8"]: "Yes" } });
+  out.proposalFlags = {
+    shipped: shipped.taxFlagsFor("Epoxy"),
+    flipped: flipped.taxFlagsFor("Epoxy"),
+    copy: copy.taxFlagsFor("Copy1"),
+    copySource: copy.taxFlagsFor("Epoxy"),
+    gyp: gyp.taxFlagsFor(VOCAB.GYP_BASE),
+    noBlock: shipped.taxFlagsFor("Takeoff"),
   };
 }
 

@@ -61,6 +61,18 @@ const MOVED = liftDecl("priceMovedSinceGenerate",
 const PAINT = liftDecl("paintLumpSum",
   "It is the row that shows an estimator the price before they send it.");
 
+// The pre-generate card's figure: three statements inside showPreGenerate, which is hundreds of
+// lines of page the rest of this file does not need. Lifted VERBATIM, from its payload read to the
+// #rv-lump write, and evaluated with every binding it names — so the second card is held to the
+// same figure as the first.
+const RV_LUMP = (function () {
+  const start = SRC.indexOf("const _rvPp = ");
+  const write = SRC.indexOf('document.getElementById("rv-lump").textContent', start);
+  if (start < 0 || write < 0) gone("the #rv-lump card", "It is the price the pre-generate card shows.");
+  const end = SRC.indexOf(";", write);
+  return SRC.slice(start, end + 1);
+})();
+
 // The mode decider is an anonymous async IIFE, so it is anchored on its own heading comment
 // rather than a name. Losing the anchor must be loud: the decider is what keeps a priced-out
 // project away from its stale downloads.
@@ -85,10 +97,17 @@ const priceMoved = new Function("st", "money",
   '"use strict"; ' + MOVED.body);
 const paint = new Function("TW", "document", "money",
   '"use strict"; ' + PAINT.body);
+const rvLump = new Function("TW", "state", "document", "money",
+  '"use strict"; ' + RV_LUMP);
 
+// `composedHere` and `location` belong to the page's DOOR, which runs first: a draft whose document
+// is not current is sent through the Proposal step before any of the choices below are made. That
+// branch is driven end to end in files-door-harness.js; here every scenario has just come back
+// through it (`composedHere` true), so what is under test is the choice AFTER the door. `location`
+// is bound to a stub that records a navigation, so a scenario that reached the door would show it.
 const runDecider = new AsyncFunction(
-  "TW", "filesMode", "viewFiles", "showPostGenerate", "showPreGenerate", "emptyEl",
-  "priceMovedSinceGenerate",
+  "TW", "filesMode", "composedHere", "location", "viewFiles", "showPostGenerate",
+  "showPreGenerate", "emptyEl", "priceMovedSinceGenerate",
   '"use strict";\n' + DECIDER);
 
 // ── the smallest DOM this touches ───────────────────────────────────────────
@@ -157,6 +176,8 @@ async function decide(st, opts) {
   await runDecider(
     Object.assign({ draftReady: Promise.resolve() }, store(st)),
     !!(opts || {}).filesMode,
+    true,
+    { replace: (u) => calls.push("door " + u), assign: (u) => calls.push("door " + u) },
     () => calls.push("viewFiles"),
     () => calls.push("showPostGenerate"),
     () => calls.push("showPreGenerate"),
@@ -206,6 +227,20 @@ out.row = {
   // THE STAMP WINS. Both are present here and they disagree on purpose: the figure shown has to
   // be the one inside the files, never the draft's newer idea of it.
   showsTheStamp: { text: stamped.val.textContent, hidden: stamped.row.hidden },
+  // THE SAVED DOCUMENT WINS OVER BOTH. Downloads build from the saved payload, so its Total is the
+  // figure in the files; the stamp and the display are from an earlier moment. Hanz's staging case:
+  // base moved to $14,224 by the pricing sidebar, stamp and display still $7,447.
+  payloadWins: (function () {
+    const p = painted({ proposal_payload: { values: { total_formatted: "$14,224" } },
+                        generated_lump_sum: "$7,447", lump_sum_display: "$7,447.00" });
+    return { text: p.val.textContent, hidden: p.row.hidden };
+  })(),
+  // A payload whose Total is not money does not blank the row: the older figures still stand.
+  unreadablePayloadFallsBack: (function () {
+    const p = painted({ proposal_payload: { values: { total_formatted: "—" } },
+                        generated_lump_sum: "$7,447" });
+    return { text: p.val.textContent, hidden: p.row.hidden };
+  })(),
   fallsBackToDisplay: (function () {
     const p = painted({ lump_sum_display: "$36,700.00" });
     return { text: p.val.textContent, hidden: p.row.hidden };
@@ -230,6 +265,31 @@ out.row = {
     try { painted({ generated_lump_sum: "$1.00" }, []); return true; }
     catch (e) { return String(e); }
   })(),
+};
+
+// ── F. BOTH CARDS NAME THE TAX-INCLUSIVE TOTAL, WHATEVER tax_layout SAYS ────
+// Hanz, 2026-09-28: exempt is the estimate sheet's answer, and no layout prints a price without the
+// taxes the sheet kept in it. #573's "Tax exempt" did, and these cards followed it onto the pre-tax
+// base_bid_formatted. That is gone: the card is the document's total_formatted, the tax-inclusive
+// bid, as it was before #573 — on a sheet with no tax it IS the one figure printed. A payload that
+// still carries tax_layout "EXEMPT" beside a base below its Total (#573's own shape) shows the Total.
+const STORED_EXEMPT = { tax_layout: "EXEMPT", tax_inclusion: "EXEMPT",
+                        base_bid_formatted: "$6,767", total_formatted: "$6,839" };
+const preCard = (st) => {
+  const d = doc(["rv-lump"]);
+  rvLump(store(st), st, d, money);
+  return d.nodes["rv-lump"].textContent;
+};
+out.storedExempt = {
+  card: (function () {
+    const p = painted({ proposal_payload: { values: STORED_EXEMPT },
+                        generated_lump_sum: "$6,839", lump_sum_display: "$6,839.00" });
+    return { text: p.val.textContent, hidden: p.row.hidden };
+  })(),
+  preCard: preCard({ proposal_payload: { values: STORED_EXEMPT }, lump_sum_display: "$6,839.00" }),
+  // Broken out: the base below the Total is real and its rows print; the card is still the Total.
+  preCardBrokenOut: preCard({ proposal_payload: { values: { tax_layout: "BROKEN_OUT", total_formatted: "$6,839",
+                                                            base_bid_formatted: "$6,767" } } }),
 };
 
 process.stdout.write(JSON.stringify(out));

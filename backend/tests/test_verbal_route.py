@@ -66,7 +66,7 @@ def test_what_the_estimator_said_comes_back_as_fields_and_evidence(cli):
     cli["reply"] = {
         "project_name": "Blue Valley West High School",
         "city": "Overland Park", "state": "ks", "bid_date": "2026-09-03",
-        "conditions": {"hard_bid": {"value": True, "quote": "It's a hard bid"}},
+        "conditions": {"remodel_tax": {"value": True, "quote": "It's a hard bid"}},
         "missing": ["contact_email"],
         "question": "Who is the contact?",
     }
@@ -76,9 +76,9 @@ def test_what_the_estimator_said_comes_back_as_fields_and_evidence(cli):
     assert body["ok"] is True
     assert body["fields"]["project_name"] == "Blue Valley West High School"
     assert body["fields"]["state"] == "KS"
-    assert body["conditions"]["hard_bid"]["value"] is True
-    assert "hard bid" in body["conditions"]["hard_bid"]["context"]
-    assert "quote" not in body["conditions"]["hard_bid"], (
+    assert body["conditions"]["remodel_tax"]["value"] is True
+    assert "hard bid" in body["conditions"]["remodel_tax"]["context"]
+    assert "quote" not in body["conditions"]["remodel_tax"], (
         "the model's crop is still on the wire, so the panel can print it instead of the "
         "transcript's own words")
     assert body["missing"] == ["contact_email"]
@@ -215,11 +215,12 @@ def test_the_gate_runs_on_the_transcript_that_was_actually_sent(cli):
     So the truncation happens once, before either, and both use the result."""
     filler = "blah " * 3000                     # exactly the cap, so what follows is cut off
     cli["reply"] = {"conditions": {
-        "hard_bid": {"value": True, "quote": "it is a hard bid"}}}
+        "remodel_tax": {"value": True, "quote": "it is a hard bid"}}}
     r = _post(filler + "and it is a hard bid.")
     body = r.json()
     assert body["conditions"] == {}, (
         "a quote from past the cap was accepted, so the gate is reading a different transcript "
         "from the one the model was given")
-    assert body["unsupported"] == ["hard_bid"]
-    assert "hard_bid" in body["missing"], "the estimator is not asked about the flag that was lost"
+    assert body["unsupported"] == ["remodel_tax"]
+    assert "remodel_tax" in body["missing"], (
+        "the estimator is not asked about the flag that was lost")

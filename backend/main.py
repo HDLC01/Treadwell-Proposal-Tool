@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import base64
 import calendar
+import copy
 import hashlib
 import io
 import json
@@ -83,8 +84,10 @@ import markup
 import nav_access
 import notifications
 import pdf_writer
+import price_rules
 import pricing
 import profiles
+import proposal_fonts
 import proposal_writer
 import pull_window
 import reference_tax
@@ -593,6 +596,12 @@ class GenerateOut(BaseModel):
     docx_download_url: str
     pdf_download_url: str       # on-demand LibreOffice render of the .docx
     totals: Dict[str, Any]     # Python-computed preview totals
+    # Set only by the one render (/api/draft/{id}/documents, `_documents_out`); empty on
+    # /api/generate. `render_id` is `_render_key` — which payload, templates and code built these
+    # files — and Send carries it back as `document_render_id`. `document_total` is the Total the
+    # rendered payload was filled with, for the Files page's card.
+    render_id: str = ""
+    document_total: str = ""
     # NO cover_letter_placeholders HERE, DELIBERATELY. It lived on this model for
     # one day and broke five different ways, every one of them the same sentence:
     # the warning's input was not the input the document is built from.
@@ -630,6 +639,22 @@ def _cache_file(content: bytes, filename: str, content_type: str) -> str:
         "content_type": content_type,
     }
     return token
+
+
+def _entry_pdf(entry: Dict[str, Any]) -> bytes:
+    """The PDF of a cached .docx entry, rendered once and then the SAME bytes for every reader.
+
+    LibreOffice stamps a creation time into every PDF, so two renders of one .docx are never
+    byte-equal. The Files page's PDF button, Send and the customer's PDF all read through here, so
+    whichever renders first decides the bytes and the others reuse them. `setdefault` rather than a
+    plain write: when two requests render the same entry at once, the second keeps the first one's
+    bytes instead of replacing them after the first has already been handed out."""
+    pdf = entry.get("_pdf")
+    if pdf is None:
+        with _PDF_RENDER_SEM:   # cap concurrent LibreOffice renders
+            rendered = pdf_writer.docx_to_pdf(entry["content"])
+        pdf = entry.setdefault("_pdf", rendered)
+    return pdf
 
 
 # ─── Work-type detection rule ─────────────────────────────────────────
@@ -1610,6 +1635,18 @@ class PortalPublishIn(BaseModel):
     # creates the row and before it resolves who to notify.
     notify_add: list[str] = Field(default_factory=list)
     notify_mute: list[str] = Field(default_factory=list)
+    # The `render_id` of the document the estimator last DOWNLOADED on the Files page, or None
+    # when they downloaded nothing there. When present, the send is refused unless the document
+    # it is about to freeze has that same key — same saved payload, same templates, same code —
+    # so the customer is never frozen a document other than the one that was checked. Optional on
+    # the same contract as the fields above: an older page sends nothing and sends as before.
+    document_render_id: Optional[str] = None
+    # When the server last stored the draft, as the Files page read it for Send's checks (the
+    # draft row's `updated_at`, from GET /api/draft/{id}). When present, the send is refused unless
+    # the draft being frozen is still that save: the page checks one copy, then waits (encoding
+    # attachments, the network), and a colleague's save landing in between was what the customer
+    # got. Optional on the same contract: an older page sends nothing and sends as before.
+    draft_version: Optional[str] = None
 
 
 def _clean_estimator(raw: str) -> str:
@@ -1784,6 +1821,22 @@ def api_portal_publish(draft_id: str, request: Request,
     # but still BEFORE the snapshot below — a 400 must never mint a revision.
     body["assigned_estimator"] = _clean_estimator(payload.assigned_estimator if payload else "")
 
+    # THE DRAFT THE PAGE CHECKED, OR NOTHING. The Files page compares its copy with the server's,
+    # then waits (encoding attachments, the network) before this request arrives, and `row` above
+    # is read only now. A colleague's Continue landing in that gap was frozen and emailed while the
+    # page showed its own version and said Sent (review of fix 4, round 2). The page hands back the
+    # `updated_at` of the save it checked; a draft stored again since is refused, before anything
+    # is rendered or written. Server-side marks that are not saves (an assignment, Won, the files
+    # being built) do not move `updated_at`, and none of them changes the document.
+    _version = (payload.draft_version or "").strip() if payload else ""
+    if _version and _version != str(row.get("updated_at") or ""):
+        log.warning("publish refused for draft %s: it was saved again after the page checked it "
+                    "(checked %s, now %s)", draft_id, _version, row.get("updated_at"))
+        return JSONResponse(status_code=409, content={
+            "ok": False, "code": "document_changed",
+            "error": "Not sent — this proposal was saved again after this page checked it (from "
+                     "another page or computer). Reload this page, check the files, then send."})
+
     # THE LAST VALIDATION, and the only one about the SNAPSHOT rather than the request — so it
     # runs after the recipient/permission errors (they are more specific and they predate this)
     # and before the first byte is written.
@@ -1817,18 +1870,103 @@ def api_portal_publish(draft_id: str, request: Request,
         # of a JSON dump. `code` + `page` + `document` are for the new page to act on.
         return JSONResponse(status_code=409, content=refusal)
 
+    # THE DOCUMENT THIS SEND WILL FREEZE, built BEFORE anything is written. From the same saved
+    # `proposal_payload` the snapshot below pins, through the same `_render_documents` the Files
+    # page's Download buttons use, under the same key. A snapshot with no payload has no document
+    # at all; it is sent exactly as before, and the customer's PDF route answers "not generated
+    # yet" for it.
+    #
+    # A document that will not build refuses the send rather than going out without one: the
+    # customer would open a link to a PDF that fails, and the estimator would have read "Sent".
+    _pp = (row.get("data") or {}).get("proposal_payload")
+    sent_docs: Optional[Dict[str, Any]] = None
+    sent_pdf = b""
+    if isinstance(_pp, dict) and _pp.get("values"):
+        try:
+            sent_docs = _render_documents(_pp, request, want_estimate=False)
+            sent_pdf = _entry_pdf(sent_docs["docx"])
+        except HTTPException as exc:
+            log.warning("publish refused for draft %s: its document did not build: %s",
+                        draft_id, exc.detail)
+            raise HTTPException(exc.status_code, "Not sent — the proposal document could not be "
+                                                 "built: %s" % exc.detail) from exc
+        except Exception as exc:  # noqa: BLE001 — re-raised as a named refusal
+            log.exception("publish refused for draft %s: its PDF did not render", draft_id)
+            raise HTTPException(500, "Not sent — the proposal PDF could not be built. "
+                                     "Please try again.") from exc
+
+    # AND IT MUST BE THE DOCUMENT THE ESTIMATOR DOWNLOADED, when they downloaded one. The Files
+    # page hands back the `render_id` of its last Download; the send is refused unless the document
+    # it is about to freeze has that same key. It differs when the saved payload changed after the
+    # download (a colleague's Continue from another computer, or an older copy of the page written
+    # back over it), or a template or the code did (a deploy in between). Each of those used to
+    # freeze a document nobody had looked at, silently. Checked after the render so the refusal
+    # costs nothing to act on: the download it asks for is already cached.
+    _checked = (payload.document_render_id or "").strip() if payload else ""
+    if _checked and (sent_docs is None or sent_docs.get("render_id") != _checked):
+        log.warning("publish refused for draft %s: the document changed after it was downloaded "
+                    "(downloaded %s, would send %s)", draft_id, _checked[:12],
+                    ((sent_docs or {}).get("render_id") or "no document")[:12])
+        return JSONResponse(status_code=409, content={
+            "ok": False, "code": "document_changed",
+            "error": "Not sent — this proposal changed after you downloaded it (a change was "
+                     "saved from another page or computer, or the tool was updated). Download it "
+                     "again, check it, then send."})
+
     # Snapshot what we are about to send, AFTER every validation above — a 400 must
     # never mint a revision. The portal pins the customer's view to this exact
     # snapshot, so from here on editing the draft cannot change a proposal that has
     # already gone out, and the previous version stays readable.
     rev_no = drafts.create_revision(draft_id, row.get("data") or {}, by)
     body["revision_no"] = rev_no
+    if sent_docs is not None:
+        # AND THE FILES THE CUSTOMER WILL OPEN, stored against that revision, so their PDF never
+        # changes again whatever later code or template changes land. A revision that cannot keep
+        # its document is not sent: it would fall back to a re-render, which is exactly what this
+        # table exists to end.
+        #
+        # EXCEPT ON A DATABASE WITHOUT THE TABLE. Until its DDL is applied there, every revision
+        # on it is re-rendered anyway (`_stored_revision_documents` reads a missing table as "none
+        # stored"), so refusing would only stop every send with a "try again" no retry can fix,
+        # and a code-before-DDL deploy would take sending down. It goes out exactly as it did
+        # before this table existed, logged as an error; the backfill freezes it once the table
+        # exists, because it is then that customer's pinned revision with no stored row.
+        try:
+            drafts.store_revision_documents(draft_id, rev_no,
+                                            payload_sha256=sent_docs["payload_sha256"],
+                                            docx=sent_docs["docx"]["content"], pdf=sent_pdf,
+                                            created_by=by)
+        except Exception as exc:  # noqa: BLE001 — re-raised as a named refusal
+            if _table_missing(exc):
+                log.error("draft_revision_documents is MISSING on this database: revision %s of "
+                          "%s is sent without a frozen PDF. Apply its DDL (supabase_schema.sql 6b "
+                          "/ staging/schema_pg.sql), then run backfill_revision_documents.py. %s",
+                          rev_no, draft_id, exc)
+                sent_docs = None     # nothing stored, so nothing for a portal failure to undo
+            else:
+                log.exception("publish refused for draft %s: revision %s's document could not "
+                              "be stored", draft_id, rev_no)
+                try:
+                    drafts.delete_revision(draft_id, rev_no)
+                except Exception as exc2:  # noqa: BLE001 — a stranded snapshot is cosmetic
+                    log.warning("could not roll back revision %s of %s: %s", rev_no, draft_id,
+                                exc2)
+                raise HTTPException(503, "Not sent — the proposal PDF could not be saved, so "
+                                         "nothing went to the customer. Please try again.") from exc
     try:
         out = _portal("/api/admin/publish", "POST", body)
     except Exception:
         # The send failed, so this snapshot represents nothing that was sent. Drop
         # it: the portal pins by explicit number, so an orphan would never be shown
         # to anyone, but leaving one would still misreport the history to staff.
+        # Its stored document goes with it, the same way and for the same reason; a row left behind
+        # is replaced by the next send that reuses the number (store_revision_documents).
+        if sent_docs is not None:
+            try:
+                drafts.delete_revision_documents(draft_id, rev_no)
+            except Exception as exc:  # noqa: BLE001 — replaced on the next send of this number
+                log.warning("could not roll back revision %s of %s's document: %s",
+                            rev_no, draft_id, exc)
         try:
             drafts.delete_revision(draft_id, rev_no)
         except Exception as exc:  # noqa: BLE001 — a stranded snapshot is cosmetic
@@ -1836,6 +1974,17 @@ def api_portal_publish(draft_id: str, request: Request,
         raise
     drafts.log_event(draft_id, by, "published", {"revision_no": rev_no,
                                                  "recipients": len(emails) or None})
+    # The draft's own copy of who owns the follow-up, which pre-fills the Files page's picker on the
+    # next send. The page used to record it with the save it makes after a send, but a browser's
+    # save no longer changes a server-owned key (api_save_draft), so it is written here, where the
+    # choice was made. A failure is only logged: the proposal has already gone to the customer.
+    _prev_est = str((row.get("data") or {}).get("assigned_estimator") or "").strip().lower()
+    if body["assigned_estimator"] != _prev_est:
+        try:
+            drafts.set_assigned_estimator(draft_id, body["assigned_estimator"], by)
+        except Exception as exc:  # noqa: BLE001 — the send itself succeeded
+            log.warning("publish: could not record %s's estimator on the draft: %s",
+                        draft_id, exc)
     if isinstance(out, dict):
         out.setdefault("revision_no", rev_no)
         # What the customer will actually see, echoed back so the sending page can check it
@@ -2036,13 +2185,14 @@ def api_draft_revisions(draft_id: str) -> Dict[str, Any]:
 
 @app.post("/api/draft/{draft_id}/revisions/{revision_no}/files")
 def api_draft_revision_files(draft_id: str, revision_no: int, request: Request) -> GenerateOut:
-    """Regenerate the estimate + proposal for an OLD revision.
+    """The estimate + proposal for an OLD revision.
 
-    Nothing is stored per revision except the inputs, so the documents are rebuilt
-    from that snapshot's `proposal_payload` on demand — the same in-memory path a
-    fresh generate takes, returning the same short-lived download tokens. This is
-    what makes "what did we send them in March" answerable with a real file rather
-    than a number in a list."""
+    The proposal .docx and PDF are the ones the customer was SENT, when that revision stored them
+    (every send since draft_revision_documents existed): the same bytes the portal serves them.
+    The workbook is never stored, so it is rebuilt from the snapshot's `proposal_payload`, and so
+    are all three files for a revision sent before the table existed — the same in-memory path a
+    fresh generate takes, returning the same short-lived download tokens. This is what makes "what
+    did we send them in March" answerable with a real file rather than a number in a list."""
     draft_id = _safe_id(draft_id)
     rev = drafts.get_revision(draft_id, revision_no)
     if not rev:
@@ -2052,6 +2202,7 @@ def api_draft_revision_files(draft_id: str, revision_no: int, request: Request) 
         # Sent before the estimator ever generated documents — there is nothing to
         # replay, and inventing defaults would produce a file we never sent.
         raise HTTPException(422, "That revision has no generated documents to rebuild.")
+    stored = _stored_revision_documents(draft_id, revision_no)
     # persist=False: this replays a payload frozen at revision `revision_no`. Writing it back
     # would push an old revision's pricing over the live draft.
     #
@@ -2062,7 +2213,18 @@ def api_draft_revision_files(draft_id: str, revision_no: int, request: Request) 
     # regenerated can raise before the xlsx and docx are cached (see _generate) and 500 the whole
     # revision download — and it is the right trade: a refusal is reportable, a silently
     # incomplete contract is not.
-    return _generate(GenerateIn(**payload), request, persist=False)
+    out = _documents_out(_render_documents(payload, request, want_estimate=True))
+    if stored is None:
+        return out
+    # The sent files replace the rebuilt ones. The PDF is memoised on the entry, so the PDF link
+    # hands back the stored bytes and never re-renders them.
+    old = _FILE_CACHE.get(out.docx_download_url.rsplit("/", 1)[-1]) or {}
+    tok = _cache_file(stored["docx"],
+                      old.get("filename") or "proposal.docx",
+                      "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+    _FILE_CACHE[tok]["_pdf"] = stored["pdf"]
+    return out.model_copy(update={"docx_download_url": f"/api/file/{tok}",
+                                  "pdf_download_url": f"/api/file/{tok}/pdf"})
 
 
 @app.get("/api/portal/pipeline")
@@ -2885,45 +3047,46 @@ def api_admin_proposal_pdf(draft_id: str, request: Request,
     `revision_no` renders the snapshot that was SENT rather than the live draft.
     The portal passes the revision it pinned, so the PDF a customer downloads can
     never disagree with the prices on the page above it — which is what happened
-    while both were rendered from whatever the estimator had most recently saved."""
+    while both were rendered from whatever the estimator had most recently saved.
+
+    AND A REVISION SENT WITH STORED FILES IS NOT RENDERED AT ALL. Its PDF is the one frozen at
+    send time (draft_revision_documents), so no later code or template change can alter what that
+    customer was sent. Only a revision sent before the table existed is re-rendered, as before."""
     import hmac
     presented = request.headers.get("x-service-token") or ""
     token_env = (os.environ.get("SERVICE_TOKEN") or "").strip()
     if not token_env or not hmac.compare_digest(presented, token_env):
         raise HTTPException(401, "unauthorized")
+    stored = None
     if revision_no is not None:
         rev = drafts.get_revision(draft_id, revision_no)
         if not rev:
             raise HTTPException(404, "Revision not found")
         row = {"data": rev.get("data") or {}}
+        stored = _stored_revision_documents(draft_id, revision_no)
     else:
         row = drafts.load_draft(draft_id)
     if not row:
         raise HTTPException(404, "Draft not found")
-    pp = (row.get("data") or {}).get("proposal_payload")
-    if not (isinstance(pp, dict) and pp.get("values")):
-        raise HTTPException(422, "This proposal hasn't been generated yet.")
-    # persist=False — this is the CUSTOMER'S on-demand PDF render. It re-runs the payload frozen
-    # in the (possibly pinned, possibly superseded) revision; a customer opening an old link must
-    # never rewrite the estimator's draft.
-    # THE LETTER IS PART OF THIS PDF. It used to be skipped so a cover-letter fill failure could
-    # not 500 the render the portal waits on; now the letter is page 1 of the proposal, and a
-    # customer whose PDF quietly lost the page the estimator approved is the worse of the two
-    # failures. Builds it, and refuses loudly if it cannot.
-    # want_estimate=False — the next line reads the DOCX token and this handler never touches the
-    # workbook. Building one cost the customer ~3.2s of the ~3.5s they spent on a spinner, to
-    # produce a file cached under a token that was never requested and expired unread.
-    out = _generate(GenerateIn(**pp), request, persist=False, want_estimate=False)
-    tok = (out.docx_download_url or "").rsplit("/", 1)[-1]
-    entry = _FILE_CACHE.get(tok)
-    if not entry:
-        raise HTTPException(500, "Could not build the proposal document.")
-    pdf_bytes = entry.get("_pdf")
-    if pdf_bytes is None:
+    if stored is not None:
+        pdf_bytes = stored["pdf"]
+    else:
+        pp = (row.get("data") or {}).get("proposal_payload")
+        if not (isinstance(pp, dict) and pp.get("values")):
+            raise HTTPException(422, "This proposal hasn't been generated yet.")
+        # Through the ONE render (persist=False inside it) — this is the CUSTOMER'S on-demand PDF.
+        # It re-runs the payload frozen in the (possibly pinned, possibly superseded) revision; a
+        # customer opening an old link must never rewrite the estimator's draft.
+        # THE LETTER IS PART OF THIS PDF. It used to be skipped so a cover-letter fill failure
+        # could not 500 the render the portal waits on; now the letter is page 1 of the proposal,
+        # and a customer whose PDF quietly lost the page the estimator approved is the worse of
+        # the two failures. Builds it, and refuses loudly if it cannot.
+        # want_estimate=False — this handler reads the .docx and never touches the workbook.
+        # Building one cost the customer ~3.2s of the ~3.5s they spent on a spinner, to produce a
+        # file cached under a token that was never requested and expired unread.
+        docs = _render_documents(pp, request, want_estimate=False)
         try:
-            with _PDF_RENDER_SEM:
-                pdf_bytes = pdf_writer.docx_to_pdf(entry["content"])
-            entry["_pdf"] = pdf_bytes
+            pdf_bytes = _entry_pdf(docs["docx"])
         except Exception as exc:  # noqa: BLE001
             log.exception("Portal PDF render failed")
             raise HTTPException(500, "Failed to render the proposal PDF.") from exc
@@ -4200,15 +4363,30 @@ def _build_options(rooms_in: list, values: Dict[str, Any], work_type: str = "epo
     The base bid is rendered by {{#single_bid}}, so it is EXCLUDED here. Each input
     option (from the estimate/proposal side) is
     {name, is_base, base_total, deduct_amount, price_mode, show, option_desc,
-     base_desc, system_desc, bid:{total, sales_tax, remodel}, notes_auto, notes_manual}.
+     base_desc, system_desc, bid:{total, sales_tax, remodel, taxable?, remodel_on?},
+     notes_auto, notes_manual}.
+
+    AN OPTION IS ALWAYS ONE LINE. Hanz, 2026-09-28: "Options should only be total amount, cannot
+    be broken out. Only the base bid would be broken out or one line." (He had picked an itemised
+    shape from previews on 2026-09-25; it printed for three days.) The TAX control's Broken out
+    is the base bid's alone, so nothing here ever returns a tax row, and no layout reaches here.
+
     A shown option (show != False, positive total) renders in one of two modes:
-      • total      → price_formatted "$8,310"; desc "<system> as described above (<tax>)"
+      • total      → the option's OWN tab decides its tax wording (price_rules.tax_rule, the
+                     same rule as the base, asked for one line): "$8,310 – <system> as described
+                     above (<tax>)" — its whole tax-inclusive total, and "(tax exempt)" when its
+                     own tab's Taxable? and Remodel Tax? both say No. Never a backed-out figure.
       • add/deduct → diff = option_total − base_total (both tax-inclusive), and the
                      line SELF-LABELS by the sign (Will's spec):
                        diff < 0  → "Deduct ($3,200)" + "VE for <option>, in lieu of <base>."
                        diff ≥ 0  → "Add $2,232" + "<option>" (a costlier option is an ADD,
                                    not a silent fall-back to its own total as before)
-    Returns [] when there are no shown options (the block then strips)."""
+                     A difference of two tax-inclusive totals has no tax of its own to show,
+                     so this line carries no tax wording.
+    Each option also reports `amount` and `tax_phrase` — the parts an edited line's markers are
+    resolved against — and `candidates`, the other figures an old-shape line could have frozen in
+    (its tax-inclusive total; the editor offers migrateLine the same list). Returns [] when there
+    are no shown options (the block then strips)."""
     def num(x) -> float:
         try:
             return float(str(x).replace(",", "").replace("$", "").strip() or 0)
@@ -4227,8 +4405,13 @@ def _build_options(rooms_in: list, values: Dict[str, Any], work_type: str = "epo
         if total <= 0:                                # un-snapshotted / empty sheet
             continue
         option_desc = str(r.get("option_desc") or r.get("system_desc") or r.get("name") or "").strip()
+        rule = price_rules.tax_rule(total, bid.get("sales_tax"), bid.get("remodel"),
+                                    taxable=bid.get("taxable"),
+                                    remodel_on=bid.get("remodel_on"), layout=price_rules.ONE_LINE)
         diff = total - num(r.get("base_total"))       # option − base (Will's formula)
 
+        tax_phrase = ""
+        candidates: list = []
         if str(r.get("price_mode")) == "deduct":
             # Auto add/deduct by sign; the Add/Deduct word rides INSIDE the amount
             # island so the docx row reads "Add $2,232 – <label>" / "Deduct ($3,200) – <label>".
@@ -4240,11 +4423,11 @@ def _build_options(rooms_in: list, values: Dict[str, Any], work_type: str = "epo
                 price_formatted = "Add " + _fmt_usd(diff)
                 price_desc = option_desc or noun
         else:                                         # total mode: the option's own price
-            remodel = num(bid.get("remodel"))
-            tax_phrase = ("(Remodel Tax AND material sales tax INCLUDED)"
-                          if remodel > 0 else "(material sales tax INCLUDED)")
-            price_formatted = _fmt_usd(total)
-            price_desc = f"{option_desc or noun} as described above {tax_phrase}"
+            tax_phrase = rule["phrase"]
+            price_formatted = _fmt_usd(rule["base_cents"] / 100)
+            price_desc = f"{option_desc or noun} as described above" + (
+                f" {tax_phrase}" if tax_phrase else "")
+            candidates = [_fmt_usd(rule["total_cents"] / 100)]
 
         lines = [str(n).strip()
                  for n in (list(r.get("notes_auto") or []) + list(r.get("notes_manual") or []))
@@ -4258,6 +4441,13 @@ def _build_options(rooms_in: list, values: Dict[str, Any], work_type: str = "epo
             "price_formatted": price_formatted,
             "price_desc": price_desc,
             "notes_joined": "\n".join(lines),
+            # What an edited line's ⟦amount⟧ / ⟦tax⟧ resolve to today.
+            "amount": price_formatted,
+            "tax_phrase": tax_phrase,
+            # The other figures a line re-worded before the markers could have frozen in: the
+            # option's tax-inclusive total, which on one line IS the amount. Empty for an
+            # Add/Deduct line — the editor offers migrateLine the same list.
+            "candidates": candidates,
         })
     return out
 
@@ -4351,6 +4541,12 @@ def _sanitize_paragraph_overrides(overrides_in: list) -> list:
             pid = int(pid)
         except (TypeError, ValueError):
             continue
+        # A REMOVED LINE travels as nothing but its id and the flag (proposal_writer
+        # `paragraph_removable` decides whether it may go). Strictly True: an entry saved before the
+        # key existed, `text: ""` included, keeps meaning "print this paragraph empty".
+        if o.get("removed") is True:
+            out.append({"id": pid, "removed": True})
+            continue
         # PARAGRAPH properties — the bullet toggle and the indent controls. Delegated to
         # proposal_writer.sanitize_para_props rather than re-validated here: unlike `runs`
         # (whose duplication is deliberate, see above), the meaning of a paragraph property is
@@ -4414,6 +4610,11 @@ def _sanitize_paragraph_overrides(overrides_in: list) -> list:
         entry_t: Dict[str, Any] = {"id": pid, "text": str(text)}
         if para:
             entry_t["para"] = para
+        # A LINE HE EMPTIED AND KEPT (proposal-review.js lineKeptEmpty): the writer prints it as
+        # his own empty line and never folds it into the blank lines above the Options heading.
+        # Strictly True, so a `text: ""` saved before the key existed means what it meant.
+        if o.get("kept") is True:
+            entry_t["kept"] = True
         out.append(entry_t)
     return out
 
@@ -4562,7 +4763,9 @@ _PRICE_OVERRIDE_FIELD_MAXLEN = 500
 
 
 def _sanitize_price_overrides(pov_in) -> dict:
-    out: Dict[str, Any] = {"options": {}, "manual": [], "single_bid": {}, "rows": {}, "alternate": {}, "lines": {}}
+    out: Dict[str, Any] = {"options": {}, "manual": [], "single_bid": {}, "rows": {}, "alternate": {},
+                           "lines": {}, "lines2": {}, "before": {}, "after": {},
+                           "line_props": {}, "before_props": {}, "after_props": {}}
     if not isinstance(pov_in, dict):
         return out
 
@@ -4640,7 +4843,73 @@ def _sanitize_price_overrides(pov_in) -> dict:
             s = str(v)
             if s.strip():
                 out["lines"][str(k)[:120]] = s[:_PRICE_OVERRIDE_FIELD_MAXLEN]
+
+    # How many blank lines sit directly above the Options heading: a real count the editor draws as
+    # real lines and the writer prints as real paragraphs (proposal_writer._apply_options_gap).
+    # Kept only when the draft states one, so a payload saved before the key existed stays exactly
+    # as it was and prints the writer's default of 2 -- the gap the editor has always shown.
+    if "options_gap" in pov_in and pov_in.get("options_gap") is not None:
+        v = pov_in.get("options_gap")
+        if not isinstance(v, (dict, list)):
+            out["options_gap"] = proposal_writer.options_gap_count(v)
+
+    # THE LIVE SHAPE (2026-09-25). `lines2` holds the same whole-line text, but with today's amount
+    # and tax wording stored as price_rules.AMOUNT_MARK / TAX_MARK wherever the estimator left them
+    # untouched, so the document puts TODAY's figures back (price_rules.resolve_line) instead of
+    # printing the ones that were on screen the day he typed. A key here wins over the same key in
+    # `lines`, which is only ever a line saved before this shape existed and still prints verbatim.
+    lines2_in = pov_in.get("lines2")
+    if isinstance(lines2_in, dict):
+        for k, v in list(lines2_in.items())[:_PRICE_OVERRIDES_MAX]:
+            if v is None or isinstance(v, (dict, list, bool)):
+                continue
+            s = str(v)
+            if s.strip():
+                out["lines2"][str(k)[:120]] = s[:_PRICE_OVERRIDE_FIELD_MAXLEN]
+
+    # THE LINES TYPED ABOVE AND BELOW A PRICE LINE, each its own paragraph: {<line key>: [text]}.
+    # Blank strings are KEPT — a blank line he added is a blank line he wants printed.
+    for bucket in ("before", "after"):
+        b_in = pov_in.get(bucket)
+        if not isinstance(b_in, dict):
+            continue
+        for k, v in list(b_in.items())[:_PRICE_OVERRIDES_MAX]:
+            if not isinstance(v, list):
+                continue
+            rows = [str(x)[:_PRICE_OVERRIDE_FIELD_MAXLEN] for x in v[:_PRICE_EXTRA_LINES_MAX]
+                    if x is not None and not isinstance(x, (dict, list, bool))]
+            if rows:
+                out[bucket][str(k)[:120]] = rows
+
+    # THE BULLET, LEVEL AND INDENT the estimator set on a price line with the ribbon (2026-09-26,
+    # Hanz: "fix the indents and the bullets now"): `line_props[key]` for the line itself, and
+    # `before_props[key]` / `after_props[key]` — one entry per line in `before[key]` / `after[key]`,
+    # in the same order, null where he set nothing. Each is price_rules.clean_line_props'd; what
+    # the line prints is price_rules.resolve_line_props (the REBID default under his override). A
+    # draft saved before these keys existed has none of them and prints the default.
+    lp_in = pov_in.get("line_props")
+    if isinstance(lp_in, dict):
+        for k, v in list(lp_in.items())[:_PRICE_OVERRIDES_MAX]:
+            c = price_rules.clean_line_props(v)
+            if c:
+                out["line_props"][str(k)[:120]] = c
+    for bucket in ("before_props", "after_props"):
+        b_in = pov_in.get(bucket)
+        if not isinstance(b_in, dict):
+            continue
+        for k, v in list(b_in.items())[:_PRICE_OVERRIDES_MAX]:
+            if not isinstance(v, list):
+                continue
+            rows = [price_rules.clean_line_props(x) or None for x in v[:_PRICE_EXTRA_LINES_MAX]]
+            if any(rows):
+                out[bucket][str(k)[:120]] = rows
     return out
+
+
+# How many lines may be typed above or below one price line. Generous — a price box is a fixed
+# frame on the printed page and runs out of room long before this — but bounded, because every
+# entry is a cloned paragraph in the customer's document.
+_PRICE_EXTRA_LINES_MAX = 20
 
 
 _DEFAULT_EXCLUSIONS = (
@@ -4963,8 +5232,24 @@ def api_proposal_template(request: Request, work_type: str = "epoxy", audience: 
     # Original templates differ on whether the value after a WORK label colon
     # inherits bold. Normalize preview metadata to the generated DOCX.
     proposal_writer._normalize_work_label_formatting(d)
+    # The PRICE rows Kyle tucked into the margin print their square in the column (the REBID
+    # layout); the render does this to the pristine template before anything else, so the editor
+    # reads the same paragraph properties — the same `para` its bullet / indent presses are
+    # measured against and the writer applies them to. No paragraph is added or removed.
+    proposal_writer._untuck_price_bullets(d)
+    # The same tag fill_proposal puts on the Options heading before Phase 0, so
+    # `paragraph_removable` answers here exactly as it will at generate time.
+    proposal_writer._mark_options_headings(d)
+    # The Options heading(s) the writer spaces from above. Only a FREE one (the GC files, where the
+    # heading is a plain paragraph) is a block the editor renders itself; a {{#has_options}}
+    # heading is the editor's own #options-heading. Held as a set so the walk below keeps the
+    # same element proxies alive and membership is by element identity.
+    _options_heads = set(proposal_writer.options_heading_paragraphs(d))
+    options_heading_ids = []
     blocks = []
     for idx, kind, p_elem, in_block, text, txbx_idx in proposal_writer.iter_editable_blocks(d):
+        if in_block is None and p_elem in _options_heads:
+            options_heading_ids.append(idx)
         p = Paragraph(p_elem, d)
         style_name = None
         try:
@@ -4989,9 +5274,9 @@ def api_proposal_template(request: Request, work_type: str = "epoxy", audience: 
             # `para.bullet` / `para.marker` do that; this stays as the fallback for a level whose
             # definition cannot be read.
             "list": proposal_writer._para_is_list(p_elem),
-            # PRICE-list rows (numId=3) get their bullets stripped at generate
-            # time (_flatten_price_bullets); flag them so the on-screen editor
-            # renders them flush/bullet-less to match the generated .docx.
+            # PRICE-list rows (numId=3). They print their bullet since the REBID layout
+            # (2026-09-25; they were flattened before), and the ribbon's indent moves one between
+            # the list's two levels, square and "o" (proposal_writer._para_price_list).
             "price_flat": proposal_writer._para_price_list(p_elem),
             # The paragraph's own Word properties: {bullet, indent (twips), locked}. The
             # toolbar cannot render a bullet toggle without knowing whether the bullet is
@@ -5002,8 +5287,17 @@ def api_proposal_template(request: Request, work_type: str = "epoxy", audience: 
             # `list` (which is True for the contract clauses too).
             "para": proposal_writer.para_props(d, p_elem),
             "runs": proposal_writer._block_runs(p_elem, p),
+            # What the writer does with this paragraph's SIZE, so the editor shows it at the size
+            # it prints (the per-box shrink itself comes from POST /api/proposal-fit):
+            #   hp         — the paragraph mark's size (`_fit_hp`): how tall it prints EMPTY,
+            #                which the shrink never scales;
+            #   typed_hp   — the size words typed into it print at (`typed_run_size`), and
+            #   typed_sized  whether that run carries a size of its own;
+            #   removable  — may a `removed` override take it out (`paragraph_removable`).
+            "fit": _block_fit(d, p_elem, in_block, txbx_idx),
         })
 
+    geometry = proposal_writer.template_geometry(d)
     payload = {
         "work_type": work_type,
         "audience": audience,
@@ -5014,8 +5308,13 @@ def api_proposal_template(request: Request, work_type: str = "epoxy", audience: 
         # second (see `template_versions`); 0 = no legacy stamp is. The editor's
         # restore guards apply the same rule the backend's `_template_version_accepts` does.
         "template_version_legacy_floor_s": template_versions.legacy_floor_s(template_path),
-        "geometry": proposal_writer.template_geometry(d),
+        "geometry": geometry,
         "blocks": blocks,
+        # Ids of the free-paragraph Options heading(s), so the editor can draw the blank lines
+        # above it (price_overrides.options_gap) exactly where the writer prints them. Top-level
+        # rather than a per-block field: the block shape, which _BLOCK_SCHEMA_VERSION pins, is
+        # unchanged, and a browser holding an older body simply draws no gap lines on GC.
+        "options_heading_ids": options_heading_ids,
     }
     # Built through JSONResponse so the cached bytes ARE the bytes this
     # endpoint has always sent — same encoder, same separators, same
@@ -5077,6 +5376,40 @@ def api_proposal_template_media(request: Request, work_type: str = "epoxy",
     return Response(content=data, media_type=ctype, headers=headers)
 
 
+@app.get("/api/proposal-font/{name}")
+def api_proposal_font(request: Request, name: str) -> Response:
+    """The proposal typeface (Zetta Serif) for the editor, to signed-in staff only.
+
+    Licensed, so it lives behind the login: this is an /api route, and `_auth_gate` refuses an
+    unauthenticated request with a 401 before it gets here. `name` is a public name looked up in
+    proposal_fonts.FONTS; it is never joined onto a path, and anything else is a 404. See
+    proposal_fonts.py for the why, and frontend/js/proposal-fonts.js for the page that asks."""
+    hit = proposal_fonts.load(name)
+    if hit is None:
+        raise HTTPException(404, "No such font")
+    data, etag = hit
+    headers = {"ETag": etag, "Cache-Control": proposal_fonts.CACHE_CONTROL,
+               "X-Content-Type-Options": "nosniff"}
+    if etag in (request.headers.get("if-none-match") or ""):
+        return Response(status_code=304, headers=headers)
+    return Response(content=data, media_type=proposal_fonts.MEDIA_TYPE, headers=headers)
+
+
+@app.on_event("startup")
+def _report_proposal_font() -> None:
+    """Say ONCE, loudly, when the licensed proposal font is not on this box.
+
+    Neither git nor the image carries Zetta Serif any more; compose mounts it from the host. A
+    host without the files gets an EMPTY mount from Docker, boots, passes /healthz and prints every
+    PDF in a substitute font, so this log line is the only thing on the box that says so. A log
+    line and nothing more: never a failed boot, and never /healthz, which must stay cheap and must
+    not flap (the Basisboard outage). See proposal_fonts.py."""
+    try:
+        proposal_fonts.report_once(log)
+    except Exception as exc:  # noqa: BLE001 — a font check is never worth a failed boot
+        log.warning("Proposal font check failed: %s", exc)
+
+
 # Block-model SCHEMA version for /api/proposal-template's ETag. The template
 # ETag is otherwise keyed on the .docx content (and, since 2026-09-25, on the
 # builders' source via _BLOCK_CODE_VERSION below), so a CODE change to the block
@@ -5094,7 +5427,33 @@ def api_proposal_template_media(request: Request, work_type: str = "epoxy",
 # ("1." to "27." for the Terms and Conditions clauses). Stale is WRONG ON SCREEN, not merely
 # degraded: with no `marker` the renderer falls back to `list`, which is what drew a red square
 # in front of all 27 numbered clauses in the first place.
-_BLOCK_SCHEMA_VERSION = "7"
+# v8 (2026-09-26, the bullets branch): the REBID price box. `para` gained `level` (w:ilvl) and
+# `glyph` ("o" for the hollow sub-bullet), and the PRICE rows' `para.bullet` / `indent` are read off
+# the UNTUCKED template (proposal_writer._untuck_price_bullets): the Direct files' rows used to
+# report indent 0. Stale is WRONG ON SCREEN: the editor would draw those rows flush while the
+# document prints them one bullet in, and measure its indent presses from the old 0.
+#
+# v8 (2026-09-26, the editor-parity branch): `fit` {hp, typed_hp, typed_sized, removable}, the sizes
+# the writer's override path and overflow shrink give each paragraph, so the editor shows every line
+# at the size the PDF prints it and knows which emptied lines Backspace may remove. A v7 body has no
+# `fit`: the editor would show typed words at the page's 9pt and offer no line removal.
+#
+# v9 (2026-09-26, the editor release): both v8s at once. Each branch bumped 7 -> 8 on its own, so a
+# browser holding EITHER branch's v8 body (staging served neither, but a local or review build did)
+# would replay it as current, missing the other half: no `fit`, or `para` measured off the tucked
+# template.
+_BLOCK_SCHEMA_VERSION = "9"
+
+
+def _block_fit(d, p_elem, in_block, txbx_idx) -> Dict[str, Any]:
+    """One block's `fit` record for /api/proposal-template (see the block dict)."""
+    typed_hp, typed_sized = proposal_writer.typed_run_size(d, p_elem)
+    return {
+        "hp": proposal_writer._fit_hp(p_elem),
+        "typed_hp": typed_hp,
+        "typed_sized": typed_sized,
+        "removable": proposal_writer.paragraph_removable(d, p_elem, in_block, txbx_idx),
+    }
 
 # The code that BUILDS a block response, fingerprinted once at import. The ETag used to move on
 # every deploy only by accident, because the template version was the file's mtime; now that it is
@@ -5266,13 +5625,85 @@ def api_coverletter_template_media(request: Request, work_type: str = "epoxy",
 
 @app.post("/api/generate", response_model=GenerateOut)
 def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
-    """The HTTP route. A real browser generate MAY write its values back to the draft."""
+    """The HTTP route. A real browser generate MAY write its values back to the draft.
+
+    Since the Files page renders a SAVED payload through /api/draft/{id}/documents, this route's
+    one browser caller is that page's rebuild for a draft with no payload at all, which builds its
+    body from the draft's own fields at click time. That is a composition, so it is signed as the
+    caller here, exactly as the browser signs the payloads it composes itself."""
+    _sign_as_caller(payload.values, request)
     return _generate(payload, request, persist=True)
+
+
+@app.post("/api/proposal-fit")
+def api_proposal_fit(payload: GenerateIn, request: Request) -> Dict[str, Any]:
+    """The size every text box of this payload PRINTS at, for the Proposal step's editor.
+
+    Hanz, 2026-09-26: "please follow the text size of what is written in the proposal PDFs. Its
+    different on the editor and on the output". The writer shrinks an overflowing box's runs down
+    to a 0.60 floor; the editor ran its own browser-measured ladder that stopped at 0.75 and then
+    clipped. So the editor now sends the body Continue would build and shows what comes back.
+
+    Answered by the REAL fill (`_generate` with `fit_report`), not by a second estimate: which
+    paragraphs a box holds at print time depends on region expansion, the frame padding
+    `_pad_frame_boxes` keys on note text, the estimator's box overrides and the hand-sized
+    paragraphs the shrink leaves alone, and a copy of that in the browser would drift from it.
+    Writes nothing: no file, no event, no draft (see `_generate`).
+
+    `boxes`: one `{id, scale, default_hp, exempt, at_floor, content_pt, usable_pt}` per text box
+    (`proposal_writer._shrink_overflowing_text_boxes`), `id` being the box id in
+    /api/proposal-template's geometry. `template_version` is the file the answer was computed on,
+    so the editor can drop an answer that arrives after a base flip switched the template."""
+    report: list = []
+    _generate(payload, request, persist=False, want_estimate=False, fit_report=report)
+    template_path = proposal_writer.pick_template(payload.work_type, payload.audience or None)
+    return {
+        "work_type": payload.work_type,
+        "audience": payload.audience,
+        "template_version": _template_proposal_version(template_path),
+        "boxes": report,
+    }
+
+
+def _name_from_email(email: str) -> str:
+    """"kyle.smith@wetreadwell.com" -> "Kyle Smith". The signature line's last resort."""
+    return email.split("@")[0].replace(".", " ").replace("_", " ").title()
+
+
+def _sign_as_caller(values: Dict[str, Any], request: Request) -> None:
+    """Fill a blank estimator name and email from the signed-in caller — at COMPOSE time only.
+
+    It lived inside `_generate` until 2026-09-25, and that made every render depend on who was
+    signed in (see the signature block there). A composition is the one moment "who is doing this"
+    is the right answer: the browser does it in computeTokenValues, and `api_generate` does it
+    here for the body it is handed. Nothing that re-renders a saved payload calls this."""
+    if not str(values.get("estimator_name") or "").strip():
+        nm = ""
+        try:
+            claims = supabase_client.verify_token_claims(request.headers.get("authorization"))
+            meta = claims.get("user_metadata") or {}
+            nm = (meta.get("full_name") or meta.get("name") or "").strip()
+        except Exception:  # noqa: BLE001
+            nm = ""
+        if not nm:
+            em = (_user_email(request) or "").strip()
+            if em:
+                nm = _name_from_email(em)
+        if nm:
+            values["estimator_name"] = nm
+    # The signature's contact line: the letter printed a literal "[ESTIMATOR EMAIL]" at the
+    # customer until 2026-09-09. `cover_letter_writer` turns it into the whole line and drops the
+    # separator when there is no address.
+    if not str(values.get("estimator_email") or "").strip():
+        em = (_user_email(request) or "").strip()
+        if em:
+            values["estimator_email"] = em
 
 
 def _generate(payload: GenerateIn, request: Request, *,
               persist: bool = True,
-              want_estimate: bool = True) -> GenerateOut:
+              want_estimate: bool = True,
+              fit_report: Optional[list] = None) -> Optional[GenerateOut]:
     """Final generate: fill xlsx + docx, return download links (xlsx / docx /
     on-demand pdf). The estimator downloads + files them manually.
 
@@ -5304,7 +5735,13 @@ def _generate(payload: GenerateIn, request: Request, *,
     bytes (see the cover-letter block below), so "the proposal without the letter" is a document
     missing its first page, and every one of those three callers wants that page. The cost is a
     wider blast radius, stated plainly: a cover-letter template that cannot fill now refuses the
-    customer PDF and the Dropbox filing too, where before it refused only a live generate."""
+    customer PDF and the Dropbox filing too, where before it refused only a live generate.
+
+    `fit_report` (a list) is POST /api/proposal-fit's question: "what size does each text box of
+    THIS payload print at". The proposal is filled exactly as for a download, the writer's overflow
+    shrink records its decisions into the list, and the function returns None right after the
+    fill: no cover letter, no file cache, no audit event, no draft write. Pass it only with
+    persist=False and want_estimate=False, which is how the route calls it."""
     values = payload.values
     _ensure_state_name(values)
     # payload.work_type is authoritative; make sure it's in `values` so the
@@ -5320,7 +5757,10 @@ def _generate(payload: GenerateIn, request: Request, *,
     if not str(values.get("base_bid_formatted") or "").strip():
         values["base_bid_formatted"] = (values.get("lump_sum_formatted")
                                         or values.get("total_formatted") or "")
-    if not str(values.get("material_tax_formatted") or "").strip():
+    # Asked BEFORE the backfill below: a payload that never said what the sales tax was has not
+    # said the job is exempt (price_rules.tax_rule reads an unknown figure as taxable).
+    _sales_known = bool(str(values.get("material_tax_formatted") or "").strip())
+    if not _sales_known:
         values["material_tax_formatted"] = "$0.00"
 
     # Site-visit phrase (epoxy template uses {{site_visit_phrase}}): "per site visit
@@ -5351,55 +5791,55 @@ def _generate(payload: GenerateIn, request: Request, *,
         except (TypeError, ValueError):
             pass
 
-    # PRICE layout. "Sales tax broken out" itemizes Base + Material Sales Tax +
-    # Remodel + Total and drops the "(… INCLUDED)" label. Default ("INCLUDED") and
-    # "Tax exempt" ask for a single all-in line — which some templates CANNOT give,
-    # see below.
-    _incl = str(values.get("tax_inclusion") or "INCLUDED").strip().upper()
-    _exempt = _incl in ("EXCLUDED", "EXEMPT", "NOT INCLUDED", "NONE", "NO", "N/A")
-    _broken = _incl in ("BROKEN_OUT", "BROKEN OUT", "BROKENOUT", "ITEMIZED", "BREAKOUT")
-    _tax_breakout = _broken
-    _remodel_lines = list(payload.remodel or []) if _broken else []
-
-    # WHICH TAX ROWS THIS PROPOSAL WILL ACTUALLY PRINT. Two sources, one question:
-    # the estimator's tax mode (which fills or strips the {{#tax_breakout}} /
-    # {{#remodel}} regions) and the TEMPLATE'S OWN SHAPE, because the three GC files
-    # and the Gyp file author those rows as plain paragraphs that no flag can strip
-    # (proposal_writer.template_free_tax_rows reads that off the file — it is
-    # deliberately not keyed on the audience or the work type; the old
-    # `work_type == "gyp"` special case here was this same fact spelled as a string,
-    # which is exactly why GC never got it).
+    # THE PRICE BLOCK, BY THE RULE (price_rules.tax_rule — the editor runs the same rule, and
+    # test_price_rules_parity.py runs both). Hanz, 2026-09-25: the estimate sheet decides WHETHER
+    # there is tax — Taxable? for material sales tax, Remodel Tax? for remodel tax — and the TAX
+    # control decides only the layout, "One line" or "Broken out". A sheet with no tax is tax
+    # exempt, and tax exempt is one line whatever the layout (Hanz, 2026-09-28; the rule does it,
+    # so a payload frozen with Broken out on such a sheet prints "(tax exempt)" and no Total row
+    # under a base line of the same figure). So the base line, the
+    # parenthetical and which rows print all come out of one call, on every template: the Direct
+    # files' {{#tax_breakout}} / {{#remodel}} regions and the GC / Gyp files' plain paragraphs are
+    # told the same thing, and a row whose tax does not apply is taken out of either kind
+    # (fill_proposal `price_rows`). No row prints "$0 – Remodel Tax" on a job with no remodel.
+    #
+    # Computed server-side every time rather than trusting the payload's own base bid: a replayed
+    # payload was frozen elsewhere, and the rule is what makes the printed rows add up.
     _free_rows = proposal_writer.template_free_tax_rows(payload.work_type, payload.audience)
-    _prints_material = _free_rows["material"] or _broken
-    _prints_remodel = _free_rows["remodel"] or bool(_remodel_lines)
-
-    # The base line makes no "(… INCLUDED)" claim when the tax rows print their own
-    # figures right underneath it: that sentence and that itemisation contradict each
-    # other, and the itemisation is the half that has to sum. "(tax exempt)" prints on
-    # an exempt job whatever the layout — it describes the tax TREATMENT, not a row.
-    values["base_tax_phrase"] = (
-        "(tax exempt)" if _exempt
-        else "" if (_prints_material or _prints_remodel)
-        else "(Remodel Tax AND material sales tax INCLUDED)" if payload.remodel
-        else "(material sales tax INCLUDED)"
-    )
-
-    # THE RULE, in ONE place: the base line equals the Total minus whatever tax lines
-    # actually print. It is what makes the printed figures add up in BOTH layouts —
-    # a Direct template that prints no tax rows puts the whole tax-inclusive bid on
-    # the base line (Kyle, 2026-09-08: the on-screen proposal was showing $6,182 under
-    # a $6,307 estimate), and a GC template that always prints them puts the ex-tax
-    # figure there so 6,182 + 125 + 0 = 6,307. Computed server-side in every mode
-    # rather than trusting the payload's own base bid, because the browser cannot know
-    # the shape until the template loads and a replayed payload was frozen elsewhere.
+    _total_v = _parse_usd(values.get("total_formatted")) or 0.0
+    _sales_v = _parse_usd(values.get("material_tax_formatted")) or 0.0
+    _remodel_amt = next((str((r or {}).get("amount_formatted") or "").strip()
+                         for r in (payload.remodel or []) if isinstance(r, dict)
+                         and str((r or {}).get("amount_formatted") or "").strip()), "")
+    _remodel_v = (_parse_usd(values.get("tax_amount_formatted"))
+                  or _parse_usd(_remodel_amt) or 0.0)
+    _taxable = price_rules.flag(values.get("price_taxable"),
+                                (_sales_v > 0) if _sales_known else True)
+    _remodel_on = price_rules.flag(values.get("price_remodel_on"),
+                                   _remodel_v > 0 or bool(_remodel_amt))
+    _layout = price_rules.layout_for(
+        values.get("tax_layout"), values.get("tax_inclusion"),
+        free_rows=bool(_free_rows["material"] or _free_rows["remodel"]),
+        taxable=_taxable, remodel_on=_remodel_on)
+    _rule = price_rules.tax_rule(_total_v, _sales_v, _remodel_v, taxable=_taxable,
+                                 remodel_on=_remodel_on, layout=_layout)
+    # The remodel row's printed amount, spelled the way the page sent it.
+    _remodel_str = (_remodel_amt or str(values.get("tax_amount_formatted") or "").strip()
+                    or _fmt_usd(_remodel_v))
+    if not str(values.get("tax_amount_formatted") or "").strip():
+        values["tax_amount_formatted"] = _remodel_str
+    _remodel_lines = [{"amount_formatted": _remodel_str}] if _rule["remodel"] else []
+    _tax_breakout = bool(_rule["material"] or _rule["total"])
+    _price_rows = {"material": _rule["material"], "remodel": _rule["remodel"],
+                   "total": _rule["total"]}
+    values["base_tax_phrase"] = _rule["phrase"]
+    # The base line equals the Total minus the tax rows that print — in the Total's own money style.
+    # Only the rows that PRINT: a tax the page does not show is still in the price the customer pays.
     _printed_tax = []
-    if _prints_material:
+    if _rule["material"]:
         _printed_tax.append(values.get("material_tax_formatted"))
-    if _prints_remodel:
-        # A free paragraph prints the flat {{tax_amount_formatted}}; the {{#remodel}}
-        # region prints its own row's amount. Read whichever one THIS template uses.
-        _printed_tax.append(values.get("tax_amount_formatted") if _free_rows["remodel"]
-                            else (_remodel_lines[0] or {}).get("amount_formatted"))
+    if _rule["remodel"]:
+        _printed_tax.append(values.get("tax_amount_formatted") if _free_rows["remodel"] else _remodel_str)
     _base_line = _base_bid_less_printed_tax(values.get("total_formatted"), _printed_tax)
     if _base_line is not None:
         values["base_bid_formatted"] = _base_line
@@ -5410,41 +5850,87 @@ def _generate(payload: GenerateIn, request: Request, *,
         a22 = str(payload.cell_values.get("Epoxy!A22") or "").strip()
         values["epoxy_system_name"] = a22 if (a22 and "Options" not in a22) else "Epoxy System"
 
-    # Sign the proposal with the logged-in estimator (the templates' old
-    # hardcoded "Troy Holmes" is now the {{estimator_name}} token). The frontend
-    # sets this from the signed-in user; backfill here so it's never blank or a
-    # raw token if a caller (e.g. "View files") omits it.
+    # Sign the proposal with the estimator THE PAYLOAD names (the templates' old hardcoded
+    # "Troy Holmes" is now the {{estimator_name}} token). The browser writes the name and the
+    # email from the signed-in user when it composes the payload (computeTokenValues), so both
+    # ride the saved draft and every revision snapshot; `api_generate` does the same for the one
+    # caller that composes on the server (`_sign_as_caller`).
+    #
+    # NEVER FROM THIS REQUEST. This used to backfill a blank name and email from whoever was
+    # signed in, which made the document depend on who pressed the button: the estimator's
+    # Download signed a payload with no email as themselves, while the customer's copy of the
+    # SAME pinned payload, rendered server-to-server with nobody signed in, printed no address.
+    # One payload, two documents — and a replay could never reproduce the send. A name missing
+    # beside a present email is derived from THAT email, which is a fact of the payload.
     if not str(values.get("estimator_name") or "").strip():
-        nm = ""
-        try:
-            claims = supabase_client.verify_token_claims(request.headers.get("authorization"))
-            meta = claims.get("user_metadata") or {}
-            nm = (meta.get("full_name") or meta.get("name") or "").strip()
-        except Exception:  # noqa: BLE001
-            nm = ""
-        if not nm:
-            em = (_user_email(request) or "").strip()
-            if em:
-                nm = em.split("@")[0].replace(".", " ").replace("_", " ").title()
-        if nm:
-            values["estimator_name"] = nm
-
-    # The signature's contact line, same idea as the name above it: the letter
-    # printed a literal "[ESTIMATOR EMAIL]" at the customer until 2026-09-09.
-    # The frontend sets this from the signed-in user so it rides the frozen
-    # payload; this backfills a caller that omitted it ("View files", a replay of
-    # a payload older than the token). `cover_letter_writer` turns it into the
-    # whole line and drops the separator when there is no address.
-    if not str(values.get("estimator_email") or "").strip():
-        em = (_user_email(request) or "").strip()
+        em = str(values.get("estimator_email") or "").strip()
         if em:
-            values["estimator_email"] = em
+            values["estimator_name"] = _name_from_email(em)
 
     # Doc-editor per-line DISPLAY overrides for the PRICE section (display TEXT
     # only — never touches cell_values, the .xlsx, or the totals; see
     # _sanitize_price_overrides). Applied to the manual price lines + option lines
     # below, and to the single_bid base amount/tax phrase after the tax layout.
     _pov = _sanitize_price_overrides(payload.price_overrides)
+
+    def _edited_line(key: str, amount: str, phrase: str = "") -> Optional[str]:
+        """The estimator's own text for one whole price line, or None when he left it alone.
+
+        The live shape (`lines2`) is resolved against TODAY's amount and tax wording, so a line he
+        re-worded still follows the estimate; a line saved before that shape existed (`lines`)
+        prints exactly as it was saved."""
+        if key in _pov["lines2"]:
+            return price_rules.resolve_line(_pov["lines2"][key], amount, phrase)
+        return _pov["lines"].get(key) or None
+
+    def _line_para(key: str, pos: Optional[str] = None, index: Optional[int] = None,
+                   text: str = "x") -> dict:
+        """What one PRICE line's bullet prints (Kyle's REBID layout, the estimator's override on
+        top): price_rules.resolve_line_props, the same rule the editor draws with."""
+        return price_rules.resolve_line_props(
+            key, pos, text, price_rules.line_props_for(_pov, key, pos, index))
+
+    def _extra_rows(key: str, where: str) -> list:
+        """The lines typed above (`before`) or below (`after`) one price line, as label-only
+        {{#price_line}} rows: their own paragraphs, cloned from the price row itself, so they
+        print in the price box's own font rather than the document default."""
+        return [{"label": t, "amount_formatted": "", "_typed": True,
+                 "_para": _line_para(key, where, i, t)}
+                for i, t in enumerate(_pov[where].get(key) or [])]
+
+    def _legacy_split(key: str, amount: str, phrase: str = "", candidates=()) -> Optional[tuple]:
+        """A line saved in the OLD shape (`lines`), laid out the way the editor lays it out on load:
+        (the lines typed above it, the price line, the lines typed below it), each exactly as saved
+        — or None: a line in the live shape, no old-shape line, or nothing to lay out (no line
+        break in it). price_rules.split_legacy_line has the rule, with the parts the editor passes
+        migrateLine for the same line (`candidates`: the other figures an old line could have frozen
+        in, the Total for a base or an option line)."""
+        if key in _pov["lines2"] or not _pov["lines"].get(key):
+            return None
+        return price_rules.split_legacy_line(_pov["lines"][key], amount, phrase, candidates)
+
+    def _split_rows(key: str, where: str, texts: list) -> list:
+        """The lines an old-shape line typed above (`before`) or below (`after`) itself, as the
+        same label-only rows `_extra_rows` makes. The editor makes them the line's `before` /
+        `after` when it has none there yet (so a stored bullet for that position is theirs); with
+        some there already they are extra, and print the default."""
+        has_own = bool(_pov[where].get(key))
+        return [{"label": t, "amount_formatted": "", "_typed": True,
+                 "_para": _line_para(key, where, None if has_own else i, t)}
+                for i, t in enumerate(texts)]
+
+    def _priced(key: str, amount: str, label: str, phrase: str = "", candidates=()) -> list:
+        """One price line as {{#price_line}} rows: the lines above it, the line, the lines below."""
+        own = _edited_line(key, amount, phrase)
+        split = _legacy_split(key, amount, phrase, candidates) if own is not None else None
+        above = below = []
+        if split:
+            above, below = _split_rows(key, "before", split[0]), _split_rows(key, "after", split[2])
+            own = split[1]
+        row = ({"label": own, "amount_formatted": ""} if own is not None
+               else {"label": label, "amount_formatted": amount})
+        row["_para"] = _line_para(key, text=own if own is not None else label)
+        return _extra_rows(key, "before") + above + [row] + below + _extra_rows(key, "after")
 
     # Structured PRICE option lines -> repeatable {{#price_line}} rows.
     price_line_dicts = []
@@ -5455,22 +5941,22 @@ def _generate(payload: GenerateIn, request: Request, *,
         except (TypeError, ValueError):
             amt = 0.0
         if label and amt:
-            row = {"label": label, "amount_formatted": _fmt_usd(amt)}
+            _key = "manual:" + str(_i)
             # WHOLE-LINE override for this manual line wins: the estimator rewrote the
             # entire line, so put it in the label and blank the amount (the writer's
             # _strip_leading_separator drops the orphaned " – " and prints it verbatim).
-            _lov = _pov["lines"].get("manual:" + str(_i))
-            if _lov:
-                row = {"label": _lov, "amount_formatted": ""}
-            else:
-                # Legacy per-field override (positional by ORIGINAL price_lines index).
-                _mov = _pov["manual"][_i] if _i < len(_pov["manual"]) else None
-                if _mov:
-                    if _mov.get("label"):
-                        row["label"] = _mov["label"]
-                    if _mov.get("amount"):
-                        row["amount_formatted"] = _mov["amount"]
-            price_line_dicts.append(row)
+            if _key in _pov["lines2"] or _pov["lines"].get(_key):
+                price_line_dicts.extend(_priced(_key, _fmt_usd(amt), label))
+                continue
+            row = {"label": label, "amount_formatted": _fmt_usd(amt), "_para": _line_para(_key)}
+            # Legacy per-field override (positional by ORIGINAL price_lines index).
+            _mov = _pov["manual"][_i] if _i < len(_pov["manual"]) else None
+            if _mov:
+                if _mov.get("label"):
+                    row["label"] = _mov["label"]
+                if _mov.get("amount"):
+                    row["amount_formatted"] = _mov["amount"]
+            price_line_dicts.extend(_extra_rows(_key, "before") + [row] + _extra_rows(_key, "after"))
 
     # Recommended ALTERNATE system -> a 0/1-item {{#alternate}} block + a second
     # estimate tab. Tax-inclusive total; flooring = total − remodel tax.
@@ -5520,7 +6006,17 @@ def _generate(payload: GenerateIn, request: Request, *,
     # so the Direct templates need NO structural change: each option is
     # "$8,310 – <system> as described above (…)" or "($6,000) – Deduct VE … in
     # lieu of <base>". Any per-option notes fold inline. The base bid itself shows
-    # via {{#single_bid}}. (GC/Gyp templates lack {{#price_line}} — Phase 2.)
+    # via {{#single_bid}}. (The GC files have no {{#price_line}}; Gyp's sits under its own
+    # {{#has_options}}.)
+    #
+    # EACH OPTION FOLLOWS ITS OWN TAB (price_rules.tax_rule, the same rule as the base): one line
+    # carrying its total and its own tax wording.
+    #
+    # ALWAYS ONE LINE. Hanz, 2026-09-28: "Options should only be total amount, cannot be broken
+    # out ... Only the base bid would be broken out or one line." Broken out is the base bid's
+    # alone, so an option has no tax rows of its own under any layout, and its figure is its whole
+    # tax-inclusive total: "(tax exempt)" when its own tab has no tax, its own INCLUDED wording
+    # otherwise. The screen's twin is renderOptionLinesPreview in proposal-review.js.
     _options = _build_options(payload.rooms, values, payload.work_type)
     _option_lines = []
     for _o in _options:
@@ -5529,20 +6025,26 @@ def _generate(payload: GenerateIn, request: Request, *,
             _label += " — " + _o["notes_joined"].replace("\n", "; ")
         _amount = _o["price_formatted"]
         _oid = str(_o.get("id") or "")
-        # WHOLE-LINE override wins (whole line in the label, blank amount → the
-        # writer strips the orphaned separator and prints it verbatim).
-        _olov = _pov["lines"].get("option:" + _oid) if _oid else None
-        if _olov:
-            _option_lines.append({"label": _olov, "amount_formatted": ""})
-            continue
-        # Legacy per-field override, keyed by the option's id.
-        _oov = _pov["options"].get(_oid) if _oid else None
-        if _oov:
-            if _oov.get("label"):
-                _label = _oov["label"]
-            if _oov.get("amount"):
-                _amount = _oov["amount"]
-        _option_lines.append({"label": _label, "amount_formatted": _amount})
+        _key = "option:" + _oid
+        if _oid and (_key in _pov["lines2"] or _pov["lines"].get(_key)):
+            # WHOLE-LINE override wins (whole line in the label, blank amount → the
+            # writer strips the orphaned separator and prints it verbatim).
+            # The option's tax-inclusive total, which an old-shape line could have frozen in (the
+            # editor's candidates for it): on one line it IS the amount.
+            _option_lines.extend(_priced(_key, _o.get("amount") or _amount, _label,
+                                         _o.get("tax_phrase") or "", _o.get("candidates") or []))
+        else:
+            # Legacy per-field override, keyed by the option's id.
+            _oov = _pov["options"].get(_oid) if _oid else None
+            if _oov:
+                if _oov.get("label"):
+                    _label = _oov["label"]
+                if _oov.get("amount"):
+                    _amount = _oov["amount"]
+            _option_lines.extend((_extra_rows(_key, "before") if _oid else [])
+                                 + [{"label": _label, "amount_formatted": _amount,
+                                     "_para": _line_para(_key)}]
+                                 + (_extra_rows(_key, "after") if _oid else []))
     # Options first, then the estimator's manual "Add for" price lines.
     price_line_dicts = _option_lines + price_line_dicts
 
@@ -5560,10 +6062,37 @@ def _generate(payload: GenerateIn, request: Request, *,
     for c in (payload.combo_options or [])[:50]:
         if not isinstance(c, dict):
             continue
+        # Which line this is, for its bullet: the page sends the line's key ("combo:epoxy.flooring")
+        # and, for a typed line, where it sits and which one it is. A payload composed before that
+        # carries none of it and gets the default for its kind — a typed line's "o", a money line's
+        # square — which is what an untouched line prints anyway.
+        _ck = str(c.get("key") or "combo:")[:120]
+        _cpos = c.get("pos") if c.get("pos") in ("before", "after") else None
+        _cidx = c.get("idx") if isinstance(c.get("idx"), int) and not isinstance(c.get("idx"), bool) else None
+        if c.get("extra") is True:
+            # A line the estimator typed above or below a combo price line: its own paragraph,
+            # kept exactly as typed — a blank one included, which is the blank line he added.
+            _t = str(c.get("label") or "")
+            _combo_lines.append({"label": _t, "amount_formatted": "", "_typed": True,
+                                 "_para": _line_para(_ck, _cpos or "after", _cidx, _t)})
+            continue
         label = str(c.get("label") or "").strip()
         amount_formatted = str(c.get("amount_formatted") or "").strip()
+        # An OLD-SHAPE combo line: the page composed its label from the old-shape line itself
+        # (`lines`), breaks and all, before the combo lines carried their key — or its key still
+        # holds one. Laid out like every other old-shape line (_legacy_split): the lines round it
+        # print as its typed lines, and only the line itself is the money line.
+        _cs = (price_rules.split_legacy_line(c.get("label"), amount_formatted)
+               if isinstance(c.get("label"), str) and (
+                   not c.get("key") or (_ck not in _pov["lines2"] and _pov["lines"].get(_ck)))
+               else None)
+        if _cs:
+            label = _cs[1].strip()
         if label or amount_formatted:
-            _combo_lines.append({"label": label, "amount_formatted": amount_formatted})
+            _combo_lines.extend(_split_rows(_ck, "before", _cs[0]) if _cs else [])
+            _combo_lines.append({"label": label, "amount_formatted": amount_formatted,
+                                 "_para": _line_para(_ck)})
+            _combo_lines.extend(_split_rows(_ck, "after", _cs[2]) if _cs else [])
     if _combo_lines:
         # The combined single-bid line is suppressed below (single_bid=[]), but
         # the template's "Options:" heading is a {{#has_options}} block that
@@ -5576,7 +6105,15 @@ def _generate(payload: GenerateIn, request: Request, *,
         # there's nothing after the breakout — an empty "Options:" would have
         # nothing to introduce.
         if price_line_dicts:
-            _combo_lines = _combo_lines + [{"label": "Options:", "amount_formatted": ""}]
+            # `_options_heading`: this row IS the Options heading on this layout, so the blank
+            # lines the estimator set above the heading print above it (options_gap). It prints
+            # what the editor shows there -- a renamed heading as renamed, and the lines typed
+            # under it -- because on this layout the template's own heading is gone.
+            _combo_lines = (_combo_lines
+                            + [{"label": _edited_line("heading_options", "") or "Options:",
+                                "amount_formatted": "", "_options_heading": True,
+                                "_para": _line_para("heading_options")}]
+                            + _extra_rows("heading_options", "after"))
         price_line_dicts = _combo_lines + price_line_dicts
 
     # The {{#room}} block is unused now (options ride the price_line block) — strip it.
@@ -5651,25 +6188,100 @@ def _generate(payload: GenerateIn, request: Request, *,
     # in place by proposal_writer._apply_line_overrides via private keys. Gated like
     # the tax rows for base/sales_tax/remodel/total (Direct epoxy/polish/combo);
     # headings + the alternate block apply wherever the template carries them.
-    _lines = _pov["lines"]
-    if _lines:
-        if _rows_ok:
-            if _lines.get("base"):      values["_line_base"] = _lines["base"]
-            if _lines.get("sales_tax"): values["_line_sales_tax"] = _lines["sales_tax"]
-            if _lines.get("remodel"):   values["_line_remodel"] = _lines["remodel"]
-            if _lines.get("total"):
-                # Polish's Total line is the whole-line {{total_label}} token; epoxy/
-                # combo use "{{total_formatted}} – Total" (replaced in place).
-                if str(payload.work_type or "").lower() == "polish":
-                    values["total_label"] = _lines["total"]
-                else:
-                    values["_line_total"] = _lines["total"]
-        if _lines.get("heading_base"):    values["_line_heading_base"] = _lines["heading_base"]
-        if _lines.get("heading_options"): values["_line_heading_options"] = _lines["heading_options"]
-        if _lines.get("alt_name"):        values["_line_alt_name"] = _lines["alt_name"]
-        if _lines.get("alt_flooring"):    values["_line_alt_flooring"] = _lines["alt_flooring"]
-        if _lines.get("alt_remodel"):     values["_line_alt_remodel"] = _lines["alt_remodel"]
-        if _lines.get("alt_total"):       values["_line_alt_total"] = _lines["alt_total"]
+    #
+    # The live shape (`lines2`) is resolved here against the figures the rows above just settled —
+    # the base line's own amount and parenthetical, each tax row's amount, the Total — so a line he
+    # re-worded prints TODAY's money (see _edited_line). The lines typed above and below these rows
+    # ride `_line_extras`, and proposal_writer inserts each as its own paragraph cloned from the
+    # row it sits next to; a row that does not print takes its extra lines with it.
+    _row_parts = {
+        "base": (values.get("base_bid_formatted") or "", values.get("base_tax_phrase") or ""),
+        "sales_tax": (values.get("material_tax_formatted") or "", ""),
+        "remodel": ((_remodel_lines[0].get("amount_formatted") if _remodel_lines else _remodel_str) or "", ""),
+        "total": (values.get("total_formatted") or "", ""),
+        "heading_base": ("", ""), "heading_options": ("", ""),
+        # The ALTERNATE flooring row's tax wording is the TEMPLATE's (price_rules.alt_flooring_phrase:
+        # Epoxy's literal "(material sales tax INCLUDED)", or {{base_tax_phrase}} on Polish and Combo)
+        # — the phrase its ⟦tax⟧ marker resolves to, the one the editor declares on the line too. With
+        # none declared, a keystroke anywhere in the price box stored the line with an empty marker
+        # and the customer's document dropped the wording (review of fix 7, finding 1).
+        "alt_name": ("", ""),
+        "alt_flooring": ("", price_rules.alt_flooring_phrase(
+            proposal_writer.template_alt_flooring_row(payload.work_type, payload.audience)
+            if alternates else "", values.get("base_tax_phrase") or "")),
+        "alt_remodel": ("", ""), "alt_total": ("", ""),
+    }
+    _whole = {k: _edited_line(k, *parts) for k, parts in _row_parts.items()}
+    # An OLD-SHAPE line on one of these rows is laid out the way the editor lays it out on load
+    # (_legacy_split): the row prints the line itself, and the lines typed round it ride `_extras`
+    # below like the ones typed there since. Not the headings: a heading carries no bullet, so a
+    # break in one prints as the blank line it always was.
+    _split = {}
+    for _k, (_amt, _ph) in _row_parts.items():
+        if _k in price_rules.HEADING_LINE_KEYS or _whole[_k] is None:
+            continue
+        _s = _legacy_split(_k, _amt, _ph, [values.get("total_formatted") or ""] if _k == "base" else ())
+        if _s:
+            _split[_k] = _s
+            _whole[_k] = _s[1]
+    # The base line and the "Base Bid" heading print his words only where the editor draws them as
+    # the page's own lines (a {{#single_bid}} template: Epoxy and Combo Direct). On Polish Direct,
+    # GC and Gyp the editor draws the TEMPLATE's paragraph there, so words that rode a base pick in
+    # from an Epoxy tab were printed while the screen showed the computed line, and nothing asked
+    # (review of the 2026-09-26 release). They stay in the draft for a base whose template draws
+    # them. proposal_writer.page_built_lines has the rule; the lines typed round them follow it too.
+    _drawn = proposal_writer.template_page_built_lines(payload.work_type, payload.audience)
+    for _k in ("base", "heading_base"):
+        if not _drawn[_k]:
+            _whole[_k] = None
+    if _rows_ok:
+        if _whole["base"]:      values["_line_base"] = _whole["base"]
+        if _whole["sales_tax"]: values["_line_sales_tax"] = _whole["sales_tax"]
+        if _whole["remodel"]:   values["_line_remodel"] = _whole["remodel"]
+        if _whole["total"]:
+            # Polish's Total line is the whole-line {{total_label}} token; epoxy/
+            # combo use "{{total_formatted}} – Total" (replaced in place).
+            if str(payload.work_type or "").lower() == "polish":
+                values["total_label"] = _whole["total"]
+            else:
+                values["_line_total"] = _whole["total"]
+    if _whole["heading_base"]:    values["_line_heading_base"] = _whole["heading_base"]
+    if _whole["heading_options"]: values["_line_heading_options"] = _whole["heading_options"]
+    if _whole["alt_name"]:        values["_line_alt_name"] = _whole["alt_name"]
+    if _whole["alt_flooring"]:    values["_line_alt_flooring"] = _whole["alt_flooring"]
+    if _whole["alt_remodel"]:     values["_line_alt_remodel"] = _whole["alt_remodel"]
+    if _whole["alt_total"]:       values["_line_alt_total"] = _whole["alt_total"]
+    _extras = {}
+    for _k in ("base", "sales_tax", "remodel", "total", "heading_base", "heading_options",
+               "alt_name", "alt_flooring", "alt_remodel", "alt_total"):
+        if _k in ("base", "sales_tax", "remodel", "total") and not _rows_ok:
+            continue
+        if _k in _drawn and not _drawn[_k]:
+            continue                       # a line the editor does not draw here: see _drawn above
+        # The ALTERNATE rows' typed lines print too: the editor draws them (and makes them, with
+        # Enter), so a line typed under "$30,000 – Total" that reached the screen and not the PDF was
+        # a line the customer never read (review of fix 7, finding 4). They are cloned inside the
+        # {{#alternate}} block, so with no alternate they go with it.
+        _b, _a = price_rules.extras_for(_pov, _k)
+        _spec: Dict[str, Any] = {}
+        # Nearest the row, the lines its old-shape line typed round it (_split, _split_rows).
+        _sb = _split_rows(_k, "before", _split[_k][0]) if _k in _split else []
+        _sa = _split_rows(_k, "after", _split[_k][2]) if _k in _split else []
+        if _b or _a or _sb or _sa:
+            _spec = {"before": _b + [r["label"] for r in _sb],
+                     "after": [r["label"] for r in _sa] + _a,
+                     "before_para": [_line_para(_k, "before", i, t) for i, t in enumerate(_b)]
+                                    + [r["_para"] for r in _sb],
+                     "after_para": [r["_para"] for r in _sa]
+                                   + [_line_para(_k, "after", i, t) for i, t in enumerate(_a)]}
+        # The row's OWN bullet, only where the estimator set one: an untouched template row prints
+        # Kyle's own numbering, untucked (proposal_writer._untuck_price_bullets). The alternate's
+        # name is the exception — the file puts that heading on the PRICE list, and a heading
+        # carries no bullet (price_rules.HEADING_LINE_KEYS).
+        if _k in _pov["line_props"] or _k == "alt_name":
+            _spec["para"] = _line_para(_k)
+        if _spec:
+            _extras[_k] = _spec
 
     # GC additional-phase amount: force the estimator's cell value into the GC
     # Clarifications text ONLY when they changed it off the $4,500 default; else
@@ -5763,6 +6375,12 @@ def _generate(payload: GenerateIn, request: Request, *,
             alternates=alternates,
             systems=systems_arg,
             remodel=_remodel_lines,
+            # WHICH TAX ROWS PRINT, by the rule, on every template: a row whose tax does not apply
+            # is taken out whether the file wraps it in a {{#block}} or authors it as a plain
+            # paragraph (GC, Gyp), and one-line takes out the Total too.
+            price_rows=_price_rows,
+            # The lines typed above and below the base / tax / total rows and the headings.
+            line_extras=_extras,
             rooms=rooms_arg,
             # Base shows via {{#single_bid}} normally; suppressed for the combo
             # breakout (its Option 1/Option 2 lines are the base price).
@@ -5778,12 +6396,23 @@ def _generate(payload: GenerateIn, request: Request, *,
             # Version-guarded above (stale template_version -> dropped).
             paragraph_overrides=_sanitize_paragraph_overrides(_para_overrides),
             box_overrides=_box_overrides,
+            # The blank lines above the Options heading, as the editor drew them (absent = 2).
+            options_gap=_pov.get("options_gap"),
+            # ...and the lines he typed ON that gap, printed above its blank lines (the editor's
+            # typeOnGapLine): price_overrides.before.heading_options.
+            options_gap_typed=_pov["before"].get("heading_options"),
+            # ...each with its own bullet (a typed line on the gap is a heading's, so none by default).
+            options_gap_typed_para=[_line_para("heading_options", "before", i, t) for i, t
+                                    in enumerate(_pov["before"].get("heading_options") or [])],
+            fit_report=fit_report,
         )
     except FileNotFoundError as exc:
         raise HTTPException(500, str(exc)) from exc
     except Exception as exc:
         log.exception("Proposal fill failed")
         raise HTTPException(500, "Failed to generate the proposal. Please try again.") from exc
+    if fit_report is not None:
+        return None
 
     # ── The optional Cover Letter, merged onto the FRONT of the proposal ────
     #
@@ -5993,15 +6622,14 @@ def api_get_file_pdf(token: str) -> Response:
     if not str(entry["filename"]).lower().endswith(".docx"):
         raise HTTPException(400, "Only .docx files can be converted to PDF")
 
-    pdf_bytes = entry.get("_pdf")
-    if pdf_bytes is None:
-        try:
-            with _PDF_RENDER_SEM:   # cap concurrent LibreOffice renders
-                pdf_bytes = pdf_writer.docx_to_pdf(entry["content"])
-        except Exception as exc:  # noqa: BLE001
-            log.exception("PDF conversion failed")
-            raise HTTPException(500, "Failed to render the PDF. Please try again.") from exc
-        entry["_pdf"] = pdf_bytes   # memoize for repeat downloads
+    try:
+        # Memoised on the entry, and shared: a Send of the same saved payload while its render is
+        # still cached reads this entry's PDF too (see _render_documents), so those bytes are the
+        # file sent. Past the cache a Send re-renders the same key: same content, new timestamps.
+        pdf_bytes = _entry_pdf(entry)
+    except Exception as exc:  # noqa: BLE001
+        log.exception("PDF conversion failed")
+        raise HTTPException(500, "Failed to render the PDF. Please try again.") from exc
 
     fname = re.sub(r"\.docx$", ".pdf", str(entry["filename"]), flags=re.IGNORECASE)
     ascii_name = re.sub(r"[^\x20-\x7e]", "_", fname).replace('"', "'")
@@ -6011,6 +6639,252 @@ def api_get_file_pdf(token: str) -> Response:
         media_type="application/pdf",
         headers={"Content-Disposition": disposition},
     )
+
+
+# ─── ONE RENDER: the Files page's downloads, Send, and the customer's PDF ─────────────────────
+#
+# Hanz, 2026-09-25: "Sending out the proposal should be the same PDF from the download button in
+# the last page." It was not, by construction. Download served the files cached under a token
+# persisted in `generate_result` — built from whatever payload the last generate had been handed,
+# alive for up to an hour — while Send pinned the SAVED `proposal_payload` and the portal
+# re-rendered that on demand. Change the texture, the tax mode or a note after a generate, and the
+# estimator checked one document while the customer was sent another.
+#
+# Now there is one path from a saved payload to its files. /api/draft/{id}/documents (the Files
+# page's buttons), /api/portal/publish (Send), /api/admin/proposal-pdf (the customer) and a
+# revision's file links all call `_render_documents` with the payload they were given, keyed by
+# `_render_key`: the payload's hash, the content of every template it fills, and the code that
+# fills them (`_RENDERER_ID`). What that buys, stated exactly, because the first version of this
+# comment claimed more than the code did:
+#
+#   * SAME CONTENT, BY CONSTRUCTION. Two renders under one key are the same document: same
+#     payload, same templates, same code, and nothing read off the request. And a Send is checked
+#     against the key of the Download the estimator pressed (`document_render_id`, see
+#     api_portal_publish): if the saved payload, a template or the code changed in between, the
+#     send is refused and the estimator is asked to download again. So what is frozen is what was
+#     checked, or nothing is sent.
+#   * SAME BYTES, WHILE THE RENDER IS CACHED. LibreOffice stamps a creation time into every PDF and
+#     python-docx one into docProps/core.xml, so two renders of one key are never byte-equal. The
+#     result is memoised here, and `_entry_pdf` memoises the PDF on the .docx entry, so a Send
+#     inside the cache's life hands out the very bytes the Download did. Past it (an hour, 24
+#     other renders, a restart), the Send renders the same key again: same content, new timestamps.
+#
+# In process memory, like _FILE_CACHE. What makes a SENT PDF permanent is draft_revision_documents,
+# not this.
+_RENDER_CACHE: cachetools.TTLCache = cachetools.TTLCache(maxsize=24, ttl=3600)
+_RENDER_LOCKS: Dict[str, threading.Lock] = {}
+_RENDER_LOCKS_GUARD = threading.Lock()
+
+
+def _canonical_sha256(obj: Any) -> str:
+    """sha256 of `obj` as canonical JSON (sorted keys, no whitespace) — the payload's identity."""
+    blob = json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def _renderer_source_id() -> str:
+    """Which CODE renders a document: sha256 over this backend's own Python source.
+
+    Every top-level module, not a hand-kept list of the ones that "affect rendering": a list is a
+    second description of the renderer that drifts the first time somebody moves a helper, and a
+    missed module would let a deploy change a document without changing its key. The price of
+    being broad is small and visible — a deploy landing between a Download and a Send asks the
+    estimator to download again."""
+    h = hashlib.sha256()
+    for p in sorted(Path(__file__).resolve().parent.glob("*.py")):
+        h.update(p.name.encode("utf-8") + b"\0" + p.read_bytes() + b"\0")
+    return h.hexdigest()
+
+
+# Read once, at import. A running process cannot change its own code, so this is the code that
+# rendered every document this process hands out.
+_RENDERER_ID = _renderer_source_id()
+
+
+def _render_key(payload: Dict[str, Any], gi: GenerateIn) -> str:
+    """What decides the document: the payload, the content of every template it fills, and the
+    code that fills them. Also the `render_id` a Download hands the Files page and a Send is
+    checked against."""
+    audience = gi.audience or None
+    parts = [_canonical_sha256(payload), _RENDERER_ID,
+             _template_proposal_version(proposal_writer.pick_template(gi.work_type, audience))]
+    if gi.cover_letter_enabled and cover_letter_writer.has_template(gi.work_type, audience):
+        parts.append(_cover_letter_template_version(gi.work_type, audience))
+    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
+
+
+def _render_lock(key: str) -> threading.Lock:
+    """One lock per payload, so a Download and a Send pressed together render it ONCE."""
+    with _RENDER_LOCKS_GUARD:
+        lock = _RENDER_LOCKS.get(key)
+        if lock is None:
+            if len(_RENDER_LOCKS) >= 256:
+                _RENDER_LOCKS.clear()
+            lock = _RENDER_LOCKS[key] = threading.Lock()
+        return lock
+
+
+def _render_documents(payload: Dict[str, Any], request: Request, *,
+                      want_estimate: bool) -> Dict[str, Any]:
+    """The files for `payload`: `{"docx": entry, "xlsx": entry | None, "payload_sha256", ...}`.
+
+    The entries are _FILE_CACHE-shaped dicts (`content`, `filename`, `content_type`, and a `_pdf`
+    once `_entry_pdf` has rendered one), shared by every caller that renders the same payload.
+
+    Always persist=False: this renders what it is handed and writes nothing back, whoever asks.
+    The payload is deep-copied before `_generate` mutates its values, so the caller's copy — the
+    one `create_revision` is about to pin, on the Send path — is untouched.
+
+    `want_estimate=False` builds no workbook (the customer's PDF and Send read the .docx only). A
+    later caller that wants the workbook gets it added to the SAME entry set, keeping the .docx
+    already handed out, because that .docx may already carry the PDF somebody downloaded."""
+    gi = GenerateIn(**copy.deepcopy(payload))
+    key = _render_key(payload, gi)
+    with _render_lock(key):
+        with _RENDER_LOCKS_GUARD:   # a TTLCache is not safe across threads on its own
+            docs = _RENDER_CACHE.get(key)
+        if docs is None or (want_estimate and docs.get("xlsx") is None):
+            out = _generate(gi, request, persist=False, want_estimate=want_estimate)
+            docx_entry = _FILE_CACHE.get((out.docx_download_url or "").rsplit("/", 1)[-1])
+            if not docx_entry:
+                raise HTTPException(500, "Could not build the proposal document.")
+            xlsx_entry = (_FILE_CACHE.get(out.xlsx_download_url.rsplit("/", 1)[-1])
+                          if out.xlsx_download_url else None)
+            if docs is None:
+                _total = (payload.get("values") or {}).get("total_formatted")
+                docs = {"docx": docx_entry, "xlsx": xlsx_entry,
+                        "work_type": out.work_type, "audience": out.audience,
+                        "totals": out.totals, "payload_sha256": _canonical_sha256(payload),
+                        "render_id": key,
+                        # The Total THIS payload was filled with, for the Files page's card. It is
+                        # the server's copy of the payload that was rendered, which is not always
+                        # the one the page holds (see done.js freshDocuments).
+                        "document_total": _total if isinstance(_total, str) else ""}
+            else:
+                docs["xlsx"] = xlsx_entry
+            with _RENDER_LOCKS_GUARD:
+                _RENDER_CACHE[key] = docs
+    return docs
+
+
+def _cache_entry(entry: Dict[str, Any]) -> str:
+    """A fresh download token for an entry that already exists. Minted per request, so a token
+    _FILE_CACHE has expired can never be what a still-cached render hands out."""
+    token = uuid.uuid4().hex
+    _FILE_CACHE[token] = entry
+    return token
+
+
+def _documents_out(docs: Dict[str, Any]) -> GenerateOut:
+    """`_render_documents`' result as the GenerateOut every download page already reads."""
+    docx_tok = _cache_entry(docs["docx"])
+    xlsx_tok = _cache_entry(docs["xlsx"]) if docs.get("xlsx") else ""
+    return GenerateOut(
+        work_type=docs["work_type"], audience=docs["audience"],
+        xlsx_download_url=f"/api/file/{xlsx_tok}" if xlsx_tok else "",
+        docx_download_url=f"/api/file/{docx_tok}",
+        pdf_download_url=f"/api/file/{docx_tok}/pdf",
+        totals=docs.get("totals") or {},
+        render_id=docs.get("render_id") or "",
+        document_total=docs.get("document_total") or "",
+    )
+
+
+def _table_missing(exc: BaseException) -> bool:
+    """True only for "this table does not exist on this database".
+
+    PGRST205 is PostgREST 12's "not in the schema cache" (prod Supabase, and staging's
+    postgrest v12.2.3); 42P01 is Postgres's own undefined_table, which an older PostgREST passes
+    through. Read off the error's `code`, never its message: a timeout, a 5xx or a dropped
+    connection is a database that HAS the table and failed to answer, and has to be treated as a
+    failure, not as a migration that has not run."""
+    return str(getattr(exc, "code", "") or "") in ("PGRST205", "42P01")
+
+
+def _stored_revision_documents(draft_id: str, revision_no: int) -> Optional[Dict[str, Any]]:
+    """The files revision `revision_no` was SENT with, or None to re-render it.
+
+    None means it was sent before draft_revision_documents existed — or that the table itself does
+    not exist yet on this database (the migration has not reached it), where re-rendering is
+    exactly how every revision was served before it.
+
+    ANY OTHER FAILURE TO READ IS A 503, NOT A RE-RENDER. A timeout on this select used to fall
+    back to re-rendering the revision through whatever code is deployed that day, and the portal
+    caches what it is given for ten minutes and hashes it into `contract_sha256` if the customer
+    approves inside them — so one database blip could put a document that was never sent in front
+    of the customer, and on their signature. A 503 serves nothing: the portal shows no PDF, and an
+    approval in that window records no hash and rebuilds the contract from the stored bytes later
+    (treadwell-portal api_approve / _proposal_pdf_bytes)."""
+    try:
+        return drafts.get_revision_documents(draft_id, revision_no)
+    except Exception as exc:  # noqa: BLE001 — sorted into the two cases above
+        if _table_missing(exc):
+            log.warning("draft_revision_documents is missing on this database; re-rendering %s "
+                        "revision %s from its snapshot: %s", draft_id, revision_no, exc)
+            return None
+        log.exception("stored documents for %s revision %s could not be read", draft_id,
+                      revision_no)
+        raise HTTPException(503, "The proposal PDF could not be read right now. "
+                                 "Please try again in a minute.") from exc
+
+
+class DocumentsIn(BaseModel):
+    # When the server stored the copy of the draft the Files page asked its question of (the
+    # draft row's `updated_at`, from GET /api/draft/{id}): TWPrice.confirmSavedCopy asks "This line
+    # says $X but the estimate says $Y — download anyway?" of the SERVER's copy, and the question
+    # can sit on screen while a colleague's save lands. Optional: the page's own builds (the files
+    # it shows on arrival) and an older page send nothing, and are built as before.
+    draft_version: Optional[str] = None
+
+
+def _stored_since(row: Dict[str, Any], version: Optional[str]) -> bool:
+    """Has the draft been stored again since the save a page checked (`version`, the row's
+    `updated_at` as that page read it)? False when the page named none. The publish makes the same
+    comparison inline (api_portal_publish); Download and To Dropbox ask it here."""
+    v = (version or "").strip()
+    return bool(v) and v != str(row.get("updated_at") or "")
+
+
+@app.post("/api/draft/{draft_id}/documents", response_model=GenerateOut)
+def api_draft_documents(draft_id: str, request: Request,
+                        payload: Optional[DocumentsIn] = None) -> GenerateOut:
+    """The Files page's Download buttons: the SAVED draft's document, through the one render.
+
+    Loads the draft from the store rather than taking a payload in the body, because the store's
+    copy is what Send pins — the page flushes its pending save first (TW.flushState). The answer
+    carries `render_id`, which the page hands back on Send so the send can refuse a document that
+    changed after this download (api_portal_publish).
+
+    ONE WRITE, AND ONLY THIS ONE: the first time a draft's files are built, `generate_result` is
+    recorded on the SERVER's copy, because the Active Projects board's "Created but not sent"
+    column reads `has_files` off it. The page used to record it with TW.setState, which PUTs the
+    page's WHOLE blob — and a Files page can hold a copy older than the server's (initDraftSync
+    does not re-read a blob already stamped for this draft), so pressing Download wrote a
+    colleague's newer revision away. The page now keeps its copy locally (TW.setLocalState)."""
+    draft_id = _safe_id(draft_id)
+    row = drafts.load_draft(draft_id)
+    if not row:
+        raise HTTPException(404, "Draft not found")
+    # THE COPY HE WAS ASKED ABOUT, OR NOTHING (review of dfcf589). The page asked its question of
+    # the save it names; a draft stored again since may carry a figure nobody was asked about, so
+    # nothing is rendered or recorded. Pressing Download again asks about the copy stored now.
+    if _stored_since(row, payload.draft_version if payload else None):
+        log.warning("documents refused for draft %s: saved again after the page checked it "
+                    "(checked %s, now %s)", draft_id, payload.draft_version, row.get("updated_at"))
+        raise HTTPException(409, "Not built — this proposal was saved again after this page "
+                                 "checked it (from another page or computer). Press Download "
+                                 "again to check the copy saved now.")
+    pp = (row.get("data") or {}).get("proposal_payload")
+    if not (isinstance(pp, dict) and pp.get("values")):
+        raise HTTPException(422, "This proposal hasn't been built yet — open the Proposal step "
+                                 "and press Continue.")
+    out = _documents_out(_render_documents(pp, request, want_estimate=True))
+    if not (row.get("data") or {}).get("generate_result"):
+        try:
+            drafts.record_generate_result(draft_id, out.model_dump())
+        except Exception as exc:  # noqa: BLE001 — a board column must never block a download
+            log.warning("could not record %s's files on the draft: %s", draft_id, exc)
+    return out
 
 
 # ─── Project persistence (Supabase) ───────────────────────────────────
@@ -6164,10 +7038,15 @@ def _warm_sheet_cache() -> None:
 def api_save_draft(draft_id: str, payload: DraftIn, request: Request) -> Dict[str, Any]:
     """Upsert a draft's full state blob. Called on a debounce as the
     estimator types — so a tab close / device switch doesn't lose work.
-    Stamps the signed-in user as the project owner on first save."""
+    Stamps the signed-in user as the project owner on first save.
+
+    The server-owned keys (drafts._SERVER_OWNED_KEYS: assigned_estimator, is_test, archived) keep
+    their stored values whatever the blob says: they are set through their own routes, and a
+    browser's blob carries whatever that browser last read."""
     try:
         return {"ok": True, **drafts.save_draft(draft_id, payload.data,
-                                                owner_email=_user_email(request))}
+                                                owner_email=_user_email(request),
+                                                keep_server_owned=True)}
     except Exception as exc:  # noqa: BLE001
         log.warning("save_draft failed: %s", exc)
         return {"ok": False, "error": str(exc)}
@@ -6695,6 +7574,9 @@ class ToDropboxIn(BaseModel):
     # the folder his team already made instead of inventing a second one). When
     # set, nothing new is created. Blank/None keeps the old create-a-folder path.
     folder_path: str | None = None
+    # When the server stored the copy the page asked "… — file anyway?" of (DocumentsIn has the
+    # why). A draft stored again since is not filed. Absent (an older page): filed as before.
+    draft_version: str | None = None
 
 
 def _dropbox_project_vals(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -6806,6 +7688,15 @@ def api_to_dropbox(payload: ToDropboxIn, request: Request) -> Dict[str, Any]:
     row = drafts.load_draft(payload.draft_id)
     if not row:
         raise HTTPException(404, "Draft not found")
+    # THE COPY HE WAS ASKED ABOUT, OR NOTHING (review of dfcf589; api_draft_documents has the same).
+    if _stored_since(row, payload.draft_version):
+        log.warning("to-dropbox refused for draft %s: saved again after the page checked it "
+                    "(checked %s, now %s)", payload.draft_id, payload.draft_version,
+                    row.get("updated_at"))
+        return {"ok": False, "code": "document_changed",
+                "error": "Nothing was filed — this proposal was saved again after this page "
+                         "checked it (from another page or computer). Press the button again to "
+                         "check the copy saved now."}
     data = row.get("data") or {}
     pp = data.get("proposal_payload")
     # STALE, NOT JUST ABSENT, SENDS US TO THE SAME FALLBACK BELOW. A payload that

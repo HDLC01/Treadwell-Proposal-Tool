@@ -8,12 +8,14 @@ source assertion also cannot tell a mention of ADMIN from a gate on it.
 
 WHAT THIS PAGE MUST NOT DO -- the properties worth the harness:
 
-  * **An ABSENT line must not read as a zero.** Gyp has no hard-bid rate: the workbook cell is
-    EMPTY. backend/markup.py stores that as `applies=false, formula=NULL` and stores "this line
-    prices to nothing" as `applies=true, formula='0'`, and the whole feature is shaped to keep
-    those apart. Rendering the absent one as an empty editable box invites somebody to fill it
-    in; rendering it as 0% reads as a discount that was declined. So the page renders a third
-    state, and the Gyp scenario puts it on screen beside a genuine filed `'0'` on bond.
+  * **An ABSENT line must not read as a zero.** backend/markup.py stores "this line does not
+    apply here" as `applies=false, formula=NULL` and stores "this line prices to nothing" as
+    `applies=true, formula='0'`, and the whole feature is shaped to keep those apart. Rendering
+    the absent one as an empty editable box invites somebody to fill it in; rendering it as 0%
+    reads as a discount that was declined. So the page renders a third state. Until 2026-09-22
+    Gyp's hard-bid row put that state on screen for free, by built-in default, beside a genuine
+    filed `'0'` on bond; no line's built-in is absent on any layout any more, so the scenario now
+    demonstrates it by having an admin switch a line off on purpose instead.
   * **A broken formula must never price as $0.00.** It reads "Unpriceable", and so does every
     line below it, and so does the total. That mirrors Kyle's own `Gyp!B75` `"error"` sentinel,
     and it is markup-core.js's stated safety property carried up into the screen. A markup line
@@ -24,11 +26,12 @@ WHAT THIS PAGE MUST NOT DO -- the properties worth the harness:
   * **The tabs come from the API.** Five sheet LAYOUTS plus Global, and deliberately no Combo: a
     combo job is two option lines each priced off its own tab, so markup.py refuses the string by
     name and a Combo tab here would offer to store a rate nothing could ever read.
-  * **ONE HOME PER LINE.** Four lines are the same rule on every sheet and are filed once, on
-    Global; a sheet tab shows them read-only and reads their value from there. Three things must
-    hold at once and each has its own test below: the Global tab is NOT the chain (no compounding,
-    no running total, no lump sum); Gyp's hard-bid row stays ABSENT whatever is filed on Global,
-    because Gyp!B73 is EMPTY and that is a fact about the tab; and a row filed at a line's OLD
+  * **ONE HOME PER LINE.** Three lines are the same rule on every sheet and are filed once, on
+    Global; a sheet tab shows them read-only and reads their value from there. hard_bid used to
+    be the fourth of these, and Gyp's hard-bid row staying ABSENT whatever was filed on Global —
+    because Gyp!B73 was EMPTY, a fact about the tab — was one of the three things this had to
+    hold at once; gone with the line on 2026-09-22, so what remains is two: the Global tab is NOT
+    the chain (no compounding, no running total, no lump sum); and a row filed at a line's OLD
     home — production has one, polish / bond / 1% — is shown as misfiled rather than applied,
     hidden or migrated.
 
@@ -67,11 +70,10 @@ HARNESS = pathlib.Path(__file__).resolve().parent / "js" / "markup-page-harness.
 # The three files the page is made of. Copied wholesale for the mutation runs below.
 PAGE_FILES = ("markup.html", "js/markup.js", "js/markup-core.js")
 
-# The two built-ins the ladders have to reproduce, written here independently of markup.js so a
-# drift on either side is a failing test rather than a rate nobody chose.
+# The one built-in a ladder has to reproduce, written here independently of markup.js so a
+# drift on either side is a failing test rather than a rate nobody chose. hard_bid's own ladder
+# built-in (HARD_BID) went with the line on 2026-09-22.
 GP_BANDS = "MARKUP(BAND(subtotal, 6500,52%, 15000,45%, 22500,35%, 32500,32%, 30%))"
-HARD_BID = ("IF(hard_bid_on, IF(subtotal>=60000, -4%, "
-            "IF(local, IF(subtotal>=13000, -2.5%, 0), 0)), 0)")
 
 needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 
@@ -166,9 +168,10 @@ def test_the_editable_lines_on_a_tab_are_exactly_the_api_TAB_line_keys(ran):
     """Editable == has a switch and a control. Read off the rendered rows, not off a list.
 
     THE SPLIT, from both ends. A sheet tab offers a box for the three lines that differ per tab
-    and nothing else; the Global tab offers one for the four that do not. An admin handed a box
-    for a line the API would refuse is being set up to collect a 400 — and hard_bid and bond are
-    now exactly that on a sheet tab."""
+    and nothing else; the Global tab offers one for the three that do not. An admin handed a box
+    for a line the API would refuse is being set up to collect a 400 — and bond is exactly that
+    on a sheet tab. hard_bid used to be a second example; it is not a line the API knows about
+    at all any more, on any tab."""
     editable = [r["line"] for r in ran["dayOnePolish"]["rows"] if r["inputs"]]
     assert editable == list(markup.TAB_LINE_KEYS)
 
@@ -307,38 +310,12 @@ def test_the_banded_lines_are_a_ladder_of_typed_numbers_not_a_formula_string(ran
     assert [b["del"] for b in r["bands"]] == [True, True, True, True, False]
 
 
-@needs_node
-def test_the_hard_bids_local_jobs_rule_is_a_checkbox_on_the_step_it_belongs_to(ran):
-    """Kyle's give-back steps UP with job size and the smaller step is local-jobs-only.
-
-    Rendered as thresholds you type and one checkbox, instead of
-    `IF(hard_bid_on, IF(subtotal>=60000, -4%, IF(local, IF(subtotal>=13000, -2.5%, 0), 0)), 0)`.
-    The terminator is not a box: a give-back that does not apply is nothing off, not a rate of
-    nothing."""
-    r = ran["ladder"]["hard_bid"]
-    assert r["advanced"] is False
-    assert [b["label"] for b in r["bands"]] == ["from", "from", "otherwise"]
-    assert [b["values"] for b in r["bands"]] == [["60,000", "-4"], ["13,000", "-2.5"], []]
-    assert [(c["part"], c["checked"]) for c in r["checks"]] == [
-        ("local-0", False), ("local-1", True)]
-    assert "nothing off" in r["bandsText"]
-
-
-@needs_node
-def test_ticking_local_jobs_only_moves_that_step_inside_kyles_own_gate(ran):
-    """The checkbox writes the shape Kyle's cell has, not a new one.
-
-    Ticking it on the top step means BOTH steps need a local job, and the `IF(local, ...)` gate
-    wraps both -- which is exactly what the person asked for by ticking it. It commits on
-    `change`, because a checkbox is a decision rather than half a word, and the focus goes
-    straight back onto the box that was ticked."""
-    body = ran["localTicked"]["body"]
-    assert body["formula"] == (
-        "IF(hard_bid_on, IF(local, IF(subtotal>=60000, -4%, "
-        "IF(subtotal>=13000, -2.5%, 0)), 0), 0)"), body["formula"]
-    assert ran["localTicked"]["focused"] == "s-hard_bid-local-0", (
-        "the repaint on change stole the focus from the box that was ticked")
-    assert [c["checked"] for c in ran["localTicked"]["row"]["checks"]] == [True, True]
+# WAS: test_the_hard_bids_local_jobs_rule_is_a_checkbox_on_the_step_it_belongs_to and
+# test_ticking_local_jobs_only_moves_that_step_inside_kyles_own_gate. Both pinned hard_bid's own
+# checkbox -- Kyle's give-back stepped up with job size, and the smaller step was local-jobs-only,
+# rendered as a checkbox alongside its two threshold rows. Deleted 2026-09-22 with the line
+# itself: no formula can parse into the `ladder` shape any more (hard_bid was the only line that
+# ever offered it), so `tick2` and the local-jobs checkbox it drove have nothing left to tick.
 
 
 @needs_node
@@ -348,8 +325,9 @@ def test_every_built_in_ladder_round_trips_without_filing_an_override(ran):
     A one-number box for a line with nothing filed is empty, so leaving it reads back as "nothing
     filed". A ladder cannot do that -- it is seeded from the built-in -- so leaving it reads back
     as the built-in, and the page compares an edit against what the control was RENDERED FROM
-    rather than against the stored string. The harness tabs out of all nine of GP's boxes and all
-    four of the hard bid's, and then every flat box, touching none of them.
+    rather than against the stored string. The harness tabs out of all nine of GP's boxes -- the
+    only ladder left since hard_bid's own four went with the line on 2026-09-22 -- and then every
+    flat box, touching none of them.
 
     Mutation: test_a_ladder_with_no_baseline_files_an_override_for_looking_at_it."""
     assert ran["roundTripPuts"] == [], (
@@ -523,68 +501,34 @@ def test_a_row_that_is_only_its_built_in_says_so_and_a_filed_one_does_not(ran):
 
 
 # ── the ABSENT state ─────────────────────────────────────────────────
+# THREE TESTS WERE HERE UNTIL 2026-09-22: test_gyps_absent_hard_bid_is_greyed_and_has_nothing_to
+# _type_into, test_an_absent_line_shows_no_figure_at_all_not_a_zero and
+# test_a_filed_zero_still_prices_as_zero_beside_it, all three read off `ran["gyp"]` -- the
+# fixture that put Gyp's hard-bid row's BUILT-IN absence on screen beside a filed zero on bond.
+# hard_bid's removal took NOT_ON_TAB's only consumer with it: no line's built-in is absent on any
+# layout any more, so there is no more built-in-absent state for a fixture like that to produce,
+# and `ran["gyp"]` does not exist in the harness output any more either. What ABSENT still means
+# — and how it is now reached, by an admin's explicit choice rather than a built-in default — is
+# covered by the tests below, against `bond` filed as applies=false.
 @needs_node
-def test_gyps_absent_hard_bid_is_greyed_and_has_nothing_to_type_into(ran):
-    """The state the mockup had no design for, and the one mistake this feature exists to prevent.
+def test_an_absent_line_filed_by_hand_renders_the_same_way(ran):
+    """`applies=false, formula=NULL` in the TABLE is the only way ABSENT happens any more.
 
-    Gyp's hard-bid cell is EMPTY in estimate_sheet_5.7.xlsx -- not 0. So the row is present and
-    greyed, says which tab it is not used on, and carries NO control: an empty editable box
-    invites somebody to fill it in, and there is no correct value to fill in.
-
-    Mutation: read `applies` back off the presence of a formula
-    (test_collapsing_applies_into_a_zero_formula_loses_the_absent_state)."""
-    r = row(ran["gyp"], "hard_bid")
+    rowState reads applies off the column and never re-derives it. Until 2026-09-22 Gyp's
+    hard-bid row got this same presentation for free, from a built-in default; that default is
+    gone, so this is now the ONE path to the state, not a second path alongside it -- an admin
+    switching Global's bond off."""
+    r = row(ran["filedAbsent"], "bond")
     assert r["absentClass"] is True, "the absent row is not distinguished from a priced one"
     assert r["inputs"] == [], "an absent line was rendered as an editable box"
     assert r["checks"] == [] and r["bands"] == []
-    assert "not used on gypsum underlayment" in r["rateText"].lower()
-    assert "not the same as 0%" in r["rateText"]
-
-
-@needs_node
-def test_an_absent_line_shows_no_figure_at_all_not_a_zero(ran):
-    """"Does not exist on this tab" has no dollar value, and "0%" reads as a discount declined."""
-    r = row(ran["gyp"], "hard_bid")
     assert r["preview"] == "—"
     assert r["figure"] == "—"
-    assert "0%" not in r["preview"]
-    assert "$" not in r["preview"]
+    assert "0%" not in r["preview"] and "$" not in r["preview"]
     assert r["run"] == "", "an absent line printed a running total it does not contribute to"
     assert r["appliesText"] == "Not used"
-
-
-@needs_node
-def test_a_filed_zero_still_prices_as_zero_beside_it(ran):
-    """The other half of the distinction, on the same screen.
-
-    bond is filed as `'0'` with applies=true on the Gyp scenario -- it exists and prices to
-    nothing -- and it reads $0.00 in dollars off an $85,000 sub-total. If the two rows ever render
-    alike, one of the two facts has been lost.
-
-    The zero is filed on GLOBAL and read from the Gyp tab, which is where bond lives now, so this
-    fixture says a second thing: a Global row reaches a sheet tab, while the tab's OWN empty cell
-    still beats it on the row above. No box on this tab, hence no `parts` here -- the box is in
-    test_the_global_tab_keeps_a_filed_zero_apart_from_an_absent_line, on the tab that owns it."""
-    absent = row(ran["gyp"], "hard_bid")
-    zero = row(ran["gyp"], "bond")
-    assert zero["rate"] == "0%" and zero["figure"] == "$0.00"
-    assert zero["absentClass"] is False
-    assert zero["appliesText"] == "Yes"
-    assert zero["preview"] != absent["preview"]
-    assert zero["inputs"] == [], "bond is set on the Global tab; this one offered a box"
-
-
-@needs_node
-def test_an_absent_line_filed_by_hand_renders_the_same_way(ran):
-    """`applies=false, formula=NULL` in the TABLE, not just as a built-in default.
-
-    rowState reads applies off the column and never re-derives it, so an admin switching Polish's
-    hard bid off gets the identical presentation Gyp gets by default."""
-    r = row(ran["filedAbsent"], "hard_bid")
-    assert r["absentClass"] is True
-    assert r["inputs"] == []
-    assert r["figure"] == "—"
     assert "not used on polished concrete" in r["rateText"].lower()
+    assert "not the same as 0%" in r["rateText"]
 
 
 # -- the off row's one exit -------------------------------------------------
@@ -605,12 +549,12 @@ def test_a_line_switched_off_keeps_the_one_control_that_undoes_it(ran):
     something to stop overriding -- and no control, so nothing else could offer it.
 
     Both are read on the tab the line is FILED on, which is the only tab that can offer to remove
-    it: an off hard-bid row seen from Polish is off because of a Global rule, and undoing it from
+    it: an off bond row seen from Polish is off because of a Global rule, and undoing it from
     there would be a sheet tab quietly editing every other sheet tab.
 
     Mutation: stop calling dropBtnHtml from the ABSENT branch
     (test_an_off_row_with_no_way_back_is_the_corner_this_undoes)."""
-    for name, line in (("globalAbsent", "hard_bid"), ("switchedOff", "soft_costs")):
+    for name, line in (("globalAbsent", "bond"), ("switchedOff", "soft_costs")):
         r = row(ran[name], line)
         assert r["absentClass"] is True, "%s/%s is not the off row this is about" % (name, line)
         assert r["inputs"] == [], (
@@ -622,19 +566,14 @@ def test_a_line_switched_off_keeps_the_one_control_that_undoes_it(ran):
             % (name, line, [b["text"] for b in r["buttons"]]))
 
 
-@needs_node
-def test_a_line_that_was_never_overridden_offers_nothing_to_stop(ran):
-    """THE COUNTEREXAMPLE. Gyp's hard bid is absent because Kyle's workbook has no such cell --
-    `applies=false` as a built-in DEFAULT, with no filed rule and so no id. "Stop overriding this
-    line" there would be a button with nothing to remove, and pressing it could only fail.
-
-    Without this, the test above would pass just as green on a version that painted the button on
-    every absent row."""
-    r = row(ran["gyp"], "hard_bid")
-    assert r["absentClass"] is True
-    assert r["buttons"] == [], (
-        "a line nobody has overridden offers to stop overriding it: %r"
-        % [b["text"] for b in r["buttons"]])
+# WAS: test_a_line_that_was_never_overridden_offers_nothing_to_stop. THE COUNTEREXAMPLE it
+# checked -- Gyp's hard bid, absent because Kyle's workbook had no such cell, `applies=false` as
+# a built-in DEFAULT with no filed rule and so no id, so "Stop overriding this line" would have
+# been a button with nothing to remove -- cannot be constructed any more: no line's built-in is
+# absent on any layout, so `applies=false` now only ever arrives as a filed row, which always has
+# an id and is exactly the case test_a_line_switched_off_keeps_the_one_control_that_undoes_it
+# already covers. Deleted with hard_bid on 2026-09-22 rather than pointed at a fixture that could
+# no longer prove what it set out to.
 
 
 @needs_node
@@ -643,21 +582,23 @@ def test_the_way_back_from_an_off_row_actually_removes_the_rule(ran):
     paints and does nothing would be a worse corner than no button -- so the DELETE, the words on
     the confirm, and the state of the row afterwards are all asserted, not the markup alone."""
     d = ran["filedAbsentDrop"]
-    assert d["deletes"] == ["/api/markup/rules/global-hard_bid"], d["deletes"]
+    assert d["deletes"] == ["/api/markup/rules/global-bond"], d["deletes"]
     c = d["confirm"] or {}
-    assert c.get("name") == "Hard bid discount", c
+    assert c.get("name") == "Bond", c
     # The expensive misreading, said out loud: removing a rule is not "charge nothing here".
     assert "does not price the line at nothing" in c.get("detail", ""), c
-    after = row(d["after"], "hard_bid")
+    after = row(d["after"], "bond")
     assert after["absentClass"] is False, "the row is still off after its rule was removed"
-    assert after["figure"] == "-4%", (
+    assert after["figure"] == "0%", (
         "the line did not come back at its built-in rate: %r" % after["preview"])
     assert after["drops"] == [], "there is still an override to stop after the rule is gone"
-    # AND THE SHEET TAB THAT WAS READING IT. Removing one Global row hands the give-back back to
-    # every layout at once, in dollars, off each tab's own chain -- which is the whole point of
-    # the line living in one place.
-    back = row(ran["filedAbsentDropPolish"], "hard_bid")
-    assert (back["rate"], back["figure"]) == ("-4%", "-$4,857.16"), back["preview"]
+    # AND THE SHEET TAB THAT WAS READING IT. Removing one Global row hands bond's built-in back to
+    # every layout at once, off each tab's own chain -- which is the whole point of the line
+    # living in one place. bond used to be the second Global read-only line alongside hard_bid,
+    # whose own give-back this test pinned in dollars before 2026-09-22; bond prices to nothing on
+    # a sheet tab, so its figure there is a dollar $0.00 rather than a percent.
+    back = row(ran["filedAbsentDropPolish"], "bond")
+    assert (back["rate"], back["figure"]) == ("0%", "$0.00"), back["preview"]
     assert back["absentClass"] is False
 
 
@@ -694,7 +635,7 @@ def test_an_unreadable_formula_makes_its_own_line_unpriceable(ran):
     """A filed formula with an unbalanced paren. It reports the parse error rather than a total --
     and because no simple control can read it, the row opens in Advanced so the person can see
     the formula the message is about."""
-    r = row(ran["invalidGlobal"], "hard_bid")
+    r = row(ran["invalidGlobal"], "bond")
     assert r["figure"] == "Unpriceable"
     assert r["advanced"] is True
     shown = [e for e in r["errmsg"] if not e["hidden"]]
@@ -704,7 +645,7 @@ def test_an_unreadable_formula_makes_its_own_line_unpriceable(ran):
     # AND ON THE SHEET TAB THAT READS IT, where there is no box to retype it in: the row that
     # cannot be priced still says WHY, or the only route to the reason is guessing which tab the
     # rate came from.
-    tab = row(ran["invalid"], "hard_bid")
+    tab = row(ran["invalid"], "bond")
     assert tab["figure"] == "Unpriceable"
     shown = [e for e in tab["errmsg"] if not e["hidden"]]
     assert shown and "position" in shown[0]["text"], (
@@ -716,18 +657,28 @@ def test_every_line_below_a_broken_one_is_unpriced_and_the_total_refuses(ran):
     """The cascade, and the sentence that names the culprit -- printed WHERE THE FIGURE IS
     MISSING, because it is the one line of explanation on this page that is about right now.
 
+    bond is now markup.CHAIN's LAST line, so this fixture has nothing left BELOW it to cascade
+    onto -- a property hard_bid used to prove here, sitting in the middle of the chain between gp
+    and contingency. What survives, and is still asserted below, is that breaking bond refuses
+    the WHOLE TOTAL: the chain need not have a downstream line for a broken one to be fatal to
+    the tab's bid. `below` is asserted empty rather than skipped, so a future line added after
+    bond in CHAIN gets this cascade test back rather than this file staying silently blind to it.
+
     Mutation: stop cascading (test_not_cascading_lets_a_broken_chain_print_figures)."""
     snap = ran["invalid"]
-    below = markup.CHAIN[markup.CHAIN.index("hard_bid") + 1:]
+    below = markup.CHAIN[markup.CHAIN.index("bond") + 1:]
+    assert below == (), (
+        "a line was added after bond in CHAIN -- this test no longer covers the cascade onto "
+        "%r, and it should: add it back to the loop below" % (below,))
     for line_key in below:
         r = row(snap, line_key)
         assert r["figure"] == "—", (
             "%s priced a figure off a base that could not be computed" % line_key)
-        assert r["run"] == "depends on Hard bid discount", r["run"]
+        assert r["run"] == "depends on Bond", r["run"]
     assert snap["grand"]["preview"] == "Unpriceable"
-    assert "Hard bid discount" in snap["grand"]["sub"]
+    assert "Bond" in snap["grand"]["sub"]
     assert snap["broken"]["hidden"] is False
-    assert "Hard bid discount can't be priced." == snap["broken"]["line"]
+    assert "Bond can't be priced." == snap["broken"]["line"]
     assert "rather than zero" in snap["broken"]["rest"]
 
 
@@ -759,18 +710,18 @@ def test_kyles_error_sentinel_is_a_refusal_to_price_not_a_zero(ran):
 def test_a_healthy_chain_prices_the_sample_job_off_the_real_engine(ran):
     """The figures are markup-core.js's, not the harness's.
 
-    Polish's built-in chain over an $85,000 sub-total: GP divides up to $36,429.00, the hard bid
-    gives back 4%, and the total lands at $153,165.41. If markup-core.js's ROUNDUP, BAND or MARKUP
-    drifts, this is where it shows -- the preview and the bid read the same engine."""
+    Polish's built-in chain over an $85,000 sub-total: GP divides up to $36,429.00, and the total
+    lands at $159,413.31. Until 2026-09-22 hard_bid sat between gp and contingency and gave back
+    4% here -- removed with the line, so every figure downstream of gp is bigger than it used to
+    be, the total included. If markup-core.js's ROUNDUP, BAND or MARKUP drifts, this is where it
+    shows -- the preview and the bid read the same engine."""
     snap = ran["dayOnePolish"]
     assert (row(snap, "gp")["rate"], row(snap, "gp")["figure"]) == ("", "$36,429.00")
-    assert (row(snap, "hard_bid")["rate"], row(snap, "hard_bid")["figure"]) == \
-        ("-4%", "-$4,857.16")
     assert (row(snap, "super_pto")["rate"], row(snap, "super_pto")["figure"]) == \
-        ("2.7%", "$3,214.94")
+        ("2.7%", "$3,346.08")
     assert (row(snap, "soft_costs")["rate"], row(snap, "soft_costs")["figure"]) == \
-        ("16%", "$19,565.88")
-    assert snap["grand"]["preview"] == "$153,165.41"
+        ("16%", "$20,364.01")
+    assert snap["grand"]["preview"] == "$159,413.31"
     assert snap["broken"]["hidden"] is True
 
 
@@ -855,8 +806,10 @@ def test_the_read_only_lines_have_no_control_at_all(ran):
         assert r["buttons"] == []
         assert r["appliesText"] == "Always"
     assert row(ran["dayOnePolish"], "contingency")["figure"] == "$2,500.00"
+    # remodel_tax's base grew when hard_bid's give-back left the chain on 2026-09-22 -- it is
+    # everything above it in the chain, and that no longer has 4% subtracted out of it.
     assert (row(ran["dayOnePolish"], "remodel_tax")["rate"],
-            row(ran["dayOnePolish"], "remodel_tax")["figure"]) == ("7.975%", "$11,312.75")
+            row(ran["dayOnePolish"], "remodel_tax")["figure"]) == ("7.975%", "$11,774.22")
 
 
 # ── the prose left the grid ───────────────────────────────────────────
@@ -917,14 +870,15 @@ def test_the_intro_is_one_sentence_with_the_rest_behind_a_disclosure():
 
 
 # ── the Global tab ───────────────────────────────────────────────────
-# Four lines are the same rule on every priced sheet -- bond is 0 everywhere, the hard-bid
-# give-back is one formula on all six sheets that carry one, travel lodging and food are one
-# figure each on all eleven -- so they are filed ONCE and every sheet tab reads them from there.
-# What follows is the three properties that has to buy, and the one it must not cost.
+# Three lines are the same rule on every priced sheet -- bond is 0 everywhere, travel lodging and
+# food are one figure each on all eleven -- so they are filed ONCE and every sheet tab reads them
+# from there. hard_bid used to be the fourth of these, the one that actually compounded into a
+# tab's own chain; removed 2026-09-22. What follows is the three properties that has to buy, and
+# the one it must not cost.
 
 
 @needs_node
-def test_the_global_tab_is_the_four_lines_that_are_one_rule_everywhere(ran):
+def test_the_global_tab_is_the_three_lines_that_are_one_rule_everywhere(ran):
     """Its rows are the API's `global_line_keys`, and nothing else.
 
     NOT the chain: gp, contingency, super_pto, soft_costs and remodel_tax are all absent, because
@@ -950,10 +904,10 @@ def test_the_global_tab_is_the_four_lines_that_are_one_rule_everywhere(ran):
 def test_the_global_tab_is_not_the_chain_and_has_no_lump_sum(ran):
     """NO COMPOUNDING, so no running total and no total.
 
-    Two of these four are not chain lines at all -- travel lodging is a per-night cost, not a
-    markup on anything -- and the other two have nothing above them on this tab to be a percentage
-    OF. A "Total lump sum" row here would be a figure made of unrelated numbers, printed in the
-    same red box a real bid is printed in. The column says what each figure IS instead.
+    Two of these three are not chain lines at all -- travel lodging is a per-night cost, not a
+    markup on anything -- and bond has nothing above it on this tab to be a percentage OF. A
+    "Total lump sum" row here would be a figure made of unrelated numbers, printed in the same
+    red box a real bid is printed in. The column says what each figure IS instead.
 
     Mutation: test_pricing_the_global_tab_as_a_chain_invents_a_lump_sum."""
     snap = ran["globalDayOne"]
@@ -994,11 +948,11 @@ def test_no_row_sits_inside_another_row_on_any_tab(ran):
 def test_every_global_line_says_plainly_that_it_reaches_no_bid(ran):
     """Which is exactly true today, and the reason `global` is absent from PRICES_THE_BID.
 
-    gp and hard_bid have no address in the writer's target table on any layout; bond has none
-    anywhere while Kyle's own bond row double-counts the tax; and the two travel figures would
-    need a dollars-only parser and a 22-cell target table that do not exist. So all four rows say
-    so, rather than letting an admin file a rate, watch it save with a green tick, and move no
-    price."""
+    bond has no address anywhere while Kyle's own bond row double-counts the tax, and the two
+    travel figures would need a dollars-only parser and a 22-cell target table that do not exist.
+    hard_bid used to be a fourth example, gp's own kind of gap (no address on any layout) rather
+    than bond's; gone with the line on 2026-09-22. So all three rows say so, rather than letting
+    an admin file a rate, watch it save with a green tick, and move no price."""
     for r in ran["globalDayOne"]["rows"]:
         assert "does not read this line yet" in r["explain"], (
             "%s claims something about a bid: %r" % (r["line"], r["explain"]))
@@ -1028,17 +982,12 @@ def test_a_travel_figure_is_dollars_and_says_what_it_is_per(ran):
         % bond["preview"])
 
 
-@needs_node
-def test_the_give_back_is_read_against_a_job_size_you_can_type(ran):
-    """The one Global line whose answer depends on the job. Its ladder is the same rungs it has
-    always had, and the figure beside it says which job size produced it -- otherwise "-4%" is a
-    number with no visible cause on a tab that has no sub-total."""
-    r = row(ran["globalDayOne"], "hard_bid")
-    assert [b["values"] for b in r["bands"]] == [["60,000", "-4"], ["13,000", "-2.5"], []]
-    assert r["figure"] == "-4%"
-    assert r["run"] == "on a $85,000 job", r["preview"]
-    assert ran["globalDayOne"]["subtotalBoxes"] == 1, (
-        "the job-size box went, so the ladder's rungs can only be read by doing the arithmetic")
+# WAS: test_the_give_back_is_read_against_a_job_size_you_can_type. hard_bid was the one Global
+# line whose answer depended on the job, and the Global tab carried a job-size box for exactly
+# that reason -- removed with the line on 2026-09-22, since nothing left on that tab (bond, the
+# two travel figures) is job-size-dependent. `subtotalBoxes` on the Global tab is 0 now; the
+# sheet tabs keep their own box, for GP's bands, and test_a_job_size_can_be_typed_the_way_people_
+# type_money already covers that one.
 
 
 @needs_node
@@ -1054,11 +1003,13 @@ def test_the_global_tab_keeps_a_filed_zero_apart_from_an_absent_line(ran):
     """The distinction markup.py exists to keep, on the tab that now owns both of its examples.
 
     bond filed as `'0'` exists and prices to nothing: a live box holding a real 0, and 0% in the
-    column. hard_bid switched off does not exist at all: no box, no figure, and a sentence that
-    says so in words that are true HERE -- "no sheet layout charges this line", not "the cell is
-    empty on this tab", because on this tab there is no cell."""
+    column. travel_lodging switched off does not exist at all: no box, no figure, and a sentence
+    that says so in words that are true HERE -- "no sheet layout charges this line", not "the
+    cell is empty on this tab", because on this tab there is no cell. hard_bid used to be the off
+    row here, absent by built-in default rather than an admin's choice; travel_lodging renders
+    identically switched off by hand, which is the only way ABSENT is reached any more."""
     zero = row(ran["globalZeroAndAbsent"], "bond")
-    absent = row(ran["globalZeroAndAbsent"], "hard_bid")
+    absent = row(ran["globalZeroAndAbsent"], "travel_lodging")
     assert parts(zero) == {"value": "0"}
     assert zero["figure"] == "0%" and zero["absentClass"] is False
     assert absent["inputs"] == [] and absent["figure"] == "—"
@@ -1072,50 +1023,34 @@ def test_the_global_tab_keeps_a_filed_zero_apart_from_an_absent_line(ran):
 
 @needs_node
 def test_a_global_line_reads_on_every_sheet_tab_and_is_typed_on_none_of_them(ran):
-    """ONE HOME, seen from the tabs. A hard bid filed once at -6% prices the Polish chain at -6%,
-    and Polish offers no box for it -- five boxes for one rule is five ways to disagree with it,
-    and whichever of the two rows won would be deciding a price.
+    """ONE HOME, seen from the tabs. A bond filed once at 6% prices the Polish chain at 6%, and
+    Polish offers no box for it -- five boxes for one rule is five ways to disagree with it, and
+    whichever of the two rows won would be deciding a price. hard_bid used to be a second
+    example, and the one where this property mattered most, because gp/hard_bid/contingency all
+    fed the very next line's base; gone with the line on 2026-09-22, bond is what remains.
 
-    READ-ONLY IS NOT A REDACTION: the rungs are all there, and so is the dollar figure, because
-    what this tab charges is the fact somebody came to the row for."""
-    for line_key in ("hard_bid", "bond"):
-        r = row(ran["dayOnePolish"], line_key)
-        assert r["inputs"] == [] and r["switches"] == [], (
-            "%s is set on Global and Polish offered a control for it" % line_key)
-        assert r["chip"] == "Set on Global", r["chip"]
-        assert any("Set on the Global tab" in n for n in r["notes"]), r["notes"]
+    READ-ONLY IS NOT A REDACTION: the dollar figure is right there, because what this tab charges
+    is the fact somebody came to the row for."""
+    r = row(ran["dayOnePolish"], "bond")
+    assert r["inputs"] == [] and r["switches"] == [], (
+        "bond is set on Global and Polish offered a control for it")
+    assert r["chip"] == "Set on Global", r["chip"]
+    assert any("Set on the Global tab" in n for n in r["notes"]), r["notes"]
 
-    priced = row(ran["globalReachPolish"], "hard_bid")
-    assert priced["figure"] == "-$7,285.74", (
+    priced = row(ran["globalReachPolish"], "bond")
+    assert priced["figure"] == "$9,564.80", (
         "a rate filed once on Global did not reach the Polish chain: %r" % priced["preview"])
-    assert priced["rate"] == "-6%"
+    assert priced["rate"] == "6%"
     assert any("every sheet layout reads this same rate" in n for n in priced["notes"]), (
         priced["notes"])
     # …and a second tab, because "reaches the tab I was looking at" is not the property.
-    assert "-6%" in row(ran["globalReachSeal"], "hard_bid")["rateText"]
-
-
-@needs_node
-def test_the_gypsum_tabs_keep_their_empty_hard_bid_whatever_global_says(ran):
-    """THE EXCEPTION THAT HAD TO SURVIVE THE MOVE.
-
-    Gyp!B73 is EMPTY, not 0 -- the gypsum tabs have no hard-bid line at all. That is a fact about
-    the TAB, it is held on the tab (`gyp: { hard_bid: NOT_ON_TAB }`), and a rule filed once for
-    every layout must not hand those tabs a line their workbook does not have. The fixture files
-    -6% on Global and the Gyp row stays absent: no figure, no control, and the caption that names
-    the tab.
-
-    Mutation: test_letting_a_global_row_beat_the_tabs_own_empty_cell_gives_gyp_a_hard_bid."""
-    r = row(ran["globalReachGyp"], "hard_bid")
-    assert r["absentClass"] is True, "a Global rate gave the gypsum tabs a hard-bid line"
-    assert r["inputs"] == [] and r["checks"] == [] and r["bands"] == []
-    assert r["figure"] == "—", "the absent line priced a give-back off a cell that is empty"
-    assert r["appliesText"] == "Not used"
-    assert "not used on gypsum underlayment" in r["rateText"].lower()
-    assert "-6" not in r["rateText"], (
-        "the Global rate is being shown on a tab that has no such line: %r" % r["rateText"])
-    # And the same rule DOES reach the tab beside it, or this proves only that nothing works.
-    assert row(ran["globalReachPolish"], "hard_bid")["figure"] == "-$7,285.74"
+    assert "6%" in row(ran["globalReachSeal"], "bond")["rateText"]
+    # …and GYP, where hard_bid's own version of this test used to stop: Gyp!B73 was EMPTY, so a
+    # hard-bid rule filed once for every layout could not reach it, and that exception was worth
+    # a test of its own (test_the_gypsum_tabs_keep_their_empty_hard_bid_whatever_global_says,
+    # deleted with hard_bid). No line left has a Gyp-specific gap, so bond reaching Gyp too is
+    # just this same property holding at a third tab, not a second fact to test.
+    assert row(ran["globalReachGyp"], "bond")["figure"] == "$8,382.94"
 
 
 # ── the rule filed before its line moved home ────────────────────────
@@ -1139,7 +1074,7 @@ def test_a_rule_filed_at_a_lines_old_home_is_shown_and_never_applied(ran):
     # NOT APPLIED. The built-in 0% still prices the line, and the whole tab still totals what an
     # unconfigured Polish tab totals.
     assert r["figure"] == "$0.00" and r["rate"] == "0%"
-    assert ran["misfiled"]["grand"]["preview"] == "$153,165.41", (
+    assert ran["misfiled"]["grand"]["preview"] == "$159,413.31", (
         "the row filed at the old home moved the price: %r" % ran["misfiled"]["grand"])
     # SAID OUT LOUD. The rate, where it is filed, why nothing reads it, and what to do about it.
     said = [n for n in r["notes"] if "1%" in n]
@@ -1167,7 +1102,7 @@ def test_removing_the_row_at_the_old_home_says_it_changes_no_price(ran):
     after = row(d["after"], "bond")
     assert after["drops"] == [], "the row is still offering to remove a rule that is gone"
     assert not [n for n in after["notes"] if "1%" in n], after["notes"]
-    assert d["after"]["grand"]["preview"] == "$153,165.41", "removing it moved a price"
+    assert d["after"]["grand"]["preview"] == "$159,413.31", "removing it moved a price"
 
 
 @needs_node
@@ -1191,22 +1126,24 @@ def test_a_non_admin_gets_no_editable_control_anywhere(ran):
     about what somebody may do. The ladder's checkboxes count: `inputCount` is every input in the
     chain, checkbox or not.
 
-    EXCEPT THE SUB-TOTAL WHAT-IF BOX, which every role gets. The gate is about controls that FILE
-    something, and that box files nothing -- it moves a preview figure on this screen only, so no
-    amount of typing in it can earn the 403 this test exists to keep somebody out of. It is also
-    the control that most serves a non-admin: test_a_non_admin_reads_the_same_facts already says
-    the point of their read-only view is answering "what would this do", and a job size you cannot
-    change answers that for exactly one job size. Asserted present below rather than ignored.
+    EXCEPT THE SUB-TOTAL WHAT-IF BOX, on a SHEET tab -- every role gets it there. The gate is
+    about controls that FILE something, and that box files nothing -- it moves a preview figure
+    on this screen only, so no amount of typing in it can earn the 403 this test exists to keep
+    somebody out of. It is also the control that most serves a non-admin: test_a_non_admin_reads_
+    the_same_facts already says the point of their read-only view is answering "what would this
+    do", and a job size you cannot change answers that for exactly one job size. Asserted present
+    below rather than ignored. Global carries none: nothing left there is job-size-dependent
+    (hard_bid was, until 2026-09-22), so there is no what-if left to offer anybody on that tab.
 
     Mutation: drop the ADMIN gate (test_dropping_the_admin_gate_hands_a_non_admin_a_box)."""
-    for name in ("nonAdminPolish", "nonAdminGyp", "nonAdminGlobal"):
+    for name, boxes in (("nonAdminPolish", 1), ("nonAdminGyp", 1), ("nonAdminGlobal", 0)):
         snap = ran[name]
         assert snap["inputCount"] == 0, "%s rendered an editable box for a non-admin" % name
         assert snap["switchCount"] == 0, "%s rendered a switch for a non-admin" % name
         assert snap["buttonCount"] == 0, "%s rendered a button for a non-admin" % name
-        assert snap["subtotalBoxes"] == 1, (
-            "%s lost the sub-total what-if box; it writes nothing and is the one control a "
-            "read-only viewer is on this page to use" % name)
+        assert snap["subtotalBoxes"] == boxes, (
+            "%s's sub-total what-if box count changed: wanted %d, got %d"
+            % (name, boxes, snap["subtotalBoxes"]))
     assert ran["nonAdminRequests"] == ["GET"], "a non-admin's page wrote to the API"
 
 
@@ -1222,13 +1159,15 @@ def test_a_non_admin_reads_the_same_facts(ran):
     assert ran["dayOnePolish"]["ro"]["hidden"] is True
     assert row(ran["nonAdminPolish"], "soft_costs")["rateText"] == "16%"
     assert (row(ran["nonAdminPolish"], "soft_costs")["rate"],
-            row(ran["nonAdminPolish"], "soft_costs")["figure"]) == ("16%", "$19,565.88")
+            row(ran["nonAdminPolish"], "soft_costs")["figure"]) == ("16%", "$20,364.01")
     gp = row(ran["nonAdminPolish"], "gp")["bandsText"]
     for rung in ("6,500", "52%", "32,500", "32%", "above that", "30%"):
         assert rung in gp, "a non-admin cannot read GP's bands: %r" % gp
-    assert "local jobs only" in row(ran["nonAdminPolish"], "hard_bid")["bandsText"]
+    # A LADDER STILL READS AS A LADDER used to be pinned against hard_bid's own local-jobs-only
+    # checkbox here; GP is the only ladder left since 2026-09-22, and its bands are the assertion
+    # above.
     # And the absent row still reads absent, which is the fact a non-admin most needs.
-    absent = row(ran["nonAdminGyp"], "hard_bid")
+    absent = row(ran["nonAdminGyp"], "bond")
     assert absent["absentClass"] is True
     assert absent["appliesText"] == "Not used"
     assert absent["figure"] == "—"
@@ -1260,16 +1199,17 @@ def test_an_empty_rules_table_is_the_normal_first_state(ran):
     assert snap["fallback"]["hidden"] is False
     assert "normal first state" in snap["fallback"]["text"]
     assert "built into the estimator" in snap["fallback"]["text"]
-    assert snap["grand"]["preview"] == "$153,165.41", "an unconfigured tab still prices"
+    assert snap["grand"]["preview"] == "$159,413.31", "an unconfigured tab still prices"
 
 
 @needs_node
 def test_a_tab_with_something_filed_counts_it(ran):
-    """Three editable lines on a sheet tab now, not five: hard_bid and bond are set on Global, so
-    they are not lines this tab's admin has or has not got round to. The Gyp fixture files gp
-    here and bond THERE, and only the one filed here is counted."""
-    assert "1 of 3 lines on Gyp are overridden here" in ran["gyp"]["fallback"]["text"]
-    assert "4 lines on Global" not in ran["gyp"]["fallback"]["text"]
+    """Three editable lines on a sheet tab now, not five: bond is set on Global (hard_bid used to
+    be a second example, until 2026-09-22), so it is not a line this tab's admin has or has not
+    got round to. globalReachGyp files gp on Gyp and bond on Global, and only the one filed on
+    Gyp itself is counted."""
+    assert "1 of 3 lines on Gyp are overridden here" in ran["globalReachGyp"]["fallback"]["text"]
+    assert "3 lines on Global" not in ran["globalReachGyp"]["fallback"]["text"]
 
 
 # ── typing, blurring, and the keyboard ───────────────────────────────
@@ -1303,7 +1243,7 @@ def test_one_typed_number_files_the_whole_rate(ran):
     assert body == {"layout": "polish", "line_key": "soft_costs", "applies": True,
                     "notes": "", "formula": "18%"}
     r = row(ran["goodNumber"], "soft_costs")
-    assert (r["rate"], r["figure"]) == ("18%", "$22,011.62"), (
+    assert (r["rate"], r["figure"]) == ("18%", "$22,909.51"), (
         "the preview did not follow the saved rate: %r" % r["preview"])
     assert r["drops"] == ["Stop overriding this line"]
 
@@ -1331,7 +1271,7 @@ def test_a_formula_that_reads_is_saved_on_blur_with_the_whole_row(ran):
     assert body == {"layout": "polish", "line_key": "soft_costs", "applies": True,
                     "notes": "", "formula": "18%"}
     r = row(ran["goodOnBlur"], "soft_costs")
-    assert (r["rate"], r["figure"]) == ("18%", "$22,011.62")
+    assert (r["rate"], r["figure"]) == ("18%", "$22,909.51")
     assert r["drops"] == ["Stop overriding this line"]
 
 
@@ -1364,8 +1304,9 @@ def test_every_control_in_a_ladder_is_labelled_for_a_screen_reader(ran):
     assert len(set(labels)) == len(labels), "two boxes in one row share a label: %r" % labels
     assert "GP band 1 job size on Polish" in labels
     assert "GP rate above the last band on Polish" in labels
-    for c in ran["ladder"]["hard_bid"]["checks"]:
-        assert "local jobs only" in c["ariaLabel"], c
+    # hard_bid's own ladder carried a "local jobs only" checkbox, labelled the same way; gone
+    # with the line on 2026-09-22, and GP -- which has no checkbox, only edge/rate boxes -- is
+    # the only ladder left to label.
 
 
 @needs_node
@@ -1405,7 +1346,7 @@ def test_stopping_an_override_hands_the_line_back_to_its_constant(ran):
     r = row(ran["drop"]["after"], "soft_costs")
     assert r["inputs"][0]["value"] == "", "the removed rule is still in the box"
     assert r["inputs"][0]["placeholder"] == "16"
-    assert (r["rate"], r["figure"]) == ("16%", "$19,565.88"), (
+    assert (r["rate"], r["figure"]) == ("16%", "$20,364.01"), (
         "the line stopped pricing instead of falling back")
     assert r["drops"] == [], "the line still offers to stop overriding a rule that is gone"
 
@@ -1442,17 +1383,17 @@ def test_collapsing_applies_into_a_zero_formula_loses_the_absent_state(tmp_path)
 
     Re-derive `applies` from anything other than the column and a switched-off line becomes an
     editable box on a row that reads as a live one. Proves
-    test_gyps_absent_hard_bid_is_greyed_and_has_nothing_to_type_into is not vacuous.
+    test_an_absent_line_filed_by_hand_renders_the_same_way is not vacuous.
 
     Read on the line's own tab, because that is where the box would appear; the sheet tab reading
     the same rule flips out of its absent state too, and both halves are asserted."""
     mutant = mutate(tmp_path,
                     "      st.applies = rule.applies !== false;",
                     "      st.applies = true;")
-    r = row(mutant["globalAbsent"], "hard_bid")
+    r = row(mutant["globalAbsent"], "bond")
     assert r["absentClass"] is False and r["inputs"], (
         "the mutation changed nothing, so the absent-state assertions prove nothing")
-    assert row(mutant["filedAbsent"], "hard_bid")["absentClass"] is False, (
+    assert row(mutant["filedAbsent"], "bond")["absentClass"] is False, (
         "the sheet tab reading that rule stayed absent, so it is not reading the column at all")
 
 
@@ -1466,8 +1407,8 @@ def test_printing_zero_for_a_broken_line_is_caught(tmp_path):
                     '      return \'<span class="unpriced">Unpriceable</span>\';',
                     '      return \'<span class="amt">$0.00</span>\';', expect_count=2)
     assert "$0.00" in mutant["invalid"]["chainText"], "the mutation changed nothing"
-    assert row(mutant["invalid"], "hard_bid")["figure"] == "$0.00"
-    assert row(mutant["invalidGlobal"], "hard_bid")["figure"] == "$0.00"
+    assert row(mutant["invalid"], "bond")["figure"] == "$0.00"
+    assert row(mutant["invalidGlobal"], "bond")["figure"] == "$0.00"
 
 
 @needs_node
@@ -1507,7 +1448,7 @@ def test_an_off_row_with_no_way_back_is_the_corner_this_undoes(tmp_path):
     mutant = mutate(tmp_path,
                     absent_tail + " +" + chr(10) + "        btnsHtml(dropBtnHtml(r));",
                     absent_tail + ";")
-    for name, line in (("filedAbsent", "hard_bid"), ("switchedOff", "soft_costs")):
+    for name, line in (("filedAbsent", "bond"), ("switchedOff", "soft_costs")):
         r = row(mutant[name], line)
         assert r["buttons"] == [], "the mutation changed nothing for %s/%s" % (name, line)
         assert r["inputs"] == [], (
@@ -1608,10 +1549,10 @@ def test_a_simple_control_for_an_expression_it_cannot_hold_misrepresents_it(tmp_
 
 @needs_node
 def test_a_global_tab_built_from_the_chain_shows_lines_it_does_not_set(tmp_path):
-    """Proves test_the_global_tab_is_the_four_lines_that_are_one_rule_everywhere is not vacuous.
+    """Proves test_the_global_tab_is_the_three_lines_that_are_one_rule_everywhere is not vacuous.
 
     Hand the Global tab the chain's rows as well and it grows a GP row, a Super & PTO row, a Soft
-    Costs row and the two context lines -- nine rows on a tab that sets four.
+    Costs row and the two context lines -- nine rows on a tab that sets three.
 
     They come out DEAD rather than editable, and that is worth knowing: `editableHere` is a second
     gate and refuses a per-tab line on Global on its own, so a leak in the row list cannot by
@@ -1657,25 +1598,14 @@ def test_pricing_the_global_tab_as_a_chain_invents_a_lump_sum(tmp_path):
         "the mutant printed no running total either")
 
 
-@needs_node
-def test_letting_a_global_row_beat_the_tabs_own_empty_cell_gives_gyp_a_hard_bid(tmp_path):
-    """Proves test_the_gypsum_tabs_keep_their_empty_hard_bid_whatever_global_says is not vacuous.
-
-    THE ONE MISTAKE THIS FEATURE COULD HAVE MADE. Check the filed rule before the tab's own
-    absence and a rate filed once, for every layout, hands the gypsum tabs a give-back line whose
-    workbook cell is EMPTY -- a discount on a bid for a line Kyle's sheet does not have. The
-    ordering of those two branches is the whole of the exception, which is why it is mutated
-    rather than read."""
-    mutant = mutate(tmp_path,
-                    "    if (b && b.applies === false) {",
-                    "    if (false && b.applies === false) {")
-    r = row(mutant["globalReachGyp"], "hard_bid")
-    assert r["absentClass"] is False, "the mutation changed nothing"
-    assert r["figure"] != "—", (
-        "the mutant left the row unpriced, so this proves nothing about the give-back: %r"
-        % r["preview"])
-    assert "-6" in r["rateText"], (
-        "the mutant shows no rate on the gypsum row: %r" % r["rateText"])
+# WAS: test_letting_a_global_row_beat_the_tabs_own_empty_cell_gives_gyp_a_hard_bid, proving
+# test_the_gypsum_tabs_keep_their_empty_hard_bid_whatever_global_says was not vacuous by mutating
+# rowState's `if (b && b.applies === false)` branch -- the check that let a tab's own built-in
+# absence win over what Global said. Both deleted 2026-09-22: no BUILTIN entry on any layout has
+# `applies === false` any more (NOT_ON_TAB lost its only consumer when hard_bid left), so the
+# branch this mutated cannot fire against real data either way, and a mutation test against dead
+# code proves nothing about the product. The branch itself stays in markup.js -- see its own
+# comment for why -- but there is nothing left here for a test to defend.
 
 
 @needs_node
@@ -1691,7 +1621,7 @@ def test_applying_the_row_at_the_old_home_moves_a_price(tmp_path):
                     "    var rule = ruleFor(LAYOUT, lineKey) || ruleFor(homeOf(lineKey), lineKey);")
     r = row(mutant["misfiled"], "bond")
     assert r["rate"] == "1%", "the mutation changed nothing: %r" % r["preview"]
-    assert mutant["misfiled"]["grand"]["preview"] != "$153,165.41", (
+    assert mutant["misfiled"]["grand"]["preview"] != "$159,413.31", (
         "the mutant priced the row and the total did not move, so the total is not reading it")
 
 

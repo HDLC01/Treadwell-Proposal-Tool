@@ -186,19 +186,19 @@ def test_the_lower_boxs_move_grip_sits_on_the_upper_boxs_text():
 
 
 # ── the z-order the fix introduces ────────────────────────────────────────────
-def test_the_focused_box_outranks_neighbours_but_not_open_or_dragging():
+def test_the_focused_box_outranks_neighbours_but_not_dragging():
     """Ordering is the point: the box you are typing in must beat a plain neighbour, and
-    must NOT beat one expanded to read past its clip, or one being dragged across the
-    page. The latter two are set from JS, so this reads both sides and compares them."""
+    must NOT beat one being dragged across the page, which is set from JS, so this reads both
+    sides and compares them. (There was a third level, a box expanded to read past its clip;
+    nothing is clipped since 2026-09-26, so the state and its z-index are gone.)"""
     plain = int(re.search(r"\.tw-txbx\s*\{[^}]*z-index\s*:\s*(\d+)", CSS).group(1))
     m = re.search(r"\.tw-txbx:focus-within\s*\{[^}]*z-index\s*:\s*(\d+)", CSS)
     assert m, "the focused box no longer gets a z-index — the overlap fix is gone"
     focused = int(m.group(1))
-    opened = int(re.search(r'zIndex\s*=\s*open\s*\?\s*"(\d+)"', JS).group(1))
+    assert not re.search(r'zIndex\s*=\s*open\s*\?', JS), "the expanded-box state is back"
     dragged = int(re.search(r'zIndex\s*=\s*"(\d+)"', JS).group(1))
-    assert plain < focused < opened <= dragged, (
-        "z-order broken: plain=%d focused=%d open=%d drag=%d"
-        % (plain, focused, opened, dragged))
+    assert plain < focused < dragged, (
+        "z-order broken: plain=%d focused=%d drag=%d" % (plain, focused, dragged))
 
 
 def test_the_focus_raise_is_css_not_inline():

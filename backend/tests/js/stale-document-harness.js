@@ -489,12 +489,14 @@ out.proposalGuard = (() => {
     shims + "; return { sayTheSaveIsBlocked: sayTheSaveIsBlocked, repaintNote: repaintNote };")(doc, {});
   const said = fns.sayTheSaveIsBlocked();
 
-  const iGuard = PROPOSAL.indexOf("if (sayTheSaveIsBlocked()) return;");
+  const iGuard = PROPOSAL.indexOf("if (sayTheSaveIsBlocked()) return false;");
   const iWrite = PROPOSAL.indexOf("proposal_payload:", iGuard > 0 ? iGuard : 0);
   const iLanded = PROPOSAL.indexOf("landed = !!(TW.getState() || {}).proposal_payload",
                                    iWrite > 0 ? iWrite : 0);
-  const iGo = PROPOSAL.indexOf("window.location.assign(TW.withDraft(\"/done.html\"))",
-                               iWrite > 0 ? iWrite : 0);
+  // The navigation to the Files page. Since the Files page's door (2026-09-25) it is built as
+  // `_files` (marked composed=1) and either replaces the page or assigns it; the first of the two
+  // is the one that must come after the checks.
+  const iGo = PROPOSAL.indexOf("window.location.replace(_files)", iWrite > 0 ? iWrite : 0);
   return {
     said: said,
     head: nodes["resync-note-head"].textContent,
@@ -512,7 +514,7 @@ out.proposalGuard = (() => {
     landedBetweenWriteAndGo: iLanded > iWrite && iGo > iLanded,
     // It must LEAVE. Painting the note and navigating anyway is the bug wearing a fix.
     landedReturns: iLanded > 0 && iGo > iLanded
-      && /\n\s*return;/.test(PROPOSAL.slice(iLanded, iGo)),
+      && /\n\s*return false;/.test(PROPOSAL.slice(iLanded, iGo)),
     // And hand the button back, or a blocked Continue leaves a dead "Generating…" button.
     landedRestoresButton: iLanded > 0 && iGo > iLanded
       && /btn\.disabled = false/.test(PROPOSAL.slice(iLanded, iGo)),

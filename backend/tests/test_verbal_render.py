@@ -155,7 +155,7 @@ def test_a_switch_the_estimator_set_is_reported_not_reapplied(ran):
     says whose call it is."""
     g = only_group(ran["respected"])
     assert g["heading"] == "You set these yourself"
-    assert "Hard bid" in g["items"][0] and "left as you set it" in g["items"][0]
+    assert "Remodel tax" in g["items"][0] and "left as you set it" in g["items"][0]
     assert "it is not a hard bid" in g["items"][0], (
         "the evidence is missing from the one group where it matters most")
     assert "Yours wins" in g["text"], g["text"]

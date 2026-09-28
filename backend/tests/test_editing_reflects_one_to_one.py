@@ -16,7 +16,11 @@ work.
 """
 from __future__ import annotations
 
+import io
+
 import pytest
+from docx import Document
+from docx.oxml.ns import qn
 
 import main
 from tests.test_price_overrides import _VALS, _rendered, _xml, client
@@ -94,24 +98,36 @@ def test_the_base_bid_line_still_works_too():
 def test_no_price_write_path_trims_the_stored_value():
     """The browser half, asserted against the shipped source rather than a copy of it.
 
-    FOUR sites write a stored override now: the two island handlers, the whole-line one, and
-    the box-wide PRICE sweep added when each text box became a single editing host (a Delete
-    across three price rows arrives as ONE input event, so a handler that only read the caret's
-    own row would leave the other two edited on screen and unedited in the draft).
+    FOUR sites write a stored override now: the two island handlers, the whole-line capture
+    (captureLineNode — both the keystroke handler and the box-wide PRICE sweep go through it; the
+    sweep exists because each text box became a single editing host, and a Delete across three
+    price rows arrives as ONE input event, so a handler that only read the caret's own row would
+    leave the other two edited on screen and unedited in the draft), and the lines typed above or
+    below a price line (captureExtrasIn, 2026-09-26: they are their own lines now, not text stored
+    inside the price line).
 
-    All four must collapse newlines only. A `.trim()` on any of them silently re-creates
-    Kyle's bug on that channel alone, which is exactly how it hid: one channel was right
-    and nothing compared them. The count is asserted so a FIFTH channel cannot appear
-    without somebody reading this rule first.
+    None of them may trim. A `.trim()` on any of them silently re-creates Kyle's bug on that
+    channel alone, which is exactly how it hid: one channel was right and nothing compared them.
+    The count is asserted so a FIFTH channel cannot appear without somebody reading this rule
+    first.
     """
     import pathlib
     js = (pathlib.Path(__file__).resolve().parents[2] / "frontend" / "js"
           / "proposal-review.js").read_text(encoding="utf-8")
-    writes = [ln.strip() for ln in js.split("\n")
-              if "serializeBlock(sp)" in ln or "serializeBlock(lineNode)" in ln]
+
+    def body(name):
+        start = js.index("  function " + name + "(")
+        return js[start:js.index("\n  }\n", start)]
+
+    writes = [ln.strip() for ln in js.split("\n") if "serializeBlock(sp)" in ln]
+    for name in ("captureLineNode", "captureExtrasIn"):
+        writes += [ln.strip() for ln in body(name).split("\n") if "serializeBlock(" in ln]
     assert len(writes) == 4, "the set of price write paths changed: %r" % writes
     for w in writes:
         assert ".trim()" not in w, "a price write path trims again: %s" % w
+    # Both whole-line entry points store through the one capture, so there is one rule to keep.
+    # (The sweep passes its spill map as a second argument: count the calls, not one spelling.)
+    assert js.count("captureLineNode(lineNode") == 2
 
 def test_the_islands_show_the_spaces_they_store():
     """The DISPLAY half, which the write-path test cannot see.
@@ -172,10 +188,15 @@ def test_the_writer_would_accept_a_newline_in_a_price_line_too():
     Enter to a space there is a deliberate choice in the browser handler ("a price line is
     one line"), NOT a limitation of the .docx. Recorded so that if Kyle asks for Enter to
     work in Base Bid and Options, whoever picks it up knows it is a one-line client change
-    and not a writer rewrite."""
-    body = {"work_type": "epoxy", "audience": "Direct", "values": dict(_VALS),
-            "price_overrides": {"lines": {"base": "$1 - first\nsecond"}}}
-    assert _xml(_docx(body)).count("<w:br/>") >= 1
+    and not a writer rewrite.
+
+    In the live shape (`lines2`, what the editor stores now). A line in the OLD shape (`lines`) is
+    laid out one line to a paragraph instead, the way the editor shows it on load: a break there
+    was a line typed next to the price line (test_legacy_line_breaks.py)."""
+    def breaks(pov):
+        return _xml(_docx({"work_type": "epoxy", "audience": "Direct", "values": dict(_VALS),
+                           "price_overrides": pov})).count("<w:br/>")
+    assert breaks({"lines2": {"base": "$1 - first\nsecond"}}) >= breaks({}) + 1
 
 
 def test_two_blank_lines_mean_two_blank_lines():
@@ -183,10 +204,14 @@ def test_two_blank_lines_mean_two_blank_lines():
     lines." The editor used to flatten every newline in a price line to a single space, so
     the count was always zero. Measured: three newlines produce three breaks per copy of
     the line (the row exists twice in the file, as the modern shape and its legacy
-    fallback), so the assertion is on the RATIO rather than a raw count."""
+    fallback), so the assertion is on the RATIO rather than a raw count.
+
+    That is the live shape (`lines2`). In the OLD shape (`lines`) each line is its own paragraph,
+    the way the editor shows it on load (test_legacy_line_breaks.py), so there the two blank lines
+    are two blank paragraphs between the price line and the words under it, in every copy."""
     def breaks(val):
         body = {"work_type": "epoxy", "audience": "Direct", "values": dict(_VALS),
-                "price_overrides": {"lines": {"base": val}}}
+                "price_overrides": {"lines2": {"base": val}}}
         return _xml(_docx(body)).count("<w:br/>")
     one  = breaks("$1 - a" + chr(10) + "b")
     three = breaks("$1 - a" + chr(10) * 3 + "b")
@@ -194,4 +219,19 @@ def test_two_blank_lines_mean_two_blank_lines():
     assert three == one * 3, (
         "three newlines gave %d breaks where one gave %d - runs are being collapsed"
         % (three, one))
+
+    def gaps(val):
+        d = Document(io.BytesIO(_docx({"work_type": "epoxy", "audience": "Direct", "values": dict(_VALS),
+                                       "price_overrides": {"lines": {"base": val}}})))
+        texts = ["".join(t.text or "" for t in p.iter(qn("w:t"))) for p in d.element.body.iter(qn("w:p"))
+                 if p.find(".//" + qn("w:txbxContent")) is None]
+        out = []
+        for i, t in enumerate(texts):
+            if t == "$1 - a":
+                j = texts.index("b", i)
+                assert all(not x for x in texts[i + 1:j]), texts[i:j + 1]
+                out.append(j - i - 1)
+        return out
+    assert gaps("$1 - a" + chr(10) + "b") == [0, 0]
+    assert gaps("$1 - a" + chr(10) * 3 + "b") == [2, 2]
 

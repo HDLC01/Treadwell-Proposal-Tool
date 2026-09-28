@@ -1,43 +1,63 @@
 "use strict";
-/* Execute BOTH of the page's price-block writers over one set of figures and report what each
- * one would put on the base-bid line.
+/* Execute the page's price-block writers over one set of figures and report what the SCREEN shows.
  *
- * THE BUG IT COVERS (Kyle, 2026-09-08). Two reports, one cause:
+ * THE RULE BEING PROVED (Hanz, 2026-09-25): the estimate sheet decides WHETHER there is tax —
+ * Taxable? for material sales tax, Remodel Tax? for remodel tax, per priced tab — and the proposal's
+ * TAX control decides only the layout, "One line" or "Broken out". Broken out: the base line is the
+ * pre-tax figure with no bracket, a Material Sales Tax row only if taxable, a Remodel Tax row only if
+ * remodel, then the Total, and the rows add up ("$6,767 – Epoxy flooring as described above / $72 –
+ * Material Sales Tax / $6,839 – Total"). One line: the whole bid, with the wording for the taxes the
+ * sheet says are in it. A sheet with no tax is tax exempt (Hanz, 2026-09-28, "Estimate sheet only")
+ * and prints one line, "(tax exempt)", whatever layout is stored. Every option off its own tab, and
+ * always on ONE line (Hanz, 2026-09-28): its whole total, an Add/Deduct off the two tax-inclusive
+ * totals.
  *
- *   1. "a proposal printing $6,182 where my estimate said $6,307" — the Direct POLISH template's
- *      base line is a FREE paragraph, so the screen prints {{base_bid_formatted}} straight out of
- *      computeTokenValues, which subtracted the sales tax unconditionally. In that template's
- *      default layout the Material Sales Tax row is inside {{#tax_breakout}} and never prints, so
- *      there was nothing on the page for the base to be net OF: a $125 discount, on screen, on
- *      the only price the document shows.
- *   2. the GC price block printing 6,307 + 125 + 0 under a 6,307 Total — the mirror image. Those
- *      files author their tax rows as plain paragraphs that always print, and the backend was
- *      collapsing the base line to the whole tax-inclusive total anyway.
+ * THE PAGE HAS SEVERAL WRITERS FOR ONE PRICE BLOCK — refreshPriceDisplay paints the mounted rows,
+ * computeTokenValues fills the {{tokens}} the free-paragraph templates print and the payload carries,
+ * renderProposalExtras draws the option lines, setBlockContent / priceRowVisibility show or hide a
+ * GC / Gyp tax row — and they all go through one rule (baseBidFigure → TWPrice.taxRule). This runs
+ * ALL of them, and test_price_block_reconciles.py compares what they show with what /api/generate
+ * prints for the same inputs, on every template shape. Two independent implementations of the rule
+ * (price-lines-core.js here, price_rules.py there) have to land on the same rows and the same dollar.
  *
- * refreshPriceDisplay said `broken ? total - tax : total` and computeTokenValues said
- * `total - tax`, for the same displayed line. THAT disagreement was the defect, so both now go
- * through baseBidFigure and this harness runs BOTH to prove they still agree.
+ * WHY EXECUTED, NOT GREPPED. "the screen and the document agree" is a comparison between two runs of
+ * real code. A source assertion that both call the rule cannot catch arguments in the wrong order, a
+ * phrase built from a stale flag, or a row shown that the render takes out.
  *
- * WHY EXECUTED, NOT GREPPED. "these two callers agree" is a comparison between two runs of real
- * code. A source assertion that both mention `baseBidFigure` cannot catch a caller that passes
- * its arguments in the wrong order, and `printedTaxRows` reads a module-level `templateBlocks`
- * that a text search cannot evaluate at all.
+ * THE SHAPES COME FROM THE REAL .docx FILES: the caller walks each template with
+ * proposal_writer.iter_editable_blocks and hands the blocks in on stdin, exactly as
+ * /api/proposal-template serves them to the browser.
  *
- * THE SHAPES COME FROM THE REAL .docx FILES. The caller walks each template with
- * proposal_writer.iter_editable_blocks and hands the resulting blocks in on stdin, exactly as
- * /api/proposal-template serves them to the browser. Nothing here hardcodes which templates gate
- * their tax rows, so a template Kyle re-authors with or without a {{#tax_breakout}} wrapper moves
- * this test rather than sneaking past it.
+ * THE TAX CONTROL ITSELF. A case with `select_options` also runs the ribbon's wiring — the real
+ * wireRibbonTax IIFE, verbatim — against a <select> double holding the options the real
+ * proposal-review.html offers, with their `hidden` / `disabled` (`select_options`; a value it does
+ * not offer reads back "", as a browser's does). It paints; lets a PERSON try `pick` (refused, as a
+ * browser refuses it, on a disabled select or a hidden or disabled option); forces `force` through
+ * a change event, as a script could; flips the sheet's answers to `reflag` and repaints, as a base
+ * pick or a re-priced estimate does; and paints a fresh page from what was saved, as a reload would.
+ * With `rebuild` the page first prices the draft's `state.priced_tabs` through its real
+ * rebuildPricing, so the sheet's answers the control is painted from are the ones the page itself
+ * derives from the tabs — a combo with no base picked takes them from both systems.
+ *
+ * THE PAGE'S OWN PAYLOAD. Each case also reports `payload`, the price half of what Continue hands
+ * /api/generate (composeProposalPayload's composition over computeTokenValues' tokens), so a test
+ * can render the document from what the page SENDS, not only from figures of its own: the screen
+ * could agree with a hand-built payload while the one the page composes prints another price.
  *
  * Usage: node price-block-harness.js <frontend-dir> < cases.json   →  one line of JSON
- *   cases.json: [{ name, work_type, audience, tax_inclusion, blocks, total, sales_tax, remodel_tax }]
+ *   cases.json: [{ name, work_type, audience, blocks, total, sales_tax, remodel_tax,
+ *                  taxable?, remodel_on?, tax_layout?, tax_inclusion?, rooms?, state?,
+ *                  select_options?, pick?, force?, reflag?, rebuild? }]
  */
 const fs = require("fs");
 const path = require("path");
 
 const ROOT = process.argv[2];
-const SRC = fs.readFileSync(path.join(ROOT, "js", "proposal-review.js"), "utf8");
-const NL = String.fromCharCode(10);
+const SRC = fs.readFileSync(path.join(ROOT, "js", "proposal-review.js"), "utf8").replace(/\r\n/g, "\n");
+// The price rule's page half, a script the page loads before proposal-review.js; the lifted code
+// reads it as the bare global `TWPrice`, exactly as the page does.
+globalThis.TWPrice = require(path.join(ROOT, "js", "price-lines-core.js"));
+const NL = "\n";
 
 /** Lift a real unit by name, refusing to invent a stub if the file moved on. */
 function grab(re, what) {
@@ -58,53 +78,153 @@ function fn(name) {
   throw new Error("unbalanced braces reading " + name);
 }
 
-// The real units, in dependency order. `baseBidFigure` is the subject; `refreshPriceDisplay` and
-// `computeTokenValues` are the two callers under comparison. Everything they reach for on the
-// pricing path is lifted rather than stubbed, so the harness cannot disagree with the app about
-// how a dollar is formatted, which work type is in effect, or what an overridden line shows.
+// The real units, in dependency order. Everything on the pricing path is lifted rather than
+// stubbed, so the harness cannot disagree with the app about how a dollar is formatted, which work
+// type is in effect, or what an edited line shows.
 //
-// INJECTED, not lifted (see scopeFor): `templateBlocks` — the whole point is to drive it per case;
-// `focusInside` and `lineAtSelection` — they read a live Selection; `renderProposalExtras` — it
-// renders the options/alternate previews out of the DOM and has nothing to do with the base line.
+// INJECTED, not lifted (see scopeFor): `templateBlocks` — driven per case; `focusInside` and
+// `lineAtSelection` — they read a live Selection.
 const UNITS = [
   grab(/^  const fmtUSD = [\s\S]*?;$/m, "fmtUSD"),
   grab(/^  const fmtUSDdoc = .*$/m, "fmtUSDdoc"),
   grab(/^  const fmtSF = .*$/m, "fmtSF"),
   grab(/^  const _OVERRIDE_TITLE = .*$/m, "_OVERRIDE_TITLE"),
+  grab(/^  const COMPUTED_PRICE_LINE_KEYS = .*$/m, "COMPUTED_PRICE_LINE_KEYS"),
+  grab(/^  const _LIVE_TITLE = .*$/m, "_LIVE_TITLE"),
+  grab(/^  const _MONEY_TITLE = .*$/m, "_MONEY_TITLE"),
+  grab(/^  const _escLine = [\s\S]*?\}\[c\]\)\);$/m, "_escLine"),
+  grab(/^  const GYP_BASE = .*$/m, "GYP_BASE"),
   fn("effectiveWorkType"),
+  fn("basePriceSystem"),
+  fn("taxLayout"),
   fn("taxTreatmentMode"),
+  fn("baseTaxRule"),
   fn("printedTaxRows"),
   fn("baseBidFigure"),
   fn("lineOverride"),
   fn("lineValue"),
+  fn("lineCue"),
+  // The price box's bullets: the builders put a line's override on it (linePropsOf) and
+  // refreshPriceDisplay ends by drawing them (paintLineParas, a no-op on these element doubles).
+  fn("linePropsOf"),
+  fn("paintLineParas"),
+  fn("extraLinesHtml"),
   fn("lineEl"),
+  fn("paintExtras"),
+  fn("makeExtraLine"),
   fn("paintLine"),
   fn("comboSystemLines"),
   fn("comboLinesForPayload"),
   fn("baseDescLabel"),
   fn("refreshPriceDisplay"),
+  // The option-line writer ends by drawing the blank lines above the Options heading. Lifted, not
+  // stubbed: this page double has no #options-gap, so it returns before touching anything, as the
+  // real one does on a page without the gap (options-gap-harness.js drives it with one).
+  fn("paintOptionsGap"),
+  fn("renderProposalExtras"),
   fn("computeTokenValues"),
+  fn("priceRowVisibility"),
+  // The pricing the page runs at init and on every base pick: priced_tabs → the base's figures and
+  // the sheet's two answers for it (a case with `rebuild` runs it). Lifted with what it calls; the
+  // payload sync returns at once here, as on a page before its first Continue.
+  grab(/^  const OPTION_ONLY_ROLES = .*$/m, "OPTION_ONLY_ROLES"),
+  grab(/^  const COMBINED_BASE_ROLES = .*$/m, "COMBINED_BASE_ROLES"),
+  grab(/^  const roleOfTab = .*$/m, "roleOfTab"),
+  grab(/^  const isOptionOnlyTab = .*$/m, "isOptionOnlyTab"),
+  grab(/^  const inCombinedBase = [\s\S]*?;$/m, "inCombinedBase"),
+  fn("baseAreaFrom"),
+  grab(/^  const PAYLOAD_PRICING_KEYS = \[[\s\S]*?\];$/m, "PAYLOAD_PRICING_KEYS"),
+  fn("pruneComputedPriceLineOverrides"),
+  fn("syncPayloadPricing"),
+  fn("rebuildPricing"),
 ].join(NL);
 
-/** A <p> double carrying only what paintLine touches: text, the computed baseline, the ⚠ class,
- *  the tooltip, and a display style refreshPriceDisplay show/hides. */
+/** The ribbon's wiring: `(function wireRibbonTax() { ... })();` exactly as the page runs it on load. */
+function iife(name) {
+  const m = new RegExp("\\n  \\(function " + name + "\\s*\\(\\s*\\)\\s*\\{").exec(SRC);
+  if (!m) throw new Error(name + " is gone — rewrite this harness, don't stub it");
+  const i = SRC.indexOf("{", m.index + m[0].length - 1);
+  let depth = 0;
+  for (let j = i; j < SRC.length; j++) {
+    if (SRC[j] === "{") depth++;
+    else if (SRC[j] === "}" && --depth === 0) {
+      const tail = /^\)\(\);/.exec(SRC.slice(j + 1));
+      if (!tail) throw new Error(name + " is no longer an IIFE — rewrite this harness, don't stub it");
+      return SRC.slice(m.index + 1, j + 1 + tail[0].length);
+    }
+  }
+  throw new Error("unbalanced braces reading " + name);
+}
+const WIRE_TAX = iife("wireRibbonTax");
+
+/** A <select> double, holding option objects {value, label, hidden, disabled} as the page's are.
+ *  As a browser's: `value` reads back only an option it offers ("" otherwise) and a script may set
+ *  it to any of them, a disabled or hidden one included; a PERSON (`userPick`) can choose only what
+ *  the list shows and lets them — nothing on a disabled select, never a hidden or disabled option —
+ *  and only a person's choice fires `change`. `fire` is a script's own change event. */
+function select(id, options) {
+  const listeners = {};
+  let v = "";
+  const opts = options.map((o) => Object.assign({}, o));
+  const s = {
+    id, options: opts, disabled: false, title: "",
+    get value() { return v; },
+    set value(x) { v = opts.some((o) => o.value === String(x)) ? String(x) : ""; },
+    addEventListener(type, f) { (listeners[type] = listeners[type] || []).push(f); },
+    fire(type) { (listeners[type] || []).forEach((f) => f({ type, target: s })); },
+    listening(type) { return (listeners[type] || []).length; },
+    choosable() { return s.disabled ? [] : opts.filter((o) => !o.hidden && !o.disabled).map((o) => o.value); },
+    userPick(x) {
+      if (s.choosable().indexOf(String(x)) < 0) return false;
+      v = String(x);
+      s.fire("change");
+      return true;
+    },
+  };
+  return s;
+}
+
+/** What the ribbon's select shows: its value, whether it can be used, its tooltip, the values a
+ *  person could choose from its list, and the Tax exempt option's OWN `hidden` / `disabled` — each
+ *  on its own, because a browser that ignores `hidden` on an <option> (Safari has) still honours
+ *  `disabled`, so neither may stand in for the other. */
+function snap(sel) {
+  const ex = sel.options.find((o) => o.value === "EXEMPT");
+  return { value: sel.value, disabled: !!sel.disabled, title: sel.title || "", choosable: sel.choosable(),
+           exempt_option: ex ? { hidden: !!ex.hidden, disabled: !!ex.disabled } : null };
+}
+
+/** A <p> double carrying only what paintLine touches: text, the computed baseline, the cue
+ *  classes, the tooltip, and a display style refreshPriceDisplay show/hides. */
 function el(id) {
-  return {
+  const o = {
     id,
     textContent: "",
     dataset: {},
     style: { display: "" },
     title: "",
     _classes: new Set(),
-    classList: {
-      toggle(c, on) { if (on) this._o._classes.add(c); else this._o._classes.delete(c); },
-      contains(c) { return this._o._classes.has(c); },
-    },
     removeAttribute() { this.title = ""; },
     appendChild() {},
     get innerHTML() { return this._html || ""; },
     set innerHTML(v) { this._html = v; },
   };
+  o.classList = {
+    toggle(c, on) { if (on) o._classes.add(c); else o._classes.delete(c); },
+    contains(c) { return o._classes.has(c); },
+  };
+  return o;
+}
+
+const unesc = (s) => String(s).replace(/&(#39|amp|lt|gt|quot);/g,
+  (_, k) => ({ "#39": "'", amp: "&", lt: "<", gt: ">", quot: '"' }[k]));
+/** The lines lineEl drew into a container, in order: {key, kind, text, classes}. */
+function linesOf(html) {
+  const out = [];
+  const re = /<p class="([^"]*)"[^>]*?data-po-kind="(line|extra)" data-po-linekey="([^"]*)"[^>]*>([\s\S]*?)<\/p>/g;
+  let m;
+  while ((m = re.exec(String(html || "")))) out.push({ classes: m[1], kind: m[2], key: unesc(m[3]), text: unesc(m[4]) });
+  return out;
 }
 
 /** Build a page scope for one case and return handles into the real functions. */
@@ -112,59 +232,170 @@ function scopeFor(c) {
   const rows = {};
   for (const id of ["base-bid-heading", "combo-price-block", "base-bid-row", "sales-tax-row",
                     "remodel-tax-row", "total-row", "options-heading", "rooms-block",
-                    "options-panel", "price-lines-block", "alternate-block"]) {
+                    "price-lines-block", "alternate-block"]) {
     rows[id] = el(id);
-    rows[id].classList._o = rows[id];
   }
+  // #tb-total is where the writers read the lump sum from; the page renders it before calling, and
+  // rebuildPricing writes it — one element, as on the page, so what it writes is what they read.
+  const tbTotal = { textContent: c.total_text };
   const document = {
-    // #tb-total is where BOTH writers read the lump sum from; the page renders it before calling.
-    querySelector: (sel) => (sel === "#tb-total" ? { textContent: c.total_text } : null),
+    querySelector: (sel) => (sel === "#tb-total" ? tbTotal : null),
     getElementById: (id) => rows[id] || null,
   };
-  const form = {
-    querySelector: (sel) => {
-      const m = /\[name='([^']+)'\]/.exec(sel);
-      const vals = { tax_inclusion: c.tax_inclusion };
-      return m && vals[m[1]] !== undefined ? { value: vals[m[1]] } : null;
-    },
-  };
+  const inputs = [];
+  const form = { querySelector: () => null, dispatchEvent: (e) => { inputs.push(e.type); return true; } };
+  if (c.select_options !== undefined) rows["tax-treatment-select"] = select("tax-treatment-select", c.select_options);
+  const sets = [];
   const state = {
     work_type: c.work_type, audience: c.audience,
-    project_name: "Viracor", priced_tabs: [], rooms: [],
+    project_name: "Viracor", priced_tabs: [], rooms: c.rooms || [],
     proposal_lump_sum: c.total, proposal_sales_tax: c.sales_tax,
     proposal_remodel_tax: c.remodel_tax,
     sheet_area: { epoxy_sf: 3000, polish_sf: 3000, cove_lf: 0 },
-    price_overrides: { lines: {} },
+    price_overrides: c.price_overrides || { lines: {} },
     cell_values: {},
   };
+  if (c.taxable !== undefined) state.proposal_taxable = c.taxable;
+  if (c.remodel_on !== undefined) state.proposal_remodel_on = c.remodel_on;
+  if (c.tax_layout !== undefined) state.tax_layout = c.tax_layout;
+  if (c.tax_inclusion !== undefined) state.tax_inclusion = c.tax_inclusion;
   // Narrative fields a case wants set (or explicitly blank) — the price cases never pass any.
   Object.assign(state, c.state || {});
-  const body = UNITS + NL +
-    "return { refreshPriceDisplay, computeTokenValues, printedTaxRows, baseBidFigure };";
+  const body = UNITS + NL + (c.select_options !== undefined ? WIRE_TAX + NL : "") +
+    "return { refreshPriceDisplay, computeTokenValues, printedTaxRows, baseBidFigure, taxLayout, priceRowVisibility, comboLinesForPayload,\n" +
+    "         effectiveWorkType, fmtUSDdoc, rebuildPricing };";
   const api = new Function("state", "document", "form", "TW", "window", "templateBlocks",
-                           "focusInside", "lineAtSelection", "renderProposalExtras", body)(
-    state, document, form, { readForm: () => ({}) }, { TWAuth: null },
-    c.blocks, () => false, () => null, () => {});
-  return { api, rows, state };
+                           "focusInside", "lineAtSelection", body)(
+    state, document, form,
+    { readForm: () => ({}), setState: (patch) => { sets.push(JSON.parse(JSON.stringify(patch))); } },
+    { TWAuth: null }, c.blocks, () => false, () => null);
+  return { api, rows, state, sets, inputs };
+}
+
+/** The tax rows the page shows under the base line. */
+function rowsShown(sc) {
+  return ["sales-tax-row", "remodel-tax-row", "total-row"].filter((id) => sc.rows[id].style.display !== "none");
+}
+
+/** Combo's Option 1 / Option 2 lines as drawn, where the page draws them instead of the base line. */
+function comboOf(sc) {
+  const b = sc.rows["combo-price-block"];
+  return b.style.display !== "none" ? linesOf(b.innerHTML).map((l) => l.text) : [];
+}
+
+/** A page opening the case's draft: with `rebuild`, its pricing runs over the draft's priced_tabs
+ *  first, as page init does (rebuildPricing: the base's figures and the sheet's two answers for
+ *  it); then the price box paints. Returns how many saves came before the paint, so what is
+ *  reported as saved is what the TAX control and the paint saved. */
+function open(sc, c) {
+  if (c.rebuild) sc.api.rebuildPricing();
+  const n = sc.sets.length;
+  sc.api.refreshPriceDisplay();
+  return n;
+}
+
+/** The TAX control, driven as the page is: paint; a person tries `pick` (the form's `input` then
+ *  runs the page's own repaint); a script forces `force` through a change event; the sheet's
+ *  answers flip to `reflag` and the page repaints, as a base pick or a re-priced estimate makes it;
+ *  and a fresh page paints the draft as it was left (a reload). */
+function pickFlow(c) {
+  const first = scopeFor(c);
+  const sel = first.rows["tax-treatment-select"];
+  const cellsBefore = JSON.stringify(first.state.cell_values);
+  const out = { wired: sel.listening("change") };
+  const opened = open(first, c);
+  out.painted = snap(sel);
+  out.paintedBase = first.rows["base-bid-row"].textContent;
+  out.paintedRows = rowsShown(first);
+  out.paintedCombo = comboOf(first);
+  out.flags = { taxable: first.state.proposal_taxable === undefined ? null : first.state.proposal_taxable,
+                remodel_on: first.state.proposal_remodel_on === undefined ? null : first.state.proposal_remodel_on };
+  if (c.pick !== undefined) {
+    out.picked = sel.userPick(c.pick);
+    if (out.picked) first.api.refreshPriceDisplay();
+    out.repainted = snap(sel);
+  }
+  if (c.force !== undefined) {
+    sel.value = c.force;
+    sel.fire("change");
+    out.forced = snap(sel);
+  }
+  out.saved = first.sets.slice(opened);
+  out.moduleState = first.state.tax_layout === undefined ? null : first.state.tax_layout;
+  out.inputs = first.inputs.slice();
+  out.base = first.rows["base-bid-row"].textContent;
+  out.rowsShown = rowsShown(first);
+  out.combo = comboOf(first);
+  const tv = first.api.computeTokenValues(Object.assign({}, first.state));
+  out.tokens = { tax_layout: tv.tax_layout, tax_inclusion: tv.tax_inclusion,
+                 base_bid_formatted: tv.base_bid_formatted, base_tax_phrase: tv.base_tax_phrase,
+                 price_taxable: tv.price_taxable, price_remodel_on: tv.price_remodel_on };
+  // What Continue would hand /api/generate now, so the document can be rendered from it.
+  out.payload = payloadOf(first.api, first.state, tv);
+  out.cellsUntouched = JSON.stringify(first.state.cell_values) === cellsBefore
+    && !out.saved.some((p) => "cell_values" in p);
+  if (c.reflag) {
+    Object.assign(first.state, c.reflag);
+    first.api.refreshPriceDisplay();
+    out.reflagged = snap(sel);
+    out.reflaggedBase = first.rows["base-bid-row"].textContent;
+    out.reflaggedRows = rowsShown(first);
+  }
+  // A reload: the draft as it was left (its sheet answers as the case gave them), drawn by a fresh page.
+  const kept = Object.assign({}, ...out.saved).tax_layout;
+  const reload = scopeFor(Object.assign({}, c, kept !== undefined ? { tax_layout: kept } : {}));
+  open(reload, c);
+  out.reloaded = snap(reload.rows["tax-treatment-select"]);
+  out.reloadedBase = reload.rows["base-bid-row"].textContent;
+  return out;
+}
+
+/** The price half of what composeProposalPayload hands /api/generate, field for field: `values`
+ *  is the draft (with the form, empty here) spread UNDER computeTokenValues' tokens, less the keys
+ *  it deletes; `combo_options` is comboLinesForPayload's; `remodel` the one conditional row off
+ *  the draft's remodel tax; rooms, manual price lines and the line edits as the draft holds them.
+ *  The narrative a test adds on top is text, never a figure or a flag. */
+function payloadOf(api, state, tv) {
+  const values = Object.assign({}, state, tv);
+  ["proposal_payload", "proposal_payload_key", "generate_result", "dropbox_result", "priced_tabs"]
+    .forEach((k) => { delete values[k]; });
+  const remodelTax = Number(state.proposal_remodel_tax || 0);
+  return {
+    work_type: api.effectiveWorkType(), audience: state.audience || "Direct", values,
+    price_lines: Array.isArray(state.price_lines) ? state.price_lines : [],
+    combo_options: api.comboLinesForPayload(),
+    remodel: remodelTax > 0 ? [{ amount_formatted: api.fmtUSDdoc(remodelTax) }] : [],
+    rooms: Array.isArray(state.rooms) ? state.rooms : [],
+    price_overrides: (state.price_overrides && typeof state.price_overrides === "object") ? state.price_overrides : {},
+  };
 }
 
 const CASES = JSON.parse(fs.readFileSync(0, "utf8"));
 const out = CASES.map((c) => {
   c.total_text = "$" + Number(c.total).toFixed(2);
+  if (c.select_options !== undefined) return { name: c.name, pick: pickFlow(c) };
   const { api, rows, state } = scopeFor(c);
 
-  // THE SCREEN. refreshPriceDisplay paints the mounted rows (the layout the Direct templates get,
-  // where the base line is inside {{#single_bid}} / next to a {{#tax_breakout}} region).
+  // THE SCREEN. refreshPriceDisplay paints the mounted rows and renders the option lines.
   api.refreshPriceDisplay();
 
-  // THE DOCUMENT. computeTokenValues fills the token the templates whose base line is a FREE
-  // paragraph print directly, and is also the payload /api/generate is handed.
+  // THE DOCUMENT'S INPUTS. computeTokenValues fills the tokens the free-paragraph templates print,
+  // and is also the payload /api/generate is handed.
   const tv = api.computeTokenValues(Object.assign({}, state));
+
+  // The GC / Gyp tax rows are FREE paragraphs: which of them the editor shows, block by block.
+  const freeRows = {};
+  for (const b of (c.blocks || [])) {
+    if (b.in_block != null) continue;
+    const fake = el("b" + b.id);
+    const hide = api.priceRowVisibility(fake, b, tv);
+    if (hide !== null) freeRows[b.id] = !hide;
+  }
 
   return {
     name: c.name,
+    layout: api.taxLayout(),
     printedTaxRows: api.printedTaxRows(),
-    // What the estimator reads off the painted rows.
     painted: {
       base: rows["base-bid-row"].textContent,
       sales_tax: rows["sales-tax-row"].textContent,
@@ -173,15 +404,31 @@ const out = CASES.map((c) => {
       salesRowShown: rows["sales-tax-row"].style.display !== "none",
       remodelRowShown: rows["remodel-tax-row"].style.display !== "none",
       totalRowShown: rows["total-row"].style.display !== "none",
+      optionsHeadingShown: rows["options-heading"].style.display !== "none",
+      baseClasses: Array.from(rows["base-bid-row"]._classes),
     },
-    // What the document is filled from.
+    options: linesOf(rows["price-lines-block"].innerHTML),
+    // Combo's Option 1 / Option 2 lines, where the page draws them instead of the base line.
+    combo: rows["combo-price-block"].style.display !== "none" ? linesOf(rows["combo-price-block"].innerHTML) : [],
+    // WHAT CONTINUE HANDS /api/generate for the price block, so the document can be rendered from
+    // the page's OWN output rather than from figures a test writes itself (payloadOf).
+    payload: payloadOf(api, state, tv),
+    freeRows,
     tokens: {
       base_bid_formatted: tv.base_bid_formatted,
       material_tax_formatted: tv.material_tax_formatted,
       tax_amount_formatted: tv.tax_amount_formatted,
       total_formatted: tv.total_formatted,
       base_tax_phrase: tv.base_tax_phrase,
+      tax_layout: tv.tax_layout,
+      tax_inclusion: tv.tax_inclusion,
+      price_taxable: tv.price_taxable,
+      price_remodel_on: tv.price_remodel_on,
+      price_rows_material: tv.price_rows_material,
+      price_rows_remodel: tv.price_rows_remodel,
+      price_rows_total: tv.price_rows_total,
     },
+    price_overrides: state.price_overrides,
     // The narrative tokens a blank field used to turn into a printed "0".
     narrative: {
       texture: tv.texture, system_name: tv.system_name, system_name_epoxy: tv.system_name_epoxy,

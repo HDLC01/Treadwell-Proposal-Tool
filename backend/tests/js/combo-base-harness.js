@@ -148,7 +148,10 @@ function harness(stateIn) {
     ensureOpt: (id) => (state.tab_opts[id] = state.tab_opts[id] ||
       { show_system: true, show_diff: false, is_option: false, show: true, price_mode: "total" }),
     persistBidOptions: () => setStateCalls.push({ persisted: true }),
-    clearSingleBidDisplayOverride: () => {},
+    // The base radio prices and saves through persistTabState, and applies the price rule's
+    // base-pick half to the Proposal step's saved edits -- the real one, as the page loads it.
+    persistTabState: () => setStateCalls.push({ persisted: true }),
+    TWPrice: require(path.join(process.argv[2], "js", "price-lines-core.js")),
     renderPricePreview: () => {},
     syncSingleBidDisplay: () => {},
     scheduleRecalcAll: () => {},

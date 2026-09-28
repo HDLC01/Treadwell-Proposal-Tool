@@ -10,15 +10,25 @@ So there are two intake forms. This one is small on purpose — a test harness f
 calculator, not a second copy of index.html — and it owns the job conditions that used to be the
 calculator's step 2.
 
-IT ASKS SEVEN QUESTIONS AND WRITES TWELVE WORKSHEET CELLS, which is the shape to hold in mind
+IT ASKS FIVE QUESTIONS AND WRITES EIGHT WORKSHEET CELLS, which is the shape to hold in mind
 while reading the rest.
-Six of the seven are engine conditions stored on polish_estimate.conditions; the seventh,
-Renovation, has no home on the model and lives only in cell_values. Three MORE — dye, joint filler
-and remove-existing — are answered on the Takeoff step since 2026-09-16 and are not on this screen
-at all, and this page still writes their Yes/No into Kyle's workbook on every save, because
-cell_values is what the downloaded .xlsx is filled from. That last sentence is the one the tests
-below spend the most effort on: it is the half of the move that can fail with every screen still
-looking right.
+All five are engine conditions stored on polish_estimate.conditions. Three MORE — dye, joint
+filler and remove-existing — are answered on the Takeoff step since 2026-09-16 and are not on
+this screen at all, and this page still writes their Yes/No into Kyle's workbook on every
+save, because cell_values is what the downloaded .xlsx is filled from. That last sentence is
+the one the tests below spend the most effort on: it is the half of the move that can fail
+with every screen still looking right.
+
+Renovation was a sixth question here, carried rather than priced, until Hanz asked for it
+removed entirely: 2026-09-23, "Remove Renovation Toggle button from the polish beta intake
+form" — confirmed to mean the toggle and its two-cell write both, not a relocation. A
+renovation job now has no way to say so from this screen; the .xlsx carries whatever the
+template ships for Epoxy!B10/Polish!B10.
+
+Hard bid was a seventh question here until 2026-09-22, when Hanz asked for it removed from the
+Polish beta entirely: "remove all hard bids from the polish intake form. And also on the
+markups." It priced a discount for bidding against a hard number rather than a budget — see
+polish-bid-core.js's removal notes for the formula it used to feed.
 
 WHY EXECUTED, NOT GREPPED.
 
@@ -73,10 +83,10 @@ def html():
     return (FRONTEND / "polish-intake.html").read_text(encoding="utf-8")
 
 
-# ── the seven toggles this form asks ─────────────────────────────────────────
+# ── the six toggles this form asks ──────────────────────────────────────────
 @needs_node
-def test_a_polish_job_renders_seven_conditions_as_toggles(ran):
-    """SEVEN switches, in the order the live intake shows them for a polish job, each a toggle.
+def test_a_polish_job_renders_five_conditions_as_toggles(ran):
+    """FIVE switches, in the order the live intake shows them for a polish job, each a toggle.
 
     IT WAS TEN UNTIL 2026-09-16, and the three that left are the point of this number. Hanz,
     2026-09-11: "ytou didnt follow this on the beta polish, the toggle buttons are different for
@@ -88,28 +98,36 @@ def test_a_polish_job_renders_seven_conditions_as_toggles(ran):
     building and the bid. They are pinned there by
     test_polish_estimate_page.py, and the cells they still write are pinned below.
 
-    What is LEFT here is the six the engine prices plus Renovation, and Renovation is the one worth
-    explaining rather than leaving to be rediscovered: it is not a description of the work, it is a
-    fact about the building — an existing floor rather than new construction. That is an intake
-    question, asked once, before anybody opens a takeoff.
+    IT WAS SEVEN UNTIL 2026-09-22. Hard bid was one of the engine five until then, priced as a
+    discount off the bid for a job the customer will award on the lowest number rather than a
+    negotiated budget. Hanz: "remove all hard bids from the polish intake form. And also on the
+    markups" — scoped to the Polish beta only, controls and data both. There is no toggle left for
+    it anywhere on this screen; see polish-bid-core.js and markup.js for what its removal took out
+    of the pricing chain.
+
+    IT WAS SIX UNTIL 2026-09-23. Renovation was the last of the three added alongside Dye and
+    Joint filler on 2026-09-11 — a fact about the building rather than a description of the work,
+    so it stayed here rather than moving with the other two — and Hanz asked for it removed
+    entirely: "Remove Renovation Toggle button from the polish beta intake form," confirmed to mean
+    the toggle and its two-cell write both, not a relocation like the others. What is LEFT here is
+    exactly the four the engine prices plus Bond.
 
     Bond is this page's own — the live intake has no Bond question because the workbook's bond rate
     is a hardcoded cell, not a Yes/No flag. It is here so the Review step's Bond row has a control
     instead of a permanently dead "off", and it moves no money: see
     test_polish_estimate_page.test_bond_is_a_switch_that_changes_no_number.
 
-    Mutation: drop back to the engine five, or reorder them, or put the three moved ones back. Any
-    of those makes two screens ask the same question, which is the state this change ended."""
+    Mutation: drop back to the engine four, or reorder them, or put the three moved ones (or hard
+    bid, or Renovation) back. Any of those makes two screens ask the same question, or asks one
+    nobody can answer any more, either of which is the state this change ended."""
     keys = [s["key"] for s in ran["conditions"]["rendered"]]
-    assert keys == ["local", "hard_bid", "prevailing_wage", "taxable", "remodel_tax", "bond",
-                    "reno"]
+    assert keys == ["local", "prevailing_wage", "taxable", "remodel_tax", "bond"]
     assert [s["label"] for s in ran["conditions"]["rendered"]] == [
-        "Local job", "Hard bid", "Prevailing wage", "Taxable", "Remodel tax", "Bond",
-        "Renovation"]
+        "Local job", "Prevailing wage", "Taxable", "Remodel tax", "Bond"]
     assert ran["conditions"]["allAreSwitches"], "a condition rendered without its toggle track"
     assert ran["conditions"]["allHaveWhy"], (
-        "a toggle lost its plain-English line — 'Hard bid' on its own tells an estimator nothing "
-        "about what it does to the price")
+        "a toggle lost its plain-English line — 'Prevailing wage' on its own tells an estimator "
+        "nothing about what it does to the price")
     # And the three really are gone from this screen, asked of the rendered block rather than
     # inferred from the list above. "They moved" is only true if they left.
     assert ran["moved"]["stillOnScreen"] == [], (
@@ -135,22 +153,24 @@ def test_the_keys_are_the_ones_the_pricing_engine_reads(ran):
     nowhere), and the only keys the model may have beyond it are those three (anything else is a
     condition nobody can answer).
 
-    `pageKeys` is the SIX the model stores for this form, not the five the chain reads: `bond`
+    `pageKeys` is the FIVE the model stores for this form, not the four the chain reads: `bond`
     lives on the model so the Review step's switch has somewhere to write, and markupChain() never
     looks it up — bond_pct is RATES.BOND unconditionally. That is deliberate and pinned separately,
-    so do not read this as "the engine reads all six"."""
+    so do not read this as "the engine reads all five"."""
     page, core = ran["conditions"]["pageKeys"], ran["coreKeys"]
-    assert page == ["local", "hard_bid", "prevailing_wage", "taxable", "remodel_tax", "bond"]
+    assert page == ["local", "prevailing_wage", "taxable", "remodel_tax", "bond"]
     assert set(page) <= set(core), (
         "this form renders a condition the model has no key for, so it saves nowhere: %r"
         % (set(page) - set(core)))
     assert set(core) - set(page) == {"dye", "joint_filler", "remove_existing_jf"}, (
         "the model carries a condition neither this form nor the Takeoff step asks about: %r"
         % (set(core) - set(page)))
-    # SEVEN RENDER, FIVE PRICE. Renovation is on screen and not on the model at all — it is a cell
-    # in Kyle's workbook, not an input to this page's library-based engine, and folding it into
-    # CONDITIONS to shorten the code would break this count.
-    assert len(ran["conditions"]["rendered"]) == len(page) + 1, (
+    # FIVE RENDER, FIVE PRICE -- WITH BOND UNCONDITIONAL RATHER THAN CONDITIONAL. Every key this
+    # form renders is stored on the model, and markupChain() looks four of them up by name; the
+    # fifth, bond_pct, is RATES.BOND unconditionally, so Bond renders and saves like the other
+    # four without the engine ever reading its toggle. Renovation used to be a sixth render with
+    # no model key at all -- that gap closed on 2026-09-23 when the toggle left the page.
+    assert len(ran["conditions"]["rendered"]) == len(page), (
         "the screen and the engine drifted apart")
 
 
@@ -159,8 +179,8 @@ def test_the_documented_defaults_are_what_a_new_project_shows(ran):
     """Most jobs are local and taxable; the other three are the exceptions somebody has to know
     about. A brand-new project has no model at all, so these have to come from this page.
 
-    Read off freshModel().conditions rather than restated here, which is why NINE keys come back
-    from a form that renders six of them: dye, joint_filler and remove_existing_jf joined the model
+    Read off freshModel().conditions rather than restated here, which is why EIGHT keys come back
+    from a form that renders five of them: dye, joint_filler and remove_existing_jf joined the model
     on 2026-09-16 and are answered on the Takeoff step. They are in this assertion anyway, because
     this page writes their cells on every save and a default that drifted here would be the answer
     a brand-new project's workbook got.
@@ -173,15 +193,14 @@ def test_the_documented_defaults_are_what_a_new_project_shows(ran):
     # MUST agree -- this screen writes Polish!E29 the instant any switch is touched, so a stale
     # True here would put the kit back into Kyle's workbook on the live intake path alone.
     assert ran["conditions"]["defaults"] == {
-        "local": True, "hard_bid": False, "prevailing_wage": False,
+        "local": True, "prevailing_wage": False,
         "taxable": True, "remodel_tax": False, "bond": False,
         "dye": False, "joint_filler": False, "remove_existing_jf": False}
-    # Local + Taxable on, the other five off — the live intake's defaults, which are how Kyle's
+    # Local + Taxable on, the other four off — the live intake's defaults, which are how Kyle's
     # sheet ships. Bond off matches B78 shipping at zero.
     assert ran["conditions"]["freshRender"] == [
-        ["local", True], ["hard_bid", False], ["prevailing_wage", False],
-        ["taxable", True], ["remodel_tax", False], ["bond", False],
-        ["reno", False]]
+        ["local", True], ["prevailing_wage", False],
+        ["taxable", True], ["remodel_tax", False], ["bond", False]]
 
 
 @needs_node
@@ -191,20 +210,17 @@ def test_a_v1_model_still_has_its_conditions_read(ran):
 
     Mutation: read conditions only when `version` is set, and every older beta project silently
     reverts to local + taxable — including the prevailing-wage ones."""
-    assert ran["conditions"]["v1Render"][:5] == [
-        ["local", False], ["hard_bid", False], ["prevailing_wage", True],
+    assert ran["conditions"]["v1Render"][:4] == [
+        ["local", False], ["prevailing_wage", True],
         ["taxable", True], ["remodel_tax", False]]
-    # Bond and Renovation are NOT in polish_estimate.conditions on a v1 draft and never were, so
-    # such a model states nothing about them and they show their documented defaults. Renovation
-    # comes back from cell_values instead — test_renovation_comes_back_from_its_cells. Bond has no
-    # cell to come back from, so `false` is the whole of its story on an older draft.
+    # Bond is not in polish_estimate.conditions on a v1 draft and never was, so such a model
+    # states nothing about it and it shows its documented default. It has no cell to come back
+    # from either, so `false` is the whole of its story on an older draft.
     #
     # The three that moved are not in this list because they are not on this screen any more; what
     # a v1 draft does about THEM is migrateModel's generic backfill, pinned in
     # test_polish_markup_parity.test_a_v1_draft_opens_as_a_v2_model.
-    assert ran["conditions"]["v1Render"][5:] == [
-        ["bond", False],
-        ["reno", False]]
+    assert ran["conditions"]["v1Render"][4:] == [["bond", False]]
 
 
 @needs_node
@@ -213,122 +229,6 @@ def test_the_spreadsheet_cell_chips_are_gone(ran):
     workbook. This page writes the draft, not the workbook, so a cell name here points at
     something it never touches."""
     assert ran["conditions"]["noCellChips"], "a toggle still names a worksheet cell"
-
-
-# ── renovation, the one condition this form still carries ────────────────────
-#
-# Hanz picked "Mirror v1, carry through only" on 2026-09-11: the beta asks the same nine questions
-# a polish job gets on the live intake and writes all nine into the draft, so both screens agree
-# and the sheet and the proposal read them — while the beta's own library-based price stays exactly
-# as it was. Four of the nine were CARRIED rather than priced, in a list of their own outside the
-# model, because migrateModel() would have dropped them.
-#
-# THREE OF THOSE FOUR MOVED ON 2026-09-16 and are no longer carried at all: they live on the model
-# now and are answered on the Takeoff step. The section after this one is about them, and it is the
-# one that matters — moving a question is easy, and keeping its answer in Kyle's workbook while the
-# question moves is the part that can silently fail.
-#
-# `reno` stayed, and stayed carried, for the reason it always was: it is not one of
-# freshModel().conditions, so migrateModel() whitelists it straight out of any model it is stored
-# on. cell_values is its one home.
-@needs_node
-def test_renovation_is_the_only_condition_this_form_carries(ran):
-    """One key, and it is Renovation.
-
-    Mutation: add bulk_discount. It is epoxy/combo on the live intake — see
-    test_intake_conditions.py — and a polish estimator would be answering a question that does not
-    apply to the job. Or put dye back: the Takeoff step already asks it, and two screens writing
-    Polish!E25 out of two different objects is how they come to disagree."""
-    assert ran["carry"]["keys"] == ["reno"]
-
-
-@needs_node
-def test_renovation_writes_both_literals_into_both_cells_on_every_save(ran):
-    """Both cells, on EVERY save, with an explicit literal for off — never a blank.
-
-    Polish!C17 is IF(B10="New",0.05,0.15): an empty B10 silently takes the Reno branch and triples
-    the patch material rate. And Epoxy!B10 is written alongside Polish!B10 because it is the cell
-    the live intake hydrates Renovation FROM (js/index.js reads cells[0]) and the cell the AI
-    autofill writes its New/Reno answer to — writing only the Polish one would leave this page
-    agreeing with the workbook and disagreeing with the two screens either side of it.
-
-    The `offCells` half is the one that needs the whole sentence "on every save": it is read off a
-    save this page made for an UNRELATED reason, before Renovation had been touched at all.
-
-    Mutation: write only the toggle that was clicked, or leave "off" blank. The bid comes back with
-    a tripled patch rate and nothing on screen to explain it."""
-    assert ran["carry"]["offCells"] == {"Epoxy!B10": "New", "Polish!B10": "New"}, (
-        "an untouched Renovation left its cells blank, which Kyle's IF() reads as Reno")
-    assert ran["carry"]["onCells"] == {"Epoxy!B10": "Reno", "Polish!B10": "Reno"}
-    # And the engine five still reach both of their homes, unchanged by any of this.
-    assert ran["carry"]["engineCells"] == {
-        "Epoxy!B4": "Yes", "Polish!B4": "Yes", "Epoxy!B6": "Yes"}
-    assert ran["carry"]["savedOnce"], "one flip has to be one save"
-    assert ran["carry"]["takeoffKept"] == 2, "a condition flip deleted the takeoff"
-
-
-@needs_node
-def test_renovation_stays_out_of_the_model(ran):
-    """cell_values is its ONE home, and that is a constraint, not a preference.
-
-    migrateModel() whitelists condition keys against freshModel().conditions and drops every other
-    one, so a key stored in polish_estimate.conditions would look saved and come back missing on
-    the next load — silently, on the estimator's second visit.
-
-    THE SISTER TEST IS THE NEXT ONE, and the pair is worth reading together: dye, joint filler and
-    remove-existing used to be asserted to stay out of the model for exactly this reason, and on
-    2026-09-16 they were deliberately put IN it — by adding them to freshModel().conditions, which
-    is what makes the whitelist keep them. Renovation was not, so it still cannot be stored there.
-    The decision is "add the key to freshModel, or keep it in cell_values", never "store it and
-    hope".
-
-    Mutation: store `reno` in polish_estimate.conditions "so it is all in one place". This test
-    goes red, and without it the bug only shows up as a toggle that will not stay set."""
-    assert ran["carry"]["flippedInCarry"] is True
-    assert ran["carry"]["notInTheModel"], "reno was written onto the pricing model"
-    assert "reno" not in ran["carry"]["savedConditionKeys"]
-    assert ran["carry"]["savedConditionKeys"] == ran["coreKeys"]
-    # What the calculator gets handed back on the next load: the model's own keys, and still no
-    # `reno` among them.
-    assert ran["carry"]["readBackConditionKeys"] == ran["coreKeys"]
-
-
-@needs_node
-def test_renovation_moves_no_money_on_this_pages_engine(ran):
-    """Carried, not priced. This page prices from the Items & Assemblies library; polish-bid-core
-    has no notion of renovation (grep it — nothing comes back). In Kyle's workbook B10 really does
-    move a price, which is the whole reason the cell has to be written correctly.
-
-    ASKED OF THE ENGINE, NOT OF TWO SAVES. Comparing the model this page wrote before the flip with
-    the one it wrote after would be vacuous by construction — `reno` is not a model key, so those
-    two objects are equal whatever happens — and would stay green after somebody taught markupChain
-    to read it. So the probe adds `reno` to the saved conditions and prices both.
-
-    Mutation: hand `cond.reno` to markupChain. This goes red; without it the next person to add
-    that branch would silently change every beta bid."""
-    assert ran["carry"]["priceIdentical"], (
-        "markupChain read `reno` — it is a workbook cell, not an input to this page's engine")
-    # AND WITH THE ENGINE SIX THE OTHER WAY ROUND. The save this prices has Prevailing wage on,
-    # because flipping it is what triggered the save — so a read written as `prevailing_wage ||
-    # reno` would move no money in the run above and slip through. Pricing the same pair again with
-    # every engine condition inverted takes that hiding place away.
-    assert ran["carry"]["priceIdenticalInverted"], (
-        "markupChain read `reno` behind a condition that happened to be on in the first run")
-    assert ran["carry"]["priceTotal"] > 0, "the price probe priced nothing, so it proves nothing"
-
-
-@needs_node
-def test_renovation_comes_back_from_its_cells(ran):
-    """It has nowhere else to come back from, so a reload reads it out of cell_values.
-
-    Mutation: hydrate only the engine five. The estimator's Renovation flag resets to New on the
-    next visit and the patch rate changes under them."""
-    assert ran["carry"]["hydrated"] == [
-        ["local", True], ["hard_bid", False], ["prevailing_wage", False],
-        ["taxable", True], ["remodel_tax", False], ["bond", False],
-        # Epoxy!B10 said Reno, which is the opposite of the documented default — so a hydrate that
-        # quietly fell through to that default cannot produce this row.
-        ["reno", True]]
 
 
 # ── the three that moved, and the workbook cells they must still reach ───────
@@ -389,8 +289,8 @@ def test_the_three_that_moved_are_in_the_model_and_survive_the_read_back(ran):
     freshModel().conditions (polish-bid-core.js), which is what a key needs in order to be storable
     at all, and only then moved onto the Takeoff step. So the old assertion is not wrong about the
     mechanism, it is out of date about the list — which is why this test names both and asserts the
-    read-back rather than just the write. Renovation, which was not added to freshModel, is still
-    held to the old rule one section up.
+    read-back rather than just the write. Renovation was never added to freshModel either, and it
+    left the page entirely on 2026-09-23 rather than following these three onto the Takeoff step.
 
     Mutation: take the three back out of freshModel().conditions while leaving the Takeoff switches
     writing them. Every answer looks saved, and every one of them is gone on the next load."""
@@ -475,16 +375,17 @@ def test_flipping_a_toggle_here_never_throws_away_the_caret(ran):
     step, and with them the only `needs` rule on this form — so there is no longer a switch here
     that CAN force that re-render, and a test driving it would be driving nothing.
 
-    repaintCondition's block branch is kept rather than deleted, because the rule it implements is
-    generic and CARRY_CONDITIONS is a list somebody will add to again. So what is pinned now is the
-    state that makes the cheap path the only one: no entry asks to be greyed out by another, and a
-    flip repaints one element in place while the caret stays where the estimator put it.
+    repaintCondition is gone from the source entirely now, not just unused: Renovation, the one
+    entry that outlived the 2026-09-16 move, named no `needs` of its own either and left the page
+    on 2026-09-23, so toggleCondition calls paintCondition directly -- there is no second path
+    left to choose between. What is pinned now is what that leaves: a flip repaints one element
+    in place, and the caret stays where the estimator put it.
 
-    Mutation: make repaintCondition always call renderConditions(). The caret jumps off Local job,
-    and nothing on screen looks wrong."""
+    Mutation: make toggleCondition call renderConditions() instead of paintCondition(). The caret
+    jumps off Local job, and nothing on screen looks wrong."""
     assert ran["caret"]["dependsOn"] == [], (
         "a condition on this form depends on another again — it will re-render the whole block on "
-        "every flip, so restore the caret the way repaintCondition does and test it: %r"
+        "every flip, so put the caret-restore logic back and test it: %r"
         % ran["caret"]["dependsOn"])
     assert ran["caret"]["focusUnmoved"] == "cond-local", (
         "flipping Taxable moved the caret off the switch the estimator had tabbed into")
@@ -537,9 +438,9 @@ def test_a_toggle_does_not_delete_the_takeoff(ran):
          "unit": "hours", "guys_auto": True}], (
         "the labor rows did not survive flipping a toggle")
     assert t["versionKept"] == 2, "the model's version was dropped by an intake save"
-    # And the four conditions nobody touched are still what they were.
+    # And the three conditions nobody touched are still what they were.
     assert t["siblingConditions"] == [
-        ["local", True], ["hard_bid", False], ["taxable", True], ["remodel_tax", False]]
+        ["local", True], ["taxable", True], ["remodel_tax", False]]
 
 
 @needs_node
@@ -752,38 +653,32 @@ def test_the_page_renders_the_copy_the_sandbox_moved_it_onto(ran):
         "the form was filled from the project that was clicked, not the copy being edited")
     assert c["hydratedIntoTheForm"], "writeForm was handed something that is not the form"
     assert c["projLine"] == "Nearman Creek (beta test) · Bonner Springs, KS"
-    assert c["rendered"][:5] == [
-        ["local", False], ["hard_bid", True], ["prevailing_wage", False],
+    assert c["rendered"][:4] == [
+        ["local", False], ["prevailing_wage", False],
         ["taxable", True], ["remodel_tax", False]], (
         "the toggles show the source project's conditions, not the copy's")
-    # And the cell-borne answers are re-read from the COPY's cell_values on the same pass —
-    # adoptModel reassigns both bindings together, because a page that switched drafts mid-boot and
-    # only re-read one of them would mix the copy's answers with the source project's.
+    # And the cell-borne answer is re-read from the COPY's cell_values on the same pass --
+    # adoptModel reassigns the model on every boot, because a page that switched drafts mid-boot
+    # and left the old one in place would mix the copy's answers with the source project's.
     #
-    # THE TWO HALVES NOW LAND IN DIFFERENT PLACES, which is why this reads the model as well as the
-    # screen. Renovation comes back into the `carry` binding and shows as a switch. Joint filler
-    # came off this form on 2026-09-16 and comes back onto M.conditions instead, where nothing on
-    # this page renders it — so its half of the re-read is invisible here and has to be asserted
-    # against the model, or the copy would quietly inherit the source project's joint filler and
-    # write it into the copy's workbook.
-    #
-    # The copy says Reno and no joint filler; both are the opposite of the default, so this cannot
-    # pass by accident.
-    assert c["rendered"][5:] == [
-        ["bond", False],
-        ["reno", True]]
+    # JOINT FILLER IS WHERE THIS SHOWS. It came off this form on 2026-09-16 and comes back onto
+    # M.conditions instead, where nothing on this page renders it -- so its half of the re-read is
+    # invisible here and has to be asserted against the model, or the copy would quietly inherit
+    # the source project's joint filler and write it into the copy's workbook. Polish!E29 says "No"
+    # on the copy, the opposite of freshModel's default, so this cannot pass by accident.
+    assert c["rendered"][4:] == [["bond", False]]
     assert c["modelConds"]["joint_filler"] is False, (
         "the model kept the source project's joint filler after the sandbox switched drafts — "
         "Polish!E29 on the COPY says No")
-    # The engine five on the model came from the copy too, and the three moved ones that the copy
+    # The engine four on the model came from the copy too, and the three moved ones that the copy
     # says nothing about fall back to freshModel's answers rather than to the source project's.
     assert c["modelConds"] == {
-        "local": False, "hard_bid": True, "prevailing_wage": False, "taxable": True,
+        "local": False, "prevailing_wage": False, "taxable": True,
         "remodel_tax": False, "bond": False,
         "dye": False, "joint_filler": False, "remove_existing_jf": False}
     assert json.loads(c["savedTakeoff"]) == [{"area": "Copy bay", "sf": 500}], (
         "a save after the switch wrote the wrong draft's takeoff")
-    assert c["savedRemodel"] is True and c["savedHardBid"] is True
+    assert c["savedRemodel"] is True
 
 
 @needs_node
@@ -932,12 +827,12 @@ def test_choosing_a_county_does_not_delete_the_takeoff(ran):
          "unit": "hours", "guys_auto": True}], (
         "the labor rows did not survive picking a county")
     assert c["versionKept"] == 2, "the model's version was dropped by a county pick"
-    # All NINE of the model's conditions, not just the six this form renders. Since 2026-09-16 the
-    # model also carries dye, joint_filler and remove_existing_jf, answered on the Takeoff step —
-    # and a county pick is exactly the kind of unrelated save that would drop them if it wrote the
-    # model from this page's own list instead of merging into what was there.
+    # All EIGHT of the model's conditions, not just the five this form renders. Since 2026-09-16
+    # the model also carries dye, joint_filler and remove_existing_jf, answered on the Takeoff
+    # step — and a county pick is exactly the kind of unrelated save that would drop them if it
+    # wrote the model from this page's own list instead of merging into what was there.
     assert c["conditionsKept"] == {
-        "local": True, "hard_bid": False, "prevailing_wage": False,
+        "local": True, "prevailing_wage": False,
         "taxable": True, "remodel_tax": False, "bond": False,
         "dye": False, "joint_filler": False, "remove_existing_jf": False}, (
         "the job conditions did not survive picking a county")

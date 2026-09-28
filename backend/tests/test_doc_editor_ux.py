@@ -393,86 +393,39 @@ def test_the_whole_frontend_to_docx_round_trip(ran):
     assert got_runs["breaks"] == 2
 
 
-# ═══ (d) the way out of an expanded text box ══════════════════════════════════
-CLIPPED = "246px"        # round(183.75pt * 96/72 + 1) — the design height fitTxbx clips to
+# ═══ (d) a box too long for its template height is NOT CLIPPED ═══════════════
+# Hanz, 2026-09-26: "whatever is the font size in the PDF should also be the same as in the Proposal
+# Editor". The writer prints an over-long box at its shrink floor and lets the lines that still do
+# not fit run past the box's bottom edge; it never cuts one. fitTxbx used to clip the box at its
+# design height and hide those lines behind "Show all", so the page showed LESS than the PDF. The
+# Show all / Collapse / Escape / outside-click machinery existed only to get past that clip, and it
+# went with it.
+UNCLIPPED = {"open": False, "overflow": True, "maxHeight": "", "overflowStyle": "", "zIndex": ""}
 
 
-def test_the_fixture_box_really_is_over_capacity(ran):
-    """Every assertion below is worthless against a box that fits. 400pt of content in Kyle's
-    183.75pt GC Resinous box is the real complaint (a long WORK scope)."""
-    assert ran["clipped"] == {"open": False, "overflow": True, "maxHeight": CLIPPED,
-                             "overflowStyle": "hidden", "zIndex": ""}
+def test_an_overflowing_box_is_marked_and_not_clipped(ran):
+    """400pt of content in Kyle's 183.75pt GC Resinous box is the real complaint (a long WORK
+    scope). The box says it is over, and every line of it stays on the page."""
+    assert ran["overflowing"] == UNCLIPPED
 
 
-def test_an_expanded_box_carries_a_labelled_way_out(ran):
-    """Not a grip. Somebody who cannot find the exit will not find it by hovering a 7px square,
-    and the grips are for resizing — a control that shares their look would read as one."""
+def test_there_is_nothing_to_open_and_nothing_to_collapse(ran):
+    """No hidden text, so no way in and no way out: a Show all button on a box that hides nothing
+    would be a control that does nothing."""
     t = ran["tools"]
-    assert t["hasCollapse"] and t["label"] == "Collapse"
-    assert t["inToolsLayer"], "the button is inside the editable content, where clicks are ignored"
-    assert t["isNotAGrip"], "the way out is a drag handle, which is what confused Kyle already"
-    assert "Esc" in t["title"] and "outside" in t["title"], (
-        "the tooltip does not mention the other two ways out: %r" % t["title"])
-    # Adding a control to the tools layer must not reorder the grips — test_box_drag_ui.py
+    assert t["hasPeek"] is False, "the Show all button is back on a box that is not clipped"
+    assert t["hasCollapse"] is False, "the Collapse button is back on a box that is not clipped"
+    # Removing two controls from the tools layer must not reorder the grips — test_box_drag_ui.py
     # asserts they come out as move / e / s / se, in that order.
     grips = [c.split()[-1] for c in t["order"] if c.startswith("tw-grip ")]
     assert grips == ["tw-grip-move", "tw-grip-e", "tw-grip-s", "tw-grip-se"]
+    assert "past the bottom of the box" in t["title"], (
+        "the tooltip no longer says where the rest of the text prints: %r" % t["title"])
 
 
-def test_the_way_into_a_clipped_box_is_a_labelled_button_too(ran):
-    """The other half of the same argument, added 2026-08-26. Getting OUT was a labelled button
-    from the start; getting IN was a click on the box, guarded by "unless the click landed on a
-    line" — and everything that is not a line is where a Word user clicks to start typing. So the
-    peek moved to its own control in the tools layer, beside Collapse, and for the same reason: it
-    is a word, outside the editable text, that no paragraph editor can swallow."""
-    t = ran["tools"]
-    assert t["hasPeek"], "a clipped box offers no way to read the text it is hiding"
-    assert t["peekLabel"] == "Show all"
-    assert t["peekInToolsLayer"], "the opener is inside the editable content, where it would be a "\
-                                  "click on the text"
-    assert t["peekIsNotAGrip"], "the way in reads as a drag handle"
-    assert "Collapse" in t["peekTitle"], (
-        "the tooltip does not say how to put the box back: %r" % t["peekTitle"])
-    # It must be OFFERED only while the box is clipped, and CSS is what decides that — the button
-    # is built on every box (addBoxTools) exactly like Collapse and Reset.
-    show = _css_rule(".tw-txbx.tw-notes-overflow:not(.tw-notes-open):not(.tw-box-dragging) "
-                     ".tw-box-peek")
-    assert "display: block" in show
-    assert "display: none" in _css_rule(".tw-box-peek"), (
-        "the opener shows on every box, including the ones whose text already fits")
-    assert "position: absolute" in _css_rule(".tw-box-peek"), (
-        "fitTxbx measures the box's offsetHeight, so a control in the flow makes every box look "
-        "too tall — which is the very notice this button answers")
-
-
-def test_the_collapse_button_clips_the_box_again(ran):
-    """The point: it must restore the clipped maxHeight fitTxbx set, not merely drop the
-    class — a box left at `max-height: none` looks expanded with no way to say so."""
-    assert ran["collapseButton"]["opened"]["open"] is True
-    assert ran["collapseButton"]["opened"]["maxHeight"] == "none"
-    assert ran["collapseButton"]["closed"] == {
-        "open": False, "overflow": True, "maxHeight": CLIPPED,
-        "overflowStyle": "hidden", "zIndex": ""}
-
-
-def test_clicking_the_text_of_an_open_box_does_not_close_it(ran):
-    """THE reason the other exits had to exist, kept as a test so nobody "simplifies" it away:
-    a click on a paragraph is a click that puts a caret in the paragraph. If it also collapsed
-    the box, the estimator would lose the view every time they went to type."""
-    assert ran["typingKeepsItOpen"]["afterBlockClick"]["open"] is True
-    assert ran["typingKeepsItOpen"]["afterFillClick"]["open"] is True, (
-        "a click on a .tw-fill island inside the paragraph collapsed the box")
-
-
-def test_escape_collapses_the_box_and_blurs_the_caret_first(ran):
-    """Order matters. A collapsed box is `overflow: hidden`, so a caret left in the clipped
-    part makes the browser scroll the box back to it — which reads as the collapse not working.
-    Blurring loses nothing: the edit is already in the DOM and already marked dirty."""
-    e = ran["escape"]
-    assert e["closed"]["open"] is False
-    assert e["closed"]["maxHeight"] == CLIPPED
-    assert e["blurred"] is True, "the caret was left inside the box it just collapsed"
-    assert e["defaultPrevented"] is True
+def test_a_box_whose_text_fits_says_nothing(ran):
+    assert ran["fits"] == {"open": False, "overflow": False, "maxHeight": "",
+                           "overflowStyle": "", "zIndex": "", "title": ""}
 
 
 def test_escape_with_nothing_open_is_not_swallowed(ran):
@@ -481,36 +434,27 @@ def test_escape_with_nothing_open_is_not_swallowed(ran):
     assert ran["escapeWhenClosed"] == {"open": False, "defaultPrevented": False}
 
 
-def test_escape_does_not_blur_a_field_outside_the_box(ran):
-    """The sidebar is full of inputs. Escape has to close the box the estimator is looking at
-    without yanking the focus out of whatever they were typing in."""
-    assert ran["escapeFromElsewhere"]["closed"]["open"] is False
-    assert ran["escapeFromElsewhere"]["stillFocused"] is True
+def test_a_click_outside_the_box_changes_nothing_about_it(ran):
+    assert ran["outsideClick"] == UNCLIPPED
 
 
-def test_clicking_the_page_outside_the_box_collapses_it(ran):
-    """The third exit, and the one most people try first."""
-    assert ran["outsideClick"]["open"] is False
-    assert ran["outsideClick"]["maxHeight"] == CLIPPED
+def test_a_refit_leaves_the_box_unclipped(ran):
+    """fitTxbx re-runs after every edit and every repagination; none of those may put a clip
+    back."""
+    assert ran["refit"] == UNCLIPPED
 
 
-def test_the_formatting_toolbar_is_not_the_outside_of_the_box(ran):
-    """ensureFmtBar mounts the B / I / U bar in the page's top chrome (`#fmt-ribbon`) — it has to
-    escape the box's own clipping to be visible at all — so in the DOM it IS outside the box.
-    Treating it as such would close the box the moment the estimator bolded a word inside it,
-    taking their selection with it. Since 2026-08-24 the bar is a static ribbon and never sits
-    over a box at all, which makes this exclusion permanent rather than positional."""
-    assert ran["formatBarClick"]["open"] is True, (
-        "clicking the formatting toolbar collapsed the box being formatted")
-    assert ran["formatBarClick"]["maxHeight"] == "none"
-
-
-def test_no_box_is_left_expanded_behind_another(ran):
-    """Two boxes can be opened at once (WORK and NOTES, say). One click off them puts both
-    back, or the page keeps a broken layout the estimator has stopped looking at."""
-    assert ran["manyBoxes"]["bothOpen"] == [True, True], "the fixture never opened both"
-    assert [b["open"] for b in ran["manyBoxes"]["afterOutside"]] == [False, False]
-    assert [b["maxHeight"] for b in ran["manyBoxes"]["afterOutside"]] == [CLIPPED, CLIPPED]
+def test_the_page_carries_no_clip_code():
+    """The clip is gone from the one function that set it, and from the stylesheet. Asserted on
+    the source because an unused `maxHeight` write is exactly what a later change would revive."""
+    JS = (FRONTEND / "js" / "proposal-review.js").read_text(encoding="utf-8")
+    body = JS[JS.index("  function fitTxbx(box) {"):]
+    body = body[:body.index("\n  }\n") + 4]
+    assert 'box.style.overflow = "hidden"' not in body
+    assert "box.style.maxHeight = Math.round" not in body
+    assert "data-box-peek" not in JS and "data-box-collapse" not in JS
+    for gone in (".tw-box-peek", ".tw-box-collapse", ".tw-notes-open"):
+        assert not _rules_matching(gone), "%s is styled again" % gone
 
 
 def test_a_click_on_the_boxs_own_padding_places_a_caret_and_does_not_expand_it(ran):
@@ -567,14 +511,6 @@ def test_releasing_a_resize_grip_does_not_move_the_caret(ran):
         "releasing a grip expanded the box — the peek is the opposite of what a resize wanted")
 
 
-def test_a_refit_puts_an_open_box_back(ran):
-    """fitTxbx re-runs after every edit and every repagination. It already cleared the class;
-    what matters is that it also restores the clip, so an open box cannot survive a render with
-    `max-height: none` still on it."""
-    assert ran["refitCollapses"] == {"open": False, "overflow": True, "maxHeight": CLIPPED,
-                                    "overflowStyle": "hidden", "zIndex": ""}
-
-
 # ═══ (c) clunky: what is editable, and what is being edited ═══════════════════
 def _css_rule(selector):
     """The declarations of EVERY top-level rule with exactly this selector, concatenated.
@@ -608,8 +544,9 @@ def test_an_editable_paragraph_says_so_with_the_pointer():
 
     THE MAGNIFIER IS GONE FROM THE BOX ENTIRELY (2026-08-26), which is why the third assertion
     inverted. It advertised a gesture that no longer exists: a click on a clipped box used to
-    expand it, and now it lands a caret like a click anywhere else in a text box. The zoom cursors
-    moved onto the two controls that really do zoom — `.tw-box-peek` and `.tw-box-collapse`."""
+    expand it, and now it lands a caret like a click anywhere else in a text box. The two controls
+    that carried the zoom cursors afterwards, Show all and Collapse, went with the clip on
+    2026-09-26."""
     assert "cursor: text" in _css_rule(".tw-block")
     assert "cursor: text" in _css_rule(".tw-block .tw-fill"), (
         "a token value inside an editable paragraph still claims to be read-only")
@@ -619,8 +556,6 @@ def test_an_editable_paragraph_says_so_with_the_pointer():
         assert "zoom" not in _decls, (
             "%s puts a zoom cursor back on the box itself, which advertises a click gesture the "
             "box no longer has" % sel)
-    assert "cursor: zoom-in" in _css_rule(".tw-box-peek"), (
-        "the control that DOES expand the box lost the cursor that says so")
 
 
 def test_the_per_line_hover_and_focus_rules_are_gone():
@@ -660,26 +595,26 @@ def test_the_dirty_bar_survives_on_its_own():
         "the hand-edited paragraph no longer says so")
 
 
-def test_the_collapse_button_adds_no_height_to_the_box():
-    """fitTxbx decides what overflows from the box's offsetHeight, so a control in the normal
-    flow would make every box measure taller than its text — i.e. would break the overflow
-    notice for the sake of the button that exists to answer it."""
-    assert "position: absolute" in _css_rule(".tw-box-collapse")
-    assert "display: none" in _css_rule(".tw-box-collapse"), (
-        "the button shows on every box, not only on the expanded one")
-    assert "display: block" in _css_rule(".tw-txbx.tw-notes-open .tw-box-collapse")
+def test_the_overflow_badge_sits_above_the_box_and_hides_no_text():
+    """The lines that run past the box are the point of showing them, so nothing may sit on top of
+    them: the old fade (`::before`, a white gradient over the last lines) is gone, and the badge
+    is drawn ABOVE the box, not under its bottom edge where those lines are. Absolutely
+    positioned, so fitTxbx's offsetHeight measurement is unaffected."""
+    badge = _css_rule(".tw-txbx.tw-notes-overflow::after")
+    assert "position: absolute" in badge
+    assert re.search(r"top:\s*-\d", badge), "the badge is not above the box: %r" % badge
+    assert "bottom:" not in badge, "the badge sits over the lines that run past the box"
+    assert "pointer-events: none" in badge
+    assert not _rules_matching(".tw-txbx.tw-notes-overflow::before"), (
+        "the fade that hid the last lines of an over-long box is back")
 
 
-def test_an_expanded_box_still_says_the_text_does_not_fit():
-    """Expanding must not make the overflow look solved. Nothing is clipped ON SCREEN any more,
-    but the .docx is unchanged and Word's normAutofit will cramp it just the same, so the badge
-    keeps naming both facts. The old copy — "Showing all of it — click to collapse" — retired
-    the warning at exactly the moment the box looks fine."""
-    badge = _css_rule(".tw-txbx.tw-notes-open::after")
-    assert "content:" in badge
-    assert "longer" in badge.lower(), "the expanded badge no longer warns about the box: %r" % badge
-    assert "Word" in badge, "the badge does not say the generated document is cramped too"
-    assert "Esc" in badge, "the badge does not name a way out"
+def test_the_badge_says_where_the_rest_prints():
+    """It says what the document does with the text, which is the thing to know: the rest prints
+    below the box, as on screen. Both badges, the ordinary one and the cannot-grow one."""
+    assert "prints below it" in _css_rule(".tw-txbx.tw-notes-overflow::after")
+    blocked = _css_rule(".tw-txbx.tw-notes-overflow.tw-grow-blocked::after")
+    assert "prints below it" in blocked and "cannot grow" in blocked
 
 
 # ═══ (a) the labels: what is real text, and what is locked ════════════════════

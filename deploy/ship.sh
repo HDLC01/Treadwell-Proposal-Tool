@@ -26,6 +26,21 @@ SSH=(ssh -i "$SSH_KEY" -o ConnectTimeout=20 "${VPS_USER}@${VPS_HOST}")
 
 cd "$(dirname "$0")/.."
 
+# The image carries no Zetta Serif (licensed; .dockerignore drops it even from this local
+# build context). Compose mounts it from /opt/treadwell-fonts, so check the box has it BEFORE
+# spending minutes on a build and a transfer. Same keep-then-check as .github/workflows/deploy.yml:
+# until its first pull past the change that untracked the files, $APP_DIR still has them, and the
+# `git pull` below deletes them, so a missing file is copied from there first.
+echo "==> Checking the proposal font is on the VPS…"
+"${SSH[@]}" 'for f in "Zetta Serif-Book.otf" "Zetta Serif.otf"; do
+  if [ ! -s "/opt/treadwell-fonts/$f" ] && [ -s "/opt/treadwell/backend/fonts/$f" ]; then
+    if mkdir -p /opt/treadwell-fonts && cp "/opt/treadwell/backend/fonts/$f" "/opt/treadwell-fonts/$f"; then
+      echo "   kept /opt/treadwell/backend/fonts/$f in /opt/treadwell-fonts before the git pull deletes it"
+    fi
+  fi
+  [ -s "/opt/treadwell-fonts/$f" ] || { echo "   /opt/treadwell-fonts/$f is missing: copy both Zetta Serif files there from the team Dropbox (backend/fonts/README.md)"; exit 1; }
+done'
+
 echo "==> Building $IMAGE locally (off the prod box)…"
 docker build --platform linux/amd64 -t "$IMAGE" .
 

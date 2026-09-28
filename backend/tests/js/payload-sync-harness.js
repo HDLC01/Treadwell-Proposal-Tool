@@ -21,6 +21,9 @@
  */
 const fs = require("fs");
 const path = require("path");
+// The price rule's page half, a script the page loads before proposal-review.js; the lifted code
+// reads it as the bare global `TWPrice`, exactly as the page does.
+globalThis.TWPrice = require(path.join(process.argv[2], "js", "price-lines-core.js"));
 
 const ROOT = process.argv[2];
 const SRC = fs.readFileSync(path.join(ROOT, "js", "proposal-review.js"), "utf8");
@@ -58,11 +61,14 @@ const UNITS = [
   grab(/^  const fmtUSDdoc = .*$/m, "fmtUSDdoc"),
   grab(/^  const fmtSF = .*$/m, "fmtSF"),
   fn("effectiveWorkType"),
+  // The tax rule's page half: the base as one priced system, the layout, the rule itself.
+  fn("basePriceSystem"),
+  fn("taxLayout"),
   fn("taxTreatmentMode"),
+  fn("baseTaxRule"),
   fn("printedTaxRows"),
   fn("baseBidFigure"),
   grab(/^  const COMPUTED_PRICE_LINE_KEYS = .*$/m, "COMPUTED_PRICE_LINE_KEYS"),
-  fn("looksLikeComputedPriceLine"),
   fn("lineOverride"),
   fn("comboSystemLines"),
   fn("comboLinesForPayload"),
@@ -71,6 +77,7 @@ const UNITS = [
   fn("baseDescLabel"),
   fn("pruneComputedPriceLineOverrides"),
   fn("syncPayloadPricing"),
+  fn("priceWarnings"),
 ].join(NL);
 
 /* The PRICE-block paragraphs of a DIRECT template, as /api/proposal-template serves them —
@@ -96,6 +103,13 @@ function scopeFor(state, opts) {
   const o = opts || {};
   const lumpText = o.lumpText != null ? o.lumpText : "$0.00";
   const formValues = o.form || {};
+  // The tax mode is no longer a FORM field (the form's persist wrote its first option into every
+  // draft, so "never chosen" could not be told from "one line"). A scenario that names one is a
+  // draft that carries it — `tax_inclusion`, the stored value of every draft saved before the
+  // TAX control became layout-only, read by what it printed (TWPrice.layoutFor).
+  if (formValues.tax_inclusion !== undefined && !("tax_inclusion" in state)) {
+    state.tax_inclusion = formValues.tax_inclusion;
+  }
   // #tb-total is where computeTokenValues reads the lump sum from — the page writes it before
   // calling, so the harness models it as the rendered total, not as a state field.
   // `noTotalEl: true` models PAGE INIT. #tb-total appears in NO html for this screen — the init
@@ -438,7 +452,30 @@ out.taxFlip = (() => {
                   base_bid_formatted: pp.values.base_bid_formatted,
                   material_tax_formatted: pp.values.material_tax_formatted,
                   tax_amount_formatted: pp.values.tax_amount_formatted,
-                  total_formatted: pp.values.total_formatted };
+                  total_formatted: pp.values.total_formatted,
+                  tax_layout: pp.values.tax_layout, tax_inclusion: pp.values.tax_inclusion,
+                  price_rows: [pp.values.price_rows_material, pp.values.price_rows_remodel,
+                               pp.values.price_rows_total] };
+  }
+  // A STORED "EXEMPT" (#573's pick, gone; no page writes it now). Not a layout: the draft reads as
+  // one that never chose, and the form keeps its hidden sales_tax_handling.
+  {
+    const s = baseState();
+    s.proposal_remodel_tax = 900;
+    s.tax_layout = "EXEMPT";
+    const sc = scopeFor(s, { lumpText: "$13,265.00", form: { sales_tax_handling: "INCLUDED" } });
+    const pp = sc.syncPayloadPricing();
+    res.EXEMPT = { base_tax_phrase: pp.values.base_tax_phrase,
+                   tax_phrase: pp.values.tax_phrase,
+                   sales_tax_handling: pp.values.sales_tax_handling,
+                   remodelLines: pp.remodel,
+                   base_bid_formatted: pp.values.base_bid_formatted,
+                   material_tax_formatted: pp.values.material_tax_formatted,
+                   tax_amount_formatted: pp.values.tax_amount_formatted,
+                   total_formatted: pp.values.total_formatted,
+                   tax_layout: pp.values.tax_layout, tax_inclusion: pp.values.tax_inclusion,
+                   price_rows: [pp.values.price_rows_material, pp.values.price_rows_remodel,
+                                pp.values.price_rows_total] };
   }
   return res;
 })();
@@ -502,9 +539,11 @@ out.staleComputedTaxOverrides = (() => {
   const sc = scopeFor(s, { lumpText: "$13,265.00",
                            form: { tax_inclusion: "BROKEN_OUT", sales_tax_handling: "BROKEN_OUT" } });
   const pp = sc.syncPayloadPricing();
+  const live = s.price_overrides.lines2 || {};
   return {
     remainingLines: s.price_overrides.lines,
     payloadLines: pp.price_overrides.lines,
+    remainingLines2: live,
     base: pp.values.base_bid_formatted,
     material: pp.values.material_tax_formatted,
     remodel: pp.values.tax_amount_formatted,
@@ -529,6 +568,10 @@ out.handEditedBaseSurvivesWhenTaxModeUnchanged = (() => {
   return {
     remainingLines: s.price_overrides.lines,
     payloadLines: pp.price_overrides.lines,
+    // The live shape the old line was migrated into (lineOverride, on first draw / at the sync).
+    remainingLines2: s.price_overrides.lines2,
+    payloadLines2: pp.price_overrides.lines2,
+    base: pp.values.base_bid_formatted,
   };
 })();
 
@@ -543,6 +586,8 @@ out.handEditedTaxLineSurvivesWhenNotZero = (() => {
   return {
     remainingLines: s.price_overrides.lines,
     payloadLines: pp.price_overrides.lines,
+    remainingLines2: s.price_overrides.lines2,
+    payloadLines2: pp.price_overrides.lines2,
   };
 })();
 

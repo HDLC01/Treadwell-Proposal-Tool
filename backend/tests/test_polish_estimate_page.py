@@ -584,9 +584,9 @@ def test_the_last_row_cannot_be_deleted_away_to_nothing(ran):
     # Same guard on the takeoff side, where the row is what the whole bid is measured on.
     t = lab["takeoffNeverEmpty"]
     assert t["count"] == 1 and t["cells"] == 1, "the takeoff was deleted away to nothing: %r" % t
-    assert t["row"]["assembly_id"] == "" and t["row"]["measurement"] == "", (
-        "the replacement takeoff row carries the deleted row's values: %r" % t["row"])
-    # And an added takeoff row opens empty, priced at nothing, saying where assemblies come from.
+    assert t["row"] == {"kind": "new", "pick_name": "", "measurement": "", "unit": "SF"}, (
+        "the replacement takeoff row is not a fresh undecided one: %r" % t["row"])
+    # And an added takeoff row opens empty, priced at nothing, saying where to search.
     a = lab["addedTakeoffRow"]
     assert a["count"] == 4 and a["cost"] == "—", (
         "a brand-new takeoff row does not read as unpriced: %r" % a["cost"])
@@ -613,8 +613,8 @@ def test_the_markup_block_is_the_chain_line_for_line(ran):
     Kyle's estimate_sheet_5.7.xlsx by tests/test_polish_markup_parity.py. So the screen is pinned to
     his workbook through that chain rather than by a number typed into this file.
 
-    The fixture has prevailing wage, hard bid, sales tax and the remodel tax all ON, so no line of
-    the chain is dark.
+    The fixture has prevailing wage, sales tax and the remodel tax all ON, so no line of the chain
+    is dark.
 
     Mutation: in bid(), pass `material: roundUp(materialTotal())`. D31 already rounds up, and
     rounding twice drifts the sub-total, which then drifts GP, super/PTO, soft costs and both
@@ -629,23 +629,25 @@ def test_the_markup_block_is_the_chain_line_for_line(ran):
     # rather than computed, so neither has a keyed money cell to compare -- they are boxes. The
     # Fees line joined them on 2026-09-16; its own coverage is
     # test_the_fees_line_is_typed_and_marked_up_the_way_the_sheet_marks_it_up.
+    # hard_bid used to be a line in this list too -- B68/D68 in Kyle's sheet, and a NEGATIVE
+    # give-back on screen (ROUNDUP away from zero makes it bigger, not smaller). Removed with the
+    # line itself on 2026-09-22, so there is no hard_bid money cell left to pin here or to check
+    # the sign of.
     for key in ("material", "shipping", "material_total", "labor", "escalation", "burden",
-                "labor_total", "sub_total", "gp", "hard_bid", "super_pto", "soft_costs",
+                "labor_total", "sub_total", "gp", "super_pto", "soft_costs",
                 "sales_tax", "remodel_tax", "taxes", "bond", "fees_and_bond", "total"):
         assert key in r["rendered"]["money"], "the review block has lost its %r line" % key
     assert r["rendered"]["persf"] == r["expectedPerSf"], (
         "the price per SF beside the lump sum is %r, not %r"
         % (r["rendered"]["persf"], r["expectedPerSf"]))
-    # The hard-bid give-back is NEGATIVE. ROUNDUP away from zero makes it bigger, not smaller.
-    assert dollars(r["rendered"]["money"]["hard_bid"]) < 0, (
-        "the hard-bid discount is not a give-back: %r" % r["rendered"]["money"]["hard_bid"])
 
 
 @needs_node
 def test_the_percentage_column_is_the_chains_own_rates(ran):
-    """Four of the rates move with the job — the GP band with the sub-total, the hard-bid discount
-    with the sub-total and the Local flag, and the two taxes with their toggles. They are rendered
-    from the chain's own output, not from RATES.
+    """Three of the rates move with the job — the GP band with the sub-total, and the two taxes
+    with their toggles. hard_bid's own discount used to be a fourth, moving with the sub-total
+    and the Local flag; removed with the line on 2026-09-22. They are rendered from the chain's
+    own output, not from RATES.
 
     Mutation: render `B.pct(B.RATES.SALES_TAX)` for the sales-tax row. It reads 9.475% on a job that
     is not taxable, beside a $0 amount."""
@@ -719,13 +721,9 @@ def test_the_two_taxes_switched_off_are_zeroed_and_marked_off(ran):
     # in Intake" link instead, which is a signpost where a control belongs.
     assert o["switches"]["taxable"]["on"] is False
     assert o["switches"]["remodel_tax"]["on"] is False
-    assert o["rowClasses"]["hard_bid"] == "off"
-    # Hard bid OFF says nothing — the switch beside it already did. Hard bid ON with the bid still
-    # under the threshold is the case that reads like a bug, so that is the case that gets words.
-    assert not o["thresholdNoteWhenOff"], (
-        "the hard bid row explains a threshold that is not why the discount is missing")
-    assert o["thresholdNoteWhenOnButZero"], (
-        "hard bid is on and the discount is zero, and the row does not say why")
+    # hard_bid used to have its own row here, with a "threshold" note distinguishing OFF (says
+    # nothing) from ON-but-still-zero (explains the $13,000 gate). Removed with the line itself
+    # on 2026-09-22, along with the note -- no other condition has a threshold shaped like it.
     # …and the whole block still agrees with the chain for that model.
     for key, cell in o["rendered"]["money"].items():
         money_is(cell, o["expected"][key], "review line %r with the taxes off" % key)
@@ -774,7 +772,8 @@ def test_every_condition_review_talks_about_is_a_real_switch_here(ran):
     Review named five conditions and could set none of them — Sales tax and Remodel tax carried an
     "off · edit in Intake" link, Hard bid and Labor escalation carried a bare "off"/"prevailing
     wage off", and Bond carried nothing at all. An estimator reading the markup block and spotting
-    a wrong flag had to leave the page, flip it, and come back.
+    a wrong flag had to leave the page, flip it, and come back. hard_bid itself is gone since
+    2026-09-22, so what is left to name is four conditions, not five.
 
     `local` is deliberately NOT here: it is an Intake toggle Review never mentions (it dims the
     Travel row on the Labor step), so it fails the "present in both" test this exists to satisfy.
@@ -782,7 +781,7 @@ def test_every_condition_review_talks_about_is_a_real_switch_here(ran):
     Mutation: render the label without `data-cond`. Every switch still draws, and not one of them
     does anything when clicked."""
     sw = ran["review"]["switches"]
-    assert sorted(sw) == ["bond", "hard_bid", "prevailing_wage", "remodel_tax", "taxable"], (
+    assert sorted(sw) == ["bond", "prevailing_wage", "remodel_tax", "taxable"], (
         "the Review step's switches are not the conditions it talks about: %r" % sorted(sw))
     for key, s in sw.items():
         assert s["hasTrack"], "%r rendered as a label with no toggle track" % key
@@ -956,10 +955,19 @@ def test_a_takeoff_row_can_be_one_material_rather_than_an_assembly(ran):
     an assembly row the moment somebody cleared the field, taking their measurement and coverage
     with it.
 
-    Mutation: seed the row without `kind`."""
+    THE ROW IS NOT BORN A MATERIAL any more, since 2026-09-23: one button adds a row that has not
+    decided anything, and pointing it at a material is what makes it one. The rest of this test is
+    unchanged, because what a material row IS did not change -- only how it gets here.
+
+    Mutation: have setPick write item_id without writing `kind`."""
     m = ran["materialRow"]
+    assert m["seededKind"] == "new", (
+        "the add button pre-decided the row's kind instead of leaving it to the pick: %r"
+        % m["seeded"])
     assert m["isItemKind"], "the added row is not marked as a material row"
     assert m["saysMaterial"], "a material row is indistinguishable from an assembly row on screen"
+    assert m["cardClass"] == "tk mat", (
+        "the redrawn card did not take the material row's own class: %r" % m["cardClass"])
     assert m["hasCoverageField"], "a material row has no coverage field, so it cannot be priced"
     assert m["resolvedId"] == "i4", (
         "typing a material name did not resolve it to a library item: %r" % m["resolvedId"])
@@ -1002,6 +1010,193 @@ def test_a_material_row_does_not_adopt_the_items_purchase_unit(ran):
     Mutation: adopt `item.unit` in setMaterial the way setAssembly adopts the assembly's."""
     assert ran["materialRow"]["unitStayedSF"], (
         "picking a material overwrote the row's unit with the pack it is bought in")
+
+
+@needs_node
+def test_one_control_adds_a_row_and_it_starts_undecided(ran):
+    """Hanz, 2026-09-23, looking at the two dashed buttons under the last row: "These two buttons
+    should be combined to one and then it should just auto categorize based off the item or
+    assemblie we want to add. Also that button should be at the top and make it more visible."
+
+    The two-button version made the estimator answer, before searching, a question they could only
+    answer after searching -- and answering it wrong quietly halved the library their search box
+    was allowed to see. So the row now starts as neither kind.
+
+    AN UNDECIDED ROW IS STILL A ROW: it measures, it deletes, and it reads as unpriced rather than
+    as free. What it does NOT have is a Coverage box, because coverage belongs to a material and
+    nobody has said this is one.
+
+    Mutation: push the old `{assembly_id: "", assembly_name: ""}` row from the click handler. The
+    row is then an assembly row before anybody has typed, which is the bug in miniature."""
+    a = ran["addControl"]
+    p = ran["pendingRow"]
+    assert a["addButtons"] == 1 and not a["oldMaterialButton"], (
+        "there is not exactly one add control on the takeoff step")
+    assert a["label"] == "Add assembly or material", (
+        "the add button does not say what it adds: %r" % a["label"])
+    assert a["aboveTheRows"], "the add button is still below the rows it adds"
+    assert a["isThePrimaryButton"] and not a["dashedGhost"], (
+        "the add button is not the page's own primary button")
+    assert p["seeded"] == {"kind": "new", "pick_name": "", "measurement": "", "unit": "SF"}, (
+        "an added row does not open undecided: %r" % p["seeded"])
+    assert p["searchable"] and p["measurable"] and p["deletable"], (
+        "an undecided row is missing one of the things every row can do: %r" % p)
+    assert not p["hasCoverage"], (
+        "an undecided row already offers a coverage box, which only a material has")
+    assert p["cost"] == "—", "a brand-new row reads as free rather than as unpriced"
+    assert p["mark"] == "new", "an undecided row is not marked as one: %r" % p["mark"]
+    assert "Items & Assemblies" in p["hint"], (
+        "the hint under a new row does not say where to search: %r" % p["hint"])
+
+
+@needs_node
+def test_picking_a_material_turns_the_row_into_one_without_rebuilding_the_panel(ran):
+    """THE AUTO-CATEGORISING HALF of Hanz's one button, and the reason it is safe to do live.
+
+    A material's card is not an assembly's -- it carries a Coverage field and a fifth column -- so
+    the pick that decides the kind has to redraw the card. It must NOT redraw the panel: `change`
+    fires as the estimator tabs into Measurement, and a panel rebuild at that moment destroys the
+    box they have just tabbed into and drops the caret on <body>. That bug shipped once already;
+    test_leaving_the_assembly_field_does_not_destroy_the_box_you_tabbed_into pins the other half.
+
+    So: exactly one innerHTML write, on the card, with the card's own node surviving. And the row
+    prices through library-core afterwards, because a row that looks right and prices wrong is
+    worse than one that looks wrong.
+
+    Mutation: `changed(true)` instead of repaintRow(i) in the pick branch of the input handler --
+    the coverage box still appears, and the panel rebuild count goes from 0 to 1."""
+    a = ran["autoCategorise"]
+    assert a["kind"] == "item" and a["row"]["item_id"] == "i4", (
+        "typing a material name did not make the row a material row: %r" % a["row"])
+    assert a["coverageAppeared"], "the coverage box did not appear when the row became a material"
+    assert a["labelNow"] == "Material", (
+        "the field still calls itself something else: %r" % a["labelNow"])
+    assert a["markGone"], "the row is still marked undecided after it decided"
+    assert not a["panelRebuilt"], (
+        "the whole panel was rebuilt to show one row's new field, which is what takes the caret "
+        "out of the box being typed in")
+    assert a["cardRedrawn"] == 1 and a["sameCardNode"], (
+        "the row card was not redrawn in place: %r" % a)
+    money_is(a["cost"], a["expectedCost"], "a row that categorised itself")
+    assert a["unitStayedSF"] == "SF", (
+        "the row adopted the pack the material is bought in as its measurement unit")
+
+
+@needs_node
+def test_changing_a_rows_kind_lets_go_of_the_other_kinds_fields(ran):
+    """A leftover item_id would decide the row for ever, because rowKind reads it first: an
+    assembly row still carrying the id of the material it used to be draws as a material and
+    prices as one. So crossing the line is explicit and clears what it leaves behind -- coverage
+    included, since an assembly keeps coverage on its own lines in the library.
+
+    Mutation: make becomeKind additive (drop the `delete`s). The row keeps item_id, rowKind keeps
+    answering "item", and the assembly it now names never prices."""
+    f = ran["flipToAssembly"]
+    assert f["kind"] == "asm" and f["row"]["assembly_id"] == "a2", (
+        "an assembly name did not take the row back across: %r" % f["row"])
+    assert "item_id" not in f["row"] and "item_name" not in f["row"], (
+        "the row is still carrying the material it used to be: %r" % f["row"])
+    assert "coverage" not in f["row"], (
+        "a material's coverage survived onto an assembly row, where nothing reads it: %r"
+        % f["row"])
+    assert f["coverageGone"], "the coverage box is still on screen for an assembly row"
+    assert f["unitAdopted"] == "LF", "the row did not adopt the assembly's own unit"
+
+
+@needs_node
+def test_clearing_the_name_does_not_take_the_row_back_to_undecided(ran):
+    """The rule the two-button version already had, kept whole now that one field does both jobs:
+    the kind changes on a resolved PICK and never on a clear.
+
+    Somebody who blanks the name to retype it has not said the row is no longer a material. If
+    clearing reset the kind, the Coverage box would vanish mid-edit and take the coverage they
+    typed with it, along with the measurement's meaning.
+
+    Mutation: have setPick fall back to "new" when nothing resolves. The coverage box disappears
+    the moment the field is emptied."""
+    c = ran["clearedMaterial"]
+    assert c["kind"] == "item", "clearing the name flipped the row back to undecided"
+    assert c["row"]["measurement"] == "2000" and c["row"]["coverage"] == "500", (
+        "clearing the name took the estimator's own figures with it: %r" % c["row"])
+    assert c["row"]["item_id"] == "", "the cleared name left the material id behind"
+    assert c["coverageBoxStayed"], "the coverage box vanished when the name was cleared"
+
+
+@needs_node
+def test_a_name_that_is_both_an_item_and_an_assembly_is_never_guessed(ran):
+    """THE GUARD THE OLD SPLIT LISTS WERE RIGHT ABOUT, kept one step later.
+
+    "Grout Compound - Test" and "Plastic - Test" each exist as an item AND an assembly in the live
+    library today: different ids, identical names, different money. Merging the lists makes it
+    possible to resolve one to the other silently, which is precisely what the note above the old
+    renderDatalist warned about. So a row that has not decided what it is holds what was typed,
+    prices NOTHING, and asks -- with enough of each candidate on the button to choose by.
+
+    The two answers are checked against different engines and come to different figures ($92.40
+    off priceLine, $199.39 off priceAssembly), so a page that quietly picked one of them cannot
+    pass both halves.
+
+    A row that already has a kind is not asked: it keeps what it is.
+
+    Mutation: in setPick, resolve `hit.item` before the both-match branch. The row silently becomes
+    a material and the question is never put."""
+    a = ran["ambiguous"]
+    assert a["kind"] == "new", "an ambiguous name resolved the row's kind by guessing"
+    assert a["row"]["pick_name"] == "Grout Compound", (
+        "the typed name was not kept while the question was open: %r" % a["row"])
+    assert a["cost"] == "—", "an undecided row priced itself against one of two candidates"
+    assert a["offered"] == ["item", "asm"], (
+        "both candidates were not offered: %r" % a["offered"])
+    assert "Two things in the library are called that" in a["asked"], (
+        "the row did not say why it is waiting: %r" % a["asked"])
+    assert "$46.20" in a["asked"] and "1 item line" in a["asked"], (
+        "the two candidates are not distinguishable on their buttons: %r" % a["asked"])
+    assert a["mark"] == "pick one", "the card does not show that it is waiting on a person"
+
+    mat = a["afterChoosingMaterial"]
+    assert mat["kind"] == "item" and mat["row"]["item_id"] == "i5", (
+        "choosing Material did not resolve the row to the item: %r" % mat["row"])
+    assert mat["stillAsking"] == 0, "the question is still on screen after it was answered"
+    money_is(mat["cost"], mat["expected"], "the material half of an ambiguous name")
+
+    asm = a["afterChoosingAssembly"]
+    assert asm["kind"] == "asm" and asm["row"]["assembly_id"] == "a6", (
+        "choosing Assembly did not resolve the row to the assembly: %r" % asm["row"])
+    money_is(asm["cost"], asm["expected"], "the assembly half of an ambiguous name")
+    assert mat["cost"] != asm["cost"], (
+        "both answers priced the same, so this fixture cannot tell a wrong resolution from a "
+        "right one")
+
+    settled = a["settledRowIsNotAsked"]
+    assert settled["kind"] == "asm" and settled["assemblyId"] == "a6", (
+        "a row that was already an assembly did not keep being one: %r" % settled)
+    assert settled["asked"] == 0, (
+        "a row that already knows what it is was asked to choose again")
+
+
+@needs_node
+def test_a_bid_made_entirely_of_materials_is_a_finished_bid(ran):
+    """A takeoff row has been able to be one material rather than an assembly since 2026-09-19, and
+    three places went on reading `assembly_id` as though it were the only way a row can be picked:
+    the rail's takeoff pip, the Review step's blocker list, and the Review table's own row labels.
+
+    So a bid made of materials priced correctly, showed its money everywhere, and still told the
+    estimator it had nothing picked -- a grey pip, "Pick an assembly for takeoff row 1", and
+    "(no assembly picked)" printed beside the row's own cost. One button makes material rows the
+    ordinary case, so this stops being a corner.
+
+    Mutation: put `!!r.assembly_id` back in either stepStatus or polish-bid-core's blockers, or
+    read assembly_name alone in reviewPanel."""
+    m = ran["materialOnly"]
+    assert m["pip"] == "ok", (
+        "a picked, measured material row leaves the takeoff step looking untouched: %r" % m["pip"])
+    assert m["blockers"] == [], (
+        "a finished material-only bid is still listed as unfinished: %r" % m["blockers"])
+    assert m["reviewPip"] == "ok", "the review step never goes green on a material-only bid"
+    assert "Densifier" in m["names"], (
+        "the Review table does not list the material row by name: %r" % m["names"])
+    assert not any("no assembly picked" in n for n in m["names"]), (
+        "a fully priced material row is printed as though nothing was picked: %r" % m["names"])
 
 
 @needs_node
@@ -1302,9 +1497,12 @@ def test_the_save_writes_the_condition_cells_and_no_others(ran):
     seven-step beta, which did write Polish!* cells — rides through untouched. Generating that
     project would fill the worksheet from the old beta's figures while this screen shows the new
     ones. Clearing a stale one would be an improvement and would still pass."""
-    # EIGHT CONDITIONS' CELLS NOW, and nothing else. local and hard_bid each carry a Polish
-    # mirror; prevailing_wage, taxable and remodel_tax are formulas on the Polish tab and must NOT
-    # be written there.
+    # SEVEN CONDITIONS' CELLS NOW, EIGHT KEYS, and nothing else. local carries a Polish mirror
+    # (two keys); prevailing_wage, taxable and remodel_tax are formulas on the Polish tab and must
+    # NOT be written there. hard_bid was an eighth condition and a ninth/tenth key, Epoxy!B5 and
+    # Polish!B5 -- removed with the line itself on 2026-09-22. Kyle's own `=IF(B5="yes",...)`
+    # reads a cell nobody ever writes the same way it reads "No", so there is nothing to write in
+    # its place; see the note over CONDITION_CELLS in polish-bid-core.js.
     #
     # E25/E29/F29 joined on 2026-09-16, when dye, joint filler and remove-existing moved off the
     # intake form onto the Takeoff step. Their cells did not change and neither did their
@@ -1312,15 +1510,14 @@ def test_the_save_writes_the_condition_cells_and_no_others(ran):
     # `carry` loop before, from exactly one page; they go through the shared writer now because
     # two screens can answer them.
     assert ran["save"]["cellValueKeys"] == [
-        "Epoxy!B4", "Epoxy!B5", "Epoxy!B6", "Epoxy!D5", "Epoxy!D6",
-        "Polish!B4", "Polish!B5", "Polish!E25", "Polish!E29", "Polish!F29"], (
-        "the save's worksheet cells are not exactly the eight conditions': %r"
+        "Epoxy!B4", "Epoxy!B6", "Epoxy!D5", "Epoxy!D6",
+        "Polish!B4", "Polish!E25", "Polish!E29", "Polish!F29"], (
+        "the save's worksheet cells are not exactly the seven conditions': %r"
         % ran["save"]["cellValueKeys"])
     # And the literals are the model's own answers. The fixture has local and taxable on, the other
-    # three off, so a mapping written backwards cannot pass this.
+    # two off, so a mapping written backwards cannot pass this.
     assert ran["save"]["cellValues"] == {
         "Epoxy!B4": "Yes", "Polish!B4": "Yes",      # local
-        "Epoxy!B5": "No", "Polish!B5": "No",        # hard_bid
         "Epoxy!D5": "No",                           # prevailing_wage
         "Epoxy!B6": "Yes",                          # taxable
         "Epoxy!D6": "No",                           # remodel_tax
@@ -1334,12 +1531,12 @@ def test_the_save_writes_the_condition_cells_and_no_others(ran):
         "Polish!E29": "No",                         # joint_filler
         "Polish!F29": "No",                         # remove_existing_jf
     }, "the condition literals do not match the model: %r" % (ran["save"]["cellValues"],)
-    # A draft that already carried a worksheet map keeps it, and gains only those same five.
+    # A draft that already carried a worksheet map keeps it, and gains only those same four.
     carried = ran["save"]["legacyCellValues"] or {}
-    assert set(carried) == {"Polish!D82", "Epoxy!B4", "Epoxy!B5", "Epoxy!B6", "Epoxy!D5",
-                            "Epoxy!D6", "Polish!B4", "Polish!B5",
+    assert set(carried) == {"Polish!D82", "Epoxy!B4", "Epoxy!B6", "Epoxy!D5",
+                            "Epoxy!D6", "Polish!B4",
                             "Polish!E25", "Polish!E29", "Polish!F29"}, (
-        "the page added a worksheet cell beyond the five conditions', or dropped a carried one: %r"
+        "the page added a worksheet cell beyond the four conditions', or dropped a carried one: %r"
         % carried)
     assert carried["Polish!D82"] == 41000, "a cell the draft already carried was overwritten"
 
@@ -1441,9 +1638,12 @@ def test_a_v1_model_becomes_v2_with_its_areas_as_measurements(ran):
     # three sat in a separate `carry` object on the intake page, deliberately outside what the
     # engine is handed. migrateModel's generic conditions loop fills each from freshModel.
     #
-    # The five the draft DID state come across untouched, which is the half that matters: a
+    # The four the draft DID state come across untouched, which is the half that matters: a
     # migration that reset a v1 job's answers would change a bid that has already been sent.
-    assert m["conditions"] == {"local": False, "hard_bid": True, "prevailing_wage": True,
+    # hard_bid was a fifth stated condition until 2026-09-22; freshModel no longer declares the
+    # key, so migrateModel's whitelist drops it from an old draft the same way it would drop any
+    # other stranger -- an obsolete answer, not a preserved one.
+    assert m["conditions"] == {"local": False, "prevailing_wage": True,
                               "taxable": False, "remodel_tax": True, "bond": False,
                               # Not in the v1 blob, so it comes from freshModel -- which ships
                               # it off since 2026-09-19.
@@ -1583,7 +1783,7 @@ def test_there_are_exactly_three_steps(ran):
     Mutation: a literal "of 3" in shell(). It is right until the next time a step is added."""
     sh = ran["shell"]
     assert sh["stepKeys"] == ["takeoff", "labor", "review"], sh["stepKeys"]
-    assert sh["stepLabels"] == ["Takeoff and Material", "Labor", "Review"]
+    assert sh["stepLabels"] == ["Material", "Labor", "Review"]
     assert [s["stepOf"] for s in sh["steps"]] == ["Step 1 of 3", "Step 2 of 3", "Step 3 of 3"]
     assert [s["railCount"] for s in sh["steps"]] == [3, 3, 3], (
         "the rail does not show one entry per step: %r" % sh["steps"][0]["railCount"])
@@ -1601,18 +1801,34 @@ def test_there_are_exactly_three_steps(ran):
 
 
 @needs_node
-def test_the_assembly_datalist_is_filled_from_the_library(ran):
-    """The box is a searchable `list=` input, not a <select>: the library is going to get long, and
-    a `list=` input matches anywhere in the name, which is how somebody who remembers "grind" finds
-    the assembly.
+def test_the_search_offers_both_the_assemblies_and_the_materials(ran):
+    """THE BUG HANZ REPORTED, 2026-09-23: "the dropdown search only pulls assemblies."
 
-    Mutation: renderDatalist() called before the fetch resolves. The input is then a plain text box
-    with no suggestions, and only a name typed exactly right resolves."""
+    It was never a data fault -- /api/library/items and /api/library/assemblies both return real,
+    distinct rows. The row's kind was fixed when the row was created, and each kind's box was
+    wired to its own list, so the half of the library you had not pre-declared was simply not
+    there. One list, both collections, and each option says which one it came from.
+
+    The box is still a searchable `list=` input rather than a <select>: the library is going to get
+    long, and `list=` matches anywhere in the name, which is how somebody who remembers "grind"
+    finds the assembly.
+
+    Mutation: fill the list from ASMS only, which is exactly what the page did before, and the
+    materials vanish from the box again."""
     d = ran["datalist"]
     assert d["options"] == d["expected"], (
-        "the datalist is not the library's assemblies: %r" % d["options"])
-    assert d["pickerIsAList"], "the assembly box is not wired to #dl-assemblies"
-    assert d["pickerIsNotASelect"], "the assembly picker became a <select>"
+        "the list is not both collections, deduped and sorted: %r" % d["options"])
+    assert "Densifier" in d["options"] and "Polish 800 Grit" in d["options"], (
+        "an item or an assembly is missing from the one list: %r" % d["options"])
+    assert set(d["labels"]) <= {"Material", "Assembly", "Material or assembly"}, (
+        "an option went out without saying which collection it came from: %r" % d["labels"])
+    assert d["collision"] == ["Material or assembly"], (
+        "the name that is in both collections is listed twice or unlabelled: %r" % d["collision"])
+    assert d["caseTwins"] == 2, (
+        "two assemblies differing only by case were collapsed into one option, which hides a "
+        "library problem this page must not resolve")
+    assert d["pickerIsAList"], "the search box is not wired to #dl-lines"
+    assert d["pickerIsNotASelect"], "the picker became a <select>"
 
 
 @needs_node
@@ -1686,10 +1902,16 @@ def test_the_step_row_says_where_you_are(html):
     assert nav.count("<a ") == 3, "an unexpected number of links in the step row"
 
 
-def test_there_is_a_datalist_for_the_assemblies(html):
-    """renderDatalist() is null-guarded, so a missing container is not a crash — it is an assembly
-    box that silently stops suggesting anything."""
-    assert '<datalist id="dl-assemblies">' in html
+def test_there_is_a_datalist_for_the_search_box(html):
+    """renderDatalist() is null-guarded, so a missing container is not a crash — it is a search box
+    that silently stops suggesting anything.
+
+    ONE list, not two: the pair it replaced (#dl-assemblies and #dl-items) is what made the box's
+    contents depend on which button created the row."""
+    assert '<datalist id="dl-lines">' in html
+    assert 'id="dl-assemblies"' not in html and 'id="dl-items"' not in html, (
+        "the split lists are still in the page, so something can still be wired to half the "
+        "library")
     assert 'id="loading"' in html and 'id="sandbox-note"' in html, (
         "enterSandbox reports into #loading and #sandbox-note; without them the page would sit "
         "blank with no explanation")

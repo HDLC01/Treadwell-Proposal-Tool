@@ -218,6 +218,20 @@ def test_the_card_shows_the_price_that_is_in_the_files(ran):
 
 
 @needs_node
+def test_the_card_shows_the_saved_documents_total_over_any_older_figure(ran):
+    """Every Download and Send now builds from the saved proposal_payload, so the card must name
+    ITS Total. Hanz, 2026-09-25, on staging: the pricing sidebar moved the base bid to $14,224, the
+    editor and the downloaded file both said $14,224, and this card still read $7,447 — the stamp
+    from the first build (/documents records it once) and a lump_sum_display nothing had rewritten.
+
+    Mutation: drop `docTotal ||` from paintLumpSum. The card goes back to the stamp."""
+    r = ran["row"]
+    assert r["payloadWins"] == {"text": "$14,224", "hidden": False}, (
+        "the card showed an older figure than the document it builds: %r" % (r["payloadWins"],))
+    assert r["unreadablePayloadFallsBack"] == {"text": "$7,447", "hidden": False}
+
+
+@needs_node
 def test_no_figure_means_no_row_rather_than_a_dash(ran):
     """A "—" where money belongs invites being read as zero, on the one card whose job is to let
     somebody check a price. So the row goes away instead.
@@ -259,3 +273,21 @@ def test_the_markup_pairs_the_class_with_its_own_hidden_rule():
         "`.fp-money` sets `display` with no [hidden] rule beside it, so the attribute cannot hide "
         "it — the cascade trap this page documents twice elsewhere")
     assert 'id="lump-row"' in DONE_HTML and 'id="lump-sum"' in DONE_HTML
+
+
+# ── A stored "EXEMPT" is not a price without its tax ─────────────────────────
+@needs_node
+def test_both_cards_name_the_tax_inclusive_total_whatever_tax_layout_says(ran):
+    """Hanz, 2026-09-28: exempt is set on the estimate sheet only, and no layout prints a price
+    without the taxes the sheet kept in it. #573's Tax exempt did, and these two cards followed it
+    onto the pre-tax base_bid_formatted; that is gone. The generated card and the pre-generate
+    #rv-lump show the document's total_formatted, the tax-inclusive bid, as they did before #573 —
+    on a sheet with no tax that IS the one figure the document prints. A payload still holding
+    `tax_layout` "EXEMPT" beside a base below its Total (#573's own shape, $6,767 against $6,839)
+    shows the Total; its base differs from its Total ON PURPOSE, or a card reading it would pass.
+
+    Mutation: done.js's #573 documentPrice back (both cards show $6,767)."""
+    e = ran["storedExempt"]
+    assert e["card"] == {"text": "$6,839", "hidden": False}, e["card"]
+    assert e["preCard"] == "$6,839", e["preCard"]
+    assert e["preCardBrokenOut"] == "$6,839", e["preCardBrokenOut"]

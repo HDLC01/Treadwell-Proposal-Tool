@@ -866,11 +866,6 @@ function ensureOpt(id) {
 function persistBidOptions() {
   TW.setState({ ...state, base_tab_id: state.base_tab_id, tab_opts: state.tab_opts });
 }
-function clearSingleBidDisplayOverride() {
-  const pov = state.price_overrides;
-  if (!pov || typeof pov !== "object" || Array.isArray(pov) || !pov.single_bid) return;
-  pov.single_bid = {};
-}
 const _escBB = (s) => String(s).replace(/[&<>"]/g,
   c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const _moneyBB = (n) => "$" + Number(n || 0).toLocaleString(undefined, { maximumFractionDigits: 0 });
@@ -1048,9 +1043,33 @@ function wireBidBar() {
       const priorBaseId = state.base_tab_id;
       state.base_tab_id = el.value || null;
       if (el.value && state.tab_opts[el.value]) state.tab_opts[el.value].is_option = false;  // base ≠ option
-      if (state.base_tab_id !== priorBaseId) clearSingleBidDisplayOverride();
+      // The Proposal step's edits to the base's lines follow the new base, by THE SAME RULE its own
+      // base picker applies (TWPrice.applyBasePick). This used to clear only
+      // price_overrides.single_bid, so Hanz, 2026-09-26: "the base bid was not updating" -- a base
+      // line saved with the old tab's figure went on printing it. And then: keep the words. His
+      // words stay; the amount, the words for the tab's system and the tax wording are the new
+      // base's. `roles` from this page's own tab list: a copy made a moment ago is not in
+      // priced_tabs until persistTabState below prices it.
+      if (state.base_tab_id !== priorBaseId) {
+        TWPrice.applyBasePick(state.price_overrides, priorBaseId, state.base_tab_id, state.priced_tabs,
+                              { workType: state.work_type,
+                                roles: Object.fromEntries(tabs.map(t => [t.id, t.role])),
+                                // The tax wording the base line prints before the pick, so a line
+                                // in the old shape is read as drawing it would read it.
+                                basePhrase: TWPrice.draftBasePhrase(state) });
+      }
       renderBidOptions();
-      persistBidOptions();
+      // PRICED AND SAVED: persistTabState takes the pricing snapshot (priced_tabs, the lump sum, the
+      // rooms) and then saves, where persistBidOptions only saved. Picking a sheet the snapshot had
+      // not priced yet (a copy made a moment ago, no cell edited since) and leaving by a step pill
+      // sent the Proposal step a base it could not find, and it fell back to the Epoxy tab's price
+      // and wrote that over the pick. It also carries this page's cell edits (`cellValues`), which
+      // the `...state` in persistBidOptions put back to what they were when the page opened.
+      persistTabState();
+      // The bottom Total bar follows the base tab, so a new base has to repaint it here: nothing
+      // else on this path does, and the bar kept the previous base's lump sum until the next cell
+      // edit or reload (Hanz, 2026-09-25: base back to Epoxy $7,696, bar still read $15,149).
+      try { if (HF && HF.ready) updateTotalBarFromHF(); } catch {}
       return;
     }
     const wrap = el.closest(".bb-opt"); if (!wrap || !wrap.dataset.id) return;
@@ -1275,6 +1294,34 @@ function renameTab(id, rawNew) {
   if (activeSheet === id) badge.textContent = newLabel.toUpperCase();
 }
 
+/** Re-key the Proposal step's PRICE line entries when the line they belong to goes away.
+ *
+ *  price_overrides.lines / .lines2 hold a price line's edited words and .before / .after the lines
+ *  the estimator typed above and below it, all keyed by the line: "option:<tab id>" (and that
+ *  option's own tax rows, "option:<tab id>:sales_tax" / ":remodel" / ":total") or "manual:<i>" by
+ *  position. Both keys get reused — a deleted copy's id goes to the NEXT copy (nextCopyId), and a
+ *  removed manual line moves every later line up one — so an entry left behind prints on an
+ *  unrelated line of the customer's proposal: the words typed under one option turning up under a
+ *  new one. `rename(key)` answers the entry's new key, or null to forget it. */
+function reKeyPriceLineOverrides(rename) {
+  const pov = state.price_overrides;
+  if (!pov || typeof pov !== "object" || Array.isArray(pov)) return;
+  // ...and the bullets the estimator set on those lines (line_props) and on the lines typed around
+  // them (before_props / after_props), keyed exactly the same way.
+  for (const bucket of ["lines", "lines2", "before", "after", "line_props", "before_props", "after_props"]) {
+    const m = pov[bucket];
+    if (!m || typeof m !== "object" || Array.isArray(m)) continue;
+    const moved = {};
+    for (const k of Object.keys(m)) {
+      const to = rename(k);
+      if (to === k) continue;
+      if (to != null) moved[to] = m[k];
+      delete m[k];
+    }
+    Object.assign(m, moved);
+  }
+}
+
 // Delete is offered for copied tabs only (base template tabs stay).
 async function deleteTab(id) {
   // Invariant: never delete a base template tab — it would break the hardcoded
@@ -1296,8 +1343,25 @@ async function deleteTab(id) {
   // price_overrides.options[id] would print this deleted tab's overridden
   // amount/label on the new (unrelated) option's customer proposal. Drop it.
   if (state.price_overrides && state.price_overrides.options) delete state.price_overrides.options[id];
-  if (state.base_tab_id === id) state.base_tab_id = null;   // fall back to auto-derive
+  // ...and the option's edited words and the lines typed around it and its own tax rows.
+  reKeyPriceLineOverrides(k => (k === "option:" + id || k.startsWith("option:" + id + ":")) ? null : k);
+  const wasBase = state.base_tab_id === id;
+  if (wasBase) state.base_tab_id = null;   // fall back to auto-derive
   buildTabs();
+  // Deleting the BASE copy changes the base, to the one the sheet derives (renderBidOptions
+  // persists it), so the copy's edited base lines follow it by THE SAME RULE both base pickers
+  // apply (TWPrice.applyBasePick): his words stay, the amount, the words for the tab's system and
+  // the tax wording are the derived base's. Applied NOW, while priced_tabs still holds the copy: a
+  // base line frozen at the copy's figure is the tool's while a tab prices it, and the next pricing
+  // takes the copy's figure off the draft. Without it the copy's figure printed under the derived
+  // base's price, unasked. `roles`: the copy has left this page's tab list, not priced_tabs.
+  if (wasBase) {
+    const next = (state.work_type || "epoxy").toLowerCase() === "combo" ? null : resolveBaseTab();
+    TWPrice.applyBasePick(state.price_overrides, id, next ? next.id : null, state.priced_tabs,
+                          { workType: state.work_type,
+                            roles: Object.fromEntries(tabs.map(t => [t.id, t.role])),
+                            basePhrase: TWPrice.draftBasePhrase(state) });
+  }
   TW.setState({ ...state, tab_copies: state.tab_copies, tab_labels: state.tab_labels,
                 tab_notes: state.tab_notes, tab_opts: state.tab_opts,
                 base_tab_id: state.base_tab_id, cell_values: cellValues });
@@ -3204,7 +3268,7 @@ function _afterBulkWrite(sheet) {
   try { updateTotalBarFromHF(); } catch {}
   try { refreshSystemName(); } catch {}
   clearTimeout(_cbTimer);
-  _cbTimer = setTimeout(() => { renderBidOptions(); persistTabState(); }, 300);
+  _cbTimer = setTimeout(() => { _cbTimer = null; renderBidOptions(); persistTabState(); }, 300);
 }
 // Spill TSV `text` from `origin`. Multi-cell → _commitCellWrite per target (full
 // edit path: HF + cellValues + % normalize), returning the skipped (locked /
@@ -3489,6 +3553,27 @@ function updateTotalBarFromHF() {
     setTB("tb-tooling",  val("tooling"));
     setTB("tb-total",    val("total"));
     setTB("tb-psf",      val("psf"));
+    return;
+  }
+  // A DESIGNATED BASE drives the bar, on exactly the condition it drives proposal_lump_sum (see
+  // the pricing snapshot's `state.base_tab_id && baseTab` branch): a copied tab ("Epoxy copy") or
+  // an inverted base IS the bid, and the Epoxy/Polish sums below are only the fallback when nothing
+  // is designated. Hanz, 2026-09-25: base = Epoxy copy at $14,224, the sheet's own Total Base Bid
+  // said $14,224, and this bar read the Epoxy tab's $7,447.
+  const _designated = state.base_tab_id ? resolveBaseTab() : null;
+  if (_designated) {
+    const bmap = totalCellsFor(_designated.id);
+    const bval = (key) => {
+      const v = HF.getValue(_designated.id, bmap[key]);
+      if (v && typeof v === "object" && "value" in v) return null;   // HF error
+      return typeof v === "number" ? v : null;
+    };
+    const setB = (id, v) => { document.getElementById(id).textContent = v == null ? "—" : fmtMoney(v); };
+    setB("tb-material", bval("material"));
+    setB("tb-labor",    bval("labor"));
+    setB("tb-tooling",  bval("tooling"));
+    setB("tb-total",    bval("total"));
+    setB("tb-psf",      bval("psf"));
     return;
   }
   // Sums numeric HF values, skipping errors / nulls
@@ -4617,6 +4702,30 @@ function snapshotLumpSumsToState() {
   const baseTab   = resolveBaseTab();
   const baseCells = baseTab ? totalCellsFor(baseTab.id) : TOTAL_CELLS.Epoxy;
   const baseTotal = baseTab ? num(baseTab.id, baseCells.total) : 0;
+  // THE SHEET'S TWO TAX ANSWERS, per tab, for the proposal (Hanz, 2026-09-25: "Remodel Tax should
+  // be triggered by remodel tax in the estimate form. Taxable is where base bid and other options
+  // are taxable or not."). Read off each tab's OWN flag cells — through its layout and its
+  // structural edits, exactly as the tax cells themselves read them (jobFlagAddrFor / txAddr), so
+  // a copy answers for itself. The same comparisons the sheet makes: sales tax is charged unless
+  // Taxable? says "no" (=IF($B$6="no",0,…)), remodel tax only when Remodel Tax? says "yes"
+  // (=IF(D6="yes",…)). A tab with no flag block answers nothing and the proposal falls back to its
+  // tax figures.
+  const taxFlagsFor = (id) => {
+    let layout;
+    try { layout = layoutIdFor(id); } catch (e) { return {}; }
+    if (JOB_FLAG_LAYOUTS.indexOf(layout) < 0) return {};
+    const read = (flag) => {
+      const a = txAddr(id, jobFlagAddrFor(layout, flag));
+      if (!a) return null;
+      const v = HF.getValue(id, a);
+      return v == null ? "" : String(v).trim().toLowerCase();
+    };
+    const tx = read("taxable"), rm = read("remodel");
+    const out = {};
+    if (tx !== null) out.taxable = tx !== "no";
+    if (rm !== null) out.remodel_on = rm === "yes";
+    return out;
+  };
   const gypLump   = (wt === "gyp" && baseTab) ? num(baseTab.id, baseCells.total) : 0;
   state.hf_lump_sums = {
     epoxy:    epoxyLump,
@@ -4633,10 +4742,14 @@ function snapshotLumpSumsToState() {
     state.proposal_lump_sum    = num(gid, gCells.total);
     state.proposal_sales_tax   = num(gid, gCells.sales_tax);
     state.proposal_remodel_tax = num(gid, gCells.remodel);
+    const f = taxFlagsFor(gid);
+    state.proposal_taxable = f.taxable; state.proposal_remodel_on = f.remodel_on;
   } else if (state.base_tab_id && baseTab) {
     state.proposal_lump_sum    = baseTotal;
     state.proposal_sales_tax   = num(baseTab.id, baseCells.sales_tax);
     state.proposal_remodel_tax = num(baseTab.id, baseCells.remodel);
+    const f = taxFlagsFor(baseTab.id);
+    state.proposal_taxable = f.taxable; state.proposal_remodel_on = f.remodel_on;
   } else {
     // Fallback (no explicit base): the single number the proposal shows, given
     // work_type; sheet's OWN sales tax (D80/D74) + remodel tax (D81/D75) so the
@@ -4650,6 +4763,12 @@ function snapshotLumpSumsToState() {
                                     num("Polish", totalCellsFor("Polish").sales_tax));
     state.proposal_remodel_tax = pick(num("Epoxy", totalCellsFor("Epoxy").remodel),
                                       num("Polish", totalCellsFor("Polish").remodel));
+    // A combined base is taxed if either sheet is.
+    const fe = taxFlagsFor("Epoxy"), fp = taxFlagsFor("Polish");
+    const either = (a, b) => (a === undefined && b === undefined) ? undefined : (a === true || b === true);
+    const f = wt === "epoxy" ? fe : wt === "polish" ? fp
+      : { taxable: either(fe.taxable, fp.taxable), remodel_on: either(fe.remodel_on, fp.remodel_on) };
+    state.proposal_taxable = f.taxable; state.proposal_remodel_on = f.remodel_on;
   }
 
   // Cost side + crew budget for the Project Info Sheet (its B58 / I58). Follows
@@ -4704,9 +4823,14 @@ function snapshotLumpSumsToState() {
     const total = isBase ? shownBase : num(t.id, c.total);
     const o = state.tab_opts[t.id] || {};
     const desc = deriveSystemNameFor(t.id) || labelFor(t.id);
+    // The option's OWN tab's tax answers; the base row carries the base's.
+    const f = isBase ? { taxable: state.proposal_taxable, remodel_on: state.proposal_remodel_on }
+                     : taxFlagsFor(t.id);
     return {
       id: t.id, name: labelFor(t.id), is_base: !!isBase,
-      bid: { total, sales_tax: num(t.id, c.sales_tax), remodel: num(t.id, c.remodel) },
+      bid: Object.assign({ total, sales_tax: num(t.id, c.sales_tax), remodel: num(t.id, c.remodel) },
+                         typeof f.taxable === "boolean" ? { taxable: f.taxable } : {},
+                         typeof f.remodel_on === "boolean" ? { remodel_on: f.remodel_on } : {}),
       base_total: shownBase,
       deduct_amount: shownBase - total,       // savings vs the shown base; <=0 ⇒ backend falls back to total
       price_mode: isBase ? "total" : (o.price_mode === "deduct" ? "deduct" : "total"),
@@ -4740,13 +4864,13 @@ function snapshotLumpSumsToState() {
   // resolved BASE tab (see state.sheet_area below).
   state.priced_tabs = pricedTabs().map(t => {
     const c = totalCellsFor(t.id);
-    return {
+    return Object.assign({
       id: t.id, name: labelFor(t.id), role: t.role, kind: t.kind,
       total: num(t.id, c.total), sales_tax: num(t.id, c.sales_tax), remodel: num(t.id, c.remodel),
       system_desc: deriveSystemNameFor(t.id), notes_auto: deriveNotes(t.id),
       sf: sfFieldsFor(t.id),
       sys_names: roleFor(t.id) === "polish" || roleFor(t.id) === "gyp" ? [] : sysNamesFor(t.id),
-    };
+    }, taxFlagsFor(t.id));   // {taxable, remodel_on}: the Proposal step's rebuildPricing reads them
   });
   // Area (SF / cove LF) for the proposal, sourced from the BASE tab(s) ONLY —
   // options never contribute. Mirrors the lump-sum base resolution above
@@ -4786,6 +4910,24 @@ document.getElementById("back-btn").addEventListener("click", () => {
 document.getElementById("continue-btn").addEventListener("click", () => {
   persistTabState();
   window.location.assign(TW.withDraft("/proposal-review.html"));
+});
+// EVERY STEP PILL LEAVES WITH THE EDIT THE GRID IS STILL HOLDING. A cell edit lives in `cellValues`
+// and HyperFormula until the grid's `change` listener runs persistTabState 300ms later (`_cbTimer`),
+// and `change` only fires as the cell loses focus — which clicking a pill does, a moment before the
+// page is torn down. So "edit the price, click 4 · Files" left with the edit in neither the draft nor
+// the totals the Proposal step prices from, and the Files page built the old price. Delegated,
+// because the header folds the pills into itself (auth.js); the click still navigates as the link
+// says.
+//
+// ONLY THAT PENDING SAVE, run now instead of 300ms from now. persistTabState writes the page's
+// whole load-time snapshot, and a page opened before a colleague revised the project holds an
+// older one: a pill click with no edit waiting must write nothing, exactly as it did before this
+// listener existed, or merely walking through this step would put that old copy back over theirs.
+document.addEventListener("click", (e) => {
+  const pill = e.target && e.target.closest ? e.target.closest(".progress a.step[href]") : null;
+  if (!pill || !_cbTimer) return;
+  clearTimeout(_cbTimer); _cbTimer = null;
+  try { persistTabState(); } catch {}
 });
 
 // ── System-name helpers (live reads off the grid / HF for the auto System Name) ──
@@ -4895,6 +5037,14 @@ function renderPriceLines() {
       // shift a later line's override onto the wrong line in the customer proposal.
       const _mo = state.price_overrides && state.price_overrides.manual;
       if (Array.isArray(_mo) && i < _mo.length) _mo.splice(i, 1);
+      // The whole-line and typed-line entries are positional too ("manual:<i>"): the removed
+      // line's go, and every later line's move up one with its line.
+      reKeyPriceLineOverrides(k => {
+        const m = /^manual:(\d+)$/.exec(k);
+        if (!m) return k;
+        const n = Number(m[1]);
+        return n === i ? null : n > i ? "manual:" + (n - 1) : k;
+      });
       persistPriceLines(); renderPriceLines();
     });
     wrap.appendChild(row);
@@ -4923,7 +5073,7 @@ document.getElementById("sheet-grid").addEventListener("change", () => {
   if (_bulkWrite) return;   // bulk paste/clear coalesces into one _afterBulkWrite pass
   refreshSystemName();
   clearTimeout(_cbTimer);
-  _cbTimer = setTimeout(() => { renderBidOptions(); persistTabState(); }, 300);
+  _cbTimer = setTimeout(() => { _cbTimer = null; renderBidOptions(); persistTabState(); }, 300);
 });
 
 init();

@@ -92,7 +92,7 @@ global.fetch = (url, opts) => {
 
 // shared.js is an IIFE that starts initDraftSync() on load.
 eval(fs.readFileSync(SHARED, "utf8"));
-const TW = global.window.TW;
+let TW = global.window.TW;
 // ASKED BEFORE THE PAGE IS READY, synchronously after the IIFE, which is the one moment there can
 // genuinely be no draft id yet -- initDraftSync mints one, and every page that asks does so after
 // its own init. Captured here so the "no-draft" answer is reachable rather than a branch nobody
@@ -101,6 +101,15 @@ const saveBlockedAtLoad = TW.saveBlocked ? TW.saveBlocked() : "MISSING";
 
 (async () => {
   await TW.draftReady;
+  // A hydrate ends in location.reload(): the page runs again on the blob it adopted, and that
+  // page is the one the estimator types into. shared.js refuses every write from the instance
+  // that asked for the reload (its snapshots are the old blob's), so the reload is modelled
+  // here as what it is: a second load of the script over the same storage.
+  if (log.reloads) {
+    eval(fs.readFileSync(SHARED, "utf8"));
+    TW = global.window.TW;
+    await TW.draftReady;
+  }
   // A keystroke: this is the moment the bug did its damage.
   if (scenario.type) TW.setState(scenario.type);
   // Fire the debounced save (2.5s) without waiting for it.

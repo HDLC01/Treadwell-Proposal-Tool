@@ -384,6 +384,23 @@
       // change the choice is null and this is the last thing between a stale click
       // and a duplicate folder (review 2026-08-20).
       if (dbxGoDisabled(DBX)) return;                    // no folder chosen yet
+      // A PRICE LINE WITH A FIGURE OF HIS OWN: the question Send asks, asked before anything is
+      // filed (Hanz, 2026-09-26: warn on all three -- Send, Download, To Dropbox). One check,
+      // TWPrice.confirmOwnFigures, asked of the copy the server files: ITS copy of the draft, which
+      // is not always this page's (TWPrice.confirmSavedCopy has the case). Cancel files nothing:
+      // the button, the result and the draft stay as they were.
+      const label = go.textContent;
+      go.disabled = true;
+      const asked = await TWPrice.confirmSavedCopy(TW, "file", TWPrice.ownFigureDialog(TW, "file"));
+      if (!asked.go) {
+        go.disabled = false; go.textContent = label;
+        if (asked.failed) {
+          result.style.display = "";
+          result.innerHTML = '<div class="dbx-err">' + esc("Couldn't save your latest changes or read "
+            + "the saved proposal, so nothing was filed — check your connection and try again.") + '</div>';
+        }
+        return;
+      }
       DBX.uploaded = false;                      // the button is ours again until it succeeds
       go.classList.remove("dbx-ok");             // reset from a prior success
       go.disabled = true; go.textContent = "Uploading to Dropbox…";
@@ -391,6 +408,9 @@
       const chosenPath = DBX.choice || "";
       try {
         const body = { draft_id: draftId, destination: dest.value, folder_owner: ownerValue() };
+        // When the server stored the copy the question was asked of: it files nothing from a draft
+        // stored again since (the question can sit on screen a long while).
+        if (asked.version) body.draft_version = asked.version;
         // Sent even when it is EMPTY. "" is the estimator deliberately choosing the
         // "Create a new folder" row, and the server has a fallback that re-files into
         // whatever folder this project went to last time whenever folder_path is absent —
@@ -415,23 +435,34 @@
         // Remember it locally too, so returning to this page shows the green
         // state immediately (the backend also persisted it on the draft).
         //
+        // IN THIS BROWSER ONLY (setLocalState): the server has already recorded it on
+        // its own copy of the draft (main.py api_to_dropbox), and a setState would PUT
+        // this page's WHOLE copy to say so again. That copy can be older than the
+        // server's — a Files page left open while a colleague revised the project on
+        // another machine — and the PUT put it back over their revision, which the
+        // next Send then froze (review of fix 4, round 2).
+        //
         // EVERY key the server put on `dropbox_result` has to be mirrored here, not
-        // just the ones this page renders. shared.js PUTs the WHOLE state blob and
-        // drafts.save_draft replaces `data` outright (only _SERVER_OWNED_KEYS survive),
-        // so a partial object here DELETES the rest from the draft on the next autosave.
-        // `written_paths` is the one that costs: backend/main.py reads it back on the
-        // NEXT filing to know which files in Kyle's folder are ours to overwrite —
-        // without it our own estimate sheet looks like a human's and gets saved beside
-        // itself as "… (1).xlsx", every single send.
+        // just the ones this page renders. shared.js PUTs the WHOLE state blob on this
+        // page's next real edit and drafts.save_draft replaces `data` outright (only
+        // _SERVER_OWNED_KEYS survive), so a partial object here DELETES the rest from
+        // the draft then. `written_paths` is the one that costs: backend/main.py reads
+        // it back on the NEXT filing to know which files in Kyle's folder are ours to
+        // overwrite — without it our own estimate sheet looks like a human's and gets
+        // saved beside itself as "… (1).xlsx", every single send.
+        //
+        // `alreadyOnServer`: a copy in step with the server stays in step. Without it the
+        // record of what the server holds was left behind, and opening another project PUT
+        // this copy back over a colleague's later revision (review of fix 4, round 3).
         try {
-          TW.setState({ dropbox_result: {
+          TW.setLocalState({ dropbox_result: {
             destination: dest.value,
             folder_owner: ownerValue(),
             folder_path: j.folder_path || chosenPath, folder_url: j.folder_url,
             xlsx_url: j.xlsx_url, docx_url: j.docx_url, pdf_url: j.pdf_url,
             existing: !!j.existing,
             written_paths: Array.isArray(j.written_paths) ? j.written_paths : [],
-            renamed: Array.isArray(j.renamed) ? j.renamed : [] } });
+            renamed: Array.isArray(j.renamed) ? j.renamed : [] } }, { alreadyOnServer: true });
         } catch {}
       } catch (err) {
         result.style.display = "";

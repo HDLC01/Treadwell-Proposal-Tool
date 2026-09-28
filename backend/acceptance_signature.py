@@ -42,10 +42,10 @@ document with a cosmetic fault, it is a contract that does not say what it
 appears to say.
 
 THE FONT IS A PDF BASE-14 FACE, DELIBERATELY. There is no script font in the
-container: the Dockerfile installs Carlito, Liberation and Treadwell's Zetta
-Serif and nothing else, so naming a cursive face would silently substitute and
-render one way here and another way in production. Times-Italic and Times-Roman
-are two of the fourteen faces every PDF consumer is required to provide, so they
+container: the Dockerfile installs Carlito and Liberation, the host mounts
+Treadwell's Zetta Serif, and nothing else is there, so naming a cursive face
+would silently substitute and render one way here and another way in
+production. Times-Italic and Times-Roman are two of the fourteen faces every PDF consumer is required to provide, so they
 need no font file on the box at all, no embedding step, and no second code path
 between the test suite and the container. A typed name in italic serif is also
 what ESIGN contemplates — the glyph was never the point, the record of intent is.

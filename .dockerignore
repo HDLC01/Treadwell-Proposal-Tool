@@ -17,3 +17,13 @@ api/
 middleware.js
 vercel.json
 *.md
+# Fonts, anywhere in the build context. Zetta Serif is LICENSED and the image is pushed to a
+# registry, so no image may carry it; the server mounts it at runtime instead (compose files).
+# This matters even though git no longer tracks the files: deploy/ship.sh builds from the local
+# working tree, where backend/fonts/ still holds them for local dev. `**/` covers the root too.
+**/*.otf
+**/*.otc
+**/*.ttf
+**/*.ttc
+**/*.woff
+**/*.woff2
