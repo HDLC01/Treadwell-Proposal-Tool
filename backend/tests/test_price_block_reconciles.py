@@ -938,37 +938,69 @@ def test_the_tax_control_ships_two_layouts_and_a_tax_exempt_that_starts_out_of_r
     ]
 
 
+# The select on a sheet with SOME tax, as the page paints it: usable, the two layouts to choose, and
+# the Tax exempt option out of reach twice over — hidden AND disabled, each on its own, because a
+# browser that ignores `hidden` on an <option> (Safari has) still honours `disabled`.
+_USABLE = {"disabled": False, "title": "", "choosable": ["ONE_LINE", "BROKEN_OUT"],
+           "exempt_option": {"hidden": True, "disabled": True}}
+# ...and on a sheet with none: "Tax exempt" shown, the option itself visible and enabled so the
+# closed select can display it, the select locked.
+_LOCKED_OPTION = {"hidden": False, "disabled": False}
+
+# One sheet per tax that can be on its own, with what Broken out and One line paint for it, and the
+# answers that take its tax away again.
+_TAXED_SHEETS = {
+    # Hanz's Test33: $72 of material sales tax, no remodel.
+    "material only": dict(
+        case=dict(total=6839.0, sales_tax=72.0, remodel_tax=0.0, taxable=True, remodel_on=False),
+        broken=("$6,767 – Epoxy flooring as described above", ["sales-tax-row", "total-row"]),
+        one_line="$6,839 – Epoxy flooring as described above (material sales tax INCLUDED)",
+        untax={"proposal_taxable": False, "proposal_sales_tax": 0}),
+    # Taxable? No, Remodel Tax? Yes — "If it's remodel tax we can also break it out, it just
+    # wouldn't have the material tax." A taxed sheet: the control is as usable as on the one above.
+    "remodel only": dict(
+        case=dict(total=6839.0, sales_tax=0.0, remodel_tax=450.0, taxable=False, remodel_on=True),
+        broken=("$6,389 – Epoxy flooring as described above", ["remodel-tax-row", "total-row"]),
+        one_line="$6,839 – Epoxy flooring as described above (Remodel Tax INCLUDED)",
+        untax={"proposal_remodel_on": False, "proposal_remodel_tax": 0}),
+}
+
+
 @needs_node
-def test_on_a_taxed_sheet_the_control_picks_a_layout_and_never_stores_tax_exempt():
-    """Hanz's Test33 ($6,839, $72 material sales tax): the select is usable, shows the Broken-out
-    default, and a person can choose One line or Broken out — never Tax exempt, which stays hidden
-    and disabled. Picking One line runs the page's own change handler (wireRibbonTax, lifted
-    verbatim): it stores the draft's top-level `tax_layout` "ONE_LINE" and fires the form's `input`.
-    A script forcing the select to "EXEMPT" and firing `change` stores NOTHING and the repaint puts
-    the select back. A reload paints the saved pick. Then the sheet changes under it — Taxable? goes
-    to No (a base pick, a re-priced estimate) — and the repaint shows "Tax exempt", disabled, with
-    its reason in the tooltip. The estimate sheet's cells are never written.
+@pytest.mark.parametrize("sheet", list(_TAXED_SHEETS))
+def test_on_a_taxed_sheet_the_control_picks_a_layout_and_never_stores_tax_exempt(sheet):
+    """A sheet with material sales tax only (Hanz's Test33, $6,839 with $72) and one with remodel tax
+    only ($450): each is TAXED, so the select is usable and shows the Broken-out default — on the
+    remodel-only sheet that is the pre-tax line, Remodel Tax and Total, no Material Sales Tax row —
+    and a person can choose One line or Broken out, never Tax exempt, which stays hidden and
+    disabled. Picking One line runs the page's own change handler (wireRibbonTax, lifted verbatim):
+    it stores the draft's top-level `tax_layout` "ONE_LINE" and fires the form's `input`. A script
+    forcing the select to "EXEMPT" and firing `change` stores NOTHING and the repaint puts the select
+    back. A reload paints the saved pick. Then the sheet's tax goes (a base pick, a re-priced
+    estimate) and the repaint shows "Tax exempt", disabled, with its reason in the tooltip. The
+    estimate sheet's cells are never written.
 
     Mutations: the handler storing "EXEMPT" (#573's coercion); the repaint leaving the Tax exempt
-    option choosable on a taxed sheet."""
-    got = _drive(total=6839.0, sales_tax=72.0, remodel_tax=0.0, taxable=True, remodel_on=False,
-                 pick="ONE_LINE", force="EXEMPT",
-                 reflag={"proposal_taxable": False, "proposal_sales_tax": 0})
+    option choosable, or un-hidden, or enabled, on a taxed sheet; the repaint reading "no tax" off
+    Taxable? alone (the remodel-only sheet locked on "Tax exempt" over a price that itemises Remodel
+    Tax)."""
+    s = _TAXED_SHEETS[sheet]
+    got = _drive(**s["case"], pick="ONE_LINE", force="EXEMPT", reflag=s["untax"])
     assert got["wired"] == 1, "the TAX select has no change handler"
-    assert got["painted"] == {"value": "BROKEN_OUT", "disabled": False, "title": "",
-                              "choosable": ["ONE_LINE", "BROKEN_OUT"]}, got["painted"]
-    assert got["picked"] is True and got["repainted"]["value"] == "ONE_LINE", got
-    assert got["forced"] == {"value": "ONE_LINE", "disabled": False, "title": "",
-                             "choosable": ["ONE_LINE", "BROKEN_OUT"]}, got["forced"]
+    assert got["painted"] == dict(_USABLE, value="BROKEN_OUT"), got["painted"]
+    assert (got["paintedBase"], got["paintedRows"]) == s["broken"], (got["paintedBase"], got["paintedRows"])
+    assert got["picked"] is True and got["repainted"] == dict(_USABLE, value="ONE_LINE"), got
+    assert got["forced"] == dict(_USABLE, value="ONE_LINE"), got["forced"]
     assert got["saved"] == [{"tax_layout": "ONE_LINE"}], got["saved"]
     assert got["moduleState"] == "ONE_LINE" and got["inputs"] == ["input"], got
-    assert got["base"] == "$6,839 – Epoxy flooring as described above (material sales tax INCLUDED)", got
+    assert (got["base"], got["rowsShown"]) == (s["one_line"], []), (got["base"], got["rowsShown"])
     assert got["tokens"]["tax_layout"] == "ONE_LINE", got["tokens"]
-    assert got["reloaded"]["value"] == "ONE_LINE", "a reload does not show the saved pick"
+    assert got["reloaded"] == dict(_USABLE, value="ONE_LINE"), "a reload does not show the saved pick"
     assert got["cellsUntouched"] is True, "the TAX control wrote the estimate sheet"
     # The sheet now says No to both: the select follows it.
     r = got["reflagged"]
-    assert (r["value"], r["disabled"], r["choosable"]) == ("EXEMPT", True, []), r
+    assert (r["value"], r["disabled"], r["choosable"], r["exempt_option"]) == (
+        "EXEMPT", True, [], _LOCKED_OPTION), r
     assert _EXEMPT_TITLE.search(r["title"]), r["title"]
     assert got["reflaggedBase"] == "$6,839 – Epoxy flooring as described above (tax exempt)", got
     assert got["reflaggedRows"] == [], got["reflaggedRows"]
@@ -983,24 +1015,131 @@ def test_on_a_sheet_with_no_tax_the_control_shows_tax_exempt_disabled_whatever_i
     Then the sheet gains a tax (Taxable? Yes, $72): the select comes back usable, Tax exempt out of
     reach again, and the stored Broken out is back in force — the pick was never overwritten.
 
-    Mutation: the repaint leaving the select enabled on a sheet with no tax."""
+    Mutations: the repaint leaving the select enabled on a sheet with no tax; leaving the Tax exempt
+    option it shows hidden or disabled."""
     got = _drive(total=6307.0, sales_tax=0.0, remodel_tax=0.0, taxable=False, remodel_on=False,
                  tax_layout="BROKEN_OUT", pick="ONE_LINE",
                  reflag={"proposal_taxable": True, "proposal_sales_tax": 72})
     p = got["painted"]
-    assert (p["value"], p["disabled"], p["choosable"]) == ("EXEMPT", True, []), p
+    assert (p["value"], p["disabled"], p["choosable"], p["exempt_option"]) == (
+        "EXEMPT", True, [], _LOCKED_OPTION), p
     assert _EXEMPT_TITLE.search(p["title"]), p["title"]
     assert got["picked"] is False, "a person picked a layout on a disabled select"
     assert got["saved"] == [] and got["inputs"] == [] and got["moduleState"] == "BROKEN_OUT", got
     assert got["base"] == "$6,307 – Epoxy flooring as described above (tax exempt)", got["base"]
     assert got["rowsShown"] == [], got["rowsShown"]
     assert got["tokens"] == {"tax_layout": "ONE_LINE", "tax_inclusion": "INCLUDED",
-                             "base_bid_formatted": "$6,307", "base_tax_phrase": "(tax exempt)"}, got["tokens"]
+                             "base_bid_formatted": "$6,307", "base_tax_phrase": "(tax exempt)",
+                             "price_taxable": False, "price_remodel_on": False}, got["tokens"]
     assert (got["reloaded"]["value"], got["reloaded"]["disabled"]) == ("EXEMPT", True), got["reloaded"]
     assert got["reloadedBase"] == got["base"], got
     # The sheet gains a tax: the stored Broken out prints again.
     r = got["reflagged"]
-    assert r == {"value": "BROKEN_OUT", "disabled": False, "title": "",
-                 "choosable": ["ONE_LINE", "BROKEN_OUT"]}, r
+    assert r == dict(_USABLE, value="BROKEN_OUT"), r
     assert got["reflaggedBase"] == "$6,235 – Epoxy flooring as described above", got["reflaggedBase"]
     assert got["reflaggedRows"] == ["sales-tax-row", "total-row"], got["reflaggedRows"]
+
+
+# ── (6) a combo with no base picked: the control follows the Option lines that print ────────────
+_E = {"id": "Epoxy", "role": "epoxy", "kind": "base"}
+_P = {"id": "Polish", "role": "polish", "kind": "base"}
+_NO_TAX = {"taxable": False, "remodel_on": False}
+_POLISH_EXEMPT_LINE = "$8,000 – Option 2: Polished Concrete flooring as described above (tax exempt)"
+# Each case: the two tabs as the Estimate step snapshotted them; whether the control is usable; the
+# sheet answers the page derives for the combined base; the Option lines drawn under a stored Broken
+# out; and under One line.
+_COMBO_CONTROL = {
+    # The review's case (2026-09-28): the epoxy tab's snapshot carries no Taxable? / Remodel Tax? —
+    # its flag cells did not read — and answers from its own $300 of sales tax; the polish tab says
+    # No to both. Option 1 itemises its Material Sales Tax, so the control is usable. OR-ing the raw
+    # flags read the flagless tab as No and locked the control on "Tax exempt" over these lines.
+    "flagless taxed tab beside an exempt one": dict(
+        tabs=[dict(_E, total=10000, sales_tax=300, remodel=0), dict(_P, total=8000, sales_tax=0, remodel=0, **_NO_TAX)],
+        usable=True, flags={"taxable": True, "remodel_on": False},
+        broken=["$9,700 – Option 1: Epoxy flooring as described above", "$300 – Material Sales Tax",
+                "$10,000 – Total", _POLISH_EXEMPT_LINE],
+        one_line=["$10,000 – Option 1: Epoxy flooring as described above (material sales tax INCLUDED)",
+                  _POLISH_EXEMPT_LINE]),
+    # A zeroed epoxy tab still says Taxable? Yes, but prints no line: the only line is the polish
+    # system's, which has no tax, so there is nothing to break out and nothing to choose.
+    "zeroed taxed tab beside an exempt one": dict(
+        tabs=[dict(_E, total=0, sales_tax=0, remodel=0, taxable=True, remodel_on=False),
+              dict(_P, total=8000, sales_tax=0, remodel=0, **_NO_TAX)],
+        usable=False, flags={"taxable": False, "remodel_on": False},
+        broken=["$8,000 – Option 1: Polished Concrete flooring as described above (tax exempt)"],
+        one_line=["$8,000 – Option 1: Polished Concrete flooring as described above (tax exempt)"]),
+    "both systems exempt": dict(
+        tabs=[dict(_E, total=10000, sales_tax=0, remodel=0, **_NO_TAX), dict(_P, total=8000, sales_tax=0, remodel=0, **_NO_TAX)],
+        usable=False, flags={"taxable": False, "remodel_on": False},
+        broken=["$10,000 – Option 1: Epoxy flooring as described above (tax exempt)", _POLISH_EXEMPT_LINE],
+        one_line=["$10,000 – Option 1: Epoxy flooring as described above (tax exempt)", _POLISH_EXEMPT_LINE]),
+    # A snapshot from before the flags travelled: both tabs answer from their own figures, as before.
+    "flagless snapshot, epoxy taxed": dict(
+        tabs=[dict(_E, total=10000, sales_tax=300, remodel=0), dict(_P, total=8000, sales_tax=0, remodel=0)],
+        usable=True, flags={"taxable": True, "remodel_on": False},
+        broken=["$9,700 – Option 1: Epoxy flooring as described above", "$300 – Material Sales Tax",
+                "$10,000 – Total", _POLISH_EXEMPT_LINE],
+        one_line=["$10,000 – Option 1: Epoxy flooring as described above (material sales tax INCLUDED)",
+                  _POLISH_EXEMPT_LINE]),
+    "flagless snapshot, no tax": dict(
+        tabs=[dict(_E, total=10000, sales_tax=0, remodel=0), dict(_P, total=8000, sales_tax=0, remodel=0)],
+        usable=False, flags={"taxable": False, "remodel_on": False},
+        broken=["$10,000 – Option 1: Epoxy flooring as described above (tax exempt)", _POLISH_EXEMPT_LINE],
+        one_line=["$10,000 – Option 1: Epoxy flooring as described above (tax exempt)", _POLISH_EXEMPT_LINE]),
+}
+
+
+def _combo_drive(tabs, **extra):
+    """A combo draft with no base picked, opened through the page's real rebuildPricing over `tabs`
+    and painted through the real refreshPriceDisplay + wireRibbonTax."""
+    return _drive(work_type="combo", blocks=_template_blocks("combo", "Direct"), rebuild=True,
+                  total=0.0, sales_tax=0.0, remodel_tax=0.0, state={"priced_tabs": tabs}, **extra)
+
+
+def _printed_from(payload):
+    """The document's paragraphs, rendered from the payload the page composed."""
+    body = json.loads(json.dumps(payload))
+    body["values"] = dict(_NARRATIVE, **body["values"])
+    return _price_rows(_render(body))["all"]
+
+
+@needs_node
+@pytest.mark.parametrize("case", list(_COMBO_CONTROL))
+def test_on_a_combo_with_no_base_the_control_follows_the_lines_that_print(case):
+    """A combo with no single base prints its two systems' Option lines as the price, each worded by
+    its own tab (comboSystemLines). The TAX control is painted from the combined base's answers, so
+    those answers must be the ones the lines are printed by: taxed when any line that prints carries
+    a tax, whatever the other tab says and whether or not a tab's snapshot carries the flags. A
+    control saying "Tax exempt — Taxable? and Remodel Tax? are both No", locked, over an Option 1
+    that itemises Material Sales Tax, would leave the estimator unable to put it on one line.
+
+    Driven through the page's own rebuildPricing, refreshPriceDisplay and wireRibbonTax, then the
+    document is rendered from the payload the page composes: every Option line drawn prints, and no
+    Total prints that the page does not draw.
+
+    Mutations: rebuildPricing OR-ing the raw flags again (the flagless tab read as No); counting a
+    tab that prints no line."""
+    c = _COMBO_CONTROL[case]
+    shown = _combo_drive(c["tabs"], tax_layout="BROKEN_OUT")
+    picked = _combo_drive(c["tabs"], tax_layout="BROKEN_OUT", pick="ONE_LINE")
+    assert shown["flags"] == c["flags"], shown["flags"]
+    assert (shown["tokens"]["price_taxable"], shown["tokens"]["price_remodel_on"]) == (
+        c["flags"]["taxable"], c["flags"]["remodel_on"]), shown["tokens"]
+    p = shown["painted"]
+    if c["usable"]:
+        assert p == dict(_USABLE, value="BROKEN_OUT"), p
+    else:
+        assert (p["value"], p["disabled"], p["choosable"], p["exempt_option"]) == (
+            "EXEMPT", True, [], _LOCKED_OPTION), p
+        assert _EXEMPT_TITLE.search(p["title"]), p["title"]
+    assert shown["paintedCombo"] == c["broken"], shown["paintedCombo"]
+    # A person's pick: One line where there is a choice; refused, nothing stored, where there is none.
+    assert picked["picked"] is c["usable"], picked
+    assert picked["saved"] == ([{"tax_layout": "ONE_LINE"}] if c["usable"] else []), picked["saved"]
+    assert picked["combo"] == c["one_line"], picked["combo"]
+    # The document prints what the page draws, both ways.
+    for got in (shown, picked):
+        printed = _printed_from(got["payload"])
+        assert [ln for ln in got["combo"] if ln not in printed] == [], (got["combo"], printed)
+        assert [ln for ln in printed if ln.endswith("– Total")] == [
+            ln for ln in got["combo"] if ln.endswith("– Total")], (got["combo"], printed)

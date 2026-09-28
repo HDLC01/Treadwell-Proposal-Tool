@@ -995,8 +995,20 @@
       else if (wt === "combo") { baseTab = eB || null; shownBase = N(eB && eB.total) + N(pB && pB.total); salesTax = N(eB && eB.sales_tax) + N(pB && pB.sales_tax); remodelTax = N(eB && eB.remodel) + N(pB && pB.remodel); }
       else { baseTab = eB || null; shownBase = N(eB && eB.total); salesTax = N(eB && eB.sales_tax); remodelTax = N(eB && eB.remodel); }
       if (wt === "combo") {
-        baseTaxable = orFlag(tFlag(eB, "taxable"), tFlag(pB, "taxable"));
-        baseRemodelOn = orFlag(tFlag(eB, "remodel_on"), tFlag(pB, "remodel_on"));
+        // No base picked: the two systems' Option lines ARE the price (comboSystemLines), and each
+        // reads its own tab through TWPrice.taxRule — its flag, or, on a snapshot without one, its
+        // own tax figure — and prints only when it has a total. The combined answer is taken off
+        // exactly those lines, so it is taxed when any line the customer reads is. OR-ing the raw
+        // flags read a flagless tab as No beside a tab that said No, and the TAX control locked on
+        // "Tax exempt" over an Option 1 that itemised its Material Sales Tax; counting a zeroed tab
+        // left it offering Broken out over a price with nothing to break out.
+        const printed = [eB, pB].filter(t => t && N(t.total) > 0)
+          .map(t => TWPrice.taxRule({ total: t.total, sales_tax: t.sales_tax, remodel: t.remodel,
+            taxable: t.taxable, remodel_on: t.remodel_on }, false));
+        baseTaxable = printed.length ? printed.some(r => r.taxable)
+          : orFlag(tFlag(eB, "taxable"), tFlag(pB, "taxable"));
+        baseRemodelOn = printed.length ? printed.some(r => r.remodel_on)
+          : orFlag(tFlag(eB, "remodel_on"), tFlag(pB, "remodel_on"));
       } else {
         baseTaxable = tFlag(baseTab, "taxable"); baseRemodelOn = tFlag(baseTab, "remodel_on");
       }

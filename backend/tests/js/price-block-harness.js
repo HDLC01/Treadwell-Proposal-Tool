@@ -35,6 +35,9 @@
  * browser refuses it, on a disabled select or a hidden or disabled option); forces `force` through
  * a change event, as a script could; flips the sheet's answers to `reflag` and repaints, as a base
  * pick or a re-priced estimate does; and paints a fresh page from what was saved, as a reload would.
+ * With `rebuild` the page first prices the draft's `state.priced_tabs` through its real
+ * rebuildPricing, so the sheet's answers the control is painted from are the ones the page itself
+ * derives from the tabs — a combo with no base picked takes them from both systems.
  *
  * THE PAGE'S OWN PAYLOAD. Each case also reports `payload`, the price half of what Continue hands
  * /api/generate (composeProposalPayload's composition over computeTokenValues' tokens), so a test
@@ -44,7 +47,7 @@
  * Usage: node price-block-harness.js <frontend-dir> < cases.json   →  one line of JSON
  *   cases.json: [{ name, work_type, audience, blocks, total, sales_tax, remodel_tax,
  *                  taxable?, remodel_on?, tax_layout?, tax_inclusion?, rooms?, state?,
- *                  select_options?, pick?, force?, reflag? }]
+ *                  select_options?, pick?, force?, reflag?, rebuild? }]
  */
 const fs = require("fs");
 const path = require("path");
@@ -121,6 +124,19 @@ const UNITS = [
   fn("renderProposalExtras"),
   fn("computeTokenValues"),
   fn("priceRowVisibility"),
+  // The pricing the page runs at init and on every base pick: priced_tabs → the base's figures and
+  // the sheet's two answers for it (a case with `rebuild` runs it). Lifted with what it calls; the
+  // payload sync returns at once here, as on a page before its first Continue.
+  grab(/^  const OPTION_ONLY_ROLES = .*$/m, "OPTION_ONLY_ROLES"),
+  grab(/^  const COMBINED_BASE_ROLES = .*$/m, "COMBINED_BASE_ROLES"),
+  grab(/^  const roleOfTab = .*$/m, "roleOfTab"),
+  grab(/^  const isOptionOnlyTab = .*$/m, "isOptionOnlyTab"),
+  grab(/^  const inCombinedBase = [\s\S]*?;$/m, "inCombinedBase"),
+  fn("baseAreaFrom"),
+  grab(/^  const PAYLOAD_PRICING_KEYS = \[[\s\S]*?\];$/m, "PAYLOAD_PRICING_KEYS"),
+  fn("pruneComputedPriceLineOverrides"),
+  fn("syncPayloadPricing"),
+  fn("rebuildPricing"),
 ].join(NL);
 
 /** The ribbon's wiring: `(function wireRibbonTax() { ... })();` exactly as the page runs it on load. */
@@ -168,10 +184,14 @@ function select(id, options) {
   return s;
 }
 
-/** What the ribbon's select shows: its value, whether it can be used, its tooltip, and the values a
- *  person could choose from its list. */
+/** What the ribbon's select shows: its value, whether it can be used, its tooltip, the values a
+ *  person could choose from its list, and the Tax exempt option's OWN `hidden` / `disabled` — each
+ *  on its own, because a browser that ignores `hidden` on an <option> (Safari has) still honours
+ *  `disabled`, so neither may stand in for the other. */
 function snap(sel) {
-  return { value: sel.value, disabled: !!sel.disabled, title: sel.title || "", choosable: sel.choosable() };
+  const ex = sel.options.find((o) => o.value === "EXEMPT");
+  return { value: sel.value, disabled: !!sel.disabled, title: sel.title || "", choosable: sel.choosable(),
+           exempt_option: ex ? { hidden: !!ex.hidden, disabled: !!ex.disabled } : null };
 }
 
 /** A <p> double carrying only what paintLine touches: text, the computed baseline, the cue
@@ -215,9 +235,11 @@ function scopeFor(c) {
                     "price-lines-block", "alternate-block"]) {
     rows[id] = el(id);
   }
+  // #tb-total is where the writers read the lump sum from; the page renders it before calling, and
+  // rebuildPricing writes it — one element, as on the page, so what it writes is what they read.
+  const tbTotal = { textContent: c.total_text };
   const document = {
-    // #tb-total is where the writers read the lump sum from; the page renders it before calling.
-    querySelector: (sel) => (sel === "#tb-total" ? { textContent: c.total_text } : null),
+    querySelector: (sel) => (sel === "#tb-total" ? tbTotal : null),
     getElementById: (id) => rows[id] || null,
   };
   const inputs = [];
@@ -241,7 +263,7 @@ function scopeFor(c) {
   Object.assign(state, c.state || {});
   const body = UNITS + NL + (c.select_options !== undefined ? WIRE_TAX + NL : "") +
     "return { refreshPriceDisplay, computeTokenValues, printedTaxRows, baseBidFigure, taxLayout, priceRowVisibility, comboLinesForPayload,\n" +
-    "         effectiveWorkType, fmtUSDdoc };";
+    "         effectiveWorkType, fmtUSDdoc, rebuildPricing };";
   const api = new Function("state", "document", "form", "TW", "window", "templateBlocks",
                            "focusInside", "lineAtSelection", body)(
     state, document, form,
@@ -255,6 +277,23 @@ function rowsShown(sc) {
   return ["sales-tax-row", "remodel-tax-row", "total-row"].filter((id) => sc.rows[id].style.display !== "none");
 }
 
+/** Combo's Option 1 / Option 2 lines as drawn, where the page draws them instead of the base line. */
+function comboOf(sc) {
+  const b = sc.rows["combo-price-block"];
+  return b.style.display !== "none" ? linesOf(b.innerHTML).map((l) => l.text) : [];
+}
+
+/** A page opening the case's draft: with `rebuild`, its pricing runs over the draft's priced_tabs
+ *  first, as page init does (rebuildPricing: the base's figures and the sheet's two answers for
+ *  it); then the price box paints. Returns how many saves came before the paint, so what is
+ *  reported as saved is what the TAX control and the paint saved. */
+function open(sc, c) {
+  if (c.rebuild) sc.api.rebuildPricing();
+  const n = sc.sets.length;
+  sc.api.refreshPriceDisplay();
+  return n;
+}
+
 /** The TAX control, driven as the page is: paint; a person tries `pick` (the form's `input` then
  *  runs the page's own repaint); a script forces `force` through a change event; the sheet's
  *  answers flip to `reflag` and the page repaints, as a base pick or a re-priced estimate makes it;
@@ -264,8 +303,13 @@ function pickFlow(c) {
   const sel = first.rows["tax-treatment-select"];
   const cellsBefore = JSON.stringify(first.state.cell_values);
   const out = { wired: sel.listening("change") };
-  first.api.refreshPriceDisplay();
+  const opened = open(first, c);
   out.painted = snap(sel);
+  out.paintedBase = first.rows["base-bid-row"].textContent;
+  out.paintedRows = rowsShown(first);
+  out.paintedCombo = comboOf(first);
+  out.flags = { taxable: first.state.proposal_taxable === undefined ? null : first.state.proposal_taxable,
+                remodel_on: first.state.proposal_remodel_on === undefined ? null : first.state.proposal_remodel_on };
   if (c.pick !== undefined) {
     out.picked = sel.userPick(c.pick);
     if (out.picked) first.api.refreshPriceDisplay();
@@ -276,14 +320,18 @@ function pickFlow(c) {
     sel.fire("change");
     out.forced = snap(sel);
   }
-  out.saved = first.sets.slice();
+  out.saved = first.sets.slice(opened);
   out.moduleState = first.state.tax_layout === undefined ? null : first.state.tax_layout;
   out.inputs = first.inputs.slice();
   out.base = first.rows["base-bid-row"].textContent;
   out.rowsShown = rowsShown(first);
+  out.combo = comboOf(first);
   const tv = first.api.computeTokenValues(Object.assign({}, first.state));
   out.tokens = { tax_layout: tv.tax_layout, tax_inclusion: tv.tax_inclusion,
-                 base_bid_formatted: tv.base_bid_formatted, base_tax_phrase: tv.base_tax_phrase };
+                 base_bid_formatted: tv.base_bid_formatted, base_tax_phrase: tv.base_tax_phrase,
+                 price_taxable: tv.price_taxable, price_remodel_on: tv.price_remodel_on };
+  // What Continue would hand /api/generate now, so the document can be rendered from it.
+  out.payload = payloadOf(first.api, first.state, tv);
   out.cellsUntouched = JSON.stringify(first.state.cell_values) === cellsBefore
     && !out.saved.some((p) => "cell_values" in p);
   if (c.reflag) {
@@ -296,7 +344,7 @@ function pickFlow(c) {
   // A reload: the draft as it was left (its sheet answers as the case gave them), drawn by a fresh page.
   const kept = Object.assign({}, ...out.saved).tax_layout;
   const reload = scopeFor(Object.assign({}, c, kept !== undefined ? { tax_layout: kept } : {}));
-  reload.api.refreshPriceDisplay();
+  open(reload, c);
   out.reloaded = snap(reload.rows["tax-treatment-select"]);
   out.reloadedBase = reload.rows["base-bid-row"].textContent;
   return out;
