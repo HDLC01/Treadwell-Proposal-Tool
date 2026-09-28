@@ -457,8 +457,8 @@ out.taxFlip = (() => {
                   price_rows: [pp.values.price_rows_material, pp.values.price_rows_remodel,
                                pp.values.price_rows_total] };
   }
-  // THE TAX EXEMPT PICK (Hanz, 2026-09-28). Not a form value: the ribbon stores it as the draft's
-  // top-level `tax_layout` (wireRibbonTax), and the form keeps its hidden sales_tax_handling.
+  // A STORED "EXEMPT" (#573's pick, gone; no page writes it now). Not a layout: the draft reads as
+  // one that never chose, and the form keeps its hidden sales_tax_handling.
   {
     const s = baseState();
     s.proposal_remodel_tax = 900;

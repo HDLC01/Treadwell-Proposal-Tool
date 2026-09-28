@@ -8,22 +8,25 @@
 // yes then broken out should be the default option in the proposal tool."
 //
 // So the ESTIMATE SHEET decides whether there is tax, per priced tab (Taxable? for material sales
-// tax, Remodel Tax? for remodel tax), and the proposal's TAX control decides the layout: "One
-// line", "Broken out" or "Tax exempt". Broken out prints the pre-tax figure with no bracket
-// wording, a Material Sales Tax row only if taxable, a Remodel Tax row only if remodel, and the
-// Total, and the rows add up. One line prints the whole bid and says which taxes are in it. The
-// bid is tax-inclusive (D88 already holds both taxes), so taxes are backed OUT using each tab's
-// own tax cells, never added on top.
+// tax, Remodel Tax? for remodel tax), and the proposal's TAX control decides only the layout:
+// "One line" or "Broken out". Broken out prints the pre-tax figure with no bracket wording, a
+// Material Sales Tax row only if taxable, a Remodel Tax row only if remodel ("If it's remodel tax
+// we can also break it out, it just wouldn't have the material tax"), and the Total, and the rows
+// add up. One line prints the whole bid and says which taxes are in it. The bid is tax-inclusive
+// (D88 already holds both taxes), so taxes are backed OUT using each tab's own tax cells, never
+// added on top.
 //
-// TAX EXEMPT (Hanz, 2026-09-28) is the customer's answer, not the sheet's: the same pre-tax figure
-// Broken out prints on its base line, then "(tax exempt)", and no row at all — no Material Sales
-// Tax, no Remodel Tax, no Total. The estimate sheet is not changed. Only a pick reads as it; it is
-// never a default (layoutFor). The whole job is exempt: every option prints its own pre-tax figure
-// with the same wording.
+// A TAB WITH NO TAX IS TAX EXEMPT, AND TAX EXEMPT IS ONE LINE (Hanz, 2026-09-28: "If it's tax
+// exempted then it should just be one line and not broken apart because there is no tax to be
+// broken out ... it's basis if it's taxable or not is on the estimate sheet"; asked where exempt
+// is set: "Estimate sheet only"). Taxable? No and Remodel Tax? No print the whole total and "(tax
+// exempt)" on one line, whatever the TAX control says — taxRule does it, for every caller. No
+// layout backs the taxes out of a price the sheet keeps them in: the #573 "Tax exempt" pick did,
+// and is gone; a stored "EXEMPT" is not a layout (layoutFor).
 //
 // OPTIONS ARE ALWAYS ONE LINE (Hanz, 2026-09-28: "Options should only be total amount, cannot be
 // broken out. Only the base bid would be broken out or one line."): an option asks the rule for
-// One line, or Tax exempt on an exempt job, never Broken out.
+// One line, never Broken out.
 //
 // THE MARKERS. An edited price line keeps the estimator's WORDS; its amount and tax wording stay
 // live. Where the typed line still carries today's computed amount and tax phrase verbatim, they
@@ -76,22 +79,22 @@
     return PHRASE.none;
   }
 
-  /** The layout one call asks the rule for: a string is a layout ("ONE_LINE", "BROKEN_OUT",
-   *  "EXEMPT", any case; anything else is one line), anything else the yes/no "broken out?" the
-   *  older callers pass. price_rules._layout_of reads it the same way. */
+  /** The layout one call asks the rule for: a string is a layout ("BROKEN_OUT", any case; any
+   *  other string — "ONE_LINE", a stored "EXEMPT", garbage — is one line), anything else the
+   *  yes/no "broken out?" the older callers pass. price_rules._layout_of reads it the same way. */
   function layoutOf(layout) {
-    if (typeof layout === "string") {
-      var lay = layout.trim().toUpperCase();
-      return (lay === "BROKEN_OUT" || lay === "EXEMPT") ? lay : "ONE_LINE";
-    }
+    if (typeof layout === "string") return layout.trim().toUpperCase() === "BROKEN_OUT" ? "BROKEN_OUT" : "ONE_LINE";
     return layout ? "BROKEN_OUT" : "ONE_LINE";
   }
 
   /** THE RULE for one priced system — the base, or one option, off its own tab.
    *  sys = {total, sales_tax, remodel, taxable?, remodel_on?}; `layout` is the TAX control's
-   *  answer (see layoutOf). Figures come back in CENTS. `taxable` / `remodel_on` stay the SHEET's
-   *  flags under every layout: they say which taxes are inside the total, so what Tax exempt backs
-   *  out of it. */
+   *  answer (see layoutOf). Figures come back in CENTS; `layout` / `broken` in the answer are the
+   *  layout it PRINTS.
+   *
+   *  NOTHING TO BREAK OUT IS ONE LINE: a system whose sheet says Taxable? No and Remodel Tax? No is
+   *  tax exempt (Hanz, 2026-09-28), and asked for Broken out it answers One line — its whole total,
+   *  "(tax exempt)", no row, no Total. price_rules.tax_rule does the same. */
   function taxRule(sys, layout) {
     sys = sys || {};
     var lay = layoutOf(layout);
@@ -100,17 +103,12 @@
     // exempt, so it reads as taxable — what every such document printed before (price_rules too).
     var salesKnown = sys.sales_tax != null && !(typeof sys.sales_tax === "string" && !sys.sales_tax.trim());
     var tx = flag(sys.taxable, salesKnown ? s > 0 : true), rm = flag(sys.remodel_on, r > 0);
-    var out = { layout: lay, broken: lay === "BROKEN_OUT", exempt: lay === "EXEMPT",
-                taxable: tx, remodel_on: rm,
+    if (!tx && !rm) lay = "ONE_LINE";
+    var out = { layout: lay, broken: lay === "BROKEN_OUT", taxable: tx, remodel_on: rm,
                 total_cents: t, sales_cents: s, remodel_cents: r };
     if (lay === "BROKEN_OUT") {
       out.base_cents = Math.max(0, t - (tx ? s : 0) - (rm ? r : 0));
       out.phrase = ""; out.material = tx; out.remodel = rm; out.total = true;
-    } else if (lay === "EXEMPT") {
-      // The figure Broken out prints on its base line, and not one row: the customer pays no tax,
-      // so nothing on the page may say there is any.
-      out.base_cents = Math.max(0, t - (tx ? s : 0) - (rm ? r : 0));
-      out.phrase = PHRASE.none; out.material = false; out.remodel = false; out.total = false;
     } else {
       out.base_cents = t;
       out.phrase = phraseFor(tx, rm); out.material = false; out.remodel = false; out.total = false;
@@ -118,19 +116,20 @@
     return out;
   }
 
-  /** "ONE_LINE", "BROKEN_OUT" or "EXEMPT".
+  /** "ONE_LINE" or "BROKEN_OUT" — the layout ASKED FOR; what prints is taxRule's answer to it (on
+   *  a sheet with no tax, one line whatever this says).
    *
-   *  `taxLayout` is the control's own answer and wins. "EXEMPT" is only ever that — an explicit
-   *  pick of Tax exempt — never a default and never a legacy reading: the sheet cannot say a
-   *  customer is exempt, and reading an old draft as exempt would print it without the taxes it
-   *  was sent with. A draft from before the control carries the old three-way `taxInclusion`, read
-   *  by what it PRINTED (see price_rules.layout_for for the table): its "EXEMPT" printed one line
-   *  with the tax-inclusive figure, and still does. A draft that carries neither was never decided
-   *  by anybody, so it takes the default Hanz asked for — Broken out whenever a tax applies — and
-   *  keeps following the sheet until the estimator picks one. */
+   *  `taxLayout` is the control's own answer and wins when it is one of the two. Anything else in
+   *  it — a stored "EXEMPT" (the #573 pick, which no page writes now), garbage — is no answer, and
+   *  the draft is read as if it had none; never as a price without its tax. A draft from before the
+   *  control carries the old three-way `taxInclusion`, read by what it PRINTED (see
+   *  price_rules.layout_for for the table): its "EXEMPT" printed one line with the tax-inclusive
+   *  figure, and still does. A draft that carries neither was never decided by anybody, so it
+   *  takes the default Hanz asked for — Broken out whenever a tax applies — and keeps following the
+   *  sheet until the estimator picks one. */
   function layoutFor(taxLayout, taxInclusion, freeRows, taxable, remodelOn) {
     var lay = String(taxLayout || "").trim().toUpperCase();
-    if (lay === "BROKEN_OUT" || lay === "ONE_LINE" || lay === "EXEMPT") return lay;
+    if (lay === "BROKEN_OUT" || lay === "ONE_LINE") return lay;
     var legacy = String(taxInclusion == null ? "" : taxInclusion).trim().toUpperCase();
     var dflt = (taxable || remodelOn) ? "BROKEN_OUT" : "ONE_LINE";
     if (!legacy) return dflt;
@@ -483,7 +482,7 @@
   var BASE_ROW_WORDS = { sales_tax: "Material Sales Tax", remodel: "Remodel Tax", total: "Total" };
 
   /** The tax wording the BASE line prints for a draft as it stands, "" when Broken out and "(tax
-   *  exempt)" when Tax exempt is picked: the layout
+   *  exempt)" whenever the base's sheet has no tax (taxRule, whatever the layout): the layout
    *  (layoutFor, off tax_layout / tax_inclusion) and the base's tax answers as the pages snapshot
    *  them (proposal_sales_tax, proposal_remodel_tax, proposal_taxable, proposal_remodel_on). For the
    *  Estimate step, which has no document to ask; the Proposal step's own is baseTaxRule, which

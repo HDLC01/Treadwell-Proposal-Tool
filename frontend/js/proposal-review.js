@@ -113,22 +113,27 @@
     return repaintNote(b.say, b.fix);
   }
 
-  // THE TAX CONTROL. Hanz, 2026-09-25: the estimate sheet decides WHETHER there is tax (Taxable?
-  // for material sales tax, Remodel Tax? for remodel tax, per priced tab); this picks how it is
-  // shown, "One line" or "Broken out". And 2026-09-28, "Tax exempt": the customer pays no tax, so
-  // the Base Bid and every option print their pre-tax figures with "(tax exempt)" and no tax rows
-  // (TWPrice.taxRule). The estimate sheet is not touched — nothing here writes a cell.
-  // It is stored as `tax_layout` only when somebody PICKS one here — until then taxLayout()
-  // defaults it off the sheet (Broken out whenever a tax applies) and keeps following the sheet;
-  // Tax exempt is never that default. The select's shown value is painted by
+  // THE TAX CONTROL: LAYOUT ONLY. Hanz, 2026-09-25: the estimate sheet decides WHETHER there is
+  // tax (Taxable? for material sales tax, Remodel Tax? for remodel tax, per priced tab); this picks
+  // how it is shown, "One line" or "Broken out". It is stored as `tax_layout` only when somebody
+  // PICKS one here — until then taxLayout() defaults it off the sheet (Broken out whenever a tax
+  // applies) and keeps following the sheet. The select's shown value is painted by
   // refreshPriceDisplay (the default needs the figures and, for a draft saved before this control,
   // the template's shape, neither of which exists yet at this line). The bubbling `input` on the
   // form runs the page's own listeners: the repaint, the document fills and the debounced persist.
+  //
+  // "TAX EXEMPT" IS NOT A PICK. Hanz, 2026-09-28: "it's basis if it's taxable or not is on the
+  // estimate sheet" — asked where exempt is set, "Estimate sheet only". So the select's Tax exempt
+  // is only ever the repaint SHOWING a base whose sheet says No to both taxes (disabled there), and
+  // this handler stores nothing but the two layouts: a change to anything else writes nothing and
+  // puts the select back to what is in force. (#573's pick, which backed the taxes out of the PDF
+  // while the sheet kept them, is gone.)
   (function wireRibbonTax() {
     const sel = document.getElementById("tax-treatment-select");
     if (!sel) return;
     sel.addEventListener("change", () => {
-      const v = (sel.value === "BROKEN_OUT" || sel.value === "EXEMPT") ? sel.value : "ONE_LINE";
+      const v = sel.value;
+      if (v !== "ONE_LINE" && v !== "BROKEN_OUT") { refreshPriceDisplay(); return; }
       state.tax_layout = v;                       // the module snapshot, in place (a primitive)
       try { TW.setState({ tax_layout: v }); } catch {}
       if (form) form.dispatchEvent(new Event("input", { bubbles: true }));
@@ -990,8 +995,20 @@
       else if (wt === "combo") { baseTab = eB || null; shownBase = N(eB && eB.total) + N(pB && pB.total); salesTax = N(eB && eB.sales_tax) + N(pB && pB.sales_tax); remodelTax = N(eB && eB.remodel) + N(pB && pB.remodel); }
       else { baseTab = eB || null; shownBase = N(eB && eB.total); salesTax = N(eB && eB.sales_tax); remodelTax = N(eB && eB.remodel); }
       if (wt === "combo") {
-        baseTaxable = orFlag(tFlag(eB, "taxable"), tFlag(pB, "taxable"));
-        baseRemodelOn = orFlag(tFlag(eB, "remodel_on"), tFlag(pB, "remodel_on"));
+        // No base picked: the two systems' Option lines ARE the price (comboSystemLines), and each
+        // reads its own tab through TWPrice.taxRule — its flag, or, on a snapshot without one, its
+        // own tax figure — and prints only when it has a total. The combined answer is taken off
+        // exactly those lines, so it is taxed when any line the customer reads is. OR-ing the raw
+        // flags read a flagless tab as No beside a tab that said No, and the TAX control locked on
+        // "Tax exempt" over an Option 1 that itemised its Material Sales Tax; counting a zeroed tab
+        // left it offering Broken out over a price with nothing to break out.
+        const printed = [eB, pB].filter(t => t && N(t.total) > 0)
+          .map(t => TWPrice.taxRule({ total: t.total, sales_tax: t.sales_tax, remodel: t.remodel,
+            taxable: t.taxable, remodel_on: t.remodel_on }, false));
+        baseTaxable = printed.length ? printed.some(r => r.taxable)
+          : orFlag(tFlag(eB, "taxable"), tFlag(pB, "taxable"));
+        baseRemodelOn = printed.length ? printed.some(r => r.remodel_on)
+          : orFlag(tFlag(eB, "remodel_on"), tFlag(pB, "remodel_on"));
       } else {
         baseTaxable = tFlag(baseTab, "taxable"); baseRemodelOn = tFlag(baseTab, "remodel_on");
       }
@@ -1230,11 +1247,11 @@
              taxable: state.proposal_taxable, remodel_on: state.proposal_remodel_on };
   }
 
-  /** "ONE_LINE", "BROKEN_OUT" or "EXEMPT" — the TAX control's answer (TWPrice.layoutFor has the
-   *  table).
+  /** "ONE_LINE" or "BROKEN_OUT" — the TAX control's answer (TWPrice.layoutFor has the table). The
+   *  layout ASKED FOR: on a base whose sheet has no tax the rule prints one line whatever this says.
    *
-   *  `tax_layout` is what the estimator picked in the ribbon; "EXEMPT" is only ever that pick. A
-   *  draft from before that control
+   *  `tax_layout` is what the estimator picked in the ribbon (a stored "EXEMPT" is not a layout and
+   *  reads as no pick at all). A draft from before that control
    *  carries the old three-way `tax_inclusion` and is read by what it printed: Broken out stays
    *  Broken out, Included and Exempt were one line (exempt now comes from the sheet) — except on a
    *  template whose tax rows are plain paragraphs (GC, Gyp), which itemised whatever the box said
@@ -1251,16 +1268,14 @@
     return TWPrice.layoutFor(state.tax_layout, state.tax_inclusion, freeRows, f.taxable, f.remodel_on);
   }
 
-  // The tax LAYOUT, as the rest of this page asks for it. `exempt` is the Tax exempt PICK (Hanz,
-  // 2026-09-28): the customer pays no tax. A sheet whose Taxable? and Remodel Tax? both say No is a
-  // different thing — nothing to back out — and its "(tax exempt)" comes out of the rule's one-line
-  // wording (TWPrice.phraseFor). Callers hand `layout` to TWPrice.taxRule: one argument, so two
-  // yes/nos can never disagree about which layout is in force.
+  // The tax LAYOUT, as the rest of this page asks for it. `exempt` is always false: whether a job
+  // is exempt is the sheet's answer (Taxable? = No, Remodel Tax? = No), and what it prints — one
+  // line, "(tax exempt)", whatever the layout — comes out of the rule (TWPrice.taxRule), not out of
+  // this control. Callers hand `layout` to TWPrice.taxRule.
   function taxTreatmentMode() {
     const layout = taxLayout();
     const broken = layout === "BROKEN_OUT";
-    const exempt = layout === "EXEMPT";
-    return { incl: broken ? "BROKEN_OUT" : exempt ? "EXEMPT" : "INCLUDED", exempt, broken, layout };
+    return { incl: broken ? "BROKEN_OUT" : "INCLUDED", exempt: false, broken, layout };
   }
 
   /** THE RULE for the base bid, as the page shows it and the document prints it. */
@@ -1288,8 +1303,8 @@
    *
    *  The rule is TWPrice.taxRule, in cents: Broken out, the base is the Total less the tax rows that
    *  print (the sheet's own tax cells, never a guessed rate — the bid is tax-inclusive and sales tax
-   *  compounds through markup); Tax exempt, the same pre-tax figure with no row printed at all; one
-   *  line, it is the whole Total. `itemized` is "Broken out". The arguments are the figures the
+   *  compounds through markup); one line — and always on a base whose sheet has no tax — it is the
+   *  whole Total. `itemized` is "Broken out" as it prints. The arguments are the figures the
    *  caller already holds; the flags come off the base tab. */
   function baseBidFigure(total, salesTax, remodelTax) {
     const rule = TWPrice.taxRule({ total, sales_tax: salesTax, remodel: remodelTax,
@@ -1300,10 +1315,11 @@
 
   // Combo per-option price breakout: Option 1 (Epoxy) + Option 2 (Polish), each off its own tab by
   // the same rule as every other price line — one line carrying that system's own tax wording, or,
-  // Broken out, its pre-tax line, the tax rows its flags call for, and its Total, adding up; Tax
-  // exempt, its own pre-tax figure with "(tax exempt)" and no rows. These two lines ARE the base
-  // price when no single base is picked, so they follow the base's layout, Broken out included
-  // (Hanz, 2026-09-28) — unlike an option, which is always one line. From
+  // Broken out, its pre-tax line, the tax rows its flags call for, and its Total, adding up. These
+  // two lines ARE the base price when no single base is picked, so they follow the base's layout,
+  // Broken out included — unlike an option, which is always one line — and each system answers for
+  // itself: one whose own tab has no tax prints one line, "(tax exempt)", under Broken out too
+  // (TWPrice.taxRule; Hanz, 2026-09-28). From
   // the per-tab totals snapshotted on the Estimate screen. Only for the combined-combo default (no
   // single base picked). Options are numbered by RENDER ORDER (not a fixed epoxy=1/polish=2) so a
   // zeroed-out epoxy tab doesn't leave a doc that jumps straight to "Option 2" with no "Option 1"
@@ -1430,11 +1446,24 @@
     const sys = basePriceSystem();
     const { rule } = baseBidFigure(sys.total, sys.sales_tax, sys.remodel);
 
-    // The ribbon shows the layout in force — the estimator's pick, or the default off the sheet.
-    // All three: a repaint that knew only two would snap a Tax exempt pick back to One line.
+    // The ribbon shows what PRINTS — the estimator's pick, or the default off the sheet — and on a
+    // base whose sheet says No to both taxes, "Tax exempt", disabled: that base prints one line,
+    // "(tax exempt)", whatever layout is stored (Hanz, 2026-09-28: set on the estimate sheet
+    // only), so there is nothing here to choose. On a taxed base the Tax exempt option is hidden
+    // and disabled, so it cannot be picked. Repainted on every price change — a base pick or an
+    // estimate that flips a flag moves it both ways — and never stored (wireRibbonTax).
     try {
       const sel = document.getElementById("tax-treatment-select");
-      if (sel) sel.value = rule.layout;
+      if (sel) {
+        const noTax = !rule.taxable && !rule.remodel_on;
+        const exOpt = Array.prototype.find.call(sel.options || [], (o) => o && o.value === "EXEMPT");
+        if (exOpt) { exOpt.hidden = !noTax; exOpt.disabled = !noTax; }
+        sel.value = noTax ? "EXEMPT" : rule.broken ? "BROKEN_OUT" : "ONE_LINE";
+        sel.disabled = noTax;
+        sel.title = noTax
+          ? "Tax exempt — set on the estimate sheet: Taxable? and Remodel Tax? are both No. The price prints on one line."
+          : "";
+      }
     } catch {}
 
     const salesRow   = document.getElementById("sales-tax-row");
@@ -1527,16 +1556,10 @@
       //
       // ALWAYS ONE LINE. Hanz, 2026-09-28: "Options should only be total amount, cannot be broken
       // out ... Only the base bid would be broken out or one line." Broken out is the base bid's
-      // alone; an option never itemises its tax rows and Total, whatever the TAX control says.
-      //
-      // TAX EXEMPT is the whole job's: every option prints its own pre-tax figure (its own tab's
-      // total less the taxes its own flags put in it) and "(tax exempt)", still on one line. An
-      // Add/Deduct line is the difference of the two PRE-TAX figures, the base's off the same
-      // rule and inputs as the base line (baseTaxRule), so base less the deduct is the option's
-      // price as printed; the tax-inclusive difference can be a different amount, or the other
-      // sign. The document's twin is main._build_options(exempt=, base_pre_tax_cents=).
-      const exemptJob = taxTreatmentMode().exempt;
-      const optLayout = exemptJob ? "EXEMPT" : "ONE_LINE";
+      // alone; an option never itemises its tax rows and Total, whatever the TAX control says. Its
+      // figure is its whole tax-inclusive total, worded by its OWN tab: "(tax exempt)" when that
+      // tab's Taxable? and Remodel Tax? both say No. An Add/Deduct line is option − base, the two
+      // tax-inclusive totals. The document's twin is main._build_options.
 
       // DOCUMENT preview — mirrors backend api_generate EXACTLY: the base bid is
       // shown ONLY by the single_bid group (#base-bid-row), so #rooms-block renders
@@ -1566,13 +1589,8 @@
           if (r.price_mode === "deduct") {
             // Auto add/deduct by sign: diff = option − base (Will's formula).
             // Negative → "Deduct ($3,200)"; positive/zero → "Add $2,232". The
-            // Add/Deduct word rides inside the amount island (docx parity). Tax exempt: the two
-            // pre-tax figures (see optLayout above); otherwise the two tax-inclusive totals.
-            const diff = exemptJob
-              ? (TWPrice.taxRule({ total: r.bid.total, sales_tax: r.bid.sales_tax, remodel: r.bid.remodel,
-                                   taxable: r.bid.taxable, remodel_on: r.bid.remodel_on }, "EXEMPT").base_cents
-                 - baseTaxRule().base_cents) / 100
-              : N(r.bid.total) - N(r.base_total);
+            // Add/Deduct word rides inside the amount island (docx parity).
+            const diff = N(r.bid.total) - N(r.base_total);
             if (diff < 0) {
               label = `VE for ${r.option_desc || r.name}, in lieu of ${r.base_desc || "the base bid"}.`;
               amount = `Deduct (${fmtUSDdoc(Math.abs(diff))})`;
@@ -1585,7 +1603,7 @@
             const notes = (Array.isArray(r.notes_auto) ? r.notes_auto : [])
               .concat(Array.isArray(r.notes_manual) ? r.notes_manual : []);
             rule = TWPrice.taxRule({ total: r.bid.total, sales_tax: r.bid.sales_tax,
-              remodel: r.bid.remodel, taxable: r.bid.taxable, remodel_on: r.bid.remodel_on }, optLayout);
+              remodel: r.bid.remodel, taxable: r.bid.taxable, remodel_on: r.bid.remodel_on }, "ONE_LINE");
             phrase = rule.phrase;
             slot = true;
             label = `${desc} as described above` + (phrase ? ` ${phrase}` : "");
@@ -1594,7 +1612,7 @@
           }
           const key = "option:" + r.id;
           // `candidates`: the option's tax-inclusive total, the figure a line re-worded before the
-          // markers froze (under one line it IS the amount; under Tax exempt it is not).
+          // markers froze (on one line it IS the amount).
           return lineEl(key, `${amount} – ${label}`,
             { parts: { amount, phrase, slot,
                        candidates: rule ? [fmtUSDdoc(rule.total_cents / 100)] : [] } });
@@ -1712,12 +1730,8 @@
               // Deduct only reads as a "($savings) – Deduct VE …" line when it SAVES
               // vs the base; add/deduct now self-labels by sign (option − base):
               // cheaper prints "Deduct ($X)", costlier prints "Add $X" — surface
-              // which one this option will be so the estimator isn't surprised. Off the same pair
-              // the line prints (under Tax exempt the two pre-tax figures, see optLayout), or the
-              // hint could promise an Add over a line that prints a Deduct.
-              const savings = exemptJob
-                ? (baseTaxRule().base_cents - TWPrice.taxRule(t, "EXEMPT").base_cents) / 100
-                : N(state.proposal_lump_sum) - N(t.total);
+              // which one this option will be so the estimator isn't surprised.
+              const savings = N(state.proposal_lump_sum) - N(t.total);
               r += `<span class="op-hint pr-deduct-hint"${(mode === "deduct" && savings <= 0) ? "" : ' style="display:none"'}>Costs more than the base — will print as an Add.</span>`;
               r += `<label class="op-notes">Notes (one per line)<textarea class="room-notes" rows="2">${esc(manual)}</textarea></label>`;
               r += `</div>`;
@@ -1801,9 +1815,7 @@
               const hint = row.querySelector(".pr-deduct-hint");
               if (hint) {
                 const t = allTabs.find(x => x.id === id);
-                const savings = exemptJob
-                  ? (baseTaxRule().base_cents - TWPrice.taxRule(t || {}, "EXEMPT").base_cents) / 100
-                  : N(state.proposal_lump_sum) - N(t ? t.total : 0);
+                const savings = N(state.proposal_lump_sum) - N(t ? t.total : 0);
                 hint.style.display = (md.value === "deduct" && savings <= 0) ? "" : "none";
               }
               applyAndRefresh();
@@ -2014,19 +2026,17 @@
       // uses (baseBidFigure). Templates WITHOUT a {{#single_bid}} base-bid island (polish Direct,
       // every GC template) print {{base_tax_phrase}} as a plain token, so this is also what the
       // editor shows there. Broken out: nothing (the rows below say it). One line: the wording for
-      // the taxes the sheet says are in the bid — "(tax exempt)" when neither. Tax exempt: "(tax
-      // exempt)", on the pre-tax figure.
+      // the taxes the sheet says are in the bid — "(tax exempt)" when neither, which is one line
+      // whatever the layout.
       base_tax_phrase: baseRule.phrase,
       // THE TAX MODEL, on the payload, for the document's half of the rule (main._generate ->
-      // price_rules): the layout, and the base tab's own Taxable? / Remodel Tax? answers as this
+      // price_rules): the layout as it PRINTS (never "EXEMPT": that is the sheet's answer, and
+      // travels as the two flags), and the base tab's own Taxable? / Remodel Tax? answers as this
       // page resolved them — so a draft whose flags were never snapshotted prints the same wording
       // in the document as on this screen. `tax_inclusion` is the old field's closest meaning, kept
-      // for a reader that predates `tax_layout` ("EXEMPT" under Tax exempt: a reader that knows no
-      // third layout falls back to it and prints the tax-inclusive figure, never a short one).
-      // `price_taxable` / `price_remodel_on` stay the SHEET's answers under Tax exempt too: they
-      // are what tells the document which taxes to back out of the Total.
-      tax_layout:         baseRule.layout,
-      tax_inclusion:      baseRule.broken ? "BROKEN_OUT" : baseRule.exempt ? "EXEMPT" : "INCLUDED",
+      // for a reader that predates `tax_layout`.
+      tax_layout:         baseRule.broken ? "BROKEN_OUT" : "ONE_LINE",
+      tax_inclusion:      baseRule.broken ? "BROKEN_OUT" : "INCLUDED",
       price_taxable:      baseRule.taxable,
       price_remodel_on:   baseRule.remodel_on,
       // Which rows print, for the editor's own free-paragraph rows (setBlockContent hides a GC /

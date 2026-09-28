@@ -322,24 +322,17 @@ def test_an_old_shape_combo_line_prints_one_line_to_a_paragraph():
         assert got[at + 3] == ("$5,000 – Option 2: Polished Concrete flooring as described above", 0), got
 
 
-@pytest.mark.parametrize("layout", ["BROKEN_OUT", "EXEMPT"])
-def test_the_price_line_is_the_one_the_editor_picks_when_two_look_like_one(layout):
+def test_the_price_line_is_the_one_the_editor_picks_when_two_look_like_one():
     """Two price-shaped lines in one old-shape line: the price line is the one priced at one of the
     line's own figures, as migrateLine reads it — here the figure an old line froze in under one
-    line, today's Total, where the line now prints a pre-tax amount (the editor's `candidates`: the
-    base's Total, an option's own tax-inclusive total). The other is a line typed above it.
-
-    Broken out, only the base prints pre-tax ($7,351): an option is one line, its whole $23,115
-    (2026-09-28). Tax exempt, the option prints its own pre-tax $22,115 too, so only its
-    `candidates` say the $23,115 line is its price line — without them the document bullets the
-    note and puts the price under it as a sub-line, where the editor shows it the other way round.
-
-    Mutation: _generate hands the option line no candidates (`_o.get("candidates")` → [])."""
+    line, today's Total, where the base line now prints its pre-tax amount Broken out (the editor's
+    `candidates`: the base's Total, an option's own tax-inclusive total). The other is a line typed
+    above it. An option is one line, its whole $23,115 (2026-09-28), so its own figure answers."""
     note = "$5,000 – a note that reads like a price line"
     blob = _render(_payload(
         {"base": note + "\n$7,447 – Epoxy flooring in the warehouse",
          "option:Copy1": note + "\n$23,115 – Hybrid as described above"},
-        values=_vals(tax_layout=layout, base_bid_formatted="$7,351", base_tax_phrase=""),
+        values=_vals(tax_layout="BROKEN_OUT", base_bid_formatted="$7,351", base_tax_phrase=""),
         rooms=[{"id": "Epoxy", "name": "Epoxy", "is_base": True,
                 "bid": {"total": 7447, "sales_tax": 96, "remodel": 0}},
                _option("Copy1", 23115, bid={"total": 23115, "sales_tax": 1000, "remodel": 0,

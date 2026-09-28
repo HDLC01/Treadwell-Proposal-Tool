@@ -492,19 +492,20 @@
     <input type="checkbox" id="cl-toggle">
     <span>Cover letter</span>
   </label>
-  <!-- Hanz, 2026-09-25: whether there IS tax is the estimate sheet's answer — Taxable? for
-       material sales tax, Remodel Tax? for remodel tax, per priced tab. This picks how it is shown:
-       on one line, or itemised (pre-tax line, the taxes that apply, Total). It defaults to Broken
-       out whenever either tax applies (proposal-review.js taxLayout).
-       "Tax exempt" came back 2026-09-28: the customer pays no tax, so the Base Bid and every option
-       print their pre-tax figures with "(tax exempt)" and no tax rows. The estimate sheet is not
-       changed. Only picking it makes a job exempt; it is never the default. -->
-  <label class="ribbon-tax" title="How the tax is shown in the PRICE box. Whether there is tax comes from the estimate sheet's Taxable? and Remodel Tax? answers. Tax exempt prints every price without its tax, and no tax rows; the estimate sheet is not changed.">
+  <!-- LAYOUT ONLY (Hanz, 2026-09-25). Whether there IS tax is the estimate sheet's answer —
+       Taxable? for material sales tax, Remodel Tax? for remodel tax, per priced tab. This picks how
+       it is shown: on one line, or itemised (pre-tax line, the taxes that apply, Total). It
+       defaults to Broken out whenever either tax applies (proposal-review.js taxLayout).
+       "Tax exempt" is NOT a choice (Hanz, 2026-09-28: set on the "Estimate sheet only"). The option
+       is only the display of a base whose sheet says No to both taxes: refreshPriceDisplay shows
+       it, selected and disabled, there, and keeps it hidden and disabled everywhere else — which
+       is why it starts that way here. Nothing ever stores it (wireRibbonTax). -->
+  <label class="ribbon-tax" title="How the tax is shown in the PRICE box. Whether there is tax comes from the estimate sheet's Taxable? and Remodel Tax? answers; a job with neither is tax exempt, set on the estimate sheet.">
     <span>Tax</span>
     <select id="tax-treatment-select">
       <option value="ONE_LINE">One line</option>
       <option value="BROKEN_OUT">Broken out</option>
-      <option value="EXEMPT">Tax exempt</option>
+      <option value="EXEMPT" hidden disabled>Tax exempt</option>
     </select>
   </label>
   <button type="button" id="back-btn" class="secondary">← Back to Estimate</button>
@@ -766,11 +767,11 @@
 <script src="/js/proposal-format-core.js?v=20260926-rel"></script>
 <!-- The price rule and the live price lines, shared with the document's half through the parity
      test (backend/price_rules.py). Before the page's script, which reads window.TWPrice. -->
-<script src="/js/price-lines-core.js?v=20260928-exempt"></script>
+<script src="/js/price-lines-core.js?v=20260928-sheet-exempt"></script>
 <!-- The proposal's licensed typeface, fetched from behind the login and registered with FontFace.
      Before the page's script, which hands it the refit to run once the font is in. -->
 <script src="/js/proposal-fonts.js?v=20260926-rel"></script>
-<script src="/js/proposal-review.js?v=20260928-exempt"></script>
+<script src="/js/proposal-review.js?v=20260928-combo-tax-control"></script>
 <!-- AFTER proposal-review.js, always. The cover letter borrows that file's token resolver and its
      "aim at nothing" call for the formatting ribbon, both of which are top-level functions in the
      shared script scope; loaded first it would find neither. Every borrow is feature-detected, so
