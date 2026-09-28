@@ -601,8 +601,7 @@ const out = {};
 }
 
 // 6. OPTIONS FOLLOW THEIR OWN TAB, ON ONE LINE even with the base Broken out (Hanz, 2026-09-28),
-//    and an edited option keeps following it. Under Tax exempt, the whole job: the base and the
-//    option each print their own pre-tax figure with "(tax exempt)", and no tax row is drawn.
+//    and an edited option keeps following it.
 {
   const st = hanzFix({ tax_layout: "BROKEN_OUT" });
   const api = build(st);
@@ -616,31 +615,6 @@ const out = {};
   api.refreshPriceDisplay();
   out.editedOption = { stored: st.price_overrides.lines2["option:Copy1"],
                        lines: api.lines().filter((l) => l.key.startsWith("option:")) };
-  // The same edited option on the same draft, picked Tax exempt: his words, today's pre-tax figure.
-  st.tax_layout = "EXEMPT";
-  api.refreshPriceDisplay();
-  out.editedOption.exempt = api.lines().filter((l) => l.key.startsWith("option:")).map((l) => l.text);
-}
-{
-  const st = hanzFix({ tax_layout: "EXEMPT" });
-  const api = build(st);
-  api.refreshPriceDisplay();
-  out.exemptJob = { lines: api.lines().map((l) => [l.key, l.text]) };
-}
-// 6b. AN OPTION RE-WORDED BEFORE THE MARKERS EXISTED, frozen at its tax-inclusive Total ($7,696),
-//     on a job now picked Tax exempt — and the option's tab is not among the priced tabs, so no tab
-//     figure says $7,696 is the estimate's: only the line's own `candidates` do.
-{
-  const st = hanzFix({ tax_layout: "EXEMPT", price_overrides: { lines: {
-    "option:Copy1": OPT_LINE.replace("as described above", "as described above, shop floor") } } });
-  const api = build(st);
-  api.refreshPriceDisplay();
-  out.exemptLegacyOption = {
-    lines: api.lines().filter((l) => l.key === "option:Copy1")
-      .map((l) => ({ kind: l.kind, text: l.text, money: /tw-money-off/.test(l.cls), live: /tw-po-live/.test(l.cls) })),
-    pov: JSON.parse(JSON.stringify(st.price_overrides)),
-    warnings: api.priceWarnings().map((w) => ({ key: w.key, says: w.says, estimate: w.estimate })),
-  };
 }
 
 // 7. A LINE BREAK THAT LANDS INSIDE A PRICE LINE by a route other than Enter at a caret (Enter over
@@ -710,11 +684,12 @@ const snap = (p) => ({ base_tab_id: p.st.base_tab_id, lump: p.st.proposal_lump_s
                        pov: clone(p.st.price_overrides || {}), doc: docPayload(p.st, p.api),
                        warnings: p.api.priceWarnings().map((w) => ({ key: w.key, says: w.says, estimate: w.estimate })) });
 
-// 6b. THE ADD/DEDUCT HINT in the Pricing options panel says what the line will print. A copy that
-//     is $53 dearer than the base with its tax ($7,500 against $7,447) is $51 cheaper without it
-//     ($7,300 against $7,351): under Tax exempt the line prints a Deduct, so the "will print as an
-//     Add" hint must not show — both where the panel draws it and where the Price-as select's
-//     change handler sets it.
+// 6b. THE ADD/DEDUCT HINT in the Pricing options panel says what the line will print: option − base,
+//     the two TAX-INCLUSIVE totals, under every layout. A copy that is $53 dearer than the base with
+//     its tax ($7,500 against $7,447) is $51 cheaper without it ($7,300 against $7,351); the line
+//     prints "Add $53" and the "will print as an Add" hint shows — both where the panel draws it and
+//     where the Price-as select's change handler sets it — on a draft holding a stored "EXEMPT" too
+//     (#573 took the pre-tax pair there; that pick is gone).
 {
   const ALT = { id: "Alt", name: "Epoxy copy 2", role: "epoxy", kind: "copy", total: 7500, sales_tax: 0,
                 remodel: 200, taxable: false, remodel_on: true, system_desc: "Treadwell Seal Coat",
@@ -1091,19 +1066,6 @@ const NOTE_UNDER_BASE = ["", "THis is a test send to Hanz"];
   st.tax_layout = "ONE_LINE";
   api.refreshPriceDisplay();
   out.ownPhrase.backToOneLine = base.textContent;
-  // Tax exempt: "(tax exempt)" IS today's wording now, so typing it over the computed line stores
-  // the marker — and a switch back to one line prints the sheet's wording, not his "(tax exempt)".
-  const ex = hanzFix({ tax_layout: "EXEMPT" });
-  const exApi = build(ex);
-  exApi.refreshPriceDisplay();
-  const exBase = exApi.pg.ids["base-bid-row"];
-  exApi.type(exBase, "$7,351 – Epoxy flooring in the warehouse as described above (tax exempt)");
-  exApi.refreshPriceDisplay();
-  out.ownPhrase.exempt = { stored: (ex.price_overrides.lines2 || {}).base, shown: exBase.textContent,
-                           cls: exBase.className };
-  ex.tax_layout = "ONE_LINE";
-  exApi.refreshPriceDisplay();
-  out.ownPhrase.exempt.backToOneLine = exBase.textContent;
   // A manual line saved before the live shape, with a wording of his in it: migrated, kept.
   const old = hanzFix({ price_lines: [{ label: "Add for moisture mitigation", amount: 1200 }],
                         price_overrides: { lines: { "manual:0": "$1,200 – Add for moisture mitigation (tax exempt)" } } });
@@ -1169,12 +1131,6 @@ const COMBO_LEGACY = "$10,000 – Option 1: Epoxy flooring in the kitchen as des
   api.refreshPriceDisplay();
   out.comboLegacy.broken = api.lines().map((l) => [l.key, l.text]);
   out.comboLegacy.brokenPayload = api.comboLinesForPayload();
-  // Tax exempt: the combo line is the BASE's price, so it follows the base's layout — its own
-  // pre-tax figure, "(tax exempt)", no row under it.
-  st.tax_layout = "EXEMPT";
-  api.refreshPriceDisplay();
-  out.comboLegacy.exempt = api.lines().map((l) => [l.key, l.text]);
-  out.comboLegacy.exemptPayload = api.comboLinesForPayload();
   // The payload built BEFORE the line is ever drawn (Download from a draft the proposal step has
   // not painted yet): the payload's own migration has to know the old figure too.
   const fresh = JSON.parse(JSON.stringify(Object.assign({}, st, { tax_layout: undefined,

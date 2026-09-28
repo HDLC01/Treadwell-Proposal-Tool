@@ -277,13 +277,13 @@ def test_a_failing_compute_does_not_break_the_save(ran):
     ("INCLUDED", "(Remodel Tax AND material sales tax INCLUDED)", "INCLUDED"),
     ("BROKEN_OUT", "", "BROKEN_OUT"),
     # A draft saved with the old "Tax exempt" on a job whose sheet charges both taxes ($420 sales,
-    # $900 remodel): it reads as the one line it printed, with the wording for the taxes the sheet
-    # says are in the bid — the old field never reads as the new Tax exempt.
+    # $900 remodel): exempt is the SHEET's answer now (Hanz, 2026-09-25), so this reads as the one
+    # line it printed, with the wording for the taxes the sheet says are in the bid.
     ("EXCLUDED", "(Remodel Tax AND material sales tax INCLUDED)", "EXCLUDED"),
-    # The Tax exempt PICK (2026-09-28), stored as `tax_layout`. `sales_tax_handling` is the form's
-    # hidden field and passes through as it stands, deliberately: no template prints it or the
-    # `tax_phrase` it drives, and the layout the document reads travels as `tax_layout`.
-    ("EXEMPT", "(tax exempt)", "INCLUDED"),
+    # A `tax_layout` "EXEMPT" (#573's pick, gone; exempt is the estimate sheet's answer only). Not a
+    # layout: the draft reads as one that never chose, so this taxed sheet takes the Broken-out
+    # default. `sales_tax_handling` is the form's hidden field and passes through as it stands.
+    ("EXEMPT", "", "INCLUDED"),
 ])
 def test_the_tax_treatment_reaches_the_document(ran, mode, phrase, handling):
     """The layout changes the parenthetical a customer reads and which of the price lines the
@@ -294,14 +294,18 @@ def test_the_tax_treatment_reaches_the_document(ran, mode, phrase, handling):
 
 
 @needs_node
-def test_the_tax_exempt_pick_rides_the_payload_as_its_own_layout(ran):
-    """What the document is told under Tax exempt: `tax_layout` "EXEMPT" (what main._generate
-    reads), `tax_inclusion` "EXEMPT" beside it for a reader that knows no third layout — which
-    falls back to the one line it always printed, tax-inclusive, never a short figure — and no row
-    to print."""
+def test_a_stored_exempt_rides_the_payload_as_the_layout_the_page_resolved(ran):
+    """What the document is told for a draft holding a `tax_layout` "EXEMPT" on a sheet that charges
+    both taxes ($420 sales, $900 remodel): never "EXEMPT" — the layout the page resolved, here the
+    Broken-out default, with every row that applies to print and the SHEET's two answers beside it.
+    #573 sent "EXEMPT" and a base with the taxes backed out; the document now reads such a payload
+    as it reads one with no layout, and the page never composes one.
+
+    Mutation: TWPrice.layoutFor accepting "EXEMPT" as a layout (the draft stops reading as
+    undecided and prints one line with no row)."""
     f = ran["taxFlip"]["EXEMPT"]
-    assert (f["tax_layout"], f["tax_inclusion"]) == ("EXEMPT", "EXEMPT"), f
-    assert f["price_rows"] == [False, False, False], f
+    assert (f["tax_layout"], f["tax_inclusion"]) == ("BROKEN_OUT", "BROKEN_OUT"), f
+    assert f["price_rows"] == [True, True, True], f
     assert ran["taxFlip"]["BROKEN_OUT"]["tax_layout"] == "BROKEN_OUT"
     assert ran["taxFlip"]["INCLUDED"]["tax_layout"] == "ONE_LINE"
 
@@ -313,7 +317,7 @@ def test_the_tax_exempt_pick_rides_the_payload_as_its_own_layout(ran):
     ("INCLUDED",   "$13,265"),   # one line: nothing prints for the base to be net of
     ("BROKEN_OUT", "$11,945"),   # rows print: 11,945 + 420 + 900 = 13,265
     ("EXCLUDED",   "$13,265"),   # an old "exempt" draft: one line, as it printed
-    ("EXEMPT",     "$11,945"),   # THE EXCEPTION, on purpose: see below
+    ("EXEMPT",     "$11,945"),   # a stored "EXEMPT": no layout, so the default — Broken out
 ])
 def test_the_base_bid_is_the_total_less_whatever_tax_rows_print(ran, mode, base):
     """The rule the whole PRICE block hangs on, on the side of it the estimator SEES.
@@ -325,26 +329,20 @@ def test_the_base_bid_is_the_total_less_whatever_tax_rows_print(ran, mode, base)
 
     This asserts the FIGURE, not that some function was called, and it asserts the sum rather
     than restating the arithmetic: whichever rows print, the printed rows plus the printed base
-    have to come to the printed Total.
-
-    TAX EXEMPT IS THE ONE NAMED EXCEPTION, and it is not a regression to "fix": Hanz, 2026-09-28,
-    the customer pays no tax, so the base is net of both taxes ($13,265 − $420 − $900) and NO row
-    prints — not the tax rows, not the Total. A discount by exactly the taxes is the point. Any
-    other layout whose base is net of a row that does not print is still the bug."""
+    have to come to the printed Total. There is no exception: #573's Tax exempt was one, a base
+    net of both taxes with no row, and it is gone (Hanz, 2026-09-28: exempt is the sheet's answer).
+    Which rows print is read off the payload's own price_rows_*, so a layout that took a tax out
+    without printing it fails here whatever it is called."""
     f = ran["taxFlip"][mode]
     assert f["base_bid_formatted"] == base
 
     def usd(s):
         return float(str(s).replace("$", "").replace(",", ""))
 
-    if mode == "EXEMPT":
-        assert f["price_rows"] == [False, False, False], f"tax exempt printed a tax row ({f!r})"
-        assert usd(f["base_bid_formatted"]) == (usd(f["total_formatted"]) - usd(f["material_tax_formatted"])
-                                                - usd(f["tax_amount_formatted"])), f
-        return
     printed = usd(f["base_bid_formatted"])
-    if mode == "BROKEN_OUT":                      # the only mode whose rows reach the page
-        printed += usd(f["material_tax_formatted"]) + usd(f["tax_amount_formatted"])
+    material, remodel, _total = f["price_rows"]   # the rows that reach the page
+    printed += (usd(f["material_tax_formatted"]) if material else 0.0) + (
+        usd(f["tax_amount_formatted"]) if remodel else 0.0)
     assert printed == usd(f["total_formatted"]), (
         f"{mode}: the printed price block does not sum to the Total ({f!r})")
 
