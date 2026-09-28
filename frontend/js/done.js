@@ -1347,7 +1347,7 @@
         // carries no price line, so its button is not asked. Cancel builds and fetches nothing.
         let checkedVersion = "";
         if (urlKey !== "xlsx_download_url") {
-          const asked = await TWPrice.confirmSavedCopy(TW, "download", (q) => window.confirm(q));
+          const asked = await TWPrice.confirmSavedCopy(TW, "download", TWPrice.ownFigureDialog(TW, "download"));
           if (asked.failed) {
             throw new Error("Couldn't save your latest changes or read the saved proposal, so "
                             + "nothing was downloaded — check your connection and try again.");
@@ -1645,7 +1645,8 @@
           // step marks those lines, and the document it built lists them (price_warnings, read
           // off the same flushed blob the publish is about to freeze). Cancel sends nothing.
           // THE ONE CHECK (TWPrice.confirmOwnFigures) that Download and To Dropbox ask too.
-          if (!TWPrice.confirmOwnFigures(TW.getState(), "send", (q) => window.confirm(q))) {
+          // The pop-up (ownFigureDialog) answers with a promise, hence the await.
+          if (!(await TWPrice.confirmOwnFigures(TW.getState(), "send", TWPrice.ownFigureDialog(TW, "send")))) {
             portalBtn.disabled = false; portalBtn.textContent = orig;
             if (portalRecip.setBusy) portalRecip.setBusy(false);
             return;                            // NOTHING is posted. No portal row, no email.

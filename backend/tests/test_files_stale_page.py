@@ -196,18 +196,22 @@ def test_the_publish_carries_when_the_checked_copy_was_saved(ran):
 def test_a_price_line_with_a_figure_of_its_own_is_asked_about_then_sent(ran):
     """Hanz, 2026-09-25: "warn, then let him send." The document the Proposal step built lists the
     price lines that print a dollar figure of the estimator's own (price_warnings); Send asks in his
-    words, Cancel sends nothing, OK sends. A document with no such line is not asked about.
+    words, Cancel sends nothing, OK sends. A document with no such line is not asked about. Asked as
+    the Treadwell pop-up (Hanz, 2026-09-28: "the warning should be a pop up"): the harness reads the
+    dialog's title | message | button.
 
-    Mutation: drop the confirm (done.js) — the cancelled send posts."""
+    Mutation: drop the confirm (done.js) — the cancelled send posts. Mutation: pass window.confirm
+    back in (done.js) — the question is the bare sentence and no pop-up is asked."""
     w = ran["priceWarning"]
-    ask = "This line says $9,999 but the estimate says $12,500 — send anyway?"
+    ask = "Send with a different price? | This line says $9,999 but the estimate says $12,500. | Send anyway"
     assert w["cancel"] == {"asked": [ask], "posted": 0}, w
     assert w["ok"] == {"asked": [ask], "posted": 1}, w
     assert w["none"] == {"asked": [], "posted": 1}, w
 
 
 # ── the copy that is built (review of dfcf589) ───────────────────────────────────────────────────
-_RJ_DOWNLOAD = "This line says $15,000 but the estimate says $12,500 — download anyway?"
+_RJ_DOWNLOAD = ("Download with a different price? | This line says $15,000 but the estimate says $12,500."
+                " | Download anyway")
 
 
 def test_download_asks_about_the_servers_copy_the_one_it_builds(ran):

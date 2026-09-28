@@ -144,8 +144,9 @@ def test_no_draft_id_falls_back_to_the_pages_own_payload(ran):
 
 
 # ── a price line with a figure of his own ────────────────────────────────────────────────────────
-_ASK = ("This line says $15,000 but the estimate says $9,860.\n"
-        "This line says $9,999, typed by hand — download anyway?")
+# Asked as the Treadwell pop-up (Hanz, 2026-09-28): the harness reads title | message | button.
+_ASK = ("Download with a different price? | This line says $15,000 but the estimate says $9,860. "
+        "This line says $9,999, typed by hand. | Download anyway")
 
 
 @pytest.mark.parametrize("case", ["pdfCancel", "docxCancel"])
@@ -191,7 +192,8 @@ def test_no_question_for_the_estimate_sheet_or_a_document_that_follows_the_estim
 
 
 # ── the copy that is built (review of dfcf589) ───────────────────────────────────────────────────
-_RJ_ASK = "This line says $15,000 but the estimate says $12,500 — download anyway?"
+_RJ_ASK = ("Download with a different price? | This line says $15,000 but the estimate says $12,500."
+           " | Download anyway")
 
 
 def test_download_asks_about_the_copy_the_server_builds_not_this_pages(ran):

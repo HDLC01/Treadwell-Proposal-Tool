@@ -8622,6 +8622,146 @@
     if (_povTimer) clearTimeout(_povTimer);
     _povTimer = setTimeout(() => { try { TW.setState({ price_overrides: state.price_overrides }); } catch {} }, 500);
   }
+  // ── A FIGURE OF HIS OWN, ASKED AS THE CARET LEAVES THE LINE ────────────────────────────────
+  /** Hanz, 2026-09-28: "the warning should be a pop up". A price line whose dollar figure he typed
+   *  over -- the estimate says one amount, the line now prints another -- was marked only by a small
+   *  ⚠, and not even at once: paintLine skips the line the caret is in, and nothing repainted it when
+   *  the caret left, so the mark came on the next repaint, a reload. Now, the moment the caret leaves
+   *  such a line, the page asks in the Treadwell pop-up:
+   *
+   *    Price doesn't match the estimate
+   *    This line says $9,999 but the estimate says $5,569.      [Keep my figure]  [Use the estimate]
+   *
+   *  KEEP MY FIGURE changes nothing: the line prints his figure, and Send, Download and To Dropbox
+   *  still ask before it goes (TWPrice.confirmOwnFigures). USE THE ESTIMATE puts the estimate's figure
+   *  back in place of his, every other word kept (TWPrice.withEstimateFigure), stored through the
+   *  line's own input -- the same capture as typing the estimate's figure by hand, which is what
+   *  returns a line to following the estimate. Escape and a click outside keep his figure, and it is
+   *  the focused button: a dismissed question must never change what he typed.
+   *
+   *  Once per figure: leaving the line again with the same figure asks nothing, a different figure
+   *  asks again. Both line families: the page's own price lines (base, tax rows, Total, options,
+   *  combo and manual lines) and the template's PRICE paragraphs (the GC and Gyp price rows, polish
+   *  Direct's base line), which the edit marker already classes tw-money-off on every keystroke.
+   *
+   *  A LISTENER OF ITS OWN, not a line in the ribbon's selectionchange listener, AND KEPT HERE, out of
+   *  the stretches of this file the harnesses lift whole: they run that listener, and everything
+   *  between "Wire the formatting ribbon" and the next paste listener, with only the names those use
+   *  bound (fmt-ribbon-harness.js WIRING, price-bullets-harness.js SELCHANGE), so a name this block
+   *  used there was a ReferenceError in 51 tests. */
+  const _figureAsked = new Map();       // line -> the figure already asked about on it
+  let _figureLine = null;               // the price line the caret is on, or null
+
+  /** The line a figure belongs to: a price line the page composes, or a template PRICE paragraph. */
+  function figureLineOf(n) {
+    const line = n ? lineAt(n) : null;
+    if (!line || !docSurface || !docSurface.contains(line)) return null;
+    if (line.dataset && line.dataset.poKind === "line" && line.dataset.poLinekey) return line;
+    if (line.classList.contains("tw-block") && isPriceParagraph(line.dataset.id)) return line;
+    return null;
+  }
+
+  function figureLineKey(el) {
+    return el.dataset.poLinekey ? "k:" + el.dataset.poLinekey : "p:" + el.dataset.id;
+  }
+
+  /** Draw a price line's cue from what is stored for it, now: the mark paintLine held back while the
+   *  caret was on the line. Returns whether the line prints a figure of his own. A line with nothing
+   *  in the live shape keeps whatever cue it was drawn with (an old-shape line's). */
+  function paintFigureCue(el) {
+    const pov = state.price_overrides || {};
+    const v = pov.lines2 && typeof pov.lines2 === "object" ? pov.lines2[el.dataset.poLinekey] : null;
+    if (typeof v !== "string") {
+      if (el.classList.contains("tw-money-off")) {
+        el.classList.remove("tw-overridden", "tw-po-live", "tw-money-off");
+        el.removeAttribute("title");
+      }
+      return false;
+    }
+    const money = TWPrice.moneyOff(v);
+    el.classList.add("tw-overridden");
+    el.classList.toggle("tw-po-live", !money);
+    el.classList.toggle("tw-money-off", money);
+    el.title = money ? _MONEY_TITLE : _LIVE_TITLE;
+    return money;
+  }
+
+  /** Put the estimate's figure back where he typed his, in the line's own text nodes (a template
+   *  paragraph carries runs, so its markup is kept), then hand the line to its input handler. */
+  function useEstimateFigure(el) {
+    if (!el || !el.isConnected) return false;
+    const est = /\$\s?[\d,]+(?:\.\d+)?/.exec(String(el.dataset.amount || ""));
+    if (!est) return false;
+    const nodes = [];
+    const walk = (n) => { for (const c of Array.from(n.childNodes || [])) { if (c.nodeType === 3) nodes.push(c); else walk(c); } };
+    walk(el);
+    const all = nodes.map(t => t.data).join("");
+    const m = /\$\s?[\d,]+(?:\.\d+)?/.exec(all);
+    if (!m) return false;
+    let at = 0, put = false;
+    const from = m.index, to = m.index + m[0].length;
+    for (const t of nodes) {
+      const a = at, b = at + t.data.length;
+      at = b;
+      if (b <= from || a >= to) continue;
+      const keepHead = t.data.slice(0, Math.max(0, from - a));
+      const keepTail = t.data.slice(Math.max(0, Math.min(t.data.length, to - a)));
+      t.data = keepHead + (put ? "" : est[0]) + keepTail;
+      put = true;
+    }
+    if (!put) return false;
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    if (el.dataset.poKind === "line") paintFigureCue(el);
+    return true;
+  }
+
+  /** The caret left `el`: draw its cue and, when it prints a figure of his own he has not been asked
+   *  about, ask. */
+  function leftFigureLine(el) {
+    if (!el || !el.isConnected || !docSurface || !docSurface.contains(el)) return;
+    const own = el.dataset.poKind === "line" ? paintFigureCue(el) : el.classList.contains("tw-money-off");
+    const id = figureLineKey(el);
+    if (!own) { _figureAsked.delete(id); return; }
+    const says = TWPrice.firstDollar(serializeBlock(el));
+    const est = TWPrice.firstDollar(String(el.dataset.amount || ""));
+    if (!says || !est || _figureAsked.get(id) === says) return;
+    if (typeof TW === "undefined" || typeof TW.confirmDanger !== "function") return;
+    if (TW.modalOpen && TW.modalOpen()) return;
+    _figureAsked.set(id, says);
+    TW.confirmDanger({
+      tone: "warn", icon: "warning", title: "Price doesn't match the estimate",
+      message: "This line says " + says + " but the estimate says " + est + ".",
+      cancelText: "Keep my figure", confirmText: "Use the estimate",
+    }).then((use) => {
+      if (use && useEstimateFigure(el)) _figureAsked.delete(id);
+    });
+  }
+
+  function trackFigureLine(next) {
+    if (next === _figureLine) return;
+    const was = _figureLine;
+    _figureLine = next;
+    if (was) leftFigureLine(was);
+  }
+
+  document.addEventListener("selectionchange", () => {
+    if (_fmtBusy || !docSurface) return;
+    const sel = window.getSelection ? window.getSelection() : null;
+    if (!sel || !sel.rangeCount) return;
+    let n = sel.getRangeAt(0).startContainer;
+    if (n && n.nodeType !== 1) n = n.parentNode;
+    // A selection outside the page's document (the sidebar, the ribbon's size box) has left too.
+    trackFigureLine(n && docSurface.contains(n) ? figureLineOf(n) : null);
+  });
+  // Focus leaving the document without moving the selection -- a button, the Tax control -- is
+  // leaving the line as well. Not a move INTO the document, and not the pop-up's own button: the
+  // line was let go of before it opened.
+  docSurface.addEventListener("focusout", (e) => {
+    const to = e.relatedTarget;
+    if (to && docSurface.contains(to)) return;
+    trackFigureLine(null);
+  });
+
   // Every whole-line PRICE element: the base bid and its option/manual lines, the tax rows, the
   // Base Bid / Options headings, the combo breakout, the per-room block and the ALTERNATE SYSTEM
   // block. Named in one place so nothing can be wired half-way.

@@ -615,6 +615,80 @@ def test_the_question_is_one_rule_in_three_verbs():
                      "seen": ["This line says $15,000 but the estimate says $9,860 — download anyway?"] * 2}
 
 
+@needs_node
+def test_the_question_is_asked_as_the_treadwell_pop_up():
+    """Hanz, 2026-09-28: "the warning should be a pop up". TWPrice.ownFigureDialog puts the one
+    question to him in TW.confirmDanger's amber pop-up: the verb's title and button, the sentences
+    without their "— download anyway?" tail (the title and button say it), Cancel on the other
+    button. Its answer is a promise, and confirmOwnFigures / confirmSavedCopy both wait for it:
+    Cancel builds nothing, OK goes. A page with no confirmDanger falls back to window.confirm.
+
+    Mutation: confirmOwnFigures back to `!!ask(q)` -- a pending promise is truthy, so Cancel goes.
+    Mutation: confirmSavedCopy stores the promise as `go` -- the caller reads a Promise, not false."""
+    w = [{"says": "$15,000", "estimate": "$9,860"}, {"says": "$9,999", "estimate": ""}]
+    got = _core_async("""async (P, w) => {
+        const opened = [];
+        const tw = (answer) => ({ confirmDanger: (o) => { opened.push(o); return Promise.resolve(answer); } });
+        const d = { proposal_payload: { price_warnings: w } };
+        const cancel = await P.confirmOwnFigures(d, 'download', P.ownFigureDialog(tw(false), 'download'));
+        const ok = await P.confirmOwnFigures(d, 'send', P.ownFigureDialog(tw(true), 'send'));
+        const saved = (answer) => ({ flushState: async () => true, getDraftId: () => 'd1',
+                                     readServerRow: async () => ({ data: d, version: 'v7' }) });
+        const filedNo = await P.confirmSavedCopy(saved(), 'file', P.ownFigureDialog(tw(false), 'file'));
+        const filedYes = await P.confirmSavedCopy(saved(), 'file', P.ownFigureDialog(tw(true), 'file'));
+        const noId = await P.confirmSavedCopy({ flushState: async () => true, getDraftId: () => '',
+                                                getState: () => d }, 'download',
+                                              P.ownFigureDialog(tw(false), 'download'));
+        global.window = { confirm: (q) => { opened.push({ fallback: q }); return true; } };
+        const fell = P.confirmOwnFigures(d, 'send', P.ownFigureDialog({}, 'send'));
+        return { cancel, ok, filedNo, filedYes, noId, fell, opened };
+    }""", w)
+    msg = "This line says $15,000 but the estimate says $9,860. This line says $9,999, typed by hand."
+    want = lambda title, go: {"tone": "warn", "icon": "warning", "title": title, "message": msg,
+                              "cancelText": "Cancel", "confirmText": go}
+    assert got["cancel"] is False and got["ok"] is True, got
+    assert got["filedNo"] == {"go": False, "failed": False, "version": "v7"}, got["filedNo"]
+    assert got["filedYes"] == {"go": True, "failed": False, "version": "v7"}, got["filedYes"]
+    assert got["noId"] == {"go": False, "failed": False, "version": ""}, got["noId"]
+    assert got["fell"] is True
+    assert got["opened"] == [
+        want("Download with a different price?", "Download anyway"),
+        want("Send with a different price?", "Send anyway"),
+        want("File with a different price?", "File anyway"),
+        want("File with a different price?", "File anyway"),
+        want("Download with a different price?", "Download anyway"),
+        {"fallback": msg[:-1].replace(". This", ".\nThis") + " — send anyway?"},
+    ], got["opened"]
+
+
+@needs_node
+def test_use_the_estimate_moves_only_the_figure():
+    """TWPrice.withEstimateFigure, what the editor's "Use the estimate" button stores: the line's
+    first dollar figure -- the one he typed -- becomes the estimate's, every other word kept, and an
+    amount that carries words of its own ("Add $4,757") gives only its figure, so no word is doubled.
+    A line or an amount with no figure comes back as it was.
+
+    Mutation: replace with the whole amount string -- "Add Add $4,757 – Rubber base"."""
+    got = _core("""(P) => [
+        P.withEstimateFigure("$9,999 – Epoxy flooring as described above", "$5,569"),
+        P.withEstimateFigure("Add $9,999 – Rubber base", "Add $4,757"),
+        P.withEstimateFigure("Deduct ($9,999) – No cove", "($1,200)"),
+        P.withEstimateFigure("$9,999 – Epoxy flooring (discounted from $6,307)", "$5,569"),
+        P.withEstimateFigure("$ 9,999.50 – Sealer", "$1,470"),
+        P.withEstimateFigure("Epoxy flooring, no figure", "$5,569"),
+        P.withEstimateFigure("$9,999 – Epoxy", ""),
+    ]""")
+    assert got == [
+        "$5,569 – Epoxy flooring as described above",
+        "Add $4,757 – Rubber base",
+        "Deduct ($1,200) – No cove",
+        "$5,569 – Epoxy flooring (discounted from $6,307)",
+        "$1,470 – Sealer",
+        "Epoxy flooring, no figure",
+        "$9,999 – Epoxy",
+    ], got
+
+
 def test_send_download_and_to_dropbox_ask_through_the_one_check():
     """No second copy of the rule: done.js (Send and the .docx / PDF downloads) and dropbox.js (To
     Dropbox) all ask through TWPrice.confirmOwnFigures, neither keeps a wording of its own, and

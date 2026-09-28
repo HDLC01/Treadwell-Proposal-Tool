@@ -391,7 +391,7 @@
       // the button, the result and the draft stay as they were.
       const label = go.textContent;
       go.disabled = true;
-      const asked = await TWPrice.confirmSavedCopy(TW, "file", (q) => window.confirm(q));
+      const asked = await TWPrice.confirmSavedCopy(TW, "file", TWPrice.ownFigureDialog(TW, "file"));
       if (!asked.go) {
         go.disabled = false; go.textContent = label;
         if (asked.failed) {

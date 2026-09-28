@@ -448,7 +448,9 @@ def test_the_client_mirrors_the_whole_dropbox_result_it_was_sent(page):
 
 
 # ── a price line with a figure of his own (Hanz, 2026-09-26: warn on all three) ────────────────
-_FILE_ASK = "This line says $15,000 but the estimate says $9,860 — file anyway?"
+# Asked as the Treadwell pop-up (Hanz, 2026-09-28): the harness reads title | message | button.
+_FILE_ASK = ("File with a different price? | This line says $15,000 but the estimate says $9,860."
+             " | File anyway")
 
 
 @needs_node
@@ -484,7 +486,8 @@ def test_to_dropbox_asks_nothing_when_every_line_follows_the_estimate(page):
 
 
 # ── the copy that is filed (review of dfcf589) ───────────────────────────────────────────────────
-_RJ_FILE_ASK = "This line says $15,000 but the estimate says $12,500 — file anyway?"
+_RJ_FILE_ASK = ("File with a different price? | This line says $15,000 but the estimate says $12,500."
+                " | File anyway")
 
 
 @needs_node

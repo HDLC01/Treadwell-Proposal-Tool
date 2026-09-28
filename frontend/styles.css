@@ -823,6 +823,12 @@ button {
    own (.tw-money-off, with its tooltip, and Send asks). Hanz, 2026-09-25: both his test lines got
    the mark and froze their amount. */
 .tw-line-edit.tw-overridden.tw-po-live::after { content: none; }
+/* A figure of his own is now ASKED about, in a pop-up, the moment the caret leaves the line
+   (proposal-review.js leftFigureLine) -- Hanz, 2026-09-28: "the warning should be a pop up". The
+   pop-up replaces the mark on both line families; the amber wash and the tooltip stay, and Send,
+   Download and To Dropbox still ask before the figure goes. */
+.tw-line-edit.tw-overridden.tw-money-off::after,
+.tw-block.tw-dirty-warn.tw-money-off::after { content: none; }
 /* A line typed above or below a price line is his own line, not an override of one. */
 .tw-line-edit.tw-po-extra { background: transparent; }
 

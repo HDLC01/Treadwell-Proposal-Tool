@@ -168,6 +168,13 @@ async function tab(local, server, opts) {
   vm.createContext(sandbox);
   vm.runInContext(SHARED, sandbox);
   const TW = sandbox.window.TW;
+  // THE POP-UP (TWPrice.ownFigureDialog, Hanz 2026-09-28). shared.js's confirmDanger draws DOM this
+  // sandbox does not have, so the dialog is answered here by the scenario's `window.confirm`, handed
+  // what the estimator reads -- the dialog's title, message and button -- so a question asked with
+  // the wrong words, or not through the pop-up at all, is what the test sees.
+  if (typeof TW.confirmDanger !== "function") throw new Error("shared.js no longer exports confirmDanger");
+  TW.confirmDanger = (o) => Promise.resolve(typeof sandbox.window.confirm === "function"
+    ? sandbox.window.confirm([o.title, o.message, o.confirmText].join(" | ")) : false);
   await TW.draftReady;
   // The page's copy was built by a Continue on this machine, so it carries that Continue's key
   // (TW.composeKey — see files-door-harness.js). Stamped locally only, as the Continue left it.
