@@ -12,15 +12,24 @@ Env:
   SUPABASE_ANON_KEY           publishable key (handed to the frontend)
   SUPABASE_JWT_SECRET         legacy HS256 secret (only if the project signs HS256)
   AUTH_ALLOWED_DOMAIN         email domain allowed to sign in (default wetreadwell.com)
+  AUTH_ALLOWED_PROVIDERS      sign-in methods accepted, comma-separated (default google)
 """
 from __future__ import annotations
 
+import logging
 import os
 from functools import lru_cache
 from typing import Optional
 
+log = logging.getLogger("proposal_tool.auth")
+
 ALLOWED_DOMAIN = (
     (os.environ.get("AUTH_ALLOWED_DOMAIN") or "wetreadwell.com").strip().lower().lstrip("@")
+)
+# Only these Supabase sign-in providers are staff. See verify_token_claims.
+ALLOWED_PROVIDERS = frozenset(
+    p.strip().lower() for p in (os.environ.get("AUTH_ALLOWED_PROVIDERS") or "google").split(",")
+    if p.strip()
 )
 
 
@@ -117,7 +126,34 @@ def verify_token_claims(authorization: Optional[str]) -> dict:
     except AuthError:
         raise
     except Exception as exc:  # bad signature / expired / malformed
-        raise AuthError(401, f"Invalid or expired token: {exc}")
+        # The reason stays in the server log; the caller learns only that it failed.
+        log.info("token rejected: %s", exc)
+        raise AuthError(401, "Invalid or expired token.")
+
+    # WHO MAY SIGN IN (security audit, 2026-09-28). A good signature and a @wetreadwell.com
+    # address are not enough on their own: the shared Supabase project also issues tokens for
+    # email/password and magic-link accounts, and its email sign-up was switched on. Staff sign
+    # in with Google, so only a Google session counts.
+    #   * The token must come from OUR project (`iss`), not merely be signed with a key we trust.
+    #   * The provider is read from `app_metadata`, which only Supabase itself can write.
+    #     `user_metadata` (where `email_verified` sits) is the user's own to edit, so it is never
+    #     trusted here.
+    #   * `amr` says how THIS session was signed in. A Google session carries an "oauth" method; an
+    #     account that also has a password identity cannot use it to reach the app.
+    #   * An anonymous session is never staff.
+    project = supabase_url()
+    if project and str(payload.get("iss") or "").rstrip("/") != project + "/auth/v1":
+        raise AuthError(401, "Invalid or expired token.")
+    app_meta = payload.get("app_metadata") if isinstance(payload.get("app_metadata"), dict) else {}
+    providers = {str(p).lower() for p in (app_meta.get("providers") or []) if p}
+    providers.add(str(app_meta.get("provider") or "").lower())
+    amr = payload.get("amr")
+    methods = ({str(m.get("method") or "").lower() for m in amr if isinstance(m, dict)}
+               if isinstance(amr, list) else None)
+    oauth_only = "email" not in ALLOWED_PROVIDERS and "phone" not in ALLOWED_PROVIDERS
+    if (payload.get("is_anonymous") is True or not (providers & ALLOWED_PROVIDERS)
+            or (oauth_only and methods is not None and "oauth" not in methods)):
+        raise AuthError(403, "Sign in with your Treadwell Google account.")
 
     email = (payload.get("email") or "").strip().lower()
     if not email:
