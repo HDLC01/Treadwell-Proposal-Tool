@@ -237,7 +237,7 @@ const POLICY = { user: ["/leads.html", "/polish-intake.html"], admin: ["/history
 // The capability table as /api/admin/nav-access serves it. Kept in step with backend/nav_access.py by
 // test_nav_permissions_ui.py, which builds this from the module rather than trusting the copy.
 const CAPS = [
-  { href: "/portal.html", label: "Direct Projects", api: [], locked: true },
+  { href: "/portal.html", label: "Direct Projects", api: ["/api/portal/deposit/"], locked: true },
   // The second project board, 2026-09-29. api: [] because it reads exactly what the Direct board
   // reads; LOCKED like /portal.html — Hanz, 2026-09-29: "The General Contractor board is always
   // on, like Direct Projects." (Was locked: false before that instruction.)

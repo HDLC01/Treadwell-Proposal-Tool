@@ -297,13 +297,55 @@ def test_the_page_refusal_only_tabs_own_no_api():
     Proposals Database's own list. Claiming it would 403 a page nobody restricted, so the row buys
     a page refusal and no data refusal — exactly the trade every other name here makes. The Admin
     page needs no edit alongside it: js/admin.js:167 derives the "hides the tab only" wording from
-    the row's own empty `api` at render time rather than from a second copy of this list."""
+    the row's own empty `api` at render time rather than from a second copy of this list.
+
+    /portal.html LEFT THE LIST on 2026-09-29: it now owns /api/portal/deposit/ (the bank-detail
+    reveal), so denying the board is a real data refusal again, not just a page refusal. The Admin
+    page's wording for this row changes accordingly — see test_denying_the_board_takes_the_deposit_
+    reveal_and_nothing_shared below for the data half of that claim."""
     assert [h for h, t in nav_access.TABS.items() if not t["api"]] == [
-        "/portal.html", "/gc-projects.html", "/polish-intake.html", "/polish-estimates.html",
-        "/projects.html", "/library.html", "/markup.html", "/notifications.html",
-        "/admin.html"], (
+        "/gc-projects.html", "/polish-intake.html", "/polish-estimates.html", "/projects.html",
+        "/library.html", "/markup.html", "/notifications.html", "/admin.html"], (
         "the set of tabs that own no private endpoint has changed; the Admin page's on-screen "
         "wording about them is derived from this and needs re-reading")
+
+
+def test_portal_html_can_never_actually_be_denied():
+    """/portal.html is in LOCKED (HOME_PAGE in auth.js — locking it out would strand whoever it was
+    done to). sanitize() drops it from a deny map on save(), silently, same as the admin route's
+    400 does loudly. This is the thing that makes the next test's policy synthetic rather than
+    something save() could ever produce — recorded here so nobody re-discovers it by watching a
+    real deny map do nothing."""
+    saved = nav_access.save({"user": ["/portal.html"]}, "k@x.com")
+    assert saved["deny"] == {}
+    assert nav_access.page_denied("user", "/portal.html") is None
+
+
+def test_the_deposit_reveal_prefix_would_be_denied_if_the_board_ever_could_be():
+    """/api/portal/deposit/ is the reveal button's route and it is claimed by /portal.html's `api`
+    tuple in TABS — but /portal.html can never be denied for real (previous test), so this can't be
+    driven through save() the way test_denying_the_follow_ups_board_... is for a normal tab. It
+    passes a POLICY DICT DIRECTLY (is_api_denied's second, unvalidated arg) to prove the TABS wiring
+    itself is correct and ready, in case /portal.html is ever taken out of LOCKED. Until then, the
+    real protection on this route is sign-in alone (main.py's _auth_gate) — see nav_access.py's
+    comment on the TABS entry for why that is not a regression."""
+    policy = {"deny": {"user": ["/portal.html"]}}
+    assert nav_access.is_api_denied("user", "/api/portal/deposit/dep-1/reveal", policy) is True
+    for shared in ("/api/portal/pipeline", "/api/portal/proposal/p1", "/api/portal/proposal/p1/reply",
+                   "/api/portal/followups", "/api/notifications"):
+        assert nav_access.is_api_denied("user", shared, policy) is False, shared
+
+
+def test_the_deposit_reveal_prefix_has_no_caller_outside_portal_js():
+    """Backend ships before frontend for this feature (2026-09-29): portal.js does not call
+    /api/portal/deposit/ yet, so this cannot yet assert portal.js IS a caller the way the
+    Follow-ups feed's equivalent test does. It asserts the narrower, still-real thing: nothing
+    OTHER than portal.js reads it. If that ever stops being true the prefix has to come out of
+    TABS or some other page goes blank for a role somebody only meant to keep off the board."""
+    js = sorted(p.name for p in (FRONTEND / "js").glob("*.js")
+                if "/api/portal/deposit/" in p.read_text(encoding="utf-8"))
+    assert set(js) <= {"portal.js"}, (
+        "%s also read /api/portal/deposit/, so the board may no longer own it" % js)
 
 
 def test_the_polish_beta_row_covers_both_of_its_pages():

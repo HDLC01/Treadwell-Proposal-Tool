@@ -472,7 +472,10 @@ def test_the_five_tabs_with_no_private_endpoint_say_so_on_screen(ran):
     caps = {c["href"]: c for c in ran["caps"]}
     rows = {r["href"]: r for r in ran["panel"]["admin"]}
     thin = [h for h, c in caps.items() if not c["api"] and not c["locked"]]
-    hard = [h for h, c in caps.items() if c["api"]]
+    # A locked tab's chip is "not deniable" regardless of api -- admin.js checks cap.locked before
+    # cap.api.length (see the switchCell renderer), so /portal.html (locked, and since 2026-09-29
+    # carrying /api/portal/deposit/) must not be expected to say "blocks its data" here.
+    hard = [h for h, c in caps.items() if c["api"] and not c["locked"]]
     assert thin, "no tab owns zero private endpoints any more; the wording below should go"
     for href in thin:
         assert rows[href]["chip"] == "thin", "%s does not say a switch there only hides it" % href

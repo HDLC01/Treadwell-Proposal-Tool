@@ -967,17 +967,75 @@ def test_a_project_won_by_the_deposit_landing_offers_the_hand_off_but_no_won_mar
 
 
 # ── the bank numbers ─────────────────────────────────────────────────────────
+# Both encrypted at rest now (bank_crypto.py, portal repo, 2026-09-29): the portal sends only
+# routing_masked/masked_ref, never the full values, so there is no longer a closure array holding
+# them for the life of the drawer. The full numbers exist only behind
+# POST /api/portal/deposit/{id}/reveal, one deposit at a time, and this section proves the
+# masked default, that Show actually calls that route, that a real re-render forgets what an
+# earlier press learned, and that a refused call says so in words instead of doing nothing.
 @needs_node
 def test_the_account_number_reaches_the_dom_only_when_a_human_asks(out):
-    """Unchanged behaviour, asserted for the first time by running it. The markup ships masked and
-    the full value lives in a closure array; Show swaps it in and a second press puts it back."""
     r = out["scenarios"]["submitted"]["reveal"]
     assert r, "the deposit submission card did not render its Show control"
-    assert r["inMarkup"] is False, "the full account number is in the markup before anyone asks"
-    assert r["shown"] == "12345678901", "Show did not reveal the number"
-    assert r["remasked"] == "••••8901", "a second press did not re-mask it"
+    assert r["inMarkup"] is False, "a full bank number is in the markup before anyone asks"
+    assert r["maskedBefore"] == {"acct": "••••8901", "rtg": "••••0187"}, (
+        "the card did not render the masked numbers the portal actually sent: %r" % r["maskedBefore"])
+    assert r["shown"] == {"acct": "12345678901", "rtg": "101000187"}, (
+        "Show did not reveal both numbers: %r" % r["shown"])
+    assert r["request"] and r["request"]["method"] == "POST", (
+        "Show did not call the reveal route: %r" % r["request"])
+    assert r["request"]["path"] == "/api/portal/deposit/dep-1/reveal", r["request"]["path"]
+    assert r["remasked"] == r["maskedBefore"], "a second press did not re-mask it: %r" % r["remasked"]
     assert r["label"] == "Show" and r["pressed"] == "false", (
         "the control does not go back to its unpressed state")
+
+
+@needs_node
+def test_deposit_masking_tolerates_legacy_rows_and_rows_with_nothing_to_show(out):
+    """Requirement 1's edge cases, proven on depositHtml directly: an older cached row that still
+    carries the full numbers must never print them (masked client-side instead), and a row with
+    nothing masked or raw offers no Show control -- there is nothing behind it to reveal."""
+    m = out["depositMasking"]
+    assert "12345678901" not in m["legacy"] and "101000187" not in m["legacy"], (
+        "a legacy row's full numbers reached the markup")
+    assert "••••8901" in m["legacy"] and "••••0187" in m["legacy"], (
+        "a legacy row was not masked client-side")
+    assert 'class="dep-show"' in m["legacy"], (
+        "a legacy row with an id and something to reveal lost its Show control")
+    assert 'class="dep-show"' not in m["none"], (
+        "a row with no numbers at all still offers to reveal something")
+    assert "••••8901" in m["masked"] and "••••0187" in m["masked"], (
+        "the current masked-fields shape did not render")
+    assert 'class="dep-show"' in m["masked"]
+
+
+@needs_node
+def test_a_second_show_after_a_real_rerender_calls_the_route_again(out):
+    """The identical-payload guard is a DIFFERENT case -- it skips the repaint entirely, so the
+    same button stays put and would prove nothing here. This drives a genuinely changed payload
+    (same trick the guard/change tests use) and presses the fresh button that repaint produced."""
+    d = out["depositReveal"]
+    assert d["secondRequest"] and d["secondRequest"]["method"] == "POST", (
+        "a Show press after a real re-render did not call the reveal route: %r" % d["secondRequest"])
+    assert d["secondRequest"]["path"] == "/api/portal/deposit/dep-1/reveal"
+    assert d["acctAfterRerenderShow"] == "12345678901", (
+        "the second reveal did not paint the full number")
+
+
+@needs_node
+def test_a_refused_reveal_shows_a_plain_message_and_keeps_the_mask(out):
+    """No em dash in this message -- deposit is a panel test_no_em_dash_in_the_panels_copy covers,
+    unlike chat."""
+    e = out["depositReveal"]["error"]
+    assert e["errHiddenBefore"] is True, "the error slot was not hidden before anything failed"
+    assert e["maskedBeforeError"] == {"acct": "••••8901", "rtg": "••••0187"}
+    assert e["masked"] == e["maskedBeforeError"], (
+        "a refused reveal changed the numbers on screen: %r" % e["masked"])
+    assert e["errHidden"] is False, "a refused reveal left no message on screen"
+    assert e["errText"] == "Couldn't load the bank details. Try again.", e["errText"]
+    assert "—" not in e["errText"], "the drawer's copy style forbids an em dash"
+    assert e["label"] == "Show" and e["pressed"] == "false" and e["disabled"] is False, (
+        "the control did not return to its normal, pressable state after the failure")
 
 
 # ── the notification chips: presentation changed, behaviour did not ──────────
