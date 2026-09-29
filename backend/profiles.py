@@ -13,12 +13,15 @@ Guardrails (mirrors ARIA):
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from supabase_client import get_client, get_auth_client
+
+log = logging.getLogger("proposal_tool.profiles")
 
 _PROFILE_COLS = ("id,email,full_name,role,status,is_estimator,"
                  "banned_at,banned_until,ban_reason,created_at,updated_at")
@@ -200,8 +203,9 @@ def ban_user(actor: Dict[str, Any], target_id: str, reason: str = "") -> Dict[st
         return {"ok": False, "error": err}
     try:
         get_auth_client().auth.admin.update_user_by_id(target_id, {"ban_duration": _BAN_FOREVER})
-    except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "error": f"Auth ban failed: {exc}"}
+    except Exception as exc:  # noqa: BLE001 — the reason goes to the log, not the page
+        log.warning("Auth ban of %r failed: %s", target_id, exc)
+        return {"ok": False, "error": "Auth ban failed. The server log has the reason."}
     get_client().table("profiles").update({
         "status": "banned", "banned_at": _now_iso(), "ban_reason": reason or None,
     }).eq("id", target_id).execute()
@@ -215,8 +219,9 @@ def unban_user(actor: Dict[str, Any], target_id: str) -> Dict[str, Any]:
         return {"ok": False, "error": err}
     try:
         get_auth_client().auth.admin.update_user_by_id(target_id, {"ban_duration": "none"})
-    except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "error": f"Auth unban failed: {exc}"}
+    except Exception as exc:  # noqa: BLE001 — the reason goes to the log, not the page
+        log.warning("Auth unban of %r failed: %s", target_id, exc)
+        return {"ok": False, "error": "Auth unban failed. The server log has the reason."}
     get_client().table("profiles").update({
         "status": "active", "banned_at": None, "banned_until": None, "ban_reason": None,
     }).eq("id", target_id).execute()
@@ -230,8 +235,9 @@ def delete_user(actor: Dict[str, Any], target_id: str) -> Dict[str, Any]:
         return {"ok": False, "error": err}
     try:
         get_auth_client().auth.admin.delete_user(target_id)  # cascades to profiles via FK (cloud)
-    except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "error": f"Delete failed: {exc}"}
+    except Exception as exc:  # noqa: BLE001 — the reason goes to the log, not the page
+        log.warning("Auth delete of %r failed: %s", target_id, exc)
+        return {"ok": False, "error": "Delete failed. The server log has the reason."}
     try:
         get_client().table("profiles").delete().eq("id", target_id).execute()  # data store
     except Exception:  # noqa: BLE001

@@ -13,10 +13,28 @@ updates:
     open-pull-requests-limit: 5
     labels: [dependencies]
 
-  # Keep the GitHub Actions themselves current (also clears the Node 20 nag)
+  # Keep the GitHub Actions themselves current (also clears the Node 20 nag). The workflows pin
+  # each action to a commit SHA with its tag in a trailing comment; Dependabot bumps both.
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
     target-branch: staging
     labels: [dependencies, ci]
+
+  # The Dockerfile's base images are pinned by digest. Without this entry a digest pin never
+  # moves, and the image would quietly stop receiving Debian and Python security fixes. Digest and
+  # patch bumps only: the container is Python 3.11 and Node 20 on purpose, and a new minor or major
+  # is a decision, not a weekly PR. (The Claude CLI version is pinned in a RUN line, which this
+  # cannot see; it is bumped by hand.)
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    target-branch: staging
+    labels: [dependencies]
+    ignore:
+      - dependency-name: python
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]

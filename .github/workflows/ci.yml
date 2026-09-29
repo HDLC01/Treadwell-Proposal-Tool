@@ -42,12 +42,17 @@ jobs:
   # when the portal moves, and a fingerprint that ignored it would cache a stale pass.
   fingerprint:
     runs-on: ubuntu-latest
+    # `actions: read` for the list of earlier CI runs below. Without it that call fails, the
+    # step reads "no green run" and the suite simply runs -- safe, but the reuse never happens.
+    permissions:
+      contents: read
+      actions: read
     outputs:
       skip: ${{ steps.look.outputs.skip }}
       tree: ${{ steps.look.outputs.tree }}
       matched: ${{ steps.look.outputs.matched }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -115,6 +120,8 @@ jobs:
     # The job still EXISTS when skipped, so the required-check name stays satisfied and branch
     # protection does not have to be edited. Only the expensive steps are gated.
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: backend
@@ -131,7 +138,7 @@ jobs:
           echo "Tree ${{ needs.fingerprint.outputs.tree }} already passed on commit ${{ needs.fingerprint.outputs.matched }}."
           echo "Identical bytes, identical suite -- nothing new to learn from a second run."
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: needs.fingerprint.outputs.skip != 'true'
 
       # ── the sibling checkout the cross-repo close-out guard needs ─────────
@@ -153,13 +160,13 @@ jobs:
       # Nothing in the suite globs the repo root, so an extra directory here is inert.
       - name: Check out the customer portal beside this repo
         if: needs.fingerprint.outputs.skip != 'true'
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: HDLC01/Treadwell-Portal
           ref: main
           path: portal
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         if: needs.fingerprint.outputs.skip != 'true'
         with:
           python-version: '3.11'          # matches the production Dockerfile
@@ -195,13 +202,15 @@ jobs:
   audit:
     # pip-audit scans the PRODUCTION dependencies for known CVEs.
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: backend
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.11'
 
