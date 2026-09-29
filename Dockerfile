@@ -3,18 +3,41 @@
 # uvicorn process on port 8888. Designed to live behind nginx on the
 # host, which terminates HTTPS and reverse-proxies to this container.
 
-FROM python:3.11-slim
+#
+# PINNED, all of it (2026-09-29, after the security review). Both images are pinned by DIGEST
+# (the tag stays in the reference and in the comment above it, for reading), and the Claude CLI
+# by exact version. A tag, or an unversioned `npm install`, is whatever the registry serves on
+# the day: two builds of one commit could differ, and a bad upstream publish would reach
+# production with nothing changing here. Dependabot (.github/dependabot.yml, `docker`) proposes
+# the digest bumps; the CLI version is bumped by hand, below.
+# (backend/tests/test_deploy_pipeline.py holds every one of these pins.)
 
-# System deps — tini for proper signal handling, curl for healthcheck,
-# Node.js for the Claude CLI (npm package @anthropic-ai/claude-code
-# powers /api/autofill via subprocess).
+# Node.js for the Claude CLI, COPIED out of the official image instead of the old
+# `curl https://deb.nodesource.com/setup_20.x | bash -`, which ran an unpinned script from a
+# third-party host as root and added its apt repository. Same Node the nodesource build gave
+# production (v20.20.2), on the same Debian release (trixie) as the python base below.
+# node:20.20.2-trixie-slim
+FROM node:20.20.2-trixie-slim@sha256:abfbe12cc943141a0c9e8c0a57d710df1dadd95d35e8662cc02958b284d1f35b AS node
+
+# python:3.11-slim
+FROM python:3.11-slim@sha256:e41613d42d4891e4930f79523f93f81bbc7632584ec65e36ab055f41a800b41e
+
+# System deps — tini for proper signal handling, curl for healthcheck.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    tini curl ca-certificates gnupg \
- && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
- && apt-get install -y --no-install-recommends nodejs \
- && npm install -g @anthropic-ai/claude-code \
+    tini curl ca-certificates \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
+
+# Node + npm from the stage above. npm's bin entries are symlinks into its own package, so they
+# are recreated here rather than copied (a copied npm-cli.js cannot find its lib/). Then the
+# Claude CLI: the npm package @anthropic-ai/claude-code powers /api/autofill via subprocess.
+# EXACT version: 2.1.197 is what the production container ran on 2026-09-29. Bump it on
+# purpose, and check `claude -p` autofill on staging when you do.
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+COPY --from=node /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
+RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+ && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
+ && npm install -g @anthropic-ai/claude-code@2.1.197
 
 # LibreOffice (headless) renders the filled .docx proposal to PDF for the
 # "Download as PDF" button (see backend/pdf_writer.py). The Writer-only subset

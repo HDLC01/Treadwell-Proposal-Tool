@@ -28,10 +28,15 @@ name: Deploy
 #
 # Auth: `VPS_SSH_KEY` / `VPS_HOST` / `VPS_USER` secrets for the box; the built-in
 # `GITHUB_TOKEN` for GHCR — no long-lived registry credential exists anywhere.
+#
+# Every `uses:` in these workflows is a full commit SHA with its release tag in the trailing
+# comment. A tag is whatever the action's owner points it at today, and the SSH steps below are
+# handed the deploy key: a moved tag would run someone else's code with it. Dependabot
+# (.github/dependabot.yml) bumps the SHA and the comment together.
 on:
   push:
     branches: [staging, main]
-  workflow_dispatch:        # allow a manual re-deploy from the Actions tab
+  workflow_dispatch:        # a manual re-deploy from the Actions tab: main or staging ONLY (see build.if)
 
 concurrency:
   # never let two deploys to the same branch overlap; let a running one finish
@@ -45,6 +50,15 @@ env:
 
 jobs:
   build:
+    # THE DISPATCH GUARD. A push only ever fires this workflow for staging or main (the branch
+    # filter above), but "Run workflow" lets anyone with write access pick ANY branch or tag. From
+    # a feature branch that used to build and push the image under the moving `staging` tag (see
+    # `move_tag` below), which the staging box then starts on its next plain `up -d`. And the
+    # deploy jobs keyed on `github.ref_name`, which a TAG named `main` also satisfies — a manual
+    # run from that tag reached production. Full refs here, so a manual run from anywhere else
+    # builds nothing, and both deploy jobs `needs: build`, so it deploys nothing either.
+    # (backend/tests/test_deploy_pipeline.py evaluates this against branch, tag and event.)
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/staging'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -52,7 +66,17 @@ jobs:
     outputs:
       image: ${{ steps.meta.outputs.image }}
     steps:
-      - uses: actions/checkout@v6
+      # The same guard, exactly. Every string comparison in a GitHub expression ignores case, so
+      # the `if:` above would also pass a branch named `Main` or `STAGING`. This one is bash and
+      # case-exact, and it runs before anything is checked out, built or pushed.
+      - name: Only main or staging may deploy
+        run: |
+          case "$GITHUB_REF" in
+            refs/heads/main|refs/heads/staging) echo "deploying from $GITHUB_REF" ;;
+            *) echo "::error::Deploys run from main or staging only, not $GITHUB_REF."; exit 1 ;;
+          esac
+
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: Work out the tags
         id: meta
@@ -63,17 +87,17 @@ jobs:
           echo "move_tag=${IMAGE}:${{ github.ref_name == 'main' && 'prod' || 'staging' }}" >> "$GITHUB_OUTPUT"
           echo "image=${IMAGE}:sha-${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           push: true
@@ -86,13 +110,17 @@ jobs:
           cache-to: type=gha,mode=max
 
   staging:
-    if: github.ref_name == 'staging'
+    if: github.ref == 'refs/heads/staging'
     needs: build
     runs-on: ubuntu-latest
     environment: staging
+    # The job's GITHUB_TOKEN goes to the VPS as GHCR_TOKEN for `docker compose pull`, so it gets
+    # exactly that and nothing else: no repo contents, no write to anything.
+    permissions:
+      packages: read
     steps:
       - name: Pull + restart staging over SSH
-        uses: appleboy/ssh-action@v1.2.5
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
@@ -210,7 +238,7 @@ jobs:
       # non-failure is pip being unable to reach the index; that is infrastructure, not the
       # product, and it exits 0 with a message.
       - name: PDF fidelity smoke (LibreOffice, in the deployed image)
-        uses: appleboy/ssh-action@v1.2.5
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
@@ -291,13 +319,15 @@ jobs:
           TW_IMAGE: ${{ needs.build.outputs.image }}
 
   production:
-    if: github.ref_name == 'main'
+    if: github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
     environment: production          # required reviewer -> waits for approval
+    permissions:
+      packages: read                 # the pull on the box; same reasoning as the staging job
     steps:
       - name: Pull + restart production over SSH
-        uses: appleboy/ssh-action@v1.2.5
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
