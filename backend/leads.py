@@ -275,19 +275,44 @@ def _html_to_text(raw: str) -> str:
     as markup, so imperfect nesting can't hurt anything."""
     if not raw:
         return ""
+    raw, clipped = _clip(raw)           # before the first regex — see _clip
     s = _COMMENT_RE.sub(" ", raw)
     s = _SCRIPT_RE.sub(" ", s)          # drop the CONTENT of script/style, not just the tags
     s = _BR_RE.sub("\n", s)
     s = _CELL_RE.sub(" ", s)            # table cells read as one line, not one line each
     s = _BLOCK_RE.sub("\n", s)
     s = _TAG_RE.sub("", s)
-    return _collapse(html.unescape(s))
+    return _mark(_collapse(html.unescape(s)), clipped)
+
+
+_TRUNCATED = "\n\n[truncated]"
+
+
+def _clip(raw: str) -> Tuple[str, bool]:
+    """Bound a body BEFORE any regex pass reads it. The tag, comment and script passes are
+    quadratic on unclosed markup — every `<` with no `>` after it rescans to the end — and the
+    body is written by whoever emailed the bid inbox. Measured: 15,000 chars of `<!--` strip in
+    ~0.25s; 60,000 take ~6s; 150,000 take ~50s. `_TEXT_CAP` is the cap applied to the text later,
+    so nothing that reaches the AI or the intake notes could have come from past it anyway.
+    The flag says the body was cut, so the reader still gets the [truncated] marker."""
+    if len(raw) <= _TEXT_CAP:
+        return raw, False
+    return raw[:_TEXT_CAP], True
+
+
+def _mark(text: str, clipped: bool) -> str:
+    """The [truncated] marker for a body `_clip` cut, sized so `_cap` leaves it alone."""
+    if not (clipped and text):
+        return text
+    return text[:_TEXT_CAP].rstrip() + _TRUNCATED
 
 
 def _cap(text: str) -> str:
     if len(text) <= _TEXT_CAP:
         return text
-    return text[:_TEXT_CAP].rstrip() + "\n\n[truncated]"
+    if text.endswith(_TRUNCATED) and len(text) <= _TEXT_CAP + len(_TRUNCATED):
+        return text                     # already cut to the cap and marked (_mark)
+    return text[:_TEXT_CAP].rstrip() + _TRUNCATED
 
 
 def _decode_part(part) -> str:
@@ -319,7 +344,8 @@ def _eml_body_text(msg) -> str:
         elif ctype == "text/html":
             html_parts.append(_decode_part(part))
     if any(p.strip() for p in plain):
-        return _collapse("\n".join(plain))
+        body, clipped = _clip("\n".join(plain))
+        return _mark(_collapse(body), clipped)
     return _html_to_text("\n".join(html_parts))
 
 
@@ -335,6 +361,46 @@ def _eml_header(msg, name: str) -> str:
         return _txt(raw)
 
 
+# Where the signed .eml link may point. Basisboard mints Google Cloud Storage signed URLs (a
+# stale one answers 403, which _download_eml re-mints on), path-style on storage.googleapis.com
+# or virtual-hosted on <bucket>.storage.googleapis.com. We fetch the link with no auth of our
+# own, but from INSIDE the server — so a link to anywhere else (localhost, the Docker network,
+# a cloud metadata address) is refused rather than fetched.
+_EML_HOSTS = ("storage.googleapis.com",)
+
+
+class _EmlHostRefused(Exception):
+    """A .eml link, or a redirect it answered with, that is not an https Basisboard storage URL."""
+
+
+def _eml_url_ok(url: Any) -> bool:
+    """True only for https on the default port to an _EML_HOSTS host, with no userinfo. Parsed by
+    httpx itself, so the check and the request cannot read the URL differently."""
+    import httpx
+    try:
+        u = url if isinstance(url, httpx.URL) else httpx.URL(str(url))
+    except Exception:  # noqa: BLE001 — unparseable is refused, not raised
+        return False
+    host = (u.host or "").lower().rstrip(".")
+    return (u.scheme == "https" and u.port in (None, 443) and not u.userinfo
+            and any(host == h or host.endswith("." + h) for h in _EML_HOSTS))
+
+
+def _eml_host(url: Any) -> str:
+    """The host of a refused link, for the log line that says where Basisboard now points."""
+    import httpx
+    try:
+        return str(httpx.URL(str(url)).host)[:80]
+    except Exception:  # noqa: BLE001
+        return "?"
+
+
+def _check_eml_request(request) -> None:
+    """httpx request hook: runs for the first request AND every redirect hop, before it is sent."""
+    if not _eml_url_ok(request.url):
+        raise _EmlHostRefused(str(request.url.host or ""))
+
+
 def _download_eml(message_id: str) -> Optional[bytes]:
     """GET the raw .eml behind a freshly minted signed URL. The URL expires after
     15 minutes, so a 403 means "stale link", not "forbidden" — mint a new one and
@@ -344,9 +410,17 @@ def _download_eml(message_id: str) -> Optional[bytes]:
         url = basisboard_client.get_message_url(message_id)
         if not url:
             return None
+        if not _eml_url_ok(url):
+            log.warning("leads: .eml link for %s refused — not an https Basisboard storage URL "
+                        "(host %r)", message_id, _eml_host(url))
+            return None
         try:
-            with httpx.Client(timeout=_EML_TIMEOUT, follow_redirects=True) as client:
+            with httpx.Client(timeout=_EML_TIMEOUT, follow_redirects=True,
+                              event_hooks={"request": [_check_eml_request]}) as client:
                 resp = client.get(url)
+        except _EmlHostRefused as exc:
+            log.warning("leads: .eml fetch %s refused a redirect to host %r", message_id, str(exc))
+            return None
         except httpx.TransportError as exc:
             log.warning("leads: .eml fetch %s transport error: %s", message_id, exc)
             return None
@@ -395,6 +469,9 @@ def fetch_email_text(message_id: str) -> Dict[str, Any]:
     if not mid:
         return {"ok": False, "subject": "", "from": "", "text": "",
                 "error": "No message id."}
+    if not basisboard_client.is_message_id(mid):     # it goes into Basisboard's URL path
+        return {"ok": False, "subject": "", "from": "", "text": "",
+                "error": "Invalid message id."}
     cached = _TEXT_CACHE.get(mid)
     if cached is not None:
         return cached
