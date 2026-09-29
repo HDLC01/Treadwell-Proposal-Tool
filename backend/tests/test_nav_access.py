@@ -485,11 +485,15 @@ def test_the_store_is_safe_across_threads():
     """Two admins saving at once must leave one whole policy on disk, not a mix of two."""
     import threading
     errors = []
+    # Deniable pages only — NOT a positional slice of TABS. /gc-projects.html landed at index 1 on
+    # 2026-09-29 and is LOCKED, so a worker naming it would have its save stripped down to an empty
+    # policy, which is a different behaviour than the race this test is checking.
+    deniable = [p for p in nav_access.TABS if p not in nav_access.LOCKED]
 
     def worker(i):
         try:
             for _ in range(20):
-                nav_access.save({"user": [list(nav_access.TABS)[i + 1]]}, "u%d@x.com" % i)
+                nav_access.save({"user": [deniable[i]]}, "u%d@x.com" % i)
                 nav_access.get()
         except Exception as exc:  # noqa: BLE001
             errors.append(exc)

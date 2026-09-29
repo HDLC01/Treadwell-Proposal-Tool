@@ -152,6 +152,7 @@ const make = new Function(
    let TAB = "active", VIEW = "board";
    let EST = "", PERIOD = "", SORTFIELD = "activity", SORTDIR = "desc";
    let BOARD_SIG = "", DEGRADED_SIG = "", DEEPLINK_USED = false;
+   let CUR_PID = null, REDIRECTED = false;
    // Which board, exactly as portal.js computes it — off <body data-pipeline>.
    const document = PAGE.document;
    ${decl("PIPELINE")}
@@ -161,7 +162,13 @@ const make = new Function(
    const api = async () => ({ ok: true, json: async () => PAGE.payload });
    const openDetail = (id) => { PAGE.opened.push(id); };
    const ssSet = () => {};
-   const EST_KEY = "", PERIOD_KEY = "";
+   // The real per-pipeline storage keys, LIFTED (not hardcoded) so the harness can prove Direct
+   // and GC actually disagree, and that Direct's own key did not move.
+   ${decl("pipelineKey")}
+   ${decl("EST_KEY")}
+   ${decl("PERIOD_KEY")}
+   ${decl("SORTFIELD_KEY")}
+   ${decl("TAB_KEY")}
    ${CONSTS.map(decl).join("\n")}
    ${LIFT.map(fn).join("\n")}
    return {
@@ -170,6 +177,15 @@ const make = new Function(
      setTab(t) { TAB = t; BOARD_SIG = ""; renderBoard(); },
      ids: () => ALL.map((p) => p.proposal_id),
      html: () => $("board").innerHTML,
+     // Stands in for the real openDetail's opening lines — CUR_PID = pid, and DEEPLINK_USED spent —
+     // without needing the drawer's own render (that's drawer-render-harness.js's job). Spending
+     // DEEPLINK_USED here matters: it is what the ORIGINAL bug actually required (any drawer open,
+     // not only a deep link, permanently disabled the wrong-board check), so a stub that left it
+     // false would let a reverted load() pass this scenario by accident, via the URL check it no
+     // longer has a right to still be using.
+     open: (pid) => { CUR_PID = pid; if (!DEEPLINK_USED) DEEPLINK_USED = true; },
+     keys: () => ({ EST_KEY: EST_KEY, PERIOD_KEY: PERIOD_KEY, SORTFIELD_KEY: SORTFIELD_KEY,
+                    SORTDIR_KEY: SORTDIR_KEY, TAB_KEY: TAB_KEY }),
    };`);
 
 /** One page load of one board: a fresh module scope, as a real navigation gives. */
@@ -187,6 +203,40 @@ async function page(pipeline, search, hash) {
   const scope = make(...VALUES, C, TW, PAGE);
   await scope.load();
   return { scope: scope, dom: dom, replaced: replaced, opened: PAGE.opened };
+}
+
+/** A project whose Audience flips WHILE its drawer is already open — the bug where DEEPLINK_USED,
+ *  spent by the FIRST drawer open of the session (a plain card click spends it exactly as a deep
+ *  link does), permanently disabled the wrong-board check for every poll after. `pid` starts on
+ *  `pl`'s board (first load paints normally, no redirect); `open()` stands in for a rep clicking the
+ *  card; the payload is then mutated (its own clone — never INPUT.payload, which other sections
+ *  still read) the way a second Audience radio click changes it on the server; the next load() is
+ *  the 12s/25s poll that must catch it, and a third proves it does not fire twice. */
+async function movedMidSession(pl, pid) {
+  const dom = makeDom();
+  const replaced = [];
+  const payload = JSON.parse(JSON.stringify(INPUT.payload));
+  const PAGE = {
+    document: { body: { dataset: { pipeline: pl } } },
+    $: dom.$,
+    // location.search already carries ?open=<pid> here because that is what markDrawerInUrl writes
+    // into the real URL the moment the drawer opens — this harness does not lift markDrawerInUrl,
+    // so it is supplied the way the real one would have already left it.
+    location: { search: "?open=" + encodeURIComponent(pid), hash: "", pathname: "/x",
+                replace: (u) => { replaced.push(u); } },
+    payload: payload,
+    opened: [],
+  };
+  const scope = make(...VALUES, C, TW, PAGE);
+  await scope.load();                 // paints normally: pid is on THIS board, no redirect yet
+  const paintedFirst = replaced.length === 0 && dom.el.board.innerHTML !== "";
+  scope.open(pid);                    // the rep opens the card
+  const row = payload.proposals.find((p) => p.proposal_id === pid);
+  row.audience = pl === "gc" ? "Direct" : "GC";   // the choice flips mid-session
+  await scope.load();                 // the next poll
+  const afterFirstPoll = replaced.slice();
+  await scope.load();                 // a slower second poll — must not redirect again
+  return { paintedFirst: paintedFirst, afterFirstPoll: afterFirstPoll, afterSecondPoll: replaced.slice() };
 }
 
 /** Column heading → [count printed in the heading, card ids drawn under it]. */
@@ -247,13 +297,14 @@ function newProject(pipeline, tab) {
 
 (async () => {
   const out = { tabs: TABS, pills: PILLS, rule: rule, boardOfPayload: boardOfPayload, radios: RADIOS,
-                boards: {}, deeplink: {}, newproj: {}, errors: {} };
+                boards: {}, deeplink: {}, moved: {}, newproj: {}, errors: {} };
   // B. every board, every tab
   for (const pl of ["direct", "gc", null]) {
     const key = pl == null ? "none" : pl;
     try {
       const p = await page(pl, "", "");
-      const res = { pipeline: p.scope.pipeline(), ids: p.scope.ids(), pills: {}, tabs: {} };
+      const res = { pipeline: p.scope.pipeline(), ids: p.scope.ids(), pills: {}, tabs: {},
+                    keys: p.scope.keys() };
       for (const tab of TABS) {
         p.scope.setTab(tab);
         res.tabs[tab] = { count: p.dom.el.count.textContent, columns: columnsOf(p.scope.html()),
@@ -275,6 +326,11 @@ function newProject(pipeline, tab) {
       await p.scope.load();
       out.deeplink[label] = { first: first, replaced: p.replaced, opened: p.opened };
     } catch (e) { out.errors["deeplink/" + label] = e.constructor.name + ": " + e.message; }
+  }
+  // C2. a project's board changes while its drawer is already open (a live poll, not a fresh link)
+  for (const [label, pl, id] of [["directToGc", "direct", "s-dir-1"], ["gcToDirect", "gc", "s-gc-1"]]) {
+    try { out.moved[label] = await movedMidSession(pl, id); }
+    catch (e) { out.errors["moved/" + label] = e.constructor.name + ": " + e.message; }
   }
   // D. + New
   for (const [label, pl, tab] of [["direct", "direct", "active"], ["gc", "gc", "active"],

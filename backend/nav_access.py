@@ -114,14 +114,11 @@ TABS: Dict[str, Dict[str, Any]] = {
         # single-caller rule every other entry here follows. Denying it hides the tab and refuses
         # the page; /api/portal/pipeline stays open because the Direct board is the same call.
         #
-        # ITS DEFAULT IS THE DIRECT BOARD'S, and that needs no code: /portal.html is in LOCKED, so
-        # nobody can be denied it, so every role has it today — and a new href is in nobody's deny
-        # list, so every role has this too. Access here is per ROLE; there is no per-person switch
-        # anywhere in this module or on the Admin page for anybody to have set on /portal.html.
-        #
-        # NOT IN LOCKED, deliberately. /portal.html is locked because signing in lands there; this
-        # page is nobody's landing page, so switching it off for a role is a decision an admin may
-        # make, and the Admin page draws a real switch for it.
+        # ALWAYS ON, LIKE /portal.html. Hanz, 2026-09-29: "The General Contractor board is always
+        # on, like Direct Projects." It is in LOCKED below for exactly that reason, so no admin
+        # policy — hand-edited or otherwise — can deny it to any role, the same guarantee
+        # /portal.html already has. (Until this change it was deliberately left OUT of LOCKED, with
+        # the Admin page drawing a real switch for it; Hanz's instruction supersedes that.)
         "pages": ("/gc-projects.html",),
         "api": (),
     },
@@ -265,10 +262,12 @@ TABS: Dict[str, Dict[str, Any]] = {
 # CANNOT BE DENIED TO ANYBODY, stripped inside save() rather than merely greyed out in the UI —
 # a policy file is hand-editable and reaches the middleware whatever the browser did.
 #
-#   /admin.html  is where this policy is edited. Denying it removes the only door back.
-#   /portal.html is HOME_PAGE in auth.js: signing in lands you there, so denying it would greet
-#                somebody with a refusal card as the first thing they see after Google.
-LOCKED: Tuple[str, ...] = ("/admin.html", "/portal.html")
+#   /admin.html      is where this policy is edited. Denying it removes the only door back.
+#   /portal.html     is HOME_PAGE in auth.js: signing in lands you there, so denying it would greet
+#                    somebody with a refusal card as the first thing they see after Google.
+#   /gc-projects.html Hanz, 2026-09-29: "The General Contractor board is always on, like Direct
+#                    Projects." Same board, same guarantee — not a landing page, just never denied.
+LOCKED: Tuple[str, ...] = ("/admin.html", "/portal.html", "/gc-projects.html")
 
 # The super admin is bootstrapped from SUPER_ADMIN_EMAIL and cannot be granted or revoked from the
 # UI; his role exists so somebody always has a way in. A policy that can deny it is a policy that

@@ -443,6 +443,22 @@ def test_a_page_that_names_no_pipeline_is_the_direct_board(harness):
 
 
 @needs_node
+def test_each_board_remembers_its_own_tab_and_filters(harness):
+    """Before this, both pages read/wrote the SAME four sessionStorage keys, so picking an
+    estimator with no GC projects cleared the Direct board's own remembered filter too — one
+    storage slot, two boards fighting over it. Direct keeps its exact original key (a rep with a
+    saved filter must not lose it on this deploy); GC gets its own suffixed key, not a migration."""
+    direct, gc = harness["boards"]["direct"]["keys"], harness["boards"]["gc"]["keys"]
+    assert direct == {"EST_KEY": "tw_crm_est", "PERIOD_KEY": "tw_crm_month",
+                       "SORTFIELD_KEY": "tw_crm_sortfield", "SORTDIR_KEY": "tw_crm_sortdir",
+                       "TAB_KEY": "tw_crm_tab"}, direct
+    assert gc == {"EST_KEY": "tw_crm_est_gc", "PERIOD_KEY": "tw_crm_month_gc",
+                  "SORTFIELD_KEY": "tw_crm_sortfield_gc", "SORTDIR_KEY": "tw_crm_sortdir_gc",
+                  "TAB_KEY": "tw_crm_tab_gc"}, gc
+    assert harness["boards"]["none"]["keys"] == direct, "no data-pipeline must read as Direct's own keys"
+
+
+@needs_node
 @pytest.mark.parametrize("board", ["gc", "direct"])
 def test_every_tab_counts_only_its_own_board(harness, board):
     """The pills, the "N proposals" line, and every column heading, read back out of what the page
@@ -541,6 +557,24 @@ def test_a_link_to_this_boards_project_opens_the_drawer_here(harness, label, pid
     assert d["first"]["painted"] is True, "the board did not paint under its own drawer"
 
 
+@needs_node
+@pytest.mark.parametrize("label,dest", [
+    ("directToGc", "/gc-projects.html?open=s-dir-1"),
+    ("gcToDirect", "/portal.html?open=s-gc-1"),
+])
+def test_a_project_whose_audience_changes_while_its_drawer_is_open_follows_it(harness, label, dest):
+    """The bug this fixes: DEEPLINK_USED is spent by the FIRST drawer open of the session — a plain
+    card click spends it exactly as a deep link does — which used to disable the wrong-board check
+    for every poll after. Here the drawer is already open (on the board the project started on, no
+    redirect yet) when its Audience flips; the NEXT load() is a live poll (the 12s drawer refresh or
+    the 25s board one), not a fresh navigation, and it must still catch the move."""
+    m = harness["moved"][label]
+    assert m["paintedFirst"] is True, "the board never painted before the project moved, so this " \
+        "proves nothing about the poll — only about the already-covered initial redirect"
+    assert m["afterFirstPoll"] == [dest], m
+    assert m["afterSecondPoll"] == [dest], "a later poll redirected a second time"
+
+
 def test_every_link_the_backend_builds_still_says_portal_html():
     """The redirect above is what makes these right for a GC project, which is why none of them had
     to change. If one of them starts naming a board itself, it needs the rule, not a guess."""
@@ -565,7 +599,10 @@ def test_the_new_tab_is_in_the_capability_table():
     assert row["label"] == "General Contractor"
     assert row["pages"] == [GC_PAGE]
     assert row["api"] == [], "it shares every route with the Direct board, so it may own none"
-    assert row["locked"] is False and row["no_sidebar"] is False
+    # LOCKED, like /portal.html — Hanz, 2026-09-29: "The General Contractor board is always on,
+    # like Direct Projects." (Was locked is False until this instruction; see nav_access.LOCKED.)
+    assert row["locked"] is True and row["no_sidebar"] is False
+    assert GC_PAGE in nav_access.LOCKED
     assert nav_access.TABS["/portal.html"]["label"] == "Direct Projects"
     order = list(nav_access.TABS)
     assert order.index(GC_PAGE) == order.index("/portal.html") + 1
@@ -593,11 +630,19 @@ def test_by_default_everybody_has_the_gc_board_exactly_when_they_have_the_direct
         assert (GC_PAGE in nav_access.denied_paths(role)) == ("/portal.html" in nav_access.denied_paths(role))
 
 
-def test_switching_it_off_is_a_separate_decision_that_leaves_the_direct_board_alone(policy_file):
+def test_the_gc_board_cannot_be_switched_off_either_now_that_its_locked(policy_file):
+    """SUPERSEDES the old "switching it off is a separate decision" test. Hanz, 2026-09-29: "The
+    General Contractor board is always on, like Direct Projects." nav_access.LOCKED now names both,
+    so a deny naming either is stripped — on write, and on a hand-edited file, the same two-sided
+    guarantee test_nav_access.py proves for /admin.html and /portal.html."""
     nav_access.save({"user": [GC_PAGE]}, "hanz@wetreadwell.com")
-    assert nav_access.page_denied("user", GC_PAGE) == GC_PAGE
+    raw = json.loads(policy_file.read_text(encoding="utf-8"))
+    assert raw["deny"] == {}, raw
+    assert nav_access.page_denied("user", GC_PAGE) is None
     assert nav_access.page_denied("user", "/portal.html") is None
-    assert nav_access.page_denied("admin", GC_PAGE) is None
+    # a hand-edited file cannot smuggle it back in either
+    policy_file.write_text(json.dumps({"deny": {"user": [GC_PAGE]}}), encoding="utf-8")
+    assert nav_access.page_denied("user", GC_PAGE) is None
     # and the pipeline route stays open: the Direct board is the same call
     assert nav_access.is_api_denied("user", "/api/portal/pipeline") is False
 

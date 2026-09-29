@@ -239,8 +239,9 @@ const POLICY = { user: ["/leads.html", "/polish-intake.html"], admin: ["/history
 const CAPS = [
   { href: "/portal.html", label: "Direct Projects", api: [], locked: true },
   // The second project board, 2026-09-29. api: [] because it reads exactly what the Direct board
-  // reads; deniable (not locked), because unlike /portal.html nobody signs in onto it.
-  { href: "/gc-projects.html", label: "General Contractor", api: [], locked: false },
+  // reads; LOCKED like /portal.html — Hanz, 2026-09-29: "The General Contractor board is always
+  // on, like Direct Projects." (Was locked: false before that instruction.)
+  { href: "/gc-projects.html", label: "General Contractor", api: [], locked: true },
   { href: "/leads.html", label: "Lead Inbox", api: ["/api/leads", "/api/leads/"], locked: false },
   { href: "/crm.html", label: "Bid Pipeline", api: ["/api/basisboard/"], locked: false },
   { href: "/calendar.html", label: "Bid Calendar",
@@ -266,7 +267,7 @@ const CAPS = [
 
 const FULL_POLICY = {
   deny: POLICY, tabs: CAPS,
-  locked_pages: ["/admin.html", "/portal.html"], locked_roles: ["super_admin"],
+  locked_pages: ["/admin.html", "/portal.html", "/gc-projects.html"], locked_roles: ["super_admin"],
   updated_at: "2026-08-19T12:00:00Z", updated_by: "kyle@wetreadwell.com",
 };
 

@@ -425,10 +425,12 @@ def test_the_switches_reflect_the_stored_policy(ran):
 
 
 @needs_node
-@pytest.mark.parametrize("href", ["/admin.html", "/portal.html"])
+@pytest.mark.parametrize("href", ["/admin.html", "/portal.html", "/gc-projects.html"])
 def test_a_locked_page_cannot_be_switched_off_for_anybody(ran, href):
-    """/admin.html is where this setting is edited and /portal.html is where signing in lands. The
-    server strips both on write AND on read; the UI must not offer what the server will refuse."""
+    """/admin.html is where this setting is edited, /portal.html is where signing in lands, and
+    /gc-projects.html is the General Contractor board, always on like Direct Projects (Hanz,
+    2026-09-29). The server strips all three on write AND on read; the UI must not offer what the
+    server will refuse."""
     rows = {r["href"]: r for r in ran["panel"]["admin"]}
     row = rows[href]
     assert row["chip"] == "lock", "%s does not say it cannot be denied" % href

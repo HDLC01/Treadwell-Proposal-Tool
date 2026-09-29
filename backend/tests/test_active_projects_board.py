@@ -377,9 +377,13 @@ def test_a_session_that_never_chose_and_one_that_chose_a_dead_tab_both_land_on_a
 
 def test_the_tab_is_remembered_like_the_rest_of_the_view_state():
     """Every other control on this board survives opening a project and coming back. A tab that
-    forgot would silently drop a rep back into Active mid-scan."""
+    forgot would silently drop a rep back into Active mid-scan.
+
+    TAB_KEY is built from pipelineKey("tw_crm_tab") (2026-09-29, so Direct and GC remember their
+    own tab instead of fighting over one storage slot), not the bare literal — check the base name
+    that goes IN, not the old literal that used to come out."""
     code = _code("portal.js")
-    assert 'TAB_KEY = "tw_crm_tab"' in code
+    assert 'TAB_KEY = pipelineKey("tw_crm_tab")' in code
     assert re.search(r"ssSet\(TAB_KEY,", code), "the chosen tab is never stored"
 
 
