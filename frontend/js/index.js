@@ -512,7 +512,7 @@
   }
 
   function renderAddr(features) {
-    const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]));
+    const esc = s => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
     // Photon often returns several OSM objects for the same address — dedupe
     // on the displayed text so we don't show identical rows.
     const seen = new Set(), items = [];
@@ -552,7 +552,7 @@
   }
 
   function renderBusinesses(features) {
-    const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]));
+    const esc = s => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
     const seen = new Set(), items = [];
     for (const f of features) {
       const p = f.properties || {};

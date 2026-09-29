@@ -782,7 +782,7 @@
         setTimeout(() => el.remove(), 400);   // after the slide-out transition
       };
       el.querySelector(".tw-toast-x").addEventListener("click", (e) => { e.stopPropagation(); dismiss(); });
-      el.addEventListener("click", () => { if (n.link) location.href = n.link; });
+      el.addEventListener("click", () => { const to = safeNotifLink(n.link); if (to) location.href = to; });
       setTimeout(dismiss, 10000);   // auto-dismiss
     }
 
@@ -810,7 +810,7 @@
         return;
       }
       list.innerHTML = items.map(n =>
-        '<a class="tw-notif-item sev-' + esc(n.severity || "info") + '" href="' + esc(n.link || "#") + '">' +
+        '<a class="tw-notif-item sev-' + esc(n.severity || "info") + '" href="' + esc(safeNotifLink(n.link) || "#") + '">' +
         '<span class="tw-notif-ico">' + icon(n.icon || "info", 16) + '</span>' +
         '<span class="tw-notif-main"><span class="tw-notif-title">' + esc(n.title || "") + '</span>' +
         '<span class="tw-notif-body">' + esc(n.body || "") + '</span></span>' +
@@ -1085,6 +1085,28 @@ padding:0 3px;border-radius:6px;flex:none;}
   function esc(s) {
     return String(s == null ? "" : s).replace(/[&<>"']/g, c =>
       ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+
+  /** The one place a notification's link is let through, or "" when it is not.
+   *
+   *  Followed only when it stays on this site: a path from the root ("/crm.html", "/?d=..&edit=1")
+   *  or an https URL on our own origin. The one off-site link the bell has ever carried is the
+   *  "Filed to Dropbox" item's folder share link, so https on Dropbox's own host is kept too.
+   *  Everything else -- javascript:, data:, a protocol-relative "//host", a "/\host" or a tab
+   *  the URL parser strips back into "//" -- is dropped. The path is resolved, not just read, so
+   *  the check is the browser's own idea of where the link goes. */
+  function safeNotifLink(link) {
+    const s = String(link == null ? "" : link);
+    let u;
+    if (/^\/(?![\/\\])/.test(s)) {
+      try { u = new URL(s, location.origin); } catch (e) { return ""; }
+      return u.origin === location.origin ? s : "";
+    }
+    try { u = new URL(s); } catch (e) { return ""; }
+    if (u.protocol !== "https:") return "";
+    if (u.origin === location.origin) return u.href;
+    if (u.hostname === "www.dropbox.com" || u.hostname === "dropbox.com") return u.href;
+    return "";
   }
 
   function showFatal(msg) {
