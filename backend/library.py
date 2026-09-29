@@ -88,7 +88,7 @@ LABOR = "library_labor"
 # validate_item / validate_assembly, which build their output from an explicit key list and drop
 # everything else — so an added column is safe by default and has to be opted IN to be writable.
 ITEM_WRITABLE = ("name", "category", "divisions", "unit", "buy_qty", "unit_cost", "coverage",
-                 "sku", "vendor", "notes", "default_work_types")
+                 "waste_pct", "roundup", "sku", "vendor", "notes", "default_work_types")
 ASM_WRITABLE = ("name", "category", "description", "unit", "lines", "default_work_types")
 VENDOR_WRITABLE = ("name", "notes")
 REF_WRITABLE = ("name", "notes")
@@ -477,6 +477,20 @@ def validate_item(payload: Dict[str, Any], *, partial: bool = False) -> Dict[str
         # material. Treated as "not set" rather than accepted.
         out["coverage"] = cov if (cov is None or cov > 0) else None
 
+    # WASTE AND ROUNDUP BELONG TO THE MATERIAL, from 2026-09-22. Hanz: "we must have coverage per
+    # unit, waste factor, roundup, and materials tab. And then it gets pulled in to assemblies
+    # instead of it being in assemblies." Offered per-line overrides, he chose material-only.
+    #
+    # NULL IS A REAL ANSWER for both, and it is what keeps the migration safe: the pricer reads a
+    # null waste as DEFAULT_WASTE_PCT and a null roundup as True -- exactly the defaults the LINE
+    # applied -- so a material nobody has filled in yet prices as it always did rather than as
+    # zero. Do not coerce either to a literal here; "unset" has to survive the round trip.
+    if "waste_pct" in payload or not partial:
+        out["waste_pct"] = _number(payload.get("waste_pct"), field="Waste factor", maximum=100)
+    if "roundup" in payload or not partial:
+        ru = payload.get("roundup")
+        out["roundup"] = None if ru is None else bool(ru)
+
     for col, limit in (("category", _MAX_TEXT), ("sku", 80),
                        ("vendor", _MAX_TEXT), ("notes", _MAX_NOTES)):
         if col == "category" and "divisions" in out:
@@ -517,6 +531,12 @@ def _shape_item(row: Dict[str, Any]) -> Dict[str, Any]:
         # as strings, so the coercion happens here rather than in every caller.
         "unit_cost": _as_float(row.get("unit_cost")),
         "coverage": _as_float(row.get("coverage")),
+        # Returned as-is including None, NOT defaulted here. library-core.js reads a null waste as
+        # 5 and a null roundup as true, and it has to be the one place that decides that: shaping
+        # them to literals here would make "nobody has set this" indistinguishable from "somebody
+        # chose the default", and the Items tab needs to tell those apart to show an empty cell.
+        "waste_pct": _as_float(row.get("waste_pct")),
+        "roundup": None if row.get("roundup") is None else bool(row.get("roundup")),
         # A row written before this column existed reads as a pack of one, which prices exactly as
         # it did then. Read-shaped rather than backfilled: rewriting somebody's hand-typed rows to
         # add a column is a migration that can go wrong, and this cannot.
@@ -715,7 +735,16 @@ def _clean_lines(raw: Any) -> List[Dict[str, Any]]:
 
     The truncation stays as the shape defence behind it. The browser guards first
     (`bulkAddRoom` in library.js) so the button can explain itself while there is still something to
-    change; this is what makes the rule true rather than merely displayed."""
+    change; this is what makes the rule true rather than merely displayed.
+
+    COVERAGE, WASTE AND ROUNDUP DO NOT LIVE HERE ANY MORE. Hanz, 2026-09-21: "for the materials,
+    we must have coverage per unit, waste factor, roundup, and materials tab. And then it gets
+    pulled in to assemblies instead of it being in assemblies." A line only names a material now
+    — those three numbers live on the item (see validate_item). A stale browser tab can still
+    send them (lineForSave() in library.js still queues them on purpose — see
+    test_the_typed_query_never_reaches_the_server), so dropping them here rather than trusting the
+    frontend is what stops an old tab from writing a per-line override back over the material's
+    own value."""
     if raw in (None, ""):
         return []
     if not isinstance(raw, list):
@@ -731,25 +760,11 @@ def _clean_lines(raw: Any) -> List[Dict[str, Any]]:
         item_id = _clean_text(entry.get("item_id"), 60)
         role = _clean_text(entry.get("role"), 80)
         note = _clean_text(entry.get("note"), 300)
-        coverage = _number(entry.get("coverage"), field="Coverage", maximum=_MAX_COVERAGE)
-        if coverage is not None and coverage <= 0:
-            coverage = None
-        # How much extra to buy over what the area needs: 5% by default, per Hanz. A line that
-        # arrives without it is either legacy or a client bug, and either way 5 is the number the
-        # screen shows — reading it as 0 would make the row lie about its own arithmetic.
-        waste = _number(entry.get("waste_pct"), field="Waste factor", maximum=100)
-        if waste is None:
-            waste = DEFAULT_WASTE_PCT
-        # Whole packs, or a fraction of one. True for a legacy line because CEIL is what it was
-        # priced with — the screen has promised "you cannot buy 3.7 kits" since this page shipped.
-        roundup = entry.get("roundup")
-        roundup = True if roundup is None else bool(roundup)
         # A line with neither a material nor a role is an empty row nobody filled in. (Role left
         # the UI on 2026-08-15 but stays in the data, so an older line keeps its label.)
         if not item_id and not role:
             continue
-        out.append({"role": role, "item_id": item_id or None, "coverage": coverage,
-                    "waste_pct": waste, "roundup": roundup, "note": note or None})
+        out.append({"role": role, "item_id": item_id or None, "note": note or None})
     return out
 
 

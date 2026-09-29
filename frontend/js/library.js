@@ -339,7 +339,8 @@
   // shape regardless.
   var ITEM_FIELD_LABELS = {
     name: "Name", unit: "Unit", unit_cost: "Cost", buy_qty: "Order amount",
-    coverage: "Coverage per unit", vendor: "Vendor", divisions: "Division",
+    coverage: "Coverage per unit", waste_pct: "Waste factor", roundup: "Roundup",
+    vendor: "Vendor", divisions: "Division",
   };
 
   // THE SERVER'S FIELDS, NOT OURS. `updated_at` moves on every write, `cost_updated_at` moves
@@ -1070,6 +1071,19 @@
         "<td>" + divisionPick(it) + "</td>" +
         '<td class="n"><input data-f="buy_qty" class="num cell-qty" value="' + (it.buy_qty == null ? "" : it.buy_qty) + '" aria-label="How many units come in one purchase"></td>' +
         "<td>" + pick("unit", it.unit, unitNames(), "Unit", ' class="cell-unit"') + "</td>" +
+        // COVERAGE, WASTE AND ROUNDUP LIVE ON THE MATERIAL, from 2026-09-22. Hanz: "we must have
+        // coverage per unit, waste factor, roundup, and materials tab. And then it gets pulled in
+        // to assemblies instead of it being in assemblies." No per-line override: a material used
+        // at two coverages is two materials (see the migration note in library.py). Same width
+        // classes (.n.w-cov / .n.w-waste / .w-ru) the assembly-lines table already defines for
+        // these three columns — reused here, not reinvented.
+        '<td class="n w-cov"><input data-f="coverage" class="num" value="' + (it.coverage == null ? "" : it.coverage) + '" aria-label="Coverage per unit"></td>' +
+        '<td class="n w-waste"><input data-f="waste_pct" class="num" value="' + (it.waste_pct == null ? "" : it.waste_pct) + '" aria-label="Waste factor, percent"></td>' +
+        // Unchecked only when roundup is explicitly false. NULL and true both read as checked --
+        // "absent means yes" (library-core.js's priceLine), so the box must not show unticked for
+        // a material nobody has touched yet.
+        '<td class="w-ru"><input type="checkbox" data-f="roundup"' +
+          (it.roundup === false ? "" : " checked") + ' aria-label="Round up to whole purchase units"></td>' +
         '<td class="n"><span class="money"><span>$</span><input data-f="unit_cost" class="num cell-cost" value="' + (it.unit_cost == null ? "" : it.unit_cost) + '" aria-label="Cost of one purchase"></span></td>' +
         "<td>" + pick("vendor", it.vendor, vendorNames(), "Vendor", ' class="cell-vendor"') + "</td>" +
         '<td class="datescell">' + datesHtml(it) + "</td>" +
@@ -1939,13 +1953,29 @@
           (!r.ok && r.reason === "missing_item"
             ? '<div class="gone">Pick a replacement item — this line is not priced</div>' : "") + "</td>" +
         '<td class="n"><div class="line-primary">' + esc(orderAmount(lineItem)) + "</div></td>" +
-        '<td class="n cov"><div class="line-primary"><input data-lf="coverage" class="num" value="' +
-          (ln.coverage == null ? "" : ln.coverage) + '" aria-label="Coverage per unit"></div></td>' +
-        '<td class="n"><div class="line-primary"><input data-lf="waste_pct" class="num waste" value="' +
-          (ln.waste_pct == null ? "" : ln.waste_pct) + '" aria-label="Waste factor, percent"> %</div></td>' +
-        '<td class="ru"><div class="line-primary"><input type="checkbox" data-lf="roundup"' +
-          (ln.roundup === false ? "" : " checked") +
-          ' aria-label="Round up to whole purchases"></div></td>' +
+        // PULLED IN FROM THE MATERIAL, NOT TYPED HERE. Hanz, 2026-09-22: "we must have coverage
+        // per unit, waste factor, roundup, and materials tab. And then it gets pulled in to
+        // assemblies instead of it being in assemblies."
+        //
+        // STILL SHOWN, though. "It gets pulled in" is a statement about where the numbers are
+        // SET, not about hiding them: an estimator reading an assembly has to see the coverage a
+        // line is priced at without opening another tab, and a blank column would make the
+        // arithmetic in the two derived cells beside it unfollowable.
+        //
+        // READ OFF `r`, THE PRICED ROW, rather than off `ln`. r.coverage is what the engine
+        // actually used, so this cell cannot disagree with the cost cell next to it -- and a
+        // legacy line still carrying its own numbers displays the material's, which is the whole
+        // point. A line whose material is missing has no r.coverage, hence the em dash.
+        // qtyText, which this file already uses for every quantity -- NOT a formatter invented
+        // here. The first draft of this line called num0(), which does not exist in this file or
+        // any it loads: an unbound identifier that a regex over the markup could never catch and
+        // that would have thrown on the first assembly anybody opened.
+        '<td class="n cov derived"><div class="line-primary">' +
+          (r.coverage == null ? "—" : esc(qtyText(r.coverage))) + "</div></td>" +
+        '<td class="n derived"><div class="line-primary">' +
+          (r.waste_pct == null ? "—" : r.waste_pct + " %") + "</div></td>" +
+        '<td class="ru derived"><div class="line-primary">' +
+          (!r.ok ? "—" : (r.roundup ? "Yes" : "No")) + "</div></td>" +
         // `derived` tints the two columns nobody types into, so the cells this page WORKS OUT
         // read as a band apart from the ones that feed them. Tone only — the class carries a
         // background and nothing else, because these are the numbers a bid is priced from.
@@ -2521,9 +2551,9 @@
         // THE SCOPING DID NOT GO WITH IT. The chips were the only writer for
         // default_work_types, and deleting them outright would put the work-type filter above
         // this table straight back to filtering nothing, which is the defect he reported the same
-        // morning. The control moves to the material's own row on the Items tab in a follow-up
-        // (the coverage/waste/roundup work in flight) -- until then Edit already reaches the row
-        // that owns the flag.
+        // morning. The control moved to the material's own row on the Items tab, where the rest
+        // of a material's properties (coverage, waste, roundup) now live -- and Edit on this row
+        // already goes there.
         out += "<tr><td>" + esc(r.name) + "</td><td>" +
           (r.rawHow ? r.how : esc(r.how)) + "</td>" +
           '<td class="rowact">' + r.actions + "</td></tr>";
@@ -3252,7 +3282,7 @@
   // `5 / "5"` work by luck and `"5" * 2` produce "55" the first time somebody multiplied instead
   // of divided — the pricing layer's `num()` is defensive, but the model it reads should not be
   // the thing needing defending.
-  var NUMERIC_ITEM_FIELDS = ["unit_cost", "coverage", "buy_qty"];
+  var NUMERIC_ITEM_FIELDS = ["unit_cost", "coverage", "buy_qty", "waste_pct"];
   function onItemEdit(e) {
     // NOTHING GETS IN WHILE A CONFIRMATION IS ON SCREEN. The modal overlay traps every real
     // keystroke and click, so the only event that can arrive here in that window is one the dialog
@@ -3288,6 +3318,15 @@
       it.category = vals[0] || "";
       renderList(); renderPanel();
       patchSoon("items", it.id, { divisions: vals });
+      return;
+    }
+    // A checkbox, not a text field: `.value` on an unchecked box is still "on", so the generic
+    // raw-string path below would send a truthy string every time. `.checked` is the only real
+    // answer, and it is already the boolean the server wants -- nothing to parse on either end.
+    if (f === "roundup") {
+      it.roundup = !!e.target.checked;
+      renderList(); renderPanel();
+      patchSoon("items", it.id, { roundup: it.roundup });
       return;
     }
     var raw = e.target.value;

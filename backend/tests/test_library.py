@@ -202,11 +202,18 @@ def test_a_line_with_a_role_but_no_material_yet_is_kept():
     assert got["lines"][0]["item_id"] is None
 
 
-def test_a_lines_coverage_is_read_and_zero_becomes_unset():
+def test_a_lines_coverage_waste_and_roundup_no_longer_persist():
+    """Inverts the old rule this call used to prove. Hanz, 2026-09-21: "for the materials, we
+    must have coverage per unit, waste factor, roundup, and materials tab. And then it gets
+    pulled in to assemblies instead of it being in assemblies." A stale tab's lineForSave() still
+    queues all three keys on every save (see test_the_typed_query_never_reaches_the_server), so
+    the backend has to be the wall that refuses to store them — otherwise a browser tab open from
+    before this change could still write a per-line override back over the material's own
+    number."""
     got = library.validate_assembly({"name": "x", "lines": [
-        {"item_id": "a", "coverage": "775"}, {"item_id": "b", "coverage": 0}]})
-    assert got["lines"][0]["coverage"] == 775.0
-    assert got["lines"][1]["coverage"] is None
+        {"item_id": "a", "coverage": "775", "waste_pct": 40, "roundup": False}]})
+    line = got["lines"][0]
+    assert "coverage" not in line and "waste_pct" not in line and "roundup" not in line
 
 
 def test_too_many_lines_are_refused_rather_than_silently_dropped():
@@ -249,11 +256,10 @@ def test_garbage_inside_the_lines_list_is_skipped(store):
 def test_creating_and_reading_back_an_assembly(store):
     it = _mk_item()
     row = library.create_assembly({"name": "MACRO Flake", "lines": [
-        {"role": "1st BC", "item_id": it["id"], "coverage": 275}]}, "hanz@wetreadwell.com")
+        {"role": "1st BC", "item_id": it["id"]}]}, "hanz@wetreadwell.com")
     got = library.get_assembly(row["id"])
     assert got["name"] == "MACRO Flake"
     assert got["lines"][0]["item_id"] == it["id"]
-    assert got["lines"][0]["coverage"] == 275.0
 
 
 def test_an_assembly_with_no_lines_column_reads_as_empty(store):
@@ -313,7 +319,7 @@ def test_the_assembly_endpoints_round_trip(store):
     r = client.patch("/api/library/assemblies/%s" % aid,
                      json={"lines": [{"role": "Top", "item_id": "x", "coverage": "775"}]})
     assert r.status_code == 200
-    assert r.json()["assembly"]["lines"][0]["coverage"] == 775.0
+    assert r.json()["assembly"]["lines"][0]["item_id"] == "x"
 
     assert client.delete("/api/library/assemblies/%s" % aid).status_code == 200
     assert client.get("/api/library/assemblies").json()["assemblies"] == []

@@ -417,7 +417,12 @@
     .qtycell select { width:100%; min-width:96px; }
     .lines .waste { width:74px; }
     .lines .ru { text-align:center; }
-    .lines input[type="checkbox"] { width:16px; height:16px; accent-color:var(--red); cursor:pointer; }
+    /* Was `.lines input[type="checkbox"]` alone -- the assembly-lines table's own roundup box.
+       That box moved to the Materials tab on 2026-09-22 (coverage/waste/roundup are read-only,
+       derived cells on a line now; see the .lines .ru.derived rule), so this rule now styles the
+       Items table's checkbox too rather than gaining a second copy of the same four declarations. */
+    .lines input[type="checkbox"], .items-table input[type="checkbox"] {
+      width:16px; height:16px; accent-color:var(--red); cursor:pointer; }
     /* THE DIVISION CELL: toggle chips on ONE line, not a stack of checkboxes.
        Hanz, 2026-08-24: "can we have it in just one row? Also instead of a checkbox please pick a
        better UI that allows a material to have multiple divisions but they show up in one row."
@@ -752,6 +757,15 @@
               <tr>
                 <th>Materials <span class="th-sub">(how the manufacturer names it)</span></th>
                 <th>Division</th><th class="n">Order Quantity</th><th>Unit</th>
+                <!-- COVERAGE, WASTE AND ROUNDUP LIVE HERE NOW, from 2026-09-22. Hanz: "for the
+                     materials, we must have coverage per unit, waste factor, roundup, and
+                     materials tab. And then it gets pulled in to assemblies instead of it being
+                     in assemblies." Same three width classes (.n.w-cov / .n.w-waste / .w-ru) and
+                     the same copy the assembly-lines <thead> already uses for these properties
+                     below — one description of what each one means, not two. -->
+                <th class="n w-cov"><span class="th-help" tabindex="0" title="How much one unit of this material covers, in whatever an assembly measures in - square feet or linear feet. Per unit, not per pack: a 5 gallon pail at 275 a gallon covers 1,375." aria-label="Coverage per Unit. How much one unit of this material covers, in whatever an assembly measures in - square feet or linear feet. Per unit, not per pack: a 5 gallon pail at 275 a gallon covers 1,375.">Coverage per Unit</span></th>
+                <th class="n w-waste"><span class="th-help" tabindex="0" title="Adds this percentage to the calculated amount needed, to account for waste, spills, and overage." aria-label="Waste Factor. Adds this percentage to the calculated amount needed, to account for waste, spills, and overage.">Waste Factor</span></th>
+                <th class="w-ru"><span class="th-help" tabindex="0" title="Rounds the amount needed up to whole purchase units, so an assembly buys complete packs, kits, bags, or other units." aria-label="Roundup. Rounds the amount needed up to whole purchase units, so an assembly buys complete packs, kits, bags, or other units.">Roundup?</span></th>
                 <!-- "Dates" until 2026-09-04. The cell names who added the material and who
                      last changed it, not only when, so the heading stopped promising only
                      dates.

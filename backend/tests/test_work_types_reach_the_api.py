@@ -123,6 +123,11 @@ PROBES = {
     "description": "a system", "lines": [], "expected_updated_at": "2026-01-01T00:00:00+00:00",
     "rate": "33", "guys_auto": True, "sort": "0",
     "default_work_types": ["epoxy"],
+    # roundup is Optional[bool] (2026-09-22, moved off the line onto the material) -- the generic
+    # "probe" string fails Pydantic's strict bool parsing, which would flag this test's own probe
+    # as the bug it exists to catch. waste_pct stays on the generic fallback: it is `Any`, like
+    # unit_cost and buy_qty, because it also arrives as text from an input.
+    "roundup": True,
 }
 
 

@@ -1007,8 +1007,14 @@ def test_the_cost_wears_a_dollar_sign(ran):
 
 
 @needs_node
-def test_coverage_left_the_items_tab(ran):
-    assert ran["items"]["hasCoverage"] is False
+def test_coverage_waste_and_roundup_live_on_the_items_tab(ran):
+    """Inverts test_coverage_left_the_items_tab. Hanz, 2026-09-21: "for the materials, we must
+    have coverage per unit, waste factor, roundup, and materials tab. And then it gets pulled in
+    to assemblies instead of it being in assemblies" — the three numbers moved back onto the
+    Items tab, off the assembly line."""
+    assert ran["items"]["hasCoverage"] is True
+    assert ran["items"]["hasWaste"] is True
+    assert ran["items"]["hasRoundupCheckbox"] is True
 
 
 @needs_node
@@ -1110,7 +1116,7 @@ def test_the_editor_is_a_server_owned_field_so_cancel_cannot_put_a_stale_one_bac
 
 @needs_node
 def test_the_pack_size_is_on_the_numeric_field_list(ran):
-    assert ran["numericFields"] == ["unit_cost", "coverage", "buy_qty"]
+    assert ran["numericFields"] == ["unit_cost", "coverage", "buy_qty", "waste_pct"]
 
 
 @needs_node
@@ -1212,11 +1218,25 @@ def test_the_role_column_is_gone_from_the_rendered_row(ran):
 
 
 @needs_node
-def test_waste_and_roundup_are_on_every_line(ran):
+def test_coverage_waste_and_roundup_are_read_only_and_come_from_the_material(ran):
+    """Inverts test_waste_and_roundup_are_on_every_line. Hanz, 2026-09-21: "for the materials, we
+    must have coverage per unit, waste factor, roundup, and materials tab. And then it gets pulled
+    in to assemblies instead of it being in assemblies" — a line no longer has its own input or
+    checkbox for any of the three, and the fixture's two ASMS lines carry coverage/waste/roundup
+    that deliberately DISAGREE with their materials (i1: 999/0/false vs the item's 275/5/true; i2:
+    999/99/true vs the item's 275/0/false), so a row echoing the line instead of the material
+    would show the wrong numbers rather than merely stale ones."""
     lines = ran["lines"]
-    assert lines["hasWaste"] and lines["hasRoundupCheckbox"]
-    assert lines["roundupTicksFromTheData"], \
-        "the checkbox ignores the line's own flag — every row would read as rounded up"
+    assert lines["noEditableWasteOnTheLine"], "a waste input still lives on the line"
+    assert lines["noEditableRoundupOnTheLine"], "a roundup checkbox still lives on the line"
+    assert lines["firstRowCoverage"] == "275" and lines["firstRowWaste"] == "5 %" \
+        and lines["firstRowRoundup"] == "Yes", (
+            "row 1 does not read the material's own numbers: %r/%r/%r"
+            % (lines["firstRowCoverage"], lines["firstRowWaste"], lines["firstRowRoundup"]))
+    assert lines["secondRowCoverage"] == "275" and lines["secondRowWaste"] == "0 %" \
+        and lines["secondRowRoundup"] == "No", (
+            "row 2 does not read the material's own numbers: %r/%r/%r"
+            % (lines["secondRowCoverage"], lines["secondRowWaste"], lines["secondRowRoundup"]))
 
 
 @needs_node

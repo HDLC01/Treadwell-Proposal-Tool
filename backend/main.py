@@ -1006,6 +1006,16 @@ class LibraryItemIn(BaseModel):
     notes: Optional[str] = None
     # Shared/team-wide, not per-user -- see library.validate_item's note.
     favorite: Optional[bool] = None
+    # THE TWO NUMBERS THAT MOVED OFF THE ASSEMBLY LINE on 2026-09-22, alongside `coverage` above.
+    # Declared here or they do not exist as far as the API is concerned: Pydantic's default
+    # `extra` is `ignore`, so an undeclared field is dropped in silence, validate_item returns
+    # {}, update_item takes its "nothing changed" early return and the route answers 200 with the
+    # row untouched. That is not hypothetical -- it is exactly how default_work_types was
+    # unwritable for as long as the column existed, and it was proven again for these two before
+    # this line was added: PATCH {"waste_pct": 12.5} answered 200 and did not even move
+    # updated_at. `Any`, like unit_cost and buy_qty, because both arrive as text from an input.
+    waste_pct: Optional[Any] = None
+    roundup: Optional[bool] = None
     # WHICH WORK TYPES THIS DEFAULT IS OFFERED FOR. `Any`, like the fields above, because
     # library._coerce_work_types accepts a list, a JSON string or a bare name and is the
     # single authority on the answer.

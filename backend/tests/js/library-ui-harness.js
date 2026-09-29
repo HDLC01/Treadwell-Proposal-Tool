@@ -614,20 +614,25 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
 `);
 
 // Two materials: a legacy pack-of-one and a five-gallon pail, so the pack column has something to
-// be wrong about.
+// be wrong about. Coverage, waste and roundup live on the MATERIAL now (Hanz, 2026-09-21: "for
+// the materials, we must have coverage per unit, waste factor, roundup... And then it gets pulled
+// in to assemblies instead of it being in assemblies") — set here, on ITEMS. The ASMS lines below
+// carry deliberately WRONG, disagreeing values: if priceLine ever reads a line's own numbers
+// instead of the material's, the two quantity labels these fixtures drive flip to the other
+// line's shape rather than quietly matching by coincidence.
 const ITEMS = [
   { id: "i1", name: "OPF", category: "Epoxy", unit: "Gal", buy_qty: 1, unit_cost: 85.3827,
-    coverage: 275, vendor: "Sherwin-Williams", notes: "",
+    coverage: 275, waste_pct: 5, roundup: true, vendor: "Sherwin-Williams", notes: "",
     created_at: "2026-08-01T14:30:00Z", cost_updated_at: null },
   { id: "i2", name: "OPF Primer", category: "Polished Concrete", unit: "Gallon", buy_qty: 5,
-    unit_cost: 426.91, coverage: 275, vendor: "Gone Supply Co", notes: "",
-    created_at: "2026-08-02T09:00:00Z", cost_updated_at: "2026-08-14T21:15:00Z" },
+    unit_cost: 426.91, coverage: 275, waste_pct: 0, roundup: false, vendor: "Gone Supply Co",
+    notes: "", created_at: "2026-08-02T09:00:00Z", cost_updated_at: "2026-08-14T21:15:00Z" },
 ];
 const ASMS = [{
   id: "a1", name: "MACRO Flake", unit: "SF",
   lines: [
-    { role: "1st BC", item_id: "i1", coverage: 275, waste_pct: 5, roundup: true, note: "" },
-    { role: "", item_id: "i2", coverage: 275, waste_pct: 0, roundup: false, note: "" },
+    { role: "1st BC", item_id: "i1", coverage: 999, waste_pct: 0, roundup: false, note: "" },
+    { role: "", item_id: "i2", coverage: 999, waste_pct: 99, roundup: true, note: "" },
   ],
 }];
 const VENDORS = [{ id: "v1", name: "Sherwin-Williams", notes: "KC branch" },
@@ -681,8 +686,12 @@ const out = {};
       .split("<option").slice(1).map((o) => (/>([^<]*)</.exec(o) || ["", ""])[1]),
     hasVendorDropdown: /<select data-f="vendor"/.test(row),
     costWearsADollarSign: /<span class="money"><span>\$<\/span><input data-f="unit_cost"/.test(row),
-    // Gone: coverage left the Items tab, and the material name is no longer a bare text box.
+    // Back, 2026-09-22: coverage, waste and roundup moved from the assembly line onto the
+    // material — see the ITEMS/ASMS comment above. The material name is also no longer a bare
+    // text box (see nameOffersAutosuggest below).
     hasCoverage: /data-f="coverage"/.test(d.nodes["items-body"].innerHTML),
+    hasWaste: /data-f="waste_pct"/.test(d.nodes["items-body"].innerHTML),
+    hasRoundupCheckbox: /type="checkbox" data-f="roundup"/.test(d.nodes["items-body"].innerHTML),
     nameOffersAutosuggest: /data-f="name"[^>]*list="dl-materials"/.test(row),
     datalistFilled: /value="OPF"/.test(d.nodes["dl-materials"].innerHTML) &&
       /value="OPF Primer"/.test(d.nodes["dl-materials"].innerHTML),
@@ -1105,10 +1114,24 @@ const out = {};
   const costIdx = tds.findIndex((t, i) => i > qtyIdx && /class="qty"/.test(t));
   out.lines = {
     roleColumnGone: !/data-lf="role"/.test(body),
-    hasWaste: /data-lf="waste_pct"/.test(firstRow),
-    hasRoundupCheckbox: /type="checkbox" data-lf="roundup"/.test(firstRow),
-    roundupTicksFromTheData: /data-lf="roundup" checked/.test(firstRow) &&
-      !/data-lf="roundup" checked/.test(body.split("</tr>")[1]),
+    // Coverage, waste and roundup are pulled in from the material now (Hanz, 2026-09-22) — no
+    // editable input or checkbox anywhere in the table, on either row.
+    noEditableWasteOnTheLine: !/data-lf="waste_pct"/.test(body),
+    noEditableRoundupOnTheLine: !/type="checkbox" data-lf="roundup"/.test(body),
+    // Both rows must show THEIR OWN material's numbers even though the fixture's ASMS lines
+    // (above) carry deliberately wrong ones — proof the material wins over a disagreeing line.
+    firstRowCoverage: (/<td class="n cov derived"><div class="line-primary">([^<]*)</
+      .exec(firstRow) || ["", ""])[1],
+    firstRowWaste: (/<td class="n derived"><div class="line-primary">([^<]*)</
+      .exec(firstRow) || ["", ""])[1],
+    firstRowRoundup: (/<td class="ru derived"><div class="line-primary">([^<]*)</
+      .exec(firstRow) || ["", ""])[1],
+    secondRowCoverage: (/<td class="n cov derived"><div class="line-primary">([^<]*)</
+      .exec(body.split("</tr>")[1]) || ["", ""])[1],
+    secondRowWaste: (/<td class="n derived"><div class="line-primary">([^<]*)</
+      .exec(body.split("</tr>")[1]) || ["", ""])[1],
+    secondRowRoundup: (/<td class="ru derived"><div class="line-primary">([^<]*)</
+      .exec(body.split("</tr>")[1]) || ["", ""])[1],
     // A search box with autofill, not a <select>: the list is going to get long.
     pickerIsSearchable: /<div class="item-picker">/.test(firstRow) &&
       /data-lf="item_search"/.test(firstRow),
