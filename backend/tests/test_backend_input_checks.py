@@ -4,11 +4,15 @@
      API path — at the route (400), in leads.fetch_email_text and in basisboard_client itself.
   2. The signed .eml link is fetched only from Basisboard's storage host, over https, and no
      redirect to anywhere else is followed.
-  3. An email body is cut to leads._TEXT_CAP BEFORE the regex passes, which are quadratic on
-     unclosed markup and read text written by whoever emailed the bid inbox.
+  3. An email body is read to a raw bound (leads._RAW_CAP) and stripped by linear scans; the
+     regexes they replaced were quadratic on unclosed markup, in text written by whoever
+     emailed the bid inbox. A cut never lets the CSS or JS of a block it left open into the text.
   4. Error bodies carry a short sentence; the exception text (paths, SQL, hosts) goes to the log.
   5. The three service-token routes answer 429 past a per-peer window.
 """
+import html
+import random
+import re
 import time
 from email.message import EmailMessage
 from types import SimpleNamespace
@@ -234,7 +238,7 @@ def test_a_redirect_within_the_storage_host_is_still_followed(monkeypatch):
     assert out["ok"] is True and "Moved but fine." in out["text"]
 
 
-# ── 3. the body is cut before the regex passes ────────────────────────
+# ── 3. the body is bounded, and stripped in linear time ───────────────
 class _Spy:
     """Stands in for a compiled pattern and records the length of every string it is run on."""
 
@@ -247,53 +251,144 @@ class _Spy:
 
 
 def _spy_all(monkeypatch):
+    """Record the length of every string any strip pass — regex or scan — is run on."""
     seen = []
-    for name in ("_COMMENT_RE", "_SCRIPT_RE", "_BR_RE", "_CELL_RE", "_BLOCK_RE", "_TAG_RE",
-                 "_SPACES_RE", "_BLANKS_RE"):
+    for name in ("_BR_RE", "_CELL_RE", "_BLOCK_RE", "_SPACES_RE", "_BLANKS_RE"):
         monkeypatch.setattr(leads, name, _Spy(getattr(leads, name), seen))
+    for name in ("_strip_comments", "_strip_blocks", "_strip_tags"):
+        real = getattr(leads, name)
+        monkeypatch.setattr(leads, name,
+                            lambda s, *a, _real=real, **k: seen.append(len(s)) or _real(s, *a, **k))
     return seen
 
 
-def test_no_regex_pass_reads_more_than_the_cap_of_an_html_body(monkeypatch):
+def test_the_raw_bound_is_well_above_the_text_cap():
+    # The text cap applies to stripped text; the raw bound must leave room for the markup.
+    assert leads._RAW_CAP >= 10 * leads._TEXT_CAP
+
+
+def test_no_pass_reads_more_than_the_raw_bound_of_an_html_body(monkeypatch):
     seen = _spy_all(monkeypatch)
-    text = leads._html_to_text("<p>" + "x" * 100_000 + "</p>")
-    assert seen and max(seen) <= leads._TEXT_CAP
+    text = leads._html_to_text("<p>" + "x" * 200_000 + "</p>")
+    assert seen and max(seen) <= leads._RAW_CAP
     assert text.endswith("[truncated]")
 
 
-def test_no_regex_pass_reads_more_than_the_cap_of_a_plain_eml_body(monkeypatch):
+def test_no_pass_reads_more_than_the_raw_bound_of_a_plain_eml_body(monkeypatch):
     from email import message_from_bytes
-    msg = message_from_bytes(_raw_eml("line of scope\n" * 10_000))     # ~140,000 chars
+    msg = message_from_bytes(_raw_eml("line of scope\n" * 20_000))     # ~280,000 chars
     seen = _spy_all(monkeypatch)
     text = leads._eml_body_text(msg)
-    assert seen and max(seen) <= leads._TEXT_CAP
+    assert seen and max(seen) <= leads._RAW_CAP
     assert text.endswith("[truncated]") and text.count("[truncated]") == 1
 
 
-def test_a_hostile_body_is_read_in_bounded_time(monkeypatch):
-    """120,000 chars of unclosed comments: ~15 s through the passes uncut, ~0.25 s cut."""
+@pytest.mark.parametrize("unit", ["<!--", "<", "<script", "<style ", "<script>", "<br ", "</td "])
+def test_a_hostile_body_is_read_in_bounded_time(monkeypatch, unit):
+    """A body the size of the raw bound, made of openers that never close. The regexes these
+    scans replaced rescanned to the end for each one: `<!--` at this size took ~50 s."""
+    body = unit * (leads._RAW_CAP // len(unit))
+    assert len(body) <= leads._RAW_CAP                     # not cut: every scan reads all of it
     monkeypatch.setattr(bb, "get_message_detail", lambda mid: {"message": {
-        "subject": "S", "fromEmail": "a@b.c", "body": "<!--" * 30_000}})
+        "subject": "S", "fromEmail": "a@b.c", "body": body}})
     monkeypatch.setattr(bb, "get_message_url", lambda mid: None)
     t0 = time.perf_counter()
     leads.fetch_email_text("m1")
-    assert time.perf_counter() - t0 < 5.0
+    assert time.perf_counter() - t0 < 2.0
+
+
+def test_a_large_style_head_does_not_hide_the_body_text(monkeypatch):
+    """A ~19,000-char <style> head, then the invite. Cutting the RAW body at the text cap landed
+    inside the <style> block: the CSS came back as the body, ok, and the .eml was never tried."""
+    css = "".join(f".c{i}{{color:#123456;font-family:Arial,sans-serif}}" for i in range(400))
+    body = ("<html><head><style>" + css + "</style></head><body>"
+            "<p>Bid invitation: Edgerton Warehouse</p>"
+            "<div>Scope: epoxy flooring, 12,000 SF</div></body></html>")
+    assert len(body) > leads._TEXT_CAP
+    monkeypatch.setattr(bb, "get_message_detail", lambda mid: {"message": {
+        "subject": "Invite", "fromEmail": "gc@example.com", "body": body}})
+    monkeypatch.setattr(bb, "get_message_url", _boom("get_message_url"))
+    out = leads.fetch_email_text("m1")
+    assert out["ok"] and out["via"] == "detail"
+    assert out["text"] == ("Bid invitation: Edgerton Warehouse\n"
+                           "Scope: epoxy flooring, 12,000 SF")
+
+
+@pytest.mark.parametrize("opener,filler", [
+    ("<style>", ".c{color:#123456}"),
+    ("<STYLE type='text/css'>", ".c{color:#123456}"),
+    ("<script>", "var color = '#123456';"),
+    ("<!--[if mso]>", '<v:rect style="width:600px">MSO fallback</v:rect>'),
+    ('<div style="', "color:#123456;"),
+])
+def test_a_cut_inside_open_markup_drops_that_markup_not_the_text_before_it(opener, filler):
+    """The raw bound can land inside a style/script block, a comment or a tag. What the cut
+    left open goes; the text before it stays, marked as cut."""
+    body = "<p>Scope: epoxy flooring</p>" + opener + filler * (leads._RAW_CAP // len(filler))
+    assert len(body) > leads._RAW_CAP
+    text = leads._html_to_text(body)
+    assert text == "Scope: epoxy flooring\n\n[truncated]"
+
+
+def test_a_cut_keeps_the_blocks_that_closed_before_it():
+    css = "<style>" + ".c{color:#123456}" * 100 + "</style>"
+    body = css + "<p>Scope: epoxy</p>" + css + "<p>Schedule: May</p><style>" + "x" * leads._RAW_CAP
+    text = leads._html_to_text(body)
+    assert text == "Scope: epoxy\nSchedule: May\n\n[truncated]"
+
+
+# The patterns the scans replaced, verbatim. Under the raw bound, a scan must give exactly the
+# output its regex gave: the only change is how long it takes.
+_OLD_COMMENT_RE = re.compile(r"(?s)<!--.*?-->")
+_OLD_SCRIPT_RE = re.compile(r"(?is)<(script|style)\b[^>]*>.*?</\1\s*>")
+_OLD_TAG_RE = re.compile(r"(?s)<[^>]*>")
+_PIECES = ["<", ">", "<!--", "-->", "--", "<!", "<script", "<SCRIPT ", "<Script>", "</script>",
+           "</SCRIPT >", "</script", "<style", "<STYLE a='x'>", "</style>", "</Style\n>",
+           "<scripts>", "<stylex", "</", "a", "b ", "\n", "<p>", "</p>", "<br>", "-", "script"]
+
+
+def _old_html_to_text(raw):
+    s = _OLD_COMMENT_RE.sub(" ", raw)
+    s = _OLD_SCRIPT_RE.sub(" ", s)
+    s = leads._BR_RE.sub("\n", s)
+    s = leads._CELL_RE.sub(" ", s)
+    s = leads._BLOCK_RE.sub("\n", s)
+    s = _OLD_TAG_RE.sub("", s)
+    return leads._collapse(html.unescape(s))
+
+
+def test_each_scan_matches_the_regex_it_replaced():
+    rnd = random.Random(20260928)
+    for _ in range(4_000):
+        s = "".join(rnd.choice(_PIECES) for _ in range(rnd.randint(0, 30)))
+        assert leads._strip_comments(s) == _OLD_COMMENT_RE.sub(" ", s), s
+        assert leads._strip_blocks(s) == _OLD_SCRIPT_RE.sub(" ", s), s
+        assert leads._strip_tags(s) == _OLD_TAG_RE.sub("", s), s
+        assert leads._html_to_text(s) == _old_html_to_text(s), s
+
+
+def test_an_uncut_body_reads_as_it_always_did():
+    from tests.test_leads import _HTML_BODY
+    assert leads._html_to_text(_HTML_BODY) == _old_html_to_text(_HTML_BODY)
 
 
 def test_a_cut_body_is_marked_once_and_the_prompt_cap_leaves_it_alone():
-    body = "word " * 5_000                                   # 25,000 chars, no markup
+    body = "word " * 40_000                                  # 200,000 chars, no markup
     text = leads._html_to_text(body)
     assert text.endswith("[truncated]") and text.count("[truncated]") == 1
     assert len(text) <= leads._TEXT_CAP + len("\n\n[truncated]")
     assert leads._cap(text) == text                        # prequalify's _cap: unchanged
-    # A cut that lands in whitespace leaves the text a few chars short of the cap, so text plus
-    # marker is just over it — the length a second _cap used to slice into, printing
-    # "[truncat" and then a second marker.
-    edge = leads._html_to_text("a" * 14_990 + " " * 10 + "b" * 100)
+    # A text cap that lands in a run of whitespace (&emsp;, which the space squeeze leaves
+    # alone) leaves the text a few chars short of the cap, so text plus marker is just over it
+    # — the length a second _cap used to slice into, printing "[truncat" and a second marker.
+    edge = leads._html_to_text("a" * 14_990 + "&emsp;" * 10 + "b" * leads._RAW_CAP)
     assert leads._TEXT_CAP < len(edge) < leads._TEXT_CAP + len("\n\n[truncated]")
     assert leads._cap(edge) == edge and leads._cap(edge).count("[trunc") == 1
     short = leads._html_to_text("<p>Scope: epoxy</p>")
     assert short == "Scope: epoxy"                          # an uncut body gains no marker
+    long_uncut = leads._html_to_text("<p>" + "x" * (leads._RAW_CAP - 10) + "</p>")
+    assert "[truncated]" not in long_uncut                  # under the raw bound: not cut here
+    assert leads._cap(long_uncut).endswith("[truncated]")  # the text cap still applies after
 
 
 # ── 4. error bodies ───────────────────────────────────────────────────

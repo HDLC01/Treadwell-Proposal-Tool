@@ -52,6 +52,7 @@ _WRITABLE_COLUMNS = frozenset({
 })
 _IN_CHUNK = 100          # ids per PostgREST `in.(...)` filter — keeps the URL sane
 _TEXT_CAP = 15_000       # chars of email body handed to the AI / the intake notes
+_RAW_CAP = 10 * _TEXT_CAP  # chars of raw body read at all, before stripping (see _clip)
 _EML_TIMEOUT = 20.0
 _TZ_NAME = "America/Chicago"
 
@@ -250,15 +251,19 @@ def merge_inbox(messages: List[Dict[str, Any]],
 
 
 # ── email body -> plain text ──────────────────────────────────────────
-_COMMENT_RE = re.compile(r"(?s)<!--.*?-->")
-_SCRIPT_RE = re.compile(r"(?is)<(script|style)\b[^>]*>.*?</\1\s*>")
 _BR_RE = re.compile(r"(?i)<br\s*/?>")
 _CELL_RE = re.compile(r"(?i)</t[dh]\s*>")
 _BLOCK_RE = re.compile(
     r"(?i)</(p|div|tr|li|ul|ol|h[1-6]|table|thead|tbody|blockquote|section|article|pre)\s*>")
-_TAG_RE = re.compile(r"(?s)<[^>]*>")
 _SPACES_RE = re.compile(r"[ \t\xa0]{2,}")
 _BLANKS_RE = re.compile(r"\n{3,}")
+# The comment, script/style and tag passes are scans, not regexes. As regexes — `<!--.*?-->`,
+# `<(script|style)\b[^>]*>.*?</\1\s*>`, `<[^>]*>` — they are quadratic on unclosed markup: every
+# opener with no closer after it rescans to the end of the body, and the body is written by
+# whoever emailed the bid inbox. Each scan gives its regex's output in one pass.
+_OPEN_BLOCK_RE = re.compile(r"(?i)<(?:(script)|style)\b")
+_CLOSE_SCRIPT_RE = re.compile(r"(?i)</script\s*>")
+_CLOSE_STYLE_RE = re.compile(r"(?i)</style\s*>")
 
 
 def _collapse(text: str) -> str:
@@ -275,33 +280,113 @@ def _html_to_text(raw: str) -> str:
     as markup, so imperfect nesting can't hurt anything."""
     if not raw:
         return ""
-    raw, clipped = _clip(raw)           # before the first regex — see _clip
-    s = _COMMENT_RE.sub(" ", raw)
-    s = _SCRIPT_RE.sub(" ", s)          # drop the CONTENT of script/style, not just the tags
+    raw, cut = _clip(raw)
+    s = _strip_comments(raw, cut)
+    s = _strip_blocks(s, cut)           # drop the CONTENT of script/style, not just the tags
     s = _BR_RE.sub("\n", s)
     s = _CELL_RE.sub(" ", s)            # table cells read as one line, not one line each
     s = _BLOCK_RE.sub("\n", s)
-    s = _TAG_RE.sub("", s)
-    return _mark(_collapse(html.unescape(s)), clipped)
+    s = _strip_tags(s, cut)
+    return _mark(_collapse(html.unescape(s)), cut)
+
+
+def _strip_comments(s: str, cut: bool = False) -> str:
+    """`re.sub(r"(?s)<!--.*?-->", " ", s)` in one pass. An unclosed `<!--` is left as the regex
+    leaves it, unless `cut` says _clip shortened the body: then the cut is what left it open, its
+    `-->` is past the cut, and the rest is comment, not text."""
+    out, pos = [], 0
+    while True:
+        start = s.find("<!--", pos)
+        if start < 0:
+            break
+        end = s.find("-->", start + 4)
+        if end < 0:                     # and no later "<!--" can close either
+            if cut:
+                out.append(s[pos:start])
+                pos = len(s)
+            break
+        out.append(s[pos:start])
+        out.append(" ")
+        pos = end + 3
+    out.append(s[pos:])
+    return "".join(out)
+
+
+def _strip_tags(s: str, cut: bool = False) -> str:
+    """`re.sub(r"(?s)<[^>]*>", "", s)` in one pass; `cut` as in _strip_comments."""
+    out, pos = [], 0
+    while True:
+        start = s.find("<", pos)
+        if start < 0:
+            break
+        end = s.find(">", start + 1)
+        if end < 0:                     # and no later "<" can close either
+            if cut:
+                out.append(s[pos:start])
+                pos = len(s)
+            break
+        out.append(s[pos:start])
+        pos = end + 1
+    out.append(s[pos:])
+    return "".join(out)
+
+
+def _strip_blocks(s: str, cut: bool = False) -> str:
+    r"""`re.sub(r"(?is)<(script|style)\b[^>]*>.*?</\1\s*>", " ", s)` in one pass: a script or
+    style block goes content and all. `cut` as in _strip_comments — a block the cut left open
+    goes to the end, so its CSS or JS is never read as body text. The regex repeats a failed
+    lookup, to the end of the body, for every later opener; here each result is kept."""
+    out, pos = [], 0
+    gt = -1                             # the last ">" found: the first after any opener before it
+    no_close_from = {True: -1, False: -1}   # per name: no closer at or after this index
+    for m in _OPEN_BLOCK_RE.finditer(s):
+        start = m.start()
+        if start < pos:
+            continue                    # inside a block already dropped
+        if gt < m.end():
+            gt = s.find(">", m.end())
+            if gt < 0:                  # an opener never closed: no later one can close either
+                if cut:
+                    out.append(s[pos:start])
+                    pos = len(s)
+                break
+        is_script = m.group(1) is not None
+        close = None
+        if not 0 <= no_close_from[is_script] <= gt + 1:
+            close = (_CLOSE_SCRIPT_RE if is_script else _CLOSE_STYLE_RE).search(s, gt + 1)
+            if close is None:
+                no_close_from[is_script] = gt + 1
+        if close is None:
+            if cut:
+                out.append(s[pos:start])
+                pos = len(s)
+                break
+            continue
+        out.append(s[pos:start])
+        out.append(" ")
+        pos = close.end()
+    out.append(s[pos:])
+    return "".join(out)
 
 
 _TRUNCATED = "\n\n[truncated]"
 
 
 def _clip(raw: str) -> Tuple[str, bool]:
-    """Bound a body BEFORE any regex pass reads it. The tag, comment and script passes are
-    quadratic on unclosed markup — every `<` with no `>` after it rescans to the end — and the
-    body is written by whoever emailed the bid inbox. Measured: 15,000 chars of `<!--` strip in
-    ~0.25s; 60,000 take ~6s; 150,000 take ~50s. `_TEXT_CAP` is the cap applied to the text later,
-    so nothing that reaches the AI or the intake notes could have come from past it anyway.
-    The flag says the body was cut, so the reader still gets the [truncated] marker."""
-    if len(raw) <= _TEXT_CAP:
+    """Bound a body before anything reads it: the body is written by whoever emailed the bid
+    inbox. The bound is on RAW characters, so it is `_RAW_CAP`, ten times `_TEXT_CAP` — the text
+    cap still applies, as it always did, to what is left after the markup is stripped. A raw cut
+    at the text cap would lose the readable text of any invite whose markup runs past it (a big
+    <style> head alone can), and bodies run tens of KB. The cut can land inside a comment, a
+    script/style block or a tag; the strip passes are told, and drop what the cut left open
+    rather than read its CSS or JS as body text. The flag also marks the result [truncated]."""
+    if len(raw) <= _RAW_CAP:
         return raw, False
-    return raw[:_TEXT_CAP], True
+    return raw[:_RAW_CAP], True
 
 
 def _mark(text: str, clipped: bool) -> str:
-    """The [truncated] marker for a body `_clip` cut, sized so `_cap` leaves it alone."""
+    """Cut to `_TEXT_CAP` and mark a body `_clip` cut, sized so `_cap` leaves it alone."""
     if not (clipped and text):
         return text
     return text[:_TEXT_CAP].rstrip() + _TRUNCATED
