@@ -731,6 +731,22 @@ def test_the_script_refuses_every_host_that_is_not_the_four(bad, tmp_path):
     assert r.fake_docker_called == "", "docker was invoked: %r" % r.fake_docker_called
 
 
+def test_the_scan_script_keeps_lf_line_endings():
+    """Git Bash's bash mis-parses a CRLF script -- a `\\` line continuation (the docker run
+    invocation here spans several) followed by \\r\\n stops being a continuation, and this is
+    exactly the class of bug the project has hit before (CLAUDE.md: "sed -i destroys CRLF"). This
+    box has core.autocrlf=true, which happily re-CRLFs a committed LF file on a fresh checkout
+    unless .gitattributes pins it, so the fix is the attribute, not just today's working copy.
+    Read the actual bytes on disk (not `git show`, which normalises) to prove the file itself, as
+    Git Bash will execute it, is clean."""
+    raw = ZAP_SCAN.read_bytes()
+    assert b"\r" not in raw, "deploy/zap-scan.sh has a CR byte -- Git Bash's bash will mis-parse it"
+    attrs = ROOT / ".gitattributes"
+    assert attrs.is_file(), "no .gitattributes: nothing stops a fresh Windows checkout from re-CRLFing this script"
+    assert re.search(r"^\*\.sh\s+text\s+eol=lf\s*$", attrs.read_text(encoding="utf-8"), re.M), (
+        "no '*.sh text eol=lf' rule in .gitattributes")
+
+
 def test_the_gitignore_keeps_the_local_report_out_of_the_repo():
     """deploy/zap-scan.sh writes the full HTML/JSON report under zap-reports/ at the repo root —
     the whole reason it exists is to hold what CI is not allowed to keep. Ask git itself whether a
