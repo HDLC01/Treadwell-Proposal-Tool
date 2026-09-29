@@ -543,8 +543,8 @@ const SCENARIOS = {
     data: payload({
       proposal: Object.assign(payload().proposal, { deposit_status: "submitted",
         contacts_status: "received", deposit_amount: 5690.75 }),
-      deposits: [{ method: "ach", account_name: "Cedar Ridge LLC", account_type: "checking",
-                   routing_number: "101000187", account_number: "12345678901",
+      deposits: [{ id: "dep-1", method: "ach", account_name: "Cedar Ridge LLC", account_type: "checking",
+                   routing_masked: "••••0187", masked_ref: "••••8901",
                    bank_name: "Commerce", submitted_at: "2026-08-12T02:14:00Z",
                    submitted_by: "ap@x.com", note: "Sent this morning" },
                  { method: "check", check_number: "4471", account_name: "Cedar Ridge LLC",
@@ -666,6 +666,12 @@ const NOTIFY = {
 // because the portal has no column for the mark — and `fails` lets one scenario prove that a refused
 // write does not leave the rep looking at a panel claiming it saved.
 const net = { requests: [], fails: false };
+// The reveal route's answer, controllable per test independently of the general `net.fails` --
+// a scenario proving the refused-reveal error message must not also break every OTHER request
+// the same drawer makes on the same paint (the estimator picker, the notify chips, ...).
+const revealStub = { fails: false };
+const isRevealPost = (p, init) =>
+  !!(init && init.method === "POST") && /^\/api\/portal\/deposit\/[^/]+\/reveal$/.test(p);
 // THE SENT VERSIONS, per project, as /api/draft/<id>/revisions serves them: newest first, which is
 // the order the real route returns and the order paintRevisions' "same price as the one before"
 // test depends on. Shaped after the bid this redesign was measured against: eight sends where the
@@ -722,6 +728,13 @@ const api = (p, init) => {
     return Promise.resolve(files.fails
       ? { ok: false, status: 404, json: () => Promise.resolve({ error: "gone" }) }
       : { ok: true, status: 200, blob: () => Promise.resolve({ size: 4, type: "image/png" }) });
+  }
+  if (isRevealPost(p, init)) {
+    return Promise.resolve(revealStub.fails
+      ? { ok: false, status: 502, json: () => Promise.resolve({ error: "portal unreachable" }) }
+      : { ok: true, status: 200,
+          json: () => Promise.resolve({ ok: true, routing_number: "101000187",
+                                        account_number: "12345678901", account_type: "checking" }) });
   }
   if (net.fails) {
     return Promise.resolve({ ok: false, status: 500,
@@ -829,6 +842,9 @@ const body = `"use strict";
   ${openDetailRealSrc}
   return {
     renderDetail, renderNotSent, renderPortalUnknown, focusSection,
+    // One card in isolation, for the masking-tolerance checks below (a legacy raw number, a row
+    // with nothing to reveal at all) that do not need a whole drawer paint to prove.
+    depositHtml: (x, i) => depositHtml(x, i),
     // The real entry point, under its lifted name: the ?sec= deep link and the per-project
     // ACTIVE_SEC reset live in it.
     openDetail: openDetailReal,
@@ -933,17 +949,32 @@ async function runScenario(name, s) {
   // Chips and the estimator select land on a microtask (both are fetches). Let them.
   await tick();
   await tick();
-  // The masked account number, revealed and re-masked through the real handler. Bank numbers are
-  // the one thing in this drawer that must not be in the markup until a human asks.
-  const reveal = (() => {
+  // The masked bank numbers, revealed and re-masked through the real handler and the reveal
+  // route it now depends on. Bank numbers are the one thing in this drawer that must not be in
+  // the markup until a human asks, and now that asking means a network call, the request itself
+  // is worth capturing too.
+  const reveal = await (async () => {
     const b = dom.queryAll(".dep-show")[0];
     if (!b) return null;
-    const cell = dom.els.get("#dep-acct-0") || dom.query("#dep-acct-0");
-    b.fire("click");
-    const shown = cell.textContent;
-    b.fire("click");
-    return { inMarkup: /12345678901/.test(html), shown, remasked: cell.textContent,
-             label: b.textContent, pressed: b.getAttribute("aria-pressed") };
+    const acctCell = dom.query("#dep-acct-0");
+    const rtgCell = dom.query("#dep-rtg-0");
+    // Not .textContent: this stub's markup parser only reads opening-tag attributes, never the
+    // text a real browser would show between the tags, so a freshly-seeded cell's .textContent is
+    // always "" until something assigns it. data-masked carries the same value the visible text
+    // does (depositHtml writes both from the one masked string) and is a faithful stand-in.
+    const maskedBefore = { acct: acctCell.dataset.masked, rtg: rtgCell.dataset.masked };
+    const before = net.requests.length;
+    await b.fire("click");                 // Show
+    await tick(); await tick();
+    const shown = { acct: acctCell.textContent, rtg: rtgCell.textContent };
+    const request = net.requests.slice(before).find((r) => /\/reveal$/.test(r.path)) || null;
+    await b.fire("click");                 // Hide -- no network call, just re-masks
+    // label/pressed read AFTER Hide, not after Show: what this proves is that the control
+    // actually goes back to its resting state, not just that Show turned it into "Hide" once.
+    const label = b.textContent, pressed = b.getAttribute("aria-pressed");
+    return { inMarkup: /12345678901/.test(html) || /101000187/.test(html),
+             maskedBefore, shown, label, pressed, request,
+             remasked: { acct: acctCell.textContent, rtg: rtgCell.textContent } };
   })();
   const tabs = {};
   for (const sec of Object.keys(page.secTabs())) tabs[sec] = tabState(sec);
@@ -1001,6 +1032,76 @@ async function runScenario(name, s) {
     } catch (e) {
       out.errors[name] = e.constructor.name + ": " + e.message + "\n" + (e.stack || "");
     }
+  }
+
+  // ── the bank numbers: masking tolerance, a real re-render, and a refused reveal ────────────
+  // The routine reveal/re-mask cycle is proven above as part of the "submitted" scenario. What is
+  // left: a legacy row and a numberless row render the way requirement 1 asks (isolated
+  // depositHtml calls, no full drawer needed), a Show press after a GENUINE repaint (not the
+  // identical-payload guard, which skips the repaint and leaves the same button in place) calls
+  // the reveal route again instead of replaying the first answer, and a refused call leaves the
+  // masked numbers exactly as they were and says so in words rather than doing nothing.
+  try {
+    out.depositMasking = {
+      // A row that still carries the FULL numbers (an older cached payload, from before the
+      // portal stopped selecting them). It must never reach the DOM unmasked, but it does still
+      // get a Show button, because the id is there to reveal against.
+      legacy: page.depositHtml({ id: "dep-legacy", method: "ach", account_name: "Old Co",
+                                  routing_number: "101000187", account_number: "12345678901" }, 9),
+      // Nothing to reveal at all -- no Show button, because there is nothing behind it.
+      none: page.depositHtml({ id: "dep-none", method: "ach", account_name: "No Numbers Co" }, 9),
+      // The current shape: masked fields only, straight through.
+      masked: page.depositHtml({ id: "dep-1", method: "ach", account_name: "Cedar Ridge LLC",
+                                  routing_masked: "••••0187", masked_ref: "••••8901" }, 9),
+    };
+
+    const s = SCENARIOS.submitted;
+    page.open(s.pid);
+    dom.paints = 0;
+    page.renderDetail(s.pid, s.data);
+
+    // A real repaint: a field the signature covers has to move, or depositHtml never runs again
+    // and the "same button" would prove nothing about a re-render.
+    const moved = JSON.parse(JSON.stringify(s.data));
+    moved.proposal.contacts_status = "received";
+    moved.proposal.project_name = String(moved.proposal.project_name || "") + " (renamed)";
+    page.renderDetail(s.pid, moved);
+
+    const before = net.requests.length;
+    const b = dom.queryAll(".dep-show")[0];
+    await b.fire("click");
+    await tick(); await tick();
+    const secondRequest = net.requests.slice(before).find((r) => /\/reveal$/.test(r.path)) || null;
+    const acctAfterRerenderShow = dom.query("#dep-acct-0").textContent;
+
+    // A THIRD, further-changed payload so the error case starts from its own fresh, masked card
+    // rather than the already-revealed one the check above just left behind.
+    const movedAgain = JSON.parse(JSON.stringify(s.data));
+    movedAgain.proposal.contacts_status = "pending";
+    movedAgain.proposal.project_name = String(movedAgain.proposal.project_name || "") + " (renamed again)";
+    page.renderDetail(s.pid, movedAgain);
+    const acctCell = dom.query("#dep-acct-0");
+    const rtgCell = dom.query("#dep-rtg-0");
+    const errCell = dom.query("#dep-err-0");
+    // Same reason as maskedBefore above: read the mask off data-masked, not .textContent.
+    const maskedBeforeError = { acct: acctCell.dataset.masked, rtg: rtgCell.dataset.masked };
+    const errHiddenBefore = errCell.classList.contains("hidden");
+    revealStub.fails = true;
+    const b3 = dom.queryAll(".dep-show")[0];
+    await b3.fire("click");
+    await tick(); await tick();
+    revealStub.fails = false;
+
+    out.depositReveal = {
+      secondRequest, acctAfterRerenderShow,
+      error: { maskedBeforeError, errHiddenBefore,
+               masked: { acct: acctCell.dataset.masked, rtg: rtgCell.dataset.masked },
+               errText: errCell.textContent, errHidden: errCell.classList.contains("hidden"),
+               label: b3.textContent, pressed: b3.getAttribute("aria-pressed"),
+               disabled: b3.disabled },
+    };
+  } catch (e) {
+    out.errors.depositReveal = e.constructor.name + ": " + e.message + "\n" + (e.stack || "");
   }
 
   // ── the not-sent panel ─────────────────────────────────────────────────────

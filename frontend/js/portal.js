@@ -2446,9 +2446,13 @@
 
   // ── deposit submissions ────────────────────────────────────────────────────
   // What the CUSTOMER sent us. Staff act on this, so it renders directly above
-  // the deposit buttons. Bank numbers appear here and nowhere else: the routing
-  // number in full (it's printed on every check), the account number masked
-  // until someone presses Show. Nothing here is ever logged.
+  // the deposit buttons. Both bank numbers are encrypted at rest now
+  // (bank_crypto.py, portal repo, 2026-09-29) -- the portal sends only
+  // routing_masked / masked_ref, never the full values, and this card renders
+  // exactly what it is given. The full numbers exist only behind Show, one
+  // deposit at a time, fetched fresh from POST /api/portal/deposit/{id}/reveal
+  // (see the click handler in renderDetail) and never stored anywhere once the
+  // drawer moves on. Nothing here is ever logged.
   const ACCT_TYPE_LABEL = { checking: "Checking", savings: "Savings" };
   const METHOD_LABEL = { ach: "ACH transfer", check: "Check mailed by the customer" };
   const METHOD_PHRASE = { ach: "ACH details", check: "a mailed check" };
@@ -2458,9 +2462,12 @@
     return s.length > 4 ? "••••" + s.slice(-4) : "••••";
   }
 
-  /** One submission card. `secrets` collects the full account numbers by index —
-   *  the markup ships masked, so the real value only enters the DOM on Show. */
-  function depositHtml(x, secrets) {
+  /** One submission card. Both bank numbers ship masked -- routing_masked / masked_ref from the
+   *  portal, or a raw legacy value masked right here for an older cached row -- and the full
+   *  value only ever enters the DOM through the Show button below, fetched one deposit at a
+   *  time. Nothing here stashes a real number anywhere for later: data-masked on each cell is
+   *  only ever the masked string, which is what Hide restores without asking the server again. */
+  function depositHtml(x, i) {
     const m = String(x.method || "").toLowerCase();
     const rows = [];
     // `v` is always escaped here; `o.after` is our own markup (the Show button).
@@ -2469,29 +2476,27 @@
       o = o || {};
       rows.push(`<div class="dep-f"><span class="dep-k">${esc(k)}</span>` +
         `<span class="dep-v${o.num ? " dep-num" : ""}"${o.id ? ` id="${o.id}"` : ""}` +
-        `${o.title ? ` title="${esc(o.title)}"` : ""}>${esc(v)}</span>${o.after || ""}</div>`);
+        `${o.title ? ` title="${esc(o.title)}"` : ""}${o.mask ? ` data-masked="${esc(v)}"` : ""}` +
+        `>${esc(v)}</span>${o.after || ""}</div>`);
     };
 
+    let canReveal = false;
     if (m === "ach") {
       add("Account name", x.account_name);
       add("Account type", ACCT_TYPE_LABEL[String(x.account_type || "").toLowerCase()] || x.account_type);
-      add("Routing no.", x.routing_number,
-          { num: true, title: "Routing numbers are printed on every check, so this one shows in full" });
-      if (x.account_number) {
-        const i = secrets.push(String(x.account_number)) - 1;
-        add("Account no.", mask4(x.account_number), {
-          num: true, id: "dep-acct-" + i,
-          title: "Hidden until you show it",
-          after: `<button type="button" class="dep-show" data-acct="${i}" aria-pressed="false"` +
-                 ` aria-label="Show the full account number">Show</button>`,
-        });
-      } else if (x.masked_ref) {
-        // account_number arrived in a later migration, so a pre-ACH-V1 row has
-        // only the last four. Show it HERE rather than in the trail below —
-        // rendering both put a stray "••••1234" under the revealed number.
-        add("Account no.", x.masked_ref,
-            { num: true, title: "Only the last four were recorded for this submission" });
-      }
+      // routing_masked / masked_ref are what the portal actually sends now that both numbers
+      // are encrypted at rest -- list_deposits() on that side does not even select the full
+      // columns any more. A raw routing_number/account_number is tolerated only from an older
+      // cached payload, and masked right here so it never paints in full either.
+      const rtgMasked = x.routing_masked || (x.routing_number ? mask4(x.routing_number) : null);
+      const acctMasked = x.masked_ref || (x.account_number ? mask4(x.account_number) : null);
+      add("Routing no.", rtgMasked, { num: true, id: "dep-rtg-" + i, mask: true,
+                                      title: "Hidden until you show it" });
+      add("Account no.", acctMasked, { num: true, id: "dep-acct-" + i, mask: true,
+                                       title: "Hidden until you show it" });
+      // A Show control needs somewhere to ask: no deposit id, no reveal call, so a row that
+      // predates it -- or one with nothing masked to reveal -- gets no button at all.
+      canReveal = !!x.id && !!(rtgMasked || acctMasked);
     } else if (m === "check") {
       add("Check no.", x.check_number);
       add("Written by", x.account_name);
@@ -2519,6 +2524,13 @@
                                              : "Submission time not recorded"}</span>
       </div>
       ${rows.join("")}
+      ${canReveal ? `<div class="dep-f">
+        <span class="dep-k"></span>
+        <span class="dep-v"><button type="button" class="dep-show" data-dep="${esc(x.id)}"
+          data-i="${i}" aria-pressed="false"
+          aria-label="Show the full account and routing numbers">Show</button>
+          <span class="note hidden" id="dep-err-${i}"></span></span>
+      </div>` : ""}
       ${trail ? `<div class="dep-s">${trail}</div>` : ""}
       ${sentTo ? `<div class="dep-s">sent to: ${sentTo}</div>` : ""}
     </div>`;
@@ -4175,9 +4187,9 @@
     // halves of applySecPanel's condition disagreeing is how this drawer ships an empty tab.
     const delHtml = deleteProjectHtml(p);
 
-    // Full account numbers stay in this array, NOT in the markup — see depositHtml.
-    const acctFull = [];
-    const deposits = (data.deposits || []).map((x) => depositHtml(x, acctFull)).join("");
+    // Bank numbers ship masked; depositHtml renders exactly what the portal sends, and the full
+    // values only ever reach the DOM through the Show click handler below, one deposit at a time.
+    const deposits = (data.deposits || []).map((x, i) => depositHtml(x, i)).join("");
 
     const depAmt = p.deposit_amount != null ? p.deposit_amount : (a ? a.total * 0.25 : null);
 
@@ -4495,18 +4507,47 @@
       () => window.location.assign("/info-sheet.html?d=" + encodeURIComponent(pid)));
     wireDeleteProject(pid, p);
 
-    // Reveal / re-hide a full account number. The value lives in `acctFull`, so it
-    // only reaches the DOM when a human asks for it — and goes back on a second click.
-    d.querySelectorAll(".dep-show").forEach((b) => b.addEventListener("click", () => {
-      const i = Number(b.dataset.acct);
-      const el = d.querySelector("#dep-acct-" + i);
-      if (!el || acctFull[i] == null) return;
-      const shown = b.getAttribute("aria-pressed") === "true";
-      el.textContent = shown ? mask4(acctFull[i]) : acctFull[i];
-      el.title = shown ? "Hidden until you show it" : "Full account number";
-      b.setAttribute("aria-pressed", shown ? "false" : "true");
-      b.setAttribute("aria-label", (shown ? "Show" : "Hide") + " the full account number");
-      b.textContent = shown ? "Show" : "Hide";
+    // Reveal a deposit's bank numbers. Nothing here is cached beyond the open drawer: every
+    // press calls POST /api/portal/deposit/{id}/reveal fresh (bank_crypto.py, portal repo,
+    // 2026-09-29), and depositHtml rebuilds this card from data.deposits on every paint, so a
+    // re-render starts over with nothing revealed -- a Show press after one always asks the
+    // server again rather than replaying an earlier answer.
+    d.querySelectorAll(".dep-show").forEach((b) => b.addEventListener("click", async () => {
+      const i = b.dataset.i;
+      const depId = b.dataset.dep;
+      const acctEl = d.querySelector("#dep-acct-" + i);
+      const rtgEl = d.querySelector("#dep-rtg-" + i);
+      const errEl = d.querySelector("#dep-err-" + i);
+      if (errEl) errEl.classList.add("hidden");
+      if (b.getAttribute("aria-pressed") === "true") {
+        // Hide: back to the masked values this card was built with -- never re-fetched.
+        if (acctEl) acctEl.textContent = acctEl.dataset.masked || acctEl.textContent;
+        if (rtgEl) rtgEl.textContent = rtgEl.dataset.masked || rtgEl.textContent;
+        b.setAttribute("aria-pressed", "false");
+        b.setAttribute("aria-label", "Show the full account and routing numbers");
+        b.textContent = "Show";
+        return;
+      }
+      b.disabled = true; b.textContent = "Working…";
+      try {
+        const r = await api("/api/portal/deposit/" + encodeURIComponent(depId) + "/reveal",
+                            { method: "POST" });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + r.status));
+        if (acctEl && j.account_number != null) acctEl.textContent = j.account_number;
+        if (rtgEl && j.routing_number != null) rtgEl.textContent = j.routing_number;
+        b.setAttribute("aria-pressed", "true");
+        b.setAttribute("aria-label", "Hide the full account and routing numbers");
+        b.textContent = "Hide";
+      } catch (err) {
+        b.textContent = "Show";
+        if (errEl) {
+          errEl.textContent = "Couldn't load the bank details. Try again.";
+          errEl.classList.remove("hidden");
+        }
+      } finally {
+        b.disabled = false;
+      }
     }));
 
     const act = async (path, btn, opts) => {
