@@ -7,8 +7,9 @@ scan harmless is pinned here rather than left to whoever edits the workflow next
   * the targets are exactly our four hosts, never the marketing site at the bare domain / www;
   * staging is scanned after a successful staging deploy, production after a successful main
     deploy, and a failed or foreign deploy triggers nothing;
-  * no job holds more than `contents: read`, the image is pinned by digest and every action by
-    commit SHA;
+  * no job holds more than `contents: read`, the image is pinned by digest, every action by
+    commit SHA and the one extra add-on by SHA-256, and ZAP never updates itself from its
+    marketplace, so the spider that enforces the rules below is the pinned image's own;
   * the spider never submits a form, runs two threads for one minute, and never requests the
     portal paths that write or send mail; there is no Ajax/browser spider and no active scan;
   * findings never fail the job;
@@ -114,20 +115,98 @@ def _code(text):
     return "\n".join(re.sub(r"(^|\s)#.*$", "", ln) for ln in text.splitlines())
 
 
-def test_no_file_names_any_other_host_of_ours():
+_URL = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://([^/\s'\"`?#)]*)")
+# A name shaped like a host (labels, dots, a letters-only last label) that is not part of a URL or a
+# path. File names and Actions contexts have the same shape, so they are told apart by their last
+# or first label. This is a heuristic (evil.sh is a real host and looks like a script); the hard
+# fence is that the container is handed exactly one variable, ZAP_TARGET, from the matrix.
+_HOSTLIKE = re.compile(r"(?<![\w@/.$-])((?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,63})(?![\w-])")
+_FILE_EXTENSIONS = {"yaml", "yml", "py", "tsv", "json", "html", "log", "sh", "zap", "txt", "xml", "js", "css", "md"}
+_CONTEXTS = {"github", "matrix", "runner", "steps", "inputs", "env", "job", "jobs", "strategy", "secrets",
+             "vars", "needs"}
+# ...unless it ends like a host: `jobs.example.org` is a host, `jobs.scan` is not
+_TLDS = {"com", "org", "net", "io", "dev", "app", "co", "us", "info", "biz", "cloud", "ai", "test", "example",
+         "local", "internal", "localhost"}
+
+
+def _is_hostlike(name):
+    first, last = name.split(".", 1)[0], name.rsplit(".", 1)[1].lower()
+    if last in _FILE_EXTENSIONS:
+        return False
+    return first not in _CONTEXTS or last in _TLDS
+
+
+def _host(netloc):
+    try:
+        return urlsplit("x://" + netloc).hostname or netloc
+    except ValueError:  # not a host at all ("[^/]+" and the like): report it as written
+        return netloc
+
+
+def _hosts_named(text):
+    """(hosts in URLs, bare host-shaped names) in the text."""
+    urls = {_host(h) for h in _URL.findall(text)}
+    bare = {h.lower() for h in _HOSTLIKE.findall(text) if _is_hostlike(h)}
+    return urls, bare
+
+
+def test_no_file_names_any_other_host():
     """The bare domain and www are the marketing WordPress site on other hosting: not ours to scan.
-    Every host in the workflow and the plan is checked, not only the matrix, so a target smuggled
-    in through an env var or a script is caught too."""
+    Every host the workflow and the plan name, in a URL or bare, is one of the four targets, not
+    only the matrix's, so a target smuggled in through an env var or a script is caught too. The
+    two exceptions are not scan targets and are pinned exactly: the image registry (in ZAP_IMAGE)
+    and the one add-on download (ZAP_BETA_RULES_URL, fetched by curl, never given to ZAP)."""
     allowed = {urlsplit(u).hostname for u in FOUR}
+    beta_url = _workflow()["env"]["ZAP_BETA_RULES_URL"]
     for path in (WORKFLOW, PLAN):
-        hosts = set(re.findall(r"[A-Za-z0-9.-]*wetreadwell\.com", _code(path.read_text(encoding="utf-8"))))
-        assert hosts <= allowed, "%s names %s" % (path.name, sorted(hosts - allowed))
-        assert not hosts & {"wetreadwell.com", "www.wetreadwell.com"}
+        code = _code(path.read_text(encoding="utf-8"))
+        if path == WORKFLOW:
+            assert code.count(beta_url) == 1, "the add-on URL is written once, in env, and nowhere else"
+            code = code.replace(beta_url, "")
+        urls, bare = _hosts_named(code)
+        assert urls <= allowed, "%s names %s" % (path.name, sorted(urls - allowed))
+        assert bare <= allowed | ({"ghcr.io"} if path == WORKFLOW else set()), (
+            "%s names %s" % (path.name, sorted(bare - allowed)))
+        assert not (urls | bare) & {"wetreadwell.com", "www.wetreadwell.com"}
+
+
+def test_the_host_check_sees_what_it_is_for():
+    """The check above against the ways a host could be slipped in, and against the workflow's own
+    file names and expressions, which it must not mistake for hosts."""
+    for sneaky in ('-e ZAP_TARGET=https://example.org', "TARGET=http://10.0.0.5:8080/x",
+                   "ZAP_TARGET=example.org", "MKT: www.wetreadwell.com", "url: ws://evil.test/",
+                   "OTHER: jobs.example.org"):
+        urls, bare = _hosts_named(sneaky)
+        assert (urls | bare) - {urlsplit(u).hostname for u in FOUR}, sneaky
+    urls, bare = _hosts_named('cp .zap/baseline.yaml "$wrk/baseline.yaml"; zap.sh -cmd; python3 .zap/summarize.py '
+                              '${{ matrix.target }} ${{ github.event.workflow_run.head_branch }} '
+                              "'https?://[^/]+/p/.*' ${{ steps.scan.outputs.exit_code }} ${{ runner.temp }} "
+                              "baseline.yaml summarize.py rules.tsv report.json report.html zap.log "
+                              "pscanrulesBeta-beta-50.zap ${{ inputs.environment }} ${{ github.repository }}")
+    assert not urls and not bare, (urls, bare)
+
+
+def _commands(script, start):
+    """Every command in the script that starts with the regex `start`, with its `\\`-continued
+    lines joined, so a flag on the third line of a command is still seen as part of it."""
+    joined = re.sub(r"\\\n", " ", script)
+    return [m.group(0) for m in re.finditer(r"%s[^\n]*" % start, joined)]
+
+
+# ZAP's command-line add-on options (-addonupdate, -addoninstall, -addoninstallall, ...), as a flag,
+# not as part of a word like `zap-addons`.
+_ADDON_FLAG = re.compile(r"(?<![\w-])-addon")
+
+
+def _docker_run(job):
+    (run,) = _commands(_scan_script(job), r"docker run\b")
+    return run
 
 
 def test_the_plan_scans_only_the_target_it_is_given():
     """The plan hard-codes no host: the context and the spider both take ${ZAP_TARGET}, and the one
-    place that sets it is the scan step, from the matrix."""
+    place that sets it is the scan step, from the matrix. It is set exactly once: docker keeps the
+    LAST of two `-e ZAP_TARGET=`, so a second one would quietly scan somewhere else."""
     plan = _plan()
     (ctx,) = plan["env"]["contexts"]
     assert ctx["urls"] == ["${ZAP_TARGET}"]
@@ -135,7 +214,12 @@ def test_the_plan_scans_only_the_target_it_is_given():
     assert spider["parameters"]["url"] == "${ZAP_TARGET}"
     for job in _jobs().values():
         assert _step(job, "Scan")["env"]["TARGET"] == "${{ matrix.target }}"
-        assert '-e ZAP_TARGET="$TARGET"' in _scan_script(job)
+        script = _scan_script(job)
+        assert '-e ZAP_TARGET="$TARGET"' in script
+        assert script.count("ZAP_TARGET") == 1, "ZAP_TARGET is set more than once in the scan step"
+        run = _docker_run(job)
+        assert re.findall(r"\s(?:-e|--env|--env-file)(?=[\s=])", run) == [" -e"], (
+            "the container gets one environment variable, ZAP_TARGET: %s" % run)
 
 
 # ── when it runs ─────────────────────────────────────────────────────────────
@@ -275,7 +359,8 @@ def test_a_cancelled_run_starts_no_production_scan():
 
 
 def test_production_waits_for_staging():
-    """One scan at a time on a 1-core VPS that hosts a dozen sites."""
+    """Within one run, one app at a time on a 1-core VPS that hosts a dozen sites. (Separate runs
+    are kept apart per app only; see test_scans_of_one_app_never_overlap.)"""
     jobs = _jobs()
     assert jobs["production"]["needs"] in ("staging", ["staging"])
     for job in jobs.values():
@@ -339,10 +424,48 @@ def test_the_image_is_pinned_by_digest():
     assert re.search(r"#\s*stable \(\d+\.\d+\.\d+\)", line), "the tag belongs in a comment beside the digest"
     for job in _jobs().values():
         script = _scan_script(job)
-        runs = re.findall(r"docker (?:run|pull)\b[^\n]*(?:\\\n[^\n]*)*", script)
+        runs = _commands(script, r"docker (?:run|pull)\b")
         assert len(runs) == 2, runs
         for r in runs:
             assert '"$ZAP_IMAGE"' in r, "a docker command uses an image other than the pinned one: %s" % r
+
+
+def test_zap_runs_only_code_that_is_pinned():
+    """`-addonupdate` updates EVERY installed add-on from ZAP's marketplace, the spider and the
+    automation framework included, and those are what enforce no forms, two threads and the
+    exclusions. So ZAP is never told to update or install anything: every add-on is the pinned
+    image's, plus one release of the beta passive rules, downloaded by the runner and checked
+    against its SHA-256 before ZAP starts. A download that fails or does not match stops the step."""
+    env = _workflow()["env"]
+    url, sha = env["ZAP_BETA_RULES_URL"], env["ZAP_BETA_RULES_SHA256"]
+    m = re.fullmatch(r"https://github\.com/zaproxy/zap-extensions/releases/download/"
+                     r"pscanrulesBeta-v(\d+)/pscanrulesBeta-beta-(\d+)\.zap", url)
+    assert m and m.group(1) == m.group(2), url
+    assert re.fullmatch(r"[0-9a-f]{64}", sha), sha
+    for job in _jobs().values():
+        script = _scan_script(job)
+        assert not _ADDON_FLAG.search(script), "ZAP must not update or install add-ons from its marketplace"
+        assert script.lstrip().startswith("set -euo pipefail\n")
+        lines = script.splitlines()
+
+        def only(pattern):
+            hits = [i for i, ln in enumerate(lines) if re.search(pattern, ln)]
+            assert len(hits) == 1, (pattern, hits)
+            return hits[0]
+
+        get = only(r'^\s*curl -fsSL --retry 3 -o "\$beta" "\$ZAP_BETA_RULES_URL"$')
+        # the whole line, so nothing like `|| true` can be tacked on to let a bad file through
+        check = only(r'^\s*echo "\$ZAP_BETA_RULES_SHA256  \$beta" \| sha256sum --check --quiet -$')
+        start = only(r"\bdocker run\b")
+        mount = only(r'^\s*-v "\$beta:/zap/plugin/\$\{beta##\*/\}:ro" "\$ZAP_IMAGE" \\$')
+        assert get < check < start < mount, (get, check, start, mount)
+        assert all(ln.rstrip().endswith("\\") for ln in lines[start:mount]), "the mount is part of docker run"
+        assert len(re.findall(r"\b(?:curl|wget)\b", script)) == 1, "one download, the pinned add-on"
+    for job in _jobs().values():
+        for s in job["steps"]:
+            if s.get("id") != "scan":
+                run = s.get("run") or ""
+                assert not re.search(r"\b(?:curl|wget)\b", run) and not _ADDON_FLAG.search(run), s.get("name")
 
 
 def test_every_action_is_pinned_to_a_commit():
@@ -373,7 +496,9 @@ def test_the_spider_never_submits_a_form_and_stays_small():
     p = spider["parameters"]
     assert p["processForm"] is False
     assert p["postForm"] is False
-    assert p["threadCount"] <= 2
+    # At least one thread, not only at most two: with threadCount 0 the spider fetched the start
+    # page and nothing else, and ZAP still exited 0 with a normal-looking summary.
+    assert type(p["threadCount"]) is int and 1 <= p["threadCount"] <= 2, p["threadCount"]
     assert p["maxDuration"] == 1
     (wait,) = [j for j in _plan()["jobs"] if j["type"] == "passiveScan-wait"]
     assert 0 < wait["parameters"]["maxDuration"] <= 5
@@ -510,9 +635,12 @@ def test_the_two_environments_run_identical_steps():
 
 
 def test_scans_of_one_app_never_overlap():
+    """One group per APP, the same in every run: a group that also named the run
+    (`zap-${{ matrix.name }}-${{ github.run_id }}`) would let two runs scan one app at once.
+    Different apps may overlap across runs; the workflow's header says so."""
     for job in _jobs().values():
         c = job["concurrency"]
-        assert "${{ matrix.name }}" in c["group"]
+        assert c["group"] == "zap-${{ matrix.name }}", c["group"]
         assert c["cancel-in-progress"] is False
         names = [m["name"] for m in job["strategy"]["matrix"]["include"]]
         assert len(set(names)) == len(names)
@@ -539,6 +667,12 @@ def test_the_summary_step_prints_only_what_summarize_py_prints():
             run = s.get("run") or ""
             assert "report.json" not in run.replace('"$RUNNER_TEMP/zap/report.json"', ""), s.get("name")
             assert "cat " not in run and "jq " not in run, s.get("name")
+            # ZAP's log and the HTML report are never read by a step, so nothing can tail, grep or
+            # print them into the public log: the log is only ever the scan's redirect target.
+            code = _code(run)
+            assert "report.html" not in code, s.get("name")
+            assert code.count("zap.log") == (1 if s.get("id") == "scan" else 0), s.get("name")
+        assert '> "$wrk/zap.log" 2>&1' in _scan_script(job)
 
 
 CANARIES = {

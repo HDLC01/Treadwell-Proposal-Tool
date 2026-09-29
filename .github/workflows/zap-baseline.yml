@@ -24,8 +24,21 @@ name: ZAP baseline
 # scan: a one-minute spider with two threads that never fills in or submits a form, ZAP's passive
 # rules (it reads responses, it attacks nothing), no Ajax or browser spider, no active scan, and
 # two portal paths that are never requested at all. Why that file is not zap-baseline.py's -z
-# options: those were measured and do not work (see its header). Staging finishes before
-# production starts and each job scans its two apps one at a time, so the VPS sees one scan at once.
+# options: those were measured and do not work (see its header).
+#
+# ONE SCAN PER APP, NEVER TWO. Each app has its own concurrency group, so two scans of the same app
+# never overlap. Within one run the apps go one at a time: staging's two, then production's two.
+# Two RUNS can overlap, though (a staging-deploy scan still going when a main deploy finishes, or
+# the Sunday scan plus a manual one), and then two different apps on the VPS are scanned at once:
+# at worst all four, each a 2-thread spider. A single VPS-wide group would stop that, but GitHub
+# keeps one pending run per group and drops the older, so a queued post-deploy scan could vanish.
+#
+# EVERYTHING ZAP RUNS IS PINNED. The image is pinned by digest, and ZAP is never told to update or
+# install from its marketplace, so the spider and the automation framework that enforce the
+# settings above are the image's own (spider 0.20.0, automation 0.60.0 in 2.17.0). The one add-on
+# added is the beta passive rules zap-baseline.py installs and the image lacks: one release,
+# downloaded by the runner, checked against its SHA-256 and mounted read-only. Bump all three pins
+# (ZAP_IMAGE and the two ZAP_BETA_RULES_*) together, from ZAP's ZapVersions-<version>.xml.
 #
 # REPORT ONLY. Findings never fail this workflow; a scan that could not run does.
 #
@@ -60,6 +73,10 @@ permissions:
 env:
   # stable = ZAP 2.17.0, resolved 2026-09-29. Bump the digest and this comment together.
   ZAP_IMAGE: ghcr.io/zaproxy/zaproxy@sha256:781a2bdaea47324e7bab583e2263f21d257b0aee61ed51521a5be45f5f5081ef # stable (2.17.0)
+  # pscanrulesBeta 50 (2026-04-14; needs ZAP >= 2.17.0 and commonlib >= 1.40, the image has 1.43.0).
+  # The SHA-256 below matches ZapVersions-2.17.xml and the GitHub release asset (checked 2026-09-29).
+  ZAP_BETA_RULES_URL: https://github.com/zaproxy/zap-extensions/releases/download/pscanrulesBeta-v50/pscanrulesBeta-beta-50.zap
+  ZAP_BETA_RULES_SHA256: a979f7cd5d8be10e0338b417e006ec1e2f6ec79101010d570ddb5199892e921b
 
 jobs:
   staging:
@@ -108,13 +125,18 @@ jobs:
           cp .zap/baseline.yaml "$wrk/baseline.yaml"
           chmod 0777 "$wrk"            # the image runs as uid 1000 (zap), the runner as 1001
           docker pull --quiet "$ZAP_IMAGE" > /dev/null
-          # All of ZAP's output goes to zap.log (artifact only), never to this public log. The
-          # add-on update is what zap-baseline.py does first: it brings in the beta passive rules
-          # (Subresource Integrity, 90003, is one), so the rules are newer than the pinned engine.
+          # The beta passive rules, one pinned release: a download that fails or does not match
+          # its SHA-256 stops this step (set -e) before ZAP starts. Nothing else is fetched.
+          beta="$RUNNER_TEMP/zap-addons/${ZAP_BETA_RULES_URL##*/}"
+          mkdir -p "${beta%/*}"
+          curl -fsSL --retry 3 -o "$beta" "$ZAP_BETA_RULES_URL"
+          echo "$ZAP_BETA_RULES_SHA256  $beta" | sha256sum --check --quiet -
+          # All of ZAP's output goes to zap.log (artifact only), never to this public log.
           rc=0
           timeout --kill-after=30s 15m \
-            docker run --rm -e ZAP_TARGET="$TARGET" -v "$wrk:/zap/wrk:rw" "$ZAP_IMAGE" \
-            sh -c 'zap.sh -cmd -addonupdate -addoninstall pscanrulesBeta || echo "add-on update failed; scanning with the bundled rules"; exec zap.sh -cmd -autorun /zap/wrk/baseline.yaml' \
+            docker run --rm -e ZAP_TARGET="$TARGET" -v "$wrk:/zap/wrk:rw" \
+              -v "$beta:/zap/plugin/${beta##*/}:ro" "$ZAP_IMAGE" \
+              zap.sh -cmd -autorun /zap/wrk/baseline.yaml \
             > "$wrk/zap.log" 2>&1 || rc=$?
           echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
           echo "ZAP finished with exit code $rc."
@@ -140,8 +162,8 @@ jobs:
 
   production:
     name: production / ${{ matrix.name }}
-    # after staging, so the VPS never serves two scans at once. `!cancelled()` because a skipped
-    # or failed staging job must not stop a production scan that was asked for.
+    # after staging, so one run scans one app at a time. `!cancelled()` because a skipped or
+    # failed staging job must not stop a production scan that was asked for.
     needs: staging
     if: >-
       !cancelled() && (
@@ -189,13 +211,18 @@ jobs:
           cp .zap/baseline.yaml "$wrk/baseline.yaml"
           chmod 0777 "$wrk"            # the image runs as uid 1000 (zap), the runner as 1001
           docker pull --quiet "$ZAP_IMAGE" > /dev/null
-          # All of ZAP's output goes to zap.log (artifact only), never to this public log. The
-          # add-on update is what zap-baseline.py does first: it brings in the beta passive rules
-          # (Subresource Integrity, 90003, is one), so the rules are newer than the pinned engine.
+          # The beta passive rules, one pinned release: a download that fails or does not match
+          # its SHA-256 stops this step (set -e) before ZAP starts. Nothing else is fetched.
+          beta="$RUNNER_TEMP/zap-addons/${ZAP_BETA_RULES_URL##*/}"
+          mkdir -p "${beta%/*}"
+          curl -fsSL --retry 3 -o "$beta" "$ZAP_BETA_RULES_URL"
+          echo "$ZAP_BETA_RULES_SHA256  $beta" | sha256sum --check --quiet -
+          # All of ZAP's output goes to zap.log (artifact only), never to this public log.
           rc=0
           timeout --kill-after=30s 15m \
-            docker run --rm -e ZAP_TARGET="$TARGET" -v "$wrk:/zap/wrk:rw" "$ZAP_IMAGE" \
-            sh -c 'zap.sh -cmd -addonupdate -addoninstall pscanrulesBeta || echo "add-on update failed; scanning with the bundled rules"; exec zap.sh -cmd -autorun /zap/wrk/baseline.yaml' \
+            docker run --rm -e ZAP_TARGET="$TARGET" -v "$wrk:/zap/wrk:rw" \
+              -v "$beta:/zap/plugin/${beta##*/}:ro" "$ZAP_IMAGE" \
+              zap.sh -cmd -autorun /zap/wrk/baseline.yaml \
             > "$wrk/zap.log" 2>&1 || rc=$?
           echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
           echo "ZAP finished with exit code $rc."
