@@ -466,8 +466,15 @@ const TEXTURE_OPTIONS = ["Smooth", "Orange Peel", "Light", "Medium", "Heavy"];
   sel.id = "tex-name"; sel.className = "tex";
   const opts = TEXTURE_OPTIONS.slice();
   if (cur && !opts.includes(cur)) opts.unshift(cur);   // don't lose an off-list value
-  sel.innerHTML = '<option value="">—</option>' +
-    opts.map(o => `<option value="${o.replace(/"/g, "&quot;")}">${o}</option>`).join("");
+  // Built as elements, never as markup: an off-list value is whatever the AI autofill or a saved
+  // draft left in state.texture, and as markup it could open a tag. As an option it is just words.
+  const addOption = (value, label) => {
+    const op = document.createElement("option");
+    op.value = value; op.textContent = label;
+    sel.appendChild(op);
+  };
+  addOption("", "—");
+  opts.forEach(o => addOption(o, o));
   sel.value = cur;
   texInput.replaceWith(sel);
   texInput = sel;
@@ -866,8 +873,8 @@ function ensureOpt(id) {
 function persistBidOptions() {
   TW.setState({ ...state, base_tab_id: state.base_tab_id, tab_opts: state.tab_opts });
 }
-const _escBB = (s) => String(s).replace(/[&<>"]/g,
-  c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const _escBB = (s) => String(s).replace(/[&<>"']/g,
+  c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const _moneyBB = (n) => "$" + Number(n || 0).toLocaleString(undefined, { maximumFractionDigits: 0 });
 
 // Render the per-sheet Base-bid toggles + option chips into #bid-bar. Every priced
@@ -4631,7 +4638,8 @@ document.getElementById("autofill-btn").addEventListener("click", async (e) => {
             try { HF.setCellValue(sheet, addr, v); }
             catch (e) { console.warn("HF.setCellValue failed for", k, v, e); }
           }
-          if (FLAG_LABELS[k]) filledFlags.push(`${FLAG_LABELS[k]}: <b>${v}</b>`);
+          // The value is the AI's answer, so it is escaped before it joins the banner's markup.
+          if (FLAG_LABELS[k]) filledFlags.push(`${escHtml(FLAG_LABELS[k])}: <b>${escHtml(v)}</b>`);
           n++;
         } else if (narrativeKeys.includes(k)) {
           carriedNarrative[k] = v;
@@ -4661,8 +4669,8 @@ document.getElementById("autofill-btn").addEventListener("click", async (e) => {
       const html =
         `<div style="font-weight:700;color:#0f5132;margin-bottom:4px;">${icon("check", 13)} Autofilled ${n} value${n===1?"":"s"}</div>` +
         `<div style="margin:4px 0;"><b>Flags:</b><br>${filledFlags.join("<br>")}</div>` +
-        (narrFilled.length ? `<div style="margin:4px 0;"><b>Proposal text:</b><br>${narrFilled.join(", ")}</div>` : "") +
-        (missingFlags.length ? `<div style="margin-top:6px;color:#a16207;"><b>AI skipped:</b> ${missingFlags.join(", ")}<br><span style="font-size:11px;">(re-click Autofill to retry, or edit manually)</span></div>` : "");
+        (narrFilled.length ? `<div style="margin:4px 0;"><b>Proposal text:</b><br>${narrFilled.map(escHtml).join(", ")}</div>` : "") +
+        (missingFlags.length ? `<div style="margin-top:6px;color:#a16207;"><b>AI skipped:</b> ${missingFlags.map(escHtml).join(", ")}<br><span style="font-size:11px;">(re-click Autofill to retry, or edit manually)</span></div>` : "");
       showAutofillBanner(html, "success");
       btn.innerHTML = icon("check", 13) + ` Filled ${n}`;
       if (activeSheet) {
@@ -5024,8 +5032,8 @@ function renderPriceLines() {
     const row = document.createElement("div");
     row.style.cssText = "display:grid;grid-template-columns:1fr 120px 28px;gap:6px;align-items:center;margin-bottom:4px;";
     row.innerHTML =
-      `<input type="text" data-k="label" placeholder="e.g. Onsite mockup" value="${(p.label || "").replace(/"/g, "&quot;")}" style="font-size:12.5px;padding:3px 6px;">
-       <input type="number" data-k="amount" placeholder="0" value="${p.amount ?? ""}" style="font-size:12.5px;padding:3px 6px;text-align:right;">
+      `<input type="text" data-k="label" placeholder="e.g. Onsite mockup" value="${escHtml(p.label || "")}" style="font-size:12.5px;padding:3px 6px;">
+       <input type="number" data-k="amount" placeholder="0" value="${escHtml(p.amount ?? "")}" style="font-size:12.5px;padding:3px 6px;text-align:right;">
        <button type="button" data-act="rm" title="Remove" style="cursor:pointer;border:none;background:none;color:var(--treadwell-red,#c0392b);font-size:15px;">×</button>`;
     row.querySelectorAll("input").forEach(inp => inp.addEventListener("input", () => {
       PRICE_LINES[i][inp.dataset.k] = inp.value; persistPriceLines();

@@ -1,9 +1,13 @@
 name: CodeQL
 
-# Static analysis (SAST) for the Python code. Runs on every PR plus pushes to
-# main/staging (both PR-protected, so every change is scanned before it merges),
-# plus a weekly scheduled scan to catch newly-published query patterns. Not run
-# on arbitrary branch pushes — avoids duplicate runs on PR branches.
+# Static analysis (SAST) for the Python backend AND the JavaScript frontend. Runs on
+# every PR plus pushes to main/staging (both PR-protected, so every change is scanned
+# before it merges), plus a weekly scheduled scan to catch newly-published query
+# patterns. Not run on arbitrary branch pushes — avoids duplicate runs on PR branches.
+#
+# JavaScript since 2026-09-29: the frontend is plain JS that builds HTML strings for
+# `innerHTML`, which is exactly the class of bug (DOM XSS) the 2026-09-28 security review
+# found and that a Python-only scan could never see.
 on:
   push:
     branches: [main, staging]
@@ -13,24 +17,33 @@ on:
 
 jobs:
   analyze:
-    name: Analyze (python)
+    # One job per language. The python leg keeps the check name "Analyze (python)" and the
+    # category "/language:python" it has always had, so nothing keyed on either changes.
+    name: Analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
     permissions:
       security-events: write
       contents: read
       actions: read
+    strategy:
+      fail-fast: false             # a failure in one language must not cancel the other's scan
+      matrix:
+        include:
+          - language: python
+          - language: javascript-typescript
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v4.37.4
+        uses: github/codeql-action/init@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4.37.4
         with:
-          languages: python
+          languages: ${{ matrix.language }}
+          # Both are interpreted and the frontend has no build step: extract the source as is.
+          build-mode: none
           # 'security-extended' adds more queries than the default set
           queries: security-extended
 
-      # Python is interpreted — no build step needed; analyze directly.
       - name: Perform CodeQL analysis
-        uses: github/codeql-action/analyze@v4.37.4
+        uses: github/codeql-action/analyze@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4.37.4
         with:
-          category: "/language:python"
+          category: "/language:${{ matrix.language }}"

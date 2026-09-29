@@ -2885,7 +2885,7 @@ def api_run_digest(request: Request) -> Dict[str, Any]:
         raise
     except Exception as exc:  # noqa: BLE001 — report it, don't 500 the page
         log.warning("Manual digest run failed: %s", exc)
-        raise HTTPException(502, f"Digest failed: {exc}") from exc
+        raise HTTPException(502, "Digest failed. The server log has the reason.") from exc
 
 
 @app.get("/api/admin/digest/preview")
@@ -3046,6 +3046,47 @@ async def api_portal_notify_overrides_set(pid: str, request: Request) -> Dict[st
                    {"email": email, "mode": mode})
 
 
+# ── Throttle on the three service-token routes ────────────────────────
+# proposal-pdf, deposit-invoice and signed-contract skip the Google gate (_AUTH_PUBLIC_PATHS),
+# so anyone who can reach the host can call them as fast as they like — guessing SERVICE_TOKEN,
+# or queueing work on a single worker. A sliding window per PEER ADDRESS: request.client.host is
+# the socket's own peer, which no header can forge. The portal calls us over the Docker network
+# (PROPOSAL_TOOL_URL is the container hostname), so it has a key of its own; everything that
+# comes through nginx shares nginx's key, and nothing legitimate comes that way.
+# The portal's heaviest real use is one customer approving — proposal-pdf, signed-contract and
+# deposit-invoice, three calls — and it caches the proposal PDF. Each call is a LibreOffice render
+# of 1-3 s on one worker, so a few dozen a minute is the most it can ever be served. 120 a minute
+# is well past that; every call counts, a good token or a bad one.
+_SERVICE_RATE_MAX = 120
+_SERVICE_RATE_WINDOW = 60.0            # seconds
+_SERVICE_RATE_KEYS_MAX = 1024          # a bound on the table itself; stale keys are dropped first
+_SERVICE_HITS: Dict[str, List[float]] = {}
+_SERVICE_HITS_LOCK = threading.Lock()
+
+
+def _service_rate_check(request: Request) -> None:
+    """Record this call; raise 429 (with Retry-After) when its peer is over the window."""
+    key = (request.client.host if request.client else "") or "unknown"
+    now = time.monotonic()
+    with _SERVICE_HITS_LOCK:
+        if key not in _SERVICE_HITS and len(_SERVICE_HITS) >= _SERVICE_RATE_KEYS_MAX:
+            for k in [k for k, v in _SERVICE_HITS.items()
+                      if not v or now - v[-1] >= _SERVICE_RATE_WINDOW]:
+                del _SERVICE_HITS[k]
+            if len(_SERVICE_HITS) >= _SERVICE_RATE_KEYS_MAX:
+                _SERVICE_HITS.clear()
+        hits = [t for t in _SERVICE_HITS.get(key, ()) if now - t < _SERVICE_RATE_WINDOW]
+        if len(hits) >= _SERVICE_RATE_MAX:
+            _SERVICE_HITS[key] = hits
+            retry = max(1, math.ceil(_SERVICE_RATE_WINDOW - (now - hits[0])))
+        else:
+            hits.append(now)
+            _SERVICE_HITS[key] = hits
+            return
+    log.warning("service route %s throttled for peer %s", request.url.path, _log_safe(key))
+    raise HTTPException(429, "Too many requests.", headers={"Retry-After": str(retry)})
+
+
 @app.get("/api/admin/proposal-pdf")
 def api_admin_proposal_pdf(draft_id: str, request: Request,
                            revision_no: Optional[int] = None) -> Response:
@@ -3063,6 +3104,7 @@ def api_admin_proposal_pdf(draft_id: str, request: Request,
     send time (draft_revision_documents), so no later code or template change can alter what that
     customer was sent. Only a revision sent before the table existed is re-rendered, as before."""
     import hmac
+    _service_rate_check(request)          # before the token: a guess counts too
     presented = request.headers.get("x-service-token") or ""
     token_env = (os.environ.get("SERVICE_TOKEN") or "").strip()
     if not token_env or not hmac.compare_digest(presented, token_env):
@@ -3117,6 +3159,7 @@ async def api_admin_deposit_invoice(request: Request) -> Response:
     over the derived defaults, which is the whole point of editing before sending.
     Set `format: "docx"` to get the Word file instead of a PDF."""
     import hmac
+    _service_rate_check(request)          # before the token: a guess counts too
     presented = request.headers.get("x-service-token") or ""
     token_env = (os.environ.get("SERVICE_TOKEN") or "").strip()
     if not token_env or not hmac.compare_digest(presented, token_env):
@@ -3257,6 +3300,7 @@ async def api_admin_signed_contract(request: Request) -> Response:
     document exists.
     """
     import hmac
+    _service_rate_check(request)          # before the token: a guess counts too
     presented = request.headers.get("x-service-token") or ""
     token_env = (os.environ.get("SERVICE_TOKEN") or "").strip()
     if not token_env or not hmac.compare_digest(presented, token_env):
@@ -5578,7 +5622,8 @@ def api_coverletter_template(request: Request, work_type: str = "epoxy",
         template_path, blocks, geometry = cover_letter_writer.describe_template(
             work_type, audience or None)
     except FileNotFoundError as exc:
-        raise HTTPException(404, str(exc)) from exc
+        log.warning("Cover letter template lookup failed: %s", exc)
+        raise HTTPException(404, "Cover letter template not found.") from exc
 
     payload = {
         "work_type": work_type,
@@ -6417,7 +6462,9 @@ def _generate(payload: GenerateIn, request: Request, *,
             fit_report=fit_report,
         )
     except FileNotFoundError as exc:
-        raise HTTPException(500, str(exc)) from exc
+        # The message names a path on this server (proposal_writer writes the absolute one).
+        log.error("Proposal template missing: %s", exc)
+        raise HTTPException(500, "Proposal template not found.") from exc
     except Exception as exc:
         log.exception("Proposal fill failed")
         raise HTTPException(500, "Failed to generate the proposal. Please try again.") from exc
@@ -6503,7 +6550,8 @@ def _generate(payload: GenerateIn, request: Request, *,
                             values.get("project_name") or "(unnamed)",
                             len(_cl_placeholders), "; ".join(_cl_placeholders))
         except FileNotFoundError as exc:
-            raise HTTPException(500, str(exc)) from exc
+            log.error("Cover letter template missing: %s", exc)
+            raise HTTPException(500, "Cover letter template not found.") from exc
         except Exception as exc:  # noqa: BLE001 — re-raised as a named refusal
             log.exception("Cover letter fill/merge failed (work_type=%s, "
                           "audience=%s, template=%s): %s: %s",
@@ -7059,7 +7107,7 @@ def api_save_draft(draft_id: str, payload: DraftIn, request: Request) -> Dict[st
                                                 keep_server_owned=True)}
     except Exception as exc:  # noqa: BLE001
         log.warning("save_draft failed: %s", exc)
-        return {"ok": False, "error": str(exc)}
+        return {"ok": False, "error": "Couldn't save the project. Please try again."}
 
 
 @app.get("/api/draft/{draft_id}")
@@ -7147,7 +7195,7 @@ def api_archive_draft(draft_id: str, payload: ArchiveIn, request: Request) -> Di
         return {"ok": True, "existed": existed, "archived": payload.archived}
     except Exception as exc:  # noqa: BLE001
         log.warning("set_archived failed: %s", exc)
-        return {"ok": False, "error": str(exc)}
+        return {"ok": False, "error": "Couldn't update status."}
 
 
 class TestFlagIn(BaseModel):
@@ -7168,7 +7216,7 @@ def api_test_flag_draft(draft_id: str, payload: TestFlagIn, request: Request) ->
         return {"ok": True, "existed": existed, "is_test": payload.is_test}
     except Exception as exc:  # noqa: BLE001
         log.warning("set_test_flag failed: %s", exc)
-        return {"ok": False, "error": str(exc)}
+        return {"ok": False, "error": "Couldn't file that project."}
 
 
 class AssignDraftIn(BaseModel):
@@ -7526,7 +7574,7 @@ def api_list_drafts() -> Dict[str, Any]:
         return {"ok": True, "projects": drafts.list_drafts()}
     except Exception as exc:  # noqa: BLE001
         log.warning("list_drafts failed: %s", exc)
-        return {"ok": False, "error": str(exc), "projects": []}
+        return {"ok": False, "error": "Couldn't load the projects.", "projects": []}
 
 
 @app.get("/api/trash")
@@ -7536,7 +7584,7 @@ def api_list_trash() -> Dict[str, Any]:
         return {"ok": True, "projects": drafts.list_trashed()}
     except Exception as exc:  # noqa: BLE001
         log.warning("list_trashed failed: %s", exc)
-        return {"ok": False, "error": str(exc), "projects": []}
+        return {"ok": False, "error": "Couldn't load the trash.", "projects": []}
 
 
 @app.get("/api/history")
@@ -7546,7 +7594,7 @@ def api_history() -> Dict[str, Any]:
         return {"ok": True, "events": drafts.list_events()}
     except Exception as exc:  # noqa: BLE001
         log.warning("list_events failed: %s", exc)
-        return {"ok": False, "error": str(exc), "events": []}
+        return {"ok": False, "error": "Couldn't load the history.", "events": []}
 
 
 @app.get("/api/notifications")
@@ -7562,7 +7610,7 @@ def api_notifications() -> Dict[str, Any]:
         return {"ok": True, **notifications.get_notifications()}
     except Exception as exc:  # noqa: BLE001
         log.warning("notifications failed: %s", exc)
-        return {"ok": False, "error": str(exc), "notifications": [], "unread": 0}
+        return {"ok": False, "error": "Couldn't load notifications.", "notifications": [], "unread": 0}
 
 
 @app.post("/api/notifications/seen")
@@ -7573,7 +7621,7 @@ def api_notifications_seen(request: Request) -> Dict[str, Any]:
         return {"ok": True}
     except Exception as exc:  # noqa: BLE001
         log.warning("notifications seen failed: %s", exc)
-        return {"ok": False, "error": str(exc)}
+        return {"ok": False, "error": "Couldn't mark notifications as seen."}
 
 
 class ToDropboxIn(BaseModel):
@@ -8313,7 +8361,10 @@ def api_leads() -> Dict[str, Any]:
 @app.get("/api/leads/{message_id}/body")
 def api_lead_body(message_id: str) -> Dict[str, Any]:
     """The readable text of one lead email. Text only — a bid invite is foreign
-    HTML from a platform we don't control, and it is never rendered as markup."""
+    HTML from a platform we don't control, and it is never rendered as markup.
+    The id goes into Basisboard's URL path, so it is held to _safe_id's charset first."""
+    if not basisboard_client.is_message_id(message_id):
+        raise HTTPException(400, "Invalid id.")
     return leads.fetch_email_text(message_id)
 
 

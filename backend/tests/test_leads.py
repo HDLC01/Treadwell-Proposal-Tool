@@ -547,7 +547,7 @@ def test_falls_back_to_the_raw_eml_when_detail_has_no_body(monkeypatch):
 
 def test_eml_html_only_part_is_stripped(monkeypatch):
     monkeypatch.setattr(bb, "get_message_detail", lambda mid: None)
-    monkeypatch.setattr(bb, "get_message_url", lambda mid: "https://storage/x.eml")
+    monkeypatch.setattr(bb, "get_message_url", lambda mid: "https://storage.googleapis.com/bb/x.eml")
     fake, _ = _fake_httpx([(200, _raw_eml("Invite", html=_HTML_BODY))])
     monkeypatch.setattr(httpx, "Client", fake)
     out = leads.fetch_email_text("m10")
@@ -561,7 +561,7 @@ def test_expired_signed_url_is_reminted_once(monkeypatch):
     monkeypatch.setattr(bb, "get_message_detail", lambda mid: None)
     minted = []
     monkeypatch.setattr(bb, "get_message_url",
-                        lambda mid: minted.append(mid) or f"https://storage/x?n={len(minted)}")
+                        lambda mid: minted.append(mid) or f"https://storage.googleapis.com/bb/x?n={len(minted)}")
     fake, served = _fake_httpx([(403, b""), (200, _raw_eml("Invite", plain="Second try."))])
     monkeypatch.setattr(httpx, "Client", fake)
 
