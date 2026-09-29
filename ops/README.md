@@ -9,7 +9,7 @@ Stopping is a deliberate human decision.
 ## If you're under attack / need it down NOW
 
 ```bash
-ssh root@<vps-ip>     # (uses the treadwell_vps key)
+ssh treadwell-vps         # the VPS alias in your SSH config
 tw-down                   # site goes offline instantly (visitors get an error)
 ```
 

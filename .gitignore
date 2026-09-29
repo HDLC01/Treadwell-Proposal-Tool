@@ -114,3 +114,13 @@ Trailing 12TH MONTH.xlsx
 /*.msg
 # Drafted outbound messages, written here for review before they are sent.
 /email-*.txt
+
+# Local tool output that is never committed: the auto-generated knowledge snapshot
+# (~/scripts/refresh-treadwell-knowledge.ps1), Codex's local state, the graphify graph,
+# browser-walk captures, console dumps, and the crash dumps Git Bash leaves behind.
+/.claude/knowledge/
+/.codex/
+/graphify-out/
+/walk2/
+/console-debug.txt
+*.stackdump
