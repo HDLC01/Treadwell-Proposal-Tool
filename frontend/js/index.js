@@ -329,6 +329,24 @@
     }
   }
 
+  /** The two split tax switches only, re-read off the cells they now write. With no explicit base
+   *  the base moves with the work type (a combo's Epoxy + Polish, a polish job's Polish, a gyp
+   *  job's gyp base), and condState would keep the last base's answer: the switch shows it, and
+   *  the next flip writes it onto the new base's own sheet. The same read hydrateConditions makes,
+   *  so a work-type change shows what a reload would. Unsplit drafts and the other switches are
+   *  left exactly as they are. */
+  function rehydrateSplitFlags() {
+    const cv = (TW.getState() || {}).cell_values || {};
+    for (let i = 0; i < CONDITIONS.length; i++) {
+      const c = CONDITIONS[i];
+      const split = splitFlagCells(c);
+      if (!split) continue;
+      const cell = cv[split[0]];
+      condState[c.key] = (cell == null || cell === "") ? c.def
+        : String(cell).trim().toLowerCase() === String(c.on).trim().toLowerCase();
+    }
+  }
+
   function switchHtml(c) {
     const on = !!condState[c.key];
     const inert = !!(c.needs && !condState[c.needs]);
@@ -433,6 +451,7 @@
    *  better failure order -- if this throws, the scope fields and the beta button
    *  have already been set correctly. */
   function syncConditionsToWorkType() {
+    rehydrateSplitFlags();
     renderConditions();
     // Save ONLY if these cells are already in play -- because the alternative is
     // that merely picking a work type on a blank form starts writing to the draft.

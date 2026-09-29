@@ -365,8 +365,11 @@ def test_on_a_split_draft_the_two_tax_switches_are_the_bases_own_cells(cond):
     single base writes both halves. A draft not yet split keeps the four literals.
 
     Mutation: conditionCells writing c.cells on a split draft (Leveling!B6 and 'Gyp (FR)'!B8 are
-    reset on the Dye flip, and the Taxable flip writes Epoxy!B6)."""
+    reset on the Dye flip, and the Taxable flip writes Epoxy!B6); condCells returning c.cells
+    (the switches boot on Epoxy's Yes)."""
     s = cond["split"]
+    assert s["booted"] == {"taxable": False, "remodel": False}, (
+        "a reloaded polish job's switches show Epoxy's answer, not the base's own")
     assert s["hydrated"] == {"taxable": False, "remodel": False}
     assert s["afterDye"] == s["before"]
     changed = {k: v for k, v in s["afterTaxable"].items() if s["afterDye"][k] != v}
@@ -380,6 +383,31 @@ def test_on_a_split_draft_the_two_tax_switches_are_the_bases_own_cells(cond):
     assert {k: s["unsplit"][k] for k in ("Epoxy!B6", "Leveling!B6", 'Gyp (USG 1-8")!B8',
                                          "Gyp (FR)!B8")} == dict.fromkeys(
         ("Epoxy!B6", "Leveling!B6", 'Gyp (USG 1-8")!B8', "Gyp (FR)!B8"), "No")
+
+
+@needs_node
+def test_a_work_type_change_on_a_split_draft_rereads_the_new_bases_own_cells(cond):
+    """The base can move with the work type when the draft names none: a combo's is Epoxy + Polish
+    (the switch reads Epoxy's), a polish job's is Polish, a gyp job's the gyp base. The switches
+    must show the cell they now write -- what a reload would show -- or the estimator sees the
+    last base's answer and the next flip writes it onto the new base's own sheet, where it stays.
+
+    The seed boots on combo and every switch-to is a real transition onto a sheet holding a
+    different answer. The radio changes write no tax cell; the flip after them writes Polish!B6.
+
+    Mutation: syncConditionsToWorkType without the split re-read (the switches keep Epoxy's Yes on
+    polish and gyp, and the flip writes No onto Polish!B6, which already says No)."""
+    s = cond["splitWorkType"]
+    assert s["onCombo"] == {"taxable": True, "remodel": True}
+    assert s["onPolish"] == {"taxable": False, "remodel": False}, (
+        "the polish job's switches still show Epoxy's answer after the work-type change")
+    assert s["onGyp"] == {"taxable": False, "remodel": True}
+    assert s["onEpoxy"] == {"taxable": True, "remodel": True}
+    assert s["afterPolish"] == s["seeded"] and s["afterTrips"] == s["seeded"], (
+        "a work-type change wrote a sheet's own tax answer")
+    changed = {k: v for k, v in s["afterFlip"].items() if s["seeded"][k] != v}
+    assert changed == {"Polish!B6": "Yes"}, changed
+    assert s["shownAfterFlip"] == {"taxable": True, "remodel": False}
 
 
 # ── the inert row, rather than a vanishing one ────────────────────────────

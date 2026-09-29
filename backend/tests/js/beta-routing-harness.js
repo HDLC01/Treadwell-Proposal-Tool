@@ -865,6 +865,8 @@ function runHandler(which) {
     });
     const b = build(splitDraft("Polish", "polish"));
     await tick();
+    // read at BOOT, before any radio fires: the change listener re-reads these two on its own
+    const booted = { taxable: b.switchFor("taxable").on, remodel: b.switchFor("remodel_tax").on };
     b.setWorkType("polish");
     const hydrated = { taxable: b.switchFor("taxable").on, remodel: b.switchFor("remodel_tax").on };
     const before = pick(cells(b));
@@ -887,9 +889,48 @@ function runHandler(which) {
     pre.setWorkType("epoxy");
     pre.clickSwitch("taxable");
     out.conditions.split = {
-      hydrated, before, afterDye, afterTaxable, afterRemodel,
+      booted, hydrated, before, afterDye, afterTaxable, afterRemodel,
       comboAfterLocal, combo: pick(cells(c)),
       unsplit: pick(cells(pre)),
+    };
+  }
+
+  // A WORK-TYPE CHANGE ON A SPLIT DRAFT moves the base with no explicit base_tab_id: a combo's is
+  // Epoxy + Polish (the switch reads Epoxy's), a polish job's is Polish, a gyp job's the gyp base.
+  // Every sheet here holds a DIFFERENT answer, and the seed's work type is not any of the ones
+  // switched to, so the switch can only be right by re-reading the new base's own cell.
+  {
+    const flagCells = ["Epoxy!B6", "Epoxy!D6", "Polish!B6", "Polish!D6",
+                       'Gyp (USG 1-8")!B8', 'Gyp (USG 1-8")!D8'];
+    const pickFlags = (cv) => { const o = {}; flagCells.forEach((k) => { o[k] = cv[k]; }); return o; };
+    const read = (x) => ({ taxable: x.switchFor("taxable").on, remodel: x.switchFor("remodel_tax").on });
+    const t = build({
+      tax_flags_per_sheet: true, base_tab_id: null, work_type: "combo",
+      priced_tabs: [
+        { id: "Epoxy", flag_cells: { taxable: "Epoxy!B6", remodel: "Epoxy!D6" } },
+        { id: "Polish", flag_cells: { taxable: "Polish!B6", remodel: "Polish!D6" } },
+        { id: 'Gyp (USG 1-8")',
+          flag_cells: { taxable: 'Gyp (USG 1-8")!B8', remodel: 'Gyp (USG 1-8")!D8' } },
+      ],
+      cell_values: { "Epoxy!B6": "Yes", "Epoxy!D6": "Yes", "Polish!B6": "No", "Polish!D6": "No",
+                     'Gyp (USG 1-8")!B8': "No", 'Gyp (USG 1-8")!D8': "Yes" },
+    });
+    await tick();
+    const onCombo = read(t);                   // booted on combo: Epoxy's own Yes / Yes
+    const seeded = pickFlags(cells(t));
+    t.setWorkType("polish");
+    const onPolish = read(t);                  // Polish's own No / No, not Epoxy's Yes / Yes
+    const afterPolish = pickFlags(cells(t));
+    t.setWorkType("gyp");
+    const onGyp = read(t);                     // the gyp base's own No / Yes
+    t.setWorkType("epoxy");
+    const onEpoxy = read(t);                   // and back to Epoxy's Yes / Yes
+    const afterTrips = pickFlags(cells(t));
+    t.setWorkType("polish");
+    t.clickSwitch("taxable");                  // off (Polish's No) -> on: Polish!B6 becomes Yes
+    out.conditions.splitWorkType = {
+      onCombo, onPolish, onGyp, onEpoxy, seeded, afterPolish, afterTrips,
+      afterFlip: pickFlags(cells(t)), shownAfterFlip: read(t),
     };
   }
 

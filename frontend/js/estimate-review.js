@@ -5094,7 +5094,7 @@ function snapshotLumpSumsToState() {
       sf: sfFieldsFor(t.id),
       sys_names: roleFor(t.id) === "polish" || roleFor(t.id) === "gyp" ? [] : sysNamesFor(t.id),
       // Where this tab's own Taxable? / Remodel Tax? live, so the intake's two switches can set
-      // the BASE's answer on a split draft (index.js baseFlagCells).
+      // the BASE's answer on a split draft (index.js splitFlagCells).
       flag_cells: jobFlagCellsFor(t.id),
     }, taxFlagsFor(t.id));   // {taxable, remodel_on}: the Proposal step's rebuildPricing reads them
   });
