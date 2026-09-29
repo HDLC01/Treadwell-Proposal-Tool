@@ -1,0 +1,226 @@
+name: ZAP baseline
+
+# A report-only OWASP ZAP baseline scan of the two apps this pipeline ships, on staging AND on
+# production. Hanz, 2026-09-29, after asking for it: "owasp should scan production as well".
+# ZAP was last run by hand in June 2026 (its findings became e65d38b, SRI on the CDN scripts, and
+# 5b9b71f, no inline scripts); nothing had run it since.
+#
+# EXACTLY FOUR TARGETS, and nothing else is ever scanned:
+#   staging     https://staging.proposals.wetreadwell.com  https://staging.portal.wetreadwell.com
+#   production  https://proposals.wetreadwell.com          https://portal.wetreadwell.com
+# Never the bare wetreadwell.com or www: that is the marketing WordPress site on other hosting,
+# not ours to scan.
+#
+# WHEN IT RUNS
+#   - every Sunday before dawn in Central time, all four;
+#   - after every SUCCESSFUL Deploy: a staging deploy scans staging, a main deploy scans
+#     production. A failed, cancelled or rejected deploy scans nothing;
+#   - by hand from the Actions tab, choosing staging, production or both.
+# `schedule` and `workflow_run` only ever fire from the copy of this file on the DEFAULT branch
+# (main). Until this file is promoted to main, only the manual button works, and only from a
+# branch that has the file.
+#
+# PASSIVE AND GENTLE, because production has real customers on it. .zap/baseline.yaml is the whole
+# scan: a one-minute spider with two threads that never fills in or submits a form, ZAP's passive
+# rules (it reads responses, it attacks nothing), no Ajax or browser spider, no active scan, and
+# two portal paths that are never requested at all. Why that file is not zap-baseline.py's -z
+# options: those were measured and do not work (see its header).
+#
+# ONE SCAN PER APP, NEVER TWO. Each app has its own concurrency group, so two scans of the same app
+# never overlap. Within one run the apps go one at a time: staging's two, then production's two.
+# Two RUNS can overlap, though (a staging-deploy scan still going when a main deploy finishes, or
+# the Sunday scan plus a manual one), and then two different apps on the VPS are scanned at once:
+# at worst all four, each a 2-thread spider. A single VPS-wide group would stop that, but GitHub
+# keeps one pending run per group and drops the older, so a queued post-deploy scan could vanish.
+#
+# EVERYTHING ZAP RUNS IS PINNED. The image is pinned by digest, and ZAP is never told to update or
+# install from its marketplace, so the spider and the automation framework that enforce the
+# settings above are the image's own (spider 0.20.0, automation 0.60.0 in 2.17.0). The one add-on
+# added is the beta passive rules zap-baseline.py installs and the image lacks: one release,
+# downloaded by the runner, checked against its SHA-256 and mounted read-only. Bump all three pins
+# (ZAP_IMAGE and the two ZAP_BETA_RULES_*) together, from ZAP's ZapVersions-<version>.xml.
+#
+# REPORT ONLY. Findings never fail this workflow; a scan that could not run does.
+#
+# THIS REPOSITORY IS PUBLIC. The run log and step summary are readable by anyone, so the summary
+# carries only counts per risk level and alert names (.zap/summarize.py), and ZAP's own output goes
+# to a file that is never uploaded, printed, or otherwise kept: an artifact on a public repository
+# can be downloaded by any signed-in GitHub user, and a ZAP report names every weak URL, parameter
+# and attack string on a real, named site — not something to hand a signed-in stranger. For the
+# full HTML + JSON report, run deploy/zap-scan.sh locally against the same target: the same pinned
+# image and the same .zap/baseline.yaml plan, with the report kept only on the machine that ran it.
+#
+# No step holds a write token: the only permission is `contents: read`, used by the checkout.
+
+on:
+  schedule:
+    # Sundays 08:41 UTC = 03:41 CDT (summer) / 02:41 CST (winter). Off the hour on purpose.
+    - cron: "41 8 * * 0"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Which environment to scan
+        type: choice
+        options: [staging, production, both]
+        default: staging
+  workflow_run:
+    workflows: [Deploy]
+    types: [completed]
+    branches: [staging, main]
+
+permissions:
+  contents: read
+
+env:
+  # stable = ZAP 2.17.0, resolved 2026-09-29. Bump the digest and this comment together.
+  ZAP_IMAGE: ghcr.io/zaproxy/zaproxy@sha256:781a2bdaea47324e7bab583e2263f21d257b0aee61ed51521a5be45f5f5081ef # stable (2.17.0)
+  # pscanrulesBeta 50 (2026-04-14; needs ZAP >= 2.17.0 and commonlib >= 1.40, the image has 1.43.0).
+  # The SHA-256 below matches ZapVersions-2.17.xml and the GitHub release asset (checked 2026-09-29).
+  ZAP_BETA_RULES_URL: https://github.com/zaproxy/zap-extensions/releases/download/pscanrulesBeta-v50/pscanrulesBeta-beta-50.zap
+  ZAP_BETA_RULES_SHA256: a979f7cd5d8be10e0338b417e006ec1e2f6ec79101010d570ddb5199892e921b
+
+jobs:
+  staging:
+    name: staging / ${{ matrix.name }}
+    if: >-
+      github.event_name == 'schedule'
+      || (github.event_name == 'workflow_dispatch' && inputs.environment != 'production')
+      || (github.event_name == 'workflow_run'
+          && github.event.workflow_run.conclusion == 'success'
+          && github.event.workflow_run.head_branch == 'staging'
+          && github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - name: staging-proposals
+            target: https://staging.proposals.wetreadwell.com
+          - name: staging-portal
+            target: https://staging.portal.wetreadwell.com
+    concurrency:
+      # never two scans of the same app at once; a running one always finishes
+      group: zap-${{ matrix.name }}
+      cancel-in-progress: false
+    steps:
+      # The default branch's own plan and rules, never the deploy's head commit: a workflow_run
+      # job must not check out the code that triggered it.
+      - name: Check out the scan plan
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .zap
+
+      - name: Scan (passive; 1-minute spider, 2 threads, no forms)
+        id: scan
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          wrk="$RUNNER_TEMP/zap"
+          mkdir -p "$wrk"
+          cp .zap/baseline.yaml "$wrk/baseline.yaml"
+          chmod 0777 "$wrk"            # the image runs as uid 1000 (zap), the runner as 1001
+          docker pull --quiet "$ZAP_IMAGE" > /dev/null
+          # The beta passive rules, one pinned release: a download that fails or does not match
+          # its SHA-256 stops this step (set -e) before ZAP starts. Nothing else is fetched.
+          beta="$RUNNER_TEMP/zap-addons/${ZAP_BETA_RULES_URL##*/}"
+          mkdir -p "${beta%/*}"
+          curl -fsSL --retry 3 -o "$beta" "$ZAP_BETA_RULES_URL"
+          echo "$ZAP_BETA_RULES_SHA256  $beta" | sha256sum --check --quiet -
+          # All of ZAP's output goes to zap.log, on the runner's disk only: never to this public
+          # log, never uploaded, gone when the job ends. For that detail, run deploy/zap-scan.sh.
+          rc=0
+          timeout --kill-after=30s 15m \
+            docker run --rm -e ZAP_TARGET="$TARGET" -v "$wrk:/zap/wrk:rw" \
+              -v "$beta:/zap/plugin/${beta##*/}:ro" "$ZAP_IMAGE" \
+              zap.sh -cmd -autorun /zap/wrk/baseline.yaml \
+            > "$wrk/zap.log" 2>&1 || rc=$?
+          echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
+          echo "ZAP finished with exit code $rc."
+
+      - name: Summary (counts and alert names only)
+        if: always()
+        env:
+          TARGET: ${{ matrix.target }}
+          ZAP_EXIT: ${{ steps.scan.outputs.exit_code || 'none' }}
+        run: python3 .zap/summarize.py "$RUNNER_TEMP/zap/report.json" .zap/rules.tsv "$TARGET" "$ZAP_EXIT" >> "$GITHUB_STEP_SUMMARY"
+
+  production:
+    name: production / ${{ matrix.name }}
+    # after staging, so one run scans one app at a time. `!cancelled()` because a skipped or
+    # failed staging job must not stop a production scan that was asked for.
+    needs: staging
+    if: >-
+      !cancelled() && (
+      github.event_name == 'schedule'
+      || (github.event_name == 'workflow_dispatch' && inputs.environment != 'staging')
+      || (github.event_name == 'workflow_run'
+          && github.event.workflow_run.conclusion == 'success'
+          && github.event.workflow_run.head_branch == 'main'
+          && github.event.workflow_run.head_repository.full_name == github.repository))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - name: production-proposals
+            target: https://proposals.wetreadwell.com
+          - name: production-portal
+            target: https://portal.wetreadwell.com
+    concurrency:
+      group: zap-${{ matrix.name }}
+      cancel-in-progress: false
+    # KEEP THESE STEPS IDENTICAL TO THE STAGING JOB'S. backend/tests/test_zap_baseline.py fails if
+    # they drift, so a safety change can never reach one environment and not the other.
+    steps:
+      # The default branch's own plan and rules, never the deploy's head commit: a workflow_run
+      # job must not check out the code that triggered it.
+      - name: Check out the scan plan
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .zap
+
+      - name: Scan (passive; 1-minute spider, 2 threads, no forms)
+        id: scan
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          wrk="$RUNNER_TEMP/zap"
+          mkdir -p "$wrk"
+          cp .zap/baseline.yaml "$wrk/baseline.yaml"
+          chmod 0777 "$wrk"            # the image runs as uid 1000 (zap), the runner as 1001
+          docker pull --quiet "$ZAP_IMAGE" > /dev/null
+          # The beta passive rules, one pinned release: a download that fails or does not match
+          # its SHA-256 stops this step (set -e) before ZAP starts. Nothing else is fetched.
+          beta="$RUNNER_TEMP/zap-addons/${ZAP_BETA_RULES_URL##*/}"
+          mkdir -p "${beta%/*}"
+          curl -fsSL --retry 3 -o "$beta" "$ZAP_BETA_RULES_URL"
+          echo "$ZAP_BETA_RULES_SHA256  $beta" | sha256sum --check --quiet -
+          # All of ZAP's output goes to zap.log, on the runner's disk only: never to this public
+          # log, never uploaded, gone when the job ends. For that detail, run deploy/zap-scan.sh.
+          rc=0
+          timeout --kill-after=30s 15m \
+            docker run --rm -e ZAP_TARGET="$TARGET" -v "$wrk:/zap/wrk:rw" \
+              -v "$beta:/zap/plugin/${beta##*/}:ro" "$ZAP_IMAGE" \
+              zap.sh -cmd -autorun /zap/wrk/baseline.yaml \
+            > "$wrk/zap.log" 2>&1 || rc=$?
+          echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
+          echo "ZAP finished with exit code $rc."
+
+      - name: Summary (counts and alert names only)
+        if: always()
+        env:
+          TARGET: ${{ matrix.target }}
+          ZAP_EXIT: ${{ steps.scan.outputs.exit_code || 'none' }}
+        run: python3 .zap/summarize.py "$RUNNER_TEMP/zap/report.json" .zap/rules.tsv "$TARGET" "$ZAP_EXIT" >> "$GITHUB_STEP_SUMMARY"
