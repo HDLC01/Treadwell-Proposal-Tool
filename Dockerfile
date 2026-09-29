@@ -22,9 +22,14 @@ FROM node:20.20.2-trixie-slim@sha256:abfbe12cc943141a0c9e8c0a57d710df1dadd95d35e
 # python:3.11-slim
 FROM python:3.11-slim@sha256:e41613d42d4891e4930f79523f93f81bbc7632584ec65e36ab055f41a800b41e
 
-# System deps — tini for proper signal handling, curl for healthcheck.
+# System deps — tini for proper signal handling, curl for healthcheck, media-types for
+# /etc/mime.types. The nodesource `nodejs` package used to bring media-types in by the back
+# door (nodejs -> python3 -> libpython3.13-stdlib -> media-types). Without that file Python's
+# mimetypes falls back to its built-in table: StaticFiles then serves the frontend's .js as
+# `application/javascript` (no charset) instead of production's `text/javascript; charset=utf-8`,
+# and .docx/.xlsx/.woff2/.webp/.md with no type at all.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    tini curl ca-certificates \
+    tini curl ca-certificates media-types \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 

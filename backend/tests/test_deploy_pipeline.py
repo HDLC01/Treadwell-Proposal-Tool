@@ -482,6 +482,22 @@ def test_nothing_is_piped_from_the_network_into_a_shell():
     assert re.search(r"(?m)^COPY --from=\S+ /usr/local/bin/node /usr/local/bin/node\s*$", code)
 
 
+def test_the_image_keeps_the_mime_table_the_frontend_is_served_from():
+    """Debian's `media-types` package is what writes /etc/mime.types. The nodesource `nodejs`
+    package used to pull it in (nodejs -> python3 -> libpython3.13-stdlib -> media-types), so it
+    was never listed here. With Node copied from the node image it has to be asked for: without
+    the file, Python's mimetypes (and so Starlette's StaticFiles) serves /shared.js as
+    `application/javascript` with no charset instead of production's
+    `text/javascript; charset=utf-8`, and .docx/.xlsx/.woff2/.webp/.md with no type at all."""
+    code = "\n".join(_docker_code())
+    packages = {p for chunk in re.findall(r"apt-get install\b([^&\n]+)", code)
+                for p in chunk.split("#")[0].split() if not p.startswith("-")}
+    assert "tini" in packages, "could not read the apt-get install lines: " + repr(sorted(packages))
+    assert "media-types" in packages, (
+        "media-types is no longer installed, so the image has no /etc/mime.types: "
+        + repr(sorted(packages)))
+
+
 def test_dependabot_moves_every_kind_of_pin():
     """A pin nobody bumps stops taking security fixes. The actions and the base images each
     need their ecosystem; the Claude CLI's RUN-line pin is bumped by hand (see the Dockerfile)."""
