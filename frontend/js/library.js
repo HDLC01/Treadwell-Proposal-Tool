@@ -1776,15 +1776,13 @@
 
   /** Assembly lines for the picked materials, in the order they were shown.
    *
-   *  SEEDS COVERAGE FROM THE ITEM, which is the whole reason this is a function with a test rather
-   *  than three lines inside a click handler. `priceLine` reports a line with no coverage as
-   *  `no_coverage`, and that reason IS counted in `broken_lines` — so a twelve-material add without
-   *  this seed arrives with twelve amber rows reading "Needs a coverage", and the estimator would
-   *  reasonably conclude the feature is broken. The single-pick path has always done it; this
-   *  matches it deliberately rather than by coincidence.
+   *  Since 2026-09-30 coverage, waste and roundup live on the MATERIAL: `priceLine` reads them off
+   *  the item and never off the line, and `_clean_lines` strips all three from a saved line. The
+   *  coverage/waste_pct/roundup keys below are kept only so a line added this way has the same
+   *  shape as one added by hand until it is saved; they do not price anything.
    *
-   *  An item whose own coverage is unset still lands, and still reads "Needs a coverage" — that is
-   *  an honest report about the material, not a fault in the add. */
+   *  A material whose own coverage is unset still lands, and still reads "Needs a coverage" — an
+   *  honest report about the material, fixed on the Materials tab, not a fault in the add. */
   function bulkLinesFor(itemIds, items) {
     var out = [];
     (itemIds || []).forEach(function (id) {

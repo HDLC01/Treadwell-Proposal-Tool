@@ -410,6 +410,13 @@ alter table public.library_labor      add column if not exists default_work_type
 -- which reproduces exactly what they priced before this column existed.
 alter table public.library_items add column if not exists buy_qty numeric(10,3) not null default 1;
 alter table public.library_items add column if not exists divisions jsonb not null default '[]'::jsonb;
+
+-- COVERAGE, WASTE AND ROUNDUP LIVE ON THE MATERIAL (Hanz, 2026-09-21; applied to BOTH databases that
+-- day, recorded here 2026-09-30). NULL waste_pct reads as 5 and NULL roundup as true, which were the
+-- assembly line's old defaults. Assemblies stopped holding their own copy; see
+-- backend/ops/backfill_material_coverage.sql, run before this code reaches a database.
+alter table public.library_items add column if not exists waste_pct numeric(5,2);
+alter table public.library_items add column if not exists roundup   boolean;
 -- Distinct from updated_at, which moves on every patch and is the assemblies' concurrency token.
 -- This one marks a PRICE REVISION, so it moves only when the cost changes — that is the date an
 -- estimator wants when they ask how old a number is.
@@ -463,13 +470,8 @@ alter table public.library_assemblies add column if not exists updated_by text;
 -- the kit row is CEIL(area / 3500) kits at $500 and the dye row is area x $0.14, to the cent what
 -- the fallback charges. WASTE IS A LITERAL 0, NEVER NULL: a null waste reads as the 5% default
 -- and would buy 5% more of both. test_polish_estimate_page.py holds these rows, both files and the
--- engine's fallback together.
---
--- waste_pct and roundup are already live on both databases (the coverage-on-material move); the
--- two `add column if not exists` lines only make this file able to build a fresh database, and
--- are a no-op everywhere else.
-alter table public.library_items add column if not exists waste_pct numeric(6,3);
-alter table public.library_items add column if not exists roundup boolean;
+-- engine's fallback together. Every column the insert names is added ABOVE it (waste_pct and
+-- roundup with the other material columns), so a fresh database builds.
 insert into public.library_items (id, name, unit, buy_qty, unit_cost, coverage, waste_pct, roundup)
 values
   ('joint-filler-kit', 'Joint filler, 10 gal kit', 'Kit', 1, 500.00, 3500, 0, true),

@@ -264,6 +264,13 @@ alter table public.library_labor      add column if not exists default_work_type
 -- price revision, unlike updated_at which moves on every patch.
 alter table public.library_items add column if not exists buy_qty numeric(10,3) not null default 1;
 alter table public.library_items add column if not exists divisions jsonb not null default '[]'::jsonb;
+
+-- COVERAGE, WASTE AND ROUNDUP LIVE ON THE MATERIAL (Hanz, 2026-09-21; applied to BOTH databases that
+-- day, recorded here 2026-09-30). NULL waste_pct reads as 5 and NULL roundup as true, which were the
+-- assembly line's old defaults. Assemblies stopped holding their own copy; see
+-- backend/ops/backfill_material_coverage.sql, run before this code reaches a database.
+alter table public.library_items add column if not exists waste_pct numeric(5,2);
+alter table public.library_items add column if not exists roundup   boolean;
 alter table public.library_items add column if not exists cost_updated_at timestamptz;
 
 insert into public.library_divisions (id, name)
@@ -293,9 +300,7 @@ alter table public.library_assemblies add column if not exists updated_by text;
 -- RESERVED rows at literal ids, `on conflict (id) do nothing` so an edited price survives a
 -- re-run; delete_item refuses both ids. Kyle's C29/C25 figures, which price to the cent what the
 -- engine's fallback does. Waste is a literal 0 -- a null would read as 5% and raise both prices.
--- The two alters are a no-op where the columns are already live.
-alter table public.library_items add column if not exists waste_pct numeric(6,3);
-alter table public.library_items add column if not exists roundup boolean;
+-- waste_pct and roundup are added above, with the other material columns.
 insert into public.library_items (id, name, unit, buy_qty, unit_cost, coverage, waste_pct, roundup)
 values
   ('joint-filler-kit', 'Joint filler, 10 gal kit', 'Kit', 1, 500.00, 3500, 0, true),
