@@ -65,18 +65,33 @@
   const pausedUntil = (p) => C.pausedUntil(p, TW.bizToday());
   const ROLE_LABEL = { primary: "Primary", accounts_payable: "Accounts payable", other: "Other" };
   let ALL = [];
+  // WHICH BOARD THIS IS: "direct" (Direct Projects, /portal.html) or "gc" (General Contractor,
+  // /gc-projects.html). Hanz, 2026-09-29: "we actually have two pipelines now ... it will have the
+  // same steps but just on a different webpage." Same steps, so the same page and this same file
+  // draw both: main.py serves portal.html at the GC address with data-pipeline="gc" on <body>, and
+  // load() hands the board only its own pipeline's rows (C.onBoard). Every tab, column, menu and
+  // count below is computed from ALL, so each board counts only its own without any of that code
+  // knowing there are two. Anything but "gc" is Direct, the board every project was on before.
+  const PIPELINE = document.body && document.body.dataset.pipeline === "gc" ? "gc" : "direct";
 
   // ── filter / sort state ────────────────────────────────────────────────────
   // Module-level and mirrored to sessionStorage: renderBoard re-runs after every
   // staff action (act() calls load()), and the controls live in static HTML, so
   // a scan survives both a re-render and a return visit.
-  const EST_KEY = "tw_crm_est";
+  //
+  // KEYED PER PIPELINE. Before the GC board existed both pages shared these four keys, so picking
+  // an estimator with no GC projects cleared EST on the GC board and it STAYED cleared for Direct —
+  // one storage slot, two boards fighting over it. PIPELINE (above) is "direct" or "gc"; Direct
+  // keeps the bare key so nobody's already-saved Direct filters reset on this deploy, and GC gets
+  // its own suffixed key rather than a migration.
+  const pipelineKey = (base) => (PIPELINE === "gc" ? base + "_gc" : base);
+  const EST_KEY = pipelineKey("tw_crm_est");
   // The STORAGE key keeps its old name deliberately: a rep with a month selected when this
   // shipped should still have it selected after the deploy. Only the variable was renamed,
   // because it now holds either a month ("2026-08") or a week ("w:2026-08-10").
-  const PERIOD_KEY = "tw_crm_month";
-  const SORTFIELD_KEY = "tw_crm_sortfield", SORTDIR_KEY = "tw_crm_sortdir";
-  const TAB_KEY = "tw_crm_tab";
+  const PERIOD_KEY = pipelineKey("tw_crm_month");
+  const SORTFIELD_KEY = pipelineKey("tw_crm_sortfield"), SORTDIR_KEY = pipelineKey("tw_crm_sortdir");
+  const TAB_KEY = pipelineKey("tw_crm_tab");
   const ss = (k, d) => { try { const v = sessionStorage.getItem(k); return v == null ? d : v; } catch { return d; } };
   const ssSet = (k, v) => { try { v ? sessionStorage.setItem(k, v) : sessionStorage.removeItem(k); } catch {} };
   // Which view is remembered PER TAB, not once for the page — the key is `tw_crm_view_<tab>`,
@@ -748,6 +763,16 @@
       localStorage.removeItem("treadwell.proposal_tool.state");
       localStorage.removeItem("treadwell.proposal_tool.draft_id");
       sessionStorage.removeItem("treadwell.proposal_tool.hydrated_once");
+      // FROM THE GENERAL CONTRACTOR BOARD THE NEW PROJECT IS ALREADY A GC ONE: its first answer is
+      // written into the fresh state the intake form reads, so the Audience radio opens on
+      // "General contractor (GC)" (index.js writeForm) and the project lands back on this board.
+      // A plain field in the blob, unlike the test intent below: `audience` is the estimator's own
+      // answer and not server-owned, so it travels the way every other intake answer does, and the
+      // estimator can still switch it. shared.js stamps the unstamped blob with the new draft id.
+      // The Direct board writes nothing, which leaves the form on its default, Direct.
+      if (PIPELINE === "gc") {
+        localStorage.setItem("treadwell.proposal_tool.state", JSON.stringify({ audience: "GC" }));
+      }
     } catch {/* private mode — the intake form still works, it just won't resume */}
     TW.setNewProjectTestIntent(TAB === "test");
     window.location.assign("/?new=1");
@@ -837,7 +862,31 @@
       const r = await api("/api/portal/pipeline");
       const j = await r.json();
       if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + r.status));
-      ALL = j.proposals || [];
+      const every = j.proposals || [];
+      // A LINK TO A PROJECT ON THE OTHER BOARD GOES TO THE OTHER BOARD, query and hash kept, so the
+      // drawer (and its &sec= tab) opens there. Every link that exists says /portal.html — the
+      // bell (notifications.py), the Follow-ups board's Open, the portal's "Reply in Portal" staff
+      // emails — whichever board the project is on today, and a project moves boards when its
+      // Direct/GC choice changes. Checked BEFORE painting, so the wrong board never flashes up.
+      // A project on neither board (trashed, never generated) falls through to openDetail below,
+      // exactly as it did before there were two boards.
+      //
+      // CUR_PID FIRST, THEN THE URL. Before any drawer has opened, CUR_PID is null and a fresh
+      // ?open= link is the only thing to check. Once a project IS open, load() keeps running every
+      // 25s (and every 12s from refreshLive while the drawer is up) — checking CUR_PID on every one
+      // of those is how a project whose Audience gets flipped WHILE a rep is looking at it sends
+      // them to the other board, instead of leaving the drawer open on a board that no longer shows
+      // it. REDIRECTED (not DEEPLINK_USED — see its declaration) is what stops a slow second poll
+      // from replaying this SAME redirect, without stopping a LATER, different one.
+      const wanted = REDIRECTED ? null : (CUR_PID || new URLSearchParams(location.search).get("open"));
+      const there = C.otherBoardFor(every, wanted, PIPELINE);
+      if (there) {
+        REDIRECTED = true;
+        DEEPLINK_USED = true;
+        location.replace(there + location.search + location.hash);
+        return;
+      }
+      ALL = C.onBoard(every, PIPELINE);
       renderDegraded(j);
       renderBoard();
     } catch (err) {
@@ -1996,6 +2045,12 @@
   const REV_CACHE = {};          // sent versions per PROJECT, for the same reason
   let RENDER_GEN = 0;
   let DEEPLINK_USED = false;
+  // A separate one-way latch from DEEPLINK_USED (see load() below): DEEPLINK_USED guards the &sec=
+  // tab and the one-time openDetail off a fresh ?open= link, and gets spent by ANY drawer open —
+  // deep-linked or a plain card click. REDIRECTED guards only "did load() already send this rep to
+  // the other board," so a project that changes boards well after the deep link was consumed can
+  // still redirect once, and a slow second poll of that SAME redirect can't fire it twice.
+  let REDIRECTED = false;
   // True while the drawer is showing a project nobody has sent. The tab strip is the same one, but
   // the Proposal tab's two lazy fetches are not: both address a portal row this project does not
   // have yet, so firing them would answer a tab click with "could not load".

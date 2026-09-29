@@ -264,20 +264,20 @@
             only be hidden, not sealed:</strong> ${hideOnly.map(t=>`<strong>${esc(t.label)}</strong>`)
               .join(", ")}. Every API route their pages read is read by another page too — the
             Analytics payload is also the Bid Calendar's, the Item Library's assemblies also price
-            the Polish beta, the pipeline feeds both Active Projects and Notification Sending — so
+            the Polish beta, the pipeline feeds Direct Projects, General Contractor and Notification Sending — so
             refusing those routes would break a page nobody restricted. Switching one off removes
             the tab and blocks the page; somebody who knows the route can still read the data.</p>`:""}
           <p><strong>Auto Followups is the exception worth knowing about.</strong> Saving it is not
             admin-gated: any signed-in member may rewrite the four recurring customer emails, and
             the save replaces the settings row with no history. The sidebar and the server agree
             here — it is the permission itself that is broader than the ones above.</p>
-          <p>Four tabs everybody can open still gate controls <em>inside</em> the page on role:
+          <p>Five tabs everybody can open still gate controls <em>inside</em> the page on role:
             <strong>Items and Assemblies</strong> (only an admin edits vendors, divisions and
             units; everyone may pick from them), <strong>Markup</strong> (only an admin edits a
             rate or a formula; everyone reads them and sees how a job is priced),
             <strong>Notification Sending</strong> (only an admin adds, removes or toggles anyone
-            but themselves) and <strong>Active Projects</strong> (only an admin reassigns someone
-            else's project).</p>
+            but themselves), and <strong>Direct Projects</strong> and <strong>General
+            Contractor</strong> (only an admin reassigns someone else's project).</p>
         </div></div>`;
     }
 

@@ -306,7 +306,7 @@
         <button type="button" data-act="sent" aria-expanded="${OPEN.has(p.proposal_id)}"
           title="Every follow-up on this project: what the automation emailed, which side got it, and what a person logged.">Emails${
           OPEN.has(p.proposal_id) ? (" " + icon("chev-up", 12)) : (" " + icon("chev-down", 12))}</button>
-        <button type="button" data-act="open" title="Open in Active Projects">Open</button>
+        <button type="button" data-act="open" title="Open the project on its board">Open</button>
       </div></td>
     </tr>` + (OPEN.has(p.proposal_id) ? histRow(p) : "");
   }

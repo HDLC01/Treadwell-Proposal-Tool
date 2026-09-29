@@ -79,7 +79,8 @@ _VERSION = 1
 #   * /api/library/items,
 #     /api/library/assemblies   — library.js AND polish-estimate.js. Gating them would stop the
 #                                 Polish beta pricing halfway through a bid, silently.
-#   * /api/portal/pipeline      — portal.js AND notifications.js. Two tabs, one route.
+#   * /api/portal/pipeline      — portal.js AND notifications.js. Three tabs, one route: portal.js
+#                                 draws BOTH project boards (Direct and General Contractor).
 #   * /api/notifications        — auth.js, on EVERY page, and it is what boots the lead autopilot.
 #   * /api/draft/*, /api/drafts,
 #     /api/estimators,
@@ -98,8 +99,27 @@ _VERSION = 1
 # page refusal: it looks like a bug rather than a policy.
 TABS: Dict[str, Dict[str, Any]] = {
     "/portal.html": {
-        "label": "Active Projects",
+        # WAS "Active Projects" until 2026-09-29. Hanz: "We relabel Active projects to Direct
+        # Projects and we add a new pipeline named 'General Contractor'." Same href, same page —
+        # only the name moved, which is exactly why this table is keyed on href.
+        "label": "Direct Projects",
         "pages": ("/portal.html",),
+        "api": (),
+    },
+    "/gc-projects.html": {
+        "label": "General Contractor",
+        # THE SAME BOARD as /portal.html (the same page bytes and the same portal.js; main.py serves
+        # it via pipelines.board_page), showing the projects whose audience is GC. So it reads
+        # exactly the routes /portal.html reads, all shared, and owns none of them: api: () for the
+        # single-caller rule every other entry here follows. Denying it hides the tab and refuses
+        # the page; /api/portal/pipeline stays open because the Direct board is the same call.
+        #
+        # ALWAYS ON, LIKE /portal.html. Hanz, 2026-09-29: "The General Contractor board is always
+        # on, like Direct Projects." It is in LOCKED below for exactly that reason, so no admin
+        # policy — hand-edited or otherwise — can deny it to any role, the same guarantee
+        # /portal.html already has. (Until this change it was deliberately left OUT of LOCKED, with
+        # the Admin page drawing a real switch for it; Hanz's instruction supersedes that.)
+        "pages": ("/gc-projects.html",),
         "api": (),
     },
     "/leads.html": {
@@ -242,10 +262,12 @@ TABS: Dict[str, Dict[str, Any]] = {
 # CANNOT BE DENIED TO ANYBODY, stripped inside save() rather than merely greyed out in the UI —
 # a policy file is hand-editable and reaches the middleware whatever the browser did.
 #
-#   /admin.html  is where this policy is edited. Denying it removes the only door back.
-#   /portal.html is HOME_PAGE in auth.js: signing in lands you there, so denying it would greet
-#                somebody with a refusal card as the first thing they see after Google.
-LOCKED: Tuple[str, ...] = ("/admin.html", "/portal.html")
+#   /admin.html      is where this policy is edited. Denying it removes the only door back.
+#   /portal.html     is HOME_PAGE in auth.js: signing in lands you there, so denying it would greet
+#                    somebody with a refusal card as the first thing they see after Google.
+#   /gc-projects.html Hanz, 2026-09-29: "The General Contractor board is always on, like Direct
+#                    Projects." Same board, same guarantee — not a landing page, just never denied.
+LOCKED: Tuple[str, ...] = ("/admin.html", "/portal.html", "/gc-projects.html")
 
 # The super admin is bootstrapped from SUPER_ADMIN_EMAIL and cannot be granted or revoked from the
 # UI; his role exists so somebody always has a way in. A policy that can deny it is a policy that
