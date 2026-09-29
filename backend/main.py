@@ -2705,6 +2705,27 @@ def api_portal_deposit_received(proposal_id: str) -> Dict[str, Any]:
     return _portal(f"/api/admin/proposal/{_safe_id(proposal_id)}/deposit-received", "POST", {})
 
 
+@app.post("/api/portal/deposit/{deposit_id}/reveal")
+def api_portal_deposit_reveal(deposit_id: str, request: Request, response: Response) -> Dict[str, Any]:
+    """The drawer's Show button for a bank number (bank_crypto.py, portal repo, 2026-09-29). The
+    drawer's own /api/portal/proposal/{id} no longer carries routing_number/account_number at all
+    — this is the only route that can still get them, one deposit at a time, and it exists so that
+    can happen without the numbers sitting in the drawer's JSON on every load.
+
+    Gated the same way every other private tab route is: nav_access.py denies this prefix to a role
+    denied /portal.html (see TABS entry there), and _auth_gate above already refused an unsigned-in
+    caller before this function runs — so `_user_email` is trusted rather than re-checked. The
+    portal's own endpoint requires SERVICE_TOKEN (carried by `_portal`) AND a staff_email in the
+    body; it is the acting user's email that goes in that field, never one the caller supplies, so
+    a member cannot claim to be somebody else's reveal in the audit log on the other side.
+
+    `Cache-Control: no-store` because this response carries the plaintext numbers — the drawer
+    fetches it fresh on every click, never from the browser's HTTP cache."""
+    response.headers["Cache-Control"] = "no-store"
+    return _portal(f"/api/admin/deposit/{_safe_id(deposit_id)}/reveal", "POST",
+                   {"staff_email": _user_email(request)})
+
+
 # The /scheduled proxy was removed on 2026-08-11 with the rest of scheduling. Nothing calls it:
 # the drawer's Mark scheduled button and the customer's Schedule tile went at the same time, and
 # Treadwell books the date on the phone. The portal's own endpoint went too, so re-adding this

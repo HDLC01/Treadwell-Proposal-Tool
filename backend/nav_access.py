@@ -100,7 +100,19 @@ TABS: Dict[str, Dict[str, Any]] = {
     "/portal.html": {
         "label": "Active Projects",
         "pages": ("/portal.html",),
-        "api": (),
+        # /api/portal/deposit/ (children-only) is the one private route this tab owns: the drawer's
+        # bank-detail reveal for a deposit (bank_crypto.py, portal repo, 2026-09-29). Nothing else
+        # reads it -- grepped frontend/js/*.js for the string, only portal.js matches.
+        #
+        # BUT: /portal.html is in LOCKED (below), so this entry can never actually be enforced —
+        # sanitize() drops "/portal.html" from a deny map on both save() and read, and the admin
+        # route 400s if asked to deny it (it is HOME_PAGE; locking it out strands whoever it was
+        # done to). So today, EVERY signed-in tool account can reach this route regardless of what
+        # this tuple says — the real protection is the same _auth_gate every /api/* route already
+        # gets, not this table. The entry is left here as correct, inert data: if /portal.html is
+        # ever taken out of LOCKED, this starts being enforced with no further edit, and the single-
+        # caller measurement above stays true either way.
+        "api": ("/api/portal/deposit/",),
     },
     "/leads.html": {
         "label": "Lead Inbox",
