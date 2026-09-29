@@ -93,7 +93,7 @@ const out = {};
   const TW = { setState: (s) => { saved.push(JSON.parse(JSON.stringify(s.price_overrides || null))); } };
   const api = new Function("state", "document", "TW", [
     "let PRICE_LINES = state.price_lines.slice();",
-    lift("reKeyPriceLineOverrides"), lift("persistPriceLines"), lift("renderPriceLines"),
+    lift("escHtml"), lift("reKeyPriceLineOverrides"), lift("persistPriceLines"), lift("renderPriceLines"),
     "return { renderPriceLines, lines: () => PRICE_LINES };",
   ].join("\n"))(state, document, TW);
   api.renderPriceLines();
