@@ -1081,7 +1081,14 @@ def api_library_item_update(item_id: str, payload: LibraryItemIn,
 
 @app.delete("/api/library/items/{item_id}")
 def api_library_item_delete(item_id: str) -> Dict[str, Any]:
-    if not library.delete_item(item_id):
+    try:
+        # ValidationError here means the id is RESERVED (dye / joint-filler-kit), not that the
+        # request was malformed — 400 still reads right, and it matches the same exception every
+        # other write on this route already turns into one.
+        deleted = library.delete_item(item_id)
+    except library.ValidationError as exc:
+        raise HTTPException(400, str(exc))
+    if not deleted:
         raise HTTPException(404, "That material no longer exists.")
     # Assemblies pointing at it are left untouched on purpose: rewriting somebody else's
     # assembly as a side effect of a delete is worse than a visible line they can repoint.

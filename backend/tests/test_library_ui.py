@@ -3580,3 +3580,74 @@ def test_the_condition_vocabulary_is_the_same_three_on_both_sides():
     # The seeder and its gate are both exported, or the estimate cannot read either.
     assert "seedConditionDefaults: seedConditionDefaults" in core
     assert "conditionsUnstated: conditionsUnstated" in core
+
+
+# ── Dye and the Joint Filler kit: reserved Items-tab rows ─────────────────────────────────────
+# Hanz: "joint filler and die should be library items so that we are able to edit them as well."
+# Both are RESERVED library_items rows (backend/library.py's RESERVED_ITEM_IDS) seeded by the
+# schema files; the Polish estimate prices its two condition lines off them. Driven through the
+# page's own renderItems / onItemEdit / takeoffConditionDefaults / itemResultsHtml /
+# defaultCandidates in library-ui-harness.js (out.reservedRows).
+@needs_node
+def test_dye_and_the_joint_filler_kit_are_edited_on_the_items_tab_and_never_removed(ran):
+    """Both rows are on the Items tab with every price field a material has -- that is where an
+    admin edits them -- and neither carries the Remove button: nothing reachable from the page
+    could make a row at one of these ids again, so one press would lose the editable price for
+    good. An ordinary row beside them keeps its Remove, so the rule is scoped to the two ids.
+
+    Mutation: drop the isReservedItem guard around the Remove button in renderItems (both
+    *HasNoRemove go red), or filter the two out of visibleItems (bothOnTheItemsTab goes red)."""
+    r = ran["reservedRows"]
+    assert r["bothOnTheItemsTab"], "dye or the joint filler kit is missing from the Items tab"
+    assert r["kitRowIsEditable"], (
+        "the joint filler kit's row has no coverage / cost / waste / roundup box to edit")
+    assert r["kitHasNoRemove"], "the joint filler kit's row offers Remove"
+    assert r["dyeHasNoRemove"], "the dye row offers Remove"
+    assert r["ordinaryRowKeepsRemove"], (
+        "an ordinary material lost its Remove button too -- the guard is not scoped to the two "
+        "reserved ids")
+
+
+@needs_node
+def test_editing_the_reserved_rows_moves_the_defaults_tab_price(ran):
+    """An edit typed on the Items tab goes out as the ordinary field-level PATCH, and the Defaults
+    tab's condition rows then quote the NEW figures -- coverage included, because the kit count is
+    the row's coverage now, not a 3,500 written into the page. With no row at all (a database the
+    seed has not reached) the rows say exactly what they said before this change.
+
+    Mutation: read RATES instead of the row in takeoffConditionDefaults (after == before), or
+    keep the literal "3,500" in the joint filler sentence (the coverage half of `after` stays)."""
+    r = ran["reservedRows"]
+    dot = "\u00b7"
+    shipped_kit = "$500.00 per kit %s one kit per 3,500 sq ft" % dot
+    shipped_dye = "$0.14 per SF %s two coats across the polished area" % dot
+    assert r["before"] == {"kit": shipped_kit, "dye": shipped_dye}, r["before"]
+    assert r["missing"] == {"kit": shipped_kit, "dye": shipped_dye}, (
+        "with no reserved row the Defaults tab no longer quotes the shipped figures: %r"
+        % r["missing"])
+    assert r["after"] == {
+        "kit": "$650.00 per kit %s one kit per 2,000 sq ft" % dot,
+        "dye": "$0.20 per SF %s two coats across the polished area" % dot,
+    }, "the Defaults tab did not follow the Items-tab edit: %r" % r["after"]
+    assert r["queued"] == [
+        'joint-filler-kit {"coverage":"2000"}',
+        'joint-filler-kit {"unit_cost":"650"}',
+        'dye {"unit_cost":"0.2"}',
+    ], "the Items-tab edits did not queue the ordinary PATCH bodies: %r" % r["queued"]
+
+
+@needs_node
+def test_the_reserved_rows_are_never_an_assembly_line_or_a_takeoff_default(ran):
+    """The Polish estimate already charges each through its own condition card, so neither may be
+    picked into an assembly (a second, invisible charge for the same material) or offered as a
+    takeoff default material (it is already on every bid as its own condition row). Searched by a
+    word both names contain, beside ordinary materials that must still turn up.
+
+    Mutation: drop the isReservedItem filter from itemResultsHtml or from defaultCandidates."""
+    r = ran["reservedRows"]
+    assert r["notInTheLinePicker"], "dye or the joint filler kit is offered as an assembly line"
+    assert r["ordinaryStillInThePicker"], "an ordinary material vanished from the line picker"
+    assert "dye" not in r["defaults"] and "joint-filler-kit" not in r["defaults"], (
+        "a reserved row is offered as a takeoff default: %r" % r["defaults"])
+    assert "i1" in r["defaults"], (
+        "the ordinary materials vanished from the default search too: %r" % r["defaults"])

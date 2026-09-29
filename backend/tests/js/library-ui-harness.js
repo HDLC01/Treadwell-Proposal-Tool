@@ -285,6 +285,12 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   ${grab(/^  var esc = function[\s\S]*?\n  \};$/m, "esc")}
   ${fn("current")}
   ${fn("itemOf")}
+  // DYE / JOINT-FILLER-KIT'S RESERVED IDS, lifted BEFORE every function that asks about them
+  // (renderItems, itemResultsHtml, takeoffConditionDefaults, defaultCandidates). A lifted function
+  // reaching for a helper this scope does not have dies on a ReferenceError that reds every
+  // scenario in this file at once.
+  ${grab(/^  var COND_PRICED_KEYS = \[[^\]]*\];$/m, "the COND_PRICED_KEYS declaration")}
+  ${fn("isReservedItem")}
   // Lifted because renderPanel calls it. A lifted function that reaches for a helper this scope
   // does not have dies with a ReferenceError, which takes every test in test_library_ui.py red at
   // once with no hint of the real cause — so a new helper and its lift belong in one commit.
@@ -4464,6 +4470,78 @@ async function conditionChecks() {
     unscopedRowIsOnEveryTab: /Densifier/.test(stripPolish) && /Densifier/.test(stripGyp),
     noChipMarkupAnywhereInTheTable: !/data-wt-toggle/.test(stripPolish) &&
       !/data-wt-toggle/.test(stripGyp),
+  };
+}
+
+// ── Dye and the Joint Filler kit: Items-tab rows with no Remove ─────────────
+//
+// Hanz: "joint filler and die should be library items so that we are able to edit them as well."
+// Both are RESERVED library_items rows (backend/library.py's RESERVED_ITEM_IDS), seeded by the
+// schema files. On this page each is an ordinary Items-tab row for EDITING and never for removing,
+// is never offered as an assembly line or a takeoff default, and the Defaults tab's condition rows
+// quote whatever the rows say. Everything here is the page's own code, executed.
+{
+  const RESERVED = [
+    { id: "joint-filler-kit", name: "Joint filler, 10 gal kit", unit: "Kit", buy_qty: 1,
+      unit_cost: 500, coverage: 3500, waste_pct: 0, roundup: true, favorite: false },
+    { id: "dye", name: "Dye, two coats", unit: "SF", buy_qty: 1,
+      unit_cost: 0.14, coverage: 1, waste_pct: 0, roundup: false, favorite: false },
+  ];
+  const withReserved = () => JSON.parse(JSON.stringify(ITEMS.concat(RESERVED)));
+  const bid = { TWPolishBid: require(path.join(ROOT, "js", "polish-bid-core.js")) };
+  const rowOf = (html, id) => (html.split("</tr>").filter((r) =>
+    r.indexOf('data-item="' + id + '"') !== -1)[0] || "");
+  const condPriced = (api, key) => (api.takeoffConditionDefaults()
+    .filter((c) => c.key === key)[0] || {}).priced;
+
+  // 1. THE ITEMS TAB: both rows are there to edit, neither can be removed, and an ordinary row
+  //    beside them keeps its Remove -- so "no Remove" is scoped to the two ids, not the table.
+  const t = build({ ITEMS: withReserved(), window: bid });
+  t.api.renderItems();
+  const tab = t.dom.nodes["items-body"].innerHTML;
+  const kitRow = rowOf(tab, "joint-filler-kit");
+  const dyeRow = rowOf(tab, "dye");
+
+  // 2. EDITED THROUGH THE ITEMS TAB'S OWN HANDLER, and the Defaults tab moves with it. Coverage
+  //    and cost on the kit, cost on dye -- the same onItemEdit every other material row takes.
+  const e = build({ ITEMS: withReserved(), window: bid });
+  e.api.renderItems();
+  const before = { kit: condPriced(e.api, "joint_filler"), dye: condPriced(e.api, "dye") };
+  const edit = (id, field, raw) => e.api.onItemEdit({ target: {
+    getAttribute: (k) => (k === "data-f" ? field : null), value: raw,
+    parentNode: { querySelector: () => null, insertAdjacentHTML: () => {} },
+    closest: (sel) => (sel === "[data-item]" ? { getAttribute: () => id } : null) } });
+  edit("joint-filler-kit", "coverage", "2000");
+  edit("joint-filler-kit", "unit_cost", "650");
+  edit("dye", "unit_cost", "0.2");
+  const after = { kit: condPriced(e.api, "joint_filler"), dye: condPriced(e.api, "dye") };
+
+  // 3. NO ROW AT ALL (a database the seed has not reached): the shipped figures, as before.
+  const none = build({ window: bid });
+  const missing = { kit: condPriced(none.api, "joint_filler"), dye: condPriced(none.api, "dye") };
+
+  // 4. NEVER AN ASSEMBLY LINE, NEVER A TAKEOFF DEFAULT -- both searched for by a word that
+  //    matches the reserved row's own name, beside an ordinary material that must still turn up.
+  const s = build({ ITEMS: withReserved(), window: bid });
+  const pickedAll = s.api.itemResultsHtml({ _item_search: "" });
+  const pickedByName = s.api.itemResultsHtml({ _item_search: "joint" }) +
+    s.api.itemResultsHtml({ _item_search: "dye" });
+  s.api.setDefaultQuery("o");
+  const defaults = s.api.defaultCandidates().rows.map((r) => r.id);
+
+  out.reservedRows = {
+    bothOnTheItemsTab: !!kitRow && !!dyeRow,
+    kitRowIsEditable: /data-f="coverage"/.test(kitRow) && /data-f="unit_cost"/.test(kitRow) &&
+      /data-f="waste_pct"/.test(kitRow) && /data-f="roundup"/.test(kitRow),
+    kitHasNoRemove: !/data-del-item/.test(kitRow),
+    dyeHasNoRemove: !/data-del-item/.test(dyeRow),
+    ordinaryRowKeepsRemove: /data-del-item="i1"/.test(rowOf(tab, "i1")),
+    before: before, after: after, missing: missing,
+    queued: e.api.QUEUED.filter((q) => q.id === "joint-filler-kit" || q.id === "dye")
+      .map((q) => q.id + " " + JSON.stringify(q.body)),
+    notInTheLinePicker: !/data-pick-item="(dye|joint-filler-kit)"/.test(pickedAll + pickedByName),
+    ordinaryStillInThePicker: /data-pick-item="i1"/.test(pickedAll),
+    defaults: defaults,
   };
 }
 

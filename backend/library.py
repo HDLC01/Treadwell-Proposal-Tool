@@ -99,6 +99,22 @@ DEFAULT_ITEM_UNIT = "Gallon"    # what Kyle's sheet buys most things by
 DEFAULT_ASM_UNIT = "SF"         # what a system is priced per
 DEFAULT_WASTE_PCT = 5.0         # Hanz, 2026-08-15: "by default is 5%"
 
+# THE TWO RESERVED library_items ROWS, seeded once by supabase_schema.sql / schema_pg.sql (`on
+# conflict (id) do nothing`, the identical pattern library_labor's own 'travel' row uses) and
+# never created through this module's own create_item -- that always mints a fresh uuid, on
+# purpose, so a caller can never name a row. Hanz: "joint filler and die should be library items
+# so that we are able to edit them as well" -- these are the two rows that answers.
+#
+# EDITED ON THE ITEMS TAB like any material (update_item is not special about them), and read by
+# the Polish estimate's two condition cards: frontend/js/polish-estimate.js's condLine prices
+# each through library-core's priceLine off the row's own cost, coverage, waste and roundup.
+# polish-bid-core.js's dyeCost/jointFillerCost (RATES.DYE_PER_SF, RATES.JOINT_FILLER_KIT_COST)
+# are the FALLBACK for a database the seed has not reached, the shape travelSeed() takes over
+# library_labor's 'travel' row. This tuple is what stops the row from ever being orphaned:
+# delete_item refuses either id outright, because nothing reachable from the API could ever
+# recreate a row at this exact id again.
+RESERVED_ITEM_IDS = ("dye", "joint-filler-kit")
+
 # The three divisions Treadwell estimates in (Hanz, 2026-08-15 — this replaced a free-text
 # "Category"). NOT enforced: a legacy row already holds whatever somebody typed, and refusing to
 # save it would make those rows uneditable. The dropdown offers these three and shows an
@@ -709,7 +725,20 @@ def delete_item(item_id: str) -> bool:
 
     Assemblies referencing it are deliberately left alone. Rewriting somebody else's assembly
     as a side effect of a delete is worse than a visible broken line they can repoint — and the
-    pricing layer already reports exactly that."""
+    pricing layer already reports exactly that.
+
+    REFUSES dye AND joint-filler-kit OUTRIGHT, before touching the store. Both are seeded once
+    by the schema files with a reserved id; create_item always mints its own uuid and never
+    accepts one from a caller, so a delete here is not recoverable through the ordinary API — the
+    row would need a manual SQL insert to come back. The Items tab never offers the Remove button
+    for either row (renderItems/isReservedItem in library.js), so this is the server-side half of
+    that guard: a request that reaches this function directly, past whatever the client renders,
+    still cannot take the row. Checked before the existence lookup, so an unseeded database
+    answers the same refusal rather than a 404 that reads as "fine, it's gone"."""
+    if item_id in RESERVED_ITEM_IDS:
+        raise ValidationError(
+            "\"%s\" prices the Polish estimate's own condition line, so it can't be removed. "
+            "Edit its cost or coverage instead." % item_id)
     sb = get_client()
     cur = (sb.table(ITEMS).select("id")
            .eq("id", item_id).is_("deleted_at", "null").limit(1).execute())

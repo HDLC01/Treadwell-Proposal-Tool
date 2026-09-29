@@ -1864,6 +1864,204 @@ def test_the_search_offers_both_the_assemblies_and_the_materials(ran):
     assert d["pickerIsNotASelect"], "the picker became a <select>"
 
 
+# ── dye and the joint filler kit: priced off their reserved library rows ─────────────────────
+# Hanz: "joint filler and die should be library items so that we are able to edit them as well."
+# Both are RESERVED library_items rows (backend/library.py's RESERVED_ITEM_IDS), edited on the
+# Items tab; the page prices its two condition cards off them through priceLine (condLine) and
+# falls back to jointFillerCost/dyeCost when a row is not there. All of it is the real page run
+# by polish-estimate-harness.js (out.reservedItems).
+SFS = ("0", "1", "3500", "3501", "12000")
+
+
+@needs_node
+def test_the_seeded_rows_price_every_bid_to_the_cent_as_before(ran):
+    """PRICE IDENTITY, the condition this change ships on. At every area that matters -- none, one
+    square foot, exactly one kit's worth, one foot over it, and a big floor -- a page holding the
+    SEEDED rows, a page holding NO rows, and the shipped constants called directly all give the
+    same material total, the same bid, and the same figures on both condition cards. The seed
+    fixture is pinned to the schema files by test_both_schema_files_seed_the_dye_and_joint_filler
+    _rows_the_engine_prices_like_the_constants below.
+
+    Mutation: seed the kit's waste as null/5 or its roundup off (3500 and 3501 move); read the
+    dye row's coverage as the divisor the wrong way round; drop the fallback in condLine (the
+    `missing` column goes to $0)."""
+    ident = ran["reservedItems"]["identity"]
+    assert sorted(ident, key=float) == list(SFS), ident.keys()
+    for sf in SFS:
+        row = ident[sf]
+        assert row["seeded"]["material"] == row["constants"], (
+            "at %s SF the seeded rows price dye + joint filler at %r, the shipped constants at %r"
+            % (sf, row["seeded"]["material"], row["constants"]))
+        assert row["missing"]["material"] == row["constants"], (
+            "at %s SF a page with no reserved row no longer falls back to the shipped constants: "
+            "%r vs %r" % (sf, row["missing"]["material"], row["constants"]))
+        assert row["seeded"]["total"] == row["missing"]["total"], (
+            "at %s SF the bid differs between the seeded rows and the fallback: %r vs %r"
+            % (sf, row["seeded"]["total"], row["missing"]["total"]))
+        assert row["seeded"]["cards"] == row["missing"]["cards"], (
+            "at %s SF the condition cards read differently off the seeded rows: %r vs %r"
+            % (sf, row["seeded"]["cards"], row["missing"]["cards"]))
+    # THE VECTORS ARE NOT VACUOUS: one kit at 3,500, a second at 3,501, and $0 at 0 SF.
+    assert ident["3500"]["constants"] == pytest.approx(3500 * 0.14 + 500)
+    assert ident["3501"]["constants"] == pytest.approx(3501 * 0.14 + 1000)
+    assert ident["0"]["constants"] == 0
+
+
+@needs_node
+def test_editing_the_library_rate_changes_the_bid(ran):
+    """$700 a kit and $0.50 a square foot on the rows, figures that share nothing with the shipped
+    $500 / $0.14: the material total is two kits at $700 plus 3,501 SF at $0.50, and each card
+    quotes the rate it charged.
+
+    Mutation: have condLine price off RATES instead of the row, or have materialTotal call
+    jointFillerCost/dyeCost directly."""
+    r = ran["reservedItems"]["rated"]
+    assert r["material"] == pytest.approx(r["expected"]), r
+    assert r["cards"]["joint_filler.rate"] == "$700.00 / kit", r["cards"]
+    assert r["cards"]["dye.rate"] == "$0.50 / SF", r["cards"]
+    assert r["cards"]["joint_filler.qty"] == "2", r["cards"]
+
+
+@needs_node
+def test_editing_the_kits_coverage_changes_the_kit_count(ran):
+    """The kit count is the row's own coverage now, not a 3,500 in the code. The same 3,500 SF is
+    one kit at the seeded coverage and four at 1,000; a 10% waste on the row buys a second kit,
+    because the material rule inflates before it rounds up. The card's sentence says what the
+    arithmetic did.
+
+    Mutation: keep `a / 3500` for the kit count; drop the row's waste; hardcode the hint's 3,500."""
+    r = ran["reservedItems"]
+    assert r["oneKit"] == "1", r["oneKit"]
+    assert r["oneKitHint"] == "3,500 sq ft, at one kit per 3,500, rounded up.", r["oneKitHint"]
+    assert r["fourKits"] == "4", r["fourKits"]
+    assert r["fourKitsCost"] == pytest.approx(2000), r["fourKitsCost"]
+    assert r["fourKitsHint"] == "3,500 sq ft, at one kit per 1,000, rounded up.", r["fourKitsHint"]
+    assert r["wastedKits"] == "2", r["wastedKits"]
+    assert r["wastedHint"] == "3,500 sq ft, at one kit per 3,500 plus 10% waste, rounded up.", (
+        r["wastedHint"])
+
+
+@needs_node
+def test_a_row_that_cannot_price_falls_back_and_off_still_charges_nothing(ran):
+    """A missing row is covered by the identity test above. A row that is THERE but cannot price
+    (its coverage or its cost blanked on the Items tab) must not bill $0 either: it takes the same
+    shipped formula a missing row does. And a condition that is off charges nothing whatever its
+    row says.
+
+    Mutation: return p.cost from condLine whatever p.ok says; drop the `if (M.conditions.x)` gate
+    in materialTotal."""
+    r = ran["reservedItems"]
+    assert r["blanked"]["material"] == pytest.approx(r["blanked"]["constants"]), r["blanked"]
+    assert r["offMaterial"] == 0, r["offMaterial"]
+
+
+def _reserved_item_seed(path):
+    """The rows one schema file's library_items insert seeds, as {id: {column: value}}, plus
+    where in the file the insert sits. Comments stripped first, so a seed somebody has commented
+    OUT does not read as a seed (the travel-row test's own lesson)."""
+    sql = re.sub(r"--[^\n]*", "", path.read_text(encoding="utf-8"))
+    found = list(re.finditer(
+        r"insert into public\.library_items\s*\(([^)]*)\)\s*values\s*(.*?)"
+        r"\s*on conflict \(id\) do nothing;", sql, re.I | re.S))
+    assert len(found) == 1, (
+        "%s must seed library_items with exactly ONE idempotent insert, found %d"
+        % (path.name, len(found)))
+    m = found[0]
+    cols = [c.strip() for c in m.group(1).split(",")]
+    rows = {}
+    for tup in re.findall(r"\(([^)]*)\)", m.group(2)):
+        vals = []
+        for tok in re.findall(r"\s*('(?:[^']|'')*'|[^,]+)", tup):
+            tok = tok.strip()
+            if tok.startswith("'"):
+                vals.append(tok[1:-1].replace("''", "'"))
+            elif tok.lower() in ("true", "false"):
+                vals.append(tok.lower() == "true")
+            elif tok.lower() == "null":
+                vals.append(None)
+            else:
+                vals.append(float(tok))
+        row = dict(zip(cols, vals))
+        rows[row["id"]] = row
+    return rows, m.start(), sql
+
+
+@needs_node
+def test_both_schema_files_seed_the_dye_and_joint_filler_rows_the_engine_prices_like_the_constants(ran):
+    """THE ROWS, THE FILES AND THE ENGINE HAVE TO AGREE, and they live in four places.
+
+    Both schema files seed the two reserved rows (DDL LANDS TWICE: prod Supabase and the staging
+    Postgres are different databases), library.py refuses to delete them, library.js keeps the
+    Remove button off them, and the page prices them. The harness's RESERVED_SEED is what
+    test_the_seeded_rows_price_every_bid_to_the_cent_as_before proves prices exactly like the
+    shipped constants -- so requiring both files to say EXACTLY that, column for column, is what
+    makes the identity a fact about the databases rather than about a fixture.
+
+    WASTE IS A LITERAL 0, never null: a null waste reads as the 5% default and would buy 5% more of
+    both. A FRESH DATABASE MUST BUILD: every column the insert names has to exist by the time the
+    insert runs, so the waste/roundup/buy_qty columns are added ABOVE it.
+
+    Mutation: seed either row differently in one file; seed waste as null; move the insert above
+    the waste_pct/roundup alters; rename an id in library.py's RESERVED_ITEM_IDS or library.js's
+    COND_PRICED_KEYS."""
+    import library  # noqa: E402 -- backend/ is the working directory for this suite
+
+    backend = pathlib.Path(__file__).resolve().parents[1]
+    seed = {r["id"]: r for r in ran["reservedItems"]["seed"]}
+    seeded = {}
+    for name in ("supabase_schema.sql", "staging/schema_pg.sql"):
+        rows, at, sql = _reserved_item_seed(backend / name)
+        seeded[name] = rows
+        for col in ("buy_qty", "waste_pct", "roundup"):
+            alter = re.search(r"alter table public\.library_items add column if not exists %s\b"
+                              % col, sql, re.I)
+            assert alter and alter.start() < at, (
+                "%s: the library_items insert names %s before any `add column if not exists %s` "
+                "above it, so a fresh database fails on this insert" % (name, col, col))
+        assert set(rows) == set(seed), (name, sorted(rows))
+        for rid, want in seed.items():
+            got = rows[rid]
+            assert set(got) == set(want), (
+                "%s seeds %s with columns %r, the priced seed has %r"
+                % (name, rid, sorted(got), sorted(want)))
+            for col, val in want.items():
+                assert got[col] is not None, "%s seeds %s.%s as NULL" % (name, rid, col)
+                if isinstance(val, bool) or isinstance(val, str):
+                    assert got[col] == val, (name, rid, col, got[col], val)
+                else:
+                    assert got[col] == pytest.approx(val), (name, rid, col, got[col], val)
+    assert seeded["supabase_schema.sql"] == seeded["staging/schema_pg.sql"], (
+        "the two schema files seed DIFFERENT dye / joint filler rows, so prod and staging would "
+        "price them differently")
+
+    assert set(library.RESERVED_ITEM_IDS) == set(seed), library.RESERVED_ITEM_IDS
+    js = (FRONTEND / "js" / "library.js").read_text(encoding="utf-8")
+    m = re.search(r"var COND_PRICED_KEYS = \[([^\]]*)\];", js)
+    assert m, "library.js no longer declares COND_PRICED_KEYS"
+    assert set(re.findall(r'"([^"]+)"', m.group(1))) == set(seed), m.group(1)
+
+
+@needs_node
+def test_the_reserved_rows_are_never_a_takeoff_row_and_the_card_uses_the_live_name(ran):
+    """Each is already priced by its own condition card, so neither may become an ordinary takeoff
+    row: it is left out of the picker's list AND a name typed out in full resolves to nothing,
+    either of which would charge the same material twice. Renaming the row on the Items tab
+    renames the card.
+
+    Mutation: drop the RESERVED_ITEM_IDS filter from renderDatalist or itemByName; render the
+    card's material from a literal."""
+    r = ran["reservedItems"]
+    assert r["dyeNotInPicker"], "\"Dye, two coats\" is offered in the takeoff row picker"
+    assert r["jointFillerNotInPicker"], (
+        "\"Joint filler, 10 gal kit\" is offered in the takeoff row picker")
+    assert r["ordinaryItemsStillListed"], "an ordinary material vanished from the picker too"
+    assert r["typedNameResolvesToNothing"], (
+        "typing a reserved row's name resolves a takeoff row to it")
+    assert r["ordinaryNameStillResolves"], "an ordinary material no longer resolves by name"
+    assert r["renamed"] and not r["notRenamedByDefault"], (
+        "the joint filler card does not show the row's own name")
+
+
 @needs_node
 def test_nothing_on_screen_says_labour_or_crew(ran):
     """Hanz: "All labour should be renamed to 'Labor'." And "Crew" went with it — the column is

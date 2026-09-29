@@ -289,6 +289,19 @@ on conflict (id) do nothing;
 alter table public.library_items add column if not exists updated_by text;
 alter table public.library_assemblies add column if not exists updated_by text;
 
+-- Dye and the Joint Filler kit, 2026-09-30. Mirrors supabase_schema.sql; see the note there. Two
+-- RESERVED rows at literal ids, `on conflict (id) do nothing` so an edited price survives a
+-- re-run; delete_item refuses both ids. Kyle's C29/C25 figures, which price to the cent what the
+-- engine's fallback does. Waste is a literal 0 -- a null would read as 5% and raise both prices.
+-- The two alters are a no-op where the columns are already live.
+alter table public.library_items add column if not exists waste_pct numeric(6,3);
+alter table public.library_items add column if not exists roundup boolean;
+insert into public.library_items (id, name, unit, buy_qty, unit_cost, coverage, waste_pct, roundup)
+values
+  ('joint-filler-kit', 'Joint filler, 10 gal kit', 'Kit', 1, 500.00, 3500, 0, true),
+  ('dye', 'Dye, two coats', 'SF', 1, 0.14, 1, 0, false)
+on conflict (id) do nothing;
+
 -- ── Markup rules ────────────────────────────────────────────────────────
 -- The markup chain's rates as editable expressions, one row per line per sheet LAYOUT. Mirrors
 -- supabase_schema.sql; see backend/markup.py for why the key is the TAB (Seal / Epoxy blank /

@@ -256,10 +256,13 @@
   /** B25 `=IF(E25="Yes",E18)`, C25 `0.14`, D25 `=B25*C25` — the Dye line. A flat rate
    *  across the whole polished area, charged only when the condition is on.
    *
-   *  Not a library item: dye has no coverage, no pack size, no vendor — nothing a real
-   *  material row has. Forcing it through priceLine/priceAssembly would mean inventing a fake
-   *  catalog item for a fixed formula that is not one, so it prices from RATES.DYE_PER_SF
-   *  directly instead. 0 when the condition is off or the area is not yet a positive number. */
+   *  THE FALLBACK NOW, NOT THE ANSWER (2026-09-30). Dye is a reserved library_items row, id
+   *  `dye` (backend/library.py's RESERVED_ITEM_IDS), and polish-estimate.js prices it through
+   *  library-core's priceLine off that row, so an admin edits it on the Items tab. This formula
+   *  is what stands when the row is not there to read: a database the seed has not reached.
+   *  The seed (coverage 1, waste 0, no roundup, $0.14) prices to the cent what this does, and
+   *  test_polish_estimate_page.py holds the two together. 0 when the condition is off or the
+   *  area is not yet a positive number. */
   function dyeCost(area, on) {
     var a = num(area);
     if (!on || !(a > 0)) return 0;
@@ -269,7 +272,10 @@
   /** B29 `=ROUNDUP(IF(E29="yes",(E18/3500),0),0)`, C29 `500`, D29 `=B29*C29` — Joint
    *  Filler (10 gal kit). One kit per 3,500 SF of polished area, ROUNDED UP to a whole kit —
    *  this file's own roundUp(), not a second rounding function — charged only when the
-   *  condition is on. Same 0-guard as dyeCost above. */
+   *  condition is on. Same 0-guard as dyeCost above, and THE SAME FALLBACK ROLE: the live price
+   *  is the reserved `joint-filler-kit` row (coverage 3500, waste 0, roundup on, $500), which
+   *  priceLine turns into exactly this ROUNDUP(area / 3500) × 500 while the seeded values
+   *  stand. */
   function jointFillerCost(area, on) {
     var a = num(area);
     if (!on || !(a > 0)) return 0;

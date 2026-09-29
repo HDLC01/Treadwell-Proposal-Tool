@@ -446,6 +446,36 @@ on conflict (id) do nothing;
 alter table public.library_items add column if not exists updated_by text;
 alter table public.library_assemblies add column if not exists updated_by text;
 
+-- ── Dye and the Joint Filler kit, 2026-09-30 (Hanz) ───────────────────────
+-- "joint filler and die should be library items so that we are able to edit them as well." Two
+-- RESERVED rows, the same pattern as library_labor's 'travel' row above: a literal id rather than
+-- a client-minted uuid, and `on conflict (id) do nothing`, so re-running this file leaves an
+-- edited price alone -- the whole point of the rows is that somebody can change them.
+--
+-- EDITED ON THE ITEMS TAB like any other material; the tab offers no Remove for either, and
+-- library.py's delete_item refuses both ids (create_item never accepts an id, so nothing
+-- reachable from the API could make a deleted one again). The Polish estimate prices its Joint
+-- Filler and Dye condition lines off these rows through library-core's priceLine
+-- (polish-estimate.js's condLine), and falls back to RATES.JOINT_FILLER_KIT_COST /
+-- RATES.DYE_PER_SF in polish-bid-core.js on a database that has not run this yet.
+--
+-- THE FIGURES ARE KYLE'S Polish!C29 AND C25, and they reprice nothing: through the material rule
+-- the kit row is CEIL(area / 3500) kits at $500 and the dye row is area x $0.14, to the cent what
+-- the fallback charges. WASTE IS A LITERAL 0, NEVER NULL: a null waste reads as the 5% default
+-- and would buy 5% more of both. test_polish_estimate_page.py holds these rows, both files and the
+-- engine's fallback together.
+--
+-- waste_pct and roundup are already live on both databases (the coverage-on-material move); the
+-- two `add column if not exists` lines only make this file able to build a fresh database, and
+-- are a no-op everywhere else.
+alter table public.library_items add column if not exists waste_pct numeric(6,3);
+alter table public.library_items add column if not exists roundup boolean;
+insert into public.library_items (id, name, unit, buy_qty, unit_cost, coverage, waste_pct, roundup)
+values
+  ('joint-filler-kit', 'Joint filler, 10 gal kit', 'Kit', 1, 500.00, 3500, 0, true),
+  ('dye', 'Dye, two coats', 'SF', 1, 0.14, 1, 0, false)
+on conflict (id) do nothing;
+
 -- ── Markup rules ──────────────────────────────────────────────────────────
 -- The markup chain's rates, as editable expressions, one row per line per sheet LAYOUT. Today
 -- those rates are hardcoded constants in frontend/js/polish-bid-core.js (RATES, GP_BANDS, and

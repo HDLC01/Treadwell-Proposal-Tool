@@ -1942,6 +1942,112 @@ const rendered = [];      // every string the page put on screen, for the Labour
     };
   }
 
+  // ── I2. dye and the joint filler kit: priced off their reserved library rows ─────────
+  //
+  // Hanz: "joint filler and die should be library items so that we are able to edit them as
+  // well." Both are RESERVED library_items rows now (backend/library.py's RESERVED_ITEM_IDS),
+  // seeded by the schema files and edited on the Items tab. The page prices its two condition
+  // cards off them through library-core's priceLine (condLine), and falls back to
+  // polish-bid-core.js's jointFillerCost/dyeCost when a row is not there.
+  //
+  // RESERVED_SEED IS THE SEED. test_polish_estimate_page.py parses both schema files and requires
+  // their inserts to say exactly this, so "the seeded rows price like today" below is a claim about
+  // the rows the databases will actually hold, not about a fixture that could drift from them.
+  {
+    const RESERVED_SEED = [
+      { id: "joint-filler-kit", name: "Joint filler, 10 gal kit", unit: "Kit", buy_qty: 1,
+        unit_cost: 500, coverage: 3500, waste_pct: 0, roundup: true },
+      { id: "dye", name: "Dye, two coats", unit: "SF", buy_qty: 1,
+        unit_cost: 0.14, coverage: 1, waste_pct: 0, roundup: false },
+    ];
+    const seeded = (over) => ITEMS.concat(RESERVED_SEED.map((r) =>
+      Object.assign({}, r, (over || {})[r.id] || {})));
+
+    // One SF row with no assembly behind it: it gives the job its area and prices nothing, so the
+    // material total is dye + joint filler and nothing else. Both conditions ON unless `off`.
+    async function priced(items, sf, off) {
+      const model = clone(MODEL);
+      model.takeoff = [{ assembly_id: "", assembly_name: "", measurement: sf, unit: "SF" }];
+      model.conditions = Object.assign({}, model.conditions,
+                                       { dye: !off, joint_filler: !off });
+      const b = build({ blob: blob({ polish_estimate: model }), items: items });
+      await b.api.init();
+      b.api.go(0);
+      const cards = {};
+      b.doc.querySelectorAll("[data-condfig]").forEach(function (el) {
+        cards[el.attrs["data-condfig"]] = el.textContent;
+      });
+      const html = b.dom.get("panels").innerHTML;
+      return { material: b.api.materialTotal(), total: b.api.bid().total, cards: cards,
+               renamedCard: /Our kit/.test(html) };
+    }
+
+    // THE SHIPPED CONSTANTS, called directly: the prices every bid had before either row existed.
+    const constants = (sf) => B.dyeCost(sf, true) + B.jointFillerCost(sf, true);
+
+    const SFS = [0, 1, 3500, 3501, 12000];
+    const identity = {};
+    for (const sf of SFS) {
+      const withRows = await priced(seeded(), sf);
+      const withoutRows = await priced(ITEMS, sf);
+      identity[sf] = { seeded: withRows, missing: withoutRows, constants: constants(sf) };
+    }
+
+    // EDITING THE RATE CHANGES THE BID: $700 a kit and $0.50 a square foot, figures that share
+    // nothing with the shipped $500 / $0.14.
+    const rated = await priced(seeded({ "joint-filler-kit": { unit_cost: 700 },
+                                        dye: { unit_cost: 0.5 } }), 3501);
+
+    // EDITING THE KIT'S COVERAGE CHANGES THE KIT COUNT: 3,500 SF is one kit at the seeded 3,500
+    // and four at 1,000 -- the same area, a different answer, because the row said so.
+    const oneKit = await priced(seeded(), 3500);
+    const fourKits = await priced(seeded({ "joint-filler-kit": { coverage: 1000 } }), 3500);
+    // AND ITS WASTE, which the material rule applies before rounding up: 3,500 SF + 10% needs a
+    // second kit.
+    const wasted = await priced(seeded({ "joint-filler-kit": { waste_pct: 10 } }), 3500);
+
+    // A ROW THAT CANNOT PRICE (cost or coverage blanked) falls back to the shipped formula rather
+    // than charging $0 -- the same answer as a row that is not there at all.
+    const blanked = await priced(seeded({ "joint-filler-kit": { coverage: null },
+                                          dye: { unit_cost: null } }), 3501);
+
+    // OFF IS STILL NOTHING, whatever the row says.
+    const offWithRows = await priced(seeded({ "joint-filler-kit": { unit_cost: 700 } }), 3501,
+                                     true);
+
+    // THE LIVE NAME: renaming the row on the Items tab renames the card.
+    const renamed = await priced(seeded({ "joint-filler-kit": { name: "Our kit" } }), 3500);
+
+    // NEVER A TAKEOFF ROW: not in the picker's list, and not resolved by typing the name out.
+    const p = build({ items: seeded() });
+    await p.api.init();
+    p.api.go(0);
+    const names = p.dom.get("dl-lines").children.filter((c) => c.tag === "option")
+      .map((c) => dec(c.attrs.value));
+
+    out.reservedItems = {
+      seed: RESERVED_SEED,
+      identity: identity,
+      rated: { material: rated.material, cards: rated.cards,
+               expected: 2 * 700 + 3501 * 0.5 },
+      oneKit: oneKit.cards["joint_filler.qty"], oneKitHint: oneKit.cards["joint_filler.qtyhint"],
+      fourKits: fourKits.cards["joint_filler.qty"],
+      fourKitsCost: fourKits.material - 3500 * 0.14,
+      fourKitsHint: fourKits.cards["joint_filler.qtyhint"],
+      wastedKits: wasted.cards["joint_filler.qty"],
+      wastedHint: wasted.cards["joint_filler.qtyhint"],
+      blanked: { material: blanked.material, constants: constants(3501) },
+      offMaterial: offWithRows.material,
+      renamed: renamed.renamedCard, notRenamedByDefault: oneKit.renamedCard,
+      dyeNotInPicker: names.indexOf("Dye, two coats") === -1,
+      jointFillerNotInPicker: names.indexOf("Joint filler, 10 gal kit") === -1,
+      ordinaryItemsStillListed: names.indexOf("OPF") !== -1 && names.indexOf("Densifier") !== -1,
+      typedNameResolvesToNothing: p.api.itemByName("Dye, two coats") === null &&
+        p.api.itemByName("joint filler, 10 gal kit") === null,
+      ordinaryNameStillResolves: (p.api.itemByName("OPF") || {}).id === "i1",
+    };
+  }
+
   // ── J. one add control, and a row that categorises itself ──────────────────
   {
     const a = build();

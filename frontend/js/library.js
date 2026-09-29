@@ -198,6 +198,29 @@
   }
   function itemOf(id) { return L.findItem(ITEMS, id); }
 
+  /** The two RESERVED library_items ids: Dye and the Joint Filler kit. Matches backend/library.py's
+   *  RESERVED_ITEM_IDS and the `item_id` on polish-estimate.js's CONDITION_CARDS.
+   *
+   *  Hanz: "joint filler and die should be library items so that we are able to edit them as
+   *  well." Both are seeded by the schema files at these literal ids, the Travel-row pattern, and
+   *  the Polish estimate prices its two condition cards off them. So each is an ordinary Items-tab
+   *  row for EDITING -- name, pack, unit, coverage, waste, roundup, cost -- with two differences:
+   *
+   *    * NO DELETE. Nothing reachable from this page can make a row at one of these ids again
+   *      (create_item mints its own uuid), so a delete would lose the editable price for good.
+   *      renderItems leaves the button off; delete_item refuses the id server-side as well.
+   *    * NEVER PICKED INTO ANYTHING. Not an assembly line, not the bulk-add list, not a takeoff
+   *      default: the Polish estimate already charges each one through its own condition card,
+   *      and a second copy buried in an assembly would charge the same material twice.
+   *
+   *  A literal pair rather than a lookup: isReservedItem runs inside filters over the whole
+   *  library on every repaint, and a set membership check is all it needs to be. */
+  var COND_PRICED_KEYS = ["dye", "joint-filler-kit"];
+
+  function isReservedItem(id) {
+    return !!id && COND_PRICED_KEYS.indexOf(id) !== -1;
+  }
+
   /** What an assembly is measured and priced per: "SF" or "LF".
    *
    *  Takes the assembly so it stays a pure function of its argument — the harness lifts the three
@@ -1089,7 +1112,11 @@
         '<td class="datescell">' + datesHtml(it) + "</td>" +
         '<td class="rowact">' +
           '<button class="icon" type="button" data-dupe-item="' + esc(it.id) + '" title="Make a copy of this material" aria-label="Duplicate ' + esc(it.name) + '">' + icon("copy") + "</button>" +
-          '<button class="icon danger" type="button" data-del-item="' + esc(it.id) + '" title="Remove this material" aria-label="Remove ' + esc(it.name) + '">' + icon("trash") + "</button></td>" +
+          // NO REMOVE ON DYE OR THE JOINT FILLER KIT -- see isReservedItem. Every other cell on
+          // the row stays editable; that is the point of the row.
+          (isReservedItem(it.id) ? "" :
+          '<button class="icon danger" type="button" data-del-item="' + esc(it.id) + '" title="Remove this material" aria-label="Remove ' + esc(it.name) + '">' + icon("trash") + "</button>") +
+          "</td>" +
       "</tr>";
     }
     $("items-body").innerHTML = out;
@@ -1838,7 +1865,9 @@
   function itemResultsHtml(line) {
     var query = line._item_search == null ? "" : line._item_search;
     var matches = ITEMS.filter(function (candidate) {
-      return itemMatches(candidate, query);
+      // Dye and the Joint Filler kit are never an assembly line -- see isReservedItem. The Polish
+      // estimate already charges each through its own condition card.
+      return !isReservedItem(candidate && candidate.id) && itemMatches(candidate, query);
     }).slice(0, 12);
     if (!matches.length) return '<div class="gone">No items match that search.</div>';
     return matches.map(function (candidate) {
@@ -2074,12 +2103,12 @@
    *  one of his formulas and nothing on any screen would say so. So the cell is printed beside the
    *  price rather than offered as a box.
    *
-   *  AND NOT THE RATE EITHER, today. $500 a kit is Kyle's C29 and $0.14 a square foot is his C25,
-   *  and this page reads both out of RATES rather than restating them -- a second copy of a rate
-   *  is the one thing on an estimating screen that can go stale without looking stale. Making
-   *  them typeable means giving them a home to be typed into, which is a store this tab does not
-   *  have; it is the next thing to build here, not something to fake with a box that writes
-   *  nowhere.
+   *  THE RATE LIVES ON THE ITEMS TAB, 2026-09-30. $500 a kit is Kyle's C29 and $0.14 a square
+   *  foot is his C25, and both are now reserved library_items rows (`joint-filler-kit`, `dye` --
+   *  see isReservedItem) that an admin edits on the Items tab like any other material. This row
+   *  READS them, the same row polish-estimate.js's condLine prices from, so the figure shown here
+   *  cannot disagree with the figure charged. RATES (and the kit's 3,500 sq ft) are what stand
+   *  when the row is not there to read -- the same fallback the estimate takes.
    *
    *  THE SHIPPED ANSWER IS STILL READ FROM freshModel, and the stored overrides are written over
    *  it through the ESTIMATE'S OWN seedConditionDefaults rather than a merge written again here.
@@ -2096,17 +2125,27 @@
     if (!B || !B.freshModel) return [];
     var shipped = (B.freshModel() || {}).conditions || {};
     var c = B.seedConditionDefaults ? B.seedConditionDefaults(shipped, COND_DEFAULTS) : shipped;
-    // READ OFF RATES, NEVER RETYPED. These are the same two constants jointFillerCost and
-    // dyeCost price from, so a figure shown here cannot disagree with the figure charged. The
-    // guard is the same one `B` carries above: a page that threw because the shared module did
-    // not load would take Items and Assemblies down with it, and an em dash is a better answer
-    // than a blank screen.
+    // THE RESERVED ROW WHEN IT CAN PRICE, RATES WHEN IT CANNOT -- condLine's own rule in
+    // polish-estimate.js, asked the same way: priceLine answers ok only for a row that is there
+    // with a usable cost and coverage. The guard on `B` above stays: a page that threw because the
+    // shared module did not load would take Items and Assemblies down with it, and an em dash is
+    // a better answer than a blank screen.
     var R = (B.RATES || {});
-    var kit = L.num(R.JOINT_FILLER_KIT_COST) != null ? L.money(R.JOINT_FILLER_KIT_COST) : null;
-    var dye = L.num(R.DYE_PER_SF) != null ? L.money(R.DYE_PER_SF) : null;
+    var kitLine = L.priceLine({ item_id: "joint-filler-kit" }, ITEMS, 0);
+    var dyeLine = L.priceLine({ item_id: "dye" }, ITEMS, 0);
+    var kitRate = kitLine.ok ? kitLine.unit_price : R.JOINT_FILLER_KIT_COST;
+    var kitCov = kitLine.ok ? kitLine.coverage : 3500;
+    // PER SQUARE FOOT, which is what the dye line costs whatever its row buys by: one unit's
+    // price over what one unit covers, plus its waste. The seeded row (coverage 1, waste 0)
+    // makes this exactly its unit_cost.
+    var dyeRate = dyeLine.ok
+      ? (dyeLine.unit_price / dyeLine.coverage) * (1 + dyeLine.waste_pct / 100)
+      : R.DYE_PER_SF;
+    var kit = L.num(kitRate) != null ? L.money(kitRate) : null;
+    var dye = L.num(dyeRate) != null ? L.money(dyeRate) : null;
     return [
       { key: "joint_filler", label: "Joint filler", on: !!c.joint_filler, cell: "Polish!E29",
-        priced: kit ? kit + " per kit \u00b7 one kit per 3,500 sq ft"
+        priced: kit ? kit + " per kit \u00b7 one kit per " + L.qtyText(kitCov) + " sq ft"
                     : "No rate loaded for the kit" },
       { key: "remove_existing_jf", label: "Remove existing joint filler",
         on: !!c.remove_existing_jf, cell: "Polish!F29",
@@ -2387,6 +2426,9 @@
       }
     });
     ITEMS.forEach(function (it) {
+      // Dye and the Joint Filler kit are never a takeoff default material: each is already on
+      // every bid as its own condition row (takeoffConditionDefaults), with its own Add/Remove.
+      if (isReservedItem(it.id)) return;
       if (!it.favorite && (!q || String(it.name || "").toLowerCase().indexOf(q) !== -1)) {
         hits.push({ kind: "items", id: it.id, name: it.name, what: "Material" });
       }
@@ -3050,7 +3092,10 @@
     var already = {};
     ((asm && asm.lines) || []).forEach(function (ln) { if (ln.item_id) already[ln.item_id] = true; });
 
-    var list = bulkCandidates(ITEMS, BULK.q, BULK.F);
+    // Dye and the Joint Filler kit are left out here too -- the same reason as itemResultsHtml,
+    // the one-line picker this modal is the bulk version of.
+    var list = bulkCandidates(
+      ITEMS.filter(function (it) { return !isReservedItem(it && it.id); }), BULK.q, BULK.F);
     BULK.shown = list.map(function (it) { return it.id; });
 
     $("bulk-list").innerHTML = list.map(function (it) {

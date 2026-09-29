@@ -172,6 +172,83 @@ def test_deleting_twice_is_not_a_success_the_second_time(store):
     assert library.delete_item(row["id"]) is False
 
 
+# ── the two reserved rows: dye and the joint filler kit ────────────────
+# Hanz: "joint filler and die should be library items so that we are able to edit them as
+# well." Seeded once by the schema files at a RESERVED id (backend/library.py's
+# RESERVED_ITEM_IDS) that create_item can never recreate -- it always mints a fresh uuid, the
+# same guarantee library_labor's 'travel' row already relies on. A delete would therefore lose
+# the editable price for good, so delete_item refuses it outright; an EDIT is the ordinary
+# update_item path and must stay open, because editing them is the whole point.
+def _reserved(rid):
+    seeds = {
+        "joint-filler-kit": {"id": "joint-filler-kit", "name": "Joint filler, 10 gal kit",
+                             "unit": "Kit", "buy_qty": 1, "unit_cost": 500.0, "coverage": 3500.0,
+                             "waste_pct": 0.0, "roundup": True, "deleted_at": None},
+        "dye": {"id": "dye", "name": "Dye, two coats", "unit": "SF", "buy_qty": 1,
+                "unit_cost": 0.14, "coverage": 1.0, "waste_pct": 0.0, "roundup": False,
+                "deleted_at": None},
+    }
+    return dict(seeds[rid])
+
+
+@pytest.mark.parametrize("rid", ["dye", "joint-filler-kit"])
+def test_a_reserved_row_cannot_be_deleted(store, rid):
+    """The guard fires before the store is touched -- the row is inserted directly (create_item
+    cannot make one at this id) and survives the refused delete. Both ids, so a guard naming only
+    one cannot pass for both."""
+    store["library_items"].append(_reserved(rid))
+    with pytest.raises(library.ValidationError):
+        library.delete_item(rid)
+    assert store["library_items"][0]["deleted_at"] is None, (
+        "the reserved row was soft-deleted despite the guard")
+
+
+@pytest.mark.parametrize("rid", ["dye", "joint-filler-kit"])
+def test_a_reserved_id_is_refused_even_with_no_row_seeded_yet(store, rid):
+    """A database the seed has not reached must not answer a delete on a reserved id with a
+    harmless-looking 404: this id may never be deleted, seeded or not, so the guard fires BEFORE
+    the existence check."""
+    with pytest.raises(library.ValidationError):
+        library.delete_item(rid)
+
+
+def test_the_reserved_ids_are_refused_through_the_api_as_a_400(store):
+    """THE SAME GUARD, THROUGH THE ROUTE. api_library_item_delete turns the ValidationError into
+    a 400 that says why, not a bare 500 -- the server-side half of the Items tab leaving the
+    Remove button off these rows, so a direct API call cannot take them either."""
+    store["library_items"].append(_reserved("joint-filler-kit"))
+    r = client.delete("/api/library/items/joint-filler-kit")
+    assert r.status_code == 400, r.text
+    assert "can't be removed" in r.json()["detail"]
+    assert store["library_items"][0]["deleted_at"] is None, (
+        "the row was soft-deleted despite the route refusing the request")
+
+
+def test_an_ordinary_material_still_deletes(store):
+    """The refusal is scoped to the two reserved ids: any other material removes as before."""
+    row = _mk_item(name="Densifier")
+    assert client.delete("/api/library/items/%s" % row["id"]).status_code == 200
+
+
+def test_the_reserved_rows_are_edited_like_any_material(store):
+    """EDITING IS THE POINT. The kit's cost, coverage, waste and roundup, and dye's cost, all go
+    through the ordinary PATCH and come back changed -- nothing about the reserved ids closes the
+    update path, which is the one the Items tab uses.
+
+    Mutation: extend the RESERVED_ITEM_IDS refusal to update_item."""
+    store["library_items"].extend([_reserved("joint-filler-kit"), _reserved("dye")])
+    r = client.patch("/api/library/items/joint-filler-kit",
+                     json={"unit_cost": "650", "coverage": "2000", "waste_pct": "10",
+                           "roundup": False})
+    assert r.status_code == 200, r.text
+    kit = r.json()["item"]
+    assert (kit["unit_cost"], kit["coverage"], kit["waste_pct"], kit["roundup"]) == (
+        650.0, 2000.0, 10.0, False), kit
+    r = client.patch("/api/library/items/dye", json={"unit_cost": "0.2"})
+    assert r.status_code == 200, r.text
+    assert r.json()["item"]["unit_cost"] == 0.2
+
+
 # ── assemblies: lines ─────────────────────────────────────────────────
 def test_an_assembly_needs_a_name():
     with pytest.raises(library.ValidationError):
