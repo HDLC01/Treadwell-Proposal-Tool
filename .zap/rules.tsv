@@ -1,0 +1,11 @@
+# Alerts ZAP raises that we keep ON PURPOSE. Read by .zap/summarize.py: an alert listed here is
+# left out of the counts in the public step summary and listed underneath with its reason, and it
+# stays in the full report artifact. Nothing else is hidden, and nothing is hidden without a reason.
+#
+# One line per alert, four TAB-separated fields:
+#     <alertRef or rule id>  IGNORE  <alert name as ZAP prints it>  <one-line reason>
+#
+# Use the alertRef (10055-6), not the rule id (10055), wherever ZAP gives one. 10055 is ONE rule
+# that raises a dozen different CSP alerts, and ignoring the rule would also hide the one that
+# matters most here: script-src 'unsafe-inline' coming back (5b9b71f removed it).
+10055-6	IGNORE	CSP: style-src unsafe-inline	Kept on purpose on both apps: the tool's pages set about 41 inline styles through innerHTML (5b9b71f) and the portal's pages carry inline style attributes. script-src unsafe-inline is allowed on neither and still counts.
