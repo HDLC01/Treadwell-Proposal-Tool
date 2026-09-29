@@ -2025,13 +2025,16 @@ def test_the_remodel_tax_uses_the_countys_real_rate_not_the_sheets_ten_percent(r
     c = ran["remodelRate"]["county"]
     assert c["pct"] == "7.975%", "a Johnson County job is not charged the county rate: %r" % c["pct"]
     assert c["pct"] == c["expectedPct"]
-    # BACK TO $1,529 ON 2026-09-19. It was $1,529 before 2026-09-18, then $1,715 while
-    # joint_filler shipped ON and added $2,500 of material to this fixture, and now $1,529 again
-    # because the condition ships off. The $2,500 is not the whole of the $186 swing -- it moves
-    # the sub-total, and GP, shipping and the taxes all follow it -- which is exactly why the
-    # figure is worth pinning rather than recomputing in the test.
-    assert c["money"] == "$1,529" and c["expectedMoney"] == 1529
-    assert c["total"] == "$33,239" and c["expectedTotal"] == 33239, (
+    # NOW $1,557 / $34,025 AS OF 2026-09-30. $1,529 held from 2026-09-19 until the library's
+    # coverage/waste/roundup moved onto the material (2026-09-22): this fixture's items i2/i3/i4
+    # were never given their own waste_pct, so they now correctly default to 5% instead of quietly
+    # inheriting the 0% their assembly lines used to carry -- and i4 (Densifier, 5 pails needed)
+    # ceiling-rounds to a whole extra pail at 5.25. That is a real, upstream, already-approved
+    # engine change, not a fixture bug: it moves the sub-total, and GP, shipping and the taxes all
+    # follow it, which is exactly why the figure is worth pinning rather than recomputing in the
+    # test.
+    assert c["money"] == "$1,557" and c["expectedMoney"] == 1557
+    assert c["total"] == "$34,025" and c["expectedTotal"] == 34025, (
         "the total does not follow the county rate through the chain")
     assert c["rowNamesTheCounty"], (
         "the row does not say which county the rate came from; an estimator who knows the workbook "
@@ -2046,9 +2049,9 @@ def test_with_no_county_it_falls_back_to_the_state_rate_and_says_so(ran):
     it matches the sheet, while being wrong everywhere."""
     f = ran["remodelRate"]["fallback"]
     assert f["pct"] == "6.5%", "the no-county fallback is not the Kansas state rate: %r" % f["pct"]
-    # $1,247 before 2026-09-18 and again from 2026-09-19 -- the same joint-filler-by-default
-    # shift as the county case above, in reverse.
-    assert f["money"] == "$1,247" and f["expectedMoney"] == 1247
+    # NOW $1,269 AS OF 2026-09-30 -- the same coverage-on-material default-waste shift as the
+    # county case above (see that test's comment), just at the state rate instead of the county's.
+    assert f["money"] == "$1,269" and f["expectedMoney"] == 1269
     assert f["expectedMoney"] != f["whatTenPercentWouldBe"], (
         "the fallback charges what the sheet's 10% would have charged (%s), so this test proves "
         "nothing" % f["whatTenPercentWouldBe"])

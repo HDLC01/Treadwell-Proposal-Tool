@@ -197,11 +197,13 @@
    *  and an assembly is nothing more than a list of those. So a material row takes the same path a
    *  line inside an assembly takes, and cannot drift from it.
    *
-   *  COVERAGE IS TYPED ON THE ROW, falling back to the item's own default -- priceLine's existing
-   *  rule, not a new one. It has to be per-row rather than per-item because the same product is
-   *  used at different coverages in different systems, which is exactly why Kyle's sheet keeps
-   *  coverage on the line. Storing the row's figure back onto the item would make it wrong for
-   *  every other place that item is used.
+   *  COVERAGE IS TYPED ON THE ROW as THIS ESTIMATE'S OWN OVERRIDE, applied here in the page, not
+   *  inside priceLine -- the library rule (2026-09-22) moved coverage onto the material, so
+   *  priceLine itself no longer reads a line's coverage at all. Hanz, 2026-09-30: keep the box,
+   *  because the same product is used at different coverages on different jobs, but the override
+   *  is a per-job fact about THIS estimate, not a second source of truth for the material -- it is
+   *  never written back onto the item (see priceMaterialRow). Blank still falls back to the
+   *  item's own default, same as before.
    *
    *  The return is shaped like priceAssembly's so every caller -- rowCost, materialTotal, the
    *  broken-line warning, the per-unit hint -- keeps working without knowing which kind it got. */
@@ -220,8 +222,23 @@
    *  that wrong would put "1 line cannot price yet" under every row the moment it is added. */
   function priceMaterialRow(r) {
     var area = B.num(r.measurement);
-    var one = L.priceLine({ item_id: r.item_id, coverage: r.coverage,
-                            waste_pct: r.waste_pct, roundup: r.roundup }, ITEMS, area);
+    // THE OVERRIDE LIVES HERE, not inside priceLine: waste and roundup have no box on this row and
+    // come from the material either way. A typed coverage prices against a ONE-ITEM SWAP of the
+    // real item -- coverage replaced, everything else (cost, pack size) untouched -- so the item
+    // in the library is never mutated. Blank r.coverage leaves `items` as ITEMS, so priceLine
+    // falls back to the material's own coverage exactly as it does for every assembly line.
+    var items = ITEMS;
+    var cov = B.num(r.coverage);
+    // TRUTHY, NOT !== null: B.num returns 0 for "", null and undefined alike (see
+    // polish-bid-core.js), which is exactly how covHint/covPlaceholder already tell "nothing
+    // typed" from a real figure. `!== null` would treat every blank row as coverage 0 and price it
+    // as broken (no_coverage) the instant it's added, before anyone touches the box.
+    if (cov) {
+      items = ITEMS.map(function (it) {
+        return it && it.id === r.item_id ? Object.assign({}, it, { coverage: cov }) : it;
+      });
+    }
+    var one = L.priceLine({ item_id: r.item_id }, items, area);
     var priced = one.ok && one.priced ? 1 : 0;
     var broken = (!one.ok && one.reason !== "no_item") ? 1 : 0;
     var total = priced ? one.cost : 0;
