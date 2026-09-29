@@ -12,17 +12,21 @@
 # (NO --build). Note: this image bakes in the Claude CLI + LibreOffice, so it's
 # large — the transfer takes a bit, but it never storms the prod CPU.
 #
-# Prereqs: local Docker engine running; SSH key at ~/.ssh/treadwell_vps.
+# Prereqs: local Docker engine running; a `Host treadwell-vps` entry in your SSH config.
+#          The address, login, port and key live in that entry, not in this public repo.
 # Usage:   bash deploy/ship.sh
+#          VPS_HOST, VPS_USER and SSH_KEY still override it (another box, another key).
 set -euo pipefail
 
-VPS_HOST="${VPS_HOST:-50.6.110.215}"
-VPS_USER="${VPS_USER:-root}"
-SSH_KEY="${SSH_KEY:-$HOME/.ssh/treadwell_vps}"
+VPS_HOST="${VPS_HOST:-treadwell-vps}"
+VPS_USER="${VPS_USER:-}"   # empty: the User from the SSH config entry
+SSH_KEY="${SSH_KEY:-}"     # empty: the IdentityFile from the SSH config entry
 APP_DIR="/opt/treadwell"
 # Must match the compose `image:` so `up -d` starts what we just built.
 IMAGE="${TW_IMAGE:-ghcr.io/hdlc01/treadwell-proposal-tool:prod}"
-SSH=(ssh -i "$SSH_KEY" -o ConnectTimeout=20 "${VPS_USER}@${VPS_HOST}")
+SSH=(ssh -o ConnectTimeout=20)
+if [ -n "$SSH_KEY" ]; then SSH+=(-i "$SSH_KEY"); fi
+SSH+=("${VPS_USER:+$VPS_USER@}$VPS_HOST")
 
 cd "$(dirname "$0")/.."
 

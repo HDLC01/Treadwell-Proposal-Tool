@@ -149,8 +149,15 @@ class Text {
 
 const VOID = new Set(["BR", "IMG", "HR", "INPUT"]);
 
+/** Every innerHTML parse, and whether it happened in an INERT document (one made by
+ *  document.implementation.createHTMLDocument, which has no window) or in the page's own. An
+ *  element the live page creates fetches an <img> and runs its onerror the moment it is parsed,
+ *  attached or not -- so where a clipboard is parsed is the whole question for a paste. */
+const PARSES = [];
+
 class El {
   constructor(tag) {
+    this._inert = false;
     this.nodeType = Node.ELEMENT_NODE;
     this.tagName = String(tag).toUpperCase();
     this.childNodes = [];
@@ -200,6 +207,8 @@ class El {
     c.parentNode = null;
     return c;
   }
+  // runsFromHtml strips <img>, <style> and the rest with it; no clipboard here carried one before.
+  remove() { if (this.parentNode) this.parentNode.removeChild(this); }
   get textContent() {
     return this.childNodes.map((n) =>
       n.nodeType === Node.TEXT_NODE ? n.nodeValue : n.textContent).join("");
@@ -211,6 +220,7 @@ class El {
   /** A real (if small) parser: renderRuns nests a .tw-fill span inside a style span, so a flat one
    *  would silently drop the token boundary this editor depends on. */
   set innerHTML(html) {
+    PARSES.push({ html: String(html), inert: this._inert });
     while (this.childNodes.length) this.removeChild(this.childNodes[0]);
     const stack = [this];
     const re = /<\/([a-zA-Z][\w-]*)\s*>|<([a-zA-Z][\w-]*)((?:\s+[\w-]+="[^"]*")*)\s*\/?>|([^<]+)/g;
@@ -221,6 +231,7 @@ class El {
         if (stack.length > 1) stack.pop();
       } else if (m[2]) {
         const el = new El(m[2]);
+        el._inert = this._inert;
         for (const a of m[3].matchAll(/([\w-]+)="([^"]*)"/g)) {
           const v = unesc(a[2]);
           el.attrs[a[1]] = v;
@@ -311,6 +322,13 @@ class Range {
 
 const document = {
   createElement: (t) => new El(t),
+  // A document with no window, as the browser's createHTMLDocument makes one: its elements are
+  // marked, so a parse inside it is told apart from one in this page.
+  implementation: {
+    createHTMLDocument: () => ({
+      createElement: (t) => { const e = new El(t); e._inert = true; return e; },
+    }),
+  },
   createRange: () => new Range(),
   createTextNode: (v) => new Text(v),
   activeElement: null,
@@ -662,6 +680,25 @@ const out = {};
   caretIn(blocks[0], 7, 7);
   paste(box, "grind and prep", '<span style="font-weight:700">grind</span> and prep');
   out.blockKeepsFormatting = page.editRuns(blocks[0]);
+}
+
+// ═══ 5b. A CLIPBOARD IS READ IN A DOCUMENT WITH NO WINDOW ════════════════════
+// Pasted through the real handler, so the question is what the page does, not what one helper
+// does. The clipboard carries an <img onerror>: parsed by an element of the live page, its handler
+// runs even though the element is never attached. Every parse of that markup must be inert, and
+// the formatting must still come through exactly as it did.
+{
+  const { blocks, box } = mountBox(["Scope: "]);
+  caretIn(blocks[0], 7, 7);
+  const html = '<img src="x" onerror="window.__pwned=1"><span style="font-weight:700">grind</span> and prep';
+  PARSES.length = 0;
+  paste(box, "grind and prep", html);
+  const ofClipboard = PARSES.filter((p) => p.html.indexOf("onerror") >= 0);
+  out.inertPaste = {
+    parses: ofClipboard.length,
+    inLiveDocument: ofClipboard.filter((p) => !p.inert).length,
+    runs: page.editRuns(blocks[0]),
+  };
 }
 
 // ═══ 6. A PASTE THAT LANDS ON NO LINE IS REFUSED ═════════════════════════════

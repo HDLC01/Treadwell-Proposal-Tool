@@ -125,6 +125,27 @@ def test_a_template_paragraph_still_takes_its_formatting(ran):
     ]
 
 
+def test_a_pasted_clipboard_is_read_in_a_document_with_no_window(ran):
+    """A clipboard's HTML is parsed where nothing in it can load or run.
+
+    `runsFromHtml` used to parse it into a `<div>` this page created. That element is live even
+    though it is never attached: an `<img src=x onerror=...>` in the clipboard is fetched, and its
+    handler runs in the staff member's session, the moment innerHTML parses it -- so copying from a
+    hostile web page into the proposal editor was enough. It is now parsed in a document from
+    `document.implementation.createHTMLDocument`, which has no window. Same `<div>`, same fragment
+    parser, so the runs that come out are unchanged, and this pins both halves.
+
+    Mutation: put `document.createElement("div")` back in runsFromHtml. `inLiveDocument` goes to 1."""
+    got = ran["inertPaste"]
+    assert got["parses"] >= 1, "the clipboard markup was never parsed at all -- the scenario is vacuous"
+    assert got["inLiveDocument"] == 0
+    assert got["runs"] == [
+        {"text": "Scope: ", "tok": None},
+        {"text": "grind", "tok": None, "bold": True},
+        {"text": " and prep", "tok": None},
+    ]
+
+
 # ═══ the multi-line clipboard ════════════════════════════════════════════════
 def test_five_lines_into_a_one_line_row_keep_every_word_on_one_line(ran):
     """The case to think hardest about, and the answer is: collapse, do not truncate.

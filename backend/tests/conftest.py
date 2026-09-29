@@ -138,6 +138,17 @@ def _clear_render_cache():
     main._RENDER_CACHE.clear()
 
 
+@pytest.fixture(autouse=True)
+def _clear_service_rate_window():
+    """main.py throttles the three service-token routes per peer (_SERVICE_HITS), and every
+    TestClient request comes from the same peer. Cleared around every test so one file's calls
+    to /api/admin/proposal-pdf can't spend the next file's allowance."""
+    import main
+    main._SERVICE_HITS.clear()
+    yield
+    main._SERVICE_HITS.clear()
+
+
 @pytest.fixture
 def real_verify_token():
     """The genuine verify_token (un-bypassed) for the auth tests."""

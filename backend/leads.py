@@ -52,6 +52,7 @@ _WRITABLE_COLUMNS = frozenset({
 })
 _IN_CHUNK = 100          # ids per PostgREST `in.(...)` filter — keeps the URL sane
 _TEXT_CAP = 15_000       # chars of email body handed to the AI / the intake notes
+_RAW_CAP = 10 * _TEXT_CAP  # chars of raw body read at all, before stripping (see _clip)
 _EML_TIMEOUT = 20.0
 _TZ_NAME = "America/Chicago"
 
@@ -250,15 +251,19 @@ def merge_inbox(messages: List[Dict[str, Any]],
 
 
 # ── email body -> plain text ──────────────────────────────────────────
-_COMMENT_RE = re.compile(r"(?s)<!--.*?-->")
-_SCRIPT_RE = re.compile(r"(?is)<(script|style)\b[^>]*>.*?</\1\s*>")
 _BR_RE = re.compile(r"(?i)<br\s*/?>")
 _CELL_RE = re.compile(r"(?i)</t[dh]\s*>")
 _BLOCK_RE = re.compile(
     r"(?i)</(p|div|tr|li|ul|ol|h[1-6]|table|thead|tbody|blockquote|section|article|pre)\s*>")
-_TAG_RE = re.compile(r"(?s)<[^>]*>")
 _SPACES_RE = re.compile(r"[ \t\xa0]{2,}")
 _BLANKS_RE = re.compile(r"\n{3,}")
+# The comment, script/style and tag passes are scans, not regexes. As regexes — `<!--.*?-->`,
+# `<(script|style)\b[^>]*>.*?</\1\s*>`, `<[^>]*>` — they are quadratic on unclosed markup: every
+# opener with no closer after it rescans to the end of the body, and the body is written by
+# whoever emailed the bid inbox. Each scan gives its regex's output in one pass.
+_OPEN_BLOCK_RE = re.compile(r"(?i)<(?:(script)|style)\b")
+_CLOSE_SCRIPT_RE = re.compile(r"(?i)</script\s*>")
+_CLOSE_STYLE_RE = re.compile(r"(?i)</style\s*>")
 
 
 def _collapse(text: str) -> str:
@@ -275,19 +280,124 @@ def _html_to_text(raw: str) -> str:
     as markup, so imperfect nesting can't hurt anything."""
     if not raw:
         return ""
-    s = _COMMENT_RE.sub(" ", raw)
-    s = _SCRIPT_RE.sub(" ", s)          # drop the CONTENT of script/style, not just the tags
+    raw, cut = _clip(raw)
+    s = _strip_comments(raw, cut)
+    s = _strip_blocks(s, cut)           # drop the CONTENT of script/style, not just the tags
     s = _BR_RE.sub("\n", s)
     s = _CELL_RE.sub(" ", s)            # table cells read as one line, not one line each
     s = _BLOCK_RE.sub("\n", s)
-    s = _TAG_RE.sub("", s)
-    return _collapse(html.unescape(s))
+    s = _strip_tags(s, cut)
+    return _mark(_collapse(html.unescape(s)), cut)
+
+
+def _strip_comments(s: str, cut: bool = False) -> str:
+    """`re.sub(r"(?s)<!--.*?-->", " ", s)` in one pass. An unclosed `<!--` is left as the regex
+    leaves it, unless `cut` says _clip shortened the body: then the cut is what left it open, its
+    `-->` is past the cut, and the rest is comment, not text."""
+    out, pos = [], 0
+    while True:
+        start = s.find("<!--", pos)
+        if start < 0:
+            break
+        end = s.find("-->", start + 4)
+        if end < 0:                     # and no later "<!--" can close either
+            if cut:
+                out.append(s[pos:start])
+                pos = len(s)
+            break
+        out.append(s[pos:start])
+        out.append(" ")
+        pos = end + 3
+    out.append(s[pos:])
+    return "".join(out)
+
+
+def _strip_tags(s: str, cut: bool = False) -> str:
+    """`re.sub(r"(?s)<[^>]*>", "", s)` in one pass; `cut` as in _strip_comments."""
+    out, pos = [], 0
+    while True:
+        start = s.find("<", pos)
+        if start < 0:
+            break
+        end = s.find(">", start + 1)
+        if end < 0:                     # and no later "<" can close either
+            if cut:
+                out.append(s[pos:start])
+                pos = len(s)
+            break
+        out.append(s[pos:start])
+        pos = end + 1
+    out.append(s[pos:])
+    return "".join(out)
+
+
+def _strip_blocks(s: str, cut: bool = False) -> str:
+    r"""`re.sub(r"(?is)<(script|style)\b[^>]*>.*?</\1\s*>", " ", s)` in one pass: a script or
+    style block goes content and all. `cut` as in _strip_comments — a block the cut left open
+    goes to the end, so its CSS or JS is never read as body text. The regex repeats a failed
+    lookup, to the end of the body, for every later opener; here each result is kept."""
+    out, pos = [], 0
+    gt = -1                             # the last ">" found: the first after any opener before it
+    no_close_from = {True: -1, False: -1}   # per name: no closer at or after this index
+    for m in _OPEN_BLOCK_RE.finditer(s):
+        start = m.start()
+        if start < pos:
+            continue                    # inside a block already dropped
+        if gt < m.end():
+            gt = s.find(">", m.end())
+            if gt < 0:                  # an opener never closed: no later one can close either
+                if cut:
+                    out.append(s[pos:start])
+                    pos = len(s)
+                break
+        is_script = m.group(1) is not None
+        close = None
+        if not 0 <= no_close_from[is_script] <= gt + 1:
+            close = (_CLOSE_SCRIPT_RE if is_script else _CLOSE_STYLE_RE).search(s, gt + 1)
+            if close is None:
+                no_close_from[is_script] = gt + 1
+        if close is None:
+            if cut:
+                out.append(s[pos:start])
+                pos = len(s)
+                break
+            continue
+        out.append(s[pos:start])
+        out.append(" ")
+        pos = close.end()
+    out.append(s[pos:])
+    return "".join(out)
+
+
+_TRUNCATED = "\n\n[truncated]"
+
+
+def _clip(raw: str) -> Tuple[str, bool]:
+    """Bound a body before anything reads it: the body is written by whoever emailed the bid
+    inbox. The bound is on RAW characters, so it is `_RAW_CAP`, ten times `_TEXT_CAP` — the text
+    cap still applies, as it always did, to what is left after the markup is stripped. A raw cut
+    at the text cap would lose the readable text of any invite whose markup runs past it (a big
+    <style> head alone can), and bodies run tens of KB. The cut can land inside a comment, a
+    script/style block or a tag; the strip passes are told, and drop what the cut left open
+    rather than read its CSS or JS as body text. The flag also marks the result [truncated]."""
+    if len(raw) <= _RAW_CAP:
+        return raw, False
+    return raw[:_RAW_CAP], True
+
+
+def _mark(text: str, clipped: bool) -> str:
+    """Cut to `_TEXT_CAP` and mark a body `_clip` cut, sized so `_cap` leaves it alone."""
+    if not (clipped and text):
+        return text
+    return text[:_TEXT_CAP].rstrip() + _TRUNCATED
 
 
 def _cap(text: str) -> str:
     if len(text) <= _TEXT_CAP:
         return text
-    return text[:_TEXT_CAP].rstrip() + "\n\n[truncated]"
+    if text.endswith(_TRUNCATED) and len(text) <= _TEXT_CAP + len(_TRUNCATED):
+        return text                     # already cut to the cap and marked (_mark)
+    return text[:_TEXT_CAP].rstrip() + _TRUNCATED
 
 
 def _decode_part(part) -> str:
@@ -319,7 +429,8 @@ def _eml_body_text(msg) -> str:
         elif ctype == "text/html":
             html_parts.append(_decode_part(part))
     if any(p.strip() for p in plain):
-        return _collapse("\n".join(plain))
+        body, clipped = _clip("\n".join(plain))
+        return _mark(_collapse(body), clipped)
     return _html_to_text("\n".join(html_parts))
 
 
@@ -335,6 +446,46 @@ def _eml_header(msg, name: str) -> str:
         return _txt(raw)
 
 
+# Where the signed .eml link may point. Basisboard mints Google Cloud Storage signed URLs (a
+# stale one answers 403, which _download_eml re-mints on), path-style on storage.googleapis.com
+# or virtual-hosted on <bucket>.storage.googleapis.com. We fetch the link with no auth of our
+# own, but from INSIDE the server — so a link to anywhere else (localhost, the Docker network,
+# a cloud metadata address) is refused rather than fetched.
+_EML_HOSTS = ("storage.googleapis.com",)
+
+
+class _EmlHostRefused(Exception):
+    """A .eml link, or a redirect it answered with, that is not an https Basisboard storage URL."""
+
+
+def _eml_url_ok(url: Any) -> bool:
+    """True only for https on the default port to an _EML_HOSTS host, with no userinfo. Parsed by
+    httpx itself, so the check and the request cannot read the URL differently."""
+    import httpx
+    try:
+        u = url if isinstance(url, httpx.URL) else httpx.URL(str(url))
+    except Exception:  # noqa: BLE001 — unparseable is refused, not raised
+        return False
+    host = (u.host or "").lower().rstrip(".")
+    return (u.scheme == "https" and u.port in (None, 443) and not u.userinfo
+            and any(host == h or host.endswith("." + h) for h in _EML_HOSTS))
+
+
+def _eml_host(url: Any) -> str:
+    """The host of a refused link, for the log line that says where Basisboard now points."""
+    import httpx
+    try:
+        return str(httpx.URL(str(url)).host)[:80]
+    except Exception:  # noqa: BLE001
+        return "?"
+
+
+def _check_eml_request(request) -> None:
+    """httpx request hook: runs for the first request AND every redirect hop, before it is sent."""
+    if not _eml_url_ok(request.url):
+        raise _EmlHostRefused(str(request.url.host or ""))
+
+
 def _download_eml(message_id: str) -> Optional[bytes]:
     """GET the raw .eml behind a freshly minted signed URL. The URL expires after
     15 minutes, so a 403 means "stale link", not "forbidden" — mint a new one and
@@ -344,9 +495,17 @@ def _download_eml(message_id: str) -> Optional[bytes]:
         url = basisboard_client.get_message_url(message_id)
         if not url:
             return None
+        if not _eml_url_ok(url):
+            log.warning("leads: .eml link for %s refused — not an https Basisboard storage URL "
+                        "(host %r)", message_id, _eml_host(url))
+            return None
         try:
-            with httpx.Client(timeout=_EML_TIMEOUT, follow_redirects=True) as client:
+            with httpx.Client(timeout=_EML_TIMEOUT, follow_redirects=True,
+                              event_hooks={"request": [_check_eml_request]}) as client:
                 resp = client.get(url)
+        except _EmlHostRefused as exc:
+            log.warning("leads: .eml fetch %s refused a redirect to host %r", message_id, str(exc))
+            return None
         except httpx.TransportError as exc:
             log.warning("leads: .eml fetch %s transport error: %s", message_id, exc)
             return None
@@ -395,6 +554,9 @@ def fetch_email_text(message_id: str) -> Dict[str, Any]:
     if not mid:
         return {"ok": False, "subject": "", "from": "", "text": "",
                 "error": "No message id."}
+    if not basisboard_client.is_message_id(mid):     # it goes into Basisboard's URL path
+        return {"ok": False, "subject": "", "from": "", "text": "",
+                "error": "Invalid message id."}
     cached = _TEXT_CACHE.get(mid)
     if cached is not None:
         return cached

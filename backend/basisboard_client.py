@@ -59,6 +59,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sys
 import threading
 import time
@@ -676,11 +677,34 @@ def get_inbox(status: str = "unlinked") -> Dict[str, Any]:
         _INBOX_LOCK.release()
 
 
+# A message id goes into an outbound URL PATH (/messages/{id}, /messages/{id}/detail), and one
+# of the callers takes it straight from our own URL. Same charset main._safe_id enforces for
+# portal ids — no slash, dot, `?`, `#` or `%` — so a crafted id cannot walk our authenticated
+# request to some other path of Basisboard's API. fullmatch, not match + `$`: `$` also matches
+# before a trailing newline.
+_MESSAGE_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
+
+
+def is_message_id(value: Any) -> bool:
+    """True when `value` is safe to put in a Basisboard message path."""
+    return isinstance(value, str) and _MESSAGE_ID.fullmatch(value) is not None
+
+
+def _refuse_message_id(message_id: Any) -> bool:
+    """Log and refuse an id that fails is_message_id. True means "refused"."""
+    if is_message_id(message_id):
+        return False
+    log.warning("Basisboard message id refused: %r", str(message_id)[:80])
+    return True
+
+
 def get_message_detail(message_id: str) -> Optional[Dict[str, Any]]:
     """One message WITH its full HTML body (`{"message": {..., "body": "<html>"}}`).
     Deliberately uncached: bodies run tens of KB and are read once, when a lead
     drawer opens. Returns None on any failure — never raises."""
     if not (is_configured() and message_id):
+        return None
+    if _refuse_message_id(message_id):
         return None
     try:
         with _session() as client:
@@ -694,6 +718,8 @@ def get_message_url(message_id: str) -> Optional[str]:
     """Signed URL to the raw .eml. NEVER cached — it expires after 15 minutes, so
     every read mints a fresh one. Returns None on any failure — never raises."""
     if not (is_configured() and message_id):
+        return None
+    if _refuse_message_id(message_id):
         return None
     try:
         with _session() as client:
