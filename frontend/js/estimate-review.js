@@ -276,8 +276,15 @@ function canonicalSheetFor(sheet) {
   try { return /^Gyp/i.test(layoutIdFor(sheet)) ? GYP_BASE : CANONICAL_SHEET; }
   catch { return CANONICAL_SHEET; }
 }
+// A project-info cell that really IS shared across the tabs of a layout. Taxable? and Remodel Tax?
+// sit inside that block and are NOT: every sheet with a flag block keeps its own two answers
+// (Hanz, 2026-09-30: "for the options we follow each worksheets tax options"), so a keystroke there
+// stays on the sheet it was typed on. See jobFlagKindFor.
+function isSharedInfoCell(sheet, addr) {
+  return isProjectInfoCell(addr) && !jobFlagKindFor(sheet, addr);
+}
 function canonicalKey(sheet, addr) {
-  return isProjectInfoCell(addr)
+  return isSharedInfoCell(sheet, addr)
     ? `${canonicalSheetFor(sheet)}!${addr}`
     : `${sheet}!${addr}`;
 }
@@ -285,7 +292,7 @@ function canonicalKey(sheet, addr) {
 // Same canonicalization but returns the {sheet, addr} pair separately —
 // HF needs both, not a single combined key.
 function canonicalTarget(sheet, addr) {
-  return isProjectInfoCell(addr)
+  return isSharedInfoCell(sheet, addr)
     ? { sheet: canonicalSheetFor(sheet), addr }
     : { sheet, addr };
 }
@@ -579,7 +586,7 @@ function bootFetch(path) {
 // The other eleven were refused: the gyp variants, Seal, Seal (+Jnts), Takeoff, Stnd Alts and
 // validation are each either cited by a live formula or priced.
 //
-// 'Epoxy blank' and 'Leveling' ARE WRITTEN TO -- applyJobFlags, applyMarkupRates and
+// 'Epoxy blank' and 'Leveling' ARE WRITTEN TO -- ownJobFlags, applyMarkupRates and
 // applyRemodelRateOverride all stamp cells on them at load. That is handled rather than
 // wished away: every one of those writers records its write in `cellValues` BEFORE it touches
 // the engine, and loadDeferredIntoEngine replays this sheet's own keys after the late
@@ -610,7 +617,7 @@ let deferredTabs = new Set();
 /** Put a tab that init() skipped into the formula engine, once, after showSheet fetched it.
  *
  *  `HF.loadSheet` calls setSheetContent, which REPLACES the sheet -- so anything written into
- *  it while it was still empty is gone. applyJobFlags (Leveling!B6, Leveling!D6),
+ *  it while it was still empty is gone. ownJobFlags (Leveling!B6, Leveling!D6),
  *  applyMarkupRates ('Epoxy blank'!B72/B73/B81) and applyRemodelRateOverride ('Epoxy blank'!B78,
  *  Leveling!B77) all write while these tabs hold nothing. Each records its write in
  *  `cellValues` first, so replaying this sheet's own keys puts all three back -- along with the
@@ -1268,13 +1275,12 @@ function copyTab(sourceId) {
   // while the pill overhead claims the real rate is applied automatically.
   // Runs after buildTabs() so `remodelRateTargets` can see the new tab.
   applyRemodelRateOverride(effectiveRemodelRate());
-  // Same reasoning, one flag up: the clone above carries the PRISTINE template's
-  // Taxable? / Remodel Tax? literals, and the cellValues replay deliberately skips
-  // A1:D10, so a copy of Epoxy / Leveling / the gyp base / 'Gyp (FR)' arrives taxable
-  // and non-remodel however the bid was actually answered. That is Kyle's report:
-  // the copy charged 9.475% on a tax-exempt job while its own box read "No". Also
-  // after buildTabs(), so jobFlagTargets can see the new tab.
-  applyJobFlags();
+  // A copy starts with its SOURCE's Taxable? / Remodel Tax? answers, as its own. The
+  // clone above carries the PRISTINE template's cell (a literal 'Yes' on four layouts,
+  // a mirror of another sheet on the rest) and the cellValues replay deliberately skips
+  // A1:D10, so without this a copy of an exempt sheet charged 9.475% while its box read
+  // "No" -- Kyle's report. Also after buildTabs(), so the copy's layout resolves.
+  copyJobFlags(sourceId, newId);
   // And the filed markup rates, for the third time the same reason: the backend
   // clones a copy from the PRISTINE template, so its rate cells arrive holding the
   // template's own percent. The cellValues replay above carries them when the source
@@ -1531,17 +1537,26 @@ async function init() {
     if (sheet && addr) HF.setCellValue(sheet, addr, val);
   }
 
-  // 3c. Self-heal the Taxable? / Remodel Tax? answers, for the drafts that already
-  //     carry the bug: the tool wrote the estimator's answer to Epoxy!B6 alone, so
-  //     Leveling!B6, both literal gyp B8 cells and EVERY copied tab were left at the
-  //     template's own "Yes"/"No". Runs here — after the copies exist in HF and
-  //     after the saved cellValues have been replayed — so it sees the whole bid,
-  //     and BEFORE showSheet so the first paint is already right.
+  // 3c. EVERY SHEET KEEPS ITS OWN Taxable? AND Remodel Tax? (Hanz, 2026-09-30). Runs
+  //     here — after the copies exist in HF and after the saved cellValues have been
+  //     replayed — so it sees the whole bid, and BEFORE showSheet so the first paint is
+  //     already right.
   //
-  //     Nothing is written when no answer has been given anywhere (jobFlagAnswer
-  //     returns null), so an untouched draft does not collect cell_values entries
-  //     that only restate the template.
-  const _flagsHealed = applyJobFlags();
+  //     A draft that has never been split (a new project, or one saved before this) is
+  //     brought to exactly what opening it showed until now, ONCE: the old job-wide
+  //     fan-out, then every flag-block sheet — template or copy, eager or deferred — is
+  //     given the answer it evaluates to as its own literal. For a new project that is
+  //     the intake's answer on every sheet; for an existing one no price and no wording
+  //     moves. From then on each sheet is independent, and the marker says so, so the
+  //     fan-out never runs on it again. A split draft that is already whole writes
+  //     nothing, so opening it saves nothing.
+  let _flagsHealed = 0;
+  if (!state.tax_flags_per_sheet) {
+    _flagsHealed += applyJobFlags();
+    _flagsHealed += ownSealJointsRemodelRate();
+  }
+  _flagsHealed += ownJobFlags();
+  if (!state.tax_flags_per_sheet) { state.tax_flags_per_sheet = true; _flagsHealed++; }
 
   // 3d. The filed markup rates, into Kyle's own rate cells. Same position and same
   //     reasons as 3c: after the copies exist in HF and after the saved cellValues
@@ -2137,7 +2152,7 @@ function refreshDomFromHF(data, grid) {
     // artifact. Mirror the CANONICAL value so the block is identical on every
     // tab of that layout (blank when the source is blank).
     const canon = canonicalSheetFor(sheet);
-    if (isProjectInfoCell(cell.addr) && sheet !== canon) {
+    if (isSharedInfoCell(sheet, cell.addr) && sheet !== canon) {
       const cKey = `${canon}!${cell.addr}`;
       if (cellValues[cKey] != null) {
         inp.value = cellValues[cKey];
@@ -2487,7 +2502,7 @@ function makeDataCell(cell, sheet, r, c, dropdowns) {
   const isYellow = cell.fill && /^#FFF[F4][0A][03A]/i.test(cell.fill);
   if (isYellow) d.classList.add("editable");
   // Visual cue when a cell is canonicalised but we're not on the source tab
-  if (isProjectInfoCell(cell.addr) && sheet !== canon) {
+  if (isSharedInfoCell(sheet, cell.addr) && sheet !== canon) {
     d.classList.add("canonical-mirror");
     d.title = `Project Info — canonical source: ${canon}!${cell.addr}`;
   }
@@ -2519,7 +2534,7 @@ function makeDataCell(cell, sheet, r, c, dropdowns) {
     // variants), else fall back to the local cell's value. This way a mirror
     // tab's "Project Info" rows show what the source holds, not a stale 0.
     let displaySource = cell;
-    if (isProjectInfoCell(cell.addr) && sheet !== canon && sheetCache[canon]) {
+    if (isSharedInfoCell(sheet, cell.addr) && sheet !== canon && sheetCache[canon]) {
       const srcCells = sheetCache[canon].cells || [];
       const sourceCell = srcCells.find(c => c.addr === cell.addr);
       if (sourceCell) displaySource = sourceCell;
@@ -2567,15 +2582,14 @@ function makeDataCell(cell, sheet, r, c, dropdowns) {
   const isPctCell = /%/.test(cell.fmt || "");
   inp.addEventListener("input", (e) => {
     const newVal = e.target.value;
-    // Taxable? / Remodel Tax? are ONE answer per bid held on many sheets, four of
-    // them as independent literals (see jobFlagTargets). Writing only the cell that
-    // was typed in leaves the other three — and every copied tab — frozen at the
-    // template's own "Yes", which is how a tax-exempt gyp job billed 9.475%. Fan the
-    // answer out instead of taking the single-cell path below, and do NOT take the
-    // delete-on-revert branch either: retyping the original has to reach every cell
-    // too, or the copies keep the answer that was just retracted.
+    // Taxable? / Remodel Tax? are THIS sheet's own answer (Hanz, 2026-09-30): the
+    // keystroke is written to the sheet it was typed on and to no other, so an option
+    // keeps its answer when the base changes and the base keeps its answer when an
+    // option does. Never the delete-on-revert branch below: a deleted key falls back to
+    // the template's cell, which on most layouts is a mirror of ANOTHER sheet -- the
+    // answer would quietly start following that sheet again.
     const flagKind = jobFlagKindFor(sheet, cell.addr);
-    if (flagKind) { applyJobFlag(flagKind, newVal); return; }
+    if (flagKind) { applySheetFlag(sheet, cell.addr, jobFlagWord(flagKind, newVal)); refreshActiveGridFromHF(); return; }
     if (newVal === original) {
       delete cellValues[addrKey];
     } else {
@@ -3708,14 +3722,15 @@ function renderCountyResults(query) {
 // anything priced on them quoted the customer Kyle's 10% placeholder while the
 // picker's pill claimed the real rate was "applied automatically".
 //
-// "Seal (+Jnts)" is deliberately ABSENT, and that is not the same omission: its
-// B75 is `=Seal!B75`, a mirror, so writing Seal already carries it. Writing it
-// too would replace the mirror with a literal and fork the two sheets apart —
-// the same independent-cell divergence found in Kyle's own filed workbooks.
+// "Seal (+Jnts)" was absent until 2026-09-30: its B75 is `=Seal!B75`, a mirror, so
+// writing Seal carried it. Since every sheet keeps its OWN Remodel Tax? answer, that
+// mirror priced the joints sheet off SEAL's toggle, so it gets its own IF on its own
+// D6 like every other sheet (ownSealJointsRemodelRate makes the fork once per draft).
 const REMODEL_RATE_BY_LAYOUT = {
   "Epoxy":       ["B81", "D6"],
   "Polish":      ["B75", "D6"],
   "Seal":        ["B75", "D6"],
+  "Seal (+Jnts)": ["B75", "D6"],
   "Leveling":    ["B77", "D6"],
   "Epoxy blank": ["B78", "D6"],
 };
@@ -3952,10 +3967,12 @@ const JOB_FLAG_ADDR = {
   taxable: { epoxy: "B6", gyp: "B8" },
   remodel: { epoxy: "D6", gyp: "D8" },
 };
-// The layouts whose flag cell is a LITERAL in the shipped template, and therefore
-// the only ones that may be written. Everything absent here is a mirror and must
-// STAY one: forking a working mirror is the independent-cell divergence found in
-// Kyle's own filed workbooks, and #432 refused to introduce it for the same reason.
+// The layouts whose flag cell is a LITERAL in the shipped template. LEGACY since
+// 2026-09-30: this list, jobFlagTargets, jobFlagAnswer, applyJobFlag and applyJobFlags
+// are the old ONE-ANSWER-PER-JOB fan-out, and they now run exactly once per draft --
+// the first time a draft saved before per-sheet answers is opened, so it opens showing
+// what it always showed (see init() step 3c). After that every flag-block sheet holds
+// its own literal (ownJobFlags) and nothing here is called on it again.
 //
 // Remodel has exactly one literal. Every other sheet's remodel toggle — including
 // Leveling!D6, 'Gyp (FR)'!D8 and the gyp base's D8 — is `=Epoxy!D6`, so writing
@@ -3970,6 +3987,28 @@ const JOB_FLAG_LITERAL_LAYOUTS = {
 // validation have their own meaning for B6 and must be left alone.
 const JOB_FLAG_LAYOUTS = ["Epoxy", "Polish", "Seal", "Seal (+Jnts)", "Epoxy blank",
                           "Leveling"].concat(GYP_SHEETS);
+// What Kyle's template holds in each flag-block layout's two cells: a literal word, or
+// "=<sheet>" for a mirror of that sheet's same answer (`=Epoxy!B6`, `=Polish!B6`,
+// `='Gyp (USG 1-8")'!B8` ...). A copy's clone holds its LAYOUT's entry, since
+// copy_worksheet keeps the reference pointing where it pointed. Needed because two of
+// these sheets ('Epoxy blank', Leveling) are not in the engine when init() splits the
+// answers (DEFERRABLE_TABS), so their answer cannot be read off it.
+// test_taxable_flag_reaches_every_sheet.py re-reads the workbook and fails on any drift.
+const JOB_FLAG_TEMPLATE = {
+  taxable: {
+    "Epoxy": "Yes", "Leveling": "Yes", [GYP_BASE]: "Yes", "Gyp (FR)": "Yes",
+    "Polish": "=Epoxy", "Epoxy blank": "=Epoxy", "Seal": "=Polish", "Seal (+Jnts)": "=Seal",
+    "Gyp (USG N12ULTRA)": "=" + GYP_BASE, 'Gyp (USG N25 1-4")': "=" + GYP_BASE,
+    "Gyp (GWorx SC190)": "=" + GYP_BASE,
+  },
+  remodel: {
+    "Epoxy": "No",
+    "Polish": "=Epoxy", "Epoxy blank": "=Epoxy", "Seal": "=Epoxy", "Seal (+Jnts)": "=Seal",
+    "Leveling": "=Epoxy", [GYP_BASE]: "=Epoxy", "Gyp (FR)": "=Epoxy",
+    "Gyp (USG N12ULTRA)": "=" + GYP_BASE, 'Gyp (USG N25 1-4")': "=" + GYP_BASE,
+    "Gyp (GWorx SC190)": "=" + GYP_BASE,
+  },
+};
 
 /** Where a flag lives on a layout. The gyp block sits one row lower. */
 function jobFlagAddrFor(layout, flag) {
@@ -4103,12 +4142,179 @@ function applyJobFlag(flag, answer) {
   return changed;
 }
 
-/** Re-assert BOTH flags from the answers already in the draft. Called on load, on
- *  copy, and after the AI autofill — every moment a cell that holds one of these
- *  answers can have appeared without the fan-out running. */
+/** Re-assert BOTH flags from the answers already in the draft, job-wide. LEGACY: called
+ *  only for a draft that has not yet been split per sheet (init() step 3c, and the
+ *  autofill on such a draft), so it opens showing what it always showed. */
 function applyJobFlags() {
   let changed = 0;
   for (const flag in JOB_FLAG_ADDR) changed += applyJobFlag(flag, jobFlagAnswer(flag));
+  return changed;
+}
+
+// ─── Every sheet keeps its own Taxable? and Remodel Tax? ────────────────────
+//
+// Hanz, 2026-09-30: "for the options we follow each worksheets tax options", and "in the
+// generation of the files, it would have the wording tax or not based off the worksheet".
+// Asked whether an option should follow when the base changes, he chose "Stay independent".
+//
+// So each flag-block sheet -- the eleven priced template sheets and every copy of one --
+// holds its two answers as its OWN literal, in `cellValues["<sheet>!<addr>"]`, where
+// `estimate_writer.fill_estimate` writes it into the .xlsx and the engine prices it. An
+// option's price (its tab's tax-inclusive total) and its tax wording in the .docx, the PDF
+// and the portal both come off that sheet (snapshotLumpSumsToState's taxFlagsFor already
+// reads each tab's own cells). A literal and not a mirror formula for the reasons above
+// JOB_FLAG_ADDR: `_coerce` mangles a quoted-sheet mirror into text and
+// `info_sheet_writer._flag` wants a word.
+
+/** The answer `sheet` holds for `flag` right now, the way its own tax cell reads it: its own
+ *  literal, else the template's -- a word, or the answer of the sheet it mirrors. null when the
+ *  sheet has no flag block or its flag row was deleted. */
+function jobFlagValue(sheet, flag) {
+  let cur = sheet;
+  for (let guard = 0; guard < 8; guard++) {
+    let layout;
+    try { layout = layoutIdFor(cur); } catch (e) { return null; }
+    if (JOB_FLAG_LAYOUTS.indexOf(layout) < 0) return null;
+    const a0 = jobFlagAddrFor(layout, flag);
+    const a = a0 ? txAddr(cur, a0) : null;
+    if (!a) return null;
+    const own = cellValues[cur + "!" + a];
+    if (own != null && String(own).trim() !== "") return String(own).trim();
+    const t = (JOB_FLAG_TEMPLATE[flag] || {})[layout];
+    if (t == null) return null;
+    if (t.charAt(0) !== "=") return t;
+    cur = t.slice(1);
+  }
+  return null;
+}
+
+/** The word a flag cell is stamped with, chosen so the sheet prices EXACTLY as the value it
+ *  replaces did. Kyle's sales-tax rate is `=IF($B$6="no",0,…)` and his remodel rate
+ *  `=IF(D6="yes",…,0)`, both case-blind, so anything that is not "no" -- a blank, the 0 an
+ *  empty mirror computes to -- is taxable, and anything that is not "yes" is not remodel. */
+function jobFlagWord(flag, v) {
+  const s = String(v == null ? "" : v).trim().toLowerCase();
+  if (flag === "taxable") return s === "no" ? "No" : "Yes";
+  return s === "yes" ? "Yes" : "No";
+}
+
+/** Write ONE sheet's own flag cell: the draft (which the .xlsx is filled from) and the engine
+ *  (which the chip, the total and the proposal snapshot are read from). Returns 1 when the
+ *  draft changed. */
+function applySheetFlag(sheet, addr, word) {
+  const key = sheet + "!" + addr;
+  const changed = cellValues[key] !== word ? 1 : 0;
+  cellValues[key] = word;
+  if (HF && HF.ready) {
+    try { HF.setCellValue(sheet, addr, word); }
+    catch (e) { console.warn("HF.setCellValue failed for", sheet, addr, e); }
+  }
+  return changed;
+}
+
+/** Give every flag-block sheet whose cell is not yet its own the answer it evaluates to NOW, as
+ *  its own literal. All the values are read before any is written. Returns how many cells were
+ *  written; 0 on a draft that is already split, so opening one saves nothing. */
+function ownJobFlags() {
+  const ids = JOB_FLAG_LAYOUTS.slice();
+  for (const t of (tabs || [])) if (ids.indexOf(t.id) < 0) ids.push(t.id);
+  const writes = [];
+  for (const id of ids) {
+    let layout;
+    try { layout = layoutIdFor(id); } catch (e) { continue; }
+    if (JOB_FLAG_LAYOUTS.indexOf(layout) < 0) continue;
+    for (const flag in JOB_FLAG_ADDR) {
+      const a = txAddr(id, jobFlagAddrFor(layout, flag));
+      if (!a) continue;
+      const own = cellValues[id + "!" + a];
+      if (own != null && String(own).trim() !== "") continue;
+      const v = jobFlagValue(id, flag);
+      if (v != null) writes.push([id, a, jobFlagWord(flag, v)]);
+    }
+  }
+  for (const [id, a, word] of writes) applySheetFlag(id, a, word);
+  return writes.length;
+}
+
+/** A new copy's two answers: its SOURCE's, as the copy's own. */
+function copyJobFlags(sourceId, newId) {
+  let layout;
+  try { layout = layoutIdFor(newId); } catch (e) { return 0; }
+  if (JOB_FLAG_LAYOUTS.indexOf(layout) < 0) return 0;
+  let changed = 0;
+  for (const flag in JOB_FLAG_ADDR) {
+    const a = txAddr(newId, jobFlagAddrFor(layout, flag));
+    const v = jobFlagValue(sourceId, flag);
+    if (a && v != null) changed += applySheetFlag(newId, a, jobFlagWord(flag, v));
+  }
+  return changed;
+}
+
+/** A tab's own two flag cells as "<id>!<addr>", keyed taxable / remodel ({} without a block).
+ *  Snapshotted onto state.priced_tabs so the intake's two switches can find the base's. */
+function jobFlagCellsFor(id) {
+  let layout;
+  try { layout = layoutIdFor(id); } catch (e) { return {}; }
+  if (JOB_FLAG_LAYOUTS.indexOf(layout) < 0) return {};
+  const out = {};
+  for (const flag in JOB_FLAG_ADDR) {
+    const a = txAddr(id, jobFlagAddrFor(layout, flag));
+    if (a) out[flag] = id + "!" + a;
+  }
+  return out;
+}
+
+/** The sheet(s) the BASE bid is priced from -- the same resolution snapshotLumpSumsToState
+ *  prices the proposal's base line with: gyp → the resolved gyp tab, an explicit base → that tab,
+ *  else the work type's (combo → Epoxy AND Polish). */
+function baseFlagSheets() {
+  const wt = (state.work_type || "epoxy").toLowerCase();
+  const baseTab = resolveBaseTab();
+  if (wt === "gyp") return [baseTab ? baseTab.id : GYP_BASE];
+  if (state.base_tab_id && baseTab) return [baseTab.id];
+  return wt === "polish" ? ["Polish"] : wt === "combo" ? ["Epoxy", "Polish"] : ["Epoxy"];
+}
+
+/** The AI autofill's two tax answers. It keys all seven flags to `Epoxy!…` whatever the work
+ *  type; on a split draft those two are the BASE bid's answers, so they land on the base sheet(s)
+ *  and no option moves. An unsplit draft keeps the old fan-out. */
+function applyAutofillJobFlags(aiFlags) {
+  if (!state.tax_flags_per_sheet) return applyJobFlags();
+  let changed = 0;
+  for (const flag in aiFlags) {
+    for (const id of baseFlagSheets()) {
+      const cell = jobFlagCellsFor(id)[flag];
+      if (!cell) continue;
+      const cut = cell.lastIndexOf("!");
+      changed += applySheetFlag(cell.slice(0, cut), cell.slice(cut + 1), jobFlagWord(flag, aiFlags[flag]));
+    }
+  }
+  if (changed) refreshActiveGridFromHF();
+  return changed;
+}
+
+/** 'Seal (+Jnts)'!B75 -- its remodel RATE -- is `=Seal!B75`, so its remodel tax is SEAL's and its
+ *  own Remodel Tax? would move nothing. While Seal's rate cell is still the sheet-relative
+ *  `=IF(D6="yes",<rate>,0)` (Kyle's, or the county's the tool wrote), the same text on the joints
+ *  sheet reads ITS OWN D6 -- the same number today, because the split gives that D6 Seal's
+ *  answer. A rate somebody typed as a bare number reads no D6 on either sheet and is left alone.
+ *  Once per draft, from init() step 3c; after that REMODEL_RATE_BY_LAYOUT keeps it in step. */
+function ownSealJointsRemodelRate() {
+  const sa = txAddr("Seal", "B75");
+  const src = sa ? cellValues["Seal!" + sa] : undefined;
+  const text = src == null || src === "" ? '=IF(D6="yes",0.1,0)' : String(src).trim();
+  const m = /^=IF\([A-Z]+[0-9]+="yes",([0-9.]+),0\)$/i.exec(text);
+  if (!m) return 0;
+  let changed = 0;
+  for (const t of (tabs || [])) {
+    let layout;
+    try { layout = layoutIdFor(t.id); } catch (e) { continue; }
+    if (layout !== "Seal (+Jnts)") continue;
+    const a = txAddr(t.id, "B75");
+    const toggle = txAddr(t.id, "D6");
+    if (!a || !toggle || cellValues[t.id + "!" + a] != null) continue;
+    changed += applySheetFlag(t.id, a, `=IF(${toggle}="yes",${m[1]},0)`);
+  }
   return changed;
 }
 
@@ -4624,11 +4830,20 @@ document.getElementById("autofill-btn").addEventListener("click", async (e) => {
       const narrativeKeys = ["system_name","texture","scope_notes","schedule_notes","exclusions"];
       const carriedNarrative = {};
       const filledFlags = [];
+      // The AI's Taxable? / Remodel Tax? answers, held back from Epoxy's own cells on a split
+      // draft -- they are the BASE bid's (applyAutofillJobFlags below), and Epoxy may be an option.
+      const aiFlags = {};
       let n = 0;
       for (const k of Object.keys(j.cell_values)) {
         const v = j.cell_values[k];
         if (v == null) continue;
-        if (k.includes("!")) {
+        const aiFlag = (k.includes("!") && state.tax_flags_per_sheet)
+          ? jobFlagKindFor(k.split("!")[0], k.split("!")[1]) : null;
+        if (aiFlag) {
+          aiFlags[aiFlag] = v;
+          if (FLAG_LABELS[k]) filledFlags.push(`${escHtml(FLAG_LABELS[k])}: <b>${escHtml(v)}</b>`);
+          n++;
+        } else if (k.includes("!")) {
           cellValues[k] = v;
           // Also push the value into the live HF engine so downstream
           // formulas pick it up immediately. Without this the change
@@ -4647,10 +4862,10 @@ document.getElementById("autofill-btn").addEventListener("click", async (e) => {
         }
       }
       // The AI writes all seven flags to hardcoded `Epoxy!…` keys whatever the work
-      // type, so on a gyp or Leveling bid its Taxable answer landed on a sheet that
-      // bid is not priced from. Fan both flags out to the cells that actually hold
-      // them before anything re-renders off them.
-      applyJobFlags();
+      // type, so on a gyp or polish bid its Taxable answer would land on a sheet that
+      // bid is not priced from. Put the two tax answers on the base sheet(s) before
+      // anything re-renders off them.
+      applyAutofillJobFlags(aiFlags);
       if (Object.keys(carriedNarrative).length) {
         Object.assign(state, carriedNarrative);
         TW.setState({ ...state, ...carriedNarrative });
@@ -4878,6 +5093,9 @@ function snapshotLumpSumsToState() {
       system_desc: deriveSystemNameFor(t.id), notes_auto: deriveNotes(t.id),
       sf: sfFieldsFor(t.id),
       sys_names: roleFor(t.id) === "polish" || roleFor(t.id) === "gyp" ? [] : sysNamesFor(t.id),
+      // Where this tab's own Taxable? / Remodel Tax? live, so the intake's two switches can set
+      // the BASE's answer on a split draft (index.js splitFlagCells).
+      flag_cells: jobFlagCellsFor(t.id),
     }, taxFlagsFor(t.id));   // {taxable, remodel_on}: the Proposal step's rebuildPricing reads them
   });
   // Area (SF / cove LF) for the proposal, sourced from the BASE tab(s) ONLY —

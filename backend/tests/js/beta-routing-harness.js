@@ -846,6 +846,94 @@ function runHandler(which) {
     out.conditions.hydrateSaves = b.SAVES.length;
   }
 
+  // A SPLIT DRAFT (2026-09-30). Once the estimate screen has given every sheet its own Taxable? /
+  // Remodel Tax? (state.tax_flags_per_sheet), these two switches are the BASE's own cells, found
+  // through priced_tabs[].flag_cells -- and they are written by their own switch only. Options
+  // (Leveling, 'Gyp (FR)', Epoxy on a polish job) keep their own answers through every save here.
+  {
+    const taxCells = ["Epoxy!B6", "Epoxy!D6", "Polish!B6", "Polish!D6", "Leveling!B6",
+                      'Gyp (USG 1-8")!B8', "Gyp (FR)!B8"];
+    const pick = (cv) => { const o = {}; taxCells.forEach((k) => { o[k] = cv[k]; }); return o; };
+    const splitDraft = (base, wt) => ({
+      tax_flags_per_sheet: true, base_tab_id: base, work_type: wt,
+      priced_tabs: [
+        { id: "Epoxy", flag_cells: { taxable: "Epoxy!B6", remodel: "Epoxy!D6" } },
+        { id: "Polish", flag_cells: { taxable: "Polish!B6", remodel: "Polish!D6" } },
+      ],
+      cell_values: { "Epoxy!B6": "Yes", "Epoxy!D6": "No", "Polish!B6": "No", "Polish!D6": "No",
+                     "Leveling!B6": "Yes", 'Gyp (USG 1-8")!B8': "No", "Gyp (FR)!B8": "No" },
+    });
+    const b = build(splitDraft("Polish", "polish"));
+    await tick();
+    // read at BOOT, before any radio fires: the change listener re-reads these two on its own
+    const booted = { taxable: b.switchFor("taxable").on, remodel: b.switchFor("remodel_tax").on };
+    b.setWorkType("polish");
+    const hydrated = { taxable: b.switchFor("taxable").on, remodel: b.switchFor("remodel_tax").on };
+    const before = pick(cells(b));
+    b.clickSwitch("dye");                      // another switch: no tax cell may move
+    const afterDye = pick(cells(b));
+    b.clickSwitch("taxable");                  // the base's own switch: Polish's cell, and only it
+    const afterTaxable = pick(cells(b));
+    b.clickSwitch("remodel_tax");
+    const afterRemodel = pick(cells(b));
+    // a combo with no single base: both halves of the combined base, no option
+    const c = build(splitDraft(null, "combo"));
+    await tick();
+    c.setWorkType("combo");
+    c.clickSwitch("local");                    // Epoxy says Yes, Polish No: neither may be restated
+    const comboAfterLocal = pick(cells(c));
+    c.clickSwitch("taxable");                  // hydrated off Epoxy's Yes -> off -> "No" on both
+    // and a draft the estimate screen has NOT split yet still writes the four literals
+    const pre = build({ cell_values: {} });
+    await tick();
+    pre.setWorkType("epoxy");
+    pre.clickSwitch("taxable");
+    out.conditions.split = {
+      booted, hydrated, before, afterDye, afterTaxable, afterRemodel,
+      comboAfterLocal, combo: pick(cells(c)),
+      unsplit: pick(cells(pre)),
+    };
+  }
+
+  // A WORK-TYPE CHANGE ON A SPLIT DRAFT moves the base with no explicit base_tab_id: a combo's is
+  // Epoxy + Polish (the switch reads Epoxy's), a polish job's is Polish, a gyp job's the gyp base.
+  // Every sheet here holds a DIFFERENT answer, and the seed's work type is not any of the ones
+  // switched to, so the switch can only be right by re-reading the new base's own cell.
+  {
+    const flagCells = ["Epoxy!B6", "Epoxy!D6", "Polish!B6", "Polish!D6",
+                       'Gyp (USG 1-8")!B8', 'Gyp (USG 1-8")!D8'];
+    const pickFlags = (cv) => { const o = {}; flagCells.forEach((k) => { o[k] = cv[k]; }); return o; };
+    const read = (x) => ({ taxable: x.switchFor("taxable").on, remodel: x.switchFor("remodel_tax").on });
+    const t = build({
+      tax_flags_per_sheet: true, base_tab_id: null, work_type: "combo",
+      priced_tabs: [
+        { id: "Epoxy", flag_cells: { taxable: "Epoxy!B6", remodel: "Epoxy!D6" } },
+        { id: "Polish", flag_cells: { taxable: "Polish!B6", remodel: "Polish!D6" } },
+        { id: 'Gyp (USG 1-8")',
+          flag_cells: { taxable: 'Gyp (USG 1-8")!B8', remodel: 'Gyp (USG 1-8")!D8' } },
+      ],
+      cell_values: { "Epoxy!B6": "Yes", "Epoxy!D6": "Yes", "Polish!B6": "No", "Polish!D6": "No",
+                     'Gyp (USG 1-8")!B8': "No", 'Gyp (USG 1-8")!D8': "Yes" },
+    });
+    await tick();
+    const onCombo = read(t);                   // booted on combo: Epoxy's own Yes / Yes
+    const seeded = pickFlags(cells(t));
+    t.setWorkType("polish");
+    const onPolish = read(t);                  // Polish's own No / No, not Epoxy's Yes / Yes
+    const afterPolish = pickFlags(cells(t));
+    t.setWorkType("gyp");
+    const onGyp = read(t);                     // the gyp base's own No / Yes
+    t.setWorkType("epoxy");
+    const onEpoxy = read(t);                   // and back to Epoxy's Yes / Yes
+    const afterTrips = pickFlags(cells(t));
+    t.setWorkType("polish");
+    t.clickSwitch("taxable");                  // off (Polish's No) -> on: Polish!B6 becomes Yes
+    out.conditions.splitWorkType = {
+      onCombo, onPolish, onGyp, onEpoxy, seeded, afterPolish, afterTrips,
+      afterFlip: pickFlags(cells(t)), shownAfterFlip: read(t),
+    };
+  }
+
   // A draft that already carries one of these cells DOES get cleaned up on a work-type change,
   // because leaving a stale out-of-scope flag behind is the bug the cleanup exists for.
   {
