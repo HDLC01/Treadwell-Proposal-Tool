@@ -82,6 +82,7 @@ const EXPORTS = `
     model: function () { return M; },
     state: function () { return state; },
     asms: function () { return ASMS; },
+    items: function () { return ITEMS; },
     at: function () { return at; }
   };
 `;
@@ -1380,7 +1381,8 @@ const rendered = [];      // every string the page put on screen, for the Labour
     const afterPick = clone(row());
 
     // THE MONEY, against library-core's own engine rather than a number typed into this file.
-    // Densifier: $100 a pail, 1,000 SF a pail, no waste, roundup on. 10,000 SF is 10 pails.
+    // Densifier: $100 a pail, 1,000 SF a pail, 5% waste (its default, since the fixture gives it
+    // no waste_pct of its own), roundup on. 10,000 SF needs 10.5 pails, which rounds up to 11.
     const expected = L.priceLine({ item_id: "i4" }, ITEMS, 10000);
     // READ THE NODE, NOT THE MARKUP. `changed(false)` repaints through textContent on the
     // cost element; the panel innerHTML captured at render time never moves, so a regex over
@@ -1388,12 +1390,42 @@ const rendered = [];      // every string the page put on screen, for the Labour
     // row that will not price.
     const costCell = () => txt(m, '[data-cost-for="' + idx + '"]');
     const costWithLibraryCoverage = costCell();
+    const itemCoverageBeforeOverride = m.api.items().find((it) => it.id === "i4").coverage;
 
     // A COVERAGE TYPED ON THE ROW WINS over the item's default, which is the whole reason the box
-    // is there: the same product goes further in one system than another.
+    // is there: the same product goes further in one system than another. priceLine itself no
+    // longer reads a line's coverage at all (2026-09-22, coverage moved onto the material), so the
+    // independent check here has to swap the ONE item the page is expected to swap, the same way
+    // priceMaterialRow does -- comparing against the untouched item would just reproduce
+    // costWithLibraryCoverage and prove nothing about the override reaching the engine.
     typeInto(m, '[data-tk="' + idx + '"][data-k="coverage"]', "500");
-    const expectedTyped = L.priceLine({ item_id: "i4", coverage: 500 }, ITEMS, 10000);
+    const swapped = ITEMS.map((it) => (it.id === "i4" ? Object.assign({}, it, { coverage: 500 })
+                                                       : it));
+    const expectedTyped = L.priceLine({ item_id: "i4" }, swapped, 10000);
     const costWithTypedCoverage = costCell();
+    // THE LIBRARY ITEM ITSELF, re-read after the typed override took effect. If priceMaterialRow
+    // swapped the item in place instead of pricing against a copy, this would already read 500.
+    const itemCoverageAfterOverride = m.api.items().find((it) => it.id === "i4").coverage;
+
+    // The card, not the model: an assembly row and a material row must not look the same. Read
+    // NOW, before the second row below forces a full renderPanel() rebuild -- the DOM stub only
+    // fills in a parsed element's own innerHTML/children through a TARGETED repaint (repaintRow),
+    // so cardEl() after a fresh full rebuild reads back an empty shell even though the real
+    // page's markup (and the model) are both still correct. Reading it late doesn't prove the
+    // card is wrong; it proves the stub was asked the wrong way.
+    const saysMaterial = /MATERIAL/.test(cardEl().innerHTML);
+    const cardClass = cardEl().className;
+    const hasCoverageField = !!cardEl().querySelector('[data-k="coverage"]');
+
+    // A SECOND ROW, ON THE SAME MATERIAL, ADDED AFTER THE FIRST ROW'S OVERRIDE AND LEFT BLANK.
+    // This is the other half of the proof: a mutated (rather than copied) item would leak the
+    // first row's 500 into every other row that points at "Densifier", including one that never
+    // touched the coverage box itself.
+    clickOn(m, "[data-add-row]");
+    const idx2 = m.api.model().takeoff.length - 1;
+    typeInto(m, '[data-tk="' + idx2 + '"][data-k="pick"]', "Densifier");
+    typeInto(m, '[data-tk="' + idx2 + '"][data-k="measurement"]', "10000");
+    const secondRowBlankCoverageCost = txt(m, '[data-cost-for="' + idx2 + '"]');
 
     out.materialRow = {
       seeded: seeded,
@@ -1402,10 +1434,9 @@ const rendered = [];      // every string the page put on screen, for the Labour
       // not inferred from item_id alone, so clearing the name cannot flip it back.
       seededKind: seeded.kind,
       isItemKind: m.api.rowKind(row()) === "item",
-      // The card, not the model: an assembly row and a material row must not look the same.
-      saysMaterial: /MATERIAL/.test(cardEl().innerHTML),
-      cardClass: cardEl().className,
-      hasCoverageField: !!cardEl().querySelector('[data-k="coverage"]'),
+      saysMaterial: saysMaterial,
+      cardClass: cardClass,
+      hasCoverageField: hasCoverageField,
       resolvedId: afterPick.item_id,
       // NO UNIT ADOPTION. An item's unit is what it is BOUGHT in (Pail), not how the floor is
       // measured. Copying it onto the row would price a 10,000 SF area in pails.
@@ -1414,6 +1445,13 @@ const rendered = [];      // every string the page put on screen, for the Labour
       expectedLibraryCost: expected.cost,
       costWithTypedCoverage: costWithTypedCoverage,
       expectedTypedCost: expectedTyped.cost,
+      // THE OVERRIDE STAYS ON THIS ROW: a per-job fact about this estimate, never written back
+      // onto the material -- so the item's own coverage must read the same before and after.
+      itemCoverageBeforeOverride: itemCoverageBeforeOverride,
+      itemCoverageAfterOverride: itemCoverageAfterOverride,
+      // ...and a second row on the same material, added after the first row's override and left
+      // blank, still prices at the library's own coverage -- not the first row's 500.
+      secondRowBlankCoverageCost: secondRowBlankCoverageCost,
       // An assembly row beside it is untouched and still an assembly row.
       assemblyRowsUnchanged: m.api.model().takeoff.slice(0, idx)
         .every((r) => !r.item_id && r.kind !== "item"),

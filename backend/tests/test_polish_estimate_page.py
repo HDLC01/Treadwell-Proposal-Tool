@@ -987,8 +987,10 @@ def test_a_material_row_prices_through_the_librarys_own_engine(ran):
     $1,100 and a coverage typed on the row gives $2,100, so a page that ignored the row's box, or
     passed the wrong area, cannot produce both.
 
-    Mutation: drop `coverage: r.coverage` from priceMaterialRow, and the typed figure collapses
-    back to the library one."""
+    Mutation: in priceMaterialRow, stop swapping the typed coverage onto a COPY of the item and
+    price against ITEMS unconditionally instead, and the typed figure collapses back to the
+    library one -- see test_a_typed_coverage_never_reaches_the_library_item below for the other
+    half of that same mutation (it would also leak the typed figure onto every other row)."""
     m = ran["materialRow"]
     assert m["costWithLibraryCoverage"] == "$1,100", (
         "the row did not price off the item's own coverage: %r" % m["costWithLibraryCoverage"])
@@ -996,6 +998,37 @@ def test_a_material_row_prices_through_the_librarys_own_engine(ran):
         "a coverage typed on the row did not reach the engine: %r" % m["costWithTypedCoverage"])
     assert m["costWithLibraryCoverage"] != m["costWithTypedCoverage"], (
         "both coverages priced the same, so the row's own box changes nothing")
+
+
+@needs_node
+def test_a_typed_coverage_never_reaches_the_library_item(ran):
+    """Hanz, 2026-09-30: the coverage box on a material row is THIS ESTIMATE'S OWN OVERRIDE, not a
+    second way to edit the material. Coverage, waste and roundup all moved onto the material on
+    2026-09-22 -- priceLine no longer reads a line's coverage at all -- so the only way a typed
+    figure can still win on this one row is for the page to price against a COPY of the item with
+    the coverage swapped in, never the item itself.
+
+    TWO INDEPENDENT SIGNS OF A MUTATION, either one enough on its own:
+      * the item's own coverage, read back after the typed row, must still be the library figure
+        (1,000), not the 500 that was typed into the row;
+      * a SECOND row on the same material, added afterwards and left blank, must price at the
+        library's own $1,100 -- not the $2,100 the first row's override would produce if it had
+        leaked into the shared item.
+
+    Mutation: swap the coverage onto the item found in ITEMS instead of a copy (e.g. `item.coverage
+    = cov` before calling priceLine), and both of these flip: itemCoverageAfterOverride reads 500,
+    and the second, untouched row prices at $2,100 instead of $1,100."""
+    m = ran["materialRow"]
+    assert m["itemCoverageBeforeOverride"] == 1000, (
+        "the fixture's own Densifier coverage moved, so this test cannot tell before from after: "
+        "%r" % m["itemCoverageBeforeOverride"])
+    assert m["itemCoverageAfterOverride"] == m["itemCoverageBeforeOverride"], (
+        "typing a coverage on the row wrote it back onto the library item: %r vs %r"
+        % (m["itemCoverageAfterOverride"], m["itemCoverageBeforeOverride"]))
+    assert m["secondRowBlankCoverageCost"] == m["costWithLibraryCoverage"] == "$1,100", (
+        "a second, blank row on the same material priced at %r after the first row's override -- "
+        "the override leaked off the row and onto every row pointing at that item"
+        % m["secondRowBlankCoverageCost"])
 
 
 @needs_node
