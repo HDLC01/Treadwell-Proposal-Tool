@@ -487,8 +487,15 @@
     if (cur && !opts.includes(cur)) opts.unshift(cur);   // keep an off-list value
     const sel = document.createElement("select");
     sel.name = "texture"; sel.className = input.className;
-    sel.innerHTML = '<option value="">—</option>' +
-      opts.map(o => `<option value="${o.replace(/"/g, "&quot;")}">${o}</option>`).join("");
+    // Built as elements, never as markup: an off-list value is whatever the AI autofill or a
+    // saved draft left in state.texture, and as markup it could open a tag.
+    const addOption = (value, label) => {
+      const op = document.createElement("option");
+      op.value = value; op.textContent = label;
+      sel.appendChild(op);
+    };
+    addOption("", "—");
+    opts.forEach(o => addOption(o, o));
     sel.value = cur;
     input.replaceWith(sel);
   }
@@ -2904,7 +2911,11 @@
   // Pasted content is now reduced to the four switches we can actually carry into the .docx.
 
   function runsFromHtml(html) {
-    const box = document.createElement("div");
+    // Read in a document of its own, never this page's. An element this page creates is live even
+    // detached: a clipboard's `<img src=x onerror=...>` fetches, and its handler runs, the moment
+    // innerHTML parses it. A createHTMLDocument document has no window, so nothing in the paste can
+    // load or run while it is read. Same <div>, same fragment parser: the tree walked is unchanged.
+    const box = document.implementation.createHTMLDocument("").createElement("div");
     box.innerHTML = String(html);
     box.querySelectorAll("script,style,meta,link,title,object,iframe,svg,img").forEach(n => n.remove());
     const runs = [];
