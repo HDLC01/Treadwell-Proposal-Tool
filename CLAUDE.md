@@ -26,10 +26,12 @@ context loaded.
 **🟢 LIVE IN PRODUCTION 24/7:** https://proposals.wetreadwell.com
 
 ### Hosting
-- **Bluehost VPS** (Standard NVMe 2), Ubuntu 24.04. The IP, hostname, SSH key
-  path, and account/order details are deliberately kept OUT of this public repo
-  — they live in the agent memory / a local ops note. Hanz has Tech-contact
-  access on the Bluehost account.
+- **Bluehost VPS** (Standard NVMe 2), Ubuntu 24.04. The IP, hostname, login,
+  SSH port, SSH key path, and account/order details are deliberately kept OUT
+  of this public repo — they live in the agent memory / a local ops note. Reach
+  the box as **the VPS (alias `treadwell-vps` in your SSH config)**:
+  `ssh treadwell-vps`. `deploy/ship.sh` defaults to that alias. Hanz has
+  Tech-contact access on the Bluehost account.
 - **Single Docker container** (`treadwell-proposal-tool`) — FastAPI serves
   BOTH the API and the static frontend on port 8888.
 - **nginx** reverse-proxies 80/443 → 8888, **Let's Encrypt** SSL (auto-renews).
@@ -43,7 +45,7 @@ context loaded.
   **All changes hit staging FIRST, then promote to `main`/prod.** Staging uses a
   self-hosted Postgres+PostgREST for DATA and cloud Supabase for AUTH only.
 
-### Deploy / ops (SSH to the VPS)
+### Deploy / ops (SSH to the VPS: `ssh treadwell-vps`)
 - Update: `cd /opt/treadwell && git pull && docker compose up -d --build`
 - Restart: `docker compose restart`  ·  Logs: `docker compose logs -f`
 - The image bakes in Node + the **Claude CLI** (`@anthropic-ai/claude-code`)
