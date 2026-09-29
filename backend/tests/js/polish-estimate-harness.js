@@ -74,6 +74,7 @@ const EXPORTS = `
     assemblyByName: assemblyByName, setAssembly: setAssembly,
     itemByName: itemByName, setPick: setPick, rowKind: rowKind,
     rowPrice: rowPrice, materialTotal: materialTotal, bid: bid,
+    condLine: condLine, conditionLibrary: conditionLibrary,
     moneyAuto: moneyAuto, measureText: measureText, asmHint: asmHint,
     repaintNumbers: repaintNumbers, renderPanel: renderPanel, stepStatus: stepStatus,
     takeoffPanel: takeoffPanel, laborPanel: laborPanel, reviewPanel: reviewPanel,
@@ -2045,6 +2046,47 @@ const rendered = [];      // every string the page put on screen, for the Labour
       typedNameResolvesToNothing: p.api.itemByName("Dye, two coats") === null &&
         p.api.itemByName("joint filler, 10 gal kit") === null,
       ordinaryNameStillResolves: (p.api.itemByName("OPF") || {}).id === "i1",
+    };
+
+    // ── WHAT A SAVE HANDS KYLE'S WORKBOOK ──
+    // The cell_values the page writes on a real save, per library state, beside the exact Dye /
+    // Joint Filler line costs and kit count the bid priced. test_library_rates_reach_the_workbook.py
+    // runs these cells through the REAL estimate_writer and evaluates the workbook it writes.
+    async function saved(items, sf, cells) {
+      const model = clone(MODEL);
+      model.takeoff = [{ assembly_id: "", assembly_name: "", measurement: sf, unit: "SF" }];
+      model.conditions = Object.assign({}, model.conditions, { dye: true, joint_filler: true });
+      const over = { polish_estimate: model };
+      if (cells) over.cell_values = cells;
+      const b = build({ blob: blob(over), items: items });
+      await b.api.init();
+      b.api.saveSoon();
+      b.clock.fire();
+      const save = b.rec.saves[b.rec.saves.length - 1] || {};
+      const area = B.takeoffSf(b.api.model().takeoff);
+      const dye = b.api.condLine("dye", area);
+      const jf = b.api.condLine("joint_filler", area);
+      return { cells: save.cell_values || {}, area: area, dyeCost: dye.cost, jfCost: jf.cost,
+               jfKits: jf.qty,
+               // TODAY'S WRITE, for the same conditions: the two-argument call every save made
+               // before the library reached the workbook.
+               today: B.conditionCellWrites(b.api.model().conditions, cells || {}) };
+    }
+    const EDITED = { "joint-filler-kit": { unit_cost: 650, coverage: 2000 },
+                     dye: { unit_cost: 0.2 } };
+    const STALE_B29 = '=ROUNDUP(IF(E29="yes",(E18/2000),0),0)';
+    out.reservedWorkbook = {
+      seeded: await saved(seeded(), 3501),
+      edited: await saved(seeded(EDITED), 3501),
+      // 3,200 SF is ONE kit at 3,500 and TWO once 10% waste is bought -- the area where the
+      // waste has to reach the workbook's own kit count or the two disagree.
+      wasted: await saved(seeded({ "joint-filler-kit": { waste_pct: 10 } }), 3200),
+      missing: await saved(ITEMS, 3501, { "Polish!C25": 0.3 }),
+      blanked: await saved(seeded({ "joint-filler-kit": { coverage: null },
+                                    dye: { unit_cost: null } }), 3501),
+      // An earlier save wrote a 2,000 coverage; the row is back at 3,500 now.
+      reset: await saved(seeded(), 3501, { "Polish!B29": STALE_B29, "Polish!C29": 650 }),
+      staleB29: STALE_B29,
     };
   }
 

@@ -637,7 +637,7 @@
     return out;
   }
 
-  function conditionCellWrites(conditions, cells) {
+  function conditionCellWrites(conditions, cells, library) {
     var out = Object.assign({}, cells || {});
     var c = conditions || {};
     for (var key in CONDITION_CELLS) {
@@ -645,6 +645,91 @@
       var spec = CONDITION_CELLS[key];
       var lit = c[key] ? spec.on : spec.off;
       for (var i = 0; i < spec.cells.length; i++) out[spec.cells[i]] = lit;
+    }
+    return libraryLineWrites(out, library);
+  }
+
+  /** KYLE'S DYE AND JOINT FILLER LINES, as the template ships them (Polish rows 25 and 29).
+   *
+   *  `template` is his B cell's formula text exactly, character for character: libraryLineWrites
+   *  compares against it to tell "the library says what the template already says" from a
+   *  change. `shipped` is what polish-estimate.js's condLine falls back to when a row cannot
+   *  price -- RATES and the template's own 3,500 -- so a fallback writes the template's figures.
+   *
+   *  Row 26 is a SECOND dye line (=IF(E25="Yes",E18) x C26 0.14) that the engine has never
+   *  charged; it is left alone here. */
+  var LIBRARY_LINE_CELLS = {
+    dye: { qty: "Polish!B25", rate: "Polish!C25", flag: 'E25="Yes"',
+           template: '=IF(E25="Yes",E18)',
+           shipped: { unit_price: RATES.DYE_PER_SF, coverage: 1, waste_pct: 0, roundup: false,
+                      buy_qty: 1 } },
+    joint_filler: { qty: "Polish!B29", rate: "Polish!C29", flag: 'E29="yes"',
+                    template: '=ROUNDUP(IF(E29="yes",(E18/3500),0),0)',
+                    shipped: { unit_price: RATES.JOINT_FILLER_KIT_COST, coverage: 3500,
+                               waste_pct: 0, roundup: true, buy_qty: 1 } }
+  };
+
+  /** `cells` with Kyle's Dye and Joint Filler cells rewritten to the library's own figures.
+   *  `cells` is conditionCellWrites' own fresh copy, so writing into it mutates nothing a
+   *  caller holds.
+   *
+   *  ONE PRICE EVERYWHERE. polish-estimate.js prices these two lines off the reserved
+   *  library_items rows (condLine); the workbook still carried Kyle's C25 0.14 and C29 500 and
+   *  his "/3500", so an edited row would have had the bid and the downloaded .xlsx quoting
+   *  different figures. `library` is what the page priced with, per condition key:
+   *
+   *    absent     no row in the library at all (a database the seed has not reached). NOTHING
+   *               is written or removed: the template's cells stand, exactly as before, and a
+   *               value an estimator typed on the grid is not touched.
+   *    null       the row is there but cannot price (cost or coverage blanked), so the page fell
+   *               back to the shipped formula -- and the cells get the shipped figures.
+   *    an object  {unit_price, coverage, waste_pct, roundup, buy_qty} off priceLine.
+   *
+   *  THE RATE CELL IS ALWAYS WRITTEN once a row exists: dye's is a price per square foot (one
+   *  unit's price over what one unit covers, plus its waste), the kit's is one kit's price. THE
+   *  QUANTITY FORMULA IS WRITTEN ONLY WHEN IT DIFFERS from the template's text -- or when the key
+   *  is already there, so a coverage put back to 3,500 replaces the formula an earlier save wrote
+   *  rather than leaving it stale. With the seeded rows every value written equals the template's,
+   *  so the workbook is unchanged. Formulas stay formulas: estimate_writer's _coerce passes an
+   *  "=ROUNDUP(IF(...))" through as one, and Excel recomputes D25/D29 and the tab on open. */
+  function libraryLineWrites(cells, library) {
+    var out = cells;
+    var lib = library || {};
+    for (var key in LIBRARY_LINE_CELLS) {
+      if (!LIBRARY_LINE_CELLS.hasOwnProperty(key)) continue;
+      if (!Object.prototype.hasOwnProperty.call(lib, key) || lib[key] === undefined) continue;
+      var spec = LIBRARY_LINE_CELLS[key];
+      var ln = lib[key] || spec.shipped;
+      var price = num(ln.unit_price);
+      var cov = num(ln.coverage);
+      var waste = num(ln.waste_pct);
+      var pack = num(ln.buy_qty) > 0 ? num(ln.buy_qty) : 1;
+      var roundup = ln.roundup !== false;
+      if (!(cov > 0)) { ln = spec.shipped; price = num(ln.unit_price); cov = ln.coverage;
+                        waste = 0; pack = 1; roundup = ln.roundup; }
+      // What one unit of the row covers, inflated by its waste: the formula's divisor, written
+      // out rather than pre-multiplied so Kyle reads his own shape back ("/3500", "*(1+10/100)").
+      var need = "E18" + (waste ? "*(1+" + waste + "/100)" : "") + "/" + cov;
+      var qty, rate;
+      if (key === "dye" && !roundup) {
+        // Dye is charged across the area: the quantity stays his =IF(E25="Yes",E18) and the
+        // whole of the row's arithmetic goes into the per-square-foot rate.
+        qty = spec.template;
+        rate = price * (1 + waste / 100) / cov;
+      } else {
+        // Units bought: whole packs when the row rounds up, the exact need when it does not.
+        var core = "IF(" + spec.flag + ",(" + need + ")" + (roundup && pack !== 1 ? "/" + pack : "") +
+          ",0)";
+        qty = roundup ? "=ROUNDUP(" + core + ",0)" + (pack !== 1 ? "*" + pack : "") : "=" + core;
+        rate = price;
+      }
+      // Twelve significant figures, this file's roundUp() tolerance: 0.2 x 1.05 / 2 is
+      // 0.10500000000000001 in IEEE-754, and a 17-digit rate is not something to put in front
+      // of Kyle in his own workbook. The seeded 0.14 and 500 come through unchanged.
+      out[spec.rate] = parseFloat(rate.toPrecision(12));
+      if (qty !== spec.template || Object.prototype.hasOwnProperty.call(out, spec.qty)) {
+        out[spec.qty] = qty;
+      }
     }
     return out;
   }
@@ -1009,6 +1094,7 @@
     HOURS_PER_DAY: HOURS_PER_DAY, RATES: RATES, GP_BANDS: GP_BANDS,
     gpPct: gpPct,
     CONDITION_CELLS: CONDITION_CELLS, conditionCellWrites: conditionCellWrites,
+    LIBRARY_LINE_CELLS: LIBRARY_LINE_CELLS,
     conditionsFromCells: conditionsFromCells,
     // The library's answer for a condition, and the gate that decides whether it may be
     // applied at all. Exported as a PAIR on purpose: seedConditionDefaults will rewrite the

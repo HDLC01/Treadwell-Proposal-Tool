@@ -22,8 +22,11 @@
 //     Yes/No condition cells, through B.conditionCellWrites. Those are not a rendering of the bid,
 //     they are the contract this screen shares with the intake page, which reads them back and
 //     lets the cell win over the model. A writer that skips them hands the estimator their old
-//     answer back on the next visit to Intake. The downloaded .xlsx therefore shows the
-//     template's own Polish tab, not what was priced here. That is survivable only because the
+//     answer back on the next visit to Intake. AND, since 2026-09-30, the Dye and Joint Filler
+//     rate/quantity cells (Polish!C25, C29, and B25/B29 when they differ from the template), so
+//     the workbook prices those two lines off the same library rows this page does -- see
+//     conditionLibrary and polish-bid-core.js's libraryLineWrites. Otherwise the downloaded
+//     .xlsx shows the template's own Polish tab, not what was priced here. That is survivable only because the
 //     beta works on test projects by construction (see polish-sandbox.js) — it must be revisited
 //     before any of this prices a real bid.
 //   * computed_bid is REPLACED on every save, not merged. On a sandbox copy the source project's
@@ -308,6 +311,27 @@
     return { library: false, line: null, cost: jf, qty: jf / B.RATES.JOINT_FILLER_KIT_COST };
   }
 
+  /** What this page priced Dye and Joint Filler with, for Kyle's workbook.
+   *
+   *  Handed to B.conditionCellWrites on every save so the downloaded .xlsx quotes the same two
+   *  lines the bid does (polish-bid-core.js's libraryLineWrites). A key is LEFT OUT when its row
+   *  is not in the library -- that writes nothing, so a database the seed has not reached keeps
+   *  the template's cells -- and is null when the row is there but cannot price, which is when
+   *  condLine falls back to the shipped formula and the cells get the shipped figures. The
+   *  library loads after the first paint, so an early save with ITEMS still empty writes nothing
+   *  either. */
+  function conditionLibrary() {
+    var out = {};
+    [["dye", "dye"], ["joint_filler", "joint-filler-kit"]].forEach(function (pair) {
+      if (!L.findItem(ITEMS, pair[1])) return;
+      var ln = condLine(pair[0], 0).line;
+      out[pair[0]] = ln ? { unit_price: ln.unit_price, coverage: ln.coverage,
+                            waste_pct: ln.waste_pct, roundup: ln.roundup, buy_qty: ln.buy_qty }
+                        : null;
+    });
+    return out;
+  }
+
   function materialTotal() {
     var sum = 0;
     M.takeoff.forEach(function (r) {
@@ -386,7 +410,11 @@
         // only the model: flip Sales tax off here, follow either of this step's own links to
         // Intake — remodelSource()'s "pick a county", or the Labor step's "Change it on the intake
         // step" — and the old answer came back, then intake's next save made the revert permanent.
-        cell_values: B.conditionCellWrites(M.conditions, TW.getState().cell_values),
+        //
+        // THE DYE AND JOINT FILLER CELLS RIDE THE SAME WRITE: the rate (and, where the library
+        // changed it, the quantity formula) the bid priced with -- conditionLibrary above.
+        cell_values: B.conditionCellWrites(M.conditions, TW.getState().cell_values,
+                                           conditionLibrary()),
         // proposal-review reads this for the SF token, and /api/generate's files-mode rebuild
         // gates on it.
         polish_sf: b.sf,
