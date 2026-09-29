@@ -351,6 +351,37 @@ def test_arriving_on_a_draft_that_has_these_cells_does_not_rewrite_them_twice(co
     assert cond["hydrateSaves"] == 1
 
 
+# ── once the estimate screen has split the two tax answers per sheet ─────
+@needs_node
+def test_on_a_split_draft_the_two_tax_switches_are_the_bases_own_cells(cond):
+    """Hanz, 2026-09-30: every sheet keeps its own Taxable? and Remodel Tax?, and an option stays
+    independent of the base. The intake's two answers are what a NEW project starts every sheet
+    with; once the estimate screen has split them (``tax_flags_per_sheet``) these switches show and
+    set the BASE bid's own two cells (``priced_tabs[].flag_cells``), and only when flipped.
+
+    A polish job: the switch reads Polish's own No, not Epoxy's Yes. Flipping Dye rewrites every
+    in-scope condition -- and must not reset Leveling or the gyp sheets to Epoxy's answer, which the
+    four-literal list would. Flipping Taxable writes Polish!B6 and nothing else; a combo with no
+    single base writes both halves. A draft not yet split keeps the four literals.
+
+    Mutation: conditionCells writing c.cells on a split draft (Leveling!B6 and 'Gyp (FR)'!B8 are
+    reset on the Dye flip, and the Taxable flip writes Epoxy!B6)."""
+    s = cond["split"]
+    assert s["hydrated"] == {"taxable": False, "remodel": False}
+    assert s["afterDye"] == s["before"]
+    changed = {k: v for k, v in s["afterTaxable"].items() if s["afterDye"][k] != v}
+    assert changed == {"Polish!B6": "Yes"}, changed
+    changed = {k: v for k, v in s["afterRemodel"].items() if s["afterTaxable"][k] != v}
+    assert changed == {"Polish!D6": "Yes"}, changed
+    assert s["comboAfterLocal"]["Epoxy!B6"] == "Yes" and s["comboAfterLocal"]["Polish!B6"] == "No", (
+        "flipping Local restated Epoxy's Taxable onto Polish, the other half of the combined base")
+    assert s["combo"]["Epoxy!B6"] == "No" and s["combo"]["Polish!B6"] == "No"
+    assert s["combo"]["Leveling!B6"] == "Yes" and s["combo"]['Gyp (USG 1-8")!B8'] == "No"
+    assert {k: s["unsplit"][k] for k in ("Epoxy!B6", "Leveling!B6", 'Gyp (USG 1-8")!B8',
+                                         "Gyp (FR)!B8")} == dict.fromkeys(
+        ("Epoxy!B6", "Leveling!B6", 'Gyp (USG 1-8")!B8', "Gyp (FR)!B8"), "No")
+
+
 # ── the inert row, rather than a vanishing one ────────────────────────────
 @needs_node
 def test_removing_existing_filler_goes_inert_when_there_is_no_filler(cond):

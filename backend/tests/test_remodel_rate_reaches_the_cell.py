@@ -64,14 +64,15 @@ def result():
 
 
 def test_covers_every_sheet_with_a_remodel_tax_line(result):
-    """Epoxy + Polish + Seal + Leveling + Epoxy blank + every Gyp variant = 10 cells.
+    """Epoxy + Polish + Seal + 'Seal (+Jnts)' + Leveling + Epoxy blank + every Gyp variant = 11.
 
     This count was 7 until 2026-09-02, and the three missing sheets are the point: the list was
     written from a comment asserting they had no remodel line, and the workbook says otherwise.
+    'Seal (+Jnts)' joined on 2026-09-30, when every sheet started keeping its own Remodel Tax?.
     If a 6th Gyp variant is ever added, this is the number that must move — not a hand-typed
     count going stale while a real customer's option line quotes 10%."""
     assert result["gypSheetCount"] == 5
-    assert result["pickedCity"]["cellCount"] == 10
+    assert result["pickedCity"]["cellCount"] == 11
 
 
 def test_picking_a_city_writes_the_real_rate_into_every_formula_cell(result):
@@ -85,7 +86,7 @@ def test_picking_a_city_writes_the_real_rate_into_every_formula_cell(result):
 def test_the_write_also_reaches_the_live_hf_engine(result):
     """So the on-screen total is right NOW, not just in the file the estimator downloads later."""
     p = result["pickedCity"]
-    assert p["hfCallCount"] == 10
+    assert p["hfCallCount"] == 11
     assert p["hfMatchesCellValues"] is True
 
 
@@ -188,12 +189,12 @@ def test_seal_leveling_and_epoxy_blank_get_the_picked_rate(result):
     assert p["epoxyBlank"] == '=IF(D6="yes",0.0935,0)'
 
 
-def test_seal_with_joints_is_deliberately_left_as_a_mirror(result):
-    """`Seal (+Jnts)!B75` is `=Seal!B75`, so writing Seal already carries it. Writing a literal
-    there too would replace the mirror and let the two sheets drift apart independently — the
-    exact divergence found in Kyle's own filed workbooks. This absence is a decision, so it is
-    asserted rather than left to whoever next extends the list."""
-    assert result["sealJointsLeftAsMirror"]["written"] is False
+def test_seal_with_joints_gets_the_rate_on_its_own_toggle(result):
+    """`Seal (+Jnts)!B75` is `=Seal!B75` in the template, which priced its remodel tax off SEAL's
+    Remodel Tax?. Since 2026-09-30 every sheet keeps its own two tax answers (Hanz: "for the options
+    we follow each worksheets tax options"), so the joints sheet takes the same IF as every other
+    sheet, on its own D6. It was deliberately left as a mirror until then."""
+    assert result["sealJointsOwnToggle"]["written"] == '=IF(D6="yes",0.0935,0)'
 
 
 def test_a_tab_copied_before_the_county_was_picked_still_gets_the_rate(result):
@@ -216,10 +217,10 @@ def test_a_copy_of_a_copy_resolves_through_the_chain_to_its_template_layout(resu
     c = result["copyChain"]
     assert c["copy2"] == '=IF(D6="yes",0.0935,0)'    # Copy2 → Copy1 → Epoxy → B81
     assert c["copy3"] == '=IF(D6="yes",0.0935,0)'    # Copy3 → Seal → B75
-    # 10 template layouts + 3 copies, each written exactly once. A `seen` set guards the overlap:
+    # 11 template layouts + 3 copies, each written exactly once. A `seen` set guards the overlap:
     # the base tabs in the tab bar are the same ids as the layouts, and writing one twice would
     # be harmless here but would hide a double-write bug on a real structural translation.
-    assert c["targetCount"] == 13
+    assert c["targetCount"] == 14
 
 
 def test_picking_while_sitting_on_a_copied_tab_keeps_the_tab_on_screen(result):

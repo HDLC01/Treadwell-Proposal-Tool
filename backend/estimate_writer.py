@@ -32,6 +32,7 @@ from openpyxl.formatting.formatting import ConditionalFormattingList
 from openpyxl.styles import Protection
 from openpyxl.workbook import Workbook
 from openpyxl.worksheet.cell_range import CellRange
+from openpyxl.worksheet.datavalidation import DataValidation
 
 
 TEMPLATE_PATH = (
@@ -481,6 +482,20 @@ TAXABLE_FLAG_CELLS: Dict[str, str] = {
     "Leveling":   "B6",
     GYP_SHEET:    "B8",
     "Gyp (FR)":   "B8",
+}
+
+# Every sheet with a flag block, and its (Taxable?, Remodel Tax?) cells in TEMPLATE coordinates.
+#
+# Since 2026-09-30 each of these sheets -- and every copy of one -- keeps its OWN two answers
+# (Hanz: "for the options we follow each worksheets tax options", and "Stay independent"): the
+# estimate screen writes each one into `cell_values` as a literal, and step 2 below lands it. What
+# the template cannot give the downloaded file is the picker: Kyle's Yes/No lists on these cells
+# are x14 extension validations, which openpyxl drops on load, so without step 2.1 the estimator
+# opening the .xlsx gets a bare text cell. The gyp block sits one row lower (B6 there is Miles Away).
+FLAG_BLOCK_CELLS: Dict[str, tuple] = {
+    "Epoxy": ("B6", "D6"), "Polish": ("B6", "D6"), "Seal": ("B6", "D6"),
+    "Seal (+Jnts)": ("B6", "D6"), "Epoxy blank": ("B6", "D6"), "Leveling": ("B6", "D6"),
+    **{name: ("B8", "D8") for name in GYP_SHEETS},
 }
 GYP_TOTALS: Dict[str, str] = {
     "material_total":  "E41",
@@ -965,7 +980,8 @@ def fill_estimate(
     # its OWN flag cell, and Leveling / the gyp base / 'Gyp (FR)' hold theirs
     # independently -- so writing Epoxy alone left a tax-exempt gypsum or Leveling
     # bid billing 9.475%. Written here, with the other named fields, so the values
-    # ride the structural-edit shift below; `cell_values` still wins over all of it.
+    # ride the structural-edit shift below; `cell_values` still wins over all of it,
+    # which is what keeps a sheet's OWN answer (FLAG_BLOCK_CELLS) the one in the file.
     if values.get("taxable") not in (None, ""):
         for name, coord in TAXABLE_FLAG_CELLS.items():
             if name in wb.sheetnames:
@@ -1013,6 +1029,10 @@ def fill_estimate(
             wb[sheet_name][addr] = _coerce(val)
         except Exception as exc:  # noqa: BLE001 — log the skip instead of swallowing it
             log.warning("estimate_writer: failed to write %s: %s", sheet_addr, exc)
+
+    # 2.1 Every flag-block sheet's two cells get their Yes/No picker back (see
+    #     FLAG_BLOCK_CELLS). After the structural edits, so the cells are found where they are.
+    _add_flag_dropdowns(wb, tab_copies, ops_by)
 
     # 3. Extra material lines -> spare "=B*C" rows on the Epoxy tab.
     _write_extra_materials(epoxy, extras, ops_by.get("Epoxy"))
@@ -1110,6 +1130,41 @@ def _create_copied_tabs(wb, tab_copies: list[Mapping[str, Any]] | None) -> None:
             ws.title = new_id
         except Exception:  # noqa: BLE001 — bad title / odd char; skip this copy
             pass
+
+
+def _add_flag_dropdowns(wb, tab_copies: list[Mapping[str, Any]] | None,
+                        ops_by: Dict[str, list[dict]] | None) -> None:
+    """A Yes/No list validation on each flag-block sheet's Taxable? and Remodel Tax? cells.
+
+    Runs while every sheet still carries its stable id, so a copy resolves through its {id, source}
+    chain to the template layout exactly as _resolve_ws_layouts does. The template coordinates are
+    translated through that sheet's own structural edits; a deleted flag cell gets no picker.
+    A guard rail, never worth failing a generation over."""
+    src_by_id: dict[str, str] = {}
+    for c in (tab_copies or []):
+        if isinstance(c, dict):
+            cid = str(c.get("id") or "").strip()[:31]
+            if cid:
+                src_by_id[cid] = str(c.get("source") or "Epoxy").strip() or "Epoxy"
+    for ws in wb.worksheets:
+        base, guard = ws.title, 0
+        while base in src_by_id and guard < 20:
+            base = src_by_id[base]
+            guard += 1
+        cells = FLAG_BLOCK_CELLS.get(base)
+        if not cells:
+            continue
+        ops = (ops_by or {}).get(ws.title) or []
+        addrs = [a for a in ((_translate_addr(c, ops) if ops else c) for c in cells) if a]
+        if not addrs:
+            continue
+        try:
+            dv = DataValidation(type="list", formula1='"Yes,No"', allow_blank=True)
+            for a in addrs:
+                dv.add(a)
+            ws.add_data_validation(dv)
+        except Exception as exc:  # noqa: BLE001 — guard rail, not worth failing generation
+            log.warning("estimate_writer: flag picker skipped on %s: %s", ws.title, exc)
 
 
 def _lock_layout_for(base_id: str) -> list[str] | None:
