@@ -116,7 +116,8 @@ def test_an_ordinary_price_line_reads_back_as_typed(ran):
 # ═══ 4. notification links ═══════════════════════════════════════════════════
 FOLLOWED = ["crm", "draft", "portal", "dropbox", "ownOrigin"]
 REFUSED = ["js", "jsMixedCase", "jsLeadingSpace", "data", "protocolRelative", "backslash",
-           "tabToSlashes", "offSite", "plainHttpOwnHost", "lookalikeDropbox"]
+           "tabToSlashes", "offSite", "plainHttpOwnHost", "lookalikeDropbox",
+           "jsOnDropboxHost", "httpDropbox", "ftpDropbox"]
 
 
 @pytest.mark.parametrize("name", FOLLOWED)
@@ -139,7 +140,14 @@ def test_any_other_notification_link_goes_nowhere(ran, name):
     The tab case is the one a read of the string misses: the URL parser strips it, and "/\\t/host"
     becomes "//host", another site. The link is resolved before it is judged.
 
-    Mutation: put `n.link` back at the two call sites. Every case here navigates."""
+    The Dropbox exception keys on the hostname, and "javascript://www.dropbox.com/%0A..." parses
+    to hostname "www.dropbox.com" with a `javascript:` scheme; setting location.href to it runs
+    the code after the %0A. The https-scheme check is the only thing that refuses it (and the
+    http/ftp Dropbox cases), so those three cases pin that line.
+
+    Mutation: put `n.link` back at the two call sites. Every case here navigates.
+    Mutation: delete `if (u.protocol !== "https:") return "";`. The three Dropbox-host cases
+    navigate."""
     got = ran["links"][name]
     assert got["toasted"] is True
     assert got["safe"] == ""

@@ -418,6 +418,11 @@ const out = { PAY, ATTR_PAY };
     offSite: "https://evil.example/login",
     plainHttpOwnHost: "http://proposals.wetreadwell.com/crm.html",
     lookalikeDropbox: "https://www.dropbox.com.evil.example/x",
+    // the Dropbox host under another scheme: the URL parser still reports hostname
+    // "www.dropbox.com", so only the https-scheme check stands between these and a click
+    jsOnDropboxHost: "javascript://www.dropbox.com/%0Aalert(document.domain)",
+    httpDropbox: "http://www.dropbox.com/scl/fo/x",
+    ftpDropbox: "ftp://dropbox.com/x",
   };
   out.links = {};
   for (const [k, v] of Object.entries(LINKS)) out.links[k] = { link: v, ...(await bell(v)) };
