@@ -6,7 +6,9 @@ THE REPOSITORY IS PUBLIC, so the step summary and the run log can be read by any
 is a list of places our apps are weak, with the exact URL, parameter, attack string and evidence
 for each. None of that may leave this script. What does: the target we were asked to scan (it is
 already in the workflow file), how many alerts there were at each risk level, and each alert's
-name and ZAP rule id, which are ZAP's own fixed strings. The full report goes to a 7-day artifact.
+name and ZAP rule id, which are ZAP's own fixed strings. The full report is never kept in CI at
+all (no artifact, nothing else printed) — for that, run deploy/zap-scan.sh locally, which writes
+it to zap-reports/ on the machine that ran it.
 
 It is built by COPYING OUT the few fields it prints, never by filtering the report down, so a field
 a newer ZAP adds cannot leak through by default. Names are still scrubbed of anything URL-shaped
@@ -87,7 +89,7 @@ def render(report, rules, target, zap_exit):
     out = ["### ZAP baseline: %s" % _target(target), ""]
     if report is None:
         out += ["**The scan did not produce a report** (ZAP exit code %s). Nothing was checked; "
-                "the log is in the `zap-*` artifact." % clean(zap_exit, 10), ""]
+                "re-run with deploy/zap-scan.sh against the same target for the full log." % clean(zap_exit, 10), ""]
         return "\n".join(out)
     merged = {}
     ignored = {}
@@ -112,8 +114,8 @@ def render(report, rules, target, zap_exit):
             out.append("- %s [%s]: %s" % (name, ref, clean(v["reason"], 240)))
     if str(zap_exit) not in OK_EXITS:
         out += ["", "**ZAP exited with code %s**, so this report may be incomplete." % clean(zap_exit, 10)]
-    out += ["", "Where each alert was found is in the `zap-*` artifact (kept 7 days), not here: "
-            "this repository is public.", ""]
+    out += ["", "Where each alert was found is not here: this repository is public. Run "
+            "deploy/zap-scan.sh against the same target for the full HTML/JSON report.", ""]
     return "\n".join(out)
 
 

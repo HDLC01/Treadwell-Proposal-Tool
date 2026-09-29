@@ -1,6 +1,7 @@
 # Alerts ZAP raises that we keep ON PURPOSE. Read by .zap/summarize.py: an alert listed here is
 # left out of the counts in the public step summary and listed underneath with its reason, and it
-# stays in the full report artifact. Nothing else is hidden, and nothing is hidden without a reason.
+# stays in ZAP's own report regardless (CI keeps no copy of that; deploy/zap-scan.sh's local one
+# still has it). Nothing else is hidden, and nothing is hidden without a reason.
 #
 # One line per alert, four TAB-separated fields:
 #     <alertRef or rule id>  IGNORE  <alert name as ZAP prints it>  <one-line reason>

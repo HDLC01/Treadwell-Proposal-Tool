@@ -13,8 +13,9 @@ scan harmless is pinned here rather than left to whoever edits the workflow next
   * the spider never submits a form, runs two threads for one minute, and never requests the
     portal paths that write or send mail; there is no Ajax/browser spider and no active scan;
   * findings never fail the job;
-  * the public step summary carries counts and alert names only, never a URL or evidence, and the
-    full report is kept 7 days.
+  * the public step summary carries counts and alert names only, never a URL or evidence, and no
+    step keeps or uploads the full report — the CI run has counts and names, nothing else; the
+    full report only ever exists on whichever machine ran deploy/zap-scan.sh.
 
 Several of these are EXECUTED rather than read: the workflow's `if:` expressions are evaluated
 for every trigger, the exclusion regexes are matched against real URLs, and .zap/summarize.py is
@@ -25,6 +26,7 @@ import json
 import os
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -40,6 +42,8 @@ DEPLOY = ROOT / ".github" / "workflows" / "deploy.yml"
 PLAN = ROOT / ".zap" / "baseline.yaml"
 RULES = ROOT / ".zap" / "rules.tsv"
 SUMMARIZE = ROOT / ".zap" / "summarize.py"
+ZAP_SCAN = ROOT / "deploy" / "zap-scan.sh"
+GITIGNORE = ROOT / ".gitignore"
 
 STAGING = {"https://staging.proposals.wetreadwell.com", "https://staging.portal.wetreadwell.com"}
 PRODUCTION = {"https://proposals.wetreadwell.com", "https://portal.wetreadwell.com"}
@@ -93,7 +97,7 @@ def _plan():
 
 def test_the_files_exist():
     """A rename would make every assertion below vacuously pass."""
-    for p in (WORKFLOW, PLAN, RULES, SUMMARIZE, DEPLOY):
+    for p in (WORKFLOW, PLAN, RULES, SUMMARIZE, DEPLOY, ZAP_SCAN):
         assert p.is_file(), p
 
 
@@ -646,14 +650,95 @@ def test_scans_of_one_app_never_overlap():
         assert len(set(names)) == len(names)
 
 
-def test_the_full_report_is_kept_seven_days():
+def test_no_step_keeps_or_uploads_the_full_report():
+    """An artifact on this PUBLIC repo can be downloaded by any signed-in GitHub user, and a ZAP
+    report names every weak URL, parameter and attack string on a real, named site — not something
+    to hand out that cheaply. So CI keeps counts and alert names only (.zap/summarize.py's step
+    summary) and nothing else: no upload-artifact step, anywhere. For the full report, run
+    deploy/zap-scan.sh, which never runs in CI and keeps its output only on the machine that ran it."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "upload-artifact" not in text
     for job in _jobs().values():
-        uploads = [s for s in job["steps"] if str(s.get("uses", "")).startswith("actions/upload-artifact@")]
-        assert len(uploads) == 1
-        w = uploads[0]["with"]
-        assert int(w["retention-days"]) == 7
-        assert "report.html" in w["path"] and "report.json" in w["path"]
-        assert uploads[0]["if"] == "always()"
+        assert not [s for s in job["steps"] if "artifact" in (s.get("name") or "").lower()]
+
+
+def _bash():
+    """A bash that can run a script: POSIX anywhere, Git for Windows' on a dev box (never
+    System32's, which is the WSL launcher). Same lookup as test_deploy_pipeline.py."""
+    found = shutil.which("bash")
+    if found and "system32" not in found.lower():
+        return found
+    git = shutil.which("git")
+    if git:
+        for up in pathlib.Path(git).resolve().parents[:3]:
+            for cand in (up / "bin" / "bash.exe", up / "usr" / "bin" / "bash.exe"):
+                if cand.is_file():
+                    return str(cand)
+    return None
+
+
+def _fake_docker_bin(tmp_path):
+    """A `docker` on PATH that never touches a real container: it only records that it was called.
+    A test proving the allowlist check MUST fail before this exists, real docker.exe stays reachable
+    and a broken check would start a real scan against whatever host the test was passing — which is
+    exactly what happened once while proving this test: the un-fixed script reached a real `docker
+    run` against https://evil.com and https://wetreadwell.com before the 30s subprocess timeout cut
+    it off, leaving two containers running that had to be found and killed by hand. This stub is the
+    fix for the test's own safety, not just the script's: a regression here can now only ever be
+    caught, never re-enacted."""
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir(exist_ok=True)
+    log = tmp_path / "fake-docker.log"
+    stub = fake_bin / "docker"
+    stub.write_text("#!/usr/bin/env bash\necho \"CALLED $*\" >> \"%s\"\nexit 0\n" % log.as_posix(),
+                     encoding="utf-8", newline="\n")
+    stub.chmod(0o755)
+    return fake_bin, log
+
+
+def _zap_scan(target, tmp_path, timeout=10):
+    """Invoke the real script, never mocked, but with a fake `docker` ahead of the real one on
+    PATH: the allowlist check must refuse before Docker is ever touched, and this makes that true
+    even if the check itself is broken (see _fake_docker_bin), so this never needs Docker Desktop
+    and never risks a real scan starting from a test run."""
+    bash = _bash()
+    if not bash:
+        pytest.skip("no bash to execute deploy/zap-scan.sh with")
+    fake_bin, log = _fake_docker_bin(tmp_path)
+    env = dict(os.environ)
+    env["PATH"] = str(fake_bin) + os.pathsep + env.get("PATH", "")
+    r = subprocess.run([bash, str(ZAP_SCAN), target], cwd=str(ROOT), env=env,
+                        capture_output=True, text=True, encoding="utf-8", timeout=timeout)
+    r.fake_docker_called = log.read_text(encoding="utf-8") if log.exists() else ""
+    return r
+
+
+@pytest.mark.parametrize("bad", [
+    "https://evil.com",
+    "https://wetreadwell.com",           # the marketing WordPress site, not ours to scan
+    "https://www.wetreadwell.com",
+    "https://proposals.wetreadwell.com.evil.com",  # CONTAINS the name; is not the name
+])
+def test_the_script_refuses_every_host_that_is_not_the_four(bad, tmp_path):
+    """deploy/zap-scan.sh's own allowlist, exercised for real (not grepped): each of these must be
+    refused before Docker is ever touched, and the refusal must name the host that was refused, in
+    a sentence a person reads and understands — not a bare nonzero exit. `docker` is a harmless
+    stub for this test (see _fake_docker_bin); it must never be called at all here."""
+    r = _zap_scan(bad, tmp_path)
+    assert r.returncode != 0, r.stdout + r.stderr
+    assert bad in (r.stdout + r.stderr), r.stdout + r.stderr
+    assert "Docker" not in (r.stdout + r.stderr), "refused too late: %r" % (r.stdout + r.stderr)
+    assert r.fake_docker_called == "", "docker was invoked: %r" % r.fake_docker_called
+
+
+def test_the_gitignore_keeps_the_local_report_out_of_the_repo():
+    """deploy/zap-scan.sh writes the full HTML/JSON report under zap-reports/ at the repo root —
+    the whole reason it exists is to hold what CI is not allowed to keep. Ask git itself whether a
+    report path is ignored (not just whether some line of .gitignore text looks right), so a stray
+    `git add` genuinely cannot stage one."""
+    sample = "zap-reports/staging.proposals.wetreadwell.com-20260101T000000Z/report.html"
+    r = subprocess.run(["git", "check-ignore", "-q", sample], cwd=str(ROOT))
+    assert r.returncode == 0, "%s is not ignored by %s" % (sample, GITIGNORE)
 
 
 def test_the_summary_step_prints_only_what_summarize_py_prints():

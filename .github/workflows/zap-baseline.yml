@@ -43,11 +43,12 @@ name: ZAP baseline
 # REPORT ONLY. Findings never fail this workflow; a scan that could not run does.
 #
 # THIS REPOSITORY IS PUBLIC. The run log and step summary are readable by anyone, so the summary
-# carries only counts per risk level and alert names (.zap/summarize.py), and ZAP's own output
-# goes to a file. The full HTML + JSON report, with every URL and piece of evidence, is uploaded
-# as an artifact kept for 7 days, and artifacts on a public repository can be downloaded by any
-# signed-in GitHub user. That is the trade for having the detail at all: download what you need,
-# and treat the report as public for those 7 days.
+# carries only counts per risk level and alert names (.zap/summarize.py), and ZAP's own output goes
+# to a file that is never uploaded, printed, or otherwise kept: an artifact on a public repository
+# can be downloaded by any signed-in GitHub user, and a ZAP report names every weak URL, parameter
+# and attack string on a real, named site — not something to hand a signed-in stranger. For the
+# full HTML + JSON report, run deploy/zap-scan.sh locally against the same target: the same pinned
+# image and the same .zap/baseline.yaml plan, with the report kept only on the machine that ran it.
 #
 # No step holds a write token: the only permission is `contents: read`, used by the checkout.
 
@@ -131,7 +132,8 @@ jobs:
           mkdir -p "${beta%/*}"
           curl -fsSL --retry 3 -o "$beta" "$ZAP_BETA_RULES_URL"
           echo "$ZAP_BETA_RULES_SHA256  $beta" | sha256sum --check --quiet -
-          # All of ZAP's output goes to zap.log (artifact only), never to this public log.
+          # All of ZAP's output goes to zap.log, on the runner's disk only: never to this public
+          # log, never uploaded, gone when the job ends. For that detail, run deploy/zap-scan.sh.
           rc=0
           timeout --kill-after=30s 15m \
             docker run --rm -e ZAP_TARGET="$TARGET" -v "$wrk:/zap/wrk:rw" \
@@ -147,18 +149,6 @@ jobs:
           TARGET: ${{ matrix.target }}
           ZAP_EXIT: ${{ steps.scan.outputs.exit_code || 'none' }}
         run: python3 .zap/summarize.py "$RUNNER_TEMP/zap/report.json" .zap/rules.tsv "$TARGET" "$ZAP_EXIT" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Keep the full report for 7 days
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: zap-${{ matrix.name }}
-          path: |
-            ${{ runner.temp }}/zap/report.html
-            ${{ runner.temp }}/zap/report.json
-            ${{ runner.temp }}/zap/zap.log
-          retention-days: 7
-          if-no-files-found: warn
 
   production:
     name: production / ${{ matrix.name }}
@@ -217,7 +207,8 @@ jobs:
           mkdir -p "${beta%/*}"
           curl -fsSL --retry 3 -o "$beta" "$ZAP_BETA_RULES_URL"
           echo "$ZAP_BETA_RULES_SHA256  $beta" | sha256sum --check --quiet -
-          # All of ZAP's output goes to zap.log (artifact only), never to this public log.
+          # All of ZAP's output goes to zap.log, on the runner's disk only: never to this public
+          # log, never uploaded, gone when the job ends. For that detail, run deploy/zap-scan.sh.
           rc=0
           timeout --kill-after=30s 15m \
             docker run --rm -e ZAP_TARGET="$TARGET" -v "$wrk:/zap/wrk:rw" \
@@ -233,15 +224,3 @@ jobs:
           TARGET: ${{ matrix.target }}
           ZAP_EXIT: ${{ steps.scan.outputs.exit_code || 'none' }}
         run: python3 .zap/summarize.py "$RUNNER_TEMP/zap/report.json" .zap/rules.tsv "$TARGET" "$ZAP_EXIT" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Keep the full report for 7 days
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: zap-${{ matrix.name }}
-          path: |
-            ${{ runner.temp }}/zap/report.html
-            ${{ runner.temp }}/zap/report.json
-            ${{ runner.temp }}/zap/zap.log
-          retention-days: 7
-          if-no-files-found: warn
