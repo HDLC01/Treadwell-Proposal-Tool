@@ -427,8 +427,8 @@
         paint();
         // The draft is saved either way; only the customer-facing copy is behind.
         if (j.sent && j.portal_updated === false) {
-          alert("Saved on the project, but the Active Projects board didn't update. "
-              + "Reassign it from the Active Projects drawer so the follow-ups and the digest "
+          alert("Saved on the project, but its project board didn't update. "
+              + "Reassign it from the project's drawer on its board so the follow-ups and the digest "
               + "move too.");
         }
       } catch (err) { alert("Couldn't assign. " + (err.message||"")); }

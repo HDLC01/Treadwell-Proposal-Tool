@@ -299,8 +299,9 @@ def test_the_page_refusal_only_tabs_own_no_api():
     page needs no edit alongside it: js/admin.js:167 derives the "hides the tab only" wording from
     the row's own empty `api` at render time rather than from a second copy of this list."""
     assert [h for h, t in nav_access.TABS.items() if not t["api"]] == [
-        "/portal.html", "/polish-intake.html", "/polish-estimates.html", "/projects.html",
-        "/library.html", "/markup.html", "/notifications.html", "/admin.html"], (
+        "/portal.html", "/gc-projects.html", "/polish-intake.html", "/polish-estimates.html",
+        "/projects.html", "/library.html", "/markup.html", "/notifications.html",
+        "/admin.html"], (
         "the set of tabs that own no private endpoint has changed; the Admin page's on-screen "
         "wording about them is derived from this and needs re-reading")
 
@@ -350,8 +351,16 @@ def test_every_tab_in_the_table_is_a_real_page_and_every_sidebar_href_is_in_the_
 
     Compared against the NAV-VISIBLE tabs, not against all of TABS: a tab may be governed without
     being drawn (NO_SIDEBAR_TABS), and the test below is what stops that becoming an accident."""
+    # A BOARD PAGE IS A REAL PAGE WITH NO FILE OF ITS OWN. The General Contractor board is
+    # portal.html's bytes served at a second address (main.py, pipelines.board_page), so it is
+    # accepted here on that condition only: it is one of pipelines.BOARD_PAGE's addresses, and the
+    # file it is built from exists. test_gc_pipeline.py GETs the address and checks what comes back.
+    import pipelines
     for href, tab in nav_access.TABS.items():
         for page in tab["pages"]:
+            if page in pipelines.BOARD_PAGE.values() and not (FRONTEND / page.lstrip("/")).exists():
+                assert (FRONTEND / "portal.html").is_file(), "%s is built from a missing portal.html" % page
+                continue
             assert (FRONTEND / page.lstrip("/")).is_file(), "%s claims %s" % (href, page)
     hrefs = _sidebar_hrefs()
     visible = set(nav_access.TABS) - set(nav_access.NO_SIDEBAR_TABS)

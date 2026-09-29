@@ -65,6 +65,14 @@
   const pausedUntil = (p) => C.pausedUntil(p, TW.bizToday());
   const ROLE_LABEL = { primary: "Primary", accounts_payable: "Accounts payable", other: "Other" };
   let ALL = [];
+  // WHICH BOARD THIS IS: "direct" (Direct Projects, /portal.html) or "gc" (General Contractor,
+  // /gc-projects.html). Hanz, 2026-09-29: "we actually have two pipelines now ... it will have the
+  // same steps but just on a different webpage." Same steps, so the same page and this same file
+  // draw both: main.py serves portal.html at the GC address with data-pipeline="gc" on <body>, and
+  // load() hands the board only its own pipeline's rows (C.onBoard). Every tab, column, menu and
+  // count below is computed from ALL, so each board counts only its own without any of that code
+  // knowing there are two. Anything but "gc" is Direct, the board every project was on before.
+  const PIPELINE = document.body && document.body.dataset.pipeline === "gc" ? "gc" : "direct";
 
   // ── filter / sort state ────────────────────────────────────────────────────
   // Module-level and mirrored to sessionStorage: renderBoard re-runs after every
@@ -748,6 +756,16 @@
       localStorage.removeItem("treadwell.proposal_tool.state");
       localStorage.removeItem("treadwell.proposal_tool.draft_id");
       sessionStorage.removeItem("treadwell.proposal_tool.hydrated_once");
+      // FROM THE GENERAL CONTRACTOR BOARD THE NEW PROJECT IS ALREADY A GC ONE: its first answer is
+      // written into the fresh state the intake form reads, so the Audience radio opens on
+      // "General contractor (GC)" (index.js writeForm) and the project lands back on this board.
+      // A plain field in the blob, unlike the test intent below: `audience` is the estimator's own
+      // answer and not server-owned, so it travels the way every other intake answer does, and the
+      // estimator can still switch it. shared.js stamps the unstamped blob with the new draft id.
+      // The Direct board writes nothing, which leaves the form on its default, Direct.
+      if (PIPELINE === "gc") {
+        localStorage.setItem("treadwell.proposal_tool.state", JSON.stringify({ audience: "GC" }));
+      }
     } catch {/* private mode — the intake form still works, it just won't resume */}
     TW.setNewProjectTestIntent(TAB === "test");
     window.location.assign("/?new=1");
@@ -837,7 +855,23 @@
       const r = await api("/api/portal/pipeline");
       const j = await r.json();
       if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + r.status));
-      ALL = j.proposals || [];
+      const every = j.proposals || [];
+      // A LINK TO A PROJECT ON THE OTHER BOARD GOES TO THE OTHER BOARD, query and hash kept, so the
+      // drawer (and its &sec= tab) opens there. Every link that exists says /portal.html — the
+      // bell (notifications.py), the Follow-ups board's Open, the portal's "Reply in Portal" staff
+      // emails — whichever board the project is on today, and a project moves boards when its
+      // Direct/GC choice changes. Checked BEFORE painting, so the wrong board never flashes up,
+      // and latched through DEEPLINK_USED so a poll landing mid-navigation cannot fire it twice.
+      // A project on neither board (trashed, never generated) falls through to openDetail below,
+      // exactly as it did before there were two boards.
+      const wanted = DEEPLINK_USED ? "" : new URLSearchParams(location.search).get("open");
+      const there = C.otherBoardFor(every, wanted, PIPELINE);
+      if (there) {
+        DEEPLINK_USED = true;
+        location.replace(there + location.search + location.hash);
+        return;
+      }
+      ALL = C.onBoard(every, PIPELINE);
       renderDegraded(j);
       renderBoard();
     } catch (err) {

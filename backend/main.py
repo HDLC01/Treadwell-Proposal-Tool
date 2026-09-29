@@ -84,6 +84,7 @@ import markup
 import nav_access
 import notifications
 import pdf_writer
+import pipelines
 import price_rules
 import pricing
 import profiles
@@ -2239,7 +2240,8 @@ def api_draft_revision_files(draft_id: str, revision_no: int, request: Request) 
 
 @app.get("/api/portal/pipeline")
 def api_portal_pipeline() -> Dict[str, Any]:
-    """The Active Projects board: the portal's pipeline, stamped with OUR test flag.
+    """Both project boards (Direct Projects and General Contractor): the portal's pipeline, stamped
+    with OUR test flag and with each project's audience, which decides the board it is drawn on.
 
     The portal has no notion of a test project: `is_test` lives in this app's `drafts` blob,
     filed by hand on the Proposals Database. The board grew an Active / Test split on
@@ -2292,10 +2294,20 @@ def api_portal_pipeline() -> Dict[str, Any]:
     # appearing on the Active board after somebody had already handed it to operations, and the
     # sales meeting would keep discussing a job nobody there still owns.
     hands = {s["id"]: s.get("handed_off_at") for s in summaries}
+    # Direct or GC — which of the two boards this card belongs on. Hanz, 2026-09-29: "we actually
+    # have two pipelines now". The portal row has no such column; the choice is the New Project
+    # form's radio, saved on OUR draft, so a SENT project would reach the board without it and sit
+    # on Direct for ever. Stamped whenever the draft is known, INCLUDING a None — unlike the won and
+    # hand-off marks below, None here is the draft's own answer ("never chose"), and the rule reads
+    # it as Direct, which is where that project has always been. A row the drafts list has never
+    # heard of is left without the key; the board reads that as Direct too.
+    audiences = {s["id"]: s.get("audience") for s in summaries}
     for row in rows:
         pid = row.get("proposal_id")
         if pid in flags:
             row["is_test"] = flags[pid]
+        if pid in audiences:
+            row["audience"] = audiences[pid]
         # Never clobber a figure the portal already has, and never write a null over nothing.
         if row.get("bid_total") is None and totals.get(pid) is not None:
             row["bid_total"] = totals[pid]
@@ -2310,6 +2322,14 @@ def api_portal_pipeline() -> Dict[str, Any]:
         # a second card for a project already on the board would double it.
         rows = rows + _sent_unknown_rows(summaries, rows)
     data["proposals"] = rows + _not_sent_rows(summaries, rows)
+    # The board each card is on, in the server's own words — pipelines.pipeline_of over the audience
+    # just stamped, for every row including the synthesised ones and the ones with no draft behind
+    # them. portal.js derives the same answer from `audience` with crm-core's pipelineOf, the same
+    # rule in JavaScript; test_gc_pipeline.py feeds this payload to that function and holds the two
+    # equal card for card. Any other reader of this payload (notifications.js is one) can take the
+    # answer from here rather than re-deriving it.
+    for row in data["proposals"]:
+        row["pipeline"] = pipelines.pipeline_of(row.get("audience"))
     # What the browser needs to say WHY the board looks the way it does. "live" is the normal
     # answer; the banner only appears for the other two. fetched_at is the cache's stamp, so on
     # "offline" it is null — there is nothing to date.
@@ -2357,6 +2377,9 @@ def _not_sent_rows(summaries: List[Dict[str, Any]],
             # NOT approved_total: nobody has approved this. cardTotal() reads both.
             "bid_total": s.get("total"),
             "work_type": s.get("work_type"),
+            # Direct or GC: which board the card is on. Unconditional, like the fields around it —
+            # this row is ours from nothing, so None is the draft's whole answer (and reads Direct).
+            "audience": s.get("audience"),
             # Marked won by hand — see drafts.set_won. Carried the same way `bid_total` is, and
             # unconditionally for the same reason: this row is SYNTHESISED, so a null here is the
             # complete truth about the project rather than a key invented over a portal field.
@@ -2462,6 +2485,9 @@ def _sent_unknown_rows(summaries: List[Dict[str, Any]],
             # NOT approved_total: nobody can tell us anybody approved this. cardTotal() reads both.
             "bid_total": s.get("total"),
             "work_type": s.get("work_type"),
+            # Direct or GC. Ours, so it survives the outage — without it every GC project would move
+            # onto the Direct board for as long as the portal was down.
+            "audience": s.get("audience"),
             # Marked won by hand — see drafts.set_won. Ours, so it survives the outage; carried
             # unconditionally because a null here is the complete truth rather than a key invented
             # over a portal field, and isWon reads the stamp's truthiness.
@@ -8551,6 +8577,44 @@ async def _root(request: Request) -> Response:
     if _frontend_files is None:                 # no frontend dir (API-only deployment)
         raise HTTPException(404, "Frontend not available")
     return await _frontend_files.get_response("portal.html", request.scope)
+
+
+# GET and HEAD, because the static mount answers both for /portal.html and a bare @app.get does not
+# register HEAD: a HEAD here would otherwise fall through to the mount, which has no such file, and
+# 404 an address that works.
+@app.api_route(pipelines.BOARD_PAGE[pipelines.GC], methods=["GET", "HEAD"], include_in_schema=False)
+async def _gc_board(request: Request) -> Response:
+    """The General Contractor board: portal.html, built for the GC pipeline.
+
+    Hanz, 2026-09-29: "we add a new pipeline named 'General Contractor' as a new sidebar ... it
+    will have the same steps but just on a different webpage." Same steps means the same page, so
+    this serves portal.html's own bytes with the four strings pipelines.board_page swaps — the
+    heading, the tab title, the sub-line, and `data-pipeline`, which is what portal.js reads to
+    draw GC projects only. There is no second copy of the board to fall out of step; see the note
+    in pipelines.py for why the swap happens here rather than in the browser.
+
+    Declared BEFORE the static mount, the same as `_root`, so it wins for this one path.
+
+    Same caching contract as every other page (NoCacheStaticFiles): `no-cache, must-revalidate`,
+    and an ETag so an unchanged page answers 304 with no body. The ETag is taken over the bytes
+    actually sent, so an edit to portal.html changes it exactly as it changes the Direct page's.
+
+    A portal.html that no longer carries one of the swapped strings raises (BoardPageError) and
+    this answers 500. Deliberately: serving the Direct page's bytes here would put every Direct
+    project under a "General Contractor" address with nothing on screen to say so.
+    """
+    if _frontend_files is None:                 # no frontend dir (API-only deployment)
+        raise HTTPException(404, "Frontend not available")
+    # read_bytes, not read_text: text mode would turn a CRLF checkout into LF on the way through,
+    # and this page should be byte for byte what portal.html is, apart from the four swaps.
+    html = (FRONTEND_DIR / "portal.html").read_bytes().decode("utf-8")
+    body = pipelines.board_page(html, pipelines.GC).encode("utf-8")
+    etag = '"%s"' % hashlib.md5(body, usedforsecurity=False).hexdigest()
+    headers = {"Cache-Control": "no-cache, must-revalidate", "ETag": etag}
+    sent = [t.strip() for t in (request.headers.get("if-none-match") or "").split(",")]
+    if etag in sent or "*" in sent:
+        return Response(status_code=304, headers=headers)
+    return Response(content=body, media_type="text/html; charset=utf-8", headers=headers)
 
 
 if FRONTEND_DIR.exists():

@@ -237,7 +237,10 @@ const POLICY = { user: ["/leads.html", "/polish-intake.html"], admin: ["/history
 // The capability table as /api/admin/nav-access serves it. Kept in step with backend/nav_access.py by
 // test_nav_permissions_ui.py, which builds this from the module rather than trusting the copy.
 const CAPS = [
-  { href: "/portal.html", label: "Active Projects", api: [], locked: true },
+  { href: "/portal.html", label: "Direct Projects", api: [], locked: true },
+  // The second project board, 2026-09-29. api: [] because it reads exactly what the Direct board
+  // reads; deniable (not locked), because unlike /portal.html nobody signs in onto it.
+  { href: "/gc-projects.html", label: "General Contractor", api: [], locked: false },
   { href: "/leads.html", label: "Lead Inbox", api: ["/api/leads", "/api/leads/"], locked: false },
   { href: "/crm.html", label: "Bid Pipeline", api: ["/api/basisboard/"], locked: false },
   { href: "/calendar.html", label: "Bid Calendar",

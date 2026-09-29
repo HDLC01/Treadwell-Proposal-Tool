@@ -93,8 +93,9 @@ def test_the_sections_survive_a_removed_item(ran):
     does survive has to keep the heading it belongs to.
 
     This used to read "Leads & bids keeps two of its three". That heading was one of the five
-    removed on 2026-08-25: Lead Inbox, Bid Pipeline and Bid Calendar are now three of the nine rows
-    under Active, and the denied user loses the first of them. The claim is unchanged and the group
+    removed on 2026-08-25: Lead Inbox, Bid Pipeline and Bid Calendar are now three of the ten rows
+    under Active (ten since the General Contractor board joined on 2026-09-29), and the denied user
+    loses the first of them. The claim is unchanged and the group
     is bigger — nothing loses its heading, and the survivors stay in order with a hole where the
     denied row was, rather than closing up into some other arrangement."""
     user = ran["menus"]["user"]
@@ -102,8 +103,9 @@ def test_the_sections_survive_a_removed_item(ran):
         assert e["section"], "%s lost its section heading" % e["href"]
     active = [e["href"] for e in user if e["section"] == "Active"]
     assert "/leads.html" not in active, "the denied row is still in the menu"
-    assert active == ["/portal.html", "/followups.html", "/crm.html", "/calendar.html",
-                      "/analytics.html", "/projects.html", "/history.html", "/trash.html"], active
+    assert active == ["/portal.html", "/gc-projects.html", "/followups.html", "/crm.html",
+                      "/calendar.html", "/analytics.html", "/projects.html", "/history.html",
+                      "/trash.html"], active
 
 
 @needs_node

@@ -79,7 +79,8 @@ _VERSION = 1
 #   * /api/library/items,
 #     /api/library/assemblies   — library.js AND polish-estimate.js. Gating them would stop the
 #                                 Polish beta pricing halfway through a bid, silently.
-#   * /api/portal/pipeline      — portal.js AND notifications.js. Two tabs, one route.
+#   * /api/portal/pipeline      — portal.js AND notifications.js. Three tabs, one route: portal.js
+#                                 draws BOTH project boards (Direct and General Contractor).
 #   * /api/notifications        — auth.js, on EVERY page, and it is what boots the lead autopilot.
 #   * /api/draft/*, /api/drafts,
 #     /api/estimators,
@@ -98,8 +99,30 @@ _VERSION = 1
 # page refusal: it looks like a bug rather than a policy.
 TABS: Dict[str, Dict[str, Any]] = {
     "/portal.html": {
-        "label": "Active Projects",
+        # WAS "Active Projects" until 2026-09-29. Hanz: "We relabel Active projects to Direct
+        # Projects and we add a new pipeline named 'General Contractor'." Same href, same page —
+        # only the name moved, which is exactly why this table is keyed on href.
+        "label": "Direct Projects",
         "pages": ("/portal.html",),
+        "api": (),
+    },
+    "/gc-projects.html": {
+        "label": "General Contractor",
+        # THE SAME BOARD as /portal.html (the same page bytes and the same portal.js; main.py serves
+        # it via pipelines.board_page), showing the projects whose audience is GC. So it reads
+        # exactly the routes /portal.html reads, all shared, and owns none of them: api: () for the
+        # single-caller rule every other entry here follows. Denying it hides the tab and refuses
+        # the page; /api/portal/pipeline stays open because the Direct board is the same call.
+        #
+        # ITS DEFAULT IS THE DIRECT BOARD'S, and that needs no code: /portal.html is in LOCKED, so
+        # nobody can be denied it, so every role has it today — and a new href is in nobody's deny
+        # list, so every role has this too. Access here is per ROLE; there is no per-person switch
+        # anywhere in this module or on the Admin page for anybody to have set on /portal.html.
+        #
+        # NOT IN LOCKED, deliberately. /portal.html is locked because signing in lands there; this
+        # page is nobody's landing page, so switching it off for a role is a decision an admin may
+        # make, and the Admin page draws a real switch for it.
+        "pages": ("/gc-projects.html",),
         "api": (),
     },
     "/leads.html": {
