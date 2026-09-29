@@ -410,6 +410,13 @@ alter table public.library_labor      add column if not exists default_work_type
 -- which reproduces exactly what they priced before this column existed.
 alter table public.library_items add column if not exists buy_qty numeric(10,3) not null default 1;
 alter table public.library_items add column if not exists divisions jsonb not null default '[]'::jsonb;
+
+-- COVERAGE, WASTE AND ROUNDUP LIVE ON THE MATERIAL (Hanz, 2026-09-21; applied to BOTH databases that
+-- day, recorded here 2026-09-30). NULL waste_pct reads as 5 and NULL roundup as true, which were the
+-- assembly line's old defaults. Assemblies stopped holding their own copy; see
+-- backend/ops/backfill_material_coverage.sql, run before this code reaches a database.
+alter table public.library_items add column if not exists waste_pct numeric(5,2);
+alter table public.library_items add column if not exists roundup   boolean;
 -- Distinct from updated_at, which moves on every patch and is the assemblies' concurrency token.
 -- This one marks a PRICE REVISION, so it moves only when the cost changes — that is the date an
 -- estimator wants when they ask how old a number is.
