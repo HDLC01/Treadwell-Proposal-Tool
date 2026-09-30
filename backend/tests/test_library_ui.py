@@ -3441,11 +3441,10 @@ def test_all_three_takeoff_conditions_ship_off_and_are_listed_off(ran):
         "a Takeoff condition still ships ON. joint_filler is the one that costs money: it adds a "
         "$500 kit per 3,500 sq ft to a bid nobody has priced yet")
     assert s["noneListedWhileOff"], (
-        "a condition that is off is still listed among the defaults; a material that is not a "
-        "default is not listed, and these are exactly like materials now")
+        "an off condition is missing from the Polish list, or has no Add, or does not say Off -- "
+        "Hanz: 'Always list them, start OFF'")
     assert s["eachIsOfferedByTheAddSearch"], (
-        "an off condition is not offered by '+ Add a takeoff default', so once removed it could "
-        "never be put back")
+        "the add search offers a condition that is already on the list -- the same row twice")
     assert s["noneOffersRemove"], "a condition that is off is offering Remove"
     assert s["keysAndRowsAgree"], (
         "takeoffConditionDefaults and RESERVED_ITEM_CONDITION disagree about which reserved row "
@@ -3562,10 +3561,11 @@ def test_changing_a_condition_default_saves_it_and_a_refusal_puts_it_back(ran):
         "a stored 'on' for joint filler did not beat the shipped 'off', so the tab is showing a "
         "set of defaults no new bid actually opens with")
     assert c["untouchedOnesKeepShipped"], (
-        "overriding one condition moved the two nobody touched, or listed them while off")
+        "overriding one condition moved the two nobody touched, or dropped them from the list "
+        "instead of listing them Off")
     assert c["startsListed"] and c["removeTakesTheRowOff"], (
-        "Remove did not take the row off the rendered list; a handler that wrote the variable and "
-        "forgot to repaint looks identical until the next reload")
+        "Remove did not turn the rendered row Off in place (Add + Off note); a handler that wrote "
+        "the variable and forgot to repaint looks identical until the next reload")
     assert c["wroteTheServer"], (
         "Remove sent no condition write, or the wrong body -- a dead control renders exactly like "
         "a live one")
@@ -3575,24 +3575,29 @@ def test_changing_a_condition_default_saves_it_and_a_refusal_puts_it_back(ran):
     assert c["keepsOneRowPerCondition"], (
         "the press appended a second row for the same condition instead of replacing it")
     assert c["removedOneIsOfferedByTheAddSearch"], (
-        "a removed condition is not offered by the add search, so Remove is a one-way door")
-    assert c["startsOffAndUnlisted"], "an off condition is listed"
-    assert c["searchFindsIt"], "typing 'dye' in the add search does not offer Dye as a Material"
+        "a removed condition has no Add on its row, or the add search offers it a second time")
+    assert c["startsOffAndUnlisted"], "an off condition is not listed with its Add"
+    assert c["searchFindsIt"], (
+        "the off Dye row has no Add keyed 'dye', or typing 'dye' in the add search offers it again")
     assert c["addPutsTheRowOnTheList"], "adding a condition did not list it"
     assert c["addWroteTheServer"], "adding a condition sent no write, or the wrong body"
     assert c["addedRowIsPriced"], "a condition added back shows no price"
     assert c["addedOneIsNoLongerOffered"], (
         "the add search still offers a condition that is now on the list -- the same row twice")
     assert c["browseOffersAllThreeWhileOff"], (
-        "the add browse does not offer all three conditions while they are off")
+        "the add browse offers a condition while it is off; it is already on the list")
     assert c["andStillOffersTheLibrary"], (
         "the browse stopped offering the library, so the assertion above passes against a list "
         "that offers only the three")
     assert c["browseSkipsAConditionAlreadyOn"], (
-        "the browse offers a condition that is already on, or stopped offering the ones that "
-        "are off")
+        "the browse offers one of the three while another is on")
     assert c["searchByLabelFindsBoth"], (
-        "searching 'joint' does not find the kit and remove-existing (or finds dye)")
+        "searching 'joint' offers the kit or remove-existing, or the renamed kit is not on the "
+        "list under its own name")
+    assert c["viewerGetsEditOnly"], (
+        "a non-admin is offered Add or Remove on a condition row; the server refuses their write")
+    assert c["offNoteIsMarkup"], (
+        "the Off note is printed as escaped text rather than drawn -- rawHow is off")
     assert c["notOnOtherWorkTypes"], (
         "a condition is listed on the Seal tab; all three write Polish-sheet cells")
     assert c["offRowEscapesTypedText"], (

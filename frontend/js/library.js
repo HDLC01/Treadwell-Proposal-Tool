@@ -1274,9 +1274,6 @@
     if (el && el.scrollIntoView) el.scrollIntoView({ block: "center" });
   }
 
-  /** Put the caret in a Labor tab row's name box -- the job refocusItemField does for Items,
-   *  reached from the Defaults tab's Edit button on a favorited line, and from Travel's own Edit,
-   *  which now sends an admin here instead of opening the form that used to live on that tab. */
   /** After Add or Remove on a condition row, put the caret on the button that row now carries.
    *  The row stays where it was and only its button changes (Add <-> Remove), but the repaint
    *  replaces the button that had focus, and a keyboard user would land on <body>. */
@@ -1292,6 +1289,9 @@
     if (el && el.focus) el.focus();
   }
 
+  /** Put the caret in a Labor tab row's name box -- the job refocusItemField does for Items,
+   *  reached from the Defaults tab's Edit button on a favorited line, and from Travel's own Edit,
+   *  which now sends an admin here instead of opening the form that used to live on that tab. */
   function focusLaborRow(id) {
     var lb = $("labor-body");
     var el = lb && lb.querySelector && lb.querySelector(
@@ -2691,17 +2691,27 @@
    *
    *  THE SAME EDIT, and an Add routed through the add router's "conditions" arm -- the one door
    *  that writes condition_defaults with true. `priced` is escaped here because this row builds
-   *  its own markup (rawHow), and the kit's unit in it is an admin's typed text. */
+   *  its own markup (rawHow), and the kit's unit in it is an admin's typed text.
+   *
+   *  ADD AND REMOVE ARE AN ADMIN'S ONLY. PUT /api/condition-defaults refuses anybody else
+   *  (_require_admin), so offering them to an estimator would be a button that always 403s --
+   *  the reason the labor rows on this tab are gated on ADMIN too. Everyone keeps Edit. */
   function conditionDefaultRow(c) {
-    if (c.on) return materialDefaultRow(c.item_id, c.name, c.priced);
+    var edit = '<button class="btn ghost sm" type="button" data-def-edit="items" data-def-id="' +
+      esc(c.item_id) + '">Edit</button>';
+    if (c.on) {
+      var row = materialDefaultRow(c.item_id, c.name, c.priced);
+      if (!ADMIN) row.actions = edit;
+      return row;
+    }
     return {
       name: c.name,
       how: esc(c.priced) + ' <span class="wtall">Off \u00b7 a new bid starts without it</span>',
       rawHow: true,
-      actions: '<button class="btn ghost sm" type="button" data-def-edit="items" data-def-id="' +
-        esc(c.item_id) + '">Edit</button>' +
-        '<button class="btn ghost sm" type="button" data-def-add="conditions" data-def-id="' +
-        esc(c.key) + '" aria-label="Make ' + esc(c.name) + ' a default">Add</button>'
+      actions: edit + (ADMIN
+        ? '<button class="btn ghost sm" type="button" data-def-add="conditions" data-def-id="' +
+          esc(c.key) + '" aria-label="Make ' + esc(c.name) + ' a default">Add</button>'
+        : "")
     };
   }
 
@@ -4010,10 +4020,14 @@
       } else {
         await setDefault(addKind, addBtn.getAttribute("data-def-id"), true);
       }
-      DEFAULT_Q = "";                      // the row has moved to the list; the hit is spent
-      var qbox = $("default-q");
-      if (qbox) qbox.value = "";
-      renderDefaultSearch();
+      // ONLY A SEARCH HIT IS SPENT. The Add on an off condition row sits in the table, not in the
+      // results box, and pressing it must leave whatever the admin had typed there alone.
+      if (addBtn.classList && addBtn.classList.contains("defhit")) {
+        DEFAULT_Q = "";                    // the row has moved to the list; the hit is spent
+        var qbox = $("default-q");
+        if (qbox) qbox.value = "";
+        renderDefaultSearch();
+      }
       return;
     }
     // THE WORK-TYPE CHIPS, FIRST of the row controls: they sit in the same row as the Edit and

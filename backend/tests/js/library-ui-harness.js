@@ -3549,6 +3549,8 @@ out.serverOwnedItemFields = build().api.SERVER_OWNED_ITEM_FIELDS;
     // asserted separately, in shippedOffMeansUnlisted, against a fixture with no overrides.
     COND_DEFAULTS: [{ key: "joint_filler", on: true }, { key: "dye", on: true },
                     { key: "remove_existing_jf", on: true }],
+    // AN ADMIN, because a condition's Remove is an admin's only (the PUT is _require_admin).
+    ADMIN: true,
   });
   // WITH ITS REAL id AND line_key, because the row now carries an editable control and the
   // control is keyed by id -- an idless fixture would render a box that writes nowhere and
@@ -3713,7 +3715,7 @@ out.serverOwnedItemFields = build().api.SERVER_OWNED_ITEM_FIELDS;
   {
     const bare = build({
       window: { TWPolishBid: require(path.join(ROOT, "js", "polish-bid-core.js")) },
-      ITEMS: [], ASMS: [],
+      ITEMS: [], ASMS: [], ADMIN: true,
     });
     bare.api.renderDefaultTakeoff();
     const bh = bare.dom.nodes["default-takeoff-body"].innerHTML;
@@ -3729,8 +3731,6 @@ out.serverOwnedItemFields = build().api.SERVER_OWNED_ITEM_FIELDS;
       noneListedWhileOff: ["joint_filler", "remove_existing_jf", "dye"].every((k) =>
         bh.indexOf('data-def-add="conditions" data-def-id="' + k + '"') !== -1) &&
         (bh.match(/Off \u00b7 a new bid starts without it/g) || []).length === 3,
-      // …and each is FOUND the way a non-default material is: the add browse offers all three,
-      // as Materials, keyed by the condition the press will turn on.
       // …and the add browse offers NONE of them: they are on the list already.
       eachIsOfferedByTheAddSearch: !/data-def-add="conditions"/.test(browse),
       noneOffersRemove: !/data-def-off=/.test(bh),
@@ -4653,6 +4653,9 @@ async function conditionChecks() {
     // list that had stopped offering the library.
     ITEMS: [{ id: "i9", name: "Not a default", unit: "Gal", unit_cost: 50, favorite: false }],
     ASMS: [],
+    // AN ADMIN: Add and Remove on these rows are an admin's only (the PUT is _require_admin).
+    // The non-admin view is its own scenario below.
+    ADMIN: true,
   }, extra || {});
   // Which reserved row each condition IS -- the row the material button is keyed by.
   const ROW = { joint_filler: "joint-filler-kit", remove_existing_jf: "remove-existing-jf",
@@ -4727,6 +4730,12 @@ async function conditionChecks() {
   sealTab.api.setWorkType("seal");
   sealTab.api.renderDefaultTakeoff();
   const sealHtml = sealTab.dom.nodes["default-takeoff-body"].innerHTML;
+
+  // 6d. A NON-ADMIN sees all three, one on and two off, with Edit only: the server would refuse
+  //     their Add or Remove.
+  const viewer = build(seed({ ADMIN: false, COND_DEFAULTS: [{ key: "dye", on: true }] }));
+  viewer.api.renderDefaultTakeoff();
+  const viewerHtml = viewer.dom.nodes["default-takeoff-body"].innerHTML;
 
   // 6c. THE OFF ROW BUILDS ITS OWN MARKUP (rawHow), so an admin's typed unit is escaped there.
   const hostile = build(seed({ ITEMS: [
@@ -4812,6 +4821,16 @@ async function conditionChecks() {
     // POLISH ONLY: the Seal tab lists none of the three, on or off.
     notOnOtherWorkTypes: !/data-def-id="(joint-filler-kit|remove-existing-jf|dye|joint_filler|remove_existing_jf)"/
       .test(sealHtml),
+    // NON-ADMIN: every condition row carries its Edit and nothing it cannot save.
+    viewerGetsEditOnly: ["joint-filler-kit", "remove-existing-jf", "dye"].every((id) =>
+        viewerHtml.indexOf('data-def-edit="items" data-def-id="' + id + '">Edit</button>') !== -1) &&
+      !/data-def-add="conditions"/.test(viewerHtml) &&
+      !/data-def-off="items" data-def-id="(joint-filler-kit|remove-existing-jf|dye)"/.test(viewerHtml) &&
+      (viewerHtml.match(/<span class="wtall">Off \u00b7 a new bid starts without it<\/span>/g) || [])
+        .length === 2,
+    // THE OFF NOTE IS AN ELEMENT, not text: rawHow must be set, or the row would print the tag.
+    offNoteIsMarkup: /<span class="wtall">Off \u00b7 a new bid starts without it<\/span>/
+        .test(beforeAddHtml) && !/&lt;span/.test(beforeAddHtml),
     // THE OFF ROW ESCAPES what it did not write: an admin's typed name and unit.
     offRowEscapesTypedText: !/<img src=x>/.test(hostileHtml) && !/<b>Kit<\/b>/.test(hostileHtml) &&
       /&lt;img src=x&gt;/.test(hostileHtml) && offRow(hostileHtml, "joint_filler"),
