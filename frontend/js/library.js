@@ -255,6 +255,7 @@
       : (kind === "vendors") ? VENDORS
       : (kind === "divisions") ? DIVISION_REFS
       : (kind === "units") ? UNIT_REFS
+      : (kind === "labor") ? LABOR
       : ITEMS;
     for (var i = 0; i < (list || []).length; i++) if (list[i].id === id) return list[i];
     return null;
@@ -630,7 +631,12 @@
       }
       // Adopt the new version stamp, or the NEXT save conflicts with our own write.
       var saved = await r.json().catch(function () { return {}; });
-      var fresh = saved.assembly || saved.item || saved.vendor || saved.division || saved.unit;
+      // `row`, not `labor` — POST/PATCH /api/library/labor answers { ok, row }, the same key
+      // create_labor/update_labor always have, unlike the other library endpoints which are
+      // named after their own kind. See patchLabor's own note for why labor's writer beside it
+      // is a separate function rather than a third branch taught to this one.
+      var fresh = saved.assembly || saved.item || saved.vendor || saved.division || saved.unit ||
+        saved.row;
       if (fresh && fresh.id) adoptSaved(kind, fresh);
       say(""); saving("Saved");
       setTimeout(function () { saving(""); }, 1200);
@@ -1156,6 +1162,225 @@
     $("dl-materials").innerHTML = ITEMS.map(function (it) {
       return '<option value="' + esc(it.name) + '"></option>';
     }).join("");
+  }
+
+  // ── labor, 2026-09-24 ─────────────────────────────────────────────────────────
+  // Hanz: "we dont have a tab for labor like the items and assemblies so we add a tab like that
+  // for all default labor then if we want it to be a default we add it to 'Default items &
+  // Assemblies'." EVERY LABOR LINE THE CATALOG HOLDS lives here -- creation, editing and
+  // deletion -- as its own peer to Items and Assemblies. WHETHER ONE IS A DEFAULT is a separate,
+  // sequential question, answered on the Default Items & Assemblies tab (renderDefaultLabor)
+  // exactly the way it already is for a material or an assembly. The two tabs read the same
+  // `LABOR` array and the same `favorite` column; this one shows every row, that one shows only
+  // the favorited ones.
+
+  var NUMERIC_LABOR_FIELDS = ["rate", "sort"];
+
+  /** Which rows have their guys_auto/sort fields open. Module state, not a property on the row --
+   *  the same reason `pickerOpen` is not stored on an assembly line: which row has "more" open is
+   *  this SCREEN's business, and it must not ride along on a save the way a persisted field would. */
+  var laborMoreOpen = {};
+
+  /** One edit inside the Labor tab's table -- name, rate, unit or notes as headline fields, and
+   *  guys_auto/sort behind the "more" disclosure. Debounced onto the wire the same way Items' own
+   *  inline table already is, generalized to a third row-kind rather than reached for a second
+   *  time: patchSoon/flush/arm/post/del do not know or care that "labor" is new to them.
+   *
+   *  NO CONFIRMATION DIALOG, unlike onItemEdit. That gate is a PRICING-INTEGRITY control, Hanz's
+   *  own words, because an item's cost reprices every assembly built on it live the moment it
+   *  saves. A labor rate has no such fan-out -- it only ever reaches a bid through `favorite`, on
+   *  a SEPARATE press, on a SEPARATE tab, so there is nothing here for the dialog to protect. */
+  function onLaborEdit(e) {
+    var f = e.target.getAttribute && e.target.getAttribute("data-f");
+    if (!f) return;
+    var row = e.target.closest("[data-labor]");
+    if (!row) return;
+    var r = byId("labor", row.getAttribute("data-labor"));
+    if (!r) return;
+    var body = {};
+    if (f === "guys_auto") {
+      r.guys_auto = !!e.target.checked;
+      body.guys_auto = r.guys_auto;
+    } else {
+      var raw = e.target.value;
+      r[f] = NUMERIC_LABOR_FIELDS.indexOf(f) !== -1 ? L.num(raw) : raw;
+      body[f] = raw;
+    }
+    // THE DEFAULTS TAB DRAWS THE SAME ROW, and a tab switch only flips `hidden` -- it does not
+    // repaint. Without this a renamed or re-rated default reads the old figure there until the
+    // next reload. That table is on another pane, so redrawing it cannot move this caret.
+    renderDefaultLabor();
+    patchSoon("labor", r.id, body);
+  }
+
+  /** Show or hide one row's guys_auto/sort fields. The redraw replaces the button that was
+   *  pressed, so the focus goes back onto its successor rather than to the top of the page. */
+  function toggleLaborMore(id) {
+    laborMoreOpen[id] = !laborMoreOpen[id];
+    renderLabor();
+    var lb = $("labor-body");
+    var b = lb && lb.querySelector && lb.querySelector('[data-labor-more-toggle="' + id + '"]');
+    if (b && b.focus) b.focus();
+  }
+
+  /** Put the caret in a Labor tab row's name box -- the job refocusItemField does for Items,
+   *  reached from the Defaults tab's Edit button on a favorited line, and from Travel's own Edit,
+   *  which now sends an admin here instead of opening the form that used to live on that tab. */
+  function focusLaborRow(id) {
+    var lb = $("labor-body");
+    var el = lb && lb.querySelector && lb.querySelector(
+      '[data-labor="' + id + '"] input[data-f="name"]');
+    if (el && el.focus) el.focus();
+  }
+
+  /** The Labor tab: every labor line the catalog holds, Travel included -- name, rate, unit and
+   *  notes as the headline columns, one row per line, always editable in place. Modeled directly
+   *  on renderItems() -- a flat, always-editable inline table -- and NOT on Assemblies' card-rail-
+   *  with-nested-editor shape, because a labor line is a flat record with no sub-list of its own.
+   *
+   *  UNFILTERED BY `favorite`, ON PURPOSE. This is the catalog -- "every labor type Treadwell can
+   *  bill" -- not "what a new bid opens holding", which is the Defaults tab's own filtered read of
+   *  these same rows (see renderDefaultLabor). Creating a line here and making it a default are
+   *  two separate, sequential actions on two different tabs, and this table is the first of them,
+   *  never the second.
+   *
+   *  TRAVEL IS A ROW HERE TOO, fully editable in place the same way its Defaults-tab row already
+   *  lets it be -- the delete icon is the ONE control this function withholds for it
+   *  (`id === "travel"`), matching the server's own fail-closed refusal in delete_labor(). Hiding
+   *  the icon is a UI nicety on top of that refusal, never a substitute for it: a caller that goes
+   *  around this render still meets the 400 `delete_labor` raises. Travel carries no work-type
+   *  chips either: it is seeded into every estimate whatever its list says, so a chip on it would
+   *  be a control that changes nothing.
+   *
+   *  TEXT, NOT INPUTS, FOR ANYBODY BUT AN ADMIN. Every write to library_labor is admin-only on the
+   *  server (`_require_admin`), so this follows the Administration lists' own rule: a non-admin
+   *  reads the rates and is handed nothing that would 403 on press -- no inputs, no chips, no
+   *  More, no Add and no delete.
+   *
+   *  THE UNIT IS ITS OWN TWO-OPTION SELECT, not pick(). pick() offers a blank "—" first, and a
+   *  blank unit saves as "hours" on the server while the screen goes on saying "—": the one field
+   *  here that decides what the rate multiplies must not be able to show one thing and store
+   *  another. */
+  function renderLabor() {
+    var body = $("labor-body");
+    if (!body) return;
+    var out = "";
+    for (var i = 0; i < LABOR.length; i++) {
+      var r = LABOR[i];
+      var travel = r.id === "travel";
+      var perUnit = (r.unit === "days" ? " / day" : " / hr");
+      var everyBid = '<span class="wtall">Every estimate</span>';
+      if (!ADMIN) {
+        out += '<tr data-labor="' + esc(r.id) + '">' +
+          "<td><b>" + esc(r.name) + "</b></td>" +
+          '<td class="n">' + esc(L.money(r.rate)) + perUnit + "</td>" +
+          "<td>" + esc(r.unit) + "</td>" +
+          "<td>" + esc(r.notes) + "</td>" +
+          "<td>" + (travel ? everyBid : workTypeLabel(r)) + "</td>" +
+          '<td class="rowact"></td></tr>';
+        continue;
+      }
+      var open = !!laborMoreOpen[r.id];
+      var units = "";
+      for (var u = 0; u < LABOR_UNITS.length; u++) {
+        units += '<option value="' + esc(LABOR_UNITS[u]) + '"' +
+          (r.unit === LABOR_UNITS[u] ? " selected" : "") + ">" + esc(LABOR_UNITS[u]) + "</option>";
+      }
+      out += '<tr data-labor="' + esc(r.id) + '">' +
+        '<td><input data-f="name" class="cell-name" value="' + esc(r.name) +
+          '" aria-label="Labor line name" maxlength="200"></td>' +
+        '<td class="n"><span class="money"><span>$</span><input data-f="rate" class="num cell-rate" value="' +
+          esc(r.rate == null ? "" : String(r.rate)) + '" aria-label="Rate"></span></td>' +
+        '<td><select data-f="unit" class="cell-unit" aria-label="Priced per">' + units +
+          "</select></td>" +
+        '<td><input data-f="notes" class="cell-note" value="' + esc(r.notes) +
+          '" aria-label="Notes" maxlength="4000"></td>' +
+        "<td>" + (travel ? everyBid : workTypeCell("labor", r)) + "</td>" +
+        '<td class="rowact">' +
+          '<button class="btn ghost sm" type="button" data-labor-more-toggle="' + esc(r.id) +
+            '" aria-expanded="' + (open ? "true" : "false") + '" aria-label="' +
+            (open ? "Hide" : "Show") + " more fields for " + esc(r.name) + '">' +
+            (open ? "Less" : "More") + "</button>" +
+          (travel ? "" :
+            '<button class="icon danger" type="button" data-del-labor="' + esc(r.id) +
+              '" title="Remove this labor line" aria-label="Remove ' + esc(r.name) +
+              '">' + icon("trash") + "</button>") +
+        "</td></tr>";
+      if (open) {
+        out += '<tr data-labor="' + esc(r.id) + '" class="labor-more">' +
+          '<td colspan="6">' +
+            '<label class="morefield"><input type="checkbox" data-f="guys_auto"' +
+              (r.guys_auto ? " checked" : "") +
+              '> Man-days come off the crew rows above it</label>' +
+            '<label class="morefield">Position ' +
+              '<input type="number" data-f="sort" class="num" value="' +
+              (r.sort == null ? 0 : r.sort) + '"></label>' +
+          "</td></tr>";
+      }
+    }
+    body.innerHTML = out;
+    // Same three-state shape renderItems already draws: nothing in the catalog at all, versus
+    // rows. There is no search on this tab (the catalog is small by nature -- a rate per line
+    // somebody actually bills), so there is no "nothing matches" state to hold apart from it.
+    $("labor-empty").hidden = LABOR.length > 0;
+    // Both Add controls are writes, so both follow ADMIN the way renderRefSection's do.
+    $("labor-addrow").hidden = !ADMIN || LABOR.length === 0;
+    var first = $("labor-empty").querySelector
+      ? $("labor-empty").querySelector("[data-add-labor]") : null;
+    if (first) first.hidden = !ADMIN;
+    if ($("labor-ro")) $("labor-ro").hidden = ADMIN;
+    // The badge is the TOTAL, matching #n-items and #n-asm: how many labor lines the catalog
+    // holds, not how many are favorited -- that count belongs to the Defaults tab, not this one.
+    $("n-labor").textContent = LABOR.length;
+  }
+
+  /** "Add labor line": a new row, NOT a default. The body names no `favorite`, so validate_labor
+   *  stores false and the column's own default agrees -- the line only reaches a new bid once
+   *  somebody adds it on the Default Items & Assemblies tab, which is the whole point of the tab.
+   *
+   *  NAMED, NOT INLINE IN THE CLICK LISTENER, for the reason openDefaultAdd gives: the harness can
+   *  run a function and cannot run a listener. Unshifted, matching Items' own Add, so the new row
+   *  lands where the button is. */
+  async function addLaborLine() {
+    try {
+      var lj = await post("labor", { name: "New labor line", rate: 0, unit: "hours" });
+      if (!lj.row) return;
+      LABOR.unshift(lj.row);
+      paint();
+      var lb = $("labor-body");
+      var lf = lb && lb.querySelector && lb.querySelector(
+        '[data-labor="' + lj.row.id + '"] input[data-f="name"]');
+      if (lf) { lf.focus(); if (lf.select) lf.select(); }
+    } catch (err) { say("Couldn't add that labor line. " + err.message); }
+  }
+
+  /** The Labor tab's delete icon: a SOFT delete of the row itself, which is why it asks first and
+   *  the Defaults tab's Remove (stop being a default) does not. Travel is refused here as well as
+   *  on the server, so a stale page that somehow drew the icon still sends nothing.
+   *
+   *  NOT OPTIMISTIC. The row stays until the server says it is gone, and a refusal leaves it where
+   *  it was with the server's reason on screen. */
+  async function removeLaborLine(id) {
+    if (!id || id === "travel") return;
+    var row = byId("labor", id);
+    var ok = await TW.confirmDanger({
+      title: "Remove this labor line?",
+      name: row ? row.name : "This labor line",
+      after: " will be taken out of the library. Any bid already holding it keeps its own " +
+        "copy of the rate.",
+    });
+    if (!ok) return;
+    try {
+      await del("labor", id);
+      // An edit typed into the row just before the press is still queued, and would PATCH a
+      // dead id 600ms later -- a 404 about a line the estimator watched go. forgetItem's reason.
+      var key = "labor:" + id;
+      clearTimeout(timers[key]);
+      delete timers[key];
+      delete pendingPatch[key];
+      LABOR = LABOR.filter(function (r) { return r.id !== id; });
+      paint();
+    } catch (err) { say("Couldn't remove that labor line. " + err.message); }
   }
 
   // ── administration ─────────────────────────────────────────────────────────
@@ -2039,6 +2264,7 @@
   // must not run on every keystroke of a search. It is cheap and self-guarding either way.
   function paint() {
     renderItems(); renderFilterBar(); renderVendors(); renderList(); renderPanel();
+    renderLabor();
     renderDefaultTakeoff(); renderDefaultLabor();
   }
 
@@ -2192,8 +2418,7 @@
    *  functions is two places to forget the rollback.
    *
    *  IT REPAINTS THE TAKEOFF LIST AND NOTHING ELSE. `paint()` would rebuild the Items tab, the
-   *  assembly rail and the open panel, none of which a condition answer touches -- and one of
-   *  which may have a half-typed labor line in it (see the note on LABOR_FORM).
+   *  Labor tab, the assembly rail and the open panel, none of which a condition answer touches.
    *
    *  A FAILED SAVE PUTS THE ROW BACK and says why. Since 2026-09-19 the row's PRESENCE is the
    *  answer -- Remove takes it off the list, Add puts it back -- so a refused write that left the
@@ -2255,13 +2480,21 @@
    *  REMOVE MEANS "STOP BEING A DEFAULT". It does not delete the assembly, which would be a very
    *  different and much worse button to put on this screen, so it says Remove and not the bin
    *  glyph the Items tab uses for actual deletion. */
-  /** On or off, for either kind, with the optimistic flip and the put-it-back both in one place.
+  /** On or off, for any of the three kinds, with the optimistic flip and the put-it-back both in
+   *  one place.
    *
    *  ONE FUNCTION FOR ADD AND REMOVE because they are the same write: `favorite` true or false.
    *  Two functions would be two places to forget the rollback, and a default that looks removed
-   *  and comes back on the next reload is worse than one that refuses. */
+   *  and comes back on the next reload is worse than one that refuses.
+   *
+   *  LABOR JOINED 2026-09-24, the same day the Labor tab did -- the small, mechanical extension
+   *  the design called for. A labor type is created on that tab and favorited here, on this one,
+   *  through this same function: the Labor tab's own `renderLabor` is what changes when THIS
+   *  write lands, which is why that repaint is folded into `paint()` rather than kept beside
+   *  `renderDefaultTakeoff`/`renderDefaultLabor` alone -- a favorite flipped from the Defaults
+   *  tab has to be visible back on the Labor tab without a reload. */
   async function setDefault(kind, id, on) {
-    var list = kind === "assemblies" ? ASMS : ITEMS;
+    var list = kind === "assemblies" ? ASMS : kind === "labor" ? LABOR : ITEMS;
     var row = null;
     for (var i = 0; i < list.length; i++) if (list[i].id === id) { row = list[i]; break; }
     if (!row) return;
@@ -2290,9 +2523,14 @@
    *  field is read by this one table and nothing else, and paint() would rebuild the Items tab,
    *  the assembly rail and the open panel -- one of which may be holding a half-typed labor line.
    *  The row dropping out of the list when it stops applying to the work type on screen happens
-   *  in that one render. */
+   *  in that one render.
+   *
+   *  LABOR REPAINTS renderLabor(), NOT renderDefaultTakeoff() -- the chips live on the Labor tab's
+   *  own row now (workTypeCell's first real caller), not on the Defaults tab, which dropped its
+   *  per-row chips 2026-09-22 and has carried none since. Repainting the wrong one would leave the
+   *  press invisible on the only table it is drawn in. */
   async function setRowWorkType(kind, id, wt, on) {
-    var list = kind === "assemblies" ? ASMS : ITEMS;
+    var list = kind === "assemblies" ? ASMS : kind === "labor" ? LABOR : ITEMS;
     var row = null;
     for (var i = 0; i < list.length; i++) if (list[i].id === id) { row = list[i]; break; }
     if (!row) return;
@@ -2301,12 +2539,25 @@
     for (var j = 0; j < was.length; j++) if (was[j] !== wt) next.push(was[j]);
     if (on) next.push(wt);
     row.default_work_types = next;
-    renderDefaultTakeoff();
+    // A LABOR CHIP REPAINTS BOTH LABOR TABLES: the Labor tab it sits on, and the Defaults tab's
+    // Labor list, which is filtered by exactly this field and is not repainted by a tab switch.
+    // The chip pressed is replaced by the redraw, so the focus goes back onto its successor --
+    // a keyboard user pressing Space must not be dropped to the top of the page.
+    function repaint() {
+      if (kind !== "labor") { renderDefaultTakeoff(); return; }
+      renderLabor();
+      renderDefaultLabor();
+      var lb = $("labor-body");
+      var chip = lb && lb.querySelector && lb.querySelector('[data-wt-toggle="labor"][data-wt-id="' +
+        id + '"][data-wt="' + wt + '"]');
+      if (chip && chip.focus) chip.focus();
+    }
+    repaint();
     try {
       await patchWorkTypes(kind, id, next);
     } catch (err) {
       row.default_work_types = was;
-      renderDefaultTakeoff();
+      repaint();
       say("Couldn't save that. " + err.message);
     }
   }
@@ -2433,6 +2684,21 @@
         hits.push({ kind: "items", id: it.id, name: it.name, what: "Material" });
       }
     });
+    // LABOR, 2026-09-24 -- the Labor tab's own rows, offered the same way an un-favorited
+    // material or assembly already is: findable here, one press to make a default. `travel`
+    // is deliberately never a candidate -- it is not opted into a bid the way a favorited row
+    // is, it is built into every estimate whether or not this table can address it at all, so
+    // offering it here would be a second, misleading way to "add" a line that is already on
+    // every bid regardless.
+    //
+    // AN ADMIN'S ONLY. Making a labor line a default is a PATCH to /api/library/labor, which the
+    // server refuses anybody else; an Add offered here to a non-admin would 403 on press.
+    LABOR.forEach(function (l) {
+      if (ADMIN && l.id !== "travel" && !l.favorite &&
+          (!q || String(l.name || "").toLowerCase().indexOf(q) !== -1)) {
+        hits.push({ kind: "labor", id: l.id, name: l.name, what: "Labor" });
+      }
+    });
     // NO CONDITIONS IN HERE, and that is a change from 2026-09-19. While an off condition was
     // unlisted, this was the only way back on and its absence would have made Remove a one-way
     // door. Now that all three are permanent rows under Materials with their own Add, offering
@@ -2460,15 +2726,19 @@
    *  ABOVE ARE: the harness can read a listener body and cannot run one, and its own doc says
    *  anything with a decision in it belongs in a function a test can call.
 
-   *  THIS IS THE DECISION THAT WAS MISSING. For a day the Labor arm of it did not exist -- the
-   *  button was markup with no handler -- and every test over it passed, because they matched the
-   *  pane for data-add-default="labor" and a dead button carries that attribute perfectly. Hanz
-   *  found it instead, twice. The two arms differ because the two categories do: a takeoff default
-   *  is a library row that already exists and has to be FOUND, and a labor line does not exist
-   *  until somebody TYPES it, so one opens a browser and the other opens a form. */
+   *  BOTH ARMS OPEN THE SAME BROWSE, 2026-09-24. Until the Labor tab existed a labor line did not
+   *  exist until somebody TYPED it here, so this used to open a form instead of the shared browse
+   *  -- and for one day it opened NOTHING: the button was markup with no handler, and every test
+   *  over it passed, because they matched the pane for data-add-default="labor" and a dead button
+   *  carries that attribute perfectly. Hanz found it instead, twice. Creating a labor TYPE is the
+   *  new Labor tab's job now; this button is only ever reached to make one an existing type a
+   *  DEFAULT, which is exactly what a takeoff default already is -- a library row that already
+   *  exists and has to be FOUND. `defaultCandidates()` already answers with all three kinds, so
+   *  the two arms collapse into the one search-and-browse mechanism Items and Assemblies already
+   *  used here; only the label on the button still says which list somebody meant to sit down and
+   *  fill in. */
   function openDefaultAdd(which) {
-    if (which === "takeoff") openDefaultBrowse();
-    else if (which === "labor") openLaborForm(null);
+    if (which === "takeoff" || which === "labor") openDefaultBrowse();
   }
 
   function renderDefaultSearch() {
@@ -2605,155 +2875,17 @@
     if ($("default-takeoff-empty")) $("default-takeoff-empty").hidden = out !== "";
   }
 
-  // -- the Labor defaults are typed here and nowhere else ------------------------------------
+  // -- the Labor defaults, 2026-09-24: favorited on this tab, TYPED on the new Labor tab -------
   /** What a labor line may be measured in.
 
    *  A LIST RATHER THAN A FREE BOX, because `unit` is not a label: it decides whether the rate
    *  multiplies hours or man-days, and a third value typed here would price at whichever branch
    *  the estimate's `else` happens to be. The API refuses anything off this list with a 400; the
    *  control declines to offer it in the first place, so the refusal is not something an estimator
-   *  has to read out of a response body. */
+   *  has to read out of a response body.
+   *
+   *  SHARED WITH THE LABOR TAB'S OWN UNIT PICKER, not restated there -- see renderLabor. */
   var LABOR_UNITS = ["hours", "days"];
-
-  /** The form, while it is open. `null` when it is not, and that is the whole of the open/shut
-   *  state -- there is no second flag to fall out of step with it.
-
-   *  THE TYPED VALUES LIVE HERE, NOT IN THE INPUTS. This tab's renderer runs from paint(), and
-   *  paint() runs whenever anything else on the page changes -- switching a takeoff default on
-   *  while this form is open would otherwise rebuild the row and throw the half-typed line away.
-   *  The input listener writes here and deliberately does NOT re-render: a re-render on every
-   *  keystroke is exactly how this repo has stolen the focus somebody just tabbed into. */
-  var LABOR_FORM = null;
-
-  /** Open the form to ADD (id null) or to EDIT the line with that id.
-
-   *  IN THE TABLE, WHERE THE ROW GOES. Hanz asked on the same day for the takeoff picker to open
-   *  "within the line item instead of up above"; a labor line has the same answer and a stronger
-   *  one, because the form IS the row -- the name types into the Line column and the rate into the
-   *  Rate column, so what is being typed is laid out as what will be read back. A modal would say
-   *  the opposite: that setting a default is a trip somewhere else. */
-  function openLaborForm(id) {
-    var row = null;
-    for (var i = 0; i < LABOR.length; i++) if (LABOR[i].id === id) { row = LABOR[i]; break; }
-    LABOR_FORM = {
-      id: row ? row.id : null,
-      name: row ? String(row.name == null ? "" : row.name) : "",
-      rate: row ? String(row.rate == null ? "" : row.rate) : "",
-      unit: row && LABOR_UNITS.indexOf(row.unit) !== -1 ? row.unit : LABOR_UNITS[0],
-      err: "",
-      busy: false
-    };
-    renderDefaultLabor();
-    // The caret lands in the name box, for the reason openDefaultBrowse puts it in the search:
-    // a control that opens somewhere you cannot type reads as having done nothing.
-    var box = $("labor-f-name");
-    if (box) box.focus();
-  }
-
-  function closeLaborForm() {
-    LABOR_FORM = null;
-    renderDefaultLabor();
-  }
-
-  /** One typed character, remembered and NOT re-rendered. See the note on LABOR_FORM.
-
-   *  The field name is checked against the three the form has rather than assigned straight
-   *  through, so a stray `data-labor-f` somewhere else on the page cannot write `id` or `busy`
-   *  into the object the save reads. */
-  function setLaborField(field, value) {
-    if (!LABOR_FORM) return;
-    if (field !== "name" && field !== "rate" && field !== "unit") return;
-    LABOR_FORM[field] = value == null ? "" : String(value);
-  }
-
-  /** What is wrong with the form, in words a person can act on, or "" when nothing is.
-
-   *  THE SAME THREE RULES THE API ENFORCES, said before the request instead of after it. The
-   *  server is still the one that decides -- a rule here that it did not have would let any other
-   *  caller write what this form refuses -- but a 400 dug out of a response body is a poor way to
-   *  find out the name box is empty. */
-  function validateLaborForm(f) {
-    if (!f) return "";
-    var name = String(f.name == null ? "" : f.name).trim();
-    if (!name) return "Give the line a name. That is what the estimate will call it.";
-    if (name.length > 200) return "That name is too long. Two hundred characters is the limit.";
-    var raw = String(f.rate == null ? "" : f.rate).trim();
-    var rate = Number(raw);
-    // !isFinite, NOT isNaN. Infinity and 1e400 are both numbers as far as isNaN is concerned,
-    // and JSON.stringify turns either into a literal null -- which then lands in a NOT NULL
-    // numeric(10,2) column and comes back as a bare 500 with the typed line still on screen.
-    if (!raw || !isFinite(rate)) return "The rate has to be a number.";
-    if (rate < 0) return "The rate cannot be less than zero.";
-    // The same ceiling the server enforces (_MAX_LABOR_RATE), so an implausible figure is
-    // refused where it was typed rather than coming back as a 400 from a round trip.
-    if (rate > 100000) return "That rate is implausibly large - check the figure.";
-    if (LABOR_UNITS.indexOf(f.unit) === -1) return "Pick hours or days.";
-    return "";
-  }
-
-  /** Save the open form: a new line, or the one being edited.
-
-   *  ONE FUNCTION FOR BOTH, because they are the same form, the same validation and the same
-   *  rollback, and the only thing that differs is which request carries the body. Two would be two
-   *  places to forget the put-it-back -- the argument setDefault's own note makes about add and
-   *  remove, and it holds harder here because this form holds typing.
-
-   *  A FAILED SAVE LEAVES THE TYPED LINE ON SCREEN and says why underneath it. Clearing the form
-   *  on a failure would make somebody type the line a second time to discover it fails a second
-   *  time, which is the page's standing rule for a failed write. */
-  async function submitLaborForm() {
-    if (!LABOR_FORM || LABOR_FORM.busy) return;
-    var f = LABOR_FORM;
-    var bad = validateLaborForm(f);
-    if (bad) { f.err = bad; renderDefaultLabor(); return; }
-    var body = { name: String(f.name).trim(), rate: Number(String(f.rate).trim()), unit: f.unit };
-    f.busy = true;
-    f.err = "";
-    renderDefaultLabor();
-    try {
-      if (f.id) {
-        var pj = await patchLabor(f.id, body);
-        for (var i = 0; i < LABOR.length; i++) {
-          if (LABOR[i].id === f.id) {
-            LABOR[i] = pj.row || Object.assign({}, LABOR[i], body);
-            break;
-          }
-        }
-      } else {
-        var cj = await post("labor", body);
-        if (cj.row) LABOR.push(cj.row);
-      }
-      LABOR_FORM = null;
-      say("");
-      renderDefaultLabor();
-    } catch (err) {
-      f.busy = false;
-      f.err = "Couldn't save that. " + (err.message || "");
-      renderDefaultLabor();
-    }
-  }
-
-  /** Take a labor line off the defaults. SOFT on the server, and off this page either way.
-
-   *  NO CONFIRMATION, the same as Remove on a takeoff default. It stops a line being something a
-   *  new bid opens with; it does not reach into a bid that already holds one, and it is a soft
-   *  delete besides. A dialog in front of a reversible single press reads as a warning about a
-   *  danger that is not there, which is how people learn to click through the ones that matter.
-
-   *  OPTIMISTIC, WITH THE LIST PUT BACK ON A FAILURE -- a row that looks removed and returns on
-   *  the next reload is worse than one that refuses out loud. */
-  async function removeLaborDefault(id) {
-    var was = LABOR.slice();
-    LABOR = LABOR.filter(function (r) { return r.id !== id; });
-    renderDefaultLabor();
-    try {
-      await del("labor", id);
-    } catch (err) {
-      LABOR = was;
-      renderDefaultLabor();
-      say("Couldn't remove that. " + (err.message || ""));
-    }
-  }
 
   /** Put Travel back on the rate the tool ships with.
 
@@ -2807,76 +2939,48 @@
     }
   }
 
-  /** Edit and Remove on a custom labor line, for an admin and nobody else.
-
+  /** Travel's own row controls on the Defaults tab, for an admin and nobody else. TRAVEL ONLY,
+   *  since 2026-09-24 -- every OTHER labor default on this tab now carries the same Edit/Remove
+   *  pair every item and assembly default already does (see `defaultRowActions`), because a
+   *  labor type is a library row like theirs now and Edit means the same thing for all three:
+   *  go to where the thing is defined. Travel is the one row that is not a library row a browse
+   *  can find or a Remove can take off the list -- it is seeded by the schema and by nothing
+   *  else, so it keeps the bespoke pair this function has always drawn for it.
+   *
    *  THE WRITES ARE ADMIN-ONLY ON THE SERVER, so this does not offer a control that 403s on press.
    *  That is the rule load() already follows when it resolves the role BEFORE the first paint, and
    *  the one the Administration lists follow when they render text instead of inputs.
-
-   *  REMOVE MEANS "STOP BEING A DEFAULT", not "delete the line out of every bid that has one", so
-   *  it says the word rather than wearing the bin glyph the Items tab deletes rows with.
-
-   *  TRAVEL IS THE ONE ROW THAT CANNOT SAY REMOVE, and `travel` is what it is handed: the stored
-   *  library_labor row with the reserved id, or null when there is none. Three things follow from
-   *  it and each is the honest answer rather than a convenience:
+   *
+   *  `travel` IS THE STORED library_labor ROW WITH THE RESERVED ID, or null when there is none.
+   *  Two things follow from it and each is the honest answer rather than a convenience:
    *
    *    * NO STORED ROW, NO CONTROLS. Every estimate is seeded with Travel from travelSeed()
    *      whether or not this table answers, so on a database where `library_labor` has not been
    *      created the line is real and its rate is genuinely not editable -- there is nothing to
-   *      PATCH. An Edit button there would open a form whose Save 500s, which is the dead control
-   *      this whole change is about; it would be worse than the chip it replaced, not better.
-   *    * RESET, NOT REMOVE. Removing Travel is not a thing that can happen: freshModel() seeds it
-   *      into every new bid and migrateModel appends it to every old one. What this button does
-   *      is put the rate back to the one the tool ships with, and the word on it says that.
-   *    * AND ONLY WHEN THERE IS SOMETHING TO RESET. `travelSeed(row)` with no row IS the shipped
-   *      row, so an unedited default compares equal to it and offers no Reset at all -- a control
-   *      that would change nothing is a control that reads as broken when it appears to do
-   *      nothing. Name, rate and unit are compared because those are the three the Edit form
-   *      writes; a renamed Travel with the shipped rate still has a way back. */
-  function laborRowActions(id, name, travel) {
+   *      PATCH. An Edit button there would open the Labor tab onto a row that is not on it, which
+   *      is worse than the chip it replaced, not better.
+   *    * RESET, ONLY WHEN THERE IS SOMETHING TO RESET. `travelSeed(row)` with no row IS the
+   *      shipped row, so an unedited default compares equal to it and offers no Reset at all -- a
+   *      control that would change nothing is a control that reads as broken when it appears to
+   *      do nothing. Name, rate and unit are compared because those are the three the Labor tab's
+   *      own row can edit; a renamed Travel with the shipped rate still has a way back. */
+  function laborRowActions(travel) {
     if (!ADMIN) return "";
     var B = window.TWPolishBid;
     var shipped = B && B.travelSeed ? B.travelSeed() : null;
-    var edit = '<button class="btn ghost sm" type="button" data-labor-edit="' + esc(id) +
-      '">Edit</button>';
-    if (shipped && id === shipped.id) {
-      if (!travel) return "";
-      var now = B.travelSeed(travel);
-      var changed = now.label !== shipped.label || now.rate !== shipped.rate ||
-                    now.unit !== shipped.unit;
-      if (!changed) return edit;
-      return edit + '<button class="btn ghost sm danger" type="button" data-labor-reset="' +
-        esc(shipped.id) + '" aria-label="Reset ' + esc(shipped.label) +
-        ' to the rate the tool ships with">Reset</button>';
-    }
-    return edit +
-      '<button class="btn ghost sm danger" type="button" data-labor-del="' + esc(id) +
-      '" aria-label="Remove ' + esc(name) + ' from the labor defaults">Remove</button>';
-  }
-
-  /** The open form, as the row it is about to become. "" when the form is shut. */
-  function laborFormRow() {
-    var f = LABOR_FORM;
-    if (!f) return "";
-    var opts = "";
-    for (var i = 0; i < LABOR_UNITS.length; i++) {
-      opts += '<option value="' + esc(LABOR_UNITS[i]) + '"' +
-        (f.unit === LABOR_UNITS[i] ? " selected" : "") + ">" + esc(LABOR_UNITS[i]) + "</option>";
-    }
-    return '<tr class="defform">' +
-      '<td><input id="labor-f-name" data-labor-f="name" value="' + esc(f.name) +
-        '" maxlength="200" placeholder="What the estimate calls this line"' +
-        ' aria-label="Labor line name"></td>' +
-      '<td class="n"><input id="labor-f-rate" data-labor-f="rate" value="' + esc(f.rate) +
-        '" inputmode="decimal" placeholder="0.00" aria-label="Rate"></td>' +
-      '<td><select id="labor-f-unit" data-labor-f="unit" aria-label="Priced per">' + opts +
-        "</select>" +
-        (f.err ? '<p class="deferr">' + esc(f.err) + "</p>" : "") + "</td>" +
-      '<td class="rowact">' +
-        '<button class="btn sm" type="button" data-labor-save' + (f.busy ? " disabled" : "") +
-        ">" + (f.busy ? "Saving" : "Save") + "</button> " +
-        '<button class="btn ghost sm" type="button" data-labor-cancel>Cancel</button>' +
-      "</td></tr>";
+    if (!shipped || !travel) return "";
+    // EDIT GOES TO THE ROW, on the Labor tab -- the same rule defaultRowActions already follows
+    // for a material or an assembly, and the one Travel itself did not have until that tab
+    // existed to send it to.
+    var edit = '<button class="btn ghost sm" type="button" data-def-edit="labor"' +
+      ' data-def-id="' + esc(shipped.id) + '">Edit</button>';
+    var now = B.travelSeed(travel);
+    var changed = now.label !== shipped.label || now.rate !== shipped.rate ||
+                  now.unit !== shipped.unit;
+    if (!changed) return edit;
+    return edit + '<button class="btn ghost sm danger" type="button" data-labor-reset="' +
+      esc(shipped.id) + '" aria-label="Reset ' + esc(shipped.label) +
+      ' to the rate the tool ships with">Reset</button>';
   }
 
   /** The Labor defaults. Travel is in here before anybody adds anything.
@@ -2895,7 +2999,15 @@
    *  ONE TRAVEL ROW, MERGED, NOT TWO. The stored row carrying the reserved id is drawn THROUGH
    *  travelSeed and then excluded from the list below. Left in, it would appear a second time,
    *  under the same name, with its own Edit and Remove -- and an admin would have two rows to
-   *  choose between with no way to tell which one prices a bid. */
+   *  choose between with no way to tell which one prices a bid.
+   *
+   *  EVERY OTHER ROW IS FILTERED ON `favorite`, 2026-09-24. Before that column existed every row
+   *  here WAS shown, because existence in this table was the only thing "default" could mean; a
+   *  labor type can now exist on the Labor tab without being one, and this list is "what a new
+   *  bid opens holding", not "every labor type Treadwell has ever typed" -- that second list is
+   *  the Labor tab's job. `defaultRowActions("labor", …)` is the same Edit/Remove pair an item or
+   *  an assembly default already carries here; Edit goes to the Labor tab now, the same way an
+   *  item default's Edit goes to the Items tab. */
   function renderDefaultLabor() {
     var body = $("default-labor-body");
     if (!body) return;
@@ -2921,17 +3033,18 @@
         "<td>" + (r.guys_auto
           ? "Man-days come off the crew rows above it"
           : "Typed on the estimate") + "</td>" +
-        '<td class="rowact">' + laborRowActions(r.id, r.label, storedTravel) + "</td>" +
+        '<td class="rowact">' + laborRowActions(storedTravel) + "</td>" +
         "</tr>";
     }
-    // THE LINES SOMEBODY TYPED, beside the one that was always there. Each carries Edit and
-    // Remove for an admin, matching the Takeoff list beside it, and Remove there and here mean
-    // the same thing: stop being a default.
+    // THE LINES SOMEBODY HAS FAVORITED, beside the one that was always there. Each carries the
+    // same Edit/Remove pair the Takeoff list beside it already does, and Remove there and here
+    // mean the same thing: stop being a default, not delete the underlying row -- that is the new
+    // Labor tab's delete icon, a different and more consequential action on a different screen.
     // FILTERED BY THE WORK-TYPE TAB, like the Takeoff list above it. Travel is neither filtered
     // nor listed here: it is seeded into every bid whatever tab it sits on, and it has already
     // been drawn above -- listing it again is the double-Travel row this merge exists to prevent.
     var shown = LABOR.filter(function (r) {
-      return (!shipped || r.id !== shipped.id) && appliesToWorkType(r, DEFAULT_WT);
+      return (!shipped || r.id !== shipped.id) && r.favorite && appliesToWorkType(r, DEFAULT_WT);
     });
     for (var k = 0; k < shown.length; k++) {
       var c = shown[k];
@@ -2942,26 +3055,33 @@
         "<td>" + (c.guys_auto
           ? "Man-days come off the crew rows above it"
           : "Typed on the estimate") + "</td>" +
-        '<td class="rowact">' + laborRowActions(c.id, c.name) + "</td>" +
-        "</tr>";
+        // ADMIN ONLY, unlike an item's or an assembly's pair: `favorite` on a labor line is a
+        // PATCH to /api/library/labor, which is `_require_admin`, so a non-admin is not handed a
+        // Remove that 403s -- the rule laborRowActions already follows for Travel.
+        '<td class="rowact">' + (ADMIN ? defaultRowActions("labor", c.id, c.name) : "") +
+        "</td></tr>";
     }
-    out += laborFormRow();
     body.innerHTML = out;
     // Counts BOTH, so a page that could not reach the shared module still hides the empty state
-    // once there is a typed line to show. Travel is normally in `rows`, which is why this read
-    // correctly while it was the only thing that could be.
+    // once there is a favorited line to show. Travel is normally in `rows`, which is why this
+    // read correctly while it was the only thing that could be.
     if ($("default-labor-empty")) {
       $("default-labor-empty").hidden = (rows.length + shown.length) > 0;
     }
-    // The add control is a write, and writes here are admin-only on the server. Hidden the same
-    // way renderRefSection hides Administration's, rather than rendered and left to 403.
+    // THE ADD BUTTON IS AN ADMIN'S, for the same reason as the row pair: what it opens is the
+    // shared browse, but the only labor it can offer there is a PATCH the server refuses anybody
+    // else, and defaultCandidates leaves labor out for a non-admin. A "labor default" button that
+    // opened onto materials alone would be the dead control this tab has already shipped once.
     var addrow = $("default-labor-addrow");
     if (addrow) addrow.hidden = !ADMIN;
   }
 
   // ── view switch ────────────────────────────────────────────────────────────
-  var PANES = ["items", "asm", "vendors", "defaults"];
-  var TAB_OF = { items: "tab-items", asm: "tab-asm", vendors: "tab-vendors",
+  // LABOR SITS RIGHT AFTER ASSEMBLIES, BEFORE ADMINISTRATION -- a peer to Items and Assemblies,
+  // not a fourth Administration list and not folded into Defaults, which stays what it always
+  // was: what a new bid opens holding, not what the catalog holds.
+  var PANES = ["items", "asm", "labor", "vendors", "defaults"];
+  var TAB_OF = { items: "tab-items", asm: "tab-asm", labor: "tab-labor", vendors: "tab-vendors",
                  defaults: "tab-defaults" };
   function showView(which) {
     view = which;
@@ -2975,11 +3095,12 @@
     // the only part of this that a reload still has.
     //
     // WRITTEN HERE, not in the click listener, because the tab strip is not the only thing that
-    // switches tabs — there are seven other call sites. The Defaults tab's Edit buttons jump to
-    // the material or the assembly behind a default (`showView("items"); paint();
-    // focusItemRow(id)`), and creating a material, an assembly or a vendor lands you on its tab.
-    // A reload after any of those has to come back to where it put you, and a listener-only write
-    // would send you to Assemblies instead.
+    // switches tabs — there are several other call sites. The Defaults tab's Edit buttons jump to
+    // the material, the assembly or the labor line behind a default (`showView("labor"); paint();
+    // focusLaborRow(id)`, and the item/assembly pair beside it), and creating a material, an
+    // assembly, a labor line or a vendor lands you on its own tab. A reload after any of those has
+    // to come back to where it put you, and a listener-only write would send you to Assemblies
+    // instead.
     //
     // `typeof window` rather than a bare read: the test harnesses run these functions in scopes
     // that bind only what the page itself declares, and an unbound identifier is a ReferenceError
@@ -3211,32 +3332,10 @@
   // delegation instead -- Remove on a listed row, Add on a removed one -- and both land in
   // setConditionDefault, which is still the one place that writes them.
 
-  // THE LABOR FORM'S TYPING, bound to the tbody rather than to the inputs. renderDefaultLabor
-  // replaces that element's innerHTML and not the element, so one listener here outlives every
-  // row it draws -- the same rule the bulk-divisions listener follows for the same reason.
-  //
-  // IT RECORDS AND DOES NOT RENDER. The values have to survive a paint() somebody else on this
-  // page triggers, which is why they are held in LABOR_FORM; re-rendering on each keystroke to
-  // show them back would take the caret out of the box being typed into.
-  if ($("default-labor-body")) {
-    $("default-labor-body").addEventListener("input", function (e) {
-      var f = e.target && e.target.getAttribute && e.target.getAttribute("data-labor-f");
-      if (f) setLaborField(f, e.target.value);
-    });
-    // A <select> is answered with `change` in every browser and with `input` in most; both land
-    // on the same setter, and setting the same value twice is not a decision.
-    $("default-labor-body").addEventListener("change", function (e) {
-      var f = e.target && e.target.getAttribute && e.target.getAttribute("data-labor-f");
-      if (f) setLaborField(f, e.target.value);
-    });
-    // Enter saves and Escape shuts it, because a three-field row that can only be finished by
-    // aiming at a button is a form that reads as heavier than the line it is adding.
-    $("default-labor-body").addEventListener("keydown", function (e) {
-      if (!LABOR_FORM) return;
-      if (e.key === "Enter") { e.preventDefault(); submitLaborForm(); }
-      else if (e.key === "Escape") { e.stopPropagation(); closeLaborForm(); }
-    });
-  }
+  // THE LABOR FORM'S TYPING used to bind here. It shut down with the form itself, 2026-09-24 --
+  // renderDefaultLabor no longer draws a `data-labor-f` input anywhere, creating a labor line
+  // moved to its own tab, and a listener kept alive over a form that no longer exists is exactly
+  // the kind of dead wiring this file's own tests exist to catch.
   // Escape in the search box clears it before it closes the dialog — the same two-stage behaviour
   // the Items tab's box has, so a typo does not cost you the whole selection.
   $("bulk-q").addEventListener("keydown", function (e) {
@@ -3553,6 +3652,12 @@
   // not bubble and this is one listener on a tbody whose rows are replaced on every render.
   $("items-body").addEventListener("focusout", onItemRowFocusOut);
 
+  // Both events, for the reason the comment above already gives: a text input reports `input`,
+  // a <select> and a checkbox are only guaranteed to report `change`. No focusout listener --
+  // there is no confirmation dialog on this table for one to schedule around.
+  $("labor-body").addEventListener("input", onLaborEdit);
+  $("labor-body").addEventListener("change", onLaborEdit);
+
   // ── administration ────────────────────────────────────────────────────────
   // Writes are admin-only on the server too (`_require_admin`). The read-only render is what keeps
   // a non-admin from being offered a control that would 403 — not the only line of defence.
@@ -3786,10 +3891,9 @@
     // THE ADD BUTTON UNDER EACH LIST. It shipped as markup with no handler on 2026-09-17,
     // and the search box shipped with no input listener, so between them there was NO WAY
     // LEFT to make a default -- the same change had just taken the switch off the item rows.
-    // Takeoff opens the list in browse mode, which is what the button is for: you do not
-    // have to already know the name. LABOR NOW OPENS A FORM -- it was left unwired on purpose
-    // because nothing stored a custom labor line and a handler could only have pretended, and
-    // Hanz said twice that the button does not work. `library_labor` is where one goes now.
+    // BOTH OPEN THE SAME BROWSE NOW, 2026-09-24. Creating a labor TYPE moved to its own Labor
+    // tab; this pair only ever makes an EXISTING type (or material, or assembly) a default, which
+    // is what the shared search-and-browse below already does for the other two kinds.
     // THE WORK-TYPE STRIP. It narrows both lists at once, because a work type is the one
     // question "what does a polish bid open holding?" and Takeoff and Labor are two halves
     // of that answer. Repainting both is the point, not an accident.
@@ -3815,17 +3919,17 @@
       openDefaultAdd(addDef.getAttribute("data-add-default"));
       return;
     }
-    // THE FORM'S OWN FOUR. Delegated with the rest because renderDefaultLabor replaces every one
-    // of these controls on each render, and a listener bound to a replaced button dies with it.
-    if (t.closest && t.closest("[data-labor-save]")) { await submitLaborForm(); return; }
-    if (t.closest && t.closest("[data-labor-cancel]")) { closeLaborForm(); return; }
-    var labEd = t.closest && t.closest("[data-labor-edit]");
-    if (labEd) { openLaborForm(labEd.getAttribute("data-labor-edit")); return; }
-    var labDel = t.closest && t.closest("[data-labor-del]");
-    if (labDel) { await removeLaborDefault(labDel.getAttribute("data-labor-del")); return; }
-    // ITS OWN ARM, not the Remove one. The two say different words to an admin and send different
-    // requests -- a DELETE here would soft-delete the only row anything can address Travel by.
+    // ITS OWN ARM, not a Remove or a Delete. The three say different things and send different
+    // requests -- a DELETE here would soft-delete the only row anything can address Travel by,
+    // and setDefault's Remove would try to un-favorite a row that is not gated by favorite at all.
     if (t.closest && t.closest("[data-labor-reset]")) { await resetTravelDefault(); return; }
+
+    // ── the Labor tab: every labor line, created and edited here ─────────────────────────────
+    if (t.closest && t.closest("[data-add-labor]")) { await addLaborLine(); return; }
+    var moreBtn = t.closest && t.closest("[data-labor-more-toggle]");
+    if (moreBtn) { toggleLaborMore(moreBtn.getAttribute("data-labor-more-toggle")); return; }
+    var delLab = t.closest && t.closest("[data-del-labor]");
+    if (delLab) { await removeLaborLine(delLab.getAttribute("data-del-labor")); return; }
     var addBtn = t.closest && t.closest("[data-def-add]");
     if (addBtn) {
       // TWO SAVERS, ONE BUTTON, because a condition is not a library row: `favorite` is a column
@@ -3870,12 +3974,13 @@
       return;
     }
     // EDIT GOES TO THE ROW, not to an editor here. What you want to change about a default is the
-    // assembly or the material, and this page already has screens for both.
+    // assembly, the material or the labor line, and this page already has screens for all three.
     var edBtn = t.closest && t.closest("[data-def-edit]");
     if (edBtn) {
       var ek = edBtn.getAttribute("data-def-edit");
       var eid = edBtn.getAttribute("data-def-id");
       if (ek === "assemblies") { openId = eid; showView("asm"); paint(); }
+      else if (ek === "labor") { showView("labor"); paint(); focusLaborRow(eid); }
       else { showView("items"); paint(); focusItemRow(eid); }
       return;
     }

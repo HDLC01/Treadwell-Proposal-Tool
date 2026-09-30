@@ -1127,6 +1127,37 @@ def test_the_defaults_stand_beside_travel_and_never_double_it(ran):
 
 
 @needs_node
+def test_only_a_favorited_labor_row_seeds_a_new_bid(ran):
+    """THE COUNTER-EXAMPLE `favorite` EXISTS FOR. A labor TYPE can now exist in the catalog --
+    created on the new Labor tab -- without being a DEFAULT, which is the entire reason Hanz asked
+    for "create it" and "make it a default" to be two separate, sequential actions on two
+    different tabs. Before this column existed every row in this table WAS a default, because
+    there was no other tab a custom line could come from; a brand new bid must not go back to that
+    the moment a non-default labor type is created.
+
+    Mutation: drop the `if (!r.favorite) continue;` guard from seedLibraryLabor's second loop, and
+    `lab-not-a-default` (rate $999/hr) lands on every new bid alongside the row somebody actually
+    chose."""
+    ids = ran["libraryLabor"]["nonFavoriteRowsDoNotSeed"]["ids"]
+    built_in = ["polishing", "mockup", "jointfill", "travel"]
+    assert ids == built_in + ["lab-a-default"], (
+        "the unfavorited rows reached a brand new bid: %r" % ids)
+    assert "lab-not-a-default" not in ids and "lab-key-absent" not in ids, (
+        "a labor type nobody made a default still seeded: %r" % ids)
+    # A ROW WITH NO `favorite` KEY AT ALL -- the shape every row in this table has until the
+    # migration's first ALTER backfills it -- must NOT seed either. Reading a missing key as "yes,
+    # favorited" would be the opposite mistake from `default_work_types`, whose empty list DOES
+    # mean "applies everywhere": the two columns disagree on what absence means for opposite
+    # reasons, and confusing them here is exactly the regression this line guards against.
+    assert "lab-key-absent" not in ids, (
+        "a row with no favorite key at all was treated as favorited")
+    # TRAVEL IS NOT GATED BY THIS, whatever its own stored favorite reads. It is built into every
+    # estimate the way it always has been, not opted into one the way a chosen default is.
+    assert ran["libraryLabor"]["nonFavoriteRowsDoNotSeed"]["travelSeedsEvenUnfavorited"] == 20, (
+        "an unfavorited stored Travel row was skipped instead of overriding the shipped rate")
+
+
+@needs_node
 def test_travel_is_overridden_in_place_and_never_becomes_a_second_row(ran):
     """TRAVEL IS EDITABLE FROM 2026-09-19 AND STILL CANNOT BE DUPLICATED OR LOST. Hanz, on the
     BUILT IN chip the Defaults tab drew beside it: "again this too how can we edit this?", and

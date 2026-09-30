@@ -201,6 +201,18 @@ def test_items_and_assemblies_opens_on_the_tab_you_were_on(result):
     assert r["selected"] == ["defaults"], "the tab strip disagrees with the pane"
 
 
+def test_a_reload_on_the_labor_tab_comes_back_to_the_labor_tab(result):
+    """The Labor tab joined the strip on 2026-09-30, between Assemblies and Administration. A tab
+    that PANES does not list is one `pick` treats as gone, so a reload there would land on
+    Assemblies -- and so would every Edit on a labor default, which switches to this tab.
+
+    Mutation: drop "labor" from PANES in library.js."""
+    r = result["libLabor"]
+    assert r["view"] == "labor", "a reload on the Labor tab landed on %r" % r["view"]
+    assert r["shown"] == ["labor"], "another pane is on screen with it: %s" % r["shown"]
+    assert r["selected"] == ["labor"], "the tab strip disagrees with the pane"
+
+
 def test_the_defaults_tab_comes_back_on_the_right_work_type(result):
     """Landing on the right tab and the wrong one of the five work types is the same bug one level
     down — the Defaults tab is five lists, not one.

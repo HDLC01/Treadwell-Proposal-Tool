@@ -1289,6 +1289,9 @@ class LibraryLaborIn(BaseModel):
     guys_auto: Optional[bool] = None
     sort: Optional[Any] = None
     notes: Optional[str] = None
+    # Shared/team-wide, not per-user -- see library.validate_labor's note. Undeclared here means
+    # silently discarded, the same trap LibraryItemIn.default_work_types' own comment records.
+    favorite: Optional[bool] = None
     # See the note on LibraryItemIn.default_work_types: undeclared means silently discarded.
     default_work_types: Optional[Any] = None
 
@@ -1336,7 +1339,14 @@ def api_library_labor_update(labor_id: str, payload: LibraryLaborIn,
 @app.delete("/api/library/labor/{labor_id}")
 def api_library_labor_delete(labor_id: str, request: Request) -> Dict[str, Any]:
     _require_admin(request)
-    if not library.delete_labor(labor_id):
+    # 400, NOT 404: `travel` is very much still on the list, and 404 would read as "already gone"
+    # to whatever called this — a caller that retried on a 404 would find nothing to retry against.
+    # library.delete_labor raises before it even asks the store whether the row exists.
+    try:
+        deleted = library.delete_labor(labor_id)
+    except library.ValidationError as exc:
+        raise HTTPException(400, str(exc))
+    if not deleted:
         raise HTTPException(404, "That labor line is no longer on the list.")
     # Soft, like every other library delete. An estimate built with this line carries its own copy
     # of the rate, so removing it from the list does not reach back into a bid.

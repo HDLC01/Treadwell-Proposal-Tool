@@ -493,7 +493,25 @@
    *  Travel keeps the POSITION IT ALREADY HAD on the model, which is the sheet's own.
    *
    *  WHO IS ALLOWED TO CALL THIS is the whole safety question, and the answer is laborUnstated
-   *  below -- never this function, which will happily add rows to a finished bid if asked. */
+   *  below -- never this function, which will happily add rows to a finished bid if asked.
+   *
+   *  ONLY A FAVORITED ROW SEEDS, 2026-09-24 -- the change that makes the new Labor tab and the
+   *  Defaults tab two different presses. `rows` is GET /api/library/labor's full catalog, every
+   *  labor type Treadwell has ever typed in, not just the ones somebody has chosen as a default --
+   *  `list_labor()` on the server deliberately does not filter it either, because the Labor tab
+   *  itself needs the WHOLE list. Before `favorite` existed there was no other tab a custom labor
+   *  line could come from, so every row WAS a default by definition and this function seeded all
+   *  of them; now that a row can exist without being one, seeding all of them would put every
+   *  labor type ever created into every new bid, which is the opposite of what a "Labor tab, and
+   *  separately a Default Items & Assemblies tab" was for. `!r.favorite` alone is enough --
+   *  `_shape_labor` already reads a row with no stored value as `false`, so this needs no fallback
+   *  of its own the way `default_work_types` does for an empty list meaning "every tab": there is
+   *  no old data to stay compatible with, because no row anywhere carried `favorite` before today.
+   *
+   *  TRAVEL IS UNCHANGED BY THIS. The branch above it applies unconditionally, whatever its stored
+   *  `favorite` reads -- Travel is not opted into a bid the way a chosen default is, it is built
+   *  into every estimate the way it always has been, and the migration backfills it to true
+   *  regardless, so the two should never actually disagree. */
   function seedLibraryLabor(labor, rows) {
     var out = (labor instanceof Array) ? labor.slice() : [];
     if (!(rows instanceof Array)) return out;
@@ -522,6 +540,7 @@
         seen[rid] = true;
         continue;
       }
+      if (!r.favorite) continue;
       if (seen[rid]) continue;
       seen[rid] = true;
       out.push(libraryLaborRow(r));

@@ -409,12 +409,19 @@ out.blockers = [
 // GET /api/library/labor hands back. Its rows are shaped the way that endpoint returns them --
 // `name` not `label`, a PostgREST numeric that can arrive as TEXT, and the audit columns -- so a
 // mapping that only works on a hand-tidied row shows up here rather than on staging.
+//
+// BOTH `favorite: true`, 2026-09-24. That flag is new on this table -- before it existed every row
+// here WAS a default, because there was no other tab a custom labor line could come from. Now
+// there is a Labor tab where a type can exist without being one, so these two are marked the way
+// an admin would mark them on the Defaults tab: chosen. See `nonFavoriteRowsDoNotSeed` below for
+// the row this fixture is deliberately NOT -- one that exists in the catalog but was never made a
+// default, which this same list must NOT hand to a brand new bid.
 const LIB_ROWS = [
   { id: "lab-densify", name: "Densify", rate: "40.00", unit: "days", guys_auto: false,
-    sort: 0, notes: null, owner_email: "hanz@wetreadwell.com",
+    sort: 0, notes: null, owner_email: "hanz@wetreadwell.com", favorite: true,
     created_at: "2026-09-17T14:00:00Z", updated_at: "2026-09-17T14:00:00Z" },
   { id: "lab-night", name: "Night shift premium", rate: 12.5, unit: "hours", guys_auto: true,
-    sort: 1, notes: "after 6pm", owner_email: "hanz@wetreadwell.com",
+    sort: 1, notes: "after 6pm", owner_email: "hanz@wetreadwell.com", favorite: true,
     created_at: "2026-09-17T14:01:00Z", updated_at: "2026-09-17T14:01:00Z" }
 ];
 
@@ -515,7 +522,40 @@ out.libraryLabor = {
   missingList: P.seedLibraryLabor(P.freshModel().labor, null)
     .map(function (r) { return r.id; }),
   rowsWithoutIds: P.seedLibraryLabor(P.freshModel().labor,
-    [{ name: "No id at all", rate: 5 }, null]).map(function (r) { return r.id; })
+    [{ name: "No id at all", rate: 5 }, null]).map(function (r) { return r.id; }),
+  // THE COUNTER-EXAMPLE `favorite` EXISTS FOR, 2026-09-24. A labor TYPE can now exist in the
+  // catalog -- created on the new Labor tab -- without being a DEFAULT: that is the entire reason
+  // Hanz asked for the two to be separate, sequential actions on two different tabs. Handed a
+  // catalog with one favorited row and one not, a brand new bid must open holding only the one
+  // somebody actually chose. Without the `!r.favorite` guard this fixture would seed BOTH --
+  // `nonFavoriteRowsDoNotSeed.ids` would include "lab-not-a-default" -- which is what every row in
+  // this table did before today, and is exactly the regression this vector is here to catch.
+  nonFavoriteRowsDoNotSeed: (function () {
+    const rows = P.seedLibraryLabor(P.freshModel().labor, [
+      { id: "lab-a-default", name: "A chosen default", rate: 40, unit: "days",
+        guys_auto: false, favorite: true },
+      { id: "lab-not-a-default", name: "Not a default", rate: 999, unit: "hours",
+        guys_auto: false, favorite: false },
+      // A ROW WITH NO `favorite` KEY AT ALL, the shape every row in this table actually has
+      // until the migration's first ALTER runs and backfills it. `_shape_labor` reads that as
+      // `false` server-side, and this must agree rather than treat "key absent" as "favorited"
+      // the way `default_work_types`' empty-list DOES treat absence as "applies everywhere" --
+      // the two columns land on opposite defaults for opposite reasons, and a harness that
+      // confused them would prove nothing.
+      { id: "lab-key-absent", name: "Never favorited at all", rate: 5, unit: "hours",
+        guys_auto: false }
+    ]);
+    return { ids: rows.map(function (r) { return r.id; }),
+             // TRAVEL IS NOT GATED BY THIS. It applies whether or not the fixture below marks
+             // it a favorite, because Travel is not opted into a bid the way a chosen default
+             // is -- it is built into every estimate regardless.
+             travelSeedsEvenUnfavorited: (function () {
+               const withTravel = P.seedLibraryLabor(P.freshModel().labor,
+                 [{ id: "travel", name: "Travel", rate: 20, unit: "hours", guys_auto: true,
+                    favorite: false }]);
+               return withTravel.filter(function (r) { return r.id === "travel"; })[0].rate;
+             })() };
+  })()
 };
 
 // ── the gate: whose labor is it? ─────────────────────────────────────────────

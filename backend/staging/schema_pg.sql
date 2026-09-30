@@ -258,6 +258,11 @@ alter table public.library_items      add column if not exists default_work_type
 alter table public.library_assemblies add column if not exists default_work_types jsonb not null default '[]'::jsonb;
 alter table public.library_labor      add column if not exists default_work_types jsonb not null default '[]'::jsonb;
 
+-- THE LABOR TAB'S OWN FAVORITE, 2026-09-24 -- mirrors supabase_schema.sql exactly (see the note
+-- there for the two-step reasoning). Two databases, DDL twice, or one drifts.
+alter table public.library_labor add column if not exists favorite boolean not null default true;
+alter table public.library_labor alter column favorite set default false;
+
 -- Items and Assemblies, 2026-08-15. Additive, and safe against a volume already holding BETA
 -- rows. buy_qty is the "5" of "5 Gal" (so unit_cost can mean what the pail costs); existing rows
 -- get 1, which prices exactly as they did before the column existed. cost_updated_at marks a

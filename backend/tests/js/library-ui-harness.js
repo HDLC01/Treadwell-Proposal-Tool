@@ -394,13 +394,12 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   // perfectly. Everything below is lifted so a test presses the thing rather than reading it.
   //
   // LABOR is handed in the way GLOBAL_MARKUP is: the page fills it from its own fetch inside
-  // load(), which this sandbox does not run. The two declarations beside it are LIFTED from
+  // load(), which this sandbox does not run. The declaration beside it is LIFTED from
   // library.js rather than restated -- "hours" and "days" are the units the estimate can actually
   // price, so a harness that typed its own list here would keep passing after the page grew a
   // third one that nothing prices.
   var LABOR = state.LABOR || [];
   ${grab(/^  var LABOR_UNITS = \[[^\]]*\];$/m, "the LABOR_UNITS declaration")}
-  ${grab(/^  var LABOR_FORM = null;$/m, "the LABOR_FORM declaration")}
   // The status line the failure paths write to. LIFTED, not stubbed, so a test reads the words an
   // estimator would, and stubbing a one-line function is just restating that line.
   ${grab(/^  var alertEl = \$\("alert"\);$/m, "the alertEl declaration")}
@@ -417,7 +416,8 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
     if (LABOR_FAIL.post) throw new Error("the server said no");
     LABOR_SEQ++;
     return { ok: true, row: Object.assign({ id: "new" + LABOR_SEQ, guys_auto: false, sort: 0,
-                                            notes: null, owner_email: null }, body) };
+                                            notes: null, owner_email: null, favorite: false },
+                                           body) };
   }
   async function del(kind, id) {
     LABOR_CALLS.push({ op: "DELETE", kind: kind, id: id });
@@ -432,18 +432,54 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   // for a helper this scope does not have dies on a ReferenceError that reds every scenario in
   // this file at once with nothing pointing at the cause -- five times in one session.
   ${fn("laborRowActions")}
-  ${fn("laborFormRow")}
   ${fn("renderDefaultLabor")}
-  // And every one of these calls the renderer, so they read after it.
-  ${fn("openLaborForm")}
-  ${fn("closeLaborForm")}
-  ${fn("setLaborField")}
-  ${fn("validateLaborForm")}
-  ${fn("submitLaborForm")}
-  ${fn("removeLaborDefault")}
-  // Travel's own write, and NOT removeLaborDefault: it PATCHes the reserved row back to the
-  // shipped rate rather than deleting the one id anything can address Travel by.
+  // Travel's own write: it PATCHes the reserved row back to the shipped rate rather than deleting
+  // the one id anything can address Travel by.
   ${fn("resetTravelDefault")}
+  // ── THE LABOR TAB ITSELF, 2026-09-24 -- LIFTED AND EXECUTED ────────────────────────────────
+  // A labor TYPE is created and edited here now, on its own tab, a peer to Items and Assemblies
+  // rather than a form on the Defaults tab. workTypeCell and byId are ALREADY lifted above this
+  // point (workTypeCell by takeoffDefaultGroups' own block, byId by the items save path) --
+  // reached here, not restated. patchSoon is STUBBED further down (QUEUED.push, no network) --
+  // hoisted, so it resolves for these too despite sitting textually after them.
+  ${grab(/^  var NUMERIC_LABOR_FIELDS = \[[^\]]*\];$/m, "the NUMERIC_LABOR_FIELDS declaration")}
+  ${grab(/^  var laborMoreOpen = \{\};$/m, "the laborMoreOpen declaration")}
+  ${fn("onLaborEdit")}
+  ${fn("toggleLaborMore")}
+  ${fn("focusLaborRow")}
+  ${fn("renderLabor")}
+  // THE TAB'S TWO WRITES, pulled out of the click listener so they run here. removeLaborLine
+  // drops a queued edit for the row it deleted, so the two stores it clears are LIFTED from
+  // library.js rather than declared -- patchSoon is stubbed in this scope and never fills them,
+  // which is why a scenario seeds one by hand through setPending.
+  ${grab(/^  var timers = \{\};$/m, "the timers declaration")}
+  ${grab(/^  var pendingPatch = \{\};$/m, "the pendingPatch declaration")}
+  ${fn("addLaborLine")}
+  ${fn("removeLaborLine")}
+  // setDefault's OWN NETWORK, stubbed the same way post/del/patchLabor are above -- captured so a
+  // test can see the write it WOULD have sent, never a real socket. Sits beside them rather than
+  // where setDefault itself is defined, matching the "NETWORK, AND ONLY THE NETWORK" grouping the
+  // comment over post/del/patchLabor already promises.
+  async function patchDefault(kind, id, on) {
+    LABOR_CALLS.push({ op: "PATCH_DEFAULT", kind: kind, id: id, on: !!on });
+    if (LABOR_FAIL.patchDefault) throw new Error("the server said no");
+  }
+  // paint()'s OWN EIGHT CALLEES ARE ALL ALREADY LIFTED by this point -- renderItems,
+  // renderFilterBar, renderVendors, renderList and renderPanel by the items/assemblies save
+  // paths above, renderLabor just above, renderDefaultTakeoff and renderDefaultLabor by the
+  // Defaults tab's own block. Lifting the REAL paint() rather than a hand-rolled stand-in is what
+  // makes setDefault's optimistic-flip-then-repaint testable at all: a fake paint() that called
+  // only SOME of the eight would pass a test that happened to check the one it called and prove
+  // nothing about the seven it did not.
+  ${fn("paint")}
+  // THE MAKE-DEFAULT TOGGLE ITSELF, EXECUTED -- never lifted before this change, because nothing
+  // in this harness had exercised the optimistic-flip-then-repaint round trip end to end. This is
+  // the function the historical incident was about: for a day the Labor arm of
+  // openDefaultAdd was markup with no handler, and every test over it matched the pane for the
+  // right data-attribute -- which a dead button carries perfectly. setDefault is the write a
+  // working Add or Remove press actually reaches, on all three kinds now, so it is executed here
+  // rather than assumed from the markup around it.
+  ${fn("setDefault")}
   // AFTER BOTH ARMS IT CALLS. This is the routing the Add buttons press, pulled out of the page's
   // anonymous click listener precisely so it can be reached from here -- the same move
   // placeNewAssembly made, and for the same reason.
@@ -605,16 +641,23 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
            // THE LABOR DEFAULTS, EXECUTED. The add button had no handler for a day and this
            // file could not tell: a source assertion cannot separate a wired control from a
            // dead one, which is exactly how it shipped green.
-           renderDefaultLabor, openLaborForm, closeLaborForm, setLaborField, validateLaborForm,
-           submitLaborForm, removeLaborDefault, resetTravelDefault, laborRowActions, laborFormRow,
+           renderDefaultLabor, resetTravelDefault, laborRowActions,
            LABOR_UNITS,
            LABOR_CALLS,
-           // GETTERS, because removeLaborDefault REASSIGNS LABOR (filter, not splice) and
-           // submitLaborForm puts LABOR_FORM back to null -- a test handed either value itself
-           // would be reading the one from before the press it is testing.
+           setDefault, paint,
            openDefaultAdd,
+           // THE LABOR TAB ITSELF, EXECUTED -- creation, editing and the delete guard, on the
+           // tab this whole change was for. QUEUED is already exposed above, beside onItemEdit --
+           // the same capture array, shared by every kind that calls patchSoon.
+           onLaborEdit, toggleLaborMore, focusLaborRow, renderLabor, NUMERIC_LABOR_FIELDS,
+           addLaborLine, removeLaborLine,
+           setPending: function (k, v) { pendingPatch[k] = v; },
+           pendingNow: function () { return pendingPatch; },
+           // GETTERS, because the delete handler REASSIGNS LABOR (filter, not splice) -- a test
+           // handed the value itself would be reading the one from before the press it is
+           // testing.
            laborNow: function () { return LABOR; },
-           laborFormNow: function () { return LABOR_FORM; },
+           laborMoreOpenNow: function () { return laborMoreOpen; },
            setGlobalMarkup: function (g) { GLOBAL_MARKUP = g; },
            snapshotOf: function (id) { return itemBefore[id]; } };
 `);
@@ -665,8 +708,11 @@ function build(overrides, docSelectors) {
   // to read the same in UTC and in Central. The dev box clock runs ~13 hours ahead of Chicago and
   // these are project dates: the ONLY correct renderer is TW's, and this proves the page reached
   // for it rather than for `new Date(...).toLocaleDateString()`.
-  const TW = { fmtBizDateTime: (iso) => "BIZ(" + iso + ")",
-               fmtBizDate: (iso) => "BIZDAY(" + iso + ")" };
+  const TW = Object.assign({ fmtBizDateTime: (iso) => "BIZ(" + iso + ")",
+                             fmtBizDate: (iso) => "BIZDAY(" + iso + ")" },
+                           // A scenario that presses a delete answers its dialog through this --
+                           // the Labor tab's removeLaborLine asks TW.confirmDanger first.
+                           st.TW || {});
   const doc = makeDocument(docSelectors || []);
   const api = scope(L, d.el, TW, st, doc, CRM);
   d.el("area").value = "2875";
@@ -3715,20 +3761,28 @@ async function laborChecks() {
             { id: "i2", name: "Not a default", unit: "Gal", unit_cost: 50, favorite: false }],
     ASMS: [{ id: "a1", name: "Polish 800", unit: "SF", favorite: true, lines: [{ item_id: "i1" }] }],
     // THREE STORED LINES, NOT ONE, and the count is the whole point. With a single row
-    // "removed the right one" and "removed ALL of them" cannot disagree -- mutate
-    // removeLaborDefault to wipe the list and a one-row fixture stays green. Two survivors
-    // are what make the removal specific, and they are named so the assertion can say which.
+    // "un-favorited the right one" and "un-favorited ALL of them" cannot disagree -- mutate
+    // setDefault to wipe the list and a one-row fixture stays green. Two survivors are what
+    // make the removal specific, and they are named so the assertion can say which.
+    //
+    // ALL THREE `favorite: true`, 2026-09-24. Before that column existed, existence in this
+    // table WAS "default" -- now a labor type can exist on the Labor tab without being one, and
+    // these three are meant to represent lines that already ARE defaults, the same way the
+    // ITEMS/ASMS fixture rows above mark theirs explicitly rather than leaving it implicit.
     LABOR: [{ id: "L1", name: "Prevailing wage", rate: 58.25, unit: "hours", guys_auto: false,
-              sort: 0, notes: null, owner_email: "kyle@wetreadwell.com" },
+              sort: 0, notes: null, owner_email: "kyle@wetreadwell.com", favorite: true },
             { id: "L2", name: "Supervisor", rate: 62.00, unit: "hours", guys_auto: false,
-              sort: 1, notes: null, owner_email: "kyle@wetreadwell.com" },
+              sort: 1, notes: null, owner_email: "kyle@wetreadwell.com", favorite: true },
             { id: "L3", name: "Mobilization", rate: 450.00, unit: "days", guys_auto: false,
-              sort: 2, notes: null, owner_email: "kyle@wetreadwell.com" }],
+              sort: 2, notes: null, owner_email: "kyle@wetreadwell.com", favorite: true }],
     ADMIN: true,
   }, extra || {});
   const rowsOf = (h) => h.split("</tr>").filter((r) => /<tr/.test(r));
 
-  // THE LIST: Travel built in, the stored line beside it, each with the controls it should have.
+  // THE LIST: Travel built in, the favorited lines beside it, each with the controls it should
+  // have. Edit now sends an admin to the Labor tab (data-def-edit="labor"), the same attribute
+  // and the same click-router branch a favorited item or assembly default already uses -- see
+  // renderLabor's own scenarios in laborTabChecks() for what that tab does with the press.
   {
     const { api, dom: d } = build(seed());
     api.renderDefaultLabor();
@@ -3737,24 +3791,46 @@ async function laborChecks() {
     out.laborDefaultsList = {
       rowCount: rows.length,
       // Travel FIRST, and on the rate the tool ships with -- this fixture's LABOR holds NO row
-      // with the reserved id, which is the state PRODUCTION is in (library_labor does not exist
-      // there) and the state any database is in before the seed row is inserted.
+      // with the reserved id, which is the state any database is in before the seed row is
+      // inserted.
       travelIsFirst: /Travel/.test(rows[0] || ""),
       travelShowsTheShippedRate: /\$33\.00/.test(rows[0] || ""),
       // NO "BUILT IN" CHIP. Hanz, twice: "don't put in a hard coded or built in line items", and
       // then on this very row: "again this too how can we edit this?".
       noBuiltInChip: !/Built in/.test(rows[0] || ""),
-      // AND NO CONTROLS EITHER, while there is no row to address. An Edit here would open a form
-      // whose Save has nothing to PATCH -- a dead button, which is worse than the chip it
-      // replaced, not better. The scenarios below are where the controls appear.
-      travelCarriesNoControls: !/data-labor-(edit|del|reset)/.test(rows[0] || ""),
-      // The stored line, which the old renderer could not draw at all.
+      // AND NO CONTROLS EITHER, while there is no row to address. An Edit here would send an
+      // admin to a Labor tab row that does not exist -- worse than the chip it replaced, not
+      // better. The scenarios below are where the controls appear.
+      travelCarriesNoControls: !/data-def-edit="labor"/.test(rows[0] || "") &&
+        !/data-labor-reset/.test(rows[0] || ""),
+      // The favorited line, which the old renderer could not draw at all.
       listsTheStoredLine: /Prevailing wage/.test(rows[1] || ""),
       storedLineShowsItsRate: /\$58\.25/.test(rows[1] || ""),
       storedLineSaysPerHour: /\/ hr/.test(rows[1] || ""),
-      storedLineCanBeEdited: /data-labor-edit="L1"/.test(rows[1] || ""),
-      storedLineCanBeRemoved: /data-labor-del="L1"/.test(rows[1] || ""),
+      // THE SAME PAIR A FAVORITED ITEM OR ASSEMBLY DEFAULT ALREADY CARRIES -- defaultRowActions,
+      // not a labor-specific button. Edit says which tab and which row; Remove is "stop being a
+      // default", never a delete.
+      storedLineCanBeEdited: /data-def-edit="labor" data-def-id="L1"/.test(rows[1] || ""),
+      storedLineCanBeRemoved: /data-def-off="labor" data-def-id="L1"/.test(rows[1] || ""),
       addRowOfferedToAnAdmin: d.nodes["default-labor-addrow"].hidden === false,
+    };
+  }
+
+  // A LABOR TYPE THAT IS NOT YET A DEFAULT DOES NOT SHOW HERE. This is the counter-example the
+  // `favorite` filter exists for: before it, existence in this table was the whole story and
+  // every labor type Treadwell had typed showed up on this tab, defaults and non-defaults alike.
+  {
+    const { api, dom: d } = build(seed({
+      LABOR: [{ id: "L1", name: "Prevailing wage", rate: 58.25, unit: "hours",
+                guys_auto: false, favorite: true },
+              { id: "L9", name: "Not a default yet", rate: 999, unit: "hours",
+                guys_auto: false, favorite: false }],
+    }));
+    api.renderDefaultLabor();
+    const h = d.nodes["default-labor-body"].innerHTML;
+    out.laborNonFavoriteHiddenFromDefaultsTab = {
+      favoritedLineShown: /Prevailing wage/.test(h),
+      nonFavoritedLineHidden: !/Not a default yet/.test(h),
     };
   }
 
@@ -3772,7 +3848,8 @@ async function laborChecks() {
   // THE EDITED ROW: one Travel line, showing the STORED rate, with Edit and Reset.
   {
     const { api, dom: d } = build(seed({ LABOR: [TRAVEL_EDITED,
-      { id: "L1", name: "Prevailing wage", rate: 58.25, unit: "hours", guys_auto: false }] }));
+      { id: "L1", name: "Prevailing wage", rate: 58.25, unit: "hours", guys_auto: false,
+        favorite: true }] }));
     api.renderDefaultLabor();
     const h = d.nodes["default-labor-body"].innerHTML;
     const rows = rowsOf(h);
@@ -3786,13 +3863,16 @@ async function laborChecks() {
       // stored, listed, edited -- and ignored.
       showsTheStoredRate: /\$41\.50/.test(rows[0] || ""),
       doesNotShowTheShippedRate: !/\$33\.00/.test(h),
-      canBeEdited: /data-labor-edit="travel"/.test(rows[0] || ""),
+      // EDIT NOW SENDS AN ADMIN TO THE LABOR TAB, 2026-09-24 -- the same data-def-edit="labor"
+      // attribute and the same click-router branch a favorited item or assembly default already
+      // uses, not a bespoke data-labor-edit any more.
+      canBeEdited: /data-def-edit="labor" data-def-id="travel"/.test(rows[0] || ""),
       // RESET, NOT REMOVE. Removing Travel is not a thing that can happen -- freshModel() seeds
       // it into every new bid -- so the word on the button is the word for what it does.
       offersReset: /data-labor-reset="travel"/.test(rows[0] || ""),
-      neverOffersRemove: !/data-labor-del="travel"/.test(h),
+      neverOffersRemove: !/data-def-off="labor" data-def-id="travel"/.test(h),
       resetSaysReset: />Reset</.test(rows[0] || ""),
-      // The custom line is untouched by any of it.
+      // The favorited line is untouched by any of it.
       stillListsTheCustomLine: /Prevailing wage/.test(h),
     };
   }
@@ -3804,12 +3884,12 @@ async function laborChecks() {
     api.renderDefaultLabor();
     const h = d.nodes["default-labor-body"].innerHTML;
     out.laborTravelUnedited = {
-      canBeEdited: /data-labor-edit="travel"/.test(h),
+      canBeEdited: /data-def-edit="labor" data-def-id="travel"/.test(h),
       noResetOffered: !/data-labor-reset/.test(h),
       showsTheShippedRate: /\$33\.00/.test(h),
     };
   }
-  // …and a RENAME alone brings Reset back, because the Edit form writes the name too and a
+  // …and a RENAME alone brings Reset back, because the Labor tab's row writes the name too and a
   // renamed Travel with the shipped rate would otherwise have no way home.
   {
     const { api, dom: d } = build(seed({
@@ -3822,30 +3902,11 @@ async function laborChecks() {
     };
   }
 
-  // EDITING IT IS A PATCH TO THE RESERVED ID, never a POST. A POST would mint a uuid and leave a
-  // SECOND row called Travel that overrides nothing -- the double-Travel hazard, arriving through
-  // the form instead of through the seed.
-  {
-    const { api, dom: d } = build(seed({ LABOR: [TRAVEL_EDITED] }));
-    api.openLaborForm("travel");
-    const opened = d.nodes["default-labor-body"].innerHTML;
-    api.setLaborField("rate", "37.25");
-    await api.submitLaborForm();
-    const after = d.nodes["default-labor-body"].innerHTML;
-    out.laborTravelEdit = {
-      // The form opens holding what is stored, not blank -- a blank form is an ADD form, and
-      // pressing Save on one is how the second row gets made.
-      preloadsTheName: /value="Travel"/.test(opened),
-      preloadsTheRate: /value="41.5"/.test(opened),
-      op: (api.LABOR_CALLS[0] || {}).op,
-      patchedTravel: (api.LABOR_CALLS[0] || {}).id === "travel",
-      body: (api.LABOR_CALLS[0] || {}).body,
-      rowShowsTheNewRate: /\$37\.25/.test(after),
-      // ONE ROW IN, ONE ROW OUT. An edit that added a line is the bug this is here for.
-      storedLineCount: api.laborNow().length,
-      idsAfter: api.laborNow().map(function (r) { return r.id; }),
-    };
-  }
+  // EDITING TRAVEL NOW HAPPENS ON THE LABOR TAB, 2026-09-24 -- see laborTabChecks() for
+  // onLaborEdit patching the reserved id through the same debounced path every other row uses,
+  // and for the delete icon withheld specifically for it. This scenario, and the one that used to
+  // sit here driving a Defaults-tab form (openLaborForm("travel") -> submitLaborForm()), retired
+  // together: there is no longer a form on this tab for Travel's own row to open.
 
   // RESET PUTS THE SHIPPED RATE BACK -- as a PATCH, and deliberately NOT as a DELETE. A soft
   // delete would also read correctly on screen (list_labor stops answering, travelSeed falls
@@ -3867,7 +3928,7 @@ async function laborChecks() {
       showsTheShippedRate: /\$33\.00/.test(h),
       // The button retires itself: there is nothing left to reset.
       resetGoneAfterwards: !/data-labor-reset/.test(h),
-      stillEditable: /data-labor-edit="travel"/.test(h),
+      stillEditable: /data-def-edit="labor" data-def-id="travel"/.test(h),
       // THE ROW SURVIVES. It is what keeps Travel editable tomorrow.
       rowStillInTheModel: api.laborNow().some(function (r) { return r.id === "travel"; }),
       travelStillListed: /Travel/.test(h),
@@ -3903,35 +3964,52 @@ async function laborChecks() {
     out.laborTravelReadOnly = {
       stillListsTravel: /Travel/.test(h),
       showsTheStoredRate: /\$41\.50/.test(h),
-      noControls: !/data-labor-(edit|del|reset)/.test(h),
+      noControls: !/data-def-edit="labor"/.test(h) && !/data-labor-reset/.test(h),
     };
   }
 
-  // THE BUTTON'S OWN ROUTING, EXECUTED. Everything above proves the form works; this proves the
-  // control Hanz pressed is what reaches it. Both arms, because a router that opened the form for
-  // everything would pass a one-armed test and break the Takeoff button next to it.
+  // THE BUTTON'S OWN ROUTING, EXECUTED, 2026-09-24 -- BOTH ARMS OPEN THE SAME BROWSE NOW. This is
+  // the historical incident's exact shape one level down: for a day the Labor arm of this router
+  // was markup with no handler, and the only test over it matched the pane for the right
+  // data-attribute, which a dead button carries perfectly. Today's risk is the mirror image --
+  // the labor arm quietly reverting to nothing, or the takeoff arm losing its own behaviour on
+  // the way past -- so both are driven and neither is assumed from the other passing.
   {
-    const { api, dom: d } = build(seed());
+    const { api, dom: d } = build(seed({
+      LABOR: [{ id: "L1", name: "Prevailing wage", rate: 58.25, unit: "hours",
+                guys_auto: false, favorite: true },
+              { id: "L9", name: "Rigging", rate: 40, unit: "hours",
+                guys_auto: false, favorite: false }],
+    }));
     api.renderDefaultLabor();
     api.openDefaultAdd("labor");
-    const afterLabor = d.nodes["default-labor-body"].innerHTML;
+    const afterLabor = d.nodes["default-hits"].innerHTML;
     const { api: api2, dom: d2 } = build(seed());
     api2.renderDefaultLabor();
     api2.openDefaultAdd("takeoff");
     out.laborAddButtonRouting = {
-      laborOpensTheForm: /data-labor-f="name"/.test(afterLabor),
-      // AND ONLY THE LABOR ONE. The Takeoff button must still open the browse list, and must not
-      // have started opening a labor form on the way past.
+      // THE LABOR ARM OPENS THE SHARED BROWSE, and the un-favorited labor type is in it -- the
+      // same box the Takeoff button opens, not a labor-only picker of its own.
+      laborOpensBrowse: /data-def-add="labor"/.test(afterLabor) && /Rigging/.test(afterLabor),
+      // AND STILL OFFERS THE OTHER TWO KINDS, unchanged. One router now opens one shared list
+      // for all three, and this is the assertion that a labor-only filter did not creep in on
+      // the way to collapsing the two arms.
+      laborBrowseStillOffersItemsAndAssemblies: (function () {
+        // AN ASSEMBLY THAT IS NOT YET A DEFAULT, so the browse has one to offer -- seed()'s only
+        // assembly is already a default, and a browse of nothing cannot show the kind is still in.
+        const { api: a4, dom: d4 } = build(seed({ ASMS: seed().ASMS.concat([
+          { id: "a2", name: "Seal coat", unit: "SF", favorite: false, lines: [] }]) }));
+        a4.openDefaultAdd("labor");
+        const hh = d4.nodes["default-hits"].innerHTML;
+        return /data-def-add="items"/.test(hh) && /data-def-add="assemblies"/.test(hh);
+      })(),
       takeoffOpensBrowse: /data-def-add=/.test(d2.nodes["default-hits"].innerHTML),
-      takeoffDoesNotOpenTheLaborForm:
-        !/data-labor-f=/.test(d2.nodes["default-labor-body"].innerHTML),
       // A THIRD CATEGORY OPENS NOTHING rather than falling through to one of these two.
       unknownOpensNothing: (function () {
         const { api: a3, dom: d3 } = build(seed());
         a3.renderDefaultLabor();
         a3.openDefaultAdd("something-else");
-        return !/data-labor-f=/.test(d3.nodes["default-labor-body"].innerHTML) &&
-          !((d3.nodes["default-hits"] || {}).innerHTML || "");
+        return !((d3.nodes["default-hits"] || {}).innerHTML || "");
       })(),
       // THE LINE THIS FILE CANNOT RUN: the page's click listener is top-level wiring inside its
       // IIFE, so no scenario here can reach it. Read as SOURCE, which is the narrow case this
@@ -3939,11 +4017,72 @@ async function laborChecks() {
       // and a wiring mistake is exactly what a source assertion can see.
       listenerCallsTheRouter:
         /addDef\) \{\s*openDefaultAdd\(addDef\.getAttribute\("data-add-default"\)\);/.test(src),
-      // And the form's own four, each dispatching to the function that was tested above.
-      listenerWiresTheForm: /data-labor-save[\s\S]{0,60}submitLaborForm\(\)/.test(src) &&
-        /data-labor-cancel[\s\S]{0,60}closeLaborForm\(\)/.test(src) &&
-        /data-labor-edit[\s\S]{0,180}openLaborForm\(/.test(src) &&
-        /data-labor-del[\s\S]{0,180}removeLaborDefault\(/.test(src),
+      // THE NEW LABOR TAB'S OWN THREE, each dispatching to the function tested in
+      // laborTabChecks() below -- the same wiring-mistake shape the router check above guards,
+      // asked of the tab where a labor TYPE is actually made and unmade now.
+      listenerWiresTheLaborTab:
+        /closest\("\[data-add-labor\]"\)\) \{ await addLaborLine\(\); return; \}/.test(src) &&
+        /closest\("\[data-del-labor\]"\);\s*if \(delLab\) \{ await removeLaborLine\(delLab\.getAttribute\("data-del-labor"\)\);/.test(src) &&
+        /data-labor-more-toggle[\s\S]{0,120}toggleLaborMore\(/.test(src) &&
+        // The two edit listeners on the table, both events, for the reason onItemEdit's give: a
+        // text box reports `input`, a select and a checkbox only promise `change`.
+        /\$\("labor-body"\)\.addEventListener\("input", onLaborEdit\)/.test(src) &&
+        /\$\("labor-body"\)\.addEventListener\("change", onLaborEdit\)/.test(src),
+    };
+  }
+
+  // THE SHARED SEARCH RETURNS LABOR TOO, 2026-09-24 -- defaultCandidates() itself, EXECUTED. The
+  // design's own words: "the same search-and-browse mechanism Items/Assemblies already use
+  // there". Travel is checked absent on purpose -- it is not opted into a bid the way a
+  // favorited default is, so offering it here would be a second, misleading way to "add" a line
+  // that is on every bid regardless of anything this box could do to it.
+  {
+    const { api } = build(seed({
+      LABOR: [{ id: "L1", name: "Prevailing wage", rate: 58.25, unit: "hours",
+                guys_auto: false, favorite: true },
+              { id: "L9", name: "Rigging", rate: 40, unit: "hours",
+                guys_auto: false, favorite: false },
+              { id: "travel", name: "Travel", rate: 33, unit: "hours",
+                guys_auto: true, favorite: false }],
+    }));
+    api.setDefaultQuery("rig");
+    const hits = api.defaultCandidates().rows;
+    // AND THE WHOLE BROWSE, not just a search: "rig" cannot match the favorited line or Travel,
+    // so asking only it whether they are offered would be a question with one possible answer.
+    api.setDefaultQuery("");
+    api.openDefaultBrowse();
+    const all = api.defaultCandidates().rows;
+    out.defaultCandidatesIncludeLabor = {
+      findsTheUnfavoritedLaborType: hits.some((r) => r.kind === "labor" && r.id === "L9"),
+      labelledLabor: (hits.find((r) => r.id === "L9") || {}).what,
+      // THE FAVORITED ONE IS NOT OFFERED AGAIN -- it is already a default, the same rule
+      // ITEMS/ASMS already follow for their own favorited rows.
+      browseOffersIt: all.some((r) => r.kind === "labor" && r.id === "L9"),
+      favoritedLaborNotOffered: !all.some((r) => r.id === "L1"),
+      travelNeverOffered: !all.some((r) => r.id === "travel"),
+    };
+  }
+
+  // NOT FOR EVERYBODY. Every write to library_labor is admin-only on the server -- `favorite`
+  // included, because making a line a default is a PATCH to /api/library/labor -- so a non-admin
+  // is handed neither the row pair nor the Add button, and the shared browse offers them no labor
+  // to add. The list itself stays readable: what a new bid opens holding is worth seeing either way.
+  {
+    const { api, dom: d } = build(seed({ ADMIN: false,
+      LABOR: seed().LABOR.concat([{ id: "L9", name: "Rigging", rate: 40, unit: "hours",
+                                     guys_auto: false, favorite: false }]) }));
+    api.renderDefaultLabor();
+    const h = d.nodes["default-labor-body"].innerHTML;
+    api.openDefaultBrowse();
+    const hits = api.defaultCandidates().rows;
+    out.laborDefaultsReadOnly = {
+      stillListsTheLine: /Prevailing wage/.test(h),
+      noRowControls: !/data-def-edit="labor"/.test(h) && !/data-def-off="labor"/.test(h),
+      addRowHidden: d.nodes["default-labor-addrow"].hidden === true,
+      noLaborToAdd: !hits.some((r) => r.kind === "labor"),
+      // AND ONLY THE LABOR IS WITHHELD. Favoriting a material is not admin-gated on the server,
+      // so a non-admin's browse still offers one -- a gate on the whole list would be a new rule.
+      stillOffersAMaterial: hits.some((r) => r.kind === "items"),
     };
   }
 
@@ -3953,7 +4092,7 @@ async function laborChecks() {
   {
     const { api, dom: d } = build(seed({
       LABOR: [{ id: "L2", name: "Night differential", rate: "41.00", unit: "days",
-                guys_auto: true }],
+                guys_auto: true, favorite: true }],
     }));
     api.renderDefaultLabor();
     const h = d.nodes["default-labor-body"].innerHTML;
@@ -3965,178 +4104,78 @@ async function laborChecks() {
     };
   }
 
-  // NOT FOR EVERYBODY. The writes are admin-only on the server, so a non-admin is not handed a
-  // control that 403s -- the rule load() follows when it resolves the role before the first paint.
+  // MAKING A LABOR LINE A DEFAULT, AND TAKING IT BACK OFF -- setDefault on the labor kind,
+  // EXECUTED, through the real paint(). Add is `favorite: true` and Remove is `favorite: false`:
+  // the same one-field PATCH an item or an assembly default sends, and REMOVE IS NOT A DELETE --
+  // the line stays in the catalog and on the Labor tab, it just stops being on a new bid.
   {
-    const { api, dom: d } = build(seed({ ADMIN: false }));
+    const { api, dom: d } = build(seed({
+      LABOR: seed().LABOR.concat([{ id: "L9", name: "Rigging", rate: 40, unit: "hours",
+                                     guys_auto: false, favorite: false }]) }));
     api.renderDefaultLabor();
-    const h = d.nodes["default-labor-body"].innerHTML;
-    out.laborDefaultsReadOnly = {
-      stillListsTheLine: /Prevailing wage/.test(h),
-      noRowControls: !/data-labor-edit/.test(h) && !/data-labor-del/.test(h),
-      addRowHidden: d.nodes["default-labor-addrow"].hidden === true,
+    const before = d.nodes["default-labor-body"].innerHTML;
+    await api.setDefault("labor", "L9", true);
+    const added = d.nodes["default-labor-body"].innerHTML;
+    const addCall = api.LABOR_CALLS[api.LABOR_CALLS.length - 1] || {};
+    await api.setDefault("labor", "L1", false);
+    const removed = d.nodes["default-labor-body"].innerHTML;
+    const offCall = api.LABOR_CALLS[api.LABOR_CALLS.length - 1] || {};
+    out.laborMakeDefault = {
+      notListedBefore: !/Rigging/.test(before),
+      listedAfterAdd: /Rigging/.test(added),
+      addCall: addCall,
+      goneAfterRemove: !/Prevailing wage/.test(removed),
+      offCall: offCall,
+      // THE OTHER THREE STAY -- the specific removal a one-row fixture could not show.
+      othersStay: /Supervisor/.test(removed) && /Mobilization/.test(removed) &&
+        /Rigging/.test(removed) && /Travel/.test(removed),
+      stillInTheCatalog: api.laborNow().map((r) => r.id),
+      // Read defensively: a setDefault that never repainted leaves no Labor table at all, and
+      // that has to fail THIS assertion rather than crash every scenario in the file.
+      stillOnTheLaborTab: /data-labor="L1"/.test((d.nodes["labor-body"] || {}).innerHTML || ""),
+      noDeleteSent: !api.LABOR_CALLS.some((c) => c.op === "DELETE"),
     };
   }
-
-  // THE FORM OPENS WHERE THE ROW GOES, which is the whole of Hanz's "within the line item instead
-  // of up above" -- said about the takeoff picker the same day, and truer of a form than a picker.
+  // A REFUSED DEFAULT WRITE PUTS IT BACK AND SAYS SO -- setDefault's own argument.
   {
-    const { api, dom: d } = build(seed());
+    const { api, dom: d } = build(seed({ LABOR_FAIL: { patchDefault: true } }));
     api.renderDefaultLabor();
-    const shut = d.nodes["default-labor-body"].innerHTML;
-    api.openLaborForm(null);
-    const h = d.nodes["default-labor-body"].innerHTML;
-    out.laborAddForm = {
-      shutUntilPressed: !/data-labor-f=/.test(shut),
-      opensInTheLaborTable: /data-labor-f="name"/.test(h) && /data-labor-f="rate"/.test(h) &&
-        /data-labor-f="unit"/.test(h),
-      // NOT UP BESIDE THE SEARCH BOX, which is the placement he asked against.
-      // The search results box is a DIFFERENT element and stays out of this entirely -- it
-      // may not even have been rendered, which is itself the answer.
-      notInTheSearchResults:
-        !/data-labor-f=/.test((d.nodes["default-hits"] || {}).innerHTML || ""),
-      // And below the rows it is about to join rather than above the head.
-      belowTheExistingRows: h.indexOf("Prevailing wage") < h.indexOf('data-labor-f="name"'),
-      // The unit is a LIST: it decides whether the rate multiplies hours or man-days, so a typed
-      // third value would price at whichever branch the estimate's else happens to be.
-      unitIsAList: /<select [^>]*data-labor-f="unit"/.test(h),
-      unitOptions: (h.match(/<option value="[a-z]*"/g) || []).map((s) => s.split('"')[1]),
-      focusesTheNameBox: d.focused[d.focused.length - 1] === "labor-f-name",
-      hasSaveAndCancel: /data-labor-save/.test(h) && /data-labor-cancel/.test(h),
-    };
-    api.closeLaborForm();
-    out.laborAddForm.cancelShutsIt =
-      !/data-labor-f=/.test(d.nodes["default-labor-body"].innerHTML);
-  }
-
-  // TYPED, SAVED, AND ON THE LIST.
-  {
-    const { api, dom: d } = build(seed());
-    api.openLaborForm(null);
-    api.setLaborField("name", "  Night shift  ");
-    api.setLaborField("rate", "72.5");
-    api.setLaborField("unit", "days");
-    await api.submitLaborForm();
-    const h = d.nodes["default-labor-body"].innerHTML;
-    out.laborAddSaves = {
-      callCount: api.LABOR_CALLS.length,
-      op: (api.LABOR_CALLS[0] || {}).op,
-      kind: (api.LABOR_CALLS[0] || {}).kind,
-      body: (api.LABOR_CALLS[0] || {}).body,
-      // The rate goes as a NUMBER. A string "72.5" would reach the sheet and the next
-      // multiplication would concatenate -- the exact hazard the item coercion list exists for.
-      rateIsANumber: typeof ((api.LABOR_CALLS[0] || {}).body || {}).rate === "number",
-      rendersTheNewLine: /Night shift/.test(h),
-      // Priced per DAY because that is what was picked, not per hour because that is the default.
-      saysPerDay: /Night shift[\s\S]*?\/ day/.test(h),
-      formClosedAfterSaving: !/data-labor-f="name"/.test(h),
-      inTheModel: api.laborNow().map((r) => r.name),
-    };
-  }
-
-  // WHAT IT REFUSES, and that it refuses BEFORE the request. The API answers 400 on each of these;
-  // reading that back out of a response body is a poor way to learn the name box is empty.
-  {
-    const { api, dom: d } = build(seed());
-    api.openLaborForm(null);
-    api.setLaborField("rate", "10");
-    await api.submitLaborForm();
-    const nameless = d.nodes["default-labor-body"].innerHTML;
-    api.setLaborField("name", "Rigging");
-    api.setLaborField("rate", "-4");
-    await api.submitLaborForm();
-    const negative = d.nodes["default-labor-body"].innerHTML;
-    api.setLaborField("rate", "nope");
-    await api.submitLaborForm();
-    const notANumber = d.nodes["default-labor-body"].innerHTML;
-    out.laborFormRefuses = {
-      nothingWasSent: api.LABOR_CALLS.length === 0,
-      namelessSaysWhy: /class="deferr"/.test(nameless) && /name/.test(nameless),
-      negativeSaysWhy: /less than zero/.test(negative),
-      notANumberSaysWhy: /has to be a number/.test(notANumber),
-      // AND THE TYPING SURVIVES the refusal. A form that cleared itself would make somebody
-      // retype the line to find out it fails a second time.
-      keepsWhatWasTyped: /value="Rigging"/.test(negative),
-      // A unit off the list is refused too: the server refuses it with a 400, and the select is
-      // not the only way this object can come to be filled.
-      unitOffTheListRefused: api.validateLaborForm({ name: "x", rate: "1", unit: "weeks" }) !== "",
-      // A free line is a real answer -- zero is not missing.
-      aGoodOnePasses: api.validateLaborForm({ name: "x", rate: "0", unit: "days" }) === "",
-    };
-  }
-
-  // EDITING GOES TO THAT ROW, not to a second line that looks like it.
-  {
-    const { api, dom: d } = build(seed());
-    api.openLaborForm("L1");
-    const opened = d.nodes["default-labor-body"].innerHTML;
-    api.setLaborField("rate", "61");
-    await api.submitLaborForm();
-    const after = d.nodes["default-labor-body"].innerHTML;
-    out.laborEdit = {
-      preloadsTheName: /value="Prevailing wage"/.test(opened),
-      preloadsTheRate: /value="58.25"/.test(opened),
-      op: (api.LABOR_CALLS[0] || {}).op,
-      patchedThatRow: (api.LABOR_CALLS[0] || {}).id === "L1",
-      body: (api.LABOR_CALLS[0] || {}).body,
-      rowShowsTheNewRate: /\$61\.00/.test(after),
-      // EDITING CHANGES A ROW, it does not add or drop one. Three in, three out.
-      storedLineCount: api.laborNow().length,
-    };
-  }
-
-  // REMOVING TAKES IT OFF THE LIST, and leaves Travel where it was.
-  {
-    const { api, dom: d } = build(seed());
-    await api.removeLaborDefault("L1");
-    const h = d.nodes["default-labor-body"].innerHTML;
-    out.laborRemove = {
-      op: (api.LABOR_CALLS[0] || {}).op,
-      removedThatOne: (api.LABOR_CALLS[0] || {}).id === "L1",
-      goneFromTheList: !/Prevailing wage/.test(h),
-      travelSurvives: /Travel/.test(h),
-      // THE OTHER TWO SURVIVE. This is the assertion a one-row fixture could not make, and
-      // the one that fails if removal takes the whole list instead of the row asked for.
-      othersSurvive: /Supervisor/.test(h) && /Mobilization/.test(h),
-      idsLeftInTheModel: api.laborNow().map(function (r) { return r.id; }),
-    };
-  }
-
-  // A REFUSED WRITE PUTS IT BACK AND SAYS SO. A row that looks removed and returns on the next
-  // reload is worse than one that refuses out loud -- setDefault's own argument.
-  {
-    const { api, dom: d } = build(seed({ LABOR_FAIL: { del: true } }));
-    await api.removeLaborDefault("L1");
-    out.laborRemoveFails = {
+    await api.setDefault("labor", "L1", false);
+    out.laborMakeDefaultFails = {
       putBackOnTheList: /Prevailing wage/.test(d.nodes["default-labor-body"].innerHTML),
-      saidSo: /Couldn't remove/.test(d.nodes["alert"].textContent),
-      // ALL THREE STILL THERE. A refused Remove must put back the one row it took, not
-      // resync to some other count -- with a one-row fixture "1" meant both.
-      stillInTheModel: api.laborNow().length === 3,
-      idsStillInTheModel: api.laborNow().map(function (r) { return r.id; }),
+      stillAFavorite: (api.laborNow().find((r) => r.id === "L1") || {}).favorite === true,
+      saidSo: /Couldn't save that/.test((d.nodes["alert"] || {}).textContent || ""),
     };
   }
+
+  // PER WORK TYPE. A labor default's scope is its own `default_work_types`, pressed on the Labor
+  // tab's chips; the Defaults tab lists it under the work types it applies to and nowhere else.
+  // The press repaints BOTH tables, because the Defaults tab is filtered by exactly this field and
+  // a tab switch does not repaint it.
   {
-    const { api, dom: d } = build(seed({ LABOR_FAIL: { post: true } }));
-    api.openLaborForm(null);
-    api.setLaborField("name", "Rigging");
-    api.setLaborField("rate", "40");
-    await api.submitLaborForm();
-    const h = d.nodes["default-labor-body"].innerHTML;
-    out.laborSaveFails = {
-      keepsTheTypedLine: /value="Rigging"/.test(h),
-      // THE SERVER'S OWN REASON reaches the screen, not a generic apology. Matched on the
-      // stub's message rather than on the page's prefix, because the apostrophe in
-      // "Couldn't" is escaped to &#39; on the way into the row and a test that did not know
-      // that would read as the message being absent.
-      saysWhy: /class="deferr"/.test(h) && /the server said no/.test(h),
-      // THE THREE SEEDED ROWS, UNCHANGED. A refused save must add nothing -- and with a
-      // one-row fixture "1" also meant "the list was replaced by one row", which is a
-      // different bug wearing the same number.
-      notAddedToTheList: api.laborNow().length === 3,
-      noRiggingInTheModel: api.laborNow().every(function (r) { return r.name !== "Rigging"; }),
-      // And it can be pressed again rather than sitting on "Saving" for ever.
-      saveIsPressableAgain: !/data-labor-save disabled/.test(h),
+    const { api, dom: d } = build(seed());
+    const chipFocus = [];
+    d.el("labor-body").querySelector = (sel) => ({ focus() { chipFocus.push(sel); } });
+    api.renderLabor();
+    api.renderDefaultLabor();
+    const shownFirst = /Prevailing wage/.test(d.nodes["default-labor-body"].innerHTML);
+    await api.setRowWorkType("labor", "L1", "gyp", true);
+    const polishAfterPress = d.nodes["default-labor-body"].innerHTML;
+    const tabAfterPress = d.nodes["labor-body"].innerHTML;
+    api.setWorkType("gyp");
+    api.renderDefaultLabor();
+    const gyp = d.nodes["default-labor-body"].innerHTML;
+    out.laborPerWorkType = {
+      shownFirst: shownFirst,
+      wtCall: api.WT_CALLS[0],
+      defaultsRepaintedByThePress: !/Prevailing wage/.test(polishAfterPress),
+      onItsOwnWorkType: /Prevailing wage/.test(gyp),
+      unscopedStayEverywhere: /Supervisor/.test(polishAfterPress) && /Supervisor/.test(gyp),
+      travelOnBoth: /Travel/.test(polishAfterPress) && /Travel/.test(gyp),
+      chipShowsPressed:
+        /aria-pressed="true" data-wt-toggle="labor" data-wt-id="L1" data-wt="gyp"/.test(tabAfterPress),
+      focusBackOnTheChip:
+        chipFocus[chipFocus.length - 1] === '[data-wt-toggle="labor"][data-wt-id="L1"][data-wt="gyp"]',
     };
   }
 
@@ -4172,10 +4211,13 @@ async function laborChecks() {
                 favorite: true, default_work_types: ["epoxy"] }],
       ASMS: [{ id: "a1", name: "Polish only 800", unit: "SF", favorite: true, lines: [],
                default_work_types: ["polish"] }],
+      // BOTH DEFAULTS (`favorite: true`): the Defaults tab lists only a line somebody made one,
+      // so an unmarked row here would vanish from every tab and prove nothing about the filter.
       LABOR: [{ id: "L1", name: "Everywhere wage", rate: 58.25, unit: "hours", guys_auto: false,
-                sort: 0, notes: null, owner_email: "k@w.dev" },
+                sort: 0, notes: null, owner_email: "k@w.dev", favorite: true },
               { id: "L2", name: "Gyp only crew", rate: 62, unit: "hours", guys_auto: false,
-                sort: 1, notes: null, owner_email: "k@w.dev", default_work_types: ["gyp"] }],
+                sort: 1, notes: null, owner_email: "k@w.dev", default_work_types: ["gyp"],
+                favorite: true }],
     }));
     const look = (wt) => {
       api.setWorkType(wt);
@@ -4206,6 +4248,227 @@ async function laborChecks() {
       // TRAVEL IS NEVER FILTERED OUT: every bid is seeded with it whatever tab it sits on.
       travelOnEveryTab: /Travel/.test(polish.labor) && /Travel/.test(epoxy.labor) &&
                         /Travel/.test(gyp.labor),
+    };
+  }
+}
+
+// ── EXECUTED: the Labor tab itself, 2026-09-30 ───────────────────────────────
+// Hanz, 2026-09-22: "we dont have a tab for labor like the items and assemblies so we add a tab
+// like that for all default labor then if we want it to be a default we add it to 'Default items
+// & Assemblies'". So this tab is the whole catalog -- every line, default or not -- and a line
+// made here is NOT a default until the Defaults tab makes it one. Every scenario runs the page's
+// own renderLabor / onLaborEdit / addLaborLine / removeLaborLine; only the network is stubbed.
+async function laborTabChecks() {
+  const lines = () => JSON.parse(JSON.stringify([
+    { id: "travel", name: "Travel", rate: 41.5, unit: "hours", guys_auto: true, sort: -1,
+      notes: null, owner_email: null, favorite: true },
+    { id: "L1", name: "Prevailing wage", rate: 58.25, unit: "hours", guys_auto: false, sort: 0,
+      notes: "Davis-Bacon jobs", owner_email: "kyle@wetreadwell.com", favorite: true },
+    { id: "L9", name: "Rigging", rate: 40, unit: "days", guys_auto: false, sort: 1,
+      notes: null, owner_email: "kyle@wetreadwell.com", favorite: false },
+  ]));
+  const seed = (extra) => Object.assign({
+    window: { TWPolishBid: require(path.join(ROOT, "js", "polish-bid-core.js")) },
+    ITEMS: [{ id: "i1", name: "Densifier", unit: "Pail", unit_cost: 100, favorite: true }],
+    ASMS: [{ id: "a1", name: "Polish 800", unit: "SF", favorite: true, lines: [{ item_id: "i1" }] }],
+    LABOR: lines(),
+    ADMIN: true,
+  }, extra || {});
+  const rowsOf = (h) => h.split("</tr>").filter((r) => /<tr/.test(r));
+  const rowOf = (h, id) => rowsOf(h).find((r) => r.indexOf('data-labor="' + id + '"') !== -1) || "";
+  const idsIn = (h) => rowsOf(h).map((r) => (/data-labor="([^"]+)"/.exec(r) || [])[1]);
+
+  // THE CATALOG, FOR AN ADMIN: every line, whether or not it is a default, each editable in place.
+  {
+    const { api, dom: d } = build(seed());
+    api.renderLabor();
+    const h = d.nodes["labor-body"].innerHTML;
+    const unitSelect = (rowOf(h, "L1").match(/<select data-f="unit"[\s\S]*?<\/select>/) || [""])[0];
+    out.laborTab = {
+      ids: idsIn(h),
+      nameIsEditable: /data-f="name" class="cell-name" value="Rigging"/.test(rowOf(h, "L9")),
+      rateIsEditable: /data-f="rate" class="num cell-rate" value="40"/.test(rowOf(h, "L9")),
+      notesAreEditable: /data-f="notes" class="cell-note" value="Davis-Bacon jobs"/.test(rowOf(h, "L1")),
+      unitOptions: (unitSelect.match(/<option value="[^"]*"/g) || []).map((s) => s.split('"')[1]),
+      daysSelectedOnADayLine: /<option value="days" selected>/.test(rowOf(h, "L9")),
+      customLinesCanBeDeleted: /data-del-labor="L1"/.test(rowOf(h, "L1")) &&
+        /data-del-labor="L9"/.test(rowOf(h, "L9")),
+      travelCannotBeDeleted: !/data-del-labor/.test(rowOf(h, "travel")),
+      travelRateIsEditable: /data-f="rate" class="num cell-rate" value="41.5"/.test(rowOf(h, "travel")),
+      travelHasNoChips: !/data-wt-toggle/.test(rowOf(h, "travel")) &&
+        /Every estimate/.test(rowOf(h, "travel")),
+      customLinesHaveChips: /data-wt-toggle="labor" data-wt-id="L9"/.test(rowOf(h, "L9")),
+      moreStartsShut: !/class="labor-more"/.test(h),
+      badge: d.nodes["n-labor"].textContent,
+      emptyHidden: d.nodes["labor-empty"].hidden === true,
+      addShown: d.nodes["labor-addrow"].hidden === false,
+      readOnlyNoteHidden: d.nodes["labor-ro"].hidden === true,
+    };
+  }
+
+  // A NON-ADMIN READS IT AND IS HANDED NOTHING THAT WOULD 403 -- every write to library_labor is
+  // `_require_admin`, the same rule the Administration lists render text for.
+  {
+    const { api, dom: d } = build(seed({ ADMIN: false }));
+    api.renderLabor();
+    const h = d.nodes["labor-body"].innerHTML;
+    out.laborTabReadOnly = {
+      listsEveryLine: idsIn(h),
+      showsTheRates: /\$58\.25 \/ hr/.test(h) && /\$40\.00 \/ day/.test(h),
+      noInputs: !/<input/.test(h) && !/<select/.test(h),
+      noControls: !/data-del-labor/.test(h) && !/data-labor-more-toggle/.test(h) &&
+        !/data-wt-toggle/.test(h),
+      addHidden: d.nodes["labor-addrow"].hidden === true,
+      saysWhy: d.nodes["labor-ro"].hidden === false,
+    };
+  }
+
+  // NOTHING IN THE CATALOG: the empty state, whose own button is an admin's like the top one.
+  {
+    const run = (admin) => {
+      const { api, dom: d } = build(seed({ ADMIN: admin, LABOR: [] }));
+      const first = { hidden: false };
+      d.el("labor-empty").querySelector = (sel) => (sel === "[data-add-labor]" ? first : null);
+      api.renderLabor();
+      return { emptyShown: d.nodes["labor-empty"].hidden === false,
+               topAddHidden: d.nodes["labor-addrow"].hidden === true,
+               firstAddHidden: first.hidden, badge: d.nodes["n-labor"].textContent };
+    };
+    out.laborTabEmpty = { admin: run(true), nonAdmin: run(false) };
+  }
+
+  // ADD: a POST that names no `favorite`, the new row first on the tab and NOT on the Defaults
+  // tab, and the caret in its name box.
+  {
+    const { api, dom: d } = build(seed());
+    const asked = [];
+    d.el("labor-body").querySelector = (sel) => {
+      asked.push(sel);
+      return { focus() { d.focused.push("q:" + sel); }, select() {} };
+    };
+    api.renderDefaultLabor();
+    await api.addLaborLine();
+    const call = api.LABOR_CALLS[0] || {};
+    out.laborTabAdd = {
+      callCount: api.LABOR_CALLS.length,
+      op: call.op, kind: call.kind, body: call.body,
+      sendsNoFavorite: !Object.prototype.hasOwnProperty.call(call.body || {}, "favorite"),
+      firstInTheModel: (api.laborNow()[0] || {}).id,
+      firstOnTheTab: idsIn(d.nodes["labor-body"].innerHTML)[0],
+      notOnTheDefaultsTab: !/New labor line/.test(d.nodes["default-labor-body"].innerHTML),
+      badge: d.nodes["n-labor"].textContent,
+      caretInTheNewName: d.focused.indexOf('q:[data-labor="new1"] input[data-f="name"]') !== -1,
+    };
+  }
+  {
+    const { api, dom: d } = build(seed({ LABOR_FAIL: { post: true } }));
+    await api.addLaborLine();
+    out.laborTabAddFails = {
+      saidWhy: /Couldn't add that labor line\. the server said no/.test(d.nodes["alert"].textContent),
+      nothingAdded: api.laborNow().map((r) => r.id),
+    };
+  }
+
+  // EDIT IN PLACE: each field queues a PATCH of the row it came from, never a POST; the Labor tab
+  // is NOT redrawn under the caret; the Defaults tab IS, because it shows the same row.
+  {
+    const { api, dom: d } = build(seed());
+    const ev = (id, f, value, checked) => ({ target: {
+      getAttribute: (k) => (k === "data-f" ? f : null),
+      closest: (sel) => (sel === "[data-labor]" ? { getAttribute: () => id } : null),
+      value: value, checked: !!checked } });
+    api.renderLabor();
+    api.renderDefaultLabor();
+    const tabBefore = d.nodes["labor-body"].innerHTML;
+    api.onLaborEdit(ev("L1", "rate", "61"));
+    api.onLaborEdit(ev("L1", "name", "Prevailing wage KS"));
+    api.onLaborEdit(ev("travel", "rate", "37.25"));
+    api.onLaborEdit(ev("L9", "guys_auto", "on", true));
+    api.onLaborEdit(ev("L9", "unit", "hours"));
+    api.onLaborEdit(ev("L9", "sort", "4"));
+    const q = api.QUEUED.filter((c) => c.kind === "labor");
+    const defaults = d.nodes["default-labor-body"].innerHTML;
+    const L1 = api.laborNow().find((r) => r.id === "L1") || {};
+    const L9 = api.laborNow().find((r) => r.id === "L9") || {};
+    out.laborTabEdit = {
+      queued: q.map((c) => ({ id: c.id, body: c.body })),
+      modelTakesTheNumber: L1.rate === 61 && L9.sort === 4,
+      modelTakesTheCheckbox: L9.guys_auto === true,
+      noPostOrDelete: api.LABOR_CALLS.length === 0,
+      noFavoriteInAnyBody: q.every((c) => !Object.prototype.hasOwnProperty.call(c.body, "favorite")),
+      tabNotRedrawnUnderTheCaret: d.nodes["labor-body"].innerHTML === tabBefore,
+      defaultsTabShowsTheNewName: /Prevailing wage KS/.test(defaults) && /\$61\.00/.test(defaults),
+      defaultsTabShowsTravelsNewRate: /\$37\.25/.test(defaults),
+      notADefaultStaysOff: !/Rigging/.test(defaults),
+    };
+  }
+
+  // MORE: guys_auto and the position open under their own row, and the focus comes back to the
+  // toggle the redraw replaced. Opening it saves nothing.
+  {
+    const { api, dom: d } = build(seed());
+    d.el("labor-body").querySelector = (sel) => ({ focus() { d.focused.push(sel); } });
+    api.renderLabor();
+    api.toggleLaborMore("L1");
+    const open = d.nodes["labor-body"].innerHTML;
+    const focusAfterOpen = d.focused[d.focused.length - 1];
+    api.toggleLaborMore("L1");
+    const shut = d.nodes["labor-body"].innerHTML;
+    out.laborTabMore = {
+      opensUnderItsRow: /data-labor="L1" class="labor-more"/.test(open),
+      onlyThatRow: (open.match(/class="labor-more"/g) || []).length === 1,
+      hasGuysAuto: /type="checkbox" data-f="guys_auto"/.test(open),
+      hasPosition: /data-f="sort" class="num" value="0"/.test(open),
+      saysLess: /aria-expanded="true"[^>]*>Less</.test(open),
+      focusBackOnTheToggle: focusAfterOpen === '[data-labor-more-toggle="L1"]',
+      shutsAgain: !/class="labor-more"/.test(shut),
+      savesNothing: api.QUEUED.length === 0 && api.LABOR_CALLS.length === 0,
+    };
+  }
+
+  // DELETE: asked first, a soft DELETE of that one row, its queued edit dropped, the rest kept --
+  // and Travel refused before anybody is even asked.
+  {
+    const asked = [];
+    const { api, dom: d } = build(seed({
+      TW: { confirmDanger: (o) => { asked.push(o); return Promise.resolve(true); } } }));
+    api.setPending("labor:L9", { rate: "44" });
+    await api.removeLaborLine("travel");
+    await api.removeLaborLine("L9");
+    out.laborTabDelete = {
+      askedOnce: asked.length,
+      askedAboutThatLine: (asked[0] || {}).name,
+      calls: api.LABOR_CALLS,
+      left: api.laborNow().map((r) => r.id),
+      goneFromTheTab: !/data-labor="L9"/.test(d.nodes["labor-body"].innerHTML),
+      queuedEditDropped: !Object.prototype.hasOwnProperty.call(api.pendingNow(), "labor:L9"),
+    };
+  }
+  {
+    const { api } = build(seed({ TW: { confirmDanger: () => Promise.resolve(false) } }));
+    await api.removeLaborLine("L1");
+    out.laborTabDeleteCancelled = { calls: api.LABOR_CALLS.length,
+                                    left: api.laborNow().map((r) => r.id) };
+  }
+  {
+    const { api, dom: d } = build(seed({ LABOR_FAIL: { del: true },
+                                         TW: { confirmDanger: () => Promise.resolve(true) } }));
+    await api.removeLaborLine("L1");
+    out.laborTabDeleteFails = {
+      left: api.laborNow().map((r) => r.id),
+      saidWhy: /Couldn't remove that labor line\. the server said no/.test(d.nodes["alert"].textContent),
+    };
+  }
+
+  // EDIT ON A LABOR DEFAULT LANDS HERE: focusLaborRow puts the caret in that row's name box.
+  {
+    const { api, dom: d } = build(seed());
+    d.el("labor-body").querySelector = (sel) => ({ focus() { d.focused.push(sel); } });
+    api.focusLaborRow("L1");
+    out.laborTabFocus = {
+      focused: d.focused[d.focused.length - 1],
+      routerSendsEditHere:
+        /ek === "labor"\) \{ showView\("labor"\); paint\(\); focusLaborRow\(eid\); \}/.test(src),
     };
   }
 }
@@ -4256,7 +4519,8 @@ out.page = {
       // placeholder has to read as adding rather than narrowing -- the same box worded the other
       // way is a different feature that happens to look identical.
       search: /id="default-q"/.test(pane),
-      searchIsForAdding: /placeholder="Search materials and assemblies to add"/.test(pane),
+      searchIsForAdding:
+        /placeholder="Search materials, assemblies and labor lines to add"/.test(pane),
       searchAboveTheLists: pane.indexOf('id="default-q"') < pane.indexOf('class="admin-grid"'),
       // THE RESULTS BOX LIVES WITH THE ROWS, not with the input. It shipped as a
       // <span class="hits"> inside .itemsearch -- a flex ROW -- so the list of things you were
@@ -4299,6 +4563,27 @@ out.page = {
   })(),
   noCoverageSfHeader: !/Coverage \(SF\)/.test(html),
   noRoleHeader: !/<th[^>]*>Role<\/th>/.test(html),
+  // THE LABOR TAB, 2026-09-30: where it sits in the strip, and what its pane holds.
+  laborTab: (function () {
+    var pane = (html.split('<section id="pane-labor"')[1] || "").split("</section>")[0];
+    return {
+      tab: /id="tab-labor"[^>]*aria-controls="pane-labor"/.test(html),
+      label: (/id="tab-labor"[^>]*>([^<]*)</.exec(html) || [])[1] || "",
+      badge: /id="n-labor"/.test(html),
+      afterAssemblies: html.indexOf('id="tab-labor"') > html.indexOf('id="tab-asm"'),
+      beforeAdministration: html.indexOf('id="tab-labor"') < html.indexOf('id="tab-vendors"'),
+      paneStartsHidden: /<section id="pane-labor"[^>]*\shidden/.test(html),
+      headers: (pane.match(/<th[^>]*>([^<]*)<\/th>/g) || []).map(function (t) {
+        return t.replace(/<[^>]+>/g, "");
+      }),
+      body: /id="labor-body"/.test(pane),
+      emptyState: /id="labor-empty"[^>]*hidden/.test(pane),
+      addButtons: (pane.match(/data-add-labor>/g) || []).length,
+      addRowIsAbove: pane.indexOf('id="labor-addrow"') < pane.indexOf('id="labor-body"'),
+      readOnlyNoteStartsHidden: /id="labor-ro"[^>]*hidden/.test(pane),
+      saysItIsNotADefault: /not on any\s+new bid until you add it under/.test(pane),
+    };
+  })(),
 };
 
 
@@ -4557,7 +4842,7 @@ const watchdog = setTimeout(() => {
   process.exit(1);
 }, 30000);
 
-Promise.all([conflictChecks(), dialogChecks(), laborChecks(),
+Promise.all([conflictChecks(), dialogChecks(), laborChecks(), laborTabChecks(),
              conditionChecks()]).then(
   () => { clearTimeout(watchdog); console.log(JSON.stringify(out)); },
   (err) => { clearTimeout(watchdog); console.error(err); process.exit(1); });

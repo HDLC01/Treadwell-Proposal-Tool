@@ -92,8 +92,11 @@ ITEM_WRITABLE = ("name", "category", "divisions", "unit", "buy_qty", "unit_cost"
 ASM_WRITABLE = ("name", "category", "description", "unit", "lines", "default_work_types")
 VENDOR_WRITABLE = ("name", "notes")
 REF_WRITABLE = ("name", "notes")
+# `favorite` IS LISTED FOR LABOR (2026-09-30): it is the whole of "is this line a default", the
+# Defaults tab writes it by PATCH, and test_every_writable_field_survives_its_request_model only
+# guards the fields named here -- an undeclared `favorite` on LibraryLaborIn would 200 and drop.
 LABOR_WRITABLE = ("name", "rate", "unit", "guys_auto", "sort", "notes",
-                  "default_work_types")
+                  "default_work_types", "favorite")
 
 DEFAULT_ITEM_UNIT = "Gallon"    # what Kyle's sheet buys most things by
 DEFAULT_ASM_UNIT = "SF"         # what a system is priced per
@@ -1174,6 +1177,18 @@ def validate_labor(payload: Dict[str, Any], *, partial: bool = False) -> Dict[st
     if "notes" in payload or not partial:
         out["notes"] = _clean_text(payload.get("notes"), _MAX_NOTES) or None
 
+    # SHARED/TEAM-WIDE, NOT PER-USER — same posture as an item's `favorite`, and the same coercion:
+    # any truthy/falsy value means exactly what it says, and there is no invalid value to reject.
+    # THE DEFAULT DIFFERS BY WHERE IT COMES FROM, not by anything this function does — this line
+    # only ever writes what the caller sent. A brand new row created through POST /api/library/labor
+    # arrives here with no `favorite` key touched by hand, so `payload.get("favorite")` reads None,
+    # `bool(None)` is False, and the row is created NOT a default — the column's own default (set
+    # false in the schema's second ALTER) agrees, so the two cannot disagree with each other. An
+    # EXISTING row's favorite is only ever true because the migration's first ALTER backfilled it,
+    # or because somebody has since favorited it on the Defaults tab — this function never invents
+    # a "yes" on its own.
+    if "favorite" in payload or not partial:
+        out["favorite"] = bool(payload.get("favorite"))
     if "default_work_types" in payload:
         out["default_work_types"] = _coerce_work_types(payload.get("default_work_types"))
     return out
@@ -1189,6 +1204,13 @@ def _shape_labor(row: Dict[str, Any]) -> Dict[str, Any]:
         "rate": _as_float(row.get("rate")) or 0.0,
         "unit": row.get("unit") or DEFAULT_LABOR_UNIT,
         "guys_auto": bool(row.get("guys_auto")),
+        # A row written before this column existed — anything read before the migration's first
+        # ALTER runs — has no `favorite` key at all, and `bool(None)` reads that as False. That is
+        # the WRONG answer for Travel and every row typed before the Labor tab existed, which is
+        # exactly why the migration backfills them to true in the same breath it adds the column:
+        # this function only ever reports what the store holds, it does not itself decide what an
+        # absent value should mean the way `_coerce_work_types([])` does for work types.
+        "favorite": bool(row.get("favorite")),
         "default_work_types": _coerce_work_types(row.get("default_work_types")),
         "sort": int(_as_float(row.get("sort")) or 0),
         "notes": row.get("notes") or "",
@@ -1289,7 +1311,21 @@ def delete_labor(labor_id: str) -> bool:
 
     A rate somebody typed by hand is reference data, and an estimate that already used this line
     carries its own copy of the number — so removing it from the list must not, and does not,
-    reach back into a bid that was built with it."""
+    reach back into a bid that was built with it.
+
+    TRAVEL IS REFUSED, FAIL-CLOSED, BEFORE THE EXISTENCE CHECK EVEN RUNS. It is the one row
+    anything can address Travel by — `travelSeed()` in polish-bid-core.js falls back to its own
+    $33.00/hr the moment this table stops answering with a `travel` row, and `migrateModel` finds
+    Travel on every saved draft by that exact id — so a soft delete here would not remove Travel
+    from a single estimate, it would only take away the one thing that makes it editable. The
+    Labor tab already hides the delete icon for this row (a UI nicety, and only that: a browser
+    is not a trust boundary), so this is the check that actually holds if that ever slips, a
+    caller goes around the tab, or a future admin screen forgets to ask the same question. See
+    `test_deleting_travel_is_refused_not_silently_soft_deleted` in test_library_labor.py."""
+    if labor_id == "travel":
+        raise ValidationError(
+            "Travel is built into every estimate and can't be deleted — reset it back to the "
+            "shipped rate instead.")
     sb = get_client()
     cur = (sb.table(LABOR).select("id")
            .eq("id", labor_id).is_("deleted_at", "null").limit(1).execute())

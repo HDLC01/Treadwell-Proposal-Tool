@@ -131,15 +131,16 @@
        takeoff conditions are built in; bond is read only because the Markup page owns it. */
     .builtin { font:600 10.5px var(--ui); color:var(--ink-v); letter-spacing:.04em;
        text-transform:uppercase; }
-    /* THE LABOR FORM, WHICH IS A ROW IN THE TABLE rather than a panel above it. Hanz asked
-       on 2026-09-17 for the takeoff picker to open "within the line item instead of up
-       above", and a form for a labor line has the same answer only louder: it opens where
-       the line will be, with the columns it will fill, so what you type is laid out as what
-       you will read back. A modal would say the opposite -- that this is a trip elsewhere. */
-    .defform > td { background:var(--surf-low); }
-    .defform input, .defform select { width:100%; font-size:12.5px; padding:5px 8px; }
-    .defform .n input { text-align:right; }
-    .deferr { margin:0; padding:2px 0 0; color:var(--red-dark); font-size:12px; }
+    /* THE LABOR TAB'S "MORE" ROW -- guys_auto and sort, the two fields Hanz's own design puts
+       behind progressive disclosure rather than as headline columns: name, rate, unit and notes
+       are what somebody reads on sight, and how a Guys column is filled in and where a line sorts
+       are decisions made once and rarely revisited. A second <tr>, not a fifth column, for the
+       same reason the labor form used to be a row rather than a panel: it opens where the line
+       already is. */
+    .labor-more > td { background:var(--surf-low); padding:8px 12px; }
+    .morefield { display:inline-flex; align-items:center; gap:6px; font-size:12.5px;
+       color:var(--ink-v); margin-right:20px; }
+    .morefield input[type="number"] { width:70px; }
     /* A SUB-HEADING INSIDE THE TABLE, not a row pretending to be one. Left-aligned and
        quiet: it is a signpost over rows that carry the actual content, so it must not
        out-shout the names beneath it. The first one drops its top border -- a rule directly
@@ -673,6 +674,11 @@
               aria-controls="pane-items">Items<span class="n" id="n-items"></span></button>
       <button type="button" role="tab" id="tab-asm" aria-selected="true"
               aria-controls="pane-asm">Assemblies<span class="n" id="n-asm"></span></button>
+      <!-- RIGHT AFTER ASSEMBLIES, BEFORE ADMINISTRATION -- every labor line Treadwell has typed,
+           the same peer Items and Assemblies already are to each other, rather than a form buried
+           inside the Defaults tab. See the note over #pane-labor for what this tab is and is not. -->
+      <button type="button" role="tab" id="tab-labor" aria-selected="false"
+              aria-controls="pane-labor">Labor<span class="n" id="n-labor"></span></button>
       <button type="button" role="tab" id="tab-vendors" aria-selected="false"
               aria-controls="pane-vendors">Administration</button>
       <button type="button" role="tab" id="tab-defaults" aria-selected="false"
@@ -807,6 +813,59 @@
         changed — correcting a spelling doesn't make a number newer.</p>
     </section>
 
+    <!-- ── Labor, 2026-09-24 ──────────────────────────────────────────────
+         Hanz: "we dont have a tab for labor like the items and assemblies so we add a tab like
+         that for all default labor then if we want it to be a default we add it to 'Default
+         items & Assemblies'." EVERY LABOR LINE THE CATALOG HOLDS, a peer to Items and Assemblies
+         rather than a form buried in the Defaults tab or a fourth Administration list -- creating
+         a labor TYPE and flagging it as a DEFAULT are two separate, sequential actions on two
+         different tabs, and this is the first of them. Modeled on Items: a flat, always-editable
+         inline table, not Assemblies' card-rail-with-nested-editor shape, because a labor line
+         has no sub-list of its own the way an assembly's lines do.
+
+         WHETHER A ROW HERE IS A DEFAULT lives on the Default Items & Assemblies tab, in its own
+         Labor section, which favorites off this same catalog the same way Items and Assemblies
+         already let a row be favorited there -- see #default-labor in that pane. This tab never
+         filters on `favorite`; it is the whole catalog, on purpose. -->
+    <section id="pane-labor" role="tabpanel" aria-labelledby="tab-labor" hidden>
+      <p class="paneintro"><b>Every labor line Treadwell bills.</b> A line added here is not on any
+        new bid until you add it under <b>Default Items &amp; Assemblies</b>.</p>
+      <p class="ronote" id="labor-ro" hidden>You can see these rates. Adding, changing and removing
+        labor lines is admin-only - ask Hanz or Kyle.</p>
+      <div class="card">
+        <div class="addrow" id="labor-addrow">
+          <button class="addbtn" type="button" data-add-labor>
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                 aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"></path></svg>
+            Add labor line</button>
+        </div>
+        <div class="tw">
+          <table class="items-table">
+            <thead>
+              <tr>
+                <th>Line</th><th class="n">Rate</th><th>Unit</th><th>Notes</th>
+                <th>Work types</th><th class="w-act"></th>
+              </tr>
+            </thead>
+            <!-- FILLED BY renderLabor(). Travel is a row here too, fully editable — the delete
+                 icon is the one control withheld for it (id === "travel"), matching the server's
+                 own fail-closed refusal in delete_labor(). guys_auto and sort sit behind the
+                 "More" toggle rather than as headline columns; name, rate, unit and notes are
+                 what an estimator scans this table for. -->
+            <tbody id="labor-body"></tbody>
+          </table>
+        </div>
+        <div id="labor-empty" class="empty" hidden>
+          <h3>No labor lines yet</h3>
+          <p>Travel is seeded into every estimate the tool itself ships with. Add a rate for
+            anything else Treadwell bills by the hour or the day — mobilization, a night shift
+            premium, a second crew.</p>
+          <button class="btn" type="button" data-add-labor>Add your first labor line</button>
+        </div>
+      </div>
+    </section>
+
     <!-- ── Vendors ────────────────────────────────────────────────────── -->
     <section id="pane-vendors" role="tabpanel" aria-labelledby="tab-vendors" hidden>
       <p class="paneintro"><b>Administration lists.</b> These are the Division, Unit and Vendor
@@ -922,8 +981,9 @@
           <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
                stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
                focusable="false"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.6-3.6"></path></svg>
-          <input id="default-q" type="search" placeholder="Search materials and assemblies to add"
-                 aria-label="Search the library for a material or assembly to make a default"
+          <input id="default-q" type="search"
+                 placeholder="Search materials, assemblies and labor lines to add"
+                 aria-label="Search the library for a material, assembly or labor line to make a default"
                  autocomplete="off" />
         </span>
       </div>
@@ -1021,20 +1081,20 @@
           <h2>Labor</h2>
           <div class="card">
             <!-- AT THE TOP, same ask and same reason as Takeoff above: the control that adds
-                 a line should not be behind every line already added. -->
-            <!-- NOT OPTIONAL ON THIS ONE. Labor lines are not library rows -- there is no Labor
-                 tab to switch anything on from, and nothing for the search above to return. They
-                 are typed here, so this button is the only way a labor default gets made.
+                 a default should not be behind every one already added.
 
-                 IT OPENS A FORM IN THE TABLE ABOVE, not a dialog. It shipped with no handler at
-                 all on 2026-09-17 because nothing stored a custom labor line; library_labor does
-                 now, and renderDefaultLabor draws the form as the row it is about to become. -->
+                 OPENS THE SHARED BROWSE NOW, 2026-09-24 -- not a form. A labor TYPE is created on
+                 its own Labor tab, beside Assemblies; this button only ever makes an EXISTING
+                 type a default, which is what the search-and-browse box above the grid already
+                 does for a material or an assembly. Its own label stays because it says which
+                 list somebody meant to sit down and fill in, even though the mechanism it opens
+                 is the one Takeoff already uses. -->
             <div class="addrow" id="default-labor-addrow" data-addrow-default="labor">
               <button class="addbtn" type="button" data-add-default="labor">
                 <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
                      stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
                      aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"></path></svg>
-                Add a labor line</button>
+                Add a labor default</button>
             </div>
             <div class="tw">
               <table>
@@ -1043,13 +1103,17 @@
                 <!-- FILLED BY renderDefaultLabor(). Travel is already in here before anybody adds
                      anything: it is the labor default the estimate has always had, seeded into
                      every new bid and appended to every old one. It was just never SHOWN as a
-                     default, which is what made it look hardcoded rather than chosen. -->
+                     default, which is what made it look hardcoded rather than chosen. Every OTHER
+                     row is a favorited line off the Labor tab -- see that tab (and its own
+                     #pane-labor note) for where a labor TYPE is created and edited; this table
+                     only ever says which of them a new bid opens holding. -->
                 <tbody id="default-labor-body"></tbody>
               </table>
             </div>
             <div id="default-labor-empty" class="empty" hidden>
               <h3>Nothing set yet</h3>
-              <p>The labor lines a new estimate opens with.</p>
+              <p>The labor lines a new estimate opens with, beside Travel. Add one from the
+                Labor tab's lines with the button above.</p>
             </div>
           </div>
         </div>

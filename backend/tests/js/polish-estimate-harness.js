@@ -2328,11 +2328,16 @@ const rendered = [];      // every string the page put on screen, for the Labour
   {
     // Shaped the way GET /api/library/labor returns them: `name` not `label`, a numeric that can
     // arrive as TEXT out of PostgREST, and a `sort` the server has already ordered by.
+    //
+    // BOTH `favorite: true`, 2026-09-24. The Labor tab lets a labor TYPE exist without being a
+    // DEFAULT, so seedLibraryLabor only seeds a favorited row now -- these two are marked the way
+    // an admin favorites one on the Defaults tab, which is what every assertion below expects a
+    // brand new bid to open holding.
     const LIB = [
       { id: "lab-densify", name: "Densify", rate: "40.00", unit: "days", guys_auto: false,
-        sort: 0, notes: null, owner_email: "hanz@wetreadwell.com" },
+        sort: 0, notes: null, owner_email: "hanz@wetreadwell.com", favorite: true },
       { id: "lab-night", name: "Night shift premium", rate: 12.5, unit: "hours", guys_auto: true,
-        sort: 1, notes: "after 6pm", owner_email: "hanz@wetreadwell.com" },
+        sort: 1, notes: "after 6pm", owner_email: "hanz@wetreadwell.com", favorite: true },
     ];
     /** The names the LABOR STEP actually put on screen, read off the inputs it rendered. */
     const onScreen = (built) => built.doc.querySelectorAll('[data-lab][data-k="label"]')

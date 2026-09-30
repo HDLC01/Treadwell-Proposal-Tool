@@ -402,6 +402,24 @@ alter table public.library_items      add column if not exists default_work_type
 alter table public.library_assemblies add column if not exists default_work_types jsonb not null default '[]'::jsonb;
 alter table public.library_labor      add column if not exists default_work_types jsonb not null default '[]'::jsonb;
 
+-- THE LABOR TAB'S OWN FAVORITE, 2026-09-24 (Hanz: "we dont have a tab for labor like the items
+-- and assemblies so we add a tab like that for all default labor then if we want it to be a
+-- default we add it to 'Default items & Assemblies'"). `library_items` and `library_assemblies`
+-- got this column already; `library_labor` did not, because until now EVERY row in this table
+-- behaved as a default -- there was no other tab a custom labor line could come from. The new
+-- Labor tab changes that: a labor type can now exist without being a default, so the table needs
+-- the same flag the other two already carry.
+--
+-- TWO STEPS ON PURPOSE, NOT ONE. Step one backfills every row that exists RIGHT NOW -- Travel,
+-- plus anything already typed into the Defaults tab's old labor form -- to `true`, which is the
+-- only reading that does not un-default something Kyle is already bidding with. Step two then
+-- moves the DEFAULT for anything inserted AFTER this runs to `false`, which is what makes
+-- "create a labor type" and "make it a default" two separate presses on two separate tabs rather
+-- than the same one. A single-step `default false` ALTER would silently un-default every row
+-- that already exists the instant it ran -- do not collapse this back into one line.
+alter table public.library_labor add column if not exists favorite boolean not null default true;
+alter table public.library_labor alter column favorite set default false;
+
 -- ── Items and Assemblies, 2026-08-15 (Hanz) ───────────────────────────────
 -- Additive only, and safe to run against a database that already holds BETA rows.
 --
