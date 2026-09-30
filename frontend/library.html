@@ -127,8 +127,9 @@
     /* .linkish carried its own margin-right; .btn does not. Scoped to the Defaults pane so
        the Items tab's icon-button pairs (already spaced by their own gap) are untouched. */
     #pane-defaults .rowact .btn + .btn { margin-left:6px; }
-    /* What a row nobody can change here says instead of an empty cell. Travel and the three
-       takeoff conditions are built in; bond is read only because the Markup page owns it. */
+    /* What a row nobody can change here says instead of an empty cell -- and the Items tab's
+       Remove existing joint filler row, whose cost cell says "No material cost" instead of a box,
+       because it buys nothing (it is a labor modifier, priced on the Labor step). */
     .builtin { font:600 10.5px var(--ui); color:var(--ink-v); letter-spacing:.04em;
        text-transform:uppercase; }
     /* THE LABOR TAB'S "MORE" ROW -- guys_auto and sort, the two fields Hanz's own design puts

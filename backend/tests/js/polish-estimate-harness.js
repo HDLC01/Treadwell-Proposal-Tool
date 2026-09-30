@@ -1960,17 +1960,24 @@ const rendered = [];      // every string the page put on screen, for the Labour
         unit_cost: 500, coverage: 3500, waste_pct: 0, roundup: true },
       { id: "dye", name: "Dye, per coat", unit: "SF", buy_qty: 1,
         unit_cost: 0.14, coverage: 1, waste_pct: 0, roundup: false },
+      // THE THIRD RESERVED ROW, 2026-10-01 (Hanz: "All 3 exactly like materials"). It BUYS
+      // NOTHING -- no cost, no coverage -- and nothing on this page prices off it: remove-existing
+      // is a labor modifier, priced on the Labor step. It is in the seed so every identity below
+      // runs WITH it present, which is the proof that it changes no price.
+      { id: "remove-existing-jf", name: "Remove existing joint filler", unit: "SF", buy_qty: 1,
+        unit_cost: null, coverage: null, waste_pct: 0, roundup: false },
     ];
     const seeded = (over) => ITEMS.concat(RESERVED_SEED.map((r) =>
       Object.assign({}, r, (over || {})[r.id] || {})));
 
     // One SF row with no assembly behind it: it gives the job its area and prices nothing, so the
     // material total is dye + joint filler and nothing else. Both conditions ON unless `off`.
-    async function priced(items, sf, off) {
+    async function priced(items, sf, off, rem) {
       const model = clone(MODEL);
       model.takeoff = [{ assembly_id: "", assembly_name: "", measurement: sf, unit: "SF" }];
       model.conditions = Object.assign({}, model.conditions,
-                                       { dye: !off, joint_filler: !off });
+                                       { dye: !off, joint_filler: !off },
+                                       rem ? { remove_existing_jf: true } : {});
       const b = build({ blob: blob({ polish_estimate: model }), items: items });
       await b.api.init();
       b.api.go(0);
@@ -2032,7 +2039,16 @@ const rendered = [];      // every string the page put on screen, for the Labour
     const typedKit = tp.api.model().takeoff[0].item_id;
     tp.api.setPick(0, "OPF");
     const typedOrdinary = tp.api.model().takeoff[0].item_id;
-    const typedPick = { dye: typedDye, kit: typedKit, ordinary: typedOrdinary };
+    tp.api.setPick(0, "Remove existing joint filler");
+    const typedRem = tp.api.model().takeoff[0].item_id;
+    const typedPick = { dye: typedDye, kit: typedKit, ordinary: typedOrdinary, rem: typedRem };
+
+    // REMOVE-EXISTING ON AS WELL, with its reserved row and without: the row prices nothing, so
+    // the bid is the same to the cent either way, and the material total is what it is with
+    // remove-existing off -- it is a labor modifier, never a material.
+    const remWithRow = await priced(seeded(), 12000, false, true);
+    const remWithoutRow = await priced(ITEMS, 12000, false, true);
+    const remOff = await priced(seeded(), 12000);
 
     // NEVER A TAKEOFF ROW: not in the picker's list, and not resolved by typing the name out.
     const p = build({ items: seeded() });
@@ -2058,11 +2074,17 @@ const rendered = [];      // every string the page put on screen, for the Labour
       renamed: renamed.renamedCard, notRenamedByDefault: oneKit.renamedCard,
       dyeNotInPicker: names.indexOf("Dye, per coat") === -1,
       jointFillerNotInPicker: names.indexOf("Joint filler, 10 gal kit") === -1,
+      removeExistingNotInPicker: names.indexOf("Remove existing joint filler") === -1,
       ordinaryItemsStillListed: names.indexOf("OPF") !== -1 && names.indexOf("Densifier") !== -1,
       typedNameResolvesToNothing: p.api.itemByName("Dye, per coat") === null &&
-        p.api.itemByName("joint filler, 10 gal kit") === null,
+        p.api.itemByName("joint filler, 10 gal kit") === null &&
+        p.api.itemByName("Remove existing joint filler") === null,
       ordinaryNameStillResolves: (p.api.itemByName("OPF") || {}).id === "i1",
       typedPick: typedPick,
+      removeExisting: { withRow: { material: remWithRow.material, total: remWithRow.total },
+                        withoutRow: { material: remWithoutRow.material,
+                                      total: remWithoutRow.total },
+                        offMaterial: remOff.material },
     };
 
     // ── WHAT A SAVE HANDS KYLE'S WORKBOOK ──
@@ -2505,6 +2527,16 @@ const rendered = [];      // every string the page put on screen, for the Labour
     delete noKey.polish_estimate;
     const brandNew = build({ blob: noKey, conditionDefaults: COND });
     await brandNew.api.init();
+    // THE SAME BRAND-NEW PROJECT WITH ALL THREE RESERVED ROWS IN THE LIBRARY. 2026-10-01 made
+    // remove-existing a library row beside dye and the kit (Hanz: "All 3 exactly like
+    // materials"); the rows are materials an admin edits, and they must change neither which
+    // conditions a new estimate opens with nor what it comes to. The seed is the I2 block's own,
+    // which test_polish_estimate_page.py pins to both schema files.
+    const noKeyRows = blob();
+    delete noKeyRows.polish_estimate;
+    const brandNewRows = build({ blob: noKeyRows, conditionDefaults: COND,
+                                 items: ITEMS.concat(out.reservedItems.seed) });
+    await brandNewRows.api.init();
 
     // AN ESTIMATOR'S OWN ANSWERS, every one of them the opposite of the stored default, so the
     // library has something that COULD have landed here and the gate is the only thing stopping
@@ -2556,6 +2588,8 @@ const rendered = [];      // every string the page put on screen, for the Labour
     out.conditionDefaults = {
       brandNew: { conditions: conds(brandNew),
                   fetched: brandNew.rec.fetches.some((u) => /condition-defaults/.test(u)) },
+      brandNewWithRows: { conditions: conds(brandNewRows), total: brandNewRows.api.bid().total,
+                          totalWithoutRows: brandNew.api.bid().total },
       // THE PROOF THAT THE GATE RAN AT ALL: a saved bid never even asks for the defaults.
       worked: { saved: WORKED.conditions, after: conds(worked),
                 fetched: worked.rec.fetches.some((u) => /condition-defaults/.test(u)),

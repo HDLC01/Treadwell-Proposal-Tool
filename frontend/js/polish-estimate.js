@@ -170,9 +170,9 @@
     var want = String(text == null ? "" : text).trim().toLowerCase();
     if (!want) return null;
     for (var i = 0; i < ITEMS.length; i++) {
-      // DYE AND THE JOINT FILLER KIT ARE NEVER A TAKEOFF ROW. Each is already priced by its own
-      // condition card (CONDITION_CARDS below); a row resolved to one of them by its exact name
-      // would charge the same material twice. renderDatalist leaves them out of the list, and
+      // DYE, THE JOINT FILLER KIT AND REMOVE-EXISTING ARE NEVER A TAKEOFF ROW. Each is already
+      // owned by its own condition card (CONDITION_CARDS below); a row resolved to one of them by
+      // its exact name would charge the same line twice. renderDatalist leaves them out of the list, and
       // this is the half that also holds when somebody types the name out in full.
       if (RESERVED_ITEM_IDS.indexOf(ITEMS[i].id) !== -1) continue;
       if (String(ITEMS[i].name == null ? "" : ITEMS[i].name).trim().toLowerCase() === want) {
@@ -792,6 +792,11 @@
       unitHint: "Kits are what the job buys." },
     { key: "remove_existing_jf", tag: "REMOVE EXISTING", label: "Taking the old filler out",
       cell: "Polish!F29", needs: "joint_filler",
+      // ITS RESERVED library_items ROW, 2026-10-01 -- the Defaults tab lists it as a material and
+      // the Items tab is where it is edited. NOTHING HERE PRICES OFF IT: the card has no `cost`,
+      // so it stays the switch-and-sentence card and its answer still only reaches Polish!F29.
+      // It is carried so RESERVED_ITEM_IDS below keeps it out of every takeoff-row picker.
+      item_id: "remove-existing-jf",
       why: "Adds a fourth hand to the joint-filler line. Priced on the Labor step, where that " +
            "line is." },
     { key: "dye", tag: "DYE", label: "In the bid", cell: "Polish!E25",
@@ -813,11 +818,11 @@
       unitHint: "Priced across the area, not by the pack." }
   ];
 
-  // The two ids CONDITION_CARDS above prices by a fixed formula rather than by search — read
-  // off it rather than retyped, so an id excluded here can never drift from the card that
-  // actually owns its price. renderDatalist() below is the reason this exists: neither may be
-  // picked into a takeoff row as an ordinary second material, because the row above it already
-  // owns that material and prices it a different way.
+  // The three ids CONDITION_CARDS above owns -- the two it prices by a fixed formula rather than
+  // by search, and remove-existing's, which prices nothing -- read off it rather than retyped, so
+  // an id excluded here can never drift from the card that owns it. renderDatalist() below is the
+  // reason this exists: none may be picked into a takeoff row as an ordinary second material,
+  // because the card above already owns that line and prices it (or does not) its own way.
   var RESERVED_ITEM_IDS = CONDITION_CARDS.filter(function (c) { return c.item_id; })
     .map(function (c) { return c.item_id; });
 
@@ -1459,9 +1464,9 @@
     }
     ASMS.forEach(function (a) { add(a.name, "asm"); });
     ITEMS.forEach(function (it) {
-      // DYE AND THE JOINT FILLER KIT NEVER APPEAR HERE. Both are already on the takeoff as
-      // their own condition rows (see CONDITION_CARDS), priced by a fixed formula rather than
-      // by the pack — picking either one into an ordinary row a second time would double the
+      // DYE, THE JOINT FILLER KIT AND REMOVE-EXISTING NEVER APPEAR HERE. All three are already on
+      // the takeoff as their own condition rows (see CONDITION_CARDS), priced by a fixed formula
+      // (or, for remove-existing, on the Labor step) rather than by the pack — picking either one into an ordinary row a second time would double the
       // charge and give an estimator no way to tell the two apart on screen.
       if (RESERVED_ITEM_IDS.indexOf(it.id) !== -1) return;
       add(it.name, "item");

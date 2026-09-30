@@ -305,11 +305,13 @@ alter table public.library_assemblies add column if not exists updated_by text;
 -- RESERVED rows at literal ids, `on conflict (id) do nothing` so an edited price survives a
 -- re-run; delete_item refuses both ids. Kyle's C29/C25 figures (dye is ONE coat; the bid buys
 -- two, rows 25 and 26), which price to the cent what the engine's fallback does. Waste is a literal 0 -- a null would read as 5% and raise both prices.
--- waste_pct and roundup are added above, with the other material columns.
+-- waste_pct and roundup are added above, with the other material columns. The third row,
+-- remove-existing-jf (2026-10-01), buys nothing: NULL cost and coverage, nothing prices off it.
 insert into public.library_items (id, name, unit, buy_qty, unit_cost, coverage, waste_pct, roundup)
 values
   ('joint-filler-kit', 'Joint filler, 10 gal kit', 'Kit', 1, 500.00, 3500, 0, true),
-  ('dye', 'Dye, per coat', 'SF', 1, 0.14, 1, 0, false)
+  ('dye', 'Dye, per coat', 'SF', 1, 0.14, 1, 0, false),
+  ('remove-existing-jf', 'Remove existing joint filler', 'SF', 1, null, null, 0, false)
 on conflict (id) do nothing;
 
 -- ── Markup rules ────────────────────────────────────────────────────────

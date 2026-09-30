@@ -2334,6 +2334,8 @@ def test_the_condition_facet_finds_what_is_not_safe_to_price_from(ran):
     Mutation: make no_cost accept a zero cost as priced."""
     f = ran["facets"]
     assert f["missingACost"] == ["No cost"]
+    # Remove existing joint filler has no material cost by design; it is not "missing" one.
+    assert f["missingACostWithRemoveExisting"] == ["No cost"], f["missingACostWithRemoveExisting"]
     assert f["notInAnyDivision"] == ["Unfiled"]
     assert f["noVendor"] == ["Unfiled"]
     assert f["priceNeverRecorded"] == ["No cost", "Unfiled"]
@@ -3356,7 +3358,7 @@ def test_the_work_type_tabs_narrow_the_defaults_without_hiding_what_was_already_
         "Travel was filtered out; it is seeded into every bid whatever tab it sits on")
 
 
-# ── the Takeoff conditions stopped being "built in" ────────────────────
+# ── the Takeoff conditions stopped being "built in", and are materials now ────────────
 @needs_node
 def test_the_takeoff_conditions_are_editable_and_say_no_such_thing_as_built_in(ran):
     """Hanz, twice. First: "All line items and the default items in assemblies should be editable
@@ -3364,30 +3366,23 @@ def test_the_takeoff_conditions_are_editable_and_say_no_such_thing_as_built_in(r
     still carrying the chip: "I told you to remove the built-in and keep and make everything
     editable in the takeoff."
 
-    AND THE YES/NO WENT WITH IT, 2026-09-19. Hanz, looking at the three selects: "remove these
-    yes and no what are these for?" The column they sat in is headed "How it is priced" and every
-    other row in it answers that question; a Yes/No answers a different one, in a control that
-    made the row read like a form. So the cell now says what the line costs -- $500.00 a kit,
-    $0.14 a square foot -- and whether a new bid buys it is said by the row being listed at all,
+    AND THE YES/NO WENT WITH IT, 2026-09-19 ("remove these yes and no what are these for?"), and
+    the "writes Polish!E29 · not in a new bid" TAG WENT ON 2026-10-01, when he asked for the three
+    to be "exactly like materials". The priced column now says what each line costs in a
+    material's own words -- "$500.00 per kit · 1 per 3,500 SF", "$0.14 per SF a coat · 2 coats",
+    "No material cost" -- and whether a new bid buys it is said by the row being listed at all,
     exactly as a favourited material says it.
 
-    THE FIGURES ARE THE ENGINE'S OWN. RATES.JOINT_FILLER_KIT_COST and RATES.DYE_PER_SF are what
-    jointFillerCost and dyeCost charge, reached here through the real module, so a page showing a
-    rate the bid does not charge cannot pass. A second copy of a rate is the one thing on an
-    estimating screen that goes stale without looking stale.
+    THE FIGURES ARE THE ENGINE'S OWN. This fixture has no reserved rows, so the fallback prices:
+    RATES.JOINT_FILLER_KIT_COST and RATES.DYE_PER_SF, reached through the real module, so a page
+    showing a rate the bid does not charge cannot pass.
 
     EXECUTED, not read. These assertions come off the RENDERED row, because a regex over the
     renderer's source cannot tell a wired control from a dead one -- which is exactly how the
-    "+ Add a labor line" button shipped green on this same tab and Hanz had to report it twice.
-    The change itself is DRIVEN in the next test.
+    "+ Add a labor line" button shipped green on this same tab.
 
-    THE ANSWER IS EDITABLE; THE CELL IS NOT. Polish!E29 is a fact about the workbook Kyle
-    maintains. A second box pointing the joint-filler answer somewhere else would write a Yes/No
-    literal over one of his formulas, and nothing on any screen would say so -- so the cell is
-    printed beside the price rather than offered as an input.
-
-    Mutation: put `actions: '<span class="builtin">Built in</span>'` back on the Conditions group,
-    or put the select back in conditionPriceCell."""
+    Mutation: put the "writes <cell> · in every new bid" span back on the priced cell, or drop the
+    per-kit coverage from the joint filler sentence."""
     t = ran["defaultsTakeoffList"]
     assert t["conditionsAreListedWhenOn"], (
         "a condition an admin has switched on is not listed among the defaults, so the Defaults "
@@ -3397,120 +3392,109 @@ def test_the_takeoff_conditions_are_editable_and_say_no_such_thing_as_built_in(r
     assert t["noYesNoSelect"], (
         "a Yes/No select is still in the priced column -- Hanz: \"remove these yes and no what "
         "are these for?\"")
-    assert t["saysWhichCellItWrites"], (
-        "the row no longer says which workbook cell the answer lands in")
+    assert t["noWritesPolishTag"], (
+        "a 'writes Polish!…' tag is still on a Takeoff defaults row; no material row carries one, "
+        "and Hanz asked for the three to be exactly like materials")
+    assert t["noInABidSentence"], (
+        "a row still says 'in every new bid' / 'not in a new bid'; being listed is what says that")
     assert t["cellIsNotAnInput"], (
         "the workbook cell is offered as an editable field; re-pointing an answer would write a "
         "Yes/No literal over one of Kyle's formulas")
-    # THE COLUMN ANSWERS ITS OWN HEADING. These figures come out of the REAL RATES through the
-    # real module -- a rate restated on the page instead of read from the engine would pass a
-    # test that typed the number here and fail an estimator reading the bid.
     assert t["jointFillerShowsItsKitPrice"], (
-        "joint filler does not say what a kit costs, in a column headed 'How it is priced'")
+        "joint filler does not say what a kit costs in a material's words ('$500.00 per kit · 1 "
+        "per 3,500 SF')")
     assert t["jointFillerSaysWhatTheKitCovers"], (
         "the kit price is shown with nothing to divide it by, so the row says $500 without "
         "saying $500 of what")
-    assert t["dyeShowsItsRate"], "dye does not say what it costs per square foot"
+    assert t["dyeShowsItsRate"], "dye does not say '$0.14 per SF a coat · 2 coats'"
     assert t["removeExistingSaysItHasNoMaterialCost"], (
-        "remove-existing shows a material cost it does not have, or shows nothing at all; it is "
-        "a labor modifier and the row has to say where it IS priced")
+        "remove-existing shows a material cost it does not have, or shows nothing at all")
 
 
 @needs_node
-def test_all_three_takeoff_conditions_ship_off_and_are_listed_saying_so(ran):
-    """THE PRICING HALF OF Hanz's 2026-09-19 decision, and the reason the selects could go.
+def test_all_three_takeoff_conditions_ship_off_and_are_found_through_the_add_search(ran):
+    """THE PRICING HALF OF Hanz's 2026-09-19 decision, and where an off condition lives now.
 
-    joint_filler shipped ON until today, transcribed faithfully from Kyle's template, which has
-    Polish!E29 = "Yes". That was right while the condition moved no money and wrong from the
-    moment it did: since 2026-09-18 jointFillerCost charges one $500 kit per 3,500 sq ft, so
-    every new polish bid was quietly carrying $2,500 on a 17,500 SF floor that nobody had asked
-    for and no screen had made anybody decide. All three now start off and the estimator switches
-    on what the job needs, on the estimate's own Takeoff step.
+    joint_filler shipped ON until 2026-09-19, transcribed faithfully from Kyle's template, which
+    has Polish!E29 = "Yes". That was right while the condition moved no money and wrong from the
+    moment it did: jointFillerCost charges one $500 kit per 3,500 sq ft, so every new polish bid
+    was quietly carrying $2,500 on a 17,500 SF floor that nobody had asked for. All three start
+    off and the estimator switches on what the job needs.
 
-    AND ALL THREE ARE STILL LISTED, which is the 2026-09-21 correction and the reverse of what
-    this test asserted for two days. Off used to mean absent from the table, by analogy with an
-    item that is not a favourite, and Hanz found the Materials list with none of them in it:
-    "Joint filler and Dye do not appear as materials in the deafult?" -- then "list them but they
-    are also materials". The analogy was wrong: a non-favourite material is one of forty rows in
-    a library and hiding it is how the list stays readable, where these are a fixed, named set of
-    three that every polish bid has an opinion about. So each row is permanent, states which way
-    it is set, and carries the button for the direction it can move in.
+    AND OFF MEANS NOT LISTED, 2026-10-01. For ten days all three were listed on or off (Hanz, on
+    2026-09-21: "list them but they are also materials"); on 2026-10-01 he asked for them to be
+    "exactly like materials". A material that is not a default is not on this list -- it is found
+    through "+ Add a takeoff default" -- and so are these, as Materials, keyed by the condition the
+    press turns on.
 
     READ THROUGH THE REAL freshModel, never restated here, so a literal put back in
-    polish-bid-core reds this rather than passing against a copy. And asserted on a fixture that
-    overrides NOTHING -- the test above switches all three on so there are rows to look at, which
-    is the other half of the same claim.
+    polish-bid-core reds this rather than passing against a copy.
 
-    Mutation: set `joint_filler: true` in freshModel().conditions. `noneOfThemOn` goes red, and
-    so does the $2,500 that moves through test_polish_estimate_page's remodel-tax figures."""
+    Mutation: set `joint_filler: true` in freshModel().conditions (`noneOfThemOn` and
+    `noneListedWhileOff` go red); drop the takeoffConditionDefaults loop from defaultCandidates
+    (`eachIsOfferedByTheAddSearch` goes red, and Remove becomes a one-way door)."""
     s = ran["defaultsShippedConditions"]
     assert s["offersTheThree"] == "dye,joint_filler,remove_existing_jf", (
         "the Defaults tab no longer offers the same three conditions: %r" % s["offersTheThree"])
     assert s["noneOfThemOn"], (
         "a Takeoff condition still ships ON. joint_filler is the one that costs money: it adds a "
         "$500 kit per 3,500 sq ft to a bid nobody has priced yet")
-    assert s["allThreeListedThoughAllThreeAreOff"], (
-        "a condition that ships off is not on the Defaults tab at all; this is the state Hanz "
-        "reported, where the Materials list had none of the three in it")
-    assert s["andEachOffersAnAdd"], (
-        "a listed-but-off condition offers no way to turn it on, so the row is a read-only "
-        "statement about a default nobody can change from the tab that owns defaults")
-    assert s["noneOffersRemove"], (
-        "a condition that is OFF is offering Remove, which would send on=false for something "
-        "already off and tell an admin it had been on")
-    assert s["andEachSaysItIsNotInABid"], (
-        "a priced row sits in a list headed 'what a new bid opens holding' without saying it is "
-        "not in one, so an admin reads three charges into every new bid that are not there")
-    assert s["andNothingElseIsInTheTable"], (
-        "the fixture has no favourites, so anything else in this table means the rows above were "
-        "not the three conditions and the assertions are reading something else")
+    assert s["noneListedWhileOff"], (
+        "a condition that is off is still listed among the defaults; a material that is not a "
+        "default is not listed, and these are exactly like materials now")
+    assert s["eachIsOfferedByTheAddSearch"], (
+        "an off condition is not offered by '+ Add a takeoff default', so once removed it could "
+        "never be put back")
+    assert s["noneOffersRemove"], "a condition that is off is offering Remove"
+    assert s["keysAndRowsAgree"], (
+        "takeoffConditionDefaults and RESERVED_ITEM_CONDITION disagree about which reserved row "
+        "each condition is, so a Remove could turn off a different condition, or none")
 
 
 @needs_node
 def test_the_three_conditions_are_materials_with_the_same_two_buttons(ran):
-    """Hanz, 2026-09-18, with the tab open: "die and joint filler are supposed to be materials not
-    something that is default", and then, pointing at the three rows sitting under their own
-    Conditions heading with a chip where the buttons should be: "just put these 3 in the materials
-    section with the same buttons."
+    """Hanz, 2026-09-18: "die and joint filler are supposed to be materials not something that is
+    default", then "just put these 3 in the materials section with the same buttons." And on
+    2026-10-01, with them still drawn by their own row code: "make these 3 as materials", then
+    "All 3 exactly like materials".
 
-    They are what a bid BUYS, so they are listed with the rest of what a bid buys. A separate
-    heading said they were a different kind of thing, and the chip in the actions column said the
-    row was not yours to change -- which is the "built in" complaint over again in a different
-    word.
+    ONE ROW BUILDER. materialDefaultRow draws every Materials row, an ordinary favorited material
+    and the three alike; each condition row's buttons are matched CHARACTER FOR CHARACTER against
+    what defaultRowActions draws for a material with that id and name, and the row is found in the
+    rendered table exactly as the renderer writes a material row.
 
-    SLICED OUT OF THE RENDERED TABLE, between the Materials heading and the next one, so a row
-    that merely exists somewhere in the list cannot pass. And Remove is matched CHARACTER FOR
-    CHARACTER against what defaultRowActions draws for a material -- same classes, same word --
-    because "the same buttons" is the request, and a lookalike that read "Delete" or dropped the
-    danger class is the inconsistency he was pointing at.
+    EDIT IS BACK, AND IT GOES SOMEWHERE NOW. It came off on 2026-09-18 because there was nothing
+    behind it; all three are reserved library rows since then, so Edit opens that row on the Items
+    tab like any material's (focusItemRow, driven in reservedRows).
 
-    EDIT IS GONE, AND THAT IS THE FIX RATHER THAN A GAP. Edit on this table means "go to where
-    this thing is defined so you can change it": an assembly's panel, a material's Items row. A
-    condition's answer is what Remove and the Add path already own, and its rate lives in Kyle's
-    workbook and in RATES with no screen behind it to go to. The Edit it used to carry put the
-    caret in the select beside it; with the select gone it would open nothing -- and a button that
-    opens nothing is the complaint that started this entire thread. One button that works beats
-    one that works and one that lies.
+    ONE REMOVE. The condition-only data-cond-off button and its router arm are gone; the
+    material's own Remove reaches removeDefault, which sends a reserved id to the condition
+    default (driven in conditionDefaults).
 
-    Mutation: put the Conditions group back in takeoffDefaultGroups, or swap conditionRowActions
-    for the old '<span class="wtall">Every new bid</span>'."""
+    Mutation: draw the conditions with their own actions again, or route data-def-off straight to
+    setDefault instead of removeDefault."""
     t = ran["defaultsTakeoffList"]
     assert t["conditionsSitUnderMaterials"], (
         "the three conditions are not under the Materials heading")
     assert t["noConditionsHeading"], "a Conditions heading is still drawn"
-    assert t["conditionsCarryTheSameRemove"], (
-        "a condition row does not carry the same Remove button a material row does")
-    assert t["noDeadEditOnAConditionRow"], (
-        "an Edit button is still on a condition row. There is nowhere for it to go now that the "
-        "select it used to focus is gone, so it would open nothing")
+    assert t["conditionsCarryTheMaterialButtons"], (
+        "a condition row's Edit/Remove is not exactly what defaultRowActions draws for a material, "
+        "or the row is not drawn the way a material row is")
+    assert t["conditionsAreTheMaterialRowShape"], (
+        "a Materials row carries fields a material row does not (rawHow?), so the three are still "
+        "built by their own code")
+    assert t["conditionsCarryEdit"], "a condition row has no Edit to its Items-tab row"
+    assert t["noConditionOnlyButtons"], (
+        "a condition-only button (data-cond-off, or an Add in the table) is still drawn or still "
+        "wired; there is one Remove now")
     assert t["noEveryNewBidChip"], (
         "the 'Every new bid' chip is still in the actions column, where the buttons go")
     assert t["removeIsRoutedToTheSaver"], (
-        "Remove has no handler -- a button with nothing behind it renders exactly like a live "
-        "one, which is how '+ Add a labor line' shipped green")
+        "the material Remove is not routed through removeDefault, so a reserved row's Remove "
+        "would flip its favorite and change nothing a bid reads")
     assert t["addIsRoutedToTheSaver"], (
         "the Add path does not route a condition to setConditionDefault, so a condition that was "
-        "removed could never be put back -- a worse control than the select it replaced")
+        "removed could never be put back")
     assert t["noStaleChangeListener"], (
         "a `change` listener is still reading data-cond-key, an attribute this page no longer "
         "renders; dead wiring reads exactly like live wiring")
@@ -3549,73 +3533,70 @@ def test_the_work_type_strip_still_filters_though_the_row_chips_are_gone(ran):
 
 @needs_node
 def test_changing_a_condition_default_saves_it_and_a_refusal_puts_it_back(ran):
-    """DRIVEN THROUGH THE HANDLER the select's `change` calls, not asserted off the markup.
+    """DRIVEN THROUGH THE HANDLERS the buttons reach, not asserted off the markup.
 
     THE STORED ANSWER IS AN OVERRIDE OF THE SHIPPED ONE, merged through the ESTIMATE'S OWN
     seedConditionDefaults rather than a second merge written on this page. Two merges is two
-    chances for the Library page to describe a bid it does not agree with, and a page claiming
-    joint filler ships off while every new bid opens with it on is worse than no page at all.
+    chances for the Library page to describe a bid it does not agree with.
 
-    BOTH DIRECTIONS, BECAUSE BOTH ARE NOW BUTTONS. With the Yes/No select gone, "on" and "off"
-    are which button the row carries -- Remove on a condition a new bid buys, Add on one it does
-    not. Since 2026-09-21 the ROW ITSELF IS PERMANENT either way, so Remove flips the button
-    rather than taking the line away, and both halves of that are asserted: no Remove left, and
-    an Add in its place. The old assertion read `!listed(...)` alone, which kept passing through
-    that change while quietly meaning something else, because `listed` tests for a Remove button
-    and not for the row.
-
-    THE ADD LIST NO LONGER OFFERS THEM. It was the only way back on while an off condition was
-    unlisted; now that every row carries its own Add, offering them there too would put the same
-    three names twice on one screen.
+    EXACTLY LIKE A MATERIAL, 2026-10-01 (Hanz: "All 3 exactly like materials"). Remove is the
+    material's own button, keyed by the reserved row, and removeDefault sends it to the CONDITION
+    default -- never to the row's `favorite`, which would save cleanly and change nothing a bid
+    reads. The row then LEAVES the list, as a material's does, and the add search offers it again.
+    Add is the search hit, keyed by the condition; the id is read off the rendered hit and handed
+    to the saver the router's "conditions" arm calls. An ordinary material's Remove is unchanged.
 
     A REFUSED SAVE PUTS THE ROW BACK and says why, which is this page's standing rule for a
     failed write: a list that keeps the new state after the server said no tells an admin every
-    new bid now opens differently when it does not, and they would find that out from a bid.
+    new bid now opens differently when it does not.
 
-    Mutation: drop the `renderDefaultTakeoff()` from setConditionDefault's catch. The refused save
-    leaves the wrong list on screen and `refusedSavePutsItBack` goes red."""
+    Mutation: route removeDefault's reserved arm to setDefault (`wroteTheServer` and
+    `didNotWriteTheFavorite` go red); drop the `renderDefaultTakeoff()` from setConditionDefault's
+    catch (`refusedSavePutsItBack` goes red); drop the `if (c.on) return;` from defaultCandidates
+    (`browseSkipsAConditionAlreadyOn` and `addedOneIsNoLongerOffered` go red)."""
     c = ran["conditionDefaults"]
     assert c["storedOverrideWins"], (
         "a stored 'on' for joint filler did not beat the shipped 'off', so the tab is showing a "
         "set of defaults no new bid actually opens with")
     assert c["untouchedOnesKeepShipped"], (
-        "overriding one condition moved the two nobody touched")
-    assert c["startsListed"] and c["removeFlipsTheRowToAdd"], (
-        "Remove did not reach the rendered table; a handler that wrote the variable and forgot "
-        "to repaint looks identical until the next reload")
-    assert c["andTheRowStaysOnScreen"], (
-        "Remove took the whole line away instead of flipping its button, which is the behaviour "
-        "Hanz reported as the three conditions being missing from Materials")
+        "overriding one condition moved the two nobody touched, or listed them while off")
+    assert c["startsListed"] and c["removeTakesTheRowOff"], (
+        "Remove did not take the row off the rendered list; a handler that wrote the variable and "
+        "forgot to repaint looks identical until the next reload")
     assert c["wroteTheServer"], (
-        "the press sent no write, or sent the wrong body -- a dead control renders exactly like a "
-        "live one")
+        "Remove sent no condition write, or the wrong body -- a dead control renders exactly like "
+        "a live one")
+    assert c["didNotWriteTheFavorite"], (
+        "Remove on a condition PATCHed the reserved row's favorite; that is not what a new bid "
+        "reads")
     assert c["keepsOneRowPerCondition"], (
         "the press appended a second row for the same condition instead of replacing it")
-    # THE WAY BACK ON, which is now the row's own Add rather than a trip through the add list.
-    # A missing add arm is not an inconvenience -- it is a default that can be destroyed and not
-    # rebuilt.
-    assert c["startsOffAndOffersAnAdd"] and c["addPutsTheRowBack"], (
-        "adding a condition back did not reach the rendered table, so Remove is a one-way door")
-    assert c["addWroteTheServer"], "adding a condition back sent no write, or the wrong body"
-    assert c["addedRowIsPriced"], (
-        "a condition put back shows no price, so the row it returns as is not the row it left as")
-    # AND THE ADD LIST NO LONGER CARRIES THEM, because the row does. Two offers of one default on
-    # one screen is the duplicate this asserts against -- a search for "dye" answering with a row
-    # already six lines up the page.
-    assert c["browseNoLongerOffersConditions"], (
-        "the Add-a-default browse still offers the three conditions, which are permanent rows "
-        "now, so the same name appears twice on one screen")
+    assert c["removedOneIsOfferedByTheAddSearch"], (
+        "a removed condition is not offered by the add search, so Remove is a one-way door")
+    assert c["startsOffAndUnlisted"], "an off condition is listed"
+    assert c["searchFindsIt"], "typing 'dye' in the add search does not offer Dye as a Material"
+    assert c["addPutsTheRowOnTheList"], "adding a condition did not list it"
+    assert c["addWroteTheServer"], "adding a condition sent no write, or the wrong body"
+    assert c["addedRowIsPriced"], "a condition added back shows no price"
+    assert c["addedOneIsNoLongerOffered"], (
+        "the add search still offers a condition that is now on the list -- the same row twice")
+    assert c["browseOffersAllThreeWhileOff"], (
+        "the add browse does not offer all three conditions while they are off")
     assert c["andStillOffersTheLibrary"], (
-        "the browse offers nothing at all, so the assertion above passes against a dead list "
-        "rather than against conditions being filtered out of a live one")
-    assert c["searchFindsNoCondition"], (
-        "typing a condition's name into the defaults search offers to add it, and it is already "
-        "listed on the tab -- the same row twice")
+        "the browse stopped offering the library, so the assertion above passes against a list "
+        "that offers only the three")
+    assert c["browseSkipsAConditionAlreadyOn"], (
+        "the browse offers a condition that is already on, or stopped offering the ones that "
+        "are off")
+    assert c["searchByLabelFindsBoth"], (
+        "searching 'joint' does not find the kit and remove-existing (or finds dye)")
     assert c["refusedSavePutsItBack"], "a refused save left the new state on screen"
     assert c["refusedSaveSaysSo"], "a refused save said nothing"
     assert c["refusedSaveDropsTheOptimisticRow"], (
         "a refused save left its optimistic row in the page's list, so the next repaint shows an "
         "answer the server never took")
+    assert c["ordinaryRemoveStillWritesTheFavorite"], (
+        "an ordinary material's Remove no longer PATCHes its favorite, or wrote a condition")
 
 
 def test_the_condition_vocabulary_is_the_same_three_on_both_sides():
@@ -3652,72 +3633,128 @@ def test_the_condition_vocabulary_is_the_same_three_on_both_sides():
     assert "conditionsUnstated: conditionsUnstated" in core
 
 
-# ── Dye and the Joint Filler kit: reserved Items-tab rows ─────────────────────────────────────
-# Hanz: "joint filler and die should be library items so that we are able to edit them as well."
-# Both are RESERVED library_items rows (backend/library.py's RESERVED_ITEM_IDS) seeded by the
-# schema files; the Polish estimate prices its two condition lines off them. Driven through the
-# page's own renderItems / onItemEdit / takeoffConditionDefaults / itemResultsHtml /
-# defaultCandidates in library-ui-harness.js (out.reservedRows).
+# ── The three reserved rows: joint filler kit, remove-existing, dye ───────────────────────────
+# Hanz: "joint filler and die should be library items so that we are able to edit them as well",
+# and on 2026-10-01: "All 3 exactly like materials", which is why remove-existing joined them.
+# All three are RESERVED library_items rows (backend/library.py's RESERVED_ITEM_IDS) seeded by the
+# schema files; the Polish estimate prices its joint filler and dye condition lines off two of
+# them and prices nothing off the third. Driven through the page's own renderItems / onItemEdit /
+# takeoffConditionDefaults / itemResultsHtml / defaultCandidates / focusItemRow in
+# library-ui-harness.js (out.reservedRows).
 @needs_node
-def test_dye_and_the_joint_filler_kit_are_edited_on_the_items_tab_and_never_removed(ran):
-    """Both rows are on the Items tab with every price field a material has -- that is where an
-    admin edits them -- and neither carries the Remove button: nothing reachable from the page
-    could make a row at one of these ids again, so one press would lose the editable price for
-    good. An ordinary row beside them keeps its Remove, so the rule is scoped to the two ids.
+def test_the_three_reserved_rows_are_edited_on_the_items_tab_and_never_removed(ran):
+    """All three rows are on the Items tab -- that is where an admin edits them -- and none carries
+    the Remove button: nothing reachable from the page could make a row at one of these ids again,
+    so one press would lose it for good. An ordinary row beside them keeps its Remove, so the rule
+    is scoped to the three ids.
 
-    Mutation: drop the isReservedItem guard around the Remove button in renderItems (both
-    *HasNoRemove go red), or filter the two out of visibleItems (bothOnTheItemsTab goes red)."""
+    REMOVE-EXISTING'S COST CELL SAYS "No material cost" and offers no box: it buys nothing, and a
+    figure typed there would sit in the library looking like a charge no bid makes. Only its cell:
+    the two priced rows keep their cost box.
+
+    Mutation: drop the isReservedItem guard around the Remove button in renderItems (the
+    *HasNoRemove keys go red); drop the remove-existing arm of the cost cell
+    (`removeExistingSaysNoMaterialCost` goes red); filter the rows out of visibleItems
+    (`allThreeOnTheItemsTab` goes red)."""
     r = ran["reservedRows"]
-    assert r["bothOnTheItemsTab"], "dye or the joint filler kit is missing from the Items tab"
+    assert r["allThreeOnTheItemsTab"], "a reserved row is missing from the Items tab"
     assert r["kitRowIsEditable"], (
         "the joint filler kit's row has no coverage / cost / waste / roundup box to edit")
     assert r["kitHasNoRemove"], "the joint filler kit's row offers Remove"
     assert r["dyeHasNoRemove"], "the dye row offers Remove"
+    assert r["removeExistingHasNoRemove"], "the remove-existing row offers Remove"
+    assert r["removeExistingSaysNoMaterialCost"], (
+        "the remove-existing row offers a cost box, or does not say it has no material cost")
+    assert r["removeExistingNameIsEditable"], "the remove-existing row's name is not editable"
+    assert r["pricedRowsKeepTheirCostBox"], (
+        "a priced reserved row lost its cost box, or 'No material cost' reached another row")
     assert r["ordinaryRowKeepsRemove"], (
-        "an ordinary material lost its Remove button too -- the guard is not scoped to the two "
+        "an ordinary material lost its Remove button too -- the guard is not scoped to the "
         "reserved ids")
 
 
 @needs_node
 def test_editing_the_reserved_rows_moves_the_defaults_tab_price(ran):
     """An edit typed on the Items tab goes out as the ordinary field-level PATCH, and the Defaults
-    tab's condition rows then quote the NEW figures -- coverage included, because the kit count is
-    the row's coverage now, not a 3,500 written into the page. With no row at all (a database the
-    seed has not reached) the rows say exactly what they said before this change.
+    tab's rows then quote the NEW figures -- coverage included, because the kit count is the row's
+    coverage now, not a 3,500 written into the page -- in a material's own words, with the kit's
+    unit off the row. With no row at all (a database the seed has not reached) the rows quote the
+    shipped figures. Remove-existing says "No material cost" whatever the rows hold.
 
     Mutation: read RATES instead of the row in takeoffConditionDefaults (after == before), or
-    keep the literal "3,500" in the joint filler sentence (the coverage half of `after` stays)."""
+    keep a literal "3,500" in the joint filler sentence (the coverage half of `after` stays)."""
     r = ran["reservedRows"]
-    dot = "\u00b7"
-    shipped_kit = "$500.00 per kit %s one kit per 3,500 sq ft" % dot
-    shipped_dye = "$0.14 per SF a coat %s 2 coats across the polished area" % dot
-    assert r["before"] == {"kit": shipped_kit, "dye": shipped_dye}, r["before"]
-    assert r["missing"] == {"kit": shipped_kit, "dye": shipped_dye}, (
+    dot = "·"
+    assert r["before"] == {"kit": "$500.00 per Kit %s 1 per 3,500 SF" % dot,
+                           "dye": "$0.14 per SF a coat %s 2 coats" % dot,
+                           "rem": "No material cost"}, r["before"]
+    assert r["missing"] == {"kit": "$500.00 per kit %s 1 per 3,500 SF" % dot,
+                            "dye": "$0.14 per SF a coat %s 2 coats" % dot,
+                            "rem": "No material cost"}, (
         "with no reserved row the Defaults tab no longer quotes the shipped figures: %r"
         % r["missing"])
     assert r["after"] == {
-        "kit": "$650.00 per kit %s one kit per 2,000 sq ft" % dot,
-        "dye": "$0.20 per SF a coat %s 2 coats across the polished area" % dot,
+        "kit": "$650.00 per Kit %s 1 per 2,000 SF" % dot,
+        "dye": "$0.20 per SF a coat %s 2 coats" % dot,
+        "rem": "No material cost",
     }, "the Defaults tab did not follow the Items-tab edit: %r" % r["after"]
     assert r["queued"] == [
         'joint-filler-kit {"coverage":"2000"}',
         'joint-filler-kit {"unit_cost":"650"}',
         'dye {"unit_cost":"0.2"}',
     ], "the Items-tab edits did not queue the ordinary PATCH bodies: %r" % r["queued"]
+    assert r["listedUnderTheirRowNames"], (
+        "the Defaults tab does not list the three under their Items-tab row names")
+    assert r["kitPricedPerTheRowsUnit"], "the kit's price is not per the row's own unit"
 
 
 @needs_node
-def test_the_reserved_rows_are_never_an_assembly_line_or_a_takeoff_default(ran):
-    """The Polish estimate already charges each through its own condition card, so neither may be
-    picked into an assembly (a second, invisible charge for the same material) or offered as a
-    takeoff default material (it is already on every bid as its own condition row). Searched by a
-    word both names contain, beside ordinary materials that must still turn up.
+def test_the_reserved_rows_are_never_an_assembly_line_and_are_a_default_only_as_a_condition(ran):
+    """The Polish estimate already owns each through its own condition card, so none may be picked
+    into an assembly (a second, invisible charge for the same line). In the add-a-default search
+    they ARE offered now -- Hanz, 2026-10-01: "All 3 exactly like materials" -- but only as their
+    CONDITION, never as an ordinary material whose `favorite` a press would flip. The bulk-add list
+    and every other picker filter on isReservedItem, asserted here for all three ids.
 
-    Mutation: drop the isReservedItem filter from itemResultsHtml or from defaultCandidates."""
+    Mutation: drop the isReservedItem filter from itemResultsHtml (`notInTheLinePicker`) or from
+    defaultCandidates' ITEMS loop (`items:dye` appears); take remove-existing-jf out of
+    RESERVED_ITEM_CONDITION (`reservedPredicate`)."""
     r = ran["reservedRows"]
-    assert r["notInTheLinePicker"], "dye or the joint filler kit is offered as an assembly line"
+    assert r["notInTheLinePicker"], "a reserved row is offered as an assembly line"
     assert r["ordinaryStillInThePicker"], "an ordinary material vanished from the line picker"
-    assert "dye" not in r["defaults"] and "joint-filler-kit" not in r["defaults"], (
-        "a reserved row is offered as a takeoff default: %r" % r["defaults"])
-    assert "i1" in r["defaults"], (
+    assert r["reservedPredicate"] == [True, True, True, False], r["reservedPredicate"]
+    for rid in ("dye", "joint-filler-kit", "remove-existing-jf"):
+        assert "items:" + rid not in r["defaults"], (
+            "a reserved row is offered as an ordinary takeoff default material: %r"
+            % r["defaults"])
+    for key in ("joint_filler", "remove_existing_jf", "dye"):
+        assert "conditions:" + key in r["defaults"], (
+            "the %s condition is not offered by the add search: %r" % (key, r["defaults"]))
+    assert "items:i1" in r["defaults"], (
         "the ordinary materials vanished from the default search too: %r" % r["defaults"])
+    # Browse with ten ordinary un-favorited materials and nothing typed: the list is capped at
+    # DEFAULT_MAX rows, and the three OFF conditions must not fall off its end.
+    for key in ("joint_filler", "remove_existing_jf", "dye"):
+        assert "conditions:" + key in r["browseFull"], (
+            "the %s condition fell off the capped Browse list: %r" % (key, r["browseFull"]))
+
+
+@needs_node
+def test_edit_on_a_condition_material_opens_its_items_tab_row(ran):
+    """Edit opens that material's row on the Items tab, like any material's. focusItemRow is what
+    the router calls -- and until this change it was CALLED AND NEVER DEFINED, so every material
+    Edit on the Defaults tab switched tabs and then threw. Driven against the REAL rendered Items
+    table: once plainly, and once with the Items tab's own search hiding the row, which a search
+    left over from an hour ago would; the search is cleared so the row can be reached.
+
+    Mutation: delete focusItemRow (the harness fails to lift it); drop the clearFilters retry
+    (`focusThroughASearch` goes red)."""
+    r = ran["reservedRows"]
+    assert r["editButtonsPointAtTheRows"], (
+        "a condition row's Edit is not keyed by its reserved row id")
+    assert r["editRouterLandsOnTheItemsRow"], (
+        "the Edit router no longer sends a material's Edit to focusItemRow")
+    assert r["focusPlain"] == "item:dye", r["focusPlain"]
+    assert r["focusHiddenFirst"], "the fixture's search did not hide the row, so this proves nothing"
+    assert r["focusThroughASearch"] == "item:remove-existing-jf", r["focusThroughASearch"]
+    assert r["searchWasCleared"], "the Items tab's search was left hiding the row Edit opened"

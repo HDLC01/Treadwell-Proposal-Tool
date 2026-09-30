@@ -198,27 +198,38 @@
   }
   function itemOf(id) { return L.findItem(ITEMS, id); }
 
-  /** The two RESERVED library_items ids: Dye and the Joint Filler kit. Matches backend/library.py's
-   *  RESERVED_ITEM_IDS and the `item_id` on polish-estimate.js's CONDITION_CARDS.
+  /** The three RESERVED library_items ids, each mapped to the Takeoff condition it IS: the Joint
+   *  Filler kit, Remove existing joint filler, and Dye. The ids match backend/library.py's
+   *  RESERVED_ITEM_IDS and the `item_id` on polish-estimate.js's CONDITION_CARDS; the values match
+   *  the keys takeoffConditionDefaults answers and backend/condition_defaults.KEYS.
    *
    *  Hanz: "joint filler and die should be library items so that we are able to edit them as
-   *  well." Both are seeded by the schema files at these literal ids, the Travel-row pattern, and
-   *  the Polish estimate prices its two condition cards off them. So each is an ordinary Items-tab
-   *  row for EDITING -- name, pack, unit, coverage, waste, roundup, cost -- with two differences:
+   *  well", and on 2026-10-01, of all three on the Defaults tab: "make these 3 as materials". All
+   *  three are seeded by the schema files at these literal ids, the Travel-row pattern. Joint
+   *  filler and dye price the Polish estimate's two condition cards; remove-existing prices
+   *  NOTHING -- it is a fourth hand on the joint-filler line, priced on the Labor step -- and has a
+   *  row so it can be listed, found and edited like the other two. Each is an ordinary Items-tab
+   *  row for EDITING, with three differences:
    *
    *    * NO DELETE. Nothing reachable from this page can make a row at one of these ids again
-   *      (create_item mints its own uuid), so a delete would lose the editable price for good.
-   *      renderItems leaves the button off; delete_item refuses the id server-side as well.
+   *      (create_item mints its own uuid), so a delete would lose the row for good. renderItems
+   *      leaves the button off; delete_item refuses the id server-side as well.
    *    * NEVER PICKED INTO ANYTHING. Not an assembly line, not the bulk-add list, not a takeoff
-   *      default: the Polish estimate already charges each one through its own condition card,
-   *      and a second copy buried in an assembly would charge the same material twice.
+   *      row: the Polish estimate already charges each one through its own condition card, and a
+   *      second copy buried in an assembly would charge the same material twice.
+   *    * A DEFAULT THROUGH ITS CONDITION, not its `favorite`. On the Defaults tab each one is
+   *      listed, removed and added exactly like a material, and every one of those writes the
+   *      condition default a new Polish estimate opens with (condition_defaults) -- see
+   *      takeoffDefaultGroups, removeDefault and defaultCandidates.
    *
-   *  A literal pair rather than a lookup: isReservedItem runs inside filters over the whole
-   *  library on every repaint, and a set membership check is all it needs to be. */
-  var COND_PRICED_KEYS = ["dye", "joint-filler-kit"];
+   *  A literal map rather than a lookup: isReservedItem runs inside filters over the whole
+   *  library on every repaint, and a key check is all it needs to be. */
+  var RESERVED_ITEM_CONDITION = {
+    "joint-filler-kit": "joint_filler", "remove-existing-jf": "remove_existing_jf", "dye": "dye"
+  };
 
   function isReservedItem(id) {
-    return !!id && COND_PRICED_KEYS.indexOf(id) !== -1;
+    return !!id && Object.prototype.hasOwnProperty.call(RESERVED_ITEM_CONDITION, id);
   }
 
   /** What an assembly is measured and priced per: "SF" or "LF".
@@ -1113,13 +1124,19 @@
         // a material nobody has touched yet.
         '<td class="w-ru"><input type="checkbox" data-f="roundup"' +
           (it.roundup === false ? "" : " checked") + ' aria-label="Round up to whole purchase units"></td>' +
-        '<td class="n"><span class="money"><span>$</span><input data-f="unit_cost" class="num cell-cost" value="' + (it.unit_cost == null ? "" : it.unit_cost) + '" aria-label="Cost of one purchase"></span></td>' +
+        // REMOVE EXISTING JOINT FILLER BUYS NOTHING, so its cost cell says so instead of offering
+        // a box. It is a fourth hand on the joint-filler line, priced on the Labor step, and the
+        // Polish estimate never reads a material price off this row -- a figure typed here would
+        // sit in the library looking like a charge that no bid makes.
+        '<td class="n">' + (it.id === "remove-existing-jf"
+          ? '<span class="builtin">No material cost</span>'
+          : '<span class="money"><span>$</span><input data-f="unit_cost" class="num cell-cost" value="' + (it.unit_cost == null ? "" : it.unit_cost) + '" aria-label="Cost of one purchase"></span>') + "</td>" +
         "<td>" + pick("vendor", it.vendor, vendorNames(), "Vendor", ' class="cell-vendor"') + "</td>" +
         '<td class="datescell">' + datesHtml(it) + "</td>" +
         '<td class="rowact">' +
           '<button class="icon" type="button" data-dupe-item="' + esc(it.id) + '" title="Make a copy of this material" aria-label="Duplicate ' + esc(it.name) + '">' + icon("copy") + "</button>" +
-          // NO REMOVE ON DYE OR THE JOINT FILLER KIT -- see isReservedItem. Every other cell on
-          // the row stays editable; that is the point of the row.
+          // NO REMOVE ON THE THREE RESERVED ROWS (joint filler kit, remove-existing, dye) -- see
+          // isReservedItem. Every other cell on the row stays editable; that is the point of it.
           (isReservedItem(it.id) ? "" :
           '<button class="icon danger" type="button" data-del-item="' + esc(it.id) + '" title="Remove this material" aria-label="Remove ' + esc(it.name) + '">' + icon("trash") + "</button>") +
           "</td>" +
@@ -1230,6 +1247,31 @@
     var lb = $("labor-body");
     var b = lb && lb.querySelector && lb.querySelector('[data-labor-more-toggle="' + id + '"]');
     if (b && b.focus) b.focus();
+  }
+
+  /** Put the caret in an Items tab row's name box -- where the Defaults tab's Edit on a material
+   *  lands, the job focusLaborRow below does for a labor line.
+   *
+   *  IT WAS CALLED AND NEVER DEFINED. The Edit router has called focusItemRow since #532, and no
+   *  function by that name existed, so every material Edit switched to the Items tab and then
+   *  threw a ReferenceError: the tab changed, the caret went nowhere, and the console said why.
+   *  Hanz's 2026-10-01 ask -- Edit on joint filler, remove-existing or dye "opens that material's
+   *  row" -- is the first time anything leant on the second half of that.
+   *
+   *  A ROW THE ITEMS TAB'S OWN SEARCH IS HIDING comes back first. The search and the facets
+   *  outlive a tab switch, so an estimator who filtered for "densifier" an hour ago and then pressed
+   *  Edit on Dye would otherwise land on a table without the row they asked for -- a dead button,
+   *  by another route. clearFilters is the same Clear the bar and the empty state already offer. */
+  function focusItemRow(id) {
+    var find = function () {
+      var body = $("items-body");
+      return body && body.querySelector && body.querySelector(
+        '[data-item="' + id + '"] input[data-f="name"]');
+    };
+    var el = find();
+    if (!el && anyFilterActive()) { clearFilters(); el = find(); }
+    if (el && el.focus) el.focus();
+    if (el && el.scrollIntoView) el.scrollIntoView({ block: "center" });
   }
 
   /** Put the caret in a Labor tab row's name box -- the job refocusItemField does for Items,
@@ -1654,7 +1696,9 @@
    *  not safe to price a bid from. A material with no cost prices every assembly built on it at
    *  nothing, silently, and until now there was no way to go looking for one. */
   function conditionHits(it, c) {
-    if (c === "no_cost") return !(Number(it.unit_cost) > 0);
+    // Remove existing joint filler has no material cost BY DESIGN (a labor modifier), so it is
+    // not a material that is missing one.
+    if (c === "no_cost") return !(Number(it.unit_cost) > 0) && it.id !== "remove-existing-jf";
     if (c === "no_division") return itemDivisions(it).length === 0;
     if (c === "no_vendor") return !String(it.vendor || "").trim();
     if (c === "no_price_date") return !it.cost_updated_at;
@@ -2097,8 +2141,9 @@
   function itemResultsHtml(line) {
     var query = line._item_search == null ? "" : line._item_search;
     var matches = ITEMS.filter(function (candidate) {
-      // Dye and the Joint Filler kit are never an assembly line -- see isReservedItem. The Polish
-      // estimate already charges each through its own condition card.
+      // The three reserved rows (joint filler kit, remove-existing, dye) are never an assembly
+      // line -- see isReservedItem. The Polish estimate already owns each through its own
+      // condition card.
       return !isReservedItem(candidate && candidate.id) && itemMatches(candidate, query);
     }).slice(0, 12);
     if (!matches.length) return '<div class="gone">No items match that search.</div>';
@@ -2321,27 +2366,28 @@
    *  items in assemblies should be editable please don't put in a hard coded or built in line
    *  items", and then, seeing the chip still there: "I told you to remove the built-in and keep and
    *  make everything editable in the takeoff." Changing one changes what the NEXT blank bid opens
-   *  answering, and the row leaves this list when it is off.
+   *  answering.
    *
-   *  THE YES/NO SELECT IS GONE, 2026-09-19. Hanz, looking at the three of them: "remove these yes
-   *  and no what are these for?" -- and the honest answer was that the column they sat in is
-   *  headed "How it is priced", where every other row says what the line costs. A Yes/No in that
-   *  column answers a question the column is not asking. So the cell now reads like the material
-   *  rows above it -- $500.00 per kit, $0.14 per SF -- and the on/off is the row's PRESENCE, the
-   *  same as it is for a favourited material: listed means a new bid buys it, removed means it
-   *  does not. See conditionPriceCell and takeoffDefaultGroups.
+   *  THEY ARE MATERIALS, 2026-10-01. Hanz, looking at the Materials list with the three of them
+   *  sitting below it as always-listed rows with an Add or a Remove and a "writes Polish!E29 · not
+   *  in a new bid" tag: "make these 3 as materials" -- then, offered the choice, "All 3 exactly
+   *  like materials". So each is drawn by the material row's own code (materialDefaultRow):
+   *  listed only while a new bid buys it, with the same Edit and Remove, and found through "+ Add
+   *  a takeoff default" when it is not. What they do NOT share with a material is where the
+   *  answer is stored -- condition_defaults, not a `favorite` -- and that is removeDefault's and
+   *  the add router's business, not the row's.
    *
-   *  WHAT IS EDITABLE IS THE ANSWER, NOT THE CELL. Polish!E29 is a fact about the workbook Kyle
-   *  maintains -- pointing the joint-filler answer somewhere else would put a Yes/No literal over
-   *  one of his formulas and nothing on any screen would say so. So the cell is printed beside the
-   *  price rather than offered as a box.
+   *  THE CELL IS NO LONGER PRINTED. Polish!E29 is a fact about the workbook Kyle maintains and it
+   *  was never editable here; the tag saying so was the one thing on these rows no material row
+   *  carries. The answer still reaches the same cell through CONDITION_CELLS in polish-bid-core.js.
    *
    *  THE RATE LIVES ON THE ITEMS TAB, 2026-09-30. $500 a kit is Kyle's C29 and $0.14 a square
-   *  foot is his C25, and both are now reserved library_items rows (`joint-filler-kit`, `dye` --
-   *  see isReservedItem) that an admin edits on the Items tab like any other material. This row
-   *  READS them, the same row polish-estimate.js's condLine prices from, so the figure shown here
-   *  cannot disagree with the figure charged. RATES (and the kit's 3,500 sq ft) are what stand
-   *  when the row is not there to read -- the same fallback the estimate takes.
+   *  foot is his C25, and both are reserved library_items rows (`joint-filler-kit`, `dye` -- see
+   *  isReservedItem) that an admin edits on the Items tab like any other material. This row READS
+   *  them, the same row polish-estimate.js's condLine prices from, so the figure shown here cannot
+   *  disagree with the figure charged. RATES (and the kit's 3,500 sq ft) are what stand when the
+   *  row is not there to read -- the same fallback the estimate takes. `name` is the row's own
+   *  name for the same reason, and the condition's label only when there is no row to read.
    *
    *  THE SHIPPED ANSWER IS STILL READ FROM freshModel, and the stored overrides are written over
    *  it through the ESTIMATE'S OWN seedConditionDefaults rather than a merge written again here.
@@ -2352,7 +2398,9 @@
    *
    *  THIS LIST IS THE VOCABULARY, and backend/condition_defaults.KEYS is the same three.
    *  test_condition_defaults.py reads both files and pins them together, so a key renamed on one
-   *  side cannot quietly become a row that saves and is read by nothing. */
+   *  side cannot quietly become a row that saves and is read by nothing. `item_id` is the
+   *  reserved row each key IS, and RESERVED_ITEM_CONDITION maps it back; the harness pins the two
+   *  directions together. */
   function takeoffConditionDefaults() {
     var B = window.TWPolishBid;
     if (!B || !B.freshModel) return [];
@@ -2376,50 +2424,30 @@
       : R.DYE_PER_SF;
     var kit = L.num(kitRate) != null ? L.money(kitRate) : null;
     var dye = L.num(dyeRate) != null ? L.money(dyeRate) : null;
+    // THE MATERIAL ROW'S OWN WORDING, "$X per <unit>", with the unit off the row when there is
+    // one -- then what one of them covers, which is the half of the kit's price a bare "$500 per
+    // Kit" would leave out.
+    var kitUnit = (itemOf("joint-filler-kit") || {}).unit || "kit";
+    var named = function (id, label) { return (itemOf(id) || {}).name || label; };
     return [
-      { key: "joint_filler", label: "Joint filler", on: !!c.joint_filler, cell: "Polish!E29",
-        priced: kit ? kit + " per kit \u00b7 one kit per " + L.qtyText(kitCov) + " sq ft"
+      { key: "joint_filler", item_id: "joint-filler-kit", label: "Joint filler",
+        name: named("joint-filler-kit", "Joint filler"), on: !!c.joint_filler,
+        priced: kit ? kit + " per " + kitUnit + " · 1 per " + L.qtyText(kitCov) + " SF"
                     : "No rate loaded for the kit" },
-      { key: "remove_existing_jf", label: "Remove existing joint filler",
-        on: !!c.remove_existing_jf, cell: "Polish!F29",
-        // NO PRICE ON THIS SCREEN, and saying so is the point. It is a fourth hand on the
-        // joint-filler line -- a labor modifier the estimator prices on the Labor step -- so a
-        // dollar figure here would be an invention. "Nothing here" is a real answer; a made-up
-        // $0.00 would read as free.
-        priced: "No material cost \u00b7 a labor modifier, priced on the Labor step" },
-      { key: "dye", label: "Dye", on: !!c.dye, cell: "Polish!E25",
+      { key: "remove_existing_jf", item_id: "remove-existing-jf",
+        label: "Remove existing joint filler",
+        name: named("remove-existing-jf", "Remove existing joint filler"),
+        on: !!c.remove_existing_jf,
+        // NO PRICE, and saying so is the point. It is a fourth hand on the joint-filler line -- a
+        // labor modifier the estimator prices on the Labor step -- so a dollar figure here would
+        // be an invention. "No material cost" is a real answer; a made-up $0.00 would read as
+        // free.
+        priced: "No material cost" },
+      { key: "dye", item_id: "dye", label: "Dye", name: named("dye", "Dye"), on: !!c.dye,
         // THE ROW IS ONE COAT and a bid buys B.DYE_COATS of them -- Kyle's rows 25 and 26.
-        priced: dye ? dye + " per SF a coat \u00b7 " + (B.DYE_COATS || 2) +
-                      " coats across the polished area"
+        priced: dye ? dye + " per SF a coat · " + (B.DYE_COATS || 2) + " coats"
                     : "No rate loaded for dye" }
     ];
-  }
-
-  /** What one condition COSTS, for the column headed "How it is priced".
-   *
-   *  IT WAS A YES/NO SELECT UNTIL 2026-09-19. Hanz: "remove these yes and no what are these
-   *  for?" The column asks what the line costs and every other row in it answers that; these
-   *  three answered a different question, in a control that made the row look like a form. Now
-   *  they read like the material rows they sit among -- the rate, the unit, and what the rate is
-   *  charged against -- and whether a new bid buys the line is said by the row being listed at
-   *  all, which is how a favourited material says it too.
-   *
-   *  STILL SEPARATE FROM THE GROUPING so a test can execute it and read one row's cell back,
-   *  rather than regex-matching it out of the whole table. This page has already shipped a dead
-   *  button behind a green markup assertion.
-   *
-   *  RENAMED WITH THE CHANGE, from conditionControl. A function called `control` that returns a
-   *  sentence is the near-miss naming this repo pays for elsewhere -- library-ui-harness.js lifts
-   *  it by name, so the rename has to be made there in the same breath or every scenario in that
-   *  file dies on a ReferenceError at once. */
-  function conditionPriceCell(c) {
-    // THE STATE IS SPELT OUT, not left to the button. Since 2026-09-21 all three are listed
-    // whether or not a new bid buys them (see takeoffDefaultGroups), so the row's PRESENCE no
-    // longer carries the answer the way it did for two days -- and a priced row sitting in a
-    // list headed "what a new bid opens holding" reads as included unless it says otherwise.
-    return esc(c.priced) +
-      ' <span class="wtall">writes ' + esc(c.cell) + " · " +
-      (c.on ? "in every new bid" : "not in a new bid") + "</span>";
   }
 
   /** One condition's answer, sent on the change, with the optimistic flip and the put-it-back in
@@ -2519,6 +2547,26 @@
     }
   }
 
+  /** A default's Remove, sent to the store that holds that default.
+   *
+   *  ONE BUTTON, TWO STORES. Joint filler, remove-existing and dye carry the same Remove as every
+   *  material (materialDefaultRow), keyed by their reserved library ids -- but whether a new bid
+   *  opens with one of them is the CONDITION default (condition_defaults), never the row's
+   *  `favorite`. So a reserved id goes to setConditionDefault, with its optimistic flip and its
+   *  put-it-back, and everything else goes to setDefault as it always has. Flipping `favorite` on
+   *  a reserved row instead would save cleanly, change nothing any bid reads, and leave the row
+   *  listed on the next load.
+   *
+   *  NAMED, NOT INLINE IN THE CLICK LISTENER, because the harness can run a function and cannot
+   *  run a listener -- and this is a decision. */
+  async function removeDefault(kind, id) {
+    if (kind === "items" && isReservedItem(id)) {
+      await setConditionDefault(RESERVED_ITEM_CONDITION[id], false);
+      return;
+    }
+    await setDefault(kind, id, false);
+  }
+
   /** Toggle one work type on one library row. OPTIMISTIC, WITH THE ROLLBACK IN HERE, exactly
    *  like setDefault above and setConditionDefault below -- the same argument applies: two
    *  functions is two places to forget to put the row back.
@@ -2600,48 +2648,19 @@
       ' being a default">Remove</button>';
   }
 
-  /** A condition's Remove, in the same button a material row carries, meaning the same thing.
+  /** One row of the Takeoff defaults' Materials group, for a favorited material AND for each of
+   *  the three condition materials -- one function, so the two cannot be drawn differently.
    *
-   *  THE SAME BUTTON, LITERALLY. Hanz, 2026-09-18, looking at the three of them sitting under a
-   *  Conditions heading with a chip where the buttons should be: "just put these 3 in the
-   *  materials section with the same buttons." Same class, same word -- a row that looked like
-   *  the others but read differently would be the thing he was pointing at.
-   *
-   *  REMOVE NOW REALLY REMOVES THE ROW, which it did not before. While the Yes/No select was in
-   *  the priced column, Remove wrote the answer to No and left the row sitting there saying No --
-   *  two controls for one answer, and the row stayed on a list of what a new bid opens with while
-   *  saying a new bid does not open with it. With the select gone, "off" is expressed the way a
-   *  material expresses it: the row is not on the list. Remove writes the No and the row goes.
-   *
-   *  AND THE WAY BACK ON IS THE WAY EVERYTHING ELSE COMES ON. A removed condition becomes a
-   *  candidate in this tab's own "Add a takeoff default" search and browse -- see
-   *  defaultCandidates -- so turning one back on is the same motion as making a material a
-   *  default, rather than a second mechanism invented for three rows.
-   *
-   *  THERE IS NO EDIT, AND THAT IS DELIBERATE. Edit on this table means "go to where this thing
-   *  is defined so you can change it": an assembly's panel, a material's Items row. A condition's
-   *  two facts are its answer -- which Remove and the Add path already own -- and its rate, which
-   *  lives in Kyle's workbook and in RATES, with no screen behind it to go to. The Edit this row
-   *  used to carry put the caret in the select beside it; with the select gone it would open
-   *  nothing, and a button that opens nothing is the exact complaint that started this thread. A
-   *  row with one button that works beats a row with one that works and one that lies. */
-  function conditionRowActions(c) {
-    // ADD OR REMOVE, because the row is on screen either way now. Hanz, 2026-09-21, looking at a
-    // Materials list with none of the three in it: "Joint filler and Dye do not appear as
-    // materials in the deafult?" -- then "list them but they are also materials". They are all
-    // three permanent rows from here, so each needs the button for the direction it can move in.
-    //
-    // THE ADD ARM REUSES data-def-add, which the click router already routes by `kind`: an Add
-    // here and an Add in the candidate list are the same write to the same table, and a second
-    // attribute meaning the same thing is a second place to forget.
-    if (!c.on) {
-      return '<button class="btn ghost sm" type="button" data-def-add="conditions"' +
-        ' data-def-id="' + esc(c.key) + '" aria-label="Put ' + esc(c.label) +
-        ' on every new bid">Add</button>';
-    }
-    return '<button class="btn ghost sm danger" type="button" data-cond-off="' + esc(c.key) +
-      '" aria-label="Stop ' + esc(c.label) +
-      ' being on every new bid">Remove</button>';
+   *  Hanz, 2026-10-01, of joint filler, remove-existing and dye: "make these 3 as materials", then
+   *  "All 3 exactly like materials". Until then they had their own row code (conditionRowActions
+   *  and a priced cell with a "writes Polish!E29 · not in a new bid" tag) and were listed whether
+   *  or not a new bid bought them, so they looked like a different kind of thing sitting under the
+   *  Materials heading. Now there is one row builder and one pair of buttons, defaultRowActions'
+   *  own: Edit opens the row on the Items tab, where all three are reserved library rows, and
+   *  Remove stops it being a default. Which STORE Remove writes is decided when it is pressed
+   *  (removeDefault), not by drawing a different button. */
+  function materialDefaultRow(id, name, how) {
+    return { name: name, how: how, actions: defaultRowActions("items", id, name) };
   }
 
   var DEFAULT_Q = "";
@@ -2686,13 +2705,35 @@
       }
     });
     ITEMS.forEach(function (it) {
-      // Dye and the Joint Filler kit are never a takeoff default material: each is already on
-      // every bid as its own condition row (takeoffConditionDefaults), with its own Add/Remove.
+      // THE THREE RESERVED ROWS ARE NOT OFFERED HERE, by their `favorite` -- that flag is not what
+      // puts them in a bid. They are offered just below, by their condition.
       if (isReservedItem(it.id)) return;
       if (!it.favorite && (!q || String(it.name || "").toLowerCase().indexOf(q) !== -1)) {
         hits.push({ kind: "items", id: it.id, name: it.name, what: "Material" });
       }
     });
+    // JOINT FILLER, REMOVE-EXISTING AND DYE, offered like any material while a new bid does not
+    // buy them -- Hanz, 2026-10-01: "All 3 exactly like materials". A material that is not a
+    // default is found here and not listed above; so are these. Adding one writes its CONDITION
+    // default (the add router's "conditions" arm), so the hit carries the condition key.
+    //
+    // WALKED OFF THE CONDITIONS, NOT OFF ITEMS. A database the seed has not reached has no row for
+    // remove-existing, and a condition removed from the list with no way back here would make
+    // Remove a one-way door. The row's own name is matched when there is one, and the condition's
+    // label too, so "joint filler" finds the kit whatever an admin has renamed it to.
+    //
+    // FIRST IN THE LIST, not after every other material: Browse shows DEFAULT_MAX rows, and with
+    // eight un-favorited materials an OFF condition fell off the end and could only be found by
+    // typing its name.
+    var condHits = [];
+    takeoffConditionDefaults().forEach(function (c) {
+      if (c.on) return;
+      if (!q || String(c.name || "").toLowerCase().indexOf(q) !== -1 ||
+          String(c.label || "").toLowerCase().indexOf(q) !== -1) {
+        condHits.push({ kind: "conditions", id: c.key, name: c.name, what: "Material" });
+      }
+    });
+    hits = condHits.concat(hits);
     // LABOR, 2026-09-24 -- the Labor tab's own rows, offered the same way an un-favorited
     // material or assembly already is: findable here, one press to make a default. `travel`
     // is deliberately never a candidate -- it is not opted into a bid the way a favorited row
@@ -2708,11 +2749,6 @@
         hits.push({ kind: "labor", id: l.id, name: l.name, what: "Labor" });
       }
     });
-    // NO CONDITIONS IN HERE, and that is a change from 2026-09-19. While an off condition was
-    // unlisted, this was the only way back on and its absence would have made Remove a one-way
-    // door. Now that all three are permanent rows under Materials with their own Add, offering
-    // them here as well would put the same three names in two places on one screen -- and a
-    // search for "dye" would answer with a row that is already six lines up.
     return { rows: hits.slice(0, DEFAULT_MAX), more: Math.max(0, hits.length - DEFAULT_MAX) };
   }
 
@@ -2798,38 +2834,32 @@
                    actions: defaultRowActions("assemblies", a.id, a.name) };
         }) },
       { title: "Materials",
-        // JOINT FILLER, REMOVE-EXISTING AND DYE ARE IN HERE, not in a Conditions section of
-        // their own. Hanz, 2026-09-18: "die and joint filler are supposed to be materials not
-        // something that is default", then "just put these 3 in the materials section with the
-        // same buttons." They are what a bid buys, so they are listed with the rest of what a
-        // bid buys, they price themselves in the same column, and they carry the same buttons --
-        // rather than the chip that could not be pressed. ALL THREE ARE LISTED, on or off; the
-        // paragraph below this says why, and it used to say the opposite.
+        // JOINT FILLER, REMOVE-EXISTING AND DYE ARE MATERIALS HERE, drawn by the material row's
+        // own code. Hanz, 2026-09-18: "die and joint filler are supposed to be materials not
+        // something that is default"; 2026-10-01: "make these 3 as materials", then "All 3
+        // exactly like materials". So each is listed ONLY while a new bid buys it -- the rule
+        // `it.favorite` is for an ordinary material -- with the same Edit and Remove, and is found
+        // through "+ Add a takeoff default" when it is not.
+        //
+        // THIS REVERSES 2026-09-21, on purpose and at his word. For ten days all three were listed
+        // on or off, each with an Add or a Remove and a "writes Polish!E29 · not in a new bid"
+        // tag, after he asked where they had gone. That was the one way these rows still did not
+        // read like the materials above them, and it is what he pointed at.
         rows: ITEMS.filter(function (it) {
-          // Never a reserved row: Dye and the kit are already listed by their condition cards.
+          // Never a reserved row by its `favorite`: the three are listed below, by their condition.
           return it.favorite && !isReservedItem(it.id) && appliesToWorkType(it, DEFAULT_WT);
         }).map(function (it) {
-          return { name: it.name,
-                   how: L.num(it.unit_cost) != null
+          return materialDefaultRow(it.id, it.name,
+                   L.num(it.unit_cost) != null
                      ? L.money(it.unit_cost) + " per " + (it.unit || "unit")
-                     : "No cost in the library yet",
-                   actions: defaultRowActions("items", it.id, it.name) };
-        }).concat(takeoffConditionDefaults().map(function (c) {
-          // ALL THREE, ON OR OFF. For two days this filtered on `c.on`, by analogy with
-          // `it.favorite` two lines above, and offered the off ones under "Add a takeoff default"
-          // instead. Hanz found the Materials list with none of them in it and asked where they
-          // were -- which is the answer: the analogy is wrong. A material that is not a favourite
-          // is one of forty rows in a library, and hiding it is how the list stays readable.
-          // These three are a FIXED, NAMED set of three that every polish bid has an opinion
-          // about, so "absent" reads as "gone" rather than "not chosen", and the place he looked
-          // for them is the place they belong. Each row says which way it is set and carries the
-          // button for the direction it can move in; see conditionPriceCell and
-          // conditionRowActions.
-
-          return { name: c.label,
-                   how: conditionPriceCell(c),
-                   rawHow: true,
-                   actions: conditionRowActions(c) };
+                     : "No cost in the library yet");
+        }).concat(takeoffConditionDefaults().filter(function (c) {
+          return c.on;
+        }).map(function (c) {
+          // KEYED BY THE RESERVED ROW'S ID, so Edit lands on that row on the Items tab like any
+          // material's does, and Remove reaches removeDefault, which sends a reserved id to the
+          // condition default rather than to `favorite`.
+          return materialDefaultRow(c.item_id, c.name, c.priced);
         })) },
       { title: "Markup",
         rows: GLOBAL_MARKUP.map(function (g) {
@@ -3223,8 +3253,8 @@
     var already = {};
     ((asm && asm.lines) || []).forEach(function (ln) { if (ln.item_id) already[ln.item_id] = true; });
 
-    // Dye and the Joint Filler kit are left out here too -- the same reason as itemResultsHtml,
-    // the one-line picker this modal is the bulk version of.
+    // The three reserved rows are left out here too -- the same reason as itemResultsHtml, the
+    // one-line picker this modal is the bulk version of.
     var list = bulkCandidates(
       ITEMS.filter(function (it) { return !isReservedItem(it && it.id); }), BULK.q, BULK.F);
     BULK.shown = list.map(function (it) { return it.id; });
@@ -3942,10 +3972,11 @@
     if (delLab) { await removeLaborLine(delLab.getAttribute("data-del-labor")); return; }
     var addBtn = t.closest && t.closest("[data-def-add]");
     if (addBtn) {
-      // TWO SAVERS, ONE BUTTON, because a condition is not a library row: `favorite` is a column
-      // on an items/assemblies row and a condition has no row to carry one. The write is
-      // condition_defaults either way round, and routing here rather than teaching setDefault a
-      // third store keeps each saver owning one table.
+      // TWO SAVERS, ONE BUTTON, because a condition's answer is not a library row's `favorite`:
+      // joint filler, remove-existing and dye are offered in the search as "conditions" hits
+      // (defaultCandidates), and adding one writes condition_defaults. Routing here rather than
+      // teaching setDefault a third store keeps each saver owning one table -- removeDefault is
+      // the same split for the Remove button.
       var addKind = addBtn.getAttribute("data-def-add");
       if (addKind === "conditions") {
         await setConditionDefault(addBtn.getAttribute("data-def-id"), true);
@@ -3970,17 +4001,12 @@
                         wtBtn.getAttribute("aria-pressed") !== "true");
       return;
     }
-    // THE CONDITION PAIR, HANDLED BEFORE THE MATERIAL PAIR so neither can swallow the other:
-    // they sit in the same column of the same table now and the selectors must not overlap.
-    var condOff = t.closest && t.closest("[data-cond-off]");
-    if (condOff) {
-      await setConditionDefault(condOff.getAttribute("data-cond-off"), false);
-      return;
-    }
+    // ONE REMOVE FOR EVERY ROW, conditions included since 2026-10-01 -- joint filler,
+    // remove-existing and dye carry the material's own button now. removeDefault decides which
+    // store the press writes (see its note); there is no second attribute to route.
     var offBtn = t.closest && t.closest("[data-def-off]");
     if (offBtn) {
-      await setDefault(offBtn.getAttribute("data-def-off"),
-                       offBtn.getAttribute("data-def-id"), false);
+      await removeDefault(offBtn.getAttribute("data-def-off"), offBtn.getAttribute("data-def-id"));
       return;
     }
     // EDIT GOES TO THE ROW, not to an editor here. What you want to change about a default is the
