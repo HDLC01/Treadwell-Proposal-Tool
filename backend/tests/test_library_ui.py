@@ -3370,8 +3370,9 @@ def test_the_takeoff_conditions_are_editable_and_say_no_such_thing_as_built_in(r
     the "writes Polish!E29 · not in a new bid" TAG WENT ON 2026-10-01, when he asked for the three
     to be "exactly like materials". The priced column now says what each line costs in a
     material's own words -- "$500.00 per kit · 1 per 3,500 SF", "$0.14 per SF a coat · 2 coats",
-    "No material cost" -- and whether a new bid buys it is said by the row being listed at all,
-    exactly as a favourited material says it.
+    "No material cost" -- and whether a new bid buys it is said by the row's button: Remove while
+    it does, Add and an "Off" note while it does not (Hanz, 2026-10-01: "Always list them, start
+    OFF").
 
     THE FIGURES ARE THE ENGINE'S OWN. This fixture has no reserved rows, so the fallback prices:
     RATES.JOINT_FILLER_KIT_COST and RATES.DYE_PER_SF, reached through the real module, so a page
@@ -3412,7 +3413,7 @@ def test_the_takeoff_conditions_are_editable_and_say_no_such_thing_as_built_in(r
 
 
 @needs_node
-def test_all_three_takeoff_conditions_ship_off_and_are_found_through_the_add_search(ran):
+def test_all_three_takeoff_conditions_ship_off_and_are_listed_off(ran):
     """THE PRICING HALF OF Hanz's 2026-09-19 decision, and where an off condition lives now.
 
     joint_filler shipped ON until 2026-09-19, transcribed faithfully from Kyle's template, which
@@ -3421,18 +3422,18 @@ def test_all_three_takeoff_conditions_ship_off_and_are_found_through_the_add_sea
     was quietly carrying $2,500 on a 17,500 SF floor that nobody had asked for. All three start
     off and the estimator switches on what the job needs.
 
-    AND OFF MEANS NOT LISTED, 2026-10-01. For ten days all three were listed on or off (Hanz, on
-    2026-09-21: "list them but they are also materials"); on 2026-10-01 he asked for them to be
-    "exactly like materials". A material that is not a default is not on this list -- it is found
-    through "+ Add a takeoff default" -- and so are these, as Materials, keyed by the condition the
-    press turns on.
+    AND OFF IS STILL LISTED, 2026-10-01. That morning he asked for them to be "exactly like
+    materials" (listed only while on, found through the add search while off); seeing the list
+    without them that afternoon: "Those 3 should be defaults as well here", then "Always list
+    them, start OFF". So all three are on the Polish list with an Add and an Off note, and the
+    add search does not offer them a second time.
 
     READ THROUGH THE REAL freshModel, never restated here, so a literal put back in
     polish-bid-core reds this rather than passing against a copy.
 
     Mutation: set `joint_filler: true` in freshModel().conditions (`noneOfThemOn` and
-    `noneListedWhileOff` go red); drop the takeoffConditionDefaults loop from defaultCandidates
-    (`eachIsOfferedByTheAddSearch` goes red, and Remove becomes a one-way door)."""
+    `noneListedWhileOff` go red); filter the three back to `c.on` in takeoffDefaultGroups
+    (`noneListedWhileOff`); offer them in defaultCandidates again (`eachIsOfferedByTheAddSearch`)."""
     s = ran["defaultsShippedConditions"]
     assert s["offersTheThree"] == "dye,joint_filler,remove_existing_jf", (
         "the Defaults tab no longer offers the same three conditions: %r" % s["offersTheThree"])
@@ -3542,9 +3543,11 @@ def test_changing_a_condition_default_saves_it_and_a_refusal_puts_it_back(ran):
     EXACTLY LIKE A MATERIAL, 2026-10-01 (Hanz: "All 3 exactly like materials"). Remove is the
     material's own button, keyed by the reserved row, and removeDefault sends it to the CONDITION
     default -- never to the row's `favorite`, which would save cleanly and change nothing a bid
-    reads. The row then LEAVES the list, as a material's does, and the add search offers it again.
-    Add is the search hit, keyed by the condition; the id is read off the rendered hit and handed
-    to the saver the router's "conditions" arm calls. An ordinary material's Remove is unchanged.
+    reads. The row then STAYS and turns off in place: its Remove becomes an Add keyed by the
+    condition, and it says Off (Hanz, later on 2026-10-01: "Always list them, start OFF"). The
+    Add's id is read off the rendered table and handed to the saver the router's "conditions" arm
+    calls; the add search never offers the three. They are listed on the Polish tab only, and the
+    off row escapes the typed text it prints. An ordinary material's Remove is unchanged.
 
     A REFUSED SAVE PUTS THE ROW BACK and says why, which is this page's standing rule for a
     failed write: a list that keeps the new state after the server said no tells an admin every
@@ -3552,8 +3555,8 @@ def test_changing_a_condition_default_saves_it_and_a_refusal_puts_it_back(ran):
 
     Mutation: route removeDefault's reserved arm to setDefault (`wroteTheServer` and
     `didNotWriteTheFavorite` go red); drop the `renderDefaultTakeoff()` from setConditionDefault's
-    catch (`refusedSavePutsItBack` goes red); drop the `if (c.on) return;` from defaultCandidates
-    (`browseSkipsAConditionAlreadyOn` and `addedOneIsNoLongerOffered` go red)."""
+    catch (`refusedSavePutsItBack` goes red); drop the DEFAULT_WT === "polish" filter
+    (`notOnOtherWorkTypes`); drop esc() on the off row's priced text (`offRowEscapesTypedText`)."""
     c = ran["conditionDefaults"]
     assert c["storedOverrideWins"], (
         "a stored 'on' for joint filler did not beat the shipped 'off', so the tab is showing a "
@@ -3590,6 +3593,10 @@ def test_changing_a_condition_default_saves_it_and_a_refusal_puts_it_back(ran):
         "are off")
     assert c["searchByLabelFindsBoth"], (
         "searching 'joint' does not find the kit and remove-existing (or finds dye)")
+    assert c["notOnOtherWorkTypes"], (
+        "a condition is listed on the Seal tab; all three write Polish-sheet cells")
+    assert c["offRowEscapesTypedText"], (
+        "the off row printed an admin's typed name or unit as HTML")
     assert c["refusedSavePutsItBack"], "a refused save left the new state on screen"
     assert c["refusedSaveSaysSo"], "a refused save said nothing"
     assert c["refusedSaveDropsTheOptimisticRow"], (
@@ -3711,9 +3718,9 @@ def test_editing_the_reserved_rows_moves_the_defaults_tab_price(ran):
 @needs_node
 def test_the_reserved_rows_are_never_an_assembly_line_and_are_a_default_only_as_a_condition(ran):
     """The Polish estimate already owns each through its own condition card, so none may be picked
-    into an assembly (a second, invisible charge for the same line). In the add-a-default search
-    they ARE offered now -- Hanz, 2026-10-01: "All 3 exactly like materials" -- but only as their
-    CONDITION, never as an ordinary material whose `favorite` a press would flip. The bulk-add list
+    into an assembly (a second, invisible charge for the same line). The add-a-default search
+    offers them in NO form: they are always on the Polish list (Hanz, 2026-10-01: "Always list
+    them, start OFF"), and never as an ordinary material whose `favorite` a press would flip. The bulk-add list
     and every other picker filter on isReservedItem, asserted here for all three ids.
 
     Mutation: drop the isReservedItem filter from itemResultsHtml (`notInTheLinePicker`) or from
@@ -3728,15 +3735,18 @@ def test_the_reserved_rows_are_never_an_assembly_line_and_are_a_default_only_as_
             "a reserved row is offered as an ordinary takeoff default material: %r"
             % r["defaults"])
     for key in ("joint_filler", "remove_existing_jf", "dye"):
-        assert "conditions:" + key in r["defaults"], (
-            "the %s condition is not offered by the add search: %r" % (key, r["defaults"]))
+        assert "conditions:" + key not in r["defaults"], (
+            "the %s condition is offered by the add search though it is always on the list: %r"
+            % (key, r["defaults"]))
     assert "items:i1" in r["defaults"], (
         "the ordinary materials vanished from the default search too: %r" % r["defaults"])
     # Browse with ten ordinary un-favorited materials and nothing typed: the list is capped at
-    # DEFAULT_MAX rows, and the three OFF conditions must not fall off its end.
-    for key in ("joint_filler", "remove_existing_jf", "dye"):
-        assert "conditions:" + key in r["browseFull"], (
-            "the %s condition fell off the capped Browse list: %r" % (key, r["browseFull"]))
+    # DEFAULT_MAX rows, and every one of them is an ordinary material.
+    assert len(r["browseFull"]) == 8 and not any(
+        k.startswith("conditions:") or k in ("items:dye", "items:joint-filler-kit",
+                                             "items:remove-existing-jf")
+        for k in r["browseFull"]), (
+        r["browseFull"])
 
 
 @needs_node
