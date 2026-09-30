@@ -64,7 +64,7 @@ function fnFrom(text, name, file) {
  *  silently empty lift surfaces as a ReferenceError from the harness itself, which reads exactly
  *  like the product bug this file hunts. */
 function declFrom(text, name, file) {
-  const m = new RegExp("\\n\\s*const " + name.replace(/[$]/g, "\\$&") + " = ").exec(text);
+  const m = new RegExp("\\n\\s*const " + name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + " = ").exec(text);
   if (!m) throw new Error("const " + name + " is gone from " + file + " — rewrite this harness");
   let depth = 0;
   for (let j = m.index + m[0].length; j < text.length; j++) {

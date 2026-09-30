@@ -292,16 +292,19 @@
     if (!s.tax_flags_per_sheet) return null;
     const flag = c.key === "taxable" ? "taxable" : "remodel";
     const tabs = s.priced_tabs instanceof Array ? s.priced_tabs : [];
-    const byId = {};
-    tabs.forEach((t) => { if (t && t.id) byId[t.id] = t; });
+    const byId = new Map();
+    tabs.forEach((t) => { if (t && t.id) byId.set(t.id, t); });
     const wt = condScope();
-    const ids = byId[s.base_tab_id] ? [s.base_tab_id]
+    const ids = byId.has(s.base_tab_id) ? [s.base_tab_id]
       : wt === "gyp" ? ['Gyp (USG 1-8")'] : wt === "polish" ? ["Polish"]
       : wt === "combo" ? ["Epoxy", "Polish"] : ["Epoxy"];
     const out = [];
     ids.forEach((id) => {
-      const fc = byId[id] && byId[id].flag_cells;
-      if (fc && typeof fc[flag] === "string" && fc[flag]) out.push(fc[flag]);
+      const fc = byId.has(id) && byId.get(id).flag_cells;
+      // Only a real "Sheet!A1" address: this string becomes a key in cell_values.
+      if (fc && typeof fc[flag] === "string" && /^[^!]+![A-Z]{1,3}[0-9]{1,5}$/.test(fc[flag])) {
+        out.push(fc[flag]);
+      }
     });
     return out;
   }
@@ -389,8 +392,10 @@
       if (split && c.key !== flipped) continue;
       const cells = split || c.cells;
       for (let j = 0; j < cells.length; j++) {
-        if (applies) out[cells[j]] = condState[c.key] ? c.on : c.off;
-        else delete out[cells[j]];
+        const k = cells[j];
+        if (k === "__proto__" || k === "constructor" || k === "prototype") continue;
+        if (applies) out[k] = condState[c.key] ? c.on : c.off;
+        else delete out[k];
       }
     }
     return out;

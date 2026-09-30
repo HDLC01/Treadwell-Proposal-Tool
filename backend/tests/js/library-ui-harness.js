@@ -4574,7 +4574,9 @@ out.page = {
       beforeAdministration: html.indexOf('id="tab-labor"') < html.indexOf('id="tab-vendors"'),
       paneStartsHidden: /<section id="pane-labor"[^>]*\shidden/.test(html),
       headers: (pane.match(/<th[^>]*>([^<]*)<\/th>/g) || []).map(function (t) {
-        return t.replace(/<[^>]+>/g, "");
+        let s = t, prev;
+        do { prev = s; s = s.replace(/<[^>]+>/g, ""); } while (s !== prev);
+        return s;
       }),
       body: /id="labor-body"/.test(pane),
       emptyState: /id="labor-empty"[^>]*hidden/.test(pane),
