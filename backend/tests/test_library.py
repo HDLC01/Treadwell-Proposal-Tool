@@ -187,11 +187,15 @@ def _reserved(rid):
         "dye": {"id": "dye", "name": "Dye, per coat", "unit": "SF", "buy_qty": 1,
                 "unit_cost": 0.14, "coverage": 1.0, "waste_pct": 0.0, "roundup": False,
                 "deleted_at": None},
+        # 2026-10-01 (Hanz: "All 3 exactly like materials"). Buys nothing: no cost, no coverage.
+        "remove-existing-jf": {"id": "remove-existing-jf", "name": "Remove existing joint filler",
+                               "unit": "SF", "buy_qty": 1, "unit_cost": None, "coverage": None,
+                               "waste_pct": 0.0, "roundup": False, "deleted_at": None},
     }
     return dict(seeds[rid])
 
 
-@pytest.mark.parametrize("rid", ["dye", "joint-filler-kit"])
+@pytest.mark.parametrize("rid", ["dye", "joint-filler-kit", "remove-existing-jf"])
 def test_a_reserved_row_cannot_be_deleted(store, rid):
     """The guard fires before the store is touched -- the row is inserted directly (create_item
     cannot make one at this id) and survives the refused delete. Both ids, so a guard naming only
@@ -203,7 +207,7 @@ def test_a_reserved_row_cannot_be_deleted(store, rid):
         "the reserved row was soft-deleted despite the guard")
 
 
-@pytest.mark.parametrize("rid", ["dye", "joint-filler-kit"])
+@pytest.mark.parametrize("rid", ["dye", "joint-filler-kit", "remove-existing-jf"])
 def test_a_reserved_id_is_refused_even_with_no_row_seeded_yet(store, rid):
     """A database the seed has not reached must not answer a delete on a reserved id with a
     harmless-looking 404: this id may never be deleted, seeded or not, so the guard fires BEFORE
@@ -222,6 +226,19 @@ def test_the_reserved_ids_are_refused_through_the_api_as_a_400(store):
     assert "can't be removed" in r.json()["detail"]
     assert store["library_items"][0]["deleted_at"] is None, (
         "the row was soft-deleted despite the route refusing the request")
+
+
+def test_remove_existing_is_refused_through_the_api_like_the_other_two(store):
+    """THE THIRD RESERVED ROW, 2026-10-01, gets the same 400 through the route as the kit -- the
+    Items tab offers it no Remove, and a direct API call cannot take it either.
+
+    Mutation: leave remove-existing-jf out of RESERVED_ITEM_IDS."""
+    store["library_items"].append(_reserved("remove-existing-jf"))
+    r = client.delete("/api/library/items/remove-existing-jf")
+    assert r.status_code == 400, r.text
+    assert "can't be removed" in r.json()["detail"]
+    assert store["library_items"][0]["deleted_at"] is None, (
+        "the remove-existing row was soft-deleted despite the route refusing the request")
 
 
 def test_an_ordinary_material_still_deletes(store):

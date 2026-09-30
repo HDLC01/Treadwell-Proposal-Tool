@@ -490,10 +490,18 @@ alter table public.library_assemblies add column if not exists updated_by text;
 -- and would buy 5% more of both. test_polish_estimate_page.py holds these rows, both files and the
 -- engine's fallback together. Every column the insert names is added ABOVE it (waste_pct and
 -- roundup with the other material columns), so a fresh database builds.
+--
+-- REMOVE EXISTING JOINT FILLER, 2026-10-01 (Hanz, of the three Takeoff conditions: "All 3
+-- exactly like materials"). A THIRD reserved row, so the Defaults tab can list it as a
+-- material and the Items tab can edit it, with the same no-delete guard. It BUYS NOTHING:
+-- unit_cost and coverage are NULL on purpose and nothing prices off the row -- the estimate's
+-- remove_existing_jf is a labor modifier (Polish!F29), priced on the Labor step. 'SF' only
+-- because unit is NOT NULL; it is never multiplied by anything.
 insert into public.library_items (id, name, unit, buy_qty, unit_cost, coverage, waste_pct, roundup)
 values
   ('joint-filler-kit', 'Joint filler, 10 gal kit', 'Kit', 1, 500.00, 3500, 0, true),
-  ('dye', 'Dye, per coat', 'SF', 1, 0.14, 1, 0, false)
+  ('dye', 'Dye, per coat', 'SF', 1, 0.14, 1, 0, false),
+  ('remove-existing-jf', 'Remove existing joint filler', 'SF', 1, null, null, 0, false)
 on conflict (id) do nothing;
 
 -- ── Markup rules ──────────────────────────────────────────────────────────

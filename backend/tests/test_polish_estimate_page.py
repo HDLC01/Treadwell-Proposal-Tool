@@ -1994,10 +1994,13 @@ def _reserved_item_seed(path):
 def test_both_schema_files_seed_the_dye_and_joint_filler_rows_the_engine_prices_like_the_constants(ran):
     """THE ROWS, THE FILES AND THE ENGINE HAVE TO AGREE, and they live in four places.
 
-    Both schema files seed the two reserved rows (DDL LANDS TWICE: prod Supabase and the staging
+    Both schema files seed the three reserved rows (DDL LANDS TWICE: prod Supabase and the staging
     Postgres are different databases), library.py refuses to delete them, library.js keeps the
-    Remove button off them, and the page prices them. The harness's RESERVED_SEED is what
-    test_the_seeded_rows_price_every_bid_to_the_cent_as_before proves prices exactly like the
+    Remove button off them, and the page prices two of them. The third, remove-existing-jf
+    (2026-10-01), buys nothing: its unit_cost and coverage are seeded NULL and must stay NULL, so
+    a figure cannot creep into a row nothing is supposed to price off. The harness's
+    RESERVED_SEED is what test_the_seeded_rows_price_every_bid_to_the_cent_as_before proves
+    prices exactly like the
     shipped constants -- so requiring both files to say EXACTLY that, column for column, is what
     makes the identity a fact about the databases rather than about a fixture.
 
@@ -2005,9 +2008,9 @@ def test_both_schema_files_seed_the_dye_and_joint_filler_rows_the_engine_prices_
     both. A FRESH DATABASE MUST BUILD: every column the insert names has to exist by the time the
     insert runs, so the waste/roundup/buy_qty columns are added ABOVE it.
 
-    Mutation: seed either row differently in one file; seed waste as null; move the insert above
-    the waste_pct/roundup alters; rename an id in library.py's RESERVED_ITEM_IDS or library.js's
-    COND_PRICED_KEYS."""
+    Mutation: seed any row differently in one file; seed waste as null; give remove-existing-jf a
+    cost; move the insert above the waste_pct/roundup alters; rename an id in library.py's
+    RESERVED_ITEM_IDS or library.js's RESERVED_ITEM_CONDITION."""
     import library  # noqa: E402 -- backend/ is the working directory for this suite
 
     backend = pathlib.Path(__file__).resolve().parents[1]
@@ -2029,6 +2032,13 @@ def test_both_schema_files_seed_the_dye_and_joint_filler_rows_the_engine_prices_
                 "%s seeds %s with columns %r, the priced seed has %r"
                 % (name, rid, sorted(got), sorted(want)))
             for col, val in want.items():
+                # NULL ONLY WHERE THE PRICED SEED SAYS NULL -- remove-existing-jf's cost and
+                # coverage. Anywhere else a NULL is a row that prices wrong (a null waste reads
+                # as 5%).
+                if val is None:
+                    assert got[col] is None, "%s seeds %s.%s as %r, not NULL" % (
+                        name, rid, col, got[col])
+                    continue
                 assert got[col] is not None, "%s seeds %s.%s as NULL" % (name, rid, col)
                 if isinstance(val, bool) or isinstance(val, str):
                     assert got[col] == val, (name, rid, col, got[col], val)
@@ -2039,10 +2049,13 @@ def test_both_schema_files_seed_the_dye_and_joint_filler_rows_the_engine_prices_
         "price them differently")
 
     assert set(library.RESERVED_ITEM_IDS) == set(seed), library.RESERVED_ITEM_IDS
+    # THE THIRD ROW BUYS NOTHING, in both files: no cost and no coverage to price from.
+    assert seed["remove-existing-jf"]["unit_cost"] is None
+    assert seed["remove-existing-jf"]["coverage"] is None
     js = (FRONTEND / "js" / "library.js").read_text(encoding="utf-8")
-    m = re.search(r"var COND_PRICED_KEYS = \[([^\]]*)\];", js)
-    assert m, "library.js no longer declares COND_PRICED_KEYS"
-    assert set(re.findall(r'"([^"]+)"', m.group(1))) == set(seed), m.group(1)
+    m = re.search(r"var RESERVED_ITEM_CONDITION = \{([^}]*)\};", js)
+    assert m, "library.js no longer declares RESERVED_ITEM_CONDITION"
+    assert set(re.findall(r'"([^"]+)":', m.group(1))) == set(seed), m.group(1)
 
 
 @needs_node
@@ -2058,6 +2071,8 @@ def test_the_reserved_rows_are_never_a_takeoff_row_and_the_card_uses_the_live_na
     assert r["dyeNotInPicker"], "\"Dye, per coat\" is offered in the takeoff row picker"
     assert r["jointFillerNotInPicker"], (
         "\"Joint filler, 10 gal kit\" is offered in the takeoff row picker")
+    assert r["removeExistingNotInPicker"], (
+        "\"Remove existing joint filler\" is offered in the takeoff row picker")
     assert r["ordinaryItemsStillListed"], "an ordinary material vanished from the picker too"
     assert r["typedNameResolvesToNothing"], (
         "typing a reserved row's name resolves a takeoff row to it")
@@ -2067,6 +2082,8 @@ def test_the_reserved_rows_are_never_a_takeoff_row_and_the_card_uses_the_live_na
         "typing 'Dye, per coat' into a material row turned it into a second dye charge")
     assert r["typedPick"]["kit"] not in ("dye", "joint-filler-kit"), (
         "typing the kit's name into a material row turned it into a second joint filler charge")
+    assert r["typedPick"]["rem"] not in ("remove-existing-jf",), (
+        "typing 'Remove existing joint filler' into a material row picked its reserved row")
     assert r["typedPick"]["ordinary"] == "i1", "typing an ordinary material no longer resolves it"
     assert r["renamed"] and not r["notRenamedByDefault"], (
         "the joint filler card does not show the row's own name")
@@ -2565,6 +2582,31 @@ def test_a_brand_new_bid_opens_with_the_conditions_the_library_says(ran):
     assert c["conditions"]["remove_existing_jf"] is True
     # The five answered on Intake are not this tab's to move.
     assert c["conditions"]["taxable"] is True and c["conditions"]["local"] is True
+
+
+@needs_node
+def test_the_reserved_rows_change_neither_the_seeded_conditions_nor_the_price(ran):
+    """2026-10-01: remove-existing became a reserved library row beside dye and the joint filler
+    kit (Hanz: "All 3 exactly like materials"), so the Defaults tab can list it as a material. A
+    new estimate must open with EXACTLY the conditions it opened with before for the same
+    condition defaults, and come to the same total, whether the three rows are in the library or
+    not -- and remove-existing, on, must move no material figure and no bid figure by a cent,
+    because nothing prices off its row.
+
+    Mutation: give remove-existing's card a `cost` that reads its row, or seed conditions off the
+    library rows' `favorite` instead of condition_defaults."""
+    n = ran["conditionDefaults"]
+    assert n["brandNewWithRows"]["conditions"] == n["brandNew"]["conditions"], (
+        "the reserved rows changed which conditions a brand new bid opens with: %r vs %r"
+        % (n["brandNewWithRows"]["conditions"], n["brandNew"]["conditions"]))
+    assert n["brandNewWithRows"]["total"] == n["brandNewWithRows"]["totalWithoutRows"], (
+        n["brandNewWithRows"])
+    rem = ran["reservedItems"]["removeExisting"]
+    assert rem["withRow"] == rem["withoutRow"], (
+        "remove-existing's reserved row moved the bid: %r" % rem)
+    assert rem["withRow"]["material"] == rem["offMaterial"], (
+        "remove-existing, on, changed the material total -- it is a labor modifier, not a "
+        "material: %r" % rem)
 
 
 @needs_node
