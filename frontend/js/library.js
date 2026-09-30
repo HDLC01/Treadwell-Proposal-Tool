@@ -2527,7 +2527,8 @@
         // rather than the chip that could not be pressed. ALL THREE ARE LISTED, on or off; the
         // paragraph below this says why, and it used to say the opposite.
         rows: ITEMS.filter(function (it) {
-          return it.favorite && appliesToWorkType(it, DEFAULT_WT);
+          // Never a reserved row: Dye and the kit are already listed by their condition cards.
+          return it.favorite && !isReservedItem(it.id) && appliesToWorkType(it, DEFAULT_WT);
         }).map(function (it) {
           return { name: it.name,
                    how: L.num(it.unit_cost) != null
