@@ -164,9 +164,14 @@ jobs:
               sleep 5
             done
             if [ "$db_ok" != "1" ]; then echo "staging database healthcheck failed"; exit 1; fi
+            # FED FROM THE CHECKOUT, NOT READ THROUGH THE MOUNT. The db container sees
+            # schema_pg.sql through a single-file bind mount, and `git pull` replaces the
+            # file with a new inode, so the mounted path kept serving the 2026-09-25 copy:
+            # every deploy after that applied a stale schema and reported success (found
+            # 2026-09-30 when library_labor.favorite never arrived).
             docker compose -f docker-compose.staging.yml exec -T db \
               psql -U postgres -d treadwell -v ON_ERROR_STOP=1 \
-              -f /docker-entrypoint-initdb.d/01_schema.sql
+              < backend/staging/schema_pg.sql
             # The token is short-lived and job-scoped; logging out again means no registry
             # credential is ever left sitting on the box.
             echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
