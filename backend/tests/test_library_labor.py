@@ -253,10 +253,15 @@ def test_creating_and_listing(store):
 
 def test_the_row_shape_is_exactly_what_the_other_tracks_were_built_against(store):
     """Three tracks were built against this at once, and the frontend maps it at the seam into
-    the estimate's own labor-row shape. A key that is not here is a `undefined` on a bid."""
+    the estimate's own labor-row shape. A key that is not here is a `undefined` on a bid.
+
+    `favorite` joined the set 2026-09-24, the same day the Labor tab did — see
+    test_creating_defaults_favorite_to_false and test_favorite_round_trips below for what it
+    actually does; this one only pins that the key is there at all."""
     row = _mk(notes="two trucks", guys_auto=True, sort=3)
     assert set(row) == {"id", "name", "rate", "unit", "guys_auto", "sort", "notes",
-                        "owner_email", "created_at", "updated_at", "default_work_types"}
+                        "owner_email", "created_at", "updated_at", "default_work_types",
+                        "favorite"}
     # EMPTY MEANS EVERY WORK TYPE, which is what keeps the column backwards compatible:
     # a row written before it existed still applies everywhere, exactly as it did when
     # `favorite` was the whole story.
@@ -265,6 +270,112 @@ def test_the_row_shape_is_exactly_what_the_other_tracks_were_built_against(store
     assert isinstance(row["sort"], int)
     assert row["guys_auto"] is True
     assert row["owner_email"] == "hanz@wetreadwell.com"
+
+
+# ── favorite: is this labor type a default? ────────────────────────────
+#
+# The column the Labor tab exists to make meaningful. Before it, EVERY row in this table behaved
+# as a default because there was no other tab a custom line could come from — the two-step ALTER
+# in both schema files backfills every row that predates the column to `true` (preserving that
+# old behaviour for what already exists) and then moves the column's own default to `false` (so a
+# type created on the new Labor tab is NOT automatically a default). This block pins the half of
+# that contract Python can see: what `validate_labor`/`create_labor`/`_shape_labor` do with the
+# key on a fresh row. The backfill itself is SQL and is not exercised here — see
+# test_creating_and_listing's sibling tests above for the same posture on `default_work_types`.
+def test_creating_defaults_favorite_to_false():
+    """A brand new labor type, created without naming `favorite` at all, is NOT a default. This is
+    the Python-side half of "create it, then decide if it's a default" — the half that has to
+    agree with the schema's own `alter column favorite set default false`, or a caller that goes
+    around the ALTER (this function) and a caller that does not (a raw SQL insert) would disagree
+    about what a blank row means.
+
+    Mutation: change `bool(payload.get("favorite"))` to default `True` in validate_labor, and a
+    line typed on the new Labor tab appears in every new bid the moment it is saved — the
+    two-tabs-two-actions design this table exists for, undone in one line."""
+    assert library.validate_labor({"name": "x"})["favorite"] is False
+    assert library.validate_labor({"name": "x", "rate": 40})["favorite"] is False
+
+
+def test_favorite_is_coerced_not_validated():
+    """Same posture as guys_auto and an item's own favorite: any truthy/falsy value means exactly
+    what it says, and there is no invalid value to reject."""
+    assert library.validate_labor({"name": "x", "favorite": True})["favorite"] is True
+    assert library.validate_labor({"name": "x", "favorite": "yes"})["favorite"] is True
+    assert library.validate_labor({"name": "x", "favorite": 0})["favorite"] is False
+    assert library.validate_labor({"name": "x"})["favorite"] is False
+
+
+def test_favorite_round_trips_through_create_and_patch(store):
+    """The whole mechanism the new Labor tab and the Defaults tab's browse-and-search share:
+    a labor type can be created not-a-default and made one afterward, on a different screen, with
+    a plain boolean PATCH — the same `{ favorite: true }` body setDefault already sends for an
+    item or an assembly."""
+    row = _mk()
+    assert row["favorite"] is False, "a freshly created labor type opened as a default"
+    made_default = library.update_labor(row["id"], {"favorite": True})
+    assert made_default["favorite"] is True
+    # AND BACK OFF, the same write Remove on the Defaults tab sends — this does not delete the
+    # labor type, it only stops it seeding a new bid. It must still be listed afterward.
+    taken_off = library.update_labor(row["id"], {"favorite": False})
+    assert taken_off["favorite"] is False
+    assert [r["id"] for r in library.list_labor()] == [row["id"]], (
+        "un-favoriting a labor type took it off the catalog — it should only stop it being a "
+        "default, the same as Remove already means for an item or an assembly")
+
+
+def test_favorite_is_read_honestly_off_whatever_the_store_holds(store):
+    """`_shape_labor` reports what is there — it does not invent a "yes" the way
+    `_coerce_work_types([])` invents "applies everywhere" for an absent `default_work_types`.
+    A row with no `favorite` key at all (every row before the migration's first ALTER backfills
+    it) reads `False`; a row the migration or an admin has set to `true` reads `True`. The two
+    columns disagree about what a missing value means for opposite, deliberate reasons, and this
+    is the one this table would get wrong if it copied the other's shape instead of stating its
+    own."""
+    store["library_labor"].append({"id": "l1", "name": "No favorite key at all"})
+    store["library_labor"].append({"id": "l2", "name": "Backfilled", "favorite": True})
+    store["library_labor"].append({"id": "l3", "name": "Explicitly off", "favorite": False})
+    got = {r["id"]: r["favorite"] for r in library.list_labor()}
+    assert got == {"l1": False, "l2": True, "l3": False}
+
+
+def test_a_partial_patch_leaves_favorite_alone_unless_named(store):
+    """The same guarantee `test_a_partial_update_only_touches_what_it_names` pins for the module as
+    a whole, asked specifically of the field a stray write would most visibly wreck: a rate edit
+    on the new Labor tab must not silently un-default a line the Defaults tab already favorited."""
+    row = _mk()
+    library.update_labor(row["id"], {"favorite": True})
+    edited = library.update_labor(row["id"], {"rate": 61})
+    assert edited["rate"] == 61.0
+    assert edited["favorite"] is True, "editing the rate turned favorite back off"
+
+
+@pytest.mark.parametrize("rel", ["supabase_schema.sql", "staging/schema_pg.sql"])
+def test_both_schemas_add_favorite_in_two_steps_so_existing_rows_stay_defaults(rel):
+    """THE ORDER IS THE BACKFILL. `add column ... default true` fills every row that exists when
+    it runs -- Travel, and every line already typed into the Defaults tab -- with true, so nothing
+    Kyle bids with stops being a default. Only THEN does the column's default move to false, so a
+    line created on the Labor tab afterwards is not one. Swap the two, or collapse them into one
+    `default false` ADD, and every existing row is un-defaulted the moment the DDL runs.
+
+    Both files, because staging runs its own Postgres and prod runs Supabase -- DDL twice, or one
+    drifts. And both AFTER the Travel seed insert, so a fresh database gets Travel backfilled too.
+
+    Mutation: swap the two ALTER lines in either file, or change the first to `default false`."""
+    import pathlib
+    import re
+    sql = (pathlib.Path(__file__).resolve().parents[1] / rel).read_text(encoding="utf-8")
+    add = ("alter table public.library_labor add column if not exists favorite boolean "
+           "not null default true;")
+    flip = "alter table public.library_labor alter column favorite set default false;"
+    assert sql.count(add) == 1, "%s does not add favorite exactly once, defaulting true" % rel
+    assert sql.count(flip) == 1, "%s never moves favorite's default to false" % rel
+    created = sql.index("create table if not exists public.library_labor")
+    seeded = sql.index("insert into public.library_labor")
+    assert created < seeded < sql.index(add) < sql.index(flip), (
+        "%s runs the favorite DDL out of order -- the backfill has to come first, after the "
+        "Travel seed" % rel)
+    assert not re.search(r"library_labor\s+add column[^;]*favorite[^;]*default\s+false", sql), (
+        "%s adds favorite with default false in one step, un-defaulting every existing row" % rel)
 
 
 class _Numeric102Client:
@@ -445,31 +556,67 @@ def test_editing_travel_leaves_the_fields_the_form_does_not_write_alone(store, a
     assert [x["id"] for x in store["library_labor"]] == ["travel"]
 
 
-def test_a_reset_that_deleted_the_row_would_take_the_only_handle_travel_has(store, as_admin):
+def test_deleting_travel_is_refused_not_silently_soft_deleted(store, as_admin):
     """WHY Reset IS A PATCH AND NOT A DELETE, said at the level where it is a fact about the API
-    rather than about a button.
+    rather than about a button — and, since the Labor tab, no longer just an argument: the row is
+    now genuinely reachable from a DELETE icon on a real table of real rows, not only from the one
+    Reset button that always PATCHed. Something has to hold the door shut at the layer a UI icon
+    cannot be trusted to.
 
-    A soft delete reads fine on screen: list_labor() stops answering with the row and the page
-    falls back to travelSeed()'s $33.00/hr, so Travel neither disappears from the list nor from a
-    bid. What it also does is take the id with it — `update_labor` and `get_labor` both filter on
-    `deleted_at is null`, so the row becomes unaddressable, and the only way to make a row called
-    `travel` again is by hand in SQL (the test above pins that the API cannot). The Edit control
-    would go with it and Travel would be exactly as uneditable as it was before.
+    A soft delete would read fine on screen: list_labor() would stop answering with the row and
+    the page would fall back to travelSeed()'s $33.00/hr, so Travel would neither disappear from
+    the list nor from a bid already using it. What it would ALSO do is take the id with it —
+    `update_labor` and `get_labor` both filter on `deleted_at is null`, so the row would become
+    unaddressable, and the only way to make a row called `travel` again would be by hand in SQL
+    (the test above pins that the API cannot mint one). The Edit control would go with it and
+    Travel would be exactly as uneditable as it was before any of this shipped.
 
-    This is that door, shown shut: after a delete the PATCH the page would send is a 404."""
+    Mutation: delete the `if labor_id == "travel"` guard from delete_labor. This test goes red
+    with `ValidationError` never raised and the row's `deleted_at` no longer null."""
     store["library_labor"].append({
         "id": "travel", "name": "Travel", "rate": 41.5, "unit": "hours", "guys_auto": True,
-        "sort": -1, "notes": None, "owner_email": None,
+        "sort": -1, "notes": None, "owner_email": None, "favorite": True,
         "created_at": "2026-09-19T00:00:00Z", "updated_at": "2026-09-19T00:00:00Z",
         "deleted_at": None})
-    assert library.delete_labor("travel") is True
-    # The bid is unharmed — the row simply stops being an override, which is the safe direction.
-    assert library.list_labor() == []
-    # …but it can never be edited again from anything a browser can reach.
-    r = client.patch("/api/library/labor/travel", json={"rate": 33.0})
-    assert r.status_code == 404, (
-        "a soft-deleted travel row is still patchable, which would make Reset-as-delete safe — "
-        "if that becomes true, revisit resetTravelDefault")
+    with pytest.raises(library.ValidationError) as exc:
+        library.delete_labor("travel")
+    assert "travel" in str(exc.value).lower() and "delete" in str(exc.value).lower()
+    # FAIL-CLOSED BEFORE THE STORE IS EVEN ASKED. The row is untouched — still there, still live,
+    # rate unchanged — because the id is refused before any query runs, not because a query
+    # happened to fail. A guard that only checked AFTER reading the row would still refuse the
+    # delete, but this pins the cheaper and safer shape.
+    stored = [r for r in store["library_labor"] if r["id"] == "travel"][0]
+    assert stored["deleted_at"] is None and stored["rate"] == 41.5
+
+    # THE UI ICON IS A NICETY, NOT THE GUARD. A caller that goes around it — a stale tab, a script,
+    # a future admin screen that forgets to hide the icon — meets the same refusal the endpoint
+    # gives: 400, not 404, because `travel` is very much still on the list. A 404 here would read
+    # as "already gone" to whatever called it, which is the wrong story to tell about a row that
+    # is refusing to leave on purpose.
+    r = client.delete("/api/library/labor/travel")
+    assert r.status_code == 400, r.text
+    assert "travel" in r.json()["detail"].lower()
+    assert client.get("/api/library/labor").json()["labor"][0]["id"] == "travel", (
+        "the refused delete still took Travel off the list")
+
+    # AND IT IS STILL FULLY ITSELF AFTERWARDS — patchable, listed, on the rate it was on. A guard
+    # that refused the delete but left the row half-broken would be a different bug wearing the
+    # same status code.
+    r2 = client.patch("/api/library/labor/travel", json={"rate": 33.0})
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["row"]["rate"] == 33.0
+
+
+def test_a_non_admin_cannot_reach_the_travel_guard_either(store, as_user):
+    """The 403 for a regular user fires before the 400 for the reserved id would — admin-gating
+    is checked first, the same order `test_the_gate_is_checked_before_the_write_not_after` pins
+    for a create. Two separate refusals, and this is the one that proves they do not race."""
+    store["library_labor"].append({
+        "id": "travel", "name": "Travel", "rate": 33.0, "unit": "hours", "guys_auto": True,
+        "sort": -1, "notes": None, "owner_email": None, "favorite": True,
+        "created_at": "2026-09-19T00:00:00Z", "updated_at": "2026-09-19T00:00:00Z",
+        "deleted_at": None})
+    assert client.delete("/api/library/labor/travel").status_code == 403
 
 
 # ── endpoints ─────────────────────────────────────────────────────────

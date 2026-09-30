@@ -65,18 +65,33 @@
   const pausedUntil = (p) => C.pausedUntil(p, TW.bizToday());
   const ROLE_LABEL = { primary: "Primary", accounts_payable: "Accounts payable", other: "Other" };
   let ALL = [];
+  // WHICH BOARD THIS IS: "direct" (Direct Projects, /portal.html) or "gc" (General Contractor,
+  // /gc-projects.html). Hanz, 2026-09-29: "we actually have two pipelines now ... it will have the
+  // same steps but just on a different webpage." Same steps, so the same page and this same file
+  // draw both: main.py serves portal.html at the GC address with data-pipeline="gc" on <body>, and
+  // load() hands the board only its own pipeline's rows (C.onBoard). Every tab, column, menu and
+  // count below is computed from ALL, so each board counts only its own without any of that code
+  // knowing there are two. Anything but "gc" is Direct, the board every project was on before.
+  const PIPELINE = document.body && document.body.dataset.pipeline === "gc" ? "gc" : "direct";
 
   // ── filter / sort state ────────────────────────────────────────────────────
   // Module-level and mirrored to sessionStorage: renderBoard re-runs after every
   // staff action (act() calls load()), and the controls live in static HTML, so
   // a scan survives both a re-render and a return visit.
-  const EST_KEY = "tw_crm_est";
+  //
+  // KEYED PER PIPELINE. Before the GC board existed both pages shared these four keys, so picking
+  // an estimator with no GC projects cleared EST on the GC board and it STAYED cleared for Direct —
+  // one storage slot, two boards fighting over it. PIPELINE (above) is "direct" or "gc"; Direct
+  // keeps the bare key so nobody's already-saved Direct filters reset on this deploy, and GC gets
+  // its own suffixed key rather than a migration.
+  const pipelineKey = (base) => (PIPELINE === "gc" ? base + "_gc" : base);
+  const EST_KEY = pipelineKey("tw_crm_est");
   // The STORAGE key keeps its old name deliberately: a rep with a month selected when this
   // shipped should still have it selected after the deploy. Only the variable was renamed,
   // because it now holds either a month ("2026-08") or a week ("w:2026-08-10").
-  const PERIOD_KEY = "tw_crm_month";
-  const SORTFIELD_KEY = "tw_crm_sortfield", SORTDIR_KEY = "tw_crm_sortdir";
-  const TAB_KEY = "tw_crm_tab";
+  const PERIOD_KEY = pipelineKey("tw_crm_month");
+  const SORTFIELD_KEY = pipelineKey("tw_crm_sortfield"), SORTDIR_KEY = pipelineKey("tw_crm_sortdir");
+  const TAB_KEY = pipelineKey("tw_crm_tab");
   const ss = (k, d) => { try { const v = sessionStorage.getItem(k); return v == null ? d : v; } catch { return d; } };
   const ssSet = (k, v) => { try { v ? sessionStorage.setItem(k, v) : sessionStorage.removeItem(k); } catch {} };
   // Which view is remembered PER TAB, not once for the page — the key is `tw_crm_view_<tab>`,
@@ -748,6 +763,16 @@
       localStorage.removeItem("treadwell.proposal_tool.state");
       localStorage.removeItem("treadwell.proposal_tool.draft_id");
       sessionStorage.removeItem("treadwell.proposal_tool.hydrated_once");
+      // FROM THE GENERAL CONTRACTOR BOARD THE NEW PROJECT IS ALREADY A GC ONE: its first answer is
+      // written into the fresh state the intake form reads, so the Audience radio opens on
+      // "General contractor (GC)" (index.js writeForm) and the project lands back on this board.
+      // A plain field in the blob, unlike the test intent below: `audience` is the estimator's own
+      // answer and not server-owned, so it travels the way every other intake answer does, and the
+      // estimator can still switch it. shared.js stamps the unstamped blob with the new draft id.
+      // The Direct board writes nothing, which leaves the form on its default, Direct.
+      if (PIPELINE === "gc") {
+        localStorage.setItem("treadwell.proposal_tool.state", JSON.stringify({ audience: "GC" }));
+      }
     } catch {/* private mode — the intake form still works, it just won't resume */}
     TW.setNewProjectTestIntent(TAB === "test");
     window.location.assign("/?new=1");
@@ -837,7 +862,31 @@
       const r = await api("/api/portal/pipeline");
       const j = await r.json();
       if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + r.status));
-      ALL = j.proposals || [];
+      const every = j.proposals || [];
+      // A LINK TO A PROJECT ON THE OTHER BOARD GOES TO THE OTHER BOARD, query and hash kept, so the
+      // drawer (and its &sec= tab) opens there. Every link that exists says /portal.html — the
+      // bell (notifications.py), the Follow-ups board's Open, the portal's "Reply in Portal" staff
+      // emails — whichever board the project is on today, and a project moves boards when its
+      // Direct/GC choice changes. Checked BEFORE painting, so the wrong board never flashes up.
+      // A project on neither board (trashed, never generated) falls through to openDetail below,
+      // exactly as it did before there were two boards.
+      //
+      // CUR_PID FIRST, THEN THE URL. Before any drawer has opened, CUR_PID is null and a fresh
+      // ?open= link is the only thing to check. Once a project IS open, load() keeps running every
+      // 25s (and every 12s from refreshLive while the drawer is up) — checking CUR_PID on every one
+      // of those is how a project whose Audience gets flipped WHILE a rep is looking at it sends
+      // them to the other board, instead of leaving the drawer open on a board that no longer shows
+      // it. REDIRECTED (not DEEPLINK_USED — see its declaration) is what stops a slow second poll
+      // from replaying this SAME redirect, without stopping a LATER, different one.
+      const wanted = REDIRECTED ? null : (CUR_PID || new URLSearchParams(location.search).get("open"));
+      const there = C.otherBoardFor(every, wanted, PIPELINE);
+      if (there) {
+        REDIRECTED = true;
+        DEEPLINK_USED = true;
+        location.replace(there + location.search + location.hash);
+        return;
+      }
+      ALL = C.onBoard(every, PIPELINE);
       renderDegraded(j);
       renderBoard();
     } catch (err) {
@@ -1996,6 +2045,12 @@
   const REV_CACHE = {};          // sent versions per PROJECT, for the same reason
   let RENDER_GEN = 0;
   let DEEPLINK_USED = false;
+  // A separate one-way latch from DEEPLINK_USED (see load() below): DEEPLINK_USED guards the &sec=
+  // tab and the one-time openDetail off a fresh ?open= link, and gets spent by ANY drawer open —
+  // deep-linked or a plain card click. REDIRECTED guards only "did load() already send this rep to
+  // the other board," so a project that changes boards well after the deep link was consumed can
+  // still redirect once, and a slow second poll of that SAME redirect can't fire it twice.
+  let REDIRECTED = false;
   // True while the drawer is showing a project nobody has sent. The tab strip is the same one, but
   // the Proposal tab's two lazy fetches are not: both address a portal row this project does not
   // have yet, so firing them would answer a tab click with "could not load".
@@ -2446,9 +2501,13 @@
 
   // ── deposit submissions ────────────────────────────────────────────────────
   // What the CUSTOMER sent us. Staff act on this, so it renders directly above
-  // the deposit buttons. Bank numbers appear here and nowhere else: the routing
-  // number in full (it's printed on every check), the account number masked
-  // until someone presses Show. Nothing here is ever logged.
+  // the deposit buttons. Both bank numbers are encrypted at rest now
+  // (bank_crypto.py, portal repo, 2026-09-29) -- the portal sends only
+  // routing_masked / masked_ref, never the full values, and this card renders
+  // exactly what it is given. The full numbers exist only behind Show, one
+  // deposit at a time, fetched fresh from POST /api/portal/deposit/{id}/reveal
+  // (see the click handler in renderDetail) and never stored anywhere once the
+  // drawer moves on. Nothing here is ever logged.
   const ACCT_TYPE_LABEL = { checking: "Checking", savings: "Savings" };
   const METHOD_LABEL = { ach: "ACH transfer", check: "Check mailed by the customer" };
   const METHOD_PHRASE = { ach: "ACH details", check: "a mailed check" };
@@ -2458,9 +2517,12 @@
     return s.length > 4 ? "••••" + s.slice(-4) : "••••";
   }
 
-  /** One submission card. `secrets` collects the full account numbers by index —
-   *  the markup ships masked, so the real value only enters the DOM on Show. */
-  function depositHtml(x, secrets) {
+  /** One submission card. Both bank numbers ship masked -- routing_masked / masked_ref from the
+   *  portal, or a raw legacy value masked right here for an older cached row -- and the full
+   *  value only ever enters the DOM through the Show button below, fetched one deposit at a
+   *  time. Nothing here stashes a real number anywhere for later: data-masked on each cell is
+   *  only ever the masked string, which is what Hide restores without asking the server again. */
+  function depositHtml(x, i) {
     const m = String(x.method || "").toLowerCase();
     const rows = [];
     // `v` is always escaped here; `o.after` is our own markup (the Show button).
@@ -2469,29 +2531,27 @@
       o = o || {};
       rows.push(`<div class="dep-f"><span class="dep-k">${esc(k)}</span>` +
         `<span class="dep-v${o.num ? " dep-num" : ""}"${o.id ? ` id="${o.id}"` : ""}` +
-        `${o.title ? ` title="${esc(o.title)}"` : ""}>${esc(v)}</span>${o.after || ""}</div>`);
+        `${o.title ? ` title="${esc(o.title)}"` : ""}${o.mask ? ` data-masked="${esc(v)}"` : ""}` +
+        `>${esc(v)}</span>${o.after || ""}</div>`);
     };
 
+    let canReveal = false;
     if (m === "ach") {
       add("Account name", x.account_name);
       add("Account type", ACCT_TYPE_LABEL[String(x.account_type || "").toLowerCase()] || x.account_type);
-      add("Routing no.", x.routing_number,
-          { num: true, title: "Routing numbers are printed on every check, so this one shows in full" });
-      if (x.account_number) {
-        const i = secrets.push(String(x.account_number)) - 1;
-        add("Account no.", mask4(x.account_number), {
-          num: true, id: "dep-acct-" + i,
-          title: "Hidden until you show it",
-          after: `<button type="button" class="dep-show" data-acct="${i}" aria-pressed="false"` +
-                 ` aria-label="Show the full account number">Show</button>`,
-        });
-      } else if (x.masked_ref) {
-        // account_number arrived in a later migration, so a pre-ACH-V1 row has
-        // only the last four. Show it HERE rather than in the trail below —
-        // rendering both put a stray "••••1234" under the revealed number.
-        add("Account no.", x.masked_ref,
-            { num: true, title: "Only the last four were recorded for this submission" });
-      }
+      // routing_masked / masked_ref are what the portal actually sends now that both numbers
+      // are encrypted at rest -- list_deposits() on that side does not even select the full
+      // columns any more. A raw routing_number/account_number is tolerated only from an older
+      // cached payload, and masked right here so it never paints in full either.
+      const rtgMasked = x.routing_masked || (x.routing_number ? mask4(x.routing_number) : null);
+      const acctMasked = x.masked_ref || (x.account_number ? mask4(x.account_number) : null);
+      add("Routing no.", rtgMasked, { num: true, id: "dep-rtg-" + i, mask: true,
+                                      title: "Hidden until you show it" });
+      add("Account no.", acctMasked, { num: true, id: "dep-acct-" + i, mask: true,
+                                       title: "Hidden until you show it" });
+      // A Show control needs somewhere to ask: no deposit id, no reveal call, so a row that
+      // predates it -- or one with nothing masked to reveal -- gets no button at all.
+      canReveal = !!x.id && !!(rtgMasked || acctMasked);
     } else if (m === "check") {
       add("Check no.", x.check_number);
       add("Written by", x.account_name);
@@ -2519,6 +2579,13 @@
                                              : "Submission time not recorded"}</span>
       </div>
       ${rows.join("")}
+      ${canReveal ? `<div class="dep-f">
+        <span class="dep-k"></span>
+        <span class="dep-v"><button type="button" class="dep-show" data-dep="${esc(x.id)}"
+          data-i="${i}" aria-pressed="false"
+          aria-label="Show the full account and routing numbers">Show</button>
+          <span class="note hidden" id="dep-err-${i}"></span></span>
+      </div>` : ""}
       ${trail ? `<div class="dep-s">${trail}</div>` : ""}
       ${sentTo ? `<div class="dep-s">sent to: ${sentTo}</div>` : ""}
     </div>`;
@@ -4175,9 +4242,9 @@
     // halves of applySecPanel's condition disagreeing is how this drawer ships an empty tab.
     const delHtml = deleteProjectHtml(p);
 
-    // Full account numbers stay in this array, NOT in the markup — see depositHtml.
-    const acctFull = [];
-    const deposits = (data.deposits || []).map((x) => depositHtml(x, acctFull)).join("");
+    // Bank numbers ship masked; depositHtml renders exactly what the portal sends, and the full
+    // values only ever reach the DOM through the Show click handler below, one deposit at a time.
+    const deposits = (data.deposits || []).map((x, i) => depositHtml(x, i)).join("");
 
     const depAmt = p.deposit_amount != null ? p.deposit_amount : (a ? a.total * 0.25 : null);
 
@@ -4495,18 +4562,47 @@
       () => window.location.assign("/info-sheet.html?d=" + encodeURIComponent(pid)));
     wireDeleteProject(pid, p);
 
-    // Reveal / re-hide a full account number. The value lives in `acctFull`, so it
-    // only reaches the DOM when a human asks for it — and goes back on a second click.
-    d.querySelectorAll(".dep-show").forEach((b) => b.addEventListener("click", () => {
-      const i = Number(b.dataset.acct);
-      const el = d.querySelector("#dep-acct-" + i);
-      if (!el || acctFull[i] == null) return;
-      const shown = b.getAttribute("aria-pressed") === "true";
-      el.textContent = shown ? mask4(acctFull[i]) : acctFull[i];
-      el.title = shown ? "Hidden until you show it" : "Full account number";
-      b.setAttribute("aria-pressed", shown ? "false" : "true");
-      b.setAttribute("aria-label", (shown ? "Show" : "Hide") + " the full account number");
-      b.textContent = shown ? "Show" : "Hide";
+    // Reveal a deposit's bank numbers. Nothing here is cached beyond the open drawer: every
+    // press calls POST /api/portal/deposit/{id}/reveal fresh (bank_crypto.py, portal repo,
+    // 2026-09-29), and depositHtml rebuilds this card from data.deposits on every paint, so a
+    // re-render starts over with nothing revealed -- a Show press after one always asks the
+    // server again rather than replaying an earlier answer.
+    d.querySelectorAll(".dep-show").forEach((b) => b.addEventListener("click", async () => {
+      const i = b.dataset.i;
+      const depId = b.dataset.dep;
+      const acctEl = d.querySelector("#dep-acct-" + i);
+      const rtgEl = d.querySelector("#dep-rtg-" + i);
+      const errEl = d.querySelector("#dep-err-" + i);
+      if (errEl) errEl.classList.add("hidden");
+      if (b.getAttribute("aria-pressed") === "true") {
+        // Hide: back to the masked values this card was built with -- never re-fetched.
+        if (acctEl) acctEl.textContent = acctEl.dataset.masked || acctEl.textContent;
+        if (rtgEl) rtgEl.textContent = rtgEl.dataset.masked || rtgEl.textContent;
+        b.setAttribute("aria-pressed", "false");
+        b.setAttribute("aria-label", "Show the full account and routing numbers");
+        b.textContent = "Show";
+        return;
+      }
+      b.disabled = true; b.textContent = "Working…";
+      try {
+        const r = await api("/api/portal/deposit/" + encodeURIComponent(depId) + "/reveal",
+                            { method: "POST" });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + r.status));
+        if (acctEl && j.account_number != null) acctEl.textContent = j.account_number;
+        if (rtgEl && j.routing_number != null) rtgEl.textContent = j.routing_number;
+        b.setAttribute("aria-pressed", "true");
+        b.setAttribute("aria-label", "Hide the full account and routing numbers");
+        b.textContent = "Hide";
+      } catch (err) {
+        b.textContent = "Show";
+        if (errEl) {
+          errEl.textContent = "Couldn't load the bank details. Try again.";
+          errEl.classList.remove("hidden");
+        }
+      } finally {
+        b.disabled = false;
+      }
     }));
 
     const act = async (path, btn, opts) => {

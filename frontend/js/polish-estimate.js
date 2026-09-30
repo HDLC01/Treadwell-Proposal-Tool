@@ -22,8 +22,11 @@
 //     Yes/No condition cells, through B.conditionCellWrites. Those are not a rendering of the bid,
 //     they are the contract this screen shares with the intake page, which reads them back and
 //     lets the cell win over the model. A writer that skips them hands the estimator their old
-//     answer back on the next visit to Intake. The downloaded .xlsx therefore shows the
-//     template's own Polish tab, not what was priced here. That is survivable only because the
+//     answer back on the next visit to Intake. AND, since 2026-09-30, the Dye and Joint Filler
+//     rate/quantity cells (Polish!C25, C29, and B25/B29 when they differ from the template), so
+//     the workbook prices those two lines off the same library rows this page does -- see
+//     conditionLibrary and polish-bid-core.js's libraryLineWrites. Otherwise the downloaded
+//     .xlsx shows the template's own Polish tab, not what was priced here. That is survivable only because the
 //     beta works on test projects by construction (see polish-sandbox.js) — it must be revisited
 //     before any of this prices a real bid.
 //   * computed_bid is REPLACED on every save, not merged. On a sandbox copy the source project's
@@ -167,6 +170,11 @@
     var want = String(text == null ? "" : text).trim().toLowerCase();
     if (!want) return null;
     for (var i = 0; i < ITEMS.length; i++) {
+      // DYE AND THE JOINT FILLER KIT ARE NEVER A TAKEOFF ROW. Each is already priced by its own
+      // condition card (CONDITION_CARDS below); a row resolved to one of them by its exact name
+      // would charge the same material twice. renderDatalist leaves them out of the list, and
+      // this is the half that also holds when somebody types the name out in full.
+      if (RESERVED_ITEM_IDS.indexOf(ITEMS[i].id) !== -1) continue;
       if (String(ITEMS[i].name == null ? "" : ITEMS[i].name).trim().toLowerCase() === want) {
         return ITEMS[i];
       }
@@ -197,11 +205,13 @@
    *  and an assembly is nothing more than a list of those. So a material row takes the same path a
    *  line inside an assembly takes, and cannot drift from it.
    *
-   *  COVERAGE IS TYPED ON THE ROW, falling back to the item's own default -- priceLine's existing
-   *  rule, not a new one. It has to be per-row rather than per-item because the same product is
-   *  used at different coverages in different systems, which is exactly why Kyle's sheet keeps
-   *  coverage on the line. Storing the row's figure back onto the item would make it wrong for
-   *  every other place that item is used.
+   *  COVERAGE IS TYPED ON THE ROW as THIS ESTIMATE'S OWN OVERRIDE, applied here in the page, not
+   *  inside priceLine -- the library rule (2026-09-22) moved coverage onto the material, so
+   *  priceLine itself no longer reads a line's coverage at all. Hanz, 2026-09-30: keep the box,
+   *  because the same product is used at different coverages on different jobs, but the override
+   *  is a per-job fact about THIS estimate, not a second source of truth for the material -- it is
+   *  never written back onto the item (see priceMaterialRow). Blank still falls back to the
+   *  item's own default, same as before.
    *
    *  The return is shaped like priceAssembly's so every caller -- rowCost, materialTotal, the
    *  broken-line warning, the per-unit hint -- keeps working without knowing which kind it got. */
@@ -220,8 +230,23 @@
    *  that wrong would put "1 line cannot price yet" under every row the moment it is added. */
   function priceMaterialRow(r) {
     var area = B.num(r.measurement);
-    var one = L.priceLine({ item_id: r.item_id, coverage: r.coverage,
-                            waste_pct: r.waste_pct, roundup: r.roundup }, ITEMS, area);
+    // THE OVERRIDE LIVES HERE, not inside priceLine: waste and roundup have no box on this row and
+    // come from the material either way. A typed coverage prices against a ONE-ITEM SWAP of the
+    // real item -- coverage replaced, everything else (cost, pack size) untouched -- so the item
+    // in the library is never mutated. Blank r.coverage leaves `items` as ITEMS, so priceLine
+    // falls back to the material's own coverage exactly as it does for every assembly line.
+    var items = ITEMS;
+    var cov = B.num(r.coverage);
+    // TRUTHY, NOT !== null: B.num returns 0 for "", null and undefined alike (see
+    // polish-bid-core.js), which is exactly how covHint/covPlaceholder already tell "nothing
+    // typed" from a real figure. `!== null` would treat every blank row as coverage 0 and price it
+    // as broken (no_coverage) the instant it's added, before anyone touches the box.
+    if (cov) {
+      items = ITEMS.map(function (it) {
+        return it && it.id === r.item_id ? Object.assign({}, it, { coverage: cov }) : it;
+      });
+    }
+    var one = L.priceLine({ item_id: r.item_id }, items, area);
     var priced = one.ok && one.priced ? 1 : 0;
     var broken = (!one.ok && one.reason !== "no_item") ? 1 : 0;
     var total = priced ? one.cost : 0;
@@ -249,20 +274,80 @@
     return { text: moneyAuto(p.total), empty: false, price: p };
   }
 
+  /** What Joint Filler (`key` "joint_filler") or Dye ("dye") comes to over `area`, as if on.
+   *
+   *  PRICED BY THE MATERIAL RULE, OFF A LIBRARY ROW (2026-09-30). Hanz: "joint filler and die
+   *  should be library items so that we are able to edit them as well." Both are reserved
+   *  library_items rows now -- `joint-filler-kit` and `dye`, backend/library.py's
+   *  RESERVED_ITEM_IDS -- edited on the Items tab like any other material, and priced by the
+   *  one priceLine every material row and assembly line already goes through. Coverage, waste
+   *  and roundup come off the row, so an admin who changes the kit's coverage changes how many
+   *  kits a job buys. The seeded rows (JF: coverage 3500, waste 0, roundup on, $500; dye:
+   *  coverage 1, waste 0, no roundup, $0.14) price to the cent what polish-bid-core.js's
+   *  jointFillerCost/dyeCost did.
+   *
+   *  THE ROW IS NOT ALWAYS THERE. On a database the seed has not reached, or a row that cannot
+   *  price (its cost or coverage blanked), this falls back to jointFillerCost/dyeCost -- the
+   *  formulas the tool shipped with, untouched -- rather than pricing the line at $0 or breaking
+   *  the page. `library` says which of the two answered.
+   *
+   *  THE IDS ARE LITERALS HERE, not read off CONDITION_CARDS: adopt() runs at parse time, above
+   *  that declaration, and nothing this reaches may depend on a var assigned below it.
+   *
+   *  `qty` is what the card's Measurement shows: kits for joint filler, the polished area in SF
+   *  for dye (the area is what dye is spread across, whatever its row's coverage says). */
+  function condLine(key, area) {
+    var id = key === "dye" ? "dye" : "joint-filler-kit";
+    var p = L.priceLine({ item_id: id }, ITEMS, area);
+    if (p.ok) {
+      // DYE IS TWO COATS, Kyle's rows 25 and 26 (B.DYE_COATS); the row prices ONE of them. The
+      // fallback's dyeCost already charges both.
+      var cost = (p.priced ? p.cost : 0) * (key === "dye" ? B.DYE_COATS : 1);
+      return { library: true, line: p, cost: cost,
+               qty: key === "dye" ? B.num(area) : (p.priced ? p.qty : 0) };
+    }
+    if (key === "dye") {
+      return { library: false, line: null, cost: B.dyeCost(area, true), qty: B.num(area) };
+    }
+    var jf = B.jointFillerCost(area, true);
+    return { library: false, line: null, cost: jf, qty: jf / B.RATES.JOINT_FILLER_KIT_COST };
+  }
+
+  /** What this page priced Dye and Joint Filler with, for Kyle's workbook.
+   *
+   *  Handed to B.conditionCellWrites on every save so the downloaded .xlsx quotes the same two
+   *  lines the bid does (polish-bid-core.js's libraryLineWrites). A key is LEFT OUT when its row
+   *  is not in the library -- that writes nothing, so a database the seed has not reached keeps
+   *  the template's cells -- and is null when the row is there but cannot price, which is when
+   *  condLine falls back to the shipped formula and the cells get the shipped figures. The
+   *  library loads after the first paint, so an early save with ITEMS still empty writes nothing
+   *  either. */
+  function conditionLibrary() {
+    var out = {};
+    [["dye", "dye"], ["joint_filler", "joint-filler-kit"]].forEach(function (pair) {
+      if (!L.findItem(ITEMS, pair[1])) return;
+      var ln = condLine(pair[0], 0).line;
+      out[pair[0]] = ln ? { unit_price: ln.unit_price, coverage: ln.coverage,
+                            waste_pct: ln.waste_pct, roundup: ln.roundup, buy_qty: ln.buy_qty }
+                        : null;
+    });
+    return out;
+  }
+
   function materialTotal() {
     var sum = 0;
     M.takeoff.forEach(function (r) {
       var p = rowPrice(r);
       if (p) sum += p.total;
     });
-    // Dye and Joint Filler are fixed formulas keyed on the polished area (Polish!E25/E29),
-    // not library items -- see polish-bid-core.js's dyeCost/jointFillerCost for why they
-    // are not a priceLine call. `area` is the SAME B.takeoffSf(M.takeoff) that bid() below
-    // uses for the sheet's SF, so the Material total and the price-per-SF divisor can never
-    // disagree about what "the area" is.
+    // Dye and Joint Filler are keyed on the polished area (Polish!E25/E29), not on a row's own
+    // measurement. `area` is the SAME B.takeoffSf(M.takeoff) that bid() below uses for the
+    // sheet's SF, so the Material total and the price-per-SF divisor can never disagree about
+    // what "the area" is. Each prices off its reserved library row, or off the shipped formula
+    // when that row is not there -- see condLine. Off means nothing, as it always has.
     var area = B.takeoffSf(M.takeoff);
-    sum += B.dyeCost(area, M.conditions.dye);
-    sum += B.jointFillerCost(area, M.conditions.joint_filler);
+    if (M.conditions.dye) sum += condLine("dye", area).cost;
+    if (M.conditions.joint_filler) sum += condLine("joint_filler", area).cost;
     return sum;
   }
 
@@ -327,7 +412,11 @@
         // only the model: flip Sales tax off here, follow either of this step's own links to
         // Intake — remodelSource()'s "pick a county", or the Labor step's "Change it on the intake
         // step" — and the old answer came back, then intake's next save made the revert permanent.
-        cell_values: B.conditionCellWrites(M.conditions, TW.getState().cell_values),
+        //
+        // THE DYE AND JOINT FILLER CELLS RIDE THE SAME WRITE: the rate (and, where the library
+        // changed it, the quantity formula) the bid priced with -- conditionLibrary above.
+        cell_values: B.conditionCellWrites(M.conditions, TW.getState().cell_values,
+                                           conditionLibrary()),
         // proposal-review reads this for the SF token, and /api/generate's files-mode rebuild
         // gates on it.
         polish_sf: b.sf,
@@ -645,7 +734,8 @@
    *  The star this page's library replaced got that wrong for two years.
    *
    *  TWO SHAPES NOW, DECIDED BY `cost`. Joint Filler and Dye BUY something: they move the
-   *  Material total through polish-bid-core.js's jointFillerCost/dyeCost. Since 2026-09-19 they
+   *  Material total through condLine (their reserved library rows, or polish-bid-core.js's
+   *  jointFillerCost/dyeCost when a row is not there). Since 2026-09-19 they
    *  render as material rows -- the same `.tk.mat` card, the same Material / Measurement / Unit /
    *  Total cost columns, the same `.costbox` -- as the rows above them. Hanz, on staging: "joint
    *  filler and die should have a measurement a unit in a total cost and they should be a
@@ -669,20 +759,35 @@
    *  always been. The tell an estimator already reads is the hover: `.f input` takes a red border
    *  under the cursor and a `.costbox` does not.
    *
-   *  `qty` READS THE PRICE BACK rather than restating the formula. "One kit per 3,500 sq ft" lives
-   *  in polish-bid-core.js and nowhere else; dividing the cost by the kit rate cannot drift from
-   *  it, and a second copy of 3500 on this page could. */
+   *  `qty` READS THE PRICE BACK rather than restating the formula. Since 2026-09-30 the kit's
+   *  coverage is the reserved row's own (condLine), so the kit count and the "one kit per ..."
+   *  sentence both come off the line priceLine priced; a second copy of 3500 on this page would
+   *  go stale the day an admin changed it. */
   var CONDITION_CARDS = [
     { key: "joint_filler", tag: "JOINT FILLER", label: "In the bid", cell: "Polish!E29",
-      material: "Joint filler, 10 gal kit",
-      matHint: "Polish!E29 · a fixed kit price, not a library item.",
-      cost: function (area) { return B.jointFillerCost(area, true); },
-      qty: function (area) {
-        return B.jointFillerCost(area, true) / B.RATES.JOINT_FILLER_KIT_COST;
+      // THE RESERVED library_items ROW that prices this line -- see condLine, which falls back to
+      // polish-bid-core.js's jointFillerCost when the row is not there.
+      item_id: "joint-filler-kit",
+      // THE LIVE NAME, not a string typed twice. An admin renaming the row on the Items tab has
+      // to show up here too, or the card is a second copy of a fact that can go stale without
+      // looking stale.
+      material: function () {
+        var item = L.findItem(ITEMS, "joint-filler-kit");
+        return (item && item.name) ? item.name : "Joint filler, 10 gal kit";
       },
+      matHint: "Polish!E29 · priced from the Item Library.",
+      cost: function (area) { return condLine("joint_filler", area).cost; },
+      qty: function (area) { return condLine("joint_filler", area).qty; },
       unit: function (n) { return n === 1 ? "kit" : "kits"; },
+      // THE ROW'S OWN COVERAGE, WASTE AND ROUNDUP, read back off the priced line rather than
+      // restated: the sentence says what the arithmetic did. With the seeded row -- and with no
+      // row at all -- it reads exactly as it always has.
       qtyHint: function (area) {
-        return B.fmtSf(area) + " sq ft, at one kit per 3,500, rounded up.";
+        var ln = condLine("joint_filler", area).line;
+        if (!ln) return B.fmtSf(area) + " sq ft, at one kit per 3,500, rounded up.";
+        return B.fmtSf(area) + " sq ft, at one kit per " + B.fmtSf(ln.coverage) +
+          (ln.waste_pct > 0 ? " plus " + B.fmtSf(ln.waste_pct) + "% waste" : "") +
+          (ln.roundup ? ", rounded up." : ".");
       },
       unitHint: "Kits are what the job buys." },
     { key: "remove_existing_jf", tag: "REMOVE EXISTING", label: "Taking the old filler out",
@@ -690,14 +795,31 @@
       why: "Adds a fourth hand to the joint-filler line. Priced on the Labor step, where that " +
            "line is." },
     { key: "dye", tag: "DYE", label: "In the bid", cell: "Polish!E25",
-      material: "Dye, two coats",
-      matHint: "Polish!E25 · a flat rate, not a library item.",
-      cost: function (area) { return B.dyeCost(area, true); },
-      qty: function (area) { return B.num(area); },
+      item_id: "dye",
+      material: function () {
+        var item = L.findItem(ITEMS, "dye");
+        return (item && item.name) ? item.name : "Dye, per coat";
+      },
+      matHint: "Polish!E25 · two coats, rows 25 and 26 · priced from the Item Library.",
+      cost: function (area) { return condLine("dye", area).cost; },
+      qty: function (area) { return condLine("dye", area).qty; },
       unit: function () { return "SF"; },
+      // TWO COATS, SAID WHERE THE RATE IS: "2 coats x $0.14 / SF" rather than a $0.28 nobody can
+      // find in the library, whose row is one coat.
+      rateHint: function (cost, qty) {
+        return B.DYE_COATS + " coats \u00d7 " + B.money2(cost / qty / B.DYE_COATS) + " / SF";
+      },
       qtyHint: function () { return "The polished area from the rows above."; },
       unitHint: "Priced across the area, not by the pack." }
   ];
+
+  // The two ids CONDITION_CARDS above prices by a fixed formula rather than by search — read
+  // off it rather than retyped, so an id excluded here can never drift from the card that
+  // actually owns its price. renderDatalist() below is the reason this exists: neither may be
+  // picked into a takeoff row as an ordinary second material, because the row above it already
+  // owns that material and prices it a different way.
+  var RESERVED_ITEM_IDS = CONDITION_CARDS.filter(function (c) { return c.item_id; })
+    .map(function (c) { return c.item_id; });
 
   /** Everything a priced condition card SHOWS, worked out once.
    *
@@ -733,7 +855,8 @@
       costEmpty: !(on && cost > 0),
       // SINGULAR, always: "$500.00 / kit" is the price of one, which is what a per-unit line
       // says. `unit` beside the Measurement is plural because five of them is what the job buys.
-      rate: qty > 0 ? B.money2(cost / qty) + " / " + c.unit(1) : "",
+      rate: qty > 0 ? (c.rateHint ? c.rateHint(cost, qty)
+                                  : B.money2(cost / qty) + " / " + c.unit(1)) : "",
       qtyHint: c.qtyHint(area)
     };
   }
@@ -772,7 +895,7 @@
       '<div class="tk-g">' +
 
       '<div class="f"><label>Material</label>' +
-      '<div class="costbox txt">' + esc(c.material) + "</div>" +
+      '<div class="costbox txt">' + esc(c.material()) + "</div>" +
       '<p class="hint">' + esc(c.matHint) + "</p></div>" +
 
       '<div class="f"><label>Measurement</label>' +
@@ -1335,7 +1458,14 @@
       seen[n][kind] = true;
     }
     ASMS.forEach(function (a) { add(a.name, "asm"); });
-    ITEMS.forEach(function (it) { add(it.name, "item"); });
+    ITEMS.forEach(function (it) {
+      // DYE AND THE JOINT FILLER KIT NEVER APPEAR HERE. Both are already on the takeoff as
+      // their own condition rows (see CONDITION_CARDS), priced by a fixed formula rather than
+      // by the pack — picking either one into an ordinary row a second time would double the
+      // charge and give an estimator no way to tell the two apart on screen.
+      if (RESERVED_ITEM_IDS.indexOf(it.id) !== -1) return;
+      add(it.name, "item");
+    });
     names.sort(function (x, y) { return x.localeCompare(y); });
     dl.innerHTML = names.map(function (n) {
       var k = seen[n];
@@ -1589,11 +1719,9 @@
     var row = M.takeoff[i];
     if (!row) return false;
     row.item_name = text;
-    var want = String(text || "").trim().toLowerCase();
-    var hit = null;
-    for (var n = 0; n < ITEMS.length; n++) {
-      if (String(ITEMS[n].name || "").trim().toLowerCase() === want) { hit = ITEMS[n]; break; }
-    }
+    // Through itemByName, not a loop of its own: that is the one name lookup that refuses Dye and
+    // the joint filler kit, so a row typed as "Dye, per coat" cannot become a second dye charge.
+    var hit = itemByName(text);
     row.item_id = hit ? hit.id : "";
     return !!hit;
   }

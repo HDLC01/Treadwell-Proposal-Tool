@@ -88,16 +88,35 @@ LABOR = "library_labor"
 # validate_item / validate_assembly, which build their output from an explicit key list and drop
 # everything else — so an added column is safe by default and has to be opted IN to be writable.
 ITEM_WRITABLE = ("name", "category", "divisions", "unit", "buy_qty", "unit_cost", "coverage",
-                 "sku", "vendor", "notes", "default_work_types")
+                 "waste_pct", "roundup", "sku", "vendor", "notes", "default_work_types")
 ASM_WRITABLE = ("name", "category", "description", "unit", "lines", "default_work_types")
 VENDOR_WRITABLE = ("name", "notes")
 REF_WRITABLE = ("name", "notes")
+# `favorite` IS LISTED FOR LABOR (2026-09-30): it is the whole of "is this line a default", the
+# Defaults tab writes it by PATCH, and test_every_writable_field_survives_its_request_model only
+# guards the fields named here -- an undeclared `favorite` on LibraryLaborIn would 200 and drop.
 LABOR_WRITABLE = ("name", "rate", "unit", "guys_auto", "sort", "notes",
-                  "default_work_types")
+                  "default_work_types", "favorite")
 
 DEFAULT_ITEM_UNIT = "Gallon"    # what Kyle's sheet buys most things by
 DEFAULT_ASM_UNIT = "SF"         # what a system is priced per
 DEFAULT_WASTE_PCT = 5.0         # Hanz, 2026-08-15: "by default is 5%"
+
+# THE TWO RESERVED library_items ROWS, seeded once by supabase_schema.sql / schema_pg.sql (`on
+# conflict (id) do nothing`, the identical pattern library_labor's own 'travel' row uses) and
+# never created through this module's own create_item -- that always mints a fresh uuid, on
+# purpose, so a caller can never name a row. Hanz: "joint filler and die should be library items
+# so that we are able to edit them as well" -- these are the two rows that answers.
+#
+# EDITED ON THE ITEMS TAB like any material (update_item is not special about them), and read by
+# the Polish estimate's two condition cards: frontend/js/polish-estimate.js's condLine prices
+# each through library-core's priceLine off the row's own cost, coverage, waste and roundup.
+# polish-bid-core.js's dyeCost/jointFillerCost (RATES.DYE_PER_SF, RATES.JOINT_FILLER_KIT_COST)
+# are the FALLBACK for a database the seed has not reached, the shape travelSeed() takes over
+# library_labor's 'travel' row. This tuple is what stops the row from ever being orphaned:
+# delete_item refuses either id outright, because nothing reachable from the API could ever
+# recreate a row at this exact id again.
+RESERVED_ITEM_IDS = ("dye", "joint-filler-kit")
 
 # The three divisions Treadwell estimates in (Hanz, 2026-08-15 — this replaced a free-text
 # "Category"). NOT enforced: a legacy row already holds whatever somebody typed, and refusing to
@@ -477,6 +496,20 @@ def validate_item(payload: Dict[str, Any], *, partial: bool = False) -> Dict[str
         # material. Treated as "not set" rather than accepted.
         out["coverage"] = cov if (cov is None or cov > 0) else None
 
+    # WASTE AND ROUNDUP BELONG TO THE MATERIAL, from 2026-09-22. Hanz: "we must have coverage per
+    # unit, waste factor, roundup, and materials tab. And then it gets pulled in to assemblies
+    # instead of it being in assemblies." Offered per-line overrides, he chose material-only.
+    #
+    # NULL IS A REAL ANSWER for both, and it is what keeps the migration safe: the pricer reads a
+    # null waste as DEFAULT_WASTE_PCT and a null roundup as True -- exactly the defaults the LINE
+    # applied -- so a material nobody has filled in yet prices as it always did rather than as
+    # zero. Do not coerce either to a literal here; "unset" has to survive the round trip.
+    if "waste_pct" in payload or not partial:
+        out["waste_pct"] = _number(payload.get("waste_pct"), field="Waste factor", maximum=100)
+    if "roundup" in payload or not partial:
+        ru = payload.get("roundup")
+        out["roundup"] = None if ru is None else bool(ru)
+
     for col, limit in (("category", _MAX_TEXT), ("sku", 80),
                        ("vendor", _MAX_TEXT), ("notes", _MAX_NOTES)):
         if col == "category" and "divisions" in out:
@@ -517,6 +550,12 @@ def _shape_item(row: Dict[str, Any]) -> Dict[str, Any]:
         # as strings, so the coercion happens here rather than in every caller.
         "unit_cost": _as_float(row.get("unit_cost")),
         "coverage": _as_float(row.get("coverage")),
+        # Returned as-is including None, NOT defaulted here. library-core.js reads a null waste as
+        # 5 and a null roundup as true, and it has to be the one place that decides that: shaping
+        # them to literals here would make "nobody has set this" indistinguishable from "somebody
+        # chose the default", and the Items tab needs to tell those apart to show an empty cell.
+        "waste_pct": _as_float(row.get("waste_pct")),
+        "roundup": None if row.get("roundup") is None else bool(row.get("roundup")),
         # A row written before this column existed reads as a pack of one, which prices exactly as
         # it did then. Read-shaped rather than backfilled: rewriting somebody's hand-typed rows to
         # add a column is a migration that can go wrong, and this cannot.
@@ -689,7 +728,20 @@ def delete_item(item_id: str) -> bool:
 
     Assemblies referencing it are deliberately left alone. Rewriting somebody else's assembly
     as a side effect of a delete is worse than a visible broken line they can repoint — and the
-    pricing layer already reports exactly that."""
+    pricing layer already reports exactly that.
+
+    REFUSES dye AND joint-filler-kit OUTRIGHT, before touching the store. Both are seeded once
+    by the schema files with a reserved id; create_item always mints its own uuid and never
+    accepts one from a caller, so a delete here is not recoverable through the ordinary API — the
+    row would need a manual SQL insert to come back. The Items tab never offers the Remove button
+    for either row (renderItems/isReservedItem in library.js), so this is the server-side half of
+    that guard: a request that reaches this function directly, past whatever the client renders,
+    still cannot take the row. Checked before the existence lookup, so an unseeded database
+    answers the same refusal rather than a 404 that reads as "fine, it's gone"."""
+    if item_id in RESERVED_ITEM_IDS:
+        raise ValidationError(
+            "\"%s\" prices the Polish estimate's own condition line, so it can't be removed. "
+            "Edit its cost or coverage instead." % item_id)
     sb = get_client()
     cur = (sb.table(ITEMS).select("id")
            .eq("id", item_id).is_("deleted_at", "null").limit(1).execute())
@@ -715,7 +767,16 @@ def _clean_lines(raw: Any) -> List[Dict[str, Any]]:
 
     The truncation stays as the shape defence behind it. The browser guards first
     (`bulkAddRoom` in library.js) so the button can explain itself while there is still something to
-    change; this is what makes the rule true rather than merely displayed."""
+    change; this is what makes the rule true rather than merely displayed.
+
+    COVERAGE, WASTE AND ROUNDUP DO NOT LIVE HERE ANY MORE. Hanz, 2026-09-21: "for the materials,
+    we must have coverage per unit, waste factor, roundup, and materials tab. And then it gets
+    pulled in to assemblies instead of it being in assemblies." A line only names a material now
+    — those three numbers live on the item (see validate_item). A stale browser tab can still
+    send them (lineForSave() in library.js still queues them on purpose — see
+    test_the_typed_query_never_reaches_the_server), so dropping them here rather than trusting the
+    frontend is what stops an old tab from writing a per-line override back over the material's
+    own value."""
     if raw in (None, ""):
         return []
     if not isinstance(raw, list):
@@ -731,25 +792,11 @@ def _clean_lines(raw: Any) -> List[Dict[str, Any]]:
         item_id = _clean_text(entry.get("item_id"), 60)
         role = _clean_text(entry.get("role"), 80)
         note = _clean_text(entry.get("note"), 300)
-        coverage = _number(entry.get("coverage"), field="Coverage", maximum=_MAX_COVERAGE)
-        if coverage is not None and coverage <= 0:
-            coverage = None
-        # How much extra to buy over what the area needs: 5% by default, per Hanz. A line that
-        # arrives without it is either legacy or a client bug, and either way 5 is the number the
-        # screen shows — reading it as 0 would make the row lie about its own arithmetic.
-        waste = _number(entry.get("waste_pct"), field="Waste factor", maximum=100)
-        if waste is None:
-            waste = DEFAULT_WASTE_PCT
-        # Whole packs, or a fraction of one. True for a legacy line because CEIL is what it was
-        # priced with — the screen has promised "you cannot buy 3.7 kits" since this page shipped.
-        roundup = entry.get("roundup")
-        roundup = True if roundup is None else bool(roundup)
         # A line with neither a material nor a role is an empty row nobody filled in. (Role left
         # the UI on 2026-08-15 but stays in the data, so an older line keeps its label.)
         if not item_id and not role:
             continue
-        out.append({"role": role, "item_id": item_id or None, "coverage": coverage,
-                    "waste_pct": waste, "roundup": roundup, "note": note or None})
+        out.append({"role": role, "item_id": item_id or None, "note": note or None})
     return out
 
 
@@ -1130,6 +1177,18 @@ def validate_labor(payload: Dict[str, Any], *, partial: bool = False) -> Dict[st
     if "notes" in payload or not partial:
         out["notes"] = _clean_text(payload.get("notes"), _MAX_NOTES) or None
 
+    # SHARED/TEAM-WIDE, NOT PER-USER — same posture as an item's `favorite`, and the same coercion:
+    # any truthy/falsy value means exactly what it says, and there is no invalid value to reject.
+    # THE DEFAULT DIFFERS BY WHERE IT COMES FROM, not by anything this function does — this line
+    # only ever writes what the caller sent. A brand new row created through POST /api/library/labor
+    # arrives here with no `favorite` key touched by hand, so `payload.get("favorite")` reads None,
+    # `bool(None)` is False, and the row is created NOT a default — the column's own default (set
+    # false in the schema's second ALTER) agrees, so the two cannot disagree with each other. An
+    # EXISTING row's favorite is only ever true because the migration's first ALTER backfilled it,
+    # or because somebody has since favorited it on the Defaults tab — this function never invents
+    # a "yes" on its own.
+    if "favorite" in payload or not partial:
+        out["favorite"] = bool(payload.get("favorite"))
     if "default_work_types" in payload:
         out["default_work_types"] = _coerce_work_types(payload.get("default_work_types"))
     return out
@@ -1145,6 +1204,13 @@ def _shape_labor(row: Dict[str, Any]) -> Dict[str, Any]:
         "rate": _as_float(row.get("rate")) or 0.0,
         "unit": row.get("unit") or DEFAULT_LABOR_UNIT,
         "guys_auto": bool(row.get("guys_auto")),
+        # A row written before this column existed — anything read before the migration's first
+        # ALTER runs — has no `favorite` key at all, and `bool(None)` reads that as False. That is
+        # the WRONG answer for Travel and every row typed before the Labor tab existed, which is
+        # exactly why the migration backfills them to true in the same breath it adds the column:
+        # this function only ever reports what the store holds, it does not itself decide what an
+        # absent value should mean the way `_coerce_work_types([])` does for work types.
+        "favorite": bool(row.get("favorite")),
         "default_work_types": _coerce_work_types(row.get("default_work_types")),
         "sort": int(_as_float(row.get("sort")) or 0),
         "notes": row.get("notes") or "",
@@ -1245,7 +1311,21 @@ def delete_labor(labor_id: str) -> bool:
 
     A rate somebody typed by hand is reference data, and an estimate that already used this line
     carries its own copy of the number — so removing it from the list must not, and does not,
-    reach back into a bid that was built with it."""
+    reach back into a bid that was built with it.
+
+    TRAVEL IS REFUSED, FAIL-CLOSED, BEFORE THE EXISTENCE CHECK EVEN RUNS. It is the one row
+    anything can address Travel by — `travelSeed()` in polish-bid-core.js falls back to its own
+    $33.00/hr the moment this table stops answering with a `travel` row, and `migrateModel` finds
+    Travel on every saved draft by that exact id — so a soft delete here would not remove Travel
+    from a single estimate, it would only take away the one thing that makes it editable. The
+    Labor tab already hides the delete icon for this row (a UI nicety, and only that: a browser
+    is not a trust boundary), so this is the check that actually holds if that ever slips, a
+    caller goes around the tab, or a future admin screen forgets to ask the same question. See
+    `test_deleting_travel_is_refused_not_silently_soft_deleted` in test_library_labor.py."""
+    if labor_id == "travel":
+        raise ValidationError(
+            "Travel is built into every estimate and can't be deleted — reset it back to the "
+            "shipped rate instead.")
     sb = get_client()
     cur = (sb.table(LABOR).select("id")
            .eq("id", labor_id).is_("deleted_at", "null").limit(1).execute())

@@ -124,3 +124,9 @@ Trailing 12TH MONTH.xlsx
 /walk2/
 /console-debug.txt
 *.stackdump
+
+# deploy/zap-scan.sh's own output: the full HTML/JSON OWASP ZAP report, with every weak URL,
+# parameter and attack string it found on a real, named site. CI never produces this (see
+# .github/workflows/zap-baseline.yml); it only ever exists on whichever machine ran the script,
+# and this repo is public, so it never gets committed either.
+/zap-reports/

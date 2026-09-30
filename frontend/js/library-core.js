@@ -74,8 +74,8 @@
    *
    *  Matches library.py's read-shaping deliberately: a line stored before the column existed must
    *  price the same on both sides, and a row showing 5% that was priced at 0% is a lie. */
-  function wastePct(line) {
-    var v = num((line || {}).waste_pct);
+  function wastePct(row) {
+    var v = num((row || {}).waste_pct);
     if (v === null || v < 0) return 5;
     return Math.min(v, 100);
   }
@@ -117,20 +117,35 @@
     var item = findItem(items, line.item_id || line.item);
     if (!item) return { ok: false, reason: "missing_item", qty: 0, cost: 0 };
 
-    // Coverage lives on the LINE (Kyle's sheet keeps it there), falling back to the item's
-    // default. The same product is used at different coverages in different systems.
-    var cov = num(line.coverage);
-    if (cov === null) cov = num(item.coverage);
+    // COVERAGE, WASTE AND ROUNDUP COME FROM THE MATERIAL, and from nowhere else.
+    //
+    // Hanz, 2026-09-22: "we must have coverage per unit, waste factor, roundup, and materials
+    // tab. And then it gets pulled in to assemblies instead of it being in assemblies." Offered
+    // per-line overrides, he chose "Material only, no overrides" -- so a line names a material
+    // and a role and carries no numbers of its own.
+    //
+    // THIS IS A PRECEDENCE INVERSION, NOT NEW ARITHMETIC. The fallback already ran the other
+    // way: line first, item as the default. The paragraph that stood here said coverage lives on
+    // the line "(Kyle's sheet keeps it there)" because "the same product is used at different
+    // coverages in different systems". That case has not gone away -- it is now served by TWO
+    // MATERIALS rather than by one material at two coverages, which is what the owner chose and
+    // what the migration that precedes this change does to the two rows it applied to.
+    //
+    // NO FALLBACK TO THE LINE. A reader that took the line's value when the material had none
+    // would be two sources for one number, which is the shape of defect this repo keeps paying
+    // for. The migration copies every line's values onto its material BEFORE this lands, so
+    // there is nothing to fall back to and nothing that silently reprices.
+    var cov = num(item.coverage);
     if (cov === null || cov <= 0) return { ok: false, reason: "no_coverage", qty: 0, cost: 0 };
 
     var packCost = num(item.unit_cost);
     if (packCost === null || packCost < 0) return { ok: false, reason: "no_cost", qty: 0, cost: 0 };
 
     var pack = buyQty(item);
-    var waste = wastePct(line);
+    var waste = wastePct(item);
     // Absent means yes: CEIL is what these lines were priced with, and the page has promised
-    // "you cannot buy 3.7 kits" since it shipped.
-    var roundup = (line.roundup === undefined || line.roundup === null) ? true : !!line.roundup;
+    // "you cannot buy 3.7 kits" since it shipped. Read off the MATERIAL now -- see above.
+    var roundup = (item.roundup === undefined || item.roundup === null) ? true : !!item.roundup;
 
     var base = { ok: true, coverage: cov, waste_pct: waste, roundup: roundup,
                  buy_qty: pack, pack_cost: packCost, unit_price: packCost / pack, item: item };

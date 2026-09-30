@@ -258,12 +258,24 @@ alter table public.library_items      add column if not exists default_work_type
 alter table public.library_assemblies add column if not exists default_work_types jsonb not null default '[]'::jsonb;
 alter table public.library_labor      add column if not exists default_work_types jsonb not null default '[]'::jsonb;
 
+-- THE LABOR TAB'S OWN FAVORITE, 2026-09-24 -- mirrors supabase_schema.sql exactly (see the note
+-- there for the two-step reasoning). Two databases, DDL twice, or one drifts.
+alter table public.library_labor add column if not exists favorite boolean not null default true;
+alter table public.library_labor alter column favorite set default false;
+
 -- Items and Assemblies, 2026-08-15. Additive, and safe against a volume already holding BETA
 -- rows. buy_qty is the "5" of "5 Gal" (so unit_cost can mean what the pail costs); existing rows
 -- get 1, which prices exactly as they did before the column existed. cost_updated_at marks a
 -- price revision, unlike updated_at which moves on every patch.
 alter table public.library_items add column if not exists buy_qty numeric(10,3) not null default 1;
 alter table public.library_items add column if not exists divisions jsonb not null default '[]'::jsonb;
+
+-- COVERAGE, WASTE AND ROUNDUP LIVE ON THE MATERIAL (Hanz, 2026-09-21; applied to BOTH databases that
+-- day, recorded here 2026-09-30). NULL waste_pct reads as 5 and NULL roundup as true, which were the
+-- assembly line's old defaults. Assemblies stopped holding their own copy; see
+-- backend/ops/backfill_material_coverage.sql, run before this code reaches a database.
+alter table public.library_items add column if not exists waste_pct numeric(5,2);
+alter table public.library_items add column if not exists roundup   boolean;
 alter table public.library_items add column if not exists cost_updated_at timestamptz;
 
 insert into public.library_divisions (id, name)
@@ -288,6 +300,17 @@ on conflict (id) do nothing;
 -- this moves on any edit, an assembly LINE change included.
 alter table public.library_items add column if not exists updated_by text;
 alter table public.library_assemblies add column if not exists updated_by text;
+
+-- Dye and the Joint Filler kit, 2026-09-30. Mirrors supabase_schema.sql; see the note there. Two
+-- RESERVED rows at literal ids, `on conflict (id) do nothing` so an edited price survives a
+-- re-run; delete_item refuses both ids. Kyle's C29/C25 figures (dye is ONE coat; the bid buys
+-- two, rows 25 and 26), which price to the cent what the engine's fallback does. Waste is a literal 0 -- a null would read as 5% and raise both prices.
+-- waste_pct and roundup are added above, with the other material columns.
+insert into public.library_items (id, name, unit, buy_qty, unit_cost, coverage, waste_pct, roundup)
+values
+  ('joint-filler-kit', 'Joint filler, 10 gal kit', 'Kit', 1, 500.00, 3500, 0, true),
+  ('dye', 'Dye, per coat', 'SF', 1, 0.14, 1, 0, false)
+on conflict (id) do nothing;
 
 -- ── Markup rules ────────────────────────────────────────────────────────
 -- The markup chain's rates as editable expressions, one row per line per sheet LAYOUT. Mirrors

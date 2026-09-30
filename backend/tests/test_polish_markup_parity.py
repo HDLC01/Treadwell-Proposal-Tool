@@ -132,12 +132,16 @@ PINNED = {
     "C81": "=B35",
     "B35": "=E18",
     "C82": "=D82/C81",
-    # dye (row 25) and joint filler (row 29), added 2026-09-18 -- Hanz: "die and joint
+    # dye (rows 25 AND 26) and joint filler (row 29), added 2026-09-18 -- Hanz: "die and joint
     # filler are supposed to be materials not something that is default". Transcribed into
-    # polish-bid-core.js's dyeCost/jointFillerCost.
+    # polish-bid-core.js's dyeCost/jointFillerCost. Row 26 is the SECOND coat, switched by the
+    # same E25; the beta read row 25 alone until 2026-09-30 and charged half the sheet's dye.
     "B25": '=IF(E25="Yes",E18)',
     "C25": 0.14,
     "D25": "=B25*C25",
+    "B26": '=IF(E25="Yes",E18)',
+    "C26": 0.14,
+    "D26": "=B26*C26",
     "B29": '=ROUNDUP(IF(E29="yes",(E18/3500),0),0)',
     "C29": 500,
     "D29": "=B29*C29",
@@ -240,20 +244,22 @@ def test_the_dye_and_joint_filler_rates_come_from_the_cells_that_hold_them(ran, 
     """C25 (Dye, $/SF) and C29 (Joint Filler, $/kit) are hardcoded constants on the sheet,
     exactly like B32/C47/B69/B70/B78 above -- the same drift check, not a special case."""
     rates = ran["constants"]["rates"]
-    for addr, key in [("C25", "DYE_PER_SF"), ("C29", "JOINT_FILLER_KIT_COST")]:
+    for addr, key in [("C25", "DYE_PER_SF"), ("C26", "DYE_PER_SF"),
+                      ("C29", "JOINT_FILLER_KIT_COST")]:
         assert float(polish[addr].value) == pytest.approx(rates[key]), (
             "Polish!%s is %r but RATES.%s is %r — %s"
             % (addr, polish[addr].value, key, rates[key], FIX_BOTH))
 
 
 def _dye_cost(area, on):
-    """B25 `=IF(E25="Yes",E18)`, C25 `0.14`, D25 `=B25*C25`. 0 when off or the area is not a
-    positive number -- Excel's IF with no ELSE (E25 not "Yes") returns FALSE, which multiplies
-    as 0 rather than raising, so the 0-guard here is not inventing a rule the sheet lacks."""
+    """D25 + D26: rows 25 and 26 are both `=IF(E25="Yes",E18)` x 0.14 -- one per coat. 0 when
+    off or the area is not a positive number -- Excel's IF with no ELSE (E25 not "Yes") returns
+    FALSE, which multiplies as 0 rather than raising, so the 0-guard here is not inventing a rule
+    the sheet lacks."""
     a = _num(area)
     if not on or not (a > 0):
         return 0.0
-    return a * 0.14
+    return a * 0.14 + a * 0.14
 
 
 def _joint_filler_cost(area, on):
@@ -302,7 +308,8 @@ def test_dye_and_joint_filler_price_by_the_sheets_own_formula(ran):
 
     # THE SPECIFIC NUMBERS, named rather than only cross-checked above -- a wrong Python
     # re-derivation that agreed with an equally wrong JS one would pass every assertion so far.
-    assert d["on_3500"] == pytest.approx(490), "3,500 SF of dye at $0.14/SF should be $490"
+    assert d["on_3500"] == pytest.approx(980), (
+        "3,500 SF of dye is two coats at $0.14/SF -- Kyle's D25 + D26 -- so $980")
     assert j["on_3500"] == 500, "an area that divides evenly into 3,500 is exactly one $500 kit"
     assert j["on_3501"] == 1000, (
         "one SF over 3,500 must round UP to a second kit, not price the first alone")
@@ -311,6 +318,21 @@ def test_dye_and_joint_filler_price_by_the_sheets_own_formula(ran):
     assert d["on_0"] == 0 and j["on_0"] == 0, "no area prices at nothing, not a negative or NaN"
     assert d["off_3500"] == 0 and j["off_3500"] == 0, (
         "the condition being off must zero the line even where the area would otherwise price it")
+
+
+@needs_node
+def test_the_engine_charges_every_dye_line_on_the_sheet(ran, polish):
+    """Hanz, 2026-09-30, on the original file: Kyle's Polish tab has TWO "Dye" lines, both switched
+    by the one E25 answer, so a job with dye buys two coats. The engine's coat count is read off
+    the workbook here -- every row whose quantity is `=IF(E25="Yes",E18)` -- so a third coat added
+    to the sheet, or the beta going back to one, fails this rather than quietly pricing half.
+
+    Mutation: set DYE_COATS to 1 in polish-bid-core.js."""
+    rows = [r for r in range(17, 31) if polish["B%d" % r].value == '=IF(E25="Yes",E18)']
+    assert rows == [25, 26], rows
+    assert ran["constants"]["dyeCoats"] == len(rows), (
+        "Kyle's sheet has %d dye lines but polish-bid-core.js's DYE_COATS is %r — %s"
+        % (len(rows), ran["constants"]["dyeCoats"], FIX_BOTH))
 
 
 @needs_node
@@ -1102,6 +1124,37 @@ def test_the_defaults_stand_beside_travel_and_never_double_it(ran):
     assert lib["emptyList"] == built_in
     assert lib["missingList"] == built_in
     assert lib["rowsWithoutIds"] == built_in
+
+
+@needs_node
+def test_only_a_favorited_labor_row_seeds_a_new_bid(ran):
+    """THE COUNTER-EXAMPLE `favorite` EXISTS FOR. A labor TYPE can now exist in the catalog --
+    created on the new Labor tab -- without being a DEFAULT, which is the entire reason Hanz asked
+    for "create it" and "make it a default" to be two separate, sequential actions on two
+    different tabs. Before this column existed every row in this table WAS a default, because
+    there was no other tab a custom line could come from; a brand new bid must not go back to that
+    the moment a non-default labor type is created.
+
+    Mutation: drop the `if (!r.favorite) continue;` guard from seedLibraryLabor's second loop, and
+    `lab-not-a-default` (rate $999/hr) lands on every new bid alongside the row somebody actually
+    chose."""
+    ids = ran["libraryLabor"]["nonFavoriteRowsDoNotSeed"]["ids"]
+    built_in = ["polishing", "mockup", "jointfill", "travel"]
+    assert ids == built_in + ["lab-a-default"], (
+        "the unfavorited rows reached a brand new bid: %r" % ids)
+    assert "lab-not-a-default" not in ids and "lab-key-absent" not in ids, (
+        "a labor type nobody made a default still seeded: %r" % ids)
+    # A ROW WITH NO `favorite` KEY AT ALL -- the shape every row in this table has until the
+    # migration's first ALTER backfills it -- must NOT seed either. Reading a missing key as "yes,
+    # favorited" would be the opposite mistake from `default_work_types`, whose empty list DOES
+    # mean "applies everywhere": the two columns disagree on what absence means for opposite
+    # reasons, and confusing them here is exactly the regression this line guards against.
+    assert "lab-key-absent" not in ids, (
+        "a row with no favorite key at all was treated as favorited")
+    # TRAVEL IS NOT GATED BY THIS, whatever its own stored favorite reads. It is built into every
+    # estimate the way it always has been, not opted into one the way a chosen default is.
+    assert ran["libraryLabor"]["nonFavoriteRowsDoNotSeed"]["travelSeedsEvenUnfavorited"] == 20, (
+        "an unfavorited stored Travel row was skipped instead of overriding the shipped rate")
 
 
 @needs_node

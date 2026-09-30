@@ -447,6 +447,14 @@ def _flag(data: Dict[str, Any], flag: str) -> Optional[str]:
     Foundation to chase an exemption certificate. Pinned by
     test_taxable_flag_reaches_every_sheet.py.
     """
+    # 2026-09-30: every sheet keeps its OWN Taxable? and Remodel Tax?, so Epoxy!B6 is the Epoxy
+    # sheet's answer, not the job's -- on a polish job, or a copy picked as the base, it is an
+    # option's. The estimate screen snapshots the BASE tab's own two answers (read off that tab's
+    # cells, the way its tax formulas read them) as proposal_taxable / proposal_remodel_on, and
+    # when a draft carries them they are the answer. A draft without them falls through as before.
+    snap = {"taxable": "proposal_taxable", "remodel_tax": "proposal_remodel_on"}.get(flag)
+    if snap and isinstance(data.get(snap), bool):
+        return "Yes" if data[snap] else "No"
     cells = data.get("cell_values") if isinstance(data.get("cell_values"), dict) else {}
     epoxy_addr, gyp_addr = _FLAG_CELLS[flag]
     if _base_role(data) == "gyp":

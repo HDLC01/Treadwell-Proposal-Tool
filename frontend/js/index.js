@@ -274,6 +274,42 @@
   }
   function condApplies(c) { return c.scope.indexOf(condScope()) !== -1; }
 
+  /** Where Taxable / Remodel tax are read and written, once the estimate screen has split them.
+   *
+   *  A NEW project starts every sheet with this page's two answers: the cells listed above, which
+   *  the estimate screen then copies onto every flag-block sheet the first time it opens the draft
+   *  (estimate-review.js init() step 3c). From then on each sheet keeps its own answers (Hanz,
+   *  2026-09-30, "Stay independent"), and `state.tax_flags_per_sheet` says so. So on a split draft
+   *  these two switches are the BASE bid's: its own two cells, as the estimate screen snapshots
+   *  them on state.priced_tabs[].flag_cells. Writing the four literal cells instead would reset
+   *  Leveling and 'Gyp (FR)' -- options -- to Epoxy's answer on every flip of any switch here.
+   *
+   *  null means "not split": use c.cells. An empty list means split but no base cell is known:
+   *  write nothing rather than guess. */
+  function splitFlagCells(c) {
+    if (c.key !== "taxable" && c.key !== "remodel_tax") return null;
+    const s = TW.getState() || {};
+    if (!s.tax_flags_per_sheet) return null;
+    const flag = c.key === "taxable" ? "taxable" : "remodel";
+    const tabs = s.priced_tabs instanceof Array ? s.priced_tabs : [];
+    const byId = new Map();
+    tabs.forEach((t) => { if (t && t.id) byId.set(t.id, t); });
+    const wt = condScope();
+    const ids = byId.has(s.base_tab_id) ? [s.base_tab_id]
+      : wt === "gyp" ? ['Gyp (USG 1-8")'] : wt === "polish" ? ["Polish"]
+      : wt === "combo" ? ["Epoxy", "Polish"] : ["Epoxy"];
+    const out = [];
+    ids.forEach((id) => {
+      const fc = byId.has(id) && byId.get(id).flag_cells;
+      // Only a real "Sheet!A1" address: this string becomes a key in cell_values.
+      if (fc && typeof fc[flag] === "string" && /^[^!]+![A-Z]{1,3}[0-9]{1,5}$/.test(fc[flag])) {
+        out.push(fc[flag]);
+      }
+    });
+    return out;
+  }
+  function condCells(c) { return splitFlagCells(c) || c.cells; }
+
   /** On means "the ON literal is sitting in the first cell". Read back off cell_values
    *  rather than off a key of our own, so a flag set by the AI autofill or typed
    *  straight into the estimate grid shows up here as the switch it is -- and a draft
@@ -284,7 +320,7 @@
     const cv = (TW.getState() || {}).cell_values || {};
     for (let i = 0; i < CONDITIONS.length; i++) {
       const c = CONDITIONS[i];
-      const cell = cv[c.cells[0]];
+      const cell = cv[condCells(c)[0]];
       if (cell == null || cell === "") {
         // Admin default only for the three it exists for, and only when nobody -- the AI
         // autofill, the estimate grid, or a previous visit -- has already answered this cell.
@@ -293,6 +329,24 @@
       } else {
         condState[c.key] = String(cell).trim().toLowerCase() === String(c.on).trim().toLowerCase();
       }
+    }
+  }
+
+  /** The two split tax switches only, re-read off the cells they now write. With no explicit base
+   *  the base moves with the work type (a combo's Epoxy + Polish, a polish job's Polish, a gyp
+   *  job's gyp base), and condState would keep the last base's answer: the switch shows it, and
+   *  the next flip writes it onto the new base's own sheet. The same read hydrateConditions makes,
+   *  so a work-type change shows what a reload would. Unsplit drafts and the other switches are
+   *  left exactly as they are. */
+  function rehydrateSplitFlags() {
+    const cv = (TW.getState() || {}).cell_values || {};
+    for (let i = 0; i < CONDITIONS.length; i++) {
+      const c = CONDITIONS[i];
+      const split = splitFlagCells(c);
+      if (!split) continue;
+      const cell = cv[split[0]];
+      condState[c.key] = (cell == null || cell === "") ? c.def
+        : String(cell).trim().toLowerCase() === String(c.on).trim().toLowerCase();
     }
   }
 
@@ -327,20 +381,27 @@
    *  switched to epoxy would otherwise carry Polish!E25 = "Yes" into a bid with no
    *  polish in it -- the same reasoning the two Continue handlers already apply to the
    *  gyp SF buckets, and the reason this runs on a work-type change and not just a flip. */
-  function conditionCells() {
+  function conditionCells(flipped) {
     const out = Object.assign({}, (TW.getState() || {}).cell_values || {});
     for (let i = 0; i < CONDITIONS.length; i++) {
       const c = CONDITIONS[i];
       const applies = condApplies(c);
-      for (let j = 0; j < c.cells.length; j++) {
-        if (applies) out[c.cells[j]] = condState[c.key] ? c.on : c.off;
-        else delete out[c.cells[j]];
+      // On a split draft the base's two tax answers are written by their OWN switch only: every
+      // other save here would restate them, and on a combo that restates Epoxy's onto Polish.
+      const split = splitFlagCells(c);
+      if (split && c.key !== flipped) continue;
+      const cells = split || c.cells;
+      for (let j = 0; j < cells.length; j++) {
+        const k = cells[j];
+        if (k === "__proto__" || k === "constructor" || k === "prototype") continue;
+        if (applies) out[k] = condState[c.key] ? c.on : c.off;
+        else delete out[k];
       }
     }
     return out;
   }
 
-  function saveConditions() { TW.setState({ cell_values: conditionCells() }); }
+  function saveConditions(flipped) { TW.setState({ cell_values: conditionCells(flipped) }); }
 
   /** Has anything written one of these cells yet -- this page, the grid, or the AI
    *  autofill? Asked off cell_values rather than tracked in a flag of our own, so a
@@ -364,7 +425,7 @@
     renderConditions();
     const again = document.getElementById("cond-" + key);
     if (again && again.focus) again.focus();     // the re-render threw the caret away
-    saveConditions();
+    saveConditions(key);
   }
 
   if (condBox) {
@@ -395,6 +456,7 @@
    *  better failure order -- if this throws, the scope fields and the beta button
    *  have already been set correctly. */
   function syncConditionsToWorkType() {
+    rehydrateSplitFlags();
     renderConditions();
     // Save ONLY if these cells are already in play -- because the alternative is
     // that merely picking a work type on a blank form starts writing to the draft.

@@ -216,6 +216,59 @@
     return nameLooksLikeTest(p);
   }
 
+  // ── which board: Direct Projects or General Contractor ─────────────────────
+  // Hanz, 2026-09-29: "we actually have two pipelines now. We will need to separate pipelines for
+  // Direct and General Contractors." Two boards, one page and one renderer: portal.js draws
+  // whichever board its page says (`data-pipeline` on <body>) and hands it only that board's rows,
+  // so every tab, column and count on it is that board's alone.
+  //
+  // THE RULE IS backend/pipelines.py's pipeline_of, CHARACTER FOR CHARACTER: GC when the audience
+  // is "GC", trimmed and case-insensitive; everything else — "Direct", missing, empty, anything
+  // that is not a string — is Direct, which is where every project lived before the split.
+  // test_gc_pipeline.py runs both functions over one fixture list and asserts they agree, and
+  // feeds the pipeline endpoint's real payload through this one to check it against the
+  // server's own `pipeline` stamp. Two details are load-bearing:
+  //   * the six ASCII whitespace characters are spelled out, not left to trim() — trim() strips
+  //     U+FEFF and Python's strip() does not, and a card must not be on one board in the payload
+  //     and on the other one on the page;
+  //   * only a STRING counts. String(["GC"]) is "GC" here and "['GC']" in Python.
+  var PIPELINE_DIRECT = "direct";
+  var PIPELINE_GC = "gc";
+  // Where each board lives. /portal.html stays Direct because every existing link points there.
+  var BOARD_PAGE = { direct: "/portal.html", gc: "/gc-projects.html" };
+
+  function pipelineOf(audience) {
+    if (typeof audience !== "string") return PIPELINE_DIRECT;
+    return audience.replace(/^[ \t\n\r\f\v]+|[ \t\n\r\f\v]+$/g, "").toLowerCase() === "gc"
+      ? PIPELINE_GC : PIPELINE_DIRECT;
+  }
+  /** The board a card is drawn on, off the audience the pipeline endpoint stamps on every card. */
+  function boardOf(p) { return pipelineOf(p && p.audience); }
+  function normPipeline(v) { return v === PIPELINE_GC ? PIPELINE_GC : PIPELINE_DIRECT; }
+  /** The rows one board shows. Everything the board draws or counts — tabs, columns, the
+   *  estimator and period menus, "N proposals" — is computed from what this returns, which is how
+   *  each board counts only its own. */
+  function onBoard(rows, pipeline) {
+    var want = normPipeline(pipeline);
+    return (rows || []).filter(function (p) { return boardOf(p) === want; });
+  }
+  /** "" when project `id` belongs on `pipeline`'s board or is not in `rows` at all; otherwise the
+   *  page of the board it IS on. For a deep link (?open=<id>) that arrived on the wrong board —
+   *  every existing link says /portal.html, whichever board the project is on now. */
+  function otherBoardFor(rows, id, pipeline) {
+    if (id == null || id === "") return "";
+    var want = normPipeline(pipeline);
+    var list = rows || [];
+    for (var i = 0; i < list.length; i++) {
+      var p = list[i];
+      if (p && String(p.proposal_id) === String(id)) {
+        var on = boardOf(p);
+        return on === want ? "" : BOARD_PAGE[on];
+      }
+    }
+    return "";
+  }
+
   /** No deposit stage stands between approval and contacts when this job doesn't
    *  collect one — otherwise a GC project would sit in Won/Approved forever, unable
    *  to reach Contact info. An issued invoice means a deposit is genuinely
@@ -640,6 +693,8 @@
     isHandedOff: isHandedOff,
     depositSatisfied: depositSatisfied, approvedInPortal: approvedInPortal,
     isTest: isTest, nameLooksLikeTest: nameLooksLikeTest,
+    PIPELINE_DIRECT: PIPELINE_DIRECT, PIPELINE_GC: PIPELINE_GC, BOARD_PAGE: BOARD_PAGE,
+    pipelineOf: pipelineOf, boardOf: boardOf, onBoard: onBoard, otherBoardFor: otherBoardFor,
     stage: stage,
     lastActivity: lastActivity, activityTs: activityTs, stageTs: stageTs,
     estimatorOf: estimatorOf, isAssigned: isAssigned, cardTotal: cardTotal,
