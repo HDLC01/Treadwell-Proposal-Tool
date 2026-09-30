@@ -19,6 +19,13 @@ const path = require("path");
 const ROOT = path.resolve(process.argv[2]);
 const src = fs.readFileSync(path.join(ROOT, "js", "analytics.js"), "utf8");
 const X = require(path.join(ROOT, "js", "analytics-core.js"));
+// The page asks X.today() for the real date, and the fixture's dates are fixed, so the 90-day
+// window drifted off them: the "fresh" bid (submitted 2026-07-01) left the window on 2026-09-30
+// and this harness started failing on an unchanged tree. Pin the page's today to the fixture's own
+// day (DATA.generated_at below); a caller that passes a date still gets the real function.
+const FIXTURE_TODAY = "2026-08-15";
+const realToday = X.today;
+X.today = (now) => (now ? realToday(now) : FIXTURE_TODAY);
 
 /** Lift a two-space-indented `function name(...) {...}` by brace counting. */
 function fn(name) {
