@@ -2019,6 +2019,21 @@ const rendered = [];      // every string the page put on screen, for the Labour
     // THE LIVE NAME: renaming the row on the Items tab renames the card.
     const renamed = await priced(seeded({ "joint-filler-kit": { name: "Our kit" } }), 3500);
 
+    // TYPED INTO A REAL MATERIAL ROW: the path the picker's list does not cover. setPick on a row
+    // that is already a material goes through setMaterial, which once had a name loop of its own.
+    const typedModel = clone(MODEL);
+    typedModel.takeoff = [{ item_id: "i1", item_name: "OPF", measurement: 1000, unit: "SF" }];
+    typedModel.conditions = Object.assign({}, typedModel.conditions, { dye: false, joint_filler: false });
+    const tp = build({ blob: blob({ polish_estimate: typedModel }), items: seeded() });
+    await tp.api.init();
+    tp.api.setPick(0, "Dye, per coat");
+    const typedDye = tp.api.model().takeoff[0].item_id;
+    tp.api.setPick(0, "joint filler, 10 gal kit");
+    const typedKit = tp.api.model().takeoff[0].item_id;
+    tp.api.setPick(0, "OPF");
+    const typedOrdinary = tp.api.model().takeoff[0].item_id;
+    const typedPick = { dye: typedDye, kit: typedKit, ordinary: typedOrdinary };
+
     // NEVER A TAKEOFF ROW: not in the picker's list, and not resolved by typing the name out.
     const p = build({ items: seeded() });
     await p.api.init();
@@ -2047,6 +2062,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
       typedNameResolvesToNothing: p.api.itemByName("Dye, per coat") === null &&
         p.api.itemByName("joint filler, 10 gal kit") === null,
       ordinaryNameStillResolves: (p.api.itemByName("OPF") || {}).id === "i1",
+      typedPick: typedPick,
     };
 
     // ── WHAT A SAVE HANDS KYLE'S WORKBOOK ──

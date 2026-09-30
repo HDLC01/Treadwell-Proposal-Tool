@@ -2062,6 +2062,12 @@ def test_the_reserved_rows_are_never_a_takeoff_row_and_the_card_uses_the_live_na
     assert r["typedNameResolvesToNothing"], (
         "typing a reserved row's name resolves a takeoff row to it")
     assert r["ordinaryNameStillResolves"], "an ordinary material no longer resolves by name"
+    # Typed into a row that is ALREADY a material (setPick -> setMaterial), not just looked up.
+    assert r["typedPick"]["dye"] not in ("dye", "joint-filler-kit"), (
+        "typing 'Dye, per coat' into a material row turned it into a second dye charge")
+    assert r["typedPick"]["kit"] not in ("dye", "joint-filler-kit"), (
+        "typing the kit's name into a material row turned it into a second joint filler charge")
+    assert r["typedPick"]["ordinary"] == "i1", "typing an ordinary material no longer resolves it"
     assert r["renamed"] and not r["notRenamedByDefault"], (
         "the joint filler card does not show the row's own name")
 

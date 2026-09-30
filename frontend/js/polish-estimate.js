@@ -1719,11 +1719,9 @@
     var row = M.takeoff[i];
     if (!row) return false;
     row.item_name = text;
-    var want = String(text || "").trim().toLowerCase();
-    var hit = null;
-    for (var n = 0; n < ITEMS.length; n++) {
-      if (String(ITEMS[n].name || "").trim().toLowerCase() === want) { hit = ITEMS[n]; break; }
-    }
+    // Through itemByName, not a loop of its own: that is the one name lookup that refuses Dye and
+    // the joint filler kit, so a row typed as "Dye, per coat" cannot become a second dye charge.
+    var hit = itemByName(text);
     row.item_id = hit ? hit.id : "";
     return !!hit;
   }
