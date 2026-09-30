@@ -361,6 +361,7 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   // materialDefaultRow BEFORE takeoffDefaultGroups, which draws EVERY Materials row through it --
   // an ordinary favorited material and the three condition materials alike.
   ${fn("materialDefaultRow")}
+  ${fn("conditionDefaultRow")}
   ${fn("takeoffDefaultGroups")}
   ${fn("renderDefaultTakeoff")}
   // AFTER the renderer it repaints and after the network stub it awaits. This is the handler the
@@ -633,7 +634,7 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
            setConditionDefault, COND_CALLS,
            // THE MATERIAL ROW'S OWN PIECES, so a condition row can be compared with what a material
            // row is drawn from rather than with a copy of it typed into this file.
-           materialDefaultRow, defaultRowActions, removeDefault, isReservedItem,
+           materialDefaultRow, conditionDefaultRow, defaultRowActions, removeDefault, isReservedItem,
            RESERVED_ITEM_CONDITION, focusItemRow,
            itemQueryNow: function () { return itemQuery; },
            condDefaultsNow: function () { return COND_DEFAULTS; },
@@ -3548,6 +3549,8 @@ out.serverOwnedItemFields = build().api.SERVER_OWNED_ITEM_FIELDS;
     // asserted separately, in shippedOffMeansUnlisted, against a fixture with no overrides.
     COND_DEFAULTS: [{ key: "joint_filler", on: true }, { key: "dye", on: true },
                     { key: "remove_existing_jf", on: true }],
+    // AN ADMIN, because a condition's Remove is an admin's only (the PUT is _require_admin).
+    ADMIN: true,
   });
   // WITH ITS REAL id AND line_key, because the row now carries an editable control and the
   // control is keyed by id -- an idless fixture would render a box that writes nowhere and
@@ -3712,7 +3715,7 @@ out.serverOwnedItemFields = build().api.SERVER_OWNED_ITEM_FIELDS;
   {
     const bare = build({
       window: { TWPolishBid: require(path.join(ROOT, "js", "polish-bid-core.js")) },
-      ITEMS: [], ASMS: [],
+      ITEMS: [], ASMS: [], ADMIN: true,
     });
     bare.api.renderDefaultTakeoff();
     const bh = bare.dom.nodes["default-takeoff-body"].innerHTML;
@@ -3723,12 +3726,13 @@ out.serverOwnedItemFields = build().api.SERVER_OWNED_ITEM_FIELDS;
       // on this list either. 2026-10-01 reverses 2026-09-21 here, at Hanz's word ("All 3 exactly
       // like materials"). This fixture has no items, assemblies or markup, so the table is EMPTY
       // rather than merely missing three names.
-      noneListedWhileOff: bh === "" && bare.api.takeoffDefaultGroups().length === 0,
-      // …and each is FOUND the way a non-default material is: the add browse offers all three,
-      // as Materials, keyed by the condition the press will turn on.
-      eachIsOfferedByTheAddSearch: ["joint_filler", "remove_existing_jf", "dye"].every((k) =>
-        browse.indexOf('data-def-add="conditions" data-def-id="' + k + '">') !== -1) &&
-        (browse.match(/<span class="k">Material<\/span>/g) || []).length === 3,
+      // ALL THREE ARE LISTED OFF on the Polish tab, since Hanz's 2026-10-01 "Always list them,
+      // start OFF" -- each with an Add, none with a Remove, all three saying Off.
+      noneListedWhileOff: ["joint_filler", "remove_existing_jf", "dye"].every((k) =>
+        bh.indexOf('data-def-add="conditions" data-def-id="' + k + '"') !== -1) &&
+        (bh.match(/Off \u00b7 a new bid starts without it/g) || []).length === 3,
+      // …and the add browse offers NONE of them: they are on the list already.
+      eachIsOfferedByTheAddSearch: !/data-def-add="conditions"/.test(browse),
       noneOffersRemove: !/data-def-off=/.test(bh),
       // The three keys the page offers, read off the function rather than the markup, so this
       // still says something when nothing is listed.
@@ -4649,17 +4653,23 @@ async function conditionChecks() {
     // list that had stopped offering the library.
     ITEMS: [{ id: "i9", name: "Not a default", unit: "Gal", unit_cost: 50, favorite: false }],
     ASMS: [],
+    // AN ADMIN: Add and Remove on these rows are an admin's only (the PUT is _require_admin).
+    // The non-admin view is its own scenario below.
+    ADMIN: true,
   }, extra || {});
   // Which reserved row each condition IS -- the row the material button is keyed by.
   const ROW = { joint_filler: "joint-filler-kit", remove_existing_jf: "remove-existing-jf",
                 dye: "dye" };
 
-  // LISTED MEANS ON, the way it does for a material since 2026-10-01 (Hanz: "All 3 exactly like
-  // materials"). Tested for the material Remove keyed by the condition's reserved row -- the
-  // button a row carries only while it is on the list.
+  // ON MEANS THE MATERIAL'S Remove, keyed by the condition's reserved row. Since 2026-10-01
+  // (Hanz: "Always list them, start OFF") an OFF condition is still on the list, carrying an
+  // Add keyed by the condition instead -- `offRow`. Both are read off the RENDERED table.
   const listed = (html, key) =>
     html.indexOf('data-def-off="items" data-def-id="' + ROW[key] + '"') !== -1;
-  // OFFERED BY THE ADD SEARCH, as the hit that turns this condition on.
+  const offRow = (html, key) =>
+    html.indexOf('data-def-add="conditions" data-def-id="' + key + '"') !== -1 &&
+    !listed(html, key);
+  // OFFERED BY THE ADD SEARCH, as a hit. None of the three ever is now: they are on the list.
   const offered = (html, key) =>
     html.indexOf('data-def-add="conditions" data-def-id="' + key + '">') !== -1;
 
@@ -4682,16 +4692,16 @@ async function conditionChecks() {
   live.api.openDefaultBrowse();
   const afterRemoveBrowse = live.dom.nodes["default-hits"].innerHTML;
 
-  // 3. AND THE WAY BACK ON: found in the add search like a non-default material, and added by the
-  //    id the hit carries. The hit's own data-def-id is read off the RENDERED search and handed to
-  //    the saver the router's "conditions" arm calls, so a hit keyed by something the saver does
-  //    not know fails here.
+  // 3. AND THE WAY BACK ON: the OFF row's own Add, keyed by the condition. The id is read off the
+  //    RENDERED table and handed to the saver the router's "conditions" arm calls, so a button
+  //    keyed by something the saver does not know fails here. The search is asked too: it must
+  //    not offer a row that is already on screen.
   const adding = build(seed({}));
   adding.api.renderDefaultTakeoff();
   const beforeAddHtml = adding.dom.nodes["default-takeoff-body"].innerHTML;
   adding.api.setDefaultQuery("dye");
   const dyeHits = adding.dom.nodes["default-hits"].innerHTML;
-  const dyeHitId = (/data-def-add="conditions" data-def-id="([^"]+)"/.exec(dyeHits) || [])[1];
+  const dyeHitId = (/data-def-add="conditions" data-def-id="(dye)"/.exec(beforeAddHtml) || [])[1];
   await adding.api.setConditionDefault(dyeHitId, true);
   const afterAddHtml = adding.dom.nodes["default-takeoff-body"].innerHTML;
   adding.api.setDefaultQuery("dye");
@@ -4715,6 +4725,25 @@ async function conditionChecks() {
   await failing.api.removeDefault("items", "joint-filler-kit");
   const failedHtml = failing.dom.nodes["default-takeoff-body"].innerHTML;
 
+  // 6b. THE OTHER FOUR WORK TYPES DO NOT LIST THEM. All three write Polish-sheet cells.
+  const sealTab = build(seed({ COND_DEFAULTS: [{ key: "joint_filler", on: true }] }));
+  sealTab.api.setWorkType("seal");
+  sealTab.api.renderDefaultTakeoff();
+  const sealHtml = sealTab.dom.nodes["default-takeoff-body"].innerHTML;
+
+  // 6d. A NON-ADMIN sees all three, one on and two off, with Edit only: the server would refuse
+  //     their Add or Remove.
+  const viewer = build(seed({ ADMIN: false, COND_DEFAULTS: [{ key: "dye", on: true }] }));
+  viewer.api.renderDefaultTakeoff();
+  const viewerHtml = viewer.dom.nodes["default-takeoff-body"].innerHTML;
+
+  // 6c. THE OFF ROW BUILDS ITS OWN MARKUP (rawHow), so an admin's typed unit is escaped there.
+  const hostile = build(seed({ ITEMS: [
+    { id: "joint-filler-kit", name: "<b>Kit</b>", unit: "<img src=x>", buy_qty: 1,
+      unit_cost: 500, coverage: 3500, waste_pct: 0, roundup: true, favorite: false }] }));
+  hostile.api.renderDefaultTakeoff();
+  const hostileHtml = hostile.dom.nodes["default-takeoff-body"].innerHTML;
+
   // 7. AN ORDINARY MATERIAL'S Remove IS UNTOUCHED: still its `favorite`, never a condition.
   const plain = build(seed({ ITEMS: [{ id: "i1", name: "Densifier", unit: "Pail",
                                        unit_cost: 100, favorite: true }] }));
@@ -4725,18 +4754,18 @@ async function conditionChecks() {
     // The merge, through the ESTIMATE'S OWN seedConditionDefaults rather than a second one
     // written on this page: a stored `on` wins over the shipped `off`.
     storedOverrideWins: listed(storedHtml, "joint_filler"),
-    // …and leaves the two nobody overrode exactly as the tool ships them, which is off -- and so
-    // NOT on the list at all.
-    untouchedOnesKeepShipped: !listed(storedHtml, "dye") &&
-      !listed(storedHtml, "remove_existing_jf") && !/Dye/.test(storedHtml) &&
-      !/Remove existing joint filler/.test(storedHtml),
+    // …and leaves the two nobody overrode exactly as the tool ships them, which is off: still
+    // listed, carrying an Add and saying Off.
+    untouchedOnesKeepShipped: offRow(storedHtml, "dye") &&
+      offRow(storedHtml, "remove_existing_jf") &&
+      (storedHtml.match(/Off \u00b7 a new bid starts without it/g) || []).length === 2,
 
     // REMOVE. It is the RENDERED table that changes, so a handler that wrote the variable and
     // forgot to repaint fails here rather than looking fine.
     startsListed: listed(beforeHtml, "joint_filler"),
-    // THE ROW LEAVES THE LIST, as a material's does -- not flipped to an Add in place.
-    removeTakesTheRowOff: !listed(afterHtml, "joint_filler") && !/Joint filler/.test(afterHtml) &&
-      !/data-def-add=/.test(afterHtml),
+    // THE ROW STAYS AND TURNS OFF IN PLACE: its Remove becomes an Add, and it says Off.
+    removeTakesTheRowOff: offRow(afterHtml, "joint_filler") && /Joint filler/.test(afterHtml) &&
+      (afterHtml.match(/Off \u00b7 a new bid starts without it/g) || []).length === 3,
     // …and the write goes to the CONDITION, keyed by the condition and carrying the answer --
     // never a `favorite` PATCH on the reserved row, which would save cleanly and change nothing.
     wroteTheServer: JSON.stringify(live.api.COND_CALLS) ===
@@ -4745,12 +4774,13 @@ async function conditionChecks() {
     // ONE ROW PER CONDITION in the page's own list, whatever the press. A handler that appended
     // instead of replacing would send the right body and then render the stale answer next to it.
     keepsOneRowPerCondition: live.api.condDefaultsNow().length === 1,
-    // AND IT IS FINDABLE AGAIN the moment it is gone, so Remove is not a one-way door.
-    removedOneIsOfferedByTheAddSearch: offered(afterRemoveBrowse, "joint_filler"),
+    // AND THE SEARCH DOES NOT OFFER IT: the way back on is the row's own Add, still on screen.
+    removedOneIsOfferedByTheAddSearch: !offered(afterRemoveBrowse, "joint_filler") &&
+      offRow(afterHtml, "joint_filler"),
 
-    // ADD. Off, so not listed; found by name in the search; added; listed and priced.
-    startsOffAndUnlisted: !listed(beforeAddHtml, "dye") && !/Dye/.test(beforeAddHtml),
-    searchFindsIt: dyeHitId === "dye" && /Dye<span class="k">Material<\/span>/.test(dyeHits),
+    // ADD. Off, so listed with an Add; the search does not offer it; added; Remove, priced.
+    startsOffAndUnlisted: offRow(beforeAddHtml, "dye") && /Dye/.test(beforeAddHtml),
+    searchFindsIt: dyeHitId === "dye" && !offered(dyeHits, "dye"),
     addPutsTheRowOnTheList: listed(afterAddHtml, "dye"),
     addWroteTheServer: JSON.stringify(adding.api.COND_CALLS) ===
       JSON.stringify([{ key: "dye", on: true }]),
@@ -4761,14 +4791,13 @@ async function conditionChecks() {
     // default.
     addedOneIsNoLongerOffered: !offered(dyeHitsAfterAdd, "dye"),
 
-    // THE BROWSE: all three, while all three are off -- beside the library, not instead of it.
+    // THE BROWSE offers none of the three while they are off -- they are on the list already.
     browseOffersAllThreeWhileOff: ["joint_filler", "remove_existing_jf", "dye"]
-      .every((k) => offered(browseHtml, k)),
+      .every((k) => !offered(browseHtml, k)),
     andStillOffersTheLibrary: /data-def-add="items" data-def-id="i9"/.test(browseHtml),
-    // AND ONLY THE ONES THAT ARE OFF, or the list would offer to add what is already added --
-    // the same rule the materials follow two lines above it in defaultCandidates.
-    browseSkipsAConditionAlreadyOn: !offered(oneOnBrowse, "joint_filler") &&
-      offered(oneOnBrowse, "dye") && offered(oneOnBrowse, "remove_existing_jf"),
+    // …and none while one is on either.
+    browseSkipsAConditionAlreadyOn: ["joint_filler", "remove_existing_jf", "dye"]
+      .every((k) => !offered(oneOnBrowse, k)),
     // THE TYPED SEARCH MATCHES THE CONDITION'S LABEL TOO: "joint" finds the kit and
     // remove-existing whatever the rows are called -- here the kit's row has been renamed to
     // something without the word in it, so only the label can find it. The hit still shows the
@@ -4780,9 +4809,31 @@ async function conditionChecks() {
           unit_cost: 500, coverage: 3500, waste_pct: 0, roundup: true, favorite: false }] }));
       s.api.setDefaultQuery("joint");
       const sh = s.dom.nodes["default-hits"].innerHTML;
-      return offered(sh, "joint_filler") && /Our 10 gal kit<span class="k">/.test(sh) &&
-        offered(sh, "remove_existing_jf") && !offered(sh, "dye");
+      s.api.renderDefaultTakeoff();
+      const th = s.dom.nodes["default-takeoff-body"].innerHTML;
+      // Typed by name or by label, the search offers none; the renamed kit is on the list
+      // under its row's own name.
+      return !offered(sh, "joint_filler") && !offered(sh, "remove_existing_jf") &&
+        !/data-def-add="items" data-def-id="joint-filler-kit"/.test(sh) &&
+        /<td>Our 10 gal kit<\/td>/.test(th) && offRow(th, "joint_filler");
     })(),
+
+    // POLISH ONLY: the Seal tab lists none of the three, on or off.
+    notOnOtherWorkTypes: !/data-def-id="(joint-filler-kit|remove-existing-jf|dye|joint_filler|remove_existing_jf)"/
+      .test(sealHtml),
+    // NON-ADMIN: every condition row carries its Edit and nothing it cannot save.
+    viewerGetsEditOnly: ["joint-filler-kit", "remove-existing-jf", "dye"].every((id) =>
+        viewerHtml.indexOf('data-def-edit="items" data-def-id="' + id + '">Edit</button>') !== -1) &&
+      !/data-def-add="conditions"/.test(viewerHtml) &&
+      !/data-def-off="items" data-def-id="(joint-filler-kit|remove-existing-jf|dye)"/.test(viewerHtml) &&
+      (viewerHtml.match(/<span class="wtall">Off \u00b7 a new bid starts without it<\/span>/g) || [])
+        .length === 2,
+    // THE OFF NOTE IS AN ELEMENT, not text: rawHow must be set, or the row would print the tag.
+    offNoteIsMarkup: /<span class="wtall">Off \u00b7 a new bid starts without it<\/span>/
+        .test(beforeAddHtml) && !/&lt;span/.test(beforeAddHtml),
+    // THE OFF ROW ESCAPES what it did not write: an admin's typed name and unit.
+    offRowEscapesTypedText: !/<img src=x>/.test(hostileHtml) && !/<b>Kit<\/b>/.test(hostileHtml) &&
+      /&lt;img src=x&gt;/.test(hostileHtml) && offRow(hostileHtml, "joint_filler"),
 
     // The refusal.
     refusedSavePutsItBack: listed(failedHtml, "joint_filler"),
@@ -4899,7 +4950,8 @@ async function conditionChecks() {
   s.api.setDefaultQuery("o");
   const defaults = s.api.defaultCandidates().rows.map((r) => r.kind + ":" + r.id);
   // BROWSE WITH A FULL LIBRARY: ten ordinary un-favorited materials, nothing typed. The cap is
-  // DEFAULT_MAX rows; the three OFF conditions must still be among them.
+  // DEFAULT_MAX rows, and all of them are ordinary materials: the three conditions are never
+  // offered here (they are always on the list), and never as their reserved rows.
   const many = withReserved().concat(Array.from({ length: 10 }, (_, k) => ({
     id: "m" + k, name: "Material " + k, unit: "Gal", buy_qty: 1, unit_cost: 10,
     coverage: 100, favorite: false, divisions: [] })));
