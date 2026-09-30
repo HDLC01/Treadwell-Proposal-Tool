@@ -3309,6 +3309,15 @@ out.serverOwnedItemFields = build().api.SERVER_OWNED_ITEM_FIELDS;
 
     // CONDITION.
     missingACost: shown({ condition: "no_cost" }),
+    // ...but not the reserved row that has no material cost by design.
+    missingACostWithRemoveExisting: (function () {
+      const items = JSON.parse(JSON.stringify(FIXTURES)).concat([{ id: "remove-existing-jf",
+        name: "Remove existing joint filler", unit: "SF", buy_qty: 1, unit_cost: null,
+        divisions: [], vendor: "" }]);
+      const b = build({ ITEMS: items,
+                        FILTERS: { divisions: [], vendor: "", condition: "no_cost" } });
+      return b.api.visibleItems().map((x) => x.name);
+    })(),
     notInAnyDivision: shown({ condition: "no_division" }),
     noVendor: shown({ condition: "no_vendor" }),
     priceNeverRecorded: shown({ condition: "no_price_date" }),

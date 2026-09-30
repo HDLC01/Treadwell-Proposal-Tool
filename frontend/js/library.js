@@ -1696,7 +1696,9 @@
    *  not safe to price a bid from. A material with no cost prices every assembly built on it at
    *  nothing, silently, and until now there was no way to go looking for one. */
   function conditionHits(it, c) {
-    if (c === "no_cost") return !(Number(it.unit_cost) > 0);
+    // Remove existing joint filler has no material cost BY DESIGN (a labor modifier), so it is
+    // not a material that is missing one.
+    if (c === "no_cost") return !(Number(it.unit_cost) > 0) && it.id !== "remove-existing-jf";
     if (c === "no_division") return itemDivisions(it).length === 0;
     if (c === "no_vendor") return !String(it.vendor || "").trim();
     if (c === "no_price_date") return !it.cost_updated_at;

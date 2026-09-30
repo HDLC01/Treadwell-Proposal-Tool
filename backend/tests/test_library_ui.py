@@ -2334,6 +2334,8 @@ def test_the_condition_facet_finds_what_is_not_safe_to_price_from(ran):
     Mutation: make no_cost accept a zero cost as priced."""
     f = ran["facets"]
     assert f["missingACost"] == ["No cost"]
+    # Remove existing joint filler has no material cost by design; it is not "missing" one.
+    assert f["missingACostWithRemoveExisting"] == ["No cost"], f["missingACostWithRemoveExisting"]
     assert f["notInAnyDivision"] == ["Unfiled"]
     assert f["noVendor"] == ["Unfiled"]
     assert f["priceNeverRecorded"] == ["No cost", "Unfiled"]
