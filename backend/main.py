@@ -1007,6 +1007,16 @@ class LibraryItemIn(BaseModel):
     notes: Optional[str] = None
     # Shared/team-wide, not per-user -- see library.validate_item's note.
     favorite: Optional[bool] = None
+    # THE TWO NUMBERS THAT MOVED OFF THE ASSEMBLY LINE on 2026-09-22, alongside `coverage` above.
+    # Declared here or they do not exist as far as the API is concerned: Pydantic's default
+    # `extra` is `ignore`, so an undeclared field is dropped in silence, validate_item returns
+    # {}, update_item takes its "nothing changed" early return and the route answers 200 with the
+    # row untouched. That is not hypothetical -- it is exactly how default_work_types was
+    # unwritable for as long as the column existed, and it was proven again for these two before
+    # this line was added: PATCH {"waste_pct": 12.5} answered 200 and did not even move
+    # updated_at. `Any`, like unit_cost and buy_qty, because both arrive as text from an input.
+    waste_pct: Optional[Any] = None
+    roundup: Optional[bool] = None
     # WHICH WORK TYPES THIS DEFAULT IS OFFERED FOR. `Any`, like the fields above, because
     # library._coerce_work_types accepts a list, a JSON string or a bare name and is the
     # single authority on the answer.
@@ -1072,7 +1082,14 @@ def api_library_item_update(item_id: str, payload: LibraryItemIn,
 
 @app.delete("/api/library/items/{item_id}")
 def api_library_item_delete(item_id: str) -> Dict[str, Any]:
-    if not library.delete_item(item_id):
+    try:
+        # ValidationError here means the id is RESERVED (dye / joint-filler-kit), not that the
+        # request was malformed — 400 still reads right, and it matches the same exception every
+        # other write on this route already turns into one.
+        deleted = library.delete_item(item_id)
+    except library.ValidationError as exc:
+        raise HTTPException(400, str(exc))
+    if not deleted:
         raise HTTPException(404, "That material no longer exists.")
     # Assemblies pointing at it are left untouched on purpose: rewriting somebody else's
     # assembly as a side effect of a delete is worse than a visible line they can repoint.
@@ -1273,6 +1290,9 @@ class LibraryLaborIn(BaseModel):
     guys_auto: Optional[bool] = None
     sort: Optional[Any] = None
     notes: Optional[str] = None
+    # Shared/team-wide, not per-user -- see library.validate_labor's note. Undeclared here means
+    # silently discarded, the same trap LibraryItemIn.default_work_types' own comment records.
+    favorite: Optional[bool] = None
     # See the note on LibraryItemIn.default_work_types: undeclared means silently discarded.
     default_work_types: Optional[Any] = None
 
@@ -1320,7 +1340,14 @@ def api_library_labor_update(labor_id: str, payload: LibraryLaborIn,
 @app.delete("/api/library/labor/{labor_id}")
 def api_library_labor_delete(labor_id: str, request: Request) -> Dict[str, Any]:
     _require_admin(request)
-    if not library.delete_labor(labor_id):
+    # 400, NOT 404: `travel` is very much still on the list, and 404 would read as "already gone"
+    # to whatever called this — a caller that retried on a 404 would find nothing to retry against.
+    # library.delete_labor raises before it even asks the store whether the row exists.
+    try:
+        deleted = library.delete_labor(labor_id)
+    except library.ValidationError as exc:
+        raise HTTPException(400, str(exc))
+    if not deleted:
         raise HTTPException(404, "That labor line is no longer on the list.")
     # Soft, like every other library delete. An estimate built with this line carries its own copy
     # of the rate, so removing it from the list does not reach back into a bid.

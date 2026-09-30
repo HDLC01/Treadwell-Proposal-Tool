@@ -208,8 +208,8 @@ const out = {};
 // ── 2. Items and Assemblies: four tabs, and five work types inside one of them ─
 {
   const src = read(path.join(ROOT, "js", "library.js"));
-  const ids = ["tab-items", "tab-asm", "tab-vendors", "tab-defaults",
-               "pane-items", "pane-asm", "pane-vendors", "pane-defaults",
+  const ids = ["tab-items", "tab-asm", "tab-labor", "tab-vendors", "tab-defaults",
+               "pane-items", "pane-asm", "pane-labor", "pane-vendors", "pane-defaults",
                "wt-polish", "wt-seal", "wt-epoxy", "wt-leveling", "wt-gyp"];
   const body = [
     decl(src, "var", "view", "library.js"),
@@ -255,6 +255,15 @@ const out = {};
     out.libRestored = { view: api.view(),
                         shown: api.PANES.filter((p) => !doc.els["pane-" + p].hidden),
                         selected: api.PANES.filter((p) => doc.els["tab-" + p].attrs["aria-selected"] === "true") };
+  }
+  // THE LABOR TAB, 2026-09-30: a fifth pane, so a reload on it has to come back to it rather
+  // than fall through to Assemblies -- which is what `pick` does with a tab PANES does not list.
+  {
+    const { doc, api } = run("#tab=labor");
+    api.restoreView();
+    out.libLabor = { view: api.view(),
+                     shown: api.PANES.filter((p) => !doc.els["pane-" + p].hidden),
+                     selected: api.PANES.filter((p) => doc.els["tab-" + p].attrs["aria-selected"] === "true") };
   }
   // One level down: the right tab AND the right work type.
   {

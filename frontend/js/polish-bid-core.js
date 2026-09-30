@@ -253,23 +253,39 @@
     return t;
   }
 
-  /** B25 `=IF(E25="Yes",E18)`, C25 `0.14`, D25 `=B25*C25` — the Dye line. A flat rate
-   *  across the whole polished area, charged only when the condition is on.
+  /** HOW MANY COATS OF DYE A JOB BUYS: Kyle's Polish tab has TWO "Dye" lines, rows 25 and 26,
+   *  both =IF(E25="Yes",E18) at 0.14 a square foot, switched by the one E25 answer. So with dye
+   *  on his sheet charges $0.28/SF, and backend/pricing.py (dye_coats 2) always agreed.
    *
-   *  Not a library item: dye has no coverage, no pack size, no vendor — nothing a real
-   *  material row has. Forcing it through priceLine/priceAssembly would mean inventing a fake
-   *  catalog item for a fixed formula that is not one, so it prices from RATES.DYE_PER_SF
-   *  directly instead. 0 when the condition is off or the area is not yet a positive number. */
+   *  THE BETA CHARGED ONE UNTIL 2026-09-30, reading row 25 alone; Hanz, looking at the original
+   *  file: make it match Kyle's. The library row `dye` is ONE coat, and dyeCost, condLine in
+   *  polish-estimate.js and the workbook writer below all take the count from here. */
+  var DYE_COATS = 2;
+
+  /** B25/B26 `=IF(E25="Yes",E18)`, C25/C26 `0.14`, D25/D26 `=B*C` — Kyle's two Dye lines, one
+   *  per coat (DYE_COATS). A flat rate across the whole polished area for each coat, charged only
+   *  when the condition is on: area x 0.14 x 2, which is D25 + D26 to the bit (doubling is exact).
+   *
+   *  THE FALLBACK NOW, NOT THE ANSWER (2026-09-30). Dye is a reserved library_items row, id
+   *  `dye` (backend/library.py's RESERVED_ITEM_IDS), one coat, and polish-estimate.js prices each
+   *  coat through library-core's priceLine off that row, so an admin edits it on the Items tab.
+   *  This formula is what stands when the row is not there to read: a database the seed has not
+   *  reached. The seed (coverage 1, waste 0, no roundup, $0.14) prices to the cent what this
+   *  does, and test_polish_estimate_page.py holds the two together. 0 when the condition is off
+   *  or the area is not yet a positive number. */
   function dyeCost(area, on) {
     var a = num(area);
     if (!on || !(a > 0)) return 0;
-    return a * RATES.DYE_PER_SF;
+    return a * RATES.DYE_PER_SF * DYE_COATS;
   }
 
   /** B29 `=ROUNDUP(IF(E29="yes",(E18/3500),0),0)`, C29 `500`, D29 `=B29*C29` — Joint
    *  Filler (10 gal kit). One kit per 3,500 SF of polished area, ROUNDED UP to a whole kit —
    *  this file's own roundUp(), not a second rounding function — charged only when the
-   *  condition is on. Same 0-guard as dyeCost above. */
+   *  condition is on. Same 0-guard as dyeCost above, and THE SAME FALLBACK ROLE: the live price
+   *  is the reserved `joint-filler-kit` row (coverage 3500, waste 0, roundup on, $500), which
+   *  priceLine turns into exactly this ROUNDUP(area / 3500) × 500 while the seeded values
+   *  stand. */
   function jointFillerCost(area, on) {
     var a = num(area);
     if (!on || !(a > 0)) return 0;
@@ -477,7 +493,25 @@
    *  Travel keeps the POSITION IT ALREADY HAD on the model, which is the sheet's own.
    *
    *  WHO IS ALLOWED TO CALL THIS is the whole safety question, and the answer is laborUnstated
-   *  below -- never this function, which will happily add rows to a finished bid if asked. */
+   *  below -- never this function, which will happily add rows to a finished bid if asked.
+   *
+   *  ONLY A FAVORITED ROW SEEDS, 2026-09-24 -- the change that makes the new Labor tab and the
+   *  Defaults tab two different presses. `rows` is GET /api/library/labor's full catalog, every
+   *  labor type Treadwell has ever typed in, not just the ones somebody has chosen as a default --
+   *  `list_labor()` on the server deliberately does not filter it either, because the Labor tab
+   *  itself needs the WHOLE list. Before `favorite` existed there was no other tab a custom labor
+   *  line could come from, so every row WAS a default by definition and this function seeded all
+   *  of them; now that a row can exist without being one, seeding all of them would put every
+   *  labor type ever created into every new bid, which is the opposite of what a "Labor tab, and
+   *  separately a Default Items & Assemblies tab" was for. `!r.favorite` alone is enough --
+   *  `_shape_labor` already reads a row with no stored value as `false`, so this needs no fallback
+   *  of its own the way `default_work_types` does for an empty list meaning "every tab": there is
+   *  no old data to stay compatible with, because no row anywhere carried `favorite` before today.
+   *
+   *  TRAVEL IS UNCHANGED BY THIS. The branch above it applies unconditionally, whatever its stored
+   *  `favorite` reads -- Travel is not opted into a bid the way a chosen default is, it is built
+   *  into every estimate the way it always has been, and the migration backfills it to true
+   *  regardless, so the two should never actually disagree. */
   function seedLibraryLabor(labor, rows) {
     var out = (labor instanceof Array) ? labor.slice() : [];
     if (!(rows instanceof Array)) return out;
@@ -506,6 +540,7 @@
         seen[rid] = true;
         continue;
       }
+      if (!r.favorite) continue;
       if (seen[rid]) continue;
       seen[rid] = true;
       out.push(libraryLaborRow(r));
@@ -631,7 +666,7 @@
     return out;
   }
 
-  function conditionCellWrites(conditions, cells) {
+  function conditionCellWrites(conditions, cells, library) {
     var out = Object.assign({}, cells || {});
     var c = conditions || {};
     for (var key in CONDITION_CELLS) {
@@ -639,6 +674,94 @@
       var spec = CONDITION_CELLS[key];
       var lit = c[key] ? spec.on : spec.off;
       for (var i = 0; i < spec.cells.length; i++) out[spec.cells[i]] = lit;
+    }
+    return libraryLineWrites(out, library);
+  }
+
+  /** KYLE'S DYE AND JOINT FILLER LINES, as the template ships them (Polish rows 25 and 29).
+   *
+   *  `template` is his B cell's formula text exactly, character for character: libraryLineWrites
+   *  compares against it to tell "the library says what the template already says" from a
+   *  change. `shipped` is what polish-estimate.js's condLine falls back to when a row cannot
+   *  price -- RATES and the template's own 3,500 -- so a fallback writes the template's figures.
+   *
+   *  DYE IS TWO LINES, rows 25 and 26 -- one per coat (DYE_COATS), each written the same, so the
+   *  sheet's D25 + D26 is the bid's dye figure. `qty` and `rate` are lists for that reason. */
+  var LIBRARY_LINE_CELLS = {
+    dye: { qty: ["Polish!B25", "Polish!B26"], rate: ["Polish!C25", "Polish!C26"],
+           flag: 'E25="Yes"', template: '=IF(E25="Yes",E18)',
+           shipped: { unit_price: RATES.DYE_PER_SF, coverage: 1, waste_pct: 0, roundup: false,
+                      buy_qty: 1 } },
+    joint_filler: { qty: ["Polish!B29"], rate: ["Polish!C29"], flag: 'E29="yes"',
+                    template: '=ROUNDUP(IF(E29="yes",(E18/3500),0),0)',
+                    shipped: { unit_price: RATES.JOINT_FILLER_KIT_COST, coverage: 3500,
+                               waste_pct: 0, roundup: true, buy_qty: 1 } }
+  };
+
+  /** `cells` with Kyle's Dye and Joint Filler cells rewritten to the library's own figures.
+   *  `cells` is conditionCellWrites' own fresh copy, so writing into it mutates nothing a
+   *  caller holds.
+   *
+   *  ONE PRICE EVERYWHERE. polish-estimate.js prices these two lines off the reserved
+   *  library_items rows (condLine); the workbook still carried Kyle's C25 0.14 and C29 500 and
+   *  his "/3500", so an edited row would have had the bid and the downloaded .xlsx quoting
+   *  different figures. `library` is what the page priced with, per condition key:
+   *
+   *    absent     no row in the library at all (a database the seed has not reached). NOTHING
+   *               is written or removed: the template's cells stand, exactly as before, and a
+   *               value an estimator typed on the grid is not touched.
+   *    null       the row is there but cannot price (cost or coverage blanked), so the page fell
+   *               back to the shipped formula -- and the cells get the shipped figures.
+   *    an object  {unit_price, coverage, waste_pct, roundup, buy_qty} off priceLine.
+   *
+   *  THE RATE CELLS ARE ALWAYS WRITTEN once a row exists: dye's is one coat's price per square
+   *  foot (one unit's price over what one unit covers, plus its waste), written into BOTH C25
+   *  and C26, one per coat; the kit's is one kit's price. THE
+   *  QUANTITY FORMULA IS WRITTEN ONLY WHEN IT DIFFERS from the template's text -- or when the key
+   *  is already there, so a coverage put back to 3,500 replaces the formula an earlier save wrote
+   *  rather than leaving it stale. With the seeded rows every value written equals the template's,
+   *  so the workbook is unchanged. Formulas stay formulas: estimate_writer's _coerce passes an
+   *  "=ROUNDUP(IF(...))" through as one, and Excel recomputes D25/D29 and the tab on open. */
+  function libraryLineWrites(cells, library) {
+    var out = cells;
+    var lib = library || {};
+    for (var key in LIBRARY_LINE_CELLS) {
+      if (!LIBRARY_LINE_CELLS.hasOwnProperty(key)) continue;
+      if (!Object.prototype.hasOwnProperty.call(lib, key) || lib[key] === undefined) continue;
+      var spec = LIBRARY_LINE_CELLS[key];
+      var ln = lib[key] || spec.shipped;
+      var price = num(ln.unit_price);
+      var cov = num(ln.coverage);
+      var waste = num(ln.waste_pct);
+      var pack = num(ln.buy_qty) > 0 ? num(ln.buy_qty) : 1;
+      var roundup = ln.roundup !== false;
+      if (!(cov > 0)) { ln = spec.shipped; price = num(ln.unit_price); cov = ln.coverage;
+                        waste = 0; pack = 1; roundup = ln.roundup; }
+      // What one unit of the row covers, inflated by its waste: the formula's divisor, written
+      // out rather than pre-multiplied so Kyle reads his own shape back ("/3500", "*(1+10/100)").
+      var need = "E18" + (waste ? "*(1+" + waste + "/100)" : "") + "/" + cov;
+      var qty, rate;
+      if (key === "dye" && !roundup) {
+        // Dye is charged across the area: the quantity stays his =IF(E25="Yes",E18) and the
+        // whole of the row's arithmetic goes into the per-square-foot rate.
+        qty = spec.template;
+        rate = price * (1 + waste / 100) / cov;
+      } else {
+        // Units bought: whole packs when the row rounds up, the exact need when it does not.
+        var core = "IF(" + spec.flag + ",(" + need + ")" + (roundup && pack !== 1 ? "/" + pack : "") +
+          ",0)";
+        qty = roundup ? "=ROUNDUP(" + core + ",0)" + (pack !== 1 ? "*" + pack : "") : "=" + core;
+        rate = price;
+      }
+      // Twelve significant figures, this file's roundUp() tolerance: 0.2 x 1.05 / 2 is
+      // 0.10500000000000001 in IEEE-754, and a 17-digit rate is not something to put in front
+      // of Kyle in his own workbook. The seeded 0.14 and 500 come through unchanged.
+      for (var j = 0; j < spec.rate.length; j++) {
+        out[spec.rate[j]] = parseFloat(rate.toPrecision(12));
+        if (qty !== spec.template || Object.prototype.hasOwnProperty.call(out, spec.qty[j])) {
+          out[spec.qty[j]] = qty;
+        }
+      }
     }
     return out;
   }
@@ -1000,9 +1123,10 @@
   return {
     num: num, roundUp: roundUp,
     money: money, money2: money2, pct: pct, fmtSf: fmtSf,
-    HOURS_PER_DAY: HOURS_PER_DAY, RATES: RATES, GP_BANDS: GP_BANDS,
+    HOURS_PER_DAY: HOURS_PER_DAY, RATES: RATES, GP_BANDS: GP_BANDS, DYE_COATS: DYE_COATS,
     gpPct: gpPct,
     CONDITION_CELLS: CONDITION_CELLS, conditionCellWrites: conditionCellWrites,
+    LIBRARY_LINE_CELLS: LIBRARY_LINE_CELLS,
     conditionsFromCells: conditionsFromCells,
     // The library's answer for a condition, and the gate that decides whether it may be
     // applied at all. Exported as a PAIR on purpose: seedConditionDefaults will rewrite the

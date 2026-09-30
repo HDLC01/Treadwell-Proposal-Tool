@@ -36,18 +36,23 @@ pytestmark = pytest.mark.skipif(shutil.which("node") is None,
 
 # Kyle's sheet, exactly. Unit costs back-solve from his printed line costs (939.21/11 etc),
 # which is why the real column holds four decimal places and not two.
+#
+# Coverage and waste live on the MATERIAL now (Hanz, 2026-09-22: "we must have coverage per unit,
+# waste factor, roundup, and materials tab. And then it gets pulled in to assemblies instead of it
+# being in assemblies"), so both are set here, on ITEMS. waste_pct 0 on every item, deliberately:
+# his sheet has no waste factor, so his printed numbers ARE the zero-waste case. Leaving it unset
+# would default them to 5% via wastePct() and this file would stop reproducing the document it
+# exists to reproduce.
 SHEET_ITEMS = """[
-  {id:'i1', name:'OPF',             unit:'Gal', unit_cost:85.3827,  coverage:275},
-  {id:'i2', name:'Glaze #4',        unit:'Gal', unit_cost:79.7574,  coverage:125},
-  {id:'i3', name:'Armor Top Satin', unit:'Kit', unit_cost:382.4475, coverage:775}
+  {id:'i1', name:'OPF',             unit:'Gal', unit_cost:85.3827,  coverage:275, waste_pct:0},
+  {id:'i2', name:'Glaze #4',        unit:'Gal', unit_cost:79.7574,  coverage:125, waste_pct:0},
+  {id:'i3', name:'Armor Top Satin', unit:'Kit', unit_cost:382.4475, coverage:775, waste_pct:0}
 ]"""
-# waste_pct 0 on every line, deliberately: his sheet has no waste factor, so his printed numbers
-# ARE the zero-waste case. Leaving it off would default them to 5% and this file would stop
-# reproducing the document it exists to reproduce.
+# A line only names a material and a role now — it carries no numbers of its own.
 SHEET_ASM = """{name:'MACRO Flake Single Broadcast', lines:[
-  {role:'1st BC',     item_id:'i1', coverage:275, waste_pct:0},
-  {role:'Grout Coat', item_id:'i2', coverage:125, waste_pct:0},
-  {role:'Top Coat',   item_id:'i3', coverage:775, waste_pct:0}
+  {role:'1st BC',     item_id:'i1'},
+  {role:'Grout Coat', item_id:'i2'},
+  {role:'Top Coat',   item_id:'i3'}
 ]}"""
 
 
@@ -107,9 +112,8 @@ def test_the_total_sums_unrounded_lines_not_rounded_ones():
     So this uses a fixture built to separate them. Three lines at $1.114: summing unrounded
     gives $3.34, summing the rounded lines gives $3.33. Excel sums unrounded, and Kyle's sheet
     is Excel, so that is the behaviour to hold."""
-    got = run("const items=[{id:'r1',unit:'Ea',unit_cost:1.114,coverage:100}];"
-              "const a={lines:[{item_id:'r1',coverage:100,waste_pct:0},"
-              "{item_id:'r1',coverage:100,waste_pct:0},{item_id:'r1',coverage:100,waste_pct:0}]};"
+    got = run("const items=[{id:'r1',unit:'Ea',unit_cost:1.114,coverage:100,waste_pct:0}];"
+              "const a={lines:[{item_id:'r1'},{item_id:'r1'},{item_id:'r1'}]};"
               "const p=L.priceAssembly(a,items,100);"
               "out({shown: L.money(p.total),"
               " ifRoundedFirst: L.money(p.rows.reduce((s,r)=>s+Math.round(r.cost*100)/100,0))})")
@@ -141,17 +145,24 @@ def test_the_smallest_job_still_buys_one_unit():
     assert run("out(L.priceLine({item_id:'i1', coverage:275}, ITEMS, 1).qty)") == 1
 
 
-# ── coverage comes from the line, then the item ───────────────────────
-def test_the_lines_coverage_wins_over_the_items_default():
-    """The same product is used at different coverages in different systems, which is why
-    Kyle's sheet keeps coverage on the line."""
+# ── coverage lives on the item only, never the line ────────────────────
+def test_the_items_coverage_always_wins_over_a_lines_own_number():
+    """Inverts test_the_lines_coverage_wins_over_the_items_default. Hanz, 2026-09-22: "coverage per
+    unit ... gets pulled in to assemblies instead of it being in assemblies" — the same product
+    used at two coverages is now two materials, not one material read two ways, so a line's own
+    coverage (100) is ignored entirely and only the item's (275) is used."""
     got = run("out(L.priceLine({item_id:'i1', coverage:100, waste_pct:0}, ITEMS, 1000).qty)")
-    assert got == 10, "used the item's 275 default instead of the line's 100"
+    assert got == 4, "used the line's 100 instead of the item's own 275"
 
 
-def test_a_line_with_no_coverage_falls_back_to_the_item():
+def test_a_lines_own_coverage_key_is_ignored_entirely():
+    """Renamed from test_a_line_with_no_coverage_falls_back_to_the_item — there is no fallback any
+    more, because there is nothing left to fall back FROM. A line's coverage key, absent, blank,
+    or a real-looking number, plays no part; only the item's 275 is ever read."""
     assert run("out(L.priceLine({item_id:'i1', waste_pct:0}, ITEMS, 550).qty)") == 2
     assert run("out(L.priceLine({item_id:'i1', coverage:'', waste_pct:0}, ITEMS, 550).qty)") == 2
+    assert run("out(L.priceLine({item_id:'i1', coverage:999, waste_pct:0}, ITEMS, 550).qty)") == 2, \
+        "a plausible-looking coverage on the line changed the answer — it should not be read at all"
 
 
 # ── the ways a line can be un-priceable ───────────────────────────────
@@ -243,8 +254,10 @@ def test_a_row_can_explain_its_own_arithmetic():
 
 
 def test_the_working_names_the_waste_factor_when_there_is_one():
-    got = run("out(L.explain(L.priceLine({item_id:'i1', coverage:275, waste_pct:5},"
-              " ITEMS, 2875), 2875))")
+    """Waste lives on the item now — i1 is Kyle's zero-waste reference (see SHEET_ITEMS), so this
+    uses its own item to get a non-zero waste factor rather than borrowing i1's."""
+    got = run("const items=[{id:'w', unit:'Gal', unit_cost:1, coverage:275, waste_pct:5}];"
+              "out(L.explain(L.priceLine({item_id:'w'}, items, 2875), 2875))")
     assert got == "2,875 ÷ 275 +5% = 10.9773 → 11 Gal"
 
 
@@ -280,9 +293,11 @@ def test_the_legacy_line_prices_exactly_as_it_did_before_any_of_this():
 
 def test_waste_buys_more_material_not_less():
     """5% means buy 5% MORE than the area needs. The inverted version (×0.95) would under-buy on
-    every job while looking like a sensible number, which is the failure this test exists for."""
-    got = run("const line = (w) => L.priceLine({item_id:'i1', coverage:275, waste_pct:w},"
-              " ITEMS, 27500);"
+    every job while looking like a sensible number, which is the failure this test exists for.
+    Waste lives on the item now, so this builds three items differing only in waste_pct instead
+    of varying it on the line."""
+    got = run("const mk = (w) => [{id:'w', unit:'Gal', unit_cost:1, coverage:275, waste_pct:w}];"
+              "const line = (w) => L.priceLine({item_id:'w'}, mk(w), 27500);"
               "out({none: line(0).qty, five: line(5).qty, ten: line(10).qty})")
     # 100 gallons at the area, so the percentages read directly. The 10% case is also the
     # float-precision trap: 100 × 1.10 is 110.00000000000001, and a bare ceil() buys a 111th
@@ -292,8 +307,11 @@ def test_waste_buys_more_material_not_less():
 
 def test_waste_can_push_an_exact_multiple_onto_another_unit():
     """The flip side of the boundary test above: with waste on, 2,750 SF at 275 SF/Gal is 10.5
-    gallons and takes 11. That is the point of the column, not an off-by-one."""
-    assert run("out(L.priceLine({item_id:'i1', coverage:275, waste_pct:5}, ITEMS, 2750).qty)") == 11
+    gallons and takes 11. That is the point of the column, not an off-by-one. Waste lives on the
+    item now, so this uses its own item rather than i1 (Kyle's zero-waste reference)."""
+    got = run("const items=[{id:'w', unit:'Gal', unit_cost:1, coverage:275, waste_pct:5}];"
+              "out(L.priceLine({item_id:'w'}, items, 2750).qty)")
+    assert got == 11
 
 
 @pytest.mark.parametrize("waste,expect", [
@@ -310,10 +328,10 @@ def test_a_missing_or_impossible_waste_factor_reads_as_the_default(waste, expect
 
 def test_rounding_up_buys_whole_packs_and_pays_the_pack_price():
     """A five-gallon pail is one purchase. 2,875 SF at 275 SF/Gal needs 10.98 gallons, which is
-    three pails — not eleven, and not 2.196 pails."""
+    three pails — not eleven, and not 2.196 pails. Waste and Roundup? live on the item now."""
     got = run("const items=[{id:'p', name:'OPF', unit:'Gallon', buy_qty:5, unit_cost:426.91,"
-              " coverage:275}];"
-              "const r = L.priceLine({item_id:'p', waste_pct:5, roundup:true}, items, 2875);"
+              " coverage:275, waste_pct:5, roundup:true}];"
+              "const r = L.priceLine({item_id:'p'}, items, 2875);"
               "out({packs: r.packs, units: r.units, qty: r.qty,"
               " needed: Number(r.needed.toFixed(2)), cost: Math.round(r.cost*100)/100,"
               " label: L.qtyLabel(r), working: L.costWorking(r)})")
@@ -323,10 +341,13 @@ def test_rounding_up_buys_whole_packs_and_pays_the_pack_price():
 
 def test_not_rounding_up_buys_the_fraction_at_the_single_unit_price():
     """Unticked, the line prices what is actually used — 10.98 gallons out of the pail, at a fifth
-    of the pail's price. Charging the PACK price per gallon here would be five times the bid."""
+    of the pail's price. Charging the PACK price per gallon here would be five times the bid.
+    Waste and Roundup? live on the item now, not the line — a line supplying roundup:false here
+    would previously have worked and now must not, since the item's own value (also false) is
+    what actually takes effect."""
     got = run("const items=[{id:'p', name:'OPF', unit:'Gallon', buy_qty:5, unit_cost:426.91,"
-              " coverage:275}];"
-              "const r = L.priceLine({item_id:'p', waste_pct:5, roundup:false}, items, 2875);"
+              " coverage:275, waste_pct:5, roundup:false}];"
+              "const r = L.priceLine({item_id:'p'}, items, 2875);"
               "out({packs: r.packs, unit_price: Number(r.unit_price.toFixed(4)),"
               " cost: Math.round(r.cost*100)/100, label: L.qtyLabel(r),"
               " working: L.costWorking(r)})")
@@ -342,22 +363,30 @@ def test_not_rounding_up_buys_the_fraction_at_the_single_unit_price():
 
 def test_the_two_modes_differ_by_exactly_the_unused_material():
     """Rounded up pays for 15 gallons and uses 10.98 of them. The gap is real money, and it is the
-    reason the checkbox exists rather than being a display preference."""
-    got = run("const items=[{id:'p', unit:'Gallon', buy_qty:5, unit_cost:500, coverage:275}];"
-              "const L2 = (ru) => L.priceLine({item_id:'p', waste_pct:0, roundup:ru}, items, 2875);"
-              "out({up: Math.round(L2(true).cost*100)/100, frac: Math.round(L2(false).cost*100)/100})")
+    reason the checkbox exists rather than being a display preference. Roundup? lives on the item
+    now, so this is two items differing only in that flag, not one line read two ways."""
+    got = run("const items=[{id:'up', unit:'Gallon', buy_qty:5, unit_cost:500, coverage:275,"
+              " waste_pct:0, roundup:true},"
+              "{id:'frac', unit:'Gallon', buy_qty:5, unit_cost:500, coverage:275, waste_pct:0,"
+              " roundup:false}];"
+              "const L2 = (id) => L.priceLine({item_id:id}, items, 2875);"
+              "out({up: Math.round(L2('up').cost*100)/100,"
+              " frac: Math.round(L2('frac').cost*100)/100})")
     # 2,875/275 = 10.4545 gal → 3 pails ($1,500) rounded up, or 10.4545 × $100 fractional.
     assert got == {"up": 1500.0, "frac": 1045.45}
 
 
 def test_an_absent_roundup_flag_still_rounds_up():
-    """Legacy lines have no flag, and the page has promised "you cannot buy 3.7 kits" since it
-    shipped. Reading absent as false would reprice every one of them downwards."""
-    got = run("out([undefined, null, true].map(ru =>"
-              " L.priceLine({item_id:'i3', coverage:775, waste_pct:0, roundup:ru}, ITEMS, 2875).qty))")
+    """Legacy items have no flag, and the page has promised "you cannot buy 3.7 kits" since it
+    shipped. Reading absent as false would reprice every one of them downwards. Roundup? lives on
+    the item now, so each case below is its own item rather than a flag on the line."""
+    got = run("const mk = (ru) => [{id:'i', unit:'Kit', unit_cost:1, coverage:775, waste_pct:0,"
+              " roundup:ru}];"
+              "out([undefined, null, true].map(ru => L.priceLine({item_id:'i'}, mk(ru), 2875).qty))")
     assert got == [4, 4, 4]
-    assert run("out(Number(L.priceLine({item_id:'i3', coverage:775, waste_pct:0, roundup:false},"
-               " ITEMS, 2875).qty.toFixed(3)))") == 3.71
+    assert run("out(Number(L.priceLine({item_id:'i'},"
+               " [{id:'i', unit:'Kit', unit_cost:1, coverage:775, waste_pct:0, roundup:false}],"
+               " 2875).qty.toFixed(3)))") == 3.71
 
 
 # ── the working under each row must multiply out to the cost beside it ────────
@@ -405,9 +434,11 @@ def test_the_working_multiplies_out_to_the_cost_it_explains(label, pack, cost, c
 
 def test_the_quantity_line_and_the_cost_line_agree_with_each_other(ran=None):
     """Both describe the same needed quantity, so both show it to the same precision. One saying
-    10.98 while the other says 10.9773 invites somebody to work out which is lying."""
-    got = run("const items=[{id:'t', unit:'Gallon', buy_qty:5, unit_cost:426.91, coverage:275}];"
-              "const r=L.priceLine({item_id:'t', waste_pct:5, roundup:false}, items, 2875);"
+    10.98 while the other says 10.9773 invites somebody to work out which is lying. Waste and
+    Roundup? live on the item now."""
+    got = run("const items=[{id:'t', unit:'Gallon', buy_qty:5, unit_cost:426.91, coverage:275,"
+              " waste_pct:5, roundup:false}];"
+              "const r=L.priceLine({item_id:'t'}, items, 2875);"
               "out({q: L.explain(r, 2875), c: L.costWorking(r)})")
     assert "10.9773" in got["q"] and "10.9773" in got["c"], got
 
