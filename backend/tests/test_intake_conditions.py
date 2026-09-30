@@ -542,3 +542,15 @@ def test_the_admin_default_reaches_a_genuinely_fresh_load(cond):
     assert c["cells"]["Polish!E25"] == "Yes", "dye's admin default never reached the cell"
     assert c["cells"]["Polish!F29"] == "Yes", (
         "remove-existing-jf's admin default never reached the cell")
+
+
+@needs_node
+def test_the_admin_default_waits_for_sign_in(cond):
+    """THE AUTH RACE. index.js asks for /api/condition-defaults at script load, before sign-in has
+    settled, so the request left without its auth header, took a 401, and every admin answer was
+    silently ignored (the same race PR #124 closed for default-notes). The harness only answers
+    with the admin's row once the header exists, and the header exists only after TWAuth.ready.
+
+    Mutation: delete the await of TWAuth.ready from loadConditionDefaults in index.js. The
+    read fires at load, comes back empty, and dye stays at its shipped False."""
+    assert cond["authRace"]["dye"] is True, "the read fired before sign-in and got a 401"

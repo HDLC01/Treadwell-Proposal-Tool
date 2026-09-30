@@ -501,6 +501,19 @@ def test_the_labor_tab_edits_patch_the_row_in_place(ran):
 
 
 @needs_node
+def test_renaming_a_labor_line_relabels_its_buttons(ran):
+    """The row is not redrawn under the caret, so its More and Remove buttons kept announcing
+    "Remove New labor line" after the line was renamed. They take the new name, and More keeps
+    whichever of Show or Hide its aria-expanded says.
+
+    Mutation: delete the relabel block from onLaborEdit. Both labels keep the old name."""
+    r = ran["laborRenameRelabels"]
+    assert r["del"] == "Remove Crane hire", r["del"]
+    assert r["more"] == "Show more fields for Crane hire", r["more"]
+    assert r["openMore"] == "Hide more fields for Boom lift", r["openMore"]
+
+
+@needs_node
 def test_the_more_fields_open_under_their_row(ran):
     """guys_auto and the position are behind More: decided once and rarely revisited. The redraw
     replaces the pressed button, so the focus goes back onto its successor.

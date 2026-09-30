@@ -890,6 +890,12 @@ const body = `"use strict";
     sig: () => DRAWER_SIG,
   };`;
 
+// The REAL closeDrawer (and remaskDeposits, the one helper it calls), run against this same DOM
+// stub. The injected closeDrawer above stays a no-op for the scenarios that only need the drawer
+// to be closable; this one is what the reveal-then-close scenario drives.
+const closeReal = new Function("$", "syncScrim", "markDrawerInUrl", "CUR_PID", "ACTIVE_SEC",
+  "DRAWER_SIG", fnSrc("remaskDeposits") + "\n" + fnSrc("closeDrawer") + "\nreturn closeDrawer;")(
+  (id) => dom.getElementById(id), () => {}, () => {}, null, null, "");
 const page = new Function(...injected.map(([n]) => n), body)(...injected.map(([, v]) => v));
 page.setBoard(BOARD_ROWS);
 
@@ -976,6 +982,20 @@ async function runScenario(name, s) {
              maskedBefore, shown, label, pressed, request,
              remasked: { acct: acctCell.textContent, rtg: rtgCell.textContent } };
   })();
+  // REVEAL, THEN CLOSE. The drawer is hidden, not destroyed, so a revealed number has to be
+  // taken back out on close. Every node that ever held text is scanned, not just the two cells.
+  const revealClose = await (async () => {
+    const b = dom.queryAll(".dep-show")[0];
+    if (!b) return null;
+    await b.fire("click");                 // Show
+    await tick(); await tick();
+    const full = /12345678901|101000187/;
+    const leaks = () => Array.from(dom.els.values()).filter((e) => full.test(e.textContent)).length;
+    const during = leaks();
+    closeReal();
+    return { during, after: leaks(), label: b.textContent, pressed: b.getAttribute("aria-pressed"),
+             acct: dom.query("#dep-acct-0").textContent, markup: full.test(dom.html + dom.extra) };
+  })();
   const tabs = {};
   for (const sec of Object.keys(page.secTabs())) tabs[sec] = tabState(sec);
   // AFTER the walk, because the chips deliberately load only while the Proposal tab is on screen
@@ -1017,6 +1037,7 @@ async function runScenario(name, s) {
     openedOn,
     notify,
     reveal,
+    revealClose,
     lookups,
     missing: lookups.filter((l) => !l.present).map((l) => l.id),
     tabs,

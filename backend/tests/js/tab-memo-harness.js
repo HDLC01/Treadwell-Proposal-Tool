@@ -465,6 +465,7 @@ const out = {};
   // runs that one. Its call site is read from the source in the test file, and says so.)
   const closeBody = [
     lift(src, "markDrawerInUrl", "portal.js"),
+    lift(src, "remaskDeposits", "portal.js"),
     lift(src, "closeDrawer", "portal.js"),
     "return { closeDrawer, pid: () => CUR_PID, sec: () => ACTIVE_SEC, sig: () => DRAWER_SIG };",
   ].join("\n");
@@ -472,7 +473,7 @@ const out = {};
                                   "CUR_PID", "ACTIVE_SEC", "DRAWER_SIG", closeBody);
   {
     const win = makeWin("", { pathname: "/portal.html", search: "?open=p-42" });
-    const el = { classList: { remove() {} } };
+    const el = { classList: { remove() {} }, querySelectorAll: () => [], querySelector: () => null };
     const api = closeScope(win.location, win.history, URLSearchParams, () => el, () => {},
                            "p-42", "chat", "sig");
     api.closeDrawer();

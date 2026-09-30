@@ -1205,6 +1205,15 @@
       var raw = e.target.value;
       r[f] = NUMERIC_LABOR_FIELDS.indexOf(f) !== -1 ? L.num(raw) : raw;
       body[f] = raw;
+      // The row is NOT redrawn under the caret, so the two buttons that name the line by their
+      // aria-label would keep announcing the old name (Remove New labor line). Say the new one.
+      if (f === "name" && row.querySelector) {
+        var mb = row.querySelector("[data-labor-more-toggle]");
+        var db = row.querySelector("[data-del-labor]");
+        if (mb) mb.setAttribute("aria-label", (mb.getAttribute("aria-expanded") === "true"
+          ? "Hide" : "Show") + " more fields for " + raw);
+        if (db) db.setAttribute("aria-label", "Remove " + raw);
+      }
     }
     // THE DEFAULTS TAB DRAWS THE SAME ROW, and a tab switch only flips `hidden` -- it does not
     // repaint. Without this a renamed or re-rated default reads the old figure there until the

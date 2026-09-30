@@ -4403,6 +4403,26 @@ async function laborTabChecks() {
     };
   }
 
+  // RENAME RELABELS. The row is not redrawn under the caret, so its buttons must be told the new
+  // name or a screen reader keeps saying "Remove New labor line" for a line called Rigging.
+  {
+    const { api } = build(seed());
+    const btn = (label, expanded) => { const a = { "aria-label": label, "aria-expanded": expanded };
+      return { getAttribute: (k) => (k in a ? a[k] : null), setAttribute: (k, v) => { a[k] = v; } }; };
+    const more = btn("Show more fields for Rigging", "false");
+    const del = btn("Remove Rigging", null);
+    const row = { getAttribute: () => "L9", querySelector: (sel) =>
+      (sel === "[data-labor-more-toggle]" ? more : sel === "[data-del-labor]" ? del : null) };
+    api.onLaborEdit({ target: { getAttribute: (k) => (k === "data-f" ? "name" : null),
+      closest: (sel) => (sel === "[data-labor]" ? row : null), value: "Crane hire" } });
+    const open = btn("Show more fields for Crane hire", "true");
+    row.querySelector = (sel) => (sel === "[data-labor-more-toggle]" ? open : null);
+    api.onLaborEdit({ target: { getAttribute: (k) => (k === "data-f" ? "name" : null),
+      closest: (sel) => (sel === "[data-labor]" ? row : null), value: "Boom lift" } });
+    out.laborRenameRelabels = { more: more.getAttribute("aria-label"),
+      del: del.getAttribute("aria-label"), openMore: open.getAttribute("aria-label") };
+  }
+
   // MORE: guys_auto and the position open under their own row, and the focus comes back to the
   // toggle the redraw replaced. Opening it saves nothing.
   {

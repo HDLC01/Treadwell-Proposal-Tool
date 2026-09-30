@@ -991,6 +991,22 @@ def test_the_account_number_reaches_the_dom_only_when_a_human_asks(out):
 
 
 @needs_node
+def test_closing_the_drawer_forgets_a_revealed_bank_number(out):
+    """A closed drawer keeps its DOM, so a number Show had revealed sat in the hidden deposit panel
+    until the next render. Reveal, close through the real closeDrawer, then scan every node the
+    page ever wrote text into: no full number may remain, and Show must read Show again.
+
+    Mutation: delete the remaskDeposits call from closeDrawer. The full account and routing
+    numbers stay in the hidden drawer."""
+    r = out["scenarios"]["submitted"]["revealClose"]
+    assert r["during"] >= 2, "the harness never revealed the numbers, so the close proves nothing"
+    assert r["after"] == 0, "a full bank number is still in the drawer after it closed"
+    assert r["markup"] is False
+    assert r["acct"] == "••••8901", r["acct"]
+    assert r["label"] == "Show" and r["pressed"] == "false"
+
+
+@needs_node
 def test_deposit_masking_tolerates_legacy_rows_and_rows_with_nothing_to_show(out):
     """Requirement 1's edge cases, proven on depositHtml directly: an older cached row that still
     carries the full numbers must never print them (masked client-side instead), and a row with

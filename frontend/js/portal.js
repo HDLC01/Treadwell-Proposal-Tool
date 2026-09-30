@@ -1009,7 +1009,25 @@
       }
     } catch { /* an old browser, or a sandboxed frame — the drawer still opens */ }
   }
+  /** Put every revealed bank number back to its masked value. A closed drawer keeps its DOM, so
+   *  a number Show had revealed would otherwise sit in the hidden panel until the next render.
+   *  The same restore the Hide press does; it reads only data-masked, never the server. */
+  function remaskDeposits(root) {
+    if (!root) return;
+    root.querySelectorAll(".dep-show").forEach((b) => {
+      if (b.getAttribute("aria-pressed") !== "true") return;
+      const i = b.dataset.i;
+      ["#dep-acct-", "#dep-rtg-"].forEach((sel) => {
+        const el = root.querySelector(sel + i);
+        if (el) el.textContent = el.dataset.masked || el.textContent;
+      });
+      b.setAttribute("aria-pressed", "false");
+      b.setAttribute("aria-label", "Show the full account and routing numbers");
+      b.textContent = "Show";
+    });
+  }
   function closeDrawer() {
+    remaskDeposits($("drawer"));
     $("drawer").classList.remove("open"); syncScrim();
     // Clear the tab so the NEXT open routes by what needs attention again.
     CUR_PID = null; ACTIVE_SEC = null;

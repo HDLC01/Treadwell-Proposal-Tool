@@ -412,8 +412,16 @@ const documentStub = {
     // table arrives empty, and the search box goes quiet in a way that is indistinguishable
     // from a network failure -- every county assertion below would pass by saying nothing.
     resolveApiBase: () => "",
-    authHeaders: () => ({}),
+    // condOpts.gated: the sign-in has not settled at script load. The header exists only once
+    // releaseAuth() runs, exactly like the real TWAuth.ready / TW.authHeaders pair.
+    authHeaders: () => (condOpts && condOpts.gated && !authReleased)
+      ? {} : { Authorization: "Bearer t" },
   };
+  let authReleased = !(condOpts && condOpts.gated);
+  let releaseAuthFn = () => { authReleased = true; };
+  if (condOpts && condOpts.gated) {
+    windowStub.TWAuth = { ready: new Promise((r) => { releaseAuthFn = () => { authReleased = true; r(); }; }) };
+  }
 
   // The admin-set answers for dye / joint_filler / remove_existing_jf, the same three the
   // Polish beta pages already fetch through this endpoint. Recorded rather than counted, the
@@ -424,9 +432,13 @@ const documentStub = {
   // case the loadConditionDefaults() in index.js has to survive.
   const conditionFetches = [];
   const cndOpts = condOpts || {};
-  const conditionFetchStub = async function (url) {
+  const conditionFetchStub = async function (url, init) {
     conditionFetches.push(String(url));
     if (cndOpts.fail) throw new Error("network");
+    // A request without the auth header is a 401 whose body carries no conditions.
+    if (cndOpts.gated && !((init || {}).headers || {}).Authorization) {
+      return { json: async () => ({ detail: "not signed in" }) };
+    }
     return { json: async () => ({ ok: true,
                                   conditions: cndOpts.rows === undefined ? [] : cndOpts.rows }) };
   };
@@ -503,7 +515,7 @@ const documentStub = {
   }
   return { NAV, SAVES, STATE, nodes, flags, form, radios, systems, documentStub,
            condBox, switches, switchFor, press, clickSwitch,
-           countyFetches, conditionFetches, typeCounty, pressCounty, countyRowList, pageClick,
+           countyFetches, conditionFetches, releaseAuth: () => releaseAuthFn(), typeCounty, pressCounty, countyRowList, pageClick,
            fire, setWorkType, fill, byName };
 }
 
@@ -1035,6 +1047,21 @@ function runHandler(which) {
         "Polish!F29": written["Polish!F29"],
       },
     };
+  }
+
+  // == THE AUTH RACE. The page script fires the read at load, before sign-in settles. The stub
+  // == answers 401-shaped (no conditions) unless the auth header is present, and the header
+  // == exists only after releaseAuth(). A read fired at load therefore comes back {}; one that
+  // == waits for TWAuth.ready comes back with the admin's answers.
+  {
+    const b = build(null, null, { gated: true, rows: [
+      { key: "dye", on: true },
+    ] });
+    await tick();
+    b.releaseAuth();
+    await tick(); await tick();
+    b.setWorkType("polish");
+    out.conditions.authRace = { dye: b.switchFor("dye").on };
   }
 
   // ── the county picker, on the LIVE intake form ─────────────────────────────
