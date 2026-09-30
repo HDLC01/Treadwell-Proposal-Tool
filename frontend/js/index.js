@@ -249,6 +249,10 @@
    *  type's estimator opens it every day. */
   async function loadConditionDefaults() {
     try {
+      // Awaited BEFORE the fetch: at script load the sign-in has not settled, so the request went
+      // out without its auth header, took a 401, and the admin's answers were silently ignored
+      // (the same race PR #124 closed for /api/default-notes).
+      if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready;
       const res = await fetch(TW.resolveApiBase() + "/api/condition-defaults",
                               { headers: TW.authHeaders() });
       const body = await res.json();
