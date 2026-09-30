@@ -184,7 +184,7 @@ def _reserved(rid):
         "joint-filler-kit": {"id": "joint-filler-kit", "name": "Joint filler, 10 gal kit",
                              "unit": "Kit", "buy_qty": 1, "unit_cost": 500.0, "coverage": 3500.0,
                              "waste_pct": 0.0, "roundup": True, "deleted_at": None},
-        "dye": {"id": "dye", "name": "Dye, two coats", "unit": "SF", "buy_qty": 1,
+        "dye": {"id": "dye", "name": "Dye, per coat", "unit": "SF", "buy_qty": 1,
                 "unit_cost": 0.14, "coverage": 1.0, "waste_pct": 0.0, "roundup": False,
                 "deleted_at": None},
     }

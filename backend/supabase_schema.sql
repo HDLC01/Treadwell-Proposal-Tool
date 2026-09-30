@@ -466,16 +466,16 @@ alter table public.library_assemblies add column if not exists updated_by text;
 -- (polish-estimate.js's condLine), and falls back to RATES.JOINT_FILLER_KIT_COST /
 -- RATES.DYE_PER_SF in polish-bid-core.js on a database that has not run this yet.
 --
--- THE FIGURES ARE KYLE'S Polish!C29 AND C25, and they reprice nothing: through the material rule
--- the kit row is CEIL(area / 3500) kits at $500 and the dye row is area x $0.14, to the cent what
--- the fallback charges. WASTE IS A LITERAL 0, NEVER NULL: a null waste reads as the 5% default
+-- THE FIGURES ARE KYLE'S Polish!C29 AND C25/C26: through the material rule the kit row is
+-- CEIL(area / 3500) kits at $500, and the dye row is ONE COAT, area x $0.14 -- the bid buys two,
+-- his rows 25 and 26 (polish-bid-core.js's DYE_COATS) -- to the cent what the fallback charges. WASTE IS A LITERAL 0, NEVER NULL: a null waste reads as the 5% default
 -- and would buy 5% more of both. test_polish_estimate_page.py holds these rows, both files and the
 -- engine's fallback together. Every column the insert names is added ABOVE it (waste_pct and
 -- roundup with the other material columns), so a fresh database builds.
 insert into public.library_items (id, name, unit, buy_qty, unit_cost, coverage, waste_pct, roundup)
 values
   ('joint-filler-kit', 'Joint filler, 10 gal kit', 'Kit', 1, 500.00, 3500, 0, true),
-  ('dye', 'Dye, two coats', 'SF', 1, 0.14, 1, 0, false)
+  ('dye', 'Dye, per coat', 'SF', 1, 0.14, 1, 0, false)
 on conflict (id) do nothing;
 
 -- ── Markup rules ──────────────────────────────────────────────────────────

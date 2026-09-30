@@ -3620,14 +3620,14 @@ def test_editing_the_reserved_rows_moves_the_defaults_tab_price(ran):
     r = ran["reservedRows"]
     dot = "\u00b7"
     shipped_kit = "$500.00 per kit %s one kit per 3,500 sq ft" % dot
-    shipped_dye = "$0.14 per SF %s two coats across the polished area" % dot
+    shipped_dye = "$0.14 per SF a coat %s 2 coats across the polished area" % dot
     assert r["before"] == {"kit": shipped_kit, "dye": shipped_dye}, r["before"]
     assert r["missing"] == {"kit": shipped_kit, "dye": shipped_dye}, (
         "with no reserved row the Defaults tab no longer quotes the shipped figures: %r"
         % r["missing"])
     assert r["after"] == {
         "kit": "$650.00 per kit %s one kit per 2,000 sq ft" % dot,
-        "dye": "$0.20 per SF %s two coats across the polished area" % dot,
+        "dye": "$0.20 per SF a coat %s 2 coats across the polished area" % dot,
     }, "the Defaults tab did not follow the Items-tab edit: %r" % r["after"]
     assert r["queued"] == [
         'joint-filler-kit {"coverage":"2000"}',

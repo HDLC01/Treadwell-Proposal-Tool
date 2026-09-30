@@ -1958,7 +1958,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
     const RESERVED_SEED = [
       { id: "joint-filler-kit", name: "Joint filler, 10 gal kit", unit: "Kit", buy_qty: 1,
         unit_cost: 500, coverage: 3500, waste_pct: 0, roundup: true },
-      { id: "dye", name: "Dye, two coats", unit: "SF", buy_qty: 1,
+      { id: "dye", name: "Dye, per coat", unit: "SF", buy_qty: 1,
         unit_cost: 0.14, coverage: 1, waste_pct: 0, roundup: false },
     ];
     const seeded = (over) => ITEMS.concat(RESERVED_SEED.map((r) =>
@@ -2030,20 +2030,21 @@ const rendered = [];      // every string the page put on screen, for the Labour
       seed: RESERVED_SEED,
       identity: identity,
       rated: { material: rated.material, cards: rated.cards,
-               expected: 2 * 700 + 3501 * 0.5 },
+               // Two kits at $700, and TWO COATS of 3,501 SF at $0.50 -- Kyle's rows 25 and 26.
+               expected: 2 * 700 + 2 * 3501 * 0.5 },
       oneKit: oneKit.cards["joint_filler.qty"], oneKitHint: oneKit.cards["joint_filler.qtyhint"],
       fourKits: fourKits.cards["joint_filler.qty"],
-      fourKitsCost: fourKits.material - 3500 * 0.14,
+      fourKitsCost: fourKits.material - 3500 * 0.14 * B.DYE_COATS,
       fourKitsHint: fourKits.cards["joint_filler.qtyhint"],
       wastedKits: wasted.cards["joint_filler.qty"],
       wastedHint: wasted.cards["joint_filler.qtyhint"],
       blanked: { material: blanked.material, constants: constants(3501) },
       offMaterial: offWithRows.material,
       renamed: renamed.renamedCard, notRenamedByDefault: oneKit.renamedCard,
-      dyeNotInPicker: names.indexOf("Dye, two coats") === -1,
+      dyeNotInPicker: names.indexOf("Dye, per coat") === -1,
       jointFillerNotInPicker: names.indexOf("Joint filler, 10 gal kit") === -1,
       ordinaryItemsStillListed: names.indexOf("OPF") !== -1 && names.indexOf("Densifier") !== -1,
-      typedNameResolvesToNothing: p.api.itemByName("Dye, two coats") === null &&
+      typedNameResolvesToNothing: p.api.itemByName("Dye, per coat") === null &&
         p.api.itemByName("joint filler, 10 gal kit") === null,
       ordinaryNameStillResolves: (p.api.itemByName("OPF") || {}).id === "i1",
     };

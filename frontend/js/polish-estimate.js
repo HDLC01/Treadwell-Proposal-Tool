@@ -300,7 +300,9 @@
     var id = key === "dye" ? "dye" : "joint-filler-kit";
     var p = L.priceLine({ item_id: id }, ITEMS, area);
     if (p.ok) {
-      var cost = p.priced ? p.cost : 0;
+      // DYE IS TWO COATS, Kyle's rows 25 and 26 (B.DYE_COATS); the row prices ONE of them. The
+      // fallback's dyeCost already charges both.
+      var cost = (p.priced ? p.cost : 0) * (key === "dye" ? B.DYE_COATS : 1);
       return { library: true, line: p, cost: cost,
                qty: key === "dye" ? B.num(area) : (p.priced ? p.qty : 0) };
     }
@@ -796,12 +798,17 @@
       item_id: "dye",
       material: function () {
         var item = L.findItem(ITEMS, "dye");
-        return (item && item.name) ? item.name : "Dye, two coats";
+        return (item && item.name) ? item.name : "Dye, per coat";
       },
-      matHint: "Polish!E25 · priced from the Item Library.",
+      matHint: "Polish!E25 · two coats, rows 25 and 26 · priced from the Item Library.",
       cost: function (area) { return condLine("dye", area).cost; },
       qty: function (area) { return condLine("dye", area).qty; },
       unit: function () { return "SF"; },
+      // TWO COATS, SAID WHERE THE RATE IS: "2 coats x $0.14 / SF" rather than a $0.28 nobody can
+      // find in the library, whose row is one coat.
+      rateHint: function (cost, qty) {
+        return B.DYE_COATS + " coats \u00d7 " + B.money2(cost / qty / B.DYE_COATS) + " / SF";
+      },
       qtyHint: function () { return "The polished area from the rows above."; },
       unitHint: "Priced across the area, not by the pack." }
   ];
@@ -848,7 +855,8 @@
       costEmpty: !(on && cost > 0),
       // SINGULAR, always: "$500.00 / kit" is the price of one, which is what a per-unit line
       // says. `unit` beside the Measurement is plural because five of them is what the job buys.
-      rate: qty > 0 ? B.money2(cost / qty) + " / " + c.unit(1) : "",
+      rate: qty > 0 ? (c.rateHint ? c.rateHint(cost, qty)
+                                  : B.money2(cost / qty) + " / " + c.unit(1)) : "",
       qtyHint: c.qtyHint(area)
     };
   }

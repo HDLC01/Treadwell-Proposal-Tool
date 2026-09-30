@@ -204,7 +204,8 @@ out.formats = {
 // B75's 10% and nothing prices from it, which the remodel vectors above demonstrate. B68's
 // hard-bid gate was the second such cell -- pinned in Layer 1 as a formula that still lives in
 // Kyle's workbook, and priced by nothing here at all since 2026-09-22.
-out.constants = { rates: P.RATES, gpBands: P.GP_BANDS, hoursPerDay: P.HOURS_PER_DAY };
+out.constants = { rates: P.RATES, gpBands: P.GP_BANDS, hoursPerDay: P.HOURS_PER_DAY,
+                  dyeCoats: P.DYE_COATS };
 out.gpProbe = {};
 [0, 1, 6499, 6500, 6501, 14999, 15000, 15001, 22499, 22500, 22501, 32499, 32500, 32501,
  60000, 100000].forEach(function (v) { out.gpProbe[v] = P.gpPct(v); });

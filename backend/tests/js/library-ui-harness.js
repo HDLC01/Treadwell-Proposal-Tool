@@ -4484,7 +4484,7 @@ async function conditionChecks() {
   const RESERVED = [
     { id: "joint-filler-kit", name: "Joint filler, 10 gal kit", unit: "Kit", buy_qty: 1,
       unit_cost: 500, coverage: 3500, waste_pct: 0, roundup: true, favorite: false },
-    { id: "dye", name: "Dye, two coats", unit: "SF", buy_qty: 1,
+    { id: "dye", name: "Dye, per coat", unit: "SF", buy_qty: 1,
       unit_cost: 0.14, coverage: 1, waste_pct: 0, roundup: false, favorite: false },
   ];
   const withReserved = () => JSON.parse(JSON.stringify(ITEMS.concat(RESERVED)));

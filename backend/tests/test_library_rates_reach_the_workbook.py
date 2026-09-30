@@ -6,7 +6,8 @@ figures. Since 2026-09-30 the Polish estimate prices both lines off reserved lib
 Kyle's Polish tab carried its own C25 0.14, C29 500 and "/3500", so an edited row made the two
 disagree. polish-bid-core.js's conditionCellWrites now writes, on every save:
 
-    Polish!C25   dye's price per SF (the row's unit price over its coverage, plus waste)
+    Polish!C25   one coat of dye's price per SF (the row's unit price over its coverage, plus
+    Polish!C26   waste) -- BOTH cells: Kyle's rows 25 and 26 are one coat each (DYE_COATS 2)
     Polish!C29   one kit's price (unit_cost / buy_qty)
     Polish!B29   the kit count, as a FORMULA, only where the row's coverage / waste / roundup /
                  pack differ from the template's =ROUNDUP(IF(E29="yes",(E18/3500),0),0)
@@ -18,7 +19,7 @@ formula text (the same reader test_markup_rate_reaches_the_bid.py proves against
 totals). openpyxl writes no cached results, so nothing here trusts a number Excel did not compute
 from the formulas in the file.
 
-WHAT IS AND IS NOT CLAIMED. D25, D29 and B29 are the bid's Dye line, Joint Filler line and kit
+WHAT IS AND IS NOT CLAIMED. D25 + D26, D29 and B29 are the bid's Dye, Joint Filler line and kit
 count to the cent. The tab total (D82) is recomputed by Kyle's own formulas from them. It is NOT
 the bid's total, and was not before this change: the beta page does not write the takeoff (E18
 included) into the workbook -- see polish-estimate.js's file header -- so E18 is set here the way
@@ -127,38 +128,40 @@ def _material_raw(book):
 
 @needs_node
 def test_the_seeded_rows_leave_the_workbook_exactly_as_today(ran, cached):
-    """With the seeded rows the save writes C25 0.14 and C29 500 -- the template's own figures --
-    and no quantity formula, so every Dye / Joint Filler cell, the material block and the tab
-    total come out identical to the workbook today's save produces. And those figures ARE the
-    bid's: D25 is 3,501 SF of dye at $0.14, D29 two kits at $500.
+    """With the seeded rows the save writes C25 = C26 = 0.14 and C29 500 -- the template's own
+    figures -- and no quantity formula, so every Dye / Joint Filler cell, the material block
+    and the tab total come out identical to the workbook today's save produces. And those
+    figures ARE the bid's: D25 + D26 is two coats of 3,501 SF at $0.14, D29 two kits at $500.
 
     Mutation: write the kit's formula whatever it says (B29 differs), or write dye's per-SF rate
     off the wrong coverage."""
     s = ran["seeded"]
     extra = {k: v for k, v in s["cells"].items() if s["today"].get(k) != v}
-    assert extra == {"Polish!C25": 0.14, "Polish!C29": 500}, extra
+    assert extra == {"Polish!C25": 0.14, "Polish!C26": 0.14, "Polish!C29": 500}, extra
     now, today = _workbook(s, cached), _workbook(s, cached, cells=s["today"])
     for addr in LINE_CELLS:
         assert now.raw(addr) == today.raw(addr), (addr, now.raw(addr), today.raw(addr))
     for addr in EVALUATED:
         assert now.num(addr) == pytest.approx(today.num(addr)), addr
     assert now.raw("B29") == TEMPLATE_B29
-    assert now.num("D25") == pytest.approx(s["dyeCost"]), (now.num("D25"), s["dyeCost"])
+    assert now.num("D25") + now.num("D26") == pytest.approx(s["dyeCost"]), (
+        now.num("D25"), now.num("D26"), s["dyeCost"])
     assert now.num("D29") == pytest.approx(s["jfCost"]), (now.num("D29"), s["jfCost"])
 
 
 @needs_node
 def test_an_edited_library_reaches_the_workbook_line_for_line(ran, cached):
-    """$650 a kit, coverage 2,000, dye $0.20 on the rows. The save writes C25 0.2, C29 650 and a
-    B29 FORMULA carrying the 2,000; the writer keeps it a formula (_coerce lets a safe "=ROUNDUP"
-    through), and the workbook's own arithmetic then gives the bid's Dye line, kit count and Joint
-    Filler line to the cent. The material block moves by exactly what the bid's two lines moved
-    by, and the tab total is recomputed from it.
+    """$650 a kit, coverage 2,000, dye $0.20 a coat on the rows. The save writes C25 = C26 = 0.2,
+    C29 650 and a B29 FORMULA carrying the 2,000; the writer keeps it a formula (_coerce lets a
+    safe "=ROUNDUP" through), and the workbook's own arithmetic then gives the bid's Dye lines,
+    kit count and Joint Filler line to the cent. The material block moves by exactly what the
+    bid's lines moved by, and the tab total is recomputed from it.
 
     Mutation: leave C29 at the template's 500; hardcode "/3500" in the formula; have the writer
     turn the formula into text."""
     e, s = ran["edited"], ran["seeded"]
     assert e["cells"]["Polish!C25"] == pytest.approx(0.2)
+    assert e["cells"]["Polish!C26"] == pytest.approx(0.2)
     assert e["cells"]["Polish!C29"] == 650
     assert e["cells"]["Polish!B29"] == '=ROUNDUP(IF(E29="yes",(E18/2000),0),0)'
     edited, seeded = _workbook(e, cached), _workbook(s, cached)
@@ -166,7 +169,8 @@ def test_an_edited_library_reaches_the_workbook_line_for_line(ran, cached):
     assert cell.data_type == "f" and cell.value == e["cells"]["Polish!B29"], (
         "B29 did not reach the .xlsx as a formula: %r (%s)" % (cell.value, cell.data_type))
     assert edited.num("B29") == e["jfKits"] == 2
-    assert edited.num("D25") == pytest.approx(e["dyeCost"]), (edited.num("D25"), e["dyeCost"])
+    assert edited.num("D25") + edited.num("D26") == pytest.approx(e["dyeCost"]), (
+        edited.num("D25"), edited.num("D26"), e["dyeCost"])
     assert edited.num("D29") == pytest.approx(e["jfCost"]), (edited.num("D29"), e["jfCost"])
     moved = (e["dyeCost"] + e["jfCost"]) - (s["dyeCost"] + s["jfCost"])
     assert _material_raw(edited) - _material_raw(seeded) == pytest.approx(moved), moved
@@ -187,16 +191,24 @@ def test_the_kits_waste_reaches_the_workbooks_kit_count(ran, cached):
 
 
 @needs_node
-def test_a_missing_row_writes_nothing_and_touches_nothing(ran):
+def test_a_missing_row_writes_nothing_and_touches_nothing(ran, cached):
     """A database the seed has not reached has no row: the save writes exactly what it wrote
     before, the template's cells stand, and a C25 somebody typed on the estimate grid survives.
+    And the template's own two dye lines are what the bid's fallback charges -- both coats -- so
+    even with no row the workbook's D25 + D26 is the bid's dye.
 
-    Mutation: write the shipped figures when the row is missing, or delete keys."""
+    Mutation: write the shipped figures when the row is missing, or delete keys; take the
+    fallback back to one coat."""
     m = ran["missing"]
     assert m["cells"] == m["today"], {k: v for k, v in m["cells"].items()
                                       if m["today"].get(k) != v}
     assert m["cells"]["Polish!C25"] == 0.3
     assert "Polish!C29" not in m["cells"] and "Polish!B29" not in m["cells"]
+    untyped = {k: v for k, v in m["cells"].items() if k != "Polish!C25"}
+    book = _workbook(m, cached, cells=untyped)
+    assert book.num("D25") + book.num("D26") == pytest.approx(m["dyeCost"]), (
+        book.num("D25"), book.num("D26"), m["dyeCost"])
+    assert book.num("D29") == pytest.approx(m["jfCost"])
 
 
 @needs_node
@@ -205,10 +217,11 @@ def test_a_row_that_cannot_price_writes_the_figures_the_bid_fell_back_to(ran, ca
     the shipped formula; the workbook gets the same shipped figures, so the two still agree."""
     b = ran["blanked"]
     assert b["cells"]["Polish!C25"] == pytest.approx(0.14)
+    assert b["cells"]["Polish!C26"] == pytest.approx(0.14)
     assert b["cells"]["Polish!C29"] == 500
     assert "Polish!B29" not in b["cells"]
     book = _workbook(b, cached)
-    assert book.num("D25") == pytest.approx(b["dyeCost"])
+    assert book.num("D25") + book.num("D26") == pytest.approx(b["dyeCost"])
     assert book.num("D29") == pytest.approx(b["jfCost"])
 
 
@@ -249,7 +262,8 @@ for (const name of Object.keys(rows)) {
   const lib = {};
   lib[key] = { unit_price: p.unit_price, coverage: p.coverage, waste_pct: p.waste_pct,
                roundup: p.roundup, buy_qty: p.buy_qty };
-  out[name] = { key: key, cost: p.cost,
+  // The row is ONE coat; a bid buys B.DYE_COATS of them (Kyle's rows 25 and 26).
+  out[name] = { key: key, cost: p.cost * (key === 'dye' ? B.DYE_COATS : 1),
                 cells: B.conditionCellWrites({ dye: true, joint_filler: true }, {}, lib) };
 }
 console.log(JSON.stringify(out));
@@ -278,9 +292,10 @@ def test_every_row_shape_prices_the_same_in_the_workbook(pair, cached):
         cells.update(got[name]["cells"])
     book = _workbook({"cells": cells, "area": area}, cached)
     for name in pair:
-        line = "D25" if got[name]["key"] == "dye" else "D29"
-        assert book.num(line) == pytest.approx(got[name]["cost"]), (
-            name, line, book.num(line), got[name]["cost"],
+        lines = ("D25", "D26") if got[name]["key"] == "dye" else ("D29",)
+        got_cost = sum(book.num(line) for line in lines)
+        assert got_cost == pytest.approx(got[name]["cost"]), (
+            name, lines, got_cost, got[name]["cost"],
             {k: v for k, v in cells.items() if k[7:9] in ("B2", "C2")})
 
 

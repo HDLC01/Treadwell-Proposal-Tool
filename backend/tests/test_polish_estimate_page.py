@@ -1296,13 +1296,15 @@ def test_joint_filler_and_dye_render_as_material_rows(ran):
         "the kit count does not show its working, so five reads as a number from nowhere: %r"
         % jf["measureHint"])
     # DYE IS BOUGHT ACROSS THE AREA, so its measurement is the area itself.
-    assert dy["name"] == "Dye, two coats", dy["name"]
+    assert dy["name"] == "Dye, per coat", dy["name"]
     assert dy["measurement"]["text"] == "17,500", dy["measurement"]
     assert dy["unit"]["text"] == "SF", dy["unit"]
     # THE PER-UNIT HINT IS KYLE'S OWN RATE, C29 and C25, arrived at by the page rather than typed
     # into it -- which is the check that the measurement and the money agree about what is bought.
     assert jf["rate"] == "$500.00 / kit", jf["rate"]
-    assert dy["rate"] == "$0.14 / SF", dy["rate"]
+    # DYE IS TWO COATS of Kyle's 0.14 (rows 25 and 26), and the hint says so rather than quoting
+    # a $0.28 the library row -- one coat -- does not hold.
+    assert dy["rate"] == "2 coats \u00d7 $0.14 / SF", dy["rate"]
 
 
 @needs_node
@@ -1442,7 +1444,8 @@ def test_switching_dye_on_moves_the_material_total_by_exactly_the_dye(ran):
         "switching dye on moved the Material total by %s, but dyeCost(%s) is %s"
         % (delta, d["area"], d["expectedDelta"]))
     assert d["laborUnmoved"], "switching dye on moved the labor total, which it does not touch"
-    assert d["costBoxOff"] == "\u2014" and d["costBoxOn"] == "$2,450", (
+    # 17,500 SF x $0.14 x 2 coats (Kyle's rows 25 and 26).
+    assert d["costBoxOff"] == "\u2014" and d["costBoxOn"] == "$4,900", (
         "the card's own Total cost box did not follow the switch: %r -> %r"
         % (d["costBoxOff"], d["costBoxOn"]))
 
@@ -1902,23 +1905,24 @@ def test_the_seeded_rows_price_every_bid_to_the_cent_as_before(ran):
             "at %s SF the condition cards read differently off the seeded rows: %r vs %r"
             % (sf, row["seeded"]["cards"], row["missing"]["cards"]))
     # THE VECTORS ARE NOT VACUOUS: one kit at 3,500, a second at 3,501, and $0 at 0 SF.
-    assert ident["3500"]["constants"] == pytest.approx(3500 * 0.14 + 500)
-    assert ident["3501"]["constants"] == pytest.approx(3501 * 0.14 + 1000)
+    # Two coats of dye (Kyle's rows 25 and 26) and the kits.
+    assert ident["3500"]["constants"] == pytest.approx(3500 * 0.14 * 2 + 500)
+    assert ident["3501"]["constants"] == pytest.approx(3501 * 0.14 * 2 + 1000)
     assert ident["0"]["constants"] == 0
 
 
 @needs_node
 def test_editing_the_library_rate_changes_the_bid(ran):
-    """$700 a kit and $0.50 a square foot on the rows, figures that share nothing with the shipped
-    $500 / $0.14: the material total is two kits at $700 plus 3,501 SF at $0.50, and each card
-    quotes the rate it charged.
+    """$700 a kit and $0.50 a square foot a coat on the rows, figures that share nothing with the
+    shipped $500 / $0.14: the material total is two kits at $700 plus two coats of 3,501 SF at
+    $0.50, and each card quotes the rate it charged.
 
     Mutation: have condLine price off RATES instead of the row, or have materialTotal call
     jointFillerCost/dyeCost directly."""
     r = ran["reservedItems"]["rated"]
     assert r["material"] == pytest.approx(r["expected"]), r
     assert r["cards"]["joint_filler.rate"] == "$700.00 / kit", r["cards"]
-    assert r["cards"]["dye.rate"] == "$0.50 / SF", r["cards"]
+    assert r["cards"]["dye.rate"] == "2 coats \u00d7 $0.50 / SF", r["cards"]
     assert r["cards"]["joint_filler.qty"] == "2", r["cards"]
 
 
@@ -2051,7 +2055,7 @@ def test_the_reserved_rows_are_never_a_takeoff_row_and_the_card_uses_the_live_na
     Mutation: drop the RESERVED_ITEM_IDS filter from renderDatalist or itemByName; render the
     card's material from a literal."""
     r = ran["reservedItems"]
-    assert r["dyeNotInPicker"], "\"Dye, two coats\" is offered in the takeoff row picker"
+    assert r["dyeNotInPicker"], "\"Dye, per coat\" is offered in the takeoff row picker"
     assert r["jointFillerNotInPicker"], (
         "\"Joint filler, 10 gal kit\" is offered in the takeoff row picker")
     assert r["ordinaryItemsStillListed"], "an ordinary material vanished from the picker too"

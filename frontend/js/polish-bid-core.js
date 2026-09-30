@@ -253,20 +253,30 @@
     return t;
   }
 
-  /** B25 `=IF(E25="Yes",E18)`, C25 `0.14`, D25 `=B25*C25` — the Dye line. A flat rate
-   *  across the whole polished area, charged only when the condition is on.
+  /** HOW MANY COATS OF DYE A JOB BUYS: Kyle's Polish tab has TWO "Dye" lines, rows 25 and 26,
+   *  both =IF(E25="Yes",E18) at 0.14 a square foot, switched by the one E25 answer. So with dye
+   *  on his sheet charges $0.28/SF, and backend/pricing.py (dye_coats 2) always agreed.
+   *
+   *  THE BETA CHARGED ONE UNTIL 2026-09-30, reading row 25 alone; Hanz, looking at the original
+   *  file: make it match Kyle's. The library row `dye` is ONE coat, and dyeCost, condLine in
+   *  polish-estimate.js and the workbook writer below all take the count from here. */
+  var DYE_COATS = 2;
+
+  /** B25/B26 `=IF(E25="Yes",E18)`, C25/C26 `0.14`, D25/D26 `=B*C` — Kyle's two Dye lines, one
+   *  per coat (DYE_COATS). A flat rate across the whole polished area for each coat, charged only
+   *  when the condition is on: area x 0.14 x 2, which is D25 + D26 to the bit (doubling is exact).
    *
    *  THE FALLBACK NOW, NOT THE ANSWER (2026-09-30). Dye is a reserved library_items row, id
-   *  `dye` (backend/library.py's RESERVED_ITEM_IDS), and polish-estimate.js prices it through
-   *  library-core's priceLine off that row, so an admin edits it on the Items tab. This formula
-   *  is what stands when the row is not there to read: a database the seed has not reached.
-   *  The seed (coverage 1, waste 0, no roundup, $0.14) prices to the cent what this does, and
-   *  test_polish_estimate_page.py holds the two together. 0 when the condition is off or the
-   *  area is not yet a positive number. */
+   *  `dye` (backend/library.py's RESERVED_ITEM_IDS), one coat, and polish-estimate.js prices each
+   *  coat through library-core's priceLine off that row, so an admin edits it on the Items tab.
+   *  This formula is what stands when the row is not there to read: a database the seed has not
+   *  reached. The seed (coverage 1, waste 0, no roundup, $0.14) prices to the cent what this
+   *  does, and test_polish_estimate_page.py holds the two together. 0 when the condition is off
+   *  or the area is not yet a positive number. */
   function dyeCost(area, on) {
     var a = num(area);
     if (!on || !(a > 0)) return 0;
-    return a * RATES.DYE_PER_SF;
+    return a * RATES.DYE_PER_SF * DYE_COATS;
   }
 
   /** B29 `=ROUNDUP(IF(E29="yes",(E18/3500),0),0)`, C29 `500`, D29 `=B29*C29` — Joint
@@ -656,14 +666,14 @@
    *  change. `shipped` is what polish-estimate.js's condLine falls back to when a row cannot
    *  price -- RATES and the template's own 3,500 -- so a fallback writes the template's figures.
    *
-   *  Row 26 is a SECOND dye line (=IF(E25="Yes",E18) x C26 0.14) that the engine has never
-   *  charged; it is left alone here. */
+   *  DYE IS TWO LINES, rows 25 and 26 -- one per coat (DYE_COATS), each written the same, so the
+   *  sheet's D25 + D26 is the bid's dye figure. `qty` and `rate` are lists for that reason. */
   var LIBRARY_LINE_CELLS = {
-    dye: { qty: "Polish!B25", rate: "Polish!C25", flag: 'E25="Yes"',
-           template: '=IF(E25="Yes",E18)',
+    dye: { qty: ["Polish!B25", "Polish!B26"], rate: ["Polish!C25", "Polish!C26"],
+           flag: 'E25="Yes"', template: '=IF(E25="Yes",E18)',
            shipped: { unit_price: RATES.DYE_PER_SF, coverage: 1, waste_pct: 0, roundup: false,
                       buy_qty: 1 } },
-    joint_filler: { qty: "Polish!B29", rate: "Polish!C29", flag: 'E29="yes"',
+    joint_filler: { qty: ["Polish!B29"], rate: ["Polish!C29"], flag: 'E29="yes"',
                     template: '=ROUNDUP(IF(E29="yes",(E18/3500),0),0)',
                     shipped: { unit_price: RATES.JOINT_FILLER_KIT_COST, coverage: 3500,
                                waste_pct: 0, roundup: true, buy_qty: 1 } }
@@ -685,8 +695,9 @@
    *               back to the shipped formula -- and the cells get the shipped figures.
    *    an object  {unit_price, coverage, waste_pct, roundup, buy_qty} off priceLine.
    *
-   *  THE RATE CELL IS ALWAYS WRITTEN once a row exists: dye's is a price per square foot (one
-   *  unit's price over what one unit covers, plus its waste), the kit's is one kit's price. THE
+   *  THE RATE CELLS ARE ALWAYS WRITTEN once a row exists: dye's is one coat's price per square
+   *  foot (one unit's price over what one unit covers, plus its waste), written into BOTH C25
+   *  and C26, one per coat; the kit's is one kit's price. THE
    *  QUANTITY FORMULA IS WRITTEN ONLY WHEN IT DIFFERS from the template's text -- or when the key
    *  is already there, so a coverage put back to 3,500 replaces the formula an earlier save wrote
    *  rather than leaving it stale. With the seeded rows every value written equals the template's,
@@ -726,9 +737,11 @@
       // Twelve significant figures, this file's roundUp() tolerance: 0.2 x 1.05 / 2 is
       // 0.10500000000000001 in IEEE-754, and a 17-digit rate is not something to put in front
       // of Kyle in his own workbook. The seeded 0.14 and 500 come through unchanged.
-      out[spec.rate] = parseFloat(rate.toPrecision(12));
-      if (qty !== spec.template || Object.prototype.hasOwnProperty.call(out, spec.qty)) {
-        out[spec.qty] = qty;
+      for (var j = 0; j < spec.rate.length; j++) {
+        out[spec.rate[j]] = parseFloat(rate.toPrecision(12));
+        if (qty !== spec.template || Object.prototype.hasOwnProperty.call(out, spec.qty[j])) {
+          out[spec.qty[j]] = qty;
+        }
       }
     }
     return out;
@@ -1091,7 +1104,7 @@
   return {
     num: num, roundUp: roundUp,
     money: money, money2: money2, pct: pct, fmtSf: fmtSf,
-    HOURS_PER_DAY: HOURS_PER_DAY, RATES: RATES, GP_BANDS: GP_BANDS,
+    HOURS_PER_DAY: HOURS_PER_DAY, RATES: RATES, GP_BANDS: GP_BANDS, DYE_COATS: DYE_COATS,
     gpPct: gpPct,
     CONDITION_CELLS: CONDITION_CELLS, conditionCellWrites: conditionCellWrites,
     LIBRARY_LINE_CELLS: LIBRARY_LINE_CELLS,

@@ -2153,7 +2153,9 @@
         // $0.00 would read as free.
         priced: "No material cost \u00b7 a labor modifier, priced on the Labor step" },
       { key: "dye", label: "Dye", on: !!c.dye, cell: "Polish!E25",
-        priced: dye ? dye + " per SF \u00b7 two coats across the polished area"
+        // THE ROW IS ONE COAT and a bid buys B.DYE_COATS of them -- Kyle's rows 25 and 26.
+        priced: dye ? dye + " per SF a coat \u00b7 " + (B.DYE_COATS || 2) +
+                      " coats across the polished area"
                     : "No rate loaded for dye" }
     ];
   }
