@@ -560,7 +560,11 @@ def test_the_tools_logged_out_surface_is_the_audited_one():
             continue
         if "GET" in (getattr(r, "methods", None) or ()) and main._auth_is_public(r.path, "GET"):
             public.add(r.path)
-    assert public == {"/", "/healthz", "/api/public-config", "/api/admin/proposal-pdf"}, sorted(public)
+    # /gc-projects.html (2026-09-30, the General Contractor board): portal.html's own bytes with four
+    # strings swapped (pipelines.board_page) -- the same inert shell "/" already serves. No data
+    # without the sign-in; every call the page makes goes through the /api auth gate.
+    assert public == {"/", "/healthz", "/api/public-config", "/api/admin/proposal-pdf",
+                      "/gc-projects.html"}, sorted(public)
 
 
 # Every GET the portal serves, and why the scan may request it. Read on 2026-09-29 from the
