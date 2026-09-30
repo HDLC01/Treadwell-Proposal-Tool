@@ -2721,13 +2721,19 @@
     // remove-existing, and a condition removed from the list with no way back here would make
     // Remove a one-way door. The row's own name is matched when there is one, and the condition's
     // label too, so "joint filler" finds the kit whatever an admin has renamed it to.
+    //
+    // FIRST IN THE LIST, not after every other material: Browse shows DEFAULT_MAX rows, and with
+    // eight un-favorited materials an OFF condition fell off the end and could only be found by
+    // typing its name.
+    var condHits = [];
     takeoffConditionDefaults().forEach(function (c) {
       if (c.on) return;
       if (!q || String(c.name || "").toLowerCase().indexOf(q) !== -1 ||
           String(c.label || "").toLowerCase().indexOf(q) !== -1) {
-        hits.push({ kind: "conditions", id: c.key, name: c.name, what: "Material" });
+        condHits.push({ kind: "conditions", id: c.key, name: c.name, what: "Material" });
       }
     });
+    hits = condHits.concat(hits);
     // LABOR, 2026-09-24 -- the Labor tab's own rows, offered the same way an un-favorited
     // material or assembly already is: findable here, one press to make a default. `travel`
     // is deliberately never a candidate -- it is not opted into a bid the way a favorited row

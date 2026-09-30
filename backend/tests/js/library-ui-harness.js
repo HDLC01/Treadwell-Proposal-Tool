@@ -4898,6 +4898,14 @@ async function conditionChecks() {
     s.api.itemResultsHtml({ _item_search: "remove" });
   s.api.setDefaultQuery("o");
   const defaults = s.api.defaultCandidates().rows.map((r) => r.kind + ":" + r.id);
+  // BROWSE WITH A FULL LIBRARY: ten ordinary un-favorited materials, nothing typed. The cap is
+  // DEFAULT_MAX rows; the three OFF conditions must still be among them.
+  const many = withReserved().concat(Array.from({ length: 10 }, (_, k) => ({
+    id: "m" + k, name: "Material " + k, unit: "Gal", buy_qty: 1, unit_cost: 10,
+    coverage: 100, favorite: false, divisions: [] })));
+  const full = build({ ITEMS: many, window: bid });
+  full.api.openDefaultBrowse();
+  const browseFull = full.api.defaultCandidates().rows.map((r) => r.kind + ":" + r.id);
 
   // 5. THE DEFAULTS TAB, ON, WITH THE ROWS THERE: each is listed under the row's OWN name, and its
   //    Edit goes to that row.
@@ -4956,6 +4964,7 @@ async function conditionChecks() {
     reservedPredicate: ["joint-filler-kit", "remove-existing-jf", "dye", "i1"]
       .map((id) => s.api.isReservedItem(id)),
     defaults: defaults,
+    browseFull: browseFull,
     // LISTED UNDER THE ROW'S OWN NAME, the name an admin edits on the Items tab.
     listedUnderTheirRowNames: ["Joint filler, 10 gal kit", "Remove existing joint filler",
                                "Dye, per coat"].every((n) => onHtml.indexOf("<td>" + n + "</td>") !== -1),

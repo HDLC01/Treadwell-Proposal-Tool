@@ -3732,6 +3732,11 @@ def test_the_reserved_rows_are_never_an_assembly_line_and_are_a_default_only_as_
             "the %s condition is not offered by the add search: %r" % (key, r["defaults"]))
     assert "items:i1" in r["defaults"], (
         "the ordinary materials vanished from the default search too: %r" % r["defaults"])
+    # Browse with ten ordinary un-favorited materials and nothing typed: the list is capped at
+    # DEFAULT_MAX rows, and the three OFF conditions must not fall off its end.
+    for key in ("joint_filler", "remove_existing_jf", "dye"):
+        assert "conditions:" + key in r["browseFull"], (
+            "the %s condition fell off the capped Browse list: %r" % (key, r["browseFull"]))
 
 
 @needs_node
