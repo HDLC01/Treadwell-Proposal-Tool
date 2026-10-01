@@ -412,8 +412,16 @@ const documentStub = {
     // table arrives empty, and the search box goes quiet in a way that is indistinguishable
     // from a network failure -- every county assertion below would pass by saying nothing.
     resolveApiBase: () => "",
-    authHeaders: () => ({}),
+    // condOpts.gated: the sign-in has not settled at script load. The header exists only once
+    // releaseAuth() runs, exactly like the real TWAuth.ready / TW.authHeaders pair.
+    authHeaders: () => (condOpts && condOpts.gated && !authReleased)
+      ? {} : { Authorization: "Bearer t" },
   };
+  let authReleased = !(condOpts && condOpts.gated);
+  let releaseAuthFn = () => { authReleased = true; };
+  if (condOpts && condOpts.gated) {
+    windowStub.TWAuth = { ready: new Promise((r) => { releaseAuthFn = () => { authReleased = true; r(); }; }) };
+  }
 
   // The admin-set answers for dye / joint_filler / remove_existing_jf, the same three the
   // Polish beta pages already fetch through this endpoint. Recorded rather than counted, the
@@ -424,9 +432,13 @@ const documentStub = {
   // case the loadConditionDefaults() in index.js has to survive.
   const conditionFetches = [];
   const cndOpts = condOpts || {};
-  const conditionFetchStub = async function (url) {
+  const conditionFetchStub = async function (url, init) {
     conditionFetches.push(String(url));
     if (cndOpts.fail) throw new Error("network");
+    // A request without the auth header is a 401 whose body carries no conditions.
+    if (cndOpts.gated && !((init || {}).headers || {}).Authorization) {
+      return { json: async () => ({ detail: "not signed in" }) };
+    }
     return { json: async () => ({ ok: true,
                                   conditions: cndOpts.rows === undefined ? [] : cndOpts.rows }) };
   };
@@ -503,7 +515,7 @@ const documentStub = {
   }
   return { NAV, SAVES, STATE, nodes, flags, form, radios, systems, documentStub,
            condBox, switches, switchFor, press, clickSwitch,
-           countyFetches, conditionFetches, typeCounty, pressCounty, countyRowList, pageClick,
+           countyFetches, conditionFetches, releaseAuth: () => releaseAuthFn(), typeCounty, pressCounty, countyRowList, pageClick,
            fire, setWorkType, fill, byName };
 }
 
@@ -846,6 +858,94 @@ function runHandler(which) {
     out.conditions.hydrateSaves = b.SAVES.length;
   }
 
+  // A SPLIT DRAFT (2026-09-30). Once the estimate screen has given every sheet its own Taxable? /
+  // Remodel Tax? (state.tax_flags_per_sheet), these two switches are the BASE's own cells, found
+  // through priced_tabs[].flag_cells -- and they are written by their own switch only. Options
+  // (Leveling, 'Gyp (FR)', Epoxy on a polish job) keep their own answers through every save here.
+  {
+    const taxCells = ["Epoxy!B6", "Epoxy!D6", "Polish!B6", "Polish!D6", "Leveling!B6",
+                      'Gyp (USG 1-8")!B8', "Gyp (FR)!B8"];
+    const pick = (cv) => { const o = {}; taxCells.forEach((k) => { o[k] = cv[k]; }); return o; };
+    const splitDraft = (base, wt) => ({
+      tax_flags_per_sheet: true, base_tab_id: base, work_type: wt,
+      priced_tabs: [
+        { id: "Epoxy", flag_cells: { taxable: "Epoxy!B6", remodel: "Epoxy!D6" } },
+        { id: "Polish", flag_cells: { taxable: "Polish!B6", remodel: "Polish!D6" } },
+      ],
+      cell_values: { "Epoxy!B6": "Yes", "Epoxy!D6": "No", "Polish!B6": "No", "Polish!D6": "No",
+                     "Leveling!B6": "Yes", 'Gyp (USG 1-8")!B8': "No", "Gyp (FR)!B8": "No" },
+    });
+    const b = build(splitDraft("Polish", "polish"));
+    await tick();
+    // read at BOOT, before any radio fires: the change listener re-reads these two on its own
+    const booted = { taxable: b.switchFor("taxable").on, remodel: b.switchFor("remodel_tax").on };
+    b.setWorkType("polish");
+    const hydrated = { taxable: b.switchFor("taxable").on, remodel: b.switchFor("remodel_tax").on };
+    const before = pick(cells(b));
+    b.clickSwitch("dye");                      // another switch: no tax cell may move
+    const afterDye = pick(cells(b));
+    b.clickSwitch("taxable");                  // the base's own switch: Polish's cell, and only it
+    const afterTaxable = pick(cells(b));
+    b.clickSwitch("remodel_tax");
+    const afterRemodel = pick(cells(b));
+    // a combo with no single base: both halves of the combined base, no option
+    const c = build(splitDraft(null, "combo"));
+    await tick();
+    c.setWorkType("combo");
+    c.clickSwitch("local");                    // Epoxy says Yes, Polish No: neither may be restated
+    const comboAfterLocal = pick(cells(c));
+    c.clickSwitch("taxable");                  // hydrated off Epoxy's Yes -> off -> "No" on both
+    // and a draft the estimate screen has NOT split yet still writes the four literals
+    const pre = build({ cell_values: {} });
+    await tick();
+    pre.setWorkType("epoxy");
+    pre.clickSwitch("taxable");
+    out.conditions.split = {
+      booted, hydrated, before, afterDye, afterTaxable, afterRemodel,
+      comboAfterLocal, combo: pick(cells(c)),
+      unsplit: pick(cells(pre)),
+    };
+  }
+
+  // A WORK-TYPE CHANGE ON A SPLIT DRAFT moves the base with no explicit base_tab_id: a combo's is
+  // Epoxy + Polish (the switch reads Epoxy's), a polish job's is Polish, a gyp job's the gyp base.
+  // Every sheet here holds a DIFFERENT answer, and the seed's work type is not any of the ones
+  // switched to, so the switch can only be right by re-reading the new base's own cell.
+  {
+    const flagCells = ["Epoxy!B6", "Epoxy!D6", "Polish!B6", "Polish!D6",
+                       'Gyp (USG 1-8")!B8', 'Gyp (USG 1-8")!D8'];
+    const pickFlags = (cv) => { const o = {}; flagCells.forEach((k) => { o[k] = cv[k]; }); return o; };
+    const read = (x) => ({ taxable: x.switchFor("taxable").on, remodel: x.switchFor("remodel_tax").on });
+    const t = build({
+      tax_flags_per_sheet: true, base_tab_id: null, work_type: "combo",
+      priced_tabs: [
+        { id: "Epoxy", flag_cells: { taxable: "Epoxy!B6", remodel: "Epoxy!D6" } },
+        { id: "Polish", flag_cells: { taxable: "Polish!B6", remodel: "Polish!D6" } },
+        { id: 'Gyp (USG 1-8")',
+          flag_cells: { taxable: 'Gyp (USG 1-8")!B8', remodel: 'Gyp (USG 1-8")!D8' } },
+      ],
+      cell_values: { "Epoxy!B6": "Yes", "Epoxy!D6": "Yes", "Polish!B6": "No", "Polish!D6": "No",
+                     'Gyp (USG 1-8")!B8': "No", 'Gyp (USG 1-8")!D8': "Yes" },
+    });
+    await tick();
+    const onCombo = read(t);                   // booted on combo: Epoxy's own Yes / Yes
+    const seeded = pickFlags(cells(t));
+    t.setWorkType("polish");
+    const onPolish = read(t);                  // Polish's own No / No, not Epoxy's Yes / Yes
+    const afterPolish = pickFlags(cells(t));
+    t.setWorkType("gyp");
+    const onGyp = read(t);                     // the gyp base's own No / Yes
+    t.setWorkType("epoxy");
+    const onEpoxy = read(t);                   // and back to Epoxy's Yes / Yes
+    const afterTrips = pickFlags(cells(t));
+    t.setWorkType("polish");
+    t.clickSwitch("taxable");                  // off (Polish's No) -> on: Polish!B6 becomes Yes
+    out.conditions.splitWorkType = {
+      onCombo, onPolish, onGyp, onEpoxy, seeded, afterPolish, afterTrips,
+      afterFlip: pickFlags(cells(t)), shownAfterFlip: read(t),
+    };
+  }
+
   // A draft that already carries one of these cells DOES get cleaned up on a work-type change,
   // because leaving a stale out-of-scope flag behind is the bug the cleanup exists for.
   {
@@ -947,6 +1047,21 @@ function runHandler(which) {
         "Polish!F29": written["Polish!F29"],
       },
     };
+  }
+
+  // == THE AUTH RACE. The page script fires the read at load, before sign-in settles. The stub
+  // == answers 401-shaped (no conditions) unless the auth header is present, and the header
+  // == exists only after releaseAuth(). A read fired at load therefore comes back {}; one that
+  // == waits for TWAuth.ready comes back with the admin's answers.
+  {
+    const b = build(null, null, { gated: true, rows: [
+      { key: "dye", on: true },
+    ] });
+    await tick();
+    b.releaseAuth();
+    await tick(); await tick();
+    b.setWorkType("polish");
+    out.conditions.authRace = { dye: b.switchFor("dye").on };
   }
 
   // ── the county picker, on the LIVE intake form ─────────────────────────────

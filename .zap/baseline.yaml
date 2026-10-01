@@ -1,0 +1,79 @@
+# OWASP ZAP baseline scan plan, run by .github/workflows/zap-baseline.yml as
+#
+#     zap.sh -cmd -autorun /zap/wrk/baseline.yaml        (ZAP_TARGET = one of our four apps)
+#
+# A baseline scan is a short spider plus ZAP's PASSIVE rules: it reads the pages it is served and
+# never attacks them. These are the same jobs zap-baseline.py generates (it prints "Using the
+# Automation Framework" and runs a plan like this one). The plan is written out here instead of
+# calling zap-baseline.py because zap-baseline.py cannot set the spider options below, and they
+# are what keep a scan of PRODUCTION, where real customers work, harmless.
+#
+# THE -config ROUTE DOES NOT WORK, and it looks as if it does. Measured on 2026-09-29 against a
+# local probe site that logs every request (ZAP 2.17.0, the digest the workflow pins):
+#   zap-baseline.py -z "-config spider.processForm=false -config spider.postForm=false
+#                       -config spider.thread=2"
+#     -> both forms SUBMITTED (a GET and a POST) and 32 requests in flight at once.
+#   the same with the real, lowercase keys (spider.processform, spider.postform)
+#     -> the same result. The spider job zap-baseline.py generates applies its own defaults
+#        (postForm: true, threadCount: 2 x cores) over anything set with -config.
+#   this plan
+#     -> no form submitted, never more than 2 requests in flight, and the excluded paths below
+#        never requested.
+# So every setting that matters is a parameter of the job itself, where ZAP cannot ignore it.
+# backend/tests/test_zap_baseline.py pins each one.
+env:
+  contexts:
+    - name: baseline
+      urls:
+        - ${ZAP_TARGET}
+      # Never requested at all (checked with the probe above). Full-match regexes against the URL.
+      #
+      # The route check behind this list (2026-09-29, both repos): every GET a logged-out visitor
+      # can reach was read for writes and mail.
+      #   proposal tool: every /api/* route is behind the Google bearer check (_auth_gate) except
+      #     /healthz, /api/public-config (read-only) and three service-token routes that answer 401
+      #     before doing anything. Everything else is static files. Nothing to exclude.
+      #   portal: every /api/portal/{token}/* and /api/me/* route needs a signed-in session cookie
+      #     and every /api/admin/* route needs the service token. The ONE logged-out GET that writes
+      #     is /p/{token}.
+      excludePaths:
+        # portal GET /p/{token}: the link in every customer email. For a real token it stamps
+        # link_clicked on that proposal (mark_link_clicked), which the Follow-ups board reads as
+        # "the customer opened the email".
+        - 'https?://[^/]+/p/.*'
+        # portal /api/auth/*: request-code emails a sign-in code to the address given; logout
+        # revokes a session. Both are POST only and this spider posts nothing, so this is the
+        # second fence, kept so that turning form posting back on still could not reach them.
+        - 'https?://[^/]+/api/auth/.*'
+  parameters:
+    failOnError: true         # a plan that cannot run must fail the job, not pass quietly
+    failOnWarning: false      # REPORT ONLY: findings never fail the job
+    progressToStdout: false   # the run log is public; keep it quiet
+jobs:
+  - type: passiveScan-config
+    parameters:
+      maxAlertsPerRule: 10    # as zap-baseline.py
+      enableTags: false
+  - type: spider              # the traditional spider: plain GETs of the links it finds
+    parameters:
+      context: baseline
+      url: ${ZAP_TARGET}
+      maxDuration: 1          # minutes
+      threadCount: 2          # 2 requests in flight at most; the default is 2 per CPU core
+      processForm: false      # never fill in or submit a form, GET or POST
+      postForm: false
+  - type: passiveScan-wait
+    parameters:
+      maxDuration: 5          # minutes
+  - type: report
+    parameters:
+      template: traditional-json
+      reportDir: /zap/wrk/
+      reportFile: report.json
+      reportTitle: ZAP baseline
+  - type: report
+    parameters:
+      template: traditional-html
+      reportDir: /zap/wrk/
+      reportFile: report.html
+      reportTitle: ZAP baseline

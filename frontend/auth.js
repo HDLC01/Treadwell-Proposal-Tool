@@ -454,7 +454,16 @@
       // below the Proposals Database - right when the Database was where you started a bid, wrong once
       // this board could start one too. The page you run the meeting from should not be something you
       // scroll past.
-      navItem("/portal.html", "board", "Active Projects") +
+      //
+      // RENAMED "Direct Projects" ON 2026-09-29, same href. Hanz: "We relabel Active projects to Direct
+      // Projects and we add a new pipeline named 'General Contractor' as a new sidebar." Everything
+      // above about being first still holds; the board is still where sign-in lands (HOME_PAGE).
+      navItem("/portal.html", "board", "Direct Projects") +
+      // THE GENERAL CONTRACTOR BOARD, directly under Direct Projects because it is the same board for
+      // the other half of the work: the same page and the same js/portal.js, drawing the projects
+      // whose Audience is GC (main.py serves it; backend/pipelines.py holds the rule). Same tabs,
+      // same columns, same drawer - "it will have the same steps but just on a different webpage".
+      navItem("/gc-projects.html", "cards", "General Contractor") +
       // BACK IN THE MENU ON 2026-08-24, and this is the THIRD decision about it; the first two
       // took it out. All three are written down because the last reader of a half-told version deleted
       // this page from the menu twice.
@@ -468,7 +477,7 @@
       //               2026-08-10. Do not "tidy" it back out on the strength of that quote; it has been
       //               answered.
       //
-      // Directly under Active Projects because it is the same population read a different way: the board
+      // Directly under the two project boards because it is the same population read a different way: the board
       // answers "where does each live job stand", this answers "who has not been chased". Its own rows
       // even open that page (/portal.html?open=...&sec=followup), so filing it anywhere else would put
       // the link under one heading and land the click under another.
@@ -711,7 +720,7 @@
       '<h1 class="tw-refuse-h">' + esc(label) + " isn't available on your account.</h1>" +
       '<p class="tw-refuse-p">An admin can turn it on for members from the Admin page. ' +
       'Nothing you were doing was lost.</p>' +
-      '<a class="tw-refuse-go" href="' + HOME_PAGE + '">Go to Active Projects</a>' +
+      '<a class="tw-refuse-go" href="' + HOME_PAGE + '">Go to Direct Projects</a>' +
       '</div>';
     document.body.appendChild(card);
     renderSidebar();

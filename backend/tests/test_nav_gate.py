@@ -348,6 +348,10 @@ def test_a_locked_page_in_the_request_is_refused_rather_than_quietly_dropped(mon
     assert r.status_code == 400 and "/admin.html" in r.json()["detail"]
     r = client.put("/api/admin/nav-access", json={"deny": {"user": ["/portal.html"]}})
     assert r.status_code == 400 and "/portal.html" in r.json()["detail"]
+    # Locked 2026-09-29, same guarantee as /portal.html: "The General Contractor board is always
+    # on, like Direct Projects."
+    r = client.put("/api/admin/nav-access", json={"deny": {"user": ["/gc-projects.html"]}})
+    assert r.status_code == 400 and "/gc-projects.html" in r.json()["detail"]
     r = client.put("/api/admin/nav-access", json={"deny": {"super_admin": ["/leads.html"]}})
     assert r.status_code == 400 and "super_admin" in r.json()["detail"]
 

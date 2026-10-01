@@ -273,6 +273,10 @@ const out = { PAY, ATTR_PAY };
       cellValues: {},
       HF: { setCellValue() {} },
       applyJobFlags() {},
+      // The autofill's two tax answers go through this now (the base sheet's, on a split draft);
+      // bound so the lifted handler reaches its banner. jobFlagKindFor is only asked on a split draft.
+      applyAutofillJobFlags() { return 0; },
+      jobFlagKindFor() { return null; },
       TW: { setState() {}, authHeaders: () => ({}), getDraftId: () => "d" },
       sysNameInput: { value: "" },
       texInput: { value: "" },

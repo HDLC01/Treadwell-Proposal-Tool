@@ -39,7 +39,11 @@ def _isolate(tmp_path, monkeypatch):
 
 
 def _a_policy():
-    return {"user": [list(nav_access.TABS)[1]]}
+    # A page that is deniable at all — NOT a positional index into TABS. /gc-projects.html landed
+    # at that position (index 1) on 2026-09-29 and is LOCKED, so a policy naming it would be
+    # stripped by save() itself, which is a different behaviour than the one this file tests.
+    deniable = next(p for p in nav_access.TABS if p not in nav_access.LOCKED)
+    return {"user": [deniable]}
 
 
 def test_a_transient_rename_refusal_is_retried_and_the_policy_lands(monkeypatch):

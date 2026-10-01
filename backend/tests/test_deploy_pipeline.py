@@ -54,6 +54,17 @@ def test_the_deploy_workflow_exists():
     assert DEPLOY.is_file()
 
 
+def test_staging_applies_the_schema_it_just_pulled():
+    """The staging deploy feeds backend/staging/schema_pg.sql from the checkout into psql. It
+    used to read /docker-entrypoint-initdb.d/01_schema.sql, a single-file bind mount that goes
+    stale as soon as `git pull` replaces the file, so from 2026-09-25 every deploy re-applied an
+    old schema and reported success (library_labor.favorite never arrived on 2026-09-30)."""
+    code = " ".join(ln.split("#", 1)[0] for ln in DEPLOY.read_text(encoding="utf-8").splitlines())
+    assert "< backend/staging/schema_pg.sql" in code, "staging no longer applies the pulled schema"
+    assert "/docker-entrypoint-initdb.d/01_schema.sql" not in code, (
+        "staging applies the schema through the bind mount again, which serves a stale copy")
+
+
 def test_no_deploy_step_builds_on_the_box():
     """THE rule. Both stacks live on the same VPS, so staging builds are just as capable
     of taking prod down as prod builds are."""

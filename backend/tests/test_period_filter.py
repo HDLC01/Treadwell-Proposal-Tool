@@ -214,8 +214,12 @@ def test_no_filter_still_means_everything(ran):
 # ── wiring a source read is the right tool for ───────────────────────────────
 def test_the_storage_key_did_not_change_when_the_variable_was_renamed():
     """MONTH became PERIOD because it now holds either grain. Renaming the KEY too would have
-    silently dropped every rep's current selection on deploy."""
-    assert 'PERIOD_KEY = "tw_crm_month"' in PORTAL_JS, (
+    silently dropped every rep's current selection on deploy.
+
+    PERIOD_KEY is now built from pipelineKey("tw_crm_month") (2026-09-29, Direct/GC each remember
+    their own period), not the bare literal — the base name is still "tw_crm_month", unchanged, so
+    Direct's own storage still resolves to the old literal key at runtime."""
+    assert 'PERIOD_KEY = pipelineKey("tw_crm_month")' in PORTAL_JS, (
         "the period is stored under a new key, so an in-flight selection is lost on deploy")
 
 
