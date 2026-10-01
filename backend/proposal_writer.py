@@ -93,6 +93,67 @@ def pick_template(work_type: str, audience: str | None) -> Path:
     return TEMPLATES_ROOT / TEMPLATE_PICKER[key]
 
 
+# ─── What a blank intake field prints, per template ──────────────────
+# The GC forms' spec, finish and addenda lines carry tokens since 2026-10-02
+# (annotate_templates.GC_SPAN_RULES), and each one stands where Kyle had a placeholder. A job
+# whose intake left that field blank prints the PLACEHOLDER, exactly as the file printed it
+# before the token went in -- so an unfinished proposal still reads as unfinished, and nothing
+# is invented. Per file, because each form has its own spec number and finish tag.
+# test_gc_template_tokens.py renders every file with these and compares the lines with Kyle's
+# raw file in docs/GC Templates/.
+#
+# APPLIED ONLY TO fill_proposal's OWN COPY of the values (`_with_token_defaults`, right before
+# the flat pass), and served to the editor with the template (/api/proposal-template
+# `token_defaults`) so the page shows the same words. Never written into the caller's `values`:
+# /api/generate writes those back onto the draft and fills the estimate sheet from them
+# (`architect` -> Epoxy!B8, `spec_section` -> the Specs+Dwgs+Addn tab), and a blank there must
+# stay blank rather than become "xx Architects".
+TEMPLATE_TOKEN_DEFAULTS: dict[str, dict[str, str]] = {
+    "GC/xx TREADWELL POLISH PROPOSAL - xx.docx": {
+        "spec_section": "033543", "architect": "xx Architects",
+        "drawings_dated_formatted": "8/1/26", "finish_tag": "PC", "plan_sheet": "A900",
+        "addenda_count": "0",
+    },
+    "GC/xx TREADWELL RESINOUS PROPOSAL - xx.docx": {
+        "spec_section": "096723", "architect": "xx Architects",
+        "drawings_dated_formatted": "8/1/26", "finish_tag": "RESx", "plan_sheet": "A900",
+        "addenda_count": "0",
+    },
+    "GC/xx TREADWELL SEALER PROPOSAL - xx.docx": {
+        "spec_section": "03xx", "architect": "xx Architects",
+        "drawings_dated_formatted": "8/1/26", "finish_tag": "SC", "plan_sheet": "A900",
+        "addenda_count": "0",
+    },
+}
+
+
+def _template_rel(path: Path) -> str:
+    """`path` relative to TEMPLATES_ROOT, as a TEMPLATE_PICKER value spells it; "" for a file
+    outside the templates (a test's copy), which has no per-file table entry."""
+    try:
+        return Path(path).resolve().relative_to(TEMPLATES_ROOT.resolve()).as_posix()
+    except (OSError, ValueError):
+        return ""
+
+
+def template_token_defaults(work_type: str, audience: str | None) -> dict[str, str]:
+    """{token: what it prints when blank} for the template `(work_type, audience)` picks;
+    {} for a template with none."""
+    return dict(TEMPLATE_TOKEN_DEFAULTS.get(_template_rel(pick_template(work_type, audience)), {}))
+
+
+def _with_token_defaults(values: Mapping[str, Any], defaults: Mapping[str, str]) -> dict:
+    """A copy of `values` in which every token of `defaults` that is missing, None or only
+    whitespace holds its default. A 0 is a value (it prints "0"), as it is in the editor's
+    proposal-review.js withTokenDefaults, which applies the same rule to the same table."""
+    out = dict(values)
+    for key, default in defaults.items():
+        cur = out.get(key)
+        if not str("" if cur is None else cur).strip():
+            out[key] = default
+    return out
+
+
 # ─── Token substitution ───────────────────────────────────────────────
 TOKEN_RE = re.compile(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}")
 
@@ -4580,10 +4641,14 @@ def fill_proposal(
 
     # Phase 2 — flat {{token}} substitution against `values`. This runs
     # unchanged from v1 and also fills any non-system tokens left inside
-    # the expanded block paragraphs.
+    # the expanded block paragraphs. A token this template prints Kyle's own placeholder for
+    # when blank (TEMPLATE_TOKEN_DEFAULTS: the GC spec / finish / addenda lines) gets it here, on
+    # a copy -- the caller's `values` are written back onto the draft and must keep the blank.
+    flat_values = _with_token_defaults(
+        values, TEMPLATE_TOKEN_DEFAULTS.get(_template_rel(template_path), {}))
     total_subs = 0
     for p in _iter_all_paragraphs(d):
-        total_subs += _replace_in_paragraph(p, values)
+        total_subs += _replace_in_paragraph(p, flat_values)
 
     log.info("Substituted %d tokens", total_subs)
     # Cove-only WORK rows: drop the "~0 SF of epoxy flooring and " prefix now that

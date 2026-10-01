@@ -380,6 +380,7 @@ const api = new Function(
   let templateBlocks = null;
   let templateVersion = "tv-1";
   let templateLegacyFloorS = 0;
+  let templatePredecessors = [];   // savedVersionMatches: proven older versions of this template
   const TWIPS_PER_PT = 20;
   const INDENT_STEP_TW = 288;
   const INDENT_MAX_TW = 2880;

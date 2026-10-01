@@ -311,6 +311,9 @@ const FORM_TO_CELL = {
   city_state:        "Epoxy!C3",   // sits next to the address
   approx_start_date: "Epoxy!B7",
   architect:         "Epoxy!B8",
+  // The GC forms' "Drawings ... dated" (intake, 2026-10-02). Polish!B9 and the other tabs'
+  // B9 are =Epoxy!B9, so the one literal carries them, exactly as Architect's B8 does.
+  drawings_dated:    "Epoxy!B9",
   // Quantities from Screen 1 → matching estimate cells. Without these
   // the user sees zero material/cost-per-SF on first load until they
   // re-type the same numbers they already gave us.
@@ -342,6 +345,7 @@ const GYP_FORM_TO_CELL = {
   city_state:        `${GYP_BASE}!C4`,
   approx_start_date: `${GYP_BASE}!B9`,
   architect:         `${GYP_BASE}!B10`,
+  drawings_dated:    `${GYP_BASE}!B11`,
   contact_name:      `${GYP_BASE}!G2`,
   contact_email:     `${GYP_BASE}!H2`,
   contact_phone:     `${GYP_BASE}!I2`,
@@ -4827,6 +4831,26 @@ document.getElementById("autofill-btn").addEventListener("click", async (e) => {
         "Epoxy!B6":"Taxable", "Epoxy!D6":"Remodel",  "Epoxy!B9":"Drawings dated",
         "Epoxy!B10":"New/Reno",
       };
+      // DRAWINGS DATED REACHES THE PROPOSAL TOO. The AI writes it to Epoxy!B9 below, but the GC
+      // proposal's spec line reads the intake's own `drawings_dated`, so an intake left blank would
+      // print Kyle's placeholder date while the sheet shows the AI's. Filled into the intake ONLY
+      // when the estimator left it blank -- a date they typed is theirs and wins. M/D/YY or ISO.
+      try {
+        const aiDate = String(j.cell_values["Epoxy!B9"] == null ? "" : j.cell_values["Epoxy!B9"]).trim();
+        const live = (TW.getState() || {}).drawings_dated;
+        if (aiDate && !(live && String(live).trim())) {
+          let iso = "";
+          const us = /^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})$/.exec(aiDate);
+          const isoM = /^(\d{4})-(\d{2})-(\d{2})$/.exec(aiDate);
+          if (us) {
+            const yr = us[3].length === 2 ? "20" + us[3] : us[3];
+            iso = yr + "-" + us[1].padStart(2, "0") + "-" + us[2].padStart(2, "0");
+          } else if (isoM) {
+            iso = aiDate;
+          }
+          if (iso) TW.setState({ drawings_dated: iso });
+        }
+      } catch (e) { /* a draft that cannot be written keeps the sheet's value only */ }
       const narrativeKeys = ["system_name","texture","scope_notes","schedule_notes","exclusions"];
       const carriedNarrative = {};
       const filledFlags = [];

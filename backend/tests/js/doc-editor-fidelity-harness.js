@@ -335,6 +335,9 @@ const LIFTED = [
   fn("effectiveWorkType"),
   fn("fillHtml"), fn("fillPlain"), fn("runStyleCss"), fn("blockHtml"),
   fn("singleTokenHint"), fn("setBlockContent"),
+  // The editor's view of the token values: a blank token shows the template's own placeholder.
+  // refreshDocumentFills and restoreEmptiedClause both draw through it.
+  fn("withTokenDefaults"),
   // A PRICE paragraph (a GC / Gyp tax row, polish Direct's base line) keeps its untouched figures
   // as {{tokens}} (storedText) and is marked only for a dollar figure of its own
   // (priceParagraphMoneyOff); setBlockContent shows or hides a free tax row by the rule
@@ -410,6 +413,13 @@ function makePage(label) {
     let flowMode = false;
     let templateVersion = "";
     let templateLegacyFloorS = 0;
+    // savedVersionMatches' third answer: older content versions of THIS template whose saved
+    // edits still land on the same paragraphs (/api/proposal-template sends them). Settable,
+    // because "a replaced template keeps its drafts' edits" is one of the things under test.
+    let templatePredecessors = [];
+    // What a blank token prints on this template (withTokenDefaults, which refreshDocumentFills
+    // and restoreEmptiedClause draw through). Settable for the same reason.
+    let templateTokenDefaults = {};
     let templateBlocks = null;
     let _overridesTimer = null, _fillsTimer = null;
     const blockById = new Map();
@@ -552,6 +562,8 @@ function makePage(label) {
       persist: () => schedulePersistOverrides(),
       refreshFills: (tokens) => { TOKENS = tokens; refreshDocumentFills(); },
       version: () => templateVersion,
+      setPredecessors: (list) => { templatePredecessors = list; },
+      setTokenDefaults: (d) => { templateTokenDefaults = d; },
     };
     `
   )(document, window, docSurface, F, Node, TW, El, Ev, persists, label);
@@ -983,6 +995,56 @@ out.fixture = { block115: BLOCK_115.runs, tokens: TOKENS_A };
     restored: restored,
     stored: JSON.parse(JSON.stringify(TW.getState().paragraph_overrides_all["epoxy:Direct"].items)),
   };
+}
+
+// ═══ 12b. …unless the server names that version a PROVEN PREDECESSOR of this template ═════════
+// Kyle's re-saved GC forms (2026-10-02) replaced three files whose paragraph walk is identical, so
+// /api/proposal-template names the old content hash in template_version_predecessors, and an entry
+// stamped with it is replayed onto the same paragraph. The next save stamps it current.
+{
+  const seed = () => Object.assign(JSON.parse(JSON.stringify(SEED)), {
+    paragraph_overrides_all: {
+      "epoxy:Direct": { template_version: "tv-OLD", items: [
+        { id: 115, text: "Scope:  kept across the swap", runs: [{ text: "Scope:  kept across the swap", bold: true }] }] },
+    },
+  });
+  STORE.blob = seed();
+  const p = makePage("predecessor");
+  p.setPredecessors(["tv-OLD"]);
+  p.mount(TEMPLATE, TOKENS_A, VER);
+  p.restore("epoxy", "Direct", TOKENS_A);
+  const restored = p.snapshot(115);
+  p.persist();
+  const after = JSON.parse(JSON.stringify(TW.getState().paragraph_overrides_all["epoxy:Direct"]));
+  // The same entry when the server names a DIFFERENT predecessor: still refused.
+  STORE.blob = seed();
+  const q = makePage("not-its-predecessor");
+  q.setPredecessors(["tv-SOMETHING-ELSE"]);
+  q.mount(TEMPLATE, TOKENS_A, VER);
+  q.restore("epoxy", "Direct", TOKENS_A);
+  out.predecessor = { restored: restored, after: after, otherRestored: q.snapshot(115) };
+}
+
+// ═══ 12c. A BLANK TOKEN SHOWS THE TEMPLATE'S OWN PLACEHOLDER, and is still not an edit ════════
+// The GC spec line, as /api/proposal-template serves it. With the intake fields blank the page
+// draws what the document prints there (token_defaults, Kyle's words); a value typed at intake
+// replaces it; clearing it brings the placeholder back. None of that is the estimator's edit.
+{
+  STORE.blob = JSON.parse(JSON.stringify(SEED));
+  const SPEC = { id: 113, text: "Polished Concrete: per Spec {{spec_section}} & Drawings by {{architect}} dated {{drawings_dated_formatted}} (NO spec)",
+                 runs: [Object.assign({ text: "Polished Concrete: per Spec {{spec_section}} & Drawings by {{architect}} dated {{drawings_dated_formatted}} (NO spec)", bold: false }, FMT)] };
+  const p = makePage("token-defaults");
+  p.setTokenDefaults({ spec_section: "033543", architect: "xx Architects", drawings_dated_formatted: "8/1/26" });
+  p.mount([SPEC], {}, VER);
+  p.refreshFills({ spec_section: "", architect: null });
+  const blank = p.snapshot(113);
+  const blankCollect = p.collect();
+  p.refreshFills({ spec_section: "033543", architect: "Gould Evans", drawings_dated_formatted: "8/15/26" });
+  const filled = p.snapshot(113);
+  p.refreshFills({ spec_section: "033543", architect: "  ", drawings_dated_formatted: "8/15/26" });
+  const cleared = p.snapshot(113);
+  out.tokenDefaults = { blank: blank, blankCollect: blankCollect, filled: filled, cleared: cleared,
+                        finalCollect: p.collect() };
 }
 
 // ═══ 13. An untouched document still ships NOTHING ═══════════════════════════════════════════

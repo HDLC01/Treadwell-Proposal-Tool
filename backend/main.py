@@ -5220,6 +5220,16 @@ def _ensure_value_aliases(values: Dict[str, Any], audience=None) -> None:
         if _bd:
             _y, _mo, _d = _bd.groups()
             values["bid_date_formatted"] = f"{int(_mo)}/{int(_d)}/{_y[2:]}"
+    # The GC spec line's "Drawings ... dated" (intake `drawings_dated`, an ISO date), M/D/YY like
+    # the header date. The browser sends it (computeTokenValues); this is the same rule for a
+    # replayed payload that holds only the date. Something typed that is not an ISO date prints as
+    # typed. A blank stays blank: the GC file then prints Kyle's own date in its place
+    # (proposal_writer.TEMPLATE_TOKEN_DEFAULTS), and nothing invents one here.
+    if _blank(values.get("drawings_dated_formatted")) and not _blank(values.get("drawings_dated")):
+        _dd = str(values.get("drawings_dated")).strip()
+        _dm = re.match(r"^(\d{4})-(\d{2})-(\d{2})", _dd)
+        values["drawings_dated_formatted"] = (
+            f"{int(_dm.group(2))}/{int(_dm.group(3))}/{_dm.group(1)[2:]}" if _dm else _dd)
     # Polish's Area and Total rows are WHOLE-LINE tokens -- "{{area_description}}"
     # and "{{total_label}}", not an amount token beside static words -- so the
     # base_bid/material_tax backfills above never reach them and a payload without
@@ -5439,6 +5449,15 @@ def api_proposal_template(request: Request, work_type: str = "epoxy", audience: 
         # second (see `template_versions`); 0 = no legacy stamp is. The editor's
         # restore guards apply the same rule the backend's `_template_version_accepts` does.
         "template_version_legacy_floor_s": template_versions.legacy_floor_s(template_path),
+        # Older content versions of THIS file whose saved edits still land on the same paragraphs
+        # (`template_versions.PREDECESSOR_VERSIONS`: a template replaced by a re-saved form with a
+        # proven-identical walk). The editor's savedVersionMatches accepts them, as
+        # `_template_version_accepts` does at generate.
+        "template_version_predecessors": list(template_versions.predecessor_versions(template_path)),
+        # What a blank token prints on this template -- Kyle's own placeholder on the GC spec,
+        # finish and addenda lines (proposal_writer.TEMPLATE_TOKEN_DEFAULTS). The editor shows the
+        # same words for a blank field that fill_proposal prints; it never sends them back.
+        "token_defaults": proposal_writer.template_token_defaults(work_type, audience or None),
         "geometry": geometry,
         "blocks": blocks,
         # Ids of the free-paragraph Options heading(s), so the editor can draw the blank lines

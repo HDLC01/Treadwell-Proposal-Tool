@@ -449,12 +449,32 @@ GYP_SHEET = 'Gyp (USG 1-8")'
 GYP_SHEETS = [GYP_SHEET, 'Gyp (USG N12ULTRA)', 'Gyp (USG N25 1-4")', 'Gyp (GWorx SC190)', 'Gyp (FR)']
 GYP_CELL_MAP: Dict[str, str] = {          # base sheet only (offset +1 row vs Epoxy; NOT =Epoxy! mirrors)
     "project_name": "B2", "bid_date": "B3", "address": "B4", "city_state": "C4",
-    "approx_start_date": "B9", "architect": "B10",
+    "approx_start_date": "B9", "architect": "B10", "drawings_dated": "B11",
     "contact_name": "G2", "contact_email": "H2", "contact_phone": "I2",
 }
 GYP_SF_MAP: Dict[str, str] = {            # written to ALL 5 gyp sheets
     "gyp_soft_sf": "G9", "gyp_hard_sf": "I9", "gyp_corridor_sf": "K9",
 }
+
+# ─── The "Specs+Dwgs+Addn" tab: the intake's drawings / spec / addenda fields ─────
+# Kyle's record of the documents a bid was priced from, in TEMPLATE coordinates:
+#   Drawings        header row 2  "Drawing | Description | Page # | Notes",  rows 3-11
+#   Specifications  header row 13 "Section | Description | Page # | Notes",  rows 14-22
+#   Addenda         header row 24 "# | Impact to Scope",                     rows 25-53
+# The intake fills the FIRST row of the first two tables and numbers the addenda rows:
+#   drawing row 3  A = the finish schedule's sheet (`plan_sheet`), B = "Finish Schedule",
+#                  D = the finish tag (`finish_tag`) -- the GC proposal's own line, "[PC] per the
+#                  Finish Schedule on A900"; written when either field is given
+#   spec row 14    A = the section (`spec_section`), as TEXT so "033543" keeps its zero
+#   addenda        A25.. = 1..N for N = `addenda_count`, at most the table's 29 rows
+# Descriptions, page numbers and each addendum's impact are Kyle's to write: nothing else is
+# filled. A cell is written only while the template holds it EMPTY (never a formula or a label),
+# and an edit typed on the estimate grid (cell_values) still wins, as on every other tab.
+SPECS_SHEET = "Specs+Dwgs+Addn"
+SPECS_DRAWING_ROW = 3
+SPECS_SPEC_ROW = 14
+SPECS_ADDENDA_ROWS = range(25, 54)
+SPECS_FINISH_SCHEDULE = "Finish Schedule"
 
 # Every sheet that holds the "Taxable?" answer as its OWN literal.
 #
@@ -975,6 +995,11 @@ def fill_estimate(
                     if name in wb.sheetnames:
                         wb[name][coord] = _coerce(values[field])
 
+    # The intake's drawings / spec / addenda fields -> the Specs+Dwgs+Addn tab, with the other
+    # named-field writes (template coordinates, so they ride the structural edits below).
+    if SPECS_SHEET in wb.sheetnames:
+        _write_specs_tab(wb[SPECS_SHEET], values)
+
     # 1.4 The Taxable? answer reaches every sheet that holds it as a literal, not
     # just Epoxy!B6. See TAXABLE_FLAG_CELLS: each priced sheet's sales-tax rate reads
     # its OWN flag cell, and Leveling / the gyp base / 'Gyp (FR)' hold theirs
@@ -1058,6 +1083,60 @@ def fill_estimate(
     wb.save(buf)
     buf.seek(0)
     return buf.read()
+
+
+def _text_cell(v: Any) -> str:
+    """An intake answer as literal cell TEXT: stripped, never coerced to a number (a spec section
+    is "033543", not 33543), and with a leading formula trigger neutralised the way `_coerce`
+    neutralises one."""
+    s = "" if v is None else str(v).strip()
+    return "'" + s if s[:1] in ("=", "+", "-", "@") else s
+
+
+def _whole_number(v: Any) -> int:
+    """`addenda_count` as a count: a whole number >= 0, else 0 (nothing is numbered)."""
+    if isinstance(v, bool):
+        return 0
+    try:
+        n = float(str(v).strip()) if not isinstance(v, (int, float)) else float(v)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+    # inf / -inf / nan, and anything past the table anyway: never int(inf) (OverflowError, a 500).
+    if n != n or n in (float("inf"), float("-inf")) or n < 0 or n > 10 ** 6 or n != int(n):
+        return 0
+    return int(n)
+
+
+def specs_tab_cells(values: Mapping[str, Any]) -> Dict[str, Any]:
+    """{template address: value} the intake writes on the Specs+Dwgs+Addn tab (see SPECS_SHEET)."""
+    out: Dict[str, Any] = {}
+    sheet, tag = _text_cell(values.get("plan_sheet")), _text_cell(values.get("finish_tag"))
+    if sheet or tag:
+        if sheet:
+            out[f"A{SPECS_DRAWING_ROW}"] = sheet
+        out[f"B{SPECS_DRAWING_ROW}"] = SPECS_FINISH_SCHEDULE
+        if tag:
+            out[f"D{SPECS_DRAWING_ROW}"] = tag
+    spec = _text_cell(values.get("spec_section"))
+    if spec:
+        out[f"A{SPECS_SPEC_ROW}"] = spec
+    rows = list(SPECS_ADDENDA_ROWS)
+    for i in range(min(_whole_number(values.get("addenda_count")), len(rows))):
+        out[f"A{rows[i]}"] = i + 1
+    return out
+
+
+def _write_specs_tab(ws, values: Mapping[str, Any]) -> int:
+    """Land `specs_tab_cells(values)` on the tab -- each only where the template's cell is empty."""
+    n = 0
+    for addr, val in specs_tab_cells(values).items():
+        if ws[addr].value not in (None, ""):
+            log.warning("estimate_writer: %s!%s is not empty in the template; not writing %r",
+                        ws.title, addr, val)
+            continue
+        ws[addr] = val
+        n += 1
+    return n
 
 
 def _write_alternate_tab(wb, alternate: Mapping[str, Any],

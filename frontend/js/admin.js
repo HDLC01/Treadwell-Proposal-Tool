@@ -264,7 +264,7 @@
             only be hidden, not sealed:</strong> ${hideOnly.map(t=>`<strong>${esc(t.label)}</strong>`)
               .join(", ")}. Every API route their pages read is read by another page too — the
             Analytics payload is also the Bid Calendar's, the Item Library's assemblies also price
-            the Polish beta, the pipeline feeds Direct Projects, General Contractor and Notification Sending — so
+            the Polish beta, the pipeline feeds Direct Projects, GC Projects and Notification Sending — so
             refusing those routes would break a page nobody restricted. Switching one off removes
             the tab and blocks the page; somebody who knows the route can still read the data.</p>`:""}
           <p><strong>Auto Followups is the exception worth knowing about.</strong> Saving it is not
@@ -276,8 +276,8 @@
             units; everyone may pick from them), <strong>Markup</strong> (only an admin edits a
             rate or a formula; everyone reads them and sees how a job is priced),
             <strong>Notification Sending</strong> (only an admin adds, removes or toggles anyone
-            but themselves), and <strong>Direct Projects</strong> and <strong>General
-            Contractor</strong> (only an admin reassigns someone else's project).</p>
+            but themselves), and <strong>Direct Projects</strong> and <strong>GC
+            Projects</strong> (only an admin reassigns someone else's project).</p>
         </div></div>`;
     }
 
