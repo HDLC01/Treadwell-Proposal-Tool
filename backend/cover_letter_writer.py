@@ -579,6 +579,70 @@ def _split_label_overrides(overrides: list, labels: Mapping[int, str]) -> list:
 
 
 # ─── Fill ─────────────────────────────────────────────────────────────
+_EMU_PER_TWIP = 635          # 914400 EMU per inch / 1440 twips per inch
+
+
+def pin_column_anchors_to_page(d) -> int:
+    """Rewrite each body image positioned relative to its COLUMN (or margin) as the same position
+    relative to the PAGE, worked out from the margins of the section the image actually sits in.
+
+    WHY. Kyle's letter templates open with a near-empty section (left margin 2.375") followed by a
+    CONTINUOUS section (left margin 0.69") that holds the letter and its full-page letterhead,
+    anchored -0.69" from the column. Word measures that column in the image's own section, so the
+    art lands at x=0. LibreOffice -- the PDF renderer -- lays a continuous section's margins out
+    inside the FIRST section's page, so the art landed 121.5pt to the right: the logo cut to "TRE"
+    and the red bar starting mid-page (walk of 2026-10-02). A page-relative offset means the same
+    thing to both, so this changes nothing in Word and fixes the PDF.
+
+    ONLY single-column sections (in a multi-column one "column" is not the margin), only
+    horizontal positions with a numeric offset; vertical positions are left alone. Returns the
+    number of images rewritten."""
+    from docx.oxml.ns import qn
+    body = d.element.body
+    W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    WP = "{http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing}"
+    # Each top-level block's governing section: the next sectPr at or after it (a paragraph's own
+    # pPr/sectPr ends a section; the body's last sectPr governs whatever follows the last break).
+    blocks = list(body)
+    governing = [None] * len(blocks)
+    current = body.find(qn("w:sectPr"))
+    for i in range(len(blocks) - 1, -1, -1):
+        el = blocks[i]
+        sp = el.find(W + "pPr/" + W + "sectPr") if el.tag == W + "p" else None
+        if sp is not None:
+            current = sp
+        governing[i] = current
+    pinned = 0
+    for el, sect in zip(blocks, governing):
+        if sect is None:
+            continue
+        cols = sect.find(W + "cols")
+        if cols is not None and (cols.get(W + "num") or "1") not in ("", "1"):
+            continue
+        mar = sect.find(W + "pgMar")
+        if mar is None:
+            continue
+        try:
+            left_twips = int(mar.get(W + "left") or 0)
+        except ValueError:
+            continue
+        for anchor in el.iter(WP + "anchor"):
+            pos = anchor.find(WP + "positionH")
+            if pos is None or pos.get("relativeFrom") not in ("column", "margin"):
+                continue
+            off = pos.find(WP + "posOffset")
+            if off is None or off.text is None:
+                continue
+            try:
+                value = int(off.text.strip())
+            except ValueError:
+                continue
+            off.text = str(left_twips * _EMU_PER_TWIP + value)
+            pos.set("relativeFrom", "page")
+            pinned += 1
+    return pinned
+
+
 def fill_cover_letter(
     *,
     work_type: str,
@@ -639,6 +703,10 @@ def fill_cover_letter(
         log.warning("Cover letter (%s) still shows raw token(s): %s",
                     template_path.relative_to(TEMPLATES_ROOT).as_posix(),
                     ", ".join(sorted(leftover)))
+
+    n_pinned = pin_column_anchors_to_page(d)
+    if n_pinned:
+        log.info("Cover letter: pinned %d column-relative image(s) to the page", n_pinned)
 
     buf = io.BytesIO()
     d.save(buf)
