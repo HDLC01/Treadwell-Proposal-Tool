@@ -172,6 +172,100 @@ def test_deleting_twice_is_not_a_success_the_second_time(store):
     assert library.delete_item(row["id"]) is False
 
 
+# ── the two reserved rows: dye and the joint filler kit ────────────────
+# Hanz: "joint filler and die should be library items so that we are able to edit them as
+# well." Seeded once by the schema files at a RESERVED id (backend/library.py's
+# RESERVED_ITEM_IDS) that create_item can never recreate -- it always mints a fresh uuid, the
+# same guarantee library_labor's 'travel' row already relies on. A delete would therefore lose
+# the editable price for good, so delete_item refuses it outright; an EDIT is the ordinary
+# update_item path and must stay open, because editing them is the whole point.
+def _reserved(rid):
+    seeds = {
+        "joint-filler-kit": {"id": "joint-filler-kit", "name": "Joint filler, 10 gal kit",
+                             "unit": "Kit", "buy_qty": 1, "unit_cost": 500.0, "coverage": 3500.0,
+                             "waste_pct": 0.0, "roundup": True, "deleted_at": None},
+        "dye": {"id": "dye", "name": "Dye, per coat", "unit": "SF", "buy_qty": 1,
+                "unit_cost": 0.14, "coverage": 1.0, "waste_pct": 0.0, "roundup": False,
+                "deleted_at": None},
+        # 2026-10-01 (Hanz: "All 3 exactly like materials"). Buys nothing: no cost, no coverage.
+        "remove-existing-jf": {"id": "remove-existing-jf", "name": "Remove existing joint filler",
+                               "unit": "SF", "buy_qty": 1, "unit_cost": None, "coverage": None,
+                               "waste_pct": 0.0, "roundup": False, "deleted_at": None},
+    }
+    return dict(seeds[rid])
+
+
+@pytest.mark.parametrize("rid", ["dye", "joint-filler-kit", "remove-existing-jf"])
+def test_a_reserved_row_cannot_be_deleted(store, rid):
+    """The guard fires before the store is touched -- the row is inserted directly (create_item
+    cannot make one at this id) and survives the refused delete. Both ids, so a guard naming only
+    one cannot pass for both."""
+    store["library_items"].append(_reserved(rid))
+    with pytest.raises(library.ValidationError):
+        library.delete_item(rid)
+    assert store["library_items"][0]["deleted_at"] is None, (
+        "the reserved row was soft-deleted despite the guard")
+
+
+@pytest.mark.parametrize("rid", ["dye", "joint-filler-kit", "remove-existing-jf"])
+def test_a_reserved_id_is_refused_even_with_no_row_seeded_yet(store, rid):
+    """A database the seed has not reached must not answer a delete on a reserved id with a
+    harmless-looking 404: this id may never be deleted, seeded or not, so the guard fires BEFORE
+    the existence check."""
+    with pytest.raises(library.ValidationError):
+        library.delete_item(rid)
+
+
+def test_the_reserved_ids_are_refused_through_the_api_as_a_400(store):
+    """THE SAME GUARD, THROUGH THE ROUTE. api_library_item_delete turns the ValidationError into
+    a 400 that says why, not a bare 500 -- the server-side half of the Items tab leaving the
+    Remove button off these rows, so a direct API call cannot take them either."""
+    store["library_items"].append(_reserved("joint-filler-kit"))
+    r = client.delete("/api/library/items/joint-filler-kit")
+    assert r.status_code == 400, r.text
+    assert "can't be removed" in r.json()["detail"]
+    assert store["library_items"][0]["deleted_at"] is None, (
+        "the row was soft-deleted despite the route refusing the request")
+
+
+def test_remove_existing_is_refused_through_the_api_like_the_other_two(store):
+    """THE THIRD RESERVED ROW, 2026-10-01, gets the same 400 through the route as the kit -- the
+    Items tab offers it no Remove, and a direct API call cannot take it either.
+
+    Mutation: leave remove-existing-jf out of RESERVED_ITEM_IDS."""
+    store["library_items"].append(_reserved("remove-existing-jf"))
+    r = client.delete("/api/library/items/remove-existing-jf")
+    assert r.status_code == 400, r.text
+    assert "can't be removed" in r.json()["detail"]
+    assert store["library_items"][0]["deleted_at"] is None, (
+        "the remove-existing row was soft-deleted despite the route refusing the request")
+
+
+def test_an_ordinary_material_still_deletes(store):
+    """The refusal is scoped to the two reserved ids: any other material removes as before."""
+    row = _mk_item(name="Densifier")
+    assert client.delete("/api/library/items/%s" % row["id"]).status_code == 200
+
+
+def test_the_reserved_rows_are_edited_like_any_material(store):
+    """EDITING IS THE POINT. The kit's cost, coverage, waste and roundup, and dye's cost, all go
+    through the ordinary PATCH and come back changed -- nothing about the reserved ids closes the
+    update path, which is the one the Items tab uses.
+
+    Mutation: extend the RESERVED_ITEM_IDS refusal to update_item."""
+    store["library_items"].extend([_reserved("joint-filler-kit"), _reserved("dye")])
+    r = client.patch("/api/library/items/joint-filler-kit",
+                     json={"unit_cost": "650", "coverage": "2000", "waste_pct": "10",
+                           "roundup": False})
+    assert r.status_code == 200, r.text
+    kit = r.json()["item"]
+    assert (kit["unit_cost"], kit["coverage"], kit["waste_pct"], kit["roundup"]) == (
+        650.0, 2000.0, 10.0, False), kit
+    r = client.patch("/api/library/items/dye", json={"unit_cost": "0.2"})
+    assert r.status_code == 200, r.text
+    assert r.json()["item"]["unit_cost"] == 0.2
+
+
 # ── assemblies: lines ─────────────────────────────────────────────────
 def test_an_assembly_needs_a_name():
     with pytest.raises(library.ValidationError):
@@ -202,11 +296,18 @@ def test_a_line_with_a_role_but_no_material_yet_is_kept():
     assert got["lines"][0]["item_id"] is None
 
 
-def test_a_lines_coverage_is_read_and_zero_becomes_unset():
+def test_a_lines_coverage_waste_and_roundup_no_longer_persist():
+    """Inverts the old rule this call used to prove. Hanz, 2026-09-21: "for the materials, we
+    must have coverage per unit, waste factor, roundup, and materials tab. And then it gets
+    pulled in to assemblies instead of it being in assemblies." A stale tab's lineForSave() still
+    queues all three keys on every save (see test_the_typed_query_never_reaches_the_server), so
+    the backend has to be the wall that refuses to store them — otherwise a browser tab open from
+    before this change could still write a per-line override back over the material's own
+    number."""
     got = library.validate_assembly({"name": "x", "lines": [
-        {"item_id": "a", "coverage": "775"}, {"item_id": "b", "coverage": 0}]})
-    assert got["lines"][0]["coverage"] == 775.0
-    assert got["lines"][1]["coverage"] is None
+        {"item_id": "a", "coverage": "775", "waste_pct": 40, "roundup": False}]})
+    line = got["lines"][0]
+    assert "coverage" not in line and "waste_pct" not in line and "roundup" not in line
 
 
 def test_too_many_lines_are_refused_rather_than_silently_dropped():
@@ -249,11 +350,10 @@ def test_garbage_inside_the_lines_list_is_skipped(store):
 def test_creating_and_reading_back_an_assembly(store):
     it = _mk_item()
     row = library.create_assembly({"name": "MACRO Flake", "lines": [
-        {"role": "1st BC", "item_id": it["id"], "coverage": 275}]}, "hanz@wetreadwell.com")
+        {"role": "1st BC", "item_id": it["id"]}]}, "hanz@wetreadwell.com")
     got = library.get_assembly(row["id"])
     assert got["name"] == "MACRO Flake"
     assert got["lines"][0]["item_id"] == it["id"]
-    assert got["lines"][0]["coverage"] == 275.0
 
 
 def test_an_assembly_with_no_lines_column_reads_as_empty(store):
@@ -313,7 +413,7 @@ def test_the_assembly_endpoints_round_trip(store):
     r = client.patch("/api/library/assemblies/%s" % aid,
                      json={"lines": [{"role": "Top", "item_id": "x", "coverage": "775"}]})
     assert r.status_code == 200
-    assert r.json()["assembly"]["lines"][0]["coverage"] == 775.0
+    assert r.json()["assembly"]["lines"][0]["item_id"] == "x"
 
     assert client.delete("/api/library/assemblies/%s" % aid).status_code == 200
     assert client.get("/api/library/assemblies").json()["assemblies"] == []

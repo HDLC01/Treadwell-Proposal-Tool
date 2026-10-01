@@ -115,11 +115,23 @@ def test_the_projects_item_is_labelled_proposals_database(sidebar):
         "the Proposals Database item is missing; nav items are %s" % (_nav_labels(sidebar),))
 
 
-def test_the_portal_item_is_labelled_active_projects(sidebar):
-    """Kills reverting to "Customer Portal CRM". The href must stay /portal.html: the follow-ups
-    board, the notification bell and projects.js all link into that page."""
-    assert re.search(r'navItem\("/portal\.html",\s*"[^"]+",\s*"Active Projects"\)', sidebar), (
-        "the Active Projects item is missing; nav items are %s" % (_nav_labels(sidebar),))
+def test_the_portal_item_is_labelled_direct_projects(sidebar):
+    """Kills reverting to "Customer Portal CRM" or to "Active Projects". The href must stay
+    /portal.html: the follow-ups board, the notification bell and the portal's staff emails all
+    link into that page.
+
+    RENAMED 2026-09-29. Hanz: "We relabel Active projects to Direct Projects and we add a new
+    pipeline named 'General Contractor' as a new sidebar." Same row, same href, new name."""
+    assert re.search(r'navItem\("/portal\.html",\s*"[^"]+",\s*"Direct Projects"\)', sidebar), (
+        "the Direct Projects item is missing; nav items are %s" % (_nav_labels(sidebar),))
+
+
+def test_the_general_contractor_board_is_in_the_sidebar(sidebar):
+    """The second board, as its own row with its own address. The label is Hanz's, word for word:
+    "we add a new pipeline named 'General Contractor' as a new sidebar"."""
+    assert re.search(r'navItem\("/gc-projects\.html",\s*"[^"]+",\s*"General Contractor"\)',
+                     sidebar), (
+        "the General Contractor item is missing; nav items are %s" % (_nav_labels(sidebar),))
 
 
 def test_no_sidebar_item_still_carries_an_old_name(sidebar):
@@ -128,6 +140,8 @@ def test_no_sidebar_item_still_carries_an_old_name(sidebar):
     labels = [lbl for _, _, lbl in _nav_labels(sidebar)]
     assert "Projects" not in labels, "the old bare 'Projects' label is still in the sidebar"
     assert "Customer Portal CRM" not in labels, "the old 'Customer Portal CRM' label survives"
+    assert "Active Projects" not in labels, (
+        "the 'Active Projects' label survives beside Direct Projects (renamed 2026-09-29)")
 
 
 # ── the follow-ups section: removed, then put back ────────────────────────────
@@ -153,8 +167,13 @@ def test_the_follow_ups_board_IS_in_the_sidebar_again(sidebar):
         % (_nav_labels(sidebar),))
 
 
-def test_the_follow_ups_board_sits_directly_under_active_projects(sidebar):
+def test_the_follow_ups_board_sits_directly_under_the_two_project_boards(sidebar):
     """Where it went back, and why that is not arbitrary.
+
+    TWO BOARDS ABOVE IT SINCE 2026-09-29. The one board became Direct Projects and General
+    Contractor, and Hanz put the new one "as a new sidebar" directly under the old one. The
+    population Follow-ups reads is both boards together, so the three still read as one group:
+    Direct Projects, General Contractor, Follow-ups, in that order and with nothing between.
 
     It is the same population as Active Projects read a different way, and its own rows navigate
     INTO that page (/portal.html?open=...&sec=followup), so filing it away from the board would put
@@ -173,9 +192,16 @@ def test_the_follow_ups_board_sits_directly_under_active_projects(sidebar):
     nxt = sidebar.find('tw-section">', i + 1)
     assert nxt == -1 or j < nxt, "the Follow-ups link fell out of the Active section"
     k = sidebar.index("/portal.html")
-    assert k < j, "Active Projects is no longer the first item under Active"
-    assert sidebar[k:j].count("navItem(") == 1, (
-        "something was inserted between Active Projects and Follow-ups; they are one population "
+    g = sidebar.index("/gc-projects.html")
+    assert k < g < j, "Direct Projects, General Contractor and Follow-ups are out of order"
+    first = sidebar.find("navItem(", i)
+    assert sidebar.find('"/portal.html"', first) == first + len("navItem("), (
+        "Direct Projects is no longer the first item under Active")
+    assert sidebar[k:g].count("navItem(") == 1, (
+        "something was inserted between Direct Projects and General Contractor; the new board goes "
+        "directly under the old one")
+    assert sidebar[g:j].count("navItem(") == 1, (
+        "something was inserted between the project boards and Follow-ups; they are one population "
         "read two ways and are meant to be read together")
 
 
@@ -304,7 +330,8 @@ def test_the_sidebar_has_exactly_three_headings(sidebar):
         "heading has %r, BETA-tagged calls are %r" % (grouped["Beta"], beta_hrefs))
     assert grouped["Settings"] == ["/notifications.html", "/followup-settings.html",
                                    "/admin.html"], grouped["Settings"]
-    assert len(grouped["Active"]) == 9, grouped["Active"]
+    # Ten since 2026-09-29: the General Contractor board joined the daily list, under Direct Projects.
+    assert len(grouped["Active"]) == 10, grouped["Active"]
     for beta in beta_hrefs:
         assert beta not in grouped["Active"], "%s leaked into the daily list" % beta
 
@@ -379,10 +406,15 @@ def test_the_portal_page_calls_itself_what_the_sidebar_calls_it():
     Projects while the page it opened was still headed and tabbed "Customer Portal CRM", which
     reads as having clicked the wrong thing. Same reason as the test above, and the tab title
     matters more here because this is the page Troy leaves open all day.
+
+    Renamed again on 2026-09-29, to Direct Projects; the General Contractor page is these same
+    bytes with the name swapped (test_gc_pipeline.py checks what that address serves).
     """
     html = (FRONTEND / "portal.html").read_text(encoding="utf-8")
     html = re.sub(r"<!--.*?-->", "", html, flags=re.S)      # the comment records the old name
-    assert "<h1>Active Projects</h1>" in html, "the page heading was not renamed"
+    assert "<h1>Direct Projects</h1>" in html, "the page heading was not renamed"
     assert "Customer Portal CRM" not in html, (
-        "the old name survives on the page the sidebar calls Active Projects")
-    assert "<title>Active Projects" in html, "the browser tab still says Customer Portal CRM"
+        "the old name survives on the page the sidebar calls Direct Projects")
+    assert "Active Projects" not in html, (
+        "the old name survives on the page the sidebar calls Direct Projects")
+    assert "<title>Direct Projects" in html, "the browser tab still says the old name"

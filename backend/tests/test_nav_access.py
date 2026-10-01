@@ -297,12 +297,55 @@ def test_the_page_refusal_only_tabs_own_no_api():
     Proposals Database's own list. Claiming it would 403 a page nobody restricted, so the row buys
     a page refusal and no data refusal — exactly the trade every other name here makes. The Admin
     page needs no edit alongside it: js/admin.js:167 derives the "hides the tab only" wording from
-    the row's own empty `api` at render time rather than from a second copy of this list."""
+    the row's own empty `api` at render time rather than from a second copy of this list.
+
+    /portal.html LEFT THE LIST on 2026-09-29: it now owns /api/portal/deposit/ (the bank-detail
+    reveal), so denying the board is a real data refusal again, not just a page refusal. The Admin
+    page's wording for this row changes accordingly — see test_denying_the_board_takes_the_deposit_
+    reveal_and_nothing_shared below for the data half of that claim."""
     assert [h for h, t in nav_access.TABS.items() if not t["api"]] == [
-        "/portal.html", "/polish-intake.html", "/polish-estimates.html", "/projects.html",
+        "/gc-projects.html", "/polish-intake.html", "/polish-estimates.html", "/projects.html",
         "/library.html", "/markup.html", "/notifications.html", "/admin.html"], (
         "the set of tabs that own no private endpoint has changed; the Admin page's on-screen "
         "wording about them is derived from this and needs re-reading")
+
+
+def test_portal_html_can_never_actually_be_denied():
+    """/portal.html is in LOCKED (HOME_PAGE in auth.js — locking it out would strand whoever it was
+    done to). sanitize() drops it from a deny map on save(), silently, same as the admin route's
+    400 does loudly. This is the thing that makes the next test's policy synthetic rather than
+    something save() could ever produce — recorded here so nobody re-discovers it by watching a
+    real deny map do nothing."""
+    saved = nav_access.save({"user": ["/portal.html"]}, "k@x.com")
+    assert saved["deny"] == {}
+    assert nav_access.page_denied("user", "/portal.html") is None
+
+
+def test_the_deposit_reveal_prefix_would_be_denied_if_the_board_ever_could_be():
+    """/api/portal/deposit/ is the reveal button's route and it is claimed by /portal.html's `api`
+    tuple in TABS — but /portal.html can never be denied for real (previous test), so this can't be
+    driven through save() the way test_denying_the_follow_ups_board_... is for a normal tab. It
+    passes a POLICY DICT DIRECTLY (is_api_denied's second, unvalidated arg) to prove the TABS wiring
+    itself is correct and ready, in case /portal.html is ever taken out of LOCKED. Until then, the
+    real protection on this route is sign-in alone (main.py's _auth_gate) — see nav_access.py's
+    comment on the TABS entry for why that is not a regression."""
+    policy = {"deny": {"user": ["/portal.html"]}}
+    assert nav_access.is_api_denied("user", "/api/portal/deposit/dep-1/reveal", policy) is True
+    for shared in ("/api/portal/pipeline", "/api/portal/proposal/p1", "/api/portal/proposal/p1/reply",
+                   "/api/portal/followups", "/api/notifications"):
+        assert nav_access.is_api_denied("user", shared, policy) is False, shared
+
+
+def test_the_deposit_reveal_prefix_has_no_caller_outside_portal_js():
+    """Backend ships before frontend for this feature (2026-09-29): portal.js does not call
+    /api/portal/deposit/ yet, so this cannot yet assert portal.js IS a caller the way the
+    Follow-ups feed's equivalent test does. It asserts the narrower, still-real thing: nothing
+    OTHER than portal.js reads it. If that ever stops being true the prefix has to come out of
+    TABS or some other page goes blank for a role somebody only meant to keep off the board."""
+    js = sorted(p.name for p in (FRONTEND / "js").glob("*.js")
+                if "/api/portal/deposit/" in p.read_text(encoding="utf-8"))
+    assert set(js) <= {"portal.js"}, (
+        "%s also read /api/portal/deposit/, so the board may no longer own it" % js)
 
 
 def test_the_polish_beta_row_covers_both_of_its_pages():
@@ -350,8 +393,16 @@ def test_every_tab_in_the_table_is_a_real_page_and_every_sidebar_href_is_in_the_
 
     Compared against the NAV-VISIBLE tabs, not against all of TABS: a tab may be governed without
     being drawn (NO_SIDEBAR_TABS), and the test below is what stops that becoming an accident."""
+    # A BOARD PAGE IS A REAL PAGE WITH NO FILE OF ITS OWN. The General Contractor board is
+    # portal.html's bytes served at a second address (main.py, pipelines.board_page), so it is
+    # accepted here on that condition only: it is one of pipelines.BOARD_PAGE's addresses, and the
+    # file it is built from exists. test_gc_pipeline.py GETs the address and checks what comes back.
+    import pipelines
     for href, tab in nav_access.TABS.items():
         for page in tab["pages"]:
+            if page in pipelines.BOARD_PAGE.values() and not (FRONTEND / page.lstrip("/")).exists():
+                assert (FRONTEND / "portal.html").is_file(), "%s is built from a missing portal.html" % page
+                continue
             assert (FRONTEND / page.lstrip("/")).is_file(), "%s claims %s" % (href, page)
     hrefs = _sidebar_hrefs()
     visible = set(nav_access.TABS) - set(nav_access.NO_SIDEBAR_TABS)
@@ -476,11 +527,15 @@ def test_the_store_is_safe_across_threads():
     """Two admins saving at once must leave one whole policy on disk, not a mix of two."""
     import threading
     errors = []
+    # Deniable pages only — NOT a positional slice of TABS. /gc-projects.html landed at index 1 on
+    # 2026-09-29 and is LOCKED, so a worker naming it would have its save stripped down to an empty
+    # policy, which is a different behaviour than the race this test is checking.
+    deniable = [p for p in nav_access.TABS if p not in nav_access.LOCKED]
 
     def worker(i):
         try:
             for _ in range(20):
-                nav_access.save({"user": [list(nav_access.TABS)[i + 1]]}, "u%d@x.com" % i)
+                nav_access.save({"user": [deniable[i]]}, "u%d@x.com" % i)
                 nav_access.get()
         except Exception as exc:  # noqa: BLE001
             errors.append(exc)

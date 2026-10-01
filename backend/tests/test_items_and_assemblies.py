@@ -230,71 +230,106 @@ def test_clearing_a_cost_counts_as_a_revision(store):
     assert library.update_item(it["id"], {"unit_cost": ""})["cost_updated_at"]
 
 
-# ── waste factor and Roundup? on every line ───────────────────────────
-def test_a_line_carries_its_waste_factor_and_roundup_flag(store):
-    got = library.validate_assembly({"name": "x", "lines": [
-        {"item_id": "a", "coverage": 275, "waste_pct": "7.5", "roundup": False}]})
-    assert got["lines"][0]["waste_pct"] == 7.5
-    assert got["lines"][0]["roundup"] is False
+# ── waste factor and Roundup? moved off the line, onto the material ──
+# Hanz, 2026-09-21: "for the materials, we must have coverage per unit, waste factor, roundup,
+# and materials tab. And then it gets pulled in to assemblies instead of it being in assemblies."
+# Every test below that used to pin a LINE carrying its own waste/roundup is inverted rather than
+# deleted, so the old behaviour stays provably gone instead of merely untested.
+
+def test_an_item_carries_its_own_waste_factor_and_roundup_flag(store):
+    it = _mk_item(waste_pct="7.5", roundup=False)
+    assert it["waste_pct"] == 7.5
+    assert it["roundup"] is False
 
 
-def test_a_line_without_a_waste_factor_defaults_to_five_percent_on_both_sides(store):
-    """The two halves must agree. A row displaying 5% that was priced at 0% is a row lying about
-    its own arithmetic, and this is the assertion that catches them drifting apart."""
-    written = library.validate_assembly({"name": "x", "lines": [{"item_id": "a"}]})
-    assert written["lines"][0]["waste_pct"] == 5.0
-    asm = library.create_assembly({"name": "x", "lines": [{"item_id": "a", "coverage": 100}]},
-                                  "hanz@wetreadwell.com")
-    del store["library_assemblies"][0]["lines"][0]["waste_pct"]
-    assert library.get_assembly(asm["id"])["lines"][0]["waste_pct"] == 5.0
+def test_an_items_waste_factor_left_unset_reads_as_unset_not_five(store):
+    """Defaulting to 5% happens once, at price time, in library-core.js's wastePct() — not here.
+    Storing a literal 5 the first time anybody looks would make "nobody has set this" and
+    "somebody chose 5%" the same row, and the Items tab needs to tell those apart."""
+    it = _mk_item()
+    assert it["waste_pct"] is None
+    assert it["roundup"] is None
 
 
-def test_zero_waste_is_a_real_answer_and_stays_zero(store):
+def test_zero_waste_on_an_item_is_a_real_answer_and_stays_zero(store):
     """Kyle's own sheet has no waste factor, so his reproduced numbers depend on 0 surviving as 0
-    rather than being treated as "unset" and defaulted back to 5."""
-    got = library.validate_assembly({"name": "x", "lines": [
-        {"item_id": "a", "waste_pct": 0}]})
-    assert got["lines"][0]["waste_pct"] == 0.0
-    asm = library.create_assembly({"name": "x", "lines": [{"item_id": "a", "waste_pct": 0}]},
-                                  None)
-    assert library.get_assembly(asm["id"])["lines"][0]["waste_pct"] == 0.0
-
-
-def test_a_legacy_line_still_rounds_up(store):
-    """The page has promised "you cannot buy 3.7 kits" since it shipped. Absent must read as true,
-    or every assembly built during the beta silently reprices downwards."""
-    asm = library.create_assembly({"name": "x", "lines": [{"item_id": "a", "coverage": 100}]},
-                                  "hanz@wetreadwell.com")
-    del store["library_assemblies"][0]["lines"][0]["roundup"]
-    assert library.get_assembly(asm["id"])["lines"][0]["roundup"] is True
+    rather than being treated as "unset" and defaulted back to 5 — now on the material, since
+    that is where the number lives."""
+    it = _mk_item(waste_pct=0)
+    assert it["waste_pct"] == 0.0
 
 
 @pytest.mark.parametrize("bad,word", [(5000, "large"), (-5, "negative"), ("abc", "number")])
-def test_an_impossible_waste_factor_is_refused_with_a_readable_message(store, bad, word):
+def test_an_impossible_waste_factor_on_an_item_is_refused_with_a_readable_message(store, bad, word):
     """Refused, not guessed at, matching how a bad COST behaves — 5000% and -5% are different
-    mistakes and neither has an obvious intended value. The page keeps the typed number on screen
-    with the message beside it, so nothing is lost; silently saving 100% instead would hide a
-    fat finger inside a plausible-looking total."""
+    mistakes and neither has an obvious intended value. Inverts
+    test_an_impossible_waste_factor_is_refused_with_a_readable_message, which used to make this
+    same call against a LINE."""
     with pytest.raises(library.ValidationError) as e:
-        library.validate_assembly({"name": "x", "lines": [{"item_id": "a", "waste_pct": bad}]})
+        library.validate_item({"name": "x", "waste_pct": bad})
     assert word in str(e.value).lower()
+
+
+def test_an_items_waste_factor_and_roundup_round_trip_through_the_endpoint(store):
+    """The silent-drop trap: a Pydantic model that does not declare a field answers 200 and writes
+    nothing. `LibraryItemIn` names both fields for exactly this reason."""
+    it = _mk_item()
+    r = client.patch("/api/library/items/%s" % it["id"],
+                     json={"waste_pct": 12.5, "roundup": False})
+    assert r.status_code == 200
+    body = r.json()["item"]
+    assert body["waste_pct"] == 12.5 and body["roundup"] is False
+
+
+def test_a_line_no_longer_carries_its_own_waste_factor_or_roundup_flag(store):
+    """Inverts test_a_line_carries_its_waste_factor_and_roundup_flag. A line only names a material
+    now; both numbers belong to the item validated above."""
+    got = library.validate_assembly({"name": "x", "lines": [
+        {"item_id": "a", "waste_pct": "7.5", "roundup": False}]})
+    assert "waste_pct" not in got["lines"][0]
+    assert "roundup" not in got["lines"][0]
+
+
+@pytest.mark.parametrize("bad", [5000, -5, "abc"])
+def test_an_impossible_waste_factor_on_a_line_is_silently_ignored_not_refused(store, bad):
+    """The validation moved with the number: `_clean_lines` never reads waste_pct at all any more,
+    so a garbage value on a LINE cannot fail a save — there is nothing left to fail. The equivalent
+    guard now lives on the item, above."""
+    got = library.validate_assembly({"name": "x", "lines": [{"item_id": "a", "waste_pct": bad}]})
+    assert "waste_pct" not in got["lines"][0]
+
+
+def test_a_line_with_no_roundup_of_its_own_still_reads_as_true(store):
+    """Every line omits `roundup` now (see _clean_lines) — a legacy row from before 2026-09-22 and
+    a brand new line both have no roundup key at all, and both must keep reading as rounded up,
+    the promise this page has made since it shipped."""
+    asm = library.create_assembly({"name": "x", "lines": [{"item_id": "a"}]},
+                                  "hanz@wetreadwell.com")
+    assert "roundup" not in store["library_assemblies"][0]["lines"][0]
+    assert library.get_assembly(asm["id"])["lines"][0]["roundup"] is True
 
 
 def test_an_impossible_waste_factor_ALREADY_STORED_reads_clamped(store):
     """Defensive on the way out only. Nothing we write can produce this, but a hand-edited row or
-    an import could, and 5000% would quietly multiply a bid by fifty."""
+    an import could, and 5000% would quietly multiply a bid by fifty. Unaffected by the move to
+    the item — `_waste_of` still shapes whatever a stored LINE happens to carry, for a row saved
+    before 2026-09-22."""
     asm = library.create_assembly({"name": "x", "lines": [{"item_id": "a", "coverage": 100}]}, None)
     store["library_assemblies"][0]["lines"][0]["waste_pct"] = 5000
     assert library.get_assembly(asm["id"])["lines"][0]["waste_pct"] == 100.0
 
 
-def test_the_roundup_flag_round_trips_through_the_endpoint(store):
+def test_the_roundup_and_waste_flags_no_longer_round_trip_through_the_line_endpoint(store):
+    """Inverts test_the_roundup_flag_round_trips_through_the_endpoint. A line PATCH can still send
+    these keys — lineForSave() in library.js still queues them on purpose — but the assembly
+    endpoint must not let them stick; the read-shape's own defaults come back instead."""
     asm = library.create_assembly({"name": "MACRO Flake"}, "hanz@wetreadwell.com")
     r = client.patch("/api/library/assemblies/%s" % asm["id"], json={"lines": [
         {"item_id": "a", "coverage": 275, "waste_pct": 10, "roundup": False}]})
     assert r.status_code == 200
     line = r.json()["assembly"]["lines"][0]
-    assert line["roundup"] is False and line["waste_pct"] == 10.0
+    assert line["roundup"] is True and line["waste_pct"] == 5.0, (
+        "a line still carries its own flags — %r" % line)
 
 
 # ── vendors: a list, so one supplier keeps one spelling ───────────────

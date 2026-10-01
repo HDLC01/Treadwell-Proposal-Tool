@@ -41,6 +41,16 @@ downloaded .xlsx charged 9.475%, because ``_coerce`` turns a quoted-sheet-name f
 So: the .xlsx is asserted here through the real ``fill_estimate``; the on-screen chip/total and
 the proposal figure both come off the live HyperFormula engine, and ``taxable-flag-harness.js``
 asserts the same literal reached it, cell for cell, out of the shipped ``copyTab``.
+
+EVERY SHEET KEEPS ITS OWN (2026-09-30). Hanz: "for the options we follow each worksheets tax
+options", "in the generation of the files, it would have the wording tax or not based off the
+worksheet", and, asked whether an option should follow the base, "Stay independent". So the
+one-answer-per-job fan-out above is now the LEGACY pass a never-split draft gets once, on the
+open that splits it: from then on every flag-block sheet -- template or copy -- holds its own two
+literals, a new project starts them all at the intake's answers, a copy starts at its source's,
+and an option's price and its wording in the document come off its own sheet. Sections 5-7 below
+execute that end to end: the real browser code, then the real ``fill_estimate`` and the real
+document renderer on what it produced.
 """
 import io
 import json
@@ -76,13 +86,26 @@ def wb():
         return openpyxl.load_workbook(TEMPLATE, data_only=False)
 
 
+def _template_cells(wb):
+    """The shipped workbook's flag-block cells (and the two seal remodel-rate cells), handed to the
+    harness so its sheets hold what Kyle's file holds rather than what this file believes."""
+    import estimate_writer as ew
+    out = {}
+    for sheet, addrs in ew.FLAG_BLOCK_CELLS.items():
+        out[sheet] = {a: wb[sheet][a].value for a in addrs}
+    for sheet in ("Seal", "Seal (+Jnts)"):
+        out[sheet]["B75"] = wb[sheet]["B75"].value
+    return out
+
+
 @pytest.fixture(scope="module")
-def result():
+def result(wb):
     if shutil.which("node") is None:
         pytest.skip("node is not installed")
     import estimate_writer as ew
     proc = subprocess.run(
-        ["node", str(HARNESS), str(FRONTEND), json.dumps(ew.list_sheet_names())],
+        ["node", str(HARNESS), str(FRONTEND), json.dumps(ew.list_sheet_names()),
+         json.dumps(_template_cells(wb))],
         capture_output=True, text=True, encoding="utf-8", timeout=120)
     assert proc.returncode == 0, (
         "the harness itself failed -- read this before assuming a product bug:\n" + proc.stderr)
@@ -441,12 +464,12 @@ def test_a_copied_tab_on_a_taxable_job_still_charges_sales_tax(taxable_copies_wb
     assert _sales_tax_rate(taxable_copies_wb, copy_id) == 0.09475, COPY_OF[copy_id]
 
 
-def test_the_mirrors_are_still_mirrors_in_the_generated_file(wb, exempt_wb):
-    """Written into the .xlsx and read back, because that is where a fork would be permanent.
-
-    Seven of the eleven flag cells are live references. Replacing one with a literal decouples the
-    sheets for good: from then on a tax-exempt job would be exempt on the sheet that was written
-    and taxable on the one that used to follow it, with nothing on screen to show it."""
+def test_the_writer_never_invents_a_sheets_answer(wb, exempt_wb):
+    """Written into the .xlsx and read back. Each sheet's OWN answer reaches the file only as the
+    draft's own ``cell_values`` entry -- which the estimate screen writes when it splits a draft
+    (sections 5-7). ``fill_estimate`` itself stamps nothing onto a mirror: a draft that was never
+    split downloads exactly the template's references, as it always did, so the file cannot hold an
+    answer the screen never showed."""
     out = exempt_wb
     for sheet, addr in (("Polish", "B6"), ("Seal", "B6"), ("Seal (+Jnts)", "B6"),
                         ("Epoxy blank", "B6"), ("Gyp (USG N12ULTRA)", "B8"),
@@ -541,112 +564,427 @@ def test_the_intake_writes_the_answer_to_all_four_literal_cells(wb):
 
 
 # ── 5. the browser half, executed ────────────────────────────────────────────
+#
+# Everything below runs the SHIPPED browser code (taxable-flag-harness.js) and, where a claim is
+# about money or wording, hands what it produced to the real ``fill_estimate`` and the real
+# document renderer. Hanz, 2026-09-30: every flag-block sheet keeps its own Taxable? and Remodel
+# Tax?; a new project starts them at the intake's answers; a copy starts at its source's; an
+# existing draft opens exactly as it did; an option's price and wording come off its own sheet.
+
+GYP_BASE = 'Gyp (USG 1-8")'
+N25 = 'Gyp (USG N25 1-4")'
+
+
+def _flag_cells(sheet_or_layout):
+    import estimate_writer as ew
+    return ew.FLAG_BLOCK_CELLS[sheet_or_layout]
+
+
+def _layout(sheet, copies):
+    """A copy's template layout, through its source chain (as the browser and the writer walk it)."""
+    by_id = {c["id"]: c["source"] for c in (copies or [])}
+    guard = 0
+    while sheet in by_id and guard < 20:
+        sheet, guard = by_id[sheet], guard + 1
+    return sheet
+
+
+def _fill_cv(cell_values, tab_copies=None, tab_structs=None):
+    """The downloaded workbook for a draft, through the real writer, formulas not values."""
+    import estimate_writer as ew
+    from openpyxl import load_workbook
+    data = ew.fill_estimate({}, cell_values=dict(cell_values or {}), tab_copies=tab_copies,
+                            tab_structs=tab_structs)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return load_workbook(io.BytesIO(data), data_only=False)
+
+
+def _cell_rate(out_wb, sheet, addr, _depth=0):
+    """Evaluate one tax RATE cell of a generated workbook: a number, Kyle's IF on a flag of ITS OWN
+    sheet (followed through that flag's mirror chain), or a mirror of another sheet's rate cell --
+    which is exactly how 'Seal (+Jnts)'!B75 = =Seal!B75 prices remodel off SEAL's toggle."""
+    assert _depth < 8, "rate mirror loop at %s!%s" % (sheet, addr)
+    v = out_wb[sheet][addr].value
+    if isinstance(v, (int, float)):
+        return float(v)
+    s = str(v).strip()
+    m = _MIRROR.match(s)
+    if m:
+        return _cell_rate(out_wb, m.group(1) or m.group(2), m.group(3) + m.group(4), _depth + 1)
+    m = _RATE.match(s)
+    assert m, "%s!%s is a rate formula this walk does not understand: %r" % (sheet, addr, v)
+    col, row, needle, when_true, when_false = m.groups()
+    _s, _a, value = _resolve_flag(out_wb, sheet, col + row)
+    hit = str(value or "").strip().lower() == needle.strip().lower()
+    return float(when_true if hit else when_false)
+
+
+def _rates(out_wb, sheet):
+    """(sales-tax rate, remodel-tax rate) a sheet of the generated workbook charges. The remodel
+    rate cell is the row under Sales Tax on every layout (Epoxy B81, Polish/Seal B75, gyp B80 …);
+    the sales-tax walk also re-checks that the dollar row still multiplies by its rate."""
+    rate_addr, _dollar, _flag = _tax_row(out_wb, sheet)
+    remodel_addr = "B%d" % (int(rate_addr[1:]) + 1)
+    return (_sales_tax_rate(out_wb, sheet), _cell_rate(out_wb, sheet, remodel_addr))
 
 
 @needs_node
-def test_the_target_list_is_four_cells_for_taxable_and_one_for_remodel(result):
-    """Four, and the fifth would be a forked mirror. One, because Epoxy!D6 is the remodel
-    toggle's only literal. If a sixth gyp variant is ever added, these are the numbers that
-    must move -- not a count going stale while an option line bills tax that was switched off."""
-    t = result["baseTargets"]["taxable"]
-    assert [tuple(x) for x in t] == [("Epoxy", "B6"), ("Leveling", "B6"),
-                                     ('Gyp (USG 1-8")', "B8"), ("Gyp (FR)", "B8")]
-    assert [tuple(x) for x in result["baseTargets"]["remodel"]] == [("Epoxy", "D6")]
+def test_the_writer_and_the_screen_agree_on_which_sheets_have_a_flag_block(result):
+    """One list of flag-block sheets and addresses, on both sides of the wire: the browser splits
+    exactly the sheets the writer gives a picker to, at the same cells."""
+    import estimate_writer as ew
+    assert set(result["flagLayouts"]) == set(ew.FLAG_BLOCK_CELLS)
+    for sheet, (t_addr, r_addr) in ew.FLAG_BLOCK_CELLS.items():
+        key = "gyp" if sheet.startswith("Gyp") else "epoxy"
+        assert (result["flagAddr"]["taxable"][key], result["flagAddr"]["remodel"][key]) == (t_addr, r_addr)
+    assert set(ew.FLAG_BLOCK_CELLS) == set(PRICED_SHEETS)
 
 
 @needs_node
-def test_the_answer_reaches_every_literal_sheet_and_no_mirror(result):
-    """One answer, four cells, and the same values pushed into the live engine -- so the screen,
-    the downloaded .xlsx and the proposal's snapshotted total cannot disagree about it."""
-    f = result["baseFanout"]
-    assert f["written"] == {"Epoxy!B6": "No", "Leveling!B6": "No",
-                            'Gyp (USG 1-8")!B8': "No", "Gyp (FR)!B8": "No"}
-    assert f["hfCallCount"] == 4 and f["hfMatches"] is True
-    assert result["taxableStaysTaxable"] == {"Epoxy!B6": "Yes", "Leveling!B6": "Yes",
-                                             'Gyp (USG 1-8")!B8': "Yes", "Gyp (FR)!B8": "Yes"}
+def test_the_template_map_the_split_reads_matches_the_workbook(result, wb):
+    """`JOB_FLAG_TEMPLATE` is how the split knows what a sheet holds without the sheet in the engine
+    (init() defers 'Epoxy blank' and Leveling). Checked cell for cell against Kyle's file: a literal
+    is the same word, a mirror names the same sheet AND that sheet's own flag cell."""
+    import estimate_writer as ew
+    t = result["template"]
+    for flag, idx in (("taxable", 0), ("remodel", 1)):
+        assert set(t[flag]) == set(ew.FLAG_BLOCK_CELLS), flag
+        for sheet in ew.FLAG_BLOCK_CELLS:
+            addr = ew.FLAG_BLOCK_CELLS[sheet][idx]
+            v, entry = wb[sheet][addr].value, t[flag][sheet]
+            if entry.startswith("="):
+                m = _MIRROR.match(str(v).strip())
+                assert m, "%s!%s is %r, but the map says it mirrors %s" % (sheet, addr, v, entry)
+                target = m.group(1) or m.group(2)
+                assert target == entry[1:], (sheet, flag, v, entry)
+                assert m.group(3) + m.group(4) == ew.FLAG_BLOCK_CELLS[target][idx], (sheet, flag, v)
+            else:
+                assert v == entry, "%s!%s is %r, the map says %r" % (sheet, addr, v, entry)
 
 
 @needs_node
-def test_an_untouched_draft_collects_nothing(result):
-    """Every one of these cells already holds the template's own default, so writing them back
-    would only grow a blob that is PUT whole on every save. Same rule the remodel-rate self-heal
-    applies to itself."""
-    assert result["untouched"] == {"changed": 0, "keys": []}
+def test_the_legacy_fan_out_a_never_split_draft_gets_once(result):
+    """The one-answer-per-job fan-out, unchanged, because it is what an existing draft opened with
+    until now: four literal cells for Taxable (never a mirror), one for Remodel. init() runs it
+    exactly once on a draft that was never split, then freezes the result per sheet."""
+    t = result["legacyTargets"]
+    assert [tuple(x) for x in t["taxable"]] == [("Epoxy", "B6"), ("Leveling", "B6"),
+                                                (GYP_BASE, "B8"), ("Gyp (FR)", "B8")]
+    assert [tuple(x) for x in t["remodel"]] == [("Epoxy", "D6")]
+    assert result["legacyFanout"] == {"Epoxy!B6": "No", "Leveling!B6": "No",
+                                      GYP_BASE + "!B8": "No", "Gyp (FR)!B8": "No"}
 
 
 @needs_node
-def test_copying_a_tab_on_a_tax_exempt_job_carries_the_answer_onto_the_copy(result):
-    """THE REPORT, through the shipped ``copyTab``.
-
-    Executed rather than read: the old code is internally consistent and simply never reaches the
-    cell. ``taxInEngine`` is the value behind the on-screen chip and total -- 'Yes' there beside
-    a box reading "No" is exactly what Kyle saw."""
-    for source, c in result["copies"].items():
-        gyp = source.startswith("Gyp")
-        literal = source in ("Epoxy", "Leveling", 'Gyp (USG 1-8")', "Gyp (FR)")
-        assert c["taxInEngine"] == ("No" if literal else
-                                    ("='%s'!B8" % 'Gyp (USG 1-8")' if gyp else "=Epoxy!B6")), source
-        assert c["taxWritten"] is literal, (
-            "%s: a copy of a mirror layout must NOT be forked into a literal" % source)
-        assert c["cacheAlive"] is True, "%s: the fan-out's refresh destroyed the copy" % source
-        assert c["remodelRateApplied"] == 1, "%s: copyTab stopped stamping the remodel rate" % source
-    # the remodel twin, on the one layout that freezes it — and it freezes OFF, which underbids
-    assert result["copies"]["Epoxy"]["remodelCellValue"] == "Yes"
-    assert result["copies"]["Epoxy"]["remodelInEngine"] == "Yes"
-    assert result["copies"]["Polish"]["remodelWritten"] is False
-
-
-@needs_node
-def test_a_copy_of_a_copy_gets_it_too_and_so_does_a_copy_made_first(result):
-    """Both orders, because they fail differently. Copying first means the answer has to find a
-    tab that did not exist when it was given; a copy of a copy has to resolve its LAYOUT through
-    the chain, since 'Copy1' is in no map."""
-    assert result["copyChain"] == {"c1": "No", "c2": "No", "c1Engine": "No", "c2Engine": "No"}
-    a = result["answerAfterCopy"]
-    assert a["copy1"] == a["copy2"] == a["copy3"] == "No"
-    assert a["copy3NotB6"] is True, (
-        "the gyp copy's answer went into B6, which on a gyp layout is Miles Away")
+def test_a_new_project_starts_every_sheet_with_the_intake_answers(result):
+    """The intake said exempt and remodel. Every one of the eleven flag-block sheets -- the gyp
+    variants at B8/D8, not B6 (Miles Away) -- now holds those two answers as its own literal, and
+    the second open changes nothing, so it saves nothing."""
+    p = result["newProject"]
+    for sheet in PRICED_SHEETS:
+        assert p["own"][sheet] == {"taxable": "No", "remodel": "Yes"}, sheet
+        t_addr, r_addr = _flag_cells(sheet)
+        assert p["written"]["%s!%s" % (sheet, t_addr)] == "No"
+        assert p["written"]["%s!%s" % (sheet, r_addr)] == "Yes"
+        assert p["engine"][sheet] == {"taxable": "No", "remodel": "Yes"}, sheet
+    assert p["gypMilesAwayUntouched"] is True
+    assert p["marker"] is True and p["first"] > 0
+    assert p["second"] == 0 and p["unchangedBySecondOpen"] is True
+    # nobody touched the intake: its defaults are the template's (Taxable on, Remodel off)
+    u = result["newProjectUntouched"]
+    assert u["first"] > 0 and u["second"] == 0
+    assert all(v == {"taxable": "Yes", "remodel": "No"} for v in u["own"].values()), u["own"]
+    # the two sheets init() leaves out of the engine get theirs off the template map
+    d = result["newProjectDeferred"]
+    assert d["leveling"] == d["blank"] == {"taxable": "No", "remodel": "Yes"}
 
 
 @needs_node
-def test_typing_the_answer_anywhere_reaches_every_cell_that_holds_it(result):
-    """The keystroke, through the grid's real edit listener.
+def test_an_existing_draft_opens_with_the_same_answers_and_saves_once(result):
+    """A draft saved by the job-wide build: the four literals and the literal-layout copies already
+    carry the answer, everything else follows by formula (a copy of a copy among them). Opened, it
+    computes the SAME two answers on every sheet -- and so the same tax, and the same proposal flags
+    -- and every sheet now owns them. The first open saves once; the second saves nothing."""
+    e = result["existing"]
+    assert e["before"]["priced"] == e["after"]["priced"]
+    assert e["before"]["proposal"] == e["after"]["proposal"]
+    ids = set(PRICED_SHEETS) | {c["id"] for c in e["copies"]}
+    assert set(e["own"]) == ids
+    for sid, own in e["own"].items():
+        assert own["taxable"] in ("Yes", "No") and own["remodel"] in ("Yes", "No"), (sid, own)
+        # ...and the word it owns is the answer it priced with before
+        pa = e["before"]["priced"][sid]
+        assert (own["taxable"] == "Yes", own["remodel"] == "Yes") == (pa["taxable"], pa["remodel"]), sid
+    assert e["marker"] is True
+    assert e["savesOnFirst"] == 1 and e["savesOnSecond"] == 0 and e["second"] == 0
+    assert e["untouchedCellKept"] == 5200
 
-    Four places the estimator can type it -- the master, a mirror tab, a copy, a gyp tab (whose
-    flag is B8 and whose canonical is the gyp base, not Epoxy) -- and all four have to produce
-    the same four-cell answer. Typing into the copy is what Kyle tried; ``canonicalTarget`` sent
-    it to the master, which already said "No", so nothing happened at all."""
-    expect = {"Epoxy!B6": "No", "Leveling!B6": "No",
-              'Gyp (USG 1-8")!B8': "No", "Gyp (FR)!B8": "No"}
-    t = result["typed"]
-    assert t["master"] == expect
-    assert t["mirrorTab"] == expect
-    assert t["gypTab"] == expect
-    assert t["onACopy"] == dict(expect, **{"Copy1!B6": "No"})
-    # Retyping the ORIGINAL answer has to reach every cell too. The single-cell path deletes the
-    # key on a revert, which would leave the copies holding the answer just retracted.
-    assert t["revert"] == {"epoxy": "Yes", "copy": "Yes"}
-    # ...and in every one of the four the OPEN tab is redrawn from the engine. Three of them are
-    # sitting on a sheet that is not written -- Polish, a copy, a mirroring gyp variant -- whose
-    # own flag cell is a live reference and whose totals recompute from it. Refreshing only when
-    # a written sheet happens to be open would leave the estimator looking at the old price
-    # after typing the answer, which is a quieter version of the bug being fixed. The caches
-    # survive it, for the reason remodel-rate case 10 exists: a copy has no server-side
-    # worksheet, so a refetch is data loss rather than a round trip.
-    assert t["gridRefreshed"] == {"master": ["Epoxy"], "mirrorTab": ["Polish"],
-                                  "onACopy": ["Copy1"], "gypTab": ['Gyp (USG N25 1-4")']}
-    assert t["cachesAlive"] is True
-    # ...and the remodel toggle behaves identically one row across
-    assert t["remodelOnACopy"] == {"epoxy": "Yes", "copy": "Yes", "copyEngine": "Yes"}
+
+@pytest.fixture(scope="module")
+def existing_files(result):
+    e = result["existing"]
+    return _fill_cv(e["cvBefore"], e["copies"]), _fill_cv(e["cvAfter"], e["copies"])
 
 
 @needs_node
-def test_an_ordinary_cell_edit_is_untouched_by_the_fan_out(result):
-    """The fan-out fires for two addresses per layout and for nothing else -- including the cells
-    sitting beside them in the same block. ``Gyp!B6`` is *Miles Away*, and a "B6 is the tax flag"
-    rule would have turned a mileage into a four-cell tax answer."""
+def test_an_existing_draft_prices_the_same_in_the_downloaded_workbook(result, existing_files):
+    """The same claim as money, off the file the estimator downloads: the draft as it was saved and
+    the draft as the first open saves it charge the same sales-tax and remodel-tax RATE on every
+    priced sheet and every copy -- including 'Seal (+Jnts)', whose remodel rate stops being Seal's
+    mirror and becomes its own IF on its own toggle at the same number."""
+    before, after = existing_files
+    e = result["existing"]
+    for sid in list(PRICED_SHEETS) + [c["id"] for c in e["copies"]]:
+        assert _rates(before, sid) == _rates(after, sid), sid
+    assert str(before["Seal (+Jnts)"]["B75"].value) == "=Seal!B75"
+    assert after["Seal (+Jnts)"]["B75"].value == '=IF(D6="yes",0.1,0)'
+
+
+@needs_node
+def test_the_downloaded_xlsx_carries_each_sheets_own_answer_with_a_picker(result, existing_files):
+    """Every flag-block sheet and every copy: its two cells are a literal Yes/No -- the one the
+    screen holds -- and carry a Yes/No list, so the estimator can still change either in Excel.
+    Kyle's own pickers are x14 extension validations that openpyxl drops, so this is the writer's."""
+    _before, after = existing_files
+    e = result["existing"]
+    for sid, own in e["own"].items():
+        t_addr, r_addr = _flag_cells(_layout(sid, e["copies"]))
+        for flag, addr in (("taxable", t_addr), ("remodel", r_addr)):
+            cell = after[sid][addr]
+            assert cell.data_type == "s" and cell.value == own[flag], (sid, addr, cell.value)
+            pickers = [dv for dv in after[sid].data_validations.dataValidation
+                       if addr in str(dv.sqref).split() and dv.type == "list"]
+            assert pickers and pickers[0].formula1 == '"Yes,No"', (sid, addr)
+            assert cell.protection.locked is False, "%s!%s is locked in the download" % (sid, addr)
+
+
+@needs_node
+def test_a_draft_from_before_the_job_wide_fix_opens_as_it_did_and_is_then_frozen(result):
+    """The intake wrote Epoxy!B6 alone and a copy was made. The job-wide build healed that on open
+    (the copy and the four literals all said No), so that is what this draft opens with -- once.
+    A draft that is already split is never healed again: its Leveling keeps its own Yes even though
+    Epoxy says No, which the fan-out would have overwritten."""
+    for sid, own in result["legacyUnhealed"].items():
+        assert own["taxable"] == "No", sid
+    assert result["legacyUnhealed"]["Copy1"] == {"taxable": "No", "remodel": "No"}
+    assert result["splitNotReHealed"]["leveling"] == "Yes"
+
+
+@needs_node
+def test_each_sheet_keeps_its_own_answer_when_another_changes(result):
+    """THE RULE, through the grid's real edit listener. An option (Polish) says exempt: that
+    keystroke reaches Polish and nothing else -- not Seal, whose template cell mirrors Polish's,
+    and not Polish's own copy. The base flips Taxable and back and turns Remodel on: no option
+    moves. A copy and a mirroring gyp variant answer for themselves, the variant at B8/D8 and not
+    through the gyp base. Retyping the original answer keeps the literal (a deleted key would fall
+    back to the template's mirror and start following another sheet again)."""
+    i = result["independent"]
+    assert i["optionCalls"] == [["Polish", "B6", "No"]]
+    for sid, own in i["afterOption"].items():
+        want = {"taxable": "No", "remodel": "No"} if sid == "Polish" else {"taxable": "Yes", "remodel": "No"}
+        assert own == want, (sid, own)
+    assert i["baseCalls"] == [["Epoxy", "B6", "No"], ["Epoxy", "B6", "Yes"], ["Epoxy", "D6", "Yes"]]
+    assert i["otherCalls"] == [["Copy1", "D6", "Yes"], [N25, "B8", "No"], [N25, "D8", "Yes"]]
+    f = i["final"]
+    assert f["Epoxy"] == {"taxable": "Yes", "remodel": "Yes"}
+    assert f["Polish"] == {"taxable": "No", "remodel": "No"}
+    assert f["Seal"] == {"taxable": "Yes", "remodel": "No"}
+    assert f["Copy1"] == {"taxable": "Yes", "remodel": "Yes"}
+    assert f[N25] == {"taxable": "No", "remodel": "Yes"}
+    assert f[GYP_BASE] == {"taxable": "Yes", "remodel": "No"}
+    for sid in f:
+        assert i["engine"][sid] == f[sid], "%s: the engine disagrees with the draft" % sid
+    assert i["epoxyKeptAfterRevert"] == "Yes" and i["refreshed"] is True
+    # the picker's blank is stamped as the word that prices the same, never left blank
+    assert i["blank"] == {"taxable": "Yes", "remodel": "No"}
+    p = i["proposal"]
+    assert p["Epoxy"] == {"taxable": True, "remodel_on": True}
+    assert p["Polish"] == {"taxable": False, "remodel_on": False}
+    assert p["Copy1"] == {"taxable": True, "remodel_on": True}
+    assert p["Seal"] == {"taxable": True, "remodel_on": False}
+
+
+@needs_node
+def test_changing_the_base_moves_no_option_in_the_downloaded_workbook(result):
+    """The same, in the .xlsx. Polish exempt, the base taxed: Polish charges 0 and the base 9.475%.
+    Seal -- whose template Taxable? is `=Polish!B6` -- still charges 9.475%, because it kept its own
+    Yes; the base's Remodel Yes reaches the base and no option."""
+    i = result["independent"]
+    out = _fill_cv(i["cellValues"], i["copies"])
+    assert _rates(out, "Polish") == (0.0, 0.0)
+    assert _rates(out, "Epoxy") == (0.09475, 0.1)
+    assert _rates(out, "Seal") == (0.09475, 0.0)
+    assert _rates(out, "Copy1") == (0.09475, 0.1)
+    assert _rates(out, N25) == (0.0, 0.1)
+    assert _rates(out, GYP_BASE) == (0.09475, 0.0)
+
+
+def _option_payload(flags, cell_values, copies):
+    """A payload shaped the way the page ships one: the base and three options, each room's figures
+    its own and each room's two flags exactly what snapshotLumpSumsToState read off its tab."""
+    from test_price_block_reconciles import _values
+    base_f = flags["Epoxy"]
+    values = _values(10000.0, 950.0, 0.0, base_f["taxable"], base_f["remodel_on"], "ONE_LINE")
+    values["base_bid_formatted"] = ""
+
+    def opt(tid, desc, total, sales, remodel):
+        f = flags[tid]
+        return {"id": tid, "name": tid, "is_base": False, "show": True, "price_mode": "total",
+                "option_desc": desc, "system_desc": desc, "base_total": 10000,
+                "bid": {"total": total, "sales_tax": sales, "remodel": remodel,
+                        "taxable": f["taxable"], "remodel_on": f["remodel_on"]}}
+    rooms = [{"id": "Epoxy", "name": "Epoxy", "is_base": True,
+              "bid": {"total": 10000, "sales_tax": 950, "remodel": 0,
+                      "taxable": base_f["taxable"], "remodel_on": base_f["remodel_on"]}},
+             opt("Polish", "Polished Concrete", 4200, 0, 0),
+             opt("Seal", "Sealed Concrete", 1476, 0, 90),
+             opt("Copy1", "Epoxy flooring", 9050, 0, 0)]
+    return {"work_type": "epoxy", "audience": "Direct", "values": values, "rooms": rooms,
+            "cell_values": cell_values, "tab_copies": copies}
+
+
+@needs_node
+def test_a_taxed_base_with_an_exempt_and_a_remodel_only_option_end_to_end(result):
+    """Hanz's two sentences, from the sheet to the files. The base sheet says Taxable Yes; the
+    Polish sheet says No to both; Seal says No / Yes; a copy of the base says No. One payload -- the
+    cell_values and the per-tab flags the real browser code produced -- through the real renderer:
+
+      * the .xlsx: Polish and the copy charge NO sales tax, Seal only remodel tax, the base 9.475%;
+      * the .docx: each option ONE line, worded by its own sheet -- "(tax exempt)" and "(Remodel Tax
+        INCLUDED)" -- while the base line keeps "(material sales tax INCLUDED)".
+
+    Mutation: any one sheet's answer following the base instead of its own sheet -- the xlsx rate
+    and the printed wording both flip."""
+    import docx as _docx
+    from starlette.requests import Request
+    import main
+    from test_price_block_reconciles import _price_rows
+    s = result["optionShapes"]
+    f = s["flags"]
+    assert f["Epoxy"] == {"taxable": True, "remodel_on": False}
+    assert f["Polish"] == {"taxable": False, "remodel_on": False}
+    assert f["Seal"] == {"taxable": False, "remodel_on": True}
+    assert f["Copy1"] == {"taxable": False, "remodel_on": False}
+    req = Request({"type": "http", "method": "POST", "path": "/t", "headers": [], "query_string": b""})
+    docs = main._render_documents(_option_payload(f, s["cellValues"], s["copies"]), req,
+                                  want_estimate=True)
+    from openpyxl import load_workbook
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        xlsx = load_workbook(io.BytesIO(docs["xlsx"]["content"]), data_only=False)
+    assert _rates(xlsx, "Epoxy") == (0.09475, 0.0)
+    assert _rates(xlsx, "Polish") == (0.0, 0.0)
+    assert _rates(xlsx, "Seal") == (0.0, 0.1)
+    assert _rates(xlsx, "Copy1") == (0.0, 0.0)
+    rows = _price_rows(docs["docx"]["content"])
+    assert rows["options"] == [
+        "$4,200 – Polished Concrete as described above (tax exempt)",
+        "$1,476 – Sealed Concrete as described above (Remodel Tax INCLUDED)",
+        "$9,050 – Epoxy flooring as described above (tax exempt)",
+    ], rows["options"]
+    assert rows["base_line"].endswith("(material sales tax INCLUDED)"), rows["base_line"]
+    assert _usd(rows["base_line"]) == 10000.0
+
+
+def _usd(s):
+    m = re.search(r"\$([\d,]+(?:\.\d+)?)", str(s))
+    assert m, s
+    return float(m.group(1).replace(",", ""))
+
+
+@needs_node
+def test_a_new_copy_starts_with_its_sources_answers_then_keeps_its_own(result):
+    """One copy per flag-block layout, of a source that answers DIFFERENTLY from the template and
+    from Epoxy (exempt, remodel on). The copy gets the source's two answers as its own literal, in
+    the engine too; changing the source afterwards leaves the copy alone; Epoxy is untouched by all
+    of it; the copy's cache survives; the remodel rate is still stamped. A gyp copy is written at
+    B8/D8, never at B6 (Miles Away)."""
+    for src, c in result["copies"].items():
+        assert c["copyId"], src
+        assert (c["copyTaxable"], c["copyRemodel"]) == ("No", "Yes"), src
+        assert c["engine"] == {"t": "No", "r": "Yes"}, src
+        assert c["copyTaxableAfterSourceChanged"] == "No", "%s: the copy followed its source" % src
+        if c["epoxyUntouched"] is not None:
+            assert c["epoxyUntouched"] == ["Yes", "No"], src
+        assert c["cacheAlive"] is True and c["remodelRateApplied"] == 1, src
+        assert c["gypMilesAwayUntouched"] is True, src
+    assert set(result["copies"]) == set(PRICED_SHEETS)
+    assert result["copyChain"] == {"c1": "No", "c2": "No", "c2Engine": "No"}
+
+
+@needs_node
+def test_the_autofill_sets_the_base_and_moves_no_option(result):
+    """The AI keys its seven flags to `Epoxy!…` whatever the work type. On a split draft the two tax
+    answers are the BASE bid's: a polish job's land on Polish (Epoxy, an option there, keeps its
+    own), a gyp job's on the gyp base (not 'Gyp (FR)'), a combo's on both halves of its combined
+    base and on no option. A never-split draft still gets the old fan-out."""
+    a = result["autofill"]
+    assert a["polish"]["bases"] == ["Polish"]
+    for sid, own in a["polish"]["own"].items():
+        want = {"taxable": "No", "remodel": "Yes"} if sid == "Polish" else {"taxable": "Yes", "remodel": "No"}
+        assert own == want, (sid, own)
+    assert a["gyp"] == {"base": "No", "fr": "Yes", "epoxy": "Yes"}
+    assert a["combo"] == {"bases": ["Epoxy", "Polish"], "epoxy": "No", "polish": "No", "seal": "Yes"}
+    assert a["unsplitFansOut"] == "No"
+
+
+@needs_node
+def test_seal_with_joints_prices_remodel_off_its_own_toggle(result):
+    """'Seal (+Jnts)'!B75, its remodel RATE, is `=Seal!B75` in the template, so its remodel tax was
+    SEAL's whatever its own Remodel Tax? said. The split gives it the same IF on its own D6, at the
+    rate Seal's cell holds -- Kyle's 0.1 or the county's -- and its copies too. A rate somebody typed
+    as a bare number reads no toggle on either sheet and is left alone; an already split draft is
+    not touched again."""
+    s = result["sealJoints"]
+    assert s["template"] == '=IF(D6="yes",0.1,0)' and s["copy"] == '=IF(D6="yes",0.1,0)'
+    assert s["templateSealUntouched"] is True
+    assert s["typedNumberLeftAlone"] is True
+    assert s["county"] == '=IF(D6="yes",0.07975,0)'
+    assert s["notOnASplitDraft"] is True
+
+
+@needs_node
+def test_the_joints_sheets_own_toggle_moves_its_price_in_the_workbook():
+    """The same, as money in the file, with the counterexample beside it. Seal says Remodel No,
+    'Seal (+Jnts)' says Yes. With the fork its remodel rate is 0.1; a copy of it left on the
+    template's `=Seal!B75` charges Seal's 0 -- the price its own box would have contradicted.
+
+    Also in this file: a copy with two rows inserted above its flag block gets its picker at the
+    MOVED cells, B8/D8."""
+    cv = {"Seal!D6": "No", "Seal (+Jnts)!D6": "Yes", "Seal (+Jnts)!B75": '=IF(D6="yes",0.1,0)',
+          "Copy1!D6": "Yes", "Copy2!B8": "No", "Copy2!D8": "No"}
+    out = _fill_cv(cv, [{"id": "Copy1", "source": "Seal (+Jnts)"}, {"id": "Copy2", "source": "Epoxy"}],
+                   [{"sheet": "Copy2", "kind": "insert_rows", "at": 2, "count": 2}])
+    assert _rates(out, "Seal")[1] == 0.0
+    assert _rates(out, "Seal (+Jnts)")[1] == 0.1
+    assert _rates(out, "Copy1")[1] == 0.0, "the mirror stopped pricing off Seal -- re-check the fork"
+    moved = [a for dv in out["Copy2"].data_validations.dataValidation
+             if dv.formula1 == '"Yes,No"' for a in str(dv.sqref).split()]
+    assert set(moved) >= {"B8", "D8"}, moved
+    assert out["Copy2"]["B8"].value == "No"
+
+
+@needs_node
+def test_each_tab_reports_where_its_own_two_cells_are(result):
+    """`priced_tabs[].flag_cells`, which the intake reads to find the BASE's two cells on a split
+    draft: through the layout and the structural edits, gyp one row lower, nothing for a sheet with
+    no flag block."""
+    c = result["flagCells"]
+    assert c["epoxy"] == {"taxable": "Epoxy!B6", "remodel": "Epoxy!D6"}
+    assert c["gyp"] == {"taxable": GYP_BASE + "!B8", "remodel": GYP_BASE + "!D8"}
+    assert c["movedCopy"] == {"taxable": "Copy1!B8", "remodel": "Copy1!D8"}
+    assert c["gypCopy"] == {"taxable": "Copy2!B8", "remodel": "Copy2!D8"}
+    assert c["takeoff"] == {}
+
+
+@needs_node
+def test_an_ordinary_cell_edit_is_untouched_by_any_of_this(result):
+    """Only the two flag addresses per layout are special -- not the cells beside them in the same
+    block. ``Gyp!B6`` is *Miles Away*, and a "B6 is the tax flag" rule would have turned a mileage
+    into a tax answer."""
     assert result["ordinaryEdits"] == {"Epoxy!E20": "5000", "Epoxy!B4": "No", "Epoxy!B5": "Yes",
-                                       "Epoxy!D5": "Yes", 'Gyp (USG 1-8")!B6': "12"}
+                                       "Epoxy!D5": "Yes", GYP_BASE + "!B6": "12"}
     k = result["kinds"]
     assert k["epoxyB6"] == "taxable" and k["epoxyD6"] == "remodel"
     assert k["gypB8"] == "taxable" and k["gypD8"] == "remodel"
@@ -657,139 +995,54 @@ def test_an_ordinary_cell_edit_is_untouched_by_the_fan_out(result):
 
 
 @needs_node
-def test_the_shared_project_info_block_is_not_forked_by_any_of_this(result):
+def test_the_project_info_block_is_shared_except_the_two_flags(result):
     """The A1:D10 redirect exists to share project name / bid date / address across every tab, and
-    it is right about those. This fix changes where two answers go, not the block they live in."""
-    p = result["projectInfoStillShared"]
+    it is right about those -- a copy's B1 still lands on Epoxy, a gyp variant's B2 (and its Miles
+    Away) on the gyp base. The two flags are the one exception, on every layout: they stay on the
+    sheet they were typed on."""
+    p = result["projectInfo"]
     assert p["b1"] == {"sheet": "Epoxy", "addr": "B1"}
-    assert p["b2"] == {"sheet": "Epoxy", "addr": "B2"}
     assert p["b3"] == {"sheet": "Epoxy", "addr": "B3"}
-    assert p["gypB2"] == {"sheet": 'Gyp (USG 1-8")', "addr": "B2"}
+    assert p["gypB2"] == {"sheet": GYP_BASE, "addr": "B2"}
+    assert p["gypVariantB6"] == {"sheet": GYP_BASE, "addr": "B6"}
+    assert p["copyB6"] == {"sheet": "Copy1", "addr": "B6"}
+    assert p["polishB6"] == {"sheet": "Polish", "addr": "B6"}
+    assert p["polishD6Key"] == "Polish!D6"
+    assert p["gypVariantB8"] == {"sheet": "Gyp (USG N12ULTRA)", "addr": "B8"}
+    assert p["gypVariantD8"] == {"sheet": "Gyp (USG N12ULTRA)", "addr": "D8"}
     assert p["typedB1"] == {"onMaster": "New Name", "forkedOntoTheCopy": False}
 
 
 @needs_node
-def test_a_structurally_edited_tab_is_written_at_its_real_address_or_not_at_all(result):
-    """Rows inserted above the block move the flag; deleting its row removes it. Both go through
-    ``txAddr``, and a deleted cell is SKIPPED rather than written at a stale address -- which
-    would put a word into whatever moved up into row 6."""
+def test_a_structurally_edited_tab_is_split_at_its_real_address_or_not_at_all(result):
+    """Rows inserted above the block move the flag; deleting its row removes it. The split goes
+    through ``txAddr`` and skips a deleted cell rather than writing a word at a stale address."""
     s = result["structural"]
-    assert [tuple(x) for x in s["movedTargets"]] == [("Copy1", "B8")]
-    assert [tuple(x) for x in s["movedRemodelTargets"]] == [("Copy1", "D8")]
-    assert s["movedWritten"] == "No" and s["movedNotAtStale"] is True
-    assert s["goneTargets"] == [] and s["goneWrittenAnywhere"] == []
+    assert s["movedWritten"] == "No" and s["movedRemodel"] == "No"
+    assert s["movedNotAtStale"] is True
+    assert s["goneWrittenAnywhere"] == []
 
 
 @needs_node
-def test_the_base_tabs_family_wins_when_two_old_answers_disagree(result):
-    """``canonicalSheetFor`` splits project info by family, so there are two canonical stores:
-    ``Epoxy!B6`` for the epoxy family and the gyp base's ``B8`` for gyp. After this fix they
-    cannot disagree -- every write fans out to both -- but a draft made BEFORE it can, in exactly
-    one shape: the intake wrote Epoxy!B6 and the estimator then typed the real answer into the
-    gyp tab's own box, which is the workaround being handed out for this very bug.
-
-    Reading Epoxy first would throw that keystroke away and put the tax back on. So the BASE
-    TAB's family wins: the base tab is the sheet the bid is priced from."""
-    t = result["twoStores"]
-    assert t["gypJobAnswer"] == "No" and t["gypJobGyp"] == "No", (
-        "a gyp job's own Taxable answer was overwritten by the intake's stale epoxy one")
-    assert t["epoxyJobAnswer"] == "No" and t["epoxyJobEpoxy"] == "No"
-    assert t["onlyGypReaches"] == "No", "an answer given only on the gyp tab must reach Epoxy too"
-    assert t["blankAnswer"] is None
-    assert t["emptyStringIsNoAnswer"] is None, (
-        "a cleared box is 'no answer', which is what fill_estimate does with an empty value")
-
-
-@needs_node
-def test_a_remodel_toggle_an_older_build_already_forked_is_kept_in_step(result):
-    """The gyp base's D8 is ``=Epoxy!D6``, but ``canonicalTarget`` has always routed a gyp tab's
-    Remodel keystroke onto it -- so drafts exist carrying a literal there. Left alone it outranks
-    the master and goes on charging a remodel tax the estimator switched off. We do not create
-    that fork and we do not silently un-fork it; we keep it in step."""
-    f = result["forkedRemodel"]
-    assert f["keptInStep"] == "No" and f["master"] == "No"
-    assert [tuple(x) for x in f["cleanTargets"]] == [("Epoxy", "D6")]
-    assert f["cleanKeys"] == ["Epoxy!D6"], "a fork was created where there was none"
-
-
-# ── 6. the two call sites this harness cannot reach ─────────────────────────
-#
-# Everything above executes. These two do not, and the reason is recorded rather than papered
-# over: `init()` is a 120-line async function that fetches /api/sheets, /api/named-expressions
-# and all sixteen worksheets before it gets here, and the autofill call site is an anonymous
-# async click handler wrapped round a fetch. Executing either means stubbing the network, which
-# would prove nothing about the ordering that actually matters.
-#
-# So these assert the ORDER, out of the shipped source: WHERE the call sits is the whole of what
-# can go wrong with it, and both positions are load-bearing. Ordering, not presence -- a plain
-# "is the string there" check would pass with the call in the wrong half of the function.
-
-
-def test_the_self_heal_runs_after_the_copies_exist_and_before_the_first_paint():
-    """`applyJobFlags` has to see the whole bid.
-
-    Run before the copied tabs are rehydrated and it writes to base sheets only, leaving exactly
-    the copy Kyle reported still frozen. Run after `showSheet` and the first paint shows the old
-    answer. So it belongs between the cellValues replay and the opening tab, and the save has to
-    come after the totals are re-rendered -- `/api/generate` fills the workbook from the STORED
-    draft, so a correction that never reached the save still downloads the tax."""
-    src = (FRONTEND / "js" / "estimate-review.js").read_text(encoding="utf-8")
-    body = src[src.index("async function init()"):src.index("\nfunction renderTabs()")]
-    replay = body.index("// Apply saved overrides")
-    heal = body.index("applyJobFlags()")
-    paint = body.index("showSheet(initialSheet)")
-    # Anchored on the CONDITION, not on the whole line: the filed-markup-rate apply added
-    # `|| _ratesApplied` to it (2026-09-08), and it belongs there for the same reason
-    # `_flagsHealed` does -- /api/generate fills the workbook from the STORED draft. What this
-    # test is about is the ORDER, and the flags' own half of the condition still has to be in it.
-    save = body.index("if (_flagsHealed")
-    assert "persistTabState()" in body[save:save + 80], (
-        "the flags' load-time save no longer calls persistTabState: %r" % body[save:save + 80])
-    assert replay < heal < paint < save, (
-        "the load-time self-heal moved: replay=%d heal=%d paint=%d save=%d"
-        % (replay, heal, paint, save))
-    assert body.index("tab_copies.filter") < heal, (
-        "the self-heal now runs before the copied tabs are rehydrated, so it cannot reach one")
-
-
-def test_the_autofill_fans_its_flags_out_before_the_page_re_renders():
-    """The AI writes all seven flags to hardcoded `Epoxy!...` keys whatever the work type, so on
-    a gyp or Leveling bid its Taxable answer lands on a sheet that bid is not priced from. The
-    fan-out has to run inside the same apply, before the grid is redrawn off those values."""
-    src = (FRONTEND / "js" / "estimate-review.js").read_text(encoding="utf-8")
-    body = src[src.index('document.getElementById("autofill-btn")'):]
-    body = body[:body.index("function snapshotLumpSumsToState()")]
-    write = body.index("cellValues[k] = v;")
-    fan = body.index("applyJobFlags()")
-    redraw = body.index("await showSheet(activeSheet)")
-    assert write < fan < redraw, (
-        "the autofill fan-out moved: write=%d fan=%d redraw=%d" % (write, fan, redraw))
-
-
-@needs_node
-def test_an_in_flight_draft_heals_itself_on_reopen_and_only_once(result):
-    """The shape Kyle's job is in right now: ``Epoxy!B6="No"``, a copy made, nothing else ever
-    written. Reopening has to fix all of it -- and report that it changed something, because the
-    correction has to be SAVED (``/api/generate`` fills the workbook from the stored draft, not
-    from the page). Opening an already-correct draft must change nothing, or every page load
-    writes a save."""
-    s = result["selfHeal"]
-    assert s["changed"] == 4
-    assert s["changedOnSecondOpen"] == 0
-    assert s["written"] == {"Epoxy!B6": "No", "Leveling!B6": "No", 'Gyp (USG 1-8")!B8': "No",
-                            "Gyp (FR)!B8": "No", "Copy1!B6": "No"}
-    assert s["copyEngine"] == "No"
+def test_the_legacy_two_store_rule_decides_what_a_never_split_draft_opens_with(result):
+    """What the job-wide build did on open, and so what these drafts open with, once. A gyp job whose
+    estimator typed the real answer into the gyp tab (the workaround handed out for the original bug)
+    opens exempt everywhere, not taxed by the intake's stale epoxy answer. A remodel toggle an older
+    build forked onto the gyp base's D8 opens in step with the master. Both then freeze per sheet."""
+    s = result["legacyStores"]
+    assert all(v["taxable"] == "No" for v in s["gypJob"].values()), s["gypJob"]
+    assert all(v["remodel"] == "No" for v in s["forked"].values()), s["forked"]
+    assert s["blankAnswer"] is None
 
 
 @needs_node
 def test_the_proposal_reads_each_tabs_own_two_answers(result):
-    """Hanz, 2026-09-25: "Remodel Tax should be triggered by remodel tax in the estimate form.
-    Taxable is where base bid and other options are taxable or not." The proposal's price block
-    now follows the sheet, so snapshotLumpSumsToState hands it each priced tab's Taxable? and
-    Remodel Tax? answers -- read off that tab's OWN flag cells, the same comparisons the sheet's
-    tax cells make (sales tax unless Taxable? says "no"; remodel tax only when Remodel Tax? says
-    "yes", however it is spelled), a copy answering for itself and a gyp tab from its lower row.
-    A tab with no flag block answers nothing, and the proposal falls back to its tax figures."""
+    """Hanz, 2026-09-25: "Remodel Tax should be triggered by remodel tax in the estimate form. Taxable
+    is where base bid and other options are taxable or not." snapshotLumpSumsToState hands the
+    proposal each priced tab's Taxable? and Remodel Tax? answers -- read off that tab's OWN flag
+    cells, the same comparisons the sheet's tax cells make (sales tax unless Taxable? says "no";
+    remodel tax only when Remodel Tax? says "yes", however it is spelled), a copy answering for
+    itself and a gyp tab from its lower row. A tab with no flag block answers nothing."""
     f = result["proposalFlags"]
     assert f["shipped"] == {"taxable": True, "remodel_on": False}
     assert f["flipped"] == {"taxable": False, "remodel_on": True}
@@ -797,3 +1050,124 @@ def test_the_proposal_reads_each_tabs_own_two_answers(result):
     assert f["copySource"] == {"taxable": True, "remodel_on": False}
     assert f["gyp"] == {"taxable": False, "remodel_on": True}
     assert f["noBlock"] == {}
+
+
+def test_the_info_sheet_reads_the_base_tabs_own_answer():
+    """Since every sheet keeps its own, Epoxy!B6 is the EPOXY sheet's answer -- on a polish job an
+    option's. The hand-off sheet reads the base's, which the estimate screen snapshots off the base
+    tab's own cells as proposal_taxable / proposal_remodel_on. Without them it falls back to the
+    cells, as before, and on this draft that fallback would tell accounting the job is taxed."""
+    import info_sheet_writer as isw
+    cv = {"Epoxy!B6": "Yes", "Epoxy!D6": "No", "Polish!B6": "No", "Polish!D6": "Yes"}
+    d = lambda extra: {"owner_email": "kyle@wetreadwell.com",
+                       "data": dict({"project_name": "Westport Commons", "work_type": "polish",
+                                     "base_tab_id": "Polish", "cell_values": cv}, **extra)}
+    pf = isw.build_prefill(d({"proposal_taxable": False, "proposal_remodel_on": True}))
+    assert pf["B66"] == "Y" and pf["B67"] == "Y"
+    old = isw.build_prefill(d({}))
+    assert old["B66"] == "N" and old["B67"] == "N", "the counterexample no longer reads Epoxy"
+
+
+def test_every_flag_block_sheets_two_cells_are_an_editable_yes_no_on_screen():
+    """The estimator changes an OPTION's answer on that option's own sheet, so every flag-block
+    sheet's two cells have to be a Yes/No picker on screen (the grid builds its <select> from the
+    sheet's dropdowns; a copy uses its source's) and unlocked -- in neither the screen's lock list
+    nor the download's. Read off the real sheet payload and the real lock maps."""
+    import estimate_writer as ew
+    src = (FRONTEND / "js" / "estimate-review.js").read_text(encoding="utf-8")
+    block = src[src.index("const LOCKED_CELLS = {"):]
+    block = block[:block.index("};")]
+    screen = {m.group(1): set(re.findall(r'"([A-Z]+\d+)"', m.group(2)))
+              for m in re.finditer(r'"([^"]+)":\s*\[([^\]]*)\]', block)}
+    gyp_locked = set(re.findall(r'"([A-Z]+\d+)"', re.search(r"const GYP_LOCKED = \[([^\]]*)\]", src).group(1)))
+    for sheet, addrs in ew.FLAG_BLOCK_CELLS.items():
+        grid = ew.read_sheet_grid(sheet)
+        on_screen = gyp_locked if sheet.startswith("Gyp") else screen.get(sheet, set())
+        in_file = set(ew._lock_layout_for(sheet) or [])
+        for a in addrs:
+            assert grid["dropdowns"].get(a) == ["Yes", "No"], (sheet, a, grid["dropdowns"].get(a))
+            assert a not in on_screen, "%s!%s is locked on screen" % (sheet, a)
+            assert a not in in_file, "%s!%s is locked in the download" % (sheet, a)
+
+
+def test_a_sheets_own_answer_in_the_draft_beats_the_job_answer_in_the_file():
+    """``fill_estimate``'s legacy step 1.4 stamps ``values["taxable"]`` onto the four literal sheets.
+    The draft's own ``cell_values`` land after it (step 2), so a sheet's own answer is the one the
+    downloaded file prices with: Leveling and 'Gyp (FR)' exempt on a job whose values say taxable."""
+    import estimate_writer as ew
+    from openpyxl import load_workbook
+    data = ew.fill_estimate({"taxable": "Yes"},
+                            cell_values={"Leveling!B6": "No", "Gyp (FR)!B8": "No"})
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        out = load_workbook(io.BytesIO(data), data_only=False)
+    assert _rates(out, "Leveling")[0] == 0.0
+    assert _rates(out, "Gyp (FR)")[0] == 0.0
+    assert _rates(out, "Epoxy")[0] == 0.09475
+    assert _rates(out, GYP_BASE)[0] == 0.09475
+
+
+@needs_node
+def test_the_autofill_click_puts_the_tax_answers_on_the_base_and_nothing_on_epoxy(result):
+    """The shipped click handler, network and banner stubbed. On a split polish job the AI's two tax
+    answers (keyed `Epoxy!B6` / `Epoxy!D6`, as it always keys them) land on POLISH, the base; Epoxy --
+    an option on this job -- keeps its own; the AI's other flags still land where they always did,
+    and the banner still reports the answer."""
+    a = result["autofillClick"]
+    assert a["bannerKind"] == "success", a["banner"]
+    assert a["polish"] == {"taxable": "No", "remodel": "Yes"}
+    assert a["epoxy"] == {"taxable": "Yes", "remodel": "No"}
+    assert a["epoxyB4"] == "No"
+    assert "Taxable: <b>No</b>" in a["banner"]
+
+
+# ── 6. the call sites this harness cannot reach ─────────────────────────────
+#
+# `init()` is a 120-line async function that fetches before it gets here, and the autofill call
+# site is an anonymous async click handler wrapped round a fetch. So these assert the ORDER out of
+# the shipped source: where the call sits is the whole of what can go wrong with it.
+
+
+def test_the_split_runs_after_the_copies_exist_and_before_the_first_paint():
+    """The split has to see the whole bid: run before the copied tabs are rehydrated and it never
+    reaches a copy; run after `showSheet` and the first paint shows the old answer. And the save
+    comes after, because `/api/generate` fills the workbook from the STORED draft."""
+    src = (FRONTEND / "js" / "estimate-review.js").read_text(encoding="utf-8")
+    body = src[src.index("async function init()"):src.index("\nfunction renderTabs()")]
+    replay = body.index("// Apply saved overrides")
+    split = body.index("_flagsHealed += ownJobFlags();")
+    legacy = body.index("_flagsHealed += applyJobFlags();")
+    paint = body.index("showSheet(initialSheet)")
+    save = body.index("if (_flagsHealed")
+    assert "persistTabState()" in body[save:save + 80], body[save:save + 80]
+    assert replay < legacy < split < paint < save, (replay, legacy, split, paint, save)
+    assert body.index("tab_copies.filter") < legacy
+    # the legacy fan-out is behind the marker, and the marker is set in the same step
+    gate = body.rindex("if (!state.tax_flags_per_sheet) {", 0, legacy)
+    assert body.index("state.tax_flags_per_sheet = true", split) > split
+    assert gate < legacy
+
+
+def test_the_snapshot_tells_the_intake_where_each_tabs_two_cells_are():
+    """The intake finds the base's own two cells on a split draft through
+    ``priced_tabs[].flag_cells`` (test_intake_conditions.py executes that half). snapshotLumpSumsToState
+    needs the whole totals engine to run, so its half is pinned here: every priced tab's snapshot
+    carries the cells ``jobFlagCellsFor`` resolves (executed above)."""
+    src = (FRONTEND / "js" / "estimate-review.js").read_text(encoding="utf-8")
+    body = src[src.index("function snapshotLumpSumsToState()"):src.index("\nfunction persistTabState()")]
+    tabs = body[body.index("state.priced_tabs = pricedTabs().map("):]
+    tabs = tabs[:tabs.index("state.sheet_area")]
+    assert "flag_cells: jobFlagCellsFor(t.id)" in tabs
+
+
+def test_the_autofill_puts_its_flags_on_the_base_before_the_page_re_renders():
+    """The two tax answers are held back from Epoxy's own cells and written to the base inside the
+    same apply, before the grid is redrawn off the values."""
+    src = (FRONTEND / "js" / "estimate-review.js").read_text(encoding="utf-8")
+    body = src[src.index('document.getElementById("autofill-btn")'):]
+    body = body[:body.index("function snapshotLumpSumsToState()")]
+    write = body.index("cellValues[k] = v;")
+    held = body.index("aiFlags[aiFlag] = v;")
+    fan = body.index("applyAutofillJobFlags(aiFlags)")
+    redraw = body.index("await showSheet(activeSheet)")
+    assert held < fan and write < fan < redraw, (held, write, fan, redraw)

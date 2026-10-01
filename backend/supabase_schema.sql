@@ -402,6 +402,24 @@ alter table public.library_items      add column if not exists default_work_type
 alter table public.library_assemblies add column if not exists default_work_types jsonb not null default '[]'::jsonb;
 alter table public.library_labor      add column if not exists default_work_types jsonb not null default '[]'::jsonb;
 
+-- THE LABOR TAB'S OWN FAVORITE, 2026-09-24 (Hanz: "we dont have a tab for labor like the items
+-- and assemblies so we add a tab like that for all default labor then if we want it to be a
+-- default we add it to 'Default items & Assemblies'"). `library_items` and `library_assemblies`
+-- got this column already; `library_labor` did not, because until now EVERY row in this table
+-- behaved as a default -- there was no other tab a custom labor line could come from. The new
+-- Labor tab changes that: a labor type can now exist without being a default, so the table needs
+-- the same flag the other two already carry.
+--
+-- TWO STEPS ON PURPOSE, NOT ONE. Step one backfills every row that exists RIGHT NOW -- Travel,
+-- plus anything already typed into the Defaults tab's old labor form -- to `true`, which is the
+-- only reading that does not un-default something Kyle is already bidding with. Step two then
+-- moves the DEFAULT for anything inserted AFTER this runs to `false`, which is what makes
+-- "create a labor type" and "make it a default" two separate presses on two separate tabs rather
+-- than the same one. A single-step `default false` ALTER would silently un-default every row
+-- that already exists the instant it ran -- do not collapse this back into one line.
+alter table public.library_labor add column if not exists favorite boolean not null default true;
+alter table public.library_labor alter column favorite set default false;
+
 -- ── Items and Assemblies, 2026-08-15 (Hanz) ───────────────────────────────
 -- Additive only, and safe to run against a database that already holds BETA rows.
 --
@@ -410,6 +428,13 @@ alter table public.library_labor      add column if not exists default_work_type
 -- which reproduces exactly what they priced before this column existed.
 alter table public.library_items add column if not exists buy_qty numeric(10,3) not null default 1;
 alter table public.library_items add column if not exists divisions jsonb not null default '[]'::jsonb;
+
+-- COVERAGE, WASTE AND ROUNDUP LIVE ON THE MATERIAL (Hanz, 2026-09-21; applied to BOTH databases that
+-- day, recorded here 2026-09-30). NULL waste_pct reads as 5 and NULL roundup as true, which were the
+-- assembly line's old defaults. Assemblies stopped holding their own copy; see
+-- backend/ops/backfill_material_coverage.sql, run before this code reaches a database.
+alter table public.library_items add column if not exists waste_pct numeric(5,2);
+alter table public.library_items add column if not exists roundup   boolean;
 -- Distinct from updated_at, which moves on every patch and is the assemblies' concurrency token.
 -- This one marks a PRICE REVISION, so it moves only when the cost changes — that is the date an
 -- estimator wants when they ask how old a number is.
@@ -445,6 +470,39 @@ on conflict (id) do nothing;
 -- update path).
 alter table public.library_items add column if not exists updated_by text;
 alter table public.library_assemblies add column if not exists updated_by text;
+
+-- ── Dye and the Joint Filler kit, 2026-09-30 (Hanz) ───────────────────────
+-- "joint filler and die should be library items so that we are able to edit them as well." Two
+-- RESERVED rows, the same pattern as library_labor's 'travel' row above: a literal id rather than
+-- a client-minted uuid, and `on conflict (id) do nothing`, so re-running this file leaves an
+-- edited price alone -- the whole point of the rows is that somebody can change them.
+--
+-- EDITED ON THE ITEMS TAB like any other material; the tab offers no Remove for either, and
+-- library.py's delete_item refuses both ids (create_item never accepts an id, so nothing
+-- reachable from the API could make a deleted one again). The Polish estimate prices its Joint
+-- Filler and Dye condition lines off these rows through library-core's priceLine
+-- (polish-estimate.js's condLine), and falls back to RATES.JOINT_FILLER_KIT_COST /
+-- RATES.DYE_PER_SF in polish-bid-core.js on a database that has not run this yet.
+--
+-- THE FIGURES ARE KYLE'S Polish!C29 AND C25/C26: through the material rule the kit row is
+-- CEIL(area / 3500) kits at $500, and the dye row is ONE COAT, area x $0.14 -- the bid buys two,
+-- his rows 25 and 26 (polish-bid-core.js's DYE_COATS) -- to the cent what the fallback charges. WASTE IS A LITERAL 0, NEVER NULL: a null waste reads as the 5% default
+-- and would buy 5% more of both. test_polish_estimate_page.py holds these rows, both files and the
+-- engine's fallback together. Every column the insert names is added ABOVE it (waste_pct and
+-- roundup with the other material columns), so a fresh database builds.
+--
+-- REMOVE EXISTING JOINT FILLER, 2026-10-01 (Hanz, of the three Takeoff conditions: "All 3
+-- exactly like materials"). A THIRD reserved row, so the Defaults tab can list it as a
+-- material and the Items tab can edit it, with the same no-delete guard. It BUYS NOTHING:
+-- unit_cost and coverage are NULL on purpose and nothing prices off the row -- the estimate's
+-- remove_existing_jf is a labor modifier (Polish!F29), priced on the Labor step. 'SF' only
+-- because unit is NOT NULL; it is never multiplied by anything.
+insert into public.library_items (id, name, unit, buy_qty, unit_cost, coverage, waste_pct, roundup)
+values
+  ('joint-filler-kit', 'Joint filler, 10 gal kit', 'Kit', 1, 500.00, 3500, 0, true),
+  ('dye', 'Dye, per coat', 'SF', 1, 0.14, 1, 0, false),
+  ('remove-existing-jf', 'Remove existing joint filler', 'SF', 1, null, null, 0, false)
+on conflict (id) do nothing;
 
 -- ── Markup rules ──────────────────────────────────────────────────────────
 -- The markup chain's rates, as editable expressions, one row per line per sheet LAYOUT. Today

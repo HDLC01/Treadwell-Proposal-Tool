@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Active Projects · Treadwell Proposal Generator</title>
+<title>Direct Projects · Treadwell Proposal Generator</title>
 <link rel="icon" type="image/svg+xml" href="/img/treadwell-bison.svg" />
 <!-- Warm the jsdelivr connection (DNS + TLS, no bytes) before the parser reaches the CDN script tag below. -->
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
@@ -827,13 +827,21 @@
     color:var(--ink); }
 </style>
 </head>
-<body>
+<!-- THIS PAGE IS BOTH BOARDS. data-pipeline says which one: "direct" here, the Direct Projects
+     board. The General Contractor board (at the gc-projects page) is these same bytes, served by
+     main.py with four strings swapped by backend/pipelines.py (board_page): this attribute, the
+     tab title, the heading and the sub-line below. js/portal.js reads the attribute and draws
+     that pipeline's projects only. So those four strings must each appear exactly once in this
+     file, and test_gc_pipeline.py fails if one of them is renamed without the swap list. -->
+<body data-pipeline="direct">
   <div class="wrap">
-    <!-- Renamed with the sidebar label (Hanz, 2026-08-10: Customer Portal CRM TO "Active
-         Projects"). The URL stays /portal.html: the follow-ups board, the notification bell and
-         projects.js all deep-link into it. -->
-    <h1>Active Projects</h1>
-    <p class="sub">Proposals sent to customers — track approvals, answer questions, and advance deposit &amp; schedule status.</p>
+    <!-- Renamed with the sidebar label: Customer Portal CRM became "Active Projects" (Hanz,
+         2026-08-10), then "Direct Projects" (Hanz, 2026-09-29) when General Contractor projects
+         got a board of their own. The URL stays /portal.html: the follow-ups board, the
+         notification bell and the portal's staff emails all deep-link into it, and portal.js
+         forwards a GC project's link to its own board. -->
+    <h1>Direct Projects</h1>
+    <p class="sub">Proposals sent to direct customers — track approvals, answer questions, and advance deposit &amp; schedule status.</p>
     <!-- Which board, not how it's filtered: the same Active / Test split as the Proposals
          Database, off the same is_test flag. The two ways a job leaves the live board, Handed Off
          and Lost, sit on this row too. -->

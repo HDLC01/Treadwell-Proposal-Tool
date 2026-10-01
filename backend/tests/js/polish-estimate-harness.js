@@ -74,6 +74,7 @@ const EXPORTS = `
     assemblyByName: assemblyByName, setAssembly: setAssembly,
     itemByName: itemByName, setPick: setPick, rowKind: rowKind,
     rowPrice: rowPrice, materialTotal: materialTotal, bid: bid,
+    condLine: condLine, conditionLibrary: conditionLibrary,
     moneyAuto: moneyAuto, measureText: measureText, asmHint: asmHint,
     repaintNumbers: repaintNumbers, renderPanel: renderPanel, stepStatus: stepStatus,
     takeoffPanel: takeoffPanel, laborPanel: laborPanel, reviewPanel: reviewPanel,
@@ -82,6 +83,7 @@ const EXPORTS = `
     model: function () { return M; },
     state: function () { return state; },
     asms: function () { return ASMS; },
+    items: function () { return ITEMS; },
     at: function () { return at; }
   };
 `;
@@ -1380,7 +1382,8 @@ const rendered = [];      // every string the page put on screen, for the Labour
     const afterPick = clone(row());
 
     // THE MONEY, against library-core's own engine rather than a number typed into this file.
-    // Densifier: $100 a pail, 1,000 SF a pail, no waste, roundup on. 10,000 SF is 10 pails.
+    // Densifier: $100 a pail, 1,000 SF a pail, 5% waste (its default, since the fixture gives it
+    // no waste_pct of its own), roundup on. 10,000 SF needs 10.5 pails, which rounds up to 11.
     const expected = L.priceLine({ item_id: "i4" }, ITEMS, 10000);
     // READ THE NODE, NOT THE MARKUP. `changed(false)` repaints through textContent on the
     // cost element; the panel innerHTML captured at render time never moves, so a regex over
@@ -1388,12 +1391,42 @@ const rendered = [];      // every string the page put on screen, for the Labour
     // row that will not price.
     const costCell = () => txt(m, '[data-cost-for="' + idx + '"]');
     const costWithLibraryCoverage = costCell();
+    const itemCoverageBeforeOverride = m.api.items().find((it) => it.id === "i4").coverage;
 
     // A COVERAGE TYPED ON THE ROW WINS over the item's default, which is the whole reason the box
-    // is there: the same product goes further in one system than another.
+    // is there: the same product goes further in one system than another. priceLine itself no
+    // longer reads a line's coverage at all (2026-09-22, coverage moved onto the material), so the
+    // independent check here has to swap the ONE item the page is expected to swap, the same way
+    // priceMaterialRow does -- comparing against the untouched item would just reproduce
+    // costWithLibraryCoverage and prove nothing about the override reaching the engine.
     typeInto(m, '[data-tk="' + idx + '"][data-k="coverage"]', "500");
-    const expectedTyped = L.priceLine({ item_id: "i4", coverage: 500 }, ITEMS, 10000);
+    const swapped = ITEMS.map((it) => (it.id === "i4" ? Object.assign({}, it, { coverage: 500 })
+                                                       : it));
+    const expectedTyped = L.priceLine({ item_id: "i4" }, swapped, 10000);
     const costWithTypedCoverage = costCell();
+    // THE LIBRARY ITEM ITSELF, re-read after the typed override took effect. If priceMaterialRow
+    // swapped the item in place instead of pricing against a copy, this would already read 500.
+    const itemCoverageAfterOverride = m.api.items().find((it) => it.id === "i4").coverage;
+
+    // The card, not the model: an assembly row and a material row must not look the same. Read
+    // NOW, before the second row below forces a full renderPanel() rebuild -- the DOM stub only
+    // fills in a parsed element's own innerHTML/children through a TARGETED repaint (repaintRow),
+    // so cardEl() after a fresh full rebuild reads back an empty shell even though the real
+    // page's markup (and the model) are both still correct. Reading it late doesn't prove the
+    // card is wrong; it proves the stub was asked the wrong way.
+    const saysMaterial = /MATERIAL/.test(cardEl().innerHTML);
+    const cardClass = cardEl().className;
+    const hasCoverageField = !!cardEl().querySelector('[data-k="coverage"]');
+
+    // A SECOND ROW, ON THE SAME MATERIAL, ADDED AFTER THE FIRST ROW'S OVERRIDE AND LEFT BLANK.
+    // This is the other half of the proof: a mutated (rather than copied) item would leak the
+    // first row's 500 into every other row that points at "Densifier", including one that never
+    // touched the coverage box itself.
+    clickOn(m, "[data-add-row]");
+    const idx2 = m.api.model().takeoff.length - 1;
+    typeInto(m, '[data-tk="' + idx2 + '"][data-k="pick"]', "Densifier");
+    typeInto(m, '[data-tk="' + idx2 + '"][data-k="measurement"]', "10000");
+    const secondRowBlankCoverageCost = txt(m, '[data-cost-for="' + idx2 + '"]');
 
     out.materialRow = {
       seeded: seeded,
@@ -1402,10 +1435,9 @@ const rendered = [];      // every string the page put on screen, for the Labour
       // not inferred from item_id alone, so clearing the name cannot flip it back.
       seededKind: seeded.kind,
       isItemKind: m.api.rowKind(row()) === "item",
-      // The card, not the model: an assembly row and a material row must not look the same.
-      saysMaterial: /MATERIAL/.test(cardEl().innerHTML),
-      cardClass: cardEl().className,
-      hasCoverageField: !!cardEl().querySelector('[data-k="coverage"]'),
+      saysMaterial: saysMaterial,
+      cardClass: cardClass,
+      hasCoverageField: hasCoverageField,
       resolvedId: afterPick.item_id,
       // NO UNIT ADOPTION. An item's unit is what it is BOUGHT in (Pail), not how the floor is
       // measured. Copying it onto the row would price a 10,000 SF area in pails.
@@ -1414,6 +1446,13 @@ const rendered = [];      // every string the page put on screen, for the Labour
       expectedLibraryCost: expected.cost,
       costWithTypedCoverage: costWithTypedCoverage,
       expectedTypedCost: expectedTyped.cost,
+      // THE OVERRIDE STAYS ON THIS ROW: a per-job fact about this estimate, never written back
+      // onto the material -- so the item's own coverage must read the same before and after.
+      itemCoverageBeforeOverride: itemCoverageBeforeOverride,
+      itemCoverageAfterOverride: itemCoverageAfterOverride,
+      // ...and a second row on the same material, added after the first row's override and left
+      // blank, still prices at the library's own coverage -- not the first row's 500.
+      secondRowBlankCoverageCost: secondRowBlankCoverageCost,
       // An assembly row beside it is untouched and still an assembly row.
       assemblyRowsUnchanged: m.api.model().takeoff.slice(0, idx)
         .every((r) => !r.item_id && r.kind !== "item"),
@@ -1904,6 +1943,192 @@ const rendered = [];      // every string the page put on screen, for the Labour
     };
   }
 
+  // ── I2. dye and the joint filler kit: priced off their reserved library rows ─────────
+  //
+  // Hanz: "joint filler and die should be library items so that we are able to edit them as
+  // well." Both are RESERVED library_items rows now (backend/library.py's RESERVED_ITEM_IDS),
+  // seeded by the schema files and edited on the Items tab. The page prices its two condition
+  // cards off them through library-core's priceLine (condLine), and falls back to
+  // polish-bid-core.js's jointFillerCost/dyeCost when a row is not there.
+  //
+  // RESERVED_SEED IS THE SEED. test_polish_estimate_page.py parses both schema files and requires
+  // their inserts to say exactly this, so "the seeded rows price like today" below is a claim about
+  // the rows the databases will actually hold, not about a fixture that could drift from them.
+  {
+    const RESERVED_SEED = [
+      { id: "joint-filler-kit", name: "Joint filler, 10 gal kit", unit: "Kit", buy_qty: 1,
+        unit_cost: 500, coverage: 3500, waste_pct: 0, roundup: true },
+      { id: "dye", name: "Dye, per coat", unit: "SF", buy_qty: 1,
+        unit_cost: 0.14, coverage: 1, waste_pct: 0, roundup: false },
+      // THE THIRD RESERVED ROW, 2026-10-01 (Hanz: "All 3 exactly like materials"). It BUYS
+      // NOTHING -- no cost, no coverage -- and nothing on this page prices off it: remove-existing
+      // is a labor modifier, priced on the Labor step. It is in the seed so every identity below
+      // runs WITH it present, which is the proof that it changes no price.
+      { id: "remove-existing-jf", name: "Remove existing joint filler", unit: "SF", buy_qty: 1,
+        unit_cost: null, coverage: null, waste_pct: 0, roundup: false },
+    ];
+    const seeded = (over) => ITEMS.concat(RESERVED_SEED.map((r) =>
+      Object.assign({}, r, (over || {})[r.id] || {})));
+
+    // One SF row with no assembly behind it: it gives the job its area and prices nothing, so the
+    // material total is dye + joint filler and nothing else. Both conditions ON unless `off`.
+    async function priced(items, sf, off, rem) {
+      const model = clone(MODEL);
+      model.takeoff = [{ assembly_id: "", assembly_name: "", measurement: sf, unit: "SF" }];
+      model.conditions = Object.assign({}, model.conditions,
+                                       { dye: !off, joint_filler: !off },
+                                       rem ? { remove_existing_jf: true } : {});
+      const b = build({ blob: blob({ polish_estimate: model }), items: items });
+      await b.api.init();
+      b.api.go(0);
+      const cards = {};
+      b.doc.querySelectorAll("[data-condfig]").forEach(function (el) {
+        cards[el.attrs["data-condfig"]] = el.textContent;
+      });
+      const html = b.dom.get("panels").innerHTML;
+      return { material: b.api.materialTotal(), total: b.api.bid().total, cards: cards,
+               renamedCard: /Our kit/.test(html) };
+    }
+
+    // THE SHIPPED CONSTANTS, called directly: the prices every bid had before either row existed.
+    const constants = (sf) => B.dyeCost(sf, true) + B.jointFillerCost(sf, true);
+
+    const SFS = [0, 1, 3500, 3501, 12000];
+    const identity = {};
+    for (const sf of SFS) {
+      const withRows = await priced(seeded(), sf);
+      const withoutRows = await priced(ITEMS, sf);
+      identity[sf] = { seeded: withRows, missing: withoutRows, constants: constants(sf) };
+    }
+
+    // EDITING THE RATE CHANGES THE BID: $700 a kit and $0.50 a square foot, figures that share
+    // nothing with the shipped $500 / $0.14.
+    const rated = await priced(seeded({ "joint-filler-kit": { unit_cost: 700 },
+                                        dye: { unit_cost: 0.5 } }), 3501);
+
+    // EDITING THE KIT'S COVERAGE CHANGES THE KIT COUNT: 3,500 SF is one kit at the seeded 3,500
+    // and four at 1,000 -- the same area, a different answer, because the row said so.
+    const oneKit = await priced(seeded(), 3500);
+    const fourKits = await priced(seeded({ "joint-filler-kit": { coverage: 1000 } }), 3500);
+    // AND ITS WASTE, which the material rule applies before rounding up: 3,500 SF + 10% needs a
+    // second kit.
+    const wasted = await priced(seeded({ "joint-filler-kit": { waste_pct: 10 } }), 3500);
+
+    // A ROW THAT CANNOT PRICE (cost or coverage blanked) falls back to the shipped formula rather
+    // than charging $0 -- the same answer as a row that is not there at all.
+    const blanked = await priced(seeded({ "joint-filler-kit": { coverage: null },
+                                          dye: { unit_cost: null } }), 3501);
+
+    // OFF IS STILL NOTHING, whatever the row says.
+    const offWithRows = await priced(seeded({ "joint-filler-kit": { unit_cost: 700 } }), 3501,
+                                     true);
+
+    // THE LIVE NAME: renaming the row on the Items tab renames the card.
+    const renamed = await priced(seeded({ "joint-filler-kit": { name: "Our kit" } }), 3500);
+
+    // TYPED INTO A REAL MATERIAL ROW: the path the picker's list does not cover. setPick on a row
+    // that is already a material goes through setMaterial, which once had a name loop of its own.
+    const typedModel = clone(MODEL);
+    typedModel.takeoff = [{ item_id: "i1", item_name: "OPF", measurement: 1000, unit: "SF" }];
+    typedModel.conditions = Object.assign({}, typedModel.conditions, { dye: false, joint_filler: false });
+    const tp = build({ blob: blob({ polish_estimate: typedModel }), items: seeded() });
+    await tp.api.init();
+    tp.api.setPick(0, "Dye, per coat");
+    const typedDye = tp.api.model().takeoff[0].item_id;
+    tp.api.setPick(0, "joint filler, 10 gal kit");
+    const typedKit = tp.api.model().takeoff[0].item_id;
+    tp.api.setPick(0, "OPF");
+    const typedOrdinary = tp.api.model().takeoff[0].item_id;
+    tp.api.setPick(0, "Remove existing joint filler");
+    const typedRem = tp.api.model().takeoff[0].item_id;
+    const typedPick = { dye: typedDye, kit: typedKit, ordinary: typedOrdinary, rem: typedRem };
+
+    // REMOVE-EXISTING ON AS WELL, with its reserved row and without: the row prices nothing, so
+    // the bid is the same to the cent either way, and the material total is what it is with
+    // remove-existing off -- it is a labor modifier, never a material.
+    const remWithRow = await priced(seeded(), 12000, false, true);
+    const remWithoutRow = await priced(ITEMS, 12000, false, true);
+    const remOff = await priced(seeded(), 12000);
+
+    // NEVER A TAKEOFF ROW: not in the picker's list, and not resolved by typing the name out.
+    const p = build({ items: seeded() });
+    await p.api.init();
+    p.api.go(0);
+    const names = p.dom.get("dl-lines").children.filter((c) => c.tag === "option")
+      .map((c) => dec(c.attrs.value));
+
+    out.reservedItems = {
+      seed: RESERVED_SEED,
+      identity: identity,
+      rated: { material: rated.material, cards: rated.cards,
+               // Two kits at $700, and TWO COATS of 3,501 SF at $0.50 -- Kyle's rows 25 and 26.
+               expected: 2 * 700 + 2 * 3501 * 0.5 },
+      oneKit: oneKit.cards["joint_filler.qty"], oneKitHint: oneKit.cards["joint_filler.qtyhint"],
+      fourKits: fourKits.cards["joint_filler.qty"],
+      fourKitsCost: fourKits.material - 3500 * 0.14 * B.DYE_COATS,
+      fourKitsHint: fourKits.cards["joint_filler.qtyhint"],
+      wastedKits: wasted.cards["joint_filler.qty"],
+      wastedHint: wasted.cards["joint_filler.qtyhint"],
+      blanked: { material: blanked.material, constants: constants(3501) },
+      offMaterial: offWithRows.material,
+      renamed: renamed.renamedCard, notRenamedByDefault: oneKit.renamedCard,
+      dyeNotInPicker: names.indexOf("Dye, per coat") === -1,
+      jointFillerNotInPicker: names.indexOf("Joint filler, 10 gal kit") === -1,
+      removeExistingNotInPicker: names.indexOf("Remove existing joint filler") === -1,
+      ordinaryItemsStillListed: names.indexOf("OPF") !== -1 && names.indexOf("Densifier") !== -1,
+      typedNameResolvesToNothing: p.api.itemByName("Dye, per coat") === null &&
+        p.api.itemByName("joint filler, 10 gal kit") === null &&
+        p.api.itemByName("Remove existing joint filler") === null,
+      ordinaryNameStillResolves: (p.api.itemByName("OPF") || {}).id === "i1",
+      typedPick: typedPick,
+      removeExisting: { withRow: { material: remWithRow.material, total: remWithRow.total },
+                        withoutRow: { material: remWithoutRow.material,
+                                      total: remWithoutRow.total },
+                        offMaterial: remOff.material },
+    };
+
+    // ── WHAT A SAVE HANDS KYLE'S WORKBOOK ──
+    // The cell_values the page writes on a real save, per library state, beside the exact Dye /
+    // Joint Filler line costs and kit count the bid priced. test_library_rates_reach_the_workbook.py
+    // runs these cells through the REAL estimate_writer and evaluates the workbook it writes.
+    async function saved(items, sf, cells) {
+      const model = clone(MODEL);
+      model.takeoff = [{ assembly_id: "", assembly_name: "", measurement: sf, unit: "SF" }];
+      model.conditions = Object.assign({}, model.conditions, { dye: true, joint_filler: true });
+      const over = { polish_estimate: model };
+      if (cells) over.cell_values = cells;
+      const b = build({ blob: blob(over), items: items });
+      await b.api.init();
+      b.api.saveSoon();
+      b.clock.fire();
+      const save = b.rec.saves[b.rec.saves.length - 1] || {};
+      const area = B.takeoffSf(b.api.model().takeoff);
+      const dye = b.api.condLine("dye", area);
+      const jf = b.api.condLine("joint_filler", area);
+      return { cells: save.cell_values || {}, area: area, dyeCost: dye.cost, jfCost: jf.cost,
+               jfKits: jf.qty,
+               // TODAY'S WRITE, for the same conditions: the two-argument call every save made
+               // before the library reached the workbook.
+               today: B.conditionCellWrites(b.api.model().conditions, cells || {}) };
+    }
+    const EDITED = { "joint-filler-kit": { unit_cost: 650, coverage: 2000 },
+                     dye: { unit_cost: 0.2 } };
+    const STALE_B29 = '=ROUNDUP(IF(E29="yes",(E18/2000),0),0)';
+    out.reservedWorkbook = {
+      seeded: await saved(seeded(), 3501),
+      edited: await saved(seeded(EDITED), 3501),
+      // 3,200 SF is ONE kit at 3,500 and TWO once 10% waste is bought -- the area where the
+      // waste has to reach the workbook's own kit count or the two disagree.
+      wasted: await saved(seeded({ "joint-filler-kit": { waste_pct: 10 } }), 3200),
+      missing: await saved(ITEMS, 3501, { "Polish!C25": 0.3 }),
+      blanked: await saved(seeded({ "joint-filler-kit": { coverage: null },
+                                    dye: { unit_cost: null } }), 3501),
+      // An earlier save wrote a 2,000 coverage; the row is back at 3,500 now.
+      reset: await saved(seeded(), 3501, { "Polish!B29": STALE_B29, "Polish!C29": 650 }),
+      staleB29: STALE_B29,
+    };
+  }
+
   // ── J. one add control, and a row that categorises itself ──────────────────
   {
     const a = build();
@@ -2141,11 +2366,16 @@ const rendered = [];      // every string the page put on screen, for the Labour
   {
     // Shaped the way GET /api/library/labor returns them: `name` not `label`, a numeric that can
     // arrive as TEXT out of PostgREST, and a `sort` the server has already ordered by.
+    //
+    // BOTH `favorite: true`, 2026-09-24. The Labor tab lets a labor TYPE exist without being a
+    // DEFAULT, so seedLibraryLabor only seeds a favorited row now -- these two are marked the way
+    // an admin favorites one on the Defaults tab, which is what every assertion below expects a
+    // brand new bid to open holding.
     const LIB = [
       { id: "lab-densify", name: "Densify", rate: "40.00", unit: "days", guys_auto: false,
-        sort: 0, notes: null, owner_email: "hanz@wetreadwell.com" },
+        sort: 0, notes: null, owner_email: "hanz@wetreadwell.com", favorite: true },
       { id: "lab-night", name: "Night shift premium", rate: 12.5, unit: "hours", guys_auto: true,
-        sort: 1, notes: "after 6pm", owner_email: "hanz@wetreadwell.com" },
+        sort: 1, notes: "after 6pm", owner_email: "hanz@wetreadwell.com", favorite: true },
     ];
     /** The names the LABOR STEP actually put on screen, read off the inputs it rendered. */
     const onScreen = (built) => built.doc.querySelectorAll('[data-lab][data-k="label"]')
@@ -2297,6 +2527,16 @@ const rendered = [];      // every string the page put on screen, for the Labour
     delete noKey.polish_estimate;
     const brandNew = build({ blob: noKey, conditionDefaults: COND });
     await brandNew.api.init();
+    // THE SAME BRAND-NEW PROJECT WITH ALL THREE RESERVED ROWS IN THE LIBRARY. 2026-10-01 made
+    // remove-existing a library row beside dye and the kit (Hanz: "All 3 exactly like
+    // materials"); the rows are materials an admin edits, and they must change neither which
+    // conditions a new estimate opens with nor what it comes to. The seed is the I2 block's own,
+    // which test_polish_estimate_page.py pins to both schema files.
+    const noKeyRows = blob();
+    delete noKeyRows.polish_estimate;
+    const brandNewRows = build({ blob: noKeyRows, conditionDefaults: COND,
+                                 items: ITEMS.concat(out.reservedItems.seed) });
+    await brandNewRows.api.init();
 
     // AN ESTIMATOR'S OWN ANSWERS, every one of them the opposite of the stored default, so the
     // library has something that COULD have landed here and the gate is the only thing stopping
@@ -2348,6 +2588,8 @@ const rendered = [];      // every string the page put on screen, for the Labour
     out.conditionDefaults = {
       brandNew: { conditions: conds(brandNew),
                   fetched: brandNew.rec.fetches.some((u) => /condition-defaults/.test(u)) },
+      brandNewWithRows: { conditions: conds(brandNewRows), total: brandNewRows.api.bid().total,
+                          totalWithoutRows: brandNew.api.bid().total },
       // THE PROOF THAT THE GATE RAN AT ALL: a saved bid never even asks for the defaults.
       worked: { saved: WORKED.conditions, after: conds(worked),
                 fetched: worked.rec.fetches.some((u) => /condition-defaults/.test(u)),

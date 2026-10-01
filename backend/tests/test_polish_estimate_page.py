@@ -987,8 +987,10 @@ def test_a_material_row_prices_through_the_librarys_own_engine(ran):
     $1,100 and a coverage typed on the row gives $2,100, so a page that ignored the row's box, or
     passed the wrong area, cannot produce both.
 
-    Mutation: drop `coverage: r.coverage` from priceMaterialRow, and the typed figure collapses
-    back to the library one."""
+    Mutation: in priceMaterialRow, stop swapping the typed coverage onto a COPY of the item and
+    price against ITEMS unconditionally instead, and the typed figure collapses back to the
+    library one -- see test_a_typed_coverage_never_reaches_the_library_item below for the other
+    half of that same mutation (it would also leak the typed figure onto every other row)."""
     m = ran["materialRow"]
     assert m["costWithLibraryCoverage"] == "$1,100", (
         "the row did not price off the item's own coverage: %r" % m["costWithLibraryCoverage"])
@@ -996,6 +998,37 @@ def test_a_material_row_prices_through_the_librarys_own_engine(ran):
         "a coverage typed on the row did not reach the engine: %r" % m["costWithTypedCoverage"])
     assert m["costWithLibraryCoverage"] != m["costWithTypedCoverage"], (
         "both coverages priced the same, so the row's own box changes nothing")
+
+
+@needs_node
+def test_a_typed_coverage_never_reaches_the_library_item(ran):
+    """Hanz, 2026-09-30: the coverage box on a material row is THIS ESTIMATE'S OWN OVERRIDE, not a
+    second way to edit the material. Coverage, waste and roundup all moved onto the material on
+    2026-09-22 -- priceLine no longer reads a line's coverage at all -- so the only way a typed
+    figure can still win on this one row is for the page to price against a COPY of the item with
+    the coverage swapped in, never the item itself.
+
+    TWO INDEPENDENT SIGNS OF A MUTATION, either one enough on its own:
+      * the item's own coverage, read back after the typed row, must still be the library figure
+        (1,000), not the 500 that was typed into the row;
+      * a SECOND row on the same material, added afterwards and left blank, must price at the
+        library's own $1,100 -- not the $2,100 the first row's override would produce if it had
+        leaked into the shared item.
+
+    Mutation: swap the coverage onto the item found in ITEMS instead of a copy (e.g. `item.coverage
+    = cov` before calling priceLine), and both of these flip: itemCoverageAfterOverride reads 500,
+    and the second, untouched row prices at $2,100 instead of $1,100."""
+    m = ran["materialRow"]
+    assert m["itemCoverageBeforeOverride"] == 1000, (
+        "the fixture's own Densifier coverage moved, so this test cannot tell before from after: "
+        "%r" % m["itemCoverageBeforeOverride"])
+    assert m["itemCoverageAfterOverride"] == m["itemCoverageBeforeOverride"], (
+        "typing a coverage on the row wrote it back onto the library item: %r vs %r"
+        % (m["itemCoverageAfterOverride"], m["itemCoverageBeforeOverride"]))
+    assert m["secondRowBlankCoverageCost"] == m["costWithLibraryCoverage"] == "$1,100", (
+        "a second, blank row on the same material priced at %r after the first row's override -- "
+        "the override leaked off the row and onto every row pointing at that item"
+        % m["secondRowBlankCoverageCost"])
 
 
 @needs_node
@@ -1263,13 +1296,15 @@ def test_joint_filler_and_dye_render_as_material_rows(ran):
         "the kit count does not show its working, so five reads as a number from nowhere: %r"
         % jf["measureHint"])
     # DYE IS BOUGHT ACROSS THE AREA, so its measurement is the area itself.
-    assert dy["name"] == "Dye, two coats", dy["name"]
+    assert dy["name"] == "Dye, per coat", dy["name"]
     assert dy["measurement"]["text"] == "17,500", dy["measurement"]
     assert dy["unit"]["text"] == "SF", dy["unit"]
     # THE PER-UNIT HINT IS KYLE'S OWN RATE, C29 and C25, arrived at by the page rather than typed
     # into it -- which is the check that the measurement and the money agree about what is bought.
     assert jf["rate"] == "$500.00 / kit", jf["rate"]
-    assert dy["rate"] == "$0.14 / SF", dy["rate"]
+    # DYE IS TWO COATS of Kyle's 0.14 (rows 25 and 26), and the hint says so rather than quoting
+    # a $0.28 the library row -- one coat -- does not hold.
+    assert dy["rate"] == "2 coats \u00d7 $0.14 / SF", dy["rate"]
 
 
 @needs_node
@@ -1409,7 +1444,8 @@ def test_switching_dye_on_moves_the_material_total_by_exactly_the_dye(ran):
         "switching dye on moved the Material total by %s, but dyeCost(%s) is %s"
         % (delta, d["area"], d["expectedDelta"]))
     assert d["laborUnmoved"], "switching dye on moved the labor total, which it does not touch"
-    assert d["costBoxOff"] == "\u2014" and d["costBoxOn"] == "$2,450", (
+    # 17,500 SF x $0.14 x 2 coats (Kyle's rows 25 and 26).
+    assert d["costBoxOff"] == "\u2014" and d["costBoxOn"] == "$4,900", (
         "the card's own Total cost box did not follow the switch: %r -> %r"
         % (d["costBoxOff"], d["costBoxOn"]))
 
@@ -1831,6 +1867,228 @@ def test_the_search_offers_both_the_assemblies_and_the_materials(ran):
     assert d["pickerIsNotASelect"], "the picker became a <select>"
 
 
+# ── dye and the joint filler kit: priced off their reserved library rows ─────────────────────
+# Hanz: "joint filler and die should be library items so that we are able to edit them as well."
+# Both are RESERVED library_items rows (backend/library.py's RESERVED_ITEM_IDS), edited on the
+# Items tab; the page prices its two condition cards off them through priceLine (condLine) and
+# falls back to jointFillerCost/dyeCost when a row is not there. All of it is the real page run
+# by polish-estimate-harness.js (out.reservedItems).
+SFS = ("0", "1", "3500", "3501", "12000")
+
+
+@needs_node
+def test_the_seeded_rows_price_every_bid_to_the_cent_as_before(ran):
+    """PRICE IDENTITY, the condition this change ships on. At every area that matters -- none, one
+    square foot, exactly one kit's worth, one foot over it, and a big floor -- a page holding the
+    SEEDED rows, a page holding NO rows, and the shipped constants called directly all give the
+    same material total, the same bid, and the same figures on both condition cards. The seed
+    fixture is pinned to the schema files by test_both_schema_files_seed_the_dye_and_joint_filler
+    _rows_the_engine_prices_like_the_constants below.
+
+    Mutation: seed the kit's waste as null/5 or its roundup off (3500 and 3501 move); read the
+    dye row's coverage as the divisor the wrong way round; drop the fallback in condLine (the
+    `missing` column goes to $0)."""
+    ident = ran["reservedItems"]["identity"]
+    assert sorted(ident, key=float) == list(SFS), ident.keys()
+    for sf in SFS:
+        row = ident[sf]
+        assert row["seeded"]["material"] == row["constants"], (
+            "at %s SF the seeded rows price dye + joint filler at %r, the shipped constants at %r"
+            % (sf, row["seeded"]["material"], row["constants"]))
+        assert row["missing"]["material"] == row["constants"], (
+            "at %s SF a page with no reserved row no longer falls back to the shipped constants: "
+            "%r vs %r" % (sf, row["missing"]["material"], row["constants"]))
+        assert row["seeded"]["total"] == row["missing"]["total"], (
+            "at %s SF the bid differs between the seeded rows and the fallback: %r vs %r"
+            % (sf, row["seeded"]["total"], row["missing"]["total"]))
+        assert row["seeded"]["cards"] == row["missing"]["cards"], (
+            "at %s SF the condition cards read differently off the seeded rows: %r vs %r"
+            % (sf, row["seeded"]["cards"], row["missing"]["cards"]))
+    # THE VECTORS ARE NOT VACUOUS: one kit at 3,500, a second at 3,501, and $0 at 0 SF.
+    # Two coats of dye (Kyle's rows 25 and 26) and the kits.
+    assert ident["3500"]["constants"] == pytest.approx(3500 * 0.14 * 2 + 500)
+    assert ident["3501"]["constants"] == pytest.approx(3501 * 0.14 * 2 + 1000)
+    assert ident["0"]["constants"] == 0
+
+
+@needs_node
+def test_editing_the_library_rate_changes_the_bid(ran):
+    """$700 a kit and $0.50 a square foot a coat on the rows, figures that share nothing with the
+    shipped $500 / $0.14: the material total is two kits at $700 plus two coats of 3,501 SF at
+    $0.50, and each card quotes the rate it charged.
+
+    Mutation: have condLine price off RATES instead of the row, or have materialTotal call
+    jointFillerCost/dyeCost directly."""
+    r = ran["reservedItems"]["rated"]
+    assert r["material"] == pytest.approx(r["expected"]), r
+    assert r["cards"]["joint_filler.rate"] == "$700.00 / kit", r["cards"]
+    assert r["cards"]["dye.rate"] == "2 coats \u00d7 $0.50 / SF", r["cards"]
+    assert r["cards"]["joint_filler.qty"] == "2", r["cards"]
+
+
+@needs_node
+def test_editing_the_kits_coverage_changes_the_kit_count(ran):
+    """The kit count is the row's own coverage now, not a 3,500 in the code. The same 3,500 SF is
+    one kit at the seeded coverage and four at 1,000; a 10% waste on the row buys a second kit,
+    because the material rule inflates before it rounds up. The card's sentence says what the
+    arithmetic did.
+
+    Mutation: keep `a / 3500` for the kit count; drop the row's waste; hardcode the hint's 3,500."""
+    r = ran["reservedItems"]
+    assert r["oneKit"] == "1", r["oneKit"]
+    assert r["oneKitHint"] == "3,500 sq ft, at one kit per 3,500, rounded up.", r["oneKitHint"]
+    assert r["fourKits"] == "4", r["fourKits"]
+    assert r["fourKitsCost"] == pytest.approx(2000), r["fourKitsCost"]
+    assert r["fourKitsHint"] == "3,500 sq ft, at one kit per 1,000, rounded up.", r["fourKitsHint"]
+    assert r["wastedKits"] == "2", r["wastedKits"]
+    assert r["wastedHint"] == "3,500 sq ft, at one kit per 3,500 plus 10% waste, rounded up.", (
+        r["wastedHint"])
+
+
+@needs_node
+def test_a_row_that_cannot_price_falls_back_and_off_still_charges_nothing(ran):
+    """A missing row is covered by the identity test above. A row that is THERE but cannot price
+    (its coverage or its cost blanked on the Items tab) must not bill $0 either: it takes the same
+    shipped formula a missing row does. And a condition that is off charges nothing whatever its
+    row says.
+
+    Mutation: return p.cost from condLine whatever p.ok says; drop the `if (M.conditions.x)` gate
+    in materialTotal."""
+    r = ran["reservedItems"]
+    assert r["blanked"]["material"] == pytest.approx(r["blanked"]["constants"]), r["blanked"]
+    assert r["offMaterial"] == 0, r["offMaterial"]
+
+
+def _reserved_item_seed(path):
+    """The rows one schema file's library_items insert seeds, as {id: {column: value}}, plus
+    where in the file the insert sits. Comments stripped first, so a seed somebody has commented
+    OUT does not read as a seed (the travel-row test's own lesson)."""
+    sql = re.sub(r"--[^\n]*", "", path.read_text(encoding="utf-8"))
+    found = list(re.finditer(
+        r"insert into public\.library_items\s*\(([^)]*)\)\s*values\s*(.*?)"
+        r"\s*on conflict \(id\) do nothing;", sql, re.I | re.S))
+    assert len(found) == 1, (
+        "%s must seed library_items with exactly ONE idempotent insert, found %d"
+        % (path.name, len(found)))
+    m = found[0]
+    cols = [c.strip() for c in m.group(1).split(",")]
+    rows = {}
+    for tup in re.findall(r"\(([^)]*)\)", m.group(2)):
+        vals = []
+        for tok in re.findall(r"\s*('(?:[^']|'')*'|[^,]+)", tup):
+            tok = tok.strip()
+            if tok.startswith("'"):
+                vals.append(tok[1:-1].replace("''", "'"))
+            elif tok.lower() in ("true", "false"):
+                vals.append(tok.lower() == "true")
+            elif tok.lower() == "null":
+                vals.append(None)
+            else:
+                vals.append(float(tok))
+        row = dict(zip(cols, vals))
+        rows[row["id"]] = row
+    return rows, m.start(), sql
+
+
+@needs_node
+def test_both_schema_files_seed_the_dye_and_joint_filler_rows_the_engine_prices_like_the_constants(ran):
+    """THE ROWS, THE FILES AND THE ENGINE HAVE TO AGREE, and they live in four places.
+
+    Both schema files seed the three reserved rows (DDL LANDS TWICE: prod Supabase and the staging
+    Postgres are different databases), library.py refuses to delete them, library.js keeps the
+    Remove button off them, and the page prices two of them. The third, remove-existing-jf
+    (2026-10-01), buys nothing: its unit_cost and coverage are seeded NULL and must stay NULL, so
+    a figure cannot creep into a row nothing is supposed to price off. The harness's
+    RESERVED_SEED is what test_the_seeded_rows_price_every_bid_to_the_cent_as_before proves
+    prices exactly like the
+    shipped constants -- so requiring both files to say EXACTLY that, column for column, is what
+    makes the identity a fact about the databases rather than about a fixture.
+
+    WASTE IS A LITERAL 0, never null: a null waste reads as the 5% default and would buy 5% more of
+    both. A FRESH DATABASE MUST BUILD: every column the insert names has to exist by the time the
+    insert runs, so the waste/roundup/buy_qty columns are added ABOVE it.
+
+    Mutation: seed any row differently in one file; seed waste as null; give remove-existing-jf a
+    cost; move the insert above the waste_pct/roundup alters; rename an id in library.py's
+    RESERVED_ITEM_IDS or library.js's RESERVED_ITEM_CONDITION."""
+    import library  # noqa: E402 -- backend/ is the working directory for this suite
+
+    backend = pathlib.Path(__file__).resolve().parents[1]
+    seed = {r["id"]: r for r in ran["reservedItems"]["seed"]}
+    seeded = {}
+    for name in ("supabase_schema.sql", "staging/schema_pg.sql"):
+        rows, at, sql = _reserved_item_seed(backend / name)
+        seeded[name] = rows
+        for col in ("buy_qty", "waste_pct", "roundup"):
+            alter = re.search(r"alter table public\.library_items add column if not exists %s\b"
+                              % col, sql, re.I)
+            assert alter and alter.start() < at, (
+                "%s: the library_items insert names %s before any `add column if not exists %s` "
+                "above it, so a fresh database fails on this insert" % (name, col, col))
+        assert set(rows) == set(seed), (name, sorted(rows))
+        for rid, want in seed.items():
+            got = rows[rid]
+            assert set(got) == set(want), (
+                "%s seeds %s with columns %r, the priced seed has %r"
+                % (name, rid, sorted(got), sorted(want)))
+            for col, val in want.items():
+                # NULL ONLY WHERE THE PRICED SEED SAYS NULL -- remove-existing-jf's cost and
+                # coverage. Anywhere else a NULL is a row that prices wrong (a null waste reads
+                # as 5%).
+                if val is None:
+                    assert got[col] is None, "%s seeds %s.%s as %r, not NULL" % (
+                        name, rid, col, got[col])
+                    continue
+                assert got[col] is not None, "%s seeds %s.%s as NULL" % (name, rid, col)
+                if isinstance(val, bool) or isinstance(val, str):
+                    assert got[col] == val, (name, rid, col, got[col], val)
+                else:
+                    assert got[col] == pytest.approx(val), (name, rid, col, got[col], val)
+    assert seeded["supabase_schema.sql"] == seeded["staging/schema_pg.sql"], (
+        "the two schema files seed DIFFERENT dye / joint filler rows, so prod and staging would "
+        "price them differently")
+
+    assert set(library.RESERVED_ITEM_IDS) == set(seed), library.RESERVED_ITEM_IDS
+    # THE THIRD ROW BUYS NOTHING, in both files: no cost and no coverage to price from.
+    assert seed["remove-existing-jf"]["unit_cost"] is None
+    assert seed["remove-existing-jf"]["coverage"] is None
+    js = (FRONTEND / "js" / "library.js").read_text(encoding="utf-8")
+    m = re.search(r"var RESERVED_ITEM_CONDITION = \{([^}]*)\};", js)
+    assert m, "library.js no longer declares RESERVED_ITEM_CONDITION"
+    assert set(re.findall(r'"([^"]+)":', m.group(1))) == set(seed), m.group(1)
+
+
+@needs_node
+def test_the_reserved_rows_are_never_a_takeoff_row_and_the_card_uses_the_live_name(ran):
+    """Each is already priced by its own condition card, so neither may become an ordinary takeoff
+    row: it is left out of the picker's list AND a name typed out in full resolves to nothing,
+    either of which would charge the same material twice. Renaming the row on the Items tab
+    renames the card.
+
+    Mutation: drop the RESERVED_ITEM_IDS filter from renderDatalist or itemByName; render the
+    card's material from a literal."""
+    r = ran["reservedItems"]
+    assert r["dyeNotInPicker"], "\"Dye, per coat\" is offered in the takeoff row picker"
+    assert r["jointFillerNotInPicker"], (
+        "\"Joint filler, 10 gal kit\" is offered in the takeoff row picker")
+    assert r["removeExistingNotInPicker"], (
+        "\"Remove existing joint filler\" is offered in the takeoff row picker")
+    assert r["ordinaryItemsStillListed"], "an ordinary material vanished from the picker too"
+    assert r["typedNameResolvesToNothing"], (
+        "typing a reserved row's name resolves a takeoff row to it")
+    assert r["ordinaryNameStillResolves"], "an ordinary material no longer resolves by name"
+    # Typed into a row that is ALREADY a material (setPick -> setMaterial), not just looked up.
+    assert r["typedPick"]["dye"] not in ("dye", "joint-filler-kit"), (
+        "typing 'Dye, per coat' into a material row turned it into a second dye charge")
+    assert r["typedPick"]["kit"] not in ("dye", "joint-filler-kit"), (
+        "typing the kit's name into a material row turned it into a second joint filler charge")
+    assert r["typedPick"]["rem"] not in ("remove-existing-jf",), (
+        "typing 'Remove existing joint filler' into a material row picked its reserved row")
+    assert r["typedPick"]["ordinary"] == "i1", "typing an ordinary material no longer resolves it"
+    assert r["renamed"] and not r["notRenamedByDefault"], (
+        "the joint filler card does not show the row's own name")
+
+
 @needs_node
 def test_nothing_on_screen_says_labour_or_crew(ran):
     """Hanz: "All labour should be renamed to 'Labor'." And "Crew" went with it — the column is
@@ -2025,13 +2283,16 @@ def test_the_remodel_tax_uses_the_countys_real_rate_not_the_sheets_ten_percent(r
     c = ran["remodelRate"]["county"]
     assert c["pct"] == "7.975%", "a Johnson County job is not charged the county rate: %r" % c["pct"]
     assert c["pct"] == c["expectedPct"]
-    # BACK TO $1,529 ON 2026-09-19. It was $1,529 before 2026-09-18, then $1,715 while
-    # joint_filler shipped ON and added $2,500 of material to this fixture, and now $1,529 again
-    # because the condition ships off. The $2,500 is not the whole of the $186 swing -- it moves
-    # the sub-total, and GP, shipping and the taxes all follow it -- which is exactly why the
-    # figure is worth pinning rather than recomputing in the test.
-    assert c["money"] == "$1,529" and c["expectedMoney"] == 1529
-    assert c["total"] == "$33,239" and c["expectedTotal"] == 33239, (
+    # NOW $1,557 / $34,025 AS OF 2026-09-30. $1,529 held from 2026-09-19 until the library's
+    # coverage/waste/roundup moved onto the material (2026-09-22): this fixture's items i2/i3/i4
+    # were never given their own waste_pct, so they now correctly default to 5% instead of quietly
+    # inheriting the 0% their assembly lines used to carry -- and i4 (Densifier, 5 pails needed)
+    # ceiling-rounds to a whole extra pail at 5.25. That is a real, upstream, already-approved
+    # engine change, not a fixture bug: it moves the sub-total, and GP, shipping and the taxes all
+    # follow it, which is exactly why the figure is worth pinning rather than recomputing in the
+    # test.
+    assert c["money"] == "$1,557" and c["expectedMoney"] == 1557
+    assert c["total"] == "$34,025" and c["expectedTotal"] == 34025, (
         "the total does not follow the county rate through the chain")
     assert c["rowNamesTheCounty"], (
         "the row does not say which county the rate came from; an estimator who knows the workbook "
@@ -2046,9 +2307,9 @@ def test_with_no_county_it_falls_back_to_the_state_rate_and_says_so(ran):
     it matches the sheet, while being wrong everywhere."""
     f = ran["remodelRate"]["fallback"]
     assert f["pct"] == "6.5%", "the no-county fallback is not the Kansas state rate: %r" % f["pct"]
-    # $1,247 before 2026-09-18 and again from 2026-09-19 -- the same joint-filler-by-default
-    # shift as the county case above, in reverse.
-    assert f["money"] == "$1,247" and f["expectedMoney"] == 1247
+    # NOW $1,269 AS OF 2026-09-30 -- the same coverage-on-material default-waste shift as the
+    # county case above (see that test's comment), just at the state rate instead of the county's.
+    assert f["money"] == "$1,269" and f["expectedMoney"] == 1269
     assert f["expectedMoney"] != f["whatTenPercentWouldBe"], (
         "the fallback charges what the sheet's 10% would have charged (%s), so this test proves "
         "nothing" % f["whatTenPercentWouldBe"])
@@ -2321,6 +2582,31 @@ def test_a_brand_new_bid_opens_with_the_conditions_the_library_says(ran):
     assert c["conditions"]["remove_existing_jf"] is True
     # The five answered on Intake are not this tab's to move.
     assert c["conditions"]["taxable"] is True and c["conditions"]["local"] is True
+
+
+@needs_node
+def test_the_reserved_rows_change_neither_the_seeded_conditions_nor_the_price(ran):
+    """2026-10-01: remove-existing became a reserved library row beside dye and the joint filler
+    kit (Hanz: "All 3 exactly like materials"), so the Defaults tab can list it as a material. A
+    new estimate must open with EXACTLY the conditions it opened with before for the same
+    condition defaults, and come to the same total, whether the three rows are in the library or
+    not -- and remove-existing, on, must move no material figure and no bid figure by a cent,
+    because nothing prices off its row.
+
+    Mutation: give remove-existing's card a `cost` that reads its row, or seed conditions off the
+    library rows' `favorite` instead of condition_defaults."""
+    n = ran["conditionDefaults"]
+    assert n["brandNewWithRows"]["conditions"] == n["brandNew"]["conditions"], (
+        "the reserved rows changed which conditions a brand new bid opens with: %r vs %r"
+        % (n["brandNewWithRows"]["conditions"], n["brandNew"]["conditions"]))
+    assert n["brandNewWithRows"]["total"] == n["brandNewWithRows"]["totalWithoutRows"], (
+        n["brandNewWithRows"])
+    rem = ran["reservedItems"]["removeExisting"]
+    assert rem["withRow"] == rem["withoutRow"], (
+        "remove-existing's reserved row moved the bid: %r" % rem)
+    assert rem["withRow"]["material"] == rem["offMaterial"], (
+        "remove-existing, on, changed the material total -- it is a labor modifier, not a "
+        "material: %r" % rem)
 
 
 @needs_node

@@ -55,8 +55,11 @@
     .alert:empty { display:none; }
 
     /* Items | Assemblies */
-    .views { display:flex; gap:2px; background:var(--surf-low); border-radius:var(--r-lg);
-      padding:3px; margin:0 0 16px; width:max-content; }
+    /* WRAPS AT PHONE WIDTH rather than pushing the page sideways. Five tabs at max-content are
+       ~600px, so on a 390px phone the whole page scrolled horizontally. max-width keeps the
+       strip inside the page; flex-wrap puts the last tabs on a second line, all five visible. */
+    .views { display:flex; flex-wrap:wrap; gap:2px; background:var(--surf-low); border-radius:var(--r-lg);
+      padding:3px; margin:0 0 16px; width:max-content; max-width:100%; box-sizing:border-box; }
     .views button { border:0; background:none; padding:7px 16px; border-radius:var(--r-md);
       cursor:pointer; font:600 13px var(--ui); color:var(--ink-v);
       transition:background .15s ease, color .15s ease; }
@@ -127,19 +130,21 @@
     /* .linkish carried its own margin-right; .btn does not. Scoped to the Defaults pane so
        the Items tab's icon-button pairs (already spaced by their own gap) are untouched. */
     #pane-defaults .rowact .btn + .btn { margin-left:6px; }
-    /* What a row nobody can change here says instead of an empty cell. Travel and the three
-       takeoff conditions are built in; bond is read only because the Markup page owns it. */
+    /* What a row nobody can change here says instead of an empty cell -- and the Items tab's
+       Remove existing joint filler row, whose cost cell says "No material cost" instead of a box,
+       because it buys nothing (it is a labor modifier, priced on the Labor step). */
     .builtin { font:600 10.5px var(--ui); color:var(--ink-v); letter-spacing:.04em;
        text-transform:uppercase; }
-    /* THE LABOR FORM, WHICH IS A ROW IN THE TABLE rather than a panel above it. Hanz asked
-       on 2026-09-17 for the takeoff picker to open "within the line item instead of up
-       above", and a form for a labor line has the same answer only louder: it opens where
-       the line will be, with the columns it will fill, so what you type is laid out as what
-       you will read back. A modal would say the opposite -- that this is a trip elsewhere. */
-    .defform > td { background:var(--surf-low); }
-    .defform input, .defform select { width:100%; font-size:12.5px; padding:5px 8px; }
-    .defform .n input { text-align:right; }
-    .deferr { margin:0; padding:2px 0 0; color:var(--red-dark); font-size:12px; }
+    /* THE LABOR TAB'S "MORE" ROW -- guys_auto and sort, the two fields Hanz's own design puts
+       behind progressive disclosure rather than as headline columns: name, rate, unit and notes
+       are what somebody reads on sight, and how a Guys column is filled in and where a line sorts
+       are decisions made once and rarely revisited. A second <tr>, not a fifth column, for the
+       same reason the labor form used to be a row rather than a panel: it opens where the line
+       already is. */
+    .labor-more > td { background:var(--surf-low); padding:8px 12px; }
+    .morefield { display:inline-flex; align-items:center; gap:6px; font-size:12.5px;
+       color:var(--ink-v); margin-right:20px; }
+    .morefield input[type="number"] { width:70px; }
     /* A SUB-HEADING INSIDE THE TABLE, not a row pretending to be one. Left-aligned and
        quiet: it is a signpost over rows that carry the actual content, so it must not
        out-shout the names beneath it. The first one drops its top border -- a rule directly
@@ -316,7 +321,17 @@
 
     /* assemblies workspace */
     .work { display:grid; grid-template-columns:272px 1fr; gap:16px; align-items:start; }
-    @media (max-width:1080px){ .work { grid-template-columns:1fr; } }
+    /* THE NARROW LAYOUT (one column) KEEPS ITS WIDE TABLE IN A BOX OF ITS OWN. Measured on staging
+       2026-10-01: at 390px the Assemblies tab scrolled the whole page to 927px. A plain `1fr` track
+       is minmax(auto,1fr), so it grew to the 864px lines table; minmax(0,1fr) holds it to the page.
+       The lines table then needs the scroller it deliberately does not have on desktop (see
+       .tw-nolimit) -- and a scroller clips an absolutely placed dropdown, so here the item picker's
+       results sit in the row instead of floating over it (that override is below the
+       .item-results rule, so it wins the cascade). Above 1080px nothing changes. */
+    @media (max-width:1080px){
+      .work { grid-template-columns:minmax(0,1fr); }
+      .tw-nolimit { overflow-x:auto; }
+    }
     .alist { padding:8px; display:flex; flex-direction:column; gap:3px; }
     .anomatch { padding:14px 12px; display:grid; gap:10px; justify-items:start; }
     .anomatch p { margin:0; font-size:12.5px; color:var(--ink-v); line-height:1.5; }
@@ -417,7 +432,12 @@
     .qtycell select { width:100%; min-width:96px; }
     .lines .waste { width:74px; }
     .lines .ru { text-align:center; }
-    .lines input[type="checkbox"] { width:16px; height:16px; accent-color:var(--red); cursor:pointer; }
+    /* Was `.lines input[type="checkbox"]` alone -- the assembly-lines table's own roundup box.
+       That box moved to the Materials tab on 2026-09-22 (coverage/waste/roundup are read-only,
+       derived cells on a line now; see the .lines .ru.derived rule), so this rule now styles the
+       Items table's checkbox too rather than gaining a second copy of the same four declarations. */
+    .lines input[type="checkbox"], .items-table input[type="checkbox"] {
+      width:16px; height:16px; accent-color:var(--red); cursor:pointer; }
     /* THE DIVISION CELL: toggle chips on ONE line, not a stack of checkboxes.
        Hanz, 2026-08-24: "can we have it in just one row? Also instead of a checkbox please pick a
        better UI that allows a material to have multiple divisions but they show up in one row."
@@ -476,6 +496,9 @@
       display:grid; gap:4px; max-height:230px; overflow:auto; background:var(--card);
       border:1px solid var(--line); border-radius:var(--r-md); padding:6px;
       box-shadow:0 8px 22px rgba(92,64,63,.18); }
+    /* The narrow layout's lines table scrolls in its own box (see .work above), which would clip
+       a floating list: there the results sit in the row. AFTER the rule above, so it wins. */
+    @media (max-width:1080px){ .item-results { position:static; margin-top:4px; } }
     .item-result { text-align:left; background:var(--card); border:1px solid var(--line);
       border-radius:var(--r-sm); padding:6px 8px; cursor:pointer; color:var(--ink); }
     .item-result[aria-pressed="true"] { border-color:var(--red); background:var(--red-tint); }
@@ -617,7 +640,10 @@
       #pane-defaults .rowact .btn { margin-bottom:4px; }
     }
 
-    .admin-grid { display:grid; gap:18px; }
+    /* minmax(0,1fr), not the implicit auto track: the divisions table is ~506px and an auto track
+       grew to it, scrolling the whole page at phone width. Held to the page, the table scrolls in
+       its own .tw box instead. */
+    .admin-grid { display:grid; gap:18px; grid-template-columns:minmax(0,1fr); }
     /* THE MEASURE CAP. .wrap runs to max-width:1660px because the Items table needs eight
        columns; the Defaults tab's tables have three. Uncapped, a row's name and its Remove
        button end up roughly fifteen hundred pixels apart on a wide monitor, so the eye has
@@ -668,6 +694,11 @@
               aria-controls="pane-items">Items<span class="n" id="n-items"></span></button>
       <button type="button" role="tab" id="tab-asm" aria-selected="true"
               aria-controls="pane-asm">Assemblies<span class="n" id="n-asm"></span></button>
+      <!-- RIGHT AFTER ASSEMBLIES, BEFORE ADMINISTRATION -- every labor line Treadwell has typed,
+           the same peer Items and Assemblies already are to each other, rather than a form buried
+           inside the Defaults tab. See the note over #pane-labor for what this tab is and is not. -->
+      <button type="button" role="tab" id="tab-labor" aria-selected="false"
+              aria-controls="pane-labor">Labor<span class="n" id="n-labor"></span></button>
       <button type="button" role="tab" id="tab-vendors" aria-selected="false"
               aria-controls="pane-vendors">Administration</button>
       <button type="button" role="tab" id="tab-defaults" aria-selected="false"
@@ -752,6 +783,15 @@
               <tr>
                 <th>Materials <span class="th-sub">(how the manufacturer names it)</span></th>
                 <th>Division</th><th class="n">Order Quantity</th><th>Unit</th>
+                <!-- COVERAGE, WASTE AND ROUNDUP LIVE HERE NOW, from 2026-09-22. Hanz: "for the
+                     materials, we must have coverage per unit, waste factor, roundup, and
+                     materials tab. And then it gets pulled in to assemblies instead of it being
+                     in assemblies." Same three width classes (.n.w-cov / .n.w-waste / .w-ru) and
+                     the same copy the assembly-lines <thead> already uses for these properties
+                     below — one description of what each one means, not two. -->
+                <th class="n w-cov"><span class="th-help" tabindex="0" title="How much one unit of this material covers, in whatever an assembly measures in - square feet or linear feet. Per unit, not per pack: a 5 gallon pail at 275 a gallon covers 1,375." aria-label="Coverage per Unit. How much one unit of this material covers, in whatever an assembly measures in - square feet or linear feet. Per unit, not per pack: a 5 gallon pail at 275 a gallon covers 1,375.">Coverage per Unit</span></th>
+                <th class="n w-waste"><span class="th-help" tabindex="0" title="Adds this percentage to the calculated amount needed, to account for waste, spills, and overage." aria-label="Waste Factor. Adds this percentage to the calculated amount needed, to account for waste, spills, and overage.">Waste Factor</span></th>
+                <th class="w-ru"><span class="th-help" tabindex="0" title="Rounds the amount needed up to whole purchase units, so an assembly buys complete packs, kits, bags, or other units." aria-label="Roundup. Rounds the amount needed up to whole purchase units, so an assembly buys complete packs, kits, bags, or other units.">Roundup?</span></th>
                 <!-- "Dates" until 2026-09-04. The cell names who added the material and who
                      last changed it, not only when, so the heading stopped promising only
                      dates.
@@ -791,6 +831,59 @@
       <p class="foot">Costs are held to four decimal places, because a per-gallon price rounded
         to the cent drifts by dollars across a large floor. <b>Price</b> is the date the cost last
         changed — correcting a spelling doesn't make a number newer.</p>
+    </section>
+
+    <!-- ── Labor, 2026-09-24 ──────────────────────────────────────────────
+         Hanz: "we dont have a tab for labor like the items and assemblies so we add a tab like
+         that for all default labor then if we want it to be a default we add it to 'Default
+         items & Assemblies'." EVERY LABOR LINE THE CATALOG HOLDS, a peer to Items and Assemblies
+         rather than a form buried in the Defaults tab or a fourth Administration list -- creating
+         a labor TYPE and flagging it as a DEFAULT are two separate, sequential actions on two
+         different tabs, and this is the first of them. Modeled on Items: a flat, always-editable
+         inline table, not Assemblies' card-rail-with-nested-editor shape, because a labor line
+         has no sub-list of its own the way an assembly's lines do.
+
+         WHETHER A ROW HERE IS A DEFAULT lives on the Default Items & Assemblies tab, in its own
+         Labor section, which favorites off this same catalog the same way Items and Assemblies
+         already let a row be favorited there -- see #default-labor in that pane. This tab never
+         filters on `favorite`; it is the whole catalog, on purpose. -->
+    <section id="pane-labor" role="tabpanel" aria-labelledby="tab-labor" hidden>
+      <p class="paneintro"><b>Every labor line Treadwell bills.</b> A line added here is not on any
+        new bid until you add it under <b>Default Items &amp; Assemblies</b>.</p>
+      <p class="ronote" id="labor-ro" hidden>You can see these rates. Adding, changing and removing
+        labor lines is admin-only - ask Hanz or Kyle.</p>
+      <div class="card">
+        <div class="addrow" id="labor-addrow">
+          <button class="addbtn" type="button" data-add-labor>
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                 aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"></path></svg>
+            Add labor line</button>
+        </div>
+        <div class="tw">
+          <table class="items-table">
+            <thead>
+              <tr>
+                <th>Line</th><th class="n">Rate</th><th>Unit</th><th>Notes</th>
+                <th>Work types</th><th class="w-act"></th>
+              </tr>
+            </thead>
+            <!-- FILLED BY renderLabor(). Travel is a row here too, fully editable — the delete
+                 icon is the one control withheld for it (id === "travel"), matching the server's
+                 own fail-closed refusal in delete_labor(). guys_auto and sort sit behind the
+                 "More" toggle rather than as headline columns; name, rate, unit and notes are
+                 what an estimator scans this table for. -->
+            <tbody id="labor-body"></tbody>
+          </table>
+        </div>
+        <div id="labor-empty" class="empty" hidden>
+          <h3>No labor lines yet</h3>
+          <p>Travel is seeded into every estimate the tool itself ships with. Add a rate for
+            anything else Treadwell bills by the hour or the day — mobilization, a night shift
+            premium, a second crew.</p>
+          <button class="btn" type="button" data-add-labor>Add your first labor line</button>
+        </div>
+      </div>
     </section>
 
     <!-- ── Vendors ────────────────────────────────────────────────────── -->
@@ -908,8 +1001,9 @@
           <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
                stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
                focusable="false"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.6-3.6"></path></svg>
-          <input id="default-q" type="search" placeholder="Search materials and assemblies to add"
-                 aria-label="Search the library for a material or assembly to make a default"
+          <input id="default-q" type="search"
+                 placeholder="Search materials, assemblies and labor lines to add"
+                 aria-label="Search the library for a material, assembly or labor line to make a default"
                  autocomplete="off" />
         </span>
       </div>
@@ -1007,20 +1101,20 @@
           <h2>Labor</h2>
           <div class="card">
             <!-- AT THE TOP, same ask and same reason as Takeoff above: the control that adds
-                 a line should not be behind every line already added. -->
-            <!-- NOT OPTIONAL ON THIS ONE. Labor lines are not library rows -- there is no Labor
-                 tab to switch anything on from, and nothing for the search above to return. They
-                 are typed here, so this button is the only way a labor default gets made.
+                 a default should not be behind every one already added.
 
-                 IT OPENS A FORM IN THE TABLE ABOVE, not a dialog. It shipped with no handler at
-                 all on 2026-09-17 because nothing stored a custom labor line; library_labor does
-                 now, and renderDefaultLabor draws the form as the row it is about to become. -->
+                 OPENS THE SHARED BROWSE NOW, 2026-09-24 -- not a form. A labor TYPE is created on
+                 its own Labor tab, beside Assemblies; this button only ever makes an EXISTING
+                 type a default, which is what the search-and-browse box above the grid already
+                 does for a material or an assembly. Its own label stays because it says which
+                 list somebody meant to sit down and fill in, even though the mechanism it opens
+                 is the one Takeoff already uses. -->
             <div class="addrow" id="default-labor-addrow" data-addrow-default="labor">
               <button class="addbtn" type="button" data-add-default="labor">
                 <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
                      stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
                      aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"></path></svg>
-                Add a labor line</button>
+                Add a labor default</button>
             </div>
             <div class="tw">
               <table>
@@ -1029,13 +1123,17 @@
                 <!-- FILLED BY renderDefaultLabor(). Travel is already in here before anybody adds
                      anything: it is the labor default the estimate has always had, seeded into
                      every new bid and appended to every old one. It was just never SHOWN as a
-                     default, which is what made it look hardcoded rather than chosen. -->
+                     default, which is what made it look hardcoded rather than chosen. Every OTHER
+                     row is a favorited line off the Labor tab -- see that tab (and its own
+                     #pane-labor note) for where a labor TYPE is created and edited; this table
+                     only ever says which of them a new bid opens holding. -->
                 <tbody id="default-labor-body"></tbody>
               </table>
             </div>
             <div id="default-labor-empty" class="empty" hidden>
               <h3>Nothing set yet</h3>
-              <p>The labor lines a new estimate opens with.</p>
+              <p>The labor lines a new estimate opens with, beside Travel. Add one from the
+                Labor tab's lines with the button above.</p>
             </div>
           </div>
         </div>

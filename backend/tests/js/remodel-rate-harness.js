@@ -273,15 +273,15 @@ out.gypSheetCount = GYP_SHEETS.length;
   };
 }
 
-// ── 7. "Seal (+Jnts)" is NOT written, on purpose ─────────────────────────────
-// Its B75 is `=Seal!B75` — a mirror. Writing a literal there would fork the two sheets, which is
-// the same independent-cell divergence found in Kyle's own filed workbooks. Absence here is a
-// deliberate design decision, so it gets an assertion rather than being left to chance.
+// ── 7. "Seal (+Jnts)" gets the rate on ITS OWN toggle ────────────────────────
+// Its B75 is `=Seal!B75` in the template, which priced its remodel tax off SEAL's Remodel Tax?.
+// Since 2026-09-30 every sheet keeps its own two tax answers, so it takes the same IF as every
+// other sheet, on its own D6.
 {
   const h = harness();
   h.pickCounty(OP);
-  out.sealJointsLeftAsMirror = {
-    written: Object.keys(h.cellValues).some(k => k.startsWith("Seal (+Jnts)!")),
+  out.sealJointsOwnToggle = {
+    written: h.cellValues["Seal (+Jnts)!B75"],
   };
 }
 
@@ -313,7 +313,7 @@ out.gypSheetCount = GYP_SHEETS.length;
   out.copyChain = {
     copy2: h.cellValues["Copy2!B81"],           // Copy1 → Epoxy → B81
     copy3: h.cellValues["Copy3!B75"],           // Seal layout → B75
-    targetCount: h.remodelRateTargets().length, // 10 layouts + 3 copies, no duplicates
+    targetCount: h.remodelRateTargets().length, // 11 layouts + 3 copies, no duplicates
   };
 }
 

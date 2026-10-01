@@ -1,0 +1,6 @@
+# This box (and any other Windows dev box) has core.autocrlf=true, which converts a committed
+# LF file to CRLF on checkout unless told not to. deploy/zap-scan.sh and deploy/ship.sh are Git
+# Bash scripts with backslash line continuations; a continuation followed by \r\n stops being a
+# continuation, and every comment picks up a literal \r -- see backend/tests/test_zap_baseline.py
+# ::test_the_scan_script_keeps_lf_line_endings for the incident this guards against.
+*.sh text eol=lf

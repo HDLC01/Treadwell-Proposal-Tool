@@ -351,6 +351,65 @@ def test_arriving_on_a_draft_that_has_these_cells_does_not_rewrite_them_twice(co
     assert cond["hydrateSaves"] == 1
 
 
+# ── once the estimate screen has split the two tax answers per sheet ─────
+@needs_node
+def test_on_a_split_draft_the_two_tax_switches_are_the_bases_own_cells(cond):
+    """Hanz, 2026-09-30: every sheet keeps its own Taxable? and Remodel Tax?, and an option stays
+    independent of the base. The intake's two answers are what a NEW project starts every sheet
+    with; once the estimate screen has split them (``tax_flags_per_sheet``) these switches show and
+    set the BASE bid's own two cells (``priced_tabs[].flag_cells``), and only when flipped.
+
+    A polish job: the switch reads Polish's own No, not Epoxy's Yes. Flipping Dye rewrites every
+    in-scope condition -- and must not reset Leveling or the gyp sheets to Epoxy's answer, which the
+    four-literal list would. Flipping Taxable writes Polish!B6 and nothing else; a combo with no
+    single base writes both halves. A draft not yet split keeps the four literals.
+
+    Mutation: conditionCells writing c.cells on a split draft (Leveling!B6 and 'Gyp (FR)'!B8 are
+    reset on the Dye flip, and the Taxable flip writes Epoxy!B6); condCells returning c.cells
+    (the switches boot on Epoxy's Yes)."""
+    s = cond["split"]
+    assert s["booted"] == {"taxable": False, "remodel": False}, (
+        "a reloaded polish job's switches show Epoxy's answer, not the base's own")
+    assert s["hydrated"] == {"taxable": False, "remodel": False}
+    assert s["afterDye"] == s["before"]
+    changed = {k: v for k, v in s["afterTaxable"].items() if s["afterDye"][k] != v}
+    assert changed == {"Polish!B6": "Yes"}, changed
+    changed = {k: v for k, v in s["afterRemodel"].items() if s["afterTaxable"][k] != v}
+    assert changed == {"Polish!D6": "Yes"}, changed
+    assert s["comboAfterLocal"]["Epoxy!B6"] == "Yes" and s["comboAfterLocal"]["Polish!B6"] == "No", (
+        "flipping Local restated Epoxy's Taxable onto Polish, the other half of the combined base")
+    assert s["combo"]["Epoxy!B6"] == "No" and s["combo"]["Polish!B6"] == "No"
+    assert s["combo"]["Leveling!B6"] == "Yes" and s["combo"]['Gyp (USG 1-8")!B8'] == "No"
+    assert {k: s["unsplit"][k] for k in ("Epoxy!B6", "Leveling!B6", 'Gyp (USG 1-8")!B8',
+                                         "Gyp (FR)!B8")} == dict.fromkeys(
+        ("Epoxy!B6", "Leveling!B6", 'Gyp (USG 1-8")!B8', "Gyp (FR)!B8"), "No")
+
+
+@needs_node
+def test_a_work_type_change_on_a_split_draft_rereads_the_new_bases_own_cells(cond):
+    """The base can move with the work type when the draft names none: a combo's is Epoxy + Polish
+    (the switch reads Epoxy's), a polish job's is Polish, a gyp job's the gyp base. The switches
+    must show the cell they now write -- what a reload would show -- or the estimator sees the
+    last base's answer and the next flip writes it onto the new base's own sheet, where it stays.
+
+    The seed boots on combo and every switch-to is a real transition onto a sheet holding a
+    different answer. The radio changes write no tax cell; the flip after them writes Polish!B6.
+
+    Mutation: syncConditionsToWorkType without the split re-read (the switches keep Epoxy's Yes on
+    polish and gyp, and the flip writes No onto Polish!B6, which already says No)."""
+    s = cond["splitWorkType"]
+    assert s["onCombo"] == {"taxable": True, "remodel": True}
+    assert s["onPolish"] == {"taxable": False, "remodel": False}, (
+        "the polish job's switches still show Epoxy's answer after the work-type change")
+    assert s["onGyp"] == {"taxable": False, "remodel": True}
+    assert s["onEpoxy"] == {"taxable": True, "remodel": True}
+    assert s["afterPolish"] == s["seeded"] and s["afterTrips"] == s["seeded"], (
+        "a work-type change wrote a sheet's own tax answer")
+    changed = {k: v for k, v in s["afterFlip"].items() if s["seeded"][k] != v}
+    assert changed == {"Polish!B6": "Yes"}, changed
+    assert s["shownAfterFlip"] == {"taxable": True, "remodel": False}
+
+
 # ── the inert row, rather than a vanishing one ────────────────────────────
 @needs_node
 def test_removing_existing_filler_goes_inert_when_there_is_no_filler(cond):
@@ -483,3 +542,15 @@ def test_the_admin_default_reaches_a_genuinely_fresh_load(cond):
     assert c["cells"]["Polish!E25"] == "Yes", "dye's admin default never reached the cell"
     assert c["cells"]["Polish!F29"] == "Yes", (
         "remove-existing-jf's admin default never reached the cell")
+
+
+@needs_node
+def test_the_admin_default_waits_for_sign_in(cond):
+    """THE AUTH RACE. index.js asks for /api/condition-defaults at script load, before sign-in has
+    settled, so the request left without its auth header, took a 401, and every admin answer was
+    silently ignored (the same race PR #124 closed for default-notes). The harness only answers
+    with the admin's row once the header exists, and the header exists only after TWAuth.ready.
+
+    Mutation: delete the await of TWAuth.ready from loadConditionDefaults in index.js. The
+    read fires at load, comes back empty, and dye stays at its shipped False."""
+    assert cond["authRace"]["dye"] is True, "the read fired before sign-in and got a 401"

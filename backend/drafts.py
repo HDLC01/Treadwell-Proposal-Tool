@@ -644,6 +644,11 @@ def _build_summaries(trashed: bool, limit: int) -> List[Dict[str, Any]]:
         cols = ("id,owner_email,created_at,updated_at,deleted_at,"
                 "project_name:data->>project_name,"
                 "work_type:data->>work_type,"
+                # Direct or GC, the New Project form's own radio. It decides which BOARD a project
+                # is on (pipelines.pipeline_of): Direct Projects or General Contractor. Named here for
+                # the reason `won_at` spells out below - this select names JSON paths, so a key it
+                # does not name reaches no card, and every GC project would sit on the Direct board.
+                "audience:data->>audience,"
                 "deadline:data->>deadline,"
                 "archived:data->>archived,"
                 # Test/demo, as set by hand on the Projects page. Tri-state (see _tribool):
@@ -715,6 +720,7 @@ def _build_summaries(trashed: bool, limit: int) -> List[Dict[str, Any]]:
                                  # the fast path resolves money in the same order as the slow one.
                                  "polish_beta": _polish_beta(r.get("polish_beta"))}),
             "work_type": r.get("work_type"),
+            "audience": r.get("audience"),
             "deadline": r.get("deadline"),
             "archived": _truthy(r.get("archived")),
             "is_test": _tribool(r.get("is_test")),
