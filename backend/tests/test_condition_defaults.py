@@ -314,6 +314,83 @@ def test_the_string_false_from_a_form_is_stored_as_off(store, admin):
     assert cd.list_defaults()[0]["on"] is False
 
 
+# ── LISTED: whether a new estimate shows the card at all ──────────────────────
+# Hanz, 2026-10-01: "Everything that is in the defaults and labor tab in the Items and Assemblies
+# appear as grayed out options that can be enabled or not." The Defaults tab's Edit/Remove writes
+# `listed`; whether a new bid starts switched ON is still `on`, and all three ship off.
+def test_listed_is_stored_and_read_back(store):
+    row = cd.set_default("dye", {"listed": False}, "hanz@wetreadwell.com")
+    assert row["listed"] is False and row["on"] is False
+    assert cd.list_defaults()[0]["listed"] is False
+    cd.set_default("dye", {"listed": True}, "hanz@wetreadwell.com")
+    assert cd.list_defaults()[0]["listed"] is True
+    assert len(store["condition_defaults"]) == 1
+
+
+def test_writing_one_field_leaves_the_other_alone(store):
+    """Remove on the Defaults tab sends only `listed`. Writing it must not reset an `on` somebody
+    set, and the reverse.
+
+    Mutation: write `on_by_default` unconditionally in set_default's update."""
+    cd.set_default("joint_filler", {"on": True}, None)
+    cd.set_default("joint_filler", {"listed": False}, None)
+    got = cd.list_defaults()[0]
+    assert got["on"] is True and got["listed"] is False
+    cd.set_default("joint_filler", {"on": False}, None)
+    got = cd.list_defaults()[0]
+    assert got["on"] is False and got["listed"] is False
+
+
+def test_a_body_with_neither_field_is_refused(store):
+    """Nothing to change is a refusal, not an 'off' saved with a green tick."""
+    with pytest.raises(cd.ValidationError):
+        cd.set_default("dye", {}, None)
+    with pytest.raises(cd.ValidationError):
+        cd.set_default("dye", {"on": None, "listed": None}, None)
+    assert store["condition_defaults"] == []
+
+
+def test_a_row_from_before_the_column_reads_as_listed(store):
+    """Every row written before `listed` existed, and a database that has not run the ALTER yet,
+    keeps its card on new estimates.
+
+    Mutation: read a missing `listed` as False in _shape."""
+    store["condition_defaults"].append({"id": "r1", "condition_key": "dye",
+                                        "on_by_default": False})
+    assert cd.list_defaults()[0]["listed"] is True
+
+
+def test_an_unreadable_listed_reads_as_listed(store, caplog):
+    """A hand-edited junk value must not 500 the read the estimate makes, and listed is the
+    direction that hides nothing."""
+    store["condition_defaults"].append({"id": "r2", "condition_key": "dye",
+                                        "on_by_default": False, "listed": "maybe"})
+    assert cd.list_defaults()[0]["listed"] is True
+
+
+def test_the_endpoint_takes_listed_and_reads_the_string_false(store, admin):
+    r = client.put("/api/condition-defaults/remove_existing_jf", json={"listed": "false"},
+                   headers={"X-User-Email": "hanz@wetreadwell.com"})
+    assert r.status_code == 200, r.text
+    assert r.json()["condition"]["listed"] is False
+    assert r.json()["condition"]["on"] is False
+
+
+def test_a_non_admin_cannot_take_a_card_off_new_estimates(store, member):
+    r = client.put("/api/condition-defaults/dye", json={"listed": False},
+                   headers={"X-User-Email": "troy@wetreadwell.com"})
+    assert r.status_code == 403, r.text
+    assert store["condition_defaults"] == []
+
+
+def test_the_listed_column_is_declared_in_both_schema_files():
+    """Additive and nullable on both databases; the write fails on one that lacks it."""
+    for name in ("supabase_schema.sql", "staging/schema_pg.sql"):
+        sql = (BACKEND / name).read_text(encoding="utf-8", errors="replace")
+        assert re.search(r"alter table public\.condition_defaults add column if not exists "
+                         r"listed boolean;", sql), name
+
+
 # ── the DDL is declared on BOTH databases ─────────────────────────────────────
 def test_the_table_is_declared_in_both_schema_files():
     """TWO DATABASES OR IT IS BROKEN. Production is cloud Supabase; staging is a separate Postgres

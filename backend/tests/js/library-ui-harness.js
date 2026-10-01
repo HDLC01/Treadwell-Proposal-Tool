@@ -249,8 +249,8 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   // put-it-back on a refusal.
   var COND_CALLS = [];
   var COND_FAIL = state.COND_FAIL || false;
-  async function putConditionDefault(key, on) {
-    COND_CALLS.push({ key: key, on: on });
+  async function putConditionDefault(key, body) {
+    COND_CALLS.push(Object.assign({ key: key }, body));
     if (COND_FAIL) throw new Error("the server said no");
     return { ok: true };
   }
@@ -3726,14 +3726,14 @@ out.serverOwnedItemFields = build().api.SERVER_OWNED_ITEM_FIELDS;
       // on this list either. 2026-10-01 reverses 2026-09-21 here, at Hanz's word ("All 3 exactly
       // like materials"). This fixture has no items, assemblies or markup, so the table is EMPTY
       // rather than merely missing three names.
-      // ALL THREE ARE LISTED OFF on the Polish tab, since Hanz's 2026-10-01 "Always list them,
-      // start OFF" -- each with an Add, none with a Remove, all three saying Off.
-      noneListedWhileOff: ["joint_filler", "remove_existing_jf", "dye"].every((k) =>
-        bh.indexOf('data-def-add="conditions" data-def-id="' + k + '"') !== -1) &&
-        (bh.match(/Off \u00b7 a new bid starts without it/g) || []).length === 3,
+      // ALL THREE LISTED, as defaults, with nothing stored (Hanz, 2026-10-01): each the
+      // material row's Edit + Remove, keyed by its reserved row. Listed is not ON -- every new
+      // bid still starts with all three switched off (noneOfThemOn).
+      noneListedWhileOff: ["joint-filler-kit", "remove-existing-jf", "dye"].every((id) =>
+        bh.indexOf('data-def-off="items" data-def-id="' + id + '"') !== -1) &&
+        !/data-def-add=/.test(bh),
       // …and the add browse offers NONE of them: they are on the list already.
       eachIsOfferedByTheAddSearch: !/data-def-add="conditions"/.test(browse),
-      noneOffersRemove: !/data-def-off=/.test(bh),
       // The three keys the page offers, read off the function rather than the markup, so this
       // still says something when nothing is listed.
       offersTheThree: bare.api.takeoffConditionDefaults().map((c) => c.key).sort().join(","),
@@ -4661,30 +4661,31 @@ async function conditionChecks() {
   const ROW = { joint_filler: "joint-filler-kit", remove_existing_jf: "remove-existing-jf",
                 dye: "dye" };
 
-  // ON MEANS THE MATERIAL'S Remove, keyed by the condition's reserved row. Since 2026-10-01
-  // (Hanz: "Always list them, start OFF") an OFF condition is still on the list, carrying an
-  // Add keyed by the condition instead -- `offRow`. Both are read off the RENDERED table.
+  // LISTED MEANS ON THE DEFAULTS TAB (Hanz, 2026-10-01: "Everything that is in the defaults ...
+  // appear as grayed out options that can be enabled or not") -- the material's own Remove, keyed
+  // by the condition's reserved row. Not listed means not in the table at all.
   const listed = (html, key) =>
     html.indexOf('data-def-off="items" data-def-id="' + ROW[key] + '"') !== -1;
-  const offRow = (html, key) =>
-    html.indexOf('data-def-add="conditions" data-def-id="' + key + '"') !== -1 &&
-    !listed(html, key);
-  // OFFERED BY THE ADD SEARCH, as a hit. None of the three ever is now: they are on the list.
+  const absent = (html, key) => html.indexOf('data-def-id="' + ROW[key] + '"') === -1 &&
+    html.indexOf('data-def-id="' + key + '"') === -1;
+  // OFFERED BY THE ADD SEARCH, as the hit that puts this condition back on the list.
   const offered = (html, key) =>
     html.indexOf('data-def-add="conditions" data-def-id="' + key + '">') !== -1;
+  const OFF_THE_LIST = (key) => ({ key: key, on: false, listed: false });
 
-  // 1. A STORED ANSWER BEATS THE SHIPPED ONE. All three ship OFF now; an admin who has turned
-  //    joint filler on must see it listed here, or this page is describing a bid that does not
-  //    exist. The fixture DISAGREES with freshModel on purpose -- one that agreed would pass
-  //    just as happily against a page that ignored COND_DEFAULTS entirely.
-  const stored = build(seed({ COND_DEFAULTS: [{ key: "joint_filler", on: true }] }));
+  // 1. NOTHING STORED: all three listed, as defaults, each with Edit and Remove.
+  const shipped = build(seed({}));
+  shipped.api.renderDefaultTakeoff();
+  const shippedHtml = shipped.dom.nodes["default-takeoff-body"].innerHTML;
+
+  // 2. ONE TAKEN OFF: that one is not drawn, the two nobody touched still are.
+  const stored = build(seed({ COND_DEFAULTS: [OFF_THE_LIST("joint_filler")] }));
   stored.api.renderDefaultTakeoff();
   const storedHtml = stored.dom.nodes["default-takeoff-body"].innerHTML;
 
-  // 2. REMOVE, DRIVEN through removeDefault with the attributes the button itself carries --
-  //    data-def-off="items", data-def-id="joint-filler-kit" -- because that is what the click
-  //    router hands it. Starts from a condition that IS listed, the only state Remove is on.
-  const live = build(seed({ COND_DEFAULTS: [{ key: "joint_filler", on: true }] }));
+  // 3. REMOVE, DRIVEN through removeDefault with the attributes the button itself carries.
+  //    Starts from an `on: true` row, so the press can be seen to leave the answer alone.
+  const live = build(seed({ COND_DEFAULTS: [{ key: "joint_filler", on: true, listed: true }] }));
   live.api.renderDefaultTakeoff();
   const beforeHtml = live.dom.nodes["default-takeoff-body"].innerHTML;
   await live.api.removeDefault("items", "joint-filler-kit");
@@ -4692,163 +4693,141 @@ async function conditionChecks() {
   live.api.openDefaultBrowse();
   const afterRemoveBrowse = live.dom.nodes["default-hits"].innerHTML;
 
-  // 3. AND THE WAY BACK ON: the OFF row's own Add, keyed by the condition. The id is read off the
-  //    RENDERED table and handed to the saver the router's "conditions" arm calls, so a button
-  //    keyed by something the saver does not know fails here. The search is asked too: it must
-  //    not offer a row that is already on screen.
-  const adding = build(seed({}));
+  // 4. AND BACK ON: found in the add search, added by the id the RENDERED hit carries.
+  const adding = build(seed({ COND_DEFAULTS: [OFF_THE_LIST("dye")] }));
   adding.api.renderDefaultTakeoff();
   const beforeAddHtml = adding.dom.nodes["default-takeoff-body"].innerHTML;
   adding.api.setDefaultQuery("dye");
   const dyeHits = adding.dom.nodes["default-hits"].innerHTML;
-  const dyeHitId = (/data-def-add="conditions" data-def-id="(dye)"/.exec(beforeAddHtml) || [])[1];
+  const dyeHitId = (/data-def-add="conditions" data-def-id="([^"]+)"/.exec(dyeHits) || [])[1];
   await adding.api.setConditionDefault(dyeHitId, true);
   const afterAddHtml = adding.dom.nodes["default-takeoff-body"].innerHTML;
   adding.api.setDefaultQuery("dye");
   const dyeHitsAfterAdd = adding.dom.nodes["default-hits"].innerHTML;
 
-  // 4. THE BROWSE, with everything off: all three offered, beside the library row.
-  const browsing = build(seed({}));
+  // 5. THE BROWSE, with all three off the list: all three offered, FIRST, beside the library.
+  const browsing = build(seed({ COND_DEFAULTS: [OFF_THE_LIST("joint_filler"),
+    OFF_THE_LIST("remove_existing_jf"), OFF_THE_LIST("dye")] }));
   browsing.api.openDefaultBrowse();
   const browseHtml = browsing.dom.nodes["default-hits"].innerHTML;
+  const browseRows = browsing.api.defaultCandidates().rows.map((r) => r.kind + ":" + r.id);
 
-  // 5. …and with one on: that one is listed, so it is NOT offered twice.
-  const oneOn = build(seed({ COND_DEFAULTS: [{ key: "joint_filler", on: true }] }));
-  oneOn.api.openDefaultBrowse();
-  const oneOnBrowse = oneOn.dom.nodes["default-hits"].innerHTML;
+  // 6. …and with all three listed (nothing stored): none offered, they are on the list already.
+  const allListed = build(seed({}));
+  allListed.api.openDefaultBrowse();
+  const allListedBrowse = allListed.dom.nodes["default-hits"].innerHTML;
 
-  // 6. A REFUSED SAVE PUTS IT BACK. A list that keeps the new state after the write was refused
-  //    tells an admin every new bid now opens differently when it does not.
-  const failing = build(seed({ COND_DEFAULTS: [{ key: "joint_filler", on: true }],
-                               COND_FAIL: true }));
+  // 7. A REFUSED SAVE PUTS IT BACK.
+  const failing = build(seed({ COND_FAIL: true }));
   failing.api.renderDefaultTakeoff();
   await failing.api.removeDefault("items", "joint-filler-kit");
   const failedHtml = failing.dom.nodes["default-takeoff-body"].innerHTML;
 
-  // 6b. THE OTHER FOUR WORK TYPES DO NOT LIST THEM. All three write Polish-sheet cells.
-  const sealTab = build(seed({ COND_DEFAULTS: [{ key: "joint_filler", on: true }] }));
+  // 8. THE OTHER FOUR WORK TYPES DO NOT LIST THEM, and do not offer them.
+  const sealTab = build(seed({ COND_DEFAULTS: [OFF_THE_LIST("dye")] }));
   sealTab.api.setWorkType("seal");
   sealTab.api.renderDefaultTakeoff();
   const sealHtml = sealTab.dom.nodes["default-takeoff-body"].innerHTML;
+  sealTab.api.openDefaultBrowse();
+  const sealBrowse = sealTab.dom.nodes["default-hits"].innerHTML;
 
-  // 6d. A NON-ADMIN sees all three, one on and two off, with Edit only: the server would refuse
-  //     their Add or Remove.
-  const viewer = build(seed({ ADMIN: false, COND_DEFAULTS: [{ key: "dye", on: true }] }));
+  // 9. A NON-ADMIN sees the listed ones with Edit only, and is offered none to add.
+  const viewer = build(seed({ ADMIN: false, COND_DEFAULTS: [OFF_THE_LIST("dye")] }));
   viewer.api.renderDefaultTakeoff();
   const viewerHtml = viewer.dom.nodes["default-takeoff-body"].innerHTML;
+  viewer.api.openDefaultBrowse();
+  const viewerBrowse = viewer.dom.nodes["default-hits"].innerHTML;
 
-  // 6c. THE OFF ROW BUILDS ITS OWN MARKUP (rawHow), so an admin's typed unit is escaped there.
+  // 10. TYPED TEXT ON THE ROW IS ESCAPED: an admin's name and unit for the kit.
   const hostile = build(seed({ ITEMS: [
     { id: "joint-filler-kit", name: "<b>Kit</b>", unit: "<img src=x>", buy_qty: 1,
       unit_cost: 500, coverage: 3500, waste_pct: 0, roundup: true, favorite: false }] }));
   hostile.api.renderDefaultTakeoff();
   const hostileHtml = hostile.dom.nodes["default-takeoff-body"].innerHTML;
 
-  // 7. AN ORDINARY MATERIAL'S Remove IS UNTOUCHED: still its `favorite`, never a condition.
+  // 11. AN ORDINARY MATERIAL'S Remove IS UNTOUCHED: still its `favorite`, never a condition.
   const plain = build(seed({ ITEMS: [{ id: "i1", name: "Densifier", unit: "Pail",
                                        unit_cost: 100, favorite: true }] }));
   plain.api.renderDefaultTakeoff();
   await plain.api.removeDefault("items", "i1");
 
   out.conditionDefaults = {
-    // The merge, through the ESTIMATE'S OWN seedConditionDefaults rather than a second one
-    // written on this page: a stored `on` wins over the shipped `off`.
-    storedOverrideWins: listed(storedHtml, "joint_filler"),
-    // …and leaves the two nobody overrode exactly as the tool ships them, which is off: still
-    // listed, carrying an Add and saying Off.
-    untouchedOnesKeepShipped: offRow(storedHtml, "dye") &&
-      offRow(storedHtml, "remove_existing_jf") &&
-      (storedHtml.match(/Off \u00b7 a new bid starts without it/g) || []).length === 2,
+    // NOTHING STORED: all three listed, each the material row's Edit + Remove, no Off note.
+    allListedByDefault: ["joint_filler", "remove_existing_jf", "dye"].every((k) =>
+      listed(shippedHtml, k)) && !/data-def-add=/.test(shippedHtml) &&
+      !/a new bid starts without it/.test(shippedHtml),
+    // ONE OFF THE LIST: not drawn; the two nobody touched still listed.
+    storedOverrideWins: absent(storedHtml, "joint_filler"),
+    untouchedOnesKeepShipped: listed(storedHtml, "dye") && listed(storedHtml, "remove_existing_jf"),
 
-    // REMOVE. It is the RENDERED table that changes, so a handler that wrote the variable and
-    // forgot to repaint fails here rather than looking fine.
+    // REMOVE: the row leaves, the write is `listed: false`, and the stored `on` is kept.
     startsListed: listed(beforeHtml, "joint_filler"),
-    // THE ROW STAYS AND TURNS OFF IN PLACE: its Remove becomes an Add, and it says Off.
-    removeTakesTheRowOff: offRow(afterHtml, "joint_filler") && /Joint filler/.test(afterHtml) &&
-      (afterHtml.match(/Off \u00b7 a new bid starts without it/g) || []).length === 3,
-    // …and the write goes to the CONDITION, keyed by the condition and carrying the answer --
-    // never a `favorite` PATCH on the reserved row, which would save cleanly and change nothing.
+    removeTakesTheRowOff: absent(afterHtml, "joint_filler") && !/Joint filler/.test(afterHtml),
     wroteTheServer: JSON.stringify(live.api.COND_CALLS) ===
-      JSON.stringify([{ key: "joint_filler", on: false }]),
+      JSON.stringify([{ key: "joint_filler", listed: false, on: false }]),
     didNotWriteTheFavorite: !live.api.LABOR_CALLS.some((c) => c.op === "PATCH_DEFAULT"),
-    // ONE ROW PER CONDITION in the page's own list, whatever the press. A handler that appended
-    // instead of replacing would send the right body and then render the stale answer next to it.
     keepsOneRowPerCondition: live.api.condDefaultsNow().length === 1,
-    // AND THE SEARCH DOES NOT OFFER IT: the way back on is the row's own Add, still on screen.
-    removedOneIsOfferedByTheAddSearch: !offered(afterRemoveBrowse, "joint_filler") &&
-      offRow(afterHtml, "joint_filler"),
+    // A STORED `on: true` (an earlier version of this tab's Add wrote one) IS CLEARED by the press,
+    // or the removed condition would still open switched on, and priced, on every new bid.
+    keepsTheStoredOn: (function () {
+      const r = live.api.condDefaultsNow()[0];
+      return r.key === "joint_filler" && r.on === false && r.listed === false;
+    })(),
+    removedOneIsOfferedByTheAddSearch: offered(afterRemoveBrowse, "joint_filler"),
 
-    // ADD. Off, so listed with an Add; the search does not offer it; added; Remove, priced.
-    startsOffAndUnlisted: offRow(beforeAddHtml, "dye") && /Dye/.test(beforeAddHtml),
-    searchFindsIt: dyeHitId === "dye" && !offered(dyeHits, "dye"),
+    // ADD BACK.
+    startsOffAndUnlisted: absent(beforeAddHtml, "dye") && !/Dye/.test(beforeAddHtml),
+    searchFindsIt: dyeHitId === "dye" && /Dye<span class="k">Material<\/span>/.test(dyeHits),
     addPutsTheRowOnTheList: listed(afterAddHtml, "dye"),
     addWroteTheServer: JSON.stringify(adding.api.COND_CALLS) ===
-      JSON.stringify([{ key: "dye", on: true }]),
-    // AND IT PRICES ITSELF THE MOMENT IT IS BACK, in a material's words, rather than arriving as
-    // a bare name.
+      JSON.stringify([{ key: "dye", listed: true, on: false }]),
     addedRowIsPriced: /\$0\.14 per SF a coat/.test(afterAddHtml),
-    // …and the search stops offering what is now on the list, like any material that became a
-    // default.
     addedOneIsNoLongerOffered: !offered(dyeHitsAfterAdd, "dye"),
 
-    // THE BROWSE offers none of the three while they are off -- they are on the list already.
+    // THE BROWSE.
     browseOffersAllThreeWhileOff: ["joint_filler", "remove_existing_jf", "dye"]
-      .every((k) => !offered(browseHtml, k)),
+      .every((k) => offered(browseHtml, k)) &&
+      browseRows.slice(0, 3).every((r) => r.indexOf("conditions:") === 0),
     andStillOffersTheLibrary: /data-def-add="items" data-def-id="i9"/.test(browseHtml),
-    // …and none while one is on either.
     browseSkipsAConditionAlreadyOn: ["joint_filler", "remove_existing_jf", "dye"]
-      .every((k) => !offered(oneOnBrowse, k)),
-    // THE TYPED SEARCH MATCHES THE CONDITION'S LABEL TOO: "joint" finds the kit and
-    // remove-existing whatever the rows are called -- here the kit's row has been renamed to
-    // something without the word in it, so only the label can find it. The hit still shows the
-    // row's own name.
+      .every((k) => !offered(allListedBrowse, k)),
+    // THE TYPED SEARCH MATCHES THE CONDITION'S LABEL TOO: the kit's row renamed to something
+    // without the word in it is still found by "joint".
     searchByLabelFindsBoth: (function () {
-      const s = build(seed({ ITEMS: [
+      const s = build(seed({ COND_DEFAULTS: [OFF_THE_LIST("joint_filler"),
+        OFF_THE_LIST("remove_existing_jf"), OFF_THE_LIST("dye")], ITEMS: [
         { id: "i9", name: "Not a default", unit: "Gal", unit_cost: 50, favorite: false },
         { id: "joint-filler-kit", name: "Our 10 gal kit", unit: "Kit", buy_qty: 1,
           unit_cost: 500, coverage: 3500, waste_pct: 0, roundup: true, favorite: false }] }));
       s.api.setDefaultQuery("joint");
       const sh = s.dom.nodes["default-hits"].innerHTML;
-      s.api.renderDefaultTakeoff();
-      const th = s.dom.nodes["default-takeoff-body"].innerHTML;
-      // Typed by name or by label, the search offers none; the renamed kit is on the list
-      // under its row's own name.
-      return !offered(sh, "joint_filler") && !offered(sh, "remove_existing_jf") &&
-        !/data-def-add="items" data-def-id="joint-filler-kit"/.test(sh) &&
-        /<td>Our 10 gal kit<\/td>/.test(th) && offRow(th, "joint_filler");
+      return offered(sh, "joint_filler") && /Our 10 gal kit<span class="k">/.test(sh) &&
+        offered(sh, "remove_existing_jf") && !offered(sh, "dye");
     })(),
 
-    // POLISH ONLY: the Seal tab lists none of the three, on or off.
-    notOnOtherWorkTypes: !/data-def-id="(joint-filler-kit|remove-existing-jf|dye|joint_filler|remove_existing_jf)"/
-      .test(sealHtml),
-    // NON-ADMIN: every condition row carries its Edit and nothing it cannot save.
-    viewerGetsEditOnly: ["joint-filler-kit", "remove-existing-jf", "dye"].every((id) =>
-        viewerHtml.indexOf('data-def-edit="items" data-def-id="' + id + '">Edit</button>') !== -1) &&
-      !/data-def-add="conditions"/.test(viewerHtml) &&
-      !/data-def-off="items" data-def-id="(joint-filler-kit|remove-existing-jf|dye)"/.test(viewerHtml) &&
-      (viewerHtml.match(/<span class="wtall">Off \u00b7 a new bid starts without it<\/span>/g) || [])
-        .length === 2,
-    // THE OFF NOTE IS AN ELEMENT, not text: rawHow must be set, or the row would print the tag.
-    offNoteIsMarkup: /<span class="wtall">Off \u00b7 a new bid starts without it<\/span>/
-        .test(beforeAddHtml) && !/&lt;span/.test(beforeAddHtml),
-    // THE OFF ROW ESCAPES what it did not write: an admin's typed name and unit.
+    notOnOtherWorkTypes: !/data-def-id="(joint-filler-kit|remove-existing-jf|dye)"/.test(sealHtml) &&
+      !/data-def-add="conditions"/.test(sealBrowse),
+    viewerGetsEditOnly: listedForViewer(viewerHtml) && !/data-def-off="items" data-def-id="(joint-filler-kit|remove-existing-jf|dye)"/.test(viewerHtml) &&
+      !/data-def-add="conditions"/.test(viewerBrowse),
     offRowEscapesTypedText: !/<img src=x>/.test(hostileHtml) && !/<b>Kit<\/b>/.test(hostileHtml) &&
-      /&lt;img src=x&gt;/.test(hostileHtml) && offRow(hostileHtml, "joint_filler"),
+      /&lt;img src=x&gt;/.test(hostileHtml) && listed(hostileHtml, "joint_filler"),
 
     // The refusal.
     refusedSavePutsItBack: listed(failedHtml, "joint_filler"),
     refusedSaveSaysSo: /Couldn't save that/.test(failing.dom.nodes["alert"].textContent || ""),
-    refusedSaveDropsTheOptimisticRow: (function () {
-      const rows = failing.api.condDefaultsNow();
-      return rows.length === 1 && rows[0].key === "joint_filler" && rows[0].on === true;
-    })(),
+    refusedSaveDropsTheOptimisticRow: failing.api.condDefaultsNow().length === 0,
 
-    // An ordinary material: its `favorite`, and no condition write.
     ordinaryRemoveStillWritesTheFavorite:
       JSON.stringify(plain.api.LABOR_CALLS) ===
         JSON.stringify([{ op: "PATCH_DEFAULT", kind: "items", id: "i1", on: false }]) &&
       plain.api.COND_CALLS.length === 0,
   };
+  // A non-admin's listed rows: the kit and remove-existing (dye is off the list), Edit only.
+  function listedForViewer(html) {
+    return ["joint-filler-kit", "remove-existing-jf"].every((id) =>
+      html.indexOf('data-def-edit="items" data-def-id="' + id + '">Edit</button>') !== -1) &&
+      html.indexOf('data-def-id="dye"') === -1;
+  }
 
   // ── THE WORK-TYPE STRIP STILL FILTERS, WITH NO ROW-LEVEL CHIPS LEFT ──────────────────────
   // Hanz, 2026-09-22: "remove the worktype section because this is not looking good" -- the

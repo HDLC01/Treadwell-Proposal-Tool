@@ -3414,26 +3414,23 @@ def test_the_takeoff_conditions_are_editable_and_say_no_such_thing_as_built_in(r
 
 @needs_node
 def test_all_three_takeoff_conditions_ship_off_and_are_listed_off(ran):
-    """THE PRICING HALF OF Hanz's 2026-09-19 decision, and where an off condition lives now.
+    """THE PRICING HALF OF Hanz's 2026-09-19 decision, and what the Defaults tab shows for it.
 
     joint_filler shipped ON until 2026-09-19, transcribed faithfully from Kyle's template, which
-    has Polish!E29 = "Yes". That was right while the condition moved no money and wrong from the
-    moment it did: jointFillerCost charges one $500 kit per 3,500 sq ft, so every new polish bid
-    was quietly carrying $2,500 on a 17,500 SF floor that nobody had asked for. All three start
-    off and the estimator switches on what the job needs.
+    has Polish!E29 = "Yes". jointFillerCost charges one $500 kit per 3,500 sq ft, so every new
+    polish bid was quietly carrying $2,500 on a 17,500 SF floor that nobody had asked for. All
+    three start off and the estimator switches on what the job needs.
 
-    AND OFF IS STILL LISTED, 2026-10-01. That morning he asked for them to be "exactly like
-    materials" (listed only while on, found through the add search while off); seeing the list
-    without them that afternoon: "Those 3 should be defaults as well here", then "Always list
-    them, start OFF". So all three are on the Polish list with an Add and an Off note, and the
-    add search does not offer them a second time.
+    LISTED IS NOT ON, 2026-10-01. Hanz: "it should be edit and remove", "dont start as on staart as
+    off in the estimating sheet but it appears as grayed out like travel in labor", and
+    "Everything that is in the defaults and labor tab in the Items and Assemblies appear as grayed
+    out options that can be enabled or not". So with nothing stored all three are on the Polish
+    list as ordinary defaults (Edit, Remove), and every new bid still starts with them off.
 
-    READ THROUGH THE REAL freshModel, never restated here, so a literal put back in
-    polish-bid-core reds this rather than passing against a copy.
+    READ THROUGH THE REAL freshModel, never restated here.
 
-    Mutation: set `joint_filler: true` in freshModel().conditions (`noneOfThemOn` and
-    `noneListedWhileOff` go red); filter the three back to `c.on` in takeoffDefaultGroups
-    (`noneListedWhileOff`); offer them in defaultCandidates again (`eachIsOfferedByTheAddSearch`)."""
+    Mutation: set `joint_filler: true` in freshModel().conditions (`noneOfThemOn`); filter the
+    three on `c.on` instead of `c.listed` (`noneListedWhileOff`)."""
     s = ran["defaultsShippedConditions"]
     assert s["offersTheThree"] == "dye,joint_filler,remove_existing_jf", (
         "the Defaults tab no longer offers the same three conditions: %r" % s["offersTheThree"])
@@ -3441,11 +3438,9 @@ def test_all_three_takeoff_conditions_ship_off_and_are_listed_off(ran):
         "a Takeoff condition still ships ON. joint_filler is the one that costs money: it adds a "
         "$500 kit per 3,500 sq ft to a bid nobody has priced yet")
     assert s["noneListedWhileOff"], (
-        "an off condition is missing from the Polish list, or has no Add, or does not say Off -- "
-        "Hanz: 'Always list them, start OFF'")
+        "with nothing stored, a condition is missing from the Polish defaults or lacks Edit/Remove")
     assert s["eachIsOfferedByTheAddSearch"], (
         "the add search offers a condition that is already on the list -- the same row twice")
-    assert s["noneOffersRemove"], "a condition that is off is offering Remove"
     assert s["keysAndRowsAgree"], (
         "takeoffConditionDefaults and RESERVED_ITEM_CONDITION disagree about which reserved row "
         "each condition is, so a Remove could turn off a different condition, or none")
@@ -3535,73 +3530,60 @@ def test_the_work_type_strip_still_filters_though_the_row_chips_are_gone(ran):
 def test_changing_a_condition_default_saves_it_and_a_refusal_puts_it_back(ran):
     """DRIVEN THROUGH THE HANDLERS the buttons reach, not asserted off the markup.
 
-    THE STORED ANSWER IS AN OVERRIDE OF THE SHIPPED ONE, merged through the ESTIMATE'S OWN
-    seedConditionDefaults rather than a second merge written on this page. Two merges is two
-    chances for the Library page to describe a bid it does not agree with.
+    THE DEFAULTS TAB EDITS `listed`, 2026-10-01 (Hanz: what is on the Defaults tab appears on a
+    new estimate grayed, to be enabled or not). Remove is the material's own button, keyed by the
+    reserved row; removeDefault sends it to the CONDITION's `listed` -- never to the row's
+    `favorite`, which would save cleanly and change nothing a bid reads
+    -- and CLEARS any stored `on`, because all three start off. The row leaves the list and the
+    add search offers it again, first, on the Polish tab,
+    to an admin. A non-admin gets Edit only, because the PUT is _require_admin.
 
-    EXACTLY LIKE A MATERIAL, 2026-10-01 (Hanz: "All 3 exactly like materials"). Remove is the
-    material's own button, keyed by the reserved row, and removeDefault sends it to the CONDITION
-    default -- never to the row's `favorite`, which would save cleanly and change nothing a bid
-    reads. The row then STAYS and turns off in place: its Remove becomes an Add keyed by the
-    condition, and it says Off (Hanz, later on 2026-10-01: "Always list them, start OFF"). The
-    Add's id is read off the rendered table and handed to the saver the router's "conditions" arm
-    calls; the add search never offers the three. They are listed on the Polish tab only, and the
-    off row escapes the typed text it prints. An ordinary material's Remove is unchanged.
+    A REFUSED SAVE PUTS THE ROW BACK and says why.
 
-    A REFUSED SAVE PUTS THE ROW BACK and says why, which is this page's standing rule for a
-    failed write: a list that keeps the new state after the server said no tells an admin every
-    new bid now opens differently when it does not.
-
-    Mutation: route removeDefault's reserved arm to setDefault (`wroteTheServer` and
-    `didNotWriteTheFavorite` go red); drop the `renderDefaultTakeoff()` from setConditionDefault's
-    catch (`refusedSavePutsItBack` goes red); drop the DEFAULT_WT === "polish" filter
-    (`notOnOtherWorkTypes`); drop esc() on the off row's priced text (`offRowEscapesTypedText`)."""
+    Mutation: route removeDefault's reserved arm to setDefault (`wroteTheServer`); filter on
+    `c.on` instead of `c.listed` (`allListedByDefault`); carry the row's old `on` in
+    setConditionDefault (`keepsTheStoredOn`); drop the ADMIN gate in conditionDefaultRow or defaultCandidates
+    (`viewerGetsEditOnly`); drop the DEFAULT_WT filter (`notOnOtherWorkTypes`); append the
+    condition hits after the library instead of before (`browseOffersAllThreeWhileOff`)."""
     c = ran["conditionDefaults"]
-    assert c["storedOverrideWins"], (
-        "a stored 'on' for joint filler did not beat the shipped 'off', so the tab is showing a "
-        "set of defaults no new bid actually opens with")
-    assert c["untouchedOnesKeepShipped"], (
-        "overriding one condition moved the two nobody touched, or dropped them from the list "
-        "instead of listing them Off")
+    assert c["allListedByDefault"], (
+        "with nothing stored the three are not all on the Polish defaults with Edit/Remove")
+    assert c["storedOverrideWins"], "a condition taken off the Defaults tab is still drawn"
+    assert c["untouchedOnesKeepShipped"], "taking one off the list took another with it"
     assert c["startsListed"] and c["removeTakesTheRowOff"], (
-        "Remove did not turn the rendered row Off in place (Add + Off note); a handler that wrote "
-        "the variable and forgot to repaint looks identical until the next reload")
+        "Remove did not take the row off the rendered list; a handler that wrote the variable and "
+        "forgot to repaint looks identical until the next reload")
     assert c["wroteTheServer"], (
-        "Remove sent no condition write, or the wrong body -- a dead control renders exactly like "
-        "a live one")
+        "Remove sent no condition write, or the wrong body (it must be {listed: false})")
     assert c["didNotWriteTheFavorite"], (
-        "Remove on a condition PATCHed the reserved row's favorite; that is not what a new bid "
-        "reads")
+        "Remove on a condition PATCHed the reserved row's favorite; that is not what a bid reads")
     assert c["keepsOneRowPerCondition"], (
         "the press appended a second row for the same condition instead of replacing it")
+    assert c["keepsTheStoredOn"], (
+        "taking a condition off the list left a stored `on: true`, so it still starts ON")
     assert c["removedOneIsOfferedByTheAddSearch"], (
-        "a removed condition has no Add on its row, or the add search offers it a second time")
-    assert c["startsOffAndUnlisted"], "an off condition is not listed with its Add"
-    assert c["searchFindsIt"], (
-        "the off Dye row has no Add keyed 'dye', or typing 'dye' in the add search offers it again")
-    assert c["addPutsTheRowOnTheList"], "adding a condition did not list it"
+        "a removed condition is not offered by the add search, so Remove is a one-way door")
+    assert c["startsOffAndUnlisted"], "a condition taken off the list is still drawn"
+    assert c["searchFindsIt"], "typing 'dye' in the add search does not offer Dye as a Material"
+    assert c["addPutsTheRowOnTheList"], "adding a condition back did not list it"
     assert c["addWroteTheServer"], "adding a condition sent no write, or the wrong body"
     assert c["addedRowIsPriced"], "a condition added back shows no price"
     assert c["addedOneIsNoLongerOffered"], (
         "the add search still offers a condition that is now on the list -- the same row twice")
     assert c["browseOffersAllThreeWhileOff"], (
-        "the add browse offers a condition while it is off; it is already on the list")
+        "the add browse does not offer all three off-the-list conditions first")
     assert c["andStillOffersTheLibrary"], (
         "the browse stopped offering the library, so the assertion above passes against a list "
         "that offers only the three")
     assert c["browseSkipsAConditionAlreadyOn"], (
-        "the browse offers one of the three while another is on")
+        "the browse offers a condition that is already on the list")
     assert c["searchByLabelFindsBoth"], (
-        "searching 'joint' offers the kit or remove-existing, or the renamed kit is not on the "
-        "list under its own name")
-    assert c["viewerGetsEditOnly"], (
-        "a non-admin is offered Add or Remove on a condition row; the server refuses their write")
-    assert c["offNoteIsMarkup"], (
-        "the Off note is printed as escaped text rather than drawn -- rawHow is off")
+        "searching 'joint' does not find the kit and remove-existing (or finds dye)")
     assert c["notOnOtherWorkTypes"], (
-        "a condition is listed on the Seal tab; all three write Polish-sheet cells")
-    assert c["offRowEscapesTypedText"], (
-        "the off row printed an admin's typed name or unit as HTML")
+        "a condition is listed or offered on the Seal tab; all three write Polish-sheet cells")
+    assert c["viewerGetsEditOnly"], (
+        "a non-admin is offered Remove or Add on a condition; the server refuses their write")
+    assert c["offRowEscapesTypedText"], "a condition row printed an admin's typed text as HTML"
     assert c["refusedSavePutsItBack"], "a refused save left the new state on screen"
     assert c["refusedSaveSaysSo"], "a refused save said nothing"
     assert c["refusedSaveDropsTheOptimisticRow"], (

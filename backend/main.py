@@ -1440,6 +1440,9 @@ class ConditionDefaultIn(BaseModel):
     and the writer. `on` is `Any` rather than `bool` because a checkbox posts the STRING "false",
     and Pydantic reading that as True would hide it from the one function that knows better."""
     on: Optional[Any] = None
+    # Whether a new estimate shows the card at all (the Defaults tab's Edit/Remove). Either field
+    # may come alone; set_default writes only what was sent.
+    listed: Optional[Any] = None
 
 
 @app.get("/api/condition-defaults")

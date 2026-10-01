@@ -406,6 +406,12 @@ create table if not exists public.condition_defaults (
 -- row is one boolean in front of a constant that is still in the source — the undo is the switch.
 create unique index if not exists condition_defaults_key_idx
   on public.condition_defaults (condition_key);
+-- LISTED, 2026-10-01 (Hanz: "Everything that is in the defaults and labor tab in the Items and
+-- Assemblies appear as grayed out options that can be enabled or not"). Whether a NEW Polish
+-- estimate shows this condition's card at all, apart from whether it starts switched on
+-- (on_by_default). NULL reads as listed, so a row written before this column existed, and every
+-- key with no row, keeps showing its card exactly as before. Additive, no default, no backfill.
+alter table public.condition_defaults add column if not exists listed boolean;
 -- Beside the table, per the measured lesson this file already records: the blanket grant above
 -- only covers tables that existed when it ran, so a table added later reads fine and every write
 -- fails.
