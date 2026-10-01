@@ -576,6 +576,7 @@ const api = new Function(
   let fmtBar = null, fmtBlock = null, fmtRange = null, fmtRangeText = null;   // the page's own bindings, verbatim
   let templateVersion = "tv-1";
   let templateLegacyFloorS = 0;
+  let templatePredecessors = [];    // savedVersionMatches: proven older versions of this template
   const blockById = new Map();      // id -> the template's block record
   const pristineById = new Map();   // id -> the block's pristine plain text
   const paraById = new Map();       // the page's own store, see proposal-review.js

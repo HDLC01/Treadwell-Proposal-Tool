@@ -214,6 +214,37 @@ def test_an_entry_from_another_version_of_the_template_is_neither_replayed_nor_r
         "the version-mismatched entry was rescued into the new store")
 
 
+def test_an_entry_from_a_proven_predecessor_of_the_template_is_replayed(ran):
+    """Kyle's re-saved GC forms replaced three templates with the SAME paragraph walk, so the server
+    names the old content as a predecessor and the drafts' saved edits come back (Hanz,
+    2026-10-02: no saved edit is lost). The next save stamps the entry with the current version."""
+    got = ran["predecessor"]
+    assert got["restored"]["dirty"] is True
+    assert got["restored"]["fmt"] is True
+    assert got["restored"]["text"] == "Scope:  kept across the swap"
+    assert got["after"]["template_version"] == "tv-epoxy-1", "the next save did not re-stamp it"
+    assert [o["text"] for o in got["after"]["items"]] == ["Scope:  kept across the swap"]
+    # A version the server did NOT name is refused as before.
+    assert got["otherRestored"]["dirty"] is False
+    assert got["otherRestored"]["text"] != "Scope:  kept across the swap"
+
+
+def test_a_blank_token_shows_the_templates_placeholder_and_is_not_an_edit(ran):
+    """The editor draws a blank GC spec field with Kyle's own placeholder -- what the document
+    prints -- and a value typed at intake replaces it. Drawing the placeholder must not make the
+    paragraph look edited: an edit would freeze "xx Architects" into the customer's proposal."""
+    got = ran["tokenDefaults"]
+    want_blank = ("Polished Concrete: per Spec 033543 & Drawings by xx Architects dated 8/1/26 "
+                  "(NO spec)")
+    assert got["blank"]["text"] == want_blank
+    assert got["blank"]["dirty"] is False and got["blankCollect"] == []
+    assert got["filled"]["text"] == ("Polished Concrete: per Spec 033543 & Drawings by Gould Evans "
+                                     "dated 8/15/26 (NO spec)")
+    assert got["cleared"]["text"] == ("Polished Concrete: per Spec 033543 & Drawings by xx Architects "
+                                      "dated 8/15/26 (NO spec)"), "a cleared field did not fall back"
+    assert got["finalCollect"] == []
+
+
 def test_an_untouched_document_still_ships_nothing(ran):
     """The generated .docx for a document nobody edited has to be the file it was before any of
     this existed."""

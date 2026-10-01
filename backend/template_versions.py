@@ -26,6 +26,16 @@ which is right: they were all taken against the old paragraphs.
 `test_template_version_is_content.py` names the entry to delete. Never add one: from this change
 on, every new stamp is a hash.
 
+A REPLACED TEMPLATE CAN KEEP ITS SAVED EDITS. When a template is swapped for a re-saved form whose
+paragraph walk is PROVEN identical -- same ids, same boxes, same regions, only some words changed
+-- every override stamped with the old content still lands on the paragraph it was made on.
+`PREDECESSOR_VERSIONS` lists, per file, the old content versions that may still be replayed, and
+the one content they may be replayed onto: the entry stops applying by itself the moment the file
+changes again, exactly like a legacy entry. Add one only with that proof (a test re-walks both
+files: test_gc_template_tokens.py keeps the predecessor bytes as fixtures for it), and only for the
+file that was replaced. Kyle's 2026-09-11 GC forms are the first: four real GC drafts carried editor
+edits stamped with the old hashes when they were installed.
+
 A LEGACY STAMP NAMES NO FILE. Every template in one image shared the same mtime, so the number
 cannot say whether it was taken on Epoxy or on Polish. Nothing may pair a legacy stamp with
 overrides captured on a different template than the one being rendered: syncPayloadPricing and
@@ -54,14 +64,14 @@ WALK_VERSION = "1"
 # content landed on origin/main, first-parent). Taken from `git log -1 --first-parent --format=%ct
 # origin/main -- <path>` on 2026-09-25. Staging got each file a few minutes to an hour earlier, so
 # a staging draft stamped in that gap is refused — conservative, and staging holds test data only.
+#
+# The three GC proposal files' entries were DELETED on 2026-10-02, when Kyle's re-saved forms
+# replaced them (see PREDECESSOR_VERSIONS): every pre-hash stamp for them described the old bytes.
 LEGACY_MTIME_FLOOR_S: dict[str, tuple[str, int]] = {
     "Direct/XX.XX TREADWELL EPOXY PROPOSAL - New Direct.docx": ("sha256:0dd6b2768e2fe68b", 1784143397),
     "Direct/xx.xx TREADWELL POLISH PROPOSAL - NewDirect.docx": ("sha256:1d5dd2991cdde3a7", 1784143397),
     "Direct/xx.xx.xx TREADWELL COMBO PROPOSAL - CUSTMOER NAME.docx": ("sha256:c5081c2a2119724d", 1784145619),
     "Direct/xx.xx TREADWELL BUDGET PRICING.docx": ("sha256:ddc026f7c1fe3969", 1780072749),
-    "GC/xx TREADWELL RESINOUS PROPOSAL - xx.docx": ("sha256:efce3be0bb01b30b", 1788900501),
-    "GC/xx TREADWELL POLISH PROPOSAL - xx.docx": ("sha256:1718cfc8beccd7fc", 1788900501),
-    "GC/xx TREADWELL SEALER PROPOSAL - xx.docx": ("sha256:b6314baffaa0f725", 1783698162),
     "Gyp/xx TREADWELL UNDERLAYMENT PROPOSAL - xx.docx": ("sha256:be7b89913c90dc7f", 1784325215),
     "CoverLetter/Direct/Epoxy.docx": ("sha256:7c18890584362022", 1789041976),
     "CoverLetter/Direct/Polish.docx": ("sha256:6c2a87ace1615e49", 1789041976),
@@ -70,6 +80,23 @@ LEGACY_MTIME_FLOOR_S: dict[str, tuple[str, int]] = {
     "CoverLetter/GC/Polish.docx": ("sha256:0b158cc6339ff031", 1789041976),
     "CoverLetter/GC/Combo.docx": ("sha256:20d9ec5cb737bd12", 1789041976),
     "CoverLetter/Gyp/Gyp.docx": ("sha256:19d3006f06a45b82", 1789041976),
+}
+
+# Relative template path -> (the content version the file has NOW, the older content versions
+# whose saved edits still replay onto it). See "A REPLACED TEMPLATE" above. The first element is
+# what keeps an entry honest: change the file again and `predecessor_versions` answers () for it,
+# so the old stamps are refused until somebody proves the walk again and writes a new entry.
+#
+# 2026-10-02: Kyle's 2026-09-11 re-save of the three GC forms (docs/GC Templates/, annotated by
+# annotate_templates.py) replaced the files hashed on the right. The walk is identical (171, 169
+# and 170 blocks, same ids, boxes and regions; the old bytes are in tests/fixtures/gc_predecessors/
+# and test_gc_template_tokens.py re-walks them against the new ones). The words that changed: the
+# job header lines and the spec / finish / addenda lines carry tokens now, the spec line's date is
+# Kyle's 8/1/26, and Resinous reads "Decorative Flake (macro sizes: 1/4”+)".
+PREDECESSOR_VERSIONS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "GC/xx TREADWELL POLISH PROPOSAL - xx.docx": ("sha256:00df2b19da129697", ("sha256:1718cfc8beccd7fc",)),
+    "GC/xx TREADWELL RESINOUS PROPOSAL - xx.docx": ("sha256:d6b9ceca38014714", ("sha256:efce3be0bb01b30b",)),
+    "GC/xx TREADWELL SEALER PROPOSAL - xx.docx": ("sha256:138dfc2c3113df3d", ("sha256:b6314baffaa0f725",)),
 }
 
 # Hashing a template is ~1 ms, and /api/proposal-template needs the version before it can answer a
@@ -129,14 +156,28 @@ def legacy_floor_s(path: Path) -> int:
     return entry[1]
 
 
+def predecessor_versions(path: Path) -> tuple[str, ...]:
+    """The older content versions whose saved edits still replay onto this file as it is now, or
+    () when there are none: the file is not in PREDECESSOR_VERSIONS, or its content has changed
+    since the entry was written."""
+    rel = _relative(path)
+    entry = PREDECESSOR_VERSIONS.get(rel) if rel else None
+    if not entry or content_version(path) != entry[0]:
+        return ()
+    return tuple(entry[1])
+
+
 def accepts(pinned: str, path: Path) -> bool:
-    """True when overrides stamped `pinned` were captured against this file's current content.
+    """True when overrides stamped `pinned` were captured against this file's current content, or
+    against a predecessor proven to share its paragraph walk (`predecessor_versions`).
 
     The caller keeps its own rule for an EMPTY stamp ("legacy caller, apply"): this answers only
     for a stamp that is present."""
     pinned = str(pinned or "")
     current = content_version(path)
     if current != "0" and pinned == current:
+        return True
+    if pinned and pinned in predecessor_versions(path):
         return True
     # A legacy stamp is a bare st_mtime_ns: nineteen digits today, never fewer than ten. ASCII
     # digits only: str.isdigit() also accepts superscripts, which int() then refuses with a 500.

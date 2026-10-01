@@ -311,6 +311,9 @@ const FORM_TO_CELL = {
   city_state:        "Epoxy!C3",   // sits next to the address
   approx_start_date: "Epoxy!B7",
   architect:         "Epoxy!B8",
+  // The GC forms' "Drawings ... dated" (intake, 2026-10-02). Polish!B9 and the other tabs'
+  // B9 are =Epoxy!B9, so the one literal carries them, exactly as Architect's B8 does.
+  drawings_dated:    "Epoxy!B9",
   // Quantities from Screen 1 → matching estimate cells. Without these
   // the user sees zero material/cost-per-SF on first load until they
   // re-type the same numbers they already gave us.
@@ -342,6 +345,7 @@ const GYP_FORM_TO_CELL = {
   city_state:        `${GYP_BASE}!C4`,
   approx_start_date: `${GYP_BASE}!B9`,
   architect:         `${GYP_BASE}!B10`,
+  drawings_dated:    `${GYP_BASE}!B11`,
   contact_name:      `${GYP_BASE}!G2`,
   contact_email:     `${GYP_BASE}!H2`,
   contact_phone:     `${GYP_BASE}!I2`,

@@ -334,6 +334,8 @@ const api = new Function(
   `const state = TW.getState();
   const liveKey = (name) => { try { return (TW.getState() || {})[name]; } catch { return undefined; } };
   let templateVersion = "TV1"; let templateLegacyFloorS = 0; let boxOverrides = new Map(); let boxLimits = null;
+  // savedVersionMatches also accepts a proven predecessor of this template's content; none here.
+  let templatePredecessors = [];
 ` + LIFTED + `
   wireBoxDrag();
   wireOverflowExpand();

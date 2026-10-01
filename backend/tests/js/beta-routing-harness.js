@@ -584,6 +584,13 @@ const PROJECT = {
   contact_name: "Dave",
   contact_email: "dave@example.com",
   polish_sf: "2875",
+  // The Drawings & specs box (2026-10-02, what Kyle's GC forms leave as "xx"). Plain named inputs,
+  // so both doors must save them as typed -- the addenda count as a NUMBER, like the quantities.
+  drawings_dated: "2026-08-15",
+  spec_section: "033543",
+  finish_tag: "PC",
+  plan_sheet: "A900",
+  addenda_count: "2",
 };
 
 function runHandler(which) {

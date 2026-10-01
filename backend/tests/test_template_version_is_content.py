@@ -105,7 +105,18 @@ def test_every_legacy_entry_still_describes_its_template():
         assert tv.legacy_floor_s(tv.TEMPLATES_ROOT / rel) == floor_s, rel
     picked = {pw.TEMPLATE_PICKER[k] for k in pw.TEMPLATE_PICKER} | {
         clw.TEMPLATE_PICKER[k] for k in clw.TEMPLATE_PICKER}
-    assert picked <= set(tv.LEGACY_MTIME_FLOOR_S), picked - set(tv.LEGACY_MTIME_FLOOR_S)
+    # A template REPLACED since the table was written has no entry -- every legacy stamp for it
+    # described the old bytes -- and is exempt from "every picked file has one" ONLY while a
+    # PREDECESSOR_VERSIONS entry vouches for it AND still describes the file as it is. So the
+    # exemption cannot outlive the replacement it was written for: edit the file again and this
+    # fails until the walk is proven again (test_gc_template_tokens.py) and the entry rewritten.
+    replaced = set(tv.PREDECESSOR_VERSIONS)
+    for rel in replaced:
+        assert rel not in tv.LEGACY_MTIME_FLOOR_S, f"{rel}: a replaced template keeps no legacy entry"
+        assert tv.predecessor_versions(tv.TEMPLATES_ROOT / rel), (
+            f"{rel}: its PREDECESSOR_VERSIONS entry no longer describes the file -- edited again?")
+    unexplained = picked - set(tv.LEGACY_MTIME_FLOOR_S) - replaced
+    assert not unexplained, unexplained
 
 
 def test_legacy_stamps_are_accepted_only_from_the_second_the_content_landed():
@@ -218,6 +229,7 @@ def test_the_proposal_editor_restores_what_the_backend_would_apply():
               str(floor * 10 ** 9 - 1), "", "STALE-NOPE", "0"]
     got = _node(_lift(_FRONTEND / "proposal-review.js", "savedVersionMatches") + f"""
 let templateVersion = {json.dumps(cur)}; let templateLegacyFloorS = {floor};
+let templatePredecessors = {json.dumps(list(tv.predecessor_versions(path)))};
 console.log(JSON.stringify({json.dumps(stamps)}.map(savedVersionMatches)));""")
     want = [tv.accepts(s, path) if s else False for s in stamps]
     assert got == want

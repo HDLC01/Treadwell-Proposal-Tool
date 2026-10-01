@@ -1988,6 +1988,16 @@
       bid_date:           safe(mergedValues.bid_date),
       // M/D/YY for the header date that the template hardcoded as 1/1/26
       bid_date_formatted: shortDate,
+      // The GC spec line's "Drawings ... dated" (intake `drawings_dated`, ISO), M/D/YY the same
+      // way -- and the same rule as main._ensure_value_aliases. Typed text that is not an ISO
+      // date shows as typed. A BLANK STAYS BLANK, unlike the header date: there is no "today" for
+      // a drawing set, and the editor shows the template's own placeholder instead
+      // (withTokenDefaults), which is what the document prints.
+      drawings_dated_formatted: (() => {
+        const raw = String(mergedValues.drawings_dated == null ? "" : mergedValues.drawings_dated).trim();
+        const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(raw);
+        return m ? `${Number(m[2])}/${Number(m[3])}/${m[1].slice(2)}` : raw;
+      })(),
       // The ONLY thing the cover letter's letterhead date box prints. Without
       // it the editor previewed the raw `{{proposal_date_short}}` — the
       // generated PDF was always right, because the backend backfills it, but
@@ -2188,6 +2198,8 @@
   let _lastTokens     = null;   // the token values the document was last drawn with
   let templateVersion = "";
   let templateLegacyFloorS = 0; // oldest pre-hash stamp still this content (see savedVersionMatches)
+  let templatePredecessors = [];  // older content versions whose edits still fit (see savedVersionMatches)
+  let templateTokenDefaults = {}; // what a blank token prints on this template (see withTokenDefaults)
   let templateOptionsHeadingIds = [];  // free-paragraph Options heading ids (GC), see paintOptionsGap
   let pageWpt        = 612;    // page width in pt, drives the zoom fit
   let flowMode        = false;  // true = geometry-less fallback rendering
@@ -2349,6 +2361,26 @@
     // next press, leaving a ribbon that looks live and does nothing for as long as the estimator
     // does not try it. Grey it out here, where the paragraphs actually go.
     idleFmtBar();
+  }
+
+  /** The token values the EDITOR draws with: computeTokenValues', plus -- for a token the intake
+   *  left blank -- what THIS template prints in its place (`token_defaults`, served with the
+   *  template from proposal_writer.TEMPLATE_TOKEN_DEFAULTS). On the GC forms that is Kyle's own
+   *  placeholder on the spec, finish and addenda lines ("xx Architects", "8/1/26", "PC", "A900",
+   *  "0"), and fill_proposal prints the same words for the same blank, so the page and the
+   *  document read alike. Blank means missing, null or only spaces; a 0 is a value (the backend's
+   *  `_with_token_defaults` is the same rule).
+   *
+   *  DISPLAY ONLY. The payload is composed from computeTokenValues itself and keeps the blank:
+   *  /api/generate writes those values back onto the draft and fills the estimate sheet from them
+   *  (`architect` is Epoxy!B8), where a blank must stay a blank. */
+  function withTokenDefaults(tokens) {
+    const out = Object.assign({}, tokens);
+    const d = templateTokenDefaults || {};
+    Object.keys(d).forEach((k) => {
+      if (String(out[k] == null ? "" : out[k]).trim() === "") out[k] = String(d[k]);
+    });
+    return out;
   }
 
   // Substituted HTML for one template paragraph: text escaped, each known
@@ -4372,7 +4404,7 @@
     // safety net failing in exactly the situation it exists for. Same merge as the other four
     // call sites; TW.readForm tolerates a missing form and returns {}.
     setBlockContent(el, blockById.get(id),
-                    computeTokenValues(Object.assign({}, state, TW.readForm(form))));
+                    withTokenDefaults(computeTokenValues(Object.assign({}, state, TW.readForm(form)))));
     el.classList.add("tw-clause-kept");
     el.title = _CLAUSE_KEPT_MSG;
     return true;
@@ -4586,10 +4618,15 @@
    *  it without changing a byte, so every deploy threw Kyle's edits away when he reopened a
    *  proposal. A pre-hash stamp still counts when it was taken at or after the second this content
    *  landed (the server sends that floor); an older one described different paragraphs. Same rule
-   *  as the backend's `template_versions.accepts`. */
+   *  as the backend's `template_versions.accepts`.
+   *
+   *  A REPLACED TEMPLATE'S EDITS STILL COUNT when the server names the old content as a proven
+   *  predecessor of this one (`template_version_predecessors`: same paragraph walk, only words
+   *  changed -- Kyle's re-saved GC forms, 2026-10-02). The next save re-stamps them current. */
   function savedVersionMatches(v) {
     const s = String(v || "");
     if (s === String(templateVersion)) return true;
+    if (s && templatePredecessors.indexOf(s) >= 0) return true;
     return templateLegacyFloorS > 0 && /^\d{10,}$/.test(s)
       && Number(s.slice(0, -9)) >= templateLegacyFloorS;
   }
@@ -4872,7 +4909,7 @@
     if (!templateBlocks) return;
     if (_fillsTimer) clearTimeout(_fillsTimer);
     _fillsTimer = setTimeout(() => {
-      const tokens = computeTokenValues(Object.assign({}, state, TW.readForm(form)));
+      const tokens = withTokenDefaults(computeTokenValues(Object.assign({}, state, TW.readForm(form))));
       _lastTokens = tokens;
       const caretLine = lineAtSelection();
       docSurface.querySelectorAll(".tw-block").forEach(el => {
@@ -6630,6 +6667,10 @@
       templateBlocks = Array.isArray(j.blocks) ? j.blocks : [];
       templateVersion = String(j.template_version || "");
       templateLegacyFloorS = Number(j.template_version_legacy_floor_s) || 0;
+      templatePredecessors = Array.isArray(j.template_version_predecessors)
+        ? j.template_version_predecessors.map(String).filter(Boolean) : [];
+      templateTokenDefaults = (j.token_defaults && typeof j.token_defaults === "object")
+        ? j.token_defaults : {};
       // A GC file's Options heading is a plain paragraph (no {{#has_options}} region), so the
       // backend names it; paintOptionsGap draws the blank lines above it there.
       templateOptionsHeadingIds = Array.isArray(j.options_heading_ids)
@@ -6645,7 +6686,7 @@
       // restoreSavedOverrides re-reads the new template's own saved entry below.
       paraById.clear();
 
-      const tokens = computeTokenValues(Object.assign({}, state, TW.readForm(form)));
+      const tokens = withTokenDefaults(computeTokenValues(Object.assign({}, state, TW.readForm(form))));
       _lastTokens = tokens;
       const geo = j.geometry || {};
       const hasBoxes = Array.isArray(geo.boxes) && geo.boxes.some(b => b.x_pt != null)
