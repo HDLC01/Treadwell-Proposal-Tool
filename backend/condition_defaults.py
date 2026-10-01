@@ -130,10 +130,23 @@ def _shape(row: Dict[str, Any]) -> Dict[str, Any]:
         log.warning("condition_defaults row %s has an unreadable on_by_default; reading it as no",
                     row.get("id"))
         on = False
+    # LISTED: NULL (a row from before the column, or a database without it yet) reads as listed,
+    # which is what every new estimate did before the Defaults tab could take one off.
+    raw_listed = row.get("listed")
+    if raw_listed is None:
+        listed = True
+    else:
+        try:
+            listed = _boolean(raw_listed, field="Listed")
+        except ValidationError:
+            log.warning("condition_defaults row %s has an unreadable listed; reading it as listed",
+                        row.get("id"))
+            listed = True
     return {
         "id": row.get("id"),
         "key": row.get("condition_key") or "",
         "on": on,
+        "listed": listed,
         "owner_email": row.get("owner_email") or "",
         "updated_by": row.get("updated_by") or "",
         "created_at": row.get("created_at"),
@@ -190,33 +203,46 @@ def set_default(key: Any, payload: Dict[str, Any],
     if not isinstance(payload, dict):
         raise ValidationError("Nothing to save.")
     condition_key = check_key(key)
-    on = _boolean(payload.get("on"), field="Default answer")
+    # EITHER FIELD MAY COME ALONE, and only what was sent is written. The Defaults tab's Edit/Remove
+    # sends `listed`; nothing may quietly reset `on` while doing it, and the reverse. A body with
+    # neither is refused rather than read as "off": it would save with a green tick and change
+    # nothing anybody asked for.
+    fields: Dict[str, Any] = {}
+    if payload.get("on") is not None:
+        fields["on_by_default"] = _boolean(payload.get("on"), field="Default answer")
+    if payload.get("listed") is not None:
+        fields["listed"] = _boolean(payload.get("listed"), field="Listed")
+    if not fields:
+        raise ValidationError("Say what to change: on, listed, or both.")
+    on = fields.get("on_by_default", False)
 
     sb = get_client()
     cur = sb.table(TABLE).select("id").eq("condition_key", condition_key).limit(1).execute()
     rows = cur.data or []
     now = _now_iso()
     if rows:
-        sb.table(TABLE).update({
-            "on_by_default": on,
+        sb.table(TABLE).update(dict(fields, **{
             "updated_by": _actor(actor_email),
             "updated_at": now,
-        }).eq("id", rows[0]["id"]).execute()
+        })).eq("id", rows[0]["id"]).execute()
     else:
-        sb.table(TABLE).insert({
+        # A new row answers `on` with the shipped OFF unless it was sent -- all three ship off --
+        # and leaves `listed` NULL (listed) unless it was sent.
+        sb.table(TABLE).insert(dict({
             "id": str(uuid.uuid4()),
             "condition_key": condition_key,
-            "on_by_default": on,
+            "on_by_default": False,
             "owner_email": _actor(actor_email),
             "updated_by": _actor(actor_email),
             "created_at": now,
             "updated_at": now,
-        }).execute()
+        }, **fields)).execute()
     # Read back rather than answering with the dict just written, the same call `create_labor`
     # makes: the store is what decides what was stored, and a reply that agreed with itself rather
     # than with the table would show an answer that changes on the next reload.
     stored = get_default(condition_key)
     if stored is not None:
         return stored
-    return {"id": None, "key": condition_key, "on": on, "owner_email": _actor(actor_email) or "",
+    return {"id": None, "key": condition_key, "on": on,
+            "listed": fields.get("listed", True), "owner_email": _actor(actor_email) or "",
             "updated_by": _actor(actor_email) or "", "created_at": now, "updated_at": now}

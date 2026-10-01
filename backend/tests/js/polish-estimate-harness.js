@@ -1529,7 +1529,9 @@ const rendered = [];      // every string the page put on screen, for the Labour
         function probe(tag, key) {
           var block = cardHtml(tag);
           return {
-            isMaterialCard: /^<div class="tk mat">/.test(block),
+            isMaterialCard: /^<div class="tk mat( inert)?">/.test(block),
+            // GRAYED WHILE OFF (Hanz, 2026-10-01), read off the card's own opening tag.
+            grayed: /^<div class="tk mat inert">/.test(block),
             usesTheAssemblyGrid: /<div class="tk-g">/.test(block),
             name: (/<div class="costbox txt">([^<]*)</.exec(block) || [])[1] || null,
             measurement: boxOf(block, key, "qty"),
@@ -2603,6 +2605,88 @@ const rendered = [];      // every string the page put on screen, for the Labour
       down: { conditions: conds(down), shipped: B.freshModel().conditions,
               mainShown: down.dom.get("main").hidden === false,
               alert: down.dom.get("alert").textContent },
+    };
+  }
+
+  // ── GRAYED UNTIL ON, AND ONLY WHAT THE DEFAULTS TAB LISTS ────────────────────────────────
+  // Hanz, 2026-10-01: "Everything that is in the defaults and labor tab in the Items and
+  // Assemblies appear as grayed out options that can be enabled or not." Read off the RENDERED
+  // Takeoff panel: each card's opening tag, or null when the card is not drawn at all.
+  {
+    const g = build();
+    const panel = () => g.dom.get("panels").innerHTML;
+    const opening = (tag) => {
+      const h = panel();
+      const i = h.indexOf(">" + tag + "<");
+      if (i < 0) return null;
+      const s0 = h.lastIndexOf('<div class="tk ', i);
+      return h.slice(s0, h.indexOf(">", s0) + 1);
+    };
+    const M = g.api.model();
+    M.conditions.joint_filler = false; M.conditions.dye = false;
+    M.conditions.remove_existing_jf = false;
+    g.api.go(0);
+    const allOff = [opening("JOINT FILLER"), opening("DYE"), opening("REMOVE EXISTING")];
+    M.conditions.dye = true; g.api.go(0);
+    const dyeOn = opening("DYE");
+    // REMOVE EXISTING GRAYED FOR ITS OWN REASON: joint filler ON (so `needs` cannot be what dims
+    // it), remove-existing off.
+    M.conditions.joint_filler = true; M.conditions.remove_existing_jf = false; g.api.go(0);
+    const remOffJfOn = opening("REMOVE EXISTING");
+    M.conditions.remove_existing_jf = true; g.api.go(0);
+    const remOn = opening("REMOVE EXISTING");
+    M.conditions.dye = false; M.conditions_shown = { dye: false }; g.api.go(0);
+    const dyeHidden = opening("DYE");
+    const othersStill = !!opening("JOINT FILLER") && !!opening("REMOVE EXISTING");
+    M.conditions.dye = true; g.api.go(0);
+    const hiddenButOn = opening("DYE");
+    // SWITCHED OFF BY HAND, through the page's own click handler: the card stays.
+    g.doc.fire("click", { target: switchNode("dye") });
+    const touchedOff = { on: g.api.model().conditions.dye, card: opening("DYE") };
+    // JOINT FILLER OFF THE LIST AND OFF: remove-existing (off) is not drawn either.
+    M.conditions.joint_filler = false; M.conditions.remove_existing_jf = false;
+    M.conditions_shown = { joint_filler: false }; g.api.go(0);
+    const needsHidden = { jf: opening("JOINT FILLER"), rem: opening("REMOVE EXISTING") };
+    M.conditions.remove_existing_jf = true; g.api.go(0);
+    const needsHiddenButOn = opening("REMOVE EXISTING");
+
+    // THE SNAPSHOT, through the real init(): a brand-new bid takes the Defaults tab's answer; a
+    // bid somebody already saved does not, whatever the Defaults tab says now.
+    const LISTED = [{ key: "dye", on: false, listed: false }];
+    const nb = blob(); delete nb.polish_estimate;
+    const fresh = build({ blob: nb, conditionDefaults: LISTED });
+    await fresh.api.init();
+    fresh.api.go(0);
+    const savedBid = { version: 2, takeoff: clone(MODEL.takeoff), labor: clone(MODEL.labor),
+                       conditions: Object.assign({}, MODEL.conditions, { dye: false }),
+                       contingency: 0, fees: 0, totals: {} };
+    const old = build({ blob: blob({ polish_estimate: clone(savedBid) }),
+                        conditionDefaults: LISTED });
+    await old.api.init();
+    old.api.go(0);
+    const freshPanel = fresh.dom.get("panels").innerHTML;
+    const oldPanel = old.dom.get("panels").innerHTML;
+
+    out.grayedUntilOn = {
+      allOffGrayed: allOff.every((t) => !!t && / inert"/.test(t)),
+      dyeOnNotGrayed: !!dyeOn && !/inert/.test(dyeOn),
+      removeExistingOnNotGrayed: !!remOn && !/inert/.test(remOn),
+      removeExistingOffGrayedOnItsOwn: !!remOffJfOn && / inert"/.test(remOffJfOn),
+      touchedCardStays: touchedOff.on === false && !!touchedOff.card && / inert"/.test(touchedOff.card),
+      removeExistingFollowsJointFiller: needsHidden.jf === null && needsHidden.rem === null &&
+        !!needsHiddenButOn,
+      dyeHiddenWhenOffTheList: dyeHidden === null && othersStill,
+      onAlwaysShows: !!hiddenButOn && !/inert/.test(hiddenButOn),
+      freshSnapshot: fresh.api.model().conditions_shown || null,
+      freshHidesDye: freshPanel.indexOf(">DYE<") === -1 && freshPanel.indexOf(">JOINT FILLER<") !== -1,
+      savedBidKeepsAll: oldPanel.indexOf(">DYE<") !== -1 && !old.api.model().conditions_shown,
+      migrated: B.migrateModel({ version: 2, takeoff: [], labor: [], conditions: {},
+        conditions_shown: { dye: false, joint_filler: true, bogus: false } }).conditions_shown,
+      noMapStaysNoMap: !("conditions_shown" in B.migrateModel(clone(savedBid))),
+      // THE COMMON STORED ROW IS `{ on: false }` WITH NO `listed` -- what every row written before
+      // the column looks like. OFF IS NOT UNLISTED: it must not land in the map.
+      seeded: B.seedConditionsShown([{ key: "dye", listed: false }, { key: "joint_filler", listed: true },
+        { key: "remove_existing_jf", on: false }, { key: "bogus", listed: false }]),
     };
   }
 

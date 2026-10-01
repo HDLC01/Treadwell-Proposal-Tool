@@ -630,6 +630,12 @@ create table if not exists public.condition_defaults (
 -- a constant that is still in the source: putting it back is one click on the same switch.
 create unique index if not exists condition_defaults_key_idx
   on public.condition_defaults (condition_key);
+-- LISTED, 2026-10-01 (Hanz: "Everything that is in the defaults and labor tab in the Items and
+-- Assemblies appear as grayed out options that can be enabled or not"). Whether a NEW Polish
+-- estimate shows this condition's card at all, apart from whether it starts switched on
+-- (on_by_default). NULL reads as listed, so a row written before this column existed, and every
+-- key with no row, keeps showing its card exactly as before. Additive, no default, no backfill.
+alter table public.condition_defaults add column if not exists listed boolean;
 
 -- Same posture as drafts/events/library_*: RLS on, no policies here; the proposal tool holds the
 -- service-role key. Beside the table rather than in a shared block at the foot of the file — a
