@@ -55,8 +55,11 @@
     .alert:empty { display:none; }
 
     /* Items | Assemblies */
-    .views { display:flex; gap:2px; background:var(--surf-low); border-radius:var(--r-lg);
-      padding:3px; margin:0 0 16px; width:max-content; }
+    /* WRAPS AT PHONE WIDTH rather than pushing the page sideways. Five tabs at max-content are
+       ~600px, so on a 390px phone the whole page scrolled horizontally. max-width keeps the
+       strip inside the page; flex-wrap puts the last tabs on a second line, all five visible. */
+    .views { display:flex; flex-wrap:wrap; gap:2px; background:var(--surf-low); border-radius:var(--r-lg);
+      padding:3px; margin:0 0 16px; width:max-content; max-width:100%; box-sizing:border-box; }
     .views button { border:0; background:none; padding:7px 16px; border-radius:var(--r-md);
       cursor:pointer; font:600 13px var(--ui); color:var(--ink-v);
       transition:background .15s ease, color .15s ease; }
