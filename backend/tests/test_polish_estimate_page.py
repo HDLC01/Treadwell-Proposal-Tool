@@ -2692,3 +2692,39 @@ def test_the_defaults_table_being_absent_opens_the_bid_anyway(ran):
     for key in THREE:
         assert d["conditions"][key] == d["shipped"][key], (
             "%s did not fall back to what the tool ships" % key)
+
+
+# ── grayed until on, and only what the Defaults tab lists ─────────────────────────────────────
+@needs_node
+def test_condition_cards_are_grayed_until_switched_on(ran):
+    """Hanz, 2026-10-01: "dont start as on staart as off in the estimating sheet but it appears as
+    grayed out like travel in labor". All three start off, and an off card is drawn dimmed
+    (`.tk.inert`, the class Travel's card takes on a local job) -- still clickable, nothing
+    disabled. On, it is drawn at full strength.
+
+    Mutation: drop the `inert` class from condMaterialCard or condSwitchCard."""
+    g = ran["grayedUntilOn"]
+    assert g["allOffGrayed"], "an off condition card is not grayed"
+    assert g["dyeOnNotGrayed"], "dye switched on is still grayed"
+    assert g["removeExistingOnNotGrayed"], "remove existing switched on is still grayed"
+
+
+@needs_node
+def test_a_condition_off_the_defaults_tab_is_not_drawn_on_a_new_bid(ran):
+    """"Everything that is in the defaults and labor tab in the Items and Assemblies appear as
+    grayed out options that can be enabled or not." So one taken off the Defaults tab is not drawn
+    on a bid made after that -- unless it is switched on, which always shows. The answer is
+    snapshotted onto the bid (conditions_shown) behind conditionsUnstated, so a saved bid keeps
+    every card it had.
+
+    Mutation: drop the conditionShown filter in takeoffPanel; let conditionShown ignore an on
+    answer; seed conditions_shown outside the conditionsUnstated gate."""
+    g = ran["grayedUntilOn"]
+    assert g["dyeHiddenWhenOffTheList"], "a card taken off the Defaults tab is still drawn"
+    assert g["onAlwaysShows"], "a hidden condition that is switched on is not drawn"
+    assert g["freshSnapshot"] == {"dye": False}, g["freshSnapshot"]
+    assert g["freshHidesDye"], "a new bid drew the card the Defaults tab took off"
+    assert g["savedBidKeepsAll"], "a saved bid lost a card because the Defaults tab changed later"
+    assert g["migrated"] == {"dye": False}, g["migrated"]
+    assert g["noMapStaysNoMap"], "migrateModel invented a card map for a bid that had none"
+    assert g["seeded"] == {"dye": False}, g["seeded"]

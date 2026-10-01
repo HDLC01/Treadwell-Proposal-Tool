@@ -891,7 +891,9 @@
       return '<p class="hint" data-condfig="' + esc(c.key) + "." + part + '">' + esc(text) +
         "</p>";
     };
-    return '<div class="tk mat">' +
+    // GRAYED WHILE OFF, like Travel on a local job: `.tk.inert` dims the card, nothing is disabled,
+    // and the switch in its header is how the estimator enables it.
+    return '<div class="tk mat' + ((M.conditions || {})[c.key] ? "" : " inert") + '">' +
       '<div class="tk-h">' +
       '<span class="tag">' + esc(c.tag) + "</span>" +
       '<span class="tk-sub" data-condfig="' + esc(c.key) + '.sub">' + esc(f.sub) + "</span>" +
@@ -927,7 +929,10 @@
    *  be a figure, and it would be wrong. */
   function condSwitchCard(c) {
     var inert = c.needs && !M.conditions[c.needs];
-    return '<div class="tk cond' + (inert ? " inert" : "") + '">' +
+    // The CARD is grayed while this condition is off, as the material cards are; the SWITCH is
+    // dimmed only for the `needs` reason, so an off card is not dimmed twice.
+    var off = !M.conditions[c.key];
+    return '<div class="tk cond' + (inert || off ? " inert" : "") + '">' +
       '<div class="tk-h">' +
       '<span class="tag">' + esc(c.tag) + "</span>" +
       condSwitch(c.key, c.label, inert) +
@@ -1105,7 +1110,15 @@
     // it to be the fourth hand of. Gated, still written: a blank cell is not "No" to Kyle. DIMMED,
     // NOT HIDDEN AND NOT DISABLED -- `.mw-sw.inert`'s rule, and Travel's -- because the answer
     // still has to reach the downloaded .xlsx whichever way it points.
-    html += CONDITION_CARDS.map(function (c) {
+    //
+    // ONLY THE ONES ON THE DEFAULTS TAB, and grayed until switched on -- Hanz, 2026-10-01:
+    // "Everything that is in the defaults and labor tab in the Items and Assemblies appear as
+    // grayed out options that can be enabled or not." One taken off the Defaults tab is not drawn
+    // on a bid created after that; one that is switched on is always drawn (B.conditionShown).
+    // A card not drawn still writes its "No" to Kyle's workbook through conditionCellWrites.
+    html += CONDITION_CARDS.filter(function (c) {
+      return B.conditionShown(M, c.key);
+    }).map(function (c) {
       return c.cost ? condMaterialCard(c) : condSwitchCard(c);
     }).join("");
 
@@ -2044,8 +2057,11 @@
     // answers are persisted by the first edit, which is what makes changing a default later leave
     // the bids already holding it alone.
     if (conditionDefaults) {
+      var condRows = await conditionDefaults;
       M.conditions = B.conditionsFromCells(
-        B.seedConditionDefaults(M.conditions, await conditionDefaults), state.cell_values);
+        B.seedConditionDefaults(M.conditions, condRows), state.cell_values);
+      // Which cards this new bid shows: the ones still on the Defaults tab (seedConditionsShown).
+      M.conditions_shown = B.seedConditionsShown(condRows);
     }
 
     // Seed the measurement from intake if nothing has been measured here yet, so the page opens

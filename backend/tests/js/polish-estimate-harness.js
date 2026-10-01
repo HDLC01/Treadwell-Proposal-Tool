@@ -1529,7 +1529,9 @@ const rendered = [];      // every string the page put on screen, for the Labour
         function probe(tag, key) {
           var block = cardHtml(tag);
           return {
-            isMaterialCard: /^<div class="tk mat">/.test(block),
+            isMaterialCard: /^<div class="tk mat( inert)?">/.test(block),
+            // GRAYED WHILE OFF (Hanz, 2026-10-01), read off the card's own opening tag.
+            grayed: /^<div class="tk mat inert">/.test(block),
             usesTheAssemblyGrid: /<div class="tk-g">/.test(block),
             name: (/<div class="costbox txt">([^<]*)</.exec(block) || [])[1] || null,
             measurement: boxOf(block, key, "qty"),
@@ -2603,6 +2605,69 @@ const rendered = [];      // every string the page put on screen, for the Labour
       down: { conditions: conds(down), shipped: B.freshModel().conditions,
               mainShown: down.dom.get("main").hidden === false,
               alert: down.dom.get("alert").textContent },
+    };
+  }
+
+  // ── GRAYED UNTIL ON, AND ONLY WHAT THE DEFAULTS TAB LISTS ────────────────────────────────
+  // Hanz, 2026-10-01: "Everything that is in the defaults and labor tab in the Items and
+  // Assemblies appear as grayed out options that can be enabled or not." Read off the RENDERED
+  // Takeoff panel: each card's opening tag, or null when the card is not drawn at all.
+  {
+    const g = build();
+    const panel = () => g.dom.get("panels").innerHTML;
+    const opening = (tag) => {
+      const h = panel();
+      const i = h.indexOf(">" + tag + "<");
+      if (i < 0) return null;
+      const s0 = h.lastIndexOf('<div class="tk ', i);
+      return h.slice(s0, h.indexOf(">", s0) + 1);
+    };
+    const M = g.api.model();
+    M.conditions.joint_filler = false; M.conditions.dye = false;
+    M.conditions.remove_existing_jf = false;
+    g.api.go(0);
+    const allOff = [opening("JOINT FILLER"), opening("DYE"), opening("REMOVE EXISTING")];
+    M.conditions.dye = true; g.api.go(0);
+    const dyeOn = opening("DYE");
+    M.conditions.remove_existing_jf = true; M.conditions.joint_filler = true; g.api.go(0);
+    const remOn = opening("REMOVE EXISTING");
+    M.conditions.dye = false; M.conditions_shown = { dye: false }; g.api.go(0);
+    const dyeHidden = opening("DYE");
+    const othersStill = !!opening("JOINT FILLER") && !!opening("REMOVE EXISTING");
+    M.conditions.dye = true; g.api.go(0);
+    const hiddenButOn = opening("DYE");
+
+    // THE SNAPSHOT, through the real init(): a brand-new bid takes the Defaults tab's answer; a
+    // bid somebody already saved does not, whatever the Defaults tab says now.
+    const LISTED = [{ key: "dye", on: false, listed: false }];
+    const nb = blob(); delete nb.polish_estimate;
+    const fresh = build({ blob: nb, conditionDefaults: LISTED });
+    await fresh.api.init();
+    fresh.api.go(0);
+    const savedBid = { version: 2, takeoff: clone(MODEL.takeoff), labor: clone(MODEL.labor),
+                       conditions: Object.assign({}, MODEL.conditions, { dye: false }),
+                       contingency: 0, fees: 0, totals: {} };
+    const old = build({ blob: blob({ polish_estimate: clone(savedBid) }),
+                        conditionDefaults: LISTED });
+    await old.api.init();
+    old.api.go(0);
+    const freshPanel = fresh.dom.get("panels").innerHTML;
+    const oldPanel = old.dom.get("panels").innerHTML;
+
+    out.grayedUntilOn = {
+      allOffGrayed: allOff.every((t) => !!t && / inert"/.test(t)),
+      dyeOnNotGrayed: !!dyeOn && !/inert/.test(dyeOn),
+      removeExistingOnNotGrayed: !!remOn && !/inert/.test(remOn),
+      dyeHiddenWhenOffTheList: dyeHidden === null && othersStill,
+      onAlwaysShows: !!hiddenButOn && !/inert/.test(hiddenButOn),
+      freshSnapshot: fresh.api.model().conditions_shown || null,
+      freshHidesDye: freshPanel.indexOf(">DYE<") === -1 && freshPanel.indexOf(">JOINT FILLER<") !== -1,
+      savedBidKeepsAll: oldPanel.indexOf(">DYE<") !== -1 && !old.api.model().conditions_shown,
+      migrated: B.migrateModel({ version: 2, takeoff: [], labor: [], conditions: {},
+        conditions_shown: { dye: false, joint_filler: true, bogus: false } }).conditions_shown,
+      noMapStaysNoMap: !("conditions_shown" in B.migrateModel(clone(savedBid))),
+      seeded: B.seedConditionsShown([{ key: "dye", listed: false }, { key: "joint_filler", listed: true },
+        { key: "remove_existing_jf" }, { key: "bogus", listed: false }]),
     };
   }
 
