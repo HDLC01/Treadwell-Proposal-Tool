@@ -140,6 +140,30 @@
     });
   })();
 
+  /** Is the cover letter on for this project? The ONE answer every reader on this page uses.
+   *
+   *  THE ESTIMATOR'S CHOICE WINS: once the box has been ticked or unticked, `cover_letter_enabled`
+   *  says so. Until then the default comes from the project's board: ON for a GC project, OFF for
+   *  everything else. Hanz, 2026-10-02: "general contractor projects should also have cover letter
+   *  default on which means that the toggle button for the cover letter is always on for all GC
+   *  projects". Every GC base bid has a letter (epoxy, polish, combo, gyp -- seal is option-only),
+   *  so the default can never ask Generate for a letter that does not exist.
+   *
+   *  THE BOARD'S OWN RULE, not a copy of it: crm-core.js (loaded before this file) decides which
+   *  board a project is on, and a project on the GC board is exactly a project whose letter defaults
+   *  on. A page where it failed to load falls back to off -- the default every project had before.
+   *
+   *  READ LIVE, never off the module-top `state` snapshot (see liveKey for why), and declared as a
+   *  hoisted function because the switch below is wired before liveKey exists. */
+  function coverLetterOn() {
+    let st = {};
+    try { st = TW.getState() || {}; } catch {}
+    const v = st.cover_letter_enabled;
+    if (v !== undefined && v !== null) return !!v;
+    const crm = typeof window !== "undefined" ? window.TWCrm : null;
+    return !!(crm && typeof crm.pipelineOf === "function" && crm.pipelineOf(st.audience) === "gc");
+  }
+
   // THE COVER-LETTER SWITCH. It used to belong to coverletter-editor.js, which also revealed a
   // document tab and loaded the letter's template to edit; both are gone (Hanz, 2026-09-09), and
   // what is left is a single flag on the draft that /api/generate reads to decide whether to
@@ -154,7 +178,7 @@
   (function wireCoverLetterSwitch() {
     const box = document.getElementById("cl-toggle");
     if (!box) return;
-    box.checked = !!(TW.getState() || {}).cover_letter_enabled;
+    box.checked = coverLetterOn();
     box.addEventListener("change", () => {
       try {
         TW.setState({ cover_letter_enabled: !!box.checked });
@@ -5430,9 +5454,10 @@
    *  The cover letter is left out because the answer is computed before page 1 is built, and the
    *  workbook's own inputs because a sheet edit changes no word in the document. */
   function fitPayload() {
-    const live = liveKey("cover_letter_enabled");
+    // The SAME resolved value continueToDone merges (coverLetterOn), so the two compose the same
+    // `values`; the letter itself is then left out below.
     const merged = Object.assign({}, state,
-      live === undefined ? {} : { cover_letter_enabled: !!live }, TW.readForm(form));
+      { cover_letter_enabled: coverLetterOn() }, TW.readForm(form));
     const pp = composeProposalPayload(merged, collectOverrides(), collectBoxOverrides());
     ["extras", "tab_copies", "tab_labels", "tab_order", "tab_structs", "lock_overrides"]
       .forEach((k) => { delete pp[k]; });
@@ -9092,7 +9117,7 @@
       // localStorage was right all along and only this read was wrong. Untick-then-Continue
       // fails the same way in reverse. Twelve other keys on this page go through liveKey for
       // exactly this reason; the note at its definition spells the mechanism out.
-      cover_letter_enabled: !!liveKey("cover_letter_enabled"),
+      cover_letter_enabled: coverLetterOn(),
     };
   }
 
@@ -9127,9 +9152,10 @@
     // it live; the spread of this object into the draft did not, so it wrote the load-time value
     // back over the estimator's tick — and the next build, the Files page's door included, read the
     // unticked box and left page 1 out of the customer's document. So it is taken live here too.
-    const _liveLetter = liveKey("cover_letter_enabled");
+    // RESOLVED, so a GC project's default (on) is written down the first time it is continued,
+    // and every later reader of the draft sees the same answer the payload carries.
     const mergedValues = Object.assign({}, state,
-      _liveLetter === undefined ? {} : { cover_letter_enabled: !!_liveLetter },
+      { cover_letter_enabled: coverLetterOn() },
       TW.readForm(form));
     const lumpSumText = document.querySelector("#tb-total")?.textContent || "$0.00";
 
@@ -9199,7 +9225,7 @@
       // PAGE, and clearing on every Continue would make anyone who steps forward just to look
       // press Generate again. The same staleness still applies to a price or a note edited after
       // a generate; that is pre-existing, wider than this fix, and worth its own round.
-      ...(!!liveKey("cover_letter_enabled") !== !!((liveKey("proposal_payload") || {}).cover_letter_enabled)
+      ...(coverLetterOn() !== !!((liveKey("proposal_payload") || {}).cover_letter_enabled)
           ? { generate_result: null }
           : {}),
     };
