@@ -360,6 +360,14 @@ def test_a_row_from_before_the_column_reads_as_listed(store):
     assert cd.list_defaults()[0]["listed"] is True
 
 
+def test_an_unreadable_listed_reads_as_listed(store, caplog):
+    """A hand-edited junk value must not 500 the read the estimate makes, and listed is the
+    direction that hides nothing."""
+    store["condition_defaults"].append({"id": "r2", "condition_key": "dye",
+                                        "on_by_default": False, "listed": "maybe"})
+    assert cd.list_defaults()[0]["listed"] is True
+
+
 def test_the_endpoint_takes_listed_and_reads_the_string_false(store, admin):
     r = client.put("/api/condition-defaults/remove_existing_jf", json={"listed": "false"},
                    headers={"X-User-Email": "hanz@wetreadwell.com"})

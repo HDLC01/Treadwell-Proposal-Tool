@@ -2629,13 +2629,26 @@ const rendered = [];      // every string the page put on screen, for the Labour
     const allOff = [opening("JOINT FILLER"), opening("DYE"), opening("REMOVE EXISTING")];
     M.conditions.dye = true; g.api.go(0);
     const dyeOn = opening("DYE");
-    M.conditions.remove_existing_jf = true; M.conditions.joint_filler = true; g.api.go(0);
+    // REMOVE EXISTING GRAYED FOR ITS OWN REASON: joint filler ON (so `needs` cannot be what dims
+    // it), remove-existing off.
+    M.conditions.joint_filler = true; M.conditions.remove_existing_jf = false; g.api.go(0);
+    const remOffJfOn = opening("REMOVE EXISTING");
+    M.conditions.remove_existing_jf = true; g.api.go(0);
     const remOn = opening("REMOVE EXISTING");
     M.conditions.dye = false; M.conditions_shown = { dye: false }; g.api.go(0);
     const dyeHidden = opening("DYE");
     const othersStill = !!opening("JOINT FILLER") && !!opening("REMOVE EXISTING");
     M.conditions.dye = true; g.api.go(0);
     const hiddenButOn = opening("DYE");
+    // SWITCHED OFF BY HAND, through the page's own click handler: the card stays.
+    g.doc.fire("click", { target: switchNode("dye") });
+    const touchedOff = { on: g.api.model().conditions.dye, card: opening("DYE") };
+    // JOINT FILLER OFF THE LIST AND OFF: remove-existing (off) is not drawn either.
+    M.conditions.joint_filler = false; M.conditions.remove_existing_jf = false;
+    M.conditions_shown = { joint_filler: false }; g.api.go(0);
+    const needsHidden = { jf: opening("JOINT FILLER"), rem: opening("REMOVE EXISTING") };
+    M.conditions.remove_existing_jf = true; g.api.go(0);
+    const needsHiddenButOn = opening("REMOVE EXISTING");
 
     // THE SNAPSHOT, through the real init(): a brand-new bid takes the Defaults tab's answer; a
     // bid somebody already saved does not, whatever the Defaults tab says now.
@@ -2658,6 +2671,10 @@ const rendered = [];      // every string the page put on screen, for the Labour
       allOffGrayed: allOff.every((t) => !!t && / inert"/.test(t)),
       dyeOnNotGrayed: !!dyeOn && !/inert/.test(dyeOn),
       removeExistingOnNotGrayed: !!remOn && !/inert/.test(remOn),
+      removeExistingOffGrayedOnItsOwn: !!remOffJfOn && / inert"/.test(remOffJfOn),
+      touchedCardStays: touchedOff.on === false && !!touchedOff.card && / inert"/.test(touchedOff.card),
+      removeExistingFollowsJointFiller: needsHidden.jf === null && needsHidden.rem === null &&
+        !!needsHiddenButOn,
       dyeHiddenWhenOffTheList: dyeHidden === null && othersStill,
       onAlwaysShows: !!hiddenButOn && !/inert/.test(hiddenButOn),
       freshSnapshot: fresh.api.model().conditions_shown || null,
@@ -2666,8 +2683,10 @@ const rendered = [];      // every string the page put on screen, for the Labour
       migrated: B.migrateModel({ version: 2, takeoff: [], labor: [], conditions: {},
         conditions_shown: { dye: false, joint_filler: true, bogus: false } }).conditions_shown,
       noMapStaysNoMap: !("conditions_shown" in B.migrateModel(clone(savedBid))),
+      // THE COMMON STORED ROW IS `{ on: false }` WITH NO `listed` -- what every row written before
+      // the column looks like. OFF IS NOT UNLISTED: it must not land in the map.
       seeded: B.seedConditionsShown([{ key: "dye", listed: false }, { key: "joint_filler", listed: true },
-        { key: "remove_existing_jf" }, { key: "bogus", listed: false }]),
+        { key: "remove_existing_jf", on: false }, { key: "bogus", listed: false }]),
     };
   }
 

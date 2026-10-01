@@ -249,8 +249,8 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   // put-it-back on a refusal.
   var COND_CALLS = [];
   var COND_FAIL = state.COND_FAIL || false;
-  async function putConditionDefault(key, listed) {
-    COND_CALLS.push({ key: key, listed: listed });
+  async function putConditionDefault(key, body) {
+    COND_CALLS.push(Object.assign({ key: key }, body));
     if (COND_FAIL) throw new Error("the server said no");
     return { ok: true };
   }
@@ -4764,12 +4764,14 @@ async function conditionChecks() {
     startsListed: listed(beforeHtml, "joint_filler"),
     removeTakesTheRowOff: absent(afterHtml, "joint_filler") && !/Joint filler/.test(afterHtml),
     wroteTheServer: JSON.stringify(live.api.COND_CALLS) ===
-      JSON.stringify([{ key: "joint_filler", listed: false }]),
+      JSON.stringify([{ key: "joint_filler", listed: false, on: false }]),
     didNotWriteTheFavorite: !live.api.LABOR_CALLS.some((c) => c.op === "PATCH_DEFAULT"),
     keepsOneRowPerCondition: live.api.condDefaultsNow().length === 1,
+    // A STORED `on: true` (an earlier version of this tab's Add wrote one) IS CLEARED by the press,
+    // or the removed condition would still open switched on, and priced, on every new bid.
     keepsTheStoredOn: (function () {
       const r = live.api.condDefaultsNow()[0];
-      return r.key === "joint_filler" && r.on === true && r.listed === false;
+      return r.key === "joint_filler" && r.on === false && r.listed === false;
     })(),
     removedOneIsOfferedByTheAddSearch: offered(afterRemoveBrowse, "joint_filler"),
 
@@ -4778,7 +4780,7 @@ async function conditionChecks() {
     searchFindsIt: dyeHitId === "dye" && /Dye<span class="k">Material<\/span>/.test(dyeHits),
     addPutsTheRowOnTheList: listed(afterAddHtml, "dye"),
     addWroteTheServer: JSON.stringify(adding.api.COND_CALLS) ===
-      JSON.stringify([{ key: "dye", listed: true }]),
+      JSON.stringify([{ key: "dye", listed: true, on: false }]),
     addedRowIsPriced: /\$0\.14 per SF a coat/.test(afterAddHtml),
     addedOneIsNoLongerOffered: !offered(dyeHitsAfterAdd, "dye"),
 

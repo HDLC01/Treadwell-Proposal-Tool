@@ -1116,8 +1116,12 @@
     // grayed out options that can be enabled or not." One taken off the Defaults tab is not drawn
     // on a bid created after that; one that is switched on is always drawn (B.conditionShown).
     // A card not drawn still writes its "No" to Kyle's workbook through conditionCellWrites.
+    //
+    // REMOVE EXISTING FOLLOWS JOINT FILLER: its `needs` card hidden means there is no switch on this
+    // page that could ever un-gray it, so it is not drawn either -- unless it is itself switched on.
     html += CONDITION_CARDS.filter(function (c) {
-      return B.conditionShown(M, c.key);
+      if (!B.conditionShown(M, c.key)) return false;
+      return !c.needs || B.conditionShown(M, c.needs) || !!(M.conditions || {})[c.key];
     }).map(function (c) {
       return c.cost ? condMaterialCard(c) : condSwitchCard(c);
     }).join("");
@@ -1696,6 +1700,12 @@
     if (cond) {
       var ck = cond.getAttribute("data-cond");
       M.conditions[ck] = !M.conditions[ck];
+      // TOUCHED, SO IT STAYS. A card drawn only because it arrived switched ON (conditionShown)
+      // would vanish under the cursor the moment it was switched off, and could not be switched
+      // back on. Once the estimator has pressed it, this bid draws it whatever the snapshot said.
+      if (M.conditions_shown && Object.prototype.hasOwnProperty.call(M.conditions_shown, ck)) {
+        delete M.conditions_shown[ck];
+      }
       changed(true);
       return;
     }

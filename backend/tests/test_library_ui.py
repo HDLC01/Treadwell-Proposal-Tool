@@ -3533,15 +3533,16 @@ def test_changing_a_condition_default_saves_it_and_a_refusal_puts_it_back(ran):
     THE DEFAULTS TAB EDITS `listed`, 2026-10-01 (Hanz: what is on the Defaults tab appears on a
     new estimate grayed, to be enabled or not). Remove is the material's own button, keyed by the
     reserved row; removeDefault sends it to the CONDITION's `listed` -- never to the row's
-    `favorite`, which would save cleanly and change nothing a bid reads -- and leaves its `on`
-    alone. The row leaves the list and the add search offers it again, first, on the Polish tab,
+    `favorite`, which would save cleanly and change nothing a bid reads
+    -- and CLEARS any stored `on`, because all three start off. The row leaves the list and the
+    add search offers it again, first, on the Polish tab,
     to an admin. A non-admin gets Edit only, because the PUT is _require_admin.
 
     A REFUSED SAVE PUTS THE ROW BACK and says why.
 
     Mutation: route removeDefault's reserved arm to setDefault (`wroteTheServer`); filter on
-    `c.on` instead of `c.listed` (`allListedByDefault`); reset `on` in setConditionDefault
-    (`keepsTheStoredOn`); drop the ADMIN gate in conditionDefaultRow or defaultCandidates
+    `c.on` instead of `c.listed` (`allListedByDefault`); carry the row's old `on` in
+    setConditionDefault (`keepsTheStoredOn`); drop the ADMIN gate in conditionDefaultRow or defaultCandidates
     (`viewerGetsEditOnly`); drop the DEFAULT_WT filter (`notOnOtherWorkTypes`); append the
     condition hits after the library instead of before (`browseOffersAllThreeWhileOff`)."""
     c = ran["conditionDefaults"]
@@ -3558,7 +3559,8 @@ def test_changing_a_condition_default_saves_it_and_a_refusal_puts_it_back(ran):
         "Remove on a condition PATCHed the reserved row's favorite; that is not what a bid reads")
     assert c["keepsOneRowPerCondition"], (
         "the press appended a second row for the same condition instead of replacing it")
-    assert c["keepsTheStoredOn"], "taking a condition off the list reset its stored `on`"
+    assert c["keepsTheStoredOn"], (
+        "taking a condition off the list left a stored `on: true`, so it still starts ON")
     assert c["removedOneIsOfferedByTheAddSearch"], (
         "a removed condition is not offered by the add search, so Remove is a one-way door")
     assert c["startsOffAndUnlisted"], "a condition taken off the list is still drawn"

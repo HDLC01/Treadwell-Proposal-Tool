@@ -2707,6 +2707,8 @@ def test_condition_cards_are_grayed_until_switched_on(ran):
     assert g["allOffGrayed"], "an off condition card is not grayed"
     assert g["dyeOnNotGrayed"], "dye switched on is still grayed"
     assert g["removeExistingOnNotGrayed"], "remove existing switched on is still grayed"
+    assert g["removeExistingOffGrayedOnItsOwn"], (
+        "remove existing, off with joint filler ON, is not grayed -- only its `needs` gate dims it")
 
 
 @needs_node
@@ -2727,4 +2729,8 @@ def test_a_condition_off_the_defaults_tab_is_not_drawn_on_a_new_bid(ran):
     assert g["savedBidKeepsAll"], "a saved bid lost a card because the Defaults tab changed later"
     assert g["migrated"] == {"dye": False}, g["migrated"]
     assert g["noMapStaysNoMap"], "migrateModel invented a card map for a bid that had none"
+    assert g["touchedCardStays"], (
+        "a hidden card that arrived ON vanished when the estimator switched it off")
+    assert g["removeExistingFollowsJointFiller"], (
+        "remove existing is drawn while joint filler is off the list -- no switch could un-gray it")
     assert g["seeded"] == {"dye": False}, g["seeded"]

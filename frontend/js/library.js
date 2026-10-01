@@ -784,13 +784,15 @@
    *  BESIDE patchDefault RATHER THAN THROUGH IT, the same call patchLabor makes: that one sends
    *  `{ favorite }` against /api/library/<kind>/<id>, and a condition has no library row and no
    *  id. Widening it would put a body behind a control that can never produce one. */
-  // WRITES `listed`, NOT `on`, since 2026-10-01. Whether a new estimate shows the condition's card
-  // (grayed until switched on) is what the Defaults tab edits now; all three still START off, and
-  // set_default leaves `on` alone when only `listed` is sent.
-  async function putConditionDefault(key, listed) {
+  // WRITES `listed` -- AND `on: false` -- since 2026-10-01. Whether a new estimate shows the
+  // condition's card (grayed until switched on) is what the Defaults tab edits now, and Hanz's
+  // rule is that all three START off: "dont start as on". So every press here also clears any
+  // `on: true` an earlier version of this tab stored (its Add button wrote one), or a condition
+  // removed from the list would still open switched on, and priced, on every new bid.
+  async function putConditionDefault(key, body) {
     var r = await api("/api/condition-defaults/" + encodeURIComponent(key), {
       method: "PUT", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ listed: !!listed }) });
+      body: JSON.stringify(body) });
     var j = await r.json().catch(function () { return {}; });
     if (!r.ok) throw new Error(j.detail || j.error || ("HTTP " + r.status));
     return j;
@@ -2375,9 +2377,9 @@
    *  sitting below it as always-listed rows with an Add or a Remove and a "writes Polish!E29 · not
    *  in a new bid" tag: "make these 3 as materials" -- then, offered the choice, "All 3 exactly
    *  like materials". So each is drawn by the material row's own code (materialDefaultRow):
-   *  the same Edit and Remove while a new bid buys it. LATER THE SAME DAY ("Those 3 should be
-   *  defaults as well here" -> "Always list them, start OFF") they are listed while off too, with
-   *  an Add in place of Remove -- conditionDefaultRow. What they do NOT share with a material is where the
+   *  the same Edit and Remove. LATER THE SAME DAY Hanz settled what a listed one MEANS: it is on
+   *  a new estimate, grayed until switched on, and all three start off -- see conditionDefaultRow.
+   *  What they do NOT share with a material is where the
    *  answer is stored -- condition_defaults, not a `favorite` -- and that is removeDefault's and
    *  the add router's business, not the row's.
    *
@@ -2480,9 +2482,9 @@
     var next = [];
     var found = false;
     for (var i = 0; i < was.length; i++) {
-      // The row's `on` is carried, never reset: this press is about the list, not the answer.
+      // `on` is CLEARED with the press -- see putConditionDefault: all three start off.
       if (was[i] && was[i].key === key) {
-        next.push(Object.assign({}, was[i], { key: key, listed: !!listed }));
+        next.push(Object.assign({}, was[i], { key: key, on: false, listed: !!listed }));
         found = true;
       } else next.push(was[i]);
     }
@@ -2490,7 +2492,7 @@
     COND_DEFAULTS = next;
     renderDefaultTakeoff();
     try {
-      await putConditionDefault(key, !!listed);
+      await putConditionDefault(key, { listed: !!listed, on: false });
     } catch (err) {
       COND_DEFAULTS = was;
       renderDefaultTakeoff();
@@ -2877,9 +2879,9 @@
         // exactly like materials". So each is drawn by the material row's code with the same Edit
         // and Remove while a new bid buys it.
         //
-        // AND LISTED WHILE OFF TOO, later on 2026-10-01: "Those 3 should be defaults as well here",
-        // then "Always list them, start OFF". An off one carries an Add and says Off
-        // (conditionDefaultRow); a new bid still starts without all three.
+        // LISTED MEANS ON A NEW ESTIMATE, GRAYED UNTIL SWITCHED ON (later on 2026-10-01): listed
+        // while condition_defaults.listed is not false, with the material's Edit and Remove; all
+        // three still start off (conditionDefaultRow).
         rows: ITEMS.filter(function (it) {
           // Never a reserved row by its `favorite`: the three are listed below, by their condition.
           return it.favorite && !isReservedItem(it.id) && appliesToWorkType(it, DEFAULT_WT);
