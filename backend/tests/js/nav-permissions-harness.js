@@ -241,7 +241,7 @@ const CAPS = [
   // The second project board, 2026-09-29. api: [] because it reads exactly what the Direct board
   // reads; LOCKED like /portal.html — Hanz, 2026-09-29: "The General Contractor board is always
   // on, like Direct Projects." (Was locked: false before that instruction.)
-  { href: "/gc-projects.html", label: "General Contractor", api: [], locked: true },
+  { href: "/gc-projects.html", label: "GC Projects", api: [], locked: true },
   { href: "/leads.html", label: "Lead Inbox", api: ["/api/leads", "/api/leads/"], locked: false },
   { href: "/crm.html", label: "Bid Pipeline", api: ["/api/basisboard/"], locked: false },
   { href: "/calendar.html", label: "Bid Calendar",
