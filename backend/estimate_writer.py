@@ -1099,9 +1099,10 @@ def _whole_number(v: Any) -> int:
         return 0
     try:
         n = float(str(v).strip()) if not isinstance(v, (int, float)) else float(v)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 0
-    if n != n or n < 0 or n != int(n):
+    # inf / -inf / nan, and anything past the table anyway: never int(inf) (OverflowError, a 500).
+    if n != n or n in (float("inf"), float("-inf")) or n < 0 or n > 10 ** 6 or n != int(n):
         return 0
     return int(n)
 

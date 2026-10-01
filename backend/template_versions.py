@@ -99,6 +99,17 @@ PREDECESSOR_VERSIONS: dict[str, tuple[str, tuple[str, ...]]] = {
     "GC/xx TREADWELL SEALER PROPOSAL - xx.docx": ("sha256:138dfc2c3113df3d", ("sha256:b6314baffaa0f725",)),
 }
 
+# Relative template path -> (the content version the file has NOW, the LEGACY mtime floor its
+# predecessor had in LEGACY_MTIME_FLOOR_S). A bare-mtime stamp saved against the old bytes is the
+# same claim a predecessor hash is ("made against the file whose walk this one shares"), so it is
+# honoured on the same terms: only while the file still has the content the entry names. The floors
+# are the deleted LEGACY_MTIME_FLOOR_S values for these paths (origin/staging, 2026-10-01).
+PREDECESSOR_LEGACY_FLOOR_S: dict[str, tuple[str, int]] = {
+    "GC/xx TREADWELL POLISH PROPOSAL - xx.docx": ("sha256:00df2b19da129697", 1788900501),
+    "GC/xx TREADWELL RESINOUS PROPOSAL - xx.docx": ("sha256:d6b9ceca38014714", 1788900501),
+    "GC/xx TREADWELL SEALER PROPOSAL - xx.docx": ("sha256:138dfc2c3113df3d", 1783698162),
+}
+
 # Hashing a template is ~1 ms, and /api/proposal-template needs the version before it can answer a
 # 304, so the digest is memoised on what `stat()` says. A file whose mtime or size moved is re-read;
 # one that did not is not. Bounded by the handful of template files plus whatever a test copies.
@@ -151,9 +162,14 @@ def legacy_floor_s(path: Path) -> int:
     can be: the file is not in the table, or its content has changed since the table was written."""
     rel = _relative(path)
     entry = LEGACY_MTIME_FLOOR_S.get(rel) if rel else None
-    if not entry or content_version(path) != entry[0]:
-        return 0
-    return entry[1]
+    if entry and content_version(path) == entry[0]:
+        return entry[1]
+    # A REPLACED file whose walk is proven identical keeps the old file's floor (see
+    # PREDECESSOR_LEGACY_FLOOR_S), on the same "content still as named" condition.
+    pred = PREDECESSOR_LEGACY_FLOOR_S.get(rel) if rel else None
+    if pred and content_version(path) == pred[0]:
+        return pred[1]
+    return 0
 
 
 def predecessor_versions(path: Path) -> tuple[str, ...]:

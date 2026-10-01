@@ -1171,3 +1171,19 @@ def test_the_autofill_puts_its_flags_on_the_base_before_the_page_re_renders():
     fan = body.index("applyAutofillJobFlags(aiFlags)")
     redraw = body.index("await showSheet(activeSheet)")
     assert held < fan and write < fan < redraw, (held, write, fan, redraw)
+
+
+
+def test_the_ai_drawings_date_fills_a_blank_intake_date_only(result):
+    """The AI Autofill writes Drawings Dated to Epoxy!B9, but the GC proposal's spec line reads the
+    intake's `drawings_dated`: an intake left blank printed Kyle's placeholder date while the sheet
+    showed the AI's (review of the GC templates, 2026-10-02). The click now fills the intake too --
+    only when it is blank, and only with something that reads as a date.
+
+    Mutation: drop the `!(live && ...)` guard (`typed` writes); drop the M/D/YY branch (`blankUs`)."""
+    a = result["aiDrawingsDated"]
+    assert a["blankUs"]["writes"] == [{"drawings_dated": "2026-09-03"}], a["blankUs"]
+    assert a["blankUs"]["cell"] == "9/3/26", a["blankUs"]
+    assert a["blankIso"]["writes"] == [{"drawings_dated": "2026-09-03"}], a["blankIso"]
+    assert a["typed"]["writes"] == [], a["typed"]
+    assert a["notADate"]["writes"] == [], a["notADate"]

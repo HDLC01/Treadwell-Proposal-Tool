@@ -719,7 +719,7 @@ const INTAKE_EXEMPT_REMODEL = {
 const AUTOFILL_SRC = grab(
   /^document\.getElementById\("autofill-btn"\)\.addEventListener\("click", async \(e\) => \{[\s\S]*?\n\}\);$/m,
   "the autofill click handler");
-async function autofillClick(h, reply) {
+async function autofillClick(h, reply, tw) {
   let handler = null;
   const btn = { textContent: "AI Autofill", disabled: false, innerHTML: "",
                 addEventListener: (type, fn) => { if (type === "click") handler = fn; } };
@@ -728,7 +728,7 @@ async function autofillClick(h, reply) {
     document: { getElementById: (id) => (id === "autofill-btn" ? btn : null) },
     state: h.state, callAutofillEndpoint: async () => reply, cellValues: h.cellValues, HF: h.HF,
     jobFlagKindFor: h.jobFlagKindFor, applyAutofillJobFlags: h.applyAutofillJobFlags,
-    escHtml: (s) => String(s == null ? "" : s), icon: () => "", TW: { setState() {} },
+    escHtml: (s) => String(s == null ? "" : s), icon: () => "", TW: tw || { setState() {} },
     sysNameInput: { value: "" }, texInput: { value: "" }, activeSheet: null, sheetCache: {},
     showSheet: async () => {}, setTimeout: () => 0,
     showAutofillBanner: (html, kind) => banners.push({ html, kind }), console,
@@ -751,6 +751,27 @@ async function autofillClick(h, reply) {
     polish: { taxable: h.cellValues["Polish!B6"], remodel: h.cellValues["Polish!D6"] },
     epoxy: { taxable: h.cellValues["Epoxy!B6"], remodel: h.cellValues["Epoxy!D6"] },
     epoxyB4: h.cellValues["Epoxy!B4"],
+  };
+  // THE AI'S DRAWINGS DATED reaches a BLANK intake date (the GC proposal's spec line reads it),
+  // and never overwrites one the estimator typed. A store that parses fresh on every read.
+  const store = (blob) => {
+    let raw = JSON.stringify(blob);
+    const writes = [];
+    return { writes, getState: () => JSON.parse(raw),
+             setState: (p) => { writes.push(p); raw = JSON.stringify(Object.assign(JSON.parse(raw), p)); } };
+  };
+  const dd = async (stored, b9) => {
+    const hh = harness({ state: { work_type: "epoxy" } });
+    hh.openDraft();
+    const tw = store(stored);
+    await autofillClick(hh, { ok: true, cell_values: { "Epoxy!B9": b9 } }, tw);
+    return { writes: tw.writes, cell: hh.cellValues["Epoxy!B9"] };
+  };
+  out.aiDrawingsDated = {
+    blankUs: await dd({}, "9/3/26"),
+    blankIso: await dd({ drawings_dated: "" }, "2026-09-03"),
+    typed: await dd({ drawings_dated: "2026-08-15" }, "9/3/26"),
+    notADate: await dd({}, "Yes"),
   };
   console.log(JSON.stringify(out));
 })().catch((e) => { console.error(e && e.stack || e); process.exit(1); });

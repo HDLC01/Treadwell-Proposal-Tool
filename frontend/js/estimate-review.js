@@ -4831,6 +4831,26 @@ document.getElementById("autofill-btn").addEventListener("click", async (e) => {
         "Epoxy!B6":"Taxable", "Epoxy!D6":"Remodel",  "Epoxy!B9":"Drawings dated",
         "Epoxy!B10":"New/Reno",
       };
+      // DRAWINGS DATED REACHES THE PROPOSAL TOO. The AI writes it to Epoxy!B9 below, but the GC
+      // proposal's spec line reads the intake's own `drawings_dated`, so an intake left blank would
+      // print Kyle's placeholder date while the sheet shows the AI's. Filled into the intake ONLY
+      // when the estimator left it blank -- a date they typed is theirs and wins. M/D/YY or ISO.
+      try {
+        const aiDate = String(j.cell_values["Epoxy!B9"] == null ? "" : j.cell_values["Epoxy!B9"]).trim();
+        const live = (TW.getState() || {}).drawings_dated;
+        if (aiDate && !(live && String(live).trim())) {
+          let iso = "";
+          const us = /^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})$/.exec(aiDate);
+          const isoM = /^(\d{4})-(\d{2})-(\d{2})$/.exec(aiDate);
+          if (us) {
+            const yr = us[3].length === 2 ? "20" + us[3] : us[3];
+            iso = yr + "-" + us[1].padStart(2, "0") + "-" + us[2].padStart(2, "0");
+          } else if (isoM) {
+            iso = aiDate;
+          }
+          if (iso) TW.setState({ drawings_dated: iso });
+        }
+      } catch (e) { /* a draft that cannot be written keeps the sheet's value only */ }
       const narrativeKeys = ["system_name","texture","scope_notes","schedule_notes","exclusions"];
       const carriedNarrative = {};
       const filledFlags = [];

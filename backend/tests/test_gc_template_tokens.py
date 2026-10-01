@@ -435,7 +435,9 @@ let templateVersion = {json.dumps(cur)}; let templateLegacyFloorS = {tv.legacy_f
 let templatePredecessors = {json.dumps(list(tv.predecessor_versions(path)))};
 console.log(JSON.stringify({json.dumps(stamps)}.map(savedVersionMatches)));""")
     assert got == [tv.accepts(s, path) if s else False for s in stamps]
-    assert got == [True, True, False, False, False, False]
+    # Index 4, a bare mtime at the old file's floor, replays since the review of 2026-10-02
+    # (PREDECESSOR_LEGACY_FLOOR_S): it was made against the predecessor, whose walk this file shares.
+    assert got == [True, True, False, False, True, False]
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
@@ -623,3 +625,81 @@ def test_the_intake_form_asks_for_them_all_optionally():
     before = html[:html.index('<fieldset id="drawings-specs-box">')]
     before = re.sub(r"<!--.*?-->", "", before, flags=re.S).rstrip()
     assert before.endswith("</fieldset>") and 'name="architect"' in before[-400:]
+
+
+
+@pytest.mark.parametrize("rel,floor", [
+    ("GC/xx TREADWELL POLISH PROPOSAL - xx.docx", 1788900501),
+    ("GC/xx TREADWELL RESINOUS PROPOSAL - xx.docx", 1788900501),
+    ("GC/xx TREADWELL SEALER PROPOSAL - xx.docx", 1783698162),
+])
+def test_a_bare_mtime_stamp_saved_on_the_old_file_still_replays(rel, floor):
+    """Review, 2026-10-02: replacing the three GC files deleted their LEGACY_MTIME_FLOOR_S entries,
+    so an edit stamped with a pre-hash bare mtime -- valid against the old file, whose walk the new
+    one shares -- was silently dropped. PREDECESSOR_LEGACY_FLOOR_S keeps the old floor on the same
+    terms as PREDECESSOR_VERSIONS: only while the file still has the content the entry names.
+
+    Mutation: return 0 from legacy_floor_s for a predecessor entry (the first assert goes red)."""
+    import template_versions as tv
+    path = BACKEND / "templates" / rel
+    at_floor = str(floor * 10 ** 9)
+    assert tv.accepts(at_floor, path), rel
+    assert tv.accepts(str(floor * 10 ** 9 + 123456789), path), rel
+    assert not tv.accepts(str((floor - 1) * 10 ** 9), path), "a stamp from before the floor replays"
+    assert tv.legacy_floor_s(path) == floor
+    # The floor goes with the content: the same path with different bytes refuses them again.
+    real = tv.content_version
+    try:
+        tv.content_version = lambda p: "sha256:0000000000000000"
+        assert tv.legacy_floor_s(path) == 0
+        assert not tv.accepts(at_floor, path)
+    finally:
+        tv.content_version = real
+
+
+def test_the_predecessor_floor_table_names_only_the_replaced_files():
+    import template_versions as tv
+    assert set(tv.PREDECESSOR_LEGACY_FLOOR_S) == set(tv.PREDECESSOR_VERSIONS)
+    for rel, (current, _floor) in tv.PREDECESSOR_LEGACY_FLOOR_S.items():
+        assert current == tv.PREDECESSOR_VERSIONS[rel][0], rel
+        assert rel not in tv.LEGACY_MTIME_FLOOR_S, rel
+
+
+@pytest.mark.parametrize("raw", ["inf", "Infinity", "-inf", "1e999", "nan", float("inf"),
+                                 float("nan"), 10 ** 400, "1" + "0" * 400, 10 ** 7])
+def test_an_absurd_addenda_count_numbers_nothing_and_never_raises(raw):
+    """Review, 2026-10-02: 'inf', 1e999 or a 400-digit number raised OverflowError out of
+    _whole_number and /api/generate answered 500. Not reachable from the form, but a count is
+    either a sane whole number or nothing.
+
+    Mutation: drop OverflowError from the except (the huge-int cases raise)."""
+    import estimate_writer as ew
+    assert ew._whole_number(raw) == 0
+
+
+def test_every_editor_fill_shows_the_templates_placeholders():
+    """Review, 2026-10-02: the editor's FIRST paint (initDocumentEditor) could drop the
+    withTokenDefaults wrapper and every test stayed green, because only the refresh path is
+    executed by a harness -- and the first paint would show blanks where the PDF prints Kyle's
+    placeholders. So every place the editor computes its token values must wrap them.
+
+    A source check, and a narrow one: it counts the editor's own token-value expression and
+    requires each to sit inside withTokenDefaults(...)."""
+    src = (BACKEND.parent / "frontend" / "js" / "proposal-review.js").read_text(encoding="utf-8")
+    expr = "computeTokenValues(Object.assign({}, state, TW.readForm(form)))"
+    # THE ONE EXEMPT CALLER: syncPayloadPricing copies pricing keys into the saved payload, which
+    # must keep blanks blank -- the placeholders are what a blank PRINTS, applied at fill time.
+    exempt = {"syncPayloadPricing"}
+    sites = []
+    for m in re.finditer(re.escape(expr), src):
+        owner = None
+        for f in re.finditer(r"^  (?:async )?function (\w+)\(", src[:m.start()], re.M):
+            owner = f.group(1)
+        wrapped = src[max(0, m.start() - len("withTokenDefaults(")):m.start()] == "withTokenDefaults("
+        sites.append((owner, wrapped))
+    display = [s for s in sites if s[0] not in exempt]
+    assert len(display) >= 3, "the editor's token-value expression moved; repoint this test: %r" % sites
+    assert all(w for _, w in display), (
+        "an editor token fill skips withTokenDefaults, so it shows a blank where the document "
+        "prints the template's placeholder: %r" % [o for o, w in display if not w])
+    assert [o for o, w in sites if o in exempt] == ["syncPayloadPricing"], sites
