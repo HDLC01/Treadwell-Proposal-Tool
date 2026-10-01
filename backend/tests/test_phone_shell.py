@@ -464,6 +464,28 @@ def test_the_two_rows_that_overflowed_the_body_now_wrap(page, selector, why):
         "%s: %s has no phone-width flex-wrap. %s" % (page, selector, why))
 
 
+def test_the_library_tab_strip_stays_inside_the_page():
+    """Measured on staging, 2026-10-01: the Library page scrolled sideways at phone width,
+    scrollWidth 623 against 416. The five-tab strip (Items, Assemblies, Labor, Administration,
+    Default Items & Assemblies) is `width:max-content`, about 600px, and nothing capped it.
+
+    FIXED ON THE BASE RULE, not a phone-only one, because the strip is wider than a small tablet
+    too. max-width:100% keeps it inside the page, and flex-wrap puts the last tabs on a second
+    line, so all five stay visible instead of scrolling out of reach.
+
+    Mutation: drop flex-wrap or max-width from the .views rule."""
+    css = "\n".join(re.findall(r"<style[^>]*>(.*?)</style>",
+                               (FRONTEND / "library.html").read_text(encoding="utf-8"), re.S))
+    hit = [d for s, d, cond, _ in rules(css)
+           if s.strip() == ".views" and media_applies(cond, 375) is not False]
+    assert hit, "library.html has no .views rule that applies at phone width"
+    decl = " ".join(hit)
+    assert re.search(r"flex-wrap\s*:\s*wrap", decl), "the Library tab strip does not wrap"
+    assert re.search(r"max-width\s*:\s*100%", decl), (
+        "the Library tab strip is not capped at the page width, so max-content pushes the page "
+        "sideways on a phone")
+
+
 def test_wide_content_keeps_its_swipe_out_of_the_browsers_back_gesture():
     """Every scroll box in this app already had overflow-x:auto; what it lacked is the second half.
 
