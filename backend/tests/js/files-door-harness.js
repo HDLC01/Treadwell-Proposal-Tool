@@ -128,6 +128,8 @@ const PROPOSAL_UNITS = [
   fn(PROPOSAL, "repaintNote", P),
   fn(PROPOSAL, "sayTheSaveIsBlocked", P),
   grab(PROPOSAL, /^  let _persistTimer = .*$/m, "_persistTimer", P),
+  // The cover letter's one resolver, which the composer and continueToDone both ask.
+  fn(PROPOSAL, "coverLetterOn", P),
   // continueToDone composes the document through the ONE composer it shares with the fit request.
   fn(PROPOSAL, "composeProposalPayload", P),
   // ...and the question the fit request asks, built by the same composer (scenario ONE).

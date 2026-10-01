@@ -119,7 +119,7 @@ TABS: Dict[str, Dict[str, Any]] = {
         "api": ("/api/portal/deposit/",),
     },
     "/gc-projects.html": {
-        "label": "General Contractor",
+        "label": "GC Projects",
         # THE SAME BOARD as /portal.html (the same page bytes and the same portal.js; main.py serves
         # it via pipelines.board_page), showing the projects whose audience is GC. So it reads
         # exactly the routes /portal.html reads, all shared, and owns none of them: api: () for the
