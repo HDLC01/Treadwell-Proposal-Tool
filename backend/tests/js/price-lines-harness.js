@@ -293,6 +293,12 @@ const UNITS = [
   // The price box's bullets: every builder above puts a line's override on it (linePropsOf) and
   // refreshPriceDisplay ends by drawing them (paintLineParas).
   fn("linePropsOf"), fn("paintLineParas"), fn("isPriceLine"), fn("priceLineAction"),
+  // paintLineParas and paintOptionsGap give each composed PRICE line the spacing of the paragraph
+  // the document prints it from (priceLineRecord; the gap's lines, the row above it:
+  // gapModelRecord), through applyParaSpacing.
+  topConst("SINGLE_LINE_EM"), fn("paraLineHeight"), fn("applyParaSpacing"),
+  fn("priceLineRecord"), fn("gapModelRecord"),
+  topConst("TWIPS_PER_PT"),
   fn("paintExtras"), fn("makeExtraLine"), fn("caretInto"), fn("splitPriceLine"), fn("mergePriceLine"),
   fn("paintLine"), fn("comboSystemLines"), fn("comboLinesForPayload"), fn("baseDescLabel"),
   fn("refreshPriceDisplay"), fn("renderProposalExtras"), fn("computeTokenValues"),

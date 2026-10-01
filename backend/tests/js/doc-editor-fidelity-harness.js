@@ -363,6 +363,9 @@ const LIFTED = [
   // and the file's own line spacing. Lifted rather than stubbed: applyParaToEl delegates to it,
   // so a stub would leave the indent arithmetic (bullet at left-hanging) untested.
   fn("applyParaGeom"),
+  // applyParaGeom puts a paragraph's vertical geometry on through applyParaSpacing, whose line
+  // height is the file's multiple of the face's own single line (paraLineHeight).
+  topConst("SINGLE_LINE_EM"), fn("paraLineHeight"), fn("applyParaSpacing"),
   // applyParaToEl asks takesPriceStep whether a row is drawn as a PRICE-box row (the REBID price box).
   fn("takesPriceStep"), fn("applyParaToEl"), fn("setParaState"),
   topConst("overrideKey"), fn("mergeOverrideEntry"), topConst("liveKey"),

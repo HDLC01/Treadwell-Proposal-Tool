@@ -458,6 +458,9 @@ const LIFTED = [
   // the document does not have. Lifted, not stubbed: this harness owns those rows, and a stub
   // returning "" would test the old geometry while calling it the new one.
   fn("sysRowTemplate"), fn("sysRowStyle"), fn("sysRowSizePt"),
+  // applyParaGeom puts a paragraph's vertical geometry on through applyParaSpacing, whose line
+  // height is the file's multiple of the face's own single line (paraLineHeight).
+  topConst("SINGLE_LINE_EM"), fn("paraLineHeight"), fn("applyParaSpacing"),
   fn("workLabelHtml"),
   fn("effectiveWorkType"), fn("sheetSystems"), fn("renderSystemPreview"), fn("serializeBlock"),
   topConst("PT_PER_CSS_PX"), topConst("BOX_DRAG_SLOP_PT"), topConst("BOX_EPS_PT"),
@@ -479,6 +482,10 @@ const LIFTED = [
   // applyBoxFit leaves the box at its design size, which is the page before its first answer.
   topConst("boxFitById"), topConst("PAGE_HP"), fn("inlineHp"), fn("clearBoxFit"), fn("applyBoxFit"),
   fn("fitTxbx"), fn("fitNotesBox"), fn("wireOverflowExpand"),
+  // fitTxbx, fitOffer, growBoxToFit and releaseAutoGrownHeight measure a box by how far its
+  // PRINTED text reaches (boxContentPx -> boxInkPx), which falls back to the box's own height
+  // when no line in it is laid out -- as here, where only the box has a modelled height.
+  fn("boxInkPx"), fn("boxContentPx"),
   // ── the paragraph controls (bullet / indent) and everything they touch ──
   // The toolbar's own click handler reaches toggleFormat and applyFormat on the B/I/U buttons,
   // and showFmtBar reads selectionFormat, so those are lifted too rather than stubbed: a stub

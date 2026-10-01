@@ -700,7 +700,16 @@
    *  prints — a bulleted line's square sits `hanging` twips left of its text (Word puts the text at
    *  `left` and the marker at `left - hanging`), an unbulleted line's text starts at its indent.
    *  A blank line draws no bullet, as none prints. Cheap and idempotent; run after every repaint
-   *  and every edit in the box, so a line gets its bullet the moment it gets its first word. */
+   *  and every edit in the box, so a line gets its bullet the moment it gets its first word.
+   *
+   *  ...AND HOW TALL IT IS. Audit, 2026-10-02: the Options heading sat ~16pt lower in the editor than
+   *  in the PDF, because these lines carried spacing nobody printed -- a 2pt margin under every row,
+   *  4pt under the Total, 1pt under the heading, 2pt under each blank line of the gap -- on the
+   *  page's own 1.32 line height, where the document prints each one as the paragraph it is cloned
+   *  from: no space before or after and its own 1.25 (or 1.15) line. So every line takes the
+   *  spacing of that paragraph (priceLineRecord, applyParaSpacing). The lines typed above the
+   *  Options heading are the gap's, and paintOptionsGap spaces them with it. A line with no
+   *  paragraph to read (no template on screen) keeps the markup's own spacing. */
   function paintLineParas(root) {
     const scope = root && root.querySelectorAll ? root
       : (typeof docSurface !== "undefined" ? docSurface : null);
@@ -719,7 +728,41 @@
       if (!el.style) return;
       if (r.bullet) { el.style.marginLeft = pt(L[r.level] - H[r.level]); el.style.paddingLeft = pt(H[r.level]); }
       else { el.style.marginLeft = pt(r.indent); el.style.paddingLeft = "0pt"; }
+      const gapOwned = kind === "extra" && el.dataset.poLinekey === "heading_options"
+        && (el.dataset.poPos || "after") === "before";
+      const rec = gapOwned ? null : priceLineRecord(el.dataset.poLinekey);
+      if (rec && rec.para) applyParaSpacing(el, rec.para.spacing);
     });
+  }
+
+  /** The template paragraph the document prints a composed PRICE line FROM, or null.
+   *
+   *  The static rows ARE template paragraphs inside a priced region ({{#single_bid}},
+   *  {{#tax_breakout}}, {{#remodel}}, {{#has_options}}), found by the token each one carries -- the
+   *  same tokens the writer fills. Every option, manual and combo line is a clone of the
+   *  {{#price_line}} row, and each alternate line is its own row. A line typed above or below one
+   *  of these is modelled on it (proposal_writer._extra_line_paragraph), so it answers with it. */
+  function priceLineRecord(key) {
+    const k = String(key || "");
+    let re = null;
+    if (k === "heading_base") re = /^\s*Base Bid\s*$/;
+    else if (k === "base") re = /\{\{\s*base_bid_formatted\s*\}\}/;
+    else if (k === "sales_tax") re = /\{\{\s*material_tax_formatted\s*\}\}/;
+    else if (k === "remodel") re = /\{\{\s*(remodel\.amount_formatted|tax_amount_formatted)\s*\}\}/;
+    else if (k === "total") re = /\{\{\s*(total_formatted|total_label)\s*\}\}/;
+    else if (/^(option|manual|combo):/.test(k)) re = /\{\{\s*price_line\.amount_formatted\s*\}\}/;
+    else if (k === "alt_name") re = /\{\{\s*alternate\.system_name\s*\}\}/;
+    else if (k === "alt_flooring") re = /\{\{\s*alternate\.lump_sum_formatted\s*\}\}/;
+    else if (k === "alt_remodel") re = /\{\{\s*alternate\.remodel_tax\s*\}\}/;
+    else if (k === "alt_total") re = /\{\{\s*alternate\.total_formatted\s*\}\}/;
+    const blocks = Array.isArray(templateBlocks) ? templateBlocks : [];
+    if (k === "heading_options") {
+      // The {{#has_options}} region's own words ("Options:"), not one of its markers.
+      return blocks.find(b => b && b.txbx != null && b.in_block === "has_options"
+        && String(b.text || "").trim() && !/\{\{\s*[#\/]\s*\w+\s*\}\}/.test(String(b.text))) || null;
+    }
+    if (!re) return null;
+    return blocks.find(b => b && b.txbx != null && re.test(String(b.text || ""))) || null;
   }
 
   /** The lines typed above ("before") or below ("after") one price line, as markup. */
@@ -2225,6 +2268,8 @@
   let templatePredecessors = [];  // older content versions whose edits still fit (see savedVersionMatches)
   let templateTokenDefaults = {}; // what a blank token prints on this template (see withTokenDefaults)
   let templateOptionsHeadingIds = [];  // free-paragraph Options heading ids (GC), see paintOptionsGap
+  // What a run with no font of its own prints in, when the server does not say (resolveTemplateFonts).
+  const DOC_DEFAULT_FONT = "Cambria";
   let pageWpt        = 612;    // page width in pt, drives the zoom fit
   let flowMode        = false;  // true = geometry-less fallback rendering
   const blockById     = new Map();   // id -> block record
@@ -3104,9 +3149,9 @@
    *  hard against the margin, exactly as it prints.
    *
    *  `line` is 240ths of a line under `lineRule="auto"` (240 single, 276 = 1.15, 300 = 1.25) and
-   *  twips under `exact`/`atLeast`, so the rule decides the unit. Absent stays absent — the
-   *  stylesheet's own default then applies, rather than this asserting a number the file never
-   *  gave.
+   *  twips under `exact`/`atLeast`, so the rule decides the unit (paraLineHeight). Absent stays
+   *  absent — the stylesheet's own default then applies, rather than this asserting a number the
+   *  file never gave.
    *
    *  `st` is the LIVE state (what the estimator has set); `tpl` is the template's record, which is
    *  where hanging, first-line and spacing come from since the toolbar cannot change them. */
@@ -3120,12 +3165,45 @@
     el.style.paddingLeft = hangTw ? pt(hangTw) : "0";
     const firstTw = Number((tpl && tpl.first_line) || 0);
     el.style.textIndent = firstTw ? pt(firstTw) : "";
-    const sp = (tpl && tpl.spacing) || {};
-    el.style.marginTop = sp.before ? pt(Number(sp.before)) : "0";
-    el.style.marginBottom = sp.after ? pt(Number(sp.after)) : "0";
-    if (sp.line && sp.line_rule === "auto") el.style.lineHeight = String(Number(sp.line) / 240);
-    else if (sp.line) el.style.lineHeight = pt(Number(sp.line));
-    else el.style.lineHeight = "";
+    applyParaSpacing(el, (tpl && tpl.spacing) || {});
+  }
+
+  /** ONE "AUTO" LINE OF THE PROPOSAL'S FACE, in ems: Zetta Serif's own single line spacing.
+   *
+   *  Word and LibreOffice size a `lineRule="auto"` line as a multiple of the FONT's single line --
+   *  its ascender plus descender plus line gap -- and CSS sizes a unitless line-height as a multiple
+   *  of the font SIZE. For Zetta Serif (both files: hhea ascender 760, descender -240, lineGap 45 on
+   *  a 1000-unit em) the single line is 1.045em, so `line-height: 1.25` drew every 1.25-spaced
+   *  line 4.3% shorter than the PDF prints it. Measured on the audited Direct epoxy job
+   *  (2026-10-02): 8pt rows at 1.15 print 9.61pt apart, 8pt rows at 1.25 print 10.45pt apart and a
+   *  9pt PRICE line at 1.25 is 11.76pt tall -- each exactly 1.045 x size x the file's multiple.
+   *
+   *  Only an AUTO line is scaled. Every template spaces its page-1 text boxes this way and gives
+   *  its Terms and Conditions paragraphs no spacing at all, so the Terms pages are unaffected. */
+  const SINGLE_LINE_EM = 1.045;
+
+  /** The CSS line-height that makes a paragraph as tall as the document prints it, from its
+   *  `spacing` record: a multiple of the face's single line under `auto`, the exact height under
+   *  `exact`/`atLeast` (twips), and "" -- the stylesheet's own -- when the file states none. */
+  function paraLineHeight(sp) {
+    const s = sp || {};
+    if (s.line && s.line_rule === "auto") {
+      return String(Math.round(Number(s.line) / 240 * SINGLE_LINE_EM * 100000) / 100000);
+    }
+    if (s.line) return (Number(s.line) / TWIPS_PER_PT) + "pt";
+    return "";
+  }
+
+  /** A paragraph's VERTICAL geometry from its `spacing` record: the space before and after it and
+   *  its line height. Shared by the template's own paragraphs (applyParaGeom) and by the lines the
+   *  page composes for the PRICE box (paintLineParas, paintOptionsGap), so a composed line is as
+   *  tall as the paragraph the document prints it from. */
+  function applyParaSpacing(el, sp) {
+    const s = sp || {};
+    const pt = (tw) => (tw / TWIPS_PER_PT) + "pt";
+    el.style.marginTop = s.before ? pt(Number(s.before)) : "0";
+    el.style.marginBottom = s.after ? pt(Number(s.after)) : "0";
+    el.style.lineHeight = paraLineHeight(s);
   }
 
   function applyParaToEl(el, st) {
@@ -4487,6 +4565,11 @@
     // default). The paragraph MARK's size (`fit.hp`) is how tall the line prints when it is empty,
     // which a rule in styles.css applies to `.tw-empty`. On the element, not a span, so fmtAt --
     // which stops at the block -- never reads either back into the estimator's formatting.
+    // ...and in the FACE they print in: a run-less paragraph's typed words are a bare run in the
+    // document, which takes the document default (resolveTemplateFonts sets `typed_font`).
+    if (b.typed_font) {
+      el.style.fontFamily = "'" + String(b.typed_font).replace(/['";]/g, "") + "', Georgia, 'Times New Roman', serif";
+    }
     if (b.txbx != null && b.fit) {
       if (Number(b.fit.typed_hp) > 0) el.style.fontSize = (Number(b.fit.typed_hp) / 2) + "pt";
       if (Number(b.fit.hp) > 0 && el.style.setProperty) {
@@ -5123,7 +5206,8 @@
                  + Math.max(0, left - hang) + "pt",
                  "padding-left:" + hang + "pt"];
     if (first) out.push("text-indent:" + first + "pt");
-    if (sp.line && sp.line_rule === "auto") out.push("line-height:" + (Number(sp.line) / 240));
+    // The file's multiple of the face's own single line (paraLineHeight), as the paragraph beside it.
+    if (sp.line && sp.line_rule === "auto") out.push("line-height:" + paraLineHeight(sp));
     const size = sysRowSizePt(b.id);
     if (size) out.push("font-size:" + size + "pt");
     return out.join(";") + ";";
@@ -5432,6 +5516,39 @@
     return true;
   }
 
+  /** How far down a box its PRINTED text reaches, in layout px: the bottom edge of the lowest line
+   *  with a character on it. Null when no line in it is laid out to be read.
+   *
+   *  Audit, 2026-10-02: the Direct epoxy PRICE box showed "Longer than this box" and offered Fit to
+   *  text with its last words two thirds of the way down it. The test was the box's whole content
+   *  height, and every template ends its PRICE box (and its WORK and NOTES boxes) with blank spacer
+   *  paragraphs -- six of them on that file -- which take height and print nothing. The document
+   *  prints them past the bottom edge just the same, where they show nothing, so they are not text
+   *  running out of the box. Only a line with words on it is.
+   *
+   *  Layout metrics (offsetTop / offsetHeight up the offsetParent chain to the box), like the terms
+   *  pager: immune to #doc-zoom's transform. The box is positioned, so every line's offsetParent
+   *  chain ends at it; a hidden line has no offsetParent and measures 0 high, adding nothing. */
+  function boxInkPx(box) {
+    let measured = false, bottom = 0;
+    box.querySelectorAll(LINE_SEL).forEach((el) => {
+      if (typeof el.offsetTop !== "number") return;                       // not laid out
+      measured = true;
+      if (!String(el.textContent || "").trim()) return;                   // prints nothing
+      let top = 0, n = el;
+      while (n && n !== box) { top += n.offsetTop; n = n.offsetParent; }
+      bottom = Math.max(bottom, top + el.offsetHeight);
+    });
+    return measured ? bottom : null;
+  }
+
+  /** The height every "does it fit" question measures: the printed text's reach (boxInkPx), or the
+   *  box's own height when there is no laid-out line to read -- the measurement this replaced. */
+  function boxContentPx(box) {
+    const ink = boxInkPx(box);
+    return ink === null ? box.offsetHeight : ink;
+  }
+
   // Fit ONE positioned text box (WORK / PRICE / NOTES / ...): show it at the size it prints, then
   // say whether its text still runs past the box's bottom edge.
   function fitTxbx(box) {
@@ -5460,12 +5577,13 @@
     // grown to fit its text stops being shrunk, and then shows that text at the size it was
     // measured at. fitOffer sets classes, never geometry.
     clearBoxFit(box);
-    const offer = box.offsetHeight > target ? fitOffer(box) : "";
+    const offer = boxContentPx(box) > target ? fitOffer(box) : "";
     const shrunk = applyBoxFit(box);
-    if (box.offsetHeight <= target) { clear(); return; }      // fits at the size it prints
+    if (boxContentPx(box) <= target) { clear(); return; }     // fits at the size it prints
     // STILL LONGER THAN THE BOX, at the size it prints. The document prints the rest of it past
     // the box's bottom edge, over whatever is below, so the page shows exactly that: no clip, no
-    // "Show all". The marker is the box's own bottom edge and a badge, both drawn in styles.css.
+    // "Show all". The marker is a line where the printed box ends (--tw-box-end, applyBoxGeom) and
+    // a badge, both drawn in styles.css.
     box.classList.add("tw-notes-overflow");
     const advice =
       offer === "grow"
@@ -5684,7 +5802,7 @@
     box.style.fontSize = ""; box.style.maxHeight = ""; box.style.overflow = "";
     // At the DESIGN size, like the grow it undoes: fitTxbx puts the printed size back after.
     clearBoxFit(box);
-    if (box.offsetHeight > (Number(design.h_pt) * 96 / 72) + 1) {
+    if (boxContentPx(box) > (Number(design.h_pt) * 96 / 72) + 1) {
       // Still does not fit at the template's size, so the height was doing a job. Put it back
       // exactly as it was — releasing it here would silently undo the estimator's Fit to text.
       if (prevEntry) boxOverrides.set(id, prevEntry); else boxOverrides.delete(id);
@@ -5826,6 +5944,11 @@
     // anything about dragging. Writing it means a box the estimator enlarged stops being reported
     // as overflowing, and stops having its font shrunk on screen — which is the whole point.
     el.dataset.boxHPt = String(r.h);
+    // WHERE THE PRINTED BOX ENDS, for the over-long marker (styles.css, .tw-notes-overflow). The box
+    // on screen is as tall as its content (min-height), so its own bottom edge is where the text
+    // stops, not where the box the document prints stops -- and a marker drawn there was the second
+    // red rule a few px under the frame's own on the audited PRICE box (2026-10-02).
+    if (el.style.setProperty) el.style.setProperty("--tw-box-end", "calc(" + r.h + "pt - 2px)");
     el.classList.toggle("tw-box-moved", boxOverrides.has(id));
     return r;
   }
@@ -6005,7 +6128,8 @@
    *    "art"  — nothing below to measure against, so what sits there is letterhead picture.
    *
    *  Called with the design font size restored and before the clip is applied, which is the one
-   *  moment offsetHeight is the real content height. Do not move the call. */
+   *  moment the measured height (boxContentPx: the printed text's reach) is the real content
+   *  height. Do not move the call. */
   function fitOffer(box) {
     box.classList.remove("tw-can-grow", "tw-grow-blocked");
     if (!box || !box.dataset || !box.dataset.boxHPt) return "";
@@ -6017,7 +6141,7 @@
     if (ov && typeof ov.h_pt === "number" && !isAutoGrown(box)) return "";
     const rect = effectiveBoxRect(id);
     const others = otherBoxRects(id);
-    const needPt = Math.ceil(box.offsetHeight * PT_PER_CSS_PX * 100) / 100;
+    const needPt = Math.ceil(boxContentPx(box) * PT_PER_CSS_PX * 100) / 100;
     const room = growRoomPt(rect, others, boxLimits);
     if (needPt <= room + BOX_EPS_PT) {
       box.classList.add("tw-can-grow");
@@ -6062,8 +6186,8 @@
     const rect = effectiveBoxRect(id);
     const target = rect.h / PT_PER_CSS_PX + 1;            // the same +1px slack fitTxbx allows
     if (!(target > 0)) return false;
-    if (box.offsetHeight <= target) { box.classList.remove("tw-grow-blocked"); return false; }
-    const needPt = Math.ceil(box.offsetHeight * PT_PER_CSS_PX * 100) / 100;
+    if (boxContentPx(box) <= target) { box.classList.remove("tw-grow-blocked"); return false; }
+    const needPt = Math.ceil(boxContentPx(box) * PT_PER_CSS_PX * 100) / 100;
     const room = growRoomPt(rect, otherBoxRects(id), boxLimits);
     if (needPt > room + BOX_EPS_PT) {
       box.classList.add("tw-grow-blocked");               // the badge says why
@@ -6073,7 +6197,7 @@
     const grown = dragBoxRect("s", rect, { x: 0, y: needPt - rect.h }, boxLimits);
     setBoxOverride(id, grown);
     applyBoxGeom(box);
-    if (box.offsetHeight > grown.h / PT_PER_CSS_PX + 1.5) {
+    if (boxContentPx(box) > grown.h / PT_PER_CSS_PX + 1.5) {
       // The clamp gave back less than the content needs. Don't leave the box at a third size
       // that neither fits nor matches the template — put it back and warn.
       if (dropAutoGrownHeight(box, id)) applyBoxGeom(box);
@@ -6309,11 +6433,47 @@
     docZoomOuter.style.height = r.height + "px";
   }
   let _zoomRO = null;
+  // THE CANVAS IS WATCHED TOO, NOT ONLY THE WINDOW. Audit, 2026-10-02: on most fresh loads at
+  // laptop widths the sheet came up too big -- scale(1.577) where 1.283 fits at innerWidth 1600 --
+  // its left ~108px behind the sidebar and its right edge under the floating Pricing options panel,
+  // until a 1px window resize put it right. The fit below reads the canvas ONCE per call, and the
+  // space it reads can change after that without the window changing size at all: the 240px nav
+  // rail is a margin on <body> that auth.js ANIMATES in when it draws the sidebar
+  // (`body{transition:margin-left .2s ease}`), so a first fit inside those 200ms measured a canvas
+  // up to 240px wider than it ends up; the 272px pricing-rail reservation is padding a :has() rule
+  // adds when #options-panel is shown; and below 1400px the panel moves inline. Measured on both
+  // bad loads, the sheet was exactly 240px wider than the space it had (canvas clientWidth - 56
+  // instead of - 296). The only listener that re-fitted was the window's `resize`, which none of
+  // those fire. So the canvas's own box is observed, and any change to it -- every frame of that
+  // transition included -- fits the sheet again before the next paint.
+  let _canvasRO = null;
+  let _zoomFitKey = "";        // the canvas box the zoom was last fitted to (zoomFitKey)
+
+  /** What a fit depends on: the canvas's border-box width and its two side paddings.
+   *
+   *  NOT clientWidth. That also moves when the canvas's own scrollbar comes or goes, which the
+   *  fit's 24px of slack already absorbs -- and watched, it is the one change a fit causes itself
+   *  (a new zoom makes the sheet taller or shorter, which can bring the scrollbar in or take it
+   *  away), so at the height where it toggles the sheet would flip between two zooms for ever. */
+  function zoomFitKey(canvas, cs) {
+    return [canvas.offsetWidth, cs.paddingLeft, cs.paddingRight].join("|");
+  }
+
+  /** Fit the sheet again when the canvas it was fitted to is a different size now. The observer's
+   *  first report (the size at observe time) and any report caused only by the scrollbar find the
+   *  same key and do nothing. */
+  function refitZoomToCanvas() {
+    const canvas = document.querySelector(".word-canvas");
+    if (!canvas) return;
+    if (zoomFitKey(canvas, getComputedStyle(canvas)) !== _zoomFitKey) applyZoom();
+  }
+
   function applyZoom() {
     if (!docZoom || !docZoomOuter) return;
     const canvas = document.querySelector(".word-canvas");
     if (!canvas) return;
     const cs = getComputedStyle(canvas);
+    _zoomFitKey = zoomFitKey(canvas, cs);
     const avail = canvas.clientWidth - parseFloat(cs.paddingLeft || 0) - parseFloat(cs.paddingRight || 0) - 24;
     const pagePx = pageWpt * (96 / 72);                    // CSS pt -> px
     const k = Math.min(1.7, Math.max(0.45, avail / pagePx));
@@ -6331,6 +6491,13 @@
     if (!_zoomRO && window.ResizeObserver) {
       _zoomRO = new ResizeObserver(() => syncZoomOuter());
       _zoomRO.observe(docZoom);
+    }
+    // ...and the canvas's own size, which the sidebar's margin and the pricing rail's padding
+    // change with no window resize (see _canvasRO above). A ResizeObserver reports after layout
+    // and before paint, so a late rail is corrected in the frame it arrives in.
+    if (!_canvasRO && window.ResizeObserver) {
+      _canvasRO = new ResizeObserver(() => refitZoomToCanvas());
+      _canvasRO.observe(canvas);
     }
   }
   window.addEventListener("resize", applyZoom);
@@ -6677,6 +6844,35 @@
     renderBlockList(pg, templateBlocks.filter(b => b.txbx == null), tokens);
   }
 
+  /** Give every template run with no font of its own the face Word prints it in.
+   *
+   *  Audit, 2026-10-02: the REGARDS name drew in Zetta Serif and the PDF printed it in another face.
+   *  Its run carries no `w:rFonts`, so /api/proposal-template reports `font: null` -- the server
+   *  reads the run's own w:ascii and its paragraph style's, and stops there -- and the page then
+   *  fell back to `.tw-page`'s Zetta Serif. Word goes one step further: a run with no font of its
+   *  own takes the document default, `w:docDefaults/w:rPrDefault/w:rFonts`, which in every template
+   *  is `asciiTheme="minorHAnsi"`, i.e. theme1.xml's minor latin face: Cambria (test_editor_layout.py
+   *  reads all of them). No template run uses a theme font of its own, so `null` only ever means
+   *  that default. The face is sent as `default_font` once the server reports it; until then it is
+   *  that resolution, done once here, held by DOC_DEFAULT_FONT.
+   *
+   *  A text-box paragraph with NO run at all gets the face too, as `typed_font`: words typed into it
+   *  become a bare run in the document (proposal_writer._set_paragraph_text), which prints in the
+   *  same default, so renderBlock draws them in it. Its SIZE already comes from `fit.typed_hp`.
+   *
+   *  The LibreOffice that renders the PDF has no Cambria and substitutes one it has; that is the
+   *  server's font to supply, and the editor follows the document, as Word shows it. */
+  function resolveTemplateFonts(blocks, face) {
+    const f = String(face || "").trim() || DOC_DEFAULT_FONT;
+    (Array.isArray(blocks) ? blocks : []).forEach((b) => {
+      if (!b || typeof b !== "object") return;
+      const runs = Array.isArray(b.runs) ? b.runs : [];
+      runs.forEach((r) => { if (r && typeof r === "object" && !r.font) r.font = f; });
+      if (b.txbx != null && !runs.length) b.typed_font = f;
+    });
+    return f;
+  }
+
   async function initDocumentEditor() {
     const wt = effectiveWorkType();
     const audience = state.audience || "Direct";
@@ -6701,6 +6897,8 @@
       templateOptionsHeadingIds = Array.isArray(j.options_heading_ids)
         ? j.options_heading_ids.map(Number).filter(Number.isFinite) : [];
       annotateRegions(templateBlocks);
+      // The face a run with no font of its own prints in, on every run that has none.
+      resolveTemplateFonts(templateBlocks, j.default_font);
       blockById.clear();
       templateBlocks.forEach(b => blockById.set(b.id, b));
       // The printed sizes belong to the template they were computed on; this one has none yet.
@@ -8450,6 +8648,36 @@
       gap.innerHTML = html;
     }
     gap.style.display = want ? "" : "none";
+    // AS TALL AS THEY PRINT. The writer prints each blank line, and each line typed on the gap, as a
+    // copy of the price row above the heading (proposal_writer._apply_options_gap: `_blank_like` /
+    // `_extra_line_paragraph` of that row), so each takes that row's spacing -- not the 2pt margin and
+    // the page's 1.32 line height these lines used to carry, which put the heading ~16pt lower than
+    // it prints on the audited Direct epoxy job.
+    const model = gapModelRecord(gap);
+    if (model && model.para) {
+      gap.querySelectorAll(".tw-gap-line").forEach(n => applyParaSpacing(n, model.para.spacing));
+      gapTypedEls().forEach(n => applyParaSpacing(n, model.para.spacing));
+    }
+  }
+
+  /** The paragraph the gap's lines are copies of: the nearest shown price row above the gap that
+   *  is not itself a line typed on the gap (those sit between it and the gap) -- the writer's
+   *  `model`, which it picks after taking out the template's own blank spacer (hidden here as
+   *  `tw-gap-absorbed`). A template paragraph answers with its own record, a composed line with
+   *  the paragraph it is printed from (priceLineRecord). Null when there is none to read. */
+  function gapModelRecord(gap) {
+    for (const n of aboveOptionsGap(gap)) {
+      if (!gapShown(n) || isGapTyped(n)) continue;
+      let line = lineAt(n) === n ? n : null;
+      if (!line && n.querySelectorAll) {
+        const inner = Array.from(n.querySelectorAll(LINE_SEL)).filter(gapShown);
+        line = inner.length ? inner[inner.length - 1] : null;
+      }
+      if (!line) continue;
+      if (line.classList && line.classList.contains("tw-block")) return blockById.get(Number(line.dataset.id)) || null;
+      return line.dataset && line.dataset.poLinekey ? priceLineRecord(line.dataset.poLinekey) : null;
+    }
+    return null;
   }
 
   /** The typed lines, drawn directly above the gap in their saved order. A line is moved only

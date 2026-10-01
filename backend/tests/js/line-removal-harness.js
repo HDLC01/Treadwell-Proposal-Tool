@@ -436,6 +436,8 @@ const api = new Function(
     fn("runsEqual"), fn("pointAt"), fn("markEdited"),
     fn("lineAt"), fn("lineAtSelection"), fn("lineTarget"), fn("editingBox"), fn("boxLines"), fn("lineShown"),
     fn("paraBase"), fn("paraNow"), fn("paraPatch"), fn("sanitizeParaPatch"), fn("applyParaGeom"),
+    // applyParaGeom's vertical geometry: applyParaSpacing / paraLineHeight / SINGLE_LINE_EM.
+    topConst("SINGLE_LINE_EM"), fn("paraLineHeight"), fn("applyParaSpacing"),
     fn("applyParaToEl"), fn("setParaState"), fn("paraAction"),
     fn("paintBoxSel"), fn("clearBoxSel"), fn("clearBoxLine"), fn("selectRangeAcross"),
     fn("insertBreakAt"), fn("spliceLines"),

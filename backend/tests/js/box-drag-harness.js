@@ -294,6 +294,10 @@ const LIFTED = [
   // applyBoxFit leaves the box at its design size, which is the page before its first answer.
   topConst("boxFitById"), topConst("PAGE_HP"), fn("inlineHp"), fn("clearBoxFit"), fn("applyBoxFit"),
   fn("fitTxbx"), fn("wireOverflowExpand"),
+  // fitTxbx, fitOffer, growBoxToFit and releaseAutoGrownHeight measure a box by how far its
+  // PRINTED text reaches (boxContentPx -> boxInkPx), which falls back to the box's own height
+  // when no line in it is laid out -- as here, where only the box has a modelled height.
+  fn("boxInkPx"), fn("boxContentPx"),
   // wireOverflowExpand's click handler asks `lineAt(e.target)` -- "was this click meant for a
   // line, which should take the caret rather than expand the box". It used to ask with a
   // hand-written selector list ending in `[contenteditable=true]`, and the BOX carries that
