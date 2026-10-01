@@ -824,6 +824,37 @@
     return true;
   }
 
+  /** Which condition cards a NEW estimate shows, out of the library's stored answers.
+   *
+   *  Hanz, 2026-10-01: "Everything that is in the defaults and labor tab in the Items and
+   *  Assemblies appear as grayed out options that can be enabled or not." A condition on the
+   *  Defaults tab (`listed`, the default) shows its card on a new bid, grayed until it is switched
+   *  on; one taken off the Defaults tab does not. Only the OFF-the-list answers are recorded --
+   *  `{ dye: false }` -- so an estimate saved before this existed, which has no map at all, shows
+   *  all three exactly as it did.
+   *
+   *  SNAPSHOTTED ONTO THE BID, behind the same conditionsUnstated gate as seedConditionDefaults:
+   *  taking a condition off the Defaults tab later must not change an estimate somebody already
+   *  has open. Only the three keys CONDITION_CELLS writes are read. */
+  function seedConditionsShown(rows) {
+    var out = {};
+    if (!(rows instanceof Array)) return out;
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      if (!r || !r.key || !Object.prototype.hasOwnProperty.call(CONDITION_CELLS, r.key)) continue;
+      if (r.listed === false) out[r.key] = false;
+    }
+    return out;
+  }
+
+  /** Does this estimate show the card for `key`? A condition that is switched ON always shows,
+   *  whatever the map says -- an answer that prices the bid is never hidden from the estimator. */
+  function conditionShown(model, key) {
+    var m = model || {};
+    if ((m.conditions || {})[key]) return true;
+    return !(m.conditions_shown && m.conditions_shown[key] === false);
+  }
+
   /** The labor rows the template itself seeds: A37 = 3 guys at C37 = $33.00/hr, the mock-up at
    *  B40 = half a day, and joint filling at C44 = $33.00. Days are left blank on the two an
    *  estimator has to judge.
@@ -984,6 +1015,17 @@
         if (!fresh.conditions.hasOwnProperty(k)) continue;
         out.conditions[k] = (k in saved) ? !!saved[k] : fresh.conditions[k];
       }
+      // WHICH CONDITION CARDS THIS BID SHOWS -- seedConditionsShown's snapshot. Carried through
+      // only as `key: false` for the three keys CONDITION_CELLS writes; anything else is dropped,
+      // and a bid with no map shows all three, as every bid did before it existed.
+      if (model.conditions_shown && typeof model.conditions_shown === "object") {
+        var shown = {};
+        for (var sk in CONDITION_CELLS) {
+          if (Object.prototype.hasOwnProperty.call(CONDITION_CELLS, sk) &&
+              model.conditions_shown[sk] === false) shown[sk] = false;
+        }
+        out.conditions_shown = shown;
+      }
       if (isBlank(out.contingency)) out.contingency = 0;
       // Every v2 draft saved before the Fees line became typeable has no `fees` at all, and a
       // missing one must read as the zero the sheet ships.
@@ -1134,6 +1176,7 @@
     // thing standing between a Defaults-tab edit and somebody's saved work.
     seedConditionDefaults: seedConditionDefaults,
     conditionsUnstated: conditionsUnstated,
+    seedConditionsShown: seedConditionsShown, conditionShown: conditionShown,
     laborCost: laborCost, laborTotal: laborTotal, travelManDays: travelManDays,
     filledIn: filledIn,
     takeoffSf: takeoffSf,

@@ -784,10 +784,15 @@
    *  BESIDE patchDefault RATHER THAN THROUGH IT, the same call patchLabor makes: that one sends
    *  `{ favorite }` against /api/library/<kind>/<id>, and a condition has no library row and no
    *  id. Widening it would put a body behind a control that can never produce one. */
-  async function putConditionDefault(key, on) {
+  // WRITES `listed` -- AND `on: false` -- since 2026-10-01. Whether a new estimate shows the
+  // condition's card (grayed until switched on) is what the Defaults tab edits now, and Hanz's
+  // rule is that all three START off: "dont start as on". So every press here also clears any
+  // `on: true` an earlier version of this tab stored (its Add button wrote one), or a condition
+  // removed from the list would still open switched on, and priced, on every new bid.
+  async function putConditionDefault(key, body) {
     var r = await api("/api/condition-defaults/" + encodeURIComponent(key), {
       method: "PUT", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ on: !!on }) });
+      body: JSON.stringify(body) });
     var j = await r.json().catch(function () { return {}; });
     if (!r.ok) throw new Error(j.detail || j.error || ("HTTP " + r.status));
     return j;
@@ -1272,21 +1277,6 @@
     if (!el && anyFilterActive()) { clearFilters(); el = find(); }
     if (el && el.focus) el.focus();
     if (el && el.scrollIntoView) el.scrollIntoView({ block: "center" });
-  }
-
-  /** After Add or Remove on a condition row, put the caret on the button that row now carries.
-   *  The row stays where it was and only its button changes (Add <-> Remove), but the repaint
-   *  replaces the button that had focus, and a keyboard user would land on <body>. */
-  function focusConditionButton(key) {
-    var body = $("default-takeoff-body");
-    if (!body || !body.querySelector || !key) return;
-    var itemId = null;
-    Object.keys(RESERVED_ITEM_CONDITION).forEach(function (id) {
-      if (RESERVED_ITEM_CONDITION[id] === key) itemId = id;
-    });
-    var el = body.querySelector('[data-def-add="conditions"][data-def-id="' + key + '"]') ||
-      (itemId && body.querySelector('[data-def-off="items"][data-def-id="' + itemId + '"]'));
-    if (el && el.focus) el.focus();
   }
 
   /** Put the caret in a Labor tab row's name box -- the job refocusItemField does for Items,
@@ -2387,9 +2377,9 @@
    *  sitting below it as always-listed rows with an Add or a Remove and a "writes Polish!E29 · not
    *  in a new bid" tag: "make these 3 as materials" -- then, offered the choice, "All 3 exactly
    *  like materials". So each is drawn by the material row's own code (materialDefaultRow):
-   *  the same Edit and Remove while a new bid buys it. LATER THE SAME DAY ("Those 3 should be
-   *  defaults as well here" -> "Always list them, start OFF") they are listed while off too, with
-   *  an Add in place of Remove -- conditionDefaultRow. What they do NOT share with a material is where the
+   *  the same Edit and Remove. LATER THE SAME DAY Hanz settled what a listed one MEANS: it is on
+   *  a new estimate, grayed until switched on, and all three start off -- see conditionDefaultRow.
+   *  What they do NOT share with a material is where the
    *  answer is stored -- condition_defaults, not a `favorite` -- and that is removeDefault's and
    *  the add router's business, not the row's.
    *
@@ -2445,21 +2435,30 @@
     // Kit" would leave out.
     var kitUnit = (itemOf("joint-filler-kit") || {}).unit || "kit";
     var named = function (id, label) { return (itemOf(id) || {}).name || label; };
+    // ON THE DEFAULTS TAB unless an admin took it off (`listed: false`). The same reading as
+    // seedConditionsShown in polish-bid-core.js, which is what a new estimate snapshots.
+    var listedOf = function (key) {
+      for (var i = 0; i < COND_DEFAULTS.length; i++) {
+        var r = COND_DEFAULTS[i];
+        if (r && r.key === key) return r.listed !== false;
+      }
+      return true;
+    };
     return [
       { key: "joint_filler", item_id: "joint-filler-kit", label: "Joint filler",
-        name: named("joint-filler-kit", "Joint filler"), on: !!c.joint_filler,
+        name: named("joint-filler-kit", "Joint filler"), on: !!c.joint_filler, listed: listedOf("joint_filler"),
         priced: kit ? kit + " per " + kitUnit + " · 1 per " + L.qtyText(kitCov) + " SF"
                     : "No rate loaded for the kit" },
       { key: "remove_existing_jf", item_id: "remove-existing-jf",
         label: "Remove existing joint filler",
         name: named("remove-existing-jf", "Remove existing joint filler"),
-        on: !!c.remove_existing_jf,
+        on: !!c.remove_existing_jf, listed: listedOf("remove_existing_jf"),
         // NO PRICE, and saying so is the point. It is a fourth hand on the joint-filler line -- a
         // labor modifier the estimator prices on the Labor step -- so a dollar figure here would
         // be an invention. "No material cost" is a real answer; a made-up $0.00 would read as
         // free.
         priced: "No material cost" },
-      { key: "dye", item_id: "dye", label: "Dye", name: named("dye", "Dye"), on: !!c.dye,
+      { key: "dye", item_id: "dye", label: "Dye", name: named("dye", "Dye"), on: !!c.dye, listed: listedOf("dye"),
         // THE ROW IS ONE COAT and a bid buys B.DYE_COATS of them -- Kyle's rows 25 and 26.
         priced: dye ? dye + " per SF a coat · " + (B.DYE_COATS || 2) + " coats"
                     : "No rate loaded for dye" }
@@ -2478,19 +2477,22 @@
    *  list alone would be showing an admin a set of defaults no new bid actually opens with, and
    *  they would find that out from a bid. The rollback is the same reassign-and-repaint either
    *  way round, which is why add and remove share this one function. */
-  async function setConditionDefault(key, on) {
+  async function setConditionDefault(key, listed) {
     var was = COND_DEFAULTS;
     var next = [];
     var found = false;
     for (var i = 0; i < was.length; i++) {
-      if (was[i] && was[i].key === key) { next.push({ key: key, on: !!on }); found = true; }
-      else next.push(was[i]);
+      // `on` is CLEARED with the press -- see putConditionDefault: all three start off.
+      if (was[i] && was[i].key === key) {
+        next.push(Object.assign({}, was[i], { key: key, on: false, listed: !!listed }));
+        found = true;
+      } else next.push(was[i]);
     }
-    if (!found) next.push({ key: key, on: !!on });
+    if (!found) next.push({ key: key, on: false, listed: !!listed });
     COND_DEFAULTS = next;
     renderDefaultTakeoff();
     try {
-      await putConditionDefault(key, !!on);
+      await putConditionDefault(key, { listed: !!listed, on: false });
     } catch (err) {
       COND_DEFAULTS = was;
       renderDefaultTakeoff();
@@ -2679,40 +2681,27 @@
     return { name: name, how: how, actions: defaultRowActions("items", id, name) };
   }
 
-  /** One of the three condition materials on the Takeoff list: the material row while a new bid
-   *  buys it, and while it does not, the same row saying so with an Add where Remove would be.
+  /** One of the three condition materials on the Takeoff list, drawn as the material row it is.
    *
-   *  ALWAYS LISTED, 2026-10-01. Hanz, seeing the Materials list without them: "Those 3 should be
-   *  defaults as well here", then, offered the choice, "Always list them, start OFF". So all three
-   *  are on the Polish tab whatever their answer, and a new bid still starts without them -- his
-   *  2026-09-19 pricing call stands (joint filler alone added $2,500 to a 17,500 SF bid nobody had
-   *  asked for). An ordinary material that is not a default is still found through the add search;
-   *  these three are not offered there any more, because they are already on the list.
+   *  LISTED MEANS "ON A NEW ESTIMATE, GRAYED UNTIL SWITCHED ON". Hanz, 2026-10-01, after a day
+   *  of answers: "it should be edit and remove", "dont start as on staart as off in the
+   *  estimating sheet but it appears as grayed out like travel in labor", and "Everything that is
+   *  in the defaults and labor tab in the Items and Assemblies appear as grayed out options that
+   *  can be enabled or not". So a listed condition is a default like any material -- Edit, Remove
+   *  -- and what it gives a new bid is its card on the Takeoff step, dimmed and switched off.
+   *  Remove takes it off this list (condition_defaults.listed = false) and off the next new bid;
+   *  "+ Add a takeoff default" puts it back. Nothing here can make one START on.
    *
-   *  THE SAME EDIT, and an Add routed through the add router's "conditions" arm -- the one door
-   *  that writes condition_defaults with true. `priced` is escaped here because this row builds
-   *  its own markup (rawHow), and the kit's unit in it is an admin's typed text.
-   *
-   *  ADD AND REMOVE ARE AN ADMIN'S ONLY. PUT /api/condition-defaults refuses anybody else
-   *  (_require_admin), so offering them to an estimator would be a button that always 403s --
-   *  the reason the labor rows on this tab are gated on ADMIN too. Everyone keeps Edit. */
+   *  REMOVE IS AN ADMIN'S ONLY. PUT /api/condition-defaults refuses anybody else
+   *  (_require_admin), so offering it to an estimator would be a button that always 403s -- the
+   *  reason the labor rows on this tab are gated on ADMIN too. Everyone keeps Edit. */
   function conditionDefaultRow(c) {
-    var edit = '<button class="btn ghost sm" type="button" data-def-edit="items" data-def-id="' +
-      esc(c.item_id) + '">Edit</button>';
-    if (c.on) {
-      var row = materialDefaultRow(c.item_id, c.name, c.priced);
-      if (!ADMIN) row.actions = edit;
-      return row;
+    var row = materialDefaultRow(c.item_id, c.name, c.priced);
+    if (!ADMIN) {
+      row.actions = '<button class="btn ghost sm" type="button" data-def-edit="items" data-def-id="' +
+        esc(c.item_id) + '">Edit</button>';
     }
-    return {
-      name: c.name,
-      how: esc(c.priced) + ' <span class="wtall">Off \u00b7 a new bid starts without it</span>',
-      rawHow: true,
-      actions: edit + (ADMIN
-        ? '<button class="btn ghost sm" type="button" data-def-add="conditions" data-def-id="' +
-          esc(c.key) + '" aria-label="Make ' + esc(c.name) + ' a default">Add</button>'
-        : "")
-    };
+    return row;
   }
 
   var DEFAULT_Q = "";
@@ -2764,10 +2753,26 @@
         hits.push({ kind: "items", id: it.id, name: it.name, what: "Material" });
       }
     });
-    // JOINT FILLER, REMOVE-EXISTING AND DYE ARE NOT OFFERED HERE. Since 2026-10-01 ("Always list
-    // them, start OFF") all three are on the Polish list whether a new bid buys them or not, with
-    // their own Add while they are off -- see conditionDefaultRow. Offering them here too would be
-    // a second copy of a row that is already on screen.
+    // JOINT FILLER, REMOVE-EXISTING AND DYE, once taken off the list, are found here like any
+    // material that is not a default, and adding one puts it back (the add router's "conditions"
+    // arm). Polish tab only, and an admin's only -- the write is _require_admin.
+    //
+    // FIRST IN THE LIST: Browse shows DEFAULT_MAX rows, and after eight un-favorited materials a
+    // removed condition would fall off the end and be findable only by typing its name.
+    //
+    // MATCHED ON THE ROW'S NAME AND THE CONDITION'S LABEL, so "joint" finds the kit whatever an
+    // admin has renamed it to.
+    if (ADMIN && DEFAULT_WT === "polish") {
+      var condHits = [];
+      takeoffConditionDefaults().forEach(function (c) {
+        if (c.listed) return;
+        if (!q || String(c.name || "").toLowerCase().indexOf(q) !== -1 ||
+            String(c.label || "").toLowerCase().indexOf(q) !== -1) {
+          condHits.push({ kind: "conditions", id: c.key, name: c.name, what: "Material" });
+        }
+      });
+      hits = condHits.concat(hits);
+    }
     // LABOR, 2026-09-24 -- the Labor tab's own rows, offered the same way an un-favorited
     // material or assembly already is: findable here, one press to make a default. `travel`
     // is deliberately never a candidate -- it is not opted into a bid the way a favorited row
@@ -2874,9 +2879,9 @@
         // exactly like materials". So each is drawn by the material row's code with the same Edit
         // and Remove while a new bid buys it.
         //
-        // AND LISTED WHILE OFF TOO, later on 2026-10-01: "Those 3 should be defaults as well here",
-        // then "Always list them, start OFF". An off one carries an Add and says Off
-        // (conditionDefaultRow); a new bid still starts without all three.
+        // LISTED MEANS ON A NEW ESTIMATE, GRAYED UNTIL SWITCHED ON (later on 2026-10-01): listed
+        // while condition_defaults.listed is not false, with the material's Edit and Remove; all
+        // three still start off (conditionDefaultRow).
         rows: ITEMS.filter(function (it) {
           // Never a reserved row by its `favorite`: the three are listed below, by their condition.
           return it.favorite && !isReservedItem(it.id) && appliesToWorkType(it, DEFAULT_WT);
@@ -2885,11 +2890,11 @@
                    L.num(it.unit_cost) != null
                      ? L.money(it.unit_cost) + " per " + (it.unit || "unit")
                      : "No cost in the library yet");
-        }).concat(takeoffConditionDefaults().filter(function () {
+        }).concat(takeoffConditionDefaults().filter(function (c) {
           // ON THE POLISH TAB ONLY. All three write Polish-sheet cells (CONDITION_CELLS in
           // polish-bid-core.js) and nothing on the other four work types reads them; a combo job
-          // reads the Polish list. Listed on or off since Hanz's "Always list them, start OFF".
-          return DEFAULT_WT === "polish";
+          // reads the Polish list. And only while LISTED -- see conditionDefaultRow.
+          return DEFAULT_WT === "polish" && c.listed;
         }).map(function (c) {
           // KEYED BY THE RESERVED ROW'S ID, so Edit lands on that row on the Items tab like any
           // material's does, and Remove reaches removeDefault, which sends a reserved id to the
@@ -4014,9 +4019,7 @@
       // the same split for the Remove button.
       var addKind = addBtn.getAttribute("data-def-add");
       if (addKind === "conditions") {
-        var ckey = addBtn.getAttribute("data-def-id");
-        await setConditionDefault(ckey, true);
-        focusConditionButton(ckey);
+        await setConditionDefault(addBtn.getAttribute("data-def-id"), true);
       } else {
         await setDefault(addKind, addBtn.getAttribute("data-def-id"), true);
       }
@@ -4048,10 +4051,6 @@
     var offBtn = t.closest && t.closest("[data-def-off]");
     if (offBtn) {
       await removeDefault(offBtn.getAttribute("data-def-off"), offBtn.getAttribute("data-def-id"));
-      var offId = offBtn.getAttribute("data-def-id");
-      if (offBtn.getAttribute("data-def-off") === "items" && isReservedItem(offId)) {
-        focusConditionButton(RESERVED_ITEM_CONDITION[offId]);
-      }
       return;
     }
     // EDIT GOES TO THE ROW, not to an editor here. What you want to change about a default is the

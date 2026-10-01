@@ -1341,3 +1341,15 @@ def test_the_defaults_table_being_absent_mints_the_model_anyway(ran):
     for key in ("joint_filler", "dye", "remove_existing_jf"):
         assert d["conditions"][key] == d["shipped"][key], (
             "%s did not fall back to what the tool ships" % key)
+
+
+def test_the_intake_page_snapshots_which_condition_cards_a_new_bid_shows(ran):
+    """The intake page mints the first polish_estimate, so the Defaults tab's "listed" answer
+    (Hanz, 2026-10-01) has to be snapshotted here and saved, or it never reaches the estimate.
+    A worked project takes no snapshot.
+
+    Mutation: drop the M.conditions_shown seed in boot, or its carry in the save."""
+    s = ran["conditionsShown"]
+    assert s["minted"] == {"dye": False}, s["minted"]
+    assert s["survivesReadBack"] == {"dye": False}, s["survivesReadBack"]
+    assert s["worked"] == "absent", s["worked"]

@@ -1517,6 +1517,36 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
                 fetched: celled.rec.fetched.some((f) => /condition-defaults/.test(f.url)) },
       down: { conditions: downCond, shipped: P.freshModel().conditions },
     };
+
+    // THE CARD MAP RIDES THE FIRST SAVE (Hanz, 2026-10-01: what is on the Defaults tab appears on
+    // the estimate grayed; what is not, does not). This page mints the model, so the estimate
+    // never sees it unstated -- the snapshot has to be taken HERE, and saved, or it never lands.
+    const LISTED = [{ key: "dye", on: false, listed: false }];
+    const listed = build({ blob: { __draft_id: "listed-cond", project_name: "Listed job" },
+                           conditionDefaults: LISTED });
+    await listed.api.boot();
+    clickSwitch(listed, "prevailing_wage");
+    listed.clock.fire();
+    const listedSave = listed.rec.saves[listed.rec.saves.length - 1].polish_estimate;
+    // …and a worked project never takes one, whatever the Defaults tab says now.
+    const workedL = build({ blob: { __draft_id: "worked-listed", project_name: "Worked job",
+      polish_estimate: { version: 2,
+        takeoff: [{ assembly_id: "", assembly_name: "", measurement: 9000, unit: "SF" }],
+        conditions: { local: true, prevailing_wage: false, taxable: true, remodel_tax: false,
+                      bond: false, joint_filler: false, dye: false, remove_existing_jf: false },
+        contingency: 0, fees: 0, totals: {} } },
+      conditionDefaults: LISTED });
+    await workedL.api.boot();
+    clickSwitch(workedL, "taxable");
+    workedL.clock.fire();
+    const workedSave = workedL.rec.saves[workedL.rec.saves.length - 1].polish_estimate;
+    out.conditionsShown = {
+      minted: listedSave.conditions_shown || null,
+      survivesReadBack: (P.migrateModel(JSON.parse(JSON.stringify(listedSave))).conditions_shown
+                         || null),
+      worked: Object.prototype.hasOwnProperty.call(workedSave, "conditions_shown")
+        ? workedSave.conditions_shown : "absent",
+    };
   }
 
   console.log(JSON.stringify(out));

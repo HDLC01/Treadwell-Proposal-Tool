@@ -659,6 +659,9 @@
     // sent the project back to the spreadsheet intake. Both of those were silent.
     var model = B.migrateModel(existing);
     model.conditions = Object.assign({}, model.conditions, M.conditions);
+    // The card map seeded on this page's first load rides along; a later save carries the same
+    // map back, since M was read through migrateModel from what was saved.
+    if (M.conditions_shown) model.conditions_shown = M.conditions_shown;
     // LABOR IS NOT THIS PAGE'S TO STATE -- and until 2026-09-17 it stated it anyway, by accident.
     // This page has no labor UI at all; the line above says out loud that only `conditions` is
     // its own. But migrateModel fills a missing `labor` in from freshModel() before it hands the
@@ -853,9 +856,13 @@
     // triggered by the first keystroke -- a seed that landed after it would either be lost or
     // arrive as a second, different answer on a bid already in flight.
     if (B.conditionsUnstated(state.polish_estimate)) {
+      var condRows = await loadConditionDefaults();
       M.conditions = B.conditionsFromCells(
-        B.seedConditionDefaults(M.conditions, await loadConditionDefaults()),
+        B.seedConditionDefaults(M.conditions, condRows),
         state.cell_values);
+      // Which condition cards this new bid shows on the estimate (seedConditionsShown). This page
+      // mints the model, so the estimate never sees it unstated and cannot seed this itself.
+      M.conditions_shown = B.seedConditionsShown(condRows);
     }
 
     form = $("intake-form");
