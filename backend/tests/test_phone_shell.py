@@ -486,6 +486,48 @@ def test_the_library_tab_strip_stays_inside_the_page():
         "sideways on a phone")
 
 
+def _library_winner(selector, prop, width):
+    """The value of `prop` for an exact `selector` in library.html at `width`: the LAST rule in
+    source order that applies there. Every rule this asks about has the same specificity (one
+    class, or one class pair), so source order is the whole cascade."""
+    css = "\n".join(re.findall(r"<style[^>]*>(.*?)</style>",
+                               (FRONTEND / "library.html").read_text(encoding="utf-8"), re.S))
+    value = None
+    for s, d, cond, _ in rules(css):
+        if s.strip() != selector or media_applies(cond, width) is False:
+            continue
+        m = re.findall(r"(?:^|;)\s*" + re.escape(prop) + r"\s*:\s*([^;]+)", d)
+        if m:
+            value = m[-1].strip()
+    return value
+
+
+@pytest.mark.parametrize("width", (360, 390, 768))
+def test_the_library_grids_hold_their_tables_to_the_page(width):
+    """Measured on staging, 2026-10-01, after the tab strip was fixed: Assemblies still scrolled the
+    page to 927px and Administration to 531px at 390. Both were a one-track grid whose track was
+    `1fr` -- minmax(auto,1fr) -- so it grew to the widest table inside it. minmax(0,1fr) holds the
+    track to the page; the lines table then scrolls in its own box, and the picker's results sit
+    in the row there, because a scroll box clips anything absolutely placed inside it.
+
+    Mutation: put `1fr` back on either grid, drop the .tw-nolimit overflow, or leave the results
+    absolute in the narrow layout."""
+    assert _library_winner(".work", "grid-template-columns", width) == "minmax(0,1fr)"
+    assert _library_winner(".admin-grid", "grid-template-columns", width) == "minmax(0,1fr)"
+    assert _library_winner(".tw-nolimit", "overflow-x", width) == "auto"
+    assert _library_winner(".item-results", "position", width) == "static", (
+        "the picker's results are absolutely placed inside a scroll box, which clips them")
+
+
+def test_the_library_desktop_layout_is_untouched():
+    """Above 1080px the lines table has no scroller and the picker's results float over the rows
+    -- Hanz, 2026-08-19: "Make one line item, one row." The narrow-layout fix must not reach it."""
+    assert _library_winner(".tw-nolimit", "overflow", 1440) == "visible"
+    assert _library_winner(".tw-nolimit", "overflow-x", 1440) is None
+    assert _library_winner(".item-results", "position", 1440) == "absolute"
+    assert _library_winner(".work", "grid-template-columns", 1440) == "272px 1fr"
+
+
 def test_wide_content_keeps_its_swipe_out_of_the_browsers_back_gesture():
     """Every scroll box in this app already had overflow-x:auto; what it lacked is the second half.
 

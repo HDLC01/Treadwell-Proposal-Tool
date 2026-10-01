@@ -321,7 +321,17 @@
 
     /* assemblies workspace */
     .work { display:grid; grid-template-columns:272px 1fr; gap:16px; align-items:start; }
-    @media (max-width:1080px){ .work { grid-template-columns:1fr; } }
+    /* THE NARROW LAYOUT (one column) KEEPS ITS WIDE TABLE IN A BOX OF ITS OWN. Measured on staging
+       2026-10-01: at 390px the Assemblies tab scrolled the whole page to 927px. A plain `1fr` track
+       is minmax(auto,1fr), so it grew to the 864px lines table; minmax(0,1fr) holds it to the page.
+       The lines table then needs the scroller it deliberately does not have on desktop (see
+       .tw-nolimit) -- and a scroller clips an absolutely placed dropdown, so here the item picker's
+       results sit in the row instead of floating over it (that override is below the
+       .item-results rule, so it wins the cascade). Above 1080px nothing changes. */
+    @media (max-width:1080px){
+      .work { grid-template-columns:minmax(0,1fr); }
+      .tw-nolimit { overflow-x:auto; }
+    }
     .alist { padding:8px; display:flex; flex-direction:column; gap:3px; }
     .anomatch { padding:14px 12px; display:grid; gap:10px; justify-items:start; }
     .anomatch p { margin:0; font-size:12.5px; color:var(--ink-v); line-height:1.5; }
@@ -486,6 +496,9 @@
       display:grid; gap:4px; max-height:230px; overflow:auto; background:var(--card);
       border:1px solid var(--line); border-radius:var(--r-md); padding:6px;
       box-shadow:0 8px 22px rgba(92,64,63,.18); }
+    /* The narrow layout's lines table scrolls in its own box (see .work above), which would clip
+       a floating list: there the results sit in the row. AFTER the rule above, so it wins. */
+    @media (max-width:1080px){ .item-results { position:static; margin-top:4px; } }
     .item-result { text-align:left; background:var(--card); border:1px solid var(--line);
       border-radius:var(--r-sm); padding:6px 8px; cursor:pointer; color:var(--ink); }
     .item-result[aria-pressed="true"] { border-color:var(--red); background:var(--red-tint); }
@@ -627,7 +640,10 @@
       #pane-defaults .rowact .btn { margin-bottom:4px; }
     }
 
-    .admin-grid { display:grid; gap:18px; }
+    /* minmax(0,1fr), not the implicit auto track: the divisions table is ~506px and an auto track
+       grew to it, scrolling the whole page at phone width. Held to the page, the table scrolls in
+       its own .tw box instead. */
+    .admin-grid { display:grid; gap:18px; grid-template-columns:minmax(0,1fr); }
     /* THE MEASURE CAP. .wrap runs to max-width:1660px because the Items table needs eight
        columns; the Defaults tab's tables have three. Uncapped, a row's name and its Remove
        button end up roughly fifteen hundred pixels apart on a wide monitor, so the eye has
