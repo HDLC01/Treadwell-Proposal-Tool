@@ -2454,8 +2454,13 @@ def _pad_frame_boxes(d: Document, notes, work_type) -> int:
                         cur_l = int(bp.get("lIns") or 0)
                     except (TypeError, ValueError):
                         cur_l = 0
-                    if cur_l < _GYP_NOTES_LEFT_INSET_EMU:
-                        bp.set("lIns", str(_GYP_NOTES_LEFT_INSET_EMU))
+                    # Less whatever the REGARDS box's wrap already moves the box right: both
+                    # renderers print the gyp NOTES box 39pt right of its posOffset, beside that
+                    # box (see `_wrap_column_shift`), so the full inset printed the notes 39pt
+                    # right of the WORK/PRICE text and ran the long lines past the frame.
+                    want_l = _GYP_NOTES_LEFT_INSET_EMU - int(round(_txbx_wrap_shift(d, txbx) * _EMU_PER_PT))
+                    if want_l >= _EMU_PER_PT and cur_l < want_l:
+                        bp.set("lIns", str(want_l))
                         n += 1
                 break
     return n
@@ -3663,11 +3668,26 @@ def template_free_tax_rows(work_type: str, audience: str | None) -> dict[str, bo
 
 # Empty body paragraphs are the vertical ruler Word hangs the floating
 # anchors off ('paragraph'-relative positionV). Their rendered line height
-# isn't in the XML (it's a layout result), so we use a constant calibrated
-# against the Direct Epoxy artwork: with 14pt/line the WORK box lands at
-# y≈153pt (art: ≈152pt), PRICE at ≈321pt (art: ≈318pt), NOTES at ≈495pt
-# (art: ≈490pt). The spec accepts approximate anchoring.
-_ANCHOR_LINE_H_PT = 14.0
+# isn't in the XML (it's a layout result): it is the line of the document default, Cambria 12pt,
+# with no spacing set (every page-1 paragraph of all nine templates).
+#
+# THE TWO RENDERERS DISAGREE ABOUT THAT LINE, and the disagreement compounds. Word lays it at
+# Cambria's own 14.07pt; LibreOffice has no Cambria, substitutes Caladea, and lays it at 13.8pt.
+# Measured 2026-10-03 on all seven priced templates (Word's own PDF export against the production
+# container's): 0.27pt a line, every box hung off paragraph n printed n x 0.27pt HIGHER in the PDF
+# than Kyle placed it in Word. The GC and Gyp NOTES boxes hang off paragraph 31, so the customer's
+# PDF printed them 8.3pt high, their first note above the frame's NOTES rule; the GC PRICE box's
+# drawn rule ("Straight Connector 1", paragraph 18) printed 5pt above the artwork's own, the "two
+# red rules" under the WORK box. This constant used to be 14.0, calibrated by eye against the art,
+# and it sat between the two.
+#
+# So the PDF is held to Word's line instead: `_pin_anchor_line_heights` gives the page-1 ruler
+# paragraphs an AT-LEAST line of `_ANCHOR_LINE_TW` twips, which Word already exceeds (its 14.07pt
+# wins, so Word prints exactly what it printed before) and LibreOffice's 13.8pt does not (so it
+# prints 14.05pt). The editor's estimate is that same line, so the box the editor draws is the box
+# the PDF prints, within 0.02pt a line of Word's.
+_ANCHOR_LINE_TW = 281
+_ANCHOR_LINE_H_PT = _ANCHOR_LINE_TW / 20.0
 _EMU_PER_PT = 12700.0
 
 # ── Resizing a floating text box ──────────────────────────────────────────────
@@ -4372,7 +4392,102 @@ def _body_section_ordinal(d: Document) -> int:
     return max(sorted(counts), key=lambda o: counts[o])
 
 
-def _pos_of_anchor(anchor, page: dict, top_ps: list, body, d: Document) -> tuple:
+# Wraps that take room from the text beside them. wrapNone and wrapTopAndBottom leave a line's
+# left edge where it was; behindDoc art never pushes anything.
+_PUSHING_WRAPS = ("wrapSquare", "wrapTight", "wrapThrough")
+
+
+def _top_level_of(body, el):
+    """The direct child of `body` that contains `el` (None when it is not in the body)."""
+    while el is not None and el.getparent() is not body:
+        el = el.getparent()
+    return el
+
+
+def _wrap_column_shift(anchor, page: dict, top_ps: list, body, d: Document,
+                       margin: dict, pidx: int) -> float:
+    """How far right of the margin the anchor paragraph's first line STARTS, in points: 0.0 unless
+    another box with a square/tight wrap covers the left end of that line.
+
+    A `positionH relativeFrom="column"` offset is measured from where that line starts, in Word
+    and in LibreOffice alike, so a box beside a wrapping box sits that box's width further right
+    than the margin arithmetic says. Kyle's GC and Gyp NOTES boxes are anchored in paragraph 31,
+    which runs beside the REGARDS/estimator box (square wrap, 90pt wide, 9pt clear on its right):
+    both renderers print the NOTES box 36.3pt (GC) / 39pt (Gyp) right of `margin + posOffset`,
+    inside its frame, while the editor drew it there -- bullets left of the box, text over the
+    rotated NOTES label. Measured 2026-10-03; a probe copy with that box set to no wrap put the
+    NOTES box back on the margin arithmetic.
+
+    The other boxes are placed with the plain arithmetic (`wrap=False`), so this never recurses."""
+    line_top = margin["top"] + pidx * _ANCHOR_LINE_H_PT
+    line_bot = line_top + _ANCHOR_LINE_H_PT
+    left = margin["left"]
+    shift = 0.0
+    section = _section_ordinal(body, _top_level_of(body, anchor))
+    for other in body.iter(qn("wp:anchor")):
+        if other is anchor or other.get("behindDoc") == "1":
+            continue
+        if not any(other.find(qn("wp:" + w)) is not None for w in _PUSHING_WRAPS):
+            continue
+        # A box in another section is on another page, whatever the one-ruler estimate says.
+        if _section_ordinal(body, _top_level_of(body, other)) != section:
+            continue
+        ox, oy, ow, oh = _pos_of_anchor(other, page, top_ps, body, d, wrap=False)
+        dist = {k: int(other.get(k) or 0) / _EMU_PER_PT for k in ("distL", "distR", "distT", "distB")}
+        if (oy - dist["distT"] < line_bot and oy + oh + dist["distB"] > line_top
+                and ox - dist["distL"] <= left < ox + ow + dist["distR"]):
+            shift = max(shift, ox + ow + dist["distR"] - left)
+    return shift
+
+
+def _txbx_wrap_shift(d: Document, txbx) -> float:
+    """`_wrap_column_shift` for one text box: how far right of its margin arithmetic it prints."""
+    anchor = _txbx_anchor(txbx)
+    if anchor is None or anchor.tag != qn("wp:anchor"):
+        return 0.0
+    body = d.element.body
+    top_ps = [c for c in body if c.tag == qn("w:p")]
+    page = _page_metrics(d)
+    return (_pos_of_anchor(anchor, page, top_ps, body, d)[0]
+            - _pos_of_anchor(anchor, page, top_ps, body, d, wrap=False)[0])
+
+
+def _pin_anchor_line_heights(d: Document) -> int:
+    """Hold the paragraphs page 1's text boxes hang off to Word's line height. Returns the count.
+
+    Every top-level paragraph ABOVE the deepest paragraph-anchored text box gets an at-least line
+    of `_ANCHOR_LINE_TW` (see the constant's note), unless it already states a line of its own.
+    At-least, not exact: Word's Cambria line is taller, so Word ignores it and prints what it
+    always printed; only LibreOffice's shorter Caladea line is raised. The paragraphs below the
+    deepest box, and so the Terms pages, are left alone."""
+    body = d.element.body
+    top_ps = [c for c in body if c.tag == qn("w:p")]
+    deepest = -1
+    for txbx in _iter_txbx(d):
+        anchor = _txbx_anchor(txbx)
+        if anchor is None or anchor.tag != qn("wp:anchor"):
+            continue
+        if _anchor_offset(anchor, "positionV")[1] not in ("paragraph", "line"):
+            continue
+        top = anchor
+        while top is not None and top.getparent() is not body:
+            top = top.getparent()
+        if top in top_ps:
+            deepest = max(deepest, top_ps.index(top))
+    n = 0
+    for p in top_ps[:max(deepest, 0)]:
+        ppr = p.get_or_add_pPr()
+        spacing = ppr.find(qn("w:spacing"))
+        if spacing is not None and spacing.get(qn("w:line")) is not None:
+            continue
+        spacing = ppr.get_or_add_spacing()
+        spacing.set(qn("w:line"), str(_ANCHOR_LINE_TW))
+        spacing.set(qn("w:lineRule"), "atLeast")
+        n += 1
+    return n
+
+
+def _pos_of_anchor(anchor, page: dict, top_ps: list, body, d: Document, wrap: bool = True) -> tuple:
     """(x_pt, y_pt, w_pt, h_pt) of a floating drawing on its page.
 
     Word stores positionH/positionV relative to page/margin/column/paragraph;
@@ -4403,6 +4518,8 @@ def _pos_of_anchor(anchor, page: dict, top_ps: list, body, d: Document) -> tuple
         pidx = 0
 
     x = ox + (margin["left"] if rfx in ("column", "margin") else 0.0)
+    if wrap and rfx == "column":
+        x += _wrap_column_shift(anchor, page, top_ps, body, d, margin, pidx)
 
     if rfy in ("paragraph", "line"):
         y = margin["top"] + pidx * _ANCHOR_LINE_H_PT + oy
@@ -4612,6 +4729,26 @@ def _set_paragraph_runs(p_elem, runs, bold_marks: dict | None = None) -> bool:
             base_rpr = copy.deepcopy(rpr)
             break
 
+    # The size the TEMPLATE gives each stretch of the old text, in half-points, so a run that
+    # merely restates it is not mistaken for one the estimator sized. The editor sends every run's
+    # size back as it reads it off the page (fmtAt), so a plain text edit on a NOTES line arrived
+    # carrying Kyle's own 7.5pt -- and the shrink, told the estimator had sized that line, left it
+    # at 7.5pt among 4.5pt neighbours (the "wear & tear" note, drawn large in the editor and in
+    # the PDF, 2026-10-02).
+    tmpl_sizes = []          # [(end offset, half-points or None)]
+    pos = 0
+    for r in text_runs:
+        pos += len("".join(t.text or "" for t in r.iter(qn("w:t"))))
+        sz = r.find(qn("w:rPr") + "/" + qn("w:sz"))
+        v = sz.get(qn("w:val")) if sz is not None else None
+        tmpl_sizes.append((pos, int(v) if v and v.isdigit() else None))
+
+    def tmpl_hp_at(offset):
+        for end, hp in tmpl_sizes:
+            if offset < end:
+                return hp
+        return tmpl_sizes[-1][1] if tmpl_sizes else None
+
     # Where the text used to start, so the new runs land in the same place relative to any
     # media runs (an anchored text box in the same paragraph must stay put).
     children = list(p_elem)
@@ -4620,6 +4757,7 @@ def _set_paragraph_runs(p_elem, runs, bold_marks: dict | None = None) -> bool:
         p_elem.remove(r)
 
     user_sized = False
+    at = 0                   # character offset of this run in the new text
     for offset, spec in enumerate(runs):
         r = OxmlElement("w:r")
         rpr = copy.deepcopy(base_rpr) if base_rpr is not None else OxmlElement("w:rPr")
@@ -4659,13 +4797,15 @@ def _set_paragraph_runs(p_elem, runs, bold_marks: dict | None = None) -> bool:
                     el = OxmlElement(tag)
                     rpr.append(el)
                 el.set(qn("w:val"), str(hp))
-            user_sized = True
+            if hp != tmpl_hp_at(at):
+                user_sized = True
 
         if len(rpr):
             r.append(rpr)
         t = OxmlElement("w:t")
         r.append(t)
         _write_t_text(t, str(spec.get("text", "")))
+        at += len(str(spec.get("text", "")))
         p_elem.insert(insert_at + offset, r)
         # Registered only once the run is IN the tree — an element that is about to be
         # discarded must never end up pinned in the register.
@@ -5290,6 +5430,9 @@ def fill_proposal(
     # `_rebuild_terms_pages`). Last, so every override and every value is already in place.
     if _rebuild_terms_pages(d, _terms):
         log.info("Rebuilt the Terms & Conditions as their own section with a repeating letterhead")
+    # Page 1's boxes print where Kyle put them in Word, and where the editor draws them, rather
+    # than 0.27pt a line higher (see `_ANCHOR_LINE_H_PT`).
+    _pin_anchor_line_heights(d)
     _n_hl = _strip_highlights(d)
     if _n_hl:
         log.info("Took %d review highlight(s) out of the customer document", _n_hl)
