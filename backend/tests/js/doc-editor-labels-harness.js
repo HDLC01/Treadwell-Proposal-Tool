@@ -463,6 +463,10 @@ const LIFTED = [
   topConst("SINGLE_LINE_EM"), fn("paraLineHeight"), fn("applyParaSpacing"),
   fn("workLabelHtml"),
   fn("effectiveWorkType"), fn("sheetSystems"), fn("renderSystemPreview"), fn("serializeBlock"),
+  // renderSystemPreview ends by asking which WORK lines print only their label
+  // (render_adjustments.lines); with no plan loaded -- `templateAdjustments` null, below -- it
+  // answers nothing and hides nothing. terms-pages-harness.js runs it with the plan.
+  fn("setRenderHidden"), fn("workLineBare"), fn("applyBareWorkLines"),
   topConst("PT_PER_CSS_PX"), topConst("BOX_DRAG_SLOP_PT"), topConst("BOX_EPS_PT"),
   topConst("isAutoGrown"),
   fn("zoomScale"), fn("ptFromClientPx"), fn("clampPt"), fn("dragBoxRect"),
@@ -568,6 +572,7 @@ const api = new Function(
   `const state = TW.getState();
   let boxOverrides = new Map(); let boxLimits = null; let docZoom = null;
   let templateBlocks = [{ id: 1, txbx: 0 }];
+  let templateAdjustments = null;   // the page's own binding: no render_adjustments loaded
   // Debounces are collapsed to "run now": what is under test is what gets WRITTEN, and a real
   // timer would make every assertion below a race.
   const setTimeout = (f) => { f(); return 1; };

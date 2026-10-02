@@ -1300,6 +1300,31 @@ button {
   top: 0;
 }
 
+/* THE TERMS AS THE DOCUMENT PRINTS THEM (proposal-review.js applyTermsPlan, from the writer's own
+   plan, /api/proposal-template render_adjustments). A Terms page is a page of the Terms section:
+   its lines are as tall as the Terms face's own single line, the way Word and LibreOffice print a
+   paragraph with no line spacing of its own, rather than the 1.32 the page-1 boxes' face is drawn
+   at -- and no line is padded taller than its words (an empty one is one line of its own). */
+.tw-page.tw-terms-section { line-height: normal; }
+.tw-terms-section .tw-block { min-height: 0; }
+.tw-terms-section .tw-block.tw-empty { min-height: 1.05em; min-height: 1lh; }
+/* One of Kyle's hand-split clauses, shown as the ONE paragraph the document prints: the head and
+   each continuation stay separate lines (each its own id and saved edit) drawn inline in a
+   wrapper that carries the head's paragraph geometry inline (padding to the head's text column,
+   `--tw-join-hang` its hanging indent). Their own margins and indents print nowhere while they
+   are joined, so they are zeroed; the space the writer puts between two halves is generated
+   content on the continuation, not a character anybody can type into or delete. */
+.tw-join { position: relative; }
+.tw-join > .tw-block {
+  display: inline !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  text-indent: 0 !important;
+}
+.tw-join > .tw-join-tail::before { content: none; }
+.tw-join > .tw-join-tail.tw-join-sep::before { content: " "; position: static; font-family: inherit; }
+.tw-join > .tw-num::before { left: calc(-1 * var(--tw-join-hang, 0pt)); }
+
 /* UNFINISHED WORDING ON PAGE 1 — the Done page's amber notice.
    AMBER, NOT RED, and the distinction is the one this file already makes for .cl-warn and
    .pr-inert-warn: the proposal itself is correct and the bid can still go out today. This is a

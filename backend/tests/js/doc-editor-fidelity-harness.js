@@ -375,6 +375,10 @@ const LIFTED = [
   // harness that imitated it would be testing the imitation.
   fn("schedulePersistOverrides"),
   fn("refreshFillsInPlace"), fn("refreshPriceFillsInPlace"), fn("refreshDocumentFills"),
+  // refreshDocumentFills asks the WORK lines again after a re-fill (render_adjustments.lines);
+  // with no plan loaded (`templateAdjustments` null, below) that hides nothing.
+  // terms-pages-harness.js runs it with the plan.
+  fn("setRenderHidden"), fn("workLineBare"), fn("applyBareWorkLines"),
   // The input handler became a BOX SWEEP when the box became the editing host: one keystroke can
   // change several paragraphs, so it syncs the caret's own line and then every other line in the
   // box that has a pristine text recorded. syncBlock is the per-paragraph half, lifted; the four
@@ -424,6 +428,7 @@ function makePage(label) {
     // and restoreEmptiedClause draw through). Settable for the same reason.
     let templateTokenDefaults = {};
     let templateBlocks = null;
+    let templateAdjustments = null;   // the page's own binding: no render_adjustments loaded
     let _overridesTimer = null, _fillsTimer = null;
     const blockById = new Map();
     const pristineById = new Map();

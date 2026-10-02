@@ -439,6 +439,9 @@ const api = new Function(
     // applyParaGeom's vertical geometry: applyParaSpacing / paraLineHeight / SINGLE_LINE_EM.
     topConst("SINGLE_LINE_EM"), fn("paraLineHeight"), fn("applyParaSpacing"),
     fn("applyParaToEl"), fn("setParaState"), fn("paraAction"),
+    // paraAction asks whether a row takes the PRICE box's step before its own: reached by the
+    // Backspace ladder on an indented line (the Terms continuation scenario).
+    fn("takesPriceStep"),
     fn("paintBoxSel"), fn("clearBoxSel"), fn("clearBoxLine"), fn("selectRangeAcross"),
     fn("insertBreakAt"), fn("spliceLines"),
     fn("noteLineHtml"), fn("notesRowSizePt"), fn("renderNotesPreview"), fn("syncNotesFromDom"),
@@ -532,7 +535,7 @@ function mountBox(lines, opts) {
     }
     api.pristine(id, ln.pristine == null ? ln.text : ln.pristine);
     recs.push({ id: id, text: ln.tpl != null ? ln.tpl : ln.text, txbx: 2, in_block: null,
-                para: ln.marker ? { marker: "1." } : null,
+                para: ln.para || (ln.marker ? { marker: "1." } : null),
                 fit: { hp: 18, typed_hp: 16, typed_sized: true, removable: ln.removable !== false } });
     return el;
   });
@@ -927,6 +930,36 @@ const out = {};
   out.undoBoth = { afterRemove: afterRemove, first: first,
                    second: { removed: api.removedBlockIds(), gap: api.pov().options_gap } };
   api.setPov(undefined);
+}
+
+// 25. A TERMS CONTINUATION SHOWN JOINED ONTO ITS HEAD (applyTermsPlan draws it inline inside a
+//     .tw-join): Backspace at its start is the middle of a paragraph on the page, and its own indent
+//     prints nowhere while it is joined, so the key changes nothing and is refused. The same line
+//     NOT joined keeps the ladder (its indent steps out), as every paragraph always has.
+{
+  const cont = { indent: 540, bullet: false, hanging: null, locked: false, marker: "", level: 0 };
+  const head = { indent: 540, bullet: false, hanging: 360, locked: true, marker: "9.", level: 0 };
+  const lines = [{ text: "Limited Warranty. ...a reasonable opportunity to", para: head },
+                 { text: "inspect the alleged improper work.", para: cont }];
+  const joined = mountBox(lines, { terms: true });
+  const wrap = new El("div");
+  wrap.className = "tw-join";
+  // The two lines are the whole box here, so the join takes their place by being appended.
+  joined.box.appendChild(wrap);
+  wrap.appendChild(joined.els[0]);
+  wrap.appendChild(joined.els[1]);
+  joined.els[0].classList.add("tw-join-head");
+  joined.els[1].classList.add("tw-join-tail");
+  joined.els[1].classList.add("tw-join-sep");
+  caret(joined.els[1], 0);
+  const e1 = key(joined.els[1], "Backspace");
+  const inJoin = { prevented: !!e1.defaultPrevented, overrides: api.collectOverrides(),
+                   lines: joined.els.map(lineState) };
+  const apart = mountBox(lines, { terms: true });
+  caret(apart.els[1], 0);
+  const e2 = key(apart.els[1], "Backspace");
+  out.joinedContinuation = { joined: inJoin,
+                             apart: { prevented: !!e2.defaultPrevented, overrides: api.collectOverrides() } };
 }
 
 process.stdout.write(JSON.stringify(out));

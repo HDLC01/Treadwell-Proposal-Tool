@@ -2268,8 +2268,13 @@
   let templatePredecessors = [];  // older content versions whose edits still fit (see savedVersionMatches)
   let templateTokenDefaults = {}; // what a blank token prints on this template (see withTokenDefaults)
   let templateOptionsHeadingIds = [];  // free-paragraph Options heading ids (GC), see paintOptionsGap
+  // What the render changes about the layout beyond the values (the Terms pages, the bare WORK
+  // lines), as the server states it: /api/proposal-template's `render_adjustments`, checked by
+  // readRenderAdjustments. null = a response without it, and the page draws the template as it was.
+  let templateAdjustments = null;
   // What a run with no font of its own prints in, when the server does not say (resolveTemplateFonts).
   const DOC_DEFAULT_FONT = "Cambria";
+  let templateDefaultFont = DOC_DEFAULT_FONT;   // that face, as resolveTemplateFonts last resolved it
   let pageWpt        = 612;    // page width in pt, drives the zoom fit
   let flowMode        = false;  // true = geometry-less fallback rendering
   const blockById     = new Map();   // id -> block record
@@ -5045,6 +5050,9 @@
       });
       renderSystemPreview();
       renderNotesPreview();
+      // A filled field brings a bare WORK line back, an emptied one takes it out, as in the
+      // document (asked again here because renderSystemPreview skips its repaint mid-typing).
+      applyBareWorkLines();
       scheduleRepaginate();
       scheduleFit();              // a changed field is changed words in a box
       // The ribbon's buttons are read off the remembered range, and the loop above may have just
@@ -5357,6 +5365,9 @@
                      "tw-list", sysRowStyle("texture_line"), false)
            + lineRow(i, "area_line", areaLine, "tw-li", sysRowStyle("area_line"), true);
     }).join("");
+    // Each system's Texture row is left out of the document while it prints only its label, so it
+    // is hidden here too, row by row, on every rebuild (applyBareWorkLines).
+    applyBareWorkLines();
   }
 
   // NOTES preview — one bullet per non-blank sidebar line ({{#notes}} block;
@@ -6617,10 +6628,43 @@
     // the generated file). The terms are PAGINATED into fixed-height pages
     // (see repaginateTerms) rather than one continuous div, so text never
     // flows across the letterhead's red band / next-page logo.
+    //
+    // THE TERMS AS THE DOCUMENT PRINTS THEM, when the server sends the plan the writer applies
+    // (`render_adjustments.terms`, proposal_writer._rebuild_terms_pages): a section of their own
+    // from `first_id`, on pages of the plan's own size and margins, every page carrying ONE
+    // letterhead drawn from `terms.art` -- the page carries it, not a paragraph, so the art Kyle
+    // anchored to each page-top paragraph (`art_host_ids`, geometry.images) is never drawn -- with
+    // his padding lines hidden while they print nothing and his hand-split clauses shown as the one
+    // paragraph each prints as (applyTermsPlan). Without the plan (an older response), the page
+    // below is the one this always drew.
+    const terms = termsPlanFor(templateBlocks);
     const bodyBlocks = templateBlocks.filter(b => b.txbx == null);
-    const firstReal = bodyBlocks.findIndex(b => String(b.text).trim());
+    let firstReal = bodyBlocks.findIndex(b => String(b.text).trim());
+    if (terms) {
+      // From the plan's first block (a host Kyle's art hangs on, or the heading itself), so a
+      // padding line under it is one the plan decides about, not one this skips. A body paragraph
+      // with words before it -- none of Kyle's files has one -- still shows, ahead of the break.
+      const at = bodyBlocks.findIndex(b => b.id === terms.first_id);
+      if (at >= 0 && (firstReal < 0 || at < firstReal)) firstReal = at;
+    }
     const flowBlocks = firstReal >= 0 ? bodyBlocks.slice(firstReal) : [];
-    if (flowBlocks.length) {
+    if (flowBlocks.length && terms) {
+      const flow = document.createElement("div");
+      renderBlockList(flow, flowBlocks, tokens);
+      _termsUnits = Array.from(flow.children);
+      _termsGeom  = { pageW: terms.page.w_pt || pageWpt, pageH: terms.page.h_pt || pageH,
+                      margin: terms.page.margin || margin, topReservePt: 0, plan: terms };
+      repaginateTerms();
+      // The plan's top margin already clears the logo (the writer sets it for exactly that), so no
+      // band is measured off the art: what the pages reserve is what the document reserves.
+      if (terms.art) {
+        artUrl(terms.art.name).then(u => {
+          if (!u || !_termsGeom || _termsGeom.plan !== terms) return;
+          _termsGeom.artUrl = u;
+          docSurface.querySelectorAll(".tw-terms-page").forEach(applyTermsArt);
+        });
+      }
+    } else if (flowBlocks.length) {
       // Render the units ONCE into a detached div so their element identity
       // (dataset.id, tw-dirty, pristine tracking, collectOverrides) is created
       // a single time; repaginateTerms only ever MOVES them between pages.
@@ -6655,8 +6699,24 @@
   // Paint the terms-page letterhead onto one page div: the SAME art, sized to
   // exactly one page and NOT repeated (each page is its own sheet), so no page
   // shows a second page's logo / red band bleeding in.
+  //
+  // With the writer's plan the art is the plan's: `terms.art`, the one letterhead the Terms
+  // section's header prints on every page, at its own size and page-relative place. A background
+  // rather than an <img>: the page is the editing host, and an image inside it is something a
+  // Ctrl+A and Delete could take out.
   function applyTermsArt(pg) {
-    if (!_termsArtUrl || !_termsGeom) return;
+    if (!_termsGeom) return;
+    const plan = _termsGeom.plan;
+    if (plan) {
+      const art = plan.art;
+      if (!art || !_termsGeom.artUrl) return;
+      pg.style.backgroundImage = `url("${_termsGeom.artUrl}")`;
+      pg.style.backgroundSize = `${art.w_pt || _termsGeom.pageW || pageWpt}pt ${art.h_pt || _termsGeom.pageH}pt`;
+      pg.style.backgroundPosition = `${art.x_pt || 0}pt ${art.y_pt || 0}pt`;
+      pg.style.backgroundRepeat = "no-repeat";
+      return;
+    }
+    if (!_termsArtUrl) return;
     pg.style.backgroundImage = `url("${_termsArtUrl}")`;
     pg.style.backgroundSize = `${pageWpt}pt ${_termsGeom.pageH}pt`;
     pg.style.backgroundRepeat = "no-repeat";
@@ -6738,9 +6798,16 @@
   // getBoundingClientRect, which the transform scales. Blocks are MOVED
   // (appendChild), never recreated, so their identity/dataset/dirty state and
   // collectOverrides() all keep working.
+  //
+  // WITH THE WRITER'S PLAN the pages are the Terms section's: its page size and margins (the top
+  // one clears the logo, so nothing is measured off the art), its face's own single line, and the
+  // plan's drops and joins made first (applyTermsPlan), so a hidden padding line takes no room and
+  // a rejoined clause moves as the one paragraph it prints as. The section starts on a page of its
+  // own at the plan's first block.
   function repaginateTerms() {
     if (flowMode || !_termsUnits || !_termsUnits.length || !_termsGeom) return;
-    const { pageH, margin, topReservePt } = _termsGeom;
+    const { pageH, margin, topReservePt, plan } = _termsGeom;
+    if (plan) applyTermsPlan();
     docSurface.querySelectorAll(".tw-terms-page").forEach(p => p.remove());  // units survive via _termsUnits
     let page = null;
     const newPage = () => {
@@ -6750,30 +6817,324 @@
       // box-wide gestures already treat it as.
       page.contentEditable = "true";
       page.spellcheck = false;
-      page.style.width = pageWpt + "pt";
+      page.style.width = ((plan && _termsGeom.pageW) || pageWpt) + "pt";
       page.style.height = pageH + "pt";     // border-box: padding lives inside the page
       page.style.overflow = "hidden";
       // Reserve the measured logo band on top of the normal top margin; the
       // padded box drives roomBottom()/packing/backgroundSize automatically.
       page.style.padding = `${margin.top + (topReservePt || 0)}pt ${margin.right}pt ${margin.bottom}pt ${margin.left}pt`;
+      if (plan) {
+        // The face a line with no font of its own prints in, so a line is as tall as the Terms
+        // face's own single line (styles.css .tw-terms-section) and not the page-1 face's.
+        page.classList.add("tw-terms-section");
+        page.style.fontFamily = "'" + String(templateDefaultFont || DOC_DEFAULT_FONT).replace(/['";]/g, "")
+          + "', Georgia, 'Times New Roman', serif";
+      }
       applyTermsArt(page);
       docSurface.appendChild(page);
     };
     newPage();
     const roomBottom = () => page.clientHeight - parseFloat(getComputedStyle(page).paddingBottom || "0");
+    // Something the estimator can see is on this page already, besides `unit`: a page holding only
+    // hidden lines is not a page to leave behind.
+    const showsOther = (unit) => Array.prototype.some.call(page.children,
+      (c) => c !== unit && !(c.style && c.style.display === "none"));
+    let last = null;
     for (const el of _termsUnits) {
-      page.appendChild(el);                                     // MOVE — identity preserved
-      if (el.offsetTop + el.offsetHeight > roomBottom()) {
-        if (page.children.length > 1) { newPage(); page.appendChild(el); }
+      const unit = termsUnitOf(el);                             // a rejoined clause moves whole
+      if (unit === last) continue;
+      last = unit;
+      if (plan && termsUnitHolds(unit, plan.first_id) && showsOther(unit)) newPage();
+      page.appendChild(unit);                                   // MOVE — identity preserved
+      if (unit.offsetTop + unit.offsetHeight > roomBottom()) {
+        if (showsOther(unit)) { newPage(); page.appendChild(unit); }
         // A single block taller than a page: let THIS page grow rather than
         // clip contract text (overflow:hidden would silently hide it).
-        if (el.offsetTop + el.offsetHeight > roomBottom()) {
+        if (unit.offsetTop + unit.offsetHeight > roomBottom()) {
           page.style.height = "auto";
           page.style.minHeight = pageH + "pt";
         }
       }
     }
     applyZoom();                                                // total height changed
+  }
+
+  // ── WHAT THE RENDER CHANGES, drawn from the writer's own plan ──────────────────────────────────
+  // /api/proposal-template sends `render_adjustments`: what proposal_writer.fill_proposal changes
+  // about the layout beyond the values, as block ids of the walk this page renders (see
+  // proposal_writer.render_adjustments). Everything below applies THAT plan and holds no copy of
+  // it: which lines are Kyle's padding, which clauses he split by hand, which WORK rows go when
+  // bare, and the Terms pages' size, margins and letterhead all come from the response.
+
+  /** `render_adjustments`, checked: the parts this page can apply, or null for a response that has
+   *  none (a cached body, an older server), and then every part of the page draws the template as
+   *  it always did. A part that does not read right is dropped on its own -- a Terms plan with no
+   *  first block is no plan, and the WORK lines still apply -- and a `sentence_end` that does not
+   *  compile joins nothing, because without it a join cannot be told from a sentence. */
+  function readRenderAdjustments(raw) {
+    if (!raw || typeof raw !== "object") return null;
+    const ids = (v) => (Array.isArray(v) ? v.map(Number).filter(Number.isFinite) : []);
+    const num = (v) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+    let terms = null;
+    const t = raw.terms;
+    if (t && typeof t === "object" && t.first_id != null && Number.isFinite(Number(t.first_id))) {
+      const pg = t.page && typeof t.page === "object" ? t.page : {};
+      const m = pg.margin && typeof pg.margin === "object" ? pg.margin : null;
+      const margin = m && ["top", "left", "right", "bottom"].every(k => num(m[k]) !== null)
+        ? { top: m.top, left: m.left, right: m.right, bottom: m.bottom } : null;
+      const a = t.art && typeof t.art === "object" ? t.art : null;
+      const art = a && a.name ? { name: String(a.name), x_pt: num(a.x_pt) || 0, y_pt: num(a.y_pt) || 0,
+                                  w_pt: num(a.w_pt), h_pt: num(a.h_pt) } : null;
+      let end = null;
+      try { end = typeof t.sentence_end === "string" && t.sentence_end ? new RegExp(t.sentence_end) : null; }
+      catch { end = null; }
+      const pairs = (Array.isArray(t.join_pairs) ? t.join_pairs : [])
+        .filter(p => Array.isArray(p) && p.length === 2)
+        .map(p => [Number(p[0]), Number(p[1])])
+        .filter(p => p.every(Number.isFinite));
+      terms = {
+        first_id: Number(t.first_id),
+        page: { w_pt: num(pg.w_pt), h_pt: num(pg.h_pt), margin: margin },
+        art: art,
+        art_host_ids: ids(t.art_host_ids),
+        drop_if_blank_ids: ids(t.drop_if_blank_ids),
+        join_pairs: end ? pairs : [],
+        sentence_end: end,
+      };
+    }
+    const lines = (Array.isArray(raw.lines) ? raw.lines : [])
+      .filter(l => l && typeof l === "object" && l.id != null && Number.isFinite(Number(l.id)))
+      .map(l => ({ id: Number(l.id), in_block: l.in_block == null ? null : String(l.in_block),
+                   line_key: l.line_key ? String(l.line_key) : null, sub_item_ids: ids(l.sub_item_ids) }));
+    return { terms: terms, lines: lines };
+  }
+
+  /** The Terms plan, when it names a body paragraph of `blocks` (the template on screen) as where
+   *  the Terms start; else null, and the Terms are drawn the old way. */
+  function termsPlanFor(blocks) {
+    const t = templateAdjustments && templateAdjustments.terms;
+    if (!t) return null;
+    return (blocks || []).some(b => b && b.txbx == null && b.id === t.first_id) ? t : null;
+  }
+
+  /** Hide or show a line FOR THE PLAN, and only undo a hide this made: the mark says the plan hid
+   *  it, so a line hidden for any other reason (a tax row the rule takes out, a removed line) is
+   *  never shown by this. Inline `display: none`, which lineShown already reads as hidden, so the
+   *  caret, Ctrl+A and Backspace never land on a line the document does not print. */
+  function setRenderHidden(el, hide) {
+    if (!el || !el.style || !el.dataset) return;
+    if (hide) {
+      if (el.dataset.twRenderHidden !== "1") {
+        el.dataset.twRenderHidden = "1";
+        el.style.display = "none";
+      }
+    } else if (el.dataset.twRenderHidden === "1") {
+      delete el.dataset.twRenderHidden;
+      el.style.display = "";
+    }
+  }
+
+  /** A line's words as the writer's `_own_text` reads them: its text, without the line breaks it
+   *  holds (a break is a `w:br`, not text), and nothing at all for the placeholder an emptied line
+   *  keeps (collectOverrides sends that as ""). */
+  function termsWords(el) {
+    return lineBare(el) ? "" : serializeBlock(el).replace(/\n/g, "");
+  }
+
+  /** Prints nothing, as proposal_writer._prints_nothing decides it for a padding line: no words.
+   *  A line break the estimator typed keeps it (a `w:br` is something), spaces and tabs alone do
+   *  not (they are empty text). */
+  function termsLinePrintsNothing(el) {
+    const t = lineBare(el) ? "" : serializeBlock(el);
+    return !/\n/.test(t) && !t.trim();
+  }
+
+  /** Does this line print on a list -- the template's own numbering, or a bullet the estimator put
+   *  on that the writer can print? The writer never joins a continuation that does
+   *  (`_para_num_ref`): it is a list item of its own. A bullet lands only where a paragraph beside
+   *  it in the same container is on a bullet list (proposal_writer._sibling_bullet_ref); anywhere
+   *  else the writer leaves the paragraph as it was, so it still joins. */
+  function termsLineIsListed(el) {
+    const id = Number(el && el.dataset && el.dataset.id);
+    const rec = blockById.get(id);
+    if ((rec && rec.list) || isNumberedClause(id)) return true;
+    const now = paraNow(id);
+    if (!(now && now.bullet)) return false;
+    const home = rec ? rec.txbx : null;
+    return (templateBlocks || []).some(b => b && b.id !== id && b.txbx == home && b.para && b.para.bullet);
+  }
+
+  /** The text the writer's join builds out of these lines, in order: one space between two halves
+   *  when neither side has one (proposal_writer._join_paragraphs). */
+  function joinedTermsText(parts) {
+    let s = "";
+    for (const el of parts) {
+      const t = termsWords(el);
+      if (s && t && !/\s$/.test(s) && !/^\s/.test(t)) s += " ";
+      s += t;
+    }
+    return s;
+  }
+
+  /** The unit the pager moves for a Terms line: the rejoined paragraph it is shown in, or itself. */
+  function termsUnitOf(el) {
+    const w = el && el.parentNode;
+    return (w && w.classList && w.classList.contains("tw-join")) ? w : el;
+  }
+
+  /** Does this pager unit hold the block `id`? */
+  function termsUnitHolds(unit, id) {
+    if (!unit) return false;
+    if (unit.dataset && unit.dataset.id != null && Number(unit.dataset.id) === id) return true;
+    return !!(unit.classList && unit.classList.contains("tw-join"))
+      && Array.prototype.some.call(unit.children, c => c.dataset && Number(c.dataset.id) === id);
+  }
+
+  /** The Terms as the writer's plan makes them, on the words on the page NOW -- the same steps, in
+   *  the same order, as proposal_writer._rebuild_terms_pages applies them to the filled document:
+   *    1. a padding line Kyle put round a page top (`drop_if_blank_ids`) is hidden while it prints
+   *       nothing, and shows again as soon as it holds something the writer keeps;
+   *    2. each hand split (`join_pairs`, in order) shows as the ONE paragraph it prints as when the
+   *       writer would rejoin it: the continuation is the very next line shown after the paragraph
+   *       its head now lives in, that paragraph's words do not end a sentence (`sentence_end`), and
+   *       the continuation has words and is on no list.
+   *  The art is the page's (applyTermsArt), never a paragraph's.
+   *
+   *  A DISPLAY JOIN. Every paragraph keeps its own element, id and saved override: a rejoined
+   *  continuation stays a line of its own, drawn inline straight after its head (showTermsJoins),
+   *  so typing in either half edits that half and collectOverrides ships it under its own id --
+   *  the ids are applied by position to the pristine template, and the writer joins them only
+   *  after every override has landed. Run by the pager, which never runs with the caret in the
+   *  Terms, so moving a line into or out of a join never takes a caret with it. */
+  function applyTermsPlan() {
+    const plan = _termsGeom && _termsGeom.plan;
+    if (!plan || !_termsUnits) return;
+    const els = _termsUnits.filter(el => el && el.dataset && el.dataset.id != null
+                                         && el.classList && el.classList.contains("tw-block"));
+    const byId = new Map(els.map(el => [Number(el.dataset.id), el]));
+    const drop = new Set(plan.drop_if_blank_ids);
+    els.forEach(el => {
+      if (drop.has(Number(el.dataset.id))) setRenderHidden(el, termsLinePrintsNothing(el));
+    });
+    const shown = els.filter(el => !(el.style && el.style.display === "none"));
+    const at = new Map(shown.map((el, i) => [el, i]));
+    const absorbed = new Set();      // continuations now shown inside their head's paragraph
+    const into = new Map();          // block id -> the head element its words are shown in
+    const groups = new Map();        // head element -> its continuations, in order
+    const nextShown = (el) => {
+      for (let i = at.get(el) + 1; i < shown.length; i++) if (!absorbed.has(shown[i])) return shown[i];
+      return null;
+    };
+    for (const [a, b] of plan.join_pairs) {
+      const head = into.get(a) || byId.get(a);
+      const tail = byId.get(b);
+      if (!head || !tail || !at.has(head) || !at.has(tail) || absorbed.has(head)) continue;
+      if (nextShown(head) !== tail) continue;
+      const headText = joinedTermsText([head].concat(groups.get(head) || [])).trim();
+      if (!headText || !termsWords(tail).trim() || plan.sentence_end.test(headText)) continue;
+      if (termsLineIsListed(tail)) continue;
+      if (!groups.has(head)) groups.set(head, []);
+      groups.get(head).push(tail);
+      absorbed.add(tail);
+      into.set(b, head);
+    }
+    showTermsJoins(groups);
+  }
+
+  /** Draw each rejoined clause as one paragraph: its lines in a `.tw-join` that carries the HEAD's
+   *  paragraph geometry (the head's paragraph properties are what the joined paragraph prints
+   *  with), each line inline inside it, and the space the writer puts between two halves drawn as
+   *  generated content on the continuation (`tw-join-sep`), never as a character in either line.
+   *  The wrapper is no line of its own (not a LINE_SEL family), so nothing can type into it.
+   *
+   *  Every join comes apart first and the ones that hold now are made again: one that stopped
+   *  holding (a full stop typed at the end of a head, words typed into a padding line between the
+   *  two halves) shows the two paragraphs it now prints as. */
+  function showTermsJoins(groups) {
+    const wraps = new Set();
+    (_termsUnits || []).forEach(el => {
+      const w = el && el.parentNode;
+      if (w && w.classList && w.classList.contains("tw-join")) wraps.add(w);
+    });
+    wraps.forEach(w => {
+      const parent = w.parentNode;
+      Array.from(w.children).forEach(c => {
+        c.classList.remove("tw-join-head");
+        c.classList.remove("tw-join-tail");
+        c.classList.remove("tw-join-sep");
+        if (parent) parent.insertBefore(c, w);
+      });
+      if (parent) parent.removeChild(w);
+    });
+    const pt = (v) => parseFloat(String(v || "")) || 0;
+    groups.forEach((tails, head) => {
+      const w = document.createElement("div");
+      w.className = "tw-join";
+      const st = head.style || {};
+      // The head's text column is where every line of the joined paragraph starts; its marker sits
+      // its hanging indent to the left of that (styles.css .tw-join > .tw-num::before).
+      w.style.paddingLeft = (pt(st.marginLeft) + pt(st.paddingLeft)) + "pt";
+      if (w.style.setProperty) w.style.setProperty("--tw-join-hang", pt(st.paddingLeft) + "pt");
+      w.style.marginTop = st.marginTop || "0";
+      w.style.marginBottom = st.marginBottom || "0";
+      if (st.lineHeight) w.style.lineHeight = st.lineHeight;
+      if (st.textIndent) w.style.textIndent = st.textIndent;
+      if (st.textAlign) w.style.textAlign = st.textAlign;
+      if (head.parentNode) head.parentNode.insertBefore(w, head);
+      w.appendChild(head);
+      head.classList.add("tw-join-head");
+      let text = termsWords(head);
+      tails.forEach(t => {
+        const tt = termsWords(t);
+        const sep = !!(text && tt && !/\s$/.test(text) && !/^\s/.test(tt));
+        t.classList.add("tw-join-tail");
+        t.classList.toggle("tw-join-sep", sep);
+        text += (sep ? " " : "") + tt;
+        w.appendChild(t);
+      });
+    });
+  }
+
+  /** A WORK line that prints nothing but its label, as proposal_writer._line_is_bare decides it:
+   *  words before a first colon, and no letter or digit after it. */
+  function workLineBare(el) {
+    const text = lineBare(el) ? "" : serializeBlock(el);
+    const colon = text.indexOf(":");
+    if (colon < 0 || !text.slice(0, colon).trim()) return false;
+    return !/[\p{L}\p{N}]/u.test(text.slice(colon + 1));
+  }
+
+  /** Hide each WORK line the plan names (`render_adjustments.lines`) while, as filled now, it prints
+   *  nothing but its label -- the writer leaves it out of the document (_omit_bare_lines) -- and
+   *  show it again as soon as it prints anything: its field filled in the sidebar, a whole-line
+   *  rewrite (the {{#system}} row's `line_key`) or a paragraph edit with words after the label. It
+   *  stays, as in the document, while one of its sub-items prints words, and when it is the only
+   *  line in its box. A line with the caret in it is left as it is until the caret leaves. */
+  function applyBareWorkLines() {
+    const lines = templateAdjustments && Array.isArray(templateAdjustments.lines)
+      ? templateAdjustments.lines : [];
+    if (!lines.length || !docSurface || !docSurface.querySelector) return;
+    const caret = lineAtSelection();
+    const prints = (id) => {
+      const s = docSurface.querySelector(`.tw-block[data-id="${Number(id)}"]`);
+      return !!(s && /\S/.test(serializeBlock(s)));
+    };
+    for (const ln of lines) {
+      let els = [];
+      if (ln.in_block == null) {
+        const el = docSurface.querySelector(`.tw-block[data-id="${ln.id}"]`);
+        if (el) els = [el];
+      } else if (ln.line_key && systemPreviewEl && systemPreviewEl.querySelectorAll) {
+        els = Array.from(systemPreviewEl.querySelectorAll(`[data-sys-line="${ln.line_key}"]`));
+      }
+      const heads = ln.sub_item_ids.some(prints);
+      for (const el of els) {
+        if (el === caret) continue;
+        const box = editingBox(el);
+        const alone = !box || !Array.prototype.some.call(box.querySelectorAll(LINE_SEL), n => n !== el);
+        setRenderHidden(el, !heads && !alone && workLineBare(el));
+      }
+    }
   }
 
   // Repaginate off the critical path, but NEVER while the caret is inside a
@@ -6807,6 +7168,10 @@
                              && !(to && from.contains(to));
       if (left(systemPreviewEl)) renderSystemPreview();
       if (left(notesPreviewEl)) renderNotesPreview();
+      // A WORK line emptied down to its label while the caret was in it goes once the caret has
+      // left the box (applyBareWorkLines leaves the caret's own line alone). After this event, so
+      // the selection it reads has moved on.
+      if (!(to && from.contains(to))) setTimeout(applyBareWorkLines, 0);
       // EVERY PRICE ROW, not the two containers that used to be named here. The other eight rows
       // normalised on their own `focusout` while each of them was its own editing host -- which is
       // exactly what made moving the caret from one price line to the next re-render the rest of
@@ -6896,9 +7261,12 @@
       // backend names it; paintOptionsGap draws the blank lines above it there.
       templateOptionsHeadingIds = Array.isArray(j.options_heading_ids)
         ? j.options_heading_ids.map(Number).filter(Number.isFinite) : [];
+      // The writer's plan for the Terms pages and the bare WORK lines; null on an older response,
+      // which then draws the template as it always did.
+      templateAdjustments = readRenderAdjustments(j.render_adjustments);
       annotateRegions(templateBlocks);
       // The face a run with no font of its own prints in, on every run that has none.
-      resolveTemplateFonts(templateBlocks, j.default_font);
+      templateDefaultFont = resolveTemplateFonts(templateBlocks, j.default_font);
       blockById.clear();
       templateBlocks.forEach(b => blockById.set(b.id, b));
       // The printed sizes belong to the template they were computed on; this one has none yet.
@@ -6924,6 +7292,8 @@
       // `tokens` so a restored run tagged with a token gets the CURRENT estimate value rather
       // than the one that was on screen when the estimator formatted it.
       restoreSavedOverrides(wt, audience, tokens);
+      // ...and asks which WORK lines print only their label, against the words just restored
+      // (applyBareWorkLines, at the end of renderSystemPreview).
       renderSystemPreview();
       renderNotesPreview();
       // restoreSavedOverrides changed some terms blocks' text (heights), so
@@ -7922,7 +8292,11 @@
         return;
       }
     }
-    if (back && atStart && el.classList.contains("tw-block")) {
+    // ...but not at the start of a Terms continuation shown joined onto its head (applyTermsPlan):
+    // on the page that is the middle of a paragraph, and its own bullet and indent print nowhere
+    // while it is joined -- the head's paragraph properties win -- so a press spent on them would
+    // change the draft and nothing anybody can see. It falls through to the refusal below.
+    if (back && atStart && el.classList.contains("tw-block") && !el.classList.contains("tw-join-tail")) {
       const now = paraNow(Number(el.dataset.id));
       // The ladder: bullet first, then the indent, then stop. `paraAction` decides whether the
       // change is allowed and reports it; only a change consumes the keystroke.
