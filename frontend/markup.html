@@ -312,7 +312,7 @@
   <div class="top">
     <img class="logo" src="/img/treadwell-bison.svg" alt="Treadwell" />
     <h1>Markup</h1>
-    <span class="beta" title="Being tested. These rows are where the chain's rates are edited by an admin instead of a developer. Super &amp; PTO and Soft Costs reach the estimate workbook; GP, the hard-bid discount, Bond and the two travel figures are stored but not read yet, and the Polish beta is not wired to any of them — its engine still runs on its own hardcoded constants.">Beta test</span>
+    <span class="beta" title="Being tested. These rows are where the chain's rates are edited by an admin instead of a developer. Super &amp; PTO and Soft Costs reach the estimate workbook; GP, Bond and the two travel figures are stored but not read yet, and the Polish beta is not wired to any of them — its engine still runs on its own hardcoded constants.">Beta test</span>
   </div>
   <div class="wrap">
     <!-- ONE SENTENCE, then the rest behind a disclosure. What used to stand here was paragraphs
@@ -350,16 +350,17 @@
       <p class="explain">The first five tabs are the <b>sheet layouts</b> a bid can sit on — not
         work types. There is no Combo: a combo job is two option lines, each priced off its own
         tab.</p>
-      <p class="explain"><b>Global is the sixth, and it isn't a sheet.</b> Four lines are the same
-        rule on every priced tab — Bond is zero everywhere, the hard-bid give-back is one formula,
-        travel lodging and food are one figure each — so they're set once there and every sheet
-        tab reads them. On a sheet tab those rows show the value and say where it's set; there's
-        no second box, because one line with two rates is a price nobody chose. The gypsum tabs
-        are the exception that stays: their hard-bid cell is <b>empty</b> in Kyle's workbook, not
-        zero, so no Global rate gives them that line.</p>
-      <p class="explain">Global doesn't compound. Two of its lines aren't chain lines at all, and
-        the other two have nothing above them there, so that tab has no running total and no lump
+      <p class="explain"><b>Global is the sixth, and it isn't a sheet.</b> Three lines are the same
+        rule on every priced tab — Bond is zero everywhere, travel lodging and food are one figure
+        each — so they're set once there and every sheet tab reads them. On a sheet tab those rows
+        show the value and say where it's set; there's no second box, because one line with two
+        rates is a price nobody chose.</p>
+      <p class="explain">Global doesn't compound. The two travel lines aren't chain lines at all,
+        and Bond has nothing above it there, so that tab has no running total and no lump
         sum — each row is just what it comes to.</p>
+      <p class="explain"><b>There is no hard-bid discount.</b> Kyle's automatic 2.5% / 4%
+        give-back for a hard bid is switched off on every tab. A discount an estimator types into
+        the sheet's own Hard Bid Discount row still prices the bid.</p>
       <p class="explain">The rows run in the order the chain compounds, and each line's base is the
         <b>running total of everything above it</b> — the small figure under each amount. A rate is
         applied to that base; GP and a typed dollar figure return dollars instead.</p>
@@ -367,8 +368,7 @@
         into the estimate workbook's own rate cell, so Kyle's formulas work the dollars out from
         them on every tab of that layout and on every copied tab. A rate has to be a plain
         percent — <span class="mono">2.7%</span> — to reach the workbook.</p>
-      <p class="explain"><b>What does not, and why.</b> GP is a tier ladder rather than a rate, the
-        hard-bid discount reads a Yes/No box the tool cannot set on most tabs, on the gypsum tab
+      <p class="explain"><b>What does not, and why.</b> GP is a tier ladder rather than a rate, on the gypsum tab
         Soft Costs is one of Kyle's own expressions, and <b>Bond is held back because Kyle's bond
         row counts the two tax lines twice</b> — any rate filed against it would over-charge until
         the sheet is corrected.</p>

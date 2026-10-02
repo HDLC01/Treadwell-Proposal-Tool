@@ -112,9 +112,14 @@ const HF = {
     }
   },
 
-  /** User typed something — push it into HF and return the affected cells. */
+  /** User typed something — push it into HF and return the affected cells.
+   *
+   *  NEVER a Hard Bid? cell (isHardBidFlagCell): this is the one door into the engine, so a
+   *  saved draft, a keystroke, a paste, a copy or an AI answer all stop here and Kyle's template
+   *  "No" is what his give-back formula reads. Same rule as estimate_writer.fill_estimate. */
   setCellValue(sheetName, addr, value) {
     if (!this.instance) return [];
+    if (isHardBidFlagCell(sheetName, addr)) return [];
     const sheetId = this.sheetIdByName[sheetName];
     if (sheetId === undefined) return [];
     const [colLetter, rowStr] = (addr.match(/^([A-Z]+)(\d+)$/) || []).slice(1);
@@ -738,6 +743,42 @@ function layoutIdFor(id) {
     cur = c.source || "Epoxy";
   }
   return cur;
+}
+
+// ─── Hard Bid?: always No ────────────────────────────────────────────
+// Hanz, 2026-10-03: "We also need to remove the hard bid discount. Even on active projects and
+// direct projects." Removed: the SWITCH -- Kyle's automatic give-back,
+//   Epoxy!B74 = IF(B5="yes", IF(D70>=60000, -0.04, IF(B4="yes", IF(D70>=13000, -0.025, 0))))
+// and its twins on the other layouts below. Kept: the "Hard Bid Discount" row itself, so a rate
+// or a dollar figure the estimator TYPES there replaces Kyle's formula exactly as before.
+//
+// The rule is that a Hard Bid? cell is never written. Kyle's template ships every one as "No"
+// ('Seal (+Jnts)'!B5 is `=Seal!B5`), and nothing else in the workbook reads it, so the automatic
+// part prices at zero on every bid and nothing else moves. Held in TWO places because the price
+// lives in two engines: HF.setCellValue above (the screen; the proposal's lump sum is its D88) and
+// backend/estimate_writer.py fill_estimate (the .xlsx), whose HARD_BID_FLAG_CELLS this list must
+// match -- test_no_hard_bid.py fails if it does not. Keyed on the LAYOUT, so a copy is covered,
+// and on txAddr, so a row inserted above it is followed. Never a gyp layout: there B5 is Local?.
+const HARD_BID_FLAG_LAYOUTS = ["Epoxy", "Polish", "Seal", "Seal (+Jnts)", "Epoxy blank", "Leveling"];
+const HARD_BID_FLAG_ADDR = "B5";
+function isHardBidFlagCell(sheet, addr) {
+  if (!HARD_BID_FLAG_LAYOUTS.includes(layoutIdFor(sheet))) return false;
+  return String(addr || "").toUpperCase() === txAddr(sheet, HARD_BID_FLAG_ADDR);
+}
+/** Drop a saved "Yes" (anything but "No") off every Hard Bid? cell, so the draft stops carrying a
+ *  switch the tool no longer honours. Returns how many went -- non-zero means persist. A saved
+ *  "No" (what the intake used to write) is left: it is Kyle's own value, and dropping it would
+ *  make every old draft save on open for nothing. */
+function dropHardBidFlags() {
+  let n = 0;
+  for (const key of Object.keys(cellValues)) {
+    const cut = key.indexOf("!");
+    if (cut <= 0 || !isHardBidFlagCell(key.slice(0, cut), key.slice(cut + 1))) continue;
+    if (String(cellValues[key] == null ? "" : cellValues[key]).trim().toLowerCase() === "no") continue;
+    delete cellValues[key];
+    n++;
+  }
+  return n;
 }
 
 // ─── Base bid + priced options ───────────────────────────────────────
@@ -1535,6 +1576,9 @@ async function init() {
     if (next.length === pending.length) break;           // no progress (orphan source) — stop
     pending = next;
   }
+  // A draft saved with the Hard Bid? switch on loses it here, before anything replays it
+  // (HF.setCellValue would refuse it anyway; this stops the draft carrying it). Persisted below.
+  const _hardBidDropped = dropHardBidFlags();
   // Apply saved overrides
   for (const [key, val] of Object.entries(cellValues)) {
     const [sheet, addr] = key.split("!");
@@ -1602,7 +1646,7 @@ async function init() {
   // page — so a corrected answer that never got saved would still download a bid
   // charging tax the estimator switched off. Saved only when 3c actually moved
   // something, so merely opening a correct draft does not write one.
-  if (_flagsHealed || _ratesApplied) persistTabState();
+  if (_flagsHealed || _ratesApplied || _hardBidDropped) persistTabState();
 }
 
 function renderTabs() {
@@ -2565,6 +2609,14 @@ function makeDataCell(cell, sheet, r, c, dropdowns) {
       d.classList.add("formula-cell");
       inp.title = "Formula cell — typing here will replace the formula";
     }
+  }
+  // Hard Bid? is shown, and cannot be changed: the tool no longer applies the automatic
+  // discount (see HARD_BID_FLAG_LAYOUTS). The cell reads what the engine reads -- Kyle's "No",
+  // or a mirror of it -- whatever an old draft saved there.
+  if (isHardBidFlagCell(sheet, cell.addr)) {
+    inp.disabled = true;
+    inp.value = "No";
+    inp.title = "Hard bid discount removed. Type a discount in the Hard Bid Discount row instead.";
   }
   inp.dataset.cellAddr = addrKey;
   // The formula bar's Name Box shows the cell's OWN address — cellAddr holds
@@ -3791,11 +3843,10 @@ function remodelRateTargets() {
 //             rate, pricing plausibly and wrongly with nothing on screen to show it.
 //             So the exclusion is by LINE KEY. The guard is the second line of
 //             defence, never the first.
-//   hard_bid  Its discount is `=IF(B5="yes",…)` against `Hard Bid?`, and B5/B7 are
-//             FROZEN literals reading "No" on Seal, Leveling, 'Epoxy blank', every
-//             gyp variant and every copy (test_taxable_flag_reaches_every_sheet.py
-//             names them: KNOWN_UNFIXED_FLAGS = {"local", "hard bid"}). An admin
-//             would file a discount, get no error, and get no discount.
+//   hard_bid  Its discount is `=IF(B5="yes",…)` against `Hard Bid?`, and since
+//             2026-10-03 every Hard Bid? cell is held at "No" on every layout and
+//             copy (HARD_BID_FLAG_LAYOUTS). An admin would file a discount, get no
+//             error, and get no discount.
 //
 //   bond      Excluded on EVERY layout, and the long note below the table says why:
 //             Kyle's own bond formula counts the tax rows twice, and filing a rate
@@ -3957,7 +4008,7 @@ function markupRateTargets() {
 //      job and fire the request-a-certificate instruction to Foundation.
 //
 // A literal is what `_coerce`, `_flag` and Excel all already expect, and it is what
-// index.js already writes for Local? and Hard Bid?. The cost is that it has to be
+// index.js already writes for Local?. The cost is that it has to be
 // re-asserted on every toggle, copy and load — exactly the shape
 // `applyRemodelRateOverride` above already has working in production.
 //
@@ -4827,7 +4878,7 @@ document.getElementById("autofill-btn").addEventListener("click", async (e) => {
     });
     if (j.ok && j.cell_values) {
       const FLAG_LABELS = {
-        "Epoxy!B4":"Local",   "Epoxy!B5":"Hard Bid", "Epoxy!D5":"Prevailing Wage",
+        "Epoxy!B4":"Local",   "Epoxy!D5":"Prevailing Wage",
         "Epoxy!B6":"Taxable", "Epoxy!D6":"Remodel",  "Epoxy!B9":"Drawings dated",
         "Epoxy!B10":"New/Reno",
       };
@@ -4861,6 +4912,9 @@ document.getElementById("autofill-btn").addEventListener("click", async (e) => {
       for (const k of Object.keys(j.cell_values)) {
         const v = j.cell_values[k];
         if (v == null) continue;
+        // An answer that still carries Hard Bid? (an older reply, or a model that sends it
+        // anyway) is ignored: not written, not counted, not on the banner.
+        if (k.includes("!") && isHardBidFlagCell(k.split("!")[0], k.split("!")[1])) continue;
         const aiFlag = (k.includes("!") && state.tax_flags_per_sheet)
           ? jobFlagKindFor(k.split("!")[0], k.split("!")[1]) : null;
         if (aiFlag) {

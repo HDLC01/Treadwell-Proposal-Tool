@@ -20,8 +20,8 @@ them over the one place the shipped answer lives.
 A CLOSED VOCABULARY, ENFORCED HERE. `KEYS` is the three takeoff conditions and nothing else.
 This is markup.py's posture for `layout`, and for the same measured reason: a condition filed
 under a name nothing looks up is not stored-but-unused, it is a row that saves with a green tick
-and changes nothing at all. The five conditions answered on the Intake step (local, hard bid,
-prevailing wage, taxable, remodel tax) are deliberately NOT here — they are answered per job from
+and changes nothing at all. The four conditions answered on the Intake step (local, prevailing
+wage, taxable, remodel tax; hard bid was a fifth until it was removed) are deliberately NOT here — they are answered per job from
 the lead notes and by the AI autofill, so "what they open as" is not a setting anybody sets; the
 estimator is told the answer by the job. Adding one later is this tuple plus a row on the page.
 

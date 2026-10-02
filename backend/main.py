@@ -3650,7 +3650,8 @@ def _price_bundle(payload: PriceIn, systems_in: list, coves_in: list,
             prevailing_wage=lb.get("prevailing_wage", False), demo_sf=lb.get("demo_sf", 0),
             local=lb.get("local", True), super_pct=lb.get("super_pct", 0.03),
             soft_pct=lb.get("soft_pct", 0.13), contingency=lb.get("contingency", 0),
-            hard_bid=lb.get("hard_bid", False), taxable=payload.taxable,
+            # No hard_bid since 2026-10-03: a caller still sending labor.hard_bid is ignored.
+            taxable=payload.taxable,
             sales_tax_rate=payload.sales_tax_rate, remodel=payload.remodel,
             remodel_rate=payload.remodel_rate or 0.0,
             fees=lb.get("fees", 0), bond_pct=lb.get("bond_pct", 0),
@@ -3891,7 +3892,6 @@ _AUTOFILL_SYSTEM_PROMPT = (
     "{\n"
     '  // ─── Estimate-sheet cells (Yes/No flags) ───────────\n'
     '  "Epoxy!B4":  "Yes|No",   // Local? Address within ~70mi of KC, MO\n'
-    '  "Epoxy!B5":  "Yes|No",   // Hard Bid? (multiple contractors bidding)\n'
     '  "Epoxy!D5":  "Yes|No",   // Prevailing Wage? (public funding)\n'
     '  "Epoxy!B6":  "Yes|No",   // Taxable? (default Yes unless exempt cert mentioned)\n'
     '  "Epoxy!D6":  "Yes|No",   // Remodel tax (often Yes if user has remodel exemption)\n'
@@ -3910,14 +3910,11 @@ _AUTOFILL_SYSTEM_PROMPT = (
     "}\n"
     "\n"
     "Rules:\n"
-    "- ALWAYS fill all 7 flag cells (B4, B5, D5, B6, D6, B9, B10) unless\n"
+    "- ALWAYS fill all 6 flag cells (B4, D5, B6, D6, B9, B10) unless\n"
     "  the value is truly indeterminate from BOTH the notes AND the\n"
     "  defaults below. For a flag, you should NEVER return null/empty\n"
     "  if the notes contain any signal at all.\n"
     "- Triggers for each flag — fill if you see ANY of these signals:\n"
-    "    Epoxy!B5 (Hard Bid) = Yes if notes mention: 'hard bid',\n"
-    "      'multiple contractors', 'N contractors bidding', 'getting bids',\n"
-    "      'bid against', 'competitive bid'.\n"
     "    Epoxy!D5 (Prevailing Wage) = Yes if notes mention: 'prevailing\n"
     "      wage', 'public funded', 'state-funded', 'bond-funded',\n"
     "      'federal funds', 'school district', 'municipality', 'gov't'.\n"
@@ -3932,7 +3929,9 @@ _AUTOFILL_SYSTEM_PROMPT = (
     "      'redo', 'replace existing', 'remodel', 'demo existing',\n"
     "      'refurbish'. Else New.\n"
     "- Conservative DEFAULTS for when notes are silent on a flag:\n"
-    "  Taxable=Yes, Hard Bid=No, Prevailing Wage=No, Remodel=No, B10=New.\n"
+    "  Taxable=Yes, Prevailing Wage=No, Remodel=No, B10=New.\n"
+    "- Do NOT return Epoxy!B5 (Hard Bid?). Treadwell no longer applies a\n"
+    "  hard-bid discount, so a competitive bid sets no cell.\n"
     "- DO NOT touch SF/LF quantities — the estimator types those in intake "
     "and those are authoritative.\n"
     "- For system_name + texture, infer from product mentions ('Macro "
@@ -4158,6 +4157,24 @@ def _ai_rate_limited(retry: int, what: str) -> JSONResponse:
     )
 
 
+def _without_hard_bid_flags(data: Any) -> Any:
+    """The AI's answer minus any Hard Bid? cell (estimate_writer.HARD_BID_FLAG_CELLS) and its
+    reasoning line. The prompt no longer asks for one; this is for a model that answers anyway,
+    so the banner never reports a switch the tool has removed (Hanz, 2026-10-03). The workbook
+    and the screen both refuse the cell on their own -- this keeps it out of the reply too."""
+    if not isinstance(data, dict):
+        return data
+
+    def is_flag(key: Any) -> bool:
+        sheet, _, addr = str(key).partition("!")
+        return bool(addr) and estimate_writer.HARD_BID_FLAG_CELLS.get(sheet) == addr.strip().upper()
+
+    out = {k: v for k, v in data.items() if not is_flag(k)}
+    if isinstance(out.get("reasoning"), dict):
+        out["reasoning"] = {k: v for k, v in out["reasoning"].items() if not is_flag(k)}
+    return out
+
+
 @app.post("/api/autofill")
 def api_autofill(payload: AutofillIn, request: Request) -> Any:
     """Infer Yes/No flags + system selections from lead notes via the
@@ -4192,7 +4209,7 @@ def api_autofill(payload: AutofillIn, request: Request) -> Any:
     )
 
     try:
-        data = _autofill_via_cli(user_input)
+        data = _without_hard_bid_flags(_autofill_via_cli(user_input))
         return {"ok": True, "cell_values": data, "via": "cli"}
     except FileNotFoundError:
         _autofill_rate_refund(bucket)   # error → don't consume the project's budget

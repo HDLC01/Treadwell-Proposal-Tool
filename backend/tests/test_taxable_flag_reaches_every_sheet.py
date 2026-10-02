@@ -291,39 +291,50 @@ def _flag_labels(wb, sheet):
 
 
 FIXED_FLAGS = {"taxable", "remodel tax"}
-# Local? and Hard Bid? are frozen on copied tabs by the IDENTICAL mechanism and are NOT in this
-# change: they drive markup tiers, the hard-bid discount, gyp soft costs and travel/lodging, none
-# of them a flat percentage, and nobody has yet quantified how far off a real bid they put it.
-# Raised as Issue 5, deliberately not fixed here.
-KNOWN_UNFIXED_FLAGS = {"local", "hard bid"}
+# Local? is frozen on copied tabs by the IDENTICAL mechanism and is NOT in this change: it drives
+# markup tiers, gyp soft costs and travel/lodging, none of them a flat percentage, and nobody has
+# yet quantified how far off a real bid it puts it. Raised as Issue 5, deliberately not fixed here.
+#
+# Hard Bid? was the second hole until 2026-10-03, when the hard-bid discount was removed (Hanz:
+# "We also need to remove the hard bid discount"). Every Hard Bid? cell is now HELD at "No" on
+# every layout and copy (estimate_writer.HARD_BID_FLAG_CELLS; test_no_hard_bid.py), so it is
+# neither written nor frozen-wrong: it is pinned, and counted as answered below.
+KNOWN_UNFIXED_FLAGS = {"local"}
 
 
 @pytest.mark.parametrize("sheet", PRICED_SHEETS)
 def test_every_yes_no_flag_in_the_block_is_either_written_or_a_mirror(wb, sheet):
     """THE WALK IS DELIBERATELY WIDER THAN THE FIX, and that is the point of it.
 
-    A walk scoped to "Taxable?" and "Remodel Tax?" would go green while Local? and Hard Bid? stay
-    frozen by the same mechanism -- a vacuous invariant certifying the rest of the block as fine.
-    So this looks at EVERY Yes/No question in A1:D10 and requires each one to be a mirror (it
-    follows the master) or a cell the tool writes. The two that are neither are named out loud
-    below and xfail against Issue 5, so a green run says "two known holes", not "no holes".
+    A walk scoped to "Taxable?" and "Remodel Tax?" would go green while Local? stays frozen by
+    the same mechanism -- a vacuous invariant certifying the rest of the block as fine. So this
+    looks at EVERY Yes/No question in A1:D10 and requires each one to be a mirror (it follows the
+    master), a cell the tool writes, or a Hard Bid? cell the tool holds at "No". The one that is
+    none of those is named out loud above and xfails against Issue 5, so a green run says "one
+    known hole", not "no holes".
 
     Prevailing Wage is a third case and needs no entry: Epoxy!D5 is its only literal and the tool
     has always written it."""
     import estimate_writer as ew
 
     written = {"%s!%s" % (s, a) for s, a in ew.TAXABLE_FLAG_CELLS.items()}
-    written |= {"Epoxy!D6", "Epoxy!D5", "Epoxy!B4", "Epoxy!B5", "Polish!B4", "Polish!B5"}
+    written |= {"Epoxy!D6", "Epoxy!D5", "Epoxy!B4", "Polish!B4"}
+    written |= {"%s!%s" % (s, a) for s, a in ew.HARD_BID_FLAG_CELLS.items()}   # pinned "No"
     unfixed = []
     for label, addr in _flag_labels(wb, sheet).items():
         src_sheet, src_addr, _v = _resolve_flag(wb, sheet, addr)
         if "%s!%s" % (src_sheet, src_addr) in written:
             continue
+        # The gyp tabs' own Hard Bid? (B7) is read by NO formula -- they never had the discount --
+        # so leaving it alone moves nothing. Proven from the workbook in
+        # test_no_hard_bid.py::test_the_flag_cells_are_every_hard_bid_question_in_the_workbook.
+        if label == "hard bid" and src_sheet.startswith("Gyp"):
+            continue
         unfixed.append((label, "%s!%s" % (src_sheet, src_addr)))
     stray = [u for u in unfixed if u[0] not in KNOWN_UNFIXED_FLAGS]
     assert not stray, "a Yes/No flag nothing writes and nobody has flagged: %r" % (stray,)
     if unfixed:
-        pytest.xfail("Issue 5 -- Local?/Hard Bid? are frozen the same way and are not in this "
+        pytest.xfail("Issue 5 -- Local? is frozen the same way and is not in this "
                      "change: %s carries %r" % (sheet, sorted(u[1] for u in unfixed)))
 
 
@@ -1119,6 +1130,19 @@ def test_the_autofill_click_puts_the_tax_answers_on_the_base_and_nothing_on_epox
     assert a["epoxy"] == {"taxable": "Yes", "remodel": "No"}
     assert a["epoxyB4"] == "No"
     assert "Taxable: <b>No</b>" in a["banner"]
+
+
+@needs_node
+def test_an_autofill_answer_still_carrying_hard_bid_is_ignored(result):
+    """The hard-bid discount was removed on 2026-10-03 (test_no_hard_bid.py). The prompt no longer
+    asks for Epoxy!B5 and the server strips it, but an older reply -- or a model answering anyway --
+    must still not set the cell, push it to the engine, or report it on the banner. The rest of the
+    same reply still lands."""
+    a = result["autofillHardBid"]
+    assert a["written"] == [] and a["engine"] == [], a
+    assert "Hard Bid" not in a["banner"], a["banner"]
+    assert a["prevailing"] == "Yes"
+    assert "Prevailing Wage: <b>Yes</b>" in a["banner"]
 
 
 # ── 6. the call sites this harness cannot reach ─────────────────────────────
