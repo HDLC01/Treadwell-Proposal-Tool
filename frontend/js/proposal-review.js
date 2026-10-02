@@ -7109,8 +7109,14 @@
    *  show it again as soon as it prints anything: its field filled in the sidebar, a whole-line
    *  rewrite (the {{#system}} row's `line_key`) or a paragraph edit with words after the label. It
    *  stays, as in the document, while one of its sub-items prints words, and when it is the only
-   *  line in its box. A line with the caret in it is left as it is until the caret leaves. */
-  function applyBareWorkLines() {
+   *  line in its box. A line with the caret in it is left as it is until the caret leaves.
+   *
+   *  `leftBox`: the box focus has just LEFT (the focusout handler passes it). A click on a button
+   *  or a Tab leaves the selection sitting in the line for a moment after focus has gone, so the
+   *  caret test alone kept an emptied "Notes:" on screen while the document drops it (review of
+   *  2026-10-02). A line inside the box that was left is no longer being edited; a caret in any
+   *  OTHER box is still respected. */
+  function applyBareWorkLines(leftBox) {
     const lines = templateAdjustments && Array.isArray(templateAdjustments.lines)
       ? templateAdjustments.lines : [];
     if (!lines.length || !docSurface || !docSurface.querySelector) return;
@@ -7129,7 +7135,7 @@
       }
       const heads = ln.sub_item_ids.some(prints);
       for (const el of els) {
-        if (el === caret) continue;
+        if (el === caret && !(leftBox && leftBox.contains && leftBox.contains(el))) continue;
         const box = editingBox(el);
         const alone = !box || !Array.prototype.some.call(box.querySelectorAll(LINE_SEL), n => n !== el);
         setRenderHidden(el, !heads && !alone && workLineBare(el));
@@ -7171,7 +7177,7 @@
       // A WORK line emptied down to its label while the caret was in it goes once the caret has
       // left the box (applyBareWorkLines leaves the caret's own line alone). After this event, so
       // the selection it reads has moved on.
-      if (!(to && from.contains(to))) setTimeout(applyBareWorkLines, 0);
+      if (!(to && from.contains(to))) setTimeout(() => applyBareWorkLines(from), 0);
       // EVERY PRICE ROW, not the two containers that used to be named here. The other eight rows
       // normalised on their own `focusout` while each of them was its own editing host -- which is
       // exactly what made moving the caret from one price line to the next re-render the rest of

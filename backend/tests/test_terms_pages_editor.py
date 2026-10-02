@@ -262,6 +262,13 @@ def _scenarios():
         {"op": "caret", "id": 118}, {"op": "type", "id": 118, "text": "Notes: "}, {"op": "bare"},
         {"op": "snap", "label": "caret in it"},
         {"op": "caret", "id": None}, {"op": "bare"}, {"op": "snap", "label": "caret gone"}]))
+    # Focus leaves the box by a button click or a Tab: the selection is still in the line for a
+    # moment, so the caret test alone kept the emptied line on screen.
+    out.append(_scenario("work-leave:epoxy:Direct", "epoxy", "Direct",
+                         form={"work_notes": "Owner moves the racking"}, steps=[
+        {"op": "caret", "id": 118}, {"op": "type", "id": 118, "text": "Notes: "}, {"op": "bare"},
+        {"op": "snap", "label": "editing"},
+        {"op": "leave", "id": 118}, {"op": "snap", "label": "left, selection still in it"}]))
     return out
 
 
@@ -641,6 +648,22 @@ def test_the_line_with_the_caret_in_it_is_not_taken_out_from_under_it(ran):
     snaps = {s["label"]: s for s in ran["work-caret:epoxy:Direct"]["steps"]}
     assert 118 not in snaps["caret in it"]["hidden"]
     assert 118 in snaps["caret gone"]["hidden"]
+
+
+def test_a_bare_line_goes_when_focus_leaves_its_box_with_the_selection_still_in_it(ran):
+    """Review, 2026-10-02: a button click or a Tab leaves the selection in the line after focus
+    has gone, so an emptied "Notes:" stayed on screen while the document dropped it. The focusout
+    handler passes the box that was left; a line in it is no longer being edited.
+
+    Mutation: drop the `leftBox` exemption in applyBareWorkLines, or call it without `from` from
+    the focusout handler (the second assert below)."""
+    snaps = {s["label"]: s for s in ran["work-leave:epoxy:Direct"]["steps"]}
+    assert 118 not in snaps["editing"]["hidden"]
+    assert 118 in snaps["left, selection still in it"]["hidden"]
+    src = (pathlib.Path(__file__).resolve().parents[2] / "frontend" / "js" /
+           "proposal-review.js").read_text(encoding="utf-8")
+    assert "setTimeout(() => applyBareWorkLines(from), 0)" in src, (
+        "the focusout handler no longer tells applyBareWorkLines which box was left")
 
 
 def test_a_response_without_the_plan_hides_no_work_line(ran):

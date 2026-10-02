@@ -531,6 +531,7 @@ function makePage(sc) {
       init: () => initDocumentEditor(),
       repaginate: () => repaginateTerms(),
       bare: () => applyBareWorkLines(),
+      bareLeft: (el) => applyBareWorkLines(editingBox(el)),
       refresh: () => refreshDocumentFills(),
       collect: () => collectOverrides(),
       serialize: (el) => serializeBlock(el),
@@ -602,6 +603,8 @@ async function run(sc) {
     if (st.op === "init") { await pg.api.init(); await flush(); await flush(); }
     else if (st.op === "repaginate") pg.api.repaginate();
     else if (st.op === "bare") pg.api.bare();
+    // Focus LEFT the box holding `id`, with the selection still in it (a button click or a Tab).
+    else if (st.op === "leave") { const el = byId(st.id); if (!el) throw new Error("no block " + st.id); pg.api.bareLeft(el); }
     else if (st.op === "form") { Object.assign(pg.FORM, st.values || {}); }
     else if (st.op === "refresh") { pg.api.refresh(); await flush(); }
     else if (st.op === "type") { const el = byId(st.id); if (!el) throw new Error("no block " + st.id); el.textContent = st.text; }
