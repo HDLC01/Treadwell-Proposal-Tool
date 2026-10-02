@@ -763,7 +763,11 @@ const HARD_BID_FLAG_LAYOUTS = ["Epoxy", "Polish", "Seal", "Seal (+Jnts)", "Epoxy
 const HARD_BID_FLAG_ADDR = "B5";
 function isHardBidFlagCell(sheet, addr) {
   if (!HARD_BID_FLAG_LAYOUTS.includes(layoutIdFor(sheet))) return false;
-  return String(addr || "").toUpperCase() === txAddr(sheet, HARD_BID_FLAG_ADDR);
+  // Compared in its CANONICAL spelling: the engine reads a row's leading zeros away ("B05" and
+  // "B005" are B5 to it), and comparing the raw text let those through (review of #605).
+  const m = /^([A-Za-z]{1,3})0*([0-9]{1,7})$/.exec(String(addr || "").trim());
+  const canon = m ? m[1].toUpperCase() + m[2] : String(addr || "").toUpperCase();
+  return canon === txAddr(sheet, HARD_BID_FLAG_ADDR);
 }
 /** Drop a saved "Yes" (anything but "No") off every Hard Bid? cell, so the draft stops carrying a
  *  switch the tool no longer honours. Returns how many went -- non-zero means persist. A saved
@@ -2614,7 +2618,11 @@ function makeDataCell(cell, sheet, r, c, dropdowns) {
   // discount (see HARD_BID_FLAG_LAYOUTS). The cell reads what the engine reads -- Kyle's "No",
   // or a mirror of it -- whatever an old draft saved there.
   if (isHardBidFlagCell(sheet, cell.addr)) {
-    inp.disabled = true;
+    // readOnly, not disabled: a disabled input cannot take focus, so Enter and the arrow keys
+    // stopped dead beside it, and multi-cell paste / clear (which skip only readOnly cells) wrote
+    // through it. The lock block below leaves this cell alone, so no 🔓 can make it editable.
+    inp.readOnly = true;
+    d.classList.add("locked");
     inp.value = "No";
     inp.title = "Hard bid discount removed. Type a discount in the Hard Bid Discount row instead.";
   }
@@ -2692,7 +2700,7 @@ function makeDataCell(cell, sheet, r, c, dropdowns) {
   // the 🔒 to unlock a single edit (auto re-locks on blur). A readonly input
   // never fires "input", so the edit writers above stay dormant while locked.
   // The generated .xlsx protects these same cells (backend/estimate_writer.py).
-  if (lockedCellsFor(sheet).has(cell.addr)) {
+  if (lockedCellsFor(sheet).has(cell.addr) && !isHardBidFlagCell(sheet, cell.addr)) {
     inp.readOnly = true;
     d.classList.add("locked");
     const lk = document.createElement("span");

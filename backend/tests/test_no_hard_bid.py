@@ -475,6 +475,13 @@ def screen(tmp_path_factory):
                    "Epoxy!B74"],
         "probe": ["Leveling!B5", "Leveling!B6", "Epoxy!B4", 'Gyp (USG 1-8")!B7', "Copy2!B5"],
     }
+    # Review of #605: the engine reads "B05" as B5. B50 is an ordinary cell that merely starts so.
+    fixtures["zeros"] = {
+        "cell_values": {"Epoxy!B05": "Yes", "Polish!B005": "Yes", "Copy1!B05": "Yes", "Epoxy!B50": 7},
+        "tab_copies": [{"id": "Copy1", "source": "Epoxy"}],
+        "direct": ["Epoxy!B05", "Seal (+Jnts)!B005", "Epoxy!B50"],
+        "probe": ["Epoxy!B05", "Epoxy!b5", "Epoxy!B50", "Epoxy!B15"],
+    }
     p = tmp_path_factory.mktemp("nohb") / "fixtures.json"
     p.write_text(json.dumps(fixtures), encoding="utf-8")
     proc = subprocess.run(["node", str(HARNESS), str(FRONTEND), str(p)], capture_output=True,
@@ -585,7 +592,96 @@ def test_init_drops_a_saved_yes_before_the_replay_and_saves_the_draft_after():
     or a reopened draft keeps carrying the switch it can no longer use."""
     src = (FRONTEND / "js" / "estimate-review.js").read_text(encoding="utf-8")
     body = src[src.index("async function init()"):src.index("\nfunction renderTabs()")]
+    # Comments out first (review of #605): `/* const _hardBidDropped = dropHardBidFlags(); */`
+    # still contained the text, so a commented-out call passed.
+    body = re.sub(r"/\*[\s\S]*?\*/", "", body)
+    body = re.sub(r"(?m)^[ \t]*//.*$", "", body)
     drop = body.index("const _hardBidDropped = dropHardBidFlags();")
-    assert drop < body.index("// Apply saved overrides") < body.index("if (_flagsHealed")
+    replay = body.index("for (const [key, val] of Object.entries(cellValues)) {")
+    assert drop < replay < body.index("if (_flagsHealed")
     save = body[body.index("if (_flagsHealed"):]
     assert save.startswith("if (_flagsHealed || _ratesApplied || _hardBidDropped) persistTabState();")
+
+
+
+# ── 6. review of #605: the address as the engines read it, and the downloaded file's lock ─────────
+@needs_node
+def test_a_leading_zero_spelling_of_the_flag_is_refused_on_the_screen_too(screen):
+    """The engine's own parser reads "B05" / "B005" as B5, so a guard comparing the raw text let a
+    saved or AI-sent "Epoxy!B05": "Yes" switch the discount back on, on screen and in the proposal's
+    lump sum, while the downloaded file priced without it.
+
+    Mutation: compare `String(addr).toUpperCase()` in isHardBidFlagCell again."""
+    z = screen["fixtures"]["zeros"]
+    before, after = z["before"], z["after"]
+    assert {"Epoxy!B5", "Polish!B5", "Copy1!B5"} <= set(before["writes"]), (
+        "the counterexample: the engine does read B05 as B5")
+    assert [k for k in after["writes"] if k.endswith("!B5")] == [], after["writes"]
+    assert after["writes"].get("Epoxy!B50") == 7, "an ordinary cell that starts with B5 was refused"
+    assert after["dropped"] == 3
+    assert after["direct"] == {"Epoxy!B05": False, "Seal (+Jnts)!B005": False, "Epoxy!B50": True}
+    assert after["isFlag"] == {"Epoxy!B05": True, "Epoxy!b5": True, "Epoxy!B50": False,
+                               "Epoxy!B15": False}
+
+
+def test_the_canonical_spelling_is_the_engines():
+    for raw, want in [("B5", "B5"), ("b5", "B5"), ("B05", "B5"), ("B005", "B5"), (" B05 ", "B5"),
+                      ("B50", "B50"), ("B500", "B500"), ("B0", "B0"), ("AA07", "AA7"),
+                      ("Epoxy", "EPOXY"), ("", "")]:
+        assert ew.canonical_cell_addr(raw) == want, (raw, ew.canonical_cell_addr(raw), want)
+
+
+@pytest.fixture(scope="module")
+def zeros_file():
+    return _load(ew.fill_estimate(
+        {}, cell_values={"Epoxy!B05": "Yes", "Seal (+Jnts)!B005": "Yes", "Copy1!B05": "Yes",
+                         "Epoxy!B50": 3},
+        tab_copies=[{"id": "Copy1", "source": "Epoxy"}], tab_labels={"Copy1": "EPOXY 2"}))
+
+
+def test_a_leading_zero_spelling_never_reaches_the_file(zeros_file):
+    """openpyxl reads "B05" as B5 too. The literal flags were saved by the "No" stamp after the
+    writes, but 'Seal (+Jnts)'!B5's formula `=Seal!B5` was overwritten by the leading-zero write
+    and turned into a literal. Mutation: compare `addr.upper()` in fill_estimate's skip again."""
+    out = zeros_file
+    assert out["Epoxy"]["B5"].value == "No"
+    assert out["Seal (+Jnts)"]["B5"].value == "=Seal!B5", out["Seal (+Jnts)"]["B5"].value
+    assert out["EPOXY 2"]["B5"].value == "No"
+    assert out["Epoxy"]["B50"].value == 3, "an ordinary cell that starts with B5 was not written"
+
+
+def test_the_flag_is_locked_in_the_downloaded_file_wherever_the_sheet_is_protected(zeros_file):
+    """One keystroke in Excel used to switch Kyle's automatic discount back on in the downloaded
+    file and nowhere else: the rate cells were locked, Hard Bid? beside them was not. Unprotect
+    Sheet (no password) still reaches it, as it does a rate. Held by worksheet, so a copy renamed
+    to its label in step 5 is locked too. Mutation: drop the step-6 addition."""
+    out = zeros_file
+    for title in list(ew.HARD_BID_FLAG_CELLS) + ["EPOXY 2"]:
+        ws = out[title]
+        if not ws.protection.sheet:
+            continue
+        assert ws["B5"].protection.locked is True, title
+    for title in ("Epoxy", "Polish", "EPOXY 2"):
+        assert out[title].protection.sheet, title + " is not protected at all"
+    assert out["Epoxy"]["B4"].protection.locked is False, "Local? beside it was locked too"
+    assert out["Epoxy"]["E20"].protection.locked is False, "an input cell was locked"
+
+
+def test_the_autofill_strip_reads_the_address_the_way_the_engines_do():
+    import main
+    out = main._without_hard_bid_flags({"Epoxy!B05": "Yes", "Polish!b005": "Yes", "Epoxy!B50": 1,
+                                        "reasoning": {"Epoxy!B05": "x", "Epoxy!D5": "y"}})
+    assert out == {"Epoxy!B50": 1, "reasoning": {"Epoxy!D5": "y"}}
+
+
+def test_the_screen_cell_is_read_only_not_disabled():
+    """Review of #605: `disabled` cannot take focus, so Enter / the arrow keys stopped dead beside
+    B5, and multi-cell paste and clear (which skip only readOnly cells, _commitCellWrite) wrote
+    through it. And the 🔒 block must leave it alone, or an unlock would make it typeable."""
+    src = (FRONTEND / "js" / "estimate-review.js").read_text(encoding="utf-8")
+    block = src[src.index("  if (isHardBidFlagCell(sheet, cell.addr)) {"):]
+    block = block[:block.index("\n  }")]
+    assert "inp.readOnly = true;" in block and "inp.disabled" not in block, block
+    assert "if (lockedCellsFor(sheet).has(cell.addr) && !isHardBidFlagCell(sheet, cell.addr)) {" in src
+    commit = src[src.index("function _commitCellWrite(inp, text) {"):]
+    assert commit.index("if (inp.readOnly) return false;") < 80, "the readOnly skip moved"
