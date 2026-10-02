@@ -274,6 +274,9 @@
      *  form; on a total failure we simply keep the markup's defaults. */
     async function loadFolders() {
       try {
+        // AFTER sign-in has settled: on a fresh Done load this fired before the bearer token
+        // existed and took a 401 (walk of 2026-10-02), the same race #124 closed elsewhere.
+        try { if (window.TWAuth && TWAuth.ready) await TWAuth.ready; } catch {}
         const r = await fetch("/api/dropbox/folders", { headers: TW.authHeaders() });
         const j = await r.json();
         if (!j || !j.ok || !Array.isArray(j.destinations) || !j.destinations.length) return;
@@ -311,6 +314,7 @@
         const qs = "?destination=" + encodeURIComponent(dest.value)
           + "&folder_owner=" + encodeURIComponent(ownerValue())
           + "&draft_id=" + encodeURIComponent(TW.getDraftId() || "");
+        try { if (window.TWAuth && TWAuth.ready) await TWAuth.ready; } catch {}
         const r = await fetch(TW.resolveApiBase() + "/api/dropbox/project-folders" + qs,
                               { headers: TW.authHeaders() });
         j = (await r.json().catch(() => ({}))) || {};   // a null body is still an object here
