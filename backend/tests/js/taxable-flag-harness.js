@@ -640,7 +640,8 @@ const INTAKE_EXEMPT_REMODEL = {
   const h = harness();
   h.typeInto("Epoxy", "E20", "5000", "4200");
   h.typeInto("Epoxy", "B4", "No", "Yes");           // Local? -- NOT ours (see Issue 5)
-  h.typeInto("Epoxy", "B5", "Yes", "No");           // Hard Bid? -- likewise
+  // (Hard Bid? is no longer an ordinary edit: since 2026-10-03 the screen refuses it outright --
+  // test_no_hard_bid.py.)
   h.typeInto("Epoxy", "D5", "Yes", "No");           // Prevailing Wage -- a mirror everywhere
   h.typeInto(GB, "B6", "12", "0");                  // "Miles Away" on a gyp layout, NOT Taxable
   out.ordinaryEdits = h.cellValues;

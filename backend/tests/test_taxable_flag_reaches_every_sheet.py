@@ -994,7 +994,7 @@ def test_an_ordinary_cell_edit_is_untouched_by_any_of_this(result):
     """Only the two flag addresses per layout are special -- not the cells beside them in the same
     block. ``Gyp!B6`` is *Miles Away*, and a "B6 is the tax flag" rule would have turned a mileage
     into a tax answer."""
-    assert result["ordinaryEdits"] == {"Epoxy!E20": "5000", "Epoxy!B4": "No", "Epoxy!B5": "Yes",
+    assert result["ordinaryEdits"] == {"Epoxy!E20": "5000", "Epoxy!B4": "No",
                                        "Epoxy!D5": "Yes", GYP_BASE + "!B6": "12"}
     k = result["kinds"]
     assert k["epoxyB6"] == "taxable" and k["epoxyD6"] == "remodel"

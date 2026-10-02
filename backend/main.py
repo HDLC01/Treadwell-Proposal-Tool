@@ -4167,7 +4167,8 @@ def _without_hard_bid_flags(data: Any) -> Any:
 
     def is_flag(key: Any) -> bool:
         sheet, _, addr = str(key).partition("!")
-        return bool(addr) and estimate_writer.HARD_BID_FLAG_CELLS.get(sheet) == addr.strip().upper()
+        return (bool(addr) and estimate_writer.HARD_BID_FLAG_CELLS.get(sheet)
+                == estimate_writer.canonical_cell_addr(addr))
 
     out = {k: v for k, v in data.items() if not is_flag(k)}
     if isinstance(out.get("reasoning"), dict):

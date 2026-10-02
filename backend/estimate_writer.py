@@ -544,6 +544,17 @@ HARD_BID_FLAG_CELLS: Dict[str, str] = {
     "Epoxy": "B5", "Polish": "B5", "Seal": "B5", "Seal (+Jnts)": "B5",
     "Epoxy blank": "B5", "Leveling": "B5",
 }
+_CANON_ADDR_RE = re.compile(r"([A-Za-z]{1,3})0*([0-9]{1,7})")
+
+
+def canonical_cell_addr(addr: Any) -> str:
+    """`"b05"` / `"B005"` -> `"B5"`. openpyxl and the screen's engine both read a row's leading
+    zeros away, so a Hard Bid? guard has to compare this spelling, not the raw text (a saved
+    `Epoxy!B05` slipped past the first version of it -- review of #605)."""
+    s = str(addr or "").strip()
+    m = _CANON_ADDR_RE.fullmatch(s)
+    return m.group(1).upper() + m.group(2) if m else s.upper()
+
 GYP_TOTALS: Dict[str, str] = {
     "material_total":  "E41",
     "labor_install":   "E52",
@@ -1067,6 +1078,7 @@ def fill_estimate(
     #    switch on keeps Kyle's "No" there, and a typed rate/dollar in the discount row below it is
     #    written like any other cell.
     hard_bid_flags = _hard_bid_flag_cells(wb, tab_copies, ops_by)
+    hard_bid_ws = [(wb[s], a) for s, a in hard_bid_flags.items() if s in wb.sheetnames]  # step 6
     for sheet_addr, val in (cell_values or {}).items():
         if val in (None, ""):
             continue
@@ -1081,7 +1093,7 @@ def fill_estimate(
         if not _CELL_SHAPE_RE.fullmatch(addr):
             log.warning("estimate_writer: skipping non-cell address %r", sheet_addr)
             continue
-        if hard_bid_flags.get(sheet_name) == addr.upper():
+        if hard_bid_flags.get(sheet_name) == canonical_cell_addr(addr):
             continue
         try:
             wb[sheet_name][addr] = _coerce(val)
@@ -1115,6 +1127,15 @@ def fill_estimate(
     #    fat-fingered in Excel. Done LAST — after every write, extra, alternate
     #    tab, copy, reorder and rename — using the ws→layout map captured while
     #    titles were still stable ids.
+    #    A Hard Bid? cell is locked too, on every sheet that is protected at all: one keystroke in
+    #    Excel would otherwise switch Kyle's automatic discount back on in the downloaded file and
+    #    nowhere else (review of #605). Unprotect Sheet still reaches it, as it does a rate.
+    #    Held by worksheet, not title: the tabs were renamed to their labels in step 5.
+    flag_of = {id(ws): addr for ws, addr in hard_bid_ws}
+    ws_layouts = [(ws, addrs + [flag_of[id(ws)]]
+                   if addrs and id(ws) in flag_of and flag_of[id(ws)] not in addrs
+                   else addrs)
+                  for ws, addrs in ws_layouts]
     _apply_cell_protection(ws_layouts)
 
     # Stream to bytes
