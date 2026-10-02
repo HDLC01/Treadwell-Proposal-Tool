@@ -121,6 +121,16 @@ const UNITS = [
   // stubbed: this page double has no #options-gap, so it returns before touching anything, as the
   // real one does on a page without the gap (options-gap-harness.js drives it with one).
   fn("paintOptionsGap"),
+  // paintLineParas and paintOptionsGap give each composed PRICE line the spacing of the paragraph
+  // the document prints it from (priceLineRecord; the gap's lines, the row above it:
+  // gapModelRecord), through applyParaSpacing.
+  grab(/^  const SINGLE_LINE_EM = .*$/m, "SINGLE_LINE_EM"), fn("paraLineHeight"), fn("applyParaSpacing"),
+  fn("priceLineRecord"), fn("gapModelRecord"),
+  grab(/^  const TWIPS_PER_PT = .*$/m, "TWIPS_PER_PT"), grab(/^  const LINE_SEL = .*$/m, "LINE_SEL"), fn("lineAt"),
+  // gapModelRecord reads the template record of a free paragraph above the gap; no case here
+  // mounts the gap, so the map is empty, as on a page with no template paragraph there.
+  "const blockById = new Map();",
+  fn("aboveOptionsGap"), fn("gapShown"), fn("isGapTyped"), fn("gapTypedEls"),
   fn("renderProposalExtras"),
   fn("computeTokenValues"),
   fn("priceRowVisibility"),

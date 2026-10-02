@@ -768,6 +768,15 @@ button {
   border-radius: 1px;
   cursor: default;
 }
+/* A BLANK VALUE DRAWS NOTHING. Audit, 2026-10-02: two yellow ticks under the Job Name value and one
+   after "Notes:" in the WORK box -- the highlight's 1px of padding either side of a value that is
+   empty (the work_description, city_state and work_notes tokens on a job without them), a 2px sliver
+   a line tall that prints nothing and marks nothing. The span stays, so a value that arrives later
+   lands in it (refreshFillsInPlace) and is highlighted again; only an EMPTY one is bare. */
+.tw-fill:empty {
+  background: none;
+  padding: 0;
+}
 /* `.tw-fill-edit` — the editable-ISLAND treatment — is gone. Every generated line on
    the proposal page (PRICE rows, the WORK {{#system}} rows) is now edited as ONE whole
    line (.tw-line-edit below), so there is no span that is editable while the words
@@ -1075,11 +1084,20 @@ button {
    that still do not fit PAST THE BOX'S BOTTOM EDGE, over whatever is below -- it never grows a box
    and never cuts text -- so that is what this page shows. It used to clip the box behind a fade
    and a "Show all" button, which hid lines that print.
-   The marker is the inset line along the box's bottom edge, i.e. where the printed box ends, and
-   a badge above the box on hover. Both stay out of the text: box-shadow and a pseudo-element, and
-   the badge sits ABOVE the box, not below it where the overflowing lines are. */
+   The marker is a 2px line where the PRINTED box ends, and a badge above the box on hover. Both
+   stay out of the text: a background and a pseudo-element, and the badge sits ABOVE the box, not
+   below it where the overflowing lines are.
+
+   AT THE PRINTED BOX'S BOTTOM, NOT THE ELEMENT'S. The box on screen is as tall as its content
+   (min-height), so an inset box-shadow -- which this was -- drew the line where the TEXT stops, a
+   few px under the frame's own red rule: the doubled rule at the PRICE/NOTES boundary in the
+   2026-10-02 audit. applyBoxGeom puts the printed height on --tw-box-end; without it the line falls
+   back to the element's bottom edge, as before. */
 .tw-txbx.tw-notes-overflow {
-  box-shadow: inset 0 -2px 0 rgba(158, 0, 31, .55);
+  background-image: linear-gradient(rgba(158, 0, 31, .55), rgba(158, 0, 31, .55));
+  background-repeat: no-repeat;
+  background-size: 100% 2px;
+  background-position: 0 var(--tw-box-end, 100%);
   position: absolute;                 /* already absolute; restated for the ::after anchor */
 }
 /* THE BOX SAYS "TEXT", EVERYWHERE INSIDE IT, IN EVERY STATE. A click anywhere in a box lands a
@@ -1282,6 +1300,31 @@ button {
   top: 0;
 }
 
+/* THE TERMS AS THE DOCUMENT PRINTS THEM (proposal-review.js applyTermsPlan, from the writer's own
+   plan, /api/proposal-template render_adjustments). A Terms page is a page of the Terms section:
+   its lines are as tall as the Terms face's own single line, the way Word and LibreOffice print a
+   paragraph with no line spacing of its own, rather than the 1.32 the page-1 boxes' face is drawn
+   at -- and no line is padded taller than its words (an empty one is one line of its own). */
+.tw-page.tw-terms-section { line-height: normal; }
+.tw-terms-section .tw-block { min-height: 0; }
+.tw-terms-section .tw-block.tw-empty { min-height: 1.05em; min-height: 1lh; }
+/* One of Kyle's hand-split clauses, shown as the ONE paragraph the document prints: the head and
+   each continuation stay separate lines (each its own id and saved edit) drawn inline in a
+   wrapper that carries the head's paragraph geometry inline (padding to the head's text column,
+   `--tw-join-hang` its hanging indent). Their own margins and indents print nowhere while they
+   are joined, so they are zeroed; the space the writer puts between two halves is generated
+   content on the continuation, not a character anybody can type into or delete. */
+.tw-join { position: relative; }
+.tw-join > .tw-block {
+  display: inline !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  text-indent: 0 !important;
+}
+.tw-join > .tw-join-tail::before { content: none; }
+.tw-join > .tw-join-tail.tw-join-sep::before { content: " "; position: static; font-family: inherit; }
+.tw-join > .tw-num::before { left: calc(-1 * var(--tw-join-hang, 0pt)); }
+
 /* UNFINISHED WORDING ON PAGE 1 — the Done page's amber notice.
    AMBER, NOT RED, and the distinction is the one this file already makes for .cl-warn and
    .pr-inert-warn: the proposal itself is correct and the bid can still go out today. This is a
@@ -1330,10 +1373,11 @@ button {
 }
 /* The blank lines above the PRICE Options heading (price_overrides.options_gap), painted by
    paintOptionsGap. REAL LINES the caret can sit on, not the 24pt margin the heading used to carry,
-   which nothing could click into or Backspace away. Same margin as a price row, and the height
-   comes from the placeholder break at the box's own font size, so one blank line is one price
-   row tall. The min-height only matters if a browser ever drops that break. */
-.tw-gap-line { margin: 0 0 2pt; min-height: 1em; cursor: text; }
+   which nothing could click into or Backspace away. No margin: each prints as a copy of the price
+   row above it, which has none, and paintOptionsGap gives it that row's line height inline; the
+   height comes from the placeholder break at the box's own font size, so one blank line is one
+   price row tall. The min-height only matters if a browser ever drops that break. */
+.tw-gap-line { margin: 0; min-height: 1em; cursor: text; }
 /* The template's own empty spacer paragraph directly above the heading (Gyp, GC). The writer
    replaces it with the counted lines, so it must not draw a line of its own here. */
 .tw-block.tw-gap-absorbed { display: none; }

@@ -91,6 +91,20 @@ def _walk(path_or_bytes):
             for i, k, _p, b, t, x in pw.iter_editable_blocks(d)]
 
 
+def _box_texts_by_template_id(out, rel):
+    """A FILLED document's text-box paragraphs, keyed by the TEMPLATE's block ids.
+
+    The walk visits the body's own paragraphs before any text box, and the fill takes Kyle's empty
+    padding lines out of the Terms (`proposal_writer._rebuild_terms_pages`), so every box
+    paragraph's id in the filled walk is lower by the number taken out. The job header and the
+    WORK box come before anything the fill adds or removes INSIDE the boxes, so that one shift is
+    the whole difference for them."""
+    got = _walk(out)
+    shift = (sum(1 for b in _walk(BACKEND / "templates" / rel) if b["txbx"] is None)
+             - sum(1 for b in got if b["txbx"] is None))
+    return {b["id"] + shift: b["text"] for b in got if b["txbx"] is not None}
+
+
 def _tokens(path):
     """{token: number of paragraphs it appears in} over document.xml, runs joined per paragraph
     (Word splits a token across runs freely), both the mc:Choice and mc:Fallback copies."""
@@ -235,7 +249,8 @@ def test_intake_values_land_on_the_spec_finish_and_addenda_lines(rel):
     area = [t for t in got if "Finish Schedule" in t]
     assert len(area) == 1 and "[RES-1]" in area[0] and area[0].endswith("per the Finish Schedule on A601")
     assert "Addenda Acknowledged: 3" in got
-    assert got[99:102] == ["Acme Warehouse", "Olathe, KS", ""]
+    by_id = _box_texts_by_template_id(out, rel)
+    assert [by_id[i] for i in (99, 100, 101)] == ["Acme Warehouse", "Olathe, KS", ""]
     assert not any("{{" in t for t in spec + area), "a raw token on the spec / area line"
 
 
@@ -480,14 +495,16 @@ def test_the_editor_shows_what_the_document_prints(work_type, rel):
             + "const blocks = %s;\n" % json.dumps(blocks)
             + "const out = {}; for (const id in blocks) out[id] = fillPlain(blocks[id], tokens);\n"
             + "console.log(JSON.stringify(out));")
-        doc = [b["text"] for b in _walk(pw.fill_proposal(work_type=work_type, audience="GC",
-                                                         values=dict(values)))]
-        # The job header and the WORK box come before anything the fill adds or removes, so their
-        # ids are the template's; the addenda line sits below the PRICE box, whose Options gap the
-        # fill redraws, so it is found by its words.
+        out = pw.fill_proposal(work_type=work_type, audience="GC", values=dict(values))
+        doc = [b["text"] for b in _walk(out)]
+        by_id = _box_texts_by_template_id(out, rel)
+        # The job header and the WORK box come before anything the fill adds or removes in the
+        # boxes, so they are found by the template's id (`_box_texts_by_template_id`); the addenda
+        # line sits below the PRICE box, whose Options gap the fill redraws, so it is found by its
+        # words.
         for bid in ids:
             if bid < 128:
-                assert screen[str(bid)] == doc[bid], (rel, bid, screen[str(bid)], doc[bid])
+                assert screen[str(bid)] == by_id[bid], (rel, bid, screen[str(bid)], by_id[bid])
             else:
                 assert screen[str(bid)] in doc, (rel, bid, screen[str(bid)])
 

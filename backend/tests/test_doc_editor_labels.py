@@ -1001,10 +1001,19 @@ def test_the_line_spacing_comes_from_the_file_not_a_constant(ran):
     """The editor used one flat `line-height: 1.32` for a box whose rows are genuinely 1.15 and
     1.25 — looser than both, and erasing the distinction between them. `line` is 240ths of a line
     under `lineRule="auto"`, so 276 is 1.15 and 300 is 1.25; the RULE has to travel with the number
-    because the same field is twips under `exact`."""
+    because the same field is twips under `exact`.
+
+    1.15 and 1.25 of the FACE'S single line, not of its size (2026-10-02): Word and LibreOffice
+    multiply Zetta Serif's own 1.045em line, which CSS's unitless line-height does not know about,
+    so the style carries the product (paraLineHeight; test_editor_layout.py measures it against the
+    PDF). The multiple is still the file's -- 1.15 and 1.25 times the same constant."""
     _, paras = _work_paras()
     assert paras["system.name"]["spacing"]["line"] == 276, paras["system.name"]["spacing"]
     assert paras["system.sqft"]["spacing"]["line"] == 300, paras["system.sqft"]["spacing"]
     got = {r["field"]: r["style"].replace(" ", "") for r in ran["workGeometry"]["rows"]}
-    assert "line-height:1.15" in got["name_line"], got["name_line"]
-    assert "line-height:1.25" in got["area_line"], got["area_line"]
+    em = float(re.search(r"\n  const SINGLE_LINE_EM = ([\d.]+);",
+                         (FRONTEND / "js" / "proposal-review.js").read_text(encoding="utf-8")).group(1))
+    lh = {k: float(re.search(r"line-height:([\d.]+)", v).group(1)) for k, v in got.items()
+          if k in ("name_line", "area_line")}
+    assert lh["name_line"] == pytest.approx(1.15 * em, abs=1e-5), got["name_line"]
+    assert lh["area_line"] == pytest.approx(1.25 * em, abs=1e-5), got["area_line"]

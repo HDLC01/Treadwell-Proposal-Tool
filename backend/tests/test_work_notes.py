@@ -1,8 +1,11 @@
-"""WORK 'Notes:' line ({{work_notes}}) — an editable per-job note that always
-renders in the WORK section of the Direct epoxy/polish + gyp templates (Kyle:
-"Note should always be present"). Combo/budget have a different WORK layout and
-are handled separately. The backend coerces work_notes to a string so a blank
-never leaks a raw {{work_notes}} token onto a customer proposal.
+"""WORK 'Notes:' line ({{work_notes}}) — an editable per-job note in the WORK section of the
+Direct epoxy/polish + gyp templates (Kyle: "Note should always be present"). Combo/budget have a
+different WORK layout and are handled separately. The backend coerces work_notes to a string so a
+blank never leaks a raw {{work_notes}} token onto a customer proposal.
+
+Since 2026-10-02 a BLANK note leaves its line out of the document (the audit found a bare
+"Notes:" bullet on a customer's page 1; proposal_writer._omit_bare_lines); a note with words in
+it always prints, and so does the line where it heads a sub-note of Kyle's (Gyp).
 """
 import io
 import re
@@ -53,7 +56,13 @@ def test_blank_work_notes_never_leaks_raw_token():
         # explicit empty
         xml, text = _gen(wt, work_notes="")
         assert "{{work_notes}}" not in xml, f"{wt}: raw token on empty work_notes"
-        assert "Notes:" in text, f"{wt}: 'Notes:' label should still be present when blank"
+        # A blank note leaves the line out (the 2026-10-02 audit: a bare "Notes:" bullet printed
+        # on the customer's page 1; proposal_writer._omit_bare_lines). Gyp's line stays, because it
+        # heads Kyle's own sub-note "Floor Leveling is NOT included".
+        if wt == "gyp":
+            assert "Notes:" in text, "gyp: the Notes line over Kyle's sub-note went"
+        else:
+            assert "Notes:" not in text, f"{wt}: a blank 'Notes:' line still prints"
 
     # omitted entirely — _ensure_value_aliases must still coerce it
     v = _vals("polish")

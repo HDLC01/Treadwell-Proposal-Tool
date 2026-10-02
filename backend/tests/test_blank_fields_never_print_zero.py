@@ -137,9 +137,14 @@ def test_the_document_prints_a_blank_texture_and_system_as_blank(work_type, audi
                                            "values": values})
     assert r.status_code == 200, r.text
     # Split on the labels: several WORK rows share one text-box paragraph in some templates.
-    text = "\n".join(_rendered(client.get(r.json()["docx_download_url"]).content))
+    lines = _rendered(client.get(r.json()["docx_download_url"]).content)
+    text = "\n".join(lines)
+    # A blank Texture leaves its whole line out (Hanz, 2026-09-25; proposal_writer._omit_bare_lines)
+    # -- so no "Texture:" with nothing after it, and the Combo's "Option 1:" row is what is left
+    # to check the system name on.
+    assert not [t for t in lines if t.strip(" .") == "Texture:"], f"{work_type}/{audience}: bare Texture:"
     seen = 0
-    for label in ("Texture:", "System:"):
+    for label in ("Texture:", "System:", "Option 1:"):
         for chunk in text.split(label)[1:]:
             seen += 1
             value = chunk.split("\n", 1)[0].split("Area:", 1)[0].split("Texture:", 1)[0].strip()

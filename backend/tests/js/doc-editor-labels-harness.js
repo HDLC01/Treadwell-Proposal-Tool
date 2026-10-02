@@ -458,8 +458,15 @@ const LIFTED = [
   // the document does not have. Lifted, not stubbed: this harness owns those rows, and a stub
   // returning "" would test the old geometry while calling it the new one.
   fn("sysRowTemplate"), fn("sysRowStyle"), fn("sysRowSizePt"),
+  // applyParaGeom puts a paragraph's vertical geometry on through applyParaSpacing, whose line
+  // height is the file's multiple of the face's own single line (paraLineHeight).
+  topConst("SINGLE_LINE_EM"), fn("paraLineHeight"), fn("applyParaSpacing"),
   fn("workLabelHtml"),
   fn("effectiveWorkType"), fn("sheetSystems"), fn("renderSystemPreview"), fn("serializeBlock"),
+  // renderSystemPreview ends by asking which WORK lines print only their label
+  // (render_adjustments.lines); with no plan loaded -- `templateAdjustments` null, below -- it
+  // answers nothing and hides nothing. terms-pages-harness.js runs it with the plan.
+  fn("setRenderHidden"), fn("workLineBare"), fn("applyBareWorkLines"),
   topConst("PT_PER_CSS_PX"), topConst("BOX_DRAG_SLOP_PT"), topConst("BOX_EPS_PT"),
   topConst("isAutoGrown"),
   fn("zoomScale"), fn("ptFromClientPx"), fn("clampPt"), fn("dragBoxRect"),
@@ -479,6 +486,10 @@ const LIFTED = [
   // applyBoxFit leaves the box at its design size, which is the page before its first answer.
   topConst("boxFitById"), topConst("PAGE_HP"), fn("inlineHp"), fn("clearBoxFit"), fn("applyBoxFit"),
   fn("fitTxbx"), fn("fitNotesBox"), fn("wireOverflowExpand"),
+  // fitTxbx, fitOffer, growBoxToFit and releaseAutoGrownHeight measure a box by how far its
+  // PRINTED text reaches (boxContentPx -> boxInkPx), which falls back to the box's own height
+  // when no line in it is laid out -- as here, where only the box has a modelled height.
+  fn("boxInkPx"), fn("boxContentPx"),
   // ── the paragraph controls (bullet / indent) and everything they touch ──
   // The toolbar's own click handler reaches toggleFormat and applyFormat on the B/I/U buttons,
   // and showFmtBar reads selectionFormat, so those are lifted too rather than stubbed: a stub
@@ -561,6 +572,7 @@ const api = new Function(
   `const state = TW.getState();
   let boxOverrides = new Map(); let boxLimits = null; let docZoom = null;
   let templateBlocks = [{ id: 1, txbx: 0 }];
+  let templateAdjustments = null;   // the page's own binding: no render_adjustments loaded
   // Debounces are collapsed to "run now": what is under test is what gets WRITTEN, and a real
   // timer would make every assertion below a race.
   const setTimeout = (f) => { f(); return 1; };

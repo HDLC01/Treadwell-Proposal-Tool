@@ -276,6 +276,11 @@ const UNITS = [
   // The paragraph controls, and the ribbon's one entry point into them.
   fn("paraBase"), fn("paraNow"), fn("paraPatch"), fn("sanitizeParaPatch"),
   fn("applyParaGeom"), fn("applyParaToEl"), fn("setParaState"),
+  // paintLineParas and paintOptionsGap give each composed PRICE line the spacing of the paragraph
+  // the document prints it from (priceLineRecord; the gap's lines, the row above it:
+  // gapModelRecord), through applyParaSpacing.
+  topConst("SINGLE_LINE_EM"), fn("paraLineHeight"), fn("applyParaSpacing"),
+  fn("priceLineRecord"), fn("gapModelRecord"),
   fn("isPriceLine"), fn("takesPriceStep"), fn("priceLineAction"), fn("paraAction"),
   // The ribbon: built, aimed and pressed by the page's own code. A price line takes the early branch
   // of renderFmtBar, so the run-formatting half (selectionFormat and friends) is never reached here.

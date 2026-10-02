@@ -444,6 +444,8 @@ const api = new Function(
     fn("runsEqual"), fn("pointAt"), fn("markEdited"),
     fn("lineAt"), fn("lineAtSelection"), fn("editingBox"), fn("boxLines"), fn("lineShown"),
     fn("paraBase"), fn("paraNow"), fn("sanitizeParaPatch"), fn("applyParaGeom"),
+    // applyParaGeom's vertical geometry: applyParaSpacing / paraLineHeight / SINGLE_LINE_EM.
+    topConst("SINGLE_LINE_EM"), fn("paraLineHeight"), fn("applyParaSpacing"),
     fn("applyParaToEl"), fn("setParaState"), fn("paraAction"),
     // A PRICE LINE is a ribbon target too (the REBID price box): paraAction hands one to
     // priceLineAction, after asking isPriceLine.

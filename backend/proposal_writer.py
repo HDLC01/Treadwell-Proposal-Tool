@@ -1806,6 +1806,588 @@ def _force_terms_on_new_page(d: Document) -> bool:
     return True
 
 
+# ─── THE TERMS PAGES: one letterhead per page, wherever the renderer breaks them ───────────────
+# The 2026-10-02 audit of a Direct Epoxy proposal ("Release check 9-26", the 4-page LibreOffice
+# PDF): clause 9 broke mid-sentence ("...a reasonable opportunity" / "to" / "inspect the
+# alleged..."), clause 18 printed in three pieces round a one-inch hole, and the last page had no
+# footer and no red bar -- its letterhead was drawn at y=42..833pt, 42pt low and off the sheet.
+#
+# THE CAUSE IS HOW THE PAGES ARE BUILT, NOT A FONT. Each Terms page's full-page letterhead PNG is a
+# picture anchored RELATIVE TO A PARAGRAPH: an empty "host" paragraph Kyle put at the top of each
+# page in Word (Direct and GC: body paragraphs 46, 63 and 79; Gyp: 46, 67, 83 and 105). To land
+# the hosts on page tops he padded each page with empty lines and split clause paragraphs by hand
+# exactly where Word broke the line at the foot of a page. That holds only in a renderer that
+# breaks every line where Word does. LibreOffice does not: not with Liberation Sans standing in
+# for Cambria, and not with Caladea, Cambria's metric twin, either (measured in the production
+# image, backend/ops/terms_render_proof.py): a host lands mid-page with its letterhead, two on one
+# page and none on the next, the footer bar goes off the sheet, and each hand split prints as a
+# broken sentence or a hole. A page break before every host (the obvious repair) was measured too
+# and rejected: it keeps one letterhead per page only for as long as each page's text still fits
+# above the next break, which the first edited clause or substituted font undoes, and it leaves
+# every hand split in place.
+#
+# SO THE PAGE CARRIES THE LETTERHEAD, NOT A PARAGRAPH. `_rebuild_terms_pages`, at render time and
+# after every override has landed on the pristine walk:
+#   1. ends page 1's section on the last paragraph before the Terms, with a copy of the document's
+#      own section properties, so page 1's setup, header, footer and art are untouched;
+#   2. gives the Terms section ONE letterhead -- Kyle's anchor, copied into the section's header,
+#      page-relative at (0, 0) and behind the text, with its own relationship to the same PNG -- so
+#      every Terms page prints it, however many there are and wherever they break; an empty footer
+#      of its own; and a top margin that clears the logo, the job Kyle's spacer lines did;
+#   3. takes the per-page art out of the hosts, drops the hosts and the spacer lines round them
+#      when they print nothing, and rejoins every clause Kyle split by hand: one that stops
+#      mid-sentence, followed by its unnumbered continuation.
+#
+# ONE PLAN, TWO READERS. `_terms_layout` reads the plan off the PRISTINE template. fill_proposal
+# holds it from before Phase 0 and applies it last; `render_adjustments` hands the same plan to the
+# editor as block ids (/api/proposal-template), so the page and the PDF make the same changes.
+# Nothing here changes the walk or a template file, so every saved edit lands where it always did.
+#
+# 126pt: the logo on the Terms letterhead ends at y=120.1pt (measured off image2.png, the art
+# every template's Terms pages use), and Kyle's own continuation pages start their text at ~124pt
+# (the host line and four spacer lines under the 1in margin; 124.1pt in LibreOffice, ~128 in Word).
+_TERMS_TOP_MARGIN_TW = 2520
+# A clause paragraph that ends like this ends a sentence; one that does not, followed by an
+# unnumbered paragraph, is one of Kyle's hand splits. Served to the editor verbatim (it reads the
+# same in a JS RegExp).
+_TERMS_SENTENCE_END = "[.:;!?)\\]\"'”’]\\s*$"
+_TERMS_SENTENCE_END_RE = re.compile(_TERMS_SENTENCE_END)
+# A picture this share of the sheet or more, in both directions, is a letterhead, not a logo.
+_FULL_PAGE_SHARE = 0.9
+_WP14_NS = "http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing"
+
+
+def _is_full_page_art(anchor, page_emu) -> bool:
+    """A `wp:anchor` drawing a picture over (nearly) the whole sheet: one of Kyle's letterheads."""
+    if anchor is None or anchor.tag != qn("wp:anchor"):
+        return False
+    if anchor.find(".//" + qn("a:blip")) is None:
+        return False
+    ext = anchor.find(qn("wp:extent"))
+    try:
+        cx, cy = int(ext.get("cx")), int(ext.get("cy"))
+    except (AttributeError, TypeError, ValueError):
+        return False
+    return cx >= _FULL_PAGE_SHARE * page_emu[0] and cy >= _FULL_PAGE_SHARE * page_emu[1]
+
+
+def _art_anchors(p_elem, page_emu) -> list:
+    """The full-page letterhead anchors a body paragraph hosts (never a VML Fallback twin)."""
+    return [a for a in p_elem.iter(qn("wp:anchor"))
+            if not _is_fallback_paragraph(a) and _is_full_page_art(a, page_emu)]
+
+
+# What an empty line may hold and still be taken out: its own properties, and runs that carry
+# nothing but formatting, empty text and Word's own "a page broke here last time" hint.
+_EMPTY_RUN_CHILDREN = tuple(qn(t) for t in ("w:rPr", "w:t", "w:lastRenderedPageBreak"))
+
+
+def _prints_nothing(p_elem, ignore=()) -> bool:
+    """True when the paragraph is an empty line and nothing else: its children are its `w:pPr`
+    (without section properties) and runs holding only formatting, empty text and the
+    `w:lastRenderedPageBreak` hint -- apart from the drawings in `ignore` (the letterheads being
+    taken out of it). Anything else -- a word, a tab, a break, a bookmark, a field, a tracked
+    change, another drawing -- keeps it. The test every drop below is made against, on the
+    template and again at render time, where an estimator's edit can have put words in it."""
+    ppr = p_elem.find(qn("w:pPr"))
+    if ppr is not None and ppr.find(qn("w:sectPr")) is not None:
+        return False
+    for child in p_elem:
+        if child.tag == qn("w:pPr"):
+            continue
+        if child.tag != qn("w:r"):
+            return False
+        for rc in child:
+            if any(rc is g for g in ignore):
+                continue
+            if rc.tag not in _EMPTY_RUN_CHILDREN:
+                return False
+            if rc.tag == qn("w:t") and (rc.text or "").strip():
+                return False
+    return True
+
+
+def _terms_layout(d: Document):
+    """The Terms pages' plan, read off the PRISTINE template; None when the template has no Terms
+    section built the way this understands (Budget has no Terms at all), and then nothing about the
+    Terms is changed and `_force_terms_on_new_page` alone applies, as it always did.
+
+    `{"break_after", "first", "hosts", "art", "drop", "joins", "heading", "page_emu"}`, all lxml
+    elements of `d` (body paragraphs, and `art` the anchor to copy): the paragraph page 1's section
+    ends on, the first Terms paragraph (a host, or the heading when the heading hosts the art), the
+    hosts, Kyle's first Terms-page anchor, the paragraphs dropped when they print nothing, and the
+    `(head, continuation)` pairs of every hand split. Read-only."""
+    body = d.element.body
+    tops = [c for c in body if c.tag == qn("w:p")]
+    heading = next((i for i, p in enumerate(tops)
+                    if _p_text(p).strip().upper() == "TERMS AND CONDITIONS"), None)
+    if heading is None:
+        return None
+    # A template that already has sections of its own is not one this was built against.
+    if any(p.find(qn("w:pPr") + "/" + qn("w:sectPr")) is not None for p in tops):
+        return None
+    w_pt, h_pt = page_size(d)
+    page_emu = (w_pt * _EMU_PER_PT, h_pt * _EMU_PER_PT)
+    first = next((j for j in range(heading, max(-1, heading - 4), -1)
+                  if _art_anchors(tops[j], page_emu)), None)
+    if first is None or first == 0:
+        return None
+    hosts = [i for i in range(first, len(tops)) if _art_anchors(tops[i], page_emu)]
+    arts = {i: _art_anchors(tops[i], page_emu) for i in hosts}
+
+    def blank(i):
+        return _prints_nothing(tops[i], [a.getparent() for a in arts.get(i, [])])
+
+    drop = set()
+    # The first host and the empty lines between it and the heading (Gyp has one): the Terms'
+    # first page starts at the section's own top margin now. Never the lines BEFORE it -- those
+    # are page 1's.
+    for i in range(first, heading):
+        if blank(i):
+            drop.add(i)
+    # Every later host, and the whole run of empty lines round it: Kyle's padding to the foot of
+    # one page and down past the logo on the next.
+    for h in hosts:
+        if h <= heading or not blank(h):
+            continue
+        lo = h
+        while lo - 1 > heading and blank(lo - 1):
+            lo -= 1
+        hi = h
+        while hi + 1 < len(tops) and blank(hi + 1):
+            hi += 1
+        drop.update(range(lo, hi + 1))
+    # The empty lines after the last words: they can only ever spill onto a page of their own.
+    tail = len(tops) - 1
+    while tail > heading and blank(tail):
+        drop.add(tail)
+        tail -= 1
+
+    # The hand splits, from the first numbered clause on (the heading lines above it are not
+    # sentences). A pair is two paragraphs with words, with nothing between them but dropped lines.
+    clause0 = next((i for i in range(heading, len(tops)) if _para_num_ref(tops[i]) is not None), None)
+    joins = []
+    if clause0 is not None:
+        printing = [i for i in range(clause0, len(tops)) if i not in drop and _own_text(tops[i]).strip()]
+        for a, b in zip(printing, printing[1:]):
+            if any(k not in drop for k in range(a + 1, b)):
+                continue                     # a kept line between them: two paragraphs, as written
+            if _TERMS_SENTENCE_END_RE.search(_own_text(tops[a]).strip()):
+                continue
+            if _para_num_ref(tops[b]) is not None:
+                continue                     # the next clause, not a continuation
+            joins.append((tops[a], tops[b]))
+
+    return {
+        "heading": tops[heading],
+        "first": tops[first],
+        "break_after": tops[first - 1],
+        "hosts": [tops[i] for i in hosts],
+        "art": arts[first][0],
+        "drop": [tops[i] for i in sorted(drop)],
+        "joins": joins,
+        "page_emu": page_emu,
+    }
+
+
+_BLOCK_TAGS = tuple(qn(t) for t in ("w:p", "w:tbl", "w:sdt", "w:sectPr"))
+
+
+def _next_block(p_elem):
+    """The block-level element after `p_elem` (a paragraph, table, content control or the body's
+    section properties), skipping the bookmarks and range marks that may sit between two."""
+    nxt = p_elem.getnext()
+    while nxt is not None and nxt.tag not in _BLOCK_TAGS:
+        nxt = nxt.getnext()
+    return nxt
+
+
+def _join_paragraphs(head, tail) -> None:
+    """Move `tail`'s content onto the end of `head`, then take `tail` out. `head` keeps its own
+    paragraph properties (the clause number and indent); every run keeps its own formatting. One
+    space goes between them when neither side has one -- "opportunity to" + "inspect" -- and none
+    when Kyle's split already left it ("filed with " + "AAA.")."""
+    a_text, b_text = _own_text(head), _own_text(tail)
+    if a_text and b_text and not a_text[-1].isspace() and not b_text[0].isspace():
+        last_t = None
+        for t in head.iter(qn("w:t")):
+            last_t = t
+        if last_t is not None:
+            last_t.text = (last_t.text or "") + " "
+            last_t.set(qn("xml:space"), "preserve")
+    for child in list(tail):
+        if child.tag == qn("w:pPr"):
+            continue
+        head.append(child)
+    parent = tail.getparent()
+    if parent is not None:
+        parent.remove(tail)
+
+
+def _take_out_art(p_elem, page_emu) -> int:
+    """Remove the full-page letterhead(s) this paragraph hosts, and a run left with nothing in it."""
+    n = 0
+    for anchor in _art_anchors(p_elem, page_emu):
+        drawing = anchor.getparent()
+        holder = drawing
+        # A picture wrapped for old readers sits in mc:AlternateContent; the whole wrapper goes.
+        for anc in drawing.iterancestors():
+            if anc.tag == "{%s}AlternateContent" % _MC_NS:
+                holder = anc
+                break
+            if anc.tag == qn("w:r"):
+                break
+        run = holder.getparent()
+        while run is not None and run.tag != qn("w:r"):
+            run = run.getparent()
+        holder.getparent().remove(holder)
+        n += 1
+        if run is not None and run.getparent() is not None:
+            leftover = [c for c in run if c.tag not in (qn("w:rPr"), qn("w:lastRenderedPageBreak"))]
+            if not leftover:
+                run.getparent().remove(run)
+    return n
+
+
+def _max_drawing_id(d: Document) -> int:
+    """The largest `wp:docPr` id in the package -- the body AND every header and footer: Word reads
+    a duplicate drawing id as a document to repair."""
+    best = 0
+    for part in d.part.package.iter_parts():
+        root = getattr(part, "element", None)
+        if root is None:
+            continue
+        for dp in root.iter(qn("wp:docPr")):
+            try:
+                best = max(best, int(dp.get("id")))
+            except (TypeError, ValueError):
+                continue
+    return best
+
+
+def _terms_header_paragraph(anchor):
+    """The one paragraph of the Terms section's header: Kyle's letterhead, nothing else."""
+    p = OxmlElement("w:p")
+    r = OxmlElement("w:r")
+    rpr = OxmlElement("w:rPr")
+    rpr.append(OxmlElement("w:noProof"))
+    r.append(rpr)
+    drawing = OxmlElement("w:drawing")
+    drawing.append(anchor)
+    r.append(drawing)
+    p.append(r)
+    return p
+
+
+def _rebuild_terms_pages(d: Document, layout) -> bool:
+    """Apply `_terms_layout`'s plan to the FILLED document (see the note above). Returns True when
+    the Terms became a section with its own letterhead; False, with the document untouched, when
+    there is no plan or the document no longer matches it (the old single-section output, with
+    `_force_terms_on_new_page`'s break, is what then prints)."""
+    if not layout:
+        return False
+    body = d.element.body
+    first, brk = layout["first"], layout["break_after"]
+    body_sect = body.find(qn("w:sectPr"))
+    if body_sect is None or first.getparent() is not body or brk.getparent() is not body:
+        return False
+    art = layout["art"]
+    blip = art.find(".//" + qn("a:blip"))
+    rid = blip.get(qn("r:embed")) if blip is not None else None
+    image_part = d.part.related_parts.get(rid) if rid else None
+    if image_part is None:
+        return False
+    from docx.enum.section import WD_SECTION
+    from docx.opc.constants import RELATIONSHIP_TYPE as RT
+    from docx.shared import Twips
+
+    anchor = copy.deepcopy(art)
+    page_emu = layout["page_emu"]
+
+    # 1. Page 1's section ends here, on a COPY of the document's own section properties: its page
+    #    setup, header and footer references stay exactly what page 1 had.
+    ppr = _get_or_make_ppr(brk)
+    sect1 = copy.deepcopy(body_sect)
+    change = ppr.find(qn("w:pPrChange"))
+    if change is not None:
+        change.addprevious(sect1)
+    else:
+        ppr.append(sect1)
+
+    # 2. The Terms section: a new page, its own header (the letterhead) and its own empty footer,
+    #    and the top margin that clears the logo.
+    for ref in body_sect.findall(qn("w:headerReference")) + body_sect.findall(qn("w:footerReference")):
+        body_sect.remove(ref)
+    for el in body_sect.findall(qn("w:titlePg")):
+        body_sect.remove(el)
+    sec = d.sections[-1]
+    sec.start_type = WD_SECTION.NEW_PAGE
+    sec.header.is_linked_to_previous = False
+    sec.footer.is_linked_to_previous = False
+    if sec.top_margin is None or sec.top_margin < Twips(_TERMS_TOP_MARGIN_TW):
+        sec.top_margin = Twips(_TERMS_TOP_MARGIN_TW)
+    header = sec.header
+    new_rid = header.part.relate_to(image_part, RT.IMAGE)
+    for tag in ("wp:positionH", "wp:positionV"):
+        pos = anchor.find(qn(tag))
+        if pos is None:
+            pos = OxmlElement(tag)
+            anchor.append(pos)
+        pos.set("relativeFrom", "page")
+        for c in list(pos):
+            pos.remove(c)
+        off = OxmlElement("wp:posOffset")
+        off.text = "0"
+        pos.append(off)
+    anchor.find(".//" + qn("a:blip")).set(qn("r:embed"), new_rid)
+    anchor.set("behindDoc", "1")
+    for key in list(anchor.attrib):
+        if key.startswith("{%s}" % _WP14_NS):        # anchorId/editId: Word mints its own
+            del anchor.attrib[key]
+    docpr = anchor.find(qn("wp:docPr"))
+    if docpr is not None:
+        docpr.set("id", str(_max_drawing_id(d) + 1))
+    hdr = header._element
+    for p in hdr.findall(qn("w:p")):
+        hdr.remove(p)
+    hdr.append(_terms_header_paragraph(anchor))
+
+    # 3. The per-page art out of the hosts, then the empty lines dropped, then the hand splits
+    #    rejoined -- in that order, because a split is only rejoined across lines that are GONE: a
+    #    line an estimator typed into between the two halves stays, and so do both halves.
+    for host in layout["hosts"]:
+        _take_out_art(host, page_emu)
+    for p in layout["drop"]:
+        if p.getparent() is body and _prints_nothing(p):
+            body.remove(p)
+    absorbed: dict = {}                      # element -> the paragraph its words now live in
+    for head, tail in layout["joins"]:
+        into = absorbed.get(head, head)
+        if into.getparent() is not body or tail.getparent() is not body:
+            continue
+        if _next_block(into) is not tail:
+            continue
+        a_text, b_text = _own_text(into).strip(), _own_text(tail).strip()
+        if not a_text or not b_text or _TERMS_SENTENCE_END_RE.search(a_text):
+            continue
+        if _para_num_ref(tail) is not None:
+            continue
+        _join_paragraphs(into, tail)
+        absorbed[tail] = into
+
+    # The first Terms paragraph keeps the page break it has always had (and the Sealer's heading
+    # already carries), now redundant with the section break and harmless: neither Word nor
+    # LibreOffice breaks a page again for a paragraph that already starts one.
+    start = brk.getnext()
+    while start is not None and start.tag != qn("w:p"):
+        start = start.getnext()
+    if start is not None:
+        sppr = _get_or_make_ppr(start)
+        if sppr.find(qn("w:pageBreakBefore")) is None:
+            _insert_pbb(sppr)
+    return True
+
+
+def _insert_pbb(ppr) -> None:
+    """`w:pageBreakBefore` in its schema slot: after pStyle / keepNext / keepLines, before the rest."""
+    pbb = OxmlElement("w:pageBreakBefore")
+    for child in ppr:
+        if child.tag not in (qn("w:pStyle"), qn("w:keepNext"), qn("w:keepLines")):
+            child.addprevious(pbb)
+            return
+    ppr.append(pbb)
+
+
+# ─── WORK lines that would print nothing but their label ───────────────────────────────────────
+# The same audit: a blank Texture printed "Texture:" on a line of its own and a blank WORK note a
+# bare "Notes:" bullet. Hanz chose on 2026-09-25 that a blank Texture leaves the whole line out
+# (memory: live-proposal-fix-plan-decisions), and nothing ever did it: fix 2 of that plan (ef69567)
+# only stopped the line printing "Texture: 0". Direct Epoxy's Texture row also lives inside the
+# {{#system}} region, cloned per priced system, which no paragraph-level rule reaches.
+#
+# THE LINES ARE THE TEMPLATE'S OWN "Label: {{token}}" ROWS for the tokens below, found on the
+# pristine template (so the editor is told the same ids, `render_adjustments`) and MARKED there,
+# so a {{#system}} clone carries the mark. After substitution a marked line goes when it prints
+# nothing but its label: no letter or digit after its first colon (Combo's "Texture: ." too). Kept
+# whenever anything else is on it -- the estimator's words, a whole-line rewrite, Kyle's own words
+# on the GC forms (which are therefore never marked) -- and kept when it heads sub-items that print
+# (Gyp's "Notes:" over "Floor Leveling is NOT included"), when it is the last line in its box, or
+# when it holds a drawing.
+_BARE_LINE_TOKENS = ("texture", "system.texture", "work_notes")
+_BARE_LINE_RE = re.compile(
+    r"^\s*(?P<label>[^{}:]*[^\s{}:][^{}:]*:)\s*\{\{\s*(?P<token>[a-zA-Z_][a-zA-Z0-9_.]*)\s*\}\}\s*\.?\s*$")
+# Marked in the `w:` namespace for `_OPTIONS_HEADING_ATTR`'s reason, and always stripped before
+# the save (`_omit_bare_lines`).
+_BARE_LINE_ATTR = qn("w:twBareLine")
+
+
+def _bare_line_spec(text):
+    """`{"label", "token"}` when a template paragraph's own text is a "Label: {{token}}" WORK row for
+    one of `_BARE_LINE_TOKENS`, else None."""
+    m = _BARE_LINE_RE.match(text or "")
+    if not m or m.group("token") not in _BARE_LINE_TOKENS:
+        return None
+    return {"label": m.group("label").strip(), "token": m.group("token")}
+
+
+def _ilvl(ref) -> int:
+    try:
+        return int(ref[1])
+    except (TypeError, ValueError, IndexError):
+        return 0
+
+
+def _sub_items(p_elem) -> list:
+    """The paragraphs right after `p_elem` in its container that are deeper levels of its list."""
+    ref = _para_num_ref(p_elem)
+    out = []
+    if ref is None:
+        return out
+    nxt = p_elem.getnext()
+    while nxt is not None:
+        if nxt.tag == qn("w:p"):
+            r = _para_num_ref(nxt)
+            if r is None or r[0] != ref[0] or _ilvl(r) <= _ilvl(ref):
+                break
+            out.append(nxt)
+        nxt = nxt.getnext()
+    return out
+
+
+def _mark_bare_lines(d: Document) -> int:
+    """Mark every copy of every eligible label line on the PRISTINE template (both copies of a text
+    box, the VML Fallback twin included, as `_mark_options_headings` does)."""
+    n = 0
+    for p in d.element.body.iter(qn("w:p")):
+        if _bare_line_spec(_own_text(p)) is not None:
+            p.set(_BARE_LINE_ATTR, "1")
+            n += 1
+    return n
+
+
+def _line_is_bare(p_elem) -> bool:
+    """Prints nothing but its label: words before a first colon, no letter or digit after it, and
+    nothing drawn, anchored or sectioned in it."""
+    text = _own_text(p_elem)
+    colon = text.find(":")
+    if colon < 0 or not text[:colon].strip():
+        return False
+    if re.search(r"[^\W_]", text[colon + 1:]):
+        return False
+    if any(next(p_elem.iter(qn(t)), None) is not None
+           for t in ("w:drawing", "w:pict", "w:object", "w:txbxContent")):
+        return False
+    ppr = p_elem.find(qn("w:pPr"))
+    return not (ppr is not None and ppr.find(qn("w:sectPr")) is not None)
+
+
+def _omit_bare_lines(d: Document) -> int:
+    """Take out every marked line that, as filled, prints nothing but its label (see the note
+    above), then strip every mark. Returns the lines taken out."""
+    n = 0
+    for p in [p for p in d.element.body.iter(qn("w:p")) if p.get(_BARE_LINE_ATTR) is not None]:
+        del p.attrib[_BARE_LINE_ATTR]
+        parent = p.getparent()
+        if parent is None or not _line_is_bare(p):
+            continue
+        if any(_own_text(s).strip() for s in _sub_items(p)):
+            continue
+        if sum(1 for c in parent if c.tag == qn("w:p")) <= 1:
+            continue                       # a text box with no paragraph is a file Word refuses
+        parent.remove(p)
+        n += 1
+    for p in d.element.body.iter(qn("w:p")):
+        if p.get(_BARE_LINE_ATTR) is not None:
+            del p.attrib[_BARE_LINE_ATTR]
+    return n
+
+
+# ─── What the render changes, for the editor ───────────────────────────────────────────────────
+RENDER_ADJUSTMENTS_VERSION = 1
+
+
+def render_adjustments(d: Document) -> dict:
+    """What `fill_proposal` changes about the document's LAYOUT beyond the values, as block ids of
+    `iter_editable_blocks` over the PRISTINE template `d` -- the Terms pages (`_terms_layout`) and
+    the WORK lines that go when bare (`_omit_bare_lines`) -- so the editor can make the same changes
+    from the same plan. Served on /api/proposal-template as `render_adjustments`.
+
+      terms: null, or
+        first_id               -- the first Terms block; the Terms are a section of their own,
+                                  starting on a new page, from here on
+        section_break_after_id -- the last block of page 1's section
+        page                   -- the Terms pages' {w_pt, h_pt, margin{top,left,right,bottom}} (pt)
+        art                    -- {name, x_pt, y_pt, w_pt, h_pt}: the letterhead EVERY Terms page
+                                  prints, page-relative and behind the text (name: as
+                                  /api/proposal-template/media serves it); page 1 keeps its own
+        art_host_ids           -- blocks whose own full-page art is taken out (first)
+        drop_if_blank_ids      -- blocks removed (second) when, with that art gone, they print
+                                  nothing: no words, nothing drawn, no tab, break or field
+        join_pairs             -- [head, continuation], applied in order (third): the
+                                  continuation joins the paragraph that now holds `head` (head
+                                  itself, or what head was joined into) when, after the drops, it
+                                  is that paragraph's very next block, that paragraph's text does
+                                  not match `sentence_end`, and the continuation has words and is
+                                  not a numbered clause. Head's paragraph properties win; every
+                                  run keeps its own formatting; one space goes between them when
+                                  neither side has one
+        sentence_end           -- the regular expression (JS-compatible) of a sentence's end
+      lines: [{id, in_block, token, label, line_key, sub_item_ids}] -- a WORK line that is left out
+        when, as filled, nothing but its label prints (no letter or digit after its first colon),
+        unless one of `sub_item_ids` prints words. `in_block: "system"` is the {{#system}} row:
+        each priced system's copy of it, whose whole-line override is `line_key`."""
+    ids = {}
+    for idx, _kind, p_elem, _in_block, _text, _txbx in iter_editable_blocks(d):
+        ids[p_elem] = idx
+    out = {"version": RENDER_ADJUSTMENTS_VERSION, "terms": None, "lines": []}
+
+    layout = _terms_layout(d)
+    if layout is not None and all(p in ids for p in [layout["first"], layout["break_after"]]):
+        sec = d.sections[0]
+        margin = _margins_of(d, 0)
+        margin["top"] = max(margin["top"], _TERMS_TOP_MARGIN_TW / 20.0)
+        art = layout["art"]
+        ext = art.find(qn("wp:extent"))
+        blip = art.find(".//" + qn("a:blip"))
+        try:
+            name = d.part.rels[blip.get(qn("r:embed"))].target_ref.rsplit("/", 1)[-1]
+        except (AttributeError, KeyError):
+            name = None
+        try:
+            page_w, page_h = float(sec.page_width.pt), float(sec.page_height.pt)
+        except Exception:  # noqa: BLE001 -- Letter, as everywhere else in this module
+            page_w, page_h = _DEFAULT_PAGE_PT
+        out["terms"] = {
+            "first_id": ids[layout["first"]],
+            "section_break_after_id": ids[layout["break_after"]],
+            "page": {"w_pt": page_w, "h_pt": page_h, "margin": margin},
+            "art": {"name": name, "x_pt": 0.0, "y_pt": 0.0,
+                    "w_pt": round(int(ext.get("cx")) / _EMU_PER_PT, 2),
+                    "h_pt": round(int(ext.get("cy")) / _EMU_PER_PT, 2)},
+            "art_host_ids": [ids[p] for p in layout["hosts"] if p in ids],
+            "drop_if_blank_ids": [ids[p] for p in layout["drop"] if p in ids],
+            "join_pairs": [[ids[a], ids[b]] for a, b in layout["joins"] if a in ids and b in ids],
+            "sentence_end": _TERMS_SENTENCE_END,
+        }
+
+    line_keys = {"system." + token: key for key, token in _SYSTEM_ROW_LINES}
+    for idx, _kind, p_elem, in_block, text, _txbx in iter_editable_blocks(d):
+        spec = _bare_line_spec(text)
+        if spec is None:
+            continue
+        out["lines"].append({
+            "id": idx, "in_block": in_block, "token": spec["token"], "label": spec["label"],
+            "line_key": line_keys.get(spec["token"]),
+            "sub_item_ids": [ids[s] for s in _sub_items(p_elem) if s in ids],
+        })
+    return out
+
+
+def template_render_adjustments(work_type: str, audience: str | None) -> dict:
+    """`render_adjustments` for the template `(work_type, audience)` picks."""
+    return render_adjustments(docx.Document(str(pick_template(work_type, audience))))
+
+
 # Some templates position a framed box's top edge at/above its red frame border
 # with zero top-inset, so the first line hugs / rides over the border. Which boxes
 # are affected varies PER TEMPLATE (Kyle positioned each individually; verified by
@@ -4531,6 +5113,12 @@ def fill_proposal(
 
     d = docx.Document(str(template_path))
 
+    # Read off the PRISTINE template, like every id-keyed plan: the Terms pages' rebuild (applied
+    # last, `_rebuild_terms_pages`) and the WORK lines that go when they print only their label
+    # (`_omit_bare_lines`). Neither adds or removes a paragraph here, so no editor id moves.
+    _terms = _terms_layout(d)
+    _mark_bare_lines(d)
+
     # The PRICE rows Kyle tucked into the margin (w:ind left=0 on the list) print their square in
     # the column now — BEFORE Phase 0, so an estimator's saved bullet / indent is applied to the same
     # paragraph properties /api/proposal-template showed him (it runs this too). No paragraph moves.
@@ -4658,6 +5246,11 @@ def fill_proposal(
     _n_work_format = _normalize_work_label_formatting(d)
     if _n_work_format:
         log.info("Normalized %d WORK label/value run(s)", _n_work_format)
+    # A WORK line left with nothing but its label ("Texture:", "Notes:") is left out -- before the
+    # padding and the shrink, which must measure the box without it.
+    _n_bare = _omit_bare_lines(d)
+    if _n_bare:
+        log.info("Left out %d WORK line(s) that printed only their label", _n_bare)
     # The blank lines between the price rows and the Options heading: the estimator's count from
     # the editor (default 2, Kyle's double spacing after the Total), replacing the template's own.
     if _apply_options_gap(d, options_gap, options_gap_typed, options_gap_typed_para):
@@ -4693,6 +5286,10 @@ def fill_proposal(
     # forced break, so a short body — e.g. combo — spills T&C over the acceptance).
     if _force_terms_on_new_page(d):
         log.info("Forced a page break before the Terms & Conditions section")
+    # The Terms pages print ONE letterhead each, wherever the renderer breaks them (see
+    # `_rebuild_terms_pages`). Last, so every override and every value is already in place.
+    if _rebuild_terms_pages(d, _terms):
+        log.info("Rebuilt the Terms & Conditions as their own section with a repeating letterhead")
     _n_hl = _strip_highlights(d)
     if _n_hl:
         log.info("Took %d review highlight(s) out of the customer document", _n_hl)
