@@ -338,6 +338,7 @@ for (const kase of CASES.cases) {
         markPt: el.dataset.markPt || null,
         markVar: el.style.getPropertyValue("--tw-mark-pt") || null,
         printed: el.style.getPropertyValue("--tw-fit-pt") || null,
+        twMark: el.dataset.twMark === "1",
         spans: sizes(el),
       });
     }

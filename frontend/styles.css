@@ -1210,6 +1210,19 @@ button {
    (renderBlock sets --tw-mark-pt from the template's own mark). More specific than the rule
    above, so it wins in a shrunk box too. */
 .tw-txbx .tw-block.tw-empty[data-mark-pt] { font-size: var(--tw-mark-pt) !important; }
+/* ...and a line with words keeps that mark too: Word and LibreOffice set every line the mark ends
+   at least as tall as the mark (and the list bullet, drawn at the mark's size), so a shrunk NOTES
+   box prints its 4.5pt notes 8.7pt apart, not the 5.85pt this page drew, and its first note sits
+   that much lower under the frame's rule (2026-10-03, every GC form). A no-break space at the
+   mark's size, at the end of the paragraph, is that mark (a zero-width space is not in Zetta, and
+   the fallback face's taller line overshot). Only in a shrunk box (`data-tw-fit`): anywhere else
+   the mark and the words are the same size; and only where applyBoxFit set `data-tw-mark`, on a
+   paragraph that states its line spacing, so the line height it multiplies is the document's.
+   Not on the two lines whose ::after already says something. */
+.tw-txbx .tw-block[data-tw-fit][data-tw-mark][data-mark-pt]:not(.tw-empty):not(.tw-dirty-warn):not(.tw-clause-kept)::after {
+  content: "\00a0"; font-size: var(--tw-mark-pt);
+  display: inline-block; width: 0;        /* takes height, never width: no line wraps differently */
+}
 /* WHICH paragraph the formatting ribbon is aimed at, for as long as it is aimed at it.
    Kyle, 2026-08-24: "Can we move this editable box on top as well but keep it static like a
    ribbon in a word document." The bar that floated beside the caret answered "which paragraph?"

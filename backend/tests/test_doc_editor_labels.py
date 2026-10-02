@@ -510,10 +510,12 @@ def test_the_page_geometry_the_growth_rule_is_built_on():
     geo = pw.template_geometry(docx.Document(str(DIRECT_EPOXY)))
     by_id = {b["id"]: b for b in geo["boxes"]}
     work, price, notes = by_id[2], by_id[4], by_id[3]
-    assert round(work["y_pt"] + work["h_pt"], 2) == 323.65
-    assert round(price["y_pt"], 2) == 320.95, "the overlap this rule exists for is gone"
-    assert round(price["y_pt"] - work["y_pt"], 2) == 168.3 < work["h_pt"]
-    assert round(notes["y_pt"] + notes["h_pt"], 2) == 656.6
+    # At the 14.05pt anchor line the PDF prints (test_notes_box_layout.py): the overlap is the
+    # printed one, measured in the production LibreOffice as 152.9 + 171 against 321.35.
+    assert round(work["y_pt"] + work["h_pt"], 2) == 323.9
+    assert round(price["y_pt"], 2) == 321.35, "the overlap this rule exists for is gone"
+    assert round(price["y_pt"] - work["y_pt"], 2) == 168.45 < work["h_pt"]
+    assert round(notes["y_pt"] + notes["h_pt"], 2) == 657.0
     assert geo["page"]["h_pt"] - geo["page"]["margin"]["bottom"] == 720.0
 
 

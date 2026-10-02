@@ -5515,6 +5515,10 @@
           const b = blockById.get(id);
           if (b && b.fit && b.fit.typed_sized === false) mark(c, Number(fit.default_hp) || PAGE_HP);
           else { const own = inlineHp(c); if (own != null) mark(c, own); }
+          // Its paragraph MARK keeps the design size -- the writer scales runs, never the mark --
+          // and the mark sets how tall the line it ends prints. styles.css draws it, on the lines
+          // whose height is the document's own (a stated line spacing).
+          if (b && b.para && b.para.spacing && b.para.spacing.line) c.dataset.twMark = "1";
         } else {
           const own = inlineHp(c);
           if (own != null) mark(c, own);
