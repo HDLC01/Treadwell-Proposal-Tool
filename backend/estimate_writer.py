@@ -42,9 +42,11 @@ TEMPLATE_PATH = (
 # Hand-curated dropdowns the UI exposes on the canonical Epoxy sheet —
 # the source xlsx leaves these as plain text cells, but Treadwell uses
 # them as Yes/No / New-Reno toggles. Maps cell address → option list.
+#
+# NO "B5" (Hard Bid?) since 2026-10-03 -- see HARD_BID_FLAG_CELLS. A picker on a cell the tool
+# never lets anyone change would offer a choice that does nothing.
 PROJECT_INFO_DROPDOWNS: Dict[str, list] = {
     "B4":  ["Yes", "No"],          # Local?
-    "B5":  ["Yes", "No"],          # Hard Bid?
     "D5":  ["Yes", "No"],          # Prevailing Wage?
     "B6":  ["Yes", "No"],          # Taxable?
     "D6":  ["Yes", "No"],          # Remodel Tax (tax-exempt)?
@@ -516,6 +518,31 @@ FLAG_BLOCK_CELLS: Dict[str, tuple] = {
     "Epoxy": ("B6", "D6"), "Polish": ("B6", "D6"), "Seal": ("B6", "D6"),
     "Seal (+Jnts)": ("B6", "D6"), "Epoxy blank": ("B6", "D6"), "Leveling": ("B6", "D6"),
     **{name: ("B8", "D8") for name in GYP_SHEETS},
+}
+
+# ─── The "Hard Bid?" switch: OFF, on every tab, for good ──────────────
+# Hanz, 2026-10-03: "We also need to remove the hard bid discount. Even on active projects and
+# direct projects." His choice, asked: remove ONLY the switch -- Kyle's automatic give-back,
+#     Epoxy!B74 = IF(B5="yes", IF(D70>=60000, -0.04, IF(B4="yes", IF(D70>=13000, -0.025, 0))))
+# and its twins at Polish/Seal/'Seal (+Jnts)'!B68, 'Epoxy blank'!B71 and Leveling!B70 -- and keep
+# the "Hard Bid Discount" row working exactly as it does for an estimator who TYPES a rate or a
+# dollar figure into it (a typed B74/D74 replaces Kyle's formula, as any typed cell does).
+#
+# THE RULE: a Hard Bid? cell is never written, by anything. Kyle's template ships every one of
+# these as "No" ('Seal (+Jnts)'!B5 is `=Seal!B5`), so his own formula prices the automatic part at
+# zero and nothing else in the workbook reads the cell (test_no_hard_bid.py proves both from the
+# file). Enforced in exactly two places, because the price exists in exactly two engines:
+#   * here, in fill_estimate -- the only door from a draft's cell_values into a workbook;
+#   * estimate-review.js, HF.setCellValue -- the only door into the screen's HyperFormula engine
+#     (its layout list is HARD_BID_FLAG_LAYOUTS; the test fails if the two drift).
+# The proposal's lump sum is the screen's D88, so it follows the screen.
+#
+# Keyed by TEMPLATE LAYOUT, so a copy of any of these tabs is covered too, and the address goes
+# through the sheet's structural edits. The gypsum tabs are not here and must never be: their B5 is
+# Local?, and their own Hard Bid? (B7) is read by no formula at all -- they never had the discount.
+HARD_BID_FLAG_CELLS: Dict[str, str] = {
+    "Epoxy": "B5", "Polish": "B5", "Seal": "B5", "Seal (+Jnts)": "B5",
+    "Epoxy blank": "B5", "Leveling": "B5",
 }
 GYP_TOTALS: Dict[str, str] = {
     "material_total":  "E41",
@@ -1036,6 +1063,10 @@ def fill_estimate(
     ws_layouts = _resolve_ws_layouts(wb, tab_copies, ops_by, _norm_lock_overrides(lock_overrides))
 
     # 2. Direct-cell writes (verbatim cell-for-cell editor path)
+    #    Except a Hard Bid? cell, on any tab or copy (HARD_BID_FLAG_CELLS): a draft saved with the
+    #    switch on keeps Kyle's "No" there, and a typed rate/dollar in the discount row below it is
+    #    written like any other cell.
+    hard_bid_flags = _hard_bid_flag_cells(wb, tab_copies, ops_by)
     for sheet_addr, val in (cell_values or {}).items():
         if val in (None, ""):
             continue
@@ -1050,10 +1081,18 @@ def fill_estimate(
         if not _CELL_SHAPE_RE.fullmatch(addr):
             log.warning("estimate_writer: skipping non-cell address %r", sheet_addr)
             continue
+        if hard_bid_flags.get(sheet_name) == addr.upper():
+            continue
         try:
             wb[sheet_name][addr] = _coerce(val)
         except Exception as exc:  # noqa: BLE001 — log the skip instead of swallowing it
             log.warning("estimate_writer: failed to write %s: %s", sheet_addr, exc)
+    # 2.05 ...and every literal flag reads "No" whatever the template ever ships. A formula flag
+    #      ('Seal (+Jnts)'!B5 = `=Seal!B5`) is left alone: it follows a cell that is itself "No".
+    for sheet_name, addr in hard_bid_flags.items():
+        cell = wb[sheet_name][addr]
+        if not (isinstance(cell.value, str) and cell.value.startswith("=")):
+            cell.value = "No"
 
     # 2.1 Every flag-block sheet's two cells get their Yes/No picker back (see
     #     FLAG_BLOCK_CELLS). After the structural edits, so the cells are found where they are.
@@ -1209,6 +1248,34 @@ def _create_copied_tabs(wb, tab_copies: list[Mapping[str, Any]] | None) -> None:
             ws.title = new_id
         except Exception:  # noqa: BLE001 — bad title / odd char; skip this copy
             pass
+
+
+def _hard_bid_flag_cells(wb, tab_copies: list[Mapping[str, Any]] | None,
+                         ops_by: Dict[str, list[dict]] | None) -> Dict[str, str]:
+    """{sheet title: CURRENT address} of every Hard Bid? cell in `wb` -- template tabs and copies
+    alike, each resolved through its {id, source} chain to a layout in HARD_BID_FLAG_CELLS and
+    translated through its own structural edits. Called while titles are still stable ids, so it
+    speaks the same "<id>!<addr>" language as cell_values. A deleted flag row drops out."""
+    src_by_id: dict[str, str] = {}
+    for c in (tab_copies or []):
+        if isinstance(c, dict):
+            cid = str(c.get("id") or "").strip()[:31]
+            if cid:
+                src_by_id[cid] = str(c.get("source") or "Epoxy").strip() or "Epoxy"
+    out: Dict[str, str] = {}
+    for ws in wb.worksheets:
+        base, guard = ws.title, 0
+        while base in src_by_id and guard < 20:
+            base = src_by_id[base]
+            guard += 1
+        addr = HARD_BID_FLAG_CELLS.get(base)
+        if not addr:
+            continue
+        ops = (ops_by or {}).get(ws.title) or []
+        addr = _translate_addr(addr, ops) if ops else addr
+        if addr:
+            out[ws.title] = addr
+    return out
 
 
 def _add_flag_dropdowns(wb, tab_copies: list[Mapping[str, Any]] | None,
@@ -1893,6 +1960,10 @@ def read_sheet_grid(sheet_name: str, *, path: Path = TEMPLATE_PATH,
     if sheet_name == "Epoxy" and path == TEMPLATE_PATH:
         for addr, options in PROJECT_INFO_DROPDOWNS.items():
             dropdowns.setdefault(addr, options)
+    # Kyle's own x14 list covers "B4 B5" on every tab; the Hard Bid? half of it is a choice the
+    # tool no longer honours (HARD_BID_FLAG_CELLS), so the grid is not offered it.
+    if path == TEMPLATE_PATH and sheet_name in HARD_BID_FLAG_CELLS:
+        dropdowns.pop(HARD_BID_FLAG_CELLS[sheet_name], None)
 
     # Border-symmetry pass: if cell A has `right` defined and cell to
     # its right (B) has no `left`, mirror A.right → B.left (and same

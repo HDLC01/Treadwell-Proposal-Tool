@@ -277,6 +277,9 @@ const out = { PAY, ATTR_PAY };
       // bound so the lifted handler reaches its banner. jobFlagKindFor is only asked on a split draft.
       applyAutofillJobFlags() { return 0; },
       jobFlagKindFor() { return null; },
+      // The handler skips a Hard Bid? answer through this (2026-10-03). This reply carries none,
+      // and the rule itself is executed in no-hard-bid-harness.js / taxable-flag-harness.js.
+      isHardBidFlagCell() { return false; },
       TW: { setState() {}, authHeaders: () => ({}), getDraftId: () => "d" },
       sysNameInput: { value: "" },
       texInput: { value: "" },

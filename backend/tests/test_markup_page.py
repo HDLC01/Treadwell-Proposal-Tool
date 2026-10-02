@@ -865,8 +865,15 @@ def test_the_intro_is_one_sentence_with_the_rest_behind_a_disclosure():
                  # and why is there no total.
                  "Global is the sixth", "no second box",
                  "no running total and no lump sum",
-                 "no Global rate gives them that line"):
+                 # 2026-10-03: the hard-bid discount is gone, and the page says so -- including
+                 # that a discount TYPED into the sheet's own row still prices the bid. It replaced
+                 # "no Global rate gives them that line", the gypsum exception to a hard-bid rate
+                 # that has not existed since 2026-09-22.
+                 "There is no hard-bid discount", "Hard Bid Discount row still prices the bid"):
         assert fact in flat, "the intro lost a fact worth keeping: %r" % fact
+    for gone in ("hard-bid give-back is one formula", "hard-bid discount reads a Yes/No box",
+                 "the hard-bid discount, Bond"):
+        assert gone not in flat, "the page still describes the removed hard-bid discount: %r" % gone
 
 
 # ── the Global tab ───────────────────────────────────────────────────

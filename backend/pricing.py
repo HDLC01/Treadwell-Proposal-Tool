@@ -285,7 +285,7 @@ def compute_full_bid(material_total: float, sf: float, *,
                      burden_pct: float = 0.12, demo_sf: float = 0, plastic: float = 0,
                      local: bool = True, lodging_rate: float = 70, food_rate: float = 45,
                      super_pct: float = 0.03, soft_pct: float = 0.13, contingency: float = 0,
-                     hard_bid: bool = False, taxable: bool = True,
+                     taxable: bool = True,
                      sales_tax_rate: float = 0.09475, remodel: bool = False,
                      remodel_rate: float = 0.10, fees: float = 0, bond_pct: float = 0) -> Dict[str, Any]:
     """Full Total Base Bid (sheet D88) from material_total (D43) + labor/markup.
@@ -336,17 +336,14 @@ def compute_full_bid(material_total: float, sf: float, *,
     # GP markup (D73), hard-bid (D74), super (D75), soft (D76), contingency (D77)
     gp = _gp_pct(D70)
     D73 = ceil((D70 + D80 + D83) / (1 - gp)) - ceil(D70 + D80)
-    # Epoxy!B74 = IF(B5="yes", IF(D70>=60000, -0.04, IF(B4="yes", IF(D70>=13000, -0.025, 0))))
-    # B4 is the LOCAL flag, and it gates the -2.5% band only -- the -4% band above $60k is
-    # granted to local and non-local jobs alike. Dropping B4 handed a discount to travelling
-    # jobs that the sheet refuses them.
-    if hard_bid and D70 >= 60000:
-        b74 = -0.04
-    elif hard_bid and local and D70 >= 13000:
-        b74 = -0.025
-    else:
-        b74 = 0
-    D74 = _roundup((D70 + D73) * b74)   # ROUNDUP, not ceil: this one is negative
+    # D74, the Hard Bid Discount row, is ZERO here since 2026-10-03 (Hanz: "We also need to
+    # remove the hard bid discount"). Kyle's B74 is
+    #   IF(B5="yes", IF(D70>=60000, -0.04, IF(B4="yes", IF(D70>=13000, -0.025, 0))))
+    # and the tool now never lets B5 say yes (estimate_writer.HARD_BID_FLAG_CELLS), so the
+    # automatic give-back is 0 on every bid. A discount an estimator TYPES into that row lives on
+    # the sheet, not in this engine, which never took one. The `hard_bid` parameter is gone with
+    # the switch; the row stays in the chain, at 0, so every figure below keeps Kyle's shape.
+    D74 = 0
     D77 = ceil(contingency)
     D75 = ceil((D70 + D73 + D74 + D77 + D80 + D83) * super_pct)
     D76 = ceil((D70 + D73 + D74 + D75 + D77 + D80 + D83) * soft_pct)
