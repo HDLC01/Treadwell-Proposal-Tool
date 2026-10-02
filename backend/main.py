@@ -5439,6 +5439,13 @@ def api_proposal_template(request: Request, work_type: str = "epoxy", audience: 
         })
 
     geometry = proposal_writer.template_geometry(d)
+    # What the render changes about the layout beyond the values -- the Terms pages rebuilt as one
+    # section with a repeating letterhead, Kyle's hand-split clauses rejoined, a WORK line that
+    # would print only its label left out -- as block ids of THIS walk, so the editor makes the
+    # same changes from the plan the writer applies (proposal_writer.render_adjustments). On the
+    # same document the blocks were read from: none of the passes above adds or removes a
+    # paragraph, so the ids are the pristine template's.
+    render_adjustments = proposal_writer.render_adjustments(d)
     payload = {
         "work_type": work_type,
         "audience": audience,
@@ -5465,6 +5472,10 @@ def api_proposal_template(request: Request, work_type: str = "epoxy", audience: 
         # rather than a per-block field: the block shape, which _BLOCK_SCHEMA_VERSION pins, is
         # unchanged, and a browser holding an older body simply draws no gap lines on GC.
         "options_heading_ids": options_heading_ids,
+        # Top-level for the same reason: the block shape is unchanged. See proposal_writer
+        # .render_adjustments for the fields; a browser holding an older body has none and draws
+        # the template as it was.
+        "render_adjustments": render_adjustments,
     }
     # Built through JSONResponse so the cached bytes ARE the bytes this
     # endpoint has always sent — same encoder, same separators, same

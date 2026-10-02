@@ -493,8 +493,15 @@ def prepend_cover_letter(proposal_docx: bytes, letter_docx: bytes) -> bytes:
         # it would be meaningless at best; `a:cNvPr` (which an earlier version of
         # this line also named) occurs in none of these files, so it silently
         # matched nothing and read as coverage it never had.
-        drawing_offset = _max_id(el.get("id")
-                                 for el in pdoc.iter(WP + "docPr")) + 1
+        # Past the highest id in EVERY part of the host, not only its body: the id space is the
+        # whole document's, and since 2026-10-02 the proposal's Terms letterhead is a drawing in a
+        # HEADER (proposal_writer._rebuild_terms_pages), numbered after the body's last.
+        drawing_offset = max(
+            [_max_id(el.get("id") for el in pdoc.iter(WP + "docPr"))]
+            + [_max_id(el.get("id") for el in etree.fromstring(pz.read(name), parser).iter(WP + "docPr"))
+               for name in sorted(pnames)
+               if name != _DOC and name.startswith("word/") and name.endswith(".xml")
+               and "/_rels/" not in name]) + 1
         _shift_int_attr(ldoc, (WP + "docPr",), "id", drawing_offset)
         bookmark_offset = _max_id(
             el.get(W + "id") for el in pdoc.iter()

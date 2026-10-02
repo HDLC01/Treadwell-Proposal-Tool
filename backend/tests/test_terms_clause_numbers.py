@@ -114,6 +114,14 @@ def _generate(overrides=None, work_type="epoxy", audience="Direct", **kw):
         paragraph_overrides=overrides, **kw)))
 
 
+def _printed_clause_texts(work_type="epoxy", audience="Direct"):
+    """The clauses as a fill with NO override prints them -- the baseline a refused blank must
+    leave untouched. Not the template's own clause texts: since 2026-10-02 the render rejoins the
+    clauses Kyle split by hand at Word's page breaks (9 and 18, `_rebuild_terms_pages`), so clause
+    9 prints its words AND its continuation ("...a reasonable opportunity to inspect...")."""
+    return _clause_texts(_generate(None, work_type, audience))
+
+
 # ══ the template facts, re-derived from Kyle's file ═══════════════════════════
 def test_the_terms_level_is_decimal_and_says_so_in_its_lvl_text():
     """THE FACT THE WHOLE FIX RESTS ON. `w:numFmt` says "decimal"; it is `w:lvlText` that says
@@ -329,8 +337,8 @@ def test_no_channel_can_empty_a_clause_or_move_a_clause_number(channel):
     d0 = _doc()
     ids = _clause_ids(d0)
     tid = ids[0]
-    before_texts, before_markers = _clause_texts(d0), _clause_markers(d0)
-    assert len(before_texts) == 27
+    before_texts, before_markers = _printed_clause_texts(), _clause_markers(d0)
+    assert len(before_texts) == 27 and len(_clause_texts(d0)) == 27
 
     got = _generate(_blank_channels(tid)[channel])
     assert _clause_texts(got) == before_texts, "%s emptied a clause" % channel
@@ -343,7 +351,7 @@ def test_a_box_override_alongside_the_blank_changes_nothing_about_the_clauses():
     d0 = _doc()
     tid = _clause_ids(d0)[0]
     got = _generate([{"id": tid, "text": ""}], box_overrides={"0": {"h_pt": 500.0}})
-    assert _clause_texts(got) == _clause_texts(d0)
+    assert _clause_texts(got) == _printed_clause_texts()
     assert _clause_markers(got) == _clause_markers(d0)
 
 
@@ -388,7 +396,7 @@ def test_the_blank_is_refused_through_the_whole_generate_endpoint():
     })
     assert r.status_code == 200, r.text
     got = docx.Document(io.BytesIO(client.get(r.json()["docx_download_url"]).content))
-    assert _clause_texts(got) == _clause_texts(d0)
+    assert _clause_texts(got) == _printed_clause_texts()
     assert _clause_markers(got) == _clause_markers(d0)
 
 

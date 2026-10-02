@@ -49,8 +49,14 @@ RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
 # keeps the image as small as this feature allows (no Calc/Impress). Carlito is
 # metric-compatible with Calibri and Liberation with Arial/Times/Courier, so the
 # rendered PDF lays out like Word even though those Microsoft fonts aren't shipped.
+# Caladea is the same for Cambria, the face of every Terms & Conditions clause and of
+# anything set in the templates' theme font (the REGARDS name): without it LibreOffice
+# printed them in Liberation Sans. Nothing else is needed: fontconfig's metric aliases
+# and LibreOffice's own font replacement table both map Cambria to Caladea (checked in
+# this base on 2026-10-02: `fc-match Cambria` -> Caladea, and the PDF names Caladea).
+# Apache-2.0, so unlike Zetta it may live in the image.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libreoffice-writer fonts-crosextra-carlito fonts-liberation \
+    libreoffice-writer fonts-crosextra-carlito fonts-crosextra-caladea fonts-liberation \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 
