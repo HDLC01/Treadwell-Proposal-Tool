@@ -762,7 +762,12 @@
         && String(b.text || "").trim() && !/\{\{\s*[#\/]\s*\w+\s*\}\}/.test(String(b.text))) || null;
     }
     if (!re) return null;
-    return blocks.find(b => b && b.txbx != null && re.test(String(b.text || ""))) || null;
+    const hit = blocks.find(b => b && b.txbx != null && re.test(String(b.text || "")));
+    if (hit) return hit;
+    // A template with no {{#price_line}} row (the GC files): the document clones these lines from
+    // Kyle's first money row under its Options heading (annotatePriceLineAnchor flags it).
+    if (/^(option|manual|combo):/.test(k)) return blocks.find(b => b && b._plModel) || null;
+    return null;
   }
 
   /** The lines typed above ("before") or below ("after") one price line, as markup. */
@@ -4608,6 +4613,39 @@
     }
   }
 
+  /** Where the option / manual / combo price lines go on a template with NO {{#price_line}} region.
+   *
+   *  Kyle's three GC files have none (nor a {{#has_options}} one): their PRICE box is plain
+   *  paragraphs under a free "Options & Unit Prices" heading, and the writer prints the lines (a combo's
+   *  Option 1 / Option 2 breakout first, then the options, then the manual lines) as new
+   *  paragraphs directly under that heading, ahead of his own unit-price rows, cloned from the first
+   *  of those rows (proposal_writer._insert_price_lines_under_headings). The island is therefore
+   *  mounted there, after the heading (renderBlockList), so the editor shows exactly the lines the
+   *  document prints, in the same order, and draws them with the spacing of that row (priceLineRecord).
+   *
+   *  Two flags on the blocks and nothing else: no block is added, so no editor id moves (the saved
+   *  edits of the real GC drafts are keyed by id), and a template WITH the region is left alone, so
+   *  Direct Epoxy / Polish / Combo and Gyp draw as they always did. `anchor` is the server's
+   *  `price_lines_anchor` ({heading_id, model_id}, null on a template that has the region); an older
+   *  response without it still mounts after the first Options heading it names. Returns the heading
+   *  block, or null when the lines have nowhere to go. */
+  function annotatePriceLineAnchor(blocks, anchor, headingIds) {
+    const list = Array.isArray(blocks) ? blocks : [];
+    list.forEach(b => { if (b) { delete b._plMount; delete b._plModel; } });
+    if (list.some(b => b && /\{\{\s*#\s*(price_line|has_options)\s*\}\}/.test(String(b.text || "")))) return null;
+    const a = anchor && typeof anchor === "object" ? anchor : null;
+    const ids = Array.isArray(headingIds) ? headingIds : [];
+    const headId = a && Number.isFinite(Number(a.heading_id)) ? Number(a.heading_id)
+      : (ids.length ? Number(ids[0]) : null);
+    const head = headId == null ? null : (list.find(b => b && b.id === headId) || null);
+    if (!head) return null;
+    head._plMount = true;
+    const modelId = a && Number.isFinite(Number(a.model_id)) ? Number(a.model_id) : null;
+    const model = modelId == null ? null : (list.find(b => b && b.id === modelId) || null);
+    if (model) model._plModel = true;
+    return head;
+  }
+
   function mountRegionPreviews(wrap, names) {
     // NO CHROME OF ANY KIND: no card, no hover tint (see `.tw-priced-region` in styles.css) and no
     // tooltip. The region flows inline as part of one continuous document, and the tooltip that
@@ -4643,6 +4681,15 @@
       } else {
         flush();
         container.appendChild(renderBlock(b, tokens));
+        // A template with no price-line region (the GC files): the combo breakout and the option /
+        // manual lines sit directly under the free Options heading, in the order the document
+        // prints them (annotatePriceLineAnchor). Moving a node keeps its listeners and content.
+        if (b._plMount) {
+          ["combo-price-block", "price-lines-block"].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) container.appendChild(el);
+          });
+        }
       }
     }
     flush();
@@ -7275,6 +7322,8 @@
       // which then draws the template as it always did.
       templateAdjustments = readRenderAdjustments(j.render_adjustments);
       annotateRegions(templateBlocks);
+      // ...and where the price lines print when the template has no {{#price_line}} region.
+      annotatePriceLineAnchor(templateBlocks, j.price_lines_anchor, templateOptionsHeadingIds);
       // The face a run with no font of its own prints in, on every run that has none.
       templateDefaultFont = resolveTemplateFonts(templateBlocks, j.default_font);
       blockById.clear();

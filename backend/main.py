@@ -5404,11 +5404,23 @@ def api_proposal_template(request: Request, work_type: str = "epoxy", audience: 
     # heading is the editor's own #options-heading. Held as a set so the walk below keeps the
     # same element proxies alive and membership is by element identity.
     _options_heads = set(proposal_writer.options_heading_paragraphs(d))
+    # A template with no {{#price_line}} region (the GC files) prints its option / manual / combo
+    # lines under that free heading, cloned from the first of Kyle's money rows there. The editor
+    # mounts its price-line island after the heading and draws it with the model row's paragraph
+    # properties, so both are named here, held (so the walk's element proxies are the same ones)
+    # and found by identity. None when the template prints them through a region.
+    _anchor = proposal_writer.price_lines_anchor(d)
+    anchor_ids: dict = {}
     options_heading_ids = []
     blocks = []
     for idx, kind, p_elem, in_block, text, txbx_idx in proposal_writer.iter_editable_blocks(d):
         if in_block is None and p_elem in _options_heads:
             options_heading_ids.append(idx)
+        if _anchor is not None:
+            if p_elem is _anchor[0]:
+                anchor_ids["heading_id"] = idx
+            if p_elem is _anchor[1]:
+                anchor_ids["model_id"] = idx
         p = Paragraph(p_elem, d)
         style_name = None
         try:
@@ -5490,6 +5502,12 @@ def api_proposal_template(request: Request, work_type: str = "epoxy", audience: 
         # rather than a per-block field: the block shape, which _BLOCK_SCHEMA_VERSION pins, is
         # unchanged, and a browser holding an older body simply draws no gap lines on GC.
         "options_heading_ids": options_heading_ids,
+        # Where the editor mounts the option / manual / combo price lines on a template that has no
+        # {{#price_line}} region: {"heading_id": the block they follow, "model_id": the block whose
+        # paragraph properties they are drawn with -- the row the writer clones}. null on every
+        # template that prints them through a region, and on an older body: the editor then mounts
+        # them as it always did. Top-level for the reason above.
+        "price_lines_anchor": (anchor_ids if len(anchor_ids) == 2 else None),
         # Top-level for the same reason: the block shape is unchanged. See proposal_writer
         # .render_adjustments for the fields; a browser holding an older body has none and draws
         # the template as it was.
@@ -6186,7 +6204,9 @@ def _generate(payload: GenerateIn, request: Request, *,
     # so the Direct templates need NO structural change: each option is
     # "$8,310 – <system> as described above (…)" or "($6,000) – Deduct VE … in
     # lieu of <base>". Any per-option notes fold inline. The base bid itself shows
-    # via {{#single_bid}}. (The GC files have no {{#price_line}}; Gyp's sits under its own
+    # via {{#single_bid}}. (The GC files have no {{#price_line}}: the writer prints these rows
+    # directly under their free "Options & Unit Prices" heading instead, as the editor draws them
+    # -- proposal_writer._insert_price_lines_under_headings. Gyp's sits under its own
     # {{#has_options}}.)
     #
     # EACH OPTION FOLLOWS ITS OWN TAB (price_rules.tax_rule, the same rule as the base): one line
@@ -6283,8 +6303,12 @@ def _generate(payload: GenerateIn, request: Request, *,
         # proposal_writer._strip_leading_separator) so those lines aren't
         # visually indistinguishable from the combo base price. Skip it when
         # there's nothing after the breakout — an empty "Options:" would have
-        # nothing to introduce.
-        if price_line_dicts:
+        # nothing to introduce. And skip it where the template keeps its OWN heading, which
+        # {{#single_bid}} does not take with it (the GC files: "Options & Unit Prices"): the
+        # lines print under that one, and a second heading would print a second blank gap and
+        # the lines typed under the heading twice.
+        if price_line_dicts and not proposal_writer.template_lines_under_heading(
+                payload.work_type, payload.audience):
             # `_options_heading`: this row IS the Options heading on this layout, so the blank
             # lines the estimator set above the heading print above it (options_gap). It prints
             # what the editor shows there -- a renamed heading as renamed, and the lines typed

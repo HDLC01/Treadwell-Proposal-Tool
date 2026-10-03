@@ -251,18 +251,21 @@ const LAYOUT_SYSTEM_NAME = {
 
 // WHICH TEMPLATES CAN PRINT AN OPTION AT ALL.
 //
-// An option reaches the customer only through the `{{#price_line}}` block in the proposal template,
-// and four of the shipped templates do not have one: GC Polish, GC Resinous, GC Sealer and Direct
-// Budget. On one of those, ticking "add as option" is silent — the estimator sees a configured
-// option and the document has nothing, which is the complaint from 2026-08-13 ("There are two
-// options but the PDF Shows one") in a different disguise.
+// An option reaches the customer through the `{{#price_line}}` block in the proposal template
+// (Direct Epoxy / Polish / Combo, Gyp), or -- on a template with no such block -- as new paragraphs
+// the writer prints directly under its free "Options & Unit Prices" heading (the three GC files,
+// proposal_writer._insert_price_lines_under_headings). The only shipped template with neither is
+// Direct Budget. On it, ticking "add as option" is silent — the estimator sees a configured option
+// and the document has nothing, which is the complaint from 2026-08-13 ("There are two options but
+// the PDF Shows one") in a different disguise. Until 2026-10-03 the GC files were in that group too.
 //
 // Keyed exactly like the backend's TEMPLATE_PICKER (work_type, audience), with gyp
 // audience-agnostic. test_seal_option.py derives the truth from the .docx files themselves and
-// fails if this list disagrees — so annotating a GC template later breaks the test until this is
-// updated, which is the right way round.
+// fails if this list disagrees — so changing which templates have a region or a heading breaks the
+// test until this is updated, which is the right way round.
 const OPTION_CAPABLE = new Set([
-  "epoxy:Direct", "polish:Direct", "combo:Direct", "gyp:*",
+  "epoxy:Direct", "epoxy:GC", "polish:Direct", "polish:GC", "combo:Direct", "combo:GC",
+  "sealer:GC", "gyp:*",
 ]);
 function templatePrintsOptions(wt, audience) {
   const w = String(wt || "epoxy").toLowerCase();
