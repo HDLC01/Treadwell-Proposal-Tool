@@ -4412,7 +4412,16 @@
   function setBlockContent(el, b, tokens) {
     el.innerHTML = blockHtml(b, tokens);
     const plain = fillPlain(b.text, tokens);
-    pristineById.set(Number(el.dataset.id), plain);
+    // THE BASELINE IS THE TEXT AS serializeBlock READS IT BACK, and serializeBlock turns every
+    // no-break space into a plain one (a contenteditable puts NBSPs into the words somebody types,
+    // and none of those may reach the document). Kept with Kyle's own NBSP in it -- the GC
+    // "installation.<NBSP>See Terms & Conditions." note, three Gyp WORK lines -- the baseline never
+    // equalled the page: `cur !== pristine` read an UNTOUCHED paragraph as edited in
+    // collectOverrides (it shipped as an override, with runs and sizes, on every persist, and the
+    // document printed a plain space where Kyle's no-break one was), in syncBlock (a sibling's
+    // keystroke marked it tw-dirty, and an edit put back by hand left the mark on) and in
+    // refreshFillsInPlace. Taken here once, so all three compare like with like.
+    pristineById.set(Number(el.dataset.id), plain.replace(/\u00a0/g, " "));
     el.classList.toggle("tw-empty", !plain.trim());
     // A TAX ROW THAT DOES NOT APPLY IS NOT THERE — here as in the document. The GC and Gyp files
     // author their Material Sales Tax / Remodel Tax / Total rows as plain paragraphs (this one), and
@@ -5122,7 +5131,8 @@
       if (sp.dataset) sp.dataset.v = next;
       touched = true;
     });
-    if (touched) pristineById.set(id, fillPlain(b.text, tokens));
+    // The baseline as setBlockContent keeps it: no-break spaces read back as plain ones.
+    if (touched) pristineById.set(id, fillPlain(b.text, tokens).replace(/\u00a0/g, " "));
     return touched;
   }
 

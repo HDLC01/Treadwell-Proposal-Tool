@@ -339,6 +339,12 @@ for (const kase of CASES.cases) {
         markVar: el.style.getPropertyValue("--tw-mark-pt") || null,
         printed: el.style.getPropertyValue("--tw-fit-pt") || null,
         twMark: el.dataset.twMark === "1",
+        // What a stylesheet rule can see of the paragraph: its classes, its attributes and the
+        // classes of the box it sits in. test_notes_box_layout.py matches the REAL styles.css
+        // selector of the mark-sized strut against these.
+        classes: Array.from(el._classes),
+        attrs: Object.assign({}, el.attrs),
+        boxClasses: Array.from(box._classes),
         spans: sizes(el),
       });
     }
