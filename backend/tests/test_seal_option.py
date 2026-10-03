@@ -299,18 +299,26 @@ def test_the_seal_sf_cell_is_the_polish_one():
 # ── an option that cannot print ───────────────────────────────────────────────
 @needs_node
 def test_a_template_that_cannot_print_options_says_so(strip):
-    """GC Polish, GC Resinous, GC Sealer and Direct Budget have no {{#price_line}} block, so a
-    ticked option reaches the customer as nothing at all. Silence there is the complaint from the
-    same morning ("There are two options but the PDF Shows one") wearing a different hat."""
+    """Direct Budget has no {{#price_line}} block and no Options heading, so a ticked option
+    reaches the customer as nothing at all. Silence there is the complaint from the same morning
+    ("There are two options but the PDF Shows one") wearing a different hat. (The three GC files
+    were in this group until 2026-10-03; the writer now prints an option under their own "Options &
+    Unit Prices" heading, so they are quiet: test_gc_option_lines.py.)"""
     c = strip["cannotPrint"]
-    assert c["warnsOnGC"] is True, "a GC job configures an option and is told nothing"
+    assert c["warnsOnBudget"] is True, "a Budget job configures an option and is told nothing"
     assert c["quietOnDirect"] is True, "the warning fires on a template that CAN print options"
+    assert c["quietOnGC"] is True, "the warning fires on a GC template, which now prints options"
 
 
 def test_the_option_capable_list_matches_the_actual_templates():
-    """Derived from the .docx files, so annotating a GC template later fails this test until the
-    frontend list is updated — which is the right way round. A hand-maintained capability list that
-    nothing checks is how the warning starts lying."""
+    """Derived from the .docx files, so changing which template carries a price-line region or an
+    Options heading fails this test until the frontend list is updated — which is the right way
+    round. A hand-maintained capability list that nothing checks is how the warning starts lying.
+    A template prints an option when it has a {{#price_line}} region, or none (nor a
+    {{#has_options}} one) but a marked Options heading the writer prints them under."""
+    import docx
+    import proposal_writer as pw
+
     m = re.search(r"const OPTION_CAPABLE = new Set\(\[([^\]]*)\]\)", ESTIMATE_JS)
     assert m, "OPTION_CAPABLE moved"
     claimed = set(re.findall(r'"([^"]+)"', m.group(1)))
@@ -325,7 +333,7 @@ def test_the_option_capable_list_matches_the_actual_templates():
         path = TEMPLATES / rel
         with zipfile.ZipFile(path) as z:
             flat = re.sub(r"<[^>]+>", "", z.read("word/document.xml").decode("utf-8", "replace"))
-        if "{{#price_line}}" in flat:
+        if "{{#price_line}}" in flat or pw.price_lines_anchor_headings(docx.Document(str(path))):
             actual.add("%s:%s" % (work_type, audience or "*"))
     assert claimed == actual, (
         "OPTION_CAPABLE says %s but the templates that actually carry {{#price_line}} are %s"

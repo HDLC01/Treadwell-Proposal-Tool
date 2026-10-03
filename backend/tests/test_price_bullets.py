@@ -415,6 +415,7 @@ def _case(work_type, audience, spec=None, name=None):
         st[k] = copy.deepcopy(v)
     return {"name": name or f"{work_type}/{audience}", "work_type": work_type, "audience": audience,
             "blocks": _price_box(tj), "options_heading_ids": tj.get("options_heading_ids") or [],
+            "price_lines_anchor": tj.get("price_lines_anchor"),
             "state": st, "actions": spec.get("actions") or []}
 
 
@@ -641,6 +642,12 @@ EXPECTED = {
         ("$1,750 – Remod", "sq", 288),
         ("$24,700 – Tota", "sq", 288),
         ("Options & Unit", "sq", 288),         # level 0, though the box's first row is on the "o"
+        # The option and the lines typed under it print DIRECTLY UNDER the free heading, ahead of
+        # Kyle's rows (proposal_writer._insert_price_lines_under_headings; the GC files have no
+        # {{#price_line}} region, so before 2026-10-03 they were dropped from both halves).
+        ("$85,500 – Alte", "sq", 288),
+        ("Notes: Areas p", "o", 1440),
+        ("Schedule: same", "o", 1440),
         ("If a different", "-", 576),
         ("$x – Add for", "sq", 288),
         ("$4,200 – Add f", "sq", 288),
@@ -656,6 +663,9 @@ EXPECTED = {
         ("$1,750 – Remod", "sq", 288),
         ("$24,700 – Tota", "sq", 288),
         ("Options & Unit", "-", 0),
+        ("$85,500 – Alte", "sq", 288),         # the option, printed under the heading (see epoxy/GC)
+        ("Notes: Areas p", "o", 1440),
+        ("Schedule: same", "o", 1440),
         ("$x – Add for", "sq", 288),
         ("$x – Add for u", "sq", 288),
         ("($x) – Deduct ", "sq", 288),

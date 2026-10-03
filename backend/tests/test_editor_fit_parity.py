@@ -427,14 +427,24 @@ def test_the_shrink_never_scales_a_paragraph_mark(wt, aud):
     """An EMPTY line prints as tall as its paragraph mark, and `_scale_txbx_runs` scales runs, never
     marks -- so in a shrunk box an empty line keeps its full height. That is why the editor draws a
     `.tw-empty` line at `fit.hp` (styles.css, --tw-mark-pt) and leaves it out of the shrink. Executed
-    on the overflowing payload: every paragraph mark of every box is the same in the printed
-    document and in the same document with run scaling switched off."""
+    on the overflowing payload: the paragraph mark of every EMPTY and every UNBULLETED line of every
+    box is the same in the printed document and in the same document with run scaling switched off.
+
+    The one exception is a bulleted line with words in it, whose mark is the size its bullet glyph is
+    drawn at (`_bullets_overflow_when_loose`): in a box whose bullets would keep it too tall for
+    LibreOffice, that mark may shrink with the words -- and only shrink, never below 4pt."""
     body = _body(wt, aud, "overflow")
     marks = []
     for unscaled in (False, True):
         d = Document(io.BytesIO(_docx(body, unscaled=unscaled)))
-        marks.append([[_mark_hp(p) for p in tx.iter(qn("w:p"))] for tx in pw._iter_txbx(d)])
-    assert marks[0] == marks[1]
+        marks.append([[(_mark_hp(p), pw._para_num_ref(p) is not None and bool(_text(p).strip()))
+                       for p in tx.iter(qn("w:p"))] for tx in pw._iter_txbx(d)])
+    for printed_box, plain_box in zip(*marks):
+        for (got, bulleted), (was, _) in zip(printed_box, plain_box):
+            if bulleted and was is not None:
+                assert min(was, 8) <= got <= was, (got, was)
+            else:
+                assert got == was, (got, was)
     assert any(f["scale"] < 0.999 for f in _fit(body)) or wt == "budget", "nothing was shrunk"
 
 

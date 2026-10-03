@@ -1664,8 +1664,14 @@ def _txbx_default_hp(txbx) -> int:
     return max(set(sizes), key=sizes.count) if sizes else 18   # half-points; 18 = 9pt
 
 
-def _scale_txbx_runs(txbx, scale: float, exempt: dict | None = None) -> None:
+def _scale_txbx_runs(txbx, scale: float, exempt: dict | None = None,
+                     scale_bullets: bool = False) -> None:
     """Directly shrink every run's font size in a text box by `scale`.
+
+    `scale_bullets` also shrinks the paragraph mark of every BULLETED line that has words in it,
+    which is what the bullet glyph is drawn at (see `_bullets_overflow_when_loose`). Nothing else's
+    mark is ever touched: an empty line keeps its full height (the editor draws it that way,
+    `fit.hp`), and an unbulleted line's mark does not size its text lines at all.
 
     `exempt` is `_user_sized_paragraphs`' register, keyed by the id() of paragraphs whose sizes
     the ESTIMATOR chose (it pins the elements; see `_hand_formatted`). Those are skipped:
@@ -1705,6 +1711,83 @@ def _scale_txbx_runs(txbx, scale: float, exempt: dict | None = None) -> None:
                 el = OxmlElement(tag)
                 rpr.append(el)
             el.set(qn("w:val"), str(new_hp))
+    if scale_bullets:
+        for p in txbx.iter(qn("w:p")):
+            if _para_num_ref(p) is None or id(p) in (exempt or ()):
+                continue
+            if not "".join(t.text or "" for t in p.iter(qn("w:t"))).strip():
+                continue
+            mark = p.find(qn("w:pPr") + "/" + qn("w:rPr"))
+            if mark is None:
+                continue
+            for tag in ("w:sz", "w:szCs"):
+                el = mark.find(qn(tag))
+                v = el.get(qn("w:val")) if el is not None else None
+                if v and v.isdigit():
+                    el.set(qn("w:val"), str(min(int(v), max(8, int(round(int(v) * scale))))))
+
+
+# A bulleted line is as tall as its BULLET GLYPH: LibreOffice draws the list marker at the size of the
+# paragraph's mark (`w:pPr/w:rPr/w:sz`; none of Kyle's numbering levels sets a size of its own), in a
+# symbol face whose line is 1.32 x the size (a 9pt mark = an 11.9pt row, measured on the GC PRICE
+# box, whatever the words' size). The shrink scales words and not marks, so a shrunk bulleted row kept
+# its full height. 2026-10-03: GC Polish + 2 options shrank to 0.767 and printed Kyle's own last
+# rows (Generator...) clean off the bottom of the box, while the estimate -- which assumes a line is as
+# tall as its words -- said it fitted and the editor warned nobody.
+_TXBX_BULLET_LINE_H = 1.32
+
+
+def _bullets_overflow_when_loose(d, txbx, box: dict | None, scale: float, exempt=None) -> bool:
+    """Would the box still run past its bottom edge at `scale` if its bulleted lines kept their
+    bullet size (the marks unscaled)? Counted the way LibreOffice lays the box out: a line of words
+    is 1.2 x its (scaled) size, a bulleted paragraph's first line at least 1.32 x its mark, an empty
+    line its mark. Trailing empty lines are left out -- they are clipped harmlessly, which is why
+    most boxes never showed this. False when the geometry is unknown."""
+    if not box:
+        return False
+    w_pt, h_pt = box.get("w_pt"), box.get("h_pt")
+    if not w_pt or not h_pt or w_pt <= 0 or h_pt <= 0:
+        return False
+    lIns, rIns, tIns, bIns = _txbx_insets(txbx)
+    usable_w = w_pt - (lIns + rIns) / _EMU_PER_PT
+    usable_h = h_pt - (tIns + bIns) / _EMU_PER_PT
+    if usable_w <= 0 or usable_h <= 0:
+        return False
+    default_hp = _txbx_default_hp(txbx)
+    total = pending_empty = 0.0
+    for p in txbx.iter(qn("w:p")):
+        text = "".join(t.text or "" for t in p.iter(qn("w:t")))
+        mark_sz = p.find(qn("w:pPr") + "/" + qn("w:rPr") + "/" + qn("w:sz"))
+        try:
+            mark_hp = int(mark_sz.get(qn("w:val"))) if mark_sz is not None else None
+        except (TypeError, ValueError):
+            mark_hp = None
+        if not text.strip():
+            pending_empty += _TXBX_LINE_H * ((mark_hp or default_hp) / 2.0)
+            continue
+        total += pending_empty
+        pending_empty = 0.0
+        run_hp = None
+        for r in p.iter(qn("w:r")):
+            if not "".join(t.text or "" for t in r.iter(qn("w:t"))):
+                continue
+            sz = r.find(qn("w:rPr") + "/" + qn("w:sz"))
+            if sz is not None and (sz.get(qn("w:val")) or "").isdigit():
+                run_hp = int(sz.get(qn("w:val")))
+            break
+        run_hp = run_hp if run_hp is not None else default_hp
+        kept = bool(exempt) and id(p) in exempt            # a deliberate size is never shrunk
+        font_pt = (run_hp if kept else max(8, int(round(run_hp * scale)))) / 2.0
+        first_w, body_w = _fit_line_widths_pt(d, p, usable_w)
+        first_chars = max(1.0, first_w / (_TXBX_GLYPH_W * font_pt))
+        body_chars = max(1.0, body_w / (_TXBX_GLYPH_W * font_pt))
+        lines = max(1, math.ceil((len(text) + body_chars - first_chars) / body_chars))
+        height = lines * _TXBX_LINE_H * font_pt
+        if _para_num_ref(p) is not None:
+            mark_pt = (mark_hp if mark_hp is not None else run_hp) / 2.0
+            height = max(height, (lines - 1) * _TXBX_LINE_H * font_pt + _TXBX_BULLET_LINE_H * mark_pt)
+        total += height
+    return total > usable_h
 
 
 def _shrink_overflowing_text_boxes(d: Document, report: list | None = None) -> int:
@@ -1723,6 +1806,11 @@ def _shrink_overflowing_text_boxes(d: Document, report: list | None = None) -> i
 
     Nothing is cut: a box still over its height at the 0.60 floor keeps the floor size and the
     rest of its text runs on past the box's bottom edge, because the box itself is never grown.
+
+    Words are not the only thing that sets a line's height: a bulleted line is as tall as its bullet,
+    drawn at the paragraph MARK's size, which scaling the runs leaves alone. A box the estimate says
+    can fit (not at the floor) whose bullets would keep it too tall for LibreOffice therefore has
+    its bulleted marks scaled too (`_bullets_overflow_when_loose`); any other mark is never touched.
 
     `report`, when given, gets one record per box this pass decided, which is what the editor
     shows (POST /api/proposal-fit): `{id, scale, default_hp, exempt, at_floor, content_pt,
@@ -1751,8 +1839,15 @@ def _shrink_overflowing_text_boxes(d: Document, report: list | None = None) -> i
         applied = scale < 0.999
         # Read BEFORE the scaling below rewrites the sizes it is counted from.
         default_hp = _txbx_default_hp(txbx) if report is not None else None
+        at_floor = bool(content_pt > 0 and usable_pt < content_pt * _TXBX_SCALE_FLOOR)
         if applied:
-            _scale_txbx_runs(txbx, scale, _user_sized_paragraphs(d))
+            user_sized = _user_sized_paragraphs(d)
+            # A box the estimate says CAN fit but whose bullets would keep it too tall: shrink the
+            # bullets too. A box already at the floor is not touched -- the estimate itself says it
+            # overflows, the editor warns, and its text is the estimator's to cut.
+            _scale_txbx_runs(txbx, scale, user_sized, scale_bullets=not at_floor
+                             and _bullets_overflow_when_loose(
+                                 d, txbx, boxes[i] if i < len(boxes) else None, scale, user_sized))
         if report is not None:
             ids = _user_sized_block_ids(d)
             report.append({
@@ -1760,7 +1855,7 @@ def _shrink_overflowing_text_boxes(d: Document, report: list | None = None) -> i
                 "scale": scale if applied else 1.0,
                 "default_hp": default_hp,
                 "exempt": sorted(ids[id(p)] for p in txbx.iter(qn("w:p")) if id(p) in ids),
-                "at_floor": bool(content_pt > 0 and usable_pt < content_pt * _TXBX_SCALE_FLOOR),
+                "at_floor": at_floor,
                 "content_pt": round(content_pt, 3),
                 "usable_pt": round(usable_pt, 3),
             })
@@ -3141,6 +3236,169 @@ def _expand_all_blocks(d: Document, block_lists: Mapping[str, list],
         for container in containers:
             total += _expand_named_block(container, block_name, list(items or []), protect)
     return total
+
+
+# ─── Price lines on a template with no {{#price_line}} region (the GC files) ─────────────────────
+# Hanz, 2026-10-03, with a screenshot of a GC Epoxy proposal in the editor: "EPOXY 2" ticked "Show
+# as a proposal option" in the Pricing options sidebar, and nothing for it in the PRICE box. The
+# option was built right. Every option, every manual "Add for" line and a combo's Option 1 / Option 2
+# breakout reaches the document as a `{{#price_line}}` row, and a row prints only where the template
+# has that region. Kyle's three GC files have none: their PRICE box is plain paragraphs, a free
+# heading "Options & Unit Prices" over his static unit-price rows. So `_expand_named_block` found no
+# region and dropped every row without a word, and the editor left its price-line island in the
+# hidden staging panel for the same reason.
+#
+# THE GC FILES ARE NOT EDITED TO GROW ONE. A paragraph added to a file moves the id of every
+# paragraph after it, and the saved editor edits of the real GC drafts are keyed by id and stamped
+# with the file's content hash (template_versions.PREDECESSOR_VERSIONS exists to keep them). The
+# rows go in at render time instead, as new paragraphs DIRECTLY UNDER the marked Options heading
+# (`_mark_options_headings`), ahead of Kyle's own rows, in every copy of the box: mc:Choice and the
+# VML mc:Fallback twin LibreOffice renders to the PDF. Each is a clone of the first of Kyle's own
+# money rows under the heading ("$x - Add for ..."), so the PRICE-list bullet, the indent, the font
+# and the size are his. The clone is taken from the PRISTINE template, before the estimator's edits
+# can reach that row (formatting typed into it must not turn up on every option), and each row is
+# then filled and bulleted by the code the Direct files' {{#price_line}} row goes through
+# (`_substitute_item_tokens`, `_mark_line_props`), so a line reads and bullets the same wherever it
+# prints. Nothing here runs on a template that has the region: those files print their rows where
+# they always did.
+#
+# The editor draws the same lines at the same place (proposal-review.js annotatePriceLineAnchor,
+# which renderBlockList and priceLineRecord read), from `price_lines_anchor`, which
+# /api/proposal-template serves: the model row has ONE definition (`_price_line_model`), shared by
+# the document and the page.
+_PRICE_LINE_ROW_TEXT = "{{price_line.amount_formatted}} – {{price_line.label}}"
+# What starts one of Kyle's unit-price rows: "$4,200 – Add for ...", "($x) – Deduct VE ...".
+_MONEY_ROW_RE = re.compile(r"^\s*\(?\s*\$")
+
+
+def _block_names(d: Document) -> set:
+    """The name of every `{{#name}}` block the document opens, in any container (body, table cell,
+    text box, the VML copy included). Asked of the PRISTINE template: expansion consumes the markers."""
+    names: set = set()
+    for p in d.element.body.iter(qn("w:p")):
+        for m in BLOCK_START_RE.finditer(_own_text(p)):
+            names.add(m.group(1))
+    return names
+
+
+def price_lines_anchor_headings(d: Document, blocks: set | None = None) -> list:
+    """The Options headings the `price_lines` are printed under when the template cannot print them
+    through a region: every copy of the free heading (the GC files'), or [] when the template has a
+    `{{#price_line}}` region (Direct Epoxy / Polish / Combo, Gyp), a `{{#has_options}}` heading of
+    its own, or no heading at all (Direct Budget). Call it on the PRISTINE template; `blocks` is
+    `_block_names(d)` when the caller already has it."""
+    names = _block_names(d) if blocks is None else blocks
+    if "price_line" in names or "has_options" in names:
+        return []
+    return options_heading_paragraphs(d)
+
+
+def _price_line_model(head):
+    """The paragraph the lines under `head` are cloned from: the first of Kyle's own MONEY rows
+    under it on the PRICE list's top level ("$x - Add for ...": his bullet, indent, font and size),
+    else the first listed row with words in it, else the heading itself. A money row first because
+    the file's first listed row can be a sentence set in italics (Resinous opens with "If a different
+    flake/chip size or style is selected, additional cost may apply.")."""
+    listed = None
+    nxt = head.getnext()
+    while nxt is not None:
+        if nxt.tag == qn("w:p") and _para_num_ref(nxt) == (_PRICE_LIST_NUM_ID, "0"):
+            words = _own_text(nxt)
+            if _MONEY_ROW_RE.match(words):
+                return nxt
+            if listed is None and words.strip():
+                listed = nxt
+        nxt = nxt.getnext()
+    return listed if listed is not None else head
+
+
+def price_lines_anchor(d: Document):
+    """`(heading, model)` -- the paragraphs of the pristine template that /api/proposal-template
+    names as `price_lines_anchor` (the editor mounts its price lines after the first, and draws
+    them with the paragraph properties of the second) -- or None when the template prints its lines
+    through a region or has nowhere to print them. The heading is the real (mc:Choice) copy: the
+    editor's ids never cover the VML twin."""
+    for head in price_lines_anchor_headings(d):
+        if not _is_fallback_paragraph(head):
+            return head, _price_line_model(head)
+    return None
+
+
+def _price_line_prototypes(d: Document, blocks: set | None = None) -> list:
+    """`[(heading, prototype)]` for every copy of the anchor heading, the prototype a detached copy
+    of that copy's own model row. Taken off the pristine template, BEFORE Phase 0 applies the
+    estimator's edits to it. Empty where `price_lines_anchor_headings` is."""
+    return [(h, copy.deepcopy(_price_line_model(h))) for h in price_lines_anchor_headings(d, blocks)]
+
+
+def _price_line_paragraph(proto, item: Mapping[str, Any]):
+    """One `price_lines` item as a paragraph of its own, cloned from `proto`: the model row's
+    paragraph properties and its first run's font, size and colour, never its bold, underline, review
+    highlight or italics (a sentence set in italics is Kyle's note, not a price). Filled by the code
+    a Direct `{{#price_line}}` row is filled by, from the same row text, so it reads the same: an
+    empty amount prints the label alone."""
+    row = {"amount_formatted": "", "label": "", **item}
+    p = _extra_line_paragraph(proto, _PRICE_LINE_ROW_TEXT)
+    # `_extra_line_paragraph` marks its clone as a line the ESTIMATOR typed; only one he did is.
+    if not item.get("_typed") and p.get(_TYPED_LINE_ATTR) is not None:
+        del p.attrib[_TYPED_LINE_ATTR]
+    for rpr in p.iter(qn("w:rPr")):
+        for tag in ("w:i", "w:iCs"):
+            for el in rpr.findall(qn(tag)):
+                rpr.remove(el)
+    _substitute_item_tokens(p, row, "price_line")
+    if not str(row.get("amount_formatted") or "").strip():
+        _strip_leading_separator(p)
+    if item.get("_para"):
+        _mark_line_props(p, item["_para"])
+    return p
+
+
+def _insert_price_lines_under_headings(prototypes: list, items) -> int:
+    """Print `items` (fill_proposal's `price_lines`) as paragraphs directly under every anchored
+    Options heading, in order, ahead of Kyle's own rows. Runs after block expansion, with the
+    heading's mark still on it. Lines the estimator typed under the heading (`_insert_line_extras`)
+    stay first, as on the Direct files: they were put there before, so they are skipped over.
+
+    A row flagged `_options_heading` is skipped: it is main.py's restored "Options:" heading for a
+    Direct combo, whose own heading goes with {{#single_bid}}. The GC files keep theirs, and a
+    second one would print a second blank gap above it. Returns the paragraphs inserted, over all
+    copies of the box."""
+    rows = [it for it in (items or []) if isinstance(it, Mapping) and not it.get("_options_heading")]
+    n = 0
+    for head, proto in prototypes:
+        if not rows or head.getparent() is None:
+            continue
+        at = head
+        nxt = head.getnext()
+        while nxt is not None and nxt.tag == qn("w:p") and nxt.get(_TYPED_LINE_ATTR) is not None:
+            at, nxt = nxt, nxt.getnext()
+        for item in rows:
+            line = _price_line_paragraph(proto, item)
+            at.addnext(line)
+            at = line
+            n += 1
+    return n
+
+
+@lru_cache(maxsize=64)
+def _lines_under_heading_cached(path_str: str, _mtime_ns: int) -> bool:
+    """Memoized on the file's mtime (see _free_tax_rows_cached)."""
+    return bool(price_lines_anchor_headings(docx.Document(path_str)))
+
+
+def template_lines_under_heading(work_type: str, audience: str | None) -> bool:
+    """Does the template `(work_type, audience)` picks print its price lines under a heading of its
+    own (the GC files)? main.py asks, to leave out the "Options:" row it restores on a Direct combo.
+    An unreadable template answers False, which is what every fill did before this was asked:
+    `fill_proposal` is a moment away from raising on the same file, with the error worth surfacing."""
+    try:
+        p = pick_template(work_type, audience)
+        return _lines_under_heading_cached(str(p), p.stat().st_mtime_ns)
+    except Exception as exc:              # noqa: BLE001 -- never fail a generate over a shape read
+        log.warning("Could not read whether the %s/%s proposal template prints price lines under "
+                    "its own heading (%s: %s)", work_type, audience, type(exc).__name__, exc)
+        return False
 
 
 # ─── Paragraph-editor id mapping (Proposal Review's document editor) ──────
@@ -5248,7 +5506,8 @@ def fill_proposal(
     Repeatable blocks (Phase 1), each cloned once per list item before the
     flat pass:
       - `systems`     → `{{#system}}…{{/system}}`     (only when supplied)
-      - `price_lines` → `{{#price_line}}…{{/price_line}}` (option/unit-price lines)
+      - `price_lines` → `{{#price_line}}…{{/price_line}}` (option/unit-price lines); on a template
+        with no such region (the GC files), new paragraphs directly under its Options heading
       - `alternates`  → `{{#alternate}}…{{/alternate}}`   (0/1 recommended system)
     `price_line`/`alternate` always run so their markers are stripped (zero
     rows) when empty — never left as literal text. A template with no marker,
@@ -5320,6 +5579,18 @@ def fill_proposal(
     # be rewritten below (Phase 0 / 0.5) and its region is cloned by Phase 1, and the tag survives
     # both. Adds no paragraph, so no editor id moves.
     _mark_options_headings(d)
+
+    # Where the `price_lines` print when the template has no {{#price_line}} region (the GC files):
+    # under the Options heading, as copies of Kyle's first money row there. Copied now, off the
+    # pristine template, so the estimator's edits to that row (Phase 0) never reach the new lines.
+    # Adds no paragraph here, so no editor id moves. Only asked when there are lines to place.
+    _lines_anchors: list = []
+    _lines_nowhere = False
+    if price_lines:
+        _lines_blocks = _block_names(d)
+        if "price_line" not in _lines_blocks:
+            _lines_anchors = _price_line_prototypes(d, _lines_blocks)
+            _lines_nowhere = not _lines_anchors
 
     # The free remodel rows, found by their token on the PRISTINE template and taken out only
     # after Phase 0: removing a paragraph before the editor's overrides are applied would shift
@@ -5403,6 +5674,17 @@ def fill_proposal(
     n_blocks = _expand_all_blocks(d, block_lists, _rewritten_rows)
     if n_blocks:
         log.info("Expanded %d repeatable block(s)", n_blocks)
+    # A template with no {{#price_line}} region prints its lines under its Options heading; one with
+    # neither says so, instead of dropping them without a word.
+    if _lines_anchors:
+        _n_under = _insert_price_lines_under_headings(_lines_anchors, price_lines)
+        if _n_under:
+            log.info("Printed %d price-line paragraph(s) under %d Options heading(s)",
+                     _n_under, len(_lines_anchors))
+    elif _lines_nowhere:
+        log.warning(
+            "Template %s has no {{#price_line}} region and no Options heading: %d price line(s) "
+            "have nowhere to print and are dropped", template_path.name, len(price_lines))
 
     # Base-bid line DISPLAY override (single_bid.desc): swap the static
     # description noun between {{base_bid_formatted}} and {{base_tax_phrase}}
