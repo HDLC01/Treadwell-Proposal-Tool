@@ -4739,11 +4739,12 @@ def _set_paragraph_runs(p_elem, runs, bold_marks: dict | None = None) -> bool:
     Media runs are never removed, for the same reason as `_set_paragraph_text`: they anchor the
     letterhead and every floating text box.
 
-    Returns True when any run carries a size that is NOT one of the sizes the template paragraph
-    itself uses -- a size the estimator chose -- so the caller can exempt this paragraph from the
+    Returns True when any run carries a size the estimator CHOSE -- a size that is NOT one of the
+    sizes the template paragraph itself uses, or one the run says outright was picked with the
+    ribbon's size box (`size_set: true`) -- so the caller can exempt this paragraph from the
     overflow shrink (which would otherwise rewrite it — measured at 4.5pt on a real GC NOTES
-    line). A size the paragraph already had is the editor handing the template's own back (see
-    `tmpl_sizes` below) and is not a choice.
+    line). A size the paragraph already had, with no `size_set`, is the editor handing the
+    template's own back (see `tmpl_sizes` below) and is not a choice.
 
     `bold_marks`, when given, collects the runs whose `bold` the estimator STATED (True or False
     alike — both are a choice, absent is not), so `_normalize_work_label_formatting` can leave
@@ -4774,9 +4775,17 @@ def _set_paragraph_runs(p_elem, runs, bold_marks: dict | None = None) -> bool:
     # 7.5 x4, then 7.0) and its 7.0pt tail landed on a 7.5pt offset, was taken for a choice, and
     # the line printed at 7.5/7.0pt beside 4.5pt notes again. A delete-one-character scan left four
     # or five lines of every GC and Gyp file exempt that way, and a plain edit to a GC WORK line
-    # did the same on the lines that mix 9pt and 8pt. The editor cannot send a size that is neither
-    # the template's nor one the estimator picked, so the only question is whether a size is one of
-    # this paragraph's own, wherever in the line it now sits.
+    # did the same on the lines that mix 9pt and 8pt. The editor reads every size off the page and
+    # sends it back, so a size that is one of this paragraph's own is the template's coming home,
+    # wherever in the line it now sits.
+    #
+    # TWO WAYS A SIZE IS STILL THE ESTIMATOR'S, and the set alone cannot see either:
+    #  * a size outside the set -- the template never used it, so somebody asked for it;
+    #  * `size_set`, which the editor writes onto a run ONLY when the ribbon's size box put the size
+    #    there (never typing, deleting, rewording, or a paste -- a paste drops the clipboard's font
+    #    size, see proposal-format-core.fmtFromPasted). That is how the estimator who sets a whole
+    #    9/8pt line to 9pt gets what they asked for even though 9pt is one of the line's own sizes.
+    # A size that is neither is not a choice, and the shrink may take it.
     #
     # Only a run with words in it counts. Word leaves empty runs behind with sizes of their own (a
     # GC PRICE row carries a dozen at 9pt and 8.5pt after its 10pt text), and the editor draws and
@@ -4838,7 +4847,7 @@ def _set_paragraph_runs(p_elem, runs, bold_marks: dict | None = None) -> bool:
                     el = OxmlElement(tag)
                     rpr.append(el)
                 el.set(qn("w:val"), str(hp))
-            if hp not in tmpl_sizes:
+            if hp not in tmpl_sizes or spec.get("size_set") is True:
                 user_sized = True
 
         if len(rpr):
@@ -5072,6 +5081,9 @@ def _apply_paragraph_overrides(d: Document, overrides: list, doomed=()) -> int:
                 sz = r.get("size_pt")
                 if isinstance(sz, (int, float)) and not isinstance(sz, bool) and 1 <= float(sz) <= 200:
                     one["size_pt"] = float(sz)
+                    # Only ever alongside a size: the flag says "this size was picked".
+                    if r.get("size_set") is True:
+                        one["size_set"] = True
                 clean.append(one)
             if clean:
                 by_id[pid] = clean

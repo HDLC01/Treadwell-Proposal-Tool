@@ -125,6 +125,24 @@ def test_a_template_paragraph_still_takes_its_formatting(ran):
     ]
 
 
+def test_a_paste_carries_no_font_size(ran):
+    """The clipboard states its own size (Chrome copies 16px = 12pt, Word 11pt). Read into `size_pt`
+    it looked like the estimator choosing a size, and one pasted run exempted the whole paragraph
+    from the text-box shrink: pasted into the GC wear & tear note it printed at 12pt among 4.5pt
+    neighbours (test_notes_box_layout::test_pasted_text_does_not_exempt_the_line_from_the_shrink
+    follows the same runs into the writer). The words, and the bold / italic that came with them,
+    still arrive; the line's own size applies.
+    Mutation: `fmtFromPasted` reading `style.fontSize` into `size_pt` again."""
+    assert ran["pastedSize"]["chrome"] == [
+        {"text": "Scope: ", "tok": None},
+        {"text": "Pasted from an email.", "tok": None, "bold": True},
+    ]
+    assert ran["pastedSize"]["word"] == [
+        {"text": "Scope: ", "tok": None},
+        {"text": "Pasted from Word.", "tok": None, "italic": True},
+    ]
+
+
 def test_a_pasted_clipboard_is_read_in_a_document_with_no_window(ran):
     """A clipboard's HTML is parsed where nothing in it can load or run.
 

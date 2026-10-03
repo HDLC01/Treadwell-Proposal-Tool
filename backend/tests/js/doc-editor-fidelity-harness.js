@@ -549,6 +549,18 @@ function makePage(label) {
       bold: (id, range) => { CARET = range; return toggleFormat(blockEl(id), "bold"); },
       italic: (id, range) => { CARET = range; return toggleFormat(blockEl(id), "italic"); },
       size: (id, range, pt) => applyFormat(blockEl(id), { size_pt: pt }, range),
+      // What the ribbon's size box writes (commitSize; its own scenario is in fmt-ribbon-harness):
+      // the size, and the statement that it was PICKED.
+      pick: (id, range, pt) => applyFormat(blockEl(id), { size_pt: pt, size_set: true }, range),
+      // Typing INSIDE the span a size was picked on: the browser edits the span's text node and
+      // leaves the span, and its attributes, in place.
+      typeInSizeSpan: (id, value) => {
+        const el = blockEl(id);
+        const sp = el.querySelectorAll("span").filter((s) => s.dataset && s.dataset.szSet === "1")[0];
+        if (!sp) return false;         // the flag is gone from the DOM: the scenario reports it, not a crash
+        sp.childNodes[0].nodeValue = value;
+        el.dispatchEvent({ type: "input" });
+      },
       resetFmt: (id, range) => applyFormat(blockEl(id),
         { bold: null, italic: null, underline: null, size_pt: null }, range),
       type: (id, value) => {
@@ -1511,6 +1523,48 @@ if (process.argv[3]) {
     res.original = original;
     out.pages[key] = res;
   }
+}
+
+// ═══ 20. A PICKED SIZE IS A STATEMENT THAT SURVIVES, AND ONLY THE SIZE BOX MAKES IT ═══════════
+// Block 115 is 8pt throughout, so picking 8pt on a stretch of it asks for nothing the template did
+// not already have -- and that is the case the writer cannot tell from a plain edit unless the run
+// says so (`size_set`, drawn as data-sz-set on the span). It has to come through a save, a reload,
+// a second save and an edit INSIDE the span; and no amount of plain typing may ever write it.
+{
+  STORE.blob = JSON.parse(JSON.stringify(SEED));
+  const p = makePage("pick-a");
+  p.mount(TEMPLATE, TOKENS_A, VER);
+  const text = p.snapshot(115).text;
+  const at = text.indexOf("Grind");
+  const flagged = (runs) => runs.filter((r) => r.size_set === true).map((r) => r.text);
+  p.pick(115, [at, at + 5], 8);
+  const sent = (p.collect().find((o) => o.id === 115) || {}).runs || [];
+  p.persist();
+  const q = makePage("pick-reloaded");
+  q.mount(TEMPLATE, TOKENS_A, VER);
+  q.restore("epoxy", "Direct", TOKENS_A);
+  const resent = (q.collect().find((o) => o.id === 115) || {}).runs || [];
+  q.persist();
+  const stored = (TW.getState().paragraph_overrides_all["epoxy:Direct"].items.find((o) => o.id === 115) || {}).runs || [];
+  q.typeInSizeSpan(115, "Grinded");
+  const typedInside = (q.collect().find((o) => o.id === 115) || {}).runs || [];
+  // PLAIN TYPING: a fresh page, words typed at the end, in the middle, and the whole text replaced.
+  const typing = {};
+  for (const [name, act] of [
+    ["append", (pg) => pg.append(115, " and more")],
+    ["replace", (pg) => pg.type(115, "Scope:  something else entirely")],
+    ["delete", (pg) => pg.type(115, "Scope:  ")],
+  ]) {
+    STORE.blob = JSON.parse(JSON.stringify(SEED));
+    const t = makePage("typing-" + name);
+    t.mount(TEMPLATE, TOKENS_A, VER);
+    act(t);
+    const got = (t.collect().find((o) => o.id === 115) || {});
+    typing[name] = { sizeSet: JSON.stringify(got).indexOf("size_set") >= 0, collected: !!got.id };
+  }
+  out.pickedSize = { sent: sent, flaggedSent: flagged(sent), flaggedReloaded: flagged(resent),
+                     flaggedStored: flagged(stored), typedInside: typedInside,
+                     flaggedAfterTypingInside: flagged(typedInside), typing: typing };
 }
 
 console.log(JSON.stringify(out));

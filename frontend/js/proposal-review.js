@@ -2626,7 +2626,7 @@
 
   /** The computed run format of a node, walking up to (not past) the block. */
   function fmtAt(node, stop) {
-    const out = { bold: null, italic: null, underline: null, size_pt: null };
+    const out = { bold: null, italic: null, underline: null, size_pt: null, size_set: null };
     let el = node.nodeType === Node.TEXT_NODE ? node.parentElement : node;
     // Read the nearest declaration for each property. Inline styles only \u2014 the block's own
     // inherited size is the template's and must stay null so the docx keeps inheriting it,
@@ -2643,6 +2643,9 @@
       }
       if (out.size_pt === null && s.fontSize && s.fontSize.endsWith("pt")) {
         out.size_pt = parseFloat(s.fontSize);
+        // ...and whether the ribbon's size box put it there (renderRuns writes the marker on the
+        // same span as the size, and only for a run that carries `size_set`).
+        if (el.dataset && el.dataset.szSet === "1") out.size_set = true;
       }
       el = el.parentElement;
     }
@@ -2816,7 +2819,11 @@
       let inner = escHtml(String(r.text));
       if (r.tok) inner = `<span class="tw-fill" data-token="${escHtml(r.tok)}" data-v="${inner}">${inner}</span>`;
       const css = runEditCss(r);
-      html += css ? `<span style="${css}">${inner}</span>` : inner;
+      // `data-sz-set` on the span is how a picked size survives the DOM: fmtAt reads it back beside
+      // the font-size, so a re-render, an undo and a reload all keep the flag the way they keep the
+      // size, and text typed INSIDE the span stays in it. Only the size box ever sets it.
+      const sz = r.size_set === true && r.size_pt ? ' data-sz-set="1"' : "";
+      html += css ? `<span${sz} style="${css}">${inner}</span>` : inner;
     }
     el.innerHTML = html || "<br>";
   }
@@ -3480,7 +3487,7 @@
           const total = runsLength(editRuns(one));
           if (!total) return;
           if (btn.dataset.fmt === "reset") {
-            applyFormat(one, { bold: null, italic: null, underline: null, size_pt: null }, [0, total]);
+            applyFormat(one, { bold: null, italic: null, underline: null, size_pt: null, size_set: null }, [0, total]);
           } else {
             toggleFormat(one, btn.dataset.fmt, [0, total]);
           }
@@ -3490,7 +3497,7 @@
       }
       if (btn.dataset.fmt === "reset") {
         const f = selectionFormat(el, fmtRangeFor(el));
-        applyFormat(el, { bold: null, italic: null, underline: null, size_pt: null }, f.range);
+        applyFormat(el, { bold: null, italic: null, underline: null, size_pt: null, size_set: null }, f.range);
         // A template PRICE-box row: its bullet, level and indent go back to the template's too, the
         // way a price line's do. (A WORK / NOTES row's Reset is the run formatting only, as before.)
         if (takesPriceStep(el.dataset.id)) {
@@ -3551,7 +3558,10 @@
         box.value = f.size_pt ? String(f.size_pt) : "";
         return;
       }
-      applyFormat(el, { size_pt: v }, f.range);
+      // The size box is the ONE place a size becomes the estimator's own: `size_set` says so, which
+      // is what keeps a size the line already uses (9pt on a 9/8pt line) from being read as the
+      // template's coming home and shrunk with the box. Emptying the box clears both.
+      applyFormat(el, { size_pt: v, size_set: v === null ? null : true }, f.range);
       showFmtBar(el);
     }
 

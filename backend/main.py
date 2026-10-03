@@ -4736,6 +4736,10 @@ def _sanitize_paragraph_overrides(overrides_in: list) -> list:
                 # A bool is an int subclass: True would become 1pt, an invisible paragraph.
                 if isinstance(sz, (int, float)) and not isinstance(sz, bool) and 1 <= float(sz) <= 200:
                     one["size_pt"] = float(sz)
+                    # `size_set`: the ribbon's size box put this size here, so it is the estimator's
+                    # even when the template's own line uses it (see _set_paragraph_runs).
+                    if r.get("size_set") is True:
+                        one["size_set"] = True
                 clean.append(one)
             if clean:
                 # `text` rides along as the plain-text fallback for any consumer that ignores runs.

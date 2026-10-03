@@ -25,7 +25,10 @@ Word's output did not change by a point with the line pin in place.
 """
 import copy
 import io
+import json
+import pathlib
 import re
+import subprocess
 from unittest import mock
 
 import docx
@@ -35,8 +38,8 @@ from docx.oxml.ns import qn
 
 import main
 import proposal_writer as pw
-from test_editor_fit_parity import (FRONTEND, TEMPLATES, _V, _fit, _docx, _box_runs, _harness, _template,
-                                    needs_node)
+from test_editor_fit_parity import (FRONTEND, NODE, TEMPLATES, _V, _body, _fit, _docx, _box_runs, _harness,
+                                    _template, needs_node)
 
 # {(work_type, audience): {box id: (x_pt, y_pt) LibreOffice prints the box at}}
 PRINTED = {
@@ -288,6 +291,106 @@ def test_a_size_the_estimator_chose_survives_an_edit_that_also_changed_the_lengt
     assert f["exempt"] == [blk["id"]]
     runs = _box_runs(_docx(body))[blk["txbx"]]
     assert [hp for hp, t in runs if t.startswith("See Terms")] == [18]
+
+
+# ── a size is also the estimator's when the size box SAYS so, and never because of a paste ─────────
+def _the_line_at(body, blk, texts):
+    """Per run of the line (found by its words) the half-points the generated document prints it at."""
+    return [hp for hp, t in _box_runs(_docx(body))[blk["txbx"]] if t in texts]
+
+
+def _pasted_runs():
+    """What the page's own paste handler (the harness lifts the shipped one) makes of a Chrome and of a
+    Word clipboard: the runs it would put into the paragraph, in order."""
+    harness = pathlib.Path(__file__).resolve().parent / "js" / "editor-paste-and-save-harness.js"
+    proc = subprocess.run([NODE, str(harness), str(FRONTEND)], capture_output=True, text=True,
+                          encoding="utf-8", timeout=180)
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout.strip().splitlines()[-1])["pastedSize"]
+
+
+@needs_node
+@pytest.mark.parametrize("source", ["chrome", "word"])
+def test_pasted_text_does_not_exempt_the_line_from_the_shrink(source):
+    """A paste brought the clipboard's font size (Chrome 16px = 12pt, Word 11pt) into `size_pt`, so one
+    pasted run was a size the wear & tear note does not use, the writer took it for the estimator's
+    choice and exempted the WHOLE paragraph: /api/proposal-fit reported [161] at scale 0.6 and the line
+    printed at 7.5/7.0pt and 12pt beside 4.5pt notes. The words the page's real paste handler makes of
+    the clipboard, appended to the note's own runs, now shrink with the box and print at the size the
+    unedited document gives each run. (A foreign size sent without `size_set` is still exempt: that
+    is the writer's rule, and the control for it is the last assertion.)
+    Mutation: `fmtFromPasted` reading `style.fontSize` into `size_pt` again."""
+    blk = _wear_block()
+    pasted = [r for r in _pasted_runs()[source] if r["text"] != "Scope: "]
+    assert pasted and not any("size_pt" in r for r in pasted), pasted
+    runs = [{"text": r["text"], "size_pt": r["size_pt"]} for r in blk["runs"]]
+    runs += [{k: v for k, v in r.items() if k != "tok"} for r in pasted]
+    body = _gc_body([{"id": blk["id"], "text": "".join(r["text"] for r in runs), "runs": runs}])
+    f = next(b for b in _fit(body) if b["id"] == blk["txbx"])
+    assert f["scale"] < 0.999 and f["exempt"] == [], f
+    unedited = {hp for hp, _t in _box_runs(_docx(_gc_body([])))[blk["txbx"]]}
+    printed = _box_runs(_docx(body))[blk["txbx"]]
+    assert {hp for hp, t in printed if t} <= unedited, (sorted({hp for hp, t in printed}), sorted(unedited))
+    foreign = runs[:-len(pasted)] + [{"text": " Pasted from an email.", "size_pt": 12}]
+    ov = {"id": blk["id"], "text": "".join(r["text"] for r in foreign), "runs": foreign}
+    f = next(b for b in _fit(_gc_body([ov])) if b["id"] == blk["txbx"])
+    assert f["exempt"] == [blk["id"]], f
+
+
+def _picked(wt, bid, pick_pt, kind, flag):
+    """A whole line set to `pick_pt` -- a size the line already uses -- exactly as the ribbon's size
+    box leaves it (`size_set` on every run) or, with flag=False, as a plain edit would send it."""
+    tpl = _template(wt, "GC")
+    blk = next(b for b in tpl["blocks"] if b["id"] == bid)
+    runs = [dict({"text": r["text"], "size_pt": pick_pt}, **({"size_set": True} if flag else {}))
+            for r in blk["runs"]]
+    body = _body(wt, "GC", kind)
+    body["paragraph_overrides"] = [{"id": bid, "text": "".join(r["text"] for r in runs), "runs": runs}]
+    return blk, body
+
+
+@pytest.mark.parametrize("wt,bid,pick,kind", [("polish", 113, 9.0, "overflow"), ("epoxy", 161, 7.5, "full")])
+def test_a_size_picked_with_the_size_box_is_honoured_even_when_the_line_already_uses_it(wt, bid, pick, kind):
+    """GC polish line 113 mixes 9pt and 8pt; the wear & tear note is 7.5pt and 7.0pt. Setting the whole
+    line to a size it already has is the estimator's choice -- on e32ced9 the line kept it, and the
+    first follow-up shrank it with the box because the size is one of the line's own. With `size_set`
+    on the runs (what the size box writes) the line is exempt again, in /api/proposal-fit (what the
+    editor draws from) and in the document, and prints at the size picked while its neighbours shrink.
+    Without the flag it is a plain edit and shrinks, which is what keeps the flag the difference.
+    Mutations: the writer's `or spec.get("size_set") is True` taken out; main.py's sanitizer dropping
+    `size_set`; the writer's own run sanitizer dropping it."""
+    blk, body = _picked(wt, bid, pick, kind, True)
+    texts = {r["text"] for r in blk["runs"] if "{{" not in r["text"] and len(r["text"].strip()) >= 4}
+    assert texts
+    f = next(b for b in _fit(body) if b["id"] == blk["txbx"])
+    assert f["exempt"] == [bid], f
+    assert set(_the_line_at(body, blk, texts)) == {int(pick * 2)}
+    _blk, plain = _picked(wt, bid, pick, kind, False)
+    f = next(b for b in _fit(plain) if b["id"] == blk["txbx"])
+    assert f["exempt"] == [], f
+    if kind == "overflow":
+        assert f["scale"] < 0.999
+        assert max(_the_line_at(plain, blk, texts)) < int(pick * 2)
+
+
+@pytest.mark.parametrize("wt,aud", TEMPLATES)
+def test_an_explicit_size_pick_is_honoured_on_every_line_of_every_template(wt, aud):
+    """The scan above, for the pick: over every free line of every text box, setting the whole line to
+    each size the line itself uses is the estimator's choice when the runs carry `size_set` and a
+    plain edit's when they do not. Mutation: the flag ignored in `_set_paragraph_runs`."""
+    d = docx.Document(str(pw.pick_template(wt, aud)))
+    picks = 0
+    for idx, p in _free_box_paragraphs(d):
+        chars = _chars_of(p)
+        if len(chars) < 3 or all(hp is None for _c, hp in chars):
+            continue
+        for hp in sorted({h for _c, h in chars if h is not None}):
+            runs = _runs_of([(c, hp) for c, _h in chars])
+            assert pw._set_paragraph_runs(copy.deepcopy(p), runs) is False, (wt, aud, idx, hp)
+            flagged = [dict(r, size_set=True) for r in runs]
+            assert pw._set_paragraph_runs(copy.deepcopy(p), flagged) is True, (wt, aud, idx, hp)
+            picks += 1
+    assert picks >= 8, picks                                    # the scan really ran
 
 
 @needs_node

@@ -629,6 +629,21 @@ const out = {};
   out.fmtAfterUndo = api.editRuns(blocks[0]);
 }
 
+// ═══ 2b. A PICKED SIZE COMES BACK AS PICKED ══════════════════════════════════
+// The size box marks what it wrote (`size_set`, drawn as data-sz-set). An undo restores the runs the
+// pre-image holds, so a flag the pre-image dropped would hand the writer a plain edit's 9pt: the
+// size looks restored and the line is shrunk with its box again.
+{
+  const { box, blocks } = mountBox(
+    ['Scope: <span data-sz-set="1" style="font-size:9pt">grind</span> and prep.']);
+  caretIn(blocks[0], 0, 0);
+  out.pickedBefore = api.editRuns(blocks[0]);
+  api.setBoxSel(blocks);
+  key(box, "Delete");
+  undoKey(box);
+  out.pickedAfterUndo = api.editRuns(blocks[0]);
+}
+
 // ═══ 3. WHAT ONE UNDO UNIT IS ════════════════════════════════════════════════
 // A burst of typing is one; a pause, a space and a move to another line each open the next.
 {

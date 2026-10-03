@@ -883,3 +883,21 @@ def test_the_live_re_fill_follows_the_estimate_on_a_formatted_no_break_space_lin
     assert r["mid"]["text"] == "Area: 6,000 SF" and any(x.get("tok") for x in r["mid"]["runs"]), r["mid"]
     assert r["after"]["text"] == "Area: 7,500 SF", r["after"]
     assert r["stored"]["text"] == "Area: 7,500 SF" and any(x.get("tok") for x in r["stored"]["runs"]), r["stored"]
+
+
+def test_a_size_the_estimator_picked_survives_save_reload_and_typing_inside_it(ran):
+    """The writer cannot tell an estimator who sets a line to a size the line already uses (8pt on
+    block 115's 8pt) from a plain edit handing the template's size back, so the size box marks what
+    it wrote: `size_set` on the run, `data-sz-set` on the span. It reaches the payload, the saved
+    draft and a reload, stays on the span when words are typed inside it, and is NEVER written by
+    typing, deleting or replacing text.
+    Mutation: `renderRuns` not writing the attribute (the flag dies at the first re-render); `fmtAt`
+    not reading it (it dies at the first serialise)."""
+    g = ran["pickedSize"]
+    assert g["flaggedSent"] == ["Grind"], g["sent"]
+    assert g["flaggedReloaded"] == ["Grind"], "the flag did not survive the reload"
+    assert g["flaggedStored"] == ["Grind"], "the flag did not survive the second persist"
+    assert g["flaggedAfterTypingInside"] == ["Grinded"], g["typedInside"]
+    assert g["typing"] == {"append": {"sizeSet": False, "collected": True},
+                           "replace": {"sizeSet": False, "collected": True},
+                           "delete": {"sizeSet": False, "collected": True}}, g["typing"]

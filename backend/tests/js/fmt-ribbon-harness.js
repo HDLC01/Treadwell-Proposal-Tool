@@ -638,6 +638,8 @@ const api = new Function(
      *  (No backticks in here: this block is inside the template literal the sandbox is built from,
      *  and one would end the literal. It has cost this repo a parse error before.) */
     renderBlank: (el) => renderRuns(el, [{ text: "", tok: null }]),
+    /** A line drawn from runs, the way a template paragraph with its own sizes is. */
+    renderFrom: (el, runs) => renderRuns(el, runs),
     /** How many characters a line reports through the run algebra. A blank one reports 1 -- the
      *  newline its lone BR stands for -- which is itself part of the story: the length is not zero,
      *  yet there is nowhere to put a caret. */
@@ -1382,6 +1384,42 @@ function backspace(el) {
   out.escapeAbandons = {
     runsUnchanged: JSON.stringify(runsOf(el)) === JSON.stringify(before),
   };
+}
+
+// ═══ 30. THE SIZE BOX, AND ONLY THE SIZE BOX, MARKS A SIZE AS THE ESTIMATOR'S ═════
+// A line that already uses 9pt and 8pt. The writer cannot tell an estimator who sets the whole line
+// to 9pt from the template's own 9pt (the size is one the line has), so the size box writes
+// `size_set` beside the size. Bold and Reset must leave / clear it as they would any size, and an
+// emptied box takes both back to the template.
+{
+  const els = api.mountBlocks(RECORDS);
+  const el = els.get(116);
+  api.renderFrom(el, [{ text: "Alpha ", tok: null, size_pt: 9 }, { text: "beta", tok: null, size_pt: 8 }]);
+  const before = runsOf(el);
+  focusBlock(el);
+  highlight(el, 0, 10);
+  leaveFor(null);
+  chooseSize("9");
+  const picked = runsOf(el);
+  focusBlock(el);
+  highlight(el, 0, 5);
+  leaveFor(null);
+  press(CONTROLS.bold);
+  const bolded = runsOf(el);
+  focusBlock(el);
+  highlight(el, 0, 10);
+  leaveFor(null);
+  press(CONTROLS.reset);
+  const reset = runsOf(el);
+  focusBlock(el);
+  highlight(el, 0, 10);
+  leaveFor(null);
+  chooseSize("9");
+  focusBlock(el);
+  highlight(el, 0, 10);
+  leaveFor(null);
+  chooseSize("");
+  out.sizePicked = { before: before, picked: picked, bolded: bolded, reset: reset, cleared: runsOf(el) };
 }
 
 /** Ctrl+A, as the keyboard sends it: at the BOX, because that is the editing host and a browser

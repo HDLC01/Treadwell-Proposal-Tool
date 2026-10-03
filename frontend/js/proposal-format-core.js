@@ -25,7 +25,12 @@
 })(typeof self !== "undefined" ? self : this, function () {
   "use strict";
 
-  var RUN_KEYS = ["bold", "italic", "underline", "size_pt"];
+  // `size_set` is not a look, it is a statement about `size_pt`: "the ribbon's size box put this size
+  // here". It rides with the size so the writer can tell an estimator's 9pt from the template's own
+  // 9pt on a line that already uses both (proposal_writer._set_paragraph_runs). It is a key so that
+  // coalesce / summarize / patchRuns treat a picked 9pt and an inherited 9pt as the different runs
+  // they are, instead of merging one into the other and losing the statement.
+  var RUN_KEYS = ["bold", "italic", "underline", "size_pt", "size_set"];
 
   function runsLength(runs) {
     var n = 0;
@@ -161,8 +166,12 @@
     if (style.fontStyle) f.italic = (style.fontStyle === "italic" || style.fontStyle === "oblique");
     var dec = String(style.textDecorationLine || style.textDecoration || "");
     if (dec) f.underline = dec.indexOf("underline") >= 0;
-    var size = parseSizePt(style.fontSize);
-    if (size) f.size_pt = size;
+    // NO SIZE COMES OUT. A clipboard states its OWN font size (Chrome 16px, which is 12pt; Word's
+    // 11pt), and carried into size_pt it was read as the estimator choosing a size: the whole
+    // paragraph was then exempt from the text-box shrink and printed at 12pt among 4.5pt neighbours
+    // (a NOTES line pasted from an email, 2026-10-03). Pasted words take the line's own size, the
+    // way they do when typed; the size box is how to ask for another. `parseSizePt` stays: it is
+    // the reading of a CSS size, whoever asks.
     return f;
   }
 
