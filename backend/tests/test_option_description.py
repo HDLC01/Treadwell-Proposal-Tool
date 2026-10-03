@@ -9,11 +9,13 @@ option rows as "$4,200 – Add for onsite/in place mockup, if required."
 THE FIELD. state.tab_opts[<tab>].desc, typed in the Proposal step's Pricing options sidebar (a
 "Description" box above Notes). It rides the draft blob the option's other settings already ride,
 becomes rooms[].custom_desc, and prints in place of the system name -- WITHOUT "as described above",
-a phrase that only makes sense after a system name:
+a phrase that only makes sense after a system name. On a Deduct line the words are the whole phrase
+(the estimator types it all; wrapping it would read "VE for Add for onsite..."), so the "VE for ...,
+in lieu of <base>." wrapper is only the line an empty description keeps:
 
     total      "$4,200 – <desc> <tax phrase>"           (+ " — note1; note2")
     add        "Add $8,292 – <desc>"                    (+ notes)
-    deduct     "Deduct ($3,200) – VE for <desc>, in lieu of <base>."   (+ notes)
+    deduct     "Deduct ($3,200) – <desc>"                (+ notes)
 
 An empty description is exactly the line this has always printed. A retyped line
 (price_overrides.lines2["option:<tab>"]) still wins over it, as it always has.
@@ -103,7 +105,7 @@ def _line(mode, words, notes=()):
         return f"$36,157 – {words} (tax exempt)" + _tail(notes)
     if mode == "add":
         return f"Add $8,292 – {words}" + _tail(notes)
-    return f"Deduct ($3,200) – VE for {words}, in lieu of {gc.BASE_DESC}." + _tail(notes)
+    return f"Deduct ($3,200) – {words}" + _tail(notes)
 
 
 def _old_line(mode, notes=(), old_desc="Treadwell MACRO Flake"):
@@ -152,6 +154,18 @@ def test_the_document_reads_custom_desc_on_its_own(wt, aud, mode, with_notes):
     got = _texts(gc._generate(wt, aud, rooms=[BASE, _room(mode, custom=WORDS, notes=notes, own=True)]))
     assert _line(mode, WORDS, notes) in got
     assert _old_line(mode, notes) not in got
+
+
+@pytest.mark.parametrize("wt,aud", CONFIGS)
+def test_a_deduct_with_a_description_is_his_words_not_the_ve_wrapper(wt, aud):
+    """The estimator types the whole phrase, so wrapping it reads "VE for Add for onsite...". With a
+    description the Deduct line is "Deduct ($3,200) – <words>"; with none it keeps the wrapper."""
+    got = _texts(gc._generate(wt, aud, rooms=[BASE, _room("deduct", custom=WORDS, own=True)]))
+    assert f"Deduct ($3,200) – {WORDS}" in got
+    assert not any("VE for" in t and WORDS in t for t in got)
+    assert not any("in lieu of" in t and "Deduct" in t for t in got)
+    was = _texts(gc._generate(wt, aud, rooms=[BASE, _room("deduct")]))
+    assert f"Deduct ($3,200) – VE for Treadwell MACRO Flake, in lieu of {gc.BASE_DESC}." in was
 
 
 @pytest.mark.parametrize("wt,aud", CONFIGS)

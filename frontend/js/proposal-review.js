@@ -1682,7 +1682,8 @@
             // Add/Deduct word rides inside the amount island (docx parity).
             const diff = N(r.bid.total) - N(r.base_total);
             if (diff < 0) {
-              label = `VE for ${custom || r.option_desc || r.name}, in lieu of ${r.base_desc || "the base bid"}.`;
+              // His own words are the whole phrase: no "VE for …, in lieu of …" wrapper round them.
+              label = custom || `VE for ${r.option_desc || r.name}, in lieu of ${r.base_desc || "the base bid"}.`;
               amount = `Deduct (${fmtUSDdoc(Math.abs(diff))})`;
             } else {
               label = custom || r.option_desc || r.system_desc || r.name || floorNoun;

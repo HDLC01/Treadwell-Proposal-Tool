@@ -4534,8 +4534,9 @@ def _build_options(rooms_in: list, values: Dict[str, Any], work_type: str = "epo
     When it is set it IS the option line -- Kyle's own style, "$4,200 – Add for onsite mockup, if
     required." -- in place of the system name, and WITHOUT the "as described above" the
     system-name fallback carries (that phrase only means something after a system name). It
-    replaces the option's name in the Add and Deduct lines the same way. Unset, every line below
-    is exactly what it has always been.
+    replaces the option's name in the Add line the same way, and IS the whole Deduct line ("Deduct
+    ($3,200) – <desc>"): the estimator types the full phrase, so the "VE for ..., in lieu of <base>."
+    wrapper is not put round it. Unset, every line below is exactly what it has always been.
 
     AN OPTION IS ALWAYS ONE LINE. Hanz, 2026-09-28: "Options should only be total amount, cannot
     be broken out. Only the base bid would be broken out or one line." (He had picked an itemised
@@ -4592,7 +4593,9 @@ def _build_options(rooms_in: list, values: Dict[str, Any], work_type: str = "epo
             if diff < 0:
                 base_desc = str(r.get("base_desc") or "").strip() or "the base bid"
                 price_formatted = "Deduct " + _fmt_usd(diff, parens=True)   # parens = abs magnitude
-                price_desc = f"VE for {option_desc or noun}, in lieu of {base_desc}."
+                # The estimator's own words are the whole phrase: no "VE for ..., in lieu of ..."
+                # wrapper round them. Without any, the line is what it has always been.
+                price_desc = custom or f"VE for {option_desc or noun}, in lieu of {base_desc}."
             else:
                 price_formatted = "Add " + _fmt_usd(diff)
                 price_desc = option_desc or noun
