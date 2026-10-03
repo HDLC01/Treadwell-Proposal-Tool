@@ -4506,14 +4506,37 @@ def _flooring_noun(work_type: str) -> str:
     }.get(str(work_type or "").lower(), "Flooring")
 
 
+# The longest an option's own description may run. The Proposal step's textarea stops at the same
+# number (maxlength) and its mkRoom cuts there too; this is the document's own guard, for a
+# payload that did not come from that page.
+OPTION_DESC_MAX = 400
+_OPTION_DESC_ILLEGAL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]")
+
+
+def _option_custom_desc(raw: Any) -> str:
+    """The estimator's own words for one option (rooms[].custom_desc, typed in its sidebar row),
+    made one tidy line: control characters and every run of whitespace (a newline included) become
+    one space, and it stops at OPTION_DESC_MAX. "" when there are none."""
+    s = _OPTION_DESC_ILLEGAL.sub(" ", str(raw or ""))
+    return " ".join(s.split())[:OPTION_DESC_MAX].strip()
+
+
 def _build_options(rooms_in: list, values: Dict[str, Any], work_type: str = "epoxy") -> list:
     """NON-base priced options for the proposal PRICE section ({{#room}} block).
 
     The base bid is rendered by {{#single_bid}}, so it is EXCLUDED here. Each input
     option (from the estimate/proposal side) is
     {name, is_base, base_total, deduct_amount, price_mode, show, option_desc,
-     base_desc, system_desc, bid:{total, sales_tax, remodel, taxable?, remodel_on?},
+     base_desc, system_desc, custom_desc?, bid:{total, sales_tax, remodel, taxable?, remodel_on?},
      notes_auto, notes_manual}.
+
+    `custom_desc` is the option's OWN long description (the Proposal step's sidebar Description).
+    When it is set it IS the option line -- Kyle's own style, "$4,200 – Add for onsite mockup, if
+    required." -- in place of the system name, and WITHOUT the "as described above" the
+    system-name fallback carries (that phrase only means something after a system name). It
+    replaces the option's name in the Add line the same way, and IS the whole Deduct line ("Deduct
+    ($3,200) – <desc>"): the estimator types the full phrase, so the "VE for ..., in lieu of <base>."
+    wrapper is not put round it. Unset, every line below is exactly what it has always been.
 
     AN OPTION IS ALWAYS ONE LINE. Hanz, 2026-09-28: "Options should only be total amount, cannot
     be broken out. Only the base bid would be broken out or one line." (He had picked an itemised
@@ -4554,6 +4577,9 @@ def _build_options(rooms_in: list, values: Dict[str, Any], work_type: str = "epo
         if total <= 0:                                # un-snapshotted / empty sheet
             continue
         option_desc = str(r.get("option_desc") or r.get("system_desc") or r.get("name") or "").strip()
+        custom = _option_custom_desc(r.get("custom_desc"))
+        if custom:
+            option_desc = custom
         rule = price_rules.tax_rule(total, bid.get("sales_tax"), bid.get("remodel"),
                                     taxable=bid.get("taxable"),
                                     remodel_on=bid.get("remodel_on"), layout=price_rules.ONE_LINE)
@@ -4567,14 +4593,16 @@ def _build_options(rooms_in: list, values: Dict[str, Any], work_type: str = "epo
             if diff < 0:
                 base_desc = str(r.get("base_desc") or "").strip() or "the base bid"
                 price_formatted = "Deduct " + _fmt_usd(diff, parens=True)   # parens = abs magnitude
-                price_desc = f"VE for {option_desc or noun}, in lieu of {base_desc}."
+                # The estimator's own words are the whole phrase: no "VE for ..., in lieu of ..."
+                # wrapper round them. Without any, the line is what it has always been.
+                price_desc = custom or f"VE for {option_desc or noun}, in lieu of {base_desc}."
             else:
                 price_formatted = "Add " + _fmt_usd(diff)
                 price_desc = option_desc or noun
         else:                                         # total mode: the option's own price
             tax_phrase = rule["phrase"]
             price_formatted = _fmt_usd(rule["base_cents"] / 100)
-            price_desc = f"{option_desc or noun} as described above" + (
+            price_desc = (custom or f"{option_desc or noun} as described above") + (
                 f" {tax_phrase}" if tax_phrase else "")
             candidates = [_fmt_usd(rule["total_cents"] / 100)]
 

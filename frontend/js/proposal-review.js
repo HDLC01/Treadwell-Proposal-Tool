@@ -1102,6 +1102,10 @@
       const total = isBase ? shownBase : N(t.total);
       const o = opts[t.id] || {};
       const desc = t.system_desc || t.name;
+      // The option's OWN words, typed in its sidebar row (tab_opts[id].desc): they print as the
+      // option line instead of the system name + "as described above". One line, 400 characters
+      // (main._build_options applies the same cap). The twin is estimate-review.js's mkRoom.
+      const custom = isBase ? "" : String(o.desc || "").replace(/\s+/g, " ").trim().slice(0, 400);
       // Each option's OWN tab says whether it is taxed; the base row carries the base's answer.
       const tx = isBase ? baseTaxable : tFlag(t, "taxable");
       const rm = isBase ? baseRemodelOn : tFlag(t, "remodel_on");
@@ -1113,7 +1117,8 @@
         base_total: shownBase, deduct_amount: shownBase - total,
         price_mode: isBase ? "total" : (o.price_mode === "deduct" ? "deduct" : "total"),
         show: isBase ? true : (o.show !== false),
-        system_desc: desc, option_desc: desc, base_desc: baseDesc,
+        system_desc: custom || desc, option_desc: custom || desc, custom_desc: custom,
+        base_desc: baseDesc,
         show_system: o.show_system !== undefined ? o.show_system : true,
         show_diff: o.show_diff !== undefined ? o.show_diff : false,
         notes_auto: Array.isArray(t.notes_auto) ? t.notes_auto : [],
@@ -1665,30 +1670,37 @@
         // OPTION lines — same mode/label rules as main._build_options.
         let html = rooms.map((r) => {
           let label, amount, phrase = "", slot = false, rule = null;
+          // The estimator's own words for the option (sidebar Description): they are the line, in
+          // place of the system name -- and without "as described above", which only makes sense
+          // for the system-name fallback. Empty = exactly the line this has always printed.
+          const custom = r.custom_desc ? String(r.custom_desc) : "";
+          const notes = (Array.isArray(r.notes_auto) ? r.notes_auto : [])
+            .concat(Array.isArray(r.notes_manual) ? r.notes_manual : []);
           if (r.price_mode === "deduct") {
             // Auto add/deduct by sign: diff = option − base (Will's formula).
             // Negative → "Deduct ($3,200)"; positive/zero → "Add $2,232". The
             // Add/Deduct word rides inside the amount island (docx parity).
             const diff = N(r.bid.total) - N(r.base_total);
             if (diff < 0) {
-              label = `VE for ${r.option_desc || r.name}, in lieu of ${r.base_desc || "the base bid"}.`;
+              // His own words are the whole phrase: no "VE for …, in lieu of …" wrapper round them.
+              label = custom || `VE for ${r.option_desc || r.name}, in lieu of ${r.base_desc || "the base bid"}.`;
               amount = `Deduct (${fmtUSDdoc(Math.abs(diff))})`;
             } else {
-              label = r.option_desc || r.system_desc || r.name || floorNoun;
+              label = custom || r.option_desc || r.system_desc || r.name || floorNoun;
               amount = `Add ${fmtUSDdoc(diff)}`;
             }
           } else {
             const desc = r.system_desc || r.option_desc || floorNoun;
-            const notes = (Array.isArray(r.notes_auto) ? r.notes_auto : [])
-              .concat(Array.isArray(r.notes_manual) ? r.notes_manual : []);
             rule = TWPrice.taxRule({ total: r.bid.total, sales_tax: r.bid.sales_tax,
               remodel: r.bid.remodel, taxable: r.bid.taxable, remodel_on: r.bid.remodel_on }, "ONE_LINE");
             phrase = rule.phrase;
             slot = true;
-            label = `${desc} as described above` + (phrase ? ` ${phrase}` : "");
-            if (notes.length) label += " — " + notes.join("; ");   // inline, matches main.py
+            label = (custom || `${desc} as described above`) + (phrase ? ` ${phrase}` : "");
             amount = fmtUSDdoc(rule.base_cents / 100);
           }
+          // Notes ride the line in every mode, inline, as main._generate prints them (the editor
+          // used to leave them off an Add/Deduct line the document printed them on).
+          if (notes.length) label += " — " + notes.join("; ");
           const key = "option:" + r.id;
           // `candidates`: the option's tax-inclusive total, the figure a line re-worded before the
           // markers froze (on one line it IS the amount).
@@ -1812,6 +1824,9 @@
               // which one this option will be so the estimator isn't surprised.
               const savings = N(state.proposal_lump_sum) - N(t.total);
               r += `<span class="op-hint pr-deduct-hint"${(mode === "deduct" && savings <= 0) ? "" : ' style="display:none"'}>Costs more than the base — will print as an Add.</span>`;
+              // The option's own long description. Empty = the option prints the system name
+              // (shown as the placeholder: what it prints now).
+              r += `<label class="op-notes op-desc">Description<textarea class="room-desc" rows="3" maxlength="400" placeholder="${esc(t.system_desc || t.name)}">${esc(o.desc || "")}</textarea><span class="op-hint">Prints as the option line.</span></label>`;
               r += `<label class="op-notes">Notes (one per line)<textarea class="room-notes" rows="2">${esc(manual)}</textarea></label>`;
               r += `</div>`;
             }
@@ -1898,6 +1913,15 @@
                 hint.style.display = (md.value === "deduct" && savings <= 0) ? "" : "none";
               }
               applyAndRefresh();
+            });
+            // Typing the description repaints ONLY the preview, as Notes does: the textarea the
+            // estimator is in is never rebuilt, so the caret stays. rebuildPricing's own save
+            // carries tab_opts.
+            const dta = row.querySelector(".room-desc");
+            if (dta) dta.addEventListener("input", () => {
+              ensureOpt(id).desc = dta.value.slice(0, 400);
+              rebuildPricing();             // refresh state.rooms (custom_desc) …
+              renderOptionLinesPreview();   // … then update ONLY the preview (keep textarea focus)
             });
             const ta = row.querySelector(".room-notes");
             if (ta) ta.addEventListener("input", () => {
