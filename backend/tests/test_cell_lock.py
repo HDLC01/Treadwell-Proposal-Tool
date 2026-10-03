@@ -7,15 +7,13 @@ per sheet layout, plus the Hard Bid? flag cell, and leave every other cell edita
 inherit their source's layout; the alternate tab and display-label renames must
 not shake the protection loose (it's applied to worksheet objects, post-rename).
 """
-import io
-
-from openpyxl import load_workbook
-
+import _memo
 import estimate_writer as ew
 
 
 def _wb(data):
-    return load_workbook(io.BytesIO(data))
+    # One loaded workbook per distinct file (tests/_memo.py). Everything below only READS it.
+    return _memo.workbook(data)
 
 
 def _locked_addrs(ws, addrs):

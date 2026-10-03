@@ -30,6 +30,7 @@ log = logging.getLogger("proposal_tool.estimate_writer")
 from openpyxl import load_workbook
 from openpyxl.formatting.formatting import ConditionalFormattingList
 from openpyxl.styles import Protection
+from openpyxl.styles.cell_style import StyleArray
 from openpyxl.workbook import Workbook
 from openpyxl.worksheet.cell_range import CellRange
 from openpyxl.worksheet.datavalidation import DataValidation
@@ -1453,10 +1454,22 @@ def _apply_cell_protection(ws_layouts: list[tuple[Any, list[str]]]) -> None:
                 ws.protection.sheet = False
                 ws.protection.disable()
                 continue
-            # Tier 1: only cells that already exist — list() because assigning
-            # a style can grow the dict via style interning side effects.
+            # Tier 1: only cells that already exist. `cell.protection = unlocked` is openpyxl's
+            # StyleDescriptor.__set__, which interns the Protection into the workbook's
+            # `_protections` list (a hash + __eq__ on a Serialisable, per cell) and then stores that
+            # index in the cell's style array. Every cell gets the SAME index, so intern it once, on
+            # the first cell exactly as the per-cell assignment did (a sheet with no cells interns
+            # nothing, which keeps the list's order, and so styles.xml, identical), and write the
+            # index straight into each style array. ~89k cells per workbook: this was a fifth of
+            # every generate.
+            protections = ws.parent._protections
+            unlocked_id = None
             for cell in list(ws._cells.values()):
-                cell.protection = unlocked
+                if unlocked_id is None:
+                    unlocked_id = protections.add(unlocked)
+                if not cell._style:
+                    cell._style = StyleArray()
+                cell._style.protectionId = unlocked_id
             for addr in addrs:
                 ws[addr].protection = locked
             ws.protection.sheet = True

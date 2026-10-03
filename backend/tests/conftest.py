@@ -10,6 +10,12 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 import pytest
 import supabase_client
 
+import _memo
+
+# One REAL fill_estimate per distinct input, per process (see tests/_memo.py for what that does and
+# does not mean). Installed at import so the /api/generate route and every direct caller share it.
+_memo.install_fill_memo()
+
 # Capture the REAL verifier BEFORE any test patches it (test_auth uses this to
 # exercise the genuine logic, while everything else runs with the bypass below).
 _REAL_VERIFY_TOKEN = supabase_client.verify_token

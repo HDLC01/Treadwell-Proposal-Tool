@@ -9,11 +9,19 @@ import io
 
 from openpyxl import load_workbook
 
+import _memo
 import estimate_writer as ew
 
 
 def _wb(data):
-    return load_workbook(io.BytesIO(data))
+    # One loaded workbook per distinct file (tests/_memo.py): every use below only READS it.
+    return _memo.workbook(data)
+
+
+def _template():
+    # Kyle's pristine template, for the tests that read a value off it. A test that APPLIES an edit
+    # to a workbook loads its own copy with load_workbook(ew.TEMPLATE_PATH), never this one.
+    return _memo.workbook(ew.TEMPLATE_PATH.read_bytes())
 
 
 # ── _shift_refs_in_formula unit semantics ────────────────────────────────
@@ -81,7 +89,7 @@ def test_norm_structs_drops_junk():
 
 # ── end-to-end through fill_estimate ─────────────────────────────────────
 def test_insert_row_shifts_content_formulas_and_locks():
-    tpl = load_workbook(ew.TEMPLATE_PATH)
+    tpl = _template()
     d40_orig = tpl["Epoxy"]["D40"].value           # =SUM(D18:D39)-style subtotal
     a73_orig = tpl["Epoxy"]["A73"].value           # 'GP (before lines below)'
 
@@ -102,7 +110,7 @@ def test_insert_row_shifts_content_formulas_and_locks():
 
 
 def test_insert_on_one_sheet_updates_cross_sheet_refs():
-    tpl = load_workbook(ew.TEMPLATE_PATH)
+    tpl = _template()
     a81_orig = tpl["Epoxy"]["A81"].value           # '=Polish!A75'
     b1_orig = tpl["Polish"]["B1"].value            # '=Epoxy!B1' project-info mirror
 
@@ -137,7 +145,7 @@ def test_extras_rows_translate_through_ops():
 
 
 def test_merged_ranges_move_with_inserts():
-    tpl = load_workbook(ew.TEMPLATE_PATH)
+    tpl = _template()
     below = [str(r) for r in tpl["Epoxy"].merged_cells.ranges if r.min_row > 15]
     wb = _wb(ew.fill_estimate({}, tab_structs=[
         {"sheet": "Epoxy", "kind": "insert_rows", "at": 12, "count": 1}]))
@@ -149,7 +157,7 @@ def test_merged_ranges_move_with_inserts():
 
 
 def test_insert_column_shifts_row_formulas():
-    tpl = load_workbook(ew.TEMPLATE_PATH)
+    tpl = _template()
     d40_orig = tpl["Epoxy"]["D40"].value
     wb = _wb(ew.fill_estimate({}, tab_structs=[
         {"sheet": "Epoxy", "kind": "insert_cols", "at": 4, "count": 1}]))
@@ -162,7 +170,7 @@ def test_ops_on_a_copy_apply_to_the_copy():
     wb = _wb(ew.fill_estimate({}, tab_copies=[{"id": "Copy1", "source": "Epoxy"}],
                               tab_structs=[{"sheet": "Copy1", "kind": "insert_rows",
                                             "at": 30, "count": 1}]))
-    tpl = load_workbook(ew.TEMPLATE_PATH)
+    tpl = _template()
     a73 = tpl["Epoxy"]["A73"].value
     assert wb["Copy1"]["A74"].value == a73         # copy shifted
     assert wb["Epoxy"]["A73"].value == a73         # source untouched
