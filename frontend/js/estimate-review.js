@@ -5135,6 +5135,9 @@ function snapshotLumpSumsToState() {
     const total = isBase ? shownBase : num(t.id, c.total);
     const o = state.tab_opts[t.id] || {};
     const desc = deriveSystemNameFor(t.id) || labelFor(t.id);
+    // The option's own words (tab_opts[id].desc, typed in the Proposal step's sidebar): see
+    // proposal-review.js's mkRoom, which this mirrors.
+    const custom = isBase ? "" : String(o.desc || "").replace(/\s+/g, " ").trim().slice(0, 400);
     // The option's OWN tab's tax answers; the base row carries the base's.
     const f = isBase ? { taxable: state.proposal_taxable, remodel_on: state.proposal_remodel_on }
                      : taxFlagsFor(t.id);
@@ -5147,8 +5150,9 @@ function snapshotLumpSumsToState() {
       deduct_amount: shownBase - total,       // savings vs the shown base; <=0 ⇒ backend falls back to total
       price_mode: isBase ? "total" : (o.price_mode === "deduct" ? "deduct" : "total"),
       show: isBase ? true : (o.show !== false),
-      system_desc: desc,
-      option_desc: desc,
+      system_desc: custom || desc,
+      option_desc: custom || desc,
+      custom_desc: custom,
       base_desc: baseDesc,
       show_system: o.show_system !== undefined ? o.show_system : true,
       show_diff:   o.show_diff   !== undefined ? o.show_diff   : false,
