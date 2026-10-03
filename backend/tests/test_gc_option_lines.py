@@ -42,6 +42,7 @@ import re
 import shutil
 import subprocess
 import zipfile
+from unittest import mock
 
 import pytest
 from docx import Document
@@ -812,3 +813,271 @@ def test_a_template_that_prints_the_lines_does_not_warn(work_type, audience, cap
         pw.fill_proposal(work_type=work_type, audience=audience, values=dict(_VALS),
                          price_lines=[{"label": "Add dye", "amount_formatted": "$1,500"}])
     assert [r.getMessage() for r in caplog.records if "price line" in r.getMessage()] == []
+
+
+# ── 9. an overflowing PRICE box shrinks enough that Kyle's own last rows print ───────────────────
+# 2026-10-03, review of this change: with about two options in the GC Polish PRICE box, LibreOffice
+# CLIPPED Kyle's last unit-price rows (Generator, then the ram-board repairs line, ...) out of the PDF
+# while the fit estimate said the box fitted (scale 0.767, not at the floor), so the editor warned
+# nobody. THE CAUSE: a bulleted row is as tall as its BULLET GLYPH, which LibreOffice draws at the size
+# of the paragraph's mark (`w:pPr/w:rPr/w:sz`, 9pt on every row; none of Kyle's numbering levels sets a
+# size) in a symbol face whose line is 1.32 x the size -- a 9pt mark is an 11.9pt row whatever the words'
+# size. The overflow shrink scaled the words and left the marks, so every shrunk bulleted row kept its
+# full height and the box ran 10-25% past the height the estimate counted. THE FIX
+# (`_bullets_overflow_when_loose`, `_scale_txbx_runs(scale_bullets=)`): a shrunk box whose bullets
+# would keep it too tall has them shrunk with the words. A box the estimate already says cannot fit
+# (at the 0.60 floor) is left alone; it reports `at_floor` and the editor warns.
+def _n_options(n, long=False):
+    desc = ("Treadwell MACRO Flake Double Broadcast with Metallic Pigment Upgrade and Extra Coats"
+            if long else "Treadwell MACRO Flake")
+    notes = ["Includes 2 mobilizations", "Colour: Gray Blend only"] if long else []
+    return [_room(f"Copy{i}", f"OPTION {i}", 30000 + 1000 * i, desc=desc, notes=notes)
+            for i in range(1, n + 1)]
+
+
+def _fit_and_docx(work_type, **extra):
+    """`(fit_report, .docx)` of ONE payload through the real generate path: the report is what
+    POST /api/proposal-fit hands the editor, the .docx is what Download and the PDF print."""
+    body = {"work_type": work_type, "audience": "GC", "values": dict(_VALS)}
+    body.update(extra)
+    req = Request({"type": "http", "headers": [], "method": "POST", "path": "/api/generate"})
+    report = []
+    main._generate(main.GenerateIn(**copy.deepcopy(body)), req, persist=False,
+                   want_estimate=False, fit_report=report)
+    out = main._generate(main.GenerateIn(**body), req, persist=False, want_estimate=False)
+    return report, main._FILE_CACHE[out.docx_download_url.rstrip("/").split("/")[-1]]["content"]
+
+
+def _price_box(content):
+    """`(Document, text box, its geometry, its index)`: the real copy of the PRICE box."""
+    d = Document(io.BytesIO(content))
+    geometry = pw.template_geometry(d)["boxes"]
+    for i, tx in enumerate(pw._iter_txbx(d)):
+        if any(pw._own_text(p) == HEADING for p in tx.iter(qn("w:p"))):
+            return d, tx, geometry[i], i
+    raise AssertionError("no PRICE box")
+
+
+# (work type, template, how many options, long wording)
+FIT_CASES = [
+    pytest.param(wt, rel, n, long, id=f"{tag}-{n}{'-long' if long else ''}")
+    for wt, rel, tag in [("polish", POLISH, "polish"), ("epoxy", RESINOUS, "resinous"),
+                         ("sealer", SEALER, "sealer"), ("combo", RESINOUS, "combo")]
+    for n, long in [(2, False), (3, False), (5, False), (3, True), (5, True)]
+]
+
+
+def _case_payload(wt, n, long):
+    extra = dict(rooms=[BASE] + _n_options(n, long))
+    if wt == "combo":
+        extra["combo_options"] = COMBO_LINES
+    return extra
+
+
+@pytest.mark.parametrize("wt,rel,n,long", FIT_CASES)
+def test_a_shrunk_price_box_either_fits_with_its_bullets_or_reports_the_overflow(wt, rel, n, long):
+    """The invariant, on every GC file with 2, 3 and 5 options (and long ones): in the PRINTED
+    document the PRICE box does not run past its bottom edge as LibreOffice lays it out (bullets at
+    1.32 x their mark, empty lines at theirs) -- unless the fit report says `at_floor`, which is the
+    editor's overflow warning. Never both quiet and too tall."""
+    report, content = _fit_and_docx(wt, **_case_payload(wt, n, long))
+    d, tx, geo, i = _price_box(content)
+    rec = report[i]
+    assert rec["at_floor"] or not pw._bullets_overflow_when_loose(d, tx, geo, 1.0), (
+        f"{wt}+{n}{' long' if long else ''}: scale {rec['scale']} said it fits, at_floor False, "
+        "but the printed box is taller than its frame")
+
+
+def test_without_the_bullet_shrink_the_same_box_overflows_and_the_estimate_says_it_fits():
+    """The counterexample that makes the invariant above mean something. GC Polish + 2 options, the
+    measured case: the estimate shrinks the box to 0.767 (not at the floor, so no warning). Run with
+    the bullet shrink switched off, the document's PRICE box is taller than its frame -- the very
+    one that printed in the PDF with Kyle's Generator row clean off the bottom. With it on, it is
+    not."""
+    extra = dict(rooms=[BASE] + _n_options(2))
+    real = pw._scale_txbx_runs
+    with mock.patch.object(pw, "_scale_txbx_runs",
+                           lambda tx, s, ex=None, scale_bullets=False: real(tx, s, ex, False)):
+        report, content = _fit_and_docx("polish", **extra)
+    d, tx, geo, i = _price_box(content)
+    assert 0.6 < report[i]["scale"] < 0.8 and report[i]["at_floor"] is False
+    assert pw._bullets_overflow_when_loose(d, tx, geo, 1.0)
+    report, content = _fit_and_docx("polish", **extra)
+    d, tx, geo, i = _price_box(content)
+    assert report[i]["at_floor"] is False and not pw._bullets_overflow_when_loose(d, tx, geo, 1.0)
+
+
+def test_the_bullet_shrink_only_touches_a_bulleted_line_with_words_in_a_box_that_can_fit():
+    """What changes in the printed PRICE box and what does not: the mark of every bulleted line with
+    words shrinks, the mark of every empty and every unbulleted line is the template's (the editor
+    draws an empty line at its mark, `fit.hp`)."""
+    _report, content = _fit_and_docx("polish", rooms=[BASE] + _n_options(2))
+    _d, tx, _geo, _i = _price_box(content)
+    pristine = Document(str(TEMPLATES / POLISH))
+    tmpl = next(t for t in pw._iter_txbx(pristine)
+                if any(pw._own_text(p) == HEADING for p in t.iter(qn("w:p"))))
+
+    def mark(p):
+        sz = p.find(qn("w:pPr") + "/" + qn("w:rPr") + "/" + qn("w:sz"))
+        return int(sz.get(qn("w:val"))) if sz is not None else None
+    seen_bullet = seen_empty = seen_plain = False
+    # Kyle's own rows under the heading are the tail of the box, in the same order in the template
+    # and the document (the new lines sit above them).
+    tmpl_ps = list(tmpl.iter(qn("w:p")))
+    tmpl_ps = tmpl_ps[[pw._own_text(p) for p in tmpl_ps].index(HEADING) + 1:]
+    got = list(tx.iter(qn("w:p")))[-len(tmpl_ps):]
+    for p, t in zip(got, tmpl_ps):
+        if pw._own_text(t).strip() and pw._para_num_ref(t) is not None:
+            seen_bullet = True
+            assert mark(p) < mark(t), (pw._own_text(p), mark(p), mark(t))
+        elif not pw._own_text(t).strip():
+            seen_empty = True
+            assert mark(p) == mark(t)
+        else:
+            seen_plain = True
+            assert mark(p) == mark(t)
+    assert seen_bullet and seen_empty and seen_plain
+
+
+@pytest.mark.parametrize("wt,rel", [("polish", POLISH), ("epoxy", RESINOUS), ("sealer", SEALER)])
+def test_a_box_the_estimate_puts_at_the_floor_keeps_every_mark(wt, rel):
+    """Scoped on purpose: the bullet shrink is for a box the estimate says CAN fit. Every GC file's
+    NOTES box prints at the 0.60 floor with its default text (the editor already warns for it, and
+    its bullet spacing is its own question), and a PRICE box with five long options is at the floor
+    too. Neither has a mark touched: the marks of every box the report puts `at_floor` are the same in
+    the printed document as with run scaling switched off."""
+    extra = dict(rooms=[BASE] + _n_options(5, long=True))
+    report, content = _fit_and_docx(wt, **extra)
+    with mock.patch.object(pw, "_scale_txbx_runs", lambda *a, **k: None):
+        _r, plain = _fit_and_docx(wt, **extra)
+
+    def marks(blob):
+        d = Document(io.BytesIO(blob))
+        szs = [[p.find(qn("w:pPr") + "/" + qn("w:rPr") + "/" + qn("w:sz")) for p in tx.iter(qn("w:p"))]
+               for tx in pw._iter_txbx(d)]
+        return [[sz.get(qn("w:val")) if sz is not None else None for sz in box] for box in szs]
+    floored = [r["id"] for r in report if r["at_floor"]]
+    assert len(floored) >= 2, "the NOTES box and the five-long-options PRICE box are both at the floor"
+    got, was = marks(content), marks(plain)
+    for i in floored:
+        assert got[i] == was[i], f"box {i}: a mark moved in a box that is at the floor"
+
+
+def test_scale_bullets_touches_only_the_bulleted_lines_with_words_and_never_a_kept_one():
+    """`_scale_txbx_runs(scale_bullets=True)` on one box of five lines, each a 9pt run with a 9pt
+    mark: a bulleted line with words has its mark scaled with its words; an EMPTY bulleted line (it
+    prints at its mark, which the editor draws), a plain line, and a line whose size the estimator
+    chose (`exempt`) keep theirs."""
+    from docx.oxml import parse_xml
+    from docx.oxml.ns import nsdecls
+    num = '<w:numPr><w:ilvl w:val="0"/><w:numId w:val="3"/></w:numPr>'
+
+    def para(words, bullet):
+        run = f'<w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>{words}</w:t></w:r>' if words else ""
+        return (f'<w:p><w:pPr>{num if bullet else ""}<w:rPr><w:sz w:val="18"/><w:szCs w:val="18"/>'
+                f'</w:rPr></w:pPr>{run}</w:p>')
+    tx = parse_xml(f'<w:txbxContent {nsdecls("w")}>{para("bulleted", True)}{para("", True)}'
+                   f'{para("plain", False)}{para("kept", True)}{para("", False)}</w:txbxContent>')
+    kept = list(tx.iter(qn("w:p")))[3]
+    pw._scale_txbx_runs(tx, 0.5, {id(kept): True}, scale_bullets=True)
+
+    def sizes(p):
+        return (p.find(qn("w:pPr") + "/" + qn("w:rPr") + "/" + qn("w:sz")).get(qn("w:val")),
+                p.find(qn("w:pPr") + "/" + qn("w:rPr") + "/" + qn("w:szCs")).get(qn("w:val")))
+    got = [sizes(p) for p in tx.iter(qn("w:p"))]
+    assert got == [("9", "9"), ("18", "18"), ("18", "18"), ("18", "18"), ("18", "18")], got
+    # Off by default: the same call without the flag touches no mark at all.
+    tx2 = parse_xml(f'<w:txbxContent {nsdecls("w")}>{para("bulleted", True)}</w:txbxContent>')
+    pw._scale_txbx_runs(tx2, 0.5)
+    assert sizes(next(tx2.iter(qn("w:p")))) == ("18", "18")
+
+
+def _letters(text):
+    """Letters and digits only: what survives however the PDF breaks, spaces and punctuates a row."""
+    import unicodedata
+    return re.sub(r"[^A-Za-z0-9]", "", unicodedata.normalize("NFKC", text))
+
+
+def _row_tails(rel):
+    """The last four words of each of Kyle's rows under the heading, letters and digits only: a row
+    clipped at all loses them (a row too short to say anything is left out)."""
+    tails = []
+    for text, _ref in _template_after_heading(rel):
+        tail = _letters(" ".join(text.split()[-4:]))
+        if len(tail) >= 10:
+            tails.append(tail)
+    return tails
+
+
+def _missing_rows(pdf_bytes, rel):
+    """Kyle's rows whose last words are not on page 1 of the PDF (PyMuPDF text)."""
+    import fitz
+    with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+        page = _letters(doc[0].get_text())
+    return [t for t in _row_tails(rel) if t not in page]
+
+
+@pytest.mark.skipif(shutil.which("soffice") is None and shutil.which("libreoffice") is None,
+                    reason="LibreOffice is not installed (it is in the Docker image)")
+@pytest.mark.parametrize("wt,rel,n,long", FIT_CASES)
+def test_every_row_of_kyles_price_box_prints_in_the_pdf_or_the_report_says_it_cannot(wt, rel, n, long):
+    """LibreOffice renders what the customer gets, and it clips a text box's overflow without a
+    word. Every GC file with 2, 3 and 5 options: each of Kyle's own unit-price rows is in the PDF,
+    unless the fit report says the box is at its floor (then the editor warns instead). Measured in
+    the production image with the Zetta fonts, before the bullet shrink: Polish + 2 lost Generator,
+    + 3 also the repairs line; Resinous + 3 long lost the moisture and Generator rows; Sealer + 3
+    lost Generator."""
+    import pdf_writer
+    report, content = _fit_and_docx(wt, **_case_payload(wt, n, long))
+    _d, _tx, _geo, i = _price_box(content)
+    missing = _missing_rows(pdf_writer.docx_to_pdf(content), rel)
+    assert not missing or report[i]["at_floor"], (
+        f"{wt}+{n}{' long' if long else ''}: rows missing from the PDF {missing}, yet the report "
+        f"says scale {report[i]['scale']}, at_floor {report[i]['at_floor']}")
+
+
+# ── 10. the model row's formatting stays on the model row ────────────────────────────────────────
+def _line_runs(content, text_start):
+    """`[(bold, size in half-points)]` of every run with words, of the first PRICE-box paragraph
+    in the real copy of the box that starts with `text_start`."""
+    _d, tx, _geo, _i = _price_box(content)
+    p = next(p for p in tx.iter(qn("w:p")) if pw._own_text(p).startswith(text_start))
+    out = []
+    for r in p.iter(qn("w:r")):
+        if not "".join(t.text or "" for t in r.iter(qn("w:t"))).strip():
+            continue
+        sz = r.find(qn("w:rPr") + "/" + qn("w:sz"))
+        out.append((r.find(qn("w:rPr") + "/" + qn("w:b")) is not None,
+                    int(sz.get(qn("w:val"))) if sz is not None else None))
+    return out
+
+
+def test_an_override_on_kyles_first_money_row_does_not_bleed_into_the_option_lines():
+    """The lines are cloned from Kyle's first money row under the heading, taken off the pristine
+    template BEFORE the estimator's edits are applied (`_price_line_prototypes`, which deep-copies
+    it). Edit that row to bold 16pt and the option line must still be the pristine row's look, not
+    the edit's: same runs, same sizes, as with no edit at all."""
+    heading_id, _first, _last = _price_box_ids(POLISH)
+    row_id = next(w[0] for w in _walk_ids(TEMPLATES / POLISH)
+                  if w[0] > heading_id and w[4].startswith("$x – Add for"))
+    body = dict(rooms=[BASE, OPT_TOTAL], template_version=tv.content_version(TEMPLATES / POLISH))
+    clean = _generate("polish", **body)
+    edited = _generate("polish", paragraph_overrides=[{"id": row_id, "runs": [
+        {"text": "$5,000 – EDITED ROW", "bold": True, "size_pt": 16.0}]}], **body)
+    # The edit took: Kyle's row prints bold at 16pt...
+    assert _line_runs(edited, "$5,000 – EDITED ROW")[0] == (True, 32)
+    # ...and the option line printed from the pristine row, as with no edit.
+    assert _line_runs(edited, L_TOTAL[0]) == _line_runs(clean, L_TOTAL[0])
+    assert (True, 32) not in _line_runs(edited, L_TOTAL[0])
+
+
+def test_the_italics_of_a_sentence_row_are_stripped_when_no_money_row_exists():
+    """Kyle's first listed row on the Resinous file is an italic sentence; with every money row out
+    of the file the model row falls back to it, and a price is not set in italics."""
+    head = _gc_resinous_after_heading("money")
+    sentence = pw._price_line_model(head)
+    assert pw._own_text(sentence).startswith("If a different flake/chip size")
+    assert sentence.findall(".//" + qn("w:i")), "the fixture row must be italic for this to mean anything"
+    line = pw._price_line_paragraph(sentence, {"label": "Add dye", "amount_formatted": "$1,500"})
+    assert pw._own_text(line) == "$1,500 – Add dye"
+    assert not line.findall(".//" + qn("w:i")) and not line.findall(".//" + qn("w:iCs"))

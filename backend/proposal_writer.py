@@ -1664,8 +1664,14 @@ def _txbx_default_hp(txbx) -> int:
     return max(set(sizes), key=sizes.count) if sizes else 18   # half-points; 18 = 9pt
 
 
-def _scale_txbx_runs(txbx, scale: float, exempt: dict | None = None) -> None:
+def _scale_txbx_runs(txbx, scale: float, exempt: dict | None = None,
+                     scale_bullets: bool = False) -> None:
     """Directly shrink every run's font size in a text box by `scale`.
+
+    `scale_bullets` also shrinks the paragraph mark of every BULLETED line that has words in it,
+    which is what the bullet glyph is drawn at (see `_bullets_overflow_when_loose`). Nothing else's
+    mark is ever touched: an empty line keeps its full height (the editor draws it that way,
+    `fit.hp`), and an unbulleted line's mark does not size its text lines at all.
 
     `exempt` is `_user_sized_paragraphs`' register, keyed by the id() of paragraphs whose sizes
     the ESTIMATOR chose (it pins the elements; see `_hand_formatted`). Those are skipped:
@@ -1705,6 +1711,83 @@ def _scale_txbx_runs(txbx, scale: float, exempt: dict | None = None) -> None:
                 el = OxmlElement(tag)
                 rpr.append(el)
             el.set(qn("w:val"), str(new_hp))
+    if scale_bullets:
+        for p in txbx.iter(qn("w:p")):
+            if _para_num_ref(p) is None or id(p) in (exempt or ()):
+                continue
+            if not "".join(t.text or "" for t in p.iter(qn("w:t"))).strip():
+                continue
+            mark = p.find(qn("w:pPr") + "/" + qn("w:rPr"))
+            if mark is None:
+                continue
+            for tag in ("w:sz", "w:szCs"):
+                el = mark.find(qn(tag))
+                v = el.get(qn("w:val")) if el is not None else None
+                if v and v.isdigit():
+                    el.set(qn("w:val"), str(min(int(v), max(8, int(round(int(v) * scale))))))
+
+
+# A bulleted line is as tall as its BULLET GLYPH: LibreOffice draws the list marker at the size of the
+# paragraph's mark (`w:pPr/w:rPr/w:sz`; none of Kyle's numbering levels sets a size of its own), in a
+# symbol face whose line is 1.32 x the size (a 9pt mark = an 11.9pt row, measured on the GC PRICE
+# box, whatever the words' size). The shrink scales words and not marks, so a shrunk bulleted row kept
+# its full height. 2026-10-03: GC Polish + 2 options shrank to 0.767 and printed Kyle's own last
+# rows (Generator...) clean off the bottom of the box, while the estimate -- which assumes a line is as
+# tall as its words -- said it fitted and the editor warned nobody.
+_TXBX_BULLET_LINE_H = 1.32
+
+
+def _bullets_overflow_when_loose(d, txbx, box: dict | None, scale: float, exempt=None) -> bool:
+    """Would the box still run past its bottom edge at `scale` if its bulleted lines kept their
+    bullet size (the marks unscaled)? Counted the way LibreOffice lays the box out: a line of words
+    is 1.2 x its (scaled) size, a bulleted paragraph's first line at least 1.32 x its mark, an empty
+    line its mark. Trailing empty lines are left out -- they are clipped harmlessly, which is why
+    most boxes never showed this. False when the geometry is unknown."""
+    if not box:
+        return False
+    w_pt, h_pt = box.get("w_pt"), box.get("h_pt")
+    if not w_pt or not h_pt or w_pt <= 0 or h_pt <= 0:
+        return False
+    lIns, rIns, tIns, bIns = _txbx_insets(txbx)
+    usable_w = w_pt - (lIns + rIns) / _EMU_PER_PT
+    usable_h = h_pt - (tIns + bIns) / _EMU_PER_PT
+    if usable_w <= 0 or usable_h <= 0:
+        return False
+    default_hp = _txbx_default_hp(txbx)
+    total = pending_empty = 0.0
+    for p in txbx.iter(qn("w:p")):
+        text = "".join(t.text or "" for t in p.iter(qn("w:t")))
+        mark_sz = p.find(qn("w:pPr") + "/" + qn("w:rPr") + "/" + qn("w:sz"))
+        try:
+            mark_hp = int(mark_sz.get(qn("w:val"))) if mark_sz is not None else None
+        except (TypeError, ValueError):
+            mark_hp = None
+        if not text.strip():
+            pending_empty += _TXBX_LINE_H * ((mark_hp or default_hp) / 2.0)
+            continue
+        total += pending_empty
+        pending_empty = 0.0
+        run_hp = None
+        for r in p.iter(qn("w:r")):
+            if not "".join(t.text or "" for t in r.iter(qn("w:t"))):
+                continue
+            sz = r.find(qn("w:rPr") + "/" + qn("w:sz"))
+            if sz is not None and (sz.get(qn("w:val")) or "").isdigit():
+                run_hp = int(sz.get(qn("w:val")))
+            break
+        run_hp = run_hp if run_hp is not None else default_hp
+        kept = bool(exempt) and id(p) in exempt            # a deliberate size is never shrunk
+        font_pt = (run_hp if kept else max(8, int(round(run_hp * scale)))) / 2.0
+        first_w, body_w = _fit_line_widths_pt(d, p, usable_w)
+        first_chars = max(1.0, first_w / (_TXBX_GLYPH_W * font_pt))
+        body_chars = max(1.0, body_w / (_TXBX_GLYPH_W * font_pt))
+        lines = max(1, math.ceil((len(text) + body_chars - first_chars) / body_chars))
+        height = lines * _TXBX_LINE_H * font_pt
+        if _para_num_ref(p) is not None:
+            mark_pt = (mark_hp if mark_hp is not None else run_hp) / 2.0
+            height = max(height, (lines - 1) * _TXBX_LINE_H * font_pt + _TXBX_BULLET_LINE_H * mark_pt)
+        total += height
+    return total > usable_h
 
 
 def _shrink_overflowing_text_boxes(d: Document, report: list | None = None) -> int:
@@ -1723,6 +1806,11 @@ def _shrink_overflowing_text_boxes(d: Document, report: list | None = None) -> i
 
     Nothing is cut: a box still over its height at the 0.60 floor keeps the floor size and the
     rest of its text runs on past the box's bottom edge, because the box itself is never grown.
+
+    Words are not the only thing that sets a line's height: a bulleted line is as tall as its bullet,
+    drawn at the paragraph MARK's size, which scaling the runs leaves alone. A box the estimate says
+    can fit (not at the floor) whose bullets would keep it too tall for LibreOffice therefore has
+    its bulleted marks scaled too (`_bullets_overflow_when_loose`); any other mark is never touched.
 
     `report`, when given, gets one record per box this pass decided, which is what the editor
     shows (POST /api/proposal-fit): `{id, scale, default_hp, exempt, at_floor, content_pt,
@@ -1751,8 +1839,15 @@ def _shrink_overflowing_text_boxes(d: Document, report: list | None = None) -> i
         applied = scale < 0.999
         # Read BEFORE the scaling below rewrites the sizes it is counted from.
         default_hp = _txbx_default_hp(txbx) if report is not None else None
+        at_floor = bool(content_pt > 0 and usable_pt < content_pt * _TXBX_SCALE_FLOOR)
         if applied:
-            _scale_txbx_runs(txbx, scale, _user_sized_paragraphs(d))
+            user_sized = _user_sized_paragraphs(d)
+            # A box the estimate says CAN fit but whose bullets would keep it too tall: shrink the
+            # bullets too. A box already at the floor is not touched -- the estimate itself says it
+            # overflows, the editor warns, and its text is the estimator's to cut.
+            _scale_txbx_runs(txbx, scale, user_sized, scale_bullets=not at_floor
+                             and _bullets_overflow_when_loose(
+                                 d, txbx, boxes[i] if i < len(boxes) else None, scale, user_sized))
         if report is not None:
             ids = _user_sized_block_ids(d)
             report.append({
@@ -1760,7 +1855,7 @@ def _shrink_overflowing_text_boxes(d: Document, report: list | None = None) -> i
                 "scale": scale if applied else 1.0,
                 "default_hp": default_hp,
                 "exempt": sorted(ids[id(p)] for p in txbx.iter(qn("w:p")) if id(p) in ids),
-                "at_floor": bool(content_pt > 0 and usable_pt < content_pt * _TXBX_SCALE_FLOOR),
+                "at_floor": at_floor,
                 "content_pt": round(content_pt, 3),
                 "usable_pt": round(usable_pt, 3),
             })
