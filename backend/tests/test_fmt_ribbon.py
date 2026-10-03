@@ -213,7 +213,7 @@ def test_the_size_dropdown_no_longer_resizes_the_whole_paragraph(ran):
     got = ran["sizeAfterBlur"]
     assert got["selectMousedownPrevented"] is False, (
         "the size dropdown's mousedown is being prevented, so it cannot open")
-    assert got["runs"] == [{"text": "Schedule", "size_pt": 12},
+    assert got["runs"] == [{"text": "Schedule", "size_pt": 12, "size_set": True},
                            {"text": ":  4 days on site"}]
     assert got["barValue"] == "12", "the ribbon does not show the size it just applied"
 
@@ -606,7 +606,7 @@ def test_a_typed_size_the_old_dropdown_could_not_offer(ran):
     The dropdown was also as wide as its widest option, "Template size", which is why it dwarfed
     the buttons beside it. The placeholder carries that meaning now and the box is 54px."""
     g = ran["typedHalfPoint"]
-    assert g["runs"] == [{"text": "Schedule", "size_pt": 10.5},
+    assert g["runs"] == [{"text": "Schedule", "size_pt": 10.5, "size_set": True},
                          {"text": ":  4 days on site"}], g["runs"]
     assert g["mousedownPrevented"] is False, (
         "the ribbon's mousedown guard cancelled the size box, so it can never be focused")
@@ -638,8 +638,25 @@ def test_clearing_the_size_box_goes_back_to_the_templates_own_size(ran):
     storing a zero, which is what keeps an untouched paragraph shipping no size at all."""
     g = ran["clearedSize"]
     assert any(r.get("size_pt") == 14 for r in g["at14"]), g["at14"]
-    assert not any("size_pt" in r for r in g["cleared"]), (
+    assert not any("size_pt" in r or "size_set" in r for r in g["cleared"]), (
         "clearing the box left a size behind: %r" % (g["cleared"],))
+    assert any(r.get("size_set") is True for r in g["at14"]), g["at14"]
+
+
+def test_the_size_box_marks_a_size_as_picked_even_when_the_line_already_uses_it(ran):
+    """The writer reads a size the line itself uses as the template's own coming home and lets the
+    text-box shrink take it (a plain edit sends every size back as it reads it). So an estimator who
+    sets a whole 9pt/8pt line to 9pt would be shrunk with the box -- unless the size box says it was
+    PICKED: `size_set` rides on the runs it wrote. Bold leaves the flag where it was, Reset and an
+    emptied box take it away with the size, and nothing but the size box writes it.
+    Mutation: `commitSize` patching `{size_pt: v}` only."""
+    g = ran["sizePicked"]
+    assert g["before"] == [{"text": "Alpha ", "size_pt": 9}, {"text": "beta", "size_pt": 8}], g["before"]
+    assert g["picked"] == [{"text": "Alpha beta", "size_pt": 9, "size_set": True}], g["picked"]
+    assert g["bolded"] == [{"text": "Alpha", "bold": True, "size_pt": 9, "size_set": True},
+                           {"text": " beta", "size_pt": 9, "size_set": True}], g["bolded"]
+    assert g["reset"] == [{"text": "Alpha beta"}], g["reset"]
+    assert g["cleared"] == [{"text": "Alpha beta"}], g["cleared"]
 
 
 def test_the_ribbon_does_not_overwrite_a_size_being_typed(ran):

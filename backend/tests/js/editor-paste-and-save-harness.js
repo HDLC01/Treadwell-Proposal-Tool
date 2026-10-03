@@ -147,7 +147,9 @@ class Text {
   get length() { return this.nodeValue.length; }
 }
 
-const VOID = new Set(["BR", "IMG", "HR", "INPUT"]);
+// META and LINK are void in a real parser: Chrome's clipboard HTML opens with a <meta>, and nesting
+// the rest of the clipboard inside it would let runsFromHtml's strip of <meta> take the words along.
+const VOID = new Set(["BR", "IMG", "HR", "INPUT", "META", "LINK"]);
 
 /** Every innerHTML parse, and whether it happened in an INERT document (one made by
  *  document.implementation.createHTMLDocument, which has no window) or in the page's own. An
@@ -699,6 +701,24 @@ const out = {};
     inLiveDocument: ofClipboard.filter((p) => !p.inert).length,
     runs: page.editRuns(blocks[0]),
   };
+}
+
+// ═══ 5c. A PASTE BRINGS NO FONT SIZE ═════════════════════════════════════════
+// The clipboard states its own size (Chrome copies 16px, Word 11pt). Carried into the run it was read
+// as the estimator CHOOSING a size, which exempts the whole paragraph from the text-box shrink -- a
+// NOTES line pasted from an email printed at 12pt among 4.5pt neighbours. Bold and the rest still come.
+{
+  const chrome = '<meta charset="utf-8"><span style="color: rgb(32, 33, 36); font-family: Arial, sans-serif; '
+               + 'font-size: 16px; font-weight: 700;">Pasted from an email.</span>';
+  const word = '<p class="MsoNormal" style="font-size:11.0pt"><span style="font-size:11.0pt;font-style:italic">'
+             + 'Pasted from Word.</span></p>';
+  out.pastedSize = {};
+  for (const [name, html] of [["chrome", chrome], ["word", word]]) {
+    const { blocks, box } = mountBox(["Scope: "]);
+    caretIn(blocks[0], 7, 7);
+    paste(box, "pasted", html);
+    out.pastedSize[name] = page.editRuns(blocks[0]);
+  }
 }
 
 // ═══ 6. A PASTE THAT LANDS ON NO LINE IS REFUSED ═════════════════════════════

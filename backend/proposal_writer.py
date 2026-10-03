@@ -4311,14 +4311,20 @@ def _section_break_indices(body) -> list:
             if c.tag == qn("w:p") and c.find(qn("w:pPr") + "/" + qn("w:sectPr")) is not None]
 
 
-def _section_ordinal(body, top_el) -> int:
+def _section_ordinal(body, top_el, breaks=None) -> int:
     """Index into `d.sections` of the section that GOVERNS top-level body child `top_el`.
 
     The break that governs a child is the first one AT OR AFTER it — at, because the `sectPr`
     lives in the last paragraph of its own section, not the first of the next. Off by one here
     and every anchor is resolved against the following section's page setup.
+
+    `breaks` is `_section_break_indices(body)` for a caller that already read it. A geometry pass
+    asks this question of one unchanged body over a hundred times (every anchor against every
+    box that wraps beside it), and re-reading the whole body's section map each time was most of
+    that pass's cost.
     """
-    breaks = _section_break_indices(body)
+    if breaks is None:
+        breaks = _section_break_indices(body)
     if not breaks:
         return 0
     try:
@@ -4405,7 +4411,7 @@ def _top_level_of(body, el):
 
 
 def _wrap_column_shift(anchor, page: dict, top_ps: list, body, d: Document,
-                       margin: dict, pidx: int) -> float:
+                       margin: dict, pidx: int, breaks=None) -> float:
     """How far right of the margin the anchor paragraph's first line STARTS, in points: 0.0 unless
     another box with a square/tight wrap covers the left end of that line.
 
@@ -4418,21 +4424,33 @@ def _wrap_column_shift(anchor, page: dict, top_ps: list, body, d: Document,
     rotated NOTES label. Measured 2026-10-03; a probe copy with that box set to no wrap put the
     NOTES box back on the margin arithmetic.
 
-    The other boxes are placed with the plain arithmetic (`wrap=False`), so this never recurses."""
+    NOT HANDLED, ON PURPOSE. The shift is read off where the TEMPLATE puts the wrapping box. If
+    the estimator drags the REGARDS/estimator box off this paragraph's line, LibreOffice stops
+    wrapping beside it and prints the NOTES box at plain `margin + posOffset` -- 36 to 39pt left,
+    its text over the rotated NOTES label -- while the editor, which was handed the template's
+    shift, still draws it inside the frame. Reproduced 2026-10-03; no saved draft holds a box drag
+    today, and the cure (the editor asking the server for the shift again on every drag) is a
+    feature rather than a fix, so this is documented and left alone.
+
+    The other boxes are placed with the plain arithmetic (`wrap=False`), so this never recurses.
+
+    `breaks`: the body's section map, read once by the caller (see `_section_ordinal`)."""
+    if breaks is None:
+        breaks = _section_break_indices(body)
     line_top = margin["top"] + pidx * _ANCHOR_LINE_H_PT
     line_bot = line_top + _ANCHOR_LINE_H_PT
     left = margin["left"]
     shift = 0.0
-    section = _section_ordinal(body, _top_level_of(body, anchor))
+    section = _section_ordinal(body, _top_level_of(body, anchor), breaks)
     for other in body.iter(qn("wp:anchor")):
         if other is anchor or other.get("behindDoc") == "1":
             continue
         if not any(other.find(qn("wp:" + w)) is not None for w in _PUSHING_WRAPS):
             continue
         # A box in another section is on another page, whatever the one-ruler estimate says.
-        if _section_ordinal(body, _top_level_of(body, other)) != section:
+        if _section_ordinal(body, _top_level_of(body, other), breaks) != section:
             continue
-        ox, oy, ow, oh = _pos_of_anchor(other, page, top_ps, body, d, wrap=False)
+        ox, oy, ow, oh = _pos_of_anchor(other, page, top_ps, body, d, wrap=False, breaks=breaks)
         dist = {k: int(other.get(k) or 0) / _EMU_PER_PT for k in ("distL", "distR", "distT", "distB")}
         if (oy - dist["distT"] < line_bot and oy + oh + dist["distB"] > line_top
                 and ox - dist["distL"] <= left < ox + ow + dist["distR"]):
@@ -4448,8 +4466,9 @@ def _txbx_wrap_shift(d: Document, txbx) -> float:
     body = d.element.body
     top_ps = [c for c in body if c.tag == qn("w:p")]
     page = _page_metrics(d)
-    return (_pos_of_anchor(anchor, page, top_ps, body, d)[0]
-            - _pos_of_anchor(anchor, page, top_ps, body, d, wrap=False)[0])
+    breaks = _section_break_indices(body)
+    return (_pos_of_anchor(anchor, page, top_ps, body, d, breaks=breaks)[0]
+            - _pos_of_anchor(anchor, page, top_ps, body, d, wrap=False, breaks=breaks)[0])
 
 
 def _pin_anchor_line_heights(d: Document) -> int:
@@ -4487,7 +4506,8 @@ def _pin_anchor_line_heights(d: Document) -> int:
     return n
 
 
-def _pos_of_anchor(anchor, page: dict, top_ps: list, body, d: Document, wrap: bool = True) -> tuple:
+def _pos_of_anchor(anchor, page: dict, top_ps: list, body, d: Document, wrap: bool = True,
+                   breaks=None) -> tuple:
     """(x_pt, y_pt, w_pt, h_pt) of a floating drawing on its page.
 
     Word stores positionH/positionV relative to page/margin/column/paragraph;
@@ -4498,7 +4518,12 @@ def _pos_of_anchor(anchor, page: dict, top_ps: list, body, d: Document, wrap: bo
     The y this returns is therefore an ESTIMATE, and `_apply_box_overrides` depends on it being
     the SAME estimate the editor was given rather than on it being right — read the
     "Moving a floating text box" note before changing the arithmetic here.
+
+    `breaks`: the body's section map (`_section_break_indices`) when the caller has it already, so
+    placing every box and picture of one document reads it once (`template_geometry`).
     """
+    if breaks is None:
+        breaks = _section_break_indices(body)
     ext = anchor.find(qn("wp:extent"))
     w = int(ext.get("cx")) / _EMU_PER_PT if ext is not None else 0.0
     h = int(ext.get("cy")) / _EMU_PER_PT if ext is not None else 0.0
@@ -4511,7 +4536,7 @@ def _pos_of_anchor(anchor, page: dict, top_ps: list, body, d: Document, wrap: bo
         anc = anc.getparent()
     # Resolved BEFORE x and y: which margin they are measured from depends on which SECTION
     # this anchor sits in, not on the document's first one — see `_governing_margins`.
-    margin = _margins_of(d, _section_ordinal(body, anc))
+    margin = _margins_of(d, _section_ordinal(body, anc, breaks))
     try:
         pidx = top_ps.index(anc)
     except ValueError:
@@ -4519,7 +4544,7 @@ def _pos_of_anchor(anchor, page: dict, top_ps: list, body, d: Document, wrap: bo
 
     x = ox + (margin["left"] if rfx in ("column", "margin") else 0.0)
     if wrap and rfx == "column":
-        x += _wrap_column_shift(anchor, page, top_ps, body, d, margin, pidx)
+        x += _wrap_column_shift(anchor, page, top_ps, body, d, margin, pidx, breaks)
 
     if rfy in ("paragraph", "line"):
         y = margin["top"] + pidx * _ANCHOR_LINE_H_PT + oy
@@ -4569,6 +4594,9 @@ def template_geometry(d: Document) -> dict:
     page = _page_metrics(d)
     body = d.element.body
     top_ps = [c for c in body if c.tag == qn("w:p")]
+    # The section map, read ONCE for the whole pass: every box and picture below is placed against
+    # it, and `_wrap_column_shift` places each against every box that wraps beside it.
+    breaks = _section_break_indices(body)
 
     def enclosing_anchor(el):
         anc = el.getparent()
@@ -4581,7 +4609,7 @@ def template_geometry(d: Document) -> dict:
     for bi, txbx in enumerate(_iter_txbx(d)):
         anchor = enclosing_anchor(txbx)
         if anchor is not None:
-            x, y, w, h = _pos_of_anchor(anchor, page, top_ps, body, d)
+            x, y, w, h = _pos_of_anchor(anchor, page, top_ps, body, d, breaks=breaks)
         else:
             x = y = w = h = None
         boxes.append({"id": bi, "x_pt": x, "y_pt": y, "w_pt": w, "h_pt": h})
@@ -4598,7 +4626,7 @@ def template_geometry(d: Document) -> dict:
             target = d.part.rels[rid].target_ref
         except (KeyError, AttributeError):
             continue
-        x, y, w, h = _pos_of_anchor(anchor, page, top_ps, body, d)
+        x, y, w, h = _pos_of_anchor(anchor, page, top_ps, body, d, breaks=breaks)
         anc = anchor
         while anc is not None and anc.getparent() is not body:
             anc = anc.getparent()
@@ -4711,11 +4739,16 @@ def _set_paragraph_runs(p_elem, runs, bold_marks: dict | None = None) -> bool:
     Media runs are never removed, for the same reason as `_set_paragraph_text`: they anchor the
     letterhead and every floating text box.
 
-    Returns True when any run carries an explicit size, so the caller can exempt this
-    paragraph from the overflow shrink (which would otherwise rewrite it — measured at 4.5pt
-    on a real GC NOTES line). `bold_marks`, when given, collects the runs whose `bold` the
-    estimator STATED (True or False alike — both are a choice, absent is not), so
-    `_normalize_work_label_formatting` can leave those alone; see `_user_bolded_runs`.
+    Returns True when any run carries a size the estimator CHOSE -- a size that is NOT one of the
+    sizes the template paragraph itself uses, or one the run says outright was picked with the
+    ribbon's size box (`size_set: true`) -- so the caller can exempt this paragraph from the
+    overflow shrink (which would otherwise rewrite it — measured at 4.5pt on a real GC NOTES
+    line). A size the paragraph already had, with no `size_set`, is the editor handing the
+    template's own back (see `tmpl_sizes` below) and is not a choice.
+
+    `bold_marks`, when given, collects the runs whose `bold` the estimator STATED (True or False
+    alike — both are a choice, absent is not), so `_normalize_work_label_formatting` can leave
+    those alone; see `_user_bolded_runs`.
     """
     _MEDIA_TAGS = (qn("w:drawing"), qn("w:pict"), qn("w:object"))
     all_runs = p_elem.findall(qn("w:r"))
@@ -4729,25 +4762,43 @@ def _set_paragraph_runs(p_elem, runs, bold_marks: dict | None = None) -> bool:
             base_rpr = copy.deepcopy(rpr)
             break
 
-    # The size the TEMPLATE gives each stretch of the old text, in half-points, so a run that
-    # merely restates it is not mistaken for one the estimator sized. The editor sends every run's
-    # size back as it reads it off the page (fmtAt), so a plain text edit on a NOTES line arrived
+    # The sizes the TEMPLATE gives this paragraph, in half-points, so a run that merely restates one
+    # of them is not mistaken for a size the estimator chose. The editor sends every run's size
+    # back as it reads it off the page (fmtAt), so a plain text edit on a NOTES line arrived
     # carrying Kyle's own 7.5pt -- and the shrink, told the estimator had sized that line, left it
     # at 7.5pt among 4.5pt neighbours (the "wear & tear" note, drawn large in the editor and in
     # the PDF, 2026-10-02).
-    tmpl_sizes = []          # [(end offset, half-points or None)]
-    pos = 0
+    #
+    # A SET, NOT A POSITION. The first fix matched each new run to the template run at the same
+    # character offset, so any edit that changed the text's length before a size boundary moved
+    # every later run onto its neighbour's size: delete "existing " from the wear & tear note (runs
+    # 7.5 x4, then 7.0) and its 7.0pt tail landed on a 7.5pt offset, was taken for a choice, and
+    # the line printed at 7.5/7.0pt beside 4.5pt notes again. A delete-one-character scan left four
+    # or five lines of every GC and Gyp file exempt that way, and a plain edit to a GC WORK line
+    # did the same on the lines that mix 9pt and 8pt. The editor reads every size off the page and
+    # sends it back, so a size that is one of this paragraph's own is the template's coming home,
+    # wherever in the line it now sits.
+    #
+    # TWO WAYS A SIZE IS STILL THE ESTIMATOR'S, and the set alone cannot see either:
+    #  * a size outside the set -- the template never used it, so somebody asked for it;
+    #  * `size_set`, which the editor writes onto a run ONLY when the ribbon's size box put the size
+    #    there (never typing, deleting, rewording, or a paste -- a paste drops the clipboard's font
+    #    size, see proposal-format-core.fmtFromPasted). That is how the estimator who sets a whole
+    #    9/8pt line to 9pt gets what they asked for even though 9pt is one of the line's own sizes.
+    # A size that is neither is not a choice, and the shrink may take it.
+    #
+    # Only a run with words in it counts. Word leaves empty runs behind with sizes of their own (a
+    # GC PRICE row carries a dozen at 9pt and 8.5pt after its 10pt text), and the editor draws and
+    # reads back only what has text, so it can never have reported one: counting them would swallow
+    # the estimator's own pick of 9pt on that row.
+    tmpl_sizes = set()       # half-points
     for r in text_runs:
-        pos += len("".join(t.text or "" for t in r.iter(qn("w:t"))))
+        if not any(t.text for t in r.iter(qn("w:t"))):
+            continue
         sz = r.find(qn("w:rPr") + "/" + qn("w:sz"))
         v = sz.get(qn("w:val")) if sz is not None else None
-        tmpl_sizes.append((pos, int(v) if v and v.isdigit() else None))
-
-    def tmpl_hp_at(offset):
-        for end, hp in tmpl_sizes:
-            if offset < end:
-                return hp
-        return tmpl_sizes[-1][1] if tmpl_sizes else None
+        if v and v.isdigit():
+            tmpl_sizes.add(int(v))
 
     # Where the text used to start, so the new runs land in the same place relative to any
     # media runs (an anchored text box in the same paragraph must stay put).
@@ -4757,7 +4808,6 @@ def _set_paragraph_runs(p_elem, runs, bold_marks: dict | None = None) -> bool:
         p_elem.remove(r)
 
     user_sized = False
-    at = 0                   # character offset of this run in the new text
     for offset, spec in enumerate(runs):
         r = OxmlElement("w:r")
         rpr = copy.deepcopy(base_rpr) if base_rpr is not None else OxmlElement("w:rPr")
@@ -4797,7 +4847,7 @@ def _set_paragraph_runs(p_elem, runs, bold_marks: dict | None = None) -> bool:
                     el = OxmlElement(tag)
                     rpr.append(el)
                 el.set(qn("w:val"), str(hp))
-            if hp != tmpl_hp_at(at):
+            if hp not in tmpl_sizes or spec.get("size_set") is True:
                 user_sized = True
 
         if len(rpr):
@@ -4805,7 +4855,6 @@ def _set_paragraph_runs(p_elem, runs, bold_marks: dict | None = None) -> bool:
         t = OxmlElement("w:t")
         r.append(t)
         _write_t_text(t, str(spec.get("text", "")))
-        at += len(str(spec.get("text", "")))
         p_elem.insert(insert_at + offset, r)
         # Registered only once the run is IN the tree — an element that is about to be
         # discarded must never end up pinned in the register.
@@ -5032,6 +5081,9 @@ def _apply_paragraph_overrides(d: Document, overrides: list, doomed=()) -> int:
                 sz = r.get("size_pt")
                 if isinstance(sz, (int, float)) and not isinstance(sz, bool) and 1 <= float(sz) <= 200:
                     one["size_pt"] = float(sz)
+                    # Only ever alongside a size: the flag says "this size was picked".
+                    if r.get("size_set") is True:
+                        one["size_set"] = True
                 clean.append(one)
             if clean:
                 by_id[pid] = clean
