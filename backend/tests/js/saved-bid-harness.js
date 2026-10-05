@@ -19,7 +19,6 @@ const Module = require("module");
 const BASE = path.join(__dirname, "polish-estimate-harness.js");
 let code = fs.readFileSync(BASE, "utf8");
 const MARK = "(async function () {\n  // ── A. the takeoff row";
-const cut = code.indexOf(MARK.replace(/\n/g, "\n")) >= 0 ? code.indexOf(MARK) : code.replace(/\r\n/g, "\n").indexOf(MARK);
 code = code.replace(/\r\n/g, "\n");
 const at = code.indexOf(MARK);
 if (at < 0) throw new Error("polish-estimate-harness.js scenario block moved; update the marker");

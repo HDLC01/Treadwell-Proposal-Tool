@@ -1573,7 +1573,8 @@ def test_the_shared_lookup_queries_fills_and_tells_the_form_so_it_can_save(addr)
     assert addr["shortQuery"] == {"calls": 0, "open": False}
     q = addr["query"]
     assert q["calls"] == 1 and q["open"] and q["rows"] == 1 and not q["hasParis"]
-    assert "photon.komoot.io" in q["url"]
+    from urllib.parse import urlparse
+    assert urlparse(q["url"]).hostname == "photon.komoot.io"
     p = addr["pick"]
     assert (p["address"], p["city"], p["state"], p["zip"]) == ("123 W 5th St", "Olathe", "KS", "66061")
     assert p["closed"] is True

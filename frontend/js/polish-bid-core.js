@@ -91,6 +91,19 @@
     return isFinite(n) ? n : 0;
   }
 
+  /** Copy one row's own keys onto `dst`, refusing the three names that would write to a prototype
+   *  instead of the row. Rows arrive from saved drafts and the library, so a key is user data. A
+   *  hostile "__proto__" is dropped (it never was a real field); every ordinary key copies as before,
+   *  so a JSON-serialised row keeps its exact shape. */
+  function copyInto(dst, src) {
+    for (var k in src) {
+      if (!Object.prototype.hasOwnProperty.call(src, k)) continue;
+      if (k === "__proto__" || k === "constructor" || k === "prototype") continue;
+      dst[k] = src[k];
+    }
+    return dst;
+  }
+
   /** Excel's ROUNDUP(n, 0): away from zero, so -1.2 becomes -2.
    *
    *  Float-guarded to twelve significant figures first. 27,500 × 1.10 is 110.00000000000001 in
@@ -300,8 +313,7 @@
       if (!r || r.unit === "hours" || r.id === "travel") continue;
       var v = laborCalcValues(byId[String(r.id)], sf, dflt);
       if (!v) continue;
-      var copy = {};
-      for (var k in r) if (Object.prototype.hasOwnProperty.call(r, k)) copy[k] = r[k];
+      var copy = copyInto({}, r);
       copy.guys = v.guys; copy.days = v.days; copy.rate = v.rate; copy.hours_per_day = v.hours_per_day;
       copy.calc_default = { guys: v.guys, days: v.days, rate: v.rate, hours_per_day: v.hours_per_day };
       // THE UNTOUCHED-FOLLOW MARKER (G2): a "From SF" line keeps its production rate so its days can
@@ -332,9 +344,7 @@
       if (!untouched) continue;
       var next = area > 0 ? Math.ceil(area / num(d.sf_per_day)) : "";
       if (next === d.days) continue;
-      var copy = {}, dc = {}, k;
-      for (k in r) if (Object.prototype.hasOwnProperty.call(r, k)) copy[k] = r[k];
-      for (k in d) if (Object.prototype.hasOwnProperty.call(d, k)) dc[k] = d[k];
+      var copy = copyInto({}, r), dc = copyInto({}, d);
       dc.days = next;
       copy.days = next;
       copy.calc_default = dc;
@@ -481,7 +491,7 @@
       if (!keep || typeof keep !== "object") return;
       var shipped = (k === "lodging") ? SHIPPED_LODGING_RATE : SHIPPED_PER_DIEM_RATE;
       var next = {};
-      for (var f in keep) if (Object.prototype.hasOwnProperty.call(keep, f)) next[f] = keep[f];
+      copyInto(next, keep);
       if (!(isFinite(Number(keep.rate)) && Number(keep.rate) > 0 && Number(keep.rate) !== shipped)) {
         next.rate = out[k].rate;
       }
@@ -1020,8 +1030,7 @@
       var travelOnShipped = (id === "travel") &&
         (isBlank(r.rate) || !isFinite(Number(r.rate)) || Number(r.rate) === SHIPPED_LABOR_RATE);
       if (crew || travelOnShipped) {
-        var copy = {};
-        for (var k in r) if (Object.prototype.hasOwnProperty.call(r, k)) copy[k] = r[k];
+        var copy = copyInto({}, r);
         copy.rate = dflt;
         out[i] = copy;
       }
@@ -1044,8 +1053,7 @@
     for (var i = 0; i < out.length; i++) {
       var r = out[i];
       if (!r || r.calc_default || r.rate_default !== undefined) continue;
-      var copy = {};
-      for (var k in r) if (Object.prototype.hasOwnProperty.call(r, k)) copy[k] = r[k];
+      var copy = copyInto({}, r);
       copy.rate_default = num(r.rate);
       out[i] = copy;
     }
@@ -1670,10 +1678,7 @@
             // RELABEL, "Travel" -> "Travel Labor" (2026-10-05). Only a label that is EXACTLY the
             // old word: a name somebody typed over it is theirs. A copy, never an edit in place.
             if (r.label === "Travel") {
-              var relabeled = {};
-              for (var rk in r) {
-                if (Object.prototype.hasOwnProperty.call(r, rk)) relabeled[rk] = r[rk];
-              }
+              var relabeled = copyInto({}, r);
               relabeled.label = TRAVEL_LABEL;
               r = relabeled;
             }
@@ -1681,10 +1686,7 @@
                           Object.prototype.hasOwnProperty.call(r, "guys_auto") &&
                           !isBlank(r.rate);
             if (current) return r;
-            var next = {};
-            for (var kk in r) {
-              if (Object.prototype.hasOwnProperty.call(r, kk)) next[kk] = r[kk];
-            }
+            var next = copyInto({}, r);
             next.unit = "hours";
             if (!Object.prototype.hasOwnProperty.call(next, "guys_auto")) {
               next.guys_auto = isBlank(next.guys);
@@ -1875,7 +1877,7 @@
   }
 
   return {
-    num: num, roundUp: roundUp,
+    num: num, roundUp: roundUp, copyInto: copyInto,
     money: money, money2: money2, pct: pct, fmtSf: fmtSf,
     HOURS_PER_DAY: HOURS_PER_DAY, RATES: RATES, GP_BANDS: GP_BANDS, DYE_COATS: DYE_COATS,
     gpPct: gpPct,

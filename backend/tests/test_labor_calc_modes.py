@@ -137,6 +137,45 @@ def _core(expr):
 
 
 @needs_node
+def test_hostile_row_keys_never_reach_a_prototype():
+    """Saved drafts and library rows are user data, so their KEYS are too. A row carrying
+    "__proto__" / "constructor" / "prototype" must not pollute Object.prototype through any row
+    copy, must not carry those keys into the copy, and every ordinary key must survive unchanged.
+
+    Mutation: drop the guard in copyInto and `polluted` comes back 1 (JSON.parse makes "__proto__"
+    an own key, and the old `copy[k] = r[k]` then re-points the copy's prototype)."""
+    expr = """(function(){
+      var hostile = JSON.parse('{"id":"x","label":"L","unit":"sf","rate":"50","days":"2","guys":"2",' +
+        '"__proto__":{"polluted":1},"constructor":{"prototype":{"polluted":1}},"prototype":"p"}');
+      var seen = [];
+      seen.push(B.copyInto({}, hostile));
+      seen.push(B.stampRateDefaults([hostile])[0]);
+      B.applyLaborRate([hostile], 61);   // a row it leaves alone is handed back as is, not copied
+      seen.push(B.followLaborDays([Object.assign(JSON.parse(JSON.stringify(hostile)), {calc_default:{sf_per_day:1000,days:2}})], 5000)[0]);
+      var d = JSON.parse('{"sf_per_day":1000,"days":2,"__proto__":{"polluted":1}}');
+      var row = JSON.parse('{"id":"y","days":2,"calc_default":null}');
+      row.calc_default = d;
+      seen.push(B.followLaborDays([row], 9000)[0]);
+      return {
+        polluted: ({}).polluted === undefined ? 0 : 1,
+        leaked: seen.map(function (r) {
+          return ["__proto__", "constructor", "prototype"].filter(function (k) {
+            return Object.prototype.hasOwnProperty.call(r, k) ||
+                   (r.calc_default && Object.prototype.hasOwnProperty.call(r.calc_default, k));
+          }).length;
+        }),
+        protoOk: seen.every(function (r) { return Object.getPrototypeOf(r) === Object.prototype; }),
+        kept: B.copyInto({}, {a: 1, label: "L"})
+      };
+    })()"""
+    got = _core(expr)
+    assert got["polluted"] == 0
+    assert got["leaked"] == [0] * 4
+    assert got["protoOk"] is True
+    assert got["kept"] == {"a": 1, "label": "L"}
+
+
+@needs_node
 def test_days_are_the_job_sf_over_the_production_rate_rounded_up():
     """12,000 / 2,500 = 4.8 -> 5; exactly 10,000 -> 4 (not 5); 10,001 -> 5.
     Mutation: Math.floor/Math.round instead of Math.ceil, and 4.8 -> 4 or the 10,001 case -> 4."""
