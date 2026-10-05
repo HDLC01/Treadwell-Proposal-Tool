@@ -426,7 +426,7 @@
   function bid() {
     return B.markupChain({
       material: materialTotal(),
-      labor: B.laborTotal(M.labor),
+      labor: B.laborTotal(M.labor, M.conditions),
       // Lodging + Per Diem: inside the markups (the sheet's D61), not labor.
       travel: B.travelCosts(M.travel, M.labor).total,
       contingency: M.contingency,
@@ -1613,7 +1613,7 @@
     html += '<button class="btn addline below" data-add-lab="1">' + icon("plus", 16)
       + ' Add a labor line</button>';
     html += '<p class="cap">Labor total <b data-labor-total>' +
-      esc(moneyAuto(B.laborTotal(M.labor))) + '</b>.</p>';
+      esc(moneyAuto(B.laborTotal(M.labor, M.conditions))) + '</b>.</p>';
 
     html += '<div class="trvsep" role="separator"><span>Travel</span></div>' +
       '<p class="cap">Travel is expected when the job is 70 miles or more from the office. Under ' +
@@ -2053,7 +2053,7 @@
     };
     one("[data-mat-total]", moneyAuto(materialTotal()));
     one("[data-area-total]", B.fmtSf(B.takeoffSf(M.takeoff)) + " SF");
-    one("[data-labor-total]", moneyAuto(B.laborTotal(M.labor)));
+    one("[data-labor-total]", moneyAuto(B.laborTotal(M.labor, M.conditions)));
     one("[data-travel-total]", moneyAuto(B.travelCosts(M.travel, M.labor).total));
     one("[data-mk-persf]", perSfText(b));
 

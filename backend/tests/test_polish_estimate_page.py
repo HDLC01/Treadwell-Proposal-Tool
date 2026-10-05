@@ -3416,12 +3416,6 @@ def test_an_off_default_row_is_grayed_and_an_on_one_is_not(ran, name, gray):
     assert sw_off == "false"
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "FINDING, NOT FIXED: remove-existing joint filler is documented as 'a fourth hand on the "
-    "joint-filler line, priced on the Labor step'. The beta engine never adds that hand (its "
-    "answer only reaches Polish!F29) and the reserved library row has no unit_cost, so the "
-    "switch moves no number. Needs a pricing decision from Hanz; this flips to XPASS-fail the "
-    "day it is priced, so the marker has to come off with the fix."))
 def test_the_remove_existing_switch_moves_the_lump_sum(ran):
     r = ran["toggleMovesTotal"]["remove-existing condition row"]
     assert r["hasSwitch"] and r["swAfter"] == "true"

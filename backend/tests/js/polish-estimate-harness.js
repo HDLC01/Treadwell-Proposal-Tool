@@ -3649,7 +3649,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
       { id: "m1", layout: "global", line_key: "travel_lodging", formula: "80", applies: true },
       { id: "m2", layout: "global", line_key: "travel_per_diem", formula: "50", applies: true }];
     const PCONDS = ["joint_filler", "remove_existing_jf", "dye"]
-      .map((k) => ({ key: k, on: false, listed: true }));
+      .map((k) => ({ key: k, on: k === "joint_filler", listed: true }));  // the fourth hand needs filler ON
     const nb = blob({ polish_estimate: null, polish_sf: 12000 });
     const p = build({ blob: nb, asms: FAV_ASMS, items: FAV_ITEMS, labor: PLABOR, laborCalc: PCALC,
                       markupRules: PRULES, conditionDefaults: PCONDS });
@@ -3685,7 +3685,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
       });
       material += extraMaterial(m);
       return B.markupChain({
-        material: material, labor: B.laborTotal(m.labor),
+        material: material, labor: B.laborTotal(m.labor, m.conditions),
         travel: B.travelCosts(m.travel, m.labor).total,
         contingency: m.contingency, fees: m.fees, conditions: m.conditions,
         sf: B.takeoffSf(m.takeoff), remodel_rate: null }).total;

@@ -392,11 +392,29 @@
 
   /** The labor rows added up, UNROUNDED. D45 is where the rounding happens
    *  (`=ROUNDUP(SUM(D37:D44),0)`), and markupChain does it — rounding twice would drift. */
-  function laborTotal(rows) {
+  function laborTotal(rows, conditions) {
     rows = rows || [];
     var t = 0;
     for (var i = 0; i < rows.length; i++) t += laborCost(rows[i]);
-    return t;
+    return t + removeExistingHand(rows, conditions);
+  }
+
+  /** REMOVE EXISTING JOINT FILLER = A FOURTH HAND ON THE JOINT-FILLER LINE (Polish A42 is
+   *  `=IF(F29="NO",3,4)`). The crew row keeps its own typed Guys; the extra hand is one more guy
+   *  for the same days at the same rate, so its cost is that row priced at 1 guy. It needs joint
+   *  filler ON (no filler, no crew to add a hand to), and it follows the row's own on/off switch
+   *  because laborCost does. Absent `conditions` adds nothing, so every caller that predates this
+   *  prices exactly as before. */
+  function removeExistingHand(rows, conditions) {
+    if (!conditions || !conditions.joint_filler || !conditions.remove_existing_jf) return 0;
+    rows = rows || [];
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i] || {};
+      if (r.id !== "jointfill") continue;
+      return laborCost({ guys: 1, days: r.days, rate: r.rate, unit: r.unit,
+                         hours_per_day: r.hours_per_day, enabled: r.enabled });
+    }
+    return 0;
   }
 
   /** THE TWO TRAVEL COSTS BESIDE TRAVEL LABOR: LODGING (a night) and PER DIEM (a day). Hanz,
@@ -2015,7 +2033,7 @@
     conditionsUnstated: conditionsUnstated,
     setMeasurement: setMeasurement,
     seedConditionsShown: seedConditionsShown, conditionShown: conditionShown,
-    laborCost: laborCost, laborTotal: laborTotal, travelManDays: travelManDays,
+    laborCost: laborCost, laborTotal: laborTotal, removeExistingHand: removeExistingHand,travelManDays: travelManDays,
     // Lodging and Per Diem, the two travel costs beside Travel Labor (see travelCostsSeed).
     SHIPPED_LODGING_RATE: SHIPPED_LODGING_RATE, SHIPPED_PER_DIEM_RATE: SHIPPED_PER_DIEM_RATE,
     TRAVEL_LINE_KEYS: TRAVEL_LINE_KEYS, TRAVEL_LABEL: TRAVEL_LABEL, travelLabel: travelLabel,
