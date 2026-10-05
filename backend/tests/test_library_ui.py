@@ -762,7 +762,9 @@ def test_reset_patches_the_row_back_rather_than_deleting_it(ran):
         "Reset went out as %s -- a delete takes the only id Travel can be addressed by with it, "
         "permanently" % r["op"])
     assert r["sentToTravel"], "Reset was addressed to something other than the reserved id"
-    assert r["body"] == {"name": "Travel", "rate": 33.0, "unit": "hours"}, (
+    # "Travel Labor" since 2026-10-05: Reset writes the row's name as travelSeed() now spells it,
+    # which also brings a row still stored under the old "Travel" onto the new name.
+    assert r["body"] == {"name": "Travel Labor", "rate": 33.0, "unit": "hours"}, (
         "Reset did not send the figures travelSeed() ships: %s" % r["body"])
     assert r["showsTheShippedRate"], "the list still shows the edited rate after a reset"
     assert r["resetGoneAfterwards"], (
@@ -902,8 +904,10 @@ def test_the_items_tab_no_longer_explains_itself(ran):
     # delete; this is the opposite of one. Defaults gained its own .paneintro on 2026-09-18 and
     # Labor on 2026-09-30, both reusing the class rather than inventing a new one -- the same
     # reasoning that kept it alive for Assemblies and Administration.
-    assert page["paneintroStillUsed"] == 4, (
-        "expected Assemblies, Labor, Administration and Defaults to carry .paneintro, found %s"
+    # FIVE since 2026-10-05: the Labor Calculator pane (Kyle's notes, B7) opens with one too.
+    assert page["paneintroStillUsed"] == 5, (
+        "expected Assemblies, Labor, Labor Calculator, Administration and Defaults to carry "
+        ".paneintro, found %s"
         % page["paneintroStillUsed"])
 
 

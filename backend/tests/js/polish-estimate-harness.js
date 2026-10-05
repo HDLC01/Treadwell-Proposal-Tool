@@ -2658,7 +2658,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
       labor: [
         { id: "polishing", label: "Polishing", guys: 4, days: 6, rate: 33 },
         { id: "mockup", label: "Mock-up", guys: 3, days: 0.5, rate: 33 },
-        { id: "travel", label: "Travel", guys: 18, days: 2, rate: 33,
+        { id: "travel", label: "Travel Labor", guys: 18, days: 2, rate: 33,
           unit: "hours", guys_auto: false },
         { id: "lab-densify", label: "Densify", guys: 2, days: 1, rate: 55, unit: "days",
           guys_auto: false },
@@ -3097,6 +3097,124 @@ const rendered = [];      // every string the page put on screen, for the Labour
       condSwitchClass: cardSw.className, condSwitchRole: cardSw.getAttribute("role"),
       offSwitchSameShape: need(base, '[data-on-tk="1"]').className.indexOf("mw-sw") === 0 &&
         need(base, '[data-on-tk="1"]').getAttribute("role") === "switch",
+    };
+  }
+
+  // ── N. Lodging and Per Diem, beside Travel Labor (Kyle's notes, B7, 2026-10-05) ─────────────────
+  // EXECUTED THROUGH THE PAGE'S OWN HANDLERS: the Labor step draws a dividing line, then Travel
+  // Labor, Lodging and Per Diem; each has its own slider and a typeable quantity; they price INSIDE
+  // the markups (the bid moves by more than the travel dollars); a switched-off line adds nothing
+  // and stays out of Review; a NEW bid copies the two rates from Markups -> Global and a saved bid
+  // keeps its own.
+  {
+    const RULES = [
+      { id: "m1", layout: "global", line_key: "travel_lodging", formula: "80", applies: true },
+      { id: "m2", layout: "global", line_key: "travel_per_diem", formula: "50", applies: true },
+    ];
+    // An OLD draft: saved before `travel` existed, with Travel still labelled "Travel".
+    const OLD = {
+      version: 2, takeoff: clone(MODEL.takeoff),
+      labor: [
+        { id: "polishing", label: "Polishing", guys: 3, days: 5, rate: 33 },
+        { id: "mockup", label: "Mock-up", guys: 3, days: 0.5, rate: 33 },
+        { id: "travel", label: "Travel", guys: "", days: "", rate: 33, unit: "hours",
+          guys_auto: true },
+      ],
+      conditions: Object.assign(clone(MODEL.conditions), { local: false }),
+      contingency: 0, fees: 0, totals: {},
+    };
+    const old = build({ blob: blob({ polish_estimate: clone(OLD) }), markupRules: RULES });
+    await old.api.init();
+    old.api.go(1);
+    const html0 = old.dom.get("panels").innerHTML;
+    const at = (needle) => html0.indexOf(needle);
+    const base = old.api.bid();
+
+    // Lodging ON.
+    clickOn(old, '[data-on-trv="lodging"]');
+    const lodgingOn = old.api.bid();
+    const lodgingModel = clone(old.api.model().travel.lodging);
+    const costCellOn = txt(old, '[data-trvcost-for="lodging"]');
+    const qtyAuto = need(old, '[data-trv="lodging"][data-k="qty"]').value;
+
+    // Type a quantity of our own: leaves auto, prices on the typed number.
+    typeInto(old, '[data-trv="lodging"][data-k="qty"]', "10");
+    const typedLodging = clone(old.api.model().travel.lodging);
+    const typedBid = old.api.bid();
+    const typedCostCell = txt(old, '[data-trvcost-for="lodging"]');
+    // And back to auto through the switch.
+    clickOn(old, '[data-trv-auto="lodging"]');
+    const backToAuto = clone(old.api.model().travel.lodging);
+
+    // Per Diem ON as well, rate typed over.
+    clickOn(old, '[data-on-trv="per_diem"]');
+    typeInto(old, '[data-trv="per_diem"][data-k="rate"]', "60");
+    const bothOn = old.api.bid();
+    const review = (() => { old.api.go(2); return old.dom.get("panels").innerHTML; })();
+    const saved = (() => { old.clock.fire(); return old.rec.saves[old.rec.saves.length - 1]; })();
+
+    // Per Diem OFF again: gone from Review, adds nothing.
+    old.api.go(1);
+    clickOn(old, '[data-on-trv="per_diem"]');
+    const perDiemOff = old.api.bid();
+    old.api.go(2);
+    const reviewOff = old.dom.get("panels").innerHTML;
+
+    // A NEW bid (no saved estimate at all) copies the two rates; a fresh bid has both OFF.
+    const fb = blob(); delete fb.polish_estimate;
+    const fresh = build({ blob: fb, markupRules: RULES });
+    await fresh.api.init();
+    // The markup read failing leaves the shipped 70 / 45.
+    const down = build({ blob: (() => { const b2 = blob(); delete b2.polish_estimate; return b2; })(),
+                         markupFails: true });
+    await down.api.init();
+
+    // A LOCAL job (under 70 miles) leaves the three lines gray until touched.
+    const loc = build({ blob: blob({ polish_estimate: Object.assign(clone(OLD), {
+      conditions: Object.assign(clone(MODEL.conditions), { local: true }) }) }) });
+    await loc.api.init();
+    loc.api.go(1);
+    const localClass0 = need(loc, '[data-trv-card="lodging"]').className;
+    clickOn(loc, '[data-on-trv="lodging"]');
+    const localClassOn = need(loc, '[data-trv-card="lodging"]').className;
+    const localHand = loc.api.model().travel.lodging.hand === true;
+
+    out.travelCosts = {
+      // layout
+      order: { sep: at('class="trvsep"'), travelLabor: at('data-lab-card="2"'),
+               lodging: at('data-trv-card="lodging"'), perDiem: at('data-trv-card="per_diem"'),
+               addLine: at("data-add-lab") },
+      travelLaborLabel: old.api.model().labor[2].label,
+      cardClassOff: /class="tk trv inert off" data-trv-card="lodging"/.test(html0),
+      noteOnEach: (html0.match(/70 miles or more from the office/g) || []).length,
+      // money
+      baseTravel: base.travel, baseTotal: base.total, baseSub: base.sub_total,
+      lodgingOnTravel: lodgingOn.travel, lodgingOnSub: lodgingOn.sub_total,
+      lodgingOnTotal: lodgingOn.total, lodgingOnGp: lodgingOn.gp,
+      oldRate: lodgingModel.rate, lodgingModel: lodgingModel,
+      costCellOn: costCellOn, qtyAuto: qtyAuto,
+      typedLodging: typedLodging, typedTravel: typedBid.travel, typedCostCell: typedCostCell,
+      backToAuto: backToAuto,
+      bothOnTravel: bothOn.travel, perDiemOffTravel: perDiemOff.travel,
+      perDiemOffTotal: perDiemOff.total, lodgingOnlyTotal: null,
+      // review
+      reviewHasCard: review.indexOf("Lodging and Per Diem") !== -1,
+      reviewHasLodging: review.indexOf(">Lodging<") !== -1,
+      reviewHasPerDiem: review.indexOf(">Per Diem<") !== -1,
+      reviewOffHasPerDiem: reviewOff.indexOf(">Per Diem<") !== -1,
+      reviewOffHasLodging: reviewOff.indexOf(">Lodging<") !== -1,
+      // saving
+      savedTravel: saved && saved.polish_estimate ? saved.polish_estimate.travel : null,
+      // rates
+      freshRates: { lodging: fresh.api.model().travel.lodging.rate,
+                    per_diem: fresh.api.model().travel.per_diem.rate },
+      freshEnabled: [fresh.api.model().travel.lodging.enabled, fresh.api.model().travel.per_diem.enabled],
+      downRates: { lodging: down.api.model().travel.lodging.rate,
+                   per_diem: down.api.model().travel.per_diem.rate },
+      oldRates: { lodging: old.api.model().travel.lodging.rate,
+                  per_diem: old.api.model().travel.per_diem.rate },
+      // local gate
+      localClass0: localClass0, localClassOn: localClassOn, localHand: localHand,
     };
   }
 

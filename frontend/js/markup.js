@@ -319,6 +319,15 @@
    *  into one. */
   function reachSentence(r) {
     if (!r.editable) return "";
+    // LODGING AND PER DIEM ARE READ BY THE POLISH ESTIMATE BETA (2026-10-05): a new bid copies the
+    // figure onto its own Lodging / Per Diem line, priced inside the markups. Kyle's WORKBOOK still
+    // does not read them (no address in any target table), and that is the half this row says too,
+    // so an admin is not left believing the downloaded .xlsx follows the figure.
+    if (LAYOUT === "global" && (r.line_key === "travel_lodging" || r.line_key === "travel_per_diem")) {
+      return " The Polish Estimate beta copies this figure onto every NEW bid's " +
+        (r.line_key === "travel_lodging" ? "Lodging" : "Per Diem") + " line; a saved bid keeps its " +
+        "own. Kyle's workbook does not read it.";
+    }
     var keys = PRICES_THE_BID[LAYOUT] || [];
     if (keys.indexOf(r.line_key) < 0) {
       return " The estimate workbook does not read this line yet, so a rate filed here " +

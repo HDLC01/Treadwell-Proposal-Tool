@@ -425,6 +425,8 @@
     return B.markupChain({
       material: materialTotal(),
       labor: B.laborTotal(M.labor),
+      // Lodging + Per Diem: inside the markups (the sheet's D61), not labor.
+      travel: B.travelCosts(M.travel, M.labor).total,
       contingency: M.contingency,
       fees: M.fees,
       conditions: M.conditions,
@@ -524,6 +526,14 @@
     for (var i = 0; i < M.labor.length; i++) {
       var r = M.labor[i];
       if (r && r.unit === "hours" && r.guys_auto) r.guys = manDays;
+    }
+    // Lodging and Per Diem count the same man-days while they are on auto (nights = man-days, the
+    // way backend/pricing.py counts them), written into the line for the reason above.
+    if (M.travel) {
+      B.TRAVEL_LINE_KEYS.forEach(function (k) {
+        var l = M.travel[k];
+        if (l && l.qty_auto !== false) l.qty = manDays;
+      });
     }
   }
 
@@ -1367,12 +1377,75 @@
         // whether it shows, so the card's class is the one source of truth for both the dimming
         // and the caption, and the two cannot drift apart on a live repaint.
         ? '<p class="inertline">This job is marked local, so no travel is expected — type here ' +
-          'anyway if it needs drive time.</p>'
+          'anyway if it needs drive time.</p>' +
+          '<p class="hint trvnote">Drive time is expected at 70 miles or more from the office. ' +
+          'Under 70 miles this line stays gray.</p>'
         : "") + '</div>';
   }
 
+  /** Is a Lodging / Per Diem card dimmed? Off is gray, and so is a LOCAL job (under 70 miles) the
+   *  estimator has not touched -- the rule Travel Labor's card already follows (laborInert). A line
+   *  somebody flipped by hand (`hand`) is theirs, so it lifts the dim. ONE FUNCTION for the first
+   *  paint and the live repaint, like laborInert. */
+  function travelInert(l) {
+    return !!(M.conditions || {}).local && !(l && l.hand);
+  }
+
+  /** One of the two travel cost lines (Lodging, Per Diem) as a card, in the `.tk lab` vocabulary
+   *  the labor cards use so the three travel lines read as one family. `key` is "lodging" or
+   *  "per_diem". Quantity is nights / days; while it is auto it is the crew's man-days (the way
+   *  backend/pricing.py counts them) and the box says so; typing flips it to the estimator's own. */
+  function travelCard(key) {
+    var l = (M.travel || {})[key] || {};
+    var on = !!l.enabled;
+    var auto = l.qty_auto !== false;
+    var isNight = key === "lodging";
+    var inert = travelInert(l);
+    var unitWord = isNight ? "Nights" : "Days";
+    var cost = B.travelLineCost(l, M.labor);
+    var mode = auto
+      ? '<button type="button" class="mw-sw labsw" role="switch" aria-checked="false"' +
+        ' data-trv-manual="' + key + '"><span class="track"></span>Type my own</button>'
+      : '<button type="button" class="mw-sw labsw on" role="switch" aria-checked="true"' +
+        ' data-trv-auto="' + key + '"><span class="track"></span>Type my own</button>';
+    return '<div class="tk trv' + ((inert || !on) ? " inert" : "") + (on ? "" : " off") +
+      '" data-trv-card="' + key + '"><div class="tk-h">' +
+      '<span class="labname static">' + esc(l.label || (isNight ? "Lodging" : "Per Diem")) + '</span>' +
+      mode +
+      B.sliderHtml(on, 'data-on-trv="' + key + '"', "Included", "Off keeps this line here, " +
+        "grayed, and adds nothing to the price") +
+      '<span class="tk-sub calc" data-trvcost-for="' + key + '">' + esc(moneyAuto(cost)) + '</span>' +
+      '</div><div class="tk-g lab-g trv-g">' +
+      '<div class="f"><label>' + unitWord + '</label>' +
+      '<input class="n" data-trv="' + key + '" data-k="qty" value="' + esc(nv(l.qty)) + '"' +
+      (auto ? ' data-auto="1"' : '') + '>' +
+      '<p class="hint">' + (auto ? "Man-days from the tasks above." : "Typed by you.") + '</p></div>' +
+      '<div class="f"><label>Rate</label>' +
+      '<span class="mny">$<input class="n" data-trv="' + key + '" data-k="rate" value="' +
+      esc(nv(l.rate)) + '"></span>' +
+      '<p class="hint">' + (isNight ? "Per night." : "Per day.") + ' Set under Items &amp; ' +
+      'Assemblies, Labor Calculator.</p></div>' +
+      '<div class="f"><label>Cost</label>' +
+      '<div class="costbox' + (cost > 0 ? "" : " empty") + '">' + esc(moneyAuto(cost)) + '</div>' +
+      '<p class="hint">' + unitWord.toLowerCase() + ' × rate</p></div>' +
+      '</div><p class="hint trvnote">' + (isNight
+        ? "Overnight stays are expected at 70 miles or more from the office. Under 70 miles " +
+          "this line stays gray."
+        : "Meals while the guys are away, expected at 70 miles or more from the office. Under " +
+          "70 miles this line stays gray.") + '</p></div>';
+  }
+
   function laborPanel() {
-    var html = M.labor.map(laborCard).join("");
+    // Travel Labor is its own block, below a dividing line, with Lodging and Per Diem. Every other
+    // task keeps its place above it. `i` stays the row's real index in M.labor -- the handlers
+    // splice and edit by position.
+    if (!M.travel) M.travel = B.normalizeTravel(null);
+    var html = "";
+    var travelRows = "";
+    M.labor.forEach(function (r, i) {
+      if ((r || {}).id === "travel") travelRows += laborCard(r, i);
+      else html += laborCard(r, i);
+    });
 
     // Same control as the takeoff step's, below the list rather than above it: this one adds a
     // row you then name yourself, so there is nothing to search and nothing to scroll back to.
@@ -1380,6 +1453,13 @@
       + ' Add a labor line</button>';
     html += '<p class="cap">Labor total <b data-labor-total>' +
       esc(moneyAuto(B.laborTotal(M.labor))) + '</b>.</p>';
+
+    html += '<div class="trvsep" role="separator"><span>Travel</span></div>' +
+      '<p class="cap">Travel is expected when the job is 70 miles or more from the office. Under ' +
+      '70 miles all three lines below stay gray until you switch one on.</p>';
+    html += travelRows + travelCard("lodging") + travelCard("per_diem");
+    html += '<p class="cap">Lodging and Per Diem total <b data-travel-total>' +
+      esc(moneyAuto(B.travelCosts(M.travel, M.labor).total)) + '</b>, added before the markups.</p>';
 
     var pw = !!(M.conditions || {}).prevailing_wage;
     html += '<p class="cap">Prevailing wage is <b>' + (pw ? "on" : "off") + '</b>' +
@@ -1472,6 +1552,20 @@
     labRows.push(["Labor burden", B.pct(B.RATES.BURDEN), mkAmt(b, "burden")]);
     labRows.push(["Labor Total", "", mkAmt(b, "labor_total"), "tot"]);
     html += card("Labor", 1, moneyAuto(b.labor_total), revTable(labRows));
+
+    // Lodging and Per Diem: listed only while switched on (an off line is out of the bid, so out of
+    // the list), and its own card because it is inside the markups but is not labor.
+    var trvRows = [];
+    B.TRAVEL_LINE_KEYS.forEach(function (k) {
+      var tl = (M.travel || {})[k];
+      if (!tl || !tl.enabled) return;
+      trvRows.push([tl.label, B.num(B.travelQty(tl, M.labor)) + " × " + B.money2(tl.rate),
+                    esc(moneyAuto(B.travelLineCost(tl, M.labor)))]);
+    });
+    if (trvRows.length) {
+      trvRows.push(["Travel Subtotal", "", mkAmt(b, "travel"), "tot"]);
+      html += card("Lodging and Per Diem", 1, moneyAuto(b.travel), revTable(trvRows));
+    }
 
     html += '<div class="rev">' + markupTable(b) + '</div>';
     return shell("Review the bid",
@@ -1701,6 +1795,25 @@
       var rOn = B.rowOn(r);
       el.className = "tk lab" + ((laborInert(r) || !rOn) ? " inert" : "") + (rOn ? "" : " off");
     });
+    // Lodging and Per Diem, live: cost, the auto quantity box, and the card's gray state. Keyed by
+    // attribute like everything above, and the class string is written by travelCard and here only.
+    if (M.travel) {
+      document.querySelectorAll("[data-trvcost-for]").forEach(function (el) {
+        el.textContent = moneyAuto(B.travelLineCost(M.travel[el.getAttribute("data-trvcost-for")], M.labor));
+      });
+      document.querySelectorAll('[data-trv][data-k="qty"][data-auto]').forEach(function (el) {
+        var l = M.travel[el.getAttribute("data-trv")];
+        if (!l) return;
+        var v = l.qty == null ? "" : String(l.qty);
+        if (el.value !== v) el.value = v;
+      });
+      document.querySelectorAll("[data-trv-card]").forEach(function (el) {
+        var l = M.travel[el.getAttribute("data-trv-card")];
+        if (!l) return;
+        el.className = "tk trv" + ((travelInert(l) || !l.enabled) ? " inert" : "") +
+          (l.enabled ? "" : " off");
+      });
+    }
     // The two condition cards that price. Every figure on them is derived from the takeoff area,
     // which is exactly what a keystroke in a takeoff row changes -- and a keystroke takes
     // `changed(false)`, which repaints in place and never rebuilds the panel. Before 2026-09-19
@@ -1749,6 +1862,7 @@
     one("[data-mat-total]", moneyAuto(materialTotal()));
     one("[data-area-total]", B.fmtSf(B.takeoffSf(M.takeoff)) + " SF");
     one("[data-labor-total]", moneyAuto(B.laborTotal(M.labor)));
+    one("[data-travel-total]", moneyAuto(B.travelCosts(M.travel, M.labor).total));
     one("[data-mk-persf]", perSfText(b));
 
     document.querySelectorAll("[data-mk]").forEach(function (el) {
@@ -1789,7 +1903,7 @@
   document.addEventListener("keydown", function (e) {
     var t = e.target;
     if (!t || !t.closest || (e.key !== " " && e.key !== "Enter")) return;
-    var sw = t.closest("[data-on-tk]") || t.closest("[data-on-lab]");
+    var sw = t.closest("[data-on-tk]") || t.closest("[data-on-lab]") || t.closest("[data-on-trv]");
     if (!sw) return;
     e.preventDefault();
     sw.click();
@@ -1882,6 +1996,35 @@
       if (M.takeoff[oi]) {
         if (B.rowOn(M.takeoff[oi])) M.takeoff[oi].enabled = false; else delete M.takeoff[oi].enabled;
       }
+      changed(true);
+      return;
+    }
+    // LODGING AND PER DIEM. The slider writes an explicit true/false (this block's convention, see
+    // normalizeTravel) and marks the line `hand`, so a later distance answer cannot override a
+    // choice the estimator made. The two mode buttons are Travel's "Type my own" switch again:
+    // going manual seeds the box with the crew's man-days and puts the caret in it.
+    var onTrv = t.closest("[data-on-trv]");
+    if (onTrv) {
+      var tl = M.travel && M.travel[onTrv.getAttribute("data-on-trv")];
+      if (tl) { tl.enabled = !tl.enabled; tl.hand = true; }
+      changed(true);
+      return;
+    }
+    var trvManual = t.closest("[data-trv-manual]");
+    if (trvManual) {
+      var mk = trvManual.getAttribute("data-trv-manual");
+      if (M.travel && M.travel[mk]) {
+        M.travel[mk].qty_auto = false;
+        M.travel[mk].qty = B.travelManDays(M.labor);
+      }
+      changed(true);
+      refocus('[data-trv="' + mk + '"][data-k="qty"]');
+      return;
+    }
+    var trvAuto = t.closest("[data-trv-auto]");
+    if (trvAuto) {
+      var ak = trvAuto.getAttribute("data-trv-auto");
+      if (M.travel && M.travel[ak]) M.travel[ak].qty_auto = true;
       changed(true);
       return;
     }
@@ -2102,6 +2245,25 @@
       return;
     }
 
+    // Lodging / Per Diem boxes. Typing in the auto quantity is how you leave auto (the same trade
+    // Travel's Guys box makes): one rebuild so the hint and the switch say so, caret carried.
+    var trvKey = el.getAttribute("data-trv");
+    if (trvKey !== null && k) {
+      var tline = M.travel && M.travel[trvKey];
+      if (tline) {
+        if (k === "qty" && tline.qty_auto !== false) {
+          tline.qty_auto = false;
+          tline.qty = el.value;
+          changed(true);
+          refocus('[data-trv="' + trvKey + '"][data-k="qty"]');
+          return;
+        }
+        tline[k] = el.value;
+      }
+      changed(false);
+      return;
+    }
+
     var li = el.getAttribute("data-lab");
     if (li !== null && k) {
       var j = parseInt(li, 10);
@@ -2227,6 +2389,20 @@
     }
   }
 
+  /** The Lodging and Per Diem rates (Markups -> Global), `{lodging, per_diem}` with null for any
+   *  that is not filed. Read for a NEW bid only (see init) and NEVER THROWS, like loadLaborRate:
+   *  a rate service being down must not stop an estimate opening, and null means the shipped
+   *  $70 / $45 stand. */
+  async function loadTravelRates() {
+    try {
+      var res = await api("/api/markup/rules?layout=global");
+      var j = await res.json();
+      return B.travelRatesFromRules(j && j.rules);
+    } catch (e) {
+      return { lodging: null, per_diem: null };
+    }
+  }
+
   async function init() {
     try { if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready; } catch (e) {}
     // shared.js is still deciding which draft this page is on (it can even hydrate and reload),
@@ -2257,6 +2433,9 @@
     // The company labor rate is read for EVERY bid, a saved one included: it is only APPLIED to a
     // new bid (the laborDefaults gate below), but "Default $X" under a rate needs it on any.
     var laborRate = loadLaborRate();
+    // Lodging and Per Diem rates ride the same gate as the labor defaults: a NEW bid copies them
+    // from Markups -> Global once; a saved bid keeps the rates it was saved with.
+    var travelRates = laborDefaults ? loadTravelRates() : null;
 
     // THE CONDITION DEFAULTS, ON THE SAME TERMS AND WITH A STRICTER GATE. B.conditionsUnstated is
     // true only when NOTHING has ever been saved for this estimate, because Hanz's rule for this
@@ -2311,6 +2490,8 @@
       // A default can carry guys_auto, exactly as Travel does. Re-run for the same reason adopt()
       // runs it: before the first paint, not on the first edit.
       syncAutoGuys();
+      // The two travel rates, onto the new bid's Lodging / Per Diem lines (both start OFF).
+      M.travel = B.applyTravelRates(M.travel, await travelRates);
     }
 
     // The library's answers for joint filler, remove-existing and dye, written over the shipped

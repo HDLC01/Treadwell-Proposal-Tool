@@ -272,6 +272,133 @@
     return t;
   }
 
+  /** THE TWO TRAVEL COSTS BESIDE TRAVEL LABOR: LODGING (a night) and PER DIEM (a day). Hanz,
+   *  2026-10-05: "separate line for Travel Lodging and Per Diem", priced INSIDE the markups like
+   *  Kyle's sheet D61 -- they join the sub-total (D64) that GP, super/PTO and soft costs are taken
+   *  on, and are NOT labor (no escalation, no burden). They live on the model as `M.travel`,
+   *  `{lodging: line, per_diem: line}`, each `{label, enabled, qty, qty_auto, rate}`, and not as rows
+   *  of M.labor, because a labor row is guys x days x rate x 8 and neither of these is.
+   *
+   *  THE QUANTITY. Nights (and days of food) are the crew's man-days, the way backend/pricing.py
+   *  works them out (`nights = labor man-days`, one lodging and one meal charge per man per night).
+   *  `qty_auto` follows travelManDays until the estimator types a number; typing is how you leave
+   *  auto, and clearing the box is how you come back. An OFF line, or an absent `travel`, is $0.
+   *
+   *  THE RATES are the Markups -> Global lines `travel_lodging` ($70) and `travel_per_diem` ($45),
+   *  copied onto a NEW bid when it opens (applyTravelRates) and never again, so a rate edited later
+   *  reaches new bids and leaves saved ones alone. 70 and 45 are Kyle's literals and what stands
+   *  when nothing is filed.
+   *
+   *  BOTH START OFF (Hanz's decision, 2026-10-05): a bid that never leaves town pays nothing for a
+   *  hotel, and an old saved bid opened after this shipped is not repriced. */
+  var SHIPPED_LODGING_RATE = 70;
+  var SHIPPED_PER_DIEM_RATE = 45;
+  var TRAVEL_LINE_KEYS = ["lodging", "per_diem"];
+
+  /** The fresh travel block, built each call so no two models share an object. */
+  function travelCostsSeed(lodgingRate, perDiemRate) {
+    return {
+      lodging: { label: "Lodging", enabled: false, qty: "", qty_auto: true,
+                 rate: rateOrShipped(lodgingRate, SHIPPED_LODGING_RATE) },
+      per_diem: { label: "Per Diem", enabled: false, qty: "", qty_auto: true,
+                  rate: rateOrShipped(perDiemRate, SHIPPED_PER_DIEM_RATE) }
+    };
+  }
+
+  /** A usable positive rate, or the shipped one. Same rule as laborRateOrShipped. */
+  function rateOrShipped(rate, shipped) {
+    var n = (rate === null || rate === undefined || rate === "") ? NaN : Number(rate);
+    return (isFinite(n) && n > 0) ? n : shipped;
+  }
+
+  /** What a line is charged for: the typed quantity, or the crew's man-days while it is auto. */
+  function travelQty(line, rows) {
+    line = line || {};
+    if (line.qty_auto === false) return num(line.qty);
+    return travelManDays(rows);
+  }
+
+  /** One travel line's cost, ROUNDED UP TO THE DOLLAR like pricing.py's D68 (each of lodging and
+   *  food is its own ROUNDUP there). An off line is 0. */
+  function travelLineCost(line, rows) {
+    if (!line || !rowOn(line)) return 0;
+    return roundUp(travelQty(line, rows) * num(line.rate));
+  }
+
+  /** Both lines and their sum. `travel` may be absent (an old model that never migrated). */
+  function travelCosts(travel, rows) {
+    var t = travel || {};
+    var lodging = travelLineCost(t.lodging, rows);
+    var per_diem = travelLineCost(t.per_diem, rows);
+    return { lodging: lodging, per_diem: per_diem, total: lodging + per_diem };
+  }
+
+  /** The Lodging and Per Diem rates out of GET /api/markup/rules' `rules`, as
+   *  `{lodging, per_diem}`, each null when none is filed (or switched off, or not a plain dollar
+   *  figure). Null, not the shipped number: the caller decides what nothing-filed means. */
+  function travelRatesFromRules(rules) {
+    var out = { lodging: null, per_diem: null };
+    if (!(rules instanceof Array)) return out;
+    var keys = { travel_lodging: "lodging", travel_per_diem: "per_diem" };
+    for (var i = 0; i < rules.length; i++) {
+      var r = rules[i];
+      if (!r || r.layout !== "global" || !keys[r.line_key]) continue;
+      if (r.applies === false) continue;
+      var m = /^\s*\$?\s*(\d+(?:\.\d+)?)\s*$/.exec(String(r.formula === null ||
+        r.formula === undefined ? "" : r.formula));
+      if (!m) continue;
+      var n = Number(m[1]);
+      if (isFinite(n) && n > 0) out[keys[r.line_key]] = n;
+    }
+    return out;
+  }
+
+  /** The two company rates written onto a NEW bid's travel lines. A NEW object; the input is never
+   *  touched. A line the estimator has already typed a rate over is not this function's to move --
+   *  the caller's gate (a bid nobody has saved) is what keeps that true, and this only fills lines
+   *  still on the shipped figure. */
+  function applyTravelRates(travel, rates) {
+    var out = travelCostsSeed(rates && rates.lodging, rates && rates.per_diem);
+    var t = travel || {};
+    TRAVEL_LINE_KEYS.forEach(function (k) {
+      var keep = t[k];
+      if (!keep || typeof keep !== "object") return;
+      var shipped = (k === "lodging") ? SHIPPED_LODGING_RATE : SHIPPED_PER_DIEM_RATE;
+      var next = {};
+      for (var f in keep) if (Object.prototype.hasOwnProperty.call(keep, f)) next[f] = keep[f];
+      if (!(isFinite(Number(keep.rate)) && Number(keep.rate) > 0 && Number(keep.rate) !== shipped)) {
+        next.rate = out[k].rate;
+      }
+      out[k] = next;
+    });
+    return out;
+  }
+
+  /** A saved `travel` block read as a full one: both lines, every field. Missing lines come from
+   *  the seed (OFF, shipped rates); a line keeps what it was saved with. Never throws. */
+  function normalizeTravel(travel) {
+    var seed = travelCostsSeed();
+    var t = (travel && typeof travel === "object") ? travel : {};
+    var out = {};
+    TRAVEL_LINE_KEYS.forEach(function (k) {
+      var s = seed[k];
+      var l = (t[k] && typeof t[k] === "object") ? t[k] : {};
+      out[k] = {
+        label: isBlank(l.label) ? s.label : String(l.label),
+        // Explicit true/false on this block (unlike a labor row, whose absent key means on): the
+        // seed is OFF, so "on" has to be written down to survive a save and a reload.
+        enabled: l.enabled === true,
+        qty: l.qty === undefined || l.qty === null ? "" : l.qty,
+        qty_auto: l.qty_auto === false ? false : true,
+        rate: (isBlank(l.rate) || !isFinite(Number(l.rate))) ? s.rate : Number(l.rate)
+      };
+      // Set when the ESTIMATOR flipped the line, so a later distance answer (the 70-mile rule)
+      // never overrides a choice somebody made.
+      if (l.hand === true) out[k].hand = true;
+    });
+    return out;
+  }
+
   /** The square feet the bid is priced per. LF rows (cove, saw-cut, stripe) measure a different
    *  thing and must not be added to an area — C82 divides the total by the AREA. */
   /** THE INTAKE'S SF BOXES, TURNED INTO TAKEOFF ROWS (Hanz, 2026-10-05: "Add SF, seed the takeoff").
@@ -485,8 +612,14 @@
     var burden = roundUp((labor + escalation) * RATES.BURDEN);           // D47
     var labor_total = labor + escalation + burden;
 
-    // D64. D55 (tooling) and D61 (travel) are in the sheet's range and are 0 in the beta.
-    var sub_total = roundUp(material_total + labor + escalation + burden);
+    // ── travel costs: Lodging + Per Diem (D61). INSIDE the sub-total, so GP's band, super/PTO, soft
+    // costs and the remodel tax's markup base all see them, exactly as Kyle's D64 `SUM(...,D61)`
+    // does. Not labor: no escalation and no burden. 0 when the caller passes none, which is every
+    // caller written before this existed.
+    var travel = roundUp(input.travel);                                  // D61
+
+    // D64. D55 (tooling) is in the sheet's range and is 0 in the beta; D61 is the line above.
+    var sub_total = roundUp(material_total + labor + escalation + burden + travel);
 
     // ── the two taxes' rates, and the fees line, all of which feed the markups below ──
     var sales_tax_pct = cond.taxable ? RATES.SALES_TAX : 0;              // B74
@@ -563,6 +696,7 @@
     return {
       material: material, shipping: shipping, material_total: material_total,
       labor: labor, escalation: escalation, burden: burden, labor_total: labor_total,
+      travel: travel,
       sub_total: sub_total,
       gp_pct: gp_pct, gp: gp,
       super_pto: super_pto, soft_costs: soft_costs, contingency: contingency,
@@ -675,11 +809,22 @@
    *  A BLANK RATE FALLS BACK RATHER THAN READING AS FREE, and `isFinite` is what catches the
    *  string PostgREST hands numeric back as when it is something other than a number. 0 is NOT
    *  blank: a rate somebody deliberately set to zero is an answer, and `isBlank` agrees. */
+  var TRAVEL_LABEL = "Travel Labor";
+  /** The label a Travel row carries: blank or exactly the old "Travel" is "Travel Labor"; a name an
+   *  admin chose is kept. Also used to relabel a saved draft's row (migrateModel). */
+  function travelLabel(name) {
+    if (isBlank(name) || String(name) === "Travel") return TRAVEL_LABEL;
+    return String(name);
+  }
+
   function travelSeed(row, dflt) {
     var r = row || {};
     var rate = Number(r.rate);
     return { id: "travel",
-             label: isBlank(r.name) ? "Travel" : String(r.name),
+             // "Travel Labor" (Hanz, 2026-10-05): Lodging and Per Diem now stand beside it as their
+             // own lines, so "Travel" alone no longer says which of the three this is. A stored
+             // name that is exactly the old "Travel" (the table was seeded with it) reads the same.
+             label: travelLabel(r.name),
              guys: "", days: "",
              // `dflt` is the company labor rate (Markups -> Global). Omitted, it is the shipped
              // $33.00, which is what the library page's Reset and its "is this still the shipped
@@ -1162,6 +1307,8 @@
       // stays the one place that says what the workbook ships -- the parity test pins B77×C77 as
       // blank, and a literal here would let the two drift apart silently.
       fees: RATES.FEES,
+      // Lodging and Per Diem, both OFF (see travelCostsSeed).
+      travel: travelCostsSeed(),
       totals: {}
     };
   }
@@ -1251,6 +1398,16 @@
           // keystroke anywhere in the panel.
           out.labor = model.labor.map(function (r) {
             if (!r || r.id !== "travel") return r;
+            // RELABEL, "Travel" -> "Travel Labor" (2026-10-05). Only a label that is EXACTLY the
+            // old word: a name somebody typed over it is theirs. A copy, never an edit in place.
+            if (r.label === "Travel") {
+              var relabeled = {};
+              for (var rk in r) {
+                if (Object.prototype.hasOwnProperty.call(r, rk)) relabeled[rk] = r[rk];
+              }
+              relabeled.label = TRAVEL_LABEL;
+              r = relabeled;
+            }
             var current = r.unit === "hours" &&
                           Object.prototype.hasOwnProperty.call(r, "guys_auto") &&
                           !isBlank(r.rate);
@@ -1297,6 +1454,10 @@
         });
         if (Object.keys(cc).length) out.cond_cov = cc;
       }
+      // LODGING AND PER DIEM. A draft saved before they existed has no `travel`, and reads as the
+      // seed: both lines OFF at the shipped rates, so an old bid opened after this shipped prices
+      // exactly what it did and is not repriced behind anybody's back.
+      out.travel = normalizeTravel(model.travel);
       if (isBlank(out.contingency)) out.contingency = 0;
       // Every v2 draft saved before the Fees line became typeable has no `fees` at all, and a
       // missing one must read as the zero the sheet ships.
@@ -1347,7 +1508,7 @@
       // system / tooling / materials / added / adds / options are dropped on purpose: assemblies
       // replace all six, and carrying half of them forward would price the same material twice.
       return { version: 2, takeoff: takeoff, labor: labor, conditions: cond,
-               contingency: 0, fees: fresh.fees, totals: {} };
+               contingency: 0, fees: fresh.fees, totals: {}, travel: fresh.travel };
     }
 
     /* An unversioned blob that is not v1 either, but which STATES something we recognise.
@@ -1457,6 +1618,12 @@
     setMeasurement: setMeasurement,
     seedConditionsShown: seedConditionsShown, conditionShown: conditionShown,
     laborCost: laborCost, laborTotal: laborTotal, travelManDays: travelManDays,
+    // Lodging and Per Diem, the two travel costs beside Travel Labor (see travelCostsSeed).
+    SHIPPED_LODGING_RATE: SHIPPED_LODGING_RATE, SHIPPED_PER_DIEM_RATE: SHIPPED_PER_DIEM_RATE,
+    TRAVEL_LINE_KEYS: TRAVEL_LINE_KEYS, TRAVEL_LABEL: TRAVEL_LABEL, travelLabel: travelLabel,
+    travelCostsSeed: travelCostsSeed, travelQty: travelQty, travelLineCost: travelLineCost,
+    travelCosts: travelCosts, travelRatesFromRules: travelRatesFromRules,
+    applyTravelRates: applyTravelRates, normalizeTravel: normalizeTravel,
     rowOn: rowOn, sliderHtml: sliderHtml,
     filledIn: filledIn,
     takeoffSf: takeoffSf,

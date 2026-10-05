@@ -3274,13 +3274,161 @@
     if (addrow) addrow.hidden = !ADMIN;
   }
 
+  // ── the Labor Calculator tab (Hanz, 2026-10-05) ────────────────────────────
+  /** WHAT THIS TAB IS: where the calculations behind a new estimate's default labor lines live.
+   *  Today it holds the TRAVEL section -- Travel Labor, Lodging and Per Diem -- and the rest of the
+   *  calculator (per-line crew/production-rate modes) is a queued follow-up.
+   *
+   *  LODGING AND PER DIEM ARE NOT STORED HERE. They are the Markup page's Global lines
+   *  `travel_lodging` ($70 a night) and `travel_per_diem` ($45 a day), and the boxes below are a
+   *  second DOOR onto those same markup_rules rows -- one home, so the two screens cannot disagree.
+   *  A new estimate copies each onto its own Lodging / Per Diem line when it opens
+   *  (polish-estimate.js), which start OFF. Travel Labor's rate is the Labor tab's Travel row.
+   *
+   *  ITS OWN READ of /api/markup/rules?layout=global rather than GLOBAL_MARKUP: that list keeps
+   *  only filed, applying rows and drops `notes`, and a PUT states the whole row -- a save that
+   *  forgot the note would clear one filed elsewhere. */
+  var TRAVEL_KEYS = [
+    { line: "travel_lodging", label: "Lodging", per: "night", shipped: 70,
+      how: "One charge per night away. Nights are the man-days of the labor tasks on the estimate " +
+           "(the way the pricing engine counts them) unless the estimator types a number." },
+    { line: "travel_per_diem", label: "Per Diem", per: "day", shipped: 45,
+      how: "One charge per day away, for meals. Days are counted the same way as nights." }
+  ];
+  var TRAVEL_RULES = {};            // line_key -> the filed markup_rules row, when there is one
+  var TRAVEL_RULES_LOADED = false;
+  var TRAVEL_RULES_ERR = false;
+
+  async function loadTravelRules() {
+    try {
+      var res = await api("/api/markup/rules?layout=global");
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      var j = await res.json();
+      TRAVEL_RULES = {};
+      (j.rules || []).forEach(function (r) {
+        if (r && r.layout === "global") TRAVEL_RULES[r.line_key] = r;
+      });
+      TRAVEL_RULES_ERR = false;
+    } catch (e) {
+      // Empty, not invented: a rate this page made up because a request failed would be worse
+      // than a box that says it could not read the figure.
+      TRAVEL_RULES = {};
+      TRAVEL_RULES_ERR = true;
+    }
+    TRAVEL_RULES_LOADED = true;
+  }
+
+  /** The dollar figure a filed rule holds, or "" when none is filed or it is not a plain number. */
+  function travelFigure(rule) {
+    if (!rule || rule.applies === false) return "";
+    var m = /^\s*\$?\s*(\d+(?:\.\d+)?)\s*$/.exec(String(rule.formula == null ? "" : rule.formula));
+    return m ? m[1] : "";
+  }
+
+  /** The Labor Calculator's Travel section, drawn from what is loaded. Never throws. */
+  function renderLabCalc() {
+    var body = $("labcalc-body");
+    if (!body) return;
+    if (!TRAVEL_RULES_LOADED) {
+      body.innerHTML = '<p class="paneintro">Loading...</p>';
+      loadTravelRules().then(renderLabCalc);
+      return;
+    }
+    var B = window.TWPolishBid;
+    var ro = $("labcalc-ro");
+    if (ro) ro.hidden = !!ADMIN;
+    // Travel Labor is the Labor tab's Travel row; its rate and unit come from there.
+    var stored = null;
+    for (var s = 0; s < LABOR.length; s++) if (LABOR[s] && LABOR[s].id === "travel") stored = LABOR[s];
+    // READ FROM THE SHARED MODULE, never re-typed here (see the note above travelSeed).
+    var tl = B.travelSeed(stored);
+    var html = '<h3 class="labcalc-h">Travel</h3>' +
+      '<p class="paneintro">Travel is expected when the job is <b>70 miles or more</b> from the ' +
+      'Olathe office. Under 70 miles all three lines stay gray on the estimate until the ' +
+      'estimator switches one on. Lodging and Per Diem start off on every new estimate, and are ' +
+      'priced inside the markups, before GP, superintendent and soft costs.</p>' +
+      '<div class="tw"><table class="items-table"><thead><tr><th>Line</th><th class="n">Rate</th>' +
+      '<th>How it is worked out</th><th class="w-act"></th></tr></thead><tbody>';
+    html += '<tr data-labcalc-row="travel"><td>' + esc(tl.label) + '</td><td class="n">' +
+      esc(L.money(tl.rate)) + " an " + (tl.unit === "days" ? "day" : "hour") + '</td><td>' +
+      'Guys are the man-days of the labor tasks; the estimator types the drive hours for the job. ' +
+      'The rate is the Travel line on the Labor tab.</td><td class="rowact">' +
+      (ADMIN ? '<button class="ghostlink" type="button" data-labcalc-goto-labor>Edit rate</button>' : "") +
+      '</td></tr>';
+    TRAVEL_KEYS.forEach(function (t) {
+      var fig = travelFigure(TRAVEL_RULES[t.line]);
+      html += '<tr data-labcalc-row="' + esc(t.line) + '"><td>' + esc(t.label) + '</td><td class="n">' +
+        (ADMIN
+          ? '$<input class="mkin" type="text" inputmode="decimal" data-travel-rate="' + esc(t.line) +
+            '" value="' + esc(fig) + '" placeholder="' + esc(String(t.shipped)) +
+            '" aria-label="' + esc(t.label) + ' rate, dollars per ' + esc(t.per) + '" /> per ' +
+            esc(t.per)
+          : esc(L.money(fig === "" ? t.shipped : Number(fig))) + " per " + esc(t.per)) +
+        '</td><td>' + esc(t.how) + '</td><td class="rowact"><span class="builtin">Saved to Markup' +
+        '</span></td></tr>';
+    });
+    html += '</tbody></table></div>';
+    if (TRAVEL_RULES_ERR) {
+      html += '<p class="ronote">Could not read the saved figures, so the boxes are empty. ' +
+        'Reload to try again.</p>';
+    }
+    body.innerHTML = html;
+  }
+
+  /** Save one travel rate. A PUT of the whole markup row, notes carried so nothing filed elsewhere
+   *  is cleared. A blank box files nothing (the shipped figure stands); anything that is not a
+   *  positive number is refused here in words rather than as a 400. */
+  async function saveTravelRate(input) {
+    var key = input.getAttribute("data-travel-rate");
+    var def = null;
+    TRAVEL_KEYS.forEach(function (t) { if (t.line === key) def = t; });
+    var out = $("labcalc-alert");
+    var say2 = function (m) { if (out) out.textContent = m || ""; };
+    if (!def) return;
+    var raw = String(input.value || "").trim().replace(/^\$/, "");
+    var prev = travelFigure(TRAVEL_RULES[key]);
+    if (raw === prev) return;
+    if (raw === "") {
+      say2("Type a dollar figure. The shipped $" + def.shipped + " stands until you do.");
+      return;
+    }
+    if (!/^\d+(\.\d+)?$/.test(raw) || Number(raw) <= 0) {
+      say2(def.label + " has to be a dollar figure above zero, like " + def.shipped + ".");
+      input.value = prev;
+      return;
+    }
+    say2("");
+    try {
+      var rule = TRAVEL_RULES[key] || {};
+      var res = await api("/api/markup/rules", { method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ layout: "global", line_key: key, applies: true,
+                               notes: rule.notes || "", formula: raw }) });
+      if (res.status === 403) {
+        say2("Changing these figures is admin-only. Nothing was saved.");
+        input.value = prev;
+        return;
+      }
+      var j = await res.json().catch(function () { return {}; });
+      if (!res.ok) { say2(j.detail || "That didn't save."); input.value = prev; return; }
+      TRAVEL_RULES[key] = j.rule || Object.assign({}, rule, { layout: "global", line_key: key,
+                                                               applies: true, formula: raw });
+      // The Defaults tab's Markup list reads the same row; keep its copy honest.
+      GLOBAL_MARKUP.forEach(function (g) { if (g.line_key === key) g.formula = raw; });
+      say2(def.label + " saved: $" + raw + " per " + def.per + ". New estimates start from it.");
+    } catch (err) {
+      say2("Couldn't reach the server. Nothing was saved.");
+      input.value = prev;
+    }
+  }
+
   // ── view switch ────────────────────────────────────────────────────────────
   // LABOR SITS RIGHT AFTER ASSEMBLIES, BEFORE ADMINISTRATION -- a peer to Items and Assemblies,
   // not a fourth Administration list and not folded into Defaults, which stays what it always
   // was: what a new bid opens holding, not what the catalog holds.
-  var PANES = ["items", "asm", "labor", "vendors", "defaults"];
-  var TAB_OF = { items: "tab-items", asm: "tab-asm", labor: "tab-labor", vendors: "tab-vendors",
-                 defaults: "tab-defaults" };
+  var PANES = ["items", "asm", "labor", "labcalc", "vendors", "defaults"];
+  var TAB_OF = { items: "tab-items", asm: "tab-asm", labor: "tab-labor", labcalc: "tab-labcalc",
+                 vendors: "tab-vendors", defaults: "tab-defaults" };
   function showView(which) {
     view = which;
     PANES.forEach(function (p) {
@@ -3338,7 +3486,10 @@
     setWorkType(M.pick(M.read(window, "wt"), WORK_TYPES, DEFAULT_WT));
   }
   PANES.forEach(function (p) {
-    $(TAB_OF[p]).addEventListener("click", function () { showView(p); });
+    $(TAB_OF[p]).addEventListener("click", function () {
+      showView(p);
+      if (p === "labcalc") renderLabCalc();
+    });
   });
   restoreView();
 
@@ -4448,5 +4599,25 @@
     }
   });
 
-  load();
+  // The Labor Calculator's rate boxes, and its jumps. Delegated on the pane because the body is
+  // redrawn from state.
+  $("pane-labcalc").addEventListener("change", function (e) {
+    var el = e.target;
+    if (el && el.getAttribute && el.getAttribute("data-travel-rate") !== null) saveTravelRate(el);
+  });
+  $("pane-labcalc").addEventListener("click", function (e) {
+    var t = e.target;
+    if (t && t.closest && t.closest("[data-labcalc-goto-labor]")) {
+      showView("labor"); paint(); focusLaborRow("travel");
+    }
+  });
+  // The Defaults tab's pointer ("Travel is set in Labor Calculator").
+  var goLabCalc = document.querySelector("[data-goto-labcalc]");
+  if (goLabCalc) goLabCalc.addEventListener("click", function (e) {
+    e.preventDefault();
+    showView("labcalc");
+    renderLabCalc();
+  });
+
+  load().then(function () { if (view === "labcalc") renderLabCalc(); });
 })();

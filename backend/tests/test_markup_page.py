@@ -953,7 +953,14 @@ def test_no_row_sits_inside_another_row_on_any_tab(ran):
 
 @needs_node
 def test_every_global_line_says_plainly_that_it_reaches_no_bid(ran):
-    """Which is exactly true today, and the reason `global` is absent from PRICES_THE_BID.
+    """Which is exactly true of the WORKBOOK today, and the reason `global` is absent from
+    PRICES_THE_BID.
+
+    CHANGED ON PURPOSE, 2026-10-05 (Kyle's notes, B7): travel lodging and travel food are no longer
+    unread. The Polish Estimate beta copies each onto every new bid's Lodging / Per Diem line and
+    prices it inside the markups, so those two rows now say so -- and still say Kyle's workbook
+    does not read them, which is the half that stays true. Bond (and labor_rate, whose sentence is
+    older than this change) keep the original wording.
 
     bond has no address anywhere while Kyle's own bond row double-counts the tax, and the two
     travel figures would need a dollars-only parser and a 22-cell target table that do not exist.
@@ -961,6 +968,12 @@ def test_every_global_line_says_plainly_that_it_reaches_no_bid(ran):
     than bond's; gone with the line on 2026-09-22. So all three rows say so, rather than letting
     an admin file a rate, watch it save with a green tick, and move no price."""
     for r in ran["globalDayOne"]["rows"]:
+        if r["line"] in ("travel_lodging", "travel_per_diem"):
+            assert "Polish Estimate beta copies this figure onto every NEW bid" in r["explain"], (
+                "%s does not say the beta reads it: %r" % (r["line"], r["explain"]))
+            assert "workbook does not read it" in r["explain"], (
+                "%s lost the half that is still true: %r" % (r["line"], r["explain"]))
+            continue
         assert "does not read this line yet" in r["explain"], (
             "%s claims something about a bid: %r" % (r["line"], r["explain"]))
 
