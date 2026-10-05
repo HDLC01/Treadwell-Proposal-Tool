@@ -2907,7 +2907,54 @@
     renderDefaultSearch();
   }
 
-  function openDefaultBrowse() {
+  /** WHERE THE SEARCH BOX SITS. Hanz, 2026-10-05: "Adding a default [labor] should have the search
+   *  bar right above the [Labor] container itself, not on the work type up above." There is ONE
+   *  box (#default-search, input and results together) and this moves it to sit directly above
+   *  the table of the section whose button was pressed -- one box means only one can be open at
+   *  a time, and nothing else (ids, handlers, the browse data) had to be duplicated. A box that
+   *  moves to ANOTHER section starts empty: a query typed for Takeoff is not a question about
+   *  Labor. */
+  function placeDefaultSearch(which) {
+    var wrap = $("default-search"), sec = $("default-" + which);
+    if (!wrap || !sec || !sec.querySelector) return;
+    var tw = sec.querySelector(".tw");
+    if (!tw || !tw.parentNode) return;
+    if (wrap.parentNode !== tw.parentNode) {
+      DEFAULT_Q = "";
+      var qb = $("default-q");
+      if (qb) qb.value = "";
+      tw.parentNode.insertBefore(wrap, tw);
+    }
+    wrap.hidden = false;
+  }
+
+  /** Cancel / Escape: shut the box and forget the query, leaving the rows alone. Focus goes back
+   *  to the button that opened it, so the keyboard is not stranded on a hidden input. */
+  function closeDefaultSearch() {
+    DEFAULT_Q = "";
+    DEFAULT_BROWSE = false;
+    var qb = $("default-q");
+    if (qb) qb.value = "";
+    var wrap = $("default-search");
+    if (wrap) wrap.hidden = true;
+    renderDefaultSearch();
+    var par = wrap && wrap.parentNode, btn = par && par.querySelector &&
+      par.querySelector("[data-add-default]");
+    if (btn && btn.focus) btn.focus();
+  }
+
+  /** The search box's keyboard: Escape closes it. Named for the reason openDefaultAdd gives. */
+  function onDefaultSearchKey(e) {
+    if (e && e.key === "Escape") {
+      if (e.stopPropagation) e.stopPropagation();
+      closeDefaultSearch();
+      return true;
+    }
+    return false;
+  }
+
+  function openDefaultBrowse(which) {
+    if (which) placeDefaultSearch(which);
     DEFAULT_BROWSE = true;
     renderDefaultSearch();
     var abox = $("default-q");
@@ -2930,7 +2977,7 @@
    *  used here; only the label on the button still says which list somebody meant to sit down and
    *  fill in. */
   function openDefaultAdd(which) {
-    if (which === "takeoff" || which === "labor") openDefaultBrowse();
+    if (which === "takeoff" || which === "labor") openDefaultBrowse(which);
   }
 
   function renderDefaultSearch() {
@@ -3672,6 +3719,7 @@
     $("default-q").addEventListener("input", function () {
       setDefaultQuery(this.value);
     });
+    $("default-q").addEventListener("keydown", onDefaultSearchKey);
   }
 
   // NO `change` LISTENER ON THE TAKEOFF TBODY ANY MORE. One lived here for the conditions'
@@ -4264,6 +4312,7 @@
       }
       return;
     }
+    if (t.closest && t.closest("[data-def-search-close]")) { closeDefaultSearch(); return; }
     var addDef = t.closest && t.closest("[data-add-default]");
     if (addDef) {
       openDefaultAdd(addDef.getAttribute("data-add-default"));

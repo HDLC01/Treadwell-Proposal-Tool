@@ -129,7 +129,8 @@ def test_the_defaults_tab_has_a_search_for_entering_them(ran):
     assert c["searchIsForAdding"], (
         "the search reads as a filter over the lists rather than a way to add to them")
     assert c["searchAboveTheLists"], (
-        "the search sits under the lists, where it reads as narrowing them")
+        "the search box is back up by the work-type tabs (or is not hidden until opened, or lost "
+        "its Cancel); it starts inside the Takeoff card above its table")
 
 
 @needs_node
@@ -3773,3 +3774,25 @@ def test_a_new_material_or_assembly_has_a_save_button_that_sends_now(ran):
     assert sn["cancelKeepsItNew"]
     assert sn["asmOnePatch"] and sn["asmDeclaredItsVersion"] and sn["asmNoLongerNew"]
     assert sn["noErrors"]
+
+
+@needs_node
+def test_add_default_search_opens_above_its_own_table(ran):
+    """Hanz, 2026-10-05: "Adding a default [labor] should have the search bar right above the
+    [Labor] container itself, not on the work type up above."
+
+    Executed, not read: the box is moved by placeDefaultSearch(), so the test presses each
+    section's button against a stand-in tree and asks where the one box ended up.
+
+    Mutation: make openDefaultAdd call openDefaultBrowse() with no section (the old behaviour) and
+    laborOpensAboveLabor goes red."""
+    r = ran["defaultsInlineSearch"]
+    assert r["laborOpensAboveLabor"], "the labor button does not open the box above the Labor table"
+    assert r["focusInBox"], "focus does not land in the search box"
+    assert r["laborResultsRendered"], "the relocated box does not show the browse results"
+    assert r["onlyOneOpenAndItMoved"], "two boxes open at once, or the box did not move sections"
+    assert r["movingToAnotherSectionClearsTheQuery"], "a query typed for one section leaks to the next"
+    assert r["escapeCloses"], "Escape does not close the box and return focus to its button"
+    assert r["otherKeysIgnored"], "an ordinary key is swallowed by the Escape handler"
+    assert r["cancelCloses"], "Cancel does not close the box"
+    assert r["listenersWired"], "the page does not wire Cancel and Escape to the close function"

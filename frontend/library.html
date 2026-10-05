@@ -1025,17 +1025,6 @@
       <p class="paneintro"><b>Defaults are what a new bid opens holding.</b> Pick a work
         type, then set the takeoff lines and the labor lines an estimate starts with.
         Travel is set in <a href="#tab=labcalc" data-goto-labcalc>Labor Calculator</a>.</p>
-      <div class="itemsearch" id="default-search">
-        <span class="searchbox">
-          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
-               stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
-               focusable="false"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.6-3.6"></path></svg>
-          <input id="default-q" type="search"
-                 placeholder="Search materials, assemblies and labor lines to add"
-                 aria-label="Search the library for a material, assembly or labor line to make a default"
-                 autocomplete="off" />
-        </span>
-      </div>
 
       <!-- ONE STRIP FOR BOTH SECTIONS, not one each. A work type is the question "what does
            a polish bid open holding?", and Takeoff and Labor are two halves of that one
@@ -1097,7 +1086,26 @@
                  list rendered alongside the input, floating clear of the table it was about
                  to add a row to. Under the Add button it reads as what it is: the next rows
                  of this list, waiting to be picked. The search box above still drives it. -->
-            <div id="default-hits" hidden></div>
+            <!-- THE SEARCH BOX LIVES HERE WHEN "Add a ... default" OPENS IT, and moves. Hanz, 2026-10-05:
+                 "the search bar right above the [Labor] container itself, not on the work type up
+                 above". ONE box, relocated by placeDefaultSearch() to sit directly above the table of
+                 whichever section's button was pressed -- one box means only one can ever be open,
+                 and the ids stay unique. Hidden until a button opens it. -->
+            <div id="default-search" hidden>
+              <div class="itemsearch">
+                <span class="searchbox">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+                       stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
+                       focusable="false"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.6-3.6"></path></svg>
+                  <input id="default-q" type="search"
+                         placeholder="Search materials, assemblies and labor lines to add"
+                         aria-label="Search the library for a material, assembly or labor line to make a default"
+                         autocomplete="off" />
+                </span>
+                <button class="btn ghost sm" type="button" data-def-search-close>Cancel</button>
+              </div>
+              <div id="default-hits" hidden></div>
+            </div>
             <div class="tw">
               <table>
                 <thead><tr><th>Line</th><th>How it is priced</th>

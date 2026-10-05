@@ -389,6 +389,9 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   ${fn("defaultCandidates")}
   ${fn("renderDefaultSearch")}
   ${fn("setDefaultQuery")}
+  ${fn("placeDefaultSearch")}
+  ${fn("closeDefaultSearch")}
+  ${fn("onDefaultSearchKey")}
   ${fn("openDefaultBrowse")}
   // ── THE LABOR DEFAULTS, LIFTED AND EXECUTED ────────────────────────────────────────────────
   // "+ Add a labor line" shipped as markup with no handler at all, and Hanz reported it twice as
@@ -655,6 +658,7 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
            // THE ADD PATH, EXECUTED. A test that only read the markup could not tell a
            // wired button from a dead one, and for two days could not.
            defaultCandidates, renderDefaultSearch, setDefaultQuery, openDefaultBrowse,
+           placeDefaultSearch, closeDefaultSearch, onDefaultSearchKey,
            appliesToWorkType, workTypeLabel, WORK_TYPES,
            // THE PER-ROW CHIPS, EXECUTED. workTypeCell draws them, setRowWorkType is what a press
            // runs, and WT_CALLS is the body that would have gone to the server -- the three
@@ -3871,6 +3875,54 @@ async function laborChecks() {
     ADMIN: true,
   }, extra || {});
   const rowsOf = (h) => h.split("</tr>").filter((r) => /<tr/.test(r));
+// ── INLINE SEARCH: each "+ Add a ... default" opens the box above ITS OWN table ─────────────
+// Hanz, 2026-10-05. A tiny tree stands in for the DOM: two sections, each with a .tw table whose
+// parent is the card, and ONE #default-search that insertBefore() moves between the cards.
+{
+  const { api, dom: d } = build(seed({ LABOR: [{ id: "L9", name: "Rigging", rate: 40,
+    unit: "hours", guys_auto: false, favorite: false }] }));
+  const mkCard = (name) => {
+    const card = { name, kids: [], addBtn: { focus() { d.focused.push(name + "-add"); } },
+      querySelector(sel) { return sel === "[data-add-default]" ? this.addBtn : null; },
+      insertBefore(n) { if (n.parentNode) n.parentNode.kids = n.parentNode.kids.filter((k) => k !== n);
+        n.parentNode = this; this.kids.push(n); } };
+    const tw = { parentNode: card };
+    d.nodes["default-" + name] = { querySelector: (sel) => (sel === ".tw" ? tw : null) };
+    return card;
+  };
+  const takeoff = mkCard("takeoff"), labor = mkCard("labor");
+  const wrap = d.el("default-search");
+  wrap.parentNode = takeoff; wrap.hidden = true;
+  const q = d.el("default-q");
+  const where = () => (wrap.parentNode === takeoff ? "takeoff" : wrap.parentNode === labor ? "labor" : "?");
+  const res = {};
+  api.openDefaultAdd("labor");
+  res.laborOpensAboveLabor = where() === "labor" && wrap.hidden === false;
+  res.focusInBox = d.focused[d.focused.length - 1] === "default-q";
+  res.laborResultsRendered = /Rigging/.test(d.nodes["default-hits"].innerHTML);
+  api.openDefaultAdd("takeoff");
+  res.onlyOneOpenAndItMoved = where() === "takeoff" && wrap.hidden === false &&
+    takeoff.kids.length === 1 && labor.kids.length === 0;
+  api.setDefaultQuery("zzz"); q.value = "zzz";
+  api.openDefaultAdd("labor");
+  res.movingToAnotherSectionClearsTheQuery = q.value === "" && where() === "labor";
+  // ESCAPE closes it, forgets the query and hands focus back to the opener
+  q.value = "abc"; api.setDefaultQuery("abc");
+  let stopped = false;
+  const handled = api.onDefaultSearchKey({ key: "Escape", stopPropagation() { stopped = true; } });
+  res.escapeCloses = handled === true && stopped && wrap.hidden === true && q.value === "" &&
+    d.nodes["default-hits"].hidden === true && d.focused[d.focused.length - 1] === "labor-add";
+  res.otherKeysIgnored = api.onDefaultSearchKey({ key: "a" }) === false;
+  // CANCEL is the same close
+  api.openDefaultAdd("takeoff");
+  api.closeDefaultSearch();
+  res.cancelCloses = wrap.hidden === true && d.nodes["default-hits"].hidden === true;
+  // THE PAGE WIRES BOTH, as source (a listener body cannot be run from here)
+  res.listenersWired = /closest\("\[data-def-search-close\]"\)\) \{ closeDefaultSearch\(\); return; \}/.test(src) &&
+    /addEventListener\("keydown", onDefaultSearchKey\)/.test(src);
+  out.defaultsInlineSearch = res;
+}
+
 
   // THE LIST: Travel built in, the favorited lines beside it, each with the controls it should
   // have. Edit now sends an admin to the Labor tab (data-def-edit="labor"), the same attribute
@@ -4634,7 +4686,14 @@ out.page = {
       search: /id="default-q"/.test(pane),
       searchIsForAdding:
         /placeholder="Search materials, assemblies and labor lines to add"/.test(pane),
-      searchAboveTheLists: pane.indexOf('id="default-q"') < pane.indexOf('class="admin-grid"'),
+      // THE BOX STARTS IN THE TAKEOFF CARD, ABOVE ITS TABLE, and is hidden until a button opens
+      // it (Hanz, 2026-10-05: not up by the work-type tabs). It used to sit above the admin-grid.
+      searchAboveTheLists: pane.indexOf('id="default-q"') > pane.indexOf('class="admin-grid"') &&
+        pane.indexOf('id="default-q"') < pane.indexOf('id="default-takeoff-body"') &&
+        /<div id="default-search" hidden>/.test(pane) &&
+        pane.indexOf('id="default-q"') > pane.indexOf('data-add-default="takeoff"') &&
+        pane.indexOf('id="default-q"') < pane.indexOf('data-add-default="labor"') &&
+        /data-def-search-close/.test(pane),
       // THE RESULTS BOX LIVES WITH THE ROWS, not with the input. It shipped as a
       // <span class="hits"> inside .itemsearch -- a flex ROW -- so the list of things you were
       // about to add rendered beside the search box, clear of the table it was adding to.
