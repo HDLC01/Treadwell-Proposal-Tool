@@ -960,6 +960,22 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
     };
   }
 
+  // ── The "0" trap: focusing a box that holds "0" must select it ─────────────────
+  {
+    const b = build();
+    await b.api.boot();
+    const fire = (t) => b.dom.nodes["intake-form"].listeners
+      .filter((l) => l.type === "focusin").forEach((l) => l.handler({ target: t }));
+    const mk = (over) => Object.assign({ type: "number", value: "0", readOnly: false, selected: 0,
+      select() { this.selected++; } }, over);
+    const zero = mk({}), typed = mk({ value: "8000" }), locked = mk({ readOnly: true });
+    fire(zero); fire(typed); fire(locked);
+    out.zeroTrap = {
+      wired: b.dom.nodes["intake-form"].listeners.some((l) => l.type === "focusin"),
+      zeroSelected: zero.selected, typedSelected: typed.selected, lockedSelected: locked.selected,
+    };
+  }
+
   // ── Fault 3: nothing flushed the 600ms timer before a tab close/switch ─────────────
   //
   // shared.js's OWN pagehide net only flushes a timer THIS page armed -- see shared.js:513 -- and

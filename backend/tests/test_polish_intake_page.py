@@ -578,6 +578,21 @@ def test_typing_a_named_field_arms_the_save_but_the_county_search_box_does_not(r
 
 
 @needs_node
+def test_focusing_a_box_that_holds_zero_selects_it_so_typing_replaces_it(ran):
+    """Walk 2026-10-06: typing 8000 into Polish floor SF gave 80000. No handler rewrites the box;
+    the markup ships value="0" and a programmatic focus leaves the caret at 0, so the keys land
+    in front of the zero. The focusin handler selects a lone "0" so the first key replaces it.
+
+    Mutation: delete the focusin listener in wire() and this fails. A box holding a real figure
+    or a locked (readonly) box must never be selected."""
+    z = ran["zeroTrap"]
+    assert z["wired"], "wire() has no focusin listener"
+    assert z["zeroSelected"] == 1, "a box holding 0 was not selected on focus"
+    assert z["typedSelected"] == 0, "a box holding a real figure was selected"
+    assert z["lockedSelected"] == 0, "a readonly box was selected"
+
+
+@needs_node
 def test_leaving_the_page_flushes_a_pending_save_instead_of_losing_it(ran):
     """shared.js's own pagehide net (shared.js:513) only flushes a timer THIS page armed -- and
     before this fix, typing never armed one, so the net had nothing to catch. wire() now runs the

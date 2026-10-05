@@ -863,6 +863,13 @@
     if (form) form.addEventListener("input", function (e) {
       if (e.target && e.target.name) saveSoon();
     });
+    // THE "0" TRAP. The two SF boxes ship with value="0". A programmatic focus (a test driver, a
+    // screen reader jump) leaves the caret at position 0, so typing 8000 gives "8000"+"0" = 80000.
+    // Selecting a lone "0" on focus makes the first keystroke replace it, as a click or Tab would.
+    if (form) form.addEventListener("focusin", function (e) {
+      var t = e.target;
+      if (t && t.type === "number" && t.value === "0" && !t.readOnly && t.select) t.select();
+    });
     // The address / business lookup, shared with the live intake (js/address-lookup.js). A picked
     // row fires `input` on City, State and Zip, which the listener above turns into a save. The
     // guard is for a page served without the script; the lookup is a convenience, not a gate.
