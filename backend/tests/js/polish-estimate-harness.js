@@ -454,6 +454,13 @@ function build(opts) {
     // behind it, and a page that could not open without it would be unusable. Default []
     // rather than a fixture list, so a page that asked when it had no business to shows
     // up as an empty answer rather than as a silent rewrite of somebody's conditions.
+    // GET /api/markup/rules?layout=global -- the company labor rate lives here. Its own arm, and
+    // [] by default so every older scenario opens on the shipped $33 exactly as before.
+    if (/api\/markup\/rules/.test(url)) {
+      if (opts.markupFails) throw new Error("the markup service is down");
+      return { json: async () => ({ ok: true,
+        rules: clone(opts.markupRules === undefined ? [] : opts.markupRules) }) };
+    }
     if (/condition-defaults/.test(url)) {
       if (opts.conditionFetchFails) throw new Error("the defaults table is not there");
       return { json: async () => ({ ok: true,
@@ -2851,6 +2858,69 @@ const rendered = [];      // every string the page put on screen, for the Labour
       // the column looks like. OFF IS NOT UNLISTED: it must not land in the map.
       seeded: B.seedConditionsShown([{ key: "dye", listed: false }, { key: "joint_filler", listed: true },
         { key: "remove_existing_jf", on: false }, { key: "bogus", listed: false }]),
+    };
+  }
+
+  // ── M. the company labor rate (Markups -> Global) ───────────────────────────
+  {
+    const RATE = (formula, extra) => [Object.assign({ id: "mk1", layout: "global",
+      line_key: "labor_rate", formula: formula, applies: true }, extra || {})];
+    const fresh = () => { const bb = blob(); delete bb.polish_estimate; return bb; };
+    const LIBM = [
+      { id: "travel", name: "Travel", rate: "33.00", unit: "hours", guys_auto: true, favorite: true },
+      { id: "lab-none", name: "No own rate", rate: 0, unit: "hours", guys_auto: false, favorite: true },
+      { id: "lab-own", name: "Own rate", rate: "55.00", unit: "days", guys_auto: false, favorite: true },
+    ];
+    const rates = (built) => {
+      const o = {};
+      built.api.model().labor.forEach((r) => { o[r.id] = r.rate; });
+      return o;
+    };
+    const flt = (built) => built.doc.querySelectorAll("[data-ratedflt-for]")
+      .map((el) => ({ text: el.textContent, hidden: !!el.hidden }));
+
+    const newBid = build({ blob: fresh(), labor: LIBM, markupRules: RATE("40") });
+    await newBid.api.init();
+    newBid.api.go(1);
+    const noRule = build({ blob: fresh(), labor: LIBM });
+    await noRule.api.init();
+    const down = build({ blob: fresh(), labor: LIBM, markupFails: true });
+    await down.api.init();
+    const off = build({ blob: fresh(), labor: LIBM, markupRules: RATE("40", { applies: false }) });
+    await off.api.init();
+
+    const SAVED = { version: 2, takeoff: clone(MODEL.takeoff),
+      labor: [{ id: "polishing", label: "Polishing", guys: 3, days: 5, rate: 33 },
+              { id: "mockup", label: "Mock-up", guys: 3, days: 0.5, rate: 36 }],
+      conditions: clone(MODEL.conditions), contingency: 0, fees: 0, totals: {} };
+    const saved = build({ blob: blob({ polish_estimate: clone(SAVED) }), labor: LIBM,
+                          markupRules: RATE("40") });
+    await saved.api.init();
+    saved.api.go(1);
+
+    // Typing the default back hides the line; typing anything else shows it. Driven through the
+    // page's own input handler so the in-place repaint is the code under test.
+    newBid.api.go(1);
+    const before = flt(newBid);
+    const newBidRates = rates(newBid);
+    typeInto(newBid, '[data-lab="0"][data-k="rate"]', "45");
+    const typedOver = flt(newBid)[0];
+    typeInto(newBid, '[data-lab="0"][data-k="rate"]', "40");
+    const typedBack = flt(newBid)[0];
+    const added = newBid.api.newLaborRow();
+
+    out.laborRate = {
+      newBid: newBidRates, noRule: rates(noRule), down: rates(down), off: rates(off),
+      saved: rates(saved), savedDefaultLines: flt(saved),
+      newBidLines: before, typedOver: typedOver, typedBack: typedBack,
+      addedRate: added.rate,
+      fetchedMarkup: newBid.rec.fetches.some((u) => /api\/markup\/rules/.test(u)),
+      savedFetchedLaborDefaults: saved.rec.fetches.some((u) => /\/labor/.test(u)),
+      parsed: [B.laborRateFromRules(RATE("33.50")), B.laborRateFromRules(RATE("$41")),
+               B.laborRateFromRules(RATE("IF(1,2,3)")), B.laborRateFromRules(RATE("0")),
+               B.laborRateFromRules([]), B.laborRateFromRules(null),
+               B.laborRateFromRules([{ layout: "polish", line_key: "labor_rate", formula: "50",
+                                      applies: true }])],
     };
   }
 

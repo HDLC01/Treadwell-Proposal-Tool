@@ -243,12 +243,12 @@ const LAYOUTS = ["polish", "seal", "epoxy", "leveling", "gyp", "global"];
 // hard_bid was a fourth GLOBAL_LINE_KEYS entry and LINE_KEYS' own second entry until 2026-09-22
 // (Hanz: "remove all hard bids from the polish intake form. And also on the markups"). Its
 // ladder-shaped built-in went with it — GP_BANDS is the only ladder left to round-trip.
-const GLOBAL_LINE_KEYS = ["bond", "travel_lodging", "travel_per_diem"];
+const GLOBAL_LINE_KEYS = ["bond", "travel_lodging", "travel_per_diem", "labor_rate"];
 const TAB_LINE_KEYS = ["gp", "super_pto", "soft_costs"];
 // The union, in the order the rows come back — the chain first, then the two lines that are not
 // chain lines at all.
 const LINE_KEYS = ["gp", "super_pto", "soft_costs", "bond",
-                   "travel_lodging", "travel_per_diem"];
+                   "travel_lodging", "travel_per_diem", "labor_rate"];
 
 // The one built-in a simple control has to round-trip byte for byte, written here
 // INDEPENDENTLY of markup.js so a change on either side is a failing test rather than a rate
@@ -436,6 +436,7 @@ function build(opts) {
       switchCount: byAttr(t, "role", "switch").length,
       buttonCount: byTag(t, "button").length,
       stateText: byClass(t, "state").map((s) => s.text).join(" "),
+      laborNote: byAttr(t, "data-labor-rate-note", "1").map((n) => n.text),
       retry: !!byAttr(t, "id", "mk-retry").length,
       // Read through getElementById, not the container map: an id the page has not touched yet
       // should read as its empty starting state, not blow the harness up.
@@ -791,7 +792,7 @@ async function main() {
     s.clickTab("global");
     await drain();
     out.roundTripPuts = s.puts().map((r) => r.body);
-    for (const k of ["bond", "travel_lodging", "travel_per_diem"]) {
+    for (const k of ["bond", "travel_lodging", "travel_per_diem", "labor_rate"]) {
       s.leave("s-" + k + "-value", null);
     }
     s.clickTab("polish");

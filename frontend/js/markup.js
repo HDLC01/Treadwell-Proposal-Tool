@@ -121,7 +121,8 @@
     remodel_tax: "Remodel tax",
     bond: "Bond",
     travel_lodging: "Travel lodging",
-    travel_per_diem: "Travel food"
+    travel_per_diem: "Travel food",
+    labor_rate: "Labor rate"
   };
 
   /** The one-line caption under a line's name. Free to read — it is the half of the old WHAT IT
@@ -134,12 +135,13 @@
     remodel_tax: "set by the county table",
     bond: "the workbook ships this at zero",
     travel_lodging: "one night away, the same on every sheet",
-    travel_per_diem: "one day's food, the same on every sheet"
+    travel_per_diem: "one day's food, the same on every sheet",
+    labor_rate: "what a new bid's labor lines start at, the same on every sheet"
   };
 
   /** What the figure beside a Global line is PER. A rate needs no such word; $70 does, and "$70"
    *  with nothing after it is the kind of number somebody multiplies by the wrong thing. */
-  var UNIT_NOTE = { travel_lodging: "a night", travel_per_diem: "a day" };
+  var UNIT_NOTE = { travel_lodging: "a night", travel_per_diem: "a day", labor_rate: "an hour" };
 
   /** The rest of it, behind the row's own disclosure. Good writing, and it does not belong
    *  repeated in every row of a table of eight numbers. */
@@ -165,7 +167,11 @@
       "sheets carry the same figure on all eleven priced tabs, which is why it is set once here " +
       "instead of five times.",
     travel_per_diem: "A day's food while the crew is away, charged per day. The same figure on " +
-      "all eleven priced tabs."
+      "all eleven priced tabs.",
+    labor_rate: "Dollars an hour. The starting rate of the crew rows, Travel Labor, every library " +
+      "labor line with no rate of its own, and every labor line added to a NEW estimate. A bid " +
+      "already saved keeps the rates it has; an estimator can still type over any one rate, and " +
+      "the estimate shows \"Default $X\" under it when they do."
   };
 
   /** A chip beside the name, for the lines an admin does not set. Short, and it says the one
@@ -236,7 +242,7 @@
     // The travel figures are Kyle's own literals off all eleven priced sheets, and they are
     // DOLLARS, not rates — written bare for that reason, the same way priceChain and the box's
     // own $ / % affordance read a bare number of 1 or more.
-    global: { bond: F("0%"), travel_lodging: F("70"), travel_per_diem: F("45") }
+    global: { bond: F("0%"), travel_lodging: F("70"), travel_per_diem: F("45"), labor_rate: F("33") }
   };
 
   // ── which rows actually reach the estimate workbook ────────────────────────
@@ -1575,7 +1581,25 @@
         ? '<span class="amt">' + esc(money(total.amount)) + "</span>"
         : '<span class="unpriced">Unpriceable</span>') +
       "</div></div>";
-    return out;
+    // The company labor rate, read-only: it is not part of this tab's chain (it adds nothing to
+    // the running total above), so it is a line BELOW the table and not a row in it.
+    return out + laborRateNoteHtml();
+  }
+
+  /** The labor rate as a sheet tab sees it: said, read-only, with where to change it.
+   *
+   *  NOT A ROW OF THE CHAIN, and deliberately kept out of displayOrder: priceChain compounds every
+   *  row it is handed, so a $33 line in the list would be added to the sub-total. One home per
+   *  line -- the box is on the Global tab, and this tab only reports what that row says. */
+  function laborRateNoteHtml() {
+    var rule = ruleFor(GLOBAL, "labor_rate");
+    var filed = rule && rule.applies !== false && rule.formula ? String(rule.formula) : "";
+    var shown = filed || ((BUILTIN[GLOBAL] || {}).labor_rate || {}).formula || "";
+    var n = Number(String(shown).replace(/[^0-9.]/g, ""));
+    var text = isFinite(n) && n > 0 ? money(n) + " an hour" : String(shown);
+    return '<p class="ronote" data-labor-rate-note="1">Labor rate: <b>' + esc(text) +
+      "</b>. Set on the Global tab. It is where every labor line on a new estimate starts, " +
+      "and it is the same for every sheet layout.</p>";
   }
 
   /** The what-if box. ONE copy, two rows.

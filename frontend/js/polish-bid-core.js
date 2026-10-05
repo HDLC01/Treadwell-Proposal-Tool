@@ -442,6 +442,78 @@
   }
 
   // ── the model the page holds ────────────────────────────────────────────────
+  /** THE COMPANY LABOR RATE. One number, set on Markups -> Global (line_key `labor_rate`), and
+   *  the starting rate of every labor line on a NEW bid: the three crew rows, Travel Labor, every
+   *  library labor row that has no rate of its own, and every line the estimator adds. 33 is
+   *  Kyle's sheet (C37 / C44) and is what stands when nothing is filed or the read failed.
+   *
+   *  A SAVED BID NEVER MOVES. This is a starting point, read once when a bid is first opened and
+   *  never applied to a model that already states a labor row (laborUnstated is the gate). */
+  var SHIPPED_LABOR_RATE = 33.0;
+
+  /** A usable rate, or the shipped one. Anything that is not a positive finite number reads as
+   *  "nothing said", because a $0 company rate would price every new line at nothing. */
+  function laborRateOrShipped(rate) {
+    var n = (rate === null || rate === undefined || rate === "") ? NaN : Number(rate);
+    return (isFinite(n) && n > 0) ? n : SHIPPED_LABOR_RATE;
+  }
+
+  /** The labor rate out of GET /api/markup/rules' `rules`, or null when none is filed (or the one
+   *  filed is switched off or is not a plain dollar figure). Null, not 33: the caller decides what
+   *  "nothing filed" means, and today that is laborRateOrShipped. The formula is the markup page's
+   *  own box, so `33`, `33.50` and `$33` all read; an expression does not -- a labor rate that
+   *  needed arithmetic would be a price nobody can read off the page. */
+  function laborRateFromRules(rules) {
+    if (!(rules instanceof Array)) return null;
+    for (var i = 0; i < rules.length; i++) {
+      var r = rules[i];
+      if (!r || r.layout !== "global" || r.line_key !== "labor_rate") continue;
+      if (r.applies === false) return null;
+      var m = /^\s*\$?\s*(\d+(?:\.\d+)?)\s*$/.exec(String(r.formula === null ||
+        r.formula === undefined ? "" : r.formula));
+      if (!m) return null;
+      var n = Number(m[1]);
+      return (isFinite(n) && n > 0) ? n : null;
+    }
+    return null;
+  }
+
+  /** Does this stored library_labor row carry a rate of its OWN? `library_labor.rate` is NOT NULL
+   *  (a blank is stored as 0), so "no rate of its own" can only be spelled 0 -- and for Travel,
+   *  also the $33.00 the table was seeded with, which nobody chose. A row somebody re-rated to
+   *  anything else keeps their number. */
+  function libraryRateIsOwn(row, isTravel) {
+    var n = Number(row && row.rate);
+    if (isBlank(row && row.rate) || !isFinite(n) || n <= 0) return false;
+    if (isTravel && n === SHIPPED_LABOR_RATE) return false;
+    return true;
+  }
+
+  /** The three crew rows and Travel, set to the company rate -- NEW BIDS ONLY (the caller's gate is
+   *  laborUnstated). A NEW array of NEW rows. Travel is only moved while it is still on the shipped
+   *  $33 or blank: a Travel the library gave its own rate is that rate's to keep. Every other row
+   *  (a library default, a typed line) is left alone, because seedLibraryLabor already resolved
+   *  those. */
+  function applyLaborRate(labor, rate) {
+    var dflt = laborRateOrShipped(rate);
+    var out = (labor instanceof Array) ? labor.slice() : [];
+    for (var i = 0; i < out.length; i++) {
+      var r = out[i];
+      if (!r) continue;
+      var id = String(r.id);
+      var crew = (id === "polishing" || id === "mockup" || id === "jointfill");
+      var travelOnShipped = (id === "travel") &&
+        (isBlank(r.rate) || !isFinite(Number(r.rate)) || Number(r.rate) === SHIPPED_LABOR_RATE);
+      if (crew || travelOnShipped) {
+        var copy = {};
+        for (var k in r) if (Object.prototype.hasOwnProperty.call(r, k)) copy[k] = r[k];
+        copy.rate = dflt;
+        out[i] = copy;
+      }
+    }
+    return out;
+  }
+
   /** The Travel row as the sheet has it, built fresh each call so no two models share an object.
    *
    *  ONE DEFINITION, THREE CALLERS: `freshModel` seeds it into a new sandbox, `migrateModel`
@@ -468,13 +540,16 @@
    *  A BLANK RATE FALLS BACK RATHER THAN READING AS FREE, and `isFinite` is what catches the
    *  string PostgREST hands numeric back as when it is something other than a number. 0 is NOT
    *  blank: a rate somebody deliberately set to zero is an answer, and `isBlank` agrees. */
-  function travelSeed(row) {
+  function travelSeed(row, dflt) {
     var r = row || {};
     var rate = Number(r.rate);
     return { id: "travel",
              label: isBlank(r.name) ? "Travel" : String(r.name),
              guys: "", days: "",
-             rate: (isBlank(r.rate) || !isFinite(rate)) ? 33.0 : rate,
+             // `dflt` is the company labor rate (Markups -> Global). Omitted, it is the shipped
+             // $33.00, which is what the library page's Reset and its "is this still the shipped
+             // row" comparison rely on -- they call travelSeed() with no second argument.
+             rate: (isBlank(r.rate) || !isFinite(rate)) ? laborRateOrShipped(dflt) : rate,
              unit: isBlank(r.unit) ? "hours" : String(r.unit),
              guys_auto: Object.prototype.hasOwnProperty.call(r, "guys_auto")
                ? !!r.guys_auto : true };
@@ -497,9 +572,13 @@
    *  be a number nobody chose sitting inside a customer's price. `rate` is Number(), not num():
    *  the endpoint refuses a non-numeric rate with a 400, so there is nothing here for a coercion
    *  to rescue, and laborCost already reads a NaN as 0 rather than poisoning the bid. */
-  function libraryLaborRow(row) {
+  function libraryLaborRow(row, dflt) {
     var r = row || {};
-    return { id: r.id, label: r.name, guys: "", days: "", rate: Number(r.rate),
+    // A row with no rate of its own follows the company labor rate -- when the caller has one.
+    // `dflt` omitted is the old behaviour exactly (the stored number, 0 included).
+    var rate = (dflt !== undefined && dflt !== null && !libraryRateIsOwn(r, false))
+      ? laborRateOrShipped(dflt) : Number(r.rate);
+    return { id: r.id, label: r.name, guys: "", days: "", rate: rate,
              unit: r.unit, guys_auto: !!r.guys_auto };
   }
 
@@ -548,7 +627,7 @@
    *  `favorite` reads -- Travel is not opted into a bid the way a chosen default is, it is built
    *  into every estimate the way it always has been, and the migration backfills it to true
    *  regardless, so the two should never actually disagree. */
-  function seedLibraryLabor(labor, rows) {
+  function seedLibraryLabor(labor, rows, dflt) {
     var out = (labor instanceof Array) ? labor.slice() : [];
     if (!(rows instanceof Array)) return out;
     var seen = {};
@@ -562,6 +641,9 @@
       var rid = String(r.id);
       if (rid === "travel") {
         var travel = travelSeed(r);
+        if (dflt !== undefined && dflt !== null && !libraryRateIsOwn(r, true)) {
+          travel.rate = laborRateOrShipped(dflt);
+        }
         var at = -1;
         for (var t = 0; t < out.length; t++) {
           if (out[t] && String(out[t].id) === "travel") { at = t; break; }
@@ -579,7 +661,7 @@
       if (!r.favorite) continue;
       if (seen[rid]) continue;
       seen[rid] = true;
-      out.push(libraryLaborRow(r));
+      out.push(libraryLaborRow(r, dflt));
     }
     return out;
   }
@@ -909,9 +991,9 @@
       version: 2,
       takeoff: [{ assembly_id: "", assembly_name: "", measurement: "", unit: "SF" }],
       labor: [
-        { id: "polishing", label: "Polishing", guys: 3, days: "", rate: 33.0 },
-        { id: "mockup", label: "Mock-up", guys: 3, days: 0.5, rate: 33.0 },
-        { id: "jointfill", label: "Joint filler", guys: 3, days: "", rate: 33.0 },
+        { id: "polishing", label: "Polishing", guys: 3, days: "", rate: SHIPPED_LABOR_RATE },
+        { id: "mockup", label: "Mock-up", guys: 3, days: 0.5, rate: SHIPPED_LABOR_RATE },
+        { id: "jointfill", label: "Joint filler", guys: 3, days: "", rate: SHIPPED_LABOR_RATE },
         travelSeed()
       ],
       // ALL THREE TAKEOFF CONDITIONS SHIP OFF, and joint_filler is the one that moved.
@@ -1248,6 +1330,9 @@
     // joining it: that branch was cut from main, which did not have the 2026-09-16 export yet.
     // Both belong -- Travel is built in, the library rows are additions beside it.
     libraryLaborRow: libraryLaborRow, seedLibraryLabor: seedLibraryLabor,
-    laborUnstated: laborUnstated
+    laborUnstated: laborUnstated,
+    // The company labor rate (Markups -> Global): read, applied to a new bid, and the fallback.
+    SHIPPED_LABOR_RATE: SHIPPED_LABOR_RATE, laborRateOrShipped: laborRateOrShipped,
+    laborRateFromRules: laborRateFromRules, applyLaborRate: applyLaborRate
   };
 });

@@ -1715,3 +1715,17 @@ def test_the_badge_does_not_promise_an_override_that_does_not_happen():
     html = (FRONTEND / "markup.html").read_text(encoding="utf-8")
     assert "rows override the constants" not in html, (
         "the Beta test badge is promising an override no code performs")
+
+
+@needs_node
+def test_a_sheet_tab_shows_the_labor_rate_read_only_and_outside_its_chain(ran):
+    """The labor rate is a Global line; a sheet tab says what it is, with no box and no row.
+    NOT a row of the chain: a $33 row would be compounded into the sub-total.
+
+    Mutation: add "labor_rate" to displayOrder's sheet-tab list -- it gets a row and the chain
+    total moves."""
+    snap = ran["dayOnePolish"]
+    assert len(snap["laborNote"]) == 1 and "$33.00 an hour" in snap["laborNote"][0], snap["laborNote"]
+    assert "Global" in snap["laborNote"][0]
+    assert "labor_rate" not in [r["line"] for r in snap["rows"]]
+    assert ran["globalDayOne"]["laborNote"] == []

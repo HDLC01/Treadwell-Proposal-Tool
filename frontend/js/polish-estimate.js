@@ -1335,7 +1335,9 @@
       '<div class="f"><label>Rate</label>' +
       '<span class="mny">$<input class="n" data-lab="' + i + '" data-k="rate" value="' +
       esc(nv(r.rate)) + '"></span>' +
-      '<p class="hint">Per hour.</p></div>' +
+      '<p class="hint">Per hour.</p>' +
+      '<p class="warnline" data-ratedflt-for="' + i + '"' + (rateDiffers(r) ? "" : " hidden") + '>' +
+      esc(rateDefaultText(r)) + '</p></div>' +
 
       '<div class="f"><label>Cost</label>' +
       '<div class="costbox' + (B.laborCost(r) > 0 ? "" : " empty") + '">' +
@@ -1647,6 +1649,11 @@
       var hi = parseInt(el.getAttribute("data-asmhint-for"), 10);
       el.innerHTML = pickHint(M.takeoff[hi], hi);
     });
+    document.querySelectorAll("[data-ratedflt-for]").forEach(function (el) {
+      var row = M.labor[parseInt(el.getAttribute("data-ratedflt-for"), 10)];
+      el.textContent = rateDefaultText(row);
+      el.hidden = !rateDiffers(row);
+    });
     document.querySelectorAll("[data-lcost-for]").forEach(function (el) {
       el.textContent = moneyAuto(B.laborCost(M.labor[parseInt(
         el.getAttribute("data-lcost-for"), 10)]));
@@ -1743,9 +1750,22 @@
   // regenerate an id that had already been used. Nothing indexes labor rows by id today (the page
   // works by array position), so this is closing a door rather than fixing a symptom.
   var laborSeq = 0;
+  // THE COMPANY LABOR RATE (Markups -> Global). A new line starts from it rather than blank, so the
+  // estimator is never typing a rate Treadwell has already decided. The shipped $33 stands until
+  // init() has read the real one, and for good if that read fails.
+  var LABOR_RATE = B.SHIPPED_LABOR_RATE;
   function newLaborRow() {
     laborSeq += 1;
-    return { id: "u_" + Date.now() + "_" + laborSeq, label: "", guys: "", days: "", rate: "" };
+    return { id: "u_" + Date.now() + "_" + laborSeq, label: "", guys: "", days: "", rate: LABOR_RATE };
+  }
+
+  /** The line under a labor rate box. Says "Default $X" when this row's rate is not the company
+   *  rate (a blank one included), and is hidden while the two agree. */
+  function rateDefaultText(row) {
+    return "Default " + B.money2(LABOR_RATE);
+  }
+  function rateDiffers(row) {
+    return B.num((row || {}).rate) !== LABOR_RATE;
   }
 
   document.addEventListener("click", function (e) {
@@ -2132,6 +2152,19 @@
     }
   }
 
+  /** The company labor rate, or the shipped $33 when nothing is filed or the read cannot answer.
+   *  NEVER THROWS: a rate service being down must not stop an estimate opening. GET
+   *  /api/markup/rules needs no admin, so every estimator can read it. */
+  async function loadLaborRate() {
+    try {
+      var res = await api("/api/markup/rules?layout=global");
+      var j = await res.json();
+      return B.laborRateOrShipped(B.laborRateFromRules(j && j.rules));
+    } catch (e) {
+      return B.SHIPPED_LABOR_RATE;
+    }
+  }
+
   async function init() {
     try { if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready; } catch (e) {}
     // shared.js is still deciding which draft this page is on (it can even hydrate and reload),
@@ -2159,6 +2192,9 @@
     // landed. Null, not an empty array, for "not asked": an empty array is a real answer (the
     // table exists and holds nothing) and the two must not be confused.
     var laborDefaults = B.laborUnstated(state.polish_estimate) ? loadLaborDefaults() : null;
+    // The company labor rate is read for EVERY bid, a saved one included: it is only APPLIED to a
+    // new bid (the laborDefaults gate below), but "Default $X" under a rate needs it on any.
+    var laborRate = loadLaborRate();
 
     // THE CONDITION DEFAULTS, ON THE SAME TERMS AND WITH A STRICTER GATE. B.conditionsUnstated is
     // true only when NOTHING has ever been saved for this estimate, because Hanz's rule for this
@@ -2204,8 +2240,12 @@
     // every other part of this model, which is what makes removing a default from the library
     // later leave the bids already holding it alone: once saved, the rows are the BID's, and
     // laborUnstated has answered false ever since.
+    LABOR_RATE = await laborRate;
     if (laborDefaults) {
-      M.labor = B.seedLibraryLabor(M.labor, await laborDefaults);
+      // Library rows with no rate of their own and Travel follow the company rate, then the three
+      // crew rows are set to it. New bids only: this whole block is behind the laborUnstated gate.
+      M.labor = B.applyLaborRate(
+        B.seedLibraryLabor(M.labor, await laborDefaults, LABOR_RATE), LABOR_RATE);
       // A default can carry guys_auto, exactly as Travel does. Re-run for the same reason adopt()
       // runs it: before the first paint, not on the first edit.
       syncAutoGuys();

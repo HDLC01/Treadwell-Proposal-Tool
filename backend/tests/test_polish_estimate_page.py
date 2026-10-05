@@ -1807,7 +1807,9 @@ def test_nothing_is_revealed_before_the_sandbox_settles(ran):
     assert b["mainShownAfterTheLibrary"], (
         "#main was revealed before the item library landed, so the first paint prices nothing")
     assert b["loadingHidden"] and b["mainShown"] and b["bidBarShown"]
-    assert b["fetches"] == ["/api/library/assemblies", "/api/library/items"]
+    # The company labor rate is read for every bid (it feeds the "Default $X" line), in parallel.
+    assert b["fetches"] == ["/api/markup/rules?layout=global", "/api/library/assemblies",
+                            "/api/library/items"]
     assert b["projLine"] == "Nearman Creek · Kansas City, KS"
 
 
@@ -2851,3 +2853,60 @@ def test_joint_filler_and_dye_cards_carry_a_per_bid_coverage_box(ran):
     d = c["libDye"]
     assert d["before"]["dyeBox"] == ["", "2"] and d["after"]["dyeHint"] == "Library default: 2"
     assert d["dyeCost"] == pytest.approx(6000 / 4 * 0.2 * 2), d["dyeCost"]
+
+
+# ── M. the company labor rate (Markups -> Global) ─────────────────────────────
+@needs_node
+def test_a_new_bid_starts_every_labor_rate_from_the_company_rate(ran):
+    """The three crew rows, Travel Labor, a library row with no rate of its own and a line the
+    estimator adds all open on the Global labor rate ($40 here, not the sheet's $33). A library
+    row somebody re-rated ($55) keeps its own number.
+
+    Mutation: drop `B.applyLaborRate(...)` in init() -- the crew rows stay on the hard-coded
+    $33 and this fails on `polishing`. Mutation: `rate: LABOR_RATE` -> `rate: ""` in
+    newLaborRow -- fails on addedRate."""
+    r = ran["laborRate"]["newBid"]
+    for rid in ("polishing", "mockup", "jointfill", "travel", "lab-none"):
+        assert r[rid] == 40, "%s did not start from the company rate: %r" % (rid, r)
+    assert r["lab-own"] == 55, "a library row with its own rate was overwritten: %r" % r
+    assert ran["laborRate"]["addedRate"] == 40
+
+
+@needs_node
+def test_no_company_rate_means_the_shipped_33_and_nothing_breaks(ran):
+    """Nothing filed, the markup read failing, and a rate switched OFF all read as the sheet's own
+    $33.00. The page still opens (these builds all booted)."""
+    lr = ran["laborRate"]
+    for key in ("noRule", "down", "off"):
+        assert lr[key]["polishing"] == 33 and lr[key]["travel"] == 33, (key, lr[key])
+        assert lr[key]["lab-none"] == 33, (key, lr[key])
+
+
+@needs_node
+def test_a_saved_bid_keeps_its_rates_and_says_what_the_default_is(ran):
+    """New bids only. The saved bid's 33 and 36 are untouched and the library defaults are never
+    even asked for -- but each rate that differs from the company rate says 'Default $40.00'.
+
+    Mutation: remove the `laborDefaults` gate around applyLaborRate -- polishing becomes 40."""
+    lr = ran["laborRate"]
+    assert lr["saved"] == {"polishing": 33, "mockup": 36, "travel": 33}, lr["saved"]
+    assert lr["savedFetchedLaborDefaults"] is False
+    assert [x["text"] for x in lr["savedDefaultLines"]] == ["Default $40.00"] * 3
+    assert all(not x["hidden"] for x in lr["savedDefaultLines"])
+
+
+@needs_node
+def test_default_line_shows_only_while_the_rate_differs(ran):
+    """Hidden on every row that matches, shown on the one library row with its own $55, shown the
+    moment the estimator types 45 over a row, hidden again when they type the default back (the
+    in-place repaint, not a rebuild)."""
+    lr = ran["laborRate"]
+    assert [x["hidden"] for x in lr["newBidLines"]] == [True, True, True, True, True, False]
+    assert lr["typedOver"]["hidden"] is False
+    assert lr["typedBack"]["hidden"] is True
+
+
+@needs_node
+def test_the_labor_rate_formula_reads_only_a_plain_positive_dollar_figure(ran):
+    assert ran["laborRate"]["parsed"] == [33.5, 41, None, None, None, None, None]
+    assert ran["laborRate"]["fetchedMarkup"] is True
