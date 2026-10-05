@@ -2070,6 +2070,9 @@
   function calcDefaultText(row, field) {
     var d = (row || {}).calc_default;
     if (!d || B.laborCalcDiffers(row).indexOf(field) < 0) return "";
+    // The calculator had nothing to fill (a from-SF line on a bid with no SF yet): there is no
+    // default to name, so say nothing rather than "Default value: blank".
+    if (d[field] === "" || d[field] == null) return "";
     var v = field === "hours_per_day" ? B.dayHours(d) : d[field];
     return dfltWarnText(true, field === "hours_per_day" ? v + " hours" : (v === "" ? "blank" : v));
   }

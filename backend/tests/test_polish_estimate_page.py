@@ -3259,4 +3259,7 @@ def test_a_saved_bid_is_never_recomputed_and_does_not_even_ask(ran):
 def test_no_sf_leaves_days_blank_and_an_absent_table_opens_exactly_as_before(ran):
     lc = ran["laborCalc"]
     assert lc["noSf"]["days"] == "" and lc["noSf"]["guys"] == 3
+    # typing days over a blank default must not warn "Default value: blank"
+    w = lc["noSfWarn"]
+    assert w is not None and (w["hidden"] or w["text"].strip() == "")
     assert lc["gone"]["same"] is True and "calc_default" not in lc["gone"]["polishing"]

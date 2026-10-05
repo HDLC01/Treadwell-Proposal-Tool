@@ -3426,6 +3426,11 @@ const rendered = [];      // every string the page put on screen, for the Labour
     // no SF yet: from-SF days stay BLANK, not 0
     const nosf = build({ blob: blob({ polish_estimate: null, polish_sf: 0 }), laborCalc: CALC });
     await nosf.api.init();
+    nosf.api.go(1);
+    const noSfRow = clone(rowOf(nosf, "polishing"));
+    const nsi = idx(nosf, "polishing");
+    typeInto(nosf, '[data-lab="' + nsi + '"][data-k="days"]', "4");
+    const noSfWarn = warn(nosf, nsi + ":days");
     // the table is absent: today's blank crew rows
     const gone = build({ blob: blob({ polish_estimate: null, polish_sf: 12000 }), laborCalcFails: true });
     await gone.api.init();
@@ -3436,7 +3441,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
       first: first, over: over, back: back, hrs: hrs, mockRateBefore: mockRateBefore,
       mockRateAfter: mockRateAfter,
       saved: { polishing: clone(rowOf(sv, "polishing")), asked: sv.rec.fetches.some((u) => /labor-calc/.test(u)) },
-      noSf: clone(rowOf(nosf, "polishing")),
+      noSf: noSfRow, noSfWarn: noSfWarn,
       gone: { polishing: clone(rowOf(gone, "polishing")), same: JSON.stringify(gone.api.model().labor) ===
               JSON.stringify(plain.api.model().labor) },
     };
