@@ -1359,6 +1359,36 @@ def api_library_labor_delete(labor_id: str, request: Request) -> Dict[str, Any]:
     return {"ok": True}
 
 
+class LibraryLaborCalcIn(BaseModel):
+    """Loose on purpose: library.validate_labor_calc() is the one authority on what is acceptable."""
+    mode: Optional[str] = None
+    crew: Optional[Any] = None
+    sf_per_day: Optional[Any] = None
+    hours_per_day: Optional[Any] = None
+    guys: Optional[Any] = None
+    days: Optional[Any] = None
+    rate: Optional[Any] = None
+
+
+# The Labor Calculator's per-line modes (Kyle's notes B7b). READ is open to every signed-in user --
+# a new estimate fills its default labor from these -- and answers [] when the table is absent.
+# WRITING is admin-only, like the rates it carries.
+@app.get("/api/library/labor-calc")
+def api_library_labor_calc() -> Dict[str, Any]:
+    return {"ok": True, "calc": library.list_labor_calc()}
+
+
+@app.put("/api/library/labor-calc/{line_id}")
+def api_library_labor_calc_save(line_id: str, payload: LibraryLaborCalcIn,
+                                request: Request) -> Dict[str, Any]:
+    _require_admin(request)
+    try:
+        row = library.save_labor_calc(line_id, payload.model_dump(exclude_unset=True))
+    except library.ValidationError as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True, "row": row}
+
+
 # ── Markup rules ──────────────────────────────────────────────────────────────
 # The markup chain's rates as editable expressions, per sheet layout. See backend/markup.py for
 # why the key is the TAB, why `applies=false` is not the same as a zero formula, and why the four

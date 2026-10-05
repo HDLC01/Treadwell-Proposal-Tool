@@ -3222,3 +3222,41 @@ def test_a_saved_bid_is_not_repriced_until_the_estimator_asks(ran):
     assert d["savedBefore"]["note"] == UNKNOWN_NOTE and d["savedBefore"]["lodging"] is False
     s = d["savedAfter"]
     assert s["note"] == "150 mi from Olathe office" and s["lodging"] is True and s["local"] is False
+
+
+# ── B7b: the Labor Calculator fills a NEW bid's default labor lines ──────────────────────────────
+def test_a_new_bid_fills_its_default_labor_from_the_calculator(ran):
+    """From SF: crew 3, 2,500 SF/day, 12,000 SF job -> 5 days at 10 h, company rate $40 = $6,000.
+    Fixed: 2 guys x 1 day at its own $50. A line with no mode keeps today's blank row.
+    Mutation: apply before the takeoff is seeded (days blank), or skip the laborCalc gate."""
+    lc = ran["laborCalc"]
+    p = lc["first"]["polishing"]
+    assert (p["guys"], p["days"], p["rate"], p["hours_per_day"]) == (3, 5, 40, 10)
+    assert lc["first"]["cost"] == 6000
+    m = lc["first"]["mockup"]
+    assert (m["guys"], m["days"], m["rate"]) == (2, 1, 50)
+    j = lc["first"]["jointfill"]
+    assert j["days"] == "" and "calc_default" not in j and j["rate"] == 40
+
+
+def test_changing_a_calculator_figure_shows_the_default_value_warning_and_typing_it_back_clears_it(ran):
+    lc = ran["laborCalc"]
+    assert lc["first"]["warnDays"] == {"text": "", "hidden": True}
+    assert lc["first"]["warnRate"] is True
+    assert lc["over"] == {"text": "Default value: 5", "hidden": False}
+    assert lc["back"] == {"text": "", "hidden": True}
+    assert lc["hrs"] == {"warn": {"text": "Default value: 10 hours", "hidden": False}, "cost": 4800}
+    # a rate typed over the calculator's OWN rate warns against that rate, not the company's
+    assert lc["mockRateBefore"] is True and lc["mockRateAfter"] == "Default value: $50.00"
+    assert lc["first"]["hoursSelect"] is True
+
+
+def test_a_saved_bid_is_never_recomputed_and_does_not_even_ask(ran):
+    sv = ran["laborCalc"]["saved"]
+    assert (sv["polishing"]["guys"], sv["polishing"]["days"]) == (4, 6) and sv["asked"] is False
+
+
+def test_no_sf_leaves_days_blank_and_an_absent_table_opens_exactly_as_before(ran):
+    lc = ran["laborCalc"]
+    assert lc["noSf"]["days"] == "" and lc["noSf"]["guys"] == 3
+    assert lc["gone"]["same"] is True and "calc_default" not in lc["gone"]["polishing"]

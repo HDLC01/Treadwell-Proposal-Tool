@@ -3496,7 +3496,7 @@
     if (!body) return;
     if (!TRAVEL_RULES_LOADED) {
       body.innerHTML = '<p class="paneintro">Loading...</p>';
-      loadTravelRules().then(renderLabCalc);
+      Promise.all([loadTravelRules(), loadCalcRows()]).then(renderLabCalc);
       return;
     }
     var B = window.TWPolishBid;
@@ -3537,7 +3537,9 @@
       html += '<p class="ronote">Could not read the saved figures, so the boxes are empty. ' +
         'Reload to try again.</p>';
     }
+    html += calcSectionHtml();
     body.innerHTML = html;
+    renderTryIt();
   }
 
   /** Save one travel rate. A PUT of the whole markup row, notes carried so nothing filed elsewhere
@@ -3585,6 +3587,210 @@
       say2("Couldn't reach the server. Nothing was saved.");
       input.value = prev;
     }
+  }
+
+  // ── the Labor Calculator's per-line modes (Kyle's notes B7b) ───────────────
+  /** Each default labor line gets a MODE the estimate's Labor step fills a NEW bid from:
+   *    From SF  crew size + production rate (SF a day): days = ceil(job SF / rate)
+   *    Fixed    guys + days
+   *  both at 8 or 10 hours a day, at the line's own rate or (blank) the company labor rate.
+   *  "Not set" is today's behaviour. Stored by /api/library/labor-calc (backend/ops/labor_calc.sql);
+   *  an absent table reads as every line "Not set". The arithmetic is B.laborCalcValues, the one
+   *  function the estimate also calls, so the Try-it box shows what a new bid will get. */
+  var CALC = {};          // line_id -> the mode as it is being edited (may be unsaved/incomplete)
+  var CALC_SAVED = {};    // line_id -> what the server holds
+  var CALC_TRY_SF = "";
+  var CALC_MODES = [["", "Not set (blank, as before)"], ["sf", "From SF"], ["fixed", "Fixed"]];
+
+  async function loadCalcRows() {
+    CALC = {}; CALC_SAVED = {};
+    try {
+      var res = await api("/api/library/labor-calc");
+      var j = await res.json();
+      ((j && j.calc instanceof Array) ? j.calc : []).forEach(function (r) {
+        if (r && r.line_id && r.mode) {
+          CALC[r.line_id] = JSON.parse(JSON.stringify(r));
+          CALC_SAVED[r.line_id] = JSON.parse(JSON.stringify(r));
+        }
+      });
+    } catch (e) { /* no table / no answer: every line reads Not set */ }
+  }
+
+  /** The lines the calculator configures: the built-in crew rows, then the favorited custom ones
+   *  that bill by the day. Travel is its own section above. */
+  function calcLines() {
+    var out = (window.TWPolishBid.LABOR_CALC_BUILTINS || []).map(function (l) {
+      return { id: l.id, name: l.name };
+    });
+    LABOR.forEach(function (r) {
+      if (r && r.favorite && r.id !== "travel" && r.unit !== "hours") out.push({ id: r.id, name: r.name });
+    });
+    return out;
+  }
+
+  function calcCompanyRate() {
+    var B = window.TWPolishBid;
+    return B.laborRateOrShipped(B.laborRateFromRules(
+      Object.keys(TRAVEL_RULES).map(function (k) { return TRAVEL_RULES[k]; })));
+  }
+
+  /** In words, what stops this mode being saved; "" when it is complete. */
+  function calcProblem(c) {
+    if (!c || !c.mode) return "";
+    var pos = function (v) { return Number(String(v == null ? "" : v).replace(/[$,\s]/g, "")) > 0; };
+    if (c.mode === "sf") {
+      if (!pos(c.crew)) return "Type how many guys are on the crew.";
+      if (!pos(c.sf_per_day)) return "Type how many square feet the crew does in a day.";
+    } else {
+      if (!pos(c.guys)) return "Type how many guys the line has.";
+      if (!pos(c.days)) return "Type how many days the line takes.";
+    }
+    return "";
+  }
+
+  function calcSectionHtml() {
+    var co = calcCompanyRate();
+    var html = '<h3 class="labcalc-h">Default labor lines</h3>' +
+      '<p class="paneintro">Pick how each line fills in on a <b>new</b> estimate. <b>From SF</b> ' +
+      "works the days out from the job's square feet (days = SF / production rate, rounded up). " +
+      '<b>Fixed</b> uses the guys and days you type. A blank rate uses the company labor rate (' +
+      esc(L.money(co)) + ' an hour). The estimator can still change any of it on the bid, and a ' +
+      'saved bid is never recomputed.</p>' +
+      '<div class="tw"><table class="items-table"><thead><tr><th>Line</th><th>Mode</th>' +
+      '<th>Crew and production</th><th>Hours a day</th><th class="n">Rate</th>' +
+      '<th class="w-act"></th></tr></thead><tbody>';
+    calcLines().forEach(function (l) {
+      var c = CALC[l.id] || { mode: "" };
+      var inp = function (f, label, w) {
+        return ADMIN
+          ? '<input class="mkin" type="text" inputmode="decimal" data-lcalc="' + esc(l.id) +
+            '" data-f="' + f + '" value="' + esc(c[f] == null ? "" : c[f]) + '" aria-label="' +
+            esc(l.name + " " + label) + '" style="width:' + (w || 64) + 'px" />'
+          : esc(c[f] == null || c[f] === "" ? "-" : c[f]);
+      };
+      var fields = c.mode === "sf"
+        ? inp("crew", "crew size") + ' guys, ' + inp("sf_per_day", "production rate", 80) + ' SF a day'
+        : c.mode === "fixed"
+          ? inp("guys", "guys") + ' guys for ' + inp("days", "days") + ' days'
+          : '<span class="builtin">Left blank on a new estimate</span>';
+      var modeCell = ADMIN
+        ? '<select data-lcalc-mode="' + esc(l.id) + '" aria-label="' + esc(l.name) + ' mode">' +
+          CALC_MODES.map(function (m) {
+            return '<option value="' + m[0] + '"' + ((c.mode || "") === m[0] ? " selected" : "") + '>' +
+              esc(m[1]) + '</option>';
+          }).join("") + '</select>'
+        : esc((CALC_MODES.filter(function (m) { return m[0] === (c.mode || ""); })[0] || [])[1] || "");
+      var hpd = Number(c.hours_per_day) === 10 ? 10 : 8;
+      var hoursCell = !c.mode ? "" : ADMIN
+        ? '<select data-lcalc="' + esc(l.id) + '" data-f="hours_per_day" aria-label="' + esc(l.name) +
+          ' hours a day"><option value="8"' + (hpd === 8 ? " selected" : "") + '>8</option>' +
+          '<option value="10"' + (hpd === 10 ? " selected" : "") + '>10</option></select>'
+        : String(hpd);
+      var rateCell = !c.mode ? "" : ADMIN
+        ? '$<input class="mkin" type="text" inputmode="decimal" data-lcalc="' + esc(l.id) +
+          '" data-f="rate" value="' + esc(c.rate == null ? "" : c.rate) + '" placeholder="' +
+          esc(String(co)) + '" aria-label="' + esc(l.name) + ' rate" />'
+        : esc(L.money(c.rate > 0 ? Number(c.rate) : co));
+      html += '<tr data-lcalc-row="' + esc(l.id) + '"><td>' + esc(l.name) + '</td><td>' + modeCell +
+        '</td><td>' + fields + '</td><td>' + hoursCell + '</td><td class="n">' + rateCell +
+        '</td><td class="rowact"></td></tr>';
+    });
+    html += '</tbody></table></div>' +
+      '<h3 class="labcalc-h">Try it</h3>' +
+      '<p class="paneintro">Type a job size to see what a new estimate would fill in. This changes ' +
+      'nothing.</p>' +
+      '<p><label>Job SF <input class="mkin" type="text" inputmode="decimal" data-tryit-sf ' +
+      'value="' + esc(CALC_TRY_SF) + '" aria-label="Job square feet" style="width:100px" /></label></p>' +
+      '<div id="labcalc-tryout"></div>';
+    return html;
+  }
+
+  /** The Try-it table, from what is SAVED (what a new bid would really get). Never throws. */
+  function renderTryIt() {
+    var out = $("labcalc-tryout");
+    if (!out) return;
+    var B = window.TWPolishBid;
+    var sf = Number(String(CALC_TRY_SF).replace(/[$,\s]/g, "")) || 0;
+    var co = calcCompanyRate();
+    var rows = "", total = 0, n = 0;
+    calcLines().forEach(function (l) {
+      var v = B.laborCalcValues(CALC_SAVED[l.id], sf, co);
+      if (!v) return;
+      n += 1;
+      var cost = B.laborCost({ guys: v.guys, days: v.days, rate: v.rate, hours_per_day: v.hours_per_day });
+      total += cost;
+      rows += '<tr><td>' + esc(l.name) + '</td><td class="n">' + esc(String(v.guys)) + '</td>' +
+        '<td class="n">' + esc(String(v.days)) + '</td><td class="n">' + v.hours_per_day + '</td>' +
+        '<td class="n">' + esc(L.money(v.rate)) + '</td><td class="n">' + esc(L.money(cost)) + '</td></tr>';
+    });
+    if (!n) {
+      out.innerHTML = '<p class="paneintro">No line has a mode saved yet, so a new estimate leaves ' +
+        'them all blank.</p>';
+      return;
+    }
+    out.innerHTML = '<div class="tw"><table class="items-table"><thead><tr><th>Line</th>' +
+      '<th class="n">Guys</th><th class="n">Days</th><th class="n">Hours a day</th>' +
+      '<th class="n">Rate</th><th class="n">Cost</th></tr></thead><tbody>' + rows +
+      '<tr><td><b>Total</b></td><td></td><td></td><td></td><td></td><td class="n"><b data-tryit-total>' +
+      esc(L.money(total)) + '</b></td></tr></tbody></table></div>' +
+      '<p class="paneintro">Before burden, travel and markups.' +
+      (sf > 0 ? "" : " Type a job size to see the SF-based days.") + '</p>';
+  }
+
+  /** Save one line's mode (or clear it). Complete modes only; an incomplete one is said in words
+   *  and kept on screen. A refused or failed save puts the line back to what the server holds. */
+  async function saveCalc(id) {
+    var out = $("labcalc-alert");
+    var say2 = function (m) { if (out) out.textContent = m || ""; };
+    var c = CALC[id];
+    var saved = CALC_SAVED[id];
+    var body;
+    if (!c || !c.mode) {
+      if (!saved) { say2(""); return; }
+      body = { mode: "none" };
+    } else {
+      var why = calcProblem(c);
+      if (why) { say2(why + " Nothing is saved until it is complete."); return; }
+      body = { mode: c.mode, crew: c.crew, sf_per_day: c.sf_per_day, guys: c.guys, days: c.days,
+               hours_per_day: c.hours_per_day || 8, rate: c.rate };
+    }
+    say2("");
+    try {
+      var res = await api("/api/library/labor-calc/" + encodeURIComponent(id), { method: "PUT",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      var j = await res.json().catch(function () { return {}; });
+      if (!res.ok) {
+        say2(res.status === 403 ? "Changing these is admin-only. Nothing was saved."
+                                : (j.detail || "That didn't save."));
+        if (saved) CALC[id] = JSON.parse(JSON.stringify(saved)); else delete CALC[id];
+        renderLabCalc();
+        return;
+      }
+      if (j.row) { CALC[id] = JSON.parse(JSON.stringify(j.row)); CALC_SAVED[id] = JSON.parse(JSON.stringify(j.row)); }
+      else { delete CALC[id]; delete CALC_SAVED[id]; }
+      say2("Saved. New estimates start from it.");
+      renderTryIt();
+    } catch (err) {
+      say2("Couldn't reach the server. Nothing was saved.");
+      if (saved) CALC[id] = JSON.parse(JSON.stringify(saved)); else delete CALC[id];
+      renderLabCalc();
+    }
+  }
+
+  /** A mode picker or a calculator box changed. */
+  function calcEdit(el) {
+    var id = el.getAttribute("data-lcalc-mode");
+    if (id !== null) {
+      if (!el.value) delete CALC[id];
+      else CALC[id] = Object.assign({ hours_per_day: 8 }, CALC[id] || {}, { mode: el.value });
+      renderLabCalc();
+      return saveCalc(id);
+    }
+    id = el.getAttribute("data-lcalc");
+    var f = el.getAttribute("data-f");
+    if (id === null || !f || !CALC[id]) return null;
+    CALC[id][f] = f === "hours_per_day" ? Number(el.value) : String(el.value).trim().replace(/^\$/, "");
+    return saveCalc(id);
   }
 
   // ── view switch ────────────────────────────────────────────────────────────
@@ -4783,6 +4989,15 @@
   $("pane-labcalc").addEventListener("change", function (e) {
     var el = e.target;
     if (el && el.getAttribute && el.getAttribute("data-travel-rate") !== null) saveTravelRate(el);
+    else if (el && el.getAttribute && (el.getAttribute("data-lcalc-mode") !== null ||
+                                       el.getAttribute("data-lcalc") !== null)) calcEdit(el);
+  });
+  $("pane-labcalc").addEventListener("input", function (e) {
+    var el = e.target;
+    if (el && el.getAttribute && el.getAttribute("data-tryit-sf") !== null) {
+      CALC_TRY_SF = el.value;
+      renderTryIt();
+    }
   });
   $("pane-labcalc").addEventListener("click", function (e) {
     var t = e.target;

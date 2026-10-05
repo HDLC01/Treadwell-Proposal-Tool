@@ -1363,3 +1363,116 @@ def delete_labor(labor_id: str) -> bool:
         return False
     sb.table(LABOR).update({"deleted_at": _now_iso()}).eq("id", labor_id).execute()
     return True
+
+
+# ── The Labor Calculator's per-line modes (Hanz, 2026-10-05; Kyle's notes B7b) ─────────────────
+#
+# WHICH LINE, AND WHERE IT IS KEPT. The default labor lines are the three built-in crew rows
+# (`polishing`, `mockup`, `jointfill`, which are NOT rows of library_labor) and every favorited
+# row of library_labor. One table keyed by the line's id covers both, so a built-in is configured
+# the same way a custom line is, and nothing is added to library_labor (whose Labor and Defaults
+# tabs would otherwise have to learn to hide three reserved rows). `backend/ops/labor_calc.sql`.
+#
+# A mode is one of two ways to fill the line's Guys / Days / Rate on a NEW bid:
+#   sf     crew size + production rate (SF a day): days = ceil(job SF / rate), at 8 or 10 hours a day
+#   fixed  guys + days, at 8 or 10 hours a day
+# `rate` blank means "the company labor rate". No row at all means the line behaves as it always
+# has, which is also what an absent table means: reads answer [] and the estimate carries on.
+LABOR_CALC = "library_labor_calc"
+LABOR_CALC_MODES = ("sf", "fixed")
+LABOR_CALC_HOURS = (8, 10)
+_MAX_CREW = 1000.0
+_MAX_SF_PER_DAY = 1e7
+_MAX_DAYS = 3650.0
+
+
+def _shape_labor_calc(row: Dict[str, Any]) -> Dict[str, Any]:
+    def _n(v: Any) -> Optional[float]:
+        try:
+            return None if v in (None, "") else float(v)
+        except (TypeError, ValueError):
+            return None
+    hpd = _n(row.get("hours_per_day"))
+    return {
+        "line_id": str(row.get("line_id") or ""),
+        "mode": row.get("mode") if row.get("mode") in LABOR_CALC_MODES else "",
+        "crew": _n(row.get("crew")),
+        "sf_per_day": _n(row.get("sf_per_day")),
+        "hours_per_day": int(hpd) if hpd in (8.0, 10.0) else 8,
+        "guys": _n(row.get("guys")),
+        "days": _n(row.get("days")),
+        "rate": _n(row.get("rate")),
+    }
+
+
+def list_labor_calc() -> List[Dict[str, Any]]:
+    """Every saved mode. NEVER RAISES: an absent table (the DDL not run yet) reads as "no line has
+    a mode", which is today's behaviour exactly -- the estimate must open either way."""
+    try:
+        res = get_client().table(LABOR_CALC).select("*").limit(500).execute()
+        return [_shape_labor_calc(r) for r in (res.data or []) if r.get("line_id")]
+    except Exception as exc:  # noqa: BLE001
+        log.warning("library_labor_calc unreadable (DDL not applied yet?): %s", exc)
+        return []
+
+
+def validate_labor_calc(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """A whole-row check. `mode` of "" / "none" / absent means CLEAR the line's mode (returns {})."""
+    if not isinstance(payload, dict):
+        raise ValidationError("Nothing to save.")
+    mode = str(payload.get("mode") or "").strip().lower()
+    if mode in ("", "none"):
+        return {}
+    if mode not in LABOR_CALC_MODES:
+        raise ValidationError("A labor line is worked out from square feet or fixed — "
+                              "\"%s\" is neither." % mode)
+    hpd = _number(payload.get("hours_per_day"), field="Hours a day", maximum=24)
+    hpd = 8 if hpd is None else int(hpd)
+    if hpd not in LABOR_CALC_HOURS:
+        raise ValidationError("A working day is 8 or 10 hours here.")
+    rate = _number(payload.get("rate"), field="A rate", maximum=_MAX_LABOR_RATE)
+    out: Dict[str, Any] = {"mode": mode, "hours_per_day": hpd,
+                           "rate": rate if (rate or 0) > 0 else None,
+                           "crew": None, "sf_per_day": None, "guys": None, "days": None}
+    if mode == "sf":
+        crew = _number(payload.get("crew"), field="Crew size", maximum=_MAX_CREW)
+        per = _number(payload.get("sf_per_day"), field="Production rate", maximum=_MAX_SF_PER_DAY)
+        if not crew or crew <= 0:
+            raise ValidationError("Type how many guys are on the crew.")
+        if not per or per <= 0:
+            raise ValidationError("Type how many square feet the crew does in a day.")
+        out["crew"], out["sf_per_day"] = crew, per
+    else:
+        guys = _number(payload.get("guys"), field="Guys", maximum=_MAX_CREW)
+        days = _number(payload.get("days"), field="Days", maximum=_MAX_DAYS)
+        if not guys or guys <= 0:
+            raise ValidationError("Type how many guys the line has.")
+        if not days or days <= 0:
+            raise ValidationError("Type how many days the line takes.")
+        out["guys"], out["days"] = guys, days
+    return out
+
+
+def save_labor_calc(line_id: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Save (or clear) one line's mode. Returns the shaped row, None when cleared.
+
+    DOES NOT DEGRADE when the table is missing -- a write that quietly does nothing tells an admin
+    they saved a mode they did not save (the asymmetry create_labor already records)."""
+    line_id = _clean_text(line_id, 80)
+    if not line_id:
+        raise ValidationError("Which labor line is this for?")
+    row = validate_labor_calc(payload)
+    sb = get_client()
+    cur = sb.table(LABOR_CALC).select("line_id").eq("line_id", line_id).limit(1).execute()
+    exists = bool(cur.data)
+    if not row:
+        if exists:
+            sb.table(LABOR_CALC).delete().eq("line_id", line_id).execute()
+        return None
+    row["updated_at"] = _now_iso()
+    if exists:
+        sb.table(LABOR_CALC).update(row).eq("line_id", line_id).execute()
+    else:
+        row["line_id"] = line_id
+        sb.table(LABOR_CALC).insert(row).execute()
+    return _shape_labor_calc(dict(row, line_id=line_id))

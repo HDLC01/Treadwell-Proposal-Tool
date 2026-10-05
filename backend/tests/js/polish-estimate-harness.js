@@ -478,6 +478,10 @@ function build(opts) {
         conditions: clone(opts.conditionDefaults === undefined
           ? [] : opts.conditionDefaults) }) };
     }
+    if (/labor-calc/.test(url)) {
+      if (opts.laborCalcFails) throw new Error("the calculator table is not there");
+      return { json: async () => ({ ok: true, calc: clone(opts.laborCalc === undefined ? [] : opts.laborCalc) }) };
+    }
     if (/\/labor/.test(url)) {
       if (opts.laborFails) throw new Error("the defaults table is not there");
       return { json: async () => (opts.laborBody !== undefined
@@ -3366,6 +3370,75 @@ const rendered = [];      // every string the page put on screen, for the Labour
       blank: blankSnap, blankRequests: (blank.rec.distanceBodies || []).length,
       thinRequests: (thin.rec.distanceBodies || []).length,
       savedBefore: savedBefore, savedFetches: savedFetches, savedAfter: savedAfter,
+    };
+  }
+
+  // ── N. the Labor Calculator fills a NEW bid's default labor (B7b) ──────────────────────────
+  {
+    const CALC = [
+      { line_id: "polishing", mode: "sf", crew: 3, sf_per_day: 2500, hours_per_day: 10,
+        guys: null, days: null, rate: null },
+      { line_id: "mockup", mode: "fixed", guys: 2, days: 1, hours_per_day: 8, rate: 50,
+        crew: null, sf_per_day: null },
+    ];
+    const RULE40 = [{ id: "mk1", layout: "global", line_key: "labor_rate", formula: "40", applies: true }];
+    const rowOf = (built, id) => built.api.model().labor.find((r) => r.id === id);
+    const warn = (built, key) => {
+      const el = built.doc.querySelector('[data-calcwarn="' + key + '"]');
+      return el ? { text: el.textContent, hidden: !!el.hidden } : null;
+    };
+    const idx = (built, id) => built.api.model().labor.findIndex((r) => r.id === id);
+
+    const nb = build({ blob: blob({ polish_estimate: null, polish_sf: 12000 }),
+                       laborCalc: CALC, markupRules: RULE40 });
+    await nb.api.init();
+    nb.api.go(1);
+    const pi = idx(nb, "polishing");
+    const first = { polishing: clone(rowOf(nb, "polishing")), mockup: clone(rowOf(nb, "mockup")),
+                    jointfill: clone(rowOf(nb, "jointfill")),
+                    hoursSelect: !!nb.doc.querySelector('[data-lab="' + pi + '"][data-k="hours_per_day"]'),
+                    warnDays: warn(nb, pi + ":days"), warnRate: nb.doc.querySelector(
+                      '[data-ratedflt-for="' + pi + '"]').hidden,
+                    cost: B.laborCost(rowOf(nb, "polishing")) };
+    // typing a different days figure raises the warning; typing the default back clears it
+    typeInto(nb, '[data-lab="' + pi + '"][data-k="days"]', "7");
+    const over = warn(nb, pi + ":days");
+    typeInto(nb, '[data-lab="' + pi + '"][data-k="days"]', "5");
+    const back = warn(nb, pi + ":days");
+    // hours a day 10 -> 8 reprices and warns
+    const hsel = need(nb, '[data-lab="' + pi + '"][data-k="hours_per_day"]');
+    hsel.value = "8";
+    nb.doc.fire("change", { target: hsel });
+    const hrs = { warn: warn(nb, pi + ":hours_per_day"), cost: B.laborCost(rowOf(nb, "polishing")) };
+    // a rate typed over the calculator's own shows the default rate
+    const mi = idx(nb, "mockup");
+    const mockRateBefore = nb.doc.querySelector('[data-ratedflt-for="' + mi + '"]').hidden;
+    typeInto(nb, '[data-lab="' + mi + '"][data-k="rate"]', "33");
+    const mockRateAfter = nb.doc.querySelector('[data-ratedflt-for="' + mi + '"]').textContent;
+
+    // a SAVED bid is never recomputed, and does not even ask
+    const SAVED = { version: 2, takeoff: clone(MODEL.takeoff),
+      labor: [{ id: "polishing", label: "Polishing", guys: 4, days: 6, rate: 33 },
+              { id: "mockup", label: "Mock-up", guys: 3, days: 0.5, rate: 33 }],
+      conditions: clone(MODEL.conditions), contingency: 0, fees: 0, totals: {} };
+    const sv = build({ blob: blob({ polish_estimate: clone(SAVED) }), laborCalc: CALC });
+    await sv.api.init();
+    // no SF yet: from-SF days stay BLANK, not 0
+    const nosf = build({ blob: blob({ polish_estimate: null, polish_sf: 0 }), laborCalc: CALC });
+    await nosf.api.init();
+    // the table is absent: today's blank crew rows
+    const gone = build({ blob: blob({ polish_estimate: null, polish_sf: 12000 }), laborCalcFails: true });
+    await gone.api.init();
+    const plain = build({ blob: blob({ polish_estimate: null, polish_sf: 12000 }) });
+    await plain.api.init();
+
+    out.laborCalc = {
+      first: first, over: over, back: back, hrs: hrs, mockRateBefore: mockRateBefore,
+      mockRateAfter: mockRateAfter,
+      saved: { polishing: clone(rowOf(sv, "polishing")), asked: sv.rec.fetches.some((u) => /labor-calc/.test(u)) },
+      noSf: clone(rowOf(nosf, "polishing")),
+      gone: { polishing: clone(rowOf(gone, "polishing")), same: JSON.stringify(gone.api.model().labor) ===
+              JSON.stringify(plain.api.model().labor) },
     };
   }
 

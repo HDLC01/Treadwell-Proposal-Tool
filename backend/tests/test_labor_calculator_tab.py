@@ -136,3 +136,39 @@ def test_the_markup_read_failing_is_said_out_loud_and_invents_no_rate(ran):
     assert ran["readFails"]["said"] and ran["readFails"]["boxesEmpty"]
     assert ran["figure"] == ["70", "70.5", "", "", ""], (
         "a switched-off, non-numeric or absent rule must read as not filed: %r" % ran["figure"])
+
+
+# ── B7b: the per-line modes, the Try-it box ──────────────────────────────────────────────────────
+def test_the_calculator_lists_the_built_in_crew_and_favorited_day_lines_only(ran):
+    """Not Travel (its own section), not an unfavorited row, not an hours row.
+    Mutation: drop the favorite / unit filters in calcLines."""
+    assert ran["calcLines"] == ["polishing", "mockup", "jointfill", "u1"]
+
+
+def test_a_saved_mode_is_shown_and_the_company_rate_is_the_placeholder_figure(ran):
+    assert ran["calcLoaded"] == {"mockupFixed": True, "companyRateShown": True}
+
+
+def test_try_it_shows_each_default_lines_figures_and_the_total_and_changes_nothing(ran):
+    """12,000 SF at 2,500 SF/day = 5 days; 3 guys x 5 x $40 x 10 h = $6,000 + mock-up $480.
+    Mutation: Math.floor in laborCalcValues (4 days) or reading the draft not the saved row."""
+    assert ran["tryFixed"] == {"hasMockup": True, "total": True}
+    assert ran["trySf"] == {"days5": True, "total": True, "changedNothing": True}
+    assert ran["tryRoundsUp"] is True
+
+
+def test_an_incomplete_mode_is_said_in_words_and_sends_nothing_then_saves_when_complete(ran):
+    assert ran["sfIncomplete"]["sent"] == 0
+    assert "how many guys" in ran["sfIncomplete"]["alert"]
+    puts = ran["sfSaved"]["puts"]
+    assert puts[-1]["mode"] == "sf" and puts[-1]["hours_per_day"] == 10
+    assert puts[-1]["crew"] == "3" and puts[-1]["sf_per_day"] == "2,500"
+    assert ran["sfSaved"]["url"] == "/api/library/labor-calc/polishing"
+
+
+def test_not_set_clears_the_line_a_refusal_puts_it_back_and_an_absent_table_still_draws(ran):
+    assert ran["cleared"] == {"last": {"mode": "none"}, "savedGone": True}
+    assert ran["calc403"] == {"alert": "Changing these is admin-only. Nothing was saved.",
+                              "kept": False}
+    assert ran["calcAbsent"] == {"drew": True, "notSet": True, "travelStill": True, "tryEmpty": True}
+    assert ran["calcNonAdmin"]["controls"] == 0

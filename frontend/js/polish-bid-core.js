@@ -237,8 +237,90 @@
     // function every total goes through, so the figure is skipped in laborTotal BEFORE markupChain
     // rounds the sum -- zeroing after the rounding would drift the bid by up to a dollar.
     if (!rowOn(row)) return 0;
-    var perDay = row.unit === "hours" ? 1 : HOURS_PER_DAY;
+    // A DAY IS 8 HOURS UNLESS THE ROW SAYS 10 (the Labor Calculator's "hours a day", 2026-10-06).
+    // Only 8 and 10 are honoured, so a stray value in a saved blob prices as the sheet does.
+    var perDay = row.unit === "hours" ? 1 : dayHours(row);
     return num(row.guys) * num(row.days) * num(row.rate) * perDay;
+  }
+
+  /** The built-in crew lines the Labor Calculator can configure (the ids freshModel() gives them).
+   *  Custom lines are the favorited rows of library_labor; Travel is not here (it is hours-based
+   *  and has its own Travel section). */
+  var LABOR_CALC_BUILTINS = [
+    { id: "polishing", name: "Polishing" },
+    { id: "mockup", name: "Mock-up" },
+    { id: "jointfill", name: "Joint filler" }
+  ];
+
+  /** Hours in this row's working day: 10 when the row says 10, else the sheet's 8. */
+  function dayHours(row) {
+    return num((row || {}).hours_per_day) === 10 ? 10 : HOURS_PER_DAY;
+  }
+
+  /** THE LABOR CALCULATOR (Library -> Labor Calculator), the arithmetic. A line's saved mode
+   *  `cfg` -- `{mode, crew, sf_per_day, hours_per_day, guys, days, rate}` -- turned into the
+   *  Guys / Days / Hours-a-day / Rate a new bid's line starts with, for a job of `sf` square feet.
+   *
+   *    sf     guys = crew, days = ceil(sf / sf_per_day)   (blank days when there is no SF yet, or
+   *           no production rate: an unknown is blank, never 0 -- 0 would read as "free")
+   *    fixed  guys and days as typed
+   *
+   *  `rate` is the line's own, else the company labor rate `dflt`. Null when `cfg` has no usable
+   *  mode, which is "behave as today". ONE DEFINITION: the estimate's seeding and the Calculator's
+   *  "Try it" box both call this, so the box shows exactly what a new bid would get. */
+  function laborCalcValues(cfg, sf, dflt) {
+    if (!cfg || (cfg.mode !== "sf" && cfg.mode !== "fixed")) return null;
+    var hpd = num(cfg.hours_per_day) === 10 ? 10 : HOURS_PER_DAY;
+    var own = num(cfg.rate);
+    var rate = own > 0 ? own : laborRateOrShipped(dflt);
+    var guys, days;
+    if (cfg.mode === "sf") {
+      var per = num(cfg.sf_per_day), area = num(sf);
+      guys = num(cfg.crew) > 0 ? num(cfg.crew) : "";
+      days = (per > 0 && area > 0) ? Math.ceil(area / per) : "";
+    } else {
+      guys = num(cfg.guys) > 0 ? num(cfg.guys) : "";
+      days = num(cfg.days) > 0 ? num(cfg.days) : "";
+    }
+    return { guys: guys, days: days, hours_per_day: hpd, rate: rate };
+  }
+
+  /** `labor` with each row that has a saved mode filled from it -- NEW BIDS ONLY (the caller's gate
+   *  is laborUnstated, the same one that guards every other default). A NEW array of NEW rows.
+   *  The values written are also kept on the row as `calc_default`, which is what the estimate's
+   *  "Default value: N" warning compares against: once saved, the bid keeps its own numbers and
+   *  nothing here ever runs on it again. Travel (an hours row) is never touched. */
+  function applyLaborCalc(labor, cfgs, sf, dflt) {
+    var out = (labor instanceof Array) ? labor.slice() : [];
+    if (!(cfgs instanceof Array)) return out;
+    var byId = {};
+    cfgs.forEach(function (c) { if (c && c.line_id) byId[String(c.line_id)] = c; });
+    for (var i = 0; i < out.length; i++) {
+      var r = out[i];
+      if (!r || r.unit === "hours" || r.id === "travel") continue;
+      var v = laborCalcValues(byId[String(r.id)], sf, dflt);
+      if (!v) continue;
+      var copy = {};
+      for (var k in r) if (Object.prototype.hasOwnProperty.call(r, k)) copy[k] = r[k];
+      copy.guys = v.guys; copy.days = v.days; copy.rate = v.rate; copy.hours_per_day = v.hours_per_day;
+      copy.calc_default = { guys: v.guys, days: v.days, rate: v.rate, hours_per_day: v.hours_per_day };
+      out[i] = copy;
+    }
+    return out;
+  }
+
+  /** What a labor row's four calculator boxes read against their default: the names of the boxes
+   *  whose value is not the default the calculator filled. `[]` for a row with no calc_default
+   *  (every row today) and for a row still holding its defaults. */
+  function laborCalcDiffers(row) {
+    var d = row && row.calc_default;
+    if (!d) return [];
+    var diff = [];
+    if (num(row.guys) !== num(d.guys)) diff.push("guys");
+    if (num(row.days) !== num(d.days)) diff.push("days");
+    if (num(row.rate) !== num(d.rate)) diff.push("rate");
+    if (dayHours(row) !== (num(d.hours_per_day) === 10 ? 10 : HOURS_PER_DAY)) diff.push("hours_per_day");
+    return diff;
   }
 
   /** The man-days a travel row is priced against: Σ guys × days over the rows that are NOT travel.
@@ -1753,6 +1835,8 @@
     // joining it: that branch was cut from main, which did not have the 2026-09-16 export yet.
     // Both belong -- Travel is built in, the library rows are additions beside it.
     libraryLaborRow: libraryLaborRow, seedLibraryLabor: seedLibraryLabor,
+    LABOR_CALC_BUILTINS: LABOR_CALC_BUILTINS, dayHours: dayHours, laborCalcValues: laborCalcValues, applyLaborCalc: applyLaborCalc,
+    laborCalcDiffers: laborCalcDiffers,
     laborUnstated: laborUnstated,
     // The company labor rate (Markups -> Global): read, applied to a new bid, and the fallback.
     SHIPPED_LABOR_RATE: SHIPPED_LABOR_RATE, laborRateOrShipped: laborRateOrShipped,

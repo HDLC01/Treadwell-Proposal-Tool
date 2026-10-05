@@ -32,14 +32,32 @@ const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
 
 function make(opts) {
   const els = {};
-  ["labcalc-body", "labcalc-ro", "labcalc-alert"].forEach((id) => {
+  ["labcalc-body", "labcalc-ro", "labcalc-alert", "labcalc-tryout"].forEach((id) => {
     els[id] = { id, innerHTML: "", textContent: "", hidden: false };
   });
   const puts = [];
+  const calcPuts = [];
   const rec = { fetches: [] };
   const GLOBAL_MARKUP = clone(opts.globalMarkup || []);
   const fetchStub = async (url, init) => {
     rec.fetches.push(url);
+    if (String(url).indexOf("/api/library/labor-calc") === 0) {
+      if ((init || {}).method === "PUT") {
+        const body = JSON.parse(init.body);
+        calcPuts.push({ url: url, body: body });
+        if (opts.calcPutStatus === 403) return { ok: false, status: 403, json: async () => ({}) };
+        if (opts.calcPutStatus === 400) {
+          return { ok: false, status: 400, json: async () => ({ detail: "calc refused" }) };
+        }
+        if (body.mode === "none") return { ok: true, status: 200, json: async () => ({ ok: true, row: null }) };
+        const line = decodeURIComponent(url.split("/").pop());
+        return { ok: true, status: 200, json: async () => ({ ok: true, row: Object.assign(
+          { line_id: line, crew: null, sf_per_day: null, guys: null, days: null, rate: null }, body,
+          { hours_per_day: body.hours_per_day || 8 }) }) };
+      }
+      if (opts.calcReadFails) throw new Error("no table");
+      return { ok: true, status: 200, json: async () => ({ ok: true, calc: clone(opts.calc || []) }) };
+    }
     if ((init || {}).method === "PUT") {
       const body = JSON.parse(init.body);
       puts.push(body);
@@ -53,11 +71,14 @@ function make(opts) {
     return { ok: true, status: 200, json: async () => ({ ok: true, rules: clone(opts.rules || []) }) };
   };
   const body = BLOCK + "\nreturn { renderLabCalc: renderLabCalc, saveTravelRate: saveTravelRate, " +
-    "travelFigure: travelFigure, rules: function () { return TRAVEL_RULES; } };";
+    "travelFigure: travelFigure, rules: function () { return TRAVEL_RULES; }, " +
+    "calcEdit: calcEdit, renderTryIt: renderTryIt, calcProblem: calcProblem, " +
+    "setTry: function (v) { CALC_TRY_SF = v; }, calc: function () { return CALC; }, " +
+    "saved: function () { return CALC_SAVED; } };";
   const scope = new Function("$", "esc", "api", "L", "LABOR", "ADMIN", "GLOBAL_MARKUP", "window", body);
   const api = scope((id) => els[id] || null, esc, fetchStub, L, clone(opts.labor || []),
                     opts.admin !== false, GLOBAL_MARKUP, { TWPolishBid: B });
-  return { api, els, puts, rec, GLOBAL_MARKUP };
+  return { api, els, puts, calcPuts, rec, GLOBAL_MARKUP };
 }
 
 const settle = () => new Promise((r) => setImmediate(r));
@@ -82,7 +103,7 @@ const RULE = (key, formula, extra) => Object.assign({ id: "r-" + key, layout: "g
     const html = s.els["labcalc-body"].innerHTML;
     out.admin = {
       loadingFirst: loadingFirst,
-      readOnce: s.rec.fetches.length,
+      readOnce: s.rec.fetches.filter((u) => u.indexOf("/api/markup") === 0).length,
       lodgingBox: /data-travel-rate="travel_lodging" value="80"/.test(html),
       perDiemBoxEmptyWithShippedPlaceholder:
         /data-travel-rate="travel_per_diem" value="" placeholder="45"/.test(html),
@@ -164,6 +185,80 @@ const RULE = (key, formula, extra) => Object.assign({ id: "r-" + key, layout: "g
                   s.api.travelFigure(RULE("travel_lodging", "70", { applies: false })),
                   s.api.travelFigure(RULE("travel_lodging", "IF(1,2,3)")),
                   s.api.travelFigure(null)];
+  }
+
+  // ── THE PER-LINE MODES (B7b): picking, saving, the Try-it box, and an absent table ────────────
+  const sel = (id, value) => ({ value: value,
+    getAttribute: (k) => (k === "data-lcalc-mode" ? id : null) });
+  const box = (id, f, value) => ({ value: value,
+    getAttribute: (k) => (k === "data-lcalc" ? id : k === "data-f" ? f : null) });
+  {
+    const s = make({ rules: [RULE("labor_rate", "40")],
+                      calc: [{ line_id: "mockup", mode: "fixed", guys: 3, days: 0.5, hours_per_day: 8, rate: null,
+                               crew: null, sf_per_day: null }],
+                      labor: [{ id: "u1", name: "Sealer", rate: 30, unit: "days", favorite: true },
+                              { id: "u2", name: "Not a default", rate: 30, unit: "days", favorite: false },
+                              { id: "u3", name: "Hours thing", rate: 30, unit: "hours", favorite: true },
+                              { id: "travel", name: "Travel", rate: 33, unit: "hours", favorite: true }] });
+    s.api.renderLabCalc(); await settle();
+    const html = s.els["labcalc-body"].innerHTML;
+    out.calcLines = (html.match(/data-lcalc-row="([^"]+)"/g) || []).map((m) => m.split('"')[1]);
+    out.calcLoaded = { mockupFixed: /data-lcalc-mode="mockup"[\s\S]*?<option value="fixed" selected/.test(html),
+                        companyRateShown: html.indexOf("$40.00 an hour") !== -1 };
+
+    // a SAVED fixed line shows in Try it with its cost: 3 guys x 0.5 days x $40 x 8h = $480
+    s.api.renderTryIt();
+    out.tryFixed = { hasMockup: s.els["labcalc-tryout"].innerHTML.indexOf("Mock-up") !== -1,
+                     total: /data-tryit-total>\$480\.00</.test(s.els["labcalc-tryout"].innerHTML) };
+
+    // pick From SF on Polishing: incomplete, so it is said in words and NOTHING is sent
+    await s.api.calcEdit(sel("polishing", "sf"));
+    out.sfIncomplete = { sent: s.calcPuts.length, alert: s.els["labcalc-alert"].textContent };
+    await s.api.calcEdit(box("polishing", "crew", "3"));
+    await s.api.calcEdit(box("polishing", "sf_per_day", "2,500"));
+    await s.api.calcEdit(box("polishing", "hours_per_day", "10"));
+    out.sfSaved = { puts: s.calcPuts.map((p) => p.body), alert: s.els["labcalc-alert"].textContent,
+                    url: s.calcPuts[0].url };
+
+    // Try it: 12,000 SF -> ceil(12000/2500) = 5 days; 3x5x$40x10h = $6,000; plus mock-up $480
+    const putsBefore = s.calcPuts.length;
+    s.api.setTry("12000"); s.api.renderTryIt();
+    const t = s.els["labcalc-tryout"].innerHTML;
+    out.trySf = { days5: /Polishing<\/td><td class="n">3<\/td><td class="n">5<\/td><td class="n">10<\/td>/.test(t),
+                  total: /data-tryit-total>\$6,480\.00</.test(t), changedNothing: s.calcPuts.length === putsBefore };
+    s.api.setTry("12501"); s.api.renderTryIt();
+    out.tryRoundsUp = /Polishing<\/td><td class="n">3<\/td><td class="n">6<\/td>/.test(s.els["labcalc-tryout"].innerHTML);
+
+    // back to Not set clears it on the server
+    await s.api.calcEdit(sel("polishing", ""));
+    out.cleared = { last: s.calcPuts[s.calcPuts.length - 1].body, savedGone: !("polishing" in s.api.saved()) };
+  }
+  // refused saves put the line back
+  {
+    const s = make({ calcPutStatus: 403 });
+    s.api.renderLabCalc(); await settle();
+    await s.api.calcEdit(sel("mockup", "fixed"));
+    await s.api.calcEdit(box("mockup", "guys", "2"));
+    await s.api.calcEdit(box("mockup", "days", "1"));
+    out.calc403 = { alert: s.els["labcalc-alert"].textContent, kept: "mockup" in s.api.calc() };
+  }
+  // an absent table: the read fails, every line reads Not set, the tab still draws
+  {
+    const s = make({ calcReadFails: true });
+    s.api.renderLabCalc(); await settle();
+    const html = s.els["labcalc-body"].innerHTML;
+    out.calcAbsent = { drew: html.indexOf('data-lcalc-row="polishing"') !== -1,
+                       notSet: html.indexOf("Left blank on a new estimate") !== -1,
+                       travelStill: html.indexOf("Lodging") !== -1,
+                       tryEmpty: s.els["labcalc-tryout"].innerHTML.indexOf("No line has a mode saved") !== -1 };
+  }
+  // a non-admin sees no controls
+  {
+    const s = make({ admin: false, calc: [{ line_id: "mockup", mode: "fixed", guys: 3, days: 1, hours_per_day: 10, rate: null }] });
+    s.api.renderLabCalc(); await settle();
+    const html = s.els["labcalc-body"].innerHTML;
+    out.calcNonAdmin = { controls: (html.match(/data-lcalc="/g) || []).length +
+                                   (html.match(/data-lcalc-mode/g) || []).length };
   }
 
   console.log(JSON.stringify(out));

@@ -1379,6 +1379,7 @@
       '<div class="f"><label>Guys</label>' +
       '<input class="n" data-lab="' + i + '" data-k="guys" value="' +
       esc(nv(r.guys)) + '"' + (auto ? ' data-auto="1"' : '') + '>' +
+      dfltWarnHtml('data-calcwarn="' + i + ':guys"', calcDefaultText(r, "guys")) +
       // "Guys", never "Crew" -- Hanz renamed that column and
       // test_nothing_on_screen_says_labour_or_crew holds the page to it.
       '<p class="hint">' + (auto ? 'Man-days from the tasks above.'
@@ -1386,6 +1387,7 @@
 
       '<div class="f"><label>' + (hours ? "Hours" : "Days") + '</label>' +
       '<input class="n" data-lab="' + i + '" data-k="days" value="' + esc(nv(r.days)) + '">' +
+      dfltWarnHtml('data-calcwarn="' + i + ':days"', calcDefaultText(r, "days")) +
       '<p class="hint">' + (hours ? "Drive time, each way counted." : "How long it takes.") +
       '</p></div>' +
 
@@ -1399,7 +1401,18 @@
       '<div class="costbox' + (B.laborCost(r) > 0 ? "" : " empty") + '">' +
       esc(moneyAuto(B.laborCost(r))) + '</div>' +
       '<p class="hint">' + (hours ? "guys × hours × rate" :
-        "guys × days × rate × " + B.HOURS_PER_DAY) + '</p></div>' +
+        "guys × days × rate × " + B.dayHours(r)) + '</p></div>' +
+      // HOURS A DAY, only on a line the Labor Calculator filled (it carries calc_default): 8 or 10.
+      (r.calc_default && !hours
+        ? '<div class="f"><label>Hours a day</label><select data-lab="' + i +
+          '" data-k="hours_per_day" aria-label="Hours a day">' +
+          [8, 10].map(function (h) {
+            return '<option value="' + h + '"' + (B.dayHours(r) === h ? " selected" : "") + '>' + h +
+              '</option>';
+          }).join("") + '</select>' +
+          dfltWarnHtml('data-calcwarn="' + i + ':hours_per_day"', calcDefaultText(r, "hours_per_day")) +
+          '</div>'
+        : "") +
 
       '</div>' + (hours
         // Rendered unconditionally on hours rows -- CSS (`.lab:not(.inert) .inertline`) decides
@@ -1899,6 +1912,10 @@
       var row = M.labor[parseInt(el.getAttribute("data-ratedflt-for"), 10)];
       paintDfltWarn(el, rateDefaultText(row));
     });
+    document.querySelectorAll("[data-calcwarn]").forEach(function (el) {
+      var parts = el.getAttribute("data-calcwarn").split(":");
+      paintDfltWarn(el, calcDefaultText(M.labor[parseInt(parts[0], 10)], parts[1]));
+    });
     document.querySelectorAll("[data-lcost-for]").forEach(function (el) {
       el.textContent = moneyAuto(B.laborCost(M.labor[parseInt(
         el.getAttribute("data-lcost-for"), 10)]));
@@ -2039,7 +2056,22 @@
   /** The warning under a labor rate box: the shared "Default value: $X.XX" when this row's rate is
    *  not the company rate (a blank one included), "" (hidden) while the two agree. */
   function rateDefaultText(row) {
-    return dfltWarnText(B.num((row || {}).rate) !== LABOR_RATE, B.money2(LABOR_RATE));
+    // A line the Labor Calculator filled carries its own default rate (the line's, else the
+    // company's at the time) -- warn against THAT, so an untouched calculator rate never shows
+    // "Default value" and a changed one names the number it started from.
+    var d = (row || {}).calc_default;
+    var dflt = d ? B.num(d.rate) : LABOR_RATE;
+    return dfltWarnText(B.num((row || {}).rate) !== dflt, B.money2(dflt));
+  }
+
+  /** The warning under a calculator-filled labor box ("guys", "days" or "hours_per_day"): the
+   *  shared "Default value: N" while the box differs from what the Labor Calculator filled, "" on a
+   *  row it never filled (every saved bid) and while the two agree. */
+  function calcDefaultText(row, field) {
+    var d = (row || {}).calc_default;
+    if (!d || B.laborCalcDiffers(row).indexOf(field) < 0) return "";
+    var v = field === "hours_per_day" ? B.dayHours(d) : d[field];
+    return dfltWarnText(true, field === "hours_per_day" ? v + " hours" : (v === "" ? "blank" : v));
   }
 
   // Space and Enter work the on/off slider from the keyboard, as they would a button.
@@ -2472,6 +2504,14 @@
   document.addEventListener("change", function (e) {
     var el = e.target;
     if (!el || !el.getAttribute) return;
+    // HOURS A DAY on a calculator-filled labor line is a <select>, which the "input" handler above
+    // skips (it only takes <input>); it reprices here, the way the takeoff unit select does.
+    var hl = el.getAttribute("data-lab");
+    if (hl !== null && el.getAttribute("data-k") === "hours_per_day") {
+      if (M.labor[parseInt(hl, 10)]) M.labor[parseInt(hl, 10)].hours_per_day = el.value;
+      changed(false);
+      return;
+    }
     var ti = el.getAttribute("data-tk");
     if (ti === null) return;
     var i = parseInt(ti, 10);
@@ -2522,6 +2562,20 @@
       var res = await api("/api/library/labor");
       var j = await res.json();
       return (j && j.labor instanceof Array) ? j.labor : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  /** The Labor Calculator's saved modes, or [] when there are none or the read cannot answer.
+   *  NEVER THROWS, like loadLaborDefaults: `library_labor_calc` may not exist on a database yet
+   *  (backend/ops/labor_calc.sql), and a missing table has to mean "no line has a mode" -- the
+   *  estimate opens with today's blank crew rows -- never a broken screen. */
+  async function loadLaborCalc() {
+    try {
+      var res = await api("/api/library/labor-calc");
+      var j = await res.json();
+      return (j && j.calc instanceof Array) ? j.calc : [];
     } catch (e) {
       return [];
     }
@@ -2606,6 +2660,9 @@
     // Lodging and Per Diem rates ride the same gate as the labor defaults: a NEW bid copies them
     // from Markups -> Global once; a saved bid keeps the rates it was saved with.
     var travelRates = laborDefaults ? loadTravelRates() : null;
+    // The Labor Calculator's per-line modes: same gate again -- a NEW bid fills its default labor
+    // from them, a saved bid is never recomputed.
+    var laborCalc = laborDefaults ? loadLaborCalc() : null;
 
     // THE CONDITION DEFAULTS, ON THE SAME TERMS AND WITH A STRICTER GATE. B.conditionsUnstated is
     // true only when NOTHING has ever been saved for this estimate, because Hanz's rule for this
@@ -2704,6 +2761,14 @@
         ? B.seedDefaultTakeoff(M.takeoff, ASMS, ITEMS, RESERVED_ITEM_IDS,
                                state.polish_sf, state.polish_2_sf)
         : B.seedTakeoffSf(M.takeoff, state.polish_sf, state.polish_2_sf);
+    }
+    // THE LABOR CALCULATOR, AFTER THE TAKEOFF SEED because "from SF" lines need the job's SF
+    // (B.takeoffSf, the same figure the bid divides by). New bids only (laborCalc is null
+    // otherwise). Nothing is written to the draft here; the first edit saves the filled rows, and
+    // from then on the rows are the BID's.
+    if (laborCalc) {
+      M.labor = B.applyLaborCalc(M.labor, await laborCalc, B.takeoffSf(M.takeoff), LABOR_RATE);
+      syncAutoGuys();
     }
     // THE TAKEOFF TOTAL IS polish_sf, SO MAKE THE DRAFT SAY SO NOW. Two ways the draft can be
     // behind the model this page just opened with: (1) seeding filled rows in memory only, so
