@@ -2424,10 +2424,11 @@
    *  the caret would make the first character somebody types the last one that lands. */
   function refocus(sel, typed) {
     var el = document.querySelector(sel);
-    if (!el || !el.focus) return;
+    if (!el) return;
     // The rebuilt box was drawn from the stored number, so a half-typed "12." came back as "12".
     // Put back exactly what was typed.
     if (typed !== undefined && el.value !== typed) el.value = typed;
+    if (!el.focus) return;
     el.focus();
     try { el.setSelectionRange(el.value.length, el.value.length); } catch (err) {}
   }
