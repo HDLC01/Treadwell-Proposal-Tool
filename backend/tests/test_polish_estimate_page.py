@@ -2895,7 +2895,7 @@ def test_every_row_kind_shows_the_library_coverage_and_prices_with_a_typed_one(r
     defaults." A row that arrives from the Defaults carries NO coverage of its own, so the box has
     to show the LIBRARY's figure (275 for OPF, 275 / 775 for the two lines of Polish 800 Grit --
     none of them the old 3,500 constant) and the total has to price with it. A number typed over
-    it prices the bid, and the line under the box says "Library default: N"; the library item
+    it prices the bid, and the amber line directly under the box says "Default value: N"; the library item
     itself is never touched. An ASSEMBLY row gets one box per material line.
 
     Mutation: render the assembly row with no coverage boxes; have priceAssemblyRow ignore the
@@ -2909,13 +2909,17 @@ def test_every_row_kind_shows_the_library_coverage_and_prices_with_a_typed_one(r
     assert f["asmCost"] == "$10,599.98" and r["expectedFirstAsm"] == pytest.approx(10599.9771)
     m = r["matTyped"]
     assert m["cost"] == "$1,707.65" and m["expected"] == pytest.approx(1707.654)
-    assert m["hint"] == "Library default: 275"
+    assert m["hint"] == "How far one goes, for this job."
+    assert m["warn"] == {"text": "Default value: 275", "hidden": False}, m["warn"]
     a = r["asmTyped"]
     assert a["cost"] == "$10,258.45" and a["expected"] == pytest.approx(10258.4463), a
-    assert a["hint0"] == "Library default: 275"
+    assert a["hint0"] == "How far one goes, for this job."
+    assert a["warn0"] == {"text": "Default value: 275", "hidden": False} and a["warn1"] == {"text": "", "hidden": True}, (a["warn0"], a["warn1"])
     assert a["hint1"] == "Blank uses the library's 775.", "an untouched line keeps the library figure"
     assert a["line_cov"] == {"0": "300"} and a["libraryUntouched"] == 275
     assert r["matBackToLib"]["hint"] == "How far one goes, for this job."
+    assert r["matBackToLib"]["warn"] == {"text": "", "hidden": True}, "typing the default back must hide the warning"
+    assert "Library default" not in str(r), "the old wording is gone"
     # a different assembly means different lines: the old lines' coverage must not follow
     assert r["switched"] == {"line_cov": True, "boxes": 1}, r["switched"]
 
@@ -2936,13 +2940,15 @@ def test_joint_filler_and_dye_cards_carry_a_per_bid_coverage_box(ran):
     assert u["after"]["jfCost"] == "$1,500" and u["jfKits"] == 3
     assert j["after"]["jfCost"] == "$1,000" and j["jfKits"] == 2
     assert j["after"]["jfQtyHint"] == "6,000 sq ft, at one kit per 3,000, rounded up."
-    assert j["after"]["jfHint"] == "Library default: 2000"
+    assert j["after"]["jfWarn"] == {"text": "Default value: 2000", "hidden": False}, j["after"]["jfWarn"]
+    assert u["after"]["jfWarn"] == {"text": "", "hidden": True} and u["before"]["dyeWarn"] == {"text": "", "hidden": True}
     assert j["matBefore"] - j["matAfter"] == pytest.approx(500)
     assert j["savedModel"] == {"joint_filler": "3000"} and j["migrated"] == {"joint_filler": "3000"}
     assert u["savedModel"] is None
     assert c["backToLibrary"]["after"]["jfHint"] == "How far one goes, for this job."
+    assert c["backToLibrary"]["after"]["jfWarn"] == {"text": "", "hidden": True}
     d = c["libDye"]
-    assert d["before"]["dyeBox"] == ["", "2"] and d["after"]["dyeHint"] == "Library default: 2"
+    assert d["before"]["dyeBox"] == ["", "2"] and d["after"]["dyeWarn"] == {"text": "Default value: 2", "hidden": False}
     assert d["dyeCost"] == pytest.approx(6000 / 4 * 0.2 * 2), d["dyeCost"]
 
 
@@ -2982,7 +2988,7 @@ def test_a_saved_bid_keeps_its_rates_and_says_what_the_default_is(ran):
     lr = ran["laborRate"]
     assert lr["saved"] == {"polishing": 33, "mockup": 36, "travel": 33}, lr["saved"]
     assert lr["savedFetchedLaborDefaults"] is False
-    assert [x["text"] for x in lr["savedDefaultLines"]] == ["Default $40.00"] * 3
+    assert [x["text"] for x in lr["savedDefaultLines"]] == ["Default value: $40.00"] * 3
     assert all(not x["hidden"] for x in lr["savedDefaultLines"])
 
 

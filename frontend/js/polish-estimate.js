@@ -779,16 +779,39 @@
    *  Typing the library's own number back reads as the plain line, because nothing differs. */
   function covLine(typed, lib) {
     typed = B.num(typed); lib = B.num(lib);
-    if (typed > 0) {
-      return (lib > 0 && typed !== lib) ? "Library default: " + lib : "How far one goes, for this job.";
-    }
+    if (typed > 0) return "How far one goes, for this job.";
     if (lib > 0) return "Blank uses the library's " + lib + ".";
     return "How far one goes. The library has no default for it.";
+  }
+
+  /** THE ONE "Default value: N" WARNING, shared by every box whose default the estimator may
+   *  override (coverage on every row kind, the labor rate). It sits directly under the box in the
+   *  page's amber `.warnline`, is empty/hidden while the box agrees with the default, and goes
+   *  away again when the default is typed back. `text` is "" when there is nothing to warn about. */
+  function dfltWarnText(differs, shown) {
+    return differs ? "Default value: " + shown : "";
+  }
+  function dfltWarnHtml(attrs, text) {
+    return '<p class="warnline dflt-warn" ' + attrs + (text ? "" : " hidden") + '>' +
+      esc(text) + '</p>';
+  }
+  function paintDfltWarn(el, text) {
+    el.textContent = text;
+    el.hidden = !text;
+  }
+  /** Coverage: warns only when a typed figure differs from a library figure that exists. */
+  function covWarn(typed, lib) {
+    typed = B.num(typed); lib = B.num(lib);
+    return dfltWarnText(typed > 0 && lib > 0 && typed !== lib, lib);
   }
 
   function covHint(row) {
     var it = itemById((row || {}).item_id);
     return covLine((row || {}).coverage, it && it.coverage);
+  }
+  function covRowWarn(row) {
+    var it = itemById((row || {}).item_id);
+    return covWarn((row || {}).coverage, it && it.coverage);
   }
 
   /** What THIS BID types for a condition card's coverage (Joint Filler, Dye). 0 when blank. */
@@ -968,6 +991,10 @@
       covHint: (function () {
         var it = condCovItem(c.key);
         return covLine(((M && M.cond_cov) || {})[c.key], it && it.coverage);
+      })(),
+      covWarn: (function () {
+        var it = condCovItem(c.key);
+        return covWarn(((M && M.cond_cov) || {})[c.key], it && it.coverage);
       })()
     };
   }
@@ -1028,6 +1055,7 @@
       '<div class="f"><label>Coverage</label>' +
       '<input class="n" data-condcov="' + esc(c.key) + '" value="' +
       esc(nv(((M && M.cond_cov) || {})[c.key])) + '" placeholder="' + esc(f.covPlaceholder) + '">' +
+      dfltWarnHtml('data-condfig="' + esc(c.key) + '.covwarn"', f.covWarn) +
       hint("covhint", f.covHint) + "</div>" +
 
       '<div class="f"><label>Total cost</label>' +
@@ -1169,6 +1197,7 @@
         ? '<div class="f"><label>Coverage</label>' +
           '<input class="n" data-tk="' + i + '" data-k="coverage" value="' +
           esc(nv(r.coverage)) + '" placeholder="' + esc(covPlaceholder(r)) + '">' +
+          dfltWarnHtml('data-covwarn-for="' + i + '"', covRowWarn(r)) +
           '<p class="hint" data-covhint-for="' + i + '">' + esc(covHint(r)) + '</p></div>'
         : "") +
 
@@ -1194,6 +1223,7 @@
       return '<div class="f"><label>' + esc(x.name) + ' coverage</label>' +
         '<input class="n" data-asmcov="' + i + '" data-line="' + x.j + '" value="' +
         esc(nv(x.typed)) + '" placeholder="' + esc(x.lib ? String(x.lib) : "") + '">' +
+        dfltWarnHtml('data-asmcovwarn="' + i + ':' + x.j + '"', covWarn(x.typed, x.lib)) +
         '<p class="hint" data-asmcovhint="' + i + ':' + x.j + '">' +
         esc(covLine(x.typed, x.lib)) + '</p></div>';
     }).join("") + '</div>';
@@ -1362,9 +1392,8 @@
       '<div class="f"><label>Rate</label>' +
       '<span class="mny">$<input class="n" data-lab="' + i + '" data-k="rate" value="' +
       esc(nv(r.rate)) + '"></span>' +
-      '<p class="hint">Per hour.</p>' +
-      '<p class="warnline" data-ratedflt-for="' + i + '"' + (rateDiffers(r) ? "" : " hidden") + '>' +
-      esc(rateDefaultText(r)) + '</p></div>' +
+      dfltWarnHtml('data-ratedflt-for="' + i + '"', rateDefaultText(r)) +
+      '<p class="hint">Per hour.</p></div>' +
 
       '<div class="f"><label>Cost</label>' +
       '<div class="costbox' + (B.laborCost(r) > 0 ? "" : " empty") + '">' +
@@ -1868,8 +1897,7 @@
     });
     document.querySelectorAll("[data-ratedflt-for]").forEach(function (el) {
       var row = M.labor[parseInt(el.getAttribute("data-ratedflt-for"), 10)];
-      el.textContent = rateDefaultText(row);
-      el.hidden = !rateDiffers(row);
+      paintDfltWarn(el, rateDefaultText(row));
     });
     document.querySelectorAll("[data-lcost-for]").forEach(function (el) {
       el.textContent = moneyAuto(B.laborCost(M.labor[parseInt(
@@ -1948,6 +1976,17 @@
       put("cost", f.cost, "costbox" + (f.costEmpty ? " empty" : ""));
       put("rate", f.rate);
       put("covhint", f.covHint);
+      var cw = document.querySelector('[data-condfig="' + c.key + '.covwarn"]');
+      if (cw) paintDfltWarn(cw, f.covWarn);
+    });
+    document.querySelectorAll("[data-covwarn-for]").forEach(function (el) {
+      paintDfltWarn(el, covRowWarn(M.takeoff[parseInt(el.getAttribute("data-covwarn-for"), 10)]));
+    });
+    document.querySelectorAll("[data-asmcovwarn]").forEach(function (el) {
+      var parts = el.getAttribute("data-asmcovwarn").split(":");
+      var row = M.takeoff[parseInt(parts[0], 10)];
+      var hit = asmCovLines(row).filter(function (x) { return String(x.j) === parts[1]; })[0];
+      if (hit) paintDfltWarn(el, covWarn(hit.typed, hit.lib));
     });
     // The Coverage hints under every takeoff box: typing takes `changed(false)`, which repaints in
     // place, so "Library default: N" has to appear here rather than wait for a rebuild.
@@ -1997,13 +2036,10 @@
     return { id: "u_" + Date.now() + "_" + laborSeq, label: "", guys: "", days: "", rate: LABOR_RATE };
   }
 
-  /** The line under a labor rate box. Says "Default $X" when this row's rate is not the company
-   *  rate (a blank one included), and is hidden while the two agree. */
+  /** The warning under a labor rate box: the shared "Default value: $X.XX" when this row's rate is
+   *  not the company rate (a blank one included), "" (hidden) while the two agree. */
   function rateDefaultText(row) {
-    return "Default " + B.money2(LABOR_RATE);
-  }
-  function rateDiffers(row) {
-    return B.num((row || {}).rate) !== LABOR_RATE;
+    return dfltWarnText(B.num((row || {}).rate) !== LABOR_RATE, B.money2(LABOR_RATE));
   }
 
   // Space and Enter work the on/off slider from the keyboard, as they would a button.

@@ -501,6 +501,10 @@ function need(built, sel) {
   if (!el) throw new Error("the page rendered nothing matching " + sel);
   return el;
 }
+const warn = (built, sel) => {
+  const el = built.doc.querySelector(sel);
+  return el ? { text: el.textContent, hidden: !!el.hidden } : null;
+};
 const txt = (built, sel) => {
   const el = built.doc.querySelector(sel);
   return el === null ? null : el.textContent;
@@ -2304,6 +2308,8 @@ const rendered = [];      // every string the page put on screen, for the Labour
         return { jfBox: box("joint_filler"), dyeBox: box("dye"),
                  jfHint: txt(b, '[data-condfig="joint_filler.covhint"]'),
                  dyeHint: txt(b, '[data-condfig="dye.covhint"]'),
+                 jfWarn: warn(b, '[data-condfig="joint_filler.covwarn"]'),
+                 dyeWarn: warn(b, '[data-condfig="dye.covwarn"]'),
                  jfCost: txt(b, '[data-condfig="joint_filler.cost"]'),
                  jfQty: txt(b, '[data-condfig="joint_filler.qty"]'),
                  jfQtyHint: txt(b, '[data-condfig="joint_filler.qtyhint"]') };
@@ -2362,16 +2368,20 @@ const rendered = [];      // every string the page put on screen, for the Labour
       const asmWith = (items) => L.priceAssembly(ASMS[0], items, 12500).total;
       typeInto(b, '[data-tk="0"][data-k="coverage"]', "300");
       const matTyped = { cost: cost(0), hint: txt(b, '[data-covhint-for="0"]'),
+                         warn: warn(b, '[data-covwarn-for="0"]'),
                          expected: L.priceLine({ item_id: "i1" }, swap("i1", 300), 5500).cost };
       typeInto(b, '[data-asmcov="1"][data-line="0"]', "300");
       const asmTyped = { cost: cost(1), hint0: txt(b, '[data-asmcovhint="1:0"]'),
+                         warn0: warn(b, '[data-asmcovwarn="1:0"]'),
+                         warn1: warn(b, '[data-asmcovwarn="1:1"]'),
                          hint1: txt(b, '[data-asmcovhint="1:1"]'),
                          expected: asmWith(swap("i1", 300)),
                          libraryUntouched: ITEMS.find((i) => i.id === "i1").coverage,
                          line_cov: clone(b.api.model().takeoff[1].line_cov),
                          matTotal: b.api.materialTotal() };
       typeInto(b, '[data-tk="0"][data-k="coverage"]', "275");
-      const matBackToLib = { hint: txt(b, '[data-covhint-for="0"]') };
+      const matBackToLib = { hint: txt(b, '[data-covhint-for="0"]'),
+                             warn: warn(b, '[data-covwarn-for="0"]') };
       // Switching the row to a different assembly drops the old lines' coverage.
       typeInto(b, '[data-tk="1"][data-k="pick"]', "Cove Base");
       const switched = { line_cov: b.api.model().takeoff[1].line_cov === undefined,
