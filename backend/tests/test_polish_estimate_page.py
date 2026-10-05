@@ -3311,3 +3311,24 @@ def test_lodging_and_per_diem_rates_warn_against_the_markup_global_rate_they_wer
     assert w["over"] == {"text": "Default value: $80.00", "hidden": False}
     assert w["back"]["hidden"] is True
     assert all(x["hidden"] for x in w["saved"]), w["saved"]
+
+
+def test_the_beta_page_writes_no_labor_cells_so_the_hours_per_day_cannot_split_the_workbook(ran):
+    """G4. Kyle's Polish tab prices labor as D37 = (A37*B37*C37)*IF($E$35="8 hour days",8,10) with ONE
+    sheet-wide E35, so a workbook labor cell holding a 10-hour line's days would be priced at 8.
+    What THIS page actually writes on a save (a bid mixing 10- and 8-hour lines): only the condition
+    cells and the Dye / Joint Filler rate and quantity cells -- never rows 35-46 of Polish (labor,
+    travel, E35) nor any Epoxy labor row. So the screen's labor ($6,000 + $640 = $6,640 here) never
+    reaches the workbook at all and the mixed-hours split cannot occur.
+
+    This pins that. The day a writer is added for those cells it MUST scale each line's days by
+    its hours_per_day / 8 (E35 stays '8 hour days'), and this test goes red to say so.
+
+    Mutation: have saveSoon add any Polish!A37..D46 key to cell_values -- this fails."""
+    import re
+    w = ran["laborWrites"]
+    assert w["screenLabor"] == 3 * 5 * 40 * 10 + 2 * 1 * 40 * 8
+    labor_rows = re.compile(r"^Polish!([A-Z]+)(3[5-9]|4[0-6])$")
+    hit = [k for k in w["keys"] if labor_rows.match(k) or k.startswith("Epoxy!") and
+           re.match(r"^Epoxy!([A-Z]+)(4[5-9]|5[0-9])$", k)]
+    assert hit == [], "the page now writes labor cells -- scale days by hours_per_day/8: %r" % hit

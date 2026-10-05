@@ -2294,6 +2294,24 @@ const rendered = [];      // every string the page put on screen, for the Labour
       staleB29: STALE_B29,
     };
 
+    // ── G4: WHAT A SAVE WRITES FOR LABOR ── a bid mixing 8- and 10-hour lines, saved through the
+    // page's own save. Reports every cell_values key so the test can prove which labor cells (if
+    // any) reach the workbook, and the screen's own labor cost for the same lines.
+    {
+      const model = clone(MODEL);
+      model.labor = [
+        { id: "polishing", label: "Polishing", guys: 3, days: 5, rate: 40, hours_per_day: 10 },
+        { id: "mockup", label: "Mock-up", guys: 2, days: 1, rate: 40, hours_per_day: 8 },
+      ];
+      const b = build({ blob: blob({ polish_estimate: model }) });
+      await b.api.init();
+      b.api.saveSoon();
+      b.clock.fire();
+      const save = b.rec.saves[b.rec.saves.length - 1] || {};
+      out.laborWrites = { keys: Object.keys(save.cell_values || {}),
+                          screenLabor: B.laborTotal(b.api.model().labor) };
+    }
+
     // ── B2: COVERAGE, AS THIS BID'S OWN FIGURE ──
     // Joint Filler / Dye cards, a material row (what a loaded default becomes) and an assembly row
     // (each material line) all carry a Coverage box; a typed number prices the bid, reaches the
