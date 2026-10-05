@@ -3278,3 +3278,22 @@ def test_no_sf_leaves_days_blank_and_an_absent_table_opens_exactly_as_before(ran
     w = lc["noSfWarn"]
     assert w is not None and (w["hidden"] or w["text"].strip() == "")
     assert lc["gone"]["same"] is True and "calc_default" not in lc["gone"]["polishing"]
+
+
+def test_labor_days_follow_the_takeoff_until_the_estimator_edits_them(ran):
+    """G2. A From-SF line (3 crew, 2,500 SF/day): 12,000 SF -> 5 days; the takeoff goes to 20,000 ->
+    8 days, in the box too, with no 'Default value' warning; a fixed line never moves. After the
+    estimator types 11 the next SF change leaves 11. A new bid with no SF fills days as soon as SF
+    exists (5,000 -> 2). A SAVED bid's stale marker row (9 days on 17,500 SF) is not recomputed on
+    open or by an unrelated edit.
+
+    Mutation: drop the followLaborDays call in changed() -- afterUp stays 5."""
+    f = ran["laborCalc"]["followed"]
+    assert f["start"] == 5
+    assert f["afterUp"] == 8 and f["boxAfterUp"] == "8"
+    assert f["warnAfterUp"] == {"text": "", "hidden": True}
+    assert f["fixedStays"] == 1
+    assert str(f["editedStays"]) == "11"
+    assert f["noSfBlank"] == "" and f["noSfFilled"] == 2
+    assert f["savedOnOpen"] == 9 and f["savedAfterOtherEdit"] == 9
+    assert f["pureMoves"] == [4, 5]

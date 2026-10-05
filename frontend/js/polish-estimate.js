@@ -58,6 +58,8 @@
   // same silent mix-up in a different direction.
   var state = {};
   var M = null;
+  // The takeoff SF the labor days last followed (null until the page has opened). See changed().
+  var followSf = null;
 
   // The library, loaded once at boot. Prices are recomputed from these on every keystroke rather
   // than stored on the row: an item's cost can move, and a stored line total would then disagree
@@ -559,6 +561,13 @@
    *  `rerender` false repaints the computed figures in place instead of rebuilding the panel:
    *  rebuilding mid-keystroke moves the caret out of the field being typed in. */
   function changed(rerender) {
+    // G2: a "From SF" labor line's untouched Days follow the takeoff -- only when the SF moved in
+    // THIS session (followSf is set once the page has opened), so reopening a saved bid moves nothing.
+    var sfNow = B.takeoffSf(M.takeoff);
+    if (followSf !== null && sfNow !== followSf) {
+      followSf = sfNow;
+      M.labor = B.followLaborDays(M.labor, sfNow);
+    }
     syncAutoGuys();
     paintBid();
     paintRail();
@@ -1919,6 +1928,15 @@
       var parts = el.getAttribute("data-calcwarn").split(":");
       paintDfltWarn(el, calcDefaultText(M.labor[parseInt(parts[0], 10)], parts[1]));
     });
+    // A followed Days box (G2) is a derived number too: show what changed() moved it to, unless the
+    // estimator is typing in it.
+    document.querySelectorAll('[data-lab][data-k="days"]').forEach(function (el) {
+      var r = M.labor[parseInt(el.getAttribute("data-lab"), 10)];
+      if (!r || !r.calc_default || !(B.num(r.calc_default.sf_per_day) > 0)) return;
+      if (document.activeElement === el) return;
+      var v = r.days == null ? "" : String(r.days);
+      if (el.value !== v) el.value = v;
+    });
     document.querySelectorAll("[data-lcost-for]").forEach(function (el) {
       el.textContent = moneyAuto(B.laborCost(M.labor[parseInt(
         el.getAttribute("data-lcost-for"), 10)]));
@@ -2783,6 +2801,7 @@
       M.labor = B.stampRateDefaults(M.labor);
       syncAutoGuys();
     }
+    followSf = B.takeoffSf(M.takeoff);
     // THE TAKEOFF TOTAL IS polish_sf, SO MAKE THE DRAFT SAY SO NOW. Two ways the draft can be
     // behind the model this page just opened with: (1) seeding filled rows in memory only, so
     // polish_sf held System 1 alone and computed_bid held nothing until the first edit; (2) the

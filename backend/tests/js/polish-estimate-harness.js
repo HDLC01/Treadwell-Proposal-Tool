@@ -3450,7 +3450,54 @@ const rendered = [];      // every string the page put on screen, for the Labour
     const plain = build({ blob: blob({ polish_estimate: null, polish_sf: 12000 }) });
     await plain.api.init();
 
+    // G2: days FOLLOW the takeoff while untouched.
+    const setSf = (built, v) => {
+      built.api.go(0);
+      typeInto(built, '[data-tk="0"][data-k="measurement"]', v);
+      built.api.go(1);
+    };
+    const daysOf = (built, id) => rowOf(built, id).days;
+    const fol = build({ blob: blob({ polish_estimate: null, polish_sf: 12000 }), laborCalc: CALC,
+                        markupRules: RULE40 });
+    await fol.api.init();
+    fol.api.go(1);
+    const fi = idx(fol, "polishing");
+    const followed = { start: daysOf(fol, "polishing") };
+    setSf(fol, "20000");
+    followed.afterUp = daysOf(fol, "polishing");
+    followed.boxAfterUp = fol.doc.querySelector('[data-lab="' + fi + '"][data-k="days"]').value;
+    followed.warnAfterUp = warn(fol, fi + ":days");
+    followed.fixedStays = daysOf(fol, "mockup");
+    // an EDITED days keeps the bid's number when the SF moves again
+    typeInto(fol, '[data-lab="' + fi + '"][data-k="days"]', "11");
+    setSf(fol, "30000");
+    followed.editedStays = daysOf(fol, "polishing");
+    // a new bid with NO SF fills its days as soon as SF exists
+    const fn = build({ blob: blob({ polish_estimate: null, polish_sf: 0 }), laborCalc: CALC });
+    await fn.api.init();
+    fn.api.go(1);
+    followed.noSfBlank = daysOf(fn, "polishing");
+    fn.api.go(0);
+    typeInto(fn, '[data-tk="0"][data-k="measurement"]', "5000");
+    fn.api.go(1);
+    followed.noSfFilled = daysOf(fn, "polishing");
+    // a SAVED bid: a stale marker row is NOT recomputed on open, nor by an unrelated edit
+    const SAVEDM = { version: 2, takeoff: clone(MODEL.takeoff),
+      labor: [{ id: "polishing", label: "Polishing", guys: 3, days: 9, rate: 33, hours_per_day: 8,
+                calc_default: { guys: 3, days: 9, rate: 33, hours_per_day: 8, sf_per_day: 2500 } }],
+      conditions: clone(MODEL.conditions), contingency: 0, fees: 0, totals: {} };
+    const sv2 = build({ blob: blob({ polish_estimate: clone(SAVEDM) }), laborCalc: CALC });
+    await sv2.api.init();
+    sv2.api.go(1);
+    followed.savedOnOpen = daysOf(sv2, "polishing");
+    typeInto(sv2, '[data-lab="0"][data-k="rate"]', "35");
+    followed.savedAfterOtherEdit = daysOf(sv2, "polishing");
+    followed.pureMoves = B.followLaborDays(
+      [{ id: "x", days: 5, calc_default: { days: 5, sf_per_day: 2500 } },
+       { id: "y", days: 5, calc_default: { days: 5 } }], 10000).map((r) => r.days);
+
     out.laborCalc = {
+      followed: followed,
       first: first, over: over, back: back, hrs: hrs, mockRateBefore: mockRateBefore,
       mockRateAfter: mockRateAfter,
       saved: { polishing: clone(rowOf(sv, "polishing")), asked: sv.rec.fetches.some((u) => /labor-calc/.test(u)) },

@@ -304,6 +304,40 @@
       for (var k in r) if (Object.prototype.hasOwnProperty.call(r, k)) copy[k] = r[k];
       copy.guys = v.guys; copy.days = v.days; copy.rate = v.rate; copy.hours_per_day = v.hours_per_day;
       copy.calc_default = { guys: v.guys, days: v.days, rate: v.rate, hours_per_day: v.hours_per_day };
+      // THE UNTOUCHED-FOLLOW MARKER (G2): a "From SF" line keeps its production rate so its days can
+      // keep following the takeoff (followLaborDays). Fixed lines carry none and never move.
+      var cfg = byId[String(r.id)];
+      if (cfg.mode === "sf" && num(cfg.sf_per_day) > 0) copy.calc_default.sf_per_day = num(cfg.sf_per_day);
+      out[i] = copy;
+    }
+    return out;
+  }
+
+  /** G2: LABOR DAYS FOLLOW THE TAKEOFF, the same pattern as coverage (untouched follows the source,
+   *  edited keeps the bid's number). A row carrying the marker `calc_default.sf_per_day` whose Days
+   *  still read what the calculator filled is moved to ceil(sf / sf_per_day) -- blank while there
+   *  is no SF -- and its calc_default.days moves with it, so the "Default value" warning stays
+   *  quiet. A row whose Days the estimator changed keeps its number. Rows without the marker (every
+   *  fixed line, every row on a saved bid from before this) are never touched. The caller runs it
+   *  only when the takeoff SF CHANGED in this session, so opening a saved bid moves nothing.
+   *  A NEW array; rows that do not move are the same objects. */
+  function followLaborDays(labor, sf) {
+    var out = (labor instanceof Array) ? labor.slice() : [];
+    var area = num(sf);
+    for (var i = 0; i < out.length; i++) {
+      var r = out[i], d = r && r.calc_default;
+      if (!d || !(num(d.sf_per_day) > 0)) continue;
+      var untouched = (isBlank(r.days) && isBlank(d.days)) ||
+        (!isBlank(r.days) && !isBlank(d.days) && num(r.days) === num(d.days));
+      if (!untouched) continue;
+      var next = area > 0 ? Math.ceil(area / num(d.sf_per_day)) : "";
+      if (next === d.days) continue;
+      var copy = {}, dc = {}, k;
+      for (k in r) if (Object.prototype.hasOwnProperty.call(r, k)) copy[k] = r[k];
+      for (k in d) if (Object.prototype.hasOwnProperty.call(d, k)) dc[k] = d[k];
+      dc.days = next;
+      copy.days = next;
+      copy.calc_default = dc;
       out[i] = copy;
     }
     return out;
@@ -1889,6 +1923,6 @@
     // The company labor rate (Markups -> Global): read, applied to a new bid, and the fallback.
     SHIPPED_LABOR_RATE: SHIPPED_LABOR_RATE, laborRateOrShipped: laborRateOrShipped,
     laborRateFromRules: laborRateFromRules, applyLaborRate: applyLaborRate,
-    stampRateDefaults: stampRateDefaults
+    stampRateDefaults: stampRateDefaults, followLaborDays: followLaborDays
   };
 });
