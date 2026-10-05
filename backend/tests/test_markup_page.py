@@ -974,6 +974,17 @@ def test_every_global_line_says_plainly_that_it_reaches_no_bid(ran):
             assert "workbook does not read it" in r["explain"], (
                 "%s lost the half that is still true: %r" % (r["line"], r["explain"]))
             continue
+        # CHANGED ON PURPOSE, 2026-10-06: the labor rate and Fees + Textura are read by the beta
+        # too -- each is a new bid's starting figure -- so their rows say so instead of "changes
+        # no bid", and still say the workbook does not read them.
+        if r["line"] in ("labor_rate", "fees_textura"):
+            assert "starts every NEW bid" in r["explain"], (
+                "%s does not say the beta reads it: %r" % (r["line"], r["explain"]))
+            assert "workbook does not read it" in r["explain"], (
+                "%s lost the half that is still true: %r" % (r["line"], r["explain"]))
+            assert "changes no bid" not in r["explain"], (
+                "%s still claims it changes no bid: %r" % (r["line"], r["explain"]))
+            continue
         assert "does not read this line yet" in r["explain"], (
             "%s claims something about a bid: %r" % (r["line"], r["explain"]))
 
