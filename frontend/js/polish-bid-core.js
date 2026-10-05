@@ -96,14 +96,13 @@
    *  hostile "__proto__" is dropped (it never was a real field); every ordinary key copies as before,
    *  so a JSON-serialised row keeps its exact shape. */
   function copyInto(dst, src) {
-    for (var k in src) {
-      if (!Object.prototype.hasOwnProperty.call(src, k)) continue;
-      if (k === "__proto__" || k === "constructor" || k === "prototype") continue;
-      // defineProperty, not `dst[k] =`: it always makes a plain own data property, so even a key the
-      // guard above missed could never reach a setter or a prototype (and CodeQL reads it as safe).
-      Object.defineProperty(dst, k, { value: src[k], writable: true, enumerable: true, configurable: true });
-    }
-    return dst;
+    // No hand-written `dst[k] =` on a user-supplied k (CodeQL js/remote-property-injection): the own
+    // entries are filtered first, Object.fromEntries builds them as plain data properties, and only
+    // then does Object.assign copy that clean object -- the same own-key, set-based copy as before.
+    var safe = Object.entries(src || {}).filter(function (e) {
+      return e[0] !== "__proto__" && e[0] !== "constructor" && e[0] !== "prototype";
+    });
+    return Object.assign(dst, Object.fromEntries(safe));
   }
 
   /** Excel's ROUNDUP(n, 0): away from zero, so -1.2 becomes -2.
