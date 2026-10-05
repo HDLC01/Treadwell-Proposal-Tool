@@ -2084,6 +2084,14 @@
     if (!B.takeoffSf(M.takeoff)) {
       M.takeoff = B.seedTakeoffSf(M.takeoff, state.polish_sf, state.polish_2_sf);
     }
+    // THE TAKEOFF TOTAL IS polish_sf, SO MAKE THE DRAFT SAY SO NOW. Two ways the draft can be
+    // behind the model this page just opened with: (1) seeding filled rows in memory only, so
+    // polish_sf held System 1 alone and computed_bid held nothing until the first edit; (2) the
+    // live intake's beta-continue door saved a polish_sf typed over a takeoff that was already
+    // measured. proposal-review reads polish_sf for the SF token. One debounced save, only when
+    // the two actually differ, so a plain reopen writes nothing.
+    var tkSf = B.takeoffSf(M.takeoff);
+    if (tkSf > 0 && tkSf !== B.num(state.polish_sf)) saveSoon();
 
     renderDatalist();
     $("loading").hidden = true;

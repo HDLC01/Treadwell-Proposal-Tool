@@ -1754,6 +1754,31 @@ const rendered = [];      // every string the page put on screen, for the Labour
       polish_sf: 8250, polish_2_sf: 3100 }) });
     await measured.api.init();
     out.migration.seedMeasured = rowsOf(measured.api.model());
+    // THE DRAFT IS BROUGHT INTO LINE WITH THE MODEL ON OPEN, with no edit. Seeded rows are in
+    // memory only, so without the save polish_sf stays System 1 alone; and a polish_sf typed over
+    // a measured takeoff (the live intake's beta-continue door) has to be put back to the total.
+    const lastSave = (x) => { x.clock.fire(); return x.rec.saves[x.rec.saves.length - 1] || null; };
+    const sTwo = lastSave(two);
+    out.migration.savedAfterSeedTwo = sTwo && { sf: sTwo.polish_sf, bidSf: sTwo.computed_bid.polish_sf };
+    const clobbered = build({ blob: blob({ polish_estimate: { version: 2,
+      takeoff: [{ assembly_id: "", assembly_name: "", measurement: 3000, unit: "SF" },
+                { assembly_id: "", assembly_name: "", measurement: 2000, unit: "SF" }],
+      labor: [], conditions: {}, contingency: 0, fees: 0, totals: {} },
+      polish_sf: 3000 }) });
+    await clobbered.api.init();
+    const sClob = lastSave(clobbered);
+    out.migration.savedAfterClobber = sClob && sClob.polish_sf;
+    // Already in line: a plain reopen writes nothing.
+    const inLine = build({ blob: blob({ polish_estimate: { version: 2,
+      takeoff: [{ assembly_id: "", assembly_name: "", measurement: 5000, unit: "SF" }],
+      labor: [], conditions: {}, contingency: 0, fees: 0, totals: {} },
+      polish_sf: 5000 }) });
+    await inLine.api.init();
+    out.migration.savesWhenInLine = lastSave(inLine) ? 1 : 0;
+    // The helper's own guard, which init's !takeoffSf check hides: an LF-only measurement is still
+    // a measurement, so neither intake number may be seeded beside it.
+    const lfRows = [{ assembly_id: "", assembly_name: "", measurement: 900, unit: "LF" }];
+    out.migration.seedOverLf = rowsOf({ takeoff: B.seedTakeoffSf(lfRows, 8250, 3100) });
     out.migration.freshLabor = fresh.api.model().labor.map((r) => [r.id, r.guys, r.rate]);
   }
 
@@ -2367,7 +2392,9 @@ const rendered = [];      // every string the page put on screen, for the Labour
     };
 
     // Nothing typed, nothing armed: leaving must not manufacture a save out of thin air.
-    const d = build();
+    // (A blob with no SF anywhere: init now saves when it SEEDS rows or finds polish_sf behind the
+    // takeoff, so the default fixture's seeded SF would arm a timer legitimately.)
+    const d = build({ blob: blob({ polish_estimate: null, polish_sf: 0 }) });
     await d.api.init();
     d.win.fire("pagehide");
     out.pagehideFlush.quietWhenNothingArmed = d.rec.saves.length === 0 && d.rec.flushed === 0;

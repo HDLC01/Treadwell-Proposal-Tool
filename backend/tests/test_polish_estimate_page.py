@@ -1745,6 +1745,32 @@ def test_intake_system_2_seeds_a_second_takeoff_row_and_never_over_a_measurement
     assert m["seedMeasured"] == [["", 5000, "SF"]], m["seedMeasured"]
 
 
+@needs_node
+def test_opening_step_2_puts_the_takeoff_total_into_the_draft_without_an_edit(ran):
+    """Review finding: seeding filled the takeoff in memory only, so with System 1 = 3,000 and
+    System 2 = 2,000 the screen priced 5,000 SF while the draft still said polish_sf 3,000 and
+    proposal-review printed that. The live intake's beta-continue door can also type a polish_sf
+    over a takeoff that is already measured. Either way polish_sf must read the takeoff total
+    after a plain open; and a draft already in line is not rewritten.
+
+    Mutation: delete the `saveSoon()` call after the seeding block in init() and the first two
+    come back as None / 3000."""
+    m = ran["migration"]
+    assert m["savedAfterSeedTwo"] == {"sf": 11350, "bidSf": 11350}, m["savedAfterSeedTwo"]
+    assert m["savedAfterClobber"] == 5000, m["savedAfterClobber"]
+    assert m["savesWhenInLine"] == 0, "a draft already in line was rewritten on open"
+
+
+@needs_node
+def test_seeding_never_lands_beside_an_lf_only_measurement(ran):
+    """B.seedTakeoffSf's own early return, which init's SF-total guard hides: a takeoff whose only
+    measurement is in LF is still somebody's work, and the old code overwrote it.
+
+    Mutation: remove the `if (num((rows[i]||{}).measurement) > 0) return rows;` line and the LF row
+    gains two SF rows."""
+    assert ran["migration"]["seedOverLf"] == [["", 900, "LF"]], ran["migration"]["seedOverLf"]
+
+
 # ── H. boot ──────────────────────────────────────────────────────────────────
 @needs_node
 def test_nothing_is_revealed_before_the_sandbox_settles(ran):
