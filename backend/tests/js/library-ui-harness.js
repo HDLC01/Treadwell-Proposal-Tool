@@ -1488,6 +1488,7 @@ async function conflictChecks() {
     ${fn("adoptSaved")}
     ${fn("adoptConflict")}
     ${fn("arm")}
+    ${fn("requeueFailed")}
     ${fn("flush")}
     ${fn("forgetItem")}
     ${fn("flushItemRow")}
@@ -1766,6 +1767,17 @@ async function conflictChecks() {
     f.hooks.autoReply = { status: 500, ok: true === false, json: async () => ({ detail: "nope" }) };
     f.type("i1", "unit_cost", "51");
     const failedStill = await f.s.saveNow("items", "i1");
+    const failedMarkKept = !!f.s.fresh().items.i1;
+    // 2b. Press Save AGAIN after the failure: it must re-send (not retire the button over a value
+    //     the server never got), and once the server accepts, clear.
+    const reqsAfterFirst = f.hooks.requests.length;
+    const secondStill = await f.s.saveNow("items", "i1");
+    const secondResent =f.hooks.requests.length === reqsAfterFirst + 1 && secondStill === true &&
+      !!f.s.fresh().items.i1;
+    f.hooks.autoReply = okItem;
+    const thirdStill = await f.s.saveNow("items", "i1");
+    const thirdClears = thirdStill === false && !f.s.fresh().items.i1 &&
+      f.hooks.requests.length === reqsAfterFirst + 2;
     // 3. THE RACE: a flush already took the payload and is parked on the dialog. Empty buffer
     //    must NOT read as saved.
     const r = run409(undefined, "manual");
@@ -1818,7 +1830,9 @@ async function conflictChecks() {
       markedByTheEdit: markedAfterTyping,
       confirmedSaveClears: savedFlag === false && !a.s.fresh().items.i1,
       onePatchOneQuestion: a.hooks.requests.length === 1 && a.hooks.asked.length === 1,
-      failedKeepsMark: failedStill === true && !!f.s.fresh().items.i1,
+      failedKeepsMark: failedStill === true && failedMarkKept,
+      secondPressResends: secondResent,
+      thirdPressClearsOnConfirm: thirdClears,
       bufferEmptyWhileAsking,
       pressWaitedForTheDialog: pressWaited,
       pressThenConfirmed: pressResult === false && !r.s.fresh().items.i1 && r.hooks.requests.length === 1,

@@ -673,6 +673,7 @@
         // they are looking at it loses their work and hides the reason.
         say(j.detail || j.error || "That change didn't save.");
         saving("Not saved");
+        requeueFailed(key, payload);
         return;
       }
       // Adopt the new version stamp, or the NEXT save conflicts with our own write.
@@ -695,6 +696,7 @@
     } catch (err) {
       say("Couldn't reach the server. " + (err.message || ""));
       saving("Not saved");
+      requeueFailed(key, payload);
     } finally {
       // `finally`, because the try block returns early on 409 and on any non-ok status. A lock left
       // set on one of those paths would silence every later save for that record — a worse bug than
@@ -705,6 +707,15 @@
       delete takenP[key];
       release();
     }
+  }
+
+  /** A failed save keeps its edit queued (no timer: no retry loop), so the next Save press or the
+   *  leave-page flush sends it again instead of finding an empty buffer and retiring the button
+   *  over a value the server never received. A newer keystroke queued meanwhile wins per field. */
+  function requeueFailed(key, payload) {
+    // Keeps the SAME object (newer keystrokes folded in): saveNow reads identity to tell "my flush
+    // failed and handed the edit back" from "a newer edit arrived", and stops after one attempt.
+    pendingPatch[key] = Object.assign(payload, pendingPatch[key] || {});
   }
 
   /** Drop everything this page is still holding for an item that no longer exists.
@@ -754,7 +765,10 @@
         clearTimeout(timers[key]);
         delete timers[key];
         worked = true;
+        var sent = pendingPatch[key];
         await flush(kind, id, key, true);
+        // The same payload back in the buffer means the save failed: one press, one attempt.
+        if (pendingPatch[key] === sent) break;
       } else if (takenP[key]) {
         // A flush already took the payload and has not heard back (dialog open, request on the
         // wire). An empty buffer is NOT "saved"; wait for that flush to finish, then judge.

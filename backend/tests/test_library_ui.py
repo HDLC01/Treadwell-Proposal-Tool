@@ -3786,6 +3786,8 @@ def test_any_edited_row_shows_save_and_clears_only_when_the_server_confirms(ran)
     assert s["notMarkedBeforeEdit"] and s["markedByTheEdit"]
     assert s["confirmedSaveClears"] and s["onePatchOneQuestion"]
     assert s["failedKeepsMark"], "a refused save cleared the unsaved mark"
+    assert s["secondPressResends"], "after a failed save, the next Save press sent nothing and retired the button"
+    assert s["thirdPressClearsOnConfirm"]
     assert s["bufferEmptyWhileAsking"], "the fixture no longer parks a flush on its dialog"
     assert s["pressWaitedForTheDialog"], "Save treated an empty buffer as saved while a flush was mid-flight"
     assert s["pressThenConfirmed"]
