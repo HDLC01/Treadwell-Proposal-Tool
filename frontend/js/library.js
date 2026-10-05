@@ -148,8 +148,14 @@
         var mk = await api("/api/markup/rules");
         if (mk.ok) {
           var mj = await mk.json();
+          // The Fees + Textura default has its own row on this tab (feesDefaultRow), so it is read
+          // out of the same answer here and kept out of the generic Markup list below.
+          FEES_RULE = null;
+          (mj.rules || []).forEach(function (r) {
+            if (r && r.layout === "global" && r.line_key === "fees_textura") FEES_RULE = r;
+          });
           GLOBAL_MARKUP = (mj.rules || []).filter(function (r) {
-            return r.layout === "global" && r.applies;
+            return r.layout === "global" && r.applies && r.line_key !== "fees_textura";
           }).map(function (r) {
             // id AND line_key KEPT. The Defaults tab can now edit these, and an edit here
             // PUTs the same markup_rules row the Markup page edits -- one home, two doors.
@@ -2508,6 +2514,8 @@
    *  Empty until the fetch lands, and empty forever if it fails. A bond rate this page invented
    *  because a request timed out would be worse than a row that is not there. */
   var GLOBAL_MARKUP = [];
+  // The filed `fees_textura` markup row (the Fees + Textura default), or null when none is filed.
+  var FEES_RULE = null;
 
   /** The labor lines somebody typed on the Defaults tab, as this page last read them.
 
@@ -3188,7 +3196,7 @@
           return conditionDefaultRow(c);
         })) },
       { title: "Markup",
-        rows: GLOBAL_MARKUP.map(function (g) {
+        rows: [feesDefaultRow()].concat(GLOBAL_MARKUP.map(function (g) {
           // EDITABLE HERE, STORED THERE. Hanz asked for no read-only rows on this tab. The
           // danger with a rate is TWO HOMES: markup.py enforces one home per line because
           // two places to set one price disagree the first time somebody changes one, and a
@@ -3206,9 +3214,73 @@
                      'page\u2019s Global tab</span>',
                    rawHow: true,
                    actions: '<span class="builtin">Saved to Markup</span>' };
-        }) },
+        })) },
     ];
     return groups.filter(function (g) { return g.rows.length > 0; });
+  }
+
+  /** The dollar figure a filed Fees + Textura rule holds, "" when none is filed / it is off / it is
+   *  not a plain number. Zero reads as "0": it is a real answer, the one the sheet ships. */
+  function feesFigure(rule) {
+    if (!rule || rule.applies === false) return "";
+    var m = /^\s*\$?\s*(\d+(?:\.\d+)?)\s*$/.exec(String(rule.formula == null ? "" : rule.formula));
+    return m ? m[1] : "";
+  }
+
+  /** THE "FEES + TEXTURA" DEFAULT ROW (Hanz, 2026-10-06): what a NEW Polish bid's Fees + Textura
+   *  line starts at. Always listed (so an admin can set it before anything is filed), $0 until set.
+   *  A second DOOR onto the Markups -> Global `fees_textura` row -- the one home, like Lodging and
+   *  Per Diem -- so there is no copy of the number here to drift. Read-only for a non-admin. */
+  function feesDefaultRow() {
+    var fig = feesFigure(FEES_RULE);
+    return { name: "Fees + Textura",
+             how: ADMIN
+               ? '$<input class="mkin" type="text" inputmode="decimal" data-fees-default="1" value="' +
+                 esc(fig) + '" placeholder="0" aria-label="Fees plus Textura, dollars a bid" /> ' +
+                 '<span class="wtall">starts every new bid’s Fees + Textura line; $0 until ' +
+                 'set; also on the Markup page’s Global tab</span>'
+               : esc(L.money(fig === "" ? 0 : Number(fig))) + " on every new bid",
+             rawHow: true,
+             actions: '<span class="builtin">Saved to Markup</span>' };
+  }
+
+  /** Save the Fees + Textura default. A PUT of the whole markup row (notes carried), the same call
+   *  saveTravelRate makes. Blank files $0 (the shipped answer); anything that is not a plain,
+   *  non-negative dollar figure is refused here in words rather than as a 400. */
+  async function saveFeesDefault(input) {
+    var say2 = say;
+    var raw = String(input.value || "").trim().replace(/^\$/, "").replace(/,/g, "");
+    var prev = feesFigure(FEES_RULE);
+    if (raw === prev) return;
+    if (raw === "") raw = "0";
+    if (!/^\d+(\.\d+)?$/.test(raw) || Number(raw) > 1e7) {
+      say2("Fees + Textura has to be a dollar figure, like 250.");
+      input.value = prev;
+      return;
+    }
+    if (raw === prev) return;
+    say2("");
+    try {
+      var rule = FEES_RULE || {};
+      var res = await api("/api/markup/rules", { method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ layout: "global", line_key: "fees_textura", applies: true,
+                               notes: rule.notes || "", formula: raw }) });
+      if (res.status === 403) {
+        say2("Changing this figure is admin-only. Nothing was saved.");
+        input.value = prev;
+        return;
+      }
+      var j = await res.json().catch(function () { return {}; });
+      if (!res.ok) { say2(j.detail || "That didn't save."); input.value = prev; return; }
+      FEES_RULE = j.rule || Object.assign({}, rule, { layout: "global", line_key: "fees_textura",
+                                                      applies: true, formula: raw });
+      input.value = feesFigure(FEES_RULE);
+      say2("Fees + Textura saved: $" + raw + ". New estimates start from it.");
+    } catch (err) {
+      say2("Couldn't reach the server. Nothing was saved.");
+      input.value = prev;
+    }
   }
 
   function renderDefaultTakeoff() {
@@ -5004,6 +5076,10 @@
 
   // The Labor Calculator's rate boxes, and its jumps. Delegated on the pane because the body is
   // redrawn from state.
+  $("pane-defaults").addEventListener("change", function (e) {
+    var el = e.target;
+    if (el && el.getAttribute && el.getAttribute("data-fees-default") !== null) saveFeesDefault(el);
+  });
   $("pane-labcalc").addEventListener("change", function (e) {
     var el = e.target;
     if (el && el.getAttribute && el.getAttribute("data-travel-rate") !== null) saveTravelRate(el);

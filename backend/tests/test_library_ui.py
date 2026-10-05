@@ -186,7 +186,8 @@ def test_the_takeoff_defaults_list_what_a_new_estimate_starts_with(ran):
     # default", then "just put these 3 in the materials section with the same buttons."
     assert t["groupTitles"] == ["Assemblies", "Materials", "Markup"], (
         "the groups or their order changed: %s" % t["groupTitles"])
-    assert t["groupCounts"] == [1, 4, 1], (
+    # Markup is 2 rows: the always-listed Fees + Textura default, then bond.
+    assert t["groupCounts"] == [1, 4, 2], (
         "a row landed in the wrong group: %s" % t["groupCounts"])
     assert t["renderedHeadings"] == t["groupTitles"], (
         "the groups exist in the data but are not drawn: %s" % t["renderedHeadings"])
@@ -3845,3 +3846,22 @@ def test_travel_is_a_default_like_any_other_on_the_defaults_tab(ran):
     assert t["offeredBack"], "a removed Travel cannot be added back as a labor default"
     assert t["onEpoxy"] and not t["onPolish"], "Travel ignores the work-type sub-tabs"
     assert t["legacyOnGyp"], "an unscoped legacy Travel row stopped listing on every tab"
+
+
+def test_the_fees_textura_default_is_always_listed_and_saves_to_the_markup_row(ran):
+    """EXECUTED (Hanz, 2026-10-06): the Defaults tab always lists a Fees + Textura amount, an admin's
+    box PUTs the Global `fees_textura` markup row (one home, two doors, notes carried), blank files
+    $0, junk is refused before any request, a 403 puts the old figure back, a viewer gets text.
+
+    Mutation: drop feesDefaultRow from the Markup group, or have saveFeesDefault skip the
+    line_key, and the first two asserts go red."""
+    f = ran["feesDefaultRow"]
+    assert f["listedWithNothingFiled"] and f["emptyBox"] and f["name"] == "Fees + Textura"
+    assert f["sent"] == [{"path": "/api/markup/rules", "method": "PUT", "body": {
+        "layout": "global", "line_key": "fees_textura", "applies": True,
+        "notes": "kept", "formula": "1250"}}]
+    assert f["ruleAfter"] == "1250"
+    assert f["blankSent"] == ["0"]
+    assert f["junkSent"] == 0 and f["junkBox"] == ""
+    assert f["refusedBox"] == "100" and f["refusedRule"] == "100"
+    assert f["viewerHasBox"] is False and "250" in f["viewerText"]

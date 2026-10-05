@@ -3546,5 +3546,77 @@ const rendered = [];      // every string the page put on screen, for the Labour
     };
   }
 
+  // ── O. The Fees + Textura default (Hanz, 2026-10-06) ────────────────────────────────────────────
+  // EXECUTED THROUGH THE PAGE'S OWN INIT: a NEW bid's D77 starts at Markups -> Global `fees_textura`;
+  // typing over it shows the shared amber warning, typing the default back clears it; the default is
+  // saved with the bid so the warning survives a reload; a SAVED bid keeps its own fees and shows no
+  // warning; no default (or $0) leaves $0 and no warning.
+  {
+    const FEES = [{ id: "m9", layout: "global", line_key: "fees_textura", formula: "250", applies: true }];
+    const newBlob = () => blob({ polish_estimate: null, polish_sf: 12000 });
+    const feesW = (b) => warn(b, '[data-feesdflt]');
+    const feesBox = '[data-fees]';
+    const withDflt = build({ blob: newBlob(), markupRules: FEES });
+    await withDflt.api.init();
+    withDflt.api.go(2);
+    const startModel = { fees: withDflt.api.model().fees, fees_default: withDflt.api.model().fees_default };
+    const startBox = need(withDflt, feesBox).value;
+    const startWarn = feesW(withDflt);
+    const startTotal = withDflt.api.bid().total;
+    typeInto(withDflt, feesBox, "400");
+    const overWarn = feesW(withDflt);
+    const overTotal = withDflt.api.bid().total;
+    typeInto(withDflt, feesBox, "250");
+    const backWarn = feesW(withDflt);
+    withDflt.clock.fire();
+    const savedWith = withDflt.rec.saves[withDflt.rec.saves.length - 1];
+    const reloaded = build({ blob: Object.assign(blob(), { polish_estimate: clone(savedWith.polish_estimate) }),
+                             markupRules: [] });
+    await reloaded.api.init();
+    reloaded.api.go(2);
+    typeInto(reloaded, feesBox, "10");
+    const reloadWarn = feesW(reloaded);
+    // The same new bid with NO default filed, and with a $0 one.
+    const none = build({ blob: newBlob() });
+    await none.api.init();
+    none.api.go(2);
+    const zero = build({ blob: newBlob(), markupRules: [
+      { id: "m9", layout: "global", line_key: "fees_textura", formula: "0", applies: true }] });
+    await zero.api.init();
+    zero.api.go(2);
+    typeInto(zero, feesBox, "75");
+    // A SAVED bid (it states a model) with a default filed: its own fees stand.
+    const savedBlob = blob({ polish_estimate: Object.assign(clone(MODEL), { fees: 75 }) });
+    const sv = build({ blob: savedBlob, markupRules: FEES });
+    await sv.api.init();
+    sv.api.go(2);
+    out.feesDefault = {
+      startModel: startModel, startBox: startBox, startWarn: startWarn, overWarn: overWarn,
+      backWarn: backWarn, startTotal: startTotal, overTotal: overTotal,
+      noneFees: none.api.model().fees, noneDefault: none.api.model().fees_default === undefined,
+      noneBox: need(none, feesBox).value, noneWarn: feesW(none),
+      zeroFees: zero.api.model().fees, zeroDefault: zero.api.model().fees_default === undefined,
+      zeroWarn: feesW(zero),
+      noneTotal: none.api.bid().total,
+      savedHasDefault: savedWith.polish_estimate.fees_default,
+      reloadWarn: reloadWarn,
+      savedBidFees: sv.api.model().fees, savedBidDefault: sv.api.model().fees_default === undefined,
+      savedBidWarn: feesW(sv),
+      rules: (() => {
+        const R = (formula, over) => [Object.assign({ layout: "global", line_key: "fees_textura",
+                                                      formula: formula, applies: true }, over || {})];
+        return { plain: B.feesFromRules(R("250")), dollar: B.feesFromRules(R("$1,250".replace(",", ""))),
+                 decimal: B.feesFromRules(R("99.5")), zero: B.feesFromRules(R("0")),
+                 off: B.feesFromRules(R("250", { applies: false })),
+                 expr: B.feesFromRules(R("=A1*2")), blank: B.feesFromRules(R("")),
+                 none: B.feesFromRules([]), notList: B.feesFromRules(null),
+                 otherLine: B.feesFromRules([{ layout: "global", line_key: "labor_rate",
+                                               formula: "33", applies: true }]),
+                 otherLayout: B.feesFromRules([{ layout: "polish", line_key: "fees_textura",
+                                                formula: "5", applies: true }]) };
+      })(),
+    };
+  }
+
   console.log(JSON.stringify(out));
 })().catch((err) => { console.error(err && err.stack || err); process.exit(1); });

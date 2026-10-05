@@ -122,7 +122,8 @@
     bond: "Bond",
     travel_lodging: "Travel lodging",
     travel_per_diem: "Travel food",
-    labor_rate: "Labor rate"
+    labor_rate: "Labor rate",
+    fees_textura: "Fees + Textura"
   };
 
   /** The one-line caption under a line's name. Free to read — it is the half of the old WHAT IT
@@ -136,12 +137,13 @@
     bond: "the workbook ships this at zero",
     travel_lodging: "one night away, the same on every sheet",
     travel_per_diem: "one day's food, the same on every sheet",
-    labor_rate: "what a new bid's labor lines start at, the same on every sheet"
+    labor_rate: "what a new bid's labor lines start at, the same on every sheet",
+    fees_textura: "what a new bid's Fees + Textura line starts at, the same on every sheet"
   };
 
   /** What the figure beside a Global line is PER. A rate needs no such word; $70 does, and "$70"
    *  with nothing after it is the kind of number somebody multiplies by the wrong thing. */
-  var UNIT_NOTE = { travel_lodging: "a night", travel_per_diem: "a day", labor_rate: "an hour" };
+  var UNIT_NOTE = { travel_lodging: "a night", travel_per_diem: "a day", labor_rate: "an hour", fees_textura: "a bid" };
 
   /** The rest of it, behind the row's own disclosure. Good writing, and it does not belong
    *  repeated in every row of a table of eight numbers. */
@@ -171,7 +173,11 @@
     labor_rate: "Dollars an hour. The starting rate of the crew rows, Travel Labor, every library " +
       "labor line with no rate of its own, and every labor line added to a NEW estimate. A bid " +
       "already saved keeps the rates it has; an estimator can still type over any one rate, and " +
-      "the estimate shows \"Default $X\" under it when they do."
+      "the estimate shows \"Default $X\" under it when they do.",
+    fees_textura: "Dollars. What a NEW Polish estimate's Fees + Textura line starts at. Blank or " +
+      "zero is what the sheet ships. A bid already saved keeps its own fees; an estimator can " +
+      "still type over it on a bid, and the estimate shows \"Default value: $N\" under the box " +
+      "when they do."
   };
 
   /** A chip beside the name, for the lines an admin does not set. Short, and it says the one
@@ -242,7 +248,8 @@
     // The travel figures are Kyle's own literals off all eleven priced sheets, and they are
     // DOLLARS, not rates — written bare for that reason, the same way priceChain and the box's
     // own $ / % affordance read a bare number of 1 or more.
-    global: { bond: F("0%"), travel_lodging: F("70"), travel_per_diem: F("45"), labor_rate: F("33") }
+    global: { bond: F("0%"), travel_lodging: F("70"), travel_per_diem: F("45"), labor_rate: F("33"),
+      fees_textura: F("0") }
   };
 
   // ── which rows actually reach the estimate workbook ────────────────────────

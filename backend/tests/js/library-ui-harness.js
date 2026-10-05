@@ -241,6 +241,16 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   // The Markup page's Global lines. Declared here rather than lifted because the page fills it
   // from its own fetch inside load(), which this sandbox does not run -- a test hands it in.
   var GLOBAL_MARKUP = state.GLOBAL_MARKUP || [];
+  // The filed Fees + Textura row (the Defaults tab's own always-listed row), handed in the same way.
+  var FEES_RULE = state.FEES_RULE || null;
+  // THE NETWORK for saveFeesDefault: what would have been sent, and what the server "answers".
+  var FEES_CALLS = [];
+  async function api(path, opts) {
+    FEES_CALLS.push({ path: path, opts: opts });
+    var r = state.FEES_RESPONSE || { status: 200, body: null };
+    var body = r.body || (opts && opts.body ? { ok: true, rule: JSON.parse(opts.body) } : {});
+    return { status: r.status, ok: r.status < 400, json: async function () { return body; } };
+  }
   // The Takeoff conditions' STORED answers, handed in the same way. Only the overrides live
   // here: what a new estimate ships answering comes from the REAL polish-bid-core below, so a
   // fixture cannot make this page agree with itself about an answer the bid does not hold.
@@ -368,6 +378,9 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   ${fn("defaultSlider")}
   ${fn("materialDefaultRow")}
   ${fn("conditionDefaultRow")}
+  ${fn("feesFigure")}
+  ${fn("feesDefaultRow")}
+  ${fn("saveFeesDefault")}
   ${fn("takeoffDefaultGroups")}
   ${fn("renderDefaultTakeoff")}
   // AFTER the renderer it repaints and after the network stub it awaits. This is the handler the
@@ -642,6 +655,8 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
            // The Defaults tab's Takeoff list, EXECUTED rather than read. GLOBAL_MARKUP is handed
            // in so a test can supply the Markup page's answer without a second fetch stub.
            renderDefaultTakeoff, takeoffConditionDefaults, takeoffDefaultGroups,
+           feesDefaultRow, saveFeesDefault, FEES_CALLS,
+           feesRuleNow: function () { return FEES_RULE; },
            // THE CONDITIONS, EXECUTED. conditionPriceCell draws one row's priced cell;
            // setConditionDefault is what BOTH directions call now -- Remove on a listed row and
            // Add on a removed one. COND_CALLS is what would have gone to the server, and
@@ -5401,6 +5416,50 @@ async function sliderChecks() {
   };
 }
 
+// ── the Fees + Textura default row on the Defaults tab (Hanz, 2026-10-06), EXECUTED ──────────────
+async function feesChecks() {
+  const B = require(path.join(ROOT, "js", "polish-bid-core.js"));
+  const mk = (state) => build(Object.assign({ window: { TWPolishBid: B }, ADMIN: true }, state));
+  // 1. Always listed in the Markup group, empty box when nothing is filed (= $0).
+  const none = mk({});
+  const row0 = none.api.feesDefaultRow();
+  const groupsNone = none.api.takeoffDefaultGroups().map((g) => g.title);
+  // 2. Typing a figure PUTs the markup row for line fees_textura, notes carried, and keeps the rule.
+  const a = mk({ FEES_RULE: { id: "r1", layout: "global", line_key: "fees_textura", formula: "100",
+                              applies: true, notes: "kept" } });
+  const box = { value: "$1,250", getAttribute: () => "1" };
+  await a.api.saveFeesDefault(box);
+  const sent = a.api.FEES_CALLS.map((c) => ({ path: c.path, method: c.opts.method,
+                                              body: JSON.parse(c.opts.body) }));
+  // 3. A blank box files $0; junk is refused and nothing is sent.
+  const b = mk({ FEES_RULE: { layout: "global", line_key: "fees_textura", formula: "100", applies: true } });
+  await b.api.saveFeesDefault({ value: "", getAttribute: () => "1" });
+  const blankSent = b.api.FEES_CALLS.map((c) => JSON.parse(c.opts.body).formula);
+  const c2 = mk({});
+  const junk = { value: "abc", getAttribute: () => "1" };
+  await c2.api.saveFeesDefault(junk);
+  // 4. A 403 puts the old figure back.
+  const d403 = mk({ FEES_RULE: { layout: "global", line_key: "fees_textura", formula: "100", applies: true },
+                    FEES_RESPONSE: { status: 403 } });
+  const box403 = { value: "300", getAttribute: () => "1" };
+  await d403.api.saveFeesDefault(box403);
+  // 5. A viewer gets text, not a box.
+  const viewer = mk({ ADMIN: false, FEES_RULE: { layout: "global", line_key: "fees_textura",
+                                                 formula: "250", applies: true } });
+  out.feesDefaultRow = {
+    listedWithNothingFiled: groupsNone.indexOf("Markup") >= 0,
+    emptyBox: /data-fees-default="1" value=""/.test(row0.how),
+    name: row0.name,
+    sent: sent, ruleAfter: a.api.feesRuleNow() && a.api.feesRuleNow().formula,
+    boxAfter: box.value,
+    blankSent: blankSent,
+    junkSent: c2.api.FEES_CALLS.length, junkBox: junk.value,
+    refusedBox: box403.value, refusedRule: d403.api.feesRuleNow().formula,
+    viewerHasBox: /<input/.test(viewer.api.feesDefaultRow().how),
+    viewerText: viewer.api.feesDefaultRow().how,
+  };
+}
+
 // A WATCHDOG, because the alternative failure mode is silence. These scenarios await dialogs and
 // held requests, so a change that opens one more dialog than a test answers leaves a flush waiting
 // forever: node's loop empties, the process exits 0, and nothing is printed — which the fixture
@@ -5414,6 +5473,6 @@ const watchdog = setTimeout(() => {
 }, 30000);
 
 Promise.all([conflictChecks(), dialogChecks(), laborChecks(), laborTabChecks(),
-             conditionChecks(), sliderChecks()]).then(
+             conditionChecks(), sliderChecks(), feesChecks()]).then(
   () => { clearTimeout(watchdog); console.log(JSON.stringify(out)); },
   (err) => { clearTimeout(watchdog); console.error(err); process.exit(1); });

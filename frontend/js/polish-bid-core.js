@@ -1033,6 +1033,43 @@
     return null;
   }
 
+  /** THE FEES + TEXTURA DEFAULT (Hanz, 2026-10-06). One dollar figure, filed as the Markups -> Global
+   *  line `fees_textura` (the Defaults tab's "Fees + Textura" box is a second door onto the same
+   *  row), and the starting value of D77 on a NEW beta bid. Null when none is filed, switched off,
+   *  or not a plain number; ZERO IS A REAL ANSWER ("nothing", which is what the sheet ships), so
+   *  unlike the labor rate this accepts 0 and the caller treats 0 and null alike. */
+  function feesFromRules(rules) {
+    if (!(rules instanceof Array)) return null;
+    for (var i = 0; i < rules.length; i++) {
+      var r = rules[i];
+      if (!r || r.layout !== "global" || r.line_key !== "fees_textura") continue;
+      if (r.applies === false) return null;
+      var m = /^\s*\$?\s*(\d+(?:\.\d+)?)\s*$/.exec(String(r.formula === null ||
+        r.formula === undefined ? "" : r.formula));
+      if (!m) return null;
+      var n = Number(m[1]);
+      return isFinite(n) ? n : null;
+    }
+    return null;
+  }
+
+  /** A NEW bid's Fees + Textura line, started at the default. NEW BIDS ONLY: the caller's gate is
+   *  laborUnstated, the same one the labor and travel defaults ride, so a saved bid never reaches
+   *  this. A default of nothing (null / 0 / junk) changes NOTHING -- the model keeps RATES.FEES --
+   *  and stamps nothing, because "Default value: $0" under a box the estimator typed a fee into
+   *  would warn about a default nobody set. A real default is written to `fees` AND remembered as
+   *  `fees_default`, which is what the shared amber warning compares against and which, being part
+   *  of the saved model, survives a reload. Returns a NEW model. */
+  function applyFeesDefault(model, fees) {
+    var n = (fees === null || fees === undefined || fees === "") ? NaN : Number(fees);
+    if (!model || !isFinite(n) || n <= 0) return model;
+    var out = {};
+    for (var k in model) if (Object.prototype.hasOwnProperty.call(model, k)) out[k] = model[k];
+    out.fees = n;
+    out.fees_default = n;
+    return out;
+  }
+
   /** Does this stored library_labor row carry a rate of its OWN? `library_labor.rate` is NOT NULL
    *  (a blank is stored as 0), so "no rate of its own" can only be spelled 0 -- and for Travel,
    *  also the $33.00 the table was seeded with, which nobody chose. A row somebody re-rated to
@@ -1819,6 +1856,10 @@
       // Every v2 draft saved before the Fees line became typeable has no `fees` at all, and a
       // missing one must read as the zero the sheet ships.
       if (isBlank(out.fees)) out.fees = fresh.fees;
+      // The default this bid was STARTED from, kept so the warning survives a reload. Absent on
+      // every bid saved before it existed and on every bid whose default was nothing.
+      if (!isBlank(model.fees_default) && isFinite(Number(model.fees_default)) &&
+          Number(model.fees_default) > 0) out.fees_default = Number(model.fees_default);
       return out;
     }
 
@@ -2015,6 +2056,8 @@
     // The company labor rate (Markups -> Global): read, applied to a new bid, and the fallback.
     SHIPPED_LABOR_RATE: SHIPPED_LABOR_RATE, laborRateOrShipped: laborRateOrShipped,
     laborRateFromRules: laborRateFromRules, applyLaborRate: applyLaborRate,
-    stampRateDefaults: stampRateDefaults, followLaborDays: followLaborDays
+    stampRateDefaults: stampRateDefaults, followLaborDays: followLaborDays,
+    // The Fees + Textura default (Markups -> Global `fees_textura`), read and applied to a new bid.
+    feesFromRules: feesFromRules, applyFeesDefault: applyFeesDefault
   };
 });

@@ -3332,3 +3332,36 @@ def test_the_beta_page_writes_no_labor_cells_so_the_hours_per_day_cannot_split_t
     hit = [k for k in w["keys"] if labor_rows.match(k) or k.startswith("Epoxy!") and
            re.match(r"^Epoxy!([A-Z]+)(4[5-9]|5[0-9])$", k)]
     assert hit == [], "the page now writes labor cells -- scale days by hours_per_day/8: %r" % hit
+
+
+def test_a_new_bids_fees_line_starts_at_the_defaults_tab_amount(ran):
+    """EXECUTED THROUGH THE PAGE'S OWN init (Hanz, 2026-10-06). A NEW bid's Fees + Textura starts at
+    the Global `fees_textura` rule, priced into the lump sum; typing over it shows the shared amber
+    "Default value: $N" and typing the default back clears it; the default rides the saved model so
+    the warning survives a reload; a SAVED bid keeps its own fees and shows no warning; no default
+    or a $0 one leaves the line at $0 with no warning.
+
+    Mutation: drop B.applyFeesDefault from init() and startModel/startTotal go red; drop
+    fees_default from migrateModel and reloadWarn goes red; apply it to a saved bid and
+    savedBidFees goes red."""
+    f = ran["feesDefault"]
+    assert f["startModel"] == {"fees": 250, "fees_default": 250}
+    assert f["startBox"] == "250" and f["startWarn"]["hidden"] is True
+    assert f["startTotal"] > f["noneTotal"], "the default did not reach the lump sum"
+    assert f["overWarn"] == {"text": "Default value: $250.00", "hidden": False}
+    assert f["overTotal"] > f["startTotal"]
+    assert f["backWarn"]["hidden"] is True
+    assert f["savedHasDefault"] == 250
+    assert f["reloadWarn"] == {"text": "Default value: $250.00", "hidden": False}
+    assert f["noneFees"] == 0 and f["noneDefault"] and f["noneBox"] == "0"
+    assert f["noneWarn"]["hidden"] is True
+    assert f["zeroDefault"] and f["zeroWarn"]["hidden"] is True and f["zeroFees"] == "75"
+    assert f["savedBidFees"] == 75 and f["savedBidDefault"] and f["savedBidWarn"]["hidden"] is True
+
+
+def test_the_fees_default_reads_only_a_plain_filed_applying_global_number(ran):
+    r = ran["feesDefault"]["rules"]
+    assert r["plain"] == 250 and r["dollar"] == 1250 and r["decimal"] == 99.5
+    assert r["zero"] == 0, "zero is a real answer, not nothing"
+    for k in ("off", "expr", "blank", "none", "notList", "otherLine", "otherLayout"):
+        assert r[k] is None, k

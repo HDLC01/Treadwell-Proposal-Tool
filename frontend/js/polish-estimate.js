@@ -1819,7 +1819,8 @@
     r += '<tr' + (b.fees ? '' : ' class="off"') + '><td>Fees + Textura ' +
       '<span class="note">yours to set</span></td><td class="pct"></td>' +
       '<td class="amt"><input data-fees value="' + esc(nv(M.fees)) +
-      '" inputmode="decimal"></td></tr>';
+      '" inputmode="decimal">' +
+      dfltWarnHtml('data-feesdflt="1"', feesDefaultText()) + '</td></tr>';
     r += row(condSwitch("bond", "Bond") +
       ' <span class="note">the sheet ships this at 0% either way</span>',
       keyedPct("bond_pct"), "bond", b.bond ? "" : "off");
@@ -1971,6 +1972,9 @@
     });
     // Lodging and Per Diem, live: cost, the auto quantity box, and the card's gray state. Keyed by
     // attribute like everything above, and the class string is written by travelCard and here only.
+    document.querySelectorAll("[data-feesdflt]").forEach(function (el) {
+      paintDfltWarn(el, feesDefaultText());
+    });
     if (M.travel) {
       document.querySelectorAll("[data-trvdflt-for]").forEach(function (el) {
         paintDfltWarn(el, travelRateDefaultText(M.travel[el.getAttribute("data-trvdflt-for")]));
@@ -2092,6 +2096,14 @@
       : (row && row.rate_default !== undefined && row.rate_default !== null && row.rate_default !== ""
           ? B.num(row.rate_default) : LABOR_RATE);
     return dfltWarnText(B.num((row || {}).rate) !== dflt, B.money2(dflt));
+  }
+
+  /** The warning under the Fees + Textura box: the shared "Default value: $N" while the typed
+   *  fee differs from the default this bid started from (Defaults tab). "" on a bid with no
+   *  `fees_default` -- a saved bid, or a new one whose default was nothing. */
+  function feesDefaultText() {
+    if (!M || M.fees_default === undefined || M.fees_default === null) return "";
+    return dfltWarnText(B.num(M.fees) !== B.num(M.fees_default), B.money2(B.num(M.fees_default)));
   }
 
   /** The warning under a Lodging / Per Diem rate box (G3): the shared "Default value: $N" while the
@@ -2654,6 +2666,18 @@
     }
   }
 
+  /** The Fees + Textura default (Markups -> Global), a number or null. Read for a NEW bid only and
+   *  NEVER THROWS: a rate service being down must not stop an estimate opening. */
+  async function loadFeesDefault() {
+    try {
+      var res = await api("/api/markup/rules?layout=global");
+      var j = await res.json();
+      return B.feesFromRules(j && j.rules);
+    } catch (e) {
+      return null;
+    }
+  }
+
   /** The Lodging and Per Diem rates (Markups -> Global), `{lodging, per_diem}` with null for any
    *  that is not filed. Read for a NEW bid only (see init) and NEVER THROWS, like loadLaborRate:
    *  a rate service being down must not stop an estimate opening, and null means the shipped
@@ -2704,6 +2728,8 @@
     // The Labor Calculator's per-line modes: same gate again -- a NEW bid fills its default labor
     // from them, a saved bid is never recomputed.
     var laborCalc = laborDefaults ? loadLaborCalc() : null;
+    // The Fees + Textura default: same gate, a NEW bid's D77 starts at it.
+    var feesDefault = laborDefaults ? loadFeesDefault() : null;
 
     // THE CONDITION DEFAULTS, ON THE SAME TERMS AND WITH A STRICTER GATE. B.conditionsUnstated is
     // true only when NOTHING has ever been saved for this estimate, because Hanz's rule for this
@@ -2764,6 +2790,8 @@
       syncAutoGuys();
       // The two travel rates, onto the new bid's Lodging / Per Diem lines (both start OFF).
       M.travel = B.applyTravelRates(M.travel, await travelRates);
+      // Fees + Textura starts at the Defaults tab's amount (nothing when none is set).
+      M = B.applyFeesDefault(M, await feesDefault);
     }
 
     // The library's answers for joint filler, remove-existing and dye, written over the shipped
