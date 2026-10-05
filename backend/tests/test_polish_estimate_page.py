@@ -3426,3 +3426,47 @@ def test_the_remove_existing_switch_moves_the_lump_sum(ran):
     r = ran["toggleMovesTotal"]["remove-existing condition row"]
     assert r["hasSwitch"] and r["swAfter"] == "true"
     assert r["afterFlip"] != r["before"]
+
+
+# ── the two toggles are independent (Hanz, 2026-10-06) ────────────────────────────────────────────
+def test_a_library_default_on_only_sets_a_new_bids_starting_state(ran):
+    """(3) EXECUTED THROUGH init: the same library with default_on true / false / never set. True and
+    unset open every default row ON; false opens the default assembly, material, custom labor line and
+    Travel Labor OFF, and the lump sum is lower by their contributions.
+
+    Mutation: make seedDefaultTakeoff ignore default_on, or seedLibraryLabor ignore it."""
+    t = ran["toggleIndependence"]
+    assert t["startsOn"]["takeoff"] == [True, True] and t["startsUnset"] == t["startsOn"]
+    assert "travel:true" in t["startsOn"]["labor"] and "c1:true" in t["startsOn"]["labor"]
+    off = t["startsOff"]
+    assert off["takeoff"][:2] == [False, False]
+    assert "travel:false" in off["labor"] and "c1:false" in off["labor"]
+    assert off["total"] < t["startsOn"]["total"]
+
+
+def test_flipping_rows_on_an_estimate_never_writes_to_the_library(ran):
+    """(1) Every takeoff row, every labor row, Lodging and Dye switched on the estimate, the bid
+    saved: not one request left the page after init (so no PATCH/POST/PUT/DELETE of /api/library*),
+    and the library fixture the page read is byte-identical afterwards. The flips did change the bid.
+
+    Mutation: have the on/off handlers call api('/api/library/...', {method:'PATCH'})."""
+    t = ran["toggleIndependence"]
+    assert t["flipCalls"] == [], t["flipCalls"]
+    assert t["libraryUntouched"] is True
+    assert t["flippedDiffers"] is True
+
+
+def test_changing_a_library_default_on_after_a_bid_is_saved_changes_nothing_on_that_bid(ran):
+    """(2) A bid saved with the default assembly row and the custom labor line switched OFF, reopened
+    under the same library, under one whose default_on is false everywhere (so the rows it left ON --
+    material, Travel -- are told OFF by the library) and under one whose default_on now agrees with
+    the flips: identical row states and the identical total each time.
+
+    Mutation: let the new-bid seeding run on a bid that already has a saved model."""
+    t = ran["toggleIndependence"]
+    assert t["savedFlips"] == {"takeoff0": False, "c1": False}
+    s = t["saved"]
+    assert s["here"]["takeoff"] == [False, True]
+    assert "travel:true" in s["here"]["labor"] and "c1:false" in s["here"]["labor"]
+    assert s["libOff"] == s["here"], "a library default_on change reached a saved bid"
+    assert s["libMatches"] == s["here"], "a library default_on change reached a saved bid"

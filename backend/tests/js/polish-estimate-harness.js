@@ -439,6 +439,8 @@ function build(opts) {
 
   const fetchStub = async function (url, init) {
     rec.fetches.push(url);
+    // Every request WITH ITS METHOD, so "never writes to the library" can be asserted on verbs.
+    (rec.calls = rec.calls || []).push({ url: String(url), method: ((init || {}).method || "GET").toUpperCase() });
     log.push("fetch:" + url);
     // POST /api/distance -- the server's driving miles from the office. `distance` is the JSON body
     // it answers with; `distanceGate` is a promise the answer waits on (a slow Google);
@@ -3745,6 +3747,99 @@ const rendered = [];      // every string the page put on screen, for the Labour
     out.toggleMovesTotal = result;
     out.toggleMovesTotalBase = { total: total(), takeoff: M0().takeoff.map((r) => r.assembly_id || r.item_id),
                                  labor: M0().labor.map((r) => r.id) };
+  }
+
+  // ── Q. THE TWO TOGGLES ARE INDEPENDENT (Hanz, 2026-10-06) ───────────────────────────────────────
+  // The library's default_on only sets what a NEW bid STARTS as; the estimate's own switch is the
+  // bid's. (1) flipping rows on an estimate never writes to the library; (2) changing a library
+  // default_on after a bid is saved never changes that saved bid; (3) a library default_on only
+  // sets a new bid's starting state. EXECUTED through the page's own init, handlers and save.
+  {
+    const lib = (on) => {
+      // `on` is the default_on every default-pulled library row carries (undefined = never set).
+      const f = (o) => (on === undefined ? o : Object.assign({}, o, { default_on: on }));
+      return {
+        asms: ASMS.map((a) => (a.id === "a1" ? f(Object.assign({}, a, { favorite: true })) : a)),
+        items: ITEMS.map((i) => (i.id === "i4" ? f(Object.assign({}, i, { favorite: true })) : i)),
+        labor: [f({ id: "travel", name: "Travel", rate: 40, unit: "hours", guys_auto: true, favorite: true }),
+                f({ id: "c1", name: "Saw cutting", rate: 45, unit: "days", guys_auto: false,
+                   favorite: true, default_work_types: [] })],
+        laborCalc: [
+          { line_id: "polishing", mode: "fixed", guys: 3, days: 5, hours_per_day: 8, rate: null },
+          { line_id: "c1", mode: "fixed", guys: 2, days: 3, hours_per_day: 8, rate: null }],
+        markupRules: [
+          { id: "m1", layout: "global", line_key: "travel_lodging", formula: "80", applies: true }],
+      };
+    };
+    const fresh = () => { const b = blob({ polish_estimate: null, polish_sf: 12000 }); return b; };
+    const stateOf = (pg) => {
+      const m = pg.api.model();
+      return { total: pg.api.bid().total,
+               takeoff: m.takeoff.map((r) => B.rowOn(r)),
+               labor: m.labor.map((r) => r.id + ":" + B.rowOn(r)) };
+    };
+
+    // (3) A NEW bid starts as the library says, and only as the library says.
+    const startsOn = build(Object.assign({ blob: fresh() }, lib(true)));
+    await startsOn.api.init();
+    const startsOff = build(Object.assign({ blob: fresh() }, lib(false)));
+    await startsOff.api.init();
+    const startsUnset = build(Object.assign({ blob: fresh() }, lib(undefined)));
+    await startsUnset.api.init();
+
+    // (1) Flip every default-pulled row on a new bid; count what went to the library.
+    const lp = build(Object.assign({ blob: fresh() }, lib(true)));
+    await lp.api.init();
+    const libBefore = JSON.stringify(lib(true));
+    const callsBefore = (lp.rec.calls || []).length;
+    const m0 = lp.api.model();
+    lp.api.go(0);
+    m0.takeoff.forEach((r, i) => { clickOn(lp, '[data-on-tk="' + i + '"]'); });
+    lp.api.go(1);
+    lp.api.model().labor.forEach((r, i) => { clickOn(lp, '[data-on-lab="' + i + '"]'); });
+    clickOn(lp, '[data-on-trv="lodging"]');
+    lp.api.go(0);
+    clickOn(lp, '[data-cond="dye"]');
+    lp.clock.fire();
+    // Let any request a handler started actually reach the fetch stub before the verbs are read.
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+    const flipped = stateOf(lp);
+    const flipCalls = (lp.rec.calls || []).slice(callsBefore);
+
+    // (2) A SAVED bid: flip some rows, save, then reopen it under a library whose default_on is
+    // the OPPOSITE of what the bid started with -- and again under one that matches the flipped
+    // rows. Neither may change a row state or the total.
+    const sv = build(Object.assign({ blob: fresh() }, lib(true)));
+    await sv.api.init();
+    sv.api.go(0);
+    clickOn(sv, '[data-on-tk="0"]');               // the default assembly row: ON -> OFF
+    sv.api.go(1);
+    const ci = sv.api.model().labor.findIndex((r) => r.id === "c1");
+    clickOn(sv, '[data-on-lab="' + ci + '"]');     // the custom labor line: ON -> OFF
+    sv.clock.fire();
+    const savedModel = clone(sv.rec.saves[sv.rec.saves.length - 1].polish_estimate);
+    const savedBlob = Object.assign(blob(), { polish_sf: 12000, polish_estimate: savedModel });
+    const reopen = async (libState) => {
+      const pg = build(Object.assign({ blob: clone(savedBlob) }, libState));
+      await pg.api.init();
+      return stateOf(pg);
+    };
+    const savedHere = await reopen(lib(true));
+    const savedLibFlippedOff = await reopen(lib(false));
+    const savedLibMatchesFlips = await reopen((() => {
+      const l = lib(true);
+      l.asms = l.asms.map((a) => (a.id === "a1" ? Object.assign({}, a, { default_on: false }) : a));
+      return l;
+    })());
+    // A bid saved with a row switched OFF while the library says ON, then the library says OFF->ON.
+    out.toggleIndependence = {
+      startsOn: stateOf(startsOn), startsOff: stateOf(startsOff), startsUnset: stateOf(startsUnset),
+      libraryUntouched: JSON.stringify(lib(true)) === libBefore,
+      flipCalls: flipCalls, flippedDiffers: flipped.total !== stateOf(startsOn).total,
+      saved: { here: savedHere, libOff: savedLibFlippedOff, libMatches: savedLibMatchesFlips },
+      savedFlips: { takeoff0: savedModel.takeoff[0].enabled, c1: savedModel.labor.filter((r) => r.id === "c1")[0].enabled },
+    };
   }
 
   console.log(JSON.stringify(out));
