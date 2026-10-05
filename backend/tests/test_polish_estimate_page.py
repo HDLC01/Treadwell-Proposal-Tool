@@ -3104,3 +3104,105 @@ def test_a_local_job_grays_all_three_until_one_is_touched(ran):
     t = ran["travelCosts"]
     assert "inert" in t["localClass0"]
     assert "inert" not in t["localClassOn"] and t["localHand"] is True
+
+
+# ── DISTANCE DECIDES "LOCAL" (Kyle 9/18; Hanz, 2026-10-05) ──────────────────────────────────────
+# Executed through the page: init() asks POST /api/distance after the first paint, and the answer
+# sets the hidden conditions.local (still written to Polish!B4), the three travel lines and the
+# "N mi from Olathe office" note.
+
+UNKNOWN_NOTE = "Distance unknown — enter miles"
+
+
+def test_a_far_job_turns_the_three_travel_lines_on_and_writes_no_to_b4(ran):
+    """120.4 driving miles: not local, Lodging and Per Diem on, Travel Labor un-grayed, the note says
+    so, Review lists Lodging, and Polish!B4 is written "No" from the hidden answer.
+
+    Mutation: leave `conditions.local` alone in B.applyDistance, or stop writing the cell."""
+    d = ran["distance"]
+    assert d["requestBody"] == {"address": "100 Main St", "city": "Wichita", "state": "KS",
+                                "zip": "67202"}
+    assert d["requests"] == 1
+    f = d["far"]
+    assert f["note"] == "120.4 mi from Olathe office"
+    assert f["local"] is False and f["lodging"] is True and f["perDiem"] is True
+    assert f["lodgingGray"] is False and f["travelLaborGray"] is False
+    assert d["farCellB4"] == "No" and d["farModelLocal"] is False
+    assert d["farSavedDistance"]["miles"] == 120.4, "the figure is cached on the draft"
+    assert d["farReviewHasLodging"] is True
+
+
+def test_a_near_job_is_local_and_all_three_travel_lines_stay_gray(ran):
+    d = ran["distance"]
+    n = d["near"]
+    assert n["note"] == "30 mi from Olathe office"
+    assert n["local"] is True and n["lodging"] is False and n["perDiem"] is False
+    assert n["lodgingGray"] is True and n["travelLaborGray"] is True
+    assert d["nearCellB4"] == "Yes"
+    # Exactly 70 is far: "70 miles or more".
+    assert d["seventy"] == {"local": False, "lodging": True}
+
+
+def test_unknown_distance_never_guesses_and_the_estimator_can_type_miles(ran):
+    """No key / address not found / the service down: the line says so, the bid is unchanged (local,
+    all three gray), and a typed figure takes over -- and wins over everything after it.
+
+    Mutation: default an unknown distance to far (or to a number), or drop the typed override."""
+    d = ran["distance"]
+    u = d["unk"]
+    assert u["note"] == UNKNOWN_NOTE and u["distance"] is None
+    assert u["local"] is True and u["lodging"] is False and u["lodgingGray"] is True
+    assert "not set up" in u["status"]
+    t = d["typed85"]
+    assert t["distance"]["source"] == "typed" and t["distance"]["miles"] == 85
+    assert t["local"] is False and t["lodging"] is True and t["perDiem"] is True
+    assert t["note"] == "85 mi from Olathe office (typed by you)"
+    # The network going away is the same answer, with its own words.
+    dn = d["down"]
+    assert dn["note"] == UNKNOWN_NOTE and dn["local"] is True and dn["lodging"] is False
+    assert "did not answer" in dn["status"]
+
+
+def test_a_line_flipped_by_hand_is_never_moved_by_the_distance(ran):
+    """Lodging was flipped off by hand at 85 miles. Typing 20 and then 90 moves Per Diem (never
+    touched) both ways and leaves Lodging off both times. Clearing the miles returns to unknown.
+
+    Mutation: ignore `hand` in B.applyDistance."""
+    d = ran["distance"]
+    assert d["typed20"]["lodgingHand"] is True
+    assert (d["typed20"]["lodging"], d["typed20"]["perDiem"], d["typed20"]["local"]) == (False, False, True)
+    assert (d["typed90"]["lodging"], d["typed90"]["perDiem"], d["typed90"]["local"]) == (False, True, False)
+    c = d["cleared"]
+    assert c["distance"] is None and c["note"] == UNKNOWN_NOTE
+    assert c["local"] is True and c["perDiem"] is False and c["lodging"] is False
+
+
+def test_a_slow_google_never_blocks_the_page_and_typed_miles_win(ran):
+    """init() resolved while the answer was still pending (the Labor step rendered, "Looking up"
+    shown); the estimator typed 10 meanwhile; when 200 miles finally arrived it was dropped.
+
+    Mutation: await the lookup inside init(), or apply the late answer over a typed one."""
+    d = ran["distance"]
+    assert "Looking up" in d["slowBusy"]["status"] and d["slowBusy"]["distance"] is None
+    a = d["slowAfter"]
+    assert a["distance"]["source"] == "typed" and a["distance"]["miles"] == 10
+    assert a["local"] is True and a["lodging"] is False
+
+
+def test_no_usable_address_means_no_request_and_a_plain_message(ran):
+    d = ran["distance"]
+    assert d["blankRequests"] == 0 and d["thinRequests"] == 0
+    assert d["blank"]["note"] == UNKNOWN_NOTE
+    assert "intake step" in d["blank"]["status"]
+
+
+def test_a_saved_bid_is_not_repriced_until_the_estimator_asks(ran):
+    """A bid with stated labor never looks the distance up on its own (that would add lodging to a
+    bid already quoted); the button does it, and the answer applies.
+
+    Mutation: drop the new-bid gate in init()."""
+    d = ran["distance"]
+    assert d["savedFetches"] == 0
+    assert d["savedBefore"]["note"] == UNKNOWN_NOTE and d["savedBefore"]["lodging"] is False
+    s = d["savedAfter"]
+    assert s["note"] == "150 mi from Olathe office" and s["lodging"] is True and s["local"] is False

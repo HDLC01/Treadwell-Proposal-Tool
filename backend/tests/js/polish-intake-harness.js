@@ -724,9 +724,9 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
   {
     const b = build();
     await b.api.boot();
-    // The estimator has tabbed to Local job and is reading it. The click below lands somewhere
+    // The estimator has tabbed to Remodel tax and is reading it. The click below lands somewhere
     // else entirely, the way a mouse does.
-    b.dom.nodes["cond-local"].focus();
+    b.dom.nodes["cond-remodel_tax"].focus();
     const beforeFlip = b.dom.nodes["conditions"].innerHTML;
     clickSwitch(b, "taxable");
     b.clock.fire();
@@ -855,6 +855,31 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
       labor: JSON.stringify(save.polish_estimate.labor),
       taxable: save.polish_estimate.conditions.taxable,
       local: save.polish_estimate.conditions.local,
+    };
+  }
+
+  // ── THE HIDDEN LOCAL ANSWER (Kyle 9/18; Hanz, 2026-10-05) ──────────────────
+  // No "Local job" switch is drawn, but `local` is still on the model and still written to both
+  // B4 cells on every save: the Labor step sets it from the job's distance, and this page must
+  // carry it through untouched when somebody flips an unrelated switch.
+  {
+    const b = build({ blob: { __draft_id: "far-job",
+      polish_estimate: { version: 2, takeoff: [], labor: [],
+        conditions: { local: false, prevailing_wage: false, taxable: true,
+                      remodel_tax: false, bond: false } },
+      cell_values: { "Epoxy!B4": "No", "Polish!B4": "No" } } });
+    await b.api.boot();
+    clickSwitch(b, "taxable");
+    b.clock.fire();
+    const save = b.rec.saves[b.rec.saves.length - 1];
+    out.hiddenLocal = {
+      drawn: Object.prototype.hasOwnProperty.call(b.dom.nodes, "cond-local"),
+      modelLocal: save.polish_estimate.conditions.local,
+      polishB4: save.cell_values["Polish!B4"], epoxyB4: save.cell_values["Epoxy!B4"],
+      switchKeys: b.api.CONDITIONS.map((c) => c.key),
+      // Nothing can flip it from this page, the verbal panel included (applyVerbal gates on the
+      // same isCondition that toggleCondition does): a spoken "it is local" changes nothing.
+      modelLocalAfterToggle: (b.api.toggleCondition("local"), b.api.model().conditions.local),
     };
   }
 
@@ -1393,7 +1418,7 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
 
     // Saved again, because this page saves on every keystroke and the guard reads what is ALREADY
     // SAVED. A second save that re-stated labor would close the door just as firmly as the first.
-    clickSwitch(fresh, "local");
+    clickSwitch(fresh, "remodel_tax");
     fresh.clock.fire();
     const mintedAgain = fresh.rec.saves[fresh.rec.saves.length - 1].polish_estimate;
 

@@ -56,9 +56,14 @@
   // markupChain() looks each one up BY KEY and a miss reads as `false`, so a typo here is a
   // prevailing-wage job quietly priced at standard rates with nothing on screen to show it.
   // Pinned by test_polish_intake_page.py, which compares the two lists.
+  //
+  // NO "LOCAL JOB" SWITCH (Kyle, 9/18 notes; Hanz, 2026-10-05). Distance decides it now: the Labor
+  // step works the driving miles out from the job address and sets the hidden `conditions.local`
+  // answer from them (< 70 miles is local). That key is still on the model and still written to
+  // Polish!B4 / Epoxy!B4 by conditionCells() -- it is only no longer ASKED here. Because it is not
+  // in this list, isCondition("local") is false and a spoken "it is not local" in the verbal panel
+  // changes nothing: a person's word does not outrank the miles.
   var CONDITIONS = [
-    { key: "local", label: "Local job",
-      why: "Under 70 miles. Off means travel and lodging get added." },
     // NO HARD BID. Hanz, 2026-09-22: "remove all hard bids from the polish intake form. And
     // also on the markups" -- confirmed to mean the Polish beta specifically (its intake,
     // Review step and the Markup admin page), leaving the live v1 Intake, the AI Autofill

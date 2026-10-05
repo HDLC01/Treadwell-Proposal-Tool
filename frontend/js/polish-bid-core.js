@@ -399,6 +399,104 @@
     return out;
   }
 
+  /** DISTANCE DECIDES "LOCAL" (Kyle 9/18; Hanz, 2026-10-05). The intake "Local job" switch is gone;
+   *  the Labor step works the driving miles from the Olathe office to the job address out on the
+   *  server (POST /api/distance) and this is what it does with the answer. The model carries it as
+   *  `distance: {miles, source, key}`:
+   *    miles   a number (0 is a real answer), or null for "unknown";
+   *    source  "google" (the server's figure) or "typed" (the estimator's own, which always wins);
+   *    key     which address the figure belongs to (distanceKey), so a changed address is noticed.
+   *  `conditions.local` stays on the model -- it is still what Polish!B4 / Epoxy!B4 are written from
+   *  -- but it is DERIVED now: under 70 miles is local. At 70 or more the three travel lines come
+   *  on (Travel Labor by un-graying, Lodging and Per Diem by switching on); under 70 they go gray.
+   *
+   *  A HAND FLIP WINS. A Lodging / Per Diem line the estimator flipped (`hand`) is never moved by a
+   *  distance answer in either direction -- the same rule normalizeTravel's note records.
+   *
+   *  UNKNOWN IS NOT AN ANSWER. No figure leaves `conditions.local` and the lines exactly as they
+   *  were (a new bid: local, all three gray). Nothing here ever guesses a distance. */
+  var LOCAL_MILES = 70;
+
+  /** A positive-or-zero finite number, else null. A blank box and "abc" are both unknown. */
+  function milesOrNull(v) {
+    if (v === null || v === undefined || v === "" || typeof v === "boolean") return null;
+    var n = Number(String(v).replace(/[,\s]/g, ""));
+    return (isFinite(n) && n >= 0) ? Math.round(n * 10) / 10 : null;
+  }
+
+  /** The address a distance belongs to, lower-cased and squeezed -- or "" when the address is too
+   *  thin to look up (needs a street AND a city+state or a zip, the same rule the server applies in
+   *  distance.clean_address). "" means: do not ask, and say so. */
+  function distanceKey(address, city, state, zip) {
+    function one(v) { return String(v == null ? "" : v).replace(/\s+/g, " ").trim().toLowerCase(); }
+    var a = one(address), c = one(city), s = one(state), z = one(zip);
+    if (!a) return "";
+    if (!((c && s) || z)) return "";
+    return [a, c, s, z].join("|");
+  }
+
+  /** A saved `distance` read as a full one, or undefined when there is none. Never throws. */
+  function normalizeDistance(d) {
+    if (!d || typeof d !== "object") return undefined;
+    var out = { miles: milesOrNull(d.miles), source: d.source === "typed" ? "typed" : "google",
+                key: typeof d.key === "string" ? d.key : "" };
+    // A record with no figure says nothing (a failed lookup is never stored, so it is asked again
+    // on the next open -- the key may have been configured since).
+    if (out.miles === null) return undefined;
+    return out;
+  }
+
+  /** Is a job at this many miles a travel job? Unknown is false: it is not asked to be anything. */
+  function isFarMiles(miles) {
+    var n = milesOrNull(miles);
+    return n !== null && n >= LOCAL_MILES;
+  }
+
+  /** The model with a distance answer applied, IN PLACE (and returned). `result` is
+   *  `{miles, source, key}`; a result with no usable miles records nothing and changes nothing. */
+  function applyDistance(model, result) {
+    var miles = milesOrNull(result && result.miles);
+    if (!model || miles === null) return model;
+    model.distance = { miles: miles, source: (result.source === "typed" ? "typed" : "google"),
+                       key: String(result.key || "") };
+    var far = miles >= LOCAL_MILES;
+    if (!model.conditions) model.conditions = {};
+    model.conditions.local = !far;
+    if (!model.travel) model.travel = normalizeTravel(null);
+    TRAVEL_LINE_KEYS.forEach(function (k) {
+      var l = model.travel[k];
+      if (l && l.hand !== true) l.enabled = far;
+    });
+    return model;
+  }
+
+  /** Back to "unknown": the estimator cleared the miles they had typed. Local again (the shipped
+   *  default) and every line the estimator never touched gray again; a hand flip stays. */
+  function clearDistance(model) {
+    if (!model) return model;
+    delete model.distance;
+    if (!model.conditions) model.conditions = {};
+    model.conditions.local = true;
+    if (model.travel) {
+      TRAVEL_LINE_KEYS.forEach(function (k) {
+        var l = model.travel[k];
+        if (l && l.hand !== true) l.enabled = false;
+      });
+    }
+    return model;
+  }
+
+  /** The words under the Travel heading: what the estimator is looking at, and what they can do. */
+  function distanceNote(model) {
+    var d = model && model.distance;
+    if (d && milesOrNull(d.miles) !== null) {
+      var n = milesOrNull(d.miles);
+      var shown = (n % 1 === 0) ? String(n) : n.toFixed(1);
+      return shown + " mi from Olathe office" + (d.source === "typed" ? " (typed by you)" : "");
+    }
+    return "Distance unknown — enter miles";
+  }
+
   /** The square feet the bid is priced per. LF rows (cove, saw-cut, stripe) measure a different
    *  thing and must not be added to an area — C82 divides the total by the AREA. */
   /** THE INTAKE'S SF BOXES, TURNED INTO TAKEOFF ROWS (Hanz, 2026-10-05: "Add SF, seed the takeoff").
@@ -1458,6 +1556,10 @@
       // seed: both lines OFF at the shipped rates, so an old bid opened after this shipped prices
       // exactly what it did and is not repriced behind anybody's back.
       out.travel = normalizeTravel(model.travel);
+      // THE JOB'S DISTANCE, when one is stated. Absent on every draft saved before it existed, and
+      // absent reads as "unknown" -- the page then asks the server once.
+      var dist = normalizeDistance(model.distance);
+      if (dist) out.distance = dist;
       if (isBlank(out.contingency)) out.contingency = 0;
       // Every v2 draft saved before the Fees line became typeable has no `fees` at all, and a
       // missing one must read as the zero the sheet ships.
@@ -1624,6 +1726,10 @@
     travelCostsSeed: travelCostsSeed, travelQty: travelQty, travelLineCost: travelLineCost,
     travelCosts: travelCosts, travelRatesFromRules: travelRatesFromRules,
     applyTravelRates: applyTravelRates, normalizeTravel: normalizeTravel,
+    // Distance decides "local" (see LOCAL_MILES).
+    LOCAL_MILES: LOCAL_MILES, milesOrNull: milesOrNull, distanceKey: distanceKey,
+    normalizeDistance: normalizeDistance, isFarMiles: isFarMiles, applyDistance: applyDistance,
+    clearDistance: clearDistance, distanceNote: distanceNote,
     rowOn: rowOn, sliderHtml: sliderHtml,
     filledIn: filledIn,
     takeoffSf: takeoffSf,

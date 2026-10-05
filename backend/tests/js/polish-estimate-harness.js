@@ -437,9 +437,20 @@ function build(opts) {
     },
   };
 
-  const fetchStub = async function (url) {
+  const fetchStub = async function (url, init) {
     rec.fetches.push(url);
     log.push("fetch:" + url);
+    // POST /api/distance -- the server's driving miles from the office. `distance` is the JSON body
+    // it answers with; `distanceGate` is a promise the answer waits on (a slow Google);
+    // `distanceFails` is the network going away. Its own arm so every older scenario, which has no
+    // address, never reaches it -- and one that did would show up in rec.distanceBodies.
+    if (/api\/distance/.test(url)) {
+      (rec.distanceBodies = rec.distanceBodies || []).push(JSON.parse((init || {}).body || "{}"));
+      if (opts.distanceGate) await opts.distanceGate;
+      if (opts.distanceFails) throw new Error("the distance service is down");
+      return { json: async () => clone(opts.distance === undefined
+        ? { ok: false, miles: null, reason: "no_key" } : opts.distance) };
+    }
     if (opts.libraryFails) throw new Error("the network went away");
     // GET /api/library/labor -- the estimator's own default labor lines. Answered separately from
     // the two below because the page has to survive it failing: public.library_labor is on staging
@@ -3215,6 +3226,130 @@ const rendered = [];      // every string the page put on screen, for the Labour
                   per_diem: old.api.model().travel.per_diem.rate },
       // local gate
       localClass0: localClass0, localClassOn: localClassOn, localHand: localHand,
+    };
+  }
+
+  // ── O. DISTANCE DECIDES "LOCAL" (Kyle 9/18; Hanz, 2026-10-05) ─────────────────────────────────
+  // EXECUTED THROUGH THE PAGE: init() asks the server for the driving miles AFTER the first paint,
+  // and the answer sets the hidden `conditions.local` (still written to Polish!B4), the three
+  // travel lines and the "N mi from Olathe office" note. Unknown never guesses; a typed figure
+  // always wins; a line flipped by hand is never moved; a slow Google never holds the page.
+  {
+    const settle = async () => { for (let i = 0; i < 6; i++) await new Promise((r) => setImmediate(r)); };
+    const ADDRESS = { address: "100 Main St", city: "Wichita", state: "KS", zip: "67202" };
+    const newBlob = () => { const b = blob(ADDRESS); delete b.polish_estimate; return b; };
+    const snap = (x) => {
+      const m = x.api.model();
+      const li = m.labor.findIndex((r) => r.id === "travel");
+      return {
+        distance: m.distance === undefined ? null : clone(m.distance),
+        local: m.conditions.local,
+        lodging: m.travel.lodging.enabled, perDiem: m.travel.per_diem.enabled,
+        lodgingHand: m.travel.lodging.hand === true,
+        note: txt(x, "[data-dist-note]"), status: txt(x, "[data-dist-status]"),
+        lodgingGray: /inert/.test(need(x, '[data-trv-card="lodging"]').className),
+        travelLaborGray: /inert/.test(need(x, '[data-lab-card="' + li + '"]').className),
+      };
+    };
+
+    // FAR: 120.4 miles. The three lines come on; Polish!B4 is written "No" from the hidden answer.
+    const far = build({ blob: newBlob(), distance: { ok: true, miles: 120.4, reason: "" } });
+    await far.api.init(); far.api.go(1); await settle();
+    const farSnap = snap(far);
+    far.clock.fire();
+    const farSaved = far.rec.saves[far.rec.saves.length - 1];
+    far.api.go(2);
+    const farReview = far.dom.get("panels").innerHTML;
+
+    // NEAR: 30 miles. Local; all three stay gray; B4 "Yes".
+    const near = build({ blob: newBlob(), distance: { ok: true, miles: 30, reason: "" } });
+    await near.api.init(); near.api.go(1); await settle();
+    const nearSnap = snap(near);
+    near.clock.fire();
+    const nearSaved = near.rec.saves[near.rec.saves.length - 1];
+
+    // EXACTLY 70 is far (70 or more).
+    const seventy = build({ blob: newBlob(), distance: { ok: true, miles: 70, reason: "" } });
+    await seventy.api.init(); await settle();
+    const seventySnap = { local: seventy.api.model().conditions.local,
+                          lodging: seventy.api.model().travel.lodging.enabled };
+
+    // UNKNOWN (no key): nothing guessed, the page still opens, and typing miles takes over.
+    const unk = build({ blob: newBlob(), distance: { ok: false, miles: null, reason: "no_key" } });
+    await unk.api.init(); unk.api.go(1); await settle();
+    const unkSnap = snap(unk);
+    typeInto(unk, "[data-dist-miles]", "85");
+    const typed85 = snap(unk);
+    // A hand flip on Lodging, then the miles move around: the line the estimator flipped stays.
+    clickOn(unk, '[data-on-trv="lodging"]');                 // on -> OFF, by hand
+    typeInto(unk, "[data-dist-miles]", "20");
+    const typed20 = snap(unk);
+    typeInto(unk, "[data-dist-miles]", "90");
+    const typed90 = snap(unk);
+    // Clearing the box goes back to unknown: Per Diem (never touched) goes gray again.
+    typeInto(unk, "[data-dist-miles]", "");
+    await settle();
+    const cleared = snap(unk);
+
+    // THE NETWORK FAILING is the same answer as unknown, with a reason shown.
+    const down = build({ blob: newBlob(), distanceFails: true });
+    await down.api.init(); down.api.go(1); await settle();
+    const downSnap = snap(down);
+
+    // A SLOW GOOGLE never holds the page: init() resolves while the answer is still pending, the
+    // Labor step renders, and a figure typed in the meantime wins when the answer finally lands.
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    const slow = build({ blob: newBlob(), distance: { ok: true, miles: 200, reason: "" },
+                         distanceGate: gate });
+    await slow.api.init(); slow.api.go(1);
+    const slowBusy = snap(slow);
+    typeInto(slow, "[data-dist-miles]", "10");
+    release(); await settle();
+    const slowAfter = snap(slow);
+
+    // NO ADDRESS (or too thin to place): no request leaves, and the estimator is told.
+    const blank = build({ blob: (() => { const b = blob(); delete b.polish_estimate; return b; })(),
+                          distance: { ok: true, miles: 99, reason: "" } });
+    await blank.api.init(); blank.api.go(1); await settle();
+    const blankSnap = snap(blank);
+    const thin = build({ blob: (() => { const b = blob({ address: "100 Main St", city: "", state: "" });
+      delete b.polish_estimate; return b; })(), distance: { ok: true, miles: 99, reason: "" } });
+    await thin.api.init(); await settle();
+
+    // A SAVED BID is not repriced behind anybody's back: no automatic request, the line stays as
+    // saved, and the button is how the estimator asks. Pressing it applies the answer.
+    const savedModel = { version: 2, takeoff: clone(MODEL.takeoff),
+      labor: [{ id: "polishing", label: "Polishing", guys: 3, days: 5, rate: 33 },
+              { id: "mockup", label: "Mock-up", guys: 3, days: 0.5, rate: 33 },
+              { id: "travel", label: "Travel Labor", guys: "", days: "", rate: 33, unit: "hours",
+                guys_auto: true }],
+      conditions: Object.assign(clone(MODEL.conditions), { local: true }),
+      contingency: 0, fees: 0, totals: {} };
+    const saved = build({ blob: blob(Object.assign({ polish_estimate: clone(savedModel) }, ADDRESS)),
+                          distance: { ok: true, miles: 150, reason: "" } });
+    await saved.api.init(); saved.api.go(1); await settle();
+    const savedBefore = snap(saved);
+    const savedFetches = (saved.rec.distanceBodies || []).length;
+    clickOn(saved, "[data-dist-lookup]"); await settle();
+    const savedAfter = snap(saved);
+
+    out.distance = {
+      requestBody: (far.rec.distanceBodies || [])[0] || null,
+      requests: (far.rec.distanceBodies || []).length,
+      far: farSnap,
+      farKey: farSnap.distance && farSnap.distance.key,
+      farCellB4: farSaved.cell_values["Polish!B4"], farModelLocal: farSaved.polish_estimate.conditions.local,
+      farSavedDistance: farSaved.polish_estimate.distance,
+      farReviewHasLodging: farReview.indexOf(">Lodging<") !== -1,
+      near: nearSnap, nearCellB4: nearSaved.cell_values["Polish!B4"],
+      seventy: seventySnap,
+      unk: unkSnap, typed85: typed85, typed20: typed20, typed90: typed90, cleared: cleared,
+      down: downSnap,
+      slowBusy: slowBusy, slowAfter: slowAfter,
+      blank: blankSnap, blankRequests: (blank.rec.distanceBodies || []).length,
+      thinRequests: (thin.rec.distanceBodies || []).length,
+      savedBefore: savedBefore, savedFetches: savedFetches, savedAfter: savedAfter,
     };
   }
 

@@ -1435,6 +1435,112 @@
           "70 miles this line stays gray.") + '</p></div>';
   }
 
+  // ── distance decides "local" ────────────────────────────────────────────────
+  // The intake's "Local job" switch is gone (Kyle 9/18; Hanz, 2026-10-05). The server works the
+  // driving miles from the Olathe office to the job address out (POST /api/distance, Google Routes)
+  // and B.applyDistance turns them into the hidden `conditions.local` answer, which is still what
+  // Polish!B4 is written from. >= 70 miles: the three travel lines come on. < 70: they gray.
+  //
+  // THE LOOKUP NEVER BLOCKS ANYTHING. It starts after the first paint, has its own timeout, and
+  // any failure leaves the page exactly as it was with "Distance unknown -- enter miles" and a
+  // box to type the number in. Nothing is guessed. A typed figure always wins, and a Lodging /
+  // Per Diem line the estimator flipped by hand is never moved by an answer (B.applyDistance).
+  //
+  // ONLY A NEW BID LOOKS IT UP BY ITSELF. A saved bid opened later does not reprice behind
+  // anybody's back: it shows what it was saved with and offers the button.
+  var distBusy = false;
+  var distReason = "";
+  var DIST_REASONS = {
+    incomplete: "Add the street, city and state on the intake step, or type the miles.",
+    no_key: "The distance service is not set up yet. Type the miles.",
+    not_found: "That address could not be found. Check it on the intake step, or type the miles.",
+    busy: "Too many lookups just now. Type the miles, or try again in a few minutes.",
+    error: "The distance lookup did not answer. Type the miles, or try again."
+  };
+
+  function addressKey() {
+    var s = TW.getState() || {};
+    return B.distanceKey(s.address, s.city, s.state, s.zip);
+  }
+
+  function distanceStatus() {
+    if (distBusy) return "Looking up the driving distance…";
+    var d = M.distance;
+    if (d && d.source === "google" && addressKey() && d.key !== addressKey()) {
+      return "The address changed since this was measured. Look it up again, or type the miles.";
+    }
+    if (!d && distReason) return DIST_REASONS[distReason] || DIST_REASONS.error;
+    if (!d) return "Type the miles from the office, or look it up from the job address.";
+    return "";
+  }
+
+  function distanceBlock() {
+    var d = M.distance;
+    return '<div class="trvdist" data-dist>' +
+      '<p class="cap"><b data-dist-note>' + esc(B.distanceNote(M)) + '</b> ' +
+      '<span class="hint" data-dist-status>' + esc(distanceStatus()) + '</span></p>' +
+      '<div class="distrow"><label>Miles from the office</label>' +
+      '<input class="n" inputmode="decimal" data-dist-miles value="' +
+      esc(d && d.miles != null ? d.miles : "") + '">' +
+      '<button type="button" class="btn" data-dist-lookup>Look it up from the address</button></div>' +
+      '</div>';
+  }
+
+  /** Repaint the distance note and the three travel lines in place: no rebuild, so a caret
+   *  somewhere else on the page is not stolen when the server's answer lands. */
+  function paintDistance() {
+    var note = document.querySelector("[data-dist-note]");
+    if (note) note.textContent = B.distanceNote(M);
+    var st = document.querySelector("[data-dist-status]");
+    if (st) st.textContent = distanceStatus();
+    var box = document.querySelector("[data-dist-miles]");
+    if (box && document.activeElement !== box) {
+      var v = M.distance && M.distance.miles != null ? String(M.distance.miles) : "";
+      if (box.value !== v) box.value = v;
+    }
+    document.querySelectorAll("[data-on-trv]").forEach(function (el) {
+      var l = M.travel && M.travel[el.getAttribute("data-on-trv")];
+      if (!l) return;
+      el.className = "mw-sw" + (l.enabled ? " on" : "");
+      el.setAttribute("aria-checked", l.enabled ? "true" : "false");
+    });
+  }
+
+  /** Ask the server for the miles and apply them. `force` is the estimator pressing the button:
+   *  it replaces a typed figure too, because they asked. Without it a typed figure, or a figure
+   *  already measured for this exact address, is left alone. Never throws. */
+  async function lookupDistance(force) {
+    var s = TW.getState() || {};
+    var key = B.distanceKey(s.address, s.city, s.state, s.zip);
+    if (!key) { distReason = "incomplete"; paintDistance(); return; }
+    if (!force && M.distance && (M.distance.source === "typed" || M.distance.key === key)) return;
+    var model = M;
+    distBusy = true; distReason = "";
+    paintDistance();
+    var miles = null, reason = "error";
+    try {
+      var res = await api("/api/distance", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ address: s.address || "", city: s.city || "", state: s.state || "",
+                               zip: s.zip || "" }),
+        signal: (typeof AbortSignal !== "undefined" && AbortSignal.timeout)
+          ? AbortSignal.timeout(10000) : undefined
+      });
+      var j = await res.json();
+      miles = B.milesOrNull(j && j.miles);
+      reason = (j && j.reason) || "error";
+    } catch (e) { miles = null; }
+    distBusy = false;
+    // The page can have moved to another draft, or the estimator can have typed miles while the
+    // answer was on its way. Theirs wins; this answer is dropped.
+    if (model !== M || (!force && M.distance && M.distance.source === "typed")) { paintDistance(); return; }
+    if (miles === null) { distReason = reason; paintDistance(); return; }
+    B.applyDistance(M, { miles: miles, source: "google", key: key });
+    changed(false);
+    paintDistance();
+  }
+
   function laborPanel() {
     // Travel Labor is its own block, below a dividing line, with Lodging and Per Diem. Every other
     // task keeps its place above it. `i` stays the row's real index in M.labor -- the handlers
@@ -1457,6 +1563,7 @@
     html += '<div class="trvsep" role="separator"><span>Travel</span></div>' +
       '<p class="cap">Travel is expected when the job is 70 miles or more from the office. Under ' +
       '70 miles all three lines below stay gray until you switch one on.</p>';
+    html += distanceBlock();
     html += travelRows + travelCard("lodging") + travelCard("per_diem");
     html += '<p class="cap">Lodging and Per Diem total <b data-travel-total>' +
       esc(moneyAuto(B.travelCosts(M.travel, M.labor).total)) + '</b>, added before the markups.</p>';
@@ -1916,6 +2023,9 @@
     var go_ = t.closest("[data-go]");
     if (go_) { e.preventDefault(); go(parseInt(go_.getAttribute("data-go"), 10)); return; }
 
+    // The explicit lookup: replaces a typed figure too, because the estimator asked.
+    if (t.closest("[data-dist-lookup]")) { lookupDistance(true); return; }
+
     // THE CARET GOES WITH THE ROW. The button is at the top of the list and the row lands at the
     // bottom of it, so without this the estimator presses Add and nothing they can see happens.
     // focus() scrolls the box into view as a side effect, which is the whole trick.
@@ -2176,6 +2286,25 @@
     if (el.matches("[data-fees]")) {
       M.fees = el.value;
       changed(false);
+      return;
+    }
+    // THE ESTIMATOR'S OWN MILES. They always win over the server's figure. A number applies at
+    // once (>= 70 brings the travel lines on, under 70 grays them; a line flipped by hand stays
+    // as flipped); clearing the box goes back to "unknown" and asks the server again. The panel is
+    // rebuilt so the three cards repaint, with the caret carried (the pattern the Travel boxes
+    // below use) -- a half-typed "7" before "70" is an ordinary moment, not an error.
+    if (el.matches("[data-dist-miles]")) {
+      var typedMiles = B.milesOrNull(el.value);
+      if (typedMiles !== null) {
+        B.applyDistance(M, { miles: typedMiles, source: "typed", key: addressKey() });
+        changed(true);
+        refocus("[data-dist-miles]");
+      } else if (String(el.value).trim() === "") {
+        B.clearDistance(M);
+        changed(true);
+        refocus("[data-dist-miles]");
+        lookupDistance(false);
+      }
       return;
     }
     if (!el.matches("input")) return;
@@ -2553,6 +2682,11 @@
     at = openingStep(at);
     paintRail();
     renderPanel();
+
+    // DISTANCE, AFTER THE PAINT AND NEVER AWAITED: a slow or dead map service costs the page
+    // nothing. Only a NEW bid asks by itself (the same gate as the defaults above); a saved bid
+    // keeps what it was saved with and offers the button. See lookupDistance.
+    if (laborDefaults && !M.distance) lookupDistance(false);
   }
 
   init();

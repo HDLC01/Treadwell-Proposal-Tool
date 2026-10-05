@@ -72,6 +72,7 @@ import condition_defaults
 import cover_letter_writer
 import docx_merge
 import digest_worker
+import distance
 import drafts
 import dropbox_client
 import estimate_writer
@@ -3663,6 +3664,32 @@ def _price_bundle(payload: PriceIn, systems_in: list, coves_in: list,
     else:
         resp["grand_total"] = round(mt + sales_tax, 2)
     return resp
+
+
+class DistanceIn(BaseModel):
+    address: str = ""
+    city: str = ""
+    state: str = ""
+    zip: str = ""
+
+
+@app.post("/api/distance")
+def api_distance(payload: DistanceIn, request: Request) -> Dict[str, Any]:
+    """Driving miles from the Olathe office to the job address (Google Routes, server-side).
+
+    ALWAYS 200. Every case that cannot produce a real figure -- no key configured, address not
+    found, Google slow or down, address too thin, rate limit -- answers `{ok: false, miles: null,
+    reason}` and the Labor step asks the estimator to type the miles. Nothing here is a guess.
+
+    PERMISSION. Any signed-in user (the auth gate above); no tab owns this route and it is NOT in
+    nav_access.TABS on purpose: the estimate step that calls it is read by every estimator
+    mid-bid, and a per-tab gate would silently blank the distance halfway through a bid (the same
+    reasoning nav_access records for /api/library/items). A sync handler, so FastAPI runs it in
+    the threadpool and a slow Google answer never holds the event loop."""
+    bucket = getattr(request.state, "user_email", None) or "anon"
+    if distance.rate_limited(bucket):
+        return {"ok": False, "miles": None, "reason": "busy", "office": distance.OFFICE_LABEL}
+    return distance.lookup(payload.address, payload.city, payload.state, payload.zip)
 
 
 @app.post("/api/price")

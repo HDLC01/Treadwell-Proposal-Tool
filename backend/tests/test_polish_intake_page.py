@@ -121,9 +121,11 @@ def test_a_polish_job_renders_five_conditions_as_toggles(ran):
     bid, or Renovation) back. Any of those makes two screens ask the same question, or asks one
     nobody can answer any more, either of which is the state this change ended."""
     keys = [s["key"] for s in ran["conditions"]["rendered"]]
-    assert keys == ["local", "prevailing_wage", "taxable", "remodel_tax", "bond"]
+    # NO "Local job" SWITCH (Kyle 9/18, Hanz 2026-10-05): the Labor step works it out from the
+    # address. The model still carries `local` and the workbook still gets Polish!B4.
+    assert keys == ["prevailing_wage", "taxable", "remodel_tax", "bond"]
     assert [s["label"] for s in ran["conditions"]["rendered"]] == [
-        "Local job", "Prevailing wage", "Taxable", "Remodel tax", "Bond"]
+        "Prevailing wage", "Taxable", "Remodel tax", "Bond"]
     assert ran["conditions"]["allAreSwitches"], "a condition rendered without its toggle track"
     assert ran["conditions"]["allHaveWhy"], (
         "a toggle lost its plain-English line — 'Prevailing wage' on its own tells an estimator "
@@ -158,11 +160,12 @@ def test_the_keys_are_the_ones_the_pricing_engine_reads(ran):
     looks it up — bond_pct is RATES.BOND unconditionally. That is deliberate and pinned separately,
     so do not read this as "the engine reads all five"."""
     page, core = ran["conditions"]["pageKeys"], ran["coreKeys"]
-    assert page == ["local", "prevailing_wage", "taxable", "remodel_tax", "bond"]
+    assert page == ["prevailing_wage", "taxable", "remodel_tax", "bond"]
     assert set(page) <= set(core), (
         "this form renders a condition the model has no key for, so it saves nowhere: %r"
         % (set(page) - set(core)))
-    assert set(core) - set(page) == {"dye", "joint_filler", "remove_existing_jf"}, (
+    # `local` is on the model and off this form: the Labor step sets it from the job's distance.
+    assert set(core) - set(page) == {"local", "dye", "joint_filler", "remove_existing_jf"}, (
         "the model carries a condition neither this form nor the Takeoff step asks about: %r"
         % (set(core) - set(page)))
     # FIVE RENDER, FIVE PRICE -- WITH BOND UNCONDITIONAL RATHER THAN CONDITIONAL. Every key this
@@ -199,7 +202,7 @@ def test_the_documented_defaults_are_what_a_new_project_shows(ran):
     # Local + Taxable on, the other four off — the live intake's defaults, which are how Kyle's
     # sheet ships. Bond off matches B78 shipping at zero.
     assert ran["conditions"]["freshRender"] == [
-        ["local", True], ["prevailing_wage", False],
+        ["prevailing_wage", False],
         ["taxable", True], ["remodel_tax", False], ["bond", False]]
 
 
@@ -210,8 +213,8 @@ def test_a_v1_model_still_has_its_conditions_read(ran):
 
     Mutation: read conditions only when `version` is set, and every older beta project silently
     reverts to local + taxable — including the prevailing-wage ones."""
-    assert ran["conditions"]["v1Render"][:4] == [
-        ["local", False], ["prevailing_wage", True],
+    assert ran["conditions"]["v1Render"][:3] == [
+        ["prevailing_wage", True],
         ["taxable", True], ["remodel_tax", False]]
     # Bond is not in polish_estimate.conditions on a v1 draft and never was, so such a model
     # states nothing about it and it shows its documented default. It has no cell to come back
@@ -220,7 +223,7 @@ def test_a_v1_model_still_has_its_conditions_read(ran):
     # The three that moved are not in this list because they are not on this screen any more; what
     # a v1 draft does about THEM is migrateModel's generic backfill, pinned in
     # test_polish_markup_parity.test_a_v1_draft_opens_as_a_v2_model.
-    assert ran["conditions"]["v1Render"][4:] == [["bond", False]]
+    assert ran["conditions"]["v1Render"][3:] == [["bond", False]]
 
 
 @needs_node
@@ -387,7 +390,7 @@ def test_flipping_a_toggle_here_never_throws_away_the_caret(ran):
         "a condition on this form depends on another again — it will re-render the whole block on "
         "every flip, so put the caret-restore logic back and test it: %r"
         % ran["caret"]["dependsOn"])
-    assert ran["caret"]["focusUnmoved"] == "cond-local", (
+    assert ran["caret"]["focusUnmoved"] == "cond-remodel_tax", (
         "flipping Taxable moved the caret off the switch the estimator had tabbed into")
     assert ran["caret"]["containerUntouched"], (
         "the whole conditions block was re-rendered to record one flip")
@@ -653,8 +656,8 @@ def test_the_page_renders_the_copy_the_sandbox_moved_it_onto(ran):
         "the form was filled from the project that was clicked, not the copy being edited")
     assert c["hydratedIntoTheForm"], "writeForm was handed something that is not the form"
     assert c["projLine"] == "Nearman Creek (beta test) · Bonner Springs, KS"
-    assert c["rendered"][:4] == [
-        ["local", False], ["prevailing_wage", False],
+    assert c["rendered"][:3] == [
+        ["prevailing_wage", False],
         ["taxable", True], ["remodel_tax", False]], (
         "the toggles show the source project's conditions, not the copy's")
     # And the cell-borne answer is re-read from the COPY's cell_values on the same pass --
@@ -666,7 +669,7 @@ def test_the_page_renders_the_copy_the_sandbox_moved_it_onto(ran):
     # invisible here and has to be asserted against the model, or the copy would quietly inherit
     # the source project's joint filler and write it into the copy's workbook. Polish!E29 says "No"
     # on the copy, the opposite of freshModel's default, so this cannot pass by accident.
-    assert c["rendered"][4:] == [["bond", False]]
+    assert c["rendered"][3:] == [["bond", False]]
     assert c["modelConds"]["joint_filler"] is False, (
         "the model kept the source project's joint filler after the sandbox switched drafts — "
         "Polish!E29 on the COPY says No")
@@ -1533,8 +1536,8 @@ def test_the_beta_conditions_differ_from_the_live_ones_only_where_decided():
     beta = re.findall(r'\{ key: "(\w+)", label:', beta_js)
     live = [k for k, scope in re.findall(r'\{ key: "(\w+)", label: "[^"]*", scope: \[([^\]]*)\]', live_js)
             if "polish" in scope]
-    assert beta == ["local", "prevailing_wage", "taxable", "remodel_tax", "bond"], beta
-    assert sorted(set(live) - set(beta)) == ["dye", "joint_filler", "remove_existing_jf", "reno"], live
+    assert beta == ["prevailing_wage", "taxable", "remodel_tax", "bond"], beta
+    assert sorted(set(live) - set(beta)) == ["dye", "joint_filler", "local", "remove_existing_jf", "reno"], live
     assert set(beta) - set(live) == {"bond"}
 
 
@@ -1580,3 +1583,16 @@ def test_the_shared_lookup_queries_fills_and_tells_the_form_so_it_can_save(addr)
     assert b["name"] == "Acme warehouse retrofit" and b["city"] == "Olathe" and b["zip"] == "66061"
     assert addr["clickAway"] == {"stayedOpenOnInputClick": True, "closedElsewhere": True}
     assert addr["noBusinessBox"] == {"threw": False}
+
+
+@needs_node
+def test_the_local_job_switch_is_gone_but_the_hidden_answer_still_reaches_b4(ran):
+    """Kyle 9/18, Hanz 2026-10-05: distance decides local. No switch is drawn and none can flip it,
+    yet the model keeps `local` and every save still writes both B4 cells from it.
+
+    Mutation: put the Local job entry back in CONDITIONS, or stop writing `local` in conditionCells."""
+    h = ran["hiddenLocal"]
+    assert h["drawn"] is False
+    assert "local" not in h["switchKeys"]
+    assert h["modelLocal"] is False and h["modelLocalAfterToggle"] is False
+    assert h["polishB4"] == "No" and h["epoxyB4"] == "No"
