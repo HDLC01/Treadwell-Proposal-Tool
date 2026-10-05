@@ -220,7 +220,45 @@
     if (r.item_id) return priceMaterialRow(r);
     var asm = asmById(r.assembly_id);
     if (!asm) return null;
-    return L.priceAssembly(asm, ITEMS, B.num(r.measurement));
+    return priceAssemblyRow(asm, r, B.num(r.measurement));
+  }
+
+  /** `items` with ONE item's coverage replaced, as a copy. The library's own rows are never
+   *  mutated: a coverage typed on a bid is that bid's fact, not a second source for the material.
+   *  Anything that is not a positive number leaves `items` as it came, so a blank box falls back
+   *  to the library value exactly as before. */
+  function itemsWithCoverage(items, itemId, cov) {
+    if (!(cov > 0)) return items;
+    return items.map(function (it) {
+      return it && it.id === itemId ? Object.assign({}, it, { coverage: cov }) : it;
+    });
+  }
+
+  /** An assembly row priced with THIS BID'S coverage for any of its lines (`row.line_cov`, keyed
+   *  by the line's position because one material can sit on two lines at two coverages).
+   *
+   *  The override rides on a one-line SWAP of the real item under a throwaway id, so the same
+   *  priceLine / priceAssembly that every other number on the page goes through does the
+   *  arithmetic; there is no second pricing path to drift. With nothing typed this is exactly
+   *  L.priceAssembly(asm, ITEMS, area), which is what every row saved before this existed gets. */
+  function priceAssemblyRow(asm, row, area) {
+    var lc = (row && row.line_cov && typeof row.line_cov === "object") ? row.line_cov : null;
+    var lines = (asm && asm.lines) || [];
+    if (!lc) return L.priceAssembly(asm, ITEMS, area);
+    var items = ITEMS, any = false;
+    var swapped = lines.map(function (ln, j) {
+      var cov = B.num(lc[j]);
+      var id = ln && (ln.item_id || ln.item);
+      if (!(cov > 0) || !id) return ln;
+      var real = L.findItem(ITEMS, id);
+      if (!real) return ln;
+      any = true;
+      var tmp = "__cov" + j;
+      items = items.concat([Object.assign({}, real, { id: tmp, coverage: cov })]);
+      return Object.assign({}, ln, { item_id: tmp, item: undefined });
+    });
+    if (!any) return L.priceAssembly(asm, ITEMS, area);
+    return L.priceAssembly(Object.assign({}, asm, { lines: swapped }), items, area);
   }
 
   /** One material, priced as priceAssembly would have priced a one-line assembly containing it.
@@ -241,11 +279,7 @@
     // polish-bid-core.js), which is exactly how covHint/covPlaceholder already tell "nothing
     // typed" from a real figure. `!== null` would treat every blank row as coverage 0 and price it
     // as broken (no_coverage) the instant it's added, before anyone touches the box.
-    if (cov) {
-      items = ITEMS.map(function (it) {
-        return it && it.id === r.item_id ? Object.assign({}, it, { coverage: cov }) : it;
-      });
-    }
+    if (cov) items = itemsWithCoverage(ITEMS, r.item_id, cov);
     var one = L.priceLine({ item_id: r.item_id }, items, area);
     var priced = one.ok && one.priced ? 1 : 0;
     var broken = (!one.ok && one.reason !== "no_item") ? 1 : 0;
@@ -298,7 +332,10 @@
    *  for dye (the area is what dye is spread across, whatever its row's coverage says). */
   function condLine(key, area) {
     var id = key === "dye" ? "dye" : "joint-filler-kit";
-    var p = L.priceLine({ item_id: id }, ITEMS, area);
+    // THIS BID'S COVERAGE for the line, if one was typed (M.cond_cov, set from the card's Coverage
+    // box). Blank leaves ITEMS alone, so the library's own figure -- and every bid saved before the
+    // box existed -- prices exactly as it did.
+    var p = L.priceLine({ item_id: id }, itemsWithCoverage(ITEMS, id, condCovTyped(key)), area);
     if (p.ok) {
       // DYE IS TWO COATS, Kyle's rows 25 and 26 (B.DYE_COATS); the row prices ONE of them. The
       // fallback's dyeCost already charges both.
@@ -718,12 +755,50 @@
     return cov ? String(cov) : "";
   }
 
+  /** The line under EVERY coverage box, whichever kind of row owns it.
+   *
+   *  `typed` is what this bid says, `lib` the material's own figure. A typed number that differs
+   *  from the library's is the one case worth a sentence of its own: the estimator is looking at
+   *  a figure that is not the library's and needs the way back to it ("Library default: N").
+   *  Typing the library's own number back reads as the plain line, because nothing differs. */
+  function covLine(typed, lib) {
+    typed = B.num(typed); lib = B.num(lib);
+    if (typed > 0) {
+      return (lib > 0 && typed !== lib) ? "Library default: " + lib : "How far one goes, for this job.";
+    }
+    if (lib > 0) return "Blank uses the library's " + lib + ".";
+    return "How far one goes. The library has no default for it.";
+  }
+
   function covHint(row) {
     var it = itemById((row || {}).item_id);
-    var cov = it && B.num(it.coverage);
-    if (B.num((row || {}).coverage)) return "How far one goes, for this job.";
-    if (cov) return "Blank uses the library's " + B.num(cov) + ".";
-    return "How far one goes. The library has no default for it.";
+    return covLine((row || {}).coverage, it && it.coverage);
+  }
+
+  /** What THIS BID types for a condition card's coverage (Joint Filler, Dye). 0 when blank. */
+  function condCovTyped(key) {
+    var cc = (M && M.cond_cov) || {};
+    return B.num(cc[key]);
+  }
+
+  function condCovItem(key) {
+    return itemById(key === "dye" ? "dye" : "joint-filler-kit");
+  }
+
+  /** An assembly row's lines that name a real material, each with the figure it will price with:
+   *  [{ j, name, lib, typed }]. `j` is the line's position, the key row.line_cov is stored under. */
+  function asmCovLines(row) {
+    var asm = asmById((row || {}).assembly_id);
+    var out = [];
+    if (!asm) return out;
+    var lc = (row.line_cov && typeof row.line_cov === "object") ? row.line_cov : {};
+    (asm.lines || []).forEach(function (ln, j) {
+      var id = ln && (ln.item_id || ln.item);
+      var it = id ? itemById(id) : null;
+      if (!it) return;
+      out.push({ j: j, name: it.name || "Material", lib: B.num(it.coverage), typed: lc[j] });
+    });
+    return out;
   }
 
   function measureText(row) {
@@ -867,7 +942,17 @@
       // says. `unit` beside the Measurement is plural because five of them is what the job buys.
       rate: qty > 0 ? (c.rateHint ? c.rateHint(cost, qty)
                                   : B.money2(cost / qty) + " / " + c.unit(1)) : "",
-      qtyHint: c.qtyHint(area)
+      qtyHint: c.qtyHint(area),
+      // The Coverage box's own text, here so the first paint and repaintNumbers share one source.
+      covPlaceholder: (function () {
+        var it = condCovItem(c.key);
+        var v = it && B.num(it.coverage);
+        return v ? String(v) : "";
+      })(),
+      covHint: (function () {
+        var it = condCovItem(c.key);
+        return covLine(((M && M.cond_cov) || {})[c.key], it && it.coverage);
+      })()
     };
   }
 
@@ -882,10 +967,12 @@
    *  reason: "In the bid" reads true against both switch positions, where "Include" would
    *  describe the state you are leaving.
    *
-   *  FOUR COLUMNS, `.tk-g` UNCHANGED -- the assembly row's template, not `.matg`'s five. There is
-   *  no Coverage, because neither of these is bought by the pack. Sharing the template is what
-   *  puts the Measurement, Unit and Total cost of these lines in the same place down the page as
-   *  every row above them, which is the whole point of them being rows. */
+   *  FIVE COLUMNS, `.matg` -- a material row's template, Coverage included. (An earlier note here
+   *  said these had no Coverage because neither is bought by the pack. That was wrong: Joint
+   *  Filler is bought by the KIT, one per 3,500 SF, and Dye is a library material with its own
+   *  coverage like any other.) The box is this bid's own override (M.cond_cov): blank prices with
+   *  the library row's figure, and a typed one says "Library default: N". It prices through
+   *  condLine and reaches Kyle's workbook through conditionLibrary, so the download matches. */
   function condMaterialCard(c) {
     var f = condFigures(c);
     var box = function (part, empty, text) {
@@ -904,7 +991,7 @@
       '<span class="tk-sub" data-condfig="' + esc(c.key) + '.sub">' + esc(f.sub) + "</span>" +
       condSwitch(c.key, c.label) +
       "</div>" +
-      '<div class="tk-g">' +
+      '<div class="tk-g matg">' +
 
       '<div class="f"><label>Material</label>' +
       '<div class="costbox txt">' + esc(c.material()) + "</div>" +
@@ -918,6 +1005,14 @@
       '<div class="costbox txt" data-condfig="' + esc(c.key) + '.unit">' + esc(f.unit) +
       "</div>" +
       '<p class="hint">' + esc(c.unitHint) + "</p></div>" +
+
+      // THE SAME COVERAGE BOX A MATERIAL ROW CARRIES, for this bid only (M.cond_cov). Blank prices
+      // with the library row's coverage, shown as the placeholder; a typed figure that differs
+      // says "Library default: N" underneath.
+      '<div class="f"><label>Coverage</label>' +
+      '<input class="n" data-condcov="' + esc(c.key) + '" value="' +
+      esc(nv(((M && M.cond_cov) || {})[c.key])) + '" placeholder="' + esc(f.covPlaceholder) + '">' +
+      hint("covhint", f.covHint) + "</div>" +
 
       '<div class="f"><label>Total cost</label>' +
       box("cost", f.costEmpty, f.cost) +
@@ -1054,7 +1149,7 @@
         ? '<div class="f"><label>Coverage</label>' +
           '<input class="n" data-tk="' + i + '" data-k="coverage" value="' +
           esc(nv(r.coverage)) + '" placeholder="' + esc(covPlaceholder(r)) + '">' +
-          '<p class="hint">' + esc(covHint(r)) + '</p></div>'
+          '<p class="hint" data-covhint-for="' + i + '">' + esc(covHint(r)) + '</p></div>'
         : "") +
 
       '<div class="f"><label>Total cost</label>' +
@@ -1064,7 +1159,24 @@
       esc(p && p.per_unit != null ? B.money2(p.per_unit) + " / " + (r.unit || "SF") : "") +
       '</p></div>' +
 
-      '</div>' + warn;
+      '</div>' + asmCoverageBlock(r, i, kind) + warn;
+  }
+
+  /** An ASSEMBLY row's coverage, one box per material line -- an assembly keeps coverage on its
+   *  materials, so a row loaded from the defaults (or picked by hand) shows what each of its lines
+   *  will price with, and the estimator can change any of them for THIS bid (row.line_cov). The
+   *  same covLine text sits under each box. Empty string for every other kind of row. */
+  function asmCoverageBlock(r, i, kind) {
+    if (kind !== "asm") return "";
+    var lines = asmCovLines(r);
+    if (!lines.length) return "";
+    return '<div class="tk-g asmcov" data-asmcov-for="' + i + '">' + lines.map(function (x) {
+      return '<div class="f"><label>' + esc(x.name) + ' coverage</label>' +
+        '<input class="n" data-asmcov="' + i + '" data-line="' + x.j + '" value="' +
+        esc(nv(x.typed)) + '" placeholder="' + esc(x.lib ? String(x.lib) : "") + '">' +
+        '<p class="hint" data-asmcovhint="' + i + ':' + x.j + '">' +
+        esc(covLine(x.typed, x.lib)) + '</p></div>';
+    }).join("") + '</div>';
   }
 
   /** Redraw ONE row card, in place, class and inside.
@@ -1591,6 +1703,19 @@
       put("qtyhint", f.qtyHint);
       put("cost", f.cost, "costbox" + (f.costEmpty ? " empty" : ""));
       put("rate", f.rate);
+      put("covhint", f.covHint);
+    });
+    // The Coverage hints under every takeoff box: typing takes `changed(false)`, which repaints in
+    // place, so "Library default: N" has to appear here rather than wait for a rebuild.
+    document.querySelectorAll("[data-covhint-for]").forEach(function (el) {
+      var hi = parseInt(el.getAttribute("data-covhint-for"), 10);
+      el.textContent = covHint(M.takeoff[hi]);
+    });
+    document.querySelectorAll("[data-asmcovhint]").forEach(function (el) {
+      var parts = el.getAttribute("data-asmcovhint").split(":");
+      var row = M.takeoff[parseInt(parts[0], 10)];
+      var hit = asmCovLines(row).filter(function (x) { return String(x.j) === parts[1]; })[0];
+      if (hit) el.textContent = covLine(hit.typed, hit.lib);
     });
 
     var one = function (sel, txt) {
@@ -1724,6 +1849,9 @@
     row.assembly_name = text;
     var asm = assemblyByName(text);
     row.assembly_id = asm ? asm.id : "";
+    // A DIFFERENT ASSEMBLY IS DIFFERENT LINES: coverage typed against the old one's lines would
+    // land on the wrong materials, so it goes with the old pick.
+    if (row.assembly_id !== before) delete row.line_cov;
     // Adopt the assembly's own unit only when the pick actually CHANGES. Doing it on every
     // keystroke would snap a row whose unit the estimator switched by hand back to the library's.
     if (asm && row.assembly_id !== before) {
@@ -1773,18 +1901,18 @@
       row.kind = "item";
       row.item_id = ""; row.item_name = "";
       if (row.coverage == null) row.coverage = "";
-      delete row.assembly_id; delete row.assembly_name;
+      delete row.assembly_id; delete row.assembly_name; delete row.line_cov;
       return;
     }
     if (kind === "asm") {
       row.kind = "asm";
       row.assembly_id = ""; row.assembly_name = "";
-      delete row.item_id; delete row.item_name; delete row.coverage;
+      delete row.item_id; delete row.item_name; delete row.coverage; delete row.line_cov;
       return;
     }
     row.kind = "new"; row.pick_name = "";
     delete row.assembly_id; delete row.assembly_name;
-    delete row.item_id; delete row.item_name; delete row.coverage;
+    delete row.item_id; delete row.item_name; delete row.coverage; delete row.line_cov;
   }
 
   /** Point a takeoff row at whatever was typed or picked, and let the pick decide what kind of
@@ -1842,6 +1970,27 @@
     if (!el.matches("input")) return;
     var k = el.getAttribute("data-k");
 
+    // THIS BID'S COVERAGE for Joint Filler / Dye (M.cond_cov) and for one line of an assembly row
+    // (row.line_cov). Both take `changed(false)`: reprice and repaint in place, never a rebuild,
+    // so the caret stays in the box being typed in.
+    var cc = el.getAttribute("data-condcov");
+    if (cc !== null) {
+      if (!M.cond_cov || typeof M.cond_cov !== "object") M.cond_cov = {};
+      M.cond_cov[cc] = el.value;
+      changed(false);
+      return;
+    }
+    var ac = el.getAttribute("data-asmcov");
+    if (ac !== null) {
+      var arow = M.takeoff[parseInt(ac, 10)];
+      if (arow) {
+        if (!arow.line_cov || typeof arow.line_cov !== "object") arow.line_cov = {};
+        arow.line_cov[el.getAttribute("data-line")] = el.value;
+      }
+      changed(false);
+      return;
+    }
+
     var ti = el.getAttribute("data-tk");
     if (ti !== null && k) {
       var i = parseInt(ti, 10);
@@ -1854,7 +2003,11 @@
       // It is deliberately NOT done in `change`: by the time that fires the estimator has tabbed
       // into Measurement, and rebuilding then destroys the box they are standing in.
       if (k === "pick") {
+        var asmBefore = M.takeoff[i] ? (M.takeoff[i].assembly_id || "") : "";
         var flipped = setPick(i, el.value);
+        // A new assembly brings its own lines, and the coverage boxes under the card are one per
+        // line -- so the card is redrawn then too, not only when the kind moved.
+        if (!flipped && M.takeoff[i] && (M.takeoff[i].assembly_id || "") !== asmBefore) flipped = true;
         changed(false);
         if (flipped) {
           repaintRow(i);

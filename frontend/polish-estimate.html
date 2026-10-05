@@ -136,6 +136,9 @@
        keeps on its own lines. Its own column template rather than a fifth column on the shared
        one, so an assembly row does not grow an empty gap where coverage would go. */
     .tk-g.matg{grid-template-columns:1.9fr .9fr .7fr .85fr 1.05fr}
+    /* An assembly row's per-line coverage boxes: one field per material line, wrapping, under the
+       card's own four columns. */
+    .tk-g.asmcov{grid-template-columns:repeat(auto-fill,minmax(190px,1fr));margin-top:12px}
     /* Marked, not restyled. It is the same kind of thing as the row above it -- something the job
        buys -- so it reads as one list. The tag says which kind it is; the card does not need to. */
     .tk.mat .tag{background:var(--surf-low);color:var(--ink-v)}

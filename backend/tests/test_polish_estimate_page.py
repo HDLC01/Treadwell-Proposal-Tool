@@ -1283,7 +1283,7 @@ def test_joint_filler_and_dye_render_as_material_rows(ran):
         assert card["usesTheAssemblyGrid"], (
             "%s does not use the takeoff row's own column template, so its figures do not line "
             "up with the rows above it" % name)
-        assert card["labels"] == ["Material", "Measurement", "Unit", "Total cost"], (
+        assert card["labels"] == ["Material", "Measurement", "Unit", "Coverage", "Total cost"], (
             "%s does not carry the four columns that were asked for: %r" % (name, card["labels"]))
     # JOINT FILLER IS BOUGHT IN KITS, and the count is the one the price was worked out from.
     assert jf["name"] == "Joint filler, 10 gal kit", jf["name"]
@@ -2793,3 +2793,61 @@ def test_a_condition_off_the_defaults_tab_is_not_drawn_on_a_new_bid(ran):
     assert g["removeExistingFollowsJointFiller"], (
         "remove existing is drawn while joint filler is off the list -- no switch could un-gray it")
     assert g["seeded"] == {"dye": False}, g["seeded"]
+
+
+# ── B2: coverage on the estimate, per bid ────────────────────────────────────────────────────
+@needs_node
+def test_every_row_kind_shows_the_library_coverage_and_prices_with_a_typed_one(ran):
+    """HANZ: "In the estimate form in the beta it should pull the default coverage areas for the
+    defaults." A row that arrives from the Defaults carries NO coverage of its own, so the box has
+    to show the LIBRARY's figure (275 for OPF, 275 / 775 for the two lines of Polish 800 Grit --
+    none of them the old 3,500 constant) and the total has to price with it. A number typed over
+    it prices the bid, and the line under the box says "Library default: N"; the library item
+    itself is never touched. An ASSEMBLY row gets one box per material line.
+
+    Mutation: render the assembly row with no coverage boxes; have priceAssemblyRow ignore the
+    typed figure; leave the hint at "How far one goes" when the figures differ."""
+    r = ran["rowCoverage"]
+    f = r["first"]
+    assert f["matBox"] == ["", "275"], f["matBox"]
+    assert f["matHint"] == "Blank uses the library's 275."
+    assert len(f["asmBoxes"]) == 2 and 'placeholder="275"' in f["asmBoxes"][0]         and 'placeholder="775"' in f["asmBoxes"][1], f["asmBoxes"]
+    assert f["matCost"] == "$1,793.04" and r["expectedFirstMat"] == pytest.approx(1793.0367)
+    assert f["asmCost"] == "$10,599.98" and r["expectedFirstAsm"] == pytest.approx(10599.9771)
+    m = r["matTyped"]
+    assert m["cost"] == "$1,707.65" and m["expected"] == pytest.approx(1707.654)
+    assert m["hint"] == "Library default: 275"
+    a = r["asmTyped"]
+    assert a["cost"] == "$10,258.45" and a["expected"] == pytest.approx(10258.4463), a
+    assert a["hint0"] == "Library default: 275"
+    assert a["hint1"] == "Blank uses the library's 775.", "an untouched line keeps the library figure"
+    assert a["line_cov"] == {"0": "300"} and a["libraryUntouched"] == 275
+    assert r["matBackToLib"]["hint"] == "How far one goes, for this job."
+    # a different assembly means different lines: the old lines' coverage must not follow
+    assert r["switched"] == {"line_cov": True, "boxes": 1}, r["switched"]
+
+
+@needs_node
+def test_joint_filler_and_dye_cards_carry_a_per_bid_coverage_box(ran):
+    """The two condition cards get the same Coverage box. The library kit is set to 2,000 (not
+    3,500) so "the library's figure" and "the old constant" cannot be confused: 6,000 SF is 3
+    kits at $500; typing 3,000 on THIS bid makes it 2 kits ($1,000), moves the Material total by
+    exactly that, rewrites the kit sentence and says "Library default: 2000". The figure is
+    stored on the bid (cond_cov) and survives a reload; a bid with none prices as before.
+
+    Mutation: condLine reads the library coverage whatever the box says."""
+    c = ran["condCoverage"]
+    u, j = c["untouched"], c["libJf"]
+    assert u["before"]["jfBox"] == ["", "2000"]
+    assert u["after"]["jfHint"] == "Blank uses the library's 2000."
+    assert u["after"]["jfCost"] == "$1,500" and u["jfKits"] == 3
+    assert j["after"]["jfCost"] == "$1,000" and j["jfKits"] == 2
+    assert j["after"]["jfQtyHint"] == "6,000 sq ft, at one kit per 3,000, rounded up."
+    assert j["after"]["jfHint"] == "Library default: 2000"
+    assert j["matBefore"] - j["matAfter"] == pytest.approx(500)
+    assert j["savedModel"] == {"joint_filler": "3000"} and j["migrated"] == {"joint_filler": "3000"}
+    assert u["savedModel"] is None
+    assert c["backToLibrary"]["after"]["jfHint"] == "How far one goes, for this job."
+    d = c["libDye"]
+    assert d["before"]["dyeBox"] == ["", "2"] and d["after"]["dyeHint"] == "Library default: 2"
+    assert d["dyeCost"] == pytest.approx(6000 / 4 * 0.2 * 2), d["dyeCost"]

@@ -1062,6 +1062,19 @@
         }
         out.conditions_shown = shown;
       }
+      // THIS BID'S OWN COVERAGE for the two priced condition lines (Joint Filler, Dye), typed on
+      // the Takeoff step's cards. Carried only for those two keys and only when stated: a draft
+      // saved before the boxes existed has no `cond_cov` and keeps pricing with the library row,
+      // which is what absent means. (A takeoff row's own `coverage` / `line_cov` ride inside
+      // `takeoff`, which passes through whole.)
+      if (model.cond_cov && typeof model.cond_cov === "object") {
+        var cc = {};
+        ["joint_filler", "dye"].forEach(function (ck) {
+          var v = model.cond_cov[ck];
+          if (v !== undefined && v !== null && v !== "") cc[ck] = v;
+        });
+        if (Object.keys(cc).length) out.cond_cov = cc;
+      }
       if (isBlank(out.contingency)) out.contingency = 0;
       // Every v2 draft saved before the Fees line became typeable has no `fees` at all, and a
       // missing one must read as the zero the sheet ships.

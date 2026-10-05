@@ -1532,7 +1532,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
             isMaterialCard: /^<div class="tk mat( inert)?">/.test(block),
             // GRAYED WHILE OFF (Hanz, 2026-10-01), read off the card's own opening tag.
             grayed: /^<div class="tk mat inert">/.test(block),
-            usesTheAssemblyGrid: /<div class="tk-g">/.test(block),
+            usesTheAssemblyGrid: /<div class="tk-g matg">/.test(block),
             name: (/<div class="costbox txt">([^<]*)</.exec(block) || [])[1] || null,
             measurement: boxOf(block, key, "qty"),
             unit: boxOf(block, key, "unit"),
@@ -1546,7 +1546,13 @@ const rendered = [];      // every string the page put on screen, for the Labour
             // NOTHING ON THE CARD IS TYPEABLE, which is the honest half of the redesign. A
             // Measurement box that accepted keystrokes and threw them away would be worse than
             // the switch-and-a-sentence card it replaced.
-            nothingTypeable: !/<input|<select/.test(block),
+            // THE ONE BOX THAT TAKES TYPING is the Coverage box (data-condcov), this bid's own
+            // override; it is stripped before looking for any other input or select.
+            nothingTypeable: !/<input|<select/.test(
+              block.replace(/<input class="n" data-condcov="[^"]*"[^>]*>/, "")),
+            coverageBox: (/<input class="n" data-condcov="([^"]*)" value="([^"]*)" placeholder="([^"]*)">/
+              .exec(block) || []).slice(1),
+            coverageHint: textOf(block, key, "covhint"),
             // The switch does the row's remove button's job, so it sits where that button sits:
             // after the header's right-hand summary, not bolted on beside the tag.
             switchAfterTheSummary:
@@ -2041,6 +2047,10 @@ const rendered = [];      // every string the page put on screen, for the Labour
       b.api.go(0);
       const cards = {};
       b.doc.querySelectorAll("[data-condfig]").forEach(function (el) {
+        // The coverage sentence names the library row it read ("Blank uses the library's N"),
+        // which is exactly what differs between a seeded and a missing row; the figures are
+        // what this identity is about.
+        if (/[.]covhint$/.test(el.attrs["data-condfig"])) return;
         cards[el.attrs["data-condfig"]] = el.textContent;
       });
       const html = b.dom.get("panels").innerHTML;
@@ -2185,6 +2195,102 @@ const rendered = [];      // every string the page put on screen, for the Labour
       reset: await saved(seeded(), 3501, { "Polish!B29": STALE_B29, "Polish!C29": 650 }),
       staleB29: STALE_B29,
     };
+
+    // ── B2: COVERAGE, AS THIS BID'S OWN FIGURE ──
+    // Joint Filler / Dye cards, a material row (what a loaded default becomes) and an assembly row
+    // (each material line) all carry a Coverage box; a typed number prices the bid, reaches the
+    // workbook's cells, and says "Library default: N" when it is not the library's.
+    async function typedCov(items, sf, typed) {
+      const model = clone(MODEL);
+      model.takeoff = [{ assembly_id: "", assembly_name: "", measurement: sf, unit: "SF" }];
+      model.conditions = Object.assign({}, model.conditions, { dye: true, joint_filler: true });
+      const b = build({ blob: blob({ polish_estimate: model }), items: items });
+      await b.api.init();
+      b.api.go(0);
+      const read = () => {
+        const html = b.dom.get("panels").innerHTML;
+        const box = (k) => (new RegExp('<input class="n" data-condcov="' + k +
+          '" value="([^"]*)" placeholder="([^"]*)"').exec(html) || []).slice(1);
+        return { jfBox: box("joint_filler"), dyeBox: box("dye"),
+                 jfHint: txt(b, '[data-condfig="joint_filler.covhint"]'),
+                 dyeHint: txt(b, '[data-condfig="dye.covhint"]'),
+                 jfCost: txt(b, '[data-condfig="joint_filler.cost"]'),
+                 jfQty: txt(b, '[data-condfig="joint_filler.qty"]'),
+                 jfQtyHint: txt(b, '[data-condfig="joint_filler.qtyhint"]') };
+      };
+      const before = read();
+      const matBefore = b.api.materialTotal();
+      Object.keys(typed || {}).forEach((k) => {
+        typeInto(b, '[data-condcov="' + k + '"]', typed[k]);
+      });
+      const after = read();
+      b.api.saveSoon();
+      b.clock.fire();
+      const save = b.rec.saves[b.rec.saves.length - 1] || {};
+      const area = B.takeoffSf(b.api.model().takeoff);
+      const dye = b.api.condLine("dye", area), jf = b.api.condLine("joint_filler", area);
+      return { before: before, after: after, matBefore: matBefore, matAfter: b.api.materialTotal(),
+               cells: save.cell_values || {}, area: area, dyeCost: dye.cost, jfCost: jf.cost,
+               jfKits: jf.qty, model: clone(b.api.model()),
+               savedModel: clone((save.polish_estimate || {}).cond_cov || null),
+               migrated: clone(B.migrateModel(save.polish_estimate).cond_cov || null) };
+    }
+    out.condCoverage = {
+      // library kit at 2,000 -- NOT the old 3,500 constant -- 6,000 SF is 3 kits; typed 3,000 is 2
+      libJf: await typedCov(seeded({ "joint-filler-kit": { coverage: 2000 } }), 6000,
+                            { joint_filler: "3000" }),
+      libDye: await typedCov(seeded({ dye: { coverage: 2, unit_cost: 0.2 } }), 6000,
+                             { dye: "4" }),
+      untouched: await typedCov(seeded({ "joint-filler-kit": { coverage: 2000 } }), 6000, {}),
+      backToLibrary: await typedCov(seeded({ "joint-filler-kit": { coverage: 2000 } }), 6000,
+                                    { joint_filler: "2000" }),
+    };
+
+    // A MATERIAL ROW and an ASSEMBLY ROW, as a loaded default would arrive: the row carries NO
+    // coverage of its own, so the box must show the LIBRARY's figure (275, 775) and price with it.
+    {
+      const model = clone(MODEL);
+      model.takeoff = [
+        { kind: "item", item_id: "i1", item_name: "OPF", coverage: "", measurement: 5500, unit: "SF" },
+        { assembly_id: "a1", assembly_name: "Polish 800 Grit", measurement: 12500, unit: "SF" },
+      ];
+      const b = build({ blob: blob({ polish_estimate: model }) });
+      await b.api.init();
+      b.api.go(0);
+      const html = () => b.dom.get("panels").innerHTML;
+      const matBox = () => (/data-tk="0" data-k="coverage" value="([^"]*)" placeholder="([^"]*)"/
+        .exec(html()) || []).slice(1);
+      const asmBoxes = () => (html().match(/data-asmcov="1" data-line="\d+" value="[^"]*" placeholder="[^"]*"/g)
+        || []);
+      const cost = (i) => txt(b, '[data-cost-for="' + i + '"]');
+      const first = { matBox: matBox(), matHint: txt(b, '[data-covhint-for="0"]'),
+                      asmBoxes: asmBoxes(), asmHint0: txt(b, '[data-asmcovhint="1:0"]'),
+                      asmHint1: txt(b, '[data-asmcovhint="1:1"]'),
+                      matCost: cost(0), asmCost: cost(1) };
+      // The expected money, from library-core against the SAME library with the figure swapped.
+      const swap = (id, cov) => ITEMS.map((it) => it.id === id ? Object.assign({}, it, { coverage: cov }) : it);
+      const asmWith = (items) => L.priceAssembly(ASMS[0], items, 12500).total;
+      typeInto(b, '[data-tk="0"][data-k="coverage"]', "300");
+      const matTyped = { cost: cost(0), hint: txt(b, '[data-covhint-for="0"]'),
+                         expected: L.priceLine({ item_id: "i1" }, swap("i1", 300), 5500).cost };
+      typeInto(b, '[data-asmcov="1"][data-line="0"]', "300");
+      const asmTyped = { cost: cost(1), hint0: txt(b, '[data-asmcovhint="1:0"]'),
+                         hint1: txt(b, '[data-asmcovhint="1:1"]'),
+                         expected: asmWith(swap("i1", 300)),
+                         libraryUntouched: ITEMS.find((i) => i.id === "i1").coverage,
+                         line_cov: clone(b.api.model().takeoff[1].line_cov),
+                         matTotal: b.api.materialTotal() };
+      typeInto(b, '[data-tk="0"][data-k="coverage"]', "275");
+      const matBackToLib = { hint: txt(b, '[data-covhint-for="0"]') };
+      // Switching the row to a different assembly drops the old lines' coverage.
+      typeInto(b, '[data-tk="1"][data-k="pick"]', "Cove Base");
+      const switched = { line_cov: b.api.model().takeoff[1].line_cov === undefined,
+                         boxes: b.doc.querySelector('[data-row-card="1"]').querySelectorAll('[data-asmcov]').length };
+      out.rowCoverage = { first: first, matTyped: matTyped, asmTyped: asmTyped,
+                          matBackToLib: matBackToLib, switched: switched,
+                          expectedFirstAsm: asmWith(ITEMS),
+                          expectedFirstMat: L.priceLine({ item_id: "i1" }, ITEMS, 5500).cost };
+    }
   }
 
   // ── J. one add control, and a row that categorises itself ──────────────────
