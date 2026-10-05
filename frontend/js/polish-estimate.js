@@ -463,7 +463,10 @@
                                            conditionLibrary()),
         // proposal-review reads this for the SF token, and /api/generate's files-mode rebuild
         // gates on it.
-        polish_sf: b.sf,
+        // b.sf is the area the bid PRICES (an OFF row is out of it). When nothing is on, keep the
+        // MEASURED floor on file rather than 0: a 0 here unlocked intake's SF boxes and sent the
+        // proposal an empty SF token because somebody flipped the only row's slider (F5).
+        polish_sf: b.sf > 0 ? b.sf : B.measuredSf(M.takeoff),
         // polish_sf IS the takeoff total, so intake's System 2 box has nothing left to say: blank
         // it. Left stale it reseeded a deleted row -- empty the takeoff, reopen step 2, and
         // B.seedTakeoffSf read the old polish_2_sf as a fresh measurement.

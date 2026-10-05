@@ -731,6 +731,31 @@
     return t;
   }
 
+  /** THE FLOOR THAT HAS BEEN MEASURED, WHETHER OR NOT THE BID IS BUYING IT RIGHT NOW.
+   *
+   *  takeoffSf above is the AREA THE BID PRICES: an OFF row is out of it. That is right for the
+   *  price per SF and for the area-driven conditions, and wrong as the answer to "has anybody typed
+   *  a floor size in here?". Switching OFF the only SF row made takeoffSf 0, so the intake page
+   *  unlocked its SF boxes (and its next save wrote whatever they showed over polish_sf), and the
+   *  estimate saved polish_sf as 0. THE DECISION (F5, 2026-10-06): the intake lock and the
+   *  polish_sf the estimate files key on MEASURED rows, on or off. The slider is a pricing choice;
+   *  it does not un-measure the floor.
+   *
+   *  Counted the way takeoffSf counts (SF rows, a same_floor row not added on top of its carrier),
+   *  minus the on/off test. When the carrier itself is off and only same_floor rows remain they
+   *  all carry the one floor's number, so the largest of them is the answer. */
+  function measuredSf(rows) {
+    rows = rows || [];
+    var t = 0, same = 0;
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i] || {};
+      if (r.unit !== "SF") continue;
+      if (r.same_floor) { if (num(r.measurement) > same) same = num(r.measurement); }
+      else t += num(r.measurement);
+    }
+    return t > 0 ? t : same;
+  }
+
   /** HOW MANY COATS OF DYE A JOB BUYS: Kyle's Polish tab has TWO "Dye" lines, rows 25 and 26,
    *  both =IF(E25="Yes",E18) at 0.14 a square foot, switched by the one E25 answer. So with dye
    *  on his sheet charges $0.28/SF, and backend/pricing.py (dye_coats 2) always agreed.
@@ -1814,7 +1839,7 @@
     clearDistance: clearDistance, distanceNote: distanceNote,
     rowOn: rowOn, sliderHtml: sliderHtml,
     filledIn: filledIn,
-    takeoffSf: takeoffSf,
+    takeoffSf: takeoffSf, measuredSf: measuredSf,
     seedTakeoffSf: seedTakeoffSf,
     seedDefaultTakeoff: seedDefaultTakeoff,
     dyeCost: dyeCost, jointFillerCost: jointFillerCost,

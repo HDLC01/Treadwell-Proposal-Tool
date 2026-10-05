@@ -657,7 +657,9 @@
    *  the estimator; stripping the two keys in save() is what actually keeps the number safe.
    *  Pinned by polish-intake-harness.js against the REAL readForm lifted out of shared.js. */
   function sfLocked(model) {
-    return !!model && B.takeoffSf(model.takeoff) > 0;
+    // MEASURED, NOT PRICED (F5): switching the only SF row OFF must not unlock these boxes and let
+    // a stale figure overwrite polish_sf. B.measuredSf ignores the on/off slider; see its note.
+    return !!model && B.measuredSf(model.takeoff) > 0;
   }
 
   /** Paint the SF boxes for the current model: editable and seeded from the draft, or locked
@@ -667,7 +669,7 @@
     var one = $("polish-sf-1"), two = $("polish-sf-2"), note = $("sf-locked-note");
     [one, two].forEach(function (el) { if (el) el.readOnly = locked; });
     if (locked) {
-      var total = B.takeoffSf(M.takeoff);
+      var total = B.measuredSf(M.takeoff);
       // The total sits in System 1 and System 2 is blank: the takeoff may have any number of SF
       // rows by now, and two boxes cannot show them. The note says so.
       if (one) one.value = total;

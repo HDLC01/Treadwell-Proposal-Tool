@@ -1662,5 +1662,55 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
     };
   }
 
+  // ── F5: saved-bid safety on the intake page ────────────────────────────────────
+  {
+    const lastSave = (bb) => bb.rec.saves[bb.rec.saves.length - 1];
+    // (a) THE ONLY SF ROW IS SWITCHED OFF. The floor is still measured, so the boxes stay locked
+    //     and a save cannot hand polish_sf over to whatever they show.
+    const offBlob = blob({ polish_sf: 12500, polish_2_sf: "",
+      polish_estimate: { version: 2,
+        takeoff: [{ assembly_id: "a1", assembly_name: "Polish", measurement: 12500, unit: "SF",
+                    enabled: false }],
+        labor: JSON.parse(JSON.stringify(LABOR)),
+        conditions: { local: true, prevailing_wage: false, taxable: true, remodel_tax: false } } });
+    const offB = build({ blob: offBlob,
+      formValues: Object.assign({}, FORM_VALUES, { polish_sf: 1, polish_2_sf: 2 }) });
+    await offB.api.boot();
+    offB.api.save();
+    const offSave = lastSave(offB);
+    // (b) AN OLD INTAKE BLOB: no Drawings fields, no local answer in the model, blank Project name.
+    //     The two `required` attributes are the browser's gate on the Continue button only; this
+    //     page's autosave and save() never ask for validity, so nothing is withheld from a draft.
+    const oldBlob = { __draft_id: "old-intake", address: "1 Water Works Dr", city: "Kansas City",
+      state: "KS", zip: "66101", work_type: "polish", polish_sf: 8000,
+      polish_estimate: { version: 2,
+        takeoff: [{ assembly_id: "a1", assembly_name: "Polish", measurement: 8000, unit: "SF" }],
+        labor: JSON.parse(JSON.stringify(LABOR)),
+        conditions: { prevailing_wage: false, taxable: true, remodel_tax: false } } };
+    const oldB = build({ blob: oldBlob, formValues: { project_name: "", bid_date: "", address:
+      "1 Water Works Dr", city: "Kansas City", state: "KS", zip: "66101" } });
+    await oldB.api.boot();
+    const dateAfterBoot = oldB.dom.fields.bid_date.value;
+    let threw = null;
+    try { oldB.api.save(); } catch (e) { threw = String(e); }
+    const oldSave = lastSave(oldB);
+    // submit (Continue) with the blank name: onSubmit saves and navigates, no validity gate in JS.
+    const subB = build({ blob: oldBlob, formValues: { project_name: "", bid_date: "" } });
+    await subB.api.boot();
+    subB.api.onSubmit({ preventDefault() {} });
+    out.f5 = {
+      offLocked: { ro1: offB.dom.nodes["polish-sf-1"].readOnly, ro2: offB.dom.nodes["polish-sf-2"].readOnly,
+        v1: offB.dom.nodes["polish-sf-1"].value,
+        noteHidden: offB.dom.nodes["sf-locked-note"].hidden !== false,
+        saveHasSf: ("polish_sf" in offSave) || ("polish_2_sf" in offSave),
+        blobSf: offB.store.blob.polish_sf, takeoffEnabled: offSave.polish_estimate.takeoff[0].enabled },
+      oldBlob: { threw: threw, saved: !!oldSave, dateAfterBoot: dateAfterBoot,
+        savedName: oldSave && oldSave.project_name,
+        localInModel: oldSave && oldSave.polish_estimate.conditions.local,
+        takeoffKept: oldSave && oldSave.polish_estimate.takeoff.length,
+        navigated: subB.rec.navigated.length, submitSaved: subB.rec.saves.length > 0 },
+    };
+  }
+
   console.log(JSON.stringify(out));
 })().catch((err) => { console.error(err); process.exit(1); });
