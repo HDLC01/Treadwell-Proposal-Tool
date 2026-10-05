@@ -1571,6 +1571,17 @@ def test_a_value_typed_and_typed_back_is_not_asked_about(ran):
 
 
 @needs_node
+def test_a_material_no_assembly_uses_saves_without_a_question(ran):
+    """A brand-new material (or any unused one) has nothing downstream to reprice, so Save must not
+    claim it is 'priced into every assembly'. The same edit on a USED material still asks (see the
+    first test in this block)."""
+    g = ran["itemUnused"]
+    assert g["errors"] == []
+    assert g["asked"] == 0, "an unused material still raised the assembly-pricing question"
+    assert g["requests"] == ["PATCH /api/library/items/i1"], "the save itself did not go out"
+
+
+@needs_node
 def test_an_assembly_save_is_never_confirmed(ran):
     """The dialog is scoped to items on purpose. An assembly's lines are a takeoff somebody is
     actively building, where a dialog per pause would be unusable; an item is reference data that
