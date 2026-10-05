@@ -1477,6 +1477,7 @@
       '<div class="f"><label>Rate</label>' +
       '<span class="mny">$<input class="n" data-trv="' + key + '" data-k="rate" value="' +
       esc(nv(l.rate)) + '"></span>' +
+      dfltWarnHtml('data-trvdflt-for="' + key + '"', travelRateDefaultText(l)) +
       '<p class="hint">' + (isNight ? "Per night." : "Per day.") + ' Set under Items &amp; ' +
       'Assemblies, Labor Calculator.</p></div>' +
       '<div class="f"><label>Cost</label>' +
@@ -1971,6 +1972,9 @@
     // Lodging and Per Diem, live: cost, the auto quantity box, and the card's gray state. Keyed by
     // attribute like everything above, and the class string is written by travelCard and here only.
     if (M.travel) {
+      document.querySelectorAll("[data-trvdflt-for]").forEach(function (el) {
+        paintDfltWarn(el, travelRateDefaultText(M.travel[el.getAttribute("data-trvdflt-for")]));
+      });
       document.querySelectorAll("[data-trvcost-for]").forEach(function (el) {
         el.textContent = moneyAuto(B.travelLineCost(M.travel[el.getAttribute("data-trvcost-for")], M.labor));
       });
@@ -2088,6 +2092,14 @@
       : (row && row.rate_default !== undefined && row.rate_default !== null && row.rate_default !== ""
           ? B.num(row.rate_default) : LABOR_RATE);
     return dfltWarnText(B.num((row || {}).rate) !== dflt, B.money2(dflt));
+  }
+
+  /** The warning under a Lodging / Per Diem rate box (G3): the shared "Default value: $N" while the
+   *  rate differs from the one the line was filled with (Markups -> Global), "" while they agree and
+   *  on a line with no stamp (a saved bid, which was never filled from anything). */
+  function travelRateDefaultText(l) {
+    if (!l || l.rate_default === undefined || l.rate_default === null) return "";
+    return dfltWarnText(B.num(l.rate) !== B.num(l.rate_default), B.money2(B.num(l.rate_default)));
   }
 
   /** The warning under a calculator-filled labor box ("guys", "days" or "hours_per_day"): the

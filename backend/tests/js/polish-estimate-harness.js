@@ -3496,7 +3496,28 @@ const rendered = [];      // every string the page put on screen, for the Labour
       [{ id: "x", days: 5, calc_default: { days: 5, sf_per_day: 2500 } },
        { id: "y", days: 5, calc_default: { days: 5 } }], 10000).map((r) => r.days);
 
+    // G3: Lodging / Per Diem rate boxes warn against the Markups -> Global rate they were filled with.
+    const TRV = [{ id: "m1", layout: "global", line_key: "travel_lodging", formula: "80", applies: true },
+                 { id: "m2", layout: "global", line_key: "travel_per_diem", formula: "50", applies: true }];
+    const tr = build({ blob: blob({ polish_estimate: null, polish_sf: 12000 }), markupRules: TRV });
+    await tr.api.init();
+    tr.api.go(1);
+    const trvW = (built, k) => { const el = built.doc.querySelector('[data-trvdflt-for="' + k + '"]');
+      return el ? { text: el.textContent, hidden: !!el.hidden } : null; };
+    const trvIn = (k) => '[data-trv="' + k + '"][data-k="rate"]';
+    const travelWarn = { rates: [tr.api.model().travel.lodging.rate, tr.api.model().travel.per_diem.rate],
+                         start: [trvW(tr, "lodging"), trvW(tr, "per_diem")] };
+    typeInto(tr, trvIn("lodging"), "90");
+    travelWarn.over = trvW(tr, "lodging");
+    typeInto(tr, trvIn("lodging"), "80");
+    travelWarn.back = trvW(tr, "lodging");
+    const trSaved = build({ blob: blob({ polish_estimate: clone(SAVEDM) }), markupRules: TRV });
+    await trSaved.api.init();
+    trSaved.api.go(1);
+    travelWarn.saved = [trvW(trSaved, "lodging"), trvW(trSaved, "per_diem")];
+
     out.laborCalc = {
+      travelWarn: travelWarn,
       followed: followed,
       first: first, over: over, back: back, hrs: hrs, mockRateBefore: mockRateBefore,
       mockRateAfter: mockRateAfter,

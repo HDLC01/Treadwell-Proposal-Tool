@@ -3297,3 +3297,17 @@ def test_labor_days_follow_the_takeoff_until_the_estimator_edits_them(ran):
     assert f["noSfBlank"] == "" and f["noSfFilled"] == 2
     assert f["savedOnOpen"] == 9 and f["savedAfterOtherEdit"] == 9
     assert f["pureMoves"] == [4, 5]
+
+
+def test_lodging_and_per_diem_rates_warn_against_the_markup_global_rate_they_were_filled_with(ran):
+    """G3. New bid, Markups -> Global lodging $80 / per diem $50: both open at those and neither
+    warns. Typing 90 over lodging warns 'Default value: $80.00'; typing 80 back clears it. A saved
+    bid (no stamp) shows nothing.
+
+    Mutation: drop the rate_default stamp in applyTravelRates -- the warning never shows."""
+    w = ran["laborCalc"]["travelWarn"]
+    assert w["rates"] == [80, 50]
+    assert all(x["hidden"] for x in w["start"]), w["start"]
+    assert w["over"] == {"text": "Default value: $80.00", "hidden": False}
+    assert w["back"]["hidden"] is True
+    assert all(x["hidden"] for x in w["saved"]), w["saved"]

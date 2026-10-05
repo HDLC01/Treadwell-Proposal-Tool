@@ -487,6 +487,9 @@
       }
       out[k] = next;
     });
+    // G3: each line remembers the rate it was filled with (the Markups -> Global figure, or the
+    // shipped one when none is filed), which is what the "Default value" warning compares against.
+    TRAVEL_LINE_KEYS.forEach(function (k) { out[k].rate_default = num(out[k].rate); });
     return out;
   }
 
@@ -511,6 +514,10 @@
       // Set when the ESTIMATOR flipped the line, so a later distance answer (the 70-mile rule)
       // never overrides a choice somebody made.
       if (l.hand === true) out[k].hand = true;
+      // The rate a NEW bid's line was filled with (applyTravelRates); absent on every saved line.
+      if (!isBlank(l.rate_default) && isFinite(Number(l.rate_default))) {
+        out[k].rate_default = Number(l.rate_default);
+      }
     });
     return out;
   }
