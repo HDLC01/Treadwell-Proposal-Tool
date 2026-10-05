@@ -3365,3 +3365,64 @@ def test_the_fees_default_reads_only_a_plain_filed_applying_global_number(ran):
     assert r["zero"] == 0, "zero is a real answer, not nothing"
     for k in ("off", "expr", "blank", "none", "notList", "otherLine", "otherLayout"):
         assert r[k] is None, k
+
+
+# ── every default-pulled row's estimate toggle moves the lump sum (Hanz, 2026-10-06) ──────────────
+_PULLED_ROWS = [
+    "default assembly takeoff row", "default material takeoff row", "joint filler condition row",
+    "dye condition row", "favorited custom labor line", "Travel Labor", "Lodging", "Per Diem",
+]
+
+
+def test_the_new_bid_really_pulled_in_one_of_every_default(ran):
+    base = ran["toggleMovesTotalBase"]
+    assert base["takeoff"] == ["a1", "i4"], base
+    assert base["labor"] == ["polishing", "mockup", "jointfill", "travel", "c1"], base
+    assert base["total"] > 0
+
+
+@pytest.mark.parametrize("name", _PULLED_ROWS)
+def test_a_default_rows_switch_moves_the_lump_sum_by_exactly_its_contribution(ran, name):
+    """EXECUTED THROUGH THE PAGE: a library with non-zero prices, a NEW bid, a click on the row's
+    own switch. The total after the click equals an oracle priced by the two real engines from the
+    model with that one flag changed; clicking again returns the original total to the dollar.
+    A row that started OFF (conditions, Lodging, Per Diem) rises; one that started ON drops.
+
+    Mutation: make laborCost ignore rowOn, make materialTotal skip the rowOn test, drop the
+    `if (M.conditions.dye)` gate, or have travelLineCost ignore rowOn -- the matching row goes red."""
+    r = ran["toggleMovesTotal"][name]
+    assert r["hasSwitch"], "%s has no switch on the estimate" % name
+    assert r["afterFlip"] != r["before"], "%s: the toggle did not move the lump sum" % name
+    assert r["afterFlip"] == r["oracleFlip"], (
+        "%s: the lump sum after the click is not what the engines price for that change" % name)
+    assert r["back"] == r["before"], "%s: switching back did not restore the total" % name
+    if r["startOn"]:
+        assert r["afterFlip"] < r["before"], "%s: switching an included row off did not drop it" % name
+    else:
+        assert r["afterFlip"] > r["before"], "%s: switching an excluded row on did not raise it" % name
+
+
+@pytest.mark.parametrize("name,gray", [
+    ("default assembly takeoff row", "inert"), ("default material takeoff row", "inert"),
+    ("favorited custom labor line", " off"), ("Travel Labor", " off"),
+    ("Lodging", " off"), ("Per Diem", " off")])
+def test_an_off_default_row_is_grayed_and_an_on_one_is_not(ran, name, gray):
+    r = ran["toggleMovesTotal"][name]
+    off_card = r["cardAfterFlip"] if r["startOn"] else r["cardBefore"]
+    on_card = r["cardBefore"] if r["startOn"] else r["cardAfterFlip"]
+    assert gray in off_card, "%s: switched off but not grayed: %r" % (name, off_card)
+    assert gray not in on_card, "%s: switched on but still grayed: %r" % (name, on_card)
+    sw_off = r["swAfter"] if r["startOn"] else r["swBefore"]
+    assert sw_off == "false"
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "FINDING, NOT FIXED: remove-existing joint filler is documented as 'a fourth hand on the "
+    "joint-filler line, priced on the Labor step'. The beta engine never adds that hand (its "
+    "answer only reaches Polish!F29) and the reserved library row has no unit_cost, so the "
+    "switch moves no number. Needs a pricing decision from Hanz; this flips to XPASS-fail the "
+    "day it is priced, so the marker has to come off with the fix."))
+def test_the_remove_existing_switch_moves_the_lump_sum(ran):
+    r = ran["toggleMovesTotal"]["remove-existing condition row"]
+    assert r["hasSwitch"] and r["swAfter"] == "true"
+    assert r["afterFlip"] != r["before"]

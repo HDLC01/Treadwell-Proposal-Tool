@@ -3618,5 +3618,134 @@ const rendered = [];      // every string the page put on screen, for the Labour
     };
   }
 
+  // ── P. EVERY DEFAULT-PULLED ROW'S ESTIMATE TOGGLE MOVES THE LUMP SUM (Hanz, 2026-10-06) ─────────
+  // A library with NON-ZERO prices, a NEW bid that pulls in one of each kind of default, and for
+  // each row: flip it, read the lump sum off the page's own bid(), compare with an ORACLE built
+  // from the model with that one flag set (the two real engines, priced independently of the
+  // page's own wiring), flip it back and demand the same total. The flip is a click on the page's
+  // own switch, so a row with no switch, or a switch that writes the wrong field, fails here.
+  {
+    const FAV_ASMS = ASMS.map((a) => (a.id === "a1" ? Object.assign({}, a, { favorite: true }) : a));
+    const FAV_ITEMS = ITEMS.map((i) => (i.id === "i4" ? Object.assign({}, i, { favorite: true }) : i))
+      .concat([
+        { id: "joint-filler-kit", name: "Joint filler, 10 gal kit", unit: "Kit", buy_qty: 1,
+          unit_cost: 500, coverage: 3500, waste_pct: 0, roundup: true },
+        { id: "dye", name: "Dye, per coat", unit: "SF", buy_qty: 1, unit_cost: 0.14, coverage: 1,
+          waste_pct: 0, roundup: false },
+        { id: "remove-existing-jf", name: "Remove existing joint filler", unit: "SF", buy_qty: 1,
+          unit_cost: null, coverage: null }]);
+    const PLABOR = [
+      { id: "travel", name: "Travel", rate: 40, unit: "hours", guys_auto: true, favorite: true },
+      { id: "c1", name: "Saw cutting", rate: 45, unit: "days", guys_auto: false, favorite: true,
+        default_on: true, default_work_types: [] }];
+    const PCALC = [
+      { line_id: "polishing", mode: "fixed", guys: 3, days: 5, hours_per_day: 8, rate: null },
+      { line_id: "mockup", mode: "fixed", guys: 3, days: 1, hours_per_day: 8, rate: null },
+      { line_id: "jointfill", mode: "fixed", guys: 3, days: 2, hours_per_day: 8, rate: null },
+      { line_id: "c1", mode: "fixed", guys: 2, days: 3, hours_per_day: 8, rate: null }];
+    const PRULES = [
+      { id: "m1", layout: "global", line_key: "travel_lodging", formula: "80", applies: true },
+      { id: "m2", layout: "global", line_key: "travel_per_diem", formula: "50", applies: true }];
+    const PCONDS = ["joint_filler", "remove_existing_jf", "dye"]
+      .map((k) => ({ key: k, on: false, listed: true }));
+    const nb = blob({ polish_estimate: null, polish_sf: 12000 });
+    const p = build({ blob: nb, asms: FAV_ASMS, items: FAV_ITEMS, labor: PLABOR, laborCalc: PCALC,
+                      markupRules: PRULES, conditionDefaults: PCONDS });
+    await p.api.init();
+    // Travel's hours, typed by the estimator (it is the one default whose quantity is theirs).
+    p.api.go(1);
+    const ti = p.api.model().labor.findIndex((r) => r.id === "travel");
+    typeInto(p, '[data-lab="' + ti + '"][data-k="days"]', "2");
+    const M0 = () => p.api.model();
+    const asmIdx = M0().takeoff.findIndex((r) => r.assembly_id === "a1");
+    const itemIdx = M0().takeoff.findIndex((r) => r.item_id === "i4");
+    const c1i = M0().labor.findIndex((r) => r.id === "c1");
+
+    // THE ORACLE: the two real engines on a copy of the page's own model with one change applied.
+    const oracle = (mutate) => {
+      const m = clone(M0());
+      mutate(m);
+      // TRAVEL LABOR'S GUYS ARE DERIVED (guys_auto): the page re-derives them from the crew's
+      // man-days whenever a row flips, so the oracle must too or it prices a stale Travel crew.
+      m.labor.forEach((r) => { if (r.unit === "hours" && r.guys_auto) r.guys = B.travelManDays(m.labor); });
+      let material = 0;
+      m.takeoff.forEach((r) => {
+        if (!B.rowOn(r)) return;
+        if (r.item_id) {
+          const it = FAV_ITEMS.filter((x) => x.id === r.item_id)[0];
+          const line = { item_id: it.id, coverage: it.coverage, waste_pct: it.waste_pct || 0, roundup: true };
+          material += L.priceAssembly({ id: "x", unit: "SF", lines: [line] }, FAV_ITEMS,
+                                      B.num(r.measurement)).total;
+        } else {
+          const asm = FAV_ASMS.filter((a) => a.id === r.assembly_id)[0];
+          if (asm) material += L.priceAssembly(asm, FAV_ITEMS, B.num(r.measurement)).total;
+        }
+      });
+      material += extraMaterial(m);
+      return B.markupChain({
+        material: material, labor: B.laborTotal(m.labor),
+        travel: B.travelCosts(m.travel, m.labor).total,
+        contingency: m.contingency, fees: m.fees, conditions: m.conditions,
+        sf: B.takeoffSf(m.takeoff), remodel_rate: null }).total;
+    };
+    const total = () => p.api.bid().total;
+    const switchOn = (sel) => { const e = p.doc.querySelector(sel); return e ? e.getAttribute("aria-checked") : null; };
+    const cardCls = (sel) => { const e = p.doc.querySelector(sel); return e ? e.className : null; };
+    const flipRow = (key, i) => (m) => { const r = m[key][i]; if (B.rowOn(r)) r.enabled = false; else delete r.enabled; };
+
+    const rows = [
+      { name: "default assembly takeoff row", step: 0, sw: '[data-on-tk="' + asmIdx + '"]',
+        card: '[data-row-card="' + asmIdx + '"]', startOn: () => B.rowOn(M0().takeoff[asmIdx]),
+        flipped: flipRow("takeoff", asmIdx) },
+      { name: "default material takeoff row", step: 0, sw: '[data-on-tk="' + itemIdx + '"]',
+        card: '[data-row-card="' + itemIdx + '"]', startOn: () => B.rowOn(M0().takeoff[itemIdx]),
+        flipped: flipRow("takeoff", itemIdx) },
+      { name: "joint filler condition row", step: 0, sw: '[data-cond="joint_filler"]', card: null,
+        startOn: () => !!M0().conditions.joint_filler,
+        flipped: (m) => { m.conditions.joint_filler = !m.conditions.joint_filler; } },
+      { name: "dye condition row", step: 0, sw: '[data-cond="dye"]', card: null,
+        startOn: () => !!M0().conditions.dye,
+        flipped: (m) => { m.conditions.dye = !m.conditions.dye; } },
+      { name: "remove-existing condition row", step: 0, sw: '[data-cond="remove_existing_jf"]', card: null,
+        startOn: () => !!M0().conditions.remove_existing_jf,
+        flipped: (m) => { m.conditions.remove_existing_jf = !m.conditions.remove_existing_jf; } },
+      { name: "favorited custom labor line", step: 1, sw: '[data-on-lab="' + c1i + '"]',
+        card: '[data-lab-card="' + c1i + '"]', startOn: () => B.rowOn(M0().labor[c1i]),
+        flipped: flipRow("labor", c1i) },
+      { name: "Travel Labor", step: 1, sw: '[data-on-lab="' + ti + '"]', card: '[data-lab-card="' + ti + '"]',
+        startOn: () => B.rowOn(M0().labor[ti]), flipped: flipRow("labor", ti) },
+      { name: "Lodging", step: 1, sw: '[data-on-trv="lodging"]', card: '[data-trv-card="lodging"]',
+        startOn: () => B.rowOn(M0().travel.lodging),
+        flipped: (m) => { m.travel.lodging.enabled = !m.travel.lodging.enabled; } },
+      { name: "Per Diem", step: 1, sw: '[data-on-trv="per_diem"]', card: '[data-trv-card="per_diem"]',
+        startOn: () => B.rowOn(M0().travel.per_diem),
+        flipped: (m) => { m.travel.per_diem.enabled = !m.travel.per_diem.enabled; } },
+    ];
+    const result = {};
+    for (const r of rows) {
+      p.api.go(r.step);
+      const hasSwitch = !!p.doc.querySelector(r.sw);
+      const startOn = r.startOn();
+      const t0 = total();
+      const expectFlip = oracle(r.flipped);
+      const swBefore = hasSwitch ? switchOn(r.sw) : null;
+      const cardBefore = r.card ? cardCls(r.card) : null;
+      if (hasSwitch) clickOn(p, r.sw);
+      const t1 = total();
+      p.api.go(r.step);
+      const swAfter = switchOn(r.sw);
+      const cardAfter = r.card ? cardCls(r.card) : null;
+      if (hasSwitch) clickOn(p, r.sw);
+      const t2 = total();
+      p.api.go(r.step);
+      result[r.name] = { hasSwitch: hasSwitch, startOn: startOn, before: t0, afterFlip: t1, back: t2,
+                         oracleFlip: expectFlip, swBefore: swBefore, swAfter: swAfter,
+                         cardBefore: cardBefore, cardAfterFlip: cardAfter };
+    }
+    out.toggleMovesTotal = result;
+    out.toggleMovesTotalBase = { total: total(), takeoff: M0().takeoff.map((r) => r.assembly_id || r.item_id),
+                                 labor: M0().labor.map((r) => r.id) };
+  }
+
   console.log(JSON.stringify(out));
 })().catch((err) => { console.error(err && err.stack || err); process.exit(1); });
