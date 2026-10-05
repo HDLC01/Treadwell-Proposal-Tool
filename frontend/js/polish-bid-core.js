@@ -243,6 +243,42 @@
 
   /** The square feet the bid is priced per. LF rows (cove, saw-cut, stripe) measure a different
    *  thing and must not be added to an area — C82 divides the total by the AREA. */
+  /** THE INTAKE'S SF BOXES, TURNED INTO TAKEOFF ROWS (Hanz, 2026-10-05: "Add SF, seed the takeoff").
+   *
+   *  Intake asks for System 1 and System 2 Polish SF; the step-2 takeoff is where the price comes
+   *  from, so each positive number becomes one row of it. Typed once, priced once.
+   *
+   *  NEVER OVER A MEASUREMENT. Returns the rows UNCHANGED (same array) when any row already
+   *  carries a number, SF or not -- an LF row with 900 on it is somebody's work too. Otherwise a
+   *  blank SF row (the one freshModel hands out) takes the first value and the rest are appended
+   *  as new blank-assembly SF rows. A system-2-only job seeds one row from system 2: the number
+   *  is the estimator's, and which box it was typed in changes nothing the takeoff prices.
+   *
+   *  Lives here, not in js/polish-estimate.js, because the harness for that file lifts init() by
+   *  name and a new local function it calls is a ReferenceError in every scenario. */
+  function seedTakeoffSf(rows, sf1, sf2) {
+    rows = Array.isArray(rows) ? rows : [];
+    for (var i = 0; i < rows.length; i++) {
+      if (num((rows[i] || {}).measurement) > 0) return rows;
+    }
+    var vals = [num(sf1), num(sf2)].filter(function (v) { return v > 0; });
+    if (!vals.length) return rows;
+    var blank = -1;
+    for (var j = 0; j < rows.length; j++) {
+      var r = rows[j] || {};
+      if ((r.unit === "SF" || !r.unit) && !r.assembly_id) { blank = j; break; }
+    }
+    vals.forEach(function (v, k) {
+      if (k === 0 && blank >= 0) {
+        rows[blank].measurement = v;
+        rows[blank].unit = "SF";
+      } else {
+        rows.push({ assembly_id: "", assembly_name: "", measurement: v, unit: "SF" });
+      }
+    });
+    return rows;
+  }
+
   function takeoffSf(rows) {
     rows = rows || [];
     var t = 0;
@@ -1180,6 +1216,7 @@
     laborCost: laborCost, laborTotal: laborTotal, travelManDays: travelManDays,
     filledIn: filledIn,
     takeoffSf: takeoffSf,
+    seedTakeoffSf: seedTakeoffSf,
     dyeCost: dyeCost, jointFillerCost: jointFillerCost,
     markupChain: markupChain,
     freshModel: freshModel, migrateModel: migrateModel, blockers: blockers,

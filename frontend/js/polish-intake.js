@@ -639,6 +639,44 @@
     saveTimer = setTimeout(function () { saveTimer = null; save(); }, 600);
   }
 
+  /** Has the step-2 takeoff been measured? Then it, not intake, owns the SF.
+   *
+   *  Asked of a MODEL, so save() can ask it of the freshest saved one and paintSfLock() of the one
+   *  this page holds. B.takeoffSf counts SF rows only, which is the number polish_sf is the total
+   *  of: a takeoff of linear-foot rows alone has no SF to disagree about, so it does not lock.
+   *
+   *  WHY THE GUARANTEE IS IN save() AND NOT IN THE DOM. TW.readForm (shared.js) walks
+   *  form.elements and takes every input that has a `name` -- readonly AND disabled included. So a
+   *  locked box that kept its name would still hand its value to the spread below and overwrite
+   *  polish_sf (the takeoff TOTAL) with whatever the box happened to show. Readonly is the cue for
+   *  the estimator; stripping the two keys in save() is what actually keeps the number safe.
+   *  Pinned by polish-intake-harness.js against the REAL readForm lifted out of shared.js. */
+  function sfLocked(model) {
+    return !!model && B.takeoffSf(model.takeoff) > 0;
+  }
+
+  /** Paint the SF boxes for the current model: editable and seeded from the draft, or locked
+   *  read-only with the takeoff total and a line saying where to change it. */
+  function paintSfLock() {
+    var locked = sfLocked(M);
+    var one = $("polish-sf-1"), two = $("polish-sf-2"), note = $("sf-locked-note");
+    [one, two].forEach(function (el) { if (el) el.readOnly = locked; });
+    if (locked) {
+      var total = B.takeoffSf(M.takeoff);
+      // The total sits in System 1 and System 2 is blank: the takeoff may have any number of SF
+      // rows by now, and two boxes cannot show them. The note says so.
+      if (one) one.value = total;
+      if (two) two.value = "";
+      if (note) {
+        note.textContent = "Measured on the takeoff (step 2): " + B.fmtSf(total) +
+          " SF in total. Change it there — these boxes are locked so the two can never disagree.";
+        note.hidden = false;
+      }
+    } else if (note) {
+      note.hidden = true;
+    }
+  }
+
   function save() {
     if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
     var values = form ? TW.readForm(form) : {};
@@ -681,6 +719,13 @@
     // from freshModel() exactly as it did before, because that is what migrateModel does with a
     // model that states no labor.
     if (B.laborUnstated(cur.polish_estimate)) delete model.labor;
+
+    // ONE SOURCE OF TRUTH FOR SF. Once the takeoff holds a measurement, polish_sf is the takeoff
+    // total (js/polish-estimate.js writes it) and is not this page's to state -- see sfLocked().
+    // Deleted from `values`, so the merge in setState leaves the saved polish_sf and polish_2_sf
+    // exactly as the takeoff wrote them. Decided from the saved model, read just now, not from the
+    // DOM: a stale locked/unlocked paint cannot let a partial value through.
+    if (sfLocked(model)) { delete values.polish_sf; delete values.polish_2_sf; }
 
     // The county's four keys ride along as TOP-LEVEL draft keys, not inside polish_estimate: they
     // are the live estimate screen's own, and js/polish-estimate.js reads county_remodel_rate off
@@ -761,6 +806,7 @@
       bid.value = now.getFullYear() + "-" + (m.length < 2 ? "0" + m : m) + "-" +
         (d.length < 2 ? "0" + d : d);
     }
+    paintSfLock();                          // after writeForm: a locked box shows the takeoff total
     renderConditions();
     hydrateCounty();                        // after the toggles: the note quotes Remodel tax
     paintProjLine();

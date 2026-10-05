@@ -2076,8 +2076,13 @@
 
     // Seed the measurement from intake if nothing has been measured here yet, so the page opens
     // with the number the estimator already gave us rather than a blank.
-    if (!B.takeoffSf(M.takeoff) && B.num(state.polish_sf) > 0) {
-      M.takeoff[0].measurement = B.num(state.polish_sf);
+    //
+    // BOTH of intake's boxes (Hanz, 2026-10-05): System 1 -> polish_sf, System 2 (optional) ->
+    // polish_2_sf, one takeoff row each. Seeding only ever fills an EMPTY takeoff -- see
+    // B.seedTakeoffSf for the rules. polish_sf is rewritten as the takeoff total on the first
+    // save, and from then on intake shows its boxes locked.
+    if (!B.takeoffSf(M.takeoff)) {
+      M.takeoff = B.seedTakeoffSf(M.takeoff, state.polish_sf, state.polish_2_sf);
     }
 
     renderDatalist();

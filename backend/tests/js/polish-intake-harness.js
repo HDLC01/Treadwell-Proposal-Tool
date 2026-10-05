@@ -279,6 +279,8 @@ const scope = new Function("$", "TW", "SB", "document", "window", "clock", "fetc
   ${fn("onCountyInput")}
   ${fn("onCountyKeydown")}
   ${fn("saveSoon")}
+  ${fn("sfLocked")}
+  ${fn("paintSfLock")}
   ${fn("save")}
   ${fn("paintSaveBlocked")}
   ${fn("hydrate")}
@@ -286,7 +288,7 @@ const scope = new Function("$", "TW", "SB", "document", "window", "clock", "fetc
   ${fn("onSubmit")}
   ${fn("wire")}
   ${fn("boot")}
-  return { boot: boot, save: save, saveSoon: saveSoon, toggleCondition: toggleCondition,
+  return { boot: boot, save: save, sfLocked: sfLocked, paintSfLock: paintSfLock, saveSoon: saveSoon, toggleCondition: toggleCondition,
            renderConditions: renderConditions, adoptModel: adoptModel, hydrate: hydrate,
            onClick: onClick, onSubmit: onSubmit, CONDITIONS: CONDITIONS,
            DEFAULT_CONDITIONS: DEFAULT_CONDITIONS, COUNTY_LIMIT: COUNTY_LIMIT,
@@ -350,7 +352,7 @@ function build(opts) {
       store.blob = Object.assign(store.blob, JSON.parse(JSON.stringify(partial)));
       return store.blob;
     },
-    readForm: () => Object.assign({}, opts.formValues || FORM_VALUES),
+    readForm: opts.readForm || (() => Object.assign({}, opts.formValues || FORM_VALUES)),
     writeForm: (f, values) => { rec.written.push({ isForm: f === dom.nodes["intake-form"],
                                                    values: values }); },
     withDraft: (p) => p + (p.indexOf("?") >= 0 ? "&" : "?") + "d=" + store.id,
@@ -1546,6 +1548,92 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
                          || null),
       worked: Object.prototype.hasOwnProperty.call(workedSave, "conditions_shown")
         ? workedSave.conditions_shown : "absent",
+    };
+  }
+
+  // ── Scope (quick): the SF boxes, seeded and then locked (Hanz, 2026-10-05) ─────
+  //
+  // "Add SF, seed the takeoff". Intake carries System 1 / System 2 Polish SF; step 2 seeds the
+  // takeoff from them; and once the takeoff holds a measurement the boxes lock and intake's save
+  // can no longer touch polish_sf, which is the takeoff TOTAL the proposal and /api/generate read.
+  {
+    // The REAL readForm, lifted out of shared.js. Whether a locked box can leak into the save
+    // turns on what this function does with readonly and disabled inputs, so a stub that returns
+    // whatever the test says would prove nothing about it.
+    const shared = read(path.join(ROOT, "shared.js"));
+    const rf = /function readForm\(formEl\) \{[\s\S]*?\n  \}/.exec(shared);
+    if (!rf) throw new Error("readForm() is gone from shared.js — rewrite this, don't stub it");
+    const realReadForm = new Function(rf[0] + " return readForm;")();
+    const fakeForm = { elements: [
+      { name: "polish_sf", type: "number", value: "999", readOnly: true },
+      { name: "polish_2_sf", type: "number", value: "5", disabled: true },
+      { name: "", type: "number", value: "77" },
+      { name: "project_name", type: "text", value: "Nearman Creek" },
+    ] };
+    const viaReal = realReadForm(fakeForm);
+
+    const sfOf = (st) => ({ sf1: st.polish_sf, sf2: st.polish_2_sf });
+    const lastSave = (bb) => bb.rec.saves[bb.rec.saves.length - 1];
+
+    // 1. unlocked: nothing measured. Both boxes editable, and what is typed round-trips.
+    const fresh = build({ blob: blob({ polish_estimate: null, polish_sf: 4000, polish_2_sf: 1500 }),
+      formValues: Object.assign({}, FORM_VALUES, { polish_sf: 4000, polish_2_sf: 1500 }) });
+    await fresh.api.boot();
+    const n1 = fresh.dom.nodes["polish-sf-1"], n2 = fresh.dom.nodes["polish-sf-2"];
+    const unlockedPaint = { ro1: n1.readOnly, ro2: n2.readOnly,
+      noteHidden: fresh.dom.nodes["sf-locked-note"].hidden !== false };
+    const hydratedWith = fresh.rec.written.map((w) => sfOf(w.values))[0];
+    fresh.api.save();
+    const freshSave = lastSave(fresh);
+    // reload: a second page over the blob the first one saved
+    const reload = build({ blob: fresh.store.blob, formValues: FORM_VALUES });
+    await reload.api.boot();
+    const reloadWritten = reload.rec.written.map((w) => sfOf(w.values))[0];
+
+    // 2. locked: the takeoff measures 12,500 SF. Boxes read-only, showing the TOTAL, with a note;
+    //    a save whose form hands over a different number cannot move polish_sf.
+    const lockedB = build({ blob: blob({ polish_sf: 12500, polish_2_sf: 800 }),
+      formValues: Object.assign({}, FORM_VALUES, { polish_sf: 999, polish_2_sf: 5 }) });
+    await lockedB.api.boot();
+    lockedB.api.save();
+    const lockedSave = lastSave(lockedB);
+
+    // 3. the same, through the REAL readForm over a form whose SF boxes are readonly/disabled:
+    //    the real function still reads them (the reason the guard lives in save()).
+    const realB = build({ blob: blob({ polish_sf: 12500 }),
+      readForm: () => Object.assign({}, FORM_VALUES, viaReal) });
+    await realB.api.boot();
+    realB.api.save();
+    const realSave = lastSave(realB);
+    // ...and the pagehide flush goes through the same save(), so it cannot leak either.
+    realB.api.saveSoon();
+    realB.win.fire("pagehide", {});
+    const flushSave = lastSave(realB);
+
+    // 4. a takeoff of LINEAR-foot rows only has no SF to disagree about: not locked.
+    const lfOnly = build({ blob: blob({ polish_estimate: { version: 2,
+      takeoff: [{ assembly_id: "a", assembly_name: "Edge", measurement: 900, unit: "LF" }],
+      labor: [], conditions: {}, contingency: 0, fees: 0, totals: {} }, polish_sf: 0 }) });
+    await lfOnly.api.boot();
+
+    out.sfBoxes = {
+      unlockedPaint, hydratedWith,
+      freshSaved: sfOf(freshSave),
+      reloadWritten,
+      reloadReadOnly: reload.dom.nodes["polish-sf-1"].readOnly,
+      lockedPaint: { ro1: lockedB.dom.nodes["polish-sf-1"].readOnly,
+        ro2: lockedB.dom.nodes["polish-sf-2"].readOnly,
+        v1: lockedB.dom.nodes["polish-sf-1"].value, v2: lockedB.dom.nodes["polish-sf-2"].value,
+        note: lockedB.dom.nodes["sf-locked-note"].textContent,
+        noteHidden: lockedB.dom.nodes["sf-locked-note"].hidden },
+      lockedSaveKeys: { hasSf1: "polish_sf" in lockedSave, hasSf2: "polish_2_sf" in lockedSave },
+      lockedBlobAfter: sfOf(lockedB.store.blob),
+      realReadFormLeaks: { sf1: viaReal.polish_sf, sf2: viaReal.polish_2_sf,
+        unnamedRead: Object.keys(viaReal).indexOf("") >= 0 },
+      realSaveKeys: { hasSf1: "polish_sf" in realSave, hasSf2: "polish_2_sf" in realSave },
+      flushSaveKeys: { hasSf1: "polish_sf" in flushSave, hasSf2: "polish_2_sf" in flushSave },
+      realBlobAfter: sfOf(realB.store.blob),
+      lfOnlyReadOnly: lfOnly.dom.nodes["polish-sf-1"].readOnly,
     };
   }
 

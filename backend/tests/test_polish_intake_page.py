@@ -1353,3 +1353,86 @@ def test_the_intake_page_snapshots_which_condition_cards_a_new_bid_shows(ran):
     assert s["minted"] == {"dye": False}, s["minted"]
     assert s["survivesReadBack"] == {"dye": False}, s["survivesReadBack"]
     assert s["worked"] == "absent", s["worked"]
+
+
+# ── Scope (quick): the same box as the live intake, SF seeded into the takeoff ───────────────
+#
+# Hanz, 2026-10-05, on seeing the two intakes side by side: "scope of beta and active projects are
+# not the same", and chose "Add SF, seed the takeoff". These run the real page code (harness
+# section "Scope (quick)") against the real readForm lifted out of shared.js.
+
+
+def _scope_fieldset():
+    html = (FRONTEND / "polish-intake.html").read_text(encoding="utf-8")
+    start = html.index("<legend>Scope (quick)</legend>")
+    return html[start:html.index("</fieldset>", start)]
+
+
+def test_the_beta_scope_box_reads_like_the_live_one_for_a_polish_job():
+    """The live intake, for a polish job, shows: the hint, System 1 and System 2 (optional) with a
+    Polish floor SF box each (polish_sf, polish_2_sf), then Area, then Approx. start date. The
+    beta shows the same, in the same order, with the live form's classes. No Epoxy SF, no Cove LF.
+
+    Mutation: delete the polish_2_sf input, or move Area above the systems."""
+    box = _scope_fieldset()
+    assert "Pre-fills the estimate. You can refine on the next screen." in box
+    names = re.findall(r'name="([a-z0-9_]+)"', box)
+    assert names == ["polish_sf", "polish_2_sf", "work_areas", "approx_start_date"], names
+    assert box.index("System 1") < box.index("System 2 (optional)") < box.index("work_areas")
+    assert box.count('class="system-block"') == 2 and box.count('class="system-tag"') == 2
+    assert box.count("Polish floor SF") == 2
+    assert "Epoxy floor SF" not in box and "Cove LF" not in box
+    # Area explains itself in the title tooltip only, as on the live form -- no visible span.
+    assert 'title="Prints on the cover letter as the Area line.' in box
+    assert '<span class="hint">' not in box
+    # The live form styles these two classes in its inline <style>; the beta carries identical rules.
+    html = (FRONTEND / "polish-intake.html").read_text(encoding="utf-8")
+    assert ".system-tag" in html and ".system-block + .system-block" in html
+
+
+@needs_node
+def test_the_sf_boxes_start_editable_and_round_trip_through_save_and_reload(ran):
+    """Nothing is measured yet, so both boxes are editable, and what the estimator typed is what
+    the draft holds and what a reload writes back into the form.
+
+    Mutation: leave polish_2_sf off the form, or hydrate before the lock paint overwrites it."""
+    s = ran["sfBoxes"]
+    assert s["unlockedPaint"] == {"ro1": False, "ro2": False, "noteHidden": True}
+    assert s["hydratedWith"] == {"sf1": 4000, "sf2": 1500}
+    assert s["freshSaved"] == {"sf1": 4000, "sf2": 1500}
+    assert s["reloadWritten"] == {"sf1": 4000, "sf2": 1500}
+    assert s["reloadReadOnly"] is False
+
+
+@needs_node
+def test_once_the_takeoff_is_measured_the_boxes_lock_and_say_where_to_change_it(ran):
+    """The takeoff owns the SF after step 2: both boxes read-only, System 1 showing the takeoff
+    total, a plain line naming step 2. A takeoff of linear-foot rows alone has no SF, so no lock.
+
+    Mutation: make sfLocked() return false."""
+    p = ran["sfBoxes"]["lockedPaint"]
+    assert p["ro1"] is True and p["ro2"] is True
+    assert p["v1"] == 12500 and p["v2"] == ""
+    assert p["noteHidden"] is False
+    assert "Measured on the takeoff (step 2)" in p["note"] and "12,500 SF" in p["note"]
+    assert ran["sfBoxes"]["lfOnlyReadOnly"] is False
+
+
+@needs_node
+def test_a_locked_intake_cannot_write_over_the_takeoff_total(ran):
+    """polish_sf is the takeoff TOTAL once step 2 has saved: proposal-review reads it for the SF
+    token and /api/generate gates on it. The real shared.js readForm takes every NAMED input,
+    readonly and disabled included, so a read-only attribute alone would still leak the box's value
+    -- proven below by running the real function. The guard that holds is save() dropping both keys.
+    The pagehide flush goes through the same save().
+
+    Mutation: delete the `if (sfLocked(model)) { delete ... }` line in save() -- the blob's
+    polish_sf becomes 999."""
+    s = ran["sfBoxes"]
+    assert s["realReadFormLeaks"] == {"sf1": 999, "sf2": 5, "unnamedRead": False}, (
+        "readForm no longer reads readonly/disabled inputs -- the lock may be simplifiable")
+    assert s["lockedSaveKeys"] == {"hasSf1": False, "hasSf2": False}
+    assert s["realSaveKeys"] == {"hasSf1": False, "hasSf2": False}
+    assert s["flushSaveKeys"] == {"hasSf1": False, "hasSf2": False}
+    assert s["lockedBlobAfter"] == {"sf1": 12500, "sf2": 800}
+    assert s["realBlobAfter"]["sf1"] == 12500

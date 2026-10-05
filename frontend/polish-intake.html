@@ -29,6 +29,11 @@
        toggles onto the draft; the workbook is the calculator's business, and loading a formula
        engine to render a form would cost every estimator a second of nothing. -->
   <style>
+    /* Per-system Scope groups: the SAME two rules as index.html's inline <style>, because the Scope
+       box here is the live one's markup (system-block / system-tag). Kept in step by hand. */
+    .system-block + .system-block { margin-top: 10px; padding-top: 10px; border-top: 1px dashed rgba(128,128,128,.3); }
+    .system-tag { font-weight: 700; font-size: 12px; letter-spacing: .04em; text-transform: uppercase;
+      color: var(--treadwell-red, #c0392b); margin: 2px 0 6px; }
     /* ── the BETA badge ──────────────────────────────────────────────────────────
        Kept as `.beta` rather than switched to styles.css's `.type-badge`, and that is a reuse
        decision rather than an oversight. `.beta` is the beta PAGES' own convention -- library.html
@@ -376,25 +381,53 @@
         </label>
       </fieldset>
 
-      <!-- SCOPE, AS A POLISH JOB SEES IT. Two fields, and the omissions are the point.
-           * system_thickness is NOT here. index.js hides it for polish and gyp -- "Thickness is a
-             RESIN question. Polish has a grind and a sheen, not a thickness" -- so adopting the
-             live form's DECISION means leaving it off a page that is polish by definition.
-           * The gyp SF buckets and the work-type radios are not here for the same reason: this
-             page IS the polish estimator, so a work-type chooser on it is a contradiction.
-           * #systems-container (polish_sf / cove_1_lf / system_1_sf) is not here either, and that
-             one is a data decision rather than a layout one: the beta prices from its own
-             area-by-area takeoff on step 2, so a Polish SF box on intake would be a second place
-             to type the same number and the two could disagree. -->
+      <!-- SCOPE, AS A POLISH JOB SEES IT. Same box as the live intake's Scope (quick) for a polish
+           job: the same hint, System 1 / System 2 (optional) Polish floor SF, then Area, then
+           Approx. start date. Hanz, 2026-10-05, on seeing the two side by side: "scope of beta and
+           active projects are not the same" -- and chose "Add SF, seed the takeoff".
+
+           WHY THE SF BOXES ARE BACK. This comment used to record the opposite decision: no SF box,
+           because the beta prices from its own area-by-area takeoff on step 2 and a second place to
+           type the same number could disagree with it. That risk is now handled, not ignored:
+             * Seeding: step 2 turns polish_sf / polish_2_sf into takeoff rows (B.seedTakeoffSf, in
+               js/polish-bid-core.js), only onto an EMPTY takeoff. Typed once.
+             * One source after that: once the takeoff has any SF, js/polish-intake.js locks both
+               boxes read-only (paintSfLock) and save() refuses to write polish_sf / polish_2_sf at
+               all, so polish_sf stays the takeoff TOTAL that proposal-review and /api/generate read.
+               The lock is in save(), not in the DOM, because TW.readForm reads readonly AND disabled
+               inputs alike -- see the note on sfLocked().
+           The ids are for the lock; the names are the live form's own (polish_sf, polish_2_sf), so
+           both intakes write the same keys on the same draft.
+
+           Still left off, because this page IS the polish estimator:
+             * system_thickness (a resin question; index.js hides it for polish),
+             * Epoxy SF and Cove LF (epoxy details), the gyp SF buckets, the work-type radios. -->
       <fieldset>
         <legend>Scope (quick)</legend>
-        <p class="hint">Pre-fills the proposal. The takeoff itself is step 2.</p>
+        <p class="hint">Pre-fills the estimate. You can refine on the next screen.</p>
+        <div id="systems-container">
+          <div class="system-block">
+            <div class="system-tag">System 1</div>
+            <div class="row">
+              <label>Polish floor SF
+                <input type="number" id="polish-sf-1" name="polish_sf" min="0" step="1" value="0">
+              </label>
+            </div>
+          </div>
+          <div class="system-block">
+            <div class="system-tag">System 2 (optional)</div>
+            <div class="row">
+              <label>Polish floor SF
+                <input type="number" id="polish-sf-2" name="polish_2_sf" min="0" step="1" value="0">
+              </label>
+            </div>
+          </div>
+          <p class="hint" id="sf-locked-note" hidden></p>
+        </div>
         <label>Area &mdash; what the floor covers
           <input type="text" name="work_areas"
                  placeholder="Warehouse expansion and 4 offices"
                  title="Prints on the cover letter as the Area line. Plain words, the way you would say it to the customer.">
-          <span class="hint">Prints on the cover letter as the Area line. Plain words, the way you
-            would say it to the customer.</span>
         </label>
         <div class="row">
           <label>Approx. start date

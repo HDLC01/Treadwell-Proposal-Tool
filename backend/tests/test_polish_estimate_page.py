@@ -1727,6 +1727,24 @@ def test_intake_seeds_the_first_measurement_only_when_nothing_is_measured(ran):
                               ["travel", 1.5, 33]]
 
 
+@needs_node
+def test_intake_system_2_seeds_a_second_takeoff_row_and_never_over_a_measurement(ran):
+    """Hanz, 2026-10-05: the beta intake carries System 1 and System 2 Polish SF, and each number
+    becomes a row of the step-2 takeoff, so it is typed once and the takeoff stays the only source
+    of the price. polish_2_sf used to be read by nothing.
+
+    A system-2-only job seeds ONE row from system 2 (the number is the estimator's; which box it
+    was typed in changes nothing the takeoff prices). A takeoff that already measures anything
+    takes neither number.
+
+    Mutation: make B.seedTakeoffSf ignore its second argument and the two-row case collapses to
+    one row; drop its early return and the measured 5,000 SF is overwritten."""
+    m = ran["migration"]
+    assert m["seedTwo"] == [["", 8250, "SF"], ["", 3100, "SF"]], m["seedTwo"]
+    assert m["seedOnlyTwo"] == [["", 3100, "SF"]], m["seedOnlyTwo"]
+    assert m["seedMeasured"] == [["", 5000, "SF"]], m["seedMeasured"]
+
+
 # ── H. boot ──────────────────────────────────────────────────────────────────
 @needs_node
 def test_nothing_is_revealed_before_the_sandbox_settles(ran):

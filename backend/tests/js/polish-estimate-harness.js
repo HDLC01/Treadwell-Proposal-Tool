@@ -1738,6 +1738,22 @@ const rendered = [];      // every string the page put on screen, for the Labour
     const fresh = build({ blob: blob({ polish_estimate: null, polish_sf: 8250 }) });
     await fresh.api.init();
     out.migration.freshFromIntake = fresh.api.model().takeoff[0].measurement;
+    // Hanz, 2026-10-05 ("Add SF, seed the takeoff"): System 2's box seeds a SECOND row, and a
+    // system-2-only job seeds one row. Each is read off the model the page actually opened with.
+    const rowsOf = (m) => m.takeoff.map((r) => [r.assembly_id, r.measurement, r.unit]);
+    const two = build({ blob: blob({ polish_estimate: null, polish_sf: 8250, polish_2_sf: 3100 }) });
+    await two.api.init();
+    out.migration.seedTwo = rowsOf(two.api.model());
+    const only2 = build({ blob: blob({ polish_estimate: null, polish_sf: 0, polish_2_sf: 3100 }) });
+    await only2.api.init();
+    out.migration.seedOnlyTwo = rowsOf(only2.api.model());
+    // A measured takeoff takes NEITHER number, however much intake holds.
+    const measured = build({ blob: blob({ polish_estimate: { version: 2,
+      takeoff: [{ assembly_id: "", assembly_name: "", measurement: 5000, unit: "SF" }],
+      labor: [], conditions: {}, contingency: 0, fees: 0, totals: {} },
+      polish_sf: 8250, polish_2_sf: 3100 }) });
+    await measured.api.init();
+    out.migration.seedMeasured = rowsOf(measured.api.model());
     out.migration.freshLabor = fresh.api.model().labor.map((r) => [r.id, r.guys, r.rate]);
   }
 
