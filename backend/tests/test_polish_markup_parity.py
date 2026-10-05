@@ -960,6 +960,11 @@ def test_a_travel_row_with_no_hours_does_not_block_the_review_step(ran):
         "a travel row with no hours is unused, not unfinished: %r" % b["noHours"])
     assert any("Travel" in x for x in b["hoursButNoGuys"]), (
         "a travel row that IS being used is checked like any other: %r" % b["hoursButNoGuys"])
+    assert not any("u_1" in x for x in b["blankAddedLine"]), (
+        "an added line with only the default rate is untouched, not half-filled: %r"
+        % b["blankAddedLine"])
+    assert any("Mobilize" in x for x in b["namedAddedLine"]), (
+        "a named line with no guys/days is still unfinished: %r" % b["namedAddedLine"])
     assert any("Polishing" in x for x in b["crewRowStillChecked"]), (
         "the carve-out must not leak onto the crew rows: %r" % b["crewRowStillChecked"])
 

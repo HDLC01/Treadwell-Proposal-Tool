@@ -1279,6 +1279,11 @@
       // checked like any other — miss the rate on it and it still complains.
       if (row.unit === "hours" && !filledIn(row.days)) continue;
 
+      // A line nobody has named or sized is an untouched blank, not a half-filled one. New lines
+      // arrive with the company rate already in the rate box, so "one box filled" no longer means
+      // the estimator started it.
+      if (isBlank(row.label) && !filledIn(row.guys) && !filledIn(row.days)) continue;
+
       var missing = [];
       if (!filledIn(row.guys)) missing.push("guys");
       if (!filledIn(row.days)) missing.push(row.unit === "hours" ? "hours" : "days");

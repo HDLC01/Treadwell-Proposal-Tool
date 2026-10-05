@@ -356,6 +356,13 @@ out.travelBlockers = {
     takeoff: [{ assembly_id: "a1", measurement: 100, unit: "SF" }],
     labor: [{ id: "travel", label: "Travel", guys: "", days: 2, rate: 33,
               unit: "hours", guys_auto: false }] }),
+  // A freshly added line carries the company rate and nothing else: untouched, not half-filled.
+  blankAddedLine: P.blockers({ version: 2,
+    takeoff: [{ assembly_id: "a1", measurement: 100, unit: "SF" }],
+    labor: [{ id: "u_1", label: "", guys: "", days: "", rate: 33 }] }),
+  namedAddedLine: P.blockers({ version: 2,
+    takeoff: [{ assembly_id: "a1", measurement: 100, unit: "SF" }],
+    labor: [{ id: "u_2", label: "Mobilize", guys: "", days: "", rate: 33 }] }),
   crewRowStillChecked: P.blockers({ version: 2,
     takeoff: [{ assembly_id: "a1", measurement: 100, unit: "SF" }],
     labor: [{ id: "polishing", label: "Polishing", guys: 3, days: "", rate: 33 }] })
