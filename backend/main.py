@@ -1007,6 +1007,8 @@ class LibraryItemIn(BaseModel):
     notes: Optional[str] = None
     # Shared/team-wide, not per-user -- see library.validate_item's note.
     favorite: Optional[bool] = None
+    # Whether this default STARTS ON in a new bid (the Defaults tab slider). Undeclared = dropped.
+    default_on: Optional[bool] = None
     # THE TWO NUMBERS THAT MOVED OFF THE ASSEMBLY LINE on 2026-09-22, alongside `coverage` above.
     # Declared here or they do not exist as far as the API is concerned: Pydantic's default
     # `extra` is `ignore`, so an undeclared field is dropped in silence, validate_item returns
@@ -1042,6 +1044,7 @@ class LibraryAssemblyIn(BaseModel):
     unit: Optional[str] = None
     lines: Optional[Any] = None
     favorite: Optional[bool] = None
+    default_on: Optional[bool] = None
     # The version the editor believes it is changing. A line edit rewrites the WHOLE lines array,
     # so without this two people with the same assembly open silently overwrite each other.
     expected_updated_at: Optional[str] = None
@@ -1293,6 +1296,7 @@ class LibraryLaborIn(BaseModel):
     # Shared/team-wide, not per-user -- see library.validate_labor's note. Undeclared here means
     # silently discarded, the same trap LibraryItemIn.default_work_types' own comment records.
     favorite: Optional[bool] = None
+    default_on: Optional[bool] = None
     # See the note on LibraryItemIn.default_work_types: undeclared means silently discarded.
     default_work_types: Optional[Any] = None
 

@@ -243,6 +243,9 @@
        so there is one source of truth for the dimming and the caption instead of two keyed
        attributes a live repaint could let drift apart. */
     .lab:not(.inert) .inertline{display:none}
+    /* Switched OFF with the row's own slider (not "local job"): dimmed like .inert, and the
+       "this job is marked local" caption would be the wrong sentence, so it stays hidden. */
+    .lab.off .inertline{display:none}
 
     table{width:100%;border-collapse:collapse;font-size:13px}
     th{text-align:left;font:600 10.5px var(--sans);letter-spacing:.07em;text-transform:uppercase;

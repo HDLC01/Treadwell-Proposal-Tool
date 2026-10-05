@@ -303,6 +303,8 @@
    *  and the cost box has to agree with them. Same for an assembly whose items cannot price: the
    *  warning line beneath it says why, and "—" is what invites reading it. */
   function rowCost(row) {
+    // A row switched OFF shows $0 and prices nothing (the on/off slider): the card stays, grayed.
+    if (!B.rowOn(row)) return { text: "$0", empty: true, price: null };
     var p = rowPrice(row);
     if (!p || !p.priced_lines) return { text: "—", empty: true, price: p };
     return { text: moneyAuto(p.total), empty: false, price: p };
@@ -374,6 +376,9 @@
   function materialTotal() {
     var sum = 0;
     M.takeoff.forEach(function (r) {
+      // OFF ROWS ARE SKIPPED HERE, in the raw sum, so the chain rounds only what the bid really
+      // buys (D31 is ROUNDUP of the sum -- zeroing a row after that would drift the total).
+      if (!B.rowOn(r)) return;
       var p = rowPrice(r);
       if (p) sum += p.total;
     });
@@ -567,6 +572,7 @@
   function stepStatus() {
     var priced = 0, half = 0;
     M.takeoff.forEach(function (r) {
+      if (!B.rowOn(r)) return;                         // an off row is not part of the bid
       var measured = B.num(r.measurement) > 0;
       // EITHER ID COUNTS. A picked, measured material row is a finished row by every definition
       // this page uses -- it prices, it reaches the Material total, it prints on Review -- and
@@ -1089,7 +1095,9 @@
       rowCardInner(r, i) + '</div>';
   }
 
-  function rowCardClass(r) { return "tk" + (rowKind(r) === "item" ? " mat" : ""); }
+  function rowCardClass(r) {
+    return "tk" + (rowKind(r) === "item" ? " mat" : "") + (B.rowOn(r) ? "" : " inert");
+  }
 
   function rowCardInner(r, i) {
     var rc = rowCost(r);
@@ -1118,6 +1126,8 @@
       (pending ? '<span class="tk-mark" data-mark-for="' + i + '">' +
         (ambiguous(r) ? "pick one" : "new") + '</span>' : '') +
       '<span class="tk-sub" data-measure-for="' + i + '">' + esc(measureText(r)) + '</span>' +
+      B.sliderHtml(B.rowOn(r), 'data-on-tk="' + i + '"', "Included", "Off keeps this row here, grayed, " +
+        "and adds nothing to the price") +
       (M.takeoff.length > 1
         ? '<button class="x" data-del-row="' + i + '" title="Remove this row">' + icon("x", 12) + '</button>'
         : '') +
@@ -1308,10 +1318,14 @@
       : '<button type="button" class="mw-sw labsw on" role="switch" aria-checked="true"'
         + ' data-lab-auto="' + i + '">'
         + '<span class="track"></span>Type my own</button>');
-    return '<div class="tk lab' + (inert ? " inert" : "") + '" data-lab-card="' + i +
+    var on = B.rowOn(r);
+    return '<div class="tk lab' + ((inert || !on) ? " inert" : "") + (on ? "" : " off") +
+      '" data-lab-card="' + i +
       '"><div class="tk-h">' +
       '<input class="labname" data-lab="' + i + '" data-k="label" value="' + esc(nv(r.label)) +
       '" placeholder="Task" aria-label="Task name">' + toggle +
+      B.sliderHtml(on, 'data-on-lab="' + i + '"', "Included", "Off keeps this line here, grayed, " +
+        "and adds nothing to the price") +
       '<span class="tk-sub calc" data-lcost-for="' + i + '">' +
       esc(moneyAuto(B.laborCost(r))) + '</span>' +
       (M.labor.length > 1
@@ -1419,6 +1433,7 @@
       // printed a fully priced material row as "(no assembly picked)" beside its own cost, which
       // reads as a fault in a row that has nothing wrong with it.
       if (!r.assembly_id && !r.item_id && !B.num(r.measurement)) return;
+      if (!B.rowOn(r)) return;               // switched off: out of the bid, so out of the list
       tkRows.push([r.assembly_name || r.item_name || "(nothing picked yet)", measureText(r),
                    esc(rowCost(r).text)]);
     });
@@ -1440,6 +1455,7 @@
     // the one labor line an estimator is most likely to have forgotten was also the only one they
     // could not see.
     M.labor.forEach(function (r) {
+      if (!B.rowOn(r)) return;               // switched off: out of the bid, so out of the list
       var cost = B.laborCost(r);
       if (!cost && (r || {}).id !== "travel") return;
       labRows.push([r.label || "Labor line",
@@ -1474,10 +1490,7 @@
     // reason. A switch whose answer changes no price still has an answer, and that answer still
     // reaches the downloaded workbook, so taking it away would lose a cell rather than tidy a
     // screen. It stays clickable; it just stops claiming to matter to the figure above it.
-    return '<span class="mw-sw' + (on ? " on" : "") + (inert ? " inert" : "") +
-      '" data-cond="' + esc(key) +
-      '" role="switch" tabindex="0" aria-checked="' + (on ? "true" : "false") + '">' +
-      '<span class="track"></span>' + esc(label) + '</span>';
+    return B.sliderHtml(on, 'data-cond="' + esc(key) + '"', label, null, inert ? " inert" : "");
   }
 
   /** Where the remodel rate came from, said out loud beside the row.
@@ -1682,7 +1695,8 @@
     document.querySelectorAll("[data-lab-card]").forEach(function (el) {
       var r = M.labor[parseInt(el.getAttribute("data-lab-card"), 10)];
       if (!r) return;
-      el.className = "tk lab" + (laborInert(r) ? " inert" : "");
+      var rOn = B.rowOn(r);
+      el.className = "tk lab" + ((laborInert(r) || !rOn) ? " inert" : "") + (rOn ? "" : " off");
     });
     // The two condition cards that price. Every figure on them is derived from the takeoff area,
     // which is exactly what a keystroke in a takeoff row changes -- and a keystroke takes
@@ -1768,6 +1782,16 @@
     return B.num((row || {}).rate) !== LABOR_RATE;
   }
 
+  // Space and Enter work the on/off slider from the keyboard, as they would a button.
+  document.addEventListener("keydown", function (e) {
+    var t = e.target;
+    if (!t || !t.closest || (e.key !== " " && e.key !== "Enter")) return;
+    var sw = t.closest("[data-on-tk]") || t.closest("[data-on-lab]");
+    if (!sw) return;
+    e.preventDefault();
+    sw.click();
+  });
+
   document.addEventListener("click", function (e) {
     var t = e.target;
     if (!t || !t.closest) return;
@@ -1846,6 +1870,27 @@
     // Review's own toggles -- same idea as polish-intake.js's onClick/toggleCondition, just
     // flipping the one flag in place rather than routing through that page's carry-four/legacy-
     // cell bookkeeping, none of which any of these five keys need.
+    // THE ON/OFF SLIDER on a takeoff row and on a labor row (the condition cards' own switch is the
+    // `data-cond` one below). Off is an explicit `enabled:false`; back on DELETES the key, so a row
+    // that has been flipped back is indistinguishable from one never touched.
+    var onTk = t.closest("[data-on-tk]");
+    if (onTk) {
+      var oi = parseInt(onTk.getAttribute("data-on-tk"), 10);
+      if (M.takeoff[oi]) {
+        if (B.rowOn(M.takeoff[oi])) M.takeoff[oi].enabled = false; else delete M.takeoff[oi].enabled;
+      }
+      changed(true);
+      return;
+    }
+    var onLab = t.closest("[data-on-lab]");
+    if (onLab) {
+      var ol = parseInt(onLab.getAttribute("data-on-lab"), 10);
+      if (M.labor[ol]) {
+        if (B.rowOn(M.labor[ol])) M.labor[ol].enabled = false; else delete M.labor[ol].enabled;
+      }
+      changed(true);
+      return;
+    }
     var cond = t.closest("[data-cond]");
     if (cond) {
       var ck = cond.getAttribute("data-cond");

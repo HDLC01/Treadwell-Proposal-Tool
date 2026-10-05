@@ -420,6 +420,12 @@ alter table public.library_labor      add column if not exists default_work_type
 alter table public.library_labor add column if not exists favorite boolean not null default true;
 alter table public.library_labor alter column favorite set default false;
 
+-- THE DEFAULTS-TAB SLIDER, 2026-10-05 -- one nullable boolean (NULL reads ON); same file as
+-- backend/ops/default_on.sql, which is how an already-running database gets it.
+alter table public.library_items      add column if not exists default_on boolean;
+alter table public.library_assemblies add column if not exists default_on boolean;
+alter table public.library_labor      add column if not exists default_on boolean;
+
 -- ── Items and Assemblies, 2026-08-15 (Hanz) ───────────────────────────────
 -- Additive only, and safe to run against a database that already holds BETA rows.
 --

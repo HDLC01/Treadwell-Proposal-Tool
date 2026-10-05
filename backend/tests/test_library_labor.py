@@ -261,7 +261,7 @@ def test_the_row_shape_is_exactly_what_the_other_tracks_were_built_against(store
     row = _mk(notes="two trucks", guys_auto=True, sort=3)
     assert set(row) == {"id", "name", "rate", "unit", "guys_auto", "sort", "notes",
                         "owner_email", "created_at", "updated_at", "default_work_types",
-                        "favorite"}
+                        "favorite", "default_on"}
     # EMPTY MEANS EVERY WORK TYPE, which is what keeps the column backwards compatible:
     # a row written before it existed still applies everywhere, exactly as it did when
     # `favorite` was the whole story.

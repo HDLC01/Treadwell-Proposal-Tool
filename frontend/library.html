@@ -229,6 +229,16 @@
     .th-sub { font-weight:400; text-transform:none; letter-spacing:0; }
     /* Widths as classes. They were eight inline style attributes on the <th> row. */
     .w-order { width:112px; } .w-cov { width:116px; } .w-waste { width:104px; }
+    /* The Defaults tab's starting-state slider (the same .mw-sw the estimate draws, via
+       TWPolishBid.sliderHtml). */
+    .w-on { width:84px; white-space:nowrap; } .rowon { white-space:nowrap; }
+    .mw-sw{display:inline-flex;align-items:center;gap:7px;cursor:pointer;vertical-align:middle;font-size:12px}
+    .mw-sw .track{width:30px;height:18px;border-radius:var(--r-lg);background:var(--surf-low,#e8e4df);
+      border:1px solid var(--line,#c9c2ba);position:relative;transition:background .15s}
+    .mw-sw .track::after{content:"";position:absolute;top:1px;left:1px;width:14px;height:14px;
+      border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.25);transition:left .15s}
+    .mw-sw.on .track{background:var(--red,#c8102e);border-color:transparent}
+    .mw-sw.on .track::after{left:13px}
     .w-ru { width:78px; text-align:center; } .w-qty { width:132px; } .w-act { width:34px; }
     .cell-name { width:100%; min-width:150px; }
     .cell-unit { width:100%; min-width:96px; }
@@ -702,7 +712,7 @@
       <button type="button" role="tab" id="tab-vendors" aria-selected="false"
               aria-controls="pane-vendors">Administration</button>
       <button type="button" role="tab" id="tab-defaults" aria-selected="false"
-              aria-controls="pane-defaults">Default Items &amp; Assemblies</button>
+              aria-controls="pane-defaults">Default Items, Assemblies &amp; Labor</button>
       <!-- "+ New assembly" USED TO SIT HERE, in a .tabaction wrapper pinned to the right-hand end
            of this strip. Hanz, 2026-08-27: "I dont like the New assembly button up top." It now
            lives at the TOP OF THE ASSEMBLY RAIL, which is the list it actually appends to — see
@@ -1072,7 +1082,7 @@
             <div class="tw">
               <table>
                 <thead><tr><th>Line</th><th>How it is priced</th>
-                  <th class="w-act"></th></tr></thead>
+                  <th class="w-on">Starts</th><th class="w-act"></th></tr></thead>
                 <!-- FILLED BY renderDefaultTakeoff(), GROUPED. Hanz, 2026-09-17: "sub
                      categorize the containers wheter they are materials or assemblies".
 
@@ -1119,7 +1129,7 @@
             <div class="tw">
               <table>
                 <thead><tr><th>Line</th><th class="n">Rate</th><th>How it is priced</th>
-                  <th class="w-act"></th></tr></thead>
+                  <th class="w-on">Starts</th><th class="w-act"></th></tr></thead>
                 <!-- FILLED BY renderDefaultLabor(). Travel is already in here before anybody adds
                      anything: it is the labor default the estimate has always had, seeded into
                      every new bid and appended to every old one. It was just never SHOWN as a

@@ -88,15 +88,17 @@ LABOR = "library_labor"
 # validate_item / validate_assembly, which build their output from an explicit key list and drop
 # everything else — so an added column is safe by default and has to be opted IN to be writable.
 ITEM_WRITABLE = ("name", "category", "divisions", "unit", "buy_qty", "unit_cost", "coverage",
-                 "waste_pct", "roundup", "sku", "vendor", "notes", "default_work_types")
-ASM_WRITABLE = ("name", "category", "description", "unit", "lines", "default_work_types")
+                 "waste_pct", "roundup", "sku", "vendor", "notes", "default_work_types",
+                 "default_on")
+ASM_WRITABLE = ("name", "category", "description", "unit", "lines", "default_work_types",
+                "default_on")
 VENDOR_WRITABLE = ("name", "notes")
 REF_WRITABLE = ("name", "notes")
 # `favorite` IS LISTED FOR LABOR (2026-09-30): it is the whole of "is this line a default", the
 # Defaults tab writes it by PATCH, and test_every_writable_field_survives_its_request_model only
 # guards the fields named here -- an undeclared `favorite` on LibraryLaborIn would 200 and drop.
 LABOR_WRITABLE = ("name", "rate", "unit", "guys_auto", "sort", "notes",
-                  "default_work_types", "favorite")
+                  "default_work_types", "favorite", "default_on")
 
 DEFAULT_ITEM_UNIT = "Gallon"    # what Kyle's sheet buys most things by
 DEFAULT_ASM_UNIT = "SF"         # what a system is priced per
@@ -529,6 +531,11 @@ def validate_item(payload: Dict[str, Any], *, partial: bool = False) -> Dict[str
         out["favorite"] = bool(payload.get("favorite"))
     if "default_work_types" in payload:
         out["default_work_types"] = _coerce_work_types(payload.get("default_work_types"))
+    # THE DEFAULTS-TAB SLIDER: does this default START ON in a new bid. Written ONLY when the
+    # request carries it -- never on create or on an ordinary edit -- so a database that has not
+    # had backend/ops/default_on.sql applied is never written a column it lacks. See _default_on.
+    if "default_on" in payload:
+        out["default_on"] = bool(payload.get("default_on"))
 
     # "epoxy" pasted from somewhere becomes the Division the dropdown offers, so the row reads as a
     # known value instead of an off-list one. Case only — a division we don't recognise is left
@@ -570,6 +577,7 @@ def _shape_item(row: Dict[str, Any]) -> Dict[str, Any]:
         # A row written before this column existed has never been starred by anybody -- reads
         # False, same read-shaping every other column added to this table already gets.
         "favorite": bool(row.get("favorite")),
+        "default_on": _default_on(row),
         "default_work_types": _coerce_work_types(row.get("default_work_types")),
         "owner_email": row.get("owner_email") or "",
         "created_at": row.get("created_at"),
@@ -835,6 +843,11 @@ def validate_assembly(payload: Dict[str, Any], *, partial: bool = False) -> Dict
         out["favorite"] = bool(payload.get("favorite"))
     if "default_work_types" in payload:
         out["default_work_types"] = _coerce_work_types(payload.get("default_work_types"))
+    # THE DEFAULTS-TAB SLIDER: does this default START ON in a new bid. Written ONLY when the
+    # request carries it -- never on create or on an ordinary edit -- so a database that has not
+    # had backend/ops/default_on.sql applied is never written a column it lacks. See _default_on.
+    if "default_on" in payload:
+        out["default_on"] = bool(payload.get("default_on"))
 
     return out
 
@@ -871,6 +884,7 @@ def _shape_assembly(row: Dict[str, Any]) -> Dict[str, Any]:
             "note": (ln or {}).get("note") or "",
         } for ln in lines if isinstance(ln, dict)],
         "favorite": bool(row.get("favorite")),
+        "default_on": _default_on(row),
         "default_work_types": _coerce_work_types(row.get("default_work_types")),
         "owner_email": row.get("owner_email") or "",
         # Who last changed it, on the same terms as an item's — including a LINE change, which is
@@ -1195,7 +1209,18 @@ def validate_labor(payload: Dict[str, Any], *, partial: bool = False) -> Dict[st
         out["favorite"] = bool(payload.get("favorite"))
     if "default_work_types" in payload:
         out["default_work_types"] = _coerce_work_types(payload.get("default_work_types"))
+    # THE DEFAULTS-TAB SLIDER: does this default START ON in a new bid. Written ONLY when the
+    # request carries it -- never on create or on an ordinary edit -- so a database that has not
+    # had backend/ops/default_on.sql applied is never written a column it lacks. See _default_on.
+    if "default_on" in payload:
+        out["default_on"] = bool(payload.get("default_on"))
     return out
+
+
+def _default_on(row: Dict[str, Any]) -> bool:
+    """Does this default start ON in a new bid? ABSENT (a column not yet added) or NULL reads ON,
+    the behaviour every default had before the slider existed. Only an explicit false is off."""
+    return (row or {}).get("default_on") is not False
 
 
 def _shape_labor(row: Dict[str, Any]) -> Dict[str, Any]:
@@ -1215,6 +1240,7 @@ def _shape_labor(row: Dict[str, Any]) -> Dict[str, Any]:
         # this function only ever reports what the store holds, it does not itself decide what an
         # absent value should mean the way `_coerce_work_types([])` does for work types.
         "favorite": bool(row.get("favorite")),
+        "default_on": _default_on(row),
         "default_work_types": _coerce_work_types(row.get("default_work_types")),
         "sort": int(_as_float(row.get("sort")) or 0),
         "notes": row.get("notes") or "",

@@ -767,6 +767,19 @@
     return j;
   }
 
+  /** The Defaults tab's on/off slider: does this default START ON in a new bid. Sent on the press,
+   *  beside patchDefault for the same reason patchLabor is -- that one sends `{ favorite }` and
+   *  nothing else. A database without the default_on column answers 502 here, which setDefaultOn
+   *  turns into the put-it-back and a message, never a slider that looks saved and is not. */
+  async function patchDefaultOn(kind, id, on) {
+    var r = await api("/api/library/" + kind + "/" + encodeURIComponent(id), {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ default_on: !!on }) });
+    var j = await r.json().catch(function () { return {}; });
+    if (!r.ok) throw new Error(j.detail || j.error || ("HTTP " + r.status));
+    return j;
+  }
+
   /** Which work types a default is offered for, sent on every chip press.
    *
    *  BESIDE patchDefault RATHER THAN THROUGH IT, for the reason the labor patch below gives:
@@ -2688,6 +2701,68 @@
       '<span class="wtall">' + (list.length ? "" : "All work types") + "</span>";
   }
 
+  /** The slider cell of one default: ON means a new bid starts with this row counted, OFF means it
+   *  starts grayed and adding nothing (the estimate's own slider, flipped there per bid).
+   *
+   *  THE SAME COMPONENT THE ESTIMATE DRAWS -- B.sliderHtml, from the shared module both pages
+   *  load -- so the two cannot look or behave differently. `canEdit` false draws the state as plain
+   *  words, not a switch that would 403 on press (the rule the labor Remove already follows). With
+   *  no shared module there is no slider, rather than a hand-typed second copy of it. */
+  function defaultSlider(kind, id, name, on, canEdit) {
+    var B = window.TWPolishBid;
+    if (!canEdit) return '<span class="wtall">' + (on ? "On" : "Off") + "</span>";
+    if (!B || !B.sliderHtml) return "";
+    return B.sliderHtml(on, 'data-def-on="' + esc(kind) + '" data-def-on-id="' + esc(id) + '"',
+      on ? "On" : "Off", (on ? "Starts on" : "Starts off") + " when an estimate opens: " + name);
+  }
+
+  /** Flip one default's starting state. OPTIMISTIC, WITH THE PUT-BACK IN HERE, like setDefault and
+   *  setConditionDefault: two places to forget the rollback is how a slider ends up showing a
+   *  state nothing stored.
+   *
+   *  THREE STORES, ONE FUNCTION. A library row (item, assembly, labor line) holds `default_on`; the
+   *  three condition materials are RESERVED items whose answer is condition_defaults.on_by_default,
+   *  so a reserved id goes there (the same split removeDefault makes). Neither writes `favorite`:
+   *  whether a row IS a default and whether it STARTS ON are different questions. */
+  async function setDefaultOn(kind, id, on) {
+    if (kind === "items" && isReservedItem(id)) {
+      var key = RESERVED_ITEM_CONDITION[id];
+      var was = COND_DEFAULTS;
+      var next = [], found = false;
+      for (var i = 0; i < was.length; i++) {
+        if (was[i] && was[i].key === key) {
+          next.push(Object.assign({}, was[i], { on: !!on })); found = true;
+        } else next.push(was[i]);
+      }
+      if (!found) next.push({ key: key, on: !!on, listed: true });
+      COND_DEFAULTS = next;
+      renderDefaultTakeoff();
+      try {
+        await putConditionDefault(key, { on: !!on });
+      } catch (err) {
+        COND_DEFAULTS = was;
+        renderDefaultTakeoff();
+        say("Couldn't save that. " + err.message);
+      }
+      return;
+    }
+    var list = kind === "assemblies" ? ASMS : kind === "labor" ? LABOR : ITEMS;
+    var row = null;
+    for (var j = 0; j < list.length; j++) if (list[j].id === id) { row = list[j]; break; }
+    if (!row) return;
+    var prior = row.default_on;
+    row.default_on = !!on;
+    var repaint = function () { if (kind === "labor") renderDefaultLabor(); else renderDefaultTakeoff(); };
+    repaint();
+    try {
+      await patchDefaultOn(kind, id, !!on);
+    } catch (err2) {
+      row.default_on = prior;
+      repaint();
+      say("Couldn't save that. " + err2.message);
+    }
+  }
+
   function defaultRowActions(kind, id, name) {
     return '<button class="btn ghost sm" type="button" data-def-edit="' + esc(kind) +
       '" data-def-id="' + esc(id) + '">Edit</button>' +
@@ -2727,6 +2802,9 @@
    *  reason the labor rows on this tab are gated on ADMIN too. Everyone keeps Edit. */
   function conditionDefaultRow(c) {
     var row = materialDefaultRow(c.item_id, c.name, c.priced);
+    // THE SLIDER IS THE CONDITION'S STARTING ANSWER (condition_defaults.on_by_default). An admin's:
+    // the PUT behind it refuses anybody else, so everyone else reads the state as words.
+    row.slider = defaultSlider("items", c.item_id, c.name, !!c.on, ADMIN);
     if (!ADMIN) {
       row.actions = '<button class="btn ghost sm" type="button" data-def-edit="items" data-def-id="' +
         esc(c.item_id) + '">Edit</button>';
@@ -2900,6 +2978,7 @@
           var n = (a.lines || []).length;
           return { name: a.name,
                    how: n + " item line" + (n === 1 ? "" : "s") + " \u00b7 per " + (a.unit || "SF"),
+                   slider: defaultSlider("assemblies", a.id, a.name, a.default_on !== false, true),
                    actions: defaultRowActions("assemblies", a.id, a.name) };
         }) },
       { title: "Materials",
@@ -2916,10 +2995,12 @@
           // Never a reserved row by its `favorite`: the three are listed below, by their condition.
           return it.favorite && !isReservedItem(it.id) && appliesToWorkType(it, DEFAULT_WT);
         }).map(function (it) {
-          return materialDefaultRow(it.id, it.name,
+          var mrow = materialDefaultRow(it.id, it.name,
                    L.num(it.unit_cost) != null
                      ? L.money(it.unit_cost) + " per " + (it.unit || "unit")
                      : "No cost in the library yet");
+          mrow.slider = defaultSlider("items", it.id, it.name, it.default_on !== false, true);
+          return mrow;
         }).concat(takeoffConditionDefaults().filter(function (c) {
           // ON THE POLISH TAB ONLY. All three write Polish-sheet cells (CONDITION_CELLS in
           // polish-bid-core.js) and nothing on the other four work types reads them; a combo job
@@ -2960,7 +3041,7 @@
     if (!body) return;
     var out = "";
     takeoffDefaultGroups().forEach(function (g) {
-      out += '<tr class="grouphead"><th scope="colgroup" colspan="3">' +
+      out += '<tr class="grouphead"><th scope="colgroup" colspan="4">' +
         esc(g.title) + "</th></tr>";
       g.rows.forEach(function (r) {
         // rawHow ONLY for the rows that build their own control. Everything else stays
@@ -2978,6 +3059,7 @@
         // already goes there.
         out += "<tr><td>" + esc(r.name) + "</td><td>" +
           (r.rawHow ? r.how : esc(r.how)) + "</td>" +
+          '<td class="rowon">' + (r.slider || "") + "</td>" +
           '<td class="rowact">' + r.actions + "</td></tr>";
       });
     });
@@ -3143,6 +3225,10 @@
         "<td>" + (r.guys_auto
           ? "Man-days come off the crew rows above it"
           : "Typed on the estimate") + "</td>" +
+        // Travel's slider needs the stored row to PATCH; with none there is nothing to switch.
+        '<td class="rowon">' + (storedTravel
+          ? defaultSlider("labor", storedTravel.id, r.label, storedTravel.default_on !== false, ADMIN)
+          : "") + "</td>" +
         '<td class="rowact">' + laborRowActions(storedTravel) + "</td>" +
         "</tr>";
     }
@@ -3165,6 +3251,8 @@
         "<td>" + (c.guys_auto
           ? "Man-days come off the crew rows above it"
           : "Typed on the estimate") + "</td>" +
+        '<td class="rowon">' + defaultSlider("labor", c.id, c.name, c.default_on !== false, ADMIN) +
+          "</td>" +
         // ADMIN ONLY, unlike an item's or an assembly's pair: `favorite` on a labor line is a
         // PATCH to /api/library/labor, which is `_require_admin`, so a non-admin is not handed a
         // Remove that 403s -- the rule laborRowActions already follows for Travel.
@@ -4079,6 +4167,13 @@
     // ONE REMOVE FOR EVERY ROW, conditions included since 2026-10-01 -- joint filler,
     // remove-existing and dye carry the material's own button now. removeDefault decides which
     // store the press writes (see its note); there is no second attribute to route.
+    // THE STARTING-STATE SLIDER, before Edit/Remove: it sits in the same row and `closest` walks up.
+    var onSw = t.closest && t.closest("[data-def-on]");
+    if (onSw) {
+      var swOn = !(onSw.getAttribute("aria-checked") === "true");
+      await setDefaultOn(onSw.getAttribute("data-def-on"), onSw.getAttribute("data-def-on-id"), swOn);
+      return;
+    }
     var offBtn = t.closest && t.closest("[data-def-off]");
     if (offBtn) {
       await removeDefault(offBtn.getAttribute("data-def-off"), offBtn.getAttribute("data-def-id"));

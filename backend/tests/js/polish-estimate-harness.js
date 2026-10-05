@@ -2924,5 +2924,109 @@ const rendered = [];      // every string the page put on screen, for the Labour
     };
   }
 
+  {
+    // THE ON/OFF SLIDER (Kyle, 2026-10-05), EXECUTED THROUGH THE PAGE'S OWN HANDLERS. A switched-off
+    // row stays on screen, grayed, and adds $0 -- skipped in the RAW sums, before the chain rounds
+    // -- so the proof is that the whole bid equals the bid of a model that never had the row.
+    const clickSw = (built, sel) => clickEl(built, need(built, sel));
+    const totalOf = (built) => built.api.bid().total;
+    const without = (mut) => {
+      const m = clone(MODEL); mut(m);
+      return build({ blob: blob({ polish_estimate: m }) });
+    };
+
+    const base = build();
+    await base.api.init();
+    base.api.go(0);
+    const total0 = totalOf(base), mat0 = base.api.materialTotal();
+    const costBoxBefore = txt(base, '[data-cost-for="0"]');
+    clickSw(base, '[data-on-tk="0"]');
+    const tkOff = base.api.model().takeoff[0];
+    const afterTkOff = {
+      enabled: tkOff.enabled,
+      costBox: txt(base, '[data-cost-for="0"]'),
+      cardClass: need(base, '[data-row-card="0"]').className,
+      switchOn: need(base, '[data-on-tk="0"]').getAttribute("aria-checked"),
+      material: base.api.materialTotal(), total: totalOf(base),
+      area: B.takeoffSf(base.api.model().takeoff),
+    };
+    const tkGone = without((m) => m.takeoff.splice(0, 1));
+    await tkGone.api.init();
+    const expectTkOff = { material: tkGone.api.materialTotal(), total: totalOf(tkGone),
+                          area: B.takeoffSf(tkGone.api.model().takeoff) };
+    clickSw(base, '[data-on-tk="0"]');
+    const tkBack = { hasEnabledKey: "enabled" in base.api.model().takeoff[0],
+                     total: totalOf(base), material: base.api.materialTotal() };
+
+    // LABOR: Polishing off. The bid must equal the bid of a model that never had the row.
+    const lab = build();
+    await lab.api.init();
+    lab.api.go(1);
+    const lab0 = totalOf(lab);
+    clickSw(lab, '[data-on-lab="0"]');
+    const labOff = {
+      enabled: lab.api.model().labor[0].enabled,
+      cardClass: need(lab, '[data-lab-card="0"]').className,
+      cost: txt(lab, '[data-lcost-for="0"]'),
+      laborTotalText: txt(lab, "[data-labor-total]"),
+      total: totalOf(lab),
+    };
+    const labGone = without((m) => m.labor.splice(0, 1));
+    await labGone.api.init();
+    const expectLabOff = { total: totalOf(labGone) };
+    clickSw(lab, '[data-on-lab="0"]');
+    const labBack = { hasEnabledKey: "enabled" in lab.api.model().labor[0], total: totalOf(lab) };
+
+    // THE REVIEW LIST leaves off rows out, and the step pip / blockers do not count them.
+    const rev = build();
+    await rev.api.init();
+    rev.api.go(0); clickSw(rev, '[data-on-tk="0"]');
+    rev.api.go(1); clickSw(rev, '[data-on-lab="0"]');
+    rev.api.go(2);
+    const revHtml = rev.api.reviewPanel();
+
+    // AN OFF CREW ROW DROPS OUT OF TRAVEL'S GUYS (man-days): polishing 3x5 + mock-up 3x0.5 = 16.5.
+    const trv = build({ blob: blob({ polish_estimate: Object.assign(clone(MODEL), {
+      labor: [{ id: "polishing", label: "Polishing", guys: 3, days: 5, rate: 33 },
+              { id: "mockup", label: "Mock-up", guys: 3, days: 0.5, rate: 33 },
+              { id: "travel", label: "Travel", guys: "", days: 2, rate: 33,
+                unit: "hours", guys_auto: true }] }) }) });
+    await trv.api.init();
+    trv.api.go(1);
+    const guysBefore = trv.api.model().labor[2].guys;
+    clickSw(trv, '[data-on-lab="0"]');
+    const guysAfter = trv.api.model().labor[2].guys;
+
+    // THE KEYBOARD: Space on the slider flips it like a press.
+    const kb = build();
+    await kb.api.init();
+    kb.api.go(0);
+    const swEl = need(kb, '[data-on-tk="1"]');
+    swEl.click = function () { kb.doc.fire("click", { target: swEl, preventDefault() {} }); };
+    let prevented = false;
+    kb.doc.fire("keydown", { target: swEl, key: " ", preventDefault() { prevented = true; } });
+    const kbOff = kb.api.model().takeoff[1].enabled;
+    kb.doc.fire("keydown", { target: swEl, key: "a", preventDefault() {} });
+    const kbOtherKey = kb.api.model().takeoff[1].enabled;
+
+    // A CONDITION CARD'S SWITCH is the same component (class, role, aria), not a lookalike.
+    const cardSw = need(base, '[data-cond="dye"]');
+
+    out.rowSlider = {
+      total0: total0, mat0: mat0, costBoxBefore: costBoxBefore,
+      afterTkOff: afterTkOff, expectTkOff: expectTkOff, tkBack: tkBack,
+      lab0: lab0, labOff: labOff, expectLabOff: expectLabOff, labBack: labBack,
+      reviewHasOffTakeoff: revHtml.indexOf("Polish 800 Grit") !== -1,
+      reviewHasOnTakeoff: revHtml.indexOf("Cove Base") !== -1,
+      reviewHasOffLabor: revHtml.indexOf("Polishing") !== -1,
+      reviewHasOnLabor: revHtml.indexOf("Mock-up") !== -1,
+      guysBefore: guysBefore, guysAfter: guysAfter,
+      kbOff: kbOff, kbPrevented: prevented, kbOtherKey: kbOtherKey,
+      condSwitchClass: cardSw.className, condSwitchRole: cardSw.getAttribute("role"),
+      offSwitchSameShape: need(base, '[data-on-tk="1"]').className.indexOf("mw-sw") === 0 &&
+        need(base, '[data-on-tk="1"]').getAttribute("role") === "switch",
+    };
+  }
+
   console.log(JSON.stringify(out));
 })().catch((err) => { console.error(err && err.stack || err); process.exit(1); });

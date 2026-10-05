@@ -362,6 +362,9 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   // find, so a stale lift here would red every scenario in this file at once.
   // materialDefaultRow BEFORE takeoffDefaultGroups, which draws EVERY Materials row through it --
   // an ordinary favorited material and the three condition materials alike.
+  // defaultSlider (the Defaults tab's starting-state slider) BEFORE both: every row they draw asks
+  // it for its slider cell, so a missing lift is a ReferenceError that reds this whole file.
+  ${fn("defaultSlider")}
   ${fn("materialDefaultRow")}
   ${fn("conditionDefaultRow")}
   ${fn("takeoffDefaultGroups")}
@@ -486,6 +489,14 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   // working Add or Remove press actually reaches, on all three kinds now, so it is executed here
   // rather than assumed from the markup around it.
   ${fn("setDefault")}
+  // THE STARTING-STATE SLIDER'S OWN NETWORK, stubbed like patchDefault above, and its handler
+  // lifted so a test PRESSES it: a reserved id goes to the condition default, everything else to
+  // the row's default_on.
+  async function patchDefaultOn(kind, id, on) {
+    LABOR_CALLS.push({ op: "PATCH_DEFAULT_ON", kind: kind, id: id, on: !!on });
+    if (LABOR_FAIL.patchDefaultOn) throw new Error("the server said no");
+  }
+  ${fn("setDefaultOn")}
   // THE REMOVE BUTTON'S ROUTER, AFTER BOTH SAVERS IT CALLS. A reserved id's Remove writes the
   // condition default (setConditionDefault); every other row's writes its favorite (setDefault).
   // (No backticks in these comments: this whole block is one template literal.)
@@ -659,7 +670,7 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
            renderDefaultLabor, resetTravelDefault, laborRowActions,
            LABOR_UNITS,
            LABOR_CALLS,
-           setDefault, paint,
+           setDefault, setDefaultOn, defaultSlider, paint,
            openDefaultAdd,
            // THE LABOR TAB ITSELF, EXECUTED -- creation, editing and the delete guard, on the
            // tab this whole change was for. QUEUED is already exposed above, beside onItemEdit --
@@ -3714,13 +3725,14 @@ out.serverOwnedItemFields = build().api.SERVER_OWNED_ITEM_FIELDS;
       .every(function (r, i) {
         var id = ["joint-filler-kit", "remove-existing-jf", "dye"][i];
         return r.actions === api.defaultRowActions("items", id, r.name) &&
-               h.indexOf("<td>" + r.name + "</td><td>" + r.how + '</td><td class="rowact">' +
-                         r.actions + "</td>") !== -1;
+               h.indexOf("<td>" + r.name + "</td><td>" + r.how + '</td><td class="rowon">' +
+                         r.slider + '</td><td class="rowact">' + r.actions + "</td>") !== -1;
       }) && api.takeoffDefaultGroups()[1].rows.length === 4,
     // …AND THE SAME ROW SHAPE AS THE MATERIAL ABOVE THEM: name, a sentence escaped like any
     // other, and the actions. No rawHow -- nothing in these rows builds its own control any more.
     conditionsAreTheMaterialRowShape: api.takeoffDefaultGroups()[1].rows.every(function (r) {
-      return Object.keys(r).sort().join(",") === "actions,how,name";
+      // `slider` is the Defaults tab's starting-state slider, the one column every row now has.
+      return Object.keys(r).sort().join(",") === "actions,how,name,slider";
     }),
     // AN Edit ON EVERY ONE, which there was not while they had their own row code: it opens the
     // row on the Items tab, where all three are reserved library rows now (focusItemRow is
@@ -5084,6 +5096,85 @@ async function conditionChecks() {
   out.saveButton.asmHiddenWhenSaved = saved.dom.nodes["asm-save"].hidden === true;
 }
 
+// â”€â”€ the Defaults tab's starting-state SLIDER, EXECUTED â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// A slider that is only markup is the dead-control failure this page has shipped before: so each
+// press below goes through the page's own setDefaultOn, and what it wrote is read back.
+async function sliderChecks() {
+  const B = require(path.join(ROOT, "js", "polish-bid-core.js"));
+  const seed = (extra) => Object.assign({
+    window: { TWPolishBid: B },
+    ITEMS: [{ id: "i1", name: "Densifier", unit: "Pail", unit_cost: 100, favorite: true }],
+    ASMS: [{ id: "a1", name: "Polish 800", unit: "SF", favorite: true, lines: [] },
+           { id: "a2", name: "Cove", unit: "LF", favorite: true, default_on: false, lines: [] }],
+    LABOR: [{ id: "travel", name: "Travel", rate: 33, unit: "hours", guys_auto: true,
+              favorite: true, default_on: true },
+            { id: "l1", name: "Grinding", rate: 40, unit: "days", favorite: true,
+              default_on: false }],
+    COND_DEFAULTS: [{ key: "dye", on: false, listed: true }],
+    ADMIN: true,
+  }, extra || {});
+  const sw = (html, kind, id) => {
+    const m = new RegExp('<span class="mw-sw( on)?" data-def-on="' + kind + '" data-def-on-id="' +
+      id + '" role="switch" tabindex="0" aria-checked="(true|false)"').exec(html);
+    return m ? m[2] : null;
+  };
+  const takeoff = (b) => { b.api.renderDefaultTakeoff(); return b.dom.nodes["default-takeoff-body"].innerHTML; };
+  const labor = (b) => { b.api.renderDefaultLabor(); return b.dom.nodes["default-labor-body"].innerHTML; };
+
+  // 1. WHAT IS DRAWN: absent default_on reads ON, an explicit false reads OFF, on all three kinds.
+  const a = build(seed({}));
+  const html0 = takeoff(a), lab0 = labor(a);
+  const drawn = {
+    asmAbsentIsOn: sw(html0, "assemblies", "a1"), asmFalseIsOff: sw(html0, "assemblies", "a2"),
+    itemAbsentIsOn: sw(html0, "items", "i1"),
+    travelOn: sw(lab0, "labor", "travel"), laborOff: sw(lab0, "labor", "l1"),
+    // The three condition materials carry one too, answering with the stored starting answer.
+    dyeOff: sw(html0, "items", "dye"),
+  };
+
+  // 2. THE PRESS WRITES default_on -- and not `favorite`.
+  const p = build(seed({}));
+  await p.api.setDefaultOn("assemblies", "a1", false);
+  const afterAsm = sw(takeoff(p), "assemblies", "a1");
+  const asmCalls = JSON.stringify(p.api.LABOR_CALLS);
+  await p.api.setDefaultOn("labor", "l1", true);
+  const afterLabor = sw(labor(p), "labor", "l1");
+
+  // 3. A REFUSED SAVE PUTS IT BACK.
+  const f = build(seed({ LABOR_FAIL: { patchDefaultOn: true } }));
+  await f.api.setDefaultOn("assemblies", "a1", false);
+  const afterRefused = sw(takeoff(f), "assemblies", "a1");
+
+  // 4. A CONDITION MATERIAL'S SLIDER IS THE CONDITION DEFAULT: one write, `on` only.
+  const c = build(seed({}));
+  await c.api.setDefaultOn("items", "dye", true);
+  const condCalls = JSON.stringify(c.api.COND_CALLS);
+  const dyeAfter = sw(takeoff(c), "items", "dye");
+  const noItemWrite = !c.api.LABOR_CALLS.some((x) => x.op === "PATCH_DEFAULT_ON");
+  const cf = build(seed({ COND_FAIL: true }));
+  await cf.api.setDefaultOn("items", "dye", true);
+  const dyeRefused = sw(takeoff(cf), "items", "dye");
+
+  // 5. A NON-ADMIN READS THE STATE AS WORDS, never a switch that would 403.
+  const v = build(seed({ ADMIN: false }));
+  const vHtml = takeoff(v), vLab = labor(v);
+  const viewer = {
+    // Labor (a PATCH the server refuses a non-admin) and the condition materials (a PUT it
+    // refuses) show words; items and assemblies stay switches, exactly like their Remove button.
+    noLaborSwitches: !/data-def-on=/.test(vLab),
+    noConditionSwitch: sw(vHtml, "items", "dye") === null,
+    laborSaysOff: /<td class="rowon"><span class="wtall">Off<\/span>/.test(vLab),
+    dyeSaysOff: /<td class="rowon"><span class="wtall">Off<\/span>/.test(vHtml),
+    asmStillSwitch: sw(vHtml, "assemblies", "a1") === "true",
+  };
+
+  out.defaultSlider = {
+    drawn: drawn, afterAsm: afterAsm, asmCalls: asmCalls, afterLabor: afterLabor,
+    afterRefused: afterRefused, condCalls: condCalls, dyeAfter: dyeAfter,
+    noItemWrite: noItemWrite, dyeRefused: dyeRefused, viewer: viewer,
+  };
+}
+
 // A WATCHDOG, because the alternative failure mode is silence. These scenarios await dialogs and
 // held requests, so a change that opens one more dialog than a test answers leaves a flush waiting
 // forever: node's loop empties, the process exits 0, and nothing is printed — which the fixture
@@ -5097,6 +5188,6 @@ const watchdog = setTimeout(() => {
 }, 30000);
 
 Promise.all([conflictChecks(), dialogChecks(), laborChecks(), laborTabChecks(),
-             conditionChecks()]).then(
+             conditionChecks(), sliderChecks()]).then(
   () => { clearTimeout(watchdog); console.log(JSON.stringify(out)); },
   (err) => { clearTimeout(watchdog); console.error(err); process.exit(1); });

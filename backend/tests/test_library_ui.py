@@ -77,7 +77,7 @@ def test_a_fourth_tab_holds_the_defaults_that_are_not_built_yet(ran):
     checked below rather than only the button's presence."""
     page = ran["page"]
     assert page["defaultsTab"], "the Default Items & Assemblies tab is not on the page"
-    assert page["defaultsTabLabel"] == "Default Items &amp; Assemblies", (
+    assert page["defaultsTabLabel"] == "Default Items, Assemblies &amp; Labor", (
         "the tab reads %r" % page["defaultsTabLabel"])
     assert page["defaultsTabIsLast"], "the tab is not beside Administration, where it was asked for"
     assert page["defaultsPaneStartsHidden"], (

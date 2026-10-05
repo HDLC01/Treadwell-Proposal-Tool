@@ -192,6 +192,31 @@
   // sheet is untouched and still carries B68/D68 -- this beta simply no longer writes a "Yes"
   // to B5, so his own formula reads it as not-hard-bid, which is the same outcome.
 
+  /** Is this row counted? `enabled` is absent on every row saved before the slider existed and on
+   *  every row nobody has switched, and absent means ON -- only an explicit false is off. Shared by
+   *  labor rows, takeoff rows and (through M.conditions) the condition cards, so there is one
+   *  answer to "does this row count" in the whole estimate. */
+  function rowOn(row) {
+    return !(row && row.enabled === false);
+  }
+
+  /** The markup for the on/off slider, ONE piece used by the estimate's cards and by the Defaults
+   *  tab's rows (both pages load this file), so the two cannot look or behave differently.
+   *
+   *  Returns a span in the page's `.mw-sw` vocabulary. `attr` is the one data- attribute the
+   *  caller's delegated handler listens for (e.g. `data-on-lab="2"`); `label` is the words beside
+   *  the track. role=switch + aria-checked so a screen reader hears the state. */
+  function sliderHtml(on, attr, label, title, cls) {
+    var esc = function (s) {
+      return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    };
+    return '<span class="mw-sw' + (on ? " on" : "") + (cls || "") + '" ' + attr +
+      ' role="switch" tabindex="0" aria-checked="' + (on ? "true" : "false") + '"' +
+      (title ? ' title="' + esc(title) + '"' : "") + '>' +
+      '<span class="track"></span>' + esc(label == null ? "" : label) + '</span>';
+  }
+
   /** One labor row's cost. D37: guys × days × hourly rate × 8 hours.
    *
    *  Kyle's screenshot: 3 guys × 5 days × $32.20 = $3,864. That figure is what pins the 8.
@@ -208,6 +233,10 @@
    *  this existed and every custom row an estimator adds today. */
   function laborCost(row) {
     row = row || {};
+    // A ROW SWITCHED OFF ADDS NOTHING (Kyle's on/off slider, 2026-10-05). Zero HERE, at the one
+    // function every total goes through, so the figure is skipped in laborTotal BEFORE markupChain
+    // rounds the sum -- zeroing after the rounding would drift the bid by up to a dollar.
+    if (!rowOn(row)) return 0;
     var perDay = row.unit === "hours" ? 1 : HOURS_PER_DAY;
     return num(row.guys) * num(row.days) * num(row.rate) * perDay;
   }
@@ -227,6 +256,8 @@
     for (var i = 0; i < rows.length; i++) {
       var r = rows[i] || {};
       if (r.unit === "hours") continue;
+      // An OFF crew row is not driving anywhere: it drops out of the man-days Travel is priced on.
+      if (!rowOn(r)) continue;
       t += num(r.guys) * num(r.days);
     }
     return t;
@@ -284,7 +315,8 @@
     var t = 0;
     for (var i = 0; i < rows.length; i++) {
       var r = rows[i] || {};
-      if (r.unit === "SF") t += num(r.measurement);
+      // An OFF row is out of the area too: the price per SF divides by what the bid actually buys.
+      if (r.unit === "SF" && rowOn(r)) t += num(r.measurement);
     }
     return t;
   }
@@ -578,8 +610,12 @@
     // `dflt` omitted is the old behaviour exactly (the stored number, 0 included).
     var rate = (dflt !== undefined && dflt !== null && !libraryRateIsOwn(r, false))
       ? laborRateOrShipped(dflt) : Number(r.rate);
-    return { id: r.id, label: r.name, guys: "", days: "", rate: rate,
-             unit: r.unit, guys_auto: !!r.guys_auto };
+    var out = { id: r.id, label: r.name, guys: "", days: "", rate: rate,
+                unit: r.unit, guys_auto: !!r.guys_auto };
+    // THE DEFAULTS-TAB SLIDER: a default saved as OFF starts the bid's row switched off (grayed,
+    // $0). Written only when explicitly false, so every other row keeps exactly the shape it had.
+    if (r.default_on === false) out.enabled = false;
+    return out;
   }
 
   /** `labor` with the library's default lines standing beside it. A NEW array; the one handed in
@@ -644,6 +680,7 @@
         if (dflt !== undefined && dflt !== null && !libraryRateIsOwn(r, true)) {
           travel.rate = laborRateOrShipped(dflt);
         }
+        if (r.default_on === false) travel.enabled = false;
         var at = -1;
         for (var t = 0; t < out.length; t++) {
           if (out[t] && String(out[t].id) === "travel") { at = t; break; }
@@ -1243,6 +1280,7 @@
     var used = 0;
     for (var i = 0; i < m.takeoff.length; i++) {
       var r = m.takeoff[i] || {};
+      if (!rowOn(r)) continue;                         // switched off: not part of this bid
       var measured = num(r.measurement);
       // EITHER ID IS A PICK. A takeoff row has been able to be one material rather than an
       // assembly since 2026-09-19, and reading assembly_id alone told a bid made of materials it
@@ -1264,6 +1302,7 @@
     // already filled sends the estimator hunting through fields that are fine.
     for (var j = 0; j < m.labor.length; j++) {
       var row = m.labor[j] || {};
+      if (!rowOn(row)) continue;                       // switched off: not part of this bid
 
       // AN HOURS ROW WITH NO HOURS IS UNUSED, NOT UNFINISHED, and skipping it here is what keeps
       // the Review step reachable. The rule below reads a row as half-filled when 1 or 2 of the
@@ -1314,6 +1353,7 @@
     conditionsUnstated: conditionsUnstated,
     seedConditionsShown: seedConditionsShown, conditionShown: conditionShown,
     laborCost: laborCost, laborTotal: laborTotal, travelManDays: travelManDays,
+    rowOn: rowOn, sliderHtml: sliderHtml,
     filledIn: filledIn,
     takeoffSf: takeoffSf,
     seedTakeoffSf: seedTakeoffSf,
