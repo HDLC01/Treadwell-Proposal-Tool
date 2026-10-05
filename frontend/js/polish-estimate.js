@@ -2294,11 +2294,12 @@
     // rebuilt so the three cards repaint, with the caret carried (the pattern the Travel boxes
     // below use) -- a half-typed "7" before "70" is an ordinary moment, not an error.
     if (el.matches("[data-dist-miles]")) {
+      var rawMiles = String(el.value);
       var typedMiles = B.milesOrNull(el.value);
       if (typedMiles !== null) {
         B.applyDistance(M, { miles: typedMiles, source: "typed", key: addressKey() });
         changed(true);
-        refocus("[data-dist-miles]");
+        refocus("[data-dist-miles]", rawMiles);
       } else if (String(el.value).trim() === "") {
         B.clearDistance(M);
         changed(true);
@@ -2421,9 +2422,12 @@
    *  Only the auto-to-manual switch needs this: it is the one edit on this panel that has to
    *  rebuild the card mid-keystroke (the hint under the box changes), and a rebuild that drops
    *  the caret would make the first character somebody types the last one that lands. */
-  function refocus(sel) {
+  function refocus(sel, typed) {
     var el = document.querySelector(sel);
     if (!el || !el.focus) return;
+    // The rebuilt box was drawn from the stored number, so a half-typed "12." came back as "12".
+    // Put back exactly what was typed.
+    if (typed !== undefined && el.value !== typed) el.value = typed;
     el.focus();
     try { el.setSelectionRange(el.value.length, el.value.length); } catch (err) {}
   }

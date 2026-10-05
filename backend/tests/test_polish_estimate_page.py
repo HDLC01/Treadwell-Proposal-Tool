@@ -3177,6 +3177,16 @@ def test_a_line_flipped_by_hand_is_never_moved_by_the_distance(ran):
     assert c["local"] is True and c["perDiem"] is False and c["lodging"] is False
 
 
+def test_a_typed_decimal_in_the_miles_box_survives_the_rebuild(ran):
+    """The panel rebuilds on each keystroke; "12." must stay "12." so "12.5" is 12.5 miles (local),
+    not 125 (far, with Lodging and Per Diem switched on)."""
+    dec = ran["distance"]["decimal"]
+    assert dec["dotBox"] == "12."
+    assert dec["box"] == "12.5"
+    assert dec["snap"]["distance"]["miles"] == 12.5
+    assert dec["snap"]["local"] is True and dec["snap"]["lodging"] is False
+
+
 def test_a_slow_google_never_blocks_the_page_and_typed_miles_win(ran):
     """init() resolved while the answer was still pending (the Labor step rendered, "Looking up"
     shown); the estimator typed 10 meanwhile; when 200 miles finally arrived it was dropped.

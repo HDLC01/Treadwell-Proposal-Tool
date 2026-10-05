@@ -3290,6 +3290,12 @@ const rendered = [];      // every string the page put on screen, for the Labour
     typeInto(unk, "[data-dist-miles]", "");
     await settle();
     const cleared = snap(unk);
+    // A DECIMAL TYPED KEY BY KEY. The panel rebuilds on every miles keystroke, so the box must come
+    // back showing what was typed ("12." stays "12.", not "12"), or "12.5" lands as 125.
+    typeInto(unk, "[data-dist-miles]", "12.");
+    const dotBox = need(unk, "[data-dist-miles]").value;
+    typeInto(unk, "[data-dist-miles]", "12.5");
+    const decimal = { dotBox: dotBox, box: need(unk, "[data-dist-miles]").value, snap: snap(unk) };
 
     // THE NETWORK FAILING is the same answer as unknown, with a reason shown.
     const down = build({ blob: newBlob(), distanceFails: true });
@@ -3344,7 +3350,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
       farReviewHasLodging: farReview.indexOf(">Lodging<") !== -1,
       near: nearSnap, nearCellB4: nearSaved.cell_values["Polish!B4"],
       seventy: seventySnap,
-      unk: unkSnap, typed85: typed85, typed20: typed20, typed90: typed90, cleared: cleared,
+      unk: unkSnap, typed85: typed85, typed20: typed20, typed90: typed90, cleared: cleared, decimal: decimal,
       down: downSnap,
       slowBusy: slowBusy, slowAfter: slowAfter,
       blank: blankSnap, blankRequests: (blank.rec.distanceBodies || []).length,
