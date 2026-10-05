@@ -330,6 +330,7 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   // renderItems, renderRefSection and renderPanel each ask icon() for a glyph now; leaving it
   // out is a ReferenceError that kills every scenario in this file at once.
   ${fn("icon")}
+  ${fn("itemSaveButtonHtml")}
   ${fn("renderItems")}
   // THE DEFAULTS TAB'S OWN RENDERERS, lifted so they are EXECUTED rather than read. A source-text
   // assertion cannot catch an unbound identifier, and this repo has taken production down that
@@ -1449,6 +1450,7 @@ async function conflictChecks() {
     // the save machinery's state so a scenario can drive it. flush() reads it to refuse a second
     // PATCH while one is on the wire.
     var inFlight = {};
+    var takenP = {};
     var FRESH = state.FRESH || { items: {}, assemblies: {} };
     var ASMS = state.ASMS, ITEMS = state.ITEMS, VENDORS = state.VENDORS;
     var setTimeout = clock.setTimeout, clearTimeout = clock.clearTimeout;
@@ -1490,6 +1492,8 @@ async function conflictChecks() {
     ${fn("forgetItem")}
     ${fn("flushItemRow")}
     ${fn("saveNow")}
+    ${fn("flushAllPending")}
+    ${fn("savePending")}
     ${fn("onItemRowFocusOut")}
     ${fn("patchSoon")}
     // THE REAL onItemEdit, in THIS scope, on top of the REAL patchSoon. The first scope in this
@@ -1504,6 +1508,7 @@ async function conflictChecks() {
              rememberItem: rememberItem, onItemEdit: onItemEdit,
              onItemRowFocusOut: onItemRowFocusOut, flushItemRow: flushItemRow,
              saveNow: saveNow, fresh: function () { return FRESH; },
+             flushAllPending: flushAllPending, savePending: savePending,
              forgetItem: forgetItem,
              confirmOpen: function () { return itemConfirmOpen; },
              snapshotOf: function (id) { return itemBefore[id]; },
@@ -1716,7 +1721,7 @@ async function conflictChecks() {
     const stillNewB = await b.s.saveNow("items", "i2");
     // Cancel on the question keeps the row "new", so the button stays for another try.
     const c2 = run409(undefined, false);
-    c2.s.fresh().items.i1 = true;
+    c2.s.fresh().items.i1 = "new";
     c2.hooks.autoReply = ok;
     c2.type("i1", "unit_cost", "77");
     const stillNewC = await c2.s.saveNow("items", "i1");
@@ -1740,6 +1745,92 @@ async function conflictChecks() {
       asmDeclaredItsVersion: /"expected_updated_at":"T1"/.test(d2.hooks.bodies[0] || ""),
       asmNoLongerNew: stillNewD === false && !d2.s.fresh().assemblies.a1,
       noErrors: [a, b, c2, d2].every((x) => x.hooks.errors.length === 0),
+    };
+  }
+
+  // ── EXECUTED: Save on ANY edited row (Hanz, 2026-10-05, B3b) ────────────────────────
+  {
+    const okItem = { status: 200, ok: true, json: async () => ({ item:
+      { id: "i1", updated_at: "T2", cost_updated_at: "STAMP-1" } }) };
+    const tick = () => new Promise((r) => setTimeout(r, 0));
+    // 1. A SAVED row, edited: marked unsaved by the edit itself, one PATCH + one question on Save,
+    //    mark lifted only after the reply.
+    const a = run409();
+    const markedBefore = !a.s.fresh().items.i1;
+    a.hooks.autoReply = okItem;
+    a.type("i1", "unit_cost", "50");
+    const markedAfterTyping = !!a.s.fresh().items.i1;
+    const savedFlag = await a.s.saveNow("items", "i1");
+    // 2. Server refuses: the mark stays and saveNow says so.
+    const f = run409();
+    f.hooks.autoReply = { status: 500, ok: true === false, json: async () => ({ detail: "nope" }) };
+    f.type("i1", "unit_cost", "51");
+    const failedStill = await f.s.saveNow("items", "i1");
+    // 3. THE RACE: a flush already took the payload and is parked on the dialog. Empty buffer
+    //    must NOT read as saved.
+    const r = run409(undefined, "manual");
+    r.hooks.autoReply = okItem;
+    r.type("i1", "unit_cost", "52");
+    const flushing = r.s.flushItemRow("i1");
+    await tick();
+    const bufferEmptyWhileAsking = r.s.pending() === 0 && r.hooks.dialogs.length === 1;
+    let pressDone = false;
+    const press = r.s.saveNow("items", "i1").then((v) => { pressDone = true; return v; });
+    await tick(); await tick();
+    const pressWaited = pressDone === false && !!r.s.fresh().items.i1;
+    r.hooks.dialogs[0].resolve(true);
+    await flushing;
+    const pressResult = await press;
+    // 4. Typing while a save is on the wire keeps the mark when the earlier save is confirmed.
+    const w = run409();
+    w.s.patchSoon("assemblies", "a1", { name: "A" });
+    const firing = w.fire();
+    await tick();
+    w.s.patchSoon("assemblies", "a1", { name: "AB" });
+    w.release({ status: 200, ok: true, json: async () => ({ assembly:
+      { id: "a1", updated_at: "T2", name: "A", lines: [] } }) });
+    await firing;
+    const newerEditKeepsMark = !!w.s.fresh().assemblies.a1;
+    // 5. An edited saved ASSEMBLY: Save sends one PATCH carrying its version, clears on confirm.
+    const d = run409();
+    d.hooks.autoReply = { status: 200, ok: true, json: async () => ({ assembly:
+      { id: "a1", updated_at: "T2", name: "Fresh", lines: [] } }) };
+    d.s.patchSoon("assemblies", "a1", { name: "Fresh" });
+    const asmMarked = !!d.s.fresh().assemblies.a1;
+    const asmStill = await d.s.saveNow("assemblies", "a1");
+    // 6. Leaving: flushAllPending sends what is queued; savePending is the beforeunload test.
+    const l = run409();
+    l.hooks.autoReply = { status: 200, ok: true, json: async () => ({ assembly:
+      { id: "a1", updated_at: "T2", name: "Z", lines: [] } }) };
+    l.s.patchSoon("assemblies", "a1", { name: "Z" });
+    const pendingBeforeLeave = l.s.savePending();
+    l.s.flushAllPending();
+    const pendingWhileInFlight = l.s.savePending();
+    await tick(); await tick();
+    const pendingAfter = l.s.savePending();
+    // 7. A dialog answered No on a SAVED row drops the mark; on a NEW row it stays.
+    const n = run409(undefined, false);
+    n.type("i1", "unit_cost", "77");
+    await n.s.saveNow("items", "i1");
+    const cancelledSavedRowClean = !n.s.fresh().items.i1;
+    out.saveEdited = {
+      notMarkedBeforeEdit: markedBefore,
+      markedByTheEdit: markedAfterTyping,
+      confirmedSaveClears: savedFlag === false && !a.s.fresh().items.i1,
+      onePatchOneQuestion: a.hooks.requests.length === 1 && a.hooks.asked.length === 1,
+      failedKeepsMark: failedStill === true && !!f.s.fresh().items.i1,
+      bufferEmptyWhileAsking,
+      pressWaitedForTheDialog: pressWaited,
+      pressThenConfirmed: pressResult === false && !r.s.fresh().items.i1 && r.hooks.requests.length === 1,
+      newerEditKeepsMark,
+      asmMarked,
+      asmSavedAndCleared: asmStill === false && !d.s.fresh().assemblies.a1 &&
+        d.hooks.requests.length === 1 && /"expected_updated_at":"T1"/.test(d.hooks.bodies[0] || ""),
+      leaveWarnsWhilePending: pendingBeforeLeave === true && pendingWhileInFlight === true,
+      leaveFlushSent: l.hooks.requests.length === 1,
+      leaveSettled: pendingAfter === false,
+      cancelledSavedRowClean,
+      noErrors: [a, f, r, w, d, l, n].every((x) => x.hooks.errors.length === 0),
     };
   }
 

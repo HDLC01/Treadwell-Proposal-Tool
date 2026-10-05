@@ -3776,6 +3776,26 @@ def test_a_new_material_or_assembly_has_a_save_button_that_sends_now(ran):
     assert sn["noErrors"]
 
 
+def test_any_edited_row_shows_save_and_clears_only_when_the_server_confirms(ran):
+    """Hanz, 2026-10-05 (B3b): Save on ANY edited material or assembly, not only new ones.
+
+    Mutations: drop the FRESH mark from patchSoon (markedByTheEdit red); clear the mark before the
+    reply in flush (failedKeepsMark red); delete takenP/the await in saveNow (pressWaitedForTheDialog
+    red -- the reviewer's race); drop flushAllPending (leaveFlushSent red)."""
+    s = ran["saveEdited"]
+    assert s["notMarkedBeforeEdit"] and s["markedByTheEdit"]
+    assert s["confirmedSaveClears"] and s["onePatchOneQuestion"]
+    assert s["failedKeepsMark"], "a refused save cleared the unsaved mark"
+    assert s["bufferEmptyWhileAsking"], "the fixture no longer parks a flush on its dialog"
+    assert s["pressWaitedForTheDialog"], "Save treated an empty buffer as saved while a flush was mid-flight"
+    assert s["pressThenConfirmed"]
+    assert s["newerEditKeepsMark"], "a newer keystroke lost its mark when the older save landed"
+    assert s["asmMarked"] and s["asmSavedAndCleared"]
+    assert s["leaveWarnsWhilePending"] and s["leaveFlushSent"] and s["leaveSettled"]
+    assert s["cancelledSavedRowClean"]
+    assert s["noErrors"]
+
+
 @needs_node
 def test_add_default_search_opens_above_its_own_table(ran):
     """Hanz, 2026-10-05: "Adding a default [labor] should have the search bar right above the

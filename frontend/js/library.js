@@ -258,7 +258,18 @@
   // typed over the placeholder name, which only goes out when the row is left or 600ms pass. That
   // is why somebody who typed a new material and looked for a Save button found nothing to press.
   // The Save button shows while an id is in here; a successful save of the record clears it.
+  //
+  // WIDENED 2026-10-05 (Hanz, B3b): the map now holds EVERY record with changes not yet confirmed by
+  // the server, not just new ones. The value is "new" for a row created on this page and true for a
+  // saved row somebody has edited since. patchSoon sets it; only a server-confirmed save (or a
+  // refused/reverted change, or a conflict repaint, or a delete) clears it. The name is kept
+  // because the harnesses seed it.
   var FRESH = { items: {}, assemblies: {} };
+  // A FLUSH THAT HAS TAKEN ITS PAYLOAD BUT NOT YET HEARD BACK, by record key: a promise that settles
+  // when that flush is completely finished (confirm dialog answered, PATCH answered). flush deletes
+  // pendingPatch[key] the moment it starts, so "nothing pending" used to read as "saved" while the
+  // question was still on screen or the request still on the wire. saveNow waits on this instead.
+  var takenP = {};
   /** PATCH one record, debounced per record so holding a key is one write.
    *
    *  Pending fields are MERGED, not replaced. The first version replaced the body on each call,
@@ -331,6 +342,8 @@
     clearTimeout(timers[key]);
     delete timers[key];
     delete pendingPatch[key];
+    // The server's copy replaced ours, so nothing of ours is left unsaved.
+    delete FRESH.assemblies[id];
     renderList();
     renderPanel();
   }
@@ -552,6 +565,12 @@
       body = Object.assign({}, body, { lines: body.lines.map(lineForSave) });
     }
     pendingPatch[key] = Object.assign(pendingPatch[key] || {}, body);
+    // Unsaved from this keystroke until the server confirms. showUnsaved is the DOM half (absent
+    // in a bare harness scope, hence the typeof).
+    if (FRESH[kind] && !FRESH[kind][id]) {
+      FRESH[kind][id] = true;
+      if (typeof showUnsaved === "function") showUnsaved(kind, id);
+    }
     arm(kind, id, key);
   }
 
@@ -611,6 +630,11 @@
       if (!now && rowHasFocus(id)) { arm(kind, id, key); return; }
     }
     delete pendingPatch[key];
+    // From here until the finally below, this record's save is UNCONFIRMED even though the buffer
+    // is empty. saveNow and the leave-page warning both read takenP for exactly that.
+    var release;
+    takenP[key] = new Promise(function (r) { release = r; });
+    try {
     // Declare the version being edited. A line change rewrites the WHOLE lines array, so
     // without this two people with the same assembly open overwrite each other in silence:
     // the second save replaces the first person's lines with a snapshot taken before they
@@ -622,7 +646,12 @@
     // Items only. An assembly's lines are a takeoff somebody is actively building and a dialog
     // per pause would be unusable; an item is reference data that other records are priced from,
     // which is the whole distinction Hanz drew.
-    if (kind === "items" && !(await confirmItemPatch(id, payload))) return;
+    if (kind === "items" && !(await confirmItemPatch(id, payload))) {
+      // Refused: the field went back to what the server holds, so a saved row is clean again. A
+      // NEW row stays unsaved -- its typed name was just refused, and it still wants a Save.
+      if (FRESH.items[id] !== "new") { delete FRESH.items[id]; if (typeof hideUnsaved === "function") hideUnsaved(kind, id); }
+      return;
+    }
     // AFTER the confirm above, which can return false and bail — marking earlier would leave the
     // record permanently locked by a question somebody answered "no" to.
     inFlight[key] = 1;
@@ -655,7 +684,12 @@
       var fresh = saved.assembly || saved.item || saved.vendor || saved.division || saved.unit ||
         saved.row;
       if (fresh && fresh.id) adoptSaved(kind, fresh);
-      if (FRESH[kind]) delete FRESH[kind][id];
+      // CONFIRMED -- this is the only place the unsaved mark is lifted by a save. Not while a newer
+      // edit is already queued behind this one: that keystroke is still unsaved.
+      if (FRESH[kind] && !pendingPatch[key]) {
+        delete FRESH[kind][id];
+        if (typeof hideUnsaved === "function") hideUnsaved(kind, id);
+      }
       say(""); saving("Saved");
       setTimeout(function () { saving(""); }, 1200);
     } catch (err) {
@@ -666,6 +700,10 @@
       // set on one of those paths would silence every later save for that record — a worse bug than
       // the one this guard fixes.
       delete inFlight[key];
+    }
+    } finally {
+      delete takenP[key];
+      release();
     }
   }
 
@@ -681,6 +719,7 @@
     clearTimeout(timers[key]);
     delete timers[key];
     delete pendingPatch[key];
+    delete FRESH.items[id];
     endItemRound(id);
   }
 
@@ -707,14 +746,79 @@
    *  caller knows to keep the button after a Cancel, a 409 or a failed request. */
   async function saveNow(kind, id) {
     var key = kind + ":" + id;
-    if (pendingPatch[key]) {
+    var worked = false;
+    // Loop: a keystroke can land while a save is out, queueing another behind it. Bounded, so a
+    // page that keeps producing edits cannot trap the press.
+    for (var n = 0; n < 6; n++) {
+      if (pendingPatch[key]) {
+        clearTimeout(timers[key]);
+        delete timers[key];
+        worked = true;
+        await flush(kind, id, key, true);
+      } else if (takenP[key]) {
+        // A flush already took the payload and has not heard back (dialog open, request on the
+        // wire). An empty buffer is NOT "saved"; wait for that flush to finish, then judge.
+        worked = true;
+        await takenP[key];
+      } else {
+        break;
+      }
+    }
+    // Nothing was queued or in flight at the press: the record is what the server holds (the
+    // create POST wrote it), so just retire the button.
+    if (!worked && FRESH[kind]) delete FRESH[kind][id];
+    // Whatever is left marked is unconfirmed: a Cancel, a 409, a failed request.
+    return !!(FRESH[kind] && FRESH[kind][id]);
+  }
+
+  /** The Save button follows the unsaved mark live, without waiting for a repaint (a repaint of
+   *  the Items table mid-typing would steal the caret). Items: add or drop the button in that
+   *  row's action cell. Assemblies: show or hide #asm-save when that assembly is the open one. */
+  function itemSaveButtonHtml(id, name) {
+    return '<button class="btn sm" type="button" data-save-new="items" data-save-id="' + esc(id) +
+      '" title="Save this material now" aria-label="Save ' + esc(name) + '">Save</button>';
+  }
+  function showUnsaved(kind, id) {
+    if (typeof document === "undefined") return;
+    if (kind === "assemblies") {
+      var b = $("asm-save");
+      if (b && openId === id) b.hidden = false;
+      return;
+    }
+    var cell = document.querySelector('#items-body [data-item="' + id + '"] .rowact');
+    if (cell && !cell.querySelector("[data-save-new]")) {
+      var tmp = document.createElement("span");
+      tmp.innerHTML = itemSaveButtonHtml(id, (itemOf(id) || {}).name || "");
+      cell.insertBefore(tmp.firstChild, cell.firstChild);
+    }
+  }
+  function hideUnsaved(kind, id) {
+    if (typeof document === "undefined") return;
+    if (kind === "assemblies") {
+      var b = $("asm-save");
+      if (b && openId === id) b.hidden = true;
+      return;
+    }
+    var btn = document.querySelector('#items-body [data-item="' + id + '"] [data-save-new]');
+    if (btn && btn.parentNode) btn.parentNode.removeChild(btn);
+  }
+
+  /** LEAVING THE PAGE MUST NOT LOSE A TYPED CHANGE. Send everything queued the moment the tab goes
+   *  to the background or the page is hidden/closed (autosave stays as the backup for the rest).
+   *  A material's "Save this change?" question cannot be answered on a closing page, so that one
+   *  waits for the estimator's return; assemblies and the rest go out. */
+  function flushAllPending() {
+    Object.keys(pendingPatch).forEach(function (key) {
+      var cut = key.indexOf(":");
+      var kind = key.slice(0, cut), id = key.slice(cut + 1);
       clearTimeout(timers[key]);
       delete timers[key];
-      await flush(kind, id, key, true);
-    } else if (FRESH[kind]) {
-      delete FRESH[kind][id];
-    }
-    return !!(FRESH[kind] && FRESH[kind][id]);
+      flush(kind, id, key, true);
+    });
+  }
+  /** True while any save is still unconfirmed: queued, or taken and waiting on the server. */
+  function savePending() {
+    return Object.keys(pendingPatch).length > 0 || Object.keys(takenP).length > 0;
   }
 
   /** Focus left an item row → that row's edits go in, and get their one question.
@@ -1179,7 +1283,7 @@
         '<td class="datescell">' + datesHtml(it) + "</td>" +
         '<td class="rowact">' +
           (FRESH.items[it.id]
-            ? '<button class="btn sm" type="button" data-save-new="items" data-save-id="' + esc(it.id) + '" title="Save this new material now" aria-label="Save ' + esc(it.name) + '">Save</button>'
+            ? itemSaveButtonHtml(it.id, it.name)
             : "") +
           '<button class="icon" type="button" data-dupe-item="' + esc(it.id) + '" title="Make a copy of this material" aria-label="Duplicate ' + esc(it.name) + '">' + icon("copy") + "</button>" +
           // NO REMOVE ON THE THREE RESERVED ROWS (joint filler kit, remove-existing, dye) -- see
@@ -4048,6 +4152,18 @@
   // …and the event that actually triggers the save. `focusout` and not `blur`, because blur does
   // not bubble and this is one listener on a tbody whose rows are replaced on every render.
   $("items-body").addEventListener("focusout", onItemRowFocusOut);
+  // LEAVING WITH UNSAVED CHANGES (Hanz, B3b): flush when the tab goes hidden or the page is
+  // hidden/closed, and warn on close only if a save is still unconfirmed after that.
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "hidden") flushAllPending();
+  });
+  window.addEventListener("pagehide", flushAllPending);
+  window.addEventListener("beforeunload", function (e) {
+    if (!savePending()) return;
+    e.preventDefault();
+    e.returnValue = "";
+    return "";
+  });
 
   // Both events, for the reason the comment above already gives: a text input reports `input`,
   // a <select> and a checkbox are only guaranteed to report `change`. No focusout listener --
@@ -4268,7 +4384,7 @@
         // 2026-08-28) precisely so pressing it and seeing the result stay the same spot on
         // screen — sorting it back into alphabetical order would undo that.
         ITEMS.unshift(j.item);
-        FRESH.items[j.item.id] = true;
+        FRESH.items[j.item.id] = "new";
         showView("items"); paint();
         var f = $("items-body").querySelector('[data-item="' + j.item.id + '"] input[data-f="name"]');
         if (f) { f.focus(); f.select(); }
@@ -4483,7 +4599,7 @@
         // It is on screen either way: openId is set to it and its name field is focused and
         // selected two lines down, ready to be typed over.
         placeNewAssembly(ASMS, a.assembly);
-        FRESH.assemblies[a.assembly.id] = true;
+        FRESH.assemblies[a.assembly.id] = "new";
         openId = a.assembly.id;
         showView("asm"); paint();
         $("asm-name").focus(); $("asm-name").select();
