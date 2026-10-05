@@ -426,6 +426,24 @@ alter table public.library_items      add column if not exists default_on boolea
 alter table public.library_assemblies add column if not exists default_on boolean;
 alter table public.library_labor      add column if not exists default_on boolean;
 
+-- THE LABOR CALCULATOR'S PER-LINE MODES, 2026-10-06 -- same table as backend/ops/labor_calc.sql,
+-- which is how an already-running database gets it. One row per default labor line (a built-in
+-- crew id or a library_labor uuid); `mode` is 'sf' (crew + sf_per_day) or 'fixed' (guys + days);
+-- `rate` NULL = the company labor rate. The code reads an absent table as "no modes".
+create table if not exists public.library_labor_calc (
+  line_id        text primary key,
+  mode           text not null check (mode in ('sf', 'fixed')),
+  crew           numeric(8,2),
+  sf_per_day     numeric(12,2),
+  hours_per_day  integer not null default 8 check (hours_per_day in (8, 10)),
+  guys           numeric(8,2),
+  days           numeric(8,2),
+  rate           numeric(10,2),
+  updated_at     timestamptz not null default now()
+);
+alter table public.library_labor_calc enable row level security;
+grant select, insert, update, delete on public.library_labor_calc to service_role;
+
 -- ── Items and Assemblies, 2026-08-15 (Hanz) ───────────────────────────────
 -- Additive only, and safe to run against a database that already holds BETA rows.
 --
