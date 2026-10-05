@@ -1622,7 +1622,10 @@ async function conflictChecks() {
       hooks.bodies.push(String((opts || {}).body || ""));
       return inflight;
     };
-    const state = { ASMS: [{ id: "a1", name: "MACRO", unit: "SF", lines: [], updated_at: "T1" }],
+    // a1 USES i1 and i2: the item-change confirmation only asks about a material some assembly
+    // prices from, so a fixture with no lines would never see the dialog these scenarios drive.
+    const state = { ASMS: [{ id: "a1", name: "MACRO", unit: "SF",
+                             lines: [{ item_id: "i1" }, { item_id: "i2" }], updated_at: "T1" }],
                     ITEMS: [{ id: "i1", name: "Densifier", unit: "Gallon", unit_cost: 42,
                               buy_qty: 5, vendor: "Sika", divisions: ["Polished Concrete"],
                               updated_at: "T1", cost_updated_at: "STAMP-1" },
@@ -2035,6 +2038,23 @@ async function conflictChecks() {
   {
     const { c } = await itemRun(true, (x) => { x.unit_cost = 42; }, { unit_cost: "42" });
     out.itemNoChange = { asked: c.hooks.asked.length, requests: c.hooks.requests };
+  }
+
+  // A MATERIAL NO ASSEMBLY USES (a brand-new row, say): saves with no question. The same edit on
+  // i1 above is asked about because a1 uses i1; here a1's lines are emptied first.
+  {
+    const c = run409(undefined, true);
+    c.state.ASMS[0].lines = [];
+    const it = c.state.ITEMS[0];
+    c.s.rememberItem(it);
+    it.unit_cost = 58;
+    c.s.patchSoon("items", "i1", { unit_cost: "58" });
+    const firing = c.fire();
+    await settle();
+    c.release({ status: 200, ok: true,
+                json: async () => ({ item: { id: "i1", name: it.name, updated_at: "T2" } }) });
+    await firing;
+    out.itemUnused = { asked: c.hooks.asked.length, requests: c.hooks.requests, errors: c.hooks.errors };
   }
 
   // ══ THE BYPASS PROBE ═══════════════════════════════════════════════════════

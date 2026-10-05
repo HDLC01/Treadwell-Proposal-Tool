@@ -601,7 +601,36 @@
       var l = model.travel[k];
       if (l && l.hand !== true) l.enabled = far;
     });
+    seedTravelHours(model, miles);
     return model;
+  }
+
+  /** THE DRIVE HOURS A NEW BID'S TRAVEL LABOR STARTS WITH (walk 2026-10-06: 150 miles typed, travel
+   *  on, and the card read "7.5 x 0 x $33 = $0"). The 7.5 is Guys: the crew's man-days (Polish A44),
+   *  filled by syncAutoGuys. The 0 is Hours, Polish B44 = Epoxy!B52, which Kyle's sheet leaves at 0
+   *  with the note "Drive Time: ?" -- so a travel job priced nothing until somebody typed the hours.
+   *  Now the distance answer fills it: a round trip at DRIVE_MPH, to the half hour (150 mi -> 5).
+   *
+   *  NEW BIDS ONLY: the row opts in with `hours_seed` (freshModel writes it; a saved bid never has
+   *  it), so no saved bid's total can move. `hours_seed` remembers what was written, so the figure
+   *  follows a changed distance until the estimator types their own hours, which is then theirs. */
+  var DRIVE_MPH = 60;
+  function driveHoursFor(miles) {
+    var m = milesOrNull(miles);
+    if (m === null || m < LOCAL_MILES) return "";
+    return Math.ceil((2 * m / DRIVE_MPH) * 2) / 2;
+  }
+  function seedTravelHours(model, miles) {
+    var labor = (model && model.labor) || [];
+    for (var i = 0; i < labor.length; i++) {
+      var r = labor[i];
+      if (!r || r.id !== "travel" || !Object.prototype.hasOwnProperty.call(r, "hours_seed")) continue;
+      var untouched = isBlank(r.days) || (!isBlank(r.hours_seed) && num(r.days) === num(r.hours_seed));
+      if (!untouched) continue;
+      var h = driveHoursFor(miles);
+      r.days = h;
+      r.hours_seed = h;
+    }
   }
 
   /** Back to "unknown": the estimator cleared the miles they had typed. Local again (the shipped
@@ -1113,6 +1142,9 @@
                ? !!r.guys_auto : true };
   }
 
+  /** A NEW bid's Travel row, opted in to distance-filled hours (seedTravelHours). */
+  function withHoursSeed(row) { row.hours_seed = ""; return row; }
+
   /** One row of `public.library_labor`, read as one of THIS model's labor rows.
    *
    *  THE TWO SHAPES DIFFER, AND NEITHER IS RENAMED TO MATCH THE OTHER. The table calls the line's
@@ -1216,6 +1248,7 @@
         } else {
           travel.guys = out[at].guys;
           travel.days = out[at].days;
+          if (Object.prototype.hasOwnProperty.call(out[at], "hours_seed")) travel.hours_seed = out[at].hours_seed;
           out[at] = travel;
         }
         seen[rid] = true;
@@ -1557,7 +1590,7 @@
         { id: "polishing", label: "Polishing", guys: 3, days: "", rate: SHIPPED_LABOR_RATE },
         { id: "mockup", label: "Mock-up", guys: 3, days: 0.5, rate: SHIPPED_LABOR_RATE },
         { id: "jointfill", label: "Joint filler", guys: 3, days: "", rate: SHIPPED_LABOR_RATE },
-        travelSeed()
+        withHoursSeed(travelSeed())
       ],
       // ALL THREE TAKEOFF CONDITIONS SHIP OFF, and joint_filler is the one that moved.
       //
@@ -1902,7 +1935,7 @@
     applyTravelRates: applyTravelRates, normalizeTravel: normalizeTravel,
     // Distance decides "local" (see LOCAL_MILES).
     LOCAL_MILES: LOCAL_MILES, milesOrNull: milesOrNull, distanceKey: distanceKey,
-    normalizeDistance: normalizeDistance, isFarMiles: isFarMiles, applyDistance: applyDistance,
+    normalizeDistance: normalizeDistance, driveHoursFor: driveHoursFor, isFarMiles: isFarMiles, applyDistance: applyDistance,
     clearDistance: clearDistance, distanceNote: distanceNote,
     rowOn: rowOn, sliderHtml: sliderHtml,
     filledIn: filledIn,

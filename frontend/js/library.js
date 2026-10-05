@@ -498,6 +498,13 @@
     // A no-op payload is still SENT — harmless, and an existing test pins it — but the snapshot
     // has done its job and must not be left behind for the next round to compare against.
     if (!fields.length) { endItemRound(id); return true; }
+    // THE QUESTION IS ABOUT THE ASSEMBLIES THAT PRICE FROM THIS MATERIAL. A material no assembly
+    // uses has nothing downstream to change, so a brand-new row (or any unused one) saves without
+    // asking; the dialog's own sentence ("priced into every assembly that uses it") would be false.
+    var usedByAssembly = (ASMS || []).some(function (a) {
+      return (a.lines || []).some(function (l) { return l.item_id === id; });
+    });
+    if (!usedByAssembly) { endItemRound(id); return true; }
     var lines = fields.map(function (f) {
       return (ITEM_FIELD_LABELS[f] || f) + ":  " + shownValue(before[f]) + "  →  "
         + shownValue(payload[f]);
