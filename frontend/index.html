@@ -102,6 +102,42 @@
       </div>
     </fieldset>
 
+    <!-- DRAWINGS & SPECS: what Kyle's GC proposal forms leave as "xx" (Hanz, 2026-10-02). On a
+         GC proposal they print "per Spec <spec section> & Drawings by <Architect / GC> dated
+         <drawings dated>", "[<finish tag>] per the Finish Schedule on <sheet>" and "Addenda
+         Acknowledged: <count>"; on the estimate sheet, Drawings Dated (Epoxy!B9, the gyp base's
+         B11) and the Specs+Dwgs+Addn tab (estimate_writer.SPECS_SHEET).
+
+         ALL OPTIONAL, AND A BLANK IS SAFE: the GC proposal prints Kyle's own placeholder in its
+         place (proposal_writer.TEMPLATE_TOKEN_DEFAULTS), so nothing is invented. Named inputs
+         and nothing else: both Continue handlers spread TW.readForm(form), so these travel with
+         no handler edit and the two blobs stay identical (test_beta_intake_routing.py). -->
+    <fieldset id="drawings-specs-box">
+      <legend>Drawings &amp; specs</legend>
+      <p class="hint">Optional. Fills the spec, finish and addenda lines of a GC proposal and the estimate&rsquo;s Specs+Dwgs+Addn tab. Left blank, the proposal keeps the template&rsquo;s placeholder.</p>
+      <div class="row">
+        <label>Drawings dated
+          <input type="date" name="drawings_dated"
+                 title="The date on the drawing set this bid is priced from.">
+        </label>
+        <label>Addenda acknowledged
+          <input type="number" name="addenda_count" min="0" step="1" inputmode="numeric"
+                 title="How many addenda this bid includes. A whole number.">
+        </label>
+      </div>
+      <div class="row three">
+        <label>Spec section
+          <input type="text" name="spec_section" autocomplete="off" placeholder="e.g. 033543">
+        </label>
+        <label>Finish tag
+          <input type="text" name="finish_tag" autocomplete="off" placeholder="e.g. PC, RES-1, SC">
+        </label>
+        <label>Finish schedule sheet
+          <input type="text" name="plan_sheet" autocomplete="off" placeholder="e.g. A900">
+        </label>
+      </div>
+    </fieldset>
+
     <fieldset>
       <legend>Contact</legend>
       <label>Contact name

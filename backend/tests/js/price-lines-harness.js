@@ -293,6 +293,12 @@ const UNITS = [
   // The price box's bullets: every builder above puts a line's override on it (linePropsOf) and
   // refreshPriceDisplay ends by drawing them (paintLineParas).
   fn("linePropsOf"), fn("paintLineParas"), fn("isPriceLine"), fn("priceLineAction"),
+  // paintLineParas and paintOptionsGap give each composed PRICE line the spacing of the paragraph
+  // the document prints it from (priceLineRecord; the gap's lines, the row above it:
+  // gapModelRecord), through applyParaSpacing.
+  topConst("SINGLE_LINE_EM"), fn("paraLineHeight"), fn("applyParaSpacing"),
+  fn("priceLineRecord"), fn("gapModelRecord"),
+  topConst("TWIPS_PER_PT"),
   fn("paintExtras"), fn("makeExtraLine"), fn("caretInto"), fn("splitPriceLine"), fn("mergePriceLine"),
   fn("paintLine"), fn("comboSystemLines"), fn("comboLinesForPayload"), fn("baseDescLabel"),
   fn("refreshPriceDisplay"), fn("renderProposalExtras"), fn("computeTokenValues"),
@@ -1241,6 +1247,83 @@ function bareLine(el) { el.innerHTML = "<br>"; fire(el, "input", { bubbles: true
   bareLine(api3.pg.ids["base-bid-row"]);
   out.bare.baseEmptied = { after: clone(st3.price_overrides.after || {}),
                            lines2: clone(st3.price_overrides.lines2 || {}) };
+}
+
+// 10. AN OPTION'S OWN DESCRIPTION (the sidebar's Description box, tab_opts[<tab>].desc). Hanz: options
+//     "would want to have it where you could put a long description instead of just the title of the
+//     worksheet". Typed into the real sidebar textarea through its real input handler: the room, the
+//     editor's option line, the save and a reload from the save; and that the box he is typing in is
+//     never rebuilt under him (the page repaints only the preview, as Notes does).
+{
+  const OPT = { is_option: true, show: true, price_mode: "total", show_system: true, show_diff: false };
+  const mkDraft = (extra) => hanzFix({ base_tab_id: "Epoxy", priced_tabs: clone(HF_TABS), rooms: [],
+    tab_opts: { Copy1: Object.assign({}, OPT, extra || {}) } });
+  const panelOf = (p) => p.api.pg.ids["options-panel"];
+  const rowOf = (p) => panelOf(p).querySelectorAll(".op-row").find((r) => r.dataset.id === "Copy1");
+  const lineOf = (p) => (p.api.lines().find((l) => l.key === "option:Copy1") || {}).text;
+  const roomOf = (p) => clone((p.st.rooms || []).find((r) => r.id === "Copy1") || null);
+  const look = (p) => {
+    const ta = rowOf(p).querySelector(".room-desc");
+    return { box: ta ? { placeholder: ta.attrs.placeholder, text: ta.textContent, maxlength: ta.attrs.maxlength } : null,
+             hint: rowOf(p).textContent.includes("Prints as the option line."),
+             room: roomOf(p), line: lineOf(p) };
+  };
+  const od = {};
+  const empty = openProposal(mkDraft());
+  od.empty = look(empty);
+  // Above Notes, in the sidebar row's own order.
+  od.order = rowOf(empty).querySelectorAll("textarea").map((t) => t.className);
+
+  const typed = openProposal(mkDraft());
+  const ta = rowOf(typed).querySelector(".room-desc");
+  const htmlBefore = panelOf(typed).innerHTML;
+  const rowBefore = rowOf(typed);
+  const type = (p, text) => {
+    const box = rowOf(p).querySelector(".room-desc");
+    box.value = text;
+    fire(box, "input");
+    return box;
+  };
+  type(typed, "Add for onsite/in place mockup, if required.");
+  od.typed = Object.assign(look(typed), {
+    sameRow: rowOf(typed) === rowBefore, sameBox: rowOf(typed).querySelector(".room-desc") === ta,
+    attached: panelOf(typed).contains(ta), panelRewritten: panelOf(typed).innerHTML !== htmlBefore,
+    opt: clone(typed.st.tab_opts.Copy1), saved: typed.api.saved(typed.draft).tab_opts.Copy1,
+    savedRoom: (typed.api.saved(typed.draft).rooms || []).find((r) => r.id === "Copy1") || null,
+  });
+  // A keystroke at a time, the way he types: the box is the same one throughout.
+  let same = true;
+  for (const text of ["A", "Ad", "Add", "Add f"]) { const b = type(typed, text); same = same && b === ta && panelOf(typed).contains(ta); }
+  od.keystrokes = { same, panelRewritten: panelOf(typed).innerHTML !== htmlBefore };
+
+  // Reload from what the page saved.
+  type(typed, "Add for onsite/in place mockup, if required.");
+  const saved = typed.api.saved(typed.draft);
+  od.reload = look(openProposal(saved));
+
+  // Typed cleanly: the cap, a newline, whitespace only, and back to nothing.
+  const t2 = openProposal(mkDraft());
+  type(t2, "x".repeat(600));
+  od.long = { stored: t2.st.tab_opts.Copy1.desc.length, room: roomOf(t2).custom_desc.length, line: lineOf(t2) };
+  type(t2, "first line\n\n   second   line ");
+  od.newline = { room: roomOf(t2).custom_desc, line: lineOf(t2) };
+  type(t2, "   \n  ");
+  od.blank = look(t2);
+  type(t2, "back");
+  type(t2, "");
+  od.cleared = look(t2);
+
+  // A draft that already holds a description opens with it: the box, the room, the line.
+  od.opens = look(openProposal(mkDraft({ desc: "Kyle's own words" })));
+  // The same description in add/deduct mode, with a note, through the sidebar's own price-as select.
+  const ad = openProposal(mkDraft({ desc: "Upgrade to a metallic pigment", price_mode: "total" }));
+  const sel = rowOf(ad).querySelector(".pr-mode");
+  sel.value = "deduct"; fire(sel, "change");
+  od.addMode = { room: roomOf(ad).price_mode, line: lineOf(ad) };
+  const nb = rowOf(ad).querySelector(".room-notes");
+  nb.value = "Colour: Gray Blend only"; fire(nb, "input");
+  od.addNotes = lineOf(ad);
+  out.optionDesc = od;
 }
 
 Promise.all([

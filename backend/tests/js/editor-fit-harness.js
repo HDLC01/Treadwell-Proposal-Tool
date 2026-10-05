@@ -216,7 +216,14 @@ const LIFTED = [
   // setBlockContent hides a free tax / total row the tax rule does not print (priceRowVisibility);
   // none of the rows these fixtures fill carries the rule's answer, so it leaves them as they are.
   fn("setBlockContent"), fn("priceRowVisibility"), fn("isNumberedClause"), fn("applyParaGeom"), fn("renderBlock"),
+  // applyParaGeom puts a paragraph's vertical geometry on through applyParaSpacing, whose line
+  // height is the file's multiple of the face's own single line (paraLineHeight).
+  topConst("SINGLE_LINE_EM"), fn("paraLineHeight"), fn("applyParaSpacing"),
   fn("inlineHp"), fn("clearBoxFit"), fn("applyBoxFit"), fn("fitOffer"), fn("fitTxbx"),
+  // fitTxbx, fitOffer, growBoxToFit and releaseAutoGrownHeight measure a box by how far its
+  // PRINTED text reaches (boxContentPx -> boxInkPx), which falls back to the box's own height
+  // when no line in it is laid out -- as here, where no element has a layout and every box fits.
+  fn("boxInkPx"), fn("boxContentPx"),
   fn("notesRowSizePt"), fn("noteLineHtml"), fn("renderNotesPreview"),
   // THE PAGE'S OWN QUESTION-AND-ANSWER LOOP: the three bookkeeping lets, verbatim, and requestFit,
   // which parses the route's answer, drops one for another template or one a newer question
@@ -331,6 +338,13 @@ for (const kase of CASES.cases) {
         markPt: el.dataset.markPt || null,
         markVar: el.style.getPropertyValue("--tw-mark-pt") || null,
         printed: el.style.getPropertyValue("--tw-fit-pt") || null,
+        twMark: el.dataset.twMark === "1",
+        // What a stylesheet rule can see of the paragraph: its classes, its attributes and the
+        // classes of the box it sits in. test_notes_box_layout.py matches the REAL styles.css
+        // selector of the mark-sized strut against these.
+        classes: Array.from(el._classes),
+        attrs: Object.assign({}, el.attrs),
+        boxClasses: Array.from(box._classes),
         spans: sizes(el),
       });
     }

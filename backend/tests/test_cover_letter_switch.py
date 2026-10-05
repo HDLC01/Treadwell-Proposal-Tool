@@ -252,11 +252,19 @@ def test_the_payload_line_under_test_is_the_shipped_one(wired):
     field = wired["liftedPayloadField"]
     assert field.startswith("cover_letter_enabled:"), (
         "the harness lifted something that is not the payload field: %r" % field)
-    assert 'liveKey("cover_letter_enabled")' in field, (
+    # SINCE 2026-10-02 the live reader is coverLetterOn(), the one resolver that also supplies a GC
+    # project's default (on). It reads TW.getState() itself -- checked on the page's own source.
+    assert 'liveKey("cover_letter_enabled")' in field or "coverLetterOn()" in field, (
         "the payload no longer reads the flag out of the CURRENT draft blob: %r. If this is a "
         "deliberate change to a different live reader, update this assertion; if it is back to "
         "`state.cover_letter_enabled`, the three tests above are already red and this says why."
         % field)
+    src = (pathlib.Path(__file__).resolve().parents[2] / "frontend" / "js" /
+           "proposal-review.js").read_text(encoding="utf-8")
+    resolver = re.search(r"\n  function coverLetterOn\(\) \{[\s\S]*?\n  \}", src)
+    assert resolver and "TW.getState()" in resolver.group(0) and \
+        not re.search(r"\bstate\.cover_letter_enabled\b", resolver.group(0)), (
+        "coverLetterOn no longer reads the CURRENT draft blob")
     assert not re.search(r"\bstate\.cover_letter_enabled\b", field), (
         "the payload is reading the page's load-time snapshot again: %r" % field)
 
@@ -947,3 +955,27 @@ def test_the_scan_above_is_looking_for_things_that_could_have_been_there():
     assert missing == [], (
         "these names in GONE were never in the pre-removal frontend CODE, so the scan that looks "
         "for them cannot fail: %r. Fix the spelling or drop the entry." % missing)
+
+
+
+def test_a_gc_project_opens_with_the_cover_letter_on(wired):
+    """Hanz, 2026-10-02: "general contractor projects should also have cover letter default on which
+    means that the toggle button for the cover letter is always on for all GC projects."
+
+    Untouched, a GC project's box opens TICKED and Continue freezes a letter into the payload; the
+    board's own rule (crm-core pipelineOf) decides what is GC, so " gc " counts and ["GC"] does
+    not; a deliberate untick still wins; a Direct project still opens unticked; and a page without
+    crm-core falls back to off, the default every project had before.
+
+    Mutation: return false from coverLetterOn's default branch (gc* go red); drop the explicit-value
+    branch (gcExplicitOffPainted, gcUntickThenContinue go red)."""
+    r = wired
+    assert r["gcEmptyPainted"] is True, r["gcEmptyPainted"]
+    assert r["gcPaddedPainted"] is True, r["gcPaddedPainted"]
+    assert r["gcUntouchedPayload"] is True, r["gcUntouchedPayload"]
+    assert r["gcExplicitOffPainted"] is False, r["gcExplicitOffPainted"]
+    assert r["gcUntickThenContinue"] == {"paintedOnLoad": True, "payload": False,
+                                         "stored": False}, r["gcUntickThenContinue"]
+    assert r["directEmptyPainted"] is False, r["directEmptyPainted"]
+    assert r["notAStringPainted"] is False, r["notAStringPainted"]
+    assert r["gcNoCrmPainted"] is False, r["gcNoCrmPainted"]

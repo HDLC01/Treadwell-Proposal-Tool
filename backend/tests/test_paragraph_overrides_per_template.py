@@ -259,6 +259,7 @@ def test_restore_still_checks_the_template_version(src):
     script = helper + """
 let templateVersion = "sha256:aaaaaaaaaaaaaaaa";
 let templateLegacyFloorS = 1784143397;
+let templatePredecessors = [];
 const got = [
   savedVersionMatches("sha256:aaaaaaaaaaaaaaaa"),   // this content
   savedVersionMatches("sha256:bbbbbbbbbbbbbbbb"),   // another version of the template

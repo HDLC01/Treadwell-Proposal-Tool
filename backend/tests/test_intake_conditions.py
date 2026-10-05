@@ -89,7 +89,7 @@ def test_every_condition_renders_as_a_toggle(cond):
 def test_each_toggle_says_what_it_does(cond):
     """The plain-English line is the reason this was worth porting rather than reinventing.
 
-    `local` / `hard_bid` / `prevailing_wage` are terms with money behind them and no obvious
+    `local` / `prevailing_wage` are terms with money behind them and no obvious
     meaning to a new estimator; the beta's contribution was one sentence under each.
     """
     assert cond["shape"]["whyNonEmpty"], "a toggle with no explanation under it"
@@ -110,16 +110,32 @@ def test_the_questions_follow_the_work_type(cond):
     # A combo job is billed off both tabs, so it is asked everything.
     assert set(by["combo"]) == set(by["epoxy"]) | set(by["polish"])
     # Gyp is priced off its own tabs with none of these five cells in play.
-    assert set(by["gyp"]) == {"local", "hard_bid", "prevailing_wage", "taxable", "remodel_tax"}
+    assert set(by["gyp"]) == {"local", "prevailing_wage", "taxable", "remodel_tax"}
     assert "reno" not in by["gyp"]
 
 
 @needs_node
-def test_the_five_original_flags_are_asked_of_every_work_type(cond):
-    """These five came off the beta page and are tab-independent, so nobody loses them."""
-    five = {"local", "hard_bid", "prevailing_wage", "taxable", "remodel_tax"}
+def test_the_four_original_flags_are_asked_of_every_work_type(cond):
+    """These came off the beta page and are tab-independent, so nobody loses them. There were five
+    until 2026-10-03, when the hard-bid switch was removed -- see the test directly below."""
+    four = {"local", "prevailing_wage", "taxable", "remodel_tax"}
     for wt, keys in cond["byWorkType"].items():
-        assert five <= set(keys), wt
+        assert four <= set(keys), wt
+
+
+@needs_node
+def test_no_work_type_is_asked_whether_it_is_a_hard_bid(cond):
+    """Hanz, 2026-10-03: "We also need to remove the hard bid discount. Even on active projects and
+    direct projects." The switch wrote Epoxy!B5/Polish!B5, which is what Kyle's automatic 2.5% / 4%
+    give-back reads, so it must not be on the form for any job -- and no flip of any other switch
+    may write either cell (test_no_hard_bid.py holds the cells at "No" everywhere else).
+
+    Mutation: put the hard_bid entry back in index.js's CONDITIONS -- this goes red."""
+    for wt, keys in cond["byWorkType"].items():
+        assert "hard_bid" not in keys, wt
+    assert "hard_bid" not in cond["defaults"]
+    for cells in (cond["afterDyeOn"], cond["merged"]):
+        assert "Epoxy!B5" not in cells and "Polish!B5" not in cells, cells
 
 
 # ── the defaults match the template, which is the point of them ────────────
@@ -161,7 +177,6 @@ def test_joint_filler_defaults_off_even_though_the_template_ships_it_on(cond, sh
 def test_the_other_defaults_match_the_template_too(cond, sheet):
     e = sheet["Epoxy"]
     assert cond["defaults"]["local"] is (str(e["B4"].value).strip().lower() == "yes")
-    assert cond["defaults"]["hard_bid"] is (str(e["B5"].value).strip().lower() == "yes")
     assert cond["defaults"]["taxable"] is (str(e["B6"].value).strip().lower() == "yes")
     assert cond["defaults"]["prevailing_wage"] is False
     assert cond["defaults"]["remodel_tax"] is False
@@ -194,14 +209,13 @@ def test_a_flip_writes_the_cell_and_saves_once(cond):
 
 
 @needs_node
-def test_local_and_hard_bid_reach_both_tabs(cond, sheet):
-    """`Polish!B4`/`B5` hold their OWN Yes/No, unlike the three below them."""
+def test_local_reaches_both_tabs(cond, sheet):
+    """`Polish!B4` holds its OWN Yes/No, unlike the three below it. (Hard bid's `B5` did too, until
+    the switch was removed on 2026-10-03.)"""
     p = sheet["Polish"]
     assert not str(p["B4"].value).startswith("="), "if B4 became a formula, stop writing it"
-    assert not str(p["B5"].value).startswith("=")
     cells = cond["afterDyeOn"]
     assert cells["Epoxy!B4"] == cells["Polish!B4"] == "Yes"
-    assert cells["Epoxy!B5"] == cells["Polish!B5"] == "No"
 
 
 @needs_node
@@ -229,7 +243,7 @@ def test_the_three_flags_polish_mirrors_are_never_written_to_the_polish_tab(cond
     for addr, ref in (("D5", "=Epoxy!D5"), ("B6", "=Epoxy!B6"), ("D6", "=Epoxy!D6")):
         assert p[addr].value == ref, (
             "Polish!%s is no longer a mirror of the Epoxy cell -- if Kyle made it independent, "
-            "these three need writing to both tabs like B4/B5" % addr)
+            "these three need writing to both tabs like B4" % addr)
     cells = cond["afterDyeOn"]
     for addr in ("Polish!D5", "Polish!B6", "Polish!D6"):
         assert addr not in cells, addr + " must never be written -- it is a formula"
@@ -342,7 +356,7 @@ def test_the_switches_are_read_back_off_the_sheet_not_off_a_key_of_our_own(cond)
     assert h["dye"] is True
     assert h["joint_filler"] is False, "an explicit No has to beat the template's Yes"
     assert h["local"] is False, "and a lower-case 'no' off the grid still reads as off"
-    assert h["hard_bid"] is False and h["remodel_tax"] is False, "unset ones keep their default"
+    assert h["remodel_tax"] is False, "unset ones keep their default"
 
 
 @needs_node
@@ -483,8 +497,8 @@ def test_none_of_these_cells_are_locked_against_the_estimator(sheet):
     for tab, addrs in getattr(estimate_writer, "LOCK_MAP", {}).items():
         for a in addrs:
             locked.add("%s!%s" % (tab, a))
-    ours = {"Epoxy!B4", "Epoxy!B5", "Epoxy!D5", "Epoxy!B6", "Epoxy!D6", "Epoxy!B10", "Epoxy!D41",
-            "Polish!B4", "Polish!B5", "Polish!B10", "Polish!E25", "Polish!E29", "Polish!F29",
+    ours = {"Epoxy!B4", "Epoxy!D5", "Epoxy!B6", "Epoxy!D6", "Epoxy!B10", "Epoxy!D41",
+            "Polish!B4", "Polish!B10", "Polish!E25", "Polish!E29", "Polish!F29",
             # The three Taxable cells added 2026-09-05. Same rule, same reason: the estimator has
             # to be able to change a tax answer in the workbook after it is downloaded.
             "Leveling!B6", 'Gyp (USG 1-8")!B8', "Gyp (FR)!B8"}

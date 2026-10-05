@@ -179,6 +179,19 @@ def test_the_two_handlers_save_byte_for_byte_the_same_blob(ran):
 
 
 @needs_node
+def test_both_doors_save_the_drawings_and_specs_answers(ran):
+    """The Drawings & specs box rides TW.readForm like every other named input, so neither handler
+    was edited for it -- and both must still save it, as typed: a spec section keeps its leading
+    zero (it is text, not a number) and the addenda count is a number the estimate sheet counts."""
+    for door in ("beta", "submit"):
+        saved = ran["saves"][door]
+        assert saved["drawings_dated"] == "2026-08-15", door
+        assert saved["spec_section"] == "033543", door
+        assert (saved["finish_tag"], saved["plan_sheet"]) == ("PC", "A900"), door
+        assert saved["addenda_count"] == 2, (door, saved["addenda_count"])
+
+
+@needs_node
 def test_the_composition_the_estimate_sheet_depends_on_survives_the_beta_door(ran):
     """city_state feeds the sheet's C3, the proposal's {{city_state}} and the tax lookup;
     `deadline` is what the Projects list, the bell's reminders and the folder date read."""

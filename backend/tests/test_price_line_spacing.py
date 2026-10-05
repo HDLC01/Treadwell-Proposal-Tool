@@ -79,8 +79,8 @@ def _para_after(xml, marker):
     return None
 
 
-def _gen_para_override(overrides):
-    body = {"work_type": "epoxy", "audience": "Direct", "values": dict(_VALS),
+def _gen_para_override(overrides, **values):
+    body = {"work_type": "epoxy", "audience": "Direct", "values": dict(_VALS, **values),
             "paragraph_overrides": overrides}
     r = client.post("/api/generate", json=body)
     assert r.status_code == 200, r.text
@@ -89,8 +89,9 @@ def _gen_para_override(overrides):
 
 def test_the_notes_row_is_bulleted_before_anyone_edits_it():
     """The premise. If this row stopped being a list item, the test below would pass for
-    the wrong reason."""
-    p = _para_after(_gen_para_override([]), "Exclusions")
+    the wrong reason. With a note in it: a Notes row with no note and no edit is left out of
+    the document altogether (2026-10-02, proposal_writer._omit_bare_lines)."""
+    p = _para_after(_gen_para_override([], work_notes="Owner moves the racking"), "Exclusions")
     assert p is not None, "could not locate the Notes row"
     assert "<w:numPr>" in p, "the Notes row is no longer bulleted — re-read this file"
     assert "Notes:" in "".join(_re.findall(r"<w:t[^>]*>([^<]*)</w:t>", p))

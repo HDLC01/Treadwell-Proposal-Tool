@@ -20,6 +20,7 @@ import re
 
 import docx
 from docx import Document
+from docx.oxml.ns import qn
 from fastapi.testclient import TestClient
 
 import main
@@ -489,21 +490,32 @@ def test_override_on_anchor_paragraph_keeps_drawings():
     runs of blank body paragraphs. An override targeting such a paragraph
     must write its text WITHOUT dropping the drawing run — losing it would
     delete the letterhead (or a whole text box) from the customer docx."""
+    w_drawing = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}drawing"
     d0 = docx.Document(str(pw.TEMPLATES_ROOT / _EPOXY_TEMPLATE))
     anchor_id = next(
         i for i, k, p, ib, t, tb in pw.iter_editable_blocks(d0)
         if tb is None and ib is None
-        and p.find(".//" + "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}drawing") is not None
+        and p.find(".//" + w_drawing) is not None
     )
-    n_drawings_before = len(d0.element.body.findall(
-        ".//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}drawing"))
 
+    def page_one_drawings(d, stop):
+        # Page 1's letterhead and every text box. The Terms pages' own letterheads are not counted
+        # here -- since 2026-10-02 the render replaces them with ONE drawing in the Terms
+        # section's header (proposal_writer._rebuild_terms_pages), which is asserted below.
+        tops = [c for c in d.element.body if c.tag == qn("w:p")]
+        return sum(len(p.findall(".//" + w_drawing)) for p in tops[:stop])
+
+    # The template's page 1 ends where its first Terms block starts; the document's on the
+    # paragraph that carries page 1's section break.
+    n_drawings_before = page_one_drawings(d0, pw.render_adjustments(d0)["terms"]["first_id"])
     out = pw.fill_proposal(work_type="epoxy", audience="Direct", values=_BASE_VALS,
                            paragraph_overrides=[{"id": anchor_id, "text": "note above the letterhead"}])
     d1 = docx.Document(io.BytesIO(out))
-    n_drawings_after = len(d1.element.body.findall(
-        ".//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}drawing"))
-    assert n_drawings_after == n_drawings_before, "override dropped an anchored drawing"
+    tops1 = [c for c in d1.element.body if c.tag == qn("w:p")]
+    brk = next(i for i, p in enumerate(tops1) if p.find(qn("w:pPr") + "/" + qn("w:sectPr")) is not None)
+    assert page_one_drawings(d1, brk + 1) == n_drawings_before, "override dropped an anchored drawing"
+    assert len(d1.sections[-1].header._element.findall(".//" + w_drawing)) == 1, (
+        "the Terms letterhead is not in the Terms section's header")
     assert "note above the letterhead" in _rendered(out)
 
 

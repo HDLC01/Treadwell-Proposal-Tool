@@ -665,6 +665,20 @@ def test_one_undo_history_carries_a_removed_line_and_the_price_lines(ran):
     assert got["second"] == {"removed": [], "gap": 2}
 
 
+def test_backspace_at_the_start_of_a_joined_terms_continuation_changes_nothing(ran):
+    """A Terms continuation the page shows joined onto its head (applyTermsPlan) is the middle of a
+    paragraph on the page, and its own indent prints nowhere while it is joined: Backspace at its
+    start is refused and saves nothing. The same line apart from its head still steps its indent
+    out, as before."""
+    got = ran["joinedContinuation"]
+    assert got["joined"]["prevented"] is True
+    assert got["joined"]["overrides"] == []
+    assert [ln["text"] for ln in got["joined"]["lines"]] == [
+        "Limited Warranty. ...a reasonable opportunity to", "inspect the alleged improper work."]
+    assert got["apart"]["prevented"] is True
+    assert [o.get("para") for o in got["apart"]["overrides"]] == [{"bullet": False, "indent": 252}]
+
+
 def test_a_kept_line_leaves_no_mark_of_ours_in_either_file():
     """`kept` is remembered on the Document (proposal_writer._kept_lines), not written into the XML:
     a `w:` attribute of our own is invalid OOXML, and the cover letter fills through the same

@@ -186,7 +186,11 @@ def test_a_move_is_exact_however_wrong_the_line_height_estimate_is():
         finally:
             pw._ANCHOR_LINE_H_PT = old
 
-    for line_h in (14.0, 20.0, 99.0):
+    # Not 99pt: at that calibration the WORK box's paragraph is estimated to run beside the REGARDS
+    # box (square wrap) and picks up its column shift (`_wrap_column_shift`), which puts a 423pt
+    # box off the sheet and has the paper bound refuse the drag -- a fake line height meeting a
+    # real wrap, not the vertical arithmetic this test is about.
+    for line_h in (14.0, 20.0, 40.0):
         assert moved_offset(line_h) == pytest.approx(design_offset - 40.0, abs=0.01), (
             "at %gpt per anchor line the writer moved the box by something other than the 40pt it "
             "was dragged — it has started trusting the absolute estimate" % line_h)

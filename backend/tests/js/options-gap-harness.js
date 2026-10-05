@@ -370,6 +370,12 @@ const LIFTED = [
   topConst("LINE_SEL"), fn("lineAt"), fn("lineAtSelection"), fn("lineTarget"), fn("editingBox"),
   topConst("focusInside"),
   topConst("REGION_MOUNTS"),
+  // The gap's lines and the composed price lines take the spacing of the paragraph the document
+  // prints them from: priceLineRecord reads the template, which this harness does not load, so
+  // it finds none and the lines keep the markup's own spacing (the spacing itself is
+  // editor-layout-harness.js's).
+  topConst("SINGLE_LINE_EM"), topConst("TWIPS_PER_PT"), fn("paraLineHeight"), fn("applyParaSpacing"),
+  fn("priceLineRecord"), "let templateBlocks = null;",
   "let _povTimer = null;",
   fn("queuePovSave"),
   // The page's Backspace handler now takes an EMPTY line out (Word's Backspace on an empty

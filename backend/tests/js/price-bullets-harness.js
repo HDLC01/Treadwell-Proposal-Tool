@@ -270,12 +270,18 @@ const UNITS = [
   // The template's own paragraphs, mounted the way a page load mounts them: the free paragraphs
   // through renderBlock, the priced regions through their staging islands.
   topConst("REGION_MOUNTS"),
-  fn("annotateRegions"), fn("mountRegionPreviews"), fn("renderBlockList"),
+  fn("annotateRegions"), fn("annotatePriceLineAnchor"), fn("mountRegionPreviews"),
+  fn("renderBlockList"),
   fn("fillHtml"), fn("fillPlain"), fn("runStyleCss"), fn("blockHtml"), fn("singleTokenHint"),
   fn("setBlockContent"), fn("priceRowVisibility"), fn("renderBlock"),
   // The paragraph controls, and the ribbon's one entry point into them.
   fn("paraBase"), fn("paraNow"), fn("paraPatch"), fn("sanitizeParaPatch"),
   fn("applyParaGeom"), fn("applyParaToEl"), fn("setParaState"),
+  // paintLineParas and paintOptionsGap give each composed PRICE line the spacing of the paragraph
+  // the document prints it from (priceLineRecord; the gap's lines, the row above it:
+  // gapModelRecord), through applyParaSpacing.
+  topConst("SINGLE_LINE_EM"), fn("paraLineHeight"), fn("applyParaSpacing"),
+  fn("priceLineRecord"), fn("gapModelRecord"),
   fn("isPriceLine"), fn("takesPriceStep"), fn("priceLineAction"), fn("paraAction"),
   // The ribbon: built, aimed and pressed by the page's own code. A price line takes the early branch
   // of renderFmtBar, so the run-formatting half (selectionFormat and friends) is never reached here.
@@ -376,7 +382,7 @@ function build(c, st) {
     "document.addEventListener('selectionchange', " + SELCHANGE + ");",
     // The box sweep and the bullets' repaint, as the page's delegated input handler runs them.
     "docSurface.addEventListener('input', (e) => { const b = editingBox(e.target); if (b) { syncPriceLinesIn(b); paintLineParas(b); } });",
-    "return { refreshPriceDisplay, computeTokenValues, comboLinesForPayload, annotateRegions,",
+    "return { refreshPriceDisplay, computeTokenValues, comboLinesForPayload, annotateRegions, annotatePriceLineAnchor,",
     "         renderBlockList, serializeBlock, paraAction, paraPatch, setParaState, paintLineParas,",
     "         blockById, paraById, bar: () => ensureFmtBar(), aimedAt: () => fmtBlock };",
   ].join("\n");
@@ -389,6 +395,12 @@ function build(c, st) {
   // A page load: the blocks registered, the box rendered, the prices painted.
   const blocks = c.blocks.map((b) => Object.assign({}, b));
   api.annotateRegions(blocks);
+  // A template with no {{#price_line}} region (the GC files) mounts the lines under its Options
+  // heading; the page load makes this call right after annotateRegions.
+  // (The page has ONE array; this harness hands the page's `templateBlocks` a second copy of the
+  // blocks it renders, so the flags go on both.)
+  api.annotatePriceLineAnchor(blocks, c.price_lines_anchor || null, c.options_heading_ids || []);
+  api.annotatePriceLineAnchor(c.blocks, c.price_lines_anchor || null, c.options_heading_ids || []);
   for (const b of blocks) api.blockById.set(b.id, b);
   const tokens = api.computeTokenValues(Object.assign({}, st));
   api.renderBlockList(box, blocks, tokens);
@@ -449,6 +461,9 @@ function describe(pg, el) {
     indent_tw: (ml == null && pl == null) ? null : Math.round(((ml || 0) + (pl || 0)) * 20),
     first_tw: Math.round((ti || 0) * 20),
     unstyled: !blank && ml == null && pl == null,
+    // The vertical geometry: space before, space after, line height. A composed price line takes
+    // them from the template paragraph the document clones it from (paintLineParas).
+    spacing: [el.style.marginTop || null, el.style.marginBottom || null, el.style.lineHeight || null],
     key: d.poLinekey || null, kind: d.poKind || (el.classList.contains("tw-block") ? "block" : "gap"),
     id: el.classList.contains("tw-block") ? Number(d.id) : null,
   };

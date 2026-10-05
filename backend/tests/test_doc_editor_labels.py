@@ -510,10 +510,12 @@ def test_the_page_geometry_the_growth_rule_is_built_on():
     geo = pw.template_geometry(docx.Document(str(DIRECT_EPOXY)))
     by_id = {b["id"]: b for b in geo["boxes"]}
     work, price, notes = by_id[2], by_id[4], by_id[3]
-    assert round(work["y_pt"] + work["h_pt"], 2) == 323.65
-    assert round(price["y_pt"], 2) == 320.95, "the overlap this rule exists for is gone"
-    assert round(price["y_pt"] - work["y_pt"], 2) == 168.3 < work["h_pt"]
-    assert round(notes["y_pt"] + notes["h_pt"], 2) == 656.6
+    # At the 14.05pt anchor line the PDF prints (test_notes_box_layout.py): the overlap is the
+    # printed one, measured in the production LibreOffice as 152.9 + 171 against 321.35.
+    assert round(work["y_pt"] + work["h_pt"], 2) == 323.9
+    assert round(price["y_pt"], 2) == 321.35, "the overlap this rule exists for is gone"
+    assert round(price["y_pt"] - work["y_pt"], 2) == 168.45 < work["h_pt"]
+    assert round(notes["y_pt"] + notes["h_pt"], 2) == 657.0
     assert geo["page"]["h_pt"] - geo["page"]["margin"]["bottom"] == 720.0
 
 
@@ -1001,10 +1003,19 @@ def test_the_line_spacing_comes_from_the_file_not_a_constant(ran):
     """The editor used one flat `line-height: 1.32` for a box whose rows are genuinely 1.15 and
     1.25 — looser than both, and erasing the distinction between them. `line` is 240ths of a line
     under `lineRule="auto"`, so 276 is 1.15 and 300 is 1.25; the RULE has to travel with the number
-    because the same field is twips under `exact`."""
+    because the same field is twips under `exact`.
+
+    1.15 and 1.25 of the FACE'S single line, not of its size (2026-10-02): Word and LibreOffice
+    multiply Zetta Serif's own 1.045em line, which CSS's unitless line-height does not know about,
+    so the style carries the product (paraLineHeight; test_editor_layout.py measures it against the
+    PDF). The multiple is still the file's -- 1.15 and 1.25 times the same constant."""
     _, paras = _work_paras()
     assert paras["system.name"]["spacing"]["line"] == 276, paras["system.name"]["spacing"]
     assert paras["system.sqft"]["spacing"]["line"] == 300, paras["system.sqft"]["spacing"]
     got = {r["field"]: r["style"].replace(" ", "") for r in ran["workGeometry"]["rows"]}
-    assert "line-height:1.15" in got["name_line"], got["name_line"]
-    assert "line-height:1.25" in got["area_line"], got["area_line"]
+    em = float(re.search(r"\n  const SINGLE_LINE_EM = ([\d.]+);",
+                         (FRONTEND / "js" / "proposal-review.js").read_text(encoding="utf-8")).group(1))
+    lh = {k: float(re.search(r"line-height:([\d.]+)", v).group(1)) for k, v in got.items()
+          if k in ("name_line", "area_line")}
+    assert lh["name_line"] == pytest.approx(1.15 * em, abs=1e-5), got["name_line"]
+    assert lh["area_line"] == pytest.approx(1.25 * em, abs=1e-5), got["area_line"]

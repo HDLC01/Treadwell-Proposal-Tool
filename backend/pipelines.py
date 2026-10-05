@@ -43,7 +43,9 @@ PIPELINES: Tuple[str, ...] = (DIRECT, GC)
 # _root). A link to /portal.html for a GC project is sent on to /gc-projects.html by the page
 # itself (portal.js load), with the query kept, so none of those links had to change.
 BOARD_PAGE: Dict[str, str] = {DIRECT: "/portal.html", GC: "/gc-projects.html"}
-BOARD_LABEL: Dict[str, str] = {DIRECT: "Direct Projects", GC: "General Contractor"}
+# "GC Projects" since 2026-10-02 (Hanz: "change on the sidebar ... from general contractor to GC
+# projects"); the board's heading and tab title below say the same.
+BOARD_LABEL: Dict[str, str] = {DIRECT: "Direct Projects", GC: "GC Projects"}
 
 # Space, tab, newline, carriage return, form feed, vertical tab. crm-core.js strips the same six.
 _WHITESPACE = " \t\n\r\f\v"
@@ -73,8 +75,8 @@ def pipeline_of(audience: Any) -> str:
 # quietly serving the Direct page's name — or worse, `data-pipeline="direct"` — at the GC address.
 _GC_PAGE_SWAPS: Tuple[Tuple[str, str], ...] = (
     ('<body data-pipeline="direct">', '<body data-pipeline="gc">'),
-    ("<title>Direct Projects · ", "<title>General Contractor · "),
-    ("<h1>Direct Projects</h1>", "<h1>General Contractor</h1>"),
+    ("<title>Direct Projects · ", "<title>GC Projects · "),
+    ("<h1>Direct Projects</h1>", "<h1>GC Projects</h1>"),
     ('<p class="sub">Proposals sent to direct customers',
      '<p class="sub">Proposals sent to general contractors'),
 )

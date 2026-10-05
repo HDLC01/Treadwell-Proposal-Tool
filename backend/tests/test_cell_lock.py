@@ -2,20 +2,18 @@
 
 fill_estimate must lock exactly the LOCK_MAP cells (GP %, Hard Bid Discount,
 Superintendent, Soft Costs, Contingency, Sales Tax %, Kansas Remodel Tax %, Bond)
-per sheet layout and leave every other cell editable, with sheet protection ON
+per sheet layout, plus the Hard Bid? flag cell, and leave every other cell editable, with sheet protection ON
 (no password) for the lock-mapped sheets and OFF for everything else. Copies
 inherit their source's layout; the alternate tab and display-label renames must
 not shake the protection loose (it's applied to worksheet objects, post-rename).
 """
-import io
-
-from openpyxl import load_workbook
-
+import _memo
 import estimate_writer as ew
 
 
 def _wb(data):
-    return load_workbook(io.BytesIO(data))
+    # One loaded workbook per distinct file (tests/_memo.py). Everything below only READS it.
+    return _memo.workbook(data)
 
 
 def _locked_addrs(ws, addrs):
@@ -41,7 +39,9 @@ def test_all_other_cells_stay_editable():
     wb = _wb(ew.fill_estimate({"project_name": "P", "sqft": 12000}))
     for sheet, lock_key in (("Epoxy", "Epoxy"), ("Polish", "Polish")):
         ws = wb[sheet]
-        locked = set(ew.LOCK_MAP[lock_key])
+        # ...plus the Hard Bid? cell since 2026-10-03, which the tool no longer lets change
+        # (test_no_hard_bid.py).
+        locked = set(ew.LOCK_MAP[lock_key]) | {ew.HARD_BID_FLAG_CELLS[sheet]}
         # Every cell that actually exists in the file must be explicitly
         # unlocked except the lock-map addrs. (Virgin cells materialized by
         # iter_rows on the RELOADED wb report openpyxl's locked-by-default

@@ -247,6 +247,12 @@ function harness(opts) {
   deps.txAddr = lift("txAddr", deps);
   deps.roleFor = lift("roleFor", deps);
   deps.layoutIdFor = lift("layoutIdFor", deps);
+  // The autofill handler below skips a Hard Bid? answer through this (2026-10-03).
+  Object.assign(deps, new Function(
+    grab(/^const HARD_BID_FLAG_LAYOUTS = \[[\s\S]*?\];$/m, "HARD_BID_FLAG_LAYOUTS") + NL +
+    grab(/^const HARD_BID_FLAG_ADDR = .*;$/m, "HARD_BID_FLAG_ADDR") + NL +
+    "return { HARD_BID_FLAG_LAYOUTS, HARD_BID_FLAG_ADDR };")());
+  deps.isHardBidFlagCell = lift("isHardBidFlagCell", deps);
   deps.isPricedRole = liftExpr(/^const isPricedRole = .*$/m, "isPricedRole",
                                { PRICED_ROLES: VOCAB.PRICED_ROLES });
   deps.isOptionOnlyRole = liftExpr(/^const isOptionOnlyRole = .*$/m, "isOptionOnlyRole",
@@ -384,6 +390,7 @@ function harness(opts) {
     jobFlagValue: deps.jobFlagValue, jobFlagCellsFor: deps.jobFlagCellsFor,
     baseFlagSheets: deps.baseFlagSheets, applyAutofillJobFlags: deps.applyAutofillJobFlags,
     ownSealJointsRemodelRate: deps.ownSealJointsRemodelRate,
+    isHardBidFlagCell: deps.isHardBidFlagCell,
     canonicalTarget: deps.canonicalTarget, canonicalKey: deps.canonicalKey,
     HF, hfAt: (s, a) => HF.getValue(s, a), hfRaw: (s, a) => HF.raw(s, a),
     taxFlagsFor, flagSheetIds, engineAnswers, pricedAs, ownAnswers,
@@ -633,7 +640,8 @@ const INTAKE_EXEMPT_REMODEL = {
   const h = harness();
   h.typeInto("Epoxy", "E20", "5000", "4200");
   h.typeInto("Epoxy", "B4", "No", "Yes");           // Local? -- NOT ours (see Issue 5)
-  h.typeInto("Epoxy", "B5", "Yes", "No");           // Hard Bid? -- likewise
+  // (Hard Bid? is no longer an ordinary edit: since 2026-10-03 the screen refuses it outright --
+  // test_no_hard_bid.py.)
   h.typeInto("Epoxy", "D5", "Yes", "No");           // Prevailing Wage -- a mirror everywhere
   h.typeInto(GB, "B6", "12", "0");                  // "Miles Away" on a gyp layout, NOT Taxable
   out.ordinaryEdits = h.cellValues;
@@ -719,7 +727,7 @@ const INTAKE_EXEMPT_REMODEL = {
 const AUTOFILL_SRC = grab(
   /^document\.getElementById\("autofill-btn"\)\.addEventListener\("click", async \(e\) => \{[\s\S]*?\n\}\);$/m,
   "the autofill click handler");
-async function autofillClick(h, reply) {
+async function autofillClick(h, reply, tw) {
   let handler = null;
   const btn = { textContent: "AI Autofill", disabled: false, innerHTML: "",
                 addEventListener: (type, fn) => { if (type === "click") handler = fn; } };
@@ -728,7 +736,8 @@ async function autofillClick(h, reply) {
     document: { getElementById: (id) => (id === "autofill-btn" ? btn : null) },
     state: h.state, callAutofillEndpoint: async () => reply, cellValues: h.cellValues, HF: h.HF,
     jobFlagKindFor: h.jobFlagKindFor, applyAutofillJobFlags: h.applyAutofillJobFlags,
-    escHtml: (s) => String(s == null ? "" : s), icon: () => "", TW: { setState() {} },
+    isHardBidFlagCell: h.isHardBidFlagCell,
+    escHtml: (s) => String(s == null ? "" : s), icon: () => "", TW: tw || { setState() {} },
     sysNameInput: { value: "" }, texInput: { value: "" }, activeSheet: null, sheetCache: {},
     showSheet: async () => {}, setTimeout: () => 0,
     showAutofillBanner: (html, kind) => banners.push({ html, kind }), console,
@@ -751,6 +760,42 @@ async function autofillClick(h, reply) {
     polish: { taxable: h.cellValues["Polish!B6"], remodel: h.cellValues["Polish!D6"] },
     epoxy: { taxable: h.cellValues["Epoxy!B6"], remodel: h.cellValues["Epoxy!D6"] },
     epoxyB4: h.cellValues["Epoxy!B4"],
+  };
+  // AN ANSWER THAT STILL CARRIES HARD BID? (an older reply, or a model that sends it anyway) is
+  // ignored: not written, not pushed to the engine, not on the banner. Removed 2026-10-03.
+  {
+    const hb = harness({ state: { work_type: "epoxy" } });
+    hb.openDraft();
+    const before = hb.hfCalls.length;
+    const bb = await autofillClick(hb, { ok: true, cell_values: {
+      "Epoxy!B5": "Yes", "Polish!B5": "Yes", "Epoxy!D5": "Yes" } });
+    out.autofillHardBid = {
+      written: ["Epoxy!B5", "Polish!B5"].filter((k) => k in hb.cellValues),
+      engine: hb.hfCalls.slice(before).filter((c) => c[1] === "B5").map((c) => c[0] + "!" + c[1]),
+      banner: bb.length ? bb[bb.length - 1].html : "",
+      prevailing: hb.cellValues["Epoxy!D5"],
+    };
+  }
+  // THE AI'S DRAWINGS DATED reaches a BLANK intake date (the GC proposal's spec line reads it),
+  // and never overwrites one the estimator typed. A store that parses fresh on every read.
+  const store = (blob) => {
+    let raw = JSON.stringify(blob);
+    const writes = [];
+    return { writes, getState: () => JSON.parse(raw),
+             setState: (p) => { writes.push(p); raw = JSON.stringify(Object.assign(JSON.parse(raw), p)); } };
+  };
+  const dd = async (stored, b9) => {
+    const hh = harness({ state: { work_type: "epoxy" } });
+    hh.openDraft();
+    const tw = store(stored);
+    await autofillClick(hh, { ok: true, cell_values: { "Epoxy!B9": b9 } }, tw);
+    return { writes: tw.writes, cell: hh.cellValues["Epoxy!B9"] };
+  };
+  out.aiDrawingsDated = {
+    blankUs: await dd({}, "9/3/26"),
+    blankIso: await dd({ drawings_dated: "" }, "2026-09-03"),
+    typed: await dd({ drawings_dated: "2026-08-15" }, "9/3/26"),
+    notADate: await dd({}, "Yes"),
   };
   console.log(JSON.stringify(out));
 })().catch((e) => { console.error(e && e.stack || e); process.exit(1); });

@@ -335,6 +335,9 @@ const LIFTED = [
   fn("effectiveWorkType"),
   fn("fillHtml"), fn("fillPlain"), fn("runStyleCss"), fn("blockHtml"),
   fn("singleTokenHint"), fn("setBlockContent"),
+  // The editor's view of the token values: a blank token shows the template's own placeholder.
+  // refreshDocumentFills and restoreEmptiedClause both draw through it.
+  fn("withTokenDefaults"),
   // A PRICE paragraph (a GC / Gyp tax row, polish Direct's base line) keeps its untouched figures
   // as {{tokens}} (storedText) and is marked only for a dollar figure of its own
   // (priceParagraphMoneyOff); setBlockContent shows or hides a free tax row by the rule
@@ -360,6 +363,9 @@ const LIFTED = [
   // and the file's own line spacing. Lifted rather than stubbed: applyParaToEl delegates to it,
   // so a stub would leave the indent arithmetic (bullet at left-hanging) untested.
   fn("applyParaGeom"),
+  // applyParaGeom puts a paragraph's vertical geometry on through applyParaSpacing, whose line
+  // height is the file's multiple of the face's own single line (paraLineHeight).
+  topConst("SINGLE_LINE_EM"), fn("paraLineHeight"), fn("applyParaSpacing"),
   // applyParaToEl asks takesPriceStep whether a row is drawn as a PRICE-box row (the REBID price box).
   fn("takesPriceStep"), fn("applyParaToEl"), fn("setParaState"),
   topConst("overrideKey"), fn("mergeOverrideEntry"), topConst("liveKey"),
@@ -369,6 +375,10 @@ const LIFTED = [
   // harness that imitated it would be testing the imitation.
   fn("schedulePersistOverrides"),
   fn("refreshFillsInPlace"), fn("refreshPriceFillsInPlace"), fn("refreshDocumentFills"),
+  // refreshDocumentFills asks the WORK lines again after a re-fill (render_adjustments.lines);
+  // with no plan loaded (`templateAdjustments` null, below) that hides nothing.
+  // terms-pages-harness.js runs it with the plan.
+  fn("setRenderHidden"), fn("workLineBare"), fn("applyBareWorkLines"),
   // The input handler became a BOX SWEEP when the box became the editing host: one keystroke can
   // change several paragraphs, so it syncs the caret's own line and then every other line in the
   // box that has a pristine text recorded. syncBlock is the per-paragraph half, lifted; the four
@@ -410,7 +420,15 @@ function makePage(label) {
     let flowMode = false;
     let templateVersion = "";
     let templateLegacyFloorS = 0;
+    // savedVersionMatches' third answer: older content versions of THIS template whose saved
+    // edits still land on the same paragraphs (/api/proposal-template sends them). Settable,
+    // because "a replaced template keeps its drafts' edits" is one of the things under test.
+    let templatePredecessors = [];
+    // What a blank token prints on this template (withTokenDefaults, which refreshDocumentFills
+    // and restoreEmptiedClause draw through). Settable for the same reason.
+    let templateTokenDefaults = {};
     let templateBlocks = null;
+    let templateAdjustments = null;   // the page's own binding: no render_adjustments loaded
     let _overridesTimer = null, _fillsTimer = null;
     const blockById = new Map();
     const pristineById = new Map();
@@ -494,14 +512,55 @@ function makePage(label) {
                dirty: el.classList.contains("tw-dirty"), fmt: el.classList.contains("tw-fmt"),
                empty: el.classList.contains("tw-empty") };
     };
+    /** A whole TEMPLATE the way a page load mounts it: the free paragraphs only (one inside a
+     *  region is drawn by the region previews, never as a block of its own), each text box's
+     *  paragraphs inside a box host so the input handler's box sweep sees the box it sees on the
+     *  real page, and the rest straight on the surface. Every paragraph through the page's own
+     *  renderBlock, so the fills and the pristine baselines are the shipped ones. */
+    function mountPage(records, tokens, version) {
+      TOKENS = tokens;
+      templateVersion = version;
+      templateBlocks = records;
+      blockById.clear(); pristineById.clear(); paraById.clear();
+      docSurface.childNodes = [];
+      const hosts = new Map();
+      for (const b of records) {
+        if (b.in_block != null) continue;
+        blockById.set(b.id, b);
+        let host = docSurface;
+        if (b.txbx != null) {
+          if (!hosts.has(b.txbx)) {
+            const box = new El("div", document);
+            box.className = "tw-txbx";
+            box.dataset.boxId = String(b.txbx);
+            docSurface.appendChild(box);
+            hosts.set(b.txbx, box);
+          }
+          host = hosts.get(b.txbx);
+        }
+        host.appendChild(renderBlock(b, tokens));
+      }
+    }
     return {
-      mount: mount, blockEl: blockEl, snapshot: snapshot,
+      mount: mount, blockEl: blockEl, snapshot: snapshot, mountPage: mountPage,
       setCaret: (r) => { CARET = r; },
       setTokens: (t) => { TOKENS = t; },
       // The B / I / U buttons and the size select, through the toolbar's own entry points.
       bold: (id, range) => { CARET = range; return toggleFormat(blockEl(id), "bold"); },
       italic: (id, range) => { CARET = range; return toggleFormat(blockEl(id), "italic"); },
       size: (id, range, pt) => applyFormat(blockEl(id), { size_pt: pt }, range),
+      // What the ribbon's size box writes (commitSize; its own scenario is in fmt-ribbon-harness):
+      // the size, and the statement that it was PICKED.
+      pick: (id, range, pt) => applyFormat(blockEl(id), { size_pt: pt, size_set: true }, range),
+      // Typing INSIDE the span a size was picked on: the browser edits the span's text node and
+      // leaves the span, and its attributes, in place.
+      typeInSizeSpan: (id, value) => {
+        const el = blockEl(id);
+        const sp = el.querySelectorAll("span").filter((s) => s.dataset && s.dataset.szSet === "1")[0];
+        if (!sp) return false;         // the flag is gone from the DOM: the scenario reports it, not a crash
+        sp.childNodes[0].nodeValue = value;
+        el.dispatchEvent({ type: "input" });
+      },
       resetFmt: (id, range) => applyFormat(blockEl(id),
         { bold: null, italic: null, underline: null, size_pt: null }, range),
       type: (id, value) => {
@@ -552,6 +611,8 @@ function makePage(label) {
       persist: () => schedulePersistOverrides(),
       refreshFills: (tokens) => { TOKENS = tokens; refreshDocumentFills(); },
       version: () => templateVersion,
+      setPredecessors: (list) => { templatePredecessors = list; },
+      setTokenDefaults: (d) => { templateTokenDefaults = d; },
     };
     `
   )(document, window, docSurface, F, Node, TW, El, Ev, persists, label);
@@ -985,6 +1046,56 @@ out.fixture = { block115: BLOCK_115.runs, tokens: TOKENS_A };
   };
 }
 
+// ═══ 12b. …unless the server names that version a PROVEN PREDECESSOR of this template ═════════
+// Kyle's re-saved GC forms (2026-10-02) replaced three files whose paragraph walk is identical, so
+// /api/proposal-template names the old content hash in template_version_predecessors, and an entry
+// stamped with it is replayed onto the same paragraph. The next save stamps it current.
+{
+  const seed = () => Object.assign(JSON.parse(JSON.stringify(SEED)), {
+    paragraph_overrides_all: {
+      "epoxy:Direct": { template_version: "tv-OLD", items: [
+        { id: 115, text: "Scope:  kept across the swap", runs: [{ text: "Scope:  kept across the swap", bold: true }] }] },
+    },
+  });
+  STORE.blob = seed();
+  const p = makePage("predecessor");
+  p.setPredecessors(["tv-OLD"]);
+  p.mount(TEMPLATE, TOKENS_A, VER);
+  p.restore("epoxy", "Direct", TOKENS_A);
+  const restored = p.snapshot(115);
+  p.persist();
+  const after = JSON.parse(JSON.stringify(TW.getState().paragraph_overrides_all["epoxy:Direct"]));
+  // The same entry when the server names a DIFFERENT predecessor: still refused.
+  STORE.blob = seed();
+  const q = makePage("not-its-predecessor");
+  q.setPredecessors(["tv-SOMETHING-ELSE"]);
+  q.mount(TEMPLATE, TOKENS_A, VER);
+  q.restore("epoxy", "Direct", TOKENS_A);
+  out.predecessor = { restored: restored, after: after, otherRestored: q.snapshot(115) };
+}
+
+// ═══ 12c. A BLANK TOKEN SHOWS THE TEMPLATE'S OWN PLACEHOLDER, and is still not an edit ════════
+// The GC spec line, as /api/proposal-template serves it. With the intake fields blank the page
+// draws what the document prints there (token_defaults, Kyle's words); a value typed at intake
+// replaces it; clearing it brings the placeholder back. None of that is the estimator's edit.
+{
+  STORE.blob = JSON.parse(JSON.stringify(SEED));
+  const SPEC = { id: 113, text: "Polished Concrete: per Spec {{spec_section}} & Drawings by {{architect}} dated {{drawings_dated_formatted}} (NO spec)",
+                 runs: [Object.assign({ text: "Polished Concrete: per Spec {{spec_section}} & Drawings by {{architect}} dated {{drawings_dated_formatted}} (NO spec)", bold: false }, FMT)] };
+  const p = makePage("token-defaults");
+  p.setTokenDefaults({ spec_section: "033543", architect: "xx Architects", drawings_dated_formatted: "8/1/26" });
+  p.mount([SPEC], {}, VER);
+  p.refreshFills({ spec_section: "", architect: null });
+  const blank = p.snapshot(113);
+  const blankCollect = p.collect();
+  p.refreshFills({ spec_section: "033543", architect: "Gould Evans", drawings_dated_formatted: "8/15/26" });
+  const filled = p.snapshot(113);
+  p.refreshFills({ spec_section: "033543", architect: "  ", drawings_dated_formatted: "8/15/26" });
+  const cleared = p.snapshot(113);
+  out.tokenDefaults = { blank: blank, blankCollect: blankCollect, filled: filled, cleared: cleared,
+                        finalCollect: p.collect() };
+}
+
 // ═══ 13. An untouched document still ships NOTHING ═══════════════════════════════════════════
 {
   STORE.blob = JSON.parse(JSON.stringify(SEED));
@@ -1315,6 +1426,145 @@ const TERMS = [BULLET_115, CLAUSE_51, CLAUSE_52, CLAUSE_53_V5];
   const neverDrawn = r.collect();
   out.putBack = { pristine: pristine.text, edited, storedEdit, back: back.text, collected, stored,
                   reloaded: reloaded.text, neverDrawn };
+}
+
+// 21 — THE SAME NO-BREAK SPACE, THROUGH THE LIVE RE-FILL. A line the estimator only FORMATTED is
+// re-filled in place from the sidebar (refreshFillsInPlace), which refuses a paragraph whose words
+// differ from the baseline ("the estimator typed") and moves the baseline with the value it writes.
+// Kept with its NBSP in it, the baseline made it refuse the very first time -- the number stayed at
+// last week's -- and, on a template where it did get through, wrote a baseline the next read took for
+// a hand edit, which drops the token tag from the stored runs. Two sidebar changes, so both sites show.
+// A synthetic line, because no shipped line carries both a no-break space and a fill.
+{
+  STORE.blob = JSON.parse(JSON.stringify(SEED));
+  const NB = {
+    id: 117,
+    text: "Area:\u00a0{{epoxy_sf}}\u00a0SF",
+    runs: [Object.assign({ text: "Area:\u00a0{{epoxy_sf}}\u00a0SF", bold: false }, FMT)],
+  };
+  const mine = () => ((TW.getState().paragraph_overrides_all || {})["epoxy:Direct"] || { items: [] })
+    .items.find((o) => o.id === 117) || null;
+  const s = makePage("nbsp-live-fill-twice");
+  s.mount([NB], TOKENS_A, VER);
+  const drawn = s.snapshot(117).text;
+  s.bold(117, [0, 5]);
+  s.refreshFills(TOKENS_B);
+  const mid = JSON.parse(JSON.stringify(mine()));
+  s.refreshFills({ scope_notes: "Grind and coat.", epoxy_sf: "7,500" });
+  out.nbspLiveFillTwice = { drawn: drawn, mid: mid, after: s.snapshot(117),
+                            stored: JSON.parse(JSON.stringify(mine())) };
+}
+
+// 20 — AN UNTOUCHED NO-BREAK SPACE IS NOT AN EDIT (review of the 2026-10-03 NOTES-box fix).
+// Kyle's GC "...installation.<NBSP>See Terms & Conditions." note, and three Gyp WORK lines, carry a
+// no-break space. serializeBlock reads every NBSP back as a plain space, but the baseline
+// setBlockContent kept still had it, so those paragraphs read as EDITED the moment the page was drawn:
+// collectOverrides shipped each as an override (with runs and sizes) on every persist and the document
+// printed a plain space where Kyle's no-break one was; any keystroke in the same box marked it tw-dirty;
+// and an edit put back by hand left the mark on. This is the REAL blocks of whole templates (handed in
+// by test_doc_editor_fidelity.py as argv[3]) through the page's own renderBlock, input handler,
+// collectOverrides and persist -- not a stand-in paragraph, because which paragraphs hold an NBSP is a
+// fact about Kyle's files.
+if (process.argv[3]) {
+  const cases = JSON.parse(fs.readFileSync(process.argv[3], "utf8")).pages;
+  out.pages = {};
+  for (const c of cases) {
+    const key = c.work_type + ":" + c.audience;
+    const fresh = (label) => {
+      STORE.blob = Object.assign(JSON.parse(JSON.stringify(SEED)),
+                                 { work_type: c.work_type, audience: c.audience });
+      const page = makePage(label);
+      page.mountPage(c.blocks, c.tokens, c.version);
+      return page;
+    };
+    const stored = () => JSON.parse(JSON.stringify(
+      (TW.getState().paragraph_overrides_all || {})[key] || { items: [] })).items;
+    const free = c.blocks.filter((b) => b.in_block == null);
+    const nbsp = free.filter((b) => String(b.text).indexOf("\u00a0") >= 0).map((b) => b.id);
+    const first = free.find((b) => b.id === nbsp[0]);
+    // A paragraph with words of its own in the SAME box, that holds no NBSP and no token: the one
+    // somebody types in while the NBSP line is left alone.
+    const sibling = first && free.find((b) => b.txbx === first.txbx && b.id !== first.id
+                                     && String(b.text).indexOf("\u00a0") < 0
+                                     && String(b.text).indexOf("{{") < 0 && String(b.text).trim().length > 12);
+    const res = { nbsp: nbsp, free: free.length, sibling: sibling ? sibling.id : null };
+
+    // (a) the page as it loads: nothing touched, nothing to send
+    let p = fresh("untouched-" + key);
+    res.untouchedOverrides = p.collect();
+    res.untouched = res.untouchedOverrides.map((o) => o.id);
+    res.dirtyOnLoad = free.filter((b) => p.snapshot(b.id).dirty).map((b) => b.id);
+    p.persist();
+    res.storedOnLoad = stored().map((o) => o.id);
+    // A template with no no-break space has only (a) to answer: the other three are about that line.
+    if (!first) { out.pages[key] = res; continue; }
+
+    // (b) a keystroke in a SIBLING line of the same box: the box sweep must not mark the NBSP lines,
+    // and only the sibling is sent
+    p = fresh("sibling-" + key);
+    p.append(sibling.id, " plus a word");
+    res.siblingEdit = { collected: p.collect().map((o) => o.id),
+                        nbspDirty: nbsp.filter((id) => p.snapshot(id).dirty) };
+    p.persist();
+    res.siblingEdit.stored = stored().map((o) => o.id);
+
+    // (c) a real edit to the NBSP line itself is still an edit: sent once, and the NBSP read as a space
+    p = fresh("edit-" + key);
+    const original = p.snapshot(first.id).text;
+    p.append(first.id, " and more");
+    const edited = p.collect();
+    res.realEdit = { collected: edited.map((o) => o.id), dirty: p.snapshot(first.id).dirty,
+                     text: (edited.find((o) => o.id === first.id) || {}).text,
+                     hasNbsp: JSON.stringify(edited).indexOf("\u00a0") >= 0 };
+    // (d) ...and put back by hand, the paragraph reads as the template again and the mark goes
+    p.type(first.id, original);
+    res.putBack = { collected: p.collect().map((o) => o.id), dirty: p.snapshot(first.id).dirty,
+                    text: p.snapshot(first.id).text };
+    res.original = original;
+    out.pages[key] = res;
+  }
+}
+
+// ═══ 20. A PICKED SIZE IS A STATEMENT THAT SURVIVES, AND ONLY THE SIZE BOX MAKES IT ═══════════
+// Block 115 is 8pt throughout, so picking 8pt on a stretch of it asks for nothing the template did
+// not already have -- and that is the case the writer cannot tell from a plain edit unless the run
+// says so (`size_set`, drawn as data-sz-set on the span). It has to come through a save, a reload,
+// a second save and an edit INSIDE the span; and no amount of plain typing may ever write it.
+{
+  STORE.blob = JSON.parse(JSON.stringify(SEED));
+  const p = makePage("pick-a");
+  p.mount(TEMPLATE, TOKENS_A, VER);
+  const text = p.snapshot(115).text;
+  const at = text.indexOf("Grind");
+  const flagged = (runs) => runs.filter((r) => r.size_set === true).map((r) => r.text);
+  p.pick(115, [at, at + 5], 8);
+  const sent = (p.collect().find((o) => o.id === 115) || {}).runs || [];
+  p.persist();
+  const q = makePage("pick-reloaded");
+  q.mount(TEMPLATE, TOKENS_A, VER);
+  q.restore("epoxy", "Direct", TOKENS_A);
+  const resent = (q.collect().find((o) => o.id === 115) || {}).runs || [];
+  q.persist();
+  const stored = (TW.getState().paragraph_overrides_all["epoxy:Direct"].items.find((o) => o.id === 115) || {}).runs || [];
+  q.typeInSizeSpan(115, "Grinded");
+  const typedInside = (q.collect().find((o) => o.id === 115) || {}).runs || [];
+  // PLAIN TYPING: a fresh page, words typed at the end, in the middle, and the whole text replaced.
+  const typing = {};
+  for (const [name, act] of [
+    ["append", (pg) => pg.append(115, " and more")],
+    ["replace", (pg) => pg.type(115, "Scope:  something else entirely")],
+    ["delete", (pg) => pg.type(115, "Scope:  ")],
+  ]) {
+    STORE.blob = JSON.parse(JSON.stringify(SEED));
+    const t = makePage("typing-" + name);
+    t.mount(TEMPLATE, TOKENS_A, VER);
+    act(t);
+    const got = (t.collect().find((o) => o.id === 115) || {});
+    typing[name] = { sizeSet: JSON.stringify(got).indexOf("size_set") >= 0, collected: !!got.id };
+  }
+  out.pickedSize = { sent: sent, flaggedSent: flagged(sent), flaggedReloaded: flagged(resent),
+                     flaggedStored: flagged(stored), typedInside: typedInside,
+                     flaggedAfterTypingInside: flagged(typedInside), typing: typing };
 }
 
 console.log(JSON.stringify(out));

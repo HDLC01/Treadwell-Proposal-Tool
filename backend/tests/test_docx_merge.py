@@ -164,13 +164,19 @@ def test_the_letters_section_stops_at_the_letters_last_paragraph(merged):
         "the proposal's page setup was rewritten by the merge")
 
     para_level = body.findall("./" + W + "p/" + W + "pPr/" + W + "sectPr")
-    assert len(para_level) == 2, (
+    # The proposal brings paragraph-level sections of its own since 2026-10-02 (its page 1 ends a
+    # section, so the Terms can carry their letterhead in a header: proposal_writer.
+    # _rebuild_terms_pages). The letter's two come first, ahead of them.
+    own = _doc(_proposal()).find(W + "body").findall("./" + W + "p/" + W + "pPr/" + W + "sectPr")
+    assert len(para_level) == 2 + len(own), (
         "expected the letterhead's two sections to both end on a paragraph, got "
-        "%d" % len(para_level))
+        "%d" % (len(para_level) - len(own)))
     # The letter's own margins, not the proposal's 1800-twip ones.
-    margins = {s.find(W + "pgMar").get(W + "left") for s in para_level}
+    margins = {s.find(W + "pgMar").get(W + "left") for s in para_level[:2]}
     assert margins == {"3420", "990"}, (
         "the letterhead's per-section margins did not survive: %s" % margins)
+    assert [_shape(s) for s in para_level[2:]] == [_shape(s) for s in own], (
+        "the proposal's own section breaks were rewritten by the merge")
 
 
 def test_the_letters_page_setup_is_not_left_governing_the_contract(merged):
@@ -279,7 +285,12 @@ def test_the_letters_empty_letterhead_chrome_is_not_inherited_by_the_contract(me
         "is no longer exercised — check it is still needed")
 
     body = _doc(merged).find(W + "body")
-    for sect in body.findall("./" + W + "p/" + W + "pPr/" + W + "sectPr"):
+    # The LETTER's sections, which come first. The proposal's own page-1 section (2026-10-02, see
+    # the test above) keeps the header and footer references the proposal always had.
+    n_letter = len(list(_doc(_letter()).iter(W + "sectPr")))
+    sects = body.findall("./" + W + "p/" + W + "pPr/" + W + "sectPr")[:n_letter]
+    assert len(sects) == n_letter
+    for sect in sects:
         assert sect.find(W + "headerReference") is None
         assert sect.find(W + "footerReference") is None
 

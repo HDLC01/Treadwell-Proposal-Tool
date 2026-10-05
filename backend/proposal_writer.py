@@ -93,6 +93,67 @@ def pick_template(work_type: str, audience: str | None) -> Path:
     return TEMPLATES_ROOT / TEMPLATE_PICKER[key]
 
 
+# ─── What a blank intake field prints, per template ──────────────────
+# The GC forms' spec, finish and addenda lines carry tokens since 2026-10-02
+# (annotate_templates.GC_SPAN_RULES), and each one stands where Kyle had a placeholder. A job
+# whose intake left that field blank prints the PLACEHOLDER, exactly as the file printed it
+# before the token went in -- so an unfinished proposal still reads as unfinished, and nothing
+# is invented. Per file, because each form has its own spec number and finish tag.
+# test_gc_template_tokens.py renders every file with these and compares the lines with Kyle's
+# raw file in docs/GC Templates/.
+#
+# APPLIED ONLY TO fill_proposal's OWN COPY of the values (`_with_token_defaults`, right before
+# the flat pass), and served to the editor with the template (/api/proposal-template
+# `token_defaults`) so the page shows the same words. Never written into the caller's `values`:
+# /api/generate writes those back onto the draft and fills the estimate sheet from them
+# (`architect` -> Epoxy!B8, `spec_section` -> the Specs+Dwgs+Addn tab), and a blank there must
+# stay blank rather than become "xx Architects".
+TEMPLATE_TOKEN_DEFAULTS: dict[str, dict[str, str]] = {
+    "GC/xx TREADWELL POLISH PROPOSAL - xx.docx": {
+        "spec_section": "033543", "architect": "xx Architects",
+        "drawings_dated_formatted": "8/1/26", "finish_tag": "PC", "plan_sheet": "A900",
+        "addenda_count": "0",
+    },
+    "GC/xx TREADWELL RESINOUS PROPOSAL - xx.docx": {
+        "spec_section": "096723", "architect": "xx Architects",
+        "drawings_dated_formatted": "8/1/26", "finish_tag": "RESx", "plan_sheet": "A900",
+        "addenda_count": "0",
+    },
+    "GC/xx TREADWELL SEALER PROPOSAL - xx.docx": {
+        "spec_section": "03xx", "architect": "xx Architects",
+        "drawings_dated_formatted": "8/1/26", "finish_tag": "SC", "plan_sheet": "A900",
+        "addenda_count": "0",
+    },
+}
+
+
+def _template_rel(path: Path) -> str:
+    """`path` relative to TEMPLATES_ROOT, as a TEMPLATE_PICKER value spells it; "" for a file
+    outside the templates (a test's copy), which has no per-file table entry."""
+    try:
+        return Path(path).resolve().relative_to(TEMPLATES_ROOT.resolve()).as_posix()
+    except (OSError, ValueError):
+        return ""
+
+
+def template_token_defaults(work_type: str, audience: str | None) -> dict[str, str]:
+    """{token: what it prints when blank} for the template `(work_type, audience)` picks;
+    {} for a template with none."""
+    return dict(TEMPLATE_TOKEN_DEFAULTS.get(_template_rel(pick_template(work_type, audience)), {}))
+
+
+def _with_token_defaults(values: Mapping[str, Any], defaults: Mapping[str, str]) -> dict:
+    """A copy of `values` in which every token of `defaults` that is missing, None or only
+    whitespace holds its default. A 0 is a value (it prints "0"), as it is in the editor's
+    proposal-review.js withTokenDefaults, which applies the same rule to the same table."""
+    out = dict(values)
+    for key, default in defaults.items():
+        cur = out.get(key)
+        if not str("" if cur is None else cur).strip():
+            out[key] = default
+    return out
+
+
 # ─── Token substitution ───────────────────────────────────────────────
 TOKEN_RE = re.compile(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}")
 
@@ -1603,8 +1664,14 @@ def _txbx_default_hp(txbx) -> int:
     return max(set(sizes), key=sizes.count) if sizes else 18   # half-points; 18 = 9pt
 
 
-def _scale_txbx_runs(txbx, scale: float, exempt: dict | None = None) -> None:
+def _scale_txbx_runs(txbx, scale: float, exempt: dict | None = None,
+                     scale_bullets: bool = False) -> None:
     """Directly shrink every run's font size in a text box by `scale`.
+
+    `scale_bullets` also shrinks the paragraph mark of every BULLETED line that has words in it,
+    which is what the bullet glyph is drawn at (see `_bullets_overflow_when_loose`). Nothing else's
+    mark is ever touched: an empty line keeps its full height (the editor draws it that way,
+    `fit.hp`), and an unbulleted line's mark does not size its text lines at all.
 
     `exempt` is `_user_sized_paragraphs`' register, keyed by the id() of paragraphs whose sizes
     the ESTIMATOR chose (it pins the elements; see `_hand_formatted`). Those are skipped:
@@ -1644,6 +1711,83 @@ def _scale_txbx_runs(txbx, scale: float, exempt: dict | None = None) -> None:
                 el = OxmlElement(tag)
                 rpr.append(el)
             el.set(qn("w:val"), str(new_hp))
+    if scale_bullets:
+        for p in txbx.iter(qn("w:p")):
+            if _para_num_ref(p) is None or id(p) in (exempt or ()):
+                continue
+            if not "".join(t.text or "" for t in p.iter(qn("w:t"))).strip():
+                continue
+            mark = p.find(qn("w:pPr") + "/" + qn("w:rPr"))
+            if mark is None:
+                continue
+            for tag in ("w:sz", "w:szCs"):
+                el = mark.find(qn(tag))
+                v = el.get(qn("w:val")) if el is not None else None
+                if v and v.isdigit():
+                    el.set(qn("w:val"), str(min(int(v), max(8, int(round(int(v) * scale))))))
+
+
+# A bulleted line is as tall as its BULLET GLYPH: LibreOffice draws the list marker at the size of the
+# paragraph's mark (`w:pPr/w:rPr/w:sz`; none of Kyle's numbering levels sets a size of its own), in a
+# symbol face whose line is 1.32 x the size (a 9pt mark = an 11.9pt row, measured on the GC PRICE
+# box, whatever the words' size). The shrink scales words and not marks, so a shrunk bulleted row kept
+# its full height. 2026-10-03: GC Polish + 2 options shrank to 0.767 and printed Kyle's own last
+# rows (Generator...) clean off the bottom of the box, while the estimate -- which assumes a line is as
+# tall as its words -- said it fitted and the editor warned nobody.
+_TXBX_BULLET_LINE_H = 1.32
+
+
+def _bullets_overflow_when_loose(d, txbx, box: dict | None, scale: float, exempt=None) -> bool:
+    """Would the box still run past its bottom edge at `scale` if its bulleted lines kept their
+    bullet size (the marks unscaled)? Counted the way LibreOffice lays the box out: a line of words
+    is 1.2 x its (scaled) size, a bulleted paragraph's first line at least 1.32 x its mark, an empty
+    line its mark. Trailing empty lines are left out -- they are clipped harmlessly, which is why
+    most boxes never showed this. False when the geometry is unknown."""
+    if not box:
+        return False
+    w_pt, h_pt = box.get("w_pt"), box.get("h_pt")
+    if not w_pt or not h_pt or w_pt <= 0 or h_pt <= 0:
+        return False
+    lIns, rIns, tIns, bIns = _txbx_insets(txbx)
+    usable_w = w_pt - (lIns + rIns) / _EMU_PER_PT
+    usable_h = h_pt - (tIns + bIns) / _EMU_PER_PT
+    if usable_w <= 0 or usable_h <= 0:
+        return False
+    default_hp = _txbx_default_hp(txbx)
+    total = pending_empty = 0.0
+    for p in txbx.iter(qn("w:p")):
+        text = "".join(t.text or "" for t in p.iter(qn("w:t")))
+        mark_sz = p.find(qn("w:pPr") + "/" + qn("w:rPr") + "/" + qn("w:sz"))
+        try:
+            mark_hp = int(mark_sz.get(qn("w:val"))) if mark_sz is not None else None
+        except (TypeError, ValueError):
+            mark_hp = None
+        if not text.strip():
+            pending_empty += _TXBX_LINE_H * ((mark_hp or default_hp) / 2.0)
+            continue
+        total += pending_empty
+        pending_empty = 0.0
+        run_hp = None
+        for r in p.iter(qn("w:r")):
+            if not "".join(t.text or "" for t in r.iter(qn("w:t"))):
+                continue
+            sz = r.find(qn("w:rPr") + "/" + qn("w:sz"))
+            if sz is not None and (sz.get(qn("w:val")) or "").isdigit():
+                run_hp = int(sz.get(qn("w:val")))
+            break
+        run_hp = run_hp if run_hp is not None else default_hp
+        kept = bool(exempt) and id(p) in exempt            # a deliberate size is never shrunk
+        font_pt = (run_hp if kept else max(8, int(round(run_hp * scale)))) / 2.0
+        first_w, body_w = _fit_line_widths_pt(d, p, usable_w)
+        first_chars = max(1.0, first_w / (_TXBX_GLYPH_W * font_pt))
+        body_chars = max(1.0, body_w / (_TXBX_GLYPH_W * font_pt))
+        lines = max(1, math.ceil((len(text) + body_chars - first_chars) / body_chars))
+        height = lines * _TXBX_LINE_H * font_pt
+        if _para_num_ref(p) is not None:
+            mark_pt = (mark_hp if mark_hp is not None else run_hp) / 2.0
+            height = max(height, (lines - 1) * _TXBX_LINE_H * font_pt + _TXBX_BULLET_LINE_H * mark_pt)
+        total += height
+    return total > usable_h
 
 
 def _shrink_overflowing_text_boxes(d: Document, report: list | None = None) -> int:
@@ -1662,6 +1806,11 @@ def _shrink_overflowing_text_boxes(d: Document, report: list | None = None) -> i
 
     Nothing is cut: a box still over its height at the 0.60 floor keeps the floor size and the
     rest of its text runs on past the box's bottom edge, because the box itself is never grown.
+
+    Words are not the only thing that sets a line's height: a bulleted line is as tall as its bullet,
+    drawn at the paragraph MARK's size, which scaling the runs leaves alone. A box the estimate says
+    can fit (not at the floor) whose bullets would keep it too tall for LibreOffice therefore has
+    its bulleted marks scaled too (`_bullets_overflow_when_loose`); any other mark is never touched.
 
     `report`, when given, gets one record per box this pass decided, which is what the editor
     shows (POST /api/proposal-fit): `{id, scale, default_hp, exempt, at_floor, content_pt,
@@ -1690,8 +1839,15 @@ def _shrink_overflowing_text_boxes(d: Document, report: list | None = None) -> i
         applied = scale < 0.999
         # Read BEFORE the scaling below rewrites the sizes it is counted from.
         default_hp = _txbx_default_hp(txbx) if report is not None else None
+        at_floor = bool(content_pt > 0 and usable_pt < content_pt * _TXBX_SCALE_FLOOR)
         if applied:
-            _scale_txbx_runs(txbx, scale, _user_sized_paragraphs(d))
+            user_sized = _user_sized_paragraphs(d)
+            # A box the estimate says CAN fit but whose bullets would keep it too tall: shrink the
+            # bullets too. A box already at the floor is not touched -- the estimate itself says it
+            # overflows, the editor warns, and its text is the estimator's to cut.
+            _scale_txbx_runs(txbx, scale, user_sized, scale_bullets=not at_floor
+                             and _bullets_overflow_when_loose(
+                                 d, txbx, boxes[i] if i < len(boxes) else None, scale, user_sized))
         if report is not None:
             ids = _user_sized_block_ids(d)
             report.append({
@@ -1699,7 +1855,7 @@ def _shrink_overflowing_text_boxes(d: Document, report: list | None = None) -> i
                 "scale": scale if applied else 1.0,
                 "default_hp": default_hp,
                 "exempt": sorted(ids[id(p)] for p in txbx.iter(qn("w:p")) if id(p) in ids),
-                "at_floor": bool(content_pt > 0 and usable_pt < content_pt * _TXBX_SCALE_FLOOR),
+                "at_floor": at_floor,
                 "content_pt": round(content_pt, 3),
                 "usable_pt": round(usable_pt, 3),
             })
@@ -1743,6 +1899,588 @@ def _force_terms_on_new_page(d: Document) -> bool:
     if ppr.find(qn("w:pageBreakBefore")) is None:
         ppr.insert(0, OxmlElement("w:pageBreakBefore"))
     return True
+
+
+# ─── THE TERMS PAGES: one letterhead per page, wherever the renderer breaks them ───────────────
+# The 2026-10-02 audit of a Direct Epoxy proposal ("Release check 9-26", the 4-page LibreOffice
+# PDF): clause 9 broke mid-sentence ("...a reasonable opportunity" / "to" / "inspect the
+# alleged..."), clause 18 printed in three pieces round a one-inch hole, and the last page had no
+# footer and no red bar -- its letterhead was drawn at y=42..833pt, 42pt low and off the sheet.
+#
+# THE CAUSE IS HOW THE PAGES ARE BUILT, NOT A FONT. Each Terms page's full-page letterhead PNG is a
+# picture anchored RELATIVE TO A PARAGRAPH: an empty "host" paragraph Kyle put at the top of each
+# page in Word (Direct and GC: body paragraphs 46, 63 and 79; Gyp: 46, 67, 83 and 105). To land
+# the hosts on page tops he padded each page with empty lines and split clause paragraphs by hand
+# exactly where Word broke the line at the foot of a page. That holds only in a renderer that
+# breaks every line where Word does. LibreOffice does not: not with Liberation Sans standing in
+# for Cambria, and not with Caladea, Cambria's metric twin, either (measured in the production
+# image, backend/ops/terms_render_proof.py): a host lands mid-page with its letterhead, two on one
+# page and none on the next, the footer bar goes off the sheet, and each hand split prints as a
+# broken sentence or a hole. A page break before every host (the obvious repair) was measured too
+# and rejected: it keeps one letterhead per page only for as long as each page's text still fits
+# above the next break, which the first edited clause or substituted font undoes, and it leaves
+# every hand split in place.
+#
+# SO THE PAGE CARRIES THE LETTERHEAD, NOT A PARAGRAPH. `_rebuild_terms_pages`, at render time and
+# after every override has landed on the pristine walk:
+#   1. ends page 1's section on the last paragraph before the Terms, with a copy of the document's
+#      own section properties, so page 1's setup, header, footer and art are untouched;
+#   2. gives the Terms section ONE letterhead -- Kyle's anchor, copied into the section's header,
+#      page-relative at (0, 0) and behind the text, with its own relationship to the same PNG -- so
+#      every Terms page prints it, however many there are and wherever they break; an empty footer
+#      of its own; and a top margin that clears the logo, the job Kyle's spacer lines did;
+#   3. takes the per-page art out of the hosts, drops the hosts and the spacer lines round them
+#      when they print nothing, and rejoins every clause Kyle split by hand: one that stops
+#      mid-sentence, followed by its unnumbered continuation.
+#
+# ONE PLAN, TWO READERS. `_terms_layout` reads the plan off the PRISTINE template. fill_proposal
+# holds it from before Phase 0 and applies it last; `render_adjustments` hands the same plan to the
+# editor as block ids (/api/proposal-template), so the page and the PDF make the same changes.
+# Nothing here changes the walk or a template file, so every saved edit lands where it always did.
+#
+# 126pt: the logo on the Terms letterhead ends at y=120.1pt (measured off image2.png, the art
+# every template's Terms pages use), and Kyle's own continuation pages start their text at ~124pt
+# (the host line and four spacer lines under the 1in margin; 124.1pt in LibreOffice, ~128 in Word).
+_TERMS_TOP_MARGIN_TW = 2520
+# A clause paragraph that ends like this ends a sentence; one that does not, followed by an
+# unnumbered paragraph, is one of Kyle's hand splits. Served to the editor verbatim (it reads the
+# same in a JS RegExp).
+_TERMS_SENTENCE_END = "[.:;!?)\\]\"'”’]\\s*$"
+_TERMS_SENTENCE_END_RE = re.compile(_TERMS_SENTENCE_END)
+# A picture this share of the sheet or more, in both directions, is a letterhead, not a logo.
+_FULL_PAGE_SHARE = 0.9
+_WP14_NS = "http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing"
+
+
+def _is_full_page_art(anchor, page_emu) -> bool:
+    """A `wp:anchor` drawing a picture over (nearly) the whole sheet: one of Kyle's letterheads."""
+    if anchor is None or anchor.tag != qn("wp:anchor"):
+        return False
+    if anchor.find(".//" + qn("a:blip")) is None:
+        return False
+    ext = anchor.find(qn("wp:extent"))
+    try:
+        cx, cy = int(ext.get("cx")), int(ext.get("cy"))
+    except (AttributeError, TypeError, ValueError):
+        return False
+    return cx >= _FULL_PAGE_SHARE * page_emu[0] and cy >= _FULL_PAGE_SHARE * page_emu[1]
+
+
+def _art_anchors(p_elem, page_emu) -> list:
+    """The full-page letterhead anchors a body paragraph hosts (never a VML Fallback twin)."""
+    return [a for a in p_elem.iter(qn("wp:anchor"))
+            if not _is_fallback_paragraph(a) and _is_full_page_art(a, page_emu)]
+
+
+# What an empty line may hold and still be taken out: its own properties, and runs that carry
+# nothing but formatting, empty text and Word's own "a page broke here last time" hint.
+_EMPTY_RUN_CHILDREN = tuple(qn(t) for t in ("w:rPr", "w:t", "w:lastRenderedPageBreak"))
+
+
+def _prints_nothing(p_elem, ignore=()) -> bool:
+    """True when the paragraph is an empty line and nothing else: its children are its `w:pPr`
+    (without section properties) and runs holding only formatting, empty text and the
+    `w:lastRenderedPageBreak` hint -- apart from the drawings in `ignore` (the letterheads being
+    taken out of it). Anything else -- a word, a tab, a break, a bookmark, a field, a tracked
+    change, another drawing -- keeps it. The test every drop below is made against, on the
+    template and again at render time, where an estimator's edit can have put words in it."""
+    ppr = p_elem.find(qn("w:pPr"))
+    if ppr is not None and ppr.find(qn("w:sectPr")) is not None:
+        return False
+    for child in p_elem:
+        if child.tag == qn("w:pPr"):
+            continue
+        if child.tag != qn("w:r"):
+            return False
+        for rc in child:
+            if any(rc is g for g in ignore):
+                continue
+            if rc.tag not in _EMPTY_RUN_CHILDREN:
+                return False
+            if rc.tag == qn("w:t") and (rc.text or "").strip():
+                return False
+    return True
+
+
+def _terms_layout(d: Document):
+    """The Terms pages' plan, read off the PRISTINE template; None when the template has no Terms
+    section built the way this understands (Budget has no Terms at all), and then nothing about the
+    Terms is changed and `_force_terms_on_new_page` alone applies, as it always did.
+
+    `{"break_after", "first", "hosts", "art", "drop", "joins", "heading", "page_emu"}`, all lxml
+    elements of `d` (body paragraphs, and `art` the anchor to copy): the paragraph page 1's section
+    ends on, the first Terms paragraph (a host, or the heading when the heading hosts the art), the
+    hosts, Kyle's first Terms-page anchor, the paragraphs dropped when they print nothing, and the
+    `(head, continuation)` pairs of every hand split. Read-only."""
+    body = d.element.body
+    tops = [c for c in body if c.tag == qn("w:p")]
+    heading = next((i for i, p in enumerate(tops)
+                    if _p_text(p).strip().upper() == "TERMS AND CONDITIONS"), None)
+    if heading is None:
+        return None
+    # A template that already has sections of its own is not one this was built against.
+    if any(p.find(qn("w:pPr") + "/" + qn("w:sectPr")) is not None for p in tops):
+        return None
+    w_pt, h_pt = page_size(d)
+    page_emu = (w_pt * _EMU_PER_PT, h_pt * _EMU_PER_PT)
+    first = next((j for j in range(heading, max(-1, heading - 4), -1)
+                  if _art_anchors(tops[j], page_emu)), None)
+    if first is None or first == 0:
+        return None
+    hosts = [i for i in range(first, len(tops)) if _art_anchors(tops[i], page_emu)]
+    arts = {i: _art_anchors(tops[i], page_emu) for i in hosts}
+
+    def blank(i):
+        return _prints_nothing(tops[i], [a.getparent() for a in arts.get(i, [])])
+
+    drop = set()
+    # The first host and the empty lines between it and the heading (Gyp has one): the Terms'
+    # first page starts at the section's own top margin now. Never the lines BEFORE it -- those
+    # are page 1's.
+    for i in range(first, heading):
+        if blank(i):
+            drop.add(i)
+    # Every later host, and the whole run of empty lines round it: Kyle's padding to the foot of
+    # one page and down past the logo on the next.
+    for h in hosts:
+        if h <= heading or not blank(h):
+            continue
+        lo = h
+        while lo - 1 > heading and blank(lo - 1):
+            lo -= 1
+        hi = h
+        while hi + 1 < len(tops) and blank(hi + 1):
+            hi += 1
+        drop.update(range(lo, hi + 1))
+    # The empty lines after the last words: they can only ever spill onto a page of their own.
+    tail = len(tops) - 1
+    while tail > heading and blank(tail):
+        drop.add(tail)
+        tail -= 1
+
+    # The hand splits, from the first numbered clause on (the heading lines above it are not
+    # sentences). A pair is two paragraphs with words, with nothing between them but dropped lines.
+    clause0 = next((i for i in range(heading, len(tops)) if _para_num_ref(tops[i]) is not None), None)
+    joins = []
+    if clause0 is not None:
+        printing = [i for i in range(clause0, len(tops)) if i not in drop and _own_text(tops[i]).strip()]
+        for a, b in zip(printing, printing[1:]):
+            if any(k not in drop for k in range(a + 1, b)):
+                continue                     # a kept line between them: two paragraphs, as written
+            if _TERMS_SENTENCE_END_RE.search(_own_text(tops[a]).strip()):
+                continue
+            if _para_num_ref(tops[b]) is not None:
+                continue                     # the next clause, not a continuation
+            joins.append((tops[a], tops[b]))
+
+    return {
+        "heading": tops[heading],
+        "first": tops[first],
+        "break_after": tops[first - 1],
+        "hosts": [tops[i] for i in hosts],
+        "art": arts[first][0],
+        "drop": [tops[i] for i in sorted(drop)],
+        "joins": joins,
+        "page_emu": page_emu,
+    }
+
+
+_BLOCK_TAGS = tuple(qn(t) for t in ("w:p", "w:tbl", "w:sdt", "w:sectPr"))
+
+
+def _next_block(p_elem):
+    """The block-level element after `p_elem` (a paragraph, table, content control or the body's
+    section properties), skipping the bookmarks and range marks that may sit between two."""
+    nxt = p_elem.getnext()
+    while nxt is not None and nxt.tag not in _BLOCK_TAGS:
+        nxt = nxt.getnext()
+    return nxt
+
+
+def _join_paragraphs(head, tail) -> None:
+    """Move `tail`'s content onto the end of `head`, then take `tail` out. `head` keeps its own
+    paragraph properties (the clause number and indent); every run keeps its own formatting. One
+    space goes between them when neither side has one -- "opportunity to" + "inspect" -- and none
+    when Kyle's split already left it ("filed with " + "AAA.")."""
+    a_text, b_text = _own_text(head), _own_text(tail)
+    if a_text and b_text and not a_text[-1].isspace() and not b_text[0].isspace():
+        last_t = None
+        for t in head.iter(qn("w:t")):
+            last_t = t
+        if last_t is not None:
+            last_t.text = (last_t.text or "") + " "
+            last_t.set(qn("xml:space"), "preserve")
+    for child in list(tail):
+        if child.tag == qn("w:pPr"):
+            continue
+        head.append(child)
+    parent = tail.getparent()
+    if parent is not None:
+        parent.remove(tail)
+
+
+def _take_out_art(p_elem, page_emu) -> int:
+    """Remove the full-page letterhead(s) this paragraph hosts, and a run left with nothing in it."""
+    n = 0
+    for anchor in _art_anchors(p_elem, page_emu):
+        drawing = anchor.getparent()
+        holder = drawing
+        # A picture wrapped for old readers sits in mc:AlternateContent; the whole wrapper goes.
+        for anc in drawing.iterancestors():
+            if anc.tag == "{%s}AlternateContent" % _MC_NS:
+                holder = anc
+                break
+            if anc.tag == qn("w:r"):
+                break
+        run = holder.getparent()
+        while run is not None and run.tag != qn("w:r"):
+            run = run.getparent()
+        holder.getparent().remove(holder)
+        n += 1
+        if run is not None and run.getparent() is not None:
+            leftover = [c for c in run if c.tag not in (qn("w:rPr"), qn("w:lastRenderedPageBreak"))]
+            if not leftover:
+                run.getparent().remove(run)
+    return n
+
+
+def _max_drawing_id(d: Document) -> int:
+    """The largest `wp:docPr` id in the package -- the body AND every header and footer: Word reads
+    a duplicate drawing id as a document to repair."""
+    best = 0
+    for part in d.part.package.iter_parts():
+        root = getattr(part, "element", None)
+        if root is None:
+            continue
+        for dp in root.iter(qn("wp:docPr")):
+            try:
+                best = max(best, int(dp.get("id")))
+            except (TypeError, ValueError):
+                continue
+    return best
+
+
+def _terms_header_paragraph(anchor):
+    """The one paragraph of the Terms section's header: Kyle's letterhead, nothing else."""
+    p = OxmlElement("w:p")
+    r = OxmlElement("w:r")
+    rpr = OxmlElement("w:rPr")
+    rpr.append(OxmlElement("w:noProof"))
+    r.append(rpr)
+    drawing = OxmlElement("w:drawing")
+    drawing.append(anchor)
+    r.append(drawing)
+    p.append(r)
+    return p
+
+
+def _rebuild_terms_pages(d: Document, layout) -> bool:
+    """Apply `_terms_layout`'s plan to the FILLED document (see the note above). Returns True when
+    the Terms became a section with its own letterhead; False, with the document untouched, when
+    there is no plan or the document no longer matches it (the old single-section output, with
+    `_force_terms_on_new_page`'s break, is what then prints)."""
+    if not layout:
+        return False
+    body = d.element.body
+    first, brk = layout["first"], layout["break_after"]
+    body_sect = body.find(qn("w:sectPr"))
+    if body_sect is None or first.getparent() is not body or brk.getparent() is not body:
+        return False
+    art = layout["art"]
+    blip = art.find(".//" + qn("a:blip"))
+    rid = blip.get(qn("r:embed")) if blip is not None else None
+    image_part = d.part.related_parts.get(rid) if rid else None
+    if image_part is None:
+        return False
+    from docx.enum.section import WD_SECTION
+    from docx.opc.constants import RELATIONSHIP_TYPE as RT
+    from docx.shared import Twips
+
+    anchor = copy.deepcopy(art)
+    page_emu = layout["page_emu"]
+
+    # 1. Page 1's section ends here, on a COPY of the document's own section properties: its page
+    #    setup, header and footer references stay exactly what page 1 had.
+    ppr = _get_or_make_ppr(brk)
+    sect1 = copy.deepcopy(body_sect)
+    change = ppr.find(qn("w:pPrChange"))
+    if change is not None:
+        change.addprevious(sect1)
+    else:
+        ppr.append(sect1)
+
+    # 2. The Terms section: a new page, its own header (the letterhead) and its own empty footer,
+    #    and the top margin that clears the logo.
+    for ref in body_sect.findall(qn("w:headerReference")) + body_sect.findall(qn("w:footerReference")):
+        body_sect.remove(ref)
+    for el in body_sect.findall(qn("w:titlePg")):
+        body_sect.remove(el)
+    sec = d.sections[-1]
+    sec.start_type = WD_SECTION.NEW_PAGE
+    sec.header.is_linked_to_previous = False
+    sec.footer.is_linked_to_previous = False
+    if sec.top_margin is None or sec.top_margin < Twips(_TERMS_TOP_MARGIN_TW):
+        sec.top_margin = Twips(_TERMS_TOP_MARGIN_TW)
+    header = sec.header
+    new_rid = header.part.relate_to(image_part, RT.IMAGE)
+    for tag in ("wp:positionH", "wp:positionV"):
+        pos = anchor.find(qn(tag))
+        if pos is None:
+            pos = OxmlElement(tag)
+            anchor.append(pos)
+        pos.set("relativeFrom", "page")
+        for c in list(pos):
+            pos.remove(c)
+        off = OxmlElement("wp:posOffset")
+        off.text = "0"
+        pos.append(off)
+    anchor.find(".//" + qn("a:blip")).set(qn("r:embed"), new_rid)
+    anchor.set("behindDoc", "1")
+    for key in list(anchor.attrib):
+        if key.startswith("{%s}" % _WP14_NS):        # anchorId/editId: Word mints its own
+            del anchor.attrib[key]
+    docpr = anchor.find(qn("wp:docPr"))
+    if docpr is not None:
+        docpr.set("id", str(_max_drawing_id(d) + 1))
+    hdr = header._element
+    for p in hdr.findall(qn("w:p")):
+        hdr.remove(p)
+    hdr.append(_terms_header_paragraph(anchor))
+
+    # 3. The per-page art out of the hosts, then the empty lines dropped, then the hand splits
+    #    rejoined -- in that order, because a split is only rejoined across lines that are GONE: a
+    #    line an estimator typed into between the two halves stays, and so do both halves.
+    for host in layout["hosts"]:
+        _take_out_art(host, page_emu)
+    for p in layout["drop"]:
+        if p.getparent() is body and _prints_nothing(p):
+            body.remove(p)
+    absorbed: dict = {}                      # element -> the paragraph its words now live in
+    for head, tail in layout["joins"]:
+        into = absorbed.get(head, head)
+        if into.getparent() is not body or tail.getparent() is not body:
+            continue
+        if _next_block(into) is not tail:
+            continue
+        a_text, b_text = _own_text(into).strip(), _own_text(tail).strip()
+        if not a_text or not b_text or _TERMS_SENTENCE_END_RE.search(a_text):
+            continue
+        if _para_num_ref(tail) is not None:
+            continue
+        _join_paragraphs(into, tail)
+        absorbed[tail] = into
+
+    # The first Terms paragraph keeps the page break it has always had (and the Sealer's heading
+    # already carries), now redundant with the section break and harmless: neither Word nor
+    # LibreOffice breaks a page again for a paragraph that already starts one.
+    start = brk.getnext()
+    while start is not None and start.tag != qn("w:p"):
+        start = start.getnext()
+    if start is not None:
+        sppr = _get_or_make_ppr(start)
+        if sppr.find(qn("w:pageBreakBefore")) is None:
+            _insert_pbb(sppr)
+    return True
+
+
+def _insert_pbb(ppr) -> None:
+    """`w:pageBreakBefore` in its schema slot: after pStyle / keepNext / keepLines, before the rest."""
+    pbb = OxmlElement("w:pageBreakBefore")
+    for child in ppr:
+        if child.tag not in (qn("w:pStyle"), qn("w:keepNext"), qn("w:keepLines")):
+            child.addprevious(pbb)
+            return
+    ppr.append(pbb)
+
+
+# ─── WORK lines that would print nothing but their label ───────────────────────────────────────
+# The same audit: a blank Texture printed "Texture:" on a line of its own and a blank WORK note a
+# bare "Notes:" bullet. Hanz chose on 2026-09-25 that a blank Texture leaves the whole line out
+# (memory: live-proposal-fix-plan-decisions), and nothing ever did it: fix 2 of that plan (ef69567)
+# only stopped the line printing "Texture: 0". Direct Epoxy's Texture row also lives inside the
+# {{#system}} region, cloned per priced system, which no paragraph-level rule reaches.
+#
+# THE LINES ARE THE TEMPLATE'S OWN "Label: {{token}}" ROWS for the tokens below, found on the
+# pristine template (so the editor is told the same ids, `render_adjustments`) and MARKED there,
+# so a {{#system}} clone carries the mark. After substitution a marked line goes when it prints
+# nothing but its label: no letter or digit after its first colon (Combo's "Texture: ." too). Kept
+# whenever anything else is on it -- the estimator's words, a whole-line rewrite, Kyle's own words
+# on the GC forms (which are therefore never marked) -- and kept when it heads sub-items that print
+# (Gyp's "Notes:" over "Floor Leveling is NOT included"), when it is the last line in its box, or
+# when it holds a drawing.
+_BARE_LINE_TOKENS = ("texture", "system.texture", "work_notes")
+_BARE_LINE_RE = re.compile(
+    r"^\s*(?P<label>[^{}:]*[^\s{}:][^{}:]*:)\s*\{\{\s*(?P<token>[a-zA-Z_][a-zA-Z0-9_.]*)\s*\}\}\s*\.?\s*$")
+# Marked in the `w:` namespace for `_OPTIONS_HEADING_ATTR`'s reason, and always stripped before
+# the save (`_omit_bare_lines`).
+_BARE_LINE_ATTR = qn("w:twBareLine")
+
+
+def _bare_line_spec(text):
+    """`{"label", "token"}` when a template paragraph's own text is a "Label: {{token}}" WORK row for
+    one of `_BARE_LINE_TOKENS`, else None."""
+    m = _BARE_LINE_RE.match(text or "")
+    if not m or m.group("token") not in _BARE_LINE_TOKENS:
+        return None
+    return {"label": m.group("label").strip(), "token": m.group("token")}
+
+
+def _ilvl(ref) -> int:
+    try:
+        return int(ref[1])
+    except (TypeError, ValueError, IndexError):
+        return 0
+
+
+def _sub_items(p_elem) -> list:
+    """The paragraphs right after `p_elem` in its container that are deeper levels of its list."""
+    ref = _para_num_ref(p_elem)
+    out = []
+    if ref is None:
+        return out
+    nxt = p_elem.getnext()
+    while nxt is not None:
+        if nxt.tag == qn("w:p"):
+            r = _para_num_ref(nxt)
+            if r is None or r[0] != ref[0] or _ilvl(r) <= _ilvl(ref):
+                break
+            out.append(nxt)
+        nxt = nxt.getnext()
+    return out
+
+
+def _mark_bare_lines(d: Document) -> int:
+    """Mark every copy of every eligible label line on the PRISTINE template (both copies of a text
+    box, the VML Fallback twin included, as `_mark_options_headings` does)."""
+    n = 0
+    for p in d.element.body.iter(qn("w:p")):
+        if _bare_line_spec(_own_text(p)) is not None:
+            p.set(_BARE_LINE_ATTR, "1")
+            n += 1
+    return n
+
+
+def _line_is_bare(p_elem) -> bool:
+    """Prints nothing but its label: words before a first colon, no letter or digit after it, and
+    nothing drawn, anchored or sectioned in it."""
+    text = _own_text(p_elem)
+    colon = text.find(":")
+    if colon < 0 or not text[:colon].strip():
+        return False
+    if re.search(r"[^\W_]", text[colon + 1:]):
+        return False
+    if any(next(p_elem.iter(qn(t)), None) is not None
+           for t in ("w:drawing", "w:pict", "w:object", "w:txbxContent")):
+        return False
+    ppr = p_elem.find(qn("w:pPr"))
+    return not (ppr is not None and ppr.find(qn("w:sectPr")) is not None)
+
+
+def _omit_bare_lines(d: Document) -> int:
+    """Take out every marked line that, as filled, prints nothing but its label (see the note
+    above), then strip every mark. Returns the lines taken out."""
+    n = 0
+    for p in [p for p in d.element.body.iter(qn("w:p")) if p.get(_BARE_LINE_ATTR) is not None]:
+        del p.attrib[_BARE_LINE_ATTR]
+        parent = p.getparent()
+        if parent is None or not _line_is_bare(p):
+            continue
+        if any(_own_text(s).strip() for s in _sub_items(p)):
+            continue
+        if sum(1 for c in parent if c.tag == qn("w:p")) <= 1:
+            continue                       # a text box with no paragraph is a file Word refuses
+        parent.remove(p)
+        n += 1
+    for p in d.element.body.iter(qn("w:p")):
+        if p.get(_BARE_LINE_ATTR) is not None:
+            del p.attrib[_BARE_LINE_ATTR]
+    return n
+
+
+# ─── What the render changes, for the editor ───────────────────────────────────────────────────
+RENDER_ADJUSTMENTS_VERSION = 1
+
+
+def render_adjustments(d: Document) -> dict:
+    """What `fill_proposal` changes about the document's LAYOUT beyond the values, as block ids of
+    `iter_editable_blocks` over the PRISTINE template `d` -- the Terms pages (`_terms_layout`) and
+    the WORK lines that go when bare (`_omit_bare_lines`) -- so the editor can make the same changes
+    from the same plan. Served on /api/proposal-template as `render_adjustments`.
+
+      terms: null, or
+        first_id               -- the first Terms block; the Terms are a section of their own,
+                                  starting on a new page, from here on
+        section_break_after_id -- the last block of page 1's section
+        page                   -- the Terms pages' {w_pt, h_pt, margin{top,left,right,bottom}} (pt)
+        art                    -- {name, x_pt, y_pt, w_pt, h_pt}: the letterhead EVERY Terms page
+                                  prints, page-relative and behind the text (name: as
+                                  /api/proposal-template/media serves it); page 1 keeps its own
+        art_host_ids           -- blocks whose own full-page art is taken out (first)
+        drop_if_blank_ids      -- blocks removed (second) when, with that art gone, they print
+                                  nothing: no words, nothing drawn, no tab, break or field
+        join_pairs             -- [head, continuation], applied in order (third): the
+                                  continuation joins the paragraph that now holds `head` (head
+                                  itself, or what head was joined into) when, after the drops, it
+                                  is that paragraph's very next block, that paragraph's text does
+                                  not match `sentence_end`, and the continuation has words and is
+                                  not a numbered clause. Head's paragraph properties win; every
+                                  run keeps its own formatting; one space goes between them when
+                                  neither side has one
+        sentence_end           -- the regular expression (JS-compatible) of a sentence's end
+      lines: [{id, in_block, token, label, line_key, sub_item_ids}] -- a WORK line that is left out
+        when, as filled, nothing but its label prints (no letter or digit after its first colon),
+        unless one of `sub_item_ids` prints words. `in_block: "system"` is the {{#system}} row:
+        each priced system's copy of it, whose whole-line override is `line_key`."""
+    ids = {}
+    for idx, _kind, p_elem, _in_block, _text, _txbx in iter_editable_blocks(d):
+        ids[p_elem] = idx
+    out = {"version": RENDER_ADJUSTMENTS_VERSION, "terms": None, "lines": []}
+
+    layout = _terms_layout(d)
+    if layout is not None and all(p in ids for p in [layout["first"], layout["break_after"]]):
+        sec = d.sections[0]
+        margin = _margins_of(d, 0)
+        margin["top"] = max(margin["top"], _TERMS_TOP_MARGIN_TW / 20.0)
+        art = layout["art"]
+        ext = art.find(qn("wp:extent"))
+        blip = art.find(".//" + qn("a:blip"))
+        try:
+            name = d.part.rels[blip.get(qn("r:embed"))].target_ref.rsplit("/", 1)[-1]
+        except (AttributeError, KeyError):
+            name = None
+        try:
+            page_w, page_h = float(sec.page_width.pt), float(sec.page_height.pt)
+        except Exception:  # noqa: BLE001 -- Letter, as everywhere else in this module
+            page_w, page_h = _DEFAULT_PAGE_PT
+        out["terms"] = {
+            "first_id": ids[layout["first"]],
+            "section_break_after_id": ids[layout["break_after"]],
+            "page": {"w_pt": page_w, "h_pt": page_h, "margin": margin},
+            "art": {"name": name, "x_pt": 0.0, "y_pt": 0.0,
+                    "w_pt": round(int(ext.get("cx")) / _EMU_PER_PT, 2),
+                    "h_pt": round(int(ext.get("cy")) / _EMU_PER_PT, 2)},
+            "art_host_ids": [ids[p] for p in layout["hosts"] if p in ids],
+            "drop_if_blank_ids": [ids[p] for p in layout["drop"] if p in ids],
+            "join_pairs": [[ids[a], ids[b]] for a, b in layout["joins"] if a in ids and b in ids],
+            "sentence_end": _TERMS_SENTENCE_END,
+        }
+
+    line_keys = {"system." + token: key for key, token in _SYSTEM_ROW_LINES}
+    for idx, _kind, p_elem, in_block, text, _txbx in iter_editable_blocks(d):
+        spec = _bare_line_spec(text)
+        if spec is None:
+            continue
+        out["lines"].append({
+            "id": idx, "in_block": in_block, "token": spec["token"], "label": spec["label"],
+            "line_key": line_keys.get(spec["token"]),
+            "sub_item_ids": [ids[s] for s in _sub_items(p_elem) if s in ids],
+        })
+    return out
+
+
+def template_render_adjustments(work_type: str, audience: str | None) -> dict:
+    """`render_adjustments` for the template `(work_type, audience)` picks."""
+    return render_adjustments(docx.Document(str(pick_template(work_type, audience))))
 
 
 # Some templates position a framed box's top edge at/above its red frame border
@@ -1811,8 +2549,13 @@ def _pad_frame_boxes(d: Document, notes, work_type) -> int:
                         cur_l = int(bp.get("lIns") or 0)
                     except (TypeError, ValueError):
                         cur_l = 0
-                    if cur_l < _GYP_NOTES_LEFT_INSET_EMU:
-                        bp.set("lIns", str(_GYP_NOTES_LEFT_INSET_EMU))
+                    # Less whatever the REGARDS box's wrap already moves the box right: both
+                    # renderers print the gyp NOTES box 39pt right of its posOffset, beside that
+                    # box (see `_wrap_column_shift`), so the full inset printed the notes 39pt
+                    # right of the WORK/PRICE text and ran the long lines past the frame.
+                    want_l = _GYP_NOTES_LEFT_INSET_EMU - int(round(_txbx_wrap_shift(d, txbx) * _EMU_PER_PT))
+                    if want_l >= _EMU_PER_PT and cur_l < want_l:
+                        bp.set("lIns", str(want_l))
                         n += 1
                 break
     return n
@@ -2495,6 +3238,169 @@ def _expand_all_blocks(d: Document, block_lists: Mapping[str, list],
     return total
 
 
+# ─── Price lines on a template with no {{#price_line}} region (the GC files) ─────────────────────
+# Hanz, 2026-10-03, with a screenshot of a GC Epoxy proposal in the editor: "EPOXY 2" ticked "Show
+# as a proposal option" in the Pricing options sidebar, and nothing for it in the PRICE box. The
+# option was built right. Every option, every manual "Add for" line and a combo's Option 1 / Option 2
+# breakout reaches the document as a `{{#price_line}}` row, and a row prints only where the template
+# has that region. Kyle's three GC files have none: their PRICE box is plain paragraphs, a free
+# heading "Options & Unit Prices" over his static unit-price rows. So `_expand_named_block` found no
+# region and dropped every row without a word, and the editor left its price-line island in the
+# hidden staging panel for the same reason.
+#
+# THE GC FILES ARE NOT EDITED TO GROW ONE. A paragraph added to a file moves the id of every
+# paragraph after it, and the saved editor edits of the real GC drafts are keyed by id and stamped
+# with the file's content hash (template_versions.PREDECESSOR_VERSIONS exists to keep them). The
+# rows go in at render time instead, as new paragraphs DIRECTLY UNDER the marked Options heading
+# (`_mark_options_headings`), ahead of Kyle's own rows, in every copy of the box: mc:Choice and the
+# VML mc:Fallback twin LibreOffice renders to the PDF. Each is a clone of the first of Kyle's own
+# money rows under the heading ("$x - Add for ..."), so the PRICE-list bullet, the indent, the font
+# and the size are his. The clone is taken from the PRISTINE template, before the estimator's edits
+# can reach that row (formatting typed into it must not turn up on every option), and each row is
+# then filled and bulleted by the code the Direct files' {{#price_line}} row goes through
+# (`_substitute_item_tokens`, `_mark_line_props`), so a line reads and bullets the same wherever it
+# prints. Nothing here runs on a template that has the region: those files print their rows where
+# they always did.
+#
+# The editor draws the same lines at the same place (proposal-review.js annotatePriceLineAnchor,
+# which renderBlockList and priceLineRecord read), from `price_lines_anchor`, which
+# /api/proposal-template serves: the model row has ONE definition (`_price_line_model`), shared by
+# the document and the page.
+_PRICE_LINE_ROW_TEXT = "{{price_line.amount_formatted}} – {{price_line.label}}"
+# What starts one of Kyle's unit-price rows: "$4,200 – Add for ...", "($x) – Deduct VE ...".
+_MONEY_ROW_RE = re.compile(r"^\s*\(?\s*\$")
+
+
+def _block_names(d: Document) -> set:
+    """The name of every `{{#name}}` block the document opens, in any container (body, table cell,
+    text box, the VML copy included). Asked of the PRISTINE template: expansion consumes the markers."""
+    names: set = set()
+    for p in d.element.body.iter(qn("w:p")):
+        for m in BLOCK_START_RE.finditer(_own_text(p)):
+            names.add(m.group(1))
+    return names
+
+
+def price_lines_anchor_headings(d: Document, blocks: set | None = None) -> list:
+    """The Options headings the `price_lines` are printed under when the template cannot print them
+    through a region: every copy of the free heading (the GC files'), or [] when the template has a
+    `{{#price_line}}` region (Direct Epoxy / Polish / Combo, Gyp), a `{{#has_options}}` heading of
+    its own, or no heading at all (Direct Budget). Call it on the PRISTINE template; `blocks` is
+    `_block_names(d)` when the caller already has it."""
+    names = _block_names(d) if blocks is None else blocks
+    if "price_line" in names or "has_options" in names:
+        return []
+    return options_heading_paragraphs(d)
+
+
+def _price_line_model(head):
+    """The paragraph the lines under `head` are cloned from: the first of Kyle's own MONEY rows
+    under it on the PRICE list's top level ("$x - Add for ...": his bullet, indent, font and size),
+    else the first listed row with words in it, else the heading itself. A money row first because
+    the file's first listed row can be a sentence set in italics (Resinous opens with "If a different
+    flake/chip size or style is selected, additional cost may apply.")."""
+    listed = None
+    nxt = head.getnext()
+    while nxt is not None:
+        if nxt.tag == qn("w:p") and _para_num_ref(nxt) == (_PRICE_LIST_NUM_ID, "0"):
+            words = _own_text(nxt)
+            if _MONEY_ROW_RE.match(words):
+                return nxt
+            if listed is None and words.strip():
+                listed = nxt
+        nxt = nxt.getnext()
+    return listed if listed is not None else head
+
+
+def price_lines_anchor(d: Document):
+    """`(heading, model)` -- the paragraphs of the pristine template that /api/proposal-template
+    names as `price_lines_anchor` (the editor mounts its price lines after the first, and draws
+    them with the paragraph properties of the second) -- or None when the template prints its lines
+    through a region or has nowhere to print them. The heading is the real (mc:Choice) copy: the
+    editor's ids never cover the VML twin."""
+    for head in price_lines_anchor_headings(d):
+        if not _is_fallback_paragraph(head):
+            return head, _price_line_model(head)
+    return None
+
+
+def _price_line_prototypes(d: Document, blocks: set | None = None) -> list:
+    """`[(heading, prototype)]` for every copy of the anchor heading, the prototype a detached copy
+    of that copy's own model row. Taken off the pristine template, BEFORE Phase 0 applies the
+    estimator's edits to it. Empty where `price_lines_anchor_headings` is."""
+    return [(h, copy.deepcopy(_price_line_model(h))) for h in price_lines_anchor_headings(d, blocks)]
+
+
+def _price_line_paragraph(proto, item: Mapping[str, Any]):
+    """One `price_lines` item as a paragraph of its own, cloned from `proto`: the model row's
+    paragraph properties and its first run's font, size and colour, never its bold, underline, review
+    highlight or italics (a sentence set in italics is Kyle's note, not a price). Filled by the code
+    a Direct `{{#price_line}}` row is filled by, from the same row text, so it reads the same: an
+    empty amount prints the label alone."""
+    row = {"amount_formatted": "", "label": "", **item}
+    p = _extra_line_paragraph(proto, _PRICE_LINE_ROW_TEXT)
+    # `_extra_line_paragraph` marks its clone as a line the ESTIMATOR typed; only one he did is.
+    if not item.get("_typed") and p.get(_TYPED_LINE_ATTR) is not None:
+        del p.attrib[_TYPED_LINE_ATTR]
+    for rpr in p.iter(qn("w:rPr")):
+        for tag in ("w:i", "w:iCs"):
+            for el in rpr.findall(qn(tag)):
+                rpr.remove(el)
+    _substitute_item_tokens(p, row, "price_line")
+    if not str(row.get("amount_formatted") or "").strip():
+        _strip_leading_separator(p)
+    if item.get("_para"):
+        _mark_line_props(p, item["_para"])
+    return p
+
+
+def _insert_price_lines_under_headings(prototypes: list, items) -> int:
+    """Print `items` (fill_proposal's `price_lines`) as paragraphs directly under every anchored
+    Options heading, in order, ahead of Kyle's own rows. Runs after block expansion, with the
+    heading's mark still on it. Lines the estimator typed under the heading (`_insert_line_extras`)
+    stay first, as on the Direct files: they were put there before, so they are skipped over.
+
+    A row flagged `_options_heading` is skipped: it is main.py's restored "Options:" heading for a
+    Direct combo, whose own heading goes with {{#single_bid}}. The GC files keep theirs, and a
+    second one would print a second blank gap above it. Returns the paragraphs inserted, over all
+    copies of the box."""
+    rows = [it for it in (items or []) if isinstance(it, Mapping) and not it.get("_options_heading")]
+    n = 0
+    for head, proto in prototypes:
+        if not rows or head.getparent() is None:
+            continue
+        at = head
+        nxt = head.getnext()
+        while nxt is not None and nxt.tag == qn("w:p") and nxt.get(_TYPED_LINE_ATTR) is not None:
+            at, nxt = nxt, nxt.getnext()
+        for item in rows:
+            line = _price_line_paragraph(proto, item)
+            at.addnext(line)
+            at = line
+            n += 1
+    return n
+
+
+@lru_cache(maxsize=64)
+def _lines_under_heading_cached(path_str: str, _mtime_ns: int) -> bool:
+    """Memoized on the file's mtime (see _free_tax_rows_cached)."""
+    return bool(price_lines_anchor_headings(docx.Document(path_str)))
+
+
+def template_lines_under_heading(work_type: str, audience: str | None) -> bool:
+    """Does the template `(work_type, audience)` picks print its price lines under a heading of its
+    own (the GC files)? main.py asks, to leave out the "Options:" row it restores on a Direct combo.
+    An unreadable template answers False, which is what every fill did before this was asked:
+    `fill_proposal` is a moment away from raising on the same file, with the error worth surfacing."""
+    try:
+        p = pick_template(work_type, audience)
+        return _lines_under_heading_cached(str(p), p.stat().st_mtime_ns)
+    except Exception as exc:              # noqa: BLE001 -- never fail a generate over a shape read
+        log.warning("Could not read whether the %s/%s proposal template prints price lines under "
+                    "its own heading (%s: %s)", work_type, audience, type(exc).__name__, exc)
+        return False
+
+
 # ─── Paragraph-editor id mapping (Proposal Review's document editor) ──────
 # The web editor shows the estimator the REAL template — every paragraph, in
 # document order, as an editable block — instead of the old hand-built HTML
@@ -3020,11 +3926,26 @@ def template_free_tax_rows(work_type: str, audience: str | None) -> dict[str, bo
 
 # Empty body paragraphs are the vertical ruler Word hangs the floating
 # anchors off ('paragraph'-relative positionV). Their rendered line height
-# isn't in the XML (it's a layout result), so we use a constant calibrated
-# against the Direct Epoxy artwork: with 14pt/line the WORK box lands at
-# y≈153pt (art: ≈152pt), PRICE at ≈321pt (art: ≈318pt), NOTES at ≈495pt
-# (art: ≈490pt). The spec accepts approximate anchoring.
-_ANCHOR_LINE_H_PT = 14.0
+# isn't in the XML (it's a layout result): it is the line of the document default, Cambria 12pt,
+# with no spacing set (every page-1 paragraph of all nine templates).
+#
+# THE TWO RENDERERS DISAGREE ABOUT THAT LINE, and the disagreement compounds. Word lays it at
+# Cambria's own 14.07pt; LibreOffice has no Cambria, substitutes Caladea, and lays it at 13.8pt.
+# Measured 2026-10-03 on all seven priced templates (Word's own PDF export against the production
+# container's): 0.27pt a line, every box hung off paragraph n printed n x 0.27pt HIGHER in the PDF
+# than Kyle placed it in Word. The GC and Gyp NOTES boxes hang off paragraph 31, so the customer's
+# PDF printed them 8.3pt high, their first note above the frame's NOTES rule; the GC PRICE box's
+# drawn rule ("Straight Connector 1", paragraph 18) printed 5pt above the artwork's own, the "two
+# red rules" under the WORK box. This constant used to be 14.0, calibrated by eye against the art,
+# and it sat between the two.
+#
+# So the PDF is held to Word's line instead: `_pin_anchor_line_heights` gives the page-1 ruler
+# paragraphs an AT-LEAST line of `_ANCHOR_LINE_TW` twips, which Word already exceeds (its 14.07pt
+# wins, so Word prints exactly what it printed before) and LibreOffice's 13.8pt does not (so it
+# prints 14.05pt). The editor's estimate is that same line, so the box the editor draws is the box
+# the PDF prints, within 0.02pt a line of Word's.
+_ANCHOR_LINE_TW = 281
+_ANCHOR_LINE_H_PT = _ANCHOR_LINE_TW / 20.0
 _EMU_PER_PT = 12700.0
 
 # ── Resizing a floating text box ──────────────────────────────────────────────
@@ -3648,14 +4569,20 @@ def _section_break_indices(body) -> list:
             if c.tag == qn("w:p") and c.find(qn("w:pPr") + "/" + qn("w:sectPr")) is not None]
 
 
-def _section_ordinal(body, top_el) -> int:
+def _section_ordinal(body, top_el, breaks=None) -> int:
     """Index into `d.sections` of the section that GOVERNS top-level body child `top_el`.
 
     The break that governs a child is the first one AT OR AFTER it — at, because the `sectPr`
     lives in the last paragraph of its own section, not the first of the next. Off by one here
     and every anchor is resolved against the following section's page setup.
+
+    `breaks` is `_section_break_indices(body)` for a caller that already read it. A geometry pass
+    asks this question of one unchanged body over a hundred times (every anchor against every
+    box that wraps beside it), and re-reading the whole body's section map each time was most of
+    that pass's cost.
     """
-    breaks = _section_break_indices(body)
+    if breaks is None:
+        breaks = _section_break_indices(body)
     if not breaks:
         return 0
     try:
@@ -3729,7 +4656,116 @@ def _body_section_ordinal(d: Document) -> int:
     return max(sorted(counts), key=lambda o: counts[o])
 
 
-def _pos_of_anchor(anchor, page: dict, top_ps: list, body, d: Document) -> tuple:
+# Wraps that take room from the text beside them. wrapNone and wrapTopAndBottom leave a line's
+# left edge where it was; behindDoc art never pushes anything.
+_PUSHING_WRAPS = ("wrapSquare", "wrapTight", "wrapThrough")
+
+
+def _top_level_of(body, el):
+    """The direct child of `body` that contains `el` (None when it is not in the body)."""
+    while el is not None and el.getparent() is not body:
+        el = el.getparent()
+    return el
+
+
+def _wrap_column_shift(anchor, page: dict, top_ps: list, body, d: Document,
+                       margin: dict, pidx: int, breaks=None) -> float:
+    """How far right of the margin the anchor paragraph's first line STARTS, in points: 0.0 unless
+    another box with a square/tight wrap covers the left end of that line.
+
+    A `positionH relativeFrom="column"` offset is measured from where that line starts, in Word
+    and in LibreOffice alike, so a box beside a wrapping box sits that box's width further right
+    than the margin arithmetic says. Kyle's GC and Gyp NOTES boxes are anchored in paragraph 31,
+    which runs beside the REGARDS/estimator box (square wrap, 90pt wide, 9pt clear on its right):
+    both renderers print the NOTES box 36.3pt (GC) / 39pt (Gyp) right of `margin + posOffset`,
+    inside its frame, while the editor drew it there -- bullets left of the box, text over the
+    rotated NOTES label. Measured 2026-10-03; a probe copy with that box set to no wrap put the
+    NOTES box back on the margin arithmetic.
+
+    NOT HANDLED, ON PURPOSE. The shift is read off where the TEMPLATE puts the wrapping box. If
+    the estimator drags the REGARDS/estimator box off this paragraph's line, LibreOffice stops
+    wrapping beside it and prints the NOTES box at plain `margin + posOffset` -- 36 to 39pt left,
+    its text over the rotated NOTES label -- while the editor, which was handed the template's
+    shift, still draws it inside the frame. Reproduced 2026-10-03; no saved draft holds a box drag
+    today, and the cure (the editor asking the server for the shift again on every drag) is a
+    feature rather than a fix, so this is documented and left alone.
+
+    The other boxes are placed with the plain arithmetic (`wrap=False`), so this never recurses.
+
+    `breaks`: the body's section map, read once by the caller (see `_section_ordinal`)."""
+    if breaks is None:
+        breaks = _section_break_indices(body)
+    line_top = margin["top"] + pidx * _ANCHOR_LINE_H_PT
+    line_bot = line_top + _ANCHOR_LINE_H_PT
+    left = margin["left"]
+    shift = 0.0
+    section = _section_ordinal(body, _top_level_of(body, anchor), breaks)
+    for other in body.iter(qn("wp:anchor")):
+        if other is anchor or other.get("behindDoc") == "1":
+            continue
+        if not any(other.find(qn("wp:" + w)) is not None for w in _PUSHING_WRAPS):
+            continue
+        # A box in another section is on another page, whatever the one-ruler estimate says.
+        if _section_ordinal(body, _top_level_of(body, other), breaks) != section:
+            continue
+        ox, oy, ow, oh = _pos_of_anchor(other, page, top_ps, body, d, wrap=False, breaks=breaks)
+        dist = {k: int(other.get(k) or 0) / _EMU_PER_PT for k in ("distL", "distR", "distT", "distB")}
+        if (oy - dist["distT"] < line_bot and oy + oh + dist["distB"] > line_top
+                and ox - dist["distL"] <= left < ox + ow + dist["distR"]):
+            shift = max(shift, ox + ow + dist["distR"] - left)
+    return shift
+
+
+def _txbx_wrap_shift(d: Document, txbx) -> float:
+    """`_wrap_column_shift` for one text box: how far right of its margin arithmetic it prints."""
+    anchor = _txbx_anchor(txbx)
+    if anchor is None or anchor.tag != qn("wp:anchor"):
+        return 0.0
+    body = d.element.body
+    top_ps = [c for c in body if c.tag == qn("w:p")]
+    page = _page_metrics(d)
+    breaks = _section_break_indices(body)
+    return (_pos_of_anchor(anchor, page, top_ps, body, d, breaks=breaks)[0]
+            - _pos_of_anchor(anchor, page, top_ps, body, d, wrap=False, breaks=breaks)[0])
+
+
+def _pin_anchor_line_heights(d: Document) -> int:
+    """Hold the paragraphs page 1's text boxes hang off to Word's line height. Returns the count.
+
+    Every top-level paragraph ABOVE the deepest paragraph-anchored text box gets an at-least line
+    of `_ANCHOR_LINE_TW` (see the constant's note), unless it already states a line of its own.
+    At-least, not exact: Word's Cambria line is taller, so Word ignores it and prints what it
+    always printed; only LibreOffice's shorter Caladea line is raised. The paragraphs below the
+    deepest box, and so the Terms pages, are left alone."""
+    body = d.element.body
+    top_ps = [c for c in body if c.tag == qn("w:p")]
+    deepest = -1
+    for txbx in _iter_txbx(d):
+        anchor = _txbx_anchor(txbx)
+        if anchor is None or anchor.tag != qn("wp:anchor"):
+            continue
+        if _anchor_offset(anchor, "positionV")[1] not in ("paragraph", "line"):
+            continue
+        top = anchor
+        while top is not None and top.getparent() is not body:
+            top = top.getparent()
+        if top in top_ps:
+            deepest = max(deepest, top_ps.index(top))
+    n = 0
+    for p in top_ps[:max(deepest, 0)]:
+        ppr = p.get_or_add_pPr()
+        spacing = ppr.find(qn("w:spacing"))
+        if spacing is not None and spacing.get(qn("w:line")) is not None:
+            continue
+        spacing = ppr.get_or_add_spacing()
+        spacing.set(qn("w:line"), str(_ANCHOR_LINE_TW))
+        spacing.set(qn("w:lineRule"), "atLeast")
+        n += 1
+    return n
+
+
+def _pos_of_anchor(anchor, page: dict, top_ps: list, body, d: Document, wrap: bool = True,
+                   breaks=None) -> tuple:
     """(x_pt, y_pt, w_pt, h_pt) of a floating drawing on its page.
 
     Word stores positionH/positionV relative to page/margin/column/paragraph;
@@ -3740,7 +4776,12 @@ def _pos_of_anchor(anchor, page: dict, top_ps: list, body, d: Document) -> tuple
     The y this returns is therefore an ESTIMATE, and `_apply_box_overrides` depends on it being
     the SAME estimate the editor was given rather than on it being right — read the
     "Moving a floating text box" note before changing the arithmetic here.
+
+    `breaks`: the body's section map (`_section_break_indices`) when the caller has it already, so
+    placing every box and picture of one document reads it once (`template_geometry`).
     """
+    if breaks is None:
+        breaks = _section_break_indices(body)
     ext = anchor.find(qn("wp:extent"))
     w = int(ext.get("cx")) / _EMU_PER_PT if ext is not None else 0.0
     h = int(ext.get("cy")) / _EMU_PER_PT if ext is not None else 0.0
@@ -3753,13 +4794,15 @@ def _pos_of_anchor(anchor, page: dict, top_ps: list, body, d: Document) -> tuple
         anc = anc.getparent()
     # Resolved BEFORE x and y: which margin they are measured from depends on which SECTION
     # this anchor sits in, not on the document's first one — see `_governing_margins`.
-    margin = _margins_of(d, _section_ordinal(body, anc))
+    margin = _margins_of(d, _section_ordinal(body, anc, breaks))
     try:
         pidx = top_ps.index(anc)
     except ValueError:
         pidx = 0
 
     x = ox + (margin["left"] if rfx in ("column", "margin") else 0.0)
+    if wrap and rfx == "column":
+        x += _wrap_column_shift(anchor, page, top_ps, body, d, margin, pidx, breaks)
 
     if rfy in ("paragraph", "line"):
         y = margin["top"] + pidx * _ANCHOR_LINE_H_PT + oy
@@ -3809,6 +4852,9 @@ def template_geometry(d: Document) -> dict:
     page = _page_metrics(d)
     body = d.element.body
     top_ps = [c for c in body if c.tag == qn("w:p")]
+    # The section map, read ONCE for the whole pass: every box and picture below is placed against
+    # it, and `_wrap_column_shift` places each against every box that wraps beside it.
+    breaks = _section_break_indices(body)
 
     def enclosing_anchor(el):
         anc = el.getparent()
@@ -3821,7 +4867,7 @@ def template_geometry(d: Document) -> dict:
     for bi, txbx in enumerate(_iter_txbx(d)):
         anchor = enclosing_anchor(txbx)
         if anchor is not None:
-            x, y, w, h = _pos_of_anchor(anchor, page, top_ps, body, d)
+            x, y, w, h = _pos_of_anchor(anchor, page, top_ps, body, d, breaks=breaks)
         else:
             x = y = w = h = None
         boxes.append({"id": bi, "x_pt": x, "y_pt": y, "w_pt": w, "h_pt": h})
@@ -3838,7 +4884,7 @@ def template_geometry(d: Document) -> dict:
             target = d.part.rels[rid].target_ref
         except (KeyError, AttributeError):
             continue
-        x, y, w, h = _pos_of_anchor(anchor, page, top_ps, body, d)
+        x, y, w, h = _pos_of_anchor(anchor, page, top_ps, body, d, breaks=breaks)
         anc = anchor
         while anc is not None and anc.getparent() is not body:
             anc = anc.getparent()
@@ -3951,11 +4997,16 @@ def _set_paragraph_runs(p_elem, runs, bold_marks: dict | None = None) -> bool:
     Media runs are never removed, for the same reason as `_set_paragraph_text`: they anchor the
     letterhead and every floating text box.
 
-    Returns True when any run carries an explicit size, so the caller can exempt this
-    paragraph from the overflow shrink (which would otherwise rewrite it — measured at 4.5pt
-    on a real GC NOTES line). `bold_marks`, when given, collects the runs whose `bold` the
-    estimator STATED (True or False alike — both are a choice, absent is not), so
-    `_normalize_work_label_formatting` can leave those alone; see `_user_bolded_runs`.
+    Returns True when any run carries a size the estimator CHOSE -- a size that is NOT one of the
+    sizes the template paragraph itself uses, or one the run says outright was picked with the
+    ribbon's size box (`size_set: true`) -- so the caller can exempt this paragraph from the
+    overflow shrink (which would otherwise rewrite it — measured at 4.5pt on a real GC NOTES
+    line). A size the paragraph already had, with no `size_set`, is the editor handing the
+    template's own back (see `tmpl_sizes` below) and is not a choice.
+
+    `bold_marks`, when given, collects the runs whose `bold` the estimator STATED (True or False
+    alike — both are a choice, absent is not), so `_normalize_work_label_formatting` can leave
+    those alone; see `_user_bolded_runs`.
     """
     _MEDIA_TAGS = (qn("w:drawing"), qn("w:pict"), qn("w:object"))
     all_runs = p_elem.findall(qn("w:r"))
@@ -3968,6 +5019,44 @@ def _set_paragraph_runs(p_elem, runs, bold_marks: dict | None = None) -> bool:
         if rpr is not None:
             base_rpr = copy.deepcopy(rpr)
             break
+
+    # The sizes the TEMPLATE gives this paragraph, in half-points, so a run that merely restates one
+    # of them is not mistaken for a size the estimator chose. The editor sends every run's size
+    # back as it reads it off the page (fmtAt), so a plain text edit on a NOTES line arrived
+    # carrying Kyle's own 7.5pt -- and the shrink, told the estimator had sized that line, left it
+    # at 7.5pt among 4.5pt neighbours (the "wear & tear" note, drawn large in the editor and in
+    # the PDF, 2026-10-02).
+    #
+    # A SET, NOT A POSITION. The first fix matched each new run to the template run at the same
+    # character offset, so any edit that changed the text's length before a size boundary moved
+    # every later run onto its neighbour's size: delete "existing " from the wear & tear note (runs
+    # 7.5 x4, then 7.0) and its 7.0pt tail landed on a 7.5pt offset, was taken for a choice, and
+    # the line printed at 7.5/7.0pt beside 4.5pt notes again. A delete-one-character scan left four
+    # or five lines of every GC and Gyp file exempt that way, and a plain edit to a GC WORK line
+    # did the same on the lines that mix 9pt and 8pt. The editor reads every size off the page and
+    # sends it back, so a size that is one of this paragraph's own is the template's coming home,
+    # wherever in the line it now sits.
+    #
+    # TWO WAYS A SIZE IS STILL THE ESTIMATOR'S, and the set alone cannot see either:
+    #  * a size outside the set -- the template never used it, so somebody asked for it;
+    #  * `size_set`, which the editor writes onto a run ONLY when the ribbon's size box put the size
+    #    there (never typing, deleting, rewording, or a paste -- a paste drops the clipboard's font
+    #    size, see proposal-format-core.fmtFromPasted). That is how the estimator who sets a whole
+    #    9/8pt line to 9pt gets what they asked for even though 9pt is one of the line's own sizes.
+    # A size that is neither is not a choice, and the shrink may take it.
+    #
+    # Only a run with words in it counts. Word leaves empty runs behind with sizes of their own (a
+    # GC PRICE row carries a dozen at 9pt and 8.5pt after its 10pt text), and the editor draws and
+    # reads back only what has text, so it can never have reported one: counting them would swallow
+    # the estimator's own pick of 9pt on that row.
+    tmpl_sizes = set()       # half-points
+    for r in text_runs:
+        if not any(t.text for t in r.iter(qn("w:t"))):
+            continue
+        sz = r.find(qn("w:rPr") + "/" + qn("w:sz"))
+        v = sz.get(qn("w:val")) if sz is not None else None
+        if v and v.isdigit():
+            tmpl_sizes.add(int(v))
 
     # Where the text used to start, so the new runs land in the same place relative to any
     # media runs (an anchored text box in the same paragraph must stay put).
@@ -4016,7 +5105,8 @@ def _set_paragraph_runs(p_elem, runs, bold_marks: dict | None = None) -> bool:
                     el = OxmlElement(tag)
                     rpr.append(el)
                 el.set(qn("w:val"), str(hp))
-            user_sized = True
+            if hp not in tmpl_sizes or spec.get("size_set") is True:
+                user_sized = True
 
         if len(rpr):
             r.append(rpr)
@@ -4249,6 +5339,9 @@ def _apply_paragraph_overrides(d: Document, overrides: list, doomed=()) -> int:
                 sz = r.get("size_pt")
                 if isinstance(sz, (int, float)) and not isinstance(sz, bool) and 1 <= float(sz) <= 200:
                     one["size_pt"] = float(sz)
+                    # Only ever alongside a size: the flag says "this size was picked".
+                    if r.get("size_set") is True:
+                        one["size_set"] = True
                 clean.append(one)
             if clean:
                 by_id[pid] = clean
@@ -4413,7 +5506,8 @@ def fill_proposal(
     Repeatable blocks (Phase 1), each cloned once per list item before the
     flat pass:
       - `systems`     → `{{#system}}…{{/system}}`     (only when supplied)
-      - `price_lines` → `{{#price_line}}…{{/price_line}}` (option/unit-price lines)
+      - `price_lines` → `{{#price_line}}…{{/price_line}}` (option/unit-price lines); on a template
+        with no such region (the GC files), new paragraphs directly under its Options heading
       - `alternates`  → `{{#alternate}}…{{/alternate}}`   (0/1 recommended system)
     `price_line`/`alternate` always run so their markers are stripped (zero
     rows) when empty — never left as literal text. A template with no marker,
@@ -4470,6 +5564,12 @@ def fill_proposal(
 
     d = docx.Document(str(template_path))
 
+    # Read off the PRISTINE template, like every id-keyed plan: the Terms pages' rebuild (applied
+    # last, `_rebuild_terms_pages`) and the WORK lines that go when they print only their label
+    # (`_omit_bare_lines`). Neither adds or removes a paragraph here, so no editor id moves.
+    _terms = _terms_layout(d)
+    _mark_bare_lines(d)
+
     # The PRICE rows Kyle tucked into the margin (w:ind left=0 on the list) print their square in
     # the column now — BEFORE Phase 0, so an estimator's saved bullet / indent is applied to the same
     # paragraph properties /api/proposal-template showed him (it runs this too). No paragraph moves.
@@ -4479,6 +5579,18 @@ def fill_proposal(
     # be rewritten below (Phase 0 / 0.5) and its region is cloned by Phase 1, and the tag survives
     # both. Adds no paragraph, so no editor id moves.
     _mark_options_headings(d)
+
+    # Where the `price_lines` print when the template has no {{#price_line}} region (the GC files):
+    # under the Options heading, as copies of Kyle's first money row there. Copied now, off the
+    # pristine template, so the estimator's edits to that row (Phase 0) never reach the new lines.
+    # Adds no paragraph here, so no editor id moves. Only asked when there are lines to place.
+    _lines_anchors: list = []
+    _lines_nowhere = False
+    if price_lines:
+        _lines_blocks = _block_names(d)
+        if "price_line" not in _lines_blocks:
+            _lines_anchors = _price_line_prototypes(d, _lines_blocks)
+            _lines_nowhere = not _lines_anchors
 
     # The free remodel rows, found by their token on the PRISTINE template and taken out only
     # after Phase 0: removing a paragraph before the editor's overrides are applied would shift
@@ -4562,6 +5674,17 @@ def fill_proposal(
     n_blocks = _expand_all_blocks(d, block_lists, _rewritten_rows)
     if n_blocks:
         log.info("Expanded %d repeatable block(s)", n_blocks)
+    # A template with no {{#price_line}} region prints its lines under its Options heading; one with
+    # neither says so, instead of dropping them without a word.
+    if _lines_anchors:
+        _n_under = _insert_price_lines_under_headings(_lines_anchors, price_lines)
+        if _n_under:
+            log.info("Printed %d price-line paragraph(s) under %d Options heading(s)",
+                     _n_under, len(_lines_anchors))
+    elif _lines_nowhere:
+        log.warning(
+            "Template %s has no {{#price_line}} region and no Options heading: %d price line(s) "
+            "have nowhere to print and are dropped", template_path.name, len(price_lines))
 
     # Base-bid line DISPLAY override (single_bid.desc): swap the static
     # description noun between {{base_bid_formatted}} and {{base_tax_phrase}}
@@ -4580,10 +5703,14 @@ def fill_proposal(
 
     # Phase 2 — flat {{token}} substitution against `values`. This runs
     # unchanged from v1 and also fills any non-system tokens left inside
-    # the expanded block paragraphs.
+    # the expanded block paragraphs. A token this template prints Kyle's own placeholder for
+    # when blank (TEMPLATE_TOKEN_DEFAULTS: the GC spec / finish / addenda lines) gets it here, on
+    # a copy -- the caller's `values` are written back onto the draft and must keep the blank.
+    flat_values = _with_token_defaults(
+        values, TEMPLATE_TOKEN_DEFAULTS.get(_template_rel(template_path), {}))
     total_subs = 0
     for p in _iter_all_paragraphs(d):
-        total_subs += _replace_in_paragraph(p, values)
+        total_subs += _replace_in_paragraph(p, flat_values)
 
     log.info("Substituted %d tokens", total_subs)
     # Cove-only WORK rows: drop the "~0 SF of epoxy flooring and " prefix now that
@@ -4593,6 +5720,11 @@ def fill_proposal(
     _n_work_format = _normalize_work_label_formatting(d)
     if _n_work_format:
         log.info("Normalized %d WORK label/value run(s)", _n_work_format)
+    # A WORK line left with nothing but its label ("Texture:", "Notes:") is left out -- before the
+    # padding and the shrink, which must measure the box without it.
+    _n_bare = _omit_bare_lines(d)
+    if _n_bare:
+        log.info("Left out %d WORK line(s) that printed only their label", _n_bare)
     # The blank lines between the price rows and the Options heading: the estimator's count from
     # the editor (default 2, Kyle's double spacing after the Total), replacing the template's own.
     if _apply_options_gap(d, options_gap, options_gap_typed, options_gap_typed_para):
@@ -4628,6 +5760,13 @@ def fill_proposal(
     # forced break, so a short body — e.g. combo — spills T&C over the acceptance).
     if _force_terms_on_new_page(d):
         log.info("Forced a page break before the Terms & Conditions section")
+    # The Terms pages print ONE letterhead each, wherever the renderer breaks them (see
+    # `_rebuild_terms_pages`). Last, so every override and every value is already in place.
+    if _rebuild_terms_pages(d, _terms):
+        log.info("Rebuilt the Terms & Conditions as their own section with a repeating letterhead")
+    # Page 1's boxes print where Kyle put them in Word, and where the editor draws them, rather
+    # than 0.27pt a line higher (see `_ANCHOR_LINE_H_PT`).
+    _pin_anchor_line_heights(d)
     _n_hl = _strip_highlights(d)
     if _n_hl:
         log.info("Took %d review highlight(s) out of the customer document", _n_hl)

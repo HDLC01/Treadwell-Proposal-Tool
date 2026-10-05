@@ -115,15 +115,24 @@ BUDGET_DIRECT_RULES: list[tuple[str, str]] = [
 
 # GC templates: tokenize the fields the tool actually fills — estimator, bid
 # date, area SF, and the Base Bid / tax / Total price block. The GC-specific
-# system menu, scope, exclusions, notes, and the GC/project addresses stay as
-# boilerplate the estimator finishes in Word (that's the GC format). The "–" is
-# an en dash; "&amp;" matches the escaped ampersand in the docx XML -- in a
+# system menu, scope, exclusions and notes stay as boilerplate the estimator
+# finishes in the editor (that's the GC format); the job header and the spec /
+# finish / addenda lines are tokenized by GC_HEADER_* / GC_SPAN_RULES below. The
+# "–" is an en dash; "&amp;" matches the escaped ampersand in the docx XML -- in a
 # SEARCH string only. Replacements are xml_escape()d on the way in, so a
 # replacement carries a PLAIN "&"; "&amp;" there double-escapes to
 # "&amp;amp;" and the customer reads a literal "&amp;" on the proposal.
+#
+# THE SOURCE FILES are Kyle's own, untokenized, in docs/GC Templates/ (his
+# 2026-09-11 re-save of all three forms), and the installed files are this script's
+# output on copies of them:
+#     python annotate_templates.py --from "../docs/GC Templates" "GC/xx TREADWELL POLISH PROPOSAL - xx.docx" ...
+# test_gc_template_tokens.py re-runs it and compares every part of the result with
+# what is installed, so a hand edit to a GC file, or a rule that stopped matching,
+# fails there. Kyle's header date is "9/1/26" in that re-save (it was "5/1/26").
 GC_POLISH_RULES: list[tuple[str, str]] = [
     ("Greg Ingebretson",                            "{{estimator_name}}"),
-    ("5/1/26",                                      "{{bid_date_formatted}}"),
+    ("9/1/26",                                      "{{bid_date_formatted}}"),
     ("~1,600 sf",                                   "~{{sqft}} sf"),
     ("$x – Polished Concrete &amp; Joint Filler as described above (material sales tax INCLUDED)",
      "{{base_bid_formatted}} – Polished Concrete & Joint Filler as described above {{base_tax_phrase}}"),
@@ -133,8 +142,13 @@ GC_POLISH_RULES: list[tuple[str, str]] = [
 ]
 
 GC_RESINOUS_RULES: list[tuple[str, str]] = [
+    # The Texture line's first choices. This rule shipped in 72af1ee, was dropped from the
+    # list in 64f230c (whose comment said the file "already" had the token, which it did,
+    # from the earlier run), and is back so that annotating Kyle's raw file reproduces the
+    # installed one: "Texture: {{texture}} Light or Medium or Heavy or with added texture".
+    ("Orange-Peel or Smooth or",                    "{{texture}}"),
     ("Greg Ingebretson",                            "{{estimator_name}}"),
-    ("5/1/26",                                      "{{bid_date_formatted}}"),
+    ("9/1/26",                                      "{{bid_date_formatted}}"),
     ("~1,600 sf",                                   "~{{sqft}} sf"),
     ("&amp; 500 lf of integral base",               "& {{cove_lf}} lf of integral base"),
     ("$x – Resinous floor &amp; integral cove base as described above (material sales tax INCLUDED)",
@@ -142,12 +156,11 @@ GC_RESINOUS_RULES: list[tuple[str, str]] = [
     ("$  x – Material Sales Tax",                    "{{material_tax_formatted}} – Material Sales Tax"),
     ("$  x – Kansas Remodel Tax",                    "{{tax_amount_formatted}} – Remodel Tax"),
     ("$x – Total",                                   "{{total_formatted}} – Total"),
-    # ({{texture}} is already present in this template's System block.)
 ]
 
 GC_SEALER_RULES: list[tuple[str, str]] = [
     ("Greg Ingebretson",                            "{{estimator_name}}"),
-    ("5/1/26",                                      "{{bid_date_formatted}}"),
+    ("9/1/26",                                      "{{bid_date_formatted}}"),
     ("~1,600 sf",                                   "~{{sqft}} sf"),
     ("$x – Sealed Concrete as described above (material sales tax INCLUDED)",
      "{{base_bid_formatted}} – Sealed Concrete as described above {{base_tax_phrase}}"),
@@ -314,6 +327,68 @@ GC_NARRATIVE_LABELS: list[tuple[str, str]] = [
 ]
 
 GC_NARRATIVE_TEMPLATES = set(GC_SCOPE_CONTINUATIONS.keys())
+
+
+# ─── GC job header + spec / finish / addenda lines (2026-10-02) ──────────
+# What the GC forms leave as "xx" that the intake form now collects (Hanz,
+# 2026-10-02). Each placeholder is replaced IN PLACE -- only its own characters, in
+# the runs they occupy -- so every other run keeps Kyle's formatting and no
+# paragraph is added or removed: the editor's paragraph ids, and every saved edit
+# keyed by them, stay where they were.
+#
+#   job header (box 0)  "xx" / "xx, KS " / "xx, MO "  -> {{job_name}} / {{city_state}} / blank
+#                       (the Gyp file's treatment of the same three lines)
+#   spec line           "033543" / "096723" / "03xx"  -> {{spec_section}}
+#                       "xx Architects"               -> {{architect}}
+#                       "8/1/26"                      -> {{drawings_dated_formatted}}
+#   finish line         "[PC]" / "[RESx]" / "[SC]"    -> [{{finish_tag}}]   (brackets kept)
+#                       "A900"                        -> {{plan_sheet}}
+#   addenda line        "Addenda Acknowledged: 0"     -> Addenda Acknowledged: {{addenda_count}}
+#
+# A BLANK INTAKE FIELD PRINTS KYLE'S OWN PLACEHOLDER, exactly as the file printed it
+# before the token went in -- proposal_writer.TEMPLATE_TOKEN_DEFAULTS holds those words
+# per file, and test_gc_template_tokens.py pins each one to his raw file. (The header
+# lines are the exception, as they are on the Gyp file: the project name is required
+# at intake and the city comes off the address.)
+#
+# ANCHORED, NEVER GLOBAL. The header rule fires only inside a text box whose first
+# three paragraphs ARE those three lines, and a span rule only inside a paragraph
+# whose whole text is the one quoted (XML-escaped, after the rules above ran) -- so
+# "Spec 03xx", "Notes: xx" and the "xx gallons/kits" scope step can never be taken
+# for the job name. A search missing from its paragraph, or repeated in it, raises
+# rather than guessing, and so does a rule that did not hit exactly two copies
+# (mc:Choice + mc:Fallback).
+GC_HEADER_LINES: tuple[str, ...] = ("xx", "xx, KS ", "xx, MO ")
+GC_HEADER_TOKENS: tuple[str, ...] = ("{{job_name}}", "{{city_state}}", "")
+
+# relative path -> [(anchor paragraph text, [(search, replacement), ...]), ...]
+GC_SPAN_RULES: dict[str, list[tuple[str, list[tuple[str, str]]]]] = {
+    "GC/xx TREADWELL POLISH PROPOSAL - xx.docx": [
+        ("Polished Concrete: per Spec 033543 &amp; Drawings by xx Architects dated 8/1/26 (NO spec)",
+         [("033543", "{{spec_section}}"), ("xx Architects", "{{architect}}"),
+          ("8/1/26", "{{drawings_dated_formatted}}")]),
+        ("Area:~{{sqft}} sf of polished concrete flooring [PC] per the Finish Schedule on A900",
+         [("[PC]", "[{{finish_tag}}]"), ("A900", "{{plan_sheet}}")]),
+        ("Addenda Acknowledged: 0", [("0", "{{addenda_count}}")]),
+    ],
+    "GC/xx TREADWELL RESINOUS PROPOSAL - xx.docx": [
+        ("Resinous Flooring: per Spec 096723 &amp; Drawings by xx Architects dated 8/1/26 (NO spec)",
+         [("096723", "{{spec_section}}"), ("xx Architects", "{{architect}}"),
+          ("8/1/26", "{{drawings_dated_formatted}}")]),
+        ("Area:~{{sqft}} sf of resinous flooring [RESx] &amp; {{cove_lf}} lf of integral base "
+         "per the Finish Schedule on A900",
+         [("[RESx]", "[{{finish_tag}}]"), ("A900", "{{plan_sheet}}")]),
+        ("Addenda Acknowledged: 0", [("0", "{{addenda_count}}")]),
+    ],
+    "GC/xx TREADWELL SEALER PROPOSAL - xx.docx": [
+        ("Sealed Concrete: per Spec 03xx &amp; Drawings by xx Architects dated 8/1/26 (NO spec)",
+         [("03xx", "{{spec_section}}"), ("xx Architects", "{{architect}}"),
+          ("8/1/26", "{{drawings_dated_formatted}}")]),
+        ("Area:~{{sqft}} sf of sealed concrete flooring [SC] per the Finish Schedule on A900",
+         [("[SC]", "[{{finish_tag}}]"), ("A900", "{{plan_sheet}}")]),
+        ("Addenda Acknowledged: 0", [("0", "{{addenda_count}}")]),
+    ],
+}
 
 
 # ─── Replacement engine (raw-XML aware) ──────────────────────────────
@@ -502,6 +577,123 @@ def _insert_marker_paragraph(xml: str, anchor_text: str, marker: str, where: str
     return WP_BLOCK_RE.sub(_sub, xml), count[0]
 
 
+TXBX_BLOCK_RE = re.compile(r"(<w:txbxContent\b[^>]*>)(.*?)(</w:txbxContent>)", re.DOTALL)
+
+
+def _set_paragraph_text(p_xml: str, text: str) -> str:
+    """One paragraph's whole text replaced by `text` (plain; escaped here): it goes into the
+    first <w:t>, every later <w:t> is emptied. Runs and their formatting are kept."""
+    nodes = list(WT_NODE_RE.finditer(p_xml))
+    if not nodes:
+        return p_xml
+    out, cursor = [], 0
+    for i, n in enumerate(nodes):
+        out.append(p_xml[cursor:n.start()])
+        if i == 0:
+            out.append(f"{_ensure_xml_space_preserve(n.group(1))}{xml_escape(text)}{n.group(3)}")
+        else:
+            out.append(f"{n.group(1)}{n.group(3)}")
+        cursor = n.end()
+    out.append(p_xml[cursor:])
+    return "".join(out)
+
+
+def _tokenize_header_box(xml: str, lines, tokens) -> tuple[str, int]:
+    """Every text box whose FIRST paragraphs read exactly `lines` (XML-escaped joined text)
+    gets those paragraphs' text replaced by `tokens`, one each, in place. Anchoring on the
+    box -- not on the text -- is what keeps "xx" from matching anywhere else. A box holding a
+    nested box is skipped (WP_BLOCK_RE cannot pair its paragraphs). Returns (xml, n_boxes)."""
+    count = [0]
+
+    def _box(m):
+        opn, inner, cls = m.group(1), m.group(2), m.group(3)
+        if "<w:txbxContent" in inner:
+            return m.group(0)
+        paras = list(WP_BLOCK_RE.finditer(inner))
+        texts = ["".join(n.group(2) for n in WT_NODE_RE.finditer(p.group(0))) for p in paras]
+        if tuple(texts[:len(lines)]) != tuple(lines):
+            return m.group(0)
+        count[0] += 1
+        out, cursor = [], 0
+        for p, token in zip(paras, tokens):
+            out.append(inner[cursor:p.start()])
+            out.append(_set_paragraph_text(p.group(0), token))
+            cursor = p.end()
+        out.append(inner[cursor:])
+        return opn + "".join(out) + cls
+
+    return TXBX_BLOCK_RE.sub(_box, xml), count[0]
+
+
+def _tokenize_spans(xml: str, anchor: str, spans) -> tuple[str, int]:
+    """In every <w:p> whose joined <w:t> text (XML-escaped, stripped) is exactly `anchor`,
+    apply each `(search, replacement)` IN PLACE: the replacement is written where the search
+    text starts, the rest of the search text is cut out of the runs it spans, and every
+    other character of every run stays where it was -- unlike `_replace_text_in_xml`'s
+    multi-run pass, which collapses the whole paragraph into its first run. Searches are
+    XML-escaped, replacements plain. Each search must occur exactly once in the paragraph as
+    it stands when its turn comes (the earlier spans already applied), or this raises.
+    Returns (new_xml, n_paragraphs)."""
+    count = [0]
+
+    def _p(m):
+        p_xml = m.group(0)
+        nodes = list(WT_NODE_RE.finditer(p_xml))
+        inners = [n.group(2) for n in nodes]
+        if "".join(inners).strip() != anchor:
+            return p_xml
+        count[0] += 1
+        touched: set[int] = set()
+        for search, repl in spans:
+            joined = "".join(inners)
+            if joined.count(search) != 1:
+                raise ValueError(f"{search!r} occurs {joined.count(search)} time(s) in the "
+                                 f"paragraph {joined!r}; the rule expects exactly one")
+            start = joined.index(search)
+            end = start + len(search)
+            pos, placed = 0, False
+            for k, inner in enumerate(inners):
+                a, b = pos, pos + len(inner)
+                pos = b
+                if b <= start or a >= end:
+                    continue
+                lo, hi = max(start, a) - a, min(end, b) - a
+                inners[k] = inner[:lo] + ("" if placed else xml_escape(repl)) + inner[hi:]
+                placed = True
+                touched.add(k)
+        out, cursor = [], 0
+        for k, n in enumerate(nodes):
+            out.append(p_xml[cursor:n.start()])
+            opn = _ensure_xml_space_preserve(n.group(1)) if k in touched else n.group(1)
+            out.append(f"{opn}{inners[k]}{n.group(3)}")
+            cursor = n.end()
+        out.append(p_xml[cursor:])
+        return "".join(out)
+
+    return WP_BLOCK_RE.sub(_p, xml), count[0]
+
+
+def _gc_header_and_spans(xml: str, rel: str) -> tuple[str, int]:
+    """The GC_HEADER_* and GC_SPAN_RULES steps for one GC document.xml. Strict: every rule
+    must hit exactly the two copies (mc:Choice + mc:Fallback), so a re-saved form whose
+    wording moved fails here instead of shipping a placeholder nobody tokenized."""
+    total = 0
+    xml, n = _tokenize_header_box(xml, GC_HEADER_LINES, GC_HEADER_TOKENS)
+    print(f"  [{'OK' if n == 2 else '!!'}]  job header box -> "
+          f"{' / '.join(t or 'blank' for t in GC_HEADER_TOKENS)}  ({n} boxes, expect 2)")
+    if n != 2:
+        raise ValueError(f"{rel}: the job header box matched {n} time(s), expected 2")
+    total += n
+    for anchor, spans in GC_SPAN_RULES[rel]:
+        xml, n = _tokenize_spans(xml, anchor, spans)
+        print(f"  [{'OK' if n == 2 else '!!'}]  {anchor[:44]!r} -> "
+              f"{', '.join(r for _s, r in spans)}  ({n} paras, expect 2)")
+        if n != 2:
+            raise ValueError(f"{rel}: {anchor!r} matched {n} paragraph(s), expected 2")
+        total += n * len(spans)
+    return xml, total
+
+
 def annotate_one(path: Path, rules: list[tuple[str, str]], rel_path: str) -> int:
     print(f"\n=== {rel_path} ===")
 
@@ -509,6 +701,21 @@ def annotate_one(path: Path, rules: list[tuple[str, str]], rel_path: str) -> int
     if tmp.exists():
         tmp.unlink()
 
+    total = 0
+    try:
+        total = _annotate_into(path, tmp, rules, rel_path)
+    except Exception:
+        # A refusal (a strict GC rule that no longer matches) leaves the template exactly
+        # as it was: the rewrite goes to the .tmp, and only a complete one replaces it.
+        if tmp.exists():
+            tmp.unlink()
+        raise
+
+    shutil.move(str(tmp), str(path))
+    return total
+
+
+def _annotate_into(path: Path, tmp: Path, rules: list[tuple[str, str]], rel_path: str) -> int:
     total = 0
     with zipfile.ZipFile(path, "r") as zin, zipfile.ZipFile(
         tmp, "w", zipfile.ZIP_DEFLATED
@@ -541,6 +748,11 @@ def annotate_one(path: Path, rules: list[tuple[str, str]], rel_path: str) -> int
                     xml, n = _delete_paragraphs(xml, GC_SCOPE_CONTINUATIONS[_rel])
                     if n:
                         print(f"  [OK]  deleted {n} scope-continuation paragraph(s)")
+                # GC job header + spec / finish / addenda lines (GC_SPAN_RULES). Strict:
+                # raises when a rule does not hit both copies.
+                if _rel in GC_SPAN_RULES and item.filename == "word/document.xml":
+                    xml, n = _gc_header_and_spans(xml, _rel)
+                    total += n
                 # Gyp underlayment: label-token Exclusions, delete leftover static
                 # option/clarification rows, then wrap {{#block}} markers + bare-xx
                 # job name. Order matters (delete before marker inserts).
@@ -565,9 +777,27 @@ def annotate_one(path: Path, rules: list[tuple[str, str]], rel_path: str) -> int
                     print(f"  [{'OK' if _c[0] else '--'}]  gyp bare 'xx' -> {{{{job_name}}}}  ({_c[0]})")
                 data = xml.encode("utf-8")
             zout.writestr(item, data)
-
-    shutil.move(str(tmp), str(path))
     return total
+
+
+def annotate_from(raw_dir: Path, rel_paths, out_root: Path = TEMPLATES_DIR) -> dict[str, int]:
+    """Annotate COPIES of Kyle's raw files: each `rel_path` (a TEMPLATE_RULES key) is
+    copied from `raw_dir / <its file name>` to `out_root / rel_path` and annotated there.
+    Kyle's file is only ever read, and a raw file never has the rules run over it twice --
+    the corruption `main` warns about. Returns {rel_path: substitutions}."""
+    out: dict[str, int] = {}
+    for rel in rel_paths:
+        rel = rel.replace("\\", "/")
+        if rel not in TEMPLATE_RULES:
+            raise KeyError(f"no rules for {rel!r}")
+        src = Path(raw_dir) / Path(rel).name
+        if not src.exists():
+            raise FileNotFoundError(f"no raw file for {rel!r} at {src}")
+        dst = Path(out_root) / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(src, dst)
+        out[rel] = annotate_one(dst, TEMPLATE_RULES[rel], rel)
+    return out
 
 
 def main() -> int:
@@ -575,7 +805,23 @@ def main() -> int:
     # re-running the rules over an ALREADY-annotated template corrupts it, so pass
     # the target when adding/fixing ONE template (e.g. the Gyp file) and leave the
     # rest untouched. No args = annotate all (fresh-checkout bootstrap only).
-    targets = {a.replace("\\", "/") for a in sys.argv[1:]}
+    #
+    # `--from DIR target...` starts each target from Kyle's RAW file in DIR instead
+    # (copied over the installed one, then annotated) -- the safe way to take a re-saved
+    # form, and the way the three GC files are produced:
+    #     python annotate_templates.py --from "../docs/GC Templates" \
+    #         "GC/xx TREADWELL POLISH PROPOSAL - xx.docx" \
+    #         "GC/xx TREADWELL RESINOUS PROPOSAL - xx.docx" \
+    #         "GC/xx TREADWELL SEALER PROPOSAL - xx.docx"
+    args = sys.argv[1:]
+    if args[:1] == ["--from"]:
+        if len(args) < 3:
+            print("usage: annotate_templates.py --from <raw dir> <template> [<template> ...]")
+            return 2
+        done = annotate_from(Path(args[1]), args[2:])
+        print(f"\nDone. {sum(done.values())} total substitutions from {args[1]}.")
+        return 0
+    targets = {a.replace("\\", "/") for a in args}
     print(f"Annotating templates in {TEMPLATES_DIR}" + (f" (targets: {sorted(targets)})" if targets else " (ALL)"))
     grand_total = 0
     for rel_path, rules in TEMPLATE_RULES.items():
