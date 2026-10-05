@@ -3650,7 +3650,8 @@ def _price_bundle(payload: PriceIn, systems_in: list, coves_in: list,
             prevailing_wage=lb.get("prevailing_wage", False), demo_sf=lb.get("demo_sf", 0),
             local=lb.get("local", True), super_pct=lb.get("super_pct", 0.03),
             soft_pct=lb.get("soft_pct", 0.13), contingency=lb.get("contingency", 0),
-            hard_bid=lb.get("hard_bid", False), taxable=payload.taxable,
+            # No hard_bid since 2026-10-03: a caller still sending labor.hard_bid is ignored.
+            taxable=payload.taxable,
             sales_tax_rate=payload.sales_tax_rate, remodel=payload.remodel,
             remodel_rate=payload.remodel_rate or 0.0,
             fees=lb.get("fees", 0), bond_pct=lb.get("bond_pct", 0),
@@ -3891,7 +3892,6 @@ _AUTOFILL_SYSTEM_PROMPT = (
     "{\n"
     '  // ─── Estimate-sheet cells (Yes/No flags) ───────────\n'
     '  "Epoxy!B4":  "Yes|No",   // Local? Address within ~70mi of KC, MO\n'
-    '  "Epoxy!B5":  "Yes|No",   // Hard Bid? (multiple contractors bidding)\n'
     '  "Epoxy!D5":  "Yes|No",   // Prevailing Wage? (public funding)\n'
     '  "Epoxy!B6":  "Yes|No",   // Taxable? (default Yes unless exempt cert mentioned)\n'
     '  "Epoxy!D6":  "Yes|No",   // Remodel tax (often Yes if user has remodel exemption)\n'
@@ -3910,14 +3910,11 @@ _AUTOFILL_SYSTEM_PROMPT = (
     "}\n"
     "\n"
     "Rules:\n"
-    "- ALWAYS fill all 7 flag cells (B4, B5, D5, B6, D6, B9, B10) unless\n"
+    "- ALWAYS fill all 6 flag cells (B4, D5, B6, D6, B9, B10) unless\n"
     "  the value is truly indeterminate from BOTH the notes AND the\n"
     "  defaults below. For a flag, you should NEVER return null/empty\n"
     "  if the notes contain any signal at all.\n"
     "- Triggers for each flag — fill if you see ANY of these signals:\n"
-    "    Epoxy!B5 (Hard Bid) = Yes if notes mention: 'hard bid',\n"
-    "      'multiple contractors', 'N contractors bidding', 'getting bids',\n"
-    "      'bid against', 'competitive bid'.\n"
     "    Epoxy!D5 (Prevailing Wage) = Yes if notes mention: 'prevailing\n"
     "      wage', 'public funded', 'state-funded', 'bond-funded',\n"
     "      'federal funds', 'school district', 'municipality', 'gov't'.\n"
@@ -3932,7 +3929,9 @@ _AUTOFILL_SYSTEM_PROMPT = (
     "      'redo', 'replace existing', 'remodel', 'demo existing',\n"
     "      'refurbish'. Else New.\n"
     "- Conservative DEFAULTS for when notes are silent on a flag:\n"
-    "  Taxable=Yes, Hard Bid=No, Prevailing Wage=No, Remodel=No, B10=New.\n"
+    "  Taxable=Yes, Prevailing Wage=No, Remodel=No, B10=New.\n"
+    "- Do NOT return Epoxy!B5 (Hard Bid?). Treadwell no longer applies a\n"
+    "  hard-bid discount, so a competitive bid sets no cell.\n"
     "- DO NOT touch SF/LF quantities — the estimator types those in intake "
     "and those are authoritative.\n"
     "- For system_name + texture, infer from product mentions ('Macro "
@@ -4158,6 +4157,25 @@ def _ai_rate_limited(retry: int, what: str) -> JSONResponse:
     )
 
 
+def _without_hard_bid_flags(data: Any) -> Any:
+    """The AI's answer minus any Hard Bid? cell (estimate_writer.HARD_BID_FLAG_CELLS) and its
+    reasoning line. The prompt no longer asks for one; this is for a model that answers anyway,
+    so the banner never reports a switch the tool has removed (Hanz, 2026-10-03). The workbook
+    and the screen both refuse the cell on their own -- this keeps it out of the reply too."""
+    if not isinstance(data, dict):
+        return data
+
+    def is_flag(key: Any) -> bool:
+        sheet, _, addr = str(key).partition("!")
+        return (bool(addr) and estimate_writer.HARD_BID_FLAG_CELLS.get(sheet)
+                == estimate_writer.canonical_cell_addr(addr))
+
+    out = {k: v for k, v in data.items() if not is_flag(k)}
+    if isinstance(out.get("reasoning"), dict):
+        out["reasoning"] = {k: v for k, v in out["reasoning"].items() if not is_flag(k)}
+    return out
+
+
 @app.post("/api/autofill")
 def api_autofill(payload: AutofillIn, request: Request) -> Any:
     """Infer Yes/No flags + system selections from lead notes via the
@@ -4192,7 +4210,7 @@ def api_autofill(payload: AutofillIn, request: Request) -> Any:
     )
 
     try:
-        data = _autofill_via_cli(user_input)
+        data = _without_hard_bid_flags(_autofill_via_cli(user_input))
         return {"ok": True, "cell_values": data, "via": "cli"}
     except FileNotFoundError:
         _autofill_rate_refund(bucket)   # error → don't consume the project's budget
@@ -4488,14 +4506,37 @@ def _flooring_noun(work_type: str) -> str:
     }.get(str(work_type or "").lower(), "Flooring")
 
 
+# The longest an option's own description may run. The Proposal step's textarea stops at the same
+# number (maxlength) and its mkRoom cuts there too; this is the document's own guard, for a
+# payload that did not come from that page.
+OPTION_DESC_MAX = 400
+_OPTION_DESC_ILLEGAL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]")
+
+
+def _option_custom_desc(raw: Any) -> str:
+    """The estimator's own words for one option (rooms[].custom_desc, typed in its sidebar row),
+    made one tidy line: control characters and every run of whitespace (a newline included) become
+    one space, and it stops at OPTION_DESC_MAX. "" when there are none."""
+    s = _OPTION_DESC_ILLEGAL.sub(" ", str(raw or ""))
+    return " ".join(s.split())[:OPTION_DESC_MAX].strip()
+
+
 def _build_options(rooms_in: list, values: Dict[str, Any], work_type: str = "epoxy") -> list:
     """NON-base priced options for the proposal PRICE section ({{#room}} block).
 
     The base bid is rendered by {{#single_bid}}, so it is EXCLUDED here. Each input
     option (from the estimate/proposal side) is
     {name, is_base, base_total, deduct_amount, price_mode, show, option_desc,
-     base_desc, system_desc, bid:{total, sales_tax, remodel, taxable?, remodel_on?},
+     base_desc, system_desc, custom_desc?, bid:{total, sales_tax, remodel, taxable?, remodel_on?},
      notes_auto, notes_manual}.
+
+    `custom_desc` is the option's OWN long description (the Proposal step's sidebar Description).
+    When it is set it IS the option line -- Kyle's own style, "$4,200 – Add for onsite mockup, if
+    required." -- in place of the system name, and WITHOUT the "as described above" the
+    system-name fallback carries (that phrase only means something after a system name). It
+    replaces the option's name in the Add line the same way, and IS the whole Deduct line ("Deduct
+    ($3,200) – <desc>"): the estimator types the full phrase, so the "VE for ..., in lieu of <base>."
+    wrapper is not put round it. Unset, every line below is exactly what it has always been.
 
     AN OPTION IS ALWAYS ONE LINE. Hanz, 2026-09-28: "Options should only be total amount, cannot
     be broken out. Only the base bid would be broken out or one line." (He had picked an itemised
@@ -4536,6 +4577,9 @@ def _build_options(rooms_in: list, values: Dict[str, Any], work_type: str = "epo
         if total <= 0:                                # un-snapshotted / empty sheet
             continue
         option_desc = str(r.get("option_desc") or r.get("system_desc") or r.get("name") or "").strip()
+        custom = _option_custom_desc(r.get("custom_desc"))
+        if custom:
+            option_desc = custom
         rule = price_rules.tax_rule(total, bid.get("sales_tax"), bid.get("remodel"),
                                     taxable=bid.get("taxable"),
                                     remodel_on=bid.get("remodel_on"), layout=price_rules.ONE_LINE)
@@ -4549,14 +4593,16 @@ def _build_options(rooms_in: list, values: Dict[str, Any], work_type: str = "epo
             if diff < 0:
                 base_desc = str(r.get("base_desc") or "").strip() or "the base bid"
                 price_formatted = "Deduct " + _fmt_usd(diff, parens=True)   # parens = abs magnitude
-                price_desc = f"VE for {option_desc or noun}, in lieu of {base_desc}."
+                # The estimator's own words are the whole phrase: no "VE for ..., in lieu of ..."
+                # wrapper round them. Without any, the line is what it has always been.
+                price_desc = custom or f"VE for {option_desc or noun}, in lieu of {base_desc}."
             else:
                 price_formatted = "Add " + _fmt_usd(diff)
                 price_desc = option_desc or noun
         else:                                         # total mode: the option's own price
             tax_phrase = rule["phrase"]
             price_formatted = _fmt_usd(rule["base_cents"] / 100)
-            price_desc = f"{option_desc or noun} as described above" + (
+            price_desc = (custom or f"{option_desc or noun} as described above") + (
                 f" {tax_phrase}" if tax_phrase else "")
             candidates = [_fmt_usd(rule["total_cents"] / 100)]
 
@@ -4718,6 +4764,10 @@ def _sanitize_paragraph_overrides(overrides_in: list) -> list:
                 # A bool is an int subclass: True would become 1pt, an invisible paragraph.
                 if isinstance(sz, (int, float)) and not isinstance(sz, bool) and 1 <= float(sz) <= 200:
                     one["size_pt"] = float(sz)
+                    # `size_set`: the ribbon's size box put this size here, so it is the estimator's
+                    # even when the template's own line uses it (see _set_paragraph_runs).
+                    if r.get("size_set") is True:
+                        one["size_set"] = True
                 clean.append(one)
             if clean:
                 # `text` rides along as the plain-text fallback for any consumer that ignores runs.
@@ -5220,6 +5270,16 @@ def _ensure_value_aliases(values: Dict[str, Any], audience=None) -> None:
         if _bd:
             _y, _mo, _d = _bd.groups()
             values["bid_date_formatted"] = f"{int(_mo)}/{int(_d)}/{_y[2:]}"
+    # The GC spec line's "Drawings ... dated" (intake `drawings_dated`, an ISO date), M/D/YY like
+    # the header date. The browser sends it (computeTokenValues); this is the same rule for a
+    # replayed payload that holds only the date. Something typed that is not an ISO date prints as
+    # typed. A blank stays blank: the GC file then prints Kyle's own date in its place
+    # (proposal_writer.TEMPLATE_TOKEN_DEFAULTS), and nothing invents one here.
+    if _blank(values.get("drawings_dated_formatted")) and not _blank(values.get("drawings_dated")):
+        _dd = str(values.get("drawings_dated")).strip()
+        _dm = re.match(r"^(\d{4})-(\d{2})-(\d{2})", _dd)
+        values["drawings_dated_formatted"] = (
+            f"{int(_dm.group(2))}/{int(_dm.group(3))}/{_dm.group(1)[2:]}" if _dm else _dd)
     # Polish's Area and Total rows are WHOLE-LINE tokens -- "{{area_description}}"
     # and "{{total_label}}", not an amount token beside static words -- so the
     # base_bid/material_tax backfills above never reach them and a payload without
@@ -5376,11 +5436,23 @@ def api_proposal_template(request: Request, work_type: str = "epoxy", audience: 
     # heading is the editor's own #options-heading. Held as a set so the walk below keeps the
     # same element proxies alive and membership is by element identity.
     _options_heads = set(proposal_writer.options_heading_paragraphs(d))
+    # A template with no {{#price_line}} region (the GC files) prints its option / manual / combo
+    # lines under that free heading, cloned from the first of Kyle's money rows there. The editor
+    # mounts its price-line island after the heading and draws it with the model row's paragraph
+    # properties, so both are named here, held (so the walk's element proxies are the same ones)
+    # and found by identity. None when the template prints them through a region.
+    _anchor = proposal_writer.price_lines_anchor(d)
+    anchor_ids: dict = {}
     options_heading_ids = []
     blocks = []
     for idx, kind, p_elem, in_block, text, txbx_idx in proposal_writer.iter_editable_blocks(d):
         if in_block is None and p_elem in _options_heads:
             options_heading_ids.append(idx)
+        if _anchor is not None:
+            if p_elem is _anchor[0]:
+                anchor_ids["heading_id"] = idx
+            if p_elem is _anchor[1]:
+                anchor_ids["model_id"] = idx
         p = Paragraph(p_elem, d)
         style_name = None
         try:
@@ -5429,6 +5501,13 @@ def api_proposal_template(request: Request, work_type: str = "epoxy", audience: 
         })
 
     geometry = proposal_writer.template_geometry(d)
+    # What the render changes about the layout beyond the values -- the Terms pages rebuilt as one
+    # section with a repeating letterhead, Kyle's hand-split clauses rejoined, a WORK line that
+    # would print only its label left out -- as block ids of THIS walk, so the editor makes the
+    # same changes from the plan the writer applies (proposal_writer.render_adjustments). On the
+    # same document the blocks were read from: none of the passes above adds or removes a
+    # paragraph, so the ids are the pristine template's.
+    render_adjustments = proposal_writer.render_adjustments(d)
     payload = {
         "work_type": work_type,
         "audience": audience,
@@ -5439,6 +5518,15 @@ def api_proposal_template(request: Request, work_type: str = "epoxy", audience: 
         # second (see `template_versions`); 0 = no legacy stamp is. The editor's
         # restore guards apply the same rule the backend's `_template_version_accepts` does.
         "template_version_legacy_floor_s": template_versions.legacy_floor_s(template_path),
+        # Older content versions of THIS file whose saved edits still land on the same paragraphs
+        # (`template_versions.PREDECESSOR_VERSIONS`: a template replaced by a re-saved form with a
+        # proven-identical walk). The editor's savedVersionMatches accepts them, as
+        # `_template_version_accepts` does at generate.
+        "template_version_predecessors": list(template_versions.predecessor_versions(template_path)),
+        # What a blank token prints on this template -- Kyle's own placeholder on the GC spec,
+        # finish and addenda lines (proposal_writer.TEMPLATE_TOKEN_DEFAULTS). The editor shows the
+        # same words for a blank field that fill_proposal prints; it never sends them back.
+        "token_defaults": proposal_writer.template_token_defaults(work_type, audience or None),
         "geometry": geometry,
         "blocks": blocks,
         # Ids of the free-paragraph Options heading(s), so the editor can draw the blank lines
@@ -5446,6 +5534,16 @@ def api_proposal_template(request: Request, work_type: str = "epoxy", audience: 
         # rather than a per-block field: the block shape, which _BLOCK_SCHEMA_VERSION pins, is
         # unchanged, and a browser holding an older body simply draws no gap lines on GC.
         "options_heading_ids": options_heading_ids,
+        # Where the editor mounts the option / manual / combo price lines on a template that has no
+        # {{#price_line}} region: {"heading_id": the block they follow, "model_id": the block whose
+        # paragraph properties they are drawn with -- the row the writer clones}. null on every
+        # template that prints them through a region, and on an older body: the editor then mounts
+        # them as it always did. Top-level for the reason above.
+        "price_lines_anchor": (anchor_ids if len(anchor_ids) == 2 else None),
+        # Top-level for the same reason: the block shape is unchanged. See proposal_writer
+        # .render_adjustments for the fields; a browser holding an older body has none and draws
+        # the template as it was.
+        "render_adjustments": render_adjustments,
     }
     # Built through JSONResponse so the cached bytes ARE the bytes this
     # endpoint has always sent — same encoder, same separators, same
@@ -6138,7 +6236,9 @@ def _generate(payload: GenerateIn, request: Request, *,
     # so the Direct templates need NO structural change: each option is
     # "$8,310 – <system> as described above (…)" or "($6,000) – Deduct VE … in
     # lieu of <base>". Any per-option notes fold inline. The base bid itself shows
-    # via {{#single_bid}}. (The GC files have no {{#price_line}}; Gyp's sits under its own
+    # via {{#single_bid}}. (The GC files have no {{#price_line}}: the writer prints these rows
+    # directly under their free "Options & Unit Prices" heading instead, as the editor draws them
+    # -- proposal_writer._insert_price_lines_under_headings. Gyp's sits under its own
     # {{#has_options}}.)
     #
     # EACH OPTION FOLLOWS ITS OWN TAB (price_rules.tax_rule, the same rule as the base): one line
@@ -6235,8 +6335,12 @@ def _generate(payload: GenerateIn, request: Request, *,
         # proposal_writer._strip_leading_separator) so those lines aren't
         # visually indistinguishable from the combo base price. Skip it when
         # there's nothing after the breakout — an empty "Options:" would have
-        # nothing to introduce.
-        if price_line_dicts:
+        # nothing to introduce. And skip it where the template keeps its OWN heading, which
+        # {{#single_bid}} does not take with it (the GC files: "Options & Unit Prices"): the
+        # lines print under that one, and a second heading would print a second blank gap and
+        # the lines typed under the heading twice.
+        if price_line_dicts and not proposal_writer.template_lines_under_heading(
+                payload.work_type, payload.audience):
             # `_options_heading`: this row IS the Options heading on this layout, so the blank
             # lines the estimator set above the heading print above it (options_gap). It prints
             # what the editor shows there -- a renamed heading as renamed, and the lines typed

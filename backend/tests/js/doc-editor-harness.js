@@ -390,6 +390,10 @@ const LIFTED = [
   // applyBoxFit leaves the box at its design size, which is the page before its first answer.
   topConst("boxFitById"), topConst("PAGE_HP"), fn("inlineHp"), fn("clearBoxFit"), fn("applyBoxFit"),
   fn("fitTxbx"), fn("wireOverflowExpand"),
+  // fitTxbx, fitOffer, growBoxToFit and releaseAutoGrownHeight measure a box by how far its
+  // PRINTED text reaches (boxContentPx -> boxInkPx), which falls back to the box's own height
+  // when no line in it is laid out -- as here, where only the box has a modelled height.
+  fn("boxInkPx"), fn("boxContentPx"),
   // The Enter handler no longer trusts the event target: the box is the editing host now, so the
   // browser fires the keystroke at the box and the caret is the only thing that says which
   // paragraph it belongs to. These four are that resolution, lifted rather than stubbed so the

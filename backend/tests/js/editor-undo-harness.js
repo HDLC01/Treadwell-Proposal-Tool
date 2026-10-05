@@ -444,6 +444,8 @@ const api = new Function(
     fn("runsEqual"), fn("pointAt"), fn("markEdited"),
     fn("lineAt"), fn("lineAtSelection"), fn("editingBox"), fn("boxLines"), fn("lineShown"),
     fn("paraBase"), fn("paraNow"), fn("sanitizeParaPatch"), fn("applyParaGeom"),
+    // applyParaGeom's vertical geometry: applyParaSpacing / paraLineHeight / SINGLE_LINE_EM.
+    topConst("SINGLE_LINE_EM"), fn("paraLineHeight"), fn("applyParaSpacing"),
     fn("applyParaToEl"), fn("setParaState"), fn("paraAction"),
     // A PRICE LINE is a ribbon target too (the REBID price box): paraAction hands one to
     // priceLineAction, after asking isPriceLine.
@@ -625,6 +627,21 @@ const out = {};
   key(box, "Delete");
   undoKey(box);
   out.fmtAfterUndo = api.editRuns(blocks[0]);
+}
+
+// ═══ 2b. A PICKED SIZE COMES BACK AS PICKED ══════════════════════════════════
+// The size box marks what it wrote (`size_set`, drawn as data-sz-set). An undo restores the runs the
+// pre-image holds, so a flag the pre-image dropped would hand the writer a plain edit's 9pt: the
+// size looks restored and the line is shrunk with its box again.
+{
+  const { box, blocks } = mountBox(
+    ['Scope: <span data-sz-set="1" style="font-size:9pt">grind</span> and prep.']);
+  caretIn(blocks[0], 0, 0);
+  out.pickedBefore = api.editRuns(blocks[0]);
+  api.setBoxSel(blocks);
+  key(box, "Delete");
+  undoKey(box);
+  out.pickedAfterUndo = api.editRuns(blocks[0]);
 }
 
 // ═══ 3. WHAT ONE UNDO UNIT IS ════════════════════════════════════════════════

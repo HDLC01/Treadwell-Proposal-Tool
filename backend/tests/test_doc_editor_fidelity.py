@@ -214,6 +214,37 @@ def test_an_entry_from_another_version_of_the_template_is_neither_replayed_nor_r
         "the version-mismatched entry was rescued into the new store")
 
 
+def test_an_entry_from_a_proven_predecessor_of_the_template_is_replayed(ran):
+    """Kyle's re-saved GC forms replaced three templates with the SAME paragraph walk, so the server
+    names the old content as a predecessor and the drafts' saved edits come back (Hanz,
+    2026-10-02: no saved edit is lost). The next save stamps the entry with the current version."""
+    got = ran["predecessor"]
+    assert got["restored"]["dirty"] is True
+    assert got["restored"]["fmt"] is True
+    assert got["restored"]["text"] == "Scope:  kept across the swap"
+    assert got["after"]["template_version"] == "tv-epoxy-1", "the next save did not re-stamp it"
+    assert [o["text"] for o in got["after"]["items"]] == ["Scope:  kept across the swap"]
+    # A version the server did NOT name is refused as before.
+    assert got["otherRestored"]["dirty"] is False
+    assert got["otherRestored"]["text"] != "Scope:  kept across the swap"
+
+
+def test_a_blank_token_shows_the_templates_placeholder_and_is_not_an_edit(ran):
+    """The editor draws a blank GC spec field with Kyle's own placeholder -- what the document
+    prints -- and a value typed at intake replaces it. Drawing the placeholder must not make the
+    paragraph look edited: an edit would freeze "xx Architects" into the customer's proposal."""
+    got = ran["tokenDefaults"]
+    want_blank = ("Polished Concrete: per Spec 033543 & Drawings by xx Architects dated 8/1/26 "
+                  "(NO spec)")
+    assert got["blank"]["text"] == want_blank
+    assert got["blank"]["dirty"] is False and got["blankCollect"] == []
+    assert got["filled"]["text"] == ("Polished Concrete: per Spec 033543 & Drawings by Gould Evans "
+                                     "dated 8/15/26 (NO spec)")
+    assert got["cleared"]["text"] == ("Polished Concrete: per Spec 033543 & Drawings by xx Architects "
+                                      "dated 8/15/26 (NO spec)"), "a cleared field did not fall back"
+    assert got["finalCollect"] == []
+
+
 def test_an_untouched_document_still_ships_nothing(ran):
     """The generated .docx for a document nobody edited has to be the file it was before any of
     this existed."""
@@ -728,3 +759,145 @@ def test_an_edit_put_back_leaves_the_draft_and_the_rescue_still_keeps_what_the_p
     assert b["collected"] == [] and b["stored"] == [], (b["collected"], b["stored"])
     assert b["reloaded"] == "Scope:  Grind and coat."
     assert b["neverDrawn"] == b["storedEdit"], b["neverDrawn"]
+
+
+# ══ an UNTOUCHED no-break space is not an edit (review of the 2026-10-03 NOTES-box fix) ═══════════════
+# Kyle's GC "...installation.<NBSP>See Terms & Conditions." note and three Gyp WORK lines carry a
+# no-break space. `serializeBlock` reads every NBSP back as a plain space; the baseline
+# `setBlockContent` kept still had it. So `cur !== pristine` was true for those paragraphs the moment the
+# page drew them: `collectOverrides` shipped each as an override, with runs and sizes, on every persist
+# (and the document printed a plain space where Kyle's no-break one was); a keystroke anywhere in the
+# same box marked them tw-dirty; and an edit put back by hand left the mark on. The harness runs the
+# REAL blocks of whole templates through the page's own renderBlock, input handler, collectOverrides and
+# persist: which paragraphs hold an NBSP is a fact about Kyle's files, so no stand-in paragraph will do.
+from test_editor_fit_parity import TEMPLATES as _ALL_TEMPLATES   # noqa: E402  (all eight files)
+
+_NBSP_IDS = {("epoxy", "GC"): [161], ("polish", "GC"): [163], ("sealer", "GC"): [162],
+             ("gyp", "Direct"): [132, 134, 136]}
+_NBSP_PAGES = sorted(_NBSP_IDS)
+
+
+@pytest.fixture(scope="module")
+def real_pages(tmp_path_factory):
+    if shutil.which("node") is None:
+        pytest.skip("node is not installed")
+    from test_editor_fit_parity import _V, _template
+    cases = []
+    for wt, aud in _ALL_TEMPLATES:
+        tpl = _template(wt, aud)
+        tokens = dict(tpl.get("token_defaults") or {})
+        tokens.update(_V)
+        cases.append({"work_type": wt, "audience": aud, "version": tpl["template_version"],
+                      "blocks": tpl["blocks"], "tokens": tokens})
+    f = tmp_path_factory.mktemp("pages") / "pages.json"
+    f.write_text(json.dumps({"pages": cases}), encoding="utf-8")
+    proc = subprocess.run(["node", str(HARNESS), str(FRONTEND), str(f)],
+                          capture_output=True, text=True, encoding="utf-8", timeout=300)
+    assert proc.returncode == 0, (
+        "the harness itself failed — read this before assuming a product bug:\n" + proc.stderr)
+    return json.loads(proc.stdout.strip().splitlines()[-1])["pages"]
+
+
+@pytest.mark.parametrize("wt,aud", _ALL_TEMPLATES)
+def test_the_pages_under_test_hold_the_no_break_spaces_the_review_found(real_pages, wt, aud):
+    """The fixture is the real template: the paragraphs named here, and no others, hold the no-break
+    space (the four Direct epoxy/polish/combo/budget files hold none). If Kyle re-authors a file and
+    they stop, the tests below prove nothing."""
+    from test_editor_fit_parity import _template
+    own = [b["id"] for b in _template(wt, aud)["blocks"] if b["in_block"] is None and "\xa0" in b["text"]]
+    assert own == _NBSP_IDS.get((wt, aud), []), own
+    assert real_pages[f"{wt}:{aud}"]["nbsp"] == own
+
+
+@pytest.mark.parametrize("wt,aud", _ALL_TEMPLATES)
+def test_an_untouched_page_collects_no_overrides_and_marks_nothing(real_pages, wt, aud):
+    """A whole template drawn and left alone sends nothing, marks nothing dirty and saves nothing to
+    the draft. Before: one override per no-break-space paragraph, each marked, on every persist.
+    Mutation: keep the baseline as `fillPlain` returns it (setBlockContent without the NBSP read)."""
+    r = real_pages[f"{wt}:{aud}"]
+    assert r["untouched"] == [], r["untouched"]
+    assert r["dirtyOnLoad"] == [], r["dirtyOnLoad"]
+    assert r["storedOnLoad"] == [], r["storedOnLoad"]
+
+
+@pytest.mark.parametrize("wt,aud", _NBSP_PAGES)
+def test_a_keystroke_in_a_sibling_line_does_not_mark_the_no_break_space_line(real_pages, wt, aud):
+    """The input handler syncs every paragraph in the edited box, so one keystroke marked every
+    no-break-space line in it dirty and sent it. Now only the line typed in is sent and saved."""
+    r = real_pages[f"{wt}:{aud}"]
+    assert r["siblingEdit"]["collected"] == [r["sibling"]], r["siblingEdit"]
+    assert r["siblingEdit"]["stored"] == [r["sibling"]], r["siblingEdit"]
+    assert r["siblingEdit"]["nbspDirty"] == [], r["siblingEdit"]
+
+
+@pytest.mark.parametrize("wt,aud", _NBSP_PAGES)
+def test_a_real_edit_to_a_no_break_space_line_is_still_sent_once_as_plain_text(real_pages, wt, aud):
+    """The fix must not turn the line into one that can never be edited. The words typed arrive, once,
+    and the no-break space reads as the plain space the document has always been given for an edited
+    line (a contenteditable puts NBSPs into typed words; none may reach the document).
+    Mutation: `setBlockContent` keeps the baseline with its NBSP (the other no-break-space lines of the
+    page are then sent along with the one edited, so `collected` is no longer just the edited line)."""
+    r = real_pages[f"{wt}:{aud}"]
+    first = _NBSP_IDS[(wt, aud)][0]
+    e = r["realEdit"]
+    assert e["collected"] == [first] and e["dirty"] is True, e
+    assert e["text"] == r["original"] + " and more", e
+    assert e["hasNbsp"] is False, e
+
+
+@pytest.mark.parametrize("wt,aud", _NBSP_PAGES)
+def test_an_edit_put_back_by_hand_clears_the_dirty_mark(real_pages, wt, aud):
+    """Typed back to the template's words, the line reads as the template again: nothing is sent and
+    the tw-dirty mark goes. Before: the mark stayed on for ever, and the line was sent as an edit."""
+    r = real_pages[f"{wt}:{aud}"]
+    assert r["putBack"] == {"collected": [], "dirty": False, "text": r["original"]}, r["putBack"]
+
+
+@pytest.mark.parametrize("wt,aud", _NBSP_PAGES)
+def test_the_customer_document_keeps_kyles_no_break_space_when_nothing_was_edited(real_pages, wt, aud):
+    """What the untouched page sends (nothing) prints Kyle's no-break space exactly as a document with
+    no overrides does. The page used to send the line back with a plain space in it, and that is what
+    the customer's PDF then wrapped on. Mutation: as above -- the override comes back, the NBSP goes."""
+    r = real_pages[f"{wt}:{aud}"]
+
+    def nbsp_lines(overrides):
+        return [t for t in _printed(wt, aud, overrides, "ONE_LINE") if "\xa0" in t]
+
+    template_prints = nbsp_lines([])
+    assert template_prints, "the template no longer prints a no-break space"
+    assert nbsp_lines(r["untouchedOverrides"]) == template_prints
+
+
+def test_the_live_re_fill_follows_the_estimate_on_a_formatted_no_break_space_line_twice(ran):
+    """The same baseline, read at the other two places. A line the estimator only formatted is re-filled
+    in place when the sidebar changes (`refreshFillsInPlace`), which refuses a line whose words differ
+    from the baseline and moves the baseline with the value it writes. With the no-break space left in
+    the baseline the first refill was refused (the number stayed where it was), and a baseline written
+    back with it made the next read take the fresh number for a hand edit, which drops the token tag from
+    the stored runs: the number stops following the estimate. A synthetic line: no shipped one carries
+    both a no-break space and a fill.
+    Mutation: the baseline `setBlockContent` keeps without the NBSP read (first refill refused); the one
+    `refreshFillsInPlace` writes back without it (the token tag is dropped)."""
+    r = ran["nbspLiveFillTwice"]
+    assert r["drawn"] == "Area: 5,200 SF"
+    assert r["mid"]["text"] == "Area: 6,000 SF" and any(x.get("tok") for x in r["mid"]["runs"]), r["mid"]
+    assert r["after"]["text"] == "Area: 7,500 SF", r["after"]
+    assert r["stored"]["text"] == "Area: 7,500 SF" and any(x.get("tok") for x in r["stored"]["runs"]), r["stored"]
+
+
+def test_a_size_the_estimator_picked_survives_save_reload_and_typing_inside_it(ran):
+    """The writer cannot tell an estimator who sets a line to a size the line already uses (8pt on
+    block 115's 8pt) from a plain edit handing the template's size back, so the size box marks what
+    it wrote: `size_set` on the run, `data-sz-set` on the span. It reaches the payload, the saved
+    draft and a reload, stays on the span when words are typed inside it, and is NEVER written by
+    typing, deleting or replacing text.
+    Mutation: `renderRuns` not writing the attribute (the flag dies at the first re-render); `fmtAt`
+    not reading it (it dies at the first serialise)."""
+    g = ran["pickedSize"]
+    assert g["flaggedSent"] == ["Grind"], g["sent"]
+    assert g["flaggedReloaded"] == ["Grind"], "the flag did not survive the reload"
+    assert g["flaggedStored"] == ["Grind"], "the flag did not survive the second persist"
+    assert g["flaggedAfterTypingInside"] == ["Grinded"], g["typedInside"]
+    assert g["typing"] == {"append": {"sizeSet": False, "collected": True},
+                           "replace": {"sizeSet": False, "collected": True},
+                           "delete": {"sizeSet": False, "collected": True}}, g["typing"]

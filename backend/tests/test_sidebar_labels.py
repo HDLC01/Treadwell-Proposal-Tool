@@ -127,11 +127,13 @@ def test_the_portal_item_is_labelled_direct_projects(sidebar):
 
 
 def test_the_general_contractor_board_is_in_the_sidebar(sidebar):
-    """The second board, as its own row with its own address. The label is Hanz's, word for word:
-    "we add a new pipeline named 'General Contractor' as a new sidebar"."""
-    assert re.search(r'navItem\("/gc-projects\.html",\s*"[^"]+",\s*"General Contractor"\)',
+    """The second board, as its own row with its own address. Named "General Contractor" on
+    2026-09-29 ("we add a new pipeline named 'General Contractor' as a new sidebar"), renamed
+    "GC Projects" on 2026-10-02 ("change on the sidebar ... from general contractor to GC
+    projects")."""
+    assert re.search(r'navItem\("/gc-projects\.html",\s*"[^"]+",\s*"GC Projects"\)',
                      sidebar), (
-        "the General Contractor item is missing; nav items are %s" % (_nav_labels(sidebar),))
+        "the GC Projects item is missing; nav items are %s" % (_nav_labels(sidebar),))
 
 
 def test_no_sidebar_item_still_carries_an_old_name(sidebar):
@@ -142,6 +144,8 @@ def test_no_sidebar_item_still_carries_an_old_name(sidebar):
     assert "Customer Portal CRM" not in labels, "the old 'Customer Portal CRM' label survives"
     assert "Active Projects" not in labels, (
         "the 'Active Projects' label survives beside Direct Projects (renamed 2026-09-29)")
+    assert "General Contractor" not in labels, (
+        "the 'General Contractor' label survives beside GC Projects (renamed 2026-10-02)")
 
 
 # ── the follow-ups section: removed, then put back ────────────────────────────

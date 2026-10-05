@@ -65,7 +65,16 @@
       const formEl = document.getElementById("proposal-form");
       const canReadForm = formEl && window.TW && typeof TW.readForm === "function";
       const merged = canReadForm ? Object.assign({}, st, TW.readForm(formEl)) : st;
-      return f(merged) || {};
+      const out = f(merged) || {};
+      // THE SIGNATURE'S CONTACT LINE is the one letter token the proposal's resolver does not
+      // know: the server builds it (cover_letter_writer._ensure_cover_letter_values), so the
+      // editor showed a raw {{estimator_contact_line}} while the PDF printed the address. Same
+      // rule as the server: "<email> | wetreadwell.com", or the site alone without an email.
+      if (!String(out.estimator_contact_line == null ? "" : out.estimator_contact_line).trim()) {
+        const email = String(out.estimator_email || merged.estimator_email || "").trim();
+        out.estimator_contact_line = email ? email + " | wetreadwell.com" : "wetreadwell.com";
+      }
+      return out;
     } catch { return {}; }
   }
 
@@ -1216,8 +1225,16 @@
    *  out" state to protect once the letter is simply present or absent, never mid tab-switch. */
   function setEnabled(on) {
     const enabled = !!on;
-    document.body.classList.toggle("cl-on", enabled);
     try { TW.setState({ cover_letter_enabled: enabled }); } catch {}
+    showEnabled(enabled);
+  }
+
+  /** setEnabled's display half, WITHOUT the write: what the page shows on load. Writing on load
+   *  turned a GC project's default (on) into a saved "off" before anybody had touched the box
+   *  (walk of 2026-10-02) -- only a real change of the box is the estimator's choice. */
+  function showEnabled(on) {
+    const enabled = !!on;
+    document.body.classList.toggle("cl-on", enabled);
     if (surface) surface.hidden = !enabled;
     if (enabled) { clWireSurface(); load(false); }
     else clAimClear();   // let go of the ribbon if it was aimed at a letter paragraph
@@ -1230,9 +1247,13 @@
     if (!toggleEl || !surface) return;   // not this page
     clWireRibbon();
 
-    toggleEl.checked = !!live("cover_letter_enabled");
+    // THE PROPOSAL STEP'S OWN ANSWER (proposal-review.js coverLetterOn: the estimator's tick or
+    // untick wins, otherwise ON for a GC project), borrowed and feature-detected like this file's
+    // other shared helpers. A page without it falls back to the saved flag, as before.
+    const resolve = g("coverLetterOn");
+    toggleEl.checked = resolve ? !!resolve() : !!live("cover_letter_enabled");
     toggleEl.addEventListener("change", () => setEnabled(toggleEl.checked));
-    setEnabled(toggleEl.checked);
+    showEnabled(toggleEl.checked);
 
     // A base-bid switch changes the effective work type with no page load, which picks a
     // different letter. Nothing broadcasts that — there is no event bus on this page — so the

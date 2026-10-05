@@ -114,6 +114,14 @@ def test_the_formatting_comes_back_with_the_words(ran):
     assert any(r.get("bold") for r in ran["fmtBefore"]), "the fixture stopped carrying any bold"
 
 
+def test_a_picked_size_comes_back_as_picked(ran):
+    """`size_set` rides the pre-image's runs like any other run key. Without it the undo would put a
+    9pt back that the writer reads as the template's own and shrinks with the box.
+    Mutation: `size_set` taken out of RUN_KEYS (the pre-image never carries it)."""
+    assert ran["pickedAfterUndo"] == ran["pickedBefore"]
+    assert any(r.get("size_set") is True and r.get("size_pt") == 9 for r in ran["pickedBefore"]),         "the fixture stopped carrying a picked size"
+
+
 # ═══ what one undo unit is ═══════════════════════════════════════════════════
 def test_a_burst_of_typing_is_one_undo(ran):
     """Six characters typed straight through leave ONE entry.

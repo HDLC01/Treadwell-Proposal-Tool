@@ -275,13 +275,15 @@ def test_a_size_the_estimator_chose_is_left_alone_and_a_runless_line_takes_the_b
                  and b["fit"]["typed_sized"] is False and b["fit"]["removable"] and b["id"] > scope["id"])
     body = _body("epoxy", "Direct", "overflow", paragraph_overrides=[
         {"id": scope["id"], "text": "Scope:  EXEMPT-QA",
-         "runs": [{"text": "Scope:", "bold": True, "size_pt": 8}, {"text": "  EXEMPT-QA", "size_pt": 8}]},
+         # 9pt, not the template's own 8pt: a run that restates the design size is a plain edit,
+         # which the shrink scales with its neighbours (test_notes_box_layout.py).
+         "runs": [{"text": "Scope:", "bold": True, "size_pt": 9}, {"text": "  EXEMPT-QA", "size_pt": 9}]},
         {"id": blank["id"], "text": "TYPED-QA"},
     ])
     f = next(b for b in _fit(body) if b["id"] == scope["txbx"])
     assert f["scale"] < 0.999 and f["exempt"] == [scope["id"]]
     runs = _box_runs(_docx(body))[scope["txbx"]]
-    assert [h for h, t in runs if t in ("Scope:", "  EXEMPT-QA")] == [16, 16], "the chosen size was shrunk"
+    assert [h for h, t in runs if t in ("Scope:", "  EXEMPT-QA")] == [18, 18], "the chosen size was shrunk"
     typed = [h for h, t in runs if t == "TYPED-QA"]
     d = Document(io.BytesIO(_docx(body, unscaled=True)))
     design_default = pw._txbx_default_hp(list(pw._iter_txbx(d))[scope["txbx"]])
@@ -370,7 +372,7 @@ def test_the_editor_leaves_a_paragraph_the_writer_exempts_at_its_own_size():
     sched = next(b for b in tpl["blocks"] if b["text"].startswith("Schedule:"))
     body = _body("epoxy", "Direct", "overflow", paragraph_overrides=[
         {"id": scope["id"], "text": "Scope:  x",
-         "runs": [{"text": "Scope:", "bold": True, "size_pt": 8}, {"text": "  x", "size_pt": 8}]}])
+         "runs": [{"text": "Scope:", "bold": True, "size_pt": 9}, {"text": "  x", "size_pt": 9}]}])
     rep = {b["id"]: b for b in _fit(body)}
     assert rep[scope["txbx"]]["exempt"] == [scope["id"]] and rep[scope["txbx"]]["scale"] < 0.999
     case = _harness([{"name": "exempt", "blocks": tpl["blocks"],
@@ -425,14 +427,24 @@ def test_the_shrink_never_scales_a_paragraph_mark(wt, aud):
     """An EMPTY line prints as tall as its paragraph mark, and `_scale_txbx_runs` scales runs, never
     marks -- so in a shrunk box an empty line keeps its full height. That is why the editor draws a
     `.tw-empty` line at `fit.hp` (styles.css, --tw-mark-pt) and leaves it out of the shrink. Executed
-    on the overflowing payload: every paragraph mark of every box is the same in the printed
-    document and in the same document with run scaling switched off."""
+    on the overflowing payload: the paragraph mark of every EMPTY and every UNBULLETED line of every
+    box is the same in the printed document and in the same document with run scaling switched off.
+
+    The one exception is a bulleted line with words in it, whose mark is the size its bullet glyph is
+    drawn at (`_bullets_overflow_when_loose`): in a box whose bullets would keep it too tall for
+    LibreOffice, that mark may shrink with the words -- and only shrink, never below 4pt."""
     body = _body(wt, aud, "overflow")
     marks = []
     for unscaled in (False, True):
         d = Document(io.BytesIO(_docx(body, unscaled=unscaled)))
-        marks.append([[_mark_hp(p) for p in tx.iter(qn("w:p"))] for tx in pw._iter_txbx(d)])
-    assert marks[0] == marks[1]
+        marks.append([[(_mark_hp(p), pw._para_num_ref(p) is not None and bool(_text(p).strip()))
+                       for p in tx.iter(qn("w:p"))] for tx in pw._iter_txbx(d)])
+    for printed_box, plain_box in zip(*marks):
+        for (got, bulleted), (was, _) in zip(printed_box, plain_box):
+            if bulleted and was is not None:
+                assert min(was, 8) <= got <= was, (got, was)
+            else:
+                assert got == was, (got, was)
     assert any(f["scale"] < 0.999 for f in _fit(body)) or wt == "budget", "nothing was shrunk"
 
 

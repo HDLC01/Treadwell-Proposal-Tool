@@ -250,17 +250,28 @@ def test_proposal_template_endpoint_gyp():
 
 # ── (g) gyp NOTES box left-inset (clears the baked "NOTES" gutter label) ──────
 def test_gyp_notes_box_left_inset_clears_gutter_label():
-    """The gyp NOTES content box sits ~0.54" left of WORK/PRICE (posH 0.451" vs
-    ~1.0"), all with zero left inset, so its bullets render over the baked-in
-    rotated red "NOTES" gutter label. _pad_frame_boxes gives the gyp NOTES box a
-    left inset so its text clears the label. WORK ("Exclusions") + PRICE ("Base
-    Bid") already start at the right x and must NOT be shifted (guard holds)."""
+    """The gyp NOTES text starts where the WORK/PRICE text starts, clear of the baked-in rotated red
+    "NOTES" gutter label.
+
+    Its posH is ~0.54" left of WORK/PRICE (0.451" vs ~1.0"), which is where the old 39pt left inset
+    came from. But the box is anchored in the paragraph that runs beside the REGARDS box, whose
+    square wrap moves the box's column 39pt right in Word and LibreOffice alike
+    (`_wrap_column_shift`), so the full inset printed the notes 39pt right of WORK/PRICE and ran
+    the long lines past the frame (2026-10-03). Measured as the box's printed x plus its inset,
+    against PRICE's; WORK ("Exclusions") + PRICE ("Base Bid") must not be left-inset at all."""
     notes = main._notes_for("gyp", [])
     out = pw.fill_proposal(work_type="gyp", audience="Direct", values=_gyp_vals(), notes=notes)
     note0 = notes[0]["text"][:18]                      # locate the NOTES box by its 1st bullet
     ins = _bodypr_left_inset(out, note0)
     assert ins is not None, "gyp NOTES box not found"
-    assert ins >= pw._GYP_NOTES_LEFT_INSET_EMU, f"gyp NOTES lIns={ins} not padded"
+    d = Document(io.BytesIO(out))
+    boxes = pw.template_geometry(d)["boxes"]
+    texts = ["".join(t.text or "" for t in tx.iter(pw.qn("w:t"))) for tx in pw._iter_txbx(d)]
+    notes_x = next(g["x_pt"] for g, t in zip(boxes, texts) if note0 in t)
+    price_x = next(g["x_pt"] for g, t in zip(boxes, texts) if "Base Bid" in t)
+    starts = notes_x + ins / 12700.0
+    assert abs(starts - price_x) <= 1.0, (
+        f"gyp NOTES text starts at {starts:.1f}pt, PRICE text at {price_x:.1f}pt")
     assert (_bodypr_left_inset(out, "Base Bid") or 0) < pw._GYP_NOTES_LEFT_INSET_EMU
     assert (_bodypr_left_inset(out, "Exclusions") or 0) < pw._GYP_NOTES_LEFT_INSET_EMU
 

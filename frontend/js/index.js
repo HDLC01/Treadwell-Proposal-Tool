@@ -147,9 +147,10 @@
     { key: "local", label: "Local job", scope: ["epoxy", "polish", "combo", "gyp"],
       why: "Under 70 miles. Off means travel and lodging get added.",
       def: true,  cells: ["Epoxy!B4", "Polish!B4"], on: "Yes", off: "No" },
-    { key: "hard_bid", label: "Hard bid", scope: ["epoxy", "polish", "combo", "gyp"],
-      why: "Competitive bid. Tightens the margin the sheet applies.",
-      def: false, cells: ["Epoxy!B5", "Polish!B5"], on: "Yes", off: "No" },
+    // NO HARD BID. Hanz, 2026-10-03: "We also need to remove the hard bid discount. Even on
+    // active projects and direct projects." The switch wrote Epoxy!B5/Polish!B5, the cell Kyle's
+    // automatic 2.5% / 4% give-back reads; nothing may set it now (estimate_writer
+    // HARD_BID_FLAG_CELLS). A discount the estimator types into the sheet's own row still works.
     { key: "prevailing_wage", label: "Prevailing wage", scope: ["epoxy", "polish", "combo", "gyp"],
       why: "Raises every labor line to the prevailing rate.",
       def: false, cells: ["Epoxy!D5"], on: "Yes", off: "No" },
@@ -202,8 +203,8 @@
 
   // Four traps, all read out of the template rather than assumed:
   //
-  //  * Polish!B4 and Polish!B5 hold their OWN Yes/No, so local and hard bid have to
-  //    be written to both tabs or the polish side keeps the template default.
+  //  * Polish!B4 holds its OWN Yes/No, so local has to be written to both tabs or
+  //    the polish side keeps the template default.
   //  * Polish!D5, B6 and D6 are the formulas =Epoxy!D5 / =Epoxy!B6 / =Epoxy!D6.
   //    Writing those three would replace a live reference with a literal and
   //    decouple the tabs for good, so the POLISH tab is never written for them and

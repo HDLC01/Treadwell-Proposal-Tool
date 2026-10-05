@@ -39,8 +39,10 @@ const ROLE = (() => {
     grab(/^const OPTION_ONLY_ROLES = new Set\(\[[^\]]*\]\);$/m, "OPTION_ONLY_ROLES"),
     grab(/^const isOptionOnlyRole = .*$/m, "isOptionOnlyRole"),
     grab(/^const isPricedRole = .*$/m, "isPricedRole"),
+    grab(/^const OPTION_CAPABLE = new Set\(\[[^\]]*\]\);$/m, "OPTION_CAPABLE"),
+    grab(/^function templatePrintsOptions\([\s\S]*?^}$/m, "templatePrintsOptions"),
   ].join(NL);
-  return new Function(src + NL + "return { BASE_ROLE, PRICED_ROLES, isPricedRole, GYP_SHEETS, SEAL_SHEETS, COMBINED_BASE_ROLES, OPTION_ONLY_ROLES, isOptionOnlyRole };")();
+  return new Function(src + NL + "return { BASE_ROLE, PRICED_ROLES, isPricedRole, GYP_SHEETS, SEAL_SHEETS, COMBINED_BASE_ROLES, OPTION_ONLY_ROLES, isOptionOnlyRole, templatePrintsOptions };")();
 })();
 /** A fixture tab's role, from the shipped map — a copy carries its own. */
 // By id, then by NAME: the gyp fixture tab is keyed "Gyp" for brevity while the real sheet — and
@@ -127,8 +129,10 @@ function harness(stateIn) {
     isOptionOnlyRole: ROLE.isOptionOnlyRole,
     basePricedTabs: () => (onlySeal ? TABS.filter((t) => roleOf(t) === "seal") : TABS)
       .filter((t) => ROLE.isPricedRole(roleOf(t)) && !ROLE.isOptionOnlyRole(roleOf(t))),
-    // The job's template capability. Direct prints options; GC does not.
-    templatePrintsOptions: (wt, aud) => String(aud || "Direct") === "Direct" || String(wt) === "gyp",
+    // The job's template capability: THE REAL ONE, with its real table, lifted from the shipped
+    // file (a stub here said "GC does not print options" for as long as that was true, and went on
+    // saying it after the writer learnt to print them under the GC files' own heading).
+    templatePrintsOptions: ROLE.templatePrintsOptions,
     // THE REAL ONES. These were `pricedTabs: () => TABS.slice()` and `isPricedRole: () => true`,
     // which made this harness structurally incapable of catching a role-filter regression — and the
     // role filter is precisely why an estimator could price the Seal sheet and never find a chip
@@ -335,7 +339,12 @@ const out = {};
     seal: h3.deriveSystemNameFor("Seal"),
     joints: h3.deriveSystemNameFor("Seal (+Jnts)"),
   };
-  // The template that cannot print an option at all says so.
+  // The template that cannot print an option at all (Direct Budget) says so; GC prints them under
+  // its own Options heading, so it does not.
+  const budget = harness({ work_type: "budget", audience: "Direct",
+                           tab_opts: { Seal: { is_option: true, show: true, price_mode: "total" } } });
+  budget.renderBidOptions();
+  const budgetSeal = chip(budget.document.els["bid-options-list"].innerHTML, "Seal");
   const gc = harness({ work_type: "epoxy", audience: "GC",
                        tab_opts: { Seal: { is_option: true, show: true, price_mode: "total" } } });
   gc.renderBidOptions();
@@ -345,7 +354,8 @@ const out = {};
   direct.renderBidOptions();
   const dirSeal = chip(direct.document.els["bid-options-list"].innerHTML, "Seal");
   out.cannotPrint = {
-    warnsOnGC: !!gcSeal && /does not print options/.test(gcSeal),
+    warnsOnBudget: !!budgetSeal && /does not print options/.test(budgetSeal),
+    quietOnGC: !!gcSeal && !/does not print options/.test(gcSeal),
     quietOnDirect: !!dirSeal && !/does not print options/.test(dirSeal),
   };
 }

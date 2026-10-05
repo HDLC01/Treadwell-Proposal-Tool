@@ -335,8 +335,8 @@ def test_the_gc_address_serves_portal_html_with_only_the_four_swaps():
     assert r.content == pipelines.board_page(_portal_text(), pipelines.GC).encode("utf-8")
     body = _no_comments(r.text)
     assert '<body data-pipeline="gc">' in body and 'data-pipeline="direct"' not in body
-    assert "<h1>General Contractor</h1>" in body
-    assert "<title>General Contractor · " in body
+    assert "<h1>GC Projects</h1>" in body
+    assert "<title>GC Projects · " in body
     assert "Proposals sent to general contractors" in body
     assert "Direct Projects" not in body, "the GC page still names the Direct board"
     # Everything else is the same page: the same scripts in the same order.
@@ -596,7 +596,7 @@ def policy_file(tmp_path, monkeypatch):
 
 def test_the_new_tab_is_in_the_capability_table():
     row = next(t for t in nav_access.capability_table() if t["href"] == GC_PAGE)
-    assert row["label"] == "General Contractor"
+    assert row["label"] == "GC Projects"
     assert row["pages"] == [GC_PAGE]
     assert row["api"] == [], "it shares every route with the Direct board, so it may own none"
     # LOCKED, like /portal.html — Hanz, 2026-09-29: "The General Contractor board is always on,

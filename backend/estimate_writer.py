@@ -30,6 +30,7 @@ log = logging.getLogger("proposal_tool.estimate_writer")
 from openpyxl import load_workbook
 from openpyxl.formatting.formatting import ConditionalFormattingList
 from openpyxl.styles import Protection
+from openpyxl.styles.cell_style import StyleArray
 from openpyxl.workbook import Workbook
 from openpyxl.worksheet.cell_range import CellRange
 from openpyxl.worksheet.datavalidation import DataValidation
@@ -42,9 +43,11 @@ TEMPLATE_PATH = (
 # Hand-curated dropdowns the UI exposes on the canonical Epoxy sheet —
 # the source xlsx leaves these as plain text cells, but Treadwell uses
 # them as Yes/No / New-Reno toggles. Maps cell address → option list.
+#
+# NO "B5" (Hard Bid?) since 2026-10-03 -- see HARD_BID_FLAG_CELLS. A picker on a cell the tool
+# never lets anyone change would offer a choice that does nothing.
 PROJECT_INFO_DROPDOWNS: Dict[str, list] = {
     "B4":  ["Yes", "No"],          # Local?
-    "B5":  ["Yes", "No"],          # Hard Bid?
     "D5":  ["Yes", "No"],          # Prevailing Wage?
     "B6":  ["Yes", "No"],          # Taxable?
     "D6":  ["Yes", "No"],          # Remodel Tax (tax-exempt)?
@@ -449,12 +452,32 @@ GYP_SHEET = 'Gyp (USG 1-8")'
 GYP_SHEETS = [GYP_SHEET, 'Gyp (USG N12ULTRA)', 'Gyp (USG N25 1-4")', 'Gyp (GWorx SC190)', 'Gyp (FR)']
 GYP_CELL_MAP: Dict[str, str] = {          # base sheet only (offset +1 row vs Epoxy; NOT =Epoxy! mirrors)
     "project_name": "B2", "bid_date": "B3", "address": "B4", "city_state": "C4",
-    "approx_start_date": "B9", "architect": "B10",
+    "approx_start_date": "B9", "architect": "B10", "drawings_dated": "B11",
     "contact_name": "G2", "contact_email": "H2", "contact_phone": "I2",
 }
 GYP_SF_MAP: Dict[str, str] = {            # written to ALL 5 gyp sheets
     "gyp_soft_sf": "G9", "gyp_hard_sf": "I9", "gyp_corridor_sf": "K9",
 }
+
+# ─── The "Specs+Dwgs+Addn" tab: the intake's drawings / spec / addenda fields ─────
+# Kyle's record of the documents a bid was priced from, in TEMPLATE coordinates:
+#   Drawings        header row 2  "Drawing | Description | Page # | Notes",  rows 3-11
+#   Specifications  header row 13 "Section | Description | Page # | Notes",  rows 14-22
+#   Addenda         header row 24 "# | Impact to Scope",                     rows 25-53
+# The intake fills the FIRST row of the first two tables and numbers the addenda rows:
+#   drawing row 3  A = the finish schedule's sheet (`plan_sheet`), B = "Finish Schedule",
+#                  D = the finish tag (`finish_tag`) -- the GC proposal's own line, "[PC] per the
+#                  Finish Schedule on A900"; written when either field is given
+#   spec row 14    A = the section (`spec_section`), as TEXT so "033543" keeps its zero
+#   addenda        A25.. = 1..N for N = `addenda_count`, at most the table's 29 rows
+# Descriptions, page numbers and each addendum's impact are Kyle's to write: nothing else is
+# filled. A cell is written only while the template holds it EMPTY (never a formula or a label),
+# and an edit typed on the estimate grid (cell_values) still wins, as on every other tab.
+SPECS_SHEET = "Specs+Dwgs+Addn"
+SPECS_DRAWING_ROW = 3
+SPECS_SPEC_ROW = 14
+SPECS_ADDENDA_ROWS = range(25, 54)
+SPECS_FINISH_SCHEDULE = "Finish Schedule"
 
 # Every sheet that holds the "Taxable?" answer as its OWN literal.
 #
@@ -497,6 +520,42 @@ FLAG_BLOCK_CELLS: Dict[str, tuple] = {
     "Seal (+Jnts)": ("B6", "D6"), "Epoxy blank": ("B6", "D6"), "Leveling": ("B6", "D6"),
     **{name: ("B8", "D8") for name in GYP_SHEETS},
 }
+
+# ─── The "Hard Bid?" switch: OFF, on every tab, for good ──────────────
+# Hanz, 2026-10-03: "We also need to remove the hard bid discount. Even on active projects and
+# direct projects." His choice, asked: remove ONLY the switch -- Kyle's automatic give-back,
+#     Epoxy!B74 = IF(B5="yes", IF(D70>=60000, -0.04, IF(B4="yes", IF(D70>=13000, -0.025, 0))))
+# and its twins at Polish/Seal/'Seal (+Jnts)'!B68, 'Epoxy blank'!B71 and Leveling!B70 -- and keep
+# the "Hard Bid Discount" row working exactly as it does for an estimator who TYPES a rate or a
+# dollar figure into it (a typed B74/D74 replaces Kyle's formula, as any typed cell does).
+#
+# THE RULE: a Hard Bid? cell is never written, by anything. Kyle's template ships every one of
+# these as "No" ('Seal (+Jnts)'!B5 is `=Seal!B5`), so his own formula prices the automatic part at
+# zero and nothing else in the workbook reads the cell (test_no_hard_bid.py proves both from the
+# file). Enforced in exactly two places, because the price exists in exactly two engines:
+#   * here, in fill_estimate -- the only door from a draft's cell_values into a workbook;
+#   * estimate-review.js, HF.setCellValue -- the only door into the screen's HyperFormula engine
+#     (its layout list is HARD_BID_FLAG_LAYOUTS; the test fails if the two drift).
+# The proposal's lump sum is the screen's D88, so it follows the screen.
+#
+# Keyed by TEMPLATE LAYOUT, so a copy of any of these tabs is covered too, and the address goes
+# through the sheet's structural edits. The gypsum tabs are not here and must never be: their B5 is
+# Local?, and their own Hard Bid? (B7) is read by no formula at all -- they never had the discount.
+HARD_BID_FLAG_CELLS: Dict[str, str] = {
+    "Epoxy": "B5", "Polish": "B5", "Seal": "B5", "Seal (+Jnts)": "B5",
+    "Epoxy blank": "B5", "Leveling": "B5",
+}
+_CANON_ADDR_RE = re.compile(r"([A-Za-z]{1,3})0*([0-9]{1,7})")
+
+
+def canonical_cell_addr(addr: Any) -> str:
+    """`"b05"` / `"B005"` -> `"B5"`. openpyxl and the screen's engine both read a row's leading
+    zeros away, so a Hard Bid? guard has to compare this spelling, not the raw text (a saved
+    `Epoxy!B05` slipped past the first version of it -- review of #605)."""
+    s = str(addr or "").strip()
+    m = _CANON_ADDR_RE.fullmatch(s)
+    return m.group(1).upper() + m.group(2) if m else s.upper()
+
 GYP_TOTALS: Dict[str, str] = {
     "material_total":  "E41",
     "labor_install":   "E52",
@@ -975,6 +1034,11 @@ def fill_estimate(
                     if name in wb.sheetnames:
                         wb[name][coord] = _coerce(values[field])
 
+    # The intake's drawings / spec / addenda fields -> the Specs+Dwgs+Addn tab, with the other
+    # named-field writes (template coordinates, so they ride the structural edits below).
+    if SPECS_SHEET in wb.sheetnames:
+        _write_specs_tab(wb[SPECS_SHEET], values)
+
     # 1.4 The Taxable? answer reaches every sheet that holds it as a literal, not
     # just Epoxy!B6. See TAXABLE_FLAG_CELLS: each priced sheet's sales-tax rate reads
     # its OWN flag cell, and Leveling / the gyp base / 'Gyp (FR)' hold theirs
@@ -1011,6 +1075,11 @@ def fill_estimate(
     ws_layouts = _resolve_ws_layouts(wb, tab_copies, ops_by, _norm_lock_overrides(lock_overrides))
 
     # 2. Direct-cell writes (verbatim cell-for-cell editor path)
+    #    Except a Hard Bid? cell, on any tab or copy (HARD_BID_FLAG_CELLS): a draft saved with the
+    #    switch on keeps Kyle's "No" there, and a typed rate/dollar in the discount row below it is
+    #    written like any other cell.
+    hard_bid_flags = _hard_bid_flag_cells(wb, tab_copies, ops_by)
+    hard_bid_ws = [(wb[s], a) for s, a in hard_bid_flags.items() if s in wb.sheetnames]  # step 6
     for sheet_addr, val in (cell_values or {}).items():
         if val in (None, ""):
             continue
@@ -1025,10 +1094,18 @@ def fill_estimate(
         if not _CELL_SHAPE_RE.fullmatch(addr):
             log.warning("estimate_writer: skipping non-cell address %r", sheet_addr)
             continue
+        if hard_bid_flags.get(sheet_name) == canonical_cell_addr(addr):
+            continue
         try:
             wb[sheet_name][addr] = _coerce(val)
         except Exception as exc:  # noqa: BLE001 — log the skip instead of swallowing it
             log.warning("estimate_writer: failed to write %s: %s", sheet_addr, exc)
+    # 2.05 ...and every literal flag reads "No" whatever the template ever ships. A formula flag
+    #      ('Seal (+Jnts)'!B5 = `=Seal!B5`) is left alone: it follows a cell that is itself "No".
+    for sheet_name, addr in hard_bid_flags.items():
+        cell = wb[sheet_name][addr]
+        if not (isinstance(cell.value, str) and cell.value.startswith("=")):
+            cell.value = "No"
 
     # 2.1 Every flag-block sheet's two cells get their Yes/No picker back (see
     #     FLAG_BLOCK_CELLS). After the structural edits, so the cells are found where they are.
@@ -1051,6 +1128,15 @@ def fill_estimate(
     #    fat-fingered in Excel. Done LAST — after every write, extra, alternate
     #    tab, copy, reorder and rename — using the ws→layout map captured while
     #    titles were still stable ids.
+    #    A Hard Bid? cell is locked too, on every sheet that is protected at all: one keystroke in
+    #    Excel would otherwise switch Kyle's automatic discount back on in the downloaded file and
+    #    nowhere else (review of #605). Unprotect Sheet still reaches it, as it does a rate.
+    #    Held by worksheet, not title: the tabs were renamed to their labels in step 5.
+    flag_of = {id(ws): addr for ws, addr in hard_bid_ws}
+    ws_layouts = [(ws, addrs + [flag_of[id(ws)]]
+                   if addrs and id(ws) in flag_of and flag_of[id(ws)] not in addrs
+                   else addrs)
+                  for ws, addrs in ws_layouts]
     _apply_cell_protection(ws_layouts)
 
     # Stream to bytes
@@ -1058,6 +1144,60 @@ def fill_estimate(
     wb.save(buf)
     buf.seek(0)
     return buf.read()
+
+
+def _text_cell(v: Any) -> str:
+    """An intake answer as literal cell TEXT: stripped, never coerced to a number (a spec section
+    is "033543", not 33543), and with a leading formula trigger neutralised the way `_coerce`
+    neutralises one."""
+    s = "" if v is None else str(v).strip()
+    return "'" + s if s[:1] in ("=", "+", "-", "@") else s
+
+
+def _whole_number(v: Any) -> int:
+    """`addenda_count` as a count: a whole number >= 0, else 0 (nothing is numbered)."""
+    if isinstance(v, bool):
+        return 0
+    try:
+        n = float(str(v).strip()) if not isinstance(v, (int, float)) else float(v)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+    # inf / -inf / nan, and anything past the table anyway: never int(inf) (OverflowError, a 500).
+    if n != n or n in (float("inf"), float("-inf")) or n < 0 or n > 10 ** 6 or n != int(n):
+        return 0
+    return int(n)
+
+
+def specs_tab_cells(values: Mapping[str, Any]) -> Dict[str, Any]:
+    """{template address: value} the intake writes on the Specs+Dwgs+Addn tab (see SPECS_SHEET)."""
+    out: Dict[str, Any] = {}
+    sheet, tag = _text_cell(values.get("plan_sheet")), _text_cell(values.get("finish_tag"))
+    if sheet or tag:
+        if sheet:
+            out[f"A{SPECS_DRAWING_ROW}"] = sheet
+        out[f"B{SPECS_DRAWING_ROW}"] = SPECS_FINISH_SCHEDULE
+        if tag:
+            out[f"D{SPECS_DRAWING_ROW}"] = tag
+    spec = _text_cell(values.get("spec_section"))
+    if spec:
+        out[f"A{SPECS_SPEC_ROW}"] = spec
+    rows = list(SPECS_ADDENDA_ROWS)
+    for i in range(min(_whole_number(values.get("addenda_count")), len(rows))):
+        out[f"A{rows[i]}"] = i + 1
+    return out
+
+
+def _write_specs_tab(ws, values: Mapping[str, Any]) -> int:
+    """Land `specs_tab_cells(values)` on the tab -- each only where the template's cell is empty."""
+    n = 0
+    for addr, val in specs_tab_cells(values).items():
+        if ws[addr].value not in (None, ""):
+            log.warning("estimate_writer: %s!%s is not empty in the template; not writing %r",
+                        ws.title, addr, val)
+            continue
+        ws[addr] = val
+        n += 1
+    return n
 
 
 def _write_alternate_tab(wb, alternate: Mapping[str, Any],
@@ -1130,6 +1270,34 @@ def _create_copied_tabs(wb, tab_copies: list[Mapping[str, Any]] | None) -> None:
             ws.title = new_id
         except Exception:  # noqa: BLE001 — bad title / odd char; skip this copy
             pass
+
+
+def _hard_bid_flag_cells(wb, tab_copies: list[Mapping[str, Any]] | None,
+                         ops_by: Dict[str, list[dict]] | None) -> Dict[str, str]:
+    """{sheet title: CURRENT address} of every Hard Bid? cell in `wb` -- template tabs and copies
+    alike, each resolved through its {id, source} chain to a layout in HARD_BID_FLAG_CELLS and
+    translated through its own structural edits. Called while titles are still stable ids, so it
+    speaks the same "<id>!<addr>" language as cell_values. A deleted flag row drops out."""
+    src_by_id: dict[str, str] = {}
+    for c in (tab_copies or []):
+        if isinstance(c, dict):
+            cid = str(c.get("id") or "").strip()[:31]
+            if cid:
+                src_by_id[cid] = str(c.get("source") or "Epoxy").strip() or "Epoxy"
+    out: Dict[str, str] = {}
+    for ws in wb.worksheets:
+        base, guard = ws.title, 0
+        while base in src_by_id and guard < 20:
+            base = src_by_id[base]
+            guard += 1
+        addr = HARD_BID_FLAG_CELLS.get(base)
+        if not addr:
+            continue
+        ops = (ops_by or {}).get(ws.title) or []
+        addr = _translate_addr(addr, ops) if ops else addr
+        if addr:
+            out[ws.title] = addr
+    return out
 
 
 def _add_flag_dropdowns(wb, tab_copies: list[Mapping[str, Any]] | None,
@@ -1286,10 +1454,22 @@ def _apply_cell_protection(ws_layouts: list[tuple[Any, list[str]]]) -> None:
                 ws.protection.sheet = False
                 ws.protection.disable()
                 continue
-            # Tier 1: only cells that already exist — list() because assigning
-            # a style can grow the dict via style interning side effects.
+            # Tier 1: only cells that already exist. `cell.protection = unlocked` is openpyxl's
+            # StyleDescriptor.__set__, which interns the Protection into the workbook's
+            # `_protections` list (a hash + __eq__ on a Serialisable, per cell) and then stores that
+            # index in the cell's style array. Every cell gets the SAME index, so intern it once, on
+            # the first cell exactly as the per-cell assignment did (a sheet with no cells interns
+            # nothing, which keeps the list's order, and so styles.xml, identical), and write the
+            # index straight into each style array. ~89k cells per workbook: this was a fifth of
+            # every generate.
+            protections = ws.parent._protections
+            unlocked_id = None
             for cell in list(ws._cells.values()):
-                cell.protection = unlocked
+                if unlocked_id is None:
+                    unlocked_id = protections.add(unlocked)
+                if not cell._style:
+                    cell._style = StyleArray()
+                cell._style.protectionId = unlocked_id
             for addr in addrs:
                 ws[addr].protection = locked
             ws.protection.sheet = True
@@ -1814,6 +1994,10 @@ def read_sheet_grid(sheet_name: str, *, path: Path = TEMPLATE_PATH,
     if sheet_name == "Epoxy" and path == TEMPLATE_PATH:
         for addr, options in PROJECT_INFO_DROPDOWNS.items():
             dropdowns.setdefault(addr, options)
+    # Kyle's own x14 list covers "B4 B5" on every tab; the Hard Bid? half of it is a choice the
+    # tool no longer honours (HARD_BID_FLAG_CELLS), so the grid is not offered it.
+    if path == TEMPLATE_PATH and sheet_name in HARD_BID_FLAG_CELLS:
+        dropdowns.pop(HARD_BID_FLAG_CELLS[sheet_name], None)
 
     # Border-symmetry pass: if cell A has `right` defined and cell to
     # its right (B) has no `left`, mirror A.right → B.left (and same

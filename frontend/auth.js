@@ -463,7 +463,9 @@
       // the other half of the work: the same page and the same js/portal.js, drawing the projects
       // whose Audience is GC (main.py serves it; backend/pipelines.py holds the rule). Same tabs,
       // same columns, same drawer - "it will have the same steps but just on a different webpage".
-      navItem("/gc-projects.html", "cards", "General Contractor") +
+      // RENAMED "GC Projects" 2026-10-02 (Hanz: "we would need to change on the sidebar ... from
+      // general contractor to GC projects"). The href is what permissions key on, not this label.
+      navItem("/gc-projects.html", "cards", "GC Projects") +
       // BACK IN THE MENU ON 2026-08-24, and this is the THIRD decision about it; the first two
       // took it out. All three are written down because the last reader of a half-told version deleted
       // this page from the menu twice.

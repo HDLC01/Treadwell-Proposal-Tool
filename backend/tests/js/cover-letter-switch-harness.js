@@ -69,6 +69,20 @@ function liftIIFE(name) {
 }
 
 const SWITCH_BODY = liftIIFE("wireCoverLetterSwitch");
+
+// THE ONE RESOLVER every reader on the page uses (Hanz, 2026-10-02: the cover letter defaults ON for
+// a GC project). A hoisted function declaration in the page, so it is lifted whole and put ahead of
+// whatever calls it -- the switch and the payload line both do.
+const RESOLVER_M = /\n  function coverLetterOn\(\) \{/.exec(SRC);
+if (!RESOLVER_M) {
+  gone("coverLetterOn", "It decides the box's first state and what Continue freezes; a page that "
+       + "reads the flag some other way needs these scenarios repointed, not deleted.");
+}
+const RESOLVER_SRC = "function coverLetterOn() {"
+  + balanced(RESOLVER_M.index + RESOLVER_M[0].length, "{", "}") + "}";
+// The board rule the resolver defers to, the REAL module, so a GC project here is a GC project on
+// the board. `noCrm` scenarios hand a window without it, which is the fallback the page documents.
+const CRM = require(path.join(ROOT, "frontend", "js", "crm-core.js"));
 if (!SWITCH_BODY) {
   gone("wireCoverLetterSwitch", "The cover-letter checkbox is the entire feature now — find "
        + "where its wiring moved to and repoint this harness; do not delete the scenarios.");
@@ -169,9 +183,11 @@ function scenario(cfg) {
   const doc = { getElementById: (id) => (id === "cl-toggle" ? box : null) };
   const store = makeStore(cfg.stored, { throws: cfg.setStateThrows });
   const TW = { getState: () => store.getState(), setState: (p) => store.setState(p) };
-  const wire = new Function("document", "TW", '"use strict";\n' + SWITCH_BODY);
+  const win = cfg.noCrm ? {} : { TWCrm: CRM };
+  const wire = new Function("document", "TW", "window",
+    '"use strict";\n' + RESOLVER_SRC + "\n" + SWITCH_BODY);
   let threw = null;
-  try { wire(doc, TW); } catch (e) { threw = String((e && e.message) || e); }
+  try { wire(doc, TW, win); } catch (e) { threw = String((e && e.message) || e); }
   return { box, store, writes: store.writes, threw };
 }
 
@@ -184,12 +200,13 @@ function payloadScenario(cfg) {
   const doc = { getElementById: (id) => (id === "cl-toggle" ? box : null) };
   const store = makeStore(cfg.stored);
   const TW = { getState: () => store.getState(), setState: (p) => store.setState(p) };
-  const build = new Function("document", "TW", '"use strict";\n'
+  const build = new Function("document", "TW", "window", '"use strict";\n'
     + SNAPSHOT_LINE + "\n"
     + LIVEKEY_SRC + "\n"
+    + RESOLVER_SRC + "\n"
     + "(function () {\n" + SWITCH_BODY + "\n})();\n"
     + "return function () { return { " + PAYLOAD_FIELD + " }; };");
-  const buildPayload = build(doc, TW);
+  const buildPayload = build(doc, TW, { TWCrm: CRM });
   return { box, store, buildPayload };
 }
 
@@ -277,5 +294,20 @@ out.untickThenContinue = press({ stored: { cover_letter_enabled: true } }, false
   const s = payloadScenario({ stored: {} });
   out.untouchedFromEmptyDraft = s.buildPayload().cover_letter_enabled;
 }
+
+// 10. GC PROJECTS DEFAULT ON (Hanz, 2026-10-02). Untouched, the box opens ticked and Continue
+//     freezes a letter; a deliberate untick still wins; the board's own rule decides what is GC.
+out.gcEmptyPainted = reported(scenario({ stored: { audience: "GC" } }).box.checked);
+out.gcPaddedPainted = reported(scenario({ stored: { audience: " gc " } }).box.checked);
+out.gcExplicitOffPainted =
+  reported(scenario({ stored: { audience: "GC", cover_letter_enabled: false } }).box.checked);
+out.directEmptyPainted = reported(scenario({ stored: { audience: "Direct" } }).box.checked);
+out.notAStringPainted = reported(scenario({ stored: { audience: ["GC"] } }).box.checked);
+out.gcNoCrmPainted = reported(scenario({ stored: { audience: "GC" }, noCrm: true }).box.checked);
+{
+  const s = payloadScenario({ stored: { audience: "GC" } });
+  out.gcUntouchedPayload = s.buildPayload().cover_letter_enabled;
+}
+out.gcUntickThenContinue = press({ stored: { audience: "GC" } }, false);
 
 process.stdout.write(JSON.stringify(out));
