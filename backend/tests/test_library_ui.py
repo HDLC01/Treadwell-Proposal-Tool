@@ -3755,3 +3755,17 @@ def test_edit_on_a_condition_material_opens_its_items_tab_row(ran):
     assert r["focusHiddenFirst"], "the fixture's search did not hide the row, so this proves nothing"
     assert r["focusThroughASearch"] == "item:remove-existing-jf", r["focusThroughASearch"]
     assert r["searchWasCleared"], "the Items tab's search was left hiding the row Edit opened"
+
+
+def test_a_new_material_or_assembly_has_a_save_button_that_sends_now(ran):
+    """Hanz, 2026-10-05: nobody should have to click off a new row to save it."""
+    sb = ran["saveButton"]
+    assert sb["onTheNewRow"] and sb["notOnASavedRow"] and sb["exactlyOne"]
+    assert sb["asmShownWhenNew"] and sb["asmHiddenWhenSaved"]
+    sn = ran["saveNew"]
+    assert sn["itemOnePatch"] and sn["itemQuestionAsked"] and sn["itemSentTheTypedCost"]
+    assert sn["itemDebounceDisarmed"] and sn["itemNoLongerNew"]
+    assert sn["untouchedRowSendsNothing"] and sn["untouchedRowNoLongerNew"]
+    assert sn["cancelKeepsItNew"]
+    assert sn["asmOnePatch"] and sn["asmDeclaredItsVersion"] and sn["asmNoLongerNew"]
+    assert sn["noErrors"]

@@ -253,6 +253,12 @@
   // second debounced save goes out stamped with the version the FIRST one is about to
   // replace, and the server rightly rejects it as stale — a 409 against our own write.
   var inFlight = {};
+  // RECORDS CREATED ON THIS PAGE THAT HAVE NOT HAD A SAVE LAND YET, by kind then id. Creating a row
+  // POSTs it, so it exists server-side from the first click -- what is unsaved is whatever is
+  // typed over the placeholder name, which only goes out when the row is left or 600ms pass. That
+  // is why somebody who typed a new material and looked for a Save button found nothing to press.
+  // The Save button shows while an id is in here; a successful save of the record clears it.
+  var FRESH = { items: {}, assemblies: {} };
   /** PATCH one record, debounced per record so holding a key is one write.
    *
    *  Pending fields are MERGED, not replaced. The first version replaced the body on each call,
@@ -649,6 +655,7 @@
       var fresh = saved.assembly || saved.item || saved.vendor || saved.division || saved.unit ||
         saved.row;
       if (fresh && fresh.id) adoptSaved(kind, fresh);
+      if (FRESH[kind]) delete FRESH[kind][id];
       say(""); saving("Saved");
       setTimeout(function () { saving(""); }, 1200);
     } catch (err) {
@@ -689,6 +696,25 @@
     clearTimeout(timers[key]);
     delete timers[key];
     return flush("items", id, key, true);
+  }
+
+  /** The Save button on a new material or a new assembly: send what is typed NOW.
+   *
+   *  The same path as leaving the row, so a material still gets its one "Save this change?"
+   *  question and an assembly still declares the version it edited. Nothing queued means the
+   *  record is already exactly what the server holds (the create POST wrote it), so the press
+   *  just retires the button. Returns whether the record is still marked new, which is how the
+   *  caller knows to keep the button after a Cancel, a 409 or a failed request. */
+  async function saveNow(kind, id) {
+    var key = kind + ":" + id;
+    if (pendingPatch[key]) {
+      clearTimeout(timers[key]);
+      delete timers[key];
+      await flush(kind, id, key, true);
+    } else if (FRESH[kind]) {
+      delete FRESH[kind][id];
+    }
+    return !!(FRESH[kind] && FRESH[kind][id]);
   }
 
   /** Focus left an item row → that row's edits go in, and get their one question.
@@ -1139,6 +1165,9 @@
         "<td>" + pick("vendor", it.vendor, vendorNames(), "Vendor", ' class="cell-vendor"') + "</td>" +
         '<td class="datescell">' + datesHtml(it) + "</td>" +
         '<td class="rowact">' +
+          (FRESH.items[it.id]
+            ? '<button class="btn sm" type="button" data-save-new="items" data-save-id="' + esc(it.id) + '" title="Save this new material now" aria-label="Save ' + esc(it.name) + '">Save</button>'
+            : "") +
           '<button class="icon" type="button" data-dupe-item="' + esc(it.id) + '" title="Make a copy of this material" aria-label="Duplicate ' + esc(it.name) + '">' + icon("copy") + "</button>" +
           // NO REMOVE ON THE THREE RESERVED ROWS (joint filler kit, remove-existing, dye) -- see
           // isReservedItem. Every other cell on the row stays editable; that is the point of it.
@@ -2220,6 +2249,7 @@
     if (!asm) return;
 
     if ($("asm-name").value !== asm.name) $("asm-name").value = asm.name;
+    $("asm-save").hidden = !FRESH.assemblies[asm.id];
     var area = $("area").value;
     var p = L.priceAssembly(asm, ITEMS, area);
     var out = "";
@@ -3951,6 +3981,7 @@
         // 2026-08-28) precisely so pressing it and seeing the result stay the same spot on
         // screen — sorting it back into alphabetical order would undo that.
         ITEMS.unshift(j.item);
+        FRESH.items[j.item.id] = true;
         showView("items"); paint();
         var f = $("items-body").querySelector('[data-item="' + j.item.id + '"] input[data-f="name"]');
         if (f) { f.focus(); f.select(); }
@@ -4065,6 +4096,14 @@
       return;
     }
 
+    var saveBtn = t.closest && t.closest("[data-save-new]");
+    if (saveBtn) {
+      var sk = saveBtn.getAttribute("data-save-new"), sid = saveBtn.getAttribute("data-save-id");
+      var still = await saveNow(sk, sid);
+      if (!still && saveBtn.parentNode) saveBtn.parentNode.removeChild(saveBtn);
+      return;
+    }
+
     var dupBtn = t.closest && t.closest("[data-dupe-item]");
     var dup = dupBtn && dupBtn.getAttribute("data-dupe-item");
     if (dup) {
@@ -4149,6 +4188,7 @@
         // It is on screen either way: openId is set to it and its name field is focused and
         // selected two lines down, ready to be typed over.
         placeNewAssembly(ASMS, a.assembly);
+        FRESH.assemblies[a.assembly.id] = true;
         openId = a.assembly.id;
         showView("asm"); paint();
         $("asm-name").focus(); $("asm-name").select();
@@ -4272,6 +4312,14 @@
         VENDORS = VENDORS.filter(function (x) { return x.id !== dv; });
         paint();
       } catch (err) { say("Couldn't remove that vendor. " + err.message); }
+      return;
+    }
+
+    if (t.closest && t.closest("#asm-save")) {
+      var sa = current();
+      if (!sa) return;
+      var stillA = await saveNow("assemblies", sa.id);
+      $("asm-save").hidden = !stillA;
       return;
     }
 

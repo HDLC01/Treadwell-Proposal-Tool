@@ -233,6 +233,8 @@ const dom = makeDom();
 const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   "use strict";
   var ITEMS = state.ITEMS, ASMS = state.ASMS, VENDORS = state.VENDORS;
+  // New-this-session records, read by renderItems (the Save button) and renderPanel (#asm-save).
+  var FRESH = state.FRESH || { items: {}, assemblies: {} };
   var DIVISION_REFS = state.DIVISION_REFS || [], UNIT_REFS = state.UNIT_REFS || [];
   var VENDOR_USE = state.VENDOR_USE, DIVISION_USE = state.DIVISION_USE || {}, UNIT_USE = state.UNIT_USE || {};
   var ADMIN = state.ADMIN;
@@ -1432,6 +1434,7 @@ async function conflictChecks() {
     // the save machinery's state so a scenario can drive it. flush() reads it to refuse a second
     // PATCH while one is on the wire.
     var inFlight = {};
+    var FRESH = state.FRESH || { items: {}, assemblies: {} };
     var ASMS = state.ASMS, ITEMS = state.ITEMS, VENDORS = state.VENDORS;
     var setTimeout = clock.setTimeout, clearTimeout = clock.clearTimeout;
     function saving(m) { hooks.saving.push(m); }
@@ -1471,6 +1474,7 @@ async function conflictChecks() {
     ${fn("flush")}
     ${fn("forgetItem")}
     ${fn("flushItemRow")}
+    ${fn("saveNow")}
     ${fn("onItemRowFocusOut")}
     ${fn("patchSoon")}
     // THE REAL onItemEdit, in THIS scope, on top of the REAL patchSoon. The first scope in this
@@ -1484,6 +1488,7 @@ async function conflictChecks() {
     return { patchSoon: patchSoon, adoptConflict: adoptConflict,
              rememberItem: rememberItem, onItemEdit: onItemEdit,
              onItemRowFocusOut: onItemRowFocusOut, flushItemRow: flushItemRow,
+             saveNow: saveNow, fresh: function () { return FRESH; },
              forgetItem: forgetItem,
              confirmOpen: function () { return itemConfirmOpen; },
              snapshotOf: function (id) { return itemBefore[id]; },
@@ -1676,6 +1681,52 @@ async function conflictChecks() {
     screenRepainted: c.hooks.renders.join(",") === "list,panel",
     toldTheUser: c.hooks.said.some((m) => /changed/i.test(String(m))),
   };
+
+  // ── EXECUTED: the Save button on a NEW material / assembly (Hanz, 2026-10-05) ────────
+  // The row exists server-side from the create POST; what the button sends is what was typed over
+  // the placeholder. Nobody should have to click off the row for it to go.
+  {
+    const ok = { status: 200, ok: true, json: async () => ({}) };
+    // New material, typed into, Save pressed: ONE PATCH, the "Save this change?" question, no wait.
+    const a = run409();
+    a.hooks.autoReply = { status: 200, ok: true, json: async () => ({ item:
+      { id: "i1", updated_at: "T2", cost_updated_at: "STAMP-1" } }) };
+    a.s.fresh().items.i1 = true;
+    a.type("i1", "unit_cost", "50");
+    const timersArmedByTyping = a.s.armed();
+    const stillNew = await a.s.saveNow("items", "i1");
+    // Nothing typed on a new row: the press only retires the button, and sends nothing.
+    const b = run409();
+    b.s.fresh().items.i2 = true;
+    const stillNewB = await b.s.saveNow("items", "i2");
+    // Cancel on the question keeps the row "new", so the button stays for another try.
+    const c2 = run409(undefined, false);
+    c2.s.fresh().items.i1 = true;
+    c2.hooks.autoReply = ok;
+    c2.type("i1", "unit_cost", "77");
+    const stillNewC = await c2.s.saveNow("items", "i1");
+    // A new ASSEMBLY: no dialog, one PATCH carrying the version it edited, flag cleared.
+    const d2 = run409();
+    d2.hooks.autoReply = { status: 200, ok: true, json: async () => ({ assembly:
+      { id: "a1", updated_at: "T2", name: "Fresh", lines: [] } }) };
+    d2.s.fresh().assemblies.a1 = true;
+    d2.s.patchSoon("assemblies", "a1", { name: "Fresh" });
+    const stillNewD = await d2.s.saveNow("assemblies", "a1");
+    out.saveNew = {
+      itemQuestionAsked: a.hooks.asked.length === 1,
+      itemOnePatch: a.hooks.requests.length === 1 && /PATCH \/api\/library\/items\/i1/.test(a.hooks.requests[0]),
+      itemSentTheTypedCost: /50/.test(a.hooks.bodies[0] || ""),
+      itemDebounceDisarmed: timersArmedByTyping >= 0 && a.s.armed() === 0,
+      itemNoLongerNew: stillNew === false && !a.s.fresh().items.i1,
+      untouchedRowSendsNothing: b.hooks.requests.length === 0,
+      untouchedRowNoLongerNew: stillNewB === false,
+      cancelKeepsItNew: stillNewC === true && c2.hooks.requests.length === 0,
+      asmOnePatch: d2.hooks.requests.length === 1 && /PATCH \/api\/library\/assemblies\/a1/.test(d2.hooks.requests[0]),
+      asmDeclaredItsVersion: /"expected_updated_at":"T1"/.test(d2.hooks.bodies[0] || ""),
+      asmNoLongerNew: stillNewD === false && !d2.s.fresh().assemblies.a1,
+      noErrors: [a, b, c2, d2].every((x) => x.hooks.errors.length === 0),
+    };
+  }
 
   // ── EXECUTED: a second save cannot go out while the first is on the wire ────
   // THE RACE THIS PREVENTS IS AGAINST OURSELVES, not another person.
@@ -5010,6 +5061,27 @@ async function conditionChecks() {
     focusThroughASearch: f2.dom.focused[f2.dom.focused.length - 1],
     searchWasCleared: f2.api.itemQueryNow() === "",
   };
+}
+
+// ── The Save button is drawn only for a row created on this page and not yet saved ──
+{
+  const { api, dom: d } = build({ FRESH: { items: { i2: true }, assemblies: { a2: true } } });
+  api.renderItems();
+  const html = d.nodes["items-body"].innerHTML;
+  const rows = html.split("</tr>");
+  const rowOf = (id) => rows.find((r) => r.indexOf('data-item="' + id + '"') !== -1) || "";
+  const had = (r) => /data-save-new="items"/.test(r);
+  out.saveButton = {
+    onTheNewRow: had(rowOf("i2")) && /data-save-id="i2"/.test(rowOf("i2")),
+    notOnASavedRow: !had(rowOf("i1")),
+    exactlyOne: (html.match(/data-save-new="items"/g) || []).length === 1,
+  };
+  const fresh = build({ FRESH: { items: {}, assemblies: { a1: true } }, openId: "a1" });
+  fresh.api.renderPanel();
+  const saved = build({ FRESH: { items: {}, assemblies: {} }, openId: "a1" });
+  saved.api.renderPanel();
+  out.saveButton.asmShownWhenNew = fresh.dom.nodes["asm-save"].hidden === false;
+  out.saveButton.asmHiddenWhenSaved = saved.dom.nodes["asm-save"].hidden === true;
 }
 
 // A WATCHDOG, because the alternative failure mode is silence. These scenarios await dialogs and
