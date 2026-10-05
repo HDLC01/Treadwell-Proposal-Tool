@@ -3022,6 +3022,24 @@ def test_the_labor_step_draws_a_dividing_line_then_the_three_travel_lines(ran):
     assert t["noteOnEach"] >= 3, "the 70-mile note is missing from a travel line: %r" % t["noteOnEach"]
 
 
+def test_auto_nights_are_the_crew_man_days_exactly_as_pricing_py_counts_them():
+    """The beta's auto Lodging/Per Diem quantity (travelQty = travelManDays, NOT divided by crew
+    size) must equal the nights backend/pricing.py bills a non-local job. The 2026-10-05 decision
+    says "man-days / crew size as pricing.py does"; pricing.py's nights are labor_raw/rate/8, which
+    IS the man-days (guys x days), so the two agree and the page follows the engine. Dividing by
+    crew size would make the on-screen bid disagree with pricing.py's D68 by the crew-size factor.
+    This is real code on both sides: compute_full_bid local vs not-local, crew 3 x (5 + .5 + .5)."""
+    import sys
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+    from pricing import compute_full_bid
+    crews = [(3, 5), (3, 0.5), (3, 0.5)]
+    far = compute_full_bid(9000, 10000, crews=crews, local=False)["travel"]
+    near = compute_full_bid(9000, 10000, crews=crews, local=True)["travel"]
+    man_days = sum(g * d for g, d in crews)  # 18
+    assert near == 0
+    assert far == man_days * 70 + man_days * 45 == 2070
+
+
 @needs_node
 def test_lodging_and_per_diem_price_inside_the_bid_and_off_adds_nothing(ran):
     """THROUGH THE PAGE'S OWN HANDLERS. Switching Lodging on moves the bid by the nights (the crew's
