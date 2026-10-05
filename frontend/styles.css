@@ -1707,3 +1707,19 @@ html.tw-nav-open .fields-panel { left: calc(var(--tw-w, 240px) + 16px); }
   white-space: nowrap;
 }
 .c-empty { padding: 8px 11px; color: var(--ink-variant); font-size: 12.5px; }
+
+/* Address autocomplete dropdown (Photon / OSM). Was inline in index.html; shared with the beta
+   polish intake through js/address-lookup.js. */
+  .addr-field { position: relative; }
+  .addr-results {
+    display: none; position: absolute; left: 0; right: 0; top: 100%; z-index: 30;
+    background: var(--surface, #1b1b1d); border: 1px solid var(--treadwell-red, #c0392b);
+    border-radius: 6px; max-height: 280px; overflow-y: auto; margin-top: 2px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.45);
+  }
+  .addr-results.open { display: block; }
+  .addr-row { padding: 8px 12px; cursor: pointer; border-bottom: 1px solid rgba(255,255,255,.07); }
+  .addr-row:last-child { border-bottom: none; }
+  .addr-row:hover { background: rgba(192,57,43,.18); }
+  .addr-l1 { font-weight: 600; }
+  .addr-l2 { font-size: 12px; color: var(--ink-variant, #9aa0a6); }

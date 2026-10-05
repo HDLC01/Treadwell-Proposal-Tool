@@ -1779,6 +1779,21 @@ const rendered = [];      // every string the page put on screen, for the Labour
     // a measurement, so neither intake number may be seeded beside it.
     const lfRows = [{ assembly_id: "", assembly_name: "", measurement: 900, unit: "LF" }];
     out.migration.seedOverLf = rowsOf({ takeoff: B.seedTakeoffSf(lfRows, 8250, 3100) });
+    // EMPTYING THE TAKEOFF MUST NOT BRING A DELETED ROW BACK (Hanz, 2026-10-05). Open a bid seeded
+    // from System 1 + System 2, blank both rows, save, and reopen step 2 from what was saved. The
+    // takeoff wrote polish_sf (now 0) but left intake's polish_2_sf at 3100, so the reopen read it
+    // as a fresh measurement and put a 3,100 SF row back.
+    const emptied = build({ blob: blob({ polish_estimate: null, polish_sf: 8250, polish_2_sf: 3100 }) });
+    await emptied.api.init();
+    typeInto(emptied, '[data-tk="0"][data-k="measurement"]', "");
+    typeInto(emptied, '[data-tk="1"][data-k="measurement"]', "");
+    emptied.clock.fire();
+    const eSave = emptied.rec.saves[emptied.rec.saves.length - 1];
+    const reopened = build({ blob: clone(emptied.store.blob) });
+    await reopened.api.init();
+    out.migration.emptiedSave = { sf: eSave.polish_sf, sf2: eSave.polish_2_sf };
+    out.migration.emptiedDraft2 = emptied.store.blob.polish_2_sf;
+    out.migration.emptiedReopen = rowsOf(reopened.api.model());
     out.migration.freshLabor = fresh.api.model().labor.map((r) => [r.id, r.guys, r.rate]);
   }
 

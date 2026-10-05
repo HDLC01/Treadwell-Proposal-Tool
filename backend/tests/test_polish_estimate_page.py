@@ -1771,6 +1771,21 @@ def test_seeding_never_lands_beside_an_lf_only_measurement(ran):
     assert ran["migration"]["seedOverLf"] == [["", 900, "LF"]], ran["migration"]["seedOverLf"]
 
 
+@needs_node
+def test_emptying_the_takeoff_does_not_reseed_a_deleted_system_2_row(ran):
+    """Step 2 writes polish_sf as the takeoff total but used to leave intake's polish_2_sf alone,
+    so blank both seeded rows, reopen, and B.seedTakeoffSf read the stale System 2 figure as a
+    fresh measurement and put the deleted row back.
+
+    Mutation: delete the `polish_2_sf: ""` line from saveSoon (or the pagehide save) in
+    polish-estimate.js and emptiedDraft2 stays 3100 and emptiedReopen holds a 3100 SF row."""
+    m = ran["migration"]
+    assert m["emptiedSave"] == {"sf": 0, "sf2": ""}, m["emptiedSave"]
+    assert m["emptiedDraft2"] == "", m["emptiedDraft2"]
+    assert not any(r[1] for r in m["emptiedReopen"]), (
+        "a deleted row came back with a measurement: %r" % m["emptiedReopen"])
+
+
 # ── H. boot ──────────────────────────────────────────────────────────────────
 @needs_node
 def test_nothing_is_revealed_before_the_sandbox_settles(ran):

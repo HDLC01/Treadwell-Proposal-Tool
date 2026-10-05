@@ -420,6 +420,10 @@
         // proposal-review reads this for the SF token, and /api/generate's files-mode rebuild
         // gates on it.
         polish_sf: b.sf,
+        // polish_sf IS the takeoff total, so intake's System 2 box has nothing left to say: blank
+        // it. Left stale it reseeded a deleted row -- empty the takeoff, reopen step 2, and
+        // B.seedTakeoffSf read the old polish_2_sf as a fresh measurement.
+        polish_2_sf: "",
         // Replaced, not merged — see the file header.
         computed_bid: {
           lump_sum: b.total,
@@ -449,6 +453,7 @@
     TW.setState(Object.assign({}, TW.getState(), {
       polish_estimate: M,
       polish_sf: b.sf,
+      polish_2_sf: "",                   // see saveSoon: the takeoff total is polish_sf now
       computed_bid: {
         lump_sum: b.total,
         price_per_sf: b.per_sf,

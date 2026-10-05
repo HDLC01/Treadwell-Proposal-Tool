@@ -39,6 +39,7 @@ const indexHtml = read(path.join(ROOT, "index.html"));
 const sharedJs = read(path.join(ROOT, "shared.js"));
 const projectsJs = read(path.join(ROOT, "js", "projects.js"));
 const countyJs = read(path.join(ROOT, "js", "county-picker.js"));
+const addressJs = read(path.join(ROOT, "js", "address-lookup.js"));
 
 const DRAFT_ID = "d1e2f3a4";
 
@@ -448,6 +449,9 @@ const documentStub = {
   // the mount guarded away and the whole control untested while every assertion below still ran.
   windowStub.TW = TW;        // county-picker.js reads window.TW, not the injected parameter
   new Function("document", "window", "fetch", countyJs)(documentStub, windowStub, fetchStub);
+  // The address lookup, loaded before index.js exactly as index.html orders the tags: the page
+  // script calls TWAddress.mount() as it boots, so a ReferenceError here is a missing script tag.
+  new Function("document", "window", "fetch", addressJs)(documentStub, windowStub, fetchStub);
   // THE REAL PAGE SCRIPT, top to bottom. An unbound identifier anywhere in it throws here.
   //
   // `fetch` IS BOUND, unlike before this comment existed. index.js now calls it itself (the

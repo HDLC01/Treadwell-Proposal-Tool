@@ -856,6 +856,18 @@
     if (form) form.addEventListener("input", function (e) {
       if (e.target && e.target.name) saveSoon();
     });
+    // The address / business lookup, shared with the live intake (js/address-lookup.js). A picked
+    // row fires `input` on City, State and Zip, which the listener above turns into a save. The
+    // guard is for a page served without the script; the lookup is a convenience, not a gate.
+    if (window.TWAddress && form) {
+      window.TWAddress.mount({
+        address:  $("address-input"),
+        business: $("business-input"),
+        city:     $("city-input"),
+        state:    $("state-input"),
+        zip:      $("zip-input"),
+      });
+    }
     var input = $("county-input");
     if (input) {
       input.addEventListener("input", onCountyInput);

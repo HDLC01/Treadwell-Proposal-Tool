@@ -1082,6 +1082,7 @@ def test_the_page_loads_no_formula_engine(html):
     # in the rail. See the house rule at the top of frontend/js/icons.js.
     assert srcs == ["https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0",
                     "/js/icons.js", "/auth.js", "/shared.js", "/js/polish-bid-core.js",
+                    "/js/address-lookup.js",
                     "/js/polish-sandbox.js", "/js/polish-intake.js",
                     "/js/polish-verbal.js"], (
         "the page's script list has changed: %r" % srcs)
@@ -1436,3 +1437,146 @@ def test_a_locked_intake_cannot_write_over_the_takeoff_total(ran):
     assert s["flushSaveKeys"] == {"hasSf1": False, "hasSf2": False}
     assert s["lockedBlobAfter"] == {"sf1": 12500, "sf2": 800}
     assert s["realBlobAfter"]["sf1"] == 12500
+
+
+# ── B1: the beta intake carries everything the live intake asks a polish job ─────────────────────
+INDEX_HTML = FRONTEND / "index.html"
+ADDRESS_HARNESS = pathlib.Path(__file__).resolve().parent / "js" / "address-lookup-harness.js"
+
+
+def _named_fields(path):
+    """{name: [(tag, type, required), ...]} for every named control in the page's markup."""
+    text = path.read_text(encoding="utf-8")
+    out = {}
+    for m in re.finditer(r"<(input|select|textarea)\b([^>]*?)/?>", text, re.I):
+        attrs = m.group(2)
+        name = re.search(r'name="([^"]*)"', attrs)
+        if not name:
+            continue
+        typ = re.search(r'type="([^"]*)"', attrs)
+        out.setdefault(name.group(1), []).append(
+            (m.group(1).lower(), typ.group(1) if typ else "", "required" in re.findall(r"\b\w+\b", attrs)))
+    return out
+
+
+# What a polish job does NOT see on the live form, and why each stays off the beta: the Work Type
+# radio (the beta is polish by construction), the gyp SF buckets and System thickness (hidden for
+# polish on the live form too). Renovation, Dye, Joint filler and Remove-existing are SWITCHES drawn
+# by JS, not named inputs, so they are compared in the conditions test below.
+LIVE_ONLY_FOR_OTHER_WORK_TYPES = {"work_type", "gyp_soft_sf", "gyp_hard_sf", "gyp_corridor_sf",
+                                  "system_thickness"}
+
+
+def test_every_field_a_polish_job_sees_on_the_live_intake_is_on_the_beta_with_the_same_name():
+    """Field-by-field, from the two pages' own markup. The live form's SF boxes are drawn by
+    js/index.js (the systems container), so polish_sf / polish_2_sf are added to its side by hand.
+
+    Mutation: delete any of the five Drawings & specs inputs from polish-intake.html."""
+    live = set(_named_fields(INDEX_HTML)) - LIVE_ONLY_FOR_OTHER_WORK_TYPES
+    live |= {"polish_sf", "polish_2_sf"}
+    beta = set(_named_fields(FRONTEND / "polish-intake.html"))
+    assert live - beta == set(), "the live intake asks for fields the beta does not: %r" % (live - beta)
+    assert beta - live == set(), "the beta asks for fields the live intake does not: %r" % (beta - live)
+
+
+def test_shared_fields_have_the_same_control_type_required_flag_and_options():
+    """Same name is not enough: a date box that became text, or a Project name that stopped being
+    required, would pass the name check and fail the estimator. Bid date and Project name are
+    required on both (Kyle, 2026-10-05).
+
+    Mutation: remove `required` from either input on the beta."""
+    live, beta = _named_fields(INDEX_HTML), _named_fields(FRONTEND / "polish-intake.html")
+    for name in sorted(set(live) & set(beta)):
+        assert live[name] == beta[name], "%s differs: live %r vs beta %r" % (name, live[name], beta[name])
+    for name in ("bid_date", "project_name"):
+        assert beta[name][0][2] is True, name + " must be required on the beta"
+
+    def src(p):
+        sel = re.search(r'<select name="source".*?</select>', p.read_text(encoding="utf-8"), re.S).group(0)
+        return re.findall(r'<option[^>]*value="([^"]*)"', sel)
+
+    assert src(INDEX_HTML) == src(FRONTEND / "polish-intake.html")
+
+
+def test_the_drawings_and_specs_box_is_the_live_one_between_project_info_and_contact(html):
+    live = INDEX_HTML.read_text(encoding="utf-8")
+
+    def box(text):
+        i = text.index('<fieldset id="drawings-specs-box">')
+        return re.sub(r"\s+", " ", text[i:text.index("</fieldset>", i)])
+
+    assert box(html) == box(live), "the beta's Drawings & specs box drifted from the live one"
+    assert html.index("<legend>Project Info</legend>") < html.index('id="drawings-specs-box"') \
+        < html.index("<legend>Contact</legend>")
+
+
+def test_the_intro_no_longer_claims_more_than_the_page_does(html):
+    """It used to say 'It asks for the same fields' while five were missing. Now it says what it
+    asks and what it leaves off.
+
+    Mutation: restore the old sentence."""
+    flat = re.sub(r"\s+", " ", html)
+    assert "It asks for the same fields, under the same names, so" not in flat
+    assert "the same fields a polish job sees on the live form" in flat
+
+
+def test_the_beta_conditions_differ_from_the_live_ones_only_where_decided():
+    """Switches are drawn by JS, so they are compared from the two scripts. For a polish job the
+    live form shows local, prevailing_wage, taxable, remodel_tax, reno, dye, joint_filler and
+    remove_existing_jf. The beta asks four of them here; Dye / Joint filler / Remove-existing are
+    asked on the takeoff (2026-09-16) and Renovation is removed (2026-09-23, Hanz). Bond is the
+    beta's own and is flagged open in the B1 report.
+
+    Mutation: add a key to either list without deciding where it belongs."""
+    beta_js = (FRONTEND / "js" / "polish-intake.js").read_text(encoding="utf-8")
+    live_js = (FRONTEND / "js" / "index.js").read_text(encoding="utf-8")
+    beta = re.findall(r'\{ key: "(\w+)", label:', beta_js)
+    live = [k for k, scope in re.findall(r'\{ key: "(\w+)", label: "[^"]*", scope: \[([^\]]*)\]', live_js)
+            if "polish" in scope]
+    assert beta == ["local", "prevailing_wage", "taxable", "remodel_tax", "bond"], beta
+    assert sorted(set(live) - set(beta)) == ["dye", "joint_filler", "remove_existing_jf", "reno"], live
+    assert set(beta) - set(live) == {"bond"}
+
+
+def test_the_address_lookup_is_mounted_on_the_beta_and_loaded_before_its_script(html):
+    for ident in ("address-input", "address-results", "business-input", "business-results",
+                  "city-input", "state-input", "zip-input"):
+        assert 'id="%s"' % ident in html, ident
+    assert "/js/address-lookup.js" in html
+    assert html.index("/js/address-lookup.js") < html.index("/js/polish-intake.js")
+    js = (FRONTEND / "js" / "polish-intake.js").read_text(encoding="utf-8")
+    assert "window.TWAddress.mount({" in js
+    css = (FRONTEND / "styles.css").read_text(encoding="utf-8")
+    assert ".addr-results.open" in css, "the dropdown's rules must live in the shared stylesheet"
+
+
+@pytest.fixture(scope="module")
+def addr():
+    if shutil.which("node") is None:
+        pytest.skip("node is not installed")
+    proc = subprocess.run(["node", str(ADDRESS_HARNESS), str(FRONTEND)],
+                          capture_output=True, text=True, encoding="utf-8", timeout=60)
+    assert proc.returncode == 0, "the harness itself failed:\n" + proc.stderr
+    return json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+@needs_node
+def test_the_shared_lookup_queries_fills_and_tells_the_form_so_it_can_save(addr):
+    """Executed. A pick fills Address, City, State, Zip and fires `input` on City, State and Zip so
+    the beta's autosave runs; NOT on Address or Project name (that would re-open the dropdown).
+    Under four characters no request is made; a duplicate row is collapsed; non-US rows are dropped.
+
+    Mutation: delete the ping() calls in fillLocation and cityEvents is empty."""
+    assert addr["shortQuery"] == {"calls": 0, "open": False}
+    q = addr["query"]
+    assert q["calls"] == 1 and q["open"] and q["rows"] == 1 and not q["hasParis"]
+    assert "photon.komoot.io" in q["url"]
+    p = addr["pick"]
+    assert (p["address"], p["city"], p["state"], p["zip"]) == ("123 W 5th St", "Olathe", "KS", "66061")
+    assert p["closed"] is True
+    assert p["cityEvents"] == p["stateEvents"] == p["zipEvents"] == ["input:bubbles"]
+    assert p["addressEvents"] == [] and p["businessEvents"] == []
+    b = addr["business"]
+    assert b["name"] == "Acme warehouse retrofit" and b["city"] == "Olathe" and b["zip"] == "66061"
+    assert addr["clickAway"] == {"stayedOpenOnInputClick": True, "closedElsewhere": True}
+    assert addr["noBusinessBox"] == {"threw": False}
