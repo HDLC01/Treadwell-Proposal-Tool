@@ -310,13 +310,97 @@
     return rows;
   }
 
+  /** THE DEFAULTS, LOADED INTO A NEW ESTIMATE'S TAKEOFF (Hanz, 2026-10-05: "each default becomes its
+   *  own Takeoff row, measured with the intake polish SF").
+   *
+   *  `asms` / `items` are the library catalogs. A row seeds when it is a favorite (the Defaults tab
+   *  list) AND applies to Polish (default_work_types, empty = every tab) -- the same two tests the
+   *  Defaults tab draws its Takeoff lists with. Assemblies first, then materials, the order the tab
+   *  shows them. The three reserved materials (`reserved` ids: dye, joint filler kit, remove-
+   *  existing) are NOT seeded here: they are the condition cards, which have their own defaults.
+   *
+   *  HOW IT COMBINES WITH seedTakeoffSf WITHOUT COUNTING THE FLOOR TWICE. takeoffSf adds every SF
+   *  row, so ten defaults each measured with the intake 8,250 SF would read as 82,500 SF of floor,
+   *  and polish_sf, the price per SF and every area-driven condition would follow it. They are all
+   *  the SAME floor, so:
+   *    - ONE row carries the area: the first ENABLED SF-unit default. Counted as always.
+   *    - every other default carries the same number for pricing but is marked `same_floor`, which
+   *      takeoffSf skips. The marker is data on the row, so it survives save and reload.
+   *    - no enabled SF default (all off, all LF, or the library has none): the intake boxes seed
+   *      plain area rows exactly as seedTakeoffSf always did (System 1 / System 2, one row each),
+   *      appended after the defaults, and every default is marked `same_floor`.
+   *  With both intake systems filled, the defaults take the SUM (the whole floor each default
+   *  covers) and the carrier counts it once.
+   *
+   *  A default switched OFF (default_on === false) is kept, grayed (`enabled:false`), measured too
+   *  so flipping it on needs nothing typed; rowOn already gives it $0 and leaves it out of area.
+   *  An LF assembly is never measured with square feet: its measurement stays blank for the
+   *  estimator -- the blocker names it -- rather than a guess. Coverage is NOT copied onto a row:
+   *  a blank coverage already follows the library's current value (covPlaceholder), which is how
+   *  a later library change reaches new bids and an untouched row never freezes a stale number.
+   *
+   *  NEVER OVER WORK: unchanged rows are returned (same array) when any row already carries a
+   *  pick or a measurement. With no defaults it IS seedTakeoffSf. Callers gate "new bid" on the
+   *  saved blob (conditionsUnstated); this function is only the combination rule. */
+  function seedDefaultTakeoff(rows, asms, items, reserved, sf1, sf2) {
+    rows = Array.isArray(rows) ? rows : [];
+    for (var i = 0; i < rows.length; i++) {
+      var q = rows[i] || {};
+      if (num(q.measurement) > 0 || q.assembly_id || q.item_id) return rows;
+    }
+    var applies = function (r) {
+      var l = r && r.default_work_types;
+      return !l || !l.length || l.indexOf("polish") !== -1;
+    };
+    var picks = [];
+    (Array.isArray(asms) ? asms : []).forEach(function (a) {
+      if (a && a.favorite && applies(a)) picks.push({ kind: "asm", row: a });
+    });
+    (Array.isArray(items) ? items : []).forEach(function (it) {
+      if (!it || !it.favorite || !applies(it)) return;
+      if ((reserved || []).indexOf(it.id) !== -1) return;
+      picks.push({ kind: "item", row: it });
+    });
+    if (!picks.length) return seedTakeoffSf(rows, sf1, sf2);
+
+    var total = (num(sf1) > 0 ? num(sf1) : 0) + (num(sf2) > 0 ? num(sf2) : 0);
+    var out = [];
+    var carried = false;
+    picks.forEach(function (p) {
+      var on = p.row.default_on !== false;
+      var unit = "SF";
+      if (p.kind === "asm") {
+        var u = String(p.row.unit == null ? "" : p.row.unit).toUpperCase();
+        if (u === "LF") unit = "LF";
+      }
+      var r;
+      if (p.kind === "asm") {
+        r = { assembly_id: p.row.id, assembly_name: p.row.name, measurement: "", unit: unit };
+      } else {
+        r = { kind: "item", item_id: p.row.id, item_name: p.row.name, coverage: "",
+              measurement: "", unit: "SF" };
+      }
+      if (unit === "SF" && total > 0) {
+        r.measurement = total;
+        if (on && !carried) carried = true;
+        else r.same_floor = true;
+      }
+      if (!on) r.enabled = false;
+      out.push(r);
+    });
+    if (!carried && total > 0) {
+      seedTakeoffSf([], sf1, sf2).forEach(function (r) { out.push(r); });
+    }
+    return out;
+  }
+
   function takeoffSf(rows) {
     rows = rows || [];
     var t = 0;
     for (var i = 0; i < rows.length; i++) {
       var r = rows[i] || {};
       // An OFF row is out of the area too: the price per SF divides by what the bid actually buys.
-      if (r.unit === "SF" && rowOn(r)) t += num(r.measurement);
+      if (r.unit === "SF" && rowOn(r) && !r.same_floor) t += num(r.measurement);
     }
     return t;
   }
@@ -1357,6 +1441,7 @@
     filledIn: filledIn,
     takeoffSf: takeoffSf,
     seedTakeoffSf: seedTakeoffSf,
+    seedDefaultTakeoff: seedDefaultTakeoff,
     dyeCost: dyeCost, jointFillerCost: jointFillerCost,
     markupChain: markupChain,
     freshModel: freshModel, migrateModel: migrateModel, blockers: blockers,

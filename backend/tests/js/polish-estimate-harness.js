@@ -1792,6 +1792,58 @@ const rendered = [];      // every string the page put on screen, for the Labour
     // a measurement, so neither intake number may be seeded beside it.
     const lfRows = [{ assembly_id: "", assembly_name: "", measurement: 900, unit: "LF" }];
     out.migration.seedOverLf = rowsOf({ takeoff: B.seedTakeoffSf(lfRows, 8250, 3100) });
+
+    // ── B6: THE DEFAULTS LOAD INTO A NEW BID (Hanz, 2026-10-05) ──────────────────────────────
+    // Library with favorites: a1 (SF assembly), a2 (LF assembly), i1 (material, coverage 333 --
+    // NOT the old 275 so a hard-coded constant shows), i4 (material, switched OFF), plus three that
+    // must NOT load: the reserved dye row, an epoxy-only favorite, and a non-favorite.
+    const dAsms = clone(ASMS).map((a) => {
+      if (a.id === "a1" || a.id === "a2") a.favorite = true;
+      if (a.id === "a5") { a.favorite = true; a.default_work_types = ["epoxy"]; }
+      return a;
+    });
+    const dItems = clone(ITEMS).map((it) => {
+      if (it.id === "i1") { it.favorite = true; it.coverage = 333; }
+      if (it.id === "i4") { it.favorite = true; it.default_on = false; }
+      return it;
+    });
+    dItems.push({ id: "dye", name: "Dye, per coat", unit: "Gal", buy_qty: 1, unit_cost: 10,
+                  coverage: 1, favorite: true });
+    const shape = (m) => m.takeoff.map((r) => ({ a: r.assembly_id || "", i: r.item_id || "",
+      m: r.measurement, u: r.unit, sf: !!r.same_floor, off: r.enabled === false }));
+    const loaded = build({ asms: dAsms, items: dItems,
+      blob: blob({ polish_estimate: null, polish_sf: 8000, polish_2_sf: 2000 }) });
+    await loaded.api.init();
+    const lm = loaded.api.model();
+    out.defaultsLoad = { rows: shape(lm), area: B.takeoffSf(lm.takeoff),
+      i1Price: loaded.api.rowPrice(lm.takeoff[2]).total,
+      i1Expected: L.priceLine({ item_id: "i1" }, dItems, 10000).cost,
+      i1CoverageBox: lm.takeoff[2].coverage,
+      offPrice: B.takeoffSf([lm.takeoff[3]]) };
+    loaded.clock.fire();
+    const dSave = loaded.rec.saves[loaded.rec.saves.length - 1] || null;
+    out.defaultsLoad.savedSf = dSave && dSave.polish_sf;
+    out.defaultsLoad.caption = txt(loaded, "[data-area-total]");
+    // Nothing enabled to carry the floor: the intake boxes still seed plain area rows.
+    const allOff = clone(dAsms).map((a) => { if (a.id === "a1") a.default_on = false;
+                                             if (a.id === "a2") a.favorite = false; return a; });
+    const offLoad = build({ asms: allOff, items: clone(ITEMS),
+      blob: blob({ polish_estimate: null, polish_sf: 5000 }) });
+    await offLoad.api.init();
+    out.defaultsLoad.allOff = shape(offLoad.api.model());
+    out.defaultsLoad.allOffArea = B.takeoffSf(offLoad.api.model().takeoff);
+    // A SAVED bid is never touched, whatever the library holds now.
+    const savedBlob = { version: 2, takeoff: [{ assembly_id: "", assembly_name: "",
+      measurement: "", unit: "SF" }], labor: [], conditions: { local: true }, contingency: 0,
+      fees: 0, totals: {} };
+    const savedLoad = build({ asms: dAsms, items: dItems,
+      blob: blob({ polish_estimate: savedBlob, polish_sf: 700 }) });
+    await savedLoad.api.init();
+    out.defaultsLoad.saved = shape(savedLoad.api.model());
+    // No defaults in the library: exactly the System 1 / System 2 seeding, unchanged.
+    const none = B.seedDefaultTakeoff([{ kind: "new", pick_name: "", measurement: "", unit: "SF" }],
+      clone(ASMS), clone(ITEMS), ["dye"], 8250, 3100);
+    out.defaultsLoad.none = rowsOf({ takeoff: none });
     // EMPTYING THE TAKEOFF MUST NOT BRING A DELETED ROW BACK (Hanz, 2026-10-05). Open a bid seeded
     // from System 1 + System 2, blank both rows, save, and reopen step 2 from what was saved. The
     // takeoff wrote polish_sf (now 0) but left intake's polish_2_sf at 3100, so the reopen read it

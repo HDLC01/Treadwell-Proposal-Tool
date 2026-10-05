@@ -1786,6 +1786,63 @@ def test_emptying_the_takeoff_does_not_reseed_a_deleted_system_2_row(ran):
         "a deleted row came back with a measurement: %r" % m["emptiedReopen"])
 
 
+@needs_node
+def test_defaults_load_into_a_new_bid_one_row_each_without_counting_the_floor_twice(ran):
+    """Hanz, 2026-10-05: each favorited assembly and material becomes its own Takeoff row, measured
+    with the intake SF. System 1 8,000 + System 2 2,000 = 10,000 SF.
+
+    Loads: a1 (SF assembly, carries the area), a2 (LF assembly, measurement left BLANK, never a
+    guess), i1 (material), i4 (material switched OFF: kept, grayed, measured). Does NOT load: the
+    reserved dye row, an epoxy-only favorite, a non-favorite. The floor counts ONCE: only the first
+    enabled SF default carries it, the rest are `same_floor`, so the area, polish_sf and the caption
+    all read 10,000 -- not 30,000.
+
+    Mutation: drop the `same_floor` marking in B.seedDefaultTakeoff and area/savedSf become 20,000;
+    drop the reserved-id test and a `dye` row appears."""
+    d = ran["defaultsLoad"]
+    keys = [(r["a"] or r["i"], r["m"], r["u"], r["sf"], r["off"]) for r in d["rows"]]
+    assert keys == [("a1", 10000, "SF", False, False), ("a2", "", "LF", False, False),
+                    ("i1", 10000, "SF", True, False), ("i4", 10000, "SF", True, True)], keys
+    assert d["area"] == 10000 and d["savedSf"] == 10000 and d["caption"] == "10,000 SF", d
+
+
+@needs_node
+def test_a_loaded_default_follows_the_library_coverage_not_a_constant(ran):
+    """The addendum: a default's coverage is the MATERIAL's library coverage. i1 is 333 in this
+    library (the shipped fixture says 275), the row's coverage box is left blank so it keeps
+    following the library, and the row prices exactly as priceLine does at 333 over 10,000 SF.
+
+    Mutation: seed the row with a literal coverage 275 and i1Price no longer equals i1Expected."""
+    d = ran["defaultsLoad"]
+    assert d["i1CoverageBox"] == "", "coverage was frozen onto the row"
+    assert d["i1Price"] == d["i1Expected"] and d["i1Price"] > 0, d
+
+
+@needs_node
+def test_a_default_switched_off_adds_nothing_and_is_not_the_area(ran):
+    """default_on false loads the row grayed (`enabled:false`): $0, outside the area. When NO
+    enabled SF default exists the intake box seeds a plain area row, so the bid still has its floor
+    -- and the off default is marked same_floor so flipping it on later cannot double the floor.
+
+    Mutation: let the carrier be the first default whether or not it is on and allOffArea is 0."""
+    d = ran["defaultsLoad"]
+    assert d["offPrice"] == 0
+    assert [(r["a"], r["m"], r["sf"], r["off"]) for r in d["allOff"]] == [
+        ("a1", 5000, True, True), ("", 5000, False, False)], d["allOff"]
+    assert d["allOffArea"] == 5000
+
+
+@needs_node
+def test_defaults_never_load_into_a_saved_bid_and_no_defaults_means_the_old_seeding(ran):
+    """New bids only: a bid with anything saved keeps exactly its rows, and a library with no
+    defaults gives the System 1 / System 2 rows seedTakeoffSf always did.
+
+    Mutation: drop the conditionsUnstated gate in init() and the saved bid (blank takeoff, intake 700 SF) gains the default rows."""
+    d = ran["defaultsLoad"]
+    assert [(r["a"], r["m"]) for r in d["saved"]] == [("", 700)], d["saved"]
+    assert [(r[1], r[2]) for r in d["none"]] == [(8250, "SF"), (3100, "SF")], d["none"]
+
+
 # ── H. boot ──────────────────────────────────────────────────────────────────
 @needs_node
 def test_nothing_is_revealed_before_the_sandbox_settles(ran):

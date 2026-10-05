@@ -1256,7 +1256,10 @@
     html += '<p class="cap">Material total <b data-mat-total>' +
       esc(moneyAuto(materialTotal())) + '</b> · measured area <b data-area-total>' +
       esc(B.fmtSf(B.takeoffSf(M.takeoff))) + ' SF</b>. LF rows are priced like any other but do ' +
-      'not count toward the square footage the price-per-SF is divided by.</p>';
+      'not count toward the square footage the price-per-SF is divided by.' +
+      (M.takeoff.some(function (r) { return r && r.same_floor; })
+        ? ' Default rows that share the floor carry the same square feet but are not added to ' +
+          'it again.' : '') + '</p>';
 
     return shell("Material",
       "One row per assembly. The library prices it against the measurement you give it.", html);
@@ -2325,7 +2328,14 @@
     // B.seedTakeoffSf for the rules. polish_sf is rewritten as the takeoff total on the first
     // save, and from then on intake shows its boxes locked.
     if (!B.takeoffSf(M.takeoff)) {
-      M.takeoff = B.seedTakeoffSf(M.takeoff, state.polish_sf, state.polish_2_sf);
+      // A NEW BID ALSO LOADS THE DEFAULTS (Hanz, 2026-10-05), on the same gate as the condition
+      // defaults above: nothing ever saved. seedDefaultTakeoff owns how they combine with intake's
+      // SF boxes (one area-carrying row, the rest marked same_floor); it falls through to
+      // seedTakeoffSf when the library has no defaults, and a saved bid takes seedTakeoffSf alone.
+      M.takeoff = B.conditionsUnstated(state.polish_estimate)
+        ? B.seedDefaultTakeoff(M.takeoff, ASMS, ITEMS, RESERVED_ITEM_IDS,
+                               state.polish_sf, state.polish_2_sf)
+        : B.seedTakeoffSf(M.takeoff, state.polish_sf, state.polish_2_sf);
     }
     // THE TAKEOFF TOTAL IS polish_sf, SO MAKE THE DRAFT SAY SO NOW. Two ways the draft can be
     // behind the model this page just opened with: (1) seeding filled rows in memory only, so
