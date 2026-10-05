@@ -2753,8 +2753,12 @@
     if (laborDefaults) {
       // Library rows with no rate of their own and Travel follow the company rate, then the three
       // crew rows are set to it. New bids only: this whole block is behind the laborUnstated gate.
+      var laborRows = await laborDefaults;
       M.labor = B.applyLaborRate(
-        B.seedLibraryLabor(M.labor, await laborDefaults, LABOR_RATE), LABOR_RATE);
+        B.seedLibraryLabor(M.labor, laborRows, LABOR_RATE, "polish"), LABOR_RATE);
+      // Travel is a default like any other: if the library says this bid does not get it, say so
+      // on the model so a reload does not append the "missing" row back (migrateModel).
+      if (B.travelDeclined(laborRows, "polish")) M.no_travel_labor = true;
       // A default can carry guys_auto, exactly as Travel does. Re-run for the same reason adopt()
       // runs it: before the first paint, not on the first edit.
       syncAutoGuys();

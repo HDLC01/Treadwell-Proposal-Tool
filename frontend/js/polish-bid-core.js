@@ -1217,13 +1217,20 @@
    *  of its own the way `default_work_types` does for an empty list meaning "every tab": there is
    *  no old data to stay compatible with, because no row anywhere carried `favorite` before today.
    *
-   *  TRAVEL IS UNCHANGED BY THIS. The branch above it applies unconditionally, whatever its stored
-   *  `favorite` reads -- Travel is not opted into a bid the way a chosen default is, it is built
-   *  into every estimate the way it always has been, and the migration backfills it to true
-   *  regardless, so the two should never actually disagree. */
-  function seedLibraryLabor(labor, rows, dflt) {
+   *  TRAVEL FOLLOWS THE SAME TWO FLAGS (Hanz, 2026-10-06), through travelAppliesToBid below: a
+   *  stored Travel row that is not a default (`favorite` false) or is scoped to other work types
+   *  (`default_work_types`) leaves Travel OFF a new bid -- the row freshModel put there is taken
+   *  out again -- and every other case is today's behaviour. No stored row, or a row whose
+   *  `favorite` is absent/null with no work types, is Travel on every new bid, as it always was.
+   *  The Defaults tab's Edit / Remove and the Labor tab's work-type chips on Travel write exactly
+   *  these two fields, so each of those controls changes what a new bid opens holding.
+   *
+   *  `workType` is the kind of bid being opened ("polish" -- the only estimate that seeds labor
+   *  today); the work-type scope applies to every row, Travel and the custom lines alike. */
+  function seedLibraryLabor(labor, rows, dflt, workType) {
     var out = (labor instanceof Array) ? labor.slice() : [];
     if (!(rows instanceof Array)) return out;
+    var wt = workType || "polish";
     var seen = {};
     var i;
     for (i = 0; i < out.length; i++) {
@@ -1234,6 +1241,13 @@
       if (!r || r.id === null || r.id === undefined) continue;
       var rid = String(r.id);
       if (rid === "travel") {
+        if (!travelAppliesToBid(r, wt)) {
+          // Not a default, or not for this work type: the bid does not get Travel. The row
+          // freshModel put on the model is taken out (a copy; the input array is never touched).
+          out = out.filter(function (x) { return !(x && String(x.id) === "travel"); });
+          seen[rid] = true;
+          continue;
+        }
         var travel = travelSeed(r);
         if (dflt !== undefined && dflt !== null && !libraryRateIsOwn(r, true)) {
           travel.rate = laborRateOrShipped(dflt);
@@ -1255,11 +1269,41 @@
         continue;
       }
       if (!r.favorite) continue;
+      if (!workTypeApplies(r, wt)) continue;
       if (seen[rid]) continue;
       seen[rid] = true;
       out.push(libraryLaborRow(r, dflt));
     }
     return out;
+  }
+
+  /** Does a default scoped to `list` apply to this kind of bid? EMPTY / ABSENT MEANS EVERY WORK
+   *  TYPE -- the same reading the library page's appliesToWorkType and seedDefaultTakeoff use. */
+  function workTypeApplies(row, workType) {
+    var l = row && row.default_work_types;
+    return !(l instanceof Array) || !l.length || l.indexOf(workType || "polish") !== -1;
+  }
+
+  /** Does the stored Travel row (library_labor id `travel`) put Travel on a NEW bid of this work
+   *  type? NO ROW IS YES, and so is a row whose `favorite` is absent/null with no work types:
+   *  Travel has been on every new bid since it shipped and nothing stored may change that by
+   *  being silent. Only an explicit `favorite: false` (the Defaults tab's Remove) or a work-type
+   *  list that leaves this one out turns it off. */
+  function travelAppliesToBid(row, workType) {
+    if (!row) return true;
+    if (row.favorite === false) return false;
+    return workTypeApplies(row, workType);
+  }
+
+  /** Did seeding leave Travel off this new bid? True exactly when the library's Travel row says
+   *  not to put it on. The caller records the answer on the model (`no_travel_labor`) so a reload
+   *  does not mistake the missing row for a stale draft and append it back (migrateModel). */
+  function travelDeclined(rows, workType) {
+    if (!(rows instanceof Array)) return false;
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i] && String(rows[i].id) === "travel") return !travelAppliesToBid(rows[i], workType);
+    }
+    return false;
   }
 
   /** Does this SAVED blob state no labor rows of its own?
@@ -1691,7 +1735,11 @@
         for (var li = 0; li < model.labor.length; li++) {
           if (model.labor[li] && model.labor[li].id === "travel") { hasTravel = true; break; }
         }
-        if (!hasTravel) {
+        if (model.no_travel_labor === true) {
+          // A NEW bid the library said not to give Travel (seedLibraryLabor): its absence is the
+          // answer, not a stale draft. Carried through so the next load does not append it back.
+          out.no_travel_labor = true;
+        } else if (!hasTravel) {
           out.labor = model.labor.concat([travelSeed()]);
         } else {
           // A TRAVEL ROW CAN ALSO BE OUT OF DATE, which is the second half of the same problem and
@@ -1960,6 +2008,7 @@
     // joining it: that branch was cut from main, which did not have the 2026-09-16 export yet.
     // Both belong -- Travel is built in, the library rows are additions beside it.
     libraryLaborRow: libraryLaborRow, seedLibraryLabor: seedLibraryLabor,
+    travelAppliesToBid: travelAppliesToBid, travelDeclined: travelDeclined,
     LABOR_CALC_BUILTINS: LABOR_CALC_BUILTINS, dayHours: dayHours, laborCalcValues: laborCalcValues, applyLaborCalc: applyLaborCalc,
     laborCalcDiffers: laborCalcDiffers,
     laborUnstated: laborUnstated,

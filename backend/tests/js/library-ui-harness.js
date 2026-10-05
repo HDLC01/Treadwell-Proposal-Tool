@@ -4140,10 +4140,52 @@ async function laborChecks() {
       // RESET, NOT REMOVE. Removing Travel is not a thing that can happen -- freshModel() seeds
       // it into every new bid -- so the word on the button is the word for what it does.
       offersReset: /data-labor-reset="travel"/.test(rows[0] || ""),
-      neverOffersRemove: !/data-def-off="labor" data-def-id="travel"/.test(h),
+      // REMOVE IS OFFERED NOW (2026-10-06): the same Edit + Remove pair as every labor default.
+      // Remove is favorite=false on the row, not a delete.
+      offersRemove: /data-def-off="labor" data-def-id="travel"/.test(rows[0] || ""),
       resetSaysReset: />Reset</.test(rows[0] || ""),
       // The favorited line is untouched by any of it.
       stillListsTheCustomLine: /Prevailing wage/.test(h),
+    };
+  }
+
+  // TRAVEL AS A DEFAULT LIKE ANY OTHER (2026-10-06): Remove = favorite=false (a PATCH on the row,
+  // never a delete), a removed Travel is off the Defaults list and offered back by the "add a
+  // labor default" browse, and the work-type sub-tabs filter it.
+  {
+    const withTravel = (extra) => Object.assign({ id: "travel", name: "Travel", rate: 33,
+      unit: "hours", guys_auto: true, sort: -1, notes: null, owner_email: null }, extra || {});
+    const calls = (h) => h.api.LABOR_CALLS;
+    // Remove, executed: the row is dropped from the list and favorite=false is what is sent.
+    const r1 = build(seed({ LABOR: [withTravel({ favorite: true })] }));
+    r1.api.renderDefaultLabor();
+    const before = r1.dom.nodes["default-labor-body"].innerHTML;
+    r1.api.LABOR_CALLS.length = 0;
+    await r1.api.setDefault("labor", "travel", false);
+    const gone = r1.dom.nodes["default-labor-body"].innerHTML;
+    const delCalls = r1.api.LABOR_CALLS.filter((c) => c.op === "DELETE");
+    // Not a default -> not offered as a row; the browse offers it back.
+    r1.api.setWorkType("polish");
+    r1.api.openDefaultBrowse && r1.api.openDefaultBrowse();
+    const cand = r1.api.defaultCandidates().rows.filter((c) => c.kind === "labor" && c.id === "travel");
+    // Work-type sub-tabs: scoped to epoxy, Travel is on the Epoxy tab and not on the Polish tab.
+    const r2 = build(seed({ LABOR: [withTravel({ favorite: true, default_work_types: ["epoxy"] })] }));
+    r2.api.setWorkType("polish"); r2.api.renderDefaultLabor();
+    const onPolish = /Travel/.test(r2.dom.nodes["default-labor-body"].innerHTML);
+    r2.api.setWorkType("epoxy"); r2.api.renderDefaultLabor();
+    const onEpoxy = /Travel/.test(r2.dom.nodes["default-labor-body"].innerHTML);
+    // favorite absent/null with no work types: listed on every tab, as before.
+    const r3 = build(seed({ LABOR: [withTravel({ favorite: null })] }));
+    r3.api.setWorkType("gyp"); r3.api.renderDefaultLabor();
+    const legacyOnGyp = /Travel/.test(r3.dom.nodes["default-labor-body"].innerHTML);
+    out.travelAsDefault = {
+      listedBefore: /Travel/.test(before),
+      removeIsFavoriteFalse: calls(r1).some((c) => c.op === "PATCH_DEFAULT" && c.kind === "labor" &&
+        c.id === "travel" && c.on === false),
+      noDelete: delCalls.length === 0,
+      goneAfterRemove: !/Travel/.test(gone),
+      offeredBack: cand.length === 1,
+      onPolish, onEpoxy, legacyOnGyp,
     };
   }
 
@@ -4313,7 +4355,7 @@ async function laborChecks() {
               { id: "L9", name: "Rigging", rate: 40, unit: "hours",
                 guys_auto: false, favorite: false },
               { id: "travel", name: "Travel", rate: 33, unit: "hours",
-                guys_auto: true, favorite: false }],
+                guys_auto: true, favorite: true }],   // a Travel that IS a default is listed, never offered again
     }));
     api.setDefaultQuery("rig");
     const hits = api.defaultCandidates().rows;
@@ -4565,8 +4607,8 @@ async function laborTabChecks() {
         /data-del-labor="L9"/.test(rowOf(h, "L9")),
       travelCannotBeDeleted: !/data-del-labor/.test(rowOf(h, "travel")),
       travelRateIsEditable: /data-f="rate" class="num cell-rate" value="41.5"/.test(rowOf(h, "travel")),
-      travelHasNoChips: !/data-wt-toggle/.test(rowOf(h, "travel")) &&
-        /Every estimate/.test(rowOf(h, "travel")),
+      travelHasChips: (rowOf(h, "travel").match(/data-wt-toggle="labor" data-wt-id="travel"/g) || []).length === 5 &&
+        /All work types/.test(rowOf(h, "travel")) && !/Every estimate/.test(rowOf(h, "travel")),
       customLinesHaveChips: /data-wt-toggle="labor" data-wt-id="L9"/.test(rowOf(h, "L9")),
       moreStartsShut: !/class="labor-more"/.test(h),
       badge: d.nodes["n-labor"].textContent,

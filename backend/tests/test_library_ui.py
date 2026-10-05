@@ -381,7 +381,7 @@ def test_the_labor_tab_lists_every_line_default_or_not(ran):
     Each row is edited in place like an Items row. The unit is a two-option select with no blank:
     a blank saves as "hours" on the server while the screen says "—", and this is the field that
     decides what the rate multiplies. Travel is editable but has no delete (the server refuses
-    one too) and no work-type chips (it is on every estimate whatever they say).
+    one too); it carries the same work-type chips as every line (2026-10-06).
 
     Mutation: filter renderLabor on `r.favorite`, and L9 disappears; use pick() for the unit and
     a blank option appears; drop the `travel ?` guard on the delete icon."""
@@ -395,7 +395,7 @@ def test_the_labor_tab_lists_every_line_default_or_not(ran):
     assert t["customLinesCanBeDeleted"], "a labor line has no delete on its own tab"
     assert t["travelCannotBeDeleted"], "Travel is offered a delete the server refuses"
     assert t["travelRateIsEditable"], "Travel cannot be edited on the Labor tab"
-    assert t["travelHasNoChips"], "Travel carries work-type chips that change nothing"
+    assert t["travelHasChips"], "Travel is missing its work-type chips (or still says Every estimate)"
     assert t["customLinesHaveChips"], "a labor line cannot be scoped to a work type"
     assert t["moreStartsShut"], "the More fields are open before anybody asks"
     assert t["badge"] == 3, "the badge counts %s, not every line" % t["badge"]
@@ -583,7 +583,7 @@ def test_the_defaults_tab_lists_only_lines_somebody_made_a_default(ran):
         "the search does not offer a labor line that is not yet a default")
     assert c["browseOffersIt"], "the browse does not offer a labor line that is not yet a default"
     assert c["favoritedLaborNotOffered"], "the browse offers a line that is already a default"
-    assert c["travelNeverOffered"], "the browse offers Travel, which is on every bid anyway"
+    assert c["travelNeverOffered"], "the browse offers Travel while it is already a default"
 
 
 @needs_node
@@ -671,9 +671,8 @@ def test_a_stored_travel_row_is_shown_once_with_its_own_rate(ran):
     twice -- same name, two sets of controls, and no way to tell which one prices a bid. So the
     count and the rate are both asserted, and the shipped figure is asserted ABSENT.
 
-    REMOVE IS NEVER OFFERED. Travel cannot be removed: freshModel() seeds it into every new bid
-    and migrateModel appends it to every old one, so a button saying Remove would be the dead
-    control this whole thread has been about. Reset is what the row can actually do.
+    REMOVE IS OFFERED (2026-10-06), as it is for every labor default: it writes favorite=false,
+    and a new bid then does not get Travel. Reset is Travel's extra.
 
     Mutation: drop the `r.id !== shipped.id` filter from renderDefaultLabor's `shown` list and
     travelRowCount becomes 2. Or pass `null` instead of `storedTravel` to travelSeed and the rate
@@ -689,9 +688,8 @@ def test_a_stored_travel_row_is_shown_once_with_its_own_rate(ran):
     assert t["canBeEdited"], "Travel still cannot be edited, which is what Hanz asked for"
     assert t["offersReset"] and t["resetSaysReset"], (
         "the way back to the shipped rate is not offered, or does not say Reset")
-    assert t["neverOffersRemove"], (
-        "Travel is offered Remove, which is a button that cannot do what it says: the row is "
-        "seeded into every bid whatever this table holds")
+    assert t["offersRemove"], (
+        "Travel is not offered Remove beside Edit, the pair every other labor default carries")
     assert t["stillListsTheCustomLine"], "merging Travel took the custom labor lines off the list"
 
 
@@ -3829,3 +3827,21 @@ def test_add_default_search_opens_above_its_own_table(ran):
     assert r["otherKeysIgnored"], "an ordinary key is swallowed by the Escape handler"
     assert r["cancelCloses"], "Cancel does not close the box"
     assert r["listenersWired"], "the page does not wire Cancel and Escape to the close function"
+
+
+@needs_node
+def test_travel_is_a_default_like_any_other_on_the_defaults_tab(ran):
+    """Hanz, 2026-10-06. Remove writes favorite=false on the Travel row (a PATCH, never a delete),
+    the row leaves the Defaults list, "+ Add a labor default" offers it back, and the work-type
+    sub-tabs filter it. A row with favorite null and no work types lists on every tab, as before.
+
+    Mutation: revert the travelListed gate in renderDefaultLabor, or restore the
+    `l.id !== "travel"` test in defaultCandidates -> goneAfterRemove / offeredBack go red."""
+    t = ran["travelAsDefault"]
+    assert t["listedBefore"]
+    assert t["removeIsFavoriteFalse"], "Remove did not PATCH favorite=false on the travel row"
+    assert t["noDelete"], "Remove sent a DELETE"
+    assert t["goneAfterRemove"], "a removed Travel is still listed as a default"
+    assert t["offeredBack"], "a removed Travel cannot be added back as a labor default"
+    assert t["onEpoxy"] and not t["onPolish"], "Travel ignores the work-type sub-tabs"
+    assert t["legacyOnGyp"], "an unscoped legacy Travel row stopped listing on every tab"

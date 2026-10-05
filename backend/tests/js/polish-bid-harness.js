@@ -568,14 +568,13 @@ out.libraryLabor = {
         guys_auto: false }
     ]);
     return { ids: rows.map(function (r) { return r.id; }),
-             // TRAVEL IS NOT GATED BY THIS. It applies whether or not the fixture below marks
-             // it a favorite, because Travel is not opted into a bid the way a chosen default
-             // is -- it is built into every estimate regardless.
-             travelSeedsEvenUnfavorited: (function () {
+             // TRAVEL FOLLOWS THE SAME FLAG NOW (2026-10-06): an unfavorited stored Travel row
+             // leaves Travel OFF a new bid. (Absent/null favorite stays ON -- travel-default-harness.)
+             travelLeftOffWhenUnfavorited: (function () {
                const withTravel = P.seedLibraryLabor(P.freshModel().labor,
                  [{ id: "travel", name: "Travel", rate: 20, unit: "hours", guys_auto: true,
                     favorite: false }]);
-               return withTravel.filter(function (r) { return r.id === "travel"; })[0].rate;
+               return withTravel.filter(function (r) { return r.id === "travel"; }).length === 0;
              })() };
   })()
 };
