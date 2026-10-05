@@ -2994,14 +2994,29 @@ def test_a_saved_bid_keeps_its_rates_and_says_what_the_default_is(ran):
 
 @needs_node
 def test_default_line_shows_only_while_the_rate_differs(ran):
-    """Hidden on every row that matches, shown on the one library row with its own $55, shown the
+    """Hidden on every row of a new bid (a library row's own $55 is ITS default, G1), shown the
     moment the estimator types 45 over a row, hidden again when they type the default back (the
     in-place repaint, not a rebuild)."""
     lr = ran["laborRate"]
     # Render order since 2026-10-05: Travel Labor is drawn last, under the Travel dividing line.
-    assert [x["hidden"] for x in lr["newBidLines"]] == [True, True, True, True, False, True]
+    assert [x["hidden"] for x in lr["newBidLines"]] == [True] * 6
     assert lr["typedOver"]["hidden"] is False
     assert lr["typedBack"]["hidden"] is True
+
+
+@needs_node
+def test_travel_labor_with_its_own_library_rate_shows_no_false_default_warning(ran):
+    """G1. Travel's library row says $41, the company rate is $40: a new bid opens Travel at 41 and
+    NOTHING warns (a row's default is the rate it was filled with). Typing 50 over it warns against
+    $41.00, not the company $40.
+
+    Mutation: remove `B.stampRateDefaults(...)` in init() -- Travel warns 'Default value: $40.00'
+    with nothing typed."""
+    t = ran["laborRate"]["travelOwn"]
+    assert t["rate"] == 41
+    assert all(x["hidden"] for x in t["lines"]), t["lines"]
+    assert t["typedOver"]["hidden"] is False
+    assert t["typedOver"]["text"] == "Default value: $41.00"
 
 
 @needs_node

@@ -988,6 +988,29 @@
     return out;
   }
 
+  /** A ROW'S DEFAULT RATE IS THE RATE IT WAS FILLED WITH (Hanz's library precedence): the library
+   *  row's own rate when it has one, else the company labor rate -- whichever seeding actually
+   *  wrote. Stamped as `rate_default` on every row of a NEW bid once all the seeding has run, so
+   *  the "Default value" warning compares a rate to what the row started from, not to the company
+   *  rate (a library Travel of $41 on a $50 company rate used to warn with nothing typed).
+   *
+   *  A row the Labor Calculator filled already carries calc_default.rate and is left alone. A row
+   *  that already has a rate_default keeps it. Saved bids never reach this (the caller's gate is
+   *  laborUnstated), so they have no stamp and fall back to the company rate as before. A NEW
+   *  array of NEW rows. */
+  function stampRateDefaults(labor) {
+    var out = (labor instanceof Array) ? labor.slice() : [];
+    for (var i = 0; i < out.length; i++) {
+      var r = out[i];
+      if (!r || r.calc_default || r.rate_default !== undefined) continue;
+      var copy = {};
+      for (var k in r) if (Object.prototype.hasOwnProperty.call(r, k)) copy[k] = r[k];
+      copy.rate_default = num(r.rate);
+      out[i] = copy;
+    }
+    return out;
+  }
+
   /** The Travel row as the sheet has it, built fresh each call so no two models share an object.
    *
    *  ONE DEFINITION, THREE CALLERS: `freshModel` seeds it into a new sandbox, `migrateModel`
@@ -1865,6 +1888,7 @@
     laborUnstated: laborUnstated,
     // The company labor rate (Markups -> Global): read, applied to a new bid, and the fallback.
     SHIPPED_LABOR_RATE: SHIPPED_LABOR_RATE, laborRateOrShipped: laborRateOrShipped,
-    laborRateFromRules: laborRateFromRules, applyLaborRate: applyLaborRate
+    laborRateFromRules: laborRateFromRules, applyLaborRate: applyLaborRate,
+    stampRateDefaults: stampRateDefaults
   };
 });

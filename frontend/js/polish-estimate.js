@@ -2062,8 +2062,13 @@
     // A line the Labor Calculator filled carries its own default rate (the line's, else the
     // company's at the time) -- warn against THAT, so an untouched calculator rate never shows
     // "Default value" and a changed one names the number it started from.
+    // Otherwise the rate the row was filled with (rate_default, stamped on a new bid after seeding:
+    // the library row's own rate, else the company rate); a saved bid has no stamp and compares
+    // to the company rate as it always did.
     var d = (row || {}).calc_default;
-    var dflt = d ? B.num(d.rate) : LABOR_RATE;
+    var dflt = d ? B.num(d.rate)
+      : (row && row.rate_default !== undefined && row.rate_default !== null && row.rate_default !== ""
+          ? B.num(row.rate_default) : LABOR_RATE);
     return dfltWarnText(B.num((row || {}).rate) !== dflt, B.money2(dflt));
   }
 
@@ -2774,6 +2779,8 @@
     // from then on the rows are the BID's.
     if (laborCalc) {
       M.labor = B.applyLaborCalc(M.labor, await laborCalc, B.takeoffSf(M.takeoff), LABOR_RATE);
+      // Every row the calculator did not fill remembers the rate it was seeded with (G1).
+      M.labor = B.stampRateDefaults(M.labor);
       syncAutoGuys();
     }
     // THE TAKEOFF TOTAL IS polish_sf, SO MAKE THE DRAFT SAY SO NOW. Two ways the draft can be

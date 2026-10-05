@@ -3006,7 +3006,20 @@ const rendered = [];      // every string the page put on screen, for the Labour
     const typedBack = flt(newBid)[0];
     const added = newBid.api.newLaborRow();
 
+    // G1: Travel Labor with its OWN library rate ($41) on a $40 company rate -- nothing typed, so
+    // no row (Travel included) may warn; typing over it warns against $41, not $40.
+    const LIBT = [{ id: "travel", name: "Travel", rate: "41.00", unit: "hours", guys_auto: true,
+                    favorite: true }];
+    const tb = build({ blob: fresh(), labor: LIBT, markupRules: RATE("40") });
+    await tb.api.init();
+    tb.api.go(1);
+    const ti = tb.api.model().labor.findIndex((r) => r.id === "travel");
+    const travelOwn = { rate: tb.api.model().labor[ti].rate, lines: flt(tb) };
+    typeInto(tb, '[data-lab="' + ti + '"][data-k="rate"]', "50");
+    travelOwn.typedOver = flt(tb)[flt(tb).length - 1];
+
     out.laborRate = {
+      travelOwn: travelOwn,
       newBid: newBidRates, noRule: rates(noRule), down: rates(down), off: rates(off),
       saved: rates(saved), savedDefaultLines: flt(saved),
       newBidLines: before, typedOver: typedOver, typedBack: typedBack,
