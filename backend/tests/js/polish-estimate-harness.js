@@ -3788,9 +3788,12 @@ const rendered = [];      // every string the page put on screen, for the Labour
     await startsUnset.api.init();
 
     // (1) Flip every default-pulled row on a new bid; count what went to the library.
-    const lp = build(Object.assign({ blob: fresh() }, lib(true)));
+    // THE SAME library object the page is handed, snapshotted before and compared after -- a
+    // freshly built lib(true) on both sides would compare equal whatever the page did.
+    const lpLib = lib(true);
+    const libBefore = JSON.stringify(lpLib);
+    const lp = build(Object.assign({ blob: fresh() }, lpLib));
     await lp.api.init();
-    const libBefore = JSON.stringify(lib(true));
     const callsBefore = (lp.rec.calls || []).length;
     const m0 = lp.api.model();
     lp.api.go(0);
@@ -3835,7 +3838,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
     // A bid saved with a row switched OFF while the library says ON, then the library says OFF->ON.
     out.toggleIndependence = {
       startsOn: stateOf(startsOn), startsOff: stateOf(startsOff), startsUnset: stateOf(startsUnset),
-      libraryUntouched: JSON.stringify(lib(true)) === libBefore,
+      libraryUntouched: JSON.stringify(lpLib) === libBefore,
       flipCalls: flipCalls, flippedDiffers: flipped.total !== stateOf(startsOn).total,
       saved: { here: savedHere, libOff: savedLibFlippedOff, libMatches: savedLibMatchesFlips },
       savedFlips: { takeoff0: savedModel.takeoff[0].enabled, c1: savedModel.labor.filter((r) => r.id === "c1")[0].enabled },

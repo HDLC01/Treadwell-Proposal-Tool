@@ -335,6 +335,14 @@
         (r.line_key === "travel_lodging" ? "Lodging" : "Per Diem") + " line; a saved bid keeps its " +
         "own. Kyle's workbook does not read it.";
     }
+    // THE LABOR RATE AND FEES + TEXTURA ARE READ THE SAME WAY (2026-10-06): a new beta bid starts
+    // its labor lines / its Fees + Textura line at this figure. Without this branch they fell
+    // through to "changes no bid", which told an admin a live default was dead.
+    if (LAYOUT === "global" && (r.line_key === "labor_rate" || r.line_key === "fees_textura")) {
+      return " The Polish Estimate beta starts every NEW bid's " +
+        (r.line_key === "labor_rate" ? "labor lines" : "Fees + Textura line") + " at this figure; " +
+        "a saved bid keeps its own. Kyle's workbook does not read it.";
+    }
     var keys = PRICES_THE_BID[LAYOUT] || [];
     if (keys.indexOf(r.line_key) < 0) {
       return " The estimate workbook does not read this line yet, so a rate filed here " +
