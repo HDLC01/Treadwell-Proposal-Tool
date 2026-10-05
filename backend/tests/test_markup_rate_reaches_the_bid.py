@@ -1183,10 +1183,17 @@ def test_the_admin_page_says_whether_each_row_reaches_the_workbook(ran):
     assert "does not read this line yet" in s["bondGyp"]
 
     # The Global tab, where hard_bid and bond are now edited and where the two travel figures
-    # live. It is in NO target table, so every one of its rows must claim nothing.
-    for name in ("bondGlobal", "hardBidGlobal", "travelLodgingGlobal", "travelPerDiemGlobal"):
+    # live. It is in NO workbook target table, so the bond rows must claim nothing.
+    for name in ("bondGlobal", "hardBidGlobal"):
         assert "does not read this line yet" in s[name], (
             "a Global row promises a price: %s -> %r" % (name, s[name]))
+    # CHANGED ON PURPOSE (Kyle's notes, B7, 2026-10-05): the two travel figures used to be pinned
+    # here as unread by everything. The Polish Estimate beta now reads them -- a new bid copies
+    # each onto its Lodging / Per Diem line -- so those rows say so, while still saying the
+    # WORKBOOK does not read them (no address in any target table, asserted in the test above).
+    for name, word in (("travelLodgingGlobal", "Lodging"), ("travelPerDiemGlobal", "Per Diem")):
+        assert "Polish Estimate beta copies this figure onto every NEW bid" in s[name]             and word in s[name] and "workbook does not read it" in s[name], (
+            "a travel figure's row misstates what reads it: %s -> %r" % (name, s[name]))
 
     assert "Prices the bid" in s["polishSoftCosts"] and "16%" in s["polishSoftCosts"]
     assert "Prices the bid" in s["filed"] and "4%" in s["filed"]

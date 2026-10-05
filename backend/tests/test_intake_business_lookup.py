@@ -6,12 +6,18 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_business_lookup_preserves_project_name_and_fills_location_fields():
+    """The lookup moved out of index.js into js/address-lookup.js (2026-10-05) so the beta intake
+    shares it; the live page keeps the same ids and loads the module before its own script."""
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
-    js = (ROOT / "frontend" / "js" / "index.js").read_text(encoding="utf-8")
+    index_js = (ROOT / "frontend" / "js" / "index.js").read_text(encoding="utf-8")
+    js = (ROOT / "frontend" / "js" / "address-lookup.js").read_text(encoding="utf-8")
 
     assert 'id="business-input"' in html
     assert 'id="business-results"' in html
     assert 'name="address" id="address-input"' in html
+    assert html.index("/js/address-lookup.js") < html.index("/js/index.js")
+    assert "window.TWAddress.mount({" in index_js
+    assert "photon.komoot.io" not in index_js, "a second copy of the lookup crept back into index.js"
     assert "https://photon.komoot.io/api/" in js
     assert "function fillLocation" in js
     assert "Keep the name Kyle entered" in js

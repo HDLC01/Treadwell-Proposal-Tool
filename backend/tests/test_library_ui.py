@@ -77,7 +77,7 @@ def test_a_fourth_tab_holds_the_defaults_that_are_not_built_yet(ran):
     checked below rather than only the button's presence."""
     page = ran["page"]
     assert page["defaultsTab"], "the Default Items & Assemblies tab is not on the page"
-    assert page["defaultsTabLabel"] == "Default Items &amp; Assemblies", (
+    assert page["defaultsTabLabel"] == "Default Items, Assemblies &amp; Labor", (
         "the tab reads %r" % page["defaultsTabLabel"])
     assert page["defaultsTabIsLast"], "the tab is not beside Administration, where it was asked for"
     assert page["defaultsPaneStartsHidden"], (
@@ -129,7 +129,8 @@ def test_the_defaults_tab_has_a_search_for_entering_them(ran):
     assert c["searchIsForAdding"], (
         "the search reads as a filter over the lists rather than a way to add to them")
     assert c["searchAboveTheLists"], (
-        "the search sits under the lists, where it reads as narrowing them")
+        "the search box is back up by the work-type tabs (or is not hidden until opened, or lost "
+        "its Cancel); it starts inside the Takeoff card above its table")
 
 
 @needs_node
@@ -762,7 +763,9 @@ def test_reset_patches_the_row_back_rather_than_deleting_it(ran):
         "Reset went out as %s -- a delete takes the only id Travel can be addressed by with it, "
         "permanently" % r["op"])
     assert r["sentToTravel"], "Reset was addressed to something other than the reserved id"
-    assert r["body"] == {"name": "Travel", "rate": 33.0, "unit": "hours"}, (
+    # "Travel Labor" since 2026-10-05: Reset writes the row's name as travelSeed() now spells it,
+    # which also brings a row still stored under the old "Travel" onto the new name.
+    assert r["body"] == {"name": "Travel Labor", "rate": 33.0, "unit": "hours"}, (
         "Reset did not send the figures travelSeed() ships: %s" % r["body"])
     assert r["showsTheShippedRate"], "the list still shows the edited rate after a reset"
     assert r["resetGoneAfterwards"], (
@@ -902,8 +905,10 @@ def test_the_items_tab_no_longer_explains_itself(ran):
     # delete; this is the opposite of one. Defaults gained its own .paneintro on 2026-09-18 and
     # Labor on 2026-09-30, both reusing the class rather than inventing a new one -- the same
     # reasoning that kept it alive for Assemblies and Administration.
-    assert page["paneintroStillUsed"] == 4, (
-        "expected Assemblies, Labor, Administration and Defaults to carry .paneintro, found %s"
+    # FIVE since 2026-10-05: the Labor Calculator pane (Kyle's notes, B7) opens with one too.
+    assert page["paneintroStillUsed"] == 5, (
+        "expected Assemblies, Labor, Labor Calculator, Administration and Defaults to carry "
+        ".paneintro, found %s"
         % page["paneintroStillUsed"])
 
 
@@ -3755,3 +3760,61 @@ def test_edit_on_a_condition_material_opens_its_items_tab_row(ran):
     assert r["focusHiddenFirst"], "the fixture's search did not hide the row, so this proves nothing"
     assert r["focusThroughASearch"] == "item:remove-existing-jf", r["focusThroughASearch"]
     assert r["searchWasCleared"], "the Items tab's search was left hiding the row Edit opened"
+
+
+def test_a_new_material_or_assembly_has_a_save_button_that_sends_now(ran):
+    """Hanz, 2026-10-05: nobody should have to click off a new row to save it."""
+    sb = ran["saveButton"]
+    assert sb["onTheNewRow"] and sb["notOnASavedRow"] and sb["exactlyOne"]
+    assert sb["asmShownWhenNew"] and sb["asmHiddenWhenSaved"]
+    sn = ran["saveNew"]
+    assert sn["itemOnePatch"] and sn["itemQuestionAsked"] and sn["itemSentTheTypedCost"]
+    assert sn["itemDebounceDisarmed"] and sn["itemNoLongerNew"]
+    assert sn["untouchedRowSendsNothing"] and sn["untouchedRowNoLongerNew"]
+    assert sn["cancelKeepsItNew"]
+    assert sn["asmOnePatch"] and sn["asmDeclaredItsVersion"] and sn["asmNoLongerNew"]
+    assert sn["noErrors"]
+
+
+def test_any_edited_row_shows_save_and_clears_only_when_the_server_confirms(ran):
+    """Hanz, 2026-10-05 (B3b): Save on ANY edited material or assembly, not only new ones.
+
+    Mutations: drop the FRESH mark from patchSoon (markedByTheEdit red); clear the mark before the
+    reply in flush (failedKeepsMark red); delete takenP/the await in saveNow (pressWaitedForTheDialog
+    red -- the reviewer's race); drop flushAllPending (leaveFlushSent red)."""
+    s = ran["saveEdited"]
+    assert s["notMarkedBeforeEdit"] and s["markedByTheEdit"]
+    assert s["confirmedSaveClears"] and s["onePatchOneQuestion"]
+    assert s["failedKeepsMark"], "a refused save cleared the unsaved mark"
+    assert s["secondPressResends"], "after a failed save, the next Save press sent nothing and retired the button"
+    assert s["thirdPressClearsOnConfirm"]
+    assert s["bufferEmptyWhileAsking"], "the fixture no longer parks a flush on its dialog"
+    assert s["pressWaitedForTheDialog"], "Save treated an empty buffer as saved while a flush was mid-flight"
+    assert s["pressThenConfirmed"]
+    assert s["newerEditKeepsMark"], "a newer keystroke lost its mark when the older save landed"
+    assert s["asmMarked"] and s["asmSavedAndCleared"]
+    assert s["leaveWarnsWhilePending"] and s["leaveFlushSent"] and s["leaveSettled"]
+    assert s["cancelledSavedRowClean"]
+    assert s["noErrors"]
+
+
+@needs_node
+def test_add_default_search_opens_above_its_own_table(ran):
+    """Hanz, 2026-10-05: "Adding a default [labor] should have the search bar right above the
+    [Labor] container itself, not on the work type up above."
+
+    Executed, not read: the box is moved by placeDefaultSearch(), so the test presses each
+    section's button against a stand-in tree and asks where the one box ended up.
+
+    Mutation: make openDefaultAdd call openDefaultBrowse() with no section (the old behaviour) and
+    laborOpensAboveLabor goes red."""
+    r = ran["defaultsInlineSearch"]
+    assert r["laborOpensAboveLabor"], "the labor button does not open the box above the Labor table"
+    assert r["focusInBox"], "focus does not land in the search box"
+    assert r["laborResultsRendered"], "the relocated box does not show the browse results"
+    assert r["onlyOneOpenAndItMoved"], "two boxes open at once, or the box did not move sections"
+    assert r["movingToAnotherSectionClearsTheQuery"], "a query typed for one section leaks to the next"
+    assert r["escapeCloses"], "Escape does not close the box and return focus to its button"
+    assert r["otherKeysIgnored"], "an ordinary key is swallowed by the Escape handler"
+    assert r["cancelCloses"], "Cancel does not close the box"
+    assert r["listenersWired"], "the page does not wire Cancel and Escape to the close function"

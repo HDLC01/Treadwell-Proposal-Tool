@@ -127,6 +127,17 @@ const VECTORS = [
   { label: "an area typed: per SF is the bid divided by it",
     input: job({ sf: 12500, conditions: cond({ taxable: true }) }) },
 
+  // ── travel costs (Lodging + Per Diem), D61, INSIDE the sub-total ───────────
+  // The GP band is read off the sub-total, so travel that pushes it across an edge must move the
+  // band: 6,371 of material alone is 6,499 (52%), and 100 of travel on top makes it 6,599 (45%).
+  { label: "travel moves the sub-total across a GP edge",
+    input: { material: 6371, labor: 0, travel: 100, contingency: 0, conditions: cond(), sf: 10000 } },
+  { label: "travel on a whole job, with labor, tax and prevailing wage",
+    input: job({ travel: 1155.4, conditions: cond({ taxable: true, prevailing_wage: true,
+                                                    remodel_tax: true }) }) },
+  { label: "travel absent reads as zero",
+    input: job({ conditions: cond() }) },
+
   // ── a whole realistic job, every condition on, raw sums with cents on them ─
   { label: "everything on, unrounded takeoff and labor sums",
     input: { material: 18450.75, labor: 15467.2, contingency: 2500, remodel_rate: 0.07975,
@@ -356,6 +367,13 @@ out.travelBlockers = {
     takeoff: [{ assembly_id: "a1", measurement: 100, unit: "SF" }],
     labor: [{ id: "travel", label: "Travel", guys: "", days: 2, rate: 33,
               unit: "hours", guys_auto: false }] }),
+  // A freshly added line carries the company rate and nothing else: untouched, not half-filled.
+  blankAddedLine: P.blockers({ version: 2,
+    takeoff: [{ assembly_id: "a1", measurement: 100, unit: "SF" }],
+    labor: [{ id: "u_1", label: "", guys: "", days: "", rate: 33 }] }),
+  namedAddedLine: P.blockers({ version: 2,
+    takeoff: [{ assembly_id: "a1", measurement: 100, unit: "SF" }],
+    labor: [{ id: "u_2", label: "Mobilize", guys: "", days: "", rate: 33 }] }),
   crewRowStillChecked: P.blockers({ version: 2,
     takeoff: [{ assembly_id: "a1", measurement: 100, unit: "SF" }],
     labor: [{ id: "polishing", label: "Polishing", guys: 3, days: "", rate: 33 }] })
@@ -497,6 +515,10 @@ out.libraryLabor = {
   storedTravelWithNoRateKey: P.travelSeed({ id: "travel", name: "Travel", unit: "hours" }),
   // …and a blank NAME or UNIT falls back the same way rather than drawing an anonymous line or
   // multiplying by a unit the estimate has no branch for.
+  // The label rule behind "Travel Labor": blank and exactly the old "Travel" take the new name, a
+  // name somebody chose is kept.
+  travelLabelOf: { Travel: P.travelLabel("Travel"), blank: P.travelLabel("  "),
+                   custom: P.travelLabel("Drive time"), almost: P.travelLabel("Travel ") },
   storedTravelWithBlankText: P.travelSeed({ id: "travel", name: "   ", rate: 44, unit: "" }),
   // THE ID IS NEVER READ OFF THE ROW, and this is the fixture that can tell. Every other one
   // here hands in `id: "travel"`, where "reserve the id" and "copy the row's id" agree and a
@@ -595,7 +617,7 @@ const SAVED_WITH_LIB_ROW = {
     { id: "polishing", label: "Polishing", guys: 4, days: 6, rate: 33.0 },
     { id: "mockup", label: "Mock-up", guys: 3, days: 0.5, rate: 33.0 },
     { id: "jointfill", label: "Joint filler", guys: 2, days: 3, rate: 33.0 },
-    { id: "travel", label: "Travel", guys: 18, days: 2, rate: 33.0,
+    { id: "travel", label: "Travel Labor", guys: 18, days: 2, rate: 33.0,
       unit: "hours", guys_auto: true },
     { id: "lab-densify", label: "Densify", guys: 2, days: 1, rate: 55, unit: "days",
       guys_auto: false }
@@ -716,7 +738,7 @@ const SAVED_WITH_CONDITIONS = {
     { id: "polishing", label: "Polishing", guys: 4, days: 6, rate: 33.0 },
     { id: "mockup", label: "Mock-up", guys: 3, days: 0.5, rate: 33.0 },
     { id: "jointfill", label: "Joint filler", guys: 2, days: 3, rate: 33.0 },
-    { id: "travel", label: "Travel", guys: 18, days: 2, rate: 33.0,
+    { id: "travel", label: "Travel Labor", guys: 18, days: 2, rate: 33.0,
       unit: "hours", guys_auto: true }
   ],
   // ALL THREE THE OPPOSITE OF COND_ROWS ABOVE, which is what keeps `wouldHaveChanged`
@@ -746,5 +768,79 @@ out.savedConditionsAreUntouchable = {
   migrationIsIdempotent: JSON.stringify(P.migrateModel(P.migrateModel(savedClone())).conditions)
     === JSON.stringify(P.migrateModel(savedClone()).conditions)
 };
+
+// ── Lodging + Per Diem, the two travel costs (Kyle's notes, B7, 2026-10-05) ─────────────────────
+{
+  const CREW = [
+    { id: "polishing", label: "Polishing", guys: 3, days: 5, rate: 33 },
+    { id: "mockup", label: "Mock-up", guys: 3, days: 0.5, rate: 33 },
+    { id: "jointfill", label: "Joint filler", guys: 3, days: 0.5, rate: 33 },
+    { id: "travel", label: "Travel Labor", guys: 18, days: 2, rate: 33, unit: "hours" },
+  ];
+  const on = (rate, extra) => Object.assign({ label: "x", enabled: true, qty: "", qty_auto: true,
+                                              rate: rate }, extra || {});
+  const off = (rate) => Object.assign(on(rate), { enabled: false });
+  const chain = (travelTotal) => P.markupChain({ material: 9000, labor: P.laborTotal(CREW),
+    travel: travelTotal, contingency: 0, conditions: cond({ taxable: true }), sf: 10000 });
+  const costs = P.travelCosts({ lodging: on(70), per_diem: on(45) }, CREW);
+  const RULE = (key, formula, extra) => Object.assign({ layout: "global", line_key: key,
+    formula: formula, applies: true }, extra || {});
+  const SAVED_NO_TRAVEL = { version: 2, takeoff: [{ assembly_id: "a1", measurement: 100, unit: "SF" }],
+    labor: [{ id: "polishing", label: "Polishing", guys: 3, days: 5, rate: 33 },
+            { id: "travel", label: "Travel", guys: 18, days: 2, rate: 33, unit: "hours",
+              guys_auto: false }],
+    conditions: { local: true }, contingency: 0 };
+  const m1 = P.migrateModel(SAVED_NO_TRAVEL);
+  out.travelCore = {
+    manDays: P.travelManDays(CREW),
+    costs: costs,
+    // one line off adds nothing; both off is the old bid exactly
+    lodgingOnlyOff: P.travelCosts({ lodging: off(70), per_diem: on(45) }, CREW),
+    typedQty: P.travelLineCost(on(70, { qty_auto: false, qty: "10" }), CREW),
+    typedQtyBlank: P.travelLineCost(on(70, { qty_auto: false, qty: "" }), CREW),
+    absentTravel: P.travelCosts(undefined, CREW),
+    offCrewRowLeavesTheCount: P.travelManDays(CREW.map((r) =>
+      r.id === "polishing" ? Object.assign({}, r, { enabled: false }) : r)),
+    // inside the markups
+    noTravel: chain(0), withTravel: chain(costs.total),
+    absentInput: P.markupChain({ material: 9000, labor: P.laborTotal(CREW),
+      contingency: 0, conditions: cond({ taxable: true }), sf: 10000 }),
+    // reading the rules
+    rates: {
+      both: P.travelRatesFromRules([RULE("travel_lodging", "85"), RULE("travel_per_diem", "$52.50")]),
+      none: P.travelRatesFromRules([]),
+      off: P.travelRatesFromRules([RULE("travel_lodging", "85", { applies: false })]),
+      expr: P.travelRatesFromRules([RULE("travel_lodging", "IF(1,2,3)")]),
+      zero: P.travelRatesFromRules([RULE("travel_lodging", "0")]),
+      wrongLayout: P.travelRatesFromRules([RULE("travel_lodging", "85", { layout: "polish" })]),
+      junk: P.travelRatesFromRules(null),
+    },
+    seeded: P.applyTravelRates(P.travelCostsSeed(), { lodging: 85, per_diem: 52.5 }),
+    seededNothing: P.applyTravelRates(P.travelCostsSeed(), { lodging: null, per_diem: null }),
+    typedRateKept: P.applyTravelRates(
+      { lodging: on(99), per_diem: off(45) }, { lodging: 85, per_diem: 52.5 }),
+    fresh: P.freshModel().travel,
+    // old drafts: no travel key -> both lines OFF at the shipped rates; the bid is not repriced
+    migrated: m1.travel,
+    migratedIdempotent: JSON.stringify(P.migrateModel(m1)) === JSON.stringify(m1),
+    oldDraftPrice: P.markupChain({ material: 5000, labor: P.laborTotal(m1.labor),
+      travel: P.travelCosts(m1.travel, m1.labor).total, contingency: 0,
+      conditions: m1.conditions, sf: 100 }).total,
+    oldDraftPriceNoTravelTerm: P.markupChain({ material: 5000, labor: P.laborTotal(m1.labor),
+      contingency: 0, conditions: m1.conditions, sf: 100 }).total,
+    // the relabel
+    relabeled: m1.labor.filter((r) => r.id === "travel")[0].label,
+    customLabelKept: P.migrateModel(Object.assign({}, SAVED_NO_TRAVEL, { labor: [
+      SAVED_NO_TRAVEL.labor[0], Object.assign({}, SAVED_NO_TRAVEL.labor[1], { label: "Drive time" })] }))
+      .labor[1].label,
+    seedLabel: P.travelSeed().label,
+    storedOldNameLabel: P.travelSeed({ id: "travel", name: "Travel", rate: 40, unit: "hours" }).label,
+    // a saved line with a typed quantity and `hand` survives the round trip
+    roundTrip: P.migrateModel(Object.assign({}, SAVED_NO_TRAVEL, { travel: {
+      lodging: { label: "Lodging", enabled: true, qty: "9", qty_auto: false, rate: 75, hand: true },
+      per_diem: { label: "Per Diem", enabled: false } } })).travel,
+    garbage: P.normalizeTravel("not an object"),
+  };
+}
 
 console.log(JSON.stringify(out));

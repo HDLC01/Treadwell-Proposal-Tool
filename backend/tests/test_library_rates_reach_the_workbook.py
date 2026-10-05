@@ -328,3 +328,32 @@ def test_the_held_rows_read_none_of_the_written_cells():
         for c in row:
             if isinstance(c.value, str) and c.value.startswith("="):
                 assert not moved.search(c.value), (c.coordinate, c.value)
+
+
+@pytest.fixture(scope="module")
+def cov():
+    """The B2 scenarios -- coverage typed on THIS bid -- from the same real-page harness run."""
+    proc = subprocess.run(["node", str(HARNESS), str(FRONTEND)], capture_output=True, text=True,
+                          encoding="utf-8", timeout=180)
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout.strip().splitlines()[-1])["condCoverage"]
+
+
+@needs_node
+def test_a_typed_coverage_reaches_the_workbook_the_same_figures(cov, cached):
+    """The download must match the screen. The kit's coverage typed on the bid (3,000 over a
+    library 2,000) is the divisor in the B29 formula the save writes, and the workbook's own
+    arithmetic gives the bid's kit count and line; the dye coverage typed on the bid lands in both
+    coat rates (price over coverage).
+
+    Mutation: conditionLibrary reads the library row instead of the priced (typed) line."""
+    jf = cov["libJf"]
+    assert jf["cells"]["Polish!B29"] == '=ROUNDUP(IF(E29="yes",(E18/3000),0),0)'
+    book = _workbook(jf, cached)
+    assert book.num("B29") == jf["jfKits"] == 2
+    assert book.num("D29") == pytest.approx(jf["jfCost"])
+    dye = cov["libDye"]
+    assert dye["cells"]["Polish!C25"] == pytest.approx(0.05)
+    assert dye["cells"]["Polish!C26"] == pytest.approx(0.05)
+    book = _workbook(dye, cached)
+    assert book.num("D25") + book.num("D26") == pytest.approx(dye["dyeCost"])

@@ -253,6 +253,23 @@
   // second debounced save goes out stamped with the version the FIRST one is about to
   // replace, and the server rightly rejects it as stale — a 409 against our own write.
   var inFlight = {};
+  // RECORDS CREATED ON THIS PAGE THAT HAVE NOT HAD A SAVE LAND YET, by kind then id. Creating a row
+  // POSTs it, so it exists server-side from the first click -- what is unsaved is whatever is
+  // typed over the placeholder name, which only goes out when the row is left or 600ms pass. That
+  // is why somebody who typed a new material and looked for a Save button found nothing to press.
+  // The Save button shows while an id is in here; a successful save of the record clears it.
+  //
+  // WIDENED 2026-10-05 (Hanz, B3b): the map now holds EVERY record with changes not yet confirmed by
+  // the server, not just new ones. The value is "new" for a row created on this page and true for a
+  // saved row somebody has edited since. patchSoon sets it; only a server-confirmed save (or a
+  // refused/reverted change, or a conflict repaint, or a delete) clears it. The name is kept
+  // because the harnesses seed it.
+  var FRESH = { items: {}, assemblies: {} };
+  // A FLUSH THAT HAS TAKEN ITS PAYLOAD BUT NOT YET HEARD BACK, by record key: a promise that settles
+  // when that flush is completely finished (confirm dialog answered, PATCH answered). flush deletes
+  // pendingPatch[key] the moment it starts, so "nothing pending" used to read as "saved" while the
+  // question was still on screen or the request still on the wire. saveNow waits on this instead.
+  var takenP = {};
   /** PATCH one record, debounced per record so holding a key is one write.
    *
    *  Pending fields are MERGED, not replaced. The first version replaced the body on each call,
@@ -325,6 +342,8 @@
     clearTimeout(timers[key]);
     delete timers[key];
     delete pendingPatch[key];
+    // The server's copy replaced ours, so nothing of ours is left unsaved.
+    delete FRESH.assemblies[id];
     renderList();
     renderPanel();
   }
@@ -546,6 +565,12 @@
       body = Object.assign({}, body, { lines: body.lines.map(lineForSave) });
     }
     pendingPatch[key] = Object.assign(pendingPatch[key] || {}, body);
+    // Unsaved from this keystroke until the server confirms. showUnsaved is the DOM half (absent
+    // in a bare harness scope, hence the typeof).
+    if (FRESH[kind] && !FRESH[kind][id]) {
+      FRESH[kind][id] = true;
+      if (typeof showUnsaved === "function") showUnsaved(kind, id);
+    }
     arm(kind, id, key);
   }
 
@@ -605,6 +630,11 @@
       if (!now && rowHasFocus(id)) { arm(kind, id, key); return; }
     }
     delete pendingPatch[key];
+    // From here until the finally below, this record's save is UNCONFIRMED even though the buffer
+    // is empty. saveNow and the leave-page warning both read takenP for exactly that.
+    var release;
+    takenP[key] = new Promise(function (r) { release = r; });
+    try {
     // Declare the version being edited. A line change rewrites the WHOLE lines array, so
     // without this two people with the same assembly open overwrite each other in silence:
     // the second save replaces the first person's lines with a snapshot taken before they
@@ -616,7 +646,12 @@
     // Items only. An assembly's lines are a takeoff somebody is actively building and a dialog
     // per pause would be unusable; an item is reference data that other records are priced from,
     // which is the whole distinction Hanz drew.
-    if (kind === "items" && !(await confirmItemPatch(id, payload))) return;
+    if (kind === "items" && !(await confirmItemPatch(id, payload))) {
+      // Refused: the field went back to what the server holds, so a saved row is clean again. A
+      // NEW row stays unsaved -- its typed name was just refused, and it still wants a Save.
+      if (FRESH.items[id] !== "new") { delete FRESH.items[id]; if (typeof hideUnsaved === "function") hideUnsaved(kind, id); }
+      return;
+    }
     // AFTER the confirm above, which can return false and bail — marking earlier would leave the
     // record permanently locked by a question somebody answered "no" to.
     inFlight[key] = 1;
@@ -638,6 +673,7 @@
         // they are looking at it loses their work and hides the reason.
         say(j.detail || j.error || "That change didn't save.");
         saving("Not saved");
+        requeueFailed(key, payload);
         return;
       }
       // Adopt the new version stamp, or the NEXT save conflicts with our own write.
@@ -649,17 +685,37 @@
       var fresh = saved.assembly || saved.item || saved.vendor || saved.division || saved.unit ||
         saved.row;
       if (fresh && fresh.id) adoptSaved(kind, fresh);
+      // CONFIRMED -- this is the only place the unsaved mark is lifted by a save. Not while a newer
+      // edit is already queued behind this one: that keystroke is still unsaved.
+      if (FRESH[kind] && !pendingPatch[key]) {
+        delete FRESH[kind][id];
+        if (typeof hideUnsaved === "function") hideUnsaved(kind, id);
+      }
       say(""); saving("Saved");
       setTimeout(function () { saving(""); }, 1200);
     } catch (err) {
       say("Couldn't reach the server. " + (err.message || ""));
       saving("Not saved");
+      requeueFailed(key, payload);
     } finally {
       // `finally`, because the try block returns early on 409 and on any non-ok status. A lock left
       // set on one of those paths would silence every later save for that record — a worse bug than
       // the one this guard fixes.
       delete inFlight[key];
     }
+    } finally {
+      delete takenP[key];
+      release();
+    }
+  }
+
+  /** A failed save keeps its edit queued (no timer: no retry loop), so the next Save press or the
+   *  leave-page flush sends it again instead of finding an empty buffer and retiring the button
+   *  over a value the server never received. A newer keystroke queued meanwhile wins per field. */
+  function requeueFailed(key, payload) {
+    // Keeps the SAME object (newer keystrokes folded in): saveNow reads identity to tell "my flush
+    // failed and handed the edit back" from "a newer edit arrived", and stops after one attempt.
+    pendingPatch[key] = Object.assign(payload, pendingPatch[key] || {});
   }
 
   /** Drop everything this page is still holding for an item that no longer exists.
@@ -674,6 +730,7 @@
     clearTimeout(timers[key]);
     delete timers[key];
     delete pendingPatch[key];
+    delete FRESH.items[id];
     endItemRound(id);
   }
 
@@ -689,6 +746,93 @@
     clearTimeout(timers[key]);
     delete timers[key];
     return flush("items", id, key, true);
+  }
+
+  /** The Save button on a new material or a new assembly: send what is typed NOW.
+   *
+   *  The same path as leaving the row, so a material still gets its one "Save this change?"
+   *  question and an assembly still declares the version it edited. Nothing queued means the
+   *  record is already exactly what the server holds (the create POST wrote it), so the press
+   *  just retires the button. Returns whether the record is still marked new, which is how the
+   *  caller knows to keep the button after a Cancel, a 409 or a failed request. */
+  async function saveNow(kind, id) {
+    var key = kind + ":" + id;
+    var worked = false;
+    // Loop: a keystroke can land while a save is out, queueing another behind it. Bounded, so a
+    // page that keeps producing edits cannot trap the press.
+    for (var n = 0; n < 6; n++) {
+      if (pendingPatch[key]) {
+        clearTimeout(timers[key]);
+        delete timers[key];
+        worked = true;
+        var sent = pendingPatch[key];
+        await flush(kind, id, key, true);
+        // The same payload back in the buffer means the save failed: one press, one attempt.
+        if (pendingPatch[key] === sent) break;
+      } else if (takenP[key]) {
+        // A flush already took the payload and has not heard back (dialog open, request on the
+        // wire). An empty buffer is NOT "saved"; wait for that flush to finish, then judge.
+        worked = true;
+        await takenP[key];
+      } else {
+        break;
+      }
+    }
+    // Nothing was queued or in flight at the press: the record is what the server holds (the
+    // create POST wrote it), so just retire the button.
+    if (!worked && FRESH[kind]) delete FRESH[kind][id];
+    // Whatever is left marked is unconfirmed: a Cancel, a 409, a failed request.
+    return !!(FRESH[kind] && FRESH[kind][id]);
+  }
+
+  /** The Save button follows the unsaved mark live, without waiting for a repaint (a repaint of
+   *  the Items table mid-typing would steal the caret). Items: add or drop the button in that
+   *  row's action cell. Assemblies: show or hide #asm-save when that assembly is the open one. */
+  function itemSaveButtonHtml(id, name) {
+    return '<button class="btn sm" type="button" data-save-new="items" data-save-id="' + esc(id) +
+      '" title="Save this material now" aria-label="Save ' + esc(name) + '">Save</button>';
+  }
+  function showUnsaved(kind, id) {
+    if (typeof document === "undefined") return;
+    if (kind === "assemblies") {
+      var b = $("asm-save");
+      if (b && openId === id) b.hidden = false;
+      return;
+    }
+    var cell = document.querySelector('#items-body [data-item="' + id + '"] .rowact');
+    if (cell && !cell.querySelector("[data-save-new]")) {
+      var tmp = document.createElement("span");
+      tmp.innerHTML = itemSaveButtonHtml(id, (itemOf(id) || {}).name || "");
+      cell.insertBefore(tmp.firstChild, cell.firstChild);
+    }
+  }
+  function hideUnsaved(kind, id) {
+    if (typeof document === "undefined") return;
+    if (kind === "assemblies") {
+      var b = $("asm-save");
+      if (b && openId === id) b.hidden = true;
+      return;
+    }
+    var btn = document.querySelector('#items-body [data-item="' + id + '"] [data-save-new]');
+    if (btn && btn.parentNode) btn.parentNode.removeChild(btn);
+  }
+
+  /** LEAVING THE PAGE MUST NOT LOSE A TYPED CHANGE. Send everything queued the moment the tab goes
+   *  to the background or the page is hidden/closed (autosave stays as the backup for the rest).
+   *  A material's "Save this change?" question cannot be answered on a closing page, so that one
+   *  waits for the estimator's return; assemblies and the rest go out. */
+  function flushAllPending() {
+    Object.keys(pendingPatch).forEach(function (key) {
+      var cut = key.indexOf(":");
+      var kind = key.slice(0, cut), id = key.slice(cut + 1);
+      clearTimeout(timers[key]);
+      delete timers[key];
+      flush(kind, id, key, true);
+    });
+  }
+  /** True while any save is still unconfirmed: queued, or taken and waiting on the server. */
+  function savePending() {
+    return Object.keys(pendingPatch).length > 0 || Object.keys(takenP).length > 0;
   }
 
   /** Focus left an item row → that row's edits go in, and get their one question.
@@ -736,6 +880,19 @@
     var r = await api("/api/library/" + kind + "/" + encodeURIComponent(id), {
       method: "PATCH", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ favorite: on }) });
+    var j = await r.json().catch(function () { return {}; });
+    if (!r.ok) throw new Error(j.detail || j.error || ("HTTP " + r.status));
+    return j;
+  }
+
+  /** The Defaults tab's on/off slider: does this default START ON in a new bid. Sent on the press,
+   *  beside patchDefault for the same reason patchLabor is -- that one sends `{ favorite }` and
+   *  nothing else. A database without the default_on column answers 502 here, which setDefaultOn
+   *  turns into the put-it-back and a message, never a slider that looks saved and is not. */
+  async function patchDefaultOn(kind, id, on) {
+    var r = await api("/api/library/" + kind + "/" + encodeURIComponent(id), {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ default_on: !!on }) });
     var j = await r.json().catch(function () { return {}; });
     if (!r.ok) throw new Error(j.detail || j.error || ("HTTP " + r.status));
     return j;
@@ -1139,6 +1296,9 @@
         "<td>" + pick("vendor", it.vendor, vendorNames(), "Vendor", ' class="cell-vendor"') + "</td>" +
         '<td class="datescell">' + datesHtml(it) + "</td>" +
         '<td class="rowact">' +
+          (FRESH.items[it.id]
+            ? itemSaveButtonHtml(it.id, it.name)
+            : "") +
           '<button class="icon" type="button" data-dupe-item="' + esc(it.id) + '" title="Make a copy of this material" aria-label="Duplicate ' + esc(it.name) + '">' + icon("copy") + "</button>" +
           // NO REMOVE ON THE THREE RESERVED ROWS (joint filler kit, remove-existing, dye) -- see
           // isReservedItem. Every other cell on the row stays editable; that is the point of it.
@@ -2220,6 +2380,7 @@
     if (!asm) return;
 
     if ($("asm-name").value !== asm.name) $("asm-name").value = asm.name;
+    $("asm-save").hidden = !FRESH.assemblies[asm.id];
     var area = $("area").value;
     var p = L.priceAssembly(asm, ITEMS, area);
     var out = "";
@@ -2658,6 +2819,68 @@
       '<span class="wtall">' + (list.length ? "" : "All work types") + "</span>";
   }
 
+  /** The slider cell of one default: ON means a new bid starts with this row counted, OFF means it
+   *  starts grayed and adding nothing (the estimate's own slider, flipped there per bid).
+   *
+   *  THE SAME COMPONENT THE ESTIMATE DRAWS -- B.sliderHtml, from the shared module both pages
+   *  load -- so the two cannot look or behave differently. `canEdit` false draws the state as plain
+   *  words, not a switch that would 403 on press (the rule the labor Remove already follows). With
+   *  no shared module there is no slider, rather than a hand-typed second copy of it. */
+  function defaultSlider(kind, id, name, on, canEdit) {
+    var B = window.TWPolishBid;
+    if (!canEdit) return '<span class="wtall">' + (on ? "On" : "Off") + "</span>";
+    if (!B || !B.sliderHtml) return "";
+    return B.sliderHtml(on, 'data-def-on="' + esc(kind) + '" data-def-on-id="' + esc(id) + '"',
+      on ? "On" : "Off", (on ? "Starts on" : "Starts off") + " when an estimate opens: " + name);
+  }
+
+  /** Flip one default's starting state. OPTIMISTIC, WITH THE PUT-BACK IN HERE, like setDefault and
+   *  setConditionDefault: two places to forget the rollback is how a slider ends up showing a
+   *  state nothing stored.
+   *
+   *  THREE STORES, ONE FUNCTION. A library row (item, assembly, labor line) holds `default_on`; the
+   *  three condition materials are RESERVED items whose answer is condition_defaults.on_by_default,
+   *  so a reserved id goes there (the same split removeDefault makes). Neither writes `favorite`:
+   *  whether a row IS a default and whether it STARTS ON are different questions. */
+  async function setDefaultOn(kind, id, on) {
+    if (kind === "items" && isReservedItem(id)) {
+      var key = RESERVED_ITEM_CONDITION[id];
+      var was = COND_DEFAULTS;
+      var next = [], found = false;
+      for (var i = 0; i < was.length; i++) {
+        if (was[i] && was[i].key === key) {
+          next.push(Object.assign({}, was[i], { on: !!on })); found = true;
+        } else next.push(was[i]);
+      }
+      if (!found) next.push({ key: key, on: !!on, listed: true });
+      COND_DEFAULTS = next;
+      renderDefaultTakeoff();
+      try {
+        await putConditionDefault(key, { on: !!on });
+      } catch (err) {
+        COND_DEFAULTS = was;
+        renderDefaultTakeoff();
+        say("Couldn't save that. " + err.message);
+      }
+      return;
+    }
+    var list = kind === "assemblies" ? ASMS : kind === "labor" ? LABOR : ITEMS;
+    var row = null;
+    for (var j = 0; j < list.length; j++) if (list[j].id === id) { row = list[j]; break; }
+    if (!row) return;
+    var prior = row.default_on;
+    row.default_on = !!on;
+    var repaint = function () { if (kind === "labor") renderDefaultLabor(); else renderDefaultTakeoff(); };
+    repaint();
+    try {
+      await patchDefaultOn(kind, id, !!on);
+    } catch (err2) {
+      row.default_on = prior;
+      repaint();
+      say("Couldn't save that. " + err2.message);
+    }
+  }
+
   function defaultRowActions(kind, id, name) {
     return '<button class="btn ghost sm" type="button" data-def-edit="' + esc(kind) +
       '" data-def-id="' + esc(id) + '">Edit</button>' +
@@ -2697,6 +2920,9 @@
    *  reason the labor rows on this tab are gated on ADMIN too. Everyone keeps Edit. */
   function conditionDefaultRow(c) {
     var row = materialDefaultRow(c.item_id, c.name, c.priced);
+    // THE SLIDER IS THE CONDITION'S STARTING ANSWER (condition_defaults.on_by_default). An admin's:
+    // the PUT behind it refuses anybody else, so everyone else reads the state as words.
+    row.slider = defaultSlider("items", c.item_id, c.name, !!c.on, ADMIN);
     if (!ADMIN) {
       row.actions = '<button class="btn ghost sm" type="button" data-def-edit="items" data-def-id="' +
         esc(c.item_id) + '">Edit</button>';
@@ -2799,7 +3025,54 @@
     renderDefaultSearch();
   }
 
-  function openDefaultBrowse() {
+  /** WHERE THE SEARCH BOX SITS. Hanz, 2026-10-05: "Adding a default [labor] should have the search
+   *  bar right above the [Labor] container itself, not on the work type up above." There is ONE
+   *  box (#default-search, input and results together) and this moves it to sit directly above
+   *  the table of the section whose button was pressed -- one box means only one can be open at
+   *  a time, and nothing else (ids, handlers, the browse data) had to be duplicated. A box that
+   *  moves to ANOTHER section starts empty: a query typed for Takeoff is not a question about
+   *  Labor. */
+  function placeDefaultSearch(which) {
+    var wrap = $("default-search"), sec = $("default-" + which);
+    if (!wrap || !sec || !sec.querySelector) return;
+    var tw = sec.querySelector(".tw");
+    if (!tw || !tw.parentNode) return;
+    if (wrap.parentNode !== tw.parentNode) {
+      DEFAULT_Q = "";
+      var qb = $("default-q");
+      if (qb) qb.value = "";
+      tw.parentNode.insertBefore(wrap, tw);
+    }
+    wrap.hidden = false;
+  }
+
+  /** Cancel / Escape: shut the box and forget the query, leaving the rows alone. Focus goes back
+   *  to the button that opened it, so the keyboard is not stranded on a hidden input. */
+  function closeDefaultSearch() {
+    DEFAULT_Q = "";
+    DEFAULT_BROWSE = false;
+    var qb = $("default-q");
+    if (qb) qb.value = "";
+    var wrap = $("default-search");
+    if (wrap) wrap.hidden = true;
+    renderDefaultSearch();
+    var par = wrap && wrap.parentNode, btn = par && par.querySelector &&
+      par.querySelector("[data-add-default]");
+    if (btn && btn.focus) btn.focus();
+  }
+
+  /** The search box's keyboard: Escape closes it. Named for the reason openDefaultAdd gives. */
+  function onDefaultSearchKey(e) {
+    if (e && e.key === "Escape") {
+      if (e.stopPropagation) e.stopPropagation();
+      closeDefaultSearch();
+      return true;
+    }
+    return false;
+  }
+
+  function openDefaultBrowse(which) {
+    if (which) placeDefaultSearch(which);
     DEFAULT_BROWSE = true;
     renderDefaultSearch();
     var abox = $("default-q");
@@ -2822,7 +3095,7 @@
    *  used here; only the label on the button still says which list somebody meant to sit down and
    *  fill in. */
   function openDefaultAdd(which) {
-    if (which === "takeoff" || which === "labor") openDefaultBrowse();
+    if (which === "takeoff" || which === "labor") openDefaultBrowse(which);
   }
 
   function renderDefaultSearch() {
@@ -2870,6 +3143,7 @@
           var n = (a.lines || []).length;
           return { name: a.name,
                    how: n + " item line" + (n === 1 ? "" : "s") + " \u00b7 per " + (a.unit || "SF"),
+                   slider: defaultSlider("assemblies", a.id, a.name, a.default_on !== false, true),
                    actions: defaultRowActions("assemblies", a.id, a.name) };
         }) },
       { title: "Materials",
@@ -2886,10 +3160,12 @@
           // Never a reserved row by its `favorite`: the three are listed below, by their condition.
           return it.favorite && !isReservedItem(it.id) && appliesToWorkType(it, DEFAULT_WT);
         }).map(function (it) {
-          return materialDefaultRow(it.id, it.name,
+          var mrow = materialDefaultRow(it.id, it.name,
                    L.num(it.unit_cost) != null
                      ? L.money(it.unit_cost) + " per " + (it.unit || "unit")
                      : "No cost in the library yet");
+          mrow.slider = defaultSlider("items", it.id, it.name, it.default_on !== false, true);
+          return mrow;
         }).concat(takeoffConditionDefaults().filter(function (c) {
           // ON THE POLISH TAB ONLY. All three write Polish-sheet cells (CONDITION_CELLS in
           // polish-bid-core.js) and nothing on the other four work types reads them; a combo job
@@ -2930,7 +3206,7 @@
     if (!body) return;
     var out = "";
     takeoffDefaultGroups().forEach(function (g) {
-      out += '<tr class="grouphead"><th scope="colgroup" colspan="3">' +
+      out += '<tr class="grouphead"><th scope="colgroup" colspan="4">' +
         esc(g.title) + "</th></tr>";
       g.rows.forEach(function (r) {
         // rawHow ONLY for the rows that build their own control. Everything else stays
@@ -2948,6 +3224,7 @@
         // already goes there.
         out += "<tr><td>" + esc(r.name) + "</td><td>" +
           (r.rawHow ? r.how : esc(r.how)) + "</td>" +
+          '<td class="rowon">' + (r.slider || "") + "</td>" +
           '<td class="rowact">' + r.actions + "</td></tr>";
       });
     });
@@ -3113,6 +3390,10 @@
         "<td>" + (r.guys_auto
           ? "Man-days come off the crew rows above it"
           : "Typed on the estimate") + "</td>" +
+        // Travel's slider needs the stored row to PATCH; with none there is nothing to switch.
+        '<td class="rowon">' + (storedTravel
+          ? defaultSlider("labor", storedTravel.id, r.label, storedTravel.default_on !== false, ADMIN)
+          : "") + "</td>" +
         '<td class="rowact">' + laborRowActions(storedTravel) + "</td>" +
         "</tr>";
     }
@@ -3135,6 +3416,8 @@
         "<td>" + (c.guys_auto
           ? "Man-days come off the crew rows above it"
           : "Typed on the estimate") + "</td>" +
+        '<td class="rowon">' + defaultSlider("labor", c.id, c.name, c.default_on !== false, ADMIN) +
+          "</td>" +
         // ADMIN ONLY, unlike an item's or an assembly's pair: `favorite` on a labor line is a
         // PATCH to /api/library/labor, which is `_require_admin`, so a non-admin is not handed a
         // Remove that 403s -- the rule laborRowActions already follows for Travel.
@@ -3156,13 +3439,367 @@
     if (addrow) addrow.hidden = !ADMIN;
   }
 
+  // ── the Labor Calculator tab (Hanz, 2026-10-05) ────────────────────────────
+  /** WHAT THIS TAB IS: where the calculations behind a new estimate's default labor lines live.
+   *  Today it holds the TRAVEL section -- Travel Labor, Lodging and Per Diem -- and the rest of the
+   *  calculator (per-line crew/production-rate modes) is a queued follow-up.
+   *
+   *  LODGING AND PER DIEM ARE NOT STORED HERE. They are the Markup page's Global lines
+   *  `travel_lodging` ($70 a night) and `travel_per_diem` ($45 a day), and the boxes below are a
+   *  second DOOR onto those same markup_rules rows -- one home, so the two screens cannot disagree.
+   *  A new estimate copies each onto its own Lodging / Per Diem line when it opens
+   *  (polish-estimate.js), which start OFF. Travel Labor's rate is the Labor tab's Travel row.
+   *
+   *  ITS OWN READ of /api/markup/rules?layout=global rather than GLOBAL_MARKUP: that list keeps
+   *  only filed, applying rows and drops `notes`, and a PUT states the whole row -- a save that
+   *  forgot the note would clear one filed elsewhere. */
+  var TRAVEL_KEYS = [
+    { line: "travel_lodging", label: "Lodging", per: "night", shipped: 70,
+      how: "One charge per night away. Nights are the man-days of the labor tasks on the estimate " +
+           "(the way the pricing engine counts them) unless the estimator types a number." },
+    { line: "travel_per_diem", label: "Per Diem", per: "day", shipped: 45,
+      how: "One charge per day away, for meals. Days are counted the same way as nights." }
+  ];
+  var TRAVEL_RULES = {};            // line_key -> the filed markup_rules row, when there is one
+  var TRAVEL_RULES_LOADED = false;
+  var TRAVEL_RULES_ERR = false;
+
+  async function loadTravelRules() {
+    try {
+      var res = await api("/api/markup/rules?layout=global");
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      var j = await res.json();
+      TRAVEL_RULES = {};
+      (j.rules || []).forEach(function (r) {
+        if (r && r.layout === "global") TRAVEL_RULES[r.line_key] = r;
+      });
+      TRAVEL_RULES_ERR = false;
+    } catch (e) {
+      // Empty, not invented: a rate this page made up because a request failed would be worse
+      // than a box that says it could not read the figure.
+      TRAVEL_RULES = {};
+      TRAVEL_RULES_ERR = true;
+    }
+    TRAVEL_RULES_LOADED = true;
+  }
+
+  /** The dollar figure a filed rule holds, or "" when none is filed or it is not a plain number. */
+  function travelFigure(rule) {
+    if (!rule || rule.applies === false) return "";
+    var m = /^\s*\$?\s*(\d+(?:\.\d+)?)\s*$/.exec(String(rule.formula == null ? "" : rule.formula));
+    return m ? m[1] : "";
+  }
+
+  /** The Labor Calculator's Travel section, drawn from what is loaded. Never throws. */
+  function renderLabCalc() {
+    var body = $("labcalc-body");
+    if (!body) return;
+    if (!TRAVEL_RULES_LOADED) {
+      body.innerHTML = '<p class="paneintro">Loading...</p>';
+      Promise.all([loadTravelRules(), loadCalcRows()]).then(renderLabCalc);
+      return;
+    }
+    var B = window.TWPolishBid;
+    var ro = $("labcalc-ro");
+    if (ro) ro.hidden = !!ADMIN;
+    // Travel Labor is the Labor tab's Travel row; its rate and unit come from there.
+    var stored = null;
+    for (var s = 0; s < LABOR.length; s++) if (LABOR[s] && LABOR[s].id === "travel") stored = LABOR[s];
+    // READ FROM THE SHARED MODULE, never re-typed here (see the note above travelSeed).
+    var tl = B.travelSeed(stored);
+    var html = '<h3 class="labcalc-h">Travel</h3>' +
+      '<p class="paneintro">Travel is expected when the job is <b>70 miles or more</b> from the ' +
+      'Olathe office. Under 70 miles all three lines stay gray on the estimate until the ' +
+      'estimator switches one on. Lodging and Per Diem start off on every new estimate, and are ' +
+      'priced inside the markups, before GP, superintendent and soft costs.</p>' +
+      '<div class="tw"><table class="items-table"><thead><tr><th>Line</th><th class="n">Rate</th>' +
+      '<th>How it is worked out</th><th class="w-act"></th></tr></thead><tbody>';
+    html += '<tr data-labcalc-row="travel"><td>' + esc(tl.label) + '</td><td class="n">' +
+      esc(L.money(tl.rate)) + " an " + (tl.unit === "days" ? "day" : "hour") + '</td><td>' +
+      'Guys are the man-days of the labor tasks; the estimator types the drive hours for the job. ' +
+      'The rate is the Travel line on the Labor tab.</td><td class="rowact">' +
+      (ADMIN ? '<button class="ghostlink" type="button" data-labcalc-goto-labor>Edit rate</button>' : "") +
+      '</td></tr>';
+    TRAVEL_KEYS.forEach(function (t) {
+      var fig = travelFigure(TRAVEL_RULES[t.line]);
+      html += '<tr data-labcalc-row="' + esc(t.line) + '"><td>' + esc(t.label) + '</td><td class="n">' +
+        (ADMIN
+          ? '$<input class="mkin" type="text" inputmode="decimal" data-travel-rate="' + esc(t.line) +
+            '" value="' + esc(fig) + '" placeholder="' + esc(String(t.shipped)) +
+            '" aria-label="' + esc(t.label) + ' rate, dollars per ' + esc(t.per) + '" /> per ' +
+            esc(t.per)
+          : esc(L.money(fig === "" ? t.shipped : Number(fig))) + " per " + esc(t.per)) +
+        '</td><td>' + esc(t.how) + '</td><td class="rowact"><span class="builtin">Saved to Markup' +
+        '</span></td></tr>';
+    });
+    html += '</tbody></table></div>';
+    if (TRAVEL_RULES_ERR) {
+      html += '<p class="ronote">Could not read the saved figures, so the boxes are empty. ' +
+        'Reload to try again.</p>';
+    }
+    html += calcSectionHtml();
+    body.innerHTML = html;
+    renderTryIt();
+  }
+
+  /** Save one travel rate. A PUT of the whole markup row, notes carried so nothing filed elsewhere
+   *  is cleared. A blank box files nothing (the shipped figure stands); anything that is not a
+   *  positive number is refused here in words rather than as a 400. */
+  async function saveTravelRate(input) {
+    var key = input.getAttribute("data-travel-rate");
+    var def = null;
+    TRAVEL_KEYS.forEach(function (t) { if (t.line === key) def = t; });
+    var out = $("labcalc-alert");
+    var say2 = function (m) { if (out) out.textContent = m || ""; };
+    if (!def) return;
+    var raw = String(input.value || "").trim().replace(/^\$/, "");
+    var prev = travelFigure(TRAVEL_RULES[key]);
+    if (raw === prev) return;
+    if (raw === "") {
+      say2("Type a dollar figure. The shipped $" + def.shipped + " stands until you do.");
+      return;
+    }
+    if (!/^\d+(\.\d+)?$/.test(raw) || Number(raw) <= 0) {
+      say2(def.label + " has to be a dollar figure above zero, like " + def.shipped + ".");
+      input.value = prev;
+      return;
+    }
+    say2("");
+    try {
+      var rule = TRAVEL_RULES[key] || {};
+      var res = await api("/api/markup/rules", { method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ layout: "global", line_key: key, applies: true,
+                               notes: rule.notes || "", formula: raw }) });
+      if (res.status === 403) {
+        say2("Changing these figures is admin-only. Nothing was saved.");
+        input.value = prev;
+        return;
+      }
+      var j = await res.json().catch(function () { return {}; });
+      if (!res.ok) { say2(j.detail || "That didn't save."); input.value = prev; return; }
+      TRAVEL_RULES[key] = j.rule || Object.assign({}, rule, { layout: "global", line_key: key,
+                                                               applies: true, formula: raw });
+      // The Defaults tab's Markup list reads the same row; keep its copy honest.
+      GLOBAL_MARKUP.forEach(function (g) { if (g.line_key === key) g.formula = raw; });
+      say2(def.label + " saved: $" + raw + " per " + def.per + ". New estimates start from it.");
+    } catch (err) {
+      say2("Couldn't reach the server. Nothing was saved.");
+      input.value = prev;
+    }
+  }
+
+  // ── the Labor Calculator's per-line modes (Kyle's notes B7b) ───────────────
+  /** Each default labor line gets a MODE the estimate's Labor step fills a NEW bid from:
+   *    From SF  crew size + production rate (SF a day): days = ceil(job SF / rate)
+   *    Fixed    guys + days
+   *  both at 8 or 10 hours a day, at the line's own rate or (blank) the company labor rate.
+   *  "Not set" is today's behaviour. Stored by /api/library/labor-calc (backend/ops/labor_calc.sql);
+   *  an absent table reads as every line "Not set". The arithmetic is B.laborCalcValues, the one
+   *  function the estimate also calls, so the Try-it box shows what a new bid will get. */
+  var CALC = {};          // line_id -> the mode as it is being edited (may be unsaved/incomplete)
+  var CALC_SAVED = {};    // line_id -> what the server holds
+  var CALC_TRY_SF = "";
+  var CALC_MODES = [["", "Not set (blank, as before)"], ["sf", "From SF"], ["fixed", "Fixed"]];
+
+  async function loadCalcRows() {
+    CALC = {}; CALC_SAVED = {};
+    try {
+      var res = await api("/api/library/labor-calc");
+      var j = await res.json();
+      ((j && j.calc instanceof Array) ? j.calc : []).forEach(function (r) {
+        if (r && r.line_id && r.mode) {
+          CALC[r.line_id] = JSON.parse(JSON.stringify(r));
+          CALC_SAVED[r.line_id] = JSON.parse(JSON.stringify(r));
+        }
+      });
+    } catch (e) { /* no table / no answer: every line reads Not set */ }
+  }
+
+  /** The lines the calculator configures: the built-in crew rows, then the favorited custom ones
+   *  that bill by the day. Travel is its own section above. */
+  function calcLines() {
+    var out = (window.TWPolishBid.LABOR_CALC_BUILTINS || []).map(function (l) {
+      return { id: l.id, name: l.name };
+    });
+    LABOR.forEach(function (r) {
+      if (r && r.favorite && r.id !== "travel" && r.unit !== "hours") out.push({ id: r.id, name: r.name });
+    });
+    return out;
+  }
+
+  function calcCompanyRate() {
+    var B = window.TWPolishBid;
+    return B.laborRateOrShipped(B.laborRateFromRules(
+      Object.keys(TRAVEL_RULES).map(function (k) { return TRAVEL_RULES[k]; })));
+  }
+
+  /** In words, what stops this mode being saved; "" when it is complete. */
+  function calcProblem(c) {
+    if (!c || !c.mode) return "";
+    var pos = function (v) { return Number(String(v == null ? "" : v).replace(/[$,\s]/g, "")) > 0; };
+    if (c.mode === "sf") {
+      if (!pos(c.crew)) return "Type how many guys are on the crew.";
+      if (!pos(c.sf_per_day)) return "Type how many square feet the crew does in a day.";
+    } else {
+      if (!pos(c.guys)) return "Type how many guys the line has.";
+      if (!pos(c.days)) return "Type how many days the line takes.";
+    }
+    return "";
+  }
+
+  function calcSectionHtml() {
+    var co = calcCompanyRate();
+    var html = '<h3 class="labcalc-h">Default labor lines</h3>' +
+      '<p class="paneintro">Pick how each line fills in on a <b>new</b> estimate. <b>From SF</b> ' +
+      "works the days out from the job's square feet (days = SF / production rate, rounded up). " +
+      '<b>Fixed</b> uses the guys and days you type. A blank rate uses the company labor rate (' +
+      esc(L.money(co)) + ' an hour). The estimator can still change any of it on the bid, and a ' +
+      'saved bid is never recomputed.</p>' +
+      '<div class="tw"><table class="items-table"><thead><tr><th>Line</th><th>Mode</th>' +
+      '<th>Crew and production</th><th>Hours a day</th><th class="n">Rate</th>' +
+      '<th class="w-act"></th></tr></thead><tbody>';
+    calcLines().forEach(function (l) {
+      var c = CALC[l.id] || { mode: "" };
+      var inp = function (f, label, w) {
+        return ADMIN
+          ? '<input class="mkin" type="text" inputmode="decimal" data-lcalc="' + esc(l.id) +
+            '" data-f="' + f + '" value="' + esc(c[f] == null ? "" : c[f]) + '" aria-label="' +
+            esc(l.name + " " + label) + '" style="width:' + (w || 64) + 'px" />'
+          : esc(c[f] == null || c[f] === "" ? "-" : c[f]);
+      };
+      var fields = c.mode === "sf"
+        ? inp("crew", "crew size") + ' guys, ' + inp("sf_per_day", "production rate", 80) + ' SF a day'
+        : c.mode === "fixed"
+          ? inp("guys", "guys") + ' guys for ' + inp("days", "days") + ' days'
+          : '<span class="builtin">Left blank on a new estimate</span>';
+      var modeCell = ADMIN
+        ? '<select data-lcalc-mode="' + esc(l.id) + '" aria-label="' + esc(l.name) + ' mode">' +
+          CALC_MODES.map(function (m) {
+            return '<option value="' + m[0] + '"' + ((c.mode || "") === m[0] ? " selected" : "") + '>' +
+              esc(m[1]) + '</option>';
+          }).join("") + '</select>'
+        : esc((CALC_MODES.filter(function (m) { return m[0] === (c.mode || ""); })[0] || [])[1] || "");
+      var hpd = Number(c.hours_per_day) === 10 ? 10 : 8;
+      var hoursCell = !c.mode ? "" : ADMIN
+        ? '<select data-lcalc="' + esc(l.id) + '" data-f="hours_per_day" aria-label="' + esc(l.name) +
+          ' hours a day"><option value="8"' + (hpd === 8 ? " selected" : "") + '>8</option>' +
+          '<option value="10"' + (hpd === 10 ? " selected" : "") + '>10</option></select>'
+        : String(hpd);
+      var rateCell = !c.mode ? "" : ADMIN
+        ? '$<input class="mkin" type="text" inputmode="decimal" data-lcalc="' + esc(l.id) +
+          '" data-f="rate" value="' + esc(c.rate == null ? "" : c.rate) + '" placeholder="' +
+          esc(String(co)) + '" aria-label="' + esc(l.name) + ' rate" />'
+        : esc(L.money(c.rate > 0 ? Number(c.rate) : co));
+      html += '<tr data-lcalc-row="' + esc(l.id) + '"><td>' + esc(l.name) + '</td><td>' + modeCell +
+        '</td><td>' + fields + '</td><td>' + hoursCell + '</td><td class="n">' + rateCell +
+        '</td><td class="rowact"></td></tr>';
+    });
+    html += '</tbody></table></div>' +
+      '<h3 class="labcalc-h">Try it</h3>' +
+      '<p class="paneintro">Type a job size to see what a new estimate would fill in. This changes ' +
+      'nothing.</p>' +
+      '<p><label>Job SF <input class="mkin" type="text" inputmode="decimal" data-tryit-sf ' +
+      'value="' + esc(CALC_TRY_SF) + '" aria-label="Job square feet" style="width:100px" /></label></p>' +
+      '<div id="labcalc-tryout"></div>';
+    return html;
+  }
+
+  /** The Try-it table, from what is SAVED (what a new bid would really get). Never throws. */
+  function renderTryIt() {
+    var out = $("labcalc-tryout");
+    if (!out) return;
+    var B = window.TWPolishBid;
+    var sf = Number(String(CALC_TRY_SF).replace(/[$,\s]/g, "")) || 0;
+    var co = calcCompanyRate();
+    var rows = "", total = 0, n = 0;
+    calcLines().forEach(function (l) {
+      var v = B.laborCalcValues(CALC_SAVED[l.id], sf, co);
+      if (!v) return;
+      n += 1;
+      var cost = B.laborCost({ guys: v.guys, days: v.days, rate: v.rate, hours_per_day: v.hours_per_day });
+      total += cost;
+      rows += '<tr><td>' + esc(l.name) + '</td><td class="n">' + esc(String(v.guys)) + '</td>' +
+        '<td class="n">' + esc(String(v.days)) + '</td><td class="n">' + v.hours_per_day + '</td>' +
+        '<td class="n">' + esc(L.money(v.rate)) + '</td><td class="n">' + esc(L.money(cost)) + '</td></tr>';
+    });
+    if (!n) {
+      out.innerHTML = '<p class="paneintro">No line has a mode saved yet, so a new estimate leaves ' +
+        'them all blank.</p>';
+      return;
+    }
+    out.innerHTML = '<div class="tw"><table class="items-table"><thead><tr><th>Line</th>' +
+      '<th class="n">Guys</th><th class="n">Days</th><th class="n">Hours a day</th>' +
+      '<th class="n">Rate</th><th class="n">Cost</th></tr></thead><tbody>' + rows +
+      '<tr><td><b>Total</b></td><td></td><td></td><td></td><td></td><td class="n"><b data-tryit-total>' +
+      esc(L.money(total)) + '</b></td></tr></tbody></table></div>' +
+      '<p class="paneintro">Before burden, travel and markups.' +
+      (sf > 0 ? "" : " Type a job size to see the SF-based days.") + '</p>';
+  }
+
+  /** Save one line's mode (or clear it). Complete modes only; an incomplete one is said in words
+   *  and kept on screen. A refused or failed save puts the line back to what the server holds. */
+  async function saveCalc(id) {
+    var out = $("labcalc-alert");
+    var say2 = function (m) { if (out) out.textContent = m || ""; };
+    var c = CALC[id];
+    var saved = CALC_SAVED[id];
+    var body;
+    if (!c || !c.mode) {
+      if (!saved) { say2(""); return; }
+      body = { mode: "none" };
+    } else {
+      var why = calcProblem(c);
+      if (why) { say2(why + " Nothing is saved until it is complete."); return; }
+      body = { mode: c.mode, crew: c.crew, sf_per_day: c.sf_per_day, guys: c.guys, days: c.days,
+               hours_per_day: c.hours_per_day || 8, rate: c.rate };
+    }
+    say2("");
+    try {
+      var res = await api("/api/library/labor-calc/" + encodeURIComponent(id), { method: "PUT",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      var j = await res.json().catch(function () { return {}; });
+      if (!res.ok) {
+        say2(res.status === 403 ? "Changing these is admin-only. Nothing was saved."
+                                : (j.detail || "That didn't save."));
+        if (saved) CALC[id] = JSON.parse(JSON.stringify(saved)); else delete CALC[id];
+        renderLabCalc();
+        return;
+      }
+      if (j.row) { CALC[id] = JSON.parse(JSON.stringify(j.row)); CALC_SAVED[id] = JSON.parse(JSON.stringify(j.row)); }
+      else { delete CALC[id]; delete CALC_SAVED[id]; }
+      say2("Saved. New estimates start from it.");
+      renderTryIt();
+    } catch (err) {
+      say2("Couldn't reach the server. Nothing was saved.");
+      if (saved) CALC[id] = JSON.parse(JSON.stringify(saved)); else delete CALC[id];
+      renderLabCalc();
+    }
+  }
+
+  /** A mode picker or a calculator box changed. */
+  function calcEdit(el) {
+    var id = el.getAttribute("data-lcalc-mode");
+    if (id !== null) {
+      if (!el.value) delete CALC[id];
+      else CALC[id] = Object.assign({ hours_per_day: 8 }, CALC[id] || {}, { mode: el.value });
+      renderLabCalc();
+      return saveCalc(id);
+    }
+    id = el.getAttribute("data-lcalc");
+    var f = el.getAttribute("data-f");
+    if (id === null || !f || !CALC[id]) return null;
+    CALC[id][f] = f === "hours_per_day" ? Number(el.value) : String(el.value).trim().replace(/^\$/, "");
+    return saveCalc(id);
+  }
+
   // ── view switch ────────────────────────────────────────────────────────────
   // LABOR SITS RIGHT AFTER ASSEMBLIES, BEFORE ADMINISTRATION -- a peer to Items and Assemblies,
   // not a fourth Administration list and not folded into Defaults, which stays what it always
   // was: what a new bid opens holding, not what the catalog holds.
-  var PANES = ["items", "asm", "labor", "vendors", "defaults"];
-  var TAB_OF = { items: "tab-items", asm: "tab-asm", labor: "tab-labor", vendors: "tab-vendors",
-                 defaults: "tab-defaults" };
+  var PANES = ["items", "asm", "labor", "labcalc", "vendors", "defaults"];
+  var TAB_OF = { items: "tab-items", asm: "tab-asm", labor: "tab-labor", labcalc: "tab-labcalc",
+                 vendors: "tab-vendors", defaults: "tab-defaults" };
   function showView(which) {
     view = which;
     PANES.forEach(function (p) {
@@ -3220,7 +3857,10 @@
     setWorkType(M.pick(M.read(window, "wt"), WORK_TYPES, DEFAULT_WT));
   }
   PANES.forEach(function (p) {
-    $(TAB_OF[p]).addEventListener("click", function () { showView(p); });
+    $(TAB_OF[p]).addEventListener("click", function () {
+      showView(p);
+      if (p === "labcalc") renderLabCalc();
+    });
   });
   restoreView();
 
@@ -3403,6 +4043,7 @@
     $("default-q").addEventListener("input", function () {
       setDefaultQuery(this.value);
     });
+    $("default-q").addEventListener("keydown", onDefaultSearchKey);
   }
 
   // NO `change` LISTENER ON THE TAKEOFF TBODY ANY MORE. One lived here for the conditions'
@@ -3731,6 +4372,18 @@
   // …and the event that actually triggers the save. `focusout` and not `blur`, because blur does
   // not bubble and this is one listener on a tbody whose rows are replaced on every render.
   $("items-body").addEventListener("focusout", onItemRowFocusOut);
+  // LEAVING WITH UNSAVED CHANGES (Hanz, B3b): flush when the tab goes hidden or the page is
+  // hidden/closed, and warn on close only if a save is still unconfirmed after that.
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "hidden") flushAllPending();
+  });
+  window.addEventListener("pagehide", flushAllPending);
+  window.addEventListener("beforeunload", function (e) {
+    if (!savePending()) return;
+    e.preventDefault();
+    e.returnValue = "";
+    return "";
+  });
 
   // Both events, for the reason the comment above already gives: a text input reports `input`,
   // a <select> and a checkbox are only guaranteed to report `change`. No focusout listener --
@@ -3951,6 +4604,7 @@
         // 2026-08-28) precisely so pressing it and seeing the result stay the same spot on
         // screen — sorting it back into alphabetical order would undo that.
         ITEMS.unshift(j.item);
+        FRESH.items[j.item.id] = "new";
         showView("items"); paint();
         var f = $("items-body").querySelector('[data-item="' + j.item.id + '"] input[data-f="name"]');
         if (f) { f.focus(); f.select(); }
@@ -3994,6 +4648,7 @@
       }
       return;
     }
+    if (t.closest && t.closest("[data-def-search-close]")) { closeDefaultSearch(); return; }
     var addDef = t.closest && t.closest("[data-add-default]");
     if (addDef) {
       openDefaultAdd(addDef.getAttribute("data-add-default"));
@@ -4048,6 +4703,13 @@
     // ONE REMOVE FOR EVERY ROW, conditions included since 2026-10-01 -- joint filler,
     // remove-existing and dye carry the material's own button now. removeDefault decides which
     // store the press writes (see its note); there is no second attribute to route.
+    // THE STARTING-STATE SLIDER, before Edit/Remove: it sits in the same row and `closest` walks up.
+    var onSw = t.closest && t.closest("[data-def-on]");
+    if (onSw) {
+      var swOn = !(onSw.getAttribute("aria-checked") === "true");
+      await setDefaultOn(onSw.getAttribute("data-def-on"), onSw.getAttribute("data-def-on-id"), swOn);
+      return;
+    }
     var offBtn = t.closest && t.closest("[data-def-off]");
     if (offBtn) {
       await removeDefault(offBtn.getAttribute("data-def-off"), offBtn.getAttribute("data-def-id"));
@@ -4062,6 +4724,14 @@
       if (ek === "assemblies") { openId = eid; showView("asm"); paint(); }
       else if (ek === "labor") { showView("labor"); paint(); focusLaborRow(eid); }
       else { showView("items"); paint(); focusItemRow(eid); }
+      return;
+    }
+
+    var saveBtn = t.closest && t.closest("[data-save-new]");
+    if (saveBtn) {
+      var sk = saveBtn.getAttribute("data-save-new"), sid = saveBtn.getAttribute("data-save-id");
+      var still = await saveNow(sk, sid);
+      if (!still && saveBtn.parentNode) saveBtn.parentNode.removeChild(saveBtn);
       return;
     }
 
@@ -4149,6 +4819,7 @@
         // It is on screen either way: openId is set to it and its name field is focused and
         // selected two lines down, ready to be typed over.
         placeNewAssembly(ASMS, a.assembly);
+        FRESH.assemblies[a.assembly.id] = "new";
         openId = a.assembly.id;
         showView("asm"); paint();
         $("asm-name").focus(); $("asm-name").select();
@@ -4275,6 +4946,14 @@
       return;
     }
 
+    if (t.closest && t.closest("#asm-save")) {
+      var sa = current();
+      if (!sa) return;
+      var stillA = await saveNow("assemblies", sa.id);
+      $("asm-save").hidden = !stillA;
+      return;
+    }
+
     if (t.closest && t.closest("#asm-del")) {
       var cur = current();
       if (!cur) return;
@@ -4305,5 +4984,34 @@
     }
   });
 
-  load();
+  // The Labor Calculator's rate boxes, and its jumps. Delegated on the pane because the body is
+  // redrawn from state.
+  $("pane-labcalc").addEventListener("change", function (e) {
+    var el = e.target;
+    if (el && el.getAttribute && el.getAttribute("data-travel-rate") !== null) saveTravelRate(el);
+    else if (el && el.getAttribute && (el.getAttribute("data-lcalc-mode") !== null ||
+                                       el.getAttribute("data-lcalc") !== null)) calcEdit(el);
+  });
+  $("pane-labcalc").addEventListener("input", function (e) {
+    var el = e.target;
+    if (el && el.getAttribute && el.getAttribute("data-tryit-sf") !== null) {
+      CALC_TRY_SF = el.value;
+      renderTryIt();
+    }
+  });
+  $("pane-labcalc").addEventListener("click", function (e) {
+    var t = e.target;
+    if (t && t.closest && t.closest("[data-labcalc-goto-labor]")) {
+      showView("labor"); paint(); focusLaborRow("travel");
+    }
+  });
+  // The Defaults tab's pointer ("Travel is set in Labor Calculator").
+  var goLabCalc = document.querySelector("[data-goto-labcalc]");
+  if (goLabCalc) goLabCalc.addEventListener("click", function (e) {
+    e.preventDefault();
+    showView("labcalc");
+    renderLabCalc();
+  });
+
+  load().then(function () { if (view === "labcalc") renderLabCalc(); });
 })();

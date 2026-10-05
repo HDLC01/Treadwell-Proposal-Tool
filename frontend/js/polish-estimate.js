@@ -58,6 +58,8 @@
   // same silent mix-up in a different direction.
   var state = {};
   var M = null;
+  // The takeoff SF the labor days last followed (null until the page has opened). See changed().
+  var followSf = null;
 
   // The library, loaded once at boot. Prices are recomputed from these on every keystroke rather
   // than stored on the row: an item's cost can move, and a stored line total would then disagree
@@ -220,7 +222,45 @@
     if (r.item_id) return priceMaterialRow(r);
     var asm = asmById(r.assembly_id);
     if (!asm) return null;
-    return L.priceAssembly(asm, ITEMS, B.num(r.measurement));
+    return priceAssemblyRow(asm, r, B.num(r.measurement));
+  }
+
+  /** `items` with ONE item's coverage replaced, as a copy. The library's own rows are never
+   *  mutated: a coverage typed on a bid is that bid's fact, not a second source for the material.
+   *  Anything that is not a positive number leaves `items` as it came, so a blank box falls back
+   *  to the library value exactly as before. */
+  function itemsWithCoverage(items, itemId, cov) {
+    if (!(cov > 0)) return items;
+    return items.map(function (it) {
+      return it && it.id === itemId ? Object.assign({}, it, { coverage: cov }) : it;
+    });
+  }
+
+  /** An assembly row priced with THIS BID'S coverage for any of its lines (`row.line_cov`, keyed
+   *  by the line's position because one material can sit on two lines at two coverages).
+   *
+   *  The override rides on a one-line SWAP of the real item under a throwaway id, so the same
+   *  priceLine / priceAssembly that every other number on the page goes through does the
+   *  arithmetic; there is no second pricing path to drift. With nothing typed this is exactly
+   *  L.priceAssembly(asm, ITEMS, area), which is what every row saved before this existed gets. */
+  function priceAssemblyRow(asm, row, area) {
+    var lc = (row && row.line_cov && typeof row.line_cov === "object") ? row.line_cov : null;
+    var lines = (asm && asm.lines) || [];
+    if (!lc) return L.priceAssembly(asm, ITEMS, area);
+    var items = ITEMS, any = false;
+    var swapped = lines.map(function (ln, j) {
+      var cov = B.num(lc[j]);
+      var id = ln && (ln.item_id || ln.item);
+      if (!(cov > 0) || !id) return ln;
+      var real = L.findItem(ITEMS, id);
+      if (!real) return ln;
+      any = true;
+      var tmp = "__cov" + j;
+      items = items.concat([Object.assign({}, real, { id: tmp, coverage: cov })]);
+      return Object.assign({}, ln, { item_id: tmp, item: undefined });
+    });
+    if (!any) return L.priceAssembly(asm, ITEMS, area);
+    return L.priceAssembly(Object.assign({}, asm, { lines: swapped }), items, area);
   }
 
   /** One material, priced as priceAssembly would have priced a one-line assembly containing it.
@@ -241,11 +281,7 @@
     // polish-bid-core.js), which is exactly how covHint/covPlaceholder already tell "nothing
     // typed" from a real figure. `!== null` would treat every blank row as coverage 0 and price it
     // as broken (no_coverage) the instant it's added, before anyone touches the box.
-    if (cov) {
-      items = ITEMS.map(function (it) {
-        return it && it.id === r.item_id ? Object.assign({}, it, { coverage: cov }) : it;
-      });
-    }
+    if (cov) items = itemsWithCoverage(ITEMS, r.item_id, cov);
     var one = L.priceLine({ item_id: r.item_id }, items, area);
     var priced = one.ok && one.priced ? 1 : 0;
     var broken = (!one.ok && one.reason !== "no_item") ? 1 : 0;
@@ -269,6 +305,8 @@
    *  and the cost box has to agree with them. Same for an assembly whose items cannot price: the
    *  warning line beneath it says why, and "—" is what invites reading it. */
   function rowCost(row) {
+    // A row switched OFF shows $0 and prices nothing (the on/off slider): the card stays, grayed.
+    if (!B.rowOn(row)) return { text: "$0", empty: true, price: null };
     var p = rowPrice(row);
     if (!p || !p.priced_lines) return { text: "—", empty: true, price: p };
     return { text: moneyAuto(p.total), empty: false, price: p };
@@ -298,7 +336,10 @@
    *  for dye (the area is what dye is spread across, whatever its row's coverage says). */
   function condLine(key, area) {
     var id = key === "dye" ? "dye" : "joint-filler-kit";
-    var p = L.priceLine({ item_id: id }, ITEMS, area);
+    // THIS BID'S COVERAGE for the line, if one was typed (M.cond_cov, set from the card's Coverage
+    // box). Blank leaves ITEMS alone, so the library's own figure -- and every bid saved before the
+    // box existed -- prices exactly as it did.
+    var p = L.priceLine({ item_id: id }, itemsWithCoverage(ITEMS, id, condCovTyped(key)), area);
     if (p.ok) {
       // DYE IS TWO COATS, Kyle's rows 25 and 26 (B.DYE_COATS); the row prices ONE of them. The
       // fallback's dyeCost already charges both.
@@ -337,6 +378,9 @@
   function materialTotal() {
     var sum = 0;
     M.takeoff.forEach(function (r) {
+      // OFF ROWS ARE SKIPPED HERE, in the raw sum, so the chain rounds only what the bid really
+      // buys (D31 is ROUNDUP of the sum -- zeroing a row after that would drift the total).
+      if (!B.rowOn(r)) return;
       var p = rowPrice(r);
       if (p) sum += p.total;
     });
@@ -383,6 +427,8 @@
     return B.markupChain({
       material: materialTotal(),
       labor: B.laborTotal(M.labor),
+      // Lodging + Per Diem: inside the markups (the sheet's D61), not labor.
+      travel: B.travelCosts(M.travel, M.labor).total,
       contingency: M.contingency,
       fees: M.fees,
       conditions: M.conditions,
@@ -419,7 +465,14 @@
                                            conditionLibrary()),
         // proposal-review reads this for the SF token, and /api/generate's files-mode rebuild
         // gates on it.
-        polish_sf: b.sf,
+        // b.sf is the area the bid PRICES (an OFF row is out of it). When nothing is on, keep the
+        // MEASURED floor on file rather than 0: a 0 here unlocked intake's SF boxes and sent the
+        // proposal an empty SF token because somebody flipped the only row's slider (F5).
+        polish_sf: b.sf > 0 ? b.sf : B.measuredSf(M.takeoff),
+        // polish_sf IS the takeoff total, so intake's System 2 box has nothing left to say: blank
+        // it. Left stale it reseeded a deleted row -- empty the takeoff, reopen step 2, and
+        // B.seedTakeoffSf read the old polish_2_sf as a fresh measurement.
+        polish_2_sf: "",
         // Replaced, not merged — see the file header.
         computed_bid: {
           lump_sum: b.total,
@@ -449,6 +502,7 @@
     TW.setState(Object.assign({}, TW.getState(), {
       polish_estimate: M,
       polish_sf: b.sf,
+      polish_2_sf: "",                   // see saveSoon: the takeoff total is polish_sf now
       computed_bid: {
         lump_sum: b.total,
         price_per_sf: b.per_sf,
@@ -478,6 +532,14 @@
       var r = M.labor[i];
       if (r && r.unit === "hours" && r.guys_auto) r.guys = manDays;
     }
+    // Lodging and Per Diem count the same man-days while they are on auto (nights = man-days, the
+    // way backend/pricing.py counts them), written into the line for the reason above.
+    if (M.travel) {
+      B.TRAVEL_LINE_KEYS.forEach(function (k) {
+        var l = M.travel[k];
+        if (l && l.qty_auto !== false) l.qty = manDays;
+      });
+    }
   }
 
   /** Whether an hours-based labor row (Travel) renders dimmed: on a local job, untouched.
@@ -499,6 +561,13 @@
    *  `rerender` false repaints the computed figures in place instead of rebuilding the panel:
    *  rebuilding mid-keystroke moves the caret out of the field being typed in. */
   function changed(rerender) {
+    // G2: a "From SF" labor line's untouched Days follow the takeoff -- only when the SF moved in
+    // THIS session (followSf is set once the page has opened), so reopening a saved bid moves nothing.
+    var sfNow = B.takeoffSf(M.takeoff);
+    if (followSf !== null && sfNow !== followSf) {
+      followSf = sfNow;
+      M.labor = B.followLaborDays(M.labor, sfNow);
+    }
     syncAutoGuys();
     paintBid();
     paintRail();
@@ -525,6 +594,7 @@
   function stepStatus() {
     var priced = 0, half = 0;
     M.takeoff.forEach(function (r) {
+      if (!B.rowOn(r)) return;                         // an off row is not part of the bid
       var measured = B.num(r.measurement) > 0;
       // EITHER ID COUNTS. A picked, measured material row is a finished row by every definition
       // this page uses -- it prices, it reaches the Material total, it prints on Review -- and
@@ -713,12 +783,73 @@
     return cov ? String(cov) : "";
   }
 
+  /** The line under EVERY coverage box, whichever kind of row owns it.
+   *
+   *  `typed` is what this bid says, `lib` the material's own figure. A typed number that differs
+   *  from the library's is the one case worth a sentence of its own: the estimator is looking at
+   *  a figure that is not the library's and needs the way back to it ("Library default: N").
+   *  Typing the library's own number back reads as the plain line, because nothing differs. */
+  function covLine(typed, lib) {
+    typed = B.num(typed); lib = B.num(lib);
+    if (typed > 0) return "How far one goes, for this job.";
+    if (lib > 0) return "Blank uses the library's " + lib + ".";
+    return "How far one goes. The library has no default for it.";
+  }
+
+  /** THE ONE "Default value: N" WARNING, shared by every box whose default the estimator may
+   *  override (coverage on every row kind, the labor rate). It sits directly under the box in the
+   *  page's amber `.warnline`, is empty/hidden while the box agrees with the default, and goes
+   *  away again when the default is typed back. `text` is "" when there is nothing to warn about. */
+  function dfltWarnText(differs, shown) {
+    return differs ? "Default value: " + shown : "";
+  }
+  function dfltWarnHtml(attrs, text) {
+    return '<p class="warnline dflt-warn" ' + attrs + (text ? "" : " hidden") + '>' +
+      esc(text) + '</p>';
+  }
+  function paintDfltWarn(el, text) {
+    el.textContent = text;
+    el.hidden = !text;
+  }
+  /** Coverage: warns only when a typed figure differs from a library figure that exists. */
+  function covWarn(typed, lib) {
+    typed = B.num(typed); lib = B.num(lib);
+    return dfltWarnText(typed > 0 && lib > 0 && typed !== lib, lib);
+  }
+
   function covHint(row) {
     var it = itemById((row || {}).item_id);
-    var cov = it && B.num(it.coverage);
-    if (B.num((row || {}).coverage)) return "How far one goes, for this job.";
-    if (cov) return "Blank uses the library's " + B.num(cov) + ".";
-    return "How far one goes. The library has no default for it.";
+    return covLine((row || {}).coverage, it && it.coverage);
+  }
+  function covRowWarn(row) {
+    var it = itemById((row || {}).item_id);
+    return covWarn((row || {}).coverage, it && it.coverage);
+  }
+
+  /** What THIS BID types for a condition card's coverage (Joint Filler, Dye). 0 when blank. */
+  function condCovTyped(key) {
+    var cc = (M && M.cond_cov) || {};
+    return B.num(cc[key]);
+  }
+
+  function condCovItem(key) {
+    return itemById(key === "dye" ? "dye" : "joint-filler-kit");
+  }
+
+  /** An assembly row's lines that name a real material, each with the figure it will price with:
+   *  [{ j, name, lib, typed }]. `j` is the line's position, the key row.line_cov is stored under. */
+  function asmCovLines(row) {
+    var asm = asmById((row || {}).assembly_id);
+    var out = [];
+    if (!asm) return out;
+    var lc = (row.line_cov && typeof row.line_cov === "object") ? row.line_cov : {};
+    (asm.lines || []).forEach(function (ln, j) {
+      var id = ln && (ln.item_id || ln.item);
+      var it = id ? itemById(id) : null;
+      if (!it) return;
+      out.push({ j: j, name: it.name || "Material", lib: B.num(it.coverage), typed: lc[j] });
+    });
+    return out;
   }
 
   function measureText(row) {
@@ -862,7 +993,21 @@
       // says. `unit` beside the Measurement is plural because five of them is what the job buys.
       rate: qty > 0 ? (c.rateHint ? c.rateHint(cost, qty)
                                   : B.money2(cost / qty) + " / " + c.unit(1)) : "",
-      qtyHint: c.qtyHint(area)
+      qtyHint: c.qtyHint(area),
+      // The Coverage box's own text, here so the first paint and repaintNumbers share one source.
+      covPlaceholder: (function () {
+        var it = condCovItem(c.key);
+        var v = it && B.num(it.coverage);
+        return v ? String(v) : "";
+      })(),
+      covHint: (function () {
+        var it = condCovItem(c.key);
+        return covLine(((M && M.cond_cov) || {})[c.key], it && it.coverage);
+      })(),
+      covWarn: (function () {
+        var it = condCovItem(c.key);
+        return covWarn(((M && M.cond_cov) || {})[c.key], it && it.coverage);
+      })()
     };
   }
 
@@ -877,10 +1022,12 @@
    *  reason: "In the bid" reads true against both switch positions, where "Include" would
    *  describe the state you are leaving.
    *
-   *  FOUR COLUMNS, `.tk-g` UNCHANGED -- the assembly row's template, not `.matg`'s five. There is
-   *  no Coverage, because neither of these is bought by the pack. Sharing the template is what
-   *  puts the Measurement, Unit and Total cost of these lines in the same place down the page as
-   *  every row above them, which is the whole point of them being rows. */
+   *  FIVE COLUMNS, `.matg` -- a material row's template, Coverage included. (An earlier note here
+   *  said these had no Coverage because neither is bought by the pack. That was wrong: Joint
+   *  Filler is bought by the KIT, one per 3,500 SF, and Dye is a library material with its own
+   *  coverage like any other.) The box is this bid's own override (M.cond_cov): blank prices with
+   *  the library row's figure, and a typed one says "Library default: N". It prices through
+   *  condLine and reaches Kyle's workbook through conditionLibrary, so the download matches. */
   function condMaterialCard(c) {
     var f = condFigures(c);
     var box = function (part, empty, text) {
@@ -899,7 +1046,7 @@
       '<span class="tk-sub" data-condfig="' + esc(c.key) + '.sub">' + esc(f.sub) + "</span>" +
       condSwitch(c.key, c.label) +
       "</div>" +
-      '<div class="tk-g">' +
+      '<div class="tk-g matg">' +
 
       '<div class="f"><label>Material</label>' +
       '<div class="costbox txt">' + esc(c.material()) + "</div>" +
@@ -913,6 +1060,15 @@
       '<div class="costbox txt" data-condfig="' + esc(c.key) + '.unit">' + esc(f.unit) +
       "</div>" +
       '<p class="hint">' + esc(c.unitHint) + "</p></div>" +
+
+      // THE SAME COVERAGE BOX A MATERIAL ROW CARRIES, for this bid only (M.cond_cov). Blank prices
+      // with the library row's coverage, shown as the placeholder; a typed figure that differs
+      // says "Library default: N" underneath.
+      '<div class="f"><label>Coverage</label>' +
+      '<input class="n" data-condcov="' + esc(c.key) + '" value="' +
+      esc(nv(((M && M.cond_cov) || {})[c.key])) + '" placeholder="' + esc(f.covPlaceholder) + '">' +
+      dfltWarnHtml('data-condfig="' + esc(c.key) + '.covwarn"', f.covWarn) +
+      hint("covhint", f.covHint) + "</div>" +
 
       '<div class="f"><label>Total cost</label>' +
       box("cost", f.costEmpty, f.cost) +
@@ -989,7 +1145,9 @@
       rowCardInner(r, i) + '</div>';
   }
 
-  function rowCardClass(r) { return "tk" + (rowKind(r) === "item" ? " mat" : ""); }
+  function rowCardClass(r) {
+    return "tk" + (rowKind(r) === "item" ? " mat" : "") + (B.rowOn(r) ? "" : " inert");
+  }
 
   function rowCardInner(r, i) {
     var rc = rowCost(r);
@@ -1018,6 +1176,8 @@
       (pending ? '<span class="tk-mark" data-mark-for="' + i + '">' +
         (ambiguous(r) ? "pick one" : "new") + '</span>' : '') +
       '<span class="tk-sub" data-measure-for="' + i + '">' + esc(measureText(r)) + '</span>' +
+      B.sliderHtml(B.rowOn(r), 'data-on-tk="' + i + '"', "Included", "Off keeps this row here, grayed, " +
+        "and adds nothing to the price") +
       (M.takeoff.length > 1
         ? '<button class="x" data-del-row="' + i + '" title="Remove this row">' + icon("x", 12) + '</button>'
         : '') +
@@ -1049,7 +1209,8 @@
         ? '<div class="f"><label>Coverage</label>' +
           '<input class="n" data-tk="' + i + '" data-k="coverage" value="' +
           esc(nv(r.coverage)) + '" placeholder="' + esc(covPlaceholder(r)) + '">' +
-          '<p class="hint">' + esc(covHint(r)) + '</p></div>'
+          dfltWarnHtml('data-covwarn-for="' + i + '"', covRowWarn(r)) +
+          '<p class="hint" data-covhint-for="' + i + '">' + esc(covHint(r)) + '</p></div>'
         : "") +
 
       '<div class="f"><label>Total cost</label>' +
@@ -1059,7 +1220,25 @@
       esc(p && p.per_unit != null ? B.money2(p.per_unit) + " / " + (r.unit || "SF") : "") +
       '</p></div>' +
 
-      '</div>' + warn;
+      '</div>' + asmCoverageBlock(r, i, kind) + warn;
+  }
+
+  /** An ASSEMBLY row's coverage, one box per material line -- an assembly keeps coverage on its
+   *  materials, so a row loaded from the defaults (or picked by hand) shows what each of its lines
+   *  will price with, and the estimator can change any of them for THIS bid (row.line_cov). The
+   *  same covLine text sits under each box. Empty string for every other kind of row. */
+  function asmCoverageBlock(r, i, kind) {
+    if (kind !== "asm") return "";
+    var lines = asmCovLines(r);
+    if (!lines.length) return "";
+    return '<div class="tk-g asmcov" data-asmcov-for="' + i + '">' + lines.map(function (x) {
+      return '<div class="f"><label>' + esc(x.name) + ' coverage</label>' +
+        '<input class="n" data-asmcov="' + i + '" data-line="' + x.j + '" value="' +
+        esc(nv(x.typed)) + '" placeholder="' + esc(x.lib ? String(x.lib) : "") + '">' +
+        dfltWarnHtml('data-asmcovwarn="' + i + ':' + x.j + '"', covWarn(x.typed, x.lib)) +
+        '<p class="hint" data-asmcovhint="' + i + ':' + x.j + '">' +
+        esc(covLine(x.typed, x.lib)) + '</p></div>';
+    }).join("") + '</div>';
   }
 
   /** Redraw ONE row card, in place, class and inside.
@@ -1129,7 +1308,10 @@
     html += '<p class="cap">Material total <b data-mat-total>' +
       esc(moneyAuto(materialTotal())) + '</b> · measured area <b data-area-total>' +
       esc(B.fmtSf(B.takeoffSf(M.takeoff))) + ' SF</b>. LF rows are priced like any other but do ' +
-      'not count toward the square footage the price-per-SF is divided by.</p>';
+      'not count toward the square footage the price-per-SF is divided by.' +
+      (M.takeoff.some(function (r) { return r && r.same_floor; })
+        ? ' Default rows that share the floor carry the same square feet but are not added to ' +
+          'it again.' : '') + '</p>';
 
     return shell("Material",
       "One row per assembly. The library prices it against the measurement you give it.", html);
@@ -1191,10 +1373,14 @@
       : '<button type="button" class="mw-sw labsw on" role="switch" aria-checked="true"'
         + ' data-lab-auto="' + i + '">'
         + '<span class="track"></span>Type my own</button>');
-    return '<div class="tk lab' + (inert ? " inert" : "") + '" data-lab-card="' + i +
+    var on = B.rowOn(r);
+    return '<div class="tk lab' + ((inert || !on) ? " inert" : "") + (on ? "" : " off") +
+      '" data-lab-card="' + i +
       '"><div class="tk-h">' +
       '<input class="labname" data-lab="' + i + '" data-k="label" value="' + esc(nv(r.label)) +
       '" placeholder="Task" aria-label="Task name">' + toggle +
+      B.sliderHtml(on, 'data-on-lab="' + i + '"', "Included", "Off keeps this line here, grayed, " +
+        "and adds nothing to the price") +
       '<span class="tk-sub calc" data-lcost-for="' + i + '">' +
       esc(moneyAuto(B.laborCost(r))) + '</span>' +
       (M.labor.length > 1
@@ -1205,6 +1391,7 @@
       '<div class="f"><label>Guys</label>' +
       '<input class="n" data-lab="' + i + '" data-k="guys" value="' +
       esc(nv(r.guys)) + '"' + (auto ? ' data-auto="1"' : '') + '>' +
+      dfltWarnHtml('data-calcwarn="' + i + ':guys"', calcDefaultText(r, "guys")) +
       // "Guys", never "Crew" -- Hanz renamed that column and
       // test_nothing_on_screen_says_labour_or_crew holds the page to it.
       '<p class="hint">' + (auto ? 'Man-days from the tasks above.'
@@ -1212,31 +1399,214 @@
 
       '<div class="f"><label>' + (hours ? "Hours" : "Days") + '</label>' +
       '<input class="n" data-lab="' + i + '" data-k="days" value="' + esc(nv(r.days)) + '">' +
+      dfltWarnHtml('data-calcwarn="' + i + ':days"', calcDefaultText(r, "days")) +
       '<p class="hint">' + (hours ? "Drive time, each way counted." : "How long it takes.") +
       '</p></div>' +
 
       '<div class="f"><label>Rate</label>' +
       '<span class="mny">$<input class="n" data-lab="' + i + '" data-k="rate" value="' +
       esc(nv(r.rate)) + '"></span>' +
+      dfltWarnHtml('data-ratedflt-for="' + i + '"', rateDefaultText(r)) +
       '<p class="hint">Per hour.</p></div>' +
 
       '<div class="f"><label>Cost</label>' +
       '<div class="costbox' + (B.laborCost(r) > 0 ? "" : " empty") + '">' +
       esc(moneyAuto(B.laborCost(r))) + '</div>' +
       '<p class="hint">' + (hours ? "guys × hours × rate" :
-        "guys × days × rate × " + B.HOURS_PER_DAY) + '</p></div>' +
+        "guys × days × rate × " + B.dayHours(r)) + '</p></div>' +
+      // HOURS A DAY, only on a line the Labor Calculator filled (it carries calc_default): 8 or 10.
+      (r.calc_default && !hours
+        ? '<div class="f"><label>Hours a day</label><select data-lab="' + i +
+          '" data-k="hours_per_day" aria-label="Hours a day">' +
+          [8, 10].map(function (h) {
+            return '<option value="' + h + '"' + (B.dayHours(r) === h ? " selected" : "") + '>' + h +
+              '</option>';
+          }).join("") + '</select>' +
+          dfltWarnHtml('data-calcwarn="' + i + ':hours_per_day"', calcDefaultText(r, "hours_per_day")) +
+          '</div>'
+        : "") +
 
       '</div>' + (hours
         // Rendered unconditionally on hours rows -- CSS (`.lab:not(.inert) .inertline`) decides
         // whether it shows, so the card's class is the one source of truth for both the dimming
         // and the caption, and the two cannot drift apart on a live repaint.
         ? '<p class="inertline">This job is marked local, so no travel is expected — type here ' +
-          'anyway if it needs drive time.</p>'
+          'anyway if it needs drive time.</p>' +
+          '<p class="hint trvnote">Drive time is expected at 70 miles or more from the office. ' +
+          'Under 70 miles this line stays gray.</p>'
         : "") + '</div>';
   }
 
+  /** Is a Lodging / Per Diem card dimmed? Off is gray, and so is a LOCAL job (under 70 miles) the
+   *  estimator has not touched -- the rule Travel Labor's card already follows (laborInert). A line
+   *  somebody flipped by hand (`hand`) is theirs, so it lifts the dim. ONE FUNCTION for the first
+   *  paint and the live repaint, like laborInert. */
+  function travelInert(l) {
+    return !!(M.conditions || {}).local && !(l && l.hand);
+  }
+
+  /** One of the two travel cost lines (Lodging, Per Diem) as a card, in the `.tk lab` vocabulary
+   *  the labor cards use so the three travel lines read as one family. `key` is "lodging" or
+   *  "per_diem". Quantity is nights / days; while it is auto it is the crew's man-days (the way
+   *  backend/pricing.py counts them) and the box says so; typing flips it to the estimator's own. */
+  function travelCard(key) {
+    var l = (M.travel || {})[key] || {};
+    var on = !!l.enabled;
+    var auto = l.qty_auto !== false;
+    var isNight = key === "lodging";
+    var inert = travelInert(l);
+    var unitWord = isNight ? "Nights" : "Days";
+    var cost = B.travelLineCost(l, M.labor);
+    var mode = auto
+      ? '<button type="button" class="mw-sw labsw" role="switch" aria-checked="false"' +
+        ' data-trv-manual="' + key + '"><span class="track"></span>Type my own</button>'
+      : '<button type="button" class="mw-sw labsw on" role="switch" aria-checked="true"' +
+        ' data-trv-auto="' + key + '"><span class="track"></span>Type my own</button>';
+    return '<div class="tk trv' + ((inert || !on) ? " inert" : "") + (on ? "" : " off") +
+      '" data-trv-card="' + key + '"><div class="tk-h">' +
+      '<span class="labname static">' + esc(l.label || (isNight ? "Lodging" : "Per Diem")) + '</span>' +
+      mode +
+      B.sliderHtml(on, 'data-on-trv="' + key + '"', "Included", "Off keeps this line here, " +
+        "grayed, and adds nothing to the price") +
+      '<span class="tk-sub calc" data-trvcost-for="' + key + '">' + esc(moneyAuto(cost)) + '</span>' +
+      '</div><div class="tk-g lab-g trv-g">' +
+      '<div class="f"><label>' + unitWord + '</label>' +
+      '<input class="n" data-trv="' + key + '" data-k="qty" value="' + esc(nv(l.qty)) + '"' +
+      (auto ? ' data-auto="1"' : '') + '>' +
+      '<p class="hint">' + (auto ? "Man-days from the tasks above." : "Typed by you.") + '</p></div>' +
+      '<div class="f"><label>Rate</label>' +
+      '<span class="mny">$<input class="n" data-trv="' + key + '" data-k="rate" value="' +
+      esc(nv(l.rate)) + '"></span>' +
+      dfltWarnHtml('data-trvdflt-for="' + key + '"', travelRateDefaultText(l)) +
+      '<p class="hint">' + (isNight ? "Per night." : "Per day.") + ' Set under Items &amp; ' +
+      'Assemblies, Labor Calculator.</p></div>' +
+      '<div class="f"><label>Cost</label>' +
+      '<div class="costbox' + (cost > 0 ? "" : " empty") + '">' + esc(moneyAuto(cost)) + '</div>' +
+      '<p class="hint">' + unitWord.toLowerCase() + ' × rate</p></div>' +
+      '</div><p class="hint trvnote">' + (isNight
+        ? "Overnight stays are expected at 70 miles or more from the office. Under 70 miles " +
+          "this line stays gray."
+        : "Meals while the guys are away, expected at 70 miles or more from the office. Under " +
+          "70 miles this line stays gray.") + '</p></div>';
+  }
+
+  // ── distance decides "local" ────────────────────────────────────────────────
+  // The intake's "Local job" switch is gone (Kyle 9/18; Hanz, 2026-10-05). The server works the
+  // driving miles from the Olathe office to the job address out (POST /api/distance, Google Routes)
+  // and B.applyDistance turns them into the hidden `conditions.local` answer, which is still what
+  // Polish!B4 is written from. >= 70 miles: the three travel lines come on. < 70: they gray.
+  //
+  // THE LOOKUP NEVER BLOCKS ANYTHING. It starts after the first paint, has its own timeout, and
+  // any failure leaves the page exactly as it was with "Distance unknown -- enter miles" and a
+  // box to type the number in. Nothing is guessed. A typed figure always wins, and a Lodging /
+  // Per Diem line the estimator flipped by hand is never moved by an answer (B.applyDistance).
+  //
+  // ONLY A NEW BID LOOKS IT UP BY ITSELF. A saved bid opened later does not reprice behind
+  // anybody's back: it shows what it was saved with and offers the button.
+  var distBusy = false;
+  var distReason = "";
+  var DIST_REASONS = {
+    incomplete: "Add the street, city and state on the intake step, or type the miles.",
+    no_key: "The distance service is not set up yet. Type the miles.",
+    not_found: "That address could not be found. Check it on the intake step, or type the miles.",
+    busy: "Too many lookups just now. Type the miles, or try again in a few minutes.",
+    error: "The distance lookup did not answer. Type the miles, or try again."
+  };
+
+  function addressKey() {
+    var s = TW.getState() || {};
+    return B.distanceKey(s.address, s.city, s.state, s.zip);
+  }
+
+  function distanceStatus() {
+    if (distBusy) return "Looking up the driving distance…";
+    var d = M.distance;
+    if (d && d.source === "google" && addressKey() && d.key !== addressKey()) {
+      return "The address changed since this was measured. Look it up again, or type the miles.";
+    }
+    if (!d && distReason) return DIST_REASONS[distReason] || DIST_REASONS.error;
+    if (!d) return "Type the miles from the office, or look it up from the job address.";
+    return "";
+  }
+
+  function distanceBlock() {
+    var d = M.distance;
+    return '<div class="trvdist" data-dist>' +
+      '<p class="cap"><b data-dist-note>' + esc(B.distanceNote(M)) + '</b> ' +
+      '<span class="hint" data-dist-status>' + esc(distanceStatus()) + '</span></p>' +
+      '<div class="distrow"><label>Miles from the office</label>' +
+      '<input class="n" inputmode="decimal" data-dist-miles value="' +
+      esc(d && d.miles != null ? d.miles : "") + '">' +
+      '<button type="button" class="btn" data-dist-lookup>Look it up from the address</button></div>' +
+      '</div>';
+  }
+
+  /** Repaint the distance note and the three travel lines in place: no rebuild, so a caret
+   *  somewhere else on the page is not stolen when the server's answer lands. */
+  function paintDistance() {
+    var note = document.querySelector("[data-dist-note]");
+    if (note) note.textContent = B.distanceNote(M);
+    var st = document.querySelector("[data-dist-status]");
+    if (st) st.textContent = distanceStatus();
+    var box = document.querySelector("[data-dist-miles]");
+    if (box && document.activeElement !== box) {
+      var v = M.distance && M.distance.miles != null ? String(M.distance.miles) : "";
+      if (box.value !== v) box.value = v;
+    }
+    document.querySelectorAll("[data-on-trv]").forEach(function (el) {
+      var l = M.travel && M.travel[el.getAttribute("data-on-trv")];
+      if (!l) return;
+      el.className = "mw-sw" + (l.enabled ? " on" : "");
+      el.setAttribute("aria-checked", l.enabled ? "true" : "false");
+    });
+  }
+
+  /** Ask the server for the miles and apply them. `force` is the estimator pressing the button:
+   *  it replaces a typed figure too, because they asked. Without it a typed figure, or a figure
+   *  already measured for this exact address, is left alone. Never throws. */
+  async function lookupDistance(force) {
+    var s = TW.getState() || {};
+    var key = B.distanceKey(s.address, s.city, s.state, s.zip);
+    if (!key) { distReason = "incomplete"; paintDistance(); return; }
+    if (!force && M.distance && (M.distance.source === "typed" || M.distance.key === key)) return;
+    var model = M;
+    distBusy = true; distReason = "";
+    paintDistance();
+    var miles = null, reason = "error";
+    try {
+      var res = await api("/api/distance", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ address: s.address || "", city: s.city || "", state: s.state || "",
+                               zip: s.zip || "" }),
+        signal: (typeof AbortSignal !== "undefined" && AbortSignal.timeout)
+          ? AbortSignal.timeout(10000) : undefined
+      });
+      var j = await res.json();
+      miles = B.milesOrNull(j && j.miles);
+      reason = (j && j.reason) || "error";
+    } catch (e) { miles = null; }
+    distBusy = false;
+    // The page can have moved to another draft, or the estimator can have typed miles while the
+    // answer was on its way. Theirs wins; this answer is dropped.
+    if (model !== M || (!force && M.distance && M.distance.source === "typed")) { paintDistance(); return; }
+    if (miles === null) { distReason = reason; paintDistance(); return; }
+    B.applyDistance(M, { miles: miles, source: "google", key: key });
+    changed(false);
+    paintDistance();
+  }
+
   function laborPanel() {
-    var html = M.labor.map(laborCard).join("");
+    // Travel Labor is its own block, below a dividing line, with Lodging and Per Diem. Every other
+    // task keeps its place above it. `i` stays the row's real index in M.labor -- the handlers
+    // splice and edit by position.
+    if (!M.travel) M.travel = B.normalizeTravel(null);
+    var html = "";
+    var travelRows = "";
+    M.labor.forEach(function (r, i) {
+      if ((r || {}).id === "travel") travelRows += laborCard(r, i);
+      else html += laborCard(r, i);
+    });
 
     // Same control as the takeoff step's, below the list rather than above it: this one adds a
     // row you then name yourself, so there is nothing to search and nothing to scroll back to.
@@ -1244,6 +1614,14 @@
       + ' Add a labor line</button>';
     html += '<p class="cap">Labor total <b data-labor-total>' +
       esc(moneyAuto(B.laborTotal(M.labor))) + '</b>.</p>';
+
+    html += '<div class="trvsep" role="separator"><span>Travel</span></div>' +
+      '<p class="cap">Travel is expected when the job is 70 miles or more from the office. Under ' +
+      '70 miles all three lines below stay gray until you switch one on.</p>';
+    html += distanceBlock();
+    html += travelRows + travelCard("lodging") + travelCard("per_diem");
+    html += '<p class="cap">Lodging and Per Diem total <b data-travel-total>' +
+      esc(moneyAuto(B.travelCosts(M.travel, M.labor).total)) + '</b>, added before the markups.</p>';
 
     var pw = !!(M.conditions || {}).prevailing_wage;
     html += '<p class="cap">Prevailing wage is <b>' + (pw ? "on" : "off") + '</b>' +
@@ -1300,6 +1678,7 @@
       // printed a fully priced material row as "(no assembly picked)" beside its own cost, which
       // reads as a fault in a row that has nothing wrong with it.
       if (!r.assembly_id && !r.item_id && !B.num(r.measurement)) return;
+      if (!B.rowOn(r)) return;               // switched off: out of the bid, so out of the list
       tkRows.push([r.assembly_name || r.item_name || "(nothing picked yet)", measureText(r),
                    esc(rowCost(r).text)]);
     });
@@ -1321,6 +1700,7 @@
     // the one labor line an estimator is most likely to have forgotten was also the only one they
     // could not see.
     M.labor.forEach(function (r) {
+      if (!B.rowOn(r)) return;               // switched off: out of the bid, so out of the list
       var cost = B.laborCost(r);
       if (!cost && (r || {}).id !== "travel") return;
       labRows.push([r.label || "Labor line",
@@ -1334,6 +1714,20 @@
     labRows.push(["Labor burden", B.pct(B.RATES.BURDEN), mkAmt(b, "burden")]);
     labRows.push(["Labor Total", "", mkAmt(b, "labor_total"), "tot"]);
     html += card("Labor", 1, moneyAuto(b.labor_total), revTable(labRows));
+
+    // Lodging and Per Diem: listed only while switched on (an off line is out of the bid, so out of
+    // the list), and its own card because it is inside the markups but is not labor.
+    var trvRows = [];
+    B.TRAVEL_LINE_KEYS.forEach(function (k) {
+      var tl = (M.travel || {})[k];
+      if (!tl || !tl.enabled) return;
+      trvRows.push([tl.label, B.num(B.travelQty(tl, M.labor)) + " × " + B.money2(tl.rate),
+                    esc(moneyAuto(B.travelLineCost(tl, M.labor)))]);
+    });
+    if (trvRows.length) {
+      trvRows.push(["Travel Subtotal", "", mkAmt(b, "travel"), "tot"]);
+      html += card("Lodging and Per Diem", 1, moneyAuto(b.travel), revTable(trvRows));
+    }
 
     html += '<div class="rev">' + markupTable(b) + '</div>';
     return shell("Review the bid",
@@ -1355,10 +1749,7 @@
     // reason. A switch whose answer changes no price still has an answer, and that answer still
     // reaches the downloaded workbook, so taking it away would lose a cell rather than tidy a
     // screen. It stays clickable; it just stops claiming to matter to the figure above it.
-    return '<span class="mw-sw' + (on ? " on" : "") + (inert ? " inert" : "") +
-      '" data-cond="' + esc(key) +
-      '" role="switch" tabindex="0" aria-checked="' + (on ? "true" : "false") + '">' +
-      '<span class="track"></span>' + esc(label) + '</span>';
+    return B.sliderHtml(on, 'data-cond="' + esc(key) + '"', label, null, inert ? " inert" : "");
   }
 
   /** Where the remodel rate came from, said out loud beside the row.
@@ -1530,6 +1921,23 @@
       var hi = parseInt(el.getAttribute("data-asmhint-for"), 10);
       el.innerHTML = pickHint(M.takeoff[hi], hi);
     });
+    document.querySelectorAll("[data-ratedflt-for]").forEach(function (el) {
+      var row = M.labor[parseInt(el.getAttribute("data-ratedflt-for"), 10)];
+      paintDfltWarn(el, rateDefaultText(row));
+    });
+    document.querySelectorAll("[data-calcwarn]").forEach(function (el) {
+      var parts = el.getAttribute("data-calcwarn").split(":");
+      paintDfltWarn(el, calcDefaultText(M.labor[parseInt(parts[0], 10)], parts[1]));
+    });
+    // A followed Days box (G2) is a derived number too: show what changed() moved it to, unless the
+    // estimator is typing in it.
+    document.querySelectorAll('[data-lab][data-k="days"]').forEach(function (el) {
+      var r = M.labor[parseInt(el.getAttribute("data-lab"), 10)];
+      if (!r || !r.calc_default || !(B.num(r.calc_default.sf_per_day) > 0)) return;
+      if (document.activeElement === el) return;
+      var v = r.days == null ? "" : String(r.days);
+      if (el.value !== v) el.value = v;
+    });
     document.querySelectorAll("[data-lcost-for]").forEach(function (el) {
       el.textContent = moneyAuto(B.laborCost(M.labor[parseInt(
         el.getAttribute("data-lcost-for"), 10)]));
@@ -1558,8 +1966,31 @@
     document.querySelectorAll("[data-lab-card]").forEach(function (el) {
       var r = M.labor[parseInt(el.getAttribute("data-lab-card"), 10)];
       if (!r) return;
-      el.className = "tk lab" + (laborInert(r) ? " inert" : "");
+      var rOn = B.rowOn(r);
+      el.className = "tk lab" + ((laborInert(r) || !rOn) ? " inert" : "") + (rOn ? "" : " off");
     });
+    // Lodging and Per Diem, live: cost, the auto quantity box, and the card's gray state. Keyed by
+    // attribute like everything above, and the class string is written by travelCard and here only.
+    if (M.travel) {
+      document.querySelectorAll("[data-trvdflt-for]").forEach(function (el) {
+        paintDfltWarn(el, travelRateDefaultText(M.travel[el.getAttribute("data-trvdflt-for")]));
+      });
+      document.querySelectorAll("[data-trvcost-for]").forEach(function (el) {
+        el.textContent = moneyAuto(B.travelLineCost(M.travel[el.getAttribute("data-trvcost-for")], M.labor));
+      });
+      document.querySelectorAll('[data-trv][data-k="qty"][data-auto]').forEach(function (el) {
+        var l = M.travel[el.getAttribute("data-trv")];
+        if (!l) return;
+        var v = l.qty == null ? "" : String(l.qty);
+        if (el.value !== v) el.value = v;
+      });
+      document.querySelectorAll("[data-trv-card]").forEach(function (el) {
+        var l = M.travel[el.getAttribute("data-trv-card")];
+        if (!l) return;
+        el.className = "tk trv" + ((travelInert(l) || !l.enabled) ? " inert" : "") +
+          (l.enabled ? "" : " off");
+      });
+    }
     // The two condition cards that price. Every figure on them is derived from the takeoff area,
     // which is exactly what a keystroke in a takeoff row changes -- and a keystroke takes
     // `changed(false)`, which repaints in place and never rebuilds the panel. Before 2026-09-19
@@ -1586,6 +2017,30 @@
       put("qtyhint", f.qtyHint);
       put("cost", f.cost, "costbox" + (f.costEmpty ? " empty" : ""));
       put("rate", f.rate);
+      put("covhint", f.covHint);
+      var cw = document.querySelector('[data-condfig="' + c.key + '.covwarn"]');
+      if (cw) paintDfltWarn(cw, f.covWarn);
+    });
+    document.querySelectorAll("[data-covwarn-for]").forEach(function (el) {
+      paintDfltWarn(el, covRowWarn(M.takeoff[parseInt(el.getAttribute("data-covwarn-for"), 10)]));
+    });
+    document.querySelectorAll("[data-asmcovwarn]").forEach(function (el) {
+      var parts = el.getAttribute("data-asmcovwarn").split(":");
+      var row = M.takeoff[parseInt(parts[0], 10)];
+      var hit = asmCovLines(row).filter(function (x) { return String(x.j) === parts[1]; })[0];
+      if (hit) paintDfltWarn(el, covWarn(hit.typed, hit.lib));
+    });
+    // The Coverage hints under every takeoff box: typing takes `changed(false)`, which repaints in
+    // place, so "Library default: N" has to appear here rather than wait for a rebuild.
+    document.querySelectorAll("[data-covhint-for]").forEach(function (el) {
+      var hi = parseInt(el.getAttribute("data-covhint-for"), 10);
+      el.textContent = covHint(M.takeoff[hi]);
+    });
+    document.querySelectorAll("[data-asmcovhint]").forEach(function (el) {
+      var parts = el.getAttribute("data-asmcovhint").split(":");
+      var row = M.takeoff[parseInt(parts[0], 10)];
+      var hit = asmCovLines(row).filter(function (x) { return String(x.j) === parts[1]; })[0];
+      if (hit) el.textContent = covLine(hit.typed, hit.lib);
     });
 
     var one = function (sel, txt) {
@@ -1595,6 +2050,7 @@
     one("[data-mat-total]", moneyAuto(materialTotal()));
     one("[data-area-total]", B.fmtSf(B.takeoffSf(M.takeoff)) + " SF");
     one("[data-labor-total]", moneyAuto(B.laborTotal(M.labor)));
+    one("[data-travel-total]", moneyAuto(B.travelCosts(M.travel, M.labor).total));
     one("[data-mk-persf]", perSfText(b));
 
     document.querySelectorAll("[data-mk]").forEach(function (el) {
@@ -1613,10 +2069,61 @@
   // regenerate an id that had already been used. Nothing indexes labor rows by id today (the page
   // works by array position), so this is closing a door rather than fixing a symptom.
   var laborSeq = 0;
+  // THE COMPANY LABOR RATE (Markups -> Global). A new line starts from it rather than blank, so the
+  // estimator is never typing a rate Treadwell has already decided. The shipped $33 stands until
+  // init() has read the real one, and for good if that read fails.
+  var LABOR_RATE = B.SHIPPED_LABOR_RATE;
   function newLaborRow() {
     laborSeq += 1;
-    return { id: "u_" + Date.now() + "_" + laborSeq, label: "", guys: "", days: "", rate: "" };
+    return { id: "u_" + Date.now() + "_" + laborSeq, label: "", guys: "", days: "", rate: LABOR_RATE };
   }
+
+  /** The warning under a labor rate box: the shared "Default value: $X.XX" when this row's rate is
+   *  not the company rate (a blank one included), "" (hidden) while the two agree. */
+  function rateDefaultText(row) {
+    // A line the Labor Calculator filled carries its own default rate (the line's, else the
+    // company's at the time) -- warn against THAT, so an untouched calculator rate never shows
+    // "Default value" and a changed one names the number it started from.
+    // Otherwise the rate the row was filled with (rate_default, stamped on a new bid after seeding:
+    // the library row's own rate, else the company rate); a saved bid has no stamp and compares
+    // to the company rate as it always did.
+    var d = (row || {}).calc_default;
+    var dflt = d ? B.num(d.rate)
+      : (row && row.rate_default !== undefined && row.rate_default !== null && row.rate_default !== ""
+          ? B.num(row.rate_default) : LABOR_RATE);
+    return dfltWarnText(B.num((row || {}).rate) !== dflt, B.money2(dflt));
+  }
+
+  /** The warning under a Lodging / Per Diem rate box (G3): the shared "Default value: $N" while the
+   *  rate differs from the one the line was filled with (Markups -> Global), "" while they agree and
+   *  on a line with no stamp (a saved bid, which was never filled from anything). */
+  function travelRateDefaultText(l) {
+    if (!l || l.rate_default === undefined || l.rate_default === null) return "";
+    return dfltWarnText(B.num(l.rate) !== B.num(l.rate_default), B.money2(B.num(l.rate_default)));
+  }
+
+  /** The warning under a calculator-filled labor box ("guys", "days" or "hours_per_day"): the
+   *  shared "Default value: N" while the box differs from what the Labor Calculator filled, "" on a
+   *  row it never filled (every saved bid) and while the two agree. */
+  function calcDefaultText(row, field) {
+    var d = (row || {}).calc_default;
+    if (!d || B.laborCalcDiffers(row).indexOf(field) < 0) return "";
+    // The calculator had nothing to fill (a from-SF line on a bid with no SF yet): there is no
+    // default to name, so say nothing rather than "Default value: blank".
+    if (d[field] === "" || d[field] == null) return "";
+    var v = field === "hours_per_day" ? B.dayHours(d) : d[field];
+    return dfltWarnText(true, field === "hours_per_day" ? v + " hours" : (v === "" ? "blank" : v));
+  }
+
+  // Space and Enter work the on/off slider from the keyboard, as they would a button.
+  document.addEventListener("keydown", function (e) {
+    var t = e.target;
+    if (!t || !t.closest || (e.key !== " " && e.key !== "Enter")) return;
+    var sw = t.closest("[data-on-tk]") || t.closest("[data-on-lab]") || t.closest("[data-on-trv]");
+    if (!sw) return;
+    e.preventDefault();
+    sw.click();
+  });
 
   document.addEventListener("click", function (e) {
     var t = e.target;
@@ -1624,6 +2131,9 @@
 
     var go_ = t.closest("[data-go]");
     if (go_) { e.preventDefault(); go(parseInt(go_.getAttribute("data-go"), 10)); return; }
+
+    // The explicit lookup: replaces a typed figure too, because the estimator asked.
+    if (t.closest("[data-dist-lookup]")) { lookupDistance(true); return; }
 
     // THE CARET GOES WITH THE ROW. The button is at the top of the list and the row lands at the
     // bottom of it, so without this the estimator presses Add and nothing they can see happens.
@@ -1696,6 +2206,56 @@
     // Review's own toggles -- same idea as polish-intake.js's onClick/toggleCondition, just
     // flipping the one flag in place rather than routing through that page's carry-four/legacy-
     // cell bookkeeping, none of which any of these five keys need.
+    // THE ON/OFF SLIDER on a takeoff row and on a labor row (the condition cards' own switch is the
+    // `data-cond` one below). Off is an explicit `enabled:false`; back on DELETES the key, so a row
+    // that has been flipped back is indistinguishable from one never touched.
+    var onTk = t.closest("[data-on-tk]");
+    if (onTk) {
+      var oi = parseInt(onTk.getAttribute("data-on-tk"), 10);
+      if (M.takeoff[oi]) {
+        if (B.rowOn(M.takeoff[oi])) M.takeoff[oi].enabled = false; else delete M.takeoff[oi].enabled;
+      }
+      changed(true);
+      return;
+    }
+    // LODGING AND PER DIEM. The slider writes an explicit true/false (this block's convention, see
+    // normalizeTravel) and marks the line `hand`, so a later distance answer cannot override a
+    // choice the estimator made. The two mode buttons are Travel's "Type my own" switch again:
+    // going manual seeds the box with the crew's man-days and puts the caret in it.
+    var onTrv = t.closest("[data-on-trv]");
+    if (onTrv) {
+      var tl = M.travel && M.travel[onTrv.getAttribute("data-on-trv")];
+      if (tl) { tl.enabled = !tl.enabled; tl.hand = true; }
+      changed(true);
+      return;
+    }
+    var trvManual = t.closest("[data-trv-manual]");
+    if (trvManual) {
+      var mk = trvManual.getAttribute("data-trv-manual");
+      if (M.travel && M.travel[mk]) {
+        M.travel[mk].qty_auto = false;
+        M.travel[mk].qty = B.travelManDays(M.labor);
+      }
+      changed(true);
+      refocus('[data-trv="' + mk + '"][data-k="qty"]');
+      return;
+    }
+    var trvAuto = t.closest("[data-trv-auto]");
+    if (trvAuto) {
+      var ak = trvAuto.getAttribute("data-trv-auto");
+      if (M.travel && M.travel[ak]) M.travel[ak].qty_auto = true;
+      changed(true);
+      return;
+    }
+    var onLab = t.closest("[data-on-lab]");
+    if (onLab) {
+      var ol = parseInt(onLab.getAttribute("data-on-lab"), 10);
+      if (M.labor[ol]) {
+        if (B.rowOn(M.labor[ol])) M.labor[ol].enabled = false; else delete M.labor[ol].enabled;
+      }
+      changed(true);
+      return;
+    }
     var cond = t.closest("[data-cond]");
     if (cond) {
       var ck = cond.getAttribute("data-cond");
@@ -1719,6 +2279,9 @@
     row.assembly_name = text;
     var asm = assemblyByName(text);
     row.assembly_id = asm ? asm.id : "";
+    // A DIFFERENT ASSEMBLY IS DIFFERENT LINES: coverage typed against the old one's lines would
+    // land on the wrong materials, so it goes with the old pick.
+    if (row.assembly_id !== before) delete row.line_cov;
     // Adopt the assembly's own unit only when the pick actually CHANGES. Doing it on every
     // keystroke would snap a row whose unit the estimator switched by hand back to the library's.
     if (asm && row.assembly_id !== before) {
@@ -1768,18 +2331,18 @@
       row.kind = "item";
       row.item_id = ""; row.item_name = "";
       if (row.coverage == null) row.coverage = "";
-      delete row.assembly_id; delete row.assembly_name;
+      delete row.assembly_id; delete row.assembly_name; delete row.line_cov;
       return;
     }
     if (kind === "asm") {
       row.kind = "asm";
       row.assembly_id = ""; row.assembly_name = "";
-      delete row.item_id; delete row.item_name; delete row.coverage;
+      delete row.item_id; delete row.item_name; delete row.coverage; delete row.line_cov;
       return;
     }
     row.kind = "new"; row.pick_name = "";
     delete row.assembly_id; delete row.assembly_name;
-    delete row.item_id; delete row.item_name; delete row.coverage;
+    delete row.item_id; delete row.item_name; delete row.coverage; delete row.line_cov;
   }
 
   /** Point a takeoff row at whatever was typed or picked, and let the pick decide what kind of
@@ -1834,8 +2397,49 @@
       changed(false);
       return;
     }
+    // THE ESTIMATOR'S OWN MILES. They always win over the server's figure. A number applies at
+    // once (>= 70 brings the travel lines on, under 70 grays them; a line flipped by hand stays
+    // as flipped); clearing the box goes back to "unknown" and asks the server again. The panel is
+    // rebuilt so the three cards repaint, with the caret carried (the pattern the Travel boxes
+    // below use) -- a half-typed "7" before "70" is an ordinary moment, not an error.
+    if (el.matches("[data-dist-miles]")) {
+      var rawMiles = String(el.value);
+      var typedMiles = B.milesOrNull(el.value);
+      if (typedMiles !== null) {
+        B.applyDistance(M, { miles: typedMiles, source: "typed", key: addressKey() });
+        changed(true);
+        refocus("[data-dist-miles]", rawMiles);
+      } else if (String(el.value).trim() === "") {
+        B.clearDistance(M);
+        changed(true);
+        refocus("[data-dist-miles]");
+        lookupDistance(false);
+      }
+      return;
+    }
     if (!el.matches("input")) return;
     var k = el.getAttribute("data-k");
+
+    // THIS BID'S COVERAGE for Joint Filler / Dye (M.cond_cov) and for one line of an assembly row
+    // (row.line_cov). Both take `changed(false)`: reprice and repaint in place, never a rebuild,
+    // so the caret stays in the box being typed in.
+    var cc = el.getAttribute("data-condcov");
+    if (cc !== null) {
+      if (!M.cond_cov || typeof M.cond_cov !== "object") M.cond_cov = {};
+      M.cond_cov[cc] = el.value;
+      changed(false);
+      return;
+    }
+    var ac = el.getAttribute("data-asmcov");
+    if (ac !== null) {
+      var arow = M.takeoff[parseInt(ac, 10)];
+      if (arow) {
+        if (!arow.line_cov || typeof arow.line_cov !== "object") arow.line_cov = {};
+        arow.line_cov[el.getAttribute("data-line")] = el.value;
+      }
+      changed(false);
+      return;
+    }
 
     var ti = el.getAttribute("data-tk");
     if (ti !== null && k) {
@@ -1849,7 +2453,11 @@
       // It is deliberately NOT done in `change`: by the time that fires the estimator has tabbed
       // into Measurement, and rebuilding then destroys the box they are standing in.
       if (k === "pick") {
+        var asmBefore = M.takeoff[i] ? (M.takeoff[i].assembly_id || "") : "";
         var flipped = setPick(i, el.value);
+        // A new assembly brings its own lines, and the coverage boxes under the card are one per
+        // line -- so the card is redrawn then too, not only when the kind moved.
+        if (!flipped && M.takeoff[i] && (M.takeoff[i].assembly_id || "") !== asmBefore) flipped = true;
         changed(false);
         if (flipped) {
           repaintRow(i);
@@ -1857,7 +2465,40 @@
         }
         return;
       }
-      if (M.takeoff[i]) M.takeoff[i][k] = el.value;
+      if (M.takeoff[i]) {
+        if (k === "measurement") B.setMeasurement(M.takeoff, i, el.value);
+        else M.takeoff[i][k] = el.value;
+      }
+      changed(false);
+      // A carrier edit moves the same-floor rows' numbers too: write them into their boxes in
+      // place (a rebuild would take the caret out of the box being typed in).
+      if (k === "measurement") {
+        M.takeoff.forEach(function (row, n) {
+          if (n === i) return;
+          var box = document.querySelector('[data-tk="' + n + '"][data-k="measurement"]');
+          if (box && row && String(box.value) !== String(row.measurement == null ? "" : row.measurement)) {
+            box.value = row.measurement;
+          }
+        });
+      }
+      return;
+    }
+
+    // Lodging / Per Diem boxes. Typing in the auto quantity is how you leave auto (the same trade
+    // Travel's Guys box makes): one rebuild so the hint and the switch say so, caret carried.
+    var trvKey = el.getAttribute("data-trv");
+    if (trvKey !== null && k) {
+      var tline = M.travel && M.travel[trvKey];
+      if (tline) {
+        if (k === "qty" && tline.qty_auto !== false) {
+          tline.qty_auto = false;
+          tline.qty = el.value;
+          changed(true);
+          refocus('[data-trv="' + trvKey + '"][data-k="qty"]');
+          return;
+        }
+        tline[k] = el.value;
+      }
       changed(false);
       return;
     }
@@ -1890,9 +2531,13 @@
    *  Only the auto-to-manual switch needs this: it is the one edit on this panel that has to
    *  rebuild the card mid-keystroke (the hint under the box changes), and a rebuild that drops
    *  the caret would make the first character somebody types the last one that lands. */
-  function refocus(sel) {
+  function refocus(sel, typed) {
     var el = document.querySelector(sel);
-    if (!el || !el.focus) return;
+    if (!el) return;
+    // The rebuilt box was drawn from the stored number, so a half-typed "12." came back as "12".
+    // Put back exactly what was typed.
+    if (typed !== undefined && el.value !== typed) el.value = typed;
+    if (!el.focus) return;
     el.focus();
     try { el.setSelectionRange(el.value.length, el.value.length); } catch (err) {}
   }
@@ -1900,6 +2545,14 @@
   document.addEventListener("change", function (e) {
     var el = e.target;
     if (!el || !el.getAttribute) return;
+    // HOURS A DAY on a calculator-filled labor line is a <select>, which the "input" handler above
+    // skips (it only takes <input>); it reprices here, the way the takeoff unit select does.
+    var hl = el.getAttribute("data-lab");
+    if (hl !== null && el.getAttribute("data-k") === "hours_per_day") {
+      if (M.labor[parseInt(hl, 10)]) M.labor[parseInt(hl, 10)].hours_per_day = el.value;
+      changed(false);
+      return;
+    }
     var ti = el.getAttribute("data-tk");
     if (ti === null) return;
     var i = parseInt(ti, 10);
@@ -1955,6 +2608,20 @@
     }
   }
 
+  /** The Labor Calculator's saved modes, or [] when there are none or the read cannot answer.
+   *  NEVER THROWS, like loadLaborDefaults: `library_labor_calc` may not exist on a database yet
+   *  (backend/ops/labor_calc.sql), and a missing table has to mean "no line has a mode" -- the
+   *  estimate opens with today's blank crew rows -- never a broken screen. */
+  async function loadLaborCalc() {
+    try {
+      var res = await api("/api/library/labor-calc");
+      var j = await res.json();
+      return (j && j.calc instanceof Array) ? j.calc : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
   /** The library's answers for the three Takeoff conditions, or [] when the read cannot answer.
    *  NEVER THROWS.
    *
@@ -1971,6 +2638,33 @@
       return (j && j.conditions instanceof Array) ? j.conditions : [];
     } catch (e) {
       return [];
+    }
+  }
+
+  /** The company labor rate, or the shipped $33 when nothing is filed or the read cannot answer.
+   *  NEVER THROWS: a rate service being down must not stop an estimate opening. GET
+   *  /api/markup/rules needs no admin, so every estimator can read it. */
+  async function loadLaborRate() {
+    try {
+      var res = await api("/api/markup/rules?layout=global");
+      var j = await res.json();
+      return B.laborRateOrShipped(B.laborRateFromRules(j && j.rules));
+    } catch (e) {
+      return B.SHIPPED_LABOR_RATE;
+    }
+  }
+
+  /** The Lodging and Per Diem rates (Markups -> Global), `{lodging, per_diem}` with null for any
+   *  that is not filed. Read for a NEW bid only (see init) and NEVER THROWS, like loadLaborRate:
+   *  a rate service being down must not stop an estimate opening, and null means the shipped
+   *  $70 / $45 stand. */
+  async function loadTravelRates() {
+    try {
+      var res = await api("/api/markup/rules?layout=global");
+      var j = await res.json();
+      return B.travelRatesFromRules(j && j.rules);
+    } catch (e) {
+      return { lodging: null, per_diem: null };
     }
   }
 
@@ -2001,6 +2695,15 @@
     // landed. Null, not an empty array, for "not asked": an empty array is a real answer (the
     // table exists and holds nothing) and the two must not be confused.
     var laborDefaults = B.laborUnstated(state.polish_estimate) ? loadLaborDefaults() : null;
+    // The company labor rate is read for EVERY bid, a saved one included: it is only APPLIED to a
+    // new bid (the laborDefaults gate below), but "Default $X" under a rate needs it on any.
+    var laborRate = loadLaborRate();
+    // Lodging and Per Diem rates ride the same gate as the labor defaults: a NEW bid copies them
+    // from Markups -> Global once; a saved bid keeps the rates it was saved with.
+    var travelRates = laborDefaults ? loadTravelRates() : null;
+    // The Labor Calculator's per-line modes: same gate again -- a NEW bid fills its default labor
+    // from them, a saved bid is never recomputed.
+    var laborCalc = laborDefaults ? loadLaborCalc() : null;
 
     // THE CONDITION DEFAULTS, ON THE SAME TERMS AND WITH A STRICTER GATE. B.conditionsUnstated is
     // true only when NOTHING has ever been saved for this estimate, because Hanz's rule for this
@@ -2046,11 +2749,17 @@
     // every other part of this model, which is what makes removing a default from the library
     // later leave the bids already holding it alone: once saved, the rows are the BID's, and
     // laborUnstated has answered false ever since.
+    LABOR_RATE = await laborRate;
     if (laborDefaults) {
-      M.labor = B.seedLibraryLabor(M.labor, await laborDefaults);
+      // Library rows with no rate of their own and Travel follow the company rate, then the three
+      // crew rows are set to it. New bids only: this whole block is behind the laborUnstated gate.
+      M.labor = B.applyLaborRate(
+        B.seedLibraryLabor(M.labor, await laborDefaults, LABOR_RATE), LABOR_RATE);
       // A default can carry guys_auto, exactly as Travel does. Re-run for the same reason adopt()
       // runs it: before the first paint, not on the first edit.
       syncAutoGuys();
+      // The two travel rates, onto the new bid's Lodging / Per Diem lines (both start OFF).
+      M.travel = B.applyTravelRates(M.travel, await travelRates);
     }
 
     // The library's answers for joint filler, remove-existing and dye, written over the shipped
@@ -2076,9 +2785,43 @@
 
     // Seed the measurement from intake if nothing has been measured here yet, so the page opens
     // with the number the estimator already gave us rather than a blank.
-    if (!B.takeoffSf(M.takeoff) && B.num(state.polish_sf) > 0) {
-      M.takeoff[0].measurement = B.num(state.polish_sf);
+    //
+    // BOTH of intake's boxes (Hanz, 2026-10-05): System 1 -> polish_sf, System 2 (optional) ->
+    // polish_2_sf, one takeoff row each. Seeding only ever fills an EMPTY takeoff -- see
+    // B.seedTakeoffSf for the rules. polish_sf is rewritten as the takeoff total on the first
+    // save, and from then on intake shows its boxes locked.
+    if (!B.takeoffSf(M.takeoff)) {
+      // A NEW BID ALSO LOADS THE DEFAULTS (Hanz, 2026-10-05), on the same gate as the condition
+      // defaults above: nothing ever saved. seedDefaultTakeoff owns how they combine with intake's
+      // SF boxes (one area-carrying row, the rest marked same_floor); it falls through to
+      // seedTakeoffSf when the library has no defaults, and a saved bid takes seedTakeoffSf alone.
+      // "New" is the saved blob stating nothing, OR nothing but what the beta intake minted: intake
+      // saves a model (conditions, a blank takeoff row) but deletes `labor`, which only this page
+      // ever states, so laborUnstated is the signal that the calculator has never saved here.
+      M.takeoff = (B.conditionsUnstated(state.polish_estimate) || B.laborUnstated(state.polish_estimate))
+        ? B.seedDefaultTakeoff(M.takeoff, ASMS, ITEMS, RESERVED_ITEM_IDS,
+                               state.polish_sf, state.polish_2_sf)
+        : B.seedTakeoffSf(M.takeoff, state.polish_sf, state.polish_2_sf);
     }
+    // THE LABOR CALCULATOR, AFTER THE TAKEOFF SEED because "from SF" lines need the job's SF
+    // (B.takeoffSf, the same figure the bid divides by). New bids only (laborCalc is null
+    // otherwise). Nothing is written to the draft here; the first edit saves the filled rows, and
+    // from then on the rows are the BID's.
+    if (laborCalc) {
+      M.labor = B.applyLaborCalc(M.labor, await laborCalc, B.takeoffSf(M.takeoff), LABOR_RATE);
+      // Every row the calculator did not fill remembers the rate it was seeded with (G1).
+      M.labor = B.stampRateDefaults(M.labor);
+      syncAutoGuys();
+    }
+    followSf = B.takeoffSf(M.takeoff);
+    // THE TAKEOFF TOTAL IS polish_sf, SO MAKE THE DRAFT SAY SO NOW. Two ways the draft can be
+    // behind the model this page just opened with: (1) seeding filled rows in memory only, so
+    // polish_sf held System 1 alone and computed_bid held nothing until the first edit; (2) the
+    // live intake's beta-continue door saved a polish_sf typed over a takeoff that was already
+    // measured. proposal-review reads polish_sf for the SF token. One debounced save, only when
+    // the two actually differ, so a plain reopen writes nothing.
+    var tkSf = B.takeoffSf(M.takeoff);
+    if (tkSf > 0 && tkSf !== B.num(state.polish_sf)) saveSoon();
 
     renderDatalist();
     $("loading").hidden = true;
@@ -2089,6 +2832,11 @@
     at = openingStep(at);
     paintRail();
     renderPanel();
+
+    // DISTANCE, AFTER THE PAINT AND NEVER AWAITED: a slow or dead map service costs the page
+    // nothing. Only a NEW bid asks by itself (the same gate as the defaults above); a saved bid
+    // keeps what it was saved with and offers the button. See lookupDistance.
+    if (laborDefaults && !M.distance) lookupDistance(false);
   }
 
   init();

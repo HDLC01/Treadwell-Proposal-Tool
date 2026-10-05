@@ -147,7 +147,13 @@ _NOT_EDITABLE = {
 # per-night and per-day costs on the travel block, not markup on a running total. They are here
 # because the Global tab is where an admin edits a number that is the same on every sheet, which
 # is a different question from "does it compound".
-GLOBAL_LINE_KEYS = ("bond", "travel_lodging", "travel_per_diem")
+#
+# `labor_rate` (added 2026-10-05) is the company labor rate in dollars an hour: the starting rate of
+# every labor line on a NEW bid. It is a `global` line for the same reason lodging is -- one number
+# for every sheet -- and, like lodging, it is not markup on a running total. No schema change: the
+# table has no CHECK on line_key (the home rule is enforced here), so the row is filed like any
+# other global line and its absence means the estimator's shipped $33.00.
+GLOBAL_LINE_KEYS = ("bond", "travel_lodging", "travel_per_diem", "labor_rate")
 TAB_LINE_KEYS = ("gp", "super_pto", "soft_costs")
 
 # The order rows come back in, and the default `sort`: the chain first, because it compounds and

@@ -9,20 +9,6 @@
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
 <link rel="stylesheet" href="/styles.css">
 <style>
-  /* Address autocomplete dropdown (Photon / OSM) */
-  .addr-field { position: relative; }
-  .addr-results {
-    display: none; position: absolute; left: 0; right: 0; top: 100%; z-index: 30;
-    background: var(--surface, #1b1b1d); border: 1px solid var(--treadwell-red, #c0392b);
-    border-radius: 6px; max-height: 280px; overflow-y: auto; margin-top: 2px;
-    box-shadow: 0 8px 24px rgba(0,0,0,.45);
-  }
-  .addr-results.open { display: block; }
-  .addr-row { padding: 8px 12px; cursor: pointer; border-bottom: 1px solid rgba(255,255,255,.07); }
-  .addr-row:last-child { border-bottom: none; }
-  .addr-row:hover { background: rgba(192,57,43,.18); }
-  .addr-l1 { font-weight: 600; }
-  .addr-l2 { font-size: 12px; color: var(--ink-variant, #9aa0a6); }
   /* Per-system Scope groups */
   .system-block + .system-block { margin-top: 10px; padding-top: 10px; border-top: 1px dashed rgba(128,128,128,.3); }
   .system-tag { font-weight: 700; font-size: 12px; letter-spacing: .04em; text-transform: uppercase;
@@ -354,6 +340,7 @@
      Reads /api/reference/counties and writes the four county_* draft keys; must precede
      the page script, which calls TWCounty.mount() as it boots. -->
 <script src="/js/county-picker.js"></script>
+<script src="/js/address-lookup.js"></script>
 <script src="/js/index.js"></script>
 
 </body>

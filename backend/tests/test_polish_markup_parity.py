@@ -452,8 +452,11 @@ def chain(inp):
     burden = round_up((labor + escalation) * 0.12)                              # D47, C47
     labor_total = labor + escalation + burden
 
-    # D64: D55 (tooling) and D61 (travel) are in the range and are zero in the beta.
-    sub_total = round_up(material_total + labor + escalation + burden)
+    # D61 (travel: lodging + per diem) is the beta's own input since 2026-10-05, a figure the caller
+    # hands in and which joins the sub-total, exactly as Kyle's D64 =SUM(...,D61) does. D55
+    # (tooling) is still zero in the beta.
+    travel = round_up(inp.get("travel"))                                        # D61
+    sub_total = round_up(material_total + labor + escalation + burden + travel)
 
     sales_tax_pct = 0.09475 if cond.get("taxable") else 0                       # B74
     sales_tax = round_up(material_total * sales_tax_pct)                        # D74, MATERIALS ONLY
@@ -489,6 +492,7 @@ def chain(inp):
     return {
         "material": material, "shipping": shipping, "material_total": material_total,
         "labor": labor, "escalation": escalation, "burden": burden, "labor_total": labor_total,
+        "travel": travel,
         "sub_total": sub_total,
         "gp_pct": gp_pct, "gp": gp,
         "super_pto": super_pto, "soft_costs": soft_costs, "contingency": contingency,
@@ -903,7 +907,8 @@ def test_a_stale_v2_draft_backfills_travel_without_disturbing_anything_else(ran)
     # hand out a different Travel from the one a brand-new sandbox gets. $33 and `hours` are the
     # sheet's own (Polish rows 43-44); `guys` is blank here because the PAGE derives it on adopt.
     travel = after["labor"][4]
-    assert travel == {"id": "travel", "label": "Travel", "guys": "", "days": "", "rate": 33,
+    # "Travel Labor" since 2026-10-05 (Lodging and Per Diem now stand beside it).
+    assert travel == {"id": "travel", "label": "Travel Labor", "guys": "", "days": "", "rate": 33,
                       "unit": "hours", "guys_auto": True}
     # Untouched elsewhere: this bug was about `labor` specifically, not a symptom of a bigger
     # migration regression.
@@ -960,6 +965,11 @@ def test_a_travel_row_with_no_hours_does_not_block_the_review_step(ran):
         "a travel row with no hours is unused, not unfinished: %r" % b["noHours"])
     assert any("Travel" in x for x in b["hoursButNoGuys"]), (
         "a travel row that IS being used is checked like any other: %r" % b["hoursButNoGuys"])
+    assert not any("u_1" in x for x in b["blankAddedLine"]), (
+        "an added line with only the default rate is untouched, not half-filled: %r"
+        % b["blankAddedLine"])
+    assert any("Mobilize" in x for x in b["namedAddedLine"]), (
+        "a named line with no guys/days is still unfinished: %r" % b["namedAddedLine"])
     assert any("Polishing" in x for x in b["crewRowStillChecked"]), (
         "the carve-out must not leak onto the crew rows: %r" % b["crewRowStillChecked"])
 
@@ -1197,13 +1207,13 @@ def test_travel_is_overridden_in_place_and_never_becomes_a_second_row(ran):
     # PRODUCTION: no travel row in the library at all. The constant stands and Travel is untouched.
     none = lib["travelWithNoStoredRow"]
     assert none["count"] == 1, "Travel is not on the bid when the library has no row for it"
-    assert none["label"] == "Travel" and none["rate"] == 33.0, (
+    assert none["label"] == "Travel Labor" and none["rate"] == 33.0, (
         "a library with no travel row did not leave Travel on the shipped rate: %r" % none)
     assert none["unit"] == "hours" and none["guysAuto"] is True
 
     # THE FALLBACK ITSELF, which everything above is an override of.
     shipped = lib["shippedTravel"]
-    assert shipped == {"id": "travel", "label": "Travel", "guys": "", "days": "",
+    assert shipped == {"id": "travel", "label": "Travel Labor", "guys": "", "days": "",
                        "rate": 33.0, "unit": "hours", "guys_auto": True}, (
         "travelSeed() with no row is no longer the sheet's own row: %r" % shipped)
 
@@ -1245,7 +1255,7 @@ def test_travel_is_overridden_in_place_and_never_becomes_a_second_row(ran):
 
     # And blank TEXT falls back too: an unnamed line, or a unit the estimate has no branch for.
     blank = lib["storedTravelWithBlankText"]
-    assert blank["label"] == "Travel" and blank["unit"] == "hours", (
+    assert blank["label"] == "Travel Labor" and blank["unit"] == "hours", (
         "a row with a blank name or unit drew an anonymous line or an unpriceable one: %r"
         % blank)
     assert blank["rate"] == 44, "the rate was lost while falling back on the text fields"
@@ -1314,11 +1324,16 @@ def test_both_schema_files_seed_the_travel_row_the_engine_actually_ships(ran):
         "the two schema files seed DIFFERENT travel rows, so prod and staging would price travel "
         "differently: %r vs %r" % (a, bfile))
 
+    lib_labor = ran["libraryLabor"]
     seed = a
     assert seed["id"] == shipped["id"], (
         "the seeded id is %r but migrateModel and seedLibraryLabor find Travel by %r — the row "
         "would be an ordinary extra labor line on every bid" % (seed["id"], shipped["id"]))
-    assert seed["name"] == shipped["label"], (
+    # THE TABLE WAS SEEDED WITH "Travel" AND IS NOT RE-SEEDED (insert ... on conflict do nothing),
+    # while the line is called "Travel Labor" from 2026-10-05. travelSeed reads a stored name that
+    # is EXACTLY "Travel" as "Travel Labor" (travelLabel), so the two agree on screen without a
+    # DDL run on either database. A seed that is neither is a different line and still fails.
+    assert seed["name"] in (shipped["label"], "Travel") and         lib_labor["travelLabelOf"]["Travel"] == shipped["label"], (
         "the seeded name %r is not what travelSeed() calls the line (%r)"
         % (seed["name"], shipped["label"]))
     assert float(seed["rate"]) == shipped["rate"], (
@@ -1511,3 +1526,103 @@ def test_a_saved_bids_conditions_are_never_touched_by_the_defaults(ran):
         "a brand new bid does not take the stored answers either, so nothing is being gated: %r"
         % s["freshTakesThem"])
     assert s["migrationIsIdempotent"], "migrating twice reshapes the conditions again"
+
+
+# ── Lodging + Per Diem (Kyle's notes, B7, 2026-10-05) ────────────────────────
+@needs_node
+def test_lodging_and_per_diem_are_the_crews_man_days_times_the_rate(ran):
+    """Nights and days are the man-days of the tasks, the way backend/pricing.py counts them
+    (`nights = labor man-days`), at $70 a night and $45 a day. The Travel Labor hours row is not
+    part of the count, and a typed quantity wins over the auto one.
+
+    Mutation: count the travel row's own guys in travelManDays (drop its `unit === "hours"` skip) --
+    18 man-days becomes 36 and every figure here doubles."""
+    t = ran["travelCore"]
+    assert t["manDays"] == 18, "3x5 + 3x0.5 + 3x0.5 man-days, travel row excluded: %r" % t["manDays"]
+    assert t["costs"] == {"lodging": 18 * 70, "per_diem": 18 * 45, "total": 18 * 70 + 18 * 45}
+    assert t["lodgingOnlyOff"]["lodging"] == 0 and t["lodgingOnlyOff"]["per_diem"] == 810, (
+        "a line switched off must add nothing and leave the other alone")
+    assert t["typedQty"] == 700, "a typed 10 nights at $70 is $700, not the crew's 18"
+    assert t["typedQtyBlank"] == 0, "a typed-then-cleared box reads as nothing, not as the auto figure"
+    assert t["absentTravel"]["total"] == 0, "a model with no `travel` block prices no travel"
+    assert t["offCrewRowLeavesTheCount"] == 3, "an OFF crew row still counted toward the nights"
+
+
+@needs_node
+def test_travel_costs_price_inside_the_markups_like_the_sheets_d61(ran):
+    """INSIDE, not a pass-through (Hanz's decision): travel joins the sub-total GP, super/PTO and
+    soft costs are taken on, so the bid grows by MORE than the travel dollars. Checked against the
+    independent Python chain, key by key, on a job where the extra sub-total does not cross a GP band.
+
+    Mutation: add the travel after soft costs instead of into sub_total -- the bid then grows by
+    exactly the travel dollars and `grew_by` below is no longer larger than them."""
+    t = ran["travelCore"]
+    base_in = {"material": 9000, "labor": 5940, "contingency": 0,
+               "conditions": {"taxable": True}, "sf": 10000}
+    want_off, want_on = chain(base_in), chain(dict(base_in, travel=t["costs"]["total"]))
+    for key, want in want_on.items():
+        got = t["withTravel"][key]
+        assert (abs(got - want) < 1e-9) if want is not None else got is None, (key, got, want)
+    for key, want in want_off.items():
+        got = t["noTravel"][key]
+        assert (abs(got - want) < 1e-9) if want is not None else got is None, (key, got, want)
+    assert t["withTravel"]["sub_total"] == t["noTravel"]["sub_total"] + t["costs"]["total"]
+    grew_by = t["withTravel"]["total"] - t["noTravel"]["total"]
+    assert grew_by > t["costs"]["total"], (
+        "travel grew the bid by %d, no more than its own %d, so it is not being marked up"
+        % (grew_by, t["costs"]["total"]))
+    # not labor: no escalation, no burden on the travel dollars
+    assert t["withTravel"]["burden"] == t["noTravel"]["burden"]
+    assert t["withTravel"]["labor_total"] == t["noTravel"]["labor_total"]
+    # a caller that passes no travel prices exactly as before
+    assert t["absentInput"] == t["noTravel"], "an absent `travel` input moved the bid"
+
+
+@needs_node
+def test_a_saved_bid_is_not_repriced_and_travel_starts_off(ran):
+    """OLD DRAFTS: a draft saved before `travel` existed reads both lines OFF at the shipped rates,
+    so opening it after this ships prices exactly what it did. A fresh bid starts OFF too.
+
+    Mutation: seed the lines `enabled: true` -- every old bid grows by $2,000+ on its next open and
+    `oldDraftPrice` no longer equals `oldDraftPriceNoTravelTerm`."""
+    t = ran["travelCore"]
+    for block in (t["migrated"], t["fresh"], t["seededNothing"]):
+        assert block["lodging"]["enabled"] is False and block["per_diem"]["enabled"] is False
+        assert (block["lodging"]["rate"], block["per_diem"]["rate"]) == (70, 45)
+    assert t["oldDraftPrice"] == t["oldDraftPriceNoTravelTerm"], "an old bid was repriced"
+    assert t["migratedIdempotent"], "migrating twice reshapes the travel block again"
+    # a saved choice round-trips whole, including the by-hand marker the distance rule will read
+    assert t["roundTrip"]["lodging"] == {"label": "Lodging", "enabled": True, "qty": "9",
+                                         "qty_auto": False, "rate": 75, "hand": True}
+    assert t["garbage"] == t["fresh"], "a junk travel block did not fall back to the seed"
+
+
+@needs_node
+def test_the_two_rates_are_read_from_the_markup_global_lines_and_nothing_else(ran):
+    """ONE HOME: the rates are the Markups -> Global lines travel_lodging / travel_per_diem. Only a
+    filed, applying, plain positive dollar figure on the GLOBAL layout counts; anything else is
+    null so the shipped $70 / $45 stand. A typed rate on a line is never moved by the company rate.
+
+    Mutation: drop the `layout !== "global"` guard -- a Polish-tab row of the same name is read."""
+    r = ran["travelCore"]["rates"]
+    assert r["both"] == {"lodging": 85, "per_diem": 52.5}
+    for k in ("none", "off", "expr", "zero", "wrongLayout", "junk"):
+        assert r[k] == {"lodging": None, "per_diem": None}, (k, r[k])
+    t = ran["travelCore"]
+    assert (t["seeded"]["lodging"]["rate"], t["seeded"]["per_diem"]["rate"]) == (85, 52.5)
+    assert t["typedRateKept"]["lodging"]["rate"] == 99, "a rate the estimator typed was overwritten"
+    assert t["typedRateKept"]["per_diem"]["rate"] == 52.5, "a shipped-rate line did not follow"
+
+
+@needs_node
+def test_travel_is_relabeled_travel_labor_but_a_chosen_name_is_kept(ran):
+    """"Travel" -> "Travel Labor" on a new row and on a saved draft whose label is EXACTLY "Travel";
+    a stored library name of exactly "Travel" reads the same; a name somebody typed is theirs.
+
+    Mutation: relabel any label that contains "Travel" -- "Drive time" survives, but so does the
+    bug where a custom "Travel to site" is flattened; the exact-match rule is the one pinned."""
+    t = ran["travelCore"]
+    assert t["seedLabel"] == "Travel Labor"
+    assert t["relabeled"] == "Travel Labor", "a saved draft's \"Travel\" was not relabeled"
+    assert t["storedOldNameLabel"] == "Travel Labor"
+    assert t["customLabelKept"] == "Drive time", "a name the estimator chose was overwritten"

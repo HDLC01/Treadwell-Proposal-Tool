@@ -72,6 +72,7 @@ import condition_defaults
 import cover_letter_writer
 import docx_merge
 import digest_worker
+import distance
 import drafts
 import dropbox_client
 import estimate_writer
@@ -1007,6 +1008,8 @@ class LibraryItemIn(BaseModel):
     notes: Optional[str] = None
     # Shared/team-wide, not per-user -- see library.validate_item's note.
     favorite: Optional[bool] = None
+    # Whether this default STARTS ON in a new bid (the Defaults tab slider). Undeclared = dropped.
+    default_on: Optional[bool] = None
     # THE TWO NUMBERS THAT MOVED OFF THE ASSEMBLY LINE on 2026-09-22, alongside `coverage` above.
     # Declared here or they do not exist as far as the API is concerned: Pydantic's default
     # `extra` is `ignore`, so an undeclared field is dropped in silence, validate_item returns
@@ -1042,6 +1045,7 @@ class LibraryAssemblyIn(BaseModel):
     unit: Optional[str] = None
     lines: Optional[Any] = None
     favorite: Optional[bool] = None
+    default_on: Optional[bool] = None
     # The version the editor believes it is changing. A line edit rewrites the WHOLE lines array,
     # so without this two people with the same assembly open silently overwrite each other.
     expected_updated_at: Optional[str] = None
@@ -1293,6 +1297,7 @@ class LibraryLaborIn(BaseModel):
     # Shared/team-wide, not per-user -- see library.validate_labor's note. Undeclared here means
     # silently discarded, the same trap LibraryItemIn.default_work_types' own comment records.
     favorite: Optional[bool] = None
+    default_on: Optional[bool] = None
     # See the note on LibraryItemIn.default_work_types: undeclared means silently discarded.
     default_work_types: Optional[Any] = None
 
@@ -1352,6 +1357,36 @@ def api_library_labor_delete(labor_id: str, request: Request) -> Dict[str, Any]:
     # Soft, like every other library delete. An estimate built with this line carries its own copy
     # of the rate, so removing it from the list does not reach back into a bid.
     return {"ok": True}
+
+
+class LibraryLaborCalcIn(BaseModel):
+    """Loose on purpose: library.validate_labor_calc() is the one authority on what is acceptable."""
+    mode: Optional[str] = None
+    crew: Optional[Any] = None
+    sf_per_day: Optional[Any] = None
+    hours_per_day: Optional[Any] = None
+    guys: Optional[Any] = None
+    days: Optional[Any] = None
+    rate: Optional[Any] = None
+
+
+# The Labor Calculator's per-line modes (Kyle's notes B7b). READ is open to every signed-in user --
+# a new estimate fills its default labor from these -- and answers [] when the table is absent.
+# WRITING is admin-only, like the rates it carries.
+@app.get("/api/library/labor-calc")
+def api_library_labor_calc() -> Dict[str, Any]:
+    return {"ok": True, "calc": library.list_labor_calc()}
+
+
+@app.put("/api/library/labor-calc/{line_id}")
+def api_library_labor_calc_save(line_id: str, payload: LibraryLaborCalcIn,
+                                request: Request) -> Dict[str, Any]:
+    _require_admin(request)
+    try:
+        row = library.save_labor_calc(line_id, payload.model_dump(exclude_unset=True))
+    except library.ValidationError as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True, "row": row}
 
 
 # ── Markup rules ──────────────────────────────────────────────────────────────
@@ -3659,6 +3694,32 @@ def _price_bundle(payload: PriceIn, systems_in: list, coves_in: list,
     else:
         resp["grand_total"] = round(mt + sales_tax, 2)
     return resp
+
+
+class DistanceIn(BaseModel):
+    address: str = ""
+    city: str = ""
+    state: str = ""
+    zip: str = ""
+
+
+@app.post("/api/distance")
+def api_distance(payload: DistanceIn, request: Request) -> Dict[str, Any]:
+    """Driving miles from the Olathe office to the job address (Google Routes, server-side).
+
+    ALWAYS 200. Every case that cannot produce a real figure -- no key configured, address not
+    found, Google slow or down, address too thin, rate limit -- answers `{ok: false, miles: null,
+    reason}` and the Labor step asks the estimator to type the miles. Nothing here is a guess.
+
+    PERMISSION. Any signed-in user (the auth gate above); no tab owns this route and it is NOT in
+    nav_access.TABS on purpose: the estimate step that calls it is read by every estimator
+    mid-bid, and a per-tab gate would silently blank the distance halfway through a bid (the same
+    reasoning nav_access records for /api/library/items). A sync handler, so FastAPI runs it in
+    the threadpool and a slow Google answer never holds the event loop."""
+    bucket = getattr(request.state, "user_email", None) or "anon"
+    if distance.rate_limited(bucket):
+        return {"ok": False, "miles": None, "reason": "busy", "office": distance.OFFICE_LABEL}
+    return distance.lookup(payload.address, payload.city, payload.state, payload.zip)
 
 
 @app.post("/api/price")

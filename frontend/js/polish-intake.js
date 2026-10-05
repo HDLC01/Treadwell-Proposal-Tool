@@ -56,9 +56,14 @@
   // markupChain() looks each one up BY KEY and a miss reads as `false`, so a typo here is a
   // prevailing-wage job quietly priced at standard rates with nothing on screen to show it.
   // Pinned by test_polish_intake_page.py, which compares the two lists.
+  //
+  // NO "LOCAL JOB" SWITCH (Kyle, 9/18 notes; Hanz, 2026-10-05). Distance decides it now: the Labor
+  // step works the driving miles out from the job address and sets the hidden `conditions.local`
+  // answer from them (< 70 miles is local). That key is still on the model and still written to
+  // Polish!B4 / Epoxy!B4 by conditionCells() -- it is only no longer ASKED here. Because it is not
+  // in this list, isCondition("local") is false and a spoken "it is not local" in the verbal panel
+  // changes nothing: a person's word does not outrank the miles.
   var CONDITIONS = [
-    { key: "local", label: "Local job",
-      why: "Under 70 miles. Off means travel and lodging get added." },
     // NO HARD BID. Hanz, 2026-09-22: "remove all hard bids from the polish intake form. And
     // also on the markups" -- confirmed to mean the Polish beta specifically (its intake,
     // Review step and the Markup admin page), leaving the live v1 Intake, the AI Autofill
@@ -639,6 +644,46 @@
     saveTimer = setTimeout(function () { saveTimer = null; save(); }, 600);
   }
 
+  /** Has the step-2 takeoff been measured? Then it, not intake, owns the SF.
+   *
+   *  Asked of a MODEL, so save() can ask it of the freshest saved one and paintSfLock() of the one
+   *  this page holds. B.takeoffSf counts SF rows only, which is the number polish_sf is the total
+   *  of: a takeoff of linear-foot rows alone has no SF to disagree about, so it does not lock.
+   *
+   *  WHY THE GUARANTEE IS IN save() AND NOT IN THE DOM. TW.readForm (shared.js) walks
+   *  form.elements and takes every input that has a `name` -- readonly AND disabled included. So a
+   *  locked box that kept its name would still hand its value to the spread below and overwrite
+   *  polish_sf (the takeoff TOTAL) with whatever the box happened to show. Readonly is the cue for
+   *  the estimator; stripping the two keys in save() is what actually keeps the number safe.
+   *  Pinned by polish-intake-harness.js against the REAL readForm lifted out of shared.js. */
+  function sfLocked(model) {
+    // MEASURED, NOT PRICED (F5): switching the only SF row OFF must not unlock these boxes and let
+    // a stale figure overwrite polish_sf. B.measuredSf ignores the on/off slider; see its note.
+    return !!model && B.measuredSf(model.takeoff) > 0;
+  }
+
+  /** Paint the SF boxes for the current model: editable and seeded from the draft, or locked
+   *  read-only with the takeoff total and a line saying where to change it. */
+  function paintSfLock() {
+    var locked = sfLocked(M);
+    var one = $("polish-sf-1"), two = $("polish-sf-2"), note = $("sf-locked-note");
+    [one, two].forEach(function (el) { if (el) el.readOnly = locked; });
+    if (locked) {
+      var total = B.measuredSf(M.takeoff);
+      // The total sits in System 1 and System 2 is blank: the takeoff may have any number of SF
+      // rows by now, and two boxes cannot show them. The note says so.
+      if (one) one.value = total;
+      if (two) two.value = "";
+      if (note) {
+        note.textContent = "Measured on the takeoff (step 2): " + B.fmtSf(total) +
+          " SF in total. Change it there — these boxes are locked so the two can never disagree.";
+        note.hidden = false;
+      }
+    } else if (note) {
+      note.hidden = true;
+    }
+  }
+
   function save() {
     if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
     var values = form ? TW.readForm(form) : {};
@@ -681,6 +726,13 @@
     // from freshModel() exactly as it did before, because that is what migrateModel does with a
     // model that states no labor.
     if (B.laborUnstated(cur.polish_estimate)) delete model.labor;
+
+    // ONE SOURCE OF TRUTH FOR SF. Once the takeoff holds a measurement, polish_sf is the takeoff
+    // total (js/polish-estimate.js writes it) and is not this page's to state -- see sfLocked().
+    // Deleted from `values`, so the merge in setState leaves the saved polish_sf and polish_2_sf
+    // exactly as the takeoff wrote them. Decided from the saved model, read just now, not from the
+    // DOM: a stale locked/unlocked paint cannot let a partial value through.
+    if (sfLocked(model)) { delete values.polish_sf; delete values.polish_2_sf; }
 
     // The county's four keys ride along as TOP-LEVEL draft keys, not inside polish_estimate: they
     // are the live estimate screen's own, and js/polish-estimate.js reads county_remodel_rate off
@@ -761,6 +813,7 @@
       bid.value = now.getFullYear() + "-" + (m.length < 2 ? "0" + m : m) + "-" +
         (d.length < 2 ? "0" + d : d);
     }
+    paintSfLock();                          // after writeForm: a locked box shows the takeoff total
     renderConditions();
     hydrateCounty();                        // after the toggles: the note quotes Remodel tax
     paintProjLine();
@@ -810,6 +863,18 @@
     if (form) form.addEventListener("input", function (e) {
       if (e.target && e.target.name) saveSoon();
     });
+    // The address / business lookup, shared with the live intake (js/address-lookup.js). A picked
+    // row fires `input` on City, State and Zip, which the listener above turns into a save. The
+    // guard is for a page served without the script; the lookup is a convenience, not a gate.
+    if (window.TWAddress && form) {
+      window.TWAddress.mount({
+        address:  $("address-input"),
+        business: $("business-input"),
+        city:     $("city-input"),
+        state:    $("state-input"),
+        zip:      $("zip-input"),
+      });
+    }
     var input = $("county-input");
     if (input) {
       input.addEventListener("input", onCountyInput);

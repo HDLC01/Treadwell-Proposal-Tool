@@ -29,6 +29,11 @@
        toggles onto the draft; the workbook is the calculator's business, and loading a formula
        engine to render a form would cost every estimator a second of nothing. -->
   <style>
+    /* Per-system Scope groups: the SAME two rules as index.html's inline <style>, because the Scope
+       box here is the live one's markup (system-block / system-tag). Kept in step by hand. */
+    .system-block + .system-block { margin-top: 10px; padding-top: 10px; border-top: 1px dashed rgba(128,128,128,.3); }
+    .system-tag { font-weight: 700; font-size: 12px; letter-spacing: .04em; text-transform: uppercase;
+      color: var(--treadwell-red, #c0392b); margin: 2px 0 6px; }
     /* ── the BETA badge ──────────────────────────────────────────────────────────
        Kept as `.beta` rather than switched to styles.css's `.type-badge`, and that is a reuse
        decision rather than an oversight. `.beta` is the beta PAGES' own convention -- library.html
@@ -250,8 +255,10 @@
   <div id="main" hidden>
     <p class="hint">This intake belongs to the <b>beta polish calculator</b> and is deliberately
       separate from the live intake form at <b>/</b> — beta work is filed under the Test tab and
-      never touches a real bid. It asks for the same fields, under the same names, so a project can
-      be opened on either form.</p>
+      never touches a real bid. It asks for the same fields a polish job sees on the live form,
+      under the same names, so a project can be opened on either form. Work type, gyp and
+      thickness are left off because they do not apply to polish; Dye and Joint filler are asked on
+      the takeoff step, next to the work they describe.</p>
 
     <!-- VERBAL INTAKE. Hanz, 2026-08-25: the estimator says or types what they have, a cheat
          sheet says what is needed, the AI fills what it can and asks ONCE for what is missing.
@@ -299,7 +306,7 @@
         <legend>Project Info</legend>
         <div class="row">
           <label>Bid date
-            <input type="date" name="bid_date"
+            <input type="date" name="bid_date" required
                    title="Bid due date — names the project folder and drives due-date reminders.">
             <!-- A DELIBERATE DEVIATION FROM "LOOK LIKE THE LIVE INTAKE", approved by Hanz on
                  2026-09-10 and recorded here so it does not read as an oversight and does not get
@@ -312,15 +319,18 @@
                  REJECTED: dropping this hint to match index.html exactly. -->
             <span class="hint">Names the project and drives its due-date reminders.</span>
           </label>
-          <label>Project name / company
-            <input type="text" name="project_name" autocomplete="off">
+          <label class="addr-field">Project name / company
+            <input type="text" name="project_name" id="business-input" required autocomplete="off">
+            <div id="business-results" class="addr-results"></div>
           </label>
         </div>
-        <!-- The live form's address/business autocomplete (#address-input, #business-input and
-             their .addr-results dropdowns) is NOT adopted. It is driven by js/index.js, which this
-             page does not load; naming those ids here would render a dropdown that never opens. -->
-        <label>Address
-          <input type="text" name="address" autocomplete="off">
+        <!-- The live form's address / business lookup, ADOPTED 2026-10-05 (Kyle: the beta intake
+             must include everything the live one does). It used to live inline in js/index.js,
+             which this page does not load; it is now js/address-lookup.js, mounted by
+             polish-intake.js, and the ids below are the ones that module looks for. -->
+        <label class="addr-field">Address
+          <input type="text" name="address" id="address-input" autocomplete="off">
+          <div id="address-results" class="addr-results"></div>
         </label>
         <!-- `.row three`, not the live form's plain `.row`. index.html puts three fields in a
              two-column grid and pins State and Zip narrow with `style="flex: 0 0 90px"` left over
@@ -329,18 +339,48 @@
              (see the change to index.html), so the two forms agree AND the row is honest. -->
         <div class="row three">
           <label>City
-            <input type="text" name="city">
+            <input type="text" name="city" id="city-input">
           </label>
           <label>State
-            <input type="text" name="state" maxlength="2" style="text-transform:uppercase">
+            <input type="text" name="state" id="state-input" maxlength="2" style="text-transform:uppercase">
           </label>
           <label>Zip
-            <input type="text" name="zip" maxlength="10" inputmode="numeric">
+            <input type="text" name="zip" id="zip-input" maxlength="10" inputmode="numeric">
           </label>
         </div>
         <div class="row">
           <label>Architect / GC
             <input type="text" name="architect">
+          </label>
+        </div>
+      </fieldset>
+
+      <!-- DRAWINGS & SPECS, copied from the live intake (index.html) with the SAME field names
+           (drawings_dated, addenda_count, spec_section, finish_tag, plan_sheet), 2026-10-05. All
+           optional; a blank prints the template's own placeholder. save() spreads
+           TW.readForm(form), so named inputs travel with no handler edit. -->
+      <fieldset id="drawings-specs-box">
+        <legend>Drawings &amp; specs</legend>
+        <p class="hint">Optional. Fills the spec, finish and addenda lines of a GC proposal and the estimate&rsquo;s Specs+Dwgs+Addn tab. Left blank, the proposal keeps the template&rsquo;s placeholder.</p>
+        <div class="row">
+          <label>Drawings dated
+            <input type="date" name="drawings_dated"
+                   title="The date on the drawing set this bid is priced from.">
+          </label>
+          <label>Addenda acknowledged
+            <input type="number" name="addenda_count" min="0" step="1" inputmode="numeric"
+                   title="How many addenda this bid includes. A whole number.">
+          </label>
+        </div>
+        <div class="row three">
+          <label>Spec section
+            <input type="text" name="spec_section" autocomplete="off" placeholder="e.g. 033543">
+          </label>
+          <label>Finish tag
+            <input type="text" name="finish_tag" autocomplete="off" placeholder="e.g. PC, RES-1, SC">
+          </label>
+          <label>Finish schedule sheet
+            <input type="text" name="plan_sheet" autocomplete="off" placeholder="e.g. A900">
           </label>
         </div>
       </fieldset>
@@ -376,25 +416,53 @@
         </label>
       </fieldset>
 
-      <!-- SCOPE, AS A POLISH JOB SEES IT. Two fields, and the omissions are the point.
-           * system_thickness is NOT here. index.js hides it for polish and gyp -- "Thickness is a
-             RESIN question. Polish has a grind and a sheen, not a thickness" -- so adopting the
-             live form's DECISION means leaving it off a page that is polish by definition.
-           * The gyp SF buckets and the work-type radios are not here for the same reason: this
-             page IS the polish estimator, so a work-type chooser on it is a contradiction.
-           * #systems-container (polish_sf / cove_1_lf / system_1_sf) is not here either, and that
-             one is a data decision rather than a layout one: the beta prices from its own
-             area-by-area takeoff on step 2, so a Polish SF box on intake would be a second place
-             to type the same number and the two could disagree. -->
+      <!-- SCOPE, AS A POLISH JOB SEES IT. Same box as the live intake's Scope (quick) for a polish
+           job: the same hint, System 1 / System 2 (optional) Polish floor SF, then Area, then
+           Approx. start date. Hanz, 2026-10-05, on seeing the two side by side: "scope of beta and
+           active projects are not the same" -- and chose "Add SF, seed the takeoff".
+
+           WHY THE SF BOXES ARE BACK. This comment used to record the opposite decision: no SF box,
+           because the beta prices from its own area-by-area takeoff on step 2 and a second place to
+           type the same number could disagree with it. That risk is now handled, not ignored:
+             * Seeding: step 2 turns polish_sf / polish_2_sf into takeoff rows (B.seedTakeoffSf, in
+               js/polish-bid-core.js), only onto an EMPTY takeoff. Typed once.
+             * One source after that: once the takeoff has any SF, js/polish-intake.js locks both
+               boxes read-only (paintSfLock) and save() refuses to write polish_sf / polish_2_sf at
+               all, so polish_sf stays the takeoff TOTAL that proposal-review and /api/generate read.
+               The lock is in save(), not in the DOM, because TW.readForm reads readonly AND disabled
+               inputs alike -- see the note on sfLocked().
+           The ids are for the lock; the names are the live form's own (polish_sf, polish_2_sf), so
+           both intakes write the same keys on the same draft.
+
+           Still left off, because this page IS the polish estimator:
+             * system_thickness (a resin question; index.js hides it for polish),
+             * Epoxy SF and Cove LF (epoxy details), the gyp SF buckets, the work-type radios. -->
       <fieldset>
         <legend>Scope (quick)</legend>
-        <p class="hint">Pre-fills the proposal. The takeoff itself is step 2.</p>
+        <p class="hint">Pre-fills the estimate. You can refine on the next screen.</p>
+        <div id="systems-container">
+          <div class="system-block">
+            <div class="system-tag">System 1</div>
+            <div class="row">
+              <label>Polish floor SF
+                <input type="number" id="polish-sf-1" name="polish_sf" min="0" step="1" value="0">
+              </label>
+            </div>
+          </div>
+          <div class="system-block">
+            <div class="system-tag">System 2 (optional)</div>
+            <div class="row">
+              <label>Polish floor SF
+                <input type="number" id="polish-sf-2" name="polish_2_sf" min="0" step="1" value="0">
+              </label>
+            </div>
+          </div>
+          <p class="hint" id="sf-locked-note" hidden></p>
+        </div>
         <label>Area &mdash; what the floor covers
           <input type="text" name="work_areas"
                  placeholder="Warehouse expansion and 4 offices"
                  title="Prints on the cover letter as the Area line. Plain words, the way you would say it to the customer.">
-          <span class="hint">Prints on the cover letter as the Area line. Plain words, the way you
-            would say it to the customer.</span>
         </label>
         <div class="row">
           <label>Approx. start date
@@ -405,8 +473,8 @@
 
       <fieldset id="job-conditions-box">
         <legend>Job conditions</legend>
-        <p class="hint">The five things that move the price, plus the county the remodel tax is
-          charged at. Each says what it does. They used to be step 2 of the beta calculator and
+        <p class="hint">The four things that move the price, plus the county the remodel tax is
+          charged at. Whether the job is local is worked out from the address on the Labor step. Each says what it does. They used to be step 2 of the beta calculator and
           live on intake now, because they describe the job rather than the takeoff — the estimate
           carries them through to the bid either way.</p>
 
@@ -495,6 +563,9 @@
      which is also what stamps the model's version, the flag the Projects page routes on. Loaded
      before the page script because `var B = window.TWPolishBid` runs at parse time. -->
 <script src="/js/polish-bid-core.js"></script>
+<!-- The address / business lookup, shared with the live intake (js/index.js). Mounted by
+     polish-intake.js as it boots, so it loads first. -->
+<script src="/js/address-lookup.js"></script>
 <!-- The sandbox, before the page's own script: polish-intake.js calls into it as it boots, and
      nothing may be rendered until it has settled which draft this page may write to. -->
 <script src="/js/polish-sandbox.js"></script>

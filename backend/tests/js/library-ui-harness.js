@@ -233,6 +233,8 @@ const dom = makeDom();
 const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   "use strict";
   var ITEMS = state.ITEMS, ASMS = state.ASMS, VENDORS = state.VENDORS;
+  // New-this-session records, read by renderItems (the Save button) and renderPanel (#asm-save).
+  var FRESH = state.FRESH || { items: {}, assemblies: {} };
   var DIVISION_REFS = state.DIVISION_REFS || [], UNIT_REFS = state.UNIT_REFS || [];
   var VENDOR_USE = state.VENDOR_USE, DIVISION_USE = state.DIVISION_USE || {}, UNIT_USE = state.UNIT_USE || {};
   var ADMIN = state.ADMIN;
@@ -328,6 +330,7 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   // renderItems, renderRefSection and renderPanel each ask icon() for a glyph now; leaving it
   // out is a ReferenceError that kills every scenario in this file at once.
   ${fn("icon")}
+  ${fn("itemSaveButtonHtml")}
   ${fn("renderItems")}
   // THE DEFAULTS TAB'S OWN RENDERERS, lifted so they are EXECUTED rather than read. A source-text
   // assertion cannot catch an unbound identifier, and this repo has taken production down that
@@ -360,6 +363,9 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   // find, so a stale lift here would red every scenario in this file at once.
   // materialDefaultRow BEFORE takeoffDefaultGroups, which draws EVERY Materials row through it --
   // an ordinary favorited material and the three condition materials alike.
+  // defaultSlider (the Defaults tab's starting-state slider) BEFORE both: every row they draw asks
+  // it for its slider cell, so a missing lift is a ReferenceError that reds this whole file.
+  ${fn("defaultSlider")}
   ${fn("materialDefaultRow")}
   ${fn("conditionDefaultRow")}
   ${fn("takeoffDefaultGroups")}
@@ -384,6 +390,9 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   ${fn("defaultCandidates")}
   ${fn("renderDefaultSearch")}
   ${fn("setDefaultQuery")}
+  ${fn("placeDefaultSearch")}
+  ${fn("closeDefaultSearch")}
+  ${fn("onDefaultSearchKey")}
   ${fn("openDefaultBrowse")}
   // ── THE LABOR DEFAULTS, LIFTED AND EXECUTED ────────────────────────────────────────────────
   // "+ Add a labor line" shipped as markup with no handler at all, and Hanz reported it twice as
@@ -484,6 +493,14 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   // working Add or Remove press actually reaches, on all three kinds now, so it is executed here
   // rather than assumed from the markup around it.
   ${fn("setDefault")}
+  // THE STARTING-STATE SLIDER'S OWN NETWORK, stubbed like patchDefault above, and its handler
+  // lifted so a test PRESSES it: a reserved id goes to the condition default, everything else to
+  // the row's default_on.
+  async function patchDefaultOn(kind, id, on) {
+    LABOR_CALLS.push({ op: "PATCH_DEFAULT_ON", kind: kind, id: id, on: !!on });
+    if (LABOR_FAIL.patchDefaultOn) throw new Error("the server said no");
+  }
+  ${fn("setDefaultOn")}
   // THE REMOVE BUTTON'S ROUTER, AFTER BOTH SAVERS IT CALLS. A reserved id's Remove writes the
   // condition default (setConditionDefault); every other row's writes its favorite (setDefault).
   // (No backticks in these comments: this whole block is one template literal.)
@@ -642,6 +659,7 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
            // THE ADD PATH, EXECUTED. A test that only read the markup could not tell a
            // wired button from a dead one, and for two days could not.
            defaultCandidates, renderDefaultSearch, setDefaultQuery, openDefaultBrowse,
+           placeDefaultSearch, closeDefaultSearch, onDefaultSearchKey,
            appliesToWorkType, workTypeLabel, WORK_TYPES,
            // THE PER-ROW CHIPS, EXECUTED. workTypeCell draws them, setRowWorkType is what a press
            // runs, and WT_CALLS is the body that would have gone to the server -- the three
@@ -657,7 +675,7 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
            renderDefaultLabor, resetTravelDefault, laborRowActions,
            LABOR_UNITS,
            LABOR_CALLS,
-           setDefault, paint,
+           setDefault, setDefaultOn, defaultSlider, paint,
            openDefaultAdd,
            // THE LABOR TAB ITSELF, EXECUTED -- creation, editing and the delete guard, on the
            // tab this whole change was for. QUEUED is already exposed above, beside onItemEdit --
@@ -1432,6 +1450,8 @@ async function conflictChecks() {
     // the save machinery's state so a scenario can drive it. flush() reads it to refuse a second
     // PATCH while one is on the wire.
     var inFlight = {};
+    var takenP = {};
+    var FRESH = state.FRESH || { items: {}, assemblies: {} };
     var ASMS = state.ASMS, ITEMS = state.ITEMS, VENDORS = state.VENDORS;
     var setTimeout = clock.setTimeout, clearTimeout = clock.clearTimeout;
     function saving(m) { hooks.saving.push(m); }
@@ -1468,9 +1488,13 @@ async function conflictChecks() {
     ${fn("adoptSaved")}
     ${fn("adoptConflict")}
     ${fn("arm")}
+    ${fn("requeueFailed")}
     ${fn("flush")}
     ${fn("forgetItem")}
     ${fn("flushItemRow")}
+    ${fn("saveNow")}
+    ${fn("flushAllPending")}
+    ${fn("savePending")}
     ${fn("onItemRowFocusOut")}
     ${fn("patchSoon")}
     // THE REAL onItemEdit, in THIS scope, on top of the REAL patchSoon. The first scope in this
@@ -1484,6 +1508,8 @@ async function conflictChecks() {
     return { patchSoon: patchSoon, adoptConflict: adoptConflict,
              rememberItem: rememberItem, onItemEdit: onItemEdit,
              onItemRowFocusOut: onItemRowFocusOut, flushItemRow: flushItemRow,
+             saveNow: saveNow, fresh: function () { return FRESH; },
+             flushAllPending: flushAllPending, savePending: savePending,
              forgetItem: forgetItem,
              confirmOpen: function () { return itemConfirmOpen; },
              snapshotOf: function (id) { return itemBefore[id]; },
@@ -1676,6 +1702,151 @@ async function conflictChecks() {
     screenRepainted: c.hooks.renders.join(",") === "list,panel",
     toldTheUser: c.hooks.said.some((m) => /changed/i.test(String(m))),
   };
+
+  // ── EXECUTED: the Save button on a NEW material / assembly (Hanz, 2026-10-05) ────────
+  // The row exists server-side from the create POST; what the button sends is what was typed over
+  // the placeholder. Nobody should have to click off the row for it to go.
+  {
+    const ok = { status: 200, ok: true, json: async () => ({}) };
+    // New material, typed into, Save pressed: ONE PATCH, the "Save this change?" question, no wait.
+    const a = run409();
+    a.hooks.autoReply = { status: 200, ok: true, json: async () => ({ item:
+      { id: "i1", updated_at: "T2", cost_updated_at: "STAMP-1" } }) };
+    a.s.fresh().items.i1 = true;
+    a.type("i1", "unit_cost", "50");
+    const timersArmedByTyping = a.s.armed();
+    const stillNew = await a.s.saveNow("items", "i1");
+    // Nothing typed on a new row: the press only retires the button, and sends nothing.
+    const b = run409();
+    b.s.fresh().items.i2 = true;
+    const stillNewB = await b.s.saveNow("items", "i2");
+    // Cancel on the question keeps the row "new", so the button stays for another try.
+    const c2 = run409(undefined, false);
+    c2.s.fresh().items.i1 = "new";
+    c2.hooks.autoReply = ok;
+    c2.type("i1", "unit_cost", "77");
+    const stillNewC = await c2.s.saveNow("items", "i1");
+    // A new ASSEMBLY: no dialog, one PATCH carrying the version it edited, flag cleared.
+    const d2 = run409();
+    d2.hooks.autoReply = { status: 200, ok: true, json: async () => ({ assembly:
+      { id: "a1", updated_at: "T2", name: "Fresh", lines: [] } }) };
+    d2.s.fresh().assemblies.a1 = true;
+    d2.s.patchSoon("assemblies", "a1", { name: "Fresh" });
+    const stillNewD = await d2.s.saveNow("assemblies", "a1");
+    out.saveNew = {
+      itemQuestionAsked: a.hooks.asked.length === 1,
+      itemOnePatch: a.hooks.requests.length === 1 && /PATCH \/api\/library\/items\/i1/.test(a.hooks.requests[0]),
+      itemSentTheTypedCost: /50/.test(a.hooks.bodies[0] || ""),
+      itemDebounceDisarmed: timersArmedByTyping >= 0 && a.s.armed() === 0,
+      itemNoLongerNew: stillNew === false && !a.s.fresh().items.i1,
+      untouchedRowSendsNothing: b.hooks.requests.length === 0,
+      untouchedRowNoLongerNew: stillNewB === false,
+      cancelKeepsItNew: stillNewC === true && c2.hooks.requests.length === 0,
+      asmOnePatch: d2.hooks.requests.length === 1 && /PATCH \/api\/library\/assemblies\/a1/.test(d2.hooks.requests[0]),
+      asmDeclaredItsVersion: /"expected_updated_at":"T1"/.test(d2.hooks.bodies[0] || ""),
+      asmNoLongerNew: stillNewD === false && !d2.s.fresh().assemblies.a1,
+      noErrors: [a, b, c2, d2].every((x) => x.hooks.errors.length === 0),
+    };
+  }
+
+  // ── EXECUTED: Save on ANY edited row (Hanz, 2026-10-05, B3b) ────────────────────────
+  {
+    const okItem = { status: 200, ok: true, json: async () => ({ item:
+      { id: "i1", updated_at: "T2", cost_updated_at: "STAMP-1" } }) };
+    const tick = () => new Promise((r) => setTimeout(r, 0));
+    // 1. A SAVED row, edited: marked unsaved by the edit itself, one PATCH + one question on Save,
+    //    mark lifted only after the reply.
+    const a = run409();
+    const markedBefore = !a.s.fresh().items.i1;
+    a.hooks.autoReply = okItem;
+    a.type("i1", "unit_cost", "50");
+    const markedAfterTyping = !!a.s.fresh().items.i1;
+    const savedFlag = await a.s.saveNow("items", "i1");
+    // 2. Server refuses: the mark stays and saveNow says so.
+    const f = run409();
+    f.hooks.autoReply = { status: 500, ok: true === false, json: async () => ({ detail: "nope" }) };
+    f.type("i1", "unit_cost", "51");
+    const failedStill = await f.s.saveNow("items", "i1");
+    const failedMarkKept = !!f.s.fresh().items.i1;
+    // 2b. Press Save AGAIN after the failure: it must re-send (not retire the button over a value
+    //     the server never got), and once the server accepts, clear.
+    const reqsAfterFirst = f.hooks.requests.length;
+    const secondStill = await f.s.saveNow("items", "i1");
+    const secondResent =f.hooks.requests.length === reqsAfterFirst + 1 && secondStill === true &&
+      !!f.s.fresh().items.i1;
+    f.hooks.autoReply = okItem;
+    const thirdStill = await f.s.saveNow("items", "i1");
+    const thirdClears = thirdStill === false && !f.s.fresh().items.i1 &&
+      f.hooks.requests.length === reqsAfterFirst + 2;
+    // 3. THE RACE: a flush already took the payload and is parked on the dialog. Empty buffer
+    //    must NOT read as saved.
+    const r = run409(undefined, "manual");
+    r.hooks.autoReply = okItem;
+    r.type("i1", "unit_cost", "52");
+    const flushing = r.s.flushItemRow("i1");
+    await tick();
+    const bufferEmptyWhileAsking = r.s.pending() === 0 && r.hooks.dialogs.length === 1;
+    let pressDone = false;
+    const press = r.s.saveNow("items", "i1").then((v) => { pressDone = true; return v; });
+    await tick(); await tick();
+    const pressWaited = pressDone === false && !!r.s.fresh().items.i1;
+    r.hooks.dialogs[0].resolve(true);
+    await flushing;
+    const pressResult = await press;
+    // 4. Typing while a save is on the wire keeps the mark when the earlier save is confirmed.
+    const w = run409();
+    w.s.patchSoon("assemblies", "a1", { name: "A" });
+    const firing = w.fire();
+    await tick();
+    w.s.patchSoon("assemblies", "a1", { name: "AB" });
+    w.release({ status: 200, ok: true, json: async () => ({ assembly:
+      { id: "a1", updated_at: "T2", name: "A", lines: [] } }) });
+    await firing;
+    const newerEditKeepsMark = !!w.s.fresh().assemblies.a1;
+    // 5. An edited saved ASSEMBLY: Save sends one PATCH carrying its version, clears on confirm.
+    const d = run409();
+    d.hooks.autoReply = { status: 200, ok: true, json: async () => ({ assembly:
+      { id: "a1", updated_at: "T2", name: "Fresh", lines: [] } }) };
+    d.s.patchSoon("assemblies", "a1", { name: "Fresh" });
+    const asmMarked = !!d.s.fresh().assemblies.a1;
+    const asmStill = await d.s.saveNow("assemblies", "a1");
+    // 6. Leaving: flushAllPending sends what is queued; savePending is the beforeunload test.
+    const l = run409();
+    l.hooks.autoReply = { status: 200, ok: true, json: async () => ({ assembly:
+      { id: "a1", updated_at: "T2", name: "Z", lines: [] } }) };
+    l.s.patchSoon("assemblies", "a1", { name: "Z" });
+    const pendingBeforeLeave = l.s.savePending();
+    l.s.flushAllPending();
+    const pendingWhileInFlight = l.s.savePending();
+    await tick(); await tick();
+    const pendingAfter = l.s.savePending();
+    // 7. A dialog answered No on a SAVED row drops the mark; on a NEW row it stays.
+    const n = run409(undefined, false);
+    n.type("i1", "unit_cost", "77");
+    await n.s.saveNow("items", "i1");
+    const cancelledSavedRowClean = !n.s.fresh().items.i1;
+    out.saveEdited = {
+      notMarkedBeforeEdit: markedBefore,
+      markedByTheEdit: markedAfterTyping,
+      confirmedSaveClears: savedFlag === false && !a.s.fresh().items.i1,
+      onePatchOneQuestion: a.hooks.requests.length === 1 && a.hooks.asked.length === 1,
+      failedKeepsMark: failedStill === true && failedMarkKept,
+      secondPressResends: secondResent,
+      thirdPressClearsOnConfirm: thirdClears,
+      bufferEmptyWhileAsking,
+      pressWaitedForTheDialog: pressWaited,
+      pressThenConfirmed: pressResult === false && !r.s.fresh().items.i1 && r.hooks.requests.length === 1,
+      newerEditKeepsMark,
+      asmMarked,
+      asmSavedAndCleared: asmStill === false && !d.s.fresh().assemblies.a1 &&
+        d.hooks.requests.length === 1 && /"expected_updated_at":"T1"/.test(d.hooks.bodies[0] || ""),
+      leaveWarnsWhilePending: pendingBeforeLeave === true && pendingWhileInFlight === true,
+      leaveFlushSent: l.hooks.requests.length === 1,
+      leaveSettled: pendingAfter === false,
+      cancelledSavedRowClean,
+      noErrors: [a, f, r, w, d, l, n].every((x) => x.hooks.errors.length === 0),
+    };
+  }
 
   // ── EXECUTED: a second save cannot go out while the first is on the wire ────
   // THE RACE THIS PREVENTS IS AGAINST OURSELVES, not another person.
@@ -3663,13 +3834,14 @@ out.serverOwnedItemFields = build().api.SERVER_OWNED_ITEM_FIELDS;
       .every(function (r, i) {
         var id = ["joint-filler-kit", "remove-existing-jf", "dye"][i];
         return r.actions === api.defaultRowActions("items", id, r.name) &&
-               h.indexOf("<td>" + r.name + "</td><td>" + r.how + '</td><td class="rowact">' +
-                         r.actions + "</td>") !== -1;
+               h.indexOf("<td>" + r.name + "</td><td>" + r.how + '</td><td class="rowon">' +
+                         r.slider + '</td><td class="rowact">' + r.actions + "</td>") !== -1;
       }) && api.takeoffDefaultGroups()[1].rows.length === 4,
     // …AND THE SAME ROW SHAPE AS THE MATERIAL ABOVE THEM: name, a sentence escaped like any
     // other, and the actions. No rawHow -- nothing in these rows builds its own control any more.
     conditionsAreTheMaterialRowShape: api.takeoffDefaultGroups()[1].rows.every(function (r) {
-      return Object.keys(r).sort().join(",") === "actions,how,name";
+      // `slider` is the Defaults tab's starting-state slider, the one column every row now has.
+      return Object.keys(r).sort().join(",") === "actions,how,name,slider";
     }),
     // AN Edit ON EVERY ONE, which there was not while they had their own row code: it opens the
     // row on the Items tab, where all three are reserved library rows now (focusItemRow is
@@ -3808,6 +3980,54 @@ async function laborChecks() {
     ADMIN: true,
   }, extra || {});
   const rowsOf = (h) => h.split("</tr>").filter((r) => /<tr/.test(r));
+// ── INLINE SEARCH: each "+ Add a ... default" opens the box above ITS OWN table ─────────────
+// Hanz, 2026-10-05. A tiny tree stands in for the DOM: two sections, each with a .tw table whose
+// parent is the card, and ONE #default-search that insertBefore() moves between the cards.
+{
+  const { api, dom: d } = build(seed({ LABOR: [{ id: "L9", name: "Rigging", rate: 40,
+    unit: "hours", guys_auto: false, favorite: false }] }));
+  const mkCard = (name) => {
+    const card = { name, kids: [], addBtn: { focus() { d.focused.push(name + "-add"); } },
+      querySelector(sel) { return sel === "[data-add-default]" ? this.addBtn : null; },
+      insertBefore(n) { if (n.parentNode) n.parentNode.kids = n.parentNode.kids.filter((k) => k !== n);
+        n.parentNode = this; this.kids.push(n); } };
+    const tw = { parentNode: card };
+    d.nodes["default-" + name] = { querySelector: (sel) => (sel === ".tw" ? tw : null) };
+    return card;
+  };
+  const takeoff = mkCard("takeoff"), labor = mkCard("labor");
+  const wrap = d.el("default-search");
+  wrap.parentNode = takeoff; wrap.hidden = true;
+  const q = d.el("default-q");
+  const where = () => (wrap.parentNode === takeoff ? "takeoff" : wrap.parentNode === labor ? "labor" : "?");
+  const res = {};
+  api.openDefaultAdd("labor");
+  res.laborOpensAboveLabor = where() === "labor" && wrap.hidden === false;
+  res.focusInBox = d.focused[d.focused.length - 1] === "default-q";
+  res.laborResultsRendered = /Rigging/.test(d.nodes["default-hits"].innerHTML);
+  api.openDefaultAdd("takeoff");
+  res.onlyOneOpenAndItMoved = where() === "takeoff" && wrap.hidden === false &&
+    takeoff.kids.length === 1 && labor.kids.length === 0;
+  api.setDefaultQuery("zzz"); q.value = "zzz";
+  api.openDefaultAdd("labor");
+  res.movingToAnotherSectionClearsTheQuery = q.value === "" && where() === "labor";
+  // ESCAPE closes it, forgets the query and hands focus back to the opener
+  q.value = "abc"; api.setDefaultQuery("abc");
+  let stopped = false;
+  const handled = api.onDefaultSearchKey({ key: "Escape", stopPropagation() { stopped = true; } });
+  res.escapeCloses = handled === true && stopped && wrap.hidden === true && q.value === "" &&
+    d.nodes["default-hits"].hidden === true && d.focused[d.focused.length - 1] === "labor-add";
+  res.otherKeysIgnored = api.onDefaultSearchKey({ key: "a" }) === false;
+  // CANCEL is the same close
+  api.openDefaultAdd("takeoff");
+  api.closeDefaultSearch();
+  res.cancelCloses = wrap.hidden === true && d.nodes["default-hits"].hidden === true;
+  // THE PAGE WIRES BOTH, as source (a listener body cannot be run from here)
+  res.listenersWired = /closest\("\[data-def-search-close\]"\)\) \{ closeDefaultSearch\(\); return; \}/.test(src) &&
+    /addEventListener\("keydown", onDefaultSearchKey\)/.test(src);
+  out.defaultsInlineSearch = res;
+}
+
 
   // THE LIST: Travel built in, the favorited lines beside it, each with the controls it should
   // have. Edit now sends an admin to the Labor tab (data-def-edit="labor"), the same attribute
@@ -4571,7 +4791,14 @@ out.page = {
       search: /id="default-q"/.test(pane),
       searchIsForAdding:
         /placeholder="Search materials, assemblies and labor lines to add"/.test(pane),
-      searchAboveTheLists: pane.indexOf('id="default-q"') < pane.indexOf('class="admin-grid"'),
+      // THE BOX STARTS IN THE TAKEOFF CARD, ABOVE ITS TABLE, and is hidden until a button opens
+      // it (Hanz, 2026-10-05: not up by the work-type tabs). It used to sit above the admin-grid.
+      searchAboveTheLists: pane.indexOf('id="default-q"') > pane.indexOf('class="admin-grid"') &&
+        pane.indexOf('id="default-q"') < pane.indexOf('id="default-takeoff-body"') &&
+        /<div id="default-search" hidden>/.test(pane) &&
+        pane.indexOf('id="default-q"') > pane.indexOf('data-add-default="takeoff"') &&
+        pane.indexOf('id="default-q"') < pane.indexOf('data-add-default="labor"') &&
+        /data-def-search-close/.test(pane),
       // THE RESULTS BOX LIVES WITH THE ROWS, not with the input. It shipped as a
       // <span class="hits"> inside .itemsearch -- a flex ROW -- so the list of things you were
       // about to add rendered beside the search box, clear of the table it was adding to.
@@ -5012,6 +5239,106 @@ async function conditionChecks() {
   };
 }
 
+// ── The Save button is drawn only for a row created on this page and not yet saved ──
+{
+  const { api, dom: d } = build({ FRESH: { items: { i2: true }, assemblies: { a2: true } } });
+  api.renderItems();
+  const html = d.nodes["items-body"].innerHTML;
+  const rows = html.split("</tr>");
+  const rowOf = (id) => rows.find((r) => r.indexOf('data-item="' + id + '"') !== -1) || "";
+  const had = (r) => /data-save-new="items"/.test(r);
+  out.saveButton = {
+    onTheNewRow: had(rowOf("i2")) && /data-save-id="i2"/.test(rowOf("i2")),
+    notOnASavedRow: !had(rowOf("i1")),
+    exactlyOne: (html.match(/data-save-new="items"/g) || []).length === 1,
+  };
+  const fresh = build({ FRESH: { items: {}, assemblies: { a1: true } }, openId: "a1" });
+  fresh.api.renderPanel();
+  const saved = build({ FRESH: { items: {}, assemblies: {} }, openId: "a1" });
+  saved.api.renderPanel();
+  out.saveButton.asmShownWhenNew = fresh.dom.nodes["asm-save"].hidden === false;
+  out.saveButton.asmHiddenWhenSaved = saved.dom.nodes["asm-save"].hidden === true;
+}
+
+// â”€â”€ the Defaults tab's starting-state SLIDER, EXECUTED â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// A slider that is only markup is the dead-control failure this page has shipped before: so each
+// press below goes through the page's own setDefaultOn, and what it wrote is read back.
+async function sliderChecks() {
+  const B = require(path.join(ROOT, "js", "polish-bid-core.js"));
+  const seed = (extra) => Object.assign({
+    window: { TWPolishBid: B },
+    ITEMS: [{ id: "i1", name: "Densifier", unit: "Pail", unit_cost: 100, favorite: true }],
+    ASMS: [{ id: "a1", name: "Polish 800", unit: "SF", favorite: true, lines: [] },
+           { id: "a2", name: "Cove", unit: "LF", favorite: true, default_on: false, lines: [] }],
+    LABOR: [{ id: "travel", name: "Travel", rate: 33, unit: "hours", guys_auto: true,
+              favorite: true, default_on: true },
+            { id: "l1", name: "Grinding", rate: 40, unit: "days", favorite: true,
+              default_on: false }],
+    COND_DEFAULTS: [{ key: "dye", on: false, listed: true }],
+    ADMIN: true,
+  }, extra || {});
+  const sw = (html, kind, id) => {
+    const m = new RegExp('<span class="mw-sw( on)?" data-def-on="' + kind + '" data-def-on-id="' +
+      id + '" role="switch" tabindex="0" aria-checked="(true|false)"').exec(html);
+    return m ? m[2] : null;
+  };
+  const takeoff = (b) => { b.api.renderDefaultTakeoff(); return b.dom.nodes["default-takeoff-body"].innerHTML; };
+  const labor = (b) => { b.api.renderDefaultLabor(); return b.dom.nodes["default-labor-body"].innerHTML; };
+
+  // 1. WHAT IS DRAWN: absent default_on reads ON, an explicit false reads OFF, on all three kinds.
+  const a = build(seed({}));
+  const html0 = takeoff(a), lab0 = labor(a);
+  const drawn = {
+    asmAbsentIsOn: sw(html0, "assemblies", "a1"), asmFalseIsOff: sw(html0, "assemblies", "a2"),
+    itemAbsentIsOn: sw(html0, "items", "i1"),
+    travelOn: sw(lab0, "labor", "travel"), laborOff: sw(lab0, "labor", "l1"),
+    // The three condition materials carry one too, answering with the stored starting answer.
+    dyeOff: sw(html0, "items", "dye"),
+  };
+
+  // 2. THE PRESS WRITES default_on -- and not `favorite`.
+  const p = build(seed({}));
+  await p.api.setDefaultOn("assemblies", "a1", false);
+  const afterAsm = sw(takeoff(p), "assemblies", "a1");
+  const asmCalls = JSON.stringify(p.api.LABOR_CALLS);
+  await p.api.setDefaultOn("labor", "l1", true);
+  const afterLabor = sw(labor(p), "labor", "l1");
+
+  // 3. A REFUSED SAVE PUTS IT BACK.
+  const f = build(seed({ LABOR_FAIL: { patchDefaultOn: true } }));
+  await f.api.setDefaultOn("assemblies", "a1", false);
+  const afterRefused = sw(takeoff(f), "assemblies", "a1");
+
+  // 4. A CONDITION MATERIAL'S SLIDER IS THE CONDITION DEFAULT: one write, `on` only.
+  const c = build(seed({}));
+  await c.api.setDefaultOn("items", "dye", true);
+  const condCalls = JSON.stringify(c.api.COND_CALLS);
+  const dyeAfter = sw(takeoff(c), "items", "dye");
+  const noItemWrite = !c.api.LABOR_CALLS.some((x) => x.op === "PATCH_DEFAULT_ON");
+  const cf = build(seed({ COND_FAIL: true }));
+  await cf.api.setDefaultOn("items", "dye", true);
+  const dyeRefused = sw(takeoff(cf), "items", "dye");
+
+  // 5. A NON-ADMIN READS THE STATE AS WORDS, never a switch that would 403.
+  const v = build(seed({ ADMIN: false }));
+  const vHtml = takeoff(v), vLab = labor(v);
+  const viewer = {
+    // Labor (a PATCH the server refuses a non-admin) and the condition materials (a PUT it
+    // refuses) show words; items and assemblies stay switches, exactly like their Remove button.
+    noLaborSwitches: !/data-def-on=/.test(vLab),
+    noConditionSwitch: sw(vHtml, "items", "dye") === null,
+    laborSaysOff: /<td class="rowon"><span class="wtall">Off<\/span>/.test(vLab),
+    dyeSaysOff: /<td class="rowon"><span class="wtall">Off<\/span>/.test(vHtml),
+    asmStillSwitch: sw(vHtml, "assemblies", "a1") === "true",
+  };
+
+  out.defaultSlider = {
+    drawn: drawn, afterAsm: afterAsm, asmCalls: asmCalls, afterLabor: afterLabor,
+    afterRefused: afterRefused, condCalls: condCalls, dyeAfter: dyeAfter,
+    noItemWrite: noItemWrite, dyeRefused: dyeRefused, viewer: viewer,
+  };
+}
+
 // A WATCHDOG, because the alternative failure mode is silence. These scenarios await dialogs and
 // held requests, so a change that opens one more dialog than a test answers leaves a flush waiting
 // forever: node's loop empties, the process exits 0, and nothing is printed — which the fixture
@@ -5025,6 +5352,6 @@ const watchdog = setTimeout(() => {
 }, 30000);
 
 Promise.all([conflictChecks(), dialogChecks(), laborChecks(), laborTabChecks(),
-             conditionChecks()]).then(
+             conditionChecks(), sliderChecks()]).then(
   () => { clearTimeout(watchdog); console.log(JSON.stringify(out)); },
   (err) => { clearTimeout(watchdog); console.error(err); process.exit(1); });
