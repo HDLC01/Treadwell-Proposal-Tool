@@ -99,7 +99,9 @@
     for (var k in src) {
       if (!Object.prototype.hasOwnProperty.call(src, k)) continue;
       if (k === "__proto__" || k === "constructor" || k === "prototype") continue;
-      dst[k] = src[k];
+      // defineProperty, not `dst[k] =`: it always makes a plain own data property, so even a key the
+      // guard above missed could never reach a setter or a prototype (and CodeQL reads it as safe).
+      Object.defineProperty(dst, k, { value: src[k], writable: true, enumerable: true, configurable: true });
     }
     return dst;
   }
