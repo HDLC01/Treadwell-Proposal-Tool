@@ -2083,8 +2083,22 @@
         }
         return;
       }
-      if (M.takeoff[i]) M.takeoff[i][k] = el.value;
+      if (M.takeoff[i]) {
+        if (k === "measurement") B.setMeasurement(M.takeoff, i, el.value);
+        else M.takeoff[i][k] = el.value;
+      }
       changed(false);
+      // A carrier edit moves the same-floor rows' numbers too: write them into their boxes in
+      // place (a rebuild would take the caret out of the box being typed in).
+      if (k === "measurement") {
+        M.takeoff.forEach(function (row, n) {
+          if (n === i) return;
+          var box = document.querySelector('[data-tk="' + n + '"][data-k="measurement"]');
+          if (box && row && String(box.value) !== String(row.measurement == null ? "" : row.measurement)) {
+            box.value = row.measurement;
+          }
+        });
+      }
       return;
     }
 
@@ -2332,7 +2346,10 @@
       // defaults above: nothing ever saved. seedDefaultTakeoff owns how they combine with intake's
       // SF boxes (one area-carrying row, the rest marked same_floor); it falls through to
       // seedTakeoffSf when the library has no defaults, and a saved bid takes seedTakeoffSf alone.
-      M.takeoff = B.conditionsUnstated(state.polish_estimate)
+      // "New" is the saved blob stating nothing, OR nothing but what the beta intake minted: intake
+      // saves a model (conditions, a blank takeoff row) but deletes `labor`, which only this page
+      // ever states, so laborUnstated is the signal that the calculator has never saved here.
+      M.takeoff = (B.conditionsUnstated(state.polish_estimate) || B.laborUnstated(state.polish_estimate))
         ? B.seedDefaultTakeoff(M.takeoff, ASMS, ITEMS, RESERVED_ITEM_IDS,
                                state.polish_sf, state.polish_2_sf)
         : B.seedTakeoffSf(M.takeoff, state.polish_sf, state.polish_2_sf);

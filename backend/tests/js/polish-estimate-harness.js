@@ -1834,12 +1834,32 @@ const rendered = [];      // every string the page put on screen, for the Labour
     out.defaultsLoad.allOffArea = B.takeoffSf(offLoad.api.model().takeoff);
     // A SAVED bid is never touched, whatever the library holds now.
     const savedBlob = { version: 2, takeoff: [{ assembly_id: "", assembly_name: "",
-      measurement: "", unit: "SF" }], labor: [], conditions: { local: true }, contingency: 0,
+      measurement: "", unit: "SF" }], labor: [{ id: "polishing", label: "Polishing", guys: 3, days: 2,
+      rate: 40 }], conditions: { local: true }, contingency: 0,
       fees: 0, totals: {} };
     const savedLoad = build({ asms: dAsms, items: dItems,
       blob: blob({ polish_estimate: savedBlob, polish_sf: 700 }) });
     await savedLoad.api.init();
     out.defaultsLoad.saved = shape(savedLoad.api.model());
+    // THE REAL NEW-BID SHAPE: a bid that came through the beta intake. Intake saves migrateModel
+    // output (conditions, one blank takeoff row) with `labor` deleted, so conditionsUnstated is
+    // FALSE here and the defaults must still load. (Reviewer repro; the cases above all start from null.)
+    const minted = B.migrateModel({});
+    minted.conditions = Object.assign({}, minted.conditions, { local: true });
+    delete minted.labor;
+    const mintedLoad = build({ asms: dAsms, items: dItems,
+      blob: blob({ polish_estimate: minted, polish_sf: 8000, polish_2_sf: 2000 }) });
+    await mintedLoad.api.init();
+    out.defaultsLoad.minted = shape(mintedLoad.api.model());
+    out.defaultsLoad.mintedGateWasFalse = B.conditionsUnstated(minted);
+    // Typing a number into a same_floor row ends the sharing; moving the carrier moves the rest.
+    const mm = mintedLoad.api.model();
+    typeInto(mintedLoad, '[data-tk="2"][data-k="measurement"]', "2000");
+    out.defaultsLoad.ownTyped = { rows: shape(mintedLoad.api.model()),
+      area: B.takeoffSf(mintedLoad.api.model().takeoff) };
+    typeInto(mintedLoad, '[data-tk="0"][data-k="measurement"]', "6000");
+    out.defaultsLoad.carrierMoved = { rows: shape(mintedLoad.api.model()),
+      area: B.takeoffSf(mintedLoad.api.model().takeoff) };
     // No defaults in the library: exactly the System 1 / System 2 seeding, unchanged.
     const none = B.seedDefaultTakeoff([{ kind: "new", pick_name: "", measurement: "", unit: "SF" }],
       clone(ASMS), clone(ITEMS), ["dye"], 8250, 3100);

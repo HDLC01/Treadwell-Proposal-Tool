@@ -394,6 +394,25 @@
     return out;
   }
 
+  /** Type `value` into row `i`'s measurement, keeping the same-floor rows honest.
+   *  - A `same_floor` row the estimator types its OWN number into stops sharing: the marker is
+   *    cleared, so takeoffSf counts what it was told rather than ignoring it for good.
+   *  - The carrier (an enabled SF row that is not same_floor) moving drags every same_floor row
+   *    still holding its old number along, so the rows the default load made as one floor keep
+   *    pricing one floor. A same_floor row already set to something else is left alone. */
+  function setMeasurement(rows, i, value) {
+    var r = rows && rows[i];
+    if (!r) return;
+    var old = r.measurement;
+    r.measurement = value;
+    if (r.same_floor) { delete r.same_floor; return; }
+    if (r.unit !== "SF" || !rowOn(r)) return;
+    for (var k = 0; k < rows.length; k++) {
+      var o = rows[k];
+      if (k !== i && o && o.same_floor && num(o.measurement) === num(old)) o.measurement = value;
+    }
+  }
+
   function takeoffSf(rows) {
     rows = rows || [];
     var t = 0;
@@ -1435,6 +1454,7 @@
     // thing standing between a Defaults-tab edit and somebody's saved work.
     seedConditionDefaults: seedConditionDefaults,
     conditionsUnstated: conditionsUnstated,
+    setMeasurement: setMeasurement,
     seedConditionsShown: seedConditionsShown, conditionShown: conditionShown,
     laborCost: laborCost, laborTotal: laborTotal, travelManDays: travelManDays,
     rowOn: rowOn, sliderHtml: sliderHtml,

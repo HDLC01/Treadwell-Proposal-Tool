@@ -1843,6 +1843,36 @@ def test_defaults_never_load_into_a_saved_bid_and_no_defaults_means_the_old_seed
     assert [(r[1], r[2]) for r in d["none"]] == [(8250, "SF"), (3100, "SF")], d["none"]
 
 
+@needs_node
+def test_defaults_load_into_a_bid_minted_by_the_beta_intake(ran):
+    """Reviewer find: the intake saves a model with conditions, so conditionsUnstated is false for
+    every beta bid and the defaults never loaded. The gate now also accepts "labor never stated".
+
+    Mutation: gate on conditionsUnstated alone and `minted` is the single blank/700 row."""
+    d = ran["defaultsLoad"]
+    assert d["mintedGateWasFalse"] is False
+    keys = [(r["a"] or r["i"], r["m"], r["sf"]) for r in d["minted"]]
+    assert keys == [("a1", 10000, False), ("a2", "", False), ("i1", 10000, True),
+                    ("i4", 10000, True)], keys
+
+
+@needs_node
+def test_same_floor_rows_follow_the_carrier_and_stop_sharing_when_typed_over(ran):
+    """Typing into a same_floor row counts its own number; changing the carrier drags the rows
+    still sharing its number along.
+
+    Mutation: use a plain `measurement = value` in the input handler and ownTyped area stays 10,000."""
+    d = ran["defaultsLoad"]
+    own = d["ownTyped"]
+    assert [(r["a"] or r["i"], r["m"], r["sf"]) for r in own["rows"]][2:] == [
+        ("i1", "2000", False), ("i4", 10000, True)], own
+    assert own["area"] == 12000, own
+    moved = d["carrierMoved"]
+    assert [(r["a"] or r["i"], r["m"], r["sf"]) for r in moved["rows"]][2:] == [
+        ("i1", "2000", False), ("i4", "6000", True)], moved
+    assert moved["area"] == 8000, moved
+
+
 # ── H. boot ──────────────────────────────────────────────────────────────────
 @needs_node
 def test_nothing_is_revealed_before_the_sandbox_settles(ran):
