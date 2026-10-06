@@ -521,6 +521,14 @@ function typeInto(built, sel, value) {
   built.doc.fire("input", { target: el });
   return el;
 }
+/** The commit of a typed box (blur or Enter): the value is set, then "change" fires. The clearing
+ *  rule lives on this event, not on "input", so a test that only calls typeInto never reaches it. */
+function changeTo(built, sel, value) {
+  const el = need(built, sel);
+  el.value = String(value);
+  built.doc.fire("change", { target: el });
+  return el;
+}
 function clickOn(built, sel) {
   return clickEl(built, need(built, sel));
 }
@@ -855,41 +863,47 @@ const rendered = [];      // every string the page put on screen, for the Labour
         return slice.indexOf("data-lab-manual=") === -1 &&
           slice.indexOf("data-lab-auto=") === -1;
       }),
-      // The toggle lives in the header (before the fields grid starts), on Travel's own card
-      // (card index 2, the auto-appended row) -- not the old inline hint link.
-      toggleInHeader: /class="mw-sw labsw" role="switch"[^>]*data-lab-manual="2"/.test(
-        (panels.innerHTML.split('class="tk lab')[3] || "").split('class="tk-g')[0]),
+      // THE "TYPE MY OWN" SWITCH IS GONE (Hanz, 2026-10-07), from every card on the step, Travel's
+      // included. The "Included" slider on the same header is a different control and stays.
+      noTypeMyOwn: {
+        words: panels.innerHTML.indexOf("Type my own") === -1,
+        labManual: panels.innerHTML.indexOf("data-lab-manual") === -1,
+        labAuto: panels.innerHTML.indexOf("data-lab-auto") === -1,
+        trvManual: panels.innerHTML.indexOf("data-trv-manual") === -1,
+        trvAuto: panels.innerHTML.indexOf("data-trv-auto") === -1,
+        noLabsw: panels.innerHTML.indexOf("labsw") === -1,
+        includedOnTravelCard: /data-on-lab="2"/.test(
+          (panels.innerHTML.split('class="tk lab')[3] || "").split('class="tk-g')[0]),
+      },
       linkishGone: panels.innerHTML.indexOf("linkish") === -1,
-      // A SWITCH REPORTS ITS STATE, which is the whole reason this stopped being a button
-      // whose words flipped. Off while the figure is derived, on once it is typed --
-      // and the label stays the same sentence in both, so it describes what IS rather
-      // than what clicking would do.
-      // BOTH POSITIONS, because the fixture only ever renders one. Travel boots in AUTO, so
-      // a check that reads the page as-built inspects a single branch of the ternary --
-      // flipping the OTHER branch back to "Back to auto" then changes nothing any
-      // assertion can see. The manual state has to be entered before it can be asserted.
-      toggleSaysItsState: await (async () => {
+      // THE HINT SAYS WHICH MODE THE BOX IS IN, in both positions (the fixture boots in auto, so
+      // the typed wording has to be entered before it can be read), and the Included slider
+      // still toggles a labor row without touching the Guys mode.
+      hintsAndIncluded: await (async () => {
         const k = build();
         await k.api.init();
         k.api.go(1);
         const kp = k.dom.get("panels");
         const ti = k.api.model().labor.findIndex((r) => r.id === "travel");
-        const headOf = () => (kp.innerHTML.split('class="tk lab')[ti + 1] || "")
-          .split('class="tk-g')[0];
-        const offHead = headOf();                 // derived: switch off
-        clickOn(k, '[data-lab-manual="' + ti + '"]');
-        const onHead = headOf();                  // typed: switch on
-        const read = (h, want) => ({
-          checked: h.indexOf('aria-checked="' + want + '"') !== -1,
-          labelOnce: (h.match(/Type my own/g) || []).length,
-          backToAutoGone: h.indexOf("Back to auto") === -1,
-          hasTrack: h.indexOf('<span class="track">') !== -1,
-        });
-        return { off: read(offHead, "false"), on: read(onHead, "true") };
+        const hintOf = () => {
+          const card = kp.innerHTML.split('class="tk lab')[ti + 1] || "";
+          const g = card.split('data-k="guys"')[1] || "";
+          // The Guys hint is keyed (data-hint-lab) so the in-place repaint can find it; read THAT one,
+          // not the first plain hint after the box (which is the Hours line's).
+          return (/<p class="hint" data-hint-lab="[^"]*">([^<]*)<\/p>/.exec(g) || ["", ""])[1];
+        };
+        const autoHint = hintOf();
+        typeInto(k, '[data-lab="' + ti + '"][data-k="guys"]', "7");
+        const typedHint = hintOf();
+        const onBefore = k.api.model().labor[ti].enabled !== false;
+        clickOn(k, '[data-on-lab="' + ti + '"]');
+        const offRow = k.api.model().labor[ti];
+        const afterOff = { enabled: offRow.enabled, guys_auto: offRow.guys_auto, guys: offRow.guys };
+        clickOn(k, '[data-on-lab="' + ti + '"]');
+        const onAgain = k.api.model().labor[ti].enabled !== false;
+        return { autoHint: autoHint, typedHint: typedHint, onBefore: onBefore,
+                 afterOff: afterOff, onAgain: onAgain };
       })(),
-      // Still a <button>: the `.mw-sw` conditions are spans with no keydown handler, so
-      // matching them visually must not cost this control its keyboard.
-      toggleIsAButton: /<button[^>]*class="mw-sw labsw"/.test(panels.innerHTML),
     };
 
     // ── the derived Guys figure, and the two ways across the auto/manual line ──
@@ -910,16 +924,41 @@ const rendered = [];      // every string the page put on screen, for the Labour
       // ...and it now IGNORES the crew, which is the whole point of having left auto.
       typeInto(c, '[data-lab="0"][data-k="days"]', "9");
       const stickyAfterCrewMoves = travelRow().guys;
-      // The way back.
-      clickOn(c, '[data-lab-auto="' + travelIdx() + '"]');
+      // The way back is CLEARING THE BOX. First the two halves of "not while typing": an empty
+      // box on INPUT (the backspace in "1", backspace, "2") leaves the row typed, and only the
+      // change (blur / Enter) hands it back. Whitespace counts as empty.
+      typeInto(c, '[data-lab="' + travelIdx() + '"][data-k="days"]', "10");   // hours on the road
+      const costTyped = txt(c, '[data-lcost-for="' + travelIdx() + '"]');
+      typeInto(c, '[data-lab="' + travelIdx() + '"][data-k="guys"]', "");
+      const midBackspace = { guys: travelRow().guys, auto: travelRow().guys_auto };
+      typeInto(c, '[data-lab="' + travelIdx() + '"][data-k="guys"]', "2");
+      const afterRetype = { guys: travelRow().guys, auto: travelRow().guys_auto };
+      const writesBefore = cp.htmlWrites;
+      changeTo(c, '[data-lab="' + travelIdx() + '"][data-k="guys"]', "   ");
+      const clearRebuilds = cp.htmlWrites - writesBefore;
       const afterBackToAuto = { guys: travelRow().guys, auto: travelRow().guys_auto };
+      const clearedBox = String(need(c, '[data-lab="' + travelIdx() + '"][data-k="guys"]').value);
+      const clearedHint = need(c, '[data-hint-lab="' + travelIdx() + '"]').textContent
+        === "Man-days from the tasks above.";
+      const costAuto = txt(c, '[data-lcost-for="' + travelIdx() + '"]');
+      // And the cost is the one the same man-days price on a never-touched row.
+      const fresh = build();
+      await fresh.api.init();
+      fresh.api.go(1);
+      typeInto(fresh, '[data-lab="0"][data-k="days"]', "9");
+      const freshIdx = fresh.api.model().labor.findIndex((r) => r.id === "travel");
+      typeInto(fresh, '[data-lab="' + freshIdx + '"][data-k="days"]', "10");
+      const costFresh = txt(fresh, '[data-lcost-for="' + freshIdx + '"]');
+      // Typing "2" over the man-days priced differently from the man-days.
+      out.travelClear = { costTyped: costTyped, midBackspace: midBackspace,
+        afterRetype: afterRetype, costAuto: costAuto, costFresh: costFresh,
+        clearedBox: clearedBox, clearedHint: clearedHint, clearRebuilds: clearRebuilds };
       out.travelGuys = {
         seeded: before, afterCrewEdit: afterCrewEdit,
         afterTyping: afterTyping, stickyAfterCrewMoves: stickyAfterCrewMoves,
         afterBackToAuto: afterBackToAuto,
         // The box shows the derived figure rather than sitting empty next to a priced row.
         boxShowsIt: String(need(c, '[data-lab="' + travelIdx() + '"][data-k="guys"]').value),
-        manualLinkOffered: cp.innerHTML.indexOf("data-lab-manual=") !== -1,
       };
     }
 
@@ -1053,6 +1092,32 @@ const rendered = [];      // every string the page put on screen, for the Labour
       away.api.go(1);
       out.travelLocal.undimmedWhenAway =
         !/class="tk lab inert"/.test(away.dom.get("panels").innerHTML);
+    }
+
+    // A SAVED bid with guys_auto false still opens as typed (hint says so), prices off the typed
+    // number, and is not touched by merely opening and leaving the box alone.
+    {
+      const sv = build({ blob: blob({ polish_estimate: {
+        version: 2,
+        takeoff: [{ assembly_id: "a1", assembly_name: "x", measurement: 100, unit: "SF" }],
+        labor: [{ id: "travel", label: "Travel", guys: 6, days: 2, rate: 33,
+                  unit: "hours", guys_auto: false }],
+        conditions: { local: false }, contingency: 0
+      } }) });
+      await sv.api.init();
+      sv.api.go(1);
+      const svH = sv.dom.get("panels").innerHTML;
+      out.savedTypedRow = {
+        typedHint: svH.indexOf("Typed by you. Clear it to use the man-days from the tasks above.") !== -1,
+        guys: sv.api.model().labor[0].guys, auto: sv.api.model().labor[0].guys_auto,
+        box: String(need(sv, '[data-lab="0"][data-k="guys"]').value),
+        cost: txt(sv, '[data-lcost-for="0"]'),
+        // 6 guys x 2 hours x $33
+        expected: 6 * 2 * 33,
+      };
+      // A change event carrying the SAME number is not a clear.
+      changeTo(sv, '[data-lab="0"][data-k="guys"]', "6");
+      out.savedTypedRow.afterSameChange = sv.api.model().labor[0].guys_auto;
     }
 
     // Add a line: it appears, it is editable, and it prices from ITS OWN values. Travel is
@@ -3200,9 +3265,26 @@ const rendered = [];      // every string the page put on screen, for the Labour
     const typedLodging = clone(old.api.model().travel.lodging);
     const typedBid = old.api.bid();
     const typedCostCell = txt(old, '[data-trvcost-for="lodging"]');
-    // And back to auto through the switch.
-    clickOn(old, '[data-trv-auto="lodging"]');
+    // And back to auto by CLEARING the box (the "Type my own" switch is gone). An empty box on
+    // input stays typed; the change commits it.
+    typeInto(old, '[data-trv="lodging"][data-k="qty"]', "");
+    const midClearLodging = clone(old.api.model().travel.lodging);
+    const lodgeWrites = old.dom.get("panels").htmlWrites;
+    changeTo(old, '[data-trv="lodging"][data-k="qty"]', "");
+    const lodgeClearRebuilds = old.dom.get("panels").htmlWrites - lodgeWrites;
     const backToAuto = clone(old.api.model().travel.lodging);
+    const clearedLodgingBox = need(old, '[data-trv="lodging"][data-k="qty"]').value;
+    const clearedLodgingCost = txt(old, '[data-trvcost-for="lodging"]');
+    const lodgingHtml = old.dom.get("panels").innerHTML;
+    const lodgingHints = {
+      auto: need(old, '[data-hint-trv="lodging"]').textContent === "Man-days from the tasks above.",
+      noTypeMyOwn: lodgingHtml.indexOf("Type my own") === -1 &&
+        lodgingHtml.indexOf("data-trv-manual") === -1 && lodgingHtml.indexOf("data-trv-auto") === -1,
+    };
+    typeInto(old, '[data-trv="lodging"][data-k="qty"]', "10");
+    const typedHintLodging = old.dom.get("panels").innerHTML
+      .indexOf("Typed by you. Clear it to use the man-days from the tasks above.") !== -1;
+    changeTo(old, '[data-trv="lodging"][data-k="qty"]', "");
 
     // Per Diem ON as well, rate typed over.
     clickOn(old, '[data-on-trv="per_diem"]');
@@ -3296,7 +3378,9 @@ const rendered = [];      // every string the page put on screen, for the Labour
       oldRate: lodgingModel.rate, lodgingModel: lodgingModel,
       costCellOn: costCellOn, qtyAuto: qtyAuto,
       typedLodging: typedLodging, typedTravel: typedBid.travel, typedCostCell: typedCostCell,
-      backToAuto: backToAuto,
+      backToAuto: backToAuto, midClearLodging: midClearLodging,
+      clearedLodgingBox: clearedLodgingBox, lodgeClearRebuilds: lodgeClearRebuilds, clearedLodgingCost: clearedLodgingCost,
+      lodgingHints: lodgingHints, typedHintLodging: typedHintLodging,
       bothOnTravel: bothOn.travel, perDiemOffTravel: perDiemOff.travel,
       perDiemOffTotal: perDiemOff.total, lodgingOnlyTotal: null,
       // review

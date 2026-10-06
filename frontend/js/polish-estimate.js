@@ -1339,46 +1339,17 @@
     // and a row that vanished would take an estimator's typed hours with it. Untouched only --
     // see laborInert -- so typing in either box beside it un-dims the card live.
     var inert = laborInert(r);
-    // The way in and out of the derived Guys figure, gated on `hours` -- a crew row must never
-    // get this button, because clicking it would run the same handler as Travel's and overwrite
-    // that row's own Guys with the man-day sum. A bare <button>, no wrapper, so its own click
-    // target is what data-lab-manual/-auto sits on.
-    //
-    // A SWITCH, NOT A BUTTON WHOSE WORDS FLIP. The old control read "Type my own", and
-    // once pressed, "Back to auto" -- the label named the ACTION, so it described the
-    // state you were leaving rather than the one you were in. A switch labels the STATE
-    // and shows it: on means this row's Guys is typed, off means it is derived. One set of
-    // words, always true, and it matches the switches the Review step already uses.
-    //
-    // STILL A <button>, deliberately. The `.mw-sw` conditions are <span role="switch">
-    // with tabindex and no keydown handler, so Space and Enter do nothing on them. This
-    // control is a real button today and reaching it by keyboard works; rendering it as a
-    // span to match would quietly take that away. A <button role="switch"> looks the same
-    // and keeps Space/Enter for free.
-    //
-    // The two data attributes are UNCHANGED and still point at the two existing handlers,
-    // which are not symmetric: going manual also seeds the box with the derived figure and
-    // moves the caret into it, while going auto only sets the flag. Only the markup moved.
-    var toggle = !hours ? "" : (auto
-    //
-    // NO aria-label. The visible words ARE the accessible name, and that is the point: an
-    // aria-label here would override them, and the old pair ("Type my own Guys figure" /
-    // "Back to the automatic Guys figure") flipped with the state. Keeping them would have
-    // left a screen-reader user hearing the next ACTION while the screen showed the state,
-    // which is the exact confusion this change removes for everybody else. role="switch"
-    // plus aria-checked already announces on/off.
-      ? '<button type="button" class="mw-sw labsw" role="switch" aria-checked="false"'
-        + ' data-lab-manual="' + i + '">'
-        + '<span class="track"></span>Type my own</button>'
-      : '<button type="button" class="mw-sw labsw on" role="switch" aria-checked="true"'
-        + ' data-lab-auto="' + i + '">'
-        + '<span class="track"></span>Type my own</button>');
+    // NO "TYPE MY OWN" SWITCH (Hanz, 2026-10-07). The Guys box is editable, so a control to ask
+    // for permission to type was a second way to do what the box already does. Typing a number
+    // makes it the estimator's own (guys_auto false); CLEARING the box hands the figure back to
+    // the man-days (the change handler below). The "Included" slider is a different thing and
+    // stays.
     var on = B.rowOn(r);
     return '<div class="tk lab' + ((inert || !on) ? " inert" : "") + (on ? "" : " off") +
       '" data-lab-card="' + i +
       '"><div class="tk-h">' +
       '<input class="labname" data-lab="' + i + '" data-k="label" value="' + esc(nv(r.label)) +
-      '" placeholder="Task" aria-label="Task name">' + toggle +
+      '" placeholder="Task" aria-label="Task name">' +
       B.sliderHtml(on, 'data-on-lab="' + i + '"', "Included", "Off keeps this line here, grayed, " +
         "and adds nothing to the price") +
       '<span class="tk-sub calc" data-lcost-for="' + i + '">' +
@@ -1394,8 +1365,8 @@
       dfltWarnHtml('data-calcwarn="' + i + ':guys"', calcDefaultText(r, "guys")) +
       // "Guys", never "Crew" -- Hanz renamed that column and
       // test_nothing_on_screen_says_labour_or_crew holds the page to it.
-      '<p class="hint">' + (auto ? 'Man-days from the tasks above.'
-        : (hours ? 'Man-days on the road.' : 'How many on it.')) + '</p></div>' +
+      '<p class="hint" data-hint-lab="' + i + '">' + (hours ? B.manDaysHint(auto)
+        : 'How many on it.') + '</p></div>' +
 
       '<div class="f"><label>' + (hours ? "Hours" : "Days") + '</label>' +
       '<input class="n" data-lab="' + i + '" data-k="days" value="' + esc(nv(r.days)) + '">' +
@@ -1457,15 +1428,9 @@
     var inert = travelInert(l);
     var unitWord = isNight ? "Nights" : "Days";
     var cost = B.travelLineCost(l, M.labor);
-    var mode = auto
-      ? '<button type="button" class="mw-sw labsw" role="switch" aria-checked="false"' +
-        ' data-trv-manual="' + key + '"><span class="track"></span>Type my own</button>'
-      : '<button type="button" class="mw-sw labsw on" role="switch" aria-checked="true"' +
-        ' data-trv-auto="' + key + '"><span class="track"></span>Type my own</button>';
     return '<div class="tk trv' + ((inert || !on) ? " inert" : "") + (on ? "" : " off") +
       '" data-trv-card="' + key + '"><div class="tk-h">' +
       '<span class="labname static">' + esc(l.label || (isNight ? "Lodging" : "Per Diem")) + '</span>' +
-      mode +
       B.sliderHtml(on, 'data-on-trv="' + key + '"', "Included", "Off keeps this line here, " +
         "grayed, and adds nothing to the price") +
       '<span class="tk-sub calc" data-trvcost-for="' + key + '">' + esc(moneyAuto(cost)) + '</span>' +
@@ -1473,7 +1438,7 @@
       '<div class="f"><label>' + unitWord + '</label>' +
       '<input class="n" data-trv="' + key + '" data-k="qty" value="' + esc(nv(l.qty)) + '"' +
       (auto ? ' data-auto="1"' : '') + '>' +
-      '<p class="hint">' + (auto ? "Man-days from the tasks above." : "Typed by you.") + '</p></div>' +
+      '<p class="hint" data-hint-trv="' + key + '">' + B.manDaysHint(auto) + '</p></div>' +
       '<div class="f"><label>Rate</label>' +
       '<span class="mny">$<input class="n" data-trv="' + key + '" data-k="rate" value="' +
       esc(nv(l.rate)) + '"></span>' +
@@ -1965,11 +1930,17 @@
     //
     // `data-auto` marks the ones the page owns. A box the estimator has taken over is not in this
     // list (typing flips it to manual and rebuilds the card), so this cannot overwrite typing.
-    document.querySelectorAll('[data-lab][data-k="guys"][data-auto]').forEach(function (el) {
+    document.querySelectorAll('[data-lab][data-k="guys"]').forEach(function (el) {
       var r = M.labor[parseInt(el.getAttribute("data-lab"), 10)];
-      if (!r) return;
+      if (!r || r.unit !== "hours") return;
+      if (!r.guys_auto) return;
+      el.setAttribute("data-auto", "1");               // cleared back to auto: the page owns it again
       var v = r.guys == null ? "" : String(r.guys);
       if (el.value !== v) el.value = v;
+    });
+    document.querySelectorAll("[data-hint-lab]").forEach(function (el) {
+      var r = M.labor[parseInt(el.getAttribute("data-hint-lab"), 10)];
+      if (r && r.unit === "hours") el.textContent = B.manDaysHint(!!r.guys_auto);
     });
     // The Travel card's own dim state, live: typing in Guys or Hours takes this path
     // (`changed(false)`), never a rebuild, so nothing else repaints the card's class. Keyed
@@ -1993,11 +1964,16 @@
       document.querySelectorAll("[data-trvcost-for]").forEach(function (el) {
         el.textContent = moneyAuto(B.travelLineCost(M.travel[el.getAttribute("data-trvcost-for")], M.labor));
       });
-      document.querySelectorAll('[data-trv][data-k="qty"][data-auto]').forEach(function (el) {
+      document.querySelectorAll('[data-trv][data-k="qty"]').forEach(function (el) {
         var l = M.travel[el.getAttribute("data-trv")];
-        if (!l) return;
+        if (!l || l.qty_auto === false) return;
+        el.setAttribute("data-auto", "1");
         var v = l.qty == null ? "" : String(l.qty);
         if (el.value !== v) el.value = v;
+      });
+      document.querySelectorAll("[data-hint-trv]").forEach(function (el) {
+        var l = M.travel[el.getAttribute("data-hint-trv")];
+        if (l) el.textContent = B.manDaysHint(l.qty_auto !== false);
       });
       document.querySelectorAll("[data-trv-card]").forEach(function (el) {
         var l = M.travel[el.getAttribute("data-trv-card")];
@@ -2199,27 +2175,6 @@
       changed(true);
       return;
     }
-    // The two ways across the auto/manual line, for somebody who would rather press a thing than
-    // discover that typing works. Going back to auto drops the typed figure on purpose -- that is
-    // what "back to auto" means, and the crew's man-days are one keystroke from being right again.
-    var manual = t.closest("[data-lab-manual]");
-    if (manual) {
-      var mi = parseInt(manual.getAttribute("data-lab-manual"), 10);
-      if (M.labor[mi]) {
-        M.labor[mi].guys_auto = false;
-        M.labor[mi].guys = B.travelManDays(M.labor);
-      }
-      changed(true);
-      refocus('[data-lab="' + mi + '"][data-k="guys"]');
-      return;
-    }
-    var auto = t.closest("[data-lab-auto]");
-    if (auto) {
-      var ai = parseInt(auto.getAttribute("data-lab-auto"), 10);
-      if (M.labor[ai]) M.labor[ai].guys_auto = true;
-      changed(true);
-      return;
-    }
     var dl = t.closest("[data-del-lab]");
     if (dl) {
       M.labor.splice(parseInt(dl.getAttribute("data-del-lab"), 10), 1);
@@ -2244,30 +2199,12 @@
     }
     // LODGING AND PER DIEM. The slider writes an explicit true/false (this block's convention, see
     // normalizeTravel) and marks the line `hand`, so a later distance answer cannot override a
-    // choice the estimator made. The two mode buttons are Travel's "Type my own" switch again:
-    // going manual seeds the box with the crew's man-days and puts the caret in it.
+    // choice the estimator made. (The "Type my own" switch is gone: typing leaves auto, clearing
+    // the box returns to it -- see the change handler.)
     var onTrv = t.closest("[data-on-trv]");
     if (onTrv) {
       var tl = M.travel && M.travel[onTrv.getAttribute("data-on-trv")];
       if (tl) { tl.enabled = !tl.enabled; tl.hand = true; }
-      changed(true);
-      return;
-    }
-    var trvManual = t.closest("[data-trv-manual]");
-    if (trvManual) {
-      var mk = trvManual.getAttribute("data-trv-manual");
-      if (M.travel && M.travel[mk]) {
-        M.travel[mk].qty_auto = false;
-        M.travel[mk].qty = B.travelManDays(M.labor);
-      }
-      changed(true);
-      refocus('[data-trv="' + mk + '"][data-k="qty"]');
-      return;
-    }
-    var trvAuto = t.closest("[data-trv-auto]");
-    if (trvAuto) {
-      var ak = trvAuto.getAttribute("data-trv-auto");
-      if (M.travel && M.travel[ak]) M.travel[ak].qty_auto = true;
       changed(true);
       return;
     }
@@ -2576,6 +2513,35 @@
       if (M.labor[parseInt(hl, 10)]) M.labor[parseInt(hl, 10)].hours_per_day = el.value;
       changed(false);
       return;
+    }
+    // CLEARING A TYPED BOX GOES BACK TO AUTO (Hanz, 2026-10-07: this replaced the "Type my own"
+    // switch). It happens HERE, on change (blur or Enter), and not on input. On input, typing "1",
+    // backspace, "2" would hit an empty box after the backspace, the figure would snap back to the
+    // man-days and the card would rebuild under the caret, so the "2" would land after the
+    // man-days instead of replacing the "1". Change only fires once the estimator has stopped.
+    // Whitespace counts as empty. The next changed(true) runs syncAutoGuys, which writes the
+    // man-days into the row, so the box, the cost and the saved blob agree.
+    var blankKey = el.getAttribute("data-k");
+    if (blankKey === "guys" || blankKey === "qty") {
+      var blankLab = el.getAttribute("data-lab");
+      var blankTrv = el.getAttribute("data-trv");
+      if (String(el.value).trim() === "") {
+        if (blankLab !== null && blankKey === "guys") {
+          var br = M.labor[parseInt(blankLab, 10)];
+          if (br && br.unit === "hours" && !br.guys_auto) {
+            br.guys_auto = true;
+            changed(false);                              // in place: a rebuild eats the next click
+            return;
+          }
+        } else if (blankTrv !== null && blankKey === "qty") {
+          var bl = M.travel && M.travel[blankTrv];
+          if (bl && bl.qty_auto === false) {
+            bl.qty_auto = true;
+            changed(false);                              // in place: a rebuild eats the next click
+            return;
+          }
+        }
+      }
     }
     var ti = el.getAttribute("data-tk");
     if (ti === null) return;

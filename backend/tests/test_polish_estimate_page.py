@@ -364,21 +364,20 @@ def test_the_travel_guys_figure_follows_the_tasks_above_it_until_somebody_disagr
     AND THE KEYSTROKE IS THE DISAGREEMENT. Typing in the box is what leaves auto — asking somebody
     to find a control first, to then be allowed to type the number they already have in mind, is a
     worse trade than noticing. Once left, the figure stops following the tasks above; the way back
-    is offered, because otherwise there is none short of knowing to clear the field."""
+    is to clear the box (there is no switch any more; see the clearing tests below)."""
     t = ran["travelGuys"]
     assert t["seeded"] == 16.5, "3x5 + 3x0.5 man-days: %r" % t["seeded"]
     assert t["afterCrewEdit"] == 13.5, (
         "the derived figure did not follow a task above it: %r" % t["afterCrewEdit"])
     assert t["boxShowsIt"] not in ("", "None"), (
         "the box sits empty next to a row that is being priced off the figure")
-    assert t["manualLinkOffered"], "no way across to typing one's own figure"
     assert t["afterTyping"] == {"guys": "7", "auto": False}, (
         "typing in the box did not take it off auto: %r" % t["afterTyping"])
     assert t["stickyAfterCrewMoves"] == "7", (
         "a hand-typed figure was overwritten when a task above it changed: %r"
         % t["stickyAfterCrewMoves"])
     assert t["afterBackToAuto"] == {"guys": 28.5, "auto": True}, (
-        "back-to-auto did not resume following the tasks above: %r" % t["afterBackToAuto"])
+        "clearing the box did not resume following the tasks above: %r" % t["afterBackToAuto"])
 
 
 @needs_node
@@ -473,57 +472,93 @@ def test_travel_undims_live_the_moment_you_type_in_it(ran):
 
 
 @needs_node
-def test_the_type_my_own_control_is_a_switch_in_the_card_header(ran, html):
-    """Moved out of the small-print hint under Guys and into the card header, and it is now a
-    SWITCH rather than a button whose words flip.
+def test_there_is_no_type_my_own_switch_on_the_labor_step(ran):
+    """Hanz, 2026-10-07: "remove the Type my own toggle button because technically we can edit
+    it, and retain the Included button" -- for the estimate, and the labor.
 
-    The old control read "Type my own", and once pressed, "Back to auto". That labels the
-    ACTION, so at any moment it names the state you are LEAVING rather than the one you are
-    in — an estimator glancing at a card could not tell from the words whether Guys was
-    derived or typed. A switch says the state and shows it, in one sentence that stays true
-    in both positions, and it matches the switches the Review step already uses."""
-    lab = ran["labor"]
-    assert lab["toggleInHeader"], "the switch is not in the Travel card's header"
-    assert lab["noToggleOnCrewRows"], (
-        "a crew row offers the auto/manual toggle — clicking it would overwrite that row's own "
-        "Guys with the man-day sum")
-    assert lab["linkishGone"], "the old underlined-link markup is still being rendered"
-    assert ".labsw" in html, "the page no longer defines the switch's own style"
-    assert ".linkish" not in html, "the old link style is still on the page"
-    assert ".labtoggle" not in html, "the old flipping-button style is still on the page"
+    The Guys and the Lodging / Per Diem boxes are plain inputs; a control that asks permission
+    to type into them is a second way to do what the box already does. Gone from every card on
+    the step, Travel's included, markup and handlers both. The Included slider is a different
+    control and must still be on the card.
 
-
-@needs_node
-def test_the_switch_reports_its_state_instead_of_naming_the_next_action(ran):
-    """What makes it a switch rather than a restyled button.
-
-    Mutation: put the label back to flipping between "Type my own" and "Back to auto", and
-    `labelOnce`/`backToAutoGone` go red."""
-    both = ran["labor"]["toggleSaysItsState"]
-    # BOTH POSITIONS. Travel boots in auto, so checking only the page as-built reads one
-    # branch of the ternary and the other can say anything at all.
-    for state in ("off", "on"):
-        s = both[state]
-        assert s["checked"], (
-            "aria-checked is wrong with the switch %s" % state)
-        assert s["labelOnce"] == 1, (
-            "expected the one unchanging label with the switch %s, found %d copies"
-            % (state, s["labelOnce"]))
-        assert s["backToAutoGone"], (
-            'the control still flips its words to "Back to auto" with the switch %s' % state)
-        assert s["hasTrack"], (
-            "the switch renders without the track the other switches use, %s" % state)
+    Mutation: put the switch back in laborCard or travelCard and `words` / the data-attribute
+    flags go red."""
+    n = ran["labor"]["noTypeMyOwn"]
+    for key in ("words", "labManual", "labAuto", "trvManual", "trvAuto", "noLabsw"):
+        assert n[key], "the Type my own switch is still rendered (%s)" % key
+    assert n["includedOnTravelCard"], "the Included slider left the Travel card"
+    assert ran["labor"]["noToggleOnCrewRows"]
+    assert ran["labor"]["linkishGone"], "the old underlined-link markup is still being rendered"
 
 
 @needs_node
-def test_the_switch_is_still_a_button_so_the_keyboard_still_reaches_it(ran):
-    """The `.mw-sw` conditions on this page are <span role="switch"> with tabindex and NO
-    keydown handler, so Space and Enter do nothing on them. This control was a real <button>
-    and worked from the keyboard; matching the others visually must not quietly cost it that.
+def test_the_hint_says_whether_the_figure_is_typed_or_the_man_days(ran):
+    """With no switch to read, the line under the box is what says which mode it is in.
 
-    Mutation: render it as a <span class="mw-sw labsw">."""
-    assert ran["labor"]["toggleIsAButton"], (
-        "the Guys switch is no longer a <button> — Space and Enter will not operate it")
+    Mutation: put the old 'Man-days on the road.' wording back."""
+    h = ran["labor"]["hintsAndIncluded"]
+    assert h["autoHint"] == "Man-days from the tasks above."
+    assert h["typedHint"] == "Typed by you. Clear it to use the man-days from the tasks above."
+    # Included still toggles, and does not disturb the Guys mode.
+    assert h["onBefore"] is True and h["afterOff"]["enabled"] is False
+    assert h["afterOff"]["guys_auto"] is False, "Included changed the Guys mode"
+    assert h["onAgain"] is True
+
+
+@needs_node
+def test_clearing_the_guys_box_returns_it_to_the_man_days_on_change_not_on_input(ran):
+    """Going back to auto is CLEARING THE BOX, committed on change (blur / Enter).
+
+    On input it would fight typing: "1", backspace, "2" passes through an empty box, the figure
+    would snap back to the man-days and the card rebuild under the caret. So an empty box
+    mid-typing stays typed; only the commit hands it back. Whitespace counts as empty, and the
+    cost afterwards is the one the man-days price on a never-touched row.
+
+    Mutation: revert on input instead of change and `midBackspace` goes red; drop the change
+    branch and `afterBackToAuto` goes red."""
+    t = ran["travelGuys"]
+    c = ran["travelClear"]
+    assert c["midBackspace"]["auto"] is False and c["midBackspace"]["guys"] == "", (
+        "an empty box on input already went back to auto: %r" % c["midBackspace"])
+    assert c["afterRetype"] == {"guys": "2", "auto": False}, (
+        "retyping after a backspace did not land: %r" % c["afterRetype"])
+    assert t["afterBackToAuto"] == {"guys": 28.5, "auto": True}
+    assert c["clearedBox"] == "28.5", "the box does not show the man-days: %r" % c["clearedBox"]
+    assert c["clearedHint"], "the hint did not go back to the auto wording"
+    assert c["clearRebuilds"] == 0, (
+        "clearing the box rebuilt the Labor panel %d time(s): the element the estimator just "
+        "tabbed or clicked into is destroyed and the next click or keystroke is lost"
+        % c["clearRebuilds"])
+    assert c["costAuto"] == c["costFresh"] != c["costTyped"], (
+        "cleared cost %r, never-touched cost %r, typed cost %r"
+        % (c["costAuto"], c["costFresh"], c["costTyped"]))
+
+
+@needs_node
+def test_clearing_lodging_or_per_diem_returns_it_to_the_man_days(ran):
+    """The same rule on the Lodging / Per Diem quantity, plus the hints and no switch there.
+
+    Mutation: drop the data-trv branch of the clearing rule and `backToAuto` stays typed."""
+    t = ran["travelCosts"]
+    assert t["midClearLodging"]["qty_auto"] is False, "empty on input went back to auto"
+    assert t["backToAuto"]["qty_auto"] is True and t["backToAuto"]["qty"] == 16.5
+    assert t["clearedLodgingBox"] == "16.5"
+    assert t["lodgeClearRebuilds"] == 0, "clearing Lodging rebuilt the panel and dropped focus"
+    assert t["clearedLodgingCost"] == "$1,155"
+    assert t["lodgingHints"]["auto"] and t["lodgingHints"]["noTypeMyOwn"]
+    assert t["typedHintLodging"], "the typed hint is not the new wording"
+
+
+@needs_node
+def test_a_saved_typed_row_still_reads_as_typed_and_prices_the_same(ran):
+    """A bid saved with guys_auto false (before this change, through the switch or by typing)
+    reopens as typed, prices off the typed number, and a change event carrying the same number
+    is not a clear."""
+    s = ran["savedTypedRow"]
+    assert s["typedHint"] and s["auto"] is False
+    assert s["box"] == "6" and s["guys"] == 6
+    assert s["cost"] == "$%d" % s["expected"], s["cost"]
+    assert s["afterSameChange"] is False
 
 
 @needs_node
