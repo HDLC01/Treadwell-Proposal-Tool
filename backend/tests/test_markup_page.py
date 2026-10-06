@@ -1742,14 +1742,70 @@ def test_the_badge_does_not_promise_an_override_that_does_not_happen():
 
 
 @needs_node
-def test_a_sheet_tab_shows_the_labor_rate_read_only_and_outside_its_chain(ran):
-    """The labor rate is a Global line; a sheet tab says what it is, with no box and no row.
-    NOT a row of the chain: a $33 row would be compounded into the sub-total.
+def test_a_sheet_tab_lists_every_global_line_read_only_and_outside_its_chain(ran):
+    """Hanz 2026-10-06: what is set on the Global tab has to show on every work type. A sheet tab
+    carries ONE read-only block under its table naming each Global line it does not already show
+    as a row, with the figure the Global tab resolves. NOT rows of the chain: a $33 row would be
+    compounded into the sub-total.
 
-    Mutation: add "labor_rate" to displayOrder's sheet-tab list -- it gets a row and the chain
-    total moves."""
+    Mutation: put "labor_rate" in displayOrder's sheet-tab list -- it gets a row and the total
+    moves. Mutation: drop the block (globalRefHtml returns "") -- every assertion here goes red."""
     snap = ran["dayOnePolish"]
-    assert len(snap["laborNote"]) == 1 and "$33.00 an hour" in snap["laborNote"][0], snap["laborNote"]
-    assert "Global" in snap["laborNote"][0]
+    assert len(snap["globalRef"]) == 1, snap["globalRef"]
+    ref = snap["globalRef"][0]
+    assert {i["line"]: i["text"] for i in ref["items"]} == {
+        "travel_lodging": "Travel lodging: $70.00 a night",
+        "travel_per_diem": "Travel food: $45.00 a day",
+        "labor_rate": "Labor rate: $33.00 an hour",
+        "fees_textura": "Fees + Textura: $0.00 a bid"}, ref["items"]
+    assert "Global" in ref["text"]
+    assert ref["link"] == 1 and ref["inputs"] == 0
     assert "labor_rate" not in [r["line"] for r in snap["rows"]]
-    assert ran["globalDayOne"]["laborNote"] == []
+    assert ran["globalDayOne"]["globalRef"] == []
+
+
+@needs_node
+def test_every_work_type_tab_shows_filed_off_and_built_in_global_figures_once(ran):
+    """Filed ($36 labor, $250 fees), switched off (lodging) and built-in (food $45) on ALL five
+    work-type tabs; bond is a chain row on each, so it is NOT repeated in the block.
+
+    Mutation: show only labor_rate (the old single note) -- fees/lodging/food assertions fail.
+    Mutation: drop the bond skip in globalRefRows -- bond appears twice per tab."""
+    for tab in ("polish", "seal", "epoxy", "leveling", "gyp"):
+        blocks = ran["globalRefByTab"][tab]
+        assert len(blocks) == 1, (tab, blocks)
+        got = {i["line"]: i["text"] for i in blocks[0]["items"]}
+        assert got == {
+            "travel_lodging": "Travel lodging: off",
+            "travel_per_diem": "Travel food: $45.00 a day",
+            "labor_rate": "Labor rate: $36.00 an hour",
+            "fees_textura": "Fees + Textura: $250.00 a bid"}, (tab, got)
+        assert "bond" in ran["globalRefRowsByTab"][tab]
+        assert "Bond" not in blocks[0]["text"], (tab, blocks[0]["text"])
+
+
+@needs_node
+def test_the_global_block_follows_a_global_edit_and_never_moves_a_total(ran):
+    """Live: a labor rate saved on Global shows on the next sheet tab read. And the block is
+    context only -- $33 and $99 leave the tab's lump sum identical.
+
+    Mutation: add the block's lines to the priced rows -- the two totals differ."""
+    assert any("Labor rate: $40.00 an hour" in i["text"]
+               for i in ran["globalRefAfterEdit"][0]["items"]), ran["globalRefAfterEdit"]
+    t = ran["globalRefTotals"]
+    assert t["lo"] == t["hi"] and t["lo"], t
+    assert "$33.00" in t["loRef"][0]["text"] and "$99.00" in t["hiRef"][0]["text"]
+
+
+@needs_node
+def test_the_global_block_link_opens_the_global_tab_and_is_the_same_for_non_admins(ran):
+    """The link switches tab; a non-admin reads exactly what an admin does, with no input.
+
+    Mutation: remove the [data-goto-global] click branch -- the selected tab stays a sheet tab."""
+    assert "global:true" in ran["globalRefLink"], ran["globalRefLink"]
+    # The link is gone after the repaint, so the focus goes to the Global tab button rather than
+    # the page body (a keyboard user would otherwise start again from the top).
+    assert ran["globalRefLinkFocus"] == "tab-global", ran["globalRefLinkFocus"]
+    assert ran["globalRefOnGlobal"] == 0
+    assert ran["globalRefNonAdmin"] == ran["globalRefAdmin"]
+    assert ran["globalRefNonAdmin"][0]["inputs"] == 0
