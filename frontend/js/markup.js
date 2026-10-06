@@ -174,7 +174,7 @@
       "labor line with no rate of its own, and every labor line added to a NEW estimate. A bid " +
       "already saved keeps the rates it has; an estimator can still type over any one rate, and " +
       "the estimate shows \"Default $X\" under it when they do.",
-    fees_textura: "Dollars. What a NEW Polish estimate's Fees + Textura line starts at. Blank or " +
+    fees_textura: "Dollars. What a NEW v2 estimate's Fees + Textura line starts at. Blank or " +
       "zero is what the sheet ships. A bid already saved keeps its own fees; an estimator can " +
       "still type over it on a bid, and the estimate shows \"Default value: $N\" under the box " +
       "when they do."
@@ -331,7 +331,7 @@
     // does not read them (no address in any target table), and that is the half this row says too,
     // so an admin is not left believing the downloaded .xlsx follows the figure.
     if (LAYOUT === "global" && (r.line_key === "travel_lodging" || r.line_key === "travel_per_diem")) {
-      return " The Polish Estimate beta copies this figure onto every NEW bid's " +
+      return " Estimating Tool v2 copies this figure onto every NEW bid's " +
         (r.line_key === "travel_lodging" ? "Lodging" : "Per Diem") + " line; a saved bid keeps its " +
         "own. Kyle's workbook does not read it.";
     }
@@ -339,7 +339,7 @@
     // its labor lines / its Fees + Textura line at this figure. Without this branch they fell
     // through to "changes no bid", which told an admin a live default was dead.
     if (LAYOUT === "global" && (r.line_key === "labor_rate" || r.line_key === "fees_textura")) {
-      return " The Polish Estimate beta starts every NEW bid's " +
+      return " Estimating Tool v2 starts every NEW bid's " +
         (r.line_key === "labor_rate" ? "labor lines" : "Fees + Textura line") + " at this figure; " +
         "a saved bid keeps its own. Kyle's workbook does not read it.";
     }

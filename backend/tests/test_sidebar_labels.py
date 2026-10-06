@@ -146,6 +146,26 @@ def test_no_sidebar_item_still_carries_an_old_name(sidebar):
         "the 'Active Projects' label survives beside Direct Projects (renamed 2026-09-29)")
     assert "General Contractor" not in labels, (
         "the 'General Contractor' label survives beside GC Projects (renamed 2026-10-02)")
+    assert "Polish Estimate" not in labels, (
+        "the 'Polish Estimate' label survives beside Estimating Tool v2 (renamed 2026-10-07)")
+    assert "Polish Estimate Database" not in labels, (
+        "the 'Polish Estimate Database' label survives beside v2 Estimates (renamed 2026-10-07)")
+
+
+def test_the_polish_beta_rows_are_labelled_estimating_tool_v2_and_v2_estimates(sidebar):
+    """RENAMED 2026-10-07: "Polish Estimate" became "Estimating Tool v2" and "Polish Estimate
+    Database" became "v2 Estimates". Kills reverting a label, and kills renaming a row by changing
+    its href instead: permissions key on the href (nav_access.py), and the doors on Estimate Review,
+    the live intake and the Proposals Database all go to these two addresses. Both keep the BETA
+    tag, which is what the Beta heading's membership is derived from."""
+    assert re.search(r'navItem\("/polish-intake\.html",\s*"[^"]+",\s*"Estimating Tool v2",\s*"BETA"\)',
+                     sidebar), (
+        "the Estimating Tool v2 item is missing or lost its BETA tag; nav items are %s"
+        % (_nav_labels(sidebar),))
+    assert re.search(r'navItem\("/polish-estimates\.html",\s*"[^"]+",\s*"v2 Estimates",\s*"BETA"\)',
+                     sidebar), (
+        "the v2 Estimates item is missing or lost its BETA tag; nav items are %s"
+        % (_nav_labels(sidebar),))
 
 
 # ── the follow-ups section: removed, then put back ────────────────────────────
@@ -263,23 +283,24 @@ def test_the_follow_ups_heading_did_not_come_back_with_the_item(sidebar):
 
 
 def test_the_removal_did_not_take_its_neighbours_with_it(sidebar):
-    """The section sat between Polish Estimate and Analytics, so an over-wide delete lands on
-    those. Kills losing Polish Estimate or the Analytics link.
+    """The section sat between Estimating Tool v2 (then called Polish Estimate) and Analytics, so an
+    over-wide delete lands on those. Kills losing Estimating Tool v2 or the Analytics link.
 
-    Polish Estimate's href became /polish-intake.html on 2026-08-17 — the beta's own step 1, after
-    the job conditions moved onto its intake form. Matched on the LABEL here rather than the path,
-    because what this test is about is the item still being in the list, not where it goes.
+    Its href became /polish-intake.html on 2026-08-17 — the beta's own step 1, after the job
+    conditions moved onto its intake form. Matched on the LABEL here rather than the path, because
+    what this test is about is the item still being in the list, not where it goes.
 
     ANALYTICS IS PINNED AS A LINK NOW, NOT A HEADING. Its heading was one of the five removed on
     2026-08-25. That is the half that mattered anyway: a heading disappearing is a decision somebody
     made and can be read straight off a diff, a LINK disappearing is a page nobody can reach.
 
     The two are no longer asserted in a fixed order, and that is deliberate rather than dropped:
-    the same change moved Polish Estimate into Beta and left Analytics in Active, so the order
+    the same change moved the tool into Beta and left Analytics in Active, so the order
     between them reversed ON PURPOSE. Where each one lives now is pinned by
     test_the_sidebar_has_exactly_three_headings below, which is the assertion that would actually
     fail if a beta leaked back into the daily list."""
-    assert '"Polish Estimate"' in sidebar, "Polish Estimate was removed along with the section"
+    assert '"Estimating Tool v2"' in sidebar, (
+        "Estimating Tool v2 was removed along with the section")
     assert "/analytics.html" in sidebar, "the Analytics link went with the section"
 
 

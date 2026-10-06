@@ -10,9 +10,21 @@ and `markup-core.js` do not exist yet: they are the design the phases build towa
 this document are on `origin/staging` at commit `3f94ed2` (2026-10-07). They will drift; the file
 and the name are what to search for.
 
+**Names.** The tool people called the Polish beta is now **Estimating Tool v2**, and its database
+page, which was the Polish Estimate Database, is now **v2 Estimates** (Phase 1b, 2026-10-07). Only
+the words a person reads changed: the two sidebar rows, the page titles and headings, the two doors
+into the tool (Estimate Review and the live intake), the Proposals Database tab that was called Beta
+Polish, and the sentences on the Items and Assemblies, Markup and Admin pages that name the tool.
+File names and addresses (`polish-intake.html`, `polish-estimate.html`, `polish-estimates.html`),
+element ids, the `polish_estimate` key with `version: 2`, the `polish_beta` flag on a project
+summary, the `beta` tab key, and the "(beta test)" ending on the name of a test copy all keep their
+names, because saved projects, permissions and bookmarks are keyed on them. Comments and tests
+written before the rename still say "Polish beta" and mean this tool. `backend/tests/test_v2_names.py`
+holds the new names in place and fails if an old one comes back in anything a person can read.
+
 ## 1. Why this exists
 
-The Polish beta was built one screen at a time, and the same fact ended up in many files. The list
+Estimating Tool v2 (first called the Polish beta) was built one screen at a time, and the same fact ended up in many files. The list
 of work types is written down more than ten times across JavaScript and Python. The job conditions
 (prevailing wage, taxable, dye and so on) are described in nine places. ROUNDUP is written three
 times for the bid and once more inside the workbook engine. The v2 intake carries its own 300-line
@@ -364,6 +376,7 @@ v2 bids stay test copies until Kyle signs off each work type. Where each phase t
 
 | Phase | What changes here |
 |---|---|
+| 1b | The Names paragraph under the title. Section 7 is unchanged: no copy in it is about a name. |
 | 3 (this one) | Sections 3 to 7 are written. Goldens, ratchet, strict node, shared helpers. |
 | 4 | 7.10. The model keeps unknown keys; one save patch. |
 | 5 | 7.5, and the module rename in section 3. |

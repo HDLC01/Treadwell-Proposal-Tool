@@ -323,7 +323,7 @@
     p.textContent = pending
       ? "Nothing has been priced here yet. Whatever you enter is saved as a NEW test project, " +
         "under the Test tab. No real bid is involved."
-      : "This project is filed as a test, so the beta is editing it directly. " +
+      : "This project is filed as a test, so Estimating Tool v2 is editing it directly. " +
         "No real bid is involved.";
     el.appendChild(p);
     el.hidden = false;
@@ -350,8 +350,8 @@
     var row;
     try { row = await loadRow(id); }
     catch (e) {
-      loadingNote("Couldn't check whether this project is filed as a test, so the " +
-        "beta stopped rather than risk editing a real bid. Reload to try again.");
+      loadingNote("Couldn't check whether this project is filed as a test, so " +
+        "Estimating Tool v2 stopped rather than risk editing a real bid. Reload to try again.");
       return false;
     }
 
@@ -387,7 +387,7 @@
     var copy;
     try { copy = await loadRow(copyId); }
     catch (e) {
-      loadingNote("Couldn't check for this project's test copy, so the beta " +
+      loadingNote("Couldn't check for this project's test copy, so Estimating Tool v2 " +
         "stopped rather than risk editing the real bid. Reload to try again.");
       return false;
     }
@@ -403,7 +403,7 @@
       var blob = buildCopy(row, id);
       try { await saveThenFileAsTest(copyId, blob); }
       catch (e) {
-        loadingNote("Couldn't make the test copy, so the beta stopped rather than " +
+        loadingNote("Couldn't make the test copy, so Estimating Tool v2 stopped rather than " +
           "edit the real project itself. Reload to try again.");
         return false;
       }

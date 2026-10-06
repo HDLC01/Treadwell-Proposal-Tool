@@ -249,10 +249,10 @@ const CAPS = [
   { href: "/info-sheet.html", label: "Info Sheet", api: ["/api/info-sheet/"], locked: false },
   // Back in the sidebar on 2026-08-24, and gated for the first time: the feed it reads is its own.
   { href: "/followups.html", label: "Follow-ups", api: ["/api/portal/followups"], locked: false },
-  { href: "/polish-intake.html", label: "Polish Estimate", api: [], locked: false },
+  { href: "/polish-intake.html", label: "Estimating Tool v2", api: [], locked: false },
   // The beta's project list, 2026-09-10. api: [] because it reads /api/drafts and nothing else,
   // and that route is the Proposals Database's own — see the note on its nav_access.py entry.
-  { href: "/polish-estimates.html", label: "Polish Estimate Database", api: [], locked: false },
+  { href: "/polish-estimates.html", label: "v2 Estimates", api: [], locked: false },
   { href: "/analytics.html", label: "Analytics", api: ["/api/analytics/"], locked: false },
   { href: "/projects.html", label: "Proposals Database", api: [], locked: false },
   { href: "/library.html", label: "Items and Assemblies", api: [], locked: false },

@@ -1192,7 +1192,7 @@ def test_the_admin_page_says_whether_each_row_reaches_the_workbook(ran):
     # each onto its Lodging / Per Diem line -- so those rows say so, while still saying the
     # WORKBOOK does not read them (no address in any target table, asserted in the test above).
     for name, word in (("travelLodgingGlobal", "Lodging"), ("travelPerDiemGlobal", "Per Diem")):
-        assert "Polish Estimate beta copies this figure onto every NEW bid" in s[name]             and word in s[name] and "workbook does not read it" in s[name], (
+        assert "Estimating Tool v2 copies this figure onto every NEW bid" in s[name]             and word in s[name] and "workbook does not read it" in s[name], (
             "a travel figure's row misstates what reads it: %s -> %r" % (name, s[name]))
     # The labor rate and Fees + Textura defaults are read by the beta too (2026-10-06): their rows
     # must not tell an admin the figure "changes no bid".
@@ -1231,8 +1231,8 @@ def test_the_paragraph_promising_that_nothing_is_priced_is_gone():
     assert "api/markup" in (FRONTEND / "js" / "estimate-review.js").read_text(encoding="utf-8")
     # The clause that is still true: no filed rate reaches the Polish beta, which prices off
     # polish-bid-core.js's own RATES/GP_BANDS. Deleting the paragraph outright would have lost it.
-    assert "Polish beta" in html and "its own engine" in html, (
-        "the rewrite dropped the Polish beta caveat, which is still true -- a filed polish rate "
+    assert "Estimating Tool v2" in html and "its own engine" in html, (
+        "the rewrite dropped the Estimating Tool v2 caveat, which is still true -- a filed polish rate "
         "moves the workbook's price and not the beta's")
     # And the sentence test_markup_page.py keeps out by name is still out.
     assert "rows override the constants" not in html
