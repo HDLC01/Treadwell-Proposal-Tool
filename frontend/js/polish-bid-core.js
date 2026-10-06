@@ -678,6 +678,83 @@
     return "Distance unknown — enter miles";
   }
 
+  /** HOW THE TRAVEL LINES ARE WORKED OUT, in plain words (Hanz, 2026-10-06: "a note that it is
+   *  calculated based off whether it's a local job ... just to show you how it's being solved").
+   *  Returns `{decision, lines, text}`: the local-or-not call and why, one working line per travel
+   *  line (the real numbers, from the same functions that price the bid: laborCost, travelQty,
+   *  travelLineCost), and `text`, those joined with newlines for one element to show with
+   *  `white-space: pre-line`. A pure read of the model: it prices nothing and changes nothing.
+   *
+   *  Lives here, not in js/polish-estimate.js, because the harness for that file lifts init() and
+   *  laborPanel() by name and a new local function they call is a ReferenceError in every scenario. */
+  function travelHow(model) {
+    var M = model || {};
+    var d = M.distance;
+    var miles = d ? milesOrNull(d.miles) : null;
+    var far = miles !== null && miles >= LOCAL_MILES;
+    var local = !!(M.conditions || {}).local;
+    var trv = M.travel || {};
+    var rows = M.labor || [];
+    var cut = String(LOCAL_MILES) + " miles";
+    var qty = function (n) { return String(Math.round(num(n) * 100) / 100); };
+
+    var decision;
+    if (miles === null) {
+      decision = "Distance not known yet, so the tool cannot tell if this is a local job. " +
+        "Type the miles above.";
+    } else if (far) {
+      decision = distanceNote(M) + ". That is " + cut + " or more, so this is NOT a local job: " +
+        "Travel Labor, Lodging and Per Diem come on.";
+    } else {
+      decision = distanceNote(M) + ". That is under " + cut + ", so this IS a local job: the " +
+        "three travel lines stay gray unless you switch one on.";
+    }
+    var hand = [];
+    var names = { lodging: "Lodging", per_diem: "Per Diem" };
+    TRAVEL_LINE_KEYS.forEach(function (k) {
+      var l = trv[k];
+      if (l && l.hand === true) {
+        hand.push(names[k] + " was switched " + (rowOn(l) ? "on" : "off") +
+          " by hand, so the distance does not change it.");
+      }
+    });
+
+    var lines = [];
+    var usesAuto = false;
+    var tr = null;
+    for (var i = 0; i < rows.length; i++) { if (rows[i] && rows[i].id === "travel") { tr = rows[i]; break; } }
+    if (tr && rowOn(tr) && (num(tr.days) > 0 || !local)) {
+      var hrs = "";
+      if (!isBlank(tr.days) && num(tr.days) > 0) {
+        hrs = (!isBlank(tr.hours_seed) && num(tr.days) === num(tr.hours_seed))
+          ? " (round trip at " + DRIVE_MPH + " mph)" : " (typed)";
+      }
+      if (tr.guys_auto) usesAuto = true;
+      lines.push("Travel Labor: " + qty(tr.guys) + " man-days" + (tr.guys_auto ? "" : " (typed)") +
+        " x " + qty(tr.days) + " drive hours" + hrs + " x " + money2(tr.rate) + " = " +
+        money2(laborCost(tr)) + (num(tr.days) > 0 ? "" : ". Type the drive hours."));
+    } else {
+      lines.push("Travel Labor: off, $0");
+    }
+    TRAVEL_LINE_KEYS.forEach(function (k) {
+      var l = trv[k];
+      if (!l || !rowOn(l)) { lines.push(names[k] + ": off, $0"); return; }
+      var q = travelQty(l, rows);
+      var prod = q * num(l.rate);
+      var cost = travelLineCost(l, rows);
+      if (l.qty_auto !== false) usesAuto = true;
+      lines.push(names[k] + ": " + qty(q) + (k === "lodging" ? " nights" : " days") +
+        (l.qty_auto === false ? " (typed)" : "") + " x " + money2(l.rate) + " = " +
+        (prod === cost ? money2(cost) : money2(prod) + ", rounded up to " + money(cost)));
+    });
+    if (usesAuto) {
+      lines.push("Man-days = guys x days on the labor lines above (" + qty(travelManDays(rows)) +
+        " now).");
+    }
+    return { decision: decision, hand: hand, lines: lines,
+             text: [decision].concat(hand, lines).join("\n") };
+  }
+
   /** The square feet the bid is priced per. LF rows (cove, saw-cut, stripe) measure a different
    *  thing and must not be added to an area — C82 divides the total by the AREA. */
   /** THE INTAKE'S SF BOXES, TURNED INTO TAKEOFF ROWS (Hanz, 2026-10-05: "Add SF, seed the takeoff").
@@ -2043,7 +2120,7 @@
     // Distance decides "local" (see LOCAL_MILES).
     LOCAL_MILES: LOCAL_MILES, milesOrNull: milesOrNull, distanceKey: distanceKey,
     normalizeDistance: normalizeDistance, driveHoursFor: driveHoursFor, isFarMiles: isFarMiles, applyDistance: applyDistance,
-    clearDistance: clearDistance, distanceNote: distanceNote,
+    clearDistance: clearDistance, distanceNote: distanceNote, travelHow: travelHow,
     rowOn: rowOn, sliderHtml: sliderHtml,
     filledIn: filledIn,
     takeoffSf: takeoffSf, measuredSf: measuredSf,

@@ -3338,6 +3338,12 @@ const rendered = [];      // every string the page put on screen, for the Labour
         lodging: m.travel.lodging.enabled, perDiem: m.travel.per_diem.enabled,
         lodgingHand: m.travel.lodging.hand === true,
         note: txt(x, "[data-dist-note]"), status: txt(x, "[data-dist-status]"),
+        // The "how this is worked out" note, and the figures the bid itself prices these lines at
+        // (the same B functions the totals use), so a test can hold the note to them.
+        how: txt(x, "[data-trv-how]"),
+        cost: { lodging: B.travelLineCost(m.travel.lodging, m.labor),
+                per_diem: B.travelLineCost(m.travel.per_diem, m.labor),
+                travel: B.laborCost(m.labor[li]) },
         lodgingGray: /inert/.test(need(x, '[data-trv-card="lodging"]').className),
         travelLaborGray: /inert/.test(need(x, '[data-lab-card="' + li + '"]').className),
       };
@@ -3431,7 +3437,18 @@ const rendered = [];      // every string the page put on screen, for the Labour
     clickOn(saved, "[data-dist-lookup]"); await settle();
     const savedAfter = snap(saved);
 
+    // TYPED NIGHTS on a far job, and a repaint after the miles move (the note must follow).
+    const nights = build({ blob: newBlob(), distance: { ok: true, miles: 150, reason: "" } });
+    await nights.api.init(); nights.api.go(1); await settle();
+    const nightsAuto = snap(nights);
+    typeInto(nights, '[data-trv="lodging"][data-k="qty"]', "10");
+    const nightsTyped = snap(nights);
+    // Miles typed over the looked-up figure: 150 -> 20, in place.
+    typeInto(nights, "[data-dist-miles]", "20");
+    const nightsLocal = snap(nights);
+
     out.distance = {
+      howNights: { auto: nightsAuto, typed: nightsTyped, local: nightsLocal },
       requestBody: (far.rec.distanceBodies || [])[0] || null,
       requests: (far.rec.distanceBodies || []).length,
       far: farSnap,

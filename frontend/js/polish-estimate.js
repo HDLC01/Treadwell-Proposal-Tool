@@ -1546,6 +1546,8 @@
   function paintDistance() {
     var note = document.querySelector("[data-dist-note]");
     if (note) note.textContent = B.distanceNote(M);
+    var how = document.querySelector("[data-trv-how]");
+    if (how) how.textContent = B.travelHow(M).text;
     var st = document.querySelector("[data-dist-status]");
     if (st) st.textContent = distanceStatus();
     var box = document.querySelector("[data-dist-miles]");
@@ -1619,6 +1621,9 @@
       '<p class="cap">Travel is expected when the job is 70 miles or more from the office. Under ' +
       '70 miles all three lines below stay gray until you switch one on.</p>';
     html += distanceBlock();
+    // HOW IT IS WORKED OUT: the local-or-not call and the sums, in words. Text only (one element,
+    // pre-line), so the live repaint can replace it without touching anything the estimator is in.
+    html += '<p class="cap trvhow" data-trv-how>' + esc(B.travelHow(M).text) + '</p>';
     html += travelRows + travelCard("lodging") + travelCard("per_diem");
     html += '<p class="cap">Lodging and Per Diem total <b data-travel-total>' +
       esc(moneyAuto(B.travelCosts(M.travel, M.labor).total)) + '</b>, added before the markups.</p>';
@@ -2061,6 +2066,7 @@
     one("[data-area-total]", B.fmtSf(B.takeoffSf(M.takeoff)) + " SF");
     one("[data-labor-total]", moneyAuto(B.laborTotal(M.labor, M.conditions)));
     one("[data-travel-total]", moneyAuto(B.travelCosts(M.travel, M.labor).total));
+    one("[data-trv-how]", B.travelHow(M).text);
     one("[data-mk-persf]", perSfText(b));
 
     document.querySelectorAll("[data-mk]").forEach(function (el) {
