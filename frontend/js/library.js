@@ -800,7 +800,15 @@
 
   /** The Save button follows the unsaved mark live, without waiting for a repaint (a repaint of
    *  the Items table mid-typing would steal the caret). Items: add or drop the button in that
-   *  row's action cell. Assemblies: show or hide #asm-save when that assembly is the open one. */
+   *  row's .rowsave cell. Assemblies: show or hide #asm-save when that assembly is the open one.
+   *
+   *  NOT THE ACTION CELL ANY MORE. Hanz, 2026-10-06: "the save button only pops up when we click
+   *  away". It never did pop up late -- it went into .rowact on the first keystroke -- but .rowact
+   *  is the last column of a table about 1,990px wide, so on a 1366 screen it sat 600px past the
+   *  right edge of the scroller and nobody saw it. .rowsave is pinned to the scroller's right edge
+   *  (position:sticky in library.html), so the button lands on screen, on the row being edited,
+   *  wherever the table is scrolled. Not the name cell: focusing Cost or Vendor scrolls the table
+   *  600px, which takes the name column off screen with it. */
   function itemSaveButtonHtml(id, name) {
     return '<button class="btn sm" type="button" data-save-new="items" data-save-id="' + esc(id) +
       '" title="Save this material now" aria-label="Save ' + esc(name) + '">Save</button>';
@@ -812,7 +820,7 @@
       if (b && openId === id) b.hidden = false;
       return;
     }
-    var cell = document.querySelector('#items-body [data-item="' + id + '"] .rowact');
+    var cell = document.querySelector('#items-body [data-item="' + id + '"] .rowsave');
     if (cell && !cell.querySelector("[data-save-new]")) {
       var tmp = document.createElement("span");
       tmp.innerHTML = itemSaveButtonHtml(id, (itemOf(id) || {}).name || "");
@@ -1308,10 +1316,15 @@
           : '<span class="money"><span>$</span><input data-f="unit_cost" class="num cell-cost" value="' + (it.unit_cost == null ? "" : it.unit_cost) + '" aria-label="Cost of one purchase"></span>') + "</td>" +
         "<td>" + pick("vendor", it.vendor, vendorNames(), "Vendor", ' class="cell-vendor"') + "</td>" +
         '<td class="datescell">' + datesHtml(it) + "</td>" +
-        '<td class="rowact">' +
+        // THE SAVE BUTTON'S OWN CELL, pinned to the right edge of the scroller -- see showUnsaved.
+        // Empty (and zero wide) until the row has an unsaved edit. Ahead of .rowact, so with the
+        // table scrolled to its end the row still reads Save, Duplicate, Remove.
+        '<td class="rowsave">' +
           (FRESH.items[it.id]
             ? itemSaveButtonHtml(it.id, it.name)
             : "") +
+          "</td>" +
+        '<td class="rowact">' +
           '<button class="icon" type="button" data-dupe-item="' + esc(it.id) + '" title="Make a copy of this material" aria-label="Duplicate ' + esc(it.name) + '">' + icon("copy") + "</button>" +
           // NO REMOVE ON THE THREE RESERVED ROWS (joint filler kit, remove-existing, dye) -- see
           // isReservedItem. Every other cell on the row stays editable; that is the point of it.

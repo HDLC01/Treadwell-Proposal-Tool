@@ -3809,6 +3809,48 @@ def test_any_edited_row_shows_save_and_clears_only_when_the_server_confirms(ran)
 
 
 @needs_node
+def test_one_edit_to_any_material_field_shows_save_in_the_pinned_cell(ran):
+    """Hanz, 2026-10-06: "the save button only pops up when we click away but there's no way to
+    save changes when we make any changes to any of the columns in the items tab".
+
+    The button was inserted on the first keystroke all along -- into .rowact, the last column of a
+    table about 1,990px wide inside a 1,320px scroller at 1366 (344px at 390). Measured in a real
+    browser: off screen for 7 of 9 fields at 1366 and all 9 at 390, so the only thing anybody saw
+    was the "Save this change?" question that leaving the row asks. It now goes into .rowsave,
+    which library.html pins to the scroller's right edge (sticky, right:0). Not the name cell:
+    focusing Cost scrolls the table 617px, which takes the name column off screen with it.
+
+    Executed through the real onItemEdit, patchSoon and showUnsaved, one event per field and no
+    blur: the field list is read off the rendered row, so a new editable column has to join it.
+
+    Mutations: point showUnsaved back at .rowact (inPinnedCell red on all nine); drop the .rowsave
+    cell from renderItems (shown red on all nine); drop the th (headerCells != rowCells); drop
+    position:sticky from the CSS (cssPinsTheCell red)."""
+    v = ran["saveVisible"]
+    assert sorted(v["fieldsInRow"]) == sorted(["name", "divisions", "buy_qty", "unit", "coverage",
+                                               "waste_pct", "roundup", "unit_cost", "vendor"]), (
+        "the Items row's editable fields changed; give the new one an action in the harness",
+        v["fieldsInRow"])
+    for f, r in v["fields"].items():
+        assert r["event"] != "none", f + " has no action in the harness, so nothing edited it"
+        assert r["shown"], "one " + r["event"] + " on " + f + " did not put a Save on the row"
+        assert r["inPinnedCell"], "Save for " + f + " went into a cell that scrolls off screen"
+        assert r["forThisRow"] and r["exactlyOne"], f
+        assert r["notInActionCell"], "Save for " + f + " is in .rowact as well"
+        assert r["queued"], f + " was not queued for the server"
+        assert r["nothingFlushed"], f + " needed a flush (a blur or a timer) before Save showed"
+        assert r["noRepaint"], f + " repainted the table mid-edit, which throws the caret out"
+    assert v["fields"]["unit_cost"]["emptyAfterHide"], (
+        "the pinned cell is not empty after the confirmed save, so the column never collapses")
+    assert v["cleanRowCellEmpty"], "a clean row's pinned cell is not empty, so it takes up width"
+    assert v["headerCells"] == v["rowCells"], (
+        "header and row have different column counts", v["headerCells"], v["rowCells"])
+    assert v["headerHasPinnedColumn"]
+    assert v["cssPinsTheCell"], "the .rowsave cell is no longer pinned to the scroller's edge"
+    assert v["cssZeroWideWhenEmpty"]
+
+
+@needs_node
 def test_add_default_search_opens_above_its_own_table(ran):
     """Hanz, 2026-10-05: "Adding a default [labor] should have the search bar right above the
     [Labor] container itself, not on the work type up above."
