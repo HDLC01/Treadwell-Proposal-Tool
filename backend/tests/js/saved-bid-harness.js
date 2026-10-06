@@ -25,7 +25,7 @@ if (at < 0) throw new Error("polish-estimate-harness.js scenario block moved; up
 let head = code.slice(0, at);
 // The older page does not define every function the current harness exports; export only what this
 // file drives so the SAME harness can boot both trees.
-head = head.replace(/const EXPORTS = `[\s\S]*?`;\n/, "const EXPORTS = `\n  return { init: init, bid: bid, model: function () { return M; }, state: function () { return state; } };\n`;\n");
+head = head.replace(/const EXPORTS = `[\s\S]*?`;\n/, "const EXPORTS = `\n  return { init: init, bid: bid, saveSoon: saveSoon, model: function () { return M; }, state: function () { return state; } };\n`;\n");
 
 const tail = fs.readFileSync(path.join(__dirname, "saved-bid-scenarios.js"), "utf8");
 const m = new Module(BASE, module);
