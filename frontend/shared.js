@@ -1718,7 +1718,8 @@
    *  v2 writes itself (a later phase) marks every tab, and is left alone.
    *
    *  WHAT IT DOES NOT DO: write. It returns a shallow copy and the stored draft keeps its keys, so
-   *  opening a project changes nothing. Nested objects are shared with the blob on purpose: the
+   *  opening a project changes nothing. Taking them off the STORED draft is Continue's job, with
+   *  v2SheetKeysOut below. Nested objects are shared with the blob on purpose: the
    *  Proposal step mutates them in place and hands the same references back to setState, and a deep
    *  copy would cut that link (see liveKey in proposal-review.js). The caller's `state` stays a
    *  one-shot snapshot, exactly as before. */
@@ -1731,6 +1732,34 @@
     const view = Object.assign({}, blob);
     SHEET_PRICING_KEYS.forEach((k) => { delete view[k]; });
     return view;
+  }
+
+  /** The patch that takes off a v2 draft's STORED copy what `v2PricingView` hid from the page: one
+   *  `undefined` per key. setState merges it, and JSON.stringify then leaves those keys out of the
+   *  blob in this browser and of the PUT to the server. `{}` for any draft the view hands back whole
+   *  (a spreadsheet bid, a clean v2 draft, a v2 snapshot with every tab marked `v2: true`), so
+   *  nothing is lost that a page was still reading.
+   *
+   *  WHY THE VIEW ALONE LEFT A DRAFT NOBODY COULD SEND. A v2 test copy made before the copy was an
+   *  allowlist still holds its source bid's `rooms`. The view hides them from the Proposal step, so
+   *  the document Continue builds shows no option, and the stored draft still lists one. That
+   *  disagreement is real, not a quirk of the gate: the customer's portal prices a proposal from
+   *  the stored `rooms` before it looks at `computed_bid`, and what the customer approves is the
+   *  sum of those rooms (the deposit invoice is a quarter of it), while the PDF is rebuilt from
+   *  `proposal_payload`. So the send gate (docDrift) and the server's publish route
+   *  (`_stale_document_refusal`) refuse it, and they are right to. Nothing on the page cleared it:
+   *  the options are hidden, the spreadsheet no longer opens a v2 draft, and Continue only ever
+   *  added keys.
+   *
+   *  So Continue, which already writes the whole document, writes this too. What is stored, what is
+   *  snapshotted for the customer and what the gate reads is then what the page printed.
+   *
+   *  DELIBERATELY NOT A CHANGE TO publishDigest. Reading `rooms` through the view there would make
+   *  the gate pass this draft while the portal went on pricing it from the spreadsheet's rooms. */
+  function v2SheetKeysOut(blob) {
+    if (v2PricingView(blob) === blob) return {};
+    const has = (k) => Object.prototype.hasOwnProperty.call(blob, k);
+    return Object.fromEntries(SHEET_PRICING_KEYS.filter(has).map((k) => [k, undefined]));
   }
 
 
@@ -1796,6 +1825,7 @@
     isV2Draft,
     isThisDraft,
     v2PricingView,
+    v2SheetKeysOut,
     draftDigest,
     bootDigest: () => _bootDigest,
     bootSynced: () => _bootSynced,

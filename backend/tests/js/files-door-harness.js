@@ -2035,13 +2035,18 @@ const mentionsY = (x) => /Other Project Y|Y texture|Y scope|Y note/.test(JSON.st
   //
   // Until the copy was an allowlist (polish-sandbox.js buildCopy), a v2 test copy of a spreadsheet bid
   // arrived holding the SOURCE's priced_tabs and proposal_lump_sum next to v2's own computed_bid, and
-  // the Proposal step prints the sheet's total before the engine's. Three drafts go through the real
+  // the Proposal step prints the sheet's total before the engine's. Four drafts go through the real
   // Proposal step, opened and then continued:
-  //   * v2Clean   a v2 draft as v2 itself writes it: computed_bid, no spreadsheet keys;
-  //   * v2Stale   the same bid with the source's spreadsheet pricing still on it;
-  //   * sheet     an ordinary spreadsheet draft, which must behave exactly as it always has.
+  //   * v2Clean       a v2 draft as v2 itself writes it: computed_bid, no spreadsheet keys;
+  //   * v2Stale       the same bid with the source's spreadsheet pricing still on it;
+  //   * v2StaleOption the same again, and the source bid had a VISIBLE OPTION, so the stored `rooms`
+  //                   hold a base and an option (the rooms the customer's portal prices from);
+  //   * sheet         an ordinary spreadsheet draft, which must behave exactly as it always has.
   // Opening writes nothing for either v2 draft (the view is a read), and the stale copy must print what
-  // the clean one prints, to the figure.
+  // the clean one prints, to the figure. Continue then leaves the draft ready to send: the Files page's
+  // send gate (TW.docDrift over TW.publishDigest, the pair done.js asks before it posts) finds nothing
+  // to refuse, the spreadsheet's keys are gone from this browser's copy and from the PUT, and the
+  // server's own refusal over the stored blob (test_files_door.py) has nothing to say either.
   {
     const V2_TOTAL = 23456;
     const v2Clean = () => ({
@@ -2063,6 +2068,27 @@ const mentionsY = (x) => /Other Project Y|Y texture|Y scope|Y note/.test(JSON.st
       proposal_remodel_on: false, sheet_area: { polish_sf: 1000 }, rooms: [],
       hf_lump_sums: { polish: 8000 }, cost_snapshot: { costs: 1, man_hours: 2 }, phase_price: 4500,
     });
+    // The same stale copy, but its SOURCE bid had a visible option (a Seal option on the Polish base),
+    // so the keys the old copy carried over include `rooms` with two rooms in it. Those rooms are what
+    // the customer's portal page prices from (the portal reads `rooms` before `computed_bid`).
+    const roomFor = (id, name, isBase, total) => ({
+      id, name, is_base: isBase, bid: { total, sales_tax: 0, remodel: 0 },
+      base_total: 8000, deduct_amount: 8000 - total, price_mode: "total", show: true,
+      system_desc: name, option_desc: name, custom_desc: "", base_desc: "", show_system: true,
+      show_diff: false, notes_auto: [], notes_manual: [] });
+    const v2StaleOption = () => Object.assign(v2Stale(), {
+      priced_tabs: tabs(10000, 320).concat([
+        { id: "Seal", name: "Seal", role: "seal", kind: "base", total: 1200, sales_tax: 0,
+          remodel: 0, system_desc: "Sealer", notes_auto: [], sf: {} }]),
+      tab_opts: { Seal: { is_option: true } },
+      rooms: [roomFor("Polish", "Polish", true, 8000), roomFor("Seal", "Seal", false, 1200)],
+    });
+    // Everything the spreadsheet's Estimate step writes that a v2 draft has no business holding
+    // (shared.js SHEET_PRICING_KEYS), read off the real file so this list cannot drift from it.
+    const SHEET_KEYS = new Function(
+      grab(SHARED, /^  const SHEET_PRICING_KEYS = \[[\s\S]*?\];$/m, "SHEET_PRICING_KEYS", "shared.js")
+      + "\nreturn SHEET_PRICING_KEYS;")();
+    const sheetKeysIn = (blob) => SHEET_KEYS.filter((k) => Object.prototype.hasOwnProperty.call(blob, k));
     const one = async (d) => {
       const b = browser(d);
       const before = JSON.stringify(local(b));
@@ -2073,12 +2099,32 @@ const mentionsY = (x) => /Other Project Y|Y texture|Y scope|Y note/.test(JSON.st
                        stateHasTabs: Array.isArray(p.state.priced_tabs) };
       await p.scope.continueToDone(null);
       const pp = local(b).proposal_payload;
+      // THE FILES PAGE'S SEND GATE, run on what Continue left stored: done.js asks
+      // TW.docDrift(TW.publishDigest(TW.getState())) before it posts anything. A row here is a Send
+      // that is refused, with nothing in the app that clears it.
+      const gate = () => p.TW.docDrift(p.TW.publishDigest(p.TW.getState()));
+      const drift = gate();
+      const digest = p.TW.publishDigest(p.TW.getState());
+      const storedAfter = local(b);
+      const serverAfter = copy(b.server.d1);
+      // The key Continue stamped (TW.composeKey over what it was about to store) must still be the key
+      // of what IS stored, here and on the server: the Files page trusts the document only while this
+      // holds, and sends a draft where it does not back through the Proposal step, again and again.
+      const holds = p.TW.documentHolds(storedAfter);
+      const serverHolds = p.TW.documentHolds(serverAfter);
+      // A second Continue on the same page load: whatever the first one left, this must not move it.
+      await p.scope.continueToDone(null);
       return { opened, summary: summary(pp), valuesLump: (pp.values || {}).proposal_lump_sum,
                lumpFormatted: (pp.values || {}).lump_sum_formatted, rooms: pp.rooms,
-               workType: pp.work_type };
+               workType: pp.work_type,
+               drift, digest, driftAfterSecondContinue: gate(), holds, serverHolds,
+               sourceKeys: Object.keys(d), sourceSheetKeys: sheetKeysIn(d),
+               storedSheetKeys: sheetKeysIn(storedAfter), serverSheetKeys: sheetKeysIn(serverAfter),
+               storedRooms: Array.isArray(storedAfter.rooms) ? storedAfter.rooms.length : null,
+               stored: storedAfter, server: serverAfter };
     };
     out.v2StaleCopy = { total: V2_TOTAL, clean: await one(v2Clean()), stale: await one(v2Stale()),
-                        sheet: await one(draft()) };
+                        staleOption: await one(v2StaleOption()), sheet: await one(draft()) };
   }
 
   process.stdout.write(JSON.stringify(out));

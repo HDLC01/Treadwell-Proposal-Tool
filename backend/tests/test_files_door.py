@@ -1243,6 +1243,93 @@ def test_an_ordinary_spreadsheet_draft_goes_through_the_same_line_unchanged(ran)
     assert sheet["workType"] == "epoxy"
 
 
+# ── the same copy when its source bid had an option (review of Phase 2: the draft nobody could send) ──
+def test_the_copy_with_an_option_opens_writing_nothing_and_prints_what_a_clean_draft_prints(ran):
+    """The two checks above ran on a copy whose `rooms` were empty, which is why they could not see the
+    draft this section is about. Same checks on the copy whose source bid had a visible option: the page
+    opens at v2's total, writes nothing, and the document it builds holds v2's price and no option, to
+    the figure a clean v2 draft holds."""
+    v2 = ran["v2StaleCopy"]
+    clean, s = v2["clean"], v2["staleOption"]
+    assert s["opened"]["tb"] == clean["opened"]["tb"] == "$23,456.00"
+    assert s["opened"]["writes"] == [] and s["opened"]["storedUnchanged"] is True
+    assert s["opened"]["stateHasLump"] is False and s["opened"]["stateHasTabs"] is False
+    assert s["summary"] == clean["summary"] and s["rooms"] == clean["rooms"] == []
+    assert s["workType"] == clean["workType"] == "polish"
+
+
+def test_a_stale_v2_copy_with_an_option_is_ready_to_send_once_it_is_continued(ran):
+    """THE REVIEW FINDING. A v2 test copy made before the allowlist holds its source bid's `rooms`. The
+    Proposal step reads the draft through the view, so the document it builds has no option, while the
+    stored draft still listed one. The Files page's send gate and the server's publish route both read
+    that disagreement and refuse it, and nothing on any page cleared it: RJ's loop (Update the PDF,
+    Continue, back, the same panel) with no cause a person could find.
+
+    Run end to end through the real Proposal step on a copy whose source had a visible option: after
+    Continue the send gate (the TW.docDrift over TW.publishDigest pair that done.js asks before it
+    posts) finds nothing, still nothing after a second Continue, and the SERVER, handed the very blob the
+    browser PUT, has no refusal either. The document is v2's own ($23,456, no option) and so is the only
+    thing a customer's portal can price from: no `rooms` for it to total, `computed_bid` for the base.
+
+    Mutation: take the clearing line out of continueToDone (the test below)."""
+    s = ran["v2StaleCopy"]["staleOption"]
+    assert s["summary"]["total"] == "$23,456" and s["rooms"] == [], "the document is not v2's"
+    assert s["drift"] == [], s["drift"]
+    assert s["driftAfterSecondContinue"] == [], s["driftAfterSecondContinue"]
+    digest = main._publish_digest(s["server"])
+    assert main._stale_document_refusal(digest) is None, digest
+    assert digest["option_count"] == digest["doc_option_count"] == 0
+    # What the portal's pricing_options reads (treadwell-portal/backend/proposals.py, read not edited):
+    # `rooms` first, then computed_bid's base. The first is absent, the second is v2's.
+    assert "rooms" not in s["server"]
+    assert s["server"]["computed_bid"]["full_bid"]["total_base_bid"] == ran["v2StaleCopy"]["total"]
+
+
+def test_continue_takes_exactly_the_spreadsheets_keys_off_a_stale_v2_copy(ran):
+    """The browser's copy AND the PUT to the server lose the twelve keys the spreadsheet's Estimate step
+    writes, and only those: every other key the copy had is still there, v2's own estimate and price
+    included. A clean v2 draft, which holds none of the twelve, is left exactly as it was.
+
+    Mutation: leave the patch out of continueToDone, or let it name other keys."""
+    for which in ("stale", "staleOption"):
+        s = ran["v2StaleCopy"][which]
+        assert len(s["sourceSheetKeys"]) == 12, (which, "the fixture does not carry the stale keys")
+        for where in ("storedSheetKeys", "serverSheetKeys"):
+            assert s[where] == [], (which, where, s[where])
+        for blob in (s["stored"], s["server"]):
+            gone = set(s["sourceKeys"]) - set(blob)
+            assert gone == set(s["sourceSheetKeys"]), (which, sorted(gone ^ set(s["sourceSheetKeys"])))
+            assert blob["computed_bid"]["full_bid"]["total_base_bid"] == ran["v2StaleCopy"]["total"]
+            assert blob["polish_estimate"] == {"version": 2, "totals": {"total": 23456}}
+    clean = ran["v2StaleCopy"]["clean"]
+    assert clean["sourceSheetKeys"] == [] and clean["storedSheetKeys"] == []
+    assert set(clean["sourceKeys"]) <= set(clean["stored"]) and set(clean["sourceKeys"]) <= set(clean["server"])
+
+
+def test_the_document_still_holds_after_the_patch_on_every_copy(ran):
+    """The key Continue stamps (TW.composeKey over what it was about to store) must be the key of what IS
+    stored, in this browser and on the server. The patch changes what is stored, and if it moved the blob
+    off the one the key was computed from, the Files page would find the document stale on every visit and
+    send the estimator through the Proposal step again, for ever.
+
+    Mutation: apply the patch AFTER the key is computed (the test below)."""
+    for which in ("clean", "stale", "staleOption", "sheet"):
+        s = ran["v2StaleCopy"][which]
+        assert s["holds"] is True and s["serverHolds"] is True, (which, s["holds"], s["serverHolds"])
+
+
+def test_continue_leaves_a_spreadsheet_drafts_keys_alone(ran):
+    """The control. The spreadsheet's own draft keeps every key it had through Continue, the ones the
+    twelve names cover included (its price, its tabs, its rooms): they are the only record it has.
+
+    Mutation: let the patch act on drafts that are not v2 (the test below)."""
+    s = ran["v2StaleCopy"]["sheet"]
+    assert len(s["sourceSheetKeys"]) >= 5, "the fixture lost its spreadsheet keys"
+    for blob in (s["stored"], s["server"]):
+        assert set(s["sourceKeys"]) <= set(blob), sorted(set(s["sourceKeys"]) - set(blob))
+    assert s["drift"] == []
+
+
 def _door_run(frontend):
     """The harness again, against a frontend directory holding one broken file (it reads whatever
     that directory lacks from the real frontend)."""
@@ -1274,3 +1361,56 @@ def test_a_view_that_strips_every_draft_would_blank_a_spreadsheet_bid(tmp_path):
                           "    if (false) return blob;")
     sheet = _door_run(broken)["v2StaleCopy"]["sheet"]
     assert sheet["opened"]["tb"] != "$10,000.00" and sheet["opened"]["stateHasTabs"] is False
+
+
+def test_a_continue_that_leaves_the_stale_keys_behind_is_caught(tmp_path):
+    """MUTATION. The page as the first pass of Phase 2 shipped it: the view hides the spreadsheet's keys
+    from the Proposal step and Continue never takes them off the stored draft. The copy whose source had
+    an option is then the draft nobody could send: the gate says the document shows 0 options, not 1,
+    after any number of Continues, and the server refuses the very blob the browser put there.
+
+    If this passes against the unbroken page, the two tests that expect the opposite can never go red."""
+    from _golden_support import break_source
+    broken = break_source(tmp_path, "js/proposal-review.js",
+                          "      ...TW.v2SheetKeysOut(TW.getState()),", "      /* patch removed */")
+    s = _door_run(broken)["v2StaleCopy"]["staleOption"]
+    row = {"k": "Options", "pdf": "0", "now": "1", "say": "0 options, not 1"}
+    assert s["drift"] == [row] and s["driftAfterSecondContinue"] == [row]
+    assert len(s["storedSheetKeys"]) == len(s["serverSheetKeys"]) == 12 and s["storedRooms"] == 2
+    refusal = main._stale_document_refusal(main._publish_digest(s["server"]))
+    assert refusal and refusal["code"] == "stale_document", refusal
+    assert refusal["differences"] == ["it shows 0 options, not 1"]
+
+
+def test_a_patch_applied_after_the_key_is_computed_leaves_the_document_stale(tmp_path):
+    """MUTATION. The patch is merged into what is stored but not into the blob the key is computed over:
+    the key then names a draft that still holds the spreadsheet's keys and the stored one does not, so
+    the document never holds and the Files page would send the estimator round the door for ever.
+
+    Two single-line edits to a scratch copy (the patch leaves the composed object, and joins the write)."""
+    from _golden_support import break_source
+    broken = break_source(tmp_path, "js/proposal-review.js",
+                          "      ...TW.v2SheetKeysOut(TW.getState()),", "      /* patch moved below the key */")
+    page = broken / "js" / "proposal-review.js"
+    text = page.read_bytes().decode("utf-8")
+    anchor = "    TW.setState(composed);"
+    assert text.count(anchor) == 1, "the write moved: repoint this mutation"
+    page.write_bytes(text.replace(
+        anchor, "    TW.setState(Object.assign(composed, TW.v2SheetKeysOut(TW.getState())));").encode("utf-8"))
+    got = _door_run(broken)["v2StaleCopy"]
+    assert got["stale"]["storedSheetKeys"] == [] and got["staleOption"]["storedSheetKeys"] == []
+    for which in ("stale", "staleOption"):
+        assert got[which]["holds"] is False and got[which]["serverHolds"] is False, which
+    for which in ("clean", "sheet"):
+        assert got[which]["holds"] is True, which
+
+
+def test_a_patch_that_acts_on_every_draft_would_strip_a_spreadsheet_bid(tmp_path):
+    """MUTATION, for the control. Let the patch act on drafts the view hands back whole and Continue takes
+    the ordinary spreadsheet draft's price, tabs and rooms off the stored copy: the control above has to
+    notice."""
+    from _golden_support import break_source
+    broken = break_source(tmp_path, "shared.js", "    if (v2PricingView(blob) === blob) return {};",
+                          "    if (false) return {};")
+    sheet = _door_run(broken)["v2StaleCopy"]["sheet"]
+    assert sheet["sourceSheetKeys"] and sheet["storedSheetKeys"] == [], sheet["storedSheetKeys"]

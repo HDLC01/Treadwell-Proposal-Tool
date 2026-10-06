@@ -366,6 +366,17 @@ one reads as v2 and the other does not fails there. **Planned (Phase 5):** the J
 and the live intake, and not at each link into them; `test_v2_routing_guard.py` scans the frontend for
 links and fails on one it has not been told about.
 
+A v2 test copy made before the copy was an allowlist still holds twelve keys the spreadsheet's Estimate step
+writes (`SHEET_PRICING_KEYS` in `js/shared.js`). Two functions deal with them, and both are needed. The
+Proposal step reads the draft through `v2PricingView`, which hides those keys and writes nothing. Continue
+then takes them off the stored draft with `v2SheetKeysOut`. With the view alone, a copy whose source bid had
+an option kept its `rooms` in storage: the customer's portal prices a proposal from the stored `rooms`
+before it looks at `computed_bid`, the PDF is built from the document, and the send gate (`docDrift`) and the
+server's publish route both refused the draft, with nothing on any page to clear it. The digest
+(`publishDigest`, `_publish_digest`) is deliberately not read through the view: that would pass the draft
+while the portal went on pricing the spreadsheet's rooms. A later phase that writes its own `priced_tabs`
+(every tab marked `v2: true`) is handed back whole by both functions.
+
 ## 8. The phases, and where each touches this document
 
 The phases, as the program plan numbers them. Each is its own pull request to staging.

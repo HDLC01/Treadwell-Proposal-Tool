@@ -9935,6 +9935,12 @@
 
     const composed = {
       ...mergedValues,
+      // A v2 draft that still holds the spreadsheet's pricing (see v2PricingView at the top of this
+      // file) was read without it, so the document below prints v2's price and shows no options.
+      // The stored copy must say the same, or the customer's portal prices the spreadsheet's rooms
+      // against a PDF that does not, and the send gate refuses it with nothing on any page to clear
+      // it. setState merges, so the keys are taken off by name; {} for every other draft.
+      ...TW.v2SheetKeysOut(TW.getState()),
       paragraph_overrides_all: _allOverrides,
       paragraph_overrides: paragraphOverrides,
       paragraph_overrides_meta: {

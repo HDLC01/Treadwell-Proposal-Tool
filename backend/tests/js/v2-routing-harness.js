@@ -294,6 +294,68 @@ const view = {};
 view.notObjects = [null, undefined, "x", 5].map((x) => v2PricingView(x) === x);
 out.view = view;
 
+// ── 4b. what Continue takes off the STORED copy ─────────────────────────────────────────────────
+// v2SheetKeysOut(blob) is the patch that makes the stored draft say what the view let the page read:
+// one `undefined` per hidden key, which setState's merge applies and JSON.stringify leaves out. The
+// real function, lifted with the real view it stands on.
+//
+// THE LAW, run on every draft below: apply the patch the way setState does (Object.assign onto the
+// stored blob, then the JSON round trip every write goes through) and what is stored equals what the
+// view handed the page. A patch that took too little leaves the customer's portal pricing the
+// spreadsheet's rooms; one that took too much costs a page a key it was still reading.
+const v2SheetKeysOut = L.lift(SHARED, "v2SheetKeysOut", { v2PricingView, SHEET_PRICING_KEYS });
+const sameBlob = (x, y) => {
+  const kx = Object.keys(x).sort();
+  const ky = Object.keys(y).sort();
+  return JSON.stringify(kx) === JSON.stringify(ky) && kx.every((k) => JSON.stringify(x[k]) === JSON.stringify(y[k]));
+};
+const storedAfter = (b) => JSON.parse(JSON.stringify(Object.assign(copy(b), v2SheetKeysOut(b))));
+const withTabs = (tabs) => Object.assign(stale(), { priced_tabs: tabs });
+const KEYS_OUT_CASES = {
+  stale: stale(),
+  plainSheet: spreadsheetBlob("polish"),
+  oldPolishEstimate: Object.assign(stale(), { polish_estimate: { areas: [] } }),
+  allMarked: withTabs([{ id: "Polish", total: 14224, v2: true }]),
+  someMarked: withTabs([{ id: "Polish", total: 14224, v2: true }, { id: "Epoxy", total: 1 }]),
+  markIsExactlyTrue: withTabs([{ id: "Polish", total: 14224, v2: "yes" }]),
+  emptyTabsStaleTotal: withTabs([]),
+  nullTab: withTabs([null]),
+  cleanV2: { project_name: "Clean v2", polish_estimate: copy(V2), computed_bid: { lump_sum: 1 } },
+  textVersion: Object.assign(stale(), { polish_estimate: { version: "2" } }),
+  // Only the keys the draft actually holds: a copy with no `rooms` is not handed a `rooms` to drop.
+  someKeysOnly: { project_name: "Few keys", polish_estimate: copy(V2), rooms: [], phase_price: 1,
+                  computed_bid: { lump_sum: 1 } },
+};
+const keysOut = {};
+Object.keys(KEYS_OUT_CASES).forEach((name) => {
+  const b = KEYS_OUT_CASES[name];
+  const before = JSON.stringify(b);
+  const patch = v2SheetKeysOut(b);
+  keysOut[name] = {
+    keys: Object.keys(patch),
+    allUndefined: Object.keys(patch).every((k) => patch[k] === undefined),
+    originalUntouched: JSON.stringify(b) === before,
+    // The law.
+    storedEqualsView: sameBlob(storedAfter(b), v2PricingView(b)),
+    // Idempotent: once the keys are off the stored copy there is nothing left to take off.
+    nothingLeftToTake: Object.keys(v2SheetKeysOut(storedAfter(b))),
+  };
+});
+// A throw is reported, not allowed to end the run: it is one more thing a broken patch can do.
+keysOut.notObjects = [null, undefined, "x", 5].map((x) => {
+  try { return Object.keys(v2SheetKeysOut(x)); } catch (e) { return "threw"; }
+});
+// A key named like an object's own machinery (JSON.parse makes both own properties) must not be able
+// to name its way into the patch: every key in it is a name from SHEET_PRICING_KEYS.
+{
+  const hostile = JSON.parse('{"polish_estimate":{"version":2},"rooms":[],"__proto__":{"x":1},'
+                             + '"constructor":{"y":1},"computed_bid":{"lump_sum":1}}');
+  const patch = v2SheetKeysOut(hostile);
+  keysOut.hostile = { keys: Object.keys(patch), inheritsFromBlob: ({}).x !== undefined || ({}).y !== undefined,
+                      patchPrototypeIsPlain: Object.getPrototypeOf(patch) === Object.prototype };
+}
+out.keysOut = keysOut;
+
 // ── 5. what the spreadsheet's snapshot writes ───────────────────────────────────────────────────
 // Read out of the real snapshotLumpSumsToState: every `state.<key> =` in it. The list in shared.js
 // has to hold all of them (but the engine's own computed_bid and alternate_computed_bid).

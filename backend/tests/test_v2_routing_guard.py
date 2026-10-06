@@ -677,3 +677,92 @@ def test_the_list_of_spreadsheet_keys_holds_everything_the_estimate_screen_write
     listed = set(ran["sandbox"]["sheetPricingKeys"])
     assert written - {"computed_bid", "alternate_computed_bid"} <= listed, sorted(written - listed)
     assert "computed_bid" not in listed
+
+
+# ══ 7. what Continue takes off the STORED copy ═══════════════════════════════════════════════════
+# The view hides the spreadsheet's keys from the Proposal step and writes nothing. A copy made before the
+# allowlist still HOLDS them, and the customer's portal prices a proposal from the stored `rooms`, so the
+# stored draft has to lose what the page never read, or the document and the draft disagree and the send is
+# refused with nothing on any page to clear it (the review of Phase 2). v2SheetKeysOut is the patch Continue
+# writes. test_files_door.py runs it through the real Proposal step; these run the function itself.
+STALE_SHAPED = ["stale", "someMarked", "markIsExactlyTrue", "emptyTabsStaleTotal", "nullTab", "textVersion"]
+HANDED_BACK_WHOLE = ["plainSheet", "oldPolishEstimate", "allMarked", "cleanV2"]
+
+
+@pytest.mark.parametrize("which", STALE_SHAPED)
+def test_the_patch_names_every_spreadsheet_key_a_stale_draft_holds(ran, which):
+    """Each draft the view reads without the spreadsheet's keys gets a patch naming every one of them,
+    each as `undefined`: the value setState's merge writes and JSON.stringify leaves out.
+
+    Mutation: the patch that returns {} (the MUTATION test below)."""
+    r = ran["keysOut"][which]
+    assert r["keys"] == ran["sandbox"]["sheetPricingKeys"], which
+    assert r["allUndefined"] is True and r["originalUntouched"] is True
+
+
+def test_the_patch_names_only_the_keys_the_draft_holds(ran):
+    """A copy that holds two of the twelve is handed two, in the list's order."""
+    r = ran["keysOut"]["someKeysOnly"]
+    assert r["keys"] == ["rooms", "phase_price"] and r["storedEqualsView"] is True
+
+
+@pytest.mark.parametrize("which", HANDED_BACK_WHOLE)
+def test_the_patch_is_empty_for_a_draft_the_view_hands_back_whole(ran, which):
+    """A spreadsheet draft, a pre-beta polish estimate, a v2 draft whose price snapshot v2 wrote itself and
+    a v2 draft that holds none of the keys lose nothing: the spreadsheet's own keys are the only record a
+    spreadsheet bid has, and a later phase's v2 snapshot is v2's own.
+
+    Mutation: the patch that acts on every draft (the MUTATION test below)."""
+    assert ran["keysOut"][which]["keys"] == [], which
+
+
+def test_a_value_that_is_not_a_draft_gets_an_empty_patch(ran):
+    assert ran["keysOut"]["notObjects"] == [[], [], [], []]
+
+
+@pytest.mark.parametrize("which", STALE_SHAPED + HANDED_BACK_WHOLE + ["someKeysOnly"])
+def test_what_is_stored_after_the_patch_is_exactly_what_the_page_was_given(ran, which):
+    """THE LAW. Apply the patch the way setState does (merge, then the JSON round trip every write goes
+    through) and the stored blob equals what v2PricingView handed the page, key for key and value for
+    value. A patch that took too little leaves the portal pricing the spreadsheet's rooms; one that took
+    too much costs a page a key it was still reading."""
+    r = ran["keysOut"][which]
+    assert r["storedEqualsView"] is True, which
+    assert r["originalUntouched"] is True, "the patch changed the blob it was handed"
+
+
+@pytest.mark.parametrize("which", STALE_SHAPED + HANDED_BACK_WHOLE + ["someKeysOnly"])
+def test_taking_the_keys_off_twice_takes_nothing_more(ran, which):
+    """Continue runs again and again (the door, the estimator, a second tab): the second run finds the
+    copy already clean and writes nothing further."""
+    assert ran["keysOut"][which]["nothingLeftToTake"] == [], which
+
+
+def test_a_key_named_like_an_objects_machinery_cannot_name_its_way_into_the_patch(ran):
+    """Every key in the patch is a name from SHEET_PRICING_KEYS, never one read out of the draft, so a draft
+    holding `__proto__` or `constructor` (JSON.parse makes them own properties) changes nothing."""
+    h = ran["keysOut"]["hostile"]
+    assert h["keys"] == ["rooms"]
+    assert h["inheritsFromBlob"] is False and h["patchPrototypeIsPlain"] is True
+
+
+def test_a_patch_that_takes_nothing_is_caught(cases_file, tmp_path):
+    """MUTATION. v2SheetKeysOut returning {}: the page reads the view and the stored draft keeps every
+    key, which is the first pass of Phase 2. The law has to notice."""
+    broken = break_source(
+        tmp_path, "shared.js",
+        "    return Object.fromEntries(SHEET_PRICING_KEYS.filter(has).map((k) => [k, undefined]));",
+        "    return {};")
+    r = _run(broken, cases_file)["keysOut"]["stale"]
+    assert r["keys"] == [] and r["storedEqualsView"] is False
+
+
+def test_a_patch_that_acts_on_every_draft_is_caught(cases_file, tmp_path):
+    """MUTATION. The patch no longer asks the view whether it hid anything: a spreadsheet draft would
+    lose the keys that are the only record of its price. The law and the empty-patch cases both notice."""
+    broken = break_source(tmp_path, "shared.js", "    if (v2PricingView(blob) === blob) return {};",
+                          "    if (false) return {};")
+    r = _run(broken, cases_file)["keysOut"]
+    assert r["plainSheet"]["keys"] != [] and r["plainSheet"]["storedEqualsView"] is False
+    assert r["allMarked"]["keys"] != [] and r["allMarked"]["storedEqualsView"] is False
+    assert "threw" in r["notObjects"], "and a value that is not a draft is no longer passed over"
