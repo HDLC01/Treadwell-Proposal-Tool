@@ -659,8 +659,32 @@
        button end up roughly fifteen hundred pixels apart on a wide monitor, so the eye has
        to cross empty table to get from one to the other. This puts the controls back beside
        the rows they act on and changes nothing on any other tab. */
-    #pane-defaults .admin-grid { max-width:980px; }
+    /* The Labor Calculator shares the cap for the same reason: four- and five-column tables and a
+       column of explanation that, uncapped, ran one sentence across the whole monitor. */
+    #pane-defaults .admin-grid, #pane-labcalc .admin-grid, #pane-labcalc > .ronote { max-width:980px; }
     .admin-section h2 { margin:0 0 8px; font:700 14px var(--ui); letter-spacing:-.01em; }
+
+    /* ── THE LABOR CALCULATOR TAB ─────────────────────────────────────────
+       Everything else on the tab is vocabulary already on this page: .admin-section, .card, .tw,
+       .money, .qtycell, .areaband, .btn.ghost.sm, .saving, .dash, .lines-empty. These four rules
+       are only what that vocabulary does not cover. */
+    /* "How it is worked out": explanation, not a figure, so it reads one step quieter than the
+       rates beside it. The min-width makes a phone scroll the table inside its card rather than
+       squeeze the sentence to a word a line. */
+    .lc-how { color:var(--ink-v); font-size:12.5px; min-width:220px; }
+    /* Only the explanation wraps. A line name, a unit or a pair of crew boxes broken over two
+       lines ("Travel / Labor", "per / night") made rows twice as tall for nothing. */
+    #pane-labcalc tbody td:not(.lc-how) { white-space:nowrap; }
+    /* A read-only figure in a column of input boxes. The box's border and inner padding put its
+       number 10px in from the cell edge; this puts the plain figure on the same edge, so the
+       dollars line up down the column. */
+    #pane-labcalc td.lc-fixed { padding-right:21px; }
+    /* The Try-it band sits flush at the head of its card, so it drops its own box and keeps a
+       rule between it and the results. */
+    #pane-labcalc .areaband { border:0; border-bottom:1px solid var(--line); border-radius:0; }
+    /* A footnote flush inside a card, under a table: the cell padding, a hairline above. */
+    .cardnote { margin:0; padding:9px 11px; color:var(--ink-v); font-size:12px;
+      border-top:1px solid var(--line-soft); }
 
     /* Vendors: readable by everyone, editable by admins. The read-only state is a real state, not
        a disabled table — it says who to ask. */
@@ -908,10 +932,9 @@
       <p class="ronote" id="labcalc-ro" hidden>You can see these figures. Changing them is
         admin-only - ask Hanz or Kyle.</p>
       <p class="alert" id="labcalc-alert" role="status" aria-live="polite"></p>
-      <div class="card">
-        <!-- FILLED BY renderLabCalc(). -->
-        <div id="labcalc-body"></div>
-      </div>
+      <!-- FILLED BY renderLabCalc(): Travel, Default labor lines and Try it, each an .admin-section
+           (a heading over its own card), the shape Administration and Defaults already use. -->
+      <div id="labcalc-body" class="admin-grid"></div>
     </section>
 
     <!-- ── Vendors ────────────────────────────────────────────────────── -->

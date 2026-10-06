@@ -170,5 +170,52 @@ def test_not_set_clears_the_line_a_refusal_puts_it_back_and_an_absent_table_stil
     assert ran["cleared"] == {"last": {"mode": "none"}, "savedGone": True}
     assert ran["calc403"] == {"alert": "Changing these is admin-only. Nothing was saved.",
                               "kept": False}
-    assert ran["calcAbsent"] == {"drew": True, "notSet": True, "travelStill": True, "tryEmpty": True}
+    assert ran["calcAbsent"] == {"drew": True, "notSet": True, "travelStill": True, "tryEmpty": True,
+                                 "tryEmptyDesigned": True}
     assert ran["calcNonAdmin"]["controls"] == 0
+
+
+# ── the layout Hanz screenshotted on staging, 2026-10-06: "fix these ui" ──────────────────────────
+@needs_node
+def test_each_section_is_a_heading_over_its_own_card_like_the_other_tabs(ran, html):
+    """Travel had no heading at all and the three sections floated inside one card; the intro text
+    ran at 80ch beside tables that ran the full 1660px page. Now: .admin-section x3 (the
+    Administration and Defaults shape), and the pane shares the Defaults tab's 980px measure cap.
+
+    Mutation: put the outer <div class="card"> back round #labcalc-body, or drop the h2 from the
+    Travel section -- the section list comes back short."""
+    lay = ran["layout"]
+    assert lay["sections"] == ["Travel", "Default labor lines", "Try it"], lay["sections"]
+    assert lay["cards"] == 3, "expected one card per section, found %r" % lay["cards"]
+    pane = html.split('<section id="pane-labcalc"')[1].split("</section>")[0]
+    assert '<div id="labcalc-body" class="admin-grid"></div>' in pane
+    assert 'class="card"' not in pane, "a card wraps the whole tab again, so sections nest inside it"
+    assert re.search(r"#pane-labcalc \.admin-grid[^{]*\{ max-width:980px; \}", html), (
+        "the Labor Calculator lost the measure cap the Defaults tab uses")
+
+
+@needs_node
+def test_rates_sit_in_the_pages_money_box_and_nothing_wears_an_unruled_class(ran):
+    """The rate boxes were class="mkin", which only markup.html styles: a bare 150px browser input
+    with a "$" floating outside it. Edit rate was class="ghostlink", the same story. Both now use
+    this page's own .money and .btn.ghost.sm; widths are classes, not style attributes.
+
+    Mutation: put style="width:64px" back on the crew boxes, or class="mkin" on a rate box."""
+    lay = ran["layout"]
+    assert lay["inlineStyles"] == [], lay["inlineStyles"]
+    assert lay["unruledClasses"] == [], lay["unruledClasses"]
+    assert lay["itemsTable"] is False, ".items-table centres every header over left-aligned cells"
+    assert lay["travelInMoneyBox"] and lay["lineRateInMoneyBox"]
+    assert lay["editRateIsGhostButton"]
+
+
+@needs_node
+def test_status_and_empty_cells_read_as_quiet_sentence_case_not_caps(ran):
+    """"SAVED TO MARKUP" and "LEFT BLANK ON A NEW ESTIMATE" were .builtin -- the uppercase chip a
+    read-only library row wears -- and the second sat under one header beside two empty columns.
+
+    Mutation: render the not-set cell as <span class="builtin"> in its own <td> again."""
+    lay = ran["layout"]
+    assert lay["capsStatus"] == 0
+    assert lay["notSetOnceAcross"], "a line with no mode does not say so once, across its empty columns"
+    assert lay["tryBand"], "Job SF is not a labelled band inside the Try-it card"
