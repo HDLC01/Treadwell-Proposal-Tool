@@ -76,6 +76,10 @@ NAMED_COPIES = [
     ("frontend/js/county-picker.js", "county"),
     ("frontend/js/polish-estimate.js", "saveSoon"),
     ("frontend/js/polish-estimate.js", "pagehide"),
+    # Phase 2: the test copy's cell list (7.3), and the browser's twin of the server's v2 test (7.11).
+    ("frontend/js/polish-sandbox.js", "COPYABLE_CELLS"),
+    ("backend/drafts.py", "_polish_beta"),
+    ("frontend/shared.js", "isV2Draft"),
 ]
 
 

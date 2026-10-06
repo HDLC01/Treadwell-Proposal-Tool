@@ -1188,3 +1188,89 @@ def test_continue_and_the_fit_request_compose_the_same_document(ran):
     # The warnings ride both (the equality above); what priceWarnings finds is read off the painted
     # price box, which this harness does not mount -- price-lines-harness.js executes that half.
     assert "price_warnings" in fit and "price_warnings" in got["stored"]
+
+
+# ── a v2 test copy that carries the spreadsheet's price (2026-10-07, Phase 2 of the v2 program) ──
+def test_a_stale_v2_copy_prints_the_v2_total_and_not_the_spreadsheets(ran):
+    """THE STALE TOTAL, end to end. Until the test copy was an allowlist (polish-sandbox.js buildCopy) a
+    v2 copy of a spreadsheet bid held the SOURCE's priced_tabs and proposal_lump_sum beside v2's own
+    computed_bid, and the Proposal step prints the sheet's total before the engine's: the copy's
+    document quoted the spreadsheet. The harness loads the draft through the page's REAL line 14
+    (`const state = TW.v2PricingView(TW.getState())`, lifted out of proposal-review.js) and presses
+    Continue, and a copy still carrying the spreadsheet's keys must print what a clean v2 draft
+    prints, to the figure: the price block, the base bid line, the tax, the document's own values.
+
+    Mutation: make line 14 `TW.getState()` again. The copy then opens at $8,000.00 (the source's Polish
+    tab) and the document quotes it."""
+    v2 = ran["v2StaleCopy"]
+    clean, stale = v2["clean"], v2["stale"]
+    assert clean["opened"]["tb"] == stale["opened"]["tb"] == "$23,456.00", (clean["opened"], stale["opened"])
+    assert stale["summary"] == clean["summary"], "a stale copy prints something a clean one does not"
+    assert stale["summary"]["total"] == stale["summary"]["baseBid"] == "$23,456"
+    assert stale["summary"]["materialTax"] == "$1,000", "the tax is the spreadsheet's, not v2's"
+    assert stale["lumpFormatted"] == clean["lumpFormatted"] == "$23,456"
+    assert stale["workType"] == clean["workType"] == "polish", "the base tab's role decided the template"
+    assert stale["rooms"] == clean["rooms"] == [], "the source's options reached the document"
+    assert "valuesLump" not in stale or stale["valuesLump"] is None, (
+        "the spreadsheet's lump sum is still in the document's values")
+
+
+def test_opening_a_stale_v2_copy_writes_nothing(ran):
+    """The view is a read. Opening the Proposal step on a stale copy must not write to the draft (the
+    page's own setState calls are recorded) and the stored blob is byte for byte what it was; the
+    spreadsheet's keys stay stored and the page simply does not read them. The page's snapshot is the
+    view, so it never held the stale keys."""
+    for which in ("clean", "stale"):
+        opened = ran["v2StaleCopy"][which]["opened"]
+        assert opened["writes"] == [], (which, opened["writes"])
+        assert opened["storedUnchanged"] is True, which
+        assert opened["stateHasLump"] is False and opened["stateHasTabs"] is False, which
+
+
+def test_an_ordinary_spreadsheet_draft_goes_through_the_same_line_unchanged(ran):
+    """The control. The page's line 14 hands a draft that is not v2 back as the very same object, so
+    the spreadsheet workflow reads its snapshot exactly as before: the priced tab's total is the lump
+    sum, the page rebuilds its rooms and writes them once as it loads (rebuildPricing, which a v2 draft
+    without the spreadsheet's keys never reaches), and the document prints the sheet's figure.
+
+    Mutation: make the view strip keys from every draft. The spreadsheet bid then loses its price."""
+    sheet = ran["v2StaleCopy"]["sheet"]
+    assert sheet["opened"]["tb"] == "$10,000.00"
+    assert sheet["opened"]["stateHasLump"] is True and sheet["opened"]["stateHasTabs"] is True
+    assert len(sheet["opened"]["writes"]) == 1 and "proposal_lump_sum" in sheet["opened"]["writes"][0], (
+        "the spreadsheet draft no longer rebuilds its pricing as the page loads")
+    assert sheet["summary"]["total"] == "$10,000" and sheet["valuesLump"] == 10000
+    assert sheet["workType"] == "epoxy"
+
+
+def _door_run(frontend):
+    """The harness again, against a frontend directory holding one broken file (it reads whatever
+    that directory lacks from the real frontend)."""
+    proc = subprocess.run(["node", str(HARNESS), str(frontend)], capture_output=True, text=True,
+                          encoding="utf-8", timeout=120)
+    assert proc.returncode == 0, "the harness itself failed:\n" + proc.stderr
+    return json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+def test_reading_the_draft_without_the_view_gives_the_stale_total_back(tmp_path):
+    """MUTATION. Line 14 of proposal-review.js as it was: `const state = TW.getState();`. The stale copy
+    then opens at the SOURCE's $8,000.00 and quotes it, while the clean v2 draft still opens at $23,456.00.
+    If this passes against the unbroken page, the test above can never go red."""
+    from _golden_support import break_source
+    broken = break_source(tmp_path, "js/proposal-review.js",
+                          "  const state = TW.v2PricingView(TW.getState());",
+                          "  const state = TW.getState();")
+    got = _door_run(broken)["v2StaleCopy"]
+    assert got["clean"]["opened"]["tb"] == "$23,456.00"
+    assert got["stale"]["opened"]["tb"] == "$8,000.00"
+    assert got["stale"]["summary"]["total"] != got["clean"]["summary"]["total"]
+
+
+def test_a_view_that_strips_every_draft_would_blank_a_spreadsheet_bid(tmp_path):
+    """MUTATION, for the control. Let the view act on drafts that are not v2 and the ordinary spreadsheet
+    draft loses its price: the control above has to notice."""
+    from _golden_support import break_source
+    broken = break_source(tmp_path, "shared.js", "    if (!isV2Draft(blob)) return blob;",
+                          "    if (false) return blob;")
+    sheet = _door_run(broken)["v2StaleCopy"]["sheet"]
+    assert sheet["opened"]["tb"] != "$10,000.00" and sheet["opened"]["stateHasTabs"] is False

@@ -220,17 +220,75 @@
     await fileAsTest(id).catch(function (e) { console.warn("[polish beta] test flag failed", e); });
   }
 
-  /** The source's numbers under a new name, plus the marks that make the copy a copy. */
+  // ── what a test copy takes from its source ──────────────────────────────────────────────
+  //
+  // AN ALLOWLIST, NOT A DENYLIST. The copy used to be `Object.assign({}, source)` minus the four
+  // keys the server owns, which carried everything else across, and "everything else" included the
+  // spreadsheet's PRICE: priced_tabs, proposal_lump_sum, computed_bid. The copy is priced in
+  // Estimating Tool v2, which writes none of the first two (it prices itself and writes only
+  // computed_bid), so the Proposal step found the SOURCE's spreadsheet total sitting where v2's own
+  // belonged, read the sheet's first, and printed it. A denylist cannot fix that: the next key the
+  // spreadsheet learns to write is carried across the day it is added. A key has to be listed to be
+  // copied, so a new one is left behind until somebody decides it belongs.
+  //
+  // What is on the list is what a PERSON typed, plus the v2 estimate itself. What is not is
+  // everything derived from the spreadsheet, which the copy works out again, and everything the
+  // server owns (is_test, archived, assigned_estimator: _SERVER_OWNED_KEYS in backend/drafts.py;
+  // copying is_test across would file the copy as a test and then put it back in Active seconds
+  // later, because this page PUTs the whole blob on every autosave). The ownership stamp
+  // (__draft_id) belongs to the source, and shared.js stamps the copy itself.
+  //
+  //   * the project and intake answers both intake forms save, and the quantities typed on them;
+  //   * the county, which the remodel tax reads (remodel_rate_override is the rate typed on the live
+  //     estimate screen, which v2 reads ahead of the county);
+  //   * `polish_estimate`, the v2 model, for a source that already has one;
+  //   * `cell_values`, but only the job-condition cells (COPYABLE_CELLS below). The other cells are
+  //     the spreadsheet's own working, which v2 never reads;
+  //   * the two marks buildCopy writes itself, listed so that this is everything a copy can hold.
+  var COPYABLE_KEYS = [
+    "project_name", "address", "city", "state", "zip", "city_state", "architect", "approx_start_date",
+    "bid_date", "deadline", "source", "work_areas", "audience", "work_type",
+    "contact_name", "contact_email", "contact_phone", "contact_notes",
+    "drawings_dated", "spec_section", "finish_tag", "plan_sheet", "addenda_count",
+    "system_1_sf", "system_2_sf", "polish_sf", "polish_2_sf", "cove_1_lf", "cove_2_lf",
+    "gyp_soft_sf", "gyp_hard_sf", "gyp_corridor_sf", "system_thickness", "num_systems",
+    "county", "county_tax_rate", "county_remodel_rate", "county_notes", "remodel_rate_override",
+    "polish_estimate", "cell_values",
+    "beta_sandbox_of", "beta_sandbox_of_name",
+  ];
+
+  // The job-condition cells: the cells the LIVE intake's CONDITIONS table writes (js/index.js), which
+  // is where a job's answers (local, prevailing wage, taxable, remodel tax, renovation, dye, joint
+  // filler, bulk discount) live and what the v2 intake reads back. A second copy of that table, and
+  // kept equal to it by test_v2_routing_guard.py rather than by hand. Phase 7 of the v2 program
+  // replaces both with the one table in js/work-types.js.
+  var COPYABLE_CELLS = [
+    "Epoxy!B4", "Polish!B4",
+    "Epoxy!D5",
+    "Epoxy!B6", "Leveling!B6", 'Gyp (USG 1-8")!B8', "Gyp (FR)!B8",
+    "Epoxy!D6",
+    "Epoxy!B10", "Polish!B10",
+    "Polish!E25", "Polish!E29", "Polish!F29",
+    "Epoxy!D41",
+  ];
+
+  /** The source's answers under a new name, plus the marks that make the copy a copy.
+   *
+   *  Every key written below is a name from the two lists above, never one read out of the source,
+   *  so nothing the source holds can name its own way into the copy. */
   function buildCopy(srcData, srcId) {
-    var blob = Object.assign({}, srcData);
-    // Server-owned (_SERVER_OWNED_KEYS in backend/drafts.py). is_test especially: the source may
-    // carry `false`, meaning a human said "this IS a real bid", and this page PUTs the whole blob
-    // on every autosave, so copying that key across would file the copy as a test through /test
-    // and then quietly put it back in Active a couple of seconds later.
-    delete blob.is_test;
-    delete blob.archived;
-    delete blob.assigned_estimator;
-    delete blob.__draft_id;              // shared.js's ownership stamp; it belongs to the source
+    var has = function (o, k) { return Object.prototype.hasOwnProperty.call(o, k); };
+    var blob = {};
+    COPYABLE_KEYS.forEach(function (k) {
+      if (k !== "cell_values" && has(srcData, k)) blob[k] = srcData[k];
+    });
+    var cells = {};
+    var srcCells = (srcData.cell_values && typeof srcData.cell_values === "object")
+      ? srcData.cell_values : {};
+    COPYABLE_CELLS.forEach(function (cell) {
+      if (has(srcCells, cell)) cells[cell] = srcCells[cell];
+    });
+    if (Object.keys(cells).length) blob.cell_values = cells;
     blob.project_name = betaName(srcData.project_name);
     // Paired with the derived id, this is what makes reopening idempotent: a draft that says
     // whose sandbox it is never gets copied again, even if its test flag went missing.
@@ -420,6 +478,8 @@
     sandboxIdFor: sandboxIdFor,
     betaName: betaName,
     buildCopy: buildCopy,
+    COPYABLE_KEYS: COPYABLE_KEYS,
+    COPYABLE_CELLS: COPYABLE_CELLS,
     loadRow: loadRow,
     fileAsTest: fileAsTest,
     saveThenFileAsTest: saveThenFileAsTest,

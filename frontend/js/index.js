@@ -1,4 +1,30 @@
 // Externalized from index.html (CSP: drop script-src 'unsafe-inline'). Do not add inline scripts.
+
+  // ── a v2 draft does not open on this form ─────────────────────────────────────
+  // Estimating Tool v2 has its own intake (polish-intake.html), and a project priced there has no
+  // spreadsheet behind it. This form's Continue goes to the spreadsheet, so a v2 draft opened here
+  // and continued from here walked into the Excel grid. Every link that opens a project on this form
+  // (the board and the Projects page, the bell, Leads, the step pills, Back from the estimate step)
+  // ends at this page, so the guard stands HERE, at the destination, and not at each of them.
+  //
+  // ONLY WHEN THE LOAD NAMES A PROJECT (?d= or ?edit=). "?new=1" on its own is somebody starting a
+  // project on this form, and gets it. (shared.js then puts the new project's id in the address bar,
+  // so a RELOAD of that page names a project, and a project that has become v2 since goes on to v2.)
+  // And only a blob that is THIS project's (TW.isThisDraft): a link opened on a machine whose storage
+  // holds another project runs this once on that blob while shared.js fetches the right one and
+  // reloads, and the reload runs this again.
+  //
+  // `replace`, so Back does not return to a page that would only bounce again, and the throw stops the
+  // rest of this script, so nothing below runs or saves on a page that is already leaving.
+  {
+    const q = new URLSearchParams(window.location.search || "");
+    const here = TW.getState();
+    if ((q.has("d") || q.has("edit")) && TW.isV2Draft(here) && TW.isThisDraft(here)) {
+      window.location.replace(TW.withDraft("/polish-intake.html"));
+      throw new Error("index: a v2 draft belongs on polish-intake.html");
+    }
+  }
+
   // Restore previous state if user clicked Back from screen 2
   const form = document.getElementById("intake-form");
 
@@ -561,6 +587,16 @@
 
   form.addEventListener("submit", (e) => {
     e.preventDefault();
+    // A draft that became v2 while this page sat open (another tab priced it in Estimating Tool v2)
+    // has no spreadsheet to go to, and this form is older than the draft: saving it would put these
+    // values, work type included, over the v2 project. So nothing is saved, and the draft goes to the
+    // v2 intake, where it lives. The load guard at the top cannot see this case, the draft was not v2
+    // when the page loaded.
+    const nowHere = TW.getState();
+    if (TW.isV2Draft(nowHere) && TW.isThisDraft(nowHere)) {
+      window.location.assign(TW.withDraft("/polish-intake.html"));
+      return;
+    }
     const values = TW.readForm(form);
     // Keep a combined "City, ST" so the estimate sheet (C3), proposal
     // ({{city_state}}) and tax lookup keep working unchanged. Zip is new
