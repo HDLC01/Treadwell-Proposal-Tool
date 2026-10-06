@@ -434,9 +434,19 @@ function build(opts) {
         (n) => !Object.prototype.hasOwnProperty.call(n.attrs, "data-subtotal")).length,
       subtotalBoxes: byAttr(t, "data-subtotal").length,
       switchCount: byAttr(t, "role", "switch").length,
-      buttonCount: byTag(t, "button").length,
+      // The Global block's link is navigation, not a control that files anything, so it is not
+      // counted here: this is the admin gate's number, and the link is shown to everyone.
+      buttonCount: byTag(t, "button").filter(
+        (n) => !Object.prototype.hasOwnProperty.call(n.attrs, "data-goto-global")).length,
       stateText: byClass(t, "state").map((s) => s.text).join(" "),
-      laborNote: byAttr(t, "data-labor-rate-note", "1").map((n) => n.text),
+      // The read-only "Set on the Global tab" block a sheet tab carries under its table: one entry
+      // per Global line it lists, the Global-tab link, and the whole block's text.
+      globalRef: byAttr(t, "data-global-ref", "1").map((n) => ({
+        text: n.text,
+        items: byAttr(n, "data-gref").map((li) => ({ line: li.attrs["data-gref"], text: li.text })),
+        link: byAttr(n, "data-goto-global").length,
+        inputs: byTag(n, "input").length,
+      })),
       retry: !!byAttr(t, "id", "mk-retry").length,
       // Read through getElementById, not the container map: an id the page has not touched yet
       // should read as its empty starting state, not blow the harness up.
@@ -924,6 +934,63 @@ async function main() {
     await drain();
     out.globalEditBody = (s.puts()[0] || {}).body || null;
     out.globalEdited = s.snap();
+  }
+
+  // ═══ 22b. THE GLOBAL BLOCK on every sheet tab ═══════════════════════════════
+  //   Filed figures, a built-in, and a switched-off line, read from all five sheet tabs; then a
+  //   Global edit in the same session; then the same tabs with the labor rate moved, to prove the
+  //   block never reaches the chain's total; then the link.
+  {
+    const tabsOf = ["polish", "seal", "epoxy", "leveling", "gyp"];
+    const filed = [rule("global", "labor_rate", { formula: "36" }),
+                   rule("global", "fees_textura", { formula: "250" }),
+                   rule("global", "travel_lodging", { formula: null, applies: false }),
+                   rule("gyp", "gp", { formula: "30%" })];
+    const s = build({ rules: filed });
+    await drain();
+    out.globalRefByTab = {};
+    out.globalRefGrand = {};
+    for (const t of tabsOf) {
+      s.clickTab(t);
+      await drain();
+      const sn = s.snap();
+      out.globalRefByTab[t] = sn.globalRef;
+      out.globalRefGrand[t] = sn.grand.preview;
+      out.globalRefRowsByTab = out.globalRefRowsByTab || {};
+      out.globalRefRowsByTab[t] = sn.rowOrder;
+    }
+
+    // The same session edits Global, then goes back to a sheet tab.
+    s.clickTab("global");
+    await drain();
+    s.typeAndLeave("s-labor_rate-value", "40", null);
+    await drain();
+    s.clickTab("polish");
+    await drain();
+    out.globalRefAfterEdit = s.snap().globalRef;
+
+    // The link goes to the Global tab.
+    s.clickIn("goto-global");
+    await drain();
+    out.globalRefLink = s.snap().tabs.map((t) => t.layout + ":" + t.selected);
+    out.globalRefOnGlobal = s.snap().globalRef.length;
+
+    // A labor rate of $33 and a labor rate of $99: the tab's total is the same.
+    const lo = build({ rules: [rule("polish", "gp", { formula: "30%" }),
+                               rule("global", "labor_rate", { formula: "33" })] });
+    const hi = build({ rules: [rule("polish", "gp", { formula: "30%" }),
+                               rule("global", "labor_rate", { formula: "99" })] });
+    await drain();
+    out.globalRefTotals = { lo: lo.snap().grand.preview, hi: hi.snap().grand.preview,
+                            loRef: lo.snap().globalRef, hiRef: hi.snap().globalRef };
+
+    // A non-admin sees the same block, with no input.
+    const n = build({ role: "estimator", rules: filed });
+    await drain();
+    out.globalRefNonAdmin = n.snap().globalRef;
+    out.globalRefAdmin = build({ rules: filed });
+    await drain();
+    out.globalRefAdmin = out.globalRefAdmin.snap().globalRef;
   }
 
   // ═══ 23. one Global rule, read by every sheet tab, gyp included ═════════════

@@ -1605,25 +1605,66 @@
         ? '<span class="amt">' + esc(money(total.amount)) + "</span>"
         : '<span class="unpriced">Unpriceable</span>') +
       "</div></div>";
-    // The company labor rate, read-only: it is not part of this tab's chain (it adds nothing to
-    // the running total above), so it is a line BELOW the table and not a row in it.
-    return out + laborRateNoteHtml();
+    // Every Global line, read-only: none of them is part of this tab's chain (they add nothing
+    // to the running total above), so they are a block BELOW the table and not rows in it.
+    return out + globalRefHtml();
   }
 
-  /** The labor rate as a sheet tab sees it: said, read-only, with where to change it.
+  /** Every Global line as a sheet tab sees it: said, read-only, with where to change it.
    *
-   *  NOT A ROW OF THE CHAIN, and deliberately kept out of displayOrder: priceChain compounds every
+   *  NOT ROWS OF THE CHAIN, and deliberately kept out of displayOrder: priceChain compounds every
    *  row it is handed, so a $33 line in the list would be added to the sub-total. One home per
-   *  line -- the box is on the Global tab, and this tab only reports what that row says. */
-  function laborRateNoteHtml() {
-    var rule = ruleFor(GLOBAL, "labor_rate");
-    var filed = rule && rule.applies !== false && rule.formula ? String(rule.formula) : "";
-    var shown = filed || ((BUILTIN[GLOBAL] || {}).labor_rate || {}).formula || "";
-    var n = Number(String(shown).replace(/[^0-9.]/g, ""));
-    var text = isFinite(n) && n > 0 ? money(n) + " an hour" : String(shown);
-    return '<p class="ronote" data-labor-rate-note="1">Labor rate: <b>' + esc(text) +
-      "</b>. Set on the Global tab. It is where every labor line on a new estimate starts, " +
-      "and it is the same for every sheet layout.</p>";
+   *  line -- the box is on the Global tab, and this tab only reports what that row says.
+   *
+   *  A GLOBAL LINE THAT IS ALREADY A CHAIN ROW HERE IS SKIPPED (bond, today, on every sheet tab):
+   *  the row says it, with its own caption, and a second figure for it a few lines lower is two
+   *  places to read one rate.
+   *
+   *  RESOLVED BY priceGlobal, the pass the Global tab itself is read by, from the SAVED rule or the
+   *  built-in -- so "off", "Unpriceable" and the unit are the Global tab's own answers and cannot
+   *  drift into a second reading. An unsaved box on the Global tab is not shown: it is not set
+   *  yet, and the estimator reads the saved rule. */
+  function globalRefRows() {
+    var shownHere = displayOrder();
+    var rows = [];
+    for (var i = 0; i < GLOBAL_KEYS.length; i++) {
+      var k = GLOBAL_KEYS[i];
+      if (shownHere.indexOf(k) >= 0) continue;
+      var rule = ruleFor(GLOBAL, k);
+      var applies = rule ? rule.applies !== false : true;
+      var built = ((BUILTIN[GLOBAL] || {})[k] || {}).formula || "";
+      rows.push({
+        line_key: k, label: LABELS[k] || labelFor(k), priced: true, applies: applies,
+        effective: applies ? ((rule && rule.formula) || built) : "", simple: null
+      });
+    }
+    return rows;
+  }
+
+  function globalRefHtml() {
+    var rows = globalRefRows();
+    if (!rows.length) return "";
+    var priced = priceGlobal(rows);
+    var items = "";
+    for (var i = 0; i < rows.length; i++) {
+      var p = priced[rows[i].line_key];
+      var text = !p || p.state === "unknownline" || p.state === "absent" ? "off"
+        : p.state !== "ok" ? "can't be read, fix it on the Global tab"
+        // A DOLLAR line (it has a unit) is always dollars: a filed 0 is under 1, which priceGlobal
+        // reads as a rate, and "0% a bid" is not an answer to "what do I charge".
+        : (p.rate == null || UNIT_NOTE[rows[i].line_key] ? money(p.rate == null ? p.amount : p.rate)
+                                                          : pct(p.rate)) +
+          (p.note ? " " + p.note : "");
+      items += '<li data-gref="' + esc(rows[i].line_key) + '">' + esc(rows[i].label) +
+        ": <b>" + esc(text) + "</b></li>";
+    }
+    return '<div class="ronote gref" data-global-ref="1"><div class="grefhead">' +
+      "<b>Set on the Global tab</b>" +
+      '<button class="ghostlink" type="button" data-goto-global="1" data-focus="goto-global">' +
+      "Open the Global tab</button></div>" +
+      '<ul class="greflist">' + items + "</ul>" +
+      "<p>The same for every sheet layout. They are read here, and not added to this tab's " +
+      "total.</p></div>";
   }
 
   /** The what-if box. ONE copy, two rows.
@@ -2115,6 +2156,17 @@
 
     var retry = t.closest("#mk-retry");
     if (retry) { reload(); return; }
+
+    // The "Open the Global tab" link under a sheet tab's read-only Global block.
+    if (t.closest("[data-goto-global]")) {
+      LAYOUT = GLOBAL;
+      if (typeof window !== "undefined" && window.TWTabMemo) {
+        window.TWTabMemo.write(window, { tab: GLOBAL });
+      }
+      say("");
+      render({ focus: false });
+      return;
+    }
 
     // Recorded, not performed: <details> opens itself, and this only remembers which ones are
     // open so the next repaint does not snap them shut.
