@@ -3907,3 +3907,79 @@ def test_the_fees_textura_default_is_always_listed_and_saves_to_the_markup_row(r
     assert f["junkSent"] == 0 and f["junkBox"] == ""
     assert f["refusedBox"] == "100" and f["refusedRule"] == "100"
     assert f["viewerHasBox"] is False and "250" in f["viewerText"]
+
+
+def _css_rule(css, selector):
+    """The declarations of the one rule whose selector is exactly `selector`, as {prop: value}.
+    Parsed by position (selector, the next brace pair, split on ; and :), not matched with a regex."""
+    start = css.index("\n    " + selector + " {") + 1
+    body = css[css.index("{", start) + 1:css.index("}", start)]
+    out = {}
+    for part in body.split(";"):
+        if ":" in part:
+            k, v = part.split(":", 1)
+            out[k.strip()] = " ".join(v.split())
+    return out
+
+
+def _ancestors_of(html, element_id):
+    """Class lists of every element enclosing the one with this id, outermost first, from a real
+    HTML parse of library.html."""
+    from html.parser import HTMLParser
+    void = {"input", "br", "img", "hr", "meta", "link", "path"}
+
+    class P(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.stack, self.found = [], None
+
+        def handle_starttag(self, tag, attrs):
+            a = dict(attrs)
+            if a.get("id") == element_id:
+                self.found = [c for t, c in self.stack]
+            if tag not in void:
+                self.stack.append((tag, (a.get("class") or "").split()))
+
+        def handle_startendtag(self, tag, attrs):
+            if dict(attrs).get("id") == element_id:
+                self.found = [c for t, c in self.stack]
+
+        def handle_endtag(self, tag):
+            while self.stack and self.stack[-1][0] != tag:
+                self.stack.pop()
+            if self.stack:
+                self.stack.pop()
+
+    p = P()
+    p.feed(html)
+    return p.found
+
+
+def test_the_open_assemblys_save_stays_on_screen_in_a_sticky_title_bar():
+    """Hanz, 2026-10-06: edit a line deep in a long takeoff and the Save button, in the title bar at
+    the top of the assembly, was about 700px above the viewport at 1366 and 1240px at 390 (a 14-line
+    assembly). The bar now sticks to the top of the page while the assembly scrolls past, so Save is
+    on screen whenever it is shown. Measured in headless Chromium against the real page: Save in the
+    viewport and topmost for pick / remove / add-then-pick at top, middle and bottom, both widths.
+
+    This pins the two things that make it so: the .atitle rule sticks, with a solid card fill, a
+    hairline and a z-index under the item picker's results (30); and #asm-save is inside that bar,
+    not beside it. Lines tabbed into are held clear of the bar by scroll-margin-top.
+
+    Mutations: drop position:sticky from .atitle, or its background, or move #asm-save out of the
+    .atitle div in library.html, or drop the .lines scroll-margin-top, or put top back above 44px -> each assert goes red."""
+    html = (FRONTEND / "library.html").read_text(encoding="utf-8")
+    bar = _css_rule(html, ".atitle")
+    assert bar.get("position") == "sticky", "the assembly title bar no longer sticks: " + str(bar)
+    # The page's own fixed #tw-topbar (52px, auth.js) covers y=0..52, so a bar stuck at the viewport
+    # top had Save hidden behind it at desktop width. It must park below that bar (52px less the
+    # 8px of card padding it slides over = 44px), never at or above y=0.
+    assert bar.get("top", "").endswith("px") and float(bar["top"][:-2]) >= 44, (
+        "the stuck bar would sit behind the fixed top bar", bar)
+    assert bar.get("background") == "var(--card)", "lines would show through the bar"
+    assert "var(--line)" in bar.get("border-bottom", ""), "no hairline under the bar"
+    assert 0 < int(bar.get("z-index", "0")) < 30, "the bar must sit under .item-results (30)"
+    assert "atitle" in _ancestors_of(html, "asm-save")[-1], (
+        "#asm-save is not a direct child of the sticky .atitle bar", _ancestors_of(html, "asm-save"))
+    margin = _css_rule(html, ".lines :is(input, select, button)")
+    assert float(margin["scroll-margin-top"][:-2]) >= 150, margin

@@ -370,7 +370,20 @@
     .an { font-weight:600; font-size:13px; }
     .am { font-size:11.5px; color:var(--ink-v); font-variant-numeric:tabular-nums; }
     .apanel { padding:18px 20px 20px; display:grid; gap:16px; }
-    .atitle { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+    /* THE TITLE BAR STAYS ON SCREEN. Hanz, 2026-10-06: after editing a line deep in a long takeoff
+       the Save button, which lives in this bar, was ~700px above the viewport at 1366 and ~1240px
+       at 390. The bar sticks to the top of the page while the open assembly scrolls past, so Save
+       is on screen whenever it is shown. The page scrolls (no ancestor clips), so sticky resolves
+       against the window and is released by the end of #asm-panel.
+       Negative margins widen the bar to the card's edges, and the padding gives the room back, so
+       the content sits exactly where it did; top:-8px lets the card's own top padding slide off
+       so a stuck bar is only as tall as its controls. top:44px is the fixed #tw-topbar (52px, z 9995,
+       injected by auth.js on this page) less that 8px, so the bar parks just under it, not behind. The card fill and a hairline keep the lines
+       from showing through. z-index 5 sits under .item-results (30) and the dialogs. */
+    .atitle { display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+      position:sticky; top:44px; z-index:5; background:var(--card);
+      margin:-18px -20px -10px; padding:18px 20px 10px;
+      border-bottom:1px solid var(--line); border-radius:var(--r-lg) var(--r-lg) 0 0; }
     .atitle input { font:700 16px var(--ui); padding:5px 8px; flex:1; min-width:180px; }
 
     /* The measured area is the one input every number below depends on, so it gets its own
@@ -389,6 +402,10 @@
     .areaband .why { color:var(--ink-v); font-size:12px; }
 
     .lines td { vertical-align:top; }
+    /* Tabbing up into a line scrolls it to the top edge of the page; this keeps it clear of the
+       sticky .atitle bar plus the fixed top bar above it (52 + 62px at desktop width, 52 + 98px when it
+       wraps at phone width). */
+    .lines :is(input, select, button) { scroll-margin-top:156px; }
     .lines .role input { width:100%; min-width:96px; }
     .lines select { width:100%; min-width:150px; }
     .lines .cov input { width:82px; }
