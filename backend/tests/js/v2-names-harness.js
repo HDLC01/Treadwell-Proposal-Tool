@@ -87,12 +87,11 @@ function plain(html) { return L.stripTags(html).split(/\s+/).filter(Boolean).joi
 // ── 1. the sidebar, and the Admin page's matrix of it ────────────────────────
 {
   const win = loadAuth();
-  out.sidebar = {};
-  win.TWAuth.roles().forEach(function (role) {
-    out.sidebar[role] = win.TWAuth.navSpec(role).map(function (r) {
+  out.sidebar = Object.fromEntries(win.TWAuth.roles().map(function (role) {
+    return [role, win.TWAuth.navSpec(role).map(function (r) {
       return { section: r.section, href: r.href, label: r.label, tag: r.tag };
-    });
-  });
+    })];
+  }));
 
   const admin = source("js", "admin.js");
   const indent = { indent: "    " };
