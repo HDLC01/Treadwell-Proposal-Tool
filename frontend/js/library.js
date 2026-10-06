@@ -3545,10 +3545,10 @@
    *  forgot the note would clear one filed elsewhere. */
   var TRAVEL_KEYS = [
     { line: "travel_lodging", label: "Lodging", per: "night", shipped: 70,
-      how: "One charge per night away. Nights are the man-days of the labor tasks on the estimate " +
-           "(the way the pricing engine counts them) unless the estimator types a number." },
+      how: "One charge a night away. Nights are the man-days of the labor tasks, unless the " +
+           "estimator types a number." },
     { line: "travel_per_diem", label: "Per Diem", per: "day", shipped: 45,
-      how: "One charge per day away, for meals. Days are counted the same way as nights." }
+      how: "One charge a day away, for meals. Days are counted the same way as nights." }
   ];
   var TRAVEL_RULES = {};            // line_key -> the filed markup_rules row, when there is one
   var TRAVEL_RULES_LOADED = false;
@@ -3597,36 +3597,44 @@
     for (var s = 0; s < LABOR.length; s++) if (LABOR[s] && LABOR[s].id === "travel") stored = LABOR[s];
     // READ FROM THE SHARED MODULE, never re-typed here (see the note above travelSeed).
     var tl = B.travelSeed(stored);
-    var html = '<h3 class="labcalc-h">Travel</h3>' +
+    // THREE SECTIONS, EACH A HEADING OVER ITS OWN CARD -- the .admin-section shape the
+    // Administration and Defaults tabs already use, not one card with headings floating inside it.
+    // Plain tables, not .items-table: that class centres every header, which left Mode and Crew
+    // sitting over the middle of columns whose contents start at the left edge.
+    var html = '<div class="admin-section"><h2>Travel</h2>' +
       '<p class="paneintro">Travel is expected when the job is <b>70 miles or more</b> from the ' +
       'Olathe office. Under 70 miles all three lines stay gray on the estimate until the ' +
       'estimator switches one on. Lodging and Per Diem start off on every new estimate, and are ' +
-      'priced inside the markups, before GP, superintendent and soft costs.</p>' +
-      '<div class="tw"><table class="items-table"><thead><tr><th>Line</th><th class="n">Rate</th>' +
-      '<th>How it is worked out</th><th class="w-act"></th></tr></thead><tbody>';
-    html += '<tr data-labcalc-row="travel"><td>' + esc(tl.label) + '</td><td class="n">' +
-      esc(L.money(tl.rate)) + " an " + (tl.unit === "days" ? "day" : "hour") + '</td><td>' +
-      'Guys are the man-days of the labor tasks; the estimator types the drive hours for the job. ' +
+      'priced inside the markups, before GP, superintendent and soft costs.</p>';
+    if (TRAVEL_RULES_ERR) {
+      html += '<p class="ronote">Could not read the saved figures, so the boxes are empty. ' +
+        'Reload to try again.</p>';
+    }
+    // RATE AND UNIT ARE TWO COLUMNS, as on the Labor tab, so the dollar figures line up down one
+    // edge whatever the unit says. Travel Labor's figure is read-only here (it is the Labor tab's
+    // Travel row); .lc-fixed pads it to sit level with the figures inside the boxes below it.
+    html += '<div class="card"><div class="tw"><table><thead><tr><th>Line</th><th class="n">Rate</th>' +
+      '<th>Unit</th><th>How it is worked out</th><th class="w-act"></th></tr></thead><tbody>';
+    html += '<tr data-labcalc-row="travel"><td>' + esc(tl.label) + '</td><td class="n' +
+      (ADMIN ? ' lc-fixed' : '') + '">' + esc(L.money(tl.rate)) + '</td><td>per ' +
+      (tl.unit === "days" ? "day" : "hour") + '</td><td class="lc-how">' +
+      'Man-days of the labor tasks, times the drive hours the estimator types. ' +
       'The rate is the Travel line on the Labor tab.</td><td class="rowact">' +
-      (ADMIN ? '<button class="ghostlink" type="button" data-labcalc-goto-labor>Edit rate</button>' : "") +
+      (ADMIN ? '<button class="btn ghost sm" type="button" data-labcalc-goto-labor>Edit rate</button>' : "") +
       '</td></tr>';
     TRAVEL_KEYS.forEach(function (t) {
       var fig = travelFigure(TRAVEL_RULES[t.line]);
       html += '<tr data-labcalc-row="' + esc(t.line) + '"><td>' + esc(t.label) + '</td><td class="n">' +
         (ADMIN
-          ? '$<input class="mkin" type="text" inputmode="decimal" data-travel-rate="' + esc(t.line) +
+          ? '<span class="money"><span>$</span><input class="num cell-cost" type="text" ' +
+            'inputmode="decimal" data-travel-rate="' + esc(t.line) +
             '" value="' + esc(fig) + '" placeholder="' + esc(String(t.shipped)) +
-            '" aria-label="' + esc(t.label) + ' rate, dollars per ' + esc(t.per) + '" /> per ' +
-            esc(t.per)
-          : esc(L.money(fig === "" ? t.shipped : Number(fig))) + " per " + esc(t.per)) +
-        '</td><td>' + esc(t.how) + '</td><td class="rowact"><span class="builtin">Saved to Markup' +
-        '</span></td></tr>';
+            '" aria-label="' + esc(t.label) + ' rate, dollars per ' + esc(t.per) + '" /></span>'
+          : esc(L.money(fig === "" ? t.shipped : Number(fig)))) +
+        '</td><td>per ' + esc(t.per) + '</td><td class="lc-how">' + esc(t.how) +
+        '</td><td class="rowact"><span class="saving">Saved to Markup</span></td></tr>';
     });
-    html += '</tbody></table></div>';
-    if (TRAVEL_RULES_ERR) {
-      html += '<p class="ronote">Could not read the saved figures, so the boxes are empty. ' +
-        'Reload to try again.</p>';
-    }
+    html += '</tbody></table></div></div></div>';
     html += calcSectionHtml();
     body.innerHTML = html;
     renderTryIt();
@@ -3740,29 +3748,32 @@
 
   function calcSectionHtml() {
     var co = calcCompanyRate();
-    var html = '<h3 class="labcalc-h">Default labor lines</h3>' +
+    var html = '<div class="admin-section"><h2>Default labor lines</h2>' +
       '<p class="paneintro">Pick how each line fills in on a <b>new</b> estimate. <b>From SF</b> ' +
       "works the days out from the job's square feet (days = SF / production rate, rounded up). " +
       '<b>Fixed</b> uses the guys and days you type. A blank rate uses the company labor rate (' +
       esc(L.money(co)) + ' an hour). The estimator can still change any of it on the bid, and a ' +
       'saved bid is never recomputed.</p>' +
-      '<div class="tw"><table class="items-table"><thead><tr><th>Line</th><th>Mode</th>' +
+      '<div class="card"><div class="tw"><table><thead><tr><th>Line</th><th>Mode</th>' +
       '<th>Crew and production</th><th>Hours a day</th><th class="n">Rate</th>' +
-      '<th class="w-act"></th></tr></thead><tbody>';
+      '</tr></thead><tbody>';
     calcLines().forEach(function (l) {
       var c = CALC[l.id] || { mode: "" };
-      var inp = function (f, label, w) {
+      // Sized by .qtycell (the Items tab's quantity row), not by a style attribute per box.
+      var inp = function (f, label) {
         return ADMIN
-          ? '<input class="mkin" type="text" inputmode="decimal" data-lcalc="' + esc(l.id) +
+          ? '<input class="num" type="text" inputmode="decimal" data-lcalc="' + esc(l.id) +
             '" data-f="' + f + '" value="' + esc(c[f] == null ? "" : c[f]) + '" aria-label="' +
-            esc(l.name + " " + label) + '" style="width:' + (w || 64) + 'px" />'
+            esc(l.name + " " + label) + '" />'
           : esc(c[f] == null || c[f] === "" ? "-" : c[f]);
       };
       var fields = c.mode === "sf"
-        ? inp("crew", "crew size") + ' guys, ' + inp("sf_per_day", "production rate", 80) + ' SF a day'
+        ? '<div class="qtycell">' + inp("crew", "crew size") + ' guys, ' +
+          inp("sf_per_day", "production rate") + ' SF a day</div>'
         : c.mode === "fixed"
-          ? inp("guys", "guys") + ' guys for ' + inp("days", "days") + ' days'
-          : '<span class="builtin">Left blank on a new estimate</span>';
+          ? '<div class="qtycell">' + inp("guys", "guys") + ' guys for ' + inp("days", "days") +
+            ' days</div>'
+          : "";
       var modeCell = ADMIN
         ? '<select data-lcalc-mode="' + esc(l.id) + '" aria-label="' + esc(l.name) + ' mode">' +
           CALC_MODES.map(function (m) {
@@ -3777,21 +3788,29 @@
           '<option value="10"' + (hpd === 10 ? " selected" : "") + '>10</option></select>'
         : String(hpd);
       var rateCell = !c.mode ? "" : ADMIN
-        ? '$<input class="mkin" type="text" inputmode="decimal" data-lcalc="' + esc(l.id) +
+        ? '<span class="money"><span>$</span><input class="num cell-cost" type="text" ' +
+          'inputmode="decimal" data-lcalc="' + esc(l.id) +
           '" data-f="rate" value="' + esc(c.rate == null ? "" : c.rate) + '" placeholder="' +
-          esc(String(co)) + '" aria-label="' + esc(l.name) + ' rate" />'
+          esc(String(co)) + '" aria-label="' + esc(l.name) + ' rate" /></span>'
         : esc(L.money(c.rate > 0 ? Number(c.rate) : co));
+      // A LINE WITH NO MODE SAYS SO ONCE, across the three columns it leaves empty, in the same
+      // quiet sentence case as the rest of the row -- not a caps label above three blank cells.
+      var rest = !c.mode
+        ? '<td colspan="3"><span class="dash">Left blank on a new estimate</span></td>'
+        : '<td>' + fields + '</td><td>' + hoursCell + '</td><td class="n">' + rateCell + '</td>';
       html += '<tr data-lcalc-row="' + esc(l.id) + '"><td>' + esc(l.name) + '</td><td>' + modeCell +
-        '</td><td>' + fields + '</td><td>' + hoursCell + '</td><td class="n">' + rateCell +
-        '</td><td class="rowact"></td></tr>';
+        '</td>' + rest + '</tr>';
     });
-    html += '</tbody></table></div>' +
-      '<h3 class="labcalc-h">Try it</h3>' +
+    // TRY IT: the job size sits in an .areaband at the head of the card -- the Assemblies tab's band
+    // for "the one input every number below depends on" -- with the results table under it.
+    html += '</tbody></table></div></div></div>' +
+      '<div class="admin-section"><h2>Try it</h2>' +
       '<p class="paneintro">Type a job size to see what a new estimate would fill in. This changes ' +
       'nothing.</p>' +
-      '<p><label>Job SF <input class="mkin" type="text" inputmode="decimal" data-tryit-sf ' +
-      'value="' + esc(CALC_TRY_SF) + '" aria-label="Job square feet" style="width:100px" /></label></p>' +
-      '<div id="labcalc-tryout"></div>';
+      '<div class="card"><div class="areaband"><label for="labcalc-try-sf">Job SF</label>' +
+      '<input id="labcalc-try-sf" class="num" type="text" inputmode="decimal" data-tryit-sf ' +
+      'value="' + esc(CALC_TRY_SF) + '" aria-label="Job square feet" /></div>' +
+      '<div id="labcalc-tryout"></div></div></div>';
     return html;
   }
 
@@ -3814,16 +3833,17 @@
         '<td class="n">' + esc(L.money(v.rate)) + '</td><td class="n">' + esc(L.money(cost)) + '</td></tr>';
     });
     if (!n) {
-      out.innerHTML = '<p class="paneintro">No line has a mode saved yet, so a new estimate leaves ' +
-        'them all blank.</p>';
+      // The empty state of a list inside a card: the Assemblies lines table's own .lines-empty.
+      out.innerHTML = '<div class="lines-empty">No line has a mode saved yet, so a new estimate ' +
+        'leaves them all blank.</div>';
       return;
     }
-    out.innerHTML = '<div class="tw"><table class="items-table"><thead><tr><th>Line</th>' +
+    out.innerHTML = '<div class="tw"><table><thead><tr><th>Line</th>' +
       '<th class="n">Guys</th><th class="n">Days</th><th class="n">Hours a day</th>' +
       '<th class="n">Rate</th><th class="n">Cost</th></tr></thead><tbody>' + rows +
       '<tr><td><b>Total</b></td><td></td><td></td><td></td><td></td><td class="n"><b data-tryit-total>' +
       esc(L.money(total)) + '</b></td></tr></tbody></table></div>' +
-      '<p class="paneintro">Before burden, travel and markups.' +
+      '<p class="cardnote">Before burden, travel and markups.' +
       (sf > 0 ? "" : " Type a job size to see the SF-based days.") + '</p>';
   }
 

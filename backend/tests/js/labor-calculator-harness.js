@@ -107,7 +107,9 @@ const RULE = (key, formula, extra) => Object.assign({ id: "r-" + key, layout: "g
       lodgingBox: /data-travel-rate="travel_lodging" value="80"/.test(html),
       perDiemBoxEmptyWithShippedPlaceholder:
         /data-travel-rate="travel_per_diem" value="" placeholder="45"/.test(html),
-      travelLaborRow: /Travel Labor<\/td><td class="n">\$41\.50 an hour/.test(html),
+      // Rate and unit are two columns since 2026-10-06 (the Labor tab's own Rate | Unit), so the
+      // dollars line up down one edge; the figure is still the Labor tab's Travel row, per hour.
+      travelLaborRow: /Travel Labor<\/td><td class="n[^"]*">\$41\.50<\/td><td>per hour<\/td>/.test(html),
       seventyMiles: html.indexOf("70 miles or more") !== -1,
       insideMarkups: html.indexOf("before GP") !== -1,
       roHidden: s.els["labcalc-ro"].hidden,
@@ -163,8 +165,8 @@ const RULE = (key, formula, extra) => Object.assign({ id: "r-" + key, layout: "g
     s.api.renderLabCalc(); await settle();
     const html = s.els["labcalc-body"].innerHTML;
     out.nonAdmin = { boxes: (html.match(/data-travel-rate/g) || []).length,
-                     showsLodging: html.indexOf("$80.00 per night") !== -1,
-                     showsShippedPerDiem: html.indexOf("$45.00 per day") !== -1,
+                     showsLodging: /\$80\.00<\/td><td>per night<\/td>/.test(html),
+                     showsShippedPerDiem: /\$45\.00<\/td><td>per day<\/td>/.test(html),
                      roShown: s.els["labcalc-ro"].hidden === false };
   }
 
@@ -205,6 +207,27 @@ const RULE = (key, formula, extra) => Object.assign({ id: "r-" + key, layout: "g
     out.calcLines = (html.match(/data-lcalc-row="([^"]+)"/g) || []).map((m) => m.split('"')[1]);
     out.calcLoaded = { mockupFixed: /data-lcalc-mode="mockup"[\s\S]*?<option value="fixed" selected/.test(html),
                         companyRateShown: html.indexOf("$40.00 an hour") !== -1 };
+
+    // THE LAYOUT HANZ SCREENSHOTTED, 2026-10-06 ("fix these ui"): three sections, each a heading
+    // over its own card; plain tables; money in the page's .money box; no style attributes and no
+    // class this page has no rule for (ghostlink, mkin and labcalc-h were borrowed by name from
+    // markup.html and drew as bare browser defaults).
+    s.api.renderTryIt();
+    const all = html + s.els["labcalc-tryout"].innerHTML;
+    out.layout = {
+      sections: (html.match(/<div class="admin-section"><h2>([^<]+)<\/h2>/g) || [])
+        .map((m) => m.replace(/.*<h2>|<\/h2>/g, "")),
+      cards: (html.match(/<div class="card">/g) || []).length,
+      itemsTable: all.indexOf("items-table") !== -1,
+      inlineStyles: all.match(/style="[^"]*"/g) || [],
+      unruledClasses: all.match(/class="[^"]*\b(ghostlink|mkin|labcalc-h)\b[^"]*"/g) || [],
+      capsStatus: (all.match(/class="builtin"/g) || []).length,
+      travelInMoneyBox: /<span class="money"><span>\$<\/span><input[^>]*data-travel-rate="travel_lodging"/.test(html),
+      lineRateInMoneyBox: /<span class="money"><span>\$<\/span><input[^>]*data-lcalc="mockup" data-f="rate"/.test(html),
+      editRateIsGhostButton: /<button class="btn ghost sm" type="button" data-labcalc-goto-labor>/.test(html),
+      notSetOnceAcross: /data-lcalc-row="jointfill"[^]*?<td colspan="3"><span class="dash">Left blank on a new estimate<\/span><\/td><\/tr>/.test(html),
+      tryBand: /<div class="areaband"><label for="labcalc-try-sf">Job SF<\/label><input id="labcalc-try-sf"[^>]*data-tryit-sf/.test(html),
+    };
 
     // a SAVED fixed line shows in Try it with its cost: 3 guys x 0.5 days x $40 x 8h = $480
     s.api.renderTryIt();
@@ -250,7 +273,9 @@ const RULE = (key, formula, extra) => Object.assign({ id: "r-" + key, layout: "g
     out.calcAbsent = { drew: html.indexOf('data-lcalc-row="polishing"') !== -1,
                        notSet: html.indexOf("Left blank on a new estimate") !== -1,
                        travelStill: html.indexOf("Lodging") !== -1,
-                       tryEmpty: s.els["labcalc-tryout"].innerHTML.indexOf("No line has a mode saved") !== -1 };
+                       tryEmpty: s.els["labcalc-tryout"].innerHTML.indexOf("No line has a mode saved") !== -1,
+                       tryEmptyDesigned: /^<div class="lines-empty">No line has a mode saved/.test(
+                         s.els["labcalc-tryout"].innerHTML) };
   }
   // a non-admin sees no controls
   {
