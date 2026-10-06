@@ -11,7 +11,13 @@
   function icon(name, size) {
     return typeof TWIcon === "function" ? TWIcon(name, size) : "";
   }
-  const state = TW.getState();
+  // THE ONE PLACE THIS PAGE LOADS ITS DRAFT, and the one-shot snapshot every `state.` below reads.
+  // A v2 draft that still carries the SPREADSHEET's pricing (a test copy made before the copy was an
+  // allowlist: priced_tabs, proposal_lump_sum, ...) is read without it, so the lump sum below falls
+  // through to v2's own `computed_bid` instead of printing the source bid's total. Any other draft
+  // comes back as the same object. Nothing is written: the stored draft keeps its keys. The view
+  // is still taken ONCE, here, so `state` stays the one-shot snapshot it always was (see liveKey).
+  const state = TW.v2PricingView(TW.getState());
   if (!state.project_name) {
     document.querySelector(".word-canvas").innerHTML = `
       <div style="background:white;padding:40pt 30pt;border-radius:4px;text-align:center;box-shadow:0 1px 4px rgba(0,0,0,0.15);">
@@ -9929,6 +9935,12 @@
 
     const composed = {
       ...mergedValues,
+      // A v2 draft that still holds the spreadsheet's pricing (see v2PricingView at the top of this
+      // file) was read without it, so the document below prints v2's price and shows no options.
+      // The stored copy must say the same, or the customer's portal prices the spreadsheet's rooms
+      // against a PDF that does not, and the send gate refuses it with nothing on any page to clear
+      // it. setState merges, so the keys are taken off by name; {} for every other draft.
+      ...TW.v2SheetKeysOut(TW.getState()),
       paragraph_overrides_all: _allOverrides,
       paragraph_overrides: paragraphOverrides,
       paragraph_overrides_meta: {

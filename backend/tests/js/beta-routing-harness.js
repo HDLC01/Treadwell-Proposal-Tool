@@ -73,15 +73,27 @@ function liftOpen() {
   return "const open = (id) => " + balanced(projectsJs, i, "open") + ";";
 }
 
-// The real serialiser + the real ?d= builder. getDraftId is the one thing stubbed inside the
-// lifted scope (it reads localStorage in the browser).
+/** The `const STAMP = "...";` line out of shared.js's IIFE: the key every blob is stamped under. */
+function sharedStampLine() {
+  const m = /\n  const STAMP = "[^"]*";/.exec(sharedJs);
+  if (!m) throw new Error("STAMP is gone from shared.js. Rewrite this harness, don't stub it");
+  return m[0].trim();
+}
+
+// The real serialiser + the real ?d= builder, and the real v2 predicate and ownership check the
+// index.js guards ask (isV2Draft is self-contained; isThisDraft reads the stamp and the draft id).
+// getDraftId is the one thing stubbed inside the lifted scope (it reads localStorage in the browser).
 const twScope = new Function("DRAFT_ID", `
   "use strict";
   function getDraftId() { return DRAFT_ID; }
+  ${sharedStampLine()}
   ${sharedFn("readForm")}
   ${sharedFn("writeForm")}
   ${sharedFn("withDraft")}
-  return { readForm: readForm, writeForm: writeForm, withDraft: withDraft };
+  ${sharedFn("isV2Draft")}
+  ${sharedFn("isThisDraft")}
+  return { readForm: readForm, writeForm: writeForm, withDraft: withDraft,
+           isV2Draft: isV2Draft, isThisDraft: isThisDraft };
 `)(DRAFT_ID);
 
 // ── a DOM stub, only as much as index.js touches ─────────────────────────────
@@ -174,8 +186,12 @@ function parseSystems(html) {
 
 // `seed` is the draft the page loads INTO -- how a project coming back through Back, or one
 // the AI autofill has already written flags for, actually arrives.
-function build(seed, countyOpts, condOpts) {
+//
+// `pageOpts.search` is the query string the page is loaded with ("?d=d1e2f3a4&edit=1"); it is empty
+// unless a scenario says otherwise, which is how every scenario but the v2 routing ones loads.
+function build(seed, countyOpts, condOpts, pageOpts) {
   const NAV = [];
+  const REPLACED = [];
   const SAVES = [];
   const STATE = JSON.parse(JSON.stringify(seed || {}));
   const nodes = {};
@@ -401,11 +417,19 @@ const documentStub = {
       return nodes[id];
     },
   };
-  const windowStub = { location: { assign: (url) => NAV.push(url) } };
+  const windowStub = { location: {
+    assign: (url) => NAV.push(url),
+    // `replace` and `search`: what the v2 routing guard at the top of index.js reads and calls.
+    replace: (url) => REPLACED.push(url),
+    search: (pageOpts && pageOpts.search) || "",
+  } };
   const TW = {
     readForm: twScope.readForm,
     writeForm: twScope.writeForm,
     withDraft: twScope.withDraft,
+    // The REAL v2 predicate and ownership check, lifted out of shared.js (see twScope).
+    isV2Draft: twScope.isV2Draft,
+    isThisDraft: twScope.isThisDraft,
     getState: () => STATE,
     setState: (partial) => { SAVES.push(JSON.parse(JSON.stringify(partial))); Object.assign(STATE, partial); },
     // js/county-picker.js builds its request out of these two, the way every other fetch in
@@ -459,8 +483,18 @@ const documentStub = {
   // against Node's own global scope rather than raising a ReferenceError -- and on this Node
   // version that global `fetch` is real, not nothing. Leaving this unbound would have every test
   // below firing a genuine network request at a relative URL the instant index.js loads.
-  new Function("document", "window", "TW", "fetch", indexJs)(
-    documentStub, windowStub, TW, conditionFetchStub);
+  //
+  // A v2 draft makes the script stop on purpose (a `replace` and then a throw), so that one error is
+  // the page doing its job and is recorded as `stopped`. Anything else rethrows: an unbound
+  // identifier must still fail loudly here.
+  let stopped = null;
+  try {
+    new Function("document", "window", "TW", "fetch", indexJs)(
+      documentStub, windowStub, TW, conditionFetchStub);
+  } catch (e) {
+    if (!/a v2 draft belongs on polish-intake/.test(String(e && e.message))) throw e;
+    stopped = String(e.message);
+  }
 
   function fire(el, type, ev) {
     const fns = (el.listeners || {})[type] || [];
@@ -517,7 +551,7 @@ const documentStub = {
     fns.forEach((fn) => fn({ target: target }));
     return fns.length;
   }
-  return { NAV, SAVES, STATE, nodes, flags, form, radios, systems, documentStub,
+  return { NAV, REPLACED, stopped, SAVES, STATE, nodes, flags, form, radios, systems, documentStub,
            condBox, switches, switchFor, press, clickSwitch,
            countyFetches, conditionFetches, releaseAuth: () => releaseAuthFn(), typeCounty, pressCounty, countyRowList, pageClick,
            fire, setWorkType, fill, byName };
@@ -1336,6 +1370,64 @@ function runHandler(which) {
     b.clickSwitch("remodel_tax");
     await tick();
     out.county.stateFallbackAbsent = { note: b.nodes["county-note"].textContent };
+  }
+
+  // ── a v2 draft does not open on the live intake ────────────────────────────────────────────
+  //
+  // The guard at the top of index.js, and the one in the submit handler. EXECUTED against the real
+  // script and the REAL isV2Draft / isThisDraft lifted out of shared.js. What matters is which way
+  // each load goes (replaced and stopped, or the form came up), so every scenario reports both, and
+  // reports what was saved: a redirected page must write nothing.
+  //
+  // THE CASES THAT MUST NOT REDIRECT matter as much as the one that must. A v2 blob that is some
+  // OTHER project's (storage holds yesterday's v2 project while a link opens a spreadsheet bid), and
+  // a load that names no project (a bare page, or "?new=1" before shared.js has given the new
+  // project its id) all have to get the form.
+  {
+    const FILLED = { project_name: "Nearman Creek (beta test)", work_type: "polish" };
+    const v2 = (extra) => Object.assign({ polish_estimate: { version: 2 }, __draft_id: DRAFT_ID },
+                                        FILLED, extra || {});
+    const sheet = (extra) => Object.assign({ __draft_id: DRAFT_ID }, FILLED, extra || {});
+    const go = (seed, search) => {
+      const b = build(seed, null, null, { search: search });
+      return { replaced: b.REPLACED.slice(), stopped: b.stopped, assigned: b.NAV.slice(),
+               saves: b.SAVES.length, formBuilt: !!(b.nodes["systems-container"].innerHTML) };
+    };
+    const NAMED = "?d=" + DRAFT_ID + "&edit=1";
+    out.v2routing = {
+      namedAndEdit: go(v2(), NAMED),
+      editOnly: go(v2(), "?edit=1"),
+      dOnly: go(v2(), "?d=" + DRAFT_ID),
+      textVersion: go(v2({ polish_estimate: { version: "2" } }), NAMED),
+      // A reload of a new project's page: shared.js has put the project's id in the address bar by
+      // then ("?new=1&d=..."), so the load names a project, and one that has become v2 goes on to v2.
+      newProjectReloaded: go(v2(), "?new=1&d=" + DRAFT_ID),
+      newProject: go(v2(), "?new=1"),
+      noQuery: go(v2(), ""),
+      anotherProjectsBlob: go(v2({ __draft_id: "some-other-draft" }), NAMED),
+      unstamped: go(v2({ __draft_id: undefined }), NAMED),
+      spreadsheetBid: go(sheet(), NAMED),
+      noEstimateAtAll: go({ __draft_id: DRAFT_ID }, NAMED),
+      oldPolishEstimate: go(sheet({ polish_estimate: { areas: [] } }), NAMED),
+      versionOne: go(sheet({ polish_estimate: { version: 1 } }), NAMED),
+    };
+
+    // The submit handler, on a page that loaded BEFORE the draft became v2 (another tab priced it in
+    // v2 since): the load guard cannot see it, so the handler must not carry it to the spreadsheet.
+    const submit = (seed) => {
+      const b = build(seed);
+      // A page that already left at load has no form to fill. Reported rather than thrown, so a
+      // scenario that breaks the load guard on purpose still reads the rest of this harness.
+      if (b.stopped) return { stoppedAtLoad: true, replaced: b.REPLACED.slice() };
+      b.setWorkType("epoxy");           // the stale form says epoxy; the draft says polish
+      b.fill(PROJECT);
+      b.fire(b.form, "submit");
+      return { assigned: b.NAV.slice(), replaced: b.REPLACED.slice(), saves: b.SAVES.length,
+               savedWorkType: b.STATE.work_type };
+    };
+    out.v2routing.submitOnAV2Draft = submit(v2());
+    out.v2routing.submitOnAnotherProjectsV2Blob = submit(v2({ __draft_id: "some-other-draft" }));
+    out.v2routing.submitOnASpreadsheetBid = submit(sheet());
   }
 
   console.log(JSON.stringify(out));

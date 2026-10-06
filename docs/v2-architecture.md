@@ -182,7 +182,7 @@ not something that has been done. The summary first, then the evidence for each 
 |---|---|---|---|---|
 | 7.1 | Work-type list, JavaScript | 9 places in 7 files | Each reads `js/work-types.js` | 7 (the v2 intake in 9) |
 | 7.2 | Work-type list, Python | 7 files | Pinned to `js/work-types.js` by one test that runs node | 7 |
-| 7.3 | Job-condition tables | 9 places | One conditions table in `js/work-types.js`. The Taxable cells are right by construction | 7 |
+| 7.3 | Job-condition tables | 10 places | One conditions table in `js/work-types.js`. The Taxable cells are right by construction. The test copy's cell list reads it too | 7 |
 | 7.4 | Built-in markup rates | 4 places | Profile data in `js/bid-profiles.js`. `markup.js` reads it. `pricing.py` is retired | 8, then 17 |
 | 7.5 | ROUNDUP | 3 bid-side copies, the workbook engine's plugin, 2 guards | One bid-side `roundUp` in `js/excel-math.js`, with a row in the parity test | 5 |
 | 7.6 | Intake scope maps | 4 places | Quantity fields live in `js/work-types.js`. `js/intake-scope.js` draws them | 7, then 9 |
@@ -190,6 +190,7 @@ not something that has been done. The summary first, then the evidence for each 
 | 7.8 | Job type to tab | 4 places | Each job type lists its tabs in `js/work-types.js` | 7 |
 | 7.9 | The v2 intake's county picker | 1 copy, about 295 lines | Mount `js/county-picker.js` and delete the copy | 9 |
 | 7.10 | The estimate page's two save blobs | 2 compositions | One `buildSavePatch` used by both | 4 |
+| 7.11 | "Is this draft a v2 estimate" | 2 places, in two languages | Held equal by one test over one table. The JavaScript one moves into `js/bid-model.js` with the model | 2 (added), 5 |
 
 ### 7.1 The work-type list, in JavaScript
 
@@ -238,13 +239,14 @@ of both `TEMPLATE_PICKER` tables and the info-sheet keys against it. A list that
 | `js/library.js:2640-2657` | The Defaults tab's condition list, and `backend/condition_defaults.py:61` (`KEYS`) |
 | `js/estimate-review.js:4032-4077` | `JOB_FLAG_ADDR`, `JOB_FLAG_LITERAL_LAYOUTS`, `JOB_FLAG_LAYOUTS`, `JOB_FLAG_TEMPLATE`: where the tax answers sit on each sheet layout |
 | `backend/estimate_writer.py:394-406` | `POLISH_CELL_MAP` and its Epoxy sibling: key to cell letter |
+| `js/polish-sandbox.js` | `COPYABLE_CELLS`: the live intake's fourteen condition cells again. A v2 test copy keeps these from its source (and no other cell), so it opens with the job's answers. Added in Phase 2 and held equal to the intake's table by `test_v2_routing_guard.py`, which lifts `CONDITIONS` out of `index.js` and compares |
 
 **Problem.** The two Taxable tables disagree today: the live intake writes four cells and the v2 model
 writes one, so a v2 bid never writes the Leveling or Gyp Taxable cell. The intake's comment records
 the same fact kept in step by hand: "two copies of one fact is what this repo keeps paying for".
 **Planned (Phase 7):** one table in `js/work-types.js` with key, label, why, default, scope, the cells
 per tab, on and off words, `needs` and where it is asked. The live intake, the v2 intake, the Takeoff
-cards and the Defaults tab read it. The Taxable cells are right by construction because they come
+cards, the Defaults tab and the test copy read it. The Taxable cells are right by construction because they come
 from the same row. The per-layout addresses in `estimate-review.js` are checked against the workbook
 by the test that already re-reads it (`test_taxable_flag_reaches_every_sheet.py`).
 
@@ -349,6 +351,32 @@ both. The same phase makes `migrateModel` carry keys it does not know, so a new 
 erased on the next save. The golden and the ratchet pin today's behaviour first, so that change shows
 as a diff.
 
+### 7.11 "Is this draft a v2 estimate"
+
+| Copy | What it is |
+|---|---|
+| `backend/drafts.py:958` | `_polish_beta`: `polish_estimate.version` is the number 2, or text that Python's `float()` reads as 2. Feeds the Projects page's `polish_beta`, which decides which intake a card opens on |
+| `js/shared.js` | `isV2Draft`: the same rule in the browser. The two routing guards (`estimate-review.js`, `index.js`) and the Proposal step's pricing view (`v2PricingView`) ask it |
+
+Two languages, so two copies, and that is the point of the table: a rule that differs by a spelling
+sends a project to the wrong screen "but only sometimes". `test_v2_routing_guard.py` runs both on one
+table of cases (`tests/_v2_cases.py`, which `test_beta_intake_routing.py` also uses), so a spelling that
+one reads as v2 and the other does not fails there. **Planned (Phase 5):** the JavaScript copy moves into
+`js/bid-model.js` with the rest of the model. The two guards stand at the destinations, the spreadsheet step
+and the live intake, and not at each link into them; `test_v2_routing_guard.py` scans the frontend for
+links and fails on one it has not been told about.
+
+A v2 test copy made before the copy was an allowlist still holds twelve keys the spreadsheet's Estimate step
+writes (`SHEET_PRICING_KEYS` in `js/shared.js`). Two functions deal with them, and both are needed. The
+Proposal step reads the draft through `v2PricingView`, which hides those keys and writes nothing. Continue
+then takes them off the stored draft with `v2SheetKeysOut`. With the view alone, a copy whose source bid had
+an option kept its `rooms` in storage: the customer's portal prices a proposal from the stored `rooms`
+before it looks at `computed_bid`, the PDF is built from the document, and the send gate (`docDrift`) and the
+server's publish route both refused the draft, with nothing on any page to clear it. The digest
+(`publishDigest`, `_publish_digest`) is deliberately not read through the view: that would pass the draft
+while the portal went on pricing the spreadsheet's rooms. A later phase that writes its own `priced_tabs`
+(every tab marked `v2: true`) is handed back whole by both functions.
+
 ## 8. The phases, and where each touches this document
 
 The phases, as the program plan numbers them. Each is its own pull request to staging.
@@ -377,6 +405,7 @@ v2 bids stay test copies until Kyle signs off each work type. Where each phase t
 | Phase | What changes here |
 |---|---|
 | 1b | The Names paragraph under the title. Section 7 is unchanged: no copy in it is about a name. |
+| 2 | 7.3 and 7.11. The test copy's cell list is one more copy of the intake's condition cells until Phase 7. `isV2Draft` is a second copy of `_polish_beta`, held equal by a test. |
 | 3 (this one) | Sections 3 to 7 are written. Goldens, ratchet, strict node, shared helpers. |
 | 4 | 7.10. The model keeps unknown keys; one save patch. |
 | 5 | 7.5, and the module rename in section 3. |

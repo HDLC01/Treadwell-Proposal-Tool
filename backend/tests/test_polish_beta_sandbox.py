@@ -466,16 +466,37 @@ def test_the_beta_suffix_does_not_accumulate():
     assert body.count("BETA_SUFFIX") >= 2, "the suffix is appended without ever being compared"
 
 
+def _listed(name: str) -> list:
+    """The quoted strings of `var NAME = [ ... ];` in the sandbox, in order."""
+    src = _code(PAGE)
+    m = re.search(r"var " + re.escape(name) + r" = \[(.*?)\];", src, re.S)
+    assert m, "%s is gone from %s: these tests need rewriting, not deleting" % (name, PAGE)
+    return [a or b for a, b in re.findall(r'"([^"]*)"|\'([^\']*)\'', m.group(1))]
+
+
 def test_the_copy_does_not_carry_the_keys_the_server_owns():
     """is_test above all. A source that a human filed as a real bid carries `false`, this page PUTs
     the whole blob on every autosave, and _SERVER_OWNED_KEYS only stops the server's value being
     dropped, not replaced. So the copy would be filed as a test through /test and then quietly
     returned to Active seconds later.
 
-    Mutation: `Object.assign({}, srcData)` and nothing else."""
+    REWRITTEN 2026-10-07, when the copy became an ALLOWLIST (Phase 2 of the v2 program). It used to be
+    `Object.assign({}, srcData)` minus four deleted keys, and that is also what carried the source's
+    spreadsheet price into a v2 copy. What it takes from the source is now a list (COPYABLE_KEYS), so a
+    server-owned key is kept out by not being on it, and a new key is kept out until somebody lists it.
+    The source half is checked here; the behaviour, run on a spreadsheet-built draft of every work type,
+    is test_v2_routing_guard.py's.
+
+    Mutation: build the copy from a spread of the source again, or list a server-owned key."""
     body = _block(PAGE, "buildCopy")
+    assert "COPYABLE_KEYS" in body and "COPYABLE_CELLS" in body, (
+        "the copy is not built from the allowlists")
+    assert "Object.assign" not in body and "srcData[k]" in body, (
+        "the copy is built as a spread of the source, which carries every key it holds")
+    keys = _listed("COPYABLE_KEYS")
+    assert len(keys) > 30, "the allowlist is suspiciously short: %r" % keys
     for key in ("is_test", "archived", "assigned_estimator", "__draft_id"):
-        assert "delete blob." + key in body, "the copy inherits the source's %s" % key
+        assert key not in keys, "the copy inherits the source's %s" % key
     assert "blob.beta_sandbox_of = srcId" in body, (
         "the copy does not say whose sandbox it is, so nothing but its id identifies it")
     assert "betaName(" in body, "the copy keeps the real project's name"

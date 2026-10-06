@@ -211,6 +211,34 @@ if (!state.project_name) {
   throw new Error("estimate-review: no project in state");
 }
 
+// ─── A v2 estimate has no spreadsheet, so it does not open here ──────────────────────────────────
+// Estimating Tool v2 (polish-estimate.html) prices itself and keeps its price in `computed_bid`.
+// This page is the SPREADSHEET's step: opening a v2 draft here ran everything below, which
+// snapshots the sheet's totals into the draft (priced_tabs, proposal_lump_sum, ...) and then writes
+// `computed_bid` = null. The estimator lost v2's price and the proposal printed the spreadsheet's
+// instead. Every step link and Back button that points at this page can reach it with a v2 draft,
+// and listing them all is how one gets missed (test_v2_routing_guard.py scans for them), so the
+// guard stands HERE, at the destination, and sends the draft to its own page.
+//
+// BEFORE anything that writes: no TW.setState, persistTabState, snapshotLumpSumsToState or autofill
+// has run, and the throw below stops the rest of this script, so a redirected visit saves nothing.
+// `replace`, so Back does not return to a page that would only bounce again.
+//
+// ONLY A BLOB THAT IS THIS PROJECT'S (TW.isThisDraft). A link opened on a machine whose storage
+// holds another project runs this page once on that blob while shared.js fetches the right one and
+// reloads; sending the first run to v2 would take a spreadsheet bid there because yesterday's open
+// project was a v2 one. The reload runs this again on the right blob.
+if (TW.isV2Draft(state) && TW.isThisDraft(state)) {
+  document.querySelector("main").innerHTML = `
+    <div style="padding:60px;text-align:center;">
+      <h1 style="color: var(--ink-variant);">This project is priced in Estimating Tool v2</h1>
+      <p>It has no spreadsheet. Opening it there now.</p>
+    </div>
+  `;
+  window.location.replace(TW.withDraft("/polish-estimate.html"));
+  throw new Error("estimate-review: a v2 draft has no spreadsheet, sent to polish-estimate.html");
+}
+
 // ─── Project Info canonicalization ──────────────────────────────────
 // In the source xlsx, the Polish/Gyp/Seal/etc sheets reference Epoxy's
 // project-info block via formulas (=Epoxy!B1, =Epoxy!B2, ...).
