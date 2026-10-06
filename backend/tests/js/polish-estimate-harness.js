@@ -3237,6 +3237,50 @@ const rendered = [];      // every string the page put on screen, for the Labour
     const localClassOn = need(loc, '[data-trv-card="lodging"]').className;
     const localHand = loc.api.model().travel.lodging.hand === true;
 
+    // HOTEL AND PER DIEM, the Review card (Hanz, 2026-10-06): always there, after Labor, before the
+    // markup block. Each state is a fresh page opened on Review.
+    const reviewOf = async (travelEdit) => {
+      const o = clone(OLD);
+      if (travelEdit) {
+        const t = clone(old.api.model().travel);
+        travelEdit(t);
+        o.travel = t;
+      }
+      const x = build({ blob: blob({ polish_estimate: o }), markupRules: RULES });
+      await x.api.init();
+      x.api.go(2);
+      return { html: x.dom.get("panels").innerHTML, bid: x.api.bid(), x: x };
+    };
+    const cardBody = (html) => {
+      const s = html.indexOf('rev-h">Hotel and Per Diem');
+      if (s === -1) return "";
+      const e = html.indexOf('class="rev"', s);
+      return html.slice(s, e === -1 ? html.length : e);
+    };
+    const hotelOff = await reviewOf(null);
+    const hotelOne = await reviewOf((t) => { t.lodging.enabled = true; });
+    const hotelBoth = await reviewOf((t) => { t.lodging.enabled = true; t.per_diem.enabled = true; });
+    const hotelRenamed = await reviewOf((t) => { t.lodging.enabled = true; t.lodging.label = "Motel"; });
+    const hotelShape = (r) => {
+      const h = r.html;
+      const body = cardBody(h);
+      return {
+        count: (h.match(/rev-h">Hotel and Per Diem/g) || []).length,
+        body: body,
+        header: (body.match(/<span class="amt">([^<]*)<\/span>/) || [])[1] || null,
+        total: (body.match(/Hotel and Per Diem Total<\/td><td class="r"><\/td><td class="r"><span data-mk="travel">([^<]*)</) || [])[1] || null,
+        travel: r.bid.travel,
+        labor: h.indexOf('rev-h">Labor'), card: h.indexOf('rev-h">Hotel and Per Diem'),
+        subtotal: h.indexOf("<td>Subtotal</td>"),
+      };
+    };
+
+    out.hotelCard = {
+      off: hotelShape(hotelOff), one: hotelShape(hotelOne),
+      both: hotelShape(hotelBoth), renamed: hotelShape(hotelRenamed),
+      oldTitleAnywhere: [hotelOff, hotelOne, hotelBoth].some((r) => r.html.indexOf("Lodging and Per Diem") !== -1),
+    };
+
     out.travelCosts = {
       // layout
       order: { sep: at('class="trvsep"'), travelLabor: at('data-lab-card="2"'),
@@ -3256,11 +3300,11 @@ const rendered = [];      // every string the page put on screen, for the Labour
       bothOnTravel: bothOn.travel, perDiemOffTravel: perDiemOff.travel,
       perDiemOffTotal: perDiemOff.total, lodgingOnlyTotal: null,
       // review
-      reviewHasCard: review.indexOf("Lodging and Per Diem") !== -1,
-      reviewHasLodging: review.indexOf(">Lodging<") !== -1,
+      reviewHasCard: review.indexOf("Hotel and Per Diem") !== -1,
+      reviewHasLodging: review.indexOf(">Hotel<") !== -1,
       reviewHasPerDiem: review.indexOf(">Per Diem<") !== -1,
       reviewOffHasPerDiem: reviewOff.indexOf(">Per Diem<") !== -1,
-      reviewOffHasLodging: reviewOff.indexOf(">Lodging<") !== -1,
+      reviewOffHasLodging: reviewOff.indexOf(">Hotel<") !== -1,
       // saving
       savedTravel: saved && saved.polish_estimate ? saved.polish_estimate.travel : null,
       // rates
@@ -3394,7 +3438,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
       farKey: farSnap.distance && farSnap.distance.key,
       farCellB4: farSaved.cell_values["Polish!B4"], farModelLocal: farSaved.polish_estimate.conditions.local,
       farSavedDistance: farSaved.polish_estimate.distance,
-      farReviewHasLodging: farReview.indexOf(">Lodging<") !== -1,
+      farReviewHasLodging: farReview.indexOf(">Hotel<") !== -1,
       near: nearSnap, nearCellB4: nearSaved.cell_values["Polish!B4"],
       seventy: seventySnap,
       unk: unkSnap, typed85: typed85, typed20: typed20, typed90: typed90, cleared: cleared, decimal: decimal,

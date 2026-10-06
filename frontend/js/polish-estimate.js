@@ -1715,19 +1715,25 @@
     labRows.push(["Labor Total", "", mkAmt(b, "labor_total"), "tot"]);
     html += card("Labor", 1, moneyAuto(b.labor_total), revTable(labRows));
 
-    // Lodging and Per Diem: listed only while switched on (an off line is out of the bid, so out of
-    // the list), and its own card because it is inside the markups but is not labor.
+    // Hotel and Per Diem (Hanz, 2026-10-06): ALWAYS drawn, straight after Labor, because it is
+    // inside the markups but is not labor and he wants to see the container whether or not it is
+    // used. A line is listed only while switched on (an off line is out of the bid, so out of the
+    // list); with both off the card says so in one row and shows $0. The title is this card's
+    // alone -- every other screen still calls the line "Lodging". The lodging line shows "Hotel"
+    // here unless the estimator typed a label of their own over the default.
     var trvRows = [];
     B.TRAVEL_LINE_KEYS.forEach(function (k) {
       var tl = (M.travel || {})[k];
       if (!tl || !tl.enabled) return;
-      trvRows.push([tl.label, B.num(B.travelQty(tl, M.labor)) + " × " + B.money2(tl.rate),
+      var name = (k === "lodging" && (!tl.label || tl.label === "Lodging")) ? "Hotel" : tl.label;
+      trvRows.push([name, B.num(B.travelQty(tl, M.labor)) + " × " + B.money2(tl.rate),
                     esc(moneyAuto(B.travelLineCost(tl, M.labor)))]);
     });
-    if (trvRows.length) {
-      trvRows.push(["Travel Subtotal", "", mkAmt(b, "travel"), "tot"]);
-      html += card("Lodging and Per Diem", 1, moneyAuto(b.travel), revTable(trvRows));
+    if (!trvRows.length) {
+      trvRows.push(["Not included. Switch Lodging or Per Diem on in the Labor step.", "", ""]);
     }
+    trvRows.push(["Hotel and Per Diem Total", "", mkAmt(b, "travel"), "tot"]);
+    html += card("Hotel and Per Diem", 1, moneyAuto(b.travel), revTable(trvRows));
 
     html += '<div class="rev">' + markupTable(b) + '</div>';
     return shell("Review the bid",

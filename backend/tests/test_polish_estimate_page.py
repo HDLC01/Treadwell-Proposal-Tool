@@ -759,7 +759,8 @@ def test_each_cost_card_runs_from_a_subtotal_to_a_total(ran):
     # The bold row that closes each card is the TOTAL, and the markup block's own two totals keep
     # the plain word — pinned so a later "make it consistent" sweep does not undo the distinction.
     assert ran["review"]["totalRowLabels"] == [
-        "Material Total", "Labor Total", "Total taxes", "Total fees + bond"], (
+        "Material Total", "Labor Total", "Hotel and Per Diem Total", "Total taxes",
+        "Total fees + bond"], (
         "the bold closing rows are not the totals: %r" % ran["review"]["totalRowLabels"])
 
 
@@ -3088,9 +3089,9 @@ def test_lodging_and_per_diem_price_inside_the_bid_and_off_adds_nothing(ran):
 
 @needs_node
 def test_an_off_travel_line_is_left_out_of_review_and_the_saved_draft_says_what_is_on(ran):
-    """Review lists a Lodging and Per Diem card only for lines that are ON, with a subtotal; an off
-    line is out of the list. The saved draft carries the whole travel block, enabled flags and the
-    typed rate included, so a reload shows what was priced.
+    """Review's Hotel and Per Diem card lists only the lines that are ON; an off line is out of the
+    list. The saved draft carries the whole travel block, enabled flags and the typed rate
+    included, so a reload shows what was priced.
 
     Mutation: skip the `!tl.enabled` return in reviewPanel -- the off Per Diem reappears."""
     t = ran["travelCosts"]
@@ -3100,6 +3101,61 @@ def test_an_off_travel_line_is_left_out_of_review_and_the_saved_draft_says_what_
     s = t["savedTravel"]
     assert s["lodging"]["enabled"] is True and s["per_diem"]["enabled"] is True
     assert str(s["per_diem"]["rate"]) == "60", "the typed Per Diem rate was not saved"
+
+
+NOT_INCLUDED = "Not included. Switch Lodging or Per Diem on in the Labor step."
+
+
+@needs_node
+def test_review_always_draws_hotel_and_per_diem_with_a_note_when_both_are_off(ran):
+    """Hanz (2026-10-06): the Review step has a container titled Hotel and Per Diem on every bid.
+    With both lines off (the default) it is still there, says nothing is included, and is $0 in the
+    header and on its total row; the old title is gone.
+
+    Mutation: wrap the card in `if (trvRows.length)` again -- the container vanishes."""
+    c = ran["hotelCard"]["off"]
+    assert c["count"] == 1, "Review has no Hotel and Per Diem container when both lines are off"
+    assert NOT_INCLUDED in c["body"]
+    assert c["header"] == "$0" and c["total"] == "$0" and c["travel"] == 0
+    assert ">Hotel<" not in c["body"] and ">Per Diem<" not in c["body"], "an off line was listed"
+    assert not ran["hotelCard"]["oldTitleAnywhere"], "Review still carries the old card title"
+
+
+@needs_node
+def test_review_hotel_card_lists_only_lines_that_are_on_and_totals_the_bid_travel(ran):
+    """One line on: it is listed as Hotel with nights x rate and no note. Both on: both listed, and
+    the Hotel and Per Diem Total row and header equal the bid's travel figure to the dollar.
+
+    Mutation: total the card from anything but b.travel -- the total stops matching."""
+    one, both = ran["hotelCard"]["one"], ran["hotelCard"]["both"]
+    assert ">Hotel<" in one["body"] and ">Per Diem<" not in one["body"]
+    assert NOT_INCLUDED not in one["body"]
+    assert one["travel"] > 0 and one["total"] == one["header"]
+    assert ">Hotel<" in both["body"] and ">Per Diem<" in both["body"]
+    assert NOT_INCLUDED not in both["body"]
+    assert both["travel"] > one["travel"], "Per Diem added nothing to the card"
+    expected = "${:,.0f}".format(both["travel"]) if both["travel"] == int(both["travel"]) \
+        else "${:,.2f}".format(both["travel"])
+    assert both["total"] == expected == both["header"]
+
+
+@needs_node
+def test_a_renamed_lodging_label_is_shown_instead_of_hotel(ran):
+    """The estimator's own label on the lodging line wins; only the untouched default reads Hotel.
+
+    Mutation: force "Hotel" for every label -- the saved Motel line is relabelled."""
+    body = ran["hotelCard"]["renamed"]["body"]
+    assert ">Motel<" in body and ">Hotel<" not in body
+
+
+@needs_node
+def test_hotel_card_sits_between_labor_and_the_markup_subtotal(ran):
+    """Order on Review: Labor card, then Hotel and Per Diem, then the Subtotal / Markup block.
+
+    Mutation: draw the card before Labor or after the markup table -- the order assertion fails."""
+    for k in ("off", "one", "both"):
+        c = ran["hotelCard"][k]
+        assert 0 < c["labor"] < c["card"] < c["subtotal"], k
 
 
 @needs_node
