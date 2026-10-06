@@ -525,6 +525,10 @@ def test_clearing_the_guys_box_returns_it_to_the_man_days_on_change_not_on_input
     assert t["afterBackToAuto"] == {"guys": 28.5, "auto": True}
     assert c["clearedBox"] == "28.5", "the box does not show the man-days: %r" % c["clearedBox"]
     assert c["clearedHint"], "the hint did not go back to the auto wording"
+    assert c["clearRebuilds"] == 0, (
+        "clearing the box rebuilt the Labor panel %d time(s): the element the estimator just "
+        "tabbed or clicked into is destroyed and the next click or keystroke is lost"
+        % c["clearRebuilds"])
     assert c["costAuto"] == c["costFresh"] != c["costTyped"], (
         "cleared cost %r, never-touched cost %r, typed cost %r"
         % (c["costAuto"], c["costFresh"], c["costTyped"]))
@@ -539,6 +543,7 @@ def test_clearing_lodging_or_per_diem_returns_it_to_the_man_days(ran):
     assert t["midClearLodging"]["qty_auto"] is False, "empty on input went back to auto"
     assert t["backToAuto"]["qty_auto"] is True and t["backToAuto"]["qty"] == 16.5
     assert t["clearedLodgingBox"] == "16.5"
+    assert t["lodgeClearRebuilds"] == 0, "clearing Lodging rebuilt the panel and dropped focus"
     assert t["clearedLodgingCost"] == "$1,155"
     assert t["lodgingHints"]["auto"] and t["lodgingHints"]["noTypeMyOwn"]
     assert t["typedHintLodging"], "the typed hint is not the new wording"

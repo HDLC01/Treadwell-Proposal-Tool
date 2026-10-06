@@ -888,7 +888,9 @@ const rendered = [];      // every string the page put on screen, for the Labour
         const hintOf = () => {
           const card = kp.innerHTML.split('class="tk lab')[ti + 1] || "";
           const g = card.split('data-k="guys"')[1] || "";
-          return (/<p class="hint">([^<]*)<\/p>/.exec(g) || ["", ""])[1];
+          // The Guys hint is keyed (data-hint-lab) so the in-place repaint can find it; read THAT one,
+          // not the first plain hint after the box (which is the Hours line's).
+          return (/<p class="hint" data-hint-lab="[^"]*">([^<]*)<\/p>/.exec(g) || ["", ""])[1];
         };
         const autoHint = hintOf();
         typeInto(k, '[data-lab="' + ti + '"][data-k="guys"]', "7");
@@ -931,11 +933,13 @@ const rendered = [];      // every string the page put on screen, for the Labour
       const midBackspace = { guys: travelRow().guys, auto: travelRow().guys_auto };
       typeInto(c, '[data-lab="' + travelIdx() + '"][data-k="guys"]', "2");
       const afterRetype = { guys: travelRow().guys, auto: travelRow().guys_auto };
+      const writesBefore = cp.htmlWrites;
       changeTo(c, '[data-lab="' + travelIdx() + '"][data-k="guys"]', "   ");
+      const clearRebuilds = cp.htmlWrites - writesBefore;
       const afterBackToAuto = { guys: travelRow().guys, auto: travelRow().guys_auto };
       const clearedBox = String(need(c, '[data-lab="' + travelIdx() + '"][data-k="guys"]').value);
-      const clearedHint = cp.innerHTML.split('data-k="guys"')[(cp.innerHTML.split('data-k="guys"').length - 1)]
-        .indexOf("Man-days from the tasks above.") !== -1;
+      const clearedHint = need(c, '[data-hint-lab="' + travelIdx() + '"]').textContent
+        === "Man-days from the tasks above.";
       const costAuto = txt(c, '[data-lcost-for="' + travelIdx() + '"]');
       // And the cost is the one the same man-days price on a never-touched row.
       const fresh = build();
@@ -948,7 +952,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
       // Typing "2" over the man-days priced differently from the man-days.
       out.travelClear = { costTyped: costTyped, midBackspace: midBackspace,
         afterRetype: afterRetype, costAuto: costAuto, costFresh: costFresh,
-        clearedBox: clearedBox, clearedHint: clearedHint };
+        clearedBox: clearedBox, clearedHint: clearedHint, clearRebuilds: clearRebuilds };
       out.travelGuys = {
         seeded: before, afterCrewEdit: afterCrewEdit,
         afterTyping: afterTyping, stickyAfterCrewMoves: stickyAfterCrewMoves,
@@ -3265,13 +3269,15 @@ const rendered = [];      // every string the page put on screen, for the Labour
     // input stays typed; the change commits it.
     typeInto(old, '[data-trv="lodging"][data-k="qty"]', "");
     const midClearLodging = clone(old.api.model().travel.lodging);
+    const lodgeWrites = old.dom.get("panels").htmlWrites;
     changeTo(old, '[data-trv="lodging"][data-k="qty"]', "");
+    const lodgeClearRebuilds = old.dom.get("panels").htmlWrites - lodgeWrites;
     const backToAuto = clone(old.api.model().travel.lodging);
     const clearedLodgingBox = need(old, '[data-trv="lodging"][data-k="qty"]').value;
     const clearedLodgingCost = txt(old, '[data-trvcost-for="lodging"]');
     const lodgingHtml = old.dom.get("panels").innerHTML;
     const lodgingHints = {
-      auto: lodgingHtml.indexOf("Man-days from the tasks above.") !== -1,
+      auto: need(old, '[data-hint-trv="lodging"]').textContent === "Man-days from the tasks above.",
       noTypeMyOwn: lodgingHtml.indexOf("Type my own") === -1 &&
         lodgingHtml.indexOf("data-trv-manual") === -1 && lodgingHtml.indexOf("data-trv-auto") === -1,
     };
@@ -3373,7 +3379,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
       costCellOn: costCellOn, qtyAuto: qtyAuto,
       typedLodging: typedLodging, typedTravel: typedBid.travel, typedCostCell: typedCostCell,
       backToAuto: backToAuto, midClearLodging: midClearLodging,
-      clearedLodgingBox: clearedLodgingBox, clearedLodgingCost: clearedLodgingCost,
+      clearedLodgingBox: clearedLodgingBox, lodgeClearRebuilds: lodgeClearRebuilds, clearedLodgingCost: clearedLodgingCost,
       lodgingHints: lodgingHints, typedHintLodging: typedHintLodging,
       bothOnTravel: bothOn.travel, perDiemOffTravel: perDiemOff.travel,
       perDiemOffTotal: perDiemOff.total, lodgingOnlyTotal: null,

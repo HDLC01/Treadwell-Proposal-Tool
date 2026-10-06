@@ -1365,9 +1365,8 @@
       dfltWarnHtml('data-calcwarn="' + i + ':guys"', calcDefaultText(r, "guys")) +
       // "Guys", never "Crew" -- Hanz renamed that column and
       // test_nothing_on_screen_says_labour_or_crew holds the page to it.
-      '<p class="hint">' + (auto ? 'Man-days from the tasks above.'
-        : (hours ? 'Typed by you. Clear it to use the man-days from the tasks above.'
-          : 'How many on it.')) + '</p></div>' +
+      '<p class="hint" data-hint-lab="' + i + '">' + (hours ? B.manDaysHint(auto)
+        : 'How many on it.') + '</p></div>' +
 
       '<div class="f"><label>' + (hours ? "Hours" : "Days") + '</label>' +
       '<input class="n" data-lab="' + i + '" data-k="days" value="' + esc(nv(r.days)) + '">' +
@@ -1439,8 +1438,7 @@
       '<div class="f"><label>' + unitWord + '</label>' +
       '<input class="n" data-trv="' + key + '" data-k="qty" value="' + esc(nv(l.qty)) + '"' +
       (auto ? ' data-auto="1"' : '') + '>' +
-      '<p class="hint">' + (auto ? "Man-days from the tasks above."
-        : "Typed by you. Clear it to use the man-days from the tasks above.") + '</p></div>' +
+      '<p class="hint" data-hint-trv="' + key + '">' + B.manDaysHint(auto) + '</p></div>' +
       '<div class="f"><label>Rate</label>' +
       '<span class="mny">$<input class="n" data-trv="' + key + '" data-k="rate" value="' +
       esc(nv(l.rate)) + '"></span>' +
@@ -1932,11 +1930,17 @@
     //
     // `data-auto` marks the ones the page owns. A box the estimator has taken over is not in this
     // list (typing flips it to manual and rebuilds the card), so this cannot overwrite typing.
-    document.querySelectorAll('[data-lab][data-k="guys"][data-auto]').forEach(function (el) {
+    document.querySelectorAll('[data-lab][data-k="guys"]').forEach(function (el) {
       var r = M.labor[parseInt(el.getAttribute("data-lab"), 10)];
-      if (!r) return;
+      if (!r || r.unit !== "hours") return;
+      if (!r.guys_auto) return;
+      el.setAttribute("data-auto", "1");               // cleared back to auto: the page owns it again
       var v = r.guys == null ? "" : String(r.guys);
       if (el.value !== v) el.value = v;
+    });
+    document.querySelectorAll("[data-hint-lab]").forEach(function (el) {
+      var r = M.labor[parseInt(el.getAttribute("data-hint-lab"), 10)];
+      if (r && r.unit === "hours") el.textContent = B.manDaysHint(!!r.guys_auto);
     });
     // The Travel card's own dim state, live: typing in Guys or Hours takes this path
     // (`changed(false)`), never a rebuild, so nothing else repaints the card's class. Keyed
@@ -1960,11 +1964,16 @@
       document.querySelectorAll("[data-trvcost-for]").forEach(function (el) {
         el.textContent = moneyAuto(B.travelLineCost(M.travel[el.getAttribute("data-trvcost-for")], M.labor));
       });
-      document.querySelectorAll('[data-trv][data-k="qty"][data-auto]').forEach(function (el) {
+      document.querySelectorAll('[data-trv][data-k="qty"]').forEach(function (el) {
         var l = M.travel[el.getAttribute("data-trv")];
-        if (!l) return;
+        if (!l || l.qty_auto === false) return;
+        el.setAttribute("data-auto", "1");
         var v = l.qty == null ? "" : String(l.qty);
         if (el.value !== v) el.value = v;
+      });
+      document.querySelectorAll("[data-hint-trv]").forEach(function (el) {
+        var l = M.travel[el.getAttribute("data-hint-trv")];
+        if (l) el.textContent = B.manDaysHint(l.qty_auto !== false);
       });
       document.querySelectorAll("[data-trv-card]").forEach(function (el) {
         var l = M.travel[el.getAttribute("data-trv-card")];
@@ -2521,14 +2530,14 @@
           var br = M.labor[parseInt(blankLab, 10)];
           if (br && br.unit === "hours" && !br.guys_auto) {
             br.guys_auto = true;
-            changed(true);
+            changed(false);                              // in place: a rebuild eats the next click
             return;
           }
         } else if (blankTrv !== null && blankKey === "qty") {
           var bl = M.travel && M.travel[blankTrv];
           if (bl && bl.qty_auto === false) {
             bl.qty_auto = true;
-            changed(true);
+            changed(false);                              // in place: a rebuild eats the next click
             return;
           }
         }

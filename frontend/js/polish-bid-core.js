@@ -206,6 +206,13 @@
   // sheet is untouched and still carries B68/D68 -- this beta simply no longer writes a "Yes"
   // to B5, so his own formula reads it as not-hard-bid, which is the same outcome.
 
+  /** The hint under a Guys / Lodging / Per Diem box: one wording, drawn by the card builders and
+   *  repainted in place when clearing the box hands the figure back to the man-days. */
+  function manDaysHint(auto) {
+    return auto ? "Man-days from the tasks above."
+      : "Typed by you. Clear it to use the man-days from the tasks above.";
+  }
+
   /** Is this row counted? `enabled` is absent on every row saved before the slider existed and on
    *  every row nobody has switched, and absent means ON -- only an explicit false is off. Shared by
    *  labor rows, takeoff rows and (through M.conditions) the condition cards, so there is one
@@ -2130,7 +2137,7 @@
     LOCAL_MILES: LOCAL_MILES, milesOrNull: milesOrNull, distanceKey: distanceKey,
     normalizeDistance: normalizeDistance, driveHoursFor: driveHoursFor, isFarMiles: isFarMiles, applyDistance: applyDistance,
     clearDistance: clearDistance, distanceNote: distanceNote, travelHow: travelHow,
-    rowOn: rowOn, sliderHtml: sliderHtml,
+    rowOn: rowOn, sliderHtml: sliderHtml, manDaysHint: manDaysHint,
     filledIn: filledIn,
     takeoffSf: takeoffSf, measuredSf: measuredSf,
     seedTakeoffSf: seedTakeoffSf,
