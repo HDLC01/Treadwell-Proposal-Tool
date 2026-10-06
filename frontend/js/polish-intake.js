@@ -692,40 +692,31 @@
     var cs = [values.city, (values.state || "").toUpperCase()].filter(Boolean).join(", ");
 
     var cur = TW.getState();
-    var existing = cur.polish_estimate || {};
-    // MERGE, NEVER REPLACE. The calculator's takeoff and labor rows live under this same key.
-    // Writing { conditions: … } over the top of it to record one toggle would silently delete a
-    // finished takeoff — and the estimator would not find out until the bid came back at zero.
-    // Only `conditions` is this page's to state.
+    // MERGE, NEVER REPLACE. The calculator's takeoff and labor rows -- and whatever else a saved
+    // model holds, `tabs` included -- live under this same key. Writing { conditions: … } over the
+    // top of it to record one toggle would silently delete a finished takeoff, and the estimator
+    // would not find out until the bid came back at zero. Only `conditions` and `conditions_shown`
+    // are this page's to state, and B.patchModel is where that is decided (polish-bid-core.js):
+    // it lays those two over the saved model and leaves every other key exactly as it was saved.
     //
-    // Through migrateModel, so what lands is a well-formed v2 model with its version stamped: a
-    // brand-new project has no polish_estimate at all, and a bare { conditions } blob was read as
-    // "unversioned, unrecognised" — the calculator replaced it with defaults and the Projects page
-    // sent the project back to the spreadsheet intake. Both of those were silent.
-    var model = B.migrateModel(existing);
-    model.conditions = Object.assign({}, model.conditions, M.conditions);
-    // The card map seeded on this page's first load rides along; a later save carries the same
-    // map back, since M was read through migrateModel from what was saved.
-    if (M.conditions_shown) model.conditions_shown = M.conditions_shown;
-    // LABOR IS NOT THIS PAGE'S TO STATE -- and until 2026-09-17 it stated it anyway, by accident.
-    // This page has no labor UI at all; the line above says out loud that only `conditions` is
-    // its own. But migrateModel fills a missing `labor` in from freshModel() before it hands the
-    // model back, so the FIRST save on a brand-new project persisted four crew rows nobody had
-    // been shown, let alone typed.
+    // It reads the saved model through migrateModel, so what lands is a well-formed v2 with its
+    // version stamped: a brand-new project has no polish_estimate at all, and a bare
+    // { conditions } blob was read as "unversioned, unrecognised" -- the calculator replaced it
+    // with defaults and the Projects page sent the project back to the spreadsheet intake. Both of
+    // those were silent.
     //
-    // That was enough to make the Labor step's own defaults unreachable in the normal flow. The
-    // calculator adds the library's default labor lines to a bid whose labor has never been
-    // stated (B.laborUnstated, and the seeding block in js/polish-estimate.js); a model minted
-    // here had already stated it, seconds before the estimator ever reached the Labor step. Every
-    // beta project starts on this page, so every beta project arrived pre-disqualified.
+    // The card map seeded on this page's first load rides along; a later save carries the same map
+    // back, since M was read through migrateModel from what was saved.
     //
-    // So the key is dropped back off -- ONLY when it was not already there. The guard reads what
-    // is ALREADY SAVED, which means the moment the calculator writes a real labor array this
-    // leaves it strictly alone; flipping a toggle here can never delete an estimator's crew rows.
-    // Nothing on screen changes either way: reopening the calculator fills the display copy in
-    // from freshModel() exactly as it did before, because that is what migrateModel does with a
-    // model that states no labor.
-    if (B.laborUnstated(cur.polish_estimate)) delete model.labor;
+    // LABOR IS NOT THIS PAGE'S TO STATE, which patchModel also enforces: this page has no labor UI
+    // at all, and migrateModel fills a missing `labor` in from freshModel(), so the FIRST save on a
+    // brand-new project used to persist four crew rows nobody had been shown. That made the Labor
+    // step's own defaults unreachable (B.laborUnstated is the gate they are seeded behind), so
+    // patchModel takes the key back off -- ONLY when what is already saved never stated it.
+    var model = B.patchModel(cur.polish_estimate, {
+      conditions: M.conditions,
+      conditions_shown: M.conditions_shown
+    });
 
     // ONE SOURCE OF TRUTH FOR SF. Once the takeoff holds a measurement, polish_sf is the takeoff
     // total (js/polish-estimate.js writes it) and is not this page's to state -- see sfLocked().

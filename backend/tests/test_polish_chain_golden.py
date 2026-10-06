@@ -5,8 +5,10 @@ answers for 2,228 deliberately awkward inputs: markupChain over every GP edge an
 of the eight job conditions, every shape the remodel rate arrives in and a sweep of dirty values;
 the number helpers; labor, travel and takeoff; the conditions and what they write into Kyle's
 workbook; the default readers; the model; the labor calculator; and what a new bid is seeded with.
-It was cut ONCE from a clean `git archive` of origin/staging (meta.commit says which commit) by
-tests/js/gen-chain-golden.js, whose recipe lists inputs only: every answer is the real code's.
+It was cut from a clean export of an origin/staging commit (meta.commit says which) by
+tests/js/gen-chain-golden.js, whose recipe lists inputs only: every answer is the real code's. Phase 3
+cut it from 3f94ed2. Phase 4 re-cut it on d569332 and exactly ONE vector moved, `model/migrate/unknownKeys`
+(the model now keeps the keys it does not know); the other 2,227 are as Phase 3 recorded them.
 
 Phases 4 to 10 move this code: the model module is renamed, ROUNDUP and the number helpers move to a
 leaf module, rates and the GP ladder become profile data, the chain becomes an engine. Each must
@@ -228,12 +230,16 @@ def test_every_function_the_later_phases_will_move_is_covered(vectors):
     assert "exports" in vectors
 
 
-def test_phase_4_will_change_exactly_this_the_model_drops_keys_it_does_not_know(vectors):
-    """Pinned so the Phase 4 passthrough shows as the diff it is: today an unknown key or a `tabs`
-    block on a saved model is dropped on load."""
-    kept = vectors["model/migrate/unknownKeys"]["out"]
-    assert "tabs" not in kept and "custom_key" not in kept
-    assert vectors["model/migrate/unknownKeys"]["args"][0]["tabs"] and vectors["model/migrate/unknownKeys"]["args"][0]["custom_key"] == 1
+def test_phase_4_changed_exactly_this_the_model_keeps_keys_it_does_not_know(vectors):
+    """The one vector Phase 4 moved, pinned so a change that drops these keys again shows as the diff
+    it is. Until Phase 4 an unknown key or a `tabs` block on a saved model was dropped on load (this
+    test used to say so, and the recipe still says so beside the input); now it comes back as saved.
+    Every other key of the answer is what it was, and the input is the same."""
+    v = vectors["model/migrate/unknownKeys"]
+    assert v["args"][0]["tabs"] and v["args"][0]["custom_key"] == 1
+    assert v["out"]["tabs"] == v["args"][0]["tabs"] and v["out"]["custom_key"] == 1
+    assert sorted(set(v["out"]) - {"tabs", "custom_key"}) == [
+        "conditions", "contingency", "fees", "labor", "takeoff", "totals", "travel", "version"]
 
 
 # ── red without the code: break a COPY of the module and watch the comparison fail ────────────────

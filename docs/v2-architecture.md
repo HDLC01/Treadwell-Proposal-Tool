@@ -6,9 +6,11 @@ today, with what happens to each copy.
 
 **What exists today, and what does not.** The tests and the golden files described in section 6
 exist now. The modules in section 3 other than the current `polish-bid-core.js`, `library-core.js`
-and `markup-core.js` do not exist yet: they are the design the phases build toward. Line numbers in
-this document are on `origin/staging` at commit `3f94ed2` (2026-10-07). They will drift; the file
-and the name are what to search for.
+and `markup-core.js` do not exist yet: they are the design the phases build toward. Phase 4 added
+`patchModel`, `buildSavePatch` and `MODEL_KEYS` to the current `polish-bid-core.js` (see 7.10 and the
+model-safety paragraph of section 6). Line numbers in this document are on `origin/staging` at commit
+`3f94ed2` (2026-10-07), except where a paragraph says they are on the Phase 4 change. They will
+drift; the file and the name are what to search for.
 
 **Names.** The tool people called the Polish beta is now **Estimating Tool v2**, and its database
 page, which was the Polish Estimate Database, is now **v2 Estimates** (Phase 1b, 2026-10-07). Only
@@ -157,6 +159,18 @@ rows saved switched off, `same_floor` rows, the bid's own coverage, Fees plus Te
 said no Travel Labor, and a stale `totals` snapshot the page must never price from. Each is opened
 plain, opened beside a library full of defaults (a saved bid ignores it), and saved then reopened.
 
+**The model's safety (Phase 4).** `backend/tests/test_v2_model_safety.py`, with
+`tests/js/model-safety-harness.js`, holds the laws Phase 4 put in place. They run over every bid the
+ratchet saves (lifted from its own scenarios, so a new fixture there is covered here) and over
+synthetic models that carry `work_type`, `tabs`, a rates snapshot and a profile stamp.
+`migrateModel` keeps every key it is given. `migrateModel` twice gives what `migrateModel` once does.
+Reading a saved model never edits it. A key the model does not know comes back as saved, and `tabs`
+comes back byte for byte. The estimate page is saved twice from identical drafts, once by its timer
+and once by `pagehide`, and the two writes must be equal. An intake save after an estimate save
+leaves `tabs` byte for byte as it was. The v1 upgrade is deliberately not a passthrough (it consumes
+`areas` and `labour`), and the tests pin that too. The file ends with a table of twelve breaks of a
+scratch copy, each of which must turn a law red.
+
 **Strict node.** About 170 older test files skip when node is missing. On a CI runner that would
 pass a run that tested none of the frontend. `tests/test_node_strict.py` fails under GitHub Actions
 when node is absent, and runs the new golden tests with node taken off the path to prove they fail
@@ -169,9 +183,11 @@ converted. New harnesses use these.
 
 **Not covered, on purpose.** Words and pixels (`travelHow`, `distanceNote`, `sliderHtml`), the distance
 lookup, and the page's rendering have their own harnesses. They are not what the program restructures.
-Two things the golden recorded as they are today and nobody has decided to fix:
-`seedTakeoffSf` throws a TypeError when the takeoff holds a null row, and the model drops any saved
-key it does not know (Phase 4 changes the second one, and the diff will show it).
+One thing the golden recorded as it is today and nobody has decided to fix: `seedTakeoffSf` throws a
+TypeError when the takeoff holds a null row. A second one, that the model dropped any saved key it
+did not know, Phase 4 fixed, and the diff showed it: the chain golden moved by exactly one vector,
+`model/migrate/unknownKeys`, which now keeps `tabs` and `custom_key`. The other 2,227 are as they
+were, and so are the library golden and the saved-bid ratchet.
 
 ## 7. Every concept, where it is copied today, and what happens to each copy
 
@@ -189,7 +205,7 @@ not something that has been done. The summary first, then the evidence for each 
 | 7.7 | Role sets | 4 sets in 3 files | Computed from each tab's role in `js/work-types.js` | 7 |
 | 7.8 | Job type to tab | 4 places | Each job type lists its tabs in `js/work-types.js` | 7 |
 | 7.9 | The v2 intake's county picker | 1 copy, about 295 lines | Mount `js/county-picker.js` and delete the copy | 9 |
-| 7.10 | The estimate page's two save blobs | 2 compositions | One `buildSavePatch` used by both | 4 |
+| 7.10 | The estimate page's two save blobs | 1 composition (was 2) | Done: one `buildSavePatch` used by both, and the intake's merge is one `patchModel` | 4 (done) |
 | 7.11 | "Is this draft a v2 estimate" | 2 places, in two languages | Held equal by one test over one table. The JavaScript one moves into `js/bid-model.js` with the model | 2 (added), 5 |
 
 ### 7.1 The work-type list, in JavaScript
@@ -337,19 +353,34 @@ never be read (the Markups page already refuses it by name).
 Both write the same four keys: `county`, `county_tax_rate`, `county_remodel_rate`, `county_notes`.
 **Planned (Phase 9):** the v2 intake mounts `county-picker.js` and its copy is deleted.
 
-### 7.10 The estimate page's two save compositions
+### 7.10 The estimate page's save, now one composition
+
+Line numbers in this subsection are on the Phase 4 change.
 
 | Copy | What it writes |
 |---|---|
-| `js/polish-estimate.js:442-491` (`saveSoon`, the 600 ms autosave) | `polish_estimate`, `cell_values` (the conditions, plus the library's figures for dye and joint filler), `polish_sf` guarded by `measuredSf`, `polish_2_sf`, `computed_bid` |
-| `js/polish-estimate.js:496-518` (the `pagehide` flush) | `polish_estimate`, `polish_sf` as `b.sf`, `polish_2_sf`, `computed_bid`. No `cell_values`, and no `measuredSf` guard |
+| `js/polish-bid-core.js:2162` (`buildSavePatch`) | The one composition: `polish_estimate` (the model, every key it holds, with `totals` stamped from the bid), `cell_values` (the conditions merged over the draft's own, plus the library's figures for dye and joint filler), `polish_sf` (the priced area, else the measured floor), `polish_2_sf`, `computed_bid` |
+| `js/polish-estimate.js:447` (`saveSoon`, the 600 ms autosave) and `:459` (the `pagehide` flush) | One call each: `B.buildSavePatch(M, draft, { bid: bid(), library: conditionLibrary() })`, laid over the draft |
+| `js/polish-bid-core.js:2114` (`patchModel`) and `js/polish-intake.js:716` (its one call) | The intake's merge: its `conditions` and `conditions_shown` laid over the saved model, every other key left as saved |
 
-**Problem.** They have drifted. A tab closed inside the debounce window does not refresh the
-condition cells, and when the only SF row is switched off it saves a polish SF of 0 where the
-autosave keeps the measured floor. **Planned (Phase 4):** one `buildSavePatch` in the model, used by
-both. The same phase makes `migrateModel` carry keys it does not know, so a new key is no longer
-erased on the next save. The golden and the ratchet pin today's behaviour first, so that change shows
-as a diff.
+**Problem, as it was.** The autosave and the `pagehide` flush composed the blob by hand in two
+places, and the two had drifted. A tab closed inside the debounce window did not refresh the
+condition cells, and when the only SF row was switched off the flush saved a polish SF of 0 where the
+autosave kept the measured floor. It was worse than the debounce window suggests: the page never
+clears its timer handle once the timer has fired, so the `pagehide` handler ran on every page exit
+after any edit, and with the only SF row off it overwrote the autosave's correct figure with 0. That
+handle is left as it is, because both saves write the same patch now and the extra flush writes
+nothing new. Separately, `migrateModel` rebuilt the model from a fixed key list, so any key it did
+not name was erased by the next save.
+
+**Done (Phase 4).** `buildSavePatch` is a pure function in the model, called by both saves, and it
+throws when it is not handed the bid, because a save with no price is a save of zero. `patchModel`
+states only `conditions` and `conditions_shown`, ignores any other key of its patch, and never states
+`labor` on a bid that never stated it. `migrateModel`'s v2 branch carries every key it does not
+normalise (`MODEL_KEYS` is the list it does), `tabs` included, through `copyInto`, which refuses
+`__proto__`, `constructor` and `prototype`. The v1 branch is a one-way upgrade and stays as it was.
+Nothing writes `tabs` yet: this change only makes it survive. The golden moved by one vector for
+it (section 6), and `test_v2_model_safety.py` holds the laws.
 
 ### 7.11 "Is this draft a v2 estimate"
 
@@ -407,7 +438,7 @@ v2 bids stay test copies until Kyle signs off each work type. Where each phase t
 | 1b | The Names paragraph under the title. Section 7 is unchanged: no copy in it is about a name. |
 | 2 | 7.3 and 7.11. The test copy's cell list is one more copy of the intake's condition cells until Phase 7. `isV2Draft` is a second copy of `_polish_beta`, held equal by a test. |
 | 3 (this one) | Sections 3 to 7 are written. Goldens, ratchet, strict node, shared helpers. |
-| 4 | 7.10. The model keeps unknown keys; one save patch. |
+| 4 | 7.10. The model keeps unknown keys; one save patch. Done. |
 | 5 | 7.5, and the module rename in section 3. |
 | 7 | 7.1, 7.2, 7.3, 7.6, 7.7, 7.8. `js/work-types.js` and the Python pin. |
 | 8 | 7.4. `js/bid-profiles.js` and `js/bid-engine.js`; Polish runs through a profile and its golden does not move. |

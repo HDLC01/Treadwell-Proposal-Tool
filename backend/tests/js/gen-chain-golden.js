@@ -769,7 +769,8 @@ function groupModel(call) {
     partialContingency: { contingency: 500 },
     partialJunk: { foo: 1 },
     currentShape: CURRENT_SHAPE,
-    // keys the model does not know today: they are dropped (the Phase 4 passthrough changes this)
+    // keys the model does not know: kept as saved since Phase 4 (until then they were dropped, and this
+    // vector recorded that: it is the one vector Phase 4 moved)
     unknownKeys: Object.assign({}, STALE_V2_NO_TRAVEL, { tabs: { Epoxy: { layout: "epoxy", takeoff: [] } }, custom_key: 1 }),
     noTravelLabor: { version: 2, takeoff: [], labor: [{ id: "polishing", label: "Polishing", guys: 3, days: 2, rate: 33 }],
                      no_travel_labor: true, conditions: {} },
