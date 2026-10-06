@@ -243,7 +243,7 @@ const LAYOUTS = ["polish", "seal", "epoxy", "leveling", "gyp", "global"];
 // hard_bid was a fourth GLOBAL_LINE_KEYS entry and LINE_KEYS' own second entry until 2026-09-22
 // (Hanz: "remove all hard bids from the polish intake form. And also on the markups"). Its
 // ladder-shaped built-in went with it — GP_BANDS is the only ladder left to round-trip.
-const GLOBAL_LINE_KEYS = ["bond", "travel_lodging", "travel_per_diem", "labor_rate"];
+const GLOBAL_LINE_KEYS = ["bond", "travel_lodging", "travel_per_diem", "labor_rate", "fees_textura"];
 const TAB_LINE_KEYS = ["gp", "super_pto", "soft_costs"];
 // The union, in the order the rows come back — the chain first, then the two lines that are not
 // chain lines at all.

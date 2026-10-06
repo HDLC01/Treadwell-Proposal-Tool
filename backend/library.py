@@ -1239,7 +1239,14 @@ def _shape_labor(row: Dict[str, Any]) -> Dict[str, Any]:
         # exactly why the migration backfills them to true in the same breath it adds the column:
         # this function only ever reports what the store holds, it does not itself decide what an
         # absent value should mean the way `_coerce_work_types([])` does for work types.
-        "favorite": bool(row.get("favorite")),
+        #
+        # TRAVEL IS THE ONE ROW WHOSE ABSENT/NULL `favorite` READS TRUE (2026-10-06). Travel is a
+        # default like any other now -- Remove writes favorite=false, and the new-bid seeding and
+        # the Defaults tab both read it -- but it has been on every new bid since before the
+        # column existed, so a Travel row with nothing stored must keep meaning "on". Only an
+        # explicit false turns it off.
+        "favorite": (row.get("favorite") is not False) if row.get("id") == "travel"
+                    else bool(row.get("favorite")),
         "default_on": _default_on(row),
         "default_work_types": _coerce_work_types(row.get("default_work_types")),
         "sort": int(_as_float(row.get("sort")) or 0),
@@ -1347,15 +1354,17 @@ def delete_labor(labor_id: str) -> bool:
     anything can address Travel by — `travelSeed()` in polish-bid-core.js falls back to its own
     $33.00/hr the moment this table stops answering with a `travel` row, and `migrateModel` finds
     Travel on every saved draft by that exact id — so a soft delete here would not remove Travel
-    from a single estimate, it would only take away the one thing that makes it editable. The
-    Labor tab already hides the delete icon for this row (a UI nicety, and only that: a browser
+    from a single estimate, it would only take away the one thing that makes it editable.
+    "STOP BEING A DEFAULT" IS NOT A DELETE: the Defaults tab's Remove PATCHes `favorite=false` on
+    this same row, and new bids then do not get Travel (see seedLibraryLabor). The Labor tab
+    already hides the delete icon for this row (a UI nicety, and only that: a browser
     is not a trust boundary), so this is the check that actually holds if that ever slips, a
     caller goes around the tab, or a future admin screen forgets to ask the same question. See
     `test_deleting_travel_is_refused_not_silently_soft_deleted` in test_library_labor.py."""
     if labor_id == "travel":
         raise ValidationError(
-            "Travel is built into every estimate and can't be deleted — reset it back to the "
-            "shipped rate instead.")
+            "The Travel row can't be deleted — take it off the Defaults tab (Remove) to stop "
+            "new bids getting it, or reset it back to the shipped rate.")
     sb = get_client()
     cur = (sb.table(LABOR).select("id")
            .eq("id", labor_id).is_("deleted_at", "null").limit(1).execute())

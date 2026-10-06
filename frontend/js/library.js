@@ -148,8 +148,14 @@
         var mk = await api("/api/markup/rules");
         if (mk.ok) {
           var mj = await mk.json();
+          // The Fees + Textura default has its own row on this tab (feesDefaultRow), so it is read
+          // out of the same answer here and kept out of the generic Markup list below.
+          FEES_RULE = null;
+          (mj.rules || []).forEach(function (r) {
+            if (r && r.layout === "global" && r.line_key === "fees_textura") FEES_RULE = r;
+          });
           GLOBAL_MARKUP = (mj.rules || []).filter(function (r) {
-            return r.layout === "global" && r.applies;
+            return r.layout === "global" && r.applies && r.line_key !== "fees_textura";
           }).map(function (r) {
             // id AND line_key KEPT. The Defaults tab can now edit these, and an edit here
             // PUTs the same markup_rules row the Markup page edits -- one home, two doors.
@@ -1471,9 +1477,12 @@
    *  lets it be -- the delete icon is the ONE control this function withholds for it
    *  (`id === "travel"`), matching the server's own fail-closed refusal in delete_labor(). Hiding
    *  the icon is a UI nicety on top of that refusal, never a substitute for it: a caller that goes
-   *  around this render still meets the 400 `delete_labor` raises. Travel carries no work-type
-   *  chips either: it is seeded into every estimate whatever its list says, so a chip on it would
-   *  be a control that changes nothing.
+   *  around this render still meets the 400 `delete_labor` raises. Travel carries the SAME
+   *  work-type chips as every other line (Hanz, 2026-10-06): they are its `default_work_types`,
+   *  which the new-bid seeding (seedLibraryLabor) and the Defaults tab's work-type sub-tabs both
+   *  read, so a chip on Travel changes which new bids get it -- empty is "All work types", as for
+   *  every row. "Stop being a default" for Travel is the Defaults tab's Remove (favorite=false),
+   *  never this table's delete.
    *
    *  TEXT, NOT INPUTS, FOR ANYBODY BUT AN ADMIN. Every write to library_labor is admin-only on the
    *  server (`_require_admin`), so this follows the Administration lists' own rule: a non-admin
@@ -1492,14 +1501,13 @@
       var r = LABOR[i];
       var travel = r.id === "travel";
       var perUnit = (r.unit === "days" ? " / day" : " / hr");
-      var everyBid = '<span class="wtall">Every estimate</span>';
       if (!ADMIN) {
         out += '<tr data-labor="' + esc(r.id) + '">' +
           "<td><b>" + esc(r.name) + "</b></td>" +
           '<td class="n">' + esc(L.money(r.rate)) + perUnit + "</td>" +
           "<td>" + esc(r.unit) + "</td>" +
           "<td>" + esc(r.notes) + "</td>" +
-          "<td>" + (travel ? everyBid : workTypeLabel(r)) + "</td>" +
+          "<td>" + workTypeLabel(r) + "</td>" +
           '<td class="rowact"></td></tr>';
         continue;
       }
@@ -1518,7 +1526,7 @@
           "</select></td>" +
         '<td><input data-f="notes" class="cell-note" value="' + esc(r.notes) +
           '" aria-label="Notes" maxlength="4000"></td>' +
-        "<td>" + (travel ? everyBid : workTypeCell("labor", r)) + "</td>" +
+        "<td>" + workTypeCell("labor", r) + "</td>" +
         '<td class="rowact">' +
           '<button class="btn ghost sm" type="button" data-labor-more-toggle="' + esc(r.id) +
             '" aria-expanded="' + (open ? "true" : "false") + '" aria-label="' +
@@ -2506,6 +2514,8 @@
    *  Empty until the fetch lands, and empty forever if it fails. A bond rate this page invented
    *  because a request timed out would be worse than a row that is not there. */
   var GLOBAL_MARKUP = [];
+  // The filed `fees_textura` markup row (the Fees + Textura default), or null when none is filed.
+  var FEES_RULE = null;
 
   /** The labor lines somebody typed on the Defaults tab, as this page last read them.
 
@@ -2515,8 +2525,9 @@
    *  that works: a tab that 500s over a list which is legitimately empty there would take Items
    *  and Assemblies down with it. No custom lines is the honest answer; a broken tab is not.
 
-   *  TRAVEL IS NOT IN HERE. It is seeded into every estimate by travelSeed and it is not a row of
-   *  this table -- see the renderer below, and the note on it. */
+   *  TRAVEL IS IN HERE when its stored row exists (id `travel`). Whether a new estimate is seeded
+   *  with it follows that row's favorite and default_work_types, like every other labor default
+   *  -- see renderDefaultLabor and seedLibraryLabor. */
   var LABOR = [];
 
   /** The answers an admin has already set for the Takeoff conditions, as this page last read them.
@@ -3007,16 +3018,16 @@
       hits = condHits.concat(hits);
     }
     // LABOR, 2026-09-24 -- the Labor tab's own rows, offered the same way an un-favorited
-    // material or assembly already is: findable here, one press to make a default. `travel`
-    // is deliberately never a candidate -- it is not opted into a bid the way a favorited row
-    // is, it is built into every estimate whether or not this table can address it at all, so
-    // offering it here would be a second, misleading way to "add" a line that is already on
-    // every bid regardless.
+    // material or assembly already is: findable here, one press to make a default. `travel` IS
+    // a candidate once it has been Removed (its stored row has favorite=false), because that is
+    // how it comes back; while it is a default it is already listed and is not offered twice.
     //
     // AN ADMIN'S ONLY. Making a labor line a default is a PATCH to /api/library/labor, which the
     // server refuses anybody else; an Add offered here to a non-admin would 403 on press.
     LABOR.forEach(function (l) {
-      if (ADMIN && l.id !== "travel" && !l.favorite &&
+      // Travel's absent/null favorite reads as ON (the server shapes it so; this keeps a stale
+      // read honest too) -- only an explicit false makes it a candidate.
+      if (ADMIN && (l.id === "travel" ? l.favorite === false : !l.favorite) &&
           (!q || String(l.name || "").toLowerCase().indexOf(q) !== -1)) {
         hits.push({ kind: "labor", id: l.id, name: l.name, what: "Labor" });
       }
@@ -3185,7 +3196,7 @@
           return conditionDefaultRow(c);
         })) },
       { title: "Markup",
-        rows: GLOBAL_MARKUP.map(function (g) {
+        rows: [feesDefaultRow()].concat(GLOBAL_MARKUP.map(function (g) {
           // EDITABLE HERE, STORED THERE. Hanz asked for no read-only rows on this tab. The
           // danger with a rate is TWO HOMES: markup.py enforces one home per line because
           // two places to set one price disagree the first time somebody changes one, and a
@@ -3203,9 +3214,73 @@
                      'page\u2019s Global tab</span>',
                    rawHow: true,
                    actions: '<span class="builtin">Saved to Markup</span>' };
-        }) },
+        })) },
     ];
     return groups.filter(function (g) { return g.rows.length > 0; });
+  }
+
+  /** The dollar figure a filed Fees + Textura rule holds, "" when none is filed / it is off / it is
+   *  not a plain number. Zero reads as "0": it is a real answer, the one the sheet ships. */
+  function feesFigure(rule) {
+    if (!rule || rule.applies === false) return "";
+    var m = /^\s*\$?\s*(\d+(?:\.\d+)?)\s*$/.exec(String(rule.formula == null ? "" : rule.formula));
+    return m ? m[1] : "";
+  }
+
+  /** THE "FEES + TEXTURA" DEFAULT ROW (Hanz, 2026-10-06): what a NEW Polish bid's Fees + Textura
+   *  line starts at. Always listed (so an admin can set it before anything is filed), $0 until set.
+   *  A second DOOR onto the Markups -> Global `fees_textura` row -- the one home, like Lodging and
+   *  Per Diem -- so there is no copy of the number here to drift. Read-only for a non-admin. */
+  function feesDefaultRow() {
+    var fig = feesFigure(FEES_RULE);
+    return { name: "Fees + Textura",
+             how: ADMIN
+               ? '$<input class="mkin" type="text" inputmode="decimal" data-fees-default="1" value="' +
+                 esc(fig) + '" placeholder="0" aria-label="Fees plus Textura, dollars a bid" /> ' +
+                 '<span class="wtall">starts every new bid’s Fees + Textura line; $0 until ' +
+                 'set; also on the Markup page’s Global tab</span>'
+               : esc(L.money(fig === "" ? 0 : Number(fig))) + " on every new bid",
+             rawHow: true,
+             actions: '<span class="builtin">Saved to Markup</span>' };
+  }
+
+  /** Save the Fees + Textura default. A PUT of the whole markup row (notes carried), the same call
+   *  saveTravelRate makes. Blank files $0 (the shipped answer); anything that is not a plain,
+   *  non-negative dollar figure is refused here in words rather than as a 400. */
+  async function saveFeesDefault(input) {
+    var say2 = say;
+    var raw = String(input.value || "").trim().replace(/^\$/, "").replace(/,/g, "");
+    var prev = feesFigure(FEES_RULE);
+    if (raw === prev) return;
+    if (raw === "") raw = "0";
+    if (!/^\d+(\.\d+)?$/.test(raw) || Number(raw) > 1e7) {
+      say2("Fees + Textura has to be a dollar figure, like 250.");
+      input.value = prev;
+      return;
+    }
+    if (raw === prev) return;
+    say2("");
+    try {
+      var rule = FEES_RULE || {};
+      var res = await api("/api/markup/rules", { method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ layout: "global", line_key: "fees_textura", applies: true,
+                               notes: rule.notes || "", formula: raw }) });
+      if (res.status === 403) {
+        say2("Changing this figure is admin-only. Nothing was saved.");
+        input.value = prev;
+        return;
+      }
+      var j = await res.json().catch(function () { return {}; });
+      if (!res.ok) { say2(j.detail || "That didn't save."); input.value = prev; return; }
+      FEES_RULE = j.rule || Object.assign({}, rule, { layout: "global", line_key: "fees_textura",
+                                                      applies: true, formula: raw });
+      input.value = feesFigure(FEES_RULE);
+      say2("Fees + Textura saved: $" + raw + ". New estimates start from it.");
+    } catch (err) {
+      say2("Couldn't reach the server. Nothing was saved.");
+      input.value = prev;
+    }
   }
 
   function renderDefaultTakeoff() {
@@ -3303,13 +3378,12 @@
     }
   }
 
-  /** Travel's own row controls on the Defaults tab, for an admin and nobody else. TRAVEL ONLY,
-   *  since 2026-09-24 -- every OTHER labor default on this tab now carries the same Edit/Remove
-   *  pair every item and assembly default already does (see `defaultRowActions`), because a
-   *  labor type is a library row like theirs now and Edit means the same thing for all three:
-   *  go to where the thing is defined. Travel is the one row that is not a library row a browse
-   *  can find or a Remove can take off the list -- it is seeded by the schema and by nothing
-   *  else, so it keeps the bespoke pair this function has always drawn for it.
+  /** Travel's own row controls on the Defaults tab, for an admin and nobody else. Since
+   *  2026-10-06 Travel carries the same Edit/Remove pair as every other labor default
+   *  (`defaultRowActions`) -- it is a stored library_labor row like theirs, and Remove means the
+   *  same thing for it: stop being a default (favorite=false), not delete the row, which the
+   *  server refuses. This function adds Travel's one extra, Reset to the shipped rate, when
+   *  something has been changed.
    *
    *  THE WRITES ARE ADMIN-ONLY ON THE SERVER, so this does not offer a control that 403s on press.
    *  That is the rule load() already follows when it resolves the role BEFORE the first paint, and
@@ -3336,8 +3410,11 @@
     // EDIT GOES TO THE ROW, on the Labor tab -- the same rule defaultRowActions already follows
     // for a material or an assembly, and the one Travel itself did not have until that tab
     // existed to send it to.
-    var edit = '<button class="btn ghost sm" type="button" data-def-edit="labor"' +
-      ' data-def-id="' + esc(shipped.id) + '">Edit</button>';
+    // EDIT + REMOVE, THE SAME PAIR EVERY OTHER LABOR DEFAULT CARRIES (defaultRowActions). Remove
+    // is data-def-off -> setDefault("labor", "travel", false): favorite=false on the stored row.
+    // It is NOT a delete -- the row stays on the Labor tab and "+ Add a labor default" offers
+    // it back; new bids simply stop being seeded with Travel (seedLibraryLabor).
+    var edit = defaultRowActions("labor", shipped.id, travel.name || shipped.label);
     var now = B.travelSeed(travel);
     var changed = now.label !== shipped.label || now.rate !== shipped.rate ||
                   now.unit !== shipped.unit;
@@ -3386,7 +3463,13 @@
         if (LABOR[s] && LABOR[s].id === shipped.id) { storedTravel = LABOR[s]; break; }
       }
     }
-    var rows = shipped ? [B.travelSeed(storedTravel)] : [];
+    // TRAVEL IS LISTED LIKE ANY OTHER LABOR DEFAULT (2026-10-06): off the list once it has been
+    // Removed (favorite false), and only on the work-type sub-tab(s) it is scoped to. With no
+    // stored row, or a row whose favorite is absent/null and no work types, it is listed on
+    // every tab exactly as before.
+    var travelListed = !storedTravel ||
+      (storedTravel.favorite !== false && appliesToWorkType(storedTravel, DEFAULT_WT));
+    var rows = (shipped && travelListed) ? [B.travelSeed(storedTravel)] : [];
     var out = "";
     for (var i = 0; i < rows.length; i++) {
       var r = rows[i];
@@ -3408,9 +3491,9 @@
     // same Edit/Remove pair the Takeoff list beside it already does, and Remove there and here
     // mean the same thing: stop being a default, not delete the underlying row -- that is the new
     // Labor tab's delete icon, a different and more consequential action on a different screen.
-    // FILTERED BY THE WORK-TYPE TAB, like the Takeoff list above it. Travel is neither filtered
-    // nor listed here: it is seeded into every bid whatever tab it sits on, and it has already
-    // been drawn above -- listing it again is the double-Travel row this merge exists to prevent.
+    // FILTERED BY THE WORK-TYPE TAB, like the Takeoff list above it. Travel is excluded from this
+    // list only because it has its own row above, filtered by the same two rules (favorite and
+    // work type) -- listing it again is the double-Travel row this merge exists to prevent.
     var shown = LABOR.filter(function (r) {
       return (!shipped || r.id !== shipped.id) && r.favorite && appliesToWorkType(r, DEFAULT_WT);
     });
@@ -4993,6 +5076,10 @@
 
   // The Labor Calculator's rate boxes, and its jumps. Delegated on the pane because the body is
   // redrawn from state.
+  $("pane-defaults").addEventListener("change", function (e) {
+    var el = e.target;
+    if (el && el.getAttribute && el.getAttribute("data-fees-default") !== null) saveFeesDefault(el);
+  });
   $("pane-labcalc").addEventListener("change", function (e) {
     var el = e.target;
     if (el && el.getAttribute && el.getAttribute("data-travel-rate") !== null) saveTravelRate(el);

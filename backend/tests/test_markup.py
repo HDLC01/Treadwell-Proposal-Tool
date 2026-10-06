@@ -172,7 +172,7 @@ def test_the_two_homes_are_disjoint_and_together_are_the_api_vocabulary():
     assert set(markup.GLOBAL_LINE_KEYS) & set(markup.TAB_LINE_KEYS) == set()
     assert set(markup.LINE_KEYS) == set(markup.GLOBAL_LINE_KEYS) | set(markup.TAB_LINE_KEYS)
     assert set(markup.GLOBAL_LINE_KEYS) == {"bond", "travel_lodging", "travel_per_diem",
-                                            "labor_rate"}
+                                            "labor_rate", "fees_textura"}
     assert set(markup.TAB_LINE_KEYS) == {"gp", "super_pto", "soft_costs"}
     # And neither half may claim a line the module refuses by name outright, or a key would be
     # offered to the editor that _check_line_key rejects two lines later.
@@ -263,7 +263,7 @@ def test_contingency_and_remodel_tax_stay_in_the_compounding_chain_but_leave_the
     assert "remodel_tax" in markup.CHAIN
     assert set(markup.CHAIN) - set(markup.LINE_KEYS) == {"contingency", "remodel_tax"}
     assert set(markup.LINE_KEYS) - set(markup.CHAIN) == {"travel_lodging", "travel_per_diem",
-                                                         "labor_rate"}
+                                                         "labor_rate", "fees_textura"}
 
 
 def test_find_rule_refuses_the_two_excluded_keys_too():

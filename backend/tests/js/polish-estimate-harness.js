@@ -439,6 +439,8 @@ function build(opts) {
 
   const fetchStub = async function (url, init) {
     rec.fetches.push(url);
+    // Every request WITH ITS METHOD, so "never writes to the library" can be asserted on verbs.
+    (rec.calls = rec.calls || []).push({ url: String(url), method: ((init || {}).method || "GET").toUpperCase() });
     log.push("fetch:" + url);
     // POST /api/distance -- the server's driving miles from the office. `distance` is the JSON body
     // it answers with; `distanceGate` is a promise the answer waits on (a slow Google);
@@ -3543,6 +3545,303 @@ const rendered = [];      // every string the page put on screen, for the Labour
       noSf: noSfRow, noSfWarn: noSfWarn,
       gone: { polishing: clone(rowOf(gone, "polishing")), same: JSON.stringify(gone.api.model().labor) ===
               JSON.stringify(plain.api.model().labor) },
+    };
+  }
+
+  // ── O. The Fees + Textura default (Hanz, 2026-10-06) ────────────────────────────────────────────
+  // EXECUTED THROUGH THE PAGE'S OWN INIT: a NEW bid's D77 starts at Markups -> Global `fees_textura`;
+  // typing over it shows the shared amber warning, typing the default back clears it; the default is
+  // saved with the bid so the warning survives a reload; a SAVED bid keeps its own fees and shows no
+  // warning; no default (or $0) leaves $0 and no warning.
+  {
+    const FEES = [{ id: "m9", layout: "global", line_key: "fees_textura", formula: "250", applies: true }];
+    const newBlob = () => blob({ polish_estimate: null, polish_sf: 12000 });
+    const feesW = (b) => warn(b, '[data-feesdflt]');
+    const feesBox = '[data-fees]';
+    const withDflt = build({ blob: newBlob(), markupRules: FEES });
+    await withDflt.api.init();
+    withDflt.api.go(2);
+    const startModel = { fees: withDflt.api.model().fees, fees_default: withDflt.api.model().fees_default };
+    const startBox = need(withDflt, feesBox).value;
+    const startWarn = feesW(withDflt);
+    const startTotal = withDflt.api.bid().total;
+    typeInto(withDflt, feesBox, "400");
+    const overWarn = feesW(withDflt);
+    const overTotal = withDflt.api.bid().total;
+    typeInto(withDflt, feesBox, "250");
+    const backWarn = feesW(withDflt);
+    withDflt.clock.fire();
+    const savedWith = withDflt.rec.saves[withDflt.rec.saves.length - 1];
+    const reloaded = build({ blob: Object.assign(blob(), { polish_estimate: clone(savedWith.polish_estimate) }),
+                             markupRules: [] });
+    await reloaded.api.init();
+    reloaded.api.go(2);
+    typeInto(reloaded, feesBox, "10");
+    const reloadWarn = feesW(reloaded);
+    // The same new bid with NO default filed, and with a $0 one.
+    const none = build({ blob: newBlob() });
+    await none.api.init();
+    none.api.go(2);
+    const zero = build({ blob: newBlob(), markupRules: [
+      { id: "m9", layout: "global", line_key: "fees_textura", formula: "0", applies: true }] });
+    await zero.api.init();
+    zero.api.go(2);
+    typeInto(zero, feesBox, "75");
+    // A SAVED bid (it states a model) with a default filed: its own fees stand.
+    const savedBlob = blob({ polish_estimate: Object.assign(clone(MODEL), { fees: 75 }) });
+    const sv = build({ blob: savedBlob, markupRules: FEES });
+    await sv.api.init();
+    sv.api.go(2);
+    out.feesDefault = {
+      startModel: startModel, startBox: startBox, startWarn: startWarn, overWarn: overWarn,
+      backWarn: backWarn, startTotal: startTotal, overTotal: overTotal,
+      noneFees: none.api.model().fees, noneDefault: none.api.model().fees_default === undefined,
+      noneBox: need(none, feesBox).value, noneWarn: feesW(none),
+      zeroFees: zero.api.model().fees, zeroDefault: zero.api.model().fees_default === undefined,
+      zeroWarn: feesW(zero),
+      noneTotal: none.api.bid().total,
+      savedHasDefault: savedWith.polish_estimate.fees_default,
+      reloadWarn: reloadWarn,
+      savedBidFees: sv.api.model().fees, savedBidDefault: sv.api.model().fees_default === undefined,
+      savedBidWarn: feesW(sv),
+      rules: (() => {
+        const R = (formula, over) => [Object.assign({ layout: "global", line_key: "fees_textura",
+                                                      formula: formula, applies: true }, over || {})];
+        return { plain: B.feesFromRules(R("250")), dollar: B.feesFromRules(R("$1,250".replace(",", ""))),
+                 decimal: B.feesFromRules(R("99.5")), zero: B.feesFromRules(R("0")),
+                 off: B.feesFromRules(R("250", { applies: false })),
+                 expr: B.feesFromRules(R("=A1*2")), blank: B.feesFromRules(R("")),
+                 none: B.feesFromRules([]), notList: B.feesFromRules(null),
+                 otherLine: B.feesFromRules([{ layout: "global", line_key: "labor_rate",
+                                               formula: "33", applies: true }]),
+                 otherLayout: B.feesFromRules([{ layout: "polish", line_key: "fees_textura",
+                                                formula: "5", applies: true }]) };
+      })(),
+    };
+  }
+
+  // ── P. EVERY DEFAULT-PULLED ROW'S ESTIMATE TOGGLE MOVES THE LUMP SUM (Hanz, 2026-10-06) ─────────
+  // A library with NON-ZERO prices, a NEW bid that pulls in one of each kind of default, and for
+  // each row: flip it, read the lump sum off the page's own bid(), compare with an ORACLE built
+  // from the model with that one flag set (the two real engines, priced independently of the
+  // page's own wiring), flip it back and demand the same total. The flip is a click on the page's
+  // own switch, so a row with no switch, or a switch that writes the wrong field, fails here.
+  {
+    const FAV_ASMS = ASMS.map((a) => (a.id === "a1" ? Object.assign({}, a, { favorite: true }) : a));
+    const FAV_ITEMS = ITEMS.map((i) => (i.id === "i4" ? Object.assign({}, i, { favorite: true }) : i))
+      .concat([
+        { id: "joint-filler-kit", name: "Joint filler, 10 gal kit", unit: "Kit", buy_qty: 1,
+          unit_cost: 500, coverage: 3500, waste_pct: 0, roundup: true },
+        { id: "dye", name: "Dye, per coat", unit: "SF", buy_qty: 1, unit_cost: 0.14, coverage: 1,
+          waste_pct: 0, roundup: false },
+        { id: "remove-existing-jf", name: "Remove existing joint filler", unit: "SF", buy_qty: 1,
+          unit_cost: null, coverage: null }]);
+    const PLABOR = [
+      { id: "travel", name: "Travel", rate: 40, unit: "hours", guys_auto: true, favorite: true },
+      { id: "c1", name: "Saw cutting", rate: 45, unit: "days", guys_auto: false, favorite: true,
+        default_on: true, default_work_types: [] }];
+    const PCALC = [
+      { line_id: "polishing", mode: "fixed", guys: 3, days: 5, hours_per_day: 8, rate: null },
+      { line_id: "mockup", mode: "fixed", guys: 3, days: 1, hours_per_day: 8, rate: null },
+      { line_id: "jointfill", mode: "fixed", guys: 3, days: 2, hours_per_day: 8, rate: null },
+      { line_id: "c1", mode: "fixed", guys: 2, days: 3, hours_per_day: 8, rate: null }];
+    const PRULES = [
+      { id: "m1", layout: "global", line_key: "travel_lodging", formula: "80", applies: true },
+      { id: "m2", layout: "global", line_key: "travel_per_diem", formula: "50", applies: true }];
+    const PCONDS = ["joint_filler", "remove_existing_jf", "dye"]
+      .map((k) => ({ key: k, on: k === "joint_filler", listed: true }));  // the fourth hand needs filler ON
+    const nb = blob({ polish_estimate: null, polish_sf: 12000 });
+    const p = build({ blob: nb, asms: FAV_ASMS, items: FAV_ITEMS, labor: PLABOR, laborCalc: PCALC,
+                      markupRules: PRULES, conditionDefaults: PCONDS });
+    await p.api.init();
+    // Travel's hours, typed by the estimator (it is the one default whose quantity is theirs).
+    p.api.go(1);
+    const ti = p.api.model().labor.findIndex((r) => r.id === "travel");
+    typeInto(p, '[data-lab="' + ti + '"][data-k="days"]', "2");
+    const M0 = () => p.api.model();
+    const asmIdx = M0().takeoff.findIndex((r) => r.assembly_id === "a1");
+    const itemIdx = M0().takeoff.findIndex((r) => r.item_id === "i4");
+    const c1i = M0().labor.findIndex((r) => r.id === "c1");
+
+    // THE ORACLE: the two real engines on a copy of the page's own model with one change applied.
+    const oracle = (mutate) => {
+      const m = clone(M0());
+      mutate(m);
+      // TRAVEL LABOR'S GUYS ARE DERIVED (guys_auto): the page re-derives them from the crew's
+      // man-days whenever a row flips, so the oracle must too or it prices a stale Travel crew.
+      m.labor.forEach((r) => { if (r.unit === "hours" && r.guys_auto) r.guys = B.travelManDays(m.labor); });
+      let material = 0;
+      m.takeoff.forEach((r) => {
+        if (!B.rowOn(r)) return;
+        if (r.item_id) {
+          const it = FAV_ITEMS.filter((x) => x.id === r.item_id)[0];
+          const line = { item_id: it.id, coverage: it.coverage, waste_pct: it.waste_pct || 0, roundup: true };
+          material += L.priceAssembly({ id: "x", unit: "SF", lines: [line] }, FAV_ITEMS,
+                                      B.num(r.measurement)).total;
+        } else {
+          const asm = FAV_ASMS.filter((a) => a.id === r.assembly_id)[0];
+          if (asm) material += L.priceAssembly(asm, FAV_ITEMS, B.num(r.measurement)).total;
+        }
+      });
+      material += extraMaterial(m);
+      return B.markupChain({
+        material: material, labor: B.laborTotal(m.labor, m.conditions),
+        travel: B.travelCosts(m.travel, m.labor).total,
+        contingency: m.contingency, fees: m.fees, conditions: m.conditions,
+        sf: B.takeoffSf(m.takeoff), remodel_rate: null }).total;
+    };
+    const total = () => p.api.bid().total;
+    const switchOn = (sel) => { const e = p.doc.querySelector(sel); return e ? e.getAttribute("aria-checked") : null; };
+    const cardCls = (sel) => { const e = p.doc.querySelector(sel); return e ? e.className : null; };
+    const flipRow = (key, i) => (m) => { const r = m[key][i]; if (B.rowOn(r)) r.enabled = false; else delete r.enabled; };
+
+    const rows = [
+      { name: "default assembly takeoff row", step: 0, sw: '[data-on-tk="' + asmIdx + '"]',
+        card: '[data-row-card="' + asmIdx + '"]', startOn: () => B.rowOn(M0().takeoff[asmIdx]),
+        flipped: flipRow("takeoff", asmIdx) },
+      { name: "default material takeoff row", step: 0, sw: '[data-on-tk="' + itemIdx + '"]',
+        card: '[data-row-card="' + itemIdx + '"]', startOn: () => B.rowOn(M0().takeoff[itemIdx]),
+        flipped: flipRow("takeoff", itemIdx) },
+      { name: "joint filler condition row", step: 0, sw: '[data-cond="joint_filler"]', card: null,
+        startOn: () => !!M0().conditions.joint_filler,
+        flipped: (m) => { m.conditions.joint_filler = !m.conditions.joint_filler; } },
+      { name: "dye condition row", step: 0, sw: '[data-cond="dye"]', card: null,
+        startOn: () => !!M0().conditions.dye,
+        flipped: (m) => { m.conditions.dye = !m.conditions.dye; } },
+      { name: "remove-existing condition row", step: 0, sw: '[data-cond="remove_existing_jf"]', card: null,
+        startOn: () => !!M0().conditions.remove_existing_jf,
+        flipped: (m) => { m.conditions.remove_existing_jf = !m.conditions.remove_existing_jf; } },
+      { name: "favorited custom labor line", step: 1, sw: '[data-on-lab="' + c1i + '"]',
+        card: '[data-lab-card="' + c1i + '"]', startOn: () => B.rowOn(M0().labor[c1i]),
+        flipped: flipRow("labor", c1i) },
+      { name: "Travel Labor", step: 1, sw: '[data-on-lab="' + ti + '"]', card: '[data-lab-card="' + ti + '"]',
+        startOn: () => B.rowOn(M0().labor[ti]), flipped: flipRow("labor", ti) },
+      { name: "Lodging", step: 1, sw: '[data-on-trv="lodging"]', card: '[data-trv-card="lodging"]',
+        startOn: () => B.rowOn(M0().travel.lodging),
+        flipped: (m) => { m.travel.lodging.enabled = !m.travel.lodging.enabled; } },
+      { name: "Per Diem", step: 1, sw: '[data-on-trv="per_diem"]', card: '[data-trv-card="per_diem"]',
+        startOn: () => B.rowOn(M0().travel.per_diem),
+        flipped: (m) => { m.travel.per_diem.enabled = !m.travel.per_diem.enabled; } },
+    ];
+    const result = {};
+    for (const r of rows) {
+      p.api.go(r.step);
+      const hasSwitch = !!p.doc.querySelector(r.sw);
+      const startOn = r.startOn();
+      const t0 = total();
+      const expectFlip = oracle(r.flipped);
+      const swBefore = hasSwitch ? switchOn(r.sw) : null;
+      const cardBefore = r.card ? cardCls(r.card) : null;
+      if (hasSwitch) clickOn(p, r.sw);
+      const t1 = total();
+      p.api.go(r.step);
+      const swAfter = switchOn(r.sw);
+      const cardAfter = r.card ? cardCls(r.card) : null;
+      if (hasSwitch) clickOn(p, r.sw);
+      const t2 = total();
+      p.api.go(r.step);
+      result[r.name] = { hasSwitch: hasSwitch, startOn: startOn, before: t0, afterFlip: t1, back: t2,
+                         oracleFlip: expectFlip, swBefore: swBefore, swAfter: swAfter,
+                         cardBefore: cardBefore, cardAfterFlip: cardAfter };
+    }
+    out.toggleMovesTotal = result;
+    out.toggleMovesTotalBase = { total: total(), takeoff: M0().takeoff.map((r) => r.assembly_id || r.item_id),
+                                 labor: M0().labor.map((r) => r.id) };
+  }
+
+  // ── Q. THE TWO TOGGLES ARE INDEPENDENT (Hanz, 2026-10-06) ───────────────────────────────────────
+  // The library's default_on only sets what a NEW bid STARTS as; the estimate's own switch is the
+  // bid's. (1) flipping rows on an estimate never writes to the library; (2) changing a library
+  // default_on after a bid is saved never changes that saved bid; (3) a library default_on only
+  // sets a new bid's starting state. EXECUTED through the page's own init, handlers and save.
+  {
+    const lib = (on) => {
+      // `on` is the default_on every default-pulled library row carries (undefined = never set).
+      const f = (o) => (on === undefined ? o : Object.assign({}, o, { default_on: on }));
+      return {
+        asms: ASMS.map((a) => (a.id === "a1" ? f(Object.assign({}, a, { favorite: true })) : a)),
+        items: ITEMS.map((i) => (i.id === "i4" ? f(Object.assign({}, i, { favorite: true })) : i)),
+        labor: [f({ id: "travel", name: "Travel", rate: 40, unit: "hours", guys_auto: true, favorite: true }),
+                f({ id: "c1", name: "Saw cutting", rate: 45, unit: "days", guys_auto: false,
+                   favorite: true, default_work_types: [] })],
+        laborCalc: [
+          { line_id: "polishing", mode: "fixed", guys: 3, days: 5, hours_per_day: 8, rate: null },
+          { line_id: "c1", mode: "fixed", guys: 2, days: 3, hours_per_day: 8, rate: null }],
+        markupRules: [
+          { id: "m1", layout: "global", line_key: "travel_lodging", formula: "80", applies: true }],
+      };
+    };
+    const fresh = () => { const b = blob({ polish_estimate: null, polish_sf: 12000 }); return b; };
+    const stateOf = (pg) => {
+      const m = pg.api.model();
+      return { total: pg.api.bid().total,
+               takeoff: m.takeoff.map((r) => B.rowOn(r)),
+               labor: m.labor.map((r) => r.id + ":" + B.rowOn(r)) };
+    };
+
+    // (3) A NEW bid starts as the library says, and only as the library says.
+    const startsOn = build(Object.assign({ blob: fresh() }, lib(true)));
+    await startsOn.api.init();
+    const startsOff = build(Object.assign({ blob: fresh() }, lib(false)));
+    await startsOff.api.init();
+    const startsUnset = build(Object.assign({ blob: fresh() }, lib(undefined)));
+    await startsUnset.api.init();
+
+    // (1) Flip every default-pulled row on a new bid; count what went to the library.
+    // THE SAME library object the page is handed, snapshotted before and compared after -- a
+    // freshly built lib(true) on both sides would compare equal whatever the page did.
+    const lpLib = lib(true);
+    const libBefore = JSON.stringify(lpLib);
+    const lp = build(Object.assign({ blob: fresh() }, lpLib));
+    await lp.api.init();
+    const callsBefore = (lp.rec.calls || []).length;
+    const m0 = lp.api.model();
+    lp.api.go(0);
+    m0.takeoff.forEach((r, i) => { clickOn(lp, '[data-on-tk="' + i + '"]'); });
+    lp.api.go(1);
+    lp.api.model().labor.forEach((r, i) => { clickOn(lp, '[data-on-lab="' + i + '"]'); });
+    clickOn(lp, '[data-on-trv="lodging"]');
+    lp.api.go(0);
+    clickOn(lp, '[data-cond="dye"]');
+    lp.clock.fire();
+    // Let any request a handler started actually reach the fetch stub before the verbs are read.
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+    const flipped = stateOf(lp);
+    const flipCalls = (lp.rec.calls || []).slice(callsBefore);
+
+    // (2) A SAVED bid: flip some rows, save, then reopen it under a library whose default_on is
+    // the OPPOSITE of what the bid started with -- and again under one that matches the flipped
+    // rows. Neither may change a row state or the total.
+    const sv = build(Object.assign({ blob: fresh() }, lib(true)));
+    await sv.api.init();
+    sv.api.go(0);
+    clickOn(sv, '[data-on-tk="0"]');               // the default assembly row: ON -> OFF
+    sv.api.go(1);
+    const ci = sv.api.model().labor.findIndex((r) => r.id === "c1");
+    clickOn(sv, '[data-on-lab="' + ci + '"]');     // the custom labor line: ON -> OFF
+    sv.clock.fire();
+    const savedModel = clone(sv.rec.saves[sv.rec.saves.length - 1].polish_estimate);
+    const savedBlob = Object.assign(blob(), { polish_sf: 12000, polish_estimate: savedModel });
+    const reopen = async (libState) => {
+      const pg = build(Object.assign({ blob: clone(savedBlob) }, libState));
+      await pg.api.init();
+      return stateOf(pg);
+    };
+    const savedHere = await reopen(lib(true));
+    const savedLibFlippedOff = await reopen(lib(false));
+    const savedLibMatchesFlips = await reopen((() => {
+      const l = lib(true);
+      l.asms = l.asms.map((a) => (a.id === "a1" ? Object.assign({}, a, { default_on: false }) : a));
+      return l;
+    })());
+    // A bid saved with a row switched OFF while the library says ON, then the library says OFF->ON.
+    out.toggleIndependence = {
+      startsOn: stateOf(startsOn), startsOff: stateOf(startsOff), startsUnset: stateOf(startsUnset),
+      libraryUntouched: JSON.stringify(lpLib) === libBefore,
+      flipCalls: flipCalls, flippedDiffers: flipped.total !== stateOf(startsOn).total,
+      saved: { here: savedHere, libOff: savedLibFlippedOff, libMatches: savedLibMatchesFlips },
+      savedFlips: { takeoff0: savedModel.takeoff[0].enabled, c1: savedModel.labor.filter((r) => r.id === "c1")[0].enabled },
     };
   }
 

@@ -392,11 +392,29 @@
 
   /** The labor rows added up, UNROUNDED. D45 is where the rounding happens
    *  (`=ROUNDUP(SUM(D37:D44),0)`), and markupChain does it — rounding twice would drift. */
-  function laborTotal(rows) {
+  function laborTotal(rows, conditions) {
     rows = rows || [];
     var t = 0;
     for (var i = 0; i < rows.length; i++) t += laborCost(rows[i]);
-    return t;
+    return t + removeExistingHand(rows, conditions);
+  }
+
+  /** REMOVE EXISTING JOINT FILLER = A FOURTH HAND ON THE JOINT-FILLER LINE (Polish A42 is
+   *  `=IF(F29="NO",3,4)`). The crew row keeps its own typed Guys; the extra hand is one more guy
+   *  for the same days at the same rate, so its cost is that row priced at 1 guy. It needs joint
+   *  filler ON (no filler, no crew to add a hand to), and it follows the row's own on/off switch
+   *  because laborCost does. Absent `conditions` adds nothing, so every caller that predates this
+   *  prices exactly as before. */
+  function removeExistingHand(rows, conditions) {
+    if (!conditions || !conditions.joint_filler || !conditions.remove_existing_jf) return 0;
+    rows = rows || [];
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i] || {};
+      if (r.id !== "jointfill") continue;
+      return laborCost({ guys: 1, days: r.days, rate: r.rate, unit: r.unit,
+                         hours_per_day: r.hours_per_day, enabled: r.enabled });
+    }
+    return 0;
   }
 
   /** THE TWO TRAVEL COSTS BESIDE TRAVEL LABOR: LODGING (a night) and PER DIEM (a day). Hanz,
@@ -1033,6 +1051,43 @@
     return null;
   }
 
+  /** THE FEES + TEXTURA DEFAULT (Hanz, 2026-10-06). One dollar figure, filed as the Markups -> Global
+   *  line `fees_textura` (the Defaults tab's "Fees + Textura" box is a second door onto the same
+   *  row), and the starting value of D77 on a NEW beta bid. Null when none is filed, switched off,
+   *  or not a plain number; ZERO IS A REAL ANSWER ("nothing", which is what the sheet ships), so
+   *  unlike the labor rate this accepts 0 and the caller treats 0 and null alike. */
+  function feesFromRules(rules) {
+    if (!(rules instanceof Array)) return null;
+    for (var i = 0; i < rules.length; i++) {
+      var r = rules[i];
+      if (!r || r.layout !== "global" || r.line_key !== "fees_textura") continue;
+      if (r.applies === false) return null;
+      var m = /^\s*\$?\s*(\d+(?:\.\d+)?)\s*$/.exec(String(r.formula === null ||
+        r.formula === undefined ? "" : r.formula));
+      if (!m) return null;
+      var n = Number(m[1]);
+      return isFinite(n) ? n : null;
+    }
+    return null;
+  }
+
+  /** A NEW bid's Fees + Textura line, started at the default. NEW BIDS ONLY: the caller's gate is
+   *  laborUnstated, the same one the labor and travel defaults ride, so a saved bid never reaches
+   *  this. A default of nothing (null / 0 / junk) changes NOTHING -- the model keeps RATES.FEES --
+   *  and stamps nothing, because "Default value: $0" under a box the estimator typed a fee into
+   *  would warn about a default nobody set. A real default is written to `fees` AND remembered as
+   *  `fees_default`, which is what the shared amber warning compares against and which, being part
+   *  of the saved model, survives a reload. Returns a NEW model. */
+  function applyFeesDefault(model, fees) {
+    var n = (fees === null || fees === undefined || fees === "") ? NaN : Number(fees);
+    if (!model || !isFinite(n) || n <= 0) return model;
+    var out = {};
+    for (var k in model) if (Object.prototype.hasOwnProperty.call(model, k)) out[k] = model[k];
+    out.fees = n;
+    out.fees_default = n;
+    return out;
+  }
+
   /** Does this stored library_labor row carry a rate of its OWN? `library_labor.rate` is NOT NULL
    *  (a blank is stored as 0), so "no rate of its own" can only be spelled 0 -- and for Travel,
    *  also the $33.00 the table was seeded with, which nobody chose. A row somebody re-rated to
@@ -1217,13 +1272,20 @@
    *  of its own the way `default_work_types` does for an empty list meaning "every tab": there is
    *  no old data to stay compatible with, because no row anywhere carried `favorite` before today.
    *
-   *  TRAVEL IS UNCHANGED BY THIS. The branch above it applies unconditionally, whatever its stored
-   *  `favorite` reads -- Travel is not opted into a bid the way a chosen default is, it is built
-   *  into every estimate the way it always has been, and the migration backfills it to true
-   *  regardless, so the two should never actually disagree. */
-  function seedLibraryLabor(labor, rows, dflt) {
+   *  TRAVEL FOLLOWS THE SAME TWO FLAGS (Hanz, 2026-10-06), through travelAppliesToBid below: a
+   *  stored Travel row that is not a default (`favorite` false) or is scoped to other work types
+   *  (`default_work_types`) leaves Travel OFF a new bid -- the row freshModel put there is taken
+   *  out again -- and every other case is today's behaviour. No stored row, or a row whose
+   *  `favorite` is absent/null with no work types, is Travel on every new bid, as it always was.
+   *  The Defaults tab's Edit / Remove and the Labor tab's work-type chips on Travel write exactly
+   *  these two fields, so each of those controls changes what a new bid opens holding.
+   *
+   *  `workType` is the kind of bid being opened ("polish" -- the only estimate that seeds labor
+   *  today); the work-type scope applies to every row, Travel and the custom lines alike. */
+  function seedLibraryLabor(labor, rows, dflt, workType) {
     var out = (labor instanceof Array) ? labor.slice() : [];
     if (!(rows instanceof Array)) return out;
+    var wt = workType || "polish";
     var seen = {};
     var i;
     for (i = 0; i < out.length; i++) {
@@ -1234,6 +1296,13 @@
       if (!r || r.id === null || r.id === undefined) continue;
       var rid = String(r.id);
       if (rid === "travel") {
+        if (!travelAppliesToBid(r, wt)) {
+          // Not a default, or not for this work type: the bid does not get Travel. The row
+          // freshModel put on the model is taken out (a copy; the input array is never touched).
+          out = out.filter(function (x) { return !(x && String(x.id) === "travel"); });
+          seen[rid] = true;
+          continue;
+        }
         var travel = travelSeed(r);
         if (dflt !== undefined && dflt !== null && !libraryRateIsOwn(r, true)) {
           travel.rate = laborRateOrShipped(dflt);
@@ -1255,11 +1324,41 @@
         continue;
       }
       if (!r.favorite) continue;
+      if (!workTypeApplies(r, wt)) continue;
       if (seen[rid]) continue;
       seen[rid] = true;
       out.push(libraryLaborRow(r, dflt));
     }
     return out;
+  }
+
+  /** Does a default scoped to `list` apply to this kind of bid? EMPTY / ABSENT MEANS EVERY WORK
+   *  TYPE -- the same reading the library page's appliesToWorkType and seedDefaultTakeoff use. */
+  function workTypeApplies(row, workType) {
+    var l = row && row.default_work_types;
+    return !(l instanceof Array) || !l.length || l.indexOf(workType || "polish") !== -1;
+  }
+
+  /** Does the stored Travel row (library_labor id `travel`) put Travel on a NEW bid of this work
+   *  type? NO ROW IS YES, and so is a row whose `favorite` is absent/null with no work types:
+   *  Travel has been on every new bid since it shipped and nothing stored may change that by
+   *  being silent. Only an explicit `favorite: false` (the Defaults tab's Remove) or a work-type
+   *  list that leaves this one out turns it off. */
+  function travelAppliesToBid(row, workType) {
+    if (!row) return true;
+    if (row.favorite === false) return false;
+    return workTypeApplies(row, workType);
+  }
+
+  /** Did seeding leave Travel off this new bid? True exactly when the library's Travel row says
+   *  not to put it on. The caller records the answer on the model (`no_travel_labor`) so a reload
+   *  does not mistake the missing row for a stale draft and append it back (migrateModel). */
+  function travelDeclined(rows, workType) {
+    if (!(rows instanceof Array)) return false;
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i] && String(rows[i].id) === "travel") return !travelAppliesToBid(rows[i], workType);
+    }
+    return false;
   }
 
   /** Does this SAVED blob state no labor rows of its own?
@@ -1691,7 +1790,11 @@
         for (var li = 0; li < model.labor.length; li++) {
           if (model.labor[li] && model.labor[li].id === "travel") { hasTravel = true; break; }
         }
-        if (!hasTravel) {
+        if (model.no_travel_labor === true) {
+          // A NEW bid the library said not to give Travel (seedLibraryLabor): its absence is the
+          // answer, not a stale draft. Carried through so the next load does not append it back.
+          out.no_travel_labor = true;
+        } else if (!hasTravel) {
           out.labor = model.labor.concat([travelSeed()]);
         } else {
           // A TRAVEL ROW CAN ALSO BE OUT OF DATE, which is the second half of the same problem and
@@ -1771,6 +1874,10 @@
       // Every v2 draft saved before the Fees line became typeable has no `fees` at all, and a
       // missing one must read as the zero the sheet ships.
       if (isBlank(out.fees)) out.fees = fresh.fees;
+      // The default this bid was STARTED from, kept so the warning survives a reload. Absent on
+      // every bid saved before it existed and on every bid whose default was nothing.
+      if (!isBlank(model.fees_default) && isFinite(Number(model.fees_default)) &&
+          Number(model.fees_default) > 0) out.fees_default = Number(model.fees_default);
       return out;
     }
 
@@ -1926,7 +2033,7 @@
     conditionsUnstated: conditionsUnstated,
     setMeasurement: setMeasurement,
     seedConditionsShown: seedConditionsShown, conditionShown: conditionShown,
-    laborCost: laborCost, laborTotal: laborTotal, travelManDays: travelManDays,
+    laborCost: laborCost, laborTotal: laborTotal, removeExistingHand: removeExistingHand,travelManDays: travelManDays,
     // Lodging and Per Diem, the two travel costs beside Travel Labor (see travelCostsSeed).
     SHIPPED_LODGING_RATE: SHIPPED_LODGING_RATE, SHIPPED_PER_DIEM_RATE: SHIPPED_PER_DIEM_RATE,
     TRAVEL_LINE_KEYS: TRAVEL_LINE_KEYS, TRAVEL_LABEL: TRAVEL_LABEL, travelLabel: travelLabel,
@@ -1960,12 +2067,15 @@
     // joining it: that branch was cut from main, which did not have the 2026-09-16 export yet.
     // Both belong -- Travel is built in, the library rows are additions beside it.
     libraryLaborRow: libraryLaborRow, seedLibraryLabor: seedLibraryLabor,
+    travelAppliesToBid: travelAppliesToBid, travelDeclined: travelDeclined,
     LABOR_CALC_BUILTINS: LABOR_CALC_BUILTINS, dayHours: dayHours, laborCalcValues: laborCalcValues, applyLaborCalc: applyLaborCalc,
     laborCalcDiffers: laborCalcDiffers,
     laborUnstated: laborUnstated,
     // The company labor rate (Markups -> Global): read, applied to a new bid, and the fallback.
     SHIPPED_LABOR_RATE: SHIPPED_LABOR_RATE, laborRateOrShipped: laborRateOrShipped,
     laborRateFromRules: laborRateFromRules, applyLaborRate: applyLaborRate,
-    stampRateDefaults: stampRateDefaults, followLaborDays: followLaborDays
+    stampRateDefaults: stampRateDefaults, followLaborDays: followLaborDays,
+    // The Fees + Textura default (Markups -> Global `fees_textura`), read and applied to a new bid.
+    feesFromRules: feesFromRules, applyFeesDefault: applyFeesDefault
   };
 });

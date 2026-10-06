@@ -1161,10 +1161,11 @@ def test_only_a_favorited_labor_row_seeds_a_new_bid(ran):
     # reasons, and confusing them here is exactly the regression this line guards against.
     assert "lab-key-absent" not in ids, (
         "a row with no favorite key at all was treated as favorited")
-    # TRAVEL IS NOT GATED BY THIS, whatever its own stored favorite reads. It is built into every
-    # estimate the way it always has been, not opted into one the way a chosen default is.
-    assert ran["libraryLabor"]["nonFavoriteRowsDoNotSeed"]["travelSeedsEvenUnfavorited"] == 20, (
-        "an unfavorited stored Travel row was skipped instead of overriding the shipped rate")
+    # TRAVEL FOLLOWS THE SAME FLAG (Hanz, 2026-10-06): Remove on the Defaults tab writes
+    # favorite=false and a new bid then opens without Travel. (Absent/null stays on:
+    # test_travel_default_flags.py.)
+    assert ran["libraryLabor"]["nonFavoriteRowsDoNotSeed"]["travelLeftOffWhenUnfavorited"] is True, (
+        "an unfavorited stored Travel row still seeded Travel onto a new bid")
 
 
 @needs_node

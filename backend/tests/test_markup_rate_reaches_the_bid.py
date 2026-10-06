@@ -1194,6 +1194,12 @@ def test_the_admin_page_says_whether_each_row_reaches_the_workbook(ran):
     for name, word in (("travelLodgingGlobal", "Lodging"), ("travelPerDiemGlobal", "Per Diem")):
         assert "Polish Estimate beta copies this figure onto every NEW bid" in s[name]             and word in s[name] and "workbook does not read it" in s[name], (
             "a travel figure's row misstates what reads it: %s -> %r" % (name, s[name]))
+    # The labor rate and Fees + Textura defaults are read by the beta too (2026-10-06): their rows
+    # must not tell an admin the figure "changes no bid".
+    for name, word in (("laborRateGlobal", "labor lines"), ("feesTexturaGlobal", "Fees + Textura")):
+        assert ("starts every NEW bid" in s[name] and word in s[name]
+                and "changes no bid" not in s[name]), (
+            "a beta default's row misstates what reads it: %s -> %r" % (name, s[name]))
 
     assert "Prices the bid" in s["polishSoftCosts"] and "16%" in s["polishSoftCosts"]
     assert "Prices the bid" in s["filed"] and "4%" in s["filed"]

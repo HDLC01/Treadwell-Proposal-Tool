@@ -153,7 +153,13 @@ _NOT_EDITABLE = {
 # for every sheet -- and, like lodging, it is not markup on a running total. No schema change: the
 # table has no CHECK on line_key (the home rule is enforced here), so the row is filed like any
 # other global line and its absence means the estimator's shipped $33.00.
-GLOBAL_LINE_KEYS = ("bond", "travel_lodging", "travel_per_diem", "labor_rate")
+#
+# `fees_textura` (added 2026-10-06) is what a NEW Polish-beta bid's Fees + Textura line (D77)
+# starts at, in dollars. Hanz: the default lives on Items & Assemblies -> Defaults, and "one home
+# for the value" -- so it is a `global` line filed here like `labor_rate`, with the Defaults tab a
+# second DOOR onto the same row. No schema change, which is the reason it is not a new table:
+# `markup_rules` has no CHECK on line_key. An absent row means $0, the figure the sheet ships.
+GLOBAL_LINE_KEYS = ("bond", "travel_lodging", "travel_per_diem", "labor_rate", "fees_textura")
 TAB_LINE_KEYS = ("gp", "super_pto", "soft_costs")
 
 # The order rows come back in, and the default `sort`: the chain first, because it compounds and
