@@ -3295,6 +3295,110 @@ def test_a_saved_bid_is_not_repriced_until_the_estimator_asks(ran):
     assert s["note"] == "150 mi from Olathe office" and s["lodging"] is True and s["local"] is False
 
 
+# ── "HOW THIS IS WORKED OUT" under the Travel heading (Hanz, 2026-10-06) ─────────────────────────
+# Executed through the page: the note is read out of the real DOM after the real init()/typing, and
+# the dollar figures in it are held to B.travelLineCost / B.laborCost (what the bid itself prices).
+
+def _how_line(how, label):
+    """The one line of the note that starts with `label` (a travel line's name)."""
+    for line in how.split("\n"):
+        if line.startswith(label + ":"):
+            return line
+    raise AssertionError("no %r line in the note: %r" % (label, how))
+
+
+def _last_dollars(line):
+    """The last dollar figure on a line, as a number: the line's answer."""
+    import re
+    return float(re.findall(r"\$([\d,]+(?:\.\d+)?)", line)[-1].replace(",", ""))
+
+
+def test_the_how_note_on_a_far_job_says_not_local_and_shows_every_sum(ran):
+    """150 miles: the note says NOT local, shows the three sums with real numbers, and each sum's
+    answer is exactly what the bid prices that line at.
+
+    Mutation: drop the note from laborPanel, or compute the sums in the note a second way."""
+    f = ran["distance"]["howNights"]["auto"]
+    how = f["how"]
+    assert how.startswith("150 mi from Olathe office. That is 70 miles or more, so this is NOT a "
+                          "local job: Travel Labor, Lodging and Per Diem come on.")
+    for label, key in (("Lodging", "lodging"), ("Per Diem", "per_diem")):
+        line = _how_line(how, label)
+        assert _last_dollars(line) == f["cost"][key] > 0
+        assert " x $" in line
+    assert "nights x $70.00" in _how_line(how, "Lodging")
+    assert "days x $45.00" in _how_line(how, "Per Diem")
+    travel = _how_line(how, "Travel Labor")
+    assert "drive hours (round trip at 60 mph)" in travel
+    assert _last_dollars(travel) == f["cost"]["travel"] > 0
+    assert "Man-days = guys x days on the labor lines above" in how
+
+
+def test_the_how_note_on_a_local_job_says_so_and_shows_the_lines_off(ran):
+    """30 miles: IS a local job, and all three lines read off, $0.
+
+    Mutation: say far for a near job, or show sums for a gray line."""
+    how = ran["distance"]["near"]["how"]
+    assert how.startswith("30 mi from Olathe office. That is under 70 miles, so this IS a local "
+                          "job: the three travel lines stay gray unless you switch one on.")
+    for label in ("Travel Labor", "Lodging", "Per Diem"):
+        assert _how_line(how, label) == label + ": off, $0"
+
+
+def test_the_how_note_when_the_distance_is_unknown_asks_for_the_miles(ran):
+    """No distance: it does not pretend to know, and tells the estimator what to type.
+
+    Mutation: treat unknown as local or as far."""
+    how = ran["distance"]["unk"]["how"]
+    assert how.startswith("Distance not known yet, so the tool cannot tell if this is a local job. "
+                          "Type the miles above.")
+    assert _how_line(how, "Lodging") == "Lodging: off, $0"
+
+
+def test_the_how_note_names_a_line_the_estimator_switched_by_hand(ran):
+    """Lodging was flipped off by hand at 85 miles; at 90 the distance would turn it on but does not,
+    and the note says exactly that, while Per Diem (never touched) is on.
+
+    Mutation: drop the `hand` sentence, or show Lodging's sum for a line that is off."""
+    d = ran["distance"]["typed90"]
+    assert "Lodging was switched off by hand, so the distance does not change it." in d["how"]
+    assert _how_line(d["how"], "Lodging") == "Lodging: off, $0"
+    assert _last_dollars(_how_line(d["how"], "Per Diem")) == d["cost"]["per_diem"] > 0
+    assert "Per Diem was switched" not in d["how"]
+
+
+def test_the_how_note_says_typed_when_nights_were_typed_and_repaints_with_the_miles(ran):
+    """Typing 10 nights marks the line (typed) and the note's figure follows; typing 20 miles over the
+    150 repaints the note in place to a local job, with no rebuild of the page's other cards.
+
+    Mutation: leave the note out of paintDistance (it would still read 'NOT a local job'). The
+    repaintNumbers path is held by the typed-labor-day test below."""
+    h = ran["distance"]["howNights"]
+    assert "(typed)" not in _how_line(h["auto"]["how"], "Lodging")
+    typed = _how_line(h["typed"]["how"], "Lodging")
+    assert "10 nights (typed) x $70.00 = $700.00" in typed
+    assert _last_dollars(typed) == h["typed"]["cost"]["lodging"] == 700
+    moved = h["local"]["how"]
+    assert moved.startswith("20 mi from Olathe office (typed by you). That is under 70 miles, so "
+                            "this IS a local job")
+    assert "NOT a local job" not in moved
+
+
+def test_the_how_note_follows_a_typed_labor_day_without_a_rebuild(ran):
+    """Typing Days on a labor line takes changed(false), which repaints in place and never rebuilds the
+    panel, so the note's man-days and dollars move only if repaintNumbers paints the note. The figure in
+    the note must equal what the bid prices the line at, before and after.
+
+    Mutation: drop the data-trv-how line from repaintNumbers (the note keeps the old man-days)."""
+    h = ran["distance"]["howDays"]
+    before, after = h["before"], h["after"]
+    assert _last_dollars(_how_line(before["how"], "Lodging")) == before["cost"]["lodging"] > 0
+    assert after["cost"]["lodging"] != before["cost"]["lodging"]
+    assert _last_dollars(_how_line(after["how"], "Lodging")) == after["cost"]["lodging"]
+    assert _last_dollars(_how_line(after["how"], "Per Diem")) == after["cost"]["per_diem"]
+    assert after["how"] != before["how"]
+
+
 # ── B7b: the Labor Calculator fills a NEW bid's default labor lines ──────────────────────────────
 def test_a_new_bid_fills_its_default_labor_from_the_calculator(ran):
     """From SF: crew 3, 2,500 SF/day, 12,000 SF job -> 5 days at 10 h, company rate $40 = $6,000.
