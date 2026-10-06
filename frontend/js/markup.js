@@ -2164,7 +2164,9 @@
         window.TWTabMemo.write(window, { tab: GLOBAL });
       }
       say("");
-      render({ focus: false });
+      // Focus lands on the Global tab button, not on <body>: the link that held it is gone after
+      // the repaint, and a keyboard user would otherwise start again from the top of the page.
+      render({ focusKey: "tab-" + GLOBAL });
       return;
     }
 

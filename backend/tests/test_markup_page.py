@@ -1803,6 +1803,9 @@ def test_the_global_block_link_opens_the_global_tab_and_is_the_same_for_non_admi
 
     Mutation: remove the [data-goto-global] click branch -- the selected tab stays a sheet tab."""
     assert "global:true" in ran["globalRefLink"], ran["globalRefLink"]
+    # The link is gone after the repaint, so the focus goes to the Global tab button rather than
+    # the page body (a keyboard user would otherwise start again from the top).
+    assert ran["globalRefLinkFocus"] == "tab-global", ran["globalRefLinkFocus"]
     assert ran["globalRefOnGlobal"] == 0
     assert ran["globalRefNonAdmin"] == ran["globalRefAdmin"]
     assert ran["globalRefNonAdmin"][0]["inputs"] == 0

@@ -973,6 +973,8 @@ async function main() {
     s.clickIn("goto-global");
     await drain();
     out.globalRefLink = s.snap().tabs.map((t) => t.layout + ":" + t.selected);
+    // Where the keyboard focus lands after the link: the Global tab button, not the page body.
+    out.globalRefLinkFocus = s.active();
     out.globalRefOnGlobal = s.snap().globalRef.length;
 
     // A labor rate of $33 and a labor rate of $99: the tab's total is the same.
