@@ -42,6 +42,26 @@
 
   <form id="intake-form">
 
+    <!-- Audience is the FIRST box on purpose (Hanz, 2026-10-07): it picks which proposal template
+         the tool fills, so it is the first thing asked. Keep it the first box in this form and
+         keep it inside the form, because readForm and the autosave only see the form's own
+         elements. test_audience_first.py pins both, and keeps it identical to the box on
+         polish-intake.html. -->
+    <fieldset id="audience-box">
+      <legend>Audience</legend>
+      <p class="hint">Picks which proposal template the tool fills.</p>
+      <div class="radio-row">
+        <label class="radio">
+          <input type="radio" name="audience" value="Direct" checked>
+          <span>Direct customer</span>
+        </label>
+        <label class="radio">
+          <input type="radio" name="audience" value="GC">
+          <span>General contractor (GC)</span>
+        </label>
+      </div>
+    </fieldset>
+
     <fieldset>
       <legend>Project Info</legend>
       <div class="row">
@@ -285,21 +305,6 @@
           <div class="c-results" id="county-results" data-county-keep hidden></div>
         </div>
         <p class="hint" id="county-note" role="status" aria-live="polite"></p>
-      </div>
-    </fieldset>
-
-    <fieldset>
-      <legend>Audience</legend>
-      <p class="hint">Picks which proposal template the tool fills.</p>
-      <div class="radio-row">
-        <label class="radio">
-          <input type="radio" name="audience" value="Direct" checked>
-          <span>Direct customer</span>
-        </label>
-        <label class="radio">
-          <input type="radio" name="audience" value="GC">
-          <span>General contractor (GC)</span>
-        </label>
       </div>
     </fieldset>
 
