@@ -711,6 +711,13 @@
     }
     var hand = [];
     var names = { lodging: "Lodging", per_diem: "Per Diem" };
+    var tr = null;
+    for (var i = 0; i < rows.length; i++) { if (rows[i] && rows[i].id === "travel") { tr = rows[i]; break; } }
+    // A far job whose Travel Labor row was switched off says so, or the decision line ("come on")
+    // and the working line ("off, $0") contradict each other with nothing in between.
+    if (far && tr && !rowOn(tr)) {
+      hand.push("Travel Labor was switched off by hand, so it adds nothing.");
+    }
     TRAVEL_LINE_KEYS.forEach(function (k) {
       var l = trv[k];
       if (l && l.hand === true) {
@@ -721,13 +728,15 @@
 
     var lines = [];
     var usesAuto = false;
-    var tr = null;
-    for (var i = 0; i < rows.length; i++) { if (rows[i] && rows[i].id === "travel") { tr = rows[i]; break; } }
     if (tr && rowOn(tr) && (num(tr.days) > 0 || !local)) {
       var hrs = "";
       if (!isBlank(tr.days) && num(tr.days) > 0) {
+        // "Round trip at 60 mph" only while there IS a distance it was worked from; after the miles
+        // are cleared the seeded hours stay priced, so say plainly where they came from instead.
         hrs = (!isBlank(tr.hours_seed) && num(tr.days) === num(tr.hours_seed))
-          ? " (round trip at " + DRIVE_MPH + " mph)" : " (typed)";
+          ? (miles !== null ? " (round trip at " + DRIVE_MPH + " mph)"
+                            : " (from an earlier distance; type the miles or the hours)")
+          : " (typed)";
       }
       if (tr.guys_auto) usesAuto = true;
       lines.push("Travel Labor: " + qty(tr.guys) + " man-days" + (tr.guys_auto ? "" : " (typed)") +
