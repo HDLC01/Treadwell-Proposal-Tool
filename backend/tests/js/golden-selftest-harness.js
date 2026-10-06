@@ -132,6 +132,31 @@ const A = [
   out.serializedShape = file.split("\n").length;          // header + one line per vector + footer
 }
 
+// ── a function that writes into its argument and returns nothing ─────────────
+// setMeasurement is one: its whole effect is the rows it edits. `mut` says THAT it wrote and only
+// `after` says WHAT, so a golden without `after` stays green when it starts writing something else.
+{
+  const writes = (m) => (rows) => { rows[0].m = m; };
+  const one = (f) => recording([{ id: "w/1", fn: "write", f: f, args: [[{ m: 1 }]] }]);
+  const golden = one(writes(5));
+  const inFile = (rec) => {
+    const text = G.serialize({ meta: Object.assign({ commit: "" }, rec.meta), vectors: rec.vectors });
+    return { meta: JSON.parse(text).meta, vectors: JSON.parse(text).vectors.map(G.decode) };
+  };
+  const reads = G.makeRecorder();
+  reads.add("reads", "read", (rows) => rows[0].m, [[{ m: 1 }]]);
+  const kept = inFile(one(writes(-0))).vectors[0];
+  out.inPlace = {
+    recorded: G.show(golden.vectors[0]),
+    afterOnlyWhenWritten: [golden.vectors[0], reads.vectors[0]].map((v) => Object.prototype.hasOwnProperty.call(v, "after")),
+    sameWrite: G.compare(golden, one(writes(5))),
+    wroteAnotherNumber: G.compare(golden, one(writes(6))),
+    stoppedWriting: G.compare(golden, one(() => undefined)),
+    negativeZeroWritten: G.compare(inFile(one(writes(-0))), one(writes(0))),
+    negativeZeroSurvivesTheFile: Boolean(kept.after) && Object.is(kept.after[0][0].m, -0),
+  };
+}
+
 // ── the command line, through a throwaway generator ──────────────────────────
 {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tw-golden-"));

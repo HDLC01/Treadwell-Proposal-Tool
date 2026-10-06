@@ -942,7 +942,9 @@ function groupCalcAndSeed(call) {
   };
   for (const name of Object.keys(DEFAULTS)) call("seed/default/" + name, "seedDefaultTakeoff", ...DEFAULTS[name]);
 
-  // typing into a measurement keeps the same-floor rows honest (it writes into the rows in place)
+  // typing into a measurement keeps the same-floor rows honest (it writes into the rows in place).
+  // setMeasurement returns nothing, so its whole answer is the rows as the call left them, which the
+  // golden keeps as `after` on each of these vectors.
   const floor = () => [
     { assembly_id: "a1", measurement: 10000, unit: "SF" },
     { assembly_id: "a3", measurement: 10000, unit: "SF", same_floor: true },
@@ -955,6 +957,25 @@ function groupCalcAndSeed(call) {
   call("seed/setMeasurement/offCarrier", "setMeasurement", [
     { unit: "SF", measurement: 100, enabled: false }, { unit: "SF", measurement: 100, same_floor: true }], 0, 200);
   call("seed/setMeasurement/noRows", "setMeasurement", undefined, 0, 5);
+
+  // Which rows a carrier drags and which it leaves alone: one layout per promise in the comment on
+  // setMeasurement, each the rows as they stand BEFORE the typing (the arguments are [rows, i, value]).
+  const sf = (m, over) => Object.assign({ unit: "SF", measurement: m }, over);
+  const DRAG = {
+    // the first default is switched OFF, so a same-floor row can sit ABOVE the row that carries the area
+    sameFloorAbove: [[sf(10000, { same_floor: true, enabled: false }), sf(10000), sf(10000, { same_floor: true })], 1, 12000],
+    // a plain SF row and an LF row that happen to hold the same number are somebody else's work
+    plainRowsSameNumber: [[sf(10000), sf(10000), { unit: "LF", measurement: 10000 }, sf(10000, { same_floor: true })], 0, 12000],
+    // a same-floor row that already holds something else is left alone
+    sameFloorHoldsOther: [[sf(10000), sf(10000, { same_floor: true }), sf(7500, { same_floor: true })], 0, 12000],
+    // typing into an LF row never drags the floor, even when the two numbers match
+    lfCarrierSameNumber: [[{ unit: "LF", measurement: 10000 }, sf(10000, { same_floor: true })], 0, 12000],
+    // the page keeps what was typed ("9,000"), so rows are compared as numbers, not as text
+    typedAsText: [[sf("9,000"), sf(9000, { same_floor: true }), sf("9,000", { same_floor: true })], 0, "12,000"],
+    // a hole in the list is stepped over
+    nullRowInList: [[null, sf(10000), sf(10000, { same_floor: true })], 1, 12000],
+  };
+  for (const name of Object.keys(DRAG)) call("seed/setMeasurement/" + name, "setMeasurement", ...DRAG[name]);
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

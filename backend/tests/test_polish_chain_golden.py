@@ -1,7 +1,7 @@
 """The Polish bid chain, recorded before the v2 program rewrites what stands behind it.
 
 backend/tests/fixtures/polish_chain_golden.json holds what js/polish-bid-core.js (TWPolishBid)
-answers for 2,222 deliberately awkward inputs: markupChain over every GP edge and all 256 settings
+answers for 2,228 deliberately awkward inputs: markupChain over every GP edge and all 256 settings
 of the eight job conditions, every shape the remodel rate arrives in and a sweep of dirty values;
 the number helpers; labor, travel and takeoff; the conditions and what they write into Kyle's
 workbook; the default readers; the model; the labor calculator; and what a new bid is seeded with.
@@ -168,6 +168,48 @@ def test_a_function_that_mutates_its_argument_is_flagged(vectors):
         "the pricing functions are pure; one that starts writing into its input is a finding"
 
 
+def test_what_a_function_left_in_its_argument_is_recorded_and_not_only_that_it_wrote(vectors):
+    """setMeasurement returns nothing: its whole effect is the rows it edits. `mut` says THAT it wrote
+    and `after` says WHAT. With `mut` alone, a refactor that wrote another number, or into another row,
+    left this file green (see the setMeasurement changes in the table of broken copies below)."""
+    mutators = {k for k, v in vectors.items() if v.get("mut")}
+    assert mutators
+    assert {k for k, v in vectors.items() if "after" in v} == mutators, "`after` is there exactly where `mut` is"
+
+
+# What typing a number into a takeoff row must leave, as (measurement, same_floor) for each row, and None
+# for a hole in the list. Cut by hand from the comment on setMeasurement, then checked against the
+# golden, so a regenerated file cannot drift off the layout its id names without somebody noticing.
+LEFT_BEHIND = {
+    # floor(): the carrier a1, a same-floor row a3, an LF row a2, a same-floor row a4 that is switched OFF
+    "seed/setMeasurement/0": [(12000, False), (12000, True), (300, False), (12000, True)],   # the carrier drags both, the OFF one too
+    "seed/setMeasurement/1": [(10000, False), (4000, False), (300, False), (10000, True)],   # typed over: stops sharing, nothing drags
+    "seed/setMeasurement/2": [(10000, False), (10000, True), (350, False), (10000, True)],   # an LF row is not a carrier
+    "seed/setMeasurement/3": [(10000, False), (10000, True), (300, False), (99, False)],     # typed over while OFF: stops sharing
+    "seed/setMeasurement/4": [("", False), ("", True), (300, False), ("", True)],            # clearing the carrier clears them too
+    "seed/setMeasurement/5": [("9,000", False), ("9,000", True), (300, False), ("9,000", True)],
+    "seed/setMeasurement/offCarrier": [(200, False), (100, True)],                           # an OFF carrier drags nothing
+    "seed/setMeasurement/sameFloorAbove": [(12000, True), (12000, False), (12000, True)],    # above the carrier counts too
+    "seed/setMeasurement/plainRowsSameNumber": [(12000, False), (10000, False), (10000, False), (12000, True)],
+    "seed/setMeasurement/sameFloorHoldsOther": [(12000, False), (12000, True), (7500, True)],
+    "seed/setMeasurement/lfCarrierSameNumber": [(12000, False), (10000, True)],
+    "seed/setMeasurement/typedAsText": [("12,000", False), ("12,000", True), ("12,000", True)],
+    "seed/setMeasurement/nullRowInList": [None, (12000, False), (12000, True)],
+}
+
+
+@pytest.mark.parametrize("vector_id, left", sorted(LEFT_BEHIND.items()))
+def test_each_setmeasurement_vector_leaves_the_rows_its_id_promises(vectors, vector_id, left):
+    rows = vectors[vector_id]["after"][0]
+    assert [None if r is None else (r["measurement"], bool(r.get("same_floor"))) for r in rows] == left
+
+
+def test_every_setmeasurement_vector_that_writes_is_in_that_table(vectors):
+    """A vector added to the recipe without its expected rows here would be pinned by the golden alone."""
+    writers = {k for k, v in vectors.items() if v["fn"] == "setMeasurement" and v.get("mut")}
+    assert writers == set(LEFT_BEHIND)
+
+
 REQUIRED_FUNCTIONS = {
     "markupChain", "gpPct", "roundUp", "num", "money", "money2", "pct", "fmtSf", "laborCost", "laborTotal",
     "removeExistingHand", "travelManDays", "travelQty", "travelLineCost", "travelCosts", "normalizeTravel",
@@ -220,6 +262,41 @@ MUTATIONS = {
         "rowOn: rowOn, sliderHtml: sliderHtml, manDaysHint: manDaysHint,",
         "rowOn: rowOn, sliderHtml: sliderHtml,",
         ["exports", ".out.manDaysHint", "golden 'function', now 'missing'"]),
+
+    # setMeasurement writes into its rows and returns nothing, so these are changes only the rows it
+    # LEAVES can show (`after` in the vector). Each is a real way to break the rule its comment states.
+    "typing writes another number into the row": (
+        "r.measurement = value;",
+        "r.measurement = 0;",
+        ["seed/setMeasurement/0", ".after[0][0].measurement: golden 12000, now 0"]),
+    "an OFF carrier drags the same-floor rows along": (
+        'if (r.unit !== "SF" || !rowOn(r)) return;',
+        'if (r.unit !== "SF" && !rowOn(r)) return;',
+        ["seed/setMeasurement/offCarrier", ".after[0][1].measurement: golden 100, now 200"]),
+    "typing into an LF row drags the floor": (
+        'if (r.unit !== "SF" || !rowOn(r)) return;',
+        "if (!rowOn(r)) return;",
+        ["seed/setMeasurement/lfCarrierSameNumber", ".after[0][1].measurement: golden 10000, now 12000"]),
+    "a same-floor row above the carrier is never dragged": (
+        "for (var k = 0; k < rows.length; k++) {",
+        "for (var k = 1; k < rows.length; k++) {",
+        ["seed/setMeasurement/sameFloorAbove", ".after[0][0].measurement: golden 12000, now 10000"]),
+    "a plain row holding the same number is dragged along": (
+        "o && o.same_floor && num(o.measurement) === num(old)",
+        "o && (o.same_floor || num(o.measurement) === num(old))",
+        ["seed/setMeasurement/plainRowsSameNumber", ".after[0][1].measurement: golden 10000, now 12000"]),
+    "a same-floor row holding another number is dragged anyway": (
+        "o.same_floor && num(o.measurement) === num(old)",
+        "o.same_floor",
+        ["seed/setMeasurement/sameFloorHoldsOther", ".after[0][2].measurement: golden 7500, now 12000"]),
+    "rows are compared as text, not as numbers": (
+        "num(o.measurement) === num(old)",
+        "o.measurement === old",
+        ["seed/setMeasurement/typedAsText", ".after[0][1].measurement: golden '12,000', now 9000"]),
+    "a hole in the list becomes a crash": (
+        "o && o.same_floor",
+        "o.same_floor",
+        ["seed/setMeasurement/nullRowInList"]),
 }
 
 

@@ -23,7 +23,10 @@
  * A VECTOR is {id, fn, args, out}. `out` is the function's answer; `threw` (the error's NAME, never
  * its message, which differs between node versions) replaces it when the call threw; `mut: true` is
  * written only when the call changed its own arguments, so a refactor that starts mutating (or
- * stops) shows as one line.
+ * stops) shows as one line. `after` is written with it: the arguments as the call LEFT them. A
+ * function that edits its input in place and returns nothing (setMeasurement) has no answer to
+ * record, so without `after` the golden would say THAT it wrote and never WHAT, and a refactor that
+ * wrote another number, or into another row, would pass.
  *
  * Usage, from a generator script built on main() below:
  *   node gen-x-golden.js <frontend-dir>                              print the golden
@@ -147,7 +150,8 @@ function same(a, b) {
 // ── recording ────────────────────────────────────────────────────────────────
 /** A recorder that calls functions on a CLONE of the arguments and notes what happened.
  *  `add(id, fnName, fn, args)`: `fn` is called with a structured clone of `args`, so a function that
- *  mutates its input cannot spoil the next vector, and `mut` records that it did. */
+ *  mutates its input cannot spoil the next vector, `mut` records that it did, and `after` holds what
+ *  it left behind (the clone, as the call finished with it). Both are written only for such a call. */
 function makeRecorder() {
   const vectors = [];
   const ids = new Set();
@@ -162,7 +166,10 @@ function makeRecorder() {
     } catch (e) {
       v.threw = (e && e.name) || "Error";
     }
-    if (JSON.stringify(encode(live, id + ".args")) !== before) v.mut = true;
+    if (JSON.stringify(encode(live, id + ".args")) !== before) {
+      v.mut = true;
+      v.after = live;
+    }
     vectors.push(v);
     return v;
   }

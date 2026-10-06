@@ -79,8 +79,25 @@ def test_the_recorder_runs_on_a_clone_and_notes_what_happened(ran):
     assert r["threwHoldsTheNameOnly"] is True, "an error's message differs per node version; only its name is stored"
     assert r["undefinedOutKept"] is True
     assert r["duplicateId"] == "duplicate vector id double"
-    assert r["vectors"][1] == "{ id: 'mutates', fn: 'mutates', args: [ { n: 2 } ], out: 99, mut: true }"
+    assert r["vectors"][1] == "{ id: 'mutates', fn: 'mutates', args: [ { n: 2 } ], out: 99, mut: true, after: [ { n: 99 } ] }"
     assert r["vectors"][3] == "{ id: 'returnsNegativeZero', fn: 'negz', args: [ 3, -0 ], out: -0 }"
+
+
+def test_a_function_that_writes_in_place_is_pinned_by_what_it_wrote(ran):
+    """`mut` alone says THAT a call wrote into its argument. A function that returns nothing (the Polish
+    takeoff's setMeasurement) has no answer to compare, so without `after` a refactor that wrote another
+    number kept the same `out` (nothing) and the same `mut` and passed."""
+    w = ran["inPlace"]
+    assert w["recorded"] == ("{ id: 'w/1', fn: 'write', args: [ [ { m: 1 } ] ], out: undefined, mut: true, "
+                             "after: [ [ { m: 5 } ] ] }")
+    assert w["afterOnlyWhenWritten"] == [True, False], "`after` goes with `mut` and with nothing else"
+    assert w["sameWrite"] == []
+    assert w["wroteAnotherNumber"] == ["1 of 1 vectors answer differently now:",
+                                       "  w/1   write([ { m: 1 } ])\n      at .after[0][0].m: golden 5, now 6"]
+    assert w["stoppedWriting"][1] == "  w/1   write([ { m: 1 } ])\n      at .mut: golden true, now (absent)"
+    # the codec covers what was written as well as what was returned
+    assert w["negativeZeroWritten"][1] == "  w/1   write([ { m: 1 } ])\n      at .after[0][0].m: golden -0, now 0"
+    assert w["negativeZeroSurvivesTheFile"] is True
 
 
 def test_a_comparison_names_every_way_a_golden_can_go_stale(ran):
