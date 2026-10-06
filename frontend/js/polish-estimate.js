@@ -439,54 +439,17 @@
 
   // ── saving ──────────────────────────────────────────────────────────────────
   var saveTimer = null;
+  // WHAT IS WRITTEN, AND WHY EACH KEY IS THERE, IS B.buildSavePatch'S BUSINESS (polish-bid-core.js).
+  // This page and its pagehide flush used to compose the blob by hand in two places, and the two
+  // drifted: the flush skipped the condition cells and the measured-floor fallback. Both call it
+  // now, so a key can only be added or fixed once. `bid` is the price this page computes (the
+  // library lives here), `library` is what it priced Dye and Joint Filler with.
   function saveSoon() {
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(function () {
-      var b = bid();
-      M.totals = b;                        // a snapshot for the card and for reading later; the
-                                           // page never prices FROM it
-      TW.setState(Object.assign({}, TW.getState(), {
-        polish_estimate: M,
-        // THE FIVE CONDITION CELLS, AND ONLY THOSE. See the file header: this page does not write
-        // the takeoff or the pricing cells, because it no longer prices through the workbook. It
-        // has to write these, because they are not a rendering of the bid — they are the contract
-        // this screen shares with the intake page, which reads them back on load and lets the CELL
-        // win over the model (polish-intake.js adoptModel, "THE CELL WINS WHERE THERE IS ONE").
-        //
-        // That rule's safety condition is that every writer writes both places. This page became a
-        // second writer the moment the Review step's switches shipped, and for one commit it wrote
-        // only the model: flip Sales tax off here, follow either of this step's own links to
-        // Intake — remodelSource()'s "pick a county", or the Labor step's "Change it on the intake
-        // step" — and the old answer came back, then intake's next save made the revert permanent.
-        //
-        // THE DYE AND JOINT FILLER CELLS RIDE THE SAME WRITE: the rate (and, where the library
-        // changed it, the quantity formula) the bid priced with -- conditionLibrary above.
-        cell_values: B.conditionCellWrites(M.conditions, TW.getState().cell_values,
-                                           conditionLibrary()),
-        // proposal-review reads this for the SF token, and /api/generate's files-mode rebuild
-        // gates on it.
-        // b.sf is the area the bid PRICES (an OFF row is out of it). When nothing is on, keep the
-        // MEASURED floor on file rather than 0: a 0 here unlocked intake's SF boxes and sent the
-        // proposal an empty SF token because somebody flipped the only row's slider (F5).
-        polish_sf: b.sf > 0 ? b.sf : B.measuredSf(M.takeoff),
-        // polish_sf IS the takeoff total, so intake's System 2 box has nothing left to say: blank
-        // it. Left stale it reseeded a deleted row -- empty the takeoff, reopen step 2, and
-        // B.seedTakeoffSf read the old polish_2_sf as a fresh measurement.
-        polish_2_sf: "",
-        // Replaced, not merged — see the file header.
-        computed_bid: {
-          lump_sum: b.total,
-          price_per_sf: b.per_sf,
-          polish_sf: b.sf,
-          // What the rest of the app reads: _bid_total in backend/drafts.py for the projects card,
-          // and proposal-review for the lump sum and the two tax lines it itemizes.
-          full_bid: {
-            total_base_bid: b.total,
-            sales_tax: b.sales_tax,
-            remodel_tax: b.remodel_tax,
-          },
-        },
-      }));
+      var now = TW.getState();
+      TW.setState(Object.assign({}, now,
+        B.buildSavePatch(M, now, { bid: bid(), library: conditionLibrary() })));
     }, 600);
   }
 
@@ -497,23 +460,9 @@
     if (!saveTimer) return;
     clearTimeout(saveTimer);
     saveTimer = null;
-    var b = bid();
-    M.totals = b;
-    TW.setState(Object.assign({}, TW.getState(), {
-      polish_estimate: M,
-      polish_sf: b.sf,
-      polish_2_sf: "",                   // see saveSoon: the takeoff total is polish_sf now
-      computed_bid: {
-        lump_sum: b.total,
-        price_per_sf: b.per_sf,
-        polish_sf: b.sf,
-        full_bid: {
-          total_base_bid: b.total,
-          sales_tax: b.sales_tax,
-          remodel_tax: b.remodel_tax,
-        },
-      },
-    }));
+    var cur = TW.getState();
+    TW.setState(Object.assign({}, cur,
+      B.buildSavePatch(M, cur, { bid: bid(), library: conditionLibrary() })));
     TW.flushState();
   });
 

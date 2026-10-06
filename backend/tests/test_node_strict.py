@@ -32,9 +32,11 @@ HERE = pathlib.Path(__file__).resolve().parent
 BACKEND = HERE.parent
 
 # The tests that must use the strict door. test_harness_lib_js.py is a new harness test too, and so
-# is test_v2_names.py (its node-free tests, the static pages and the Python sweep, still run).
+# is test_v2_names.py (its node-free tests, the static pages and the Python sweep, still run), and
+# so is test_v2_model_safety.py (Phase 4).
 STRICT_MODULES = ["tests/test_polish_chain_golden.py", "tests/test_library_pricing_golden.py",
-                  "tests/test_harness_lib_js.py", "tests/test_v2_names.py"]
+                  "tests/test_harness_lib_js.py", "tests/test_v2_names.py",
+                  "tests/test_v2_model_safety.py"]
 
 
 # ── 1. the runner has node ───────────────────────────────────────────────────

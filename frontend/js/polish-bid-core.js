@@ -1832,6 +1832,36 @@
     return /^-?\d*\.?\d+$/.test(String(v).replace(/[$,\s]/g, ""));
   }
 
+  /** THE TOP-LEVEL KEYS migrateModel's v2 branch READS AND NORMALISES ITSELF, and so the only keys it
+   *  may ever rewrite or drop. Every OTHER own key of a saved v2 model belongs to somebody else and
+   *  is carried through exactly as it was saved (carryUnknownKeys below).
+   *
+   *  Until Phase 4 of the v2 estimating program this branch rebuilt the model from a fixed list of
+   *  keys, so any key it did not name was erased by the NEXT SAVE: a field a later phase writes (the
+   *  other sheets' `tabs`, a rates snapshot, a profile stamp) would have come back as nothing the
+   *  first time an estimator touched an unrelated switch. Pinned by test_v2_model_safety.py two
+   *  ways: round-trip laws over every saved-bid fixture, and this list against what a model that
+   *  states all of these comes back with. A key added to the OUTPUT without being added HERE would
+   *  be carried raw over its own normalisation, which is the one mistake this list exists to stop. */
+  var MODEL_KEYS = Object.freeze(["version", "takeoff", "labor", "conditions", "contingency", "fees",
+    "totals", "no_travel_labor", "conditions_shown", "cond_cov", "travel", "distance", "fees_default"]);
+
+  /** `out` with every own key of `saved` that is not in MODEL_KEYS copied on, unchanged.
+   *
+   *  copyInto, not a hand-written `out[key] = ...`: a saved key is user data (a draft is whatever
+   *  was in localStorage or the drafts table), and copyInto is this file's one idiom that refuses
+   *  `__proto__`, `constructor` and `prototype`. Values are carried BY REFERENCE and never looked
+   *  into, `tabs` included: this function does not know what is inside them and must not pretend
+   *  to. Nothing already on `out` is overwritten, so a known key keeps exactly the normalisation
+   *  the branch above gave it, and a known key that normalisation DROPPED (a distance that is not a
+   *  distance) stays dropped. */
+  function carryUnknownKeys(out, saved) {
+    var rest = Object.entries(saved).filter(function (e) {
+      return MODEL_KEYS.indexOf(e[0]) < 0 && !Object.prototype.hasOwnProperty.call(out, e[0]);
+    });
+    return copyInto(out, Object.fromEntries(rest));
+  }
+
   /** Bring any saved model up to v2. Never throws: a draft is whatever was in localStorage or
    *  the drafts table, including something a half-shipped build wrote, and an estimator opening
    *  an old job should get a working screen rather than a blank one. */
@@ -1971,7 +2001,10 @@
       // every bid saved before it existed and on every bid whose default was nothing.
       if (!isBlank(model.fees_default) && isFinite(Number(model.fees_default)) &&
           Number(model.fees_default) > 0) out.fees_default = Number(model.fees_default);
-      return out;
+      // EVERYTHING ELSE THE SAVED MODEL HOLDS comes back as it went in (see MODEL_KEYS). The v1
+      // branch below does NOT do this, on purpose: it is a one-way upgrade that consumes `areas` and
+      // `labour` and drops six legacy keys so the same material is never priced twice.
+      return carryUnknownKeys(out, model);
     }
 
     // v1: named areas, each with an SF figure, and no assemblies at all — materials were typed
@@ -2040,6 +2073,116 @@
     }
 
     return fresh;
+  }
+
+  function isObject(v) { return !!v && typeof v === "object" && !(v instanceof Array); }
+
+  /** The saved model with ONE writer's fields laid over it, and everything else left as it was.
+   *
+   *  THE INTAKE PAGE'S SAVE. It used to migrate what was saved and then overlay its own answers by
+   *  hand, in the page. It is a function of the model now so that "what the intake may state" is
+   *  decided in ONE place, next to the model, and can be tested without a page: a second writer that
+   *  states a little more (Phase 9's intake, a section-aware model) widens this function and nothing
+   *  else.
+   *
+   *  `existing` is whatever the draft holds under `polish_estimate`: nothing, a v1 model, a partial
+   *  blob, a v2 model. It is read through migrateModel, so what comes back is ALWAYS a well-formed v2
+   *  with its version stamped. That matters because the intake MINTS the first model on a brand-new
+   *  project, and backend/drafts.py reads `polish_estimate.version` to decide that a project resumes
+   *  on the beta intake and not on the spreadsheet one. Every key the model holds that this function
+   *  does not name (`tabs`, a rates snapshot, a profile stamp, anything a later phase adds) comes
+   *  back exactly as saved, because migrateModel carries it and nothing here touches it.
+   *
+   *  `patch` states ONLY what the intake owns, and only these two are read from it:
+   *
+   *    conditions        merged key by key over the saved answers, never replacing the object: an
+   *                      answer the patch does not mention stays as it was saved
+   *    conditions_shown  which condition cards this bid shows, replaced when the patch states one
+   *
+   *  Anything else in `patch` is ignored. The takeoff, the labor rows and `tabs` belong to the
+   *  estimate page, and a patch that could overwrite them is how recording one toggle deletes a
+   *  finished takeoff.
+   *
+   *  A PATCH NEVER STATES LABOR ON A BID THAT NEVER STATED IT. migrateModel fills a missing `labor`
+   *  in from freshModel(), and the intake used to persist those four rows: that made the library's
+   *  default labor lines unreachable, because laborUnstated(saved) is the gate the estimate page
+   *  seeds them behind and a model minted here had already stated labor. So `labor` is taken back off
+   *  when `existing` stated none. It is asked of `existing` itself and not of the migrated copy,
+   *  for the reason laborUnstated gives.
+   *
+   *  Pure: neither argument is changed. */
+  function patchModel(existing, patch) {
+    var model = migrateModel(existing);
+    var p = isObject(patch) ? patch : {};
+    if (isObject(p.conditions)) model.conditions = Object.assign({}, model.conditions, p.conditions);
+    if (isObject(p.conditions_shown)) model.conditions_shown = copyInto({}, p.conditions_shown);
+    if (laborUnstated(existing)) delete model.labor;
+    return model;
+  }
+
+  /** EVERY DRAFT KEY THE ESTIMATE PAGE SAVES, as one patch, for the page to lay over the draft:
+   *  `TW.setState(Object.assign({}, draft, buildSavePatch(model, draft, ctx)))`.
+   *
+   *  ONE COMPOSITION, USED BY BOTH SAVES. The 600 ms autosave and the `pagehide` flush used to build
+   *  this blob in two places, and the two had drifted: a tab closed inside the debounce window did
+   *  not refresh the condition cells, and when the only SF row was switched off it saved a polish SF
+   *  of 0 where the autosave kept the measured floor. A key can only be added or fixed here now.
+   *
+   *  `model` is the page's own (already migrated) model. `state` is the draft as it stands, and only
+   *  its `cell_values` is read, as the base the condition cells are MERGED over. `ctx` carries what
+   *  only the page can compute: `bid`, the markupChain result for `model` (required, and this throws
+   *  without it, because a save with no price is a save of zero), and `library`, what the page priced
+   *  Dye and Joint Filler with (see conditionCellWrites; left out, it writes nothing for those two).
+   *
+   *  What it returns, and why each key is there:
+   *
+   *    polish_estimate  the model, with `totals` stamped from `ctx.bid`: a snapshot for reading later,
+   *                     which the page never prices FROM. Every other key rides along as the model
+   *                     holds it, the ones migrateModel does not know included.
+   *    cell_values      THE CONDITION CELLS, merged over the draft's own. This page does not write
+   *                     the takeoff or the pricing cells, because it no longer prices through the
+   *                     workbook; it has to write the conditions, because they are not a rendering of
+   *                     the bid, they are the contract it shares with the intake page, which reads
+   *                     them back on load and lets the CELL win over the model. That rule is safe only
+   *                     while every writer writes both places. The Dye and Joint Filler rate and
+   *                     quantity cells ride the same write, so the downloaded workbook prices those
+   *                     two lines off the same library rows the bid does.
+   *    polish_sf        the area the bid PRICES (an OFF row is out of it). When nothing is on, the
+   *                     MEASURED floor, not 0: a 0 here unlocked intake's SF boxes and sent the
+   *                     proposal an empty SF token because somebody flipped the only row's slider.
+   *    polish_2_sf      blank. polish_sf IS the takeoff total, so intake's System 2 box has nothing
+   *                     left to say. Left stale it reseeded a deleted row.
+   *    computed_bid     REPLACED, not merged: on a sandbox copy the source project's figures arrived
+   *                     with the blob, and merging would leave a real project's total sitting under a
+   *                     beta price. `full_bid` is what the rest of the app reads (_bid_total in
+   *                     backend/drafts.py for the projects card; proposal-review for the lump sum and
+   *                     the two tax lines it itemizes).
+   *
+   *  Pure: nothing it is handed is changed. The model is COPIED to take the `totals` stamp. */
+  function buildSavePatch(model, state, ctx) {
+    var b = ctx && ctx.bid;
+    if (!isObject(model)) throw new Error("buildSavePatch needs the model it is saving");
+    if (!isObject(b)) {
+      throw new Error("buildSavePatch needs ctx.bid, the markupChain result for this model: a save " +
+                      "with no price is a save of zero");
+    }
+    var cells = isObject(state) ? state.cell_values : undefined;
+    return {
+      polish_estimate: Object.assign(copyInto({}, model), { totals: b }),
+      cell_values: conditionCellWrites(model.conditions, cells, ctx.library),
+      polish_sf: b.sf > 0 ? b.sf : measuredSf(model.takeoff),
+      polish_2_sf: "",
+      computed_bid: {
+        lump_sum: b.total,
+        price_per_sf: b.per_sf,
+        polish_sf: b.sf,
+        full_bid: {
+          total_base_bid: b.total,
+          sales_tax: b.sales_tax,
+          remodel_tax: b.remodel_tax
+        }
+      }
+    };
   }
 
   /** What is stopping this model being priced, in plain words. [] when nothing is.
@@ -2145,6 +2288,9 @@
     dyeCost: dyeCost, jointFillerCost: jointFillerCost,
     markupChain: markupChain,
     freshModel: freshModel, migrateModel: migrateModel, blockers: blockers,
+    // The model's safety (Phase 4): the keys migrateModel owns, what the intake may state on a saved
+    // model, and the ONE composition of everything the estimate page saves.
+    MODEL_KEYS: MODEL_KEYS, patchModel: patchModel, buildSavePatch: buildSavePatch,
     // EXPORTED 2026-09-16 for a THIRD reader: the library page's Defaults tab lists Travel as the
     // labor default that already exists. It is exported rather than re-typed there for the reason
     // written above travelSeed itself -- the two copies that existed before drifted within a day,
