@@ -149,6 +149,32 @@ out.stripTags = {
   };
 }
 
+// ── stringLiterals ──────────────────────────────────────────────────────────
+// Added with the v2 names test (Phase 1b), which has to ask "can this word reach a person" of every
+// string in the frontend. Each case is an input a line-by-line search gets wrong.
+{
+  const texts = function (src) { return L.stringLiterals(src).map(function (s) { return s.text; }); };
+  out.literals = {
+    plain: texts("a = \"x\"; b = 'y';"),
+    escaped: texts('a = "he said \\"hi\\"";'),
+    // none of the three comments is a string, including the one at the end of a line of code
+    comments: texts('// "line"\n/* "block" */ a = "kept"; // "tail"'),
+    // a quote inside a regular expression does not open a string, so "kept" is still found
+    quoteInRegex: texts("r = /[\"']/g; s = \"kept\";"),
+    division: texts("n = 4 / 2; s = \"kept\"; m = (a + b) / 3;"),
+    template: texts("t = `a ${ x } b`;"),
+    nested: texts("t = `a ${ \"in\" + `deep ${ 1 }` } b`;"),
+    braceInSubstitution: texts("t = `a ${ {k: \"v\"}.k } b`;"),
+    lines: L.stringLiterals("a\n\"first\"\n\nb = \"second\"").map(function (s) { return s.line; }),
+    templateLines: L.stringLiterals("a\n`one\ntwo ${ \"in\" } three`").map(function (s) { return [s.text, s.line]; }),
+    unterminatedString: threw(function () { L.stringLiterals('a = "oops'); }),
+    unterminatedTemplate: threw(function () { L.stringLiterals("a = `oops"); }),
+    unterminatedComment: threw(function () { L.stringLiterals("a = 1; /* oops"); }),
+    openBracket: threw(function () { L.stringLiterals('f(a, "x"'); }),
+    strayCloser: threw(function () { L.stringLiterals("a = 1; }"); }),
+  };
+}
+
 // ── the real page files: lift every function, compile every one ─────────────
 const FILES = ["js/polish-estimate.js", "js/estimate-review.js", "js/proposal-review.js", "js/library.js",
   "js/polish-bid-core.js", "js/index.js", "js/portal.js"];
@@ -176,6 +202,15 @@ out.sweep = FILES.map(function (rel) {
     }
   });
   return { file: rel, declared: seen.size, lifted: lifted, failures: failures };
+});
+
+// The string scanner over the same real files. It ends with a balance check, so a quote, regular
+// expression or comment misread anywhere in a file fails that file here instead of quietly moving
+// every later string out of place.
+out.literalSweep = FILES.map(function (rel) {
+  const src = L.read(path.join(FRONTEND, rel));
+  try { return { file: rel, n: L.stringLiterals(src).length, error: null }; }
+  catch (e) { return { file: rel, n: 0, error: String(e && e.message).slice(0, 160) }; }
 });
 
 // Constants lifted by name out of a real page, and evaluated: the shapes later phases read.

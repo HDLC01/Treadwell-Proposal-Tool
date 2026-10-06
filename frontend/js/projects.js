@@ -130,7 +130,9 @@
     function isInactive(p) { return !!p.archived; }
     function applyFilter(list) {
       if (CURRENT_FILTER === "test") return list.filter(isTest);
-      // BETA POLISH, and it has to sit above realOnly() for the same reason the test branch does.
+      // THE v2 ESTIMATES TAB (called "Beta Polish" until 2026-10-07; its key is still "beta", which
+      // is saved in sessionStorage), and it has to sit above realOnly() for the same reason the
+      // test branch does.
       // The sandbox files every beta copy with is_test: true (polish-sandbox.js) and renames it
       // "<name> (beta test)", so realOnly would hide every beta project from its own tab. Reading
       // the unfiltered list is the point, not an oversight.
@@ -226,7 +228,7 @@
         ["inactive", "Inactive", nInactive],
         ["all",      "All",      real.length],
         ["test",     "Test",     nTest],
-        ["beta",     "Beta Polish", nBeta],
+        ["beta",     "v2 Estimates", nBeta],
       ];
       f.hidden = ALL_PROJECTS.length === 0;
       f.innerHTML = defs.map(([key,label,n]) =>
@@ -280,7 +282,7 @@
           : !chipSet.length
             ? (CURRENT_FILTER === "inactive" ? "No inactive projects."
                : CURRENT_FILTER === "test"   ? "No test projects."
-               : CURRENT_FILTER === "beta"   ? "No beta polish projects yet."
+               : CURRENT_FILTER === "beta"   ? "No v2 estimates yet."
                : "No active projects.")
             : "No projects match your search.";   // tab has rows, but search/month filtered them out
         return;

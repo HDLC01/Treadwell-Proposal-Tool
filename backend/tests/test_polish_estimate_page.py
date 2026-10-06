@@ -2390,7 +2390,7 @@ def test_nothing_is_advertised_above_the_estimate_grid():
     where the estimator is reading rows of numbers. Hanz, 2026-08-07: "I can barely see the
     sheet. The Estimate sheet is supposed to be the majority viewport."
 
-    The beta is reached from the sidebar instead (Polish Estimate · BETA), which is where the
+    The beta is reached from the sidebar instead (Estimating Tool v2 · BETA), which is where the
     Item Library and the Info Sheet announce themselves too. This test is here so the next
     feature that wants a launch moment does not take it from the grid.
     """

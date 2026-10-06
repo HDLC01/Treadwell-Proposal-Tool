@@ -20,6 +20,8 @@
  *   lift(src, name, deps, opts)     that function, bound to `deps` BY NAME
  *   grabConst(src, name, opts)      the text of `const|let|var name = ...;`
  *   stripTags(html)                 the text of some markup, tags and comments removed
+ *   stringLiterals(src)             every string and template text in some JavaScript, as
+ *                                   { text, line }, comments and regex literals left out
  *   escapeRegExp(text), reOf(text)  the only way to put a variable into a regex
  *
  * THE RULE FOR LIFTED CODE: a function lifted by name runs in a scope that holds ONLY what the
@@ -242,6 +244,128 @@ function grabConst(src, name, opts) {
   return src.slice(start, end + 1);
 }
 
+// ── the words a page can show ────────────────────────────────────────────────
+/** Every string literal and every piece of template-literal text in `src`, in source order, as
+ *  `{ text, line }` (line is 1-based, where the text starts).
+ *
+ *  WHY IT EXISTS. A test that wants to know whether a word can reach a person has to look at the
+ *  strings, not the file. Grepping the file also finds the comments that explain a rename by
+ *  quoting the old name, which is every comment worth reading, and a search that skips comment
+ *  lines misses a `// note` at the end of a code line. So this walks the code the way `scan`
+ *  does: a comment, a regular-expression literal and a division are told apart, and only the
+ *  strings come out. Text inside a `${ ... }` substitution is code, so a string inside it is
+ *  found too, in the order it appears. The text keeps its escapes as written (`\"` stays two
+ *  characters): enough to look for words in, not a value to compute with.
+ *
+ *  Same limits as `scan`, on purpose (one scanner, one set of limits): a regular expression that
+ *  follows `)` is read as a division. Throws on an unterminated string, template or comment, and
+ *  names where. */
+function stringLiterals(src) {
+  const text = String(src);
+  const out = [];
+  const starts = [0];                           // where each line begins, for the line numbers
+  for (let k = 0; k < text.length; k++) if (text[k] === NL) starts.push(k + 1);
+  function lineOf(at) {
+    let lo = 0;
+    let hi = starts.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (starts[mid] <= at) lo = mid; else hi = mid - 1;
+    }
+    return lo + 1;
+  }
+  /** The string that opens at `i`; returns the index just past its closing quote. */
+  function quoted(i) {
+    const q = text[i];
+    let j = i + 1;
+    let body = "";
+    while (j < text.length) {
+      const c = text[j];
+      if (c === "\\") { body += text.slice(j, j + 2); j += 2; continue; }
+      if (c === q) { out.push({ text: body, line: lineOf(i) }); return j + 1; }
+      body += c;
+      j++;
+    }
+    throw new Error("unterminated " + q + " string starting at " + i);
+  }
+  /** The template literal that opens at `i`; returns the index just past its closing backtick. */
+  function template(i) {
+    let j = i + 1;
+    let body = "";
+    let from = j;
+    function flush() { if (body) out.push({ text: body, line: lineOf(from) }); body = ""; }
+    while (j < text.length) {
+      const c = text[j];
+      if (c === "\\") { body += text.slice(j, j + 2); j += 2; continue; }
+      if (c === "`") { flush(); return j + 1; }
+      if (c === "$" && text[j + 1] === "{") {
+        flush();
+        j = walk(j + 2, "}") + 1;
+        from = j;
+        continue;
+      }
+      body += c;
+      j++;
+    }
+    throw new Error("unterminated template literal starting at " + i);
+  }
+  /** Code from `i` to the unmatched `stop` character (its index), or to the end when `stop` is null. */
+  function walk(i, stop) {
+    let depth = 0;
+    let prev = "";                              // the last significant character, regex or division
+    let word = "";
+    while (i < text.length) {
+      const c = text[i];
+      if (isSpace(c)) { i++; continue; }
+      if (c === "'" || c === '"') { i = quoted(i); prev = "a"; word = ""; continue; }
+      if (c === "`") { i = template(i); prev = "a"; word = ""; continue; }
+      if (c === "/") {
+        const n = text[i + 1];
+        if (n === "/") { const e = text.indexOf(NL, i); i = e < 0 ? text.length : e; continue; }
+        if (n === "*") {
+          const e = text.indexOf("*/", i + 2);
+          if (e < 0) throw new Error("unterminated comment starting at " + i);
+          i = e + 2;
+          continue;
+        }
+        if (prev === "" || REGEX_AFTER_CHAR.indexOf(prev) >= 0 || (prev === "a" && REGEX_AFTER_WORD.has(word))) {
+          i = skipRegex(text, i);
+          prev = "a"; word = "";
+          continue;
+        }
+        prev = "/"; word = ""; i++;
+        continue;
+      }
+      if (c === "{" || c === "(" || c === "[") { depth++; prev = c; word = ""; i++; continue; }
+      if (c === "}" || c === ")" || c === "]") {
+        if (depth === 0) {
+          if (c === stop) return i;
+          throw new Error("unbalanced " + c + " at " + i);
+        }
+        depth--;
+        prev = c; word = ""; i++;
+        continue;
+      }
+      if (isIdentStart(c) || (c >= "0" && c <= "9")) {
+        let j = i + 1;
+        while (j < text.length && isIdentPart(text[j])) j++;
+        word = text.slice(i, j);
+        prev = "a";
+        i = j;
+        continue;
+      }
+      prev = c; word = ""; i++;
+    }
+    if (stop !== null) throw new Error("ran off the end of the source looking for " + stop);
+    // A whole file is balanced. Brackets still open here mean a quote, a regular expression or a
+    // comment was misread somewhere above, and every string after that point is not to be trusted.
+    if (depth !== 0) throw new Error("the source ends with " + depth + " bracket(s) still open");
+    return i;
+  }
+  walk(0, null);
+  return out;
+}
+
 // ── text out of markup ───────────────────────────────────────────────────────
 /** One pass: drop every comment and every tag, quoted attribute values included. */
 function stripOnce(html) {
@@ -310,5 +434,5 @@ function reOf(text, flags) {
 }
 
 module.exports = {
-  NL, read, balanced, grab, liftSource, lift, grabConst, stripTags, escapeRegExp, reOf,
+  NL, read, balanced, grab, liftSource, lift, grabConst, stripTags, stringLiterals, escapeRegExp, reOf,
 };

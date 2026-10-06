@@ -144,6 +144,50 @@ def test_every_function_in_seven_real_pages_lifts_and_compiles(lib):
         assert s["lifted"] == s["declared"], (rel, "a declaration was skipped, not lifted")
 
 
+def test_string_literals_finds_the_strings_and_only_the_strings(lib):
+    """The comment that explains a rename quotes the old name, so a search of the FILE cannot say
+    whether the old name still reaches a person. This reads the strings and nothing else."""
+    s = lib["literals"]
+    assert s["plain"] == ["x", "y"]
+    assert s["escaped"] == ['he said \\"hi\\"']
+    assert s["comments"] == ["kept"], "a comment (or the tail of a code line) was read as a string"
+    # a quote inside a regular expression, and a division, do not open or close anything
+    assert s["quoteInRegex"] == ["kept"] and s["division"] == ["kept"]
+    assert s["template"] == ["a ", " b"]
+    assert s["nested"] == ["a ", "in", "deep ", " b"], "a string inside ${ } was missed or misordered"
+    assert s["braceInSubstitution"] == ["a ", "v", " b"]
+
+
+def test_string_literals_reports_the_line_each_string_starts_on(lib):
+    s = lib["literals"]
+    assert s["lines"] == [2, 4]
+    assert s["templateLines"] == [["one\ntwo ", 2], ["in", 3], [" three", 3]]
+
+
+def test_string_literals_refuses_source_it_cannot_read_to_the_end(lib):
+    s = lib["literals"]
+    assert s["unterminatedString"].startswith("unterminated \" string starting at")
+    assert s["unterminatedTemplate"].startswith("unterminated template literal starting at")
+    assert s["unterminatedComment"].startswith("unterminated comment starting at")
+    assert s["openBracket"] == "the source ends with 1 bracket(s) still open"
+    assert s["strayCloser"].startswith("unbalanced } at")
+
+
+# A floor, not an exact count: half of today's. It only has to prove the scan read real files.
+LITERAL_FLOORS = {"js/polish-estimate.js": 500, "js/estimate-review.js": 700, "js/proposal-review.js": 1000,
+                  "js/library.js": 900, "js/polish-bid-core.js": 150, "js/index.js": 100, "js/portal.js": 1000}
+
+
+def test_string_literals_survives_seven_real_pages(lib):
+    """Thousands of lines of template literals, regular expressions and braces inside strings. The
+    scan ends with a balance check, so a misread quote or regex fails the file here by name."""
+    swept = {s["file"]: s for s in lib["literalSweep"]}
+    assert set(swept) == set(LITERAL_FLOORS)
+    for rel, floor in LITERAL_FLOORS.items():
+        assert swept[rel]["error"] is None, (rel, swept[rel]["error"])
+        assert swept[rel]["n"] >= floor, (rel, swept[rel]["n"], "suspiciously few strings")
+
+
 def test_constants_are_lifted_out_of_the_page_not_retyped(lib):
     """The role sets and tables later phases pin to work-types.js are read off estimate-review.js."""
     assert lib["realConsts"]["pricedRoles"] == ["epoxy", "gyp", "polish", "seal"]

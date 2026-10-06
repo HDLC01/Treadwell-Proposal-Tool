@@ -186,7 +186,10 @@ TABS: Dict[str, Dict[str, Any]] = {
         "api": ("/api/portal/followups",),
     },
     "/polish-intake.html": {
-        "label": "Polish Estimate",
+        # WAS "Polish Estimate" until 2026-10-07. Same href, same two pages; only the name moved,
+        # which is why this table is keyed on href. frontend/auth.js carries the same label on the
+        # sidebar row and the Admin page shows one or the other, so test_v2_names.py pins them equal.
+        "label": "Estimating Tool v2",
         # TWO PAGES on one sidebar row. Step 2 is opened directly from two places that are not this
         # tab — the beta link in the Estimate Review toolbar (estimate-review.html) and the step-2
         # link on polish-intake.html itself — so denying the row has to cover both or the door is
@@ -195,7 +198,8 @@ TABS: Dict[str, Dict[str, Any]] = {
         "api": (),
     },
     "/polish-estimates.html": {
-        "label": "Polish Estimate Database",
+        # WAS "Polish Estimate Database" until 2026-10-07. Same href; see the note above.
+        "label": "v2 Estimates",
         # api: () DELIBERATELY. The page reads /api/drafts and NOTHING else, and that route is the
         # Proposals Database's own list — claiming it here would 403 a page nobody restricted the
         # moment anyone switched this row off, which is the single-caller rule this whole table is

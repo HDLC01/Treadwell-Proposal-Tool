@@ -969,7 +969,7 @@ def test_every_global_line_says_plainly_that_it_reaches_no_bid(ran):
     an admin file a rate, watch it save with a green tick, and move no price."""
     for r in ran["globalDayOne"]["rows"]:
         if r["line"] in ("travel_lodging", "travel_per_diem"):
-            assert "Polish Estimate beta copies this figure onto every NEW bid" in r["explain"], (
+            assert "Estimating Tool v2 copies this figure onto every NEW bid" in r["explain"], (
                 "%s does not say the beta reads it: %r" % (r["line"], r["explain"]))
             assert "workbook does not read it" in r["explain"], (
                 "%s lost the half that is still true: %r" % (r["line"], r["explain"]))

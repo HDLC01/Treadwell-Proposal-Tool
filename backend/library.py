@@ -752,7 +752,7 @@ def delete_item(item_id: str) -> bool:
     answers the same refusal rather than a 404 that reads as "fine, it's gone"."""
     if item_id in RESERVED_ITEM_IDS:
         raise ValidationError(
-            "\"%s\" is one of the Polish estimate's own condition lines, so it can't be removed. "
+            "\"%s\" is one of Estimating Tool v2's own condition lines, so it can't be removed. "
             "Edit it on the Items tab instead." % item_id)
     sb = get_client()
     cur = (sb.table(ITEMS).select("id")

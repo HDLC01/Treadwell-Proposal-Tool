@@ -84,7 +84,8 @@ def test_the_label_names_the_calculator_and_is_marked_beta(ran):
     a finished feature. The chip class comes from auth.js's injected stylesheet, which every page
     that loads auth.js gets."""
     label = ran["boot"]["label"] or ""
-    assert "Continue with Beta Calculator" in label, label
+    assert "Continue with Estimating Tool v2" in label, label
+    assert "Beta Calculator" not in label, "the old name came back on the live intake's button"
     assert ">BETA<" in label, "the button is not marked BETA: %r" % label
     assert "—" not in label, "em dash in UI copy (house rule)"
     auth = (FRONTEND / "auth.js").read_text(encoding="utf-8")

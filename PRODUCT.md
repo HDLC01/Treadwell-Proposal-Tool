@@ -46,8 +46,9 @@ tax handling, or document templates without redoing this transcription work.
 
 A staff member's daily tool, used at a desk during and after a sales call: Intake → Estimate
 Review → Proposal Review → Done, plus a CRM board that runs the sales meeting, a lead inbox, and
-(newer) a from-scratch "Polish beta" estimator that prices itself rather than driving the legacy
-spreadsheet. Every fix and feature ships to a staging environment first
+(newer) Estimating Tool v2 (first called the "Polish beta"), a from-scratch estimator that prices
+itself rather than driving the legacy spreadsheet. Every fix and feature ships to a staging
+environment first
 (`staging.proposals.wetreadwell.com`) and is verified live there before promotion to production —
 this is a standing, non-negotiable release discipline, not a suggestion.
 
