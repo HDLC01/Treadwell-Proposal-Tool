@@ -3967,15 +3967,19 @@ def test_the_open_assemblys_save_stays_on_screen_in_a_sticky_title_bar():
     not beside it. Lines tabbed into are held clear of the bar by scroll-margin-top.
 
     Mutations: drop position:sticky from .atitle, or its background, or move #asm-save out of the
-    .atitle div in library.html, or drop the .lines scroll-margin-top -> each assert goes red."""
+    .atitle div in library.html, or drop the .lines scroll-margin-top, or put top back above 44px -> each assert goes red."""
     html = (FRONTEND / "library.html").read_text(encoding="utf-8")
     bar = _css_rule(html, ".atitle")
     assert bar.get("position") == "sticky", "the assembly title bar no longer sticks: " + str(bar)
-    assert bar.get("top", "").endswith("px") and float(bar["top"][:-2]) <= 0, bar
+    # The page's own fixed #tw-topbar (52px, auth.js) covers y=0..52, so a bar stuck at the viewport
+    # top had Save hidden behind it at desktop width. It must park below that bar (52px less the
+    # 8px of card padding it slides over = 44px), never at or above y=0.
+    assert bar.get("top", "").endswith("px") and float(bar["top"][:-2]) >= 44, (
+        "the stuck bar would sit behind the fixed top bar", bar)
     assert bar.get("background") == "var(--card)", "lines would show through the bar"
     assert "var(--line)" in bar.get("border-bottom", ""), "no hairline under the bar"
     assert 0 < int(bar.get("z-index", "0")) < 30, "the bar must sit under .item-results (30)"
     assert "atitle" in _ancestors_of(html, "asm-save")[-1], (
         "#asm-save is not a direct child of the sticky .atitle bar", _ancestors_of(html, "asm-save"))
     margin = _css_rule(html, ".lines :is(input, select, button)")
-    assert float(margin["scroll-margin-top"][:-2]) >= 90, margin
+    assert float(margin["scroll-margin-top"][:-2]) >= 150, margin
