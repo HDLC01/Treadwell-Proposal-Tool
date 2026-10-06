@@ -3371,7 +3371,8 @@ def test_the_how_note_says_typed_when_nights_were_typed_and_repaints_with_the_mi
     """Typing 10 nights marks the line (typed) and the note's figure follows; typing 20 miles over the
     150 repaints the note in place to a local job, with no rebuild of the page's other cards.
 
-    Mutation: leave the note out of the live repaint (it would still read 'NOT a local job')."""
+    Mutation: leave the note out of paintDistance (it would still read 'NOT a local job'). The
+    repaintNumbers path is held by the typed-labor-day test below."""
     h = ran["distance"]["howNights"]
     assert "(typed)" not in _how_line(h["auto"]["how"], "Lodging")
     typed = _how_line(h["typed"]["how"], "Lodging")
@@ -3381,6 +3382,21 @@ def test_the_how_note_says_typed_when_nights_were_typed_and_repaints_with_the_mi
     assert moved.startswith("20 mi from Olathe office (typed by you). That is under 70 miles, so "
                             "this IS a local job")
     assert "NOT a local job" not in moved
+
+
+def test_the_how_note_follows_a_typed_labor_day_without_a_rebuild(ran):
+    """Typing Days on a labor line takes changed(false), which repaints in place and never rebuilds the
+    panel, so the note's man-days and dollars move only if repaintNumbers paints the note. The figure in
+    the note must equal what the bid prices the line at, before and after.
+
+    Mutation: drop the data-trv-how line from repaintNumbers (the note keeps the old man-days)."""
+    h = ran["distance"]["howDays"]
+    before, after = h["before"], h["after"]
+    assert _last_dollars(_how_line(before["how"], "Lodging")) == before["cost"]["lodging"] > 0
+    assert after["cost"]["lodging"] != before["cost"]["lodging"]
+    assert _last_dollars(_how_line(after["how"], "Lodging")) == after["cost"]["lodging"]
+    assert _last_dollars(_how_line(after["how"], "Per Diem")) == after["cost"]["per_diem"]
+    assert after["how"] != before["how"]
 
 
 # ── B7b: the Labor Calculator fills a NEW bid's default labor lines ──────────────────────────────

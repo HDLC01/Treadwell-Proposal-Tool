@@ -3446,9 +3446,17 @@ const rendered = [];      // every string the page put on screen, for the Labour
     // Miles typed over the looked-up figure: 150 -> 20, in place.
     typeInto(nights, "[data-dist-miles]", "20");
     const nightsLocal = snap(nights);
+    // Days typed on a labor line goes through changed(false): the panel is NOT rebuilt, so only the
+    // in-place repaint can move the man-days and dollars in the note.
+    const nights2 = build({ blob: newBlob(), distance: { ok: true, miles: 150, reason: "" } });
+    await nights2.api.init(); nights2.api.go(1); await settle();
+    const daysBefore = snap(nights2);
+    typeInto(nights2, '[data-lab="0"][data-k="days"]', "20");
+    const daysAfter = snap(nights2);
 
     out.distance = {
       howNights: { auto: nightsAuto, typed: nightsTyped, local: nightsLocal },
+      howDays: { before: daysBefore, after: daysAfter },
       requestBody: (far.rec.distanceBodies || [])[0] || null,
       requests: (far.rec.distanceBodies || []).length,
       far: farSnap,
