@@ -5337,6 +5337,178 @@ async function conditionChecks() {
   out.saveButton.asmHiddenWhenSaved = saved.dom.nodes["asm-save"].hidden === true;
 }
 
+// ── EXECUTED: one edit to ANY field of a material row puts Save in the row's PINNED cell ──
+// Hanz, 2026-10-06: "the save button only pops up when we click away". It was inserted on the first
+// keystroke all along, into .rowact -- the last column of a table about 1,990px wide, so it sat off
+// screen to the right. It now goes into .rowsave, which library.html pins to the scroller's right
+// edge. Measured in a real browser at 1366 and 390 (see the commit); this proves the wiring.
+//
+// THE REAL CHAIN, one event per field and nothing after it: onItemEdit, then patchSoon, then
+// showUnsaved, then the cell. No blur, no focusout, no timer fired -- the timers are captured and
+// never run, and flush is a recorder, so a Save that only appeared once the row was left would
+// show up here as a flush and no button. The row the handler edits is cut out of the REAL
+// renderItems output, so a cell renamed or dropped there breaks this too.
+//
+// Each field gets a fresh scope: patchSoon only shows the button on the FIRST unsaved edit of a
+// row, so a shared scope would let the first field pass for all nine.
+function itemRowDoc(rowHtml, id) {
+  const cells = rowHtml.split("<td").slice(1).map((c) => {
+    const open = c.slice(0, c.indexOf(">"));
+    const cell = {
+      cls: ((/class="([^"]*)"/.exec(open) || ["", ""])[1]).split(/\s+/).filter(Boolean),
+      html: c.slice(c.indexOf(">") + 1).replace(/<\/td>\s*$/, ""),
+      firstChild: null,
+      querySelector(sel) {
+        if (sel === "[data-save-new]") return /data-save-new=/.test(this.html) ? { parentNode: this } : null;
+        if (sel === ".dupe") return null;
+        throw new Error("a cell was asked for " + sel + ", which this stub does not model");
+      },
+      insertBefore(node) { this.html = node.outerHTML + this.html; },
+      insertAdjacentHTML(_where, h) { this.html += h; },
+      removeChild() { this.html = this.html.replace(/<button[^>]*data-save-new=[\s\S]*?<\/button>/, ""); },
+    };
+    return cell;
+  });
+  const doc = {
+    cells,
+    createElement() { return { set innerHTML(h) { this.firstChild = { outerHTML: h }; } }; },
+    querySelector(sel) {
+      let m = /^#items-body \[data-item="([^"]+)"\] \.([\w-]+)$/.exec(sel);
+      if (m) return m[1] === id ? cells.find((c) => c.cls.indexOf(m[2]) !== -1) || null : null;
+      m = /^#items-body \[data-item="([^"]+)"\] \[data-save-new\]$/.exec(sel);
+      if (m) {
+        const c = m[1] === id ? cells.find((x) => /data-save-new=/.test(x.html)) : null;
+        return c ? { parentNode: c } : null;
+      }
+      throw new Error("the page asked document for " + sel + ", which this stub does not model");
+    },
+  };
+  return doc;
+}
+{
+  const visScope = new Function("L", "TW", "state", "document", "clock", "hooks", `
+    "use strict";
+    var ITEMS = state.ITEMS, ASMS = state.ASMS, VENDORS = state.VENDORS;
+    var FRESH = { items: {}, assemblies: {} };
+    var openId = null;
+    var timers = {};
+    var pendingPatch = {};
+    var setTimeout = clock.setTimeout, clearTimeout = clock.clearTimeout;
+    var $ = function () { return null; };
+    // RECORDERS. flush is what a timer or a focusout would reach; renderItems is the repaint that
+    // would throw the caret out of the field being typed in. Neither may run.
+    function flush() { hooks.flushed.push(Array.prototype.slice.call(arguments)); }
+    function renderItems() { hooks.repaints.push("items"); }
+    function renderList() {}
+    function renderPanel() {}
+    ${grab(/^  var esc = function[\s\S]*?\n  \};$/m, "esc")}
+    var itemBefore = {};
+    ${grab(/^  var itemConfirmOpen = null;$/m, "the itemConfirmOpen declaration")}
+    ${grab(/^  var itemLastField = \{\};$/m, "the itemLastField declaration")}
+    ${grab(/^  var SERVER_OWNED_ITEM_FIELDS = \[[^\]]*\];$/m, "SERVER_OWNED_ITEM_FIELDS")}
+    ${grab(/^  var NUMERIC_ITEM_FIELDS = \[[^\]]*\];$/m, "NUMERIC_ITEM_FIELDS")}
+    ${fn("itemOf")}
+    ${fn("snapshotItem")}
+    ${fn("rememberItem")}
+    ${fn("similarNames")}
+    ${fn("dupeHtml")}
+    ${fn("arm")}
+    ${fn("patchSoon")}
+    ${fn("itemSaveButtonHtml")}
+    ${fn("showUnsaved")}
+    ${fn("hideUnsaved")}
+    ${fn("onItemEdit")}
+    return { onItemEdit: onItemEdit, hideUnsaved: hideUnsaved,
+             pending: function () { return Object.keys(pendingPatch); } };
+  `);
+
+  const { api: rapi, dom: rd } = build();
+  rapi.renderItems();
+  const rowHtml = rd.nodes["items-body"].innerHTML.split("</tr>")
+    .find((r) => r.indexOf('data-item="i1"') !== -1) || "";
+
+  // What one estimator action does to each kind of control. Text boxes report input; a select, the
+  // checkbox and a division chip report change -- both events reach the same handler.
+  const ACTIONS = {
+    name: (t) => { t.value = "OPF II"; return "input"; },
+    buy_qty: (t) => { t.value = "2"; return "input"; },
+    coverage: (t) => { t.value = "300"; return "input"; },
+    waste_pct: (t) => { t.value = "7"; return "input"; },
+    unit_cost: (t) => { t.value = "90"; return "input"; },
+    unit: (t) => { t.value = "Kit"; return "change"; },
+    vendor: (t) => { t.value = "Sika"; return "change"; },
+    roundup: (t) => { t.checked = !t.checked; return "change"; },
+    divisions: null,   // driven through the real chip markup below
+  };
+  const fields = {};
+  // EVERY data-f IN THE RENDERED ROW, not a list typed here: a tenth editable column added to
+  // renderItems lands in this loop and fails until it is given an action above.
+  const inRow = Array.from(new Set((rowHtml.match(/data-f="[^"]+"/g) || [])
+    .map((s) => s.slice(8, -1))));
+  for (const f of inRow) {
+    const hooks = { flushed: [], repaints: [] };
+    const clock = { setTimeout: () => 1, clearTimeout: () => {} };
+    const doc = itemRowDoc(rowHtml, "i1");
+    const st = { ITEMS: JSON.parse(JSON.stringify(ITEMS)), ASMS: JSON.parse(JSON.stringify(ASMS)),
+                 VENDORS: JSON.parse(JSON.stringify(VENDORS)) };
+    const s = visScope(L, {}, st, doc, clock, hooks);
+    const cell = doc.cells.find((c) => c.html.indexOf('data-f="' + f + '"') !== -1);
+    let ev = "none";
+    const rowStub = { getAttribute: (k) => (k === "data-item" ? "i1" : null) };
+    if (f === "divisions") {
+      const chips = chipRowFromHtml("i1", cell.html);
+      const off = chips.inputs.find((x) => !x.checked) || chips.inputs[0];
+      off.checked = !off.checked;
+      ev = "change";
+      s.onItemEdit({ type: ev, target: off });
+    } else if (ACTIONS[f]) {
+      const tag = (new RegExp('<(input|select)[^>]*data-f="' + f + '"[^>]*>').exec(cell.html) || [""])[0];
+      const target = { value: "", checked: / checked/.test(tag), parentNode: cell,
+                       getAttribute: (k) => (k === "data-f" ? f : null),
+                       closest: (sel) => (sel === "[data-item]" ? rowStub : null) };
+      ev = ACTIONS[f](target);
+      s.onItemEdit({ type: ev, target: target });
+    }
+    const holders = doc.cells.filter((c) => /data-save-new="items"/.test(c.html));
+    const holder = holders[0];
+    fields[f] = {
+      event: ev,
+      shown: !!holder,
+      inPinnedCell: !!holder && holder.cls.indexOf("rowsave") !== -1,
+      forThisRow: !!holder && /data-save-id="i1"/.test(holder.html),
+      exactlyOne: holders.length === 1,
+      notInActionCell: !doc.cells.some((c) => c.cls.indexOf("rowact") !== -1 &&
+                                             /data-save-new=/.test(c.html)),
+      queued: s.pending().indexOf("items:i1") !== -1,
+      nothingFlushed: hooks.flushed.length === 0,
+      noRepaint: hooks.repaints.length === 0,
+    };
+    // …and it leaves the cell EMPTY again, not whitespace: :empty is what keeps the column zero wide.
+    if (f === "unit_cost") {
+      s.hideUnsaved("items", "i1");
+      // Guarded: a row with no pinned cell is a FAILED assertion, not a crash of the whole file.
+      fields[f].emptyAfterHide =
+        (doc.cells.find((c) => c.cls.indexOf("rowsave") !== -1) || { html: null }).html === "";
+    }
+  }
+  // The header must carry the column too, or every cell after History sits under the wrong heading.
+  const tableHtml = html.slice(html.indexOf('<table class="items-table">'),
+                               html.indexOf("</table>", html.indexOf('<table class="items-table">')))
+    .replace(/<!--[\s\S]*?-->/g, "");
+  const cleanRow = itemRowDoc(rowHtml, "i1");
+  out.saveVisible = {
+    fieldsInRow: inRow,
+    fields: fields,
+    cleanRowCellEmpty: (cleanRow.cells.find((c) => c.cls.indexOf("rowsave") !== -1) || {}).html === "",
+    headerCells: (tableHtml.match(/<th[\s>]/g) || []).length,
+    rowCells: cleanRow.cells.length,
+    headerHasPinnedColumn: /<th class="rowsave"><\/th>\s*<th class="w-act"><\/th>/.test(tableHtml),
+    cssPinsTheCell: /td\.rowsave \{ position:sticky; right:0; \}/.test(html),
+    cssZeroWideWhenEmpty: /\.rowsave \{ padding:0; \}/.test(html) &&
+      /td\.rowsave:not\(:empty\) \{[^}]*background:var\(--card\)/.test(html),
+  };
+}
+
 // â”€â”€ the Defaults tab's starting-state SLIDER, EXECUTED â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // A slider that is only markup is the dead-control failure this page has shipped before: so each
 // press below goes through the page's own setDefaultOn, and what it wrote is read back.

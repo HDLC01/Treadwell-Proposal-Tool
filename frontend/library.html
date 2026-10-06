@@ -248,6 +248,22 @@
     .cell-qty { width:64px; }
     .cell-cost { width:92px; }
     .rowact { white-space:nowrap; }
+    /* THE ITEMS ROW'S SAVE BUTTON, PINNED TO THE RIGHT EDGE OF THE SCROLLER. Hanz, 2026-10-06:
+       "the save button only pops up when we click away". The Items table is about 1,990px wide
+       inside a .tw scroller, and the button used to go into .rowact, the last column -- 600px past
+       the right edge on a 1366 screen, 1,600px past it on a phone. It was there from the first
+       keystroke; nobody could see it. Sticky right:0 keeps it on the edited row and on screen at
+       any scroll position, Cost and Vendor included (focusing those scrolls the NAME column off
+       screen, which is why the button is not in the name cell).
+       Zero wide while empty: no padding, no background, so a clean table carries no strip down its
+       right edge and the column costs nothing. Only a cell holding a button paints, opaque so the
+       columns sliding under it do not show through. The hover fill is --surf rather than the
+       translucent row tint, which would let those columns through; the two differ by 3 levels. */
+    .rowsave { padding:0; }
+    td.rowsave { position:sticky; right:0; }
+    td.rowsave:not(:empty) { padding:0 11px; background:var(--card);
+      box-shadow:inset 1px 0 0 var(--line); }
+    tbody tr:hover td.rowsave:not(:empty) { background:var(--surf); }
 
     /* WHICH CELLS THE PAGE WORKS OUT FOR YOU. Quantity and Cost are the only two columns nobody
        types into — they are the arithmetic this page exists to show — so they carry a faint band
@@ -844,6 +860,8 @@
                      default items in assemblies should be handled in default items in assemblies
                      tab" -- one screen owns defaults, and a switch here would be a second place to
                      set the same thing. The Defaults tab's own search adds them now. -->
+                <!-- The Save button's column, zero wide until a row has an unsaved edit. -->
+                <th class="rowsave"></th>
                 <th class="w-act"></th>
               </tr>
             </thead>
