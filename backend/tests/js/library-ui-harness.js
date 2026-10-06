@@ -5492,9 +5492,21 @@ function itemRowDoc(rowHtml, id) {
     }
   }
   // The header must carry the column too, or every cell after History sits under the wrong heading.
-  const tableHtml = html.slice(html.indexOf('<table class="items-table">'),
-                               html.indexOf("</table>", html.indexOf('<table class="items-table">')))
-    .replace(/<!--[\s\S]*?-->/g, "");
+  // Comments cut out with indexOf, not a regex replace: a single-pass /<!--.*?-->/ strip is the
+  // pattern CodeQL flags (js/incomplete-multi-character-sanitization) even on our own page source.
+  const dropComments = (s) => {
+    let out = "", at = 0;
+    for (;;) {
+      const open = s.indexOf("<!--", at);
+      if (open === -1) return out + s.slice(at);
+      out += s.slice(at, open);
+      const close = s.indexOf("-->", open + 4);
+      if (close === -1) return out;
+      at = close + 3;
+    }
+  };
+  const tableHtml = dropComments(html.slice(html.indexOf('<table class="items-table">'),
+                               html.indexOf("</table>", html.indexOf('<table class="items-table">'))));
   const cleanRow = itemRowDoc(rowHtml, "i1");
   out.saveVisible = {
     fieldsInRow: inRow,
