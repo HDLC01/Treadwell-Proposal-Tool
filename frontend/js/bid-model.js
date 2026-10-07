@@ -68,89 +68,29 @@
 // real .xlsx, and re-derives every number below in Python. If Kyle edits his workbook, that test
 // fails — which is the whole point of it: it is the only thing standing between a template edit
 // and a silently wrong bid. Change this file and that pin together, never one without the other.
+//
+// LOAD ORDER. This file needs js/excel-math.js loaded before it: a script tag above this one on a
+// page, and `require` does the same under node. The number helpers it exports (num, roundUp,
+// copyInto, money, money2, pct, fmtSf) are that file's own functions, bound below to the names this
+// file has always used.
 (function (root, factory) {
-  var api = factory();
+  var isNode = typeof module !== "undefined" && module.exports;
+  var deps = {
+    math: isNode ? require("./excel-math.js") : root.TWExcelMath
+  };
+  if (!deps.math) throw new Error("bid-model.js needs excel-math.js loaded before it");
+  var api = factory(deps);
   root.TWBidModel = api;
-  if (typeof module !== "undefined" && module.exports) module.exports = api;   // node, for tests
-})(typeof self !== "undefined" ? self : this, function () {
+  if (isNode) module.exports = api;   // node, for tests
+})(typeof self !== "undefined" ? self : this, function (deps) {
   "use strict";
 
-  /** A number from anything a person might type or paste. 0 when it isn't one.
-   *
-   *  Deliberately unlike library-core's num(), which returns null: every caller here is
-   *  ARITHMETIC, and one null in the middle of the chain would poison every line below it. An
-   *  empty labor row has to cost nothing, not NaN. Tolerates "$1,200" and " 12,500 " because
-   *  these values get pasted out of spreadsheets. */
-  function num(raw) {
-    if (raw === null || raw === undefined || raw === "") return 0;
-    if (typeof raw === "number") return isFinite(raw) ? raw : 0;
-    if (typeof raw === "boolean") return 0;
-    var s = String(raw).replace(/[$,\s]/g, "");
-    if (s === "" || !/^-?\d*\.?\d+$/.test(s)) return 0;
-    var n = parseFloat(s);
-    return isFinite(n) ? n : 0;
-  }
-
-  /** Copy one row's own keys onto `dst`, refusing the three names that would write to a prototype
-   *  instead of the row. Rows arrive from saved drafts and the library, so a key is user data. A
-   *  hostile "__proto__" is dropped (it never was a real field); every ordinary key copies as before,
-   *  so a JSON-serialised row keeps its exact shape. */
-  function copyInto(dst, src) {
-    // No hand-written `dst[k] =` on a user-supplied k (CodeQL js/remote-property-injection): the own
-    // entries are filtered first, Object.fromEntries builds them as plain data properties, and only
-    // then does Object.assign copy that clean object -- the same own-key, set-based copy as before.
-    var safe = Object.entries(src || {}).filter(function (e) {
-      return e[0] !== "__proto__" && e[0] !== "constructor" && e[0] !== "prototype";
-    });
-    return Object.assign(dst, Object.fromEntries(safe));
-  }
-
-  /** Excel's ROUNDUP(n, 0): away from zero, so -1.2 becomes -2.
-   *
-   *  Float-guarded to twelve significant figures first. 27,500 × 1.10 is 110.00000000000001 in
-   *  IEEE-754 and a bare ceil() would buy a whole extra dollar off the back of the error — on
-   *  exactly the round numbers an estimator checks by hand. Twelve figures is far finer than any
-   *  money on this screen and far coarser than the noise. */
-  function roundUp(n) {
-    var v = num(n);
-    var g = parseFloat(v.toPrecision(12));
-    return g >= 0 ? Math.ceil(g) : -Math.ceil(-g);
-  }
-
-  /** Whole dollars: "$15,681". Every line of the chain is already an integer (ROUNDUP put it
-   *  there), so decimals here would only be float dust. */
-  function money(n) {
-    var v = num(n);
-    var r = Math.round(Math.abs(v));
-    return (v < 0 && r !== 0 ? "-$" : "$") + r.toLocaleString("en-US");
-  }
-
-  /** Dollars and cents: "$32.20". For the things a person types — an hourly rate, a price per SF
-   *  — where the cents are the number. */
-  function money2(n) {
-    var v = num(n);
-    var s = Math.abs(v).toLocaleString("en-US",
-      { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    return (v < 0 && parseFloat(s.replace(/,/g, "")) !== 0 ? "-$" : "$") + s;
-  }
-
-  /** A rate as a percentage: 0.45 -> "45%", -0.025 -> "-2.5%", 0.09475 -> "9.475%".
-   *
-   *  Float noise is stripped first (0.027 × 100 is 2.7000000000000006 in IEEE-754), then the
-   *  trailing zeros go, so a whole percentage reads as one. Precision is KEPT rather than
-   *  rounded to a tidy two places: 9.475% is the Kansas sales-tax rate and 9.5% is a different
-   *  bid on a 40,000 SF floor. */
-  function pct(n) {
-    var v = num(n) * 100;
-    var s = parseFloat(v.toPrecision(12)).toFixed(4);
-    s = s.replace(/0+$/, "").replace(/\.$/, "");
-    return s + "%";
-  }
-
-  /** An area for reading: 12500 -> "12,500". */
-  function fmtSf(n) {
-    return num(n).toLocaleString("en-US", { maximumFractionDigits: 2 });
-  }
+  // The number helpers live in excel-math.js (Phase 5). They are bound here to the names this file has
+  // always used, so every line below reads as it did, and they are exported again at the bottom under
+  // those same names.
+  var num = deps.math.num, copyInto = deps.math.copyInto, roundUp = deps.math.roundUp,
+      money = deps.math.money, money2 = deps.math.money2, pct = deps.math.pct, fmtSf = deps.math.fmtSf,
+      isBlank = deps.math.isBlank;
 
   // ── the constants, straight off the Polish tab ──────────────────────────────
   /** D37: `=(A37*B37*C37)*IF($E$35="8 hour days",8,10)`, and E35 says "8 hour days". */
@@ -1819,10 +1759,6 @@
   /** v1 kept its labor under these keys. `crew` was the GUYS COUNT, not a crew cost — reading it
    *  as money would multiply a saved estimate by eight. */
   var V1_LABOUR_KEY = { polishing: "polishing", mockup: "mockup", jointfill: "joint_filler" };
-
-  function isBlank(v) {
-    return v === null || v === undefined || (typeof v === "string" && v.replace(/\s/g, "") === "");
-  }
 
   /** True when a field holds a usable number. 0 counts: a labor row at 0 days is a row the
    *  estimator has deliberately switched off, not a half-filled one. */

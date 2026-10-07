@@ -5,13 +5,15 @@ other, the rules every change follows, and a table of every place the same fact 
 today, with what happens to each copy.
 
 **What exists today, and what does not.** The tests and the golden files described in section 6
-exist now. The modules in section 3 other than `bid-model.js`, `library-core.js` and `markup-core.js`
-do not exist yet: they are the design the phases build toward. `bid-model.js` is the old
-`polish-bid-core.js` under its new name (Phase 5, no logic change; see "Module names" below). Phase 4
-added `patchModel`, `buildSavePatch` and `MODEL_KEYS` to it (see 7.10 and the model-safety paragraph of
-section 6). Line numbers in this document are on `origin/staging` at commit `3f94ed2` (2026-10-07),
-except where a paragraph says they are on the Phase 4 change. They will drift; the file and the name
-are what to search for.
+exist now. The modules in section 3 other than `bid-model.js`, `excel-math.js`, `library-core.js` and
+`markup-core.js` do not exist yet: they are the design the phases build toward. `bid-model.js` is the
+old `polish-bid-core.js` under its new name, and `excel-math.js` is the leaf Phase 5 took the model's
+number helpers out into, both with no change to what any of it does (see "Module names" and "The
+leaf" below). Phase 4 added `patchModel`, `buildSavePatch` and `MODEL_KEYS` to the model (see 7.10 and
+the model-safety paragraph of section 6). Line numbers in this document are on `origin/staging` at
+commit `3f94ed2` (2026-10-07), except where a paragraph says they are on the Phase 4 change, and
+except every line number in `js/bid-model.js` or `js/excel-math.js`, which is on the Phase 5 change.
+They will drift; the file and the name are what to search for.
 
 **Names.** The tool people called the Polish beta is now **Estimating Tool v2**, and its database
 page, which was the Polish Estimate Database, is now **v2 Estimates** (Phase 1b, 2026-10-07). Only
@@ -35,6 +37,17 @@ permissions are untouched, because none of them is keyed on the module's name (`
 `backend/tests/test_bid_model_rename.py` fails if the old file, the old global or either old name
 comes back anywhere under `frontend/` or `backend/`. This document is outside that scan on purpose: it
 is where the old names are allowed to appear, as history.
+
+**The leaf (Phase 5).** `js/excel-math.js` holds the helpers that were at the top of the model: `num`,
+`copyInto`, `roundUp`, `money`, `money2`, `pct`, `fmtSf` and `isBlank`, moved byte for byte, plus one new
+function, `ceiling` (Excel's CEILING, the workbook engine's own arithmetic). Nothing on the bid side
+calls `ceiling` yet: the Epoxy tab has 78 CEILING formulas and Phase 8 is where they are priced. The
+model reads the leaf through the header in section 4 and binds each helper to its old name, so every
+line of the model and every caller (`B.roundUp`, `B.money` and the rest) is unchanged, and `B.roundUp` is
+the very same function as `TWExcelMath.roundUp`. Three things were looked at and left where they are,
+each for a reason written in 7.5 and 7.11: `markup-core.js` keeps its own `excelRoundUp`,
+`library-core.js` keeps its own pack count, and `isV2Draft` stays in `shared.js`. `isObject` also stayed
+in the model, because only the model uses it, and a helper moves into the leaf when two modules need it.
 
 ## 1. Why this exists
 
@@ -62,10 +75,10 @@ Each layer may use the layers above it in this table and nothing below it. A lea
 
 | Layer | File | What it owns | Uses |
 |---|---|---|---|
-| leaf | `js/excel-math.js` | `num`, `roundUp`, `ceiling`, `copyInto`, `isBlank`, money and percent text. The one bid-side ROUNDUP. | nothing |
+| leaf | `js/excel-math.js` | `num`, `roundUp`, `ceiling`, `copyInto`, `isBlank`, and the text helpers `money`, `money2`, `pct` and `fmtSf`. The one bid-side ROUNDUP. Exists since Phase 5, with functions only: no rate and no table | nothing |
 | leaf (data) | `js/work-types.js` | The one vocabulary: job types (polish, epoxy, combo, gyp) and tabs (polish, epoxy, gyp, seal, leveling; seal and leveling are option-only). For each: label, which tabs a job type prices (combo is Epoxy plus Polish), workbook tab ids, role, quantity fields and snapshot keys, proposal template keys, whether it is ready. Also the one job-conditions table. | nothing |
 | leaf (data) | `js/bid-profiles.js` | One profile per sheet tab as plain data: rates and GP ladders as formula strings, cell maps, labor built-ins. A profile can extend another (Seal is Polish plus a few changes). The one home of the global defaults: labor rate, lodging, per diem, fees, sales tax. | nothing |
-| model | `js/bid-model.js` (Phase 5 renamed it from `js/polish-bid-core.js`, with no logic change) | The saved estimate: fresh, migrate, seed a new bid, labor, travel, distance, conditions per section; building the save patch; composing the price snapshot the proposal reads. | excel-math, work-types, bid-profiles |
+| model | `js/bid-model.js` (Phase 5 renamed it from `js/polish-bid-core.js`, with no logic change) | The saved estimate: fresh, migrate, seed a new bid, labor, travel, distance, conditions per section; building the save patch; composing the price snapshot the proposal reads. | excel-math today; work-types and bid-profiles when they exist |
 | engine | `js/bid-engine.js` | `priceChain(profile, input, rates)`: the markup chain for any profile. Turns the filed Markups rules into numbers. Adds the tabs of a combo job after each tab has had its own gross profit. | excel-math, bid-profiles, markup-core |
 | render | `js/intake-scope.js` | Draws and shows the quantity fields of the intake from `work-types.js`. Extracted from `js/index.js`; the live intake then calls it. | work-types |
 
@@ -80,7 +93,7 @@ sit on top of all of this and hold only what is about the screen.
 ## 4. The header every module carries
 
 Every shared module is one file that works in two places: a browser (a script tag defines a global
-such as `TWLib`) and node (the tests `require` it). The modules that exist today have no
+such as `TWLib`) and node (the tests `require` it). Most modules that exist today have no
 dependencies, so their header is short:
 
 ```js
@@ -115,10 +128,14 @@ A module that depends on another one declares it in the header and fails loudly 
 });
 ```
 
+`js/bid-model.js` carries this header today with `excel-math.js` as its one dependency. The line for
+`work-types.js`, and its error, are added the day that module exists.
+
 Rules that go with it:
 
 - The error names the file to load first. A missing dependency must not show up later as "undefined is not a function" in the middle of a price.
 - Script tags in a page load in layer order: leaves, then data, then model, then engine, then the page.
+- Every page that loads a module runs what its header declares first, and the browser runs it first (a `defer`red leaf is too late for a plain module). `backend/tests/test_core_boot_order.py` finds the modules and the pages by reading the headers and the HTML, checks the order, and runs each page's modules the way a browser does, so a new leaf needs no edit to any test.
 - No inline scripts anywhere (the site's content security policy forbids them).
 - A core module never touches the DOM, never calls `fetch`, and never reads the clock.
 
@@ -193,6 +210,15 @@ there and skip on a laptop. New harness tests call `require_node()` from `tests/
 (the codec, the recorder, the comparison). Older harnesses keep their own copies and are not
 converted. New harnesses use these.
 
+**Loading scripts the way a page does (Phase 5).** Every other harness reaches a module with `require`,
+and the dependency line in the module's header hides behind it. `backend/tests/js/core-boot-harness.js`
+runs scripts in one fresh context with no `require` and no `module`, `self` and `window` the global, in
+the order it is given, and reports what each published and what it threw. `backend/tests/_page_scripts.py`
+is the one reader of a page's script tags and of the order a browser runs them in.
+`backend/tests/_golden_support.py` carries whatever a module declares it needs into a scratch tree
+(`break_source` and `copy_unmodified`), so a test that breaks a copy of the model gets the leaf beside it,
+and a leaf added later needs no edit.
+
 **Not covered, on purpose.** Words and pixels (`travelHow`, `distanceNote`, `sliderHtml`), the distance
 lookup, and the page's rendering have their own harnesses. They are not what the program restructures.
 One thing the golden recorded as it is today and nobody has decided to fix: `seedTakeoffSf` throws a
@@ -203,7 +229,8 @@ were, and so are the library golden and the saved-bid ratchet.
 
 ## 7. Every concept, where it is copied today, and what happens to each copy
 
-Line numbers are on `origin/staging` at `3f94ed2`. "Planned" means the phase in the program plan,
+Line numbers are on `origin/staging` at `3f94ed2`, except those in `js/bid-model.js` and
+`js/excel-math.js`, which are on the Phase 5 change. "Planned" means the phase in the program plan,
 not something that has been done. The summary first, then the evidence for each row.
 
 | | Concept | Copies today | Disposition | Phase |
@@ -212,7 +239,7 @@ not something that has been done. The summary first, then the evidence for each 
 | 7.2 | Work-type list, Python | 7 files | Pinned to `js/work-types.js` by one test that runs node | 7 |
 | 7.3 | Job-condition tables | 10 places | One conditions table in `js/work-types.js`. The Taxable cells are right by construction. The test copy's cell list reads it too | 7 |
 | 7.4 | Built-in markup rates | 4 places | Profile data in `js/bid-profiles.js`. `markup.js` reads it. `pricing.py` is retired | 8, then 17 |
-| 7.5 | ROUNDUP | 3 bid-side copies, the workbook engine's plugin, 2 guards | One bid-side `roundUp` in `js/excel-math.js`, with a row in the parity test | 5 |
+| 7.5 | ROUNDUP | 3 implementations (the leaf, `markup-core.js`, `pricing.py`), the workbook engine's plugin, 2 guards | Done: the model's copy is the leaf's `roundUp`, with a row in the parity test. `excelRoundUp`, the pack CEIL and `_roundup` stay, held equal by tests | 5 (done), 8, 17 |
 | 7.6 | Intake scope maps | 4 places | Quantity fields live in `js/work-types.js`. `js/intake-scope.js` draws them | 7, then 9 |
 | 7.7 | Role sets | 4 sets in 3 files | Computed from each tab's role in `js/work-types.js` | 7 |
 | 7.8 | Job type to tab | 4 places | Each job type lists its tabs in `js/work-types.js` | 7 |
@@ -261,8 +288,8 @@ of both `TEMPLATE_PICKER` tables and the info-sheet keys against it. A list that
 |---|---|
 | `js/index.js:146-202` | `CONDITIONS` on the live intake: key, label, scope, default, the cells it writes, the on and off words, `needs`. Nine rows. Taxable writes four cells (Epoxy, Leveling and two Gyp tabs) |
 | `js/polish-intake.js:66-82` | `CONDITIONS` on the v2 intake: four rows (prevailing wage, taxable, remodel tax, bond), keys only |
-| `js/bid-model.js:1502-1529` | `CONDITION_CELLS`: seven rows with the cells they write. Taxable writes only `Epoxy!B6` |
-| `js/bid-model.js:1805-1807` | The conditions of a fresh model, eight keys including `bond` |
+| `js/bid-model.js:1442-1469` | `CONDITION_CELLS`: seven rows with the cells they write. Taxable writes only `Epoxy!B6` |
+| `js/bid-model.js:1745-1747` | The conditions of a fresh model, eight keys including `bond` |
 | `js/polish-estimate.js:897-957` | `CONDITION_CARDS`: the Takeoff step's three cards (dye, joint filler, remove existing) |
 | `js/library.js:2640-2657` | The Defaults tab's condition list, and `backend/condition_defaults.py:61` (`KEYS`) |
 | `js/estimate-review.js:4032-4077` | `JOB_FLAG_ADDR`, `JOB_FLAG_LITERAL_LAYOUTS`, `JOB_FLAG_LAYOUTS`, `JOB_FLAG_TEMPLATE`: where the tax answers sit on each sheet layout |
@@ -282,7 +309,7 @@ by the test that already re-reads it (`test_taxable_flag_reaches_every_sheet.py`
 
 | Copy | What it holds |
 |---|---|
-| `js/bid-model.js:159-190` | `RATES` (shipping 2%, escalation 5%, burden 12%, super and PTO 2.7%, soft costs 16%, sales tax 9.475%, bond 0, the Kansas remodel floor 6.5%) and `GP_BANDS` |
+| `js/bid-model.js:99-130` | `RATES` (shipping 2%, escalation 5%, burden 12%, super and PTO 2.7%, soft costs 16%, sales tax 9.475%, bond 0, the Kansas remodel floor 6.5%) and `GP_BANDS` |
 | `js/markup.js:215-253` | `GP_5_BANDS` and `BUILTIN`: the same for Polish, plus Seal, Epoxy (3% and 13%), Leveling, Gyp (4.1% and an expression), and the Global lines (labor rate 33, lodging 70, per diem 45) |
 | `backend/pricing.py:272-292` | `_gp_pct` (the same ladder) and the defaults of `compute_full_bid` (33, 12%, 70, 45, 3%, 13%, 9.475%, a 10% remodel) |
 | `backend/markup.py:20-24` | The same rates, written in the docstring as an audit of the workbook |
@@ -300,18 +327,35 @@ program plan records it as wrong on whipped-resin cove and on quartz and flake p
 
 | Copy | What it is |
 |---|---|
-| `js/bid-model.js:114` | `roundUp`: away from zero, snapped to twelve significant figures first |
+| `js/excel-math.js:65` | `roundUp`: away from zero, snapped to twelve significant figures first. The one bid-side ROUNDUP. It sat in the model until Phase 5, and `js/bid-model.js` now exports this very function |
+| `js/excel-math.js:87` | `ceiling(n, significance)`: Excel's CEILING with the same guard. New in Phase 5, no caller yet |
 | `js/markup-core.js:283` | `excelRoundUp(n, digits)`: the same, with a digits argument. Not exported |
 | `backend/pricing.py:78` | `_roundup`: the same in Python (`"%.12g"`) |
 | `js/xl-excel-rounding.js:64-90` | The workbook engine's ROUNDUP and CEILING (a HyperFormula plugin). A different job: it makes the sheet engine agree with Excel |
 | `js/library-core.js:166` | The pack count is a CEIL with the same twelve-figure guard |
 | `js/markup.js:501` | `round12`, the guard on its own |
 
-`backend/tests/test_roundup_parity_js.py` compares the first three on the same inputs. **Planned
-(Phase 5):** the one bid-side `roundUp` lives in `js/excel-math.js`, with a row added to that parity
-test. `markup-core.js` calls it. The workbook plugin stays, because it is the sheet engine's, not a
-bid-side copy. Whether the pack CEIL in `library-core.js` calls the leaf's `ceiling` is decided in
-Phase 5. `pricing.py`'s copy goes when `pricing.py` does.
+`backend/tests/test_roundup_parity_js.py` compares the Python copy, the leaf, the model's re-export and
+`markup-core.js` on the same 24,004 inputs. **Done (Phase 5):** the model's `roundUp` is the leaf's. The
+parity test has a row for the leaf, and `backend/tests/test_excel_math.py` checks that the model's
+`roundUp` is the very same function and not a copy. Three things were decided here, and one of them
+corrects what this section said before:
+
+1. **`markup-core.js` keeps `excelRoundUp(n, digits)`.** This section used to say it would call the leaf.
+   It cannot without a change in behaviour. It takes a digits argument that the leaf's `roundUp(n)` does
+   not, and a value that is not a number is an error there (`MarkupEvalError: ROUNDUP: expected a
+   number`) where the leaf reads it as 0. Merging them means giving the leaf a digits argument and
+   deciding what a non-number does in a Markups formula, which is a decision about the Markups page. It
+   waits for Phase 8, when the bid engine uses both. The parity test holds the pair equal until then.
+2. **`library-core.js` keeps its own pack CEIL.** The question this section left for Phase 5 was whether
+   it calls the leaf's `ceiling`. It does not. `library-core.js` is dependency-free, several tests load it
+   standalone, and its pack count is one line. What that costs is a pair that must not drift, so
+   `test_excel_math.py` takes a grid of over a thousand real pack counts through `priceLine` and
+   through `ceiling(needed / pack, 1)` and requires them equal. The grid is checked to hold cases where a
+   bare ceil gives a different count, so it cannot pass by agreeing on easy numbers.
+3. **The workbook plugin stays,** because it is the sheet engine's, not a bid-side copy.
+
+`pricing.py`'s copy goes when `pricing.py` does (Phase 17).
 
 ### 7.6 The intake scope maps
 
@@ -367,13 +411,13 @@ Both write the same four keys: `county`, `county_tax_rate`, `county_remodel_rate
 
 ### 7.10 The estimate page's save, now one composition
 
-Line numbers in this subsection are on the Phase 4 change.
+Line numbers in this subsection are on the Phase 4 change, except those in `js/bid-model.js`, which are on the Phase 5 change.
 
 | Copy | What it writes |
 |---|---|
-| `js/bid-model.js:2162` (`buildSavePatch`) | The one composition: `polish_estimate` (the model, every key it holds, with `totals` stamped from the bid), `cell_values` (the conditions merged over the draft's own, plus the library's figures for dye and joint filler), `polish_sf` (the priced area, else the measured floor), `polish_2_sf`, `computed_bid` |
+| `js/bid-model.js:2098` (`buildSavePatch`) | The one composition: `polish_estimate` (the model, every key it holds, with `totals` stamped from the bid), `cell_values` (the conditions merged over the draft's own, plus the library's figures for dye and joint filler), `polish_sf` (the priced area, else the measured floor), `polish_2_sf`, `computed_bid` |
 | `js/polish-estimate.js:447` (`saveSoon`, the 600 ms autosave) and `:459` (the `pagehide` flush) | One call each: `B.buildSavePatch(M, draft, { bid: bid(), library: conditionLibrary() })`, laid over the draft |
-| `js/bid-model.js:2114` (`patchModel`) and `js/polish-intake.js:716` (its one call) | The intake's merge: its `conditions` and `conditions_shown` laid over the saved model, every other key left as saved |
+| `js/bid-model.js:2050` (`patchModel`) and `js/polish-intake.js:716` (its one call) | The intake's merge: its `conditions` and `conditions_shown` laid over the saved model, every other key left as saved |
 
 **Problem, as it was.** The autosave and the `pagehide` flush composed the blob by hand in two
 places, and the two had drifted. A tab closed inside the debounce window did not refresh the
@@ -454,7 +498,7 @@ v2 bids stay test copies until Kyle signs off each work type. Where each phase t
 | 2 | 7.3 and 7.11. The test copy's cell list is one more copy of the intake's condition cells until Phase 7. `isV2Draft` is a second copy of `_polish_beta`, held equal by a test. |
 | 3 (this one) | Sections 3 to 7 are written. Goldens, ratchet, strict node, shared helpers. |
 | 4 | 7.10. The model keeps unknown keys; one save patch. Done. |
-| 5 | 7.5, and the module rename in section 3. |
+| 5 | Done. The module rename and the leaf in section 3 (with the paragraphs "Module names" and "The leaf"), the header in section 4, 7.5 (the model's ROUNDUP is the leaf's, and what was left where it is), and 7.11 (the move that did not happen). |
 | 7 | 7.1, 7.2, 7.3, 7.6, 7.7, 7.8. `js/work-types.js` and the Python pin. |
 | 8 | 7.4. `js/bid-profiles.js` and `js/bid-engine.js`; Polish runs through a profile and its golden does not move. |
 | 9 | 7.6, 7.9. `js/intake-scope.js`; the v2 intake for the four job types. |

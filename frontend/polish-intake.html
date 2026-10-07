@@ -563,6 +563,8 @@
 <script src="/js/icons.js"></script>
 <script src="/auth.js"></script>
 <script src="/shared.js"></script>
+<!-- bid-model reads its number helpers off window.TWExcelMath as it loads, so that goes first. -->
+<script src="/js/excel-math.js"></script>
 <!-- bid-model owns the model's shape and the condition keys the pricing chain reads. This
      page states the conditions, so it writes through the same module the calculator prices with —
      which is also what stamps the model's version, the flag the Projects page routes on. Loaded

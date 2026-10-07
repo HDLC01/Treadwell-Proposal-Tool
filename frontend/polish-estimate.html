@@ -420,6 +420,8 @@
        Same reason library.html loads it first. bid-model is the markup chain; it is pinned
        to Kyle's worksheet by backend/tests/test_polish_markup_parity.py. -->
   <script src="/js/library-core.js"></script>
+  <!-- bid-model reads its number helpers off window.TWExcelMath as it loads, so that goes first. -->
+  <script src="/js/excel-math.js"></script>
   <script src="/js/bid-model.js"></script>
   <script src="/js/polish-sandbox.js"></script>
   <script src="/js/polish-estimate.js"></script>

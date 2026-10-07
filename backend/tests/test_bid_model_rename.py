@@ -29,13 +29,11 @@ Run under node; a missing node FAILS under CI (tests/_node.py).
 """
 from __future__ import annotations
 
-import html.parser
 import os
 import pathlib
 
-import pytest
-
 from _node import last_json_line, require_node, run_node
+from _page_scripts import execution_order
 
 TESTS = pathlib.Path(__file__).resolve().parent
 ROOT = TESTS.parents[1]
@@ -164,10 +162,12 @@ def test_the_scan_is_clean_on_a_tree_with_only_the_new_names(tmp_path):
 # ── 3. loaded the way a browser loads it ─────────────────────────────────────
 def test_loaded_as_a_browser_loads_it_the_module_publishes_the_new_global_and_only_that():
     require_node()
-    proc = run_node(BOOT_HARNESS, FRONTEND, NEW_PATH)
+    # The model reads its number helpers off js/excel-math.js, so a page loads that first.
+    proc = run_node(BOOT_HARNESS, FRONTEND, "js/excel-math.js", NEW_PATH)
     assert proc.returncode == 0, proc.stderr
     out = last_json_line(proc.stdout)
-    (script,) = out["scripts"]
+    leaf, script = out["scripts"]
+    assert leaf["threw"] is None, leaf["threw"]
     assert script["threw"] is None, "the module did not load as a script tag loads it: %s" % script["threw"]
     assert script["published"] == [NEW_GLOBAL], script["published"]
     assert OLD_GLOBAL not in out["globals"]
@@ -177,33 +177,6 @@ def test_loaded_as_a_browser_loads_it_the_module_publishes_the_new_global_and_on
 
 
 # ── 4. every page that reads the global loads the module first ───────────────
-class _ScriptTags(html.parser.HTMLParser):
-    """The `<script src>` tags of a page, in document order. A real parser, not a pattern: a script
-    tag inside an HTML comment is not a script tag, and a regular expression cannot tell."""
-
-    def __init__(self):
-        super().__init__(convert_charrefs=True)
-        self.scripts = []          # (src without its query string, runs after parsing)
-
-    def handle_starttag(self, tag, attrs):
-        if tag != "script":
-            return
-        a = dict(attrs)
-        if a.get("src"):
-            deferred = "defer" in a or a.get("type") == "module"
-            self.scripts.append((a["src"].split("?")[0], deferred))
-
-
-def execution_order(page_html: str):
-    """The local script paths of a page in the order a browser RUNS them: scripts without `defer`
-    first, in document order, then the deferred ones, in document order."""
-    tags = _ScriptTags()
-    tags.feed(page_html)
-    tags.close()
-    return [src for src, deferred in tags.scripts if not deferred] + \
-           [src for src, deferred in tags.scripts if deferred]
-
-
 def readers_of(frontend: pathlib.Path, global_name: str):
     """The URLs of the page scripts that read `window.<global_name>`."""
     needle = "window." + global_name

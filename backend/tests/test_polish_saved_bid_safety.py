@@ -38,7 +38,7 @@ import subprocess
 
 import pytest
 
-from _golden_support import break_source
+from _golden_support import break_source, copy_unmodified
 
 FRONTEND = pathlib.Path(__file__).resolve().parents[2] / "frontend"
 HARNESS = pathlib.Path(__file__).resolve().parent / "js" / "saved-bid-harness.js"
@@ -380,10 +380,6 @@ def test_the_ratchet_goes_red_when_the_page_or_the_model_changes(tmp_path, name)
     must exist exactly once (break_source refuses otherwise), so none can pass by applying nowhere."""
     rel, old, new, fixture, notices = NEWEST_MUTATIONS[name]
     frontend = break_source(tmp_path, rel, old, new)
-    for f in HARNESS_FILES:
-        dest = frontend / f
-        if not dest.exists():
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(FRONTEND / f, dest)
+    copy_unmodified(frontend, HARNESS_FILES)      # and what each declares it needs: js/excel-math.js
     got = _run(HARNESS, frontend)["newest"]["fixtures"][fixture]
     assert notices(got), (name, fixture, {k: got[k] for k in ("total", "laborDays", "distance", "condCov")})

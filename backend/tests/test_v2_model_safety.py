@@ -32,7 +32,7 @@ import shutil
 
 import pytest
 
-from _golden_support import break_source
+from _golden_support import break_source, copy_unmodified
 from _node import last_json_line, run_node
 from test_polish_saved_bid_safety import NEWEST_TOTALS, STAGING_TOTALS
 
@@ -405,11 +405,7 @@ def test_the_laws_go_red_when_the_code_changes(tmp_path, name):
     files and the core. The anchor must be in the file exactly once (break_source refuses otherwise)."""
     rel, old, new, noticed = MUTATIONS[name]
     frontend = break_source(tmp_path, rel, old, new)
-    for f in SCRATCH_FRONTEND_FILES:
-        dest = frontend / f
-        if not dest.exists():
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(FRONTEND / f, dest)
+    copy_unmodified(frontend, SCRATCH_FRONTEND_FILES)      # and what each declares it needs: js/excel-math.js
     # the intake prelude reads the county table out of the backend module that serves it
     (tmp_path / "backend").mkdir(exist_ok=True)
     shutil.copyfile(BACKEND / "reference_tax.py", tmp_path / "backend" / "reference_tax.py")

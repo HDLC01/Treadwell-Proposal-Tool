@@ -306,6 +306,13 @@ MUTATIONS = {
 }
 
 
+# A helper the model borrows is broken where it now lives. The generator reaches it through the model,
+# so the model comes along unmodified (`also=` in the test below).
+MUTATION_MODULE = {
+    "the ROUNDUP float guard loosens": "js/excel-math.js",
+}
+
+
 def test_a_new_export_does_not_turn_the_golden_red(node, tmp_path):
     """An unrelated change that adds a helper to the module is not a pricing change, so it must not
     cost its author a regenerated fixture. (A name that goes MISSING or changes type does: see above.)"""
@@ -323,7 +330,7 @@ def test_the_golden_goes_red_when_the_code_changes(node, tmp_path, name):
     must exist exactly once (break_source refuses otherwise), so none of these can pass by applying
     nowhere."""
     old, new, expected = MUTATIONS[name]
-    frontend = break_source(tmp_path, MODULE, old, new)
+    frontend = break_source(tmp_path, MUTATION_MODULE.get(name, MODULE), old, new, also=[MODULE])
     proc = compare(GENERATOR, GOLDEN, frontend, "--limit", "100000")        # list every vector that moved
     assert proc.returncode == 1, "the golden did not notice: " + name + "\n" + proc.stdout
     assert "GOLDEN MASTER MISMATCH" in proc.stdout

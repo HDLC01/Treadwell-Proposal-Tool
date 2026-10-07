@@ -2329,7 +2329,7 @@ def test_the_page_loads_no_formula_engine_and_the_modules_in_order(html):
     # in the rail. See the house rule at the top of frontend/js/icons.js.
     assert srcs == ["https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0",
                     "/js/icons.js", "/auth.js", "/shared.js", "/js/tab-memo.js",
-                    "/js/library-core.js", "/js/bid-model.js", "/js/polish-sandbox.js",
+                    "/js/library-core.js", "/js/excel-math.js", "/js/bid-model.js", "/js/polish-sandbox.js",
                     "/js/polish-estimate.js"], (
         "the page's script list has changed: %r" % srcs)
 
