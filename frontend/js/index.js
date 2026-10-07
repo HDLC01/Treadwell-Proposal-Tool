@@ -210,7 +210,7 @@
       // The beta charges a $500 kit per 3,500 sq ft for it, so on a 17,500 SF floor "on by
       // default" was $2,500 nobody had chosen. Hanz's call was all three of these start off.
       //
-      // FLIPPED HERE TOO, AND THAT IS THE POINT. polish-bid-core's freshModel() is the other
+      // FLIPPED HERE TOO, AND THAT IS THE POINT. bid-model's freshModel() is the other
       // place this answer is stated, and the two must agree: this screen writes Polish!E29 the
       // instant any of the ten switches is touched, so a `true` left here would put the $2,500
       // back into Kyle's workbook on the live intake path while the beta showed it off. Two
@@ -253,7 +253,7 @@
   // ── The admin-set answers for three of these same ten questions ────────────
   //
   // dye / joint_filler / remove_existing_jf ALSO ship on the Polish beta's own Takeoff step
-  // (frontend/js/polish-bid-core.js CONDITION_CELLS), where their default is no longer the
+  // (frontend/js/bid-model.js CONDITION_CELLS), where their default is no longer the
   // literal below but GET /api/condition-defaults (backend/condition_defaults.py) -- Hanz,
   // twice: "I told you to remove the built-in and keep and make everything editable in the
   // takeoff." THIS PAGE carried its own hardcoded c.def for the same three keys and never

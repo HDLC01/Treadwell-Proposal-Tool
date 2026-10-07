@@ -8,7 +8,7 @@ everything editable in the takeoff." `condition_defaults.py` is where that answe
 What these tests are actually protecting:
 
   * **A row is an OVERRIDE, not the answer.** What the tool SHIPS answering lives once, in
-    `freshModel()` in frontend/js/polish-bid-core.js. A row here says somebody changed one key.
+    `freshModel()` in frontend/js/bid-model.js. A row here says somebody changed one key.
     So this module deliberately holds no copy of "joint filler ships on" — two statements of one
     fact is what the note above `travelSeed` records drifting within a day — and these tests pin
     that it stays that way.
@@ -103,12 +103,12 @@ def test_the_key_vocabulary_is_the_same_three_the_workbook_writes():
     """THE KEYS ARE AN AGREEMENT ACROSS TWO LANGUAGES, and a mismatch is silent in the worst way:
     the endpoint 400s a save the page makes, or worse, accepts one that reaches no cell.
 
-    `CONDITION_CELLS` in polish-bid-core.js is what decides the workbook cell each answer writes.
+    `CONDITION_CELLS` in bid-model.js is what decides the workbook cell each answer writes.
     Every key this module accepts has to be in it, or the answer lands nowhere in Kyle's file.
 
     Mutation: add a fourth key to KEYS. Nothing in the product would say which of the two files
     was wrong."""
-    core = (FRONTEND / "js" / "polish-bid-core.js").read_text(encoding="utf-8", errors="replace")
+    core = (FRONTEND / "js" / "bid-model.js").read_text(encoding="utf-8", errors="replace")
     for key in cd.KEYS:
         assert re.search(r"^\s*%s:\s*\{ cells: \[" % key, core, re.M), (
             "%s is accepted here but CONDITION_CELLS does not write it, so the answer reaches no "

@@ -25,7 +25,7 @@
  * would ever have run.
  *
  * Stubbed: fetch, window.TW, window.TWAuth, window.TWPolishSandbox, the DOM, and the clock.
- * REAL: js/polish-bid-core.js (the markup chain, pinned to Kyle's Polish tab) and
+ * REAL: js/bid-model.js (the markup chain, pinned to Kyle's Polish tab) and
  * js/library-core.js (priceAssembly). The arithmetic under test is the shipped arithmetic.
  *
  * Usage: node polish-estimate-harness.js <frontend-dir>   →  one line of JSON
@@ -46,7 +46,7 @@ const read = (p) => fs.readFileSync(p, "utf8").replace(/\r\n/g, "\n");
 
 const src = read(path.join(ROOT, "js", "polish-estimate.js"));
 const pageHtml = read(path.join(ROOT, "polish-estimate.html"));
-const B = require(path.join(ROOT, "js", "polish-bid-core.js"));
+const B = require(path.join(ROOT, "js", "bid-model.js"));
 const L = require(path.join(ROOT, "js", "library-core.js"));
 
 const clone = (v) => JSON.parse(JSON.stringify(v));
@@ -334,7 +334,7 @@ function blob(over) {
 /** The bid this model SHOULD come to, composed out of the two real engines the documented way.
  *
  *  Independent of the page on purpose: the page must agree with library-core's priceAssembly and
- *  polish-bid-core's markupChain, not merely be self-consistent. */
+ *  bid-model's markupChain, not merely be self-consistent. */
 /** `remodelRate` is the project's county rate off the draft, which the page reads from
  *  `state.county_remodel_rate`. Passing it here too keeps this expectation and the page computing
  *  the same thing; leaving it out would let a page that ignored the county still match. */
@@ -421,7 +421,7 @@ function build(opts) {
 
   const winListeners = [];
   const win = {
-    TWPolishBid: B, TWLib: L, TWPolishSandbox: S,
+    TWBidModel: B, TWLib: L, TWPolishSandbox: S,
     TWAuth: { ready: Promise.resolve() },
     scrollTo: () => { log.push("scroll"); },
     location: { href: "https://x/polish-estimate.html?d=proj-1" },
@@ -1717,7 +1717,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
       before: before,
       after: { jf: fig("joint_filler"), dye: fig("dye") },
       // What the real engine says about the area that is now on the screen, so the expectation
-      // is polish-bid-core's answer rather than a number typed into this file.
+      // is bid-model's answer rather than a number typed into this file.
       expectedArea: 8000,
       expectedJfCost: B.jointFillerCost(8000, true),
       expectedDyeCost: B.dyeCost(8000, true),
@@ -2178,7 +2178,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
   // well." Both are RESERVED library_items rows now (backend/library.py's RESERVED_ITEM_IDS),
   // seeded by the schema files and edited on the Items tab. The page prices its two condition
   // cards off them through library-core's priceLine (condLine), and falls back to
-  // polish-bid-core.js's jointFillerCost/dyeCost when a row is not there.
+  // bid-model.js's jointFillerCost/dyeCost when a row is not there.
   //
   // RESERVED_SEED IS THE SEED. test_polish_estimate_page.py parses both schema files and requires
   // their inserts to say exactly this, so "the seeded rows price like today" below is a claim about

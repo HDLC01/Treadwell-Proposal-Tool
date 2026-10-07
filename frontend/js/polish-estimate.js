@@ -11,7 +11,7 @@
 // ASSEMBLIES out of the Items & Assemblies library, labor lines an estimator can add, and the
 // markup chain shown as its own reviewable block. There is no cell to write an assembly into. So
 // the beta now prices itself, and the connection to Kyle's file is kept a different way: every
-// percentage and every step of the chain is transcribed in polish-bid-core.js, and
+// percentage and every step of the chain is transcribed in bid-model.js, and
 // backend/tests/test_polish_markup_parity.py fails if his workbook and that transcription ever
 // disagree. The pin replaces the engine.
 //
@@ -25,7 +25,7 @@
 //     answer back on the next visit to Intake. AND, since 2026-09-30, the Dye and Joint Filler
 //     rate/quantity cells (Polish!C25, C29, and B25/B29 when they differ from the template), so
 //     the workbook prices those two lines off the same library rows this page does -- see
-//     conditionLibrary and polish-bid-core.js's libraryLineWrites. Otherwise the downloaded
+//     conditionLibrary and bid-model.js's libraryLineWrites. Otherwise the downloaded
 //     .xlsx shows the template's own Polish tab, not what was priced here. That is survivable only because the
 //     beta works on test projects by construction (see polish-sandbox.js) — it must be revisited
 //     before any of this prices a real bid.
@@ -47,7 +47,7 @@
     return typeof TWIcon === "function" ? TWIcon(name, size) : "";
   }
 
-  var B = window.TWPolishBid;      // the markup chain, pinned to Kyle's Polish tab
+  var B = window.TWBidModel;      // the markup chain, pinned to Kyle's Polish tab
   var L = window.TWLib;            // priceAssembly — the same maths the library page shows
   var S = window.TWPolishSandbox;  // never edit a live bid
   var $ = function (id) { return document.getElementById(id); };
@@ -278,7 +278,7 @@
     var items = ITEMS;
     var cov = B.num(r.coverage);
     // TRUTHY, NOT !== null: B.num returns 0 for "", null and undefined alike (see
-    // polish-bid-core.js), which is exactly how covHint/covPlaceholder already tell "nothing
+    // bid-model.js), which is exactly how covHint/covPlaceholder already tell "nothing
     // typed" from a real figure. `!== null` would treat every blank row as coverage 0 and price it
     // as broken (no_coverage) the instant it's added, before anyone touches the box.
     if (cov) items = itemsWithCoverage(ITEMS, r.item_id, cov);
@@ -301,7 +301,7 @@
    *  a number, so it is the state most likely to be read.
    *
    *  Both engines already refuse to do this with their own per-unit figures for exactly this
-   *  reason (library-core.js's per_unit and polish-bid-core.js's per_sf are null rather than 0),
+   *  reason (library-core.js's per_unit and bid-model.js's per_sf are null rather than 0),
    *  and the cost box has to agree with them. Same for an assembly whose items cannot price: the
    *  warning line beneath it says why, and "—" is what invites reading it. */
   function rowCost(row) {
@@ -321,7 +321,7 @@
    *  one priceLine every material row and assembly line already goes through. Coverage, waste
    *  and roundup come off the row, so an admin who changes the kit's coverage changes how many
    *  kits a job buys. The seeded rows (JF: coverage 3500, waste 0, roundup on, $500; dye:
-   *  coverage 1, waste 0, no roundup, $0.14) price to the cent what polish-bid-core.js's
+   *  coverage 1, waste 0, no roundup, $0.14) price to the cent what bid-model.js's
    *  jointFillerCost/dyeCost did.
    *
    *  THE ROW IS NOT ALWAYS THERE. On a database the seed has not reached, or a row that cannot
@@ -357,7 +357,7 @@
   /** What this page priced Dye and Joint Filler with, for Kyle's workbook.
    *
    *  Handed to B.conditionCellWrites on every save so the downloaded .xlsx quotes the same two
-   *  lines the bid does (polish-bid-core.js's libraryLineWrites). A key is LEFT OUT when its row
+   *  lines the bid does (bid-model.js's libraryLineWrites). A key is LEFT OUT when its row
    *  is not in the library -- that writes nothing, so a database the seed has not reached keeps
    *  the template's cells -- and is null when the row is there but cannot price, which is when
    *  condLine falls back to the shipped formula and the cells get the shipped figures. The
@@ -439,7 +439,7 @@
 
   // ── saving ──────────────────────────────────────────────────────────────────
   var saveTimer = null;
-  // WHAT IS WRITTEN, AND WHY EACH KEY IS THERE, IS B.buildSavePatch'S BUSINESS (polish-bid-core.js).
+  // WHAT IS WRITTEN, AND WHY EACH KEY IS THERE, IS B.buildSavePatch'S BUSINESS (bid-model.js).
   // This page and its pagehide flush used to compose the blob by hand in two places, and the two
   // drifted: the flush skipped the condition cells and the measured-floor fallback. Both call it
   // now, so a key can only be added or fixed once. `bid` is the price this page computes (the
@@ -814,7 +814,7 @@
    *  The star this page's library replaced got that wrong for two years.
    *
    *  TWO SHAPES NOW, DECIDED BY `cost`. Joint Filler and Dye BUY something: they move the
-   *  Material total through condLine (their reserved library rows, or polish-bid-core.js's
+   *  Material total through condLine (their reserved library rows, or bid-model.js's
    *  jointFillerCost/dyeCost when a row is not there). Since 2026-09-19 they
    *  render as material rows -- the same `.tk.mat` card, the same Material / Measurement / Unit /
    *  Total cost columns, the same `.costbox` -- as the rows above them. Hanz, on staging: "joint
@@ -846,7 +846,7 @@
   var CONDITION_CARDS = [
     { key: "joint_filler", tag: "JOINT FILLER", label: "In the bid", cell: "Polish!E29",
       // THE RESERVED library_items ROW that prices this line -- see condLine, which falls back to
-      // polish-bid-core.js's jointFillerCost when the row is not there.
+      // bid-model.js's jointFillerCost when the row is not there.
       item_id: "joint-filler-kit",
       // THE LIVE NAME, not a string typed twice. An admin renaming the row on the Items tab has
       // to show up here too, or the card is a second copy of a fact that can go stale without
@@ -1725,7 +1725,7 @@
     r += row("GP <span class=\"note\">before the lines below</span>", keyedPct("gp_pct"), "gp");
     // NO HARD BID ROW. Hanz, 2026-09-22: "remove all hard bids from the polish intake form. And
     // also on the markups" -- the switch and its row came out with the condition itself; see
-    // polish-bid-core.js's note on bid() for where the arithmetic went.
+    // bid-model.js's note on bid() for where the arithmetic went.
     r += row("Superintendent &amp; PTO", esc(B.pct(B.RATES.SUPER_PTO)), "super_pto");
     r += row("Soft costs", esc(B.pct(B.RATES.SOFT_COSTS)), "soft_costs");
     r += '<tr><td>Contingency <span class="note">yours to set</span></td>' +

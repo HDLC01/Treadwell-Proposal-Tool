@@ -117,7 +117,7 @@ DEFAULT_WASTE_PCT = 5.0         # Hanz, 2026-08-15: "by default is 5%"
 # EDITED ON THE ITEMS TAB like any material (update_item is not special about them), and read by
 # the Polish estimate's two condition cards: frontend/js/polish-estimate.js's condLine prices
 # each through library-core's priceLine off the row's own cost, coverage, waste and roundup.
-# polish-bid-core.js's dyeCost/jointFillerCost (RATES.DYE_PER_SF, RATES.JOINT_FILLER_KIT_COST)
+# bid-model.js's dyeCost/jointFillerCost (RATES.DYE_PER_SF, RATES.JOINT_FILLER_KIT_COST)
 # are the FALLBACK for a database the seed has not reached, the shape travelSeed() takes over
 # library_labor's 'travel' row. This tuple is what stops the row from ever being orphaned:
 # delete_item refuses either id outright, because nothing reachable from the API could ever
@@ -162,7 +162,7 @@ ASM_UNITS = ("SF", "LF")
 # not price high or low — it would price as nothing, on a screen still showing the rate
 # somebody typed.
 #
-# Lower-case because that is what `TWPolishBid.travelSeed()` already puts on an estimate's
+# Lower-case because that is what `TWBidModel.travelSeed()` already puts on an estimate's
 # own labor row (`unit: "hours"`), and the two have to compare equal at the seam.
 LABOR_UNITS = ("hours", "days")
 DEFAULT_LABOR_UNIT = "hours"
@@ -1130,7 +1130,7 @@ def unit_usage() -> Dict[str, int]:
 # "Mobilization", "Night shift", a second crew rate — typed once here instead of into every bid.
 #
 # TRAVEL IS NOT A ROW IN THIS TABLE, is not migrated into it, and must not be written into it by
-# anything. It stays `TWPolishBid.travelSeed()` in frontend/js/polish-bid-core.js and keeps
+# anything. It stays `TWBidModel.travelSeed()` in frontend/js/bid-model.js and keeps
 # rendering as "Built in" with no Edit and no Remove; a row here is an ADDITION beside it. The two
 # shapes differ on purpose and the names differ with them — an estimate's labor row calls it
 # `label` and carries the guys/days somebody typed for THAT job, while this table calls it `name`
@@ -1351,7 +1351,7 @@ def delete_labor(labor_id: str) -> bool:
     reach back into a bid that was built with it.
 
     TRAVEL IS REFUSED, FAIL-CLOSED, BEFORE THE EXISTENCE CHECK EVEN RUNS. It is the one row
-    anything can address Travel by — `travelSeed()` in polish-bid-core.js falls back to its own
+    anything can address Travel by — `travelSeed()` in bid-model.js falls back to its own
     $33.00/hr the moment this table stops answering with a `travel` row, and `migrateModel` finds
     Travel on every saved draft by that exact id — so a soft delete here would not remove Travel
     from a single estimate, it would only take away the one thing that makes it editable.

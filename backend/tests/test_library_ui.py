@@ -343,9 +343,9 @@ def test_the_labor_default_is_read_from_the_estimate_not_retyped():
         "the renderer carries Travel's own label or rate as a literal, which is the copy that "
         "drifts")
     html = (FRONTEND / "library.html").read_text(encoding="utf-8", errors="replace")
-    assert "/js/polish-bid-core.js" in html, (
+    assert "/js/bid-model.js" in html, (
         "the shared module is not loaded, so travelSeed is unreachable and the list renders empty")
-    core = (FRONTEND / "js" / "polish-bid-core.js").read_text(encoding="utf-8", errors="replace")
+    core = (FRONTEND / "js" / "bid-model.js").read_text(encoding="utf-8", errors="replace")
     assert "travelSeed: travelSeed" in core, (
         "travelSeed is no longer exported, so this page cannot reach it")
 
@@ -3613,7 +3613,7 @@ def test_the_condition_vocabulary_is_the_same_three_on_both_sides():
     because a mismatch is silent in the worst possible way: a condition filed under a key no
     reader knows saves with a green tick, reaches nothing, and writes to no cell.
 
-      * `CONDITION_CELLS` in polish-bid-core.js decides which workbook cell each answer writes.
+      * `CONDITION_CELLS` in bid-model.js decides which workbook cell each answer writes.
       * `takeoffConditionDefaults()` in library.js is what the Defaults tab offers.
       * `KEYS` in backend/condition_defaults.py is what the endpoint will accept.
 
@@ -3621,7 +3621,7 @@ def test_the_condition_vocabulary_is_the_same_three_on_both_sides():
     page makes for that condition, and nothing in the product would have said which of the three
     files was wrong."""
     js = (FRONTEND / "js" / "library.js").read_text(encoding="utf-8", errors="replace")
-    core = (FRONTEND / "js" / "polish-bid-core.js").read_text(encoding="utf-8", errors="replace")
+    core = (FRONTEND / "js" / "bid-model.js").read_text(encoding="utf-8", errors="replace")
     py = (pathlib.Path(__file__).resolve().parents[1] / "condition_defaults.py").read_text(
         encoding="utf-8", errors="replace")
 

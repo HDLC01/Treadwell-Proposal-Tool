@@ -4,7 +4,7 @@ Hanz's rule: ONE PRICE EVERYWHERE -- the tool's bid and the .xlsx must never quo
 figures. Since 2026-09-30 the Polish estimate prices both lines off reserved library_items rows
 (`dye`, `joint-filler-kit`; see polish-estimate.js condLine) that an admin edits on the Items tab.
 Kyle's Polish tab carried its own C25 0.14, C29 500 and "/3500", so an edited row made the two
-disagree. polish-bid-core.js's conditionCellWrites now writes, on every save:
+disagree. bid-model.js's conditionCellWrites now writes, on every save:
 
     Polish!C25   one coat of dye's price per SF (the row's unit price over its coverage, plus
     Polish!C26   waste) -- BOTH cells: Kyle's rows 25 and 26 are one coat each (DYE_COATS 2)
@@ -253,7 +253,7 @@ BRANCHES = {
                        "coverage": 2, "waste_pct": 5, "roundup": False},
 }
 _NODE = r"""
-const B = require(process.argv[1] + '/js/polish-bid-core.js');
+const B = require(process.argv[1] + '/js/bid-model.js');
 const L = require(process.argv[1] + '/js/library-core.js');
 const rows = JSON.parse(process.argv[2]), area = Number(process.argv[3]), out = {};
 for (const name of Object.keys(rows)) {

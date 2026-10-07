@@ -1,11 +1,16 @@
 """Excel's ROUNDUP exists THREE times in this repo, in two languages. They must agree.
 
-  * `backend/pricing.py`             `_roundup`      -- Python, guards via "%.12g"
-  * `frontend/js/polish-bid-core.js` `roundUp`       -- JS, guards via toPrecision(12)
-  * `frontend/js/markup-core.js`     `excelRoundUp`  -- JS, same guard, plus a digits argument.
-                                                       NOT exported, so this file reaches it the
-                                                       only way anything can: run("ROUNDUP(v,0)"),
-                                                       which is also the door markup_rules uses.
+  * `backend/pricing.py`          `_roundup`      -- Python, guards via "%.12g"
+  * `frontend/js/excel-math.js`   `roundUp`       -- JS, guards via toPrecision(12). THE bid-side
+                                                     ROUNDUP: it sat in the model module until Phase 5
+                                                     moved it to this leaf. `frontend/js/bid-model.js`
+                                                     re-exports it, and a row below checks the model's
+                                                     answers are the leaf's (test_excel_math.py checks
+                                                     it is the very same function, not a copy).
+  * `frontend/js/markup-core.js`  `excelRoundUp`  -- JS, same guard, plus a digits argument.
+                                                     NOT exported, so this file reaches it the
+                                                     only way anything can: run("ROUNDUP(v,0)"),
+                                                     which is also the door markup_rules uses.
 
 Each rounds AWAY FROM ZERO and each first snaps its input to twelve significant figures, because
 Excel keeps fifteen and IEEE-754 keeps seventeen: a value sitting a hair above an integer only as
@@ -40,7 +45,8 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import pricing  # noqa: E402
 
 FRONTEND = pathlib.Path(__file__).resolve().parents[2] / "frontend"
-BID_CORE = FRONTEND / "js" / "polish-bid-core.js"
+EXCEL_MATH = FRONTEND / "js" / "excel-math.js"       # the one bid-side ROUNDUP
+BID_CORE = FRONTEND / "js" / "bid-model.js"          # re-exports it under the name callers use
 MARKUP_CORE = FRONTEND / "js" / "markup-core.js"
 
 pytestmark = pytest.mark.skipif(shutil.which("node") is None,
@@ -111,6 +117,11 @@ def bid_core():
 
 
 @pytest.fixture(scope="module")
+def excel_math():
+    return _js_answers(EXCEL_MATH, "M.roundUp(v)")
+
+
+@pytest.fixture(scope="module")
 def markup_core():
     """markup-core.js does NOT export excelRoundUp -- the only way in is the formula engine.
 
@@ -141,10 +152,30 @@ def test_the_vectors_actually_exercise_the_guard():
 
 
 def test_python_and_the_bid_engine_round_identically(bid_core):
-    """pricing.py vs polish-bid-core.js -- the two that price the same job on the two paths."""
+    """pricing.py vs bid-model.js -- the two that price the same job on the two paths."""
     bad = [(v, pricing._roundup(v), js) for v, js in zip(VECTORS, bid_core)
            if pricing._roundup(v) != js]
     assert not bad, "%d of %d disagree, first few: %r" % (len(bad), len(VECTORS), bad[:5])
+
+
+def test_python_and_the_leaf_round_identically(excel_math):
+    """pricing.py vs excel-math.js -- the bid-side ROUNDUP itself, not the model's re-export of it."""
+    bad = [(v, pricing._roundup(v), js) for v, js in zip(VECTORS, excel_math)
+           if pricing._roundup(v) != js]
+    assert not bad, "%d of %d disagree, first few: %r" % (len(bad), len(VECTORS), bad[:5])
+
+
+def test_the_leaf_and_the_formula_engine_round_identically(excel_math, markup_core):
+    """excel-math.js vs markup-core.js's excelRoundUp at digits=0: the bid-side ROUNDUP and the one
+    the markup formulas run, which markup-core.js keeps as its own because it takes a digits argument."""
+    bad = [(v, a, b) for v, a, b in zip(VECTORS, excel_math, markup_core) if a != b]
+    assert not bad, "%d disagree, first few: %r" % (len(bad), bad[:5])
+
+
+def test_the_models_roundup_answers_what_the_leaf_answers(bid_core, excel_math):
+    """bid-model.js re-exports the leaf's function, so on every vector the two are one answer. This
+    is the cheap half: test_excel_math.py holds the other, that it is the very same function object."""
+    assert bid_core == excel_math
 
 
 def test_python_and_the_formula_engine_round_identically(markup_core):
@@ -162,7 +193,7 @@ def test_the_two_javascript_engines_round_identically(bid_core, markup_core):
 
 
 @pytest.mark.parametrize("value,want", [
-    (110.00000000000001, 110),      # 27,500 x 1.10 -- polish-bid-core's own documented case
+    (110.00000000000001, 110),      # 27,500 x 1.10 -- bid-model's own documented case
     (362.00000000000006, 362),      # 724 sq ft of polish with dye -- PR #451's case
     (220.22000000000003, 221),      # a REAL fraction: rounds all the way up, guard or no guard
     (-1234.2, -1235),               # the hard-bid give-back: away from zero, not toward it
@@ -173,5 +204,6 @@ def test_the_named_cases_agree_across_all_three(value, want):
     """The specific numbers each fix was written against, asserted on every implementation at once
     so a future change cannot quietly fix one and leave the others behind."""
     assert pricing._roundup(value) == want
+    assert _node("out(M.roundUp(%r));" % value, EXCEL_MATH) == want
     assert _node("out(M.roundUp(%r));" % value, BID_CORE) == want
     assert _node('out(M.run("ROUNDUP(v,0)", {v: %r}));' % value, MARKUP_CORE) == want

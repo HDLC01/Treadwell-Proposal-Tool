@@ -412,7 +412,7 @@ alter default privileges in schema public grant all on sequences to service_role
 --
 -- NOT APPLIED on either database as of 2026-09-18 — it needs Hanz's go, and it has to land on
 -- BOTH or the one that misses it answers 502 on the first save. Until then list_defaults()
--- answers empty by design and every estimate opens with the literals in polish-bid-core.js.
+-- answers empty by design and every estimate opens with the literals in bid-model.js.
 --
 -- A row is an OVERRIDE of a shipped constant, and it reaches a BRAND-NEW bid only: a saved
 -- estimate keeps the answers it was saved with whatever this table later says.

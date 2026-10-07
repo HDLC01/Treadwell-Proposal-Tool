@@ -1,7 +1,7 @@
 "use strict";
-/* Runs the REAL polish-bid-core.js: a new bid takes a distance answer, a saved bid does too. */
+/* Runs the REAL bid-model.js: a new bid takes a distance answer, a saved bid does too. */
 const path = require("path");
-const B = require(path.join(path.resolve(process.argv[2]), "js", "polish-bid-core.js"));
+const B = require(path.join(path.resolve(process.argv[2]), "js", "bid-model.js"));
 function trv(m) { return m.labor.filter(function (r) { return r.id === "travel"; })[0]; }
 function priced(m) {
   m.labor[0].days = 5;                 // 3 guys x 5 days polishing -> 15 man-days

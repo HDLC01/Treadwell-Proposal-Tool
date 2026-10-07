@@ -127,7 +127,7 @@ def test_escape_reg_exp_makes_text_match_only_itself(lib):
 
 # A floor, not an exact count: it only has to prove the sweep read real files. Half of today's.
 SWEEP_FLOORS = {"js/polish-estimate.js": 50, "js/estimate-review.js": 75, "js/proposal-review.js": 135,
-                "js/library.js": 80, "js/polish-bid-core.js": 35, "js/index.js": 9, "js/portal.js": 45}
+                "js/library.js": 80, "js/bid-model.js": 35, "js/index.js": 9, "js/portal.js": 45}
 
 
 def test_every_function_in_seven_real_pages_lifts_and_compiles(lib):
@@ -175,7 +175,7 @@ def test_string_literals_refuses_source_it_cannot_read_to_the_end(lib):
 
 # A floor, not an exact count: half of today's. It only has to prove the scan read real files.
 LITERAL_FLOORS = {"js/polish-estimate.js": 500, "js/estimate-review.js": 700, "js/proposal-review.js": 1000,
-                  "js/library.js": 900, "js/polish-bid-core.js": 150, "js/index.js": 100, "js/portal.js": 1000}
+                  "js/library.js": 900, "js/bid-model.js": 150, "js/index.js": 100, "js/portal.js": 1000}
 
 
 def test_string_literals_survives_seven_real_pages(lib):

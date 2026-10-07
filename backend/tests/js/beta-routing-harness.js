@@ -753,7 +753,7 @@ function runHandler(which) {
     // remove filler from jobs that get it today". What changed is that the line started costing
     // money -- a $500 kit per 3,500 sq ft -- so "on by default" stopped being a harmless
     // transcription of the workbook and became $2,500 nobody had chosen. Hanz's call: all three
-    // start off. index.js's `def` and polish-bid-core's freshModel() both say so and must agree.
+    // start off. index.js's `def` and bid-model's freshModel() both say so and must agree.
     out.conditions.defaults = {};
     b.switches().forEach((s) => { out.conditions.defaults[s.key] = s.on; });
   }

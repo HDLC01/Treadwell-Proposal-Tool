@@ -15,7 +15,7 @@
  *   * An unbound identifier in a handler is exactly what a source test cannot see, and that class
  *     of mistake took the board down on prod on 2026-08-12.
  *
- * The condition KEYS are compared against the real js/polish-bid-core.js, so this cannot pass
+ * The condition KEYS are compared against the real js/bid-model.js, so this cannot pass
  * against a list that has drifted from the one markupChain() reads. That anchor moved when the
  * beta stopped writing worksheet cells: the keys used to have to match cellWrites() in the old
  * polish-estimate-core.js, and now they have to match the pricing engine that consumes them —
@@ -46,7 +46,7 @@ const read = (p) => fs.readFileSync(p, "utf8").replace(/\r\n/g, "\n");
 
 const src = read(path.join(ROOT, "js", "polish-intake.js"));
 const pageHtml = read(path.join(ROOT, "polish-intake.html"));
-const P = require(path.join(ROOT, "js", "polish-bid-core.js"));
+const P = require(path.join(ROOT, "js", "bid-model.js"));
 
 // ── the REAL county table, out of the server module that serves it ────────────
 //
@@ -219,16 +219,16 @@ const scope = new Function("$", "TW", "SB", "document", "window", "clock", "fetc
   "use strict";
   var setTimeout = clock.setTimeout, clearTimeout = clock.clearTimeout;
   ${grab(/^  var esc = function[\s\S]*?\n  \};$/m, "esc")}
-  ${grab(/^  var B = window\.TWPolishBid;[^\n]*$/m, "the window.TWPolishBid binding")}
+  ${grab(/^  var B = window\.TWBidModel;[^\n]*$/m, "the window.TWBidModel binding")}
   ${grab(/^  var CONDITIONS = \[[\s\S]*?\n  \];$/m, "CONDITIONS")}
   ${grab(/^  var DEFAULT_CONDITIONS = [^\n]*;$/m, "DEFAULT_CONDITIONS")}
   // Added 2026-09-03 with the cell map. adoptModel() and save() both reach for it now,
   // and a const the lifted function cannot see is a ReferenceError at boot, not a
   // product bug -- which is the whole reason grab() names what it is looking for.
   //
-  // Repointed 2026-09-15: the map moved into polish-bid-core.js, because the Review step became a
+  // Repointed 2026-09-15: the map moved into bid-model.js, because the Review step became a
   // second writer of these same five cells and two copies is how the two screens drift. This line
-  // is now an alias, and it resolves through the window.TWPolishBid binding lifted above --
+  // is now an alias, and it resolves through the window.TWBidModel binding lifted above --
   // which is why that grab has to stay ahead of this one.
   ${grab(/^  var CONDITION_CELLS = B\.CONDITION_CELLS;$/m, "CONDITION_CELLS")}
   // Added 2026-09-11 with the four carry-through toggles, then down to one (reno) on
@@ -388,9 +388,9 @@ function build(opts) {
   const win = {
     TWAuth: { ready: Promise.resolve() },
     // The REAL pricing core, under the real global name. The page's own
-    // `var B = window.TWPolishBid` line is lifted below, so renaming the global breaks this
+    // `var B = window.TWBidModel` line is lifted below, so renaming the global breaks this
     // harness instead of quietly leaving B undefined at runtime.
-    TWPolishBid: P,
+    TWBidModel: P,
     location: { href: "https://x/polish-intake.html?d=proj-1",
                 assign: (u) => rec.navigated.push(u) },
     // wire() registers its own pagehide flush directly on window (mirrors shared.js's own net
@@ -893,7 +893,7 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
   // polish_estimate.version — sends the project back to the spreadsheet intake instead.
   //
   // So the assertion is a ROUND TRIP: what this page saved, read back through the real
-  // polish-bid-core the calculator prices with.
+  // bid-model the calculator prices with.
   {
     const b = build({ blob: { __draft_id: "brand-new", project_name: "Fresh beta job" } });
     await b.api.boot();

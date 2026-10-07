@@ -16,7 +16,7 @@
 //
 // WHAT IT WRITES, AND WHAT IT MUST NOT WRITE.
 //
-// The toggles land in `state.polish_estimate.conditions`, where js/polish-bid-core.js's
+// The toggles land in `state.polish_estimate.conditions`, where js/bid-model.js's
 // markupChain() reads them by key to decide the labor escalation and the two taxes. The takeoff
 // and labor rows live under the SAME key, so every save merges — see save().
 //
@@ -36,7 +36,7 @@
   "use strict";
 
   var SB = window.TWPolishSandbox;
-  var B = window.TWPolishBid;      // owns the model shape, and the keys markupChain reads
+  var B = window.TWBidModel;      // owns the model shape, and the keys markupChain reads
   var $ = function (id) { return document.getElementById(id); };
 
   var esc = function (s) {
@@ -52,7 +52,7 @@
   // panel, where Kyle could check a field against the workbook he already trusts. This page writes
   // the draft, not the workbook, so a cell name here would point at a cell it never touches.
   //
-  // THE KEYS ARE THE CONTRACT. They have to match the conditions in js/polish-bid-core.js exactly:
+  // THE KEYS ARE THE CONTRACT. They have to match the conditions in js/bid-model.js exactly:
   // markupChain() looks each one up BY KEY and a miss reads as `false`, so a typo here is a
   // prevailing-wage job quietly priced at standard rates with nothing on screen to show it.
   // Pinned by test_polish_intake_page.py, which compares the two lists.
@@ -68,7 +68,7 @@
     // also on the markups" -- confirmed to mean the Polish beta specifically (its intake,
     // Review step and the Markup admin page), leaving the live v1 Intake, the AI Autofill
     // flag, the verbal-AI parser and pricing.py's own engine untouched; those never read this
-    // list. The keys are still the contract with polish-bid-core.js's markupChain(), which no
+    // list. The keys are still the contract with bid-model.js's markupChain(), which no
     // longer offers hard_bid either -- see that file's own note on the removal.
     { key: "prevailing_wage", label: "Prevailing wage",
       why: "Raises every labor line to the prevailing rate." },
@@ -94,7 +94,7 @@
   // job's downloaded .xlsx now writes Polish!B10 / Epoxy!B10 as "New" unconditionally -- the same
   // literal an untouched Renovation switch already defaulted to, so no download that was correct
   // yesterday becomes wrong today; a job that IS a renovation simply has no way to say so from
-  // this screen any more. js/polish-bid-core.js still has no notion of renovation and never did.
+  // this screen any more. js/bid-model.js still has no notion of renovation and never did.
   //
   // If a carry-only condition is ever needed again, CARRY_CONDITIONS existed as a parallel array
   // to CONDITIONS with its own `cells`/`on`/`off`/`def` shape (see git history) -- do not
@@ -114,7 +114,7 @@
    *  EXTRACTED AS OF 2026-09-15, having been a deliberate duplicate before that. The old note
    *  here said one shared module was not worth it because test_polish_intake_page.py pins this
    *  page's <script src> list as an exact seven-item sequence, so a sixth file would be a test
-   *  move dressed up as a refactor. That trade changed twice over: polish-bid-core.js is ALREADY
+   *  move dressed up as a refactor. That trade changed twice over: bid-model.js is ALREADY
    *  in both pages' script lists so nothing new is loaded, and the Review step became a second
    *  writer of these conditions — at which point two copies stopped being a tidiness question and
    *  became the mechanism by which the two screens would disagree about a price.
@@ -696,7 +696,7 @@
     // model holds, `tabs` included -- live under this same key. Writing { conditions: … } over the
     // top of it to record one toggle would silently delete a finished takeoff, and the estimator
     // would not find out until the bid came back at zero. Only `conditions` and `conditions_shown`
-    // are this page's to state, and B.patchModel is where that is decided (polish-bid-core.js):
+    // are this page's to state, and B.patchModel is where that is decided (bid-model.js):
     // it lays those two over the saved model and leaves every other key exactly as it was saved.
     //
     // It reads the saved model through migrateModel, so what lands is a well-formed v2 with its

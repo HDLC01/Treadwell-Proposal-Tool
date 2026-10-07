@@ -2,7 +2,7 @@
 /* EXECUTE the Labor Calculator tab's Travel section: the shipped code out of library.js.
  *
  * The block from `// ── the Labor Calculator tab` to `// ── view switch` is taken whole and run
- * against a fake DOM, a fake fetch and the real library-core.js (money) and polish-bid-core.js
+ * against a fake DOM, a fake fetch and the real library-core.js (money) and bid-model.js
  * (travelSeed). Nothing is restated: a source assertion cannot tell a rate box that saves from one
  * that does not, which is exactly how the Defaults tab's Markup inputs shipped with no handler.
  *
@@ -15,7 +15,7 @@ const ROOT = path.resolve(process.argv[2]);
 const read = (p) => fs.readFileSync(p, "utf8").replace(/\r\n/g, "\n");
 const src = read(path.join(ROOT, "js", "library.js"));
 const L = require(path.join(ROOT, "js", "library-core.js"));
-const B = require(path.join(ROOT, "js", "polish-bid-core.js"));
+const B = require(path.join(ROOT, "js", "bid-model.js"));
 
 const START = "  // ── the Labor Calculator tab (Hanz, 2026-10-05)";
 const END = "  // ── view switch ";
@@ -77,7 +77,7 @@ function make(opts) {
     "saved: function () { return CALC_SAVED; } };";
   const scope = new Function("$", "esc", "api", "L", "LABOR", "ADMIN", "GLOBAL_MARKUP", "window", body);
   const api = scope((id) => els[id] || null, esc, fetchStub, L, clone(opts.labor || []),
-                    opts.admin !== false, GLOBAL_MARKUP, { TWPolishBid: B });
+                    opts.admin !== false, GLOBAL_MARKUP, { TWBidModel: B });
   return { api, els, puts, calcPuts, rec, GLOBAL_MARKUP };
 }
 

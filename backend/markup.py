@@ -1,10 +1,10 @@
 """Markup rules — the markup chain's rates, as editable expressions, per sheet LAYOUT.
 
 WHAT THIS IS FOR. The Polish beta's on-screen price comes out of one choke point,
-`markupChain()` in frontend/js/polish-bid-core.js, which walks a chain of markup lines over a
+`markupChain()` in frontend/js/bid-model.js, which walks a chain of markup lines over a
 subtotal — gp → contingency → super_pto → soft_costs → remodel_tax → bond — each line's base
 being the running sum ABOVE it (hard_bid, removed 2026-09-22, used to sit between gp and
-contingency; see polish-bid-core.js's bid() for the note on where it went). It compounds; it
+contingency; see bid-model.js's bid() for the note on where it went). It compounds; it
 does not add. Those rates are hardcoded constants in that file (`RATES`, `GP_BANDS`),
 transcribed by hand off Kyle's workbook. This table is where an admin edits them instead.
 

@@ -1,5 +1,5 @@
 "use strict";
-/* Run the REAL polish bid engine out of frontend/js/polish-bid-core.js and report what it says.
+/* Run the REAL polish bid engine out of frontend/js/bid-model.js and report what it says.
  *
  * WHY THE VECTORS LIVE HERE. test_polish_markup_parity.py re-derives every one of these numbers in
  * Python by transliterating Kyle's formulas, then compares. If each side owned its own input list
@@ -31,7 +31,7 @@
  */
 const path = require("path");
 
-const CORE = path.join(__dirname, "..", "..", "..", "frontend", "js", "polish-bid-core.js");
+const CORE = path.join(__dirname, "..", "..", "..", "frontend", "js", "bid-model.js");
 const P = require(CORE);
 
 const OFF = { local: false, prevailing_wage: false,

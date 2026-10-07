@@ -1,6 +1,6 @@
 """Markup rules — the storage layer and its endpoints.
 
-The markup chain's rates live as hardcoded constants in frontend/js/polish-bid-core.js today
+The markup chain's rates live as hardcoded constants in frontend/js/bid-model.js today
 (`RATES`, `GP_BANDS`), transcribed by hand off Kyle's workbook. `markup.py` is where an admin
 edits them instead. The engine that evaluates a formula and the page that shows it are separate;
 these tests only pin the row.

@@ -13,7 +13,7 @@ TWO DEFECTS stood in front of every later phase.
      the only SF row switched off it saved a polish SF of 0). One `buildSavePatch` now, and the
      intake's merge is one `patchModel`.
 
-EVERYTHING HERE RUNS CODE. tests/js/model-safety-harness.js executes the real polish-bid-core.js over
+EVERYTHING HERE RUNS CODE. tests/js/model-safety-harness.js executes the real bid-model.js over
 every saved-bid fixture that tests/js/saved-bid-scenarios.js holds (lifted from that file by name, so a
 fixture added there is covered here) plus synthetic models carrying `work_type`, `tabs`, a rates
 snapshot and a profile stamp; the real estimate page, saved once by its timer and once by `pagehide`
@@ -32,7 +32,7 @@ import shutil
 
 import pytest
 
-from _golden_support import break_source
+from _golden_support import break_source, copy_unmodified
 from _node import last_json_line, run_node
 from test_polish_saved_bid_safety import NEWEST_TOTALS, STAGING_TOTALS
 
@@ -75,7 +75,7 @@ def test_no_section_of_the_harness_failed_or_is_missing_its_function(ran, sectio
     that running this harness over an older tree fails an assertion with a reason, not a stack."""
     got = ran[section]
     assert "error" not in got, got.get("error")
-    assert "missing" not in got, "polish-bid-core.js has no %s" % ("patchModel" if section == "patch" else "buildSavePatch")
+    assert "missing" not in got, "bid-model.js has no %s" % ("patchModel" if section == "patch" else "buildSavePatch")
 
 
 # ── 1. the round-trip laws ───────────────────────────────────────────────────────────────────────
@@ -345,18 +345,18 @@ def test_an_intake_save_after_an_estimate_save_leaves_tabs_byte_identical(ran):
 
 # ── red without the code: break a COPY and watch each law notice ─────────────────────────────────
 SCRATCH_FRONTEND_FILES = ["polish-estimate.html", "polish-intake.html", "js/polish-estimate.js",
-                          "js/polish-intake.js", "js/polish-bid-core.js", "js/library-core.js"]
+                          "js/polish-intake.js", "js/bid-model.js", "js/library-core.js"]
 
 MUTATIONS = {
     "migrate stops carrying the keys it does not know": (
-        "js/polish-bid-core.js", "return carryUnknownKeys(out, model);", "return out;",
+        "js/bid-model.js", "return carryUnknownKeys(out, model);", "return out;",
         lambda r: r["fixtures"]["synthetic"]["synthetic_tabs"]["missing"] == ["tabs"]
         and r["intake"]["cross"]["tabsAfterEstimate"] != r["intake"]["cross"]["tabsBefore"]),
     "the known-key list forgets a key the branch normalises": (
-        "js/polish-bid-core.js", '"distance", "fees_default"]);', '"fees_default"]);',
+        "js/bid-model.js", '"distance", "fees_default"]);', '"fees_default"]);',
         lambda r: r["known"]["exported"] != r["known"]["keys"]),
     "a hostile key reaches the model": (
-        "js/polish-bid-core.js", "return copyInto(out, Object.fromEntries(rest));",
+        "js/bid-model.js", "return copyInto(out, Object.fromEntries(rest));",
         "return Object.assign(out, Object.fromEntries(rest));",
         lambda r: r["hostile"]["protoIsObjectPrototype"] is False),
     "the pagehide flush forgets the library's dye and joint filler lines": (
@@ -370,29 +370,29 @@ MUTATIONS = {
         lambda r: r["estimate"]["onlyRowOff"]["equal"] is False and r["estimate"]["onlyRowOff"]["settled"] is False
         and r["estimate"]["typed"]["settled"] is True),
     "a save keeps the priced area when the only row is off": (
-        "js/polish-bid-core.js", "polish_sf: b.sf > 0 ? b.sf : measuredSf(model.takeoff),", "polish_sf: b.sf,",
+        "js/bid-model.js", "polish_sf: b.sf > 0 ? b.sf : measuredSf(model.takeoff),", "polish_sf: b.sf,",
         lambda r: r["savePatch"]["floor"]["saved"] == 0 and r["estimate"]["onlyRowOff"]["autosave"]["polish_sf"] == 0),
     "a save forgets the condition cells": (
-        "js/polish-bid-core.js", "cell_values: conditionCellWrites(model.conditions, cells, ctx.library),",
+        "js/bid-model.js", "cell_values: conditionCellWrites(model.conditions, cells, ctx.library),",
         "cell_values: cells,",
         lambda r: r["savePatch"]["cells"]["taxable"] is None
         and (r["estimate"]["condition"]["autosave"]["cells"] or {}).get("Epoxy!B6") != "No"),
     "a save edits the model it was handed": (
-        "js/polish-bid-core.js", "polish_estimate: Object.assign(copyInto({}, model), { totals: b }),",
+        "js/bid-model.js", "polish_estimate: Object.assign(copyInto({}, model), { totals: b }),",
         "polish_estimate: Object.assign(model, { totals: b }),",
         lambda r: r["savePatch"]["modelCopied"] is False and r["savePatch"]["frozenThrew"] is not None),
     "a patch overwrites what the intake does not own": (
-        "js/polish-bid-core.js", "var p = isObject(patch) ? patch : {};",
+        "js/bid-model.js", "var p = isObject(patch) ? patch : {};",
         "var p = isObject(patch) ? patch : {}; copyInto(model, p);",
         lambda r: r["patch"]["smuggledRestDiff"] is not None),
     "a patch states labor on a bid that never stated it": (
-        "js/polish-bid-core.js", "if (laborUnstated(existing)) delete model.labor;", "void 0;",
+        "js/bid-model.js", "if (laborUnstated(existing)) delete model.labor;", "void 0;",
         lambda r: r["patch"]["mint"]["undef"]["hasLabor"] is True),
     "the intake rebuilds the model from nothing": (
         "js/polish-intake.js", "var model = B.patchModel(cur.polish_estimate, {", "var model = B.patchModel({}, {",
         lambda r: r["intake"]["alone"]["takeoffKept"] is False and r["intake"]["alone"]["tabsIdentical"] is False),
     "an estimate save stops carrying what the model holds": (
-        "js/polish-bid-core.js", "polish_estimate: Object.assign(copyInto({}, model), { totals: b }),",
+        "js/bid-model.js", "polish_estimate: Object.assign(copyInto({}, model), { totals: b }),",
         "polish_estimate: { version: 2, takeoff: model.takeoff, labor: model.labor, conditions: model.conditions, contingency: model.contingency, fees: model.fees, travel: model.travel, totals: b },",
         lambda r: "tabs" not in r["estimate"]["withTabs"]["autosave"]["modelKeys"]
         and r["intake"]["cross"]["tabsAfterIntake"] != r["intake"]["cross"]["tabsBefore"]),
@@ -405,11 +405,7 @@ def test_the_laws_go_red_when_the_code_changes(tmp_path, name):
     files and the core. The anchor must be in the file exactly once (break_source refuses otherwise)."""
     rel, old, new, noticed = MUTATIONS[name]
     frontend = break_source(tmp_path, rel, old, new)
-    for f in SCRATCH_FRONTEND_FILES:
-        dest = frontend / f
-        if not dest.exists():
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(FRONTEND / f, dest)
+    copy_unmodified(frontend, SCRATCH_FRONTEND_FILES)      # and what each declares it needs: js/excel-math.js
     # the intake prelude reads the county table out of the backend module that serves it
     (tmp_path / "backend").mkdir(exist_ok=True)
     shutil.copyfile(BACKEND / "reference_tax.py", tmp_path / "backend" / "reference_tax.py")

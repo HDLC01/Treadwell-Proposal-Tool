@@ -28,7 +28,7 @@ template ships for Epoxy!B10/Polish!B10.
 Hard bid was a seventh question here until 2026-09-22, when Hanz asked for it removed from the
 Polish beta entirely: "remove all hard bids from the polish intake form. And also on the
 markups." It priced a discount for bidding against a hard number rather than a budget — see
-polish-bid-core.js's removal notes for the formula it used to feed.
+bid-model.js's removal notes for the formula it used to feed.
 
 WHY EXECUTED, NOT GREPPED.
 
@@ -44,7 +44,7 @@ identifier or a transposed write. The failures that matter on this page are all 
     on the element the page produced.
   * "nothing renders before the sandbox settles" is an ORDERING, checked as one.
 
-The condition KEYS are compared with the real js/polish-bid-core.js, whose markupChain() reads them
+The condition KEYS are compared with the real js/bid-model.js, whose markupChain() reads them
 by key to decide the hard-bid discount, the labor escalation and the two taxes. A key that drifted
 here would be a prevailing-wage job quietly priced at standard rates, and nothing on screen would
 say so.
@@ -102,7 +102,7 @@ def test_a_polish_job_renders_five_conditions_as_toggles(ran):
     discount off the bid for a job the customer will award on the lowest number rather than a
     negotiated budget. Hanz: "remove all hard bids from the polish intake form. And also on the
     markups" — scoped to the Polish beta only, controls and data both. There is no toggle left for
-    it anywhere on this screen; see polish-bid-core.js and markup.js for what its removal took out
+    it anywhere on this screen; see bid-model.js and markup.js for what its removal took out
     of the pricing chain.
 
     IT WAS SIX UNTIL 2026-09-23. Renovation was the last of the three added alongside Dye and
@@ -140,7 +140,7 @@ def test_a_polish_job_renders_five_conditions_as_toggles(ran):
 
 @needs_node
 def test_the_keys_are_the_ones_the_pricing_engine_reads(ran):
-    """markupChain() in polish-bid-core.js looks each condition up BY KEY and a miss reads as
+    """markupChain() in bid-model.js looks each condition up BY KEY and a miss reads as
     `false`. Two lists, one contract — pinned against the real module so they cannot drift.
 
     Mutation: rename `remodel_tax` to `remodel` here. The toggle still works, still saves, still
@@ -289,7 +289,7 @@ def test_the_three_that_moved_are_in_the_model_and_survive_the_read_back(ran):
     missing on the estimator's next visit.
 
     The move did not defeat that rule, it satisfied it. The three were ADDED to
-    freshModel().conditions (polish-bid-core.js), which is what a key needs in order to be storable
+    freshModel().conditions (bid-model.js), which is what a key needs in order to be storable
     at all, and only then moved onto the Takeoff step. So the old assertion is not wrong about the
     mechanism, it is out of date about the list — which is why this test names both and asserts the
     read-back rather than just the write. Renovation was never added to freshModel either, and it
@@ -911,7 +911,7 @@ def test_remodel_tax_with_no_county_names_the_kansas_state_rate(ran):
     # 6.5% the server's reference table calls the Kansas state rate.
     from reference_tax import KS_STATE_RATE
     assert ran["ksStateRate"] == KS_STATE_RATE == 0.065, (
-        "js/polish-bid-core.js and backend/reference_tax.py disagree about the Kansas state rate, "
+        "js/bid-model.js and backend/reference_tax.py disagree about the Kansas state rate, "
         "so the note names a rate the bid does not use: %r vs %r"
         % (ran["ksStateRate"], KS_STATE_RATE))
     assert fb["enginePct"]["raw"] == KS_STATE_RATE, (
@@ -1099,16 +1099,16 @@ def test_the_page_loads_no_formula_engine(html):
     # /js/icons.js is FIRST, ahead of auth.js: the sidebar auth.js draws asks it for every glyph
     # in the rail. See the house rule at the top of frontend/js/icons.js.
     assert srcs == ["https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0",
-                    "/js/icons.js", "/auth.js", "/shared.js", "/js/polish-bid-core.js",
+                    "/js/icons.js", "/auth.js", "/shared.js", "/js/excel-math.js", "/js/bid-model.js",
                     "/js/address-lookup.js",
                     "/js/polish-sandbox.js", "/js/polish-intake.js",
                     "/js/polish-verbal.js"], (
         "the page's script list has changed: %r" % srcs)
-    # polish-bid-core is the model's shape and the condition keys, NOT a formula engine: no CDN, no
+    # bid-model is the model's shape and the condition keys, NOT a formula engine: no CDN, no
     # workbook fetch. It is here because this page writes the model the calculator prices, and the
     # version it stamps is what routes a resumed project back to this intake.
-    assert html.index("/js/polish-bid-core.js") < html.index("/js/polish-intake.js"), (
-        "`var B = window.TWPolishBid` runs at parse time")
+    assert html.index("/js/bid-model.js") < html.index("/js/polish-intake.js"), (
+        "`var B = window.TWBidModel` runs at parse time")
 
 
 def test_the_step_row_says_where_you_are_and_where_the_beta_goes(html):
@@ -1156,7 +1156,7 @@ def test_there_is_somewhere_for_the_sandbox_notice_to_render(html):
 @needs_node
 def test_a_brand_new_project_is_saved_as_a_model_the_calculator_can_read(ran):
     """The round trip, executed: what this page saved, read back through the real
-    polish-bid-core.js that the calculator prices with.
+    bid-model.js that the calculator prices with.
 
     THE BUG: a version-less blob fell through migrateModel's v2 and v1 branches to `return fresh`,
     so the estimator set prevailing wage and taxable here, clicked Continue, and the calculator

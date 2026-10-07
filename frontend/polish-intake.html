@@ -445,7 +445,7 @@
            because the beta prices from its own area-by-area takeoff on step 2 and a second place to
            type the same number could disagree with it. That risk is now handled, not ignored:
              * Seeding: step 2 turns polish_sf / polish_2_sf into takeoff rows (B.seedTakeoffSf, in
-               js/polish-bid-core.js), only onto an EMPTY takeoff. Typed once.
+               js/bid-model.js), only onto an EMPTY takeoff. Typed once.
              * One source after that: once the takeoff has any SF, js/polish-intake.js locks both
                boxes read-only (paintSfLock) and save() refuses to write polish_sf / polish_2_sf at
                all, so polish_sf stays the takeoff TOTAL that proposal-review and /api/generate read.
@@ -503,11 +503,11 @@
              plus reno, dye, joint_filler and remove_existing_jf (index.js CONDITIONS, scoped by
              work type). After this change the two pages LOOK alike and ASK differently, knowingly.
 
-             DO NOT "FIX" THIS BY ADDING FOUR TOGGLES. js/polish-bid-core.js is what prices a beta
+             DO NOT "FIX" THIS BY ADDING FOUR TOGGLES. js/bid-model.js is what prices a beta
              bid, and markupChain() reads conditions BY KEY -- a key it does not know reads as
              false. So a Dye switch added here would paint, save, read back, and change the price by
              nothing at all, with nothing on screen saying so. Teaching the calculator to price
-             those four is a separate piece of work on polish-bid-core.js, and until it is done the
+             those four is a separate piece of work on bid-model.js, and until it is done the
              honest number of switches on this page is five. The five keys are pinned against that
              module by test_polish_intake_page.py::test_the_keys_are_the_ones_the_pricing_engine_reads.
 
@@ -563,11 +563,13 @@
 <script src="/js/icons.js"></script>
 <script src="/auth.js"></script>
 <script src="/shared.js"></script>
-<!-- polish-bid-core owns the model's shape and the condition keys the pricing chain reads. This
+<!-- bid-model reads its number helpers off window.TWExcelMath as it loads, so that goes first. -->
+<script src="/js/excel-math.js"></script>
+<!-- bid-model owns the model's shape and the condition keys the pricing chain reads. This
      page states the conditions, so it writes through the same module the calculator prices with —
      which is also what stamps the model's version, the flag the Projects page routes on. Loaded
-     before the page script because `var B = window.TWPolishBid` runs at parse time. -->
-<script src="/js/polish-bid-core.js"></script>
+     before the page script because `var B = window.TWBidModel` runs at parse time. -->
+<script src="/js/bid-model.js"></script>
 <!-- The address / business lookup, shared with the live intake (js/index.js). Mounted by
      polish-intake.js as it boots, so it loads first. -->
 <script src="/js/address-lookup.js"></script>

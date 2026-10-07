@@ -6,7 +6,7 @@ WHAT CHANGED, AND WHY EVERY ASSERTION HERE RUNS THE PAGE.
 The workbook is gone from this screen. Will asked for a takeoff whose rows are ASSEMBLIES out of the
 Items & Assemblies library, labor lines an estimator can add, and the markup chain shown as its own
 reviewable block — none of which the Polish worksheet has a cell for. So the page prices itself, and
-the connection to Kyle's file is kept a different way: polish-bid-core.js transcribes his markup
+the connection to Kyle's file is kept a different way: bid-model.js transcribes his markup
 column and tests/test_polish_markup_parity.py fails if the two ever disagree.
 
 That moved what these tests have to protect. The old file asserted engine loading, named
@@ -31,7 +31,7 @@ What can go wrong now is arithmetic and addressing:
 The harness (tests/js/polish-estimate-harness.js) executes the page's ENTIRE IIFE body — nothing is
 lifted out function by function, because a function it forgot to lift would be a function no test
 ever ran — with only `init();` taken off the bottom so boot can be driven. fetch, TW, TWAuth, the
-sandbox module, the DOM and the clock are stubbed. polish-bid-core.js and library-core.js are the
+sandbox module, the DOM and the clock are stubbed. bid-model.js and library-core.js are the
 real modules, so the arithmetic under test is the shipped arithmetic.
 """
 import json
@@ -173,7 +173,7 @@ def test_a_picked_but_unmeasured_row_reads_as_unmeasured_not_as_free(ran):
 
     Both engines already refuse this for their own per-unit figures, in those words:
     library-core.js's `per_unit` is null because 0 "would read as 'free' rather than 'unknown'",
-    and polish-bid-core.js says the same of `per_sf`. The cost box has to agree with them.
+    and bid-model.js says the same of `per_sf`. The cost box has to agree with them.
 
     Mutation: `return { text: moneyAuto(p.total), empty: false }` unconditionally in rowCost()."""
     u = ran["takeoff"]["unmeasured"]
@@ -643,7 +643,7 @@ def test_money_columns_wear_the_dollar_sign(ran):
 # ── E. review: the markup block IS the chain ──────────────────────────────────
 @needs_node
 def test_the_markup_block_is_the_chain_line_for_line(ran):
-    """Every money cell in the review block is compared with polish-bid-core's markupChain() for the
+    """Every money cell in the review block is compared with bid-model's markupChain() for the
     same model — the module that is pinned, formula string by formula string, to the Polish tab of
     Kyle's estimate_sheet_5.7.xlsx by tests/test_polish_markup_parity.py. So the screen is pinned to
     his workbook through that chain rather than by a number typed into this file.
@@ -1254,7 +1254,7 @@ def test_a_bid_made_entirely_of_materials_is_a_finished_bid(ran):
     "(no assembly picked)" printed beside the row's own cost. One button makes material rows the
     ordinary case, so this stops being a corner.
 
-    Mutation: put `!!r.assembly_id` back in either stepStatus or polish-bid-core's blockers, or
+    Mutation: put `!!r.assembly_id` back in either stepStatus or bid-model's blockers, or
     read assembly_name alone in reviewPanel."""
     m = ran["materialOnly"]
     assert m["pip"] == "ok", (
@@ -1458,7 +1458,7 @@ def test_the_priced_cards_follow_the_takeoff_area_live(ran):
     assert a["jf"]["qty"] == "3", (
         "the kit count did not follow the area down to 8,000 sq ft: %r" % a["jf"])
     assert a["jf"]["cost"] == "$1,500" and r["expectedJfCost"] == 1500, (
-        "the joint-filler figure disagrees with polish-bid-core's own jointFillerCost: %r" % a)
+        "the joint-filler figure disagrees with bid-model's own jointFillerCost: %r" % a)
     assert a["jf"]["sub"] == "3 kits", a["jf"]["sub"]
     assert a["jf"]["hint"] == "8,000 sq ft, at one kit per 3,500, rounded up.", a["jf"]["hint"]
     assert a["dye"]["qty"] == "8,000" and a["dye"]["sub"] == "8,000 SF", a["dye"]
@@ -1469,7 +1469,7 @@ def test_switching_dye_on_moves_the_material_total_by_exactly_the_dye(ran):
     """THE GUARANTEE UNDER THE MARKUP, which outlived two card designs and has to outlive this one.
 
     Flipping the switch adds `dyeCost(area)` to the Material total and moves nothing else. The
-    figure is polish-bid-core's, not one typed into this file, so a page that quietly priced the
+    figure is bid-model's, not one typed into this file, so a page that quietly priced the
     dye a second time -- or priced it off a different area than the one the bid divides by -- is
     caught here rather than in a proposal.
 
@@ -1574,7 +1574,7 @@ def test_the_save_writes_the_condition_cells_and_no_others(ran):
     # NOT be written there. hard_bid was an eighth condition and a ninth/tenth key, Epoxy!B5 and
     # Polish!B5 -- removed with the line itself on 2026-09-22. Kyle's own `=IF(B5="yes",...)`
     # reads a cell nobody ever writes the same way it reads "No", so there is nothing to write in
-    # its place; see the note over CONDITION_CELLS in polish-bid-core.js.
+    # its place; see the note over CONDITION_CELLS in bid-model.js.
     #
     # E25/E29/F29 joined on 2026-09-16, when dye, joint filler and remove-existing moved off the
     # intake form onto the Takeoff step. Their cells did not change and neither did their
@@ -2286,7 +2286,7 @@ def test_nothing_on_screen_says_labour_or_crew(ran):
     goes red everywhere at once — which is exactly what happened the first time this rename ran.
 
     SCOPED DELIBERATELY. The word may legitimately appear in code comments quoting the history of
-    this rework (polish-bid-core.js documents the v1 `labour` key and why `crew` was a head count),
+    this rework (bid-model.js documents the v1 `labour` key and why `crew` was a head count),
     so this looks at two things only: every string the page actually RENDERED across all three steps
     plus its boot messages, collected by the harness; and polish-estimate.html with its comments and
     its <style> block stripped. A comment is not user-visible; a rendered string is.
@@ -2315,12 +2315,12 @@ def test_the_page_carries_no_inline_script(html):
 def test_the_page_loads_no_formula_engine_and_the_modules_in_order(html):
     """HyperFormula and the whole workbook load are gone: this page prices itself now.
 
-    The order is load-bearing and it fails silently. polish-estimate.js reads `window.TWPolishBid`,
+    The order is load-bearing and it fails silently. polish-estimate.js reads `window.TWBidModel`,
     `window.TWLib` and `window.TWPolishSandbox` at PARSE time, so any of them loaded after it is
     `undefined`, and the first thing that touches it throws while the page sits on its loading
     message for ever.
 
-    Mutation: move /js/polish-bid-core.js below /js/polish-estimate.js."""
+    Mutation: move /js/bid-model.js below /js/polish-estimate.js."""
     markup = re.sub(r"<!--.*?-->", "", html, flags=re.S)
     assert "hyperformula" not in markup.lower(), "the beta calculator loads a formula engine again"
     assert "xl-core.js" not in markup, "the beta calculator loads the workbook helpers again"
@@ -2329,7 +2329,7 @@ def test_the_page_loads_no_formula_engine_and_the_modules_in_order(html):
     # in the rail. See the house rule at the top of frontend/js/icons.js.
     assert srcs == ["https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0",
                     "/js/icons.js", "/auth.js", "/shared.js", "/js/tab-memo.js",
-                    "/js/library-core.js", "/js/polish-bid-core.js", "/js/polish-sandbox.js",
+                    "/js/library-core.js", "/js/excel-math.js", "/js/bid-model.js", "/js/polish-sandbox.js",
                     "/js/polish-estimate.js"], (
         "the page's script list has changed: %r" % srcs)
 
@@ -2362,7 +2362,7 @@ def test_there_is_a_datalist_for_the_search_box(html):
 
 
 def test_the_page_holds_no_rate_of_its_own(js):
-    """Every percentage belongs to polish-bid-core.js, which is pinned to Kyle's workbook by
+    """Every percentage belongs to bid-model.js, which is pinned to Kyle's workbook by
     tests/test_polish_markup_parity.py. A rate copied into this file is a second opinion waiting to
     drift from the pin, and nothing would fail when it did.
 
@@ -2370,7 +2370,7 @@ def test_the_page_holds_no_rate_of_its_own(js):
     body = "\n".join(l for l in js.splitlines() if not l.strip().startswith("//"))
     for rate in ("0.02", "0.05", "0.12", "0.027", "0.16", "0.09475", "6500", "15000", "22500",
                  "32500", "32.2", "32.20"):
-        assert rate not in body, "%r looks like a rate copied out of polish-bid-core" % rate
+        assert rate not in body, "%r looks like a rate copied out of bid-model" % rate
     assert "B.RATES" in js, "the page does not read the pinned rates at all"
 
 

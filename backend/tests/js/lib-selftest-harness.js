@@ -177,7 +177,7 @@ out.stripTags = {
 
 // ── the real page files: lift every function, compile every one ─────────────
 const FILES = ["js/polish-estimate.js", "js/estimate-review.js", "js/proposal-review.js", "js/library.js",
-  "js/polish-bid-core.js", "js/index.js", "js/portal.js"];
+  "js/bid-model.js", "js/index.js", "js/portal.js"];
 const DECL = /(^|\n)([ \t]*)(?:async[ \t]+)?function[ \t]*\*?[ \t]*([A-Za-z_$][\w$]*)[ \t]*\(/g;
 out.sweep = FILES.map(function (rel) {
   const src = L.read(path.join(FRONTEND, rel));

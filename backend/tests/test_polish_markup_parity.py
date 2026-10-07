@@ -1,6 +1,6 @@
 """The Polish BETA's bid maths, pinned to Kyle's workbook and re-derived in Python.
 
-`frontend/js/polish-bid-core.js` is a transcription of the markup column on the Polish tab of
+`frontend/js/bid-model.js` is a transcription of the markup column on the Polish tab of
 `backend/templates/estimate_sheet_5.7.xlsx`. Nothing on the screen loads that workbook any more,
 so nothing on the screen can notice when the transcription and the file stop agreeing — and every
 way this arithmetic can be wrong produces a number that looks exactly like a bid.
@@ -63,13 +63,13 @@ openpyxl = pytest.importorskip("openpyxl")
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 FRONTEND = ROOT / "frontend"
-CORE = FRONTEND / "js" / "polish-bid-core.js"
+CORE = FRONTEND / "js" / "bid-model.js"
 TEMPLATE = ROOT / "backend" / "templates" / "estimate_sheet_5.7.xlsx"
 HARNESS = pathlib.Path(__file__).resolve().parent / "js" / "polish-bid-harness.js"
 
 needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 
-FIX_BOTH = ("update frontend/js/polish-bid-core.js AND this pin together — the engine no longer "
+FIX_BOTH = ("update frontend/js/bid-model.js AND this pin together — the engine no longer "
             "matches Kyle's workbook, and nothing on the polish screen can tell")
 
 # B75 is the one cell the engine departs from ON PURPOSE, so its drift message has to be different:
@@ -83,7 +83,7 @@ FIX_SHEET_REMODEL = (
 
 
 # ── Layer 1: the formulas this engine was transcribed from ────────────────────
-# Read out of the template. Every one of them is quoted in polish-bid-core.js's header.
+# Read out of the template. Every one of them is quoted in bid-model.js's header.
 PINNED = {
     # labor: guys x days x hourly rate x hours-per-day
     "D37": '=(A37*B37*C37)*IF($E$35="8 hour days",8,10)',
@@ -134,7 +134,7 @@ PINNED = {
     "C82": "=D82/C81",
     # dye (rows 25 AND 26) and joint filler (row 29), added 2026-09-18 -- Hanz: "die and joint
     # filler are supposed to be materials not something that is default". Transcribed into
-    # polish-bid-core.js's dyeCost/jointFillerCost. Row 26 is the SECOND coat, switched by the
+    # bid-model.js's dyeCost/jointFillerCost. Row 26 is the SECOND coat, switched by the
     # same E25; the beta read row 25 alone until 2026-09-30 and charged half the sheet's dye.
     "B25": '=IF(E25="Yes",E18)',
     "C25": 0.14,
@@ -173,7 +173,7 @@ def test_every_formula_the_engine_was_written_from_is_still_there(polish):
 def test_the_totals_label_is_why_the_d64_ranges_collapse(polish):
     """`SUM(D64:D68,...)` in D69 and `SUM(D64:D69,...)` in D70 look like five and six live rows.
     They are not: D65 is EMPTY and D66 holds the TEXT "Totals", both of which Excel's SUM skips.
-    That is the ONLY reason polish-bid-core.js adds D64+D67+D68 there. Put a number in either cell
+    That is the ONLY reason bid-model.js adds D64+D67+D68 there. Put a number in either cell
     and the engine starts under-charging super/PTO and soft costs on every job."""
     assert polish["D65"].value is None, (
         "D65 has gained a value, so SUM(D64:D68) is no longer D64+D67+D68 — %s" % FIX_BOTH)
@@ -327,11 +327,11 @@ def test_the_engine_charges_every_dye_line_on_the_sheet(ran, polish):
     the workbook here -- every row whose quantity is `=IF(E25="Yes",E18)` -- so a third coat added
     to the sheet, or the beta going back to one, fails this rather than quietly pricing half.
 
-    Mutation: set DYE_COATS to 1 in polish-bid-core.js."""
+    Mutation: set DYE_COATS to 1 in bid-model.js."""
     rows = [r for r in range(17, 31) if polish["B%d" % r].value == '=IF(E25="Yes",E18)']
     assert rows == [25, 26], rows
     assert ran["constants"]["dyeCoats"] == len(rows), (
-        "Kyle's sheet has %d dye lines but polish-bid-core.js's DYE_COATS is %r — %s"
+        "Kyle's sheet has %d dye lines but bid-model.js's DYE_COATS is %r — %s"
         % (len(rows), ran["constants"]["dyeCoats"], FIX_BOTH))
 
 
@@ -380,7 +380,7 @@ def test_the_gp_bands_are_the_ones_written_in_b67(ran, polish):
 # Transliterated from the formula strings PINNED above, deliberately not from the JS. Layer 1 ties
 # those strings to Kyle's file; this ties the engine's answers to those strings.
 def _num(raw):
-    """polish-bid-core's num(): tolerant, and 0 rather than None, because this is arithmetic."""
+    """bid-model's num(): tolerant, and 0 rather than None, because this is arithmetic."""
     if raw is None or raw == "" or isinstance(raw, bool):
         return 0.0
     if isinstance(raw, (int, float)):

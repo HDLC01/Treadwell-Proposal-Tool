@@ -1,7 +1,7 @@
 "use strict";
-/* Runs the REAL polish-bid-core.js: Travel follows the library row's favorite + work types. */
+/* Runs the REAL bid-model.js: Travel follows the library row's favorite + work types. */
 const path = require("path");
-const B = require(path.join(path.resolve(process.argv[2]), "js", "polish-bid-core.js"));
+const B = require(path.join(path.resolve(process.argv[2]), "js", "bid-model.js"));
 function ids(rows) { return rows.map(function (r) { return r.id; }); }
 function seed(rows, wt) { return ids(B.seedLibraryLabor(B.freshModel().labor, rows, undefined, wt)); }
 const T = { id: "travel", name: "Travel", rate: 33, unit: "hours", guys_auto: true };

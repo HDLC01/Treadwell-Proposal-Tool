@@ -1462,7 +1462,7 @@ def api_markup_rule_delete(rule_id: str, request: Request) -> Dict[str, Any]:
 # What a NEW Polish estimate opens ANSWERED for the three Yes/No questions the Takeoff step
 # carries — joint filler, remove existing joint filler, dye. See backend/condition_defaults.py for
 # why the key vocabulary is closed, why a row is an OVERRIDE of the literal in
-# frontend/js/polish-bid-core.js rather than a copy of it, and why the workbook CELL each answer
+# frontend/js/bid-model.js rather than a copy of it, and why the workbook CELL each answer
 # writes is not editable.
 #
 # GATED LIKE MARKUP AND VENDORS, NOT LIKE ITEMS. WRITING is admin-only: this decides what every
@@ -3795,7 +3795,7 @@ def api_counties(state: str = "") -> Dict[str, Any]:
     `ks_state_rate` rides along so the pickers can say the fallback rate
     out loud ("no county picked, so this falls back to the Kansas state
     rate of 6.5%") without a third copy of the number. It already lives
-    in reference_tax.KS_STATE_RATE and in polish-bid-core.js RATES.KS_STATE;
+    in reference_tax.KS_STATE_RATE and in bid-model.js RATES.KS_STATE;
     serving it here is what let js/county-picker.js quote it while adding
     no table of its own."""
     return {"counties": reference_tax.list_tax_areas(state),

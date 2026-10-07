@@ -279,7 +279,7 @@
   }
 
   // Excel ROUNDUP: away from zero, guarded to 12 significant figures against float noise.
-  // Matches frontend/js/polish-bid-core.js's roundUp() exactly at digits=0.
+  // Matches frontend/js/bid-model.js's roundUp() exactly at digits=0.
   function excelRoundUp(n, digits) {
     digits = (digits === undefined || digits === null) ? 0 : digits;
     if (typeof digits !== "number" || !isFinite(digits)) {
@@ -336,7 +336,7 @@
         return excelRoundUp(n, digits);
       }
       // BAND(value, ceiling1, rate1, ceiling2, rate2, ..., defaultRate) -- first pair whose ceiling
-      // the value is STRICTLY BELOW wins, matching polish-bid-core.js's GP_BANDS lookup exactly
+      // the value is STRICTLY BELOW wins, matching bid-model.js's GP_BANDS lookup exactly
       // ([[6500,.52],[15000,.45],[22500,.35],[32500,.32],[null,.30]] becomes
       // BAND(sub_total, 6500,.52, 15000,.45, 22500,.35, 32500,.32, .30)).
       case "BAND": {
@@ -354,7 +354,7 @@
         }
         return def;
       }
-      // MARKUP(rate) -- the GP divide-up-then-subtract shape (D67 in polish-bid-core.js):
+      // MARKUP(rate) -- the GP divide-up-then-subtract shape (D67 in bid-model.js):
       // ROUNDUP(base/(1-rate),0) - ROUNDUP(base,0). `base` must be supplied in the context (the
       // running sum of every chain line above this one -- markup.py's own docstring calls this
       // "the running sum ABOVE it").
