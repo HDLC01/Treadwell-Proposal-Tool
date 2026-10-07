@@ -1,12 +1,12 @@
 "use strict";
-/* The on/off slider's arithmetic, out of the REAL frontend/js/polish-bid-core.js. One line of JSON.
+/* The on/off slider's arithmetic, out of the REAL frontend/js/bid-model.js. One line of JSON.
  *
  * A row switched off (`enabled: false`) must add $0 BEFORE the chain rounds (D31 and D45 are
  * ROUNDUPs of the raw sums), must drop out of Travel's man-days, must not block Review, and a
  * library default saved OFF must seed the bid's row switched off. Every claim is proved by
  * comparing against the bid of a model that never had the row at all. */
 const path = require("path");
-const B = require(path.join(path.resolve(process.argv[2]), "js", "polish-bid-core.js"));
+const B = require(path.join(path.resolve(process.argv[2]), "js", "bid-model.js"));
 
 const crew = [
   { id: "polishing", label: "Polishing", guys: 3, days: 5, rate: 33.1 },

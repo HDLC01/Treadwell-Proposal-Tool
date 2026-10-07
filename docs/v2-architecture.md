@@ -5,12 +5,13 @@ other, the rules every change follows, and a table of every place the same fact 
 today, with what happens to each copy.
 
 **What exists today, and what does not.** The tests and the golden files described in section 6
-exist now. The modules in section 3 other than the current `polish-bid-core.js`, `library-core.js`
-and `markup-core.js` do not exist yet: they are the design the phases build toward. Phase 4 added
-`patchModel`, `buildSavePatch` and `MODEL_KEYS` to the current `polish-bid-core.js` (see 7.10 and the
-model-safety paragraph of section 6). Line numbers in this document are on `origin/staging` at commit
-`3f94ed2` (2026-10-07), except where a paragraph says they are on the Phase 4 change. They will
-drift; the file and the name are what to search for.
+exist now. The modules in section 3 other than `bid-model.js`, `library-core.js` and `markup-core.js`
+do not exist yet: they are the design the phases build toward. `bid-model.js` is the old
+`polish-bid-core.js` under its new name (Phase 5, no logic change; see "Module names" below). Phase 4
+added `patchModel`, `buildSavePatch` and `MODEL_KEYS` to it (see 7.10 and the model-safety paragraph of
+section 6). Line numbers in this document are on `origin/staging` at commit `3f94ed2` (2026-10-07),
+except where a paragraph says they are on the Phase 4 change. They will drift; the file and the name
+are what to search for.
 
 **Names.** The tool people called the Polish beta is now **Estimating Tool v2**, and its database
 page, which was the Polish Estimate Database, is now **v2 Estimates** (Phase 1b, 2026-10-07). Only
@@ -23,6 +24,17 @@ summary, the `beta` tab key, and the "(beta test)" ending on the name of a test 
 names, because saved projects, permissions and bookmarks are keyed on them. Comments and tests
 written before the rename still say "Polish beta" and mean this tool. `backend/tests/test_v2_names.py`
 holds the new names in place and fails if an old one comes back in anything a person can read.
+
+**Module names (Phase 5, 2026-10-07).** The model module `js/polish-bid-core.js` is now
+`js/bid-model.js`, and its browser global `TWPolishBid` is now `TWBidModel`. Every exported name is the
+same, so a page changes its script tag and its one `window.TWBidModel` line and nothing else. No file
+is left under the old name and nothing answers to the old global: a page that still asked for either
+would fail at once, where an alias would let it read a stale copy. Saved projects, routes and
+permissions are untouched, because none of them is keyed on the module's name (`polish_estimate`,
+`polish_beta`, the page file names and `/api/polish/verbal-intake` all keep theirs).
+`backend/tests/test_bid_model_rename.py` fails if the old file, the old global or either old name
+comes back anywhere under `frontend/` or `backend/`. This document is outside that scan on purpose: it
+is where the old names are allowed to appear, as history.
 
 ## 1. Why this exists
 
@@ -53,7 +65,7 @@ Each layer may use the layers above it in this table and nothing below it. A lea
 | leaf | `js/excel-math.js` | `num`, `roundUp`, `ceiling`, `copyInto`, `isBlank`, money and percent text. The one bid-side ROUNDUP. | nothing |
 | leaf (data) | `js/work-types.js` | The one vocabulary: job types (polish, epoxy, combo, gyp) and tabs (polish, epoxy, gyp, seal, leveling; seal and leveling are option-only). For each: label, which tabs a job type prices (combo is Epoxy plus Polish), workbook tab ids, role, quantity fields and snapshot keys, proposal template keys, whether it is ready. Also the one job-conditions table. | nothing |
 | leaf (data) | `js/bid-profiles.js` | One profile per sheet tab as plain data: rates and GP ladders as formula strings, cell maps, labor built-ins. A profile can extend another (Seal is Polish plus a few changes). The one home of the global defaults: labor rate, lodging, per diem, fees, sales tax. | nothing |
-| model | `js/bid-model.js` (today: `js/polish-bid-core.js`, renamed in Phase 5 with no logic change) | The saved estimate: fresh, migrate, seed a new bid, labor, travel, distance, conditions per section; building the save patch; composing the price snapshot the proposal reads. | excel-math, work-types, bid-profiles |
+| model | `js/bid-model.js` (Phase 5 renamed it from `js/polish-bid-core.js`, with no logic change) | The saved estimate: fresh, migrate, seed a new bid, labor, travel, distance, conditions per section; building the save patch; composing the price snapshot the proposal reads. | excel-math, work-types, bid-profiles |
 | engine | `js/bid-engine.js` | `priceChain(profile, input, rates)`: the markup chain for any profile. Turns the filed Markups rules into numbers. Adds the tabs of a combo job after each tab has had its own gross profit. | excel-math, bid-profiles, markup-core |
 | render | `js/intake-scope.js` | Draws and shows the quantity fields of the intake from `work-types.js`. Extracted from `js/index.js`; the live intake then calls it. | work-types |
 
@@ -206,7 +218,7 @@ not something that has been done. The summary first, then the evidence for each 
 | 7.8 | Job type to tab | 4 places | Each job type lists its tabs in `js/work-types.js` | 7 |
 | 7.9 | The v2 intake's county picker | 1 copy, about 295 lines | Mount `js/county-picker.js` and delete the copy | 9 |
 | 7.10 | The estimate page's two save blobs | 1 composition (was 2) | Done: one `buildSavePatch` used by both, and the intake's merge is one `patchModel` | 4 (done) |
-| 7.11 | "Is this draft a v2 estimate" | 2 places, in two languages | Held equal by one test over one table. The JavaScript one moves into `js/bid-model.js` with the model | 2 (added), 5 |
+| 7.11 | "Is this draft a v2 estimate" | 2 places, in two languages | Held equal by one test over one table. The JavaScript one stays in `js/shared.js` (Phase 5 left it there, see 7.11) | 2 (added) |
 
 ### 7.1 The work-type list, in JavaScript
 
@@ -249,8 +261,8 @@ of both `TEMPLATE_PICKER` tables and the info-sheet keys against it. A list that
 |---|---|
 | `js/index.js:146-202` | `CONDITIONS` on the live intake: key, label, scope, default, the cells it writes, the on and off words, `needs`. Nine rows. Taxable writes four cells (Epoxy, Leveling and two Gyp tabs) |
 | `js/polish-intake.js:66-82` | `CONDITIONS` on the v2 intake: four rows (prevailing wage, taxable, remodel tax, bond), keys only |
-| `js/polish-bid-core.js:1502-1529` | `CONDITION_CELLS`: seven rows with the cells they write. Taxable writes only `Epoxy!B6` |
-| `js/polish-bid-core.js:1805-1807` | The conditions of a fresh model, eight keys including `bond` |
+| `js/bid-model.js:1502-1529` | `CONDITION_CELLS`: seven rows with the cells they write. Taxable writes only `Epoxy!B6` |
+| `js/bid-model.js:1805-1807` | The conditions of a fresh model, eight keys including `bond` |
 | `js/polish-estimate.js:897-957` | `CONDITION_CARDS`: the Takeoff step's three cards (dye, joint filler, remove existing) |
 | `js/library.js:2640-2657` | The Defaults tab's condition list, and `backend/condition_defaults.py:61` (`KEYS`) |
 | `js/estimate-review.js:4032-4077` | `JOB_FLAG_ADDR`, `JOB_FLAG_LITERAL_LAYOUTS`, `JOB_FLAG_LAYOUTS`, `JOB_FLAG_TEMPLATE`: where the tax answers sit on each sheet layout |
@@ -270,12 +282,12 @@ by the test that already re-reads it (`test_taxable_flag_reaches_every_sheet.py`
 
 | Copy | What it holds |
 |---|---|
-| `js/polish-bid-core.js:159-190` | `RATES` (shipping 2%, escalation 5%, burden 12%, super and PTO 2.7%, soft costs 16%, sales tax 9.475%, bond 0, the Kansas remodel floor 6.5%) and `GP_BANDS` |
+| `js/bid-model.js:159-190` | `RATES` (shipping 2%, escalation 5%, burden 12%, super and PTO 2.7%, soft costs 16%, sales tax 9.475%, bond 0, the Kansas remodel floor 6.5%) and `GP_BANDS` |
 | `js/markup.js:215-253` | `GP_5_BANDS` and `BUILTIN`: the same for Polish, plus Seal, Epoxy (3% and 13%), Leveling, Gyp (4.1% and an expression), and the Global lines (labor rate 33, lodging 70, per diem 45) |
 | `backend/pricing.py:272-292` | `_gp_pct` (the same ladder) and the defaults of `compute_full_bid` (33, 12%, 70, 45, 3%, 13%, 9.475%, a 10% remodel) |
 | `backend/markup.py:20-24` | The same rates, written in the docstring as an audit of the workbook |
 
-**Problem.** `markup.js` says its numbers are transcribed from `polish-bid-core.js` and from
+**Problem.** `markup.js` says its numbers are transcribed from `bid-model.js` and from
 `markup.py`'s audit of the workbook, "and from nowhere else". A test (`test_markup_page.py` with
 `markup-rate-harness.js`) keeps the pair equal, which is a pinned pair and not one value. `pricing.py`
 only serves `/api/price` (`backend/main.py:3725`), which nothing in the frontend calls, and the
@@ -288,7 +300,7 @@ program plan records it as wrong on whipped-resin cove and on quartz and flake p
 
 | Copy | What it is |
 |---|---|
-| `js/polish-bid-core.js:114` | `roundUp`: away from zero, snapped to twelve significant figures first |
+| `js/bid-model.js:114` | `roundUp`: away from zero, snapped to twelve significant figures first |
 | `js/markup-core.js:283` | `excelRoundUp(n, digits)`: the same, with a digits argument. Not exported |
 | `backend/pricing.py:78` | `_roundup`: the same in Python (`"%.12g"`) |
 | `js/xl-excel-rounding.js:64-90` | The workbook engine's ROUNDUP and CEILING (a HyperFormula plugin). A different job: it makes the sheet engine agree with Excel |
@@ -359,9 +371,9 @@ Line numbers in this subsection are on the Phase 4 change.
 
 | Copy | What it writes |
 |---|---|
-| `js/polish-bid-core.js:2162` (`buildSavePatch`) | The one composition: `polish_estimate` (the model, every key it holds, with `totals` stamped from the bid), `cell_values` (the conditions merged over the draft's own, plus the library's figures for dye and joint filler), `polish_sf` (the priced area, else the measured floor), `polish_2_sf`, `computed_bid` |
+| `js/bid-model.js:2162` (`buildSavePatch`) | The one composition: `polish_estimate` (the model, every key it holds, with `totals` stamped from the bid), `cell_values` (the conditions merged over the draft's own, plus the library's figures for dye and joint filler), `polish_sf` (the priced area, else the measured floor), `polish_2_sf`, `computed_bid` |
 | `js/polish-estimate.js:447` (`saveSoon`, the 600 ms autosave) and `:459` (the `pagehide` flush) | One call each: `B.buildSavePatch(M, draft, { bid: bid(), library: conditionLibrary() })`, laid over the draft |
-| `js/polish-bid-core.js:2114` (`patchModel`) and `js/polish-intake.js:716` (its one call) | The intake's merge: its `conditions` and `conditions_shown` laid over the saved model, every other key left as saved |
+| `js/bid-model.js:2114` (`patchModel`) and `js/polish-intake.js:716` (its one call) | The intake's merge: its `conditions` and `conditions_shown` laid over the saved model, every other key left as saved |
 
 **Problem, as it was.** The autosave and the `pagehide` flush composed the blob by hand in two
 places, and the two had drifted. A tab closed inside the debounce window did not refresh the
@@ -392,8 +404,11 @@ it (section 6), and `test_v2_model_safety.py` holds the laws.
 Two languages, so two copies, and that is the point of the table: a rule that differs by a spelling
 sends a project to the wrong screen "but only sometimes". `test_v2_routing_guard.py` runs both on one
 table of cases (`tests/_v2_cases.py`, which `test_beta_intake_routing.py` also uses), so a spelling that
-one reads as v2 and the other does not fails there. **Planned (Phase 5):** the JavaScript copy moves into
-`js/bid-model.js` with the rest of the model. The two guards stand at the destinations, the spreadsheet step
+one reads as v2 and the other does not fails there. **Not moved in Phase 5, on purpose:** the JavaScript copy
+stays in `js/shared.js`. Its callers are `shared.js` itself (`v2PricingView`) and the two routing guards
+on the spreadsheet step and the live intake, and neither of those pages loads `js/bid-model.js`. Moving it
+would make them load the whole model for one comparison, and `shared.js` loads before every module, so it
+cannot depend on one. It moves when the model is split or the guards read a small leaf. The two guards stand at the destinations, the spreadsheet step
 and the live intake, and not at each link into them; `test_v2_routing_guard.py` scans the frontend for
 links and fails on one it has not been told about.
 

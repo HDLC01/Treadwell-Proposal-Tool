@@ -1,6 +1,6 @@
 """The Polish bid chain, recorded before the v2 program rewrites what stands behind it.
 
-backend/tests/fixtures/polish_chain_golden.json holds what js/polish-bid-core.js (TWPolishBid)
+backend/tests/fixtures/polish_chain_golden.json holds what js/bid-model.js (TWBidModel)
 answers for 2,228 deliberately awkward inputs: markupChain over every GP edge and all 256 settings
 of the eight job conditions, every shape the remodel rate arrives in and a sweep of dirty values;
 the number helpers; labor, travel and takeoff; the conditions and what they write into Kyle's
@@ -33,7 +33,7 @@ from _node import require_node
 
 GOLDEN = FIXTURES / "polish_chain_golden.json"
 GENERATOR = "gen-chain-golden.js"
-MODULE = "js/polish-bid-core.js"
+MODULE = "js/bid-model.js"
 
 
 @pytest.fixture(scope="module")

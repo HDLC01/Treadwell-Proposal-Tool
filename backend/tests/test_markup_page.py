@@ -1726,7 +1726,7 @@ def test_the_page_only_claims_a_filed_rate_prices_nothing_while_that_is_true():
     else:
         assert note, (
             "nothing consumes these rules -- markup-core.js is loaded by markup.html alone and "
-            "polish-bid-core.js still owns its own RATES -- so an admin can edit a rate, watch it "
+            "bid-model.js still owns its own RATES -- so an admin can edit a rate, watch it "
             "save, and move no price at all. The page has to say so.")
 
 

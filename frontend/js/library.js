@@ -2546,7 +2546,7 @@
   /** The answers an admin has already set for the Takeoff conditions, as this page last read them.
 
    *  ONLY THE OVERRIDES, never the whole answer. What a new estimate opens answering for joint
-   *  filler, remove-existing and dye lives in freshModel() in polish-bid-core.js; a row in here
+   *  filler, remove-existing and dye lives in freshModel() in bid-model.js; a row in here
    *  says somebody changed one of those three on this tab. takeoffConditionDefaults() merges the
    *  two through the estimate's OWN seedConditionDefaults, so this page cannot arrive at a
    *  different answer from the bid it is describing.
@@ -2577,7 +2577,7 @@
    *
    *  THE CELL IS NO LONGER PRINTED. Polish!E29 is a fact about the workbook Kyle maintains and it
    *  was never editable here; the tag saying so was the one thing on these rows no material row
-   *  carries. The answer still reaches the same cell through CONDITION_CELLS in polish-bid-core.js.
+   *  carries. The answer still reaches the same cell through CONDITION_CELLS in bid-model.js.
    *
    *  THE RATE LIVES ON THE ITEMS TAB, 2026-09-30. $500 a kit is Kyle's C29 and $0.14 a square
    *  foot is his C25, and both are reserved library_items rows (`joint-filler-kit`, `dye` -- see
@@ -2591,7 +2591,7 @@
    *  it through the ESTIMATE'S OWN seedConditionDefaults rather than a merge written again here.
    *  Two merges is two chances for this page to describe a bid it does not agree with -- and the
    *  page claiming joint filler ships off while every new bid opens with it on is worse than no
-   *  page at all. `B.seedConditionDefaults` is guarded because window.TWPolishBid is a script tag
+   *  page at all. `B.seedConditionDefaults` is guarded because window.TWBidModel is a script tag
    *  that can fail to load, and a Defaults tab that throws would take Items and Assemblies with it.
    *
    *  THIS LIST IS THE VOCABULARY, and backend/condition_defaults.KEYS is the same three.
@@ -2600,7 +2600,7 @@
    *  reserved row each key IS, and RESERVED_ITEM_CONDITION maps it back; the harness pins the two
    *  directions together. */
   function takeoffConditionDefaults() {
-    var B = window.TWPolishBid;
+    var B = window.TWBidModel;
     if (!B || !B.freshModel) return [];
     var shipped = (B.freshModel() || {}).conditions || {};
     var c = B.seedConditionDefaults ? B.seedConditionDefaults(shipped, COND_DEFAULTS) : shipped;
@@ -2628,7 +2628,7 @@
     var kitUnit = (itemOf("joint-filler-kit") || {}).unit || "kit";
     var named = function (id, label) { return (itemOf(id) || {}).name || label; };
     // ON THE DEFAULTS TAB unless an admin took it off (`listed: false`). The same reading as
-    // seedConditionsShown in polish-bid-core.js, which is what a new estimate snapshots.
+    // seedConditionsShown in bid-model.js, which is what a new estimate snapshots.
     var listedOf = function (key) {
       for (var i = 0; i < COND_DEFAULTS.length; i++) {
         var r = COND_DEFAULTS[i];
@@ -2858,7 +2858,7 @@
    *  words, not a switch that would 403 on press (the rule the labor Remove already follows). With
    *  no shared module there is no slider, rather than a hand-typed second copy of it. */
   function defaultSlider(kind, id, name, on, canEdit) {
-    var B = window.TWPolishBid;
+    var B = window.TWBidModel;
     if (!canEdit) return '<span class="wtall">' + (on ? "On" : "Off") + "</span>";
     if (!B || !B.sliderHtml) return "";
     return B.sliderHtml(on, 'data-def-on="' + esc(kind) + '" data-def-on-id="' + esc(id) + '"',
@@ -3199,7 +3199,7 @@
           return mrow;
         }).concat(takeoffConditionDefaults().filter(function (c) {
           // ON THE POLISH TAB ONLY. All three write Polish-sheet cells (CONDITION_CELLS in
-          // polish-bid-core.js) and nothing on the other four work types reads them; a combo job
+          // bid-model.js) and nothing on the other four work types reads them; a combo job
           // reads the Polish list. And only while LISTED -- see conditionDefaultRow.
           return DEFAULT_WT === "polish" && c.listed;
         }).map(function (c) {
@@ -3358,7 +3358,7 @@
    *  OPTIMISTIC, WITH THE ROW PUT BACK ON A FAILURE, like both writes above it: a rate that looks
    *  reset and returns on the next reload is worse than one that refuses out loud. */
   async function resetTravelDefault() {
-    var B = window.TWPolishBid;
+    var B = window.TWBidModel;
     var shipped = B && B.travelSeed ? B.travelSeed() : null;
     if (!shipped) return;
     var at = -1;
@@ -3417,7 +3417,7 @@
    *      own row can edit; a renamed Travel with the shipped rate still has a way back. */
   function laborRowActions(travel) {
     if (!ADMIN) return "";
-    var B = window.TWPolishBid;
+    var B = window.TWBidModel;
     var shipped = B && B.travelSeed ? B.travelSeed() : null;
     if (!shipped || !travel) return "";
     // EDIT GOES TO THE ROW, on the Labor tab -- the same rule defaultRowActions already follows
@@ -3465,7 +3465,7 @@
   function renderDefaultLabor() {
     var body = $("default-labor-body");
     if (!body) return;
-    var B = window.TWPolishBid;
+    var B = window.TWBidModel;
     var shipped = B && B.travelSeed ? B.travelSeed() : null;
     // The stored override, or null on a database where this table does not exist yet -- in which
     // case travelSeed(null) hands back the shipped row and the line renders exactly as it did
@@ -3602,7 +3602,7 @@
       Promise.all([loadTravelRules(), loadCalcRows()]).then(renderLabCalc);
       return;
     }
-    var B = window.TWPolishBid;
+    var B = window.TWBidModel;
     var ro = $("labcalc-ro");
     if (ro) ro.hidden = !!ADMIN;
     // Travel Labor is the Labor tab's Travel row; its rate and unit come from there.
@@ -3730,7 +3730,7 @@
   /** The lines the calculator configures: the built-in crew rows, then the favorited custom ones
    *  that bill by the day. Travel is its own section above. */
   function calcLines() {
-    var out = (window.TWPolishBid.LABOR_CALC_BUILTINS || []).map(function (l) {
+    var out = (window.TWBidModel.LABOR_CALC_BUILTINS || []).map(function (l) {
       return { id: l.id, name: l.name };
     });
     LABOR.forEach(function (r) {
@@ -3740,7 +3740,7 @@
   }
 
   function calcCompanyRate() {
-    var B = window.TWPolishBid;
+    var B = window.TWBidModel;
     return B.laborRateOrShipped(B.laborRateFromRules(
       Object.keys(TRAVEL_RULES).map(function (k) { return TRAVEL_RULES[k]; })));
   }
@@ -3831,7 +3831,7 @@
   function renderTryIt() {
     var out = $("labcalc-tryout");
     if (!out) return;
-    var B = window.TWPolishBid;
+    var B = window.TWBidModel;
     var sf = Number(String(CALC_TRY_SF).replace(/[$,\s]/g, "")) || 0;
     var co = calcCompanyRate();
     var rows = "", total = 0, n = 0;

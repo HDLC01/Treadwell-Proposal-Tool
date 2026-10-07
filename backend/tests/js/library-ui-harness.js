@@ -252,7 +252,7 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
     return { status: r.status, ok: r.status < 400, json: async function () { return body; } };
   }
   // The Takeoff conditions' STORED answers, handed in the same way. Only the overrides live
-  // here: what a new estimate ships answering comes from the REAL polish-bid-core below, so a
+  // here: what a new estimate ships answering comes from the REAL bid-model below, so a
   // fixture cannot make this page agree with itself about an answer the bid does not hold.
   // Reassigned by setConditionDefault, so tests read it back through condDefaultsNow().
   var COND_DEFAULTS = state.COND_DEFAULTS || [];
@@ -3743,7 +3743,7 @@ out.serverOwnedItemFields = build().api.SERVER_OWNED_ITEM_FIELDS;
   const { api, dom: d } = build({
     // THE REAL MODULE, required rather than faked: the whole claim is that this list reads the
     // answers a new estimate opens with, so a made-up freshModel would prove the opposite.
-    window: { TWPolishBid: require(path.join(ROOT, "js", "polish-bid-core.js")) },
+    window: { TWBidModel: require(path.join(ROOT, "js", "bid-model.js")) },
     ITEMS: [{ id: "i1", name: "Densifier", unit: "Pail", unit_cost: 100, favorite: true },
             { id: "i2", name: "Not a default", unit: "Gal", unit_cost: 50, favorite: false }],
     ASMS: [{ id: "a1", name: "Polish 800", unit: "SF", favorite: true,
@@ -3838,7 +3838,7 @@ out.serverOwnedItemFields = build().api.SERVER_OWNED_ITEM_FIELDS;
     // "$X per <unit>", as every material row above says it. These figures are the REAL
     // RATES.JOINT_FILLER_KIT_COST and RATES.DYE_PER_SF, reached through the real module (this
     // fixture has no reserved rows, so the fallback is what prices) -- the page reads them rather
-    // than restating them, so a rate that moved in polish-bid-core has to move here too.
+    // than restating them, so a rate that moved in bid-model has to move here too.
     jointFillerShowsItsKitPrice: /\$500\.00 per kit · 1 per 3,500 SF/.test(h),
     jointFillerSaysWhatTheKitCovers: /1 per 3,500 SF/.test(h),
     dyeShowsItsRate: /\$0\.14 per SF a coat · 2 coats</.test(h),
@@ -3918,10 +3918,10 @@ out.serverOwnedItemFields = build().api.SERVER_OWNED_ITEM_FIELDS;
   // shipping it on added $2,500 to a 17,500 SF bid nobody had asked for.
   //
   // READ THROUGH THE REAL freshModel, not typed here, so a literal that moved back in
-  // polish-bid-core reds this rather than passing against a restated copy.
+  // bid-model reds this rather than passing against a restated copy.
   {
     const bare = build({
-      window: { TWPolishBid: require(path.join(ROOT, "js", "polish-bid-core.js")) },
+      window: { TWBidModel: require(path.join(ROOT, "js", "bid-model.js")) },
       ITEMS: [], ASMS: [], ADMIN: true,
     });
     bare.api.renderDefaultTakeoff();
@@ -3990,7 +3990,7 @@ async function laborChecks() {
   const seed = (extra) => Object.assign({
     // THE REAL MODULE, for the reason the Takeoff scenario gives: Travel has to come out of
     // travelSeed or this proves nothing about what a new estimate opens holding.
-    window: { TWPolishBid: require(path.join(ROOT, "js", "polish-bid-core.js")) },
+    window: { TWBidModel: require(path.join(ROOT, "js", "bid-model.js")) },
     // One default and one not, because the Takeoff arm of the router opens a BROWSE list of
     // what is not already a default -- a library where everything is one offers nothing, and
     // an empty box would read as the button being dead, which is the bug under test.
@@ -4595,7 +4595,7 @@ async function laborTabChecks() {
       notes: null, owner_email: "kyle@wetreadwell.com", favorite: false },
   ]));
   const seed = (extra) => Object.assign({
-    window: { TWPolishBid: require(path.join(ROOT, "js", "polish-bid-core.js")) },
+    window: { TWBidModel: require(path.join(ROOT, "js", "bid-model.js")) },
     ITEMS: [{ id: "i1", name: "Densifier", unit: "Pail", unit_cost: 100, favorite: true }],
     ASMS: [{ id: "a1", name: "Polish 800", unit: "SF", favorite: true, lines: [{ item_id: "i1" }] }],
     LABOR: lines(),
@@ -4951,7 +4951,7 @@ async function conditionChecks() {
   const seed = (extra) => Object.assign({
     // THE REAL MODULE. The whole claim is that this list shows what a new estimate opens
     // ANSWERING, so a made-up freshModel would prove the opposite of what it looks like it proves.
-    window: { TWPolishBid: require(path.join(ROOT, "js", "polish-bid-core.js")) },
+    window: { TWBidModel: require(path.join(ROOT, "js", "bid-model.js")) },
     // ONE NON-FAVOURITE LIBRARY ROW, so the browse list has something in it that is NOT a
     // condition -- a browse offering only the three would pass "offers the conditions" against a
     // list that had stopped offering the library.
@@ -5140,7 +5140,7 @@ async function conditionChecks() {
   // still filters takeoffDefaultGroups correctly when default_work_types is set the way the API
   // sets it, with nothing in this table able to press a chip any more.
   const stripSeed = {
-    window: { TWPolishBid: require(path.join(ROOT, "js", "polish-bid-core.js")) },
+    window: { TWBidModel: require(path.join(ROOT, "js", "bid-model.js")) },
     ITEMS: [
       { id: "i1", name: "Densifier", unit: "Pail", unit_cost: 100, favorite: true,
         default_work_types: [] },
@@ -5185,7 +5185,7 @@ async function conditionChecks() {
       unit_cost: null, coverage: null, waste_pct: 0, roundup: false, favorite: false },
   ];
   const withReserved = () => JSON.parse(JSON.stringify(ITEMS.concat(RESERVED)));
-  const bid = { TWPolishBid: require(path.join(ROOT, "js", "polish-bid-core.js")) };
+  const bid = { TWBidModel: require(path.join(ROOT, "js", "bid-model.js")) };
   const rowOf = (html, id) => (html.split("</tr>").filter((r) =>
     r.indexOf('data-item="' + id + '"') !== -1)[0] || "");
   const condPriced = (api, key) => (api.takeoffConditionDefaults()
@@ -5525,9 +5525,9 @@ function itemRowDoc(rowHtml, id) {
 // A slider that is only markup is the dead-control failure this page has shipped before: so each
 // press below goes through the page's own setDefaultOn, and what it wrote is read back.
 async function sliderChecks() {
-  const B = require(path.join(ROOT, "js", "polish-bid-core.js"));
+  const B = require(path.join(ROOT, "js", "bid-model.js"));
   const seed = (extra) => Object.assign({
-    window: { TWPolishBid: B },
+    window: { TWBidModel: B },
     ITEMS: [{ id: "i1", name: "Densifier", unit: "Pail", unit_cost: 100, favorite: true }],
     ASMS: [{ id: "a1", name: "Polish 800", unit: "SF", favorite: true, lines: [] },
            { id: "a2", name: "Cove", unit: "LF", favorite: true, default_on: false, lines: [] }],
@@ -5602,8 +5602,8 @@ async function sliderChecks() {
 
 // ── the Fees + Textura default row on the Defaults tab (Hanz, 2026-10-06), EXECUTED ──────────────
 async function feesChecks() {
-  const B = require(path.join(ROOT, "js", "polish-bid-core.js"));
-  const mk = (state) => build(Object.assign({ window: { TWPolishBid: B }, ADMIN: true }, state));
+  const B = require(path.join(ROOT, "js", "bid-model.js"));
+  const mk = (state) => build(Object.assign({ window: { TWBidModel: B }, ADMIN: true }, state));
   // 1. Always listed in the Markup group, empty box when nothing is filed (= $0).
   const none = mk({});
   const row0 = none.api.feesDefaultRow();

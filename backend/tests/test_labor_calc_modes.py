@@ -129,7 +129,7 @@ def test_the_put_route_saves_and_refuses_with_a_400_in_words(store, as_admin):
 # ── the one arithmetic both screens use ──────────────────────────────────────────────────────────
 def _core(expr):
     script = ("const B=require(%s);console.log(JSON.stringify(%s))"
-              % (json.dumps(str(REPO / "frontend" / "js" / "polish-bid-core.js")), expr))
+              % (json.dumps(str(REPO / "frontend" / "js" / "bid-model.js")), expr))
     out = subprocess.run(["node", "-e", script], capture_output=True, text=True, encoding="utf-8",
                          timeout=60)
     assert out.returncode == 0, out.stderr

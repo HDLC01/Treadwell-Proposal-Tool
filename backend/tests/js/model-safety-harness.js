@@ -13,7 +13,7 @@
  *
  * WHAT THIS EXECUTES, and why nothing here is a source assertion:
  *
- *   * the REAL polish-bid-core.js, over EVERY saved-bid fixture saved-bid-scenarios.js holds (lifted
+ *   * the REAL bid-model.js, over EVERY saved-bid fixture saved-bid-scenarios.js holds (lifted
  *     from that file by name, not copied: a fixture added there is covered here) plus synthetic
  *     models carrying `work_type`, `tabs`, a rates snapshot and a profile stamp;
  *   * the REAL estimate page (polish-estimate.js, whole), saved twice from identical drafts, once by
@@ -35,7 +35,7 @@ const L = require("./_lib.js");
 const G = require("./_golden.js");
 
 const ROOT = path.resolve(process.argv[2]);
-const B = require(path.join(ROOT, "js", "polish-bid-core.js"));
+const B = require(path.join(ROOT, "js", "bid-model.js"));
 
 const clone = (v) => JSON.parse(JSON.stringify(v));
 const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);

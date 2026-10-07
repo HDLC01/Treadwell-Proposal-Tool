@@ -62,13 +62,13 @@ const G = require("./_golden");
 
 const RECIPE_VERSION = 1;
 
-/** The module that holds the Polish bid maths. Phase 5 renames it; both names are tried. */
+/** The module that holds the Polish bid maths: the model, with the markup chain still inside it until
+ *  Phase 8. Phase 5 gave it this name. A tree from before that has it under its old name, so a recipe
+ *  run against such a tree needs the generator that tree carries, not this one. */
 function loadEngine(frontend) {
-  for (const rel of ["js/bid-model.js", "js/polish-bid-core.js"]) {
-    const p = path.resolve(frontend, rel);
-    if (fs.existsSync(p)) return require(p);
-  }
-  throw new Error("neither js/bid-model.js nor js/polish-bid-core.js exists under " + frontend);
+  const p = path.resolve(frontend, "js/bid-model.js");
+  if (fs.existsSync(p)) return require(p);
+  throw new Error("js/bid-model.js does not exist under " + frontend);
 }
 
 /** A value as a short, unambiguous id fragment. */

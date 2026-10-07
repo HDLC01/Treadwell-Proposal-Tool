@@ -337,26 +337,26 @@ def test_where_the_remodel_rate_comes_from_is_pinned_at_the_page(ran):
 
 
 # ── red without the code: break a COPY of the page or the model and watch the ratchet notice ───────
-HARNESS_FILES = ["polish-estimate.html", "js/polish-estimate.js", "js/polish-bid-core.js", "js/library-core.js"]
+HARNESS_FILES = ["polish-estimate.html", "js/polish-estimate.js", "js/bid-model.js", "js/library-core.js"]
 
 NEWEST_MUTATIONS = {
     "migrate drops the bid's own coverage": (
-        "js/polish-bid-core.js", "if (Object.keys(cc).length) out.cond_cov = cc;", "void cc;",
+        "js/bid-model.js", "if (Object.keys(cc).length) out.cond_cov = cc;", "void cc;",
         "v2_coverage_overrides", lambda got: got["condCov"] is None and got["total"] != NEWEST_TOTALS["v2_coverage_overrides"]),
     "migrate drops the saved distance": (
-        "js/polish-bid-core.js", "if (dist) out.distance = dist;", "void dist;",
+        "js/bid-model.js", "if (dist) out.distance = dist;", "void dist;",
         "v2_travel_block_far_job", lambda got: got["distance"] is None),
     "migrate drops which cards a bid shows": (
-        "js/polish-bid-core.js", "out.conditions_shown = shown;", "void shown;",
+        "js/bid-model.js", "out.conditions_shown = shown;", "void shown;",
         "v2_default_rows_saved", lambda got: got["conditionsShown"] is None),
     "migrate forgets the library said no Travel Labor": (
-        "js/polish-bid-core.js", "out.no_travel_labor = true;", "void 0;",
+        "js/bid-model.js", "out.no_travel_labor = true;", "void 0;",
         "v2_fees_contingency_no_travel_labor", lambda got: got["noTravelLabor"] is False),
     "a hand flip on a travel line is forgotten": (
-        "js/polish-bid-core.js", "if (l.hand === true) out[k].hand = true;", "void l;",
+        "js/bid-model.js", "if (l.hand === true) out[k].hand = true;", "void l;",
         "v2_travel_typed_and_hand_flipped", lambda got: '"hand"' not in got["travelDetail"]),
     "every labor day becomes eight hours": (
-        "js/polish-bid-core.js", 'var perDay = row.unit === "hours" ? 1 : dayHours(row);',
+        "js/bid-model.js", 'var perDay = row.unit === "hours" ? 1 : dayHours(row);',
         'var perDay = row.unit === "hours" ? 1 : HOURS_PER_DAY;',
         "v2_labor_calculator_rows", lambda got: got["total"] != NEWEST_TOTALS["v2_labor_calculator_rows"]),
     "opening a bid re-follows the takeoff": (

@@ -523,7 +523,7 @@ def test_no_script_string_shows_an_old_name(ran):
 # ═════════════════════════════════════════════════════════════════════════════
 @pytest.mark.parametrize("name", ["polish-intake.html", "polish-estimate.html", "polish-estimates.html",
                                   "js/polish-intake.js", "js/polish-estimate.js", "js/polish-estimates.js",
-                                  "js/polish-sandbox.js", "js/polish-bid-core.js"])
+                                  "js/polish-sandbox.js", "js/bid-model.js"])
 def test_the_files_keep_their_names(name):
     assert (FRONTEND / name).is_file(), "%s was renamed or removed: a rename of labels moves no file" % name
 

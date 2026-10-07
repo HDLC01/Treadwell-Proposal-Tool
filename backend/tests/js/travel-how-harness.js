@@ -1,8 +1,8 @@
-// The Labor step's "how this is worked out" note, run on the real engine (polish-bid-core.js).
+// The Labor step's "how this is worked out" note, run on the real engine (bid-model.js).
 // Two wording cases the staging review found: a far job with Travel Labor switched off, and the
 // note after the miles are cleared while the seeded drive hours stay priced.
 const path = require("path");
-const B = require(path.join(process.argv[2], "js", "polish-bid-core.js"));
+const B = require(path.join(process.argv[2], "js", "bid-model.js"));
 
 function far(miles) {
   const M = B.freshModel();

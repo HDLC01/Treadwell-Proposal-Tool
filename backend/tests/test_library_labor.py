@@ -1,7 +1,7 @@
 """Default labor lines — the table behind Library → Defaults → "+ Add a labor line".
 
 The button shipped DEAD, on purpose: nothing stored a custom labor line, so `renderDefaultLabor()`
-drew exactly one hardcoded row out of `TWPolishBid.travelSeed()` and the Add button had nowhere to
+drew exactly one hardcoded row out of `TWBidModel.travelSeed()` and the Add button had nowhere to
 put a second one. Hanz reported it twice on staging. `library_labor` is where a custom line now
 lives, and this file is the backend half of it.
 

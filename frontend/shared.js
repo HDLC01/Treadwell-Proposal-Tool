@@ -1662,7 +1662,7 @@
    *
    *  NOT MIRRORED, because nothing can write them: digits outside ASCII (Python reads one as 2) and
    *  the whitespace only one language trims (U+FEFF here; U+001C to U+001F and U+0085 there). What
-   *  writes the version is polish-bid-core.js, and it writes the number 2.
+   *  writes the version is bid-model.js, and it writes the number 2.
    *
    *  SELF-CONTAINED ON PURPOSE: it calls nothing else in this file, so a harness can lift it by name
    *  and run it. Keep it that way. */

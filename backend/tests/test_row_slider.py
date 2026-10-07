@@ -6,7 +6,7 @@ switched OFF is shown grayed, adds $0, drops out of the totals BEFORE they are r
 Travel's man-days, and is left out of the Review list.
 
 Three harnesses run the real files:
-  * js/row-slider-core-harness.js    -- polish-bid-core.js's arithmetic, against "the bid of a model
+  * js/row-slider-core-harness.js    -- bid-model.js's arithmetic, against "the bid of a model
                                         that never had the row" (the only honest oracle).
   * js/polish-estimate-harness.js    -- the whole estimate page, its click and keydown handlers.
   * js/library-ui-harness.js         -- the Defaults tab: what is drawn, what a press writes, and the

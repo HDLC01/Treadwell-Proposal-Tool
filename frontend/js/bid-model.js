@@ -70,7 +70,7 @@
 // and a silently wrong bid. Change this file and that pin together, never one without the other.
 (function (root, factory) {
   var api = factory();
-  root.TWPolishBid = api;
+  root.TWBidModel = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;   // node, for tests
 })(typeof self !== "undefined" ? self : this, function () {
   "use strict";

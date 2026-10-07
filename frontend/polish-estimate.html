@@ -417,10 +417,10 @@
        must precede the page script, which reads window.TWTabMemo as it restores the open tab. -->
   <script src="/js/tab-memo.js"></script>
   <!-- library-core before the page script: the page does `var L = window.TWLib` at parse time.
-       Same reason library.html loads it first. polish-bid-core is the markup chain; it is pinned
+       Same reason library.html loads it first. bid-model is the markup chain; it is pinned
        to Kyle's worksheet by backend/tests/test_polish_markup_parity.py. -->
   <script src="/js/library-core.js"></script>
-  <script src="/js/polish-bid-core.js"></script>
+  <script src="/js/bid-model.js"></script>
   <script src="/js/polish-sandbox.js"></script>
   <script src="/js/polish-estimate.js"></script>
 </body>

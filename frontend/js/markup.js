@@ -5,8 +5,8 @@
 // first. In short: the Polish beta's price walks one compounding chain over a subtotal —
 // gp → contingency → super_pto → soft_costs → remodel_tax → bond -- each line's base being
 // the running sum ABOVE it (hard_bid, removed 2026-09-22, used to sit between gp and
-// contingency; see polish-bid-core.js's bid() for the note on where it went). Those rates are
-// hardcoded constants in polish-bid-core.js. The
+// contingency; see bid-model.js's bid() for the note on where it went). Those rates are
+// hardcoded constants in bid-model.js. The
 // markup_rules table is where an admin overrides them, and this is that table's screen.
 //
 // A LINE WHOSE ANSWER IS ONE NUMBER GETS ONE NUMBER BOX. This page used to ask an estimator to
@@ -200,9 +200,9 @@
 
   // ── the built-in constants, per tab ────────────────────────────────────────
   // What the chain uses TODAY for a line with no row filed. Transcribed from
-  // frontend/js/polish-bid-core.js (RATES, GP_BANDS) and backend/markup.py's audit of
+  // frontend/js/bid-model.js (RATES, GP_BANDS) and backend/markup.py's audit of
   // estimate_sheet_5.7.xlsx, and from nowhere else. hardBidPct was a third source here until
-  // it left polish-bid-core.js with the line itself on 2026-09-22.
+  // it left bid-model.js with the line itself on 2026-09-22.
   //
   // WHERE A NUMBER IS NOT ON RECORD, THERE IS NO ENTRY. markup.py's audit says Seal has a SIXTH
   // GP tier topping out at 0.28 and Gyp has SEVEN tiers on different edges, but it does not give

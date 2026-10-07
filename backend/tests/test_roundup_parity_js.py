@@ -1,7 +1,7 @@
 """Excel's ROUNDUP exists THREE times in this repo, in two languages. They must agree.
 
   * `backend/pricing.py`             `_roundup`      -- Python, guards via "%.12g"
-  * `frontend/js/polish-bid-core.js` `roundUp`       -- JS, guards via toPrecision(12)
+  * `frontend/js/bid-model.js` `roundUp`       -- JS, guards via toPrecision(12)
   * `frontend/js/markup-core.js`     `excelRoundUp`  -- JS, same guard, plus a digits argument.
                                                        NOT exported, so this file reaches it the
                                                        only way anything can: run("ROUNDUP(v,0)"),
@@ -40,7 +40,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import pricing  # noqa: E402
 
 FRONTEND = pathlib.Path(__file__).resolve().parents[2] / "frontend"
-BID_CORE = FRONTEND / "js" / "polish-bid-core.js"
+BID_CORE = FRONTEND / "js" / "bid-model.js"
 MARKUP_CORE = FRONTEND / "js" / "markup-core.js"
 
 pytestmark = pytest.mark.skipif(shutil.which("node") is None,
@@ -141,7 +141,7 @@ def test_the_vectors_actually_exercise_the_guard():
 
 
 def test_python_and_the_bid_engine_round_identically(bid_core):
-    """pricing.py vs polish-bid-core.js -- the two that price the same job on the two paths."""
+    """pricing.py vs bid-model.js -- the two that price the same job on the two paths."""
     bad = [(v, pricing._roundup(v), js) for v, js in zip(VECTORS, bid_core)
            if pricing._roundup(v) != js]
     assert not bad, "%d of %d disagree, first few: %r" % (len(bad), len(VECTORS), bad[:5])
@@ -162,7 +162,7 @@ def test_the_two_javascript_engines_round_identically(bid_core, markup_core):
 
 
 @pytest.mark.parametrize("value,want", [
-    (110.00000000000001, 110),      # 27,500 x 1.10 -- polish-bid-core's own documented case
+    (110.00000000000001, 110),      # 27,500 x 1.10 -- bid-model's own documented case
     (362.00000000000006, 362),      # 724 sq ft of polish with dye -- PR #451's case
     (220.22000000000003, 221),      # a REAL fraction: rounds all the way up, guard or no guard
     (-1234.2, -1235),               # the hard-bid give-back: away from zero, not toward it
