@@ -257,20 +257,16 @@
     "beta_sandbox_of", "beta_sandbox_of_name",
   ];
 
-  // The job-condition cells: the cells the LIVE intake's CONDITIONS table writes (js/index.js), which
-  // is where a job's answers (local, prevailing wage, taxable, remodel tax, renovation, dye, joint
-  // filler, bulk discount) live and what the v2 intake reads back. A second copy of that table, and
-  // kept equal to it by test_v2_routing_guard.py rather than by hand. Phase 7 of the v2 program
-  // replaces both with the one table in js/work-types.js.
-  var COPYABLE_CELLS = [
-    "Epoxy!B4", "Polish!B4",
-    "Epoxy!D5",
-    "Epoxy!B6", "Leveling!B6", 'Gyp (USG 1-8")!B8', "Gyp (FR)!B8",
-    "Epoxy!D6",
-    "Epoxy!B10", "Polish!B10",
-    "Polish!E25", "Polish!E29", "Polish!F29",
-    "Epoxy!D41",
-  ];
+  // The job-condition cells: every cell a job condition writes (local, prevailing wage, taxable, remodel
+  // tax, renovation, dye, joint filler, bulk discount), which is where a job's answers live and what the
+  // v2 intake reads back. READ FROM THE ONE TABLE (js/work-types.js copyableCells, Phase 7), where it
+  // used to be a second copy of the live intake's table kept equal by test_v2_routing_guard.py. Every
+  // job type's cells are kept, not only polish's: the copy is of whatever the source job was, and the
+  // job's answers are the same cells on any of them. A condition added to the table is copied from the
+  // day it is added.
+  var WT = window.TWWorkTypes;
+  if (!WT) throw new Error("polish-sandbox.js needs work-types.js loaded before it");
+  var COPYABLE_CELLS = WT.copyableCells();
 
   /** The source's answers under a new name, plus the marks that make the copy a copy.
    *

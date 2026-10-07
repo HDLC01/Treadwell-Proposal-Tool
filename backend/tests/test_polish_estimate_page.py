@@ -1581,10 +1581,18 @@ def test_the_save_writes_the_condition_cells_and_no_others(ran):
     # literals -- only which screen asks the question. They were written by polish-intake.js's own
     # `carry` loop before, from exactly one page; they go through the shared writer now because
     # two screens can answer them.
+    #
+    # THIRTEEN CELLS SINCE PHASE 7 (js/work-types.js), and the five new ones are the whole review: a polish
+    # job writes exactly the cells the live intake writes for a polish job, because both come out of the
+    # one conditions table. TAXABLE now reaches Leveling!B6 and the two Gyp B8 cells, which are independent
+    # literals that nothing wrote, so a tax-exempt option on a v2 bid kept charging 9.475%. RENOVATION's
+    # two B10 cells are written too, "New" while nobody has answered: the live intake writes them for every
+    # polish job, and a blank Polish!B10 is not "New" to IF(B10="New",0.05,0.15), it takes the Reno branch.
+    # No price moves (test_work_types.py and the chain golden), only what a save puts in the workbook cells.
     assert ran["save"]["cellValueKeys"] == [
-        "Epoxy!B4", "Epoxy!B6", "Epoxy!D5", "Epoxy!D6",
-        "Polish!B4", "Polish!E25", "Polish!E29", "Polish!F29"], (
-        "the save's worksheet cells are not exactly the seven conditions': %r"
+        "Epoxy!B10", "Epoxy!B4", "Epoxy!B6", "Epoxy!D5", "Epoxy!D6", "Gyp (FR)!B8", 'Gyp (USG 1-8")!B8',
+        "Leveling!B6", "Polish!B10", "Polish!B4", "Polish!E25", "Polish!E29", "Polish!F29"], (
+        "the save's worksheet cells are not exactly the conditions' a polish job is asked: %r"
         % ran["save"]["cellValueKeys"])
     # And the literals are the model's own answers. The fixture has local and taxable on, the other
     # two off, so a mapping written backwards cannot pass this.
@@ -1602,12 +1610,17 @@ def test_the_save_writes_the_condition_cells_and_no_others(ran):
         # Yes/No cell is not "No" to Kyle's formulas, it is whatever his IF() falls through to.
         "Polish!E29": "No",                         # joint_filler
         "Polish!F29": "No",                         # remove_existing_jf
+        # The fixture has taxable ON, so the three independent Taxable literals carry the same "Yes".
+        "Leveling!B6": "Yes", 'Gyp (USG 1-8")!B8': "Yes", "Gyp (FR)!B8": "Yes",     # taxable
+        # Nobody has answered Renovation, so it is "New" in both cells, never blank.
+        "Epoxy!B10": "New", "Polish!B10": "New",                                    # reno
     }, "the condition literals do not match the model: %r" % (ran["save"]["cellValues"],)
-    # A draft that already carried a worksheet map keeps it, and gains only those same four.
+    # A draft that already carried a worksheet map keeps it, and gains only those same conditions' cells.
     carried = ran["save"]["legacyCellValues"] or {}
     assert set(carried) == {"Polish!D82", "Epoxy!B4", "Epoxy!B6", "Epoxy!D5",
                             "Epoxy!D6", "Polish!B4",
-                            "Polish!E25", "Polish!E29", "Polish!F29"}, (
+                            "Polish!E25", "Polish!E29", "Polish!F29",
+                            "Leveling!B6", 'Gyp (USG 1-8")!B8', "Gyp (FR)!B8", "Epoxy!B10", "Polish!B10"}, (
         "the page added a worksheet cell beyond the four conditions', or dropped a carried one: %r"
         % carried)
     assert carried["Polish!D82"] == 41000, "a cell the draft already carried was overwritten"
@@ -2238,10 +2251,13 @@ def test_both_schema_files_seed_the_dye_and_joint_filler_rows_the_engine_prices_
     # THE THIRD ROW BUYS NOTHING, in both files: no cost and no coverage to price from.
     assert seed["remove-existing-jf"]["unit_cost"] is None
     assert seed["remove-existing-jf"]["coverage"] is None
+    # THE PAGE'S MAP OF RESERVED ROWS IS THE TABLE'S, since Phase 7: library.js reads each condition's
+    # `item_id` off js/work-types.js (reservedItems), and the Takeoff cards on this page read the same
+    # ids, so it is the table's ids that are held to the seed here, through the cards the page really built.
+    assert set(ran["cards"]["reserved"]) == set(seed), ran["cards"]["reserved"]
     js = (FRONTEND / "js" / "library.js").read_text(encoding="utf-8")
-    m = re.search(r"var RESERVED_ITEM_CONDITION = \{([^}]*)\};", js)
-    assert m, "library.js no longer declares RESERVED_ITEM_CONDITION"
-    assert set(re.findall(r'"([^"]+)":', m.group(1))) == set(seed), m.group(1)
+    assert "var RESERVED_ITEM_CONDITION = WT.reservedItems();" in js, (
+        "library.js no longer reads its reserved rows off the vocabulary")
 
 
 @needs_node
@@ -2316,7 +2332,8 @@ def test_the_page_loads_no_formula_engine_and_the_modules_in_order(html):
     """HyperFormula and the whole workbook load are gone: this page prices itself now.
 
     The order is load-bearing and it fails silently. polish-estimate.js reads `window.TWBidModel`,
-    `window.TWLib` and `window.TWPolishSandbox` at PARSE time, so any of them loaded after it is
+    `window.TWWorkTypes` (its Takeoff cards, since Phase 7), `window.TWLib` and `window.TWPolishSandbox`
+    at PARSE time, so any of them loaded after it is
     `undefined`, and the first thing that touches it throws while the page sits on its loading
     message for ever.
 
@@ -2329,8 +2346,8 @@ def test_the_page_loads_no_formula_engine_and_the_modules_in_order(html):
     # in the rail. See the house rule at the top of frontend/js/icons.js.
     assert srcs == ["https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0",
                     "/js/icons.js", "/auth.js", "/shared.js", "/js/tab-memo.js",
-                    "/js/library-core.js", "/js/excel-math.js", "/js/bid-model.js", "/js/polish-sandbox.js",
-                    "/js/polish-estimate.js"], (
+                    "/js/library-core.js", "/js/excel-math.js", "/js/work-types.js", "/js/bid-model.js",
+                    "/js/polish-sandbox.js", "/js/polish-estimate.js"], (
         "the page's script list has changed: %r" % srcs)
 
 
@@ -3659,3 +3676,29 @@ def test_changing_a_library_default_on_after_a_bid_is_saved_changes_nothing_on_t
     assert "travel:true" in s["here"]["labor"] and "c1:false" in s["here"]["labor"]
     assert s["libOff"] == s["here"], "a library default_on change reached a saved bid"
     assert s["libMatches"] == s["here"], "a library default_on change reached a saved bid"
+
+
+def test_the_takeoff_cards_are_the_tables_rows_joined_with_this_pages_views(ran):
+    """PHASE 7. Which cards there are, in what order, and each one's workbook cell, reserved library row
+    and dependency come out of the one conditions table (js/work-types.js: the conditions the Takeoff step
+    asks of a polish job). What a card SAYS is this page's own (CARD_VIEWS). The harness reads the page's real
+    CONDITION_CARDS after the real parse, so a card typed back into the page with its own cell, or a table
+    row with no view, shows up here.
+
+    Remove-existing is the card that does not price: it is a fourth hand on the joint-filler line, and it is
+    the only one that `needs` another. Each priced card's hint still names its cell in words, which is text
+    this page types, so that is checked against the cell the table gave it.
+
+    Mutation: change a cell or an item_id in the CARD_VIEWS joined row, or add a v2Takeoff row to the table
+    with no view."""
+    cards = ran["cards"]
+    assert cards["rows"] == [
+        {"key": "joint_filler", "cell": "Polish!E29", "item_id": "joint-filler-kit", "needs": None,
+         "prices": True, "hintNamesItsCell": True},
+        {"key": "remove_existing_jf", "cell": "Polish!F29", "item_id": "remove-existing-jf",
+         "needs": "joint_filler", "prices": False, "hintNamesItsCell": None},
+        {"key": "dye", "cell": "Polish!E25", "item_id": "dye", "needs": None,
+         "prices": True, "hintNamesItsCell": True},
+    ]
+    assert cards["reserved"] == ["joint-filler-kit", "remove-existing-jf", "dye"], (
+        "the ids kept out of every takeoff-row picker are the ids of the cards, in the cards' order")

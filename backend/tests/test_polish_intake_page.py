@@ -175,6 +175,18 @@ def test_the_keys_are_the_ones_the_pricing_engine_reads(ran):
     # no model key at all -- that gap closed on 2026-09-23 when the toggle left the page.
     assert len(ran["conditions"]["rendered"]) == len(page), (
         "the screen and the engine drifted apart")
+    # THE ANCHOR THAT IS NOT A LIST (Phase 7). `page` and `core` both come out of the one conditions table
+    # (js/work-types.js) now, so the containment above can no longer notice a key the table spells wrongly
+    # for both: `remodel` for `remodel_tax` would still be contained, still render, still save. What can is
+    # the engine. The harness prices one job with each question this form asks answered both ways, and the
+    # bid has to move for the three markupChain() reads and stand still for bond, which it does not.
+    assert ran["engineMoves"] == {"prevailing_wage": True, "taxable": True, "remodel_tax": True, "bond": False}, (
+        "a question this form asks no longer moves the bid it is for: %r" % ran["engineMoves"])
+    # AND THE WORDS THIS FORM USES for the one sentence it words differently from the live intake: its
+    # county box is not "below" here, so it says what the rate does instead. Read from the table's
+    # `wording.v2Intake`, so a lost override would put the live intake's sentence on this form.
+    remodel = next(s for s in ran["conditions"]["rendered"] if s["key"] == "remodel_tax")
+    assert remodel["why"] == "Occupied remodel. Adds the county remodel rate on top.", remodel["why"]
 
 
 @needs_node
@@ -1099,8 +1111,8 @@ def test_the_page_loads_no_formula_engine(html):
     # /js/icons.js is FIRST, ahead of auth.js: the sidebar auth.js draws asks it for every glyph
     # in the rail. See the house rule at the top of frontend/js/icons.js.
     assert srcs == ["https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0",
-                    "/js/icons.js", "/auth.js", "/shared.js", "/js/excel-math.js", "/js/bid-model.js",
-                    "/js/address-lookup.js",
+                    "/js/icons.js", "/auth.js", "/shared.js", "/js/excel-math.js", "/js/work-types.js",
+                    "/js/bid-model.js", "/js/address-lookup.js",
                     "/js/polish-sandbox.js", "/js/polish-intake.js",
                     "/js/polish-verbal.js"], (
         "the page's script list has changed: %r" % srcs)
@@ -1109,6 +1121,10 @@ def test_the_page_loads_no_formula_engine(html):
     # version it stamps is what routes a resumed project back to this intake.
     assert html.index("/js/bid-model.js") < html.index("/js/polish-intake.js"), (
         "`var B = window.TWBidModel` runs at parse time")
+    # work-types is the model's second dependency AND this page's own: `var T = window.TWWorkTypes` runs
+    # at parse time too, and so does the sandbox's read of the cells a test copy keeps.
+    assert html.index("/js/work-types.js") < html.index("/js/bid-model.js") < html.index("/js/polish-sandbox.js"), (
+        "the vocabulary has to load before the model, and both before the sandbox")
 
 
 def test_the_step_row_says_where_you_are_and_where_the_beta_goes(html):
@@ -1538,17 +1554,22 @@ def test_the_intro_no_longer_claims_more_than_the_page_does(html):
     assert "the same fields a polish job sees on the live form" in flat
 
 
-def test_the_beta_conditions_differ_from_the_live_ones_only_where_decided():
+@needs_node
+def test_the_beta_conditions_differ_from_the_live_ones_only_where_decided(ran):
     """Switches are drawn by JS, so they are compared from the two scripts. For a polish job the
     live form shows local, prevailing_wage, taxable, remodel_tax, reno, dye, joint_filler and
     remove_existing_jf. The beta asks four of them here; Dye / Joint filler / Remove-existing are
     asked on the takeoff (2026-09-16) and Renovation is removed (2026-09-23, Hanz). Bond is the
     beta's own and is flagged open in the B1 report.
 
+    The beta's list is the page's own CONDITIONS as the harness ran it: since Phase 7 it is the rows of
+    the one conditions table that this form asks (js/work-types.js), no longer a literal in the script.
+    The live form's literal is still read out of js/index.js until Phase 9; test_work_types.py executes it
+    and holds it equal to the same table.
+
     Mutation: add a key to either list without deciding where it belongs."""
-    beta_js = (FRONTEND / "js" / "polish-intake.js").read_text(encoding="utf-8")
     live_js = (FRONTEND / "js" / "index.js").read_text(encoding="utf-8")
-    beta = re.findall(r'\{ key: "(\w+)", label:', beta_js)
+    beta = ran["conditions"]["pageKeys"]
     live = [k for k, scope in re.findall(r'\{ key: "(\w+)", label: "[^"]*", scope: \[([^\]]*)\]', live_js)
             if "polish" in scope]
     assert beta == ["prevailing_wage", "taxable", "remodel_tax", "bond"], beta

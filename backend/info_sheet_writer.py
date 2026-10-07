@@ -323,6 +323,8 @@ def _primary_floor(data: Dict[str, Any]) -> str:
 # Which takeoff fields make up a floor area, per layout. The sheet-resolved
 # names come first; the second tuple is what intake called them, for drafts
 # saved before the sheet snapshot existed.
+# These, _LF_KEYS and _COVE_ROLES are the quantity fields of frontend/js/work-types.js (each tab's `area`
+# and `cove`, and the snapshot key of each field); test_work_types_python_pin.py holds them to that table.
 _SF_KEYS = {
     "epoxy":  (("epoxy_sf", "epoxy_sf_2"), ("system_1_sf", "system_2_sf")),
     "polish": (("polish_sf",), ("polish_sf",)),

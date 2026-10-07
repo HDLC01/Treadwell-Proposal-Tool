@@ -8,7 +8,12 @@ workbook; the default readers; the model; the labor calculator; and what a new b
 It was cut from a clean export of an origin/staging commit (meta.commit says which) by
 tests/js/gen-chain-golden.js, whose recipe lists inputs only: every answer is the real code's. Phase 3
 cut it from 3f94ed2. Phase 4 re-cut it on d569332 and exactly ONE vector moved, `model/migrate/unknownKeys`
-(the model now keeps the keys it does not know); the other 2,227 are as Phase 3 recorded them.
+(the model now keeps the keys it does not know); the other 2,227 are as Phase 3 recorded them. Phase 7 re-cut
+it on ee49e39 and 48 vectors moved, all of them the workbook cells a save writes, none of them a price: the
+constant `const/CONDITION_CELLS` (Taxable is four cells now, not one) and the 47 `cond/cells/*` and
+`cond/library/*` vectors, each of which gains exactly the same five keys (Leveling!B6, the two Gyp B8 cells,
+and Epoxy!B10 and Polish!B10 written as "New") and nothing else. The other 2,180, every `chain/*` vector
+(the whole bid), `model/*`, `newbid/*` and `seed/*` among them, are as before.
 
 Phases 4 to 10 move this code: the model module is renamed, ROUNDUP and the number helpers move to a
 leaf module, rates and the GP ladder become profile data, the chain becomes an engine. Each must

@@ -557,11 +557,13 @@ def test_a_copy_keeps_the_job_conditions_and_not_the_rest_of_the_sheet(ran, wt):
 
 
 def test_the_cells_a_copy_keeps_are_the_ones_the_live_intake_writes(ran):
-    """COPYABLE_CELLS is a second copy of the live intake's CONDITIONS cells until Phase 7 puts both on
-    one table (docs/v2-architecture.md 7.3). The intake's table is lifted out of index.js and evaluated
-    by the harness, so a condition added there that this list does not know turns this red.
+    """COPYABLE_CELLS is READ FROM THE ONE CONDITIONS TABLE since Phase 7 (js/work-types.js copyableCells;
+    docs/v2-architecture.md 7.3), no longer a second copy of the live intake's cells. The live intake still
+    keeps its own CONDITIONS literal until Phase 9, so this stays as the comparison of the two: the intake's
+    table is lifted out of index.js and evaluated by the harness, so a condition (or a cell) added to either
+    side that the other does not know turns this red.
 
-    Mutation: add a condition (or a cell) to CONDITIONS in index.js."""
+    Mutation: add a condition (or a cell) to CONDITIONS in index.js, or to the table in work-types.js."""
     s = ran["sandbox"]
     assert sorted(s["copyableCells"]) == sorted(s["conditionCells"])
     assert len(s["conditionCells"]) >= 10, "the lift of CONDITIONS found too little: %r" % s["conditionCells"]

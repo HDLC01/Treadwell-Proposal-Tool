@@ -3608,38 +3608,59 @@ def test_changing_a_condition_default_saves_it_and_a_refusal_puts_it_back(ran):
         "an ordinary material's Remove no longer PATCHes its favorite, or wrote a condition")
 
 
-def test_the_condition_vocabulary_is_the_same_three_on_both_sides():
-    """ONE LIST OF KEYS, STATED IN THREE PLACES THAT MUST AGREE, and asserted at the source
-    because a mismatch is silent in the worst possible way: a condition filed under a key no
-    reader knows saves with a green tick, reaches nothing, and writes to no cell.
+@needs_node
+def test_the_condition_vocabulary_is_the_same_three_on_both_sides(ran):
+    """ONE LIST OF KEYS, STATED IN THREE PLACES THAT MUST AGREE, and checked by running them because a
+    mismatch is silent in the worst possible way: a condition filed under a key no reader knows saves with
+    a green tick, reaches nothing, and writes to no cell.
 
       * `CONDITION_CELLS` in bid-model.js decides which workbook cell each answer writes.
       * `takeoffConditionDefaults()` in library.js is what the Defaults tab offers.
       * `KEYS` in backend/condition_defaults.py is what the endpoint will accept.
 
+    SINCE PHASE 7 the first two are derived from the one conditions table (js/work-types.js), so what this
+    guards now is the third against that table, and that the table's three are cell-writing conditions. The
+    full pin of the Python lists is test_work_types_python_pin.py. This one stays, run against the page's own
+    function and the real model, because it is the agreement a rename would break first.
+
     Mutation: rename one key in condition_defaults.KEYS. The endpoint then 400s every save the
     page makes for that condition, and nothing in the product would have said which of the three
     files was wrong."""
-    js = (FRONTEND / "js" / "library.js").read_text(encoding="utf-8", errors="replace")
-    core = (FRONTEND / "js" / "bid-model.js").read_text(encoding="utf-8", errors="replace")
-    py = (pathlib.Path(__file__).resolve().parents[1] / "condition_defaults.py").read_text(
-        encoding="utf-8", errors="replace")
+    import condition_defaults
 
-    page_keys = set(re.findall(r'\{ key: "([a-z_]+)"', js))
-    api_keys = set(re.findall(r'KEYS = \(([^)]*)\)', py)[0].replace('"', "").split(","))
-    api_keys = {k.strip() for k in api_keys if k.strip()}
-    assert page_keys == api_keys == {"joint_filler", "remove_existing_jf", "dye"}, (
-        "the Defaults tab and the endpoint no longer offer the same three conditions:\n"
-        " page: %r\n  api: %r" % (sorted(page_keys), sorted(api_keys)))
-    # …and every one of them is a key CONDITION_CELLS actually writes, or the answer reaches no
+    shipped = ran["defaultsShippedConditions"]
+    page_keys = shipped["offersTheThree"].split(",")
+    api_keys = sorted(condition_defaults.KEYS)
+    assert page_keys == api_keys == ["dye", "joint_filler", "remove_existing_jf"], (
+        "the Defaults tab and the endpoint no longer offer the same three conditions: "
+        "page %r, api %r" % (page_keys, api_keys))
+    # ...in the order the Takeoff step asks them, which the endpoint also keeps (list_defaults sorts by it)
+    assert shipped["offeredInOrder"] == list(condition_defaults.KEYS)
+    # ...and every one of them is a key CONDITION_CELLS actually writes, or the answer reaches no
     # cell in Kyle's workbook at all.
-    for key in sorted(api_keys):
-        assert re.search(r"^\s*%s:\s*\{ cells:" % key, core, re.M), (
+    for key in api_keys:
+        assert key in shipped["cellKeys"], (
             "%s is offered as an editable default but CONDITION_CELLS does not write it, so the "
             "answer reaches no cell in the workbook" % key)
     # The seeder and its gate are both exported, or the estimate cannot read either.
+    core = (FRONTEND / "js" / "bid-model.js").read_text(encoding="utf-8", errors="replace")
     assert "seedConditionDefaults: seedConditionDefaults" in core
     assert "conditionsUnstated: conditionsUnstated" in core
+
+
+@needs_node
+def test_the_work_type_filter_is_a_thin_wrapper_over_the_one_vocabulary(ran):
+    """PHASE 7. The five tabs the Defaults tab is split by and the filter that decides which defaults show on
+    which of them are js/work-types.js's (tabKeys and appliesTo), read through the page's own lifted
+    functions. An empty list is every tab, a list is those tabs, and asking about a JOB TYPE throws: a combo
+    job has no tab of its own, so a default filed under it could never be read.
+
+    Mutation: give appliesToWorkType back its own `list.indexOf(wt)`, or make `combo` answer quietly."""
+    f = ran["defaultsWorkTypeFilter"]
+    assert f["tabs"] == ["polish", "seal", "epoxy", "leveling", "gyp"]
+    assert f["none"] is True and f["empty"] is True and f["noRow"] is True
+    assert f["scopedIn"] is True and f["scopedOut"] is False
+    assert f["combo"].startswith("threw: work-types.js: appliesTo() was asked about \"combo\""), f["combo"]
 
 
 # ── The three reserved rows: joint filler kit, remove-existing, dye ───────────────────────────

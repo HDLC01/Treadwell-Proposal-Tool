@@ -565,6 +565,10 @@
 <script src="/shared.js"></script>
 <!-- bid-model reads its number helpers off window.TWExcelMath as it loads, so that goes first. -->
 <script src="/js/excel-math.js"></script>
+<!-- The one work-type vocabulary and job-conditions table. bid-model derives its condition cells and a new
+     bid's answers from it as it loads, polish-sandbox reads the cells a test copy keeps, and this page's
+     own script reads the questions it asks (var T = window.TWWorkTypes), so it goes ahead of all three. -->
+<script src="/js/work-types.js"></script>
 <!-- bid-model owns the model's shape and the condition keys the pricing chain reads. This
      page states the conditions, so it writes through the same module the calculator prices with —
      which is also what stamps the model's version, the flag the Projects page routes on. Loaded

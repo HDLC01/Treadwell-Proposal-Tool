@@ -121,7 +121,9 @@ DEFAULT_WASTE_PCT = 5.0         # Hanz, 2026-08-15: "by default is 5%"
 # are the FALLBACK for a database the seed has not reached, the shape travelSeed() takes over
 # library_labor's 'travel' row. This tuple is what stops the row from ever being orphaned:
 # delete_item refuses either id outright, because nothing reachable from the API could ever
-# recreate a row at this exact id again.
+# recreate a row at this exact id again. They are the `item_id` of each job condition in
+# frontend/js/work-types.js (the three the Takeoff step carries), and test_work_types_python_pin.py
+# holds this tuple to that table.
 RESERVED_ITEM_IDS = ("dye", "joint-filler-kit", "remove-existing-jf")
 
 # The three divisions Treadwell estimates in (Hanz, 2026-08-15 — this replaced a free-text

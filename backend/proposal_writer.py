@@ -58,6 +58,9 @@ TEMPLATES_ROOT = Path(__file__).parent / "templates"
 # ─── Template selection ───────────────────────────────────────────────
 # (work_type, audience) → relative template path. None audience means
 # the template is audience-agnostic (e.g. gypsum, budget).
+# The keys are the job types of frontend/js/work-types.js crossed with the audiences each has a template
+# for (its `proposalKey` and `audiences`), plus the two documents that are no job type (sealer, budget);
+# test_work_types_python_pin.py holds the key set to that table.
 TEMPLATE_PICKER: dict[tuple[str, str | None], str] = {
     ("epoxy",   "Direct"): "Direct/XX.XX TREADWELL EPOXY PROPOSAL - New Direct.docx",
     ("epoxy",   "GC"):     "GC/xx TREADWELL RESINOUS PROPOSAL - xx.docx",

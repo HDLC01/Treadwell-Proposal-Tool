@@ -115,6 +115,8 @@ RULES = "markup_rules"
 # `global` GOES LAST, which is load-bearing and not tidiness: the page opens on LAYOUTS[0], and the
 # tab somebody came to this screen to edit is a sheet tab.
 GLOBAL = "global"
+# The tabs of frontend/js/work-types.js, in its order: test_work_types_python_pin.py runs node and holds
+# this tuple to that table, so add or reorder a tab in both places in the same change.
 TABS = ("polish", "seal", "epoxy", "leveling", "gyp")
 LAYOUTS = TABS + (GLOBAL,)
 

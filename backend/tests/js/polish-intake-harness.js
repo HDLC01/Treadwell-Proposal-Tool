@@ -47,6 +47,9 @@ const read = (p) => fs.readFileSync(p, "utf8").replace(/\r\n/g, "\n");
 const src = read(path.join(ROOT, "js", "polish-intake.js"));
 const pageHtml = read(path.join(ROOT, "polish-intake.html"));
 const P = require(path.join(ROOT, "js", "bid-model.js"));
+// The one vocabulary (js/work-types.js). The page reads its questions off it as it parses
+// (`var T = window.TWWorkTypes`), so it is handed to every window below under its real global name.
+const W = require(path.join(ROOT, "js", "work-types.js"));
 
 // ── the REAL county table, out of the server module that serves it ────────────
 //
@@ -220,7 +223,11 @@ const scope = new Function("$", "TW", "SB", "document", "window", "clock", "fetc
   var setTimeout = clock.setTimeout, clearTimeout = clock.clearTimeout;
   ${grab(/^  var esc = function[\s\S]*?\n  \};$/m, "esc")}
   ${grab(/^  var B = window\.TWBidModel;[^\n]*$/m, "the window.TWBidModel binding")}
-  ${grab(/^  var CONDITIONS = \[[\s\S]*?\n  \];$/m, "CONDITIONS")}
+  // THE VOCABULARY BINDING, then the page's one line that reads its questions off it. CONDITIONS used
+  // to be a literal lifted by a regex that ran to the closing bracket; it is the table's own rows now
+  // (js/work-types.js conditionsFor), so what this lifts is the call, and what it runs is the real module.
+  ${grab(/^  var T = window\.TWWorkTypes;[^\n]*$/m, "the window.TWWorkTypes binding")}
+  ${grab(/^  var CONDITIONS = T\.conditionsFor\("polish", "v2Intake"\);$/m, "CONDITIONS")}
   ${grab(/^  var DEFAULT_CONDITIONS = [^\n]*;$/m, "DEFAULT_CONDITIONS")}
   // Added 2026-09-03 with the cell map. adoptModel() and save() both reach for it now,
   // and a const the lifted function cannot see is a ReferenceError at boot, not a
@@ -391,6 +398,7 @@ function build(opts) {
     // `var B = window.TWBidModel` line is lifted below, so renaming the global breaks this
     // harness instead of quietly leaving B undefined at runtime.
     TWBidModel: P,
+    TWWorkTypes: W,
     location: { href: "https://x/polish-intake.html?d=proj-1",
                 assign: (u) => rec.navigated.push(u) },
     // wire() registers its own pagehide flush directly on window (mirrors shared.js's own net
@@ -562,6 +570,19 @@ function snap(built) {
 // The keys the PRICING engine reads. freshModel() is where markupChain's conditions come from, so
 // a toggle the page renders under any other name is a toggle that moves no money.
 const out = { coreKeys: Object.keys(P.freshModel().conditions) };
+
+// WHAT THE ENGINE READS, asked of the engine itself and of no list. The questions this page asks and the
+// keys the model carries both come from the one table now (js/work-types.js), so comparing them with each
+// other can no longer catch a key the table spells wrongly for both. Pricing the same job with each
+// question answered both ways can: a key markupChain does not read is a toggle that moves nothing. Bond
+// is the documented exception (markupChain takes bond_pct from RATES.BOND unconditionally).
+out.engineMoves = (function () {
+  const base = { material: 10000, labor: 8000, travel: 0, contingency: 0, fees: 0, sf: 5000, remodel_rate: 0.07975 };
+  const fresh = P.freshModel().conditions;
+  const total = (conditions) => P.markupChain(Object.assign({}, base, { conditions })).total;
+  return Object.fromEntries(W.conditionsFor("polish", "v2Intake").map((c) => [c.key,
+    total(Object.assign({}, fresh, { [c.key]: false })) !== total(Object.assign({}, fresh, { [c.key]: true }))]));
+})();
 
 (async function () {
   // ── the five toggles, from the data the page ships ──────────────────────────
@@ -1391,7 +1412,7 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
                     setAttribute: (k, v) => { if (k === "href") a.href = v; } };
         return a;
       });
-      const win = { location: { href: "https://x/polish-intake.html" }, history: {} };
+      const win = { location: { href: "https://x/polish-intake.html" }, history: {}, TWWorkTypes: W };
       const doc = { querySelectorAll: (sel) => (sel === "a[href]" ? anchors : []),
                     getElementById: () => null };
       const make = new Function("window", "document", "TW", "location", "localStorage", "fetch",

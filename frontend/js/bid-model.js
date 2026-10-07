@@ -69,16 +69,20 @@
 // fails — which is the whole point of it: it is the only thing standing between a template edit
 // and a silently wrong bid. Change this file and that pin together, never one without the other.
 //
-// LOAD ORDER. This file needs js/excel-math.js loaded before it: a script tag above this one on a
-// page, and `require` does the same under node. The number helpers it exports (num, roundUp,
-// copyInto, money, money2, pct, fmtSf) are that file's own functions, bound below to the names this
-// file has always used.
+// LOAD ORDER. This file needs js/excel-math.js and js/work-types.js loaded before it: a script tag above
+// this one on a page, and `require` does the same under node. The number helpers it exports (num,
+// roundUp, copyInto, money, money2, pct, fmtSf) are excel-math's own functions, bound below to the names
+// this file has always used. The work-type vocabulary and the job-conditions table (which workbook cells
+// each condition writes, what a new bid answers, which defaults apply to a job) are work-types.js's, and
+// this file derives CONDITION_CELLS, a fresh model's conditions and workTypeApplies from them.
 (function (root, factory) {
   var isNode = typeof module !== "undefined" && module.exports;
   var deps = {
-    math: isNode ? require("./excel-math.js") : root.TWExcelMath
+    math: isNode ? require("./excel-math.js") : root.TWExcelMath,
+    types: isNode ? require("./work-types.js") : root.TWWorkTypes
   };
   if (!deps.math) throw new Error("bid-model.js needs excel-math.js loaded before it");
+  if (!deps.types) throw new Error("bid-model.js needs work-types.js loaded before it");
   var api = factory(deps);
   root.TWBidModel = api;
   if (isNode) module.exports = api;   // node, for tests
@@ -91,6 +95,10 @@
   var num = deps.math.num, copyInto = deps.math.copyInto, roundUp = deps.math.roundUp,
       money = deps.math.money, money2 = deps.math.money2, pct = deps.math.pct, fmtSf = deps.math.fmtSf,
       isBlank = deps.math.isBlank;
+
+  // The work-type vocabulary and the job-conditions table (js/work-types.js, Phase 7). Every question
+  // this file answers about WHICH JOB TYPE, WHICH TAB or WHICH CONDITION goes through it.
+  var types = deps.types;
 
   // ── the constants, straight off the Polish tab ──────────────────────────────
   /** D37: `=(A37*B37*C37)*IF($E$35="8 hour days",8,10)`, and E35 says "8 hour days". */
@@ -753,10 +761,15 @@
    *  own Takeoff row, measured with the intake polish SF").
    *
    *  `asms` / `items` are the library catalogs. A row seeds when it is a favorite (the Defaults tab
-   *  list) AND applies to Polish (default_work_types, empty = every tab) -- the same two tests the
-   *  Defaults tab draws its Takeoff lists with. Assemblies first, then materials, the order the tab
-   *  shows them. The three reserved materials (`reserved` ids: dye, joint filler kit, remove-
+   *  list) AND applies to the job being opened (default_work_types, empty = every tab) -- the same two
+   *  tests the Defaults tab draws its Takeoff lists with. Assemblies first, then materials, the order
+   *  the tab shows them. The three reserved materials (`reserved` ids: dye, joint filler kit, remove-
    *  existing) are NOT seeded here: they are the condition cards, which have their own defaults.
+   *
+   *  `workType` is the JOB TYPE being opened, and a default applies when it applies to ANY tab that job
+   *  is priced on (workTypeApplies): polish reads the polish list, epoxy the epoxy list, and a combo job
+   *  reads both. It was Polish alone, written into this function, until a combo job needed its own. It
+   *  is "polish" when a caller leaves it out, which is every caller that existed before it did.
    *
    *  HOW IT COMBINES WITH seedTakeoffSf WITHOUT COUNTING THE FLOOR TWICE. takeoffSf adds every SF
    *  row, so ten defaults each measured with the intake 8,250 SF would read as 82,500 SF of floor,
@@ -781,16 +794,13 @@
    *  NEVER OVER WORK: unchanged rows are returned (same array) when any row already carries a
    *  pick or a measurement. With no defaults it IS seedTakeoffSf. Callers gate "new bid" on the
    *  saved blob (conditionsUnstated); this function is only the combination rule. */
-  function seedDefaultTakeoff(rows, asms, items, reserved, sf1, sf2) {
+  function seedDefaultTakeoff(rows, asms, items, reserved, sf1, sf2, workType) {
     rows = Array.isArray(rows) ? rows : [];
     for (var i = 0; i < rows.length; i++) {
       var q = rows[i] || {};
       if (num(q.measurement) > 0 || q.assembly_id || q.item_id) return rows;
     }
-    var applies = function (r) {
-      var l = r && r.default_work_types;
-      return !l || !l.length || l.indexOf("polish") !== -1;
-    };
+    var applies = function (r) { return workTypeApplies(r, workType); };
     var picks = [];
     (Array.isArray(asms) ? asms : []).forEach(function (a) {
       if (a && a.favorite && applies(a)) picks.push({ kind: "asm", row: a });
@@ -1365,11 +1375,18 @@
     return out;
   }
 
-  /** Does a default scoped to `list` apply to this kind of bid? EMPTY / ABSENT MEANS EVERY WORK
-   *  TYPE -- the same reading the library page's appliesToWorkType and seedDefaultTakeoff use. */
+  /** Does a default scoped by `row.default_work_types` apply to this kind of bid? EMPTY / ABSENT MEANS
+   *  EVERY TAB -- work-types.js's appliesTo, the one reading the library page's appliesToWorkType and
+   *  seedDefaultTakeoff share.
+   *
+   *  A default's work types are TABS, and a job type is priced on one or more of them, so a default
+   *  applies when it applies to ANY tab of the job: a combo job reads the Epoxy list AND the Polish
+   *  list, where it used to read neither (nothing is filed under "combo"). `workType` is the job type,
+   *  "polish" when it is left out (the one job this model has priced), and anything that is not a job
+   *  type THROWS from tabsFor rather than answering "no" quietly. */
   function workTypeApplies(row, workType) {
-    var l = row && row.default_work_types;
-    return !(l instanceof Array) || !l.length || l.indexOf(workType || "polish") !== -1;
+    var list = row && row.default_work_types;
+    return types.tabsFor(workType || "polish").some(function (tab) { return types.appliesTo(list, tab); });
   }
 
   /** Does the stored Travel row (library_labor id `travel`) put Travel on a NEW bid of this work
@@ -1418,7 +1435,7 @@
     return !(saved.labor instanceof Array) || !saved.labor.length;
   }
 
-  /** The five conditions that ALSO live as Yes/No literals in Kyle's workbook.
+  /** The conditions this model carries that ALSO live as Yes/No literals in Kyle's workbook.
    *
    *  HERE, IN THE SHARED MODULE, BECAUSE THERE ARE NOW TWO SCREENS THAT CAN CHANGE A CONDITION.
    *  It used to live in polish-intake.js, when that page was the only writer. The rule it
@@ -1436,39 +1453,46 @@
    *  One mapping used by both, for the same reason syncPayloadPricing calls computeTokenValues
    *  rather than re-deriving the money: a second copy is how the two screens drift again.
    *
-   *  Only Epoxy!B4 and B5 are paired with a Polish cell: Polish!B4/B5 hold their own Yes/No,
-   *  while Polish!D5, B6 and D6 are the formulas =Epoxy!D5 / =Epoxy!B6 / =Epoxy!D6, and writing
-   *  them would replace a live reference with a literal. */
-  var CONDITION_CELLS = {
-    local:           { cells: ["Epoxy!B4", "Polish!B4"], on: "Yes", off: "No" },
-    // NO hard_bid ENTRY. It used to write Epoxy!B5/Polish!B5; a cell this beta never writes to
-    // is a blank cell, and Kyle's own =IF(B5="yes",...) reads a blank the same way it reads
-    // "No" -- so leaving the entry out is enough, with nothing to change in his real sheet.
-    prevailing_wage: { cells: ["Epoxy!D5"],              on: "Yes", off: "No" },
-    taxable:         { cells: ["Epoxy!B6"],              on: "Yes", off: "No" },
-    remodel_tax:     { cells: ["Epoxy!D6"],              on: "Yes", off: "No" },
+   *  Polish!B4 holds its own Yes/No, so Local writes both B4 cells, while Polish!D5, B6 and D6 are the
+   *  formulas =Epoxy!D5 / =Epoxy!B6 / =Epoxy!D6, and writing them would replace a live reference with
+   *  a literal.
+   *
+   *  DERIVED, NOT TYPED, SINCE PHASE 7 (js/work-types.js). The cells, the literals and which job types
+   *  are asked each condition are rows of the one job-conditions table, and this is that table cut for
+   *  the one job type this model prices (polish), keeping the conditions the model CARRIES. A job type
+   *  writes exactly the cells the live intake writes for it, because both come from the same rows:
+   *  that is what puts the Leveling and Gypsum Taxable cells in here (Taxable is four cells, not one),
+   *  which this mapping used to leave out, so a tax-exempt option on a v2 bid kept charging 9.475%.
+   *  The first cell of a row is the one the intake reads the switch back from.
+   *
+   *  NO hard_bid ENTRY. It used to write Epoxy!B5/Polish!B5; a cell this beta never writes to is a
+   *  blank cell, and Kyle's own =IF(B5="yes",...) reads a blank the same way it reads "No" -- so
+   *  leaving the entry out is enough, with nothing to change in his real sheet. `bond` has no cell.
+   *
+   *  Dye, joint filler and remove-existing MOVED OFF THE INTAKE FORM on 2026-09-16 (Hanz asked for
+   *  them on the Takeoff step, where the work they describe is), and they were moved INTO THE MODEL:
+   *  two screens can answer them, so there is one writer, `conditionCellWrites`, called by both. BOTH
+   *  LITERALS, ALWAYS, INCLUDING remove_existing_jf WHILE JOINT FILLER IS OFF: a blank Yes/No cell is
+   *  not "No" to Kyle's formulas, it is whatever his IF() falls through to. The switch greys out on
+   *  screen because it moves no money, not because its answer stopped existing. */
+  var POLISH_CELLS = types.cellsFor("polish");
+  var CONDITION_CELLS = Object.fromEntries(POLISH_CELLS
+    .filter(function (c) { return c.model; })
+    .map(function (c) { return [c.key, { cells: c.cells, on: c.on, off: c.off }]; }));
 
-    // MOVED OFF THE INTAKE FORM, 2026-09-16. These three were "carry" conditions: they lived in a
-    // separate object on polish-intake.js, outside the model, because the beta engine prices none
-    // of them -- they exist to set a Yes/No literal in Kyle's workbook and nothing else. Hanz
-    // asked for them on the Takeoff step instead, where the work they describe actually is.
-    //
-    // THE MOVE IS INTO THE MODEL, AND THAT IS THE WHOLE POINT. Their old home wrote these cells
-    // from exactly one page. Two screens can answer them now, so they go where the other five
-    // already are: one writer, `conditionCellWrites`, called by both. The alternative -- a second
-    // carry object on a second page -- is how the same question gets two different answers.
-    //
-    // BOTH LITERALS, ALWAYS, INCLUDING remove_existing_jf WHILE JOINT FILLER IS OFF. The loop
-    // below writes every key unconditionally, which is the behaviour being preserved rather than
-    // a detail of it: a blank Yes/No cell is not "No" to Kyle's formulas, it is whatever his IF()
-    // falls through to. The switch greys out on screen because it moves no money, not because its
-    // answer stopped existing.
-    dye:               { cells: ["Polish!E25"], on: "Yes", off: "No" },
-    joint_filler:      { cells: ["Polish!E29"], on: "Yes", off: "No" },
-    remove_existing_jf: { cells: ["Polish!F29"], on: "Yes", off: "No" }
-  };
+  /** The conditions this job is asked on the live intake and the model does NOT carry: Renovation
+   *  (Epoxy!B10 and Polish!B10). Estimating Tool v2 has no question for it (Hanz, 2026-09-23, took the
+   *  toggle off its intake), so it has no answer on the model -- and the live intake writes it for every
+   *  polish job, so a job that arrives from there has it in cell_values, or a draft whose AI autofill
+   *  set it has. conditionCellWrites carries the answer through and writes the default only while the
+   *  cell is blank, exactly what the live intake does with it: a blank Polish!B10 is not "New" to
+   *  Polish!C17 (IF(B10="New",0.05,0.15)), it takes the Reno branch and triples the patch material rate.
+   *  Each is { key, cells, on, off, default }. */
+  var CARRIED_CELLS = POLISH_CELLS
+    .filter(function (c) { return !c.model; })
+    .map(function (c) { return { key: c.key, cells: c.cells, on: c.on, off: c.off, default: c.default }; });
 
-  /** `cells` with those five literals written over it.
+  /** `cells` with every condition's literals written over it (conditionCellWrites below).
    *
    *  MERGED, never a fresh object: cell_values also carries the AI autofill's flags and every
    *  cell the estimator edited by hand on the estimate grid.
@@ -1521,6 +1545,15 @@
       var lit = c[key] ? spec.on : spec.off;
       for (var i = 0; i < spec.cells.length; i++) out[spec.cells[i]] = lit;
     }
+    // THE CONDITIONS THE MODEL DOES NOT CARRY (Renovation): the answer is whatever the first cell says,
+    // else the default, and it is written to every cell of the row -- the live intake's own read-then-
+    // write, so a "Reno" it or the AI autofill put there survives a v2 save and a blank gets "New".
+    CARRIED_CELLS.forEach(function (carried) {
+      var first = out[carried.cells[0]];
+      var on = isBlank(first) ? carried.default
+        : String(first).trim().toLowerCase() === String(carried.on).trim().toLowerCase();
+      carried.cells.forEach(function (cell) { out[cell] = on ? carried.on : carried.off; });
+    });
     return libraryLineWrites(out, library);
   }
 
@@ -1742,9 +1775,12 @@
       // AN ADMIN OVERRIDE STILL WINS over every one of these: seedConditionDefaults writes a
       // stored condition_defaults row over this literal on a brand new bid. This is what the tool
       // SHIPS answering, not the last word on it.
-      conditions: { local: true, prevailing_wage: false,
-                    taxable: true, remodel_tax: false, bond: false,
-                    dye: false, joint_filler: false, remove_existing_jf: false },
+      //
+      // READ FROM THE TABLE (js/work-types.js modelDefaults), which is now the one place a condition's
+      // shipped answer is written: the eight keys this model carries, local and taxable on, the rest
+      // off. The live intake's own `def` for the same questions used to be kept in step with this
+      // literal by hand; test_work_types.py holds the two equal now.
+      conditions: types.modelDefaults(),
       contingency: 0,
       // D77, the Fees + Textura line. Seeded from RATES.FEES rather than a bare 0 so the constant
       // stays the one place that says what the workbook ships -- the parity test pins B77×C77 as
@@ -2194,7 +2230,8 @@
     money: money, money2: money2, pct: pct, fmtSf: fmtSf,
     HOURS_PER_DAY: HOURS_PER_DAY, RATES: RATES, GP_BANDS: GP_BANDS, DYE_COATS: DYE_COATS,
     gpPct: gpPct,
-    CONDITION_CELLS: CONDITION_CELLS, conditionCellWrites: conditionCellWrites,
+    CONDITION_CELLS: CONDITION_CELLS, CARRIED_CELLS: CARRIED_CELLS, conditionCellWrites: conditionCellWrites,
+    workTypeApplies: workTypeApplies,
     LIBRARY_LINE_CELLS: LIBRARY_LINE_CELLS,
     conditionsFromCells: conditionsFromCells,
     // The library's answer for a condition, and the gate that decides whether it may be
