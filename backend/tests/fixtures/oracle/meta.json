@@ -35,9 +35,40 @@
    "Gyp (GWorx SC190)",
    "Gyp (FR)"
   ],
-  "hash": "0b6949c75e93a32138b79be070acdbe101cf7fdca8c385502051c0526146532c",
+  "hash": "1055d3ca8f045f254dd9709fc8887f0b62a859ac2e67fb80e7a5f9a3568b78b1",
   "cells": 21225,
-  "about": "sha256 over the sorted (sheet, address, formula or constant) lines of the priced sheets, from backend/tests/_oracle_support.py normalised_cells(); it ignores cached values and how the file was saved"
+  "names": 34,
+  "about": "sha256 over the sorted (sheet, address, formula or constant) lines of the priced sheets, then the sorted (scope, name, expression) lines of every defined name the page registers, from backend/tests/_oracle_support.py normalised_cells() and normalised_names(); it ignores cached values and how the file was saved"
+ },
+ "integrity": {
+  "about": "sha256 of each recorded sheet file (its text with every CRLF read as LF) and of the cell-map data in frontend/js/bid-profiles.js that this run read, hashed by backend/tests/js/oracle-integrity.js. Written only when the oracle regenerates; backend/tests/test_workbook_oracle.py recomputes them in CI, so a recorded answer edited by hand, even one that still adds up, fails there with 're-run the oracle'",
+  "files": {
+   "epoxy.json": "81f1032f9a260b817e642ebc6ca2e8e146d198e3f52c8eeca45f75cd88b3bdd2",
+   "polish.json": "9a717c86a8cd30dce0fa57a8e2f55b0c3cf416d540b8b0c8e3ff9d0094411c6b",
+   "seal.json": "d7626b404592dfbc2d8d692377d887cd2d346325bcb74fed7cc0e088391fef21",
+   "seal-jnts.json": "387c2bec8e99fd43b48153146275b802527c4bd6c1d5510ebc8b79b1f86d4ddd",
+   "epoxy-blank.json": "5640bbebdf2bf691560cca88c62edb1eaad92bf6d06b3c27cdd20a18fd4ad2a2",
+   "leveling.json": "867a49d462a80d6813f5865502b96b4fefaaa7b28558791da23a9405c6e53a38",
+   "gyp-usg-1-8.json": "8f11658c37e33c4e6c85516242387204e5ddc15a681d50479413abe5b6d2c168",
+   "gyp-usg-n12ultra.json": "530e2c84bdea46de9f2f2bad4162d39865a8a183633a47102cedec32fd458b5f",
+   "gyp-usg-n25-1-4.json": "d3c0c1f8681926b74419e9603d2c50f616c225f730ac539fe6dcb55d380d734e",
+   "gyp-gworx-sc190.json": "c7311291095d53988e4768ca1c3c20964c020e63b7267a78494ba9e5589c00d5",
+   "gyp-fr.json": "40123ad13020f5fc46c26793dbd366ebbf68864b1825e39b379545afe7ba7d9f"
+  },
+  "profiles": {
+   "file": "frontend/js/bid-profiles.js",
+   "sheetFields": [
+    "slug",
+    "family",
+    "flags",
+    "inputs",
+    "rates",
+    "fixed",
+    "outputs",
+    "ladders"
+   ],
+   "sha256": "492e5d15a3c3908948b6b9ec4f469654dc74ece20a73e7e31f0581b11f95914b"
+  }
  },
  "selfCheck": {
   "sheets": {
@@ -717,7 +748,7 @@
    "slug": "leveling",
    "family": "leveling",
    "vectors": 185,
-   "probes": 3
+   "probes": 4
   },
   "Gyp (USG 1-8\")": {
    "slug": "gyp-usg-1-8",

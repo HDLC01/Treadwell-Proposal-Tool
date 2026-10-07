@@ -281,8 +281,13 @@ against.
   `estimate-review.html`), registers `frontend/js/xl-excel-rounding.js` as it ships, uses the page's options
   and its alias rule for the names HyperFormula refuses, and loads all sixteen tabs. The Excel parity audit
   next to it uses the same module, so there is one way to build the workbook outside a browser.
-  `test_workbook_oracle.py` lifts `HF.init` and the alias rule out of `estimate-review.js` and runs them to
-  prove the options and the rule are the page's. HyperFormula is not a dependency of the repo (no
+  `oracle-engine-harness.js` lifts the page's `HF.init`, its alias rule, its named-expression block and
+  `HF.loadSheet` out of `estimate-review.js` and runs them, and `engine.build()` beside them, against recording
+  stand-ins for HyperFormula on one small fixture. `test_workbook_oracle.py` requires every call each of them
+  made, in order, to be equal, reads the page's boot order (sheets, then names, then cells) from its source, and
+  shows the comparison go red when one line of the page or of `engine.js` is changed in a scratch copy. What it
+  does not cover is the page's edit door, `HF.setCellValue`, which the oracle goes round on purpose (it records
+  what the sheet does when Hard Bid? says Yes). HyperFormula is not a dependency of the repo (no
   `package.json`): install it outside (`npm i --no-save --prefix <dir> hyperformula@2.7.1`, then
   `NODE_PATH=<dir>/node_modules`).
 - *The cell maps.* `js/bid-profiles.js` names, for each of the eleven priced tabs (Epoxy, Polish, Seal,
@@ -300,19 +305,31 @@ against.
   file (about 17,000 cells), after putting back the labor rates the file was last calculated with (the
   template's rate cells were edited after its last calculation, see `docs/kyle-workbook-odd-rules.md`).
 - *What CI does.* CI has no HyperFormula, so it only compares. A hash of the normalised (tab, address,
-  formula or constant) of the priced tabs says "re-run the oracle" when Kyle changes a formula or a number,
-  and does not fire when the file is merely re-saved or an unpriced tab is edited. The page's pinned
-  HyperFormula and the rounding plugin are held to the recorded ones the same way. The recorded cases are
-  checked to straddle every edge on the right side, to add up the way the sheet's total does, and to hold
-  every kind of case. Where HyperFormula is installed, one more test recomputes everything and requires the
-  recorded files byte for byte.
+  formula or constant) of the priced tabs and of every defined name in the workbook says "re-run the oracle"
+  when Kyle changes a formula, a number or what a name points at (a formula that uses `Silica` keeps the same
+  text when Silica is redefined), and does not fire when the file is merely re-saved, its names come out in
+  another order, or an unpriced tab is edited. The page's pinned HyperFormula and the rounding plugin are held
+  to the recorded ones the same way. `meta.json` also records, under `integrity`, a sha256 of every recorded
+  sheet file and of the cell-map data in `bid-profiles.js` the answers came from (`oracle-integrity.js` is the
+  one place that says which fields are hashed and how), and CI recomputes them: a
+  recorded value edited by hand is caught even when it still adds up (gp and total both raised by 1,000 satisfy
+  every arithmetic check and fail the hash). A reworded comment in `bid-profiles.js` does not move the hash;
+  a changed cell or rate does. The recorded cases are checked to straddle every edge on the right side, to add
+  up the way the sheet's total does, and to hold every kind of case. Where HyperFormula is installed, one more
+  test recomputes everything and requires the recorded files byte for byte. What the hashes cannot do is stop
+  someone who edits a file and its hash together; the diff of `meta.json` is where that shows, and so is the
+  recompute test on any machine that has HyperFormula.
 - *Regenerating.* `node backend/tests/js/workbook-oracle.js --write`, then read the fixture diff: one case is
-  one line. A run with no flag compares and exits non-zero on any difference.
+  one line, and the hashes in `meta.json` are rewritten by the same run. A run with no flag compares and exits
+  non-zero on any difference.
 - *First user: Polish.* `oracle-polish-harness.js` runs today's model on every Polish case and requires it to
   equal the sheet except for the declared departures in `fixtures/oracle/departures.json` (no tooling line,
   a narrower remodel tax base, lodging counted in people-days, no hard bid, no bond). Two are predicted to the
   dollar from the model plus exactly what their reason says; all are seen on at least one case; a model change
-  that closes one turns the test red until the list says so.
+  that closes one turns the test red until the list says so. Phase 17 closes three of them for new bids (the
+  tooling line, the remodel tax base and lodging by labor hours). The hard bid and the bond are decisions and
+  not gaps: Hanz removed hard bids on purpose (2026-09-22, and the Hard Bid? switch held at No since
+  2026-10-03) and the bond is 0 by design, so neither is to be fixed.
 - *Kyle's odd rules.* `docs/kyle-workbook-odd-rules.md` lists the eleven places the sheet does something
   surprising (the bond counts the taxes twice, Leveling lodging divides by 8 on 10 hour days, and so on). v2
   reproduces them on purpose. `test_kyle_odd_rules.py` ties each to its cells, to recorded evidence and to the

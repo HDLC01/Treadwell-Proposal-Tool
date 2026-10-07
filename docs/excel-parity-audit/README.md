@@ -46,14 +46,17 @@ Needs Excel installed (it is the authority — the application Troy opens the fi
 
 python extract.py            # 2. workbook -> JSON, in the shape /api/sheet serves
 ./excel-read.ps1             # 3. Excel's own answers, after CalculateFullRebuild
-npm install hyperformula@2.7.1
+npm i --no-save --prefix $env:TEMP\hf hyperformula@2.7.1    # once: into a scratch folder OUTSIDE the repo
+$env:NODE_PATH = "$env:TEMP\hf\node_modules"
 node one-config.js roundup   # 4. the engine's answers, and the diff
 ```
 
-`npm install` here leaves a `node_modules` folder in this directory; it is gitignored along with the
-`job*` files and `*.excel.json`, because this repository is public and none of that belongs in it. To keep
-the repo free of it, install somewhere else instead and point node at it
-(`npm i --no-save --prefix <dir> hyperformula@2.7.1`, then `NODE_PATH=<dir>/node_modules`).
+Install hyperformula with that `npm i --no-save --prefix <scratch dir> hyperformula@2.7.1` form and point node
+at the result with `NODE_PATH=<scratch dir>/node_modules`. Do not run a plain `npm install hyperformula@2.7.1`
+inside this folder: it writes a `node_modules` folder, a `package.json` and a `package-lock.json` here. This
+repository has no `package.json` on purpose (nothing in it depends on a node package), so all three are
+gitignored, along with the `job*` files and `*.excel.json`, because this repository is public and none of that
+belongs in it.
 
 `one-config.js` takes `was`, `nosmart`, `precision` or `roundup`. **One config per process, and
 that matters:** an earlier version ran all four in one process, and
@@ -76,8 +79,20 @@ way to build Kyle's workbook outside a browser:
 - it builds the workbook in the page's order: every sheet, then the named expressions with the page's alias
   rule (`Glaze4` becomes `Glaze_4`), then each sheet's cells.
 
-`backend/tests/test_workbook_oracle.py` lifts the page's own `HF.init` and alias rule and checks them against
-this module, so the claim "same engine as the screen" cannot go quietly stale.
+`backend/tests/js/oracle-engine-harness.js` is what keeps the claim "same engine as the screen" from going quietly
+stale. It lifts the page's own `HF.init`, its alias rule, `HF.rewriteNames`, its named-expression block and
+`HF.loadSheet` out of `frontend/js/estimate-review.js` and RUNS them, and runs this module's `build()` beside
+them, against a recording stand-in for HyperFormula on a small fixture that takes every branch of the page's
+name block (a name that is refused and aliased, a scope on the first sheet, a scope that does not exist, a name
+that throws, an alias that throws, a sheet with no cells). Every call each one makes to the engine is kept in
+order and `backend/tests/test_workbook_oracle.py` requires the two lists to be equal. The page's boot order
+(add the sheets, register the names, only then load cells) is read from its source. The same test changes one
+line of the page or of `engine.js` in a scratch copy, ten different ways, and requires each to go red.
+
+What is NOT claimed: the oracle types its numbers into the engine with `setCellContents`. The page's own door
+for an edit, `HF.setCellValue`, also turns numeric text into a number and refuses to write a Hard Bid? cell.
+The oracle goes round it on purpose (it records what the workbook does when that cell says Yes, which the page
+can never produce), so what is compared is how the workbook is BUILT, not how a keystroke is applied.
 
 ## Reading the output
 

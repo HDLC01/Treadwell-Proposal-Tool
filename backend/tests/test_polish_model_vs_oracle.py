@@ -15,8 +15,11 @@ the model plus exactly what the reason says (tooling added in with travel, trave
 remodel base) and requires it to equal the oracle to the dollar, which proves each reason is the whole reason.
 Every departure must also be SEEN on at least one case, or it is a comment and not a departure.
 
-THE RATCHET. Phase 17 closes these gaps for new bids. The moment a model change closes one, this test goes red
-until the departure is taken out of departures.json, so the list can only shrink on purpose and in view.
+THE RATCHET. Phase 17 closes three of these for NEW bids: tooling, the remodel tax base and lodging. The other two
+are decisions and are not to be "fixed": the hard-bid give-back is Hanz's deliberate removal (2026-09-22, and the
+Hard Bid? switch held at No since 2026-10-03), and the bond is 0 by design. The moment a model change closes a
+departure, this test goes red until it is taken out of departures.json, so the list can only shrink on purpose and
+in view.
 """
 import json
 
@@ -75,6 +78,22 @@ def test_departures_json_is_well_formed(departures):
         assert d["explain"] in (None, "tooling-folds-into-travel", "remodel-base-widened"), d["id"]
         valid = set(departures["outputKeys"]) if d["scope"] == "chain" else set(departures["lodgingKeys"])
         assert set(d["keys"]) <= valid, d["id"]
+
+
+def test_the_note_in_departures_says_which_three_phase_17_closes_and_which_two_are_decisions(departures):
+    """The first wording said Phase 17 closes "the first three", which in the order of the list is tooling, the remodel base and the
+    HARD BID. The hard bid is not a gap, Hanz removed it on purpose, and the bond is 0 by design. A note that sends somebody to
+    'fix' either is a trap, so the note names which departures are which, in the right order, with the reasons."""
+    about = departures["about"]
+    closes = ["tooling-is-zero", "remodel-base-widened", "lodging-by-man-days"]
+    decisions = ["hard-bid-removed", "bond-is-not-an-input"]
+    assert {d["id"] for d in departures["departures"]} == set(closes + decisions)
+    where = {i: about.find(i) for i in closes + decisions}
+    assert min(where.values()) >= 0, ("the note must name every departure by its id", where)
+    assert max(where[i] for i in closes) < min(where[i] for i in decisions), "the three Phase 17 closes come first, then the two decisions"
+    assert "first three" not in about
+    for phrase in ("NEW bids", "2026-09-22", "2026-10-03", "by design", "not to be 'fixed'"):
+        assert phrase in about, phrase
 
 
 def test_each_departure_names_cells_that_really_say_it(departures):
