@@ -129,7 +129,9 @@ out.estimate = {
 };
 
 // ── 3. the test copy ─────────────────────────────────────────────────────────────────────────────
-const win = {};
+// The sandbox reads the cells a test copy keeps off the one vocabulary (js/work-types.js copyableCells)
+// as it parses, so the real module is handed to the window it runs against, under its real global name.
+const win = { TWWorkTypes: require(pick("js/work-types.js")) };
 vm.runInNewContext(SANDBOX, { window: win, document: { getElementById: () => null }, console });
 const SB = win.TWPolishSandbox;
 

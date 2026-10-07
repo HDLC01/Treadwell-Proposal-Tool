@@ -24,6 +24,12 @@
   // actually guarantees this, and there is a test on the tag's presence and its order, because no
   // amount of executing these functions can see a missing <script>.
   var CRM = window.TWCrm;
+  // The one work-type vocabulary and job-conditions table (js/work-types.js, Phase 7): the five tabs the
+  // Defaults tab is split by, which defaults apply to which tab, and the three conditions its Takeoff list
+  // offers. library.html loads it ahead of this file, and a page that did not would otherwise fail later
+  // in some filter, so it says so by name here.
+  var WT = window.TWWorkTypes;
+  if (!WT) throw new Error("library.js needs work-types.js loaded before it");
   var $ = function (id) { return document.getElementById(id); };
 
   var ITEMS = [];
@@ -228,11 +234,11 @@
    *      condition default a new Polish estimate opens with (condition_defaults) -- see
    *      takeoffDefaultGroups, removeDefault and defaultCandidates.
    *
-   *  A literal map rather than a lookup: isReservedItem runs inside filters over the whole
-   *  library on every repaint, and a key check is all it needs to be. */
-  var RESERVED_ITEM_CONDITION = {
-    "joint-filler-kit": "joint_filler", "remove-existing-jf": "remove_existing_jf", "dye": "dye"
-  };
+   *  A plain map rather than a lookup function: isReservedItem runs inside filters over the whole
+   *  library on every repaint, and a key check is all it needs to be. IT IS READ FROM THE TABLE
+   *  (js/work-types.js reservedItems: each condition's `item_id`), and test_work_types_python_pin.py
+   *  holds backend/library.py's RESERVED_ITEM_IDS to the same ids. */
+  var RESERVED_ITEM_CONDITION = WT.reservedItems();
 
   function isReservedItem(id) {
     return !!id && Object.prototype.hasOwnProperty.call(RESERVED_ITEM_CONDITION, id);
@@ -1311,7 +1317,7 @@
         // a box. It is a fourth hand on the joint-filler line, priced on the Labor step, and the
         // Polish estimate never reads a material price off this row -- a figure typed here would
         // sit in the library looking like a charge that no bid makes.
-        '<td class="n">' + (it.id === "remove-existing-jf"
+        '<td class="n">' + (it.id === WT.itemIdOf("remove_existing_jf")
           ? '<span class="builtin">No material cost</span>'
           : '<span class="money"><span>$</span><input data-f="unit_cost" class="num cell-cost" value="' + (it.unit_cost == null ? "" : it.unit_cost) + '" aria-label="Cost of one purchase"></span>') + "</td>" +
         "<td>" + pick("vendor", it.vendor, vendorNames(), "Vendor", ' class="cell-vendor"') + "</td>" +
@@ -1891,7 +1897,7 @@
   function conditionHits(it, c) {
     // Remove existing joint filler has no material cost BY DESIGN (a labor modifier), so it is
     // not a material that is missing one.
-    if (c === "no_cost") return !(Number(it.unit_cost) > 0) && it.id !== "remove-existing-jf";
+    if (c === "no_cost") return !(Number(it.unit_cost) > 0) && it.id !== WT.itemIdOf("remove_existing_jf");
     if (c === "no_division") return itemDivisions(it).length === 0;
     if (c === "no_vendor") return !String(it.vendor || "").trim();
     if (c === "no_price_date") return !it.cost_updated_at;
@@ -2610,8 +2616,10 @@
     // shared module did not load would take Items and Assemblies down with it, and an em dash is
     // a better answer than a blank screen.
     var R = (B.RATES || {});
-    var kitLine = L.priceLine({ item_id: "joint-filler-kit" }, ITEMS, 0);
-    var dyeLine = L.priceLine({ item_id: "dye" }, ITEMS, 0);
+    // THE RESERVED ROWS' IDS ARE THE TABLE'S (js/work-types.js: each condition's item_id), not typed here.
+    var kitId = WT.itemIdOf("joint_filler"), dyeId = WT.itemIdOf("dye");
+    var kitLine = L.priceLine({ item_id: kitId }, ITEMS, 0);
+    var dyeLine = L.priceLine({ item_id: dyeId }, ITEMS, 0);
     var kitRate = kitLine.ok ? kitLine.unit_price : R.JOINT_FILLER_KIT_COST;
     var kitCov = kitLine.ok ? kitLine.coverage : 3500;
     // PER SQUARE FOOT, which is what the dye line costs whatever its row buys by: one unit's
@@ -2625,7 +2633,7 @@
     // THE MATERIAL ROW'S OWN WORDING, "$X per <unit>", with the unit off the row when there is
     // one -- then what one of them covers, which is the half of the kit's price a bare "$500 per
     // Kit" would leave out.
-    var kitUnit = (itemOf("joint-filler-kit") || {}).unit || "kit";
+    var kitUnit = (itemOf(kitId) || {}).unit || "kit";
     var named = function (id, label) { return (itemOf(id) || {}).name || label; };
     // ON THE DEFAULTS TAB unless an admin took it off (`listed: false`). The same reading as
     // seedConditionsShown in bid-model.js, which is what a new estimate snapshots.
@@ -2636,25 +2644,30 @@
       }
       return true;
     };
-    return [
-      { key: "joint_filler", item_id: "joint-filler-kit", label: "Joint filler",
-        name: named("joint-filler-kit", "Joint filler"), on: !!c.joint_filler, listed: listedOf("joint_filler"),
-        priced: kit ? kit + " per " + kitUnit + " · 1 per " + L.qtyText(kitCov) + " SF"
-                    : "No rate loaded for the kit" },
-      { key: "remove_existing_jf", item_id: "remove-existing-jf",
-        label: "Remove existing joint filler",
-        name: named("remove-existing-jf", "Remove existing joint filler"),
-        on: !!c.remove_existing_jf, listed: listedOf("remove_existing_jf"),
-        // NO PRICE, and saying so is the point. It is a fourth hand on the joint-filler line -- a
-        // labor modifier the estimator prices on the Labor step -- so a dollar figure here would
-        // be an invention. "No material cost" is a real answer; a made-up $0.00 would read as
-        // free.
-        priced: "No material cost" },
-      { key: "dye", item_id: "dye", label: "Dye", name: named("dye", "Dye"), on: !!c.dye, listed: listedOf("dye"),
-        // THE ROW IS ONE COAT and a bid buys B.DYE_COATS of them -- Kyle's rows 25 and 26.
-        priced: dye ? dye + " per SF a coat · " + (B.DYE_COATS || 2) + " coats"
-                    : "No rate loaded for dye" }
-    ];
+    // WHAT EACH ROW SAYS IT COSTS, and the only thing about these three that is this page's own. Which
+    // conditions there are, in what order, and each one's key, id and label are the table's (the ones
+    // the Takeoff step asks, js/work-types.js), so a fourth condition added there with no line here is
+    // refused by name below and never drawn half-finished.
+    var priced = new Map([
+      ["joint_filler", kit ? kit + " per " + kitUnit + " · 1 per " + L.qtyText(kitCov) + " SF"
+                           : "No rate loaded for the kit"],
+      // NO PRICE, and saying so is the point. It is a fourth hand on the joint-filler line -- a
+      // labor modifier the estimator prices on the Labor step -- so a dollar figure here would
+      // be an invention. "No material cost" is a real answer; a made-up $0.00 would read as
+      // free.
+      ["remove_existing_jf", "No material cost"],
+      // THE ROW IS ONE COAT and a bid buys B.DYE_COATS of them -- Kyle's rows 25 and 26.
+      ["dye", dye ? dye + " per SF a coat · " + (B.DYE_COATS || 2) + " coats"
+                  : "No rate loaded for dye"]
+    ]);
+    return WT.conditionsFor("polish", "v2Takeoff").map(function (cond) {
+      if (!priced.has(cond.key)) {
+        throw new Error("library.js has no priced line for the Takeoff condition " + cond.key);
+      }
+      return { key: cond.key, item_id: cond.item_id, label: cond.label,
+               name: named(cond.item_id, cond.label), on: !!c[cond.key], listed: listedOf(cond.key),
+               priced: priced.get(cond.key) };
+    });
   }
 
   /** One condition's answer, sent on the change, with the optimistic flip and the put-it-back in
@@ -2968,21 +2981,24 @@
   // returning nothing made the Add button below the list have nothing to open.
   var DEFAULT_BROWSE = false;
 
-  // WHICH WORK TYPE THE DEFAULTS TAB IS SHOWING. The five are markup.TABS -- the tabs of
-  // Kyle's workbook and the list the markup rules are already filed under. `combo` is not
+  // WHICH WORK TYPE THE DEFAULTS TAB IS SHOWING. The five are the TABS of the one vocabulary
+  // (js/work-types.js): the tabs of Kyle's workbook and the list the markup rules are already filed
+  // under, which markup.TABS holds the same way and test_work_types_python_pin.py pins. `combo` is not
   // among them: a combo job runs on the epoxy AND polish tabs, so it reads both lists.
-  var WORK_TYPES = ["polish", "seal", "epoxy", "leveling", "gyp"];
+  var WORK_TYPES = WT.tabKeys();
   var DEFAULT_WT = WORK_TYPES[0];
 
   /** Does this default belong on the tab currently showing?
    *
    *  AN EMPTY LIST MEANS EVERY WORK TYPE, and that is the whole backwards-compatibility
    *  story: every row set before these tabs existed has no list, so it keeps appearing
-   *  everywhere exactly as it did. Nobody opens this tab to find their defaults gone. */
+   *  everywhere exactly as it did. Nobody opens this tab to find their defaults gone.
+   *
+   *  A thin wrapper over work-types.js's appliesTo, the one reading the estimate's own seeding shares.
+   *  `wt` is a TAB, which is all this page ever has (the strip above the lists is the five tabs); asking
+   *  it about "combo" throws. */
   function appliesToWorkType(row, wt) {
-    var list = row && row.default_work_types;
-    if (!list || !list.length) return true;
-    return list.indexOf(wt) !== -1;
+    return WT.appliesTo(row && row.default_work_types, wt);
   }
 
   /** What a row says about where it applies, so the list can be read without clicking

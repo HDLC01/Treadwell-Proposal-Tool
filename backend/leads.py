@@ -710,6 +710,8 @@ def build_base_blob(msg: Dict[str, Any], email_text: str, draft_id: str) -> Dict
     }
 
 
+# Every intake quantity field, in the live intake's order: the FIELDS of frontend/js/work-types.js, to which
+# test_work_types_python_pin.py holds this tuple.
 _QUANTITY_KEYS = (
     "system_1_sf", "polish_sf", "cove_1_lf",
     "system_2_sf", "polish_2_sf", "cove_2_lf",
@@ -723,6 +725,7 @@ _ALLOWED_INTAKE_KEYS = frozenset({
     "approx_start_date", "contact_notes",
 } | set(_QUANTITY_KEYS))
 
+# The job types of frontend/js/work-types.js, in its order (test_work_types_python_pin.py pins them).
 _WORK_TYPES = ("epoxy", "polish", "combo", "gyp")
 _AUDIENCES = {"direct": "Direct", "gc": "GC"}
 _NUM_JUNK_RE = re.compile(r"[$,\s]")

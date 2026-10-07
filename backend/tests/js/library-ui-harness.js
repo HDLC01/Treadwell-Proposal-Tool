@@ -42,6 +42,10 @@ const L = require(path.join(ROOT, "js", "library-core.js"));
 // by who created an assembly through TWCrm.nameOf, which is the app's one email→display-name
 // convention. A stub here could agree with this file and disagree with the CRM board.
 const CRM = require(path.join(ROOT, "js", "crm-core.js"));
+// The REAL vocabulary (js/work-types.js), for the same reason: the page's WORK_TYPES, its
+// appliesToWorkType and the three Takeoff conditions it lists are read off it, so a made-up copy here would
+// agree with the page by construction and prove nothing. Handed to the scope as `WT`, the page's own alias.
+const WT = require(path.join(ROOT, "js", "work-types.js"));
 
 /** Lift a named function out of the page's IIFE (two-space indent), braces balanced.
  *
@@ -230,7 +234,7 @@ function makeDocument(presentSelectors) {
 }
 
 const dom = makeDom();
-const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
+const scope = new Function("L", "$", "TW", "state", "document", "CRM", "WT", `
   "use strict";
   var ITEMS = state.ITEMS, ASMS = state.ASMS, VENDORS = state.VENDORS;
   // New-this-session records, read by renderItems (the Save button) and renderPanel (#asm-save).
@@ -302,7 +306,7 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   // takeoffConditionDefaults, defaultCandidates, removeDefault). A lifted function reaching for a
   // helper this scope does not have dies on a ReferenceError that reds every scenario in this
   // file at once.
-  ${grab(/^  var RESERVED_ITEM_CONDITION = \{\n[^}]*\n  \};$/m, "the RESERVED_ITEM_CONDITION declaration")}
+  ${grab(/^  var RESERVED_ITEM_CONDITION = WT\.reservedItems\(\);$/m, "the RESERVED_ITEM_CONDITION declaration")}
   ${fn("isReservedItem")}
   // Lifted because renderPanel calls it. A lifted function that reaches for a helper this scope
   // does not have dies with a ReferenceError, which takes every test in test_library_ui.py red at
@@ -359,7 +363,7 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   // is what every row set before the column existed carries, so nothing anybody already
   // configured disappears the day the tabs arrive. The declarations come from library.js so
   // a renamed list cannot pass as a working one.
-  ${grab(/^  var WORK_TYPES = \[[^\]]*\];$/m, "the WORK_TYPES declaration")}
+  ${grab(/^  var WORK_TYPES = WT\.tabKeys\(\);$/m, "the WORK_TYPES declaration")}
   ${grab(/^  var DEFAULT_WT = .*$/m, "the DEFAULT_WT declaration")}
   ${fn("appliesToWorkType")}
   ${fn("workTypeLabel")}
@@ -760,7 +764,7 @@ function build(overrides, docSelectors) {
                            // the Labor tab's removeLaborLine asks TW.confirmDanger first.
                            st.TW || {});
   const doc = makeDocument(docSelectors || []);
-  const api = scope(L, d.el, TW, st, doc, CRM);
+  const api = scope(L, d.el, TW, st, doc, CRM, WT);
   d.el("area").value = "2875";
   return { api, dom: d, st, doc };
 }
@@ -3920,8 +3924,9 @@ out.serverOwnedItemFields = build().api.SERVER_OWNED_ITEM_FIELDS;
   // READ THROUGH THE REAL freshModel, not typed here, so a literal that moved back in
   // bid-model reds this rather than passing against a restated copy.
   {
+    const bareModel = require(path.join(ROOT, "js", "bid-model.js"));
     const bare = build({
-      window: { TWBidModel: require(path.join(ROOT, "js", "bid-model.js")) },
+      window: { TWBidModel: bareModel },
       ITEMS: [], ASMS: [], ADMIN: true,
     });
     bare.api.renderDefaultTakeoff();
@@ -3944,6 +3949,10 @@ out.serverOwnedItemFields = build().api.SERVER_OWNED_ITEM_FIELDS;
       // The three keys the page offers, read off the function rather than the markup, so this
       // still says something when nothing is listed.
       offersTheThree: bare.api.takeoffConditionDefaults().map((c) => c.key).sort().join(","),
+      // ...in the order the Takeoff step asks them, and the keys bid-model writes workbook cells for:
+      // the three agreements test_the_condition_vocabulary_is_the_same_three_on_both_sides holds.
+      offeredInOrder: bare.api.takeoffConditionDefaults().map((c) => c.key),
+      cellKeys: Object.keys(bareModel.CONDITION_CELLS),
       noneOfThemOn: bare.api.takeoffConditionDefaults().every((c) => c.on === false),
       // EACH KEY IS ITS RESERVED ROW, BOTH WAYS. takeoffConditionDefaults names the row each key
       // is and RESERVED_ITEM_CONDITION maps the row back; a rename on one side only would list a
@@ -3951,6 +3960,22 @@ out.serverOwnedItemFields = build().api.SERVER_OWNED_ITEM_FIELDS;
       keysAndRowsAgree: bare.api.takeoffConditionDefaults().every((c) =>
         bare.api.RESERVED_ITEM_CONDITION[c.item_id] === c.key) &&
         Object.keys(bare.api.RESERVED_ITEM_CONDITION).length === 3,
+    };
+  }
+
+  // THE WORK-TYPE FILTER IS A THIN WRAPPER OVER THE ONE VOCABULARY (js/work-types.js appliesTo), run through the
+  // page's own lifted function: an empty list is every tab, a list is those tabs, and asking it about a JOB
+  // TYPE ("combo" has no tab of its own) throws instead of quietly answering "no".
+  {
+    const wt = api.appliesToWorkType;
+    const answer = (row, tab) => { try { return wt(row, tab); } catch (e) { return "threw: " + e.message; } };
+    out.defaultsWorkTypeFilter = {
+      tabs: api.WORK_TYPES,
+      none: answer({}, "gyp"), empty: answer({ default_work_types: [] }, "seal"),
+      scopedIn: answer({ default_work_types: ["epoxy", "seal"] }, "seal"),
+      scopedOut: answer({ default_work_types: ["epoxy", "seal"] }, "polish"),
+      noRow: answer(null, "polish"),
+      combo: answer({ default_work_types: [] }, "combo"),
     };
   }
 

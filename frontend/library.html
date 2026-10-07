@@ -1535,6 +1535,10 @@
        nothing on load; it is 14.6 KB gzipped of pure arithmetic. -->
   <!-- bid-model reads its number helpers off window.TWExcelMath as it loads, so that goes first. -->
   <script src="/js/excel-math.js"></script>
+  <!-- The one work-type vocabulary and job-conditions table: bid-model derives from it as it loads, and
+       library.js reads the five work types, which default applies to which, and the three Takeoff
+       conditions off it (var WT = window.TWWorkTypes, which runs at parse time). -->
+  <script src="/js/work-types.js"></script>
   <script src="/js/bid-model.js"></script>
   <script src="/js/library-core.js"></script>
   <!-- ONE FUNCTION out of this file, and the eighteenth page to load it: TWCrm.nameOf, which is

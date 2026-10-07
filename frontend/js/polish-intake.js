@@ -37,6 +37,7 @@
 
   var SB = window.TWPolishSandbox;
   var B = window.TWBidModel;      // owns the model shape, and the keys markupChain reads
+  var T = window.TWWorkTypes;     // the one vocabulary: which questions this form asks, and how it words them
   var $ = function (id) { return document.getElementById(id); };
 
   var esc = function (s) {
@@ -63,22 +64,17 @@
   // Polish!B4 / Epoxy!B4 by conditionCells() -- it is only no longer ASKED here. Because it is not
   // in this list, isCondition("local") is false and a spoken "it is not local" in the verbal panel
   // changes nothing: a person's word does not outrank the miles.
-  var CONDITIONS = [
-    // NO HARD BID. Hanz, 2026-09-22: "remove all hard bids from the polish intake form. And
-    // also on the markups" -- confirmed to mean the Polish beta specifically (its intake,
-    // Review step and the Markup admin page), leaving the live v1 Intake, the AI Autofill
-    // flag, the verbal-AI parser and pricing.py's own engine untouched; those never read this
-    // list. The keys are still the contract with bid-model.js's markupChain(), which no
-    // longer offers hard_bid either -- see that file's own note on the removal.
-    { key: "prevailing_wage", label: "Prevailing wage",
-      why: "Raises every labor line to the prevailing rate." },
-    { key: "taxable", label: "Taxable",
-      why: "Adds sales tax. The bid you see already includes it." },
-    { key: "remodel_tax", label: "Remodel tax",
-      why: "Occupied remodel. Adds the county remodel rate on top." },
-    { key: "bond", label: "Bond",
-      why: "Bond premium on the running total. The sheet ships this at 0% either way." }
-  ];
+  //
+  // READ FROM THE TABLE (js/work-types.js, Phase 7), not typed here: the questions a polish job is asked on
+  // this form, in this form's order, with the wording this form uses (`wording.v2Intake` where it words one
+  // differently from the live intake: the county box is not "below" here). A row is { key, label, why,
+  // ... } and this page reads only those three. NO HARD BID. Hanz, 2026-09-22: "remove all hard bids from
+  // the polish intake form. And also on the markups" -- confirmed to mean the Polish beta specifically
+  // (its intake, Review step and the Markup admin page), leaving the live v1 Intake, the AI Autofill flag,
+  // the verbal-AI parser and pricing.py's own engine untouched; those never read this list. The keys are
+  // still the contract with bid-model.js's markupChain(), which no longer offers hard_bid either -- see
+  // that file's own note on the removal.
+  var CONDITIONS = T.conditionsFor("polish", "v2Intake");
 
   // Taken FROM the pricing engine rather than restated: most jobs are local and taxable, and the
   // other three are the exceptions somebody has to know about. Sourcing them here means this page

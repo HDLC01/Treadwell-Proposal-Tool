@@ -229,13 +229,16 @@ const out = {};
     "return { showView, setWorkType, restoreView, onWtClick: __onWtClick, view: () => view," +
       " wt: () => DEFAULT_WT, PANES, WORK_TYPES };",
   ].join("\n");
+  // `WT` is library.js's own alias for the one vocabulary (js/work-types.js): the lifted
+  // `var WORK_TYPES = WT.tabKeys();` reads the five tabs off it, so the REAL module is what answers.
+  const WT = require(path.join(ROOT, "js", "work-types.js"));
   const scope = new Function("window", "document", "$",
-    "renderDefaultTakeoff", "renderDefaultLabor", "renderDefaultSearch", body);
+    "renderDefaultTakeoff", "renderDefaultLabor", "renderDefaultSearch", "WT", body);
   const noop = () => {};
   const run = (hash) => {
     const win = makeWin(hash, { pathname: "/library.html" });
     const doc = makeDoc(ids);
-    const api = scope(win, doc, doc.getElementById, noop, noop, noop);
+    const api = scope(win, doc, doc.getElementById, noop, noop, noop, WT);
     return { win, doc, api };
   };
 
@@ -296,7 +299,7 @@ const out = {};
   {
     const win = makeWin("#tab=defaults", { noModule: true });
     const doc = makeDoc(ids);
-    const api = scope(win, doc, doc.getElementById, noop, noop, noop);
+    const api = scope(win, doc, doc.getElementById, noop, noop, noop, WT);
     api.restoreView();
     out.libNoModule = { view: api.view(), hash: win.location.hash };
   }

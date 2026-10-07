@@ -48,6 +48,8 @@ const src = read(path.join(ROOT, "js", "polish-estimate.js"));
 const pageHtml = read(path.join(ROOT, "polish-estimate.html"));
 const B = require(path.join(ROOT, "js", "bid-model.js"));
 const L = require(path.join(ROOT, "js", "library-core.js"));
+// The one vocabulary (js/work-types.js): the page builds its Takeoff cards off it as it parses.
+const W = require(path.join(ROOT, "js", "work-types.js"));
 
 const clone = (v) => JSON.parse(JSON.stringify(v));
 
@@ -80,6 +82,7 @@ const EXPORTS = `
     takeoffPanel: takeoffPanel, laborPanel: laborPanel, reviewPanel: reviewPanel,
     markupTable: markupTable, newLaborRow: newLaborRow,
     STEPS: STEPS, UNITS: UNITS,
+    CONDITION_CARDS: CONDITION_CARDS, RESERVED_ITEM_IDS: RESERVED_ITEM_IDS,
     model: function () { return M; },
     state: function () { return state; },
     asms: function () { return ASMS; },
@@ -421,7 +424,7 @@ function build(opts) {
 
   const winListeners = [];
   const win = {
-    TWBidModel: B, TWLib: L, TWPolishSandbox: S,
+    TWBidModel: B, TWWorkTypes: W, TWLib: L, TWPolishSandbox: S,
     TWAuth: { ready: Promise.resolve() },
     scrollTo: () => { log.push("scroll"); },
     location: { href: "https://x/polish-estimate.html?d=proj-1" },
@@ -3995,6 +3998,24 @@ const rendered = [];      // every string the page put on screen, for the Labour
       flipCalls: flipCalls, flippedDiffers: flipped.total !== stateOf(startsOn).total,
       saved: { here: savedHere, libOff: savedLibFlippedOff, libMatches: savedLibMatchesFlips },
       savedFlips: { takeoff0: savedModel.takeoff[0].enabled, c1: savedModel.labor.filter((r) => r.id === "c1")[0].enabled },
+    };
+  }
+
+  // ── THE TAKEOFF CARDS ARE THE TABLE'S ROWS, joined with this page's own views ──────────────────────
+  // Read off the page's real CONDITION_CARDS after the real parse: which cards there are, in what order, and
+  // each one's cell, reserved library row and dependency come from js/work-types.js (the conditions the
+  // Takeoff step asks of a polish job). What a card says is the page's, so the harness reports only the
+  // table's half, plus whether a card prices (the remove-existing card must not) and what its hint starts
+  // with (the cell it names, which is text this page still types).
+  {
+    const cards = build();
+    out.cards = {
+      rows: cards.api.CONDITION_CARDS.map((c) => ({
+        key: c.key, cell: c.cell, item_id: c.item_id, needs: c.needs === undefined ? null : c.needs,
+        prices: typeof c.cost === "function",
+        hintNamesItsCell: typeof c.matHint === "string" ? c.matHint.indexOf(c.cell) === 0 : null,
+      })),
+      reserved: cards.api.RESERVED_ITEM_IDS,
     };
   }
 

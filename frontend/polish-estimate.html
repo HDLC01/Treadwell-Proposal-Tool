@@ -422,6 +422,9 @@
   <script src="/js/library-core.js"></script>
   <!-- bid-model reads its number helpers off window.TWExcelMath as it loads, so that goes first. -->
   <script src="/js/excel-math.js"></script>
+  <!-- The one work-type vocabulary and job-conditions table: bid-model derives from it as it loads, and
+       this page's own script reads its Takeoff cards off it (var T = window.TWWorkTypes). -->
+  <script src="/js/work-types.js"></script>
   <script src="/js/bid-model.js"></script>
   <script src="/js/polish-sandbox.js"></script>
   <script src="/js/polish-estimate.js"></script>

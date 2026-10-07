@@ -48,6 +48,9 @@
   }
 
   var B = window.TWBidModel;      // the markup chain, pinned to Kyle's Polish tab
+  // The one vocabulary and job-conditions table (js/work-types.js). Bound ABOVE adopt() on purpose:
+  // adopt() runs at parse time, and condLine reads the reserved library ids off it.
+  var T = window.TWWorkTypes;
   var L = window.TWLib;            // priceAssembly — the same maths the library page shows
   var S = window.TWPolishSandbox;  // never edit a live bid
   var $ = function (id) { return document.getElementById(id); };
@@ -329,13 +332,14 @@
    *  formulas the tool shipped with, untouched -- rather than pricing the line at $0 or breaking
    *  the page. `library` says which of the two answered.
    *
-   *  THE IDS ARE LITERALS HERE, not read off CONDITION_CARDS: adopt() runs at parse time, above
-   *  that declaration, and nothing this reaches may depend on a var assigned below it.
+   *  THE IDS ARE THE TABLE'S (T.itemIdOf: js/work-types.js), not read off CONDITION_CARDS: adopt() runs
+   *  at parse time, above that declaration, and nothing this reaches may depend on a var assigned
+   *  below it. T is bound at the top of this file for that reason.
    *
    *  `qty` is what the card's Measurement shows: kits for joint filler, the polished area in SF
    *  for dye (the area is what dye is spread across, whatever its row's coverage says). */
   function condLine(key, area) {
-    var id = key === "dye" ? "dye" : "joint-filler-kit";
+    var id = T.itemIdOf(key);
     // THIS BID'S COVERAGE for the line, if one was typed (M.cond_cov, set from the card's Coverage
     // box). Blank leaves ITEMS alone, so the library's own figure -- and every bid saved before the
     // box existed -- prices exactly as it did.
@@ -365,12 +369,12 @@
    *  either. */
   function conditionLibrary() {
     var out = {};
-    [["dye", "dye"], ["joint_filler", "joint-filler-kit"]].forEach(function (pair) {
-      if (!L.findItem(ITEMS, pair[1])) return;
-      var ln = condLine(pair[0], 0).line;
-      out[pair[0]] = ln ? { unit_price: ln.unit_price, coverage: ln.coverage,
-                            waste_pct: ln.waste_pct, roundup: ln.roundup, buy_qty: ln.buy_qty }
-                        : null;
+    ["dye", "joint_filler"].forEach(function (key) {
+      if (!L.findItem(ITEMS, T.itemIdOf(key))) return;
+      var ln = condLine(key, 0).line;
+      out[key] = ln ? { unit_price: ln.unit_price, coverage: ln.coverage,
+                        waste_pct: ln.waste_pct, roundup: ln.roundup, buy_qty: ln.buy_qty }
+                    : null;
     });
     return out;
   }
@@ -782,7 +786,7 @@
   }
 
   function condCovItem(key) {
-    return itemById(key === "dye" ? "dye" : "joint-filler-kit");
+    return itemById(T.itemIdOf(key));
   }
 
   /** An assembly row's lines that name a real material, each with the figure it will price with:
@@ -843,16 +847,20 @@
    *  coverage is the reserved row's own (condLine), so the kit count and the "one kit per ..."
    *  sentence both come off the line priceLine priced; a second copy of 3500 on this page would
    *  go stale the day an admin changed it. */
-  var CONDITION_CARDS = [
-    { key: "joint_filler", tag: "JOINT FILLER", label: "In the bid", cell: "Polish!E29",
-      // THE RESERVED library_items ROW that prices this line -- see condLine, which falls back to
-      // bid-model.js's jointFillerCost when the row is not there.
-      item_id: "joint-filler-kit",
+  //
+  //  WHICH CARDS THERE ARE IS THE TABLE'S, AND WHAT EACH ONE SAYS IS THIS PAGE'S (Phase 7). CARD_VIEWS
+  //  below is everything about a card that is this screen's own: its tag, its sentences, how it prices.
+  //  The conditions the Takeoff step asks of a polish job, in its order, and each one's workbook cell, its
+  //  reserved library row (`item_id`: see condLine, which falls back to bid-model.js's jointFillerCost when
+  //  the row is not there) and what it `needs` come from js/work-types.js, and CONDITION_CARDS joins the
+  //  two. A condition added there with no view here is refused by name rather than drawn half-finished.
+  var CARD_VIEWS = [
+    { key: "joint_filler", tag: "JOINT FILLER", label: "In the bid",
       // THE LIVE NAME, not a string typed twice. An admin renaming the row on the Items tab has
       // to show up here too, or the card is a second copy of a fact that can go stale without
       // looking stale.
       material: function () {
-        var item = L.findItem(ITEMS, "joint-filler-kit");
+        var item = L.findItem(ITEMS, T.itemIdOf("joint_filler"));
         return (item && item.name) ? item.name : "Joint filler, 10 gal kit";
       },
       matHint: "Polish!E29 · priced from the Item Library.",
@@ -871,18 +879,15 @@
       },
       unitHint: "Kits are what the job buys." },
     { key: "remove_existing_jf", tag: "REMOVE EXISTING", label: "Taking the old filler out",
-      cell: "Polish!F29", needs: "joint_filler",
       // ITS RESERVED library_items ROW, 2026-10-01 -- the Defaults tab lists it as a material and
       // the Items tab is where it is edited. NOTHING HERE PRICES OFF IT: the card has no `cost`,
       // so it stays the switch-and-sentence card and its answer still only reaches Polish!F29.
       // It is carried so RESERVED_ITEM_IDS below keeps it out of every takeoff-row picker.
-      item_id: "remove-existing-jf",
       why: "Adds a fourth hand to the joint-filler line. Priced on the Labor step, where that " +
            "line is." },
-    { key: "dye", tag: "DYE", label: "In the bid", cell: "Polish!E25",
-      item_id: "dye",
+    { key: "dye", tag: "DYE", label: "In the bid",
       material: function () {
-        var item = L.findItem(ITEMS, "dye");
+        var item = L.findItem(ITEMS, T.itemIdOf("dye"));
         return (item && item.name) ? item.name : "Dye, per coat";
       },
       matHint: "Polish!E25 · two coats, rows 25 and 26 · priced from the Item Library.",
@@ -897,6 +902,22 @@
       qtyHint: function () { return "The polished area from the rows above."; },
       unitHint: "Priced across the area, not by the pack." }
   ];
+
+  /** The cards, as the page draws them: each condition the Takeoff step asks of a polish job (the table's
+   *  rows, in its order) with its own view laid over { key, cell, item_id, needs }. `cell` is the first
+   *  workbook cell the answer is written to, `item_id` the reserved library row that prices it, and
+   *  `needs` is set only on the card that depends on another. */
+  var CONDITION_CARDS = (function () {
+    var views = new Map(CARD_VIEWS.map(function (v) { return [v.key, v]; }));
+    return T.conditionsFor("polish", "v2Takeoff").map(function (c) {
+      if (!views.has(c.key)) {
+        throw new Error("polish-estimate.js has no card for the Takeoff condition " + c.key);
+      }
+      var data = { key: c.key, cell: c.cells[0], item_id: c.item_id };
+      if (c.needs) data.needs = c.needs;
+      return Object.assign(data, views.get(c.key));
+    });
+  })();
 
   // The three ids CONDITION_CARDS above owns -- the two it prices by a fixed formula rather than
   // by search, and remove-existing's, which prices nothing -- read off it rather than retyped, so
@@ -2759,7 +2780,7 @@
       // ever states, so laborUnstated is the signal that the calculator has never saved here.
       M.takeoff = (B.conditionsUnstated(state.polish_estimate) || B.laborUnstated(state.polish_estimate))
         ? B.seedDefaultTakeoff(M.takeoff, ASMS, ITEMS, RESERVED_ITEM_IDS,
-                               state.polish_sf, state.polish_2_sf)
+                               state.polish_sf, state.polish_2_sf, "polish")
         : B.seedTakeoffSf(M.takeoff, state.polish_sf, state.polish_2_sf);
     }
     // THE LABOR CALCULATOR, AFTER THE TAKEOFF SEED because "from SF" lines need the job's SF

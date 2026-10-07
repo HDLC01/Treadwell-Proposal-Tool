@@ -41,6 +41,7 @@ from fastapi.testclient import TestClient
 import condition_defaults as cd
 import main
 import profiles
+from _node import last_json_line, require_node, run_node
 
 client = TestClient(main.app)
 
@@ -108,9 +109,15 @@ def test_the_key_vocabulary_is_the_same_three_the_workbook_writes():
 
     Mutation: add a fourth key to KEYS. Nothing in the product would say which of the two files
     was wrong."""
-    core = (FRONTEND / "js" / "bid-model.js").read_text(encoding="utf-8", errors="replace")
+    # RUN, not read (Phase 7): CONDITION_CELLS is the one conditions table (js/work-types.js) cut for the job
+    # type the model prices, so what has to hold is that the real module writes a cell for every key.
+    require_node()
+    proc = run_node("-e", "console.log(JSON.stringify(Object.keys(require(process.argv[1]).CONDITION_CELLS)))",
+                    FRONTEND / "js" / "bid-model.js")
+    assert proc.returncode == 0, proc.stderr
+    written = last_json_line(proc.stdout)
     for key in cd.KEYS:
-        assert re.search(r"^\s*%s:\s*\{ cells: \[" % key, core, re.M), (
+        assert key in written, (
             "%s is accepted here but CONDITION_CELLS does not write it, so the answer reaches no "
             "cell in the workbook" % key)
     assert set(cd.KEYS) == {"joint_filler", "remove_existing_jf", "dye"}

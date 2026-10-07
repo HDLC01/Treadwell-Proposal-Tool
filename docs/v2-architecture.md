@@ -6,16 +6,19 @@ today, with what happens to each copy.
 
 **What exists today, and what does not.** The tests and the golden files described in section 6
 exist now, and so does the workbook oracle (Phase 6, also section 6). The modules in section 3 other
-than `bid-model.js`, `excel-math.js`, `library-core.js` and `markup-core.js` do not exist yet: they
-are the design the phases build toward. The one exception is `js/bid-profiles.js`, which Phase 6
+than `bid-model.js`, `excel-math.js`, `work-types.js`, `library-core.js` and `markup-core.js` do not
+exist yet: they are the design the phases build toward. The one exception is `js/bid-profiles.js`, which Phase 6
 created with only the cell maps of the eleven priced tabs in it; the rates and rules come in Phase 8.
 `bid-model.js` is the old `polish-bid-core.js` under its new name, and `excel-math.js` is the leaf
 Phase 5 took the model's number helpers out into, both with no change to what any of it does (see
 "Module names" and "The leaf" below). Phase 4 added `patchModel`, `buildSavePatch` and `MODEL_KEYS`
 to the model (see 7.10 and the model-safety paragraph of section 6). Line numbers in this document
 are on `origin/staging` at commit `3f94ed2` (2026-10-07), except where a paragraph says they are on
-the Phase 4 change, and except every line number in `js/bid-model.js` or `js/excel-math.js`, which is
-on the Phase 5 change. They will drift; the file and the name are what to search for.
+the Phase 4 change, and except every line number in `js/excel-math.js`, which is on the Phase 5 change.
+The citations that Phase 7 wrote or rewrote (in 7.1, 7.3 and the vocabulary paragraph below) are on the
+Phase 7 change. Phase 7 also moved lines in `js/bid-model.js`, `js/library.js`, `js/polish-intake.js`,
+`js/polish-estimate.js` and `js/polish-sandbox.js`, and the older citations to those five files in the
+other subsections were not recounted. They will drift; the file and the name are what to search for.
 
 **Names.** The tool people called the Polish beta is now **Estimating Tool v2**, and its database
 page, which was the Polish Estimate Database, is now **v2 Estimates** (Phase 1b, 2026-10-07). Only
@@ -51,6 +54,41 @@ each for a reason written in 7.5 and 7.11: `markup-core.js` keeps its own `excel
 `library-core.js` keeps its own pack count, and `isV2Draft` stays in `shared.js`. `isObject` also stayed
 in the model, because only the model uses it, and a helper moves into the leaf when two modules need it.
 
+**The vocabulary (Phase 7).** `js/work-types.js` is a leaf in the same sense `excel-math.js` is. It is data and a few readers, with no
+dependency, and it holds four tables: the four job types (epoxy, polish, combo, gyp, each with the tabs it
+is priced on, whether v2 prices it yet, its proposal template key and the audiences that have one), the
+five tabs of the workbook (polish, seal, epoxy, leveling, gyp, each with its sheets, role, markup layout
+and whether it is option-only, which Seal and Leveling are), the nine intake quantity fields with the key
+each is filed under on the estimate screen, and ONE table of the job conditions. A condition row says what
+the question is called and how it is worded, what a new job answers, which job types are asked it, which
+workbook cells the answer is written to and with which two words, what it needs, which of three screens
+ask it (the live intake, v2's intake and v2's Takeoff step) and in what position, whether the v2 model
+carries the answer, and which reserved library row prices it. The readers are `tabsFor` (a job type's
+tabs, and a throw for anything that is not a job type), `appliesTo` (does a default scoped to these tabs
+apply to this tab: an empty list is every tab, and a job type such as combo is refused by name),
+`conditionsFor`, `cellsFor`, `copyableCells`, `modelDefaults` and a few lookups.
+
+What reads it now: `js/bid-model.js` derives `CONDITION_CELLS` (`js/bid-model.js:1479`) and the conditions
+of a fresh model from it, and answers `workTypeApplies` (`js/bid-model.js:1387`) and the default takeoff
+through `tabsFor` and `appliesTo`, so a combo job reads the Epoxy defaults and the Polish defaults where it
+used to read neither. `js/polish-intake.js` takes its `CONDITIONS` (`js/polish-intake.js:77`), `js/polish-estimate.js`
+its `CONDITION_CARDS` (`js/polish-estimate.js:910`; the page keeps what each card says), `js/library.js` its
+`WORK_TYPES` (`js/library.js:2988`), its reserved rows and its Takeoff conditions, and `js/polish-sandbox.js`
+its `COPYABLE_CELLS` (`js/polish-sandbox.js:269`). Each of those pages loads `work-types.js` before the
+script that reads it, and `bid-model.js` names the file in its error if it is missing. The live intake
+(`js/index.js`) and the estimate and proposal screens keep their own copies for now, and 7.1 to 7.8 say which
+and why.
+
+Two things a save writes into the workbook cells changed, and no price did. A job type now writes exactly the
+cells the live intake writes for it, so a v2 save writes the Taxable answer to Leveling!B6 and to the two
+Gyp sheets as well as Epoxy!B6, which it used to leave out (a tax-exempt option on a v2 bid kept charging
+9.475%). And a v2 save writes the Renovation cells, Epoxy!B10 and Polish!B10, which the live intake writes for
+every polish job and v2 never did: whatever is there stays (a "Reno" the live intake or the autofill put
+there survives), and a blank becomes "New", because Kyle's template ships both blank and a blank B10 is not
+"New" to the formula that sets the patch material rate, it takes the Reno branch. The chain golden moved by
+exactly the 48 vectors that record those cells (section 6), and the saved-bid ratchet's totals did not move.
+The model does not carry a Renovation answer, so nothing on a v2 screen can change it yet.
+
 ## 1. Why this exists
 
 Estimating Tool v2 (first called the Polish beta) was built one screen at a time, and the same fact ended up in many files. The list
@@ -78,7 +116,7 @@ Each layer may use the layers above it in this table and nothing below it. A lea
 | Layer | File | What it owns | Uses |
 |---|---|---|---|
 | leaf | `js/excel-math.js` | `num`, `roundUp`, `ceiling`, `copyInto`, `isBlank`, and the text helpers `money`, `money2`, `pct` and `fmtSf`. The one bid-side ROUNDUP. Exists since Phase 5, with functions only: no rate and no table | nothing |
-| leaf (data) | `js/work-types.js` | The one vocabulary: job types (polish, epoxy, combo, gyp) and tabs (polish, epoxy, gyp, seal, leveling; seal and leveling are option-only). For each: label, which tabs a job type prices (combo is Epoxy plus Polish), workbook tab ids, role, quantity fields and snapshot keys, proposal template keys, whether it is ready. Also the one job-conditions table. | nothing |
+| leaf (data) | `js/work-types.js` | Exists since Phase 7. The one vocabulary: job types (polish, epoxy, combo, gyp) and tabs (polish, epoxy, gyp, seal, leveling; seal and leveling are option-only). For each: label, which tabs a job type prices (combo is Epoxy plus Polish), workbook tab ids, role, quantity fields and snapshot keys, proposal template keys, whether it is ready. Also the one job-conditions table. | nothing |
 | leaf (data) | `js/bid-profiles.js` | One profile per sheet tab as plain data: rates and GP ladders as formula strings, cell maps, labor built-ins. A profile can extend another (Seal is Polish plus a few changes). The one home of the global defaults: labor rate, lodging, per diem, fees, sales tax. | nothing |
 | model | `js/bid-model.js` (Phase 5 renamed it from `js/polish-bid-core.js`, with no logic change) | The saved estimate: fresh, migrate, seed a new bid, labor, travel, distance, conditions per section; building the save patch; composing the price snapshot the proposal reads. | excel-math today; work-types and bid-profiles when they exist |
 | engine | `js/bid-engine.js` | `priceChain(profile, input, rates)`: the markup chain for any profile. Turns the filed Markups rules into numbers. Adds the tabs of a combo job after each tab has had its own gross profit. | excel-math, bid-profiles, markup-core |
@@ -130,8 +168,12 @@ A module that depends on another one declares it in the header and fails loudly 
 });
 ```
 
-`js/bid-model.js` carries this header today with `excel-math.js` as its one dependency. The line for
-`work-types.js`, and its error, are added the day that module exists.
+`js/bid-model.js` carries this header with two dependencies, `excel-math.js` and `work-types.js` (the second
+joined in Phase 7), checked in that order, each with its own error that names the file. A page that reads
+`window.TWWorkTypes` itself as it parses (`js/library.js`, `js/polish-intake.js`, `js/polish-estimate.js`,
+`js/polish-sandbox.js`) has no header to read, so `test_work_types.py` finds those scripts and checks that
+every page which loads one loads the vocabulary first, and `library.js` and `polish-sandbox.js` throw a
+named error of their own if it is missing.
 
 Rules that go with it:
 
@@ -276,22 +318,42 @@ against.
   reproduces them on purpose. `test_kyle_odd_rules.py` ties each to its cells, to recorded evidence and to the
   figures the document quotes, and runs each check on falsified evidence to prove it can fail.
 
+**The vocabulary tests (Phase 7).** `backend/tests/test_work_types.py`, with `tests/js/work-types-harness.js`,
+runs the real `js/work-types.js` and the real `js/bid-model.js` that derives from it, and the copies the table
+has to stay equal to, lifted out of the page files and evaluated: the live intake's `CONDITIONS`,
+`SCOPE_BY_WORK_TYPE` and `systemFieldNames` (`js/index.js`), and the estimate screen's sheet map, role map,
+area cells and role sets (`js/estimate-review.js`). The cells are read back out of Kyle's template (each is a
+literal there, or one of the two Renovation cells and blank). Its last section breaks one line of the module or
+of the model in a scratch copy, runs the harness against it, and requires the named check to fail, and a test
+requires every check to be in that table. `backend/tests/test_work_types_python_pin.py` is the one test that
+runs node and holds the Python lists to the table (7.2). The page harnesses were moved onto the real module
+(`polish-intake-harness.js`, `polish-estimate-harness.js`, `library-ui-harness.js`, `tab-memo-harness.js`,
+`v2-routing-harness.js`, `v2-names-harness.js`), and `test_polish_intake_page.py` gained a check that does not
+read any list: it prices one job with each of the questions the v2 intake asks answered both ways, so a key
+the table misspells for everyone still shows up as a toggle that moves nothing.
+
+Phase 7 re-cut the chain golden and 48 of its 2,228 vectors moved: `const/CONDITION_CELLS` (Taxable is four
+cells) and the 47 `cond/cells/*` and `cond/library/*` vectors, each of which gains the same five cells
+(Leveling!B6, the two Gyp B8 cells, Epoxy!B10 and Polish!B10) and nothing else. No `chain/*` vector moved, so no
+price did, and the library golden and the saved-bid ratchet's totals are as they were. A save of an existing
+v2 estimate gains exactly those five cells and loses or changes none, and a "Reno" already in B10 survives.
+
 ## 7. Every concept, where it is copied today, and what happens to each copy
 
 Line numbers are on `origin/staging` at `3f94ed2`, except those in `js/bid-model.js` and
-`js/excel-math.js`, which are on the Phase 5 change. "Planned" means the phase in the program plan,
+`js/excel-math.js`, which are on the Phase 5 change, and those Phase 7 wrote (see the top). "Planned" means the phase in the program plan,
 not something that has been done. The summary first, then the evidence for each row.
 
 | | Concept | Copies today | Disposition | Phase |
 |---|---|---|---|---|
-| 7.1 | Work-type list, JavaScript | 9 places in 7 files | Each reads `js/work-types.js` | 7 (the v2 intake in 9) |
-| 7.2 | Work-type list, Python | 7 files | Pinned to `js/work-types.js` by one test that runs node | 7 |
-| 7.3 | Job-condition tables | 10 places | One conditions table in `js/work-types.js`. The Taxable cells are right by construction. The test copy's cell list reads it too | 7 |
+| 7.1 | Work-type list, JavaScript | 9 places in 7 files | Done in Phase 7: `js/library.js` reads `js/work-types.js` (`WORK_TYPES`, `appliesToWorkType`), and so does the model's default scoping. Left: the live intake's map (held equal by a test until Phase 9) and the estimate and proposal screens' lists | 7 (in part), 9 |
+| 7.2 | Work-type list, Python | 7 files | Done: pinned to `js/work-types.js` by `test_work_types_python_pin.py`, which runs node | 7 (done) |
+| 7.3 | Job-condition tables | 10 places | Done in Phase 7: one conditions table in `js/work-types.js`, and the model's `CONDITION_CELLS` and fresh conditions, v2's intake `CONDITIONS`, the Takeoff `CONDITION_CARDS`, the Defaults tab's list and the test copy's `COPYABLE_CELLS` read it. The Taxable cells are right by construction. Left: the live intake's `CONDITIONS` (held equal by a test until Phase 9) and the estimate screen's per-sheet tax addresses | 7 (in part), 9 |
 | 7.4 | Built-in markup rates | 4 places | Profile data in `js/bid-profiles.js`. `markup.js` reads it. `pricing.py` is retired | 8, then 17 |
 | 7.5 | ROUNDUP | 3 implementations (the leaf, `markup-core.js`, `pricing.py`), the workbook engine's plugin, 2 guards | Done: the model's copy is the leaf's `roundUp`, with a row in the parity test. `excelRoundUp`, the pack CEIL and `_roundup` stay, held equal by tests | 5 (done), 8, 17 |
-| 7.6 | Intake scope maps | 4 places | Quantity fields live in `js/work-types.js`. `js/intake-scope.js` draws them | 7, then 9 |
-| 7.7 | Role sets | 4 sets in 3 files | Computed from each tab's role in `js/work-types.js` | 7 |
-| 7.8 | Job type to tab | 4 places | Each job type lists its tabs in `js/work-types.js` | 7 |
+| 7.6 | Intake scope maps | 4 places | The quantity fields and their snapshot keys live in `js/work-types.js` (done), and the live intake's map and the estimate screen's area keys are held equal to them by tests. `js/intake-scope.js` draws them | 7 (done), then 9 |
+| 7.7 | Role sets | 4 sets in 3 files | Each tab carries its `role` and `optionOnly` in `js/work-types.js` (done). The sets are not yet computed from it: one difference is pinned (Leveling), see 7.7 | 7 (in part) |
+| 7.8 | Job type to tab | 4 places | Each job type lists its tabs in `js/work-types.js` and the model reads them through `tabsFor` (done). The intake's and the two screens' copies stay | 7 (in part) |
 | 7.9 | The v2 intake's county picker | 1 copy, about 295 lines | Mount `js/county-picker.js` and delete the copy | 9 |
 | 7.10 | The estimate page's two save blobs | 1 composition (was 2) | Done: one `buildSavePatch` used by both, and the intake's merge is one `patchModel` | 4 (done) |
 | 7.11 | "Is this draft a v2 estimate" | 2 places, in two languages | Held equal by one test over one table. The JavaScript one stays in `js/shared.js` (Phase 5 left it there, see 7.11) | 2 (added) |
@@ -302,7 +364,7 @@ not something that has been done. The summary first, then the evidence for each 
 |---|---|
 | `js/index.js:70-75` | `SCOPE_BY_WORK_TYPE`: epoxy, polish, combo, gyp |
 | `js/index.js:147-199` | A `scope: [...]` list of work types on each of the nine intake conditions |
-| `js/library.js:2974` | `WORK_TYPES`: polish, seal, epoxy, leveling, gyp (the tab list, not the job types) |
+| `js/library.js:2988` | `WORK_TYPES`: polish, seal, epoxy, leveling, gyp (the tab list, not the job types). Replaced in Phase 7: it is the table's `tabKeys()` now, and `appliesToWorkType` is a wrapper over `appliesTo` (`js/library.js:3000`) |
 | `js/estimate-review.js:671-673` | `BASE_ROLE`: workbook tab id to role |
 | `js/proposal-review.js:226-232` | `effectiveWorkType`: which roles decide the document |
 | `js/proposal-review.js:262-272` | The default narrative (scope, schedule, exclusions) keyed by audience and work type |
@@ -314,6 +376,19 @@ not something that has been done. The summary first, then the evidence for each 
 default without any error (the proposal falls back to the intake work type, a lookup falls back to
 Epoxy). **Planned (Phase 7):** `js/work-types.js` is the one vocabulary, and each of these reads it.
 The v2 intake gets the four job types in Phase 9, with types that are not ready shown disabled.
+
+**Done (Phase 7).** The vocabulary exists and `js/library.js` reads it: `WORK_TYPES` is `tabKeys()` and
+`appliesToWorkType` is a wrapper over `appliesTo`, which also fixes the model's own scoping (a combo job
+reads the Epoxy and the Polish defaults, and a job type handed to `appliesTo` throws, where it used to be
+answered "no" quietly). **Left where they are, and why.** `SCOPE_BY_WORK_TYPE` and the `scope` lists in
+`js/index.js` stay until Phase 9 moves the live intake onto `js/intake-scope.js`; until then
+`test_work_types.py` executes them and requires them equal to the table, so a second home cannot drift
+unseen. `BASE_ROLE` in `js/estimate-review.js` stays and is held equal to the table's roles by the same
+test. `effectiveWorkType` and the default narrative in `js/proposal-review.js`, the phrase in
+`js/price-lines-core.js` and the letter kinds in `js/coverletter-editor.js` stay: they belong to the
+spreadsheet's proposal path, which this phase does not touch, and each is a sentence or a document chosen
+by work type, which the table does not hold yet. `js/polish-intake.js` still writes `work_type: "polish"`
+and nothing else, until Phase 9.
 
 ### 7.2 The work-type list, in Python
 
@@ -331,19 +406,27 @@ The v2 intake gets the four job types in Phase 9, with types that are not ready 
 vocabulary from `js/work-types.js` as JSON, and compares `markup.TABS`, `leads._WORK_TYPES`, the keys
 of both `TEMPLATE_PICKER` tables and the info-sheet keys against it. A list that drifts fails the test.
 
+**Done (Phase 7).** `test_work_types_python_pin.py` is that test. It compares `markup.TABS`,
+`library.WORK_TYPES`, `leads._WORK_TYPES` and `leads._QUANTITY_KEYS`, the key sets of both
+`TEMPLATE_PICKER` tables (the proposal one also holds the two documents that are no job type, a sealer
+proposal and a budget sheet, named in the test), `info_sheet_writer`'s `_SF_KEYS`, `_LF_KEYS` and
+`_COVE_ROLES`, `condition_defaults.KEYS`, `library.RESERVED_ITEM_IDS` and `detect_work_type` against the
+table, and each check is shown to fail when its list drifts. Left: the option price phrase by work type in
+`backend/main.py`, which is a sentence and not a list of work types.
+
 ### 7.3 The job-condition tables
 
 | Copy | What it holds |
 |---|---|
 | `js/index.js:146-202` | `CONDITIONS` on the live intake: key, label, scope, default, the cells it writes, the on and off words, `needs`. Nine rows. Taxable writes four cells (Epoxy, Leveling and two Gyp tabs) |
-| `js/polish-intake.js:66-82` | `CONDITIONS` on the v2 intake: four rows (prevailing wage, taxable, remodel tax, bond), keys only |
-| `js/bid-model.js:1442-1469` | `CONDITION_CELLS`: seven rows with the cells they write. Taxable writes only `Epoxy!B6` |
-| `js/bid-model.js:1745-1747` | The conditions of a fresh model, eight keys including `bond` |
-| `js/polish-estimate.js:897-957` | `CONDITION_CARDS`: the Takeoff step's three cards (dye, joint filler, remove existing) |
-| `js/library.js:2640-2657` | The Defaults tab's condition list, and `backend/condition_defaults.py:61` (`KEYS`) |
+| `js/polish-intake.js:77` | `CONDITIONS` on the v2 intake: four rows (prevailing wage, taxable, remodel tax, bond), keys only. Replaced in Phase 7: it is the table's rows that the v2 intake asks |
+| `js/bid-model.js:1479` | `CONDITION_CELLS`: seven rows with the cells they write. Taxable writes only `Epoxy!B6`. Replaced in Phase 7: it is the table cut for polish, so Taxable writes four cells, and `CARRIED_CELLS` (`js/bid-model.js:1491`) carries the one condition the model has no answer for (Renovation) |
+| `js/bid-model.js:1783` | The conditions of a fresh model, eight keys including `bond`. Replaced in Phase 7: `modelDefaults()` of the table |
+| `js/polish-estimate.js:857-920` | `CONDITION_CARDS`: the Takeoff step's three cards (dye, joint filler, remove existing). Replaced in Phase 7: which cards, their order, cell, library row and dependency are the table's, and `CARD_VIEWS` keeps what each card says |
+| `js/library.js:2608-2671` | The Defaults tab's condition list, and `backend/condition_defaults.py:61` (`KEYS`). Replaced in Phase 7: the list is the table's (`takeoffConditionDefaults`), and `KEYS` is pinned to it by `test_work_types_python_pin.py` |
 | `js/estimate-review.js:4032-4077` | `JOB_FLAG_ADDR`, `JOB_FLAG_LITERAL_LAYOUTS`, `JOB_FLAG_LAYOUTS`, `JOB_FLAG_TEMPLATE`: where the tax answers sit on each sheet layout |
 | `backend/estimate_writer.py:394-406` | `POLISH_CELL_MAP` and its Epoxy sibling: key to cell letter |
-| `js/polish-sandbox.js` | `COPYABLE_CELLS`: the live intake's fourteen condition cells again. A v2 test copy keeps these from its source (and no other cell), so it opens with the job's answers. Added in Phase 2 and held equal to the intake's table by `test_v2_routing_guard.py`, which lifts `CONDITIONS` out of `index.js` and compares |
+| `js/polish-sandbox.js:269` | `COPYABLE_CELLS`: the live intake's fourteen condition cells again. A v2 test copy keeps these from its source (and no other cell), so it opens with the job's answers. Added in Phase 2 and held equal to the intake's table by `test_v2_routing_guard.py`, which lifts `CONDITIONS` out of `index.js` and compares Replaced in Phase 7: `copyableCells()` of the table |
 
 **Problem.** The two Taxable tables disagree today: the live intake writes four cells and the v2 model
 writes one, so a v2 bid never writes the Leveling or Gyp Taxable cell. The intake's comment records
@@ -353,6 +436,17 @@ per tab, on and off words, `needs` and where it is asked. The live intake, the v
 cards, the Defaults tab and the test copy read it. The Taxable cells are right by construction because they come
 from the same row. The per-layout addresses in `estimate-review.js` are checked against the workbook
 by the test that already re-reads it (`test_taxable_flag_reaches_every_sheet.py`).
+
+**Done (Phase 7).** The table is `CONDITIONS` in `js/work-types.js`, and the rows marked replaced above read
+it. Taxable is four cells in it, so v2 writes the Leveling and Gyp Taxable cells by construction. Two
+things the table says that the old copies did not: a condition the v2 model does not carry (Renovation,
+asked on the live intake alone) is still written, with its default while its cell is blank and otherwise
+left as it is, and the three screens' orders and the v2 intake's one different sentence are data (`asked_on`
+and `wording`). **Left, and why.** The live intake's `CONDITIONS` in `js/index.js` stays until Phase 9, and
+`test_work_types.py` executes it and requires its nine rows equal to the table's rows asked on the live
+screen. `JOB_FLAG_*` in `js/estimate-review.js` (where each sheet's tax answers sit, after the estimate
+screen splits them) and `POLISH_CELL_MAP` in `backend/estimate_writer.py` (a key to a cell letter) stay: they
+are the spreadsheet's own, and `test_taxable_flag_reaches_every_sheet.py` re-reads the workbook for them.
 
 ### 7.4 The built-in markup rates
 
@@ -421,6 +515,15 @@ same change that creates it, and a test proves the HTML is byte for byte what it
 captures taken from the base commit. There are never two renderers. The Python keys are pinned to the
 table by the same test as 7.2.
 
+**Done (Phase 7).** `FIELDS` in `js/work-types.js` is the nine quantity fields in the live intake's order, each
+with its scope token, its unit, its system and the key the estimate screen files it under (`snapshot`, or
+null where the sheet has no cell: a second polish system), and each job type and tab says which of them it
+uses. The python keys are pinned (7.2). `test_work_types.py` executes `SCOPE_BY_WORK_TYPE` and
+`systemFieldNames` out of `js/index.js` and `AREA_SF_CELLS` and `GYP_SF_CELLS` out of `js/estimate-review.js`
+and requires each equal to what the table derives, so the three copies cannot drift while they stay.
+**Left:** the renderer, which is Phase 9's, and the estimate cell each quantity lands in, which is the
+spreadsheet's.
+
 ### 7.7 The role sets
 
 | Copy | What it is |
@@ -433,6 +536,16 @@ table by the same test as 7.2.
 once printed the Epoxy document with Seal's money. The two JavaScript copies are kept equal by a test
 that greps both. **Planned (Phase 7):** each tab in `js/work-types.js` carries its role and an
 `optionOnly` flag, and the sets are computed from it.
+
+**Done in part (Phase 7).** Each tab carries its `role` and `optionOnly`, and a combo job's two tabs are the
+combined base roles. The two screens' sets are NOT computed from them yet, on purpose, because the table and
+the spreadsheet disagree about one tab: the table says Leveling is an option-only tab with the role
+`leveling`, and `js/estimate-review.js` gives Leveling and Epoxy blank the role `other`, which is why
+`OPTION_ONLY_ROLES` there is only seal. Computing the set from the table would change what the spreadsheet
+does with a Leveling tab, and that is its own change. `test_work_types.py` holds the rest equal (every
+sheet the spreadsheet gives a role agrees with the table, `PRICED_ROLES` and `COMBINED_BASE_ROLES` match)
+and pins the one difference, so closing it or widening it has to be done on purpose. `_COVE_ROLES` is
+pinned to the table by the Python test (7.2).
 
 ### 7.8 Job type to tab
 
@@ -447,6 +560,11 @@ that greps both. **Planned (Phase 7):** each tab in `js/work-types.js` carries i
 and `appliesTo(defaultWorkTypes, layout)` answers "does this default apply to this tab". It throws when
 asked about "combo", because a combo job has no tab of its own and a rate filed under that name could
 never be read (the Markups page already refuses it by name).
+
+**Done in part (Phase 7).** Each job type lists its tabs, `tabsFor` returns them and refuses anything that is
+not a job type, and the model's `workTypeApplies` and the default takeoff read them (that is the combo fix
+in 7.1). **Left:** the live intake's tab list for the split tax flags and the screens' `baseFlagSheets` and
+`_areaBaseIds` stay, because they are the spreadsheet path's.
 
 ### 7.9 The v2 intake's own county picker
 
@@ -549,7 +667,7 @@ v2 bids stay test copies until Kyle signs off each work type. Where each phase t
 | 4 | 7.10. The model keeps unknown keys; one save patch. Done. |
 | 5 | Done. The module rename and the leaf in section 3 (with the paragraphs "Module names" and "The leaf"), the header in section 4, 7.5 (the model's ROUNDUP is the leaf's, and what was left where it is), and 7.11 (the move that did not happen). |
 | 6 | Done. Section 6, the workbook oracle, and the `js/bid-profiles.js` row of section 3 (the file exists, with only the cell maps in it). Nothing in section 7 changes: none of its copies is about the workbook's own cells. |
-| 7 | 7.1, 7.2, 7.3, 7.6, 7.7, 7.8. `js/work-types.js` and the Python pin. |
+| 7 | Done, with some copies left on purpose. 7.1, 7.2, 7.3, 7.6, 7.7 and 7.8 each say what was replaced and what stays and why. `js/work-types.js` and the Python pin, the vocabulary paragraph near the top, the header in section 4 and the tests in section 6. |
 | 8 | 7.4. `js/bid-profiles.js` and `js/bid-engine.js`; Polish runs through a profile and its golden does not move. |
 | 9 | 7.6, 7.9. `js/intake-scope.js`; the v2 intake for the four job types. |
 | 10 and later | Multi-section estimates, and the work types one at a time. v2 bids stay test copies until Kyle signs each work type off. |
