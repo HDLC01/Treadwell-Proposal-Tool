@@ -1,0 +1,442 @@
+{
+ "schema": 1,
+ "about": "The odd rules of Kyle's estimate workbook that the v2 estimating tool will REPRODUCE (Hanz, 2026-10-07: match Kyle's sheet exactly). docs/kyle-workbook-odd-rules.md is the plain-words list for Kyle; this file is what ties each entry to the workbook. For every rule: the cells it lives in, the pieces of formula text that make it so (checked against the template), and the oracle cases or probes that show it happening (checked by backend/tests/test_kyle_odd_rules.py, which also requires the document to carry the rule's title, every one of its cells and every dollar figure the evidence gives).",
+ "rules": [
+  {
+   "id": "bond-twice",
+   "title": "The bond counts the taxes twice",
+   "cells": [
+    "Polish!D78",
+    "Seal!D78",
+    "Seal (+Jnts)!D78",
+    "Epoxy!D84",
+    "Epoxy blank!D81",
+    "Leveling!D80",
+    "Gyp (USG 1-8\")!E83"
+   ],
+   "claims": [
+    {
+     "tab": "Polish",
+     "cell": "D78",
+     "contains": [
+      "D74",
+      "D75:D77"
+     ]
+    },
+    {
+     "tab": "Epoxy",
+     "cell": "D84",
+     "contains": [
+      "D80",
+      "D81:D83"
+     ]
+    },
+    {
+     "tab": "Epoxy blank",
+     "cell": "D81",
+     "contains": [
+      "D77",
+      "D78:D80"
+     ]
+    },
+    {
+     "tab": "Leveling",
+     "cell": "D80",
+     "contains": [
+      "D76",
+      "D77:D79"
+     ]
+    },
+    {
+     "tab": "Gyp (USG 1-8\")",
+     "cell": "E83",
+     "contains": [
+      "E79",
+      "E80:E82"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "leveling-lodging-eight",
+   "title": "Leveling divides lodging by 8 although its days are 10 hours",
+   "cells": [
+    "Leveling!B61",
+    "Leveling!E42",
+    "Gyp (USG 1-8\")!B64",
+    "Polish!B58"
+   ],
+   "claims": [
+    {
+     "tab": "Leveling",
+     "cell": "B61",
+     "contains": [
+      "((D49-D48)/C44)/8"
+     ]
+    },
+    {
+     "tab": "Gyp (USG 1-8\")",
+     "cell": "B64",
+     "contains": [
+      "((E52-E51)/C46)/10"
+     ]
+    },
+    {
+     "tab": "Polish",
+     "cell": "B58",
+     "contains": [
+      "((D45-D44)/C37)/8"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "leveling-escalation-left-out",
+   "title": "Leveling's sub-total leaves out the labor escalation",
+   "cells": [
+    "Leveling!D66",
+    "Leveling!D50",
+    "Leveling!D51",
+    "Polish!D64"
+   ],
+   "claims": [
+    {
+     "tab": "Leveling",
+     "cell": "D66",
+     "contains": [
+      "D40",
+      "D49",
+      "D58",
+      "D64",
+      "D51"
+     ]
+    },
+    {
+     "tab": "Leveling",
+     "cell": "D51",
+     "contains": [
+      "D49+D50"
+     ]
+    },
+    {
+     "tab": "Polish",
+     "cell": "D64",
+     "contains": [
+      "D45:D47"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "epoxy-gp-without-fees",
+   "title": "Epoxy's gross profit leaves the fees out of the amount it subtracts",
+   "cells": [
+    "Epoxy!D73",
+    "Polish!D67",
+    "Epoxy blank!D70",
+    "Leveling!D69",
+    "Gyp (USG 1-8\")!E72"
+   ],
+   "claims": [
+    {
+     "tab": "Epoxy",
+     "cell": "D73",
+     "contains": [
+      "SUM(D70,D80,D83)/(1-B73)",
+      "ROUNDUP(SUM(D70,D80),0)"
+     ]
+    },
+    {
+     "tab": "Polish",
+     "cell": "D67",
+     "contains": [
+      "SUM(D64,D74,D77)/(1-B67)",
+      "ROUNDUP(SUM(D64,D74,D77),0)"
+     ]
+    },
+    {
+     "tab": "Epoxy blank",
+     "cell": "D70",
+     "contains": [
+      "SUM(D67,D77,D80)/(1-B70)",
+      "ROUNDUP(SUM(D67,D77,D80),0)"
+     ]
+    },
+    {
+     "tab": "Leveling",
+     "cell": "D69",
+     "contains": [
+      "SUM(D66,D76,D79)/(1-B69)",
+      "ROUNDUP(SUM(D66,D76,D79,),0)"
+     ]
+    },
+    {
+     "tab": "Gyp (USG 1-8\")",
+     "cell": "E72",
+     "contains": [
+      "SUM(E69,E79,E82)/(1-B72)",
+      "ROUNDUP(SUM(E69,E79,E82),0)"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "gyp-escalation-always-five",
+   "title": "Gyp's labor escalation is always 5%",
+   "cells": [
+    "Gyp (USG 1-8\")!C53",
+    "Gyp (USG 1-8\")!E53",
+    "Gyp (USG 1-8\")!D7",
+    "Polish!C46"
+   ],
+   "claims": [
+    {
+     "tab": "Gyp (USG 1-8\")",
+     "cell": "E53",
+     "contains": [
+      "C53"
+     ]
+    },
+    {
+     "tab": "Polish",
+     "cell": "C46",
+     "contains": [
+      "IF(D5=\"Yes\",5%,0)"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "gyp-mat-shipping-truckload",
+   "title": "Gyp's sound-mat shipping is waived once the order reaches a truckload",
+   "cells": [
+    "Gyp (USG 1-8\")!E40",
+    "Gyp (USG 1-8\")!B36",
+    "Gyp (USG 1-8\")!H36"
+   ],
+   "claims": [
+    {
+     "tab": "Gyp (USG 1-8\")",
+     "cell": "E40",
+     "contains": [
+      "IF(B36<H36,(SUM(E35:E37)),0)"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "gyp-bags-fractional",
+   "title": "Gyp's bags are fractional and the sand is worked out from them",
+   "cells": [
+    "Gyp (USG 1-8\")!B23",
+    "Gyp (USG 1-8\")!B24",
+    "Gyp (USG 1-8\")!B25",
+    "Gyp (USG 1-8\")!H33",
+    "Gyp (USG 1-8\")!B33"
+   ],
+   "claims": [
+    {
+     "tab": "Gyp (USG 1-8\")",
+     "cell": "B23",
+     "contains": [
+      "(F23/J23)*(1+G18)"
+     ]
+    },
+    {
+     "tab": "Gyp (USG 1-8\")",
+     "cell": "H33",
+     "contains": [
+      "B23+B24+B25"
+     ]
+    },
+    {
+     "tab": "Gyp (USG 1-8\")",
+     "cell": "B33",
+     "contains": [
+      "*H33)/2000)*(1+G19)"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "leveling-travel-hour",
+   "title": "Leveling charges an hour of travel even on a local job",
+   "cells": [
+    "Leveling!B48",
+    "Leveling!D48",
+    "Epoxy!B52",
+    "Polish!B44"
+   ],
+   "claims": [
+    {
+     "tab": "Leveling",
+     "cell": "D48",
+     "contains": [
+      "A48*B48*C48"
+     ]
+    },
+    {
+     "tab": "Polish",
+     "cell": "B44",
+     "contains": [
+      "Epoxy!B52"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "leveling-overage-powders",
+   "title": "Leveling's overage is taken on the powders only",
+   "cells": [
+    "Leveling!D38",
+    "Epoxy blank!D38"
+   ],
+   "claims": [
+    {
+     "tab": "Leveling",
+     "cell": "D38",
+     "contains": [
+      "SUM(D21:D27)*B38"
+     ]
+    },
+    {
+     "tab": "Epoxy blank",
+     "cell": "D38",
+     "contains": [
+      "D18:D20",
+      "D33:D36"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "ship-tiers-inclusive-gp-strict",
+   "title": "The shipping tiers include the edge, the gross profit bands do not",
+   "cells": [
+    "Epoxy!B42",
+    "Epoxy!B73",
+    "Epoxy blank!B39",
+    "Epoxy blank!B70",
+    "Leveling!B39",
+    "Leveling!B69"
+   ],
+   "claims": [
+    {
+     "tab": "Epoxy",
+     "cell": "B42",
+     "contains": [
+      "D40<=5000",
+      "D40<=10000"
+     ]
+    },
+    {
+     "tab": "Epoxy",
+     "cell": "B73",
+     "contains": [
+      "D70<6500"
+     ]
+    },
+    {
+     "tab": "Epoxy blank",
+     "cell": "B39",
+     "contains": [
+      "D37<=5000"
+     ]
+    },
+    {
+     "tab": "Leveling",
+     "cell": "B39",
+     "contains": [
+      "D37<=5000"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "cove-aggregate-system-1",
+   "title": "The cove aggregate price follows System 1, even in System 2's block",
+   "cells": [
+    "Epoxy!AF126",
+    "Epoxy!AF131",
+    "Epoxy!AF136",
+    "Epoxy!AF142",
+    "Epoxy!AF148",
+    "Epoxy!AF153",
+    "Epoxy!F126"
+   ],
+   "claims": [
+    {
+     "tab": "Epoxy",
+     "cell": "AF126",
+     "contains": [
+      "$A$22",
+      "Q28_40s",
+      "Silica"
+     ],
+     "notContains": [
+      "$A$26"
+     ]
+    },
+    {
+     "tab": "Epoxy",
+     "cell": "AF153",
+     "contains": [
+      "$A$22"
+     ],
+     "notContains": [
+      "$A$26"
+     ]
+    },
+    {
+     "tab": "Epoxy",
+     "cell": "F126",
+     "contains": [
+      "$A$22"
+     ],
+     "notContains": [
+      "$A$26"
+     ]
+    }
+   ]
+  }
+ ],
+ "also": [
+  {
+   "id": "saved-values-are-old",
+   "title": "The values saved in the template are from an older labor rate",
+   "cells": [
+    "Polish!C37",
+    "Polish!C38",
+    "Leveling!C44",
+    "Leveling!C45"
+   ]
+  },
+  {
+   "id": "gyp-hard-bid-unwired",
+   "title": "On the Gyp tabs the Hard Bid question does nothing",
+   "cells": [
+    "Gyp (USG 1-8\")!B7",
+    "Gyp (USG 1-8\")!B73",
+    "Gyp (USG 1-8\")!E73"
+   ]
+  },
+  {
+   "id": "gyp-fr-own-answers",
+   "title": "Gyp (FR) keeps its own answers; the other Gyp tabs follow the first",
+   "cells": [
+    "Gyp (FR)!B5",
+    "Gyp (FR)!B8",
+    "Gyp (USG N12ULTRA)!B5",
+    "Gyp (USG N12ULTRA)!B8"
+   ]
+  },
+  {
+   "id": "seal-extra-rung",
+   "title": "Seal's gross profit ladder has one more rung than Polish's",
+   "cells": [
+    "Seal!B67",
+    "Polish!B67"
+   ]
+  }
+ ]
+}

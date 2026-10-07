@@ -5,15 +5,17 @@ other, the rules every change follows, and a table of every place the same fact 
 today, with what happens to each copy.
 
 **What exists today, and what does not.** The tests and the golden files described in section 6
-exist now. The modules in section 3 other than `bid-model.js`, `excel-math.js`, `library-core.js` and
-`markup-core.js` do not exist yet: they are the design the phases build toward. `bid-model.js` is the
-old `polish-bid-core.js` under its new name, and `excel-math.js` is the leaf Phase 5 took the model's
-number helpers out into, both with no change to what any of it does (see "Module names" and "The
-leaf" below). Phase 4 added `patchModel`, `buildSavePatch` and `MODEL_KEYS` to the model (see 7.10 and
-the model-safety paragraph of section 6). Line numbers in this document are on `origin/staging` at
-commit `3f94ed2` (2026-10-07), except where a paragraph says they are on the Phase 4 change, and
-except every line number in `js/bid-model.js` or `js/excel-math.js`, which is on the Phase 5 change.
-They will drift; the file and the name are what to search for.
+exist now, and so does the workbook oracle (Phase 6, also section 6). The modules in section 3 other
+than `bid-model.js`, `excel-math.js`, `library-core.js` and `markup-core.js` do not exist yet: they
+are the design the phases build toward. The one exception is `js/bid-profiles.js`, which Phase 6
+created with only the cell maps of the eleven priced tabs in it; the rates and rules come in Phase 8.
+`bid-model.js` is the old `polish-bid-core.js` under its new name, and `excel-math.js` is the leaf
+Phase 5 took the model's number helpers out into, both with no change to what any of it does (see
+"Module names" and "The leaf" below). Phase 4 added `patchModel`, `buildSavePatch` and `MODEL_KEYS`
+to the model (see 7.10 and the model-safety paragraph of section 6). Line numbers in this document
+are on `origin/staging` at commit `3f94ed2` (2026-10-07), except where a paragraph says they are on
+the Phase 4 change, and except every line number in `js/bid-model.js` or `js/excel-math.js`, which is
+on the Phase 5 change. They will drift; the file and the name are what to search for.
 
 **Names.** The tool people called the Polish beta is now **Estimating Tool v2**, and its database
 page, which was the Polish Estimate Database, is now **v2 Estimates** (Phase 1b, 2026-10-07). Only
@@ -226,6 +228,53 @@ TypeError when the takeoff holds a null row. A second one, that the model droppe
 did not know, Phase 4 fixed, and the diff showed it: the chain golden moved by exactly one vector,
 `model/migrate/unknownKeys`, which now keeps `tabs` and `custom_key`. The other 2,227 are as they
 were, and so are the library golden and the saved-bid ratchet.
+
+**The workbook oracle (Phase 6).** The goldens above pin what the code does today. The oracle pins what
+Kyle's workbook does, which is what the code is supposed to do: `backend/templates/estimate_sheet_5.7.xlsx`,
+evaluated by the same HyperFormula the Estimate Review page runs, is the answer key every v2 tab is checked
+against.
+
+- *The engine.* `docs/excel-parity-audit/engine.js` loads the exact bytes the page pins (it hashes the
+  installed `hyperformula.full.min.js` and refuses to go on unless the sha384 is the one in
+  `estimate-review.html`), registers `frontend/js/xl-excel-rounding.js` as it ships, uses the page's options
+  and its alias rule for the names HyperFormula refuses, and loads all sixteen tabs. The Excel parity audit
+  next to it uses the same module, so there is one way to build the workbook outside a browser.
+  `test_workbook_oracle.py` lifts `HF.init` and the alias rule out of `estimate-review.js` and runs them to
+  prove the options and the rule are the page's. HyperFormula is not a dependency of the repo (no
+  `package.json`): install it outside (`npm i --no-save --prefix <dir> hyperformula@2.7.1`, then
+  `NODE_PATH=<dir>/node_modules`).
+- *The cell maps.* `js/bid-profiles.js` names, for each of the eleven priced tabs (Epoxy, Polish, Seal,
+  Seal (+Jnts), Epoxy blank, Leveling, five Gyp), the cells at the edges of the markup chain: where material,
+  labor, tooling, travel, fees and contingency come in, the five job questions, the rates, and where the bid
+  comes out. Each entry carries what the template holds there. `test_workbook_formula_pins.py` reads every
+  entry back out of the template (about 580 of them) and checks the copies of a layout against each other:
+  the five Gyp tabs, Seal (+Jnts) against Seal, Seal against Polish, each difference listed with its reason.
+- *The recorded answers.* `backend/tests/js/workbook-oracle.js` types numbers into the boundary cells of each
+  tab (a dollar either side of every gross profit band, shipping tier and hard-bid threshold, all 32 settings of
+  the five questions at three sizes, remodel rates, fees, contingency, bond, small and huge jobs, lodging) and
+  writes what the chain answers into `backend/tests/fixtures/oracle/<tab>.json`, one file per tab, plus
+  `meta.json`. About 2,000 cases. It also runs probes that start upstream of the boundary, for the odd rules.
+  It checks itself first: every formula cell of all sixteen tabs must equal the value Excel saved in the
+  file (about 17,000 cells), after putting back the labor rates the file was last calculated with (the
+  template's rate cells were edited after its last calculation, see `docs/kyle-workbook-odd-rules.md`).
+- *What CI does.* CI has no HyperFormula, so it only compares. A hash of the normalised (tab, address,
+  formula or constant) of the priced tabs says "re-run the oracle" when Kyle changes a formula or a number,
+  and does not fire when the file is merely re-saved or an unpriced tab is edited. The page's pinned
+  HyperFormula and the rounding plugin are held to the recorded ones the same way. The recorded cases are
+  checked to straddle every edge on the right side, to add up the way the sheet's total does, and to hold
+  every kind of case. Where HyperFormula is installed, one more test recomputes everything and requires the
+  recorded files byte for byte.
+- *Regenerating.* `node backend/tests/js/workbook-oracle.js --write`, then read the fixture diff: one case is
+  one line. A run with no flag compares and exits non-zero on any difference.
+- *First user: Polish.* `oracle-polish-harness.js` runs today's model on every Polish case and requires it to
+  equal the sheet except for the declared departures in `fixtures/oracle/departures.json` (no tooling line,
+  a narrower remodel tax base, lodging counted in people-days, no hard bid, no bond). Two are predicted to the
+  dollar from the model plus exactly what their reason says; all are seen on at least one case; a model change
+  that closes one turns the test red until the list says so.
+- *Kyle's odd rules.* `docs/kyle-workbook-odd-rules.md` lists the eleven places the sheet does something
+  surprising (the bond counts the taxes twice, Leveling lodging divides by 8 on 10 hour days, and so on). v2
+  reproduces them on purpose. `test_kyle_odd_rules.py` ties each to its cells, to recorded evidence and to the
+  figures the document quotes, and runs each check on falsified evidence to prove it can fail.
 
 ## 7. Every concept, where it is copied today, and what happens to each copy
 
@@ -499,6 +548,7 @@ v2 bids stay test copies until Kyle signs off each work type. Where each phase t
 | 3 (this one) | Sections 3 to 7 are written. Goldens, ratchet, strict node, shared helpers. |
 | 4 | 7.10. The model keeps unknown keys; one save patch. Done. |
 | 5 | Done. The module rename and the leaf in section 3 (with the paragraphs "Module names" and "The leaf"), the header in section 4, 7.5 (the model's ROUNDUP is the leaf's, and what was left where it is), and 7.11 (the move that did not happen). |
+| 6 | Done. Section 6, the workbook oracle, and the `js/bid-profiles.js` row of section 3 (the file exists, with only the cell maps in it). Nothing in section 7 changes: none of its copies is about the workbook's own cells. |
 | 7 | 7.1, 7.2, 7.3, 7.6, 7.7, 7.8. `js/work-types.js` and the Python pin. |
 | 8 | 7.4. `js/bid-profiles.js` and `js/bid-engine.js`; Polish runs through a profile and its golden does not move. |
 | 9 | 7.6, 7.9. `js/intake-scope.js`; the v2 intake for the four job types. |

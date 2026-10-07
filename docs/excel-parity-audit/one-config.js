@@ -5,95 +5,35 @@
 // match the registered one). Every config measured after the plugin config therefore ran WITH the
 // plugin, which made `smartRounding:false` look like it achieved parity on its own. It does not.
 //
+// The engine itself (the shipped HyperFormula bytes, the shipped rounding plugin, the page's load
+// order) lives in ./engine.js, shared with backend/tests/js/workbook-oracle.js. This file is only
+// the comparison against Excel's own answers.
+//
 // Usage: node one-config.js <was|nosmart|precision|roundup>
-const { HyperFormula, FunctionPlugin, FunctionArgumentType } = require("hyperformula");
+//   `roundup` is the configuration that ships: frontend/js/xl-excel-rounding.js, loaded as it is.
+//   The other three leave HyperFormula's own ROUNDUP in place, with the options named below.
 const fs = require("fs");
 const path = require("path");
+const E = require("./engine.js");
 
 const HERE = __dirname;
 const CENT = 0.005;
 const WHICH = process.argv[2];
 
 const readJson = (p) => JSON.parse(fs.readFileSync(p, "utf8").replace(/^﻿/, ""));
-const snap = (x) => { const n = Number(x); return isFinite(n) ? Number(n.toPrecision(12)) : n; };
 
 const OPTS = {
   was:       { smartRounding: true,  precisionRounding: 4 },
   nosmart:   { smartRounding: false },
   precision: { smartRounding: true,  precisionRounding: 10 },
-  roundup:   { smartRounding: false },      // + the plugin below
+  roundup:   { smartRounding: false },      // + the shipped plugin, loaded by engine.js
 };
 if (!OPTS[WHICH]) { console.error("unknown config " + WHICH); process.exit(2); }
 
-if (WHICH === "roundup") {
-  class ExcelRounding extends FunctionPlugin {
-    roundup(ast, state) {
-      return this.runFunction(ast.args, state, this.metadata("ROUNDUP"), (value, places) => {
-        const p = Math.trunc(places || 0), f = Math.pow(10, p);
-        const s = snap(snap(value) * f);
-        return (s >= 0 ? Math.ceil(s) : Math.floor(s)) / f;
-      });
-    }
-    ceilingFn(ast, state) {
-      return this.runFunction(ast.args, state, this.metadata("CEILING"), (value, sig) => {
-        const s = (sig === undefined || sig === null) ? 1 : Number(sig);
-        if (s === 0) return 0;
-        return Math.ceil(snap(snap(value) / s)) * s;
-      });
-    }
-  }
-  ExcelRounding.implementedFunctions = {
-    ROUNDUP: { method: "roundup", parameters: [
-      { argumentType: FunctionArgumentType.NUMBER },
-      { argumentType: FunctionArgumentType.NUMBER, defaultValue: 0 }] },
-    CEILING: { method: "ceilingFn", parameters: [
-      { argumentType: FunctionArgumentType.NUMBER },
-      { argumentType: FunctionArgumentType.NUMBER, defaultValue: 1 }] },
-  };
-  HyperFormula.unregisterFunction("ROUNDUP");
-  HyperFormula.unregisterFunction("CEILING");
-  HyperFormula.registerFunctionPlugin(ExcelRounding,
-    { enGB: { ROUNDUP: "ROUNDUP", CEILING: "CEILING" } });
-}
-
-function build(spec) {
-  const hf = HyperFormula.buildEmpty(Object.assign({ licenseKey: "gpl-v3" }, OPTS[WHICH]));
-  const idBy = {};
-  for (const n of spec.order) { hf.addSheet(n); idBy[n] = hf.getSheetId(n); }
-  const aliases = {};
-  for (const n of spec.names || []) {
-    let reg = n.name;
-    try {
-      if (!hf.isItPossibleToAddNamedExpression(reg, n.expression)) {
-        reg = n.name.replace(/(\d+)$/, "_$1");
-        if (reg === n.name) reg = n.name + "_n";
-        aliases[n.name] = reg;
-      }
-      hf.addNamedExpression(reg, n.expression);
-    } catch (e) { delete aliases[n.name]; }
-  }
-  const rewrite = (f) => {
-    let o = f;
-    for (const k in aliases) {
-      const esc = k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      o = o.replace(new RegExp("(?<![A-Za-z0-9_.])" + esc + "(?![A-Za-z0-9_.])", "g"), aliases[k]);
-    }
-    return o;
-  };
-  for (const name of spec.order) {
-    const cells = spec.sheets[name].cells;
-    let mr = 0, mc = 0;
-    for (const c of cells) { if (c.row > mr) mr = c.row; if (c.col > mc) mc = c.col; }
-    const data = [];
-    for (let r = 0; r < mr; r++) data.push(new Array(mc).fill(null));
-    for (const c of cells) {
-      data[c.row - 1][c.col - 1] = c.isFormula && c.formula != null ? rewrite(c.formula)
-        : (c.value === "" || c.value === undefined ? null : c.value);
-    }
-    try { hf.setSheetContent(idBy[name], data); } catch (e) {}
-  }
-  return { hf, idBy };
-}
+// The bytes under test must be the bytes the page ships: a result measured on some other
+// HyperFormula says nothing about the screen.
+E.assertShippedBytes(E.hyperformulaPath());
+const HyperFormula = E.loadEngine({ plugin: WHICH === "roundup" });
 
 let numeric = 0, match = 0;
 const misses = [];
@@ -103,27 +43,22 @@ for (const f of fs.readdirSync(HERE).filter((x) => /^job\d+\.json$/.test(x)).sor
   if (!fs.existsSync(ep)) continue;
   const spec = readJson(path.join(HERE, f));
   const excel = readJson(ep);
-  const eng = build(spec);
+  const wb = E.build(HyperFormula, spec, { options: Object.assign({ licenseKey: "gpl-v3" }, OPTS[WHICH]) });
+  if (wb.warnings.length) console.error(stem + ": " + wb.warnings.join("; "));
   for (const c of spec.compare) {
     const key = c.sheet + "!" + c.addr;
     const e = excel[key];
     if (typeof e !== "number" || e < -1e9) continue;
     numeric++;
-    const id = eng.idBy[c.sheet];
     let h = null;
-    if (id !== undefined) {
-      const m = /^([A-Z]{1,3})(\d+)$/.exec(c.addr);
-      if (m) {
-        let col = 0;
-        for (const ch of m[1]) col = col * 26 + (ch.charCodeAt(0) - 64);
-        try { h = eng.hf.getCellValue({ sheet: id, col: col - 1, row: +m[2] - 1 }); } catch (x) {}
-      }
+    if (wb.sheetNames.indexOf(c.sheet) >= 0 && /^[A-Z]{1,3}\d+$/.test(c.addr)) {
+      try { h = wb.get(c.sheet, c.addr); } catch (x) { /* a cell the engine cannot read counts as a miss */ }
     }
     const hn = typeof h === "number" ? h : NaN;
     if (isFinite(hn) && Math.abs(hn - e) < CENT) match++;
     else misses.push({ job: stem, cell: key, excel: e, hf: hn, diff: isFinite(hn) ? +(hn - e).toFixed(4) : null });
   }
-  eng.hf.destroy();
+  wb.destroy();
 }
 console.log(JSON.stringify({ config: WHICH, numeric, match, wrong: misses.length,
                              pct: +(100 * match / numeric).toFixed(3),

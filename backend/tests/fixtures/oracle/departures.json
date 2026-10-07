@@ -1,0 +1,82 @@
+{
+ "schema": 1,
+ "tab": "Polish",
+ "about": "Every place today's Estimating Tool v2 model (markupChain and travelCosts in frontend/js/polish-bid-core.js) answers differently from Kyle's Polish tab, with the reason. backend/tests/test_polish_model_vs_oracle.py runs the model on every Polish case the oracle recorded and requires the two to be EQUAL except where one of these applies. A departure with an `explain` is not just excused, it is predicted: the harness rebuilds the sheet's answer from the model plus exactly what the reason says, and that has to match the oracle to the dollar. The rest are excused on the keys they list, and each must be seen to differ at least once, or it is not a departure. Hanz decided on 2026-10-07 that v2 will match Kyle's sheet exactly, quirks included; a departure here is something to close, not something to keep (Phase 17 closes the first three for new bids).",
+ "outputKeys": {
+  "shipping": "shipping",
+  "materialTotal": "material_total",
+  "escalation": "escalation",
+  "burden": "burden",
+  "subTotal": "sub_total",
+  "gpPct": "gp_pct",
+  "gp": "gp",
+  "superPto": "super_pto",
+  "softCosts": "soft_costs",
+  "salesTaxPct": "sales_tax_pct",
+  "salesTax": "sales_tax",
+  "remodelTax": "remodel_tax",
+  "taxes": "taxes",
+  "bond": "bond",
+  "feesAndBond": "fees_and_bond",
+  "total": "total",
+  "perSf": "per_sf"
+ },
+ "lodgingKeys": {
+  "lodging": "lodging",
+  "perDiem": "per_diem",
+  "travel": "total"
+ },
+ "departures": [
+  {
+   "id": "tooling-is-zero",
+   "scope": "chain",
+   "reason": "The Polish tab charges tooling and consumables (D55): D51 is at least $150 whatever the size, plus demo tooling (D52), slurry hardener (D53) and plastic (D54), and D64 adds the total into the sub-total. The v2 model has no tooling line, so its sub-total is material, labor and travel only and every v2 bid is at least $150 light before the markups land on it. The harness predicts the sheet by folding the tooling into the model's travel input: the same dollars in the same place in the sub-total.",
+   "cells": ["D51", "D52", "D53", "D54", "D55", "D64"],
+   "evidence": [{"cell": "D64", "contains": ["D55"]}, {"cell": "D55", "contains": ["D50:D54"]}],
+   "appliesWhen": {"in": "tooling", "ne": 0},
+   "explain": "tooling-folds-into-travel",
+   "keys": ["subTotal", "gpPct", "gp", "superPto", "softCosts", "remodelTax", "taxes", "total", "perSf"]
+  },
+  {
+   "id": "remodel-base-widened",
+   "scope": "chain",
+   "reason": "The sheet takes the Kansas remodel tax (D75) on SUM(D45:D47, D55, D61, D67:D71, D77): labor, tooling, travel, and the markups. The v2 model takes it on labor, the markups and fees only: it leaves travel and tooling out of the base. The harness predicts the sheet by adding travel and tooling to the model's base.",
+   "cells": ["D75"],
+   "evidence": [{"cell": "D75", "contains": ["D55", "D61", "D67:D71"]}],
+   "appliesWhen": {"allOf": [{"answers": "remodel", "eq": true}, {"out": "remodelPct", "nonzero": true},
+                             {"anyOf": [{"in": "travel", "ne": 0}, {"in": "tooling", "ne": 0}]}]},
+   "explain": "remodel-base-widened",
+   "keys": ["remodelTax", "taxes", "total", "perSf"]
+  },
+  {
+   "id": "hard-bid-removed",
+   "scope": "chain",
+   "reason": "Hanz removed hard bids from the v2 estimate on 2026-09-22. The sheet gives money back when Hard Bid? is Yes: 4% off from a $60,000 sub-total, 2.5% off from $13,000 when the job is local (B68, D68), and the give-back is inside the super/PTO, soft cost, remodel tax and bond bases. The v2 model has no such line. The tool never writes Yes into that cell, so nothing a customer is quoted differs; the oracle still records the sheet's behaviour.",
+   "cells": ["B5", "B68", "D68"],
+   "evidence": [{"cell": "B68", "contains": ["D64>=60000", "D64>=13000"]}],
+   "appliesWhen": {"allOf": [{"answers": "hardBid", "eq": true}, {"out": "hardBidPct", "nonzero": true}]},
+   "explain": null,
+   "keys": ["superPto", "softCosts", "remodelTax", "taxes", "bond", "feesAndBond", "total", "perSf"]
+  },
+  {
+   "id": "bond-is-not-an-input",
+   "scope": "chain",
+   "reason": "The sheet has a bond rate (B78, 0 as it ships) and charges it on a base that counts the taxes twice (D78). The v2 model has no bond: RATES.BOND is 0 and nothing sets it, so a bond rate typed into the sheet has no counterpart.",
+   "cells": ["B78", "D78", "D79"],
+   "evidence": [{"cell": "D78", "contains": ["B78", "D74", "D75:D77"]}],
+   "appliesWhen": {"in": "bondPct", "ne": 0},
+   "explain": null,
+   "keys": ["bond", "feesAndBond", "total", "perSf"]
+  },
+  {
+   "id": "lodging-by-man-days",
+   "scope": "lodging",
+   "reason": "The sheet works nights of lodging out of money: (labor minus travel labor) / the labor rate in C37 / 8 (B58), and the same quantity for per diem (B59). The v2 model counts people-days: guys x days over the crew rows. The two agree while every row is paid the tab's rate and a day is 8 hours. Once a row is paid another rate (a prevailing wage row, a custom row) the sheet counts more nights than there are people-days, because the extra pay is read as extra days.",
+   "cells": ["B58", "B59", "D58", "D59", "D61"],
+   "evidence": [{"cell": "B58", "contains": ["((D45-D44)/C37)/8"]}, {"cell": "B59", "contains": ["B58"]}],
+   "appliesWhen": {"allOf": [{"answers": "local", "eq": false}, {"rows": "differ"}]},
+   "explain": null,
+   "keys": ["lodging", "perDiem", "travel"]
+  }
+ ]
+}

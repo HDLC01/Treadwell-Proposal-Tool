@@ -50,12 +50,34 @@ npm install hyperformula@2.7.1
 node one-config.js roundup   # 4. the engine's answers, and the diff
 ```
 
+`npm install` here leaves a `node_modules` folder in this directory; it is gitignored along with the
+`job*` files and `*.excel.json`, because this repository is public and none of that belongs in it. To keep
+the repo free of it, install somewhere else instead and point node at it
+(`npm i --no-save --prefix <dir> hyperformula@2.7.1`, then `NODE_PATH=<dir>/node_modules`).
+
 `one-config.js` takes `was`, `nosmart`, `precision` or `roundup`. **One config per process, and
 that matters:** an earlier version ran all four in one process, and
 `unregisterFunctionPlugin` silently failed to remove the custom `ROUNDUP` — so every
 configuration measured after the plugin one took credit for a fix it did not have. That is how
 the first run of this audit reported 15 wrong cells instead of 98. If you add a configuration,
 give it its own process.
+
+## The engine is shared: `engine.js`
+
+`one-config.js` is only the comparison. The engine itself lives in `engine.js`, which
+`backend/tests/js/workbook-oracle.js` (the answer key for the v2 estimating tool) uses too, so there is one
+way to build Kyle's workbook outside a browser:
+
+- it loads `hyperformula/dist/hyperformula.full.min.js`, the file the page pins, and refuses to go on unless
+  its sha384 is the one `frontend/estimate-review.html` pins;
+- it registers `frontend/js/xl-excel-rounding.js` exactly as it ships, through a two-line shim (a global
+  `HyperFormula` and a global `window`). The audit used to carry its own copy of that plugin, which could
+  drift from the shipped one; it no longer does. The `roundup` configuration IS the shipped plugin;
+- it builds the workbook in the page's order: every sheet, then the named expressions with the page's alias
+  rule (`Glaze4` becomes `Glaze_4`), then each sheet's cells.
+
+`backend/tests/test_workbook_oracle.py` lifts the page's own `HF.init` and alias rule and checks them against
+this module, so the claim "same engine as the screen" cannot go quietly stale.
 
 ## Reading the output
 
