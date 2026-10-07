@@ -23,11 +23,11 @@ import json
 import pytest
 
 import _oracle_support as S
-from _golden_support import FRONTEND, break_source
+from _golden_support import break_source
 from _node import last_json_line, require_node, run_node
 
 HARNESS = S.TESTS / "js" / "oracle-polish-harness.js"
-MODEL = "js/bid-model.js" if (FRONTEND / "js" / "bid-model.js").exists() else "js/polish-bid-core.js"
+MODEL = "js/bid-model.js"
 
 
 def run(frontend=None):

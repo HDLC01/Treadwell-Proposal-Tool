@@ -18,7 +18,7 @@
  *
  * Prints, as its last line, one JSON object the test reads. <frontend dir> defaults to this repository's
  * frontend; the test hands it a copy with the model deliberately broken to watch this go red. The model file is
- * bid-model.js once Phase 5 has renamed polish-bid-core.js, and polish-bid-core.js until then.
+ * js/bid-model.js.
  */
 const fs = require("fs");
 const path = require("path");
@@ -28,12 +28,12 @@ const REPO = path.resolve(HERE, "..", "..", "..");
 const FRONTEND = process.argv[2] ? path.resolve(process.argv[2]) : path.join(REPO, "frontend");
 const ORACLE = path.join(HERE, "..", "fixtures", "oracle");
 
-const MODEL_FILE = ["bid-model.js", "polish-bid-core.js"].map((f) => path.join(FRONTEND, "js", f)).find((f) => fs.existsSync(f));
-if (!MODEL_FILE) throw new Error("no bid-model.js or polish-bid-core.js under " + FRONTEND);
+const MODEL_FILE = path.join(FRONTEND, "js", "bid-model.js");
+if (!fs.existsSync(MODEL_FILE)) throw new Error("no bid-model.js under " + FRONTEND);
 const M = require(MODEL_FILE);
-// ROUNDUP lives in the model today. Phase 5 moves it to js/excel-math.js; whichever has it is the one the
-// model's own numbers come from.
-const roundUp = M.roundUp || require(path.join(FRONTEND, "js", "excel-math.js")).roundUp;
+// ROUNDUP is js/excel-math.js's. The model re-exports that same function as M.roundUp, so this is the
+// very one the model's own numbers come from.
+const roundUp = M.roundUp;
 const P = require(path.join(REPO, "frontend", "js", "bid-profiles.js"));
 const golden = JSON.parse(fs.readFileSync(path.join(ORACLE, "polish.json"), "utf8"));
 const dep = JSON.parse(fs.readFileSync(path.join(ORACLE, "departures.json"), "utf8"));
