@@ -1,4 +1,30 @@
 // Externalized from index.html (CSP: drop script-src 'unsafe-inline'). Do not add inline scripts.
+
+  // ── a v2 draft does not open on this form ─────────────────────────────────────
+  // Estimating Tool v2 has its own intake (polish-intake.html), and a project priced there has no
+  // spreadsheet behind it. This form's Continue goes to the spreadsheet, so a v2 draft opened here
+  // and continued from here walked into the Excel grid. Every link that opens a project on this form
+  // (the board and the Projects page, the bell, Leads, the step pills, Back from the estimate step)
+  // ends at this page, so the guard stands HERE, at the destination, and not at each of them.
+  //
+  // ONLY WHEN THE LOAD NAMES A PROJECT (?d= or ?edit=). "?new=1" on its own is somebody starting a
+  // project on this form, and gets it. (shared.js then puts the new project's id in the address bar,
+  // so a RELOAD of that page names a project, and a project that has become v2 since goes on to v2.)
+  // And only a blob that is THIS project's (TW.isThisDraft): a link opened on a machine whose storage
+  // holds another project runs this once on that blob while shared.js fetches the right one and
+  // reloads, and the reload runs this again.
+  //
+  // `replace`, so Back does not return to a page that would only bounce again, and the throw stops the
+  // rest of this script, so nothing below runs or saves on a page that is already leaving.
+  {
+    const q = new URLSearchParams(window.location.search || "");
+    const here = TW.getState();
+    if ((q.has("d") || q.has("edit")) && TW.isV2Draft(here) && TW.isThisDraft(here)) {
+      window.location.replace(TW.withDraft("/polish-intake.html"));
+      throw new Error("index: a v2 draft belongs on polish-intake.html");
+    }
+  }
+
   // Restore previous state if user clicked Back from screen 2
   const form = document.getElementById("intake-form");
 
@@ -184,7 +210,7 @@
       // The beta charges a $500 kit per 3,500 sq ft for it, so on a 17,500 SF floor "on by
       // default" was $2,500 nobody had chosen. Hanz's call was all three of these start off.
       //
-      // FLIPPED HERE TOO, AND THAT IS THE POINT. polish-bid-core's freshModel() is the other
+      // FLIPPED HERE TOO, AND THAT IS THE POINT. bid-model's freshModel() is the other
       // place this answer is stated, and the two must agree: this screen writes Polish!E29 the
       // instant any of the ten switches is touched, so a `true` left here would put the $2,500
       // back into Kyle's workbook on the live intake path while the beta showed it off. Two
@@ -227,7 +253,7 @@
   // ── The admin-set answers for three of these same ten questions ────────────
   //
   // dye / joint_filler / remove_existing_jf ALSO ship on the Polish beta's own Takeoff step
-  // (frontend/js/polish-bid-core.js CONDITION_CELLS), where their default is no longer the
+  // (frontend/js/bid-model.js CONDITION_CELLS), where their default is no longer the
   // literal below but GET /api/condition-defaults (backend/condition_defaults.py) -- Hanz,
   // twice: "I told you to remove the built-in and keep and make everything editable in the
   // takeoff." THIS PAGE carried its own hardcoded c.def for the same three keys and never
@@ -550,147 +576,27 @@
   }
 
   // ── Address autocomplete (keyless — OpenStreetMap via Photon) ──────
-  // Photon is a free public address database; we query it as the user
-  // types and fill Address / City / State / Zip. No API key, nothing to
-  // host, no scraping — just a fetch to a public endpoint.
-  const addrInput   = document.getElementById("address-input");
-  const addrResults = document.getElementById("address-results");
-  const businessInput = document.getElementById("business-input");
-  const businessResults = document.getElementById("business-results");
-  const cityInput   = document.getElementById("city-input");
-  const stateInput  = document.getElementById("state-input");
-  const zipInput    = document.getElementById("zip-input");
-
-  const STATE_ABBR = {Alabama:"AL",Alaska:"AK",Arizona:"AZ",Arkansas:"AR",California:"CA",
-    Colorado:"CO",Connecticut:"CT",Delaware:"DE","District of Columbia":"DC",Florida:"FL",
-    Georgia:"GA",Hawaii:"HI",Idaho:"ID",Illinois:"IL",Indiana:"IN",Iowa:"IA",Kansas:"KS",
-    Kentucky:"KY",Louisiana:"LA",Maine:"ME",Maryland:"MD",Massachusetts:"MA",Michigan:"MI",
-    Minnesota:"MN",Mississippi:"MS",Missouri:"MO",Montana:"MT",Nebraska:"NE",Nevada:"NV",
-    "New Hampshire":"NH","New Jersey":"NJ","New Mexico":"NM","New York":"NY","North Carolina":"NC",
-    "North Dakota":"ND",Ohio:"OH",Oklahoma:"OK",Oregon:"OR",Pennsylvania:"PA","Rhode Island":"RI",
-    "South Carolina":"SC","South Dakota":"SD",Tennessee:"TN",Texas:"TX",Utah:"UT",Vermont:"VT",
-    Virginia:"VA",Washington:"WA","West Virginia":"WV",Wisconsin:"WI",Wyoming:"WY"};
-
-  const fmtLine1 = p => [p.housenumber, p.street || p.name].filter(Boolean).join(" ") || p.name || "";
-
-  function showAddrMsg(text) {
-    addrResults.innerHTML = `<div class="addr-row addr-msg">${text}</div>`;
-    addrResults.classList.add("open");
-  }
-
-  function renderAddr(features) {
-    const esc = s => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
-    // Photon often returns several OSM objects for the same address — dedupe
-    // on the displayed text so we don't show identical rows.
-    const seen = new Set(), items = [];
-    for (const f of features) {
-      const p = f.properties;
-      const l1 = fmtLine1(p);
-      const l2 = [p.city || p.county, STATE_ABBR[p.state] || p.state, p.postcode].filter(Boolean).join(", ");
-      if (!l1 && !l2) continue;
-      const key = (l1 + "|" + l2).toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      items.push({ f, l1, l2 });
-    }
-    if (!items.length) { showAddrMsg("No matches — keep typing the address"); return; }
-    addrResults.innerHTML = items.map((it, i) =>
-      `<div class="addr-row" data-idx="${i}"><div class="addr-l1">${esc(it.l1)}</div><div class="addr-l2">${esc(it.l2)}</div></div>`
-    ).join("");
-    addrResults.classList.add("open");
-    addrResults.querySelectorAll(".addr-row").forEach(row =>
-      row.addEventListener("click", () => pickAddr(items[+row.dataset.idx].f)));
-  }
-
-  function pickAddr(f) {
-    const p = f.properties;
-    addrInput.value  = fmtLine1(p);
-    cityInput.value  = p.city || p.county || "";
-    stateInput.value = STATE_ABBR[p.state] || (p.state || "").slice(0, 2).toUpperCase();
-    zipInput.value   = p.postcode || "";
-    addrResults.classList.remove("open");
-  }
-
-  function fillLocation(p) {
-    addrInput.value  = fmtLine1(p);
-    cityInput.value  = p.city || p.county || "";
-    stateInput.value = STATE_ABBR[p.state] || (p.state || "").slice(0, 2).toUpperCase();
-    zipInput.value   = p.postcode || "";
-  }
-
-  function renderBusinesses(features) {
-    const esc = s => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
-    const seen = new Set(), items = [];
-    for (const f of features) {
-      const p = f.properties || {};
-      const name = (p.name || "").trim();
-      const address = fmtLine1(p);
-      const locality = [p.city || p.county, STATE_ABBR[p.state] || p.state, p.postcode].filter(Boolean).join(", ");
-      if (!name || (!address && !locality)) continue;
-      const key = (name + "|" + address + "|" + locality).toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      items.push({ f, name, address: [address, locality].filter(Boolean).join(", ") });
-    }
-    if (!items.length) {
-      businessResults.innerHTML = '<div class="addr-row addr-msg">No business matches — enter the address manually</div>';
-      businessResults.classList.add("open");
-      return;
-    }
-    businessResults.innerHTML = items.map((it, i) =>
-      `<div class="addr-row" data-idx="${i}"><div class="addr-l1">${esc(it.name)}</div><div class="addr-l2">${esc(it.address)}</div></div>`
-    ).join("");
-    businessResults.classList.add("open");
-    businessResults.querySelectorAll(".addr-row").forEach(row => row.addEventListener("click", () => {
-      // Keep the name Kyle entered (it can include a job description); this is
-      // only a location lookup, not a replacement for the project name.
-      fillLocation(items[+row.dataset.idx].f.properties || {});
-      businessResults.classList.remove("open");
-    }));
-  }
-
-  let addrTimer = null, addrSeq = 0;
-  addrInput.addEventListener("input", () => {
-    const q = addrInput.value.trim();
-    if (addrTimer) clearTimeout(addrTimer);
-    if (q.length < 4) { addrResults.classList.remove("open"); return; }
-    addrTimer = setTimeout(async () => {
-      const seq = ++addrSeq;
-      try {
-        // Bias toward the Kansas City metro (lat/lon); filter to US results.
-        const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=6&lang=en&lat=39.0997&lon=-94.5786`;
-        const data = await (await fetch(url)).json();
-        if (seq !== addrSeq) return;  // a newer keystroke already fired
-        const feats = (data.features || []).filter(f => (f.properties.countrycode || "US") === "US");
-        renderAddr(feats);
-      } catch { addrResults.classList.remove("open"); }
-    }, 300);  // debounce
-  });
-  let businessTimer = null, businessSeq = 0;
-  if (businessInput && businessResults) businessInput.addEventListener("input", () => {
-    const q = businessInput.value.trim();
-    if (businessTimer) clearTimeout(businessTimer);
-    if (q.length < 3) { businessResults.classList.remove("open"); return; }
-    businessTimer = setTimeout(async () => {
-      const seq = ++businessSeq;
-      try {
-        // Free OSM business/location search, biased toward the Kansas City metro.
-        const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=6&lang=en&lat=39.0997&lon=-94.5786`;
-        const data = await (await fetch(url)).json();
-        if (seq !== businessSeq) return;
-        renderBusinesses((data.features || []).filter(f => (f.properties.countrycode || "US") === "US"));
-      } catch { businessResults.classList.remove("open"); }
-    }, 300);
-  });
-  document.addEventListener("click", e => {
-    if (!addrInput.contains(e.target) && !addrResults.contains(e.target))
-      addrResults.classList.remove("open");
-    if (businessInput && businessResults && !businessInput.contains(e.target) && !businessResults.contains(e.target))
-      businessResults.classList.remove("open");
+  // Moved to js/address-lookup.js so the beta polish intake shares it. Same behaviour.
+  window.TWAddress.mount({
+    address:  document.getElementById("address-input"),
+    business: document.getElementById("business-input"),
+    city:     document.getElementById("city-input"),
+    state:    document.getElementById("state-input"),
+    zip:      document.getElementById("zip-input"),
   });
 
   form.addEventListener("submit", (e) => {
     e.preventDefault();
+    // A draft that became v2 while this page sat open (another tab priced it in Estimating Tool v2)
+    // has no spreadsheet to go to, and this form is older than the draft: saving it would put these
+    // values, work type included, over the v2 project. So nothing is saved, and the draft goes to the
+    // v2 intake, where it lives. The load guard at the top cannot see this case, the draft was not v2
+    // when the page loaded.
+    const nowHere = TW.getState();
+    if (TW.isV2Draft(nowHere) && TW.isThisDraft(nowHere)) {
+      window.location.assign(TW.withDraft("/polish-intake.html"));
+      return;
+    }
     const values = TW.readForm(form);
     // Keep a combined "City, ST" so the estimate sheet (C3), proposal
     // ({{city_state}}) and tax lookup keep working unchanged. Zip is new

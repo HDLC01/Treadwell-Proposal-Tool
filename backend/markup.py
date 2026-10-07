@@ -1,10 +1,10 @@
 """Markup rules — the markup chain's rates, as editable expressions, per sheet LAYOUT.
 
 WHAT THIS IS FOR. The Polish beta's on-screen price comes out of one choke point,
-`markupChain()` in frontend/js/polish-bid-core.js, which walks a chain of markup lines over a
+`markupChain()` in frontend/js/bid-model.js, which walks a chain of markup lines over a
 subtotal — gp → contingency → super_pto → soft_costs → remodel_tax → bond — each line's base
 being the running sum ABOVE it (hard_bid, removed 2026-09-22, used to sit between gp and
-contingency; see polish-bid-core.js's bid() for the note on where it went). It compounds; it
+contingency; see bid-model.js's bid() for the note on where it went). It compounds; it
 does not add. Those rates are hardcoded constants in that file (`RATES`, `GP_BANDS`),
 transcribed by hand off Kyle's workbook. This table is where an admin edits them instead.
 
@@ -147,7 +147,19 @@ _NOT_EDITABLE = {
 # per-night and per-day costs on the travel block, not markup on a running total. They are here
 # because the Global tab is where an admin edits a number that is the same on every sheet, which
 # is a different question from "does it compound".
-GLOBAL_LINE_KEYS = ("bond", "travel_lodging", "travel_per_diem")
+#
+# `labor_rate` (added 2026-10-05) is the company labor rate in dollars an hour: the starting rate of
+# every labor line on a NEW bid. It is a `global` line for the same reason lodging is -- one number
+# for every sheet -- and, like lodging, it is not markup on a running total. No schema change: the
+# table has no CHECK on line_key (the home rule is enforced here), so the row is filed like any
+# other global line and its absence means the estimator's shipped $33.00.
+#
+# `fees_textura` (added 2026-10-06) is what a NEW Polish-beta bid's Fees + Textura line (D77)
+# starts at, in dollars. Hanz: the default lives on Items & Assemblies -> Defaults, and "one home
+# for the value" -- so it is a `global` line filed here like `labor_rate`, with the Defaults tab a
+# second DOOR onto the same row. No schema change, which is the reason it is not a new table:
+# `markup_rules` has no CHECK on line_key. An absent row means $0, the figure the sheet ships.
+GLOBAL_LINE_KEYS = ("bond", "travel_lodging", "travel_per_diem", "labor_rate", "fees_textura")
 TAB_LINE_KEYS = ("gp", "super_pto", "soft_costs")
 
 # The order rows come back in, and the default `sort`: the chain first, because it compounds and

@@ -1,6 +1,6 @@
 """Markup rules — the storage layer and its endpoints.
 
-The markup chain's rates live as hardcoded constants in frontend/js/polish-bid-core.js today
+The markup chain's rates live as hardcoded constants in frontend/js/bid-model.js today
 (`RATES`, `GP_BANDS`), transcribed by hand off Kyle's workbook. `markup.py` is where an admin
 edits them instead. The engine that evaluates a formula and the page that shows it are separate;
 these tests only pin the row.
@@ -171,7 +171,8 @@ def test_the_two_homes_are_disjoint_and_together_are_the_api_vocabulary():
     line?" reader answered yes too."""
     assert set(markup.GLOBAL_LINE_KEYS) & set(markup.TAB_LINE_KEYS) == set()
     assert set(markup.LINE_KEYS) == set(markup.GLOBAL_LINE_KEYS) | set(markup.TAB_LINE_KEYS)
-    assert set(markup.GLOBAL_LINE_KEYS) == {"bond", "travel_lodging", "travel_per_diem"}
+    assert set(markup.GLOBAL_LINE_KEYS) == {"bond", "travel_lodging", "travel_per_diem",
+                                            "labor_rate", "fees_textura"}
     assert set(markup.TAB_LINE_KEYS) == {"gp", "super_pto", "soft_costs"}
     # And neither half may claim a line the module refuses by name outright, or a key would be
     # offered to the editor that _check_line_key rejects two lines later.
@@ -261,7 +262,8 @@ def test_contingency_and_remodel_tax_stay_in_the_compounding_chain_but_leave_the
     assert "contingency" in markup.CHAIN
     assert "remodel_tax" in markup.CHAIN
     assert set(markup.CHAIN) - set(markup.LINE_KEYS) == {"contingency", "remodel_tax"}
-    assert set(markup.LINE_KEYS) - set(markup.CHAIN) == {"travel_lodging", "travel_per_diem"}
+    assert set(markup.LINE_KEYS) - set(markup.CHAIN) == {"travel_lodging", "travel_per_diem",
+                                                         "labor_rate", "fees_textura"}
 
 
 def test_find_rule_refuses_the_two_excluded_keys_too():
@@ -912,3 +914,14 @@ def test_both_schema_files_say_global_is_a_layout_and_no_migration_was_written()
         # And no CHECK was smuggled in with them, on either column, in either file.
         assert "layout text not null check" not in block, path.name
         assert "line_key text not null check" not in block, path.name
+
+
+def test_labor_rate_is_a_global_line_and_refused_on_a_sheet_tab(store):
+    """The company labor rate is filed once, on Global, like lodging. Filed under a tab it is
+    refused by name rather than saved where nothing reads it.
+
+    Mutation: remove "labor_rate" from GLOBAL_LINE_KEYS -- the Global save is refused."""
+    ok = markup.validate_rule({"layout": "global", "line_key": "labor_rate", "formula": "36.5"})
+    assert ok["layout"] == "global" and ok["formula"] == "36.5"
+    with pytest.raises(markup.ValidationError):
+        markup.validate_rule({"layout": "polish", "line_key": "labor_rate", "formula": "36.5"})

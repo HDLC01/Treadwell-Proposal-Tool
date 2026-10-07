@@ -5,8 +5,8 @@
 // first. In short: the Polish beta's price walks one compounding chain over a subtotal —
 // gp → contingency → super_pto → soft_costs → remodel_tax → bond -- each line's base being
 // the running sum ABOVE it (hard_bid, removed 2026-09-22, used to sit between gp and
-// contingency; see polish-bid-core.js's bid() for the note on where it went). Those rates are
-// hardcoded constants in polish-bid-core.js. The
+// contingency; see bid-model.js's bid() for the note on where it went). Those rates are
+// hardcoded constants in bid-model.js. The
 // markup_rules table is where an admin overrides them, and this is that table's screen.
 //
 // A LINE WHOSE ANSWER IS ONE NUMBER GETS ONE NUMBER BOX. This page used to ask an estimator to
@@ -121,7 +121,9 @@
     remodel_tax: "Remodel tax",
     bond: "Bond",
     travel_lodging: "Travel lodging",
-    travel_per_diem: "Travel food"
+    travel_per_diem: "Travel food",
+    labor_rate: "Labor rate",
+    fees_textura: "Fees + Textura"
   };
 
   /** The one-line caption under a line's name. Free to read — it is the half of the old WHAT IT
@@ -134,12 +136,14 @@
     remodel_tax: "set by the county table",
     bond: "the workbook ships this at zero",
     travel_lodging: "one night away, the same on every sheet",
-    travel_per_diem: "one day's food, the same on every sheet"
+    travel_per_diem: "one day's food, the same on every sheet",
+    labor_rate: "what a new bid's labor lines start at, the same on every sheet",
+    fees_textura: "what a new bid's Fees + Textura line starts at, the same on every sheet"
   };
 
   /** What the figure beside a Global line is PER. A rate needs no such word; $70 does, and "$70"
    *  with nothing after it is the kind of number somebody multiplies by the wrong thing. */
-  var UNIT_NOTE = { travel_lodging: "a night", travel_per_diem: "a day" };
+  var UNIT_NOTE = { travel_lodging: "a night", travel_per_diem: "a day", labor_rate: "an hour", fees_textura: "a bid" };
 
   /** The rest of it, behind the row's own disclosure. Good writing, and it does not belong
    *  repeated in every row of a table of eight numbers. */
@@ -165,7 +169,15 @@
       "sheets carry the same figure on all eleven priced tabs, which is why it is set once here " +
       "instead of five times.",
     travel_per_diem: "A day's food while the crew is away, charged per day. The same figure on " +
-      "all eleven priced tabs."
+      "all eleven priced tabs.",
+    labor_rate: "Dollars an hour. The starting rate of the crew rows, Travel Labor, every library " +
+      "labor line with no rate of its own, and every labor line added to a NEW estimate. A bid " +
+      "already saved keeps the rates it has; an estimator can still type over any one rate, and " +
+      "the estimate shows \"Default $X\" under it when they do.",
+    fees_textura: "Dollars. What a NEW v2 estimate's Fees + Textura line starts at. Blank or " +
+      "zero is what the sheet ships. A bid already saved keeps its own fees; an estimator can " +
+      "still type over it on a bid, and the estimate shows \"Default value: $N\" under the box " +
+      "when they do."
   };
 
   /** A chip beside the name, for the lines an admin does not set. Short, and it says the one
@@ -188,9 +200,9 @@
 
   // ── the built-in constants, per tab ────────────────────────────────────────
   // What the chain uses TODAY for a line with no row filed. Transcribed from
-  // frontend/js/polish-bid-core.js (RATES, GP_BANDS) and backend/markup.py's audit of
+  // frontend/js/bid-model.js (RATES, GP_BANDS) and backend/markup.py's audit of
   // estimate_sheet_5.7.xlsx, and from nowhere else. hardBidPct was a third source here until
-  // it left polish-bid-core.js with the line itself on 2026-09-22.
+  // it left bid-model.js with the line itself on 2026-09-22.
   //
   // WHERE A NUMBER IS NOT ON RECORD, THERE IS NO ENTRY. markup.py's audit says Seal has a SIXTH
   // GP tier topping out at 0.28 and Gyp has SEVEN tiers on different edges, but it does not give
@@ -236,7 +248,8 @@
     // The travel figures are Kyle's own literals off all eleven priced sheets, and they are
     // DOLLARS, not rates — written bare for that reason, the same way priceChain and the box's
     // own $ / % affordance read a bare number of 1 or more.
-    global: { bond: F("0%"), travel_lodging: F("70"), travel_per_diem: F("45") }
+    global: { bond: F("0%"), travel_lodging: F("70"), travel_per_diem: F("45"), labor_rate: F("33"),
+      fees_textura: F("0") }
   };
 
   // ── which rows actually reach the estimate workbook ────────────────────────
@@ -313,6 +326,23 @@
    *  into one. */
   function reachSentence(r) {
     if (!r.editable) return "";
+    // LODGING AND PER DIEM ARE READ BY THE POLISH ESTIMATE BETA (2026-10-05): a new bid copies the
+    // figure onto its own Lodging / Per Diem line, priced inside the markups. Kyle's WORKBOOK still
+    // does not read them (no address in any target table), and that is the half this row says too,
+    // so an admin is not left believing the downloaded .xlsx follows the figure.
+    if (LAYOUT === "global" && (r.line_key === "travel_lodging" || r.line_key === "travel_per_diem")) {
+      return " Estimating Tool v2 copies this figure onto every NEW bid's " +
+        (r.line_key === "travel_lodging" ? "Lodging" : "Per Diem") + " line; a saved bid keeps its " +
+        "own. Kyle's workbook does not read it.";
+    }
+    // THE LABOR RATE AND FEES + TEXTURA ARE READ THE SAME WAY (2026-10-06): a new beta bid starts
+    // its labor lines / its Fees + Textura line at this figure. Without this branch they fell
+    // through to "changes no bid", which told an admin a live default was dead.
+    if (LAYOUT === "global" && (r.line_key === "labor_rate" || r.line_key === "fees_textura")) {
+      return " Estimating Tool v2 starts every NEW bid's " +
+        (r.line_key === "labor_rate" ? "labor lines" : "Fees + Textura line") + " at this figure; " +
+        "a saved bid keeps its own. Kyle's workbook does not read it.";
+    }
     var keys = PRICES_THE_BID[LAYOUT] || [];
     if (keys.indexOf(r.line_key) < 0) {
       return " The estimate workbook does not read this line yet, so a rate filed here " +
@@ -1575,7 +1605,66 @@
         ? '<span class="amt">' + esc(money(total.amount)) + "</span>"
         : '<span class="unpriced">Unpriceable</span>') +
       "</div></div>";
-    return out;
+    // Every Global line, read-only: none of them is part of this tab's chain (they add nothing
+    // to the running total above), so they are a block BELOW the table and not rows in it.
+    return out + globalRefHtml();
+  }
+
+  /** Every Global line as a sheet tab sees it: said, read-only, with where to change it.
+   *
+   *  NOT ROWS OF THE CHAIN, and deliberately kept out of displayOrder: priceChain compounds every
+   *  row it is handed, so a $33 line in the list would be added to the sub-total. One home per
+   *  line -- the box is on the Global tab, and this tab only reports what that row says.
+   *
+   *  A GLOBAL LINE THAT IS ALREADY A CHAIN ROW HERE IS SKIPPED (bond, today, on every sheet tab):
+   *  the row says it, with its own caption, and a second figure for it a few lines lower is two
+   *  places to read one rate.
+   *
+   *  RESOLVED BY priceGlobal, the pass the Global tab itself is read by, from the SAVED rule or the
+   *  built-in -- so "off", "Unpriceable" and the unit are the Global tab's own answers and cannot
+   *  drift into a second reading. An unsaved box on the Global tab is not shown: it is not set
+   *  yet, and the estimator reads the saved rule. */
+  function globalRefRows() {
+    var shownHere = displayOrder();
+    var rows = [];
+    for (var i = 0; i < GLOBAL_KEYS.length; i++) {
+      var k = GLOBAL_KEYS[i];
+      if (shownHere.indexOf(k) >= 0) continue;
+      var rule = ruleFor(GLOBAL, k);
+      var applies = rule ? rule.applies !== false : true;
+      var built = ((BUILTIN[GLOBAL] || {})[k] || {}).formula || "";
+      rows.push({
+        line_key: k, label: LABELS[k] || labelFor(k), priced: true, applies: applies,
+        effective: applies ? ((rule && rule.formula) || built) : "", simple: null
+      });
+    }
+    return rows;
+  }
+
+  function globalRefHtml() {
+    var rows = globalRefRows();
+    if (!rows.length) return "";
+    var priced = priceGlobal(rows);
+    var items = "";
+    for (var i = 0; i < rows.length; i++) {
+      var p = priced[rows[i].line_key];
+      var text = !p || p.state === "unknownline" || p.state === "absent" ? "off"
+        : p.state !== "ok" ? "can't be read, fix it on the Global tab"
+        // A DOLLAR line (it has a unit) is always dollars: a filed 0 is under 1, which priceGlobal
+        // reads as a rate, and "0% a bid" is not an answer to "what do I charge".
+        : (p.rate == null || UNIT_NOTE[rows[i].line_key] ? money(p.rate == null ? p.amount : p.rate)
+                                                          : pct(p.rate)) +
+          (p.note ? " " + p.note : "");
+      items += '<li data-gref="' + esc(rows[i].line_key) + '">' + esc(rows[i].label) +
+        ": <b>" + esc(text) + "</b></li>";
+    }
+    return '<div class="ronote gref" data-global-ref="1"><div class="grefhead">' +
+      "<b>Set on the Global tab</b>" +
+      '<button class="ghostlink" type="button" data-goto-global="1" data-focus="goto-global">' +
+      "Open the Global tab</button></div>" +
+      '<ul class="greflist">' + items + "</ul>" +
+      "<p>The same for every sheet layout. They are read here, and not added to this tab's " +
+      "total.</p></div>";
   }
 
   /** The what-if box. ONE copy, two rows.
@@ -2067,6 +2156,19 @@
 
     var retry = t.closest("#mk-retry");
     if (retry) { reload(); return; }
+
+    // The "Open the Global tab" link under a sheet tab's read-only Global block.
+    if (t.closest("[data-goto-global]")) {
+      LAYOUT = GLOBAL;
+      if (typeof window !== "undefined" && window.TWTabMemo) {
+        window.TWTabMemo.write(window, { tab: GLOBAL });
+      }
+      say("");
+      // Focus lands on the Global tab button, not on <body>: the link that held it is gone after
+      // the repaint, and a keyboard user would otherwise start again from the top of the page.
+      render({ focusKey: "tab-" + GLOBAL });
+      return;
+    }
 
     // Recorded, not performed: <details> opens itself, and this only remembers which ones are
     // open so the next repaint does not snap them shut.

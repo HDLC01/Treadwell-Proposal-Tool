@@ -77,7 +77,7 @@ def test_a_fourth_tab_holds_the_defaults_that_are_not_built_yet(ran):
     checked below rather than only the button's presence."""
     page = ran["page"]
     assert page["defaultsTab"], "the Default Items & Assemblies tab is not on the page"
-    assert page["defaultsTabLabel"] == "Default Items &amp; Assemblies", (
+    assert page["defaultsTabLabel"] == "Default Items, Assemblies &amp; Labor", (
         "the tab reads %r" % page["defaultsTabLabel"])
     assert page["defaultsTabIsLast"], "the tab is not beside Administration, where it was asked for"
     assert page["defaultsPaneStartsHidden"], (
@@ -129,7 +129,8 @@ def test_the_defaults_tab_has_a_search_for_entering_them(ran):
     assert c["searchIsForAdding"], (
         "the search reads as a filter over the lists rather than a way to add to them")
     assert c["searchAboveTheLists"], (
-        "the search sits under the lists, where it reads as narrowing them")
+        "the search box is back up by the work-type tabs (or is not hidden until opened, or lost "
+        "its Cancel); it starts inside the Takeoff card above its table")
 
 
 @needs_node
@@ -185,7 +186,8 @@ def test_the_takeoff_defaults_list_what_a_new_estimate_starts_with(ran):
     # default", then "just put these 3 in the materials section with the same buttons."
     assert t["groupTitles"] == ["Assemblies", "Materials", "Markup"], (
         "the groups or their order changed: %s" % t["groupTitles"])
-    assert t["groupCounts"] == [1, 4, 1], (
+    # Markup is 2 rows: the always-listed Fees + Textura default, then bond.
+    assert t["groupCounts"] == [1, 4, 2], (
         "a row landed in the wrong group: %s" % t["groupCounts"])
     assert t["renderedHeadings"] == t["groupTitles"], (
         "the groups exist in the data but are not drawn: %s" % t["renderedHeadings"])
@@ -341,9 +343,9 @@ def test_the_labor_default_is_read_from_the_estimate_not_retyped():
         "the renderer carries Travel's own label or rate as a literal, which is the copy that "
         "drifts")
     html = (FRONTEND / "library.html").read_text(encoding="utf-8", errors="replace")
-    assert "/js/polish-bid-core.js" in html, (
+    assert "/js/bid-model.js" in html, (
         "the shared module is not loaded, so travelSeed is unreachable and the list renders empty")
-    core = (FRONTEND / "js" / "polish-bid-core.js").read_text(encoding="utf-8", errors="replace")
+    core = (FRONTEND / "js" / "bid-model.js").read_text(encoding="utf-8", errors="replace")
     assert "travelSeed: travelSeed" in core, (
         "travelSeed is no longer exported, so this page cannot reach it")
 
@@ -380,7 +382,7 @@ def test_the_labor_tab_lists_every_line_default_or_not(ran):
     Each row is edited in place like an Items row. The unit is a two-option select with no blank:
     a blank saves as "hours" on the server while the screen says "—", and this is the field that
     decides what the rate multiplies. Travel is editable but has no delete (the server refuses
-    one too) and no work-type chips (it is on every estimate whatever they say).
+    one too); it carries the same work-type chips as every line (2026-10-06).
 
     Mutation: filter renderLabor on `r.favorite`, and L9 disappears; use pick() for the unit and
     a blank option appears; drop the `travel ?` guard on the delete icon."""
@@ -394,7 +396,7 @@ def test_the_labor_tab_lists_every_line_default_or_not(ran):
     assert t["customLinesCanBeDeleted"], "a labor line has no delete on its own tab"
     assert t["travelCannotBeDeleted"], "Travel is offered a delete the server refuses"
     assert t["travelRateIsEditable"], "Travel cannot be edited on the Labor tab"
-    assert t["travelHasNoChips"], "Travel carries work-type chips that change nothing"
+    assert t["travelHasChips"], "Travel is missing its work-type chips (or still says Every estimate)"
     assert t["customLinesHaveChips"], "a labor line cannot be scoped to a work type"
     assert t["moreStartsShut"], "the More fields are open before anybody asks"
     assert t["badge"] == 3, "the badge counts %s, not every line" % t["badge"]
@@ -582,7 +584,7 @@ def test_the_defaults_tab_lists_only_lines_somebody_made_a_default(ran):
         "the search does not offer a labor line that is not yet a default")
     assert c["browseOffersIt"], "the browse does not offer a labor line that is not yet a default"
     assert c["favoritedLaborNotOffered"], "the browse offers a line that is already a default"
-    assert c["travelNeverOffered"], "the browse offers Travel, which is on every bid anyway"
+    assert c["travelNeverOffered"], "the browse offers Travel while it is already a default"
 
 
 @needs_node
@@ -670,9 +672,8 @@ def test_a_stored_travel_row_is_shown_once_with_its_own_rate(ran):
     twice -- same name, two sets of controls, and no way to tell which one prices a bid. So the
     count and the rate are both asserted, and the shipped figure is asserted ABSENT.
 
-    REMOVE IS NEVER OFFERED. Travel cannot be removed: freshModel() seeds it into every new bid
-    and migrateModel appends it to every old one, so a button saying Remove would be the dead
-    control this whole thread has been about. Reset is what the row can actually do.
+    REMOVE IS OFFERED (2026-10-06), as it is for every labor default: it writes favorite=false,
+    and a new bid then does not get Travel. Reset is Travel's extra.
 
     Mutation: drop the `r.id !== shipped.id` filter from renderDefaultLabor's `shown` list and
     travelRowCount becomes 2. Or pass `null` instead of `storedTravel` to travelSeed and the rate
@@ -688,9 +689,8 @@ def test_a_stored_travel_row_is_shown_once_with_its_own_rate(ran):
     assert t["canBeEdited"], "Travel still cannot be edited, which is what Hanz asked for"
     assert t["offersReset"] and t["resetSaysReset"], (
         "the way back to the shipped rate is not offered, or does not say Reset")
-    assert t["neverOffersRemove"], (
-        "Travel is offered Remove, which is a button that cannot do what it says: the row is "
-        "seeded into every bid whatever this table holds")
+    assert t["offersRemove"], (
+        "Travel is not offered Remove beside Edit, the pair every other labor default carries")
     assert t["stillListsTheCustomLine"], "merging Travel took the custom labor lines off the list"
 
 
@@ -762,7 +762,9 @@ def test_reset_patches_the_row_back_rather_than_deleting_it(ran):
         "Reset went out as %s -- a delete takes the only id Travel can be addressed by with it, "
         "permanently" % r["op"])
     assert r["sentToTravel"], "Reset was addressed to something other than the reserved id"
-    assert r["body"] == {"name": "Travel", "rate": 33.0, "unit": "hours"}, (
+    # "Travel Labor" since 2026-10-05: Reset writes the row's name as travelSeed() now spells it,
+    # which also brings a row still stored under the old "Travel" onto the new name.
+    assert r["body"] == {"name": "Travel Labor", "rate": 33.0, "unit": "hours"}, (
         "Reset did not send the figures travelSeed() ships: %s" % r["body"])
     assert r["showsTheShippedRate"], "the list still shows the edited rate after a reset"
     assert r["resetGoneAfterwards"], (
@@ -902,8 +904,10 @@ def test_the_items_tab_no_longer_explains_itself(ran):
     # delete; this is the opposite of one. Defaults gained its own .paneintro on 2026-09-18 and
     # Labor on 2026-09-30, both reusing the class rather than inventing a new one -- the same
     # reasoning that kept it alive for Assemblies and Administration.
-    assert page["paneintroStillUsed"] == 4, (
-        "expected Assemblies, Labor, Administration and Defaults to carry .paneintro, found %s"
+    # FIVE since 2026-10-05: the Labor Calculator pane (Kyle's notes, B7) opens with one too.
+    assert page["paneintroStillUsed"] == 5, (
+        "expected Assemblies, Labor, Labor Calculator, Administration and Defaults to carry "
+        ".paneintro, found %s"
         % page["paneintroStillUsed"])
 
 
@@ -1563,6 +1567,17 @@ def test_a_value_typed_and_typed_back_is_not_asked_about(ran):
     assert g["asked"] == 0, "it asked about a change that was not one"
     assert g["requests"] == ["PATCH /api/library/items/i1"], (
         "the save itself was dropped; a no-op payload is harmless and still gets sent")
+
+
+@needs_node
+def test_a_material_no_assembly_uses_saves_without_a_question(ran):
+    """A brand-new material (or any unused one) has nothing downstream to reprice, so Save must not
+    claim it is 'priced into every assembly'. The same edit on a USED material still asks (see the
+    first test in this block)."""
+    g = ran["itemUnused"]
+    assert g["errors"] == []
+    assert g["asked"] == 0, "an unused material still raised the assembly-pricing question"
+    assert g["requests"] == ["PATCH /api/library/items/i1"], "the save itself did not go out"
 
 
 @needs_node
@@ -3598,7 +3613,7 @@ def test_the_condition_vocabulary_is_the_same_three_on_both_sides():
     because a mismatch is silent in the worst possible way: a condition filed under a key no
     reader knows saves with a green tick, reaches nothing, and writes to no cell.
 
-      * `CONDITION_CELLS` in polish-bid-core.js decides which workbook cell each answer writes.
+      * `CONDITION_CELLS` in bid-model.js decides which workbook cell each answer writes.
       * `takeoffConditionDefaults()` in library.js is what the Defaults tab offers.
       * `KEYS` in backend/condition_defaults.py is what the endpoint will accept.
 
@@ -3606,7 +3621,7 @@ def test_the_condition_vocabulary_is_the_same_three_on_both_sides():
     page makes for that condition, and nothing in the product would have said which of the three
     files was wrong."""
     js = (FRONTEND / "js" / "library.js").read_text(encoding="utf-8", errors="replace")
-    core = (FRONTEND / "js" / "polish-bid-core.js").read_text(encoding="utf-8", errors="replace")
+    core = (FRONTEND / "js" / "bid-model.js").read_text(encoding="utf-8", errors="replace")
     py = (pathlib.Path(__file__).resolve().parents[1] / "condition_defaults.py").read_text(
         encoding="utf-8", errors="replace")
 
@@ -3755,3 +3770,216 @@ def test_edit_on_a_condition_material_opens_its_items_tab_row(ran):
     assert r["focusHiddenFirst"], "the fixture's search did not hide the row, so this proves nothing"
     assert r["focusThroughASearch"] == "item:remove-existing-jf", r["focusThroughASearch"]
     assert r["searchWasCleared"], "the Items tab's search was left hiding the row Edit opened"
+
+
+def test_a_new_material_or_assembly_has_a_save_button_that_sends_now(ran):
+    """Hanz, 2026-10-05: nobody should have to click off a new row to save it."""
+    sb = ran["saveButton"]
+    assert sb["onTheNewRow"] and sb["notOnASavedRow"] and sb["exactlyOne"]
+    assert sb["asmShownWhenNew"] and sb["asmHiddenWhenSaved"]
+    sn = ran["saveNew"]
+    assert sn["itemOnePatch"] and sn["itemQuestionAsked"] and sn["itemSentTheTypedCost"]
+    assert sn["itemDebounceDisarmed"] and sn["itemNoLongerNew"]
+    assert sn["untouchedRowSendsNothing"] and sn["untouchedRowNoLongerNew"]
+    assert sn["cancelKeepsItNew"]
+    assert sn["asmOnePatch"] and sn["asmDeclaredItsVersion"] and sn["asmNoLongerNew"]
+    assert sn["noErrors"]
+
+
+def test_any_edited_row_shows_save_and_clears_only_when_the_server_confirms(ran):
+    """Hanz, 2026-10-05 (B3b): Save on ANY edited material or assembly, not only new ones.
+
+    Mutations: drop the FRESH mark from patchSoon (markedByTheEdit red); clear the mark before the
+    reply in flush (failedKeepsMark red); delete takenP/the await in saveNow (pressWaitedForTheDialog
+    red -- the reviewer's race); drop flushAllPending (leaveFlushSent red)."""
+    s = ran["saveEdited"]
+    assert s["notMarkedBeforeEdit"] and s["markedByTheEdit"]
+    assert s["confirmedSaveClears"] and s["onePatchOneQuestion"]
+    assert s["failedKeepsMark"], "a refused save cleared the unsaved mark"
+    assert s["secondPressResends"], "after a failed save, the next Save press sent nothing and retired the button"
+    assert s["thirdPressClearsOnConfirm"]
+    assert s["bufferEmptyWhileAsking"], "the fixture no longer parks a flush on its dialog"
+    assert s["pressWaitedForTheDialog"], "Save treated an empty buffer as saved while a flush was mid-flight"
+    assert s["pressThenConfirmed"]
+    assert s["newerEditKeepsMark"], "a newer keystroke lost its mark when the older save landed"
+    assert s["asmMarked"] and s["asmSavedAndCleared"]
+    assert s["leaveWarnsWhilePending"] and s["leaveFlushSent"] and s["leaveSettled"]
+    assert s["cancelledSavedRowClean"]
+    assert s["noErrors"]
+
+
+@needs_node
+def test_one_edit_to_any_material_field_shows_save_in_the_pinned_cell(ran):
+    """Hanz, 2026-10-06: "the save button only pops up when we click away but there's no way to
+    save changes when we make any changes to any of the columns in the items tab".
+
+    The button was inserted on the first keystroke all along -- into .rowact, the last column of a
+    table about 1,990px wide inside a 1,320px scroller at 1366 (344px at 390). Measured in a real
+    browser: off screen for 7 of 9 fields at 1366 and all 9 at 390, so the only thing anybody saw
+    was the "Save this change?" question that leaving the row asks. It now goes into .rowsave,
+    which library.html pins to the scroller's right edge (sticky, right:0). Not the name cell:
+    focusing Cost scrolls the table 617px, which takes the name column off screen with it.
+
+    Executed through the real onItemEdit, patchSoon and showUnsaved, one event per field and no
+    blur: the field list is read off the rendered row, so a new editable column has to join it.
+
+    Mutations: point showUnsaved back at .rowact (inPinnedCell red on all nine); drop the .rowsave
+    cell from renderItems (shown red on all nine); drop the th (headerCells != rowCells); drop
+    position:sticky from the CSS (cssPinsTheCell red)."""
+    v = ran["saveVisible"]
+    assert sorted(v["fieldsInRow"]) == sorted(["name", "divisions", "buy_qty", "unit", "coverage",
+                                               "waste_pct", "roundup", "unit_cost", "vendor"]), (
+        "the Items row's editable fields changed; give the new one an action in the harness",
+        v["fieldsInRow"])
+    for f, r in v["fields"].items():
+        assert r["event"] != "none", f + " has no action in the harness, so nothing edited it"
+        assert r["shown"], "one " + r["event"] + " on " + f + " did not put a Save on the row"
+        assert r["inPinnedCell"], "Save for " + f + " went into a cell that scrolls off screen"
+        assert r["forThisRow"] and r["exactlyOne"], f
+        assert r["notInActionCell"], "Save for " + f + " is in .rowact as well"
+        assert r["queued"], f + " was not queued for the server"
+        assert r["nothingFlushed"], f + " needed a flush (a blur or a timer) before Save showed"
+        assert r["noRepaint"], f + " repainted the table mid-edit, which throws the caret out"
+    assert v["fields"]["unit_cost"]["emptyAfterHide"], (
+        "the pinned cell is not empty after the confirmed save, so the column never collapses")
+    assert v["cleanRowCellEmpty"], "a clean row's pinned cell is not empty, so it takes up width"
+    assert v["headerCells"] == v["rowCells"], (
+        "header and row have different column counts", v["headerCells"], v["rowCells"])
+    assert v["headerHasPinnedColumn"]
+    assert v["cssPinsTheCell"], "the .rowsave cell is no longer pinned to the scroller's edge"
+    assert v["cssZeroWideWhenEmpty"]
+
+
+@needs_node
+def test_add_default_search_opens_above_its_own_table(ran):
+    """Hanz, 2026-10-05: "Adding a default [labor] should have the search bar right above the
+    [Labor] container itself, not on the work type up above."
+
+    Executed, not read: the box is moved by placeDefaultSearch(), so the test presses each
+    section's button against a stand-in tree and asks where the one box ended up.
+
+    Mutation: make openDefaultAdd call openDefaultBrowse() with no section (the old behaviour) and
+    laborOpensAboveLabor goes red."""
+    r = ran["defaultsInlineSearch"]
+    assert r["laborOpensAboveLabor"], "the labor button does not open the box above the Labor table"
+    assert r["focusInBox"], "focus does not land in the search box"
+    assert r["laborResultsRendered"], "the relocated box does not show the browse results"
+    assert r["onlyOneOpenAndItMoved"], "two boxes open at once, or the box did not move sections"
+    assert r["movingToAnotherSectionClearsTheQuery"], "a query typed for one section leaks to the next"
+    assert r["escapeCloses"], "Escape does not close the box and return focus to its button"
+    assert r["otherKeysIgnored"], "an ordinary key is swallowed by the Escape handler"
+    assert r["cancelCloses"], "Cancel does not close the box"
+    assert r["listenersWired"], "the page does not wire Cancel and Escape to the close function"
+
+
+@needs_node
+def test_travel_is_a_default_like_any_other_on_the_defaults_tab(ran):
+    """Hanz, 2026-10-06. Remove writes favorite=false on the Travel row (a PATCH, never a delete),
+    the row leaves the Defaults list, "+ Add a labor default" offers it back, and the work-type
+    sub-tabs filter it. A row with favorite null and no work types lists on every tab, as before.
+
+    Mutation: revert the travelListed gate in renderDefaultLabor, or restore the
+    `l.id !== "travel"` test in defaultCandidates -> goneAfterRemove / offeredBack go red."""
+    t = ran["travelAsDefault"]
+    assert t["listedBefore"]
+    assert t["removeIsFavoriteFalse"], "Remove did not PATCH favorite=false on the travel row"
+    assert t["noDelete"], "Remove sent a DELETE"
+    assert t["goneAfterRemove"], "a removed Travel is still listed as a default"
+    assert t["offeredBack"], "a removed Travel cannot be added back as a labor default"
+    assert t["onEpoxy"] and not t["onPolish"], "Travel ignores the work-type sub-tabs"
+    assert t["legacyOnGyp"], "an unscoped legacy Travel row stopped listing on every tab"
+
+
+def test_the_fees_textura_default_is_always_listed_and_saves_to_the_markup_row(ran):
+    """EXECUTED (Hanz, 2026-10-06): the Defaults tab always lists a Fees + Textura amount, an admin's
+    box PUTs the Global `fees_textura` markup row (one home, two doors, notes carried), blank files
+    $0, junk is refused before any request, a 403 puts the old figure back, a viewer gets text.
+
+    Mutation: drop feesDefaultRow from the Markup group, or have saveFeesDefault skip the
+    line_key, and the first two asserts go red."""
+    f = ran["feesDefaultRow"]
+    assert f["listedWithNothingFiled"] and f["emptyBox"] and f["name"] == "Fees + Textura"
+    assert f["sent"] == [{"path": "/api/markup/rules", "method": "PUT", "body": {
+        "layout": "global", "line_key": "fees_textura", "applies": True,
+        "notes": "kept", "formula": "1250"}}]
+    assert f["ruleAfter"] == "1250"
+    assert f["blankSent"] == ["0"]
+    assert f["junkSent"] == 0 and f["junkBox"] == ""
+    assert f["refusedBox"] == "100" and f["refusedRule"] == "100"
+    assert f["viewerHasBox"] is False and "250" in f["viewerText"]
+
+
+def _css_rule(css, selector):
+    """The declarations of the one rule whose selector is exactly `selector`, as {prop: value}.
+    Parsed by position (selector, the next brace pair, split on ; and :), not matched with a regex."""
+    start = css.index("\n    " + selector + " {") + 1
+    body = css[css.index("{", start) + 1:css.index("}", start)]
+    out = {}
+    for part in body.split(";"):
+        if ":" in part:
+            k, v = part.split(":", 1)
+            out[k.strip()] = " ".join(v.split())
+    return out
+
+
+def _ancestors_of(html, element_id):
+    """Class lists of every element enclosing the one with this id, outermost first, from a real
+    HTML parse of library.html."""
+    from html.parser import HTMLParser
+    void = {"input", "br", "img", "hr", "meta", "link", "path"}
+
+    class P(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.stack, self.found = [], None
+
+        def handle_starttag(self, tag, attrs):
+            a = dict(attrs)
+            if a.get("id") == element_id:
+                self.found = [c for t, c in self.stack]
+            if tag not in void:
+                self.stack.append((tag, (a.get("class") or "").split()))
+
+        def handle_startendtag(self, tag, attrs):
+            if dict(attrs).get("id") == element_id:
+                self.found = [c for t, c in self.stack]
+
+        def handle_endtag(self, tag):
+            while self.stack and self.stack[-1][0] != tag:
+                self.stack.pop()
+            if self.stack:
+                self.stack.pop()
+
+    p = P()
+    p.feed(html)
+    return p.found
+
+
+def test_the_open_assemblys_save_stays_on_screen_in_a_sticky_title_bar():
+    """Hanz, 2026-10-06: edit a line deep in a long takeoff and the Save button, in the title bar at
+    the top of the assembly, was about 700px above the viewport at 1366 and 1240px at 390 (a 14-line
+    assembly). The bar now sticks to the top of the page while the assembly scrolls past, so Save is
+    on screen whenever it is shown. Measured in headless Chromium against the real page: Save in the
+    viewport and topmost for pick / remove / add-then-pick at top, middle and bottom, both widths.
+
+    This pins the two things that make it so: the .atitle rule sticks, with a solid card fill, a
+    hairline and a z-index under the item picker's results (30); and #asm-save is inside that bar,
+    not beside it. Lines tabbed into are held clear of the bar by scroll-margin-top.
+
+    Mutations: drop position:sticky from .atitle, or its background, or move #asm-save out of the
+    .atitle div in library.html, or drop the .lines scroll-margin-top, or put top back above 44px -> each assert goes red."""
+    html = (FRONTEND / "library.html").read_text(encoding="utf-8")
+    bar = _css_rule(html, ".atitle")
+    assert bar.get("position") == "sticky", "the assembly title bar no longer sticks: " + str(bar)
+    # The page's own fixed #tw-topbar (52px, auth.js) covers y=0..52, so a bar stuck at the viewport
+    # top had Save hidden behind it at desktop width. It must park below that bar (52px less the
+    # 8px of card padding it slides over = 44px), never at or above y=0.
+    assert bar.get("top", "").endswith("px") and float(bar["top"][:-2]) >= 44, (
+        "the stuck bar would sit behind the fixed top bar", bar)
+    assert bar.get("background") == "var(--card)", "lines would show through the bar"
+    assert "var(--line)" in bar.get("border-bottom", ""), "no hairline under the bar"
+    assert 0 < int(bar.get("z-index", "0")) < 30, "the bar must sit under .item-results (30)"
+    assert "atitle" in _ancestors_of(html, "asm-save")[-1], (
+        "#asm-save is not a direct child of the sticky .atitle bar", _ancestors_of(html, "asm-save"))
+    margin = _css_rule(html, ".lines :is(input, select, button)")
+    assert float(margin["scroll-margin-top"][:-2]) >= 150, margin

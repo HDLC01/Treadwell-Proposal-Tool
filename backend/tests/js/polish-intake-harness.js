@@ -15,7 +15,7 @@
  *   * An unbound identifier in a handler is exactly what a source test cannot see, and that class
  *     of mistake took the board down on prod on 2026-08-12.
  *
- * The condition KEYS are compared against the real js/polish-bid-core.js, so this cannot pass
+ * The condition KEYS are compared against the real js/bid-model.js, so this cannot pass
  * against a list that has drifted from the one markupChain() reads. That anchor moved when the
  * beta stopped writing worksheet cells: the keys used to have to match cellWrites() in the old
  * polish-estimate-core.js, and now they have to match the pricing engine that consumes them —
@@ -46,7 +46,7 @@ const read = (p) => fs.readFileSync(p, "utf8").replace(/\r\n/g, "\n");
 
 const src = read(path.join(ROOT, "js", "polish-intake.js"));
 const pageHtml = read(path.join(ROOT, "polish-intake.html"));
-const P = require(path.join(ROOT, "js", "polish-bid-core.js"));
+const P = require(path.join(ROOT, "js", "bid-model.js"));
 
 // ── the REAL county table, out of the server module that serves it ────────────
 //
@@ -219,16 +219,16 @@ const scope = new Function("$", "TW", "SB", "document", "window", "clock", "fetc
   "use strict";
   var setTimeout = clock.setTimeout, clearTimeout = clock.clearTimeout;
   ${grab(/^  var esc = function[\s\S]*?\n  \};$/m, "esc")}
-  ${grab(/^  var B = window\.TWPolishBid;[^\n]*$/m, "the window.TWPolishBid binding")}
+  ${grab(/^  var B = window\.TWBidModel;[^\n]*$/m, "the window.TWBidModel binding")}
   ${grab(/^  var CONDITIONS = \[[\s\S]*?\n  \];$/m, "CONDITIONS")}
   ${grab(/^  var DEFAULT_CONDITIONS = [^\n]*;$/m, "DEFAULT_CONDITIONS")}
   // Added 2026-09-03 with the cell map. adoptModel() and save() both reach for it now,
   // and a const the lifted function cannot see is a ReferenceError at boot, not a
   // product bug -- which is the whole reason grab() names what it is looking for.
   //
-  // Repointed 2026-09-15: the map moved into polish-bid-core.js, because the Review step became a
+  // Repointed 2026-09-15: the map moved into bid-model.js, because the Review step became a
   // second writer of these same five cells and two copies is how the two screens drift. This line
-  // is now an alias, and it resolves through the window.TWPolishBid binding lifted above --
+  // is now an alias, and it resolves through the window.TWBidModel binding lifted above --
   // which is why that grab has to stay ahead of this one.
   ${grab(/^  var CONDITION_CELLS = B\.CONDITION_CELLS;$/m, "CONDITION_CELLS")}
   // Added 2026-09-11 with the four carry-through toggles, then down to one (reno) on
@@ -279,6 +279,8 @@ const scope = new Function("$", "TW", "SB", "document", "window", "clock", "fetc
   ${fn("onCountyInput")}
   ${fn("onCountyKeydown")}
   ${fn("saveSoon")}
+  ${fn("sfLocked")}
+  ${fn("paintSfLock")}
   ${fn("save")}
   ${fn("paintSaveBlocked")}
   ${fn("hydrate")}
@@ -286,7 +288,7 @@ const scope = new Function("$", "TW", "SB", "document", "window", "clock", "fetc
   ${fn("onSubmit")}
   ${fn("wire")}
   ${fn("boot")}
-  return { boot: boot, save: save, saveSoon: saveSoon, toggleCondition: toggleCondition,
+  return { boot: boot, save: save, sfLocked: sfLocked, paintSfLock: paintSfLock, saveSoon: saveSoon, toggleCondition: toggleCondition,
            renderConditions: renderConditions, adoptModel: adoptModel, hydrate: hydrate,
            onClick: onClick, onSubmit: onSubmit, CONDITIONS: CONDITIONS,
            DEFAULT_CONDITIONS: DEFAULT_CONDITIONS, COUNTY_LIMIT: COUNTY_LIMIT,
@@ -350,7 +352,7 @@ function build(opts) {
       store.blob = Object.assign(store.blob, JSON.parse(JSON.stringify(partial)));
       return store.blob;
     },
-    readForm: () => Object.assign({}, opts.formValues || FORM_VALUES),
+    readForm: opts.readForm || (() => Object.assign({}, opts.formValues || FORM_VALUES)),
     writeForm: (f, values) => { rec.written.push({ isForm: f === dom.nodes["intake-form"],
                                                    values: values }); },
     withDraft: (p) => p + (p.indexOf("?") >= 0 ? "&" : "?") + "d=" + store.id,
@@ -386,9 +388,9 @@ function build(opts) {
   const win = {
     TWAuth: { ready: Promise.resolve() },
     // The REAL pricing core, under the real global name. The page's own
-    // `var B = window.TWPolishBid` line is lifted below, so renaming the global breaks this
+    // `var B = window.TWBidModel` line is lifted below, so renaming the global breaks this
     // harness instead of quietly leaving B undefined at runtime.
-    TWPolishBid: P,
+    TWBidModel: P,
     location: { href: "https://x/polish-intake.html?d=proj-1",
                 assign: (u) => rec.navigated.push(u) },
     // wire() registers its own pagehide flush directly on window (mirrors shared.js's own net
@@ -722,9 +724,9 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
   {
     const b = build();
     await b.api.boot();
-    // The estimator has tabbed to Local job and is reading it. The click below lands somewhere
+    // The estimator has tabbed to Remodel tax and is reading it. The click below lands somewhere
     // else entirely, the way a mouse does.
-    b.dom.nodes["cond-local"].focus();
+    b.dom.nodes["cond-remodel_tax"].focus();
     const beforeFlip = b.dom.nodes["conditions"].innerHTML;
     clickSwitch(b, "taxable");
     b.clock.fire();
@@ -856,6 +858,31 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
     };
   }
 
+  // ── THE HIDDEN LOCAL ANSWER (Kyle 9/18; Hanz, 2026-10-05) ──────────────────
+  // No "Local job" switch is drawn, but `local` is still on the model and still written to both
+  // B4 cells on every save: the Labor step sets it from the job's distance, and this page must
+  // carry it through untouched when somebody flips an unrelated switch.
+  {
+    const b = build({ blob: { __draft_id: "far-job",
+      polish_estimate: { version: 2, takeoff: [], labor: [],
+        conditions: { local: false, prevailing_wage: false, taxable: true,
+                      remodel_tax: false, bond: false } },
+      cell_values: { "Epoxy!B4": "No", "Polish!B4": "No" } } });
+    await b.api.boot();
+    clickSwitch(b, "taxable");
+    b.clock.fire();
+    const save = b.rec.saves[b.rec.saves.length - 1];
+    out.hiddenLocal = {
+      drawn: Object.prototype.hasOwnProperty.call(b.dom.nodes, "cond-local"),
+      modelLocal: save.polish_estimate.conditions.local,
+      polishB4: save.cell_values["Polish!B4"], epoxyB4: save.cell_values["Epoxy!B4"],
+      switchKeys: b.api.CONDITIONS.map((c) => c.key),
+      // Nothing can flip it from this page, the verbal panel included (applyVerbal gates on the
+      // same isCondition that toggleCondition does): a spoken "it is local" changes nothing.
+      modelLocalAfterToggle: (b.api.toggleCondition("local"), b.api.model().conditions.local),
+    };
+  }
+
   // ── THE SEAM: a brand-new project, handed to the calculator ─────────────────
   //
   // This is the one case neither page can test on its own, and it was broken. A new beta project
@@ -866,7 +893,7 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
   // polish_estimate.version — sends the project back to the spreadsheet intake instead.
   //
   // So the assertion is a ROUND TRIP: what this page saved, read back through the real
-  // polish-bid-core the calculator prices with.
+  // bid-model the calculator prices with.
   {
     const b = build({ blob: { __draft_id: "brand-new", project_name: "Fresh beta job" } });
     await b.api.boot();
@@ -930,6 +957,22 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
       armedOnNamedField,
       savedFromTyping: b.rec.saves.length,
       quietOnCountyInput: c.clock.armed(),
+    };
+  }
+
+  // ── The "0" trap: focusing a box that holds "0" must select it ─────────────────
+  {
+    const b = build();
+    await b.api.boot();
+    const fire = (t) => b.dom.nodes["intake-form"].listeners
+      .filter((l) => l.type === "focusin").forEach((l) => l.handler({ target: t }));
+    const mk = (over) => Object.assign({ type: "number", value: "0", readOnly: false, selected: 0,
+      select() { this.selected++; } }, over);
+    const zero = mk({}), typed = mk({ value: "8000" }), locked = mk({ readOnly: true });
+    fire(zero); fire(typed); fire(locked);
+    out.zeroTrap = {
+      wired: b.dom.nodes["intake-form"].listeners.some((l) => l.type === "focusin"),
+      zeroSelected: zero.selected, typedSelected: typed.selected, lockedSelected: locked.selected,
     };
   }
 
@@ -1391,7 +1434,7 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
 
     // Saved again, because this page saves on every keystroke and the guard reads what is ALREADY
     // SAVED. A second save that re-stated labor would close the door just as firmly as the first.
-    clickSwitch(fresh, "local");
+    clickSwitch(fresh, "remodel_tax");
     fresh.clock.fire();
     const mintedAgain = fresh.rec.saves[fresh.rec.saves.length - 1].polish_estimate;
 
@@ -1546,6 +1589,142 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
                          || null),
       worked: Object.prototype.hasOwnProperty.call(workedSave, "conditions_shown")
         ? workedSave.conditions_shown : "absent",
+    };
+  }
+
+  // ── Scope (quick): the SF boxes, seeded and then locked (Hanz, 2026-10-05) ─────
+  //
+  // "Add SF, seed the takeoff". Intake carries System 1 / System 2 Polish SF; step 2 seeds the
+  // takeoff from them; and once the takeoff holds a measurement the boxes lock and intake's save
+  // can no longer touch polish_sf, which is the takeoff TOTAL the proposal and /api/generate read.
+  {
+    // The REAL readForm, lifted out of shared.js. Whether a locked box can leak into the save
+    // turns on what this function does with readonly and disabled inputs, so a stub that returns
+    // whatever the test says would prove nothing about it.
+    const shared = read(path.join(ROOT, "shared.js"));
+    const rf = /function readForm\(formEl\) \{[\s\S]*?\n  \}/.exec(shared);
+    if (!rf) throw new Error("readForm() is gone from shared.js — rewrite this, don't stub it");
+    const realReadForm = new Function(rf[0] + " return readForm;")();
+    const fakeForm = { elements: [
+      { name: "polish_sf", type: "number", value: "999", readOnly: true },
+      { name: "polish_2_sf", type: "number", value: "5", disabled: true },
+      { name: "", type: "number", value: "77" },
+      { name: "project_name", type: "text", value: "Nearman Creek" },
+    ] };
+    const viaReal = realReadForm(fakeForm);
+
+    const sfOf = (st) => ({ sf1: st.polish_sf, sf2: st.polish_2_sf });
+    const lastSave = (bb) => bb.rec.saves[bb.rec.saves.length - 1];
+
+    // 1. unlocked: nothing measured. Both boxes editable, and what is typed round-trips.
+    const fresh = build({ blob: blob({ polish_estimate: null, polish_sf: 4000, polish_2_sf: 1500 }),
+      formValues: Object.assign({}, FORM_VALUES, { polish_sf: 4000, polish_2_sf: 1500 }) });
+    await fresh.api.boot();
+    const n1 = fresh.dom.nodes["polish-sf-1"], n2 = fresh.dom.nodes["polish-sf-2"];
+    const unlockedPaint = { ro1: n1.readOnly, ro2: n2.readOnly,
+      noteHidden: fresh.dom.nodes["sf-locked-note"].hidden !== false };
+    const hydratedWith = fresh.rec.written.map((w) => sfOf(w.values))[0];
+    fresh.api.save();
+    const freshSave = lastSave(fresh);
+    // reload: a second page over the blob the first one saved
+    const reload = build({ blob: fresh.store.blob, formValues: FORM_VALUES });
+    await reload.api.boot();
+    const reloadWritten = reload.rec.written.map((w) => sfOf(w.values))[0];
+
+    // 2. locked: the takeoff measures 12,500 SF. Boxes read-only, showing the TOTAL, with a note;
+    //    a save whose form hands over a different number cannot move polish_sf.
+    const lockedB = build({ blob: blob({ polish_sf: 12500, polish_2_sf: 800 }),
+      formValues: Object.assign({}, FORM_VALUES, { polish_sf: 999, polish_2_sf: 5 }) });
+    await lockedB.api.boot();
+    lockedB.api.save();
+    const lockedSave = lastSave(lockedB);
+
+    // 3. the same, through the REAL readForm over a form whose SF boxes are readonly/disabled:
+    //    the real function still reads them (the reason the guard lives in save()).
+    const realB = build({ blob: blob({ polish_sf: 12500 }),
+      readForm: () => Object.assign({}, FORM_VALUES, viaReal) });
+    await realB.api.boot();
+    realB.api.save();
+    const realSave = lastSave(realB);
+    // ...and the pagehide flush goes through the same save(), so it cannot leak either.
+    realB.api.saveSoon();
+    realB.win.fire("pagehide", {});
+    const flushSave = lastSave(realB);
+
+    // 4. a takeoff of LINEAR-foot rows only has no SF to disagree about: not locked.
+    const lfOnly = build({ blob: blob({ polish_estimate: { version: 2,
+      takeoff: [{ assembly_id: "a", assembly_name: "Edge", measurement: 900, unit: "LF" }],
+      labor: [], conditions: {}, contingency: 0, fees: 0, totals: {} }, polish_sf: 0 }) });
+    await lfOnly.api.boot();
+
+    out.sfBoxes = {
+      unlockedPaint, hydratedWith,
+      freshSaved: sfOf(freshSave),
+      reloadWritten,
+      reloadReadOnly: reload.dom.nodes["polish-sf-1"].readOnly,
+      lockedPaint: { ro1: lockedB.dom.nodes["polish-sf-1"].readOnly,
+        ro2: lockedB.dom.nodes["polish-sf-2"].readOnly,
+        v1: lockedB.dom.nodes["polish-sf-1"].value, v2: lockedB.dom.nodes["polish-sf-2"].value,
+        note: lockedB.dom.nodes["sf-locked-note"].textContent,
+        noteHidden: lockedB.dom.nodes["sf-locked-note"].hidden },
+      lockedSaveKeys: { hasSf1: "polish_sf" in lockedSave, hasSf2: "polish_2_sf" in lockedSave },
+      lockedBlobAfter: sfOf(lockedB.store.blob),
+      realReadFormLeaks: { sf1: viaReal.polish_sf, sf2: viaReal.polish_2_sf,
+        unnamedRead: Object.keys(viaReal).indexOf("") >= 0 },
+      realSaveKeys: { hasSf1: "polish_sf" in realSave, hasSf2: "polish_2_sf" in realSave },
+      flushSaveKeys: { hasSf1: "polish_sf" in flushSave, hasSf2: "polish_2_sf" in flushSave },
+      realBlobAfter: sfOf(realB.store.blob),
+      lfOnlyReadOnly: lfOnly.dom.nodes["polish-sf-1"].readOnly,
+    };
+  }
+
+  // ── F5: saved-bid safety on the intake page ────────────────────────────────────
+  {
+    const lastSave = (bb) => bb.rec.saves[bb.rec.saves.length - 1];
+    // (a) THE ONLY SF ROW IS SWITCHED OFF. The floor is still measured, so the boxes stay locked
+    //     and a save cannot hand polish_sf over to whatever they show.
+    const offBlob = blob({ polish_sf: 12500, polish_2_sf: "",
+      polish_estimate: { version: 2,
+        takeoff: [{ assembly_id: "a1", assembly_name: "Polish", measurement: 12500, unit: "SF",
+                    enabled: false }],
+        labor: JSON.parse(JSON.stringify(LABOR)),
+        conditions: { local: true, prevailing_wage: false, taxable: true, remodel_tax: false } } });
+    const offB = build({ blob: offBlob,
+      formValues: Object.assign({}, FORM_VALUES, { polish_sf: 1, polish_2_sf: 2 }) });
+    await offB.api.boot();
+    offB.api.save();
+    const offSave = lastSave(offB);
+    // (b) AN OLD INTAKE BLOB: no Drawings fields, no local answer in the model, blank Project name.
+    //     The two `required` attributes are the browser's gate on the Continue button only; this
+    //     page's autosave and save() never ask for validity, so nothing is withheld from a draft.
+    const oldBlob = { __draft_id: "old-intake", address: "1 Water Works Dr", city: "Kansas City",
+      state: "KS", zip: "66101", work_type: "polish", polish_sf: 8000,
+      polish_estimate: { version: 2,
+        takeoff: [{ assembly_id: "a1", assembly_name: "Polish", measurement: 8000, unit: "SF" }],
+        labor: JSON.parse(JSON.stringify(LABOR)),
+        conditions: { prevailing_wage: false, taxable: true, remodel_tax: false } } };
+    const oldB = build({ blob: oldBlob, formValues: { project_name: "", bid_date: "", address:
+      "1 Water Works Dr", city: "Kansas City", state: "KS", zip: "66101" } });
+    await oldB.api.boot();
+    const dateAfterBoot = oldB.dom.fields.bid_date.value;
+    let threw = null;
+    try { oldB.api.save(); } catch (e) { threw = String(e); }
+    const oldSave = lastSave(oldB);
+    // submit (Continue) with the blank name: onSubmit saves and navigates, no validity gate in JS.
+    const subB = build({ blob: oldBlob, formValues: { project_name: "", bid_date: "" } });
+    await subB.api.boot();
+    subB.api.onSubmit({ preventDefault() {} });
+    out.f5 = {
+      offLocked: { ro1: offB.dom.nodes["polish-sf-1"].readOnly, ro2: offB.dom.nodes["polish-sf-2"].readOnly,
+        v1: offB.dom.nodes["polish-sf-1"].value,
+        noteHidden: offB.dom.nodes["sf-locked-note"].hidden !== false,
+        saveHasSf: ("polish_sf" in offSave) || ("polish_2_sf" in offSave),
+        blobSf: offB.store.blob.polish_sf, takeoffEnabled: offSave.polish_estimate.takeoff[0].enabled },
+      oldBlob: { threw: threw, saved: !!oldSave, dateAfterBoot: dateAfterBoot,
+        savedName: oldSave && oldSave.project_name,
+        localInModel: oldSave && oldSave.polish_estimate.conditions.local,
+        takeoffKept: oldSave && oldSave.polish_estimate.takeoff.length,
+        navigated: subB.rec.navigated.length, submitSaved: subB.rec.saves.length > 0 },
     };
   }
 

@@ -208,8 +208,8 @@ const out = {};
 // ── 2. Items and Assemblies: four tabs, and five work types inside one of them ─
 {
   const src = read(path.join(ROOT, "js", "library.js"));
-  const ids = ["tab-items", "tab-asm", "tab-labor", "tab-vendors", "tab-defaults",
-               "pane-items", "pane-asm", "pane-labor", "pane-vendors", "pane-defaults",
+  const ids = ["tab-items", "tab-asm", "tab-labor", "tab-labcalc", "tab-vendors", "tab-defaults",
+               "pane-items", "pane-asm", "pane-labor", "pane-labcalc", "pane-vendors", "pane-defaults",
                "wt-polish", "wt-seal", "wt-epoxy", "wt-leveling", "wt-gyp"];
   const body = [
     decl(src, "var", "view", "library.js"),

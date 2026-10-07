@@ -104,6 +104,18 @@
       max-width:84ch; }
     .ronote b { color:var(--ink); font-weight:600; }
 
+    /* A sheet tab's read-only list of the Global lines. It sits inside the 900px card, so it is
+       sticky to the scroller's left edge and capped to the viewport: on a phone it stays on screen
+       instead of being scrolled off to the right with the grid. */
+    .gref { position:sticky; left:0; box-sizing:border-box; margin:12px;
+      width:min(100% - 24px, calc(100vw - 56px)); }
+    .grefhead { display:flex; flex-wrap:wrap; gap:2px 12px; align-items:baseline;
+      justify-content:space-between; }
+    .greflist { list-style:none; margin:6px 0; padding:0; display:grid; gap:3px 20px;
+      grid-template-columns:repeat(auto-fit, minmax(190px, 1fr));
+      font-variant-numeric:tabular-nums; }
+    .gref p { margin:0; font-size:12px; }
+
     .banner { display:flex; gap:10px; align-items:flex-start; background:var(--warn-bg);
       border:1px solid rgba(122,92,0,.25); color:var(--warn); border-radius:var(--r-md);
       padding:12px 14px; font-size:13px; margin:0 0 14px; max-width:900px; }
@@ -312,7 +324,7 @@
   <div class="top">
     <img class="logo" src="/img/treadwell-bison.svg" alt="Treadwell" />
     <h1>Markup</h1>
-    <span class="beta" title="Being tested. These rows are where the chain's rates are edited by an admin instead of a developer. Super &amp; PTO and Soft Costs reach the estimate workbook; GP, Bond and the two travel figures are stored but not read yet, and the Polish beta is not wired to any of them — its engine still runs on its own hardcoded constants.">Beta test</span>
+    <span class="beta" title="Being tested. These rows are where the chain's rates are edited by an admin instead of a developer. Super &amp; PTO and Soft Costs reach the estimate workbook; GP, Bond and the two travel figures are stored but not read yet, and Estimating Tool v2 is not wired to any of them: its engine still runs on its own hardcoded constants.">Beta test</span>
   </div>
   <div class="wrap">
     <!-- ONE SENTENCE, then the rest behind a disclosure. What used to stand here was paragraphs
@@ -375,7 +387,7 @@
       <p class="explain"><b>When a filed rate is read.</b> An estimate screen reads these rates as
         it loads. One somebody already has open keeps the old rate until they reload, and
         <b>reopening an older estimate reprices it</b> at the new rate; what has already been sent
-        to a customer stays as it was sent. The Polish beta is separate again — it still prices
+        to a customer stays as it was sent. Estimating Tool v2 is separate again: it still prices
         off the constants built into its own engine.</p>
     </details>
 

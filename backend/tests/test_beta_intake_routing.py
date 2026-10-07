@@ -37,6 +37,7 @@ import subprocess
 import pytest
 
 import drafts
+from _v2_cases import MIRRORED_CASES, VERSION_CASES
 
 FRONTEND = pathlib.Path(__file__).resolve().parents[2] / "frontend"
 HARNESS = pathlib.Path(__file__).resolve().parent / "js" / "beta-routing-harness.js"
@@ -84,7 +85,8 @@ def test_the_label_names_the_calculator_and_is_marked_beta(ran):
     a finished feature. The chip class comes from auth.js's injected stylesheet, which every page
     that loads auth.js gets."""
     label = ran["boot"]["label"] or ""
-    assert "Continue with Beta Calculator" in label, label
+    assert "Continue with Estimating Tool v2" in label, label
+    assert "Beta Calculator" not in label, "the old name came back on the live intake's button"
     assert ">BETA<" in label, "the button is not marked BETA: %r" % label
     assert "—" not in label, "em dash in UI copy (house rule)"
     auth = (FRONTEND / "auth.js").read_text(encoding="utf-8")
@@ -384,15 +386,14 @@ def test_the_two_read_paths_agree_about_every_draft(fast, pid):
     assert fast[pid]["polish_beta"] is drafts._summary(row)["polish_beta"]
 
 
-@pytest.mark.parametrize("raw,expect", [
-    (2, True), ("2", True), (" 2 ", True), ("2.0", True),
-    (1, False), ("1", False), (3, False), ("3", False),
-    (None, False), ("", False), ("null", False), ("v2", False), ("banana", False),
-    (True, False), (False, False), ({}, False),
-])
+@pytest.mark.parametrize("raw,expect", VERSION_CASES + MIRRORED_CASES)
 def test_the_version_coercion_reads_a_string_and_a_number_the_same_way(raw, expect):
     """One helper for both paths, so they cannot drift. `True` is not version 2 — a bool arriving
-    here means somebody stored the wrong thing, and guessing would file the project wrongly."""
+    here means somebody stored the wrong thing, and guessing would file the project wrongly.
+
+    The table is `_v2_cases.py`'s, shared with test_v2_routing_guard.py, which holds the JavaScript
+    twin (shared.js isV2Draft) to the same cases. MIRRORED_CASES are there for that twin; they are
+    asserted here too so that the table can never claim something the server does not say."""
     assert drafts._polish_beta(raw) is expect
 
 

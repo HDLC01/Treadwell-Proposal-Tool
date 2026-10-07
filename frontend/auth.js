@@ -520,29 +520,37 @@
       // pricing before the five switches that change the price have been seen. The mid-flow door is
       // different and stays different: the toolbar link on Estimate Review goes straight to
       // /polish-estimate.html, because there the project already exists.
-      navItem("/polish-intake.html", "calculator", "Polish Estimate", "BETA") +
+      // RENAMED "Estimating Tool v2" ON 2026-10-07 (it was "Polish Estimate"), same href. The tool is
+      // growing past polish, so the old name stops being true; the page it opens is headed the same way.
+      // Permissions key on the href, never on this label, so nothing about who sees it moved.
+      // backend/nav_access.py carries the same label for the Admin page, and
+      // test_v2_names.py fails if the two ever disagree.
+      navItem("/polish-intake.html", "calculator", "Estimating Tool v2", "BETA") +
       // The beta's own filing cabinet, immediately after the calculator that fills it. Hanz,
       // 2026-09-10: "the polish estimate database ... the beta polish estimates that does not add up
       // to the analytics, just something to test and save the polish projects."
       //
+      // RENAMED "v2 Estimates" ON 2026-10-07 (it was "Polish Estimate Database"), same href.
+      //
       // A SECOND DOOR ONTO A FILTER THAT ALREADY EXISTS, and that is the point rather than an
-      // oversight. The Proposals Database has carried a "Beta Polish" tab since 2026-09-02
+      // oversight. The Proposals Database has carried a tab for these since 2026-09-02, first called
+      // "Beta Polish" and "v2 Estimates" since 2026-10-07
       // (js/projects.js:131, test_projects_beta_tab.py) and it STAYS - this row does not supersede
       // it. What the tab could not fix is where somebody goes LOOKING: it sits inside a page filed
       // under Active, behind a chip that opens on "active" out of sessionStorage. Beta work being
       // invisible where an estimator expects it is what produced Will's "it doesn't save" report,
       // so the row is here, under Beta, beside the calculator.
       //
-      // The glyph is `archive` - a filing cabinet for a filing cabinet, and distinct from Polish
-      // Estimate's `calculator` even though the two are one subject read two ways - and
+      // The glyph is `archive` - a filing cabinet for a filing cabinet, and distinct from Estimating
+      // Tool v2's `calculator` even though the two are one subject read two ways - and
       // test_sidebar_labels.py forbids two rows sharing a glyph anyway.
-      navItem("/polish-estimates.html", "archive", "Polish Estimate Database", "BETA") +
+      navItem("/polish-estimates.html", "archive", "v2 Estimates", "BETA") +
       // Reference data, not a daily page - the materials Treadwell buys and the assemblies
-      // built out of them. (The Polish Estimate beta does price its takeoff from these assemblies; no
+      // built out of them. (Estimating Tool v2 does price its takeoff from these assemblies; no
       // live bid does.) The glyph is `layers` - stacked material, and distinct from every other
       // row's icon on this list, which is the one thing that actually matters here.
       navItem("/library.html", "layers", "Items and Assemblies", "BETA") +
-      // The admin-editable rate table behind the polish beta's markup line, third because it
+      // The admin-editable rate table behind Estimating Tool v2's markup line, third because it
       // is reference data the same way the library is, not a page an estimator opens daily.
       navItem("/markup.html", "percent", "Markup", "BETA") +
       '<div class="tw-section">Settings</div>' +

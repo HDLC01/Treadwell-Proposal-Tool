@@ -4,7 +4,7 @@ WHAT THIS IS FOR. The Polish beta's Takeoff step carries three Yes/No questions 
 remove existing joint filler, and dye. Their answers are not priced by the beta engine; each one
 writes a Yes/No literal into a cell of Kyle's workbook (Polish!E29, Polish!F29, Polish!E25) and
 Kyle's own formulas do the rest. Which answer a BRAND NEW bid opens holding is today a literal
-inside `freshModel()` in frontend/js/polish-bid-core.js, and the Library page's Defaults tab
+inside `freshModel()` in frontend/js/bid-model.js, and the Library page's Defaults tab
 listed all three with a "Built in" chip beside them. Hanz, twice: "I told you to remove the
 built-in and keep and make everything editable in the takeoff." This table is where that answer
 is edited instead.
@@ -55,7 +55,7 @@ log = logging.getLogger(__name__)
 TABLE = "condition_defaults"
 
 # The three conditions the Takeoff step carries, in the order that step asks them. These are the
-# keys of `CONDITION_CELLS` in frontend/js/polish-bid-core.js — the mapping that decides which
+# keys of `CONDITION_CELLS` in frontend/js/bid-model.js — the mapping that decides which
 # workbook cell each answer writes — and test_condition_defaults.py reads that file and pins the
 # two lists together, so a key renamed on one side cannot quietly stop being written on the other.
 KEYS = ("joint_filler", "remove_existing_jf", "dye")

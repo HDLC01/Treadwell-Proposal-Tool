@@ -28,7 +28,7 @@ template ships for Epoxy!B10/Polish!B10.
 Hard bid was a seventh question here until 2026-09-22, when Hanz asked for it removed from the
 Polish beta entirely: "remove all hard bids from the polish intake form. And also on the
 markups." It priced a discount for bidding against a hard number rather than a budget — see
-polish-bid-core.js's removal notes for the formula it used to feed.
+bid-model.js's removal notes for the formula it used to feed.
 
 WHY EXECUTED, NOT GREPPED.
 
@@ -44,7 +44,7 @@ identifier or a transposed write. The failures that matter on this page are all 
     on the element the page produced.
   * "nothing renders before the sandbox settles" is an ORDERING, checked as one.
 
-The condition KEYS are compared with the real js/polish-bid-core.js, whose markupChain() reads them
+The condition KEYS are compared with the real js/bid-model.js, whose markupChain() reads them
 by key to decide the hard-bid discount, the labor escalation and the two taxes. A key that drifted
 here would be a prevailing-wage job quietly priced at standard rates, and nothing on screen would
 say so.
@@ -102,7 +102,7 @@ def test_a_polish_job_renders_five_conditions_as_toggles(ran):
     discount off the bid for a job the customer will award on the lowest number rather than a
     negotiated budget. Hanz: "remove all hard bids from the polish intake form. And also on the
     markups" — scoped to the Polish beta only, controls and data both. There is no toggle left for
-    it anywhere on this screen; see polish-bid-core.js and markup.js for what its removal took out
+    it anywhere on this screen; see bid-model.js and markup.js for what its removal took out
     of the pricing chain.
 
     IT WAS SIX UNTIL 2026-09-23. Renovation was the last of the three added alongside Dye and
@@ -121,9 +121,11 @@ def test_a_polish_job_renders_five_conditions_as_toggles(ran):
     bid, or Renovation) back. Any of those makes two screens ask the same question, or asks one
     nobody can answer any more, either of which is the state this change ended."""
     keys = [s["key"] for s in ran["conditions"]["rendered"]]
-    assert keys == ["local", "prevailing_wage", "taxable", "remodel_tax", "bond"]
+    # NO "Local job" SWITCH (Kyle 9/18, Hanz 2026-10-05): the Labor step works it out from the
+    # address. The model still carries `local` and the workbook still gets Polish!B4.
+    assert keys == ["prevailing_wage", "taxable", "remodel_tax", "bond"]
     assert [s["label"] for s in ran["conditions"]["rendered"]] == [
-        "Local job", "Prevailing wage", "Taxable", "Remodel tax", "Bond"]
+        "Prevailing wage", "Taxable", "Remodel tax", "Bond"]
     assert ran["conditions"]["allAreSwitches"], "a condition rendered without its toggle track"
     assert ran["conditions"]["allHaveWhy"], (
         "a toggle lost its plain-English line — 'Prevailing wage' on its own tells an estimator "
@@ -138,7 +140,7 @@ def test_a_polish_job_renders_five_conditions_as_toggles(ran):
 
 @needs_node
 def test_the_keys_are_the_ones_the_pricing_engine_reads(ran):
-    """markupChain() in polish-bid-core.js looks each condition up BY KEY and a miss reads as
+    """markupChain() in bid-model.js looks each condition up BY KEY and a miss reads as
     `false`. Two lists, one contract — pinned against the real module so they cannot drift.
 
     Mutation: rename `remodel_tax` to `remodel` here. The toggle still works, still saves, still
@@ -158,11 +160,12 @@ def test_the_keys_are_the_ones_the_pricing_engine_reads(ran):
     looks it up — bond_pct is RATES.BOND unconditionally. That is deliberate and pinned separately,
     so do not read this as "the engine reads all five"."""
     page, core = ran["conditions"]["pageKeys"], ran["coreKeys"]
-    assert page == ["local", "prevailing_wage", "taxable", "remodel_tax", "bond"]
+    assert page == ["prevailing_wage", "taxable", "remodel_tax", "bond"]
     assert set(page) <= set(core), (
         "this form renders a condition the model has no key for, so it saves nowhere: %r"
         % (set(page) - set(core)))
-    assert set(core) - set(page) == {"dye", "joint_filler", "remove_existing_jf"}, (
+    # `local` is on the model and off this form: the Labor step sets it from the job's distance.
+    assert set(core) - set(page) == {"local", "dye", "joint_filler", "remove_existing_jf"}, (
         "the model carries a condition neither this form nor the Takeoff step asks about: %r"
         % (set(core) - set(page)))
     # FIVE RENDER, FIVE PRICE -- WITH BOND UNCONDITIONAL RATHER THAN CONDITIONAL. Every key this
@@ -199,7 +202,7 @@ def test_the_documented_defaults_are_what_a_new_project_shows(ran):
     # Local + Taxable on, the other four off — the live intake's defaults, which are how Kyle's
     # sheet ships. Bond off matches B78 shipping at zero.
     assert ran["conditions"]["freshRender"] == [
-        ["local", True], ["prevailing_wage", False],
+        ["prevailing_wage", False],
         ["taxable", True], ["remodel_tax", False], ["bond", False]]
 
 
@@ -210,8 +213,8 @@ def test_a_v1_model_still_has_its_conditions_read(ran):
 
     Mutation: read conditions only when `version` is set, and every older beta project silently
     reverts to local + taxable — including the prevailing-wage ones."""
-    assert ran["conditions"]["v1Render"][:4] == [
-        ["local", False], ["prevailing_wage", True],
+    assert ran["conditions"]["v1Render"][:3] == [
+        ["prevailing_wage", True],
         ["taxable", True], ["remodel_tax", False]]
     # Bond is not in polish_estimate.conditions on a v1 draft and never was, so such a model
     # states nothing about it and it shows its documented default. It has no cell to come back
@@ -220,7 +223,7 @@ def test_a_v1_model_still_has_its_conditions_read(ran):
     # The three that moved are not in this list because they are not on this screen any more; what
     # a v1 draft does about THEM is migrateModel's generic backfill, pinned in
     # test_polish_markup_parity.test_a_v1_draft_opens_as_a_v2_model.
-    assert ran["conditions"]["v1Render"][4:] == [["bond", False]]
+    assert ran["conditions"]["v1Render"][3:] == [["bond", False]]
 
 
 @needs_node
@@ -286,7 +289,7 @@ def test_the_three_that_moved_are_in_the_model_and_survive_the_read_back(ran):
     missing on the estimator's next visit.
 
     The move did not defeat that rule, it satisfied it. The three were ADDED to
-    freshModel().conditions (polish-bid-core.js), which is what a key needs in order to be storable
+    freshModel().conditions (bid-model.js), which is what a key needs in order to be storable
     at all, and only then moved onto the Takeoff step. So the old assertion is not wrong about the
     mechanism, it is out of date about the list — which is why this test names both and asserts the
     read-back rather than just the write. Renovation was never added to freshModel either, and it
@@ -387,7 +390,7 @@ def test_flipping_a_toggle_here_never_throws_away_the_caret(ran):
         "a condition on this form depends on another again — it will re-render the whole block on "
         "every flip, so put the caret-restore logic back and test it: %r"
         % ran["caret"]["dependsOn"])
-    assert ran["caret"]["focusUnmoved"] == "cond-local", (
+    assert ran["caret"]["focusUnmoved"] == "cond-remodel_tax", (
         "flipping Taxable moved the caret off the switch the estimator had tabbed into")
     assert ran["caret"]["containerUntouched"], (
         "the whole conditions block was re-rendered to record one flip")
@@ -434,7 +437,7 @@ def test_a_toggle_does_not_delete_the_takeoff(ran):
         {"id": "mockup", "label": "Mock-up", "guys": 3, "days": 0.5, "rate": 32.2},
         # Backfilled by migrateModel() at boot (#491's Travel row, added after this fixture's
         # labor array was written) — not something a toggle-save is expected to have dropped.
-        {"id": "travel", "label": "Travel", "guys": "", "days": "", "rate": 33,
+        {"id": "travel", "label": "Travel Labor", "guys": "", "days": "", "rate": 33,
          "unit": "hours", "guys_auto": True}], (
         "the labor rows did not survive flipping a toggle")
     assert t["versionKept"] == 2, "the model's version was dropped by an intake save"
@@ -457,7 +460,7 @@ def test_a_model_with_no_conditions_at_all_keeps_its_takeoff_too(ran):
         {"id": "polishing", "label": "Polishing", "guys": 4, "days": 3, "rate": 32.2},
         {"id": "mockup", "label": "Mock-up", "guys": 3, "days": 0.5, "rate": 32.2},
         # Backfilled by migrateModel() at boot — see the sibling test above.
-        {"id": "travel", "label": "Travel", "guys": "", "days": "", "rate": 33,
+        {"id": "travel", "label": "Travel Labor", "guys": "", "days": "", "rate": 33,
          "unit": "hours", "guys_auto": True}]
     assert t["taxable"] is False, "the clicked toggle did not land"
     assert t["local"] is True, "the untouched defaults did not land alongside it"
@@ -575,6 +578,21 @@ def test_typing_a_named_field_arms_the_save_but_the_county_search_box_does_not(r
 
 
 @needs_node
+def test_focusing_a_box_that_holds_zero_selects_it_so_typing_replaces_it(ran):
+    """Walk 2026-10-06: typing 8000 into Polish floor SF gave 80000. No handler rewrites the box;
+    the markup ships value="0" and a programmatic focus leaves the caret at 0, so the keys land
+    in front of the zero. The focusin handler selects a lone "0" so the first key replaces it.
+
+    Mutation: delete the focusin listener in wire() and this fails. A box holding a real figure
+    or a locked (readonly) box must never be selected."""
+    z = ran["zeroTrap"]
+    assert z["wired"], "wire() has no focusin listener"
+    assert z["zeroSelected"] == 1, "a box holding 0 was not selected on focus"
+    assert z["typedSelected"] == 0, "a box holding a real figure was selected"
+    assert z["lockedSelected"] == 0, "a readonly box was selected"
+
+
+@needs_node
 def test_leaving_the_page_flushes_a_pending_save_instead_of_losing_it(ran):
     """shared.js's own pagehide net (shared.js:513) only flushes a timer THIS page armed -- and
     before this fix, typing never armed one, so the net had nothing to catch. wire() now runs the
@@ -653,8 +671,8 @@ def test_the_page_renders_the_copy_the_sandbox_moved_it_onto(ran):
         "the form was filled from the project that was clicked, not the copy being edited")
     assert c["hydratedIntoTheForm"], "writeForm was handed something that is not the form"
     assert c["projLine"] == "Nearman Creek (beta test) · Bonner Springs, KS"
-    assert c["rendered"][:4] == [
-        ["local", False], ["prevailing_wage", False],
+    assert c["rendered"][:3] == [
+        ["prevailing_wage", False],
         ["taxable", True], ["remodel_tax", False]], (
         "the toggles show the source project's conditions, not the copy's")
     # And the cell-borne answer is re-read from the COPY's cell_values on the same pass --
@@ -666,7 +684,7 @@ def test_the_page_renders_the_copy_the_sandbox_moved_it_onto(ran):
     # invisible here and has to be asserted against the model, or the copy would quietly inherit
     # the source project's joint filler and write it into the copy's workbook. Polish!E29 says "No"
     # on the copy, the opposite of freshModel's default, so this cannot pass by accident.
-    assert c["rendered"][4:] == [["bond", False]]
+    assert c["rendered"][3:] == [["bond", False]]
     assert c["modelConds"]["joint_filler"] is False, (
         "the model kept the source project's joint filler after the sandbox switched drafts — "
         "Polish!E29 on the COPY says No")
@@ -823,7 +841,7 @@ def test_choosing_a_county_does_not_delete_the_takeoff(ran):
         {"id": "polishing", "label": "Polishing", "guys": 4, "days": 3, "rate": 32.2},
         {"id": "mockup", "label": "Mock-up", "guys": 3, "days": 0.5, "rate": 32.2},
         # Backfilled by migrateModel() at boot — see the toggle test above.
-        {"id": "travel", "label": "Travel", "guys": "", "days": "", "rate": 33,
+        {"id": "travel", "label": "Travel Labor", "guys": "", "days": "", "rate": 33,
          "unit": "hours", "guys_auto": True}], (
         "the labor rows did not survive picking a county")
     assert c["versionKept"] == 2, "the model's version was dropped by a county pick"
@@ -893,7 +911,7 @@ def test_remodel_tax_with_no_county_names_the_kansas_state_rate(ran):
     # 6.5% the server's reference table calls the Kansas state rate.
     from reference_tax import KS_STATE_RATE
     assert ran["ksStateRate"] == KS_STATE_RATE == 0.065, (
-        "js/polish-bid-core.js and backend/reference_tax.py disagree about the Kansas state rate, "
+        "js/bid-model.js and backend/reference_tax.py disagree about the Kansas state rate, "
         "so the note names a rate the bid does not use: %r vs %r"
         % (ran["ksStateRate"], KS_STATE_RATE))
     assert fb["enginePct"]["raw"] == KS_STATE_RATE, (
@@ -1081,15 +1099,16 @@ def test_the_page_loads_no_formula_engine(html):
     # /js/icons.js is FIRST, ahead of auth.js: the sidebar auth.js draws asks it for every glyph
     # in the rail. See the house rule at the top of frontend/js/icons.js.
     assert srcs == ["https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0",
-                    "/js/icons.js", "/auth.js", "/shared.js", "/js/polish-bid-core.js",
+                    "/js/icons.js", "/auth.js", "/shared.js", "/js/excel-math.js", "/js/bid-model.js",
+                    "/js/address-lookup.js",
                     "/js/polish-sandbox.js", "/js/polish-intake.js",
                     "/js/polish-verbal.js"], (
         "the page's script list has changed: %r" % srcs)
-    # polish-bid-core is the model's shape and the condition keys, NOT a formula engine: no CDN, no
+    # bid-model is the model's shape and the condition keys, NOT a formula engine: no CDN, no
     # workbook fetch. It is here because this page writes the model the calculator prices, and the
     # version it stamps is what routes a resumed project back to this intake.
-    assert html.index("/js/polish-bid-core.js") < html.index("/js/polish-intake.js"), (
-        "`var B = window.TWPolishBid` runs at parse time")
+    assert html.index("/js/bid-model.js") < html.index("/js/polish-intake.js"), (
+        "`var B = window.TWBidModel` runs at parse time")
 
 
 def test_the_step_row_says_where_you_are_and_where_the_beta_goes(html):
@@ -1137,7 +1156,7 @@ def test_there_is_somewhere_for_the_sandbox_notice_to_render(html):
 @needs_node
 def test_a_brand_new_project_is_saved_as_a_model_the_calculator_can_read(ran):
     """The round trip, executed: what this page saved, read back through the real
-    polish-bid-core.js that the calculator prices with.
+    bid-model.js that the calculator prices with.
 
     THE BUG: a version-less blob fell through migrateModel's v2 and v1 branches to `return fresh`,
     so the estimator set prevailing wage and taxable here, clicked Continue, and the calculator
@@ -1353,3 +1372,243 @@ def test_the_intake_page_snapshots_which_condition_cards_a_new_bid_shows(ran):
     assert s["minted"] == {"dye": False}, s["minted"]
     assert s["survivesReadBack"] == {"dye": False}, s["survivesReadBack"]
     assert s["worked"] == "absent", s["worked"]
+
+
+# ── Scope (quick): the same box as the live intake, SF seeded into the takeoff ───────────────
+#
+# Hanz, 2026-10-05, on seeing the two intakes side by side: "scope of beta and active projects are
+# not the same", and chose "Add SF, seed the takeoff". These run the real page code (harness
+# section "Scope (quick)") against the real readForm lifted out of shared.js.
+
+
+def _scope_fieldset():
+    html = (FRONTEND / "polish-intake.html").read_text(encoding="utf-8")
+    start = html.index("<legend>Scope (quick)</legend>")
+    return html[start:html.index("</fieldset>", start)]
+
+
+def test_the_beta_scope_box_reads_like_the_live_one_for_a_polish_job():
+    """The live intake, for a polish job, shows: the hint, System 1 and System 2 (optional) with a
+    Polish floor SF box each (polish_sf, polish_2_sf), then Area, then Approx. start date. The
+    beta shows the same, in the same order, with the live form's classes. No Epoxy SF, no Cove LF.
+
+    Mutation: delete the polish_2_sf input, or move Area above the systems."""
+    box = _scope_fieldset()
+    assert "Pre-fills the estimate. You can refine on the next screen." in box
+    names = re.findall(r'name="([a-z0-9_]+)"', box)
+    assert names == ["polish_sf", "polish_2_sf", "work_areas", "approx_start_date"], names
+    assert box.index("System 1") < box.index("System 2 (optional)") < box.index("work_areas")
+    assert box.count('class="system-block"') == 2 and box.count('class="system-tag"') == 2
+    assert box.count("Polish floor SF") == 2
+    assert "Epoxy floor SF" not in box and "Cove LF" not in box
+    # Area explains itself in the title tooltip only, as on the live form -- no visible span.
+    assert 'title="Prints on the cover letter as the Area line.' in box
+    assert '<span class="hint">' not in box
+    # The live form styles these two classes in its inline <style>; the beta carries identical rules.
+    html = (FRONTEND / "polish-intake.html").read_text(encoding="utf-8")
+    assert ".system-tag" in html and ".system-block + .system-block" in html
+
+
+@needs_node
+def test_the_sf_boxes_start_editable_and_round_trip_through_save_and_reload(ran):
+    """Nothing is measured yet, so both boxes are editable, and what the estimator typed is what
+    the draft holds and what a reload writes back into the form.
+
+    Mutation: leave polish_2_sf off the form, or hydrate before the lock paint overwrites it."""
+    s = ran["sfBoxes"]
+    assert s["unlockedPaint"] == {"ro1": False, "ro2": False, "noteHidden": True}
+    assert s["hydratedWith"] == {"sf1": 4000, "sf2": 1500}
+    assert s["freshSaved"] == {"sf1": 4000, "sf2": 1500}
+    assert s["reloadWritten"] == {"sf1": 4000, "sf2": 1500}
+    assert s["reloadReadOnly"] is False
+
+
+@needs_node
+def test_once_the_takeoff_is_measured_the_boxes_lock_and_say_where_to_change_it(ran):
+    """The takeoff owns the SF after step 2: both boxes read-only, System 1 showing the takeoff
+    total, a plain line naming step 2. A takeoff of linear-foot rows alone has no SF, so no lock.
+
+    Mutation: make sfLocked() return false."""
+    p = ran["sfBoxes"]["lockedPaint"]
+    assert p["ro1"] is True and p["ro2"] is True
+    assert p["v1"] == 12500 and p["v2"] == ""
+    assert p["noteHidden"] is False
+    assert "Measured on the takeoff (step 2)" in p["note"] and "12,500 SF" in p["note"]
+    assert ran["sfBoxes"]["lfOnlyReadOnly"] is False
+
+
+@needs_node
+def test_a_locked_intake_cannot_write_over_the_takeoff_total(ran):
+    """polish_sf is the takeoff TOTAL once step 2 has saved: proposal-review reads it for the SF
+    token and /api/generate gates on it. The real shared.js readForm takes every NAMED input,
+    readonly and disabled included, so a read-only attribute alone would still leak the box's value
+    -- proven below by running the real function. The guard that holds is save() dropping both keys.
+    The pagehide flush goes through the same save().
+
+    Mutation: delete the `if (sfLocked(model)) { delete ... }` line in save() -- the blob's
+    polish_sf becomes 999."""
+    s = ran["sfBoxes"]
+    assert s["realReadFormLeaks"] == {"sf1": 999, "sf2": 5, "unnamedRead": False}, (
+        "readForm no longer reads readonly/disabled inputs -- the lock may be simplifiable")
+    assert s["lockedSaveKeys"] == {"hasSf1": False, "hasSf2": False}
+    assert s["realSaveKeys"] == {"hasSf1": False, "hasSf2": False}
+    assert s["flushSaveKeys"] == {"hasSf1": False, "hasSf2": False}
+    assert s["lockedBlobAfter"] == {"sf1": 12500, "sf2": 800}
+    assert s["realBlobAfter"]["sf1"] == 12500
+
+
+# ── B1: the beta intake carries everything the live intake asks a polish job ─────────────────────
+INDEX_HTML = FRONTEND / "index.html"
+ADDRESS_HARNESS = pathlib.Path(__file__).resolve().parent / "js" / "address-lookup-harness.js"
+
+
+def _named_fields(path):
+    """{name: [(tag, type, required), ...]} for every named control in the page's markup."""
+    text = path.read_text(encoding="utf-8")
+    out = {}
+    for m in re.finditer(r"<(input|select|textarea)\b([^>]*?)/?>", text, re.I):
+        attrs = m.group(2)
+        name = re.search(r'name="([^"]*)"', attrs)
+        if not name:
+            continue
+        typ = re.search(r'type="([^"]*)"', attrs)
+        out.setdefault(name.group(1), []).append(
+            (m.group(1).lower(), typ.group(1) if typ else "", "required" in re.findall(r"\b\w+\b", attrs)))
+    return out
+
+
+# What a polish job does NOT see on the live form, and why each stays off the beta: the Work Type
+# radio (the beta is polish by construction), the gyp SF buckets and System thickness (hidden for
+# polish on the live form too). Renovation, Dye, Joint filler and Remove-existing are SWITCHES drawn
+# by JS, not named inputs, so they are compared in the conditions test below.
+LIVE_ONLY_FOR_OTHER_WORK_TYPES = {"work_type", "gyp_soft_sf", "gyp_hard_sf", "gyp_corridor_sf",
+                                  "system_thickness"}
+
+
+def test_every_field_a_polish_job_sees_on_the_live_intake_is_on_the_beta_with_the_same_name():
+    """Field-by-field, from the two pages' own markup. The live form's SF boxes are drawn by
+    js/index.js (the systems container), so polish_sf / polish_2_sf are added to its side by hand.
+
+    Mutation: delete any of the five Drawings & specs inputs from polish-intake.html."""
+    live = set(_named_fields(INDEX_HTML)) - LIVE_ONLY_FOR_OTHER_WORK_TYPES
+    live |= {"polish_sf", "polish_2_sf"}
+    beta = set(_named_fields(FRONTEND / "polish-intake.html"))
+    assert live - beta == set(), "the live intake asks for fields the beta does not: %r" % (live - beta)
+    assert beta - live == set(), "the beta asks for fields the live intake does not: %r" % (beta - live)
+
+
+def test_shared_fields_have_the_same_control_type_required_flag_and_options():
+    """Same name is not enough: a date box that became text, or a Project name that stopped being
+    required, would pass the name check and fail the estimator. Bid date and Project name are
+    required on both (Kyle, 2026-10-05).
+
+    Mutation: remove `required` from either input on the beta."""
+    live, beta = _named_fields(INDEX_HTML), _named_fields(FRONTEND / "polish-intake.html")
+    for name in sorted(set(live) & set(beta)):
+        assert live[name] == beta[name], "%s differs: live %r vs beta %r" % (name, live[name], beta[name])
+    for name in ("bid_date", "project_name"):
+        assert beta[name][0][2] is True, name + " must be required on the beta"
+
+    def src(p):
+        sel = re.search(r'<select name="source".*?</select>', p.read_text(encoding="utf-8"), re.S).group(0)
+        return re.findall(r'<option[^>]*value="([^"]*)"', sel)
+
+    assert src(INDEX_HTML) == src(FRONTEND / "polish-intake.html")
+
+
+def test_the_drawings_and_specs_box_is_the_live_one_between_project_info_and_contact(html):
+    live = INDEX_HTML.read_text(encoding="utf-8")
+
+    def box(text):
+        i = text.index('<fieldset id="drawings-specs-box">')
+        return re.sub(r"\s+", " ", text[i:text.index("</fieldset>", i)])
+
+    assert box(html) == box(live), "the beta's Drawings & specs box drifted from the live one"
+    assert html.index("<legend>Project Info</legend>") < html.index('id="drawings-specs-box"') \
+        < html.index("<legend>Contact</legend>")
+
+
+def test_the_intro_no_longer_claims_more_than_the_page_does(html):
+    """It used to say 'It asks for the same fields' while five were missing. Now it says what it
+    asks and what it leaves off.
+
+    Mutation: restore the old sentence."""
+    flat = re.sub(r"\s+", " ", html)
+    assert "It asks for the same fields, under the same names, so" not in flat
+    assert "the same fields a polish job sees on the live form" in flat
+
+
+def test_the_beta_conditions_differ_from_the_live_ones_only_where_decided():
+    """Switches are drawn by JS, so they are compared from the two scripts. For a polish job the
+    live form shows local, prevailing_wage, taxable, remodel_tax, reno, dye, joint_filler and
+    remove_existing_jf. The beta asks four of them here; Dye / Joint filler / Remove-existing are
+    asked on the takeoff (2026-09-16) and Renovation is removed (2026-09-23, Hanz). Bond is the
+    beta's own and is flagged open in the B1 report.
+
+    Mutation: add a key to either list without deciding where it belongs."""
+    beta_js = (FRONTEND / "js" / "polish-intake.js").read_text(encoding="utf-8")
+    live_js = (FRONTEND / "js" / "index.js").read_text(encoding="utf-8")
+    beta = re.findall(r'\{ key: "(\w+)", label:', beta_js)
+    live = [k for k, scope in re.findall(r'\{ key: "(\w+)", label: "[^"]*", scope: \[([^\]]*)\]', live_js)
+            if "polish" in scope]
+    assert beta == ["prevailing_wage", "taxable", "remodel_tax", "bond"], beta
+    assert sorted(set(live) - set(beta)) == ["dye", "joint_filler", "local", "remove_existing_jf", "reno"], live
+    assert set(beta) - set(live) == {"bond"}
+
+
+def test_the_address_lookup_is_mounted_on_the_beta_and_loaded_before_its_script(html):
+    for ident in ("address-input", "address-results", "business-input", "business-results",
+                  "city-input", "state-input", "zip-input"):
+        assert 'id="%s"' % ident in html, ident
+    assert "/js/address-lookup.js" in html
+    assert html.index("/js/address-lookup.js") < html.index("/js/polish-intake.js")
+    js = (FRONTEND / "js" / "polish-intake.js").read_text(encoding="utf-8")
+    assert "window.TWAddress.mount({" in js
+    css = (FRONTEND / "styles.css").read_text(encoding="utf-8")
+    assert ".addr-results.open" in css, "the dropdown's rules must live in the shared stylesheet"
+
+
+@pytest.fixture(scope="module")
+def addr():
+    if shutil.which("node") is None:
+        pytest.skip("node is not installed")
+    proc = subprocess.run(["node", str(ADDRESS_HARNESS), str(FRONTEND)],
+                          capture_output=True, text=True, encoding="utf-8", timeout=60)
+    assert proc.returncode == 0, "the harness itself failed:\n" + proc.stderr
+    return json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+@needs_node
+def test_the_shared_lookup_queries_fills_and_tells_the_form_so_it_can_save(addr):
+    """Executed. A pick fills Address, City, State, Zip and fires `input` on City, State and Zip so
+    the beta's autosave runs; NOT on Address or Project name (that would re-open the dropdown).
+    Under four characters no request is made; a duplicate row is collapsed; non-US rows are dropped.
+
+    Mutation: delete the ping() calls in fillLocation and cityEvents is empty."""
+    assert addr["shortQuery"] == {"calls": 0, "open": False}
+    q = addr["query"]
+    assert q["calls"] == 1 and q["open"] and q["rows"] == 1 and not q["hasParis"]
+    from urllib.parse import urlparse
+    assert urlparse(q["url"]).hostname == "photon.komoot.io"
+    p = addr["pick"]
+    assert (p["address"], p["city"], p["state"], p["zip"]) == ("123 W 5th St", "Olathe", "KS", "66061")
+    assert p["closed"] is True
+    assert p["cityEvents"] == p["stateEvents"] == p["zipEvents"] == ["input:bubbles"]
+    assert p["addressEvents"] == [] and p["businessEvents"] == []
+    b = addr["business"]
+    assert b["name"] == "Acme warehouse retrofit" and b["city"] == "Olathe" and b["zip"] == "66061"
+    assert addr["clickAway"] == {"stayedOpenOnInputClick": True, "closedElsewhere": True}
+    assert addr["noBusinessBox"] == {"threw": False}
+
+
+@needs_node
+def test_the_local_job_switch_is_gone_but_the_hidden_answer_still_reaches_b4(ran):
+    """Kyle 9/18, Hanz 2026-10-05: distance decides local. No switch is drawn and none can flip it,
+    yet the model keeps `local` and every save still writes both B4 cells from it.
+
+    Mutation: put the Local job entry back in CONDITIONS, or stop writing `local` in conditionCells."""
+    h = ran["hiddenLocal"]
+    assert h["drawn"] is False
+    assert "local" not in h["switchKeys"]
+    assert h["modelLocal"] is False and h["modelLocalAfterToggle"] is False
+    assert h["polishB4"] == "No" and h["epoxyB4"] == "No"

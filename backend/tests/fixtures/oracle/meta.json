@@ -1,0 +1,753 @@
+{
+ "schema": 1,
+ "generator": "backend/tests/js/workbook-oracle.js",
+ "engine": {
+  "hyperformula": {
+   "version": "2.7.1",
+   "sri": "sha384-mL8xIzdJNHBlFY+1tgjim6oUyvoCQpvhxipvuvmbN6xCaJzrausWuA16r/ktXKcm",
+   "bytes": 705473
+  },
+  "plugin": {
+   "file": "frontend/js/xl-excel-rounding.js",
+   "sha256": "f0cc462b124cb3c6662a80c55e644d2608377e7cdc531c46e1e59a575bbdf467"
+  },
+  "options": {
+   "licenseKey": "gpl-v3",
+   "smartRounding": false
+  },
+  "namesRegistered": 34,
+  "aliases": {
+   "Glaze4": "Glaze_4"
+  }
+ },
+ "template": {
+  "file": "backend/templates/estimate_sheet_5.7.xlsx",
+  "sheets": [
+   "Epoxy",
+   "Polish",
+   "Seal",
+   "Seal (+Jnts)",
+   "Epoxy blank",
+   "Leveling",
+   "Gyp (USG 1-8\")",
+   "Gyp (USG N12ULTRA)",
+   "Gyp (USG N25 1-4\")",
+   "Gyp (GWorx SC190)",
+   "Gyp (FR)"
+  ],
+  "hash": "0b6949c75e93a32138b79be070acdbe101cf7fdca8c385502051c0526146532c",
+  "cells": 21225,
+  "about": "sha256 over the sorted (sheet, address, formula or constant) lines of the priced sheets, from backend/tests/_oracle_support.py normalised_cells(); it ignores cached values and how the file was saved"
+ },
+ "selfCheck": {
+  "sheets": {
+   "Epoxy": {
+    "compared": 2358,
+    "matchedAsSaved": 2315,
+    "matched": 2358,
+    "laborRatesPutBack": [
+     "Epoxy!C47: 33 -> 32.2",
+     "Epoxy!C52: 33 -> 32.2"
+    ]
+   },
+   "Polish": {
+    "compared": 265,
+    "matchedAsSaved": 234,
+    "matched": 265,
+    "laborRatesPutBack": [
+     "Polish!C37: 33 -> 32.2",
+     "Polish!C44: 33 -> 32.2"
+    ]
+   },
+   "Gyp (USG 1-8\")": {
+    "compared": 1514,
+    "matchedAsSaved": 1509,
+    "matched": 1514,
+    "laborRatesPutBack": [
+     "Gyp (USG 1-8\")!C45: 33.66 -> 32.52",
+     "Gyp (USG 1-8\")!C51: 33.66 -> 32.52"
+    ]
+   },
+   "Takeoff": {
+    "compared": 16,
+    "matchedAsSaved": 16,
+    "matched": 16
+   },
+   "Seal": {
+    "compared": 216,
+    "matchedAsSaved": 189,
+    "matched": 216,
+    "laborRatesPutBack": [
+     "Seal!C37: 33 -> 32.2",
+     "Seal!C44: 33 -> 32.2"
+    ]
+   },
+   "Seal (+Jnts)": {
+    "compared": 277,
+    "matchedAsSaved": 246,
+    "matched": 277
+   },
+   "Epoxy blank": {
+    "compared": 1566,
+    "matchedAsSaved": 1527,
+    "matched": 1566,
+    "laborRatesPutBack": [
+     "Epoxy blank!C44: 33 -> 32.2",
+     "Epoxy blank!C49: 33 -> 32.2"
+    ]
+   },
+   "Stnd Alts": {
+    "compared": 3142,
+    "matchedAsSaved": 3142,
+    "matched": 3142
+   },
+   "Leveling": {
+    "compared": 1355,
+    "matchedAsSaved": 1330,
+    "matched": 1355,
+    "laborRatesPutBack": [
+     "Leveling!C44: 33.66 -> 32.52",
+     "Leveling!C48: 33.66 -> 32.52"
+    ]
+   },
+   "Gyp (USG N12ULTRA)": {
+    "compared": 1542,
+    "matchedAsSaved": 1537,
+    "matched": 1542,
+    "laborRatesPutBack": [
+     "Gyp (USG N12ULTRA)!C45: 33.66 -> 32.52",
+     "Gyp (USG N12ULTRA)!C51: 33.66 -> 32.52"
+    ]
+   },
+   "Gyp (USG N25 1-4\")": {
+    "compared": 1542,
+    "matchedAsSaved": 1537,
+    "matched": 1542,
+    "laborRatesPutBack": [
+     "Gyp (USG N25 1-4\")!C45: 33.66 -> 32.52",
+     "Gyp (USG N25 1-4\")!C51: 33.66 -> 32.52"
+    ]
+   },
+   "Gyp (GWorx SC190)": {
+    "compared": 1539,
+    "matchedAsSaved": 1534,
+    "matched": 1539,
+    "laborRatesPutBack": [
+     "Gyp (GWorx SC190)!C45: 33.66 -> 32.52",
+     "Gyp (GWorx SC190)!C51: 33.66 -> 32.52"
+    ]
+   },
+   "Specs+Dwgs+Addn": {
+    "compared": 0,
+    "matchedAsSaved": 0,
+    "matched": 0
+   },
+   "Gyp (FR)": {
+    "compared": 1499,
+    "matchedAsSaved": 1494,
+    "matched": 1499,
+    "laborRatesPutBack": [
+     "Gyp (FR)!C45: 33.66 -> 32.52",
+     "Gyp (FR)!C51: 33.66 -> 32.52"
+    ]
+   },
+   "validation": {
+    "compared": 121,
+    "matchedAsSaved": 121,
+    "matched": 121
+   },
+   "Unit Layouts": {
+    "compared": 43,
+    "matchedAsSaved": 43,
+    "matched": 43
+   }
+  },
+  "rule": "every formula cell with a saved value must equal it (numbers to the cent, an empty reference as 0, errors as their text), after the labor-rate cells of the tabs listed are put back to the rate the file was last calculated with",
+  "compared": 16995,
+  "matched": 16995
+ },
+ "ladders": {
+  "Epoxy": [
+   {
+    "cell": "shipPct",
+    "on": "material",
+    "edges": [
+     {
+      "op": "<=",
+      "at": 5000
+     },
+     {
+      "op": "<=",
+      "at": 10000
+     }
+    ]
+   },
+   {
+    "cell": "gpPct",
+    "on": "subTotal",
+    "edges": [
+     {
+      "op": "<",
+      "at": 6500
+     },
+     {
+      "op": "<",
+      "at": 15000
+     },
+     {
+      "op": "<",
+      "at": 22500
+     },
+     {
+      "op": "<",
+      "at": 32500
+     }
+    ]
+   },
+   {
+    "cell": "hardBidPct",
+    "on": "subTotal",
+    "needs": "hardBid",
+    "edges": [
+     {
+      "op": ">=",
+      "at": 13000
+     },
+     {
+      "op": ">=",
+      "at": 60000
+     }
+    ]
+   }
+  ],
+  "Polish": [
+   {
+    "cell": "gpPct",
+    "on": "subTotal",
+    "edges": [
+     {
+      "op": "<",
+      "at": 6500
+     },
+     {
+      "op": "<",
+      "at": 15000
+     },
+     {
+      "op": "<",
+      "at": 22500
+     },
+     {
+      "op": "<",
+      "at": 32500
+     }
+    ]
+   },
+   {
+    "cell": "hardBidPct",
+    "on": "subTotal",
+    "needs": "hardBid",
+    "edges": [
+     {
+      "op": ">=",
+      "at": 13000
+     },
+     {
+      "op": ">=",
+      "at": 60000
+     }
+    ]
+   }
+  ],
+  "Seal": [
+   {
+    "cell": "gpPct",
+    "on": "subTotal",
+    "edges": [
+     {
+      "op": "<",
+      "at": 6500
+     },
+     {
+      "op": "<",
+      "at": 15000
+     },
+     {
+      "op": "<",
+      "at": 22500
+     },
+     {
+      "op": "<",
+      "at": 32500
+     },
+     {
+      "op": "<",
+      "at": 42500
+     }
+    ]
+   },
+   {
+    "cell": "hardBidPct",
+    "on": "subTotal",
+    "needs": "hardBid",
+    "edges": [
+     {
+      "op": ">=",
+      "at": 13000
+     },
+     {
+      "op": ">=",
+      "at": 60000
+     }
+    ]
+   }
+  ],
+  "Seal (+Jnts)": [
+   {
+    "cell": "gpPct",
+    "on": "subTotal",
+    "edges": [
+     {
+      "op": "<",
+      "at": 6500
+     },
+     {
+      "op": "<",
+      "at": 15000
+     },
+     {
+      "op": "<",
+      "at": 22500
+     },
+     {
+      "op": "<",
+      "at": 32500
+     },
+     {
+      "op": "<",
+      "at": 42500
+     }
+    ]
+   },
+   {
+    "cell": "hardBidPct",
+    "on": "subTotal",
+    "needs": "hardBid",
+    "edges": [
+     {
+      "op": ">=",
+      "at": 13000
+     },
+     {
+      "op": ">=",
+      "at": 60000
+     }
+    ]
+   }
+  ],
+  "Epoxy blank": [
+   {
+    "cell": "shipPct",
+    "on": "material",
+    "edges": [
+     {
+      "op": "<=",
+      "at": 5000
+     },
+     {
+      "op": "<=",
+      "at": 10000
+     }
+    ]
+   },
+   {
+    "cell": "gpPct",
+    "on": "subTotal",
+    "edges": [
+     {
+      "op": "<",
+      "at": 6500
+     },
+     {
+      "op": "<",
+      "at": 15000
+     },
+     {
+      "op": "<",
+      "at": 22500
+     },
+     {
+      "op": "<",
+      "at": 32500
+     }
+    ]
+   },
+   {
+    "cell": "hardBidPct",
+    "on": "subTotal",
+    "needs": "hardBid",
+    "edges": [
+     {
+      "op": ">=",
+      "at": 13000
+     },
+     {
+      "op": ">=",
+      "at": 60000
+     }
+    ]
+   }
+  ],
+  "Leveling": [
+   {
+    "cell": "shipPct",
+    "on": "material",
+    "edges": [
+     {
+      "op": "<=",
+      "at": 5000
+     },
+     {
+      "op": "<=",
+      "at": 10000
+     }
+    ]
+   },
+   {
+    "cell": "gpPct",
+    "on": "subTotal",
+    "edges": [
+     {
+      "op": "<",
+      "at": 6500
+     },
+     {
+      "op": "<",
+      "at": 15000
+     },
+     {
+      "op": "<",
+      "at": 22500
+     },
+     {
+      "op": "<",
+      "at": 32500
+     }
+    ]
+   },
+   {
+    "cell": "hardBidPct",
+    "on": "subTotal",
+    "needs": "hardBid",
+    "edges": [
+     {
+      "op": ">=",
+      "at": 13000
+     },
+     {
+      "op": ">=",
+      "at": 60000
+     }
+    ]
+   }
+  ],
+  "Gyp (USG 1-8\")": [
+   {
+    "cell": "gpPct",
+    "on": "subTotal",
+    "edges": [
+     {
+      "op": "<",
+      "at": 15000
+     },
+     {
+      "op": "<",
+      "at": 25000
+     },
+     {
+      "op": "<",
+      "at": 50000
+     },
+     {
+      "op": "<",
+      "at": 75000
+     },
+     {
+      "op": "<",
+      "at": 100000
+     },
+     {
+      "op": "<",
+      "at": 150000
+     }
+    ]
+   },
+   {
+    "cell": "softPct",
+    "on": "subTotal",
+    "edges": [
+     {
+      "op": ">",
+      "at": 234450
+     },
+     {
+      "op": ">",
+      "at": 334900
+     }
+    ]
+   }
+  ],
+  "Gyp (USG N12ULTRA)": [
+   {
+    "cell": "gpPct",
+    "on": "subTotal",
+    "edges": [
+     {
+      "op": "<",
+      "at": 15000
+     },
+     {
+      "op": "<",
+      "at": 25000
+     },
+     {
+      "op": "<",
+      "at": 50000
+     },
+     {
+      "op": "<",
+      "at": 75000
+     },
+     {
+      "op": "<",
+      "at": 100000
+     },
+     {
+      "op": "<",
+      "at": 150000
+     }
+    ]
+   },
+   {
+    "cell": "softPct",
+    "on": "subTotal",
+    "edges": [
+     {
+      "op": ">",
+      "at": 234450
+     },
+     {
+      "op": ">",
+      "at": 334900
+     }
+    ]
+   }
+  ],
+  "Gyp (USG N25 1-4\")": [
+   {
+    "cell": "gpPct",
+    "on": "subTotal",
+    "edges": [
+     {
+      "op": "<",
+      "at": 15000
+     },
+     {
+      "op": "<",
+      "at": 25000
+     },
+     {
+      "op": "<",
+      "at": 50000
+     },
+     {
+      "op": "<",
+      "at": 75000
+     },
+     {
+      "op": "<",
+      "at": 100000
+     },
+     {
+      "op": "<",
+      "at": 150000
+     }
+    ]
+   },
+   {
+    "cell": "softPct",
+    "on": "subTotal",
+    "edges": [
+     {
+      "op": ">",
+      "at": 234450
+     },
+     {
+      "op": ">",
+      "at": 334900
+     }
+    ]
+   }
+  ],
+  "Gyp (GWorx SC190)": [
+   {
+    "cell": "gpPct",
+    "on": "subTotal",
+    "edges": [
+     {
+      "op": "<",
+      "at": 15000
+     },
+     {
+      "op": "<",
+      "at": 25000
+     },
+     {
+      "op": "<",
+      "at": 50000
+     },
+     {
+      "op": "<",
+      "at": 75000
+     },
+     {
+      "op": "<",
+      "at": 100000
+     },
+     {
+      "op": "<",
+      "at": 150000
+     }
+    ]
+   },
+   {
+    "cell": "softPct",
+    "on": "subTotal",
+    "edges": [
+     {
+      "op": ">",
+      "at": 234450
+     },
+     {
+      "op": ">",
+      "at": 334900
+     }
+    ]
+   }
+  ],
+  "Gyp (FR)": [
+   {
+    "cell": "gpPct",
+    "on": "subTotal",
+    "edges": [
+     {
+      "op": "<",
+      "at": 15000
+     },
+     {
+      "op": "<",
+      "at": 25000
+     },
+     {
+      "op": "<",
+      "at": 50000
+     },
+     {
+      "op": "<",
+      "at": 75000
+     },
+     {
+      "op": "<",
+      "at": 100000
+     },
+     {
+      "op": "<",
+      "at": 150000
+     }
+    ]
+   },
+   {
+    "cell": "softPct",
+    "on": "subTotal",
+    "edges": [
+     {
+      "op": ">",
+      "at": 234450
+     },
+     {
+      "op": ">",
+      "at": 334900
+     }
+    ]
+   }
+  ]
+ },
+ "sheets": {
+  "Epoxy": {
+   "slug": "epoxy",
+   "family": "epoxy",
+   "vectors": 185,
+   "probes": 2
+  },
+  "Polish": {
+   "slug": "polish",
+   "family": "polish",
+   "vectors": 179,
+   "probes": 1
+  },
+  "Seal": {
+   "slug": "seal",
+   "family": "polish",
+   "vectors": 182,
+   "probes": 0
+  },
+  "Seal (+Jnts)": {
+   "slug": "seal-jnts",
+   "family": "polish",
+   "vectors": 182,
+   "probes": 0
+  },
+  "Epoxy blank": {
+   "slug": "epoxy-blank",
+   "family": "epoxy-blank",
+   "vectors": 185,
+   "probes": 1
+  },
+  "Leveling": {
+   "slug": "leveling",
+   "family": "leveling",
+   "vectors": 185,
+   "probes": 3
+  },
+  "Gyp (USG 1-8\")": {
+   "slug": "gyp-usg-1-8",
+   "family": "gyp",
+   "vectors": 179,
+   "probes": 2
+  },
+  "Gyp (USG N12ULTRA)": {
+   "slug": "gyp-usg-n12ultra",
+   "family": "gyp",
+   "vectors": 179,
+   "probes": 2
+  },
+  "Gyp (USG N25 1-4\")": {
+   "slug": "gyp-usg-n25-1-4",
+   "family": "gyp",
+   "vectors": 179,
+   "probes": 2
+  },
+  "Gyp (GWorx SC190)": {
+   "slug": "gyp-gworx-sc190",
+   "family": "gyp",
+   "vectors": 179,
+   "probes": 2
+  },
+  "Gyp (FR)": {
+   "slug": "gyp-fr",
+   "family": "gyp",
+   "vectors": 179,
+   "probes": 2
+  }
+ }
+}

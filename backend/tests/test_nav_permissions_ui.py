@@ -317,12 +317,14 @@ def test_the_refusal_names_the_tab_who_can_fix_it_and_that_nothing_was_lost(ran)
 
 @needs_node
 def test_the_refusal_names_the_tab_that_owns_the_page_not_the_page(ran):
-    """The Polish beta's step 2 has its own URL and no sidebar row. The card has to say "Polish
-    Estimate", which is the tab a member would look for on the Admin page."""
+    """The Polish beta's step 2 has its own URL and no sidebar row. The card has to say "Estimating
+    Tool v2" (called "Polish Estimate" until 2026-10-07), which is the tab a member would look for
+    on the Admin page."""
     r = ran["signedIn"]["deniedStepTwo"]
     assert r["refusals"] == 1
-    assert "Polish Estimate isn" in r["refusalHtml"], r["refusalHtml"]
-    assert "Polish Estimate isn" in r["title"]
+    assert "Estimating Tool v2 isn" in r["refusalHtml"], r["refusalHtml"]
+    assert "Estimating Tool v2 isn" in r["title"]
+    assert "Polish Estimate" not in r["refusalHtml"] and "Polish Estimate" not in r["title"]
 
 
 @needs_node

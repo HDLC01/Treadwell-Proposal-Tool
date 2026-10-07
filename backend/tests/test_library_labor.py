@@ -1,7 +1,7 @@
 """Default labor lines — the table behind Library → Defaults → "+ Add a labor line".
 
 The button shipped DEAD, on purpose: nothing stored a custom labor line, so `renderDefaultLabor()`
-drew exactly one hardcoded row out of `TWPolishBid.travelSeed()` and the Add button had nowhere to
+drew exactly one hardcoded row out of `TWBidModel.travelSeed()` and the Add button had nowhere to
 put a second one. Hanz reported it twice on staging. `library_labor` is where a custom line now
 lives, and this file is the backend half of it.
 
@@ -261,7 +261,7 @@ def test_the_row_shape_is_exactly_what_the_other_tracks_were_built_against(store
     row = _mk(notes="two trucks", guys_auto=True, sort=3)
     assert set(row) == {"id", "name", "rate", "unit", "guys_auto", "sort", "notes",
                         "owner_email", "created_at", "updated_at", "default_work_types",
-                        "favorite"}
+                        "favorite", "default_on"}
     # EMPTY MEANS EVERY WORK TYPE, which is what keeps the column backwards compatible:
     # a row written before it existed still applies everywhere, exactly as it did when
     # `favorite` was the whole story.
@@ -742,3 +742,50 @@ def test_a_labor_line_carries_its_work_types_through_a_write(store):
     """The column is useless if validate_labor drops it on the way to the store."""
     row = _mk(default_work_types=["epoxy", "polish"])
     assert row["default_work_types"] == ["polish", "epoxy"]
+
+
+# ── Travel is a default like any other (Hanz, 2026-10-06) ─────────────────────
+def _travel(**kw):
+    row = {"id": "travel", "name": "Travel", "rate": 33.0, "unit": "hours", "guys_auto": True,
+           "sort": -1, "notes": None, "owner_email": None, "deleted_at": None}
+    row.update(kw)
+    return row
+
+
+def test_travel_with_no_favorite_stored_still_reads_as_a_default(store):
+    """BACKWARDS COMPATIBLE: Travel is on every new bid today. A Travel row whose favorite is
+    absent or null (the column not yet added, or never backfilled) must keep reading True, where
+    every OTHER labor row reads False for the same missing value. Only an explicit false is off.
+
+    Mutation: revert _shape_labor to `bool(row.get("favorite"))` -> the first two read False."""
+    store["library_labor"].append(_travel())
+    store["library_labor"].append({"id": "l1", "name": "Other, no favorite key"})
+    got = {r["id"]: r["favorite"] for r in library.list_labor()}
+    assert got == {"travel": True, "l1": False}
+    store["library_labor"][0]["favorite"] = None
+    assert library.get_labor("travel")["favorite"] is True
+    store["library_labor"][0]["favorite"] = False
+    assert library.get_labor("travel")["favorite"] is False
+
+
+def test_travel_can_be_removed_as_a_default_and_scoped_but_never_deleted(store, as_admin):
+    """Remove = PATCH favorite=false and chips = PATCH default_work_types, both on the reserved
+    id; the row stays listed and DELETE is still refused."""
+    store["library_labor"].append(_travel(favorite=True))
+    r = client.patch("/api/library/labor/travel", json={"favorite": False})
+    assert r.status_code == 200, r.text
+    assert r.json()["row"]["favorite"] is False
+    r = client.patch("/api/library/labor/travel", json={"default_work_types": ["epoxy", "seal"]})
+    assert r.status_code == 200, r.text
+    assert r.json()["row"]["default_work_types"] == ["seal", "epoxy"]
+    assert r.json()["row"]["favorite"] is False, "a chip edit changed favorite"
+    r = client.patch("/api/library/labor/travel", json={"favorite": True})
+    assert r.json()["row"]["favorite"] is True
+    assert client.delete("/api/library/labor/travel").status_code == 400
+    assert [x["id"] for x in client.get("/api/library/labor").json()["labor"]] == ["travel"]
+
+
+def test_a_non_admin_still_cannot_change_travels_flags(store, as_user):
+    store["library_labor"].append(_travel(favorite=True))
+    r = client.patch("/api/library/labor/travel", json={"favorite": False})
+    assert r.status_code == 403

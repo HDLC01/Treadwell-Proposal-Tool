@@ -68,75 +68,29 @@
 // real .xlsx, and re-derives every number below in Python. If Kyle edits his workbook, that test
 // fails — which is the whole point of it: it is the only thing standing between a template edit
 // and a silently wrong bid. Change this file and that pin together, never one without the other.
+//
+// LOAD ORDER. This file needs js/excel-math.js loaded before it: a script tag above this one on a
+// page, and `require` does the same under node. The number helpers it exports (num, roundUp,
+// copyInto, money, money2, pct, fmtSf) are that file's own functions, bound below to the names this
+// file has always used.
 (function (root, factory) {
-  var api = factory();
-  root.TWPolishBid = api;
-  if (typeof module !== "undefined" && module.exports) module.exports = api;   // node, for tests
-})(typeof self !== "undefined" ? self : this, function () {
+  var isNode = typeof module !== "undefined" && module.exports;
+  var deps = {
+    math: isNode ? require("./excel-math.js") : root.TWExcelMath
+  };
+  if (!deps.math) throw new Error("bid-model.js needs excel-math.js loaded before it");
+  var api = factory(deps);
+  root.TWBidModel = api;
+  if (isNode) module.exports = api;   // node, for tests
+})(typeof self !== "undefined" ? self : this, function (deps) {
   "use strict";
 
-  /** A number from anything a person might type or paste. 0 when it isn't one.
-   *
-   *  Deliberately unlike library-core's num(), which returns null: every caller here is
-   *  ARITHMETIC, and one null in the middle of the chain would poison every line below it. An
-   *  empty labor row has to cost nothing, not NaN. Tolerates "$1,200" and " 12,500 " because
-   *  these values get pasted out of spreadsheets. */
-  function num(raw) {
-    if (raw === null || raw === undefined || raw === "") return 0;
-    if (typeof raw === "number") return isFinite(raw) ? raw : 0;
-    if (typeof raw === "boolean") return 0;
-    var s = String(raw).replace(/[$,\s]/g, "");
-    if (s === "" || !/^-?\d*\.?\d+$/.test(s)) return 0;
-    var n = parseFloat(s);
-    return isFinite(n) ? n : 0;
-  }
-
-  /** Excel's ROUNDUP(n, 0): away from zero, so -1.2 becomes -2.
-   *
-   *  Float-guarded to twelve significant figures first. 27,500 × 1.10 is 110.00000000000001 in
-   *  IEEE-754 and a bare ceil() would buy a whole extra dollar off the back of the error — on
-   *  exactly the round numbers an estimator checks by hand. Twelve figures is far finer than any
-   *  money on this screen and far coarser than the noise. */
-  function roundUp(n) {
-    var v = num(n);
-    var g = parseFloat(v.toPrecision(12));
-    return g >= 0 ? Math.ceil(g) : -Math.ceil(-g);
-  }
-
-  /** Whole dollars: "$15,681". Every line of the chain is already an integer (ROUNDUP put it
-   *  there), so decimals here would only be float dust. */
-  function money(n) {
-    var v = num(n);
-    var r = Math.round(Math.abs(v));
-    return (v < 0 && r !== 0 ? "-$" : "$") + r.toLocaleString("en-US");
-  }
-
-  /** Dollars and cents: "$32.20". For the things a person types — an hourly rate, a price per SF
-   *  — where the cents are the number. */
-  function money2(n) {
-    var v = num(n);
-    var s = Math.abs(v).toLocaleString("en-US",
-      { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    return (v < 0 && parseFloat(s.replace(/,/g, "")) !== 0 ? "-$" : "$") + s;
-  }
-
-  /** A rate as a percentage: 0.45 -> "45%", -0.025 -> "-2.5%", 0.09475 -> "9.475%".
-   *
-   *  Float noise is stripped first (0.027 × 100 is 2.7000000000000006 in IEEE-754), then the
-   *  trailing zeros go, so a whole percentage reads as one. Precision is KEPT rather than
-   *  rounded to a tidy two places: 9.475% is the Kansas sales-tax rate and 9.5% is a different
-   *  bid on a 40,000 SF floor. */
-  function pct(n) {
-    var v = num(n) * 100;
-    var s = parseFloat(v.toPrecision(12)).toFixed(4);
-    s = s.replace(/0+$/, "").replace(/\.$/, "");
-    return s + "%";
-  }
-
-  /** An area for reading: 12500 -> "12,500". */
-  function fmtSf(n) {
-    return num(n).toLocaleString("en-US", { maximumFractionDigits: 2 });
-  }
+  // The number helpers live in excel-math.js (Phase 5). They are bound here to the names this file has
+  // always used, so every line below reads as it did, and they are exported again at the bottom under
+  // those same names.
+  var num = deps.math.num, copyInto = deps.math.copyInto, roundUp = deps.math.roundUp,
+      money = deps.math.money, money2 = deps.math.money2, pct = deps.math.pct, fmtSf = deps.math.fmtSf,
+      isBlank = deps.math.isBlank;
 
   // ── the constants, straight off the Polish tab ──────────────────────────────
   /** D37: `=(A37*B37*C37)*IF($E$35="8 hour days",8,10)`, and E35 says "8 hour days". */
@@ -192,6 +146,38 @@
   // sheet is untouched and still carries B68/D68 -- this beta simply no longer writes a "Yes"
   // to B5, so his own formula reads it as not-hard-bid, which is the same outcome.
 
+  /** The hint under a Guys / Lodging / Per Diem box: one wording, drawn by the card builders and
+   *  repainted in place when clearing the box hands the figure back to the man-days. */
+  function manDaysHint(auto) {
+    return auto ? "Man-days from the tasks above."
+      : "Typed by you. Clear it to use the man-days from the tasks above.";
+  }
+
+  /** Is this row counted? `enabled` is absent on every row saved before the slider existed and on
+   *  every row nobody has switched, and absent means ON -- only an explicit false is off. Shared by
+   *  labor rows, takeoff rows and (through M.conditions) the condition cards, so there is one
+   *  answer to "does this row count" in the whole estimate. */
+  function rowOn(row) {
+    return !(row && row.enabled === false);
+  }
+
+  /** The markup for the on/off slider, ONE piece used by the estimate's cards and by the Defaults
+   *  tab's rows (both pages load this file), so the two cannot look or behave differently.
+   *
+   *  Returns a span in the page's `.mw-sw` vocabulary. `attr` is the one data- attribute the
+   *  caller's delegated handler listens for (e.g. `data-on-lab="2"`); `label` is the words beside
+   *  the track. role=switch + aria-checked so a screen reader hears the state. */
+  function sliderHtml(on, attr, label, title, cls) {
+    var esc = function (s) {
+      return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    };
+    return '<span class="mw-sw' + (on ? " on" : "") + (cls || "") + '" ' + attr +
+      ' role="switch" tabindex="0" aria-checked="' + (on ? "true" : "false") + '"' +
+      (title ? ' title="' + esc(title) + '"' : "") + '>' +
+      '<span class="track"></span>' + esc(label == null ? "" : label) + '</span>';
+  }
+
   /** One labor row's cost. D37: guys × days × hourly rate × 8 hours.
    *
    *  Kyle's screenshot: 3 guys × 5 days × $32.20 = $3,864. That figure is what pins the 8.
@@ -208,8 +194,125 @@
    *  this existed and every custom row an estimator adds today. */
   function laborCost(row) {
     row = row || {};
-    var perDay = row.unit === "hours" ? 1 : HOURS_PER_DAY;
+    // A ROW SWITCHED OFF ADDS NOTHING (Kyle's on/off slider, 2026-10-05). Zero HERE, at the one
+    // function every total goes through, so the figure is skipped in laborTotal BEFORE markupChain
+    // rounds the sum -- zeroing after the rounding would drift the bid by up to a dollar.
+    if (!rowOn(row)) return 0;
+    // A DAY IS 8 HOURS UNLESS THE ROW SAYS 10 (the Labor Calculator's "hours a day", 2026-10-06).
+    // Only 8 and 10 are honoured, so a stray value in a saved blob prices as the sheet does.
+    var perDay = row.unit === "hours" ? 1 : dayHours(row);
     return num(row.guys) * num(row.days) * num(row.rate) * perDay;
+  }
+
+  /** The built-in crew lines the Labor Calculator can configure (the ids freshModel() gives them).
+   *  Custom lines are the favorited rows of library_labor; Travel is not here (it is hours-based
+   *  and has its own Travel section). */
+  var LABOR_CALC_BUILTINS = [
+    { id: "polishing", name: "Polishing" },
+    { id: "mockup", name: "Mock-up" },
+    { id: "jointfill", name: "Joint filler" }
+  ];
+
+  /** Hours in this row's working day: 10 when the row says 10, else the sheet's 8. */
+  function dayHours(row) {
+    return num((row || {}).hours_per_day) === 10 ? 10 : HOURS_PER_DAY;
+  }
+
+  /** THE LABOR CALCULATOR (Library -> Labor Calculator), the arithmetic. A line's saved mode
+   *  `cfg` -- `{mode, crew, sf_per_day, hours_per_day, guys, days, rate}` -- turned into the
+   *  Guys / Days / Hours-a-day / Rate a new bid's line starts with, for a job of `sf` square feet.
+   *
+   *    sf     guys = crew, days = ceil(sf / sf_per_day)   (blank days when there is no SF yet, or
+   *           no production rate: an unknown is blank, never 0 -- 0 would read as "free")
+   *    fixed  guys and days as typed
+   *
+   *  `rate` is the line's own, else the company labor rate `dflt`. Null when `cfg` has no usable
+   *  mode, which is "behave as today". ONE DEFINITION: the estimate's seeding and the Calculator's
+   *  "Try it" box both call this, so the box shows exactly what a new bid would get. */
+  function laborCalcValues(cfg, sf, dflt) {
+    if (!cfg || (cfg.mode !== "sf" && cfg.mode !== "fixed")) return null;
+    var hpd = num(cfg.hours_per_day) === 10 ? 10 : HOURS_PER_DAY;
+    var own = num(cfg.rate);
+    var rate = own > 0 ? own : laborRateOrShipped(dflt);
+    var guys, days;
+    if (cfg.mode === "sf") {
+      var per = num(cfg.sf_per_day), area = num(sf);
+      guys = num(cfg.crew) > 0 ? num(cfg.crew) : "";
+      days = (per > 0 && area > 0) ? Math.ceil(area / per) : "";
+    } else {
+      guys = num(cfg.guys) > 0 ? num(cfg.guys) : "";
+      days = num(cfg.days) > 0 ? num(cfg.days) : "";
+    }
+    return { guys: guys, days: days, hours_per_day: hpd, rate: rate };
+  }
+
+  /** `labor` with each row that has a saved mode filled from it -- NEW BIDS ONLY (the caller's gate
+   *  is laborUnstated, the same one that guards every other default). A NEW array of NEW rows.
+   *  The values written are also kept on the row as `calc_default`, which is what the estimate's
+   *  "Default value: N" warning compares against: once saved, the bid keeps its own numbers and
+   *  nothing here ever runs on it again. Travel (an hours row) is never touched. */
+  function applyLaborCalc(labor, cfgs, sf, dflt) {
+    var out = (labor instanceof Array) ? labor.slice() : [];
+    if (!(cfgs instanceof Array)) return out;
+    var byId = {};
+    cfgs.forEach(function (c) { if (c && c.line_id) byId[String(c.line_id)] = c; });
+    for (var i = 0; i < out.length; i++) {
+      var r = out[i];
+      if (!r || r.unit === "hours" || r.id === "travel") continue;
+      var v = laborCalcValues(byId[String(r.id)], sf, dflt);
+      if (!v) continue;
+      var copy = copyInto({}, r);
+      copy.guys = v.guys; copy.days = v.days; copy.rate = v.rate; copy.hours_per_day = v.hours_per_day;
+      copy.calc_default = { guys: v.guys, days: v.days, rate: v.rate, hours_per_day: v.hours_per_day };
+      // THE UNTOUCHED-FOLLOW MARKER (G2): a "From SF" line keeps its production rate so its days can
+      // keep following the takeoff (followLaborDays). Fixed lines carry none and never move.
+      var cfg = byId[String(r.id)];
+      if (cfg.mode === "sf" && num(cfg.sf_per_day) > 0) copy.calc_default.sf_per_day = num(cfg.sf_per_day);
+      out[i] = copy;
+    }
+    return out;
+  }
+
+  /** G2: LABOR DAYS FOLLOW THE TAKEOFF, the same pattern as coverage (untouched follows the source,
+   *  edited keeps the bid's number). A row carrying the marker `calc_default.sf_per_day` whose Days
+   *  still read what the calculator filled is moved to ceil(sf / sf_per_day) -- blank while there
+   *  is no SF -- and its calc_default.days moves with it, so the "Default value" warning stays
+   *  quiet. A row whose Days the estimator changed keeps its number. Rows without the marker (every
+   *  fixed line, every row on a saved bid from before this) are never touched. The caller runs it
+   *  only when the takeoff SF CHANGED in this session, so opening a saved bid moves nothing.
+   *  A NEW array; rows that do not move are the same objects. */
+  function followLaborDays(labor, sf) {
+    var out = (labor instanceof Array) ? labor.slice() : [];
+    var area = num(sf);
+    for (var i = 0; i < out.length; i++) {
+      var r = out[i], d = r && r.calc_default;
+      if (!d || !(num(d.sf_per_day) > 0)) continue;
+      var untouched = (isBlank(r.days) && isBlank(d.days)) ||
+        (!isBlank(r.days) && !isBlank(d.days) && num(r.days) === num(d.days));
+      if (!untouched) continue;
+      var next = area > 0 ? Math.ceil(area / num(d.sf_per_day)) : "";
+      if (next === d.days) continue;
+      var copy = copyInto({}, r), dc = copyInto({}, d);
+      dc.days = next;
+      copy.days = next;
+      copy.calc_default = dc;
+      out[i] = copy;
+    }
+    return out;
+  }
+
+  /** What a labor row's four calculator boxes read against their default: the names of the boxes
+   *  whose value is not the default the calculator filled. `[]` for a row with no calc_default
+   *  (every row today) and for a row still holding its defaults. */
+  function laborCalcDiffers(row) {
+    var d = row && row.calc_default;
+    if (!d) return [];
+    var diff = [];
+    if (num(row.guys) !== num(d.guys)) diff.push("guys");
+    if (num(row.days) !== num(d.days)) diff.push("days");
+    if (num(row.rate) !== num(d.rate)) diff.push("rate");
+    if (dayHours(row) !== (num(d.hours_per_day) === 10 ? 10 : HOURS_PER_DAY)) diff.push("hours_per_day");
+    return diff;
   }
 
   /** The man-days a travel row is priced against: Σ guys × days over the rows that are NOT travel.
@@ -227,6 +330,8 @@
     for (var i = 0; i < rows.length; i++) {
       var r = rows[i] || {};
       if (r.unit === "hours") continue;
+      // An OFF crew row is not driving anywhere: it drops out of the man-days Travel is priced on.
+      if (!rowOn(r)) continue;
       t += num(r.guys) * num(r.days);
     }
     return t;
@@ -234,23 +339,553 @@
 
   /** The labor rows added up, UNROUNDED. D45 is where the rounding happens
    *  (`=ROUNDUP(SUM(D37:D44),0)`), and markupChain does it — rounding twice would drift. */
-  function laborTotal(rows) {
+  function laborTotal(rows, conditions) {
     rows = rows || [];
     var t = 0;
     for (var i = 0; i < rows.length; i++) t += laborCost(rows[i]);
-    return t;
+    return t + removeExistingHand(rows, conditions);
+  }
+
+  /** REMOVE EXISTING JOINT FILLER = A FOURTH HAND ON THE JOINT-FILLER LINE (Polish A42 is
+   *  `=IF(F29="NO",3,4)`). The crew row keeps its own typed Guys; the extra hand is one more guy
+   *  for the same days at the same rate, so its cost is that row priced at 1 guy. It needs joint
+   *  filler ON (no filler, no crew to add a hand to), and it follows the row's own on/off switch
+   *  because laborCost does. Absent `conditions` adds nothing, so every caller that predates this
+   *  prices exactly as before. */
+  function removeExistingHand(rows, conditions) {
+    if (!conditions || !conditions.joint_filler || !conditions.remove_existing_jf) return 0;
+    rows = rows || [];
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i] || {};
+      if (r.id !== "jointfill") continue;
+      return laborCost({ guys: 1, days: r.days, rate: r.rate, unit: r.unit,
+                         hours_per_day: r.hours_per_day, enabled: r.enabled });
+    }
+    return 0;
+  }
+
+  /** THE TWO TRAVEL COSTS BESIDE TRAVEL LABOR: LODGING (a night) and PER DIEM (a day). Hanz,
+   *  2026-10-05: "separate line for Travel Lodging and Per Diem", priced INSIDE the markups like
+   *  Kyle's sheet D61 -- they join the sub-total (D64) that GP, super/PTO and soft costs are taken
+   *  on, and are NOT labor (no escalation, no burden). They live on the model as `M.travel`,
+   *  `{lodging: line, per_diem: line}`, each `{label, enabled, qty, qty_auto, rate}`, and not as rows
+   *  of M.labor, because a labor row is guys x days x rate x 8 and neither of these is.
+   *
+   *  THE QUANTITY. Nights (and days of food) are the crew's man-days, the way backend/pricing.py
+   *  works them out (`nights = labor man-days`, one lodging and one meal charge per man per night).
+   *  `qty_auto` follows travelManDays until the estimator types a number; typing is how you leave
+   *  auto, and clearing the box is how you come back. An OFF line, or an absent `travel`, is $0.
+   *
+   *  THE RATES are the Markups -> Global lines `travel_lodging` ($70) and `travel_per_diem` ($45),
+   *  copied onto a NEW bid when it opens (applyTravelRates) and never again, so a rate edited later
+   *  reaches new bids and leaves saved ones alone. 70 and 45 are Kyle's literals and what stands
+   *  when nothing is filed.
+   *
+   *  BOTH START OFF (Hanz's decision, 2026-10-05): a bid that never leaves town pays nothing for a
+   *  hotel, and an old saved bid opened after this shipped is not repriced. */
+  var SHIPPED_LODGING_RATE = 70;
+  var SHIPPED_PER_DIEM_RATE = 45;
+  var TRAVEL_LINE_KEYS = ["lodging", "per_diem"];
+
+  /** The fresh travel block, built each call so no two models share an object. */
+  function travelCostsSeed(lodgingRate, perDiemRate) {
+    return {
+      lodging: { label: "Lodging", enabled: false, qty: "", qty_auto: true,
+                 rate: rateOrShipped(lodgingRate, SHIPPED_LODGING_RATE) },
+      per_diem: { label: "Per Diem", enabled: false, qty: "", qty_auto: true,
+                  rate: rateOrShipped(perDiemRate, SHIPPED_PER_DIEM_RATE) }
+    };
+  }
+
+  /** A usable positive rate, or the shipped one. Same rule as laborRateOrShipped. */
+  function rateOrShipped(rate, shipped) {
+    var n = (rate === null || rate === undefined || rate === "") ? NaN : Number(rate);
+    return (isFinite(n) && n > 0) ? n : shipped;
+  }
+
+  /** What a line is charged for: the typed quantity, or the crew's man-days while it is auto. */
+  function travelQty(line, rows) {
+    line = line || {};
+    if (line.qty_auto === false) return num(line.qty);
+    return travelManDays(rows);
+  }
+
+  /** One travel line's cost, ROUNDED UP TO THE DOLLAR like pricing.py's D68 (each of lodging and
+   *  food is its own ROUNDUP there). An off line is 0. */
+  function travelLineCost(line, rows) {
+    if (!line || !rowOn(line)) return 0;
+    return roundUp(travelQty(line, rows) * num(line.rate));
+  }
+
+  /** Both lines and their sum. `travel` may be absent (an old model that never migrated). */
+  function travelCosts(travel, rows) {
+    var t = travel || {};
+    var lodging = travelLineCost(t.lodging, rows);
+    var per_diem = travelLineCost(t.per_diem, rows);
+    return { lodging: lodging, per_diem: per_diem, total: lodging + per_diem };
+  }
+
+  /** The Lodging and Per Diem rates out of GET /api/markup/rules' `rules`, as
+   *  `{lodging, per_diem}`, each null when none is filed (or switched off, or not a plain dollar
+   *  figure). Null, not the shipped number: the caller decides what nothing-filed means. */
+  function travelRatesFromRules(rules) {
+    var out = { lodging: null, per_diem: null };
+    if (!(rules instanceof Array)) return out;
+    var keys = { travel_lodging: "lodging", travel_per_diem: "per_diem" };
+    for (var i = 0; i < rules.length; i++) {
+      var r = rules[i];
+      if (!r || r.layout !== "global" || !keys[r.line_key]) continue;
+      if (r.applies === false) continue;
+      var m = /^\s*\$?\s*(\d+(?:\.\d+)?)\s*$/.exec(String(r.formula === null ||
+        r.formula === undefined ? "" : r.formula));
+      if (!m) continue;
+      var n = Number(m[1]);
+      if (isFinite(n) && n > 0) out[keys[r.line_key]] = n;
+    }
+    return out;
+  }
+
+  /** The two company rates written onto a NEW bid's travel lines. A NEW object; the input is never
+   *  touched. A line the estimator has already typed a rate over is not this function's to move --
+   *  the caller's gate (a bid nobody has saved) is what keeps that true, and this only fills lines
+   *  still on the shipped figure. */
+  function applyTravelRates(travel, rates) {
+    var out = travelCostsSeed(rates && rates.lodging, rates && rates.per_diem);
+    var t = travel || {};
+    TRAVEL_LINE_KEYS.forEach(function (k) {
+      var keep = t[k];
+      if (!keep || typeof keep !== "object") return;
+      var shipped = (k === "lodging") ? SHIPPED_LODGING_RATE : SHIPPED_PER_DIEM_RATE;
+      var next = {};
+      copyInto(next, keep);
+      if (!(isFinite(Number(keep.rate)) && Number(keep.rate) > 0 && Number(keep.rate) !== shipped)) {
+        next.rate = out[k].rate;
+      }
+      out[k] = next;
+    });
+    // G3: each line remembers the rate it was filled with (the Markups -> Global figure, or the
+    // shipped one when none is filed), which is what the "Default value" warning compares against.
+    TRAVEL_LINE_KEYS.forEach(function (k) { out[k].rate_default = num(out[k].rate); });
+    return out;
+  }
+
+  /** A saved `travel` block read as a full one: both lines, every field. Missing lines come from
+   *  the seed (OFF, shipped rates); a line keeps what it was saved with. Never throws. */
+  function normalizeTravel(travel) {
+    var seed = travelCostsSeed();
+    var t = (travel && typeof travel === "object") ? travel : {};
+    var out = {};
+    TRAVEL_LINE_KEYS.forEach(function (k) {
+      var s = seed[k];
+      var l = (t[k] && typeof t[k] === "object") ? t[k] : {};
+      out[k] = {
+        label: isBlank(l.label) ? s.label : String(l.label),
+        // Explicit true/false on this block (unlike a labor row, whose absent key means on): the
+        // seed is OFF, so "on" has to be written down to survive a save and a reload.
+        enabled: l.enabled === true,
+        qty: l.qty === undefined || l.qty === null ? "" : l.qty,
+        qty_auto: l.qty_auto === false ? false : true,
+        rate: (isBlank(l.rate) || !isFinite(Number(l.rate))) ? s.rate : Number(l.rate)
+      };
+      // Set when the ESTIMATOR flipped the line, so a later distance answer (the 70-mile rule)
+      // never overrides a choice somebody made.
+      if (l.hand === true) out[k].hand = true;
+      // The rate a NEW bid's line was filled with (applyTravelRates); absent on every saved line.
+      if (!isBlank(l.rate_default) && isFinite(Number(l.rate_default))) {
+        out[k].rate_default = Number(l.rate_default);
+      }
+    });
+    return out;
+  }
+
+  /** DISTANCE DECIDES "LOCAL" (Kyle 9/18; Hanz, 2026-10-05). The intake "Local job" switch is gone;
+   *  the Labor step works the driving miles from the Olathe office to the job address out on the
+   *  server (POST /api/distance) and this is what it does with the answer. The model carries it as
+   *  `distance: {miles, source, key}`:
+   *    miles   a number (0 is a real answer), or null for "unknown";
+   *    source  "google" (the server's figure) or "typed" (the estimator's own, which always wins);
+   *    key     which address the figure belongs to (distanceKey), so a changed address is noticed.
+   *  `conditions.local` stays on the model -- it is still what Polish!B4 / Epoxy!B4 are written from
+   *  -- but it is DERIVED now: under 70 miles is local. At 70 or more the three travel lines come
+   *  on (Travel Labor by un-graying, Lodging and Per Diem by switching on); under 70 they go gray.
+   *
+   *  A HAND FLIP WINS. A Lodging / Per Diem line the estimator flipped (`hand`) is never moved by a
+   *  distance answer in either direction -- the same rule normalizeTravel's note records.
+   *
+   *  UNKNOWN IS NOT AN ANSWER. No figure leaves `conditions.local` and the lines exactly as they
+   *  were (a new bid: local, all three gray). Nothing here ever guesses a distance. */
+  var LOCAL_MILES = 70;
+
+  /** A positive-or-zero finite number, else null. A blank box and "abc" are both unknown. */
+  function milesOrNull(v) {
+    if (v === null || v === undefined || v === "" || typeof v === "boolean") return null;
+    var n = Number(String(v).replace(/[,\s]/g, ""));
+    return (isFinite(n) && n >= 0) ? Math.round(n * 10) / 10 : null;
+  }
+
+  /** The address a distance belongs to, lower-cased and squeezed -- or "" when the address is too
+   *  thin to look up (needs a street AND a city+state or a zip, the same rule the server applies in
+   *  distance.clean_address). "" means: do not ask, and say so. */
+  function distanceKey(address, city, state, zip) {
+    function one(v) { return String(v == null ? "" : v).replace(/\s+/g, " ").trim().toLowerCase(); }
+    var a = one(address), c = one(city), s = one(state), z = one(zip);
+    if (!a) return "";
+    if (!((c && s) || z)) return "";
+    return [a, c, s, z].join("|");
+  }
+
+  /** A saved `distance` read as a full one, or undefined when there is none. Never throws. */
+  function normalizeDistance(d) {
+    if (!d || typeof d !== "object") return undefined;
+    var out = { miles: milesOrNull(d.miles), source: d.source === "typed" ? "typed" : "google",
+                key: typeof d.key === "string" ? d.key : "" };
+    // A record with no figure says nothing (a failed lookup is never stored, so it is asked again
+    // on the next open -- the key may have been configured since).
+    if (out.miles === null) return undefined;
+    return out;
+  }
+
+  /** Is a job at this many miles a travel job? Unknown is false: it is not asked to be anything. */
+  function isFarMiles(miles) {
+    var n = milesOrNull(miles);
+    return n !== null && n >= LOCAL_MILES;
+  }
+
+  /** The model with a distance answer applied, IN PLACE (and returned). `result` is
+   *  `{miles, source, key}`; a result with no usable miles records nothing and changes nothing. */
+  function applyDistance(model, result) {
+    var miles = milesOrNull(result && result.miles);
+    if (!model || miles === null) return model;
+    model.distance = { miles: miles, source: (result.source === "typed" ? "typed" : "google"),
+                       key: String(result.key || "") };
+    var far = miles >= LOCAL_MILES;
+    if (!model.conditions) model.conditions = {};
+    model.conditions.local = !far;
+    if (!model.travel) model.travel = normalizeTravel(null);
+    TRAVEL_LINE_KEYS.forEach(function (k) {
+      var l = model.travel[k];
+      if (l && l.hand !== true) l.enabled = far;
+    });
+    seedTravelHours(model, miles);
+    return model;
+  }
+
+  /** THE DRIVE HOURS A NEW BID'S TRAVEL LABOR STARTS WITH (walk 2026-10-06: 150 miles typed, travel
+   *  on, and the card read "7.5 x 0 x $33 = $0"). The 7.5 is Guys: the crew's man-days (Polish A44),
+   *  filled by syncAutoGuys. The 0 is Hours, Polish B44 = Epoxy!B52, which Kyle's sheet leaves at 0
+   *  with the note "Drive Time: ?" -- so a travel job priced nothing until somebody typed the hours.
+   *  Now the distance answer fills it: a round trip at DRIVE_MPH, to the half hour (150 mi -> 5).
+   *
+   *  NEW BIDS ONLY: the row opts in with `hours_seed` (freshModel writes it; a saved bid never has
+   *  it), so no saved bid's total can move. `hours_seed` remembers what was written, so the figure
+   *  follows a changed distance until the estimator types their own hours, which is then theirs. */
+  var DRIVE_MPH = 60;
+  function driveHoursFor(miles) {
+    var m = milesOrNull(miles);
+    if (m === null || m < LOCAL_MILES) return "";
+    return Math.ceil((2 * m / DRIVE_MPH) * 2) / 2;
+  }
+  function seedTravelHours(model, miles) {
+    var labor = (model && model.labor) || [];
+    for (var i = 0; i < labor.length; i++) {
+      var r = labor[i];
+      if (!r || r.id !== "travel" || !Object.prototype.hasOwnProperty.call(r, "hours_seed")) continue;
+      var untouched = isBlank(r.days) || (!isBlank(r.hours_seed) && num(r.days) === num(r.hours_seed));
+      if (!untouched) continue;
+      var h = driveHoursFor(miles);
+      r.days = h;
+      r.hours_seed = h;
+    }
+  }
+
+  /** Back to "unknown": the estimator cleared the miles they had typed. Local again (the shipped
+   *  default) and every line the estimator never touched gray again; a hand flip stays. */
+  function clearDistance(model) {
+    if (!model) return model;
+    delete model.distance;
+    if (!model.conditions) model.conditions = {};
+    model.conditions.local = true;
+    if (model.travel) {
+      TRAVEL_LINE_KEYS.forEach(function (k) {
+        var l = model.travel[k];
+        if (l && l.hand !== true) l.enabled = false;
+      });
+    }
+    return model;
+  }
+
+  /** The words under the Travel heading: what the estimator is looking at, and what they can do. */
+  function distanceNote(model) {
+    var d = model && model.distance;
+    if (d && milesOrNull(d.miles) !== null) {
+      var n = milesOrNull(d.miles);
+      var shown = (n % 1 === 0) ? String(n) : n.toFixed(1);
+      return shown + " mi from Olathe office" + (d.source === "typed" ? " (typed by you)" : "");
+    }
+    return "Distance unknown — enter miles";
+  }
+
+  /** HOW THE TRAVEL LINES ARE WORKED OUT, in plain words (Hanz, 2026-10-06: "a note that it is
+   *  calculated based off whether it's a local job ... just to show you how it's being solved").
+   *  Returns `{decision, lines, text}`: the local-or-not call and why, one working line per travel
+   *  line (the real numbers, from the same functions that price the bid: laborCost, travelQty,
+   *  travelLineCost), and `text`, those joined with newlines for one element to show with
+   *  `white-space: pre-line`. A pure read of the model: it prices nothing and changes nothing.
+   *
+   *  Lives here, not in js/polish-estimate.js, because the harness for that file lifts init() and
+   *  laborPanel() by name and a new local function they call is a ReferenceError in every scenario. */
+  function travelHow(model) {
+    var M = model || {};
+    var d = M.distance;
+    var miles = d ? milesOrNull(d.miles) : null;
+    var far = miles !== null && miles >= LOCAL_MILES;
+    var local = !!(M.conditions || {}).local;
+    var trv = M.travel || {};
+    var rows = M.labor || [];
+    var cut = String(LOCAL_MILES) + " miles";
+    var qty = function (n) { return String(Math.round(num(n) * 100) / 100); };
+
+    var decision;
+    if (miles === null) {
+      decision = "Distance not known yet, so the tool cannot tell if this is a local job. " +
+        "Type the miles above.";
+    } else if (far) {
+      decision = distanceNote(M) + ". That is " + cut + " or more, so this is NOT a local job: " +
+        "Travel Labor, Lodging and Per Diem come on.";
+    } else {
+      decision = distanceNote(M) + ". That is under " + cut + ", so this IS a local job: the " +
+        "three travel lines stay gray unless you switch one on.";
+    }
+    var hand = [];
+    var names = { lodging: "Lodging", per_diem: "Per Diem" };
+    var tr = null;
+    for (var i = 0; i < rows.length; i++) { if (rows[i] && rows[i].id === "travel") { tr = rows[i]; break; } }
+    // A far job whose Travel Labor row was switched off says so, or the decision line ("come on")
+    // and the working line ("off, $0") contradict each other with nothing in between.
+    if (far && tr && !rowOn(tr)) {
+      hand.push("Travel Labor was switched off by hand, so it adds nothing.");
+    }
+    TRAVEL_LINE_KEYS.forEach(function (k) {
+      var l = trv[k];
+      if (l && l.hand === true) {
+        hand.push(names[k] + " was switched " + (rowOn(l) ? "on" : "off") +
+          " by hand, so the distance does not change it.");
+      }
+    });
+
+    var lines = [];
+    var usesAuto = false;
+    if (tr && rowOn(tr) && (num(tr.days) > 0 || !local)) {
+      var hrs = "";
+      if (!isBlank(tr.days) && num(tr.days) > 0) {
+        // "Round trip at 60 mph" only while there IS a distance it was worked from; after the miles
+        // are cleared the seeded hours stay priced, so say plainly where they came from instead.
+        hrs = (!isBlank(tr.hours_seed) && num(tr.days) === num(tr.hours_seed))
+          ? (miles !== null ? " (round trip at " + DRIVE_MPH + " mph)"
+                            : " (from an earlier distance; type the miles or the hours)")
+          : " (typed)";
+      }
+      if (tr.guys_auto) usesAuto = true;
+      lines.push("Travel Labor: " + qty(tr.guys) + " man-days" + (tr.guys_auto ? "" : " (typed)") +
+        " x " + qty(tr.days) + " drive hours" + hrs + " x " + money2(tr.rate) + " = " +
+        money2(laborCost(tr)) + (num(tr.days) > 0 ? "" : ". Type the drive hours."));
+    } else {
+      lines.push("Travel Labor: off, $0");
+    }
+    TRAVEL_LINE_KEYS.forEach(function (k) {
+      var l = trv[k];
+      if (!l || !rowOn(l)) { lines.push(names[k] + ": off, $0"); return; }
+      var q = travelQty(l, rows);
+      var prod = q * num(l.rate);
+      var cost = travelLineCost(l, rows);
+      if (l.qty_auto !== false) usesAuto = true;
+      lines.push(names[k] + ": " + qty(q) + (k === "lodging" ? " nights" : " days") +
+        (l.qty_auto === false ? " (typed)" : "") + " x " + money2(l.rate) + " = " +
+        (prod === cost ? money2(cost) : money2(prod) + ", rounded up to " + money(cost)));
+    });
+    if (usesAuto) {
+      lines.push("Man-days = guys x days on the labor lines above (" + qty(travelManDays(rows)) +
+        " now).");
+    }
+    return { decision: decision, hand: hand, lines: lines,
+             text: [decision].concat(hand, lines).join("\n") };
   }
 
   /** The square feet the bid is priced per. LF rows (cove, saw-cut, stripe) measure a different
    *  thing and must not be added to an area — C82 divides the total by the AREA. */
+  /** THE INTAKE'S SF BOXES, TURNED INTO TAKEOFF ROWS (Hanz, 2026-10-05: "Add SF, seed the takeoff").
+   *
+   *  Intake asks for System 1 and System 2 Polish SF; the step-2 takeoff is where the price comes
+   *  from, so each positive number becomes one row of it. Typed once, priced once.
+   *
+   *  NEVER OVER A MEASUREMENT. Returns the rows UNCHANGED (same array) when any row already
+   *  carries a number, SF or not -- an LF row with 900 on it is somebody's work too. Otherwise a
+   *  blank SF row (the one freshModel hands out) takes the first value and the rest are appended
+   *  as new blank-assembly SF rows. A system-2-only job seeds one row from system 2: the number
+   *  is the estimator's, and which box it was typed in changes nothing the takeoff prices.
+   *
+   *  Lives here, not in js/polish-estimate.js, because the harness for that file lifts init() by
+   *  name and a new local function it calls is a ReferenceError in every scenario. */
+  function seedTakeoffSf(rows, sf1, sf2) {
+    rows = Array.isArray(rows) ? rows : [];
+    for (var i = 0; i < rows.length; i++) {
+      if (num((rows[i] || {}).measurement) > 0) return rows;
+    }
+    var vals = [num(sf1), num(sf2)].filter(function (v) { return v > 0; });
+    if (!vals.length) return rows;
+    var blank = -1;
+    for (var j = 0; j < rows.length; j++) {
+      var r = rows[j] || {};
+      if ((r.unit === "SF" || !r.unit) && !r.assembly_id) { blank = j; break; }
+    }
+    vals.forEach(function (v, k) {
+      if (k === 0 && blank >= 0) {
+        rows[blank].measurement = v;
+        rows[blank].unit = "SF";
+      } else {
+        rows.push({ assembly_id: "", assembly_name: "", measurement: v, unit: "SF" });
+      }
+    });
+    return rows;
+  }
+
+  /** THE DEFAULTS, LOADED INTO A NEW ESTIMATE'S TAKEOFF (Hanz, 2026-10-05: "each default becomes its
+   *  own Takeoff row, measured with the intake polish SF").
+   *
+   *  `asms` / `items` are the library catalogs. A row seeds when it is a favorite (the Defaults tab
+   *  list) AND applies to Polish (default_work_types, empty = every tab) -- the same two tests the
+   *  Defaults tab draws its Takeoff lists with. Assemblies first, then materials, the order the tab
+   *  shows them. The three reserved materials (`reserved` ids: dye, joint filler kit, remove-
+   *  existing) are NOT seeded here: they are the condition cards, which have their own defaults.
+   *
+   *  HOW IT COMBINES WITH seedTakeoffSf WITHOUT COUNTING THE FLOOR TWICE. takeoffSf adds every SF
+   *  row, so ten defaults each measured with the intake 8,250 SF would read as 82,500 SF of floor,
+   *  and polish_sf, the price per SF and every area-driven condition would follow it. They are all
+   *  the SAME floor, so:
+   *    - ONE row carries the area: the first ENABLED SF-unit default. Counted as always.
+   *    - every other default carries the same number for pricing but is marked `same_floor`, which
+   *      takeoffSf skips. The marker is data on the row, so it survives save and reload.
+   *    - no enabled SF default (all off, all LF, or the library has none): the intake boxes seed
+   *      plain area rows exactly as seedTakeoffSf always did (System 1 / System 2, one row each),
+   *      appended after the defaults, and every default is marked `same_floor`.
+   *  With both intake systems filled, the defaults take the SUM (the whole floor each default
+   *  covers) and the carrier counts it once.
+   *
+   *  A default switched OFF (default_on === false) is kept, grayed (`enabled:false`), measured too
+   *  so flipping it on needs nothing typed; rowOn already gives it $0 and leaves it out of area.
+   *  An LF assembly is never measured with square feet: its measurement stays blank for the
+   *  estimator -- the blocker names it -- rather than a guess. Coverage is NOT copied onto a row:
+   *  a blank coverage already follows the library's current value (covPlaceholder), which is how
+   *  a later library change reaches new bids and an untouched row never freezes a stale number.
+   *
+   *  NEVER OVER WORK: unchanged rows are returned (same array) when any row already carries a
+   *  pick or a measurement. With no defaults it IS seedTakeoffSf. Callers gate "new bid" on the
+   *  saved blob (conditionsUnstated); this function is only the combination rule. */
+  function seedDefaultTakeoff(rows, asms, items, reserved, sf1, sf2) {
+    rows = Array.isArray(rows) ? rows : [];
+    for (var i = 0; i < rows.length; i++) {
+      var q = rows[i] || {};
+      if (num(q.measurement) > 0 || q.assembly_id || q.item_id) return rows;
+    }
+    var applies = function (r) {
+      var l = r && r.default_work_types;
+      return !l || !l.length || l.indexOf("polish") !== -1;
+    };
+    var picks = [];
+    (Array.isArray(asms) ? asms : []).forEach(function (a) {
+      if (a && a.favorite && applies(a)) picks.push({ kind: "asm", row: a });
+    });
+    (Array.isArray(items) ? items : []).forEach(function (it) {
+      if (!it || !it.favorite || !applies(it)) return;
+      if ((reserved || []).indexOf(it.id) !== -1) return;
+      picks.push({ kind: "item", row: it });
+    });
+    if (!picks.length) return seedTakeoffSf(rows, sf1, sf2);
+
+    var total = (num(sf1) > 0 ? num(sf1) : 0) + (num(sf2) > 0 ? num(sf2) : 0);
+    var out = [];
+    var carried = false;
+    picks.forEach(function (p) {
+      var on = p.row.default_on !== false;
+      var unit = "SF";
+      if (p.kind === "asm") {
+        var u = String(p.row.unit == null ? "" : p.row.unit).toUpperCase();
+        if (u === "LF") unit = "LF";
+      }
+      var r;
+      if (p.kind === "asm") {
+        r = { assembly_id: p.row.id, assembly_name: p.row.name, measurement: "", unit: unit };
+      } else {
+        r = { kind: "item", item_id: p.row.id, item_name: p.row.name, coverage: "",
+              measurement: "", unit: "SF" };
+      }
+      if (unit === "SF" && total > 0) {
+        r.measurement = total;
+        if (on && !carried) carried = true;
+        else r.same_floor = true;
+      }
+      if (!on) r.enabled = false;
+      out.push(r);
+    });
+    if (!carried && total > 0) {
+      seedTakeoffSf([], sf1, sf2).forEach(function (r) { out.push(r); });
+    }
+    return out;
+  }
+
+  /** Type `value` into row `i`'s measurement, keeping the same-floor rows honest.
+   *  - A `same_floor` row the estimator types its OWN number into stops sharing: the marker is
+   *    cleared, so takeoffSf counts what it was told rather than ignoring it for good.
+   *  - The carrier (an enabled SF row that is not same_floor) moving drags every same_floor row
+   *    still holding its old number along, so the rows the default load made as one floor keep
+   *    pricing one floor. A same_floor row already set to something else is left alone. */
+  function setMeasurement(rows, i, value) {
+    var r = rows && rows[i];
+    if (!r) return;
+    var old = r.measurement;
+    r.measurement = value;
+    if (r.same_floor) { delete r.same_floor; return; }
+    if (r.unit !== "SF" || !rowOn(r)) return;
+    for (var k = 0; k < rows.length; k++) {
+      var o = rows[k];
+      if (k !== i && o && o.same_floor && num(o.measurement) === num(old)) o.measurement = value;
+    }
+  }
+
   function takeoffSf(rows) {
     rows = rows || [];
     var t = 0;
     for (var i = 0; i < rows.length; i++) {
       var r = rows[i] || {};
-      if (r.unit === "SF") t += num(r.measurement);
+      // An OFF row is out of the area too: the price per SF divides by what the bid actually buys.
+      if (r.unit === "SF" && rowOn(r) && !r.same_floor) t += num(r.measurement);
     }
     return t;
+  }
+
+  /** THE FLOOR THAT HAS BEEN MEASURED, WHETHER OR NOT THE BID IS BUYING IT RIGHT NOW.
+   *
+   *  takeoffSf above is the AREA THE BID PRICES: an OFF row is out of it. That is right for the
+   *  price per SF and for the area-driven conditions, and wrong as the answer to "has anybody typed
+   *  a floor size in here?". Switching OFF the only SF row made takeoffSf 0, so the intake page
+   *  unlocked its SF boxes (and its next save wrote whatever they showed over polish_sf), and the
+   *  estimate saved polish_sf as 0. THE DECISION (F5, 2026-10-06): the intake lock and the
+   *  polish_sf the estimate files key on MEASURED rows, on or off. The slider is a pricing choice;
+   *  it does not un-measure the floor.
+   *
+   *  Counted the way takeoffSf counts (SF rows, a same_floor row not added on top of its carrier),
+   *  minus the on/off test. When the carrier itself is off and only same_floor rows remain they
+   *  all carry the one floor's number, so the largest of them is the answer. */
+  function measuredSf(rows) {
+    rows = rows || [];
+    var t = 0, same = 0;
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i] || {};
+      if (r.unit !== "SF") continue;
+      if (r.same_floor) { if (num(r.measurement) > same) same = num(r.measurement); }
+      else t += num(r.measurement);
+    }
+    return t > 0 ? t : same;
   }
 
   /** HOW MANY COATS OF DYE A JOB BUYS: Kyle's Polish tab has TWO "Dye" lines, rows 25 and 26,
@@ -314,8 +949,14 @@
     var burden = roundUp((labor + escalation) * RATES.BURDEN);           // D47
     var labor_total = labor + escalation + burden;
 
-    // D64. D55 (tooling) and D61 (travel) are in the sheet's range and are 0 in the beta.
-    var sub_total = roundUp(material_total + labor + escalation + burden);
+    // ── travel costs: Lodging + Per Diem (D61). INSIDE the sub-total, so GP's band, super/PTO, soft
+    // costs and the remodel tax's markup base all see them, exactly as Kyle's D64 `SUM(...,D61)`
+    // does. Not labor: no escalation and no burden. 0 when the caller passes none, which is every
+    // caller written before this existed.
+    var travel = roundUp(input.travel);                                  // D61
+
+    // D64. D55 (tooling) is in the sheet's range and is 0 in the beta; D61 is the line above.
+    var sub_total = roundUp(material_total + labor + escalation + burden + travel);
 
     // ── the two taxes' rates, and the fees line, all of which feed the markups below ──
     var sales_tax_pct = cond.taxable ? RATES.SALES_TAX : 0;              // B74
@@ -392,6 +1033,7 @@
     return {
       material: material, shipping: shipping, material_total: material_total,
       labor: labor, escalation: escalation, burden: burden, labor_total: labor_total,
+      travel: travel,
       sub_total: sub_total,
       gp_pct: gp_pct, gp: gp,
       super_pto: super_pto, soft_costs: soft_costs, contingency: contingency,
@@ -406,6 +1048,136 @@
   }
 
   // ── the model the page holds ────────────────────────────────────────────────
+  /** THE COMPANY LABOR RATE. One number, set on Markups -> Global (line_key `labor_rate`), and
+   *  the starting rate of every labor line on a NEW bid: the three crew rows, Travel Labor, every
+   *  library labor row that has no rate of its own, and every line the estimator adds. 33 is
+   *  Kyle's sheet (C37 / C44) and is what stands when nothing is filed or the read failed.
+   *
+   *  A SAVED BID NEVER MOVES. This is a starting point, read once when a bid is first opened and
+   *  never applied to a model that already states a labor row (laborUnstated is the gate). */
+  var SHIPPED_LABOR_RATE = 33.0;
+
+  /** A usable rate, or the shipped one. Anything that is not a positive finite number reads as
+   *  "nothing said", because a $0 company rate would price every new line at nothing. */
+  function laborRateOrShipped(rate) {
+    var n = (rate === null || rate === undefined || rate === "") ? NaN : Number(rate);
+    return (isFinite(n) && n > 0) ? n : SHIPPED_LABOR_RATE;
+  }
+
+  /** The labor rate out of GET /api/markup/rules' `rules`, or null when none is filed (or the one
+   *  filed is switched off or is not a plain dollar figure). Null, not 33: the caller decides what
+   *  "nothing filed" means, and today that is laborRateOrShipped. The formula is the markup page's
+   *  own box, so `33`, `33.50` and `$33` all read; an expression does not -- a labor rate that
+   *  needed arithmetic would be a price nobody can read off the page. */
+  function laborRateFromRules(rules) {
+    if (!(rules instanceof Array)) return null;
+    for (var i = 0; i < rules.length; i++) {
+      var r = rules[i];
+      if (!r || r.layout !== "global" || r.line_key !== "labor_rate") continue;
+      if (r.applies === false) return null;
+      var m = /^\s*\$?\s*(\d+(?:\.\d+)?)\s*$/.exec(String(r.formula === null ||
+        r.formula === undefined ? "" : r.formula));
+      if (!m) return null;
+      var n = Number(m[1]);
+      return (isFinite(n) && n > 0) ? n : null;
+    }
+    return null;
+  }
+
+  /** THE FEES + TEXTURA DEFAULT (Hanz, 2026-10-06). One dollar figure, filed as the Markups -> Global
+   *  line `fees_textura` (the Defaults tab's "Fees + Textura" box is a second door onto the same
+   *  row), and the starting value of D77 on a NEW beta bid. Null when none is filed, switched off,
+   *  or not a plain number; ZERO IS A REAL ANSWER ("nothing", which is what the sheet ships), so
+   *  unlike the labor rate this accepts 0 and the caller treats 0 and null alike. */
+  function feesFromRules(rules) {
+    if (!(rules instanceof Array)) return null;
+    for (var i = 0; i < rules.length; i++) {
+      var r = rules[i];
+      if (!r || r.layout !== "global" || r.line_key !== "fees_textura") continue;
+      if (r.applies === false) return null;
+      var m = /^\s*\$?\s*(\d+(?:\.\d+)?)\s*$/.exec(String(r.formula === null ||
+        r.formula === undefined ? "" : r.formula));
+      if (!m) return null;
+      var n = Number(m[1]);
+      return isFinite(n) ? n : null;
+    }
+    return null;
+  }
+
+  /** A NEW bid's Fees + Textura line, started at the default. NEW BIDS ONLY: the caller's gate is
+   *  laborUnstated, the same one the labor and travel defaults ride, so a saved bid never reaches
+   *  this. A default of nothing (null / 0 / junk) changes NOTHING -- the model keeps RATES.FEES --
+   *  and stamps nothing, because "Default value: $0" under a box the estimator typed a fee into
+   *  would warn about a default nobody set. A real default is written to `fees` AND remembered as
+   *  `fees_default`, which is what the shared amber warning compares against and which, being part
+   *  of the saved model, survives a reload. Returns a NEW model. */
+  function applyFeesDefault(model, fees) {
+    var n = (fees === null || fees === undefined || fees === "") ? NaN : Number(fees);
+    if (!model || !isFinite(n) || n <= 0) return model;
+    var out = {};
+    for (var k in model) if (Object.prototype.hasOwnProperty.call(model, k)) out[k] = model[k];
+    out.fees = n;
+    out.fees_default = n;
+    return out;
+  }
+
+  /** Does this stored library_labor row carry a rate of its OWN? `library_labor.rate` is NOT NULL
+   *  (a blank is stored as 0), so "no rate of its own" can only be spelled 0 -- and for Travel,
+   *  also the $33.00 the table was seeded with, which nobody chose. A row somebody re-rated to
+   *  anything else keeps their number. */
+  function libraryRateIsOwn(row, isTravel) {
+    var n = Number(row && row.rate);
+    if (isBlank(row && row.rate) || !isFinite(n) || n <= 0) return false;
+    if (isTravel && n === SHIPPED_LABOR_RATE) return false;
+    return true;
+  }
+
+  /** The three crew rows and Travel, set to the company rate -- NEW BIDS ONLY (the caller's gate is
+   *  laborUnstated). A NEW array of NEW rows. Travel is only moved while it is still on the shipped
+   *  $33 or blank: a Travel the library gave its own rate is that rate's to keep. Every other row
+   *  (a library default, a typed line) is left alone, because seedLibraryLabor already resolved
+   *  those. */
+  function applyLaborRate(labor, rate) {
+    var dflt = laborRateOrShipped(rate);
+    var out = (labor instanceof Array) ? labor.slice() : [];
+    for (var i = 0; i < out.length; i++) {
+      var r = out[i];
+      if (!r) continue;
+      var id = String(r.id);
+      var crew = (id === "polishing" || id === "mockup" || id === "jointfill");
+      var travelOnShipped = (id === "travel") &&
+        (isBlank(r.rate) || !isFinite(Number(r.rate)) || Number(r.rate) === SHIPPED_LABOR_RATE);
+      if (crew || travelOnShipped) {
+        var copy = copyInto({}, r);
+        copy.rate = dflt;
+        out[i] = copy;
+      }
+    }
+    return out;
+  }
+
+  /** A ROW'S DEFAULT RATE IS THE RATE IT WAS FILLED WITH (Hanz's library precedence): the library
+   *  row's own rate when it has one, else the company labor rate -- whichever seeding actually
+   *  wrote. Stamped as `rate_default` on every row of a NEW bid once all the seeding has run, so
+   *  the "Default value" warning compares a rate to what the row started from, not to the company
+   *  rate (a library Travel of $41 on a $50 company rate used to warn with nothing typed).
+   *
+   *  A row the Labor Calculator filled already carries calc_default.rate and is left alone. A row
+   *  that already has a rate_default keeps it. Saved bids never reach this (the caller's gate is
+   *  laborUnstated), so they have no stamp and fall back to the company rate as before. A NEW
+   *  array of NEW rows. */
+  function stampRateDefaults(labor) {
+    var out = (labor instanceof Array) ? labor.slice() : [];
+    for (var i = 0; i < out.length; i++) {
+      var r = out[i];
+      if (!r || r.calc_default || r.rate_default !== undefined) continue;
+      var copy = copyInto({}, r);
+      copy.rate_default = num(r.rate);
+      out[i] = copy;
+    }
+    return out;
+  }
+
   /** The Travel row as the sheet has it, built fresh each call so no two models share an object.
    *
    *  ONE DEFINITION, THREE CALLERS: `freshModel` seeds it into a new sandbox, `migrateModel`
@@ -432,17 +1204,34 @@
    *  A BLANK RATE FALLS BACK RATHER THAN READING AS FREE, and `isFinite` is what catches the
    *  string PostgREST hands numeric back as when it is something other than a number. 0 is NOT
    *  blank: a rate somebody deliberately set to zero is an answer, and `isBlank` agrees. */
-  function travelSeed(row) {
+  var TRAVEL_LABEL = "Travel Labor";
+  /** The label a Travel row carries: blank or exactly the old "Travel" is "Travel Labor"; a name an
+   *  admin chose is kept. Also used to relabel a saved draft's row (migrateModel). */
+  function travelLabel(name) {
+    if (isBlank(name) || String(name) === "Travel") return TRAVEL_LABEL;
+    return String(name);
+  }
+
+  function travelSeed(row, dflt) {
     var r = row || {};
     var rate = Number(r.rate);
     return { id: "travel",
-             label: isBlank(r.name) ? "Travel" : String(r.name),
+             // "Travel Labor" (Hanz, 2026-10-05): Lodging and Per Diem now stand beside it as their
+             // own lines, so "Travel" alone no longer says which of the three this is. A stored
+             // name that is exactly the old "Travel" (the table was seeded with it) reads the same.
+             label: travelLabel(r.name),
              guys: "", days: "",
-             rate: (isBlank(r.rate) || !isFinite(rate)) ? 33.0 : rate,
+             // `dflt` is the company labor rate (Markups -> Global). Omitted, it is the shipped
+             // $33.00, which is what the library page's Reset and its "is this still the shipped
+             // row" comparison rely on -- they call travelSeed() with no second argument.
+             rate: (isBlank(r.rate) || !isFinite(rate)) ? laborRateOrShipped(dflt) : rate,
              unit: isBlank(r.unit) ? "hours" : String(r.unit),
              guys_auto: Object.prototype.hasOwnProperty.call(r, "guys_auto")
                ? !!r.guys_auto : true };
   }
+
+  /** A NEW bid's Travel row, opted in to distance-filled hours (seedTravelHours). */
+  function withHoursSeed(row) { row.hours_seed = ""; return row; }
 
   /** One row of `public.library_labor`, read as one of THIS model's labor rows.
    *
@@ -461,10 +1250,18 @@
    *  be a number nobody chose sitting inside a customer's price. `rate` is Number(), not num():
    *  the endpoint refuses a non-numeric rate with a 400, so there is nothing here for a coercion
    *  to rescue, and laborCost already reads a NaN as 0 rather than poisoning the bid. */
-  function libraryLaborRow(row) {
+  function libraryLaborRow(row, dflt) {
     var r = row || {};
-    return { id: r.id, label: r.name, guys: "", days: "", rate: Number(r.rate),
-             unit: r.unit, guys_auto: !!r.guys_auto };
+    // A row with no rate of its own follows the company labor rate -- when the caller has one.
+    // `dflt` omitted is the old behaviour exactly (the stored number, 0 included).
+    var rate = (dflt !== undefined && dflt !== null && !libraryRateIsOwn(r, false))
+      ? laborRateOrShipped(dflt) : Number(r.rate);
+    var out = { id: r.id, label: r.name, guys: "", days: "", rate: rate,
+                unit: r.unit, guys_auto: !!r.guys_auto };
+    // THE DEFAULTS-TAB SLIDER: a default saved as OFF starts the bid's row switched off (grayed,
+    // $0). Written only when explicitly false, so every other row keeps exactly the shape it had.
+    if (r.default_on === false) out.enabled = false;
+    return out;
   }
 
   /** `labor` with the library's default lines standing beside it. A NEW array; the one handed in
@@ -508,13 +1305,20 @@
    *  of its own the way `default_work_types` does for an empty list meaning "every tab": there is
    *  no old data to stay compatible with, because no row anywhere carried `favorite` before today.
    *
-   *  TRAVEL IS UNCHANGED BY THIS. The branch above it applies unconditionally, whatever its stored
-   *  `favorite` reads -- Travel is not opted into a bid the way a chosen default is, it is built
-   *  into every estimate the way it always has been, and the migration backfills it to true
-   *  regardless, so the two should never actually disagree. */
-  function seedLibraryLabor(labor, rows) {
+   *  TRAVEL FOLLOWS THE SAME TWO FLAGS (Hanz, 2026-10-06), through travelAppliesToBid below: a
+   *  stored Travel row that is not a default (`favorite` false) or is scoped to other work types
+   *  (`default_work_types`) leaves Travel OFF a new bid -- the row freshModel put there is taken
+   *  out again -- and every other case is today's behaviour. No stored row, or a row whose
+   *  `favorite` is absent/null with no work types, is Travel on every new bid, as it always was.
+   *  The Defaults tab's Edit / Remove and the Labor tab's work-type chips on Travel write exactly
+   *  these two fields, so each of those controls changes what a new bid opens holding.
+   *
+   *  `workType` is the kind of bid being opened ("polish" -- the only estimate that seeds labor
+   *  today); the work-type scope applies to every row, Travel and the custom lines alike. */
+  function seedLibraryLabor(labor, rows, dflt, workType) {
     var out = (labor instanceof Array) ? labor.slice() : [];
     if (!(rows instanceof Array)) return out;
+    var wt = workType || "polish";
     var seen = {};
     var i;
     for (i = 0; i < out.length; i++) {
@@ -525,7 +1329,18 @@
       if (!r || r.id === null || r.id === undefined) continue;
       var rid = String(r.id);
       if (rid === "travel") {
+        if (!travelAppliesToBid(r, wt)) {
+          // Not a default, or not for this work type: the bid does not get Travel. The row
+          // freshModel put on the model is taken out (a copy; the input array is never touched).
+          out = out.filter(function (x) { return !(x && String(x.id) === "travel"); });
+          seen[rid] = true;
+          continue;
+        }
         var travel = travelSeed(r);
+        if (dflt !== undefined && dflt !== null && !libraryRateIsOwn(r, true)) {
+          travel.rate = laborRateOrShipped(dflt);
+        }
+        if (r.default_on === false) travel.enabled = false;
         var at = -1;
         for (var t = 0; t < out.length; t++) {
           if (out[t] && String(out[t].id) === "travel") { at = t; break; }
@@ -535,17 +1350,48 @@
         } else {
           travel.guys = out[at].guys;
           travel.days = out[at].days;
+          if (Object.prototype.hasOwnProperty.call(out[at], "hours_seed")) travel.hours_seed = out[at].hours_seed;
           out[at] = travel;
         }
         seen[rid] = true;
         continue;
       }
       if (!r.favorite) continue;
+      if (!workTypeApplies(r, wt)) continue;
       if (seen[rid]) continue;
       seen[rid] = true;
-      out.push(libraryLaborRow(r));
+      out.push(libraryLaborRow(r, dflt));
     }
     return out;
+  }
+
+  /** Does a default scoped to `list` apply to this kind of bid? EMPTY / ABSENT MEANS EVERY WORK
+   *  TYPE -- the same reading the library page's appliesToWorkType and seedDefaultTakeoff use. */
+  function workTypeApplies(row, workType) {
+    var l = row && row.default_work_types;
+    return !(l instanceof Array) || !l.length || l.indexOf(workType || "polish") !== -1;
+  }
+
+  /** Does the stored Travel row (library_labor id `travel`) put Travel on a NEW bid of this work
+   *  type? NO ROW IS YES, and so is a row whose `favorite` is absent/null with no work types:
+   *  Travel has been on every new bid since it shipped and nothing stored may change that by
+   *  being silent. Only an explicit `favorite: false` (the Defaults tab's Remove) or a work-type
+   *  list that leaves this one out turns it off. */
+  function travelAppliesToBid(row, workType) {
+    if (!row) return true;
+    if (row.favorite === false) return false;
+    return workTypeApplies(row, workType);
+  }
+
+  /** Did seeding leave Travel off this new bid? True exactly when the library's Travel row says
+   *  not to put it on. The caller records the answer on the model (`no_travel_labor`) so a reload
+   *  does not mistake the missing row for a stale draft and append it back (migrateModel). */
+  function travelDeclined(rows, workType) {
+    if (!(rows instanceof Array)) return false;
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i] && String(rows[i].id) === "travel") return !travelAppliesToBid(rows[i], workType);
+    }
+    return false;
   }
 
   /** Does this SAVED blob state no labor rows of its own?
@@ -873,10 +1719,10 @@
       version: 2,
       takeoff: [{ assembly_id: "", assembly_name: "", measurement: "", unit: "SF" }],
       labor: [
-        { id: "polishing", label: "Polishing", guys: 3, days: "", rate: 33.0 },
-        { id: "mockup", label: "Mock-up", guys: 3, days: 0.5, rate: 33.0 },
-        { id: "jointfill", label: "Joint filler", guys: 3, days: "", rate: 33.0 },
-        travelSeed()
+        { id: "polishing", label: "Polishing", guys: 3, days: "", rate: SHIPPED_LABOR_RATE },
+        { id: "mockup", label: "Mock-up", guys: 3, days: 0.5, rate: SHIPPED_LABOR_RATE },
+        { id: "jointfill", label: "Joint filler", guys: 3, days: "", rate: SHIPPED_LABOR_RATE },
+        withHoursSeed(travelSeed())
       ],
       // ALL THREE TAKEOFF CONDITIONS SHIP OFF, and joint_filler is the one that moved.
       //
@@ -904,6 +1750,8 @@
       // stays the one place that says what the workbook ships -- the parity test pins B77×C77 as
       // blank, and a literal here would let the two drift apart silently.
       fees: RATES.FEES,
+      // Lodging and Per Diem, both OFF (see travelCostsSeed).
+      travel: travelCostsSeed(),
       totals: {}
     };
   }
@@ -912,16 +1760,42 @@
    *  as money would multiply a saved estimate by eight. */
   var V1_LABOUR_KEY = { polishing: "polishing", mockup: "mockup", jointfill: "joint_filler" };
 
-  function isBlank(v) {
-    return v === null || v === undefined || (typeof v === "string" && v.replace(/\s/g, "") === "");
-  }
-
   /** True when a field holds a usable number. 0 counts: a labor row at 0 days is a row the
    *  estimator has deliberately switched off, not a half-filled one. */
   function filledIn(v) {
     if (isBlank(v) || typeof v === "boolean") return false;
     if (typeof v === "number") return isFinite(v);
     return /^-?\d*\.?\d+$/.test(String(v).replace(/[$,\s]/g, ""));
+  }
+
+  /** THE TOP-LEVEL KEYS migrateModel's v2 branch READS AND NORMALISES ITSELF, and so the only keys it
+   *  may ever rewrite or drop. Every OTHER own key of a saved v2 model belongs to somebody else and
+   *  is carried through exactly as it was saved (carryUnknownKeys below).
+   *
+   *  Until Phase 4 of the v2 estimating program this branch rebuilt the model from a fixed list of
+   *  keys, so any key it did not name was erased by the NEXT SAVE: a field a later phase writes (the
+   *  other sheets' `tabs`, a rates snapshot, a profile stamp) would have come back as nothing the
+   *  first time an estimator touched an unrelated switch. Pinned by test_v2_model_safety.py two
+   *  ways: round-trip laws over every saved-bid fixture, and this list against what a model that
+   *  states all of these comes back with. A key added to the OUTPUT without being added HERE would
+   *  be carried raw over its own normalisation, which is the one mistake this list exists to stop. */
+  var MODEL_KEYS = Object.freeze(["version", "takeoff", "labor", "conditions", "contingency", "fees",
+    "totals", "no_travel_labor", "conditions_shown", "cond_cov", "travel", "distance", "fees_default"]);
+
+  /** `out` with every own key of `saved` that is not in MODEL_KEYS copied on, unchanged.
+   *
+   *  copyInto, not a hand-written `out[key] = ...`: a saved key is user data (a draft is whatever
+   *  was in localStorage or the drafts table), and copyInto is this file's one idiom that refuses
+   *  `__proto__`, `constructor` and `prototype`. Values are carried BY REFERENCE and never looked
+   *  into, `tabs` included: this function does not know what is inside them and must not pretend
+   *  to. Nothing already on `out` is overwritten, so a known key keeps exactly the normalisation
+   *  the branch above gave it, and a known key that normalisation DROPPED (a distance that is not a
+   *  distance) stays dropped. */
+  function carryUnknownKeys(out, saved) {
+    var rest = Object.entries(saved).filter(function (e) {
+      return MODEL_KEYS.indexOf(e[0]) < 0 && !Object.prototype.hasOwnProperty.call(out, e[0]);
+    });
+    return copyInto(out, Object.fromEntries(rest));
   }
 
   /** Bring any saved model up to v2. Never throws: a draft is whatever was in localStorage or
@@ -975,7 +1849,11 @@
         for (var li = 0; li < model.labor.length; li++) {
           if (model.labor[li] && model.labor[li].id === "travel") { hasTravel = true; break; }
         }
-        if (!hasTravel) {
+        if (model.no_travel_labor === true) {
+          // A NEW bid the library said not to give Travel (seedLibraryLabor): its absence is the
+          // answer, not a stale draft. Carried through so the next load does not append it back.
+          out.no_travel_labor = true;
+        } else if (!hasTravel) {
           out.labor = model.labor.concat([travelSeed()]);
         } else {
           // A TRAVEL ROW CAN ALSO BE OUT OF DATE, which is the second half of the same problem and
@@ -993,14 +1871,18 @@
           // keystroke anywhere in the panel.
           out.labor = model.labor.map(function (r) {
             if (!r || r.id !== "travel") return r;
+            // RELABEL, "Travel" -> "Travel Labor" (2026-10-05). Only a label that is EXACTLY the
+            // old word: a name somebody typed over it is theirs. A copy, never an edit in place.
+            if (r.label === "Travel") {
+              var relabeled = copyInto({}, r);
+              relabeled.label = TRAVEL_LABEL;
+              r = relabeled;
+            }
             var current = r.unit === "hours" &&
                           Object.prototype.hasOwnProperty.call(r, "guys_auto") &&
                           !isBlank(r.rate);
             if (current) return r;
-            var next = {};
-            for (var kk in r) {
-              if (Object.prototype.hasOwnProperty.call(r, kk)) next[kk] = r[kk];
-            }
+            var next = copyInto({}, r);
             next.unit = "hours";
             if (!Object.prototype.hasOwnProperty.call(next, "guys_auto")) {
               next.guys_auto = isBlank(next.guys);
@@ -1026,11 +1908,39 @@
         }
         out.conditions_shown = shown;
       }
+      // THIS BID'S OWN COVERAGE for the two priced condition lines (Joint Filler, Dye), typed on
+      // the Takeoff step's cards. Carried only for those two keys and only when stated: a draft
+      // saved before the boxes existed has no `cond_cov` and keeps pricing with the library row,
+      // which is what absent means. (A takeoff row's own `coverage` / `line_cov` ride inside
+      // `takeoff`, which passes through whole.)
+      if (model.cond_cov && typeof model.cond_cov === "object") {
+        var cc = {};
+        ["joint_filler", "dye"].forEach(function (ck) {
+          var v = model.cond_cov[ck];
+          if (v !== undefined && v !== null && v !== "") cc[ck] = v;
+        });
+        if (Object.keys(cc).length) out.cond_cov = cc;
+      }
+      // LODGING AND PER DIEM. A draft saved before they existed has no `travel`, and reads as the
+      // seed: both lines OFF at the shipped rates, so an old bid opened after this shipped prices
+      // exactly what it did and is not repriced behind anybody's back.
+      out.travel = normalizeTravel(model.travel);
+      // THE JOB'S DISTANCE, when one is stated. Absent on every draft saved before it existed, and
+      // absent reads as "unknown" -- the page then asks the server once.
+      var dist = normalizeDistance(model.distance);
+      if (dist) out.distance = dist;
       if (isBlank(out.contingency)) out.contingency = 0;
       // Every v2 draft saved before the Fees line became typeable has no `fees` at all, and a
       // missing one must read as the zero the sheet ships.
       if (isBlank(out.fees)) out.fees = fresh.fees;
-      return out;
+      // The default this bid was STARTED from, kept so the warning survives a reload. Absent on
+      // every bid saved before it existed and on every bid whose default was nothing.
+      if (!isBlank(model.fees_default) && isFinite(Number(model.fees_default)) &&
+          Number(model.fees_default) > 0) out.fees_default = Number(model.fees_default);
+      // EVERYTHING ELSE THE SAVED MODEL HOLDS comes back as it went in (see MODEL_KEYS). The v1
+      // branch below does NOT do this, on purpose: it is a one-way upgrade that consumes `areas` and
+      // `labour` and drops six legacy keys so the same material is never priced twice.
+      return carryUnknownKeys(out, model);
     }
 
     // v1: named areas, each with an SF figure, and no assemblies at all — materials were typed
@@ -1076,7 +1986,7 @@
       // system / tooling / materials / added / adds / options are dropped on purpose: assemblies
       // replace all six, and carrying half of them forward would price the same material twice.
       return { version: 2, takeoff: takeoff, labor: labor, conditions: cond,
-               contingency: 0, fees: fresh.fees, totals: {} };
+               contingency: 0, fees: fresh.fees, totals: {}, travel: fresh.travel };
     }
 
     /* An unversioned blob that is not v1 either, but which STATES something we recognise.
@@ -1101,6 +2011,116 @@
     return fresh;
   }
 
+  function isObject(v) { return !!v && typeof v === "object" && !(v instanceof Array); }
+
+  /** The saved model with ONE writer's fields laid over it, and everything else left as it was.
+   *
+   *  THE INTAKE PAGE'S SAVE. It used to migrate what was saved and then overlay its own answers by
+   *  hand, in the page. It is a function of the model now so that "what the intake may state" is
+   *  decided in ONE place, next to the model, and can be tested without a page: a second writer that
+   *  states a little more (Phase 9's intake, a section-aware model) widens this function and nothing
+   *  else.
+   *
+   *  `existing` is whatever the draft holds under `polish_estimate`: nothing, a v1 model, a partial
+   *  blob, a v2 model. It is read through migrateModel, so what comes back is ALWAYS a well-formed v2
+   *  with its version stamped. That matters because the intake MINTS the first model on a brand-new
+   *  project, and backend/drafts.py reads `polish_estimate.version` to decide that a project resumes
+   *  on the beta intake and not on the spreadsheet one. Every key the model holds that this function
+   *  does not name (`tabs`, a rates snapshot, a profile stamp, anything a later phase adds) comes
+   *  back exactly as saved, because migrateModel carries it and nothing here touches it.
+   *
+   *  `patch` states ONLY what the intake owns, and only these two are read from it:
+   *
+   *    conditions        merged key by key over the saved answers, never replacing the object: an
+   *                      answer the patch does not mention stays as it was saved
+   *    conditions_shown  which condition cards this bid shows, replaced when the patch states one
+   *
+   *  Anything else in `patch` is ignored. The takeoff, the labor rows and `tabs` belong to the
+   *  estimate page, and a patch that could overwrite them is how recording one toggle deletes a
+   *  finished takeoff.
+   *
+   *  A PATCH NEVER STATES LABOR ON A BID THAT NEVER STATED IT. migrateModel fills a missing `labor`
+   *  in from freshModel(), and the intake used to persist those four rows: that made the library's
+   *  default labor lines unreachable, because laborUnstated(saved) is the gate the estimate page
+   *  seeds them behind and a model minted here had already stated labor. So `labor` is taken back off
+   *  when `existing` stated none. It is asked of `existing` itself and not of the migrated copy,
+   *  for the reason laborUnstated gives.
+   *
+   *  Pure: neither argument is changed. */
+  function patchModel(existing, patch) {
+    var model = migrateModel(existing);
+    var p = isObject(patch) ? patch : {};
+    if (isObject(p.conditions)) model.conditions = Object.assign({}, model.conditions, p.conditions);
+    if (isObject(p.conditions_shown)) model.conditions_shown = copyInto({}, p.conditions_shown);
+    if (laborUnstated(existing)) delete model.labor;
+    return model;
+  }
+
+  /** EVERY DRAFT KEY THE ESTIMATE PAGE SAVES, as one patch, for the page to lay over the draft:
+   *  `TW.setState(Object.assign({}, draft, buildSavePatch(model, draft, ctx)))`.
+   *
+   *  ONE COMPOSITION, USED BY BOTH SAVES. The 600 ms autosave and the `pagehide` flush used to build
+   *  this blob in two places, and the two had drifted: a tab closed inside the debounce window did
+   *  not refresh the condition cells, and when the only SF row was switched off it saved a polish SF
+   *  of 0 where the autosave kept the measured floor. A key can only be added or fixed here now.
+   *
+   *  `model` is the page's own (already migrated) model. `state` is the draft as it stands, and only
+   *  its `cell_values` is read, as the base the condition cells are MERGED over. `ctx` carries what
+   *  only the page can compute: `bid`, the markupChain result for `model` (required, and this throws
+   *  without it, because a save with no price is a save of zero), and `library`, what the page priced
+   *  Dye and Joint Filler with (see conditionCellWrites; left out, it writes nothing for those two).
+   *
+   *  What it returns, and why each key is there:
+   *
+   *    polish_estimate  the model, with `totals` stamped from `ctx.bid`: a snapshot for reading later,
+   *                     which the page never prices FROM. Every other key rides along as the model
+   *                     holds it, the ones migrateModel does not know included.
+   *    cell_values      THE CONDITION CELLS, merged over the draft's own. This page does not write
+   *                     the takeoff or the pricing cells, because it no longer prices through the
+   *                     workbook; it has to write the conditions, because they are not a rendering of
+   *                     the bid, they are the contract it shares with the intake page, which reads
+   *                     them back on load and lets the CELL win over the model. That rule is safe only
+   *                     while every writer writes both places. The Dye and Joint Filler rate and
+   *                     quantity cells ride the same write, so the downloaded workbook prices those
+   *                     two lines off the same library rows the bid does.
+   *    polish_sf        the area the bid PRICES (an OFF row is out of it). When nothing is on, the
+   *                     MEASURED floor, not 0: a 0 here unlocked intake's SF boxes and sent the
+   *                     proposal an empty SF token because somebody flipped the only row's slider.
+   *    polish_2_sf      blank. polish_sf IS the takeoff total, so intake's System 2 box has nothing
+   *                     left to say. Left stale it reseeded a deleted row.
+   *    computed_bid     REPLACED, not merged: on a sandbox copy the source project's figures arrived
+   *                     with the blob, and merging would leave a real project's total sitting under a
+   *                     beta price. `full_bid` is what the rest of the app reads (_bid_total in
+   *                     backend/drafts.py for the projects card; proposal-review for the lump sum and
+   *                     the two tax lines it itemizes).
+   *
+   *  Pure: nothing it is handed is changed. The model is COPIED to take the `totals` stamp. */
+  function buildSavePatch(model, state, ctx) {
+    var b = ctx && ctx.bid;
+    if (!isObject(model)) throw new Error("buildSavePatch needs the model it is saving");
+    if (!isObject(b)) {
+      throw new Error("buildSavePatch needs ctx.bid, the markupChain result for this model: a save " +
+                      "with no price is a save of zero");
+    }
+    var cells = isObject(state) ? state.cell_values : undefined;
+    return {
+      polish_estimate: Object.assign(copyInto({}, model), { totals: b }),
+      cell_values: conditionCellWrites(model.conditions, cells, ctx.library),
+      polish_sf: b.sf > 0 ? b.sf : measuredSf(model.takeoff),
+      polish_2_sf: "",
+      computed_bid: {
+        lump_sum: b.total,
+        price_per_sf: b.per_sf,
+        polish_sf: b.sf,
+        full_bid: {
+          total_base_bid: b.total,
+          sales_tax: b.sales_tax,
+          remodel_tax: b.remodel_tax
+        }
+      }
+    };
+  }
+
   /** What is stopping this model being priced, in plain words. [] when nothing is.
    *
    *  Written for estimators, not for the console: every line names the row it is about, so the
@@ -1112,6 +2132,7 @@
     var used = 0;
     for (var i = 0; i < m.takeoff.length; i++) {
       var r = m.takeoff[i] || {};
+      if (!rowOn(r)) continue;                         // switched off: not part of this bid
       var measured = num(r.measurement);
       // EITHER ID IS A PICK. A takeoff row has been able to be one material rather than an
       // assembly since 2026-09-19, and reading assembly_id alone told a bid made of materials it
@@ -1133,6 +2154,7 @@
     // already filled sends the estimator hunting through fields that are fine.
     for (var j = 0; j < m.labor.length; j++) {
       var row = m.labor[j] || {};
+      if (!rowOn(row)) continue;                       // switched off: not part of this bid
 
       // AN HOURS ROW WITH NO HOURS IS UNUSED, NOT UNFINISHED, and skipping it here is what keeps
       // the Review step reachable. The rule below reads a row as half-filled when 1 or 2 of the
@@ -1147,6 +2169,11 @@
       // estimator never chose, so neither says anything about intent. A travel row WITH hours is
       // checked like any other — miss the rate on it and it still complains.
       if (row.unit === "hours" && !filledIn(row.days)) continue;
+
+      // A line nobody has named or sized is an untouched blank, not a half-filled one. New lines
+      // arrive with the company rate already in the rate box, so "one box filled" no longer means
+      // the estimator started it.
+      if (isBlank(row.label) && !filledIn(row.guys) && !filledIn(row.days)) continue;
 
       var missing = [];
       if (!filledIn(row.guys)) missing.push("guys");
@@ -1163,7 +2190,7 @@
   }
 
   return {
-    num: num, roundUp: roundUp,
+    num: num, roundUp: roundUp, copyInto: copyInto,
     money: money, money2: money2, pct: pct, fmtSf: fmtSf,
     HOURS_PER_DAY: HOURS_PER_DAY, RATES: RATES, GP_BANDS: GP_BANDS, DYE_COATS: DYE_COATS,
     gpPct: gpPct,
@@ -1176,13 +2203,30 @@
     // thing standing between a Defaults-tab edit and somebody's saved work.
     seedConditionDefaults: seedConditionDefaults,
     conditionsUnstated: conditionsUnstated,
+    setMeasurement: setMeasurement,
     seedConditionsShown: seedConditionsShown, conditionShown: conditionShown,
-    laborCost: laborCost, laborTotal: laborTotal, travelManDays: travelManDays,
+    laborCost: laborCost, laborTotal: laborTotal, removeExistingHand: removeExistingHand,travelManDays: travelManDays,
+    // Lodging and Per Diem, the two travel costs beside Travel Labor (see travelCostsSeed).
+    SHIPPED_LODGING_RATE: SHIPPED_LODGING_RATE, SHIPPED_PER_DIEM_RATE: SHIPPED_PER_DIEM_RATE,
+    TRAVEL_LINE_KEYS: TRAVEL_LINE_KEYS, TRAVEL_LABEL: TRAVEL_LABEL, travelLabel: travelLabel,
+    travelCostsSeed: travelCostsSeed, travelQty: travelQty, travelLineCost: travelLineCost,
+    travelCosts: travelCosts, travelRatesFromRules: travelRatesFromRules,
+    applyTravelRates: applyTravelRates, normalizeTravel: normalizeTravel,
+    // Distance decides "local" (see LOCAL_MILES).
+    LOCAL_MILES: LOCAL_MILES, milesOrNull: milesOrNull, distanceKey: distanceKey,
+    normalizeDistance: normalizeDistance, driveHoursFor: driveHoursFor, isFarMiles: isFarMiles, applyDistance: applyDistance,
+    clearDistance: clearDistance, distanceNote: distanceNote, travelHow: travelHow,
+    rowOn: rowOn, sliderHtml: sliderHtml, manDaysHint: manDaysHint,
     filledIn: filledIn,
-    takeoffSf: takeoffSf,
+    takeoffSf: takeoffSf, measuredSf: measuredSf,
+    seedTakeoffSf: seedTakeoffSf,
+    seedDefaultTakeoff: seedDefaultTakeoff,
     dyeCost: dyeCost, jointFillerCost: jointFillerCost,
     markupChain: markupChain,
     freshModel: freshModel, migrateModel: migrateModel, blockers: blockers,
+    // The model's safety (Phase 4): the keys migrateModel owns, what the intake may state on a saved
+    // model, and the ONE composition of everything the estimate page saves.
+    MODEL_KEYS: MODEL_KEYS, patchModel: patchModel, buildSavePatch: buildSavePatch,
     // EXPORTED 2026-09-16 for a THIRD reader: the library page's Defaults tab lists Travel as the
     // labor default that already exists. It is exported rather than re-typed there for the reason
     // written above travelSeed itself -- the two copies that existed before drifted within a day,
@@ -1198,6 +2242,15 @@
     // joining it: that branch was cut from main, which did not have the 2026-09-16 export yet.
     // Both belong -- Travel is built in, the library rows are additions beside it.
     libraryLaborRow: libraryLaborRow, seedLibraryLabor: seedLibraryLabor,
-    laborUnstated: laborUnstated
+    travelAppliesToBid: travelAppliesToBid, travelDeclined: travelDeclined,
+    LABOR_CALC_BUILTINS: LABOR_CALC_BUILTINS, dayHours: dayHours, laborCalcValues: laborCalcValues, applyLaborCalc: applyLaborCalc,
+    laborCalcDiffers: laborCalcDiffers,
+    laborUnstated: laborUnstated,
+    // The company labor rate (Markups -> Global): read, applied to a new bid, and the fallback.
+    SHIPPED_LABOR_RATE: SHIPPED_LABOR_RATE, laborRateOrShipped: laborRateOrShipped,
+    laborRateFromRules: laborRateFromRules, applyLaborRate: applyLaborRate,
+    stampRateDefaults: stampRateDefaults, followLaborDays: followLaborDays,
+    // The Fees + Textura default (Markups -> Global `fees_textura`), read and applied to a new bid.
+    feesFromRules: feesFromRules, applyFeesDefault: applyFeesDefault
   };
 });

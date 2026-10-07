@@ -1,12 +1,15 @@
 // Externalized from polish-estimates.html (CSP: script-src has no 'unsafe-inline').
 // Do not add inline scripts or onclick= handlers — both fail silently in production.
 //
-// THE POLISH ESTIMATE DATABASE. Hanz, 2026-09-10: "the polish estimate database ... the beta
+// THE v2 ESTIMATES PAGE. It was the "Polish Estimate Database" until 2026-10-07, when the tool it
+// lists became "Estimating Tool v2"; the file, the address and the sidebar href did not change.
+// Hanz, 2026-09-10: "the polish estimate database ... the beta
 // polish estimates that does not add up to the analytics, just something to test and save the
 // polish projects."
 //
 // THIS IS THE SECOND DOOR ONTO ONE FILTER, ON PURPOSE. The Proposals Database already carries a
-// "Beta Polish" tab (js/projects.js:131, ten tests in test_projects_beta_tab.py) and it STAYS.
+// "v2 Estimates" tab (it was "Beta Polish"; js/projects.js:131, ten tests in
+// test_projects_beta_tab.py) and it STAYS.
 // What that tab could not fix is where somebody goes looking: it lives inside a page filed under
 // Active, behind a chip that opens on "active" out of sessionStorage. This page is a sidebar row
 // under BETA, beside the calculator itself.
@@ -153,7 +156,8 @@
     { label: "Project", sort: "name" },
     { label: "Flag", sort: null },
     { label: "Type", sort: null },
-    // "BETA TOTAL", AND IT MUST NOT BE TIDIED BACK TO "TOTAL".
+    // "v2 TOTAL" (it was "Beta total" until 2026-10-07), AND IT MUST NOT BE TIDIED BACK TO "TOTAL".
+    // The word in front is what says whose figure it is, so a rename keeps a word there.
     //
     // backend/drafts.py:_bid_total INVERTS its resolution order for a beta project:
     //
@@ -167,14 +171,14 @@
     // beta, the lump sum is the stale number and the engine object is the live one, so preferring
     // the lump sum here would quote a price nobody uses any more.
     //
-    // The consequence for this page: the figure in this column is the BETA CALCULATOR'S, and on a
+    // The consequence for this page: the figure in this column is ESTIMATING TOOL v2'S, and on a
     // re-priced job it disagrees with the sheet. _bid_total's own docstring records real spreads —
     // $30,960 against $45,629, and $11,573 against $7,861. A column headed plain "Total" on a
     // page called a database is a number somebody reads as the bid. This header is what says
     // whose figure it is; the sentence under the page heading says it again in words, and the
     // cell carries it a third time as a title. Renaming this to "Total" reintroduces the
     // misreading all three exist to prevent.
-    { label: "Beta total", sort: "total", num: true },
+    { label: "v2 total", sort: "total", num: true },
     { label: "Files", sort: null },
     { label: "Estimator", sort: null },
     { label: "Due", sort: "deadline" },
@@ -197,11 +201,11 @@
       return `<tr class="trow" data-id="${encodeURIComponent(p.id)}" tabindex="0">
         <td class="t-name">${esc(p.project_name || "(untitled)")}</td>
         <td>${isTest(p)
-          ? `<span class="badge badge-test" title="Filed as a test project — the beta files every copy it makes this way">Test</span>`
+          ? `<span class="badge badge-test" title="Filed as a test project. Estimating Tool v2 files every copy it makes this way">Test</span>`
           : ""}</td>
         <td>${p.work_type ? esc(p.work_type) : ""}</td>
         <td class="num${p.total != null ? " total" : " soft"}"${p.total != null
-          ? ` title="Priced in the Polish Estimate beta — not the estimate sheet's lump sum"` : ""
+          ? ` title="Priced in Estimating Tool v2. Not the estimate sheet's lump sum"` : ""
         }>${p.total != null ? money(p.total) : "&mdash;"}</td>
         <td>${p.has_files
           ? `<span class="badge" title="Generate has run for this project at least once">Generated</span>`
@@ -228,32 +232,32 @@
     if (SEARCH.trim() || MONTH) {
       return `<div class="card empty">
         <p class="empty-h">Nothing matches that.</p>
-        <p class="empty-p">${ALL.length} beta ${ALL.length === 1 ? "estimate is" : "estimates are"}`
-        + ` saved &mdash; none of them match the search or month you have set.</p>
+        <p class="empty-p">${ALL.length} v2 ${ALL.length === 1 ? "estimate is" : "estimates are"}`
+        + ` saved, but none of them match the search or month you have set.</p>
       </div>`;
     }
     return `<div class="card empty">
       <svg class="empty-mark" width="28" height="28" viewBox="0 0 24 24" fill="none"
            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
            aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 3a9 9 0 0 1 0 18z"></path></svg>
-      <p class="empty-h">No beta polish estimates yet.</p>
-      <p class="empty-p">An estimate lands here the moment it is priced in the <b>Polish Estimate</b>
-        beta &mdash; either from the beta's own intake, or by pressing <b>Try the polish beta</b> on a
-        polish job's Estimate Review. Bids priced on the spreadsheet stay in the Proposals Database.
-        This list reads the ${READ_CEILING} most recently updated projects, so a beta estimate older
+      <p class="empty-h">No v2 estimates yet.</p>
+      <p class="empty-p">An estimate lands here the moment it is priced in <b>Estimating Tool v2</b>,
+        either from its own intake or by pressing the <b>Estimating Tool v2</b> link on a polish
+        job's Estimate Review. Bids priced on the spreadsheet stay in the Proposals Database.
+        This list reads the ${READ_CEILING} most recently updated projects, so a v2 estimate older
         than that will not appear here.</p>
       <div class="empty-act">
-        <a class="btn" href="/polish-intake.html">Start a beta estimate</a>
+        <a class="btn" href="/polish-intake.html">Start a v2 estimate</a>
         <a class="btn-quiet" href="/projects.html">Proposals Database</a>
       </div>
     </div>`;
   }
 
-  // A FAILED FETCH IS ITS OWN STATE, never an empty list. "No beta polish estimates yet" on a 500
+  // A FAILED FETCH IS ITS OWN STATE, never an empty list. "No v2 estimates yet" on a 500
   // is a lie that reads as data loss — the one thing this page must not say by accident.
   function failedHtml(msg) {
     return `<div class="card failed">
-      <p class="empty-h">Could not load the beta estimates.</p>
+      <p class="empty-h">Could not load the v2 estimates.</p>
       <p class="empty-p">Nothing is lost &mdash; this page only reads.
         ${esc(msg || "The request did not come back.")}</p>
       <div class="empty-act"><button type="button" id="retry" class="btn">Try again</button></div>
@@ -305,7 +309,7 @@
     ceiling.hidden = !at;
     if (at) {
       ceiling.textContent = `Showing the ${READ_CEILING} most recently updated projects. `
-        + `A beta estimate older than that is still saved, but will not appear here.`;
+        + `A v2 estimate older than that is still saved, but will not appear here.`;
     }
     syncToolbar();
   }

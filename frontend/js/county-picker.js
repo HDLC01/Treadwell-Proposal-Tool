@@ -38,7 +38,7 @@
  * backend/reference_tax.py — rates pulled one by one from the KS DOR Address Tax Rate Locator.
  * A copy in this file would be a second table to keep in step with the DOR, silently wrong. The
  * same reasoning covers the Kansas state fallback rate: reference_tax.py and
- * js/polish-bid-core.js already hold that number twice, so this file reads it off the endpoint
+ * js/bid-model.js already hold that number twice, so this file reads it off the endpoint
  * rather than writing it down a third time.
  */
 (function () {
@@ -55,7 +55,7 @@
   }
 
   /** Percentages read the same here as on the beta's markup rows, which is half the point of
-   *  sharing: 0.07975 -> "7.975%". Mirrors polish-bid-core.js's pct so a page that has B and a
+   *  sharing: 0.07975 -> "7.975%". Mirrors bid-model.js's pct so a page that has B and a
    *  page that does not cannot disagree about how a rate is spelled. */
   function pctOf(n) {
     var v = (Number(n) || 0) * 100;
@@ -238,7 +238,7 @@
 
     /** The fallback rate, named only when it is actually known. Writing "6.5%" into this file
      *  would be a third copy of a number that already lives in reference_tax.py and
-     *  polish-bid-core.js; saying the sentence without the figure until the endpoint supplies one
+     *  bid-model.js; saying the sentence without the figure until the endpoint supplies one
      *  is honest and needs no second table. */
     function ksPhrase() {
       return ksState == null ? "the Kansas state rate"

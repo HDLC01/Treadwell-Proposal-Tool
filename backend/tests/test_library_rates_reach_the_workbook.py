@@ -4,7 +4,7 @@ Hanz's rule: ONE PRICE EVERYWHERE -- the tool's bid and the .xlsx must never quo
 figures. Since 2026-09-30 the Polish estimate prices both lines off reserved library_items rows
 (`dye`, `joint-filler-kit`; see polish-estimate.js condLine) that an admin edits on the Items tab.
 Kyle's Polish tab carried its own C25 0.14, C29 500 and "/3500", so an edited row made the two
-disagree. polish-bid-core.js's conditionCellWrites now writes, on every save:
+disagree. bid-model.js's conditionCellWrites now writes, on every save:
 
     Polish!C25   one coat of dye's price per SF (the row's unit price over its coverage, plus
     Polish!C26   waste) -- BOTH cells: Kyle's rows 25 and 26 are one coat each (DYE_COATS 2)
@@ -253,7 +253,7 @@ BRANCHES = {
                        "coverage": 2, "waste_pct": 5, "roundup": False},
 }
 _NODE = r"""
-const B = require(process.argv[1] + '/js/polish-bid-core.js');
+const B = require(process.argv[1] + '/js/bid-model.js');
 const L = require(process.argv[1] + '/js/library-core.js');
 const rows = JSON.parse(process.argv[2]), area = Number(process.argv[3]), out = {};
 for (const name of Object.keys(rows)) {
@@ -328,3 +328,32 @@ def test_the_held_rows_read_none_of_the_written_cells():
         for c in row:
             if isinstance(c.value, str) and c.value.startswith("="):
                 assert not moved.search(c.value), (c.coordinate, c.value)
+
+
+@pytest.fixture(scope="module")
+def cov():
+    """The B2 scenarios -- coverage typed on THIS bid -- from the same real-page harness run."""
+    proc = subprocess.run(["node", str(HARNESS), str(FRONTEND)], capture_output=True, text=True,
+                          encoding="utf-8", timeout=180)
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout.strip().splitlines()[-1])["condCoverage"]
+
+
+@needs_node
+def test_a_typed_coverage_reaches_the_workbook_the_same_figures(cov, cached):
+    """The download must match the screen. The kit's coverage typed on the bid (3,000 over a
+    library 2,000) is the divisor in the B29 formula the save writes, and the workbook's own
+    arithmetic gives the bid's kit count and line; the dye coverage typed on the bid lands in both
+    coat rates (price over coverage).
+
+    Mutation: conditionLibrary reads the library row instead of the priced (typed) line."""
+    jf = cov["libJf"]
+    assert jf["cells"]["Polish!B29"] == '=ROUNDUP(IF(E29="yes",(E18/3000),0),0)'
+    book = _workbook(jf, cached)
+    assert book.num("B29") == jf["jfKits"] == 2
+    assert book.num("D29") == pytest.approx(jf["jfCost"])
+    dye = cov["libDye"]
+    assert dye["cells"]["Polish!C25"] == pytest.approx(0.05)
+    assert dye["cells"]["Polish!C26"] == pytest.approx(0.05)
+    book = _workbook(dye, cached)
+    assert book.num("D25") + book.num("D26") == pytest.approx(dye["dyeCost"])

@@ -435,21 +435,31 @@ const out = { PAY, ATTR_PAY };
   for (const [k, v] of Object.entries(LINKS)) out.links[k] = { link: v, ...(await bell(v)) };
 
   // ═══ 5. THE ESCAPE HELPERS THAT MISSED THE SINGLE QUOTE ══════════════════════
-  // index.js's two address-lookup renderers, run for real against a Photon-shaped feature.
-  const intake = (name) => {
-    const results = new El("div");
-    const api = bind([
-      grab(INDEX, /^ {2}const fmtLine1 = .*$/m, "fmtLine1"),
-      liftFn(INDEX, "index.js", name, "  "),
-    ].join(NL), {
-      addrResults: results, businessResults: results, STATE_ABBR: { Missouri: "MO" },
-      showAddrMsg() {}, pickAddr() {}, fillLocation() {},
-    }, [name]);
-    api[name]([{ properties: { name: PAY, housenumber: "12", street: PAY, city: "O'Fallon",
-                               state: "Missouri", postcode: "63366" } }]);
-    return { markup: results.innerHTML, ...census(results) };
+  // js/address-lookup.js's two renderers (moved out of index.js 2026-10-05), run for real: the
+  // actual module is mounted on stub inputs, a Photon-shaped answer comes back through a stub
+  // fetch, and the markup it wrote into the dropdown is what gets counted.
+  const intake = (which) => {
+    const doc = makeDocument();
+    const mk = (id) => { const e = new El("div"); e.id = id; doc.body.appendChild(e); return e; };
+    const els = { address: mk("address-input"), business: mk("business-input"),
+                  city: mk("city-input"), state: mk("state-input"), zip: mk("zip-input") };
+    const results = { renderAddr: mk("address-results"), renderBusinesses: mk("business-results") };
+    els.address.value = "12 Main St"; els.business.value = "Acme";
+    const feature = { properties: { name: PAY, housenumber: "12", street: PAY, city: "O'Fallon",
+                                    state: "Missouri", postcode: "63366" } };
+    const fakeFetch = async () => ({ json: async () => ({ features: [feature] }) });
+    const win = {};
+    new Function("document", "window", "fetch", "setTimeout", "clearTimeout",
+                 read("js/address-lookup.js"))(doc, win, fakeFetch, (f) => { f(); return 1; }, () => {});
+    win.TWAddress.mount(els);
+    const target = which === "renderAddr" ? els.address : els.business;
+    target._l.input.forEach((f) => f());
+    return new Promise((res) => setTimeout(res, 20)).then(() => {
+      const r = results[which];
+      return { markup: r.innerHTML, ...census(r) };
+    });
   };
-  out.intake = { renderAddr: intake("renderAddr"), renderBusinesses: intake("renderBusinesses") };
+  out.intake = { renderAddr: await intake("renderAddr"), renderBusinesses: await intake("renderBusinesses") };
 
   // estimate-review.js's bid-bar escape, called as itself.
   out.escBB = bind(grab(EST, /^const _escBB = [^\n]*\n[^\n]*;$/m, "_escBB"), {}, ["_escBB"])._escBB(PAY);

@@ -1183,10 +1183,23 @@ def test_the_admin_page_says_whether_each_row_reaches_the_workbook(ran):
     assert "does not read this line yet" in s["bondGyp"]
 
     # The Global tab, where hard_bid and bond are now edited and where the two travel figures
-    # live. It is in NO target table, so every one of its rows must claim nothing.
-    for name in ("bondGlobal", "hardBidGlobal", "travelLodgingGlobal", "travelPerDiemGlobal"):
+    # live. It is in NO workbook target table, so the bond rows must claim nothing.
+    for name in ("bondGlobal", "hardBidGlobal"):
         assert "does not read this line yet" in s[name], (
             "a Global row promises a price: %s -> %r" % (name, s[name]))
+    # CHANGED ON PURPOSE (Kyle's notes, B7, 2026-10-05): the two travel figures used to be pinned
+    # here as unread by everything. The Polish Estimate beta now reads them -- a new bid copies
+    # each onto its Lodging / Per Diem line -- so those rows say so, while still saying the
+    # WORKBOOK does not read them (no address in any target table, asserted in the test above).
+    for name, word in (("travelLodgingGlobal", "Lodging"), ("travelPerDiemGlobal", "Per Diem")):
+        assert "Estimating Tool v2 copies this figure onto every NEW bid" in s[name]             and word in s[name] and "workbook does not read it" in s[name], (
+            "a travel figure's row misstates what reads it: %s -> %r" % (name, s[name]))
+    # The labor rate and Fees + Textura defaults are read by the beta too (2026-10-06): their rows
+    # must not tell an admin the figure "changes no bid".
+    for name, word in (("laborRateGlobal", "labor lines"), ("feesTexturaGlobal", "Fees + Textura")):
+        assert ("starts every NEW bid" in s[name] and word in s[name]
+                and "changes no bid" not in s[name]), (
+            "a beta default's row misstates what reads it: %s -> %r" % (name, s[name]))
 
     assert "Prices the bid" in s["polishSoftCosts"] and "16%" in s["polishSoftCosts"]
     assert "Prices the bid" in s["filed"] and "4%" in s["filed"]
@@ -1217,9 +1230,9 @@ def test_the_paragraph_promising_that_nothing_is_priced_is_gone():
     assert "Filed rates are not pricing anything yet." not in html
     assert "api/markup" in (FRONTEND / "js" / "estimate-review.js").read_text(encoding="utf-8")
     # The clause that is still true: no filed rate reaches the Polish beta, which prices off
-    # polish-bid-core.js's own RATES/GP_BANDS. Deleting the paragraph outright would have lost it.
-    assert "Polish beta" in html and "its own engine" in html, (
-        "the rewrite dropped the Polish beta caveat, which is still true -- a filed polish rate "
+    # bid-model.js's own RATES/GP_BANDS. Deleting the paragraph outright would have lost it.
+    assert "Estimating Tool v2" in html and "its own engine" in html, (
+        "the rewrite dropped the Estimating Tool v2 caveat, which is still true -- a filed polish rate "
         "moves the workbook's price and not the beta's")
     # And the sentence test_markup_page.py keeps out by name is still out.
     assert "rows override the constants" not in html
