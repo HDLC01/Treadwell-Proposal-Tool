@@ -291,6 +291,27 @@
     COPYABLE_CELLS.forEach(function (cell) {
       if (has(srcCells, cell)) cells[cell] = srcCells[cell];
     });
+    // THE BID THIS COPY IS COMPARED WITH. v2 prices a POLISH bid, so on a split draft it reads and writes
+    // Polish!B6 and Polish!D6 for Taxable and Remodel tax (js/work-types.js writeCellsFor). Those two cells
+    // hold the answer the estimate screen stamped when it split the draft, and an estimator may have changed
+    // the SOURCE job's own base answer since (Epoxy!B6 on an epoxy job, the gyp base's B8 on a gyp job).
+    // So when the source's job is priced on other sheets than Polish, the copy starts with the source
+    // base's answer in the Polish cells, and the beta price opens at the live bid's tax. A job that has a
+    // Polish base (polish, combo) already holds its own answer there, and a source with no answer yet
+    // leaves the cells as they were.
+    if (WT.isSplit(srcData) && WT.isJobType(srcData.work_type)) {
+      WT.CONDITIONS.filter(function (c) { return c.perSheet; }).forEach(function (c) {
+        var from = WT.writeCellsFor(c.key, srcData.work_type, true);
+        var to = WT.writeCellsFor(c.key, "polish", true)[0];
+        if (from.indexOf(to) !== -1) return;
+        for (var i = 0; i < from.length; i++) {
+          if (has(cells, from[i]) && cells[from[i]] !== "" && cells[from[i]] != null) {
+            cells[to] = cells[from[i]];
+            break;
+          }
+        }
+      });
+    }
     if (Object.keys(cells).length) blob.cell_values = cells;
     blob.project_name = betaName(srcData.project_name);
     // Paired with the derived id, this is what makes reopening idempotent: a draft that says

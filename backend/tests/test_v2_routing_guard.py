@@ -553,13 +553,24 @@ def test_a_copy_keeps_what_a_person_typed(ran, wt):
 def test_a_copy_keeps_the_job_conditions_and_not_the_rest_of_the_sheet(ran, wt):
     """cell_values holds the sheet's own working (the project block, the quantities, the rates) AND the
     job's answers (local, prevailing wage, taxable, remodel tax, renovation, dye, joint filler, bulk
-    discount). The v2 intake reads the second back; v2 never reads the first."""
+    discount). The v2 intake reads the second back; v2 never reads the first.
+
+    A v2 test copy is itself priced on Polish. For a split source whose base is not Polish, buildCopy moves
+    the source base's own Taxable/Remodel answers into Polish!B6/Polish!D6 so the copy opens at the bid it is
+    meant to compare against. All other condition cells are byte-for-byte from the source."""
     r = ran["sandbox"]["byWorkType"][wt]
     # the live intake's condition cells, and (the fixture is a split draft) the base sheets' own tax cells
     cells = set(ran["sandbox"]["conditionCells"]) | _base_sheets_own_tax_cells()
     assert r["cellKeys"] and set(r["cellKeys"]) == cells, sorted(set(r["cellKeys"]) ^ cells)
+    expected = dict(r["source"]["cell_values"])
+    if wt == "epoxy":
+        expected["Polish!B6"] = expected["Epoxy!B6"]
+        expected["Polish!D6"] = expected["Epoxy!D6"]
+    elif wt == "gyp":
+        expected["Polish!B6"] = expected['Gyp (USG 1-8")!B8']
+        expected["Polish!D6"] = expected['Gyp (USG 1-8")!D8']
     for k in r["cellKeys"]:
-        assert r["copy"]["cell_values"][k] == r["source"]["cell_values"][k], k
+        assert r["copy"]["cell_values"][k] == expected[k], k
     for sheet_only in ("Epoxy!B1", "Epoxy!E20", "Polish!E18", "Epoxy!E34", "Polish!C25", "Epoxy!D77"):
         assert sheet_only in r["source"]["cell_values"] and sheet_only not in r["cellKeys"], sheet_only
 

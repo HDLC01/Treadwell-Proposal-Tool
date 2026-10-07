@@ -328,6 +328,41 @@ def test_a_split_project_copied_and_saved_in_v2_keeps_its_option_sheets_tax_answ
     assert {k: j["unsplit"]["cells"][k] for k in FAN_OUT} == dict.fromkeys(FAN_OUT, "Yes")
 
 
+def test_a_v2_copy_of_a_split_project_that_is_not_polish_opens_at_the_source_bases_own_tax_answer(ran):
+    """v2 prices a POLISH bid, so on a split draft it reads and writes Polish!B6 and Polish!D6. A project whose
+    job is priced on other sheets had its real answer changed on the grid after the split stamped Polish's, so
+    the copy has to start with that answer in the Polish cells, or the beta price opens taxed (Epoxy exempt,
+    Polish stale Yes) and no longer matches the live bid it was copied to compare against. Saved twice."""
+    j = ran["journey"]
+    # epoxy job: Epoxy!B6 No and Epoxy!D6 Yes are the base's answer; Polish!B6 was stamped Yes and Polish!D6 No
+    for name in ("epoxyBased", "epoxyBasedNoPolish"):
+        r = j[name]
+        assert (r["taxable"], r["remodel"]) == (False, True), name
+        for cells in (r["cells"], r["cellsAgain"]):
+            assert (cells["Polish!B6"], cells["Polish!D6"]) == ("No", "Yes"), (name, cells)
+            # the source's own cells and every option's are exactly as the source had them
+            assert (cells["Epoxy!B6"], cells["Epoxy!D6"]) == ("No", "Yes"), name
+            assert (cells["Leveling!B6"], cells["Gyp (FR)!B8"], cells[GYP + "!B8"], cells[GYP + "!D8"]) == \
+                ("No", "No", "Yes", "Yes"), name
+        assert r["cellsAgain"] == r["cells"], name
+    # gyp job: the gyp base's own B8 and D8
+    g = j["gypBased"]
+    assert (g["taxable"], g["remodel"]) == (False, True)
+    assert (g["cells"]["Polish!B6"], g["cells"]["Polish!D6"]) == ("No", "Yes")
+    assert (g["cells"][GYP + "!B8"], g["cells"][GYP + "!D8"]) == ("No", "Yes"), "the gyp base's own cells moved"
+    assert g["cellsAgain"] == g["cells"]
+    # a combo job has a Polish base of its own, and its answer is the one v2 reads
+    c = j["comboBased"]
+    assert (c["taxable"], c["remodel"]) == (True, False)
+    assert (c["cells"]["Polish!B6"], c["cells"]["Polish!D6"]) == ("Yes", "No")
+    # a job the vocabulary does not know is read as the polish job v2 prices, and a draft that is not split
+    # keeps the fan-out untouched
+    u = j["unknownJob"]
+    assert (u["cells"]["Polish!B6"], u["cells"]["Polish!D6"]) == ("Yes", "No")
+    e = j["epoxyUnsplit"]
+    assert {k: e["cells"][k] for k in FAN_OUT} == dict.fromkeys(FAN_OUT, "No")
+
+
 def _page_journey(r, name, base_taxable, base_remodel):
     """What a page's save did to a copy of the split project: the options untouched, the base sheet's own two
     cells holding the answers the page had (the same on the second save), and nothing written on opening."""
@@ -662,6 +697,7 @@ READ_LINE = "      var cell = firstFilled(types.writeCellsFor(key, MODEL_JOB, !!
 PATCH_LINE = "      cell_values: conditionCellWrites(model.conditions, cells, ctx.library, types.isSplit(state)),"
 RENO_LINE = "      var first = firstFilled(carried.cells, out, isBlank);"
 MARK_LINE = '    "polish_estimate", "cell_values", "tax_flags_per_sheet",'
+COPY_BASE_LINE = "    if (WT.isSplit(srcData) && WT.isJobType(srcData.work_type)) {"
 ESTIMATE_ADOPT = "    M.conditions = B.conditionsFromCells(M.conditions, state.cell_values, T.isSplit(state));"
 ESTIMATE_SEEDED = "        B.seedConditionDefaults(M.conditions, condRows), state.cell_values, T.isSplit(state));"
 INTAKE_ADOPT = "    M.conditions = B.conditionsFromCells(M.conditions, state.cell_values, T.isSplit(state));"
@@ -726,6 +762,9 @@ BREAKS = {
     "the copy drops the mark": (
         "module", SANDBOX, MARK_LINE, '    "polish_estimate", "cell_values",', [MODEL],
         test_a_split_project_copied_and_saved_in_v2_keeps_its_option_sheets_tax_answers),
+    "the copy forgets the source base's own tax answer": (
+        "module", SANDBOX, COPY_BASE_LINE, "    if (false && WT.isSplit(srcData) && WT.isJobType(srcData.work_type)) {", [MODEL],
+        test_a_v2_copy_of_a_split_project_that_is_not_polish_opens_at_the_source_bases_own_tax_answer),
     "the Takeoff step reads the draft as unsplit": (
         "takeoff", ESTIMATE, ESTIMATE_ADOPT,
         "    M.conditions = B.conditionsFromCells(M.conditions, state.cell_values);", [],
@@ -788,6 +827,7 @@ def test_every_check_a_break_names_is_a_real_test_and_each_part_of_the_fix_has_a
                  test_renovation_survives_a_save_whichever_of_its_two_cells_holds_it,
                  test_a_copy_of_a_split_project_arrives_split_with_its_tax_answers,
                  test_a_split_project_copied_and_saved_in_v2_keeps_its_option_sheets_tax_answers,
+                 test_a_v2_copy_of_a_split_project_that_is_not_polish_opens_at_the_source_bases_own_tax_answer,
                  test_the_takeoff_step_saves_a_split_copy_without_touching_its_options,
                  test_the_v2_intake_shows_and_saves_a_split_copy_without_touching_its_options,
                  test_the_live_intake_drops_an_address_that_is_not_a_cell):

@@ -226,6 +226,8 @@ function v2Save(draft, change) {
   const patch = B.buildSavePatch(model, draft, { bid });
   return { patch, model };
 }
+/** The split source's own cells with some overridden. */
+const sourceCells = (over) => Object.assign({}, splitSource().cell_values, over);
 function journey(source, change) {
   const copy = SB.buildCopy(source, "src-1");
   const first = v2Save(copy, change);
@@ -249,6 +251,23 @@ out.journey = {
   flipped: journey(splitSource(), { taxable: false, remodel_tax: true }),
   // a draft that is NOT split keeps the fan-out: every literal follows the one answer
   unsplit: journey(splitSource({ tax_flags_per_sheet: undefined })),
+  // A SPLIT PROJECT WHOSE JOB IS NOT POLISH. v2 prices a polish bid, so it reads Polish!B6 and Polish!D6, and the
+  // source's own base answer (changed on the grid after the split stamped Polish's) has to be in them.
+  epoxyBased: journey(splitSource({ work_type: "epoxy", cell_values: sourceCells({
+    "Epoxy!B6": "No", "Epoxy!D6": "Yes", "Polish!B6": "Yes", "Polish!D6": "No" }) })),
+  epoxyBasedNoPolish: journey(splitSource({ work_type: "epoxy", cell_values: without(sourceCells({
+    "Epoxy!B6": "No", "Epoxy!D6": "Yes" }), ["Polish!B6", "Polish!D6"]) })),
+  gypBased: journey(splitSource({ work_type: "gyp", cell_values: sourceCells({
+    'Gyp (USG 1-8")!B8': "No", 'Gyp (USG 1-8")!D8': "Yes", "Polish!B6": "Yes", "Polish!D6": "No" }) })),
+  // a combo job has a Polish base of its own: its answer is what v2 reads, whatever Epoxy's says
+  comboBased: journey(splitSource({ work_type: "combo", cell_values: sourceCells({
+    "Epoxy!B6": "No", "Epoxy!D6": "Yes", "Polish!B6": "Yes", "Polish!D6": "No" }) })),
+  // a source whose job the vocabulary does not know is read as the polish job v2 prices
+  unknownJob: journey(splitSource({ work_type: "seal", cell_values: sourceCells({
+    "Epoxy!B6": "No", "Epoxy!D6": "Yes", "Polish!B6": "Yes", "Polish!D6": "No" }) })),
+  // an epoxy source that is NOT split: the fan-out is untouched
+  epoxyUnsplit: journey(splitSource({ work_type: "epoxy", tax_flags_per_sheet: undefined, cell_values: sourceCells({
+    "Epoxy!B6": "No", "Epoxy!D6": "Yes", "Polish!B6": "Yes", "Polish!D6": "No" }) })),
 };
 
 // ── 5. the cells the LIVE intake writes, lifted out of js/index.js and evaluated ─────────────────

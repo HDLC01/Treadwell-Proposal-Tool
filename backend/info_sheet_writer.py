@@ -71,6 +71,8 @@ _FLAG_CELLS = {
     "remodel_tax":      ("D6",  "D8"),
 }
 _GYP_BASE = 'Gyp (USG 1-8")'
+# Where a draft split per sheet keeps a polish bid's own two tax answers (js/work-types.js `perSheet`).
+_POLISH_SPLIT_CELLS = {"taxable": "B6", "remodel_tax": "D6"}
 
 _STATES = {
     "KS": "KS - Kansas", "MO": "MO - Missouri", "OK": "OK - Oklahoma",
@@ -459,6 +461,14 @@ def _flag(data: Dict[str, Any], flag: str) -> Optional[str]:
         return "Yes" if data[snap] else "No"
     cells = data.get("cell_values") if isinstance(data.get("cell_values"), dict) else {}
     epoxy_addr, gyp_addr = _FLAG_CELLS[flag]
+    # 2026-10-07: on a draft split per sheet, a polish bid's answer is the Polish sheet's own cell, not
+    # Epoxy's (an option's). A v2 save writes those two cells and no other tax cell, and a v2 test copy
+    # (`beta_sandbox_of`) is priced on Polish whatever the source job was, so it reads them too.
+    if flag in _POLISH_SPLIT_CELLS and data.get("tax_flags_per_sheet") and (
+            data.get("beta_sandbox_of") or _base_role(data) == "polish"):
+        v = cells.get(f"Polish!{_POLISH_SPLIT_CELLS[flag]}")
+        if v not in (None, ""):
+            return str(v)
     if _base_role(data) == "gyp":
         v = cells.get(f"{_GYP_BASE}!{gyp_addr}")
         if v not in (None, ""):
