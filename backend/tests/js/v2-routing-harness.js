@@ -155,6 +155,10 @@ function spreadsheetBlob(workType) {
   const cells = { "Epoxy!B1": "Nearman Creek", "Epoxy!E20": 4000, "Polish!E18": 2875, "Epoxy!E34": 120,
                   'Gyp (USG 1-8")!E20': 1000, "Polish!C25": 1.2, "Epoxy!D77": 450 };
   conditionCells.forEach((c, i) => { cells[c] = i % 2 ? "Yes" : "No"; });
+  // This blob is a SPLIT draft (tax_flags_per_sheet is on it below), and a split draft holds the job's tax
+  // answers in the BASE sheets' own cells as well: Polish's and the gyp base's remodel cell are not on the
+  // live intake's table, because the intake reads them from the estimate screen's snapshot.
+  ["Polish!B6", "Polish!D6", 'Gyp (USG 1-8")!D8'].forEach((c) => { cells[c] = "No"; });
   return {
     // what a person typed, on either intake form
     project_name: "Nearman Creek", address: "1200 Kaw Dr", city: "Overland Park", state: "KS",

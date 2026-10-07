@@ -244,6 +244,11 @@
   //   * `polish_estimate`, the v2 model, for a source that already has one;
   //   * `cell_values`, but only the job-condition cells (COPYABLE_CELLS below). The other cells are
   //     the spreadsheet's own working, which v2 never reads;
+  //   * `tax_flags_per_sheet`, the estimate screen's mark that every sheet holds its OWN Taxable and
+  //     Remodel answer. It is not a price. It says how the tax cells just above are to be read: on a split
+  //     draft the job's answer is the base sheet's own cell and every other sheet keeps its own
+  //     (js/work-types.js writeCellsFor). A copy that lost it would read a split project as an unsplit one,
+  //     and v2's first save would write the base's answer over the Leveling and Gypsum options';
   //   * the two marks buildCopy writes itself, listed so that this is everything a copy can hold.
   var COPYABLE_KEYS = [
     "project_name", "address", "city", "state", "zip", "city_state", "architect", "approx_start_date",
@@ -253,7 +258,7 @@
     "system_1_sf", "system_2_sf", "polish_sf", "polish_2_sf", "cove_1_lf", "cove_2_lf",
     "gyp_soft_sf", "gyp_hard_sf", "gyp_corridor_sf", "system_thickness", "num_systems",
     "county", "county_tax_rate", "county_remodel_rate", "county_notes", "remodel_rate_override",
-    "polish_estimate", "cell_values",
+    "polish_estimate", "cell_values", "tax_flags_per_sheet",
     "beta_sandbox_of", "beta_sandbox_of_name",
   ];
 
@@ -263,7 +268,9 @@
   // used to be a second copy of the live intake's table kept equal by test_v2_routing_guard.py. Every
   // job type's cells are kept, not only polish's: the copy is of whatever the source job was, and the
   // job's answers are the same cells on any of them. A condition added to the table is copied from the
-  // day it is added.
+  // day it is added. That includes the base sheets' own tax cells (Polish!B6, Polish!D6 ...) which a split
+  // draft holds as the job's tax answer and a draft that is not split never writes: they travel with the
+  // `tax_flags_per_sheet` mark above, so a copy of a split project arrives split, with its answers.
   var WT = window.TWWorkTypes;
   if (!WT) throw new Error("polish-sandbox.js needs work-types.js loaded before it");
   var COPYABLE_CELLS = WT.copyableCells();

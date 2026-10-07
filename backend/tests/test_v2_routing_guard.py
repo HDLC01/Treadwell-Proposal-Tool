@@ -37,7 +37,7 @@ HARNESS = TESTS / "js" / "v2-routing-harness.js"
 BETA_HARNESS = TESTS / "js" / "beta-routing-harness.js"
 # What beta-routing-harness.js reads (it does not fall back to the real frontend for a missing file).
 BETA_FILES = ["js/index.js", "index.html", "shared.js", "js/projects.js", "js/county-picker.js",
-              "js/address-lookup.js"]
+              "js/address-lookup.js", "js/work-types.js"]
 
 
 # ── the harness runs ─────────────────────────────────────────────────────────────────────────────
@@ -477,13 +477,20 @@ def test_the_door_scan_sees_a_door_when_one_is_added(tmp_path):
 WORK_TYPES = ["epoxy", "polish", "combo", "gyp"]
 # An independent list of what the spreadsheet derives, and what the server owns: the oracle the
 # allowlist is checked against, written out here and not read from the code under test.
+#
+# `tax_flags_per_sheet` WAS ON THIS LIST AND IS NOT ANY MORE (Phase 7b). It is the estimate screen's mark
+# that every sheet holds its own Taxable and Remodel answer, and it is written by the spreadsheet, so it
+# looked derived. It is not a price and it carries none: it is what says how the copied tax cells are to be
+# read. A copy without it reads a split project as an unsplit one, and v2's first save writes the base's
+# answer over the Leveling and Gypsum options' own. So it is copied on purpose, and
+# test_a_copy_of_a_split_source_stays_split pins that it is.
 DERIVED = [
     "priced_tabs", "rooms", "base_tab_id", "proposal_lump_sum", "proposal_sales_tax",
     "proposal_remodel_tax", "proposal_taxable", "proposal_remodel_on", "sheet_area", "hf_lump_sums",
     "cost_snapshot", "phase_price", "computed_bid", "alternate_computed_bid", "generate_result",
     "generated_lump_sum", "lump_sum_display", "proposal_payload", "proposal_payload_key",
     "tab_opts", "tab_copies", "tab_labels", "tab_order", "tab_notes", "tab_structs", "lock_overrides",
-    "tax_flags_per_sheet", "tax_layout", "tax_inclusion", "price_overrides", "price_lines", "extras",
+    "tax_layout", "tax_inclusion", "price_overrides", "price_lines", "extras",
     "paragraph_overrides", "paragraph_overrides_all", "system_name", "texture", "scope_notes",
     "schedule_notes", "exclusions", "notes_text", "estimator_name",
     "dropbox_result", "portal_message", "portal_emails", "require_deposit", "job_number",
@@ -548,7 +555,8 @@ def test_a_copy_keeps_the_job_conditions_and_not_the_rest_of_the_sheet(ran, wt):
     job's answers (local, prevailing wage, taxable, remodel tax, renovation, dye, joint filler, bulk
     discount). The v2 intake reads the second back; v2 never reads the first."""
     r = ran["sandbox"]["byWorkType"][wt]
-    cells = set(ran["sandbox"]["conditionCells"])
+    # the live intake's condition cells, and (the fixture is a split draft) the base sheets' own tax cells
+    cells = set(ran["sandbox"]["conditionCells"]) | _base_sheets_own_tax_cells()
     assert r["cellKeys"] and set(r["cellKeys"]) == cells, sorted(set(r["cellKeys"]) ^ cells)
     for k in r["cellKeys"]:
         assert r["copy"]["cell_values"][k] == r["source"]["cell_values"][k], k
@@ -556,17 +564,51 @@ def test_a_copy_keeps_the_job_conditions_and_not_the_rest_of_the_sheet(ran, wt):
         assert sheet_only in r["source"]["cell_values"] and sheet_only not in r["cellKeys"], sheet_only
 
 
-def test_the_cells_a_copy_keeps_are_the_ones_the_live_intake_writes(ran):
+def _base_sheets_own_tax_cells():
+    """The cells a SPLIT draft holds the job's Taxable and Remodel answers in: the own flag cells of the
+    three sheets a job can be priced on (Epoxy, Polish, the gyp base), read from the BACKEND's table of
+    every flag-block sheet and its (Taxable?, Remodel Tax?) cells, an independent source from the one
+    under test. The live intake never writes the Polish and Gyp D8 ones itself: it reads them from the
+    estimate screen's snapshot, so they are not on its table."""
+    import estimate_writer as ew
+    cells = set()
+    for sheet in ("Epoxy", "Polish", ew.GYP_SHEET):
+        cells.update("%s!%s" % (sheet, addr) for addr in ew.FLAG_BLOCK_CELLS[sheet])
+    return cells
+
+
+def test_the_cells_a_copy_keeps_are_the_ones_the_live_intake_writes_and_the_base_sheets_own_tax_cells(ran):
     """COPYABLE_CELLS is READ FROM THE ONE CONDITIONS TABLE since Phase 7 (js/work-types.js copyableCells;
     docs/v2-architecture.md 7.3), no longer a second copy of the live intake's cells. The live intake still
     keeps its own CONDITIONS literal until Phase 9, so this stays as the comparison of the two: the intake's
     table is lifted out of index.js and evaluated by the harness, so a condition (or a cell) added to either
     side that the other does not know turns this red.
 
+    PHASE 7b ADDS THE BASE SHEETS' OWN TAX CELLS, and only those: Polish!B6, Polish!D6 and the gyp base's D8
+    (Epoxy's and the gyp base's B8 are on the intake's table already). A split draft holds the job's tax
+    answers there, so a copy that kept the `tax_flags_per_sheet` mark and not these would arrive split and
+    answerless. The extra set comes from the backend's FLAG_BLOCK_CELLS, not from the table under test.
+
     Mutation: add a condition (or a cell) to CONDITIONS in index.js, or to the table in work-types.js."""
     s = ran["sandbox"]
-    assert sorted(s["copyableCells"]) == sorted(s["conditionCells"])
+    expected = set(s["conditionCells"]) | _base_sheets_own_tax_cells()
+    assert sorted(s["copyableCells"]) == sorted(expected)
     assert len(s["conditionCells"]) >= 10, "the lift of CONDITIONS found too little: %r" % s["conditionCells"]
+    assert set(s["copyableCells"]) - set(s["conditionCells"]) == {"Polish!B6", "Polish!D6", 'Gyp (USG 1-8")!D8'}
+
+
+@pytest.mark.parametrize("wt", WORK_TYPES)
+def test_a_copy_of_a_split_source_stays_split(ran, wt):
+    """`tax_flags_per_sheet` is copied (it is not a spreadsheet price: see the note over DERIVED), and so are
+    the answers it refers to. The harness's spreadsheet blob is a split draft (the mark is on it), so every
+    copy of it must carry the mark with the value the source had.
+
+    Mutation: take `tax_flags_per_sheet` off COPYABLE_KEYS (test_the_copy_of_a_split_source_forgetting_the_
+    mark_is_caught below)."""
+    r = ran["sandbox"]["byWorkType"][wt]
+    assert r["source"]["tax_flags_per_sheet"] is True, "the fixture is no longer a split draft"
+    assert r["copy"].get("tax_flags_per_sheet") is True, "the copy lost the mark, so it reads as an unsplit draft"
+    assert "tax_flags_per_sheet" in ran["sandbox"]["copyableKeys"]
 
 
 def test_the_copy_is_renamed_and_marked_and_the_source_is_left_alone(ran):
@@ -601,6 +643,17 @@ def test_letting_the_copy_take_everything_again_is_caught(cases_file, tmp_path):
     r = _run(broken, cases_file)["sandbox"]["byWorkType"]["polish"]
     survivors = set(r["keys"]) & {"priced_tabs", "proposal_lump_sum", "computed_bid"}
     assert survivors == {"priced_tabs", "proposal_lump_sum", "computed_bid"}
+
+
+def test_the_copy_of_a_split_source_forgetting_the_mark_is_caught(cases_file, tmp_path):
+    """MUTATION. `tax_flags_per_sheet` off the allowlist: the copy of a split project arrives unmarked, and
+    v2 reads it as an unsplit one. test_a_copy_of_a_split_source_stays_split has to go red on this."""
+    broken = break_source(tmp_path, "js/polish-sandbox.js",
+                          '    "polish_estimate", "cell_values", "tax_flags_per_sheet",',
+                          '    "polish_estimate", "cell_values",')
+    r = _run(broken, cases_file)["sandbox"]["byWorkType"]["polish"]
+    assert "tax_flags_per_sheet" not in r["copy"], "the mutation did not take the mark off the allowlist"
+    assert r["source"]["tax_flags_per_sheet"] is True
 
 
 # ══ 6. a stale copy that already exists ══════════════════════════════════════════════════════════

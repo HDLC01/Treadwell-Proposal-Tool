@@ -346,6 +346,10 @@
      the page script, which calls TWCounty.mount() as it boots. -->
 <script src="/js/county-picker.js"></script>
 <script src="/js/address-lookup.js"></script>
+<!-- The one vocabulary of work types and job conditions. The page script reads it for the rule that says which
+     cells the two tax switches write once a draft is split per sheet, the same rule a v2 save follows, and it
+     throws by name when this tag is missing. Must precede the page's own script. -->
+<script src="/js/work-types.js"></script>
 <script src="/js/index.js"></script>
 
 </body>

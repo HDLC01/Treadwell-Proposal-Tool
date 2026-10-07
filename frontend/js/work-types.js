@@ -34,11 +34,13 @@
 // Local job is asked on no v2 screen: the Labor step works the driving miles out and sets it.
 //
 // WHAT READS THIS, AND WHAT STILL HOLDS ITS OWN COPY. Read from here: js/bid-model.js (CONDITION_CELLS, the
-// fresh model's conditions, which defaults apply to a bid), js/polish-intake.js (CONDITIONS),
-// js/polish-estimate.js (CONDITION_CARDS), js/library.js (WORK_TYPES, appliesToWorkType and the Takeoff
-// condition defaults) and js/polish-sandbox.js (COPYABLE_CELLS). The live intake (js/index.js) keeps its
+// fresh model's conditions, which defaults apply to a bid, where a save writes the tax answers), js/polish-intake.js
+// (CONDITIONS), js/polish-estimate.js (CONDITION_CARDS), js/library.js (WORK_TYPES, appliesToWorkType and the
+// Takeoff condition defaults) and js/polish-sandbox.js (COPYABLE_CELLS). The live intake (js/index.js) keeps its
 // own CONDITIONS and SCOPE_BY_WORK_TYPE until Phase 9 moves it onto js/intake-scope.js, and
-// test_work_types.py executes both and requires them equal to the rows below. Python is pinned to this
+// test_work_types.py executes both and requires them equal to the rows below. It reads this file for one thing
+// already, the split rule below (writeCellsFor and baseSheets), so that the live intake and a v2 save cannot
+// answer "which cells does this tax switch write on a split draft" two ways. Python is pinned to this
 // file by test_work_types_python_pin.py, which runs node and compares markup.TABS, library.WORK_TYPES,
 // leads._WORK_TYPES and _QUANTITY_KEYS, both TEMPLATE_PICKER tables, info_sheet_writer's area keys,
 // condition_defaults.KEYS and library.RESERVED_ITEM_IDS.
@@ -149,6 +151,8 @@
   // workbook with their default only while the cell is blank (Renovation and Bulk discount are asked on
   // the live intake alone). `item_id` is the reserved library item that prices the condition, for the
   // three the Takeoff step carries. `wording` replaces `why` on a screen that words it differently.
+  // `perSheet`, on the two tax conditions only, is where the job's answer lives once a draft is split
+  // (see PER SHEET below); a condition without it writes `cells` whatever state the draft is in.
   //
   // TAXABLE WRITES FOUR CELLS, and that is the whole of Kyle's tax-exempt bug on the base tabs. The
   // sales-tax rate is `=IF($B$6="no",0,0.09475)` on every priced sheet, and each sheet reads its OWN
@@ -157,6 +161,18 @@
   // tax-exempt Gypsum or Leveling bid carried 9.475% it should not have. The other three Gyp variants
   // mirror the gyp base. Epoxy!B6 stays FIRST. Prevailing wage and remodel tax really are Epoxy-only:
   // Epoxy!D5 and Epoxy!D6 are the only literals either has, and every other sheet's is =Epoxy!.
+  //
+  // PER SHEET ONCE A DRAFT IS SPLIT. Taxable and Remodel tax are the two conditions whose answer a sheet can
+  // own, and `perSheet` marks them. A NEW job has one answer for every sheet, which is what `cells` holds:
+  // Taxable lists four cells because four sheets carry a literal, and writing all four is how a tax-exempt
+  // Leveling or Gypsum option stops charging 9.475%. The first time the estimate screen opens a draft it gives
+  // every sheet its OWN answer and marks the draft (`tax_flags_per_sheet`; Hanz, 2026-09-30, "Stay
+  // independent": an option follows its own sheet's tax answer and never the base's). From then on the job's
+  // switch is the BASE bid's answer alone. It is read from, and written to, the cell on the base sheet of the
+  // job's tab(s), which is what `perSheet` lists by tab (the cell on each tab's first sheet, the same
+  // addresses as FLAG_BLOCK_CELLS in backend/estimate_writer.py), and no other sheet is touched. Writing the
+  // `cells` on a split draft would put the base's answer over every option's, which is the defect this rule
+  // exists to stop. writeCellsFor() below is the one place that decides, for the live intake and for a v2 save.
   //
   // THINGS READ OUT OF THE TEMPLATE, not assumed. Polish!B4 holds its own Yes/No, so Local writes both.
   // Polish!D5, B6 and D6 are the formulas =Epoxy!D5, =Epoxy!B6, =Epoxy!D6, so the Polish tab is never
@@ -177,6 +193,7 @@
     { key: "taxable", label: "Taxable", scope: ALL_JOBS,
       why: "Adds sales tax. The bid you see already includes it.",
       default: true, cells: ["Epoxy!B6", "Leveling!B6", 'Gyp (USG 1-8")!B8', "Gyp (FR)!B8"],
+      perSheet: { epoxy: "Epoxy!B6", polish: "Polish!B6", gyp: 'Gyp (USG 1-8")!B8' },
       on: "Yes", off: "No", needs: null,
       model: true, item_id: null, asked_on: { live: 3, v2Intake: 2, v2Takeoff: 0 } },
     // The live intake's sentence, kept as it was written (its dash is U+2014). Estimating Tool v2's
@@ -185,6 +202,7 @@
       why: "Occupied remodel. Taxed at the county rate \u2014 pick the county below.",
       wording: { v2Intake: "Occupied remodel. Adds the county remodel rate on top." },
       default: false, cells: ["Epoxy!D6"], on: "Yes", off: "No", needs: null,
+      perSheet: { epoxy: "Epoxy!D6", polish: "Polish!D6", gyp: 'Gyp (USG 1-8")!D8' },
       model: true, item_id: null, asked_on: { live: 4, v2Intake: 3, v2Takeoff: 0 } },
     // BOND HAS NO CELL: the sheet's bond rate is a hardcoded number, not a Yes/No flag, so there is no
     // literal to write and nothing for an intake to read back. It is a model answer only, and the one
@@ -354,12 +372,79 @@
       });
   }
 
-  /** Every cell any condition writes, in table order and without repeats. A test copy of a bid keeps
-   *  these from its source: the job's answers, whatever the job type. */
+  /** Every cell any condition writes, in table order and without repeats: its `cells`, then (for the two
+   *  tax conditions) the base sheets' own cells it writes on a split draft. A test copy of a bid keeps
+   *  these from its source: the job's answers, whatever the job type and whether or not the source is split,
+   *  so a copy of a split draft arrives with the answers its `tax_flags_per_sheet` mark refers to. */
   function copyableCells() {
     var out = [];
+    function add(cell) { if (out.indexOf(cell) === -1) out.push(cell); }
     CONDITIONS.forEach(function (c) {
-      c.cells.forEach(function (cell) { if (out.indexOf(cell) === -1) out.push(cell); });
+      c.cells.forEach(add);
+      if (c.perSheet) Object.keys(c.perSheet).forEach(function (tabKey) { add(c.perSheet[tabKey]); });
+    });
+    return out;
+  }
+
+  // ── the split rule ───────────────────────────────────────────────────────────────────────────
+  // A real "Sheet!A1" address and nothing else: an address becomes a key in a draft's cell_values, and it can
+  // come from the draft itself (the estimate screen's snapshot of each tab's flag cells).
+  var CELL_ADDRESS = /^[^!]+![A-Z]{1,3}[0-9]{1,5}$/;
+
+  /** Has the estimate screen given every sheet of this draft its OWN Taxable and Remodel answer? The
+   *  `tax_flags_per_sheet` mark on the draft says so, and nothing else does. */
+  function isSplit(draft) {
+    return !!(draft && draft.tax_flags_per_sheet);
+  }
+
+  /** Is this one of the conditions whose answer a sheet owns once the draft is split (Taxable and Remodel
+   *  tax)? THROWS on a key that is not a condition. */
+  function isPerSheet(conditionKey) {
+    return !!condition(conditionKey).perSheet;
+  }
+
+  /** The sheet each of a job type's tabs is priced on, in tab order, as a new array: ["Polish"] for polish,
+   *  ["Epoxy", "Polish"] for a combo job, ['Gyp (USG 1-8")'] for gyp. THROWS on anything that is not a job
+   *  type, a tab included, like tabsFor. These are the sheets whose own answers are the job's once a draft is
+   *  split. */
+  function baseSheets(jobTypeKey) {
+    return jobRecord(jobTypeKey, "baseSheets").tabs.map(function (t) { return tabByKey.get(t).sheets[0]; });
+  }
+
+  /** WHERE ONE CONDITION'S ANSWER IS WRITTEN, AND READ BACK FROM, for one job type, as a new array of
+   *  "Sheet!A1" addresses. The one place that decides, for the live intake (js/index.js) and for a v2 save
+   *  (js/bid-model.js conditionCellWrites and conditionsFromCells), so the two cannot answer differently.
+   *
+   *    not split, or a condition no sheet owns    the condition's `cells`, all of them: one answer for
+   *                                               every sheet.
+   *    split, and Taxable or Remodel tax          the BASE sheets' own cells, one per tab of the job type
+   *                                               (`perSheet`), and no other sheet's: an option keeps its
+   *                                               own answer, and a save never writes the base's over it.
+   *
+   *  `own` is for a caller that already knows the base's cells better than the table does. The live intake
+   *  has the estimate screen's snapshot of them (priced_tabs[].flag_cells), which follows a copied tab or a
+   *  moved row where the table's template addresses cannot. When it is a list, it IS the answer on a split
+   *  draft: only its real "Sheet!A1" addresses, and an empty list means split but no base cell is known, so
+   *  nothing is written rather than a guess. A v2 draft has no snapshot and passes nothing, which reads the
+   *  table.
+   *
+   *  `jobTypeKey` and `split` are REQUIRED, and it throws without them: a default is how a gypsum job once
+   *  read the Polish defaults, and `split` is `isSplit(draft)`, never a guess. It does not decide whether the
+   *  job is asked the condition at all (conditionsFor does). */
+  function writeCellsFor(conditionKey, jobTypeKey, split, own) {
+    var c = condition(conditionKey);
+    var job = jobRecord(jobTypeKey, "writeCellsFor");
+    if (typeof split !== "boolean") {
+      throw new Error("work-types.js: writeCellsFor() was asked about " + said(conditionKey) + " with " + said(split) +
+        " for split, which is not true or false (isSplit(draft) answers it)");
+    }
+    if (!split || !c.perSheet) return c.cells.slice();
+    if (Array.isArray(own)) {
+      return own.filter(function (cell) { return typeof cell === "string" && CELL_ADDRESS.test(cell); });
+    }
+    var out = [];
+    job.tabs.forEach(function (tabKey) {
+      if (Object.prototype.hasOwnProperty.call(c.perSheet, tabKey)) out.push(c.perSheet[tabKey]);
     });
     return out;
   }
@@ -389,6 +474,7 @@
     tabsFor: tabsFor, appliesTo: appliesTo, tabOfSheet: tabOfSheet,
     fieldsFor: fieldsFor, scopesFor: scopesFor,
     conditionsFor: conditionsFor, cellsFor: cellsFor, copyableCells: copyableCells,
+    isSplit: isSplit, isPerSheet: isPerSheet, baseSheets: baseSheets, writeCellsFor: writeCellsFor,
     modelDefaults: modelDefaults, reservedItems: reservedItems, itemIdOf: itemIdOf
   };
 });
