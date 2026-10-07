@@ -91,13 +91,29 @@ if (!SWITCH_BODY) {
 // The module-top snapshot binding. Its being a ONE-SHOT read is the whole mechanism under test,
 // so it is taken from the source rather than written out here — a page that switched to a live
 // getter would make these scenarios pass for a new reason, and that should be visible.
-const SNAPSHOT_M = /\n\s*const state = TW\.getState\(\);/.exec(SRC);
+//
+// THE LINE READS `TW.v2PricingView(TW.getState())` SINCE 2026-10-07: a v2 draft that carries the
+// spreadsheet's pricing is read without it. The view is taken ONCE, at the same moment, so `state` is
+// still the one-shot snapshot these scenarios are about; for every draft that is not v2 the view hands
+// back the very same object. The REAL function is lifted out of shared.js below and given to the
+// scenarios' TW, so this runs the line the page runs.
+const SNAPSHOT_M = /\n\s*const state = TW\.v2PricingView\(TW\.getState\(\)\);/.exec(SRC);
 if (!SNAPSHOT_M) {
-  gone("the module-top `const state = TW.getState();` binding",
+  gone("the module-top `const state = TW.v2PricingView(TW.getState());` binding",
        "If the page no longer keeps a load-time snapshot, the staleness these scenarios are "
        + "about cannot happen and they need rewriting rather than repointing.");
 }
 const SNAPSHOT_LINE = SNAPSHOT_M[0].trim();
+
+// shared.js's real v2PricingView, with the real isV2Draft and SHEET_PRICING_KEYS it stands on.
+const LIB = require("./_lib.js");
+const SHARED_SRC = LIB.read(path.join(ROOT, "frontend", "shared.js"));
+const V2_VIEW = LIB.lift(SHARED_SRC, "v2PricingView", {
+  isV2Draft: LIB.lift(SHARED_SRC, "isV2Draft", {}),
+  SHEET_PRICING_KEYS: new Function(
+    LIB.grabConst(SHARED_SRC, "SHEET_PRICING_KEYS", { indent: "  " })
+    + "\nreturn SHEET_PRICING_KEYS;")(),
+});
 
 // The real `liveKey` helper — the fix for that staleness, and 13 keys on this page depend on it.
 const LIVEKEY_M = /\n(\s*)const liveKey = \(name\) => \{/.exec(SRC);
@@ -199,7 +215,8 @@ function payloadScenario(cfg) {
   const box = makeBox();
   const doc = { getElementById: (id) => (id === "cl-toggle" ? box : null) };
   const store = makeStore(cfg.stored);
-  const TW = { getState: () => store.getState(), setState: (p) => store.setState(p) };
+  const TW = { getState: () => store.getState(), setState: (p) => store.setState(p),
+               v2PricingView: V2_VIEW };
   const build = new Function("document", "TW", "window", '"use strict";\n'
     + SNAPSHOT_LINE + "\n"
     + LIVEKEY_SRC + "\n"

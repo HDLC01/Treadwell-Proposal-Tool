@@ -176,7 +176,7 @@ def test_the_api_ignores_a_hard_bid_flag_still_sent_by_an_old_caller():
 # Excel keeps 15 significant digits, so a figure that is only a binary artefact above an integer
 # IS that integer to Excel. Python's float keeps all 17 and math.ceil believes every one of them.
 # The gap costs a dollar, and it compounds: D73 feeds D75 and D76, so one bad dollar of GP comes
-# out as two on the bid. polish-bid-core.js has guarded this since it was written; pricing.py had
+# out as two on the bid. bid-model.js has guarded this since it was written; pricing.py had
 # not, so the two engines disagreed on 320 of the 22,000 material figures swept on 2026-09-04.
 # Every one of those sits in the 0.32 GP band, because 1 - 0.32 is the only band edge that is not
 # exact in binary: 0.6799999999999999.

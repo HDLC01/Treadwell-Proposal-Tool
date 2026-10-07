@@ -13,11 +13,11 @@ of visibly refused. That is the property this file is protecting:
   * **IF must be lazy.** A formula referencing a cell that only exists on the taken branch
     (`IF(B5="Yes", 1/E69, 0)` when E69 is legitimately absent off that branch) must not evaluate
     the branch it didn't take.
-  * **ROUNDUP must match the workbook, not the spec.** frontend/js/polish-bid-core.js's own
+  * **ROUNDUP must match the workbook, not the spec.** frontend/js/bid-model.js's own
     roundUp() is float-guarded via toPrecision(12) specifically because naive Math.ceil(n*100)/100
     disagrees with Excel at the boundary. This engine's excelRoundUp must match it, not
     re-derive it and drift.
-  * **BAND's edge is "strictly below."** GP_BANDS in polish-bid-core.js is
+  * **BAND's edge is "strictly below."** GP_BANDS in bid-model.js is
     [[6500,.52],[15000,.45],[22500,.35],[32500,.32],[null,.30]] and a value sitting exactly on a
     ceiling takes the NEXT band, not the one it's touching. Off-by-one here is Kyle's example of
     the mistake that goes unnoticed longest, because both bands are plausible margins.
@@ -49,7 +49,7 @@ GYP_SOFT_COSTS = (
     'IF(E69>334900,.05,IF(E69>234450,.035,0)), "error")'
 )
 
-# frontend/js/polish-bid-core.js RATES/GP_BANDS, restated here as the ground truth the engine's
+# frontend/js/bid-model.js RATES/GP_BANDS, restated here as the ground truth the engine's
 # BAND/MARKUP/ROUNDUP built-ins must reproduce.
 GP_BANDS = [[6500, .52], [15000, .45], [22500, .35], [32500, .32], [None, .30]]
 
@@ -159,7 +159,7 @@ def test_min_max():
     assert run('out(M.run("MAX(4,1,9)"))') == 9
 
 
-# ── ROUNDUP must match polish-bid-core.js's roundUp() ────────────────────
+# ── ROUNDUP must match bid-model.js's roundUp() ────────────────────
 def test_roundup_matches_excel_away_from_zero():
     assert run('out(M.run("ROUNDUP(2.001)"))') == 3
     assert run('out(M.run("ROUNDUP(2)"))') == 2
@@ -168,7 +168,7 @@ def test_roundup_matches_excel_away_from_zero():
 
 def test_roundup_is_float_guarded_like_the_workbook():
     """2875/275*11 lands on 11 exactly in real arithmetic but not in float -- this is the exact
-    class of noise toPrecision(12) exists to absorb in polish-bid-core.js's roundUp()."""
+    class of noise toPrecision(12) exists to absorb in bid-model.js's roundUp()."""
     assert run('out(M.run("ROUNDUP(2875/275,0)"))') == 11
 
 

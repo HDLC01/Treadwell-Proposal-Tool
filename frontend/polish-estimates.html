@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Polish Estimate Database · Treadwell Proposal Generator</title>
+  <title>v2 Estimates · Treadwell Proposal Generator</title>
   <link rel="icon" type="image/svg+xml" href="/img/treadwell-bison.svg" />
   <!-- Styles itself, like library.html and polish-estimate.html, so it needs its own
        opt-out. Missing here until 2026-09-18 -- Hanz saw this page render in dark mode
@@ -34,7 +34,7 @@
     /* The two sentences that keep a number on this page from being read as the bid, and the
        page itself from being read as part of the reporting. Quieter than .hint but NOT
        hidden behind a tooltip: both are things somebody would otherwise only find out by
-       trusting the wrong figure. See the Beta total header comment in js/polish-estimates.js. */
+       trusting the wrong figure. See the v2 total header comment in js/polish-estimates.js. */
     .hint-quiet { color:var(--ink-v); font-size:12.5px; max-width:1100px; margin:0 auto 4px; opacity:.85; }
     /* An explicit modifier rather than :last-of-type — that selector counts <p> siblings, so
        adding one paragraph anywhere below would silently move this margin somewhere else. */
@@ -115,38 +115,38 @@
   <div class="top">
     <img class="logo" src="/img/treadwell-bison.svg" width="54" height="34" alt="Treadwell" />
     <div class="h1wrap">
-      <h1>Polish Estimate Database</h1>
+      <h1>v2 Estimates</h1>
       <span class="tag">Beta</span>
     </div>
-    <a class="btn" href="/polish-intake.html">Open the Polish Estimate beta</a>
+    <a class="btn" href="/polish-intake.html">Open Estimating Tool v2</a>
   </div>
-  <p class="hint">Every estimate priced in the Polish Estimate beta, newest first. Open one to reopen it in the beta calculator exactly as it was saved.</p>
+  <p class="hint">Every estimate priced in Estimating Tool v2, newest first. Open one to reopen it exactly as it was saved.</p>
   <!-- THE ANALYTICS SENTENCE. Not-polluting-the-real-numbers is the reason this page was
        asked for, and /api/analytics is basisboard_client.get_analytics() (main.py:562) — it
        is built entirely from BasisBoard and never reads the drafts table, so this is a
        statement of fact about the code rather than a promise about future behaviour. If
        Analytics ever starts reading drafts, this line is the first thing to come out. -->
   <p class="hint-quiet">These figures never reach <b>Analytics</b>. Analytics is built entirely from BasisBoard and does not read this tool's projects, so nothing priced here can move a real number.</p>
-  <!-- THE MONEY SENTENCE. See the Beta total header comment in js/polish-estimates.js for
+  <!-- THE MONEY SENTENCE. See the v2 total header comment in js/polish-estimates.js for
        the mechanism; this is the same fact in the estimator's language. -->
-  <p class="hint-quiet is-last"><b>Beta total</b> is what the beta calculator priced — not the estimate sheet's lump sum, and not necessarily what a proposal document would print.</p>
+  <p class="hint-quiet is-last"><b>v2 total</b> is what Estimating Tool v2 priced. It is not the estimate sheet's lump sum, and not necessarily what a proposal document would print.</p>
   <div class="wrap">
     <div id="toolbar" class="toolbar" hidden>
-      <input id="q" type="search" class="tw-search" placeholder="Search beta estimates…" aria-label="Search beta estimates" autocomplete="off" />
+      <input id="q" type="search" class="tw-search" placeholder="Search v2 estimates…" aria-label="Search v2 estimates" autocomplete="off" />
       <select id="month" class="tw-select" aria-label="Filter by month">
         <option value="">Any month</option>
       </select>
-      <select id="sort" class="tw-select" aria-label="Sort beta estimates by">
+      <select id="sort" class="tw-select" aria-label="Sort v2 estimates by">
         <option value="updated">Date updated</option>
         <option value="name">Name</option>
         <option value="deadline">Deadline</option>
-        <option value="total">Beta total</option>
+        <option value="total">v2 total</option>
       </select>
       <button type="button" id="dir" class="tw-select tw-dir" aria-label="Toggle sort direction"><svg class="tw-ico" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 5v14"></path><path d="M6 13l6 6 6-6"></path></svg> Desc</button>
       <span id="count" class="tw-count" aria-live="polite"></span>
       <button type="button" id="clear" class="chip" hidden><svg class="tw-ico" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6L6 18"></path></svg> Clear</button>
     </div>
-    <div id="list" class="loading">Loading beta estimates…</div>
+    <div id="list" class="loading">Loading v2 estimates…</div>
     <p id="ceiling" class="foot-note" hidden></p>
   </div>
 

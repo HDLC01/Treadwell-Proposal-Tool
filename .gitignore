@@ -130,3 +130,15 @@ Trailing 12TH MONTH.xlsx
 # .github/workflows/zap-baseline.yml); it only ever exists on whichever machine ran the script,
 # and this repo is public, so it never gets committed either.
 /zap-reports/
+
+# ── Node, and the real workbooks the Excel-parity audit reads ────────────────
+# node_modules/ is what `npm install hyperformula@2.7.1` leaves behind when the audit in
+# docs/excel-parity-audit/ is run. Nothing in the repo depends on it (there is no package.json),
+# so there is nothing to commit beside it. The audit's INPUTS are real customer estimate
+# workbooks copied out of Dropbox as job01.xlsx, job02.xlsx and so on, and what it dumps from
+# them (jobNN.json, jobNN.excel.json) carries every cell of a real bid. This repo is public, so
+# none of that is committed. The audit's scripts, its README and last-report.json are not
+# touched by these patterns.
+node_modules/
+docs/excel-parity-audit/job*
+*.excel.json

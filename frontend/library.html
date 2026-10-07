@@ -229,6 +229,16 @@
     .th-sub { font-weight:400; text-transform:none; letter-spacing:0; }
     /* Widths as classes. They were eight inline style attributes on the <th> row. */
     .w-order { width:112px; } .w-cov { width:116px; } .w-waste { width:104px; }
+    /* The Defaults tab's starting-state slider (the same .mw-sw the estimate draws, via
+       TWBidModel.sliderHtml). */
+    .w-on { width:84px; white-space:nowrap; } .rowon { white-space:nowrap; }
+    .mw-sw{display:inline-flex;align-items:center;gap:7px;cursor:pointer;vertical-align:middle;font-size:12px}
+    .mw-sw .track{width:30px;height:18px;border-radius:var(--r-lg);background:var(--surf-low,#e8e4df);
+      border:1px solid var(--line,#c9c2ba);position:relative;transition:background .15s}
+    .mw-sw .track::after{content:"";position:absolute;top:1px;left:1px;width:14px;height:14px;
+      border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.25);transition:left .15s}
+    .mw-sw.on .track{background:var(--red,#c8102e);border-color:transparent}
+    .mw-sw.on .track::after{left:13px}
     .w-ru { width:78px; text-align:center; } .w-qty { width:132px; } .w-act { width:34px; }
     .cell-name { width:100%; min-width:150px; }
     .cell-unit { width:100%; min-width:96px; }
@@ -238,6 +248,22 @@
     .cell-qty { width:64px; }
     .cell-cost { width:92px; }
     .rowact { white-space:nowrap; }
+    /* THE ITEMS ROW'S SAVE BUTTON, PINNED TO THE RIGHT EDGE OF THE SCROLLER. Hanz, 2026-10-06:
+       "the save button only pops up when we click away". The Items table is about 1,990px wide
+       inside a .tw scroller, and the button used to go into .rowact, the last column -- 600px past
+       the right edge on a 1366 screen, 1,600px past it on a phone. It was there from the first
+       keystroke; nobody could see it. Sticky right:0 keeps it on the edited row and on screen at
+       any scroll position, Cost and Vendor included (focusing those scrolls the NAME column off
+       screen, which is why the button is not in the name cell).
+       Zero wide while empty: no padding, no background, so a clean table carries no strip down its
+       right edge and the column costs nothing. Only a cell holding a button paints, opaque so the
+       columns sliding under it do not show through. The hover fill is --surf rather than the
+       translucent row tint, which would let those columns through; the two differ by 3 levels. */
+    .rowsave { padding:0; }
+    td.rowsave { position:sticky; right:0; }
+    td.rowsave:not(:empty) { padding:0 11px; background:var(--card);
+      box-shadow:inset 1px 0 0 var(--line); }
+    tbody tr:hover td.rowsave:not(:empty) { background:var(--surf); }
 
     /* WHICH CELLS THE PAGE WORKS OUT FOR YOU. Quantity and Cost are the only two columns nobody
        types into — they are the arithmetic this page exists to show — so they carry a faint band
@@ -344,7 +370,20 @@
     .an { font-weight:600; font-size:13px; }
     .am { font-size:11.5px; color:var(--ink-v); font-variant-numeric:tabular-nums; }
     .apanel { padding:18px 20px 20px; display:grid; gap:16px; }
-    .atitle { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+    /* THE TITLE BAR STAYS ON SCREEN. Hanz, 2026-10-06: after editing a line deep in a long takeoff
+       the Save button, which lives in this bar, was ~700px above the viewport at 1366 and ~1240px
+       at 390. The bar sticks to the top of the page while the open assembly scrolls past, so Save
+       is on screen whenever it is shown. The page scrolls (no ancestor clips), so sticky resolves
+       against the window and is released by the end of #asm-panel.
+       Negative margins widen the bar to the card's edges, and the padding gives the room back, so
+       the content sits exactly where it did; top:-8px lets the card's own top padding slide off
+       so a stuck bar is only as tall as its controls. top:44px is the fixed #tw-topbar (52px, z 9995,
+       injected by auth.js on this page) less that 8px, so the bar parks just under it, not behind. The card fill and a hairline keep the lines
+       from showing through. z-index 5 sits under .item-results (30) and the dialogs. */
+    .atitle { display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+      position:sticky; top:44px; z-index:5; background:var(--card);
+      margin:-18px -20px -10px; padding:18px 20px 10px;
+      border-bottom:1px solid var(--line); border-radius:var(--r-lg) var(--r-lg) 0 0; }
     .atitle input { font:700 16px var(--ui); padding:5px 8px; flex:1; min-width:180px; }
 
     /* The measured area is the one input every number below depends on, so it gets its own
@@ -363,6 +402,10 @@
     .areaband .why { color:var(--ink-v); font-size:12px; }
 
     .lines td { vertical-align:top; }
+    /* Tabbing up into a line scrolls it to the top edge of the page; this keeps it clear of the
+       sticky .atitle bar plus the fixed top bar above it (52 + 62px at desktop width, 52 + 98px when it
+       wraps at phone width). */
+    .lines :is(input, select, button) { scroll-margin-top:156px; }
     .lines .role input { width:100%; min-width:96px; }
     .lines select { width:100%; min-width:150px; }
     .lines .cov input { width:82px; }
@@ -649,8 +692,32 @@
        button end up roughly fifteen hundred pixels apart on a wide monitor, so the eye has
        to cross empty table to get from one to the other. This puts the controls back beside
        the rows they act on and changes nothing on any other tab. */
-    #pane-defaults .admin-grid { max-width:980px; }
+    /* The Labor Calculator shares the cap for the same reason: four- and five-column tables and a
+       column of explanation that, uncapped, ran one sentence across the whole monitor. */
+    #pane-defaults .admin-grid, #pane-labcalc .admin-grid, #pane-labcalc > .ronote { max-width:980px; }
     .admin-section h2 { margin:0 0 8px; font:700 14px var(--ui); letter-spacing:-.01em; }
+
+    /* ── THE LABOR CALCULATOR TAB ─────────────────────────────────────────
+       Everything else on the tab is vocabulary already on this page: .admin-section, .card, .tw,
+       .money, .qtycell, .areaband, .btn.ghost.sm, .saving, .dash, .lines-empty. These four rules
+       are only what that vocabulary does not cover. */
+    /* "How it is worked out": explanation, not a figure, so it reads one step quieter than the
+       rates beside it. The min-width makes a phone scroll the table inside its card rather than
+       squeeze the sentence to a word a line. */
+    .lc-how { color:var(--ink-v); font-size:12.5px; min-width:220px; }
+    /* Only the explanation wraps. A line name, a unit or a pair of crew boxes broken over two
+       lines ("Travel / Labor", "per / night") made rows twice as tall for nothing. */
+    #pane-labcalc tbody td:not(.lc-how) { white-space:nowrap; }
+    /* A read-only figure in a column of input boxes. The box's border and inner padding put its
+       number 10px in from the cell edge; this puts the plain figure on the same edge, so the
+       dollars line up down the column. */
+    #pane-labcalc td.lc-fixed { padding-right:21px; }
+    /* The Try-it band sits flush at the head of its card, so it drops its own box and keeps a
+       rule between it and the results. */
+    #pane-labcalc .areaband { border:0; border-bottom:1px solid var(--line); border-radius:0; }
+    /* A footnote flush inside a card, under a table: the cell padding, a hairline above. */
+    .cardnote { margin:0; padding:9px 11px; color:var(--ink-v); font-size:12px;
+      border-top:1px solid var(--line-soft); }
 
     /* Vendors: readable by everyone, editable by admins. The read-only state is a real state, not
        a disabled table — it says who to ask. */
@@ -681,12 +748,12 @@
   <div class="top">
     <img class="logo" src="/img/treadwell-bison.svg" alt="Treadwell" />
     <h1>Items and Assemblies</h1>
-    <span class="beta" title="Being tested. The shape of an assembly may still change. Assemblies are priced by the Polish Estimate beta; no live bid reads them.">Beta test</span>
+    <span class="beta" title="Being tested. The shape of an assembly may still change. Assemblies are priced by Estimating Tool v2; no live bid reads them.">Beta test</span>
   </div>
   <div class="wrap">
     <p class="hint">Materials you buy, and the assemblies you build out of them. Change a
-      material's cost once and every assembly using it reprices. The <b>Polish Estimate beta</b>
-      prices its takeoff from these assemblies — no live bid reads them yet.</p>
+      material's cost once and every assembly using it reprices. <b>Estimating Tool v2</b>
+      prices its takeoff from these assemblies. No live bid reads them yet.</p>
     <p class="alert" id="alert" role="status" aria-live="polite"></p>
 
     <div class="views" role="tablist" aria-label="Items and assemblies">
@@ -699,10 +766,14 @@
            inside the Defaults tab. See the note over #pane-labor for what this tab is and is not. -->
       <button type="button" role="tab" id="tab-labor" aria-selected="false"
               aria-controls="pane-labor">Labor<span class="n" id="n-labor"></span></button>
+      <!-- RIGHT AFTER LABOR (Hanz, 2026-10-05): the calculations behind the labor defaults a new
+           estimate opens with. Travel is the first section: Travel Labor, Lodging and Per Diem. -->
+      <button type="button" role="tab" id="tab-labcalc" aria-selected="false"
+              aria-controls="pane-labcalc">Labor Calculator</button>
       <button type="button" role="tab" id="tab-vendors" aria-selected="false"
               aria-controls="pane-vendors">Administration</button>
       <button type="button" role="tab" id="tab-defaults" aria-selected="false"
-              aria-controls="pane-defaults">Default Items &amp; Assemblies</button>
+              aria-controls="pane-defaults">Default Items, Assemblies &amp; Labor</button>
       <!-- "+ New assembly" USED TO SIT HERE, in a .tabaction wrapper pinned to the right-hand end
            of this strip. Hanz, 2026-08-27: "I dont like the New assembly button up top." It now
            lives at the TOP OF THE ASSEMBLY RAIL, which is the list it actually appends to — see
@@ -806,6 +877,8 @@
                      default items in assemblies should be handled in default items in assemblies
                      tab" -- one screen owns defaults, and a switch here would be a second place to
                      set the same thing. The Defaults tab's own search adds them now. -->
+                <!-- The Save button's column, zero wide until a row has an unsaved edit. -->
+                <th class="rowsave"></th>
                 <th class="w-act"></th>
               </tr>
             </thead>
@@ -884,6 +957,19 @@
           <button class="btn" type="button" data-add-labor>Add your first labor line</button>
         </div>
       </div>
+    </section>
+
+    <!-- ── Labor Calculator ───────────────────────────────────────────── -->
+    <section id="pane-labcalc" role="tabpanel" aria-labelledby="tab-labcalc" hidden>
+      <p class="paneintro"><b>How the labor lines a new estimate opens with are worked out.</b>
+        Travel is first: Travel Labor, Lodging and Per Diem. Lodging and Per Diem rates are stored
+        once, on the Markup page's Global tab, and are edited here too.</p>
+      <p class="ronote" id="labcalc-ro" hidden>You can see these figures. Changing them is
+        admin-only - ask Hanz or Kyle.</p>
+      <p class="alert" id="labcalc-alert" role="status" aria-live="polite"></p>
+      <!-- FILLED BY renderLabCalc(): Travel, Default labor lines and Try it, each an .admin-section
+           (a heading over its own card), the shape Administration and Defaults already use. -->
+      <div id="labcalc-body" class="admin-grid"></div>
     </section>
 
     <!-- ── Vendors ────────────────────────────────────────────────────── -->
@@ -995,18 +1081,8 @@
       <!-- THE PANE'S OWN RATIONALE, said once rather than left in HTML comments. The
          Assemblies and Administration panes both open with a .paneintro; this one did not. -->
       <p class="paneintro"><b>Defaults are what a new bid opens holding.</b> Pick a work
-        type, then set the takeoff lines and the labor lines an estimate starts with.</p>
-      <div class="itemsearch" id="default-search">
-        <span class="searchbox">
-          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
-               stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
-               focusable="false"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.6-3.6"></path></svg>
-          <input id="default-q" type="search"
-                 placeholder="Search materials, assemblies and labor lines to add"
-                 aria-label="Search the library for a material, assembly or labor line to make a default"
-                 autocomplete="off" />
-        </span>
-      </div>
+        type, then set the takeoff lines and the labor lines an estimate starts with.
+        Travel is set in <a href="#tab=labcalc" data-goto-labcalc>Labor Calculator</a>.</p>
 
       <!-- ONE STRIP FOR BOTH SECTIONS, not one each. A work type is the question "what does
            a polish bid open holding?", and Takeoff and Labor are two halves of that one
@@ -1068,11 +1144,30 @@
                  list rendered alongside the input, floating clear of the table it was about
                  to add a row to. Under the Add button it reads as what it is: the next rows
                  of this list, waiting to be picked. The search box above still drives it. -->
-            <div id="default-hits" hidden></div>
+            <!-- THE SEARCH BOX LIVES HERE WHEN "Add a ... default" OPENS IT, and moves. Hanz, 2026-10-05:
+                 "the search bar right above the [Labor] container itself, not on the work type up
+                 above". ONE box, relocated by placeDefaultSearch() to sit directly above the table of
+                 whichever section's button was pressed -- one box means only one can ever be open,
+                 and the ids stay unique. Hidden until a button opens it. -->
+            <div id="default-search" hidden>
+              <div class="itemsearch">
+                <span class="searchbox">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+                       stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
+                       focusable="false"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.6-3.6"></path></svg>
+                  <input id="default-q" type="search"
+                         placeholder="Search materials, assemblies and labor lines to add"
+                         aria-label="Search the library for a material, assembly or labor line to make a default"
+                         autocomplete="off" />
+                </span>
+                <button class="btn ghost sm" type="button" data-def-search-close>Cancel</button>
+              </div>
+              <div id="default-hits" hidden></div>
+            </div>
             <div class="tw">
               <table>
                 <thead><tr><th>Line</th><th>How it is priced</th>
-                  <th class="w-act"></th></tr></thead>
+                  <th class="w-on">Starts</th><th class="w-act"></th></tr></thead>
                 <!-- FILLED BY renderDefaultTakeoff(), GROUPED. Hanz, 2026-09-17: "sub
                      categorize the containers wheter they are materials or assemblies".
 
@@ -1119,7 +1214,7 @@
             <div class="tw">
               <table>
                 <thead><tr><th>Line</th><th class="n">Rate</th><th>How it is priced</th>
-                  <th class="w-act"></th></tr></thead>
+                  <th class="w-on">Starts</th><th class="w-act"></th></tr></thead>
                 <!-- FILLED BY renderDefaultLabor(). Travel is already in here before anybody adds
                      anything: it is the labor default the estimate has always had, seeded into
                      every new bid and appended to every old one. It was just never SHOWN as a
@@ -1273,6 +1368,7 @@
               <option value="SF">per SF</option>
               <option value="LF">per LF</option>
             </select>
+            <button class="btn sm" type="button" id="asm-save" hidden title="Save this new assembly now">Save</button>
             <button class="icon danger" type="button" id="asm-del" title="Delete this assembly"
                     aria-label="Delete this assembly">
               <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
@@ -1437,7 +1533,9 @@
        records the two copies that existed before drifting within a day -- and a third here would
        have drifted unseen, since nothing on this page prices anything. It touches no DOM and runs
        nothing on load; it is 14.6 KB gzipped of pure arithmetic. -->
-  <script src="/js/polish-bid-core.js"></script>
+  <!-- bid-model reads its number helpers off window.TWExcelMath as it loads, so that goes first. -->
+  <script src="/js/excel-math.js"></script>
+  <script src="/js/bid-model.js"></script>
   <script src="/js/library-core.js"></script>
   <!-- ONE FUNCTION out of this file, and the eighteenth page to load it: TWCrm.nameOf, which is
        the app's single email→display-name convention ("kyle.loseke@…" → "Kyle Loseke"). The

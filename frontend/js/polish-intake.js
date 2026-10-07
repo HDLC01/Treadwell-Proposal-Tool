@@ -16,7 +16,7 @@
 //
 // WHAT IT WRITES, AND WHAT IT MUST NOT WRITE.
 //
-// The toggles land in `state.polish_estimate.conditions`, where js/polish-bid-core.js's
+// The toggles land in `state.polish_estimate.conditions`, where js/bid-model.js's
 // markupChain() reads them by key to decide the labor escalation and the two taxes. The takeoff
 // and labor rows live under the SAME key, so every save merges — see save().
 //
@@ -36,7 +36,7 @@
   "use strict";
 
   var SB = window.TWPolishSandbox;
-  var B = window.TWPolishBid;      // owns the model shape, and the keys markupChain reads
+  var B = window.TWBidModel;      // owns the model shape, and the keys markupChain reads
   var $ = function (id) { return document.getElementById(id); };
 
   var esc = function (s) {
@@ -52,18 +52,23 @@
   // panel, where Kyle could check a field against the workbook he already trusts. This page writes
   // the draft, not the workbook, so a cell name here would point at a cell it never touches.
   //
-  // THE KEYS ARE THE CONTRACT. They have to match the conditions in js/polish-bid-core.js exactly:
+  // THE KEYS ARE THE CONTRACT. They have to match the conditions in js/bid-model.js exactly:
   // markupChain() looks each one up BY KEY and a miss reads as `false`, so a typo here is a
   // prevailing-wage job quietly priced at standard rates with nothing on screen to show it.
   // Pinned by test_polish_intake_page.py, which compares the two lists.
+  //
+  // NO "LOCAL JOB" SWITCH (Kyle, 9/18 notes; Hanz, 2026-10-05). Distance decides it now: the Labor
+  // step works the driving miles out from the job address and sets the hidden `conditions.local`
+  // answer from them (< 70 miles is local). That key is still on the model and still written to
+  // Polish!B4 / Epoxy!B4 by conditionCells() -- it is only no longer ASKED here. Because it is not
+  // in this list, isCondition("local") is false and a spoken "it is not local" in the verbal panel
+  // changes nothing: a person's word does not outrank the miles.
   var CONDITIONS = [
-    { key: "local", label: "Local job",
-      why: "Under 70 miles. Off means travel and lodging get added." },
     // NO HARD BID. Hanz, 2026-09-22: "remove all hard bids from the polish intake form. And
     // also on the markups" -- confirmed to mean the Polish beta specifically (its intake,
     // Review step and the Markup admin page), leaving the live v1 Intake, the AI Autofill
     // flag, the verbal-AI parser and pricing.py's own engine untouched; those never read this
-    // list. The keys are still the contract with polish-bid-core.js's markupChain(), which no
+    // list. The keys are still the contract with bid-model.js's markupChain(), which no
     // longer offers hard_bid either -- see that file's own note on the removal.
     { key: "prevailing_wage", label: "Prevailing wage",
       why: "Raises every labor line to the prevailing rate." },
@@ -89,7 +94,7 @@
   // job's downloaded .xlsx now writes Polish!B10 / Epoxy!B10 as "New" unconditionally -- the same
   // literal an untouched Renovation switch already defaulted to, so no download that was correct
   // yesterday becomes wrong today; a job that IS a renovation simply has no way to say so from
-  // this screen any more. js/polish-bid-core.js still has no notion of renovation and never did.
+  // this screen any more. js/bid-model.js still has no notion of renovation and never did.
   //
   // If a carry-only condition is ever needed again, CARRY_CONDITIONS existed as a parallel array
   // to CONDITIONS with its own `cells`/`on`/`off`/`def` shape (see git history) -- do not
@@ -109,7 +114,7 @@
    *  EXTRACTED AS OF 2026-09-15, having been a deliberate duplicate before that. The old note
    *  here said one shared module was not worth it because test_polish_intake_page.py pins this
    *  page's <script src> list as an exact seven-item sequence, so a sixth file would be a test
-   *  move dressed up as a refactor. That trade changed twice over: polish-bid-core.js is ALREADY
+   *  move dressed up as a refactor. That trade changed twice over: bid-model.js is ALREADY
    *  in both pages' script lists so nothing new is loaded, and the Review step became a second
    *  writer of these conditions — at which point two copies stopped being a tidiness question and
    *  became the mechanism by which the two screens would disagree about a price.
@@ -639,6 +644,46 @@
     saveTimer = setTimeout(function () { saveTimer = null; save(); }, 600);
   }
 
+  /** Has the step-2 takeoff been measured? Then it, not intake, owns the SF.
+   *
+   *  Asked of a MODEL, so save() can ask it of the freshest saved one and paintSfLock() of the one
+   *  this page holds. B.takeoffSf counts SF rows only, which is the number polish_sf is the total
+   *  of: a takeoff of linear-foot rows alone has no SF to disagree about, so it does not lock.
+   *
+   *  WHY THE GUARANTEE IS IN save() AND NOT IN THE DOM. TW.readForm (shared.js) walks
+   *  form.elements and takes every input that has a `name` -- readonly AND disabled included. So a
+   *  locked box that kept its name would still hand its value to the spread below and overwrite
+   *  polish_sf (the takeoff TOTAL) with whatever the box happened to show. Readonly is the cue for
+   *  the estimator; stripping the two keys in save() is what actually keeps the number safe.
+   *  Pinned by polish-intake-harness.js against the REAL readForm lifted out of shared.js. */
+  function sfLocked(model) {
+    // MEASURED, NOT PRICED (F5): switching the only SF row OFF must not unlock these boxes and let
+    // a stale figure overwrite polish_sf. B.measuredSf ignores the on/off slider; see its note.
+    return !!model && B.measuredSf(model.takeoff) > 0;
+  }
+
+  /** Paint the SF boxes for the current model: editable and seeded from the draft, or locked
+   *  read-only with the takeoff total and a line saying where to change it. */
+  function paintSfLock() {
+    var locked = sfLocked(M);
+    var one = $("polish-sf-1"), two = $("polish-sf-2"), note = $("sf-locked-note");
+    [one, two].forEach(function (el) { if (el) el.readOnly = locked; });
+    if (locked) {
+      var total = B.measuredSf(M.takeoff);
+      // The total sits in System 1 and System 2 is blank: the takeoff may have any number of SF
+      // rows by now, and two boxes cannot show them. The note says so.
+      if (one) one.value = total;
+      if (two) two.value = "";
+      if (note) {
+        note.textContent = "Measured on the takeoff (step 2): " + B.fmtSf(total) +
+          " SF in total. Change it there — these boxes are locked so the two can never disagree.";
+        note.hidden = false;
+      }
+    } else if (note) {
+      note.hidden = true;
+    }
+  }
+
   function save() {
     if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
     var values = form ? TW.readForm(form) : {};
@@ -647,40 +692,38 @@
     var cs = [values.city, (values.state || "").toUpperCase()].filter(Boolean).join(", ");
 
     var cur = TW.getState();
-    var existing = cur.polish_estimate || {};
-    // MERGE, NEVER REPLACE. The calculator's takeoff and labor rows live under this same key.
-    // Writing { conditions: … } over the top of it to record one toggle would silently delete a
-    // finished takeoff — and the estimator would not find out until the bid came back at zero.
-    // Only `conditions` is this page's to state.
+    // MERGE, NEVER REPLACE. The calculator's takeoff and labor rows -- and whatever else a saved
+    // model holds, `tabs` included -- live under this same key. Writing { conditions: … } over the
+    // top of it to record one toggle would silently delete a finished takeoff, and the estimator
+    // would not find out until the bid came back at zero. Only `conditions` and `conditions_shown`
+    // are this page's to state, and B.patchModel is where that is decided (bid-model.js):
+    // it lays those two over the saved model and leaves every other key exactly as it was saved.
     //
-    // Through migrateModel, so what lands is a well-formed v2 model with its version stamped: a
-    // brand-new project has no polish_estimate at all, and a bare { conditions } blob was read as
-    // "unversioned, unrecognised" — the calculator replaced it with defaults and the Projects page
-    // sent the project back to the spreadsheet intake. Both of those were silent.
-    var model = B.migrateModel(existing);
-    model.conditions = Object.assign({}, model.conditions, M.conditions);
-    // The card map seeded on this page's first load rides along; a later save carries the same
-    // map back, since M was read through migrateModel from what was saved.
-    if (M.conditions_shown) model.conditions_shown = M.conditions_shown;
-    // LABOR IS NOT THIS PAGE'S TO STATE -- and until 2026-09-17 it stated it anyway, by accident.
-    // This page has no labor UI at all; the line above says out loud that only `conditions` is
-    // its own. But migrateModel fills a missing `labor` in from freshModel() before it hands the
-    // model back, so the FIRST save on a brand-new project persisted four crew rows nobody had
-    // been shown, let alone typed.
+    // It reads the saved model through migrateModel, so what lands is a well-formed v2 with its
+    // version stamped: a brand-new project has no polish_estimate at all, and a bare
+    // { conditions } blob was read as "unversioned, unrecognised" -- the calculator replaced it
+    // with defaults and the Projects page sent the project back to the spreadsheet intake. Both of
+    // those were silent.
     //
-    // That was enough to make the Labor step's own defaults unreachable in the normal flow. The
-    // calculator adds the library's default labor lines to a bid whose labor has never been
-    // stated (B.laborUnstated, and the seeding block in js/polish-estimate.js); a model minted
-    // here had already stated it, seconds before the estimator ever reached the Labor step. Every
-    // beta project starts on this page, so every beta project arrived pre-disqualified.
+    // The card map seeded on this page's first load rides along; a later save carries the same map
+    // back, since M was read through migrateModel from what was saved.
     //
-    // So the key is dropped back off -- ONLY when it was not already there. The guard reads what
-    // is ALREADY SAVED, which means the moment the calculator writes a real labor array this
-    // leaves it strictly alone; flipping a toggle here can never delete an estimator's crew rows.
-    // Nothing on screen changes either way: reopening the calculator fills the display copy in
-    // from freshModel() exactly as it did before, because that is what migrateModel does with a
-    // model that states no labor.
-    if (B.laborUnstated(cur.polish_estimate)) delete model.labor;
+    // LABOR IS NOT THIS PAGE'S TO STATE, which patchModel also enforces: this page has no labor UI
+    // at all, and migrateModel fills a missing `labor` in from freshModel(), so the FIRST save on a
+    // brand-new project used to persist four crew rows nobody had been shown. That made the Labor
+    // step's own defaults unreachable (B.laborUnstated is the gate they are seeded behind), so
+    // patchModel takes the key back off -- ONLY when what is already saved never stated it.
+    var model = B.patchModel(cur.polish_estimate, {
+      conditions: M.conditions,
+      conditions_shown: M.conditions_shown
+    });
+
+    // ONE SOURCE OF TRUTH FOR SF. Once the takeoff holds a measurement, polish_sf is the takeoff
+    // total (js/polish-estimate.js writes it) and is not this page's to state -- see sfLocked().
+    // Deleted from `values`, so the merge in setState leaves the saved polish_sf and polish_2_sf
+    // exactly as the takeoff wrote them. Decided from the saved model, read just now, not from the
+    // DOM: a stale locked/unlocked paint cannot let a partial value through.
+    if (sfLocked(model)) { delete values.polish_sf; delete values.polish_2_sf; }
 
     // The county's four keys ride along as TOP-LEVEL draft keys, not inside polish_estimate: they
     // are the live estimate screen's own, and js/polish-estimate.js reads county_remodel_rate off
@@ -761,6 +804,7 @@
       bid.value = now.getFullYear() + "-" + (m.length < 2 ? "0" + m : m) + "-" +
         (d.length < 2 ? "0" + d : d);
     }
+    paintSfLock();                          // after writeForm: a locked box shows the takeoff total
     renderConditions();
     hydrateCounty();                        // after the toggles: the note quotes Remodel tax
     paintProjLine();
@@ -810,6 +854,25 @@
     if (form) form.addEventListener("input", function (e) {
       if (e.target && e.target.name) saveSoon();
     });
+    // THE "0" TRAP. The two SF boxes ship with value="0". A programmatic focus (a test driver, a
+    // screen reader jump) leaves the caret at position 0, so typing 8000 gives "8000"+"0" = 80000.
+    // Selecting a lone "0" on focus makes the first keystroke replace it, as a click or Tab would.
+    if (form) form.addEventListener("focusin", function (e) {
+      var t = e.target;
+      if (t && t.type === "number" && t.value === "0" && !t.readOnly && t.select) t.select();
+    });
+    // The address / business lookup, shared with the live intake (js/address-lookup.js). A picked
+    // row fires `input` on City, State and Zip, which the listener above turns into a save. The
+    // guard is for a page served without the script; the lookup is a convenience, not a gate.
+    if (window.TWAddress && form) {
+      window.TWAddress.mount({
+        address:  $("address-input"),
+        business: $("business-input"),
+        city:     $("city-input"),
+        state:    $("state-input"),
+        zip:      $("zip-input"),
+      });
+    }
     var input = $("county-input");
     if (input) {
       input.addEventListener("input", onCountyInput);

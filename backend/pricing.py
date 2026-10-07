@@ -87,7 +87,7 @@ def _roundup(value: float) -> int:
     binary artefact above an integer is that integer to Excel. In IEEE-754 1 - 0.32 is
     0.6799999999999999, so 1003 / (1 - 0.32) is 1475.0000000000002 -- and a bare ceil buys a
     whole extra dollar off the back of the error. 1.3% of the (cost, GP) pairs in the range this
-    tool bids land on it. polish-bid-core.js has guarded this since it was written and names the
+    tool bids land on it. bid-model.js has guarded this since it was written and names the
     same hazard in its own comment; 12 significant digits is that engine's figure, kept so the
     two agree exactly rather than merely closely.
     """

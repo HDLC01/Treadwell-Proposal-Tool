@@ -953,7 +953,14 @@ def test_no_row_sits_inside_another_row_on_any_tab(ran):
 
 @needs_node
 def test_every_global_line_says_plainly_that_it_reaches_no_bid(ran):
-    """Which is exactly true today, and the reason `global` is absent from PRICES_THE_BID.
+    """Which is exactly true of the WORKBOOK today, and the reason `global` is absent from
+    PRICES_THE_BID.
+
+    CHANGED ON PURPOSE, 2026-10-05 (Kyle's notes, B7): travel lodging and travel food are no longer
+    unread. The Polish Estimate beta copies each onto every new bid's Lodging / Per Diem line and
+    prices it inside the markups, so those two rows now say so -- and still say Kyle's workbook
+    does not read them, which is the half that stays true. Bond (and labor_rate, whose sentence is
+    older than this change) keep the original wording.
 
     bond has no address anywhere while Kyle's own bond row double-counts the tax, and the two
     travel figures would need a dollars-only parser and a 22-cell target table that do not exist.
@@ -961,6 +968,23 @@ def test_every_global_line_says_plainly_that_it_reaches_no_bid(ran):
     than bond's; gone with the line on 2026-09-22. So all three rows say so, rather than letting
     an admin file a rate, watch it save with a green tick, and move no price."""
     for r in ran["globalDayOne"]["rows"]:
+        if r["line"] in ("travel_lodging", "travel_per_diem"):
+            assert "Estimating Tool v2 copies this figure onto every NEW bid" in r["explain"], (
+                "%s does not say the beta reads it: %r" % (r["line"], r["explain"]))
+            assert "workbook does not read it" in r["explain"], (
+                "%s lost the half that is still true: %r" % (r["line"], r["explain"]))
+            continue
+        # CHANGED ON PURPOSE, 2026-10-06: the labor rate and Fees + Textura are read by the beta
+        # too -- each is a new bid's starting figure -- so their rows say so instead of "changes
+        # no bid", and still say the workbook does not read them.
+        if r["line"] in ("labor_rate", "fees_textura"):
+            assert "starts every NEW bid" in r["explain"], (
+                "%s does not say the beta reads it: %r" % (r["line"], r["explain"]))
+            assert "workbook does not read it" in r["explain"], (
+                "%s lost the half that is still true: %r" % (r["line"], r["explain"]))
+            assert "changes no bid" not in r["explain"], (
+                "%s still claims it changes no bid: %r" % (r["line"], r["explain"]))
+            continue
         assert "does not read this line yet" in r["explain"], (
             "%s claims something about a bid: %r" % (r["line"], r["explain"]))
 
@@ -1702,7 +1726,7 @@ def test_the_page_only_claims_a_filed_rate_prices_nothing_while_that_is_true():
     else:
         assert note, (
             "nothing consumes these rules -- markup-core.js is loaded by markup.html alone and "
-            "polish-bid-core.js still owns its own RATES -- so an admin can edit a rate, watch it "
+            "bid-model.js still owns its own RATES -- so an admin can edit a rate, watch it "
             "save, and move no price at all. The page has to say so.")
 
 
@@ -1715,3 +1739,73 @@ def test_the_badge_does_not_promise_an_override_that_does_not_happen():
     html = (FRONTEND / "markup.html").read_text(encoding="utf-8")
     assert "rows override the constants" not in html, (
         "the Beta test badge is promising an override no code performs")
+
+
+@needs_node
+def test_a_sheet_tab_lists_every_global_line_read_only_and_outside_its_chain(ran):
+    """Hanz 2026-10-06: what is set on the Global tab has to show on every work type. A sheet tab
+    carries ONE read-only block under its table naming each Global line it does not already show
+    as a row, with the figure the Global tab resolves. NOT rows of the chain: a $33 row would be
+    compounded into the sub-total.
+
+    Mutation: put "labor_rate" in displayOrder's sheet-tab list -- it gets a row and the total
+    moves. Mutation: drop the block (globalRefHtml returns "") -- every assertion here goes red."""
+    snap = ran["dayOnePolish"]
+    assert len(snap["globalRef"]) == 1, snap["globalRef"]
+    ref = snap["globalRef"][0]
+    assert {i["line"]: i["text"] for i in ref["items"]} == {
+        "travel_lodging": "Travel lodging: $70.00 a night",
+        "travel_per_diem": "Travel food: $45.00 a day",
+        "labor_rate": "Labor rate: $33.00 an hour",
+        "fees_textura": "Fees + Textura: $0.00 a bid"}, ref["items"]
+    assert "Global" in ref["text"]
+    assert ref["link"] == 1 and ref["inputs"] == 0
+    assert "labor_rate" not in [r["line"] for r in snap["rows"]]
+    assert ran["globalDayOne"]["globalRef"] == []
+
+
+@needs_node
+def test_every_work_type_tab_shows_filed_off_and_built_in_global_figures_once(ran):
+    """Filed ($36 labor, $250 fees), switched off (lodging) and built-in (food $45) on ALL five
+    work-type tabs; bond is a chain row on each, so it is NOT repeated in the block.
+
+    Mutation: show only labor_rate (the old single note) -- fees/lodging/food assertions fail.
+    Mutation: drop the bond skip in globalRefRows -- bond appears twice per tab."""
+    for tab in ("polish", "seal", "epoxy", "leveling", "gyp"):
+        blocks = ran["globalRefByTab"][tab]
+        assert len(blocks) == 1, (tab, blocks)
+        got = {i["line"]: i["text"] for i in blocks[0]["items"]}
+        assert got == {
+            "travel_lodging": "Travel lodging: off",
+            "travel_per_diem": "Travel food: $45.00 a day",
+            "labor_rate": "Labor rate: $36.00 an hour",
+            "fees_textura": "Fees + Textura: $250.00 a bid"}, (tab, got)
+        assert "bond" in ran["globalRefRowsByTab"][tab]
+        assert "Bond" not in blocks[0]["text"], (tab, blocks[0]["text"])
+
+
+@needs_node
+def test_the_global_block_follows_a_global_edit_and_never_moves_a_total(ran):
+    """Live: a labor rate saved on Global shows on the next sheet tab read. And the block is
+    context only -- $33 and $99 leave the tab's lump sum identical.
+
+    Mutation: add the block's lines to the priced rows -- the two totals differ."""
+    assert any("Labor rate: $40.00 an hour" in i["text"]
+               for i in ran["globalRefAfterEdit"][0]["items"]), ran["globalRefAfterEdit"]
+    t = ran["globalRefTotals"]
+    assert t["lo"] == t["hi"] and t["lo"], t
+    assert "$33.00" in t["loRef"][0]["text"] and "$99.00" in t["hiRef"][0]["text"]
+
+
+@needs_node
+def test_the_global_block_link_opens_the_global_tab_and_is_the_same_for_non_admins(ran):
+    """The link switches tab; a non-admin reads exactly what an admin does, with no input.
+
+    Mutation: remove the [data-goto-global] click branch -- the selected tab stays a sheet tab."""
+    assert "global:true" in ran["globalRefLink"], ran["globalRefLink"]
+    # The link is gone after the repaint, so the focus goes to the Global tab button rather than
+    # the page body (a keyboard user would otherwise start again from the top).
+    assert ran["globalRefLinkFocus"] == "tab-global", ran["globalRefLinkFocus"]
+    assert ran["globalRefOnGlobal"] == 0
+    assert ran["globalRefNonAdmin"] == ran["globalRefAdmin"]
+    assert ran["globalRefNonAdmin"][0]["inputs"] == 0

@@ -57,7 +57,7 @@ def test_the_beta_tab_shows_beta_projects(ran):
     files them as — so a beta branch reading the already-filtered list returns an empty tab.
     """
     assert ran["shown"]["beta"] == ["c", "d"], (
-        "the Beta Polish tab is not showing beta projects. If it is empty, the branch has been "
+        "the v2 Estimates tab is not showing beta projects. If it is empty, the branch has been "
         "moved below `const real = realOnly(list)` — beta rows are test rows, so it must read the "
         "unfiltered list.")
 
@@ -102,8 +102,10 @@ def test_the_chip_count_agrees_with_the_rows_the_tab_shows(ran):
     count taken off the real-bids list would read 0 here while the grid showed two rows.
     """
     beta = [c for c in ran["chips"] if c["key"] == "beta"]
-    assert len(beta) == 1, "there is no Beta Polish chip in the rendered chip row"
-    assert beta[0]["label"] == "Beta Polish"
+    assert len(beta) == 1, "there is no v2 Estimates chip in the rendered chip row"
+    # RENAMED 2026-10-07 (it was "Beta Polish"). The chip KEY stays "beta": it is what the page
+    # keeps in sessionStorage and what every other assertion here selects on.
+    assert beta[0]["label"] == "v2 Estimates"
     assert beta[0]["n"] == len(ran["shown"]["beta"]), (
         "the chip count disagrees with what the tab shows — count off ALL_PROJECTS, not realOnly()")
 

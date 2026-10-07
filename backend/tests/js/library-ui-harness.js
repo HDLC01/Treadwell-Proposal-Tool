@@ -233,14 +233,26 @@ const dom = makeDom();
 const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   "use strict";
   var ITEMS = state.ITEMS, ASMS = state.ASMS, VENDORS = state.VENDORS;
+  // New-this-session records, read by renderItems (the Save button) and renderPanel (#asm-save).
+  var FRESH = state.FRESH || { items: {}, assemblies: {} };
   var DIVISION_REFS = state.DIVISION_REFS || [], UNIT_REFS = state.UNIT_REFS || [];
   var VENDOR_USE = state.VENDOR_USE, DIVISION_USE = state.DIVISION_USE || {}, UNIT_USE = state.UNIT_USE || {};
   var ADMIN = state.ADMIN;
   // The Markup page's Global lines. Declared here rather than lifted because the page fills it
   // from its own fetch inside load(), which this sandbox does not run -- a test hands it in.
   var GLOBAL_MARKUP = state.GLOBAL_MARKUP || [];
+  // The filed Fees + Textura row (the Defaults tab's own always-listed row), handed in the same way.
+  var FEES_RULE = state.FEES_RULE || null;
+  // THE NETWORK for saveFeesDefault: what would have been sent, and what the server "answers".
+  var FEES_CALLS = [];
+  async function api(path, opts) {
+    FEES_CALLS.push({ path: path, opts: opts });
+    var r = state.FEES_RESPONSE || { status: 200, body: null };
+    var body = r.body || (opts && opts.body ? { ok: true, rule: JSON.parse(opts.body) } : {});
+    return { status: r.status, ok: r.status < 400, json: async function () { return body; } };
+  }
   // The Takeoff conditions' STORED answers, handed in the same way. Only the overrides live
-  // here: what a new estimate ships answering comes from the REAL polish-bid-core below, so a
+  // here: what a new estimate ships answering comes from the REAL bid-model below, so a
   // fixture cannot make this page agree with itself about an answer the bid does not hold.
   // Reassigned by setConditionDefault, so tests read it back through condDefaultsNow().
   var COND_DEFAULTS = state.COND_DEFAULTS || [];
@@ -328,6 +340,7 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   // renderItems, renderRefSection and renderPanel each ask icon() for a glyph now; leaving it
   // out is a ReferenceError that kills every scenario in this file at once.
   ${fn("icon")}
+  ${fn("itemSaveButtonHtml")}
   ${fn("renderItems")}
   // THE DEFAULTS TAB'S OWN RENDERERS, lifted so they are EXECUTED rather than read. A source-text
   // assertion cannot catch an unbound identifier, and this repo has taken production down that
@@ -360,8 +373,14 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   // find, so a stale lift here would red every scenario in this file at once.
   // materialDefaultRow BEFORE takeoffDefaultGroups, which draws EVERY Materials row through it --
   // an ordinary favorited material and the three condition materials alike.
+  // defaultSlider (the Defaults tab's starting-state slider) BEFORE both: every row they draw asks
+  // it for its slider cell, so a missing lift is a ReferenceError that reds this whole file.
+  ${fn("defaultSlider")}
   ${fn("materialDefaultRow")}
   ${fn("conditionDefaultRow")}
+  ${fn("feesFigure")}
+  ${fn("feesDefaultRow")}
+  ${fn("saveFeesDefault")}
   ${fn("takeoffDefaultGroups")}
   ${fn("renderDefaultTakeoff")}
   // AFTER the renderer it repaints and after the network stub it awaits. This is the handler the
@@ -384,6 +403,9 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   ${fn("defaultCandidates")}
   ${fn("renderDefaultSearch")}
   ${fn("setDefaultQuery")}
+  ${fn("placeDefaultSearch")}
+  ${fn("closeDefaultSearch")}
+  ${fn("onDefaultSearchKey")}
   ${fn("openDefaultBrowse")}
   // ── THE LABOR DEFAULTS, LIFTED AND EXECUTED ────────────────────────────────────────────────
   // "+ Add a labor line" shipped as markup with no handler at all, and Hanz reported it twice as
@@ -484,6 +506,14 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   // working Add or Remove press actually reaches, on all three kinds now, so it is executed here
   // rather than assumed from the markup around it.
   ${fn("setDefault")}
+  // THE STARTING-STATE SLIDER'S OWN NETWORK, stubbed like patchDefault above, and its handler
+  // lifted so a test PRESSES it: a reserved id goes to the condition default, everything else to
+  // the row's default_on.
+  async function patchDefaultOn(kind, id, on) {
+    LABOR_CALLS.push({ op: "PATCH_DEFAULT_ON", kind: kind, id: id, on: !!on });
+    if (LABOR_FAIL.patchDefaultOn) throw new Error("the server said no");
+  }
+  ${fn("setDefaultOn")}
   // THE REMOVE BUTTON'S ROUTER, AFTER BOTH SAVERS IT CALLS. A reserved id's Remove writes the
   // condition default (setConditionDefault); every other row's writes its favorite (setDefault).
   // (No backticks in these comments: this whole block is one template literal.)
@@ -625,6 +655,8 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
            // The Defaults tab's Takeoff list, EXECUTED rather than read. GLOBAL_MARKUP is handed
            // in so a test can supply the Markup page's answer without a second fetch stub.
            renderDefaultTakeoff, takeoffConditionDefaults, takeoffDefaultGroups,
+           feesDefaultRow, saveFeesDefault, FEES_CALLS,
+           feesRuleNow: function () { return FEES_RULE; },
            // THE CONDITIONS, EXECUTED. conditionPriceCell draws one row's priced cell;
            // setConditionDefault is what BOTH directions call now -- Remove on a listed row and
            // Add on a removed one. COND_CALLS is what would have gone to the server, and
@@ -642,6 +674,7 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
            // THE ADD PATH, EXECUTED. A test that only read the markup could not tell a
            // wired button from a dead one, and for two days could not.
            defaultCandidates, renderDefaultSearch, setDefaultQuery, openDefaultBrowse,
+           placeDefaultSearch, closeDefaultSearch, onDefaultSearchKey,
            appliesToWorkType, workTypeLabel, WORK_TYPES,
            // THE PER-ROW CHIPS, EXECUTED. workTypeCell draws them, setRowWorkType is what a press
            // runs, and WT_CALLS is the body that would have gone to the server -- the three
@@ -657,7 +690,7 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
            renderDefaultLabor, resetTravelDefault, laborRowActions,
            LABOR_UNITS,
            LABOR_CALLS,
-           setDefault, paint,
+           setDefault, setDefaultOn, defaultSlider, paint,
            openDefaultAdd,
            // THE LABOR TAB ITSELF, EXECUTED -- creation, editing and the delete guard, on the
            // tab this whole change was for. QUEUED is already exposed above, beside onItemEdit --
@@ -1432,6 +1465,8 @@ async function conflictChecks() {
     // the save machinery's state so a scenario can drive it. flush() reads it to refuse a second
     // PATCH while one is on the wire.
     var inFlight = {};
+    var takenP = {};
+    var FRESH = state.FRESH || { items: {}, assemblies: {} };
     var ASMS = state.ASMS, ITEMS = state.ITEMS, VENDORS = state.VENDORS;
     var setTimeout = clock.setTimeout, clearTimeout = clock.clearTimeout;
     function saving(m) { hooks.saving.push(m); }
@@ -1468,9 +1503,13 @@ async function conflictChecks() {
     ${fn("adoptSaved")}
     ${fn("adoptConflict")}
     ${fn("arm")}
+    ${fn("requeueFailed")}
     ${fn("flush")}
     ${fn("forgetItem")}
     ${fn("flushItemRow")}
+    ${fn("saveNow")}
+    ${fn("flushAllPending")}
+    ${fn("savePending")}
     ${fn("onItemRowFocusOut")}
     ${fn("patchSoon")}
     // THE REAL onItemEdit, in THIS scope, on top of the REAL patchSoon. The first scope in this
@@ -1484,6 +1523,8 @@ async function conflictChecks() {
     return { patchSoon: patchSoon, adoptConflict: adoptConflict,
              rememberItem: rememberItem, onItemEdit: onItemEdit,
              onItemRowFocusOut: onItemRowFocusOut, flushItemRow: flushItemRow,
+             saveNow: saveNow, fresh: function () { return FRESH; },
+             flushAllPending: flushAllPending, savePending: savePending,
              forgetItem: forgetItem,
              confirmOpen: function () { return itemConfirmOpen; },
              snapshotOf: function (id) { return itemBefore[id]; },
@@ -1596,7 +1637,10 @@ async function conflictChecks() {
       hooks.bodies.push(String((opts || {}).body || ""));
       return inflight;
     };
-    const state = { ASMS: [{ id: "a1", name: "MACRO", unit: "SF", lines: [], updated_at: "T1" }],
+    // a1 USES i1 and i2: the item-change confirmation only asks about a material some assembly
+    // prices from, so a fixture with no lines would never see the dialog these scenarios drive.
+    const state = { ASMS: [{ id: "a1", name: "MACRO", unit: "SF",
+                             lines: [{ item_id: "i1" }, { item_id: "i2" }], updated_at: "T1" }],
                     ITEMS: [{ id: "i1", name: "Densifier", unit: "Gallon", unit_cost: 42,
                               buy_qty: 5, vendor: "Sika", divisions: ["Polished Concrete"],
                               updated_at: "T1", cost_updated_at: "STAMP-1" },
@@ -1676,6 +1720,151 @@ async function conflictChecks() {
     screenRepainted: c.hooks.renders.join(",") === "list,panel",
     toldTheUser: c.hooks.said.some((m) => /changed/i.test(String(m))),
   };
+
+  // ── EXECUTED: the Save button on a NEW material / assembly (Hanz, 2026-10-05) ────────
+  // The row exists server-side from the create POST; what the button sends is what was typed over
+  // the placeholder. Nobody should have to click off the row for it to go.
+  {
+    const ok = { status: 200, ok: true, json: async () => ({}) };
+    // New material, typed into, Save pressed: ONE PATCH, the "Save this change?" question, no wait.
+    const a = run409();
+    a.hooks.autoReply = { status: 200, ok: true, json: async () => ({ item:
+      { id: "i1", updated_at: "T2", cost_updated_at: "STAMP-1" } }) };
+    a.s.fresh().items.i1 = true;
+    a.type("i1", "unit_cost", "50");
+    const timersArmedByTyping = a.s.armed();
+    const stillNew = await a.s.saveNow("items", "i1");
+    // Nothing typed on a new row: the press only retires the button, and sends nothing.
+    const b = run409();
+    b.s.fresh().items.i2 = true;
+    const stillNewB = await b.s.saveNow("items", "i2");
+    // Cancel on the question keeps the row "new", so the button stays for another try.
+    const c2 = run409(undefined, false);
+    c2.s.fresh().items.i1 = "new";
+    c2.hooks.autoReply = ok;
+    c2.type("i1", "unit_cost", "77");
+    const stillNewC = await c2.s.saveNow("items", "i1");
+    // A new ASSEMBLY: no dialog, one PATCH carrying the version it edited, flag cleared.
+    const d2 = run409();
+    d2.hooks.autoReply = { status: 200, ok: true, json: async () => ({ assembly:
+      { id: "a1", updated_at: "T2", name: "Fresh", lines: [] } }) };
+    d2.s.fresh().assemblies.a1 = true;
+    d2.s.patchSoon("assemblies", "a1", { name: "Fresh" });
+    const stillNewD = await d2.s.saveNow("assemblies", "a1");
+    out.saveNew = {
+      itemQuestionAsked: a.hooks.asked.length === 1,
+      itemOnePatch: a.hooks.requests.length === 1 && /PATCH \/api\/library\/items\/i1/.test(a.hooks.requests[0]),
+      itemSentTheTypedCost: /50/.test(a.hooks.bodies[0] || ""),
+      itemDebounceDisarmed: timersArmedByTyping >= 0 && a.s.armed() === 0,
+      itemNoLongerNew: stillNew === false && !a.s.fresh().items.i1,
+      untouchedRowSendsNothing: b.hooks.requests.length === 0,
+      untouchedRowNoLongerNew: stillNewB === false,
+      cancelKeepsItNew: stillNewC === true && c2.hooks.requests.length === 0,
+      asmOnePatch: d2.hooks.requests.length === 1 && /PATCH \/api\/library\/assemblies\/a1/.test(d2.hooks.requests[0]),
+      asmDeclaredItsVersion: /"expected_updated_at":"T1"/.test(d2.hooks.bodies[0] || ""),
+      asmNoLongerNew: stillNewD === false && !d2.s.fresh().assemblies.a1,
+      noErrors: [a, b, c2, d2].every((x) => x.hooks.errors.length === 0),
+    };
+  }
+
+  // ── EXECUTED: Save on ANY edited row (Hanz, 2026-10-05, B3b) ────────────────────────
+  {
+    const okItem = { status: 200, ok: true, json: async () => ({ item:
+      { id: "i1", updated_at: "T2", cost_updated_at: "STAMP-1" } }) };
+    const tick = () => new Promise((r) => setTimeout(r, 0));
+    // 1. A SAVED row, edited: marked unsaved by the edit itself, one PATCH + one question on Save,
+    //    mark lifted only after the reply.
+    const a = run409();
+    const markedBefore = !a.s.fresh().items.i1;
+    a.hooks.autoReply = okItem;
+    a.type("i1", "unit_cost", "50");
+    const markedAfterTyping = !!a.s.fresh().items.i1;
+    const savedFlag = await a.s.saveNow("items", "i1");
+    // 2. Server refuses: the mark stays and saveNow says so.
+    const f = run409();
+    f.hooks.autoReply = { status: 500, ok: true === false, json: async () => ({ detail: "nope" }) };
+    f.type("i1", "unit_cost", "51");
+    const failedStill = await f.s.saveNow("items", "i1");
+    const failedMarkKept = !!f.s.fresh().items.i1;
+    // 2b. Press Save AGAIN after the failure: it must re-send (not retire the button over a value
+    //     the server never got), and once the server accepts, clear.
+    const reqsAfterFirst = f.hooks.requests.length;
+    const secondStill = await f.s.saveNow("items", "i1");
+    const secondResent =f.hooks.requests.length === reqsAfterFirst + 1 && secondStill === true &&
+      !!f.s.fresh().items.i1;
+    f.hooks.autoReply = okItem;
+    const thirdStill = await f.s.saveNow("items", "i1");
+    const thirdClears = thirdStill === false && !f.s.fresh().items.i1 &&
+      f.hooks.requests.length === reqsAfterFirst + 2;
+    // 3. THE RACE: a flush already took the payload and is parked on the dialog. Empty buffer
+    //    must NOT read as saved.
+    const r = run409(undefined, "manual");
+    r.hooks.autoReply = okItem;
+    r.type("i1", "unit_cost", "52");
+    const flushing = r.s.flushItemRow("i1");
+    await tick();
+    const bufferEmptyWhileAsking = r.s.pending() === 0 && r.hooks.dialogs.length === 1;
+    let pressDone = false;
+    const press = r.s.saveNow("items", "i1").then((v) => { pressDone = true; return v; });
+    await tick(); await tick();
+    const pressWaited = pressDone === false && !!r.s.fresh().items.i1;
+    r.hooks.dialogs[0].resolve(true);
+    await flushing;
+    const pressResult = await press;
+    // 4. Typing while a save is on the wire keeps the mark when the earlier save is confirmed.
+    const w = run409();
+    w.s.patchSoon("assemblies", "a1", { name: "A" });
+    const firing = w.fire();
+    await tick();
+    w.s.patchSoon("assemblies", "a1", { name: "AB" });
+    w.release({ status: 200, ok: true, json: async () => ({ assembly:
+      { id: "a1", updated_at: "T2", name: "A", lines: [] } }) });
+    await firing;
+    const newerEditKeepsMark = !!w.s.fresh().assemblies.a1;
+    // 5. An edited saved ASSEMBLY: Save sends one PATCH carrying its version, clears on confirm.
+    const d = run409();
+    d.hooks.autoReply = { status: 200, ok: true, json: async () => ({ assembly:
+      { id: "a1", updated_at: "T2", name: "Fresh", lines: [] } }) };
+    d.s.patchSoon("assemblies", "a1", { name: "Fresh" });
+    const asmMarked = !!d.s.fresh().assemblies.a1;
+    const asmStill = await d.s.saveNow("assemblies", "a1");
+    // 6. Leaving: flushAllPending sends what is queued; savePending is the beforeunload test.
+    const l = run409();
+    l.hooks.autoReply = { status: 200, ok: true, json: async () => ({ assembly:
+      { id: "a1", updated_at: "T2", name: "Z", lines: [] } }) };
+    l.s.patchSoon("assemblies", "a1", { name: "Z" });
+    const pendingBeforeLeave = l.s.savePending();
+    l.s.flushAllPending();
+    const pendingWhileInFlight = l.s.savePending();
+    await tick(); await tick();
+    const pendingAfter = l.s.savePending();
+    // 7. A dialog answered No on a SAVED row drops the mark; on a NEW row it stays.
+    const n = run409(undefined, false);
+    n.type("i1", "unit_cost", "77");
+    await n.s.saveNow("items", "i1");
+    const cancelledSavedRowClean = !n.s.fresh().items.i1;
+    out.saveEdited = {
+      notMarkedBeforeEdit: markedBefore,
+      markedByTheEdit: markedAfterTyping,
+      confirmedSaveClears: savedFlag === false && !a.s.fresh().items.i1,
+      onePatchOneQuestion: a.hooks.requests.length === 1 && a.hooks.asked.length === 1,
+      failedKeepsMark: failedStill === true && failedMarkKept,
+      secondPressResends: secondResent,
+      thirdPressClearsOnConfirm: thirdClears,
+      bufferEmptyWhileAsking,
+      pressWaitedForTheDialog: pressWaited,
+      pressThenConfirmed: pressResult === false && !r.s.fresh().items.i1 && r.hooks.requests.length === 1,
+      newerEditKeepsMark,
+      asmMarked,
+      asmSavedAndCleared: asmStill === false && !d.s.fresh().assemblies.a1 &&
+        d.hooks.requests.length === 1 && /"expected_updated_at":"T1"/.test(d.hooks.bodies[0] || ""),
+      leaveWarnsWhilePending: pendingBeforeLeave === true && pendingWhileInFlight === true,
+      leaveFlushSent: l.hooks.requests.length === 1,
+      leaveSettled: pendingAfter === false,
+      cancelledSavedRowClean,
+      noErrors: [a, f, r, w, d, l, n].every((x) => x.hooks.errors.length === 0),
+    };
+  }
 
   // ── EXECUTED: a second save cannot go out while the first is on the wire ────
   // THE RACE THIS PREVENTS IS AGAINST OURSELVES, not another person.
@@ -1864,6 +2053,23 @@ async function conflictChecks() {
   {
     const { c } = await itemRun(true, (x) => { x.unit_cost = 42; }, { unit_cost: "42" });
     out.itemNoChange = { asked: c.hooks.asked.length, requests: c.hooks.requests };
+  }
+
+  // A MATERIAL NO ASSEMBLY USES (a brand-new row, say): saves with no question. The same edit on
+  // i1 above is asked about because a1 uses i1; here a1's lines are emptied first.
+  {
+    const c = run409(undefined, true);
+    c.state.ASMS[0].lines = [];
+    const it = c.state.ITEMS[0];
+    c.s.rememberItem(it);
+    it.unit_cost = 58;
+    c.s.patchSoon("items", "i1", { unit_cost: "58" });
+    const firing = c.fire();
+    await settle();
+    c.release({ status: 200, ok: true,
+                json: async () => ({ item: { id: "i1", name: it.name, updated_at: "T2" } }) });
+    await firing;
+    out.itemUnused = { asked: c.hooks.asked.length, requests: c.hooks.requests, errors: c.hooks.errors };
   }
 
   // ══ THE BYPASS PROBE ═══════════════════════════════════════════════════════
@@ -3537,7 +3743,7 @@ out.serverOwnedItemFields = build().api.SERVER_OWNED_ITEM_FIELDS;
   const { api, dom: d } = build({
     // THE REAL MODULE, required rather than faked: the whole claim is that this list reads the
     // answers a new estimate opens with, so a made-up freshModel would prove the opposite.
-    window: { TWPolishBid: require(path.join(ROOT, "js", "polish-bid-core.js")) },
+    window: { TWBidModel: require(path.join(ROOT, "js", "bid-model.js")) },
     ITEMS: [{ id: "i1", name: "Densifier", unit: "Pail", unit_cost: 100, favorite: true },
             { id: "i2", name: "Not a default", unit: "Gal", unit_cost: 50, favorite: false }],
     ASMS: [{ id: "a1", name: "Polish 800", unit: "SF", favorite: true,
@@ -3632,7 +3838,7 @@ out.serverOwnedItemFields = build().api.SERVER_OWNED_ITEM_FIELDS;
     // "$X per <unit>", as every material row above says it. These figures are the REAL
     // RATES.JOINT_FILLER_KIT_COST and RATES.DYE_PER_SF, reached through the real module (this
     // fixture has no reserved rows, so the fallback is what prices) -- the page reads them rather
-    // than restating them, so a rate that moved in polish-bid-core has to move here too.
+    // than restating them, so a rate that moved in bid-model has to move here too.
     jointFillerShowsItsKitPrice: /\$500\.00 per kit · 1 per 3,500 SF/.test(h),
     jointFillerSaysWhatTheKitCovers: /1 per 3,500 SF/.test(h),
     dyeShowsItsRate: /\$0\.14 per SF a coat · 2 coats</.test(h),
@@ -3663,13 +3869,14 @@ out.serverOwnedItemFields = build().api.SERVER_OWNED_ITEM_FIELDS;
       .every(function (r, i) {
         var id = ["joint-filler-kit", "remove-existing-jf", "dye"][i];
         return r.actions === api.defaultRowActions("items", id, r.name) &&
-               h.indexOf("<td>" + r.name + "</td><td>" + r.how + '</td><td class="rowact">' +
-                         r.actions + "</td>") !== -1;
+               h.indexOf("<td>" + r.name + "</td><td>" + r.how + '</td><td class="rowon">' +
+                         r.slider + '</td><td class="rowact">' + r.actions + "</td>") !== -1;
       }) && api.takeoffDefaultGroups()[1].rows.length === 4,
     // …AND THE SAME ROW SHAPE AS THE MATERIAL ABOVE THEM: name, a sentence escaped like any
     // other, and the actions. No rawHow -- nothing in these rows builds its own control any more.
     conditionsAreTheMaterialRowShape: api.takeoffDefaultGroups()[1].rows.every(function (r) {
-      return Object.keys(r).sort().join(",") === "actions,how,name";
+      // `slider` is the Defaults tab's starting-state slider, the one column every row now has.
+      return Object.keys(r).sort().join(",") === "actions,how,name,slider";
     }),
     // AN Edit ON EVERY ONE, which there was not while they had their own row code: it opens the
     // row on the Items tab, where all three are reserved library rows now (focusItemRow is
@@ -3711,10 +3918,10 @@ out.serverOwnedItemFields = build().api.SERVER_OWNED_ITEM_FIELDS;
   // shipping it on added $2,500 to a 17,500 SF bid nobody had asked for.
   //
   // READ THROUGH THE REAL freshModel, not typed here, so a literal that moved back in
-  // polish-bid-core reds this rather than passing against a restated copy.
+  // bid-model reds this rather than passing against a restated copy.
   {
     const bare = build({
-      window: { TWPolishBid: require(path.join(ROOT, "js", "polish-bid-core.js")) },
+      window: { TWBidModel: require(path.join(ROOT, "js", "bid-model.js")) },
       ITEMS: [], ASMS: [], ADMIN: true,
     });
     bare.api.renderDefaultTakeoff();
@@ -3783,7 +3990,7 @@ async function laborChecks() {
   const seed = (extra) => Object.assign({
     // THE REAL MODULE, for the reason the Takeoff scenario gives: Travel has to come out of
     // travelSeed or this proves nothing about what a new estimate opens holding.
-    window: { TWPolishBid: require(path.join(ROOT, "js", "polish-bid-core.js")) },
+    window: { TWBidModel: require(path.join(ROOT, "js", "bid-model.js")) },
     // One default and one not, because the Takeoff arm of the router opens a BROWSE list of
     // what is not already a default -- a library where everything is one offers nothing, and
     // an empty box would read as the button being dead, which is the bug under test.
@@ -3808,6 +4015,54 @@ async function laborChecks() {
     ADMIN: true,
   }, extra || {});
   const rowsOf = (h) => h.split("</tr>").filter((r) => /<tr/.test(r));
+// ── INLINE SEARCH: each "+ Add a ... default" opens the box above ITS OWN table ─────────────
+// Hanz, 2026-10-05. A tiny tree stands in for the DOM: two sections, each with a .tw table whose
+// parent is the card, and ONE #default-search that insertBefore() moves between the cards.
+{
+  const { api, dom: d } = build(seed({ LABOR: [{ id: "L9", name: "Rigging", rate: 40,
+    unit: "hours", guys_auto: false, favorite: false }] }));
+  const mkCard = (name) => {
+    const card = { name, kids: [], addBtn: { focus() { d.focused.push(name + "-add"); } },
+      querySelector(sel) { return sel === "[data-add-default]" ? this.addBtn : null; },
+      insertBefore(n) { if (n.parentNode) n.parentNode.kids = n.parentNode.kids.filter((k) => k !== n);
+        n.parentNode = this; this.kids.push(n); } };
+    const tw = { parentNode: card };
+    d.nodes["default-" + name] = { querySelector: (sel) => (sel === ".tw" ? tw : null) };
+    return card;
+  };
+  const takeoff = mkCard("takeoff"), labor = mkCard("labor");
+  const wrap = d.el("default-search");
+  wrap.parentNode = takeoff; wrap.hidden = true;
+  const q = d.el("default-q");
+  const where = () => (wrap.parentNode === takeoff ? "takeoff" : wrap.parentNode === labor ? "labor" : "?");
+  const res = {};
+  api.openDefaultAdd("labor");
+  res.laborOpensAboveLabor = where() === "labor" && wrap.hidden === false;
+  res.focusInBox = d.focused[d.focused.length - 1] === "default-q";
+  res.laborResultsRendered = /Rigging/.test(d.nodes["default-hits"].innerHTML);
+  api.openDefaultAdd("takeoff");
+  res.onlyOneOpenAndItMoved = where() === "takeoff" && wrap.hidden === false &&
+    takeoff.kids.length === 1 && labor.kids.length === 0;
+  api.setDefaultQuery("zzz"); q.value = "zzz";
+  api.openDefaultAdd("labor");
+  res.movingToAnotherSectionClearsTheQuery = q.value === "" && where() === "labor";
+  // ESCAPE closes it, forgets the query and hands focus back to the opener
+  q.value = "abc"; api.setDefaultQuery("abc");
+  let stopped = false;
+  const handled = api.onDefaultSearchKey({ key: "Escape", stopPropagation() { stopped = true; } });
+  res.escapeCloses = handled === true && stopped && wrap.hidden === true && q.value === "" &&
+    d.nodes["default-hits"].hidden === true && d.focused[d.focused.length - 1] === "labor-add";
+  res.otherKeysIgnored = api.onDefaultSearchKey({ key: "a" }) === false;
+  // CANCEL is the same close
+  api.openDefaultAdd("takeoff");
+  api.closeDefaultSearch();
+  res.cancelCloses = wrap.hidden === true && d.nodes["default-hits"].hidden === true;
+  // THE PAGE WIRES BOTH, as source (a listener body cannot be run from here)
+  res.listenersWired = /closest\("\[data-def-search-close\]"\)\) \{ closeDefaultSearch\(\); return; \}/.test(src) &&
+    /addEventListener\("keydown", onDefaultSearchKey\)/.test(src);
+  out.defaultsInlineSearch = res;
+}
+
 
   // THE LIST: Travel built in, the favorited lines beside it, each with the controls it should
   // have. Edit now sends an admin to the Labor tab (data-def-edit="labor"), the same attribute
@@ -3900,10 +4155,52 @@ async function laborChecks() {
       // RESET, NOT REMOVE. Removing Travel is not a thing that can happen -- freshModel() seeds
       // it into every new bid -- so the word on the button is the word for what it does.
       offersReset: /data-labor-reset="travel"/.test(rows[0] || ""),
-      neverOffersRemove: !/data-def-off="labor" data-def-id="travel"/.test(h),
+      // REMOVE IS OFFERED NOW (2026-10-06): the same Edit + Remove pair as every labor default.
+      // Remove is favorite=false on the row, not a delete.
+      offersRemove: /data-def-off="labor" data-def-id="travel"/.test(rows[0] || ""),
       resetSaysReset: />Reset</.test(rows[0] || ""),
       // The favorited line is untouched by any of it.
       stillListsTheCustomLine: /Prevailing wage/.test(h),
+    };
+  }
+
+  // TRAVEL AS A DEFAULT LIKE ANY OTHER (2026-10-06): Remove = favorite=false (a PATCH on the row,
+  // never a delete), a removed Travel is off the Defaults list and offered back by the "add a
+  // labor default" browse, and the work-type sub-tabs filter it.
+  {
+    const withTravel = (extra) => Object.assign({ id: "travel", name: "Travel", rate: 33,
+      unit: "hours", guys_auto: true, sort: -1, notes: null, owner_email: null }, extra || {});
+    const calls = (h) => h.api.LABOR_CALLS;
+    // Remove, executed: the row is dropped from the list and favorite=false is what is sent.
+    const r1 = build(seed({ LABOR: [withTravel({ favorite: true })] }));
+    r1.api.renderDefaultLabor();
+    const before = r1.dom.nodes["default-labor-body"].innerHTML;
+    r1.api.LABOR_CALLS.length = 0;
+    await r1.api.setDefault("labor", "travel", false);
+    const gone = r1.dom.nodes["default-labor-body"].innerHTML;
+    const delCalls = r1.api.LABOR_CALLS.filter((c) => c.op === "DELETE");
+    // Not a default -> not offered as a row; the browse offers it back.
+    r1.api.setWorkType("polish");
+    r1.api.openDefaultBrowse && r1.api.openDefaultBrowse();
+    const cand = r1.api.defaultCandidates().rows.filter((c) => c.kind === "labor" && c.id === "travel");
+    // Work-type sub-tabs: scoped to epoxy, Travel is on the Epoxy tab and not on the Polish tab.
+    const r2 = build(seed({ LABOR: [withTravel({ favorite: true, default_work_types: ["epoxy"] })] }));
+    r2.api.setWorkType("polish"); r2.api.renderDefaultLabor();
+    const onPolish = /Travel/.test(r2.dom.nodes["default-labor-body"].innerHTML);
+    r2.api.setWorkType("epoxy"); r2.api.renderDefaultLabor();
+    const onEpoxy = /Travel/.test(r2.dom.nodes["default-labor-body"].innerHTML);
+    // favorite absent/null with no work types: listed on every tab, as before.
+    const r3 = build(seed({ LABOR: [withTravel({ favorite: null })] }));
+    r3.api.setWorkType("gyp"); r3.api.renderDefaultLabor();
+    const legacyOnGyp = /Travel/.test(r3.dom.nodes["default-labor-body"].innerHTML);
+    out.travelAsDefault = {
+      listedBefore: /Travel/.test(before),
+      removeIsFavoriteFalse: calls(r1).some((c) => c.op === "PATCH_DEFAULT" && c.kind === "labor" &&
+        c.id === "travel" && c.on === false),
+      noDelete: delCalls.length === 0,
+      goneAfterRemove: !/Travel/.test(gone),
+      offeredBack: cand.length === 1,
+      onPolish, onEpoxy, legacyOnGyp,
     };
   }
 
@@ -4073,7 +4370,7 @@ async function laborChecks() {
               { id: "L9", name: "Rigging", rate: 40, unit: "hours",
                 guys_auto: false, favorite: false },
               { id: "travel", name: "Travel", rate: 33, unit: "hours",
-                guys_auto: true, favorite: false }],
+                guys_auto: true, favorite: true }],   // a Travel that IS a default is listed, never offered again
     }));
     api.setDefaultQuery("rig");
     const hits = api.defaultCandidates().rows;
@@ -4298,7 +4595,7 @@ async function laborTabChecks() {
       notes: null, owner_email: "kyle@wetreadwell.com", favorite: false },
   ]));
   const seed = (extra) => Object.assign({
-    window: { TWPolishBid: require(path.join(ROOT, "js", "polish-bid-core.js")) },
+    window: { TWBidModel: require(path.join(ROOT, "js", "bid-model.js")) },
     ITEMS: [{ id: "i1", name: "Densifier", unit: "Pail", unit_cost: 100, favorite: true }],
     ASMS: [{ id: "a1", name: "Polish 800", unit: "SF", favorite: true, lines: [{ item_id: "i1" }] }],
     LABOR: lines(),
@@ -4325,8 +4622,8 @@ async function laborTabChecks() {
         /data-del-labor="L9"/.test(rowOf(h, "L9")),
       travelCannotBeDeleted: !/data-del-labor/.test(rowOf(h, "travel")),
       travelRateIsEditable: /data-f="rate" class="num cell-rate" value="41.5"/.test(rowOf(h, "travel")),
-      travelHasNoChips: !/data-wt-toggle/.test(rowOf(h, "travel")) &&
-        /Every estimate/.test(rowOf(h, "travel")),
+      travelHasChips: (rowOf(h, "travel").match(/data-wt-toggle="labor" data-wt-id="travel"/g) || []).length === 5 &&
+        /All work types/.test(rowOf(h, "travel")) && !/Every estimate/.test(rowOf(h, "travel")),
       customLinesHaveChips: /data-wt-toggle="labor" data-wt-id="L9"/.test(rowOf(h, "L9")),
       moreStartsShut: !/class="labor-more"/.test(h),
       badge: d.nodes["n-labor"].textContent,
@@ -4571,7 +4868,14 @@ out.page = {
       search: /id="default-q"/.test(pane),
       searchIsForAdding:
         /placeholder="Search materials, assemblies and labor lines to add"/.test(pane),
-      searchAboveTheLists: pane.indexOf('id="default-q"') < pane.indexOf('class="admin-grid"'),
+      // THE BOX STARTS IN THE TAKEOFF CARD, ABOVE ITS TABLE, and is hidden until a button opens
+      // it (Hanz, 2026-10-05: not up by the work-type tabs). It used to sit above the admin-grid.
+      searchAboveTheLists: pane.indexOf('id="default-q"') > pane.indexOf('class="admin-grid"') &&
+        pane.indexOf('id="default-q"') < pane.indexOf('id="default-takeoff-body"') &&
+        /<div id="default-search" hidden>/.test(pane) &&
+        pane.indexOf('id="default-q"') > pane.indexOf('data-add-default="takeoff"') &&
+        pane.indexOf('id="default-q"') < pane.indexOf('data-add-default="labor"') &&
+        /data-def-search-close/.test(pane),
       // THE RESULTS BOX LIVES WITH THE ROWS, not with the input. It shipped as a
       // <span class="hits"> inside .itemsearch -- a flex ROW -- so the list of things you were
       // about to add rendered beside the search box, clear of the table it was adding to.
@@ -4647,7 +4951,7 @@ async function conditionChecks() {
   const seed = (extra) => Object.assign({
     // THE REAL MODULE. The whole claim is that this list shows what a new estimate opens
     // ANSWERING, so a made-up freshModel would prove the opposite of what it looks like it proves.
-    window: { TWPolishBid: require(path.join(ROOT, "js", "polish-bid-core.js")) },
+    window: { TWBidModel: require(path.join(ROOT, "js", "bid-model.js")) },
     // ONE NON-FAVOURITE LIBRARY ROW, so the browse list has something in it that is NOT a
     // condition -- a browse offering only the three would pass "offers the conditions" against a
     // list that had stopped offering the library.
@@ -4836,7 +5140,7 @@ async function conditionChecks() {
   // still filters takeoffDefaultGroups correctly when default_work_types is set the way the API
   // sets it, with nothing in this table able to press a chip any more.
   const stripSeed = {
-    window: { TWPolishBid: require(path.join(ROOT, "js", "polish-bid-core.js")) },
+    window: { TWBidModel: require(path.join(ROOT, "js", "bid-model.js")) },
     ITEMS: [
       { id: "i1", name: "Densifier", unit: "Pail", unit_cost: 100, favorite: true,
         default_work_types: [] },
@@ -4881,7 +5185,7 @@ async function conditionChecks() {
       unit_cost: null, coverage: null, waste_pct: 0, roundup: false, favorite: false },
   ];
   const withReserved = () => JSON.parse(JSON.stringify(ITEMS.concat(RESERVED)));
-  const bid = { TWPolishBid: require(path.join(ROOT, "js", "polish-bid-core.js")) };
+  const bid = { TWBidModel: require(path.join(ROOT, "js", "bid-model.js")) };
   const rowOf = (html, id) => (html.split("</tr>").filter((r) =>
     r.indexOf('data-item="' + id + '"') !== -1)[0] || "");
   const condPriced = (api, key) => (api.takeoffConditionDefaults()
@@ -5012,6 +5316,334 @@ async function conditionChecks() {
   };
 }
 
+// ── The Save button is drawn only for a row created on this page and not yet saved ──
+{
+  const { api, dom: d } = build({ FRESH: { items: { i2: true }, assemblies: { a2: true } } });
+  api.renderItems();
+  const html = d.nodes["items-body"].innerHTML;
+  const rows = html.split("</tr>");
+  const rowOf = (id) => rows.find((r) => r.indexOf('data-item="' + id + '"') !== -1) || "";
+  const had = (r) => /data-save-new="items"/.test(r);
+  out.saveButton = {
+    onTheNewRow: had(rowOf("i2")) && /data-save-id="i2"/.test(rowOf("i2")),
+    notOnASavedRow: !had(rowOf("i1")),
+    exactlyOne: (html.match(/data-save-new="items"/g) || []).length === 1,
+  };
+  const fresh = build({ FRESH: { items: {}, assemblies: { a1: true } }, openId: "a1" });
+  fresh.api.renderPanel();
+  const saved = build({ FRESH: { items: {}, assemblies: {} }, openId: "a1" });
+  saved.api.renderPanel();
+  out.saveButton.asmShownWhenNew = fresh.dom.nodes["asm-save"].hidden === false;
+  out.saveButton.asmHiddenWhenSaved = saved.dom.nodes["asm-save"].hidden === true;
+}
+
+// ── EXECUTED: one edit to ANY field of a material row puts Save in the row's PINNED cell ──
+// Hanz, 2026-10-06: "the save button only pops up when we click away". It was inserted on the first
+// keystroke all along, into .rowact -- the last column of a table about 1,990px wide, so it sat off
+// screen to the right. It now goes into .rowsave, which library.html pins to the scroller's right
+// edge. Measured in a real browser at 1366 and 390 (see the commit); this proves the wiring.
+//
+// THE REAL CHAIN, one event per field and nothing after it: onItemEdit, then patchSoon, then
+// showUnsaved, then the cell. No blur, no focusout, no timer fired -- the timers are captured and
+// never run, and flush is a recorder, so a Save that only appeared once the row was left would
+// show up here as a flush and no button. The row the handler edits is cut out of the REAL
+// renderItems output, so a cell renamed or dropped there breaks this too.
+//
+// Each field gets a fresh scope: patchSoon only shows the button on the FIRST unsaved edit of a
+// row, so a shared scope would let the first field pass for all nine.
+function itemRowDoc(rowHtml, id) {
+  const cells = rowHtml.split("<td").slice(1).map((c) => {
+    const open = c.slice(0, c.indexOf(">"));
+    const cell = {
+      cls: ((/class="([^"]*)"/.exec(open) || ["", ""])[1]).split(/\s+/).filter(Boolean),
+      html: c.slice(c.indexOf(">") + 1).replace(/<\/td>\s*$/, ""),
+      firstChild: null,
+      querySelector(sel) {
+        if (sel === "[data-save-new]") return /data-save-new=/.test(this.html) ? { parentNode: this } : null;
+        if (sel === ".dupe") return null;
+        throw new Error("a cell was asked for " + sel + ", which this stub does not model");
+      },
+      insertBefore(node) { this.html = node.outerHTML + this.html; },
+      insertAdjacentHTML(_where, h) { this.html += h; },
+      removeChild() { this.html = this.html.replace(/<button[^>]*data-save-new=[\s\S]*?<\/button>/, ""); },
+    };
+    return cell;
+  });
+  const doc = {
+    cells,
+    createElement() { return { set innerHTML(h) { this.firstChild = { outerHTML: h }; } }; },
+    querySelector(sel) {
+      let m = /^#items-body \[data-item="([^"]+)"\] \.([\w-]+)$/.exec(sel);
+      if (m) return m[1] === id ? cells.find((c) => c.cls.indexOf(m[2]) !== -1) || null : null;
+      m = /^#items-body \[data-item="([^"]+)"\] \[data-save-new\]$/.exec(sel);
+      if (m) {
+        const c = m[1] === id ? cells.find((x) => /data-save-new=/.test(x.html)) : null;
+        return c ? { parentNode: c } : null;
+      }
+      throw new Error("the page asked document for " + sel + ", which this stub does not model");
+    },
+  };
+  return doc;
+}
+{
+  const visScope = new Function("L", "TW", "state", "document", "clock", "hooks", `
+    "use strict";
+    var ITEMS = state.ITEMS, ASMS = state.ASMS, VENDORS = state.VENDORS;
+    var FRESH = { items: {}, assemblies: {} };
+    var openId = null;
+    var timers = {};
+    var pendingPatch = {};
+    var setTimeout = clock.setTimeout, clearTimeout = clock.clearTimeout;
+    var $ = function () { return null; };
+    // RECORDERS. flush is what a timer or a focusout would reach; renderItems is the repaint that
+    // would throw the caret out of the field being typed in. Neither may run.
+    function flush() { hooks.flushed.push(Array.prototype.slice.call(arguments)); }
+    function renderItems() { hooks.repaints.push("items"); }
+    function renderList() {}
+    function renderPanel() {}
+    ${grab(/^  var esc = function[\s\S]*?\n  \};$/m, "esc")}
+    var itemBefore = {};
+    ${grab(/^  var itemConfirmOpen = null;$/m, "the itemConfirmOpen declaration")}
+    ${grab(/^  var itemLastField = \{\};$/m, "the itemLastField declaration")}
+    ${grab(/^  var SERVER_OWNED_ITEM_FIELDS = \[[^\]]*\];$/m, "SERVER_OWNED_ITEM_FIELDS")}
+    ${grab(/^  var NUMERIC_ITEM_FIELDS = \[[^\]]*\];$/m, "NUMERIC_ITEM_FIELDS")}
+    ${fn("itemOf")}
+    ${fn("snapshotItem")}
+    ${fn("rememberItem")}
+    ${fn("similarNames")}
+    ${fn("dupeHtml")}
+    ${fn("arm")}
+    ${fn("patchSoon")}
+    ${fn("itemSaveButtonHtml")}
+    ${fn("showUnsaved")}
+    ${fn("hideUnsaved")}
+    ${fn("onItemEdit")}
+    return { onItemEdit: onItemEdit, hideUnsaved: hideUnsaved,
+             pending: function () { return Object.keys(pendingPatch); } };
+  `);
+
+  const { api: rapi, dom: rd } = build();
+  rapi.renderItems();
+  const rowHtml = rd.nodes["items-body"].innerHTML.split("</tr>")
+    .find((r) => r.indexOf('data-item="i1"') !== -1) || "";
+
+  // What one estimator action does to each kind of control. Text boxes report input; a select, the
+  // checkbox and a division chip report change -- both events reach the same handler.
+  const ACTIONS = {
+    name: (t) => { t.value = "OPF II"; return "input"; },
+    buy_qty: (t) => { t.value = "2"; return "input"; },
+    coverage: (t) => { t.value = "300"; return "input"; },
+    waste_pct: (t) => { t.value = "7"; return "input"; },
+    unit_cost: (t) => { t.value = "90"; return "input"; },
+    unit: (t) => { t.value = "Kit"; return "change"; },
+    vendor: (t) => { t.value = "Sika"; return "change"; },
+    roundup: (t) => { t.checked = !t.checked; return "change"; },
+    divisions: null,   // driven through the real chip markup below
+  };
+  const fields = {};
+  // EVERY data-f IN THE RENDERED ROW, not a list typed here: a tenth editable column added to
+  // renderItems lands in this loop and fails until it is given an action above.
+  const inRow = Array.from(new Set((rowHtml.match(/data-f="[^"]+"/g) || [])
+    .map((s) => s.slice(8, -1))));
+  for (const f of inRow) {
+    const hooks = { flushed: [], repaints: [] };
+    const clock = { setTimeout: () => 1, clearTimeout: () => {} };
+    const doc = itemRowDoc(rowHtml, "i1");
+    const st = { ITEMS: JSON.parse(JSON.stringify(ITEMS)), ASMS: JSON.parse(JSON.stringify(ASMS)),
+                 VENDORS: JSON.parse(JSON.stringify(VENDORS)) };
+    const s = visScope(L, {}, st, doc, clock, hooks);
+    const cell = doc.cells.find((c) => c.html.indexOf('data-f="' + f + '"') !== -1);
+    let ev = "none";
+    const rowStub = { getAttribute: (k) => (k === "data-item" ? "i1" : null) };
+    if (f === "divisions") {
+      const chips = chipRowFromHtml("i1", cell.html);
+      const off = chips.inputs.find((x) => !x.checked) || chips.inputs[0];
+      off.checked = !off.checked;
+      ev = "change";
+      s.onItemEdit({ type: ev, target: off });
+    } else if (ACTIONS[f]) {
+      const tag = (new RegExp('<(input|select)[^>]*data-f="' + f + '"[^>]*>').exec(cell.html) || [""])[0];
+      const target = { value: "", checked: / checked/.test(tag), parentNode: cell,
+                       getAttribute: (k) => (k === "data-f" ? f : null),
+                       closest: (sel) => (sel === "[data-item]" ? rowStub : null) };
+      ev = ACTIONS[f](target);
+      s.onItemEdit({ type: ev, target: target });
+    }
+    const holders = doc.cells.filter((c) => /data-save-new="items"/.test(c.html));
+    const holder = holders[0];
+    fields[f] = {
+      event: ev,
+      shown: !!holder,
+      inPinnedCell: !!holder && holder.cls.indexOf("rowsave") !== -1,
+      forThisRow: !!holder && /data-save-id="i1"/.test(holder.html),
+      exactlyOne: holders.length === 1,
+      notInActionCell: !doc.cells.some((c) => c.cls.indexOf("rowact") !== -1 &&
+                                             /data-save-new=/.test(c.html)),
+      queued: s.pending().indexOf("items:i1") !== -1,
+      nothingFlushed: hooks.flushed.length === 0,
+      noRepaint: hooks.repaints.length === 0,
+    };
+    // …and it leaves the cell EMPTY again, not whitespace: :empty is what keeps the column zero wide.
+    if (f === "unit_cost") {
+      s.hideUnsaved("items", "i1");
+      // Guarded: a row with no pinned cell is a FAILED assertion, not a crash of the whole file.
+      fields[f].emptyAfterHide =
+        (doc.cells.find((c) => c.cls.indexOf("rowsave") !== -1) || { html: null }).html === "";
+    }
+  }
+  // The header must carry the column too, or every cell after History sits under the wrong heading.
+  // Comments cut out with indexOf, not a regex replace: a single-pass /<!--.*?-->/ strip is the
+  // pattern CodeQL flags (js/incomplete-multi-character-sanitization) even on our own page source.
+  const dropComments = (s) => {
+    let out = "", at = 0;
+    for (;;) {
+      const open = s.indexOf("<!--", at);
+      if (open === -1) return out + s.slice(at);
+      out += s.slice(at, open);
+      const close = s.indexOf("-->", open + 4);
+      if (close === -1) return out;
+      at = close + 3;
+    }
+  };
+  const tableHtml = dropComments(html.slice(html.indexOf('<table class="items-table">'),
+                               html.indexOf("</table>", html.indexOf('<table class="items-table">'))));
+  const cleanRow = itemRowDoc(rowHtml, "i1");
+  out.saveVisible = {
+    fieldsInRow: inRow,
+    fields: fields,
+    cleanRowCellEmpty: (cleanRow.cells.find((c) => c.cls.indexOf("rowsave") !== -1) || {}).html === "",
+    headerCells: (tableHtml.match(/<th[\s>]/g) || []).length,
+    rowCells: cleanRow.cells.length,
+    headerHasPinnedColumn: /<th class="rowsave"><\/th>\s*<th class="w-act"><\/th>/.test(tableHtml),
+    cssPinsTheCell: /td\.rowsave \{ position:sticky; right:0; \}/.test(html),
+    cssZeroWideWhenEmpty: /\.rowsave \{ padding:0; \}/.test(html) &&
+      /td\.rowsave:not\(:empty\) \{[^}]*background:var\(--card\)/.test(html),
+  };
+}
+
+// â”€â”€ the Defaults tab's starting-state SLIDER, EXECUTED â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// A slider that is only markup is the dead-control failure this page has shipped before: so each
+// press below goes through the page's own setDefaultOn, and what it wrote is read back.
+async function sliderChecks() {
+  const B = require(path.join(ROOT, "js", "bid-model.js"));
+  const seed = (extra) => Object.assign({
+    window: { TWBidModel: B },
+    ITEMS: [{ id: "i1", name: "Densifier", unit: "Pail", unit_cost: 100, favorite: true }],
+    ASMS: [{ id: "a1", name: "Polish 800", unit: "SF", favorite: true, lines: [] },
+           { id: "a2", name: "Cove", unit: "LF", favorite: true, default_on: false, lines: [] }],
+    LABOR: [{ id: "travel", name: "Travel", rate: 33, unit: "hours", guys_auto: true,
+              favorite: true, default_on: true },
+            { id: "l1", name: "Grinding", rate: 40, unit: "days", favorite: true,
+              default_on: false }],
+    COND_DEFAULTS: [{ key: "dye", on: false, listed: true }],
+    ADMIN: true,
+  }, extra || {});
+  const sw = (html, kind, id) => {
+    const m = new RegExp('<span class="mw-sw( on)?" data-def-on="' + kind + '" data-def-on-id="' +
+      id + '" role="switch" tabindex="0" aria-checked="(true|false)"').exec(html);
+    return m ? m[2] : null;
+  };
+  const takeoff = (b) => { b.api.renderDefaultTakeoff(); return b.dom.nodes["default-takeoff-body"].innerHTML; };
+  const labor = (b) => { b.api.renderDefaultLabor(); return b.dom.nodes["default-labor-body"].innerHTML; };
+
+  // 1. WHAT IS DRAWN: absent default_on reads ON, an explicit false reads OFF, on all three kinds.
+  const a = build(seed({}));
+  const html0 = takeoff(a), lab0 = labor(a);
+  const drawn = {
+    asmAbsentIsOn: sw(html0, "assemblies", "a1"), asmFalseIsOff: sw(html0, "assemblies", "a2"),
+    itemAbsentIsOn: sw(html0, "items", "i1"),
+    travelOn: sw(lab0, "labor", "travel"), laborOff: sw(lab0, "labor", "l1"),
+    // The three condition materials carry one too, answering with the stored starting answer.
+    dyeOff: sw(html0, "items", "dye"),
+  };
+
+  // 2. THE PRESS WRITES default_on -- and not `favorite`.
+  const p = build(seed({}));
+  await p.api.setDefaultOn("assemblies", "a1", false);
+  const afterAsm = sw(takeoff(p), "assemblies", "a1");
+  const asmCalls = JSON.stringify(p.api.LABOR_CALLS);
+  await p.api.setDefaultOn("labor", "l1", true);
+  const afterLabor = sw(labor(p), "labor", "l1");
+
+  // 3. A REFUSED SAVE PUTS IT BACK.
+  const f = build(seed({ LABOR_FAIL: { patchDefaultOn: true } }));
+  await f.api.setDefaultOn("assemblies", "a1", false);
+  const afterRefused = sw(takeoff(f), "assemblies", "a1");
+
+  // 4. A CONDITION MATERIAL'S SLIDER IS THE CONDITION DEFAULT: one write, `on` only.
+  const c = build(seed({}));
+  await c.api.setDefaultOn("items", "dye", true);
+  const condCalls = JSON.stringify(c.api.COND_CALLS);
+  const dyeAfter = sw(takeoff(c), "items", "dye");
+  const noItemWrite = !c.api.LABOR_CALLS.some((x) => x.op === "PATCH_DEFAULT_ON");
+  const cf = build(seed({ COND_FAIL: true }));
+  await cf.api.setDefaultOn("items", "dye", true);
+  const dyeRefused = sw(takeoff(cf), "items", "dye");
+
+  // 5. A NON-ADMIN READS THE STATE AS WORDS, never a switch that would 403.
+  const v = build(seed({ ADMIN: false }));
+  const vHtml = takeoff(v), vLab = labor(v);
+  const viewer = {
+    // Labor (a PATCH the server refuses a non-admin) and the condition materials (a PUT it
+    // refuses) show words; items and assemblies stay switches, exactly like their Remove button.
+    noLaborSwitches: !/data-def-on=/.test(vLab),
+    noConditionSwitch: sw(vHtml, "items", "dye") === null,
+    laborSaysOff: /<td class="rowon"><span class="wtall">Off<\/span>/.test(vLab),
+    dyeSaysOff: /<td class="rowon"><span class="wtall">Off<\/span>/.test(vHtml),
+    asmStillSwitch: sw(vHtml, "assemblies", "a1") === "true",
+  };
+
+  out.defaultSlider = {
+    drawn: drawn, afterAsm: afterAsm, asmCalls: asmCalls, afterLabor: afterLabor,
+    afterRefused: afterRefused, condCalls: condCalls, dyeAfter: dyeAfter,
+    noItemWrite: noItemWrite, dyeRefused: dyeRefused, viewer: viewer,
+  };
+}
+
+// ── the Fees + Textura default row on the Defaults tab (Hanz, 2026-10-06), EXECUTED ──────────────
+async function feesChecks() {
+  const B = require(path.join(ROOT, "js", "bid-model.js"));
+  const mk = (state) => build(Object.assign({ window: { TWBidModel: B }, ADMIN: true }, state));
+  // 1. Always listed in the Markup group, empty box when nothing is filed (= $0).
+  const none = mk({});
+  const row0 = none.api.feesDefaultRow();
+  const groupsNone = none.api.takeoffDefaultGroups().map((g) => g.title);
+  // 2. Typing a figure PUTs the markup row for line fees_textura, notes carried, and keeps the rule.
+  const a = mk({ FEES_RULE: { id: "r1", layout: "global", line_key: "fees_textura", formula: "100",
+                              applies: true, notes: "kept" } });
+  const box = { value: "$1,250", getAttribute: () => "1" };
+  await a.api.saveFeesDefault(box);
+  const sent = a.api.FEES_CALLS.map((c) => ({ path: c.path, method: c.opts.method,
+                                              body: JSON.parse(c.opts.body) }));
+  // 3. A blank box files $0; junk is refused and nothing is sent.
+  const b = mk({ FEES_RULE: { layout: "global", line_key: "fees_textura", formula: "100", applies: true } });
+  await b.api.saveFeesDefault({ value: "", getAttribute: () => "1" });
+  const blankSent = b.api.FEES_CALLS.map((c) => JSON.parse(c.opts.body).formula);
+  const c2 = mk({});
+  const junk = { value: "abc", getAttribute: () => "1" };
+  await c2.api.saveFeesDefault(junk);
+  // 4. A 403 puts the old figure back.
+  const d403 = mk({ FEES_RULE: { layout: "global", line_key: "fees_textura", formula: "100", applies: true },
+                    FEES_RESPONSE: { status: 403 } });
+  const box403 = { value: "300", getAttribute: () => "1" };
+  await d403.api.saveFeesDefault(box403);
+  // 5. A viewer gets text, not a box.
+  const viewer = mk({ ADMIN: false, FEES_RULE: { layout: "global", line_key: "fees_textura",
+                                                 formula: "250", applies: true } });
+  out.feesDefaultRow = {
+    listedWithNothingFiled: groupsNone.indexOf("Markup") >= 0,
+    emptyBox: /data-fees-default="1" value=""/.test(row0.how),
+    name: row0.name,
+    sent: sent, ruleAfter: a.api.feesRuleNow() && a.api.feesRuleNow().formula,
+    boxAfter: box.value,
+    blankSent: blankSent,
+    junkSent: c2.api.FEES_CALLS.length, junkBox: junk.value,
+    refusedBox: box403.value, refusedRule: d403.api.feesRuleNow().formula,
+    viewerHasBox: /<input/.test(viewer.api.feesDefaultRow().how),
+    viewerText: viewer.api.feesDefaultRow().how,
+  };
+}
+
 // A WATCHDOG, because the alternative failure mode is silence. These scenarios await dialogs and
 // held requests, so a change that opens one more dialog than a test answers leaves a flush waiting
 // forever: node's loop empties, the process exits 0, and nothing is printed — which the fixture
@@ -5025,6 +5657,6 @@ const watchdog = setTimeout(() => {
 }, 30000);
 
 Promise.all([conflictChecks(), dialogChecks(), laborChecks(), laborTabChecks(),
-             conditionChecks()]).then(
+             conditionChecks(), sliderChecks(), feesChecks()]).then(
   () => { clearTimeout(watchdog); console.log(JSON.stringify(out)); },
   (err) => { clearTimeout(watchdog); console.error(err); process.exit(1); });

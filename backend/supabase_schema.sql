@@ -420,6 +420,30 @@ alter table public.library_labor      add column if not exists default_work_type
 alter table public.library_labor add column if not exists favorite boolean not null default true;
 alter table public.library_labor alter column favorite set default false;
 
+-- THE DEFAULTS-TAB SLIDER, 2026-10-05 -- one nullable boolean (NULL reads ON); same file as
+-- backend/ops/default_on.sql, which is how an already-running database gets it.
+alter table public.library_items      add column if not exists default_on boolean;
+alter table public.library_assemblies add column if not exists default_on boolean;
+alter table public.library_labor      add column if not exists default_on boolean;
+
+-- THE LABOR CALCULATOR'S PER-LINE MODES, 2026-10-06 -- same table as backend/ops/labor_calc.sql,
+-- which is how an already-running database gets it. One row per default labor line (a built-in
+-- crew id or a library_labor uuid); `mode` is 'sf' (crew + sf_per_day) or 'fixed' (guys + days);
+-- `rate` NULL = the company labor rate. The code reads an absent table as "no modes".
+create table if not exists public.library_labor_calc (
+  line_id        text primary key,
+  mode           text not null check (mode in ('sf', 'fixed')),
+  crew           numeric(8,2),
+  sf_per_day     numeric(12,2),
+  hours_per_day  integer not null default 8 check (hours_per_day in (8, 10)),
+  guys           numeric(8,2),
+  days           numeric(8,2),
+  rate           numeric(10,2),
+  updated_at     timestamptz not null default now()
+);
+alter table public.library_labor_calc enable row level security;
+grant select, insert, update, delete on public.library_labor_calc to service_role;
+
 -- ── Items and Assemblies, 2026-08-15 (Hanz) ───────────────────────────────
 -- Additive only, and safe to run against a database that already holds BETA rows.
 --
@@ -482,11 +506,11 @@ alter table public.library_assemblies add column if not exists updated_by text;
 -- reachable from the API could make a deleted one again). The Polish estimate prices its Joint
 -- Filler and Dye condition lines off these rows through library-core's priceLine
 -- (polish-estimate.js's condLine), and falls back to RATES.JOINT_FILLER_KIT_COST /
--- RATES.DYE_PER_SF in polish-bid-core.js on a database that has not run this yet.
+-- RATES.DYE_PER_SF in bid-model.js on a database that has not run this yet.
 --
 -- THE FIGURES ARE KYLE'S Polish!C29 AND C25/C26: through the material rule the kit row is
 -- CEIL(area / 3500) kits at $500, and the dye row is ONE COAT, area x $0.14 -- the bid buys two,
--- his rows 25 and 26 (polish-bid-core.js's DYE_COATS) -- to the cent what the fallback charges. WASTE IS A LITERAL 0, NEVER NULL: a null waste reads as the 5% default
+-- his rows 25 and 26 (bid-model.js's DYE_COATS) -- to the cent what the fallback charges. WASTE IS A LITERAL 0, NEVER NULL: a null waste reads as the 5% default
 -- and would buy 5% more of both. test_polish_estimate_page.py holds these rows, both files and the
 -- engine's fallback together. Every column the insert names is added ABOVE it (waste_pct and
 -- roundup with the other material columns), so a fresh database builds.
@@ -506,7 +530,7 @@ on conflict (id) do nothing;
 
 -- ── Markup rules ──────────────────────────────────────────────────────────
 -- The markup chain's rates, as editable expressions, one row per line per sheet LAYOUT. Today
--- those rates are hardcoded constants in frontend/js/polish-bid-core.js (RATES, GP_BANDS, and
+-- those rates are hardcoded constants in frontend/js/bid-model.js (RATES, GP_BANDS, and
 -- literals inside hardBidPct), transcribed by hand off Kyle's workbook. See backend/markup.py.
 --
 -- KEYED ON THE TAB, not on a work type: audited 2026-09-03, the workbook's markup column keys on
@@ -596,7 +620,7 @@ grant select, insert, update, delete on public.markup_rules to service_role;
 --
 -- NOT APPLIED. Written 2026-09-18 and deliberately left unrun on both databases until Hanz says
 -- go. Until then backend/condition_defaults.list_defaults() answers with an empty list by design
--- and every estimate opens with the literals in frontend/js/polish-bid-core.js, exactly as today.
+-- and every estimate opens with the literals in frontend/js/bid-model.js, exactly as today.
 -- BOTH databases or neither: the one that misses this answers 502 on the first save.
 --
 -- AN OVERRIDE, NOT THE ANSWER. A row here says "the shipped default for this key is wrong for
@@ -606,12 +630,12 @@ grant select, insert, update, delete on public.markup_rules to service_role;
 --
 -- IT REACHES A BRAND-NEW BID AND NOTHING ELSE. An estimate that has already been saved keeps the
 -- answers it was saved with, forever, whatever this table later says — the seeding is gated on
--- there being no saved estimate at all (conditionsUnstated in polish-bid-core.js). An estimator's
+-- there being no saved estimate at all (conditionsUnstated in bid-model.js). An estimator's
 -- answers are their work; a default is what the next blank bid starts from.
 create table if not exists public.condition_defaults (
   id            text primary key,
   -- joint_filler | remove_existing_jf | dye. The keys of CONDITION_CELLS in
-  -- frontend/js/polish-bid-core.js, which is what decides the workbook cell each answer writes
+  -- frontend/js/bid-model.js, which is what decides the workbook cell each answer writes
   -- (Polish!E29 / Polish!F29 / Polish!E25). Checked in condition_defaults.py rather than by a
   -- CHECK constraint, for the reason this project has already paid for twice: an unapplied CHECK
   -- surfaces as a 502 on whichever database missed it, and this vocabulary will grow.

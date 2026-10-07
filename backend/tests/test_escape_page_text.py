@@ -162,7 +162,7 @@ def test_the_intake_address_lookup_escapes_all_five_characters(ran, fn):
     into the markup, so the helper is safe in a single-quoted attribute too, and the words still
     read "O'Fallon".
 
-    Mutation: drop `'` from the esc in index.js. A raw `'` reaches the markup."""
+    Mutation: drop `'` from the esc in js/address-lookup.js. A raw `'` reaches the markup."""
     got = ran["intake"][fn]
     assert "'" not in got["markup"]
     assert "&#39;" in got["markup"]

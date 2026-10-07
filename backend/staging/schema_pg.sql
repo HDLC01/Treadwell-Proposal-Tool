@@ -263,6 +263,29 @@ alter table public.library_labor      add column if not exists default_work_type
 alter table public.library_labor add column if not exists favorite boolean not null default true;
 alter table public.library_labor alter column favorite set default false;
 
+-- THE DEFAULTS-TAB SLIDER, 2026-10-05 -- one nullable boolean (NULL reads ON); same file as
+-- backend/ops/default_on.sql, which is how an already-running database gets it.
+alter table public.library_items      add column if not exists default_on boolean;
+alter table public.library_assemblies add column if not exists default_on boolean;
+alter table public.library_labor      add column if not exists default_on boolean;
+
+-- THE LABOR CALCULATOR'S PER-LINE MODES, 2026-10-06 -- same table as backend/ops/labor_calc.sql,
+-- which is how an already-running database gets it. One row per default labor line (a built-in
+-- crew id or a library_labor uuid); `mode` is 'sf' (crew + sf_per_day) or 'fixed' (guys + days);
+-- `rate` NULL = the company labor rate. The code reads an absent table as "no modes".
+create table if not exists public.library_labor_calc (
+  line_id        text primary key,
+  mode           text not null check (mode in ('sf', 'fixed')),
+  crew           numeric(8,2),
+  sf_per_day     numeric(12,2),
+  hours_per_day  integer not null default 8 check (hours_per_day in (8, 10)),
+  guys           numeric(8,2),
+  days           numeric(8,2),
+  rate           numeric(10,2),
+  updated_at     timestamptz not null default now()
+);
+grant select, insert, update, delete on public.library_labor_calc to service_role;
+
 -- Items and Assemblies, 2026-08-15. Additive, and safe against a volume already holding BETA
 -- rows. buy_qty is the "5" of "5 Gal" (so unit_cost can mean what the pail costs); existing rows
 -- get 1, which prices exactly as they did before the column existed. cost_updated_at marks a
@@ -389,7 +412,7 @@ alter default privileges in schema public grant all on sequences to service_role
 --
 -- NOT APPLIED on either database as of 2026-09-18 — it needs Hanz's go, and it has to land on
 -- BOTH or the one that misses it answers 502 on the first save. Until then list_defaults()
--- answers empty by design and every estimate opens with the literals in polish-bid-core.js.
+-- answers empty by design and every estimate opens with the literals in bid-model.js.
 --
 -- A row is an OVERRIDE of a shipped constant, and it reaches a BRAND-NEW bid only: a saved
 -- estimate keeps the answers it was saved with whatever this table later says.

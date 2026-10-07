@@ -428,7 +428,7 @@ def test_a_dead_table_says_no_match_rather_than_going_blank(county):
 def test_the_kansas_fallback_rate_is_quoted_from_the_endpoint(county):
     """NOT written down a third time.
 
-    The number already lives in `reference_tax.KS_STATE_RATE` and in `polish-bid-core.js`'s
+    The number already lives in `reference_tax.KS_STATE_RATE` and in `bid-model.js`'s
     `RATES.KS_STATE`. `/api/reference/counties` serves it precisely so this picker can say it out
     loud without a third copy -- and a third copy is how the first two come to disagree.
     """

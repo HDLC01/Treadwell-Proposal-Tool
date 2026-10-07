@@ -44,15 +44,20 @@ const path = require("path");
 const vm = require("vm");
 
 const ROOT = path.resolve(__dirname, "..", "..", "..");
-const FRONT = path.join(ROOT, "frontend");
-const read = (p) => fs.readFileSync(path.join(FRONT, p), "utf8").replace(/\r\n/g, "\n");
+const REAL_FRONT = path.join(ROOT, "frontend");
+// An optional first argument names another frontend directory, which may hold only SOME of the
+// files: whatever it lacks is read from the real one. That is how test_files_door.py breaks one page
+// file in a scratch copy and requires a scenario to go red.
+const FRONT = process.argv[2] ? path.resolve(process.argv[2]) : REAL_FRONT;
+const pick = (p) => (fs.existsSync(path.join(FRONT, p)) ? path.join(FRONT, p) : path.join(REAL_FRONT, p));
+const read = (p) => fs.readFileSync(pick(p), "utf8").replace(/\r\n/g, "\n");
 const SHARED = read("shared.js");
 const PROPOSAL = read(path.join("js", "proposal-review.js"));
 const DONE = read(path.join("js", "done.js"));
 const ESTIMATE = read(path.join("js", "estimate-review.js"));
 const HTML = read("proposal-review.html");
 // The price rule's page half, loaded as the page loads it (a script before proposal-review.js).
-const TWPRICE = require(path.join(FRONT, "js", "price-lines-core.js"));
+const TWPRICE = require(pick(path.join("js", "price-lines-core.js")));
 const NL = "\n";
 
 function gone(what, where) {
@@ -137,6 +142,13 @@ const PROPOSAL_UNITS = [
   fn(PROPOSAL, "continueToDone", P),
   fn(PROPOSAL, "composeForFiles", P),
 ].join(NL);
+// The page's own state load (its line 14), taken from the source: the draft is read THROUGH it, as
+// the page reads it. Today that line hands a v2 draft that still carries the spreadsheet's pricing
+// over without it (shared.js v2PricingView), and every other draft over as the very same object. It
+// used to be written out here as `TW.getState()`, which would have made the scenarios below pass for
+// a page that never applied the view.
+const STATE_LOAD = grab(PROPOSAL, /^  const state = [^\n]*;$/m, "the page's state load", P);
+const loadState = new Function("TW", STATE_LOAD + "\nreturn state;");
 // The page-init block that creates #tb-total from the snapshotted lump sum, verbatim.
 const LUMP = iifeBody(PROPOSAL, "// Lump sum = the estimate sheet's own TOTAL LUMP SUM", "(() => {", P);
 // The page-init block that puts a name on the signature line, verbatim.
@@ -406,7 +418,7 @@ async function openProposal(b, href, opts) {
   const o = opts || {};
   const page = await load(b, href);
   const TW = page.TW;
-  const state = TW.getState();                         // the page's one-shot snapshot (line 14)
+  const state = loadState(TW);                         // the page's one-shot snapshot (line 14, real)
   const form = { elements: FIELDS.map((f) => ({ name: f.name, type: f.type, value: f.value,
                                                   checked: false })) };
   form.querySelector = (sel) => {
@@ -480,6 +492,8 @@ async function openProposal(b, href, opts) {
   scope.rebuildPricing();                              // page init, in the page's order
   scope.__initLump();
   return { page, TW, state, form, nodes, scope, firstDocLoad, writes,
+           // The lump sum the page stashed for its price block (#tb-total), as text.
+           tbText: () => (tb ? tb.textContent : null),
            firePageTimers: () => { const due = pageTimers.splice(0); due.forEach((f) => { if (f) f(); }); } };
 }
 
@@ -2015,6 +2029,102 @@ const mentionsY = (x) => /Other Project Y|Y texture|Y scope|Y note/.test(JSON.st
     const fit = p.scope.fitPayload();
     await p.scope.continueToDone(null);
     out.oneComposer = { fit, stored: local(b).proposal_payload, draft: d };
+  }
+
+  // V2. A v2 TEST COPY THAT CARRIES THE SPREADSHEET'S PRICE (the 2026-10-07 stale-total defect).
+  //
+  // Until the copy was an allowlist (polish-sandbox.js buildCopy), a v2 test copy of a spreadsheet bid
+  // arrived holding the SOURCE's priced_tabs and proposal_lump_sum next to v2's own computed_bid, and
+  // the Proposal step prints the sheet's total before the engine's. Four drafts go through the real
+  // Proposal step, opened and then continued:
+  //   * v2Clean       a v2 draft as v2 itself writes it: computed_bid, no spreadsheet keys;
+  //   * v2Stale       the same bid with the source's spreadsheet pricing still on it;
+  //   * v2StaleOption the same again, and the source bid had a VISIBLE OPTION, so the stored `rooms`
+  //                   hold a base and an option (the rooms the customer's portal prices from);
+  //   * sheet         an ordinary spreadsheet draft, which must behave exactly as it always has.
+  // Opening writes nothing for either v2 draft (the view is a read), and the stale copy must print what
+  // the clean one prints, to the figure. Continue then leaves the draft ready to send: the Files page's
+  // send gate (TW.docDrift over TW.publishDigest, the pair done.js asks before it posts) finds nothing
+  // to refuse, the spreadsheet's keys are gone from this browser's copy and from the PUT, and the
+  // server's own refusal over the stored blob (test_files_door.py) has nothing to say either.
+  {
+    const V2_TOTAL = 23456;
+    const v2Clean = () => ({
+      project_name: "Door Test (beta test)", job_name: "Door Test (beta test)", work_type: "polish",
+      audience: "Direct", city_state: "Lenexa, KS", address: "100 Main St", bid_date: "2026-09-20",
+      system_name: "Treadwell Polished Concrete", texture: "", estimator_name: "Kyle Loseke",
+      scope_notes: "Grind and polish.", schedule_notes: "One week.", exclusions: "Moving furniture.",
+      notes_text: "", tax_inclusion: "INCLUDED", price_overrides: { lines: {} }, tab_opts: {},
+      polish_sf: 2875, polish_2_sf: "",
+      polish_estimate: { version: 2, totals: { total: V2_TOTAL } },
+      computed_bid: { lump_sum: V2_TOTAL, price_per_sf: 8.16, polish_sf: 2875,
+                      full_bid: { total_base_bid: V2_TOTAL, sales_tax: 1000, remodel_tax: 0 } },
+    });
+    // What the source bid's spreadsheet snapshot would have left on it: a Polish tab at $8,000, the
+    // base pointing at it, and the lump sum and taxes derived from it.
+    const v2Stale = () => Object.assign(v2Clean(), {
+      priced_tabs: tabs(10000, 320), base_tab_id: "Polish", proposal_lump_sum: 8000,
+      proposal_sales_tax: 250, proposal_remodel_tax: 0, proposal_taxable: true,
+      proposal_remodel_on: false, sheet_area: { polish_sf: 1000 }, rooms: [],
+      hf_lump_sums: { polish: 8000 }, cost_snapshot: { costs: 1, man_hours: 2 }, phase_price: 4500,
+    });
+    // The same stale copy, but its SOURCE bid had a visible option (a Seal option on the Polish base),
+    // so the keys the old copy carried over include `rooms` with two rooms in it. Those rooms are what
+    // the customer's portal page prices from (the portal reads `rooms` before `computed_bid`).
+    const roomFor = (id, name, isBase, total) => ({
+      id, name, is_base: isBase, bid: { total, sales_tax: 0, remodel: 0 },
+      base_total: 8000, deduct_amount: 8000 - total, price_mode: "total", show: true,
+      system_desc: name, option_desc: name, custom_desc: "", base_desc: "", show_system: true,
+      show_diff: false, notes_auto: [], notes_manual: [] });
+    const v2StaleOption = () => Object.assign(v2Stale(), {
+      priced_tabs: tabs(10000, 320).concat([
+        { id: "Seal", name: "Seal", role: "seal", kind: "base", total: 1200, sales_tax: 0,
+          remodel: 0, system_desc: "Sealer", notes_auto: [], sf: {} }]),
+      tab_opts: { Seal: { is_option: true } },
+      rooms: [roomFor("Polish", "Polish", true, 8000), roomFor("Seal", "Seal", false, 1200)],
+    });
+    // Everything the spreadsheet's Estimate step writes that a v2 draft has no business holding
+    // (shared.js SHEET_PRICING_KEYS), read off the real file so this list cannot drift from it.
+    const SHEET_KEYS = new Function(
+      grab(SHARED, /^  const SHEET_PRICING_KEYS = \[[\s\S]*?\];$/m, "SHEET_PRICING_KEYS", "shared.js")
+      + "\nreturn SHEET_PRICING_KEYS;")();
+    const sheetKeysIn = (blob) => SHEET_KEYS.filter((k) => Object.prototype.hasOwnProperty.call(blob, k));
+    const one = async (d) => {
+      const b = browser(d);
+      const before = JSON.stringify(local(b));
+      const p = await openProposal(b, "/proposal-review.html?d=d1");
+      const opened = { tb: p.tbText(), writes: p.writes.slice(),
+                       storedUnchanged: JSON.stringify(local(b)) === before,
+                       stateHasLump: "proposal_lump_sum" in p.state,
+                       stateHasTabs: Array.isArray(p.state.priced_tabs) };
+      await p.scope.continueToDone(null);
+      const pp = local(b).proposal_payload;
+      // THE FILES PAGE'S SEND GATE, run on what Continue left stored: done.js asks
+      // TW.docDrift(TW.publishDigest(TW.getState())) before it posts anything. A row here is a Send
+      // that is refused, with nothing in the app that clears it.
+      const gate = () => p.TW.docDrift(p.TW.publishDigest(p.TW.getState()));
+      const drift = gate();
+      const digest = p.TW.publishDigest(p.TW.getState());
+      const storedAfter = local(b);
+      const serverAfter = copy(b.server.d1);
+      // The key Continue stamped (TW.composeKey over what it was about to store) must still be the key
+      // of what IS stored, here and on the server: the Files page trusts the document only while this
+      // holds, and sends a draft where it does not back through the Proposal step, again and again.
+      const holds = p.TW.documentHolds(storedAfter);
+      const serverHolds = p.TW.documentHolds(serverAfter);
+      // A second Continue on the same page load: whatever the first one left, this must not move it.
+      await p.scope.continueToDone(null);
+      return { opened, summary: summary(pp), valuesLump: (pp.values || {}).proposal_lump_sum,
+               lumpFormatted: (pp.values || {}).lump_sum_formatted, rooms: pp.rooms,
+               workType: pp.work_type,
+               drift, digest, driftAfterSecondContinue: gate(), holds, serverHolds,
+               sourceKeys: Object.keys(d), sourceSheetKeys: sheetKeysIn(d),
+               storedSheetKeys: sheetKeysIn(storedAfter), serverSheetKeys: sheetKeysIn(serverAfter),
+               storedRooms: Array.isArray(storedAfter.rooms) ? storedAfter.rooms.length : null,
+               stored: storedAfter, server: serverAfter };
+    };
+    out.v2StaleCopy = { total: V2_TOTAL, clean: await one(v2Clean()), stale: await one(v2Stale()),
+                        staleOption: await one(v2StaleOption()), sheet: await one(draft()) };
   }
 
   process.stdout.write(JSON.stringify(out));

@@ -25,7 +25,7 @@
  * would ever have run.
  *
  * Stubbed: fetch, window.TW, window.TWAuth, window.TWPolishSandbox, the DOM, and the clock.
- * REAL: js/polish-bid-core.js (the markup chain, pinned to Kyle's Polish tab) and
+ * REAL: js/bid-model.js (the markup chain, pinned to Kyle's Polish tab) and
  * js/library-core.js (priceAssembly). The arithmetic under test is the shipped arithmetic.
  *
  * Usage: node polish-estimate-harness.js <frontend-dir>   →  one line of JSON
@@ -46,7 +46,7 @@ const read = (p) => fs.readFileSync(p, "utf8").replace(/\r\n/g, "\n");
 
 const src = read(path.join(ROOT, "js", "polish-estimate.js"));
 const pageHtml = read(path.join(ROOT, "polish-estimate.html"));
-const B = require(path.join(ROOT, "js", "polish-bid-core.js"));
+const B = require(path.join(ROOT, "js", "bid-model.js"));
 const L = require(path.join(ROOT, "js", "library-core.js"));
 
 const clone = (v) => JSON.parse(JSON.stringify(v));
@@ -334,7 +334,7 @@ function blob(over) {
 /** The bid this model SHOULD come to, composed out of the two real engines the documented way.
  *
  *  Independent of the page on purpose: the page must agree with library-core's priceAssembly and
- *  polish-bid-core's markupChain, not merely be self-consistent. */
+ *  bid-model's markupChain, not merely be self-consistent. */
 /** `remodelRate` is the project's county rate off the draft, which the page reads from
  *  `state.county_remodel_rate`. Passing it here too keeps this expectation and the page computing
  *  the same thing; leaving it out would let a page that ignored the county still match. */
@@ -421,7 +421,7 @@ function build(opts) {
 
   const winListeners = [];
   const win = {
-    TWPolishBid: B, TWLib: L, TWPolishSandbox: S,
+    TWBidModel: B, TWLib: L, TWPolishSandbox: S,
     TWAuth: { ready: Promise.resolve() },
     scrollTo: () => { log.push("scroll"); },
     location: { href: "https://x/polish-estimate.html?d=proj-1" },
@@ -437,9 +437,22 @@ function build(opts) {
     },
   };
 
-  const fetchStub = async function (url) {
+  const fetchStub = async function (url, init) {
     rec.fetches.push(url);
+    // Every request WITH ITS METHOD, so "never writes to the library" can be asserted on verbs.
+    (rec.calls = rec.calls || []).push({ url: String(url), method: ((init || {}).method || "GET").toUpperCase() });
     log.push("fetch:" + url);
+    // POST /api/distance -- the server's driving miles from the office. `distance` is the JSON body
+    // it answers with; `distanceGate` is a promise the answer waits on (a slow Google);
+    // `distanceFails` is the network going away. Its own arm so every older scenario, which has no
+    // address, never reaches it -- and one that did would show up in rec.distanceBodies.
+    if (/api\/distance/.test(url)) {
+      (rec.distanceBodies = rec.distanceBodies || []).push(JSON.parse((init || {}).body || "{}"));
+      if (opts.distanceGate) await opts.distanceGate;
+      if (opts.distanceFails) throw new Error("the distance service is down");
+      return { json: async () => clone(opts.distance === undefined
+        ? { ok: false, miles: null, reason: "no_key" } : opts.distance) };
+    }
     if (opts.libraryFails) throw new Error("the network went away");
     // GET /api/library/labor -- the estimator's own default labor lines. Answered separately from
     // the two below because the page has to survive it failing: public.library_labor is on staging
@@ -454,11 +467,22 @@ function build(opts) {
     // behind it, and a page that could not open without it would be unusable. Default []
     // rather than a fixture list, so a page that asked when it had no business to shows
     // up as an empty answer rather than as a silent rewrite of somebody's conditions.
+    // GET /api/markup/rules?layout=global -- the company labor rate lives here. Its own arm, and
+    // [] by default so every older scenario opens on the shipped $33 exactly as before.
+    if (/api\/markup\/rules/.test(url)) {
+      if (opts.markupFails) throw new Error("the markup service is down");
+      return { json: async () => ({ ok: true,
+        rules: clone(opts.markupRules === undefined ? [] : opts.markupRules) }) };
+    }
     if (/condition-defaults/.test(url)) {
       if (opts.conditionFetchFails) throw new Error("the defaults table is not there");
       return { json: async () => ({ ok: true,
         conditions: clone(opts.conditionDefaults === undefined
           ? [] : opts.conditionDefaults) }) };
+    }
+    if (/labor-calc/.test(url)) {
+      if (opts.laborCalcFails) throw new Error("the calculator table is not there");
+      return { json: async () => ({ ok: true, calc: clone(opts.laborCalc === undefined ? [] : opts.laborCalc) }) };
     }
     if (/\/labor/.test(url)) {
       if (opts.laborFails) throw new Error("the defaults table is not there");
@@ -483,6 +507,10 @@ function need(built, sel) {
   if (!el) throw new Error("the page rendered nothing matching " + sel);
   return el;
 }
+const warn = (built, sel) => {
+  const el = built.doc.querySelector(sel);
+  return el ? { text: el.textContent, hidden: !!el.hidden } : null;
+};
 const txt = (built, sel) => {
   const el = built.doc.querySelector(sel);
   return el === null ? null : el.textContent;
@@ -491,6 +519,14 @@ function typeInto(built, sel, value) {
   const el = need(built, sel);
   el.value = String(value);
   built.doc.fire("input", { target: el });
+  return el;
+}
+/** The commit of a typed box (blur or Enter): the value is set, then "change" fires. The clearing
+ *  rule lives on this event, not on "input", so a test that only calls typeInto never reaches it. */
+function changeTo(built, sel, value) {
+  const el = need(built, sel);
+  el.value = String(value);
+  built.doc.fire("change", { target: el });
   return el;
 }
 function clickOn(built, sel) {
@@ -827,41 +863,47 @@ const rendered = [];      // every string the page put on screen, for the Labour
         return slice.indexOf("data-lab-manual=") === -1 &&
           slice.indexOf("data-lab-auto=") === -1;
       }),
-      // The toggle lives in the header (before the fields grid starts), on Travel's own card
-      // (card index 2, the auto-appended row) -- not the old inline hint link.
-      toggleInHeader: /class="mw-sw labsw" role="switch"[^>]*data-lab-manual="2"/.test(
-        (panels.innerHTML.split('class="tk lab')[3] || "").split('class="tk-g')[0]),
+      // THE "TYPE MY OWN" SWITCH IS GONE (Hanz, 2026-10-07), from every card on the step, Travel's
+      // included. The "Included" slider on the same header is a different control and stays.
+      noTypeMyOwn: {
+        words: panels.innerHTML.indexOf("Type my own") === -1,
+        labManual: panels.innerHTML.indexOf("data-lab-manual") === -1,
+        labAuto: panels.innerHTML.indexOf("data-lab-auto") === -1,
+        trvManual: panels.innerHTML.indexOf("data-trv-manual") === -1,
+        trvAuto: panels.innerHTML.indexOf("data-trv-auto") === -1,
+        noLabsw: panels.innerHTML.indexOf("labsw") === -1,
+        includedOnTravelCard: /data-on-lab="2"/.test(
+          (panels.innerHTML.split('class="tk lab')[3] || "").split('class="tk-g')[0]),
+      },
       linkishGone: panels.innerHTML.indexOf("linkish") === -1,
-      // A SWITCH REPORTS ITS STATE, which is the whole reason this stopped being a button
-      // whose words flipped. Off while the figure is derived, on once it is typed --
-      // and the label stays the same sentence in both, so it describes what IS rather
-      // than what clicking would do.
-      // BOTH POSITIONS, because the fixture only ever renders one. Travel boots in AUTO, so
-      // a check that reads the page as-built inspects a single branch of the ternary --
-      // flipping the OTHER branch back to "Back to auto" then changes nothing any
-      // assertion can see. The manual state has to be entered before it can be asserted.
-      toggleSaysItsState: await (async () => {
+      // THE HINT SAYS WHICH MODE THE BOX IS IN, in both positions (the fixture boots in auto, so
+      // the typed wording has to be entered before it can be read), and the Included slider
+      // still toggles a labor row without touching the Guys mode.
+      hintsAndIncluded: await (async () => {
         const k = build();
         await k.api.init();
         k.api.go(1);
         const kp = k.dom.get("panels");
         const ti = k.api.model().labor.findIndex((r) => r.id === "travel");
-        const headOf = () => (kp.innerHTML.split('class="tk lab')[ti + 1] || "")
-          .split('class="tk-g')[0];
-        const offHead = headOf();                 // derived: switch off
-        clickOn(k, '[data-lab-manual="' + ti + '"]');
-        const onHead = headOf();                  // typed: switch on
-        const read = (h, want) => ({
-          checked: h.indexOf('aria-checked="' + want + '"') !== -1,
-          labelOnce: (h.match(/Type my own/g) || []).length,
-          backToAutoGone: h.indexOf("Back to auto") === -1,
-          hasTrack: h.indexOf('<span class="track">') !== -1,
-        });
-        return { off: read(offHead, "false"), on: read(onHead, "true") };
+        const hintOf = () => {
+          const card = kp.innerHTML.split('class="tk lab')[ti + 1] || "";
+          const g = card.split('data-k="guys"')[1] || "";
+          // The Guys hint is keyed (data-hint-lab) so the in-place repaint can find it; read THAT one,
+          // not the first plain hint after the box (which is the Hours line's).
+          return (/<p class="hint" data-hint-lab="[^"]*">([^<]*)<\/p>/.exec(g) || ["", ""])[1];
+        };
+        const autoHint = hintOf();
+        typeInto(k, '[data-lab="' + ti + '"][data-k="guys"]', "7");
+        const typedHint = hintOf();
+        const onBefore = k.api.model().labor[ti].enabled !== false;
+        clickOn(k, '[data-on-lab="' + ti + '"]');
+        const offRow = k.api.model().labor[ti];
+        const afterOff = { enabled: offRow.enabled, guys_auto: offRow.guys_auto, guys: offRow.guys };
+        clickOn(k, '[data-on-lab="' + ti + '"]');
+        const onAgain = k.api.model().labor[ti].enabled !== false;
+        return { autoHint: autoHint, typedHint: typedHint, onBefore: onBefore,
+                 afterOff: afterOff, onAgain: onAgain };
       })(),
-      // Still a <button>: the `.mw-sw` conditions are spans with no keydown handler, so
-      // matching them visually must not cost this control its keyboard.
-      toggleIsAButton: /<button[^>]*class="mw-sw labsw"/.test(panels.innerHTML),
     };
 
     // ── the derived Guys figure, and the two ways across the auto/manual line ──
@@ -882,16 +924,41 @@ const rendered = [];      // every string the page put on screen, for the Labour
       // ...and it now IGNORES the crew, which is the whole point of having left auto.
       typeInto(c, '[data-lab="0"][data-k="days"]', "9");
       const stickyAfterCrewMoves = travelRow().guys;
-      // The way back.
-      clickOn(c, '[data-lab-auto="' + travelIdx() + '"]');
+      // The way back is CLEARING THE BOX. First the two halves of "not while typing": an empty
+      // box on INPUT (the backspace in "1", backspace, "2") leaves the row typed, and only the
+      // change (blur / Enter) hands it back. Whitespace counts as empty.
+      typeInto(c, '[data-lab="' + travelIdx() + '"][data-k="days"]', "10");   // hours on the road
+      const costTyped = txt(c, '[data-lcost-for="' + travelIdx() + '"]');
+      typeInto(c, '[data-lab="' + travelIdx() + '"][data-k="guys"]', "");
+      const midBackspace = { guys: travelRow().guys, auto: travelRow().guys_auto };
+      typeInto(c, '[data-lab="' + travelIdx() + '"][data-k="guys"]', "2");
+      const afterRetype = { guys: travelRow().guys, auto: travelRow().guys_auto };
+      const writesBefore = cp.htmlWrites;
+      changeTo(c, '[data-lab="' + travelIdx() + '"][data-k="guys"]', "   ");
+      const clearRebuilds = cp.htmlWrites - writesBefore;
       const afterBackToAuto = { guys: travelRow().guys, auto: travelRow().guys_auto };
+      const clearedBox = String(need(c, '[data-lab="' + travelIdx() + '"][data-k="guys"]').value);
+      const clearedHint = need(c, '[data-hint-lab="' + travelIdx() + '"]').textContent
+        === "Man-days from the tasks above.";
+      const costAuto = txt(c, '[data-lcost-for="' + travelIdx() + '"]');
+      // And the cost is the one the same man-days price on a never-touched row.
+      const fresh = build();
+      await fresh.api.init();
+      fresh.api.go(1);
+      typeInto(fresh, '[data-lab="0"][data-k="days"]', "9");
+      const freshIdx = fresh.api.model().labor.findIndex((r) => r.id === "travel");
+      typeInto(fresh, '[data-lab="' + freshIdx + '"][data-k="days"]', "10");
+      const costFresh = txt(fresh, '[data-lcost-for="' + freshIdx + '"]');
+      // Typing "2" over the man-days priced differently from the man-days.
+      out.travelClear = { costTyped: costTyped, midBackspace: midBackspace,
+        afterRetype: afterRetype, costAuto: costAuto, costFresh: costFresh,
+        clearedBox: clearedBox, clearedHint: clearedHint, clearRebuilds: clearRebuilds };
       out.travelGuys = {
         seeded: before, afterCrewEdit: afterCrewEdit,
         afterTyping: afterTyping, stickyAfterCrewMoves: stickyAfterCrewMoves,
         afterBackToAuto: afterBackToAuto,
         // The box shows the derived figure rather than sitting empty next to a priced row.
         boxShowsIt: String(need(c, '[data-lab="' + travelIdx() + '"][data-k="guys"]').value),
-        manualLinkOffered: cp.innerHTML.indexOf("data-lab-manual=") !== -1,
       };
     }
 
@@ -1025,6 +1092,32 @@ const rendered = [];      // every string the page put on screen, for the Labour
       away.api.go(1);
       out.travelLocal.undimmedWhenAway =
         !/class="tk lab inert"/.test(away.dom.get("panels").innerHTML);
+    }
+
+    // A SAVED bid with guys_auto false still opens as typed (hint says so), prices off the typed
+    // number, and is not touched by merely opening and leaving the box alone.
+    {
+      const sv = build({ blob: blob({ polish_estimate: {
+        version: 2,
+        takeoff: [{ assembly_id: "a1", assembly_name: "x", measurement: 100, unit: "SF" }],
+        labor: [{ id: "travel", label: "Travel", guys: 6, days: 2, rate: 33,
+                  unit: "hours", guys_auto: false }],
+        conditions: { local: false }, contingency: 0
+      } }) });
+      await sv.api.init();
+      sv.api.go(1);
+      const svH = sv.dom.get("panels").innerHTML;
+      out.savedTypedRow = {
+        typedHint: svH.indexOf("Typed by you. Clear it to use the man-days from the tasks above.") !== -1,
+        guys: sv.api.model().labor[0].guys, auto: sv.api.model().labor[0].guys_auto,
+        box: String(need(sv, '[data-lab="0"][data-k="guys"]').value),
+        cost: txt(sv, '[data-lcost-for="0"]'),
+        // 6 guys x 2 hours x $33
+        expected: 6 * 2 * 33,
+      };
+      // A change event carrying the SAME number is not a clear.
+      changeTo(sv, '[data-lab="0"][data-k="guys"]', "6");
+      out.savedTypedRow.afterSameChange = sv.api.model().labor[0].guys_auto;
     }
 
     // Add a line: it appears, it is editable, and it prices from ITS OWN values. Travel is
@@ -1532,7 +1625,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
             isMaterialCard: /^<div class="tk mat( inert)?">/.test(block),
             // GRAYED WHILE OFF (Hanz, 2026-10-01), read off the card's own opening tag.
             grayed: /^<div class="tk mat inert">/.test(block),
-            usesTheAssemblyGrid: /<div class="tk-g">/.test(block),
+            usesTheAssemblyGrid: /<div class="tk-g matg">/.test(block),
             name: (/<div class="costbox txt">([^<]*)</.exec(block) || [])[1] || null,
             measurement: boxOf(block, key, "qty"),
             unit: boxOf(block, key, "unit"),
@@ -1546,7 +1639,13 @@ const rendered = [];      // every string the page put on screen, for the Labour
             // NOTHING ON THE CARD IS TYPEABLE, which is the honest half of the redesign. A
             // Measurement box that accepted keystrokes and threw them away would be worse than
             // the switch-and-a-sentence card it replaced.
-            nothingTypeable: !/<input|<select/.test(block),
+            // THE ONE BOX THAT TAKES TYPING is the Coverage box (data-condcov), this bid's own
+            // override; it is stripped before looking for any other input or select.
+            nothingTypeable: !/<input|<select/.test(
+              block.replace(/<input class="n" data-condcov="[^"]*"[^>]*>/, "")),
+            coverageBox: (/<input class="n" data-condcov="([^"]*)" value="([^"]*)" placeholder="([^"]*)">/
+              .exec(block) || []).slice(1),
+            coverageHint: textOf(block, key, "covhint"),
             // The switch does the row's remove button's job, so it sits where that button sits:
             // after the header's right-hand summary, not bolted on beside the tag.
             switchAfterTheSummary:
@@ -1618,7 +1717,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
       before: before,
       after: { jf: fig("joint_filler"), dye: fig("dye") },
       // What the real engine says about the area that is now on the screen, so the expectation
-      // is polish-bid-core's answer rather than a number typed into this file.
+      // is bid-model's answer rather than a number typed into this file.
       expectedArea: 8000,
       expectedJfCost: B.jointFillerCost(8000, true),
       expectedDyeCost: B.dyeCost(8000, true),
@@ -1738,6 +1837,134 @@ const rendered = [];      // every string the page put on screen, for the Labour
     const fresh = build({ blob: blob({ polish_estimate: null, polish_sf: 8250 }) });
     await fresh.api.init();
     out.migration.freshFromIntake = fresh.api.model().takeoff[0].measurement;
+    // Hanz, 2026-10-05 ("Add SF, seed the takeoff"): System 2's box seeds a SECOND row, and a
+    // system-2-only job seeds one row. Each is read off the model the page actually opened with.
+    const rowsOf = (m) => m.takeoff.map((r) => [r.assembly_id, r.measurement, r.unit]);
+    const two = build({ blob: blob({ polish_estimate: null, polish_sf: 8250, polish_2_sf: 3100 }) });
+    await two.api.init();
+    out.migration.seedTwo = rowsOf(two.api.model());
+    const only2 = build({ blob: blob({ polish_estimate: null, polish_sf: 0, polish_2_sf: 3100 }) });
+    await only2.api.init();
+    out.migration.seedOnlyTwo = rowsOf(only2.api.model());
+    // A measured takeoff takes NEITHER number, however much intake holds.
+    const measured = build({ blob: blob({ polish_estimate: { version: 2,
+      takeoff: [{ assembly_id: "", assembly_name: "", measurement: 5000, unit: "SF" }],
+      labor: [], conditions: {}, contingency: 0, fees: 0, totals: {} },
+      polish_sf: 8250, polish_2_sf: 3100 }) });
+    await measured.api.init();
+    out.migration.seedMeasured = rowsOf(measured.api.model());
+    // THE DRAFT IS BROUGHT INTO LINE WITH THE MODEL ON OPEN, with no edit. Seeded rows are in
+    // memory only, so without the save polish_sf stays System 1 alone; and a polish_sf typed over
+    // a measured takeoff (the live intake's beta-continue door) has to be put back to the total.
+    const lastSave = (x) => { x.clock.fire(); return x.rec.saves[x.rec.saves.length - 1] || null; };
+    const sTwo = lastSave(two);
+    out.migration.savedAfterSeedTwo = sTwo && { sf: sTwo.polish_sf, bidSf: sTwo.computed_bid.polish_sf };
+    const clobbered = build({ blob: blob({ polish_estimate: { version: 2,
+      takeoff: [{ assembly_id: "", assembly_name: "", measurement: 3000, unit: "SF" },
+                { assembly_id: "", assembly_name: "", measurement: 2000, unit: "SF" }],
+      labor: [], conditions: {}, contingency: 0, fees: 0, totals: {} },
+      polish_sf: 3000 }) });
+    await clobbered.api.init();
+    const sClob = lastSave(clobbered);
+    out.migration.savedAfterClobber = sClob && sClob.polish_sf;
+    // Already in line: a plain reopen writes nothing.
+    const inLine = build({ blob: blob({ polish_estimate: { version: 2,
+      takeoff: [{ assembly_id: "", assembly_name: "", measurement: 5000, unit: "SF" }],
+      labor: [], conditions: {}, contingency: 0, fees: 0, totals: {} },
+      polish_sf: 5000 }) });
+    await inLine.api.init();
+    out.migration.savesWhenInLine = lastSave(inLine) ? 1 : 0;
+    // The helper's own guard, which init's !takeoffSf check hides: an LF-only measurement is still
+    // a measurement, so neither intake number may be seeded beside it.
+    const lfRows = [{ assembly_id: "", assembly_name: "", measurement: 900, unit: "LF" }];
+    out.migration.seedOverLf = rowsOf({ takeoff: B.seedTakeoffSf(lfRows, 8250, 3100) });
+
+    // ── B6: THE DEFAULTS LOAD INTO A NEW BID (Hanz, 2026-10-05) ──────────────────────────────
+    // Library with favorites: a1 (SF assembly), a2 (LF assembly), i1 (material, coverage 333 --
+    // NOT the old 275 so a hard-coded constant shows), i4 (material, switched OFF), plus three that
+    // must NOT load: the reserved dye row, an epoxy-only favorite, and a non-favorite.
+    const dAsms = clone(ASMS).map((a) => {
+      if (a.id === "a1" || a.id === "a2") a.favorite = true;
+      if (a.id === "a5") { a.favorite = true; a.default_work_types = ["epoxy"]; }
+      return a;
+    });
+    const dItems = clone(ITEMS).map((it) => {
+      if (it.id === "i1") { it.favorite = true; it.coverage = 333; }
+      if (it.id === "i4") { it.favorite = true; it.default_on = false; }
+      return it;
+    });
+    dItems.push({ id: "dye", name: "Dye, per coat", unit: "Gal", buy_qty: 1, unit_cost: 10,
+                  coverage: 1, favorite: true });
+    const shape = (m) => m.takeoff.map((r) => ({ a: r.assembly_id || "", i: r.item_id || "",
+      m: r.measurement, u: r.unit, sf: !!r.same_floor, off: r.enabled === false }));
+    const loaded = build({ asms: dAsms, items: dItems,
+      blob: blob({ polish_estimate: null, polish_sf: 8000, polish_2_sf: 2000 }) });
+    await loaded.api.init();
+    const lm = loaded.api.model();
+    out.defaultsLoad = { rows: shape(lm), area: B.takeoffSf(lm.takeoff),
+      i1Price: loaded.api.rowPrice(lm.takeoff[2]).total,
+      i1Expected: L.priceLine({ item_id: "i1" }, dItems, 10000).cost,
+      i1CoverageBox: lm.takeoff[2].coverage,
+      offPrice: B.takeoffSf([lm.takeoff[3]]) };
+    loaded.clock.fire();
+    const dSave = loaded.rec.saves[loaded.rec.saves.length - 1] || null;
+    out.defaultsLoad.savedSf = dSave && dSave.polish_sf;
+    out.defaultsLoad.caption = txt(loaded, "[data-area-total]");
+    // Nothing enabled to carry the floor: the intake boxes still seed plain area rows.
+    const allOff = clone(dAsms).map((a) => { if (a.id === "a1") a.default_on = false;
+                                             if (a.id === "a2") a.favorite = false; return a; });
+    const offLoad = build({ asms: allOff, items: clone(ITEMS),
+      blob: blob({ polish_estimate: null, polish_sf: 5000 }) });
+    await offLoad.api.init();
+    out.defaultsLoad.allOff = shape(offLoad.api.model());
+    out.defaultsLoad.allOffArea = B.takeoffSf(offLoad.api.model().takeoff);
+    // A SAVED bid is never touched, whatever the library holds now.
+    const savedBlob = { version: 2, takeoff: [{ assembly_id: "", assembly_name: "",
+      measurement: "", unit: "SF" }], labor: [{ id: "polishing", label: "Polishing", guys: 3, days: 2,
+      rate: 40 }], conditions: { local: true }, contingency: 0,
+      fees: 0, totals: {} };
+    const savedLoad = build({ asms: dAsms, items: dItems,
+      blob: blob({ polish_estimate: savedBlob, polish_sf: 700 }) });
+    await savedLoad.api.init();
+    out.defaultsLoad.saved = shape(savedLoad.api.model());
+    // THE REAL NEW-BID SHAPE: a bid that came through the beta intake. Intake saves migrateModel
+    // output (conditions, one blank takeoff row) with `labor` deleted, so conditionsUnstated is
+    // FALSE here and the defaults must still load. (Reviewer repro; the cases above all start from null.)
+    const minted = B.migrateModel({});
+    minted.conditions = Object.assign({}, minted.conditions, { local: true });
+    delete minted.labor;
+    const mintedLoad = build({ asms: dAsms, items: dItems,
+      blob: blob({ polish_estimate: minted, polish_sf: 8000, polish_2_sf: 2000 }) });
+    await mintedLoad.api.init();
+    out.defaultsLoad.minted = shape(mintedLoad.api.model());
+    out.defaultsLoad.mintedGateWasFalse = B.conditionsUnstated(minted);
+    // Typing a number into a same_floor row ends the sharing; moving the carrier moves the rest.
+    const mm = mintedLoad.api.model();
+    typeInto(mintedLoad, '[data-tk="2"][data-k="measurement"]', "2000");
+    out.defaultsLoad.ownTyped = { rows: shape(mintedLoad.api.model()),
+      area: B.takeoffSf(mintedLoad.api.model().takeoff) };
+    typeInto(mintedLoad, '[data-tk="0"][data-k="measurement"]', "6000");
+    out.defaultsLoad.carrierMoved = { rows: shape(mintedLoad.api.model()),
+      area: B.takeoffSf(mintedLoad.api.model().takeoff) };
+    // No defaults in the library: exactly the System 1 / System 2 seeding, unchanged.
+    const none = B.seedDefaultTakeoff([{ kind: "new", pick_name: "", measurement: "", unit: "SF" }],
+      clone(ASMS), clone(ITEMS), ["dye"], 8250, 3100);
+    out.defaultsLoad.none = rowsOf({ takeoff: none });
+    // EMPTYING THE TAKEOFF MUST NOT BRING A DELETED ROW BACK (Hanz, 2026-10-05). Open a bid seeded
+    // from System 1 + System 2, blank both rows, save, and reopen step 2 from what was saved. The
+    // takeoff wrote polish_sf (now 0) but left intake's polish_2_sf at 3100, so the reopen read it
+    // as a fresh measurement and put a 3,100 SF row back.
+    const emptied = build({ blob: blob({ polish_estimate: null, polish_sf: 8250, polish_2_sf: 3100 }) });
+    await emptied.api.init();
+    typeInto(emptied, '[data-tk="0"][data-k="measurement"]', "");
+    typeInto(emptied, '[data-tk="1"][data-k="measurement"]', "");
+    emptied.clock.fire();
+    const eSave = emptied.rec.saves[emptied.rec.saves.length - 1];
+    const reopened = build({ blob: clone(emptied.store.blob) });
+    await reopened.api.init();
+    out.migration.emptiedSave = { sf: eSave.polish_sf, sf2: eSave.polish_2_sf };
+    out.migration.emptiedDraft2 = emptied.store.blob.polish_2_sf;
+    out.migration.emptiedReopen = rowsOf(reopened.api.model());
     out.migration.freshLabor = fresh.api.model().labor.map((r) => [r.id, r.guys, r.rate]);
   }
 
@@ -1951,7 +2178,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
   // well." Both are RESERVED library_items rows now (backend/library.py's RESERVED_ITEM_IDS),
   // seeded by the schema files and edited on the Items tab. The page prices its two condition
   // cards off them through library-core's priceLine (condLine), and falls back to
-  // polish-bid-core.js's jointFillerCost/dyeCost when a row is not there.
+  // bid-model.js's jointFillerCost/dyeCost when a row is not there.
   //
   // RESERVED_SEED IS THE SEED. test_polish_estimate_page.py parses both schema files and requires
   // their inserts to say exactly this, so "the seeded rows price like today" below is a claim about
@@ -1985,6 +2212,10 @@ const rendered = [];      // every string the page put on screen, for the Labour
       b.api.go(0);
       const cards = {};
       b.doc.querySelectorAll("[data-condfig]").forEach(function (el) {
+        // The coverage sentence names the library row it read ("Blank uses the library's N"),
+        // which is exactly what differs between a seeded and a missing row; the figures are
+        // what this identity is about.
+        if (/[.]covhint$/.test(el.attrs["data-condfig"])) return;
         cards[el.attrs["data-condfig"]] = el.textContent;
       });
       const html = b.dom.get("panels").innerHTML;
@@ -2129,6 +2360,126 @@ const rendered = [];      // every string the page put on screen, for the Labour
       reset: await saved(seeded(), 3501, { "Polish!B29": STALE_B29, "Polish!C29": 650 }),
       staleB29: STALE_B29,
     };
+
+    // ── G4: WHAT A SAVE WRITES FOR LABOR ── a bid mixing 8- and 10-hour lines, saved through the
+    // page's own save. Reports every cell_values key so the test can prove which labor cells (if
+    // any) reach the workbook, and the screen's own labor cost for the same lines.
+    {
+      const model = clone(MODEL);
+      model.labor = [
+        { id: "polishing", label: "Polishing", guys: 3, days: 5, rate: 40, hours_per_day: 10 },
+        { id: "mockup", label: "Mock-up", guys: 2, days: 1, rate: 40, hours_per_day: 8 },
+      ];
+      const b = build({ blob: blob({ polish_estimate: model }) });
+      await b.api.init();
+      b.api.saveSoon();
+      b.clock.fire();
+      const save = b.rec.saves[b.rec.saves.length - 1] || {};
+      out.laborWrites = { keys: Object.keys(save.cell_values || {}),
+                          screenLabor: B.laborTotal(b.api.model().labor) };
+    }
+
+    // ── B2: COVERAGE, AS THIS BID'S OWN FIGURE ──
+    // Joint Filler / Dye cards, a material row (what a loaded default becomes) and an assembly row
+    // (each material line) all carry a Coverage box; a typed number prices the bid, reaches the
+    // workbook's cells, and says "Library default: N" when it is not the library's.
+    async function typedCov(items, sf, typed) {
+      const model = clone(MODEL);
+      model.takeoff = [{ assembly_id: "", assembly_name: "", measurement: sf, unit: "SF" }];
+      model.conditions = Object.assign({}, model.conditions, { dye: true, joint_filler: true });
+      const b = build({ blob: blob({ polish_estimate: model }), items: items });
+      await b.api.init();
+      b.api.go(0);
+      const read = () => {
+        const html = b.dom.get("panels").innerHTML;
+        const box = (k) => (new RegExp('<input class="n" data-condcov="' + k +
+          '" value="([^"]*)" placeholder="([^"]*)"').exec(html) || []).slice(1);
+        return { jfBox: box("joint_filler"), dyeBox: box("dye"),
+                 jfHint: txt(b, '[data-condfig="joint_filler.covhint"]'),
+                 dyeHint: txt(b, '[data-condfig="dye.covhint"]'),
+                 jfWarn: warn(b, '[data-condfig="joint_filler.covwarn"]'),
+                 dyeWarn: warn(b, '[data-condfig="dye.covwarn"]'),
+                 jfCost: txt(b, '[data-condfig="joint_filler.cost"]'),
+                 jfQty: txt(b, '[data-condfig="joint_filler.qty"]'),
+                 jfQtyHint: txt(b, '[data-condfig="joint_filler.qtyhint"]') };
+      };
+      const before = read();
+      const matBefore = b.api.materialTotal();
+      Object.keys(typed || {}).forEach((k) => {
+        typeInto(b, '[data-condcov="' + k + '"]', typed[k]);
+      });
+      const after = read();
+      b.api.saveSoon();
+      b.clock.fire();
+      const save = b.rec.saves[b.rec.saves.length - 1] || {};
+      const area = B.takeoffSf(b.api.model().takeoff);
+      const dye = b.api.condLine("dye", area), jf = b.api.condLine("joint_filler", area);
+      return { before: before, after: after, matBefore: matBefore, matAfter: b.api.materialTotal(),
+               cells: save.cell_values || {}, area: area, dyeCost: dye.cost, jfCost: jf.cost,
+               jfKits: jf.qty, model: clone(b.api.model()),
+               savedModel: clone((save.polish_estimate || {}).cond_cov || null),
+               migrated: clone(B.migrateModel(save.polish_estimate).cond_cov || null) };
+    }
+    out.condCoverage = {
+      // library kit at 2,000 -- NOT the old 3,500 constant -- 6,000 SF is 3 kits; typed 3,000 is 2
+      libJf: await typedCov(seeded({ "joint-filler-kit": { coverage: 2000 } }), 6000,
+                            { joint_filler: "3000" }),
+      libDye: await typedCov(seeded({ dye: { coverage: 2, unit_cost: 0.2 } }), 6000,
+                             { dye: "4" }),
+      untouched: await typedCov(seeded({ "joint-filler-kit": { coverage: 2000 } }), 6000, {}),
+      backToLibrary: await typedCov(seeded({ "joint-filler-kit": { coverage: 2000 } }), 6000,
+                                    { joint_filler: "2000" }),
+    };
+
+    // A MATERIAL ROW and an ASSEMBLY ROW, as a loaded default would arrive: the row carries NO
+    // coverage of its own, so the box must show the LIBRARY's figure (275, 775) and price with it.
+    {
+      const model = clone(MODEL);
+      model.takeoff = [
+        { kind: "item", item_id: "i1", item_name: "OPF", coverage: "", measurement: 5500, unit: "SF" },
+        { assembly_id: "a1", assembly_name: "Polish 800 Grit", measurement: 12500, unit: "SF" },
+      ];
+      const b = build({ blob: blob({ polish_estimate: model }) });
+      await b.api.init();
+      b.api.go(0);
+      const html = () => b.dom.get("panels").innerHTML;
+      const matBox = () => (/data-tk="0" data-k="coverage" value="([^"]*)" placeholder="([^"]*)"/
+        .exec(html()) || []).slice(1);
+      const asmBoxes = () => (html().match(/data-asmcov="1" data-line="\d+" value="[^"]*" placeholder="[^"]*"/g)
+        || []);
+      const cost = (i) => txt(b, '[data-cost-for="' + i + '"]');
+      const first = { matBox: matBox(), matHint: txt(b, '[data-covhint-for="0"]'),
+                      asmBoxes: asmBoxes(), asmHint0: txt(b, '[data-asmcovhint="1:0"]'),
+                      asmHint1: txt(b, '[data-asmcovhint="1:1"]'),
+                      matCost: cost(0), asmCost: cost(1) };
+      // The expected money, from library-core against the SAME library with the figure swapped.
+      const swap = (id, cov) => ITEMS.map((it) => it.id === id ? Object.assign({}, it, { coverage: cov }) : it);
+      const asmWith = (items) => L.priceAssembly(ASMS[0], items, 12500).total;
+      typeInto(b, '[data-tk="0"][data-k="coverage"]', "300");
+      const matTyped = { cost: cost(0), hint: txt(b, '[data-covhint-for="0"]'),
+                         warn: warn(b, '[data-covwarn-for="0"]'),
+                         expected: L.priceLine({ item_id: "i1" }, swap("i1", 300), 5500).cost };
+      typeInto(b, '[data-asmcov="1"][data-line="0"]', "300");
+      const asmTyped = { cost: cost(1), hint0: txt(b, '[data-asmcovhint="1:0"]'),
+                         warn0: warn(b, '[data-asmcovwarn="1:0"]'),
+                         warn1: warn(b, '[data-asmcovwarn="1:1"]'),
+                         hint1: txt(b, '[data-asmcovhint="1:1"]'),
+                         expected: asmWith(swap("i1", 300)),
+                         libraryUntouched: ITEMS.find((i) => i.id === "i1").coverage,
+                         line_cov: clone(b.api.model().takeoff[1].line_cov),
+                         matTotal: b.api.materialTotal() };
+      typeInto(b, '[data-tk="0"][data-k="coverage"]', "275");
+      const matBackToLib = { hint: txt(b, '[data-covhint-for="0"]'),
+                             warn: warn(b, '[data-covwarn-for="0"]') };
+      // Switching the row to a different assembly drops the old lines' coverage.
+      typeInto(b, '[data-tk="1"][data-k="pick"]', "Cove Base");
+      const switched = { line_cov: b.api.model().takeoff[1].line_cov === undefined,
+                         boxes: b.doc.querySelector('[data-row-card="1"]').querySelectorAll('[data-asmcov]').length };
+      out.rowCoverage = { first: first, matTyped: matTyped, asmTyped: asmTyped,
+                          matBackToLib: matBackToLib, switched: switched,
+                          expectedFirstAsm: asmWith(ITEMS),
+                          expectedFirstMat: L.priceLine({ item_id: "i1" }, ITEMS, 5500).cost };
+    }
   }
 
   // ── J. one add control, and a row that categorises itself ──────────────────
@@ -2351,7 +2702,9 @@ const rendered = [];      // every string the page put on screen, for the Labour
     };
 
     // Nothing typed, nothing armed: leaving must not manufacture a save out of thin air.
-    const d = build();
+    // (A blob with no SF anywhere: init now saves when it SEEDS rows or finds polish_sf behind the
+    // takeoff, so the default fixture's seeded SF would arm a timer legitimately.)
+    const d = build({ blob: blob({ polish_estimate: null, polish_sf: 0 }) });
     await d.api.init();
     d.win.fire("pagehide");
     out.pagehideFlush.quietWhenNothingArmed = d.rec.saves.length === 0 && d.rec.flushed === 0;
@@ -2415,7 +2768,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
       labor: [
         { id: "polishing", label: "Polishing", guys: 4, days: 6, rate: 33 },
         { id: "mockup", label: "Mock-up", guys: 3, days: 0.5, rate: 33 },
-        { id: "travel", label: "Travel", guys: 18, days: 2, rate: 33,
+        { id: "travel", label: "Travel Labor", guys: 18, days: 2, rate: 33,
           unit: "hours", guys_auto: false },
         { id: "lab-densify", label: "Densify", guys: 2, days: 1, rate: 55, unit: "days",
           guys_auto: false },
@@ -2687,6 +3040,961 @@ const rendered = [];      // every string the page put on screen, for the Labour
       // the column looks like. OFF IS NOT UNLISTED: it must not land in the map.
       seeded: B.seedConditionsShown([{ key: "dye", listed: false }, { key: "joint_filler", listed: true },
         { key: "remove_existing_jf", on: false }, { key: "bogus", listed: false }]),
+    };
+  }
+
+  // ── M. the company labor rate (Markups -> Global) ───────────────────────────
+  {
+    const RATE = (formula, extra) => [Object.assign({ id: "mk1", layout: "global",
+      line_key: "labor_rate", formula: formula, applies: true }, extra || {})];
+    const fresh = () => { const bb = blob(); delete bb.polish_estimate; return bb; };
+    const LIBM = [
+      { id: "travel", name: "Travel", rate: "33.00", unit: "hours", guys_auto: true, favorite: true },
+      { id: "lab-none", name: "No own rate", rate: 0, unit: "hours", guys_auto: false, favorite: true },
+      { id: "lab-own", name: "Own rate", rate: "55.00", unit: "days", guys_auto: false, favorite: true },
+    ];
+    const rates = (built) => {
+      const o = {};
+      built.api.model().labor.forEach((r) => { o[r.id] = r.rate; });
+      return o;
+    };
+    const flt = (built) => built.doc.querySelectorAll("[data-ratedflt-for]")
+      .map((el) => ({ text: el.textContent, hidden: !!el.hidden }));
+
+    const newBid = build({ blob: fresh(), labor: LIBM, markupRules: RATE("40") });
+    await newBid.api.init();
+    newBid.api.go(1);
+    const noRule = build({ blob: fresh(), labor: LIBM });
+    await noRule.api.init();
+    const down = build({ blob: fresh(), labor: LIBM, markupFails: true });
+    await down.api.init();
+    const off = build({ blob: fresh(), labor: LIBM, markupRules: RATE("40", { applies: false }) });
+    await off.api.init();
+
+    const SAVED = { version: 2, takeoff: clone(MODEL.takeoff),
+      labor: [{ id: "polishing", label: "Polishing", guys: 3, days: 5, rate: 33 },
+              { id: "mockup", label: "Mock-up", guys: 3, days: 0.5, rate: 36 }],
+      conditions: clone(MODEL.conditions), contingency: 0, fees: 0, totals: {} };
+    const saved = build({ blob: blob({ polish_estimate: clone(SAVED) }), labor: LIBM,
+                          markupRules: RATE("40") });
+    await saved.api.init();
+    saved.api.go(1);
+
+    // Typing the default back hides the line; typing anything else shows it. Driven through the
+    // page's own input handler so the in-place repaint is the code under test.
+    newBid.api.go(1);
+    const before = flt(newBid);
+    const newBidRates = rates(newBid);
+    typeInto(newBid, '[data-lab="0"][data-k="rate"]', "45");
+    const typedOver = flt(newBid)[0];
+    typeInto(newBid, '[data-lab="0"][data-k="rate"]', "40");
+    const typedBack = flt(newBid)[0];
+    const added = newBid.api.newLaborRow();
+
+    // G1: Travel Labor with its OWN library rate ($41) on a $40 company rate -- nothing typed, so
+    // no row (Travel included) may warn; typing over it warns against $41, not $40.
+    const LIBT = [{ id: "travel", name: "Travel", rate: "41.00", unit: "hours", guys_auto: true,
+                    favorite: true }];
+    const tb = build({ blob: fresh(), labor: LIBT, markupRules: RATE("40") });
+    await tb.api.init();
+    tb.api.go(1);
+    const ti = tb.api.model().labor.findIndex((r) => r.id === "travel");
+    const travelOwn = { rate: tb.api.model().labor[ti].rate, lines: flt(tb) };
+    typeInto(tb, '[data-lab="' + ti + '"][data-k="rate"]', "50");
+    travelOwn.typedOver = flt(tb)[flt(tb).length - 1];
+
+    out.laborRate = {
+      travelOwn: travelOwn,
+      newBid: newBidRates, noRule: rates(noRule), down: rates(down), off: rates(off),
+      saved: rates(saved), savedDefaultLines: flt(saved),
+      newBidLines: before, typedOver: typedOver, typedBack: typedBack,
+      addedRate: added.rate,
+      fetchedMarkup: newBid.rec.fetches.some((u) => /api\/markup\/rules/.test(u)),
+      savedFetchedLaborDefaults: saved.rec.fetches.some((u) => /\/labor/.test(u)),
+      parsed: [B.laborRateFromRules(RATE("33.50")), B.laborRateFromRules(RATE("$41")),
+               B.laborRateFromRules(RATE("IF(1,2,3)")), B.laborRateFromRules(RATE("0")),
+               B.laborRateFromRules([]), B.laborRateFromRules(null),
+               B.laborRateFromRules([{ layout: "polish", line_key: "labor_rate", formula: "50",
+                                      applies: true }])],
+    };
+  }
+
+  {
+    // THE ON/OFF SLIDER (Kyle, 2026-10-05), EXECUTED THROUGH THE PAGE'S OWN HANDLERS. A switched-off
+    // row stays on screen, grayed, and adds $0 -- skipped in the RAW sums, before the chain rounds
+    // -- so the proof is that the whole bid equals the bid of a model that never had the row.
+    const clickSw = (built, sel) => clickEl(built, need(built, sel));
+    const totalOf = (built) => built.api.bid().total;
+    const without = (mut) => {
+      const m = clone(MODEL); mut(m);
+      return build({ blob: blob({ polish_estimate: m }) });
+    };
+
+    const base = build();
+    await base.api.init();
+    base.api.go(0);
+    const total0 = totalOf(base), mat0 = base.api.materialTotal();
+    const costBoxBefore = txt(base, '[data-cost-for="0"]');
+    clickSw(base, '[data-on-tk="0"]');
+    const tkOff = base.api.model().takeoff[0];
+    const afterTkOff = {
+      enabled: tkOff.enabled,
+      costBox: txt(base, '[data-cost-for="0"]'),
+      cardClass: need(base, '[data-row-card="0"]').className,
+      switchOn: need(base, '[data-on-tk="0"]').getAttribute("aria-checked"),
+      material: base.api.materialTotal(), total: totalOf(base),
+      area: B.takeoffSf(base.api.model().takeoff),
+    };
+    const tkGone = without((m) => m.takeoff.splice(0, 1));
+    await tkGone.api.init();
+    const expectTkOff = { material: tkGone.api.materialTotal(), total: totalOf(tkGone),
+                          area: B.takeoffSf(tkGone.api.model().takeoff) };
+    clickSw(base, '[data-on-tk="0"]');
+    const tkBack = { hasEnabledKey: "enabled" in base.api.model().takeoff[0],
+                     total: totalOf(base), material: base.api.materialTotal() };
+
+    // LABOR: Polishing off. The bid must equal the bid of a model that never had the row.
+    const lab = build();
+    await lab.api.init();
+    lab.api.go(1);
+    const lab0 = totalOf(lab);
+    clickSw(lab, '[data-on-lab="0"]');
+    const labOff = {
+      enabled: lab.api.model().labor[0].enabled,
+      cardClass: need(lab, '[data-lab-card="0"]').className,
+      cost: txt(lab, '[data-lcost-for="0"]'),
+      laborTotalText: txt(lab, "[data-labor-total]"),
+      total: totalOf(lab),
+    };
+    const labGone = without((m) => m.labor.splice(0, 1));
+    await labGone.api.init();
+    const expectLabOff = { total: totalOf(labGone) };
+    clickSw(lab, '[data-on-lab="0"]');
+    const labBack = { hasEnabledKey: "enabled" in lab.api.model().labor[0], total: totalOf(lab) };
+
+    // THE REVIEW LIST leaves off rows out, and the step pip / blockers do not count them.
+    const rev = build();
+    await rev.api.init();
+    rev.api.go(0); clickSw(rev, '[data-on-tk="0"]');
+    rev.api.go(1); clickSw(rev, '[data-on-lab="0"]');
+    rev.api.go(2);
+    const revHtml = rev.api.reviewPanel();
+
+    // AN OFF CREW ROW DROPS OUT OF TRAVEL'S GUYS (man-days): polishing 3x5 + mock-up 3x0.5 = 16.5.
+    const trv = build({ blob: blob({ polish_estimate: Object.assign(clone(MODEL), {
+      labor: [{ id: "polishing", label: "Polishing", guys: 3, days: 5, rate: 33 },
+              { id: "mockup", label: "Mock-up", guys: 3, days: 0.5, rate: 33 },
+              { id: "travel", label: "Travel", guys: "", days: 2, rate: 33,
+                unit: "hours", guys_auto: true }] }) }) });
+    await trv.api.init();
+    trv.api.go(1);
+    const guysBefore = trv.api.model().labor[2].guys;
+    clickSw(trv, '[data-on-lab="0"]');
+    const guysAfter = trv.api.model().labor[2].guys;
+
+    // THE KEYBOARD: Space on the slider flips it like a press.
+    const kb = build();
+    await kb.api.init();
+    kb.api.go(0);
+    const swEl = need(kb, '[data-on-tk="1"]');
+    swEl.click = function () { kb.doc.fire("click", { target: swEl, preventDefault() {} }); };
+    let prevented = false;
+    kb.doc.fire("keydown", { target: swEl, key: " ", preventDefault() { prevented = true; } });
+    const kbOff = kb.api.model().takeoff[1].enabled;
+    kb.doc.fire("keydown", { target: swEl, key: "a", preventDefault() {} });
+    const kbOtherKey = kb.api.model().takeoff[1].enabled;
+
+    // A CONDITION CARD'S SWITCH is the same component (class, role, aria), not a lookalike.
+    const cardSw = need(base, '[data-cond="dye"]');
+
+    out.rowSlider = {
+      total0: total0, mat0: mat0, costBoxBefore: costBoxBefore,
+      afterTkOff: afterTkOff, expectTkOff: expectTkOff, tkBack: tkBack,
+      lab0: lab0, labOff: labOff, expectLabOff: expectLabOff, labBack: labBack,
+      reviewHasOffTakeoff: revHtml.indexOf("Polish 800 Grit") !== -1,
+      reviewHasOnTakeoff: revHtml.indexOf("Cove Base") !== -1,
+      reviewHasOffLabor: revHtml.indexOf("Polishing") !== -1,
+      reviewHasOnLabor: revHtml.indexOf("Mock-up") !== -1,
+      guysBefore: guysBefore, guysAfter: guysAfter,
+      kbOff: kbOff, kbPrevented: prevented, kbOtherKey: kbOtherKey,
+      condSwitchClass: cardSw.className, condSwitchRole: cardSw.getAttribute("role"),
+      offSwitchSameShape: need(base, '[data-on-tk="1"]').className.indexOf("mw-sw") === 0 &&
+        need(base, '[data-on-tk="1"]').getAttribute("role") === "switch",
+    };
+  }
+
+  // ── N. Lodging and Per Diem, beside Travel Labor (Kyle's notes, B7, 2026-10-05) ─────────────────
+  // EXECUTED THROUGH THE PAGE'S OWN HANDLERS: the Labor step draws a dividing line, then Travel
+  // Labor, Lodging and Per Diem; each has its own slider and a typeable quantity; they price INSIDE
+  // the markups (the bid moves by more than the travel dollars); a switched-off line adds nothing
+  // and stays out of Review; a NEW bid copies the two rates from Markups -> Global and a saved bid
+  // keeps its own.
+  {
+    const RULES = [
+      { id: "m1", layout: "global", line_key: "travel_lodging", formula: "80", applies: true },
+      { id: "m2", layout: "global", line_key: "travel_per_diem", formula: "50", applies: true },
+    ];
+    // An OLD draft: saved before `travel` existed, with Travel still labelled "Travel".
+    const OLD = {
+      version: 2, takeoff: clone(MODEL.takeoff),
+      labor: [
+        { id: "polishing", label: "Polishing", guys: 3, days: 5, rate: 33 },
+        { id: "mockup", label: "Mock-up", guys: 3, days: 0.5, rate: 33 },
+        { id: "travel", label: "Travel", guys: "", days: "", rate: 33, unit: "hours",
+          guys_auto: true },
+      ],
+      conditions: Object.assign(clone(MODEL.conditions), { local: false }),
+      contingency: 0, fees: 0, totals: {},
+    };
+    const old = build({ blob: blob({ polish_estimate: clone(OLD) }), markupRules: RULES });
+    await old.api.init();
+    old.api.go(1);
+    const html0 = old.dom.get("panels").innerHTML;
+    const at = (needle) => html0.indexOf(needle);
+    const base = old.api.bid();
+
+    // Lodging ON.
+    clickOn(old, '[data-on-trv="lodging"]');
+    const lodgingOn = old.api.bid();
+    const lodgingModel = clone(old.api.model().travel.lodging);
+    const costCellOn = txt(old, '[data-trvcost-for="lodging"]');
+    const qtyAuto = need(old, '[data-trv="lodging"][data-k="qty"]').value;
+
+    // Type a quantity of our own: leaves auto, prices on the typed number.
+    typeInto(old, '[data-trv="lodging"][data-k="qty"]', "10");
+    const typedLodging = clone(old.api.model().travel.lodging);
+    const typedBid = old.api.bid();
+    const typedCostCell = txt(old, '[data-trvcost-for="lodging"]');
+    // And back to auto by CLEARING the box (the "Type my own" switch is gone). An empty box on
+    // input stays typed; the change commits it.
+    typeInto(old, '[data-trv="lodging"][data-k="qty"]', "");
+    const midClearLodging = clone(old.api.model().travel.lodging);
+    const lodgeWrites = old.dom.get("panels").htmlWrites;
+    changeTo(old, '[data-trv="lodging"][data-k="qty"]', "");
+    const lodgeClearRebuilds = old.dom.get("panels").htmlWrites - lodgeWrites;
+    const backToAuto = clone(old.api.model().travel.lodging);
+    const clearedLodgingBox = need(old, '[data-trv="lodging"][data-k="qty"]').value;
+    const clearedLodgingCost = txt(old, '[data-trvcost-for="lodging"]');
+    const lodgingHtml = old.dom.get("panels").innerHTML;
+    const lodgingHints = {
+      auto: need(old, '[data-hint-trv="lodging"]').textContent === "Man-days from the tasks above.",
+      noTypeMyOwn: lodgingHtml.indexOf("Type my own") === -1 &&
+        lodgingHtml.indexOf("data-trv-manual") === -1 && lodgingHtml.indexOf("data-trv-auto") === -1,
+    };
+    typeInto(old, '[data-trv="lodging"][data-k="qty"]', "10");
+    const typedHintLodging = old.dom.get("panels").innerHTML
+      .indexOf("Typed by you. Clear it to use the man-days from the tasks above.") !== -1;
+    changeTo(old, '[data-trv="lodging"][data-k="qty"]', "");
+
+    // Per Diem ON as well, rate typed over.
+    clickOn(old, '[data-on-trv="per_diem"]');
+    typeInto(old, '[data-trv="per_diem"][data-k="rate"]', "60");
+    const bothOn = old.api.bid();
+    const review = (() => { old.api.go(2); return old.dom.get("panels").innerHTML; })();
+    const saved = (() => { old.clock.fire(); return old.rec.saves[old.rec.saves.length - 1]; })();
+
+    // Per Diem OFF again: gone from Review, adds nothing.
+    old.api.go(1);
+    clickOn(old, '[data-on-trv="per_diem"]');
+    const perDiemOff = old.api.bid();
+    old.api.go(2);
+    const reviewOff = old.dom.get("panels").innerHTML;
+
+    // A NEW bid (no saved estimate at all) copies the two rates; a fresh bid has both OFF.
+    const fb = blob(); delete fb.polish_estimate;
+    const fresh = build({ blob: fb, markupRules: RULES });
+    await fresh.api.init();
+    // The markup read failing leaves the shipped 70 / 45.
+    const down = build({ blob: (() => { const b2 = blob(); delete b2.polish_estimate; return b2; })(),
+                         markupFails: true });
+    await down.api.init();
+
+    // A LOCAL job (under 70 miles) leaves the three lines gray until touched.
+    const loc = build({ blob: blob({ polish_estimate: Object.assign(clone(OLD), {
+      conditions: Object.assign(clone(MODEL.conditions), { local: true }) }) }) });
+    await loc.api.init();
+    loc.api.go(1);
+    const localClass0 = need(loc, '[data-trv-card="lodging"]').className;
+    clickOn(loc, '[data-on-trv="lodging"]');
+    const localClassOn = need(loc, '[data-trv-card="lodging"]').className;
+    const localHand = loc.api.model().travel.lodging.hand === true;
+
+    // HOTEL AND PER DIEM, the Review card (Hanz, 2026-10-06): always there, after Labor, before the
+    // markup block. Each state is a fresh page opened on Review.
+    const reviewOf = async (travelEdit) => {
+      const o = clone(OLD);
+      if (travelEdit) {
+        const t = clone(old.api.model().travel);
+        travelEdit(t);
+        o.travel = t;
+      }
+      const x = build({ blob: blob({ polish_estimate: o }), markupRules: RULES });
+      await x.api.init();
+      x.api.go(2);
+      return { html: x.dom.get("panels").innerHTML, bid: x.api.bid(), x: x };
+    };
+    const cardBody = (html) => {
+      const s = html.indexOf('rev-h">Hotel and Per Diem');
+      if (s === -1) return "";
+      const e = html.indexOf('class="rev"', s);
+      return html.slice(s, e === -1 ? html.length : e);
+    };
+    const hotelOff = await reviewOf(null);
+    const hotelOne = await reviewOf((t) => { t.lodging.enabled = true; });
+    const hotelBoth = await reviewOf((t) => { t.lodging.enabled = true; t.per_diem.enabled = true; });
+    const hotelRenamed = await reviewOf((t) => { t.lodging.enabled = true; t.lodging.label = "Motel"; });
+    const hotelShape = (r) => {
+      const h = r.html;
+      const body = cardBody(h);
+      return {
+        count: (h.match(/rev-h">Hotel and Per Diem/g) || []).length,
+        body: body,
+        header: (body.match(/<span class="amt">([^<]*)<\/span>/) || [])[1] || null,
+        total: (body.match(/Hotel and Per Diem Total<\/td><td class="r"><\/td><td class="r"><span data-mk="travel">([^<]*)</) || [])[1] || null,
+        travel: r.bid.travel,
+        labor: h.indexOf('rev-h">Labor'), card: h.indexOf('rev-h">Hotel and Per Diem'),
+        subtotal: h.indexOf("<td>Subtotal</td>"),
+      };
+    };
+
+    out.hotelCard = {
+      off: hotelShape(hotelOff), one: hotelShape(hotelOne),
+      both: hotelShape(hotelBoth), renamed: hotelShape(hotelRenamed),
+      oldTitleAnywhere: [hotelOff, hotelOne, hotelBoth].some((r) => r.html.indexOf("Lodging and Per Diem") !== -1),
+    };
+
+    out.travelCosts = {
+      // layout
+      order: { sep: at('class="trvsep"'), travelLabor: at('data-lab-card="2"'),
+               lodging: at('data-trv-card="lodging"'), perDiem: at('data-trv-card="per_diem"'),
+               addLine: at("data-add-lab") },
+      travelLaborLabel: old.api.model().labor[2].label,
+      cardClassOff: /class="tk trv inert off" data-trv-card="lodging"/.test(html0),
+      noteOnEach: (html0.match(/70 miles or more from the office/g) || []).length,
+      // money
+      baseTravel: base.travel, baseTotal: base.total, baseSub: base.sub_total,
+      lodgingOnTravel: lodgingOn.travel, lodgingOnSub: lodgingOn.sub_total,
+      lodgingOnTotal: lodgingOn.total, lodgingOnGp: lodgingOn.gp,
+      oldRate: lodgingModel.rate, lodgingModel: lodgingModel,
+      costCellOn: costCellOn, qtyAuto: qtyAuto,
+      typedLodging: typedLodging, typedTravel: typedBid.travel, typedCostCell: typedCostCell,
+      backToAuto: backToAuto, midClearLodging: midClearLodging,
+      clearedLodgingBox: clearedLodgingBox, lodgeClearRebuilds: lodgeClearRebuilds, clearedLodgingCost: clearedLodgingCost,
+      lodgingHints: lodgingHints, typedHintLodging: typedHintLodging,
+      bothOnTravel: bothOn.travel, perDiemOffTravel: perDiemOff.travel,
+      perDiemOffTotal: perDiemOff.total, lodgingOnlyTotal: null,
+      // review
+      reviewHasCard: review.indexOf("Hotel and Per Diem") !== -1,
+      reviewHasLodging: review.indexOf(">Hotel<") !== -1,
+      reviewHasPerDiem: review.indexOf(">Per Diem<") !== -1,
+      reviewOffHasPerDiem: reviewOff.indexOf(">Per Diem<") !== -1,
+      reviewOffHasLodging: reviewOff.indexOf(">Hotel<") !== -1,
+      // saving
+      savedTravel: saved && saved.polish_estimate ? saved.polish_estimate.travel : null,
+      // rates
+      freshRates: { lodging: fresh.api.model().travel.lodging.rate,
+                    per_diem: fresh.api.model().travel.per_diem.rate },
+      freshEnabled: [fresh.api.model().travel.lodging.enabled, fresh.api.model().travel.per_diem.enabled],
+      downRates: { lodging: down.api.model().travel.lodging.rate,
+                   per_diem: down.api.model().travel.per_diem.rate },
+      oldRates: { lodging: old.api.model().travel.lodging.rate,
+                  per_diem: old.api.model().travel.per_diem.rate },
+      // local gate
+      localClass0: localClass0, localClassOn: localClassOn, localHand: localHand,
+    };
+  }
+
+  // ── O. DISTANCE DECIDES "LOCAL" (Kyle 9/18; Hanz, 2026-10-05) ─────────────────────────────────
+  // EXECUTED THROUGH THE PAGE: init() asks the server for the driving miles AFTER the first paint,
+  // and the answer sets the hidden `conditions.local` (still written to Polish!B4), the three
+  // travel lines and the "N mi from Olathe office" note. Unknown never guesses; a typed figure
+  // always wins; a line flipped by hand is never moved; a slow Google never holds the page.
+  {
+    const settle = async () => { for (let i = 0; i < 6; i++) await new Promise((r) => setImmediate(r)); };
+    const ADDRESS = { address: "100 Main St", city: "Wichita", state: "KS", zip: "67202" };
+    const newBlob = () => { const b = blob(ADDRESS); delete b.polish_estimate; return b; };
+    const snap = (x) => {
+      const m = x.api.model();
+      const li = m.labor.findIndex((r) => r.id === "travel");
+      return {
+        distance: m.distance === undefined ? null : clone(m.distance),
+        local: m.conditions.local,
+        lodging: m.travel.lodging.enabled, perDiem: m.travel.per_diem.enabled,
+        lodgingHand: m.travel.lodging.hand === true,
+        note: txt(x, "[data-dist-note]"), status: txt(x, "[data-dist-status]"),
+        // The "how this is worked out" note, and the figures the bid itself prices these lines at
+        // (the same B functions the totals use), so a test can hold the note to them.
+        how: txt(x, "[data-trv-how]"),
+        cost: { lodging: B.travelLineCost(m.travel.lodging, m.labor),
+                per_diem: B.travelLineCost(m.travel.per_diem, m.labor),
+                travel: B.laborCost(m.labor[li]) },
+        lodgingGray: /inert/.test(need(x, '[data-trv-card="lodging"]').className),
+        travelLaborGray: /inert/.test(need(x, '[data-lab-card="' + li + '"]').className),
+      };
+    };
+
+    // FAR: 120.4 miles. The three lines come on; Polish!B4 is written "No" from the hidden answer.
+    const far = build({ blob: newBlob(), distance: { ok: true, miles: 120.4, reason: "" } });
+    await far.api.init(); far.api.go(1); await settle();
+    const farSnap = snap(far);
+    far.clock.fire();
+    const farSaved = far.rec.saves[far.rec.saves.length - 1];
+    far.api.go(2);
+    const farReview = far.dom.get("panels").innerHTML;
+
+    // NEAR: 30 miles. Local; all three stay gray; B4 "Yes".
+    const near = build({ blob: newBlob(), distance: { ok: true, miles: 30, reason: "" } });
+    await near.api.init(); near.api.go(1); await settle();
+    const nearSnap = snap(near);
+    near.clock.fire();
+    const nearSaved = near.rec.saves[near.rec.saves.length - 1];
+
+    // EXACTLY 70 is far (70 or more).
+    const seventy = build({ blob: newBlob(), distance: { ok: true, miles: 70, reason: "" } });
+    await seventy.api.init(); await settle();
+    const seventySnap = { local: seventy.api.model().conditions.local,
+                          lodging: seventy.api.model().travel.lodging.enabled };
+
+    // UNKNOWN (no key): nothing guessed, the page still opens, and typing miles takes over.
+    const unk = build({ blob: newBlob(), distance: { ok: false, miles: null, reason: "no_key" } });
+    await unk.api.init(); unk.api.go(1); await settle();
+    const unkSnap = snap(unk);
+    typeInto(unk, "[data-dist-miles]", "85");
+    const typed85 = snap(unk);
+    // A hand flip on Lodging, then the miles move around: the line the estimator flipped stays.
+    clickOn(unk, '[data-on-trv="lodging"]');                 // on -> OFF, by hand
+    typeInto(unk, "[data-dist-miles]", "20");
+    const typed20 = snap(unk);
+    typeInto(unk, "[data-dist-miles]", "90");
+    const typed90 = snap(unk);
+    // Clearing the box goes back to unknown: Per Diem (never touched) goes gray again.
+    typeInto(unk, "[data-dist-miles]", "");
+    await settle();
+    const cleared = snap(unk);
+    // A DECIMAL TYPED KEY BY KEY. The panel rebuilds on every miles keystroke, so the box must come
+    // back showing what was typed ("12." stays "12.", not "12"), or "12.5" lands as 125.
+    typeInto(unk, "[data-dist-miles]", "12.");
+    const dotBox = need(unk, "[data-dist-miles]").value;
+    typeInto(unk, "[data-dist-miles]", "12.5");
+    const decimal = { dotBox: dotBox, box: need(unk, "[data-dist-miles]").value, snap: snap(unk) };
+
+    // THE NETWORK FAILING is the same answer as unknown, with a reason shown.
+    const down = build({ blob: newBlob(), distanceFails: true });
+    await down.api.init(); down.api.go(1); await settle();
+    const downSnap = snap(down);
+
+    // A SLOW GOOGLE never holds the page: init() resolves while the answer is still pending, the
+    // Labor step renders, and a figure typed in the meantime wins when the answer finally lands.
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    const slow = build({ blob: newBlob(), distance: { ok: true, miles: 200, reason: "" },
+                         distanceGate: gate });
+    await slow.api.init(); slow.api.go(1);
+    const slowBusy = snap(slow);
+    typeInto(slow, "[data-dist-miles]", "10");
+    release(); await settle();
+    const slowAfter = snap(slow);
+
+    // NO ADDRESS (or too thin to place): no request leaves, and the estimator is told.
+    const blank = build({ blob: (() => { const b = blob(); delete b.polish_estimate; return b; })(),
+                          distance: { ok: true, miles: 99, reason: "" } });
+    await blank.api.init(); blank.api.go(1); await settle();
+    const blankSnap = snap(blank);
+    const thin = build({ blob: (() => { const b = blob({ address: "100 Main St", city: "", state: "" });
+      delete b.polish_estimate; return b; })(), distance: { ok: true, miles: 99, reason: "" } });
+    await thin.api.init(); await settle();
+
+    // A SAVED BID is not repriced behind anybody's back: no automatic request, the line stays as
+    // saved, and the button is how the estimator asks. Pressing it applies the answer.
+    const savedModel = { version: 2, takeoff: clone(MODEL.takeoff),
+      labor: [{ id: "polishing", label: "Polishing", guys: 3, days: 5, rate: 33 },
+              { id: "mockup", label: "Mock-up", guys: 3, days: 0.5, rate: 33 },
+              { id: "travel", label: "Travel Labor", guys: "", days: "", rate: 33, unit: "hours",
+                guys_auto: true }],
+      conditions: Object.assign(clone(MODEL.conditions), { local: true }),
+      contingency: 0, fees: 0, totals: {} };
+    const saved = build({ blob: blob(Object.assign({ polish_estimate: clone(savedModel) }, ADDRESS)),
+                          distance: { ok: true, miles: 150, reason: "" } });
+    await saved.api.init(); saved.api.go(1); await settle();
+    const savedBefore = snap(saved);
+    const savedFetches = (saved.rec.distanceBodies || []).length;
+    clickOn(saved, "[data-dist-lookup]"); await settle();
+    const savedAfter = snap(saved);
+
+    // TYPED NIGHTS on a far job, and a repaint after the miles move (the note must follow).
+    const nights = build({ blob: newBlob(), distance: { ok: true, miles: 150, reason: "" } });
+    await nights.api.init(); nights.api.go(1); await settle();
+    const nightsAuto = snap(nights);
+    typeInto(nights, '[data-trv="lodging"][data-k="qty"]', "10");
+    const nightsTyped = snap(nights);
+    // Miles typed over the looked-up figure: 150 -> 20, in place.
+    typeInto(nights, "[data-dist-miles]", "20");
+    const nightsLocal = snap(nights);
+    // Days typed on a labor line goes through changed(false): the panel is NOT rebuilt, so only the
+    // in-place repaint can move the man-days and dollars in the note.
+    const nights2 = build({ blob: newBlob(), distance: { ok: true, miles: 150, reason: "" } });
+    await nights2.api.init(); nights2.api.go(1); await settle();
+    const daysBefore = snap(nights2);
+    typeInto(nights2, '[data-lab="0"][data-k="days"]', "20");
+    const daysAfter = snap(nights2);
+
+    out.distance = {
+      howNights: { auto: nightsAuto, typed: nightsTyped, local: nightsLocal },
+      howDays: { before: daysBefore, after: daysAfter },
+      requestBody: (far.rec.distanceBodies || [])[0] || null,
+      requests: (far.rec.distanceBodies || []).length,
+      far: farSnap,
+      farKey: farSnap.distance && farSnap.distance.key,
+      farCellB4: farSaved.cell_values["Polish!B4"], farModelLocal: farSaved.polish_estimate.conditions.local,
+      farSavedDistance: farSaved.polish_estimate.distance,
+      farReviewHasLodging: farReview.indexOf(">Hotel<") !== -1,
+      near: nearSnap, nearCellB4: nearSaved.cell_values["Polish!B4"],
+      seventy: seventySnap,
+      unk: unkSnap, typed85: typed85, typed20: typed20, typed90: typed90, cleared: cleared, decimal: decimal,
+      down: downSnap,
+      slowBusy: slowBusy, slowAfter: slowAfter,
+      blank: blankSnap, blankRequests: (blank.rec.distanceBodies || []).length,
+      thinRequests: (thin.rec.distanceBodies || []).length,
+      savedBefore: savedBefore, savedFetches: savedFetches, savedAfter: savedAfter,
+    };
+  }
+
+  // ── N. the Labor Calculator fills a NEW bid's default labor (B7b) ──────────────────────────
+  {
+    const CALC = [
+      { line_id: "polishing", mode: "sf", crew: 3, sf_per_day: 2500, hours_per_day: 10,
+        guys: null, days: null, rate: null },
+      { line_id: "mockup", mode: "fixed", guys: 2, days: 1, hours_per_day: 8, rate: 50,
+        crew: null, sf_per_day: null },
+    ];
+    const RULE40 = [{ id: "mk1", layout: "global", line_key: "labor_rate", formula: "40", applies: true }];
+    const rowOf = (built, id) => built.api.model().labor.find((r) => r.id === id);
+    const warn = (built, key) => {
+      const el = built.doc.querySelector('[data-calcwarn="' + key + '"]');
+      return el ? { text: el.textContent, hidden: !!el.hidden } : null;
+    };
+    const idx = (built, id) => built.api.model().labor.findIndex((r) => r.id === id);
+
+    const nb = build({ blob: blob({ polish_estimate: null, polish_sf: 12000 }),
+                       laborCalc: CALC, markupRules: RULE40 });
+    await nb.api.init();
+    nb.api.go(1);
+    const pi = idx(nb, "polishing");
+    const first = { polishing: clone(rowOf(nb, "polishing")), mockup: clone(rowOf(nb, "mockup")),
+                    jointfill: clone(rowOf(nb, "jointfill")),
+                    hoursSelect: !!nb.doc.querySelector('[data-lab="' + pi + '"][data-k="hours_per_day"]'),
+                    warnDays: warn(nb, pi + ":days"), warnRate: nb.doc.querySelector(
+                      '[data-ratedflt-for="' + pi + '"]').hidden,
+                    cost: B.laborCost(rowOf(nb, "polishing")) };
+    // typing a different days figure raises the warning; typing the default back clears it
+    typeInto(nb, '[data-lab="' + pi + '"][data-k="days"]', "7");
+    const over = warn(nb, pi + ":days");
+    typeInto(nb, '[data-lab="' + pi + '"][data-k="days"]', "5");
+    const back = warn(nb, pi + ":days");
+    // hours a day 10 -> 8 reprices and warns
+    const hsel = need(nb, '[data-lab="' + pi + '"][data-k="hours_per_day"]');
+    hsel.value = "8";
+    nb.doc.fire("change", { target: hsel });
+    const hrs = { warn: warn(nb, pi + ":hours_per_day"), cost: B.laborCost(rowOf(nb, "polishing")) };
+    // a rate typed over the calculator's own shows the default rate
+    const mi = idx(nb, "mockup");
+    const mockRateBefore = nb.doc.querySelector('[data-ratedflt-for="' + mi + '"]').hidden;
+    typeInto(nb, '[data-lab="' + mi + '"][data-k="rate"]', "33");
+    const mockRateAfter = nb.doc.querySelector('[data-ratedflt-for="' + mi + '"]').textContent;
+
+    // a SAVED bid is never recomputed, and does not even ask
+    const SAVED = { version: 2, takeoff: clone(MODEL.takeoff),
+      labor: [{ id: "polishing", label: "Polishing", guys: 4, days: 6, rate: 33 },
+              { id: "mockup", label: "Mock-up", guys: 3, days: 0.5, rate: 33 }],
+      conditions: clone(MODEL.conditions), contingency: 0, fees: 0, totals: {} };
+    const sv = build({ blob: blob({ polish_estimate: clone(SAVED) }), laborCalc: CALC });
+    await sv.api.init();
+    // no SF yet: from-SF days stay BLANK, not 0
+    const nosf = build({ blob: blob({ polish_estimate: null, polish_sf: 0 }), laborCalc: CALC });
+    await nosf.api.init();
+    nosf.api.go(1);
+    const noSfRow = clone(rowOf(nosf, "polishing"));
+    const nsi = idx(nosf, "polishing");
+    typeInto(nosf, '[data-lab="' + nsi + '"][data-k="days"]', "4");
+    const noSfWarn = warn(nosf, nsi + ":days");
+    // the table is absent: today's blank crew rows
+    const gone = build({ blob: blob({ polish_estimate: null, polish_sf: 12000 }), laborCalcFails: true });
+    await gone.api.init();
+    const plain = build({ blob: blob({ polish_estimate: null, polish_sf: 12000 }) });
+    await plain.api.init();
+
+    // G2: days FOLLOW the takeoff while untouched.
+    const setSf = (built, v) => {
+      built.api.go(0);
+      typeInto(built, '[data-tk="0"][data-k="measurement"]', v);
+      built.api.go(1);
+    };
+    const daysOf = (built, id) => rowOf(built, id).days;
+    const fol = build({ blob: blob({ polish_estimate: null, polish_sf: 12000 }), laborCalc: CALC,
+                        markupRules: RULE40 });
+    await fol.api.init();
+    fol.api.go(1);
+    const fi = idx(fol, "polishing");
+    const followed = { start: daysOf(fol, "polishing") };
+    setSf(fol, "20000");
+    followed.afterUp = daysOf(fol, "polishing");
+    followed.boxAfterUp = fol.doc.querySelector('[data-lab="' + fi + '"][data-k="days"]').value;
+    followed.warnAfterUp = warn(fol, fi + ":days");
+    followed.fixedStays = daysOf(fol, "mockup");
+    // an EDITED days keeps the bid's number when the SF moves again
+    typeInto(fol, '[data-lab="' + fi + '"][data-k="days"]', "11");
+    setSf(fol, "30000");
+    followed.editedStays = daysOf(fol, "polishing");
+    // a new bid with NO SF fills its days as soon as SF exists
+    const fn = build({ blob: blob({ polish_estimate: null, polish_sf: 0 }), laborCalc: CALC });
+    await fn.api.init();
+    fn.api.go(1);
+    followed.noSfBlank = daysOf(fn, "polishing");
+    fn.api.go(0);
+    typeInto(fn, '[data-tk="0"][data-k="measurement"]', "5000");
+    fn.api.go(1);
+    followed.noSfFilled = daysOf(fn, "polishing");
+    // a SAVED bid: a stale marker row is NOT recomputed on open, nor by an unrelated edit
+    const SAVEDM = { version: 2, takeoff: clone(MODEL.takeoff),
+      labor: [{ id: "polishing", label: "Polishing", guys: 3, days: 9, rate: 33, hours_per_day: 8,
+                calc_default: { guys: 3, days: 9, rate: 33, hours_per_day: 8, sf_per_day: 2500 } }],
+      conditions: clone(MODEL.conditions), contingency: 0, fees: 0, totals: {} };
+    const sv2 = build({ blob: blob({ polish_estimate: clone(SAVEDM) }), laborCalc: CALC });
+    await sv2.api.init();
+    sv2.api.go(1);
+    followed.savedOnOpen = daysOf(sv2, "polishing");
+    typeInto(sv2, '[data-lab="0"][data-k="rate"]', "35");
+    followed.savedAfterOtherEdit = daysOf(sv2, "polishing");
+    followed.pureMoves = B.followLaborDays(
+      [{ id: "x", days: 5, calc_default: { days: 5, sf_per_day: 2500 } },
+       { id: "y", days: 5, calc_default: { days: 5 } }], 10000).map((r) => r.days);
+
+    // G3: Lodging / Per Diem rate boxes warn against the Markups -> Global rate they were filled with.
+    const TRV = [{ id: "m1", layout: "global", line_key: "travel_lodging", formula: "80", applies: true },
+                 { id: "m2", layout: "global", line_key: "travel_per_diem", formula: "50", applies: true }];
+    const tr = build({ blob: blob({ polish_estimate: null, polish_sf: 12000 }), markupRules: TRV });
+    await tr.api.init();
+    tr.api.go(1);
+    const trvW = (built, k) => { const el = built.doc.querySelector('[data-trvdflt-for="' + k + '"]');
+      return el ? { text: el.textContent, hidden: !!el.hidden } : null; };
+    const trvIn = (k) => '[data-trv="' + k + '"][data-k="rate"]';
+    const travelWarn = { rates: [tr.api.model().travel.lodging.rate, tr.api.model().travel.per_diem.rate],
+                         start: [trvW(tr, "lodging"), trvW(tr, "per_diem")] };
+    typeInto(tr, trvIn("lodging"), "90");
+    travelWarn.over = trvW(tr, "lodging");
+    typeInto(tr, trvIn("lodging"), "80");
+    travelWarn.back = trvW(tr, "lodging");
+    const trSaved = build({ blob: blob({ polish_estimate: clone(SAVEDM) }), markupRules: TRV });
+    await trSaved.api.init();
+    trSaved.api.go(1);
+    travelWarn.saved = [trvW(trSaved, "lodging"), trvW(trSaved, "per_diem")];
+
+    out.laborCalc = {
+      travelWarn: travelWarn,
+      followed: followed,
+      first: first, over: over, back: back, hrs: hrs, mockRateBefore: mockRateBefore,
+      mockRateAfter: mockRateAfter,
+      saved: { polishing: clone(rowOf(sv, "polishing")), asked: sv.rec.fetches.some((u) => /labor-calc/.test(u)) },
+      noSf: noSfRow, noSfWarn: noSfWarn,
+      gone: { polishing: clone(rowOf(gone, "polishing")), same: JSON.stringify(gone.api.model().labor) ===
+              JSON.stringify(plain.api.model().labor) },
+    };
+  }
+
+  // ── O. The Fees + Textura default (Hanz, 2026-10-06) ────────────────────────────────────────────
+  // EXECUTED THROUGH THE PAGE'S OWN INIT: a NEW bid's D77 starts at Markups -> Global `fees_textura`;
+  // typing over it shows the shared amber warning, typing the default back clears it; the default is
+  // saved with the bid so the warning survives a reload; a SAVED bid keeps its own fees and shows no
+  // warning; no default (or $0) leaves $0 and no warning.
+  {
+    const FEES = [{ id: "m9", layout: "global", line_key: "fees_textura", formula: "250", applies: true }];
+    const newBlob = () => blob({ polish_estimate: null, polish_sf: 12000 });
+    const feesW = (b) => warn(b, '[data-feesdflt]');
+    const feesBox = '[data-fees]';
+    const withDflt = build({ blob: newBlob(), markupRules: FEES });
+    await withDflt.api.init();
+    withDflt.api.go(2);
+    const startModel = { fees: withDflt.api.model().fees, fees_default: withDflt.api.model().fees_default };
+    const startBox = need(withDflt, feesBox).value;
+    const startWarn = feesW(withDflt);
+    const startTotal = withDflt.api.bid().total;
+    typeInto(withDflt, feesBox, "400");
+    const overWarn = feesW(withDflt);
+    const overTotal = withDflt.api.bid().total;
+    typeInto(withDflt, feesBox, "250");
+    const backWarn = feesW(withDflt);
+    withDflt.clock.fire();
+    const savedWith = withDflt.rec.saves[withDflt.rec.saves.length - 1];
+    const reloaded = build({ blob: Object.assign(blob(), { polish_estimate: clone(savedWith.polish_estimate) }),
+                             markupRules: [] });
+    await reloaded.api.init();
+    reloaded.api.go(2);
+    typeInto(reloaded, feesBox, "10");
+    const reloadWarn = feesW(reloaded);
+    // The same new bid with NO default filed, and with a $0 one.
+    const none = build({ blob: newBlob() });
+    await none.api.init();
+    none.api.go(2);
+    const zero = build({ blob: newBlob(), markupRules: [
+      { id: "m9", layout: "global", line_key: "fees_textura", formula: "0", applies: true }] });
+    await zero.api.init();
+    zero.api.go(2);
+    typeInto(zero, feesBox, "75");
+    // A SAVED bid (it states a model) with a default filed: its own fees stand.
+    const savedBlob = blob({ polish_estimate: Object.assign(clone(MODEL), { fees: 75 }) });
+    const sv = build({ blob: savedBlob, markupRules: FEES });
+    await sv.api.init();
+    sv.api.go(2);
+    out.feesDefault = {
+      startModel: startModel, startBox: startBox, startWarn: startWarn, overWarn: overWarn,
+      backWarn: backWarn, startTotal: startTotal, overTotal: overTotal,
+      noneFees: none.api.model().fees, noneDefault: none.api.model().fees_default === undefined,
+      noneBox: need(none, feesBox).value, noneWarn: feesW(none),
+      zeroFees: zero.api.model().fees, zeroDefault: zero.api.model().fees_default === undefined,
+      zeroWarn: feesW(zero),
+      noneTotal: none.api.bid().total,
+      savedHasDefault: savedWith.polish_estimate.fees_default,
+      reloadWarn: reloadWarn,
+      savedBidFees: sv.api.model().fees, savedBidDefault: sv.api.model().fees_default === undefined,
+      savedBidWarn: feesW(sv),
+      rules: (() => {
+        const R = (formula, over) => [Object.assign({ layout: "global", line_key: "fees_textura",
+                                                      formula: formula, applies: true }, over || {})];
+        return { plain: B.feesFromRules(R("250")), dollar: B.feesFromRules(R("$1,250".replace(",", ""))),
+                 decimal: B.feesFromRules(R("99.5")), zero: B.feesFromRules(R("0")),
+                 off: B.feesFromRules(R("250", { applies: false })),
+                 expr: B.feesFromRules(R("=A1*2")), blank: B.feesFromRules(R("")),
+                 none: B.feesFromRules([]), notList: B.feesFromRules(null),
+                 otherLine: B.feesFromRules([{ layout: "global", line_key: "labor_rate",
+                                               formula: "33", applies: true }]),
+                 otherLayout: B.feesFromRules([{ layout: "polish", line_key: "fees_textura",
+                                                formula: "5", applies: true }]) };
+      })(),
+    };
+  }
+
+  // ── P. EVERY DEFAULT-PULLED ROW'S ESTIMATE TOGGLE MOVES THE LUMP SUM (Hanz, 2026-10-06) ─────────
+  // A library with NON-ZERO prices, a NEW bid that pulls in one of each kind of default, and for
+  // each row: flip it, read the lump sum off the page's own bid(), compare with an ORACLE built
+  // from the model with that one flag set (the two real engines, priced independently of the
+  // page's own wiring), flip it back and demand the same total. The flip is a click on the page's
+  // own switch, so a row with no switch, or a switch that writes the wrong field, fails here.
+  {
+    const FAV_ASMS = ASMS.map((a) => (a.id === "a1" ? Object.assign({}, a, { favorite: true }) : a));
+    const FAV_ITEMS = ITEMS.map((i) => (i.id === "i4" ? Object.assign({}, i, { favorite: true }) : i))
+      .concat([
+        { id: "joint-filler-kit", name: "Joint filler, 10 gal kit", unit: "Kit", buy_qty: 1,
+          unit_cost: 500, coverage: 3500, waste_pct: 0, roundup: true },
+        { id: "dye", name: "Dye, per coat", unit: "SF", buy_qty: 1, unit_cost: 0.14, coverage: 1,
+          waste_pct: 0, roundup: false },
+        { id: "remove-existing-jf", name: "Remove existing joint filler", unit: "SF", buy_qty: 1,
+          unit_cost: null, coverage: null }]);
+    const PLABOR = [
+      { id: "travel", name: "Travel", rate: 40, unit: "hours", guys_auto: true, favorite: true },
+      { id: "c1", name: "Saw cutting", rate: 45, unit: "days", guys_auto: false, favorite: true,
+        default_on: true, default_work_types: [] }];
+    const PCALC = [
+      { line_id: "polishing", mode: "fixed", guys: 3, days: 5, hours_per_day: 8, rate: null },
+      { line_id: "mockup", mode: "fixed", guys: 3, days: 1, hours_per_day: 8, rate: null },
+      { line_id: "jointfill", mode: "fixed", guys: 3, days: 2, hours_per_day: 8, rate: null },
+      { line_id: "c1", mode: "fixed", guys: 2, days: 3, hours_per_day: 8, rate: null }];
+    const PRULES = [
+      { id: "m1", layout: "global", line_key: "travel_lodging", formula: "80", applies: true },
+      { id: "m2", layout: "global", line_key: "travel_per_diem", formula: "50", applies: true }];
+    const PCONDS = ["joint_filler", "remove_existing_jf", "dye"]
+      .map((k) => ({ key: k, on: k === "joint_filler", listed: true }));  // the fourth hand needs filler ON
+    const nb = blob({ polish_estimate: null, polish_sf: 12000 });
+    const p = build({ blob: nb, asms: FAV_ASMS, items: FAV_ITEMS, labor: PLABOR, laborCalc: PCALC,
+                      markupRules: PRULES, conditionDefaults: PCONDS });
+    await p.api.init();
+    // Travel's hours, typed by the estimator (it is the one default whose quantity is theirs).
+    p.api.go(1);
+    const ti = p.api.model().labor.findIndex((r) => r.id === "travel");
+    typeInto(p, '[data-lab="' + ti + '"][data-k="days"]', "2");
+    const M0 = () => p.api.model();
+    const asmIdx = M0().takeoff.findIndex((r) => r.assembly_id === "a1");
+    const itemIdx = M0().takeoff.findIndex((r) => r.item_id === "i4");
+    const c1i = M0().labor.findIndex((r) => r.id === "c1");
+
+    // THE ORACLE: the two real engines on a copy of the page's own model with one change applied.
+    const oracle = (mutate) => {
+      const m = clone(M0());
+      mutate(m);
+      // TRAVEL LABOR'S GUYS ARE DERIVED (guys_auto): the page re-derives them from the crew's
+      // man-days whenever a row flips, so the oracle must too or it prices a stale Travel crew.
+      m.labor.forEach((r) => { if (r.unit === "hours" && r.guys_auto) r.guys = B.travelManDays(m.labor); });
+      let material = 0;
+      m.takeoff.forEach((r) => {
+        if (!B.rowOn(r)) return;
+        if (r.item_id) {
+          const it = FAV_ITEMS.filter((x) => x.id === r.item_id)[0];
+          const line = { item_id: it.id, coverage: it.coverage, waste_pct: it.waste_pct || 0, roundup: true };
+          material += L.priceAssembly({ id: "x", unit: "SF", lines: [line] }, FAV_ITEMS,
+                                      B.num(r.measurement)).total;
+        } else {
+          const asm = FAV_ASMS.filter((a) => a.id === r.assembly_id)[0];
+          if (asm) material += L.priceAssembly(asm, FAV_ITEMS, B.num(r.measurement)).total;
+        }
+      });
+      material += extraMaterial(m);
+      return B.markupChain({
+        material: material, labor: B.laborTotal(m.labor, m.conditions),
+        travel: B.travelCosts(m.travel, m.labor).total,
+        contingency: m.contingency, fees: m.fees, conditions: m.conditions,
+        sf: B.takeoffSf(m.takeoff), remodel_rate: null }).total;
+    };
+    const total = () => p.api.bid().total;
+    const switchOn = (sel) => { const e = p.doc.querySelector(sel); return e ? e.getAttribute("aria-checked") : null; };
+    const cardCls = (sel) => { const e = p.doc.querySelector(sel); return e ? e.className : null; };
+    const flipRow = (key, i) => (m) => { const r = m[key][i]; if (B.rowOn(r)) r.enabled = false; else delete r.enabled; };
+
+    const rows = [
+      { name: "default assembly takeoff row", step: 0, sw: '[data-on-tk="' + asmIdx + '"]',
+        card: '[data-row-card="' + asmIdx + '"]', startOn: () => B.rowOn(M0().takeoff[asmIdx]),
+        flipped: flipRow("takeoff", asmIdx) },
+      { name: "default material takeoff row", step: 0, sw: '[data-on-tk="' + itemIdx + '"]',
+        card: '[data-row-card="' + itemIdx + '"]', startOn: () => B.rowOn(M0().takeoff[itemIdx]),
+        flipped: flipRow("takeoff", itemIdx) },
+      { name: "joint filler condition row", step: 0, sw: '[data-cond="joint_filler"]', card: null,
+        startOn: () => !!M0().conditions.joint_filler,
+        flipped: (m) => { m.conditions.joint_filler = !m.conditions.joint_filler; } },
+      { name: "dye condition row", step: 0, sw: '[data-cond="dye"]', card: null,
+        startOn: () => !!M0().conditions.dye,
+        flipped: (m) => { m.conditions.dye = !m.conditions.dye; } },
+      { name: "remove-existing condition row", step: 0, sw: '[data-cond="remove_existing_jf"]', card: null,
+        startOn: () => !!M0().conditions.remove_existing_jf,
+        flipped: (m) => { m.conditions.remove_existing_jf = !m.conditions.remove_existing_jf; } },
+      { name: "favorited custom labor line", step: 1, sw: '[data-on-lab="' + c1i + '"]',
+        card: '[data-lab-card="' + c1i + '"]', startOn: () => B.rowOn(M0().labor[c1i]),
+        flipped: flipRow("labor", c1i) },
+      { name: "Travel Labor", step: 1, sw: '[data-on-lab="' + ti + '"]', card: '[data-lab-card="' + ti + '"]',
+        startOn: () => B.rowOn(M0().labor[ti]), flipped: flipRow("labor", ti) },
+      { name: "Lodging", step: 1, sw: '[data-on-trv="lodging"]', card: '[data-trv-card="lodging"]',
+        startOn: () => B.rowOn(M0().travel.lodging),
+        flipped: (m) => { m.travel.lodging.enabled = !m.travel.lodging.enabled; } },
+      { name: "Per Diem", step: 1, sw: '[data-on-trv="per_diem"]', card: '[data-trv-card="per_diem"]',
+        startOn: () => B.rowOn(M0().travel.per_diem),
+        flipped: (m) => { m.travel.per_diem.enabled = !m.travel.per_diem.enabled; } },
+    ];
+    const result = {};
+    for (const r of rows) {
+      p.api.go(r.step);
+      const hasSwitch = !!p.doc.querySelector(r.sw);
+      const startOn = r.startOn();
+      const t0 = total();
+      const expectFlip = oracle(r.flipped);
+      const swBefore = hasSwitch ? switchOn(r.sw) : null;
+      const cardBefore = r.card ? cardCls(r.card) : null;
+      if (hasSwitch) clickOn(p, r.sw);
+      const t1 = total();
+      p.api.go(r.step);
+      const swAfter = switchOn(r.sw);
+      const cardAfter = r.card ? cardCls(r.card) : null;
+      if (hasSwitch) clickOn(p, r.sw);
+      const t2 = total();
+      p.api.go(r.step);
+      result[r.name] = { hasSwitch: hasSwitch, startOn: startOn, before: t0, afterFlip: t1, back: t2,
+                         oracleFlip: expectFlip, swBefore: swBefore, swAfter: swAfter,
+                         cardBefore: cardBefore, cardAfterFlip: cardAfter };
+    }
+    out.toggleMovesTotal = result;
+    out.toggleMovesTotalBase = { total: total(), takeoff: M0().takeoff.map((r) => r.assembly_id || r.item_id),
+                                 labor: M0().labor.map((r) => r.id) };
+  }
+
+  // ── Q. THE TWO TOGGLES ARE INDEPENDENT (Hanz, 2026-10-06) ───────────────────────────────────────
+  // The library's default_on only sets what a NEW bid STARTS as; the estimate's own switch is the
+  // bid's. (1) flipping rows on an estimate never writes to the library; (2) changing a library
+  // default_on after a bid is saved never changes that saved bid; (3) a library default_on only
+  // sets a new bid's starting state. EXECUTED through the page's own init, handlers and save.
+  {
+    const lib = (on) => {
+      // `on` is the default_on every default-pulled library row carries (undefined = never set).
+      const f = (o) => (on === undefined ? o : Object.assign({}, o, { default_on: on }));
+      return {
+        asms: ASMS.map((a) => (a.id === "a1" ? f(Object.assign({}, a, { favorite: true })) : a)),
+        items: ITEMS.map((i) => (i.id === "i4" ? f(Object.assign({}, i, { favorite: true })) : i)),
+        labor: [f({ id: "travel", name: "Travel", rate: 40, unit: "hours", guys_auto: true, favorite: true }),
+                f({ id: "c1", name: "Saw cutting", rate: 45, unit: "days", guys_auto: false,
+                   favorite: true, default_work_types: [] })],
+        laborCalc: [
+          { line_id: "polishing", mode: "fixed", guys: 3, days: 5, hours_per_day: 8, rate: null },
+          { line_id: "c1", mode: "fixed", guys: 2, days: 3, hours_per_day: 8, rate: null }],
+        markupRules: [
+          { id: "m1", layout: "global", line_key: "travel_lodging", formula: "80", applies: true }],
+      };
+    };
+    const fresh = () => { const b = blob({ polish_estimate: null, polish_sf: 12000 }); return b; };
+    const stateOf = (pg) => {
+      const m = pg.api.model();
+      return { total: pg.api.bid().total,
+               takeoff: m.takeoff.map((r) => B.rowOn(r)),
+               labor: m.labor.map((r) => r.id + ":" + B.rowOn(r)) };
+    };
+
+    // (3) A NEW bid starts as the library says, and only as the library says.
+    const startsOn = build(Object.assign({ blob: fresh() }, lib(true)));
+    await startsOn.api.init();
+    const startsOff = build(Object.assign({ blob: fresh() }, lib(false)));
+    await startsOff.api.init();
+    const startsUnset = build(Object.assign({ blob: fresh() }, lib(undefined)));
+    await startsUnset.api.init();
+
+    // (1) Flip every default-pulled row on a new bid; count what went to the library.
+    // THE SAME library object the page is handed, snapshotted before and compared after -- a
+    // freshly built lib(true) on both sides would compare equal whatever the page did.
+    const lpLib = lib(true);
+    const libBefore = JSON.stringify(lpLib);
+    const lp = build(Object.assign({ blob: fresh() }, lpLib));
+    await lp.api.init();
+    const callsBefore = (lp.rec.calls || []).length;
+    const m0 = lp.api.model();
+    lp.api.go(0);
+    m0.takeoff.forEach((r, i) => { clickOn(lp, '[data-on-tk="' + i + '"]'); });
+    lp.api.go(1);
+    lp.api.model().labor.forEach((r, i) => { clickOn(lp, '[data-on-lab="' + i + '"]'); });
+    clickOn(lp, '[data-on-trv="lodging"]');
+    lp.api.go(0);
+    clickOn(lp, '[data-cond="dye"]');
+    lp.clock.fire();
+    // Let any request a handler started actually reach the fetch stub before the verbs are read.
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+    const flipped = stateOf(lp);
+    const flipCalls = (lp.rec.calls || []).slice(callsBefore);
+
+    // (2) A SAVED bid: flip some rows, save, then reopen it under a library whose default_on is
+    // the OPPOSITE of what the bid started with -- and again under one that matches the flipped
+    // rows. Neither may change a row state or the total.
+    const sv = build(Object.assign({ blob: fresh() }, lib(true)));
+    await sv.api.init();
+    sv.api.go(0);
+    clickOn(sv, '[data-on-tk="0"]');               // the default assembly row: ON -> OFF
+    sv.api.go(1);
+    const ci = sv.api.model().labor.findIndex((r) => r.id === "c1");
+    clickOn(sv, '[data-on-lab="' + ci + '"]');     // the custom labor line: ON -> OFF
+    sv.clock.fire();
+    const savedModel = clone(sv.rec.saves[sv.rec.saves.length - 1].polish_estimate);
+    const savedBlob = Object.assign(blob(), { polish_sf: 12000, polish_estimate: savedModel });
+    const reopen = async (libState) => {
+      const pg = build(Object.assign({ blob: clone(savedBlob) }, libState));
+      await pg.api.init();
+      return stateOf(pg);
+    };
+    const savedHere = await reopen(lib(true));
+    const savedLibFlippedOff = await reopen(lib(false));
+    const savedLibMatchesFlips = await reopen((() => {
+      const l = lib(true);
+      l.asms = l.asms.map((a) => (a.id === "a1" ? Object.assign({}, a, { default_on: false }) : a));
+      return l;
+    })());
+    // A bid saved with a row switched OFF while the library says ON, then the library says OFF->ON.
+    out.toggleIndependence = {
+      startsOn: stateOf(startsOn), startsOff: stateOf(startsOff), startsUnset: stateOf(startsUnset),
+      libraryUntouched: JSON.stringify(lpLib) === libBefore,
+      flipCalls: flipCalls, flippedDiffers: flipped.total !== stateOf(startsOn).total,
+      saved: { here: savedHere, libOff: savedLibFlippedOff, libMatches: savedLibMatchesFlips },
+      savedFlips: { takeoff0: savedModel.takeoff[0].enabled, c1: savedModel.labor.filter((r) => r.id === "c1")[0].enabled },
     };
   }
 

@@ -1643,6 +1643,125 @@
     return !!key && !!blob && blob.proposal_payload_key === key;
   }
 
+  // ─── Estimating Tool v2: which drafts are one, and what a page must not read off them ──────
+  /** Is this draft a v2 estimate: priced in Estimating Tool v2 (polish-estimate.html), which prices
+   *  itself, so there is no spreadsheet behind its numbers?
+   *
+   *  A MIRROR OF `_polish_beta` IN backend/drafts.py, CASE FOR CASE. The server answers this for the
+   *  Projects page (a card opens on the intake it was built on); this answers it in the browser, for
+   *  every page that has to decide the same thing from the draft in its hand. Two answers to one
+   *  question is how a project opens on the wrong screen "but only sometimes", so
+   *  backend/tests/test_v2_routing_guard.py runs BOTH on the same cases, and a spelling that one reads
+   *  as v2 and the other does not fails there.
+   *
+   *  v2 is `polish_estimate.version` being the number 2, or a string that reads as 2 the way Python's
+   *  float() reads one: "2", " 2 ", "2.0", "+2", "2e0", "0_2". Not v2: no version, 1, 3, a boolean (a
+   *  bool means something stored the wrong thing, and guessing would file the project wrongly), an
+   *  object, "v2", "", and every non-decimal way of writing 2 ("0x2", "0b10"). The string forms matter
+   *  because PostgREST hands the server the version as TEXT.
+   *
+   *  NOT MIRRORED, because nothing can write them: digits outside ASCII (Python reads one as 2) and
+   *  the whitespace only one language trims (U+FEFF here; U+001C to U+001F and U+0085 there). What
+   *  writes the version is bid-model.js, and it writes the number 2.
+   *
+   *  SELF-CONTAINED ON PURPOSE: it calls nothing else in this file, so a harness can lift it by name
+   *  and run it. Keep it that way. */
+  function isV2Draft(blob) {
+    const est = blob && typeof blob === "object" ? blob.polish_estimate : null;
+    const v = est && typeof est === "object" ? est.version : null;
+    if (typeof v === "number") return v === 2;
+    if (typeof v !== "string") return false;
+    // Python accepts an underscore between two digits ("0_2"). Dropped first, then only the
+    // characters of a decimal number are let through, so JavaScript's own extras ("0x2", "Infinity")
+    // cannot read as 2 where Python's float() refuses them.
+    const s = v.trim().replace(/(\d)_(?=\d)/g, "$1");
+    return /^[0-9eE+.-]+$/.test(s) && Number(s) === 2;
+  }
+
+  /** Is `blob` the draft THIS page is on, by the stamp this file writes into every blob?
+   *
+   *  A page that decides where to send somebody from the blob in its hand must know the blob is the
+   *  project's, and it is not always. A link opened on a machine whose storage holds ANOTHER project
+   *  (the bell, an email, a colleague's link) runs the page once against that other project's blob
+   *  while initDraftSync fetches the right one and reloads. Acting on that first run would send a
+   *  spreadsheet bid to the v2 pages because the project open on this machine yesterday was a v2
+   *  one. The reload runs the page again on the right blob, and the page decides then.
+   *
+   *  An unstamped blob is not provably this draft's either, so it is not acted on. Every blob a page
+   *  writes is stamped (setState), and the hydrate stamps what it adopts. */
+  function isThisDraft(blob) {
+    const id = getDraftId();
+    return !!(blob && typeof blob === "object" && blob[STAMP] && id && blob[STAMP] === id);
+  }
+
+  /** The keys the SPREADSHEET's Estimate step writes into a draft (estimate-review.js
+   *  snapshotLumpSumsToState): the per-tab pricing snapshot, the base pick that names one of those
+   *  tabs, and everything derived from them. A v2 draft prices itself and writes none of these, so
+   *  on a v2 draft they are somebody else's numbers. `computed_bid` is NOT here: that is v2's own.
+   *  test_v2_routing_guard.py fails when the snapshot writes a key this list lacks. */
+  const SHEET_PRICING_KEYS = [
+    "priced_tabs", "rooms", "base_tab_id", "proposal_lump_sum", "proposal_sales_tax",
+    "proposal_remodel_tax", "proposal_taxable", "proposal_remodel_on", "sheet_area",
+    "hf_lump_sums", "cost_snapshot", "phase_price",
+  ];
+
+  /** `blob` as the Proposal step should read its pricing: a v2 draft that carries the spreadsheet's
+   *  numbers has them taken out, and anything else comes back as the very same object.
+   *
+   *  WHY. Until the test copy was an allowlist (polish-sandbox.js buildCopy), a v2 test copy of a
+   *  spreadsheet bid arrived holding the SOURCE's priced_tabs and proposal_lump_sum. The Proposal
+   *  step reads the sheet's total first and the engine's second, so the copy's document printed the
+   *  spreadsheet's price, not the one v2 had just worked out. Without them the page falls through to
+   *  `computed_bid.full_bid.total_base_bid`, v2's own figure.
+   *
+   *  WHEN. Only for a v2 draft whose `priced_tabs` are not all marked `v2: true`. A price snapshot
+   *  v2 writes itself (a later phase) marks every tab, and is left alone.
+   *
+   *  WHAT IT DOES NOT DO: write. It returns a shallow copy and the stored draft keeps its keys, so
+   *  opening a project changes nothing. Taking them off the STORED draft is Continue's job, with
+   *  v2SheetKeysOut below. Nested objects are shared with the blob on purpose: the
+   *  Proposal step mutates them in place and hands the same references back to setState, and a deep
+   *  copy would cut that link (see liveKey in proposal-review.js). The caller's `state` stays a
+   *  one-shot snapshot, exactly as before. */
+  function v2PricingView(blob) {
+    if (!isV2Draft(blob)) return blob;
+    const has = (k) => Object.prototype.hasOwnProperty.call(blob, k);
+    if (!SHEET_PRICING_KEYS.some(has)) return blob;
+    const tabs = Array.isArray(blob.priced_tabs) ? blob.priced_tabs : [];
+    if (tabs.length && tabs.every((t) => !!t && t.v2 === true)) return blob;
+    const view = Object.assign({}, blob);
+    SHEET_PRICING_KEYS.forEach((k) => { delete view[k]; });
+    return view;
+  }
+
+  /** The patch that takes off a v2 draft's STORED copy what `v2PricingView` hid from the page: one
+   *  `undefined` per key. setState merges it, and JSON.stringify then leaves those keys out of the
+   *  blob in this browser and of the PUT to the server. `{}` for any draft the view hands back whole
+   *  (a spreadsheet bid, a clean v2 draft, a v2 snapshot with every tab marked `v2: true`), so
+   *  nothing is lost that a page was still reading.
+   *
+   *  WHY THE VIEW ALONE LEFT A DRAFT NOBODY COULD SEND. A v2 test copy made before the copy was an
+   *  allowlist still holds its source bid's `rooms`. The view hides them from the Proposal step, so
+   *  the document Continue builds shows no option, and the stored draft still lists one. That
+   *  disagreement is real, not a quirk of the gate: the customer's portal prices a proposal from
+   *  the stored `rooms` before it looks at `computed_bid`, and what the customer approves is the
+   *  sum of those rooms (the deposit invoice is a quarter of it), while the PDF is rebuilt from
+   *  `proposal_payload`. So the send gate (docDrift) and the server's publish route
+   *  (`_stale_document_refusal`) refuse it, and they are right to. Nothing on the page cleared it:
+   *  the options are hidden, the spreadsheet no longer opens a v2 draft, and Continue only ever
+   *  added keys.
+   *
+   *  So Continue, which already writes the whole document, writes this too. What is stored, what is
+   *  snapshotted for the customer and what the gate reads is then what the page printed.
+   *
+   *  DELIBERATELY NOT A CHANGE TO publishDigest. Reading `rooms` through the view there would make
+   *  the gate pass this draft while the portal went on pricing it from the spreadsheet's rooms. */
+  function v2SheetKeysOut(blob) {
+    if (v2PricingView(blob) === blob) return {};
+    const has = (k) => Object.prototype.hasOwnProperty.call(blob, k);
+    return Object.fromEntries(SHEET_PRICING_KEYS.filter(has).map((k) => [k, undefined]));
+  }
+
 
   /** Keep a floating panel's REMEMBERED position on screen.
    *
@@ -1703,6 +1822,10 @@
     docDrift,
     composeKey,
     documentHolds,
+    isV2Draft,
+    isThisDraft,
+    v2PricingView,
+    v2SheetKeysOut,
     draftDigest,
     bootDigest: () => _bootDigest,
     bootSynced: () => _bootSynced,

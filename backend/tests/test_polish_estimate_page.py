@@ -6,7 +6,7 @@ WHAT CHANGED, AND WHY EVERY ASSERTION HERE RUNS THE PAGE.
 The workbook is gone from this screen. Will asked for a takeoff whose rows are ASSEMBLIES out of the
 Items & Assemblies library, labor lines an estimator can add, and the markup chain shown as its own
 reviewable block — none of which the Polish worksheet has a cell for. So the page prices itself, and
-the connection to Kyle's file is kept a different way: polish-bid-core.js transcribes his markup
+the connection to Kyle's file is kept a different way: bid-model.js transcribes his markup
 column and tests/test_polish_markup_parity.py fails if the two ever disagree.
 
 That moved what these tests have to protect. The old file asserted engine loading, named
@@ -31,7 +31,7 @@ What can go wrong now is arithmetic and addressing:
 The harness (tests/js/polish-estimate-harness.js) executes the page's ENTIRE IIFE body — nothing is
 lifted out function by function, because a function it forgot to lift would be a function no test
 ever ran — with only `init();` taken off the bottom so boot can be driven. fetch, TW, TWAuth, the
-sandbox module, the DOM and the clock are stubbed. polish-bid-core.js and library-core.js are the
+sandbox module, the DOM and the clock are stubbed. bid-model.js and library-core.js are the
 real modules, so the arithmetic under test is the shipped arithmetic.
 """
 import json
@@ -173,7 +173,7 @@ def test_a_picked_but_unmeasured_row_reads_as_unmeasured_not_as_free(ran):
 
     Both engines already refuse this for their own per-unit figures, in those words:
     library-core.js's `per_unit` is null because 0 "would read as 'free' rather than 'unknown'",
-    and polish-bid-core.js says the same of `per_sf`. The cost box has to agree with them.
+    and bid-model.js says the same of `per_sf`. The cost box has to agree with them.
 
     Mutation: `return { text: moneyAuto(p.total), empty: false }` unconditionally in rowCost()."""
     u = ran["takeoff"]["unmeasured"]
@@ -364,21 +364,20 @@ def test_the_travel_guys_figure_follows_the_tasks_above_it_until_somebody_disagr
     AND THE KEYSTROKE IS THE DISAGREEMENT. Typing in the box is what leaves auto — asking somebody
     to find a control first, to then be allowed to type the number they already have in mind, is a
     worse trade than noticing. Once left, the figure stops following the tasks above; the way back
-    is offered, because otherwise there is none short of knowing to clear the field."""
+    is to clear the box (there is no switch any more; see the clearing tests below)."""
     t = ran["travelGuys"]
     assert t["seeded"] == 16.5, "3x5 + 3x0.5 man-days: %r" % t["seeded"]
     assert t["afterCrewEdit"] == 13.5, (
         "the derived figure did not follow a task above it: %r" % t["afterCrewEdit"])
     assert t["boxShowsIt"] not in ("", "None"), (
         "the box sits empty next to a row that is being priced off the figure")
-    assert t["manualLinkOffered"], "no way across to typing one's own figure"
     assert t["afterTyping"] == {"guys": "7", "auto": False}, (
         "typing in the box did not take it off auto: %r" % t["afterTyping"])
     assert t["stickyAfterCrewMoves"] == "7", (
         "a hand-typed figure was overwritten when a task above it changed: %r"
         % t["stickyAfterCrewMoves"])
     assert t["afterBackToAuto"] == {"guys": 28.5, "auto": True}, (
-        "back-to-auto did not resume following the tasks above: %r" % t["afterBackToAuto"])
+        "clearing the box did not resume following the tasks above: %r" % t["afterBackToAuto"])
 
 
 @needs_node
@@ -473,57 +472,93 @@ def test_travel_undims_live_the_moment_you_type_in_it(ran):
 
 
 @needs_node
-def test_the_type_my_own_control_is_a_switch_in_the_card_header(ran, html):
-    """Moved out of the small-print hint under Guys and into the card header, and it is now a
-    SWITCH rather than a button whose words flip.
+def test_there_is_no_type_my_own_switch_on_the_labor_step(ran):
+    """Hanz, 2026-10-07: "remove the Type my own toggle button because technically we can edit
+    it, and retain the Included button" -- for the estimate, and the labor.
 
-    The old control read "Type my own", and once pressed, "Back to auto". That labels the
-    ACTION, so at any moment it names the state you are LEAVING rather than the one you are
-    in — an estimator glancing at a card could not tell from the words whether Guys was
-    derived or typed. A switch says the state and shows it, in one sentence that stays true
-    in both positions, and it matches the switches the Review step already uses."""
-    lab = ran["labor"]
-    assert lab["toggleInHeader"], "the switch is not in the Travel card's header"
-    assert lab["noToggleOnCrewRows"], (
-        "a crew row offers the auto/manual toggle — clicking it would overwrite that row's own "
-        "Guys with the man-day sum")
-    assert lab["linkishGone"], "the old underlined-link markup is still being rendered"
-    assert ".labsw" in html, "the page no longer defines the switch's own style"
-    assert ".linkish" not in html, "the old link style is still on the page"
-    assert ".labtoggle" not in html, "the old flipping-button style is still on the page"
+    The Guys and the Lodging / Per Diem boxes are plain inputs; a control that asks permission
+    to type into them is a second way to do what the box already does. Gone from every card on
+    the step, Travel's included, markup and handlers both. The Included slider is a different
+    control and must still be on the card.
 
-
-@needs_node
-def test_the_switch_reports_its_state_instead_of_naming_the_next_action(ran):
-    """What makes it a switch rather than a restyled button.
-
-    Mutation: put the label back to flipping between "Type my own" and "Back to auto", and
-    `labelOnce`/`backToAutoGone` go red."""
-    both = ran["labor"]["toggleSaysItsState"]
-    # BOTH POSITIONS. Travel boots in auto, so checking only the page as-built reads one
-    # branch of the ternary and the other can say anything at all.
-    for state in ("off", "on"):
-        s = both[state]
-        assert s["checked"], (
-            "aria-checked is wrong with the switch %s" % state)
-        assert s["labelOnce"] == 1, (
-            "expected the one unchanging label with the switch %s, found %d copies"
-            % (state, s["labelOnce"]))
-        assert s["backToAutoGone"], (
-            'the control still flips its words to "Back to auto" with the switch %s' % state)
-        assert s["hasTrack"], (
-            "the switch renders without the track the other switches use, %s" % state)
+    Mutation: put the switch back in laborCard or travelCard and `words` / the data-attribute
+    flags go red."""
+    n = ran["labor"]["noTypeMyOwn"]
+    for key in ("words", "labManual", "labAuto", "trvManual", "trvAuto", "noLabsw"):
+        assert n[key], "the Type my own switch is still rendered (%s)" % key
+    assert n["includedOnTravelCard"], "the Included slider left the Travel card"
+    assert ran["labor"]["noToggleOnCrewRows"]
+    assert ran["labor"]["linkishGone"], "the old underlined-link markup is still being rendered"
 
 
 @needs_node
-def test_the_switch_is_still_a_button_so_the_keyboard_still_reaches_it(ran):
-    """The `.mw-sw` conditions on this page are <span role="switch"> with tabindex and NO
-    keydown handler, so Space and Enter do nothing on them. This control was a real <button>
-    and worked from the keyboard; matching the others visually must not quietly cost it that.
+def test_the_hint_says_whether_the_figure_is_typed_or_the_man_days(ran):
+    """With no switch to read, the line under the box is what says which mode it is in.
 
-    Mutation: render it as a <span class="mw-sw labsw">."""
-    assert ran["labor"]["toggleIsAButton"], (
-        "the Guys switch is no longer a <button> — Space and Enter will not operate it")
+    Mutation: put the old 'Man-days on the road.' wording back."""
+    h = ran["labor"]["hintsAndIncluded"]
+    assert h["autoHint"] == "Man-days from the tasks above."
+    assert h["typedHint"] == "Typed by you. Clear it to use the man-days from the tasks above."
+    # Included still toggles, and does not disturb the Guys mode.
+    assert h["onBefore"] is True and h["afterOff"]["enabled"] is False
+    assert h["afterOff"]["guys_auto"] is False, "Included changed the Guys mode"
+    assert h["onAgain"] is True
+
+
+@needs_node
+def test_clearing_the_guys_box_returns_it_to_the_man_days_on_change_not_on_input(ran):
+    """Going back to auto is CLEARING THE BOX, committed on change (blur / Enter).
+
+    On input it would fight typing: "1", backspace, "2" passes through an empty box, the figure
+    would snap back to the man-days and the card rebuild under the caret. So an empty box
+    mid-typing stays typed; only the commit hands it back. Whitespace counts as empty, and the
+    cost afterwards is the one the man-days price on a never-touched row.
+
+    Mutation: revert on input instead of change and `midBackspace` goes red; drop the change
+    branch and `afterBackToAuto` goes red."""
+    t = ran["travelGuys"]
+    c = ran["travelClear"]
+    assert c["midBackspace"]["auto"] is False and c["midBackspace"]["guys"] == "", (
+        "an empty box on input already went back to auto: %r" % c["midBackspace"])
+    assert c["afterRetype"] == {"guys": "2", "auto": False}, (
+        "retyping after a backspace did not land: %r" % c["afterRetype"])
+    assert t["afterBackToAuto"] == {"guys": 28.5, "auto": True}
+    assert c["clearedBox"] == "28.5", "the box does not show the man-days: %r" % c["clearedBox"]
+    assert c["clearedHint"], "the hint did not go back to the auto wording"
+    assert c["clearRebuilds"] == 0, (
+        "clearing the box rebuilt the Labor panel %d time(s): the element the estimator just "
+        "tabbed or clicked into is destroyed and the next click or keystroke is lost"
+        % c["clearRebuilds"])
+    assert c["costAuto"] == c["costFresh"] != c["costTyped"], (
+        "cleared cost %r, never-touched cost %r, typed cost %r"
+        % (c["costAuto"], c["costFresh"], c["costTyped"]))
+
+
+@needs_node
+def test_clearing_lodging_or_per_diem_returns_it_to_the_man_days(ran):
+    """The same rule on the Lodging / Per Diem quantity, plus the hints and no switch there.
+
+    Mutation: drop the data-trv branch of the clearing rule and `backToAuto` stays typed."""
+    t = ran["travelCosts"]
+    assert t["midClearLodging"]["qty_auto"] is False, "empty on input went back to auto"
+    assert t["backToAuto"]["qty_auto"] is True and t["backToAuto"]["qty"] == 16.5
+    assert t["clearedLodgingBox"] == "16.5"
+    assert t["lodgeClearRebuilds"] == 0, "clearing Lodging rebuilt the panel and dropped focus"
+    assert t["clearedLodgingCost"] == "$1,155"
+    assert t["lodgingHints"]["auto"] and t["lodgingHints"]["noTypeMyOwn"]
+    assert t["typedHintLodging"], "the typed hint is not the new wording"
+
+
+@needs_node
+def test_a_saved_typed_row_still_reads_as_typed_and_prices_the_same(ran):
+    """A bid saved with guys_auto false (before this change, through the switch or by typing)
+    reopens as typed, prices off the typed number, and a change event carrying the same number
+    is not a clear."""
+    s = ran["savedTypedRow"]
+    assert s["typedHint"] and s["auto"] is False
+    assert s["box"] == "6" and s["guys"] == 6
+    assert s["cost"] == "$%d" % s["expected"], s["cost"]
+    assert s["afterSameChange"] is False
 
 
 @needs_node
@@ -556,7 +591,7 @@ def test_deleting_a_labor_line_removes_the_one_that_was_asked_for(ran):
     Mutation: `M.labor.splice(i, 1)` where i comes from `data-del-lab` on the row above, or a
     `splice(i)` with no count — which truncates everything from there down."""
     lab = ran["labor"]
-    assert lab["afterDelete"] == ["Polishing", "Travel", "Densify"], (
+    assert lab["afterDelete"] == ["Polishing", "Travel Labor", "Densify"], (
         "the delete took the wrong line: %r" % lab["afterDelete"])
     assert lab["afterDeleteCells"] == 3, "the table still renders a cell for the deleted line"
     # The survivors keep their own money after the row between them went.
@@ -608,7 +643,7 @@ def test_money_columns_wear_the_dollar_sign(ran):
 # ── E. review: the markup block IS the chain ──────────────────────────────────
 @needs_node
 def test_the_markup_block_is_the_chain_line_for_line(ran):
-    """Every money cell in the review block is compared with polish-bid-core's markupChain() for the
+    """Every money cell in the review block is compared with bid-model's markupChain() for the
     same model — the module that is pinned, formula string by formula string, to the Polish tab of
     Kyle's estimate_sheet_5.7.xlsx by tests/test_polish_markup_parity.py. So the screen is pinned to
     his workbook through that chain rather than by a number typed into this file.
@@ -759,7 +794,8 @@ def test_each_cost_card_runs_from_a_subtotal_to_a_total(ran):
     # The bold row that closes each card is the TOTAL, and the markup block's own two totals keep
     # the plain word — pinned so a later "make it consistent" sweep does not undo the distinction.
     assert ran["review"]["totalRowLabels"] == [
-        "Material Total", "Labor Total", "Total taxes", "Total fees + bond"], (
+        "Material Total", "Labor Total", "Hotel and Per Diem Total", "Total taxes",
+        "Total fees + bond"], (
         "the bold closing rows are not the totals: %r" % ran["review"]["totalRowLabels"])
 
 
@@ -866,12 +902,12 @@ def test_travel_is_listed_even_when_it_costs_nothing(ran):
     assert z["travelCost"] == 0 and z["jointFillerCost"] == 0, (
         "the fixture no longer isolates the rule: travel=%r joint filler=%r"
         % (z["travelCost"], z["jointFillerCost"]))
-    assert "Travel" in z["labels"], (
+    assert "Travel Labor" in z["labels"], (
         "an unpriced Travel row is still missing from Review: %r" % z["labels"])
     assert "Joint filler" not in z["labels"], (
         "an unpriced non-travel row was listed: %r" % z["labels"])
     # And the priced row beside them is unaffected -- the change is about zeros, not about order.
-    assert z["labels"][0] == "Polishing" and z["labels"][1] == "Travel", (
+    assert z["labels"][0] == "Polishing" and z["labels"][1] == "Travel Labor", (
         "the labor rows are out of order: %r" % z["labels"])
 
 
@@ -1218,7 +1254,7 @@ def test_a_bid_made_entirely_of_materials_is_a_finished_bid(ran):
     "(no assembly picked)" printed beside the row's own cost. One button makes material rows the
     ordinary case, so this stops being a corner.
 
-    Mutation: put `!!r.assembly_id` back in either stepStatus or polish-bid-core's blockers, or
+    Mutation: put `!!r.assembly_id` back in either stepStatus or bid-model's blockers, or
     read assembly_name alone in reviewPanel."""
     m = ran["materialOnly"]
     assert m["pip"] == "ok", (
@@ -1283,7 +1319,7 @@ def test_joint_filler_and_dye_render_as_material_rows(ran):
         assert card["usesTheAssemblyGrid"], (
             "%s does not use the takeoff row's own column template, so its figures do not line "
             "up with the rows above it" % name)
-        assert card["labels"] == ["Material", "Measurement", "Unit", "Total cost"], (
+        assert card["labels"] == ["Material", "Measurement", "Unit", "Coverage", "Total cost"], (
             "%s does not carry the four columns that were asked for: %r" % (name, card["labels"]))
     # JOINT FILLER IS BOUGHT IN KITS, and the count is the one the price was worked out from.
     assert jf["name"] == "Joint filler, 10 gal kit", jf["name"]
@@ -1422,7 +1458,7 @@ def test_the_priced_cards_follow_the_takeoff_area_live(ran):
     assert a["jf"]["qty"] == "3", (
         "the kit count did not follow the area down to 8,000 sq ft: %r" % a["jf"])
     assert a["jf"]["cost"] == "$1,500" and r["expectedJfCost"] == 1500, (
-        "the joint-filler figure disagrees with polish-bid-core's own jointFillerCost: %r" % a)
+        "the joint-filler figure disagrees with bid-model's own jointFillerCost: %r" % a)
     assert a["jf"]["sub"] == "3 kits", a["jf"]["sub"]
     assert a["jf"]["hint"] == "8,000 sq ft, at one kit per 3,500, rounded up.", a["jf"]["hint"]
     assert a["dye"]["qty"] == "8,000" and a["dye"]["sub"] == "8,000 SF", a["dye"]
@@ -1433,7 +1469,7 @@ def test_switching_dye_on_moves_the_material_total_by_exactly_the_dye(ran):
     """THE GUARANTEE UNDER THE MARKUP, which outlived two card designs and has to outlive this one.
 
     Flipping the switch adds `dyeCost(area)` to the Material total and moves nothing else. The
-    figure is polish-bid-core's, not one typed into this file, so a page that quietly priced the
+    figure is bid-model's, not one typed into this file, so a page that quietly priced the
     dye a second time -- or priced it off a different area than the one the bid divides by -- is
     caught here rather than in a proposal.
 
@@ -1538,7 +1574,7 @@ def test_the_save_writes_the_condition_cells_and_no_others(ran):
     # NOT be written there. hard_bid was an eighth condition and a ninth/tenth key, Epoxy!B5 and
     # Polish!B5 -- removed with the line itself on 2026-09-22. Kyle's own `=IF(B5="yes",...)`
     # reads a cell nobody ever writes the same way it reads "No", so there is nothing to write in
-    # its place; see the note over CONDITION_CELLS in polish-bid-core.js.
+    # its place; see the note over CONDITION_CELLS in bid-model.js.
     #
     # E25/E29/F29 joined on 2026-09-16, when dye, joint filler and remove-existing moved off the
     # intake form onto the Takeoff step. Their cells did not change and neither did their
@@ -1702,8 +1738,10 @@ def test_the_dropped_v1_keys_are_gone(ran):
     assert m["dropped"] == [], "a v1 key survived migration: %r" % m["dropped"]
     # `fees` joined the shape on 2026-09-16, when the Fees + Textura line became typeable on the
     # Review step. A v1 draft has no such figure, so migration seeds it from the sheet's own zero.
+    # `travel` (Lodging and Per Diem, 2026-10-05) is the newest key: both lines OFF, so a v1 draft
+    # migrates to a bid that prices no travel cost until somebody turns one on.
     assert m["keys"] == ["conditions", "contingency", "fees", "labor", "takeoff", "totals",
-                         "version"], (
+                         "travel", "version"], (
         "the v2 model's shape has changed: %r" % m["keys"])
 
 
@@ -1727,6 +1765,152 @@ def test_intake_seeds_the_first_measurement_only_when_nothing_is_measured(ran):
                               ["travel", 1.5, 33]]
 
 
+@needs_node
+def test_intake_system_2_seeds_a_second_takeoff_row_and_never_over_a_measurement(ran):
+    """Hanz, 2026-10-05: the beta intake carries System 1 and System 2 Polish SF, and each number
+    becomes a row of the step-2 takeoff, so it is typed once and the takeoff stays the only source
+    of the price. polish_2_sf used to be read by nothing.
+
+    A system-2-only job seeds ONE row from system 2 (the number is the estimator's; which box it
+    was typed in changes nothing the takeoff prices). A takeoff that already measures anything
+    takes neither number.
+
+    Mutation: make B.seedTakeoffSf ignore its second argument and the two-row case collapses to
+    one row; drop its early return and the measured 5,000 SF is overwritten."""
+    m = ran["migration"]
+    assert m["seedTwo"] == [["", 8250, "SF"], ["", 3100, "SF"]], m["seedTwo"]
+    assert m["seedOnlyTwo"] == [["", 3100, "SF"]], m["seedOnlyTwo"]
+    assert m["seedMeasured"] == [["", 5000, "SF"]], m["seedMeasured"]
+
+
+@needs_node
+def test_opening_step_2_puts_the_takeoff_total_into_the_draft_without_an_edit(ran):
+    """Review finding: seeding filled the takeoff in memory only, so with System 1 = 3,000 and
+    System 2 = 2,000 the screen priced 5,000 SF while the draft still said polish_sf 3,000 and
+    proposal-review printed that. The live intake's beta-continue door can also type a polish_sf
+    over a takeoff that is already measured. Either way polish_sf must read the takeoff total
+    after a plain open; and a draft already in line is not rewritten.
+
+    Mutation: delete the `saveSoon()` call after the seeding block in init() and the first two
+    come back as None / 3000."""
+    m = ran["migration"]
+    assert m["savedAfterSeedTwo"] == {"sf": 11350, "bidSf": 11350}, m["savedAfterSeedTwo"]
+    assert m["savedAfterClobber"] == 5000, m["savedAfterClobber"]
+    assert m["savesWhenInLine"] == 0, "a draft already in line was rewritten on open"
+
+
+@needs_node
+def test_seeding_never_lands_beside_an_lf_only_measurement(ran):
+    """B.seedTakeoffSf's own early return, which init's SF-total guard hides: a takeoff whose only
+    measurement is in LF is still somebody's work, and the old code overwrote it.
+
+    Mutation: remove the `if (num((rows[i]||{}).measurement) > 0) return rows;` line and the LF row
+    gains two SF rows."""
+    assert ran["migration"]["seedOverLf"] == [["", 900, "LF"]], ran["migration"]["seedOverLf"]
+
+
+@needs_node
+def test_emptying_the_takeoff_does_not_reseed_a_deleted_system_2_row(ran):
+    """Step 2 writes polish_sf as the takeoff total but used to leave intake's polish_2_sf alone,
+    so blank both seeded rows, reopen, and B.seedTakeoffSf read the stale System 2 figure as a
+    fresh measurement and put the deleted row back.
+
+    Mutation: delete the `polish_2_sf: ""` line from saveSoon (or the pagehide save) in
+    polish-estimate.js and emptiedDraft2 stays 3100 and emptiedReopen holds a 3100 SF row."""
+    m = ran["migration"]
+    assert m["emptiedSave"] == {"sf": 0, "sf2": ""}, m["emptiedSave"]
+    assert m["emptiedDraft2"] == "", m["emptiedDraft2"]
+    assert not any(r[1] for r in m["emptiedReopen"]), (
+        "a deleted row came back with a measurement: %r" % m["emptiedReopen"])
+
+
+@needs_node
+def test_defaults_load_into_a_new_bid_one_row_each_without_counting_the_floor_twice(ran):
+    """Hanz, 2026-10-05: each favorited assembly and material becomes its own Takeoff row, measured
+    with the intake SF. System 1 8,000 + System 2 2,000 = 10,000 SF.
+
+    Loads: a1 (SF assembly, carries the area), a2 (LF assembly, measurement left BLANK, never a
+    guess), i1 (material), i4 (material switched OFF: kept, grayed, measured). Does NOT load: the
+    reserved dye row, an epoxy-only favorite, a non-favorite. The floor counts ONCE: only the first
+    enabled SF default carries it, the rest are `same_floor`, so the area, polish_sf and the caption
+    all read 10,000 -- not 30,000.
+
+    Mutation: drop the `same_floor` marking in B.seedDefaultTakeoff and area/savedSf become 20,000;
+    drop the reserved-id test and a `dye` row appears."""
+    d = ran["defaultsLoad"]
+    keys = [(r["a"] or r["i"], r["m"], r["u"], r["sf"], r["off"]) for r in d["rows"]]
+    assert keys == [("a1", 10000, "SF", False, False), ("a2", "", "LF", False, False),
+                    ("i1", 10000, "SF", True, False), ("i4", 10000, "SF", True, True)], keys
+    assert d["area"] == 10000 and d["savedSf"] == 10000 and d["caption"] == "10,000 SF", d
+
+
+@needs_node
+def test_a_loaded_default_follows_the_library_coverage_not_a_constant(ran):
+    """The addendum: a default's coverage is the MATERIAL's library coverage. i1 is 333 in this
+    library (the shipped fixture says 275), the row's coverage box is left blank so it keeps
+    following the library, and the row prices exactly as priceLine does at 333 over 10,000 SF.
+
+    Mutation: seed the row with a literal coverage 275 and i1Price no longer equals i1Expected."""
+    d = ran["defaultsLoad"]
+    assert d["i1CoverageBox"] == "", "coverage was frozen onto the row"
+    assert d["i1Price"] == d["i1Expected"] and d["i1Price"] > 0, d
+
+
+@needs_node
+def test_a_default_switched_off_adds_nothing_and_is_not_the_area(ran):
+    """default_on false loads the row grayed (`enabled:false`): $0, outside the area. When NO
+    enabled SF default exists the intake box seeds a plain area row, so the bid still has its floor
+    -- and the off default is marked same_floor so flipping it on later cannot double the floor.
+
+    Mutation: let the carrier be the first default whether or not it is on and allOffArea is 0."""
+    d = ran["defaultsLoad"]
+    assert d["offPrice"] == 0
+    assert [(r["a"], r["m"], r["sf"], r["off"]) for r in d["allOff"]] == [
+        ("a1", 5000, True, True), ("", 5000, False, False)], d["allOff"]
+    assert d["allOffArea"] == 5000
+
+
+@needs_node
+def test_defaults_never_load_into_a_saved_bid_and_no_defaults_means_the_old_seeding(ran):
+    """New bids only: a bid with anything saved keeps exactly its rows, and a library with no
+    defaults gives the System 1 / System 2 rows seedTakeoffSf always did.
+
+    Mutation: drop the conditionsUnstated gate in init() and the saved bid (blank takeoff, intake 700 SF) gains the default rows."""
+    d = ran["defaultsLoad"]
+    assert [(r["a"], r["m"]) for r in d["saved"]] == [("", 700)], d["saved"]
+    assert [(r[1], r[2]) for r in d["none"]] == [(8250, "SF"), (3100, "SF")], d["none"]
+
+
+@needs_node
+def test_defaults_load_into_a_bid_minted_by_the_beta_intake(ran):
+    """Reviewer find: the intake saves a model with conditions, so conditionsUnstated is false for
+    every beta bid and the defaults never loaded. The gate now also accepts "labor never stated".
+
+    Mutation: gate on conditionsUnstated alone and `minted` is the single blank/700 row."""
+    d = ran["defaultsLoad"]
+    assert d["mintedGateWasFalse"] is False
+    keys = [(r["a"] or r["i"], r["m"], r["sf"]) for r in d["minted"]]
+    assert keys == [("a1", 10000, False), ("a2", "", False), ("i1", 10000, True),
+                    ("i4", 10000, True)], keys
+
+
+@needs_node
+def test_same_floor_rows_follow_the_carrier_and_stop_sharing_when_typed_over(ran):
+    """Typing into a same_floor row counts its own number; changing the carrier drags the rows
+    still sharing its number along.
+
+    Mutation: use a plain `measurement = value` in the input handler and ownTyped area stays 10,000."""
+    d = ran["defaultsLoad"]
+    own = d["ownTyped"]
+    assert [(r["a"] or r["i"], r["m"], r["sf"]) for r in own["rows"]][2:] == [
+        ("i1", "2000", False), ("i4", 10000, True)], own
+    assert own["area"] == 12000, own
+    moved = d["carrierMoved"]
+    assert [(r["a"] or r["i"], r["m"], r["sf"]) for r in moved["rows"]][2:] == [
+        ("i1", "2000", False), ("i4", "6000", True)], moved
+    assert moved["area"] == 8000, moved
+
+
 # ── H. boot ──────────────────────────────────────────────────────────────────
 @needs_node
 def test_nothing_is_revealed_before_the_sandbox_settles(ran):
@@ -1748,7 +1932,9 @@ def test_nothing_is_revealed_before_the_sandbox_settles(ran):
     assert b["mainShownAfterTheLibrary"], (
         "#main was revealed before the item library landed, so the first paint prices nothing")
     assert b["loadingHidden"] and b["mainShown"] and b["bidBarShown"]
-    assert b["fetches"] == ["/api/library/assemblies", "/api/library/items"]
+    # The company labor rate is read for every bid (it feeds the "Default $X" line), in parallel.
+    assert b["fetches"] == ["/api/markup/rules?layout=global", "/api/library/assemblies",
+                            "/api/library/items"]
     assert b["projLine"] == "Nearman Creek · Kansas City, KS"
 
 
@@ -2100,7 +2286,7 @@ def test_nothing_on_screen_says_labour_or_crew(ran):
     goes red everywhere at once — which is exactly what happened the first time this rename ran.
 
     SCOPED DELIBERATELY. The word may legitimately appear in code comments quoting the history of
-    this rework (polish-bid-core.js documents the v1 `labour` key and why `crew` was a head count),
+    this rework (bid-model.js documents the v1 `labour` key and why `crew` was a head count),
     so this looks at two things only: every string the page actually RENDERED across all three steps
     plus its boot messages, collected by the harness; and polish-estimate.html with its comments and
     its <style> block stripped. A comment is not user-visible; a rendered string is.
@@ -2129,12 +2315,12 @@ def test_the_page_carries_no_inline_script(html):
 def test_the_page_loads_no_formula_engine_and_the_modules_in_order(html):
     """HyperFormula and the whole workbook load are gone: this page prices itself now.
 
-    The order is load-bearing and it fails silently. polish-estimate.js reads `window.TWPolishBid`,
+    The order is load-bearing and it fails silently. polish-estimate.js reads `window.TWBidModel`,
     `window.TWLib` and `window.TWPolishSandbox` at PARSE time, so any of them loaded after it is
     `undefined`, and the first thing that touches it throws while the page sits on its loading
     message for ever.
 
-    Mutation: move /js/polish-bid-core.js below /js/polish-estimate.js."""
+    Mutation: move /js/bid-model.js below /js/polish-estimate.js."""
     markup = re.sub(r"<!--.*?-->", "", html, flags=re.S)
     assert "hyperformula" not in markup.lower(), "the beta calculator loads a formula engine again"
     assert "xl-core.js" not in markup, "the beta calculator loads the workbook helpers again"
@@ -2143,7 +2329,7 @@ def test_the_page_loads_no_formula_engine_and_the_modules_in_order(html):
     # in the rail. See the house rule at the top of frontend/js/icons.js.
     assert srcs == ["https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0",
                     "/js/icons.js", "/auth.js", "/shared.js", "/js/tab-memo.js",
-                    "/js/library-core.js", "/js/polish-bid-core.js", "/js/polish-sandbox.js",
+                    "/js/library-core.js", "/js/excel-math.js", "/js/bid-model.js", "/js/polish-sandbox.js",
                     "/js/polish-estimate.js"], (
         "the page's script list has changed: %r" % srcs)
 
@@ -2176,7 +2362,7 @@ def test_there_is_a_datalist_for_the_search_box(html):
 
 
 def test_the_page_holds_no_rate_of_its_own(js):
-    """Every percentage belongs to polish-bid-core.js, which is pinned to Kyle's workbook by
+    """Every percentage belongs to bid-model.js, which is pinned to Kyle's workbook by
     tests/test_polish_markup_parity.py. A rate copied into this file is a second opinion waiting to
     drift from the pin, and nothing would fail when it did.
 
@@ -2184,7 +2370,7 @@ def test_the_page_holds_no_rate_of_its_own(js):
     body = "\n".join(l for l in js.splitlines() if not l.strip().startswith("//"))
     for rate in ("0.02", "0.05", "0.12", "0.027", "0.16", "0.09475", "6500", "15000", "22500",
                  "32500", "32.2", "32.20"):
-        assert rate not in body, "%r looks like a rate copied out of polish-bid-core" % rate
+        assert rate not in body, "%r looks like a rate copied out of bid-model" % rate
     assert "B.RATES" in js, "the page does not read the pinned rates at all"
 
 
@@ -2204,7 +2390,7 @@ def test_nothing_is_advertised_above_the_estimate_grid():
     where the estimator is reading rows of numbers. Hanz, 2026-08-07: "I can barely see the
     sheet. The Estimate sheet is supposed to be the majority viewport."
 
-    The beta is reached from the sidebar instead (Polish Estimate · BETA), which is where the
+    The beta is reached from the sidebar instead (Estimating Tool v2 · BETA), which is where the
     Item Library and the Info Sheet announce themselves too. This test is here so the next
     feature that wants a launch moment does not take it from the grid.
     """
@@ -2401,8 +2587,10 @@ def test_a_brand_new_bid_opens_holding_travel_and_every_default_line(ran):
         "a new bid did not open holding Travel AND the library's lines, in that order: %r"
         % n["ids"])
     # RENDERED, not merely on the model: these are the values in the boxes the Labor step drew.
-    assert n["onScreen"] == ["Polishing", "Mock-up", "Joint filler", "Travel",
-                             "Densify", "Night shift premium"], (
+    # TRAVEL LABOR IS DRAWN LAST, below the dividing line, with Lodging and Per Diem under it
+    # (2026-10-05) -- the MODEL order above is unchanged, only where the Labor step puts the card.
+    assert n["onScreen"] == ["Polishing", "Mock-up", "Joint filler", "Densify",
+                             "Night shift premium", "Travel Labor"], (
         "the Labor step did not put the defaults on screen: %r" % n["onScreen"])
     assert n["costCells"] == 6, "the panel drew %r cost cells for 6 rows" % n["costCells"]
     assert n["rates"] == [33, 33, 33, 33, 40, 12.5], (
@@ -2449,7 +2637,7 @@ def test_a_project_that_came_through_the_beta_intake_gets_the_defaults_too(ran):
     assert f["ids"] == ["polishing", "mockup", "jointfill", "travel",
                         "lab-densify", "lab-night"], (
         "the normal flow does not get the defaults: %r" % f["ids"])
-    assert f["onScreen"][-2:] == ["Densify", "Night shift premium"]
+    assert f["onScreen"][-3:] == ["Densify", "Night shift premium", "Travel Labor"]
 
 
 @needs_node
@@ -2471,7 +2659,7 @@ def test_a_saved_bid_opens_exactly_as_it_was_saved(ran):
     assert w["after"] == w["saved"], (
         "a saved bid's labor came back changed:\n saved: %r\n opened: %r"
         % (w["saved"], w["after"]))
-    assert w["onScreen"] == ["Polishing", "Mock-up", "Travel", "Densify"], (
+    assert w["onScreen"] == ["Polishing", "Mock-up", "Densify", "Travel Labor"], (
         "the Labor step drew something other than the saved rows: %r" % w["onScreen"])
     assert not [u for u in w["fetches"] if "/labor" in u], (
         "a saved bid asked the server for the default labor lines: %r" % w["fetches"])
@@ -2498,7 +2686,7 @@ def test_deleting_a_default_leaves_the_bids_already_holding_it_alone(ran):
     d = ran["laborDefaults"]["deleted"]
     assert "lab-densify" in d["ids"], (
         "deleting the default took it off a bid already holding it: %r" % d["ids"])
-    assert d["onScreen"] == ["Polishing", "Mock-up", "Travel", "Densify"]
+    assert d["onScreen"] == ["Polishing", "Mock-up", "Densify", "Travel Labor"]
     assert d["densifyRate"] == [55], (
         "the kept row lost the estimator's own rate: %r" % d["densifyRate"])
 
@@ -2526,7 +2714,7 @@ def test_a_missing_defaults_table_is_no_defaults_and_never_a_broken_step(ran):
             "there yet: %r" % (key, case["alert"]))
     down = ran["laborDefaults"]["down"]
     assert down["loadingHidden"], "the page stayed on its loading message"
-    assert down["onScreen"] == ["Polishing", "Mock-up", "Joint filler", "Travel"], (
+    assert down["onScreen"] == ["Polishing", "Mock-up", "Joint filler", "Travel Labor"], (
         "the Labor step came up without Travel on it: %r" % down["onScreen"])
     assert down["costCells"] == 4
 
@@ -2734,3 +2922,740 @@ def test_a_condition_off_the_defaults_tab_is_not_drawn_on_a_new_bid(ran):
     assert g["removeExistingFollowsJointFiller"], (
         "remove existing is drawn while joint filler is off the list -- no switch could un-gray it")
     assert g["seeded"] == {"dye": False}, g["seeded"]
+
+
+# ── B2: coverage on the estimate, per bid ────────────────────────────────────────────────────
+@needs_node
+def test_every_row_kind_shows_the_library_coverage_and_prices_with_a_typed_one(ran):
+    """HANZ: "In the estimate form in the beta it should pull the default coverage areas for the
+    defaults." A row that arrives from the Defaults carries NO coverage of its own, so the box has
+    to show the LIBRARY's figure (275 for OPF, 275 / 775 for the two lines of Polish 800 Grit --
+    none of them the old 3,500 constant) and the total has to price with it. A number typed over
+    it prices the bid, and the amber line directly under the box says "Default value: N"; the library item
+    itself is never touched. An ASSEMBLY row gets one box per material line.
+
+    Mutation: render the assembly row with no coverage boxes; have priceAssemblyRow ignore the
+    typed figure; leave the hint at "How far one goes" when the figures differ."""
+    r = ran["rowCoverage"]
+    f = r["first"]
+    assert f["matBox"] == ["", "275"], f["matBox"]
+    assert f["matHint"] == "Blank uses the library's 275."
+    assert len(f["asmBoxes"]) == 2 and 'placeholder="275"' in f["asmBoxes"][0]         and 'placeholder="775"' in f["asmBoxes"][1], f["asmBoxes"]
+    assert f["matCost"] == "$1,793.04" and r["expectedFirstMat"] == pytest.approx(1793.0367)
+    assert f["asmCost"] == "$10,599.98" and r["expectedFirstAsm"] == pytest.approx(10599.9771)
+    m = r["matTyped"]
+    assert m["cost"] == "$1,707.65" and m["expected"] == pytest.approx(1707.654)
+    assert m["hint"] == "How far one goes, for this job."
+    assert m["warn"] == {"text": "Default value: 275", "hidden": False}, m["warn"]
+    a = r["asmTyped"]
+    assert a["cost"] == "$10,258.45" and a["expected"] == pytest.approx(10258.4463), a
+    assert a["hint0"] == "How far one goes, for this job."
+    assert a["warn0"] == {"text": "Default value: 275", "hidden": False} and a["warn1"] == {"text": "", "hidden": True}, (a["warn0"], a["warn1"])
+    assert a["hint1"] == "Blank uses the library's 775.", "an untouched line keeps the library figure"
+    assert a["line_cov"] == {"0": "300"} and a["libraryUntouched"] == 275
+    assert r["matBackToLib"]["hint"] == "How far one goes, for this job."
+    assert r["matBackToLib"]["warn"] == {"text": "", "hidden": True}, "typing the default back must hide the warning"
+    assert "Library default" not in str(r), "the old wording is gone"
+    # a different assembly means different lines: the old lines' coverage must not follow
+    assert r["switched"] == {"line_cov": True, "boxes": 1}, r["switched"]
+
+
+@needs_node
+def test_joint_filler_and_dye_cards_carry_a_per_bid_coverage_box(ran):
+    """The two condition cards get the same Coverage box. The library kit is set to 2,000 (not
+    3,500) so "the library's figure" and "the old constant" cannot be confused: 6,000 SF is 3
+    kits at $500; typing 3,000 on THIS bid makes it 2 kits ($1,000), moves the Material total by
+    exactly that, rewrites the kit sentence and says "Library default: 2000". The figure is
+    stored on the bid (cond_cov) and survives a reload; a bid with none prices as before.
+
+    Mutation: condLine reads the library coverage whatever the box says."""
+    c = ran["condCoverage"]
+    u, j = c["untouched"], c["libJf"]
+    assert u["before"]["jfBox"] == ["", "2000"]
+    assert u["after"]["jfHint"] == "Blank uses the library's 2000."
+    assert u["after"]["jfCost"] == "$1,500" and u["jfKits"] == 3
+    assert j["after"]["jfCost"] == "$1,000" and j["jfKits"] == 2
+    assert j["after"]["jfQtyHint"] == "6,000 sq ft, at one kit per 3,000, rounded up."
+    assert j["after"]["jfWarn"] == {"text": "Default value: 2000", "hidden": False}, j["after"]["jfWarn"]
+    assert u["after"]["jfWarn"] == {"text": "", "hidden": True} and u["before"]["dyeWarn"] == {"text": "", "hidden": True}
+    assert j["matBefore"] - j["matAfter"] == pytest.approx(500)
+    assert j["savedModel"] == {"joint_filler": "3000"} and j["migrated"] == {"joint_filler": "3000"}
+    assert u["savedModel"] is None
+    assert c["backToLibrary"]["after"]["jfHint"] == "How far one goes, for this job."
+    assert c["backToLibrary"]["after"]["jfWarn"] == {"text": "", "hidden": True}
+    d = c["libDye"]
+    assert d["before"]["dyeBox"] == ["", "2"] and d["after"]["dyeWarn"] == {"text": "Default value: 2", "hidden": False}
+    assert d["dyeCost"] == pytest.approx(6000 / 4 * 0.2 * 2), d["dyeCost"]
+
+
+# ── M. the company labor rate (Markups -> Global) ─────────────────────────────
+@needs_node
+def test_a_new_bid_starts_every_labor_rate_from_the_company_rate(ran):
+    """The three crew rows, Travel Labor, a library row with no rate of its own and a line the
+    estimator adds all open on the Global labor rate ($40 here, not the sheet's $33). A library
+    row somebody re-rated ($55) keeps its own number.
+
+    Mutation: drop `B.applyLaborRate(...)` in init() -- the crew rows stay on the hard-coded
+    $33 and this fails on `polishing`. Mutation: `rate: LABOR_RATE` -> `rate: ""` in
+    newLaborRow -- fails on addedRate."""
+    r = ran["laborRate"]["newBid"]
+    for rid in ("polishing", "mockup", "jointfill", "travel", "lab-none"):
+        assert r[rid] == 40, "%s did not start from the company rate: %r" % (rid, r)
+    assert r["lab-own"] == 55, "a library row with its own rate was overwritten: %r" % r
+    assert ran["laborRate"]["addedRate"] == 40
+
+
+@needs_node
+def test_no_company_rate_means_the_shipped_33_and_nothing_breaks(ran):
+    """Nothing filed, the markup read failing, and a rate switched OFF all read as the sheet's own
+    $33.00. The page still opens (these builds all booted)."""
+    lr = ran["laborRate"]
+    for key in ("noRule", "down", "off"):
+        assert lr[key]["polishing"] == 33 and lr[key]["travel"] == 33, (key, lr[key])
+        assert lr[key]["lab-none"] == 33, (key, lr[key])
+
+
+@needs_node
+def test_a_saved_bid_keeps_its_rates_and_says_what_the_default_is(ran):
+    """New bids only. The saved bid's 33 and 36 are untouched and the library defaults are never
+    even asked for -- but each rate that differs from the company rate says 'Default $40.00'.
+
+    Mutation: remove the `laborDefaults` gate around applyLaborRate -- polishing becomes 40."""
+    lr = ran["laborRate"]
+    assert lr["saved"] == {"polishing": 33, "mockup": 36, "travel": 33}, lr["saved"]
+    assert lr["savedFetchedLaborDefaults"] is False
+    assert [x["text"] for x in lr["savedDefaultLines"]] == ["Default value: $40.00"] * 3
+    assert all(not x["hidden"] for x in lr["savedDefaultLines"])
+
+
+@needs_node
+def test_default_line_shows_only_while_the_rate_differs(ran):
+    """Hidden on every row of a new bid (a library row's own $55 is ITS default, G1), shown the
+    moment the estimator types 45 over a row, hidden again when they type the default back (the
+    in-place repaint, not a rebuild)."""
+    lr = ran["laborRate"]
+    # Render order since 2026-10-05: Travel Labor is drawn last, under the Travel dividing line.
+    assert [x["hidden"] for x in lr["newBidLines"]] == [True] * 6
+    assert lr["typedOver"]["hidden"] is False
+    assert lr["typedBack"]["hidden"] is True
+
+
+@needs_node
+def test_travel_labor_with_its_own_library_rate_shows_no_false_default_warning(ran):
+    """G1. Travel's library row says $41, the company rate is $40: a new bid opens Travel at 41 and
+    NOTHING warns (a row's default is the rate it was filled with). Typing 50 over it warns against
+    $41.00, not the company $40.
+
+    Mutation: remove `B.stampRateDefaults(...)` in init() -- Travel warns 'Default value: $40.00'
+    with nothing typed."""
+    t = ran["laborRate"]["travelOwn"]
+    assert t["rate"] == 41
+    assert all(x["hidden"] for x in t["lines"]), t["lines"]
+    assert t["typedOver"]["hidden"] is False
+    assert t["typedOver"]["text"] == "Default value: $41.00"
+
+
+@needs_node
+def test_the_labor_rate_formula_reads_only_a_plain_positive_dollar_figure(ran):
+    assert ran["laborRate"]["parsed"] == [33.5, 41, None, None, None, None, None]
+    assert ran["laborRate"]["fetchedMarkup"] is True
+
+
+# ── Lodging + Per Diem on the Labor step (Kyle's notes, B7, 2026-10-05) ─────
+@needs_node
+def test_the_labor_step_draws_a_dividing_line_then_the_three_travel_lines(ran):
+    """Hanz: "Line to separate travel; make labor for travel titled Travel Labor; separate line for
+    Travel Lodging and Per Diem; note the 70 mile rule." The Labor step draws the tasks, the Add
+    button, the Labor total, THEN a dividing line, then Travel Labor, Lodging and Per Diem, each
+    with its own 70-mile note. A fresh Lodging card starts OFF (grayed).
+
+    Mutation: render travelRows before the separator, or drop the note from travelCard."""
+    t = ran["travelCosts"]
+    o = t["order"]
+    assert 0 < o["addLine"] < o["sep"] < o["travelLabor"] < o["lodging"] < o["perDiem"], (
+        "the Labor step is not tasks, divider, Travel Labor, Lodging, Per Diem: %r" % o)
+    assert t["travelLaborLabel"] == "Travel Labor", "a saved draft's Travel row was not relabeled"
+    assert t["cardClassOff"], "a fresh Lodging card is not drawn grayed and off"
+    assert t["noteOnEach"] >= 3, "the 70-mile note is missing from a travel line: %r" % t["noteOnEach"]
+
+
+def test_auto_nights_are_the_crew_man_days_exactly_as_pricing_py_counts_them():
+    """The beta's auto Lodging/Per Diem quantity (travelQty = travelManDays, NOT divided by crew
+    size) must equal the nights backend/pricing.py bills a non-local job. The 2026-10-05 decision
+    says "man-days / crew size as pricing.py does"; pricing.py's nights are labor_raw/rate/8, which
+    IS the man-days (guys x days), so the two agree and the page follows the engine. Dividing by
+    crew size would make the on-screen bid disagree with pricing.py's D68 by the crew-size factor.
+    This is real code on both sides: compute_full_bid local vs not-local, crew 3 x (5 + .5 + .5)."""
+    import sys
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+    from pricing import compute_full_bid
+    crews = [(3, 5), (3, 0.5), (3, 0.5)]
+    far = compute_full_bid(9000, 10000, crews=crews, local=False)["travel"]
+    near = compute_full_bid(9000, 10000, crews=crews, local=True)["travel"]
+    man_days = sum(g * d for g, d in crews)  # 18
+    assert near == 0
+    assert far == man_days * 70 + man_days * 45 == 2070
+
+
+@needs_node
+def test_lodging_and_per_diem_price_inside_the_bid_and_off_adds_nothing(ran):
+    """THROUGH THE PAGE'S OWN HANDLERS. Switching Lodging on moves the bid by the nights (the crew's
+    16.5 man-days at the saved bid's $70) AND the markups on top -- more than the travel dollars --
+    while off adds exactly nothing. The quantity box shows the auto figure, typing leaves auto and
+    prices the typed number, and the switch brings it back.
+
+    Mutation: leave `travel:` out of bid() in polish-estimate.js -- the switch moves nothing."""
+    t = ran["travelCosts"]
+    assert t["baseTravel"] == 0, "a fresh travel line is priced while it is off"
+    assert t["lodgingOnTravel"] == 1155 == 16.5 * 70
+    assert t["lodgingOnSub"] == t["baseSub"] + 1155, "travel is not in the sub-total"
+    assert t["lodgingOnTotal"] - t["baseTotal"] > 1155, (
+        "the bid grew by no more than the travel dollars, so the markups are not applied to it")
+    assert t["lodgingModel"]["enabled"] is True and t["lodgingModel"]["hand"] is True, (
+        "the slider must write an explicit true and mark the line as set by hand")
+    assert t["costCellOn"] == "$1,155" and t["qtyAuto"] == "16.5"
+    assert t["typedLodging"]["qty_auto"] is False and t["typedTravel"] == 700, (
+        "typing a quantity did not leave auto and price on the typed number")
+    assert t["typedCostCell"] == "$700", "the cost cell did not repaint live: %r" % t["typedCostCell"]
+    assert t["backToAuto"]["qty_auto"] is True and t["backToAuto"]["qty"] == 16.5
+    assert t["bothOnTravel"] == 1155 + 990, "per diem at a typed $60 over 16.5 days is $990"
+    assert t["perDiemOffTravel"] == 1155, "switching per diem off again did not take it out"
+
+
+@needs_node
+def test_an_off_travel_line_is_left_out_of_review_and_the_saved_draft_says_what_is_on(ran):
+    """Review's Hotel and Per Diem card lists only the lines that are ON; an off line is out of the
+    list. The saved draft carries the whole travel block, enabled flags and the typed rate
+    included, so a reload shows what was priced.
+
+    Mutation: skip the `!tl.enabled` return in reviewPanel -- the off Per Diem reappears."""
+    t = ran["travelCosts"]
+    assert t["reviewHasCard"] and t["reviewHasLodging"] and t["reviewHasPerDiem"]
+    assert t["reviewOffHasLodging"] and not t["reviewOffHasPerDiem"], (
+        "an off line is still listed on Review")
+    s = t["savedTravel"]
+    assert s["lodging"]["enabled"] is True and s["per_diem"]["enabled"] is True
+    assert str(s["per_diem"]["rate"]) == "60", "the typed Per Diem rate was not saved"
+
+
+NOT_INCLUDED = "Not included. Switch Lodging or Per Diem on in the Labor step."
+
+
+@needs_node
+def test_review_always_draws_hotel_and_per_diem_with_a_note_when_both_are_off(ran):
+    """Hanz (2026-10-06): the Review step has a container titled Hotel and Per Diem on every bid.
+    With both lines off (the default) it is still there, says nothing is included, and is $0 in the
+    header and on its total row; the old title is gone.
+
+    Mutation: wrap the card in `if (trvRows.length)` again -- the container vanishes."""
+    c = ran["hotelCard"]["off"]
+    assert c["count"] == 1, "Review has no Hotel and Per Diem container when both lines are off"
+    assert NOT_INCLUDED in c["body"]
+    assert c["header"] == "$0" and c["total"] == "$0" and c["travel"] == 0
+    assert ">Hotel<" not in c["body"] and ">Per Diem<" not in c["body"], "an off line was listed"
+    assert not ran["hotelCard"]["oldTitleAnywhere"], "Review still carries the old card title"
+
+
+@needs_node
+def test_review_hotel_card_lists_only_lines_that_are_on_and_totals_the_bid_travel(ran):
+    """One line on: it is listed as Hotel with nights x rate and no note. Both on: both listed, and
+    the Hotel and Per Diem Total row and header equal the bid's travel figure to the dollar.
+
+    Mutation: total the card from anything but b.travel -- the total stops matching."""
+    one, both = ran["hotelCard"]["one"], ran["hotelCard"]["both"]
+    assert ">Hotel<" in one["body"] and ">Per Diem<" not in one["body"]
+    assert NOT_INCLUDED not in one["body"]
+    assert one["travel"] > 0 and one["total"] == one["header"]
+    assert ">Hotel<" in both["body"] and ">Per Diem<" in both["body"]
+    assert NOT_INCLUDED not in both["body"]
+    assert both["travel"] > one["travel"], "Per Diem added nothing to the card"
+    expected = "${:,.0f}".format(both["travel"]) if both["travel"] == int(both["travel"]) \
+        else "${:,.2f}".format(both["travel"])
+    assert both["total"] == expected == both["header"]
+
+
+@needs_node
+def test_a_renamed_lodging_label_is_shown_instead_of_hotel(ran):
+    """The estimator's own label on the lodging line wins; only the untouched default reads Hotel.
+
+    Mutation: force "Hotel" for every label -- the saved Motel line is relabelled."""
+    body = ran["hotelCard"]["renamed"]["body"]
+    assert ">Motel<" in body and ">Hotel<" not in body
+
+
+@needs_node
+def test_hotel_card_sits_between_labor_and_the_markup_subtotal(ran):
+    """Order on Review: Labor card, then Hotel and Per Diem, then the Subtotal / Markup block.
+
+    Mutation: draw the card before Labor or after the markup table -- the order assertion fails."""
+    for k in ("off", "one", "both"):
+        c = ran["hotelCard"][k]
+        assert 0 < c["labor"] < c["card"] < c["subtotal"], k
+
+
+@needs_node
+def test_a_new_bid_copies_the_two_rates_and_a_saved_bid_keeps_its_own(ran):
+    """A NEW bid copies Markups -> Global lodging / per diem ($80 / $50 in the fixture) and both
+    start OFF; a read that fails leaves the shipped $70 / $45; a saved bid keeps the 70 it was
+    stored with even though the company rate is now 80.
+
+    Mutation: apply the rates outside the `if (laborDefaults)` gate -- the saved bid becomes 80."""
+    t = ran["travelCosts"]
+    assert t["freshRates"] == {"lodging": 80, "per_diem": 50}
+    assert t["freshEnabled"] == [False, False]
+    assert t["downRates"] == {"lodging": 70, "per_diem": 45}
+    assert t["oldRates"]["lodging"] == 70, "a saved bid's lodging rate moved to the new company rate"
+
+
+@needs_node
+def test_a_local_job_grays_all_three_until_one_is_touched(ran):
+    """Under 70 miles (the `local` answer) the cards are gray; switching one on is the estimator's
+    choice, lifts the dim on that card and marks it by hand so the distance rule cannot undo it.
+
+    Mutation: drop `hand` from travelInert -- the card stays gray after being switched on."""
+    t = ran["travelCosts"]
+    assert "inert" in t["localClass0"]
+    assert "inert" not in t["localClassOn"] and t["localHand"] is True
+
+
+# ── DISTANCE DECIDES "LOCAL" (Kyle 9/18; Hanz, 2026-10-05) ──────────────────────────────────────
+# Executed through the page: init() asks POST /api/distance after the first paint, and the answer
+# sets the hidden conditions.local (still written to Polish!B4), the three travel lines and the
+# "N mi from Olathe office" note.
+
+UNKNOWN_NOTE = "Distance unknown — enter miles"
+
+
+def test_a_far_job_turns_the_three_travel_lines_on_and_writes_no_to_b4(ran):
+    """120.4 driving miles: not local, Lodging and Per Diem on, Travel Labor un-grayed, the note says
+    so, Review lists Lodging, and Polish!B4 is written "No" from the hidden answer.
+
+    Mutation: leave `conditions.local` alone in B.applyDistance, or stop writing the cell."""
+    d = ran["distance"]
+    assert d["requestBody"] == {"address": "100 Main St", "city": "Wichita", "state": "KS",
+                                "zip": "67202"}
+    assert d["requests"] == 1
+    f = d["far"]
+    assert f["note"] == "120.4 mi from Olathe office"
+    assert f["local"] is False and f["lodging"] is True and f["perDiem"] is True
+    assert f["lodgingGray"] is False and f["travelLaborGray"] is False
+    assert d["farCellB4"] == "No" and d["farModelLocal"] is False
+    assert d["farSavedDistance"]["miles"] == 120.4, "the figure is cached on the draft"
+    assert d["farReviewHasLodging"] is True
+
+
+def test_a_near_job_is_local_and_all_three_travel_lines_stay_gray(ran):
+    d = ran["distance"]
+    n = d["near"]
+    assert n["note"] == "30 mi from Olathe office"
+    assert n["local"] is True and n["lodging"] is False and n["perDiem"] is False
+    assert n["lodgingGray"] is True and n["travelLaborGray"] is True
+    assert d["nearCellB4"] == "Yes"
+    # Exactly 70 is far: "70 miles or more".
+    assert d["seventy"] == {"local": False, "lodging": True}
+
+
+def test_unknown_distance_never_guesses_and_the_estimator_can_type_miles(ran):
+    """No key / address not found / the service down: the line says so, the bid is unchanged (local,
+    all three gray), and a typed figure takes over -- and wins over everything after it.
+
+    Mutation: default an unknown distance to far (or to a number), or drop the typed override."""
+    d = ran["distance"]
+    u = d["unk"]
+    assert u["note"] == UNKNOWN_NOTE and u["distance"] is None
+    assert u["local"] is True and u["lodging"] is False and u["lodgingGray"] is True
+    assert "not set up" in u["status"]
+    t = d["typed85"]
+    assert t["distance"]["source"] == "typed" and t["distance"]["miles"] == 85
+    assert t["local"] is False and t["lodging"] is True and t["perDiem"] is True
+    assert t["note"] == "85 mi from Olathe office (typed by you)"
+    # The network going away is the same answer, with its own words.
+    dn = d["down"]
+    assert dn["note"] == UNKNOWN_NOTE and dn["local"] is True and dn["lodging"] is False
+    assert "did not answer" in dn["status"]
+
+
+def test_a_line_flipped_by_hand_is_never_moved_by_the_distance(ran):
+    """Lodging was flipped off by hand at 85 miles. Typing 20 and then 90 moves Per Diem (never
+    touched) both ways and leaves Lodging off both times. Clearing the miles returns to unknown.
+
+    Mutation: ignore `hand` in B.applyDistance."""
+    d = ran["distance"]
+    assert d["typed20"]["lodgingHand"] is True
+    assert (d["typed20"]["lodging"], d["typed20"]["perDiem"], d["typed20"]["local"]) == (False, False, True)
+    assert (d["typed90"]["lodging"], d["typed90"]["perDiem"], d["typed90"]["local"]) == (False, True, False)
+    c = d["cleared"]
+    assert c["distance"] is None and c["note"] == UNKNOWN_NOTE
+    assert c["local"] is True and c["perDiem"] is False and c["lodging"] is False
+
+
+def test_a_typed_decimal_in_the_miles_box_survives_the_rebuild(ran):
+    """The panel rebuilds on each keystroke; "12." must stay "12." so "12.5" is 12.5 miles (local),
+    not 125 (far, with Lodging and Per Diem switched on)."""
+    dec = ran["distance"]["decimal"]
+    assert dec["dotBox"] == "12."
+    assert dec["box"] == "12.5"
+    assert dec["snap"]["distance"]["miles"] == 12.5
+    assert dec["snap"]["local"] is True and dec["snap"]["lodging"] is False
+
+
+def test_a_slow_google_never_blocks_the_page_and_typed_miles_win(ran):
+    """init() resolved while the answer was still pending (the Labor step rendered, "Looking up"
+    shown); the estimator typed 10 meanwhile; when 200 miles finally arrived it was dropped.
+
+    Mutation: await the lookup inside init(), or apply the late answer over a typed one."""
+    d = ran["distance"]
+    assert "Looking up" in d["slowBusy"]["status"] and d["slowBusy"]["distance"] is None
+    a = d["slowAfter"]
+    assert a["distance"]["source"] == "typed" and a["distance"]["miles"] == 10
+    assert a["local"] is True and a["lodging"] is False
+
+
+def test_no_usable_address_means_no_request_and_a_plain_message(ran):
+    d = ran["distance"]
+    assert d["blankRequests"] == 0 and d["thinRequests"] == 0
+    assert d["blank"]["note"] == UNKNOWN_NOTE
+    assert "intake step" in d["blank"]["status"]
+
+
+def test_a_saved_bid_is_not_repriced_until_the_estimator_asks(ran):
+    """A bid with stated labor never looks the distance up on its own (that would add lodging to a
+    bid already quoted); the button does it, and the answer applies.
+
+    Mutation: drop the new-bid gate in init()."""
+    d = ran["distance"]
+    assert d["savedFetches"] == 0
+    assert d["savedBefore"]["note"] == UNKNOWN_NOTE and d["savedBefore"]["lodging"] is False
+    s = d["savedAfter"]
+    assert s["note"] == "150 mi from Olathe office" and s["lodging"] is True and s["local"] is False
+
+
+# ── "HOW THIS IS WORKED OUT" under the Travel heading (Hanz, 2026-10-06) ─────────────────────────
+# Executed through the page: the note is read out of the real DOM after the real init()/typing, and
+# the dollar figures in it are held to B.travelLineCost / B.laborCost (what the bid itself prices).
+
+def _how_line(how, label):
+    """The one line of the note that starts with `label` (a travel line's name)."""
+    for line in how.split("\n"):
+        if line.startswith(label + ":"):
+            return line
+    raise AssertionError("no %r line in the note: %r" % (label, how))
+
+
+def _last_dollars(line):
+    """The last dollar figure on a line, as a number: the line's answer."""
+    import re
+    return float(re.findall(r"\$([\d,]+(?:\.\d+)?)", line)[-1].replace(",", ""))
+
+
+def test_the_how_note_on_a_far_job_says_not_local_and_shows_every_sum(ran):
+    """150 miles: the note says NOT local, shows the three sums with real numbers, and each sum's
+    answer is exactly what the bid prices that line at.
+
+    Mutation: drop the note from laborPanel, or compute the sums in the note a second way."""
+    f = ran["distance"]["howNights"]["auto"]
+    how = f["how"]
+    assert how.startswith("150 mi from Olathe office. That is 70 miles or more, so this is NOT a "
+                          "local job: Travel Labor, Lodging and Per Diem come on.")
+    for label, key in (("Lodging", "lodging"), ("Per Diem", "per_diem")):
+        line = _how_line(how, label)
+        assert _last_dollars(line) == f["cost"][key] > 0
+        assert " x $" in line
+    assert "nights x $70.00" in _how_line(how, "Lodging")
+    assert "days x $45.00" in _how_line(how, "Per Diem")
+    travel = _how_line(how, "Travel Labor")
+    assert "drive hours (round trip at 60 mph)" in travel
+    assert _last_dollars(travel) == f["cost"]["travel"] > 0
+    assert "Man-days = guys x days on the labor lines above" in how
+
+
+def test_the_how_note_on_a_local_job_says_so_and_shows_the_lines_off(ran):
+    """30 miles: IS a local job, and all three lines read off, $0.
+
+    Mutation: say far for a near job, or show sums for a gray line."""
+    how = ran["distance"]["near"]["how"]
+    assert how.startswith("30 mi from Olathe office. That is under 70 miles, so this IS a local "
+                          "job: the three travel lines stay gray unless you switch one on.")
+    for label in ("Travel Labor", "Lodging", "Per Diem"):
+        assert _how_line(how, label) == label + ": off, $0"
+
+
+def test_the_how_note_when_the_distance_is_unknown_asks_for_the_miles(ran):
+    """No distance: it does not pretend to know, and tells the estimator what to type.
+
+    Mutation: treat unknown as local or as far."""
+    how = ran["distance"]["unk"]["how"]
+    assert how.startswith("Distance not known yet, so the tool cannot tell if this is a local job. "
+                          "Type the miles above.")
+    assert _how_line(how, "Lodging") == "Lodging: off, $0"
+
+
+def test_the_how_note_names_a_line_the_estimator_switched_by_hand(ran):
+    """Lodging was flipped off by hand at 85 miles; at 90 the distance would turn it on but does not,
+    and the note says exactly that, while Per Diem (never touched) is on.
+
+    Mutation: drop the `hand` sentence, or show Lodging's sum for a line that is off."""
+    d = ran["distance"]["typed90"]
+    assert "Lodging was switched off by hand, so the distance does not change it." in d["how"]
+    assert _how_line(d["how"], "Lodging") == "Lodging: off, $0"
+    assert _last_dollars(_how_line(d["how"], "Per Diem")) == d["cost"]["per_diem"] > 0
+    assert "Per Diem was switched" not in d["how"]
+
+
+def test_the_how_note_says_typed_when_nights_were_typed_and_repaints_with_the_miles(ran):
+    """Typing 10 nights marks the line (typed) and the note's figure follows; typing 20 miles over the
+    150 repaints the note in place to a local job, with no rebuild of the page's other cards.
+
+    Mutation: leave the note out of paintDistance (it would still read 'NOT a local job'). The
+    repaintNumbers path is held by the typed-labor-day test below."""
+    h = ran["distance"]["howNights"]
+    assert "(typed)" not in _how_line(h["auto"]["how"], "Lodging")
+    typed = _how_line(h["typed"]["how"], "Lodging")
+    assert "10 nights (typed) x $70.00 = $700.00" in typed
+    assert _last_dollars(typed) == h["typed"]["cost"]["lodging"] == 700
+    moved = h["local"]["how"]
+    assert moved.startswith("20 mi from Olathe office (typed by you). That is under 70 miles, so "
+                            "this IS a local job")
+    assert "NOT a local job" not in moved
+
+
+def test_the_how_note_follows_a_typed_labor_day_without_a_rebuild(ran):
+    """Typing Days on a labor line takes changed(false), which repaints in place and never rebuilds the
+    panel, so the note's man-days and dollars move only if repaintNumbers paints the note. The figure in
+    the note must equal what the bid prices the line at, before and after.
+
+    Mutation: drop the data-trv-how line from repaintNumbers (the note keeps the old man-days)."""
+    h = ran["distance"]["howDays"]
+    before, after = h["before"], h["after"]
+    assert _last_dollars(_how_line(before["how"], "Lodging")) == before["cost"]["lodging"] > 0
+    assert after["cost"]["lodging"] != before["cost"]["lodging"]
+    assert _last_dollars(_how_line(after["how"], "Lodging")) == after["cost"]["lodging"]
+    assert _last_dollars(_how_line(after["how"], "Per Diem")) == after["cost"]["per_diem"]
+    assert after["how"] != before["how"]
+
+
+# ── B7b: the Labor Calculator fills a NEW bid's default labor lines ──────────────────────────────
+def test_a_new_bid_fills_its_default_labor_from_the_calculator(ran):
+    """From SF: crew 3, 2,500 SF/day, 12,000 SF job -> 5 days at 10 h, company rate $40 = $6,000.
+    Fixed: 2 guys x 1 day at its own $50. A line with no mode keeps today's blank row.
+    Mutation: apply before the takeoff is seeded (days blank), or skip the laborCalc gate."""
+    lc = ran["laborCalc"]
+    p = lc["first"]["polishing"]
+    assert (p["guys"], p["days"], p["rate"], p["hours_per_day"]) == (3, 5, 40, 10)
+    assert lc["first"]["cost"] == 6000
+    m = lc["first"]["mockup"]
+    assert (m["guys"], m["days"], m["rate"]) == (2, 1, 50)
+    j = lc["first"]["jointfill"]
+    assert j["days"] == "" and "calc_default" not in j and j["rate"] == 40
+
+
+def test_changing_a_calculator_figure_shows_the_default_value_warning_and_typing_it_back_clears_it(ran):
+    lc = ran["laborCalc"]
+    assert lc["first"]["warnDays"] == {"text": "", "hidden": True}
+    assert lc["first"]["warnRate"] is True
+    assert lc["over"] == {"text": "Default value: 5", "hidden": False}
+    assert lc["back"] == {"text": "", "hidden": True}
+    assert lc["hrs"] == {"warn": {"text": "Default value: 10 hours", "hidden": False}, "cost": 4800}
+    # a rate typed over the calculator's OWN rate warns against that rate, not the company's
+    assert lc["mockRateBefore"] is True and lc["mockRateAfter"] == "Default value: $50.00"
+    assert lc["first"]["hoursSelect"] is True
+
+
+def test_a_saved_bid_is_never_recomputed_and_does_not_even_ask(ran):
+    sv = ran["laborCalc"]["saved"]
+    assert (sv["polishing"]["guys"], sv["polishing"]["days"]) == (4, 6) and sv["asked"] is False
+
+
+def test_no_sf_leaves_days_blank_and_an_absent_table_opens_exactly_as_before(ran):
+    lc = ran["laborCalc"]
+    assert lc["noSf"]["days"] == "" and lc["noSf"]["guys"] == 3
+    # typing days over a blank default must not warn "Default value: blank"
+    w = lc["noSfWarn"]
+    assert w is not None and (w["hidden"] or w["text"].strip() == "")
+    assert lc["gone"]["same"] is True and "calc_default" not in lc["gone"]["polishing"]
+
+
+def test_labor_days_follow_the_takeoff_until_the_estimator_edits_them(ran):
+    """G2. A From-SF line (3 crew, 2,500 SF/day): 12,000 SF -> 5 days; the takeoff goes to 20,000 ->
+    8 days, in the box too, with no 'Default value' warning; a fixed line never moves. After the
+    estimator types 11 the next SF change leaves 11. A new bid with no SF fills days as soon as SF
+    exists (5,000 -> 2). A SAVED bid's stale marker row (9 days on 17,500 SF) is not recomputed on
+    open or by an unrelated edit.
+
+    Mutation: drop the followLaborDays call in changed() -- afterUp stays 5."""
+    f = ran["laborCalc"]["followed"]
+    assert f["start"] == 5
+    assert f["afterUp"] == 8 and f["boxAfterUp"] == "8"
+    assert f["warnAfterUp"] == {"text": "", "hidden": True}
+    assert f["fixedStays"] == 1
+    assert str(f["editedStays"]) == "11"
+    assert f["noSfBlank"] == "" and f["noSfFilled"] == 2
+    assert f["savedOnOpen"] == 9 and f["savedAfterOtherEdit"] == 9
+    assert f["pureMoves"] == [4, 5]
+
+
+def test_lodging_and_per_diem_rates_warn_against_the_markup_global_rate_they_were_filled_with(ran):
+    """G3. New bid, Markups -> Global lodging $80 / per diem $50: both open at those and neither
+    warns. Typing 90 over lodging warns 'Default value: $80.00'; typing 80 back clears it. A saved
+    bid (no stamp) shows nothing.
+
+    Mutation: drop the rate_default stamp in applyTravelRates -- the warning never shows."""
+    w = ran["laborCalc"]["travelWarn"]
+    assert w["rates"] == [80, 50]
+    assert all(x["hidden"] for x in w["start"]), w["start"]
+    assert w["over"] == {"text": "Default value: $80.00", "hidden": False}
+    assert w["back"]["hidden"] is True
+    assert all(x["hidden"] for x in w["saved"]), w["saved"]
+
+
+def test_the_beta_page_writes_no_labor_cells_so_the_hours_per_day_cannot_split_the_workbook(ran):
+    """G4. Kyle's Polish tab prices labor as D37 = (A37*B37*C37)*IF($E$35="8 hour days",8,10) with ONE
+    sheet-wide E35, so a workbook labor cell holding a 10-hour line's days would be priced at 8.
+    What THIS page actually writes on a save (a bid mixing 10- and 8-hour lines): only the condition
+    cells and the Dye / Joint Filler rate and quantity cells -- never rows 35-46 of Polish (labor,
+    travel, E35) nor any Epoxy labor row. So the screen's labor ($6,000 + $640 = $6,640 here) never
+    reaches the workbook at all and the mixed-hours split cannot occur.
+
+    This pins that. The day a writer is added for those cells it MUST scale each line's days by
+    its hours_per_day / 8 (E35 stays '8 hour days'), and this test goes red to say so.
+
+    Mutation: have saveSoon add any Polish!A37..D46 key to cell_values -- this fails."""
+    import re
+    w = ran["laborWrites"]
+    assert w["screenLabor"] == 3 * 5 * 40 * 10 + 2 * 1 * 40 * 8
+    labor_rows = re.compile(r"^Polish!([A-Z]+)(3[5-9]|4[0-6])$")
+    hit = [k for k in w["keys"] if labor_rows.match(k) or k.startswith("Epoxy!") and
+           re.match(r"^Epoxy!([A-Z]+)(4[5-9]|5[0-9])$", k)]
+    assert hit == [], "the page now writes labor cells -- scale days by hours_per_day/8: %r" % hit
+
+
+def test_a_new_bids_fees_line_starts_at_the_defaults_tab_amount(ran):
+    """EXECUTED THROUGH THE PAGE'S OWN init (Hanz, 2026-10-06). A NEW bid's Fees + Textura starts at
+    the Global `fees_textura` rule, priced into the lump sum; typing over it shows the shared amber
+    "Default value: $N" and typing the default back clears it; the default rides the saved model so
+    the warning survives a reload; a SAVED bid keeps its own fees and shows no warning; no default
+    or a $0 one leaves the line at $0 with no warning.
+
+    Mutation: drop B.applyFeesDefault from init() and startModel/startTotal go red; drop
+    fees_default from migrateModel and reloadWarn goes red; apply it to a saved bid and
+    savedBidFees goes red."""
+    f = ran["feesDefault"]
+    assert f["startModel"] == {"fees": 250, "fees_default": 250}
+    assert f["startBox"] == "250" and f["startWarn"]["hidden"] is True
+    assert f["startTotal"] > f["noneTotal"], "the default did not reach the lump sum"
+    assert f["overWarn"] == {"text": "Default value: $250.00", "hidden": False}
+    assert f["overTotal"] > f["startTotal"]
+    assert f["backWarn"]["hidden"] is True
+    assert f["savedHasDefault"] == 250
+    assert f["reloadWarn"] == {"text": "Default value: $250.00", "hidden": False}
+    assert f["noneFees"] == 0 and f["noneDefault"] and f["noneBox"] == "0"
+    assert f["noneWarn"]["hidden"] is True
+    assert f["zeroDefault"] and f["zeroWarn"]["hidden"] is True and f["zeroFees"] == "75"
+    assert f["savedBidFees"] == 75 and f["savedBidDefault"] and f["savedBidWarn"]["hidden"] is True
+
+
+def test_the_fees_default_reads_only_a_plain_filed_applying_global_number(ran):
+    r = ran["feesDefault"]["rules"]
+    assert r["plain"] == 250 and r["dollar"] == 1250 and r["decimal"] == 99.5
+    assert r["zero"] == 0, "zero is a real answer, not nothing"
+    for k in ("off", "expr", "blank", "none", "notList", "otherLine", "otherLayout"):
+        assert r[k] is None, k
+
+
+# ── every default-pulled row's estimate toggle moves the lump sum (Hanz, 2026-10-06) ──────────────
+_PULLED_ROWS = [
+    "default assembly takeoff row", "default material takeoff row", "joint filler condition row",
+    "dye condition row", "favorited custom labor line", "Travel Labor", "Lodging", "Per Diem",
+]
+
+
+def test_the_new_bid_really_pulled_in_one_of_every_default(ran):
+    base = ran["toggleMovesTotalBase"]
+    assert base["takeoff"] == ["a1", "i4"], base
+    assert base["labor"] == ["polishing", "mockup", "jointfill", "travel", "c1"], base
+    assert base["total"] > 0
+
+
+@pytest.mark.parametrize("name", _PULLED_ROWS)
+def test_a_default_rows_switch_moves_the_lump_sum_by_exactly_its_contribution(ran, name):
+    """EXECUTED THROUGH THE PAGE: a library with non-zero prices, a NEW bid, a click on the row's
+    own switch. The total after the click equals an oracle priced by the two real engines from the
+    model with that one flag changed; clicking again returns the original total to the dollar.
+    A row that started OFF (conditions, Lodging, Per Diem) rises; one that started ON drops.
+
+    Mutation: make laborCost ignore rowOn, make materialTotal skip the rowOn test, drop the
+    `if (M.conditions.dye)` gate, or have travelLineCost ignore rowOn -- the matching row goes red."""
+    r = ran["toggleMovesTotal"][name]
+    assert r["hasSwitch"], "%s has no switch on the estimate" % name
+    assert r["afterFlip"] != r["before"], "%s: the toggle did not move the lump sum" % name
+    assert r["afterFlip"] == r["oracleFlip"], (
+        "%s: the lump sum after the click is not what the engines price for that change" % name)
+    assert r["back"] == r["before"], "%s: switching back did not restore the total" % name
+    if r["startOn"]:
+        assert r["afterFlip"] < r["before"], "%s: switching an included row off did not drop it" % name
+    else:
+        assert r["afterFlip"] > r["before"], "%s: switching an excluded row on did not raise it" % name
+
+
+@pytest.mark.parametrize("name,gray", [
+    ("default assembly takeoff row", "inert"), ("default material takeoff row", "inert"),
+    ("favorited custom labor line", " off"), ("Travel Labor", " off"),
+    ("Lodging", " off"), ("Per Diem", " off")])
+def test_an_off_default_row_is_grayed_and_an_on_one_is_not(ran, name, gray):
+    r = ran["toggleMovesTotal"][name]
+    off_card = r["cardAfterFlip"] if r["startOn"] else r["cardBefore"]
+    on_card = r["cardBefore"] if r["startOn"] else r["cardAfterFlip"]
+    assert gray in off_card, "%s: switched off but not grayed: %r" % (name, off_card)
+    assert gray not in on_card, "%s: switched on but still grayed: %r" % (name, on_card)
+    sw_off = r["swAfter"] if r["startOn"] else r["swBefore"]
+    assert sw_off == "false"
+
+
+def test_the_remove_existing_switch_moves_the_lump_sum(ran):
+    r = ran["toggleMovesTotal"]["remove-existing condition row"]
+    assert r["hasSwitch"] and r["swAfter"] == "true"
+    assert r["afterFlip"] != r["before"]
+
+
+# ── the two toggles are independent (Hanz, 2026-10-06) ────────────────────────────────────────────
+def test_a_library_default_on_only_sets_a_new_bids_starting_state(ran):
+    """(3) EXECUTED THROUGH init: the same library with default_on true / false / never set. True and
+    unset open every default row ON; false opens the default assembly, material, custom labor line and
+    Travel Labor OFF, and the lump sum is lower by their contributions.
+
+    Mutation: make seedDefaultTakeoff ignore default_on, or seedLibraryLabor ignore it."""
+    t = ran["toggleIndependence"]
+    assert t["startsOn"]["takeoff"] == [True, True] and t["startsUnset"] == t["startsOn"]
+    assert "travel:true" in t["startsOn"]["labor"] and "c1:true" in t["startsOn"]["labor"]
+    off = t["startsOff"]
+    assert off["takeoff"][:2] == [False, False]
+    assert "travel:false" in off["labor"] and "c1:false" in off["labor"]
+    assert off["total"] < t["startsOn"]["total"]
+
+
+def test_flipping_rows_on_an_estimate_never_writes_to_the_library(ran):
+    """(1) Every takeoff row, every labor row, Lodging and Dye switched on the estimate, the bid
+    saved: not one request left the page after init (so no PATCH/POST/PUT/DELETE of /api/library*),
+    and the library fixture the page read is byte-identical afterwards. The flips did change the bid.
+
+    Mutation: have the on/off handlers call api('/api/library/...', {method:'PATCH'})."""
+    t = ran["toggleIndependence"]
+    assert t["flipCalls"] == [], t["flipCalls"]
+    assert t["libraryUntouched"] is True
+    assert t["flippedDiffers"] is True
+
+
+def test_changing_a_library_default_on_after_a_bid_is_saved_changes_nothing_on_that_bid(ran):
+    """(2) A bid saved with the default assembly row and the custom labor line switched OFF, reopened
+    under the same library, under one whose default_on is false everywhere (so the rows it left ON --
+    material, Travel -- are told OFF by the library) and under one whose default_on now agrees with
+    the flips: identical row states and the identical total each time.
+
+    Mutation: let the new-bid seeding run on a bid that already has a saved model."""
+    t = ran["toggleIndependence"]
+    assert t["savedFlips"] == {"takeoff0": False, "c1": False}
+    s = t["saved"]
+    assert s["here"]["takeoff"] == [False, True]
+    assert "travel:true" in s["here"]["labor"] and "c1:false" in s["here"]["labor"]
+    assert s["libOff"] == s["here"], "a library default_on change reached a saved bid"
+    assert s["libMatches"] == s["here"], "a library default_on change reached a saved bid"
