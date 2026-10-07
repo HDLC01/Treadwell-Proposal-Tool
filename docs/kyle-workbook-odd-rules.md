@@ -99,11 +99,16 @@ those fractional bags: pounds of sand per bag times the bags, divided by 2,000, 
 
 ### 8. Leveling charges an hour of travel even on a local job
 
-Cells: `Leveling!B48`, `Leveling!D48`, `Epoxy!B52`, `Polish!B44`.
+Cells: `Leveling!A48`, `Leveling!B48`, `Leveling!D48`, `Epoxy!B52`, `Polish!B44`.
 
 The Leveling tab ships with 1 typed into the travel hours cell (B48), and nothing there looks at the Local
-answer. For 6 people at $33.66 an hour that is $201.96 of travel labor on a job next door, and it goes into
-Install Labor (D49). Epoxy and Polish ship with 0 travel hours.
+answer. The travel line is person-days times those hours times the travel rate ($33.66 an hour). Person-days
+(A48) is not a head count. It is the guys times the days of every crew row in the labor table above it, added
+up: 3 guys for 4 days and 2 guys for 3 days is 18 person-days.
+
+The tab ships with one crew row, 6 guys for 1 day, so a job next door carries 6 person-days: $201.96 of travel
+labor. A crew of 6 for 5 days is 30 person-days, and the same local job carries $1,009.80. It goes into Install
+Labor (D49). Epoxy and Polish ship with 0 travel hours.
 
 ### 9. Leveling's overage is taken on the powders only
 
@@ -143,9 +148,9 @@ is something else. The sheet prices it at $100. Following System 2 it would be $
 Cells: `Polish!C37`, `Polish!C38`, `Leveling!C44`, `Leveling!C45`.
 
 The template file stores the last answer Excel calculated next to each formula. Those answers were calculated
-with a labor rate of $32.20 (Polish, Epoxy, Seal) and $32.52 (Leveling and the Gyp tabs). The cells now hold $33
-and $33.66. So a number read from the file without recalculating is a few dollars off what Excel shows after
-a recalculation. The estimating tool always calculates, so it is not affected. For our check we put the old
+with a labor rate of $32.20 on five tabs (Polish, Epoxy, Epoxy blank, Seal and Seal (+Jnts)) and $32.52 on six
+(Leveling and the five Gyp tabs). The cells now hold $33 and $33.66 (Seal (+Jnts) reads its rate from Seal). So a
+number read from the file without recalculating is a few dollars off what Excel shows after a recalculation. The estimating tool always calculates, so it is not affected. For our check we put the old
 rates back for a moment, and every one of the roughly 17,000 saved answers in the workbook then matched the
 engine to the cent.
 
