@@ -394,6 +394,52 @@ def test_the_public_repo_never_gets_node_modules_or_a_real_job_workbook():
         assert not ignored(path), path + " belongs to the repository and must not be ignored"
 
 
+# ── reading the template for the oracle must not change what the app reads next ─
+def _dropdowns_left_by(read, monkeypatch, sheet="Polish"):
+    """What the NEXT caller of read_sheet_grid(sheet) gets, after `read()` has had its turn at the live
+    template. read_sheet_grid keeps one result per (path, sheet, mtime) for the whole process and hands the
+    same dict to everyone, so what one test caches is what a later test in that worker sees. The cache is
+    swapped for an empty scratch one (and put back when the test ends), so this neither depends on nor
+    disturbs what the rest of the suite has already cached."""
+    monkeypatch.setattr(S.ew, "_SHEET_GRID_CACHE", {})
+    read()
+    return S.ew.read_sheet_grid(sheet)["dropdowns"]
+
+
+def test_the_oracles_readers_leave_the_apps_sheet_cache_as_the_app_would_have_it(monkeypatch):
+    """The first full run of this phase failed test_taxable_flag_reaches_every_sheet. The oracle had read the
+    live template with the dropdown parser off, that result went into the process-wide cache under the key
+    every normal read uses, and the next test in the same worker to ask for the Polish tab found no Yes/No
+    pickers. Every way the oracle reads the live template has to leave behind exactly what the app's own
+    read would have."""
+    app = _dropdowns_left_by(lambda: S.ew.read_sheet_grid("Polish"), monkeypatch)
+    assert app.get("B6") == ["Yes", "No"], (
+        "the Polish tab keeps its Yes/No pickers in x14 validations; a fresh read has to find them or this "
+        "test proves nothing")
+    readers = {
+        "_grid": lambda: S._grid("Polish", S.TEMPLATE_PATH),
+        "normalised_cells": lambda: S.normalised_cells(["Polish"]),
+        "template_spec": lambda: S.template_spec(),
+    }
+    for name, read in readers.items():
+        assert _dropdowns_left_by(read, monkeypatch) == app, (
+            name + " left the sheet cache different from what the app's own read would have put there")
+
+
+def test_that_check_can_fail_a_read_without_the_dropdown_parser_does_poison_the_cache(monkeypatch):
+    """Proof the comparison above is not vacuous: the OLD oracle read (parse_x14 off, on the live template)
+    leaves the Polish tab with no pickers in the shared cache. If this ever goes red because
+    read_sheet_grid's cache key now includes parse_x14, the cause is fixed at its root: delete this test
+    and the one above."""
+    app = _dropdowns_left_by(lambda: S.ew.read_sheet_grid("Polish"), monkeypatch)
+
+    def old_read():
+        S.ew.read_sheet_grid("Polish", path=S.TEMPLATE_PATH, parse_x14=False)
+
+    left = _dropdowns_left_by(old_read, monkeypatch)
+    assert left != app and not left, "a read without the parser should have left no dropdowns behind"
+
+
 # ── where HyperFormula is installed, the recorded files are re-derived ───────
 def _hyperformula_installed() -> bool:
     """Can docs/excel-parity-audit/engine.js find hyperformula? (A node_modules beside it, or NODE_PATH.)"""

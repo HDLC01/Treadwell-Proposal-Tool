@@ -49,10 +49,17 @@ TEMPLATE_PATH = ew.TEMPLATE_PATH
 # ── the workbook, in the shape the engine loads ──────────────────────────────
 def _grid(sheet: str, path: pathlib.Path) -> dict:
     """read_sheet_grid for one sheet, with openpyxl's "extension is not supported" chatter muted.
-    parse_x14=False skips the dropdown parser: the cell list does not depend on it."""
+
+    On the LIVE template this is the app's own call, dropdown parser included. read_sheet_grid keeps
+    one cached result per (path, sheet, mtime) for the whole process, and parse_x14 is not part of
+    that key, so a read without the parser would leave the Polish tab with no Yes/No pickers for
+    every later reader in the same worker (test_taxable_flag_reaches_every_sheet failed exactly that
+    way on the first full run). A copy has a key of its own and nothing else reads it, so it skips
+    the parser: the cell list, which is all the oracle reads, does not depend on it."""
+    live = pathlib.Path(path) == pathlib.Path(TEMPLATE_PATH)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        return ew.read_sheet_grid(sheet, path=path, parse_x14=False)
+        return ew.read_sheet_grid(sheet, path=path, parse_x14=live)
 
 
 def sheet_names(path: pathlib.Path = TEMPLATE_PATH) -> list:
