@@ -161,7 +161,9 @@
             if (r && r.layout === "global" && r.line_key === "fees_textura") FEES_RULE = r;
           });
           GLOBAL_MARKUP = (mj.rules || []).filter(function (r) {
-            return r.layout === "global" && r.applies && r.line_key !== "fees_textura";
+            // fees_textura has its own row (feesDefaultRow); the labor rate lives on the Labor tab.
+            return r.layout === "global" && r.applies && r.line_key !== "fees_textura" &&
+                   r.line_key !== "labor_rate";
           }).map(function (r) {
             // id AND line_key KEPT. The Defaults tab can now edit these, and an edit here
             // PUTs the same markup_rules row the Markup page edits -- one home, two doors.
@@ -3563,6 +3565,11 @@
    *  Today it holds the TRAVEL section -- Travel Labor, Lodging and Per Diem -- and the rest of the
    *  calculator (per-line crew/production-rate modes) is a queued follow-up.
    *
+   *  THE COMPANY LABOR RATE IS FILED THROUGH THE SAME CODE, from the LABOR tab (Hanz, 2026-10-09:
+   *  "remove the labor row from Markup and transfer it to labor tab"). It is the Global line
+   *  `labor_rate` in the same markup_rules table, so loadGlobalRules reads it with the travel
+   *  figures and fileGlobalRate saves all three. Nothing moved in the database.
+   *
    *  LODGING AND PER DIEM ARE NOT STORED HERE. They are the Markup page's Global lines
    *  `travel_lodging` ($70 a night) and `travel_per_diem` ($45 a day), and the boxes below are a
    *  second DOOR onto those same markup_rules rows -- one home, so the two screens cannot disagree.
@@ -3579,11 +3586,14 @@
     { line: "travel_per_diem", label: "Per Diem", per: "day", shipped: 45,
       how: "One charge a day away, for meals. Days are counted the same way as nights." }
   ];
+  /** The company labor rate's box, on the Labor tab. `shipped` is bid-model's one constant, read
+   *  lazily so this block stays the only place that names the line. */
+  var LABOR_RATE_DEF = { line: "labor_rate", label: "Labor rate", per: "hour" };
   var TRAVEL_RULES = {};            // line_key -> the filed markup_rules row, when there is one
   var TRAVEL_RULES_LOADED = false;
   var TRAVEL_RULES_ERR = false;
 
-  async function loadTravelRules() {
+  async function loadGlobalRules() {
     try {
       var res = await api("/api/markup/rules?layout=global");
       if (!res.ok) throw new Error("HTTP " + res.status);
@@ -3615,7 +3625,7 @@
     if (!body) return;
     if (!TRAVEL_RULES_LOADED) {
       body.innerHTML = '<p class="paneintro">Loading...</p>';
-      Promise.all([loadTravelRules(), loadCalcRows()]).then(renderLabCalc);
+      Promise.all([loadGlobalRules(), loadCalcRows()]).then(renderLabCalc);
       return;
     }
     var B = window.TWBidModel;
@@ -3669,16 +3679,22 @@
     renderTryIt();
   }
 
-  /** Save one travel rate. A PUT of the whole markup row, notes carried so nothing filed elsewhere
-   *  is cleared. A blank box files nothing (the shipped figure stands); anything that is not a
-   *  positive number is refused here in words rather than as a 400. */
+  /** Save one travel rate. See fileGlobalRate; the Labor tab's labor-rate box shares it. */
   async function saveTravelRate(input) {
     var key = input.getAttribute("data-travel-rate");
     var def = null;
     TRAVEL_KEYS.forEach(function (t) { if (t.line === key) def = t; });
-    var out = $("labcalc-alert");
-    var say2 = function (m) { if (out) out.textContent = m || ""; };
     if (!def) return;
+    return fileGlobalRate(def, input, $("labcalc-alert"));
+  }
+
+  /** File one Global dollar figure (lodging, per diem, the company labor rate). A PUT of the whole
+   *  markup row, notes carried so nothing filed elsewhere is cleared. A blank box files nothing
+   *  (the shipped figure stands); anything that is not a positive number is refused here in words
+   *  rather than as a 400. `def` is {line, label, per, shipped}; `out` is the line that says so. */
+  async function fileGlobalRate(def, input, out) {
+    var key = def.line;
+    var say2 = function (m) { if (out) out.textContent = m || ""; };
     var raw = String(input.value || "").trim().replace(/^\$/, "");
     var prev = travelFigure(TRAVEL_RULES[key]);
     if (raw === prev) return;
@@ -3714,6 +3730,44 @@
       say2("Couldn't reach the server. Nothing was saved.");
       input.value = prev;
     }
+  }
+
+  /** The company labor rate, as the box at the top of the Labor tab draws it. The figure on file
+   *  when there is one, else the shipped one as a placeholder (admin) or as plain text (everyone
+   *  else). Never throws; it waits for the shared read of the Global rows the first time. */
+  function renderLaborRate() {
+    var host = $("labor-rate-box");
+    if (!host) return;
+    if (!TRAVEL_RULES_LOADED) {
+      host.innerHTML = '<p class="paneintro">Loading...</p>';
+      loadGlobalRules().then(renderLaborRate);
+      return;
+    }
+    var shipped = window.TWBidModel.SHIPPED_LABOR_RATE;
+    var fig = travelFigure(TRAVEL_RULES[LABOR_RATE_DEF.line]);
+    var html = '<div class="card"><div class="areaband"><label for="labor-rate-input"><b>Labor rate</b></label> ';
+    if (ADMIN) {
+      html += '<span class="money"><span>$</span><input id="labor-rate-input" class="num cell-cost" ' +
+        'type="text" inputmode="decimal" data-labor-rate="1" value="' + esc(fig) + '" placeholder="' +
+        esc(String(shipped)) + '" aria-label="Labor rate, dollars an hour" /></span> an hour';
+    } else {
+      html += '<span id="labor-rate-input" class="labor-rate-fig">' +
+        esc(L.money(fig === "" ? shipped : Number(fig))) + '</span> an hour';
+    }
+    html += '</div><p class="paneintro">New estimates start every labor line at this rate. ' +
+      'A saved bid keeps its own.</p>';
+    if (TRAVEL_RULES_ERR) {
+      html += '<p class="ronote">Could not read the saved rate, so the box is empty. ' +
+        'Reload to try again.</p>';
+    }
+    host.innerHTML = html + '</div>';
+  }
+
+  /** Save the company labor rate: the shared Global-figure save, reported on the Labor tab. */
+  async function saveLaborRate(input) {
+    var def = { line: LABOR_RATE_DEF.line, label: LABOR_RATE_DEF.label, per: LABOR_RATE_DEF.per,
+                shipped: window.TWBidModel.SHIPPED_LABOR_RATE };
+    return fileGlobalRate(def, input, $("labor-rate-alert"));
   }
 
   // ── the Labor Calculator's per-line modes (Kyle's notes B7b) ───────────────
@@ -3781,7 +3835,7 @@
       '<p class="paneintro">Pick how each line fills in on a <b>new</b> estimate. <b>From SF</b> ' +
       "works the days out from the job's square feet (days = SF / production rate, rounded up). " +
       '<b>Fixed</b> uses the guys and days you type. A blank rate uses the company labor rate (' +
-      esc(L.money(co)) + ' an hour). The estimator can still change any of it on the bid, and a ' +
+      esc(L.money(co)) + ' an hour, set on the Labor tab). The estimator can still change any of it on the bid, and a ' +
       'saved bid is never recomputed.</p>' +
       '<div class="card"><div class="tw"><table><thead><tr><th>Line</th><th>Mode</th>' +
       '<th>Crew and production</th><th>Hours a day</th><th class="n">Rate</th>' +
@@ -3999,6 +4053,7 @@
     $(TAB_OF[p]).addEventListener("click", function () {
       showView(p);
       if (p === "labcalc") renderLabCalc();
+      if (p === "labor") renderLaborRate();
     });
   });
   restoreView();
@@ -5156,5 +5211,14 @@
     renderLabCalc();
   });
 
-  load().then(function () { if (view === "labcalc") renderLabCalc(); });
+  // The Labor tab's rate box is the other door onto the same Global rows.
+  $("pane-labor").addEventListener("change", function (e) {
+    var el = e.target;
+    if (el && el.getAttribute && el.getAttribute("data-labor-rate") !== null) saveLaborRate(el);
+  });
+
+  load().then(function () {
+    renderLaborRate();
+    if (view === "labcalc") renderLabCalc();
+  });
 })();

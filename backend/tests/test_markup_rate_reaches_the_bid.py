@@ -1194,9 +1194,10 @@ def test_the_admin_page_says_whether_each_row_reaches_the_workbook(ran):
     for name, word in (("travelLodgingGlobal", "Lodging"), ("travelPerDiemGlobal", "Per Diem")):
         assert "Estimating Tool v2 copies this figure onto every NEW bid" in s[name]             and word in s[name] and "workbook does not read it" in s[name], (
             "a travel figure's row misstates what reads it: %s -> %r" % (name, s[name]))
-    # The labor rate and Fees + Textura defaults are read by the beta too (2026-10-06): their rows
-    # must not tell an admin the figure "changes no bid".
-    for name, word in (("laborRateGlobal", "labor lines"), ("feesTexturaGlobal", "Fees + Textura")):
+    # The Fees + Textura default is read by the beta too (2026-10-06): its row must not tell an
+    # admin the figure "changes no bid". (The labor rate has no row on this page since 2026-10-09;
+    # it is set on Items & Assemblies -> Labor.)
+    for name, word in (("feesTexturaGlobal", "Fees + Textura"),):
         assert ("starts every NEW bid" in s[name] and word in s[name]
                 and "changes no bid" not in s[name]), (
             "a beta default's row misstates what reads it: %s -> %r" % (name, s[name]))

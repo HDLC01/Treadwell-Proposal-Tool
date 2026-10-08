@@ -503,7 +503,6 @@ out.builtin = MK.BUILTIN;
     bondGlobal: say("global", row("bond", { formula: "1%" })),
     hardBidGlobal: say("global", row("hard_bid", { formula: "-4%" })),
     travelLodgingGlobal: say("global", row("travel_lodging", { formula: "70" })),
-    laborRateGlobal: say("global", row("labor_rate", { formula: "33" })),
     feesTexturaGlobal: say("global", row("fees_textura", { formula: "0" })),
     travelPerDiemGlobal: say("global", row("travel_per_diem", { formula: "45" })),
     // gyp soft costs: the per-(layout, line) hole

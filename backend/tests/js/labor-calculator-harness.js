@@ -32,7 +32,7 @@ const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
 
 function make(opts) {
   const els = {};
-  ["labcalc-body", "labcalc-ro", "labcalc-alert", "labcalc-tryout"].forEach((id) => {
+  ["labcalc-body", "labcalc-ro", "labcalc-alert", "labcalc-tryout", "labor-rate-box", "labor-rate-alert"].forEach((id) => {
     els[id] = { id, innerHTML: "", textContent: "", hidden: false };
   });
   const puts = [];
@@ -71,6 +71,7 @@ function make(opts) {
     return { ok: true, status: 200, json: async () => ({ ok: true, rules: clone(opts.rules || []) }) };
   };
   const body = BLOCK + "\nreturn { renderLabCalc: renderLabCalc, saveTravelRate: saveTravelRate, " +
+    "renderLaborRate: renderLaborRate, saveLaborRate: saveLaborRate, " +
     "travelFigure: travelFigure, rules: function () { return TRAVEL_RULES; }, " +
     "calcEdit: calcEdit, renderTryIt: renderTryIt, calcProblem: calcProblem, " +
     "setTry: function (v) { CALC_TRY_SF = v; }, calc: function () { return CALC; }, " +
@@ -86,6 +87,8 @@ const input = (key, value) => ({
   value: value,
   getAttribute: (k) => (k === "data-travel-rate" ? key : null),
 });
+const rateBox = (value) => ({ value: value,
+  getAttribute: (k) => (k === "data-labor-rate" ? "1" : null) });
 const RULE = (key, formula, extra) => Object.assign({ id: "r-" + key, layout: "global",
   line_key: key, formula: formula, applies: true, notes: "" }, extra || {});
 
@@ -284,6 +287,56 @@ const RULE = (key, formula, extra) => Object.assign({ id: "r-" + key, layout: "g
     const html = s.els["labcalc-body"].innerHTML;
     out.calcNonAdmin = { controls: (html.match(/data-lcalc="/g) || []).length +
                                    (html.match(/data-lcalc-mode/g) || []).length };
+  }
+
+  // ── THE COMPANY LABOR RATE, on the Labor tab (Hanz, 2026-10-09) ──────────────────────────────
+  {
+    const s = make({ rules: [RULE("labor_rate", "40", { notes: "kept note" })] });
+    s.api.renderLaborRate();
+    const loadingFirst = s.els["labor-rate-box"].innerHTML;
+    await settle();
+    const html = s.els["labor-rate-box"].innerHTML;
+    out.laborRate = {
+      loadingFirst: loadingFirst,
+      box: /data-labor-rate="1" value="40" placeholder="33"/.test(html),
+      anHour: html.indexOf("an hour") !== -1,
+      sentence: html.indexOf("New estimates start every labor line at this rate. A saved bid keeps its own.") !== -1,
+      emDash: html.indexOf("—") !== -1,
+    };
+    await s.api.saveLaborRate(rateBox("$44.5"));
+    out.laborRateSaved = { puts: s.puts, alert: s.els["labor-rate-alert"].textContent,
+                           cached: s.api.rules()["labor_rate"].formula };
+    const before = s.puts.length;
+    await s.api.saveLaborRate(rateBox("44.5"));
+    await s.api.saveLaborRate(rateBox(""));
+    const bx = rateBox("abc");
+    await s.api.saveLaborRate(bx);
+    out.laborRateNoops = { sent: s.puts.length - before, back: bx.value,
+                           alert: s.els["labor-rate-alert"].textContent };
+  }
+  {
+    const s = make({});
+    s.api.renderLaborRate(); await settle();
+    out.laborRateUnfiled = /data-labor-rate="1" value="" placeholder="33"/.test(
+      s.els["labor-rate-box"].innerHTML);
+    const s2 = make({ rules: [RULE("labor_rate", "40")], putStatus: 403 });
+    s2.api.renderLaborRate(); await settle();
+    const bx = rateBox("55");
+    await s2.api.saveLaborRate(bx);
+    out.laborRate403 = { back: bx.value, alert: s2.els["labor-rate-alert"].textContent };
+    const n = make({ admin: false, rules: [RULE("labor_rate", "40")] });
+    n.api.renderLaborRate(); await settle();
+    const nh = n.els["labor-rate-box"].innerHTML;
+    out.laborRateNonAdmin = { inputs: (nh.match(/<input/g) || []).length, shows: nh.indexOf("$40.00") !== -1,
+                              unfiledShows33: false };
+    const n2 = make({ admin: false });
+    n2.api.renderLaborRate(); await settle();
+    out.laborRateNonAdmin.unfiledShows33 = n2.els["labor-rate-box"].innerHTML.indexOf("$33.00") !== -1;
+    // Lodging still PUTs the global row through the shared helper
+    const t = make({ rules: [RULE("travel_lodging", "80", { notes: "n" })] });
+    t.api.renderLabCalc(); await settle();
+    await t.api.saveTravelRate(input("travel_lodging", "91"));
+    out.travelStillSaves = t.puts;
   }
 
   console.log(JSON.stringify(out));

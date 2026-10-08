@@ -1058,7 +1058,7 @@
   }
 
   // ── the model the page holds ────────────────────────────────────────────────
-  /** THE COMPANY LABOR RATE. One number, set on Markups -> Global (line_key `labor_rate`), and
+  /** THE COMPANY LABOR RATE. One number, set on Items & Assemblies -> Labor (filed as the Global markup row `labor_rate`), and
    *  the starting rate of every labor line on a NEW bid: the three crew rows, Travel Labor, every
    *  library labor row that has no rate of its own, and every line the estimator adds. 33 is
    *  Kyle's sheet (C37 / C44) and is what stands when nothing is filed or the read failed.
@@ -1231,7 +1231,7 @@
              // name that is exactly the old "Travel" (the table was seeded with it) reads the same.
              label: travelLabel(r.name),
              guys: "", days: "",
-             // `dflt` is the company labor rate (Markups -> Global). Omitted, it is the shipped
+             // `dflt` is the company labor rate (Items & Assemblies -> Labor). Omitted, it is the shipped
              // $33.00, which is what the library page's Reset and its "is this still the shipped
              // row" comparison rely on -- they call travelSeed() with no second argument.
              rate: (isBlank(r.rate) || !isFinite(rate)) ? laborRateOrShipped(dflt) : rate,
@@ -2319,7 +2319,7 @@
     LABOR_CALC_BUILTINS: LABOR_CALC_BUILTINS, dayHours: dayHours, laborCalcValues: laborCalcValues, applyLaborCalc: applyLaborCalc,
     laborCalcDiffers: laborCalcDiffers,
     laborUnstated: laborUnstated,
-    // The company labor rate (Markups -> Global): read, applied to a new bid, and the fallback.
+    // The company labor rate (Items & Assemblies -> Labor): read, applied to a new bid, and the fallback.
     SHIPPED_LABOR_RATE: SHIPPED_LABOR_RATE, laborRateOrShipped: laborRateOrShipped,
     laborRateFromRules: laborRateFromRules, applyLaborRate: applyLaborRate,
     stampRateDefaults: stampRateDefaults, followLaborDays: followLaborDays,
