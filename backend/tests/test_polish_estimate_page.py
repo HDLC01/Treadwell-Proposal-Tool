@@ -3766,6 +3766,24 @@ def test_ticked_lines_become_rows_resolved_the_way_the_rows_own_field_resolves_t
 
 
 @needs_node
+def test_esc_closes_the_pop_up_even_when_focus_is_outside_it(ran):
+    """Mutation: remove the document keydown listener in library-picker.js. Esc fired on body (focus
+    after a click on the heading or a locked row) then leaves the pop-up open."""
+    o = ran["addPopup"]["escOutside"]
+    assert o["closed"] and o["rows"] == 3, o
+    assert o["focusedBack"] == 2, "focus did not return to the opener: %r" % o
+    assert o["listenersAfter"] == o["listenersWhileOpen"] - 1, (
+        "the document listener outlived the pop-up: %r" % o)
+
+
+@needs_node
+def test_a_ticked_assembly_takes_its_own_unit_when_another_shares_its_name(ran):
+    """Mutation: drop the unit lines after `row.assembly_id = p.id` in addPickedTakeoffRow. The
+    second Cove Base (SF) then lands as LF, the unit of the first one found by name."""
+    assert ran["addPopup"]["dupName"] == [{"id": "a2", "unit": "LF"}, {"id": "a2b", "unit": "SF"}]
+
+
+@needs_node
 def test_the_labor_button_lists_the_labor_list_work_type_first_and_never_travel(ran):
     """Mutation: drop the work-type split in shown() (or `first:` in laborPickEntries). The epoxy-only
     line then sorts ahead of the polish ones. Mutation: drop the travel skip and `lab:travel` appears."""

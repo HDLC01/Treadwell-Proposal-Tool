@@ -251,6 +251,10 @@ function makeDocument(dom, log) {
       listeners.push({ type, handler });
       log.push("listen:" + type);
     },
+    removeEventListener(type, handler) {
+      const at = listeners.findIndex((l) => l.type === type && l.handler === handler);
+      if (at !== -1) listeners.splice(at, 1);
+    },
     querySelectorAll: (sel) => dom.all(sel),
     querySelector: (sel) => dom.all(sel)[0] || null,
     fire(type, event) {
@@ -4211,6 +4215,15 @@ const rendered = [];      // every string the page put on screen, for the Labour
     esc(t);
     pop.esc = { closed: t.doc.body.kids.length === 0, rows: t.api.model().takeoff.length,
                 focusedBack: focusedBack };
+    // N4b. Esc also closes it when focus is NOT inside it (keydown lands on body), and the
+    // document listener is gone afterwards.
+    clickOn(t, "[data-add-row]");
+    const kdBefore = t.doc.listeners.filter((l) => l.type === "keydown").length;
+    t.doc.fire("keydown", { target: t.doc.body, key: "Escape", preventDefault() {} });
+    pop.escOutside = { closed: t.doc.body.kids.length === 0, rows: t.api.model().takeoff.length,
+                       focusedBack: focusedBack, listenersWhileOpen: kdBefore,
+                       listenersAfter: t.doc.listeners.filter((l) => l.type === "keydown").length };
+    focusedBack = 1;
     // ...and so does Cancel.
     clickOn(t, "[data-add-row]");
     fireOn(popup(t), "click", { target: popup(t).querySelector("[data-pk-close]") });
@@ -4341,6 +4354,19 @@ const rendered = [];      // every string the page put on screen, for the Labour
     bad.api.go(1);
     await openLaborPopup(bad);
     pop.laborFallback = { keys: keysOf(bad) };
+
+    // N14. two assemblies with ONE name and different units: ticking the second lands on the
+    // second's unit, not the first's.
+    const dupAsms = clone(ASMS).concat([{ id: "a2b", name: "Cove Base", unit: "SF", lines: [
+      { item_id: "i2", coverage: 125, waste_pct: 0, roundup: false }] }]);
+    const dp = build({ asms: dupAsms });
+    await dp.api.init();
+    dp.api.go(0);
+    const dBefore = dp.api.model().takeoff.length;
+    clickOn(dp, "[data-add-row]");
+    tick(dp, "asm:a2b"); tick(dp, "asm:a2");
+    pressAdd(dp);
+    pop.dupName = dp.api.model().takeoff.slice(dBefore).map((r) => ({ id: r.assembly_id, unit: r.unit }));
 
     out.addPopup = pop;
   }

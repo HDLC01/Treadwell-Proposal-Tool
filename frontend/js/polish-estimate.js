@@ -1134,6 +1134,11 @@
     } else {
       setAssembly(i, p.name);
       row.assembly_id = p.id;
+      // setAssembly found the assembly by NAME, so with two assemblies of one name the unit it
+      // adopted is the first one's. Take the unit of the one that was actually ticked.
+      var ticked = ASMS.filter(function (a) { return a.id === p.id; })[0];
+      var tu = ticked ? String(ticked.unit == null ? "" : ticked.unit).toUpperCase() : "";
+      if (tu === "SF" || tu === "LF") row.unit = tu;
     }
     return i;
   }

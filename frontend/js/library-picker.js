@@ -178,9 +178,18 @@
       addBtn.disabled = n === 0;
     }
 
+    // Esc has to work when focus is NOT inside the box: after a click on the heading or on a
+    // locked "already on this bid" row (a disabled checkbox cannot take focus) the key lands on
+    // body, and a listener on the overlay never hears it. So the document listens too, only while
+    // this pop-up is open.
+    function onDocKey(e) {
+      if (e && e.key === "Escape") { if (e.preventDefault) e.preventDefault(); close(); }
+    }
+
     function close() {
       if (closed) return;
       closed = true;
+      if (doc.removeEventListener) doc.removeEventListener("keydown", onDocKey);
       if (doc.body && doc.body.removeChild) doc.body.removeChild(ov);
       var back = cfg.opener;
       if (back && back.focus) back.focus();
@@ -238,6 +247,7 @@
     paintList();
     paintFoot();
     doc.body.appendChild(ov);
+    if (doc.addEventListener) doc.addEventListener("keydown", onDocKey);
     if (search && search.focus) search.focus();
     return { close: close, element: ov };
   }
