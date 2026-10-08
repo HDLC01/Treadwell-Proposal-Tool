@@ -5754,7 +5754,7 @@ async function globalTabChecks() {
     /Edit on Global/.test(row) && !/data-def-off=/.test(row) && !/data-def-edit=/.test(row) &&
     !/data-def-on=/.test(row);
   const titles = (html) => (html.match(/<th scope="colgroup"[^>]*>([^<]*)<\/th>/g) || [])
-    .map((s) => s.replace(/<[^>]*>/g, ""));
+    .map((s) => { let t = s, prev; do { prev = t; t = t.replace(/<[^>]+>/g, ""); } while (t !== prev); return t; });
   const typesOf = (list, id) => list.filter((r) => r.id === id)[0].default_work_types;
 
   const s = build(seed());
