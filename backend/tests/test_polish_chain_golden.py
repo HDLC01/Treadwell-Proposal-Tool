@@ -264,8 +264,8 @@ MUTATIONS = {
         "var GP_BANDS = [[6500, 0.53], [15000, 0.45], [22500, 0.35], [32500, 0.32], [null, 0.30]];",
         ["const/GP_BANDS", "golden 0.52, now 0.53"]),
     "negative zero becomes zero": (
-        "return num(row.guys) * num(row.days) * num(row.rate) * perDay;",
-        "return 0 + num(row.guys) * num(row.days) * num(row.rate) * perDay;",
+        "return num(row.guys) * num(row.days) * laborRateOf(row) * perDay;",
+        "return 0 + num(row.guys) * num(row.days) * laborRateOf(row) * perDay;",
         ["labor/negzero/0", "golden -0, now 0"]),
     "NaN becomes null (a JSON-only comparison cannot see this)": (
         "? laborRateOrShipped(dflt) : Number(r.rate);",

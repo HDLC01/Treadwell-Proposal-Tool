@@ -4651,6 +4651,9 @@ async function laborTabChecks() {
         /All work types/.test(rowOf(h, "travel")) && !/Every estimate/.test(rowOf(h, "travel")),
       customLinesHaveChips: /data-wt-toggle="labor" data-wt-id="L9"/.test(rowOf(h, "L9")),
       moreStartsShut: !/class="labor-more"/.test(h),
+      // LS1 (Hanz, 2026-10-09): the Travel row is DRAWN "Travel Labor" by the same rule the Defaults tab
+      // and the estimate use; the stored name is untouched (no write).
+      travelNameDrawn: /data-f="name" class="cell-name" value="Travel Labor"/.test(rowOf(h, "travel")),
       badge: d.nodes["n-labor"].textContent,
       emptyHidden: d.nodes["labor-empty"].hidden === true,
       addShown: d.nodes["labor-addrow"].hidden === false,

@@ -1522,9 +1522,13 @@
       var r = LABOR[i];
       var travel = r.id === "travel";
       var perUnit = (r.unit === "days" ? " / day" : " / hr");
+      // THE TRAVEL ROW READS "Travel Labor" (Hanz, 2026-10-09), by the same rule the Defaults tab
+      // and the estimate use (B.travelLabel): the stored name is left alone, only what is drawn.
+      var shownName = (travel && window.TWBidModel && window.TWBidModel.travelLabel)
+        ? window.TWBidModel.travelLabel(r.name) : r.name;
       if (!ADMIN) {
         out += '<tr data-labor="' + esc(r.id) + '">' +
-          "<td><b>" + esc(r.name) + "</b></td>" +
+          "<td><b>" + esc(shownName) + "</b></td>" +
           '<td class="n">' + esc(L.money(r.rate)) + perUnit + "</td>" +
           "<td>" + esc(r.unit) + "</td>" +
           "<td>" + esc(r.notes) + "</td>" +
@@ -1539,7 +1543,7 @@
           (r.unit === LABOR_UNITS[u] ? " selected" : "") + ">" + esc(LABOR_UNITS[u]) + "</option>";
       }
       out += '<tr data-labor="' + esc(r.id) + '">' +
-        '<td><input data-f="name" class="cell-name" value="' + esc(r.name) +
+        '<td><input data-f="name" class="cell-name" value="' + esc(shownName) +
           '" aria-label="Labor line name" maxlength="200"></td>' +
         '<td class="n"><span class="money"><span>$</span><input data-f="rate" class="num cell-rate" value="' +
           esc(r.rate == null ? "" : String(r.rate)) + '" aria-label="Rate"></span></td>' +
@@ -3803,8 +3807,13 @@
     var out = (window.TWBidModel.LABOR_CALC_BUILTINS || []).map(function (l) {
       return { id: l.id, name: l.name };
     });
+    // The crew lines are rows of the Labor list now, so a line already named above is not listed twice.
+    var named = {};
+    out.forEach(function (l) { named[l.id] = true; });
     LABOR.forEach(function (r) {
-      if (r && r.favorite && r.id !== "travel" && r.unit !== "hours") out.push({ id: r.id, name: r.name });
+      if (r && r.favorite && r.id !== "travel" && r.unit !== "hours" && !named[r.id]) {
+        out.push({ id: r.id, name: r.name });
+      }
     });
     return out;
   }
