@@ -373,7 +373,7 @@ MUTATIONS = {
         "js/bid-model.js", "polish_sf: b.sf > 0 ? b.sf : measuredSf(model.takeoff),", "polish_sf: b.sf,",
         lambda r: r["savePatch"]["floor"]["saved"] == 0 and r["estimate"]["onlyRowOff"]["autosave"]["polish_sf"] == 0),
     "a save forgets the condition cells": (
-        "js/bid-model.js", "cell_values: conditionCellWrites(model.conditions, cells, ctx.library),",
+        "js/bid-model.js", "cell_values: conditionCellWrites(model.conditions, cells, ctx.library, types.isSplit(state)),",
         "cell_values: cells,",
         lambda r: r["savePatch"]["cells"]["taxable"] is None
         and (r["estimate"]["condition"]["autosave"]["cells"] or {}).get("Epoxy!B6") != "No"),

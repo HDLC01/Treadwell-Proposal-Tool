@@ -116,7 +116,11 @@
    *  became the mechanism by which the two screens would disagree about a price.
    *
    *  The live intake (js/index.js) still keeps its own copy and remains the one to edit first;
-   *  this page and the Review step now follow it through ONE shared definition rather than two. */
+   *  this page and the Review step now follow it through ONE shared definition rather than two.
+   *
+   *  THE LOOP THAT READ THEM BACK IS NOT HERE ANY MORE: adoptModel calls B.conditionsFromCells, which
+   *  also knows a condition with several cells and a draft split per sheet. This alias is what the page's
+   *  harness lifts, and it is the same map that function reads. */
   var CONDITION_CELLS = B.CONDITION_CELLS;
 
   /** cell_values with every condition's literal written into it, MERGED over what is already
@@ -136,7 +140,11 @@
     // is what the generated .xlsx is filled from and a save that left them out would blank them.
     // That includes remove_existing_jf's literal while Joint filler is off: it greys out over
     // there because it changes no price, not because its answer stopped existing.
-    return B.conditionCellWrites(M.conditions, (TW.getState() || {}).cell_values);
+    //
+    // `split`: once the estimate screen has split the tax answers per sheet, Taxable and Remodel tax go to
+    // the base sheet's own cell and the options' stay as the draft has them (js/work-types.js writeCellsFor).
+    var draft = TW.getState() || {};
+    return B.conditionCellWrites(M.conditions, draft.cell_values, undefined, T.isSplit(draft));
   }
 
   // The draft this page is working ON, and the model derived from it. Reassigned together by
@@ -179,14 +187,12 @@
     // back here is what stops this screen contradicting the one before it. After this
     // change every write to a condition writes its cell too (see save()), so the cell
     // can never be the staler of the two.
-    var cv = (state.cell_values && typeof state.cell_values === "object") ? state.cell_values : {};
-    for (var ck in CONDITION_CELLS) {
-      if (!CONDITION_CELLS.hasOwnProperty(ck)) continue;
-      var cell = cv[CONDITION_CELLS[ck].cells[0]];
-      if (cell == null || cell === "") continue;
-      M.conditions[ck] =
-        String(cell).trim().toLowerCase() === String(CONDITION_CELLS[ck].on).toLowerCase();
-    }
+    //
+    // THE SHARED READER, not a loop of this page's own: a condition with several cells is answered by the
+    // first one that holds an answer, and on a draft the estimate screen has split per sheet the two tax
+    // answers are the base sheet's own cell. Both rules live beside the writer (B.conditionsFromCells),
+    // because a page that read one way while a save wrote the other would put the wrong answer back.
+    M.conditions = B.conditionsFromCells(M.conditions, state.cell_values, T.isSplit(state));
   }
 
   function isCondition(key) {
@@ -918,7 +924,7 @@
       var condRows = await loadConditionDefaults();
       M.conditions = B.conditionsFromCells(
         B.seedConditionDefaults(M.conditions, condRows),
-        state.cell_values);
+        state.cell_values, T.isSplit(state));
       // Which condition cards this new bid shows on the estimate (seedConditionsShown). This page
       // mints the model, so the estimate never sees it unstated and cannot seed this itself.
       M.conditions_shown = B.seedConditionsShown(condRows);

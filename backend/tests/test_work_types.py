@@ -460,7 +460,11 @@ def test_renovation_is_carried_through_and_a_blank_is_new_never_blank(ran):
     """The model has no renovation answer (Hanz took the toggle off its intake, 2026-09-23). The live intake
     writes it for every polish job, so a save carries what is there and fills a blank with the default: a
     blank Polish!B10 is not "New" to IF(B10="New",0.05,0.15), it takes the Reno branch and triples the patch
-    material rate. The first cell decides, as it does on the live intake, and it is written to both."""
+    material rate. The first cell THAT HOLDS AN ANSWER decides (Phase 7b), and it is written to both.
+
+    PHASE 7b CHANGED ONE ANSWER HERE, ON PURPOSE: `renoOnlyOnPolish`, a "Reno" in Polish!B10 with Epoxy!B10
+    blank, used to save as "New" in both cells (the first cell was blank, so the default applied) and now
+    saves as "Reno" in both. The first cell still wins when it holds an answer (`renoNew`)."""
     w = ran["cellWrites"]
 
     def both(name):
@@ -469,18 +473,24 @@ def test_renovation_is_carried_through_and_a_blank_is_new_never_blank(ran):
     assert both("allOn") == ("New", "New"), "the model's answers are not reno's"
     assert both("renoYes") == ("Reno", "Reno"), "a Reno survives a save"
     assert both("renoSpaced") == ("Reno", "Reno")
-    assert both("renoNew") == ("New", "New"), "the first cell decides"
-    assert both("renoOnlyOnPolish") == ("New", "New")
+    assert both("renoNew") == ("New", "New"), "the first cell that holds an answer decides"
+    assert both("renoOnlyOnPolish") == ("Reno", "Reno"), "a Reno in the second cell alone flipped to New"
     assert both("renoNumber") == ("New", "New"), "0 is not Reno"
     assert both("renoAskedByTheModelIsIgnored") == ("New", "New")
     assert w["keepsOtherCells"]["Epoxy!B1"] == "Nearman" and w["keepsOtherCells"]["Epoxy!D41"] == "BULK Discount ON"
     assert "reno" not in ran["fromCells"]["reno"], "the model carries no renovation answer to read back into"
 
 
-def test_the_read_back_reads_the_first_cell_only(ran):
-    """Taxable is read back from Epoxy!B6 alone: Leveling and Gypsum are written, never read."""
-    assert ran["fromCells"]["taxableOnly"] == {}
-    assert ran["fromCells"]["taxable"] == {"taxable": False}
+def test_the_read_back_reads_the_first_cell_that_holds_an_answer(ran):
+    """A condition with several cells (Local is two, Taxable is four) is read back from the FIRST ONE THAT
+    HOLDS AN ANSWER. It used to be read from the first cell alone ("Leveling and Gypsum are written, never
+    read"), so a blank Epoxy!B6 with an answer after it took the default and the next save wrote that default
+    over the real answer in every cell of the row. PHASE 7b CHANGED THIS ON PURPOSE, for every multi-cell
+    condition and not only Renovation. The first cell still wins when it holds an answer."""
+    assert ran["fromCells"]["taxableOnly"] == {"taxable": False}, "a Leveling answer was dropped for a blank first cell"
+    assert ran["fromCells"]["taxable"] == {"taxable": False}, "the first cell no longer wins"
+    assert ran["fromCells"]["localSecondOnly"] == {"local": False}
+    assert ran["fromCells"]["localFirstWins"] == {"local": True}
 
 
 def test_a_fresh_models_answers_are_the_tables_defaults_and_the_live_intakes(ran):
@@ -575,6 +585,7 @@ NAMED_ERROR = (
 @pytest.mark.parametrize("script, message", [
     ("js/library.js", "library.js needs work-types.js loaded before it"),
     ("js/polish-sandbox.js", "polish-sandbox.js needs work-types.js loaded before it"),
+    ("js/index.js", "index.js needs work-types.js loaded before it"),
 ])
 def test_a_page_script_that_reads_the_vocabulary_says_so_by_name_when_it_is_missing(script, message):
     require_node()
@@ -591,8 +602,11 @@ def readers_of_the_vocabulary(frontend: pathlib.Path = FRONTEND):
 
 
 def test_every_page_that_loads_a_reader_of_the_vocabulary_loads_the_vocabulary_first():
+    """PHASE 7b ADDED THE LIVE INTAKE to the readers (js/index.js, for the split rule only): index.html now
+    loads the vocabulary ahead of the page script, and the page throws by name when the tag is missing."""
     readers = readers_of_the_vocabulary()
-    assert readers == ["js/library.js", "js/polish-estimate.js", "js/polish-intake.js", "js/polish-sandbox.js"]
+    assert readers == ["js/index.js", "js/library.js", "js/polish-estimate.js", "js/polish-intake.js",
+                       "js/polish-sandbox.js"]
     for page in sorted(FRONTEND.glob("*.html")):
         order = local_scripts(page.read_text(encoding="utf-8"))
         for reader in readers:
@@ -600,8 +614,9 @@ def test_every_page_that_loads_a_reader_of_the_vocabulary_loads_the_vocabulary_f
                 assert "js/work-types.js" in order and order.index("js/work-types.js") < order.index(reader), (
                     "%s runs %s before the vocabulary it reads as it parses" % (page.name, reader))
     loads = {page.name for page in FRONTEND.glob("*.html") if "js/work-types.js" in local_scripts(page.read_text(encoding="utf-8"))}
-    assert loads == {"library.html", "polish-estimate.html", "polish-intake.html"}, (
-        "only the pages that load the model load the vocabulary: %r" % sorted(loads))
+    assert loads == {"index.html", "library.html", "polish-estimate.html", "polish-intake.html"}, (
+        "only the pages that load the model, and the live intake for the split rule, load the vocabulary: %r"
+        % sorted(loads))
 
 
 # ══ 6. the copies are gone from the pages ════════════════════════════════════════════════════════════
@@ -620,6 +635,11 @@ GONE = [
     ("js/bid-model.js", 'cells: ["Polish!E25"]'),
     ("js/bid-model.js", 'taxable:         { cells:'),
     ("js/polish-sandbox.js", '"Epoxy!B4", "Polish!B4",'),
+    # PHASE 7b: the split rule has one home. The live intake's own job-type ladder for the base sheets, its own
+    # address pattern, and the v2 intake's own loop that read a condition back off its first cell.
+    ("js/index.js", 'wt === "combo" ? ["Epoxy", "Polish"]'),
+    ("js/index.js", "[A-Z]{1,3}[0-9]{1,5}$/"),
+    ("js/polish-intake.js", "for (var ck in CONDITION_CELLS)"),
 ]
 
 
@@ -702,6 +722,15 @@ BREAKS = {
         MODEL, "      conditions: types.modelDefaults(),",
         "      conditions: Object.assign(types.modelDefaults(), { local: false }),", [],
         test_a_fresh_models_answers_are_the_tables_defaults_and_the_live_intakes),
+    # PHASE 7b: a condition with several cells is answered by the first cell that holds an answer.
+    "the read-back goes back to the first cell": (
+        MODEL, "      var cell = firstFilled(types.writeCellsFor(key, MODEL_JOB, !!split), cv, unanswered);",
+        "      var cell = firstFilled(types.writeCellsFor(key, MODEL_JOB, !!split).slice(0, 1), cv, unanswered);", [],
+        test_the_read_back_reads_the_first_cell_that_holds_an_answer),
+    "a save reads only the first renovation cell": (
+        MODEL, "      var first = firstFilled(carried.cells, out, isBlank);",
+        "      var first = firstFilled(carried.cells.slice(0, 1), out, isBlank);", [],
+        test_renovation_is_carried_through_and_a_blank_is_new_never_blank),
 }
 
 

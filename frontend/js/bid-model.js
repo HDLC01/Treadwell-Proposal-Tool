@@ -1476,6 +1476,7 @@
    *  not "No" to Kyle's formulas, it is whatever his IF() falls through to. The switch greys out on
    *  screen because it moves no money, not because its answer stopped existing. */
   var POLISH_CELLS = types.cellsFor("polish");
+  var MODEL_JOB = "polish";   // the job type cellsFor() was cut for on the line above, asked again below
   var CONDITION_CELLS = Object.fromEntries(POLISH_CELLS
     .filter(function (c) { return c.model; })
     .map(function (c) { return [c.key, { cells: c.cells, on: c.on, off: c.off }]; }));
@@ -1522,34 +1523,66 @@
    *
    *  A BLANK IS NOT AN ANSWER. An absent or empty cell leaves the model's value alone: every save
    *  writes both literals, so a blank means nobody has answered yet, and the documented default
-   *  applies rather than a silent "off". */
-  function conditionsFromCells(conditions, cells) {
+   *  applies rather than a silent "off".
+   *
+   *  A CONDITION WITH SEVERAL CELLS IS ANSWERED BY THE FIRST ONE THAT HOLDS AN ANSWER, not by the first
+   *  cell: Local is two cells (Epoxy!B4 and Polish!B4) and Taxable is four, and a blank first cell with
+   *  an answer after it is an answered question. Reading only the first took the default instead, and the
+   *  next save wrote that default over the real answer in every cell of the row.
+   *
+   *  `split` is whether the draft is split (work-types.js isSplit(draft)): once the estimate screen has
+   *  given every sheet its own Taxable and Remodel answer, those two are the BASE sheet's own cell and no
+   *  other (work-types.js writeCellsFor decides, for this and for conditionCellWrites). It is the draft's
+   *  to say and not the cells', so it is an argument; left out, the draft is not split. */
+  function conditionsFromCells(conditions, cells, split) {
     var out = Object.assign({}, conditions || {});
     var cv = (cells && typeof cells === "object") ? cells : {};
     for (var key in CONDITION_CELLS) {
       if (!CONDITION_CELLS.hasOwnProperty(key)) continue;
-      var cell = cv[CONDITION_CELLS[key].cells[0]];
-      if (cell == null || cell === "") continue;
+      var cell = firstFilled(types.writeCellsFor(key, MODEL_JOB, !!split), cv, unanswered);
+      if (cell === undefined) continue;
       out[key] = String(cell).trim().toLowerCase() ===
                  String(CONDITION_CELLS[key].on).toLowerCase();
     }
     return out;
   }
 
-  function conditionCellWrites(conditions, cells, library) {
+  /** What a cell that is absent, null or "" says: nothing. (Whitespace is an answer here, and reads as no.) */
+  function unanswered(v) { return v == null || v === ""; }
+
+  /** The value of the first of `list`'s cells that holds an answer, or undefined when none does.
+   *  `blank` is the test for "holds no answer": conditionsFromCells and the carried conditions below
+   *  have always disagreed about whitespace, and each keeps its own. */
+  function firstFilled(list, values, blank) {
+    for (var i = 0; i < list.length; i++) {
+      var v = values[list[i]];
+      if (!blank(v)) return v;
+    }
+    return undefined;
+  }
+
+  /** `cells` with every condition's literals written over it, merged and never blank for "off" (the
+   *  first doc block above says why). `split` is the draft's (see conditionsFromCells): on a split draft
+   *  Taxable and Remodel tax are written to the base sheet's own cell and every other sheet's tax cell
+   *  is left exactly as the draft has it, so an option keeps its own answer through a save. The same
+   *  rule the live intake follows (js/index.js splitFlagCells), from the same table. */
+  function conditionCellWrites(conditions, cells, library, split) {
     var out = Object.assign({}, cells || {});
     var c = conditions || {};
     for (var key in CONDITION_CELLS) {
       if (!CONDITION_CELLS.hasOwnProperty(key)) continue;
       var spec = CONDITION_CELLS[key];
       var lit = c[key] ? spec.on : spec.off;
-      for (var i = 0; i < spec.cells.length; i++) out[spec.cells[i]] = lit;
+      var to = types.writeCellsFor(key, MODEL_JOB, !!split);
+      for (var i = 0; i < to.length; i++) out[to[i]] = lit;
     }
-    // THE CONDITIONS THE MODEL DOES NOT CARRY (Renovation): the answer is whatever the first cell says,
-    // else the default, and it is written to every cell of the row -- the live intake's own read-then-
-    // write, so a "Reno" it or the AI autofill put there survives a v2 save and a blank gets "New".
+    // THE CONDITIONS THE MODEL DOES NOT CARRY (Renovation): the answer is whatever the first cell that
+    // holds one says, else the default, and it is written to every cell of the row -- the live intake's
+    // own read-then-write, so a "Reno" it or the AI autofill put there survives a v2 save and a blank
+    // gets "New". The first cell THAT HOLDS ONE, not the first cell: a "Reno" in Polish!B10 with
+    // Epoxy!B10 blank is an answer, and reading only the first turned it into "New" on the next save.
     CARRIED_CELLS.forEach(function (carried) {
-      var first = out[carried.cells[0]];
+      var first = firstFilled(carried.cells, out, isBlank);
       var on = isBlank(first) ? carried.default
         : String(first).trim().toLowerCase() === String(carried.on).trim().toLowerCase();
       carried.cells.forEach(function (cell) { out[cell] = on ? carried.on : carried.off; });
@@ -2101,7 +2134,8 @@
    *  of 0 where the autosave kept the measured floor. A key can only be added or fixed here now.
    *
    *  `model` is the page's own (already migrated) model. `state` is the draft as it stands, and only
-   *  its `cell_values` is read, as the base the condition cells are MERGED over. `ctx` carries what
+   *  its `cell_values` (the base the condition cells are MERGED over) and its `tax_flags_per_sheet`
+   *  mark (whether the tax answers are written per sheet) are read. `ctx` carries what
    *  only the page can compute: `bid`, the markupChain result for `model` (required, and this throws
    *  without it, because a save with no price is a save of zero), and `library`, what the page priced
    *  Dye and Joint Filler with (see conditionCellWrites; left out, it writes nothing for those two).
@@ -2141,7 +2175,9 @@
     var cells = isObject(state) ? state.cell_values : undefined;
     return {
       polish_estimate: Object.assign(copyInto({}, model), { totals: b }),
-      cell_values: conditionCellWrites(model.conditions, cells, ctx.library),
+      // `split` is the draft's own mark (work-types.js isSplit), so the one save both pages share is also
+      // the one that keeps an option's tax answer out of the base's way on a split draft.
+      cell_values: conditionCellWrites(model.conditions, cells, ctx.library, types.isSplit(state)),
       polish_sf: b.sf > 0 ? b.sf : measuredSf(model.takeoff),
       polish_2_sf: "",
       computed_bid: {

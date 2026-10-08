@@ -244,6 +244,11 @@
   //   * `polish_estimate`, the v2 model, for a source that already has one;
   //   * `cell_values`, but only the job-condition cells (COPYABLE_CELLS below). The other cells are
   //     the spreadsheet's own working, which v2 never reads;
+  //   * `tax_flags_per_sheet`, the estimate screen's mark that every sheet holds its OWN Taxable and
+  //     Remodel answer. It is not a price. It says how the tax cells just above are to be read: on a split
+  //     draft the job's answer is the base sheet's own cell and every other sheet keeps its own
+  //     (js/work-types.js writeCellsFor). A copy that lost it would read a split project as an unsplit one,
+  //     and v2's first save would write the base's answer over the Leveling and Gypsum options';
   //   * the two marks buildCopy writes itself, listed so that this is everything a copy can hold.
   var COPYABLE_KEYS = [
     "project_name", "address", "city", "state", "zip", "city_state", "architect", "approx_start_date",
@@ -253,7 +258,7 @@
     "system_1_sf", "system_2_sf", "polish_sf", "polish_2_sf", "cove_1_lf", "cove_2_lf",
     "gyp_soft_sf", "gyp_hard_sf", "gyp_corridor_sf", "system_thickness", "num_systems",
     "county", "county_tax_rate", "county_remodel_rate", "county_notes", "remodel_rate_override",
-    "polish_estimate", "cell_values",
+    "polish_estimate", "cell_values", "tax_flags_per_sheet",
     "beta_sandbox_of", "beta_sandbox_of_name",
   ];
 
@@ -263,7 +268,9 @@
   // used to be a second copy of the live intake's table kept equal by test_v2_routing_guard.py. Every
   // job type's cells are kept, not only polish's: the copy is of whatever the source job was, and the
   // job's answers are the same cells on any of them. A condition added to the table is copied from the
-  // day it is added.
+  // day it is added. That includes the base sheets' own tax cells (Polish!B6, Polish!D6 ...) which a split
+  // draft holds as the job's tax answer and a draft that is not split never writes: they travel with the
+  // `tax_flags_per_sheet` mark above, so a copy of a split project arrives split, with its answers.
   var WT = window.TWWorkTypes;
   if (!WT) throw new Error("polish-sandbox.js needs work-types.js loaded before it");
   var COPYABLE_CELLS = WT.copyableCells();
@@ -284,6 +291,27 @@
     COPYABLE_CELLS.forEach(function (cell) {
       if (has(srcCells, cell)) cells[cell] = srcCells[cell];
     });
+    // THE BID THIS COPY IS COMPARED WITH. v2 prices a POLISH bid, so on a split draft it reads and writes
+    // Polish!B6 and Polish!D6 for Taxable and Remodel tax (js/work-types.js writeCellsFor). Those two cells
+    // hold the answer the estimate screen stamped when it split the draft, and an estimator may have changed
+    // the SOURCE job's own base answer since (Epoxy!B6 on an epoxy job, the gyp base's B8 on a gyp job).
+    // So when the source's job is priced on other sheets than Polish, the copy starts with the source
+    // base's answer in the Polish cells, and the beta price opens at the live bid's tax. A job that has a
+    // Polish base (polish, combo) already holds its own answer there, and a source with no answer yet
+    // leaves the cells as they were.
+    if (WT.isSplit(srcData) && WT.isJobType(srcData.work_type)) {
+      WT.CONDITIONS.filter(function (c) { return c.perSheet; }).forEach(function (c) {
+        var from = WT.writeCellsFor(c.key, srcData.work_type, true);
+        var to = WT.writeCellsFor(c.key, "polish", true)[0];
+        if (from.indexOf(to) !== -1) return;
+        for (var i = 0; i < from.length; i++) {
+          if (has(cells, from[i]) && cells[from[i]] !== "" && cells[from[i]] != null) {
+            cells[to] = cells[from[i]];
+            break;
+          }
+        }
+      });
+    }
     if (Object.keys(cells).length) blob.cell_values = cells;
     blob.project_name = betaName(srcData.project_name);
     // Paired with the derived id, this is what makes reopening idempotent: a draft that says

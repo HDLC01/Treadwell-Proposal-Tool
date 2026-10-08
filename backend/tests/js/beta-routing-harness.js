@@ -472,6 +472,10 @@ const documentStub = {
   // because the page script calls TWCounty.mount() as it boots; loading it second would leave
   // the mount guarded away and the whole control untested while every assertion below still ran.
   windowStub.TW = TW;        // county-picker.js reads window.TW, not the injected parameter
+  // The one vocabulary (js/work-types.js), under its real global name, ahead of the page script exactly as
+  // index.html orders the tags: index.js reads it for the split rule and throws by name without it. The REAL
+  // module, so the live intake's split behaviour is the table's.
+  windowStub.TWWorkTypes = require(path.join(ROOT, "js", "work-types.js"));
   new Function("document", "window", "fetch", countyJs)(documentStub, windowStub, fetchStub);
   // The address lookup, loaded before index.js exactly as index.html orders the tags: the page
   // script calls TWAddress.mount() as it boots, so a ReferenceError here is a missing script tag.
@@ -949,6 +953,53 @@ function runHandler(which) {
       booted, hydrated, before, afterDye, afterTaxable, afterRemodel,
       comboAfterLocal, combo: pick(cells(c)),
       unsplit: pick(cells(pre)),
+    };
+  }
+
+  // A COMBO JOB IS PRICED ON TWO SHEETS, and the shared rule says which (js/work-types.js baseSheets): with
+  // no explicit base both Epoxy's and Polish's own cells are the job's, so flipping Taxable writes BOTH and
+  // nothing else tax. The earlier combo case above starts Polish at the answer it ends on, so it cannot tell a
+  // lost second sheet from a written one; here Polish starts on Yes and has to come out No.
+  {
+    const c = build({
+      tax_flags_per_sheet: true, base_tab_id: null, work_type: "combo",
+      priced_tabs: [
+        { id: "Epoxy", flag_cells: { taxable: "Epoxy!B6", remodel: "Epoxy!D6" } },
+        { id: "Polish", flag_cells: { taxable: "Polish!B6", remodel: "Polish!D6" } },
+      ],
+      cell_values: { "Epoxy!B6": "Yes", "Polish!B6": "Yes", "Epoxy!D6": "No", "Polish!D6": "No",
+                     "Leveling!B6": "Yes", 'Gyp (USG 1-8")!B8': "No" },
+    });
+    await tick();
+    c.setWorkType("combo");
+    c.clickSwitch("taxable");
+    const cv = cells(c);
+    out.conditions.comboBothHalves = {
+      cells: { "Epoxy!B6": cv["Epoxy!B6"], "Polish!B6": cv["Polish!B6"], "Epoxy!D6": cv["Epoxy!D6"],
+               "Polish!D6": cv["Polish!D6"], "Leveling!B6": cv["Leveling!B6"],
+               "Gyp (USG 1-8\")!B8": cv['Gyp (USG 1-8")!B8'] },
+    };
+  }
+
+  // THE ADDRESSES COME OFF THE DRAFT. priced_tabs[].flag_cells is the estimate screen's snapshot, and a string
+  // that came out of a draft becomes a KEY in cell_values, so only a real "Sheet!A1" may be written. Phase 7b
+  // moved that check out of this page and into the shared rule (js/work-types.js writeCellsFor), and this
+  // scenario is what says it still happens: every address the Polish tab's snapshot offers here is wrong, so
+  // flipping the two switches writes no tax cell and invents no key.
+  {
+    const b = build({
+      tax_flags_per_sheet: true, base_tab_id: "Polish", work_type: "polish",
+      priced_tabs: [{ id: "Polish", flag_cells: { taxable: "Polish!B6;x", remodel: "Polish!D6\n" } }],
+      cell_values: { "Epoxy!B6": "Yes", "Polish!B6": "No", "Polish!D6": "No" },
+    });
+    await tick();
+    b.setWorkType("polish");
+    b.clickSwitch("taxable");
+    b.clickSwitch("remodel_tax");
+    const cv = cells(b);
+    out.conditions.hostileFlagCells = {
+      taxCells: { "Epoxy!B6": cv["Epoxy!B6"], "Polish!B6": cv["Polish!B6"], "Polish!D6": cv["Polish!D6"] },
+      invented: Object.keys(cv).filter((k) => /[;\n]/.test(k)),
     };
   }
 

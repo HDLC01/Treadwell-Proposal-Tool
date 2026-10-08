@@ -88,7 +88,10 @@
     //
     // Safe only because every writer writes both places: saveSoon puts all eight cells back through
     // conditionCellWrites on every save, so the cell can never be the staler of the two.
-    M.conditions = B.conditionsFromCells(M.conditions, state.cell_values);
+    //
+    // `T.isSplit(state)`: on a draft the estimate screen has split per sheet, the two tax answers are the
+    // base sheet's own cell, and the save below (B.buildSavePatch) writes the same one.
+    M.conditions = B.conditionsFromCells(M.conditions, state.cell_values, T.isSplit(state));
     // BEFORE THE FIRST PAINT, not on the first edit. `changed()` is what normally keeps a derived
     // Guys figure current, and nothing calls it on load -- so without this a reopened draft shows
     // Travel's Guys box empty until somebody touches an unrelated field, and prices it at nothing
@@ -2758,7 +2761,7 @@
     if (conditionDefaults) {
       var condRows = await conditionDefaults;
       M.conditions = B.conditionsFromCells(
-        B.seedConditionDefaults(M.conditions, condRows), state.cell_values);
+        B.seedConditionDefaults(M.conditions, condRows), state.cell_values, T.isSplit(state));
       // Which cards this new bid shows: the ones still on the Defaults tab (seedConditionsShown).
       M.conditions_shown = B.seedConditionsShown(condRows);
     }

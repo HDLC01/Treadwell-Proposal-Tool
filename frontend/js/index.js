@@ -1,5 +1,15 @@
 // Externalized from index.html (CSP: drop script-src 'unsafe-inline'). Do not add inline scripts.
 
+  // ── the one vocabulary, for ONE thing ─────────────────────────────────────────
+  // js/work-types.js is loaded before this script (index.html). This page reads it for the split rule only:
+  // which cells the two tax switches write once the estimate screen has split them per sheet (splitFlagCells
+  // below), the same rule a v2 save follows. The page's own condition table and its map of which quantity
+  // fields each work type shows stay its own until Phase 9 moves it onto the shared modules, and
+  // test_work_types.py holds both equal to the table. FIRST in the file, so a page that lacks the vocabulary
+  // says so by name instead of dying later on a TypeError.
+  const workTypes = window.TWWorkTypes;
+  if (!workTypes) throw new Error("index.js needs work-types.js loaded before it");
+
   // ── a v2 draft does not open on this form ─────────────────────────────────────
   // Estimating Tool v2 has its own intake (polish-intake.html), and a project priced there has no
   // spreadsheet behind it. This form's Continue goes to the spreadsheet, so a v2 draft opened here
@@ -316,28 +326,29 @@
    *  Leveling and 'Gyp (FR)' -- options -- to Epoxy's answer on every flip of any switch here.
    *
    *  null means "not split": use c.cells. An empty list means split but no base cell is known:
-   *  write nothing rather than guess. */
+   *  write nothing rather than guess.
+   *
+   *  WHICH SWITCHES ARE PER SHEET, WHICH SHEETS A JOB TYPE IS PRICED ON AND WHAT COUNTS AS A REAL ADDRESS
+   *  ARE THE TABLE'S (js/work-types.js isPerSheet, baseSheets, writeCellsFor), the same rule a v2 save
+   *  follows. What this page adds is the one thing the table cannot know: the estimate screen's snapshot of
+   *  each tab's own flag cells, which follows a copied tab or a moved row. */
   function splitFlagCells(c) {
-    if (c.key !== "taxable" && c.key !== "remodel_tax") return null;
+    if (!workTypes.isPerSheet(c.key)) return null;
     const s = TW.getState() || {};
-    if (!s.tax_flags_per_sheet) return null;
+    if (!workTypes.isSplit(s)) return null;
     const flag = c.key === "taxable" ? "taxable" : "remodel";
     const tabs = s.priced_tabs instanceof Array ? s.priced_tabs : [];
     const byId = new Map();
     tabs.forEach((t) => { if (t && t.id) byId.set(t.id, t); });
     const wt = condScope();
-    const ids = byId.has(s.base_tab_id) ? [s.base_tab_id]
-      : wt === "gyp" ? ['Gyp (USG 1-8")'] : wt === "polish" ? ["Polish"]
-      : wt === "combo" ? ["Epoxy", "Polish"] : ["Epoxy"];
-    const out = [];
+    const ids = byId.has(s.base_tab_id) ? [s.base_tab_id] : workTypes.baseSheets(wt);
+    const own = [];
     ids.forEach((id) => {
       const fc = byId.has(id) && byId.get(id).flag_cells;
-      // Only a real "Sheet!A1" address: this string becomes a key in cell_values.
-      if (fc && typeof fc[flag] === "string" && /^[^!]+![A-Z]{1,3}[0-9]{1,5}$/.test(fc[flag])) {
-        out.push(fc[flag]);
-      }
+      if (fc && typeof fc[flag] === "string") own.push(fc[flag]);
     });
-    return out;
+    // An address that is not a real "Sheet!A1" is dropped there: this string becomes a key in cell_values.
+    return workTypes.writeCellsFor(c.key, wt, true, own);
   }
   function condCells(c) { return splitFlagCells(c) || c.cells; }
 

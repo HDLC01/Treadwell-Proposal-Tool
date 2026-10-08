@@ -1,7 +1,7 @@
 """The Polish bid chain, recorded before the v2 program rewrites what stands behind it.
 
 backend/tests/fixtures/polish_chain_golden.json holds what js/bid-model.js (TWBidModel)
-answers for 2,228 deliberately awkward inputs: markupChain over every GP edge and all 256 settings
+answers for 2,247 deliberately awkward inputs: markupChain over every GP edge and all 256 settings
 of the eight job conditions, every shape the remodel rate arrives in and a sweep of dirty values;
 the number helpers; labor, travel and takeoff; the conditions and what they write into Kyle's
 workbook; the default readers; the model; the labor calculator; and what a new bid is seeded with.
@@ -14,6 +14,16 @@ constant `const/CONDITION_CELLS` (Taxable is four cells now, not one) and the 47
 `cond/library/*` vectors, each of which gains exactly the same five keys (Leveling!B6, the two Gyp B8 cells,
 and Epoxy!B10 and Polish!B10 written as "New") and nothing else. The other 2,180, every `chain/*` vector
 (the whole bid), `model/*`, `newbid/*` and `seed/*` among them, are as before.
+
+Phase 7b re-cut it on f0cf3fc (the Phase 7 merge) and changed it on purpose in two ways, neither of them a
+price. ONE VECTOR WAS RENAMED AND ITS ANSWER MOVED: `cond/fromCells/polishB4IsNotRead` is gone, and its
+replacement `cond/fromCells/polishB4IsReadWhenEpoxyB4IsBlank` has the same arguments and the answer the other
+way (`local` reads "No", where it used to read nothing), because a condition with several cells is now answered
+by the first cell that holds an answer and not by the first cell. NINETEEN VECTORS WERE ADDED for the new
+argument and the new rule: a split draft (`split`, the fourth argument of `conditionCellWrites` and the third of
+`conditionsFromCells`), and a Renovation answer in the second of its two cells. No other vector of the 2,228
+moved: all of `chain/*`, and every `cond/cells/*` and `cond/fromCells/*` that was already there bar the one
+above, answer as before (2,228 - 1 + 1 + 19 = 2,247).
 
 Phases 4 to 10 move this code: the model module is renamed, ROUNDUP and the number helpers move to a
 leaf module, rates and the GP ladder become profile data, the chain becomes an engine. Each must

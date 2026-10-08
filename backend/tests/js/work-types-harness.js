@@ -200,6 +200,9 @@ out.bid = {
     reno: B.conditionsFromCells({}, { "Epoxy!B10": "Reno" }),
     taxableOnly: B.conditionsFromCells({}, { "Leveling!B6": "No", 'Gyp (FR)!B8': "No" }),
     taxable: B.conditionsFromCells({ taxable: true }, { "Epoxy!B6": "No", "Leveling!B6": "Yes" }),
+    // PHASE 7b: a condition with several cells is answered by the first cell that holds an answer.
+    localSecondOnly: B.conditionsFromCells({ local: true }, { "Polish!B4": "No" }),
+    localFirstWins: B.conditionsFromCells({ local: false }, { "Epoxy!B4": "Yes", "Polish!B4": "No" }),
   };
 }
 
