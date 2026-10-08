@@ -5733,7 +5733,8 @@ async function globalTabChecks() {
       { id: "s1", name: "Seal Only Primer", unit: "Gal", unit_cost: 30, favorite: true, default_work_types: ["seal"] },
       { id: "n1", name: "Spare Seal Item", unit: "Gal", unit_cost: 5, favorite: false, default_work_types: ["seal"] },
       { id: "n2", name: "Spare Plain Item", unit: "Gal", unit_cost: 5, favorite: false, default_work_types: [] },
-      { id: "n3", name: "Spare Epoxy Item", unit: "Gal", unit_cost: 5, favorite: false, default_work_types: ["epoxy"] }],
+      { id: "n3", name: "Spare Epoxy Item", unit: "Gal", unit_cost: 5, favorite: false, default_work_types: ["epoxy"] },
+      { id: "n4", name: "Epoxy Default Item", unit: "Gal", unit_cost: 5, favorite: true, default_work_types: ["epoxy"] }],
     ASMS: [{ id: "ga", name: "Global Assembly", unit: "SF", favorite: true, lines: [], default_work_types: [] },
            { id: "pa", name: "Polish Assembly", unit: "SF", favorite: true, lines: [], default_work_types: ["polish"] }],
     LABOR: [{ id: "lg", name: "Global Crew", rate: 40, unit: "days", favorite: true, default_work_types: [] },
@@ -5772,7 +5773,8 @@ async function globalTabChecks() {
   const addP = build(seed());
   addP.api.setWorkType("polish");
   await addP.api.setDefault("items", "n2", true);          // names none -> [polish]
-  await addP.api.setDefault("items", "n3", true);          // names epoxy -> epoxy + polish
+  await addP.api.setDefault("items", "n3", true);          // removed row, stale epoxy -> [polish] only
+  await addP.api.setDefault("items", "n4", true);          // live epoxy default -> epoxy + polish
   // A REMOVE FILES NO WORK TYPES: it only stops the row being a default.
   const rm = build(seed());
   rm.api.setWorkType("global");
@@ -5808,7 +5810,7 @@ async function globalTabChecks() {
     addUnderGlobal: add.api.DEFAULT_WT_CALLS.slice(),
     rowsAfterGlobalAdd: { n1: typesOf(add.api.ITEMS, "n1"), ln: typesOf(add.api.laborNow(), "ln") },
     addUnderPolish: addP.api.DEFAULT_WT_CALLS.slice(),
-    rowsAfterPolishAdd: { n2: typesOf(addP.api.ITEMS, "n2"), n3: typesOf(addP.api.ITEMS, "n3") },
+    rowsAfterPolishAdd: { n2: typesOf(addP.api.ITEMS, "n2"), n3: typesOf(addP.api.ITEMS, "n3"), n4: typesOf(addP.api.ITEMS, "n4") },
     removeCalls: rm.api.DEFAULT_WT_CALLS.slice(),
     refusedPutsTypesBack: badRow.favorite === false && JSON.stringify(badRow.default_work_types) === "[\"seal\"]",
   };

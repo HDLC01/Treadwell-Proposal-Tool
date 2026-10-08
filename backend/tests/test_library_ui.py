@@ -4088,7 +4088,7 @@ def test_adding_a_default_files_the_work_types_of_the_view_it_was_added_on(ran):
         ("items", "n1", []), ("labor", "ln", [])]
     assert g["rowsAfterGlobalAdd"] == {"n1": [], "ln": []}
     assert [(c["id"], c["workTypes"]) for c in g["addUnderPolish"]] == [
-        ("n2", ["polish"]), ("n3", ["epoxy", "polish"])]
-    assert g["rowsAfterPolishAdd"] == {"n2": ["polish"], "n3": ["epoxy", "polish"]}
+        ("n2", ["polish"]), ("n3", ["polish"]), ("n4", ["epoxy", "polish"])]
+    assert g["rowsAfterPolishAdd"] == {"n2": ["polish"], "n3": ["polish"], "n4": ["epoxy", "polish"]}
     assert g["removeCalls"] == [{"kind": "items", "id": "g1", "on": False, "workTypes": None}]
     assert g["refusedPutsTypesBack"]

@@ -2775,7 +2775,9 @@
     // that tab's own row rather than as a read-only Global one. Remove leaves them alone.
     var types = null;
     if (on) {
-      var had = Array.isArray(wasTypes) ? wasTypes : [];
+      // A row that is not a default today (never was, or was Removed) keeps its old types only as
+      // leftovers; carrying them would bring it back on a tab it was removed from.
+      var had = was && Array.isArray(wasTypes) ? wasTypes : [];
       types = DEFAULT_WT === "global" ? [] :
         (!had.length ? [DEFAULT_WT] : had.indexOf(DEFAULT_WT) !== -1 ? had : had.concat([DEFAULT_WT]));
     }
