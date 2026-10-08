@@ -395,7 +395,9 @@ def test_the_defaults_tabs_strip_is_the_tables_tabs(ran):
     """library.html draws the five work-type buttons as markup, a copy of the tab list in HTML."""
     s = _Strip()
     s.feed((FRONTEND / "library.html").read_text(encoding="utf-8"))
-    assert s.buttons == [(t["key"], t["label"]) for t in ran["data"]["TABS"]]
+    # Global is the first pill and is not a work type: it holds the global values and the defaults
+    # that name no work type. The five after it are the table's tabs, in the table's order.
+    assert s.buttons == [("global", "Global")] + [(t["key"], t["label"]) for t in ran["data"]["TABS"]]
 
 
 def test_the_estimate_screens_sheet_map_roles_and_area_keys_are_the_tables(ran):

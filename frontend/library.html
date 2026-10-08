@@ -183,6 +183,8 @@
     .wtchip[aria-pressed="true"] { background:var(--red-tint); border-color:var(--red);
        color:var(--red-dark); }
     .wtchip:focus-visible { outline:2px solid var(--red); outline-offset:2px; }
+    /* A Global default seen from a work type: shown for context, not editable there. */
+    tr.globalrow td:first-child, tr.globalrow td:nth-child(2) { color:var(--ink-v); }
     /* The chips and the "all work types" note stack, and the note collapses to nothing when a
        row has chosen some -- so a scoped row is not carrying an empty line under it. */
     .wtcell { white-space:normal; }
@@ -1110,8 +1112,10 @@
       <div class="wtrow">
         <span class="flabel" id="wt-strip-label">Work type</span>
         <div class="wtabs" role="tablist" aria-labelledby="wt-strip-label">
+          <button class="wtab" type="button" role="tab" data-work-type="global"
+                  id="wt-global" aria-selected="true">Global</button>
           <button class="wtab" type="button" role="tab" data-work-type="polish"
-                  id="wt-polish" aria-selected="true">Polish</button>
+                  id="wt-polish" aria-selected="false">Polish</button>
           <button class="wtab" type="button" role="tab" data-work-type="seal"
                   id="wt-seal" aria-selected="false">Seal</button>
           <button class="wtab" type="button" role="tab" data-work-type="epoxy"

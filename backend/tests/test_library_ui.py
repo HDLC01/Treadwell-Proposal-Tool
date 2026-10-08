@@ -19,6 +19,7 @@ import pathlib
 import re
 import shutil
 import subprocess
+from html.parser import HTMLParser
 
 import pytest
 
@@ -184,11 +185,18 @@ def test_the_takeoff_defaults_list_what_a_new_estimate_starts_with(ran):
     # THREE GROUPS, NOT FOUR, since 2026-09-18: joint filler, remove-existing and dye moved into
     # Materials. Hanz: "die and joint filler are supposed to be materials not something that is
     # default", then "just put these 3 in the materials section with the same buttons."
-    assert t["groupTitles"] == ["Assemblies", "Materials", "Markup"], (
+    #
+    # THE POLISH VIEW HAS TWO GROUPS since 2026-10-09: Markup (the global values) moved to the Global
+    # pill, so it is read from there below.
+    assert t["groupTitles"] == ["Assemblies", "Materials"], (
         "the groups or their order changed: %s" % t["groupTitles"])
-    # Markup is 2 rows: the always-listed Fees + Textura default, then bond.
-    assert t["groupCounts"] == [1, 4, 2], (
+    assert t["groupCounts"] == [1, 4], (
         "a row landed in the wrong group: %s" % t["groupCounts"])
+    # Markup is 2 rows on Global: the always-listed Fees + Textura default, then bond. Nothing else is
+    # global in this fixture (its assemblies and materials name Polish).
+    assert t["globalTitles"] == ["Markup"] and t["globalCounts"] == [2], (
+        "the Global view should hold only the global values: %s %s"
+        % (t["globalTitles"], t["globalCounts"]))
     assert t["renderedHeadings"] == t["groupTitles"], (
         "the groups exist in the data but are not drawn: %s" % t["renderedHeadings"])
     assert t["noKindColumn"], (
@@ -4005,3 +4013,82 @@ def test_the_open_assemblys_save_stays_on_screen_in_a_sticky_title_bar():
         "#asm-save is not a direct child of the sticky .atitle bar", _ancestors_of(html, "asm-save"))
     margin = _css_rule(html, ".lines :is(input, select, button)")
     assert float(margin["scroll-margin-top"][:-2]) >= 150, margin
+
+
+# ── the Defaults tab's Global pill (Hanz, 2026-10-09) ─────────────────────────────────────────────
+class _Pills(HTMLParser):
+    """The work-type pills as markup."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.pills = []
+
+    def handle_starttag(self, tag, attrs):
+        a = dict(attrs)
+        if tag == "button" and a.get("data-work-type"):
+            self.pills.append((a["data-work-type"], a.get("aria-selected")))
+
+
+@needs_node
+def test_global_is_the_first_pill_and_the_one_selected_on_open(ran):
+    """The page opens on Global: the markup says so (first pill, the only one selected) and so does
+    the executed declaration the renderers read.
+
+    Mutation: put the Global pill after Polish, or select Polish in the markup, or set DEFAULT_WT back
+    to the first work type."""
+    p = _Pills()
+    p.feed((FRONTEND / "library.html").read_text(encoding="utf-8"))
+    assert p.pills[0] == ("global", "true"), p.pills
+    assert [s for _, s in p.pills[1:]] == ["false"] * 5, p.pills
+    assert ran["globalTab"]["opened"] == "global"
+
+
+@needs_node
+def test_global_shows_the_global_values_and_the_rows_that_name_no_work_type_editable(ran):
+    """Under Global: Fees + Textura and the other global values, plus every takeoff and labor default
+    that names no work type, each with its normal Edit/Remove/switch. Rows naming a work type are not
+    here.
+
+    Mutation: leave the Markup group on every view, or let a work-type row through the Global filter."""
+    g = ran["globalTab"]
+    assert g["globalTitles"] == ["Assemblies", "Materials", "Markup"], g["globalTitles"]
+    assert g["globalHasFees"]
+    assert g["globalEditable"], "a row naming no work type is not editable under Global"
+    assert g["globalHasNoTypedRows"], "a row that names a work type shows under Global"
+    assert g["globalLaborHasTravel"], "Travel (names no work type) is missing or read-only under Global"
+
+
+@needs_node
+def test_a_work_type_shows_its_own_rows_and_the_global_ones_read_only_beneath(ran):
+    """Under Polish: Polish's own rows editable, then the Global rows tagged Global with no Edit,
+    Remove or switch and a note saying where to edit. The other work types' rows and the global values
+    do not appear.
+
+    Mutation: draw a Global row with its buttons on a work type, sort Global above own, or show the
+    Markup group on a work type."""
+    g = ran["globalTab"]
+    assert g["polishOwnEditable"]
+    assert g["polishGlobalReadOnly"], "a Global row on a work type is editable or untagged"
+    assert g["polishOwnBeforeGlobal"], "the Global rows are not underneath"
+    assert g["polishNoSealRows"], "another work type's row shows under Polish"
+    assert g["polishTitles"] == ["Assemblies", "Materials"], g["polishTitles"]
+    assert g["sealShowsOnlySeal"]
+    assert g["feesOnlyUnderGlobal"], "Fees + Textura shows on a work type"
+
+
+@needs_node
+def test_adding_a_default_files_the_work_types_of_the_view_it_was_added_on(ran):
+    """Under Global an add saves default_work_types [] (every new bid), even for a row that named a
+    work type before; under a work type it names that type, joining any it already has, so the row
+    lands as that tab's own. Remove files nothing; a refused add puts the types back.
+
+    Mutation: stop sending the list from setDefault, or send [] from a work type."""
+    g = ran["globalTab"]
+    assert [(c["kind"], c["id"], c["workTypes"]) for c in g["addUnderGlobal"]] == [
+        ("items", "n1", []), ("labor", "ln", [])]
+    assert g["rowsAfterGlobalAdd"] == {"n1": [], "ln": []}
+    assert [(c["id"], c["workTypes"]) for c in g["addUnderPolish"]] == [
+        ("n2", ["polish"]), ("n3", ["epoxy", "polish"])]
+    assert g["rowsAfterPolishAdd"] == {"n2": ["polish"], "n3": ["epoxy", "polish"]}
+    assert g["removeCalls"] == [{"kind": "items", "id": "g1", "on": False, "workTypes": None}]
+    assert g["refusedPutsTypesBack"]
