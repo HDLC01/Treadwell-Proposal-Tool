@@ -1647,7 +1647,7 @@
       var cost = B.laborCost(r);
       if (!cost && (r || {}).id !== "travel") return;
       labRows.push([r.label || "Labor line",
-                    B.num(r.guys) + " × " + B.num(r.days) + " × " + B.money2(r.rate),
+                    B.num(r.guys) + " × " + B.num(r.days) + " × " + B.money2(B.laborRateOf(r)),
                     esc(moneyAuto(cost))]);
     });
     if (!labRows.length) labRows.push(["No labor entered yet", "", ""]);
@@ -2040,7 +2040,9 @@
   var LABOR_RATE = B.SHIPPED_LABOR_RATE;
   function newLaborRow() {
     laborSeq += 1;
-    return { id: "u_" + Date.now() + "_" + laborSeq, label: "", guys: "", days: "", rate: LABOR_RATE };
+    // rate_default is the rate a cleared Rate box falls back to (B.laborRateOf).
+    return { id: "u_" + Date.now() + "_" + laborSeq, label: "", guys: "", days: "", rate: LABOR_RATE,
+             rate_default: LABOR_RATE };
   }
 
   /** The warning under a labor rate box: the shared "Default value: $X.XX" when this row's rate is
@@ -2516,6 +2518,22 @@
         }
       }
     }
+    // A CLEARED RATE BOX GOES BACK TO THE LINE'S OWN RATE (Hanz, 2026-10-09), on change like Guys
+    // above, so typing "3", backspace, "4" never snaps. The row was already priced at that rate while
+    // the box was empty (B.laborRateOf); this writes it back into the model and the box so the screen,
+    // the total and the saved blob agree. In place, never a rebuild: a rebuild eats the next click.
+    // Typing 0 is not blank and stays zero. A row with no default to fall back to stays blank.
+    if (blankKey === "rate" && el.getAttribute("data-lab") !== null && String(el.value).trim() === "") {
+      var rateRow = M.labor[parseInt(el.getAttribute("data-lab"), 10)];
+      if (rateRow && B.laborRateOf(rateRow) > 0) {
+        var back = B.laborRateOf(rateRow);
+        rateRow.rate = back;
+        el.value = String(back);
+        changed(false);
+        return;
+      }
+    }
+
     var ti = el.getAttribute("data-tk");
     if (ti === null) return;
     var i = parseInt(ti, 10);
@@ -2670,6 +2688,7 @@
     // landed. Null, not an empty array, for "not asked": an empty array is a real answer (the
     // table exists and holds nothing) and the two must not be confused.
     var laborDefaults = B.laborUnstated(state.polish_estimate) ? loadLaborDefaults() : null;
+    var libraryLaborRows = [];
     // The company labor rate is read for EVERY bid, a saved one included: it is only APPLIED to a
     // new bid (the laborDefaults gate below), but "Default $X" under a rate needs it on any.
     var laborRate = loadLaborRate();
@@ -2730,9 +2749,15 @@
     if (laborDefaults) {
       // Library rows with no rate of their own and Travel follow the company rate, then the three
       // crew rows are set to it. New bids only: this whole block is behind the laborUnstated gate.
-      var laborRows = await laborDefaults;
-      M.labor = B.applyLaborRate(
-        B.seedLibraryLabor(M.labor, laborRows, LABOR_RATE, "polish"), LABOR_RATE);
+      var laborRows = B.withCrewFallback(await laborDefaults);
+      libraryLaborRows = laborRows;
+      // THE CREW LINES COME FROM THE LABOR LIST LIKE ANY OTHER DEFAULT (Hanz, 2026-10-09). A model
+      // that states no rows reads as the four shipped ones (migrateModel's legacyLabor), so keep
+      // only Travel here and let the library put the rest on; withCrewFallback above is the shipped
+      // set standing in only when the library cannot answer.
+      M.labor = M.labor.filter(function (r) { return r && r.id === "travel"; });
+      M.labor = B.crewFirst(B.applyLaborRate(
+        B.seedLibraryLabor(M.labor, laborRows, LABOR_RATE, "polish"), LABOR_RATE));
       // Travel is a default like any other: if the library says this bid does not get it, say so
       // on the model so a reload does not append the "missing" row back (migrateModel).
       if (B.travelDeclined(laborRows, "polish")) M.no_travel_labor = true;
@@ -2791,7 +2816,10 @@
     // otherwise). Nothing is written to the draft here; the first edit saves the filled rows, and
     // from then on the rows are the BID's.
     if (laborCalc) {
-      M.labor = B.applyLaborCalc(M.labor, await laborCalc, B.takeoffSf(M.takeoff), LABOR_RATE);
+      var calcRows = B.withCrewCalcFallback(await laborCalc);
+      M.labor = B.applyLaborCalc(M.labor, calcRows, B.takeoffSf(M.takeoff), LABOR_RATE);
+      // A rate typed on the Labor tab beats the calculator's blank ("company rate").
+      M.labor = B.keepLibraryRates(M.labor, libraryLaborRows, calcRows);
       // Every row the calculator did not fill remembers the rate it was seeded with (G1).
       M.labor = B.stampRateDefaults(M.labor);
       syncAutoGuys();

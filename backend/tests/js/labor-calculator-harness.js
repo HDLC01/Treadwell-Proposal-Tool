@@ -201,7 +201,9 @@ const RULE = (key, formula, extra) => Object.assign({ id: "r-" + key, layout: "g
     const s = make({ rules: [RULE("labor_rate", "40")],
                       calc: [{ line_id: "mockup", mode: "fixed", guys: 3, days: 0.5, hours_per_day: 8, rate: null,
                                crew: null, sf_per_day: null }],
-                      labor: [{ id: "u1", name: "Sealer", rate: 30, unit: "days", favorite: true },
+                      // The crew lines are rows of the Labor list now (LS1): listed once, not twice.
+                      labor: [{ id: "polishing", name: "Polishing", rate: 33, unit: "days", favorite: true },
+                              { id: "u1", name: "Sealer", rate: 30, unit: "days", favorite: true },
                               { id: "u2", name: "Not a default", rate: 30, unit: "days", favorite: false },
                               { id: "u3", name: "Hours thing", rate: 30, unit: "hours", favorite: true },
                               { id: "travel", name: "Travel", rate: 33, unit: "hours", favorite: true }] });

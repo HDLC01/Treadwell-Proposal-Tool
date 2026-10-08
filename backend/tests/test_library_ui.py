@@ -396,6 +396,7 @@ def test_the_labor_tab_lists_every_line_default_or_not(ran):
     assert t["customLinesCanBeDeleted"], "a labor line has no delete on its own tab"
     assert t["travelCannotBeDeleted"], "Travel is offered a delete the server refuses"
     assert t["travelRateIsEditable"], "Travel cannot be edited on the Labor tab"
+    assert t["travelNameDrawn"], "the Travel row does not read 'Travel Labor' on the Labor tab (LS1)"
     assert t["travelHasChips"], "Travel is missing its work-type chips (or still says Every estimate)"
     assert t["customLinesHaveChips"], "a labor line cannot be scoped to a work type"
     assert t["moreStartsShut"], "the More fields are open before anybody asks"

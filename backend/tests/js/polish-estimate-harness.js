@@ -4019,5 +4019,91 @@ const rendered = [];      // every string the page put on screen, for the Labour
     };
   }
 
+
+  // ── LS1. THE CREW LINES COME FROM THE LABOR LIST; A BLANK RATE IS THE LINE'S OWN; NO EMPTY CARDS ──
+  {
+    const RULE40 = [{ id: "mk1", layout: "global", line_key: "labor_rate", formula: "40", applies: true }];
+    const TRAVEL = { id: "travel", name: "Travel", rate: 33, unit: "hours", guys_auto: true, favorite: true,
+                     default_work_types: [], sort: -1, notes: "" };
+    const crewRow = (id, name, sort, extra) => Object.assign({ id: id, name: name, rate: 33, unit: "days",
+      guys_auto: false, favorite: true, default_work_types: ["polish"], sort: sort, notes: "" }, extra || {});
+    const CALCS = [
+      { line_id: "polishing", mode: "fixed", guys: 4, days: null, hours_per_day: 8, rate: null, crew: null, sf_per_day: null },
+      { line_id: "mockup", mode: "fixed", guys: 3, days: 0.5, hours_per_day: 8, rate: null, crew: null, sf_per_day: null },
+      { line_id: "jointfill", mode: "fixed", guys: 3, days: null, hours_per_day: 8, rate: null, crew: null, sf_per_day: null },
+    ];
+    const rowOf = (built, id) => built.api.model().labor.find((r) => r.id === id);
+    const idx = (built, id) => built.api.model().labor.findIndex((r) => r.id === id);
+    const ids = (built) => built.api.model().labor.map((r) => r.id);
+    const fresh = (opts) => build(Object.assign({ blob: blob({ polish_estimate: null, polish_sf: 9000 }),
+                                                  markupRules: RULE40 }, opts));
+
+    // A. the library's rows (Kyle re-rated Polishing and renamed Mock-up) are what the bid opens with.
+    const a = fresh({ labor: [TRAVEL, crewRow("polishing", "Polishing", 1, { rate: 41 }),
+                              crewRow("mockup", "Mock-up crew", 2), crewRow("jointfill", "Joint filler", 3)],
+                      laborCalc: CALCS });
+    await a.api.init();
+    out.ls1Library = { ids: ids(a), polishing: clone(rowOf(a, "polishing")), mockup: clone(rowOf(a, "mockup")),
+                       jointfill: clone(rowOf(a, "jointfill")) };
+
+    // B. the library cannot answer (read fails): the shipped crew stands in, at the company rate.
+    const f = fresh({ laborFails: true, laborCalcFails: true });
+    await f.api.init();
+    out.ls1Fallback = { ids: ids(f), rows: f.api.model().labor.map((r) => [r.id, r.guys, r.days, r.rate]) };
+
+    // C. a line taken off the defaults (favorite false) is NOT brought back by the fallback.
+    const c = fresh({ labor: [TRAVEL, crewRow("polishing", "Polishing", 1, { favorite: false }),
+                              crewRow("mockup", "Mock-up", 2), crewRow("jointfill", "Joint filler", 3)],
+                      laborCalc: CALCS });
+    await c.api.init();
+    out.ls1Removed = ids(c);
+
+    // D. a blank Rate box prices at the line's own rate, and repaints in place.
+    const d = a;
+    d.api.go(1);
+    const pi = idx(d, "polishing");
+    const rateSel = '[data-lab="' + pi + '"][data-k="rate"]';
+    typeInto(d, '[data-lab="' + pi + '"][data-k="days"]', "5");
+    const priced = B.laborCost(rowOf(d, "polishing"));
+    const cardBefore = d.doc.querySelector('[data-lab-card="' + pi + '"]');
+    const costSel = '[data-lcost-for="' + pi + '"]';
+    typeInto(d, rateSel, "");                        // the box is empty while typing
+    const whileEmpty = { rate: rowOf(d, "polishing").rate, cost: txt(d, costSel), total: B.laborCost(rowOf(d, "polishing")) };
+    changeTo(d, rateSel, "");                        // the commit: the box shows the rate again
+    const afterChange = { rate: rowOf(d, "polishing").rate, box: need(d, rateSel).value,
+                          sameCard: d.doc.querySelector('[data-lab-card="' + pi + '"]') === cardBefore,
+                          cost: txt(d, costSel) };
+    typeInto(d, rateSel, "0");
+    changeTo(d, rateSel, "0");
+    const zero = { rate: rowOf(d, "polishing").rate, cost: B.laborCost(rowOf(d, "polishing")) };
+    typeInto(d, rateSel, "");
+    changeTo(d, rateSel, "");
+    const off = clone(rowOf(d, "polishing"));
+    off.rate = ""; off.enabled = false;
+    out.ls1Blank = { priced: priced, whileEmpty: whileEmpty, afterChange: afterChange, zero: zero,
+                     offCost: B.laborCost(off), unstampedBlank: B.laborCost({ guys: 3, days: 5, rate: "" }),
+                     stampedBlank: B.laborCost({ guys: 3, days: 5, rate: "", rate_default: 33 }),
+                     calcBlank: B.laborCost({ guys: 3, days: 5, rate: "", calc_default: { rate: 50 }, rate_default: 33 }),
+                     savedWarn: warn(d, '[data-ratedflt-for="' + pi + '"]') };
+
+    // D2. a SAVED row holding a blank rate beside a stamp priced $0 and still does after loading.
+    const savedBlank = B.migrateModel({ version: 2, takeoff: [], labor: [
+      { id: "polishing", label: "Polishing", guys: 3, days: 1, rate: "", rate_default: 33 },
+      { id: "mockup", label: "Mock-up", guys: 3, days: 1, rate: "", calc_default: { rate: 50 } }] }).labor;
+    out.ls1SavedBlank = { a: B.laborCost(savedBlank[0]), b: B.laborCost(savedBlank[1]) };
+
+    // E. a saved draft with five empty cards opens without them, and its total does not move.
+    const six = [{ id: "polishing", label: "Polishing", guys: 3, days: 5, rate: 33 },
+                 { id: "travel", label: "Travel Labor", guys: 15, days: 2, rate: 33, unit: "hours", guys_auto: true }];
+    const empties = [1, 2, 3, 4, 5].map((n) => ({ id: "u_" + n, label: "", guys: "", days: "", rate: 33 }));
+    const mk = (labor) => ({ version: 2, takeoff: clone(MODEL.takeoff), labor: labor,
+                             conditions: clone(MODEL.conditions), contingency: 0, fees: 0, totals: {} });
+    const withE = build({ blob: blob({ polish_estimate: mk(six.concat(empties)) }) });
+    const without = build({ blob: blob({ polish_estimate: mk(six) }) });
+    await withE.api.init(); await without.api.init();
+    out.ls1Empty = { ids: ids(withE), total: B.laborTotal(withE.api.model().labor),
+                     totalWithout: B.laborTotal(without.api.model().labor) };
+  }
+
   console.log(JSON.stringify(out));
 })().catch((err) => { console.error(err && err.stack || err); process.exit(1); });

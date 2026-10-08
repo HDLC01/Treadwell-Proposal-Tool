@@ -3463,7 +3463,10 @@ def test_a_new_bid_fills_its_default_labor_from_the_calculator(ran):
     m = lc["first"]["mockup"]
     assert (m["guys"], m["days"], m["rate"]) == (2, 1, 50)
     j = lc["first"]["jointfill"]
-    assert j["days"] == "" and "calc_default" not in j and j["rate"] == 40
+    # A line with no saved mode still opens as the shipped crew line did (3 guys, blank days, the
+    # company rate): the shipped starting crew stands in for a calculator row (Phase LS1).
+    assert j["days"] == "" and j["guys"] == 3 and j["rate"] == 40
+    assert j["calc_default"]["guys"] == 3 and j["calc_default"]["rate"] == 40
 
 
 def test_changing_a_calculator_figure_shows_the_default_value_warning_and_typing_it_back_clears_it(ran):
@@ -3489,7 +3492,10 @@ def test_no_sf_leaves_days_blank_and_an_absent_table_opens_exactly_as_before(ran
     # typing days over a blank default must not warn "Default value: blank"
     w = lc["noSfWarn"]
     assert w is not None and (w["hidden"] or w["text"].strip() == "")
-    assert lc["gone"]["same"] is True and "calc_default" not in lc["gone"]["polishing"]
+    # An absent calculator table opens the crew lines exactly as before: the shipped starting crew
+    # (3 guys, blank days) is what fills them, so the figures are the same ones.
+    assert lc["gone"]["same"] is True
+    assert lc["gone"]["polishing"]["guys"] == 3 and lc["gone"]["polishing"]["days"] == ""
 
 
 def test_labor_days_follow_the_takeoff_until_the_estimator_edits_them(ran):

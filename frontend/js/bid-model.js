@@ -209,7 +209,23 @@
     // A DAY IS 8 HOURS UNLESS THE ROW SAYS 10 (the Labor Calculator's "hours a day", 2026-10-06).
     // Only 8 and 10 are honoured, so a stray value in a saved blob prices as the sheet does.
     var perDay = row.unit === "hours" ? 1 : dayHours(row);
-    return num(row.guys) * num(row.days) * num(row.rate) * perDay;
+    return num(row.guys) * num(row.days) * laborRateOf(row) * perDay;
+  }
+
+  /** THE RATE A LABOR ROW PRICES AT, the one place a blank Rate box is resolved (Hanz, 2026-10-09).
+   *  A rate that is typed is the rate, 0 included: typing 0 still means zero. A rate that is BLANK
+   *  is the line's own default rate, not $0: the rate the row was filled with (`calc_default.rate`
+   *  when the Labor Calculator filled it, else the `rate_default` stamp a new bid carries on every
+   *  row). A row with no stamp (a saved bid from before the stamp, which was never filled from
+   *  anything) keeps pricing a blank rate at 0, so no saved bid's total moves. laborCost, the
+   *  Review lines and the box on the card all read this, so the screen and the totals agree. */
+  function laborRateOf(row) {
+    row = row || {};
+    if (!isBlank(row.rate)) return num(row.rate);
+    var d = row.calc_default;
+    if (d && !isBlank(d.rate) && isFinite(Number(d.rate))) return num(d.rate);
+    if (!isBlank(row.rate_default) && isFinite(Number(row.rate_default))) return num(row.rate_default);
+    return 0;
   }
 
   /** The built-in crew lines the Labor Calculator can configure (the ids freshModel() gives them).
@@ -276,6 +292,32 @@
       // keep following the takeoff (followLaborDays). Fixed lines carry none and never move.
       var cfg = byId[String(r.id)];
       if (cfg.mode === "sf" && num(cfg.sf_per_day) > 0) copy.calc_default.sf_per_day = num(cfg.sf_per_day);
+      out[i] = copy;
+    }
+    return out;
+  }
+
+  /** A LIBRARY LINE'S OWN RATE BEATS THE COMPANY RATE EVEN WHEN THE CALCULATOR FILLED IT. The
+   *  calculator's blank rate means "the company rate", and applyLaborCalc stamps that over the row;
+   *  but a rate an admin typed on the Labor tab (a Polishing at $40) is the line's own, and the
+   *  calculator row carries none. Run after applyLaborCalc, NEW BIDS ONLY, on the rows seedLibraryLabor
+   *  took from `libRows`: a row whose calculator mode has no rate of its own and whose library row
+   *  does gets that rate, in both the row and its calc_default so no "Default value" warning shows.
+   *  A NEW array of NEW rows where changed. */
+  function keepLibraryRates(labor, libRows, cfgs) {
+    var out = (labor instanceof Array) ? labor.slice() : [];
+    var lib = {}, cfg = {};
+    (libRows instanceof Array ? libRows : []).forEach(function (l) { if (l && l.id != null) lib[String(l.id)] = l; });
+    (cfgs instanceof Array ? cfgs : []).forEach(function (c) { if (c && c.line_id) cfg[String(c.line_id)] = c; });
+    for (var i = 0; i < out.length; i++) {
+      var r = out[i];
+      if (!r || !r.calc_default || r.id === "travel") continue;
+      var l = lib[String(r.id)], c = cfg[String(r.id)];
+      if (!l || !c || num(c.rate) > 0 || !libraryRateIsOwn(l, isCrewId(l.id))) continue;
+      var copy = copyInto({}, r), dc = copyInto({}, r.calc_default);
+      copy.rate = Number(l.rate);
+      dc.rate = Number(l.rate);
+      copy.calc_default = dc;
       out[i] = copy;
     }
     return out;
@@ -366,7 +408,7 @@
     for (var i = 0; i < rows.length; i++) {
       var r = rows[i] || {};
       if (r.id !== "jointfill") continue;
-      return laborCost({ guys: 1, days: r.days, rate: r.rate, unit: r.unit,
+      return laborCost({ guys: 1, days: r.days, rate: laborRateOf(r), unit: r.unit,
                          hours_per_day: r.hours_per_day, enabled: r.enabled });
     }
     return 0;
@@ -1154,10 +1196,11 @@
       var r = out[i];
       if (!r) continue;
       var id = String(r.id);
-      var crew = (id === "polishing" || id === "mockup" || id === "jointfill");
-      var travelOnShipped = (id === "travel") &&
+      // Travel and the three crew lines move only while still on the shipped $33 or blank: a rate
+      // the library gave one of them is that rate's to keep (the crew lines are library rows now).
+      var onShipped = (id === "travel" || isCrewId(id)) &&
         (isBlank(r.rate) || !isFinite(Number(r.rate)) || Number(r.rate) === SHIPPED_LABOR_RATE);
-      if (crew || travelOnShipped) {
+      if (onShipped) {
         var copy = copyInto({}, r);
         copy.rate = dflt;
         out[i] = copy;
@@ -1263,8 +1306,10 @@
   function libraryLaborRow(row, dflt) {
     var r = row || {};
     // A row with no rate of its own follows the company labor rate -- when the caller has one.
-    // `dflt` omitted is the old behaviour exactly (the stored number, 0 included).
-    var rate = (dflt !== undefined && dflt !== null && !libraryRateIsOwn(r, false))
+    // `dflt` omitted is the old behaviour exactly (the stored number, 0 included). The three crew
+    // lines are seeded at the shipped $33.00, which nobody chose, so it reads as "no rate" for them
+    // exactly as it does for Travel.
+    var rate = (dflt !== undefined && dflt !== null && !libraryRateIsOwn(r, isCrewId(r.id)))
       ? laborRateOrShipped(dflt) : Number(r.rate);
     var out = { id: r.id, label: r.name, guys: "", days: "", rate: rate,
                 unit: r.unit, guys_auto: !!r.guys_auto };
@@ -1767,6 +1812,123 @@
     return !(m.conditions_shown && m.conditions_shown[key] === false);
   }
 
+  /** THE THREE CREW LINES, as the Labor list holds them (Hanz, 2026-10-09: "Labor is like the Items
+   *  tab for pulling in data in the estimate sheet"). They are rows of public.library_labor with
+   *  these SAME ids, so a bid saved before they moved and a bid opened after read the same rows
+   *  (seedLibraryLabor's id de-dup keeps the two from doubling), and the starting guys / days live
+   *  where every other default's do: a `fixed` row of library_labor_calc keyed by the line id.
+   *
+   *  THE LIBRARY IS THE SOURCE; THIS CONSTANT IS ONLY THE FALLBACK, the dye / joint filler reserved
+   *  row contract: it stands when the library cannot answer (a database the seed has not reached, a
+   *  read that failed) and nowhere else. backend/ops/seed_crew_labor.sql writes the same figures,
+   *  and test_crew_labor_library.py pins the two equal. `rate` is the $33.00 the sheet ships, which
+   *  libraryLaborRow reads as "no rate of its own" so these follow the company labor rate until an
+   *  admin types one. `guys`/`days` are the starting crew; blank days is an unknown, never 0. */
+  var SHIPPED_CREW = [
+    { id: "polishing", name: "Polishing", sort: 1, guys: 3, days: "" },
+    { id: "mockup", name: "Mock-up", sort: 2, guys: 3, days: 0.5 },
+    { id: "jointfill", name: "Joint filler", sort: 3, guys: 3, days: "" }
+  ];
+
+  function isCrewId(id) {
+    for (var i = 0; i < SHIPPED_CREW.length; i++) if (SHIPPED_CREW[i].id === String(id)) return true;
+    return false;
+  }
+
+  /** The shipped crew lines as library_labor rows (what GET /api/library/labor returns). */
+  function shippedCrewRows() {
+    return SHIPPED_CREW.map(function (c) {
+      return { id: c.id, name: c.name, rate: SHIPPED_LABOR_RATE, unit: "days", guys_auto: false,
+               sort: c.sort, notes: "", favorite: true, default_on: null, default_work_types: ["polish"] };
+    });
+  }
+
+  /** The shipped crew lines' starting guys / days as library_labor_calc rows (GET
+   *  /api/library/labor-calc). `rate` null is the company labor rate. */
+  function shippedCrewCalc() {
+    return SHIPPED_CREW.map(function (c) {
+      return { line_id: c.id, mode: "fixed", crew: null, sf_per_day: null, hours_per_day: 8,
+               guys: c.guys, days: c.days === "" ? null : c.days, rate: null };
+    });
+  }
+
+  /** `rows` (the library's labor list) with the shipped crew lines added WHEN THE LIBRARY HAS NONE
+   *  OF THEM: not one of the three ids, favorited or not. That is the only way this can tell "the
+   *  library cannot answer" (no table, a failed read) from "somebody took a line off the defaults"
+   *  (its row is still listed, favorite false), and only the first is the fallback's to answer.
+   *  A NEW array; the input is never touched. */
+  function withCrewFallback(rows) {
+    var out = (rows instanceof Array) ? rows.slice() : [];
+    for (var i = 0; i < out.length; i++) if (out[i] && isCrewId(out[i].id)) return out;
+    return out.concat(shippedCrewRows());
+  }
+
+  /** `cfgs` (the labor calculator's rows) plus the shipped starting guys / days for each crew line
+   *  that has no row of its own. A mode cannot be cleared once saved, so an absent one only ever
+   *  means the seed has not reached this database. A NEW array. */
+  function withCrewCalcFallback(cfgs) {
+    var out = (cfgs instanceof Array) ? cfgs.slice() : [];
+    var have = {};
+    out.forEach(function (c) { if (c && c.line_id) have[String(c.line_id)] = true; });
+    shippedCrewCalc().forEach(function (c) { if (!have[c.line_id]) out.push(c); });
+    return out;
+  }
+
+  /** The four rows freshModel() used to carry, for what still has to READ a model that states no
+   *  rows of its own: migrateModel on a saved v2 blob with an empty `labor`, and a v1 draft. The
+   *  figures come from SHIPPED_CREW, so there is one list. A NEW array of NEW rows each call. */
+  function legacyLabor() {
+    var rows = SHIPPED_CREW.map(function (c) {
+      return { id: c.id, label: c.name, guys: c.guys, days: c.days, rate: SHIPPED_LABOR_RATE };
+    });
+    rows.push(withHoursSeed(travelSeed()));
+    return rows;
+  }
+
+  /** THE SHEET'S ORDER: the crew lines first (Polishing, Mock-up, Joint filler, in SHIPPED_CREW's
+   *  order), then Travel, then every other line as it came. The crew rows now arrive from the Labor
+   *  list after Travel and after any custom line, and a new bid should still open the way the sheet
+   *  reads (A37..A44) and the way every bid has. A NEW array; rows are the same objects. */
+  function crewFirst(rows) {
+    var list = (rows instanceof Array) ? rows : [];
+    var crew = [], travel = [], rest = [];
+    SHIPPED_CREW.forEach(function (c) {
+      list.forEach(function (r) { if (r && String(r.id) === c.id) crew.push(r); });
+    });
+    list.forEach(function (r) {
+      if (r && String(r.id) === "travel") travel.push(r);
+      else if (!(r && isCrewId(r.id))) rest.push(r);
+    });
+    return crew.concat(travel, rest);
+  }
+
+  /** A SAVED ROW'S BLANK RATE STAYS ZERO. The blank-rate fallback (laborRateOf) is for the box a
+   *  person clears on screen; a saved draft that already holds a blank rate beside a stamp priced it
+   *  at $0, so loading pins it to 0 and the bid's total does not move. A NEW array. */
+  function pinSavedBlankRates(rows) {
+    if (!(rows instanceof Array)) return rows;
+    return rows.map(function (r) {
+      if (!r || typeof r !== "object" || !isBlank(r.rate)) return r;
+      if (r.rate_default === undefined && !r.calc_default) return r;
+      var copy = copyInto({}, r);
+      copy.rate = 0;
+      return copy;
+    });
+  }
+
+  /** `rows` without the cards nobody filled in: no name, no guys and no days, and not Travel.
+   *  Such a row prices $0 (laborCost multiplies guys by days), so dropping it moves no total; it is
+   *  what "+ Add a labor line" leaves behind when it is never used. A library default always has a
+   *  name, so it never matches. A NEW array; the rows are the same objects. */
+  function dropEmptyLaborRows(rows) {
+    if (!(rows instanceof Array)) return rows;
+    return rows.filter(function (r) {
+      if (!r || typeof r !== "object") return true;
+      if (r.id === "travel" || r.unit === "hours") return true;
+      return !(isBlank(r.label) && isBlank(r.guys) && isBlank(r.days));
+    });
+  }
+
   /** The labor rows the template itself seeds: A37 = 3 guys at C37 = $33.00/hr, the mock-up at
    *  B40 = half a day, and joint filling at C44 = $33.00. Days are left blank on the two an
    *  estimator has to judge.
@@ -1784,12 +1946,14 @@
     return {
       version: 2,
       takeoff: [{ assembly_id: "", assembly_name: "", measurement: "", unit: "SF" }],
-      labor: [
-        { id: "polishing", label: "Polishing", guys: 3, days: "", rate: SHIPPED_LABOR_RATE },
-        { id: "mockup", label: "Mock-up", guys: 3, days: 0.5, rate: SHIPPED_LABOR_RATE },
-        { id: "jointfill", label: "Joint filler", guys: 3, days: "", rate: SHIPPED_LABOR_RATE },
-        withHoursSeed(travelSeed())
-      ],
+      // THE SHIPPED FOUR, still. This is what every reader that has no library to ask sees (the
+      // golden, a model that states no rows, the v1 migration), and what the polish-chain golden pins
+      // unchanged. A NEW bid on the estimate page does NOT keep the three crew rows from here: init
+      // keeps only Travel and takes Polishing / Mock-up / Joint filler from the Labor list
+      // (Items & Assemblies -> Labor) like any other default, with SHIPPED_CREW as the fallback
+      // when the library cannot answer. legacyLabor() builds these rows FROM SHIPPED_CREW, so there
+      // is one list.
+      labor: legacyLabor(),
       // ALL THREE TAKEOFF CONDITIONS SHIP OFF, and joint_filler is the one that moved.
       //
       // It shipped ON until 2026-09-19 because Kyle's template ships Polish!E29 = "Yes". That was
@@ -1875,15 +2039,22 @@
     var fresh = freshModel();
 
     if (model.version === 2) {
+      // THE CARDS NOBODY FILLED IN ARE NOT OPENED (Hanz, 2026-10-09: no empty cards). Such a row
+      // prices $0, so no total moves. Travel is never one of them.
+      var laborIn = model.labor;
+      if (laborIn instanceof Array && laborIn.length) {
+        laborIn = pinSavedBlankRates(dropEmptyLaborRows(laborIn));
+        if (!laborIn.length) laborIn = [withHoursSeed(travelSeed())];
+      }
       var out = {
         version: 2,
-        takeoff: model.takeoff, labor: model.labor,
+        takeoff: model.takeoff, labor: laborIn,
         conditions: {}, contingency: model.contingency, fees: model.fees,
         totals: (model.totals && typeof model.totals === "object") ? model.totals : {}
       };
       if (!(out.takeoff instanceof Array) || !out.takeoff.length) out.takeoff = fresh.takeoff;
       if (!(out.labor instanceof Array) || !out.labor.length) {
-        out.labor = fresh.labor;
+        out.labor = legacyLabor();
       } else {
         // Travel joined `freshModel()`'s labor rows here on 2026-09-12 (#491), but a sandbox
         // already saved before that keeps whatever row count it had FOREVER — the branch above
@@ -1915,15 +2086,15 @@
         // not "a test that only cares about one row." Don't add the generic loop without doing
         // that second half — that's exactly what broke here.
         var hasTravel = false;
-        for (var li = 0; li < model.labor.length; li++) {
-          if (model.labor[li] && model.labor[li].id === "travel") { hasTravel = true; break; }
+        for (var li = 0; li < laborIn.length; li++) {
+          if (laborIn[li] && laborIn[li].id === "travel") { hasTravel = true; break; }
         }
         if (model.no_travel_labor === true) {
           // A NEW bid the library said not to give Travel (seedLibraryLabor): its absence is the
           // answer, not a stale draft. Carried through so the next load does not append it back.
           out.no_travel_labor = true;
         } else if (!hasTravel) {
-          out.labor = model.labor.concat([travelSeed()]);
+          out.labor = laborIn.concat([travelSeed()]);
         } else {
           // A TRAVEL ROW CAN ALSO BE OUT OF DATE, which is the second half of the same problem and
           // the reason this is a map rather than the one-line pass-through it started as. Travel
@@ -1938,7 +2109,7 @@
           // already carries a guys figure had that typed by hand (nothing auto-filled it before
           // this existed), so turning the auto back on would overwrite their number on the next
           // keystroke anywhere in the panel.
-          out.labor = model.labor.map(function (r) {
+          out.labor = laborIn.map(function (r) {
             if (!r || r.id !== "travel") return r;
             // RELABEL, "Travel" -> "Travel Labor" (2026-10-05). Only a label that is EXACTLY the
             // old word: a name somebody typed over it is theirs. A copy, never an edit in place.
@@ -2026,8 +2197,9 @@
 
       var labour = (model.labour && typeof model.labour === "object") ? model.labour : {};
       var labor = [];
-      for (var j = 0; j < fresh.labor.length; j++) {
-        var seed = fresh.labor[j];
+      var legacy = legacyLabor();
+      for (var j = 0; j < legacy.length; j++) {
+        var seed = legacy[j];
         var old = labour[V1_LABOUR_KEY[seed.id]] || {};
         // BUILT ON THE SEED, not listed field by field. This used to name the five v1 fields
         // explicitly and rebuild each row from scratch, which silently dropped every field a seed
@@ -2250,7 +2422,7 @@
       var missing = [];
       if (!filledIn(row.guys)) missing.push("guys");
       if (!filledIn(row.days)) missing.push(row.unit === "hours" ? "hours" : "days");
-      if (!filledIn(row.rate)) missing.push("rate");
+      if (!filledIn(row.rate) && !(laborRateOf(row) > 0)) missing.push("rate");
       if (missing.length > 0 && missing.length < 3) {
         var which = missing.length === 1 ? missing[0]
           : missing.slice(0, -1).join(", ") + " and " + missing[missing.length - 1];
@@ -2278,7 +2450,7 @@
     conditionsUnstated: conditionsUnstated,
     setMeasurement: setMeasurement,
     seedConditionsShown: seedConditionsShown, conditionShown: conditionShown,
-    laborCost: laborCost, laborTotal: laborTotal, removeExistingHand: removeExistingHand,travelManDays: travelManDays,
+    pinSavedBlankRates: pinSavedBlankRates, laborCost: laborCost, laborRateOf: laborRateOf, laborTotal: laborTotal, removeExistingHand: removeExistingHand,travelManDays: travelManDays,
     // Lodging and Per Diem, the two travel costs beside Travel Labor (see travelCostsSeed).
     SHIPPED_LODGING_RATE: SHIPPED_LODGING_RATE, SHIPPED_PER_DIEM_RATE: SHIPPED_PER_DIEM_RATE,
     TRAVEL_LINE_KEYS: TRAVEL_LINE_KEYS, TRAVEL_LABEL: TRAVEL_LABEL, travelLabel: travelLabel,
@@ -2318,7 +2490,11 @@
     travelAppliesToBid: travelAppliesToBid, travelDeclined: travelDeclined,
     LABOR_CALC_BUILTINS: LABOR_CALC_BUILTINS, dayHours: dayHours, laborCalcValues: laborCalcValues, applyLaborCalc: applyLaborCalc,
     laborCalcDiffers: laborCalcDiffers,
-    laborUnstated: laborUnstated,
+    laborUnstated: laborUnstated, keepLibraryRates: keepLibraryRates,
+    SHIPPED_CREW: SHIPPED_CREW, isCrewId: isCrewId, shippedCrewRows: shippedCrewRows,
+    shippedCrewCalc: shippedCrewCalc, withCrewFallback: withCrewFallback,
+    withCrewCalcFallback: withCrewCalcFallback, legacyLabor: legacyLabor,
+    dropEmptyLaborRows: dropEmptyLaborRows, crewFirst: crewFirst,
     // The company labor rate (Items & Assemblies -> Labor): read, applied to a new bid, and the fallback.
     SHIPPED_LABOR_RATE: SHIPPED_LABOR_RATE, laborRateOrShipped: laborRateOrShipped,
     laborRateFromRules: laborRateFromRules, applyLaborRate: applyLaborRate,
