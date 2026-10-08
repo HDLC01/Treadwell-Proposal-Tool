@@ -210,7 +210,7 @@ const out = {};
   const src = read(path.join(ROOT, "js", "library.js"));
   const ids = ["tab-items", "tab-asm", "tab-labor", "tab-labcalc", "tab-vendors", "tab-defaults",
                "pane-items", "pane-asm", "pane-labor", "pane-labcalc", "pane-vendors", "pane-defaults",
-               "wt-polish", "wt-seal", "wt-epoxy", "wt-leveling", "wt-gyp"];
+               "wt-global", "wt-polish", "wt-seal", "wt-epoxy", "wt-leveling", "wt-gyp"];
   const body = [
     decl(src, "var", "view", "library.js"),
     decl(src, "var", "WORK_TYPES", "library.js"),
@@ -274,6 +274,24 @@ const out = {};
     api.restoreView();
     out.libWorkType = { view: api.view(), wt: api.wt(),
                         strip: api.WORK_TYPES.filter((k) => doc.els["wt-" + k].attrs["aria-selected"] === "true") };
+  }
+  // THE GLOBAL PILL (2026-10-09): the first strip entry and the page's own default. A fresh open on
+  // Defaults selects it and nothing else; a remembered work type still wins; and pressing the pill
+  // records it like any other.
+  {
+    const { win, doc, api } = run("#tab=defaults");
+    api.restoreView();
+    const strip = (d) => ["global"].concat(api.WORK_TYPES)
+      .filter((k) => d.els["wt-" + k].attrs["aria-selected"] === "true");
+    const fresh = { wt: api.wt(), strip: strip(doc) };
+    const remembered = run("#tab=defaults&wt=epoxy");
+    remembered.api.restoreView();
+    const pressed = run("#tab=defaults&wt=epoxy");
+    pressed.api.restoreView();
+    pressed.api.onWtClick({ target: fakeTarget("data-work-type", "global") });
+    out.libGlobal = { fresh,
+                      remembered: { wt: remembered.api.wt(), strip: strip(remembered.doc) },
+                      pressed: { wt: pressed.api.wt(), strip: strip(pressed.doc), hash: pressed.win.location.hash } };
   }
   // A tab that does not exist, and a work type that does not: both fall back, and neither leaves
   // an empty pane behind.

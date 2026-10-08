@@ -317,6 +317,26 @@
     return defaultWorkTypes.indexOf(layout) !== -1;
   }
 
+  /** Where a default sits on the Defaults tab's work-type strip, which is the five tabs plus "global".
+   *
+   *  "own"    the default belongs on that view: under "global" it names no work type; under a tab it names
+   *           that tab.
+   *  "global" a default that names no work type, seen from a tab: it is on every new bid, so the tab shows it
+   *           read-only. It is edited under "global".
+   *  null     it does not belong on that view at all.
+   *
+   *  Storage is unchanged: an empty list (or anything that is not a list) still means every work type. */
+  function defaultScope(defaultWorkTypes, view) {
+    var empty = !Array.isArray(defaultWorkTypes) || !defaultWorkTypes.length;
+    if (view === "global") return empty ? "own" : null;
+    if (!isTab(view)) {
+      throw new Error("work-types.js: defaultScope() was asked about " + said(view) + ", which is neither \"global\" nor a tab (" +
+        listOf(TABS).join(", ") + ").");
+    }
+    if (empty) return "global";
+    return defaultWorkTypes.indexOf(view) !== -1 ? "own" : null;
+  }
+
   /** The tab a workbook sheet id belongs to ("Seal (+Jnts)" is seal), or null for a sheet that is not
    *  priced (Takeoff, Stnd Alts, Specs+Dwgs+Addn, ...). */
   function tabOfSheet(sheetId) {
@@ -471,7 +491,7 @@
     SURFACES: SURFACES, FIELDS: FIELDS, TABS: TABS, JOB_TYPES: JOB_TYPES, CONDITIONS: CONDITIONS,
     jobTypeKeys: jobTypeKeys, tabKeys: tabKeys, isJobType: isJobType, isTab: isTab,
     jobType: jobType, tab: tab, condition: condition,
-    tabsFor: tabsFor, appliesTo: appliesTo, tabOfSheet: tabOfSheet,
+    tabsFor: tabsFor, appliesTo: appliesTo, defaultScope: defaultScope, tabOfSheet: tabOfSheet,
     fieldsFor: fieldsFor, scopesFor: scopesFor,
     conditionsFor: conditionsFor, cellsFor: cellsFor, copyableCells: copyableCells,
     isSplit: isSplit, isPerSheet: isPerSheet, baseSheets: baseSheets, writeCellsFor: writeCellsFor,

@@ -905,10 +905,14 @@
    *  -- no sort, no filter, no default -- so it was free to take over. Renaming it would be DDL on
    *  two separate databases, which is this project's documented way of shipping a 502. The name is
    *  wrong and the migration is worse; this comment is the trade. */
-  async function patchDefault(kind, id, on) {
+  async function patchDefault(kind, id, on, workTypes) {
+    var body = { favorite: on };
+    // Making a row a default also files WHICH work types: none under Global (every new bid), the
+    // tab on screen otherwise. Sent in the same PATCH so the two cannot half-save.
+    if (Array.isArray(workTypes)) body.default_work_types = workTypes;
     var r = await api("/api/library/" + kind + "/" + encodeURIComponent(id), {
       method: "PATCH", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ favorite: on }) });
+      body: JSON.stringify(body) });
     var j = await r.json().catch(function () { return {}; });
     if (!r.ok) throw new Error(j.detail || j.error || ("HTTP " + r.status));
     return j;
@@ -2765,12 +2769,26 @@
     for (var i = 0; i < list.length; i++) if (list[i].id === id) { row = list[i]; break; }
     if (!row) return;
     var was = !!row.favorite;
+    var wasTypes = row.default_work_types;
+    // ADDING FILES THE WORK TYPES TOO. Under Global the row names none, so it lands on every new
+    // bid. Under a work type it names that type (added to any it already names), so it shows as
+    // that tab's own row rather than as a read-only Global one. Remove leaves them alone.
+    var types = null;
+    if (on) {
+      // A row that is not a default today (never was, or was Removed) keeps its old types only as
+      // leftovers; carrying them would bring it back on a tab it was removed from.
+      var had = was && Array.isArray(wasTypes) ? wasTypes : [];
+      types = DEFAULT_WT === "global" ? [] :
+        (!had.length ? [DEFAULT_WT] : had.indexOf(DEFAULT_WT) !== -1 ? had : had.concat([DEFAULT_WT]));
+    }
     row.favorite = !!on;
+    if (types) row.default_work_types = types;
     paint();
     try {
-      await patchDefault(kind, id, !!on);
+      await patchDefault(kind, id, !!on, types);
     } catch (err) {
       row.favorite = was;
+      row.default_work_types = wasTypes;
       paint();
       say("Couldn't save that. " + err.message);
     }
@@ -2992,7 +3010,11 @@
   // under, which markup.TABS holds the same way and test_work_types_python_pin.py pins. `combo` is not
   // among them: a combo job runs on the epoxy AND polish tabs, so it reads both lists.
   var WORK_TYPES = WT.tabKeys();
-  var DEFAULT_WT = WORK_TYPES[0];
+  // THE TAB OPENS ON "global" (Hanz, 2026-10-09: "the default work type should be global since we have
+  // global values"). It is a sixth pill ahead of the five, not a seventh work type: it holds the
+  // global values and the defaults that name NO work type, which is every row written before the work
+  // types existed and every new bid's starting set. A remembered work type in the URL still wins.
+  var DEFAULT_WT = "global";
 
   /** Does this default belong on the tab currently showing?
    *
@@ -3004,6 +3026,7 @@
    *  `wt` is a TAB, which is all this page ever has (the strip above the lists is the five tabs); asking
    *  it about "combo" throws. */
   function appliesToWorkType(row, wt) {
+    if (wt === "global") return WT.defaultScope(row && row.default_work_types, "global") === "own";
     return WT.appliesTo(row && row.default_work_types, wt);
   }
 
@@ -3188,17 +3211,24 @@
   // SEPARATE FROM THE RENDERER so a test can execute the grouping and read it back as data.
   // This page has already shipped a dead button behind a green markup regex once.
   function takeoffDefaultGroups() {
+    // A work type's own rows first, then the global ones read-only beneath them. Stable.
+    var globalNote = '<span class="builtin">Edit on Global</span>';
+    function ownFirst(rows) {
+      return rows.filter(function (r) { return !r.readOnly; })
+        .concat(rows.filter(function (r) { return r.readOnly; }));
+    }
     var groups = [
       { title: "Assemblies",
-        rows: ASMS.filter(function (a) {
-          return a.favorite && appliesToWorkType(a, DEFAULT_WT);
+        rows: ownFirst(ASMS.filter(function (a) {
+          return a.favorite && WT.defaultScope(a.default_work_types, DEFAULT_WT) !== null;
         }).map(function (a) {
           var n = (a.lines || []).length;
-          return { name: a.name,
+          var ro = WT.defaultScope(a.default_work_types, DEFAULT_WT) === "global";
+          return { name: a.name, readOnly: ro,
                    how: n + " item line" + (n === 1 ? "" : "s") + " \u00b7 per " + (a.unit || "SF"),
-                   slider: defaultSlider("assemblies", a.id, a.name, a.default_on !== false, true),
-                   actions: defaultRowActions("assemblies", a.id, a.name) };
-        }) },
+                   slider: defaultSlider("assemblies", a.id, a.name, a.default_on !== false, !ro),
+                   actions: ro ? globalNote : defaultRowActions("assemblies", a.id, a.name) };
+        })) },
       { title: "Materials",
         // JOINT FILLER, REMOVE-EXISTING AND DYE ARE MATERIALS HERE, drawn by the material row's
         // own code. Hanz, 2026-09-18: "die and joint filler are supposed to be materials not
@@ -3209,17 +3239,20 @@
         // LISTED MEANS ON A NEW ESTIMATE, GRAYED UNTIL SWITCHED ON (later on 2026-10-01): listed
         // while condition_defaults.listed is not false, with the material's Edit and Remove; all
         // three still start off (conditionDefaultRow).
-        rows: ITEMS.filter(function (it) {
+        rows: ownFirst(ITEMS.filter(function (it) {
           // Never a reserved row by its `favorite`: the three are listed below, by their condition.
-          return it.favorite && !isReservedItem(it.id) && appliesToWorkType(it, DEFAULT_WT);
+          return it.favorite && !isReservedItem(it.id) &&
+            WT.defaultScope(it.default_work_types, DEFAULT_WT) !== null;
         }).map(function (it) {
           var mrow = materialDefaultRow(it.id, it.name,
                    L.num(it.unit_cost) != null
                      ? L.money(it.unit_cost) + " per " + (it.unit || "unit")
                      : "No cost in the library yet");
-          mrow.slider = defaultSlider("items", it.id, it.name, it.default_on !== false, true);
+          var ro = WT.defaultScope(it.default_work_types, DEFAULT_WT) === "global";
+          mrow.slider = defaultSlider("items", it.id, it.name, it.default_on !== false, !ro);
+          if (ro) { mrow.readOnly = true; mrow.actions = globalNote; }
           return mrow;
-        }).concat(takeoffConditionDefaults().filter(function (c) {
+        })).concat(takeoffConditionDefaults().filter(function (c) {
           // ON THE POLISH TAB ONLY. All three write Polish-sheet cells (CONDITION_CELLS in
           // bid-model.js) and nothing on the other four work types reads them; a combo job
           // reads the Polish list. And only while LISTED -- see conditionDefaultRow.
@@ -3231,7 +3264,10 @@
           return conditionDefaultRow(c);
         })) },
       { title: "Markup",
-        rows: [feesDefaultRow()].concat(GLOBAL_MARKUP.map(function (g) {
+        // THE GLOBAL VALUES LIVE UNDER GLOBAL ONLY. Fees + Textura and the Markup page's global
+        // lines are one value for every work type, so a work type's own tab would show a number
+        // that belongs to none of them.
+        rows: DEFAULT_WT !== "global" ? [] : [feesDefaultRow()].concat(GLOBAL_MARKUP.map(function (g) {
           // EDITABLE HERE, STORED THERE. Hanz asked for no read-only rows on this tab. The
           // danger with a rate is TWO HOMES: markup.py enforces one home per line because
           // two places to set one price disagree the first time somebody changes one, and a
@@ -3339,7 +3375,8 @@
         // morning. The control moved to the material's own row on the Items tab, where the rest
         // of a material's properties (coverage, waste, roundup) now live -- and Edit on this row
         // already goes there.
-        out += "<tr><td>" + esc(r.name) + "</td><td>" +
+        out += "<tr" + (r.readOnly ? ' class="globalrow"' : "") + "><td>" + esc(r.name) +
+          (r.readOnly ? ' <span class="wtall">Global</span>' : "") + "</td><td>" +
           (r.rawHow ? r.how : esc(r.how)) + "</td>" +
           '<td class="rowon">' + (r.slider || "") + "</td>" +
           '<td class="rowact">' + r.actions + "</td></tr>";
@@ -3502,14 +3539,21 @@
     // Removed (favorite false), and only on the work-type sub-tab(s) it is scoped to. With no
     // stored row, or a row whose favorite is absent/null and no work types, it is listed on
     // every tab exactly as before.
+    var travelScope = storedTravel ? WT.defaultScope(storedTravel.default_work_types, DEFAULT_WT)
+                                   : WT.defaultScope([], DEFAULT_WT);
     var travelListed = !storedTravel ||
-      (storedTravel.favorite !== false && appliesToWorkType(storedTravel, DEFAULT_WT));
+      (storedTravel.favorite !== false && travelScope !== null);
+    // A global row seen from a work type is read-only there ("Edit on Global").
+    var travelRo = travelListed && travelScope === "global";
+    var globalNote = '<span class="builtin">Edit on Global</span>';
     var rows = (shipped && travelListed) ? [B.travelSeed(storedTravel)] : [];
+    // Own rows first, the global ones read-only beneath them.
     var out = "";
+    var globOut = "";
     for (var i = 0; i < rows.length; i++) {
       var r = rows[i];
-      out += "<tr>" +
-        "<td>" + esc(r.label) + "</td>" +
+      var trow = "<tr" + (travelRo ? ' class="globalrow"' : "") + ">" +
+        "<td>" + esc(r.label) + (travelRo ? ' <span class="wtall">Global</span>' : "") + "</td>" +
         '<td class="n">' + esc(L.money(r.rate)) + (r.unit === "hours" ? " / hr" : " / day") +
         "</td>" +
         "<td>" + (r.guys_auto
@@ -3517,10 +3561,11 @@
           : "Typed on the estimate") + "</td>" +
         // Travel's slider needs the stored row to PATCH; with none there is nothing to switch.
         '<td class="rowon">' + (storedTravel
-          ? defaultSlider("labor", storedTravel.id, r.label, storedTravel.default_on !== false, ADMIN)
+          ? defaultSlider("labor", storedTravel.id, r.label, storedTravel.default_on !== false, ADMIN && !travelRo)
           : "") + "</td>" +
-        '<td class="rowact">' + laborRowActions(storedTravel) + "</td>" +
+        '<td class="rowact">' + (travelRo ? globalNote : laborRowActions(storedTravel)) + "</td>" +
         "</tr>";
+      if (travelRo) globOut += trow; else out += trow;
     }
     // THE LINES SOMEBODY HAS FAVORITED, beside the one that was always there. Each carries the
     // same Edit/Remove pair the Takeoff list beside it already does, and Remove there and here
@@ -3530,25 +3575,29 @@
     // list only because it has its own row above, filtered by the same two rules (favorite and
     // work type) -- listing it again is the double-Travel row this merge exists to prevent.
     var shown = LABOR.filter(function (r) {
-      return (!shipped || r.id !== shipped.id) && r.favorite && appliesToWorkType(r, DEFAULT_WT);
+      return (!shipped || r.id !== shipped.id) && r.favorite &&
+        WT.defaultScope(r.default_work_types, DEFAULT_WT) !== null;
     });
     for (var k = 0; k < shown.length; k++) {
       var c = shown[k];
-      out += "<tr>" +
-        "<td>" + esc(c.name) + "</td>" +
+      var cro = WT.defaultScope(c.default_work_types, DEFAULT_WT) === "global";
+      var crow = "<tr" + (cro ? ' class="globalrow"' : "") + ">" +
+        "<td>" + esc(c.name) + (cro ? ' <span class="wtall">Global</span>' : "") + "</td>" +
         '<td class="n">' + esc(L.money(c.rate)) +
           (c.unit === "days" ? " / day" : " / hr") + "</td>" +
         "<td>" + (c.guys_auto
           ? "Man-days come off the crew rows above it"
           : "Typed on the estimate") + "</td>" +
-        '<td class="rowon">' + defaultSlider("labor", c.id, c.name, c.default_on !== false, ADMIN) +
+        '<td class="rowon">' + defaultSlider("labor", c.id, c.name, c.default_on !== false, ADMIN && !cro) +
           "</td>" +
         // ADMIN ONLY, unlike an item's or an assembly's pair: `favorite` on a labor line is a
         // PATCH to /api/library/labor, which is `_require_admin`, so a non-admin is not handed a
         // Remove that 403s -- the rule laborRowActions already follows for Travel.
-        '<td class="rowact">' + (ADMIN ? defaultRowActions("labor", c.id, c.name) : "") +
+        '<td class="rowact">' + (cro ? globalNote : ADMIN ? defaultRowActions("labor", c.id, c.name) : "") +
         "</td></tr>";
+      if (cro) globOut += crow; else out += crow;
     }
+    out += globOut;
     body.innerHTML = out;
     // Counts BOTH, so a page that could not reach the shared module still hides the empty state
     // once there is a favorited line to show. Travel is normally in `rows`, which is why this
@@ -4037,7 +4086,7 @@
    *  by the time somebody can click, there is something to repaint. */
   function setWorkType(wt) {
     DEFAULT_WT = wt;
-    WORK_TYPES.forEach(function (k) {
+    ["global"].concat(WORK_TYPES).forEach(function (k) {
       var b = $("wt-" + k);
       if (b) b.setAttribute("aria-selected", String(k === wt));
     });
@@ -4056,7 +4105,7 @@
     if (typeof window === "undefined" || !window.TWTabMemo) return;
     var M = window.TWTabMemo;
     showView(M.pick(M.read(window, "tab"), PANES, view));
-    setWorkType(M.pick(M.read(window, "wt"), WORK_TYPES, DEFAULT_WT));
+    setWorkType(M.pick(M.read(window, "wt"), ["global"].concat(WORK_TYPES), DEFAULT_WT));
   }
   PANES.forEach(function (p) {
     $(TAB_OF[p]).addEventListener("click", function () {
@@ -4837,7 +4886,7 @@
     var wtBtn = t.closest && t.closest("[data-work-type]");
     if (wtBtn) {
       var wt = wtBtn.getAttribute("data-work-type");
-      if (WORK_TYPES.indexOf(wt) !== -1) {
+      if (wt === "global" || WORK_TYPES.indexOf(wt) !== -1) {
         setWorkType(wt);
         // REMEMBERED BESIDE THE TAB, not instead of it. Landing on Defaults and showing the wrong
         // one of the five work types is the same reload bug one level down, so the fragment
