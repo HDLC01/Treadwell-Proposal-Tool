@@ -219,3 +219,61 @@ def test_status_and_empty_cells_read_as_quiet_sentence_case_not_caps(ran):
     assert lay["capsStatus"] == 0
     assert lay["notSetOnceAcross"], "a line with no mode does not say so once, across its empty columns"
     assert lay["tryBand"], "Job SF is not a labelled band inside the Try-it card"
+
+
+@needs_node
+def test_the_labor_tab_shows_the_company_labor_rate_and_an_admin_can_file_it(ran):
+    """Hanz 2026-10-09: the labor rate moved from Markups -> Global to Items & Assemblies -> Labor.
+    A box at the top of the tab: the filed figure (placeholder 33 when none), "an hour", and the one
+    plain sentence. Saving PUTs the SAME markup_rules row (layout global, line_key labor_rate) with
+    the filed note carried; the same figure, a blank, and a non-number send nothing.
+
+    Mutation: make saveLaborRate a no-op, or PUT layout "labor" -- puts is empty / wrong."""
+    r = ran["laborRate"]
+    assert r["loadingFirst"].startswith('<p class="paneintro">Loading')
+    assert r["box"] and r["anHour"] and r["sentence"], r
+    assert not r["emDash"]
+    assert ran["laborRateSaved"]["puts"] == [{"layout": "global", "line_key": "labor_rate",
+                                              "applies": True, "notes": "kept note",
+                                              "formula": "44.5"}]
+    assert "Labor rate saved: $44.5 per hour" in ran["laborRateSaved"]["alert"]
+    assert ran["laborRateSaved"]["cached"] == "44.5"
+    assert ran["laborRateNoops"]["sent"] == 0
+    assert ran["laborRateNoops"]["back"] == "44.5"
+    assert "dollar figure above zero" in ran["laborRateNoops"]["alert"]
+
+
+@needs_node
+def test_the_labor_rate_box_shows_the_shipped_figure_when_unfiled_and_is_read_only_for_staff(ran):
+    """No figure filed: an empty box with the shipped 33 as its placeholder (the one constant in
+    bid-model). A 403 puts the old figure back. A non-admin gets text and no input, 33 when unfiled.
+
+    Mutation: draw the input for a non-admin -- inputs == 1."""
+    assert ran["laborRateUnfiled"] is True
+    assert ran["laborRate403"]["back"] == "40"
+    assert "admin-only" in ran["laborRate403"]["alert"]
+    assert ran["laborRateNonAdmin"] == {"inputs": 0, "shows": True, "unfiledShows33": True}
+
+
+@needs_node
+def test_lodging_and_per_diem_still_save_through_the_shared_helper(ran):
+    """The travel boxes and the labor-rate box share fileGlobalRate; this is the travel half, so a
+    refactor that broke it goes red here."""
+    assert ran["travelStillSaves"] == [{"layout": "global", "line_key": "travel_lodging",
+                                        "applies": True, "notes": "n", "formula": "91"}]
+
+
+def test_the_labor_tab_carries_the_box_and_nothing_still_says_markups_sets_the_rate(html):
+    """The mount points exist, the change listener is wired, and no code comment or text still
+    names Markups -> Global as the labor rate's home.
+
+    Mutation: drop the pane-labor change listener -- the box draws and saves nothing."""
+    pane = html.split('id="pane-labor"')[1].split("</section>")[0]
+    assert 'id="labor-rate-box"' in pane and 'id="labor-rate-alert"' in pane
+    js = (FRONTEND / "js" / "library.js").read_text(encoding="utf-8", errors="replace")
+    assert re.search(r'\$\("pane-labor"\)\.addEventListener\("change"', js)
+    assert 'if (p === "labor") renderLaborRate();' in js
+    for name in ("polish-estimate.js", "bid-model.js"):
+        text = (FRONTEND / "js" / name).read_text(encoding="utf-8", errors="replace")
+        for line in text.splitlines():
+            assert not ("labor rate" in line.lower() and "markups -> global" in line.lower()), (name, line)

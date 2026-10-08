@@ -75,6 +75,10 @@ PAGE_FILES = ("markup.html", "js/markup.js", "js/markup-core.js")
 # built-in (HARD_BID) went with the line on 2026-09-22.
 GP_BANDS = "MARKUP(BAND(subtotal, 6500,52%, 15000,45%, 22500,35%, 32500,32%, 30%))"
 
+# THE GLOBAL LINES THIS PAGE DRAWS. The API still accepts `labor_rate` (it is filed through
+# /api/markup/rules from Items & Assemblies -> Labor, Hanz 2026-10-09) but this page never lists it.
+PAGE_GLOBAL_KEYS = [k for k in markup.GLOBAL_LINE_KEYS if k != "labor_rate"]
+
 needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 
 
@@ -176,7 +180,7 @@ def test_the_editable_lines_on_a_tab_are_exactly_the_api_TAB_line_keys(ran):
     assert editable == list(markup.TAB_LINE_KEYS)
 
     on_global = [r["line"] for r in ran["globalDayOne"]["rows"] if r["inputs"]]
-    assert on_global == list(markup.GLOBAL_LINE_KEYS)
+    assert on_global == PAGE_GLOBAL_KEYS
 
 
 @needs_node
@@ -786,7 +790,7 @@ def test_the_two_context_lines_are_marked_as_set_elsewhere(ran):
         assert r["ctxClass"] is False, "%s reads as somebody else's to set" % line_key
         assert r["chip"] == ""
     # The four on Global are not marked that way on THEIR tab either.
-    for line_key in markup.GLOBAL_LINE_KEYS:
+    for line_key in PAGE_GLOBAL_KEYS:
         r = row(ran["globalDayOne"], line_key)
         assert r["ctxClass"] is False, "%s reads as somebody else's to set on Global" % line_key
         assert r["chip"] == ""
@@ -898,7 +902,7 @@ def test_the_global_tab_is_the_three_lines_that_are_one_rule_everywhere(ran):
     a save could contain.
 
     Mutation: test_a_global_tab_built_from_the_chain_shows_lines_it_does_not_set."""
-    assert ran["globalDayOne"]["rowOrder"] == list(markup.GLOBAL_LINE_KEYS)
+    assert ran["globalDayOne"]["rowOrder"] == PAGE_GLOBAL_KEYS
     for line_key in markup.TAB_LINE_KEYS:
         assert line_key not in ran["globalDayOne"]["rowOrder"], (
             "%s is a different rate on every tab and the Global tab offered to set it once"
@@ -977,7 +981,7 @@ def test_every_global_line_says_plainly_that_it_reaches_no_bid(ran):
         # CHANGED ON PURPOSE, 2026-10-06: the labor rate and Fees + Textura are read by the beta
         # too -- each is a new bid's starting figure -- so their rows say so instead of "changes
         # no bid", and still say the workbook does not read them.
-        if r["line"] in ("labor_rate", "fees_textura"):
+        if r["line"] in ("fees_textura",):
             assert "starts every NEW bid" in r["explain"], (
                 "%s does not say the beta reads it: %r" % (r["line"], r["explain"]))
             assert "workbook does not read it" in r["explain"], (
@@ -987,6 +991,24 @@ def test_every_global_line_says_plainly_that_it_reaches_no_bid(ran):
             continue
         assert "does not read this line yet" in r["explain"], (
             "%s claims something about a bid: %r" % (r["line"], r["explain"]))
+
+
+@needs_node
+def test_the_labor_rate_has_no_row_on_the_markup_page_and_one_pointer_says_where_it_went(ran):
+    """Hanz 2026-10-09: the company labor rate moved to Items & Assemblies -> Labor. The API still
+    returns `labor_rate` as a Global line AND a rate is filed for it ($36 in the 22b scenario), so
+    only the page can keep it off the screen. Not drawn on Global, not in the read-only block on
+    any sheet tab, and the Global tab says where it went.
+
+    Mutation: empty OFF_PAGE in markup.js -- a labor_rate row (and its box) comes back."""
+    assert "labor_rate" not in [r["line"] for r in ran["globalDayOne"]["rows"]]
+    assert "labor_rate" not in ran["globalDayOne"]["rowOrder"]
+    for tab, blocks in ran["globalRefByTab"].items():
+        for b in blocks:
+            assert "labor_rate" not in [i["line"] for i in b["items"]], tab
+            assert "Labor rate" not in b["text"], tab
+    assert "labor_rate" not in ran["globalFiledLaborOnGlobal"]["rowOrder"]
+    assert ran["globalFiledLaborOnGlobal"]["pointer"] is True
 
 
 @needs_node
@@ -1322,7 +1344,7 @@ def test_the_switch_is_a_real_button_the_keyboard_can_reach(ran):
             assert sw["checked"] in ("true", "false")
             assert sw["ariaLabel"], "a switch with no label is unreadable to a screen reader"
     assert ran["dayOnePolish"]["switchCount"] == len(markup.TAB_LINE_KEYS)
-    assert ran["globalDayOne"]["switchCount"] == len(markup.GLOBAL_LINE_KEYS)
+    assert ran["globalDayOne"]["switchCount"] == len(PAGE_GLOBAL_KEYS)
 
 
 @needs_node
@@ -1598,7 +1620,7 @@ def test_a_global_tab_built_from_the_chain_shows_lines_it_does_not_set(tmp_path)
                     "      out = GLOBAL_KEYS.slice();",
                     "      out = GLOBAL_KEYS.concat(CHAIN);")
     order = mutant["globalDayOne"]["rowOrder"]
-    assert order != list(markup.GLOBAL_LINE_KEYS), "the mutation changed nothing"
+    assert order != PAGE_GLOBAL_KEYS, "the mutation changed nothing"
     for line_key in list(markup.TAB_LINE_KEYS) + list(markup._NOT_EDITABLE):
         assert line_key in order, (
             "%s did not reach the mutant's Global tab, so the row list is not what was mutated"
@@ -1756,7 +1778,6 @@ def test_a_sheet_tab_lists_every_global_line_read_only_and_outside_its_chain(ran
     assert {i["line"]: i["text"] for i in ref["items"]} == {
         "travel_lodging": "Travel lodging: $70.00 a night",
         "travel_per_diem": "Travel food: $45.00 a day",
-        "labor_rate": "Labor rate: $33.00 an hour",
         "fees_textura": "Fees + Textura: $0.00 a bid"}, ref["items"]
     assert "Global" in ref["text"]
     assert ref["link"] == 1 and ref["inputs"] == 0
@@ -1778,7 +1799,6 @@ def test_every_work_type_tab_shows_filed_off_and_built_in_global_figures_once(ra
         assert got == {
             "travel_lodging": "Travel lodging: off",
             "travel_per_diem": "Travel food: $45.00 a day",
-            "labor_rate": "Labor rate: $36.00 an hour",
             "fees_textura": "Fees + Textura: $250.00 a bid"}, (tab, got)
         assert "bond" in ran["globalRefRowsByTab"][tab]
         assert "Bond" not in blocks[0]["text"], (tab, blocks[0]["text"])
@@ -1790,7 +1810,7 @@ def test_the_global_block_follows_a_global_edit_and_never_moves_a_total(ran):
     context only -- $33 and $99 leave the tab's lump sum identical.
 
     Mutation: add the block's lines to the priced rows -- the two totals differ."""
-    assert any("Labor rate: $40.00 an hour" in i["text"]
+    assert any("Fees + Textura: $40.00 a bid" in i["text"]
                for i in ran["globalRefAfterEdit"][0]["items"]), ran["globalRefAfterEdit"]
     t = ran["globalRefTotals"]
     assert t["lo"] == t["hi"] and t["lo"], t

@@ -434,6 +434,10 @@ function build(opts) {
         (n) => !Object.prototype.hasOwnProperty.call(n.attrs, "data-subtotal")).length,
       subtotalBoxes: byAttr(t, "data-subtotal").length,
       switchCount: byAttr(t, "role", "switch").length,
+      // The one line on the Global tab that says where the labor rate went.
+      pointer: byAttr(t, "data-labor-rate-pointer").length > 0 &&
+               /Items &amp; Assemblies, Labor tab/.test(byAttr(t, "data-labor-rate-pointer")[0].html || "") ||
+               byAttr(t, "data-labor-rate-pointer").some((n) => /Items & Assemblies, Labor tab/.test(n.text || "")),
       // The Global block's link is navigation, not a control that files anything, so it is not
       // counted here: this is the admin gate's number, and the link is shown to everyone.
       buttonCount: byTag(t, "button").filter(
@@ -802,7 +806,7 @@ async function main() {
     s.clickTab("global");
     await drain();
     out.roundTripPuts = s.puts().map((r) => r.body);
-    for (const k of ["bond", "travel_lodging", "travel_per_diem", "labor_rate"]) {
+    for (const k of ["bond", "travel_lodging", "travel_per_diem"]) {
       s.leave("s-" + k + "-value", null);
     }
     s.clickTab("polish");
@@ -928,6 +932,15 @@ async function main() {
     await drain();
     out.globalDayOne = s.snap();
 
+    // The labor rate is FILED ($36) and the API lists it; the page still draws no row for it.
+    {
+      const f = build({ rules: [rule("global", "labor_rate", { formula: "36" })] });
+      await drain();
+      f.clickTab("global");
+      await drain();
+      out.globalFiledLaborOnGlobal = f.snap();
+    }
+
     // A rate typed here files against the `global` layout, not against whichever sheet tab the
     // admin happened to come from.
     s.typeAndLeave("s-travel_lodging-value", "80", null);
@@ -938,10 +951,11 @@ async function main() {
 
   // ═══ 22b. THE GLOBAL BLOCK on every sheet tab ═══════════════════════════════
   //   Filed figures, a built-in, and a switched-off line, read from all five sheet tabs; then a
-  //   Global edit in the same session; then the same tabs with the labor rate moved, to prove the
+  //   Global edit in the same session; then the same tabs with the fees figure moved, to prove the
   //   block never reaches the chain's total; then the link.
   {
     const tabsOf = ["polish", "seal", "epoxy", "leveling", "gyp"];
+    // labor_rate is FILED on purpose and must never show: it lives on Items & Assemblies -> Labor.
     const filed = [rule("global", "labor_rate", { formula: "36" }),
                    rule("global", "fees_textura", { formula: "250" }),
                    rule("global", "travel_lodging", { formula: null, applies: false }),
@@ -963,7 +977,7 @@ async function main() {
     // The same session edits Global, then goes back to a sheet tab.
     s.clickTab("global");
     await drain();
-    s.typeAndLeave("s-labor_rate-value", "40", null);
+    s.typeAndLeave("s-fees_textura-value", "40", null);
     await drain();
     s.clickTab("polish");
     await drain();
@@ -977,11 +991,11 @@ async function main() {
     out.globalRefLinkFocus = s.active();
     out.globalRefOnGlobal = s.snap().globalRef.length;
 
-    // A labor rate of $33 and a labor rate of $99: the tab's total is the same.
+    // Fees of $33 and fees of $99: the tab's total is the same.
     const lo = build({ rules: [rule("polish", "gp", { formula: "30%" }),
-                               rule("global", "labor_rate", { formula: "33" })] });
+                               rule("global", "fees_textura", { formula: "33" })] });
     const hi = build({ rules: [rule("polish", "gp", { formula: "30%" }),
-                               rule("global", "labor_rate", { formula: "99" })] });
+                               rule("global", "fees_textura", { formula: "99" })] });
     await drain();
     out.globalRefTotals = { lo: lo.snap().grand.preview, hi: hi.snap().grand.preview,
                             loRef: lo.snap().globalRef, hiRef: hi.snap().globalRef };

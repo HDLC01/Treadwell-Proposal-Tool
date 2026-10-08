@@ -2034,7 +2034,7 @@
   // regenerate an id that had already been used. Nothing indexes labor rows by id today (the page
   // works by array position), so this is closing a door rather than fixing a symptom.
   var laborSeq = 0;
-  // THE COMPANY LABOR RATE (Markups -> Global). A new line starts from it rather than blank, so the
+  // THE COMPANY LABOR RATE (Items & Assemblies -> Labor). A new line starts from it rather than blank, so the
   // estimator is never typing a rate Treadwell has already decided. The shipped $33 stands until
   // init() has read the real one, and for good if that read fails.
   var LABOR_RATE = B.SHIPPED_LABOR_RATE;

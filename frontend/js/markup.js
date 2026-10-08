@@ -122,7 +122,6 @@
     bond: "Bond",
     travel_lodging: "Travel lodging",
     travel_per_diem: "Travel food",
-    labor_rate: "Labor rate",
     fees_textura: "Fees + Textura"
   };
 
@@ -137,13 +136,12 @@
     bond: "the workbook ships this at zero",
     travel_lodging: "one night away, the same on every sheet",
     travel_per_diem: "one day's food, the same on every sheet",
-    labor_rate: "what a new bid's labor lines start at, the same on every sheet",
     fees_textura: "what a new bid's Fees + Textura line starts at, the same on every sheet"
   };
 
   /** What the figure beside a Global line is PER. A rate needs no such word; $70 does, and "$70"
    *  with nothing after it is the kind of number somebody multiplies by the wrong thing. */
-  var UNIT_NOTE = { travel_lodging: "a night", travel_per_diem: "a day", labor_rate: "an hour", fees_textura: "a bid" };
+  var UNIT_NOTE = { travel_lodging: "a night", travel_per_diem: "a day", fees_textura: "a bid" };
 
   /** The rest of it, behind the row's own disclosure. Good writing, and it does not belong
    *  repeated in every row of a table of eight numbers. */
@@ -170,10 +168,6 @@
       "instead of five times.",
     travel_per_diem: "A day's food while the crew is away, charged per day. The same figure on " +
       "all eleven priced tabs.",
-    labor_rate: "Dollars an hour. The starting rate of the crew rows, Travel Labor, every library " +
-      "labor line with no rate of its own, and every labor line added to a NEW estimate. A bid " +
-      "already saved keeps the rates it has; an estimator can still type over any one rate, and " +
-      "the estimate shows \"Default $X\" under it when they do.",
     fees_textura: "Dollars. What a NEW v2 estimate's Fees + Textura line starts at. Blank or " +
       "zero is what the sheet ships. A bid already saved keeps its own fees; an estimator can " +
       "still type over it on a bid, and the estimate shows \"Default value: $N\" under the box " +
@@ -248,7 +242,7 @@
     // The travel figures are Kyle's own literals off all eleven priced sheets, and they are
     // DOLLARS, not rates — written bare for that reason, the same way priceChain and the box's
     // own $ / % affordance read a bare number of 1 or more.
-    global: { bond: F("0%"), travel_lodging: F("70"), travel_per_diem: F("45"), labor_rate: F("33"),
+    global: { bond: F("0%"), travel_lodging: F("70"), travel_per_diem: F("45"),
       fees_textura: F("0") }
   };
 
@@ -335,12 +329,12 @@
         (r.line_key === "travel_lodging" ? "Lodging" : "Per Diem") + " line; a saved bid keeps its " +
         "own. Kyle's workbook does not read it.";
     }
-    // THE LABOR RATE AND FEES + TEXTURA ARE READ THE SAME WAY (2026-10-06): a new beta bid starts
-    // its labor lines / its Fees + Textura line at this figure. Without this branch they fell
-    // through to "changes no bid", which told an admin a live default was dead.
-    if (LAYOUT === "global" && (r.line_key === "labor_rate" || r.line_key === "fees_textura")) {
-      return " Estimating Tool v2 starts every NEW bid's " +
-        (r.line_key === "labor_rate" ? "labor lines" : "Fees + Textura line") + " at this figure; " +
+    // FEES + TEXTURA IS READ THE SAME WAY (2026-10-06): a new beta bid starts its Fees + Textura
+    // line at this figure. Without this branch it fell through to "changes no bid", which told an
+    // admin a live default was dead. (The labor rate used to share this branch; it is set on
+    // Items & Assemblies -> Labor now and has no row on this page.)
+    if (LAYOUT === "global" && r.line_key === "fees_textura") {
+      return " Estimating Tool v2 starts every NEW bid's Fees + Textura line at this figure; " +
         "a saved bid keeps its own. Kyle's workbook does not read it.";
     }
     var keys = PRICES_THE_BID[LAYOUT] || [];
@@ -476,6 +470,15 @@
   // `global` layout, so every answer below collapses to what this page did before the split.
 
   function isGlobalLine(k) { return GLOBAL_KEYS.indexOf(k) >= 0; }
+
+  /** GLOBAL LINES THE API STILL ACCEPTS BUT THIS PAGE DOES NOT DRAW. The company labor rate moved
+   *  to Items & Assemblies -> Labor (Hanz, 2026-10-09): the same markup_rules row (layout global,
+   *  line_key labor_rate), a different door, so the backend keeps accepting it and no data moves.
+   *  It stays a global line for every "where does this live" question above; it is only never
+   *  listed -- not on the Global tab, not in the read-only block on a sheet tab, and not even as a
+   *  filed rule that "nothing would show". */
+  var OFF_PAGE = ["labor_rate"];
+  function onPage(k) { return OFF_PAGE.indexOf(k) < 0; }
   function knownHome(k) { return isGlobalLine(k) || TAB_KEYS.indexOf(k) >= 0; }
 
   /** The layout whose ROW prices this line on the tab currently on screen. A global line is read
@@ -755,7 +758,7 @@
         out.push(RULES[i].line_key);
       }
     }
-    return out;
+    return out.filter(onPage);
   }
 
   function ruleFor(layout, lineKey) {
@@ -1629,7 +1632,7 @@
     var rows = [];
     for (var i = 0; i < GLOBAL_KEYS.length; i++) {
       var k = GLOBAL_KEYS[i];
-      if (shownHere.indexOf(k) >= 0) continue;
+      if (shownHere.indexOf(k) >= 0 || !onPage(k)) continue;
       var rule = ruleFor(GLOBAL, k);
       var applies = rule ? rule.applies !== false : true;
       var built = ((BUILTIN[GLOBAL] || {})[k] || {}).formula || "";
@@ -1682,7 +1685,7 @@
       '<span class="prevnote">' + esc(note) + "</span></div>";
   }
 
-  /** The GLOBAL tab. Four lines that are the same rule on every sheet, and NOT a chain.
+  /** The GLOBAL tab. A few lines that are the same rule on every sheet, and NOT a chain.
    *
    *  NO LUMP SUM AND NO RUNNING TOTAL, because there is nothing here to add up: two of the four
    *  are not chain lines at all, and the other two have no line above them on this tab to be a
@@ -1708,6 +1711,9 @@
     for (var i = 0; i < rows.length; i++) {
       out += rowHtml(rows[i], priced[rows[i].line_key], globalPreviewHtml);
     }
+    // THE ONE POINTER TO WHERE THE LABOR RATE WENT, so somebody who looks for it here is told.
+    out += '<p class="hint" data-labor-rate-pointer="1">The company labor rate is set on ' +
+      '<a href="library.html#tab=labor">Items &amp; Assemblies, Labor tab</a>.</p>';
     return out;
   }
 

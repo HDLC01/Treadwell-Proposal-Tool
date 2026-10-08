@@ -925,6 +925,11 @@
         new bid until you add it under <b>Default Items &amp; Assemblies</b>.</p>
       <p class="ronote" id="labor-ro" hidden>You can see these rates. Adding, changing and removing
         labor lines is admin-only - ask Hanz or Kyle.</p>
+      <!-- THE COMPANY LABOR RATE (Hanz, 2026-10-09). Filled by renderLaborRate(). It is the Global
+           line `labor_rate` in the markup_rules table, the same row the Markups page used to
+           show; this is its only door now. -->
+      <p class="alert" id="labor-rate-alert" role="status" aria-live="polite"></p>
+      <div id="labor-rate-box"></div>
       <div class="card">
         <div class="addrow" id="labor-addrow">
           <button class="addbtn" type="button" data-add-labor>
