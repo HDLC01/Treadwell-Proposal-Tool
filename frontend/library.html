@@ -1548,6 +1548,11 @@
        library.js reads the five work types, which default applies to which, and the three Takeoff
        conditions off it (var WT = window.TWWorkTypes, which runs at parse time). -->
   <script src="/js/work-types.js"></script>
+  <!-- The bid engine and what it reads (the Markups formula reader, the profiles, the engine): bid-model
+       hands its chain to the engine as it loads, so all three go ahead of it. -->
+  <script src="/js/markup-core.js"></script>
+  <script src="/js/bid-profiles.js"></script>
+  <script src="/js/bid-engine.js"></script>
   <script src="/js/bid-model.js"></script>
   <script src="/js/library-core.js"></script>
   <!-- ONE FUNCTION out of this file, and the eighteenth page to load it: TWCrm.nameOf, which is

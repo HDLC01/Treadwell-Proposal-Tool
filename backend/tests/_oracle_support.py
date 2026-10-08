@@ -103,6 +103,30 @@ def named_expressions(path: pathlib.Path = TEMPLATE_PATH) -> list:
             ew._load_template = real
 
 
+def sheet_scoped_names(path: pathlib.Path = TEMPLATE_PATH) -> list:
+    """The defined names that belong to ONE sheet, [{name, expression, scope}] with `scope` the sheet's name.
+
+    openpyxl keeps a workbook-wide name in `wb.defined_names` and a name scoped to a sheet (a `definedName` with a
+    `localSheetId`) in that sheet's `ws.defined_names`. estimate_writer.read_named_expressions reads only the first, so the
+    page registers no sheet-scoped name with HyperFormula, and a guard built on that function alone could not see one.
+    Excel could: a sheet-scoped `Silica` shadows the workbook's own on that sheet, and a formula that says `Silica` keeps
+    its text and changes its price. The guard hashes these too, with their scope, so such a name is a change to the
+    answer key like any other. Read through the app's own loader, pointed at the copy when there is one."""
+    path = pathlib.Path(path)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        wb = ew._load_template(data_only=False, path=path)
+    out = []
+    for ws in wb.worksheets:
+        for name, dn in ws.defined_names.items():
+            expression = getattr(dn, "value", None) or getattr(dn, "attr_text", None)
+            if not expression or str(name).startswith("_xlnm."):
+                continue
+            out.append({"name": str(name), "expression": expression if str(expression).startswith("=") else "=" + str(expression),
+                        "scope": ws.title})
+    return out
+
+
 def template_spec(path: pathlib.Path = TEMPLATE_PATH) -> dict:
     """{order, sheets: {name: {cells: [...]}}, names: [...]} for every sheet of the workbook.
 
@@ -158,8 +182,8 @@ def normalised_cells(sheets, path: pathlib.Path = TEMPLATE_PATH) -> list:
 
 
 def normalised_names(path: pathlib.Path = TEMPLATE_PATH) -> list:
-    """[(scope, name, "n", expression)] for every defined name the page registers in HyperFormula, sorted
-    by scope and then name. `scope` is the sheet's name for a name that belongs to one sheet and "" for a
+    """[(scope, name, "n", expression)] for every defined name the page registers in HyperFormula AND every name that
+    belongs to one sheet (sheet_scoped_names, which the page does not register), sorted by scope and then name. `scope` is the sheet's name for a name that belongs to one sheet and "" for a
     workbook-wide one; `expression` is what it points at, as read_named_expressions returns it
     (`=Epoxy!$W$145` for Silica).
 
@@ -171,8 +195,9 @@ def normalised_names(path: pathlib.Path = TEMPLATE_PATH) -> list:
 
     The order Excel writes them in is not part of what a name is, so they are sorted. The kind "n" cannot
     be mistaken for a cell's "f" or "c", so a name and a cell never produce the same line."""
-    out = [(n.get("scope") or "", str(n["name"]), "n", str(n["expression"])) for n in named_expressions(path)]
-    out.sort(key=lambda t: (t[0], t[1]))
+    every = named_expressions(path) + sheet_scoped_names(path)
+    out = sorted({(n.get("scope") or "", str(n["name"]), "n", str(n["expression"])) for n in every},
+                 key=lambda t: (t[0], t[1], t[3]))
     return out
 
 

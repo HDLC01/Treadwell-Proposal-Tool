@@ -31,6 +31,10 @@ from _node import last_json_line, require_node, run_node
 
 HARNESS = S.TESTS / "js" / "oracle-polish-harness.js"
 MODEL = "js/bid-model.js"
+# Since Phase 8 the model's chain is js/bid-engine.js priceChain on the profile `polish-legacy`, and the rates
+# are js/bid-profiles.js text. A scratch copy of either carries the model beside it (the harness loads it).
+ENGINE = "js/bid-engine.js"
+PROFILES = "js/bid-profiles.js"
 
 
 def run(frontend=None):
@@ -109,15 +113,16 @@ def test_each_departure_names_cells_that_really_say_it(departures):
 
 # ── the comparison can fail: break the model and watch it ────────────────────
 def test_a_wrong_burden_turns_it_red(tmp_path):
-    frontend = break_source(tmp_path, MODEL, "var burden = roundUp((labor + escalation) * RATES.BURDEN);",
-                            "var burden = roundUp((labor) * RATES.BURDEN);")
+    frontend = break_source(tmp_path, ENGINE, 'var burden = roundUp((labor + escalation) * rate("burden_pct"));',
+                            'var burden = roundUp((labor) * rate("burden_pct"));', also=[MODEL])
     summary = run(frontend)
     keys = {d["key"] for u in summary["chain"]["unexplained"] for d in u["diffs"]}
     assert summary["chain"]["unexplained"] and "burden" in keys, "burden must differ wherever prevailing wage adds an escalation"
 
 
 def test_a_moved_gp_edge_turns_it_red(tmp_path):
-    frontend = break_source(tmp_path, MODEL, "var GP_BANDS = [[6500, 0.52],", "var GP_BANDS = [[6501, 0.52],")
+    frontend = break_source(tmp_path, PROFILES, 'var GP_5 = "MARKUP(BAND(subtotal, 6500,52%,',
+                            'var GP_5 = "MARKUP(BAND(subtotal, 6501,52%,', also=[MODEL])
     summary = run(frontend)
     ids = {u["id"] for u in summary["chain"]["unexplained"]}
     assert any(i.startswith("edge/gpPct/6500/0") for i in ids), ids
@@ -128,9 +133,9 @@ def test_closing_the_remodel_base_departure_in_the_model_turns_it_red_until_the_
     harness, which describes the model as leaving travel out, says the model is no longer that: red. The departure
     has to come out of departures.json in the same change."""
     frontend = break_source(
-        tmp_path, MODEL,
-        "(labor + escalation + burden + gp + super_pto + soft_costs + contingency + fees)",
-        "(labor + escalation + burden + travel + gp + super_pto + soft_costs + contingency + fees)")
+        tmp_path, ENGINE,
+        "var remodelBase = labor + escalation + burden;",
+        "var remodelBase = labor + escalation + burden + travel;", also=[MODEL])
     summary = run(frontend)
     keys = {d["key"] for u in summary["chain"]["unexplained"] for d in u["diffs"]}
     assert "(remodel-base-widened)" in keys, "a closed departure must be noticed, and named"
@@ -140,9 +145,9 @@ def test_closing_the_tooling_departure_in_the_model_turns_it_red_until_the_list_
     """Give the model a tooling line in its sub-total, as Kyle's sheet has it. The harness predicts the sheet by
     folding tooling into travel, so a model that now reads tooling counts it twice: red."""
     frontend = break_source(
-        tmp_path, MODEL,
-        "var sub_total = roundUp(material_total + labor + escalation + burden + travel);",
-        "var sub_total = roundUp(material_total + labor + escalation + burden + travel + num(input.tooling));")
+        tmp_path, ENGINE,
+        "if (q.toolingInSubTotal) sub += tooling;",
+        "sub += num(input.tooling);", also=[MODEL])
     summary = run(frontend)
     keys = {d["key"] for u in summary["chain"]["unexplained"] for d in u["diffs"]}
     assert "subTotal" in keys, "a closed departure must be noticed"

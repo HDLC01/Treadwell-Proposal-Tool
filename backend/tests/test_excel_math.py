@@ -227,8 +227,12 @@ def test_the_model_without_the_leaf_throws_an_error_that_names_the_file():
 
 def test_the_model_loads_after_the_leaf_and_not_before_it():
     # The model needs two leaves since Phase 7 (this one and js/work-types.js), so a page loads both first.
-    leaf, types, model = _boot("js/excel-math.js", "js/work-types.js", "js/bid-model.js")
-    assert leaf["threw"] is None and types["threw"] is None and model["threw"] is None, (leaf, types, model)
+    # Phase 8 added the chain: markup-core, bid-profiles and bid-engine load before the model too.
+    leaf, types, core, profiles, engine, model = _boot(
+        "js/excel-math.js", "js/work-types.js", "js/markup-core.js", "js/bid-profiles.js",
+        "js/bid-engine.js", "js/bid-model.js")
+    assert all(m["threw"] is None for m in (leaf, types, core, profiles, engine, model)), (
+        leaf, types, core, profiles, engine, model)
     assert model["published"] == ["TWBidModel"]
     assert {"markupChain", "roundUp", "num", "money", "pct", "copyInto"} <= set(model["members"]["TWBidModel"])
     early_model, late_leaf, late_types = _boot("js/bid-model.js", "js/excel-math.js", "js/work-types.js")

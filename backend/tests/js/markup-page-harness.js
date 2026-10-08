@@ -315,6 +315,8 @@ function build(opts) {
 
   const win = {
     TWMarkup: CORE,
+    // markup.js reads its built-in rates off the profiles as it loads (the one home of every rate).
+    TWBidProfiles: require(path.join(ROOT, "js", "bid-profiles.js")),
     TWAuth: {
       ready: Promise.resolve(),
       user: () => ({ role: o.role === undefined ? "admin" : o.role }),
@@ -512,6 +514,15 @@ async function main() {
     await drain();
     out.dayOnePolish = s.snap();
     out.dayOneRequests = s.requests.map((r) => r.method + " " + r.url);
+
+    // Seal's six GP rungs and Gyp's seven, which were "not on record" (an empty box and an Unpriceable tab) until the
+    // profiles carried them (Phase 8). Nothing filed: they are the built-ins.
+    s.clickTab("seal");
+    await drain();
+    out.dayOneSeal = s.snap();
+    s.clickTab("gyp");
+    await drain();
+    out.dayOneGyp = s.snap();
   }
 
   // ═══ 2. the poisoned vocabulary: a `combo` the API must never be able to

@@ -6,7 +6,7 @@
 // gp → contingency → super_pto → soft_costs → remodel_tax → bond -- each line's base being
 // the running sum ABOVE it (hard_bid, removed 2026-09-22, used to sit between gp and
 // contingency; see bid-model.js's bid() for the note on where it went). Those rates are
-// hardcoded constants in bid-model.js. The
+// the profiles' built-ins in js/bid-profiles.js (Phase 8; they were constants in bid-model.js). The
 // markup_rules table is where an admin overrides them, and this is that table's screen.
 //
 // A LINE WHOSE ANSWER IS ONE NUMBER GETS ONE NUMBER BOX. This page used to ask an estimator to
@@ -193,58 +193,37 @@
   };
 
   // ── the built-in constants, per tab ────────────────────────────────────────
-  // What the chain uses TODAY for a line with no row filed. Transcribed from
-  // frontend/js/bid-model.js (RATES, GP_BANDS) and backend/markup.py's audit of
-  // estimate_sheet_5.7.xlsx, and from nowhere else. hardBidPct was a third source here until
-  // it left bid-model.js with the line itself on 2026-09-22.
+  // What the chain uses TODAY for a line with no row filed. NOT written here since Phase 8 of the v2
+  // program: they are read off js/bid-profiles.js, the one home of the rates (`builtinRules()`), which is
+  // also where js/bid-engine.js prices from. So the number this page shows as the built-in and the number
+  // a bid is charged are the same text, and there is no pair to keep equal by test.
   //
-  // WHERE A NUMBER IS NOT ON RECORD, THERE IS NO ENTRY. markup.py's audit says Seal has a SIXTH
-  // GP tier topping out at 0.28 and Gyp has SEVEN tiers on different edges, but it does not give
-  // those edges — and inventing a band edge to fill a column would be inventing pricing. Those
-  // two cells render an empty rate box instead, and the tab's total says Unpriceable until a rate
-  // is filed, which is the same refusal Kyle's own `"error"` sentinel makes.
-
-  /** B67 as a BAND: `=IF(D64<6500,0.52,IF(D64<15000,0.45,IF(D64<22500,0.35,IF(D64<32500,0.32,
-   *  0.3))))`, wrapped in MARKUP because GP is a divide-up (D67), not a rate on the base. */
-  var GP_5_BANDS = "MARKUP(BAND(subtotal, 6500,52%, 15000,45%, 22500,35%, 32500,32%, 30%))";
-
+  // THE TWO LADDERS THAT WERE NOT ON RECORD ARE NOW. This page used to render Seal's and Gyp's GP as an
+  // empty rate box and the tab's total as Unpriceable, because the workbook audit named a sixth and a
+  // seventh GP tier and not their edges. The workbook oracle (Phase 6) read them out of the template:
+  // Seal 6,500 / 15,000 / 22,500 / 32,500 / 42,500 at 52 / 45 / 35 / 32 / 30 and then 28 percent, and Gyp
+  // 15,000 / 25,000 / 50,000 / 75,000 / 100,000 / 150,000 at 45 / 40 / 35 / 33 / 28 / 26 and then 24.
+  // They are built-ins like any other now, and a filed ladder still overrides them.
+  //
+  // WHERE A NUMBER IS NOT ON RECORD, THERE IS NO ENTRY: a line the profiles do not carry has no built-in,
+  // and the row renders an empty rate box and reads Unpriceable until a rate is filed. That is the same
+  // refusal Kyle's own `"error"` sentinel makes, and it is how an `escalation` row from a newer server
+  // still behaves.
+  //
   // NO HARD_BID CONSTANT. It was B68 `=IF(B5="yes",IF(D64>=60000,-0.04,IF(B4="yes",
   // IF(D64>=13000,-0.025,0))))`, removed 2026-09-22 along with the last BUILTIN entry that
   // read it. ladderFrom/ladderTo (below) can still PARSE a string in this shape if one is ever
   // typed into Advanced by hand, but nothing in this file writes one any more.
-
-  /** Gyp's soft-costs cell, verbatim from markup.py's docstring — string sentinel and all. */
-  var GYP_SOFT_COSTS = 'IF(OR(B5="Yes",B5="No"), IF(B5="Yes",.09,.1) - ' +
-    'IF(E69>334900,.05,IF(E69>234450,.035,0)), "error")';
-
-  var F = function (formula) { return { formula: formula }; };
-  /** "This line does not exist on this tab" as a DEFAULT, before anybody files a row. Gyp's
-   *  hard-bid cell is empty in the workbook, so an unconfigured Gyp tab must show the absent
-   *  state, not an empty box waiting to be filled in. */
-  var NOT_ON_TAB = { applies: false };
-
-  var BUILTIN = {
-    polish: { gp: F(GP_5_BANDS), super_pto: F("2.7%"), soft_costs: F("16%"), bond: F("0%") },
-    // Same rates as Polish; its GP tiers are the sixth-tier set and are not on record here.
-    seal: { super_pto: F("2.7%"), soft_costs: F("16%"), bond: F("0%") },
-    epoxy: { gp: F(GP_5_BANDS), super_pto: F("3%"), soft_costs: F("13%"), bond: F("0%") },
-    leveling: { gp: F(GP_5_BANDS), super_pto: F("3%"), soft_costs: F("13%"), bond: F("0%") },
-    // A different species: 7 GP tiers on edges not on record, and soft costs is an expression
-    // rather than a rate. Used to also carry `hard_bid: NOT_ON_TAB` -- Kyle's gypsum sheets
-    // never had a hard-bid cell (B73 was EMPTY, not 0), and now nothing on any tab does.
-    gyp: { super_pto: F("4.1%"), soft_costs: F(GYP_SOFT_COSTS), bond: F("0%") },
-    // THE THREE LINES THAT DO NOT DIFFER PER TAB, which is what the Global tab is for. bond is
-    // the SAME string the tabs above carry, deliberately: Global is where it is edited now, and
-    // a tab with nothing filed falls back to its own copy, so the two have to agree or the same
-    // line would price differently depending on which row was read. hard_bid used to be the
-    // fourth of these; removed 2026-09-22.
-    //
-    // The travel figures are Kyle's own literals off all eleven priced sheets, and they are
-    // DOLLARS, not rates — written bare for that reason, the same way priceChain and the box's
-    // own $ / % affordance read a bare number of 1 or more.
-    global: { bond: F("0%"), travel_lodging: F("70"), travel_per_diem: F("45"),
-      fees_textura: F("0") }
-  };
+  //
+  // THE GLOBAL LINES. bond is the SAME string the tabs carry, deliberately: Global is where it is edited now,
+  // and a tab with nothing filed falls back to its own copy, so the two have to agree or the same line
+  // would price differently depending on which row was read. The travel figures are Kyle's own literals off
+  // all eleven priced sheets, and they are DOLLARS, not rates, written bare for that reason.
+  var PROFILES = window.TWBidProfiles;
+  if (!PROFILES || typeof PROFILES.builtinRules !== "function") {
+    throw new Error("markup.js needs bid-profiles.js loaded before it");
+  }
+  var BUILTIN = PROFILES.builtinRules();
 
   // ── which rows actually reach the estimate workbook ────────────────────────
   //
@@ -702,9 +681,11 @@
     return "";
   }
 
-  /** The control a line with NOTHING on record gets. Seal's GP tiers and Gyp's are not in this
-   *  file (inventing a band edge would be inventing pricing), and the question those cells are
-   *  asking is still "what is our rate?" — so they get the one-number box, and Advanced is one
+  /** The control a line with NOTHING on record gets. Every line the profiles carry has a built-in
+   *  now (Seal's and Gyp's GP ladders joined them in Phase 8), so this is the control of a line a newer
+   *  server offers and the profiles do not know (`escalation`), and of a line whose filed rule cannot be
+   *  read as a simple one. Inventing a rate for it would be inventing pricing, and the question it is
+   *  asking is still "what is our rate?", so it gets the one-number box, and Advanced is one
    *  click away for a tab whose answer really is a ladder.
    *
    *  GP IS A DIVIDE-UP. A bare `30%` on that line would be a mark-on: the wrong arithmetic, on
