@@ -484,6 +484,11 @@
   <!-- The one work-type vocabulary and job-conditions table: bid-model derives from it as it loads, and
        this page's own script reads its Takeoff cards off it (var T = window.TWWorkTypes). -->
   <script src="/js/work-types.js"></script>
+  <!-- The bid engine and what it reads: the Markups formula reader, the profiles (rates as formula text),
+       then the engine. bid-model hands its chain to the engine as it loads, so all three go first. -->
+  <script src="/js/markup-core.js"></script>
+  <script src="/js/bid-profiles.js"></script>
+  <script src="/js/bid-engine.js"></script>
   <script src="/js/bid-model.js"></script>
   <script src="/js/polish-sandbox.js"></script>
   <!-- The search pop-up both Add buttons open. Pure logic plus a small mount; the page reads

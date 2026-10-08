@@ -68,7 +68,7 @@ FRONTEND = REPO / "frontend"
 HARNESS = pathlib.Path(__file__).resolve().parent / "js" / "markup-page-harness.js"
 
 # The three files the page is made of. Copied wholesale for the mutation runs below.
-PAGE_FILES = ("markup.html", "js/markup.js", "js/markup-core.js")
+PAGE_FILES = ("markup.html", "js/markup.js", "js/markup-core.js", "js/bid-profiles.js")
 
 # The one built-in a ladder has to reproduce, written here independently of markup.js so a
 # drift on either side is a failing test rather than a rate nobody chose. hard_bid's own ladder
@@ -314,6 +314,25 @@ def test_the_banded_lines_are_a_ladder_of_typed_numbers_not_a_formula_string(ran
     assert [b["del"] for b in r["bands"]] == [True, True, True, True, False]
 
 
+@needs_node
+def test_seals_six_rungs_and_gyps_seven_are_built_in_and_the_tabs_price(ran):
+    """THE PAGE SENTENCE THAT CHANGED IN PHASE 8. Until then Seal's and Gyp's GP rendered an empty rate box and the
+    tab's total read Unpriceable, because the audit named a sixth and a seventh tier and not their edges. The workbook
+    oracle read them out of the template and the profiles carry them, so with nothing filed both tabs show their
+    ladder as the built-in and price. The strings are written here independently of bid-profiles.js; the engine test
+    holds them to the workbook's own cell formulas over every edge."""
+    seal = row(ran["dayOneSeal"], "gp")
+    assert [b["values"] for b in seal["bands"]] == [
+        ["6,500", "52"], ["15,000", "45"], ["22,500", "35"], ["32,500", "32"], ["42,500", "30"], ["28"]]
+    assert seal["figure"] != "Unpriceable"
+    gyp = row(ran["dayOneGyp"], "gp")
+    assert [b["values"] for b in gyp["bands"]] == [
+        ["15,000", "45"], ["25,000", "40"], ["50,000", "35"], ["75,000", "33"], ["100,000", "28"], ["150,000", "26"], ["24"]]
+    assert gyp["figure"] != "Unpriceable"
+    # looking at a built-in ladder files nothing: the day-one page made no write
+    assert all(r.startswith("GET") for r in ran["dayOneRequests"])
+
+
 # WAS: test_the_hard_bids_local_jobs_rule_is_a_checkbox_on_the_step_it_belongs_to and
 # test_ticking_local_jobs_only_moves_that_step_inside_kyles_own_gate. Both pinned hard_bid's own
 # checkbox -- Kyle's give-back stepped up with job size, and the smaller step was local-jobs-only,
@@ -393,8 +412,8 @@ def test_a_job_size_can_be_typed_the_way_people_type_money(ran):
 
 @needs_node
 def test_a_band_can_be_added_and_is_not_saved_half_filled(ran):
-    """Seal has a SIXTH GP tier and Gyp has seven, and their edges are not on record anywhere in
-    this repo -- so an admin has to be able to add a rung. A new one arrives empty, and an empty
+    """Seal has a SIXTH GP tier and Gyp has seven. Their edges were not on record until Phase 8 read them out of
+    the workbook, and an admin still has to be able to add a rung of their own. A new one arrives empty, and an empty
     rung is not a rate: it says which half is missing and posts nothing."""
     added = ran["bandAdded"]
     assert added["puts"] == 0

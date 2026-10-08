@@ -98,7 +98,7 @@ TEMPLATE = pathlib.Path(__file__).resolve().parents[1] / "templates" / "estimate
 # Everything the two harnesses read, copied wholesale for the mutation runs at the bottom.
 # markup.html and markup-core.js are in the list because markup-page-harness.js reads the element
 # ids OUT OF THE PAGE and requires the real engine -- one mutation below drives that harness too.
-MUTATE_FILES = ("js/estimate-review.js", "js/markup.js", "js/markup-core.js", "markup.html")
+MUTATE_FILES = ("js/estimate-review.js", "js/markup.js", "js/markup-core.js", "js/bid-profiles.js", "markup.html")
 
 GYP_SHEETS = ['Gyp (USG 1-8")', 'Gyp (USG N12ULTRA)', 'Gyp (USG N25 1-4")',
               'Gyp (GWorx SC190)', 'Gyp (FR)']

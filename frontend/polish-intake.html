@@ -572,7 +572,12 @@
 <!-- bid-model owns the model's shape and the condition keys the pricing chain reads. This
      page states the conditions, so it writes through the same module the calculator prices with —
      which is also what stamps the model's version, the flag the Projects page routes on. Loaded
-     before the page script because `var B = window.TWBidModel` runs at parse time. -->
+     before the page script because `var B = window.TWBidModel` runs at parse time. bid-model hands its chain
+     to the bid engine as it loads, and the engine reads the Markups formula reader and the profiles, so those
+     three go first. -->
+<script src="/js/markup-core.js"></script>
+<script src="/js/bid-profiles.js"></script>
+<script src="/js/bid-engine.js"></script>
 <script src="/js/bid-model.js"></script>
 <!-- The address / business lookup, shared with the live intake (js/index.js). Mounted by
      polish-intake.js as it boots, so it loads first. -->

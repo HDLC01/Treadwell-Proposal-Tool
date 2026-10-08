@@ -69,8 +69,16 @@
 // fails — which is the whole point of it: it is the only thing standing between a template edit
 // and a silently wrong bid. Change this file and that pin together, never one without the other.
 //
-// LOAD ORDER. This file needs js/excel-math.js and js/work-types.js loaded before it: a script tag above
-// this one on a page, and `require` does the same under node. The number helpers it exports (num,
+// THE CHAIN ITSELF MOVED (Phase 8). markupChain below is now a thin wrapper: it hands the job to
+// js/bid-engine.js priceChain with the profile `polish-legacy` (js/bid-profiles.js), which is exactly what
+// this file priced before, and returns the same keys with the same values. The rates the comment above
+// quotes live in that profile as Markups formula text now; RATES, GP_BANDS and the shipped travel and
+// labor figures below are READ from it, so there is one copy of each number. The chain golden
+// (backend/tests/fixtures/polish_chain_golden.json) is what says nothing moved.
+//
+// LOAD ORDER. This file needs js/excel-math.js, js/work-types.js and js/bid-engine.js loaded before it (and
+// bid-engine.js needs js/bid-profiles.js and js/markup-core.js): a script tag above this one on a page, and
+// `require` does the same under node. The number helpers it exports (num,
 // roundUp, copyInto, money, money2, pct, fmtSf) are excel-math's own functions, bound below to the names
 // this file has always used. The work-type vocabulary and the job-conditions table (which workbook cells
 // each condition writes, what a new bid answers, which defaults apply to a job) are work-types.js's, and
@@ -79,10 +87,12 @@
   var isNode = typeof module !== "undefined" && module.exports;
   var deps = {
     math: isNode ? require("./excel-math.js") : root.TWExcelMath,
-    types: isNode ? require("./work-types.js") : root.TWWorkTypes
+    types: isNode ? require("./work-types.js") : root.TWWorkTypes,
+    engine: isNode ? require("./bid-engine.js") : root.TWBidEngine
   };
   if (!deps.math) throw new Error("bid-model.js needs excel-math.js loaded before it");
   if (!deps.types) throw new Error("bid-model.js needs work-types.js loaded before it");
+  if (!deps.engine) throw new Error("bid-model.js needs bid-engine.js loaded before it");
   var api = factory(deps);
   root.TWBidModel = api;
   if (isNode) module.exports = api;   // node, for tests
@@ -104,15 +114,22 @@
   /** D37: `=(A37*B37*C37)*IF($E$35="8 hour days",8,10)`, and E35 says "8 hour days". */
   var HOURS_PER_DAY = 8;
 
+  // THE PROFILE THIS FILE PRICES WITH, and the rates it reads. `polish-legacy` (js/bid-profiles.js) is the
+  // Polish tab as this model has always charged it. Every figure in RATES below, and the GP ladder, is READ
+  // off it and off the global defaults, as Markups formula text snapped to twelve significant figures, so the
+  // number lives in one file. The cell each came from is still named beside it.
+  var engine = deps.engine;
+  var LEGACY = engine.resolveProfile("polish-legacy");
+
   var RATES = {
-    SHIPPING: 0.02,       // B32
-    ESCALATION: 0.05,     // C46, when prevailing wage applies
-    BURDEN: 0.12,         // C47
-    SUPER_PTO: 0.027,     // B69
-    SOFT_COSTS: 0.16,     // B70
-    SALES_TAX: 0.09475,   // B74, when the job is taxable
-    BOND: 0,              // B78 — the sheet ships it at zero
-    FEES: 0,              // D77 — B77 and C77 are blank, so the line is zero
+    SHIPPING: engine.rateNumber(LEGACY.rates.ship_pct),         // B32
+    ESCALATION: engine.rateNumber(LEGACY.rates.esc_pct),        // C46, when prevailing wage applies
+    BURDEN: engine.rateNumber(LEGACY.rates.burden_pct),         // C47
+    SUPER_PTO: engine.rateNumber(LEGACY.rates.super_pto),       // B69
+    SOFT_COSTS: engine.rateNumber(LEGACY.rates.soft_costs),     // B70
+    SALES_TAX: engine.rateNumber(LEGACY.rates.sales_tax),       // B74, when the job is taxable
+    BOND: engine.rateNumber(LEGACY.rates.bond),                 // B78 — the sheet ships it at zero
+    FEES: engine.defaultNumber("fees_textura"),                 // D77 — B77 and C77 are blank, so the line is zero
     DYE_PER_SF: 0.14,            // C25 — Dye, a flat rate across the polished area
     JOINT_FILLER_KIT_COST: 500,  // C29 — Joint Filler (10 gal kit), per kit
 
@@ -128,14 +145,15 @@
      * So markupChain takes `remodel_rate` as an input. SHEET_REMODEL is kept only so the parity
      * test can pin the sheet's own number and prove the departure is the one we intended rather
      * than drift. Nothing prices from it. */
-    SHEET_REMODEL: 0.10,  // B75 — what the workbook says, NOT what this engine charges
-    KS_STATE: 0.065       // the floor when nobody has picked a county yet
+    SHEET_REMODEL: engine.defaultNumber("remodel_sheet"),  // B75 — what the workbook says, NOT what this engine charges
+    KS_STATE: engine.defaultNumber("remodel_state")        // the floor when nobody has picked a county yet
   };
 
   /** B67, as bands: [ceiling, rate]. Strictly BELOW the ceiling, and the last band is the floor
    *  for everything above. A `<=` here would move the GP on every job that lands exactly on a
-   *  round number, which is most of the ones anybody checks. */
-  var GP_BANDS = [[6500, 0.52], [15000, 0.45], [22500, 0.35], [32500, 0.32], [null, 0.30]];
+   *  round number, which is most of the ones anybody checks. Read off the profile's ladder (the Polish tab's
+   *  five rungs); the edges and rates live in js/bid-profiles.js and nowhere else. */
+  var GP_BANDS = engine.bandsOf(LEGACY.rates.gp);
 
   /** B67 `=IF(D64<6500,0.52,IF(D64<15000,0.45,IF(D64<22500,0.35,IF(D64<32500,0.32,0.3))))` */
   function gpPct(subTotal) {
@@ -433,8 +451,8 @@
    *
    *  BOTH START OFF (Hanz's decision, 2026-10-05): a bid that never leaves town pays nothing for a
    *  hotel, and an old saved bid opened after this shipped is not repriced. */
-  var SHIPPED_LODGING_RATE = 70;
-  var SHIPPED_PER_DIEM_RATE = 45;
+  var SHIPPED_LODGING_RATE = engine.defaultNumber("travel_lodging");
+  var SHIPPED_PER_DIEM_RATE = engine.defaultNumber("travel_per_diem");
   var TRAVEL_LINE_KEYS = ["lodging", "per_diem"];
 
   /** The fresh travel block, built each call so no two models share an object. */
@@ -983,119 +1001,29 @@
   /** THE CHAIN. Materials and labor in, a bid out, one key per cell of Kyle's markup column.
    *
    *  `material` is the raw sum of the takeoff assemblies and `labor` the raw sum of the labor
-   *  rows — both unrounded, because D31 and D45 are where the sheet rounds them. */
+   *  rows -- both unrounded, because D31 and D45 are where the sheet rounds them.
+   *
+   *  A WRAPPER SINCE PHASE 8. The arithmetic (every ROUNDUP, every base, the Epoxy and Leveling quirks that
+   *  this tab does not have) is js/bid-engine.js priceChain, and the rates are the profile `polish-legacy`'s.
+   *  This function hands the job over and returns the keys it has always returned, with the values it has
+   *  always returned: backend/tests/fixtures/polish_chain_golden.json is the proof, vector by vector. The
+   *  notes that used to sit in this body (the remodel rate's null against zero, the fees line being marked
+   *  up, the bond base counting the taxes twice) are in the engine beside the lines they explain. */
   function markupChain(input) {
-    input = input || {};
-    var cond = input.conditions || {};
-    var sf = num(input.sf);
-
-    // ── materials ──
-    var material = roundUp(input.material);                              // D31
-    var shipping = roundUp(material * RATES.SHIPPING);                   // D32
-    var material_total = material + shipping;                            // D33
-
-    // ── labor ──
-    var labor = roundUp(input.labor);                                    // D45
-    var escPct = cond.prevailing_wage ? RATES.ESCALATION : 0;            // C46
-    var escalation = roundUp(labor * escPct);                            // D46
-    var burden = roundUp((labor + escalation) * RATES.BURDEN);           // D47
-    var labor_total = labor + escalation + burden;
-
-    // ── travel costs: Lodging + Per Diem (D61). INSIDE the sub-total, so GP's band, super/PTO, soft
-    // costs and the remodel tax's markup base all see them, exactly as Kyle's D64 `SUM(...,D61)`
-    // does. Not labor: no escalation and no burden. 0 when the caller passes none, which is every
-    // caller written before this existed.
-    var travel = roundUp(input.travel);                                  // D61
-
-    // D64. D55 (tooling) is in the sheet's range and is 0 in the beta; D61 is the line above.
-    var sub_total = roundUp(material_total + labor + escalation + burden + travel);
-
-    // ── the two taxes' rates, and the fees line, all of which feed the markups below ──
-    var sales_tax_pct = cond.taxable ? RATES.SALES_TAX : 0;              // B74
-    var sales_tax = roundUp(material_total * sales_tax_pct);             // D74 — MATERIALS ONLY
-    // D77. The sheet computes this as B77×C77 -- a quantity times a rate -- and ships both blank,
-    // so it has always been zero here. It is now a figure the estimator types on the Review step,
-    // for the same reason contingency (D71) is: the workbook leaves the cells open, and a line an
-    // estimator cannot fill in is one they have to remember to add somewhere else.
-    //
-    // ONE DOLLAR FIGURE, NOT TWO CELLS. Collapsing B77×C77 into the product they make loses
-    // nothing the bid uses -- every formula below reads D77, never its two factors -- and asking
-    // for a quantity and a rate would be asking an estimator to decompose a number they already
-    // have in hand.
-    //
-    // IT IS MARKED UP, and that is the sheet's own behaviour rather than a choice made here: D77
-    // sits inside GP's base (D67), super/PTO's (D69), soft costs' (D70) and the remodel tax's
-    // (D75). A fee typed here therefore grows the bid by more than itself.
-    var fees = roundUp(num(input.fees));                                 // D77 -- B77×C77
-
-    // ── markups ──
-    var gp_pct = gpPct(sub_total);                                       // B67
-    // D67. A margin, not a mark-on: the sheet divides UP to the sell price and subtracts the
-    // cost, so 32% GP is 32% OF THE BID, not 32% added to the cost.
-    var gp = roundUp((sub_total + sales_tax + fees) / (1 - gp_pct))
-           - roundUp(sub_total + sales_tax + fees);
-    // NO hard_bid TERM. It was B68/D68 in Kyle's real sheet -- see the note above hardBidPct's
-    // old home for why it is gone rather than pinned at zero. Every SUM below is one D-cell
-    // short of his literal range for exactly that reason; this file has diverged from his
-    // ranges on purpose, and it is the only place that has.
-    var contingency = num(input.contingency);                            // D71
-
-    // D69 `=ROUNDUP(SUM(D64:D68,D71,D74,D77)*B69,0)` — D65 empty, D66 the text "Totals", D68 no
-    // longer a term this file computes.
-    var super_pto = roundUp(
-      (sub_total + gp + contingency + sales_tax + fees) * RATES.SUPER_PTO);
-    // D70 `=(ROUNDUP(SUM(D64:D69,D71,D74,D77)*B70,0))+0` — same collapse, plus super/PTO.
-    var soft_costs = roundUp(
-      (sub_total + gp + super_pto + contingency + sales_tax + fees) * RATES.SOFT_COSTS);
-
-    // ── the remodel tax, on the labor side and the markups. NEVER on materials. ──
-    //
-    // The RATE is the county's real one, handed in by the caller from the project's county (see
-    // RATES.SHEET_REMODEL for why this is not the sheet's 10%). With the remodel toggle on and no
-    // county picked yet, fall back to the Kansas state rate rather than to 10% — a low answer an
-    // estimator can correct beats an invented one they might not question.
-    // NULL AND ZERO MEAN DIFFERENT THINGS HERE, and conflating them overcharges a whole state.
-    // `null`/absent is "nobody has said which county" → stand the state rate up until they do.
-    // An explicit `0` is "we know, and it is nothing": Missouri taxes remodel labor as exempt, so
-    // a Missouri county has no remodel rate on purpose. Reading that 0 as "unknown" would charge a
-    // Missouri job the Kansas rate. Same null-is-not-zero rule as per_unit and per_sf.
-    var remodel_pct = 0;                                                 // B75
-    if (cond.remodel_tax) {
-      var given = input.remodel_rate;
-      remodel_pct = (given === null || given === undefined || given === "")
-        ? RATES.KS_STATE
-        : num(given);
-    }
-    var remodel_tax = roundUp(
-      (labor + escalation + burden + gp + super_pto + soft_costs + contingency + fees)
-      * remodel_pct);                                                    // D75
-    var taxes = sales_tax + remodel_tax;                                 // D76
-
-    // ── bond, fees ──
-    var bond_pct = RATES.BOND;                                           // B78
-    // D78. The sheet's range double-counts D74/D75 through D76; kept as written, because B78 is
-    // zero and quietly "fixing" his arithmetic is how the two files stop agreeing.
-    var bond = roundUp((sub_total + gp + super_pto + soft_costs + contingency
-                        + sales_tax + remodel_tax + taxes + fees) * bond_pct);
-    var fees_and_bond = roundUp(fees + bond);                            // D79
-
-    var total = sub_total + gp + super_pto + soft_costs                  // D82
-              + contingency + taxes + fees_and_bond;
-
+    var r = engine.priceChain(LEGACY, input);
     return {
-      material: material, shipping: shipping, material_total: material_total,
-      labor: labor, escalation: escalation, burden: burden, labor_total: labor_total,
-      travel: travel,
-      sub_total: sub_total,
-      gp_pct: gp_pct, gp: gp,
-      super_pto: super_pto, soft_costs: soft_costs, contingency: contingency,
-      sales_tax_pct: sales_tax_pct, sales_tax: sales_tax,
-      remodel_pct: remodel_pct, remodel_tax: remodel_tax, taxes: taxes,
-      fees: fees, bond: bond, bond_pct: bond_pct, fees_and_bond: fees_and_bond,
-      total: total,
-      sf: sf,
-      // Null, not 0, without an area: 0 would read as "free" rather than "not known yet".
-      per_sf: sf > 0 ? total / sf : null
+      material: r.material, shipping: r.shipping, material_total: r.material_total,
+      labor: r.labor, escalation: r.escalation, burden: r.burden, labor_total: r.labor_total,
+      travel: r.travel,
+      sub_total: r.sub_total,
+      gp_pct: r.gp_pct, gp: r.gp,
+      super_pto: r.super_pto, soft_costs: r.soft_costs, contingency: r.contingency,
+      sales_tax_pct: r.sales_tax_pct, sales_tax: r.sales_tax,
+      remodel_pct: r.remodel_pct, remodel_tax: r.remodel_tax, taxes: r.taxes,
+      fees: r.fees, bond: r.bond, bond_pct: r.bond_pct, fees_and_bond: r.fees_and_bond,
+      total: r.total,
+      sf: r.sf,
+      per_sf: r.per_sf
     };
   }
 
@@ -1107,7 +1035,7 @@
    *
    *  A SAVED BID NEVER MOVES. This is a starting point, read once when a bid is first opened and
    *  never applied to a model that already states a labor row (laborUnstated is the gate). */
-  var SHIPPED_LABOR_RATE = 33.0;
+  var SHIPPED_LABOR_RATE = engine.defaultNumber("labor_rate");
 
   /** A usable rate, or the shipped one. Anything that is not a positive finite number reads as
    *  "nothing said", because a $0 company rate would price every new line at nothing. */
@@ -1383,10 +1311,12 @@
     var out = (labor instanceof Array) ? labor.slice() : [];
     if (!(rows instanceof Array)) return out;
     var wt = workType || "polish";
-    var seen = {};
+    // A Set, not an object keyed by the row id: ids come out of the library and out of saved drafts, and a
+    // key that is user data does not belong on a plain object (CodeQL js/remote-property-injection).
+    var seen = new Set();
     var i;
     for (i = 0; i < out.length; i++) {
-      if (out[i] && out[i].id !== null && out[i].id !== undefined) seen[String(out[i].id)] = true;
+      if (out[i] && out[i].id !== null && out[i].id !== undefined) seen.add(String(out[i].id));
     }
     for (i = 0; i < rows.length; i++) {
       var r = rows[i];
@@ -1397,7 +1327,7 @@
           // Not a default, or not for this work type: the bid does not get Travel. The row
           // freshModel put on the model is taken out (a copy; the input array is never touched).
           out = out.filter(function (x) { return !(x && String(x.id) === "travel"); });
-          seen[rid] = true;
+          seen.add(rid);
           continue;
         }
         var travel = travelSeed(r);
@@ -1417,13 +1347,13 @@
           if (Object.prototype.hasOwnProperty.call(out[at], "hours_seed")) travel.hours_seed = out[at].hours_seed;
           out[at] = travel;
         }
-        seen[rid] = true;
+        seen.add(rid);
         continue;
       }
       if (!r.favorite) continue;
       if (!workTypeApplies(r, wt)) continue;
-      if (seen[rid]) continue;
-      seen[rid] = true;
+      if (seen.has(rid)) continue;
+      seen.add(rid);
       out.push(libraryLaborRow(r, dflt));
     }
     return out;

@@ -52,7 +52,9 @@ NAMED_COPIES = [
     ("backend/estimate_writer.py", "POLISH_CELL_MAP"),
     ("frontend/js/bid-model.js", "RATES"),
     ("frontend/js/bid-model.js", "GP_BANDS"),
-    ("frontend/js/markup.js", "GP_5_BANDS"),
+    # Phase 8: GP_5_BANDS left markup.js (BUILTIN is read off the profiles now), and the profiles are the home.
+    ("frontend/js/bid-profiles.js", "builtinRules"),
+    ("frontend/js/bid-engine.js", "priceChain"),
     ("frontend/js/markup.js", "BUILTIN"),
     ("backend/pricing.py", "_gp_pct"),
     ("backend/pricing.py", "compute_full_bid"),

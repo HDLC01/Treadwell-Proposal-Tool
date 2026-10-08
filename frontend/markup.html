@@ -428,6 +428,9 @@
   <!-- The expression engine. Must precede the page script, which reads window.TWMarkup as it
        runs. Hand-rolled parser, not eval: prod's CSP has no unsafe-eval. -->
   <script src="/js/markup-core.js"></script>
+  <!-- The built-in rates the page shows, which are the ones the bid engine prices with. markup.js reads
+       window.TWBidProfiles as it loads, so this goes first. -->
+  <script src="/js/bid-profiles.js"></script>
   <script src="/js/markup.js"></script>
 </body>
 </html>

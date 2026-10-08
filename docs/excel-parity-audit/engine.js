@@ -30,8 +30,9 @@
  *      HF.loadSheet, and build() below, against recording stand-ins for HyperFormula on one fixture, and
  *      test_workbook_oracle.py requires every call each of them made to HyperFormula, in order, to be
  *      equal (the aliases they ended with and the number of names registered too). The page's boot order
- *      (HF.init, the names, only then the cells) is read from its source. One line changed in either
- *      file, in a scratch copy, turns that test red.
+ *      (HF.init, the names, only then the cells) is read from its source. The ten one-line changes listed
+ *      in LOAD_BREAKS (test_workbook_oracle.py), each made to a scratch copy of the page or of this file,
+ *      turn that test red.
  *
  * WHAT IS NOT CLAIMED. The oracle types its numbers into the engine with setCellContents (see `set`
  * below). The page's own door for an edit, HF.setCellValue, also turns numeric text into a number and

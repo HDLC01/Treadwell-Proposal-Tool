@@ -213,6 +213,10 @@ def name_edits(tmp_path_factory):
     rewrite("a name added", lambda xml: _once(xml, "</definedNames>", '<definedName name="Extra_Name">Epoxy!$A$1</definedName></definedNames>'))
     rewrite("a name removed", lambda xml: _once(xml, SILICA, ""))
     rewrite("a name renamed", lambda xml: _once(xml, SILICA, SILICA.replace('"Silica"', '"Silica2"')))
+    # a Silica of Polish's own (localSheetId 1: Epoxy is sheet 0, Polish sheet 1): it shadows the workbook's on that
+    # sheet, belongs to no workbook-wide list, and is not one the page registers
+    rewrite("a sheet-scoped Silica added", lambda xml: _once(
+        xml, "</definedNames>", '<definedName name="Silica" localSheetId="1">Epoxy!$W$146</definedName></definedNames>'))
     # the same two definitions swapped in the file: nothing is defined differently
     rewrite("two names swapped in the file", lambda xml: _once(_once(_once(xml, SILICA, "@@SILICA@@"), QUARTZ, SILICA), "@@SILICA@@", QUARTZ))
     return out
@@ -223,7 +227,8 @@ def _cells_only_hash(path):
     return S.hash_cells(S.normalised_cells(["Polish"], path))
 
 
-NAME_CHANGES = ["Silica pointed at another cell", "a name added", "a name removed", "a name renamed"]
+NAME_CHANGES = ["Silica pointed at another cell", "a name added", "a name removed", "a name renamed",
+                "a sheet-scoped Silica added"]
 
 
 @pytest.mark.parametrize("label", NAME_CHANGES)
@@ -239,6 +244,37 @@ def test_a_name_defined_differently_moves_the_template_hash_though_no_cell_chang
     # all would still notice an added or a removed one by that count alone
     assert S.template_hash(["Polish"], copy)[0] != S.template_hash(["Polish"])[0], (
         label + ": the template guard did not notice a changed defined name, so it guards the cells and not the workbook")
+
+
+def test_a_name_that_belongs_to_one_sheet_is_hashed_with_its_sheet(name_edits):
+    """`ws.defined_names`, which the app's own reader never looks at. The copy below has a Silica of Polish's own: the
+    workbook-wide list is exactly the template's (so a guard built on that list alone, as this one was, is blind to it),
+    the hash sees it, and it sees WHICH sheet it belongs to: the same name on Epoxy is another change."""
+    copy = name_edits["a sheet-scoped Silica added"]
+    assert S.named_expressions(copy) == S.named_expressions(S.TEMPLATE_PATH), "the copy must change no workbook-wide name"
+    assert S.sheet_scoped_names(S.TEMPLATE_PATH) == [], "Kyle's template has no sheet-scoped names today"
+    scoped = S.sheet_scoped_names(copy)
+    assert scoped == [{"name": "Silica", "expression": "=Epoxy!$W$146", "scope": "Polish"}]
+    assert ("Polish", "Silica", "n", "=Epoxy!$W$146") in S.normalised_names(copy)
+    assert S.template_hash(["Polish"], copy)[0] != S.template_hash(["Polish"])[0]
+    assert S.template_hash(["Polish"], copy)[2] == S.template_hash(["Polish"])[2] + 1, "one more name is hashed"
+
+
+def test_the_same_name_on_two_sheets_hashes_apart_and_the_sheet_is_part_of_it(tmp_path):
+    """The scope is in the hash, so a name moved from one sheet to another changes the answer key."""
+    def with_scope(sheet_index, label):
+        path = tmp_path / (label + ".xlsx")
+        with zipfile.ZipFile(S.TEMPLATE_PATH) as src, zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as dst:
+            for item in src.infolist():
+                data = src.read(item.filename)
+                if item.filename == "xl/workbook.xml":
+                    data = _once(data.decode("utf-8"), "</definedNames>",
+                                 '<definedName name="Silica" localSheetId="%d">Epoxy!$W$146</definedName></definedNames>'
+                                 % sheet_index).encode("utf-8")
+                dst.writestr(item, data)
+        return path
+    on_polish, on_epoxy = with_scope(1, "polish"), with_scope(0, "epoxy")
+    assert S.template_hash(["Polish"], on_polish)[0] != S.template_hash(["Polish"], on_epoxy)[0]
 
 
 def test_the_same_names_in_another_order_do_not_move_the_template_hash(name_edits):

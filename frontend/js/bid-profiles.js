@@ -14,8 +14,10 @@
 //     `outputs` cells. The recorded answers are backend/tests/fixtures/oracle/<slug>.json.
 //   - backend/tests/test_workbook_formula_pins.py reads every entry back out of the template and fails when
 //     the formula or the constant in the template is not the one written here.
-//   - Phases 8 to 17 of the v2 estimating program add the rates and the rules (the GP ladders, the shipping
-//     tiers, the odd rules of docs/kyle-workbook-odd-rules.md) to THIS module, and the bid engine reads it.
+//   - js/bid-engine.js (Phase 8) prices a bid with the PROFILES in part two below (the rates, the GP ladders,
+//     the shipping tiers, the odd rules of docs/kyle-workbook-odd-rules.md as named quirk flags), and
+//     js/markup.js shows `builtinRules()` as the Markups page's built-ins. Part one, the cell maps, is
+//     untouched by that and is what the oracle's integrity hash covers.
 //
 // THE GROUPS of one tab's map
 //   flags    The five job questions. Each is a Yes/No cell (flagWords says which words). Some tabs keep their
@@ -572,11 +574,212 @@
     }
   };
 
+  // ══ PART TWO (Phase 8): what the bid engine prices with ═══════════════════════════════════════════
+  // Everything above says where a number sits IN THE WORKBOOK. Everything below says what js/bid-engine.js
+  // charges: one PROFILE per kind of tab, the one home of the global defaults, and the table that says
+  // which Markups lines the engine reads. Still data only. A rate is TEXT in the Markups vocabulary
+  // (js/markup-core.js evaluates it), so a rate filed on the Markups page and a rate built in here are the
+  // same kind of thing and one engine reads both. `sheets` above is what the oracle recorded its answers
+  // from and is hashed for that (backend/tests/js/oracle-integrity.js); nothing below is, and nothing below
+  // changes it.
+
+  /** THE GLOBAL DEFAULTS, the ONE home of the figures that are the same on every sheet. Each key is the
+   *  Markups line it is filed under (backend/markup.py GLOBAL_LINE_KEYS) where there is one. Text, so the
+   *  Markups page can show it as the built-in and the engine can read it. sales_tax is the Kansas
+   *  9.475% the sheets type in; remodel_sheet is the 10% the sheets type for the remodel tax and
+   *  remodel_state is the Kansas floor the tool uses instead when no county is picked (see
+   *  bid-model.js, "the one place this engine deliberately departs"). */
+  var DEFAULTS = {
+    labor_rate: "33",
+    travel_lodging: "70",
+    travel_per_diem: "45",
+    fees_textura: "0",
+    bond: "0%",
+    sales_tax: "9.475%",
+    remodel_sheet: "10%",
+    remodel_state: "6.5%"
+  };
+
+  /** The Markups lines the engine can read a filed rule for, and what each one is. `kind` says how a
+   *  filed formula is read: "gp" is a divide-up margin (a rate, or MARKUP(rate), or a BAND ladder),
+   *  "rate" is a fraction of a base (2.7%), "dollars" is a figure. `home` is where the rule is filed:
+   *  "layout" on the tab's own layout, "global" on the Global tab (the one home for a line that is the
+   *  same on every sheet). */
+  var LINES = {
+    gp:              { kind: "gp",      home: "layout" },
+    super_pto:       { kind: "rate",    home: "layout" },
+    soft_costs:      { kind: "rate",    home: "layout" },
+    bond:            { kind: "rate",    home: "global" },
+    travel_lodging:  { kind: "dollars", home: "global" },
+    travel_per_diem: { kind: "dollars", home: "global" },
+    labor_rate:      { kind: "dollars", home: "global" },
+    fees_textura:    { kind: "dollars", home: "global" }
+  };
+
+  /** Which Markups lines a layout shows as built-ins, in the order the page lists them. */
+  var BUILTIN_LINES = ["gp", "super_pto", "soft_costs", "bond"];
+
+  // THE QUIRKS. A closed set of named flags, each one a place where a sheet does something its neighbour
+  // does not (docs/kyle-workbook-odd-rules.md has the plain-words list). The engine reads each by name and
+  // a profile that carries a name not in this list is refused when it is resolved, so a typo cannot add a
+  // rule nobody reads.
+  //   escalationInSubtotal       the labor escalation is one of the sub-total's terms (not on Leveling)
+  //   escalationAlwaysOn         the escalation applies whatever Prevailing Wage says (Gyp)
+  //   gpSubtractionIncludesFees  GP takes the fees back off the divided-up figure (not on Epoxy)
+  //   hasHardBid                 the sheet has a Hard Bid give-back line (not on Gyp, not in the v2 model)
+  //   hasOverage                 the sheet has a Discount / Overage line in its material
+  //   toolingInSubTotal          the tooling line is one of the sub-total's terms (the v2 model has none)
+  //   remodelBase                "sheet": labor, tooling, travel and the markups; "model": labor and the
+  //                              markups only, as the v2 model charges today
+  //   remodelRateDefault         what a remodel job with no rate typed pays: "sheet" 10%, "state" 6.5%
+  //   bondInput                  a bond rate can be typed for a job (the v2 model has none)
+  //   travelFromLodging          with no travel figure typed, travel is lodging plus per diem
+  //   shippingRule               "rate": one rate on the material; "gyp-split": 20% on the gypsum, 10% on
+  //                              the rest, the sound mat free from a truckload on
+  //   lodgingDivisor             nights = (labor - travel labor) / labor rate / this
+  //   dayHours                   hours in a crew day (8 or 10); the oracle pins it to the tab's own cell
+  var QUIRKS = ["escalationInSubtotal", "escalationAlwaysOn", "gpSubtractionIncludesFees", "hasHardBid",
+    "hasOverage", "toolingInSubTotal", "remodelBase", "remodelRateDefault", "bondInput", "travelFromLodging",
+    "shippingRule", "lodgingDivisor", "dayHours"];
+
+  var GP_5 = "MARKUP(BAND(subtotal, 6500,52%, 15000,45%, 22500,35%, 32500,32%, 30%))";
+  // Seal's sixth rung: 30% up to 42,500 and 28% from there (Seal!B67, odd-rules "Seal's gross profit ladder").
+  var GP_SEAL = "MARKUP(BAND(subtotal, 6500,52%, 15000,45%, 22500,35%, 32500,32%, 42500,30%, 28%))";
+  // Gyp's seven tiers (Gyp (USG 1-8")!B72): 45, 40, 35, 33, 28, 26 and 24 percent.
+  var GP_GYP = "MARKUP(BAND(subtotal, 15000,45%, 25000,40%, 50000,35%, 75000,33%, 100000,28%, 150000,26%, 24%))";
+  // Gyp's soft costs, verbatim from the cell (Gyp (USG 1-8")!B75), string sentinel and all. It names two
+  // cells of the sheet, B5 (Local) and E69 (the sub-total); `names` below says what each means.
+  var GYP_SOFT_COSTS = 'IF(OR(B5="Yes",B5="No"), IF(B5="Yes",.09,.1) - ' +
+    'IF(E69>334900,.05,IF(E69>234450,.035,0)), "error")';
+  // The Epoxy-style shipping and material escalation: 15% to 5,000 of material, 11% to 10,000, 9% above.
+  var SHIP_TIERS = "0.05+IF(material<=5000,0.1,IF(material<=10000,0.06,0.04))";
+  // The give-back: 4% off from a 60,000 sub-total, 2.5% off from 13,000 when the job is local.
+  var HARD_BID = "IF(hard_bid, IF(subtotal>=60000, -4%, IF(local, IF(subtotal>=13000, -2.5%, 0), 0)), 0)";
+
+  // THE PROFILES. `extends` names another profile; its quirks, rates and names are the starting point and
+  // this one states only what differs (js/bid-engine.js resolveProfile merges them). `layout` is the
+  // Markups layout (backend/markup.py TABS), which is where a rate filed on the Markups page is read from:
+  // Epoxy and Epoxy blank share `epoxy`, Seal and Seal (+Jnts) share `seal`, and the five Gyp tabs share
+  // `gyp`. `rev` goes into the stamp a saved section carries ("polish@1"); change what a profile charges
+  // and its rev moves with it, so a saved bid says which rules priced it.
+  //   polish         Kyle's Polish tab, exactly, with every quirk and line it has.
+  //   polish-legacy  what the v2 model has priced since it was written: polish minus the tooling line, with
+  //                  the narrower remodel base, no hard bid, no bond input and the Kansas floor for a
+  //                  missing remodel rate. The five differences are departures.json, and Phase 17 closes
+  //                  three of them for NEW bids.
+  var PROFILES = {
+    "polish": {
+      rev: 1, layout: "polish", extends: null,
+      label: "Polish tab, as the workbook prices it",
+      quirks: {
+        escalationInSubtotal: true, escalationAlwaysOn: false, gpSubtractionIncludesFees: true,
+        hasHardBid: true, hasOverage: false, toolingInSubTotal: true, remodelBase: "sheet",
+        remodelRateDefault: "sheet", bondInput: true, travelFromLodging: true,
+        shippingRule: "rate", lodgingDivisor: 8, dayHours: 8
+      },
+      rates: {
+        ship_pct: "2%", esc_pct: "5%", burden_pct: "12%", gp: GP_5, super_pto: "2.7%",
+        soft_costs: "16%", hard_bid: HARD_BID
+      },
+      names: {}
+    },
+    "polish-legacy": {
+      rev: 1, layout: "polish", extends: "polish",
+      label: "Polish as the v2 model prices it today (saved bids keep these rules)",
+      quirks: {
+        toolingInSubTotal: false, remodelBase: "model", remodelRateDefault: "state", hasHardBid: false,
+        bondInput: false, travelFromLodging: false
+      }
+    },
+    "seal": {
+      rev: 1, layout: "seal", extends: "polish",
+      label: "Seal and Seal (+Jnts): Polish with a sixth gross profit rung",
+      rates: { gp: GP_SEAL }
+    },
+    "epoxy": {
+      rev: 1, layout: "epoxy", extends: "polish",
+      label: "Epoxy tab",
+      quirks: { gpSubtractionIncludesFees: false },
+      rates: { ship_pct: SHIP_TIERS, super_pto: "3%", soft_costs: "13%" }
+    },
+    "epoxy-blank": {
+      rev: 1, layout: "epoxy", extends: "epoxy",
+      label: "Epoxy blank tab: Epoxy with an overage line, and GP that takes the fees back off",
+      quirks: { gpSubtractionIncludesFees: true, hasOverage: true }
+    },
+    "leveling": {
+      rev: 1, layout: "leveling", extends: "epoxy-blank",
+      label: "Leveling tab: ten hour days, lodging still divided by 8, escalation left out of the sub-total",
+      quirks: { escalationInSubtotal: false, dayHours: 10 },
+      rates: { labor_rate: "33.66" }
+    },
+    "gyp": {
+      rev: 1, layout: "gyp", extends: "polish",
+      label: "The five Gyp tabs",
+      quirks: {
+        escalationAlwaysOn: true, hasHardBid: false, shippingRule: "gyp-split", lodgingDivisor: 10, dayHours: 10
+      },
+      rates: {
+        ship_pct: null, hard_bid: null, gp: GP_GYP, super_pto: "4.1%", soft_costs: GYP_SOFT_COSTS,
+        labor_rate: "33.66", material_esc_pct: "8%", ship_gyp_pct: "20%", ship_other_pct: "10%"
+      },
+      // The two cells GYP_SOFT_COSTS names, and what each is: B5 is the Local answer, E69 the sub-total.
+      names: { B5: "local", E69: "sub_total" }
+    }
+  };
+
+  // THE TABS. Which profile prices each of the eleven priced tabs, and the one thing that differs between
+  // tabs of a profile: a Gyp tab's truckload, in sound-mat rolls (Gyp (USG 1-8")!H36 and its copies). The
+  // oracle's `fixed.truckload` holds the same numbers, and backend/tests/test_bid_engine.py holds the two.
+  var TAB_PROFILES = {
+    "Epoxy": { profile: "epoxy" },
+    "Polish": { profile: "polish" },
+    "Seal": { profile: "seal" },
+    "Seal (+Jnts)": { profile: "seal" },
+    "Epoxy blank": { profile: "epoxy-blank" },
+    "Leveling": { profile: "leveling" },
+    "Gyp (USG 1-8\")": { profile: "gyp", truckload: 280 },
+    "Gyp (USG N12ULTRA)": { profile: "gyp", truckload: 260 },
+    "Gyp (USG N25 1-4\")": { profile: "gyp", truckload: 208 },
+    "Gyp (GWorx SC190)": { profile: "gyp", truckload: 384 },
+    "Gyp (FR)": { profile: "gyp", truckload: 448 }
+  };
+
+  /** What the Markups page shows as the built-in for each layout and for Global, as { layout: { line:
+   *  { formula } } }. Read off the profiles and the defaults, so the page has no second copy of a rate:
+   *  one entry per profile whose id is its layout (polish, seal, epoxy, leveling, gyp) carrying the
+   *  lines the page lists, and the Global lines. Each formula is the text the engine reads too. */
+  function builtinRules() {
+    var has = Object.prototype.hasOwnProperty;
+    function ratesOf(id) {
+      var chain = [];
+      for (var at = id; at; at = PROFILES[at].extends) chain.unshift(PROFILES[at]);
+      return chain.reduce(function (merged, p) { return Object.assign({}, merged, p.rates || {}); }, {});
+    }
+    var layouts = ["polish", "seal", "epoxy", "leveling", "gyp"].map(function (layout) {
+      var rates = ratesOf(layout);
+      var lines = BUILTIN_LINES.map(function (line) {
+        return [line, has.call(rates, line) ? rates[line] : DEFAULTS[line]];
+      }).filter(function (pair) { return typeof pair[1] === "string"; })
+        .map(function (pair) { return [pair[0], { formula: pair[1] }]; });
+      return [layout, Object.fromEntries(lines)];
+    });
+    var globals = Object.keys(LINES).filter(function (line) { return LINES[line].home === "global"; })
+      .map(function (line) { return [line, { formula: DEFAULTS[line] }]; });
+    return Object.fromEntries(layouts.concat([["global", Object.fromEntries(globals)]]));
+  }
+
   return deepFreeze({
     version: 1,
     flagWords: { on: "Yes", off: "No" },
     priced: priced,
     sheets: sheets,
-    families: families
+    families: families,
+    defaults: DEFAULTS,
+    lines: LINES,
+    quirks: QUIRKS,
+    profiles: PROFILES,
+    tabs: TAB_PROFILES,
+    builtinRules: builtinRules
   });
 });
