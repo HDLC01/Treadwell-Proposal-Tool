@@ -4086,6 +4086,12 @@ const rendered = [];      // every string the page put on screen, for the Labour
                      calcBlank: B.laborCost({ guys: 3, days: 5, rate: "", calc_default: { rate: 50 }, rate_default: 33 }),
                      savedWarn: warn(d, '[data-ratedflt-for="' + pi + '"]') };
 
+    // D2. a SAVED row holding a blank rate beside a stamp priced $0 and still does after loading.
+    const savedBlank = B.migrateModel({ version: 2, takeoff: [], labor: [
+      { id: "polishing", label: "Polishing", guys: 3, days: 1, rate: "", rate_default: 33 },
+      { id: "mockup", label: "Mock-up", guys: 3, days: 1, rate: "", calc_default: { rate: 50 } }] }).labor;
+    out.ls1SavedBlank = { a: B.laborCost(savedBlank[0]), b: B.laborCost(savedBlank[1]) };
+
     // E. a saved draft with five empty cards opens without them, and its total does not move.
     const six = [{ id: "polishing", label: "Polishing", guys: 3, days: 5, rate: 33 },
                  { id: "travel", label: "Travel Labor", guys: 15, days: 2, rate: 33, unit: "hours", guys_auto: true }];

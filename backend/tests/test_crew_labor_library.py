@@ -181,10 +181,15 @@ MUTATIONS = {
         "return num(row.guys) * num(row.days) * laborRateOf(row) * perDay;",
         "return num(row.guys) * num(row.days) * num(row.rate) * perDay;",
         lambda r: r["ls1Blank"]["whileEmpty"]["total"] == 0),
+    "a saved blank rate is pinned to zero": (
+        "js/bid-model.js",
+        "laborIn = pinSavedBlankRates(dropEmptyLaborRows(laborIn));",
+        "laborIn = dropEmptyLaborRows(laborIn);",
+        lambda r: r["ls1SavedBlank"]["a"] == 792),
     "the empty cards open again": (
         "js/bid-model.js",
-        "laborIn = dropEmptyLaborRows(laborIn);",
-        "laborIn = laborIn;",
+        "laborIn = pinSavedBlankRates(dropEmptyLaborRows(laborIn));",
+        "laborIn = pinSavedBlankRates(laborIn);",
         lambda r: len(r["ls1Empty"]["ids"]) == 7),
     "no fallback when the library cannot answer": (
         "js/polish-estimate.js",
@@ -217,3 +222,7 @@ def test_each_protection_goes_red_without_its_line(tmp_path, name):
     if p.returncode != 0:
         return          # an older scenario in the same harness crashed on the missing row: red, as wanted
     assert noticed(last_json_line(p.stdout)), "the harness did not notice: " + name
+
+def test_a_saved_blank_rate_beside_a_stamp_still_prices_zero_after_loading(page):
+    assert page["ls1SavedBlank"] == {"a": 0, "b": 0}
+

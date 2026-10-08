@@ -1902,6 +1902,20 @@
     return crew.concat(travel, rest);
   }
 
+  /** A SAVED ROW'S BLANK RATE STAYS ZERO. The blank-rate fallback (laborRateOf) is for the box a
+   *  person clears on screen; a saved draft that already holds a blank rate beside a stamp priced it
+   *  at $0, so loading pins it to 0 and the bid's total does not move. A NEW array. */
+  function pinSavedBlankRates(rows) {
+    if (!(rows instanceof Array)) return rows;
+    return rows.map(function (r) {
+      if (!r || typeof r !== "object" || !isBlank(r.rate)) return r;
+      if (r.rate_default === undefined && !r.calc_default) return r;
+      var copy = copyInto({}, r);
+      copy.rate = 0;
+      return copy;
+    });
+  }
+
   /** `rows` without the cards nobody filled in: no name, no guys and no days, and not Travel.
    *  Such a row prices $0 (laborCost multiplies guys by days), so dropping it moves no total; it is
    *  what "+ Add a labor line" leaves behind when it is never used. A library default always has a
@@ -2029,7 +2043,7 @@
       // prices $0, so no total moves. Travel is never one of them.
       var laborIn = model.labor;
       if (laborIn instanceof Array && laborIn.length) {
-        laborIn = dropEmptyLaborRows(laborIn);
+        laborIn = pinSavedBlankRates(dropEmptyLaborRows(laborIn));
         if (!laborIn.length) laborIn = [withHoursSeed(travelSeed())];
       }
       var out = {
@@ -2436,7 +2450,7 @@
     conditionsUnstated: conditionsUnstated,
     setMeasurement: setMeasurement,
     seedConditionsShown: seedConditionsShown, conditionShown: conditionShown,
-    laborCost: laborCost, laborRateOf: laborRateOf, laborTotal: laborTotal, removeExistingHand: removeExistingHand,travelManDays: travelManDays,
+    pinSavedBlankRates: pinSavedBlankRates, laborCost: laborCost, laborRateOf: laborRateOf, laborTotal: laborTotal, removeExistingHand: removeExistingHand,travelManDays: travelManDays,
     // Lodging and Per Diem, the two travel costs beside Travel Labor (see travelCostsSeed).
     SHIPPED_LODGING_RATE: SHIPPED_LODGING_RATE, SHIPPED_PER_DIEM_RATE: SHIPPED_PER_DIEM_RATE,
     TRAVEL_LINE_KEYS: TRAVEL_LINE_KEYS, TRAVEL_LABEL: TRAVEL_LABEL, travelLabel: travelLabel,
