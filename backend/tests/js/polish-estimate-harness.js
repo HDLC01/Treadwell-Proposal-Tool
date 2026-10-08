@@ -50,6 +50,8 @@ const B = require(path.join(ROOT, "js", "bid-model.js"));
 const L = require(path.join(ROOT, "js", "library-core.js"));
 // The one vocabulary (js/work-types.js): the page builds its Takeoff cards off it as it parses.
 const W = require(path.join(ROOT, "js", "work-types.js"));
+// The one search pop-up both Add buttons open: the REAL module, mounted on this file's stub DOM.
+const PICKER = require(path.join(ROOT, "js", "library-picker.js"));
 
 const clone = (v) => JSON.parse(JSON.stringify(v));
 
@@ -235,14 +237,23 @@ function makeDom(log) {
 
 function makeDocument(dom, log) {
   const listeners = [];
+  // document.body, for the pop-up to mount on: appendChild keeps it in `kids`, removeChild takes it
+  // out, so "the pop-up is on screen" is `body.kids.length`.
+  const body = dom.element("body", {}, "", null);
+  body.removeChild = (c) => { body.kids = body.kids.filter((k) => k !== c); return c; };
   return {
     listeners,
+    body,
     getElementById: dom.get,
     createElement: (tag) => dom.element(String(tag).toLowerCase(), {}, "", null),
     createTextNode: (txt) => ({ isText: true, text: String(txt) }),
     addEventListener(type, handler) {
       listeners.push({ type, handler });
       log.push("listen:" + type);
+    },
+    removeEventListener(type, handler) {
+      const at = listeners.findIndex((l) => l.type === type && l.handler === handler);
+      if (at !== -1) listeners.splice(at, 1);
     },
     querySelectorAll: (sel) => dom.all(sel),
     querySelector: (sel) => dom.all(sel)[0] || null,
@@ -424,7 +435,7 @@ function build(opts) {
 
   const winListeners = [];
   const win = {
-    TWBidModel: B, TWWorkTypes: W, TWLib: L, TWPolishSandbox: S,
+    TWBidModel: B, TWWorkTypes: W, TWLib: L, TWPolishSandbox: S, TWLibraryPicker: PICKER,
     TWAuth: { ready: Promise.resolve() },
     scrollTo: () => { log.push("scroll"); },
     location: { href: "https://x/polish-estimate.html?d=proj-1" },
@@ -538,6 +549,51 @@ function clickOn(built, sel) {
 function clickEl(built, el) {
   built.doc.fire("click", { target: el, preventDefault: function () {} });
   return el;
+}
+/** The pop-up on screen (the last thing mounted on body), or null. */
+function popup(built) {
+  const k = built.doc.body.kids;
+  return k.length ? k[k.length - 1] : null;
+}
+function fireOn(el, type, event) {
+  el.listeners.filter((l) => l.type === type).forEach((l) => l.handler(event));
+}
+/** Tick (or untick) one pop-up row by its key, the way the browser reports it: a change event on the checkbox. */
+function tick(built, key) {
+  const box = popup(built).querySelectorAll("[data-pk]").filter((e) => e.attrs["data-pk"] === key)[0];
+  if (!box) throw new Error("the pop-up has no row " + key);
+  fireOn(popup(built), "change", { target: box });
+}
+function typeInPopup(built, which, value) {
+  const el = popup(built).querySelector('[data-pk-el="' + which + '"]');
+  el.value = String(value);
+  fireOn(popup(built), "input", { target: el });
+  return el;
+}
+function pressIn(built, which, key) {
+  const el = popup(built).querySelector('[data-pk-el="' + which + '"]');
+  let prevented = false;
+  fireOn(popup(built), "keydown", { target: el, key: key, preventDefault() { prevented = true; } });
+  return prevented;
+}
+function pressOneOff(built) {
+  fireOn(popup(built), "click", { target: popup(built).querySelector("[data-pk-oneoff]") });
+}
+function pressAdd(built) {
+  fireOn(popup(built), "click", { target: popup(built).querySelector("[data-pk-add]") });
+}
+const flush = () => new Promise((r) => setImmediate(r));
+/** Press "Add a labor line": it reads the Labor list, then the pop-up appears. */
+async function openLaborPopup(built) {
+  clickOn(built, "[data-add-lab]");
+  await flush();
+}
+/** A row the way a SAVED bid can still hold one: undecided. The add button no longer makes one,
+ *  but the row still renders and its own search field still works, and these scenarios are about
+ *  that field. */
+function addUndecidedRow(built) {
+  built.api.model().takeoff.push({ kind: "new", pick_name: "", measurement: "", unit: "SF" });
+  built.api.changed(true);
 }
 function paints(log) {
   return log.filter((e) => /^(html|show|hide|text):/.test(e));
@@ -1127,7 +1183,10 @@ const rendered = [];      // every string the page put on screen, for the Labour
     // backfilled onto MODEL's saved (pre-#491) two rows at boot — see migrateModel's Travel
     // comment — so the model already has three rows [Polishing, Mock-up, Travel] before this
     // click, and the new row lands at index 3, not 2.
-    clickOn(b, "[data-add-lab]");
+    // Through the pop-up's One-off line, the one way a card with no library row behind it is made.
+    await openLaborPopup(b);
+    typeInPopup(b, "oneoff", "Densify");
+    pressOneOff(b);
     out.labor.afterAdd = { count: b.api.model().labor.length,
                            rebuilt: panels.htmlWrites > 0 };
     typeInto(b, '[data-lab="3"][data-k="label"]', "Densify");
@@ -1182,11 +1241,17 @@ const rendered = [];      // every string the page put on screen, for the Labour
     // Add a takeoff row: it appears empty, priced at nothing, and says where to search.
     const t3 = build();
     await t3.api.init();
+    // Press Add assembly or material: nothing is added until a row is ticked and Add is pressed.
     clickOn(t3, "[data-add-row]");
+    const beforePick = t3.api.model().takeoff.length;
+    tick(t3, "item:i4");
+    pressAdd(t3);
     out.labor.addedTakeoffRow = {
+      beforePick: beforePick,
       count: t3.api.model().takeoff.length,
+      row: clone(t3.api.model().takeoff[3]),
+      // No measurement yet, so the cost box reads unpriced rather than free.
       cost: txt(t3, '[data-cost-for="3"]'),
-      hint: txt(t3, '[data-asmhint-for="3"]'),
     };
   }
 
@@ -1462,7 +1527,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
     // first version of this probe skipped it and spent its evidence blaming setMaterial.
     await m.api.init();
     m.api.go(0);
-    clickOn(m, "[data-add-row]");
+    addUndecidedRow(m);
     const idx = m.api.model().takeoff.length - 1;
     const row = () => m.api.model().takeoff[idx];
     // READ THE CARD, NOT THE PANEL. Since 2026-09-23 a row that changes kind is redrawn on its
@@ -1518,7 +1583,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
     // This is the other half of the proof: a mutated (rather than copied) item would leak the
     // first row's 500 into every other row that points at "Densifier", including one that never
     // touched the coverage box itself.
-    clickOn(m, "[data-add-row]");
+    addUndecidedRow(m);
     const idx2 = m.api.model().takeoff.length - 1;
     typeInto(m, '[data-tk="' + idx2 + '"][data-k="pick"]', "Densifier");
     typeInto(m, '[data-tk="' + idx2 + '"][data-k="measurement"]', "10000");
@@ -2502,7 +2567,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
       aboveTheRows: opening.indexOf("data-add-row") < opening.indexOf("data-row-card"),
     };
 
-    clickOn(a, "[data-add-row]");
+    addUndecidedRow(a);
     const idx = a.api.model().takeoff.length - 1;
     const row = () => a.api.model().takeoff[idx];
     const q = (k) => a.doc.querySelector('[data-tk="' + idx + '"][data-k="' + k + '"]');
@@ -2560,7 +2625,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
     // what it is, holding the measurement and the coverage somebody typed.
     const mc = build();
     await mc.api.init();
-    clickOn(mc, "[data-add-row]");
+    addUndecidedRow(mc);
     const mi = mc.api.model().takeoff.length - 1;
     typeInto(mc, '[data-tk="' + mi + '"][data-k="pick"]', "Densifier");
     typeInto(mc, '[data-tk="' + mi + '"][data-k="measurement"]', "2000");
@@ -2578,7 +2643,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
   {
     const q = build();
     await q.api.init();
-    clickOn(q, "[data-add-row]");
+    addUndecidedRow(q);
     const qi = q.api.model().takeoff.length - 1;
     typeInto(q, '[data-tk="' + qi + '"][data-k="pick"]', "Grout Compound");
     const choices = () => q.doc.querySelectorAll("[data-kind-pick]");
@@ -2607,7 +2672,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
     // id, different lines and a different number, which is what makes the choice real.
     const w = build();
     await w.api.init();
-    clickOn(w, "[data-add-row]");
+    addUndecidedRow(w);
     const wi = w.api.model().takeoff.length - 1;
     typeInto(w, '[data-tk="' + wi + '"][data-k="pick"]', "Grout Compound");
     clickOn(w, '[data-kind-pick="asm"]');
@@ -4103,6 +4168,207 @@ const rendered = [];      // every string the page put on screen, for the Labour
     await withE.api.init(); await without.api.init();
     out.ls1Empty = { ids: ids(withE), total: B.laborTotal(withE.api.model().labor),
                      totalWithout: B.laborTotal(without.api.model().labor) };
+  }
+
+  // ── N. one search pop-up adds Takeoff rows and Labor cards (Hanz, 2026-10-09) ──────────────
+  {
+    const keysOf = (b) => popup(b).querySelectorAll("[data-pk]").map((e) => e.attrs["data-pk"]);
+    const addBtn = (b) => popup(b).querySelector("[data-pk-add]");
+    const isIn = (b, key) => popup(b).querySelectorAll("[data-pk]").some((e) => e.attrs["data-pk"] === key);
+    const esc = (b) => fireOn(popup(b), "keydown", { target: popup(b), key: "Escape", preventDefault() {} });
+    const countText = (b) => popup(b).querySelector('[data-pk-el="count"]').textContent;
+    const pop = {};
+
+    // N1. the takeoff button opens the pop-up and adds NOTHING by itself.
+    const probe = build();
+    const RESERVED = probe.api.RESERVED_ITEM_IDS;
+    const items = clone(ITEMS).concat([{ id: RESERVED[0], name: "Reserved Thing", unit: "Kit",
+                                         buy_qty: 1, unit_cost: 10, coverage: 100 }]);
+    const t = build({ items: items });
+    await t.api.init();
+    t.api.go(0);
+    const opener = need(t, "[data-add-row]");
+    let focusedBack = 0;
+    opener.focus = () => { focusedBack += 1; };
+    const before = t.api.model().takeoff.length;
+    clickOn(t, "[data-add-row]");
+    pop.takeoffOpen = { before: before, after: t.api.model().takeoff.length,
+                        popupOn: !!popup(t), addDisabled: addBtn(t).disabled, keys: keysOf(t),
+                        reservedListed: isIn(t, "item:" + RESERVED[0]) };
+
+    // N2. nothing ticked: Add does nothing and the pop-up stays; Enter in the search box adds nothing.
+    pressAdd(t);
+    const enterPrevented = pressIn(t, "q", "Enter");
+    pop.noPick = { rows: t.api.model().takeoff.length, stillOpen: !!popup(t),
+                   addDisabled: addBtn(t).disabled, enterPrevented: enterPrevented };
+
+    // N3. the search narrows the list, and a pick survives a narrowing.
+    typeInPopup(t, "q", "cove");
+    pop.searched = { keys: keysOf(t) };
+    tick(t, "asm:a2");
+    typeInPopup(t, "q", "zzzz-no-such");
+    pop.searchedNone = { keys: keysOf(t), noneHidden: popup(t).querySelector('[data-pk-el="none"]').hidden,
+                         count: countText(t) };
+    typeInPopup(t, "q", "");
+
+    // N4. Esc closes it, nothing added, and the caret goes back to the button that opened it.
+    esc(t);
+    pop.esc = { closed: t.doc.body.kids.length === 0, rows: t.api.model().takeoff.length,
+                focusedBack: focusedBack };
+    // N4b. Esc also closes it when focus is NOT inside it (keydown lands on body), and the
+    // document listener is gone afterwards.
+    clickOn(t, "[data-add-row]");
+    const kdBefore = t.doc.listeners.filter((l) => l.type === "keydown").length;
+    t.doc.fire("keydown", { target: t.doc.body, key: "Escape", preventDefault() {} });
+    pop.escOutside = { closed: t.doc.body.kids.length === 0, rows: t.api.model().takeoff.length,
+                       focusedBack: focusedBack, listenersWhileOpen: kdBefore,
+                       listenersAfter: t.doc.listeners.filter((l) => l.type === "keydown").length };
+    focusedBack = 1;
+    // ...and so does Cancel.
+    clickOn(t, "[data-add-row]");
+    fireOn(popup(t), "click", { target: popup(t).querySelector("[data-pk-close]") });
+    pop.cancel = { closed: t.doc.body.kids.length === 0, rows: t.api.model().takeoff.length,
+                   focusedBack: focusedBack };
+
+    // N5. tick an assembly, a material, and the TWO things that share the name "Grout Compound":
+    // each becomes one row, resolved to exactly what was ticked.
+    clickOn(t, "[data-add-row]");
+    tick(t, "asm:a2"); tick(t, "item:i4"); tick(t, "asm:a6"); tick(t, "item:i5");
+    pop.ticked = { count: countText(t), addDisabled: addBtn(t).disabled };
+    tick(t, "item:i5");                                   // unticking is real
+    pop.untickedCount = countText(t);
+    pressAdd(t);
+    const mt = t.api.model().takeoff;
+    pop.added = { before: before, after: mt.length, closed: t.doc.body.kids.length === 0,
+                  rows: clone(mt.slice(before)), focusedBack: focusedBack };
+
+    // N6. the SAME row the row's own search field makes: type the names into undecided rows on a
+    // second page and compare what each produced.
+    const ty = build({ items: items });
+    await ty.api.init();
+    const typedRows = {};
+    [["Cove Base", "a2"], ["Densifier", "i4"]].forEach((pair) => {
+      addUndecidedRow(ty);
+      const idx = ty.api.model().takeoff.length - 1;
+      typeInto(ty, '[data-tk="' + idx + '"][data-k="pick"]', pair[0]);
+      typedRows[pair[1]] = clone(ty.api.model().takeoff[idx]);
+    });
+    pop.typed = typedRows;
+
+    // N7. a picked row prices like any other once measured.
+    const di = t.api.model().takeoff.findIndex((r, i) => i >= before && r.item_id === "i4");
+    typeInto(t, '[data-tk="' + di + '"][data-k="measurement"]', "10000");
+    pop.pickedCost = { cell: txt(t, '[data-cost-for="' + di + '"]'),
+                       expected: L.priceLine({ item_id: "i4" }, ITEMS, 10000).cost };
+
+    // N8. a lone untouched starting row is taken over by the first pick instead of sitting under it.
+    const lone = clone(MODEL);
+    lone.takeoff = [{ assembly_id: "", assembly_name: "", measurement: "", unit: "SF" }];
+    const lb = build({ blob: blob({ polish_estimate: lone }) });
+    await lb.api.init();
+    lb.api.go(0);
+    const loneBefore = lb.api.model().takeoff.length;
+    clickOn(lb, "[data-add-row]");
+    tick(lb, "asm:a1");
+    pressAdd(lb);
+    pop.lone = { before: loneBefore, after: lb.api.model().takeoff.map((r) => r.assembly_id) };
+
+    // N9. THE LABOR POP-UP. Library rows: one for another work type, one for this bid's, one for
+    // any, Travel (never listed).
+    const LIB = [
+      { id: "L2", name: "Epoxy prep", rate: 61, unit: "days", default_work_types: ["epoxy"], sort: 2 },
+      { id: "L1", name: "Densify crew", rate: 40, unit: "days", default_work_types: ["polish"], sort: 3 },
+      { id: "L3", name: "Any work", rate: null, unit: "hours", default_work_types: [], sort: 4 },
+      { id: "travel", name: "Travel Labor", rate: 33, unit: "hours", default_work_types: [], sort: 5 },
+    ];
+    const lab = build({ labor: LIB });
+    await lab.api.init();
+    lab.api.go(1);
+    const lopener = need(lab, "[data-add-lab]");
+    let lfocus = 0;
+    lopener.focus = () => { lfocus += 1; };
+    const lBefore = lab.api.model().labor.length;
+    const idsBefore = lab.api.model().labor.map((r) => r.id);
+    await openLaborPopup(lab);
+    pop.laborOpen = { before: lBefore, after: lab.api.model().labor.length, popupOn: !!popup(lab),
+                      keys: keysOf(lab), addDisabled: addBtn(lab).disabled,
+                      oneOffDisabled: popup(lab).querySelector("[data-pk-oneoff]").disabled };
+    // an empty one-off name adds nothing, Enter included
+    pressIn(lab, "oneoff", "Enter");
+    pop.laborEmptyOneOff = { rows: lab.api.model().labor.length, stillOpen: !!popup(lab) };
+    pressAdd(lab);                                         // nothing ticked: Add does nothing
+    pop.laborNoPick = { rows: lab.api.model().labor.length, stillOpen: !!popup(lab) };
+    esc(lab);
+    pop.laborEsc = { closed: lab.doc.body.kids.length === 0, rows: lab.api.model().labor.length,
+                     focusedBack: lfocus };
+
+    await openLaborPopup(lab);
+    tick(lab, "lab:L1"); tick(lab, "lab:L3");
+    pressAdd(lab);
+    const picked = lab.api.model().labor.slice(lBefore);
+    // The same mapping a new bid's seeding uses, plus the stamp.
+    const viaSeed = B.stampRateDefaults(B.seedLibraryLabor([], [
+      Object.assign({}, LIB[1], { favorite: true }), Object.assign({}, LIB[2], { favorite: true })],
+      B.SHIPPED_LABOR_RATE, "polish"));
+    pop.laborPicked = { cards: clone(picked), viaSeed: clone(viaSeed), idsBefore: idsBefore,
+                        closed: lab.doc.body.kids.length === 0, focusedBack: lfocus };
+    // The card is a real card: the Task name stays editable, the blank-rate fallback and the
+    // "Default value" note work (LS1), and the cost prices from what was typed.
+    const ci = lBefore + 1;                        // "Any work", no rate of its own
+    typeInto(lab, '[data-lab="' + ci + '"][data-k="label"]', "Any work v2");
+    typeInto(lab, '[data-lab="' + ci + '"][data-k="guys"]', "2");
+    typeInto(lab, '[data-lab="' + ci + '"][data-k="days"]', "3");
+    typeInto(lab, '[data-lab="' + ci + '"][data-k="rate"]', "");
+    pop.laborCard = { label: lab.api.model().labor[ci].label,
+                      rateDefault: lab.api.model().labor[ci].rate_default,
+                      costBlankRate: txt(lab, '[data-lcost-for="' + ci + '"]'),
+                      expectedBlankRate: B.laborCost({ guys: "2", days: "3", rate: "", rate_default: 33,
+                                                       unit: "hours" }),
+                      warn: warn(lab, '[data-ratedflt-for="' + ci + '"]') };
+
+    // N10. a library line already on the bid is listed locked and cannot be ticked twice.
+    await openLaborPopup(lab);
+    const lenNow = lab.api.model().labor.length;
+    tick(lab, "lab:L1");
+    pressAdd(lab);
+    pop.laborLocked = { addedAnother: lab.api.model().labor.length - lenNow,
+                        stillOpen: !!popup(lab),
+                        lockedRowMarked: /On this bid/.test(
+                          popup(lab).querySelector('[data-pk-el="list"]').innerHTML) };
+
+    // N11. the One-off line: name typed (spaces folded), a custom card at the company rate.
+    typeInPopup(lab, "oneoff", "  Hand   grind ");
+    pop.oneOffEnabled = !popup(lab).querySelector("[data-pk-oneoff]").disabled;
+    const oneBefore = lab.api.model().labor.length;
+    pressIn(lab, "oneoff", "Enter");
+    pop.oneOff = { added: lab.api.model().labor.length - oneBefore,
+                   card: clone(lab.api.model().labor[oneBefore] || {}),
+                   closed: lab.doc.body.kids.length === 0 };
+
+    // N12. no card anywhere is nameless, however the pop-up was used.
+    pop.allNamed = lab.api.model().labor.every((r) => String(r.label || "").trim() !== "");
+
+    // N13. the Labor list cannot be read: the shipped crew stands in, Travel still never listed.
+    const bad = build({ laborFails: true });
+    await bad.api.init();
+    bad.api.go(1);
+    await openLaborPopup(bad);
+    pop.laborFallback = { keys: keysOf(bad) };
+
+    // N14. two assemblies with ONE name and different units: ticking the second lands on the
+    // second's unit, not the first's.
+    const dupAsms = clone(ASMS).concat([{ id: "a2b", name: "Cove Base", unit: "SF", lines: [
+      { item_id: "i2", coverage: 125, waste_pct: 0, roundup: false }] }]);
+    const dp = build({ asms: dupAsms });
+    await dp.api.init();
+    dp.api.go(0);
+    const dBefore = dp.api.model().takeoff.length;
+    clickOn(dp, "[data-add-row]");
+    tick(dp, "asm:a2b"); tick(dp, "asm:a2");
+    pressAdd(dp);
+    pop.dupName = dp.api.model().takeoff.slice(dBefore).map((r) => ({ id: r.assembly_id, unit: r.unit }));
+
+    out.addPopup = pop;
   }
 
   console.log(JSON.stringify(out));

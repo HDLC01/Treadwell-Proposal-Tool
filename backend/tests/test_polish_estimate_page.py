@@ -605,8 +605,8 @@ def test_the_last_row_cannot_be_deleted_away_to_nothing(ran):
     page rendered a moment ago is pressed again. An empty table has no box to type in and no way
     back to one.
 
-    Mutation: drop `if (!M.labor.length) M.labor.push(newLaborRow());`. The labor step renders an
-    empty table and the estimator's only recovery is to reload."""
+    Mutation: drop `if (M.labor.length <= 1) return;`. The labor step renders an empty table (or,
+    as it once did, refills it with an unnamed "Task" card, which can no longer be made at all)."""
     lab = ran["labor"]
     assert lab["atOneRow"]["count"] == 1
     assert lab["atOneRow"]["deleteOffered"] == 0, (
@@ -614,18 +614,21 @@ def test_the_last_row_cannot_be_deleted_away_to_nothing(ran):
     assert lab["afterDeletingTheLast"]["count"] == 1, (
         "the labor table was emptied: %r" % lab["afterDeletingTheLast"])
     assert lab["afterDeletingTheLast"]["cells"] == 1, "no labor row is rendered any more"
-    assert lab["afterDeletingTheLast"]["labels"] == [""], (
-        "the replacement row is not a fresh blank one: %r" % lab["afterDeletingTheLast"]["labels"])
+    assert lab["afterDeletingTheLast"]["labels"] == ["Densify"], (
+        "the last row was replaced by something else: %r" % lab["afterDeletingTheLast"]["labels"])
     # Same guard on the takeoff side, where the row is what the whole bid is measured on.
     t = lab["takeoffNeverEmpty"]
     assert t["count"] == 1 and t["cells"] == 1, "the takeoff was deleted away to nothing: %r" % t
-    assert t["row"] == {"kind": "new", "pick_name": "", "measurement": "", "unit": "SF"}, (
-        "the replacement takeoff row is not a fresh undecided one: %r" % t["row"])
-    # And an added takeoff row opens empty, priced at nothing, saying where to search.
+    assert t["row"].get("assembly_id") == "a5", (
+        "the takeoff's last row was refilled with a blank one instead of being kept: %r" % t["row"])
+    # Pressing Add adds nothing by itself; ticking Densifier and pressing Add in the pop-up adds
+    # ONE row already pointed at that material, priced at nothing until it is measured.
     a = lab["addedTakeoffRow"]
+    assert a["beforePick"] == 3, "the add button put a row on the takeoff before anything was picked"
     assert a["count"] == 4 and a["cost"] == "—", (
-        "a brand-new takeoff row does not read as unpriced: %r" % a["cost"])
-    assert "Items & Assemblies" in a["hint"]
+        "a freshly picked takeoff row does not read as unpriced: %r" % a["cost"])
+    assert a["row"]["kind"] == "item" and a["row"]["item_id"] == "i4", (
+        "the picked material did not land on the row: %r" % a["row"])
 
 
 @needs_node
@@ -2347,7 +2350,7 @@ def test_the_page_loads_no_formula_engine_and_the_modules_in_order(html):
     assert srcs == ["https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0",
                     "/js/icons.js", "/auth.js", "/shared.js", "/js/tab-memo.js",
                     "/js/library-core.js", "/js/excel-math.js", "/js/work-types.js", "/js/bid-model.js",
-                    "/js/polish-sandbox.js", "/js/polish-estimate.js"], (
+                    "/js/polish-sandbox.js", "/js/library-picker.js", "/js/polish-estimate.js"], (
         "the page's script list has changed: %r" % srcs)
 
 
@@ -3708,3 +3711,137 @@ def test_the_takeoff_cards_are_the_tables_rows_joined_with_this_pages_views(ran)
     ]
     assert cards["reserved"] == ["joint-filler-kit", "remove-existing-jf", "dye"], (
         "the ids kept out of every takeoff-row picker are the ids of the cards, in the cards' order")
+
+
+# ── one search pop-up adds Takeoff rows and Labor cards (Hanz, 2026-10-09) ────────────────────────
+# Run by section N of the harness: the REAL library-picker.js mounted on the harness's DOM, opened
+# by the page's own Add buttons. Mutation proofs are named per test.
+
+@needs_node
+def test_the_takeoff_button_opens_a_pop_up_and_adds_nothing_by_itself(ran):
+    """Mutation: put `M.takeoff.push({kind: "new", ...})` back in the [data-add-row] handler. `after`
+    becomes 4 and an empty row sits on the takeoff before anything was picked."""
+    o = ran["addPopup"]["takeoffOpen"]
+    assert o["popupOn"] and o["after"] == o["before"], "the click added a row, or no pop-up opened"
+    assert o["addDisabled"], "Add is live with nothing ticked"
+    # assemblies AND materials, the same set the row's own field offers, minus a reserved material
+    keys = o["keys"]
+    assert {"asm:a1", "asm:a2", "item:i1", "item:i4"} <= set(keys)
+    assert not o["reservedListed"], "a reserved material (dye, joint filler) is offered as a takeoff row"
+    n = ran["addPopup"]["noPick"]
+    assert n["rows"] == o["before"] and n["stillOpen"] and n["addDisabled"]
+    assert n["enterPrevented"], "Enter in the search box was left to do whatever it does"
+
+
+@needs_node
+def test_the_search_narrows_and_a_tick_survives_it_and_esc_closes_and_returns_focus(ran):
+    p = ran["addPopup"]
+    assert p["searched"]["keys"] == ["asm:a2"]
+    assert p["searchedNone"]["keys"] == [] and not p["searchedNone"]["noneHidden"]
+    assert p["searchedNone"]["count"] == "1 picked", "a pick was lost when the search hid its row"
+    assert p["esc"]["closed"] and p["esc"]["rows"] == 3 and p["esc"]["focusedBack"] == 1, (
+        "Esc did not close the pop-up, or the focus did not return to the button: %r" % p["esc"])
+    assert p["cancel"]["closed"] and p["cancel"]["rows"] == 3 and p["cancel"]["focusedBack"] == 2
+
+
+@needs_node
+def test_ticked_lines_become_rows_resolved_the_way_the_rows_own_field_resolves_them(ran):
+    """Mutation: skip becomeKind/setAssembly/setMaterial and write the ids by hand. The row loses
+    the assembly's own unit (Cove Base is LF) or the material's coverage key, and stops matching the
+    row typing its name produces."""
+    p = ran["addPopup"]
+    assert p["ticked"]["count"] == "4 picked" and not p["ticked"]["addDisabled"]
+    assert p["untickedCount"] == "3 picked", "unticking did not take the pick back off"
+    a = p["added"]
+    assert a["before"] == 3 and a["after"] == 6 and a["closed"], a
+    cove, densifier, grout = a["rows"]
+    assert cove == p["typed"]["a2"], "popup row differs from the typed one: %r vs %r" % (cove, p["typed"]["a2"])
+    assert densifier == p["typed"]["i4"]
+    # The two things named "Grout Compound": the ticked one is the one that lands, never a guess.
+    assert grout["kind"] == "asm" and grout["assembly_id"] == "a6"
+    assert a["focusedBack"] == 3 and p["pickedCost"]["cell"] == "$1,100"
+    assert p["pickedCost"]["expected"] == 1100
+    # A lone untouched starting row is replaced by the first pick, not left beneath it.
+    assert p["lone"] == {"before": 1, "after": ["a1"]}
+
+
+@needs_node
+def test_esc_closes_the_pop_up_even_when_focus_is_outside_it(ran):
+    """Mutation: remove the document keydown listener in library-picker.js. Esc fired on body (focus
+    after a click on the heading or a locked row) then leaves the pop-up open."""
+    o = ran["addPopup"]["escOutside"]
+    assert o["closed"] and o["rows"] == 3, o
+    assert o["focusedBack"] == 2, "focus did not return to the opener: %r" % o
+    assert o["listenersAfter"] == o["listenersWhileOpen"] - 1, (
+        "the document listener outlived the pop-up: %r" % o)
+
+
+@needs_node
+def test_a_ticked_assembly_takes_its_own_unit_when_another_shares_its_name(ran):
+    """Mutation: drop the unit lines after `row.assembly_id = p.id` in addPickedTakeoffRow. The
+    second Cove Base (SF) then lands as LF, the unit of the first one found by name."""
+    assert ran["addPopup"]["dupName"] == [{"id": "a2", "unit": "LF"}, {"id": "a2b", "unit": "SF"}]
+
+
+@needs_node
+def test_the_labor_button_lists_the_labor_list_work_type_first_and_never_travel(ran):
+    """Mutation: drop the work-type split in shown() (or `first:` in laborPickEntries). The epoxy-only
+    line then sorts ahead of the polish ones. Mutation: drop the travel skip and `lab:travel` appears."""
+    o = ran["addPopup"]["laborOpen"]
+    assert o["popupOn"] and o["after"] == o["before"], "the click added a card"
+    keys = o["keys"]
+    assert "lab:travel" not in keys
+    assert keys.index("lab:L1") < keys.index("lab:L2") and keys.index("lab:L3") < keys.index("lab:L2"), (
+        "a line for another work type is listed ahead of this bid's: %r" % keys)
+    assert o["addDisabled"] and o["oneOffDisabled"]
+    p = ran["addPopup"]
+    assert p["laborEmptyOneOff"] == {"rows": 3, "stillOpen": True}, "an empty one-off name added a card"
+    assert p["laborNoPick"] == {"rows": 3, "stillOpen": True}
+    assert p["laborEsc"] == {"closed": True, "rows": 3, "focusedBack": 1}
+
+
+@needs_node
+def test_a_ticked_labor_line_becomes_the_card_seeding_would_have_made(ran):
+    """Mutation: build the card by hand (rate: row.rate). The blank-rate line "Any work" then has
+    rate null instead of the company rate, rate_default is missing, and `cards` stops equalling
+    `viaSeed`."""
+    p = ran["addPopup"]["laborPicked"]
+    assert p["cards"] == p["viaSeed"], (p["cards"], p["viaSeed"])
+    assert [c["rate_default"] for c in p["cards"]] == [40, 33]
+    assert p["closed"] and p["focusedBack"] == 2
+    c = ran["addPopup"]["laborCard"]
+    assert c["label"] == "Any work v2", "the Task name is not editable"
+    assert c["costBlankRate"] == "$198" and c["costBlankRate"] == "$%d" % c["expectedBlankRate"], (
+        "a cleared rate no longer falls back to the stamped default: %r" % c)
+    assert c["warn"] == {"text": "Default value: $33.00", "hidden": False}
+    lk = ran["addPopup"]["laborLocked"]
+    assert lk["addedAnother"] == 0 and lk["stillOpen"] and lk["lockedRowMarked"], (
+        "a library line already on the bid can be added a second time: %r" % lk)
+
+
+@needs_node
+def test_the_one_off_line_needs_a_name_and_comes_at_the_company_rate(ran):
+    """Mutation: let addOneOff skip the name check. The empty Enter in the earlier test then adds a
+    nameless card (laborEmptyOneOff.rows becomes 4)."""
+    p = ran["addPopup"]
+    assert p["oneOffEnabled"]
+    o = p["oneOff"]
+    assert o["added"] == 1 and o["closed"]
+    assert o["card"]["label"] == "Hand grind", "the typed name was not tidied: %r" % o["card"]["label"]
+    assert o["card"]["rate"] == 33 and o["card"]["rate_default"] == 33
+    assert p["allNamed"], "a nameless Task card exists after using the pop-up"
+
+
+@needs_node
+def test_when_the_labor_list_cannot_be_read_the_shipped_crew_stands_in(ran):
+    assert ran["addPopup"]["laborFallback"]["keys"] == ["lab:polishing", "lab:mockup", "lab:jointfill"]
+
+
+def test_the_old_empty_row_paths_are_gone():
+    """The two buttons used to push an empty row (and the delete guards refilled one). Source reads
+    are enough for the ABSENCE of the old calls; the behaviour is executed above."""
+    src = (FRONTEND / "js" / "polish-estimate.js").read_text(encoding="utf-8")
+    assert "newTakeoffRow" not in src, "the empty-takeoff-row constructor is back"
+    assert "M.labor.push(newLaborRow())" not in src, "an unnamed Task card can be pushed again"
+    assert not re.search(r"newLaborRow\(\s*\)", src), "newLaborRow() is called with no name"
+    assert "openTakeoffPicker(addRow)" in src and "openLaborPicker(addLab)" in src

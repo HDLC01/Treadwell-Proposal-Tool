@@ -56,7 +56,7 @@ DOC = ROOT / "docs" / "v2-architecture.md"
 # What each page harness reads out of a frontend directory (they do not fall back to the real one), so a
 # scratch copy that breaks ONE file can be completed with the rest.
 TAKEOFF_FILES = ["polish-estimate.html", "js/polish-estimate.js", "js/bid-model.js", "js/library-core.js",
-                 "js/work-types.js", "js/polish-sandbox.js"]
+                 "js/work-types.js", "js/polish-sandbox.js", "js/library-picker.js"]
 INTAKE_FILES = ["polish-intake.html", "js/polish-intake.js", "js/bid-model.js", "js/work-types.js",
                 "js/polish-sandbox.js"]
 BETA_FILES = ["js/index.js", "index.html", "shared.js", "js/projects.js", "js/county-picker.js",
