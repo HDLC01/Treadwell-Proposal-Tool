@@ -345,7 +345,7 @@ def test_an_intake_save_after_an_estimate_save_leaves_tabs_byte_identical(ran):
 
 # ── red without the code: break a COPY and watch each law notice ─────────────────────────────────
 SCRATCH_FRONTEND_FILES = ["polish-estimate.html", "polish-intake.html", "js/polish-estimate.js",
-                          "js/polish-intake.js", "js/bid-model.js", "js/library-core.js"]
+                          "js/polish-intake.js", "js/bid-model.js", "js/library-core.js", "js/library-picker.js"]
 
 MUTATIONS = {
     "migrate stops carrying the keys it does not know": (

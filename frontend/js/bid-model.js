@@ -1319,6 +1319,15 @@
     return out;
   }
 
+  /** ONE library Labor row as the labor card it becomes when an estimator picks it from the
+   *  Labor step's search pop-up: the SAME mapping seedLibraryLabor uses (libraryLaborRow), then the
+   *  `rate_default` stamp a new bid gets (stampRateDefaults), so the "Default value" note and the
+   *  blank-rate fallback behave on a picked line exactly as on a seeded one. Guys and days start
+   *  empty. A NEW object. */
+  function laborRowFromLibrary(row, dflt) {
+    return stampRateDefaults([libraryLaborRow(row, dflt)])[0];
+  }
+
   /** `labor` with the library's default lines standing beside it. A NEW array; the one handed in
    *  is never touched, and neither are the rows inside it.
    *
@@ -2486,7 +2495,8 @@
     // The conflict resolved here was the seed branch replacing travelSeed's export rather than
     // joining it: that branch was cut from main, which did not have the 2026-09-16 export yet.
     // Both belong -- Travel is built in, the library rows are additions beside it.
-    libraryLaborRow: libraryLaborRow, seedLibraryLabor: seedLibraryLabor,
+    libraryLaborRow: libraryLaborRow, laborRowFromLibrary: laborRowFromLibrary,
+    seedLibraryLabor: seedLibraryLabor,
     travelAppliesToBid: travelAppliesToBid, travelDeclined: travelDeclined,
     LABOR_CALC_BUILTINS: LABOR_CALC_BUILTINS, dayHours: dayHours, laborCalcValues: laborCalcValues, applyLaborCalc: applyLaborCalc,
     laborCalcDiffers: laborCalcDiffers,

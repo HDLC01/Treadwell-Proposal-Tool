@@ -53,6 +53,7 @@
   var T = window.TWWorkTypes;
   var L = window.TWLib;            // priceAssembly — the same maths the library page shows
   var S = window.TWPolishSandbox;  // never edit a live bid
+  var P = window.TWLibraryPicker;  // the one search pop-up both "Add" buttons open (js/library-picker.js)
   var $ = function (id) { return document.getElementById(id); };
 
   // The draft this page is working ON, and the model derived from it. Reassigned together by
@@ -1096,11 +1097,80 @@
     return k === "item" ? r.item_name : (k === "new" ? r.pick_name : r.assembly_name);
   }
 
-  /** A row nobody has pointed at anything yet: the shape the add button pushes, and the shape the
-   *  delete guard refills an emptied takeoff with. No assembly_id and no item_id, so rowPrice
-   *  returns null and the cost box reads as unpriced rather than as free. */
-  function newTakeoffRow() {
-    return { kind: "new", pick_name: "", measurement: "", unit: "SF" };
+  /** What the takeoff pop-up lists: every assembly and every material the row's own search field
+   *  offers (renderDatalist), by name, minus the three reserved materials that already have a
+   *  condition card of their own. Pure over ASMS and ITEMS. */
+  function takeoffPickEntries() {
+    var out = [];
+    ASMS.forEach(function (a) {
+      out.push({ key: "asm:" + a.id, kind: "asm", id: a.id, name: String(a.name == null ? "" : a.name),
+                 sub: "Assembly" + (a.unit ? ", per " + String(a.unit).toUpperCase() : ""),
+                 tag: "Assembly" });
+    });
+    ITEMS.forEach(function (it) {
+      if (RESERVED_ITEM_IDS.indexOf(it.id) !== -1) return;
+      out.push({ key: "item:" + it.id, kind: "item", id: it.id,
+                 name: String(it.name == null ? "" : it.name),
+                 sub: "Material" + (it.unit ? ", " + it.unit : ""), tag: "Material" });
+    });
+    out.sort(function (x, y) { return x.name.localeCompare(y.name) || (x.kind < y.kind ? -1 : 1); });
+    return out;
+  }
+
+  /** Add one takeoff row already pointed at the assembly or material that was ticked. It is built
+   *  the way the row's own search field builds one: an undecided row, then becomeKind and the same
+   *  setAssembly / setMaterial the field uses (unit adoption and all). The id is then pinned
+   *  explicitly, because those two resolve by NAME and the pop-up knows exactly which row was
+   *  ticked (two materials that differ only by case would otherwise land on the first). Returns
+   *  the new row's index. */
+  function addPickedTakeoffRow(p) {
+    M.takeoff.push({ kind: "new", pick_name: "", measurement: "", unit: "SF" });
+    var i = M.takeoff.length - 1;
+    var row = M.takeoff[i];
+    becomeKind(row, p.kind);
+    if (p.kind === "item") {
+      setMaterial(i, p.name);
+      row.item_id = p.id;
+    } else {
+      setAssembly(i, p.name);
+      row.assembly_id = p.id;
+    }
+    return i;
+  }
+
+  /** A lone takeoff row nobody has touched (no pick, no measurement) is the empty starting row of
+   *  a new bid; the first pick takes its place rather than sitting under an empty one. */
+  function isUntouchedTakeoffRow(r) {
+    return !!r && !r.item_id && !r.assembly_id && !r.pick_name &&
+      (r.measurement === "" || r.measurement == null);
+  }
+
+  var pickerOpen = false;
+  function openTakeoffPicker(btn) {
+    if (!P || pickerOpen) return;
+    if (TW.modalOpen && TW.modalOpen()) return;
+    if (TW.injectModalCss) TW.injectModalCss();
+    pickerOpen = true;
+    P.open(document, {
+      onClose: function () { pickerOpen = false; },
+      title: "Add assemblies or materials",
+      sub: "Tick what this bid uses. Each one becomes a takeoff row.",
+      placeholder: "Search assemblies and materials",
+      emptyText: "The library has no assemblies or materials yet. Add some in Items & Assemblies first.",
+      entries: takeoffPickEntries(),
+      opener: btn,
+      onAdd: function (chosen) {
+        if (M.takeoff.length === 1 && isUntouchedTakeoffRow(M.takeoff[0])) M.takeoff = [];
+        var first = -1;
+        chosen.forEach(function (p) {
+          var i = addPickedTakeoffRow(p);
+          if (first === -1) first = i;
+        });
+        changed(true);
+        // The caret goes with the new rows: Measurement of the first one is the next thing to fill.
+        refocus('[data-tk="' + first + '"][data-k="measurement"]');
+      }
+    });
   }
 
   /** One takeoff row, as its own card -- a named function beside laborCard, and for the same
@@ -2038,11 +2108,67 @@
   // estimator is never typing a rate Treadwell has already decided. The shipped $33 stands until
   // init() has read the real one, and for good if that read fails.
   var LABOR_RATE = B.SHIPPED_LABOR_RATE;
-  function newLaborRow() {
+  /** A one-off labor card at the company rate. ONLY the pop-up's "One-off line" calls this, and only
+   *  with a name somebody typed: an unnamed "Task" card can no longer be made. */
+  function newLaborRow(name) {
     laborSeq += 1;
     // rate_default is the rate a cleared Rate box falls back to (B.laborRateOf).
-    return { id: "u_" + Date.now() + "_" + laborSeq, label: "", guys: "", days: "", rate: LABOR_RATE,
-             rate_default: LABOR_RATE };
+    return { id: "u_" + Date.now() + "_" + laborSeq, label: name == null ? "" : String(name),
+             guys: "", days: "", rate: LABOR_RATE, rate_default: LABOR_RATE };
+  }
+
+  /** What the labor pop-up lists: the live Labor rows of Items & Assemblies, Travel left out (it has
+   *  its own block below). Rows that apply to this bid's work type, or name none, are listed first;
+   *  a row already on the bid shows locked, so one library line is never two cards with one id.
+   *  `rows` is GET /api/library/labor's list, with the shipped crew standing in when the library
+   *  cannot answer (the same fallback a new bid is seeded with). */
+  function laborPickEntries(rows) {
+    var onBid = {};
+    M.labor.forEach(function (r) { if (r && r.id != null) onBid[String(r.id)] = true; });
+    var out = [];
+    B.withCrewFallback(rows).forEach(function (r) {
+      if (!r || r.id == null || String(r.id) === "travel") return;
+      var card = B.libraryLaborRow(r, LABOR_RATE);
+      out.push({ key: "lab:" + r.id, id: r.id, row: r, name: String(r.name == null ? "" : r.name),
+                 sub: (r.unit === "hours" ? "Hours" : "Days") + (r.notes ? ", " + r.notes : ""),
+                 tag: B.money2(card.rate) + " per hour",
+                 first: B.workTypeApplies(r, "polish"),
+                 on: !!onBid[String(r.id)], onText: "On this bid" });
+    });
+    return out;
+  }
+
+  function openLaborPicker(btn) {
+    if (!P || pickerOpen) return;
+    if (TW.modalOpen && TW.modalOpen()) return;
+    pickerOpen = true;          // held across the fetch so a double click opens one pop-up
+    loadLaborDefaults().then(function (rows) {
+      if (TW.injectModalCss) TW.injectModalCss();
+      P.open(document, {
+        onClose: function () { pickerOpen = false; },
+        title: "Add labor lines",
+        sub: "Tick the lines this bid needs, or type a one-off at the bottom.",
+        placeholder: "Search labor lines",
+        emptyText: "The Labor list in Items & Assemblies is empty. Type a one-off line below.",
+        entries: laborPickEntries(rows),
+        opener: btn,
+        onAdd: function (chosen) {
+          var first = M.labor.length;
+          chosen.forEach(function (p) { M.labor.push(B.laborRowFromLibrary(p.row, LABOR_RATE)); });
+          changed(true);
+          refocus('[data-lab="' + first + '"][data-k="guys"]');
+        },
+        oneOff: {
+          label: "One-off line", placeholder: "Name this line", button: "Add line",
+          onAdd: function (name) {
+            var first = M.labor.length;
+            M.labor.push(newLaborRow(name));
+            changed(true);
+            refocus('[data-lab="' + first + '"][data-k="guys"]');
+          }
+        }
+      });
+    });
   }
 
   /** The warning under a labor rate box: the shared "Default value: $X.XX" when this row's rate is
@@ -2113,12 +2239,10 @@
     // THE CARET GOES WITH THE ROW. The button is at the top of the list and the row lands at the
     // bottom of it, so without this the estimator presses Add and nothing they can see happens.
     // focus() scrolls the box into view as a side effect, which is the whole trick.
-    if (t.closest("[data-add-row]")) {
-      M.takeoff.push(newTakeoffRow());
-      changed(true);
-      refocus('[data-tk="' + (M.takeoff.length - 1) + '"][data-k="pick"]');
-      return;
-    }
+    // NOTHING IS ADDED BY THE CLICK ITSELF (Hanz, 2026-10-09): it opens the search pop-up, and a
+    // row exists only once something was ticked there and Add was pressed.
+    var addRow = t.closest("[data-add-row]");
+    if (addRow) { openTakeoffPicker(addRow); return; }
     // The answer to the only question a takeoff row asks -- see pickHint. The typed name is read
     // off the row BEFORE becomeKind clears it, then replayed through the setter for the kind that
     // was chosen, so the id lands exactly the way typing the name would have landed it.
@@ -2140,20 +2264,18 @@
     }
     var dr = t.closest("[data-del-row]");
     if (dr) {
+      // The last row stays: the x is not drawn on it, and a stale button must not empty the step.
+      if (M.takeoff.length <= 1) return;
       M.takeoff.splice(parseInt(dr.getAttribute("data-del-row"), 10), 1);
-      if (!M.takeoff.length) M.takeoff.push(newTakeoffRow());
       changed(true);
       return;
     }
-    if (t.closest("[data-add-lab]")) {
-      M.labor.push(newLaborRow());
-      changed(true);
-      return;
-    }
+    var addLab = t.closest("[data-add-lab]");
+    if (addLab) { openLaborPicker(addLab); return; }
     var dl = t.closest("[data-del-lab]");
     if (dl) {
+      if (M.labor.length <= 1) return;
       M.labor.splice(parseInt(dl.getAttribute("data-del-lab"), 10), 1);
-      if (!M.labor.length) M.labor.push(newLaborRow());
       changed(true);
       return;
     }
