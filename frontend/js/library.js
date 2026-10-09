@@ -161,9 +161,11 @@
             if (r && r.layout === "global" && r.line_key === "fees_textura") FEES_RULE = r;
           });
           GLOBAL_MARKUP = (mj.rules || []).filter(function (r) {
-            // fees_textura has its own row (feesDefaultRow); the labor rate lives on the Labor tab.
+            // fees_textura has its own row (feesDefaultRow); the labor rate, Hotel and Per Diem
+            // live on the Labor tab.
             return r.layout === "global" && r.applies && r.line_key !== "fees_textura" &&
-                   r.line_key !== "labor_rate";
+                   r.line_key !== "labor_rate" && r.line_key !== "travel_lodging" &&
+                   r.line_key !== "travel_per_diem";
           }).map(function (r) {
             // id AND line_key KEPT. The Defaults tab can now edit these, and an edit here
             // PUTs the same markup_rules row the Markup page edits -- one home, two doors.
@@ -3615,29 +3617,27 @@
 
   // ── the Labor Calculator tab (Hanz, 2026-10-05) ────────────────────────────
   /** WHAT THIS TAB IS: where the calculations behind a new estimate's default labor lines live.
-   *  Today it holds the TRAVEL section -- Travel Labor, Lodging and Per Diem -- and the rest of the
-   *  calculator (per-line crew/production-rate modes) is a queued follow-up.
+   *  Today it holds the Travel Labor explanation and the per-line crew/production-rate modes.
    *
-   *  THE COMPANY LABOR RATE IS FILED THROUGH THE SAME CODE, from the LABOR tab (Hanz, 2026-10-09:
-   *  "remove the labor row from Markup and transfer it to labor tab"). It is the Global line
-   *  `labor_rate` in the same markup_rules table, so loadGlobalRules reads it with the travel
-   *  figures and fileGlobalRate saves all three. Nothing moved in the database.
-   *
-   *  LODGING AND PER DIEM ARE NOT STORED HERE. They are the Markup page's Global lines
-   *  `travel_lodging` ($70 a night) and `travel_per_diem` ($45 a day), and the boxes below are a
-   *  second DOOR onto those same markup_rules rows -- one home, so the two screens cannot disagree.
-   *  A new estimate copies each onto its own Lodging / Per Diem line when it opens
-   *  (polish-estimate.js), which start OFF. Travel Labor's rate is the Labor tab's Travel row.
+   *  THE COMPANY LABOR RATE, HOTEL AND PER DIEM ARE FILED FROM THE LABOR TAB (Hanz, 2026-10-09:
+   *  "remove the labor row from Markup and transfer it to labor tab", then "what about hotel and
+   *  per diem?"). They are the Global lines `labor_rate`, `travel_lodging` ($70 a night) and
+   *  `travel_per_diem` ($45 a day) in the markup_rules table, so loadGlobalRules reads all three and
+   *  fileGlobalRate saves any of them. Nothing moved in the database, and this tab and the Markups
+   *  page no longer draw them: one door. A new estimate copies Lodging / Per Diem onto its own lines
+   *  when it opens (polish-estimate.js), which start OFF. Travel Labor's rate is the Labor tab's
+   *  Travel row.
    *
    *  ITS OWN READ of /api/markup/rules?layout=global rather than GLOBAL_MARKUP: that list keeps
    *  only filed, applying rows and drops `notes`, and a PUT states the whole row -- a save that
    *  forgot the note would clear one filed elsewhere. */
   var TRAVEL_KEYS = [
-    { line: "travel_lodging", label: "Lodging", per: "night", shipped: 70,
-      how: "One charge a night away. Nights are the man-days of the labor tasks, unless the " +
-           "estimator types a number." },
-    { line: "travel_per_diem", label: "Per Diem", per: "day", shipped: 45,
-      how: "One charge a day away, for meals. Days are counted the same way as nights." }
+    { line: "travel_lodging", label: "Hotel", per: "night", unitWord: "a night", shipped: 70,
+      how: "One charge a night away. Nights are the crew's man-days unless the estimator types " +
+           "a number. Starts off on every new estimate." },
+    { line: "travel_per_diem", label: "Per Diem", per: "day", unitWord: "a day", shipped: 45,
+      how: "One charge a day away, for meals. Days are counted the same way as nights. " +
+           "Starts off on every new estimate." }
   ];
   /** The company labor rate's box, on the Labor tab. `shipped` is bid-model's one constant, read
    *  lazily so this block stays the only place that names the line. */
@@ -3696,8 +3696,9 @@
     var html = '<div class="admin-section"><h2>Travel</h2>' +
       '<p class="paneintro">Travel is expected when the job is <b>70 miles or more</b> from the ' +
       'Olathe office. Under 70 miles all three lines stay gray on the estimate until the ' +
-      'estimator switches one on. Lodging and Per Diem start off on every new estimate, and are ' +
-      'priced inside the markups, before GP, superintendent and soft costs.</p>';
+      'estimator switches one on. Hotel and Per Diem are priced inside the markups, before GP, ' +
+      'superintendent and soft costs. Their rates are set on the Labor tab, under Hotel and ' +
+      'Per Diem.</p>';
     if (TRAVEL_RULES_ERR) {
       html += '<p class="ronote">Could not read the saved figures, so the boxes are empty. ' +
         'Reload to try again.</p>';
@@ -3714,18 +3715,6 @@
       'The rate is the Travel line on the Labor tab.</td><td class="rowact">' +
       (ADMIN ? '<button class="btn ghost sm" type="button" data-labcalc-goto-labor>Edit rate</button>' : "") +
       '</td></tr>';
-    TRAVEL_KEYS.forEach(function (t) {
-      var fig = travelFigure(TRAVEL_RULES[t.line]);
-      html += '<tr data-labcalc-row="' + esc(t.line) + '"><td>' + esc(t.label) + '</td><td class="n">' +
-        (ADMIN
-          ? '<span class="money"><span>$</span><input class="num cell-cost" type="text" ' +
-            'inputmode="decimal" data-travel-rate="' + esc(t.line) +
-            '" value="' + esc(fig) + '" placeholder="' + esc(String(t.shipped)) +
-            '" aria-label="' + esc(t.label) + ' rate, dollars per ' + esc(t.per) + '" /></span>'
-          : esc(L.money(fig === "" ? t.shipped : Number(fig)))) +
-        '</td><td>per ' + esc(t.per) + '</td><td class="lc-how">' + esc(t.how) +
-        '</td><td class="rowact"><span class="saving">Saved to Markup</span></td></tr>';
-    });
     html += '</tbody></table></div></div></div>';
     html += calcSectionHtml();
     body.innerHTML = html;
@@ -3738,7 +3727,38 @@
     var def = null;
     TRAVEL_KEYS.forEach(function (t) { if (t.line === key) def = t; });
     if (!def) return;
-    return fileGlobalRate(def, input, $("labcalc-alert"));
+    return fileGlobalRate(def, input, $("travel-rate-alert"));
+  }
+
+  /** The Hotel and Per Diem section of the Labor tab, below the labor lines. Two rows, each the
+   *  filed figure (or the shipped one as a placeholder for an admin, plain text for everyone
+   *  else). Never throws; renderLaborRate calls it once the shared read of the Global rows is in. */
+  function renderTravelRates() {
+    var host = $("travel-rates-box");
+    if (!host) return;
+    var html = '<div class="admin-section"><h2>Hotel and Per Diem</h2>' +
+      '<p class="paneintro">Travel is expected when the job is <b>70 miles or more</b> from the ' +
+      'Olathe office. New estimates start Hotel and Per Diem at these rates. A saved bid keeps ' +
+      'its own.</p>';
+    if (TRAVEL_RULES_ERR) {
+      html += '<p class="ronote">Could not read the saved figures, so the boxes are empty. ' +
+        'Reload to try again.</p>';
+    }
+    html += '<div class="card"><div class="tw"><table><thead><tr><th>Line</th><th class="n">Rate</th>' +
+      '<th>Unit</th><th>How it is worked out</th></tr></thead><tbody>';
+    TRAVEL_KEYS.forEach(function (t) {
+      var fig = travelFigure(TRAVEL_RULES[t.line]);
+      html += '<tr data-travel-row="' + esc(t.line) + '"><td>' + esc(t.label) + '</td><td class="n">' +
+        (ADMIN
+          ? '<span class="money"><span>$</span><input class="num cell-cost" type="text" ' +
+            'inputmode="decimal" data-travel-rate="' + esc(t.line) +
+            '" value="' + esc(fig) + '" placeholder="' + esc(String(t.shipped)) +
+            '" aria-label="' + esc(t.label) + ' rate, dollars ' + esc(t.unitWord) + '" /></span>'
+          : esc(L.money(fig === "" ? t.shipped : Number(fig)))) +
+        '</td><td>' + esc(t.unitWord) + '</td><td class="lc-how">' + esc(t.how) + '</td></tr>';
+    });
+    html += '</tbody></table></div></div></div>';
+    host.innerHTML = html;
   }
 
   /** File one Global dollar figure (lodging, per diem, the company labor rate). A PUT of the whole
@@ -3814,6 +3834,7 @@
         'Reload to try again.</p>';
     }
     host.innerHTML = html + '</div>';
+    renderTravelRates();
   }
 
   /** Save the company labor rate: the shared Global-figure save, reported on the Labor tab. */
@@ -5244,9 +5265,8 @@
   });
   $("pane-labcalc").addEventListener("change", function (e) {
     var el = e.target;
-    if (el && el.getAttribute && el.getAttribute("data-travel-rate") !== null) saveTravelRate(el);
-    else if (el && el.getAttribute && (el.getAttribute("data-lcalc-mode") !== null ||
-                                       el.getAttribute("data-lcalc") !== null)) calcEdit(el);
+    if (el && el.getAttribute && (el.getAttribute("data-lcalc-mode") !== null ||
+                                  el.getAttribute("data-lcalc") !== null)) calcEdit(el);
   });
   $("pane-labcalc").addEventListener("input", function (e) {
     var el = e.target;
@@ -5261,7 +5281,7 @@
       showView("labor"); paint(); focusLaborRow("travel");
     }
   });
-  // The Defaults tab's pointer ("Travel is set in Labor Calculator").
+  // The Defaults tab's pointer to the Labor Calculator.
   var goLabCalc = document.querySelector("[data-goto-labcalc]");
   if (goLabCalc) goLabCalc.addEventListener("click", function (e) {
     e.preventDefault();
@@ -5269,10 +5289,11 @@
     renderLabCalc();
   });
 
-  // The Labor tab's rate box is the other door onto the same Global rows.
+  // The Labor tab's rate box and its Hotel / Per Diem rows are the one door onto the Global rows.
   $("pane-labor").addEventListener("change", function (e) {
     var el = e.target;
     if (el && el.getAttribute && el.getAttribute("data-labor-rate") !== null) saveLaborRate(el);
+    else if (el && el.getAttribute && el.getAttribute("data-travel-rate") !== null) saveTravelRate(el);
   });
 
   load().then(function () {
