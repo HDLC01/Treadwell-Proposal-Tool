@@ -769,7 +769,7 @@
       <button type="button" role="tab" id="tab-labor" aria-selected="false"
               aria-controls="pane-labor">Labor<span class="n" id="n-labor"></span></button>
       <!-- RIGHT AFTER LABOR (Hanz, 2026-10-05): the calculations behind the labor defaults a new
-           estimate opens with. Travel is the first section: Travel Labor, Lodging and Per Diem. -->
+           estimate opens with. Travel is the first section: Travel Labor. Hotel and Per Diem rates are set on the Labor tab. -->
       <button type="button" role="tab" id="tab-labcalc" aria-selected="false"
               aria-controls="pane-labcalc">Labor Calculator</button>
       <button type="button" role="tab" id="tab-vendors" aria-selected="false"
@@ -964,13 +964,16 @@
           <button class="btn" type="button" data-add-labor>Add your first labor line</button>
         </div>
       </div>
+      <!-- HOTEL AND PER DIEM (Hanz, 2026-10-09). Filled by renderTravelRates(). The Global lines
+           `travel_lodging` and `travel_per_diem` in markup_rules; this is their only door now. -->
+      <p class="alert" id="travel-rate-alert" role="status" aria-live="polite"></p>
+      <div id="travel-rates-box"></div>
     </section>
 
     <!-- ── Labor Calculator ───────────────────────────────────────────── -->
     <section id="pane-labcalc" role="tabpanel" aria-labelledby="tab-labcalc" hidden>
       <p class="paneintro"><b>How the labor lines a new estimate opens with are worked out.</b>
-        Travel is first: Travel Labor, Lodging and Per Diem. Lodging and Per Diem rates are stored
-        once, on the Markup page's Global tab, and are edited here too.</p>
+        Travel is first: Travel Labor. The Hotel and Per Diem rates are set on the Labor tab.</p>
       <p class="ronote" id="labcalc-ro" hidden>You can see these figures. Changing them is
         admin-only - ask Hanz or Kyle.</p>
       <p class="alert" id="labcalc-alert" role="status" aria-live="polite"></p>
@@ -1089,7 +1092,8 @@
          Assemblies and Administration panes both open with a .paneintro; this one did not. -->
       <p class="paneintro"><b>Defaults are what a new bid opens holding.</b> Pick a work
         type, then set the takeoff lines and the labor lines an estimate starts with.
-        Travel is set in <a href="#tab=labcalc" data-goto-labcalc>Labor Calculator</a>.</p>
+        Travel Labor is worked out in <a href="#tab=labcalc" data-goto-labcalc>Labor Calculator</a>;
+        Hotel and Per Diem rates are set on the Labor tab.</p>
 
       <!-- ONE STRIP FOR BOTH SECTIONS, not one each. A work type is the question "what does
            a polish bid open holding?", and Takeoff and Labor are two halves of that one

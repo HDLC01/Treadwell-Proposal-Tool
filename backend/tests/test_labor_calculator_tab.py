@@ -2,12 +2,13 @@
 
 Hanz: "create another tab right beside Labor in Items & Assemblies ... where we would have the
 calculations for the default containers in the Labor tab in the estimate sheet ... name it Labor
-Calculator", and Travel goes in it. Today it holds Travel Labor, Lodging and Per Diem; the rest of
-the calculator is a queued follow-up (B7b).
+Calculator", and Travel goes in it. Today it holds Travel Labor and the per-line modes.
 
-THE LODGING AND PER DIEM RATES ARE NOT STORED HERE. They are the Markup page's Global lines, and the
-boxes on this tab are a second door onto the same rows -- so the behaviour is EXECUTED, not read:
-labor-calculator-harness.js runs the shipped block out of library.js against a fake DOM and fetch.
+HOTEL AND PER DIEM ARE SET ON THE LABOR TAB (Hanz, 2026-10-09: "what about hotel and per diem? I
+think they should be under this labor Tab but they have their own section"). They are still the
+Global markup_rules lines travel_lodging / travel_per_diem, and the Labor tab's own section is the
+only door -- so the behaviour is EXECUTED, not read: labor-calculator-harness.js runs the shipped
+block out of library.js against a fake DOM and fetch.
 (The Defaults tab's own "Markup" inputs carry a data-markup-formula attribute and NO save handler
 anywhere in js/, which is the failure a source assertion cannot see.)
 """
@@ -51,12 +52,16 @@ def test_the_tab_sits_right_after_labor_and_before_administration(html):
     assert ">Labor Calculator<" in html
 
 
-def test_the_defaults_tab_points_at_the_calculator_for_travel(html):
-    """One line on the Defaults tab: Travel is set in Labor Calculator, with a link that goes there.
+def test_the_defaults_tab_points_at_the_calculator_and_the_labor_tab_for_travel(html):
+    """One pointer on the Defaults tab: Travel Labor is worked out in the Labor Calculator (a link
+    that goes there), and Hotel and Per Diem rates are set on the Labor tab.
 
-    Mutation: delete the data-goto-labcalc anchor -- the pointer becomes plain text."""
+    Mutation: delete the data-goto-labcalc anchor -- the pointer becomes plain text. Put "Travel is
+    set in Labor Calculator" back -- an admin is sent to a tab with no Hotel or Per Diem box."""
     pane = html.split('id="pane-defaults"')[1].split("</section>")[0]
-    assert "Travel is set in" in pane and "data-goto-labcalc" in pane
+    assert "data-goto-labcalc" in pane
+    assert "Travel is set in" not in pane
+    assert "Hotel and Per Diem rates are set on the Labor tab" in pane
 
 
 def test_the_new_tab_is_wired_into_the_view_switch():
@@ -73,18 +78,49 @@ def test_the_new_tab_is_wired_into_the_view_switch():
 
 
 @needs_node
-def test_the_admin_sees_the_stored_rates_and_the_travel_labor_rate_and_the_rule(ran):
+def test_the_calculator_shows_the_travel_labor_rate_and_the_rule_but_no_hotel_or_per_diem_box(ran):
+    """Mutation: put the TRAVEL_KEYS loop back into renderLabCalc -- two boxes (and a second door
+    onto the same rows) come back."""
     a = ran["admin"]
     assert a["loadingFirst"].startswith('<p class="paneintro">Loading'), (
         "the tab painted before its figures arrived")
     assert a["readOnce"] == 1, "opening the tab made %r reads of the markup rules" % a["readOnce"]
-    assert a["lodgingBox"], "the filed $80 lodging figure is not in its box"
-    assert a["perDiemBoxEmptyWithShippedPlaceholder"], (
-        "an unfiled per diem must show an empty box with Kyle's $45 as the placeholder")
+    assert a["travelBoxes"] == 0, "the Labor Calculator still has a Hotel / Per Diem box"
+    assert a["mentionsLodging"] is False, "the Labor Calculator still draws a Hotel / Per Diem row"
+    assert a["pointsAtLabor"], "the tab does not say where the Hotel and Per Diem rates went"
     assert a["travelLaborRow"], "Travel Labor does not show the Labor tab's own rate"
     assert a["seventyMiles"], "the 70-mile rule is not stated on the tab"
-    assert a["insideMarkups"], "the tab does not say Lodging and Per Diem price inside the markups"
+    assert a["insideMarkups"], "the tab does not say Hotel and Per Diem price inside the markups"
     assert a["roHidden"] is True
+
+
+@needs_node
+def test_the_labor_tab_has_a_hotel_and_per_diem_section_with_the_filed_figures(ran):
+    """Hanz 2026-10-09. Its own section below the labor lines: Hotel ($ a night) and Per Diem ($ a
+    day), the filed figure in each box (the shipped 70 / 45 as the placeholder when none is filed),
+    and one plain line on how it is worked out. Plain words, no em dash.
+
+    Mutation: delete renderTravelRates (or the call from renderLaborRate) -- no section."""
+    t = ran["travel"]
+    assert t["section"], "no Hotel and Per Diem section on the Labor tab"
+    assert t["hotelFiled"], "the filed $80 hotel figure is not in its box (placeholder 70)"
+    assert t["perDiemEmptyWithShippedPlaceholder"], (
+        "an unfiled per diem must show an empty box with Kyle's $45 as the placeholder")
+    assert t["hotelAria"] and t["units"] and t["inMoneyBox"]
+    assert t["how"], "the Hotel row does not say how nights are counted"
+    assert t["startsOff"] == 2, "both rows say they start off on a new estimate"
+    assert t["seventyMiles"], "the 70-mile rule is not stated"
+    assert not t["emDash"]
+
+
+@needs_node
+def test_a_new_estimate_still_starts_hotel_and_per_diem_at_the_filed_figures(ran):
+    """STORAGE DID NOT MOVE: the same markup_rules rows are read, so a new bid copies $80 / $52 when
+    they are filed and the shipped $70 / $45 when nothing is.
+
+    Mutation: read the rates from a different line key in travelRatesFromRules."""
+    assert ran["newEstimate"] == {"filedLodging": 80, "filedPerDiem": 52,
+                                  "shippedLodging": 70, "shippedPerDiem": 45}
 
 
 @needs_node
@@ -100,7 +136,7 @@ def test_saving_a_rate_files_the_whole_global_row_and_keeps_its_note(ran):
     assert s["puts"][1] == {"layout": "global", "line_key": "travel_lodging", "applies": True,
                             "notes": "kept note", "formula": "90"}, (
         "the lodging save did not carry the filed note: %r" % s["puts"][1])
-    assert "Lodging saved: $90 per night" in s["alert"]
+    assert "Hotel saved: $90 per night" in s["alert"]
     assert s["cached"] == "55"
     assert s["defaultsTabCopy"] == [["travel_lodging", "90"]]
 
@@ -127,8 +163,8 @@ def test_a_refused_save_puts_the_old_figure_back_and_says_why(ran):
 @needs_node
 def test_a_non_admin_reads_the_figures_but_gets_no_boxes(ran):
     n = ran["nonAdmin"]
-    assert n["boxes"] == 0, "a non-admin was handed a box that can only 403"
-    assert n["showsLodging"] and n["showsShippedPerDiem"] and n["roShown"]
+    assert n["boxes"] == 0 and n["inputs"] == 0, "a non-admin was handed a box that can only 403"
+    assert n["showsLodging"] and n["showsShippedPerDiem"]
 
 
 @needs_node
@@ -205,7 +241,7 @@ def test_rates_sit_in_the_pages_money_box_and_nothing_wears_an_unruled_class(ran
     assert lay["inlineStyles"] == [], lay["inlineStyles"]
     assert lay["unruledClasses"] == [], lay["unruledClasses"]
     assert lay["itemsTable"] is False, ".items-table centres every header over left-aligned cells"
-    assert lay["travelInMoneyBox"] and lay["lineRateInMoneyBox"]
+    assert lay["lineRateInMoneyBox"] and ran["travel"]["inMoneyBox"]
     assert lay["editRateIsGhostButton"]
 
 
@@ -270,6 +306,9 @@ def test_the_labor_tab_carries_the_box_and_nothing_still_says_markups_sets_the_r
     Mutation: drop the pane-labor change listener -- the box draws and saves nothing."""
     pane = html.split('id="pane-labor"')[1].split("</section>")[0]
     assert 'id="labor-rate-box"' in pane and 'id="labor-rate-alert"' in pane
+    assert 'id="travel-rates-box"' in pane and 'id="travel-rate-alert"' in pane
+    labcalc = html.split('id="pane-labcalc"')[1].split("</section>")[0]
+    assert "Markup page" not in labcalc, "the Labor Calculator still names the Markup page as a home"
     js = (FRONTEND / "js" / "library.js").read_text(encoding="utf-8", errors="replace")
     assert re.search(r'\$\("pane-labor"\)\.addEventListener\("change"', js)
     assert 'if (p === "labor") renderLaborRate();' in js
@@ -277,3 +316,14 @@ def test_the_labor_tab_carries_the_box_and_nothing_still_says_markups_sets_the_r
         text = (FRONTEND / "js" / name).read_text(encoding="utf-8", errors="replace")
         for line in text.splitlines():
             assert not ("labor rate" in line.lower() and "markups -> global" in line.lower()), (name, line)
+
+
+def test_the_defaults_tab_markup_list_no_longer_lists_hotel_or_per_diem():
+    """One door: the Defaults tab's read-only Markup list leaves out every Global line that has its
+    own home (fees_textura, labor_rate, travel_lodging, travel_per_diem).
+
+    Mutation: drop the two travel_* clauses from the GLOBAL_MARKUP filter in load()."""
+    js = (FRONTEND / "js" / "library.js").read_text(encoding="utf-8", errors="replace")
+    block = js.split("GLOBAL_MARKUP = (mj.rules || []).filter(function (r) {")[1].split("}).map(")[0]
+    for key in ("fees_textura", "labor_rate", "travel_lodging", "travel_per_diem"):
+        assert 'r.line_key !== "%s"' % key in block, key
