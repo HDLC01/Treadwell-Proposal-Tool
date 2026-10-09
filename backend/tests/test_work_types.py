@@ -304,8 +304,8 @@ def test_each_job_type_writes_exactly_the_cells_the_live_intake_writes_for_it(ra
 
 
 def test_the_live_intakes_scope_map_and_field_names_are_the_tables(ran):
-    """SCOPE_BY_WORK_TYPE (which quantity fields each work type shows) and systemFieldNames (their names) are
-    the intake's own literals until Phase 9. The table's job types derive both."""
+    """Which quantity fields each work type shows and the names of the two systems' fields are
+    js/intake-scope.js's since Phase 9a, which reads both off the table. The real module is asked."""
     for job in JOB_TYPES:
         assert sorted(ran["live"]["scopeByWorkType"][job]) == sorted(ran["views"]["jobTypes"][job]["scopes"]), job
     by = {1: {}, 2: {}}
@@ -588,6 +588,7 @@ NAMED_ERROR = (
     ("js/library.js", "library.js needs work-types.js loaded before it"),
     ("js/polish-sandbox.js", "polish-sandbox.js needs work-types.js loaded before it"),
     ("js/index.js", "index.js needs work-types.js loaded before it"),
+    ("js/intake-scope.js", "intake-scope.js needs work-types.js loaded before it"),
 ])
 def test_a_page_script_that_reads_the_vocabulary_says_so_by_name_when_it_is_missing(script, message):
     require_node()
@@ -607,7 +608,7 @@ def test_every_page_that_loads_a_reader_of_the_vocabulary_loads_the_vocabulary_f
     """PHASE 7b ADDED THE LIVE INTAKE to the readers (js/index.js, for the split rule only): index.html now
     loads the vocabulary ahead of the page script, and the page throws by name when the tag is missing."""
     readers = readers_of_the_vocabulary()
-    assert readers == ["js/index.js", "js/library.js", "js/polish-estimate.js", "js/polish-intake.js",
+    assert readers == ["js/index.js", "js/intake-scope.js", "js/library.js", "js/polish-estimate.js", "js/polish-intake.js",
                        "js/polish-sandbox.js"]
     for page in sorted(FRONTEND.glob("*.html")):
         order = local_scripts(page.read_text(encoding="utf-8"))

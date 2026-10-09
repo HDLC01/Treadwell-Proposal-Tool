@@ -60,7 +60,7 @@ TAKEOFF_FILES = ["polish-estimate.html", "js/polish-estimate.js", "js/bid-model.
 INTAKE_FILES = ["polish-intake.html", "js/polish-intake.js", "js/bid-model.js", "js/work-types.js",
                 "js/polish-sandbox.js"]
 BETA_FILES = ["js/index.js", "index.html", "shared.js", "js/projects.js", "js/county-picker.js",
-              "js/address-lookup.js", "js/work-types.js"]
+              "js/address-lookup.js", "js/work-types.js", "js/intake-scope.js"]
 
 GYP = 'Gyp (USG 1-8")'
 JOBS = ["epoxy", "polish", "combo", "gyp"]

@@ -34,6 +34,7 @@ const src = (rel) => L.read(pick(rel));
 
 const T = require(pick("js/work-types.js"));
 const B = require(pick("js/bid-model.js"));
+const IS = require(pick("js/intake-scope.js"));
 const INDEX = src("js/index.js");
 const REVIEW = src("js/estimate-review.js");
 
@@ -207,12 +208,13 @@ out.bid = {
 }
 
 // ── 5. the copies the table has to stay equal to, lifted and evaluated ───────────────────────────
-// The live intake (js/index.js) keeps its own literals until Phase 9: its job conditions, which quantity
-// fields each work type shows, and the names of the two systems' fields.
+// The live intake (js/index.js) keeps its own job conditions until Phase 9. Which quantity fields each work
+// type shows, and the names of the two systems' fields, are js/intake-scope.js's since Phase 9a (it reads
+// them off the table): the real module is asked, job type by job type.
 out.live = {
   conditions: clone(evaluate(L.grabConst(INDEX, "CONDITIONS", { indent: "  " }), "CONDITIONS")),
-  scopeByWorkType: clone(evaluate(L.grabConst(INDEX, "SCOPE_BY_WORK_TYPE", { indent: "  " }), "SCOPE_BY_WORK_TYPE")),
-  systemFieldNames: byKey([1, 2], (k) => clone(L.lift(INDEX, "systemFieldNames", {}, { indent: "  " })(k))),
+  scopeByWorkType: byKey(T.jobTypeKeys(), (k) => clone(IS.scopesFor(k))),
+  systemFieldNames: byKey([1, 2], (k) => clone(IS.systemFieldNames(k))),
 };
 
 // The estimate screen's own role sets, sheet-to-layout map and area cells.
