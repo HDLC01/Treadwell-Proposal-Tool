@@ -1492,7 +1492,7 @@
       esc(nv(l.rate)) + '"></span>' +
       dfltWarnHtml('data-trvdflt-for="' + key + '"', travelRateDefaultText(l)) +
       '<p class="hint">' + (isNight ? "Per night." : "Per day.") + ' Set under Items &amp; ' +
-      'Assemblies, Labor Calculator.</p></div>' +
+      'Assemblies, Labor tab.</p></div>' +
       '<div class="f"><label>Cost</label>' +
       '<div class="costbox' + (cost > 0 ? "" : " empty") + '">' + esc(moneyAuto(cost)) + '</div>' +
       '<p class="hint">' + unitWord.toLowerCase() + ' × rate</p></div>' +
@@ -2201,7 +2201,7 @@
   }
 
   /** The warning under a Lodging / Per Diem rate box (G3): the shared "Default value: $N" while the
-   *  rate differs from the one the line was filled with (Markups -> Global), "" while they agree and
+   *  rate differs from the one the line was filled with (Items & Assemblies -> Labor), "" while they agree and
    *  on a line with no stamp (a saved bid, which was never filled from anything). */
   function travelRateDefaultText(l) {
     if (!l || l.rate_default === undefined || l.rate_default === null) return "";
@@ -2774,7 +2774,7 @@
     }
   }
 
-  /** The Lodging and Per Diem rates (Markups -> Global), `{lodging, per_diem}` with null for any
+  /** The Lodging and Per Diem rates (Items & Assemblies -> Labor, Hotel and Per Diem), `{lodging, per_diem}` with null for any
    *  that is not filed. Read for a NEW bid only (see init) and NEVER THROWS, like loadLaborRate:
    *  a rate service being down must not stop an estimate opening, and null means the shipped
    *  $70 / $45 stand. */
@@ -2820,7 +2820,7 @@
     // new bid (the laborDefaults gate below), but "Default $X" under a rate needs it on any.
     var laborRate = loadLaborRate();
     // Lodging and Per Diem rates ride the same gate as the labor defaults: a NEW bid copies them
-    // from Markups -> Global once; a saved bid keeps the rates it was saved with.
+    // from Items & Assemblies -> Labor once; a saved bid keeps the rates it was saved with.
     var travelRates = laborDefaults ? loadTravelRates() : null;
     // The Labor Calculator's per-line modes: same gate again -- a NEW bid fills its default labor
     // from them, a saved bid is never recomputed.

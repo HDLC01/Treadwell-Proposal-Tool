@@ -444,7 +444,7 @@
    *  `qty_auto` follows travelManDays until the estimator types a number; typing is how you leave
    *  auto, and clearing the box is how you come back. An OFF line, or an absent `travel`, is $0.
    *
-   *  THE RATES are the Markups -> Global lines `travel_lodging` ($70) and `travel_per_diem` ($45),
+   *  THE RATES are the Global markup_rules rows (set on Items & Assemblies -> Labor) `travel_lodging` ($70) and `travel_per_diem` ($45),
    *  copied onto a NEW bid when it opens (applyTravelRates) and never again, so a rate edited later
    *  reaches new bids and leaves saved ones alone. 70 and 45 are Kyle's literals and what stands
    *  when nothing is filed.
@@ -531,7 +531,7 @@
       }
       out[k] = next;
     });
-    // G3: each line remembers the rate it was filled with (the Markups -> Global figure, or the
+    // G3: each line remembers the rate it was filled with (the Items & Assemblies -> Labor figure, or the
     // shipped one when none is filed), which is what the "Default value" warning compares against.
     TRAVEL_LINE_KEYS.forEach(function (k) { out[k].rate_default = num(out[k].rate); });
     return out;

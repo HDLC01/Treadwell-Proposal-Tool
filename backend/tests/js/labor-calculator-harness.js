@@ -32,7 +32,7 @@ const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
 
 function make(opts) {
   const els = {};
-  ["labcalc-body", "labcalc-ro", "labcalc-alert", "labcalc-tryout", "labor-rate-box", "labor-rate-alert"].forEach((id) => {
+  ["labcalc-body", "labcalc-ro", "labcalc-alert", "labcalc-tryout", "labor-rate-box", "labor-rate-alert", "travel-rates-box", "travel-rate-alert"].forEach((id) => {
     els[id] = { id, innerHTML: "", textContent: "", hidden: false };
   });
   const puts = [];
@@ -95,7 +95,7 @@ const RULE = (key, formula, extra) => Object.assign({ id: "r-" + key, layout: "g
 (async () => {
   const out = {};
 
-  // ── an admin sees the stored rates in boxes, and the Travel row's rate off the Labor tab ──────
+  // ── the Labor Calculator no longer carries Hotel or Per Diem; Travel Labor's rate is off the Labor tab ──
   {
     const s = make({ rules: [RULE("travel_lodging", "80", { notes: "kept note" })],
                      labor: [{ id: "travel", name: "Travel", rate: "41.50", unit: "hours" }],
@@ -107,9 +107,10 @@ const RULE = (key, formula, extra) => Object.assign({ id: "r-" + key, layout: "g
     out.admin = {
       loadingFirst: loadingFirst,
       readOnce: s.rec.fetches.filter((u) => u.indexOf("/api/markup") === 0).length,
-      lodgingBox: /data-travel-rate="travel_lodging" value="80"/.test(html),
-      perDiemBoxEmptyWithShippedPlaceholder:
-        /data-travel-rate="travel_per_diem" value="" placeholder="45"/.test(html),
+      travelBoxes: (html.match(/data-travel-rate/g) || []).length,
+      mentionsLodging: /Lodging|Hotel|Per Diem/.test(html.replace(/Hotel and Per Diem are priced[^<]*<\/p>/, "")
+                                                       .replace(/Their rates are set on the Labor tab[^<]*/, "")),
+      pointsAtLabor: html.indexOf("set on the Labor tab, under Hotel and Per Diem") !== -1,
       // Rate and unit are two columns since 2026-10-06 (the Labor tab's own Rate | Unit), so the
       // dollars line up down one edge; the figure is still the Labor tab's Travel row, per hour.
       travelLaborRow: /Travel Labor<\/td><td class="n[^"]*">\$41\.50<\/td><td>per hour<\/td>/.test(html),
@@ -117,15 +118,35 @@ const RULE = (key, formula, extra) => Object.assign({ id: "r-" + key, layout: "g
       insideMarkups: html.indexOf("before GP") !== -1,
       roHidden: s.els["labcalc-ro"].hidden,
     };
+  }
+
+  // ── HOTEL AND PER DIEM, on the Labor tab (Hanz, 2026-10-09) ───────────────────────────────────
+  {
+    const s = make({ rules: [RULE("travel_lodging", "80", { notes: "kept note" })],
+                     globalMarkup: [{ id: "r-travel_lodging", line_key: "travel_lodging", formula: "80" }] });
+    s.api.renderLaborRate();
+    await settle();
+    const html = s.els["travel-rates-box"].innerHTML;
+    out.travel = {
+      section: /<h2>Hotel and Per Diem<\/h2>/.test(html),
+      hotelFiled: /data-travel-rate="travel_lodging" value="80" placeholder="70"/.test(html),
+      hotelAria: html.indexOf('aria-label="Hotel rate, dollars a night"') !== -1,
+      perDiemEmptyWithShippedPlaceholder:
+        /data-travel-rate="travel_per_diem" value="" placeholder="45"/.test(html),
+      units: /<td>a night<\/td>/.test(html) && /<td>a day<\/td>/.test(html),
+      how: html.indexOf("Nights are the crew&#39;s man-days unless the estimator types a number.") !== -1,
+      startsOff: (html.match(/Starts off on every new estimate\./g) || []).length,
+      seventyMiles: html.indexOf("70 miles or more") !== -1,
+      emDash: html.indexOf("—") !== -1,
+      inMoneyBox: /<span class="money"><span>\$<\/span><input[^>]*data-travel-rate="travel_lodging"/.test(html),
+    };
 
     // saving keeps the filed note and files the whole row on the GLOBAL layout
-    const box = input("travel_per_diem", "55");
-    await s.api.saveTravelRate(box);
-    const lodgingBox = input("travel_lodging", "$90");
-    await s.api.saveTravelRate(lodgingBox);
+    await s.api.saveTravelRate(input("travel_per_diem", "55"));
+    await s.api.saveTravelRate(input("travel_lodging", "$90"));
     out.saved = {
       puts: s.puts,
-      alert: s.els["labcalc-alert"].textContent,
+      alert: s.els["travel-rate-alert"].textContent,
       cached: s.api.rules()["travel_per_diem"].formula,
       defaultsTabCopy: s.GLOBAL_MARKUP.map((g) => [g.line_key, g.formula]),
     };
@@ -134,7 +155,7 @@ const RULE = (key, formula, extra) => Object.assign({ id: "r-" + key, layout: "g
     const before = s.puts.length;
     await s.api.saveTravelRate(input("travel_per_diem", "55"));
     await s.api.saveTravelRate(input("travel_per_diem", ""));
-    out.noops = { sent: s.puts.length - before, alert: s.els["labcalc-alert"].textContent };
+    out.noops = { sent: s.puts.length - before, alert: s.els["travel-rate-alert"].textContent };
 
     // refused in words, nothing sent, the box put back
     const bad = [];
@@ -142,7 +163,7 @@ const RULE = (key, formula, extra) => Object.assign({ id: "r-" + key, layout: "g
       const bx = input("travel_lodging", v);
       const n = s.puts.length;
       await s.api.saveTravelRate(bx);
-      bad.push({ v: v, sent: s.puts.length - n, back: bx.value, alert: s.els["labcalc-alert"].textContent });
+      bad.push({ v: v, sent: s.puts.length - n, back: bx.value, alert: s.els["travel-rate-alert"].textContent });
     }
     out.refused = bad;
   }
@@ -150,36 +171,46 @@ const RULE = (key, formula, extra) => Object.assign({ id: "r-" + key, layout: "g
   // ── a refused save (403 / 400) puts the old figure back and says so ──────────────────────────
   {
     const s = make({ rules: [RULE("travel_lodging", "80")], putStatus: 403 });
-    s.api.renderLabCalc(); await settle();
+    s.api.renderLaborRate(); await settle();
     const bx = input("travel_lodging", "99");
     await s.api.saveTravelRate(bx);
     const s4 = make({ rules: [RULE("travel_lodging", "80")], putStatus: 400 });
-    s4.api.renderLabCalc(); await settle();
+    s4.api.renderLaborRate(); await settle();
     const bx4 = input("travel_lodging", "99");
     await s4.api.saveTravelRate(bx4);
-    out.refusedByServer = { back403: bx.value, alert403: s.els["labcalc-alert"].textContent,
-                            back400: bx4.value, alert400: s4.els["labcalc-alert"].textContent,
+    out.refusedByServer = { back403: bx.value, alert403: s.els["travel-rate-alert"].textContent,
+                            back400: bx4.value, alert400: s4.els["travel-rate-alert"].textContent,
                             cacheKept: s.api.rules()["travel_lodging"].formula };
   }
 
   // ── a non-admin sees the figures as text, with no boxes ──────────────────────────────────────
   {
     const s = make({ admin: false, rules: [RULE("travel_lodging", "80")] });
-    s.api.renderLabCalc(); await settle();
-    const html = s.els["labcalc-body"].innerHTML;
+    s.api.renderLaborRate(); await settle();
+    const html = s.els["travel-rates-box"].innerHTML;
     out.nonAdmin = { boxes: (html.match(/data-travel-rate/g) || []).length,
-                     showsLodging: /\$80\.00<\/td><td>per night<\/td>/.test(html),
-                     showsShippedPerDiem: /\$45\.00<\/td><td>per day<\/td>/.test(html),
-                     roShown: s.els["labcalc-ro"].hidden === false };
+                     inputs: (html.match(/<input/g) || []).length,
+                     showsLodging: /\$80\.00<\/td><td>a night<\/td>/.test(html),
+                     showsShippedPerDiem: /\$45\.00<\/td><td>a day<\/td>/.test(html) };
   }
 
   // ── the markup read going down is said out loud and invents no rate ──────────────────────────
   {
     const s = make({ readFails: true });
-    s.api.renderLabCalc(); await settle();
-    const html = s.els["labcalc-body"].innerHTML;
+    s.api.renderLaborRate(); await settle();
+    const html = s.els["travel-rates-box"].innerHTML;
     out.readFails = { said: html.indexOf("Could not read the saved figures") !== -1,
                       boxesEmpty: /data-travel-rate="travel_lodging" value=""/.test(html) };
+  }
+
+  // ── a NEW estimate still starts its Hotel / Per Diem lines at the figures filed on the Labor tab ──
+  {
+    const rates = B.travelRatesFromRules([RULE("travel_lodging", "80"), RULE("travel_per_diem", "52")]);
+    const m = B.freshModel();
+    const filed = B.applyTravelRates(m.travel, rates);
+    const un = B.applyTravelRates(B.freshModel().travel, B.travelRatesFromRules([]));
+    out.newEstimate = { filedLodging: Number(filed.lodging.rate), filedPerDiem: Number(filed.per_diem.rate),
+                        shippedLodging: Number(un.lodging.rate), shippedPerDiem: Number(un.per_diem.rate) };
   }
 
   // ── filed-but-off and non-numeric rules read as not filed ────────────────────────────────────
@@ -227,7 +258,6 @@ const RULE = (key, formula, extra) => Object.assign({ id: "r-" + key, layout: "g
       inlineStyles: all.match(/style="[^"]*"/g) || [],
       unruledClasses: all.match(/class="[^"]*\b(ghostlink|mkin|labcalc-h)\b[^"]*"/g) || [],
       capsStatus: (all.match(/class="builtin"/g) || []).length,
-      travelInMoneyBox: /<span class="money"><span>\$<\/span><input[^>]*data-travel-rate="travel_lodging"/.test(html),
       lineRateInMoneyBox: /<span class="money"><span>\$<\/span><input[^>]*data-lcalc="mockup" data-f="rate"/.test(html),
       editRateIsGhostButton: /<button class="btn ghost sm" type="button" data-labcalc-goto-labor>/.test(html),
       notSetOnceAcross: /data-lcalc-row="jointfill"[^]*?<td colspan="3"><span class="dash">Left blank on a new estimate<\/span><\/td><\/tr>/.test(html),
@@ -277,7 +307,7 @@ const RULE = (key, formula, extra) => Object.assign({ id: "r-" + key, layout: "g
     const html = s.els["labcalc-body"].innerHTML;
     out.calcAbsent = { drew: html.indexOf('data-lcalc-row="polishing"') !== -1,
                        notSet: html.indexOf("Left blank on a new estimate") !== -1,
-                       travelStill: html.indexOf("Lodging") !== -1,
+                       travelStill: html.indexOf("Travel Labor") !== -1,
                        tryEmpty: s.els["labcalc-tryout"].innerHTML.indexOf("No line has a mode saved") !== -1,
                        tryEmptyDesigned: /^<div class="lines-empty">No line has a mode saved/.test(
                          s.els["labcalc-tryout"].innerHTML) };
@@ -334,9 +364,9 @@ const RULE = (key, formula, extra) => Object.assign({ id: "r-" + key, layout: "g
     const n2 = make({ admin: false });
     n2.api.renderLaborRate(); await settle();
     out.laborRateNonAdmin.unfiledShows33 = n2.els["labor-rate-box"].innerHTML.indexOf("$33.00") !== -1;
-    // Lodging still PUTs the global row through the shared helper
+    // Hotel still PUTs the global row through the shared helper
     const t = make({ rules: [RULE("travel_lodging", "80", { notes: "n" })] });
-    t.api.renderLabCalc(); await settle();
+    t.api.renderLaborRate(); await settle();
     await t.api.saveTravelRate(input("travel_lodging", "91"));
     out.travelStillSaves = t.puts;
   }

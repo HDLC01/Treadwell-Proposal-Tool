@@ -1191,9 +1191,14 @@ def test_the_admin_page_says_whether_each_row_reaches_the_workbook(ran):
     # here as unread by everything. The Polish Estimate beta now reads them -- a new bid copies
     # each onto its Lodging / Per Diem line -- so those rows say so, while still saying the
     # WORKBOOK does not read them (no address in any target table, asserted in the test above).
-    for name, word in (("travelLodgingGlobal", "Lodging"), ("travelPerDiemGlobal", "Per Diem")):
-        assert "Estimating Tool v2 copies this figure onto every NEW bid" in s[name]             and word in s[name] and "workbook does not read it" in s[name], (
-            "a travel figure's row misstates what reads it: %s -> %r" % (name, s[name]))
+    #
+    # CHANGED AGAIN ON PURPOSE (Hanz, 2026-10-09): Hotel and Per Diem are set on Items & Assemblies
+    # -> Labor now and this page draws no row for them (markup-page tests pin that), so the page no
+    # longer carries a sentence about the beta reading them.
+    for name in ("travelLodgingGlobal", "travelPerDiemGlobal"):
+        assert "Estimating Tool v2 copies this figure" not in s[name], (
+            "a sentence about a figure set on the Labor tab is still on the Markups page: %s -> %r"
+            % (name, s[name]))
     # The Fees + Textura default is read by the beta too (2026-10-06): its row must not tell an
     # admin the figure "changes no bid". (The labor rate has no row on this page since 2026-10-09;
     # it is set on Items & Assemblies -> Labor.)

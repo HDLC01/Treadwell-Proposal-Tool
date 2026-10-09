@@ -75,9 +75,11 @@ PAGE_FILES = ("markup.html", "js/markup.js", "js/markup-core.js", "js/bid-profil
 # built-in (HARD_BID) went with the line on 2026-09-22.
 GP_BANDS = "MARKUP(BAND(subtotal, 6500,52%, 15000,45%, 22500,35%, 32500,32%, 30%))"
 
-# THE GLOBAL LINES THIS PAGE DRAWS. The API still accepts `labor_rate` (it is filed through
-# /api/markup/rules from Items & Assemblies -> Labor, Hanz 2026-10-09) but this page never lists it.
-PAGE_GLOBAL_KEYS = [k for k in markup.GLOBAL_LINE_KEYS if k != "labor_rate"]
+# THE GLOBAL LINES THIS PAGE DRAWS. The API still accepts `labor_rate`, `travel_lodging` and
+# `travel_per_diem` (filed through /api/markup/rules from Items & Assemblies -> Labor, Hanz
+# 2026-10-09) but this page never lists them.
+OFF_PAGE_KEYS = ["labor_rate", "travel_lodging", "travel_per_diem"]
+PAGE_GLOBAL_KEYS = [k for k in markup.GLOBAL_LINE_KEYS if k not in OFF_PAGE_KEYS]
 
 needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 
@@ -991,12 +993,6 @@ def test_every_global_line_says_plainly_that_it_reaches_no_bid(ran):
     than bond's; gone with the line on 2026-09-22. So all three rows say so, rather than letting
     an admin file a rate, watch it save with a green tick, and move no price."""
     for r in ran["globalDayOne"]["rows"]:
-        if r["line"] in ("travel_lodging", "travel_per_diem"):
-            assert "Estimating Tool v2 copies this figure onto every NEW bid" in r["explain"], (
-                "%s does not say the beta reads it: %r" % (r["line"], r["explain"]))
-            assert "workbook does not read it" in r["explain"], (
-                "%s lost the half that is still true: %r" % (r["line"], r["explain"]))
-            continue
         # CHANGED ON PURPOSE, 2026-10-06: the labor rate and Fees + Textura are read by the beta
         # too -- each is a new bid's starting figure -- so their rows say so instead of "changes
         # no bid", and still say the workbook does not read them.
@@ -1031,20 +1027,38 @@ def test_the_labor_rate_has_no_row_on_the_markup_page_and_one_pointer_says_where
 
 
 @needs_node
-def test_a_travel_figure_is_dollars_and_says_what_it_is_per(ran):
-    """$70 is not a rate and must not read as one, and "$70.00" with nothing after it is a number
-    waiting to be multiplied by the wrong thing.
+def test_hotel_and_per_diem_have_no_row_on_the_markup_page_and_the_pointer_names_them(ran):
+    """Hanz 2026-10-09: Hotel and Per Diem moved to Items & Assemblies -> Labor, the same
+    markup_rules rows (travel_lodging, travel_per_diem). The API still lists both as Global lines
+    AND a figure is filed for each, so only the page can keep them off the screen: not a row, not a
+    box, not in the read-only block on any sheet tab. One pointer line says where they went.
+
+    Mutation: take them out of OFF_PAGE in markup.js -- both rows (and their boxes) come back."""
+    filed = ran["globalFiledLaborOnGlobal"]
+    for key in ("travel_lodging", "travel_per_diem"):
+        assert key not in [r["line"] for r in filed["rows"]], key
+        assert key not in filed["rowOrder"], key
+        assert key not in [r["line"] for r in ran["globalDayOne"]["rows"]], key
+        for tab, blocks in ran["globalRefByTab"].items():
+            for b in blocks:
+                assert key not in [i["line"] for i in b["items"]], (tab, key)
+                assert "Travel lodging" not in b["text"] and "Travel food" not in b["text"], tab
+    assert filed["pointerText"].count("Hotel and Per Diem") == 1, filed["pointerText"]
+
+
+@needs_node
+def test_a_dollar_figure_is_dollars_and_says_what_it_is_per(ran):
+    """A dollar figure is not a rate and must not read as one, and "$0.00" with nothing after it is
+    a number waiting to be multiplied by the wrong thing.
 
     The same bare-number reading priceChain makes: 1 or more is money, under 1 is a rate. So the
-    box carries a $ and the figure carries the word it is per."""
-    lodging = row(ran["globalDayOne"], "travel_lodging")
-    assert lodging["figure"] == "$70.00", lodging["preview"]
-    assert lodging["run"] == "a night", lodging["preview"]
-    assert lodging["rate"] == "", "a dollar figure printed a percentage"
-    assert "$" in lodging["rateText"], lodging["rateText"]
-
-    food = row(ran["globalDayOne"], "travel_per_diem")
-    assert food["figure"] == "$45.00" and food["run"] == "a day"
+    box carries a $ and the figure carries the word it is per. (Hotel and Per Diem used to be the
+    two examples; they are set on Items & Assemblies -> Labor now, so Fees + Textura is the one.)"""
+    bond = row(ran["globalDayOne"], "bond")
+    assert bond["figure"] == "0%", bond["preview"]
+    assert "$" not in bond["preview"], (
+        "0%% was turned into a dollar figure off a base this tab does not have: %r"
+        % bond["preview"])
 
     # …and a rate on the same tab still reads as a rate, with no base invented for it.
     bond = row(ran["globalDayOne"], "bond")
@@ -1065,9 +1079,9 @@ def test_a_travel_figure_is_dollars_and_says_what_it_is_per(ran):
 @needs_node
 def test_a_rate_typed_on_global_is_filed_against_global(ran):
     """Not against whichever sheet tab the admin came from. The layout in the body IS the home."""
-    assert ran["globalEditBody"] == {"layout": "global", "line_key": "travel_lodging",
-                                     "applies": True, "notes": "", "formula": "80"}
-    assert row(ran["globalEdited"], "travel_lodging")["figure"] == "$80.00"
+    assert ran["globalEditBody"] == {"layout": "global", "line_key": "bond",
+                                     "applies": True, "notes": "", "formula": "2%"}
+    assert row(ran["globalEdited"], "bond")["figure"] == "2%"
 
 
 @needs_node
@@ -1081,7 +1095,7 @@ def test_the_global_tab_keeps_a_filed_zero_apart_from_an_absent_line(ran):
     row here, absent by built-in default rather than an admin's choice; travel_lodging renders
     identically switched off by hand, which is the only way ABSENT is reached any more."""
     zero = row(ran["globalZeroAndAbsent"], "bond")
-    absent = row(ran["globalZeroAndAbsent"], "travel_lodging")
+    absent = row(ran["globalZeroAndAbsent"], "fees_textura")
     assert parts(zero) == {"value": "0"}
     assert zero["figure"] == "0%" and zero["absentClass"] is False
     assert absent["inputs"] == [] and absent["figure"] == "—"
@@ -1795,8 +1809,6 @@ def test_a_sheet_tab_lists_every_global_line_read_only_and_outside_its_chain(ran
     assert len(snap["globalRef"]) == 1, snap["globalRef"]
     ref = snap["globalRef"][0]
     assert {i["line"]: i["text"] for i in ref["items"]} == {
-        "travel_lodging": "Travel lodging: $70.00 a night",
-        "travel_per_diem": "Travel food: $45.00 a day",
         "fees_textura": "Fees + Textura: $0.00 a bid"}, ref["items"]
     assert "Global" in ref["text"]
     assert ref["link"] == 1 and ref["inputs"] == 0
@@ -1816,8 +1828,6 @@ def test_every_work_type_tab_shows_filed_off_and_built_in_global_figures_once(ra
         assert len(blocks) == 1, (tab, blocks)
         got = {i["line"]: i["text"] for i in blocks[0]["items"]}
         assert got == {
-            "travel_lodging": "Travel lodging: off",
-            "travel_per_diem": "Travel food: $45.00 a day",
             "fees_textura": "Fees + Textura: $250.00 a bid"}, (tab, got)
         assert "bond" in ran["globalRefRowsByTab"][tab]
         assert "Bond" not in blocks[0]["text"], (tab, blocks[0]["text"])
