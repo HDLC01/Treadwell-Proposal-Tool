@@ -19,6 +19,7 @@ import pathlib
 import re
 import shutil
 import subprocess
+from html.parser import HTMLParser
 
 import pytest
 
@@ -184,11 +185,18 @@ def test_the_takeoff_defaults_list_what_a_new_estimate_starts_with(ran):
     # THREE GROUPS, NOT FOUR, since 2026-09-18: joint filler, remove-existing and dye moved into
     # Materials. Hanz: "die and joint filler are supposed to be materials not something that is
     # default", then "just put these 3 in the materials section with the same buttons."
-    assert t["groupTitles"] == ["Assemblies", "Materials", "Markup"], (
+    #
+    # THE POLISH VIEW HAS TWO GROUPS since 2026-10-09: Markup (the global values) moved to the Global
+    # pill, so it is read from there below.
+    assert t["groupTitles"] == ["Assemblies", "Materials"], (
         "the groups or their order changed: %s" % t["groupTitles"])
-    # Markup is 2 rows: the always-listed Fees + Textura default, then bond.
-    assert t["groupCounts"] == [1, 4, 2], (
+    assert t["groupCounts"] == [1, 4], (
         "a row landed in the wrong group: %s" % t["groupCounts"])
+    # Markup is 2 rows on Global: the always-listed Fees + Textura default, then bond. Nothing else is
+    # global in this fixture (its assemblies and materials name Polish).
+    assert t["globalTitles"] == ["Markup"] and t["globalCounts"] == [2], (
+        "the Global view should hold only the global values: %s %s"
+        % (t["globalTitles"], t["globalCounts"]))
     assert t["renderedHeadings"] == t["groupTitles"], (
         "the groups exist in the data but are not drawn: %s" % t["renderedHeadings"])
     assert t["noKindColumn"], (
@@ -396,6 +404,7 @@ def test_the_labor_tab_lists_every_line_default_or_not(ran):
     assert t["customLinesCanBeDeleted"], "a labor line has no delete on its own tab"
     assert t["travelCannotBeDeleted"], "Travel is offered a delete the server refuses"
     assert t["travelRateIsEditable"], "Travel cannot be edited on the Labor tab"
+    assert t["travelNameDrawn"], "the Travel row does not read 'Travel Labor' on the Labor tab (LS1)"
     assert t["travelHasChips"], "Travel is missing its work-type chips (or still says Every estimate)"
     assert t["customLinesHaveChips"], "a labor line cannot be scoped to a work type"
     assert t["moreStartsShut"], "the More fields are open before anybody asks"
@@ -3608,38 +3617,59 @@ def test_changing_a_condition_default_saves_it_and_a_refusal_puts_it_back(ran):
         "an ordinary material's Remove no longer PATCHes its favorite, or wrote a condition")
 
 
-def test_the_condition_vocabulary_is_the_same_three_on_both_sides():
-    """ONE LIST OF KEYS, STATED IN THREE PLACES THAT MUST AGREE, and asserted at the source
-    because a mismatch is silent in the worst possible way: a condition filed under a key no
-    reader knows saves with a green tick, reaches nothing, and writes to no cell.
+@needs_node
+def test_the_condition_vocabulary_is_the_same_three_on_both_sides(ran):
+    """ONE LIST OF KEYS, STATED IN THREE PLACES THAT MUST AGREE, and checked by running them because a
+    mismatch is silent in the worst possible way: a condition filed under a key no reader knows saves with
+    a green tick, reaches nothing, and writes to no cell.
 
       * `CONDITION_CELLS` in bid-model.js decides which workbook cell each answer writes.
       * `takeoffConditionDefaults()` in library.js is what the Defaults tab offers.
       * `KEYS` in backend/condition_defaults.py is what the endpoint will accept.
 
+    SINCE PHASE 7 the first two are derived from the one conditions table (js/work-types.js), so what this
+    guards now is the third against that table, and that the table's three are cell-writing conditions. The
+    full pin of the Python lists is test_work_types_python_pin.py. This one stays, run against the page's own
+    function and the real model, because it is the agreement a rename would break first.
+
     Mutation: rename one key in condition_defaults.KEYS. The endpoint then 400s every save the
     page makes for that condition, and nothing in the product would have said which of the three
     files was wrong."""
-    js = (FRONTEND / "js" / "library.js").read_text(encoding="utf-8", errors="replace")
-    core = (FRONTEND / "js" / "bid-model.js").read_text(encoding="utf-8", errors="replace")
-    py = (pathlib.Path(__file__).resolve().parents[1] / "condition_defaults.py").read_text(
-        encoding="utf-8", errors="replace")
+    import condition_defaults
 
-    page_keys = set(re.findall(r'\{ key: "([a-z_]+)"', js))
-    api_keys = set(re.findall(r'KEYS = \(([^)]*)\)', py)[0].replace('"', "").split(","))
-    api_keys = {k.strip() for k in api_keys if k.strip()}
-    assert page_keys == api_keys == {"joint_filler", "remove_existing_jf", "dye"}, (
-        "the Defaults tab and the endpoint no longer offer the same three conditions:\n"
-        " page: %r\n  api: %r" % (sorted(page_keys), sorted(api_keys)))
-    # …and every one of them is a key CONDITION_CELLS actually writes, or the answer reaches no
+    shipped = ran["defaultsShippedConditions"]
+    page_keys = shipped["offersTheThree"].split(",")
+    api_keys = sorted(condition_defaults.KEYS)
+    assert page_keys == api_keys == ["dye", "joint_filler", "remove_existing_jf"], (
+        "the Defaults tab and the endpoint no longer offer the same three conditions: "
+        "page %r, api %r" % (page_keys, api_keys))
+    # ...in the order the Takeoff step asks them, which the endpoint also keeps (list_defaults sorts by it)
+    assert shipped["offeredInOrder"] == list(condition_defaults.KEYS)
+    # ...and every one of them is a key CONDITION_CELLS actually writes, or the answer reaches no
     # cell in Kyle's workbook at all.
-    for key in sorted(api_keys):
-        assert re.search(r"^\s*%s:\s*\{ cells:" % key, core, re.M), (
+    for key in api_keys:
+        assert key in shipped["cellKeys"], (
             "%s is offered as an editable default but CONDITION_CELLS does not write it, so the "
             "answer reaches no cell in the workbook" % key)
     # The seeder and its gate are both exported, or the estimate cannot read either.
+    core = (FRONTEND / "js" / "bid-model.js").read_text(encoding="utf-8", errors="replace")
     assert "seedConditionDefaults: seedConditionDefaults" in core
     assert "conditionsUnstated: conditionsUnstated" in core
+
+
+@needs_node
+def test_the_work_type_filter_is_a_thin_wrapper_over_the_one_vocabulary(ran):
+    """PHASE 7. The five tabs the Defaults tab is split by and the filter that decides which defaults show on
+    which of them are js/work-types.js's (tabKeys and appliesTo), read through the page's own lifted
+    functions. An empty list is every tab, a list is those tabs, and asking about a JOB TYPE throws: a combo
+    job has no tab of its own, so a default filed under it could never be read.
+
+    Mutation: give appliesToWorkType back its own `list.indexOf(wt)`, or make `combo` answer quietly."""
+    f = ran["defaultsWorkTypeFilter"]
+    assert f["tabs"] == ["polish", "seal", "epoxy", "leveling", "gyp"]
+    assert f["none"] is True and f["empty"] is True and f["noRow"] is True
+    assert f["scopedIn"] is True and f["scopedOut"] is False
+    assert f["combo"].startswith("threw: work-types.js: appliesTo() was asked about \"combo\""), f["combo"]
 
 
 # ── The three reserved rows: joint filler kit, remove-existing, dye ───────────────────────────
@@ -3983,3 +4013,82 @@ def test_the_open_assemblys_save_stays_on_screen_in_a_sticky_title_bar():
         "#asm-save is not a direct child of the sticky .atitle bar", _ancestors_of(html, "asm-save"))
     margin = _css_rule(html, ".lines :is(input, select, button)")
     assert float(margin["scroll-margin-top"][:-2]) >= 150, margin
+
+
+# ── the Defaults tab's Global pill (Hanz, 2026-10-09) ─────────────────────────────────────────────
+class _Pills(HTMLParser):
+    """The work-type pills as markup."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.pills = []
+
+    def handle_starttag(self, tag, attrs):
+        a = dict(attrs)
+        if tag == "button" and a.get("data-work-type"):
+            self.pills.append((a["data-work-type"], a.get("aria-selected")))
+
+
+@needs_node
+def test_global_is_the_first_pill_and_the_one_selected_on_open(ran):
+    """The page opens on Global: the markup says so (first pill, the only one selected) and so does
+    the executed declaration the renderers read.
+
+    Mutation: put the Global pill after Polish, or select Polish in the markup, or set DEFAULT_WT back
+    to the first work type."""
+    p = _Pills()
+    p.feed((FRONTEND / "library.html").read_text(encoding="utf-8"))
+    assert p.pills[0] == ("global", "true"), p.pills
+    assert [s for _, s in p.pills[1:]] == ["false"] * 5, p.pills
+    assert ran["globalTab"]["opened"] == "global"
+
+
+@needs_node
+def test_global_shows_the_global_values_and_the_rows_that_name_no_work_type_editable(ran):
+    """Under Global: Fees + Textura and the other global values, plus every takeoff and labor default
+    that names no work type, each with its normal Edit/Remove/switch. Rows naming a work type are not
+    here.
+
+    Mutation: leave the Markup group on every view, or let a work-type row through the Global filter."""
+    g = ran["globalTab"]
+    assert g["globalTitles"] == ["Assemblies", "Materials", "Markup"], g["globalTitles"]
+    assert g["globalHasFees"]
+    assert g["globalEditable"], "a row naming no work type is not editable under Global"
+    assert g["globalHasNoTypedRows"], "a row that names a work type shows under Global"
+    assert g["globalLaborHasTravel"], "Travel (names no work type) is missing or read-only under Global"
+
+
+@needs_node
+def test_a_work_type_shows_its_own_rows_and_the_global_ones_read_only_beneath(ran):
+    """Under Polish: Polish's own rows editable, then the Global rows tagged Global with no Edit,
+    Remove or switch and a note saying where to edit. The other work types' rows and the global values
+    do not appear.
+
+    Mutation: draw a Global row with its buttons on a work type, sort Global above own, or show the
+    Markup group on a work type."""
+    g = ran["globalTab"]
+    assert g["polishOwnEditable"]
+    assert g["polishGlobalReadOnly"], "a Global row on a work type is editable or untagged"
+    assert g["polishOwnBeforeGlobal"], "the Global rows are not underneath"
+    assert g["polishNoSealRows"], "another work type's row shows under Polish"
+    assert g["polishTitles"] == ["Assemblies", "Materials"], g["polishTitles"]
+    assert g["sealShowsOnlySeal"]
+    assert g["feesOnlyUnderGlobal"], "Fees + Textura shows on a work type"
+
+
+@needs_node
+def test_adding_a_default_files_the_work_types_of_the_view_it_was_added_on(ran):
+    """Under Global an add saves default_work_types [] (every new bid), even for a row that named a
+    work type before; under a work type it names that type, joining any it already has, so the row
+    lands as that tab's own. Remove files nothing; a refused add puts the types back.
+
+    Mutation: stop sending the list from setDefault, or send [] from a work type."""
+    g = ran["globalTab"]
+    assert [(c["kind"], c["id"], c["workTypes"]) for c in g["addUnderGlobal"]] == [
+        ("items", "n1", []), ("labor", "ln", [])]
+    assert g["rowsAfterGlobalAdd"] == {"n1": [], "ln": []}
+    assert [(c["id"], c["workTypes"]) for c in g["addUnderPolish"]] == [
+        ("n2", ["polish"]), ("n3", ["polish"]), ("n4", ["epoxy", "polish"])]
+    assert g["rowsAfterPolishAdd"] == {"n2": ["polish"], "n3": ["polish"], "n4": ["epoxy", "polish"]}
+    assert g["removeCalls"] == [{"kind": "items", "id": "g1", "on": False, "workTypes": None}]
+    assert g["refusedPutsTypesBack"]

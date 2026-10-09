@@ -96,6 +96,65 @@
     .addline:active{transform:translateY(1px)}
     .addline svg{flex:none}
 
+    /* THE SEARCH POP-UP BOTH "ADD" BUTTONS OPEN (js/library-picker.js). The scrim (.tw-ov) comes
+       from shared.js; these are the .bulk-* rules library.html's "Add materials" dialog uses,
+       carried over with this page's own tokens so the two read as one dialog. */
+    .bulk-ov{align-items:flex-start}
+    .bulk-dlg{background:var(--card);border:1px solid var(--line);border-radius:var(--r);
+      width:min(760px,100%);max-height:min(82vh,720px);margin-top:6vh;display:flex;
+      flex-direction:column;overflow:hidden;box-shadow:0 18px 48px rgba(92,64,63,.22);text-align:left}
+    .bulk-head{display:grid;grid-template-columns:1fr auto;align-items:start;gap:4px 10px;
+      padding:16px 16px 12px;border-bottom:1px solid var(--line)}
+    .bulk-head h2{margin:0;font:700 15px var(--sans);letter-spacing:-.01em}
+    .bulk-head .icon{grid-row:1 / span 2;align-self:center;background:none;border:0;padding:6px;
+      color:var(--ink-v);cursor:pointer;border-radius:var(--r-s)}
+    .bulk-head .icon:hover{color:var(--red)}
+    .bulk-sub{grid-column:1;margin:0;color:var(--ink-v);font-size:12.5px}
+    .bulk-filters{display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;padding:12px 16px;
+      background:var(--surf-low);border-bottom:1px solid var(--line)}
+    .bulk-filters .searchbox{flex:1 1 auto;display:flex}
+    .bulk-filters input,.bulk-oneoff input{flex:1 1 auto;min-width:0;font:400 14px var(--sans);
+      padding:8px 10px;border:1px solid var(--line);border-radius:var(--r-s);background:var(--card);
+      color:var(--ink)}
+    .bulk-list{flex:1 1 auto;overflow-y:auto;padding:6px 0}
+    .bulk-none{margin:0;padding:22px 16px;color:var(--ink-v);font-size:13px}
+    .bulk-row{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:12px;
+      padding:8px 16px;cursor:pointer;transition:background .12s ease}
+    .bulk-row:hover{background:var(--surf-low)}
+    .bulk-row > input{position:absolute;width:1px;height:1px;margin:0;padding:0;border:0;
+      clip-path:inset(50%);overflow:hidden;white-space:nowrap}
+    .bulk-box{width:17px;height:17px;flex:none;border:1px solid var(--line);border-radius:var(--r-s);
+      background:var(--card);display:inline-flex;align-items:center;justify-content:center;
+      transition:background .12s ease,border-color .12s ease}
+    .bulk-box::after{content:"";width:4px;height:8px;margin-top:-1px;border:solid #fff;
+      border-width:0 2px 2px 0;transform:rotate(45deg) scale(.7);opacity:0;
+      transition:opacity .12s ease,transform .12s ease}
+    .bulk-row > input:checked + .bulk-box{background:var(--red);border-color:var(--red)}
+    .bulk-row > input:checked + .bulk-box::after{opacity:1;transform:rotate(45deg)}
+    .bulk-row > input:focus-visible + .bulk-box{outline:2px solid var(--red);outline-offset:2px}
+    .bulk-nm{min-width:0}
+    .bulk-nm b{display:block;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .bulk-nm span{display:block;color:var(--ink-v);font-size:11.5px;overflow:hidden;
+      text-overflow:ellipsis;white-space:nowrap}
+    .bulk-cost{color:var(--ink-v);font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap}
+    .bulk-row.on{cursor:default}
+    .bulk-row.on .bulk-nm b{color:var(--ink-v)}
+    .bulk-row.on:hover{background:none}
+    .bulk-in{font:600 10px var(--sans);letter-spacing:.06em;text-transform:uppercase;color:var(--ok);
+      white-space:nowrap}
+    .bulk-oneoff{display:flex;align-items:center;gap:10px;padding:12px 16px;
+      border-top:1px solid var(--line);background:var(--surf-low)}
+    .bulk-oneoff b{font-weight:600;white-space:nowrap}
+    .bulk-foot{display:flex;align-items:center;gap:12px;padding:12px 16px;
+      border-top:1px solid var(--line);background:var(--card)}
+    .bulk-count{color:var(--ink-v);font-size:12.5px;font-variant-numeric:tabular-nums}
+    .bulk-spacer{flex:1 1 auto}
+    @media (max-width:560px){
+      .bulk-dlg{margin-top:0;max-height:100%;border-radius:0;border:0}
+      .bulk-ov{padding:0}
+      .bulk-oneoff{flex-wrap:wrap}
+    }
+
     .grid{display:grid;gap:15px;grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}
     .f label{display:flex;align-items:baseline;gap:6px;font:600 12.5px var(--sans);
              margin:0 0 5px;flex-wrap:wrap}
@@ -422,8 +481,19 @@
   <script src="/js/library-core.js"></script>
   <!-- bid-model reads its number helpers off window.TWExcelMath as it loads, so that goes first. -->
   <script src="/js/excel-math.js"></script>
+  <!-- The one work-type vocabulary and job-conditions table: bid-model derives from it as it loads, and
+       this page's own script reads its Takeoff cards off it (var T = window.TWWorkTypes). -->
+  <script src="/js/work-types.js"></script>
+  <!-- The bid engine and what it reads: the Markups formula reader, the profiles (rates as formula text),
+       then the engine. bid-model hands its chain to the engine as it loads, so all three go first. -->
+  <script src="/js/markup-core.js"></script>
+  <script src="/js/bid-profiles.js"></script>
+  <script src="/js/bid-engine.js"></script>
   <script src="/js/bid-model.js"></script>
   <script src="/js/polish-sandbox.js"></script>
+  <!-- The search pop-up both Add buttons open. Pure logic plus a small mount; the page reads
+       window.TWLibraryPicker at parse time, so it goes before the page script. -->
+  <script src="/js/library-picker.js"></script>
   <script src="/js/polish-estimate.js"></script>
 </body>
 </html>

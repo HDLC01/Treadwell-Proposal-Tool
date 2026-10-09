@@ -93,17 +93,17 @@ def check_bond_twice(c):
 
 def check_leveling_lodging_eight(c):
     lev, gyp, pol = (c.vec(t, "lodging/one/local0") for t in ("Leveling", "Gyp (USG 1-8\")", "Polish"))
-    people_days = sum(r["guys"] * r["days"] for r in lev["rows"])
+    person_days = sum(r["guys"] * r["days"] for r in lev["rows"])
     rate = lev["rows"][0]["rate"]
     assert lev["hoursPerDay"] == 10 and gyp["hoursPerDay"] == 10 and pol["hoursPerDay"] == 8
     nights = lev["out"]["lodgingQty"]
     assert nights == pytest.approx((lev["in"]["labor"] - lev["in"]["travelLabor"]) / rate / 8)
-    assert nights == pytest.approx(people_days * 10 / 8), "ten hour days counted as eight: a quarter too many nights"
-    assert gyp["out"]["lodgingQty"] == pytest.approx(people_days) and pol["out"]["lodgingQty"] == pytest.approx(people_days)
+    assert nights == pytest.approx(person_days * 10 / 8), "ten hour days counted as eight: a quarter too many nights"
+    assert gyp["out"]["lodgingQty"] == pytest.approx(person_days) and pol["out"]["lodgingQty"] == pytest.approx(person_days)
     first, second = c.probe("Leveling", "lodging-divisor")["steps"]
     assert first["got"]["E42"] == "10 hour days" and second["got"]["E42"] == "8 hour days"
     assert first["got"]["B61"] == second["got"]["B61"], "the divisor does not read the day-length cell"
-    return {"nights": num(nights), "people-days": num(people_days)}
+    return {"nights": num(nights), "person_days": num(person_days)}
 
 
 def check_leveling_escalation_left_out(c):
@@ -183,7 +183,20 @@ def check_leveling_travel_hour(c):
     assert yes["got"]["D48"] == pytest.approx(yes["got"]["A48"] * yes["got"]["B48"] * yes["got"]["C48"])
     (epoxy,), (polish,) = (c.probe(t, "travel-hours-when-local")["steps"] for t in ("Epoxy", "Polish"))
     assert epoxy["got"]["B4"] == polish["got"]["B4"] == "Yes" and epoxy["got"]["D52"] == 0 and polish["got"]["D44"] == 0
-    return {"charge": usd(yes["got"]["D48"]), "people": num(yes["got"]["A48"]), "rate": usd(yes["got"]["C48"])}
+    # A48 is PERSON-DAYS (the guys times the days of every crew row, added up), not a head count: the as-shipped crew is 6 guys
+    # for 1 day, and the engine's own answers for two other crews show the multiplication and the adding up.
+    five_days, two_rows = c.probe("Leveling", "travel-person-days")["steps"]
+    for step in (five_days, two_rows):
+        g = step["got"]
+        assert g["B4"] == "Yes" and g["B48"] == 1, "a local job, charged an hour of travel per person-day"
+        assert g["D48"] == pytest.approx(g["A48"] * g["B48"] * g["C48"])
+    g = five_days["got"]
+    assert (g["A44"], g["B44"], g["A48"]) == (6, 5, 30), "6 guys for 5 days is 30 person-days, not 6 people"
+    h = two_rows["got"]
+    assert h["A48"] == h["A44"] * h["B44"] + h["A45"] * h["B45"] == 18, "every crew row counts, added up"
+    assert yes["got"]["A48"] == 6 and yes["got"]["C48"] == g["C48"], "as shipped: 6 guys for 1 day"
+    return {"charge": usd(yes["got"]["D48"]), "person_days": num(yes["got"]["A48"]), "rate": usd(yes["got"]["C48"]),
+            "crew person_days": num(g["A48"]), "crew charge": usd(g["D48"]), "two rows": num(h["A48"])}
 
 
 def check_leveling_overage_powders(c):
@@ -234,11 +247,81 @@ CHECKS = {
 }
 
 
+def old_rate_tabs(c):
+    """{saved rate, as the self-check prints it: [tabs]} for the labor rates the template's saved values were calculated
+    with, read out of meta.json's self-check, tabs in the workbook's order.
+
+    A tab is in it when the values saved in the file were NOT already what the engine computes (`matchedAsSaved` below
+    `matched`). It belongs to the rate its labor-rate cell was put back to. A tab with no cell put back whose rate cell is
+    a reference to another tab's (Seal (+Jnts) reads Seal's, so putting Seal back put it back too) belongs to the same
+    rate as the tab it reads."""
+    sc = c.meta["selfCheck"]["sheets"]
+    groups = {}
+    for tab in c.profiles["priced"]:
+        row = sc[tab]
+        if row["matchedAsSaved"] == row["matched"]:
+            continue
+        lines = row.get("laborRatesPutBack")
+        if lines:
+            rate = lines[0].rsplit(" -> ", 1)[1]
+        else:
+            ref = c.profiles["sheets"][tab]["rates"]["laborRate"].get("formula")
+            assert ref, (tab, "its saved values are stale, no labor rate was put back and its rate is not a reference")
+            source = ref.lstrip("=").split("!")[0].strip("'")
+            rate = next(r for r, tabs in groups.items() if source in tabs)
+        groups.setdefault(rate, []).append(tab)
+    return groups
+
+
+def names_in(text, names):
+    """The `names` that `text` mentions as whole names. Longest first, and each one found is taken out of the text before the
+    next is looked for: a note that names only 'Seal' and 'Epoxy' must not count for 'Seal (+Jnts)' and 'Epoxy blank', which
+    contain them."""
+    found = set()
+    for name in sorted(names, key=len, reverse=True):
+        if name in text:
+            found.add(name)
+            text = text.replace(name, " ")
+    return found
+
+
+NON_GYP = ["Polish", "Epoxy", "Epoxy blank", "Seal", "Seal (+Jnts)", "Leveling"]
+
+
+def old_rate_note_problems(note, groups):
+    """What is wrong with the paragraph that says which tabs the saved values were calculated at $32.20 and $32.52 on, against
+    the tabs the self-check says: every tab of the first group named, none of the others, the Gyp tabs counted, the numbers
+    of tabs right. [] when it is right."""
+    note = " ".join(note.split())                         # the paragraph is wrapped
+    first = note.find("$32.20")
+    second = note.find("$32.52", first + 1)
+    if first < 0 or second < 0:
+        return ["the note no longer gives both rates"]
+    problems = []
+    low, high = groups["32.2"], groups["32.52"]
+    named = names_in(note[first:second], NON_GYP)
+    if named != set(low):
+        problems.append("the tabs at $32.20 are %s and the note names %s" % (sorted(low), sorted(named)))
+    clause = note[second:].split(". ")[0]                  # "$32.52 on six (Leveling and the five Gyp tabs)", not what follows it
+    if names_in(clause, NON_GYP) != {"Leveling"} or set(high) != {"Leveling"} | set(GYP):
+        problems.append("the tabs at $32.52 are %s; the note must name Leveling and the Gyp tabs" % sorted(high))
+    words = {5: "five", 6: "six"}
+    if "the %s Gyp tabs" % words.get(len(GYP), "?") not in clause:
+        problems.append("the note must say how many Gyp tabs there are")
+    if "on %s tabs" % words.get(len(low), "?") not in note[first:second]:
+        problems.append("the note must say the $32.20 rate is on %d tabs" % len(low))
+    if "on %s" % words.get(len(high), "?") not in clause:
+        problems.append("the note must say the $32.52 rate is on %d tabs" % len(high))
+    return problems
+
+
 def check_saved_values_are_old(c):
     sc = c.meta["selfCheck"]["sheets"]
     assert "Polish!C37: 33 -> 32.2" in sc["Polish"]["laborRatesPutBack"]
     assert "Leveling!C44: 33.66 -> 32.52" in sc["Leveling"]["laborRatesPutBack"]
     assert sc["Polish"]["matchedAsSaved"] < sc["Polish"]["compared"] == sc["Polish"]["matched"]
+    groups = old_rate_tabs(c)
+    assert groups == {"32.2": ["Epoxy", "Polish", "Seal", "Seal (+Jnts)", "Epoxy blank"], "32.52": ["Leveling"] + GYP}, groups
     return {"polish rate": usd(33), "polish saved": "$32.20", "leveling rate": "$33.66", "leveling saved": "$32.52"}
 
 
@@ -414,6 +497,39 @@ def _falsified(ctx, rule_id):
 def test_each_check_refuses_evidence_that_says_otherwise(ctx, rule_id):
     with pytest.raises(AssertionError):
         CHECKS[rule_id](_falsified(ctx, rule_id))
+
+
+@pytest.mark.parametrize("edit", ["a head count", "only the first crew row"])
+def test_the_travel_check_refuses_evidence_that_person_days_is_something_else(ctx, edit):
+    """A48 on Leveling is person-days. Evidence in which it is the head count (6, with the charge worked out from 6), or
+    in which a second crew row does not add to it, has to be refused, each by the check that is about that."""
+    bad = Ctx(copy.deepcopy(ctx.g), ctx.meta, ctx.profiles)
+    steps = bad.probe("Leveling", "travel-person-days")["steps"]
+    if edit == "a head count":
+        got = steps[0]["got"]
+        got["A48"] = 6
+        got["D48"] = got["A48"] * got["B48"] * got["C48"]          # still adds up: only the meaning of A48 is wrong
+    else:
+        got = steps[1]["got"]
+        got["A48"] = got["A44"] * got["B44"]                        # row 1 only
+        got["D48"] = got["A48"] * got["B48"] * got["C48"]
+    with pytest.raises(AssertionError):
+        check_leveling_travel_hour(bad)
+
+
+def test_the_labor_rate_note_names_every_tab_the_saved_values_were_calculated_on(ctx, doc):
+    note = sections(doc)["The values saved in the template are from an older labor rate"]
+    assert old_rate_note_problems(note, old_rate_tabs(ctx)) == []
+
+
+def test_that_note_check_refuses_the_wording_that_named_three_of_the_five_tabs(ctx):
+    """The first version of the note named Polish, Epoxy and Seal at $32.20. Epoxy blank and Seal (+Jnts) were calculated
+    at it too (meta.json's self-check says so), and a check that cannot refuse that wording would not have found the slip."""
+    stale = ("Those answers were calculated with a labor rate of $32.20 (Polish, Epoxy, Seal) and $32.52 (Leveling and the "
+             "Gyp tabs). The cells now hold $33 and $33.66.")
+    problems = old_rate_note_problems(stale, old_rate_tabs(ctx))
+    assert problems and problems[0].startswith("the tabs at $32.20 are "), problems
+    assert old_rate_tabs(ctx)["32.2"] == ["Epoxy", "Polish", "Seal", "Seal (+Jnts)", "Epoxy blank"]
 
 
 def test_the_document_carries_every_rule_with_its_cells_and_its_figures(rules, ctx, doc):

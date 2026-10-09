@@ -34,6 +34,8 @@
     .system-block + .system-block { margin-top: 10px; padding-top: 10px; border-top: 1px dashed rgba(128,128,128,.3); }
     .system-tag { font-weight: 700; font-size: 12px; letter-spacing: .04em; text-transform: uppercase;
       color: var(--treadwell-red, #c0392b); margin: 2px 0 6px; }
+    /* A job type v2 cannot price yet: still readable, plainly not selectable. */
+    .radio.off { cursor: not-allowed; opacity: .6; }
     /* ── the BETA badge ──────────────────────────────────────────────────────────
        Kept as `.beta` rather than switched to styles.css's `.type-badge`, and that is a reuse
        decision rather than an oversight. `.beta` is the beta PAGES' own convention -- library.html
@@ -322,6 +324,17 @@
         </div>
       </fieldset>
 
+      <!-- JOB TYPE (Phase 9b). The four job types are drawn by js/polish-intake.js from js/work-types.js
+           (js/intake-scope.js jobTypesMarkup), so this box has no list of its own. Polish is the only one
+           Estimating Tool v2 prices today: the other three are shown and disabled with a plain note, and a
+           later phase enables one by setting `ready` in the vocabulary. Seal and Leveling are options on a
+           bid and are never listed here. Inside the form, like Audience, so the choice is a named input. -->
+      <fieldset id="job-type-box">
+        <legend>Job type</legend>
+        <div class="radio-row" id="job-type"></div>
+        <p class="hint" id="job-type-note" hidden></p>
+      </fieldset>
+
       <fieldset>
         <legend>Project Info</legend>
         <div class="row">
@@ -451,34 +464,20 @@
                all, so polish_sf stays the takeoff TOTAL that proposal-review and /api/generate read.
                The lock is in save(), not in the DOM, because TW.readForm reads readonly AND disabled
                inputs alike -- see the note on sfLocked().
-           The ids are for the lock; the names are the live form's own (polish_sf, polish_2_sf), so
-           both intakes write the same keys on the same draft.
+           The boxes are drawn by js/intake-scope.js (Phase 9b), the live intake's renderer, so the names are
+           the live form's own (polish_sf, polish_2_sf) and both intakes write the same keys on the same draft.
+           The lock finds them by name.
 
-           Still left off, because this page IS the polish estimator:
-             * system_thickness (a resin question; index.js hides it for polish),
-             * Epoxy SF and Cove LF (epoxy details), the gyp SF buckets, the work-type radios. -->
+           Still left off: system_thickness (a resin question; index.js hides it for polish) and the gypsum
+           box, which a later phase adds when it enables Gyp. The Epoxy SF and Cove LF boxes are drawn and
+           hidden for a polish job, like the live intake. -->
       <fieldset>
         <legend>Scope (quick)</legend>
         <p class="hint">Pre-fills the estimate. You can refine on the next screen.</p>
-        <div id="systems-container">
-          <div class="system-block">
-            <div class="system-tag">System 1</div>
-            <div class="row">
-              <label>Polish floor SF
-                <input type="number" id="polish-sf-1" name="polish_sf" min="0" step="1" value="0">
-              </label>
-            </div>
-          </div>
-          <div class="system-block">
-            <div class="system-tag">System 2 (optional)</div>
-            <div class="row">
-              <label>Polish floor SF
-                <input type="number" id="polish-sf-2" name="polish_2_sf" min="0" step="1" value="0">
-              </label>
-            </div>
-          </div>
-          <p class="hint" id="sf-locked-note" hidden></p>
-        </div>
+        <!-- Drawn by js/intake-scope.js, the live intake's own renderer: System 1 and System 2 blocks with
+             every quantity field, the ones the job type does not ask for hidden. -->
+        <div id="systems-container"></div>
+        <p class="hint" id="sf-locked-note" hidden></p>
         <label>Area &mdash; what the floor covers
           <input type="text" name="work_areas"
                  placeholder="Warehouse expansion and 4 offices"
@@ -565,10 +564,20 @@
 <script src="/shared.js"></script>
 <!-- bid-model reads its number helpers off window.TWExcelMath as it loads, so that goes first. -->
 <script src="/js/excel-math.js"></script>
+<!-- The one work-type vocabulary and job-conditions table. bid-model derives its condition cells and a new
+     bid's answers from it as it loads, polish-sandbox reads the cells a test copy keeps, and this page's
+     own script reads the questions it asks (var T = window.TWWorkTypes), so it goes ahead of all three. -->
+<script src="/js/work-types.js"></script>
+<script src="/js/intake-scope.js"></script>
 <!-- bid-model owns the model's shape and the condition keys the pricing chain reads. This
      page states the conditions, so it writes through the same module the calculator prices with —
      which is also what stamps the model's version, the flag the Projects page routes on. Loaded
-     before the page script because `var B = window.TWBidModel` runs at parse time. -->
+     before the page script because `var B = window.TWBidModel` runs at parse time. bid-model hands its chain
+     to the bid engine as it loads, and the engine reads the Markups formula reader and the profiles, so those
+     three go first. -->
+<script src="/js/markup-core.js"></script>
+<script src="/js/bid-profiles.js"></script>
+<script src="/js/bid-engine.js"></script>
 <script src="/js/bid-model.js"></script>
 <!-- The address / business lookup, shared with the live intake (js/index.js). Mounted by
      polish-intake.js as it boots, so it loads first. -->
@@ -576,6 +585,7 @@
 <!-- The sandbox, before the page's own script: polish-intake.js calls into it as it boots, and
      nothing may be rendered until it has settled which draft this page may write to. -->
 <script src="/js/polish-sandbox.js"></script>
+<script src="/js/county-picker.js"></script>
 <script src="/js/polish-intake.js"></script>
 <!-- After polish-intake.js: the panel calls window.TWPolishIntake.applyVerbal, which that file
      publishes as it boots. -->

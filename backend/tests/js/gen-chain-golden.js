@@ -534,6 +534,24 @@ function groupConditions(call) {
     { "Polish!B25": 0.5, "Epoxy!B4": "Maybe", "Other!A1": "kept", "Polish!E25": "No" }, undefined);
   call("cond/cells/unknownConditionKey", "conditionCellWrites", { taxable: true, bond: true, nonsense: true }, {}, undefined);
 
+  // PHASE 7b, added to the recipe on purpose (the vectors above are untouched, and so are their answers).
+  // A SPLIT draft: the estimate screen has given every sheet its own Taxable and Remodel answer, so the two
+  // tax conditions are written to the BASE sheet's own cell (Polish!B6, Polish!D6) and no other sheet's tax
+  // cell is touched. The fourth argument is `split`; every call above leaves it out, which is "not split".
+  call("cond/cells/split/allOff", "conditionCellWrites", ALL_OFF, {}, undefined, true);
+  call("cond/cells/split/allOn", "conditionCellWrites", ALL_ON, {}, undefined, true);
+  call("cond/cells/split/only-taxable", "conditionCellWrites", make(ALL_OFF, { taxable: true }), {}, undefined, true);
+  call("cond/cells/split/only-remodel_tax", "conditionCellWrites", make(ALL_OFF, { remodel_tax: true }), {}, undefined, true);
+  call("cond/cells/split/keepsOptionSheets", "conditionCellWrites", ALL_ON,
+    { "Epoxy!B6": "Yes", "Leveling!B6": "No", "Gyp (FR)!B8": "No", 'Gyp (USG 1-8")!B8': "No", "Epoxy!D6": "Yes" }, undefined, true);
+  call("cond/cells/split/false", "conditionCellWrites", ALL_ON, {}, undefined, false);
+  // Renovation, written from the first of its two cells that holds an answer (the answer survives a save)
+  call("cond/cells/reno/polishOnly", "conditionCellWrites", ALL_OFF, { "Polish!B10": "Reno" }, undefined);
+  call("cond/cells/reno/epoxyOnly", "conditionCellWrites", ALL_OFF, { "Epoxy!B10": "Reno" }, undefined);
+  call("cond/cells/reno/firstWins", "conditionCellWrites", ALL_ON, { "Epoxy!B10": "New", "Polish!B10": "Reno" }, undefined);
+  call("cond/cells/reno/firstIsSpaces", "conditionCellWrites", ALL_OFF, { "Epoxy!B10": "  ", "Polish!B10": "Reno" }, undefined);
+  call("cond/cells/reno/bothBlank", "conditionCellWrites", ALL_OFF, { "Epoxy!B10": "", "Polish!B10": "" }, undefined);
+
   // the library's own figures for the two priced lines (Dye, Joint Filler), written into the cells
   const SEED_DYE = { unit_price: 0.14, coverage: 1, waste_pct: 0, roundup: false, buy_qty: 1 };
   const SEED_JF = { unit_price: 500, coverage: 3500, waste_pct: 0, roundup: true, buy_qty: 1 };
@@ -579,7 +597,24 @@ function groupConditions(call) {
   call("cond/fromCells/allNo", "conditionsFromCells", ALL_ON, {
     "Epoxy!B4": "No", "Epoxy!D5": "No", "Epoxy!B6": "No", "Epoxy!D6": "No", "Polish!E25": "No",
     "Polish!E29": "No", "Polish!F29": "No" });
-  call("cond/fromCells/polishB4IsNotRead", "conditionsFromCells", { local: true }, { "Polish!B4": "No" });
+  // PHASE 7b RENAMED THIS VECTOR AND ITS ANSWER MOVED, ON PURPOSE. It was `polishB4IsNotRead`: the read-back
+  // looked at the first cell of a condition alone, so a Polish!B4 of "No" with Epoxy!B4 blank read as nothing.
+  // A condition with several cells is answered by the first cell that holds an answer now, so it reads "No".
+  // The first cell still wins when it holds one (`epoxyB4WinsOverPolishB4`).
+  call("cond/fromCells/polishB4IsReadWhenEpoxyB4IsBlank", "conditionsFromCells", { local: true }, { "Polish!B4": "No" });
+  call("cond/fromCells/epoxyB4WinsOverPolishB4", "conditionsFromCells", { local: false }, { "Epoxy!B4": "Yes", "Polish!B4": "No" });
+  call("cond/fromCells/taxable/secondCellOnly", "conditionsFromCells", { taxable: true }, { "Leveling!B6": "No" });
+  call("cond/fromCells/taxable/firstBlankThenGyp", "conditionsFromCells", { taxable: true }, { "Epoxy!B6": "", 'Gyp (USG 1-8")!B8': "No" });
+  call("cond/fromCells/taxable/firstIsSpaces", "conditionsFromCells", { taxable: true }, { "Epoxy!B6": "  ", "Leveling!B6": "Yes" });
+  // a split draft reads the two tax answers from the BASE sheet's own cell and from no other
+  call("cond/fromCells/split/baseCellWins", "conditionsFromCells", { taxable: true, remodel_tax: false },
+    { "Epoxy!B6": "Yes", "Polish!B6": "No", "Epoxy!D6": "No", "Polish!D6": "Yes" }, true);
+  call("cond/fromCells/split/epoxyCellIsNotRead", "conditionsFromCells", { taxable: true, remodel_tax: false },
+    { "Epoxy!B6": "No", "Epoxy!D6": "Yes", "Leveling!B6": "No" }, true);
+  call("cond/fromCells/split/false", "conditionsFromCells", { taxable: true, remodel_tax: false },
+    { "Epoxy!B6": "No", "Polish!B6": "Yes", "Epoxy!D6": "Yes", "Polish!D6": "No" }, false);
+  call("cond/fromCells/split/otherConditionsReadAsBefore", "conditionsFromCells", { local: true, dye: false },
+    { "Polish!B4": "No", "Polish!E25": "Yes", "Polish!B6": "No" }, true);
   call("cond/fromCells/undefinedBoth", "conditionsFromCells", undefined, undefined);
   call("cond/fromCells/nullCells", "conditionsFromCells", { taxable: true }, null);
   call("cond/fromCells/stringCells", "conditionsFromCells", { taxable: true }, "abc");

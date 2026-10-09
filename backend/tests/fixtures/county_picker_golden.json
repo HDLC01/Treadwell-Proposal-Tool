@@ -1,0 +1,1818 @@
+[
+ {
+  "offered": [
+   [
+    "Johnson County, MO",
+    "remodel labor exempt"
+   ],
+   [
+    "Johnson County, KS",
+    "remodel 7.975%"
+   ],
+   [
+    "Shawnee, KS",
+    "remodel 9.6%"
+   ]
+  ],
+  "picks": [
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0
+    },
+    "input": "Johnson County, MO",
+    "keys": {
+     "county": "Johnson County, MO",
+     "county_notes": "Warrensburg, Whiteman AFB.",
+     "county_remodel_rate": null,
+     "county_tax_rate": 0.06225
+    },
+    "note": "Johnson County, MO — Missouri remodel labor is generally exempt, so no remodel tax applies. Remodel tax is off, so it is not affecting the price either way.",
+    "row": "Johnson County, MO"
+   },
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0
+    },
+    "input": "Johnson County, KS",
+    "keys": {
+     "county": "Johnson County, KS",
+     "county_notes": "Overland Park, Olathe, Lenexa, Shawnee — high job density.",
+     "county_remodel_rate": 0.07975,
+     "county_tax_rate": 0.01475
+    },
+    "note": "Remodel tax 7.975% · Johnson County, KS — but the Remodel tax toggle is off, so it is not affecting the price yet.",
+    "row": "Johnson County, KS"
+   },
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0
+    },
+    "input": "Shawnee, KS",
+    "keys": {
+     "county": "Shawnee, KS",
+     "county_notes": "City of Shawnee (Johnson County) — not to be confused with Shawnee County (Topeka), below. Verified 2026-09-02 against KDOR (11110 Johnson Dr, 66203): 9.6%. Prior snapshot said 9.75% — 0.15 pt too high.",
+     "county_remodel_rate": 0.096,
+     "county_tax_rate": null
+    },
+    "note": "Remodel tax 9.6% · Shawnee, KS — but the Remodel tax toggle is off, so it is not affecting the price yet.",
+    "row": "Shawnee, KS"
+   }
+  ],
+  "query": "johnson",
+  "remodelOn": false
+ },
+ {
+  "offered": [
+   [
+    "Wyandotte County, KS",
+    "remodel 7.5%"
+   ]
+  ],
+  "picks": [
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0
+    },
+    "input": "Wyandotte County, KS",
+    "keys": {
+     "county": "Wyandotte County, KS",
+     "county_notes": "KCK, Bonner Springs.",
+     "county_remodel_rate": 0.075,
+     "county_tax_rate": 0.01
+    },
+    "note": "Remodel tax 7.5% · Wyandotte County, KS — but the Remodel tax toggle is off, so it is not affecting the price yet.",
+    "row": "Wyandotte County, KS"
+   }
+  ],
+  "query": "wyandotte",
+  "remodelOn": false
+ },
+ {
+  "offered": [
+   [
+    "Johnson County, MO",
+    "remodel labor exempt"
+   ]
+  ],
+  "picks": [
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0
+    },
+    "input": "Johnson County, MO",
+    "keys": {
+     "county": "Johnson County, MO",
+     "county_notes": "Warrensburg, Whiteman AFB.",
+     "county_remodel_rate": null,
+     "county_tax_rate": 0.06225
+    },
+    "note": "Johnson County, MO — Missouri remodel labor is generally exempt, so no remodel tax applies. Remodel tax is off, so it is not affecting the price either way.",
+    "row": "Johnson County, MO"
+   }
+  ],
+  "query": "warrensburg",
+  "remodelOn": false
+ },
+ {
+  "offered": [
+   [
+    "Johnson County, KS",
+    "remodel 7.975%"
+   ],
+   [
+    "Overland Park, KS",
+    "remodel 9.35%"
+   ]
+  ],
+  "picks": [
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0
+    },
+    "input": "Johnson County, KS",
+    "keys": {
+     "county": "Johnson County, KS",
+     "county_notes": "Overland Park, Olathe, Lenexa, Shawnee — high job density.",
+     "county_remodel_rate": 0.07975,
+     "county_tax_rate": 0.01475
+    },
+    "note": "Remodel tax 7.975% · Johnson County, KS — but the Remodel tax toggle is off, so it is not affecting the price yet.",
+    "row": "Johnson County, KS"
+   },
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0
+    },
+    "input": "Overland Park, KS",
+    "keys": {
+     "county": "Overland Park, KS",
+     "county_notes": "Verified 2026-09-02: 6.5% state + 1.475% county + 1.375% city. Up to 0.1135 inside a TDD/CID special district — verify the exact address for those.",
+     "county_remodel_rate": 0.0935,
+     "county_tax_rate": null
+    },
+    "note": "Remodel tax 9.35% · Overland Park, KS — but the Remodel tax toggle is off, so it is not affecting the price yet.",
+    "row": "Overland Park, KS"
+   }
+  ],
+  "query": "overland park",
+  "remodelOn": false
+ },
+ {
+  "offered": [
+   [
+    "Johnson County, KS",
+    "remodel 7.975%"
+   ],
+   [
+    "Shawnee County, KS",
+    "remodel 7.85%"
+   ],
+   [
+    "Shawnee, KS",
+    "remodel 9.6%"
+   ],
+   [
+    "Topeka, KS",
+    "remodel 9.35%"
+   ]
+  ],
+  "picks": [
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0
+    },
+    "input": "Johnson County, KS",
+    "keys": {
+     "county": "Johnson County, KS",
+     "county_notes": "Overland Park, Olathe, Lenexa, Shawnee — high job density.",
+     "county_remodel_rate": 0.07975,
+     "county_tax_rate": 0.01475
+    },
+    "note": "Remodel tax 7.975% · Johnson County, KS — but the Remodel tax toggle is off, so it is not affecting the price yet.",
+    "row": "Johnson County, KS"
+   },
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0
+    },
+    "input": "Shawnee County, KS",
+    "keys": {
+     "county": "Shawnee County, KS",
+     "county_notes": "Topeka.",
+     "county_remodel_rate": 0.0785,
+     "county_tax_rate": 0.0135
+    },
+    "note": "Remodel tax 7.85% · Shawnee County, KS — but the Remodel tax toggle is off, so it is not affecting the price yet.",
+    "row": "Shawnee County, KS"
+   },
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0
+    },
+    "input": "Shawnee, KS",
+    "keys": {
+     "county": "Shawnee, KS",
+     "county_notes": "City of Shawnee (Johnson County) — not to be confused with Shawnee County (Topeka), below. Verified 2026-09-02 against KDOR (11110 Johnson Dr, 66203): 9.6%. Prior snapshot said 9.75% — 0.15 pt too high.",
+     "county_remodel_rate": 0.096,
+     "county_tax_rate": null
+    },
+    "note": "Remodel tax 9.6% · Shawnee, KS — but the Remodel tax toggle is off, so it is not affecting the price yet.",
+    "row": "Shawnee, KS"
+   },
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0
+    },
+    "input": "Topeka, KS",
+    "keys": {
+     "county": "Topeka, KS",
+     "county_notes": "County seat of Shawnee County. Verified 2026-09-02 against KDOR (215 SE 7th St, 66603): 9.35%.",
+     "county_remodel_rate": 0.0935,
+     "county_tax_rate": null
+    },
+    "note": "Remodel tax 9.35% · Topeka, KS — but the Remodel tax toggle is off, so it is not affecting the price yet.",
+    "row": "Topeka, KS"
+   }
+  ],
+  "query": "shawnee",
+  "remodelOn": false
+ },
+ {
+  "offered": [
+   [
+    "Johnson County, KS",
+    "remodel 7.975%"
+   ],
+   [
+    "Lenexa, KS",
+    "remodel 9.35%"
+   ]
+  ],
+  "picks": [
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0
+    },
+    "input": "Johnson County, KS",
+    "keys": {
+     "county": "Johnson County, KS",
+     "county_notes": "Overland Park, Olathe, Lenexa, Shawnee — high job density.",
+     "county_remodel_rate": 0.07975,
+     "county_tax_rate": 0.01475
+    },
+    "note": "Remodel tax 7.975% · Johnson County, KS — but the Remodel tax toggle is off, so it is not affecting the price yet.",
+    "row": "Johnson County, KS"
+   },
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0
+    },
+    "input": "Lenexa, KS",
+    "keys": {
+     "county": "Lenexa, KS",
+     "county_notes": "Verified 2026-09-02 against KDOR (17101 W 87th St Pkwy, 66219): 9.35%. Prior snapshot said 9.475% — 0.125 pt too high.",
+     "county_remodel_rate": 0.0935,
+     "county_tax_rate": null
+    },
+    "note": "Remodel tax 9.35% · Lenexa, KS — but the Remodel tax toggle is off, so it is not affecting the price yet.",
+    "row": "Lenexa, KS"
+   }
+  ],
+  "query": "lenexa",
+  "remodelOn": false
+ },
+ {
+  "offered": [
+   [
+    "Kansas City, KS",
+    "remodel 9.125%"
+   ]
+  ],
+  "picks": [
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0
+    },
+    "input": "Kansas City, KS",
+    "keys": {
+     "county": "Kansas City, KS",
+     "county_notes": "Verified 2026-09-02 against KDOR (701 N 7th St, 66101): 9.125%. Prior snapshot said 9.75% — 0.625 pt too high, the worst of the batch. Village West / Legends addresses sit in a CID+TDD and run 10.725% — verify the exact address there.",
+     "county_remodel_rate": 0.09125,
+     "county_tax_rate": null
+    },
+    "note": "Remodel tax 9.125% · Kansas City, KS — but the Remodel tax toggle is off, so it is not affecting the price yet.",
+    "row": "Kansas City, KS"
+   }
+  ],
+  "query": "kansas city",
+  "remodelOn": false
+ },
+ {
+  "offered": [
+   [
+    "Douglas County, KS",
+    "remodel 7.75%"
+   ]
+  ],
+  "picks": [
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0
+    },
+    "input": "Douglas County, KS",
+    "keys": {
+     "county": "Douglas County, KS",
+     "county_notes": "Lawrence, KU.",
+     "county_remodel_rate": 0.0775,
+     "county_tax_rate": 0.0125
+    },
+    "note": "Remodel tax 7.75% · Douglas County, KS — but the Remodel tax toggle is off, so it is not affecting the price yet.",
+    "row": "Douglas County, KS"
+   }
+  ],
+  "query": "douglas",
+  "remodelOn": false
+ },
+ {
+  "offered": [
+   [
+    "Sedgwick County, KS",
+    "remodel 7.5%"
+   ]
+  ],
+  "picks": [
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0
+    },
+    "input": "Sedgwick County, KS",
+    "keys": {
+     "county": "Sedgwick County, KS",
+     "county_notes": "Wichita currently levies no general city sales tax, so this county-only rate is also correct for a Wichita address specifically — NOT for other Sedgwick County cities, which may have their own add-on.",
+     "county_remodel_rate": 0.075,
+     "county_tax_rate": 0.01
+    },
+    "note": "Remodel tax 7.5% · Sedgwick County, KS — but the Remodel tax toggle is off, so it is not affecting the price yet.",
+    "row": "Sedgwick County, KS"
+   }
+  ],
+  "query": "sedgwick",
+  "remodelOn": false
+ },
+ {
+  "offered": [
+   [
+    "Jackson County, MO",
+    "remodel labor exempt"
+   ]
+  ],
+  "picks": [
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0
+    },
+    "input": "Jackson County, MO",
+    "keys": {
+     "county": "Jackson County, MO",
+     "county_notes": "KC metro core. Remodels for taxable-orgs: taxable. Gov/school: exempt.",
+     "county_remodel_rate": null,
+     "county_tax_rate": 0.06225
+    },
+    "note": "Jackson County, MO — Missouri remodel labor is generally exempt, so no remodel tax applies. Remodel tax is off, so it is not affecting the price either way.",
+    "row": "Jackson County, MO"
+   }
+  ],
+  "query": "jackson",
+  "remodelOn": false
+ },
+ {
+  "offered": [
+   [
+    "Jackson County, MO",
+    "remodel labor exempt"
+   ],
+   [
+    "Clay County, MO",
+    "remodel labor exempt"
+   ],
+   [
+    "Platte County, MO",
+    "remodel labor exempt"
+   ],
+   [
+    "Cass County, MO",
+    "remodel labor exempt"
+   ],
+   [
+    "Buchanan County, MO",
+    "remodel labor exempt"
+   ],
+   [
+    "Ray County, MO",
+    "remodel labor exempt"
+   ],
+   [
+    "Lafayette County, MO",
+    "remodel labor exempt"
+   ],
+   [
+    "Henry County, MO",
+    "remodel labor exempt"
+   ],
+   [
+    "Bates County, MO",
+    "remodel labor exempt"
+   ],
+   [
+    "Caldwell County, MO",
+    "remodel labor exempt"
+   ],
+   [
+    "Clinton County, MO",
+    "remodel labor exempt"
+   ],
+   [
+    "DeKalb County, MO",
+    "remodel labor exempt"
+   ]
+  ],
+  "picks": [
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0
+    },
+    "input": "Jackson County, MO",
+    "keys": {
+     "county": "Jackson County, MO",
+     "county_notes": "KC metro core. Remodels for taxable-orgs: taxable. Gov/school: exempt.",
+     "county_remodel_rate": null,
+     "county_tax_rate": 0.06225
+    },
+    "note": "Jackson County, MO — Missouri remodel labor is generally exempt, so no remodel tax applies. Remodel tax is off, so it is not affecting the price either way.",
+    "row": "Jackson County, MO"
+   },
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0
+    },
+    "input": "Clay County, MO",
+    "keys": {
+     "county": "Clay County, MO",
+     "county_notes": "Liberty, Gladstone. Standard MO contractor rule.",
+     "county_remodel_rate": null,
+     "county_tax_rate": 0.06225
+    },
+    "note": "Clay County, MO — Missouri remodel labor is generally exempt, so no remodel tax applies. Remodel tax is off, so it is not affecting the price either way.",
+    "row": "Clay County, MO"
+   },
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0
+    },
+    "input": "Platte County, MO",
+    "keys": {
+     "county": "Platte County, MO",
+     "county_notes": "KCI, Parkville, Riverside.",
+     "county_remodel_rate": null,
+     "county_tax_rate": 0.06225
+    },
+    "note": "Platte County, MO — Missouri remodel labor is generally exempt, so no remodel tax applies. Remodel tax is off, so it is not affecting the price either way.",
+    "row": "Platte County, MO"
+   },
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0
+    },
+    "input": "Cass County, MO",
+    "keys": {
+     "county": "Cass County, MO",
+     "county_notes": "Belton, Raymore, Harrisonville.",
+     "county_remodel_rate": null,
+     "county_tax_rate": 0.06225
+    },
+    "note": "Cass County, MO — Missouri remodel labor is generally exempt, so no remodel tax applies. Remodel tax is off, so it is not affecting the price either way.",
+    "row": "Cass County, MO"
+   },
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0
+    },
+    "input": "Buchanan County, MO",
+    "keys": {
+     "county": "Buchanan County, MO",
+     "county_notes": "St. Joseph.",
+     "county_remodel_rate": null,
+     "county_tax_rate": 0.06225
+    },
+    "note": "Buchanan County, MO — Missouri remodel labor is generally exempt, so no remodel tax applies. Remodel tax is off, so it is not affecting the price either way.",
+    "row": "Buchanan County, MO"
+   },
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0
+    },
+    "input": "Ray County, MO",
+    "keys": {
+     "county": "Ray County, MO",
+     "county_notes": "Richmond.",
+     "county_remodel_rate": null,
+     "county_tax_rate": 0.06225
+    },
+    "note": "Ray County, MO — Missouri remodel labor is generally exempt, so no remodel tax applies. Remodel tax is off, so it is not affecting the price either way.",
+    "row": "Ray County, MO"
+   },
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0
+    },
+    "input": "Lafayette County, MO",
+    "keys": {
+     "county": "Lafayette County, MO",
+     "county_notes": "Higginsville, Lexington.",
+     "county_remodel_rate": null,
+     "county_tax_rate": 0.06225
+    },
+    "note": "Lafayette County, MO — Missouri remodel labor is generally exempt, so no remodel tax applies. Remodel tax is off, so it is not affecting the price either way.",
+    "row": "Lafayette County, MO"
+   },
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0
+    },
+    "input": "Henry County, MO",
+    "keys": {
+     "county": "Henry County, MO",
+     "county_notes": "Clinton.",
+     "county_remodel_rate": null,
+     "county_tax_rate": 0.06225
+    },
+    "note": "Henry County, MO — Missouri remodel labor is generally exempt, so no remodel tax applies. Remodel tax is off, so it is not affecting the price either way.",
+    "row": "Henry County, MO"
+   },
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0
+    },
+    "input": "Bates County, MO",
+    "keys": {
+     "county": "Bates County, MO",
+     "county_notes": "Butler.",
+     "county_remodel_rate": null,
+     "county_tax_rate": 0.06225
+    },
+    "note": "Bates County, MO — Missouri remodel labor is generally exempt, so no remodel tax applies. Remodel tax is off, so it is not affecting the price either way.",
+    "row": "Bates County, MO"
+   },
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0
+    },
+    "input": "Caldwell County, MO",
+    "keys": {
+     "county": "Caldwell County, MO",
+     "county_notes": "",
+     "county_remodel_rate": null,
+     "county_tax_rate": 0.06225
+    },
+    "note": "Caldwell County, MO — Missouri remodel labor is generally exempt, so no remodel tax applies. Remodel tax is off, so it is not affecting the price either way.",
+    "row": "Caldwell County, MO"
+   },
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0
+    },
+    "input": "Clinton County, MO",
+    "keys": {
+     "county": "Clinton County, MO",
+     "county_notes": "",
+     "county_remodel_rate": null,
+     "county_tax_rate": 0.06225
+    },
+    "note": "Clinton County, MO — Missouri remodel labor is generally exempt, so no remodel tax applies. Remodel tax is off, so it is not affecting the price either way.",
+    "row": "Clinton County, MO"
+   },
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0
+    },
+    "input": "DeKalb County, MO",
+    "keys": {
+     "county": "DeKalb County, MO",
+     "county_notes": "",
+     "county_remodel_rate": null,
+     "county_tax_rate": 0.06225
+    },
+    "note": "DeKalb County, MO — Missouri remodel labor is generally exempt, so no remodel tax applies. Remodel tax is off, so it is not affecting the price either way.",
+    "row": "DeKalb County, MO"
+   }
+  ],
+  "query": "county",
+  "remodelOn": false
+ },
+ {
+  "offered": [],
+  "picks": [],
+  "query": "zzzz",
+  "remodelOn": false
+ },
+ {
+  "offered": [],
+  "picks": [],
+  "query": "",
+  "remodelOn": false
+ },
+ {
+  "offered": [
+   [
+    "Johnson County, KS",
+    "remodel 7.975%"
+   ],
+   [
+    "Olathe, KS",
+    "remodel 9.475%"
+   ]
+  ],
+  "picks": [
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0
+    },
+    "input": "Johnson County, KS",
+    "keys": {
+     "county": "Johnson County, KS",
+     "county_notes": "Overland Park, Olathe, Lenexa, Shawnee — high job density.",
+     "county_remodel_rate": 0.07975,
+     "county_tax_rate": 0.01475
+    },
+    "note": "Remodel tax 7.975% · Johnson County, KS — but the Remodel tax toggle is off, so it is not affecting the price yet.",
+    "row": "Johnson County, KS"
+   },
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0
+    },
+    "input": "Olathe, KS",
+    "keys": {
+     "county": "Olathe, KS",
+     "county_notes": "Verified 2026-09-02 against KDOR (100 E Santa Fe St, 66061): 9.475%.",
+     "county_remodel_rate": 0.09475,
+     "county_tax_rate": null
+    },
+    "note": "Remodel tax 9.475% · Olathe, KS — but the Remodel tax toggle is off, so it is not affecting the price yet.",
+    "row": "Olathe, KS"
+   }
+  ],
+  "query": "olathe",
+  "remodelOn": false
+ },
+ {
+  "offered": [
+   [
+    "Leawood, KS",
+    "remodel 9.1%"
+   ]
+  ],
+  "picks": [
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0
+    },
+    "input": "Leawood, KS",
+    "keys": {
+     "county": "Leawood, KS",
+     "county_notes": "Verified 2026-09-02 against KDOR (4800 Town Center Dr, 66211): 9.1%. Prior snapshot said 9.5% — 0.4 pt too high.",
+     "county_remodel_rate": 0.091,
+     "county_tax_rate": null
+    },
+    "note": "Remodel tax 9.1% · Leawood, KS — but the Remodel tax toggle is off, so it is not affecting the price yet.",
+    "row": "Leawood, KS"
+   }
+  ],
+  "query": "leawood",
+  "remodelOn": false
+ },
+ {
+  "offered": [
+   [
+    "Shawnee County, KS",
+    "remodel 7.85%"
+   ],
+   [
+    "Shawnee, KS",
+    "remodel 9.6%"
+   ],
+   [
+    "Topeka, KS",
+    "remodel 9.35%"
+   ]
+  ],
+  "picks": [
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0
+    },
+    "input": "Shawnee County, KS",
+    "keys": {
+     "county": "Shawnee County, KS",
+     "county_notes": "Topeka.",
+     "county_remodel_rate": 0.0785,
+     "county_tax_rate": 0.0135
+    },
+    "note": "Remodel tax 7.85% · Shawnee County, KS — but the Remodel tax toggle is off, so it is not affecting the price yet.",
+    "row": "Shawnee County, KS"
+   },
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0
+    },
+    "input": "Shawnee, KS",
+    "keys": {
+     "county": "Shawnee, KS",
+     "county_notes": "City of Shawnee (Johnson County) — not to be confused with Shawnee County (Topeka), below. Verified 2026-09-02 against KDOR (11110 Johnson Dr, 66203): 9.6%. Prior snapshot said 9.75% — 0.15 pt too high.",
+     "county_remodel_rate": 0.096,
+     "county_tax_rate": null
+    },
+    "note": "Remodel tax 9.6% · Shawnee, KS — but the Remodel tax toggle is off, so it is not affecting the price yet.",
+    "row": "Shawnee, KS"
+   },
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0
+    },
+    "input": "Topeka, KS",
+    "keys": {
+     "county": "Topeka, KS",
+     "county_notes": "County seat of Shawnee County. Verified 2026-09-02 against KDOR (215 SE 7th St, 66603): 9.35%.",
+     "county_remodel_rate": 0.0935,
+     "county_tax_rate": null
+    },
+    "note": "Remodel tax 9.35% · Topeka, KS — but the Remodel tax toggle is off, so it is not affecting the price yet.",
+    "row": "Topeka, KS"
+   }
+  ],
+  "query": "topeka",
+  "remodelOn": false
+ },
+ {
+  "offered": [
+   [
+    "Prairie Village, KS",
+    "remodel 8.975%"
+   ]
+  ],
+  "picks": [
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0
+    },
+    "input": "Prairie Village, KS",
+    "keys": {
+     "county": "Prairie Village, KS",
+     "county_notes": "Verified 2026-09-02 against KDOR (7700 Mission Rd, 66208): 8.975%. Prior snapshot said 9.35% — 0.375 pt too high.",
+     "county_remodel_rate": 0.08975,
+     "county_tax_rate": null
+    },
+    "note": "Remodel tax 8.975% · Prairie Village, KS — but the Remodel tax toggle is off, so it is not affecting the price yet.",
+    "row": "Prairie Village, KS"
+   }
+  ],
+  "query": "prairie",
+  "remodelOn": false
+ },
+ {
+  "offered": [
+   [
+    "Miami County, KS",
+    "remodel 8%"
+   ],
+   [
+    "Paola, KS",
+    "remodel 9.25%"
+   ]
+  ],
+  "picks": [
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0
+    },
+    "input": "Miami County, KS",
+    "keys": {
+     "county": "Miami County, KS",
+     "county_notes": "Paola.",
+     "county_remodel_rate": 0.08,
+     "county_tax_rate": 0.015
+    },
+    "note": "Remodel tax 8% · Miami County, KS — but the Remodel tax toggle is off, so it is not affecting the price yet.",
+    "row": "Miami County, KS"
+   },
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0
+    },
+    "input": "Paola, KS",
+    "keys": {
+     "county": "Paola, KS",
+     "county_notes": "Verified 2026-09-02 against the City of Paola's own published rate: 6.5% state + 1.5% county + 1.25% city. The Paola Crossings special district runs 0.105 — verify the exact address. (Some third-party aggregators show 0.0975/0.105 as the city-wide rate; the city's own figure was treated as authoritative.)",
+     "county_remodel_rate": 0.0925,
+     "county_tax_rate": null
+    },
+    "note": "Remodel tax 9.25% · Paola, KS — but the Remodel tax toggle is off, so it is not affecting the price yet.",
+    "row": "Paola, KS"
+   }
+  ],
+  "query": "paola",
+  "remodelOn": false
+ },
+ {
+  "offered": [
+   [
+    "Riley County, KS",
+    "remodel 7.2%"
+   ],
+   [
+    "Manhattan, KS",
+    "remodel 9.15%"
+   ]
+  ],
+  "picks": [
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0
+    },
+    "input": "Riley County, KS",
+    "keys": {
+     "county": "Riley County, KS",
+     "county_notes": "Manhattan, Ft. Riley.",
+     "county_remodel_rate": 0.072,
+     "county_tax_rate": 0.007
+    },
+    "note": "Remodel tax 7.2% · Riley County, KS — but the Remodel tax toggle is off, so it is not affecting the price yet.",
+    "row": "Riley County, KS"
+   },
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0
+    },
+    "input": "Manhattan, KS",
+    "keys": {
+     "county": "Manhattan, KS",
+     "county_notes": "Verified 2026-09-02: 6.5% state + 0.7% county + 1.95% city (ZIP 66505 baseline). ZIP 66503 adds a 0.5% special district — 0.0965 there. Verify the exact address.",
+     "county_remodel_rate": 0.0915,
+     "county_tax_rate": null
+    },
+    "note": "Remodel tax 9.15% · Manhattan, KS — but the Remodel tax toggle is off, so it is not affecting the price yet.",
+    "row": "Manhattan, KS"
+   }
+  ],
+  "query": "manhattan",
+  "remodelOn": false
+ },
+ {
+  "offered": [
+   [
+    "Johnson County, MO",
+    "remodel labor exempt"
+   ],
+   [
+    "Johnson County, KS",
+    "remodel 7.975%"
+   ],
+   [
+    "Shawnee, KS",
+    "remodel 9.6%"
+   ]
+  ],
+  "picks": [
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0.065
+    },
+    "input": "Johnson County, MO",
+    "keys": {
+     "county": "Johnson County, MO",
+     "county_notes": "Warrensburg, Whiteman AFB.",
+     "county_remodel_rate": null,
+     "county_tax_rate": 0.06225
+    },
+    "note": "Johnson County, MO — Missouri remodel labor is generally exempt, so no remodel tax applies. Remodel tax is on anyway: turn it off for a Missouri job unless you know this labor is taxable.",
+    "row": "Johnson County, MO"
+   },
+   {
+    "enginePct": {
+     "asWired": 0.07975,
+     "raw": 0.07975
+    },
+    "input": "Johnson County, KS",
+    "keys": {
+     "county": "Johnson County, KS",
+     "county_notes": "Overland Park, Olathe, Lenexa, Shawnee — high job density.",
+     "county_remodel_rate": 0.07975,
+     "county_tax_rate": 0.01475
+    },
+    "note": "Remodel tax 7.975% · Johnson County, KS, on the labor and the markups. Never on materials.",
+    "row": "Johnson County, KS"
+   },
+   {
+    "enginePct": {
+     "asWired": 0.096,
+     "raw": 0.096
+    },
+    "input": "Shawnee, KS",
+    "keys": {
+     "county": "Shawnee, KS",
+     "county_notes": "City of Shawnee (Johnson County) — not to be confused with Shawnee County (Topeka), below. Verified 2026-09-02 against KDOR (11110 Johnson Dr, 66203): 9.6%. Prior snapshot said 9.75% — 0.15 pt too high.",
+     "county_remodel_rate": 0.096,
+     "county_tax_rate": null
+    },
+    "note": "Remodel tax 9.6% · Shawnee, KS, on the labor and the markups. Never on materials.",
+    "row": "Shawnee, KS"
+   }
+  ],
+  "query": "johnson",
+  "remodelOn": true
+ },
+ {
+  "offered": [
+   [
+    "Wyandotte County, KS",
+    "remodel 7.5%"
+   ]
+  ],
+  "picks": [
+   {
+    "enginePct": {
+     "asWired": 0.075,
+     "raw": 0.075
+    },
+    "input": "Wyandotte County, KS",
+    "keys": {
+     "county": "Wyandotte County, KS",
+     "county_notes": "KCK, Bonner Springs.",
+     "county_remodel_rate": 0.075,
+     "county_tax_rate": 0.01
+    },
+    "note": "Remodel tax 7.5% · Wyandotte County, KS, on the labor and the markups. Never on materials.",
+    "row": "Wyandotte County, KS"
+   }
+  ],
+  "query": "wyandotte",
+  "remodelOn": true
+ },
+ {
+  "offered": [
+   [
+    "Johnson County, MO",
+    "remodel labor exempt"
+   ]
+  ],
+  "picks": [
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0.065
+    },
+    "input": "Johnson County, MO",
+    "keys": {
+     "county": "Johnson County, MO",
+     "county_notes": "Warrensburg, Whiteman AFB.",
+     "county_remodel_rate": null,
+     "county_tax_rate": 0.06225
+    },
+    "note": "Johnson County, MO — Missouri remodel labor is generally exempt, so no remodel tax applies. Remodel tax is on anyway: turn it off for a Missouri job unless you know this labor is taxable.",
+    "row": "Johnson County, MO"
+   }
+  ],
+  "query": "warrensburg",
+  "remodelOn": true
+ },
+ {
+  "offered": [
+   [
+    "Johnson County, KS",
+    "remodel 7.975%"
+   ],
+   [
+    "Overland Park, KS",
+    "remodel 9.35%"
+   ]
+  ],
+  "picks": [
+   {
+    "enginePct": {
+     "asWired": 0.07975,
+     "raw": 0.07975
+    },
+    "input": "Johnson County, KS",
+    "keys": {
+     "county": "Johnson County, KS",
+     "county_notes": "Overland Park, Olathe, Lenexa, Shawnee — high job density.",
+     "county_remodel_rate": 0.07975,
+     "county_tax_rate": 0.01475
+    },
+    "note": "Remodel tax 7.975% · Johnson County, KS, on the labor and the markups. Never on materials.",
+    "row": "Johnson County, KS"
+   },
+   {
+    "enginePct": {
+     "asWired": 0.0935,
+     "raw": 0.0935
+    },
+    "input": "Overland Park, KS",
+    "keys": {
+     "county": "Overland Park, KS",
+     "county_notes": "Verified 2026-09-02: 6.5% state + 1.475% county + 1.375% city. Up to 0.1135 inside a TDD/CID special district — verify the exact address for those.",
+     "county_remodel_rate": 0.0935,
+     "county_tax_rate": null
+    },
+    "note": "Remodel tax 9.35% · Overland Park, KS, on the labor and the markups. Never on materials.",
+    "row": "Overland Park, KS"
+   }
+  ],
+  "query": "overland park",
+  "remodelOn": true
+ },
+ {
+  "offered": [
+   [
+    "Johnson County, KS",
+    "remodel 7.975%"
+   ],
+   [
+    "Shawnee County, KS",
+    "remodel 7.85%"
+   ],
+   [
+    "Shawnee, KS",
+    "remodel 9.6%"
+   ],
+   [
+    "Topeka, KS",
+    "remodel 9.35%"
+   ]
+  ],
+  "picks": [
+   {
+    "enginePct": {
+     "asWired": 0.07975,
+     "raw": 0.07975
+    },
+    "input": "Johnson County, KS",
+    "keys": {
+     "county": "Johnson County, KS",
+     "county_notes": "Overland Park, Olathe, Lenexa, Shawnee — high job density.",
+     "county_remodel_rate": 0.07975,
+     "county_tax_rate": 0.01475
+    },
+    "note": "Remodel tax 7.975% · Johnson County, KS, on the labor and the markups. Never on materials.",
+    "row": "Johnson County, KS"
+   },
+   {
+    "enginePct": {
+     "asWired": 0.0785,
+     "raw": 0.0785
+    },
+    "input": "Shawnee County, KS",
+    "keys": {
+     "county": "Shawnee County, KS",
+     "county_notes": "Topeka.",
+     "county_remodel_rate": 0.0785,
+     "county_tax_rate": 0.0135
+    },
+    "note": "Remodel tax 7.85% · Shawnee County, KS, on the labor and the markups. Never on materials.",
+    "row": "Shawnee County, KS"
+   },
+   {
+    "enginePct": {
+     "asWired": 0.096,
+     "raw": 0.096
+    },
+    "input": "Shawnee, KS",
+    "keys": {
+     "county": "Shawnee, KS",
+     "county_notes": "City of Shawnee (Johnson County) — not to be confused with Shawnee County (Topeka), below. Verified 2026-09-02 against KDOR (11110 Johnson Dr, 66203): 9.6%. Prior snapshot said 9.75% — 0.15 pt too high.",
+     "county_remodel_rate": 0.096,
+     "county_tax_rate": null
+    },
+    "note": "Remodel tax 9.6% · Shawnee, KS, on the labor and the markups. Never on materials.",
+    "row": "Shawnee, KS"
+   },
+   {
+    "enginePct": {
+     "asWired": 0.0935,
+     "raw": 0.0935
+    },
+    "input": "Topeka, KS",
+    "keys": {
+     "county": "Topeka, KS",
+     "county_notes": "County seat of Shawnee County. Verified 2026-09-02 against KDOR (215 SE 7th St, 66603): 9.35%.",
+     "county_remodel_rate": 0.0935,
+     "county_tax_rate": null
+    },
+    "note": "Remodel tax 9.35% · Topeka, KS, on the labor and the markups. Never on materials.",
+    "row": "Topeka, KS"
+   }
+  ],
+  "query": "shawnee",
+  "remodelOn": true
+ },
+ {
+  "offered": [
+   [
+    "Johnson County, KS",
+    "remodel 7.975%"
+   ],
+   [
+    "Lenexa, KS",
+    "remodel 9.35%"
+   ]
+  ],
+  "picks": [
+   {
+    "enginePct": {
+     "asWired": 0.07975,
+     "raw": 0.07975
+    },
+    "input": "Johnson County, KS",
+    "keys": {
+     "county": "Johnson County, KS",
+     "county_notes": "Overland Park, Olathe, Lenexa, Shawnee — high job density.",
+     "county_remodel_rate": 0.07975,
+     "county_tax_rate": 0.01475
+    },
+    "note": "Remodel tax 7.975% · Johnson County, KS, on the labor and the markups. Never on materials.",
+    "row": "Johnson County, KS"
+   },
+   {
+    "enginePct": {
+     "asWired": 0.0935,
+     "raw": 0.0935
+    },
+    "input": "Lenexa, KS",
+    "keys": {
+     "county": "Lenexa, KS",
+     "county_notes": "Verified 2026-09-02 against KDOR (17101 W 87th St Pkwy, 66219): 9.35%. Prior snapshot said 9.475% — 0.125 pt too high.",
+     "county_remodel_rate": 0.0935,
+     "county_tax_rate": null
+    },
+    "note": "Remodel tax 9.35% · Lenexa, KS, on the labor and the markups. Never on materials.",
+    "row": "Lenexa, KS"
+   }
+  ],
+  "query": "lenexa",
+  "remodelOn": true
+ },
+ {
+  "offered": [
+   [
+    "Kansas City, KS",
+    "remodel 9.125%"
+   ]
+  ],
+  "picks": [
+   {
+    "enginePct": {
+     "asWired": 0.09125,
+     "raw": 0.09125
+    },
+    "input": "Kansas City, KS",
+    "keys": {
+     "county": "Kansas City, KS",
+     "county_notes": "Verified 2026-09-02 against KDOR (701 N 7th St, 66101): 9.125%. Prior snapshot said 9.75% — 0.625 pt too high, the worst of the batch. Village West / Legends addresses sit in a CID+TDD and run 10.725% — verify the exact address there.",
+     "county_remodel_rate": 0.09125,
+     "county_tax_rate": null
+    },
+    "note": "Remodel tax 9.125% · Kansas City, KS, on the labor and the markups. Never on materials.",
+    "row": "Kansas City, KS"
+   }
+  ],
+  "query": "kansas city",
+  "remodelOn": true
+ },
+ {
+  "offered": [
+   [
+    "Douglas County, KS",
+    "remodel 7.75%"
+   ]
+  ],
+  "picks": [
+   {
+    "enginePct": {
+     "asWired": 0.0775,
+     "raw": 0.0775
+    },
+    "input": "Douglas County, KS",
+    "keys": {
+     "county": "Douglas County, KS",
+     "county_notes": "Lawrence, KU.",
+     "county_remodel_rate": 0.0775,
+     "county_tax_rate": 0.0125
+    },
+    "note": "Remodel tax 7.75% · Douglas County, KS, on the labor and the markups. Never on materials.",
+    "row": "Douglas County, KS"
+   }
+  ],
+  "query": "douglas",
+  "remodelOn": true
+ },
+ {
+  "offered": [
+   [
+    "Sedgwick County, KS",
+    "remodel 7.5%"
+   ]
+  ],
+  "picks": [
+   {
+    "enginePct": {
+     "asWired": 0.075,
+     "raw": 0.075
+    },
+    "input": "Sedgwick County, KS",
+    "keys": {
+     "county": "Sedgwick County, KS",
+     "county_notes": "Wichita currently levies no general city sales tax, so this county-only rate is also correct for a Wichita address specifically — NOT for other Sedgwick County cities, which may have their own add-on.",
+     "county_remodel_rate": 0.075,
+     "county_tax_rate": 0.01
+    },
+    "note": "Remodel tax 7.5% · Sedgwick County, KS, on the labor and the markups. Never on materials.",
+    "row": "Sedgwick County, KS"
+   }
+  ],
+  "query": "sedgwick",
+  "remodelOn": true
+ },
+ {
+  "offered": [
+   [
+    "Jackson County, MO",
+    "remodel labor exempt"
+   ]
+  ],
+  "picks": [
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0.065
+    },
+    "input": "Jackson County, MO",
+    "keys": {
+     "county": "Jackson County, MO",
+     "county_notes": "KC metro core. Remodels for taxable-orgs: taxable. Gov/school: exempt.",
+     "county_remodel_rate": null,
+     "county_tax_rate": 0.06225
+    },
+    "note": "Jackson County, MO — Missouri remodel labor is generally exempt, so no remodel tax applies. Remodel tax is on anyway: turn it off for a Missouri job unless you know this labor is taxable.",
+    "row": "Jackson County, MO"
+   }
+  ],
+  "query": "jackson",
+  "remodelOn": true
+ },
+ {
+  "offered": [
+   [
+    "Jackson County, MO",
+    "remodel labor exempt"
+   ],
+   [
+    "Clay County, MO",
+    "remodel labor exempt"
+   ],
+   [
+    "Platte County, MO",
+    "remodel labor exempt"
+   ],
+   [
+    "Cass County, MO",
+    "remodel labor exempt"
+   ],
+   [
+    "Buchanan County, MO",
+    "remodel labor exempt"
+   ],
+   [
+    "Ray County, MO",
+    "remodel labor exempt"
+   ],
+   [
+    "Lafayette County, MO",
+    "remodel labor exempt"
+   ],
+   [
+    "Henry County, MO",
+    "remodel labor exempt"
+   ],
+   [
+    "Bates County, MO",
+    "remodel labor exempt"
+   ],
+   [
+    "Caldwell County, MO",
+    "remodel labor exempt"
+   ],
+   [
+    "Clinton County, MO",
+    "remodel labor exempt"
+   ],
+   [
+    "DeKalb County, MO",
+    "remodel labor exempt"
+   ]
+  ],
+  "picks": [
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0.065
+    },
+    "input": "Jackson County, MO",
+    "keys": {
+     "county": "Jackson County, MO",
+     "county_notes": "KC metro core. Remodels for taxable-orgs: taxable. Gov/school: exempt.",
+     "county_remodel_rate": null,
+     "county_tax_rate": 0.06225
+    },
+    "note": "Jackson County, MO — Missouri remodel labor is generally exempt, so no remodel tax applies. Remodel tax is on anyway: turn it off for a Missouri job unless you know this labor is taxable.",
+    "row": "Jackson County, MO"
+   },
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0.065
+    },
+    "input": "Clay County, MO",
+    "keys": {
+     "county": "Clay County, MO",
+     "county_notes": "Liberty, Gladstone. Standard MO contractor rule.",
+     "county_remodel_rate": null,
+     "county_tax_rate": 0.06225
+    },
+    "note": "Clay County, MO — Missouri remodel labor is generally exempt, so no remodel tax applies. Remodel tax is on anyway: turn it off for a Missouri job unless you know this labor is taxable.",
+    "row": "Clay County, MO"
+   },
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0.065
+    },
+    "input": "Platte County, MO",
+    "keys": {
+     "county": "Platte County, MO",
+     "county_notes": "KCI, Parkville, Riverside.",
+     "county_remodel_rate": null,
+     "county_tax_rate": 0.06225
+    },
+    "note": "Platte County, MO — Missouri remodel labor is generally exempt, so no remodel tax applies. Remodel tax is on anyway: turn it off for a Missouri job unless you know this labor is taxable.",
+    "row": "Platte County, MO"
+   },
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0.065
+    },
+    "input": "Cass County, MO",
+    "keys": {
+     "county": "Cass County, MO",
+     "county_notes": "Belton, Raymore, Harrisonville.",
+     "county_remodel_rate": null,
+     "county_tax_rate": 0.06225
+    },
+    "note": "Cass County, MO — Missouri remodel labor is generally exempt, so no remodel tax applies. Remodel tax is on anyway: turn it off for a Missouri job unless you know this labor is taxable.",
+    "row": "Cass County, MO"
+   },
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0.065
+    },
+    "input": "Buchanan County, MO",
+    "keys": {
+     "county": "Buchanan County, MO",
+     "county_notes": "St. Joseph.",
+     "county_remodel_rate": null,
+     "county_tax_rate": 0.06225
+    },
+    "note": "Buchanan County, MO — Missouri remodel labor is generally exempt, so no remodel tax applies. Remodel tax is on anyway: turn it off for a Missouri job unless you know this labor is taxable.",
+    "row": "Buchanan County, MO"
+   },
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0.065
+    },
+    "input": "Ray County, MO",
+    "keys": {
+     "county": "Ray County, MO",
+     "county_notes": "Richmond.",
+     "county_remodel_rate": null,
+     "county_tax_rate": 0.06225
+    },
+    "note": "Ray County, MO — Missouri remodel labor is generally exempt, so no remodel tax applies. Remodel tax is on anyway: turn it off for a Missouri job unless you know this labor is taxable.",
+    "row": "Ray County, MO"
+   },
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0.065
+    },
+    "input": "Lafayette County, MO",
+    "keys": {
+     "county": "Lafayette County, MO",
+     "county_notes": "Higginsville, Lexington.",
+     "county_remodel_rate": null,
+     "county_tax_rate": 0.06225
+    },
+    "note": "Lafayette County, MO — Missouri remodel labor is generally exempt, so no remodel tax applies. Remodel tax is on anyway: turn it off for a Missouri job unless you know this labor is taxable.",
+    "row": "Lafayette County, MO"
+   },
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0.065
+    },
+    "input": "Henry County, MO",
+    "keys": {
+     "county": "Henry County, MO",
+     "county_notes": "Clinton.",
+     "county_remodel_rate": null,
+     "county_tax_rate": 0.06225
+    },
+    "note": "Henry County, MO — Missouri remodel labor is generally exempt, so no remodel tax applies. Remodel tax is on anyway: turn it off for a Missouri job unless you know this labor is taxable.",
+    "row": "Henry County, MO"
+   },
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0.065
+    },
+    "input": "Bates County, MO",
+    "keys": {
+     "county": "Bates County, MO",
+     "county_notes": "Butler.",
+     "county_remodel_rate": null,
+     "county_tax_rate": 0.06225
+    },
+    "note": "Bates County, MO — Missouri remodel labor is generally exempt, so no remodel tax applies. Remodel tax is on anyway: turn it off for a Missouri job unless you know this labor is taxable.",
+    "row": "Bates County, MO"
+   },
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0.065
+    },
+    "input": "Caldwell County, MO",
+    "keys": {
+     "county": "Caldwell County, MO",
+     "county_notes": "",
+     "county_remodel_rate": null,
+     "county_tax_rate": 0.06225
+    },
+    "note": "Caldwell County, MO — Missouri remodel labor is generally exempt, so no remodel tax applies. Remodel tax is on anyway: turn it off for a Missouri job unless you know this labor is taxable.",
+    "row": "Caldwell County, MO"
+   },
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0.065
+    },
+    "input": "Clinton County, MO",
+    "keys": {
+     "county": "Clinton County, MO",
+     "county_notes": "",
+     "county_remodel_rate": null,
+     "county_tax_rate": 0.06225
+    },
+    "note": "Clinton County, MO — Missouri remodel labor is generally exempt, so no remodel tax applies. Remodel tax is on anyway: turn it off for a Missouri job unless you know this labor is taxable.",
+    "row": "Clinton County, MO"
+   },
+   {
+    "enginePct": {
+     "asWired": 0,
+     "raw": 0.065
+    },
+    "input": "DeKalb County, MO",
+    "keys": {
+     "county": "DeKalb County, MO",
+     "county_notes": "",
+     "county_remodel_rate": null,
+     "county_tax_rate": 0.06225
+    },
+    "note": "DeKalb County, MO — Missouri remodel labor is generally exempt, so no remodel tax applies. Remodel tax is on anyway: turn it off for a Missouri job unless you know this labor is taxable.",
+    "row": "DeKalb County, MO"
+   }
+  ],
+  "query": "county",
+  "remodelOn": true
+ },
+ {
+  "offered": [],
+  "picks": [],
+  "query": "zzzz",
+  "remodelOn": true
+ },
+ {
+  "offered": [],
+  "picks": [],
+  "query": "",
+  "remodelOn": true
+ },
+ {
+  "offered": [
+   [
+    "Johnson County, KS",
+    "remodel 7.975%"
+   ],
+   [
+    "Olathe, KS",
+    "remodel 9.475%"
+   ]
+  ],
+  "picks": [
+   {
+    "enginePct": {
+     "asWired": 0.07975,
+     "raw": 0.07975
+    },
+    "input": "Johnson County, KS",
+    "keys": {
+     "county": "Johnson County, KS",
+     "county_notes": "Overland Park, Olathe, Lenexa, Shawnee — high job density.",
+     "county_remodel_rate": 0.07975,
+     "county_tax_rate": 0.01475
+    },
+    "note": "Remodel tax 7.975% · Johnson County, KS, on the labor and the markups. Never on materials.",
+    "row": "Johnson County, KS"
+   },
+   {
+    "enginePct": {
+     "asWired": 0.09475,
+     "raw": 0.09475
+    },
+    "input": "Olathe, KS",
+    "keys": {
+     "county": "Olathe, KS",
+     "county_notes": "Verified 2026-09-02 against KDOR (100 E Santa Fe St, 66061): 9.475%.",
+     "county_remodel_rate": 0.09475,
+     "county_tax_rate": null
+    },
+    "note": "Remodel tax 9.475% · Olathe, KS, on the labor and the markups. Never on materials.",
+    "row": "Olathe, KS"
+   }
+  ],
+  "query": "olathe",
+  "remodelOn": true
+ },
+ {
+  "offered": [
+   [
+    "Leawood, KS",
+    "remodel 9.1%"
+   ]
+  ],
+  "picks": [
+   {
+    "enginePct": {
+     "asWired": 0.091,
+     "raw": 0.091
+    },
+    "input": "Leawood, KS",
+    "keys": {
+     "county": "Leawood, KS",
+     "county_notes": "Verified 2026-09-02 against KDOR (4800 Town Center Dr, 66211): 9.1%. Prior snapshot said 9.5% — 0.4 pt too high.",
+     "county_remodel_rate": 0.091,
+     "county_tax_rate": null
+    },
+    "note": "Remodel tax 9.1% · Leawood, KS, on the labor and the markups. Never on materials.",
+    "row": "Leawood, KS"
+   }
+  ],
+  "query": "leawood",
+  "remodelOn": true
+ },
+ {
+  "offered": [
+   [
+    "Shawnee County, KS",
+    "remodel 7.85%"
+   ],
+   [
+    "Shawnee, KS",
+    "remodel 9.6%"
+   ],
+   [
+    "Topeka, KS",
+    "remodel 9.35%"
+   ]
+  ],
+  "picks": [
+   {
+    "enginePct": {
+     "asWired": 0.0785,
+     "raw": 0.0785
+    },
+    "input": "Shawnee County, KS",
+    "keys": {
+     "county": "Shawnee County, KS",
+     "county_notes": "Topeka.",
+     "county_remodel_rate": 0.0785,
+     "county_tax_rate": 0.0135
+    },
+    "note": "Remodel tax 7.85% · Shawnee County, KS, on the labor and the markups. Never on materials.",
+    "row": "Shawnee County, KS"
+   },
+   {
+    "enginePct": {
+     "asWired": 0.096,
+     "raw": 0.096
+    },
+    "input": "Shawnee, KS",
+    "keys": {
+     "county": "Shawnee, KS",
+     "county_notes": "City of Shawnee (Johnson County) — not to be confused with Shawnee County (Topeka), below. Verified 2026-09-02 against KDOR (11110 Johnson Dr, 66203): 9.6%. Prior snapshot said 9.75% — 0.15 pt too high.",
+     "county_remodel_rate": 0.096,
+     "county_tax_rate": null
+    },
+    "note": "Remodel tax 9.6% · Shawnee, KS, on the labor and the markups. Never on materials.",
+    "row": "Shawnee, KS"
+   },
+   {
+    "enginePct": {
+     "asWired": 0.0935,
+     "raw": 0.0935
+    },
+    "input": "Topeka, KS",
+    "keys": {
+     "county": "Topeka, KS",
+     "county_notes": "County seat of Shawnee County. Verified 2026-09-02 against KDOR (215 SE 7th St, 66603): 9.35%.",
+     "county_remodel_rate": 0.0935,
+     "county_tax_rate": null
+    },
+    "note": "Remodel tax 9.35% · Topeka, KS, on the labor and the markups. Never on materials.",
+    "row": "Topeka, KS"
+   }
+  ],
+  "query": "topeka",
+  "remodelOn": true
+ },
+ {
+  "offered": [
+   [
+    "Prairie Village, KS",
+    "remodel 8.975%"
+   ]
+  ],
+  "picks": [
+   {
+    "enginePct": {
+     "asWired": 0.08975,
+     "raw": 0.08975
+    },
+    "input": "Prairie Village, KS",
+    "keys": {
+     "county": "Prairie Village, KS",
+     "county_notes": "Verified 2026-09-02 against KDOR (7700 Mission Rd, 66208): 8.975%. Prior snapshot said 9.35% — 0.375 pt too high.",
+     "county_remodel_rate": 0.08975,
+     "county_tax_rate": null
+    },
+    "note": "Remodel tax 8.975% · Prairie Village, KS, on the labor and the markups. Never on materials.",
+    "row": "Prairie Village, KS"
+   }
+  ],
+  "query": "prairie",
+  "remodelOn": true
+ },
+ {
+  "offered": [
+   [
+    "Miami County, KS",
+    "remodel 8%"
+   ],
+   [
+    "Paola, KS",
+    "remodel 9.25%"
+   ]
+  ],
+  "picks": [
+   {
+    "enginePct": {
+     "asWired": 0.08,
+     "raw": 0.08
+    },
+    "input": "Miami County, KS",
+    "keys": {
+     "county": "Miami County, KS",
+     "county_notes": "Paola.",
+     "county_remodel_rate": 0.08,
+     "county_tax_rate": 0.015
+    },
+    "note": "Remodel tax 8% · Miami County, KS, on the labor and the markups. Never on materials.",
+    "row": "Miami County, KS"
+   },
+   {
+    "enginePct": {
+     "asWired": 0.0925,
+     "raw": 0.0925
+    },
+    "input": "Paola, KS",
+    "keys": {
+     "county": "Paola, KS",
+     "county_notes": "Verified 2026-09-02 against the City of Paola's own published rate: 6.5% state + 1.5% county + 1.25% city. The Paola Crossings special district runs 0.105 — verify the exact address. (Some third-party aggregators show 0.0975/0.105 as the city-wide rate; the city's own figure was treated as authoritative.)",
+     "county_remodel_rate": 0.0925,
+     "county_tax_rate": null
+    },
+    "note": "Remodel tax 9.25% · Paola, KS, on the labor and the markups. Never on materials.",
+    "row": "Paola, KS"
+   }
+  ],
+  "query": "paola",
+  "remodelOn": true
+ },
+ {
+  "offered": [
+   [
+    "Riley County, KS",
+    "remodel 7.2%"
+   ],
+   [
+    "Manhattan, KS",
+    "remodel 9.15%"
+   ]
+  ],
+  "picks": [
+   {
+    "enginePct": {
+     "asWired": 0.072,
+     "raw": 0.072
+    },
+    "input": "Riley County, KS",
+    "keys": {
+     "county": "Riley County, KS",
+     "county_notes": "Manhattan, Ft. Riley.",
+     "county_remodel_rate": 0.072,
+     "county_tax_rate": 0.007
+    },
+    "note": "Remodel tax 7.2% · Riley County, KS, on the labor and the markups. Never on materials.",
+    "row": "Riley County, KS"
+   },
+   {
+    "enginePct": {
+     "asWired": 0.0915,
+     "raw": 0.0915
+    },
+    "input": "Manhattan, KS",
+    "keys": {
+     "county": "Manhattan, KS",
+     "county_notes": "Verified 2026-09-02: 6.5% state + 0.7% county + 1.95% city (ZIP 66505 baseline). ZIP 66503 adds a 0.5% special district — 0.0965 there. Verify the exact address.",
+     "county_remodel_rate": 0.0915,
+     "county_tax_rate": null
+    },
+    "note": "Remodel tax 9.15% · Manhattan, KS, on the labor and the markups. Never on materials.",
+    "row": "Manhattan, KS"
+   }
+  ],
+  "query": "manhattan",
+  "remodelOn": true
+ }
+]

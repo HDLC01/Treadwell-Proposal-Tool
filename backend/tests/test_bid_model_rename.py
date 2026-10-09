@@ -162,12 +162,18 @@ def test_the_scan_is_clean_on_a_tree_with_only_the_new_names(tmp_path):
 # ── 3. loaded the way a browser loads it ─────────────────────────────────────
 def test_loaded_as_a_browser_loads_it_the_module_publishes_the_new_global_and_only_that():
     require_node()
-    # The model reads its number helpers off js/excel-math.js, so a page loads that first.
-    proc = run_node(BOOT_HARNESS, FRONTEND, "js/excel-math.js", NEW_PATH)
+    # The model reads its number helpers off js/excel-math.js and the work-type vocabulary off
+    # js/work-types.js (Phase 7), and the chain off js/bid-engine.js (Phase 8, which needs markup-core and
+    # bid-profiles), so a page loads them first.
+    proc = run_node(BOOT_HARNESS, FRONTEND, "js/excel-math.js", "js/work-types.js",
+                    "js/markup-core.js", "js/bid-profiles.js", "js/bid-engine.js", NEW_PATH)
     assert proc.returncode == 0, proc.stderr
     out = last_json_line(proc.stdout)
-    leaf, script = out["scripts"]
+    leaf, types, core, profiles, engine, script = out["scripts"]
     assert leaf["threw"] is None, leaf["threw"]
+    assert types["threw"] is None, types["threw"]
+    for dep in (core, profiles, engine):
+        assert dep["threw"] is None, dep["threw"]
     assert script["threw"] is None, "the module did not load as a script tag loads it: %s" % script["threw"]
     assert script["published"] == [NEW_GLOBAL], script["published"]
     assert OLD_GLOBAL not in out["globals"]

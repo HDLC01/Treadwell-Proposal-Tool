@@ -32,6 +32,10 @@
  *      no random numbers, so two runs write the same bytes.
  *   5. Runs the probes: a few targeted experiments upstream of the boundary that show the odd rules of
  *      docs/kyle-workbook-odd-rules.md happening in the workbook itself.
+ *   6. Writes meta.json, which says what the answers were recorded FROM: the engine, the template (a hash
+ *      of the priced tabs' cells AND the workbook's defined names), the self-check, and `integrity`, a
+ *      sha256 of every file it wrote and of the cell maps it read (backend/tests/js/oracle-integrity.js).
+ *      CI recomputes those hashes, so a recorded answer edited by hand is caught even when it still adds up.
  *
  * A CASE is { id, in, out [, rows] }. `in` names only what differs from the defaults: every input not
  * named is written as 0, every flag and rate not named is left as the template has it. The value
@@ -47,6 +51,7 @@ const HERE = __dirname;
 const REPO = path.resolve(HERE, "..", "..", "..");
 const E = require(path.join(REPO, "docs", "excel-parity-audit", "engine.js"));
 const P = require(path.join(REPO, "frontend", "js", "bid-profiles.js"));
+const I = require("./oracle-integrity.js");
 const OUT_DIR = path.join(HERE, "..", "fixtures", "oracle");
 const SUPPORT = path.join(HERE, "..", "_oracle_support.py");
 const SCHEMA = 1;
@@ -499,6 +504,17 @@ probeFor([LEVELING], () => ({
     { label: "Local = No", set: { B4: "No" }, read: ["B4", "A48", "B48", "C48", "D48"] },
   ],
 }));
+probeFor([LEVELING], () => ({
+  id: "travel-person-days", rule: "leveling-travel-hour",
+  note: "The quantity on the travel line (A48) is PERSON-DAYS: the guys times the days of every crew row of the labor " +
+    "table (A44:B46), added up. It is not a head count. Travel labor is that quantity x the travel hours (B48) x the " +
+    "travel rate (C48). Local stays Yes, as the tab ships.",
+  steps: [
+    { label: "one crew row: 6 guys for 5 days", set: { A44: 6, B44: 5 }, read: ["B4", "A44", "B44", "A48", "B48", "C48", "D48"] },
+    { label: "two crew rows: 3 guys for 4 days and 2 guys for 3 days", set: { A44: 3, B44: 4, A45: 2, B45: 3 },
+      read: ["B4", "A44", "B44", "A45", "B45", "A48", "B48", "C48", "D48"] },
+  ],
+}));
 probeFor(["Epoxy"], () => ({
   id: "travel-hours-when-local", rule: "leveling-travel-hour",
   note: "The same reading on Epoxy, for contrast: its travel hours are typed and ship as 0.",
@@ -655,6 +671,16 @@ function main() {
       cell: l.cell, on: l.on, needs: l.needs, edges: l.edges,
     }))]);
     const aliases = Object.fromEntries(wb.aliases);
+    // `files` holds only the recorded sheet files at this point (meta.json is added to it below), and a
+    // hash goes in for every one of them. The cell maps are hashed as the data this run just read.
+    const integrity = {
+      about: "sha256 of each recorded sheet file (its text with every CRLF read as LF) and of the cell-map data in " +
+        "frontend/js/bid-profiles.js that this run read, hashed by backend/tests/js/oracle-integrity.js. Written only " +
+        "when the oracle regenerates; backend/tests/test_workbook_oracle.py recomputes them in CI, so a recorded " +
+        "answer edited by hand, even one that still adds up, fails there with 're-run the oracle'",
+      files: Object.fromEntries(Array.from(files).map(([name, text]) => [name, I.textSha256(text)])),
+      profiles: { file: "frontend/js/bid-profiles.js", sheetFields: I.SHEET_FIELDS, sha256: I.profilesSha256(P) },
+    };
     const meta = {
       schema: SCHEMA,
       generator: "backend/tests/js/workbook-oracle.js",
@@ -670,9 +696,13 @@ function main() {
         sheets: P.priced,
         hash: tmpl.hash,
         cells: tmpl.cells,
-        about: "sha256 over the sorted (sheet, address, formula or constant) lines of the priced sheets, " +
-          "from backend/tests/_oracle_support.py normalised_cells(); it ignores cached values and how the file was saved",
+        names: tmpl.names,
+        about: "sha256 over the sorted (sheet, address, formula or constant) lines of the priced sheets, then the " +
+          "sorted (scope, name, expression) lines of every defined name the page registers, from " +
+          "backend/tests/_oracle_support.py normalised_cells() and normalised_names(); it ignores cached values and " +
+          "how the file was saved",
       },
+      integrity: integrity,
       selfCheck: check.report,
       ladders: Object.fromEntries(ladders),
       sheets: Object.fromEntries(counts),
@@ -703,7 +733,12 @@ function main() {
 function reportDifference(haveText, wantText) {
   let have, want;
   try { have = JSON.parse(haveText); want = JSON.parse(wantText); } catch (e) { console.error("  (a file is not valid JSON)"); return; }
-  if (!Array.isArray(have.vectors)) { console.error("  (meta.json differs)"); return; }
+  if (!Array.isArray(have.vectors)) {
+    // meta.json: name the top-level parts that moved (template, integrity, selfCheck, ...)
+    const keys = Array.from(new Set(Object.keys(have).concat(Object.keys(want))));
+    console.error("  (meta.json differs in: " + keys.filter((k) => JSON.stringify(have[k]) !== JSON.stringify(want[k])).join(", ") + ")");
+    return;
+  }
   const was = new Map(have.vectors.map((v) => [v.id, JSON.stringify(v)]));
   let shown = 0;
   for (const v of want.vectors) {

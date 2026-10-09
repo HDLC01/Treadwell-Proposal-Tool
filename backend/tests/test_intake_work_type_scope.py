@@ -20,8 +20,11 @@ TWO HALVES, and the second is the one with teeth:
 
 Hiding without the second half would be the worse outcome: invisible on screen, still priced.
 """
+import json
 import pathlib
 import re
+import shutil
+import subprocess
 
 import pytest
 
@@ -34,53 +37,66 @@ def index_js():
 
 
 @pytest.fixture()
+def scope_js():
+    return (FRONTEND / "js" / "intake-scope.js").read_text(encoding="utf-8")
+
+
+@pytest.fixture()
 def review_js():
     return (FRONTEND / "js" / "estimate-review.js").read_text(encoding="utf-8")
 
 
 # ── intake: the right fields for the work type ────────────────────────────────
-def test_every_quantity_field_declares_which_work_types_it_belongs_to(index_js):
-    block = index_js[index_js.index("function renderSystems("):][:1800]
+# Since Phase 9a the fields are drawn and shown by js/intake-scope.js, and the live intake delegates to
+# it. These checks EXECUTE the real module (and, in test_intake_scope_module.py, the real page against
+# golden snapshots) instead of reading source text.
+@pytest.fixture(scope="module")
+def scopes():
+    if shutil.which("node") is None:
+        pytest.skip("node is not installed")
+    code = ("const m=require(process.argv[1]);"
+            "const o={};for(const j of ['epoxy','polish','combo','gyp'])o[j]=m.scopesFor(j);"
+            "o.markup=m.systemsMarkup(2);console.log(JSON.stringify(o));")
+    proc = subprocess.run(["node", "-e", code, str(FRONTEND / "js" / "intake-scope.js")],
+                          capture_output=True, text=True, encoding="utf-8", timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout)
+
+
+def test_every_quantity_field_declares_which_work_types_it_belongs_to(scopes):
     for scope in ("epoxy", "polish", "cove"):
-        assert 'data-scope="%s"' % scope in block, (
+        assert 'data-scope="%s"' % scope in scopes["markup"], (
             "the %s field is not tagged, so nothing can gate it" % scope)
 
 
-def test_the_work_type_map_matches_what_hanz_asked_for(index_js):
+def test_the_work_type_map_matches_what_hanz_asked_for(scopes):
     """Cove is an epoxy detail: a polish-only job never shows it."""
-    i = index_js.index("SCOPE_BY_WORK_TYPE")
-    block = index_js[i:i + 420]
-    got = dict(re.findall(r'(\w+):\s*\[([^\]]*)\]', block))
-    parse = lambda s: {x.strip().strip('"\'') for x in s.split(",") if x.strip()}
-
-    assert parse(got["epoxy"]) == {"epoxy", "cove"}
-    assert parse(got["polish"]) == {"polish"}, "polish must not be asked for epoxy SF or cove"
-    assert parse(got["combo"]) == {"epoxy", "polish", "cove"}
-    assert parse(got["gyp"]) == set(), "gyp uses its own three SF buckets"
+    assert set(scopes["epoxy"]) == {"epoxy", "cove"}
+    assert set(scopes["polish"]) == {"polish"}, "polish must not be asked for epoxy SF or cove"
+    assert set(scopes["combo"]) == {"epoxy", "polish", "cove"}
+    assert set(scopes["gyp"]) == set(), "gyp uses its own three SF buckets"
 
 
-def test_polish_is_never_asked_for_cove(index_js):
+def test_polish_is_never_asked_for_cove(scopes):
     """The specific domain fact Hanz confirmed. Worth its own test so a later edit that adds
     cove back to polish has to argue with this name."""
-    i = index_js.index("SCOPE_BY_WORK_TYPE")
-    polish_line = re.search(r'polish:\s*\[([^\]]*)\]', index_js[i:i + 420]).group(1)
-    assert "cove" not in polish_line
+    assert "cove" not in scopes["polish"]
 
 
-def test_fields_are_hidden_and_never_removed(index_js):
+def test_fields_are_hidden_and_never_removed(scope_js):
     """The field NAMES are what saved drafts and the estimate-cell mappings key on. Removing an
     input would break both, and would also lose a value the estimator may want back."""
-    i = index_js.index("function syncScopeToWorkType")
-    block = index_js[i:i + 1500]
+    i = scope_js.index("function applyScope")
+    block = scope_js[i:i + 1500]
     assert "style.display" in block, "expected a visibility toggle"
     for bad in (".remove()", "removeChild", "innerHTML =", "outerHTML"):
-        assert bad not in block, "syncScopeToWorkType destroys fields instead of hiding them (%s)" % bad
+        assert bad not in block, "applyScope destroys fields instead of hiding them (%s)" % bad
 
 
-def test_a_row_left_with_no_visible_fields_is_collapsed(index_js):
+def test_a_row_left_with_no_visible_fields_is_collapsed(scope_js):
     """Otherwise polish shows an empty gap where the cove row used to be."""
-    i = index_js.index("function syncScopeToWorkType")
-    block = index_js[i:i + 1500]
+    i = scope_js.index("function applyScope")
+    block = scope_js[i:i + 1500]
     assert ".row" in block and "anyShown" in block
 
 

@@ -47,6 +47,35 @@ const read = (p) => fs.readFileSync(p, "utf8").replace(/\r\n/g, "\n");
 const src = read(path.join(ROOT, "js", "polish-intake.js"));
 const pageHtml = read(path.join(ROOT, "polish-intake.html"));
 const P = require(path.join(ROOT, "js", "bid-model.js"));
+// The one vocabulary (js/work-types.js). The page reads its questions off it as it parses
+// (`var T = window.TWWorkTypes`), so it is handed to every window below under its real global name.
+const W = require(path.join(ROOT, "js", "work-types.js"));
+// The intake's quantity fields and Job type choice (js/intake-scope.js), and the shared county control
+// (js/county-picker.js): both are loaded by the page ahead of its own script, so both are handed to the
+// window below. The county control is a browser script, so it is kept as source and executed per page.
+const IS = require(path.join(ROOT, "js", "intake-scope.js"));
+const COUNTY_SRC = read(path.join(ROOT, "js", "county-picker.js"));
+
+/** The REAL work-types.js and intake-scope.js, evaluated from source with the named job types set to
+ *  `ready: true`. This is how "a later phase enables a type by flipping data, not code" is executed: nothing
+ *  else in the files changes, so whatever the page does with the flipped type it does from the data. */
+function vocabularyWith(readyKeys) {
+  let wsrc = read(path.join(ROOT, "js", "work-types.js"));
+  readyKeys.forEach((k) => {
+    if (!/^[a-z]+$/.test(k)) throw new Error("a job type key is lower-case letters: " + k);
+    const re = new RegExp('(key: "' + k + '",[^\n]*ready: )false');
+    if (!re.test(wsrc)) throw new Error("no not-ready job type " + k + " in work-types.js");
+    wsrc = wsrc.replace(re, "$1true");
+  });
+  const load = (src, req) => {
+    const mod = { exports: {} };
+    new Function("module", "exports", "require", "self", src)(mod, mod.exports, req, {});
+    return mod.exports;
+  };
+  const W2 = load(wsrc, () => { throw new Error("work-types.js requires nothing"); });
+  const IS2 = load(read(path.join(ROOT, "js", "intake-scope.js")), () => W2);
+  return { W: W2, IS: IS2 };
+}
 
 // ── the REAL county table, out of the server module that serves it ────────────
 //
@@ -111,6 +140,27 @@ function grab(re, what) {
   return m[0];
 }
 
+// The server serves the CITIES table too (each row tagged kind "city"), so a search for a town finds the city's
+// own full combined rate as well as its county's floor. The block above is bounded to COUNTIES on purpose;
+// this reads CITIES the same way and tags its rows the way the endpoint does.
+const CITY_ROWS = (function () {
+  const py = read(path.join(ROOT, "..", "backend", "reference_tax.py"));
+  const decl = "CITIES: list[dict] = [";
+  const from = py.indexOf(decl);
+  if (from < 0) throw new Error("CITIES is gone from backend/reference_tax.py — rewrite this");
+  const open = from + decl.length - 1;
+  let depth = 0, end = -1;
+  for (let i = open; i < py.length; i++) {
+    if (py[i] === "[") depth++;
+    else if (py[i] === "]" && --depth === 0) { end = i; break; }
+  }
+  if (end < 0) throw new Error("CITIES list never closes — rewrite this");
+  const rows = (py.slice(open, end + 1).match(/\{"name":[^}]*\}/g) || [])
+    .map((s) => Object.assign(JSON.parse(s), { kind: "city" }));
+  if (rows.length < 10) throw new Error("only parsed " + rows.length + " cities — rewrite this");
+  return rows;
+})();
+
 // ── a DOM stub, only as much as this page touches ─────────────────────────────
 //
 // The child nodes for the switches are created FROM renderConditions' own output, which is the
@@ -128,7 +178,7 @@ function makeDom(log, formValues) {
   function node(id) {
     let html = "", hidden = false, cls = "", text = "";
     const self = {
-      id, value: "", attrs: {}, listeners: [],
+      id, value: "", attrs: {}, listeners: [], style: {},
       get innerHTML() { return html; },
       set innerHTML(v) { html = v; log.push("html:" + id); adoptIds(v); },
       get hidden() { return hidden; },
@@ -171,6 +221,9 @@ function makeDom(log, formValues) {
   const fields = {};
   Object.keys(formValues || {}).forEach((k) => { fields[k] = { name: k, value: "" }; });
   if (!fields.bid_date) fields.bid_date = { name: "bid_date", value: "" };
+  // The two SF boxes the page finds by NAME (paintSfLock): js/intake-scope.js draws them, so a lookup that
+  // asked for an id would find nothing.
+  ["polish_sf", "polish_2_sf"].forEach((k) => { if (!fields[k]) fields[k] = { name: k, value: "" }; });
 
   /** Register a node for every id the rendered markup carries, with the attributes it carries,
    *  so a later lookup finds the element the page actually produced. */
@@ -220,7 +273,11 @@ const scope = new Function("$", "TW", "SB", "document", "window", "clock", "fetc
   var setTimeout = clock.setTimeout, clearTimeout = clock.clearTimeout;
   ${grab(/^  var esc = function[\s\S]*?\n  \};$/m, "esc")}
   ${grab(/^  var B = window\.TWBidModel;[^\n]*$/m, "the window.TWBidModel binding")}
-  ${grab(/^  var CONDITIONS = \[[\s\S]*?\n  \];$/m, "CONDITIONS")}
+  // THE VOCABULARY BINDING, then the page's one line that reads its questions off it. CONDITIONS used
+  // to be a literal lifted by a regex that ran to the closing bracket; it is the table's own rows now
+  // (js/work-types.js conditionsFor), so what this lifts is the call, and what it runs is the real module.
+  ${grab(/^  var T = window\.TWWorkTypes;[^\n]*$/m, "the window.TWWorkTypes binding")}
+  ${grab(/^  var CONDITIONS = T\.conditionsFor\("polish", "v2Intake"\);$/m, "CONDITIONS")}
   ${grab(/^  var DEFAULT_CONDITIONS = [^\n]*;$/m, "DEFAULT_CONDITIONS")}
   // Added 2026-09-03 with the cell map. adoptModel() and save() both reach for it now,
   // and a const the lifted function cannot see is a ReferenceError at boot, not a
@@ -236,7 +293,9 @@ const scope = new Function("$", "TW", "SB", "document", "window", "clock", "fetc
   // page, not relocated -- see polish-intake.js's own note above CONDITIONS. CARRY_CONDITIONS,
   // carrySpec() and the carry binding no longer exist in the source, so nothing here lifts
   // or scopes them any more.
-  ${grab(/^  var COUNTY_LIMIT = [^\n]*$/m, "COUNTY_LIMIT")}
+  ${grab(/^  var S = window\.TWIntakeScope;[^\n]*$/m, "the window.TWIntakeScope binding")}
+  ${grab(/^  var JOB = "polish";$/m, "JOB")}
+  ${grab(/^  var county = null;$/m, "county")}
   var state = {};
   var M = null;
   var form = null;
@@ -244,10 +303,6 @@ const scope = new Function("$", "TW", "SB", "document", "window", "clock", "fetc
   // to land in humanConditions, which is what stops a second verbal run overriding it.
   var humanConditions = {};
   var saveTimer = null;
-  var counties = [];
-  var countyMatches = [];
-  var countyHighlight = -1;
-  var countyPick = null;
   ${fn("condOn")}
   ${fn("adoptModel")}
   ${fn("conditionCells")}
@@ -256,33 +311,23 @@ const scope = new Function("$", "TW", "SB", "document", "window", "clock", "fetc
   ${fn("renderConditions")}
   ${fn("paintCondition")}
   ${fn("toggleCondition")}
-  ${fn("loadCounties")}
   // LIFTED, not stubbed, and BEFORE boot() which awaits it. This page mints the first
   // polish_estimate, so it is where a company-wide condition default has to land -- by the
   // time polish-estimate.html opens, migrateModel has already stated all nine conditions and
   // that page's own gate correctly refuses to touch them.
   ${fn("loadConditionDefaults")}
-  ${fn("countyStateOf")}
-  ${fn("countyRowRate")}
-  ${fn("countyRowLabel")}
-  ${fn("filterCounties")}
-  ${fn("closeCountyResults")}
-  ${fn("renderCountyResults")}
-  ${fn("paintCountyHighlight")}
-  ${fn("countyKeys")}
-  ${fn("pickCounty")}
-  ${fn("clearCounty")}
-  ${fn("countyNoteText")}
+  ${fn("mountCounty")}
   ${fn("renderCountyNote")}
-  ${fn("hydrateCounty")}
+  ${fn("countyKeys")}
   ${fn("paintProjLine")}
-  ${fn("onCountyInput")}
-  ${fn("onCountyKeydown")}
   ${fn("saveSoon")}
   ${fn("sfLocked")}
   ${fn("paintSfLock")}
   ${fn("save")}
   ${fn("paintSaveBlocked")}
+  ${fn("renderJobTypes")}
+  ${fn("renderScope")}
+  ${fn("pickJobType")}
   ${fn("hydrate")}
   ${fn("onClick")}
   ${fn("onSubmit")}
@@ -291,11 +336,13 @@ const scope = new Function("$", "TW", "SB", "document", "window", "clock", "fetc
   return { boot: boot, save: save, sfLocked: sfLocked, paintSfLock: paintSfLock, saveSoon: saveSoon, toggleCondition: toggleCondition,
            renderConditions: renderConditions, adoptModel: adoptModel, hydrate: hydrate,
            onClick: onClick, onSubmit: onSubmit, CONDITIONS: CONDITIONS,
-           DEFAULT_CONDITIONS: DEFAULT_CONDITIONS, COUNTY_LIMIT: COUNTY_LIMIT,
+           DEFAULT_CONDITIONS: DEFAULT_CONDITIONS, COUNTY_LIMIT: window.TWCounty.LIMIT,
            CONDITION_CELLS: CONDITION_CELLS, conditionCells: conditionCells,
-           loadCounties: loadCounties, countyKeys: countyKeys,
+           // The county list's load, and the picked county's four keys: both are the SHARED control's.
+           loadCounties: function () { return county.load(); }, countyKeys: countyKeys,
+           pickJobType: pickJobType, jobType: function () { return JOB; },
            model: function () { return M; }, state: function () { return state; },
-           countyPick: function () { return countyPick; } };
+           countyPick: function () { return county && county.hasPick() ? county.keys() : null; } };
 `);
 
 // ── a project, with the calculator's own work already on it ───────────────────
@@ -385,12 +432,15 @@ function build(opts) {
 
   const clock = makeClock();
   const winListeners = [];
+  const vocab = opts.fakeReady ? vocabularyWith(opts.fakeReady) : { W: W, IS: IS };
   const win = {
     TWAuth: { ready: Promise.resolve() },
     // The REAL pricing core, under the real global name. The page's own
     // `var B = window.TWBidModel` line is lifted below, so renaming the global breaks this
     // harness instead of quietly leaving B undefined at runtime.
     TWBidModel: P,
+    TWWorkTypes: vocab.W,
+    TWIntakeScope: vocab.IS,
     location: { href: "https://x/polish-intake.html?d=proj-1",
                 assign: (u) => rec.navigated.push(u) },
     // wire() registers its own pagehide flush directly on window (mirrors shared.js's own net
@@ -399,6 +449,15 @@ function build(opts) {
     addEventListener(type, handler) { winListeners.push({ type, handler }); },
     fire(type, event) { winListeners.filter((l) => l.type === type).forEach((l) => l.handler(event)); },
   };
+  win.TW = TW;                         // js/county-picker.js reads window.TW, not an injected parameter
+  doc.getElementById = dom.el;         // ... and document.getElementById, for the field it fills
+  // THE REAL SHARED CONTROL, executed from its own file the way the browser loads it: it sets
+  // window.TWCounty, which the page's mountCounty() reads.
+  // Its fetch is the page's fetch stand-in too, bound late because the stand-in is chosen below.
+  let pageFetch = null;
+  new Function("window", "document", "fetch", COUNTY_SRC)(win, doc, function () {
+    return pageFetch.apply(null, arguments);
+  });
   // The ONLY source of the county list. Nothing is seeded into the page, so a hardcoded table in
   // polish-intake.js would show up here as a search that works with the fetch never called.
   const fetchStub = async function (url, init) {
@@ -418,13 +477,15 @@ function build(opts) {
       return { ok: true, json: async () => ({ ok: true,
         conditions: JSON.parse(JSON.stringify(opts.conditionDefaults || [])) }) };
     }
-    return { ok: true, json: async () => ({ counties: JSON.parse(JSON.stringify(COUNTIES)) }) };
+    return { ok: true, json: async () => ({ counties: JSON.parse(JSON.stringify(
+      COUNTIES.concat(opts.extraRows || []))) }) };
   };
 
-  const api = scope(dom.el, TW, SB, doc, win, clock, opts.countyFetchFails
+  pageFetch = opts.countyFetchFails
     ? async function (url) { rec.fetched.push({ url: String(url), failed: true });
                              throw new Error("reference data is down"); }
-    : fetchStub);
+    : fetchStub;
+  const api = scope(dom.el, TW, SB, doc, win, clock, pageFetch);
   return { api, dom, doc, win, TW, SB, clock, log, rec, store };
 }
 
@@ -562,6 +623,19 @@ function snap(built) {
 // The keys the PRICING engine reads. freshModel() is where markupChain's conditions come from, so
 // a toggle the page renders under any other name is a toggle that moves no money.
 const out = { coreKeys: Object.keys(P.freshModel().conditions) };
+
+// WHAT THE ENGINE READS, asked of the engine itself and of no list. The questions this page asks and the
+// keys the model carries both come from the one table now (js/work-types.js), so comparing them with each
+// other can no longer catch a key the table spells wrongly for both. Pricing the same job with each
+// question answered both ways can: a key markupChain does not read is a toggle that moves nothing. Bond
+// is the documented exception (markupChain takes bond_pct from RATES.BOND unconditionally).
+out.engineMoves = (function () {
+  const base = { material: 10000, labor: 8000, travel: 0, contingency: 0, fees: 0, sf: 5000, remodel_rate: 0.07975 };
+  const fresh = P.freshModel().conditions;
+  const total = (conditions) => P.markupChain(Object.assign({}, base, { conditions })).total;
+  return Object.fromEntries(W.conditionsFor("polish", "v2Intake").map((c) => [c.key,
+    total(Object.assign({}, fresh, { [c.key]: false })) !== total(Object.assign({}, fresh, { [c.key]: true }))]));
+})();
 
 (async function () {
   // ── the five toggles, from the data the page ships ──────────────────────────
@@ -1198,6 +1272,128 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
     snap(b);
   }
 
+  // ── the Job type choice (Phase 9b) ────────────────────────────────────────────
+  // Drawn from js/work-types.js by js/intake-scope.js. The page holds no list of job types, so a type that
+  // the vocabulary marks ready is enabled by that flag alone, and one that it does not is disabled.
+  {
+    // A click on a radio, the way the page's delegated listener meets it. `detail` is 0 for a click the
+    // keyboard made (a radio group's arrow keys and Space fire one) and 1 for the mouse.
+    const jobClick = (b, key, detail) => {
+      const t = { getAttribute: (k) => (k === "data-jobtype" ? key : null),
+                  closest: (sel) => (sel === "[data-jobtype]" ? t : null) };
+      b.doc.fire("click", { target: t, detail: detail });
+    };
+    const radios = (b) => (String(b.dom.nodes["job-type"].innerHTML).match(/<label[\s\S]*?<\/label>/g) || [])
+      .map((chunk) => ({
+        value: (/value="([^"]*)"/.exec(chunk) || [])[1],
+        label: (/<span>([^<]*)<\/span>/.exec(chunk) || [])[1],
+        disabled: /\sdisabled[\s>]/.test(chunk),
+        checked: /\schecked[\s>]/.test(chunk),
+      }));
+    const noteOf = (b) => ({ text: b.dom.nodes["job-type-note"].textContent,
+                             hidden: b.dom.nodes["job-type-note"].hidden });
+
+    const b = await (async () => { const x = build(); await x.api.boot(); return x; })();
+    out.jobTypes = {
+      vocabulary: W.JOB_TYPES.map((j) => ({ key: j.key, label: j.label, ready: j.ready })),
+      radios: radios(b), note: noteOf(b), current: b.api.jobType(),
+      savedOnOpen: b.rec.saves.length, armedOnOpen: b.clock.armed(),
+    };
+    const markupBefore = b.dom.nodes["job-type"].innerHTML;
+    const attempts = {};
+    ["epoxy", "combo", "gyp", "seal", "leveling", "nonsense", ""].forEach((key) => {
+      jobClick(b, key, 1);                    // the mouse
+      jobClick(b, key, 0);                    // the keyboard
+      attempts[key || "(empty)"] = { current: b.api.jobType(), armed: b.clock.armed(), saves: b.rec.saves.length };
+    });
+    out.jobTypes.disabledClicks = {
+      attempts: attempts, markupUnchanged: b.dom.nodes["job-type"].innerHTML === markupBefore,
+    };
+
+    // The same page, with a vocabulary that marks Epoxy ready: nothing in the page changes.
+    const f = build({ fakeReady: ["epoxy"] });
+    await f.api.boot();
+    out.jobTypes.fakeReady = { radios: radios(f), note: noteOf(f), before: f.api.jobType() };
+    jobClick(f, "epoxy", 1);
+    const armed = f.clock.armed();
+    f.clock.fire();
+    out.jobTypes.fakeReady.afterPick = { current: f.api.jobType(), armed: armed, radios: radios(f),
+      savedWorkType: (f.rec.saves[f.rec.saves.length - 1] || {}).work_type };
+    jobClick(f, "combo", 0);
+    out.jobTypes.fakeReady.comboStillDisabled = f.api.jobType();
+
+    // Saved drafts open unchanged: no job type reads as Polish, one v2 cannot price yet reads as Polish,
+    // and opening writes nothing. The county the draft holds is still shown.
+    const picked = { county: "Wyandotte County, KS", county_tax_rate: 0.01, county_remodel_rate: 0.075,
+                     county_notes: "KCK, Bonner Springs." };
+    const none = build({ blob: blob(picked) });                  // no work_type at all
+    await none.api.boot();
+    const combo = build({ blob: blob(Object.assign({ work_type: "combo" }, picked)) });
+    await combo.api.boot();
+    const noneOpenSaves = none.rec.saves.length;
+    none.api.save();
+    out.jobTypes.savedDrafts = {
+      absent: { current: none.api.jobType(), checked: radios(none).filter((r) => r.checked).map((r) => r.value),
+                saved: none.rec.saves[none.rec.saves.length - 1].work_type,
+                county: readCountyField(none).input, savedOnOpen: noneOpenSaves },
+      combo: { current: combo.api.jobType(), checked: radios(combo).filter((r) => r.checked).map((r) => r.value),
+               county: readCountyField(combo).input, savedOnOpen: combo.rec.saves.length,
+               armedOnOpen: combo.clock.armed() },
+    };
+
+    // The quantity boxes a polish job does not ask for are drawn (hidden, never removed) and so are swept
+    // into the form's values. A save leaves them off the draft unless the draft already holds them.
+    const swept = { system_1_sf: "0", cove_1_lf: "0", system_2_sf: "0", cove_2_lf: "0",
+                    gyp_soft_sf: "0", gyp_hard_sf: "0", gyp_corridor_sf: "0" };
+    const fresh = build({ formValues: Object.assign({}, FORM_VALUES, swept) });
+    await fresh.api.boot();
+    fresh.api.save();
+    const held = build({ blob: blob({ system_1_sf: 750, cove_1_lf: 40 }),
+                         formValues: Object.assign({}, FORM_VALUES, swept, { system_1_sf: "750", cove_1_lf: "40" }) });
+    await held.api.boot();
+    held.api.save();
+    const savedKeys = (bb) => Object.keys(bb.rec.saves[bb.rec.saves.length - 1]);
+    out.jobTypes.hiddenQuantities = {
+      freshKeys: savedKeys(fresh).filter((k) => k in swept),
+      heldKeys: savedKeys(held).filter((k) => k in swept).sort(),
+      heldValues: { system_1_sf: held.rec.saves[held.rec.saves.length - 1].system_1_sf,
+                    cove_1_lf: held.rec.saves[held.rec.saves.length - 1].cove_1_lf },
+    };
+  }
+
+  // ── the county picker, as a GOLDEN ───────────────────────────────────────────
+  // Captured from this page's OWN copy of the picker before that copy was deleted in favour of
+  // js/county-picker.js (Phase 9b), and kept as a fixture: every row the box offers for a sample of
+  // searches, and for every one of those rows what a click writes (the four draft keys), what the
+  // note says with Remodel tax off and on, and what the real engine charges. The shared module must
+  // reproduce all of it, so "same county list, same remodel rate" is a comparison and not a promise.
+  {
+    const b = build({ extraRows: CITY_ROWS });
+    await b.api.boot();
+    await b.api.loadCounties();
+    const queries = ["johnson", "wyandotte", "warrensburg", "overland park", "shawnee", "lenexa",
+                     "kansas city", "douglas", "sedgwick", "jackson", "county", "zzzz", "", "olathe", "leawood",
+                     "topeka", "prairie", "paola", "manhattan"];
+    const golden = [];
+    for (const remodelOn of [false, true]) {
+      if (remodelOn) { clickSwitch(b, "remodel_tax"); b.clock.fire(); }
+      for (const q of queries) {
+        const rows = typeCounty(b, q);
+        const picks = [];
+        for (let i = 0; i < rows.length; i++) {
+          typeCounty(b, q);
+          clickId(b, "county-row-" + i);
+          b.clock.fire();
+          const save = b.rec.saves[b.rec.saves.length - 1];
+          picks.push({ row: rows[i].name, keys: countyOf(save), note: readCountyField(b).note,
+                       input: readCountyField(b).input, enginePct: enginePcts(save) });
+        }
+        golden.push({ remodelOn, query: q, offered: rows.map((r) => [r.name, r.rate]), picks });
+      }
+    }
+    out.countyGolden = golden;
+  }
+
   // ── a Missouri county ───────────────────────────────────────────────────────
   // MO rows carry no `remodel_rate` and that is CORRECT, not missing data: Missouri remodel labor
   // is generally exempt. The note has to say so, and the key has to stay null rather than being
@@ -1391,7 +1587,7 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
                     setAttribute: (k, v) => { if (k === "href") a.href = v; } };
         return a;
       });
-      const win = { location: { href: "https://x/polish-intake.html" }, history: {} };
+      const win = { location: { href: "https://x/polish-intake.html" }, history: {}, TWWorkTypes: W };
       const doc = { querySelectorAll: (sel) => (sel === "a[href]" ? anchors : []),
                     getElementById: () => null };
       const make = new Function("window", "document", "TW", "location", "localStorage", "fetch",
@@ -1620,7 +1816,7 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
     const fresh = build({ blob: blob({ polish_estimate: null, polish_sf: 4000, polish_2_sf: 1500 }),
       formValues: Object.assign({}, FORM_VALUES, { polish_sf: 4000, polish_2_sf: 1500 }) });
     await fresh.api.boot();
-    const n1 = fresh.dom.nodes["polish-sf-1"], n2 = fresh.dom.nodes["polish-sf-2"];
+    const n1 = fresh.dom.fields.polish_sf, n2 = fresh.dom.fields.polish_2_sf;
     const unlockedPaint = { ro1: n1.readOnly, ro2: n2.readOnly,
       noteHidden: fresh.dom.nodes["sf-locked-note"].hidden !== false };
     const hydratedWith = fresh.rec.written.map((w) => sfOf(w.values))[0];
@@ -1661,10 +1857,10 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
       unlockedPaint, hydratedWith,
       freshSaved: sfOf(freshSave),
       reloadWritten,
-      reloadReadOnly: reload.dom.nodes["polish-sf-1"].readOnly,
-      lockedPaint: { ro1: lockedB.dom.nodes["polish-sf-1"].readOnly,
-        ro2: lockedB.dom.nodes["polish-sf-2"].readOnly,
-        v1: lockedB.dom.nodes["polish-sf-1"].value, v2: lockedB.dom.nodes["polish-sf-2"].value,
+      reloadReadOnly: reload.dom.fields.polish_sf.readOnly,
+      lockedPaint: { ro1: lockedB.dom.fields.polish_sf.readOnly,
+        ro2: lockedB.dom.fields.polish_2_sf.readOnly,
+        v1: lockedB.dom.fields.polish_sf.value, v2: lockedB.dom.fields.polish_2_sf.value,
         note: lockedB.dom.nodes["sf-locked-note"].textContent,
         noteHidden: lockedB.dom.nodes["sf-locked-note"].hidden },
       lockedSaveKeys: { hasSf1: "polish_sf" in lockedSave, hasSf2: "polish_2_sf" in lockedSave },
@@ -1674,7 +1870,7 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
       realSaveKeys: { hasSf1: "polish_sf" in realSave, hasSf2: "polish_2_sf" in realSave },
       flushSaveKeys: { hasSf1: "polish_sf" in flushSave, hasSf2: "polish_2_sf" in flushSave },
       realBlobAfter: sfOf(realB.store.blob),
-      lfOnlyReadOnly: lfOnly.dom.nodes["polish-sf-1"].readOnly,
+      lfOnlyReadOnly: lfOnly.dom.fields.polish_sf.readOnly,
     };
   }
 
@@ -1715,8 +1911,8 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
     await subB.api.boot();
     subB.api.onSubmit({ preventDefault() {} });
     out.f5 = {
-      offLocked: { ro1: offB.dom.nodes["polish-sf-1"].readOnly, ro2: offB.dom.nodes["polish-sf-2"].readOnly,
-        v1: offB.dom.nodes["polish-sf-1"].value,
+      offLocked: { ro1: offB.dom.fields.polish_sf.readOnly, ro2: offB.dom.fields.polish_2_sf.readOnly,
+        v1: offB.dom.fields.polish_sf.value,
         noteHidden: offB.dom.nodes["sf-locked-note"].hidden !== false,
         saveHasSf: ("polish_sf" in offSave) || ("polish_2_sf" in offSave),
         blobSf: offB.store.blob.polish_sf, takeoffEnabled: offSave.polish_estimate.takeoff[0].enabled },

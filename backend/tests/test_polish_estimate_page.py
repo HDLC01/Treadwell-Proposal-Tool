@@ -605,8 +605,8 @@ def test_the_last_row_cannot_be_deleted_away_to_nothing(ran):
     page rendered a moment ago is pressed again. An empty table has no box to type in and no way
     back to one.
 
-    Mutation: drop `if (!M.labor.length) M.labor.push(newLaborRow());`. The labor step renders an
-    empty table and the estimator's only recovery is to reload."""
+    Mutation: drop `if (M.labor.length <= 1) return;`. The labor step renders an empty table (or,
+    as it once did, refills it with an unnamed "Task" card, which can no longer be made at all)."""
     lab = ran["labor"]
     assert lab["atOneRow"]["count"] == 1
     assert lab["atOneRow"]["deleteOffered"] == 0, (
@@ -614,18 +614,21 @@ def test_the_last_row_cannot_be_deleted_away_to_nothing(ran):
     assert lab["afterDeletingTheLast"]["count"] == 1, (
         "the labor table was emptied: %r" % lab["afterDeletingTheLast"])
     assert lab["afterDeletingTheLast"]["cells"] == 1, "no labor row is rendered any more"
-    assert lab["afterDeletingTheLast"]["labels"] == [""], (
-        "the replacement row is not a fresh blank one: %r" % lab["afterDeletingTheLast"]["labels"])
+    assert lab["afterDeletingTheLast"]["labels"] == ["Densify"], (
+        "the last row was replaced by something else: %r" % lab["afterDeletingTheLast"]["labels"])
     # Same guard on the takeoff side, where the row is what the whole bid is measured on.
     t = lab["takeoffNeverEmpty"]
     assert t["count"] == 1 and t["cells"] == 1, "the takeoff was deleted away to nothing: %r" % t
-    assert t["row"] == {"kind": "new", "pick_name": "", "measurement": "", "unit": "SF"}, (
-        "the replacement takeoff row is not a fresh undecided one: %r" % t["row"])
-    # And an added takeoff row opens empty, priced at nothing, saying where to search.
+    assert t["row"].get("assembly_id") == "a5", (
+        "the takeoff's last row was refilled with a blank one instead of being kept: %r" % t["row"])
+    # Pressing Add adds nothing by itself; ticking Densifier and pressing Add in the pop-up adds
+    # ONE row already pointed at that material, priced at nothing until it is measured.
     a = lab["addedTakeoffRow"]
+    assert a["beforePick"] == 3, "the add button put a row on the takeoff before anything was picked"
     assert a["count"] == 4 and a["cost"] == "—", (
-        "a brand-new takeoff row does not read as unpriced: %r" % a["cost"])
-    assert "Items & Assemblies" in a["hint"]
+        "a freshly picked takeoff row does not read as unpriced: %r" % a["cost"])
+    assert a["row"]["kind"] == "item" and a["row"]["item_id"] == "i4", (
+        "the picked material did not land on the row: %r" % a["row"])
 
 
 @needs_node
@@ -1581,10 +1584,18 @@ def test_the_save_writes_the_condition_cells_and_no_others(ran):
     # literals -- only which screen asks the question. They were written by polish-intake.js's own
     # `carry` loop before, from exactly one page; they go through the shared writer now because
     # two screens can answer them.
+    #
+    # THIRTEEN CELLS SINCE PHASE 7 (js/work-types.js), and the five new ones are the whole review: a polish
+    # job writes exactly the cells the live intake writes for a polish job, because both come out of the
+    # one conditions table. TAXABLE now reaches Leveling!B6 and the two Gyp B8 cells, which are independent
+    # literals that nothing wrote, so a tax-exempt option on a v2 bid kept charging 9.475%. RENOVATION's
+    # two B10 cells are written too, "New" while nobody has answered: the live intake writes them for every
+    # polish job, and a blank Polish!B10 is not "New" to IF(B10="New",0.05,0.15), it takes the Reno branch.
+    # No price moves (test_work_types.py and the chain golden), only what a save puts in the workbook cells.
     assert ran["save"]["cellValueKeys"] == [
-        "Epoxy!B4", "Epoxy!B6", "Epoxy!D5", "Epoxy!D6",
-        "Polish!B4", "Polish!E25", "Polish!E29", "Polish!F29"], (
-        "the save's worksheet cells are not exactly the seven conditions': %r"
+        "Epoxy!B10", "Epoxy!B4", "Epoxy!B6", "Epoxy!D5", "Epoxy!D6", "Gyp (FR)!B8", 'Gyp (USG 1-8")!B8',
+        "Leveling!B6", "Polish!B10", "Polish!B4", "Polish!E25", "Polish!E29", "Polish!F29"], (
+        "the save's worksheet cells are not exactly the conditions' a polish job is asked: %r"
         % ran["save"]["cellValueKeys"])
     # And the literals are the model's own answers. The fixture has local and taxable on, the other
     # two off, so a mapping written backwards cannot pass this.
@@ -1602,12 +1613,17 @@ def test_the_save_writes_the_condition_cells_and_no_others(ran):
         # Yes/No cell is not "No" to Kyle's formulas, it is whatever his IF() falls through to.
         "Polish!E29": "No",                         # joint_filler
         "Polish!F29": "No",                         # remove_existing_jf
+        # The fixture has taxable ON, so the three independent Taxable literals carry the same "Yes".
+        "Leveling!B6": "Yes", 'Gyp (USG 1-8")!B8': "Yes", "Gyp (FR)!B8": "Yes",     # taxable
+        # Nobody has answered Renovation, so it is "New" in both cells, never blank.
+        "Epoxy!B10": "New", "Polish!B10": "New",                                    # reno
     }, "the condition literals do not match the model: %r" % (ran["save"]["cellValues"],)
-    # A draft that already carried a worksheet map keeps it, and gains only those same four.
+    # A draft that already carried a worksheet map keeps it, and gains only those same conditions' cells.
     carried = ran["save"]["legacyCellValues"] or {}
     assert set(carried) == {"Polish!D82", "Epoxy!B4", "Epoxy!B6", "Epoxy!D5",
                             "Epoxy!D6", "Polish!B4",
-                            "Polish!E25", "Polish!E29", "Polish!F29"}, (
+                            "Polish!E25", "Polish!E29", "Polish!F29",
+                            "Leveling!B6", 'Gyp (USG 1-8")!B8', "Gyp (FR)!B8", "Epoxy!B10", "Polish!B10"}, (
         "the page added a worksheet cell beyond the four conditions', or dropped a carried one: %r"
         % carried)
     assert carried["Polish!D82"] == 41000, "a cell the draft already carried was overwritten"
@@ -2238,10 +2254,13 @@ def test_both_schema_files_seed_the_dye_and_joint_filler_rows_the_engine_prices_
     # THE THIRD ROW BUYS NOTHING, in both files: no cost and no coverage to price from.
     assert seed["remove-existing-jf"]["unit_cost"] is None
     assert seed["remove-existing-jf"]["coverage"] is None
+    # THE PAGE'S MAP OF RESERVED ROWS IS THE TABLE'S, since Phase 7: library.js reads each condition's
+    # `item_id` off js/work-types.js (reservedItems), and the Takeoff cards on this page read the same
+    # ids, so it is the table's ids that are held to the seed here, through the cards the page really built.
+    assert set(ran["cards"]["reserved"]) == set(seed), ran["cards"]["reserved"]
     js = (FRONTEND / "js" / "library.js").read_text(encoding="utf-8")
-    m = re.search(r"var RESERVED_ITEM_CONDITION = \{([^}]*)\};", js)
-    assert m, "library.js no longer declares RESERVED_ITEM_CONDITION"
-    assert set(re.findall(r'"([^"]+)":', m.group(1))) == set(seed), m.group(1)
+    assert "var RESERVED_ITEM_CONDITION = WT.reservedItems();" in js, (
+        "library.js no longer reads its reserved rows off the vocabulary")
 
 
 @needs_node
@@ -2316,7 +2335,8 @@ def test_the_page_loads_no_formula_engine_and_the_modules_in_order(html):
     """HyperFormula and the whole workbook load are gone: this page prices itself now.
 
     The order is load-bearing and it fails silently. polish-estimate.js reads `window.TWBidModel`,
-    `window.TWLib` and `window.TWPolishSandbox` at PARSE time, so any of them loaded after it is
+    `window.TWWorkTypes` (its Takeoff cards, since Phase 7), `window.TWLib` and `window.TWPolishSandbox`
+    at PARSE time, so any of them loaded after it is
     `undefined`, and the first thing that touches it throws while the page sits on its loading
     message for ever.
 
@@ -2329,8 +2349,9 @@ def test_the_page_loads_no_formula_engine_and_the_modules_in_order(html):
     # in the rail. See the house rule at the top of frontend/js/icons.js.
     assert srcs == ["https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0",
                     "/js/icons.js", "/auth.js", "/shared.js", "/js/tab-memo.js",
-                    "/js/library-core.js", "/js/excel-math.js", "/js/bid-model.js", "/js/polish-sandbox.js",
-                    "/js/polish-estimate.js"], (
+                    "/js/library-core.js", "/js/excel-math.js", "/js/work-types.js", "/js/markup-core.js",
+                    "/js/bid-profiles.js", "/js/bid-engine.js", "/js/bid-model.js",
+                    "/js/polish-sandbox.js", "/js/library-picker.js", "/js/polish-estimate.js"], (
         "the page's script list has changed: %r" % srcs)
 
 
@@ -3446,7 +3467,10 @@ def test_a_new_bid_fills_its_default_labor_from_the_calculator(ran):
     m = lc["first"]["mockup"]
     assert (m["guys"], m["days"], m["rate"]) == (2, 1, 50)
     j = lc["first"]["jointfill"]
-    assert j["days"] == "" and "calc_default" not in j and j["rate"] == 40
+    # A line with no saved mode still opens as the shipped crew line did (3 guys, blank days, the
+    # company rate): the shipped starting crew stands in for a calculator row (Phase LS1).
+    assert j["days"] == "" and j["guys"] == 3 and j["rate"] == 40
+    assert j["calc_default"]["guys"] == 3 and j["calc_default"]["rate"] == 40
 
 
 def test_changing_a_calculator_figure_shows_the_default_value_warning_and_typing_it_back_clears_it(ran):
@@ -3472,7 +3496,10 @@ def test_no_sf_leaves_days_blank_and_an_absent_table_opens_exactly_as_before(ran
     # typing days over a blank default must not warn "Default value: blank"
     w = lc["noSfWarn"]
     assert w is not None and (w["hidden"] or w["text"].strip() == "")
-    assert lc["gone"]["same"] is True and "calc_default" not in lc["gone"]["polishing"]
+    # An absent calculator table opens the crew lines exactly as before: the shipped starting crew
+    # (3 guys, blank days) is what fills them, so the figures are the same ones.
+    assert lc["gone"]["same"] is True
+    assert lc["gone"]["polishing"]["guys"] == 3 and lc["gone"]["polishing"]["days"] == ""
 
 
 def test_labor_days_follow_the_takeoff_until_the_estimator_edits_them(ran):
@@ -3659,3 +3686,163 @@ def test_changing_a_library_default_on_after_a_bid_is_saved_changes_nothing_on_t
     assert "travel:true" in s["here"]["labor"] and "c1:false" in s["here"]["labor"]
     assert s["libOff"] == s["here"], "a library default_on change reached a saved bid"
     assert s["libMatches"] == s["here"], "a library default_on change reached a saved bid"
+
+
+def test_the_takeoff_cards_are_the_tables_rows_joined_with_this_pages_views(ran):
+    """PHASE 7. Which cards there are, in what order, and each one's workbook cell, reserved library row
+    and dependency come out of the one conditions table (js/work-types.js: the conditions the Takeoff step
+    asks of a polish job). What a card SAYS is this page's own (CARD_VIEWS). The harness reads the page's real
+    CONDITION_CARDS after the real parse, so a card typed back into the page with its own cell, or a table
+    row with no view, shows up here.
+
+    Remove-existing is the card that does not price: it is a fourth hand on the joint-filler line, and it is
+    the only one that `needs` another. Each priced card's hint still names its cell in words, which is text
+    this page types, so that is checked against the cell the table gave it.
+
+    Mutation: change a cell or an item_id in the CARD_VIEWS joined row, or add a v2Takeoff row to the table
+    with no view."""
+    cards = ran["cards"]
+    assert cards["rows"] == [
+        {"key": "joint_filler", "cell": "Polish!E29", "item_id": "joint-filler-kit", "needs": None,
+         "prices": True, "hintNamesItsCell": True},
+        {"key": "remove_existing_jf", "cell": "Polish!F29", "item_id": "remove-existing-jf",
+         "needs": "joint_filler", "prices": False, "hintNamesItsCell": None},
+        {"key": "dye", "cell": "Polish!E25", "item_id": "dye", "needs": None,
+         "prices": True, "hintNamesItsCell": True},
+    ]
+    assert cards["reserved"] == ["joint-filler-kit", "remove-existing-jf", "dye"], (
+        "the ids kept out of every takeoff-row picker are the ids of the cards, in the cards' order")
+
+
+# ── one search pop-up adds Takeoff rows and Labor cards (Hanz, 2026-10-09) ────────────────────────
+# Run by section N of the harness: the REAL library-picker.js mounted on the harness's DOM, opened
+# by the page's own Add buttons. Mutation proofs are named per test.
+
+@needs_node
+def test_the_takeoff_button_opens_a_pop_up_and_adds_nothing_by_itself(ran):
+    """Mutation: put `M.takeoff.push({kind: "new", ...})` back in the [data-add-row] handler. `after`
+    becomes 4 and an empty row sits on the takeoff before anything was picked."""
+    o = ran["addPopup"]["takeoffOpen"]
+    assert o["popupOn"] and o["after"] == o["before"], "the click added a row, or no pop-up opened"
+    assert o["addDisabled"], "Add is live with nothing ticked"
+    # assemblies AND materials, the same set the row's own field offers, minus a reserved material
+    keys = o["keys"]
+    assert {"asm:a1", "asm:a2", "item:i1", "item:i4"} <= set(keys)
+    assert not o["reservedListed"], "a reserved material (dye, joint filler) is offered as a takeoff row"
+    n = ran["addPopup"]["noPick"]
+    assert n["rows"] == o["before"] and n["stillOpen"] and n["addDisabled"]
+    assert n["enterPrevented"], "Enter in the search box was left to do whatever it does"
+
+
+@needs_node
+def test_the_search_narrows_and_a_tick_survives_it_and_esc_closes_and_returns_focus(ran):
+    p = ran["addPopup"]
+    assert p["searched"]["keys"] == ["asm:a2"]
+    assert p["searchedNone"]["keys"] == [] and not p["searchedNone"]["noneHidden"]
+    assert p["searchedNone"]["count"] == "1 picked", "a pick was lost when the search hid its row"
+    assert p["esc"]["closed"] and p["esc"]["rows"] == 3 and p["esc"]["focusedBack"] == 1, (
+        "Esc did not close the pop-up, or the focus did not return to the button: %r" % p["esc"])
+    assert p["cancel"]["closed"] and p["cancel"]["rows"] == 3 and p["cancel"]["focusedBack"] == 2
+
+
+@needs_node
+def test_ticked_lines_become_rows_resolved_the_way_the_rows_own_field_resolves_them(ran):
+    """Mutation: skip becomeKind/setAssembly/setMaterial and write the ids by hand. The row loses
+    the assembly's own unit (Cove Base is LF) or the material's coverage key, and stops matching the
+    row typing its name produces."""
+    p = ran["addPopup"]
+    assert p["ticked"]["count"] == "4 picked" and not p["ticked"]["addDisabled"]
+    assert p["untickedCount"] == "3 picked", "unticking did not take the pick back off"
+    a = p["added"]
+    assert a["before"] == 3 and a["after"] == 6 and a["closed"], a
+    cove, densifier, grout = a["rows"]
+    assert cove == p["typed"]["a2"], "popup row differs from the typed one: %r vs %r" % (cove, p["typed"]["a2"])
+    assert densifier == p["typed"]["i4"]
+    # The two things named "Grout Compound": the ticked one is the one that lands, never a guess.
+    assert grout["kind"] == "asm" and grout["assembly_id"] == "a6"
+    assert a["focusedBack"] == 3 and p["pickedCost"]["cell"] == "$1,100"
+    assert p["pickedCost"]["expected"] == 1100
+    # A lone untouched starting row is replaced by the first pick, not left beneath it.
+    assert p["lone"] == {"before": 1, "after": ["a1"]}
+
+
+@needs_node
+def test_esc_closes_the_pop_up_even_when_focus_is_outside_it(ran):
+    """Mutation: remove the document keydown listener in library-picker.js. Esc fired on body (focus
+    after a click on the heading or a locked row) then leaves the pop-up open."""
+    o = ran["addPopup"]["escOutside"]
+    assert o["closed"] and o["rows"] == 3, o
+    assert o["focusedBack"] == 2, "focus did not return to the opener: %r" % o
+    assert o["listenersAfter"] == o["listenersWhileOpen"] - 1, (
+        "the document listener outlived the pop-up: %r" % o)
+
+
+@needs_node
+def test_a_ticked_assembly_takes_its_own_unit_when_another_shares_its_name(ran):
+    """Mutation: drop the unit lines after `row.assembly_id = p.id` in addPickedTakeoffRow. The
+    second Cove Base (SF) then lands as LF, the unit of the first one found by name."""
+    assert ran["addPopup"]["dupName"] == [{"id": "a2", "unit": "LF"}, {"id": "a2b", "unit": "SF"}]
+
+
+@needs_node
+def test_the_labor_button_lists_the_labor_list_work_type_first_and_never_travel(ran):
+    """Mutation: drop the work-type split in shown() (or `first:` in laborPickEntries). The epoxy-only
+    line then sorts ahead of the polish ones. Mutation: drop the travel skip and `lab:travel` appears."""
+    o = ran["addPopup"]["laborOpen"]
+    assert o["popupOn"] and o["after"] == o["before"], "the click added a card"
+    keys = o["keys"]
+    assert "lab:travel" not in keys
+    assert keys.index("lab:L1") < keys.index("lab:L2") and keys.index("lab:L3") < keys.index("lab:L2"), (
+        "a line for another work type is listed ahead of this bid's: %r" % keys)
+    assert o["addDisabled"] and o["oneOffDisabled"]
+    p = ran["addPopup"]
+    assert p["laborEmptyOneOff"] == {"rows": 3, "stillOpen": True}, "an empty one-off name added a card"
+    assert p["laborNoPick"] == {"rows": 3, "stillOpen": True}
+    assert p["laborEsc"] == {"closed": True, "rows": 3, "focusedBack": 1}
+
+
+@needs_node
+def test_a_ticked_labor_line_becomes_the_card_seeding_would_have_made(ran):
+    """Mutation: build the card by hand (rate: row.rate). The blank-rate line "Any work" then has
+    rate null instead of the company rate, rate_default is missing, and `cards` stops equalling
+    `viaSeed`."""
+    p = ran["addPopup"]["laborPicked"]
+    assert p["cards"] == p["viaSeed"], (p["cards"], p["viaSeed"])
+    assert [c["rate_default"] for c in p["cards"]] == [40, 33]
+    assert p["closed"] and p["focusedBack"] == 2
+    c = ran["addPopup"]["laborCard"]
+    assert c["label"] == "Any work v2", "the Task name is not editable"
+    assert c["costBlankRate"] == "$198" and c["costBlankRate"] == "$%d" % c["expectedBlankRate"], (
+        "a cleared rate no longer falls back to the stamped default: %r" % c)
+    assert c["warn"] == {"text": "Default value: $33.00", "hidden": False}
+    lk = ran["addPopup"]["laborLocked"]
+    assert lk["addedAnother"] == 0 and lk["stillOpen"] and lk["lockedRowMarked"], (
+        "a library line already on the bid can be added a second time: %r" % lk)
+
+
+@needs_node
+def test_the_one_off_line_needs_a_name_and_comes_at_the_company_rate(ran):
+    """Mutation: let addOneOff skip the name check. The empty Enter in the earlier test then adds a
+    nameless card (laborEmptyOneOff.rows becomes 4)."""
+    p = ran["addPopup"]
+    assert p["oneOffEnabled"]
+    o = p["oneOff"]
+    assert o["added"] == 1 and o["closed"]
+    assert o["card"]["label"] == "Hand grind", "the typed name was not tidied: %r" % o["card"]["label"]
+    assert o["card"]["rate"] == 33 and o["card"]["rate_default"] == 33
+    assert p["allNamed"], "a nameless Task card exists after using the pop-up"
+
+
+@needs_node
+def test_when_the_labor_list_cannot_be_read_the_shipped_crew_stands_in(ran):
+    assert ran["addPopup"]["laborFallback"]["keys"] == ["lab:polishing", "lab:mockup", "lab:jointfill"]
+
+
+def test_the_old_empty_row_paths_are_gone():
+    """The two buttons used to push an empty row (and the delete guards refilled one). Source reads
+    are enough for the ABSENCE of the old calls; the behaviour is executed above."""
+    src = (FRONTEND / "js" / "polish-estimate.js").read_text(encoding="utf-8")
+    assert "newTakeoffRow" not in src, "the empty-takeoff-row constructor is back"
+    assert "M.labor.push(newLaborRow())" not in src, "an unnamed Task card can be pushed again"
+    assert not re.search(r"newLaborRow\(\s*\)", src), "newLaborRow() is called with no name"
+    assert "openTakeoffPicker(addRow)" in src and "openLaborPicker(addLab)" in src

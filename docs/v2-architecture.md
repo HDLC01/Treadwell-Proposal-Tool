@@ -5,17 +5,22 @@ other, the rules every change follows, and a table of every place the same fact 
 today, with what happens to each copy.
 
 **What exists today, and what does not.** The tests and the golden files described in section 6
-exist now, and so does the workbook oracle (Phase 6, also section 6). The modules in section 3 other
-than `bid-model.js`, `excel-math.js`, `library-core.js` and `markup-core.js` do not exist yet: they
-are the design the phases build toward. The one exception is `js/bid-profiles.js`, which Phase 6
-created with only the cell maps of the eleven priced tabs in it; the rates and rules come in Phase 8.
+exist now, and so does the workbook oracle (Phase 6, also section 6). Every module in section 3 exists
+except the v2 intake's use of `intake-scope.js`, which Phase 9 finishes (9a created the module and moved the live intake onto it). `js/bid-profiles.js` was created by Phase 6
+with only the cell maps of the eleven priced tabs in it, and Phase 8 added its second half (the profiles, the
+global defaults and the table of Markups lines) and created `js/bid-engine.js`, which prices a bid from a profile
+(see "The engine and the profiles" below). Nothing on a screen calls the engine yet except through
+`markupChain`, which is now a thin wrapper over it.
 `bid-model.js` is the old `polish-bid-core.js` under its new name, and `excel-math.js` is the leaf
 Phase 5 took the model's number helpers out into, both with no change to what any of it does (see
 "Module names" and "The leaf" below). Phase 4 added `patchModel`, `buildSavePatch` and `MODEL_KEYS`
 to the model (see 7.10 and the model-safety paragraph of section 6). Line numbers in this document
 are on `origin/staging` at commit `3f94ed2` (2026-10-07), except where a paragraph says they are on
-the Phase 4 change, and except every line number in `js/bid-model.js` or `js/excel-math.js`, which is
-on the Phase 5 change. They will drift; the file and the name are what to search for.
+the Phase 4 change, and except every line number in `js/excel-math.js`, which is on the Phase 5 change.
+The citations that Phase 7 wrote or rewrote (in 7.1, 7.3 and the vocabulary paragraph below) are on the
+Phase 7 change. Phase 7 also moved lines in `js/bid-model.js`, `js/library.js`, `js/polish-intake.js`,
+`js/polish-estimate.js` and `js/polish-sandbox.js`, and the older citations to those five files in the
+other subsections were not recounted. They will drift; the file and the name are what to search for.
 
 **Names.** The tool people called the Polish beta is now **Estimating Tool v2**, and its database
 page, which was the Polish Estimate Database, is now **v2 Estimates** (Phase 1b, 2026-10-07). Only
@@ -51,6 +56,67 @@ each for a reason written in 7.5 and 7.11: `markup-core.js` keeps its own `excel
 `library-core.js` keeps its own pack count, and `isV2Draft` stays in `shared.js`. `isObject` also stayed
 in the model, because only the model uses it, and a helper moves into the leaf when two modules need it.
 
+**The vocabulary (Phase 7).** `js/work-types.js` is a leaf in the same sense `excel-math.js` is. It is data and a few readers, with no
+dependency, and it holds four tables: the four job types (epoxy, polish, combo, gyp, each with the tabs it
+is priced on, whether v2 prices it yet, its proposal template key and the audiences that have one), the
+five tabs of the workbook (polish, seal, epoxy, leveling, gyp, each with its sheets, role, markup layout
+and whether it is option-only, which Seal and Leveling are), the nine intake quantity fields with the key
+each is filed under on the estimate screen, and ONE table of the job conditions. A condition row says what
+the question is called and how it is worded, what a new job answers, which job types are asked it, which
+workbook cells the answer is written to and with which two words, what it needs, which of three screens
+ask it (the live intake, v2's intake and v2's Takeoff step) and in what position, whether the v2 model
+carries the answer, and which reserved library row prices it. The readers are `tabsFor` (a job type's
+tabs, and a throw for anything that is not a job type), `appliesTo` (does a default scoped to these tabs
+apply to this tab: an empty list is every tab, and a job type such as combo is refused by name),
+`conditionsFor`, `cellsFor`, `copyableCells`, `modelDefaults` and a few lookups.
+
+What reads it now: `js/bid-model.js` derives `CONDITION_CELLS` (`js/bid-model.js:1479`) and the conditions
+of a fresh model from it, and answers `workTypeApplies` (`js/bid-model.js:1387`) and the default takeoff
+through `tabsFor` and `appliesTo`, so a combo job reads the Epoxy defaults and the Polish defaults where it
+used to read neither. `js/polish-intake.js` takes its `CONDITIONS` (`js/polish-intake.js:77`), `js/polish-estimate.js`
+its `CONDITION_CARDS` (`js/polish-estimate.js:910`; the page keeps what each card says), `js/library.js` its
+`WORK_TYPES` (`js/library.js:2988`), its reserved rows and its Takeoff conditions, and `js/polish-sandbox.js`
+its `COPYABLE_CELLS` (`js/polish-sandbox.js:269`). Each of those pages loads `work-types.js` before the
+script that reads it, and `bid-model.js` names the file in its error if it is missing. The live intake
+(`js/index.js`) and the estimate and proposal screens keep their own copies for now, and 7.1 to 7.8 say which
+and why. Since Phase 7b the live intake also reads the file, for one thing only: which cells the two tax
+switches write on a split draft (`index.html` loads `js/work-types.js` before it, and the page throws by name
+without it).
+
+Two things a save writes into the workbook cells changed, and no price did. A job type now writes exactly the
+cells the live intake writes for it, so a v2 save writes the Taxable answer to Leveling!B6 and to the two
+Gyp sheets as well as Epoxy!B6, which it used to leave out (a tax-exempt option on a v2 bid kept charging
+9.475%). And a v2 save writes the Renovation cells, Epoxy!B10 and Polish!B10, which the live intake writes for
+every polish job and v2 never did: whatever is there stays (a "Reno" the live intake or the autofill put
+there survives), and a blank becomes "New", because Kyle's template ships both blank and a blank B10 is not
+"New" to the formula that sets the patch material rate, it takes the Reno branch. The chain golden moved by
+exactly the 48 vectors that record those cells (section 6), and the saved-bid ratchet's totals did not move.
+The model does not carry a Renovation answer, so nothing on a v2 screen can change it yet.
+
+**The engine and the profiles (Phase 8).** `js/bid-engine.js` holds one function that prices any tab,
+`priceChain(profile, input, rates)`, and `js/bid-profiles.js` (its part two) holds what makes one tab differ from
+another as data. A profile is plain JSON: an `extends` link, a closed set of thirteen named quirk flags, and rates as
+Markups formula text. There are seven: `polish` (Kyle's Polish tab exactly), `polish-legacy` (what the v2 model has
+always charged: polish with six quirks turned the other way, four of which are the chain departures of
+`departures.json` and two of which are the model's own: the Kansas floor for a missing remodel rate and no travel
+taken from lodging), `seal`
+(polish plus a sixth GP rung), `epoxy`, `epoxy-blank`, `leveling` (epoxy blank with ten hour days and the
+escalation left out of the sub-total) and `gyp` (seven GP tiers, a split shipping rule, an expression for soft
+costs). Each of the eleven priced tabs names its profile in a table, and a Gyp tab also names its truckload. A rate
+is text in the Markups vocabulary (`2.7%`, `MARKUP(BAND(subtotal, ...))`), read by `markup-core.js` and snapped to
+twelve significant figures, so a rate built in and a rate filed on the Markups page are one kind of thing and
+one reader serves both. `compileRates(profile, rules)` reads the filed rules into the text a section would save,
+`ruleNumber(rules, layout, line)` reads one, and a rule that cannot be read, cannot be worked out or comes to a
+dollar figure where a rate belongs makes the line unpriceable with a reason, never $0. `combine(tabs)` adds the
+tabs of a Combo job after each has taken its own gross profit, because pooling the sub-totals lands the job on a
+lower rung than either part. The global defaults (labor rate, lodging, per diem, fees, sales tax, the bond, the two
+remodel rates) have one home, `defaults`, and `bid-model.js` reads its `RATES`, `GP_BANDS` and shipped figures off
+it. `markupChain` returns the keys and values it always did: `polish_chain_golden.json` has no change, and neither
+do the saved-bid totals. Layout is a required argument everywhere, and a call without one throws. Two things are
+left on purpose. No page prices with the engine itself yet, so no bid moved. And the odd rules that live before the
+chain (the fractional bags, the travel hours, the overage rows, the cove aggregate) are the takeoff's: the chain is
+handed their dollars.
+
 ## 1. Why this exists
 
 Estimating Tool v2 (first called the Polish beta) was built one screen at a time, and the same fact ended up in many files. The list
@@ -78,11 +144,11 @@ Each layer may use the layers above it in this table and nothing below it. A lea
 | Layer | File | What it owns | Uses |
 |---|---|---|---|
 | leaf | `js/excel-math.js` | `num`, `roundUp`, `ceiling`, `copyInto`, `isBlank`, and the text helpers `money`, `money2`, `pct` and `fmtSf`. The one bid-side ROUNDUP. Exists since Phase 5, with functions only: no rate and no table | nothing |
-| leaf (data) | `js/work-types.js` | The one vocabulary: job types (polish, epoxy, combo, gyp) and tabs (polish, epoxy, gyp, seal, leveling; seal and leveling are option-only). For each: label, which tabs a job type prices (combo is Epoxy plus Polish), workbook tab ids, role, quantity fields and snapshot keys, proposal template keys, whether it is ready. Also the one job-conditions table. | nothing |
-| leaf (data) | `js/bid-profiles.js` | One profile per sheet tab as plain data: rates and GP ladders as formula strings, cell maps, labor built-ins. A profile can extend another (Seal is Polish plus a few changes). The one home of the global defaults: labor rate, lodging, per diem, fees, sales tax. | nothing |
-| model | `js/bid-model.js` (Phase 5 renamed it from `js/polish-bid-core.js`, with no logic change) | The saved estimate: fresh, migrate, seed a new bid, labor, travel, distance, conditions per section; building the save patch; composing the price snapshot the proposal reads. | excel-math today; work-types and bid-profiles when they exist |
-| engine | `js/bid-engine.js` | `priceChain(profile, input, rates)`: the markup chain for any profile. Turns the filed Markups rules into numbers. Adds the tabs of a combo job after each tab has had its own gross profit. | excel-math, bid-profiles, markup-core |
-| render | `js/intake-scope.js` | Draws and shows the quantity fields of the intake from `work-types.js`. Extracted from `js/index.js`; the live intake then calls it. | work-types |
+| leaf (data) | `js/work-types.js` | Exists since Phase 7. The one vocabulary: job types (polish, epoxy, combo, gyp) and tabs (polish, epoxy, gyp, seal, leveling; seal and leveling are option-only). For each: label, which tabs a job type prices (combo is Epoxy plus Polish), workbook tab ids, role, quantity fields and snapshot keys, proposal template keys, whether it is ready. Also the one job-conditions table. | nothing |
+| leaf (data) | `js/bid-profiles.js` | Part one (Phase 6): the cell maps of the eleven priced tabs. Part two (Phase 8): one profile per kind of tab as plain data, with rates and GP ladders as Markups formula text, a closed set of quirk flags and an `extends` link (Seal is Polish plus one ladder). The one home of the global defaults: labor rate, lodging, per diem, fees, sales tax, bond and the two remodel rates. `builtinRules()` is what the Markups page shows as built-ins. | nothing |
+| model | `js/bid-model.js` (Phase 5 renamed it from `js/polish-bid-core.js`, with no logic change) | The saved estimate: fresh, migrate, seed a new bid, labor, travel, distance, conditions per section; building the save patch; composing the price snapshot the proposal reads. Since Phase 8 `markupChain` is a wrapper over the engine on `polish-legacy`, and `RATES` and `GP_BANDS` are read off the profile. | excel-math, work-types and bid-engine |
+| engine | `js/bid-engine.js` (Phase 8) | `priceChain(profile, input, rates)`: the markup chain for any profile. `resolveProfile`, `forTab`, `compileRates` and `ruleNumber` turn the filed Markups rules into numbers or into an unpriceable line with a reason. `combine` adds the tabs of a combo job after each tab has had its own gross profit. | excel-math, bid-profiles, markup-core |
+| render | `js/intake-scope.js` | Draws and shows the quantity fields of the intake from `work-types.js`. Extracted from `js/index.js` in Phase 9a; the live intake calls it (`renderSystems`, `applyScope`) and holds no copy. | work-types |
 
 Already shared and kept as they are: `js/library-core.js` (priceLine and priceAssembly, every
 material), `js/markup-core.js` (reads and evaluates the Markups formulas), `js/xl-excel-rounding.js`
@@ -130,8 +196,15 @@ A module that depends on another one declares it in the header and fails loudly 
 });
 ```
 
-`js/bid-model.js` carries this header today with `excel-math.js` as its one dependency. The line for
-`work-types.js`, and its error, are added the day that module exists.
+`js/bid-model.js` carries this header with three dependencies, `excel-math.js`, `work-types.js` (Phase 7) and
+`bid-engine.js` (Phase 8), checked in that order, each with its own error that names the file. `js/bid-engine.js`
+carries it with three more, `excel-math.js`, `bid-profiles.js` and `markup-core.js`. Every page that loads
+`bid-model.js` therefore loads `markup-core.js`, `bid-profiles.js` and `bid-engine.js` ahead of it, and
+`markup.html` loads `bid-profiles.js` ahead of `markup.js`, which reads `window.TWBidProfiles` as it loads. A page that reads
+`window.TWWorkTypes` itself as it parses (`js/library.js`, `js/polish-intake.js`, `js/polish-estimate.js`,
+`js/polish-sandbox.js`) has no header to read, so `test_work_types.py` finds those scripts and checks that
+every page which loads one loads the vocabulary first, and `library.js` and `polish-sandbox.js` throw a
+named error of their own if it is missing.
 
 Rules that go with it:
 
@@ -163,7 +236,7 @@ Phase 3 added the instruments. None of them change product code.
 **Golden masters.** A golden master is a file of inputs and the answers today's code gives for them,
 cut once from a clean export of `origin/staging`.
 
-- `backend/tests/fixtures/polish_chain_golden.json`: 2,228 vectors over the Polish maths. The whole bid (every gross-profit edge from a dollar either side, all 256 settings of the eight job conditions, every shape the remodel rate arrives in, dirty values like `"12,500"` and `"$1,200"`), the number helpers, labor and travel, the takeoff, the conditions and what they write into the workbook, the model, the labor calculator, what a new bid is started with, the exported data (`RATES`, `GP_BANDS`, `CONDITION_CELLS`), and the type of every name the module exports today. A name that goes missing or changes type fails. A new export does not, because adding a helper is not a pricing change.
+- `backend/tests/fixtures/polish_chain_golden.json`: 2,247 vectors over the Polish maths. The whole bid (every gross-profit edge from a dollar either side, all 256 settings of the eight job conditions, every shape the remodel rate arrives in, dirty values like `"12,500"` and `"$1,200"`), the number helpers, labor and travel, the takeoff, the conditions and what they write into the workbook, the model, the labor calculator, what a new bid is started with, the exported data (`RATES`, `GP_BANDS`, `CONDITION_CELLS`), and the type of every name the module exports today. A name that goes missing or changes type fails. A new export does not, because adding a helper is not a pricing change.
 - `backend/tests/fixtures/library_pricing_golden.json`: 874 vectors over `priceLine` and `priceAssembly`: waste, roundup, pack size, coverage, cost, every area, rows older than those columns, whole assemblies, Kyle's printed flake system.
 
 Each is generated by a recipe (`tests/js/gen-chain-golden.js`, `tests/js/gen-library-golden.js`) that lists inputs only. The answers come from running the real functions, never from a second copy of the formulas. The recipes use no random numbers, so they regenerate byte for byte.
@@ -239,8 +312,14 @@ against.
   `estimate-review.html`), registers `frontend/js/xl-excel-rounding.js` as it ships, uses the page's options
   and its alias rule for the names HyperFormula refuses, and loads all sixteen tabs. The Excel parity audit
   next to it uses the same module, so there is one way to build the workbook outside a browser.
-  `test_workbook_oracle.py` lifts `HF.init` and the alias rule out of `estimate-review.js` and runs them to
-  prove the options and the rule are the page's. HyperFormula is not a dependency of the repo (no
+  `oracle-engine-harness.js` lifts the page's `HF.init`, its alias rule, its named-expression block and
+  `HF.loadSheet` out of `estimate-review.js` and runs them, and `engine.build()` beside them, against recording
+  stand-ins for HyperFormula on one small fixture. `test_workbook_oracle.py` requires every call each of them
+  made, in order, to be equal, reads the page's boot order (sheets, then names, then cells) from its source, and
+  shows the comparison go red for each of the ten one-line changes listed in `LOAD_BREAKS` (each made to a scratch
+  copy of the page or of `engine.js`). What it
+  does not cover is the page's edit door, `HF.setCellValue`, which the oracle goes round on purpose (it records
+  what the sheet does when Hard Bid? says Yes). HyperFormula is not a dependency of the repo (no
   `package.json`): install it outside (`npm i --no-save --prefix <dir> hyperformula@2.7.1`, then
   `NODE_PATH=<dir>/node_modules`).
 - *The cell maps.* `js/bid-profiles.js` names, for each of the eleven priced tabs (Epoxy, Polish, Seal,
@@ -258,41 +337,135 @@ against.
   file (about 17,000 cells), after putting back the labor rates the file was last calculated with (the
   template's rate cells were edited after its last calculation, see `docs/kyle-workbook-odd-rules.md`).
 - *What CI does.* CI has no HyperFormula, so it only compares. A hash of the normalised (tab, address,
-  formula or constant) of the priced tabs says "re-run the oracle" when Kyle changes a formula or a number,
-  and does not fire when the file is merely re-saved or an unpriced tab is edited. The page's pinned
-  HyperFormula and the rounding plugin are held to the recorded ones the same way. The recorded cases are
-  checked to straddle every edge on the right side, to add up the way the sheet's total does, and to hold
-  every kind of case. Where HyperFormula is installed, one more test recomputes everything and requires the
-  recorded files byte for byte.
+  formula or constant) of the priced tabs and of every defined name in the workbook says "re-run the oracle"
+  when Kyle changes a formula, a number or what a name points at (a formula that uses `Silica` keeps the same
+  text when Silica is redefined), and does not fire when the file is merely re-saved, its names come out in
+  another order, or an unpriced tab is edited. The page's pinned HyperFormula and the rounding plugin are held
+  to the recorded ones the same way. `meta.json` also records, under `integrity`, a sha256 of every recorded
+  sheet file and of the cell-map data in `bid-profiles.js` the answers came from (`oracle-integrity.js` is the
+  one place that says which fields are hashed and how), and CI recomputes them: a
+  recorded value edited by hand is caught even when it still adds up (gp and total both raised by 1,000 satisfy
+  every arithmetic check and fail the hash). A reworded comment in `bid-profiles.js` does not move the hash;
+  a changed cell or rate does. The recorded cases are checked to straddle every edge on the right side, to add
+  up the way the sheet's total does, and to hold every kind of case. Where HyperFormula is installed, one more
+  test recomputes everything and requires the recorded files byte for byte. What the hashes cannot do is stop
+  someone who edits a file and its hash together; the diff of `meta.json` is where that shows, and so is the
+  recompute test on any machine that has HyperFormula.
 - *Regenerating.* `node backend/tests/js/workbook-oracle.js --write`, then read the fixture diff: one case is
-  one line. A run with no flag compares and exits non-zero on any difference.
+  one line, and the hashes in `meta.json` are rewritten by the same run. A run with no flag compares and exits
+  non-zero on any difference.
 - *First user: Polish.* `oracle-polish-harness.js` runs today's model on every Polish case and requires it to
   equal the sheet except for the declared departures in `fixtures/oracle/departures.json` (no tooling line,
   a narrower remodel tax base, lodging counted in people-days, no hard bid, no bond). Two are predicted to the
   dollar from the model plus exactly what their reason says; all are seen on at least one case; a model change
-  that closes one turns the test red until the list says so.
+  that closes one turns the test red until the list says so. Phase 17 closes three of them for new bids (the
+  tooling line, the remodel tax base and lodging by labor hours). The hard bid and the bond are decisions and
+  not gaps: Hanz removed hard bids on purpose (2026-09-22, and the Hard Bid? switch held at No since
+  2026-10-03) and the bond is 0 by design, so neither is to be fixed.
 - *Kyle's odd rules.* `docs/kyle-workbook-odd-rules.md` lists the eleven places the sheet does something
   surprising (the bond counts the taxes twice, Leveling lodging divides by 8 on 10 hour days, and so on). v2
   reproduces them on purpose. `test_kyle_odd_rules.py` ties each to its cells, to recorded evidence and to the
   figures the document quotes, and runs each check on falsified evidence to prove it can fail.
 
+**The bid engine's proof (Phase 8).** `backend/tests/test_bid_engine.py` runs `tests/js/bid-engine-harness.js`, which
+prices every recorded oracle case with the profile of its tab: 1,993 chain and lodging cases over the eleven priced
+tabs, and every answer the two share is equal to the dollar (Seal (+Jnts) reads its remodel rate from Seal, which the
+oracle's cases never set, so those cases are handed the rate the sheet read; the harness says so where it does it).
+The profile `polish-legacy` is the one with departures, and it is held to them differently: its answers are set
+beside the sheet's own `polish` profile case by case, and every difference has to be one that `departures.json`
+declares for that case, and every declared departure has to be seen. Four more things make "equal" mean something.
+Every one of the thirteen quirk flags is turned the other way on every tab, and answers go red somewhere (all but
+`dayHours`, which the chain never reads and which is pinned to each tab's own "8 hour days" cell instead). Seven of
+the eleven odd rules live in the chain and each is shown on recorded cases where the ordinary reading would have
+charged something else; the other four are before the chain and the test says why. Every rate, ladder, tier
+table, hard bid and the Gyp soft cost expression is evaluated beside the workbook's own cell formula over every edge
+of that formula, one either side, and the two agree. And the oracle's own probes at the chain's boundary (the sound
+mat at a truckload minus one, at it and over it; Leveling's lodging nights with the day length changed) are answered
+by the engine as the sheet answers them. `bid-engine-units-harness.js` is the engine's own behaviour: `extends`,
+reading a filed rule, what is unpriceable, combining tabs, every call that must throw, and bad profile data
+refused. The last section of the test file breaks twenty-five lines of a scratch copy of the engine or the
+profiles and requires the same checks to go red by name. The cell maps of part one are untouched, so the oracle's
+integrity hash did not move and no answer was recorded again. `backend/tests/test_polish_chain_golden.py` is unchanged
+apart from where two of its breakages now land (the GP band in `bid-profiles.js`, the Missouri zero in
+`bid-engine.js`), and the chain golden file has no diff.
+
+**The vocabulary tests (Phase 7).** `backend/tests/test_work_types.py`, with `tests/js/work-types-harness.js`,
+runs the real `js/work-types.js` and the real `js/bid-model.js` that derives from it, and the copies the table
+has to stay equal to, lifted out of the page files and evaluated: the live intake's `CONDITIONS`
+(`js/index.js`), `scopesFor` and `systemFieldNames` out of `js/intake-scope.js`, and the estimate screen's sheet map, role map,
+area cells and role sets (`js/estimate-review.js`). The cells are read back out of Kyle's template (each is a
+literal there, or one of the two Renovation cells and blank). Its last section breaks one line of the module or
+of the model in a scratch copy, runs the harness against it, and requires the named check to fail, and a test
+requires every check to be in that table. `backend/tests/test_work_types_python_pin.py` is the one test that
+runs node and holds the Python lists to the table (7.2). The page harnesses were moved onto the real module
+(`polish-intake-harness.js`, `polish-estimate-harness.js`, `library-ui-harness.js`, `tab-memo-harness.js`,
+`v2-routing-harness.js`, `v2-names-harness.js`), and `test_polish_intake_page.py` gained a check that does not
+read any list: it prices one job with each of the questions the v2 intake asks answered both ways, so a key
+the table misspells for everyone still shows up as a toggle that moves nothing.
+
+Phase 7 re-cut the chain golden and 48 of its 2,228 vectors moved: `const/CONDITION_CELLS` (Taxable is four
+cells) and the 47 `cond/cells/*` and `cond/library/*` vectors, each of which gains the same five cells
+(Leveling!B6, the two Gyp B8 cells, Epoxy!B10 and Polish!B10) and nothing else. No `chain/*` vector moved, so no
+price did, and the library golden and the saved-bid ratchet's totals are as they were. Phase 7 said of this that
+a save of an existing v2 estimate "gains exactly those five cells and loses or changes none". That was true of a
+draft that is not split, and false of two other kinds, which Phase 7b (next) fixed. What is true now is below.
+
+**The split rule and the condition read-back (Phase 7b).** Review of Phase 7 found two ways a v2 save changed a
+cell it should have left alone.
+
+1. *A draft the estimate screen has split per sheet.* The first time the estimate screen opens a draft it gives
+   every flag-block sheet its own Taxable and Remodel answer and marks the draft `tax_flags_per_sheet` (Hanz,
+   2026-09-30, "Stay independent": an option follows its own sheet's answer and never the base's). The live
+   intake respected that, through `splitFlagCells`: the two tax switches become the base bid's own cell and no
+   other sheet's is restated. The v2 save did not. It wrote the job's answer to all four Taxable cells, so
+   `Leveling!B6`, `Gyp (USG 1-8")!B8` and `Gyp (FR)!B8` took the base's answer over their own, and it read the
+   job's answer off `Epoxy!B6`, which on a polish job is not the base sheet. A v2 test copy made it worse: the
+   copy dropped the `tax_flags_per_sheet` mark, so a split project arrived looking unsplit.
+2. *A condition with several cells.* The read-back took the first cell only. Renovation is two cells
+   (`Epoxy!B10`, `Polish!B10`), so a "Reno" in `Polish!B10` with `Epoxy!B10` blank read as nothing and the next
+   save wrote "New" into both. Local (two cells) and Taxable (four) had the same read.
+
+Now: the rule is in `js/work-types.js`. Taxable and Remodel tax carry `perSheet` (the cell on the base sheet of
+each tab a job can be priced on, the same addresses as `FLAG_BLOCK_CELLS` in `backend/estimate_writer.py`), and
+`writeCellsFor(condition, jobType, split, own)` answers which cells an answer is written to and read from: all of
+the condition's `cells` when the draft is not split, the base sheets' own cell when it is. `isSplit(draft)`,
+`isPerSheet(condition)` and `baseSheets(jobType)` are its helpers. Two callers use it and nothing else decides:
+the live intake's `splitFlagCells` (which adds only the estimate screen's own snapshot of each tab's cells, and
+its job-type ladder is gone), and the model's `conditionCellWrites` and `conditionsFromCells` (each takes `split`;
+`buildSavePatch` reads it off the draft). The v2 intake and the Takeoff step pass `isSplit(state)`, and
+`polish-intake.js` no longer carries a read-back loop of its own. A test copy keeps `tax_flags_per_sheet` and the
+base sheets' own tax cells (`copyableCells` includes them), so a copy of a split project arrives split with its
+answers. A condition with several cells is read back from the first cell that holds an answer.
+
+So a save of an existing v2 estimate on a draft that is not split gains the five cells above and changes no other.
+On a split draft it writes the base sheet's own Taxable and Remodel cell (`Polish!B6`, `Polish!D6` for a polish job)
+and leaves every other sheet's tax cell as the draft has it. On any draft a "Reno" in either B10 cell survives. No
+`chain/*` vector moved, so no price did. The chain golden changed on purpose: one vector was renamed and its
+answer moved (`cond/fromCells/polishB4IsNotRead` became `cond/fromCells/polishB4IsReadWhenEpoxyB4IsBlank`, with the
+answer the other way) and nineteen were added, 2,228 vectors to 2,247. `backend/tests/test_v2_condition_cells.py` pins all of it, executes it through
+the real Takeoff step and the real v2 intake as well as the modules, and scans every priced sheet of Kyle's
+template for its own literal flag cells (Local, Taxable, Prevailing wage, Remodel tax, New or Reno). Each must be
+written by the table or sit on a list of known gaps that names the phase that will close it: the Seal ones
+(Phase 15), the Leveling ones (Phase 16) and the Gyp Local and New or Reno ones (Phase 14). The live intake does
+not write those either, and a new literal flag cell that is on neither list fails the test.
+
 ## 7. Every concept, where it is copied today, and what happens to each copy
 
 Line numbers are on `origin/staging` at `3f94ed2`, except those in `js/bid-model.js` and
-`js/excel-math.js`, which are on the Phase 5 change. "Planned" means the phase in the program plan,
+`js/excel-math.js`, which are on the Phase 5 change, and those Phase 7 wrote (see the top). "Planned" means the phase in the program plan,
 not something that has been done. The summary first, then the evidence for each row.
 
 | | Concept | Copies today | Disposition | Phase |
 |---|---|---|---|---|
-| 7.1 | Work-type list, JavaScript | 9 places in 7 files | Each reads `js/work-types.js` | 7 (the v2 intake in 9) |
-| 7.2 | Work-type list, Python | 7 files | Pinned to `js/work-types.js` by one test that runs node | 7 |
-| 7.3 | Job-condition tables | 10 places | One conditions table in `js/work-types.js`. The Taxable cells are right by construction. The test copy's cell list reads it too | 7 |
-| 7.4 | Built-in markup rates | 4 places | Profile data in `js/bid-profiles.js`. `markup.js` reads it. `pricing.py` is retired | 8, then 17 |
+| 7.1 | Work-type list, JavaScript | 9 places in 7 files | Done in Phase 7: `js/library.js` reads `js/work-types.js` (`WORK_TYPES`, `appliesToWorkType`), and so does the model's default scoping. Left: the live intake's map (held equal by a test until Phase 9) and the estimate and proposal screens' lists | 7 (in part), 9 |
+| 7.2 | Work-type list, Python | 7 files | Done: pinned to `js/work-types.js` by `test_work_types_python_pin.py`, which runs node | 7 (done) |
+| 7.3 | Job-condition tables | 10 places | Done in Phase 7: one conditions table in `js/work-types.js`, and the model's `CONDITION_CELLS` and fresh conditions, v2's intake `CONDITIONS`, the Takeoff `CONDITION_CARDS`, the Defaults tab's list and the test copy's `COPYABLE_CELLS` read it. The Taxable cells are right by construction. Which cells the two tax switches write on a split draft is the table's too since Phase 7b (`perSheet` and `writeCellsFor`), for the live intake and for a v2 save. Left: the live intake's `CONDITIONS` (held equal by a test until Phase 9) and the estimate screen's per-sheet tax addresses (`JOB_FLAG_ADDR`) | 7 (in part), 7b, 9 |
+| 7.4 | Built-in markup rates | 4 places (was) | Done in Phase 8: one home, the profiles and `defaults` in `js/bid-profiles.js`. `bid-model.js` and `markup.js` read it, so there is no pinned pair. Left: `pricing.py` and the docstring audit in `markup.py`, which Phase 17 retires | 8 (done), 17 |
 | 7.5 | ROUNDUP | 3 implementations (the leaf, `markup-core.js`, `pricing.py`), the workbook engine's plugin, 2 guards | Done: the model's copy is the leaf's `roundUp`, with a row in the parity test. `excelRoundUp`, the pack CEIL and `_roundup` stay, held equal by tests | 5 (done), 8, 17 |
-| 7.6 | Intake scope maps | 4 places | Quantity fields live in `js/work-types.js`. `js/intake-scope.js` draws them | 7, then 9 |
-| 7.7 | Role sets | 4 sets in 3 files | Computed from each tab's role in `js/work-types.js` | 7 |
-| 7.8 | Job type to tab | 4 places | Each job type lists its tabs in `js/work-types.js` | 7 |
-| 7.9 | The v2 intake's county picker | 1 copy, about 295 lines | Mount `js/county-picker.js` and delete the copy | 9 |
+| 7.6 | Intake scope maps | 4 places | Done in Phase 9a: the quantity fields and their snapshot keys live in `js/work-types.js`, and `js/intake-scope.js` draws and shows them, one source. The live intake delegates (its `SCOPE_BY_WORK_TYPE` and `systemFieldNames` are deleted), proven byte for byte against golden captures. Left: the estimate screen's area keys, held equal to the table by tests | 7 (done), 9a (done) |
+| 7.7 | Role sets | 4 sets in 3 files | Each tab carries its `role` and `optionOnly` in `js/work-types.js` (done). The sets are not yet computed from it: one difference is pinned (Leveling), see 7.7 | 7 (in part) |
+| 7.8 | Job type to tab | 4 places | Each job type lists its tabs in `js/work-types.js` and the model reads them through `tabsFor` (done). The intake's and the two screens' copies stay | 7 (in part) |
+| 7.9 | The v2 intake's county picker | 1 copy, about 295 lines (was) | Done in Phase 9b: the v2 intake mounts `js/county-picker.js` and its copy is deleted. A golden captured from the old copy pins every row, key, note and rate | 9b (done) |
 | 7.10 | The estimate page's two save blobs | 1 composition (was 2) | Done: one `buildSavePatch` used by both, and the intake's merge is one `patchModel` | 4 (done) |
 | 7.11 | "Is this draft a v2 estimate" | 2 places, in two languages | Held equal by one test over one table. The JavaScript one stays in `js/shared.js` (Phase 5 left it there, see 7.11) | 2 (added) |
 
@@ -300,9 +473,9 @@ not something that has been done. The summary first, then the evidence for each 
 
 | Copy | What it is |
 |---|---|
-| `js/index.js:70-75` | `SCOPE_BY_WORK_TYPE`: epoxy, polish, combo, gyp |
+| `js/intake-scope.js` | Was `SCOPE_BY_WORK_TYPE` in `js/index.js`: now `scopesFor`, read off the table (Phase 9a) |
 | `js/index.js:147-199` | A `scope: [...]` list of work types on each of the nine intake conditions |
-| `js/library.js:2974` | `WORK_TYPES`: polish, seal, epoxy, leveling, gyp (the tab list, not the job types) |
+| `js/library.js:2988` | `WORK_TYPES`: polish, seal, epoxy, leveling, gyp (the tab list, not the job types). Replaced in Phase 7: it is the table's `tabKeys()` now, and `appliesToWorkType` is a wrapper over `appliesTo` (`js/library.js:3000`) |
 | `js/estimate-review.js:671-673` | `BASE_ROLE`: workbook tab id to role |
 | `js/proposal-review.js:226-232` | `effectiveWorkType`: which roles decide the document |
 | `js/proposal-review.js:262-272` | The default narrative (scope, schedule, exclusions) keyed by audience and work type |
@@ -314,6 +487,19 @@ not something that has been done. The summary first, then the evidence for each 
 default without any error (the proposal falls back to the intake work type, a lookup falls back to
 Epoxy). **Planned (Phase 7):** `js/work-types.js` is the one vocabulary, and each of these reads it.
 The v2 intake gets the four job types in Phase 9, with types that are not ready shown disabled.
+
+**Done (Phase 7).** The vocabulary exists and `js/library.js` reads it: `WORK_TYPES` is `tabKeys()` and
+`appliesToWorkType` is a wrapper over `appliesTo`, which also fixes the model's own scoping (a combo job
+reads the Epoxy and the Polish defaults, and a job type handed to `appliesTo` throws, where it used to be
+answered "no" quietly). **Left where they are, and why.** The `scope` lists in `js/index.js` stay until Phase 9 moves the
+conditions of the live intake; until then `test_work_types.py` executes them and requires them equal to
+the table, so a second home cannot drift unseen. (`SCOPE_BY_WORK_TYPE` moved in Phase 9a: `applyScope` in
+`js/intake-scope.js` reads the table.) `BASE_ROLE` in `js/estimate-review.js` stays and is held equal to the table's roles by the same
+test. `effectiveWorkType` and the default narrative in `js/proposal-review.js`, the phrase in
+`js/price-lines-core.js` and the letter kinds in `js/coverletter-editor.js` stay: they belong to the
+spreadsheet's proposal path, which this phase does not touch, and each is a sentence or a document chosen
+by work type, which the table does not hold yet. `js/polish-intake.js` still writes `work_type: "polish"`
+and nothing else, until Phase 9.
 
 ### 7.2 The work-type list, in Python
 
@@ -331,19 +517,27 @@ The v2 intake gets the four job types in Phase 9, with types that are not ready 
 vocabulary from `js/work-types.js` as JSON, and compares `markup.TABS`, `leads._WORK_TYPES`, the keys
 of both `TEMPLATE_PICKER` tables and the info-sheet keys against it. A list that drifts fails the test.
 
+**Done (Phase 7).** `test_work_types_python_pin.py` is that test. It compares `markup.TABS`,
+`library.WORK_TYPES`, `leads._WORK_TYPES` and `leads._QUANTITY_KEYS`, the key sets of both
+`TEMPLATE_PICKER` tables (the proposal one also holds the two documents that are no job type, a sealer
+proposal and a budget sheet, named in the test), `info_sheet_writer`'s `_SF_KEYS`, `_LF_KEYS` and
+`_COVE_ROLES`, `condition_defaults.KEYS`, `library.RESERVED_ITEM_IDS` and `detect_work_type` against the
+table, and each check is shown to fail when its list drifts. Left: the option price phrase by work type in
+`backend/main.py`, which is a sentence and not a list of work types.
+
 ### 7.3 The job-condition tables
 
 | Copy | What it holds |
 |---|---|
 | `js/index.js:146-202` | `CONDITIONS` on the live intake: key, label, scope, default, the cells it writes, the on and off words, `needs`. Nine rows. Taxable writes four cells (Epoxy, Leveling and two Gyp tabs) |
-| `js/polish-intake.js:66-82` | `CONDITIONS` on the v2 intake: four rows (prevailing wage, taxable, remodel tax, bond), keys only |
-| `js/bid-model.js:1442-1469` | `CONDITION_CELLS`: seven rows with the cells they write. Taxable writes only `Epoxy!B6` |
-| `js/bid-model.js:1745-1747` | The conditions of a fresh model, eight keys including `bond` |
-| `js/polish-estimate.js:897-957` | `CONDITION_CARDS`: the Takeoff step's three cards (dye, joint filler, remove existing) |
-| `js/library.js:2640-2657` | The Defaults tab's condition list, and `backend/condition_defaults.py:61` (`KEYS`) |
+| `js/polish-intake.js:77` | `CONDITIONS` on the v2 intake: four rows (prevailing wage, taxable, remodel tax, bond), keys only. Replaced in Phase 7: it is the table's rows that the v2 intake asks |
+| `js/bid-model.js:1479` | `CONDITION_CELLS`: seven rows with the cells they write. Taxable writes only `Epoxy!B6`. Replaced in Phase 7: it is the table cut for polish, so Taxable writes four cells, and `CARRIED_CELLS` (`js/bid-model.js:1491`) carries the one condition the model has no answer for (Renovation) |
+| `js/bid-model.js:1783` | The conditions of a fresh model, eight keys including `bond`. Replaced in Phase 7: `modelDefaults()` of the table |
+| `js/polish-estimate.js:857-920` | `CONDITION_CARDS`: the Takeoff step's three cards (dye, joint filler, remove existing). Replaced in Phase 7: which cards, their order, cell, library row and dependency are the table's, and `CARD_VIEWS` keeps what each card says |
+| `js/library.js:2608-2671` | The Defaults tab's condition list, and `backend/condition_defaults.py:61` (`KEYS`). Replaced in Phase 7: the list is the table's (`takeoffConditionDefaults`), and `KEYS` is pinned to it by `test_work_types_python_pin.py` |
 | `js/estimate-review.js:4032-4077` | `JOB_FLAG_ADDR`, `JOB_FLAG_LITERAL_LAYOUTS`, `JOB_FLAG_LAYOUTS`, `JOB_FLAG_TEMPLATE`: where the tax answers sit on each sheet layout |
 | `backend/estimate_writer.py:394-406` | `POLISH_CELL_MAP` and its Epoxy sibling: key to cell letter |
-| `js/polish-sandbox.js` | `COPYABLE_CELLS`: the live intake's fourteen condition cells again. A v2 test copy keeps these from its source (and no other cell), so it opens with the job's answers. Added in Phase 2 and held equal to the intake's table by `test_v2_routing_guard.py`, which lifts `CONDITIONS` out of `index.js` and compares |
+| `js/polish-sandbox.js:269` | `COPYABLE_CELLS`: the live intake's fourteen condition cells again. A v2 test copy keeps these from its source (and no other cell), so it opens with the job's answers. Added in Phase 2 and held equal to the intake's table by `test_v2_routing_guard.py`, which lifts `CONDITIONS` out of `index.js` and compares Replaced in Phase 7: `copyableCells()` of the table. Phase 7b added the three base-sheet tax cells a split draft holds (`Polish!B6`, `Polish!D6`, `Gyp (USG 1-8")!D8`), so the list is those fourteen and three more, and a copy of a split project keeps its answers |
 
 **Problem.** The two Taxable tables disagree today: the live intake writes four cells and the v2 model
 writes one, so a v2 bid never writes the Leveling or Gyp Taxable cell. The intake's comment records
@@ -354,23 +548,42 @@ cards, the Defaults tab and the test copy read it. The Taxable cells are right b
 from the same row. The per-layout addresses in `estimate-review.js` are checked against the workbook
 by the test that already re-reads it (`test_taxable_flag_reaches_every_sheet.py`).
 
+**Done (Phase 7).** The table is `CONDITIONS` in `js/work-types.js`, and the rows marked replaced above read
+it. Taxable is four cells in it, so v2 writes the Leveling and Gyp Taxable cells by construction. Two
+things the table says that the old copies did not: a condition the v2 model does not carry (Renovation,
+asked on the live intake alone) is still written, with its default while its cell is blank and otherwise
+left as it is, and the three screens' orders and the v2 intake's one different sentence are data (`asked_on`
+and `wording`). **Left, and why.** The live intake's `CONDITIONS` in `js/index.js` stays until Phase 9, and
+`test_work_types.py` executes it and requires its nine rows equal to the table's rows asked on the live
+screen. `JOB_FLAG_*` in `js/estimate-review.js` (where each sheet's tax answers sit, after the estimate
+screen splits them) and `POLISH_CELL_MAP` in `backend/estimate_writer.py` (a key to a cell letter) stay: they
+are the spreadsheet's own, and `test_taxable_flag_reaches_every_sheet.py` re-reads the workbook for them.
+
 ### 7.4 The built-in markup rates
 
 | Copy | What it holds |
 |---|---|
-| `js/bid-model.js:99-130` | `RATES` (shipping 2%, escalation 5%, burden 12%, super and PTO 2.7%, soft costs 16%, sales tax 9.475%, bond 0, the Kansas remodel floor 6.5%) and `GP_BANDS` |
-| `js/markup.js:215-253` | `GP_5_BANDS` and `BUILTIN`: the same for Polish, plus Seal, Epoxy (3% and 13%), Leveling, Gyp (4.1% and an expression), and the Global lines (labor rate 33, lodging 70, per diem 45) |
-| `backend/pricing.py:272-292` | `_gp_pct` (the same ladder) and the defaults of `compute_full_bid` (33, 12%, 70, 45, 3%, 13%, 9.475%, a 10% remodel) |
-| `backend/markup.py:20-24` | The same rates, written in the docstring as an audit of the workbook |
+| `js/bid-profiles.js` (the home since Phase 8) | `defaults` (labor rate 33, lodging 70, per diem 45, fees, bond, sales tax 9.475%, the sheet's 10% and the Kansas 6.5% remodel rates) and `profiles`: every rate as Markups formula text, with the GP ladders (five rungs on Polish, Epoxy and Leveling, six on Seal, seven on Gyp) and Gyp's soft costs expression |
+| `js/bid-model.js` `RATES` and `GP_BANDS` | Read off the `polish-legacy` profile and `defaults` as it loads (`engine.rateNumber`, `engine.bandsOf`), and exported under the names they always had. The shipped labor, lodging and per diem figures are read the same way |
+| `js/markup.js` `BUILTIN` | `builtinRules()` of the profiles. `GP_5_BANDS` and `GYP_SOFT_COSTS` are gone from it, and Seal's and Gyp's GP now show their ladders where they used to show an empty box |
+| `backend/pricing.py` `_gp_pct` and `compute_full_bid` | Left. The same ladder and the defaults of `compute_full_bid` (33, 12%, 70, 45, 3%, 13%, 9.475%, a 10% remodel). Retired in Phase 17 |
+| `backend/markup.py` docstring | Left. The same rates, written as an audit of the workbook |
 
-**Problem.** `markup.js` says its numbers are transcribed from `bid-model.js` and from
-`markup.py`'s audit of the workbook, "and from nowhere else". A test (`test_markup_page.py` with
-`markup-rate-harness.js`) keeps the pair equal, which is a pinned pair and not one value. `pricing.py`
-only serves `/api/price` (`backend/main.py:3725`), which nothing in the frontend calls, and the
-program plan records it as wrong on whipped-resin cove and on quartz and flake price breaks.
-**Planned:** rates and ladders move into `js/bid-profiles.js` as formula strings (Phase 8).
-`markup.js` reads them, so there is no pinned pair. `pricing.py` and `/api/price` are retired
-(Phase 17). Until then `test_polish_markup_parity.py` and the goldens hold the numbers.
+**Problem, as it was.** `markup.js` said its numbers were transcribed from `bid-model.js` and from
+`markup.py`'s audit of the workbook, "and from nowhere else", and a test (`test_markup_page.py` with
+`markup-rate-harness.js`) kept the pair equal, which is a pinned pair and not one value. Seal's and Gyp's GP
+ladders were "not on record", so those two cells rendered an empty rate box. `pricing.py` only serves
+`/api/price` (`backend/main.py:3725`), which nothing in the frontend calls, and the program plan records it as wrong
+on whipped-resin cove and on quartz and flake price breaks.
+
+**Done (Phase 8).** The rates moved into `js/bid-profiles.js` as formula text and the engine reads them, so a
+rate built in and a rate filed on the Markups page are the same kind of thing. `bid-model.js` and `markup.js` read
+the profiles and there is no pair to keep equal. Seal's sixth rung (42,500) and Gyp's seven tiers were taken from
+the workbook's formula text, and `test_bid_engine.py` evaluates each profile ladder beside the cell formula over
+every edge, one either side. The Markups page now shows them as built-ins, and a filed ladder still overrides them.
+`markup-rate-harness.js` lifts the one line of `markup.js` that reads the profiles and runs it with the real module,
+and the Markups page tests carry `bid-profiles.js` into every scratch copy. **Left on purpose:** `pricing.py` and
+`/api/price`, until Phase 17, and the `markup.py` docstring.
 
 ### 7.5 ROUNDUP, and rounding up generally
 
@@ -421,6 +634,19 @@ same change that creates it, and a test proves the HTML is byte for byte what it
 captures taken from the base commit. There are never two renderers. The Python keys are pinned to the
 table by the same test as 7.2.
 
+**Done (Phase 7).** `FIELDS` in `js/work-types.js` is the nine quantity fields in the live intake's order, each
+with its scope token, its unit, its system and the key the estimate screen files it under (`snapshot`, or
+null where the sheet has no cell: a second polish system), and each job type and tab says which of them it
+uses. The python keys are pinned (7.2). `test_work_types.py` executes `scopesFor` and
+`systemFieldNames` out of `js/intake-scope.js` and `AREA_SF_CELLS` and `GYP_SF_CELLS` out of `js/estimate-review.js`
+and requires each equal to what the table derives, so the three copies cannot drift while they stay.
+**Done (Phase 9a).** The renderer is `js/intake-scope.js`: `renderSystems` draws the system blocks,
+`applyScope` shows what a job type asks for and hides the rest, and both take the job type from the caller
+(none is a throw). The live intake delegates in the same change and its old code is deleted.
+`test_intake_scope_module.py` runs the real page against `tests/fixtures/intake_scope_golden.json`, captured
+from the unchanged code, for every job type and both audiences. **Left:** the estimate cell each quantity
+lands in, which is the spreadsheet's.
+
 ### 7.7 The role sets
 
 | Copy | What it is |
@@ -434,11 +660,21 @@ once printed the Epoxy document with Seal's money. The two JavaScript copies are
 that greps both. **Planned (Phase 7):** each tab in `js/work-types.js` carries its role and an
 `optionOnly` flag, and the sets are computed from it.
 
+**Done in part (Phase 7).** Each tab carries its `role` and `optionOnly`, and a combo job's two tabs are the
+combined base roles. The two screens' sets are NOT computed from them yet, on purpose, because the table and
+the spreadsheet disagree about one tab: the table says Leveling is an option-only tab with the role
+`leveling`, and `js/estimate-review.js` gives Leveling and Epoxy blank the role `other`, which is why
+`OPTION_ONLY_ROLES` there is only seal. Computing the set from the table would change what the spreadsheet
+does with a Leveling tab, and that is its own change. `test_work_types.py` holds the rest equal (every
+sheet the spreadsheet gives a role agrees with the table, `PRICED_ROLES` and `COMBINED_BASE_ROLES` match)
+and pins the one difference, so closing it or widening it has to be done on purpose. `_COVE_ROLES` is
+pinned to the table by the Python test (7.2).
+
 ### 7.8 Job type to tab
 
 | Copy | What it is |
 |---|---|
-| `js/index.js:303-305` | Job type to the tabs the split tax flags go to |
+| `js/index.js:303-305` | Job type to the tabs the split tax flags go to. Gone in Phase 7b: it reads `baseSheets` of the table |
 | `js/estimate-review.js:4336-4342` | `baseFlagSheets`: Polish to `["Polish"]`, combo to Epoxy and Polish, else Epoxy |
 | `js/estimate-review.js:5203-5208` | `_areaBaseIds`: the tabs the proposal's area line is read from |
 | `js/proposal-review.js:1140-1144` | The same, with fewer branches |
@@ -448,15 +684,30 @@ and `appliesTo(defaultWorkTypes, layout)` answers "does this default apply to th
 asked about "combo", because a combo job has no tab of its own and a rate filed under that name could
 never be read (the Markups page already refuses it by name).
 
+**Done in part (Phase 7).** Each job type lists its tabs, `tabsFor` returns them and refuses anything that is
+not a job type, and the model's `workTypeApplies` and the default takeoff read them (that is the combo fix
+in 7.1). **Done in Phase 7b:** the live intake's tab list for the split tax flags is `baseSheets(jobType)`
+of the table, the sheet each of a job type's tabs is priced on. **Left:** the screens' `baseFlagSheets` and
+`_areaBaseIds` stay, because they are the spreadsheet path's.
+
 ### 7.9 The v2 intake's own county picker
 
 | Copy | What it is |
 |---|---|
-| `js/polish-intake.js:333-628` | About 295 lines: `loadCounties`, `filterCounties`, `renderCountyResults`, keyboard handling, `pickCounty`, `clearCounty`, the note under the box, `hydrateCounty` from the draft |
-| `js/county-picker.js` (394 lines) | The shared control the live intake already mounts (`index.html` loads it) |
+| `js/county-picker.js` | The one control. The live intake and the v2 intake both mount it |
 
-Both write the same four keys: `county`, `county_tax_rate`, `county_remodel_rate`, `county_notes`.
-**Planned (Phase 9):** the v2 intake mounts `county-picker.js` and its copy is deleted.
+**Done in Phase 9b.** The v2 intake used to carry about 295 lines of its own (`loadCounties`, `filterCounties`,
+`renderCountyResults`, keyboard handling, `pickCounty`, `clearCounty`, the note under the box and `hydrateCounty`).
+They are deleted. The page now holds three small functions that are its own: `mountCounty`, `renderCountyNote` and
+`countyKeys`. `backend/tests/fixtures/county_picker_golden.json` was captured from the old copy before it went: for
+a sample of searches, every row the box offers and, for each row, the four keys a click writes (`county`,
+`county_tax_rate`, `county_remodel_rate`, `county_notes`), the note with Remodel tax off and on, and what the real
+engine charges. The shared control must reproduce all of it.
+
+The same change gave the v2 intake a Job type choice. It is drawn from `js/work-types.js` by `js/intake-scope.js`
+(`jobTypesMarkup`), so there is no list of job types on the page. Only Polish is `ready`; Epoxy, Combo and Gyp are
+shown and disabled with a plain note, and a later phase enables one by setting `ready` in the vocabulary. The
+quantity fields on the page are drawn by the same renderer as the live intake.
 
 ### 7.10 The estimate page's save, now one composition
 
@@ -531,7 +782,7 @@ The phases, as the program plan numbers them. Each is its own pull request to st
 | 5 | Rename `polish-bid-core.js` to `bid-model.js` with no logic change, and add the `excel-math.js` leaf |
 | 6 | The workbook oracle and per-sheet goldens, Polish first |
 | 7 | `js/work-types.js` replaces the JavaScript copies; the Python pin; Taxable cells right by construction |
-| 8 | `js/bid-profiles.js` and `js/bid-engine.js`; Polish runs through a profile and its golden does not move; an Epoxy profile proven on goldens |
+| 8 | `js/bid-profiles.js` (part two) and `js/bid-engine.js`; Polish runs through a profile and its golden does not move; every tab's profile proven on the workbook's recorded answers |
 | 9 | `js/intake-scope.js`; the live intake delegates to it; the v2 intake for the four job types; the shared county picker |
 | 10 | Multi-section estimates, the price snapshot the proposal reads, per-tab rates snapshotted |
 | 11 | Library columns (price breaks, bulk cost, coverage basis) |
@@ -549,7 +800,7 @@ v2 bids stay test copies until Kyle signs off each work type. Where each phase t
 | 4 | 7.10. The model keeps unknown keys; one save patch. Done. |
 | 5 | Done. The module rename and the leaf in section 3 (with the paragraphs "Module names" and "The leaf"), the header in section 4, 7.5 (the model's ROUNDUP is the leaf's, and what was left where it is), and 7.11 (the move that did not happen). |
 | 6 | Done. Section 6, the workbook oracle, and the `js/bid-profiles.js` row of section 3 (the file exists, with only the cell maps in it). Nothing in section 7 changes: none of its copies is about the workbook's own cells. |
-| 7 | 7.1, 7.2, 7.3, 7.6, 7.7, 7.8. `js/work-types.js` and the Python pin. |
-| 8 | 7.4. `js/bid-profiles.js` and `js/bid-engine.js`; Polish runs through a profile and its golden does not move. |
+| 7 | Done, with some copies left on purpose. 7.1, 7.2, 7.3, 7.6, 7.7 and 7.8 each say what was replaced and what stays and why. `js/work-types.js` and the Python pin, the vocabulary paragraph near the top, the header in section 4 and the tests in section 6. |
+| 8 | Done. 7.4 and its row in the summary table (built-in rates now one source), the paragraph "The engine and the profiles", the rows of the engine, the model and `bid-profiles.js` in section 3, the header in section 4, and "The bid engine's proof" in section 6. Nothing is wired into a new screen: no bid changed price. |
 | 9 | 7.6, 7.9. `js/intake-scope.js`; the v2 intake for the four job types. |
 | 10 and later | Multi-section estimates, and the work types one at a time. v2 bids stay test copies until Kyle signs each work type off. |

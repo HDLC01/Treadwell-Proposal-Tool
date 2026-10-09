@@ -231,8 +231,22 @@ def test_a_tab_or_a_work_type_that_no_longer_exists_falls_back(result):
     Mutation: return `wanted` from pick() regardless of `allowed`."""
     r = result["libUnknown"]
     assert r["view"] == "asm", "an unknown tab was honoured"
-    assert r["wt"] == "polish", "an unknown work type was honoured"
+    assert r["wt"] == "global", "an unknown work type was honoured"
     assert r["shown"] == ["asm"], "no pane is on screen"
+
+
+def test_the_defaults_tab_opens_on_the_global_pill_and_a_remembered_work_type_still_wins(result):
+    """Hanz, 2026-10-09: "the default work type should be global since we have global values."
+    Global is the one selected on a fresh open, a remembered work type in the link still wins, and
+    pressing the Global pill selects it (and only it).
+
+    Mutation: put DEFAULT_WT back to the first work type, or leave `global` out of the list restoreView
+    and the strip's click handler accept."""
+    r = result["libGlobal"]
+    assert r["fresh"] == {"wt": "global", "strip": ["global"]}, r["fresh"]
+    assert r["remembered"] == {"wt": "epoxy", "strip": ["epoxy"]}, r["remembered"]
+    assert r["pressed"]["wt"] == "global" and r["pressed"]["strip"] == ["global"], r["pressed"]
+    assert "wt=global" in r["pressed"]["hash"], r["pressed"]
 
 
 def test_a_fresh_open_still_lands_on_assemblies_and_says_so(result):

@@ -189,16 +189,13 @@ const MK = (() => {
     "return { ratePctFrom, reachSentence, setLayout: (l) => { LAYOUT = l; } };"
   )(PRICES_THE_BID);
   // The built-in constants, so the round trip is asserted against the strings the page actually
-  // ships rather than against a retyped copy of them.
-  const BUILTIN = new Function(
-    g(/^  var GP_5_BANDS = .*$/m, "GP_5_BANDS") + NL +
-    // HARD_BID was lifted here too, until the constant it names left markup.js with the line
-    // itself on 2026-09-22.
-    g(/^  var GYP_SOFT_COSTS = '[\s\S]*?;$/m, "GYP_SOFT_COSTS") + NL +
-    g(/^  var F = function \(formula\) .*$/m, "F") + NL +
-    g(/^  var NOT_ON_TAB = .*$/m, "NOT_ON_TAB") + NL +
-    g(/^  var BUILTIN = \{[\s\S]*?^  \};$/m, "BUILTIN") + NL +
-    "return BUILTIN;")();
+  // ships rather than against a retyped copy of them. Since Phase 8 the page does not write them: it reads
+  // them off js/bid-profiles.js (`builtinRules()`), so this is that call, and the one line of markup.js that
+  // makes it is lifted and run with the real module handed in as `window`.
+  const BUILTIN = new Function("window",
+    g(/^  var PROFILES = window\.TWBidProfiles;$/m, "PROFILES") + NL +
+    g(/^  var BUILTIN = PROFILES\.builtinRules\(\);$/m, "BUILTIN") + NL +
+    "return BUILTIN;")({ TWBidProfiles: require(path.join(ROOT, "js", "bid-profiles.js")) });
   return Object.assign({ PRICES_THE_BID, BUILTIN }, api);
 })();
 
@@ -503,7 +500,6 @@ out.builtin = MK.BUILTIN;
     bondGlobal: say("global", row("bond", { formula: "1%" })),
     hardBidGlobal: say("global", row("hard_bid", { formula: "-4%" })),
     travelLodgingGlobal: say("global", row("travel_lodging", { formula: "70" })),
-    laborRateGlobal: say("global", row("labor_rate", { formula: "33" })),
     feesTexturaGlobal: say("global", row("fees_textura", { formula: "0" })),
     travelPerDiemGlobal: say("global", row("travel_per_diem", { formula: "45" })),
     // gyp soft costs: the per-(layout, line) hole

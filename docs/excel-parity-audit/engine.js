@@ -19,13 +19,26 @@
  *      global `window` for the flag the plugin sets. The audit used to carry its own copy of the plugin
  *      class, which could drift from the one that ships; it no longer does.
  *   3. THE SAME OPTIONS. PAGE_OPTIONS is what estimate-review.js passes to HyperFormula.buildEmpty
- *      (HF.init). backend/tests/test_workbook_oracle.py lifts that object out of the page, runs it
- *      against a fake HyperFormula and requires it to equal PAGE_OPTIONS, so this cannot go stale.
+ *      (HF.init). backend/tests/js/oracle-engine-harness.js lifts HF.init out of the page and runs it
+ *      against a stand-in HyperFormula, and backend/tests/test_workbook_oracle.py requires the options
+ *      it was given to equal PAGE_OPTIONS, so this cannot go stale.
  *   4. THE SAME LOAD ORDER. Every sheet is added first (cross-sheet references need them all),
  *      then the named expressions are registered with the page's alias rule for the names
  *      HyperFormula rejects (Glaze4 becomes Glaze_4, and every formula token is rewritten to match),
  *      then each sheet's cells go in as formula text when there is one and as the value when there is
- *      not (HF.loadSheet).
+ *      not (HF.loadSheet). The same harness RUNS the page's own named-expression block and its own
+ *      HF.loadSheet, and build() below, against recording stand-ins for HyperFormula on one fixture, and
+ *      test_workbook_oracle.py requires every call each of them made to HyperFormula, in order, to be
+ *      equal (the aliases they ended with and the number of names registered too). The page's boot order
+ *      (HF.init, the names, only then the cells) is read from its source. The ten one-line changes listed
+ *      in LOAD_BREAKS (test_workbook_oracle.py), each made to a scratch copy of the page or of this file,
+ *      turn that test red.
+ *
+ * WHAT IS NOT CLAIMED. The oracle types its numbers into the engine with setCellContents (see `set`
+ * below). The page's own door for an edit, HF.setCellValue, also turns numeric text into a number and
+ * refuses to write a Hard Bid? cell. The oracle goes round it on purpose: it records what the workbook
+ * does when that cell says Yes, which the page can never produce. So "the same engine" means the same
+ * BUILD of the workbook (bytes, plugin, options, names, load), not the same handling of a keystroke.
  *
  * ONE CONFIGURATION PER PROCESS. HyperFormula's function registry is global to the class and
  * unregisterFunction does not reliably undo a registration, so a second configuration measured in

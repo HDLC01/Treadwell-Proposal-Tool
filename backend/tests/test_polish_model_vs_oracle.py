@@ -15,8 +15,11 @@ the model plus exactly what the reason says (tooling added in with travel, trave
 remodel base) and requires it to equal the oracle to the dollar, which proves each reason is the whole reason.
 Every departure must also be SEEN on at least one case, or it is a comment and not a departure.
 
-THE RATCHET. Phase 17 closes these gaps for new bids. The moment a model change closes one, this test goes red
-until the departure is taken out of departures.json, so the list can only shrink on purpose and in view.
+THE RATCHET. Phase 17 closes three of these for NEW bids: tooling, the remodel tax base and lodging. The other two
+are decisions and are not to be "fixed": the hard-bid give-back is Hanz's deliberate removal (2026-09-22, and the
+Hard Bid? switch held at No since 2026-10-03), and the bond is 0 by design. The moment a model change closes a
+departure, this test goes red until it is taken out of departures.json, so the list can only shrink on purpose and
+in view.
 """
 import json
 
@@ -28,6 +31,10 @@ from _node import last_json_line, require_node, run_node
 
 HARNESS = S.TESTS / "js" / "oracle-polish-harness.js"
 MODEL = "js/bid-model.js"
+# Since Phase 8 the model's chain is js/bid-engine.js priceChain on the profile `polish-legacy`, and the rates
+# are js/bid-profiles.js text. A scratch copy of either carries the model beside it (the harness loads it).
+ENGINE = "js/bid-engine.js"
+PROFILES = "js/bid-profiles.js"
 
 
 def run(frontend=None):
@@ -77,6 +84,22 @@ def test_departures_json_is_well_formed(departures):
         assert set(d["keys"]) <= valid, d["id"]
 
 
+def test_the_note_in_departures_says_which_three_phase_17_closes_and_which_two_are_decisions(departures):
+    """The first wording said Phase 17 closes "the first three", which in the order of the list is tooling, the remodel base and the
+    HARD BID. The hard bid is not a gap, Hanz removed it on purpose, and the bond is 0 by design. A note that sends somebody to
+    'fix' either is a trap, so the note names which departures are which, in the right order, with the reasons."""
+    about = departures["about"]
+    closes = ["tooling-is-zero", "remodel-base-widened", "lodging-by-man-days"]
+    decisions = ["hard-bid-removed", "bond-is-not-an-input"]
+    assert {d["id"] for d in departures["departures"]} == set(closes + decisions)
+    where = {i: about.find(i) for i in closes + decisions}
+    assert min(where.values()) >= 0, ("the note must name every departure by its id", where)
+    assert max(where[i] for i in closes) < min(where[i] for i in decisions), "the three Phase 17 closes come first, then the two decisions"
+    assert "first three" not in about
+    for phrase in ("NEW bids", "2026-09-22", "2026-10-03", "by design", "not to be 'fixed'"):
+        assert phrase in about, phrase
+
+
 def test_each_departure_names_cells_that_really_say_it(departures):
     """The reasons are claims about the Polish tab. Read them back out of the template."""
     from test_workbook_formula_pins import _index
@@ -90,15 +113,16 @@ def test_each_departure_names_cells_that_really_say_it(departures):
 
 # ── the comparison can fail: break the model and watch it ────────────────────
 def test_a_wrong_burden_turns_it_red(tmp_path):
-    frontend = break_source(tmp_path, MODEL, "var burden = roundUp((labor + escalation) * RATES.BURDEN);",
-                            "var burden = roundUp((labor) * RATES.BURDEN);")
+    frontend = break_source(tmp_path, ENGINE, 'var burden = roundUp((labor + escalation) * rate("burden_pct"));',
+                            'var burden = roundUp((labor) * rate("burden_pct"));', also=[MODEL])
     summary = run(frontend)
     keys = {d["key"] for u in summary["chain"]["unexplained"] for d in u["diffs"]}
     assert summary["chain"]["unexplained"] and "burden" in keys, "burden must differ wherever prevailing wage adds an escalation"
 
 
 def test_a_moved_gp_edge_turns_it_red(tmp_path):
-    frontend = break_source(tmp_path, MODEL, "var GP_BANDS = [[6500, 0.52],", "var GP_BANDS = [[6501, 0.52],")
+    frontend = break_source(tmp_path, PROFILES, 'var GP_5 = "MARKUP(BAND(subtotal, 6500,52%,',
+                            'var GP_5 = "MARKUP(BAND(subtotal, 6501,52%,', also=[MODEL])
     summary = run(frontend)
     ids = {u["id"] for u in summary["chain"]["unexplained"]}
     assert any(i.startswith("edge/gpPct/6500/0") for i in ids), ids
@@ -109,9 +133,9 @@ def test_closing_the_remodel_base_departure_in_the_model_turns_it_red_until_the_
     harness, which describes the model as leaving travel out, says the model is no longer that: red. The departure
     has to come out of departures.json in the same change."""
     frontend = break_source(
-        tmp_path, MODEL,
-        "(labor + escalation + burden + gp + super_pto + soft_costs + contingency + fees)",
-        "(labor + escalation + burden + travel + gp + super_pto + soft_costs + contingency + fees)")
+        tmp_path, ENGINE,
+        "var remodelBase = labor + escalation + burden;",
+        "var remodelBase = labor + escalation + burden + travel;", also=[MODEL])
     summary = run(frontend)
     keys = {d["key"] for u in summary["chain"]["unexplained"] for d in u["diffs"]}
     assert "(remodel-base-widened)" in keys, "a closed departure must be noticed, and named"
@@ -121,9 +145,9 @@ def test_closing_the_tooling_departure_in_the_model_turns_it_red_until_the_list_
     """Give the model a tooling line in its sub-total, as Kyle's sheet has it. The harness predicts the sheet by
     folding tooling into travel, so a model that now reads tooling counts it twice: red."""
     frontend = break_source(
-        tmp_path, MODEL,
-        "var sub_total = roundUp(material_total + labor + escalation + burden + travel);",
-        "var sub_total = roundUp(material_total + labor + escalation + burden + travel + num(input.tooling));")
+        tmp_path, ENGINE,
+        "if (q.toolingInSubTotal) sub += tooling;",
+        "sub += num(input.tooling);", also=[MODEL])
     summary = run(frontend)
     keys = {d["key"] for u in summary["chain"]["unexplained"] for d in u["diffs"]}
     assert "subTotal" in keys, "a closed departure must be noticed"
