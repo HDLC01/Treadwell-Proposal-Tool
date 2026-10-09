@@ -324,7 +324,7 @@
   <div class="top">
     <img class="logo" src="/img/treadwell-bison.svg" alt="Treadwell" />
     <h1>Markup</h1>
-    <span class="beta" title="Being tested. These rows are where the chain's rates are edited by an admin instead of a developer. Super &amp; PTO and Soft Costs reach the estimate workbook; GP, Bond and the two travel figures are stored but not read yet, and Estimating Tool v2 is not wired to any of them: its engine still runs on its own hardcoded constants.">Beta test</span>
+    <span class="beta" title="Being tested. These rows are where the chain's rates are edited by an admin instead of a developer. Super &amp; PTO and Soft Costs reach the estimate workbook; GP and Bond are stored but not read yet, and Estimating Tool v2 is not wired to any of them: its engine still runs on its own hardcoded constants.">Beta test</span>
   </div>
   <div class="wrap">
     <!-- ONE SENTENCE, then the rest behind a disclosure. What used to stand here was paragraphs
@@ -362,12 +362,13 @@
       <p class="explain">The first five tabs are the <b>sheet layouts</b> a bid can sit on — not
         work types. There is no Combo: a combo job is two option lines, each priced off its own
         tab.</p>
-      <p class="explain"><b>Global is the sixth, and it isn't a sheet.</b> Three lines are the same
-        rule on every priced tab — Bond is zero everywhere, travel lodging and food are one figure
-        each — so they're set once there and every sheet tab reads them. On a sheet tab those rows
+      <p class="explain"><b>Global is the sixth, and it isn't a sheet.</b> Two lines are the same
+        rule on every priced tab — Bond is zero everywhere, and Fees + Textura is one figure — so
+        they're set once there and every sheet tab reads them. On a sheet tab those rows
         show the value and say where it's set; there's no second box, because one line with two
-        rates is a price nobody chose.</p>
-      <p class="explain">Global doesn't compound. The two travel lines aren't chain lines at all,
+        rates is a price nobody chose. Hotel and Per Diem are set on the Labor tab of Items &amp;
+        Assemblies.</p>
+      <p class="explain">Global doesn't compound. Neither line is a chain line,
         and Bond has nothing above it there, so that tab has no running total and no lump
         sum — each row is just what it comes to.</p>
       <p class="explain"><b>There is no hard-bid discount.</b> Kyle's automatic 2.5% / 4%

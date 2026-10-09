@@ -299,15 +299,7 @@
    *  into one. */
   function reachSentence(r) {
     if (!r.editable) return "";
-    // LODGING AND PER DIEM ARE READ BY THE POLISH ESTIMATE BETA (2026-10-05): a new bid copies the
-    // figure onto its own Lodging / Per Diem line, priced inside the markups. Kyle's WORKBOOK still
-    // does not read them (no address in any target table), and that is the half this row says too,
-    // so an admin is not left believing the downloaded .xlsx follows the figure.
-    if (LAYOUT === "global" && (r.line_key === "travel_lodging" || r.line_key === "travel_per_diem")) {
-      return " Estimating Tool v2 copies this figure onto every NEW bid's " +
-        (r.line_key === "travel_lodging" ? "Lodging" : "Per Diem") + " line; a saved bid keeps its " +
-        "own. Kyle's workbook does not read it.";
-    }
+    // (Lodging and Per Diem are set on Items & Assemblies -> Labor now and have no row here.)
     // FEES + TEXTURA IS READ THE SAME WAY (2026-10-06): a new beta bid starts its Fees + Textura
     // line at this figure. Without this branch it fell through to "changes no bid", which told an
     // admin a live default was dead. (The labor rate used to share this branch; it is set on
@@ -450,13 +442,14 @@
 
   function isGlobalLine(k) { return GLOBAL_KEYS.indexOf(k) >= 0; }
 
-  /** GLOBAL LINES THE API STILL ACCEPTS BUT THIS PAGE DOES NOT DRAW. The company labor rate moved
-   *  to Items & Assemblies -> Labor (Hanz, 2026-10-09): the same markup_rules row (layout global,
-   *  line_key labor_rate), a different door, so the backend keeps accepting it and no data moves.
+  /** GLOBAL LINES THE API STILL ACCEPTS BUT THIS PAGE DOES NOT DRAW. The company labor rate, Hotel
+   *  and Per Diem moved to Items & Assemblies -> Labor (Hanz, 2026-10-09): the same markup_rules
+   *  rows (layout global, line_key labor_rate / travel_lodging / travel_per_diem), a different
+   *  door, so the backend keeps accepting them and no data moves.
    *  It stays a global line for every "where does this live" question above; it is only never
    *  listed -- not on the Global tab, not in the read-only block on a sheet tab, and not even as a
    *  filed rule that "nothing would show". */
-  var OFF_PAGE = ["labor_rate"];
+  var OFF_PAGE = ["labor_rate", "travel_lodging", "travel_per_diem"];
   function onPage(k) { return OFF_PAGE.indexOf(k) < 0; }
   function knownHome(k) { return isGlobalLine(k) || TAB_KEYS.indexOf(k) >= 0; }
 
@@ -1693,8 +1686,8 @@
       out += rowHtml(rows[i], priced[rows[i].line_key], globalPreviewHtml);
     }
     // THE ONE POINTER TO WHERE THE LABOR RATE WENT, so somebody who looks for it here is told.
-    out += '<p class="hint" data-labor-rate-pointer="1">The company labor rate is set on ' +
-      '<a href="library.html#tab=labor">Items &amp; Assemblies, Labor tab</a>.</p>';
+    out += '<p class="hint" data-labor-rate-pointer="1">The company labor rate, Hotel and Per Diem ' +
+      'are set on <a href="library.html#tab=labor">Items &amp; Assemblies, Labor tab</a>.</p>';
     return out;
   }
 

@@ -437,6 +437,7 @@ function build(opts) {
       subtotalBoxes: byAttr(t, "data-subtotal").length,
       switchCount: byAttr(t, "role", "switch").length,
       // The one line on the Global tab that says where the labor rate went.
+      pointerText: (byAttr(t, "data-labor-rate-pointer")[0] || {}).text || "",
       pointer: byAttr(t, "data-labor-rate-pointer").length > 0 &&
                /Items &amp; Assemblies, Labor tab/.test(byAttr(t, "data-labor-rate-pointer")[0].html || "") ||
                byAttr(t, "data-labor-rate-pointer").some((n) => /Items & Assemblies, Labor tab/.test(n.text || "")),
@@ -817,7 +818,7 @@ async function main() {
     s.clickTab("global");
     await drain();
     out.roundTripPuts = s.puts().map((r) => r.body);
-    for (const k of ["bond", "travel_lodging", "travel_per_diem"]) {
+    for (const k of ["bond", "fees_textura"]) {
       s.leave("s-" + k + "-value", null);
     }
     s.clickTab("polish");
@@ -945,7 +946,9 @@ async function main() {
 
     // The labor rate is FILED ($36) and the API lists it; the page still draws no row for it.
     {
-      const f = build({ rules: [rule("global", "labor_rate", { formula: "36" })] });
+      const f = build({ rules: [rule("global", "labor_rate", { formula: "36" }),
+                                rule("global", "travel_lodging", { formula: "90" }),
+                                rule("global", "travel_per_diem", { formula: "50" })] });
       await drain();
       f.clickTab("global");
       await drain();
@@ -954,7 +957,7 @@ async function main() {
 
     // A rate typed here files against the `global` layout, not against whichever sheet tab the
     // admin happened to come from.
-    s.typeAndLeave("s-travel_lodging-value", "80", null);
+    s.typeAndLeave("s-bond-value", "2", null);
     await drain();
     out.globalEditBody = (s.puts()[0] || {}).body || null;
     out.globalEdited = s.snap();
@@ -969,7 +972,10 @@ async function main() {
     // labor_rate is FILED on purpose and must never show: it lives on Items & Assemblies -> Labor.
     const filed = [rule("global", "labor_rate", { formula: "36" }),
                    rule("global", "fees_textura", { formula: "250" }),
-                   rule("global", "travel_lodging", { formula: null, applies: false }),
+                   // FILED on purpose and must never show: Hotel and Per Diem live on Items &
+                   // Assemblies -> Labor (Hanz, 2026-10-09).
+                   rule("global", "travel_lodging", { formula: "90" }),
+                   rule("global", "travel_per_diem", { formula: "50" }),
                    rule("gyp", "gp", { formula: "30%" })];
     const s = build({ rules: filed });
     await drain();
@@ -1046,7 +1052,7 @@ async function main() {
   //   admin decisions on one screen instead: bond filed at nothing, travel_lodging switched off.
   {
     const s = build({ rules: [rule("global", "bond", { formula: "0", applies: true }),
-                              rule("global", "travel_lodging", { applies: false, formula: null })] });
+                              rule("global", "fees_textura", { applies: false, formula: null })] });
     await drain();
     s.clickTab("global");
     await drain();
