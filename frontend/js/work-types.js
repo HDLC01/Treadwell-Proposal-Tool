@@ -37,8 +37,8 @@
 // fresh model's conditions, which defaults apply to a bid, where a save writes the tax answers), js/polish-intake.js
 // (CONDITIONS), js/polish-estimate.js (CONDITION_CARDS), js/library.js (WORK_TYPES, appliesToWorkType and the
 // Takeoff condition defaults) and js/polish-sandbox.js (COPYABLE_CELLS). The live intake (js/index.js) keeps its
-// own CONDITIONS and SCOPE_BY_WORK_TYPE until Phase 9 moves it onto js/intake-scope.js, and
-// test_work_types.py executes both and requires them equal to the rows below. It reads this file for one thing
+// own CONDITIONS until Phase 9 moves them, and test_work_types.py executes them and requires them equal to
+// the rows below. Which quantity fields a job type shows is js/intake-scope.js's, read off this table. It reads this file for one thing
 // already, the split rule below (writeCellsFor and baseSheets), so that the live intake and a v2 save cannot
 // answer "which cells does this tax switch write on a split draft" two ways. Python is pinned to this
 // file by test_work_types_python_pin.py, which runs node and compares markup.TABS, library.WORK_TYPES,
@@ -350,7 +350,7 @@
   }
 
   /** The intake's data-scope tokens a job type shows in the two-system block ("epoxy", "polish",
-   *  "cove"), which is js/index.js's SCOPE_BY_WORK_TYPE. Gypsum has its own box and shows none. */
+   *  "cove"), which js/intake-scope.js shows. Gypsum has its own box and shows none. */
   function scopesFor(jobTypeKey) {
     var out = [];
     fieldsFor(jobTypeKey).forEach(function (f) {

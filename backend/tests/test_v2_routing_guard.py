@@ -37,7 +37,7 @@ HARNESS = TESTS / "js" / "v2-routing-harness.js"
 BETA_HARNESS = TESTS / "js" / "beta-routing-harness.js"
 # What beta-routing-harness.js reads (it does not fall back to the real frontend for a missing file).
 BETA_FILES = ["js/index.js", "index.html", "shared.js", "js/projects.js", "js/county-picker.js",
-              "js/address-lookup.js", "js/work-types.js"]
+              "js/address-lookup.js", "js/work-types.js", "js/intake-scope.js"]
 
 
 # ── the harness runs ─────────────────────────────────────────────────────────────────────────────

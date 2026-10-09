@@ -476,6 +476,8 @@ const documentStub = {
   // index.html orders the tags: index.js reads it for the split rule and throws by name without it. The REAL
   // module, so the live intake's split behaviour is the table's.
   windowStub.TWWorkTypes = require(path.join(ROOT, "js", "work-types.js"));
+  // The quantity-field renderer, loaded after the vocabulary and before the page script, as index.html orders them.
+  windowStub.TWIntakeScope = require(path.join(ROOT, "js", "intake-scope.js"));
   new Function("document", "window", "fetch", countyJs)(documentStub, windowStub, fetchStub);
   // The address lookup, loaded before index.js exactly as index.html orders the tags: the page
   // script calls TWAddress.mount() as it boots, so a ReferenceError here is a missing script tag.

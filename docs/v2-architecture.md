@@ -6,7 +6,7 @@ today, with what happens to each copy.
 
 **What exists today, and what does not.** The tests and the golden files described in section 6
 exist now, and so does the workbook oracle (Phase 6, also section 6). Every module in section 3 exists
-except `intake-scope.js`, which is the design Phase 9 builds toward. `js/bid-profiles.js` was created by Phase 6
+except the v2 intake's use of `intake-scope.js`, which Phase 9 finishes (9a created the module and moved the live intake onto it). `js/bid-profiles.js` was created by Phase 6
 with only the cell maps of the eleven priced tabs in it, and Phase 8 added its second half (the profiles, the
 global defaults and the table of Markups lines) and created `js/bid-engine.js`, which prices a bid from a profile
 (see "The engine and the profiles" below). Nothing on a screen calls the engine yet except through
@@ -148,7 +148,7 @@ Each layer may use the layers above it in this table and nothing below it. A lea
 | leaf (data) | `js/bid-profiles.js` | Part one (Phase 6): the cell maps of the eleven priced tabs. Part two (Phase 8): one profile per kind of tab as plain data, with rates and GP ladders as Markups formula text, a closed set of quirk flags and an `extends` link (Seal is Polish plus one ladder). The one home of the global defaults: labor rate, lodging, per diem, fees, sales tax, bond and the two remodel rates. `builtinRules()` is what the Markups page shows as built-ins. | nothing |
 | model | `js/bid-model.js` (Phase 5 renamed it from `js/polish-bid-core.js`, with no logic change) | The saved estimate: fresh, migrate, seed a new bid, labor, travel, distance, conditions per section; building the save patch; composing the price snapshot the proposal reads. Since Phase 8 `markupChain` is a wrapper over the engine on `polish-legacy`, and `RATES` and `GP_BANDS` are read off the profile. | excel-math, work-types and bid-engine |
 | engine | `js/bid-engine.js` (Phase 8) | `priceChain(profile, input, rates)`: the markup chain for any profile. `resolveProfile`, `forTab`, `compileRates` and `ruleNumber` turn the filed Markups rules into numbers or into an unpriceable line with a reason. `combine` adds the tabs of a combo job after each tab has had its own gross profit. | excel-math, bid-profiles, markup-core |
-| render | `js/intake-scope.js` | Draws and shows the quantity fields of the intake from `work-types.js`. Extracted from `js/index.js`; the live intake then calls it. | work-types |
+| render | `js/intake-scope.js` | Draws and shows the quantity fields of the intake from `work-types.js`. Extracted from `js/index.js` in Phase 9a; the live intake calls it (`renderSystems`, `applyScope`) and holds no copy. | work-types |
 
 Already shared and kept as they are: `js/library-core.js` (priceLine and priceAssembly, every
 material), `js/markup-core.js` (reads and evaluates the Markups formulas), `js/xl-excel-rounding.js`
@@ -391,8 +391,8 @@ apart from where two of its breakages now land (the GP band in `bid-profiles.js`
 
 **The vocabulary tests (Phase 7).** `backend/tests/test_work_types.py`, with `tests/js/work-types-harness.js`,
 runs the real `js/work-types.js` and the real `js/bid-model.js` that derives from it, and the copies the table
-has to stay equal to, lifted out of the page files and evaluated: the live intake's `CONDITIONS`,
-`SCOPE_BY_WORK_TYPE` and `systemFieldNames` (`js/index.js`), and the estimate screen's sheet map, role map,
+has to stay equal to, lifted out of the page files and evaluated: the live intake's `CONDITIONS`
+(`js/index.js`), `scopesFor` and `systemFieldNames` out of `js/intake-scope.js`, and the estimate screen's sheet map, role map,
 area cells and role sets (`js/estimate-review.js`). The cells are read back out of Kyle's template (each is a
 literal there, or one of the two Renovation cells and blank). Its last section breaks one line of the module or
 of the model in a scratch copy, runs the harness against it, and requires the named check to fail, and a test
@@ -462,7 +462,7 @@ not something that has been done. The summary first, then the evidence for each 
 | 7.3 | Job-condition tables | 10 places | Done in Phase 7: one conditions table in `js/work-types.js`, and the model's `CONDITION_CELLS` and fresh conditions, v2's intake `CONDITIONS`, the Takeoff `CONDITION_CARDS`, the Defaults tab's list and the test copy's `COPYABLE_CELLS` read it. The Taxable cells are right by construction. Which cells the two tax switches write on a split draft is the table's too since Phase 7b (`perSheet` and `writeCellsFor`), for the live intake and for a v2 save. Left: the live intake's `CONDITIONS` (held equal by a test until Phase 9) and the estimate screen's per-sheet tax addresses (`JOB_FLAG_ADDR`) | 7 (in part), 7b, 9 |
 | 7.4 | Built-in markup rates | 4 places (was) | Done in Phase 8: one home, the profiles and `defaults` in `js/bid-profiles.js`. `bid-model.js` and `markup.js` read it, so there is no pinned pair. Left: `pricing.py` and the docstring audit in `markup.py`, which Phase 17 retires | 8 (done), 17 |
 | 7.5 | ROUNDUP | 3 implementations (the leaf, `markup-core.js`, `pricing.py`), the workbook engine's plugin, 2 guards | Done: the model's copy is the leaf's `roundUp`, with a row in the parity test. `excelRoundUp`, the pack CEIL and `_roundup` stay, held equal by tests | 5 (done), 8, 17 |
-| 7.6 | Intake scope maps | 4 places | The quantity fields and their snapshot keys live in `js/work-types.js` (done), and the live intake's map and the estimate screen's area keys are held equal to them by tests. `js/intake-scope.js` draws them | 7 (done), then 9 |
+| 7.6 | Intake scope maps | 4 places | Done in Phase 9a: the quantity fields and their snapshot keys live in `js/work-types.js`, and `js/intake-scope.js` draws and shows them, one source. The live intake delegates (its `SCOPE_BY_WORK_TYPE` and `systemFieldNames` are deleted), proven byte for byte against golden captures. Left: the estimate screen's area keys, held equal to the table by tests | 7 (done), 9a (done) |
 | 7.7 | Role sets | 4 sets in 3 files | Each tab carries its `role` and `optionOnly` in `js/work-types.js` (done). The sets are not yet computed from it: one difference is pinned (Leveling), see 7.7 | 7 (in part) |
 | 7.8 | Job type to tab | 4 places | Each job type lists its tabs in `js/work-types.js` and the model reads them through `tabsFor` (done). The intake's and the two screens' copies stay | 7 (in part) |
 | 7.9 | The v2 intake's county picker | 1 copy, about 295 lines | Mount `js/county-picker.js` and delete the copy | 9 |
@@ -473,7 +473,7 @@ not something that has been done. The summary first, then the evidence for each 
 
 | Copy | What it is |
 |---|---|
-| `js/index.js:70-75` | `SCOPE_BY_WORK_TYPE`: epoxy, polish, combo, gyp |
+| `js/intake-scope.js` | Was `SCOPE_BY_WORK_TYPE` in `js/index.js`: now `scopesFor`, read off the table (Phase 9a) |
 | `js/index.js:147-199` | A `scope: [...]` list of work types on each of the nine intake conditions |
 | `js/library.js:2988` | `WORK_TYPES`: polish, seal, epoxy, leveling, gyp (the tab list, not the job types). Replaced in Phase 7: it is the table's `tabKeys()` now, and `appliesToWorkType` is a wrapper over `appliesTo` (`js/library.js:3000`) |
 | `js/estimate-review.js:671-673` | `BASE_ROLE`: workbook tab id to role |
@@ -491,10 +491,10 @@ The v2 intake gets the four job types in Phase 9, with types that are not ready 
 **Done (Phase 7).** The vocabulary exists and `js/library.js` reads it: `WORK_TYPES` is `tabKeys()` and
 `appliesToWorkType` is a wrapper over `appliesTo`, which also fixes the model's own scoping (a combo job
 reads the Epoxy and the Polish defaults, and a job type handed to `appliesTo` throws, where it used to be
-answered "no" quietly). **Left where they are, and why.** `SCOPE_BY_WORK_TYPE` and the `scope` lists in
-`js/index.js` stay until Phase 9 moves the live intake onto `js/intake-scope.js`; until then
-`test_work_types.py` executes them and requires them equal to the table, so a second home cannot drift
-unseen. `BASE_ROLE` in `js/estimate-review.js` stays and is held equal to the table's roles by the same
+answered "no" quietly). **Left where they are, and why.** The `scope` lists in `js/index.js` stay until Phase 9 moves the
+conditions of the live intake; until then `test_work_types.py` executes them and requires them equal to
+the table, so a second home cannot drift unseen. (`SCOPE_BY_WORK_TYPE` moved in Phase 9a: `applyScope` in
+`js/intake-scope.js` reads the table.) `BASE_ROLE` in `js/estimate-review.js` stays and is held equal to the table's roles by the same
 test. `effectiveWorkType` and the default narrative in `js/proposal-review.js`, the phrase in
 `js/price-lines-core.js` and the letter kinds in `js/coverletter-editor.js` stay: they belong to the
 spreadsheet's proposal path, which this phase does not touch, and each is a sentence or a document chosen
@@ -637,11 +637,15 @@ table by the same test as 7.2.
 **Done (Phase 7).** `FIELDS` in `js/work-types.js` is the nine quantity fields in the live intake's order, each
 with its scope token, its unit, its system and the key the estimate screen files it under (`snapshot`, or
 null where the sheet has no cell: a second polish system), and each job type and tab says which of them it
-uses. The python keys are pinned (7.2). `test_work_types.py` executes `SCOPE_BY_WORK_TYPE` and
-`systemFieldNames` out of `js/index.js` and `AREA_SF_CELLS` and `GYP_SF_CELLS` out of `js/estimate-review.js`
+uses. The python keys are pinned (7.2). `test_work_types.py` executes `scopesFor` and
+`systemFieldNames` out of `js/intake-scope.js` and `AREA_SF_CELLS` and `GYP_SF_CELLS` out of `js/estimate-review.js`
 and requires each equal to what the table derives, so the three copies cannot drift while they stay.
-**Left:** the renderer, which is Phase 9's, and the estimate cell each quantity lands in, which is the
-spreadsheet's.
+**Done (Phase 9a).** The renderer is `js/intake-scope.js`: `renderSystems` draws the system blocks,
+`applyScope` shows what a job type asks for and hides the rest, and both take the job type from the caller
+(none is a throw). The live intake delegates in the same change and its old code is deleted.
+`test_intake_scope_module.py` runs the real page against `tests/fixtures/intake_scope_golden.json`, captured
+from the unchanged code, for every job type and both audiences. **Left:** the estimate cell each quantity
+lands in, which is the spreadsheet's.
 
 ### 7.7 The role sets
 

@@ -3,12 +3,14 @@
   // ── the one vocabulary, for ONE thing ─────────────────────────────────────────
   // js/work-types.js is loaded before this script (index.html). This page reads it for the split rule only:
   // which cells the two tax switches write once the estimate screen has split them per sheet (splitFlagCells
-  // below), the same rule a v2 save follows. The page's own condition table and its map of which quantity
-  // fields each work type shows stay its own until Phase 9 moves it onto the shared modules, and
-  // test_work_types.py holds both equal to the table. FIRST in the file, so a page that lacks the vocabulary
-  // says so by name instead of dying later on a TypeError.
+  // below), the same rule a v2 save follows. The page's own condition table stays its own until Phase 9
+  // moves it onto the shared modules, and test_work_types.py holds it equal to the table. The quantity
+  // fields (what they are, which job type shows which) are js/intake-scope.js's. FIRST in the file, so a
+  // page that lacks the vocabulary says so by name instead of dying later on a TypeError.
   const workTypes = window.TWWorkTypes;
   if (!workTypes) throw new Error("index.js needs work-types.js loaded before it");
+  const intakeScope = window.TWIntakeScope;
+  if (!intakeScope) throw new Error("index.js needs intake-scope.js loaded before it");
 
   // ── a v2 draft does not open on this form ─────────────────────────────────────
   // Estimating Tool v2 has its own intake (polish-intake.html), and a project priced there has no
@@ -39,58 +41,12 @@
   const form = document.getElementById("intake-form");
 
   // ── Per-system Scope fields (fixed at two) ────────────────────────
-  // The estimate sheet is a two-system model, so we always render exactly
-  // two {Epoxy SF, Polish SF, Cove LF} groups. System 1 keeps the legacy
-  // field names so the existing estimate-cell mappings keep working;
-  // System 2 uses suffixed names and is optional (leave blank to skip it).
+  // Drawn by js/intake-scope.js: the estimate sheet is a two-system model, so it always renders exactly
+  // two systems of quantity fields. System 2 is optional (leave blank to skip it).
   const systemsContainer = document.getElementById("systems-container");
 
-  function systemFieldNames(k) {
-    return k === 1
-      ? { epoxy: "system_1_sf", polish: "polish_sf",      cove: "cove_1_lf" }
-      : { epoxy: `system_${k}_sf`, polish: `polish_${k}_sf`, cove: `cove_${k}_lf` };
-  }
-
-  function renderSystems(n) {
-    n = Math.max(1, Math.min(6, parseInt(n, 10) || 1));
-    // Preserve anything already typed before we rebuild the markup.
-    const prev = {};
-    systemsContainer.querySelectorAll("input[name]").forEach(i => { prev[i.name] = i.value; });
-    let html = "";
-    for (let k = 1; k <= n; k++) {
-      const f = systemFieldNames(k);
-      const label = k === 2 ? `System ${k} (optional)` : `System ${k}`;
-      const tag = n > 1 ? `<div class="system-tag">${label}</div>` : "";
-      // data-scope drives which work types each field belongs to (see
-      // syncScopeToWorkType). Asking an epoxy job for Polish floor SF, or a polish
-      // job for cove, is how an intake form teaches people to ignore it.
-      html += `
-        <div class="system-block">
-          ${tag}
-          <div class="row">
-            <label data-scope="epoxy">Epoxy floor SF
-              <input type="number" name="${f.epoxy}" min="0" step="1" value="0">
-            </label>
-            <label data-scope="polish">Polish floor SF
-              <input type="number" name="${f.polish}" min="0" step="1" value="0">
-            </label>
-          </div>
-          <div class="row">
-            <label data-scope="cove">Cove LF (epoxy)
-              <input type="number" name="${f.cove}" min="0" step="1" value="0">
-            </label>
-          </div>
-        </div>`;
-    }
-    systemsContainer.innerHTML = html;
-    // Restore preserved values into the rebuilt fields.
-    systemsContainer.querySelectorAll("input[name]").forEach(i => {
-      if (prev[i.name] != null && prev[i.name] !== "") i.value = prev[i.name];
-    });
-  }
-
   // Always two systems (System 2 optional), then hydrate the whole form.
-  renderSystems(2);
+  intakeScope.renderSystems(systemsContainer, 2);
   TW.writeForm(form, TW.getState());
 
   // Gyp jobs use 3 SF buckets instead of the epoxy/polish system fields — show
@@ -101,47 +57,20 @@
   const betaBtn = document.getElementById("beta-continue");
   const thicknessRow = document.getElementById("thickness-row");
 
-  // Which quantity fields belong to which work type. Cove is an epoxy detail, so a
-  // polish-only job never shows it (Hanz, 2026-08-06).
-  const SCOPE_BY_WORK_TYPE = {
-    epoxy:  ["epoxy", "cove"],
-    polish: ["polish"],
-    combo:  ["epoxy", "polish", "cove"],
-    gyp:    [],                     // gyp uses its own three SF buckets instead
-  };
-
   function syncScopeToWorkType() {
     const wt = (form.querySelector("[name='work_type']:checked") || {}).value || "epoxy";
-    const isGyp = wt === "gyp";
-    if (gypBox) gypBox.style.display = isGyp ? "" : "none";
-    if (systemsContainer) systemsContainer.style.display = isGyp ? "none" : "";
-
-    // Hide, never remove: the field names are what saved drafts and the estimate-cell
-    // mappings key on, and a value typed under Combo should still be there if somebody
-    // switches back. Keeping it out of the SHEET is estimate-review's job, which seeds
-    // only the fields that apply to the chosen work type.
-    const allowed = SCOPE_BY_WORK_TYPE[wt] || SCOPE_BY_WORK_TYPE.epoxy;
-    (systemsContainer ? systemsContainer.querySelectorAll("[data-scope]") : []).forEach((el) => {
-      el.style.display = allowed.includes(el.getAttribute("data-scope")) ? "" : "none";
-    });
-    // A row whose every field is hidden would otherwise leave an empty gap.
-    (systemsContainer ? systemsContainer.querySelectorAll(".row") : []).forEach((row) => {
-      const fields = row.querySelectorAll("[data-scope]");
-      const anyShown = [...fields].some((el) => el.style.display !== "none");
-      if (fields.length) row.style.display = anyShown ? "" : "none";
-    });
+    // Which quantity fields show, and the gyp box, are js/intake-scope.js's. Hide, never remove: a value
+    // typed under Combo should still be there if somebody switches back.
+    intakeScope.applyScope(wt, { systems: systemsContainer, gyp: gypBox });
     // The beta calculator prices POLISH and nothing else, so its door only exists on a polish
     // job. Toggled from here rather than from a listener of its own so it can never disagree
     // with the fields on screen, and hidden rather than removed for the same reason as those
     // fields: switching work type away and back has to bring the same door back, listener and
-    // all. Deliberately the LAST thing in this function — test_intake_work_type_scope.py reads
-    // a fixed-length window from the top of it.
+    // all.
     if (betaBtn) betaBtn.style.display = wt === "polish" ? "" : "none";
     // Thickness is a RESIN question. Polish has a grind and a sheen, not a thickness, and gyp
     // carries its own three thicknesses on the proposal screen -- so asking here would put a
-    // number on the cover letter that describes neither job. Appended after the beta button
-    // rather than beside the gyp box for the reason the comment above gives: this function's
-    // opening is read as a fixed-length window by test_intake_work_type_scope.py.
+    // number on the cover letter that describes neither job.
     if (thicknessRow) thicknessRow.style.display = (wt === "epoxy" || wt === "combo") ? "" : "none";
   }
   form.querySelectorAll("[name='work_type']").forEach(r => r.addEventListener("change", syncScopeToWorkType));

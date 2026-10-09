@@ -27,7 +27,7 @@ FIXTURES = pathlib.Path(__file__).resolve().parent / "fixtures"
 
 # (file under the repo root, a name the document uses for a copy that lives there)
 NAMED_COPIES = [
-    ("frontend/js/index.js", "SCOPE_BY_WORK_TYPE"),
+    ("frontend/js/intake-scope.js", "applyScope"),
     ("frontend/js/index.js", "CONDITIONS"),
     ("frontend/js/library.js", "WORK_TYPES"),
     ("frontend/js/estimate-review.js", "BASE_ROLE"),
