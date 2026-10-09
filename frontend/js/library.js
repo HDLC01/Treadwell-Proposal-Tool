@@ -24,6 +24,12 @@
   // actually guarantees this, and there is a test on the tag's presence and its order, because no
   // amount of executing these functions can see a missing <script>.
   var CRM = window.TWCrm;
+  // The one work-type vocabulary and job-conditions table (js/work-types.js, Phase 7): the five tabs the
+  // Defaults tab is split by, which defaults apply to which tab, and the three conditions its Takeoff list
+  // offers. library.html loads it ahead of this file, and a page that did not would otherwise fail later
+  // in some filter, so it says so by name here.
+  var WT = window.TWWorkTypes;
+  if (!WT) throw new Error("library.js needs work-types.js loaded before it");
   var $ = function (id) { return document.getElementById(id); };
 
   var ITEMS = [];
@@ -155,7 +161,9 @@
             if (r && r.layout === "global" && r.line_key === "fees_textura") FEES_RULE = r;
           });
           GLOBAL_MARKUP = (mj.rules || []).filter(function (r) {
-            return r.layout === "global" && r.applies && r.line_key !== "fees_textura";
+            // fees_textura has its own row (feesDefaultRow); the labor rate lives on the Labor tab.
+            return r.layout === "global" && r.applies && r.line_key !== "fees_textura" &&
+                   r.line_key !== "labor_rate";
           }).map(function (r) {
             // id AND line_key KEPT. The Defaults tab can now edit these, and an edit here
             // PUTs the same markup_rules row the Markup page edits -- one home, two doors.
@@ -228,11 +236,11 @@
    *      condition default a new Polish estimate opens with (condition_defaults) -- see
    *      takeoffDefaultGroups, removeDefault and defaultCandidates.
    *
-   *  A literal map rather than a lookup: isReservedItem runs inside filters over the whole
-   *  library on every repaint, and a key check is all it needs to be. */
-  var RESERVED_ITEM_CONDITION = {
-    "joint-filler-kit": "joint_filler", "remove-existing-jf": "remove_existing_jf", "dye": "dye"
-  };
+   *  A plain map rather than a lookup function: isReservedItem runs inside filters over the whole
+   *  library on every repaint, and a key check is all it needs to be. IT IS READ FROM THE TABLE
+   *  (js/work-types.js reservedItems: each condition's `item_id`), and test_work_types_python_pin.py
+   *  holds backend/library.py's RESERVED_ITEM_IDS to the same ids. */
+  var RESERVED_ITEM_CONDITION = WT.reservedItems();
 
   function isReservedItem(id) {
     return !!id && Object.prototype.hasOwnProperty.call(RESERVED_ITEM_CONDITION, id);
@@ -897,10 +905,14 @@
    *  -- no sort, no filter, no default -- so it was free to take over. Renaming it would be DDL on
    *  two separate databases, which is this project's documented way of shipping a 502. The name is
    *  wrong and the migration is worse; this comment is the trade. */
-  async function patchDefault(kind, id, on) {
+  async function patchDefault(kind, id, on, workTypes) {
+    var body = { favorite: on };
+    // Making a row a default also files WHICH work types: none under Global (every new bid), the
+    // tab on screen otherwise. Sent in the same PATCH so the two cannot half-save.
+    if (Array.isArray(workTypes)) body.default_work_types = workTypes;
     var r = await api("/api/library/" + kind + "/" + encodeURIComponent(id), {
       method: "PATCH", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ favorite: on }) });
+      body: JSON.stringify(body) });
     var j = await r.json().catch(function () { return {}; });
     if (!r.ok) throw new Error(j.detail || j.error || ("HTTP " + r.status));
     return j;
@@ -1311,7 +1323,7 @@
         // a box. It is a fourth hand on the joint-filler line, priced on the Labor step, and the
         // Polish estimate never reads a material price off this row -- a figure typed here would
         // sit in the library looking like a charge that no bid makes.
-        '<td class="n">' + (it.id === "remove-existing-jf"
+        '<td class="n">' + (it.id === WT.itemIdOf("remove_existing_jf")
           ? '<span class="builtin">No material cost</span>'
           : '<span class="money"><span>$</span><input data-f="unit_cost" class="num cell-cost" value="' + (it.unit_cost == null ? "" : it.unit_cost) + '" aria-label="Cost of one purchase"></span>') + "</td>" +
         "<td>" + pick("vendor", it.vendor, vendorNames(), "Vendor", ' class="cell-vendor"') + "</td>" +
@@ -1514,9 +1526,13 @@
       var r = LABOR[i];
       var travel = r.id === "travel";
       var perUnit = (r.unit === "days" ? " / day" : " / hr");
+      // THE TRAVEL ROW READS "Travel Labor" (Hanz, 2026-10-09), by the same rule the Defaults tab
+      // and the estimate use (B.travelLabel): the stored name is left alone, only what is drawn.
+      var shownName = (travel && window.TWBidModel && window.TWBidModel.travelLabel)
+        ? window.TWBidModel.travelLabel(r.name) : r.name;
       if (!ADMIN) {
         out += '<tr data-labor="' + esc(r.id) + '">' +
-          "<td><b>" + esc(r.name) + "</b></td>" +
+          "<td><b>" + esc(shownName) + "</b></td>" +
           '<td class="n">' + esc(L.money(r.rate)) + perUnit + "</td>" +
           "<td>" + esc(r.unit) + "</td>" +
           "<td>" + esc(r.notes) + "</td>" +
@@ -1531,7 +1547,7 @@
           (r.unit === LABOR_UNITS[u] ? " selected" : "") + ">" + esc(LABOR_UNITS[u]) + "</option>";
       }
       out += '<tr data-labor="' + esc(r.id) + '">' +
-        '<td><input data-f="name" class="cell-name" value="' + esc(r.name) +
+        '<td><input data-f="name" class="cell-name" value="' + esc(shownName) +
           '" aria-label="Labor line name" maxlength="200"></td>' +
         '<td class="n"><span class="money"><span>$</span><input data-f="rate" class="num cell-rate" value="' +
           esc(r.rate == null ? "" : String(r.rate)) + '" aria-label="Rate"></span></td>' +
@@ -1891,7 +1907,7 @@
   function conditionHits(it, c) {
     // Remove existing joint filler has no material cost BY DESIGN (a labor modifier), so it is
     // not a material that is missing one.
-    if (c === "no_cost") return !(Number(it.unit_cost) > 0) && it.id !== "remove-existing-jf";
+    if (c === "no_cost") return !(Number(it.unit_cost) > 0) && it.id !== WT.itemIdOf("remove_existing_jf");
     if (c === "no_division") return itemDivisions(it).length === 0;
     if (c === "no_vendor") return !String(it.vendor || "").trim();
     if (c === "no_price_date") return !it.cost_updated_at;
@@ -2610,8 +2626,10 @@
     // shared module did not load would take Items and Assemblies down with it, and an em dash is
     // a better answer than a blank screen.
     var R = (B.RATES || {});
-    var kitLine = L.priceLine({ item_id: "joint-filler-kit" }, ITEMS, 0);
-    var dyeLine = L.priceLine({ item_id: "dye" }, ITEMS, 0);
+    // THE RESERVED ROWS' IDS ARE THE TABLE'S (js/work-types.js: each condition's item_id), not typed here.
+    var kitId = WT.itemIdOf("joint_filler"), dyeId = WT.itemIdOf("dye");
+    var kitLine = L.priceLine({ item_id: kitId }, ITEMS, 0);
+    var dyeLine = L.priceLine({ item_id: dyeId }, ITEMS, 0);
     var kitRate = kitLine.ok ? kitLine.unit_price : R.JOINT_FILLER_KIT_COST;
     var kitCov = kitLine.ok ? kitLine.coverage : 3500;
     // PER SQUARE FOOT, which is what the dye line costs whatever its row buys by: one unit's
@@ -2625,7 +2643,7 @@
     // THE MATERIAL ROW'S OWN WORDING, "$X per <unit>", with the unit off the row when there is
     // one -- then what one of them covers, which is the half of the kit's price a bare "$500 per
     // Kit" would leave out.
-    var kitUnit = (itemOf("joint-filler-kit") || {}).unit || "kit";
+    var kitUnit = (itemOf(kitId) || {}).unit || "kit";
     var named = function (id, label) { return (itemOf(id) || {}).name || label; };
     // ON THE DEFAULTS TAB unless an admin took it off (`listed: false`). The same reading as
     // seedConditionsShown in bid-model.js, which is what a new estimate snapshots.
@@ -2636,25 +2654,30 @@
       }
       return true;
     };
-    return [
-      { key: "joint_filler", item_id: "joint-filler-kit", label: "Joint filler",
-        name: named("joint-filler-kit", "Joint filler"), on: !!c.joint_filler, listed: listedOf("joint_filler"),
-        priced: kit ? kit + " per " + kitUnit + " · 1 per " + L.qtyText(kitCov) + " SF"
-                    : "No rate loaded for the kit" },
-      { key: "remove_existing_jf", item_id: "remove-existing-jf",
-        label: "Remove existing joint filler",
-        name: named("remove-existing-jf", "Remove existing joint filler"),
-        on: !!c.remove_existing_jf, listed: listedOf("remove_existing_jf"),
-        // NO PRICE, and saying so is the point. It is a fourth hand on the joint-filler line -- a
-        // labor modifier the estimator prices on the Labor step -- so a dollar figure here would
-        // be an invention. "No material cost" is a real answer; a made-up $0.00 would read as
-        // free.
-        priced: "No material cost" },
-      { key: "dye", item_id: "dye", label: "Dye", name: named("dye", "Dye"), on: !!c.dye, listed: listedOf("dye"),
-        // THE ROW IS ONE COAT and a bid buys B.DYE_COATS of them -- Kyle's rows 25 and 26.
-        priced: dye ? dye + " per SF a coat · " + (B.DYE_COATS || 2) + " coats"
-                    : "No rate loaded for dye" }
-    ];
+    // WHAT EACH ROW SAYS IT COSTS, and the only thing about these three that is this page's own. Which
+    // conditions there are, in what order, and each one's key, id and label are the table's (the ones
+    // the Takeoff step asks, js/work-types.js), so a fourth condition added there with no line here is
+    // refused by name below and never drawn half-finished.
+    var priced = new Map([
+      ["joint_filler", kit ? kit + " per " + kitUnit + " · 1 per " + L.qtyText(kitCov) + " SF"
+                           : "No rate loaded for the kit"],
+      // NO PRICE, and saying so is the point. It is a fourth hand on the joint-filler line -- a
+      // labor modifier the estimator prices on the Labor step -- so a dollar figure here would
+      // be an invention. "No material cost" is a real answer; a made-up $0.00 would read as
+      // free.
+      ["remove_existing_jf", "No material cost"],
+      // THE ROW IS ONE COAT and a bid buys B.DYE_COATS of them -- Kyle's rows 25 and 26.
+      ["dye", dye ? dye + " per SF a coat · " + (B.DYE_COATS || 2) + " coats"
+                  : "No rate loaded for dye"]
+    ]);
+    return WT.conditionsFor("polish", "v2Takeoff").map(function (cond) {
+      if (!priced.has(cond.key)) {
+        throw new Error("library.js has no priced line for the Takeoff condition " + cond.key);
+      }
+      return { key: cond.key, item_id: cond.item_id, label: cond.label,
+               name: named(cond.item_id, cond.label), on: !!c[cond.key], listed: listedOf(cond.key),
+               priced: priced.get(cond.key) };
+    });
   }
 
   /** One condition's answer, sent on the change, with the optimistic flip and the put-it-back in
@@ -2746,12 +2769,26 @@
     for (var i = 0; i < list.length; i++) if (list[i].id === id) { row = list[i]; break; }
     if (!row) return;
     var was = !!row.favorite;
+    var wasTypes = row.default_work_types;
+    // ADDING FILES THE WORK TYPES TOO. Under Global the row names none, so it lands on every new
+    // bid. Under a work type it names that type (added to any it already names), so it shows as
+    // that tab's own row rather than as a read-only Global one. Remove leaves them alone.
+    var types = null;
+    if (on) {
+      // A row that is not a default today (never was, or was Removed) keeps its old types only as
+      // leftovers; carrying them would bring it back on a tab it was removed from.
+      var had = was && Array.isArray(wasTypes) ? wasTypes : [];
+      types = DEFAULT_WT === "global" ? [] :
+        (!had.length ? [DEFAULT_WT] : had.indexOf(DEFAULT_WT) !== -1 ? had : had.concat([DEFAULT_WT]));
+    }
     row.favorite = !!on;
+    if (types) row.default_work_types = types;
     paint();
     try {
-      await patchDefault(kind, id, !!on);
+      await patchDefault(kind, id, !!on, types);
     } catch (err) {
       row.favorite = was;
+      row.default_work_types = wasTypes;
       paint();
       say("Couldn't save that. " + err.message);
     }
@@ -2968,21 +3005,29 @@
   // returning nothing made the Add button below the list have nothing to open.
   var DEFAULT_BROWSE = false;
 
-  // WHICH WORK TYPE THE DEFAULTS TAB IS SHOWING. The five are markup.TABS -- the tabs of
-  // Kyle's workbook and the list the markup rules are already filed under. `combo` is not
+  // WHICH WORK TYPE THE DEFAULTS TAB IS SHOWING. The five are the TABS of the one vocabulary
+  // (js/work-types.js): the tabs of Kyle's workbook and the list the markup rules are already filed
+  // under, which markup.TABS holds the same way and test_work_types_python_pin.py pins. `combo` is not
   // among them: a combo job runs on the epoxy AND polish tabs, so it reads both lists.
-  var WORK_TYPES = ["polish", "seal", "epoxy", "leveling", "gyp"];
-  var DEFAULT_WT = WORK_TYPES[0];
+  var WORK_TYPES = WT.tabKeys();
+  // THE TAB OPENS ON "global" (Hanz, 2026-10-09: "the default work type should be global since we have
+  // global values"). It is a sixth pill ahead of the five, not a seventh work type: it holds the
+  // global values and the defaults that name NO work type, which is every row written before the work
+  // types existed and every new bid's starting set. A remembered work type in the URL still wins.
+  var DEFAULT_WT = "global";
 
   /** Does this default belong on the tab currently showing?
    *
    *  AN EMPTY LIST MEANS EVERY WORK TYPE, and that is the whole backwards-compatibility
    *  story: every row set before these tabs existed has no list, so it keeps appearing
-   *  everywhere exactly as it did. Nobody opens this tab to find their defaults gone. */
+   *  everywhere exactly as it did. Nobody opens this tab to find their defaults gone.
+   *
+   *  A thin wrapper over work-types.js's appliesTo, the one reading the estimate's own seeding shares.
+   *  `wt` is a TAB, which is all this page ever has (the strip above the lists is the five tabs); asking
+   *  it about "combo" throws. */
   function appliesToWorkType(row, wt) {
-    var list = row && row.default_work_types;
-    if (!list || !list.length) return true;
-    return list.indexOf(wt) !== -1;
+    if (wt === "global") return WT.defaultScope(row && row.default_work_types, "global") === "own";
+    return WT.appliesTo(row && row.default_work_types, wt);
   }
 
   /** What a row says about where it applies, so the list can be read without clicking
@@ -3166,17 +3211,24 @@
   // SEPARATE FROM THE RENDERER so a test can execute the grouping and read it back as data.
   // This page has already shipped a dead button behind a green markup regex once.
   function takeoffDefaultGroups() {
+    // A work type's own rows first, then the global ones read-only beneath them. Stable.
+    var globalNote = '<span class="builtin">Edit on Global</span>';
+    function ownFirst(rows) {
+      return rows.filter(function (r) { return !r.readOnly; })
+        .concat(rows.filter(function (r) { return r.readOnly; }));
+    }
     var groups = [
       { title: "Assemblies",
-        rows: ASMS.filter(function (a) {
-          return a.favorite && appliesToWorkType(a, DEFAULT_WT);
+        rows: ownFirst(ASMS.filter(function (a) {
+          return a.favorite && WT.defaultScope(a.default_work_types, DEFAULT_WT) !== null;
         }).map(function (a) {
           var n = (a.lines || []).length;
-          return { name: a.name,
+          var ro = WT.defaultScope(a.default_work_types, DEFAULT_WT) === "global";
+          return { name: a.name, readOnly: ro,
                    how: n + " item line" + (n === 1 ? "" : "s") + " \u00b7 per " + (a.unit || "SF"),
-                   slider: defaultSlider("assemblies", a.id, a.name, a.default_on !== false, true),
-                   actions: defaultRowActions("assemblies", a.id, a.name) };
-        }) },
+                   slider: defaultSlider("assemblies", a.id, a.name, a.default_on !== false, !ro),
+                   actions: ro ? globalNote : defaultRowActions("assemblies", a.id, a.name) };
+        })) },
       { title: "Materials",
         // JOINT FILLER, REMOVE-EXISTING AND DYE ARE MATERIALS HERE, drawn by the material row's
         // own code. Hanz, 2026-09-18: "die and joint filler are supposed to be materials not
@@ -3187,17 +3239,20 @@
         // LISTED MEANS ON A NEW ESTIMATE, GRAYED UNTIL SWITCHED ON (later on 2026-10-01): listed
         // while condition_defaults.listed is not false, with the material's Edit and Remove; all
         // three still start off (conditionDefaultRow).
-        rows: ITEMS.filter(function (it) {
+        rows: ownFirst(ITEMS.filter(function (it) {
           // Never a reserved row by its `favorite`: the three are listed below, by their condition.
-          return it.favorite && !isReservedItem(it.id) && appliesToWorkType(it, DEFAULT_WT);
+          return it.favorite && !isReservedItem(it.id) &&
+            WT.defaultScope(it.default_work_types, DEFAULT_WT) !== null;
         }).map(function (it) {
           var mrow = materialDefaultRow(it.id, it.name,
                    L.num(it.unit_cost) != null
                      ? L.money(it.unit_cost) + " per " + (it.unit || "unit")
                      : "No cost in the library yet");
-          mrow.slider = defaultSlider("items", it.id, it.name, it.default_on !== false, true);
+          var ro = WT.defaultScope(it.default_work_types, DEFAULT_WT) === "global";
+          mrow.slider = defaultSlider("items", it.id, it.name, it.default_on !== false, !ro);
+          if (ro) { mrow.readOnly = true; mrow.actions = globalNote; }
           return mrow;
-        }).concat(takeoffConditionDefaults().filter(function (c) {
+        })).concat(takeoffConditionDefaults().filter(function (c) {
           // ON THE POLISH TAB ONLY. All three write Polish-sheet cells (CONDITION_CELLS in
           // bid-model.js) and nothing on the other four work types reads them; a combo job
           // reads the Polish list. And only while LISTED -- see conditionDefaultRow.
@@ -3209,7 +3264,10 @@
           return conditionDefaultRow(c);
         })) },
       { title: "Markup",
-        rows: [feesDefaultRow()].concat(GLOBAL_MARKUP.map(function (g) {
+        // THE GLOBAL VALUES LIVE UNDER GLOBAL ONLY. Fees + Textura and the Markup page's global
+        // lines are one value for every work type, so a work type's own tab would show a number
+        // that belongs to none of them.
+        rows: DEFAULT_WT !== "global" ? [] : [feesDefaultRow()].concat(GLOBAL_MARKUP.map(function (g) {
           // EDITABLE HERE, STORED THERE. Hanz asked for no read-only rows on this tab. The
           // danger with a rate is TWO HOMES: markup.py enforces one home per line because
           // two places to set one price disagree the first time somebody changes one, and a
@@ -3317,7 +3375,8 @@
         // morning. The control moved to the material's own row on the Items tab, where the rest
         // of a material's properties (coverage, waste, roundup) now live -- and Edit on this row
         // already goes there.
-        out += "<tr><td>" + esc(r.name) + "</td><td>" +
+        out += "<tr" + (r.readOnly ? ' class="globalrow"' : "") + "><td>" + esc(r.name) +
+          (r.readOnly ? ' <span class="wtall">Global</span>' : "") + "</td><td>" +
           (r.rawHow ? r.how : esc(r.how)) + "</td>" +
           '<td class="rowon">' + (r.slider || "") + "</td>" +
           '<td class="rowact">' + r.actions + "</td></tr>";
@@ -3480,14 +3539,21 @@
     // Removed (favorite false), and only on the work-type sub-tab(s) it is scoped to. With no
     // stored row, or a row whose favorite is absent/null and no work types, it is listed on
     // every tab exactly as before.
+    var travelScope = storedTravel ? WT.defaultScope(storedTravel.default_work_types, DEFAULT_WT)
+                                   : WT.defaultScope([], DEFAULT_WT);
     var travelListed = !storedTravel ||
-      (storedTravel.favorite !== false && appliesToWorkType(storedTravel, DEFAULT_WT));
+      (storedTravel.favorite !== false && travelScope !== null);
+    // A global row seen from a work type is read-only there ("Edit on Global").
+    var travelRo = travelListed && travelScope === "global";
+    var globalNote = '<span class="builtin">Edit on Global</span>';
     var rows = (shipped && travelListed) ? [B.travelSeed(storedTravel)] : [];
+    // Own rows first, the global ones read-only beneath them.
     var out = "";
+    var globOut = "";
     for (var i = 0; i < rows.length; i++) {
       var r = rows[i];
-      out += "<tr>" +
-        "<td>" + esc(r.label) + "</td>" +
+      var trow = "<tr" + (travelRo ? ' class="globalrow"' : "") + ">" +
+        "<td>" + esc(r.label) + (travelRo ? ' <span class="wtall">Global</span>' : "") + "</td>" +
         '<td class="n">' + esc(L.money(r.rate)) + (r.unit === "hours" ? " / hr" : " / day") +
         "</td>" +
         "<td>" + (r.guys_auto
@@ -3495,10 +3561,11 @@
           : "Typed on the estimate") + "</td>" +
         // Travel's slider needs the stored row to PATCH; with none there is nothing to switch.
         '<td class="rowon">' + (storedTravel
-          ? defaultSlider("labor", storedTravel.id, r.label, storedTravel.default_on !== false, ADMIN)
+          ? defaultSlider("labor", storedTravel.id, r.label, storedTravel.default_on !== false, ADMIN && !travelRo)
           : "") + "</td>" +
-        '<td class="rowact">' + laborRowActions(storedTravel) + "</td>" +
+        '<td class="rowact">' + (travelRo ? globalNote : laborRowActions(storedTravel)) + "</td>" +
         "</tr>";
+      if (travelRo) globOut += trow; else out += trow;
     }
     // THE LINES SOMEBODY HAS FAVORITED, beside the one that was always there. Each carries the
     // same Edit/Remove pair the Takeoff list beside it already does, and Remove there and here
@@ -3508,25 +3575,29 @@
     // list only because it has its own row above, filtered by the same two rules (favorite and
     // work type) -- listing it again is the double-Travel row this merge exists to prevent.
     var shown = LABOR.filter(function (r) {
-      return (!shipped || r.id !== shipped.id) && r.favorite && appliesToWorkType(r, DEFAULT_WT);
+      return (!shipped || r.id !== shipped.id) && r.favorite &&
+        WT.defaultScope(r.default_work_types, DEFAULT_WT) !== null;
     });
     for (var k = 0; k < shown.length; k++) {
       var c = shown[k];
-      out += "<tr>" +
-        "<td>" + esc(c.name) + "</td>" +
+      var cro = WT.defaultScope(c.default_work_types, DEFAULT_WT) === "global";
+      var crow = "<tr" + (cro ? ' class="globalrow"' : "") + ">" +
+        "<td>" + esc(c.name) + (cro ? ' <span class="wtall">Global</span>' : "") + "</td>" +
         '<td class="n">' + esc(L.money(c.rate)) +
           (c.unit === "days" ? " / day" : " / hr") + "</td>" +
         "<td>" + (c.guys_auto
           ? "Man-days come off the crew rows above it"
           : "Typed on the estimate") + "</td>" +
-        '<td class="rowon">' + defaultSlider("labor", c.id, c.name, c.default_on !== false, ADMIN) +
+        '<td class="rowon">' + defaultSlider("labor", c.id, c.name, c.default_on !== false, ADMIN && !cro) +
           "</td>" +
         // ADMIN ONLY, unlike an item's or an assembly's pair: `favorite` on a labor line is a
         // PATCH to /api/library/labor, which is `_require_admin`, so a non-admin is not handed a
         // Remove that 403s -- the rule laborRowActions already follows for Travel.
-        '<td class="rowact">' + (ADMIN ? defaultRowActions("labor", c.id, c.name) : "") +
+        '<td class="rowact">' + (cro ? globalNote : ADMIN ? defaultRowActions("labor", c.id, c.name) : "") +
         "</td></tr>";
+      if (cro) globOut += crow; else out += crow;
     }
+    out += globOut;
     body.innerHTML = out;
     // Counts BOTH, so a page that could not reach the shared module still hides the empty state
     // once there is a favorited line to show. Travel is normally in `rows`, which is why this
@@ -3547,6 +3618,11 @@
    *  Today it holds the TRAVEL section -- Travel Labor, Lodging and Per Diem -- and the rest of the
    *  calculator (per-line crew/production-rate modes) is a queued follow-up.
    *
+   *  THE COMPANY LABOR RATE IS FILED THROUGH THE SAME CODE, from the LABOR tab (Hanz, 2026-10-09:
+   *  "remove the labor row from Markup and transfer it to labor tab"). It is the Global line
+   *  `labor_rate` in the same markup_rules table, so loadGlobalRules reads it with the travel
+   *  figures and fileGlobalRate saves all three. Nothing moved in the database.
+   *
    *  LODGING AND PER DIEM ARE NOT STORED HERE. They are the Markup page's Global lines
    *  `travel_lodging` ($70 a night) and `travel_per_diem` ($45 a day), and the boxes below are a
    *  second DOOR onto those same markup_rules rows -- one home, so the two screens cannot disagree.
@@ -3563,11 +3639,14 @@
     { line: "travel_per_diem", label: "Per Diem", per: "day", shipped: 45,
       how: "One charge a day away, for meals. Days are counted the same way as nights." }
   ];
+  /** The company labor rate's box, on the Labor tab. `shipped` is bid-model's one constant, read
+   *  lazily so this block stays the only place that names the line. */
+  var LABOR_RATE_DEF = { line: "labor_rate", label: "Labor rate", per: "hour" };
   var TRAVEL_RULES = {};            // line_key -> the filed markup_rules row, when there is one
   var TRAVEL_RULES_LOADED = false;
   var TRAVEL_RULES_ERR = false;
 
-  async function loadTravelRules() {
+  async function loadGlobalRules() {
     try {
       var res = await api("/api/markup/rules?layout=global");
       if (!res.ok) throw new Error("HTTP " + res.status);
@@ -3599,7 +3678,7 @@
     if (!body) return;
     if (!TRAVEL_RULES_LOADED) {
       body.innerHTML = '<p class="paneintro">Loading...</p>';
-      Promise.all([loadTravelRules(), loadCalcRows()]).then(renderLabCalc);
+      Promise.all([loadGlobalRules(), loadCalcRows()]).then(renderLabCalc);
       return;
     }
     var B = window.TWBidModel;
@@ -3653,16 +3732,22 @@
     renderTryIt();
   }
 
-  /** Save one travel rate. A PUT of the whole markup row, notes carried so nothing filed elsewhere
-   *  is cleared. A blank box files nothing (the shipped figure stands); anything that is not a
-   *  positive number is refused here in words rather than as a 400. */
+  /** Save one travel rate. See fileGlobalRate; the Labor tab's labor-rate box shares it. */
   async function saveTravelRate(input) {
     var key = input.getAttribute("data-travel-rate");
     var def = null;
     TRAVEL_KEYS.forEach(function (t) { if (t.line === key) def = t; });
-    var out = $("labcalc-alert");
-    var say2 = function (m) { if (out) out.textContent = m || ""; };
     if (!def) return;
+    return fileGlobalRate(def, input, $("labcalc-alert"));
+  }
+
+  /** File one Global dollar figure (lodging, per diem, the company labor rate). A PUT of the whole
+   *  markup row, notes carried so nothing filed elsewhere is cleared. A blank box files nothing
+   *  (the shipped figure stands); anything that is not a positive number is refused here in words
+   *  rather than as a 400. `def` is {line, label, per, shipped}; `out` is the line that says so. */
+  async function fileGlobalRate(def, input, out) {
+    var key = def.line;
+    var say2 = function (m) { if (out) out.textContent = m || ""; };
     var raw = String(input.value || "").trim().replace(/^\$/, "");
     var prev = travelFigure(TRAVEL_RULES[key]);
     if (raw === prev) return;
@@ -3700,6 +3785,44 @@
     }
   }
 
+  /** The company labor rate, as the box at the top of the Labor tab draws it. The figure on file
+   *  when there is one, else the shipped one as a placeholder (admin) or as plain text (everyone
+   *  else). Never throws; it waits for the shared read of the Global rows the first time. */
+  function renderLaborRate() {
+    var host = $("labor-rate-box");
+    if (!host) return;
+    if (!TRAVEL_RULES_LOADED) {
+      host.innerHTML = '<p class="paneintro">Loading...</p>';
+      loadGlobalRules().then(renderLaborRate);
+      return;
+    }
+    var shipped = window.TWBidModel.SHIPPED_LABOR_RATE;
+    var fig = travelFigure(TRAVEL_RULES[LABOR_RATE_DEF.line]);
+    var html = '<div class="card"><div class="areaband"><label for="labor-rate-input"><b>Labor rate</b></label> ';
+    if (ADMIN) {
+      html += '<span class="money"><span>$</span><input id="labor-rate-input" class="num cell-cost" ' +
+        'type="text" inputmode="decimal" data-labor-rate="1" value="' + esc(fig) + '" placeholder="' +
+        esc(String(shipped)) + '" aria-label="Labor rate, dollars an hour" /></span> an hour';
+    } else {
+      html += '<span id="labor-rate-input" class="labor-rate-fig">' +
+        esc(L.money(fig === "" ? shipped : Number(fig))) + '</span> an hour';
+    }
+    html += '</div><p class="paneintro">New estimates start every labor line at this rate. ' +
+      'A saved bid keeps its own.</p>';
+    if (TRAVEL_RULES_ERR) {
+      html += '<p class="ronote">Could not read the saved rate, so the box is empty. ' +
+        'Reload to try again.</p>';
+    }
+    host.innerHTML = html + '</div>';
+  }
+
+  /** Save the company labor rate: the shared Global-figure save, reported on the Labor tab. */
+  async function saveLaborRate(input) {
+    var def = { line: LABOR_RATE_DEF.line, label: LABOR_RATE_DEF.label, per: LABOR_RATE_DEF.per,
+                shipped: window.TWBidModel.SHIPPED_LABOR_RATE };
+    return fileGlobalRate(def, input, $("labor-rate-alert"));
+  }
+
   // ── the Labor Calculator's per-line modes (Kyle's notes B7b) ───────────────
   /** Each default labor line gets a MODE the estimate's Labor step fills a NEW bid from:
    *    From SF  crew size + production rate (SF a day): days = ceil(job SF / rate)
@@ -3733,8 +3856,13 @@
     var out = (window.TWBidModel.LABOR_CALC_BUILTINS || []).map(function (l) {
       return { id: l.id, name: l.name };
     });
+    // The crew lines are rows of the Labor list now, so a line already named above is not listed twice.
+    var named = {};
+    out.forEach(function (l) { named[l.id] = true; });
     LABOR.forEach(function (r) {
-      if (r && r.favorite && r.id !== "travel" && r.unit !== "hours") out.push({ id: r.id, name: r.name });
+      if (r && r.favorite && r.id !== "travel" && r.unit !== "hours" && !named[r.id]) {
+        out.push({ id: r.id, name: r.name });
+      }
     });
     return out;
   }
@@ -3765,7 +3893,7 @@
       '<p class="paneintro">Pick how each line fills in on a <b>new</b> estimate. <b>From SF</b> ' +
       "works the days out from the job's square feet (days = SF / production rate, rounded up). " +
       '<b>Fixed</b> uses the guys and days you type. A blank rate uses the company labor rate (' +
-      esc(L.money(co)) + ' an hour). The estimator can still change any of it on the bid, and a ' +
+      esc(L.money(co)) + ' an hour, set on the Labor tab). The estimator can still change any of it on the bid, and a ' +
       'saved bid is never recomputed.</p>' +
       '<div class="card"><div class="tw"><table><thead><tr><th>Line</th><th>Mode</th>' +
       '<th>Crew and production</th><th>Hours a day</th><th class="n">Rate</th>' +
@@ -3958,7 +4086,7 @@
    *  by the time somebody can click, there is something to repaint. */
   function setWorkType(wt) {
     DEFAULT_WT = wt;
-    WORK_TYPES.forEach(function (k) {
+    ["global"].concat(WORK_TYPES).forEach(function (k) {
       var b = $("wt-" + k);
       if (b) b.setAttribute("aria-selected", String(k === wt));
     });
@@ -3977,12 +4105,13 @@
     if (typeof window === "undefined" || !window.TWTabMemo) return;
     var M = window.TWTabMemo;
     showView(M.pick(M.read(window, "tab"), PANES, view));
-    setWorkType(M.pick(M.read(window, "wt"), WORK_TYPES, DEFAULT_WT));
+    setWorkType(M.pick(M.read(window, "wt"), ["global"].concat(WORK_TYPES), DEFAULT_WT));
   }
   PANES.forEach(function (p) {
     $(TAB_OF[p]).addEventListener("click", function () {
       showView(p);
       if (p === "labcalc") renderLabCalc();
+      if (p === "labor") renderLaborRate();
     });
   });
   restoreView();
@@ -4757,7 +4886,7 @@
     var wtBtn = t.closest && t.closest("[data-work-type]");
     if (wtBtn) {
       var wt = wtBtn.getAttribute("data-work-type");
-      if (WORK_TYPES.indexOf(wt) !== -1) {
+      if (wt === "global" || WORK_TYPES.indexOf(wt) !== -1) {
         setWorkType(wt);
         // REMEMBERED BESIDE THE TAB, not instead of it. Landing on Defaults and showing the wrong
         // one of the five work types is the same reload bug one level down, so the fragment
@@ -5140,5 +5269,14 @@
     renderLabCalc();
   });
 
-  load().then(function () { if (view === "labcalc") renderLabCalc(); });
+  // The Labor tab's rate box is the other door onto the same Global rows.
+  $("pane-labor").addEventListener("change", function (e) {
+    var el = e.target;
+    if (el && el.getAttribute && el.getAttribute("data-labor-rate") !== null) saveLaborRate(el);
+  });
+
+  load().then(function () {
+    renderLaborRate();
+    if (view === "labcalc") renderLabCalc();
+  });
 })();

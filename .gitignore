@@ -142,3 +142,9 @@ Trailing 12TH MONTH.xlsx
 node_modules/
 docs/excel-parity-audit/job*
 *.excel.json
+# A plain `npm install hyperformula@2.7.1` run inside docs/excel-parity-audit/ also writes these two.
+# The repository has no package.json on purpose (nothing here depends on a node package), so a file
+# that appears there is an install that went to the wrong folder. The README gives the form that
+# leaves nothing behind: `npm i --no-save --prefix <scratch dir> hyperformula@2.7.1`.
+docs/excel-parity-audit/package.json
+docs/excel-parity-audit/package-lock.json

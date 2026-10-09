@@ -54,10 +54,12 @@ log = logging.getLogger(__name__)
 
 TABLE = "condition_defaults"
 
-# The three conditions the Takeoff step carries, in the order that step asks them. These are the
-# keys of `CONDITION_CELLS` in frontend/js/bid-model.js — the mapping that decides which
-# workbook cell each answer writes — and test_condition_defaults.py reads that file and pins the
-# two lists together, so a key renamed on one side cannot quietly stop being written on the other.
+# The three conditions the Takeoff step carries, in the order that step asks them. They are the rows
+# of the one job-conditions table in frontend/js/work-types.js that are `asked_on.v2Takeoff`, and
+# frontend/js/bid-model.js's `CONDITION_CELLS` (the mapping that decides which workbook cell each
+# answer writes) is derived from that same table. test_work_types_python_pin.py runs node and holds
+# this tuple to the table, and test_condition_defaults.py runs the real model and requires a cell
+# for every key, so a key renamed on one side cannot quietly stop being written on the other.
 KEYS = ("joint_filler", "remove_existing_jf", "dye")
 
 _MAX_KEY = 64

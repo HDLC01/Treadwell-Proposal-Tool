@@ -472,6 +472,12 @@ const documentStub = {
   // because the page script calls TWCounty.mount() as it boots; loading it second would leave
   // the mount guarded away and the whole control untested while every assertion below still ran.
   windowStub.TW = TW;        // county-picker.js reads window.TW, not the injected parameter
+  // The one vocabulary (js/work-types.js), under its real global name, ahead of the page script exactly as
+  // index.html orders the tags: index.js reads it for the split rule and throws by name without it. The REAL
+  // module, so the live intake's split behaviour is the table's.
+  windowStub.TWWorkTypes = require(path.join(ROOT, "js", "work-types.js"));
+  // The quantity-field renderer, loaded after the vocabulary and before the page script, as index.html orders them.
+  windowStub.TWIntakeScope = require(path.join(ROOT, "js", "intake-scope.js"));
   new Function("document", "window", "fetch", countyJs)(documentStub, windowStub, fetchStub);
   // The address lookup, loaded before index.js exactly as index.html orders the tags: the page
   // script calls TWAddress.mount() as it boots, so a ReferenceError here is a missing script tag.
@@ -952,6 +958,53 @@ function runHandler(which) {
     };
   }
 
+  // A COMBO JOB IS PRICED ON TWO SHEETS, and the shared rule says which (js/work-types.js baseSheets): with
+  // no explicit base both Epoxy's and Polish's own cells are the job's, so flipping Taxable writes BOTH and
+  // nothing else tax. The earlier combo case above starts Polish at the answer it ends on, so it cannot tell a
+  // lost second sheet from a written one; here Polish starts on Yes and has to come out No.
+  {
+    const c = build({
+      tax_flags_per_sheet: true, base_tab_id: null, work_type: "combo",
+      priced_tabs: [
+        { id: "Epoxy", flag_cells: { taxable: "Epoxy!B6", remodel: "Epoxy!D6" } },
+        { id: "Polish", flag_cells: { taxable: "Polish!B6", remodel: "Polish!D6" } },
+      ],
+      cell_values: { "Epoxy!B6": "Yes", "Polish!B6": "Yes", "Epoxy!D6": "No", "Polish!D6": "No",
+                     "Leveling!B6": "Yes", 'Gyp (USG 1-8")!B8': "No" },
+    });
+    await tick();
+    c.setWorkType("combo");
+    c.clickSwitch("taxable");
+    const cv = cells(c);
+    out.conditions.comboBothHalves = {
+      cells: { "Epoxy!B6": cv["Epoxy!B6"], "Polish!B6": cv["Polish!B6"], "Epoxy!D6": cv["Epoxy!D6"],
+               "Polish!D6": cv["Polish!D6"], "Leveling!B6": cv["Leveling!B6"],
+               "Gyp (USG 1-8\")!B8": cv['Gyp (USG 1-8")!B8'] },
+    };
+  }
+
+  // THE ADDRESSES COME OFF THE DRAFT. priced_tabs[].flag_cells is the estimate screen's snapshot, and a string
+  // that came out of a draft becomes a KEY in cell_values, so only a real "Sheet!A1" may be written. Phase 7b
+  // moved that check out of this page and into the shared rule (js/work-types.js writeCellsFor), and this
+  // scenario is what says it still happens: every address the Polish tab's snapshot offers here is wrong, so
+  // flipping the two switches writes no tax cell and invents no key.
+  {
+    const b = build({
+      tax_flags_per_sheet: true, base_tab_id: "Polish", work_type: "polish",
+      priced_tabs: [{ id: "Polish", flag_cells: { taxable: "Polish!B6;x", remodel: "Polish!D6\n" } }],
+      cell_values: { "Epoxy!B6": "Yes", "Polish!B6": "No", "Polish!D6": "No" },
+    });
+    await tick();
+    b.setWorkType("polish");
+    b.clickSwitch("taxable");
+    b.clickSwitch("remodel_tax");
+    const cv = cells(b);
+    out.conditions.hostileFlagCells = {
+      taxCells: { "Epoxy!B6": cv["Epoxy!B6"], "Polish!B6": cv["Polish!B6"], "Polish!D6": cv["Polish!D6"] },
+      invented: Object.keys(cv).filter((k) => /[;\n]/.test(k)),
+    };
+  }
+
   // A WORK-TYPE CHANGE ON A SPLIT DRAFT moves the base with no explicit base_tab_id: a combo's is
   // Epoxy + Polish (the switch reads Epoxy's), a polish job's is Polish, a gyp job's the gyp base.
   // Every sheet here holds a DIFFERENT answer, and the seed's work type is not any of the ones
@@ -1428,6 +1481,44 @@ function runHandler(which) {
     out.v2routing.submitOnAV2Draft = submit(v2());
     out.v2routing.submitOnAnotherProjectsV2Blob = submit(v2({ __draft_id: "some-other-draft" }));
     out.v2routing.submitOnASpreadsheetBid = submit(sheet());
+  }
+
+  // ── the intake's work-type scope, as the live page renders and shows it ──────────────────────────────
+  // Phase 9a: every job type (and "blank", no radio checked) x both audiences, read off the nodes after the REAL
+  // page script ran, once as the page LOADS with a saved draft and once after the radio is clicked. The markup of
+  // the systems block, and the display state of everything the work type shows or hides. fixtures/
+  // intake_scope_golden.json was written from the code BEFORE it moved onto js/intake-scope.js, so a test that
+  // compares this to it proves the move changed nothing a person can see.
+  out.scopeSnapshots = {};
+  {
+    const snapshot = (b) => ({
+      systemsHtml: b.systems.innerHTML,
+      systemsDisplay: b.systems.style.display === undefined ? null : b.systems.style.display,
+      gypDisplay: b.nodes["gyp-sf-container"].style.display === undefined ? null : b.nodes["gyp-sf-container"].style.display,
+      betaDisplay: b.nodes["beta-continue"].style.display === undefined ? null : b.nodes["beta-continue"].style.display,
+      thicknessDisplay: b.nodes["thickness-row"].style.display === undefined ? null : b.nodes["thickness-row"].style.display,
+      labels: b.systems.querySelectorAll("[data-scope]").map((l) => ({
+        scope: l.getAttribute("data-scope"), display: l.style.display === undefined ? null : l.style.display })),
+      rows: b.systems.querySelectorAll(".row").map((r) => (r.style.display === undefined ? null : r.style.display)),
+    });
+    ["Direct", "GC"].forEach(function (audience) {
+      ["polish", "epoxy", "combo", "gyp", "blank"].forEach(function (job) {
+        const key = audience + "/" + job;
+        const seed = { audience: audience };
+        if (job !== "blank") seed.work_type = job;
+        const loaded = build(seed);
+        if (job === "blank") loaded.radios.forEach((r) => { r.checked = false; });
+        const atLoad = snapshot(loaded);
+        const clicked = build({ audience: audience });
+        if (job === "blank") {
+          clicked.radios.forEach((r) => { r.checked = false; });
+          clicked.fire(clicked.radios[0], "change");
+        } else {
+          clicked.setWorkType(job);
+        }
+        out.scopeSnapshots[key] = { atLoad: atLoad, afterClick: snapshot(clicked) };
+      });
+    });
   }
 
   console.log(JSON.stringify(out));

@@ -345,7 +345,8 @@ def test_an_intake_save_after_an_estimate_save_leaves_tabs_byte_identical(ran):
 
 # ── red without the code: break a COPY and watch each law notice ─────────────────────────────────
 SCRATCH_FRONTEND_FILES = ["polish-estimate.html", "polish-intake.html", "js/polish-estimate.js",
-                          "js/polish-intake.js", "js/bid-model.js", "js/library-core.js"]
+                          "js/polish-intake.js", "js/bid-model.js", "js/library-core.js", "js/library-picker.js",
+                          "js/intake-scope.js", "js/county-picker.js", "js/work-types.js"]
 
 MUTATIONS = {
     "migrate stops carrying the keys it does not know": (
@@ -373,7 +374,7 @@ MUTATIONS = {
         "js/bid-model.js", "polish_sf: b.sf > 0 ? b.sf : measuredSf(model.takeoff),", "polish_sf: b.sf,",
         lambda r: r["savePatch"]["floor"]["saved"] == 0 and r["estimate"]["onlyRowOff"]["autosave"]["polish_sf"] == 0),
     "a save forgets the condition cells": (
-        "js/bid-model.js", "cell_values: conditionCellWrites(model.conditions, cells, ctx.library),",
+        "js/bid-model.js", "cell_values: conditionCellWrites(model.conditions, cells, ctx.library, types.isSplit(state)),",
         "cell_values: cells,",
         lambda r: r["savePatch"]["cells"]["taxable"] is None
         and (r["estimate"]["condition"]["autosave"]["cells"] or {}).get("Epoxy!B6") != "No"),

@@ -27,7 +27,7 @@ FIXTURES = pathlib.Path(__file__).resolve().parent / "fixtures"
 
 # (file under the repo root, a name the document uses for a copy that lives there)
 NAMED_COPIES = [
-    ("frontend/js/index.js", "SCOPE_BY_WORK_TYPE"),
+    ("frontend/js/intake-scope.js", "applyScope"),
     ("frontend/js/index.js", "CONDITIONS"),
     ("frontend/js/library.js", "WORK_TYPES"),
     ("frontend/js/estimate-review.js", "BASE_ROLE"),
@@ -52,7 +52,9 @@ NAMED_COPIES = [
     ("backend/estimate_writer.py", "POLISH_CELL_MAP"),
     ("frontend/js/bid-model.js", "RATES"),
     ("frontend/js/bid-model.js", "GP_BANDS"),
-    ("frontend/js/markup.js", "GP_5_BANDS"),
+    # Phase 8: GP_5_BANDS left markup.js (BUILTIN is read off the profiles now), and the profiles are the home.
+    ("frontend/js/bid-profiles.js", "builtinRules"),
+    ("frontend/js/bid-engine.js", "priceChain"),
     ("frontend/js/markup.js", "BUILTIN"),
     ("backend/pricing.py", "_gp_pct"),
     ("backend/pricing.py", "compute_full_bid"),
@@ -72,9 +74,9 @@ NAMED_COPIES = [
     ("frontend/js/estimate-review.js", "baseFlagSheets"),
     ("frontend/js/estimate-review.js", "_areaBaseIds"),
     ("frontend/js/proposal-review.js", "_areaBaseIds"),
-    ("frontend/js/polish-intake.js", "pickCounty"),
-    ("frontend/js/polish-intake.js", "filterCounties"),
+    # Phase 9b deleted the v2 intake's county copy (7.9); the shared control is the one that is left.
     ("frontend/js/county-picker.js", "county"),
+    ("frontend/js/intake-scope.js", "jobTypesMarkup"),
     ("frontend/js/polish-estimate.js", "saveSoon"),
     ("frontend/js/polish-estimate.js", "pagehide"),
     # Phase 2: the test copy's cell list (7.3), and the browser's twin of the server's v2 test (7.11).

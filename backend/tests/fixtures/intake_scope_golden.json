@@ -1,0 +1,802 @@
+{
+ "Direct/blank": {
+  "afterClick": {
+   "betaDisplay": "none",
+   "gypDisplay": "none",
+   "labels": [
+    {
+     "display": "",
+     "scope": "epoxy"
+    },
+    {
+     "display": "none",
+     "scope": "polish"
+    },
+    {
+     "display": "",
+     "scope": "cove"
+    },
+    {
+     "display": "",
+     "scope": "epoxy"
+    },
+    {
+     "display": "none",
+     "scope": "polish"
+    },
+    {
+     "display": "",
+     "scope": "cove"
+    }
+   ],
+   "rows": [
+    "",
+    "",
+    "",
+    ""
+   ],
+   "systemsDisplay": "",
+   "systemsHtml": "\n        <div class=\"system-block\">\n          <div class=\"system-tag\">System 1</div>\n          <div class=\"row\">\n            <label data-scope=\"epoxy\">Epoxy floor SF\n              <input type=\"number\" name=\"system_1_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n            <label data-scope=\"polish\">Polish floor SF\n              <input type=\"number\" name=\"polish_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n          <div class=\"row\">\n            <label data-scope=\"cove\">Cove LF (epoxy)\n              <input type=\"number\" name=\"cove_1_lf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n        </div>\n        <div class=\"system-block\">\n          <div class=\"system-tag\">System 2 (optional)</div>\n          <div class=\"row\">\n            <label data-scope=\"epoxy\">Epoxy floor SF\n              <input type=\"number\" name=\"system_2_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n            <label data-scope=\"polish\">Polish floor SF\n              <input type=\"number\" name=\"polish_2_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n          <div class=\"row\">\n            <label data-scope=\"cove\">Cove LF (epoxy)\n              <input type=\"number\" name=\"cove_2_lf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n        </div>",
+   "thicknessDisplay": ""
+  },
+  "atLoad": {
+   "betaDisplay": "none",
+   "gypDisplay": "none",
+   "labels": [
+    {
+     "display": "",
+     "scope": "epoxy"
+    },
+    {
+     "display": "none",
+     "scope": "polish"
+    },
+    {
+     "display": "",
+     "scope": "cove"
+    },
+    {
+     "display": "",
+     "scope": "epoxy"
+    },
+    {
+     "display": "none",
+     "scope": "polish"
+    },
+    {
+     "display": "",
+     "scope": "cove"
+    }
+   ],
+   "rows": [
+    "",
+    "",
+    "",
+    ""
+   ],
+   "systemsDisplay": "",
+   "systemsHtml": "\n        <div class=\"system-block\">\n          <div class=\"system-tag\">System 1</div>\n          <div class=\"row\">\n            <label data-scope=\"epoxy\">Epoxy floor SF\n              <input type=\"number\" name=\"system_1_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n            <label data-scope=\"polish\">Polish floor SF\n              <input type=\"number\" name=\"polish_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n          <div class=\"row\">\n            <label data-scope=\"cove\">Cove LF (epoxy)\n              <input type=\"number\" name=\"cove_1_lf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n        </div>\n        <div class=\"system-block\">\n          <div class=\"system-tag\">System 2 (optional)</div>\n          <div class=\"row\">\n            <label data-scope=\"epoxy\">Epoxy floor SF\n              <input type=\"number\" name=\"system_2_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n            <label data-scope=\"polish\">Polish floor SF\n              <input type=\"number\" name=\"polish_2_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n          <div class=\"row\">\n            <label data-scope=\"cove\">Cove LF (epoxy)\n              <input type=\"number\" name=\"cove_2_lf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n        </div>",
+   "thicknessDisplay": ""
+  }
+ },
+ "Direct/combo": {
+  "afterClick": {
+   "betaDisplay": "none",
+   "gypDisplay": "none",
+   "labels": [
+    {
+     "display": "",
+     "scope": "epoxy"
+    },
+    {
+     "display": "",
+     "scope": "polish"
+    },
+    {
+     "display": "",
+     "scope": "cove"
+    },
+    {
+     "display": "",
+     "scope": "epoxy"
+    },
+    {
+     "display": "",
+     "scope": "polish"
+    },
+    {
+     "display": "",
+     "scope": "cove"
+    }
+   ],
+   "rows": [
+    "",
+    "",
+    "",
+    ""
+   ],
+   "systemsDisplay": "",
+   "systemsHtml": "\n        <div class=\"system-block\">\n          <div class=\"system-tag\">System 1</div>\n          <div class=\"row\">\n            <label data-scope=\"epoxy\">Epoxy floor SF\n              <input type=\"number\" name=\"system_1_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n            <label data-scope=\"polish\">Polish floor SF\n              <input type=\"number\" name=\"polish_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n          <div class=\"row\">\n            <label data-scope=\"cove\">Cove LF (epoxy)\n              <input type=\"number\" name=\"cove_1_lf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n        </div>\n        <div class=\"system-block\">\n          <div class=\"system-tag\">System 2 (optional)</div>\n          <div class=\"row\">\n            <label data-scope=\"epoxy\">Epoxy floor SF\n              <input type=\"number\" name=\"system_2_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n            <label data-scope=\"polish\">Polish floor SF\n              <input type=\"number\" name=\"polish_2_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n          <div class=\"row\">\n            <label data-scope=\"cove\">Cove LF (epoxy)\n              <input type=\"number\" name=\"cove_2_lf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n        </div>",
+   "thicknessDisplay": ""
+  },
+  "atLoad": {
+   "betaDisplay": "none",
+   "gypDisplay": "none",
+   "labels": [
+    {
+     "display": "",
+     "scope": "epoxy"
+    },
+    {
+     "display": "",
+     "scope": "polish"
+    },
+    {
+     "display": "",
+     "scope": "cove"
+    },
+    {
+     "display": "",
+     "scope": "epoxy"
+    },
+    {
+     "display": "",
+     "scope": "polish"
+    },
+    {
+     "display": "",
+     "scope": "cove"
+    }
+   ],
+   "rows": [
+    "",
+    "",
+    "",
+    ""
+   ],
+   "systemsDisplay": "",
+   "systemsHtml": "\n        <div class=\"system-block\">\n          <div class=\"system-tag\">System 1</div>\n          <div class=\"row\">\n            <label data-scope=\"epoxy\">Epoxy floor SF\n              <input type=\"number\" name=\"system_1_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n            <label data-scope=\"polish\">Polish floor SF\n              <input type=\"number\" name=\"polish_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n          <div class=\"row\">\n            <label data-scope=\"cove\">Cove LF (epoxy)\n              <input type=\"number\" name=\"cove_1_lf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n        </div>\n        <div class=\"system-block\">\n          <div class=\"system-tag\">System 2 (optional)</div>\n          <div class=\"row\">\n            <label data-scope=\"epoxy\">Epoxy floor SF\n              <input type=\"number\" name=\"system_2_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n            <label data-scope=\"polish\">Polish floor SF\n              <input type=\"number\" name=\"polish_2_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n          <div class=\"row\">\n            <label data-scope=\"cove\">Cove LF (epoxy)\n              <input type=\"number\" name=\"cove_2_lf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n        </div>",
+   "thicknessDisplay": ""
+  }
+ },
+ "Direct/epoxy": {
+  "afterClick": {
+   "betaDisplay": "none",
+   "gypDisplay": "none",
+   "labels": [
+    {
+     "display": "",
+     "scope": "epoxy"
+    },
+    {
+     "display": "none",
+     "scope": "polish"
+    },
+    {
+     "display": "",
+     "scope": "cove"
+    },
+    {
+     "display": "",
+     "scope": "epoxy"
+    },
+    {
+     "display": "none",
+     "scope": "polish"
+    },
+    {
+     "display": "",
+     "scope": "cove"
+    }
+   ],
+   "rows": [
+    "",
+    "",
+    "",
+    ""
+   ],
+   "systemsDisplay": "",
+   "systemsHtml": "\n        <div class=\"system-block\">\n          <div class=\"system-tag\">System 1</div>\n          <div class=\"row\">\n            <label data-scope=\"epoxy\">Epoxy floor SF\n              <input type=\"number\" name=\"system_1_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n            <label data-scope=\"polish\">Polish floor SF\n              <input type=\"number\" name=\"polish_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n          <div class=\"row\">\n            <label data-scope=\"cove\">Cove LF (epoxy)\n              <input type=\"number\" name=\"cove_1_lf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n        </div>\n        <div class=\"system-block\">\n          <div class=\"system-tag\">System 2 (optional)</div>\n          <div class=\"row\">\n            <label data-scope=\"epoxy\">Epoxy floor SF\n              <input type=\"number\" name=\"system_2_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n            <label data-scope=\"polish\">Polish floor SF\n              <input type=\"number\" name=\"polish_2_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n          <div class=\"row\">\n            <label data-scope=\"cove\">Cove LF (epoxy)\n              <input type=\"number\" name=\"cove_2_lf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n        </div>",
+   "thicknessDisplay": ""
+  },
+  "atLoad": {
+   "betaDisplay": "none",
+   "gypDisplay": "none",
+   "labels": [
+    {
+     "display": "",
+     "scope": "epoxy"
+    },
+    {
+     "display": "none",
+     "scope": "polish"
+    },
+    {
+     "display": "",
+     "scope": "cove"
+    },
+    {
+     "display": "",
+     "scope": "epoxy"
+    },
+    {
+     "display": "none",
+     "scope": "polish"
+    },
+    {
+     "display": "",
+     "scope": "cove"
+    }
+   ],
+   "rows": [
+    "",
+    "",
+    "",
+    ""
+   ],
+   "systemsDisplay": "",
+   "systemsHtml": "\n        <div class=\"system-block\">\n          <div class=\"system-tag\">System 1</div>\n          <div class=\"row\">\n            <label data-scope=\"epoxy\">Epoxy floor SF\n              <input type=\"number\" name=\"system_1_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n            <label data-scope=\"polish\">Polish floor SF\n              <input type=\"number\" name=\"polish_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n          <div class=\"row\">\n            <label data-scope=\"cove\">Cove LF (epoxy)\n              <input type=\"number\" name=\"cove_1_lf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n        </div>\n        <div class=\"system-block\">\n          <div class=\"system-tag\">System 2 (optional)</div>\n          <div class=\"row\">\n            <label data-scope=\"epoxy\">Epoxy floor SF\n              <input type=\"number\" name=\"system_2_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n            <label data-scope=\"polish\">Polish floor SF\n              <input type=\"number\" name=\"polish_2_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n          <div class=\"row\">\n            <label data-scope=\"cove\">Cove LF (epoxy)\n              <input type=\"number\" name=\"cove_2_lf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n        </div>",
+   "thicknessDisplay": ""
+  }
+ },
+ "Direct/gyp": {
+  "afterClick": {
+   "betaDisplay": "none",
+   "gypDisplay": "",
+   "labels": [
+    {
+     "display": "none",
+     "scope": "epoxy"
+    },
+    {
+     "display": "none",
+     "scope": "polish"
+    },
+    {
+     "display": "none",
+     "scope": "cove"
+    },
+    {
+     "display": "none",
+     "scope": "epoxy"
+    },
+    {
+     "display": "none",
+     "scope": "polish"
+    },
+    {
+     "display": "none",
+     "scope": "cove"
+    }
+   ],
+   "rows": [
+    "none",
+    "none",
+    "none",
+    "none"
+   ],
+   "systemsDisplay": "none",
+   "systemsHtml": "\n        <div class=\"system-block\">\n          <div class=\"system-tag\">System 1</div>\n          <div class=\"row\">\n            <label data-scope=\"epoxy\">Epoxy floor SF\n              <input type=\"number\" name=\"system_1_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n            <label data-scope=\"polish\">Polish floor SF\n              <input type=\"number\" name=\"polish_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n          <div class=\"row\">\n            <label data-scope=\"cove\">Cove LF (epoxy)\n              <input type=\"number\" name=\"cove_1_lf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n        </div>\n        <div class=\"system-block\">\n          <div class=\"system-tag\">System 2 (optional)</div>\n          <div class=\"row\">\n            <label data-scope=\"epoxy\">Epoxy floor SF\n              <input type=\"number\" name=\"system_2_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n            <label data-scope=\"polish\">Polish floor SF\n              <input type=\"number\" name=\"polish_2_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n          <div class=\"row\">\n            <label data-scope=\"cove\">Cove LF (epoxy)\n              <input type=\"number\" name=\"cove_2_lf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n        </div>",
+   "thicknessDisplay": "none"
+  },
+  "atLoad": {
+   "betaDisplay": "none",
+   "gypDisplay": "",
+   "labels": [
+    {
+     "display": "none",
+     "scope": "epoxy"
+    },
+    {
+     "display": "none",
+     "scope": "polish"
+    },
+    {
+     "display": "none",
+     "scope": "cove"
+    },
+    {
+     "display": "none",
+     "scope": "epoxy"
+    },
+    {
+     "display": "none",
+     "scope": "polish"
+    },
+    {
+     "display": "none",
+     "scope": "cove"
+    }
+   ],
+   "rows": [
+    "none",
+    "none",
+    "none",
+    "none"
+   ],
+   "systemsDisplay": "none",
+   "systemsHtml": "\n        <div class=\"system-block\">\n          <div class=\"system-tag\">System 1</div>\n          <div class=\"row\">\n            <label data-scope=\"epoxy\">Epoxy floor SF\n              <input type=\"number\" name=\"system_1_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n            <label data-scope=\"polish\">Polish floor SF\n              <input type=\"number\" name=\"polish_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n          <div class=\"row\">\n            <label data-scope=\"cove\">Cove LF (epoxy)\n              <input type=\"number\" name=\"cove_1_lf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n        </div>\n        <div class=\"system-block\">\n          <div class=\"system-tag\">System 2 (optional)</div>\n          <div class=\"row\">\n            <label data-scope=\"epoxy\">Epoxy floor SF\n              <input type=\"number\" name=\"system_2_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n            <label data-scope=\"polish\">Polish floor SF\n              <input type=\"number\" name=\"polish_2_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n          <div class=\"row\">\n            <label data-scope=\"cove\">Cove LF (epoxy)\n              <input type=\"number\" name=\"cove_2_lf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n        </div>",
+   "thicknessDisplay": "none"
+  }
+ },
+ "Direct/polish": {
+  "afterClick": {
+   "betaDisplay": "",
+   "gypDisplay": "none",
+   "labels": [
+    {
+     "display": "none",
+     "scope": "epoxy"
+    },
+    {
+     "display": "",
+     "scope": "polish"
+    },
+    {
+     "display": "none",
+     "scope": "cove"
+    },
+    {
+     "display": "none",
+     "scope": "epoxy"
+    },
+    {
+     "display": "",
+     "scope": "polish"
+    },
+    {
+     "display": "none",
+     "scope": "cove"
+    }
+   ],
+   "rows": [
+    "",
+    "none",
+    "",
+    "none"
+   ],
+   "systemsDisplay": "",
+   "systemsHtml": "\n        <div class=\"system-block\">\n          <div class=\"system-tag\">System 1</div>\n          <div class=\"row\">\n            <label data-scope=\"epoxy\">Epoxy floor SF\n              <input type=\"number\" name=\"system_1_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n            <label data-scope=\"polish\">Polish floor SF\n              <input type=\"number\" name=\"polish_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n          <div class=\"row\">\n            <label data-scope=\"cove\">Cove LF (epoxy)\n              <input type=\"number\" name=\"cove_1_lf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n        </div>\n        <div class=\"system-block\">\n          <div class=\"system-tag\">System 2 (optional)</div>\n          <div class=\"row\">\n            <label data-scope=\"epoxy\">Epoxy floor SF\n              <input type=\"number\" name=\"system_2_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n            <label data-scope=\"polish\">Polish floor SF\n              <input type=\"number\" name=\"polish_2_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n          <div class=\"row\">\n            <label data-scope=\"cove\">Cove LF (epoxy)\n              <input type=\"number\" name=\"cove_2_lf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n        </div>",
+   "thicknessDisplay": "none"
+  },
+  "atLoad": {
+   "betaDisplay": "",
+   "gypDisplay": "none",
+   "labels": [
+    {
+     "display": "none",
+     "scope": "epoxy"
+    },
+    {
+     "display": "",
+     "scope": "polish"
+    },
+    {
+     "display": "none",
+     "scope": "cove"
+    },
+    {
+     "display": "none",
+     "scope": "epoxy"
+    },
+    {
+     "display": "",
+     "scope": "polish"
+    },
+    {
+     "display": "none",
+     "scope": "cove"
+    }
+   ],
+   "rows": [
+    "",
+    "none",
+    "",
+    "none"
+   ],
+   "systemsDisplay": "",
+   "systemsHtml": "\n        <div class=\"system-block\">\n          <div class=\"system-tag\">System 1</div>\n          <div class=\"row\">\n            <label data-scope=\"epoxy\">Epoxy floor SF\n              <input type=\"number\" name=\"system_1_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n            <label data-scope=\"polish\">Polish floor SF\n              <input type=\"number\" name=\"polish_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n          <div class=\"row\">\n            <label data-scope=\"cove\">Cove LF (epoxy)\n              <input type=\"number\" name=\"cove_1_lf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n        </div>\n        <div class=\"system-block\">\n          <div class=\"system-tag\">System 2 (optional)</div>\n          <div class=\"row\">\n            <label data-scope=\"epoxy\">Epoxy floor SF\n              <input type=\"number\" name=\"system_2_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n            <label data-scope=\"polish\">Polish floor SF\n              <input type=\"number\" name=\"polish_2_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n          <div class=\"row\">\n            <label data-scope=\"cove\">Cove LF (epoxy)\n              <input type=\"number\" name=\"cove_2_lf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n        </div>",
+   "thicknessDisplay": "none"
+  }
+ },
+ "GC/blank": {
+  "afterClick": {
+   "betaDisplay": "none",
+   "gypDisplay": "none",
+   "labels": [
+    {
+     "display": "",
+     "scope": "epoxy"
+    },
+    {
+     "display": "none",
+     "scope": "polish"
+    },
+    {
+     "display": "",
+     "scope": "cove"
+    },
+    {
+     "display": "",
+     "scope": "epoxy"
+    },
+    {
+     "display": "none",
+     "scope": "polish"
+    },
+    {
+     "display": "",
+     "scope": "cove"
+    }
+   ],
+   "rows": [
+    "",
+    "",
+    "",
+    ""
+   ],
+   "systemsDisplay": "",
+   "systemsHtml": "\n        <div class=\"system-block\">\n          <div class=\"system-tag\">System 1</div>\n          <div class=\"row\">\n            <label data-scope=\"epoxy\">Epoxy floor SF\n              <input type=\"number\" name=\"system_1_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n            <label data-scope=\"polish\">Polish floor SF\n              <input type=\"number\" name=\"polish_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n          <div class=\"row\">\n            <label data-scope=\"cove\">Cove LF (epoxy)\n              <input type=\"number\" name=\"cove_1_lf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n        </div>\n        <div class=\"system-block\">\n          <div class=\"system-tag\">System 2 (optional)</div>\n          <div class=\"row\">\n            <label data-scope=\"epoxy\">Epoxy floor SF\n              <input type=\"number\" name=\"system_2_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n            <label data-scope=\"polish\">Polish floor SF\n              <input type=\"number\" name=\"polish_2_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n          <div class=\"row\">\n            <label data-scope=\"cove\">Cove LF (epoxy)\n              <input type=\"number\" name=\"cove_2_lf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n        </div>",
+   "thicknessDisplay": ""
+  },
+  "atLoad": {
+   "betaDisplay": "none",
+   "gypDisplay": "none",
+   "labels": [
+    {
+     "display": "",
+     "scope": "epoxy"
+    },
+    {
+     "display": "none",
+     "scope": "polish"
+    },
+    {
+     "display": "",
+     "scope": "cove"
+    },
+    {
+     "display": "",
+     "scope": "epoxy"
+    },
+    {
+     "display": "none",
+     "scope": "polish"
+    },
+    {
+     "display": "",
+     "scope": "cove"
+    }
+   ],
+   "rows": [
+    "",
+    "",
+    "",
+    ""
+   ],
+   "systemsDisplay": "",
+   "systemsHtml": "\n        <div class=\"system-block\">\n          <div class=\"system-tag\">System 1</div>\n          <div class=\"row\">\n            <label data-scope=\"epoxy\">Epoxy floor SF\n              <input type=\"number\" name=\"system_1_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n            <label data-scope=\"polish\">Polish floor SF\n              <input type=\"number\" name=\"polish_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n          <div class=\"row\">\n            <label data-scope=\"cove\">Cove LF (epoxy)\n              <input type=\"number\" name=\"cove_1_lf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n        </div>\n        <div class=\"system-block\">\n          <div class=\"system-tag\">System 2 (optional)</div>\n          <div class=\"row\">\n            <label data-scope=\"epoxy\">Epoxy floor SF\n              <input type=\"number\" name=\"system_2_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n            <label data-scope=\"polish\">Polish floor SF\n              <input type=\"number\" name=\"polish_2_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n          <div class=\"row\">\n            <label data-scope=\"cove\">Cove LF (epoxy)\n              <input type=\"number\" name=\"cove_2_lf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n        </div>",
+   "thicknessDisplay": ""
+  }
+ },
+ "GC/combo": {
+  "afterClick": {
+   "betaDisplay": "none",
+   "gypDisplay": "none",
+   "labels": [
+    {
+     "display": "",
+     "scope": "epoxy"
+    },
+    {
+     "display": "",
+     "scope": "polish"
+    },
+    {
+     "display": "",
+     "scope": "cove"
+    },
+    {
+     "display": "",
+     "scope": "epoxy"
+    },
+    {
+     "display": "",
+     "scope": "polish"
+    },
+    {
+     "display": "",
+     "scope": "cove"
+    }
+   ],
+   "rows": [
+    "",
+    "",
+    "",
+    ""
+   ],
+   "systemsDisplay": "",
+   "systemsHtml": "\n        <div class=\"system-block\">\n          <div class=\"system-tag\">System 1</div>\n          <div class=\"row\">\n            <label data-scope=\"epoxy\">Epoxy floor SF\n              <input type=\"number\" name=\"system_1_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n            <label data-scope=\"polish\">Polish floor SF\n              <input type=\"number\" name=\"polish_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n          <div class=\"row\">\n            <label data-scope=\"cove\">Cove LF (epoxy)\n              <input type=\"number\" name=\"cove_1_lf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n        </div>\n        <div class=\"system-block\">\n          <div class=\"system-tag\">System 2 (optional)</div>\n          <div class=\"row\">\n            <label data-scope=\"epoxy\">Epoxy floor SF\n              <input type=\"number\" name=\"system_2_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n            <label data-scope=\"polish\">Polish floor SF\n              <input type=\"number\" name=\"polish_2_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n          <div class=\"row\">\n            <label data-scope=\"cove\">Cove LF (epoxy)\n              <input type=\"number\" name=\"cove_2_lf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n        </div>",
+   "thicknessDisplay": ""
+  },
+  "atLoad": {
+   "betaDisplay": "none",
+   "gypDisplay": "none",
+   "labels": [
+    {
+     "display": "",
+     "scope": "epoxy"
+    },
+    {
+     "display": "",
+     "scope": "polish"
+    },
+    {
+     "display": "",
+     "scope": "cove"
+    },
+    {
+     "display": "",
+     "scope": "epoxy"
+    },
+    {
+     "display": "",
+     "scope": "polish"
+    },
+    {
+     "display": "",
+     "scope": "cove"
+    }
+   ],
+   "rows": [
+    "",
+    "",
+    "",
+    ""
+   ],
+   "systemsDisplay": "",
+   "systemsHtml": "\n        <div class=\"system-block\">\n          <div class=\"system-tag\">System 1</div>\n          <div class=\"row\">\n            <label data-scope=\"epoxy\">Epoxy floor SF\n              <input type=\"number\" name=\"system_1_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n            <label data-scope=\"polish\">Polish floor SF\n              <input type=\"number\" name=\"polish_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n          <div class=\"row\">\n            <label data-scope=\"cove\">Cove LF (epoxy)\n              <input type=\"number\" name=\"cove_1_lf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n        </div>\n        <div class=\"system-block\">\n          <div class=\"system-tag\">System 2 (optional)</div>\n          <div class=\"row\">\n            <label data-scope=\"epoxy\">Epoxy floor SF\n              <input type=\"number\" name=\"system_2_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n            <label data-scope=\"polish\">Polish floor SF\n              <input type=\"number\" name=\"polish_2_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n          <div class=\"row\">\n            <label data-scope=\"cove\">Cove LF (epoxy)\n              <input type=\"number\" name=\"cove_2_lf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n        </div>",
+   "thicknessDisplay": ""
+  }
+ },
+ "GC/epoxy": {
+  "afterClick": {
+   "betaDisplay": "none",
+   "gypDisplay": "none",
+   "labels": [
+    {
+     "display": "",
+     "scope": "epoxy"
+    },
+    {
+     "display": "none",
+     "scope": "polish"
+    },
+    {
+     "display": "",
+     "scope": "cove"
+    },
+    {
+     "display": "",
+     "scope": "epoxy"
+    },
+    {
+     "display": "none",
+     "scope": "polish"
+    },
+    {
+     "display": "",
+     "scope": "cove"
+    }
+   ],
+   "rows": [
+    "",
+    "",
+    "",
+    ""
+   ],
+   "systemsDisplay": "",
+   "systemsHtml": "\n        <div class=\"system-block\">\n          <div class=\"system-tag\">System 1</div>\n          <div class=\"row\">\n            <label data-scope=\"epoxy\">Epoxy floor SF\n              <input type=\"number\" name=\"system_1_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n            <label data-scope=\"polish\">Polish floor SF\n              <input type=\"number\" name=\"polish_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n          <div class=\"row\">\n            <label data-scope=\"cove\">Cove LF (epoxy)\n              <input type=\"number\" name=\"cove_1_lf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n        </div>\n        <div class=\"system-block\">\n          <div class=\"system-tag\">System 2 (optional)</div>\n          <div class=\"row\">\n            <label data-scope=\"epoxy\">Epoxy floor SF\n              <input type=\"number\" name=\"system_2_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n            <label data-scope=\"polish\">Polish floor SF\n              <input type=\"number\" name=\"polish_2_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n          <div class=\"row\">\n            <label data-scope=\"cove\">Cove LF (epoxy)\n              <input type=\"number\" name=\"cove_2_lf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n        </div>",
+   "thicknessDisplay": ""
+  },
+  "atLoad": {
+   "betaDisplay": "none",
+   "gypDisplay": "none",
+   "labels": [
+    {
+     "display": "",
+     "scope": "epoxy"
+    },
+    {
+     "display": "none",
+     "scope": "polish"
+    },
+    {
+     "display": "",
+     "scope": "cove"
+    },
+    {
+     "display": "",
+     "scope": "epoxy"
+    },
+    {
+     "display": "none",
+     "scope": "polish"
+    },
+    {
+     "display": "",
+     "scope": "cove"
+    }
+   ],
+   "rows": [
+    "",
+    "",
+    "",
+    ""
+   ],
+   "systemsDisplay": "",
+   "systemsHtml": "\n        <div class=\"system-block\">\n          <div class=\"system-tag\">System 1</div>\n          <div class=\"row\">\n            <label data-scope=\"epoxy\">Epoxy floor SF\n              <input type=\"number\" name=\"system_1_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n            <label data-scope=\"polish\">Polish floor SF\n              <input type=\"number\" name=\"polish_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n          <div class=\"row\">\n            <label data-scope=\"cove\">Cove LF (epoxy)\n              <input type=\"number\" name=\"cove_1_lf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n        </div>\n        <div class=\"system-block\">\n          <div class=\"system-tag\">System 2 (optional)</div>\n          <div class=\"row\">\n            <label data-scope=\"epoxy\">Epoxy floor SF\n              <input type=\"number\" name=\"system_2_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n            <label data-scope=\"polish\">Polish floor SF\n              <input type=\"number\" name=\"polish_2_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n          <div class=\"row\">\n            <label data-scope=\"cove\">Cove LF (epoxy)\n              <input type=\"number\" name=\"cove_2_lf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n        </div>",
+   "thicknessDisplay": ""
+  }
+ },
+ "GC/gyp": {
+  "afterClick": {
+   "betaDisplay": "none",
+   "gypDisplay": "",
+   "labels": [
+    {
+     "display": "none",
+     "scope": "epoxy"
+    },
+    {
+     "display": "none",
+     "scope": "polish"
+    },
+    {
+     "display": "none",
+     "scope": "cove"
+    },
+    {
+     "display": "none",
+     "scope": "epoxy"
+    },
+    {
+     "display": "none",
+     "scope": "polish"
+    },
+    {
+     "display": "none",
+     "scope": "cove"
+    }
+   ],
+   "rows": [
+    "none",
+    "none",
+    "none",
+    "none"
+   ],
+   "systemsDisplay": "none",
+   "systemsHtml": "\n        <div class=\"system-block\">\n          <div class=\"system-tag\">System 1</div>\n          <div class=\"row\">\n            <label data-scope=\"epoxy\">Epoxy floor SF\n              <input type=\"number\" name=\"system_1_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n            <label data-scope=\"polish\">Polish floor SF\n              <input type=\"number\" name=\"polish_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n          <div class=\"row\">\n            <label data-scope=\"cove\">Cove LF (epoxy)\n              <input type=\"number\" name=\"cove_1_lf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n        </div>\n        <div class=\"system-block\">\n          <div class=\"system-tag\">System 2 (optional)</div>\n          <div class=\"row\">\n            <label data-scope=\"epoxy\">Epoxy floor SF\n              <input type=\"number\" name=\"system_2_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n            <label data-scope=\"polish\">Polish floor SF\n              <input type=\"number\" name=\"polish_2_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n          <div class=\"row\">\n            <label data-scope=\"cove\">Cove LF (epoxy)\n              <input type=\"number\" name=\"cove_2_lf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n        </div>",
+   "thicknessDisplay": "none"
+  },
+  "atLoad": {
+   "betaDisplay": "none",
+   "gypDisplay": "",
+   "labels": [
+    {
+     "display": "none",
+     "scope": "epoxy"
+    },
+    {
+     "display": "none",
+     "scope": "polish"
+    },
+    {
+     "display": "none",
+     "scope": "cove"
+    },
+    {
+     "display": "none",
+     "scope": "epoxy"
+    },
+    {
+     "display": "none",
+     "scope": "polish"
+    },
+    {
+     "display": "none",
+     "scope": "cove"
+    }
+   ],
+   "rows": [
+    "none",
+    "none",
+    "none",
+    "none"
+   ],
+   "systemsDisplay": "none",
+   "systemsHtml": "\n        <div class=\"system-block\">\n          <div class=\"system-tag\">System 1</div>\n          <div class=\"row\">\n            <label data-scope=\"epoxy\">Epoxy floor SF\n              <input type=\"number\" name=\"system_1_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n            <label data-scope=\"polish\">Polish floor SF\n              <input type=\"number\" name=\"polish_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n          <div class=\"row\">\n            <label data-scope=\"cove\">Cove LF (epoxy)\n              <input type=\"number\" name=\"cove_1_lf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n        </div>\n        <div class=\"system-block\">\n          <div class=\"system-tag\">System 2 (optional)</div>\n          <div class=\"row\">\n            <label data-scope=\"epoxy\">Epoxy floor SF\n              <input type=\"number\" name=\"system_2_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n            <label data-scope=\"polish\">Polish floor SF\n              <input type=\"number\" name=\"polish_2_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n          <div class=\"row\">\n            <label data-scope=\"cove\">Cove LF (epoxy)\n              <input type=\"number\" name=\"cove_2_lf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n        </div>",
+   "thicknessDisplay": "none"
+  }
+ },
+ "GC/polish": {
+  "afterClick": {
+   "betaDisplay": "",
+   "gypDisplay": "none",
+   "labels": [
+    {
+     "display": "none",
+     "scope": "epoxy"
+    },
+    {
+     "display": "",
+     "scope": "polish"
+    },
+    {
+     "display": "none",
+     "scope": "cove"
+    },
+    {
+     "display": "none",
+     "scope": "epoxy"
+    },
+    {
+     "display": "",
+     "scope": "polish"
+    },
+    {
+     "display": "none",
+     "scope": "cove"
+    }
+   ],
+   "rows": [
+    "",
+    "none",
+    "",
+    "none"
+   ],
+   "systemsDisplay": "",
+   "systemsHtml": "\n        <div class=\"system-block\">\n          <div class=\"system-tag\">System 1</div>\n          <div class=\"row\">\n            <label data-scope=\"epoxy\">Epoxy floor SF\n              <input type=\"number\" name=\"system_1_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n            <label data-scope=\"polish\">Polish floor SF\n              <input type=\"number\" name=\"polish_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n          <div class=\"row\">\n            <label data-scope=\"cove\">Cove LF (epoxy)\n              <input type=\"number\" name=\"cove_1_lf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n        </div>\n        <div class=\"system-block\">\n          <div class=\"system-tag\">System 2 (optional)</div>\n          <div class=\"row\">\n            <label data-scope=\"epoxy\">Epoxy floor SF\n              <input type=\"number\" name=\"system_2_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n            <label data-scope=\"polish\">Polish floor SF\n              <input type=\"number\" name=\"polish_2_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n          <div class=\"row\">\n            <label data-scope=\"cove\">Cove LF (epoxy)\n              <input type=\"number\" name=\"cove_2_lf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n        </div>",
+   "thicknessDisplay": "none"
+  },
+  "atLoad": {
+   "betaDisplay": "",
+   "gypDisplay": "none",
+   "labels": [
+    {
+     "display": "none",
+     "scope": "epoxy"
+    },
+    {
+     "display": "",
+     "scope": "polish"
+    },
+    {
+     "display": "none",
+     "scope": "cove"
+    },
+    {
+     "display": "none",
+     "scope": "epoxy"
+    },
+    {
+     "display": "",
+     "scope": "polish"
+    },
+    {
+     "display": "none",
+     "scope": "cove"
+    }
+   ],
+   "rows": [
+    "",
+    "none",
+    "",
+    "none"
+   ],
+   "systemsDisplay": "",
+   "systemsHtml": "\n        <div class=\"system-block\">\n          <div class=\"system-tag\">System 1</div>\n          <div class=\"row\">\n            <label data-scope=\"epoxy\">Epoxy floor SF\n              <input type=\"number\" name=\"system_1_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n            <label data-scope=\"polish\">Polish floor SF\n              <input type=\"number\" name=\"polish_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n          <div class=\"row\">\n            <label data-scope=\"cove\">Cove LF (epoxy)\n              <input type=\"number\" name=\"cove_1_lf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n        </div>\n        <div class=\"system-block\">\n          <div class=\"system-tag\">System 2 (optional)</div>\n          <div class=\"row\">\n            <label data-scope=\"epoxy\">Epoxy floor SF\n              <input type=\"number\" name=\"system_2_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n            <label data-scope=\"polish\">Polish floor SF\n              <input type=\"number\" name=\"polish_2_sf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n          <div class=\"row\">\n            <label data-scope=\"cove\">Cove LF (epoxy)\n              <input type=\"number\" name=\"cove_2_lf\" min=\"0\" step=\"1\" value=\"0\">\n            </label>\n          </div>\n        </div>",
+   "thicknessDisplay": "none"
+  }
+ }
+}

@@ -173,6 +173,36 @@ def test_tax_exempt_is_the_inverse_of_the_estimates_taxable_flag():
     assert exempt["B66"] == "Y"
 
 
+def test_a_split_polish_draft_reads_tax_from_the_polish_sheets_own_cells():
+    """Once the estimate screen has split a draft per sheet (`tax_flags_per_sheet`), Epoxy!B6 is the Epoxy
+    option's answer, not the job's, and a polish job's base answer is Polish!B6 and Polish!D6. A v2 save writes
+    those two and no other tax cell, so reading Epoxy's told accounting the opposite of the bid."""
+    split = dict(work_type="polish", tax_flags_per_sheet=True,
+                 cell_values={"Polish!B6": "No", "Polish!D6": "Yes", "Epoxy!B6": "Yes", "Epoxy!D6": "No"})
+    pf = isw.build_prefill(_draft(**split))
+    assert pf["B66"] == "Y", "exempt on the polish sheet, so Tax Exempt? is Y"
+    assert pf["B67"] == "Y"
+    # a polish draft that is NOT split still reads Epoxy, the cell the fan-out writes
+    unsplit = dict(split, tax_flags_per_sheet=False)
+    pf2 = isw.build_prefill(_draft(**unsplit))
+    assert pf2["B66"] == "N" and pf2["B67"] == "N"
+    # split but Polish never answered: the old fall-through stands rather than inventing an answer
+    blank = dict(split, cell_values={"Epoxy!B6": "No"})
+    assert isw.build_prefill(_draft(**blank))["B66"] == "Y"
+
+
+def test_a_v2_test_copy_of_a_split_project_reads_tax_from_the_polish_sheet_whatever_its_job_was():
+    """v2 prices a polish bid, so its save writes Polish!B6 and Polish!D6 even on a copy of an epoxy project
+    (work_type is still epoxy until the v2 intake is saved). The copy says whose sandbox it is."""
+    cells = {"Polish!B6": "No", "Polish!D6": "Yes", "Epoxy!B6": "Yes", "Epoxy!D6": "No"}
+    copy = isw.build_prefill(_draft(work_type="epoxy", tax_flags_per_sheet=True,
+                                    beta_sandbox_of="src-1", cell_values=cells))
+    assert copy["B66"] == "Y" and copy["B67"] == "Y"
+    # the same epoxy project that is NOT a copy keeps reading the Epoxy sheet it is priced on
+    live = isw.build_prefill(_draft(work_type="epoxy", tax_flags_per_sheet=True, cell_values=cells))
+    assert live["B66"] == "N" and live["B67"] == "N"
+
+
 def test_prevailing_wage_and_remodel_tax_carry_across():
     pf = isw.build_prefill(_draft(cell_values={"Epoxy!D5": "Yes", "Epoxy!D6": "Yes"}))
     assert pf["B63"] == "Y" and pf["B67"] == "Y"

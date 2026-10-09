@@ -302,6 +302,8 @@ async function runSandbox(route, state) {
     location: { origin: "https://app.test", href: "https://app.test/polish-intake.html?d=d1" },
     history: { replaceState() {} },
     fetch: async function (url, opts) { return route(String(url), (opts && opts.method) || "GET"); },
+    // The sandbox reads the cells a test copy keeps off the one vocabulary as it parses.
+    TWWorkTypes: require(path.join(FRONTEND, "js", "work-types.js")),
   };
   box.window = box;
   vm.createContext(box);

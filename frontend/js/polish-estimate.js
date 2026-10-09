@@ -48,8 +48,12 @@
   }
 
   var B = window.TWBidModel;      // the markup chain, pinned to Kyle's Polish tab
+  // The one vocabulary and job-conditions table (js/work-types.js). Bound ABOVE adopt() on purpose:
+  // adopt() runs at parse time, and condLine reads the reserved library ids off it.
+  var T = window.TWWorkTypes;
   var L = window.TWLib;            // priceAssembly — the same maths the library page shows
   var S = window.TWPolishSandbox;  // never edit a live bid
+  var P = window.TWLibraryPicker;  // the one search pop-up both "Add" buttons open (js/library-picker.js)
   var $ = function (id) { return document.getElementById(id); };
 
   // The draft this page is working ON, and the model derived from it. Reassigned together by
@@ -85,7 +89,10 @@
     //
     // Safe only because every writer writes both places: saveSoon puts all eight cells back through
     // conditionCellWrites on every save, so the cell can never be the staler of the two.
-    M.conditions = B.conditionsFromCells(M.conditions, state.cell_values);
+    //
+    // `T.isSplit(state)`: on a draft the estimate screen has split per sheet, the two tax answers are the
+    // base sheet's own cell, and the save below (B.buildSavePatch) writes the same one.
+    M.conditions = B.conditionsFromCells(M.conditions, state.cell_values, T.isSplit(state));
     // BEFORE THE FIRST PAINT, not on the first edit. `changed()` is what normally keeps a derived
     // Guys figure current, and nothing calls it on load -- so without this a reopened draft shows
     // Travel's Guys box empty until somebody touches an unrelated field, and prices it at nothing
@@ -329,13 +336,14 @@
    *  formulas the tool shipped with, untouched -- rather than pricing the line at $0 or breaking
    *  the page. `library` says which of the two answered.
    *
-   *  THE IDS ARE LITERALS HERE, not read off CONDITION_CARDS: adopt() runs at parse time, above
-   *  that declaration, and nothing this reaches may depend on a var assigned below it.
+   *  THE IDS ARE THE TABLE'S (T.itemIdOf: js/work-types.js), not read off CONDITION_CARDS: adopt() runs
+   *  at parse time, above that declaration, and nothing this reaches may depend on a var assigned
+   *  below it. T is bound at the top of this file for that reason.
    *
    *  `qty` is what the card's Measurement shows: kits for joint filler, the polished area in SF
    *  for dye (the area is what dye is spread across, whatever its row's coverage says). */
   function condLine(key, area) {
-    var id = key === "dye" ? "dye" : "joint-filler-kit";
+    var id = T.itemIdOf(key);
     // THIS BID'S COVERAGE for the line, if one was typed (M.cond_cov, set from the card's Coverage
     // box). Blank leaves ITEMS alone, so the library's own figure -- and every bid saved before the
     // box existed -- prices exactly as it did.
@@ -365,12 +373,12 @@
    *  either. */
   function conditionLibrary() {
     var out = {};
-    [["dye", "dye"], ["joint_filler", "joint-filler-kit"]].forEach(function (pair) {
-      if (!L.findItem(ITEMS, pair[1])) return;
-      var ln = condLine(pair[0], 0).line;
-      out[pair[0]] = ln ? { unit_price: ln.unit_price, coverage: ln.coverage,
-                            waste_pct: ln.waste_pct, roundup: ln.roundup, buy_qty: ln.buy_qty }
-                        : null;
+    ["dye", "joint_filler"].forEach(function (key) {
+      if (!L.findItem(ITEMS, T.itemIdOf(key))) return;
+      var ln = condLine(key, 0).line;
+      out[key] = ln ? { unit_price: ln.unit_price, coverage: ln.coverage,
+                        waste_pct: ln.waste_pct, roundup: ln.roundup, buy_qty: ln.buy_qty }
+                    : null;
     });
     return out;
   }
@@ -782,7 +790,7 @@
   }
 
   function condCovItem(key) {
-    return itemById(key === "dye" ? "dye" : "joint-filler-kit");
+    return itemById(T.itemIdOf(key));
   }
 
   /** An assembly row's lines that name a real material, each with the figure it will price with:
@@ -843,16 +851,20 @@
    *  coverage is the reserved row's own (condLine), so the kit count and the "one kit per ..."
    *  sentence both come off the line priceLine priced; a second copy of 3500 on this page would
    *  go stale the day an admin changed it. */
-  var CONDITION_CARDS = [
-    { key: "joint_filler", tag: "JOINT FILLER", label: "In the bid", cell: "Polish!E29",
-      // THE RESERVED library_items ROW that prices this line -- see condLine, which falls back to
-      // bid-model.js's jointFillerCost when the row is not there.
-      item_id: "joint-filler-kit",
+  //
+  //  WHICH CARDS THERE ARE IS THE TABLE'S, AND WHAT EACH ONE SAYS IS THIS PAGE'S (Phase 7). CARD_VIEWS
+  //  below is everything about a card that is this screen's own: its tag, its sentences, how it prices.
+  //  The conditions the Takeoff step asks of a polish job, in its order, and each one's workbook cell, its
+  //  reserved library row (`item_id`: see condLine, which falls back to bid-model.js's jointFillerCost when
+  //  the row is not there) and what it `needs` come from js/work-types.js, and CONDITION_CARDS joins the
+  //  two. A condition added there with no view here is refused by name rather than drawn half-finished.
+  var CARD_VIEWS = [
+    { key: "joint_filler", tag: "JOINT FILLER", label: "In the bid",
       // THE LIVE NAME, not a string typed twice. An admin renaming the row on the Items tab has
       // to show up here too, or the card is a second copy of a fact that can go stale without
       // looking stale.
       material: function () {
-        var item = L.findItem(ITEMS, "joint-filler-kit");
+        var item = L.findItem(ITEMS, T.itemIdOf("joint_filler"));
         return (item && item.name) ? item.name : "Joint filler, 10 gal kit";
       },
       matHint: "Polish!E29 · priced from the Item Library.",
@@ -871,18 +883,15 @@
       },
       unitHint: "Kits are what the job buys." },
     { key: "remove_existing_jf", tag: "REMOVE EXISTING", label: "Taking the old filler out",
-      cell: "Polish!F29", needs: "joint_filler",
       // ITS RESERVED library_items ROW, 2026-10-01 -- the Defaults tab lists it as a material and
       // the Items tab is where it is edited. NOTHING HERE PRICES OFF IT: the card has no `cost`,
       // so it stays the switch-and-sentence card and its answer still only reaches Polish!F29.
       // It is carried so RESERVED_ITEM_IDS below keeps it out of every takeoff-row picker.
-      item_id: "remove-existing-jf",
       why: "Adds a fourth hand to the joint-filler line. Priced on the Labor step, where that " +
            "line is." },
-    { key: "dye", tag: "DYE", label: "In the bid", cell: "Polish!E25",
-      item_id: "dye",
+    { key: "dye", tag: "DYE", label: "In the bid",
       material: function () {
-        var item = L.findItem(ITEMS, "dye");
+        var item = L.findItem(ITEMS, T.itemIdOf("dye"));
         return (item && item.name) ? item.name : "Dye, per coat";
       },
       matHint: "Polish!E25 · two coats, rows 25 and 26 · priced from the Item Library.",
@@ -897,6 +906,22 @@
       qtyHint: function () { return "The polished area from the rows above."; },
       unitHint: "Priced across the area, not by the pack." }
   ];
+
+  /** The cards, as the page draws them: each condition the Takeoff step asks of a polish job (the table's
+   *  rows, in its order) with its own view laid over { key, cell, item_id, needs }. `cell` is the first
+   *  workbook cell the answer is written to, `item_id` the reserved library row that prices it, and
+   *  `needs` is set only on the card that depends on another. */
+  var CONDITION_CARDS = (function () {
+    var views = new Map(CARD_VIEWS.map(function (v) { return [v.key, v]; }));
+    return T.conditionsFor("polish", "v2Takeoff").map(function (c) {
+      if (!views.has(c.key)) {
+        throw new Error("polish-estimate.js has no card for the Takeoff condition " + c.key);
+      }
+      var data = { key: c.key, cell: c.cells[0], item_id: c.item_id };
+      if (c.needs) data.needs = c.needs;
+      return Object.assign(data, views.get(c.key));
+    });
+  })();
 
   // The three ids CONDITION_CARDS above owns -- the two it prices by a fixed formula rather than
   // by search, and remove-existing's, which prices nothing -- read off it rather than retyped, so
@@ -1072,11 +1097,85 @@
     return k === "item" ? r.item_name : (k === "new" ? r.pick_name : r.assembly_name);
   }
 
-  /** A row nobody has pointed at anything yet: the shape the add button pushes, and the shape the
-   *  delete guard refills an emptied takeoff with. No assembly_id and no item_id, so rowPrice
-   *  returns null and the cost box reads as unpriced rather than as free. */
-  function newTakeoffRow() {
-    return { kind: "new", pick_name: "", measurement: "", unit: "SF" };
+  /** What the takeoff pop-up lists: every assembly and every material the row's own search field
+   *  offers (renderDatalist), by name, minus the three reserved materials that already have a
+   *  condition card of their own. Pure over ASMS and ITEMS. */
+  function takeoffPickEntries() {
+    var out = [];
+    ASMS.forEach(function (a) {
+      out.push({ key: "asm:" + a.id, kind: "asm", id: a.id, name: String(a.name == null ? "" : a.name),
+                 sub: "Assembly" + (a.unit ? ", per " + String(a.unit).toUpperCase() : ""),
+                 tag: "Assembly" });
+    });
+    ITEMS.forEach(function (it) {
+      if (RESERVED_ITEM_IDS.indexOf(it.id) !== -1) return;
+      out.push({ key: "item:" + it.id, kind: "item", id: it.id,
+                 name: String(it.name == null ? "" : it.name),
+                 sub: "Material" + (it.unit ? ", " + it.unit : ""), tag: "Material" });
+    });
+    out.sort(function (x, y) { return x.name.localeCompare(y.name) || (x.kind < y.kind ? -1 : 1); });
+    return out;
+  }
+
+  /** Add one takeoff row already pointed at the assembly or material that was ticked. It is built
+   *  the way the row's own search field builds one: an undecided row, then becomeKind and the same
+   *  setAssembly / setMaterial the field uses (unit adoption and all). The id is then pinned
+   *  explicitly, because those two resolve by NAME and the pop-up knows exactly which row was
+   *  ticked (two materials that differ only by case would otherwise land on the first). Returns
+   *  the new row's index. */
+  function addPickedTakeoffRow(p) {
+    M.takeoff.push({ kind: "new", pick_name: "", measurement: "", unit: "SF" });
+    var i = M.takeoff.length - 1;
+    var row = M.takeoff[i];
+    becomeKind(row, p.kind);
+    if (p.kind === "item") {
+      setMaterial(i, p.name);
+      row.item_id = p.id;
+    } else {
+      setAssembly(i, p.name);
+      row.assembly_id = p.id;
+      // setAssembly found the assembly by NAME, so with two assemblies of one name the unit it
+      // adopted is the first one's. Take the unit of the one that was actually ticked.
+      var ticked = ASMS.filter(function (a) { return a.id === p.id; })[0];
+      var tu = ticked ? String(ticked.unit == null ? "" : ticked.unit).toUpperCase() : "";
+      if (tu === "SF" || tu === "LF") row.unit = tu;
+    }
+    return i;
+  }
+
+  /** A lone takeoff row nobody has touched (no pick, no measurement) is the empty starting row of
+   *  a new bid; the first pick takes its place rather than sitting under an empty one. */
+  function isUntouchedTakeoffRow(r) {
+    return !!r && !r.item_id && !r.assembly_id && !r.pick_name &&
+      (r.measurement === "" || r.measurement == null);
+  }
+
+  var pickerOpen = false;
+  function openTakeoffPicker(btn) {
+    if (!P || pickerOpen) return;
+    if (TW.modalOpen && TW.modalOpen()) return;
+    if (TW.injectModalCss) TW.injectModalCss();
+    pickerOpen = true;
+    P.open(document, {
+      onClose: function () { pickerOpen = false; },
+      title: "Add assemblies or materials",
+      sub: "Tick what this bid uses. Each one becomes a takeoff row.",
+      placeholder: "Search assemblies and materials",
+      emptyText: "The library has no assemblies or materials yet. Add some in Items & Assemblies first.",
+      entries: takeoffPickEntries(),
+      opener: btn,
+      onAdd: function (chosen) {
+        if (M.takeoff.length === 1 && isUntouchedTakeoffRow(M.takeoff[0])) M.takeoff = [];
+        var first = -1;
+        chosen.forEach(function (p) {
+          var i = addPickedTakeoffRow(p);
+          if (first === -1) first = i;
+        });
+        changed(true);
+        // The caret goes with the new rows: Measurement of the first one is the next thing to fill.
+        refocus('[data-tk="' + first + '"][data-k="measurement"]');
+      }
+    });
   }
 
   /** One takeoff row, as its own card -- a named function beside laborCard, and for the same
@@ -1623,7 +1722,7 @@
       var cost = B.laborCost(r);
       if (!cost && (r || {}).id !== "travel") return;
       labRows.push([r.label || "Labor line",
-                    B.num(r.guys) + " × " + B.num(r.days) + " × " + B.money2(r.rate),
+                    B.num(r.guys) + " × " + B.num(r.days) + " × " + B.money2(B.laborRateOf(r)),
                     esc(moneyAuto(cost))]);
     });
     if (!labRows.length) labRows.push(["No labor entered yet", "", ""]);
@@ -2010,13 +2109,71 @@
   // regenerate an id that had already been used. Nothing indexes labor rows by id today (the page
   // works by array position), so this is closing a door rather than fixing a symptom.
   var laborSeq = 0;
-  // THE COMPANY LABOR RATE (Markups -> Global). A new line starts from it rather than blank, so the
+  // THE COMPANY LABOR RATE (Items & Assemblies -> Labor). A new line starts from it rather than blank, so the
   // estimator is never typing a rate Treadwell has already decided. The shipped $33 stands until
   // init() has read the real one, and for good if that read fails.
   var LABOR_RATE = B.SHIPPED_LABOR_RATE;
-  function newLaborRow() {
+  /** A one-off labor card at the company rate. ONLY the pop-up's "One-off line" calls this, and only
+   *  with a name somebody typed: an unnamed "Task" card can no longer be made. */
+  function newLaborRow(name) {
     laborSeq += 1;
-    return { id: "u_" + Date.now() + "_" + laborSeq, label: "", guys: "", days: "", rate: LABOR_RATE };
+    // rate_default is the rate a cleared Rate box falls back to (B.laborRateOf).
+    return { id: "u_" + Date.now() + "_" + laborSeq, label: name == null ? "" : String(name),
+             guys: "", days: "", rate: LABOR_RATE, rate_default: LABOR_RATE };
+  }
+
+  /** What the labor pop-up lists: the live Labor rows of Items & Assemblies, Travel left out (it has
+   *  its own block below). Rows that apply to this bid's work type, or name none, are listed first;
+   *  a row already on the bid shows locked, so one library line is never two cards with one id.
+   *  `rows` is GET /api/library/labor's list, with the shipped crew standing in when the library
+   *  cannot answer (the same fallback a new bid is seeded with). */
+  function laborPickEntries(rows) {
+    var onBid = {};
+    M.labor.forEach(function (r) { if (r && r.id != null) onBid[String(r.id)] = true; });
+    var out = [];
+    B.withCrewFallback(rows).forEach(function (r) {
+      if (!r || r.id == null || String(r.id) === "travel") return;
+      var card = B.libraryLaborRow(r, LABOR_RATE);
+      out.push({ key: "lab:" + r.id, id: r.id, row: r, name: String(r.name == null ? "" : r.name),
+                 sub: (r.unit === "hours" ? "Hours" : "Days") + (r.notes ? ", " + r.notes : ""),
+                 tag: B.money2(card.rate) + " per hour",
+                 first: B.workTypeApplies(r, "polish"),
+                 on: !!onBid[String(r.id)], onText: "On this bid" });
+    });
+    return out;
+  }
+
+  function openLaborPicker(btn) {
+    if (!P || pickerOpen) return;
+    if (TW.modalOpen && TW.modalOpen()) return;
+    pickerOpen = true;          // held across the fetch so a double click opens one pop-up
+    loadLaborDefaults().then(function (rows) {
+      if (TW.injectModalCss) TW.injectModalCss();
+      P.open(document, {
+        onClose: function () { pickerOpen = false; },
+        title: "Add labor lines",
+        sub: "Tick the lines this bid needs, or type a one-off at the bottom.",
+        placeholder: "Search labor lines",
+        emptyText: "The Labor list in Items & Assemblies is empty. Type a one-off line below.",
+        entries: laborPickEntries(rows),
+        opener: btn,
+        onAdd: function (chosen) {
+          var first = M.labor.length;
+          chosen.forEach(function (p) { M.labor.push(B.laborRowFromLibrary(p.row, LABOR_RATE)); });
+          changed(true);
+          refocus('[data-lab="' + first + '"][data-k="guys"]');
+        },
+        oneOff: {
+          label: "One-off line", placeholder: "Name this line", button: "Add line",
+          onAdd: function (name) {
+            var first = M.labor.length;
+            M.labor.push(newLaborRow(name));
+            changed(true);
+            refocus('[data-lab="' + first + '"][data-k="guys"]');
+          }
+        }
+      });
+    });
   }
 
   /** The warning under a labor rate box: the shared "Default value: $X.XX" when this row's rate is
@@ -2087,12 +2244,10 @@
     // THE CARET GOES WITH THE ROW. The button is at the top of the list and the row lands at the
     // bottom of it, so without this the estimator presses Add and nothing they can see happens.
     // focus() scrolls the box into view as a side effect, which is the whole trick.
-    if (t.closest("[data-add-row]")) {
-      M.takeoff.push(newTakeoffRow());
-      changed(true);
-      refocus('[data-tk="' + (M.takeoff.length - 1) + '"][data-k="pick"]');
-      return;
-    }
+    // NOTHING IS ADDED BY THE CLICK ITSELF (Hanz, 2026-10-09): it opens the search pop-up, and a
+    // row exists only once something was ticked there and Add was pressed.
+    var addRow = t.closest("[data-add-row]");
+    if (addRow) { openTakeoffPicker(addRow); return; }
     // The answer to the only question a takeoff row asks -- see pickHint. The typed name is read
     // off the row BEFORE becomeKind clears it, then replayed through the setter for the kind that
     // was chosen, so the id lands exactly the way typing the name would have landed it.
@@ -2114,20 +2269,18 @@
     }
     var dr = t.closest("[data-del-row]");
     if (dr) {
+      // The last row stays: the x is not drawn on it, and a stale button must not empty the step.
+      if (M.takeoff.length <= 1) return;
       M.takeoff.splice(parseInt(dr.getAttribute("data-del-row"), 10), 1);
-      if (!M.takeoff.length) M.takeoff.push(newTakeoffRow());
       changed(true);
       return;
     }
-    if (t.closest("[data-add-lab]")) {
-      M.labor.push(newLaborRow());
-      changed(true);
-      return;
-    }
+    var addLab = t.closest("[data-add-lab]");
+    if (addLab) { openLaborPicker(addLab); return; }
     var dl = t.closest("[data-del-lab]");
     if (dl) {
+      if (M.labor.length <= 1) return;
       M.labor.splice(parseInt(dl.getAttribute("data-del-lab"), 10), 1);
-      if (!M.labor.length) M.labor.push(newLaborRow());
       changed(true);
       return;
     }
@@ -2492,6 +2645,22 @@
         }
       }
     }
+    // A CLEARED RATE BOX GOES BACK TO THE LINE'S OWN RATE (Hanz, 2026-10-09), on change like Guys
+    // above, so typing "3", backspace, "4" never snaps. The row was already priced at that rate while
+    // the box was empty (B.laborRateOf); this writes it back into the model and the box so the screen,
+    // the total and the saved blob agree. In place, never a rebuild: a rebuild eats the next click.
+    // Typing 0 is not blank and stays zero. A row with no default to fall back to stays blank.
+    if (blankKey === "rate" && el.getAttribute("data-lab") !== null && String(el.value).trim() === "") {
+      var rateRow = M.labor[parseInt(el.getAttribute("data-lab"), 10)];
+      if (rateRow && B.laborRateOf(rateRow) > 0) {
+        var back = B.laborRateOf(rateRow);
+        rateRow.rate = back;
+        el.value = String(back);
+        changed(false);
+        return;
+      }
+    }
+
     var ti = el.getAttribute("data-tk");
     if (ti === null) return;
     var i = parseInt(ti, 10);
@@ -2646,6 +2815,7 @@
     // landed. Null, not an empty array, for "not asked": an empty array is a real answer (the
     // table exists and holds nothing) and the two must not be confused.
     var laborDefaults = B.laborUnstated(state.polish_estimate) ? loadLaborDefaults() : null;
+    var libraryLaborRows = [];
     // The company labor rate is read for EVERY bid, a saved one included: it is only APPLIED to a
     // new bid (the laborDefaults gate below), but "Default $X" under a rate needs it on any.
     var laborRate = loadLaborRate();
@@ -2706,9 +2876,15 @@
     if (laborDefaults) {
       // Library rows with no rate of their own and Travel follow the company rate, then the three
       // crew rows are set to it. New bids only: this whole block is behind the laborUnstated gate.
-      var laborRows = await laborDefaults;
-      M.labor = B.applyLaborRate(
-        B.seedLibraryLabor(M.labor, laborRows, LABOR_RATE, "polish"), LABOR_RATE);
+      var laborRows = B.withCrewFallback(await laborDefaults);
+      libraryLaborRows = laborRows;
+      // THE CREW LINES COME FROM THE LABOR LIST LIKE ANY OTHER DEFAULT (Hanz, 2026-10-09). A model
+      // that states no rows reads as the four shipped ones (migrateModel's legacyLabor), so keep
+      // only Travel here and let the library put the rest on; withCrewFallback above is the shipped
+      // set standing in only when the library cannot answer.
+      M.labor = M.labor.filter(function (r) { return r && r.id === "travel"; });
+      M.labor = B.crewFirst(B.applyLaborRate(
+        B.seedLibraryLabor(M.labor, laborRows, LABOR_RATE, "polish"), LABOR_RATE));
       // Travel is a default like any other: if the library says this bid does not get it, say so
       // on the model so a reload does not append the "missing" row back (migrateModel).
       if (B.travelDeclined(laborRows, "polish")) M.no_travel_labor = true;
@@ -2737,7 +2913,7 @@
     if (conditionDefaults) {
       var condRows = await conditionDefaults;
       M.conditions = B.conditionsFromCells(
-        B.seedConditionDefaults(M.conditions, condRows), state.cell_values);
+        B.seedConditionDefaults(M.conditions, condRows), state.cell_values, T.isSplit(state));
       // Which cards this new bid shows: the ones still on the Defaults tab (seedConditionsShown).
       M.conditions_shown = B.seedConditionsShown(condRows);
     }
@@ -2759,7 +2935,7 @@
       // ever states, so laborUnstated is the signal that the calculator has never saved here.
       M.takeoff = (B.conditionsUnstated(state.polish_estimate) || B.laborUnstated(state.polish_estimate))
         ? B.seedDefaultTakeoff(M.takeoff, ASMS, ITEMS, RESERVED_ITEM_IDS,
-                               state.polish_sf, state.polish_2_sf)
+                               state.polish_sf, state.polish_2_sf, "polish")
         : B.seedTakeoffSf(M.takeoff, state.polish_sf, state.polish_2_sf);
     }
     // THE LABOR CALCULATOR, AFTER THE TAKEOFF SEED because "from SF" lines need the job's SF
@@ -2767,7 +2943,10 @@
     // otherwise). Nothing is written to the draft here; the first edit saves the filled rows, and
     // from then on the rows are the BID's.
     if (laborCalc) {
-      M.labor = B.applyLaborCalc(M.labor, await laborCalc, B.takeoffSf(M.takeoff), LABOR_RATE);
+      var calcRows = B.withCrewCalcFallback(await laborCalc);
+      M.labor = B.applyLaborCalc(M.labor, calcRows, B.takeoffSf(M.takeoff), LABOR_RATE);
+      // A rate typed on the Labor tab beats the calculator's blank ("company rate").
+      M.labor = B.keepLibraryRates(M.labor, libraryLaborRows, calcRows);
       // Every row the calculator did not fill remembers the rate it was seeded with (G1).
       M.labor = B.stampRateDefaults(M.labor);
       syncAutoGuys();

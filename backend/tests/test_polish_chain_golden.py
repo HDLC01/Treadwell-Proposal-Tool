@@ -1,14 +1,29 @@
 """The Polish bid chain, recorded before the v2 program rewrites what stands behind it.
 
 backend/tests/fixtures/polish_chain_golden.json holds what js/bid-model.js (TWBidModel)
-answers for 2,228 deliberately awkward inputs: markupChain over every GP edge and all 256 settings
+answers for 2,247 deliberately awkward inputs: markupChain over every GP edge and all 256 settings
 of the eight job conditions, every shape the remodel rate arrives in and a sweep of dirty values;
 the number helpers; labor, travel and takeoff; the conditions and what they write into Kyle's
 workbook; the default readers; the model; the labor calculator; and what a new bid is seeded with.
 It was cut from a clean export of an origin/staging commit (meta.commit says which) by
 tests/js/gen-chain-golden.js, whose recipe lists inputs only: every answer is the real code's. Phase 3
 cut it from 3f94ed2. Phase 4 re-cut it on d569332 and exactly ONE vector moved, `model/migrate/unknownKeys`
-(the model now keeps the keys it does not know); the other 2,227 are as Phase 3 recorded them.
+(the model now keeps the keys it does not know); the other 2,227 are as Phase 3 recorded them. Phase 7 re-cut
+it on ee49e39 and 48 vectors moved, all of them the workbook cells a save writes, none of them a price: the
+constant `const/CONDITION_CELLS` (Taxable is four cells now, not one) and the 47 `cond/cells/*` and
+`cond/library/*` vectors, each of which gains exactly the same five keys (Leveling!B6, the two Gyp B8 cells,
+and Epoxy!B10 and Polish!B10 written as "New") and nothing else. The other 2,180, every `chain/*` vector
+(the whole bid), `model/*`, `newbid/*` and `seed/*` among them, are as before.
+
+Phase 7b re-cut it on f0cf3fc (the Phase 7 merge) and changed it on purpose in two ways, neither of them a
+price. ONE VECTOR WAS RENAMED AND ITS ANSWER MOVED: `cond/fromCells/polishB4IsNotRead` is gone, and its
+replacement `cond/fromCells/polishB4IsReadWhenEpoxyB4IsBlank` has the same arguments and the answer the other
+way (`local` reads "No", where it used to read nothing), because a condition with several cells is now answered
+by the first cell that holds an answer and not by the first cell. NINETEEN VECTORS WERE ADDED for the new
+argument and the new rule: a split draft (`split`, the fourth argument of `conditionCellWrites` and the third of
+`conditionsFromCells`), and a Renovation answer in the second of its two cells. No other vector of the 2,228
+moved: all of `chain/*`, and every `cond/cells/*` and `cond/fromCells/*` that was already there bar the one
+above, answer as before (2,228 - 1 + 1 + 19 = 2,247).
 
 Phases 4 to 10 move this code: the model module is renamed, ROUNDUP and the number helpers move to a
 leaf module, rates and the GP ladder become profile data, the chain becomes an engine. Each must
@@ -244,13 +259,14 @@ def test_phase_4_changed_exactly_this_the_model_keeps_keys_it_does_not_know(vect
 
 # ── red without the code: break a COPY of the module and watch the comparison fail ────────────────
 MUTATIONS = {
+    # The ladder is the profile `polish-legacy`'s since Phase 8 (js/bid-profiles.js), and GP_BANDS is read off it.
     "a GP band moves": (
-        "var GP_BANDS = [[6500, 0.52], [15000, 0.45], [22500, 0.35], [32500, 0.32], [null, 0.30]];",
-        "var GP_BANDS = [[6500, 0.53], [15000, 0.45], [22500, 0.35], [32500, 0.32], [null, 0.30]];",
+        'var GP_5 = "MARKUP(BAND(subtotal, 6500,52%, 15000,45%, 22500,35%, 32500,32%, 30%))";',
+        'var GP_5 = "MARKUP(BAND(subtotal, 6500,53%, 15000,45%, 22500,35%, 32500,32%, 30%))";',
         ["const/GP_BANDS", "golden 0.52, now 0.53"]),
     "negative zero becomes zero": (
-        "return num(row.guys) * num(row.days) * num(row.rate) * perDay;",
-        "return 0 + num(row.guys) * num(row.days) * num(row.rate) * perDay;",
+        "return num(row.guys) * num(row.days) * laborRateOf(row) * perDay;",
+        "return 0 + num(row.guys) * num(row.days) * laborRateOf(row) * perDay;",
         ["labor/negzero/0", "golden -0, now 0"]),
     "NaN becomes null (a JSON-only comparison cannot see this)": (
         "? laborRateOrShipped(dflt) : Number(r.rate);",
@@ -260,9 +276,10 @@ MUTATIONS = {
         "var g = parseFloat(v.toPrecision(12));",
         "var g = parseFloat(v.toPrecision(15));",
         ["round/", "chain/float/material/0"]),
+    # The chain is the engine's since Phase 8: the same line, in js/bid-engine.js.
     "a Missouri zero is read as no county": (
-        'remodel_pct = (given === null || given === undefined || given === "")',
-        'remodel_pct = (given === null || given === undefined || given === "" || given === 0)',
+        "remodel_pct = isBlank(given) ? rate(",
+        "remodel_pct = (isBlank(given) || given === 0) ? rate(",
         ["chain/remodel/3/0/on", "golden 0, now 0.065"]),
     "an export the module has today goes missing": (
         "rowOn: rowOn, sliderHtml: sliderHtml, manDaysHint: manDaysHint,",
@@ -310,6 +327,8 @@ MUTATIONS = {
 # so the model comes along unmodified (`also=` in the test below).
 MUTATION_MODULE = {
     "the ROUNDUP float guard loosens": "js/excel-math.js",
+    "a GP band moves": "js/bid-profiles.js",
+    "a Missouri zero is read as no county": "js/bid-engine.js",
 }
 
 

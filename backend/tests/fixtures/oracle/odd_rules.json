@@ -262,12 +262,22 @@
    "id": "leveling-travel-hour",
    "title": "Leveling charges an hour of travel even on a local job",
    "cells": [
+    "Leveling!A48",
     "Leveling!B48",
     "Leveling!D48",
     "Epoxy!B52",
     "Polish!B44"
    ],
    "claims": [
+    {
+     "tab": "Leveling",
+     "cell": "A48",
+     "contains": [
+      "(A44*B44)",
+      "(A45*B45)",
+      "(A46*B46)"
+     ]
+    },
     {
      "tab": "Leveling",
      "cell": "D48",

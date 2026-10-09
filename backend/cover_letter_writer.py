@@ -96,6 +96,8 @@ TEMPLATES_ROOT = proposal_writer.TEMPLATES_ROOT
 # reuses GC resinous only because Kyle never made a GC combo document, and a
 # LETTER that did the same would describe half the job), and there is no sealer
 # or budget letter (no source copy exists, so those fall back — see below).
+# The keys are exactly the job types of frontend/js/work-types.js crossed with the audiences each has a
+# template for; test_work_types_python_pin.py holds the key set to that table.
 TEMPLATE_PICKER: dict[tuple[str, str | None], str] = {
     ("epoxy",  "Direct"): "CoverLetter/Direct/Epoxy.docx",
     ("epoxy",  "GC"):     "CoverLetter/GC/Epoxy.docx",

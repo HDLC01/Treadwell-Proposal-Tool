@@ -107,8 +107,12 @@ def boot_problems(frontend: pathlib.Path):
 # ── the real frontend ────────────────────────────────────────────────────────
 def test_every_page_runs_the_dependencies_of_every_core_module_it_loads_first():
     modules, pages = pages_with_modules(FRONTEND)
-    assert modules.get("js/bid-model.js") == ["js/excel-math.js"], (
-        "the discovery did not find the model's declared dependency: %r" % modules)
+    # THREE since Phase 8: the number helpers, the work-type vocabulary and the bid engine, in the order its
+    # header names them. The engine needs the number helpers, the profiles and the formula reader.
+    assert modules.get("js/bid-model.js") == ["js/excel-math.js", "js/work-types.js", "js/bid-engine.js"], (
+        "the discovery did not find the model's declared dependencies: %r" % modules)
+    assert modules.get("js/bid-engine.js") == ["js/excel-math.js", "js/bid-profiles.js", "js/markup-core.js"], (
+        "the discovery did not find the engine's declared dependencies: %r" % modules)
     assert {name for name, *_ in pages} >= {"library.html", "polish-estimate.html", "polish-intake.html"}, (
         "the discovery did not find the pages that load the model: %r" % [name for name, *_ in pages])
     assert order_problems(FRONTEND) == []

@@ -42,6 +42,10 @@ const L = require(path.join(ROOT, "js", "library-core.js"));
 // by who created an assembly through TWCrm.nameOf, which is the app's one email→display-name
 // convention. A stub here could agree with this file and disagree with the CRM board.
 const CRM = require(path.join(ROOT, "js", "crm-core.js"));
+// The REAL vocabulary (js/work-types.js), for the same reason: the page's WORK_TYPES, its
+// appliesToWorkType and the three Takeoff conditions it lists are read off it, so a made-up copy here would
+// agree with the page by construction and prove nothing. Handed to the scope as `WT`, the page's own alias.
+const WT = require(path.join(ROOT, "js", "work-types.js"));
 
 /** Lift a named function out of the page's IIFE (two-space indent), braces balanced.
  *
@@ -230,7 +234,7 @@ function makeDocument(presentSelectors) {
 }
 
 const dom = makeDom();
-const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
+const scope = new Function("L", "$", "TW", "state", "document", "CRM", "WT", `
   "use strict";
   var ITEMS = state.ITEMS, ASMS = state.ASMS, VENDORS = state.VENDORS;
   // New-this-session records, read by renderItems (the Save button) and renderPanel (#asm-save).
@@ -302,7 +306,7 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   // takeoffConditionDefaults, defaultCandidates, removeDefault). A lifted function reaching for a
   // helper this scope does not have dies on a ReferenceError that reds every scenario in this
   // file at once.
-  ${grab(/^  var RESERVED_ITEM_CONDITION = \{\n[^}]*\n  \};$/m, "the RESERVED_ITEM_CONDITION declaration")}
+  ${grab(/^  var RESERVED_ITEM_CONDITION = WT\.reservedItems\(\);$/m, "the RESERVED_ITEM_CONDITION declaration")}
   ${fn("isReservedItem")}
   // Lifted because renderPanel calls it. A lifted function that reaches for a helper this scope
   // does not have dies with a ReferenceError, which takes every test in test_library_ui.py red at
@@ -359,8 +363,12 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   // is what every row set before the column existed carries, so nothing anybody already
   // configured disappears the day the tabs arrive. The declarations come from library.js so
   // a renamed list cannot pass as a working one.
-  ${grab(/^  var WORK_TYPES = \[[^\]]*\];$/m, "the WORK_TYPES declaration")}
+  ${grab(/^  var WORK_TYPES = WT\.tabKeys\(\);$/m, "the WORK_TYPES declaration")}
   ${grab(/^  var DEFAULT_WT = .*$/m, "the DEFAULT_WT declaration")}
+  // THE PAGE OPENS ON "global" and a scenario gets that unless it asks for a work type: state.wt is
+  // how a scenario about the Polish list (the three condition materials live only there) or about
+  // another work type's own rows says so. The declaration above is the page's own and is not edited.
+  if (state.wt) DEFAULT_WT = state.wt;
   ${fn("appliesToWorkType")}
   ${fn("workTypeLabel")}
   // workTypeCell BEFORE takeoffDefaultGroups, which calls it for every assembly and material
@@ -486,7 +494,11 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   // test can see the write it WOULD have sent, never a real socket. Sits beside them rather than
   // where setDefault itself is defined, matching the "NETWORK, AND ONLY THE NETWORK" grouping the
   // comment over post/del/patchLabor already promises.
-  async function patchDefault(kind, id, on) {
+  // WHICH WORK TYPES THE SAME PRESS FILED, kept apart from LABOR_CALLS so the older assertions over
+  // that list (an exact { op, kind, id, on } each) are about what they were always about.
+  var DEFAULT_WT_CALLS = [];
+  async function patchDefault(kind, id, on, workTypes) {
+    DEFAULT_WT_CALLS.push({ kind: kind, id: id, on: !!on, workTypes: workTypes });
     LABOR_CALLS.push({ op: "PATCH_DEFAULT", kind: kind, id: id, on: !!on });
     if (LABOR_FAIL.patchDefault) throw new Error("the server said no");
   }
@@ -689,7 +701,7 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
            // dead one, which is exactly how it shipped green.
            renderDefaultLabor, resetTravelDefault, laborRowActions,
            LABOR_UNITS,
-           LABOR_CALLS,
+           LABOR_CALLS, DEFAULT_WT_CALLS,
            setDefault, setDefaultOn, defaultSlider, paint,
            openDefaultAdd,
            // THE LABOR TAB ITSELF, EXECUTED -- creation, editing and the delete guard, on the
@@ -750,6 +762,18 @@ function build(overrides, docSelectors) {
     UNIT_USE: { gal: 1, gallon: 1 },
     ADMIN: false, openId: "a1",
   }, overrides || {});
+  // A SCENARIO THAT ASKS FOR THE POLISH VIEW IS ABOUT POLISH'S OWN ROWS. These fixtures were written
+  // when an untyped favorite was simply "a Polish default"; now an untyped one is a Global row and
+  // the Polish view draws it read-only. So the rows such a scenario leaves untyped are filed as
+  // Polish's, which is what it always meant. A scenario that wants a Global row says so by naming
+  // none on a row it adds after build(), or by not asking for the polish view.
+  if (st.wt === "polish") {
+    ["ITEMS", "ASMS", "LABOR"].forEach((k) => {
+      if (Array.isArray(st[k])) st[k] = st[k].map((r) =>
+        (r && r.favorite && r.default_work_types === undefined)
+          ? Object.assign({}, r, { default_work_types: ["polish"] }) : r);
+    });
+  }
   // Marked rather than formatted, so an assertion cannot pass by accident on a date that happens
   // to read the same in UTC and in Central. The dev box clock runs ~13 hours ahead of Chicago and
   // these are project dates: the ONLY correct renderer is TW's, and this proves the page reached
@@ -760,7 +784,7 @@ function build(overrides, docSelectors) {
                            // the Labor tab's removeLaborLine asks TW.confirmDanger first.
                            st.TW || {});
   const doc = makeDocument(docSelectors || []);
-  const api = scope(L, d.el, TW, st, doc, CRM);
+  const api = scope(L, d.el, TW, st, doc, CRM, WT);
   d.el("area").value = "2875";
   return { api, dom: d, st, doc };
 }
@@ -3755,6 +3779,8 @@ out.serverOwnedItemFields = build().api.SERVER_OWNED_ITEM_FIELDS;
     // asserted separately, in shippedOffMeansUnlisted, against a fixture with no overrides.
     COND_DEFAULTS: [{ key: "joint_filler", on: true }, { key: "dye", on: true },
                     { key: "remove_existing_jf", on: true }],
+    // The three condition materials are Polish rows: they are drawn on the Polish view only.
+    wt: "polish",
     // AN ADMIN, because a condition's Remove is an admin's only (the PUT is _require_admin).
     ADMIN: true,
   });
@@ -3765,7 +3791,17 @@ out.serverOwnedItemFields = build().api.SERVER_OWNED_ITEM_FIELDS;
                          label: "bond", formula: "1%" }]);
   api.renderDefaultTakeoff();
   const h = d.nodes["default-takeoff-body"].innerHTML;
+  // THE GLOBAL VIEW OF THE SAME DATA: the Markup group (Fees + Textura, bond) lives there and only
+  // there. Read first, then the Polish view goes back on so the rest of the scenario is unchanged.
+  api.setWorkType("global");
+  api.renderDefaultTakeoff();
+  const gh = d.nodes["default-takeoff-body"].innerHTML;
+  const globalTitles = api.takeoffDefaultGroups().map((g) => g.title);
+  const globalCounts = api.takeoffDefaultGroups().map((g) => g.rows.length);
+  api.setWorkType("polish");
+  api.renderDefaultTakeoff();
   out.defaultsTakeoffList = {
+    globalTitles, globalCounts,
     rowCount: (h.match(/<tr>/g) || []).length,
     // THE GROUPS, taken from the function rather than scraped out of the HTML -- the point
     // of separating it was that a test could read them as data. The rendered headings are
@@ -3788,10 +3824,10 @@ out.serverOwnedItemFields = build().api.SERVER_OWNED_ITEM_FIELDS;
     // rather than a second home: markup.py enforces one home per line because two places
     // to set one price disagree the first time somebody changes one, and that is a wrong
     // bid. The id being on the control is what makes it the same row.
-    showsBond: /bond/.test(h) && /data-markup-formula=/.test(h),
-    bondIsEditableNotReadOnly: !/Read only/.test(h) && /data-markup-formula="/.test(h),
-    bondStillSaysWhereItLives: /Markup/.test(h),
-    saysWhereBondLives: /Global tab/.test(h),
+    showsBond: /bond/.test(gh) && /data-markup-formula=/.test(gh),
+    bondIsEditableNotReadOnly: !/Read only/.test(gh) && /data-markup-formula="/.test(gh),
+    bondStillSaysWhereItLives: /Markup/.test(gh),
+    saysWhereBondLives: /Global tab/.test(gh),
     // BOND CARRIES NO CONTROL, read off the RENDERED row rather than sliced out of the
     // renderer's source. The source version split on "GLOBAL_MARKUP" and then on "});" and
     // broke the moment the function was regrouped -- it was asserting on punctuation. What
@@ -3806,7 +3842,7 @@ out.serverOwnedItemFields = build().api.SERVER_OWNED_ITEM_FIELDS;
     // control writing a library-local field would be a second HOME, and two homes for one
     // rate disagree the first time somebody changes one, which is a wrong bid.
     bondControlTargetsTheMarkupRule: (function () {
-      var rows = h.split("</tr>");
+      var rows = gh.split("</tr>");
       var row = "";
       for (var i = 0; i < rows.length; i++) {
         if (/bond/i.test(rows[i])) { row = rows[i]; break; }
@@ -3920,9 +3956,11 @@ out.serverOwnedItemFields = build().api.SERVER_OWNED_ITEM_FIELDS;
   // READ THROUGH THE REAL freshModel, not typed here, so a literal that moved back in
   // bid-model reds this rather than passing against a restated copy.
   {
+    const bareModel = require(path.join(ROOT, "js", "bid-model.js"));
     const bare = build({
-      window: { TWBidModel: require(path.join(ROOT, "js", "bid-model.js")) },
+      window: { TWBidModel: bareModel },
       ITEMS: [], ASMS: [], ADMIN: true,
+      wt: "polish",
     });
     bare.api.renderDefaultTakeoff();
     const bh = bare.dom.nodes["default-takeoff-body"].innerHTML;
@@ -3944,6 +3982,10 @@ out.serverOwnedItemFields = build().api.SERVER_OWNED_ITEM_FIELDS;
       // The three keys the page offers, read off the function rather than the markup, so this
       // still says something when nothing is listed.
       offersTheThree: bare.api.takeoffConditionDefaults().map((c) => c.key).sort().join(","),
+      // ...in the order the Takeoff step asks them, and the keys bid-model writes workbook cells for:
+      // the three agreements test_the_condition_vocabulary_is_the_same_three_on_both_sides holds.
+      offeredInOrder: bare.api.takeoffConditionDefaults().map((c) => c.key),
+      cellKeys: Object.keys(bareModel.CONDITION_CELLS),
       noneOfThemOn: bare.api.takeoffConditionDefaults().every((c) => c.on === false),
       // EACH KEY IS ITS RESERVED ROW, BOTH WAYS. takeoffConditionDefaults names the row each key
       // is and RESERVED_ITEM_CONDITION maps the row back; a rename on one side only would list a
@@ -3951,6 +3993,22 @@ out.serverOwnedItemFields = build().api.SERVER_OWNED_ITEM_FIELDS;
       keysAndRowsAgree: bare.api.takeoffConditionDefaults().every((c) =>
         bare.api.RESERVED_ITEM_CONDITION[c.item_id] === c.key) &&
         Object.keys(bare.api.RESERVED_ITEM_CONDITION).length === 3,
+    };
+  }
+
+  // THE WORK-TYPE FILTER IS A THIN WRAPPER OVER THE ONE VOCABULARY (js/work-types.js appliesTo), run through the
+  // page's own lifted function: an empty list is every tab, a list is those tabs, and asking it about a JOB
+  // TYPE ("combo" has no tab of its own) throws instead of quietly answering "no".
+  {
+    const wt = api.appliesToWorkType;
+    const answer = (row, tab) => { try { return wt(row, tab); } catch (e) { return "threw: " + e.message; } };
+    out.defaultsWorkTypeFilter = {
+      tabs: api.WORK_TYPES,
+      none: answer({}, "gyp"), empty: answer({ default_work_types: [] }, "seal"),
+      scopedIn: answer({ default_work_types: ["epoxy", "seal"] }, "seal"),
+      scopedOut: answer({ default_work_types: ["epoxy", "seal"] }, "polish"),
+      noRow: answer(null, "polish"),
+      combo: answer({ default_work_types: [] }, "combo"),
     };
   }
 
@@ -4626,6 +4684,9 @@ async function laborTabChecks() {
         /All work types/.test(rowOf(h, "travel")) && !/Every estimate/.test(rowOf(h, "travel")),
       customLinesHaveChips: /data-wt-toggle="labor" data-wt-id="L9"/.test(rowOf(h, "L9")),
       moreStartsShut: !/class="labor-more"/.test(h),
+      // LS1 (Hanz, 2026-10-09): the Travel row is DRAWN "Travel Labor" by the same rule the Defaults tab
+      // and the estimate use; the stored name is untouched (no write).
+      travelNameDrawn: /data-f="name" class="cell-name" value="Travel Labor"/.test(rowOf(h, "travel")),
       badge: d.nodes["n-labor"].textContent,
       emptyHidden: d.nodes["labor-empty"].hidden === true,
       addShown: d.nodes["labor-addrow"].hidden === false,
@@ -4949,6 +5010,7 @@ out.page = {
 // three conditions rendered a "Built in" chip and there was nothing to press at all.
 async function conditionChecks() {
   const seed = (extra) => Object.assign({
+    wt: "polish",
     // THE REAL MODULE. The whole claim is that this list shows what a new estimate opens
     // ANSWERING, so a made-up freshModel would prove the opposite of what it looks like it proves.
     window: { TWBidModel: require(path.join(ROOT, "js", "bid-model.js")) },
@@ -5244,7 +5306,7 @@ async function conditionChecks() {
 
   // 5. THE DEFAULTS TAB, ON, WITH THE ROWS THERE: each is listed under the row's OWN name, and its
   //    Edit goes to that row.
-  const on = build({ ITEMS: withReserved(), window: bid,
+  const on = build({ ITEMS: withReserved(), window: bid, wt: "polish",
                      COND_DEFAULTS: [{ key: "joint_filler", on: true }, { key: "dye", on: true },
                                      { key: "remove_existing_jf", on: true }] });
   on.api.renderDefaultTakeoff();
@@ -5536,6 +5598,7 @@ async function sliderChecks() {
             { id: "l1", name: "Grinding", rate: 40, unit: "days", favorite: true,
               default_on: false }],
     COND_DEFAULTS: [{ key: "dye", on: false, listed: true }],
+    wt: "polish",
     ADMIN: true,
   }, extra || {});
   const sw = (html, kind, id) => {
@@ -5656,7 +5719,104 @@ const watchdog = setTimeout(() => {
   process.exit(1);
 }, 30000);
 
+// ── THE DEFAULTS TAB'S GLOBAL PILL (Hanz, 2026-10-09), EXECUTED ──────────────────────────────────────
+// "The default work type should be global since we have global values." Global is the first pill and
+// the one selected on open; it holds the global values and the defaults that name no work type, and
+// a work type's own tab shows its own rows with the global ones read-only underneath.
+async function globalTabChecks() {
+  const bid = { TWBidModel: require(path.join(ROOT, "js", "bid-model.js")) };
+  const seed = (extra) => Object.assign({
+    window: bid, ADMIN: true,
+    ITEMS: [
+      { id: "g1", name: "Global Sealer", unit: "Gal", unit_cost: 10, favorite: true, default_work_types: [] },
+      { id: "p1", name: "Polish Densifier", unit: "Gal", unit_cost: 20, favorite: true, default_work_types: ["polish"] },
+      { id: "s1", name: "Seal Only Primer", unit: "Gal", unit_cost: 30, favorite: true, default_work_types: ["seal"] },
+      { id: "n1", name: "Spare Seal Item", unit: "Gal", unit_cost: 5, favorite: false, default_work_types: ["seal"] },
+      { id: "n2", name: "Spare Plain Item", unit: "Gal", unit_cost: 5, favorite: false, default_work_types: [] },
+      { id: "n3", name: "Spare Epoxy Item", unit: "Gal", unit_cost: 5, favorite: false, default_work_types: ["epoxy"] },
+      { id: "n4", name: "Epoxy Default Item", unit: "Gal", unit_cost: 5, favorite: true, default_work_types: ["epoxy"] }],
+    ASMS: [{ id: "ga", name: "Global Assembly", unit: "SF", favorite: true, lines: [], default_work_types: [] },
+           { id: "pa", name: "Polish Assembly", unit: "SF", favorite: true, lines: [], default_work_types: ["polish"] }],
+    LABOR: [{ id: "lg", name: "Global Crew", rate: 40, unit: "days", favorite: true, default_work_types: [] },
+            { id: "lp", name: "Polish Crew", rate: 50, unit: "days", favorite: true, default_work_types: ["polish"] },
+            { id: "ln", name: "Spare Labor", rate: 30, unit: "days", favorite: false, default_work_types: [] }],
+  }, extra || {});
+  const draw = (s, wt) => {
+    s.api.setWorkType(wt);
+    s.api.renderDefaultTakeoff();
+    s.api.renderDefaultLabor();
+    return { take: s.dom.nodes["default-takeoff-body"].innerHTML,
+             lab: s.dom.nodes["default-labor-body"].innerHTML };
+  };
+  const rowOf = (html, name) => (html.split("</tr>").filter((r) => r.indexOf(">" + name) !== -1)[0] || "");
+  const editable = (row) => /data-def-off=/.test(row) && /data-def-edit=/.test(row);
+  const readOnlyGlobal = (row) => row !== "" && /<span class="wtall">Global<\/span>/.test(row) &&
+    /Edit on Global/.test(row) && !/data-def-off=/.test(row) && !/data-def-edit=/.test(row) &&
+    !/data-def-on=/.test(row);
+  const titles = (html) => (html.match(/<th scope="colgroup"[^>]*>([^<]*)<\/th>/g) || [])
+    .map((s) => { let t = s, prev; do { prev = t; t = t.replace(/<[^>]+>/g, ""); } while (t !== prev); return t; });
+  const typesOf = (list, id) => list.filter((r) => r.id === id)[0].default_work_types;
+
+  const s = build(seed());
+  const opened = s.api.workTypeNow();                       // the page's own declaration, not set here
+  const g = draw(s, "global");
+  const pol = draw(s, "polish");
+  const seal = draw(s, "seal");
+  const epoxy = draw(s, "epoxy");
+
+  // ADDING UNDER GLOBAL FILES NO WORK TYPE, even for a row that named one before.
+  const add = build(seed());
+  add.api.setWorkType("global");
+  await add.api.setDefault("items", "n1", true);
+  await add.api.setDefault("labor", "ln", true);
+  // ADDING UNDER A WORK TYPE NAMES THAT TYPE (so it lands as that tab's own row, not a Global one).
+  const addP = build(seed());
+  addP.api.setWorkType("polish");
+  await addP.api.setDefault("items", "n2", true);          // names none -> [polish]
+  await addP.api.setDefault("items", "n3", true);          // removed row, stale epoxy -> [polish] only
+  await addP.api.setDefault("items", "n4", true);          // live epoxy default -> epoxy + polish
+  // A REMOVE FILES NO WORK TYPES: it only stops the row being a default.
+  const rm = build(seed());
+  rm.api.setWorkType("global");
+  await rm.api.setDefault("items", "g1", false);
+  // A REFUSED ADD PUTS THE ROW BACK, work types included.
+  const bad = build(seed({ LABOR_FAIL: { patchDefault: true } }));
+  bad.api.setWorkType("global");
+  await bad.api.setDefault("items", "n1", true);
+  const badRow = bad.api.ITEMS.filter((r) => r.id === "n1")[0];
+
+  out.globalTab = {
+    opened,
+    globalTitles: titles(g.take),
+    globalEditable: editable(rowOf(g.take, "Global Sealer")) && editable(rowOf(g.take, "Global Assembly")) &&
+      editable(rowOf(g.lab, "Global Crew")),
+    globalHasNoTypedRows: !/Polish Densifier|Seal Only Primer|Polish Assembly/.test(g.take) &&
+      !/Polish Crew/.test(g.lab),
+    globalHasFees: /Fees \+ Textura/.test(g.take),
+    globalLaborHasTravel: /Travel/.test(g.lab) && !/Edit on Global/.test(g.lab),
+    polishOwnEditable: editable(rowOf(pol.take, "Polish Densifier")) && editable(rowOf(pol.take, "Polish Assembly")) &&
+      editable(rowOf(pol.lab, "Polish Crew")),
+    polishGlobalReadOnly: readOnlyGlobal(rowOf(pol.take, "Global Sealer")) &&
+      readOnlyGlobal(rowOf(pol.take, "Global Assembly")) && readOnlyGlobal(rowOf(pol.lab, "Global Crew")) &&
+      readOnlyGlobal(rowOf(pol.lab, "Travel")),
+    polishOwnBeforeGlobal: pol.take.indexOf("Polish Densifier") < pol.take.indexOf("Global Sealer") &&
+      pol.lab.indexOf("Polish Crew") < pol.lab.indexOf("Global Crew"),
+    polishNoSealRows: !/Seal Only Primer/.test(pol.take),
+    polishTitles: titles(pol.take),
+    sealShowsOnlySeal: /Seal Only Primer/.test(seal.take) && !/Polish Densifier/.test(seal.take) &&
+      editable(rowOf(seal.take, "Seal Only Primer")),
+    feesOnlyUnderGlobal: !/Fees \+ Textura/.test(pol.take + seal.take + epoxy.take) &&
+      /Fees \+ Textura/.test(g.take),
+    addUnderGlobal: add.api.DEFAULT_WT_CALLS.slice(),
+    rowsAfterGlobalAdd: { n1: typesOf(add.api.ITEMS, "n1"), ln: typesOf(add.api.laborNow(), "ln") },
+    addUnderPolish: addP.api.DEFAULT_WT_CALLS.slice(),
+    rowsAfterPolishAdd: { n2: typesOf(addP.api.ITEMS, "n2"), n3: typesOf(addP.api.ITEMS, "n3"), n4: typesOf(addP.api.ITEMS, "n4") },
+    removeCalls: rm.api.DEFAULT_WT_CALLS.slice(),
+    refusedPutsTypesBack: badRow.favorite === false && JSON.stringify(badRow.default_work_types) === "[\"seal\"]",
+  };
+}
+
 Promise.all([conflictChecks(), dialogChecks(), laborChecks(), laborTabChecks(),
-             conditionChecks(), sliderChecks(), feesChecks()]).then(
+             conditionChecks(), sliderChecks(), feesChecks(), globalTabChecks()]).then(
   () => { clearTimeout(watchdog); console.log(JSON.stringify(out)); },
   (err) => { clearTimeout(watchdog); console.error(err); process.exit(1); });
