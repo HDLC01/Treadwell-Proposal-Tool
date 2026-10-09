@@ -74,9 +74,9 @@ NAMED_COPIES = [
     ("frontend/js/estimate-review.js", "baseFlagSheets"),
     ("frontend/js/estimate-review.js", "_areaBaseIds"),
     ("frontend/js/proposal-review.js", "_areaBaseIds"),
-    ("frontend/js/polish-intake.js", "pickCounty"),
-    ("frontend/js/polish-intake.js", "filterCounties"),
+    # Phase 9b deleted the v2 intake's county copy (7.9); the shared control is the one that is left.
     ("frontend/js/county-picker.js", "county"),
+    ("frontend/js/intake-scope.js", "jobTypesMarkup"),
     ("frontend/js/polish-estimate.js", "saveSoon"),
     ("frontend/js/polish-estimate.js", "pagehide"),
     # Phase 2: the test copy's cell list (7.3), and the browser's twin of the server's v2 test (7.11).

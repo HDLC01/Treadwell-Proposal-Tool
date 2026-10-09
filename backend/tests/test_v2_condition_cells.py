@@ -58,7 +58,7 @@ DOC = ROOT / "docs" / "v2-architecture.md"
 TAKEOFF_FILES = ["polish-estimate.html", "js/polish-estimate.js", "js/bid-model.js", "js/library-core.js",
                  "js/work-types.js", "js/polish-sandbox.js", "js/library-picker.js"]
 INTAKE_FILES = ["polish-intake.html", "js/polish-intake.js", "js/bid-model.js", "js/work-types.js",
-                "js/polish-sandbox.js"]
+                "js/polish-sandbox.js", "js/intake-scope.js", "js/county-picker.js"]
 BETA_FILES = ["js/index.js", "index.html", "shared.js", "js/projects.js", "js/county-picker.js",
               "js/address-lookup.js", "js/work-types.js", "js/intake-scope.js"]
 

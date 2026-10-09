@@ -128,8 +128,76 @@
     });
   }
 
+  // ── the Job type choice (Estimating Tool v2's intake) ─────────────────────────────────────────
+  // The four job types are js/work-types.js's, in its order, and `ready` is its flag for whether Estimating
+  // Tool v2 prices the type yet. A type that is not ready is SHOWN and DISABLED with a plain note, so a later
+  // phase enables it by flipping that flag in the vocabulary and nothing here changes. Seal and Leveling are
+  // options on a bid, never job types, and the vocabulary does not list them as one.
+
+  /** What a new v2 bid starts as, and what a saved draft with no job type reads as. */
+  var DEFAULT_JOB = "polish";
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c];
+    });
+  }
+
+  /** "Epoxy" out of "Epoxy", "Combo" out of "Combo (Epoxy + Polish)". */
+  function shortLabel(job) { return String(job.label).split(" (")[0]; }
+
+  /** True when Estimating Tool v2 can price this job type today. Anything that is not a job type is false. */
+  function isPickable(key) {
+    return workTypes.isJobType(key) && workTypes.jobType(key).ready === true;
+  }
+
+  /** The job type a saved draft opens as: its own when v2 can price it, otherwise the default. */
+  function chosenJobType(saved) {
+    return isPickable(saved) ? saved : DEFAULT_JOB;
+  }
+
+  /** The job types as the choice shows them, in the vocabulary's order. */
+  function jobTypeChoices(selected) {
+    var pick = chosenJobType(selected);
+    return workTypes.JOB_TYPES.map(function (j) {
+      return { key: j.key, label: j.label, ready: j.ready === true, checked: j.key === pick };
+    });
+  }
+
+  /** The one sentence that says why some choices are greyed out, or "" when every job type is ready. */
+  function jobTypeNote() {
+    var waiting = workTypes.JOB_TYPES.filter(function (j) { return j.ready !== true; }).map(shortLabel);
+    if (!waiting.length) return "";
+    var names = waiting.length === 1 ? waiting[0]
+      : waiting.slice(0, -1).join(", ") + " and " + waiting[waiting.length - 1];
+    return names + " pricing in v2 is coming. Use the live estimate for now.";
+  }
+
+  /** The radios, as a string. A job type that is not ready is disabled, so the browser will not focus it, click
+   *  it or reach it with the arrow keys; the page ignores a pick of one as well, for a script that clicks it. */
+  function jobTypesMarkup(selected) {
+    var note = jobTypeNote();
+    return jobTypeChoices(selected).map(function (c) {
+      return '\n          <label class="radio' + (c.ready ? "" : " off") + '">' +
+        '<input type="radio" name="work_type" value="' + esc(c.key) + '" data-jobtype="' + esc(c.key) + '"' +
+        (c.checked ? " checked" : "") + (c.ready ? "" : ' disabled title="' + esc(note) + '"') + ">" +
+        "<span>" + esc(c.label) + "</span></label>";
+    }).join("");
+  }
+
+  /** The quantity-field names a job type does NOT ask for. A save leaves these off the draft unless the draft
+   *  already holds them, so opening a polish bid and saving it never adds an epoxy quantity it did not have. */
+  function hiddenNames(jobType) {
+    var shown = workTypes.fieldsFor(need(jobType, "hiddenNames")).map(function (f) { return f.name; });
+    return workTypes.FIELDS.map(function (f) { return f.name; })
+      .filter(function (n) { return shown.indexOf(n) === -1; });
+  }
+
   return {
     systemFieldNames: systemFieldNames, systemCount: systemCount, scopesFor: scopesFor,
-    systemsMarkup: systemsMarkup, renderSystems: renderSystems, applyScope: applyScope
+    systemsMarkup: systemsMarkup, renderSystems: renderSystems, applyScope: applyScope,
+    DEFAULT_JOB: DEFAULT_JOB, isPickable: isPickable, chosenJobType: chosenJobType,
+    jobTypeChoices: jobTypeChoices, jobTypeNote: jobTypeNote, jobTypesMarkup: jobTypesMarkup,
+    hiddenNames: hiddenNames
   };
 });

@@ -465,7 +465,7 @@ not something that has been done. The summary first, then the evidence for each 
 | 7.6 | Intake scope maps | 4 places | Done in Phase 9a: the quantity fields and their snapshot keys live in `js/work-types.js`, and `js/intake-scope.js` draws and shows them, one source. The live intake delegates (its `SCOPE_BY_WORK_TYPE` and `systemFieldNames` are deleted), proven byte for byte against golden captures. Left: the estimate screen's area keys, held equal to the table by tests | 7 (done), 9a (done) |
 | 7.7 | Role sets | 4 sets in 3 files | Each tab carries its `role` and `optionOnly` in `js/work-types.js` (done). The sets are not yet computed from it: one difference is pinned (Leveling), see 7.7 | 7 (in part) |
 | 7.8 | Job type to tab | 4 places | Each job type lists its tabs in `js/work-types.js` and the model reads them through `tabsFor` (done). The intake's and the two screens' copies stay | 7 (in part) |
-| 7.9 | The v2 intake's county picker | 1 copy, about 295 lines | Mount `js/county-picker.js` and delete the copy | 9 |
+| 7.9 | The v2 intake's county picker | 1 copy, about 295 lines (was) | Done in Phase 9b: the v2 intake mounts `js/county-picker.js` and its copy is deleted. A golden captured from the old copy pins every row, key, note and rate | 9b (done) |
 | 7.10 | The estimate page's two save blobs | 1 composition (was 2) | Done: one `buildSavePatch` used by both, and the intake's merge is one `patchModel` | 4 (done) |
 | 7.11 | "Is this draft a v2 estimate" | 2 places, in two languages | Held equal by one test over one table. The JavaScript one stays in `js/shared.js` (Phase 5 left it there, see 7.11) | 2 (added) |
 
@@ -694,11 +694,20 @@ of the table, the sheet each of a job type's tabs is priced on. **Left:** the sc
 
 | Copy | What it is |
 |---|---|
-| `js/polish-intake.js:333-628` | About 295 lines: `loadCounties`, `filterCounties`, `renderCountyResults`, keyboard handling, `pickCounty`, `clearCounty`, the note under the box, `hydrateCounty` from the draft |
-| `js/county-picker.js` (394 lines) | The shared control the live intake already mounts (`index.html` loads it) |
+| `js/county-picker.js` | The one control. The live intake and the v2 intake both mount it |
 
-Both write the same four keys: `county`, `county_tax_rate`, `county_remodel_rate`, `county_notes`.
-**Planned (Phase 9):** the v2 intake mounts `county-picker.js` and its copy is deleted.
+**Done in Phase 9b.** The v2 intake used to carry about 295 lines of its own (`loadCounties`, `filterCounties`,
+`renderCountyResults`, keyboard handling, `pickCounty`, `clearCounty`, the note under the box and `hydrateCounty`).
+They are deleted. The page now holds three small functions that are its own: `mountCounty`, `renderCountyNote` and
+`countyKeys`. `backend/tests/fixtures/county_picker_golden.json` was captured from the old copy before it went: for
+a sample of searches, every row the box offers and, for each row, the four keys a click writes (`county`,
+`county_tax_rate`, `county_remodel_rate`, `county_notes`), the note with Remodel tax off and on, and what the real
+engine charges. The shared control must reproduce all of it.
+
+The same change gave the v2 intake a Job type choice. It is drawn from `js/work-types.js` by `js/intake-scope.js`
+(`jobTypesMarkup`), so there is no list of job types on the page. Only Polish is `ready`; Epoxy, Combo and Gyp are
+shown and disabled with a plain note, and a later phase enables one by setting `ready` in the vocabulary. The
+quantity fields on the page are drawn by the same renderer as the live intake.
 
 ### 7.10 The estimate page's save, now one composition
 
