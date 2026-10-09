@@ -1481,5 +1481,43 @@ function runHandler(which) {
     out.v2routing.submitOnASpreadsheetBid = submit(sheet());
   }
 
+  // ── the intake's work-type scope, as the live page renders and shows it ──────────────────────────────
+  // Phase 9a: every job type (and "blank", no radio checked) x both audiences, read off the nodes after the REAL
+  // page script ran, once as the page LOADS with a saved draft and once after the radio is clicked. The markup of
+  // the systems block, and the display state of everything the work type shows or hides. fixtures/
+  // intake_scope_golden.json was written from the code BEFORE it moved onto js/intake-scope.js, so a test that
+  // compares this to it proves the move changed nothing a person can see.
+  out.scopeSnapshots = {};
+  {
+    const snapshot = (b) => ({
+      systemsHtml: b.systems.innerHTML,
+      systemsDisplay: b.systems.style.display === undefined ? null : b.systems.style.display,
+      gypDisplay: b.nodes["gyp-sf-container"].style.display === undefined ? null : b.nodes["gyp-sf-container"].style.display,
+      betaDisplay: b.nodes["beta-continue"].style.display === undefined ? null : b.nodes["beta-continue"].style.display,
+      thicknessDisplay: b.nodes["thickness-row"].style.display === undefined ? null : b.nodes["thickness-row"].style.display,
+      labels: b.systems.querySelectorAll("[data-scope]").map((l) => ({
+        scope: l.getAttribute("data-scope"), display: l.style.display === undefined ? null : l.style.display })),
+      rows: b.systems.querySelectorAll(".row").map((r) => (r.style.display === undefined ? null : r.style.display)),
+    });
+    ["Direct", "GC"].forEach(function (audience) {
+      ["polish", "epoxy", "combo", "gyp", "blank"].forEach(function (job) {
+        const key = audience + "/" + job;
+        const seed = { audience: audience };
+        if (job !== "blank") seed.work_type = job;
+        const loaded = build(seed);
+        if (job === "blank") loaded.radios.forEach((r) => { r.checked = false; });
+        const atLoad = snapshot(loaded);
+        const clicked = build({ audience: audience });
+        if (job === "blank") {
+          clicked.radios.forEach((r) => { r.checked = false; });
+          clicked.fire(clicked.radios[0], "change");
+        } else {
+          clicked.setWorkType(job);
+        }
+        out.scopeSnapshots[key] = { atLoad: atLoad, afterClick: snapshot(clicked) };
+      });
+    });
+  }
+
   console.log(JSON.stringify(out));
 })();
