@@ -2336,7 +2336,9 @@
    *  layout, and "polish" is never assumed. */
   function sectionsOf(model) {
     if (!isObject(model)) throw new Error("sectionsOf needs the model");
-    var rootKind = SECTION_KINDS.indexOf(model.kind) >= 0 ? model.kind : "base";
+    // Only "off" is read at the root. A root kind of base or option is reserved (Phase 17) and means base: the
+    // root is priced through bid(), which always charges the job's travel, so an "option" root would carry it twice.
+    var rootKind = model.kind === "off" ? "off" : "base";
     var out = [{ tab: ROOT_TAB, root: true, section: model, layout: "polish", kind: rootKind,
                  profile: LEGACY.stamp, role: "polish" }];
     var tabs = model.tabs;
@@ -2444,6 +2446,12 @@
     };
     var mat = ctx.material(e);
     if (isObject(mat)) copyInto(input, mat); else input.material = num(mat);
+    // A gyp-split profile reads the engine's material inputs (gyp, extras, sand, soundMat), never a plain sum:
+    // a number would price the material at $0 and still call the section priceable. No price rather than a wrong one.
+    if (profile.quirks.shippingRule === "gyp-split" && !isObject(mat)) {
+      return unpriceableSection(e.profile, "material", "the " + e.tab + " material has to come as gyp, extras, sand " +
+        "and sound mat figures. A single material total cannot be priced here.");
+    }
     try {
       if (profile.quirks.shippingRule === "gyp-split") input.truckload = engine.forTab(e.tab).truckload;
       // The root keeps no snapshot (see above): it prices at the built-ins.

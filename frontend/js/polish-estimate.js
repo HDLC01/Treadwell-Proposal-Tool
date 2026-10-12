@@ -457,6 +457,9 @@
       var p = rowPrice(r);
       if (p) sum += p.total;
     });
+    // A Gyp section prices its material from gyp, extras, sand and sound mat (the engine's gyp-split inputs), and
+    // a plain number is refused there: the library's sum goes in as the gyp line.
+    if (entry.role === "gyp") return { gyp: sum, extras: 0, sand: 0, soundMat: 0, soundMatRolls: 0 };
     return sum;
   }
 

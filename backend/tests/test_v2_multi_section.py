@@ -70,7 +70,7 @@ def recorded():
 
 
 @pytest.mark.parametrize("section", ["sections", "newSection", "activation", "noReprice", "pricing", "composer",
-                                     "seeding", "switcher", "page"])
+                                     "seeding", "switcher", "pins", "page"])
 def test_no_section_of_the_harness_failed(ran, section):
     """A section that threw reports it instead of crashing, so running this over a tree without the
     functions fails an assertion with a reason."""
@@ -137,6 +137,44 @@ def test_the_roots_profile_is_always_the_legacy_one_whatever_the_root_keys_say(r
     """`profile`, `rates` and a `kind` of base or option at the root are reserved for Polish rev 2 (Phase 17)
     and are not read: the root prices at polish-legacy@1's built-ins, so no saved bid's total can move."""
     assert ran["sections"]["rootProfileKeyIsReserved"] == "polish-legacy@1"
+
+
+def test_the_page_prices_a_gyp_section_from_its_takeoff(ran):
+    """The page's sectionMaterial answered a number for every tab. A Gyp section needs the gyp-split inputs,
+    so it gets them: a priced section with a material, and a combined price, never a $0 material."""
+    g = ran["page"]["gypOnPage"]
+    assert g["priceable"] is True and g["material"] > 0 and g["total"] > 0
+    assert g["computed"] is True and g["lump"] > 0
+
+
+def test_a_root_kind_of_option_is_not_read_so_the_jobs_travel_is_charged_once(ran):
+    """Only `kind: "off"` is read at the root. An "option" root used to move the travel carrier to Epoxy while
+    the page still charged the root the job's travel through bid(): the same travel on both sections."""
+    r = ran["pins"]["rootOption"]
+    assert r["kind"] == "base" and r["carrier"] == "Polish"
+    assert r["rootTravel"] > 0 and r["epoxyTravel"] == 0
+
+
+def test_the_combined_tax_figures_are_each_sections_own_sales_and_remodel_tax_summed(ran):
+    t = ran["pins"]["taxes"]
+    assert t["rootSales"] > 0 and t["epoxySales"] > 0 and t["rootRemodel"] > 0 and t["epoxyRemodel"] > 0
+    assert t["sales"] == t["rootSales"] + t["epoxySales"]
+    assert t["remodel"] == t["rootRemodel"] + t["epoxyRemodel"]
+    assert t["sales"] != t["remodel"] and t["computed"] == [t["sales"], t["remodel"]]
+
+
+def test_a_tab_sections_contingency_fees_and_labor_conditions_reach_its_own_price(ran):
+    p = ran["pins"]
+    assert p["contingencyMoves"] is True and p["feesMove"] is True
+    with_cond, without = p["laborReadsConditions"]
+    assert with_cond > without, "remove-existing joint filler adds a fourth hand to the section's own labor"
+
+
+def test_a_gyp_base_section_writes_its_area_and_a_base_tab_carries_travel_when_the_root_is_off(ran):
+    p = ran["pins"]
+    assert p["gypArea"] == {"polish_sf": 10000, "gyp_soft_sf": 9000}
+    assert p["gypTabArea"] == {"gyp_soft_sf": 9000}
+    assert p["carrierRootOff"] == 'Gyp (USG 1-8")', "the first BASE section carries it, not the first section"
 
 
 @pytest.mark.parametrize("case,words", [
@@ -299,7 +337,15 @@ def test_a_profile_that_is_not_the_one_the_section_was_saved_with_is_unpriceable
 def test_a_gyp_section_gets_its_truckload_and_takes_the_engines_material_inputs(ran):
     g = ran["pricing"]["gyp"]
     assert g["priceable"] is True and g["profile"] == "gyp@1" and g["total"] == 26751 and g["materialEscalation"]
-    assert ran["pricing"]["gypNumberMaterialThrows"]["priceable"] is True
+
+
+def test_a_gyp_section_handed_one_material_number_is_unpriceable_not_priced_at_zero_material(ran):
+    """A gyp-split profile reads gyp, extras, sand and sound mat. A plain number (what the estimate page's
+    sectionMaterial answers for every tab) would price the material at $0 and still say priceable: so there is
+    no price instead, with the reason, and the combined bid takes it with it."""
+    r = ran["pricing"]["gypNumberMaterialIsUnpriceable"]
+    assert r["priceable"] is False and r["total"] is None and r["line"] == "material"
+    assert "gyp, extras, sand" in r["reason"] and "—" not in r["reason"]
 
 
 def test_pricing_without_the_pages_material_or_for_a_section_that_is_not_there_is_refused(ran):
@@ -580,6 +626,46 @@ BREAKS = {
     "the strip is drawn for one section": (
         "js/bid-model.js", "    if (list.length < 2) return \"\";", "    if (list.length < 1) return \"\";",
         lambda r: r["switcher"]["single"] != ""),
+    "a root kind of option is read": (
+        "js/bid-model.js", '    var rootKind = model.kind === "off" ? "off" : "base";',
+        '    var rootKind = SECTION_KINDS.indexOf(model.kind) >= 0 ? model.kind : "base";',
+        lambda r: r["pins"]["rootOption"]["epoxyTravel"] != 0 or r["pins"]["rootOption"]["kind"] != "base"),
+    "a gyp section is priced from a plain number": (
+        "js/bid-model.js", '    if (profile.quirks.shippingRule === "gyp-split" && !isObject(mat)) {',
+        "    if (false) {",
+        lambda r: r["pricing"]["gypNumberMaterialIsUnpriceable"]["priceable"] is True),
+    "the remodel tax is dropped from the lump": (
+        "js/bid-model.js", "    out.proposal_remodel_tax = ok ? sums.remodel_tax : null;",
+        "    out.proposal_remodel_tax = ok ? 0 : null;",
+        lambda r: r["pins"]["taxes"]["remodel"] != r["pins"]["taxes"]["rootRemodel"] + r["pins"]["taxes"]["epoxyRemodel"]),
+    "the sales tax is every tax": (
+        "js/bid-model.js", "    out.proposal_sales_tax = ok ? sums.sales_tax : null;",
+        "    out.proposal_sales_tax = ok ? sums.taxes : null;",
+        lambda r: r["pins"]["taxes"]["sales"] != r["pins"]["taxes"]["rootSales"] + r["pins"]["taxes"]["epoxySales"]),
+    "the gyp area is forgotten": (
+        "js/bid-model.js", '    if (e.role === "gyp") return { gyp_soft_sf: takeoffSf(rows) };',
+        '    if (e.role === "gyp") return {};',
+        lambda r: r["pins"]["gypArea"] != {"polish_sf": 10000, "gyp_soft_sf": 9000}),
+    "the travel carrier is the first section": (
+        "js/bid-model.js", '    for (var i = 0; i < list.length; i++) if (list[i].kind === "base") return list[i].tab;',
+        "    for (var i = 0; i < list.length; i++) if (i >= 0) return list[i].tab;",
+        lambda r: r["pins"]["carrierRootOff"] != 'Gyp (USG 1-8")'),
+    "a sections labor ignores the job's conditions": (
+        "js/bid-model.js", "      labor: laborTotal(s.labor, model.conditions),",
+        "      labor: laborTotal(s.labor),",
+        lambda r: r["pins"]["laborReadsConditions"][0] <= r["pins"]["laborReadsConditions"][1]),
+    "a sections contingency is dropped": (
+        "js/bid-model.js", "      contingency: s.contingency, fees: s.fees, conditions: model.conditions,",
+        "      contingency: 0, fees: s.fees, conditions: model.conditions,",
+        lambda r: r["pins"]["contingencyMoves"] is False),
+    "a sections fees are dropped": (
+        "js/bid-model.js", "      contingency: s.contingency, fees: s.fees, conditions: model.conditions,",
+        "      contingency: s.contingency, fees: 0, conditions: model.conditions,",
+        lambda r: r["pins"]["feesMove"] is False),
+    "the page hands a gyp section a plain number": (
+        "js/polish-estimate.js", '    if (entry.role === "gyp") return { gyp: sum, extras: 0, sand: 0, soundMat: 0, soundMatRolls: 0 };',
+        "    void 0;",
+        lambda r: r["page"]["gypOnPage"]["priceable"] is False or not r["page"]["gypOnPage"].get("material")),
     "the page saves without pricing its other sections": (
         "js/polish-estimate.js", "      return B.buildSavePatch(M, now, priceCtx());",
         "      return B.buildSavePatch(M, now, { bid: bid(), library: conditionLibrary() });",

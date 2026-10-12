@@ -248,8 +248,8 @@ function pricing() {
     unknownProfile: (() => { const r = B.priceSection(unknown, "Epoxy", ctxOf()); return { priceable: r.priceable, total: r.total, line: r.line }; })(),
     gyp: { priceable: objectMaterial.priceable, total: objectMaterial.total, profile: objectMaterial.profile,
            materialEscalation: objectMaterial.material_escalation > 0 },
-    gypNumberMaterialThrows: (() => { const r = B.priceSection(g, gyp, { material: () => 6000 });
-      return { priceable: r.priceable, total: r.total }; })(),
+    gypNumberMaterialIsUnpriceable: (() => { const r = B.priceSection(g, gyp, { material: () => 6000 });
+      return { priceable: r.priceable, total: r.total, line: r.line, reason: r.reason }; })(),
     needsMaterial: threw(() => B.priceSection(m, "Epoxy", {})),
     unknownSection: threw(() => B.priceSection(m, "Leveling", ctxOf())),
     pricesAreNumbers: Object.values(bids).every((b) => typeof b.total === "number"),
@@ -437,6 +437,49 @@ function loadPrelude(file, exportNames) {
   m._compile(code.slice(0, cut) + "\nmodule.exports = { " + exportNames.join(", ") + " };\n", base);
   return m.exports;
 }
+
+// ── 8b. behaviours the fixtures above never exercised ─────────────────────────────────────────
+const GYP = 'Gyp (USG 1-8")';
+const GYP_MATERIAL = { gyp: 6000, extras: 200, sand: 100, soundMat: 300, soundMatRolls: 40 };
+function pins() {
+  // both taxes on: the lump sum's two tax figures are each section's own, summed, and are not the same figure
+  const taxed = comboWithSeal();
+  taxed.conditions.taxable = true; taxed.conditions.remodel_tax = true;
+  const tp = priceAll(taxed);
+  const td = B.composePricingSnapshot(taxed, tp);
+  // a tab section's contingency, fees and the conditions its labor reads reach its own price
+  const price = (mut) => { const m = withEpoxy([]); m.conditions.joint_filler = true; m.conditions.remove_existing_jf = true;
+    m.tabs.Epoxy.labor.push({ id: "jointfill", label: "Joint filler", guys: 2, days: 3, rate: 33 });
+    if (mut) mut(m); return B.priceSection(m, "Epoxy", ctxOf()); };
+  const plain = price();
+  // a Gyp base section's area, and the carrier of the job's travel when the root is not the base
+  const g = B.activateSection(polishBid(), GYP, "base", {});
+  g.tabs[GYP].takeoff = [{ assembly_id: "g1", assembly_name: "Underlayment", measurement: 9000, unit: "SF" }];
+  g.tabs[GYP].labor = [{ id: "inst", label: "Install", guys: 4, days: 3, rate: 33.66 }];
+  const gctx = { material: () => GYP_MATERIAL };
+  const gd = B.composePricingSnapshot(g, { bid: rootBid(g, MATERIAL.Polish), bids: B.priceTabs(g, gctx) });
+  let carrier = B.activateSection(Object.assign(polishBid(), { kind: "off" }), "Epoxy", "option", {});
+  carrier = B.activateSection(carrier, GYP, "base", {});
+  // a root kind of "option" is reserved, not read: the root stays a base and the job's travel is charged once
+  const rootOpt = withEpoxy([]);
+  rootOpt.kind = "option";
+  rootOpt.conditions.local = false;
+  rootOpt.travel.lodging.enabled = true; rootOpt.travel.lodging.qty = 10; rootOpt.travel.lodging.qty_auto = false; rootOpt.travel.lodging.rate = 100;
+  return {
+    taxes: { rootSales: tp.bid.sales_tax, epoxySales: tp.bids.Epoxy.sales_tax, rootRemodel: tp.bid.remodel_tax,
+             epoxyRemodel: tp.bids.Epoxy.remodel_tax, sales: td.proposal_sales_tax, remodel: td.proposal_remodel_tax,
+             computed: [td.computed_bid.full_bid.sales_tax, td.computed_bid.full_bid.remodel_tax] },
+    contingencyMoves: price((m) => { m.tabs.Epoxy.contingency = 500; }).contingency === 500,
+    feesMove: price((m) => { m.tabs.Epoxy.fees = 300; }).fees === 300,
+    laborReadsConditions: [plain.labor, price((m) => { m.conditions.remove_existing_jf = false; }).labor],
+    gypArea: gd.sheet_area, gypTabArea: gd.priced_tabs.filter((t) => t.id === GYP).map((t) => t.sf)[0],
+    carrierRootOff: B.travelCarrier(carrier),
+    rootOption: { kind: B.sectionsOf(rootOpt)[0].kind, carrier: B.travelCarrier(rootOpt),
+                  epoxyTravel: B.priceSection(rootOpt, "Epoxy", ctxOf()).travel,
+                  rootTravel: B.priceSection(rootOpt, "Polish", ctxOf()).travel },
+  };
+}
+
 let ESTIMATE = null;
 const est = () => ESTIMATE || (ESTIMATE = loadPrelude("polish-estimate-harness.js",
   ["build", "blob", "typeInto", "clickEl", "need", "MODEL", "ITEMS", "ASMS"]));
@@ -489,8 +532,23 @@ async function page() {
   c.clock.fire();
   const brokenSave = last(c.rec.saves);
 
+  // a Gyp section, priced on the page: its takeoff reaches the engine as gyp-split material inputs, so the
+  // section has a material and a price (a plain number would give none, or a $0 material)
+  const gypModel = clone(model);
+  gypModel.tabs = { [GYP]: { layout: "gyp", kind: "base", profile: "gyp@1",
+    takeoff: [{ assembly_id: "a1", assembly_name: "Polish 800 Grit", measurement: 9000, unit: "SF" }],
+    labor: [{ id: "inst", label: "Install", guys: 4, days: 3, rate: 33.66 }], contingency: 0, fees: 0, totals: {} } };
+  const gb = P.build({ blob: P.blob({ polish_estimate: clone(gypModel), polish_sf: 17500 }) });
+  await gb.api.init();
+  P.typeInto(gb, '[data-tk="0"][data-k="measurement"]', "12000");
+  gb.clock.fire();
+  const gypSaved = last(gb.rec.saves);
+  const gypStamp = gypSaved.polish_estimate.tabs[GYP].totals;
+
   // a new bid seeds through the model and opens with the same strip rules
   return {
+    gypOnPage: { priceable: gypStamp.priceable !== false, material: gypStamp.material, total: gypStamp.total,
+                 computed: !!gypSaved.computed_bid, lump: gypSaved.proposal_lump_sum },
     one: { strip: oneStrip, keys: Object.keys(oneSave).sort(), hasSnapshot: has(oneSave, "priced_tabs"), alert: one.doc.getElementById("alert").textContent },
     multi: { strip: strip, total: total, maths: maths, rootOnlyTotal: rootOnly, panelEpoxy: panelEpoxy,
              stripAfterClick: stripAfter.html, panelRootIsTakeoff: panelRoot.indexOf("Polish 800 Grit") >= 0,
@@ -512,7 +570,7 @@ async function page() {
   };
   const sections = [["sections", sectionsSection], ["newSection", newSection], ["activation", activation],
     ["noReprice", noReprice], ["pricing", pricing], ["composer", composer], ["seeding", seeding],
-    ["switcher", switcher], ["page", page]];
+    ["switcher", switcher], ["pins", pins], ["page", page]];
   const done = [];
   for (const [name, fn] of sections) done.push([name, await attempt(fn)]);
   console.log(JSON.stringify(Object.fromEntries(done)));
