@@ -328,7 +328,7 @@ def test_where_the_remodel_rate_comes_from_is_pinned_at_the_page(ran):
 
 # ── red without the code: break a COPY of the page or the model and watch the ratchet notice ───────
 HARNESS_FILES = ["polish-estimate.html", "js/polish-estimate.js", "js/bid-model.js", "js/library-core.js",
-                 "js/library-picker.js"]
+                 "js/library-picker.js", "js/epoxy-takeoff.js"]
 
 NEWEST_MUTATIONS = {
     "migrate drops the bid's own coverage": (

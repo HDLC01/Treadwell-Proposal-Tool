@@ -48,6 +48,8 @@ const src = read(path.join(ROOT, "js", "polish-estimate.js"));
 const pageHtml = read(path.join(ROOT, "polish-estimate.html"));
 const B = require(path.join(ROOT, "js", "bid-model.js"));
 const L = require(path.join(ROOT, "js", "library-core.js"));
+// The Epoxy tab's patch, cove and tooling (js/epoxy-takeoff.js): the page reads it as it parses.
+const EPOXY = require(path.join(ROOT, "js", "epoxy-takeoff.js"));
 // The one vocabulary (js/work-types.js): the page builds its Takeoff cards off it as it parses.
 const W = require(path.join(ROOT, "js", "work-types.js"));
 // The one search pop-up both Add buttons open: the REAL module, mounted on this file's stub DOM.
@@ -77,7 +79,8 @@ const EXPORTS = `
     init: init, adopt: adopt, go: go, changed: changed, saveSoon: saveSoon,
     assemblyByName: assemblyByName, setAssembly: setAssembly,
     itemByName: itemByName, setPick: setPick, rowKind: rowKind,
-    rowPrice: rowPrice, materialTotal: materialTotal, bid: bid,
+    rowPrice: rowPrice, materialTotal: materialTotal, bid: bid, activeBid: activeBid,
+    addPickedTakeoffRow: addPickedTakeoffRow, show: show, sectionBids: sectionBids,
     condLine: condLine, conditionLibrary: conditionLibrary,
     moneyAuto: moneyAuto, measureText: measureText, asmHint: asmHint,
     repaintNumbers: repaintNumbers, renderPanel: renderPanel, stepStatus: stepStatus,
@@ -435,7 +438,7 @@ function build(opts) {
 
   const winListeners = [];
   const win = {
-    TWBidModel: B, TWWorkTypes: W, TWLib: L, TWPolishSandbox: S, TWLibraryPicker: PICKER,
+    TWBidModel: B, TWWorkTypes: W, TWLib: L, TWEpoxyTakeoff: EPOXY, TWPolishSandbox: S, TWLibraryPicker: PICKER,
     TWAuth: { ready: Promise.resolve() },
     scrollTo: () => { log.push("scroll"); },
     location: { href: "https://x/polish-estimate.html?d=proj-1" },

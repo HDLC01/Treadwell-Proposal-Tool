@@ -1309,7 +1309,7 @@ out.engineMoves = (function () {
     };
     const markupBefore = b.dom.nodes["job-type"].innerHTML;
     const attempts = {};
-    ["epoxy", "combo", "gyp", "seal", "leveling", "nonsense", ""].forEach((key) => {
+    ["combo", "gyp", "seal", "leveling", "nonsense", ""].forEach((key) => {
       jobClick(b, key, 1);                    // the mouse
       jobClick(b, key, 0);                    // the keyboard
       attempts[key || "(empty)"] = { current: b.api.jobType(), armed: b.clock.armed(), saves: b.rec.saves.length };
@@ -1318,17 +1318,18 @@ out.engineMoves = (function () {
       attempts: attempts, markupUnchanged: b.dom.nodes["job-type"].innerHTML === markupBefore,
     };
 
-    // The same page, with a vocabulary that marks Epoxy ready: nothing in the page changes.
-    const f = build({ fakeReady: ["epoxy"] });
+    // The same page, with a vocabulary that also marks Combo ready (Epoxy has been since Phase 12): nothing in the
+    // page changes.
+    const f = build({ fakeReady: ["combo"] });
     await f.api.boot();
     out.jobTypes.fakeReady = { radios: radios(f), note: noteOf(f), before: f.api.jobType() };
-    jobClick(f, "epoxy", 1);
+    jobClick(f, "combo", 1);
     const armed = f.clock.armed();
     f.clock.fire();
     out.jobTypes.fakeReady.afterPick = { current: f.api.jobType(), armed: armed, radios: radios(f),
       savedWorkType: (f.rec.saves[f.rec.saves.length - 1] || {}).work_type };
-    jobClick(f, "combo", 0);
-    out.jobTypes.fakeReady.comboStillDisabled = f.api.jobType();
+    jobClick(f, "gyp", 0);
+    out.jobTypes.fakeReady.gypStillDisabled = f.api.jobType();
 
     // Saved drafts open unchanged: no job type reads as Polish, one v2 cannot price yet reads as Polish,
     // and opening writes nothing. The county the draft holds is still shown.

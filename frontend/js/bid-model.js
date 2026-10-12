@@ -2530,6 +2530,55 @@
     throw new Error("the model has no section for " + JSON.stringify(String(tabId)));
   }
 
+  /** The five keys that are a SECTION's own: what a panel edits when a section other than the root is on show. */
+  var SECTION_KEYS = ["takeoff", "labor", "contingency", "fees", "totals"];
+
+  /** THE MODEL AS THE PANELS SEE IT while one section is on show (Phase 12). The estimate page's Material,
+   *  Labor and Review panels have always edited `M.takeoff`, `M.labor`, `M.contingency` and `M.fees`, which is
+   *  right for the root (Polish) section because those ARE the root's keys. For any other section the same four
+   *  keys live in `model.tabs[tab]`, and a second copy of every panel for them is what this avoids: the view
+   *  answers those keys from the section and every other key (the conditions, the travel, the distance, the
+   *  fees default) from the model, and a write goes to the same place a read came from. It holds NOTHING of its
+   *  own, so the model underneath is always the one that is saved. The root's view is the model itself.
+   *  THROWS for a tab the model has no section for. */
+  function sectionView(model, tabId) {
+    var e = sectionOf(model, tabId);
+    if (e.root) return model;
+    var sec = e.section;
+    // Reflect, so a write is never `object[name] = value` with a name that came from outside (CodeQL's
+    // remote-property-injection rule, and the repo's rule 5): the keys are the five of SECTION_KEYS or the model's own.
+    var ownerOf = function (target, key) { return SECTION_KEYS.indexOf(key) >= 0 ? sec : target; };
+    return new Proxy(model, {
+      get: function (target, key) { return Reflect.get(ownerOf(target, key), key); },
+      set: function (target, key, value) { return Reflect.set(ownerOf(target, key), key, value); }
+    });
+  }
+
+  /** WHICH SECTIONS A JOB TYPE NEEDS (Phase 12). A job type's base tab is a section of the bid, and the model
+   *  holds the Polish section as its root, so an Epoxy job is: the root marked "off" (it is not part of the bid)
+   *  and an Epoxy section as the base. Polish returns the model it was given, unchanged (no saved bid moves).
+   *  Idempotent: a section the model already has is left as it is, and the root's kind is only ever written
+   *  here, never read back to decide anything else. Returns a NEW model when it changes anything, else the one
+   *  handed in. A job type that is not ready in the vocabulary THROWS, because pricing it would be a guess. */
+  function sectionsForJob(model, jobType, ctx) {
+    if (!isObject(model)) throw new Error("sectionsForJob needs the model");
+    var job = types.jobType(jobType);
+    if (!job) throw new Error(JSON.stringify(String(jobType)) + " is not a job type");
+    if (job.ready !== true) throw new Error(job.label + " is not ready in Estimating Tool v2 yet");
+    var tabs = types.tabsFor(jobType);
+    var out = model;
+    var baseTabs = tabs.map(function (key) { return types.tab(key); });
+    var needsRoot = baseTabs.some(function (rec) { return rec.sheets.indexOf(ROOT_TAB) >= 0; });
+    baseTabs.forEach(function (rec) {
+      var id = rec.sheets[0];
+      if (id === ROOT_TAB) return;
+      if (isObject(out.tabs) && has.call(out.tabs, id)) return;
+      out = activateSection(out, id, "base", ctx);
+    });
+    if (!needsRoot && out.kind !== "off") out = Object.assign({}, out, { kind: "off" });
+    return out;
+  }
+
   function takeoffStated(rows) {
     return rows instanceof Array && rows.some(function (r) {
       return !!r && (!!r.assembly_id || !!r.item_id || !isBlank(r.measurement));
@@ -2773,6 +2822,14 @@
       s.takeoff = (e.root ? (condGate || laborGate) : true)
         ? seedDefaultTakeoff(s.takeoff, ctx.asms, ctx.items, ctx.reserved, sfs[0], sfs[1], e.layout)
         : seedTakeoffSf(s.takeoff, sfs[0], sfs[1]);
+      // The intake's cove lengths, as takeoff rows of their own (Epoxy has a cove, Polish does not). A blank
+      // assembly the estimator picks a cove for, never over a row that is already measured in linear feet.
+      var lfs = isObject(ctx.lf) && has.call(ctx.lf, e.tab) && ctx.lf[e.tab] instanceof Array ? ctx.lf[e.tab] : [];
+      if (!(takeoffLf(s.takeoff) > 0)) {
+        lfs.forEach(function (v) {
+          if (num(v) > 0) s.takeoff.push({ assembly_id: "", assembly_name: "", measurement: num(v), unit: "LF" });
+        });
+      }
     });
 
     // 4. the labor calculator, after the takeoff (a "from SF" line needs the area)
@@ -2953,8 +3010,11 @@
    *  single-section estimate looks exactly as it did. One button per section, naming it, its kind and its price;
    *  `active` is the tab id on show and `bids` the { tabId: bid } the page priced (the root's under its own tab
    *  id). The page's delegated click handler reads `data-section-tab`. */
-  function sectionSwitcherHtml(model, active, bids) {
+  function sectionSwitcherHtml(model, active, bids, opts) {
     var list = sectionsOf(model);
+    // `opts.skipOff`: leave out a section that is not part of the bid (an Epoxy job's Polish root), so the strip
+    // lists only what the bid is made of. Without it every section is listed, as it always was.
+    if (opts && opts.skipOff) list = list.filter(function (e) { return e.kind !== "off"; });
     if (list.length < 2) return "";
     var esc = function (s) {
       return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
@@ -3079,6 +3139,8 @@
     // Sections (Phase 10): a bid priced on several workbook tabs. See the block above blockers().
     ROOT_TAB: ROOT_TAB, SECTION_KINDS: SECTION_KINDS, sectionsOf: sectionsOf, activeSections: activeSections,
     sectionOf: sectionOf, isNewSection: isNewSection, travelCarrier: travelCarrier,
+    // Phase 12: the model as a panel sees one section, and the sections a job type is made of.
+    SECTION_KEYS: SECTION_KEYS, sectionView: sectionView, sectionsForJob: sectionsForJob,
     priceSection: priceSection, priceTabs: priceTabs, activateSection: activateSection,
     seedNewSections: seedNewSections, syncAutoGuys: syncAutoGuys,
     composePricingSnapshot: composePricingSnapshot, sectionSwitcherHtml: sectionSwitcherHtml,

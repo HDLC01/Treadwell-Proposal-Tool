@@ -468,7 +468,8 @@
       var labor = roundUp(input.labor);
       var esc_pct = (q.escalationAlwaysOn || cond.prevailing_wage) ? rate("esc_pct") : 0;
       var escalation = roundUp(labor * esc_pct);
-      var burden = roundUp((labor + escalation) * rate("burden_pct"));
+      var burden_pct = rate("burden_pct");
+      var burden = roundUp((labor + escalation) * burden_pct);
       var labor_total = labor + escalation + burden;
 
       // ── lodging and per diem: nights worked out of the labor dollars (odd rule 2 lives in the divisor) ──
@@ -511,7 +512,8 @@
       }
       var contingency = num(input.contingency);
 
-      var super_pto = roundUp((sub_total + gp + hard_bid + contingency + sales_tax + fees) * rate("super_pto"));
+      var super_pct = rate("super_pto");
+      var super_pto = roundUp((sub_total + gp + hard_bid + contingency + sales_tax + fees) * super_pct);
       var soft_pct = rate("soft_costs");
       var soft_costs = roundUp((sub_total + gp + hard_bid + super_pto + contingency + sales_tax + fees) * soft_pct);
 
@@ -542,13 +544,13 @@
         priceable: true, profile: profile.stamp,
         material: material, overage: overage, material_escalation: material_escalation,
         ship_pct: ship_pct, shipping: shipping, material_total: material_total,
-        labor: labor, esc_pct: esc_pct, escalation: escalation, burden: burden, labor_total: labor_total,
+        labor: labor, esc_pct: esc_pct, escalation: escalation, burden_pct: burden_pct, burden: burden, labor_total: labor_total,
         lodging_qty: lodging_qty, lodging: lodging, per_diem_qty: per_diem_qty, per_diem: per_diem,
         travel: travel, tooling: tooling,
         sub_total: sub_total,
         gp_pct: gp_pct, gp: gp,
         hard_bid_pct: hard_bid_pct, hard_bid: hard_bid,
-        super_pto: super_pto, soft_pct: soft_pct, soft_costs: soft_costs, contingency: contingency,
+        super_pct: super_pct, super_pto: super_pto, soft_pct: soft_pct, soft_costs: soft_costs, contingency: contingency,
         sales_tax_pct: sales_tax_pct, sales_tax: sales_tax,
         remodel_pct: remodel_pct, remodel_tax: remodel_tax, taxes: taxes,
         fees: fees, bond: bond, bond_pct: bond_pct, fees_and_bond: fees_and_bond,

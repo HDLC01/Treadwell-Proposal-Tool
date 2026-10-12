@@ -2406,7 +2406,7 @@ def test_the_page_loads_no_formula_engine_and_the_modules_in_order(html):
     assert srcs == ["https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0",
                     "/js/icons.js", "/auth.js", "/shared.js", "/js/tab-memo.js",
                     "/js/library-core.js", "/js/excel-math.js", "/js/work-types.js", "/js/markup-core.js",
-                    "/js/bid-profiles.js", "/js/bid-engine.js", "/js/bid-model.js",
+                    "/js/bid-profiles.js", "/js/bid-engine.js", "/js/bid-model.js", "/js/epoxy-takeoff.js",
                     "/js/polish-sandbox.js", "/js/library-picker.js", "/js/polish-estimate.js"], (
         "the page's script list has changed: %r" % srcs)
 
