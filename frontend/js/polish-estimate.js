@@ -535,16 +535,16 @@
   }
 
   /** Whether an hours-based labor row (Travel) renders dimmed: on a local job, untouched.
-   *  `guys_auto` going false is what typing in Guys already does (the `data-k="guys"` handler
-   *  below flips it); `filledIn(r.days)` is Hours holding a real number. Either one is the
-   *  estimator saying "we need this anyway", so either one lifts the dim -- not just Hours, since
-   *  Guys is the box somebody is looking at when they start typing.
+   *  Untouched is Guys not typed (blank on a new bid, or still on auto on a bid saved before
+   *  2026-10-12) and Hours blank. A typed Guys or a typed Hours is the estimator saying "we need
+   *  this anyway", so either one lifts the dim -- not just Hours, since Guys is the box somebody
+   *  is looking at when they start typing.
    *
    *  ONE FUNCTION, used by both the first paint (laborCard) and the live repaint
    *  (repaintNumbers), so the two cannot disagree about a row that is being typed into right now. */
   function laborInert(r) {
     return !!(r && r.unit === "hours") && !!(M.conditions || {}).local &&
-      !!r.guys_auto && !B.filledIn(r.days);
+      (!!r.guys_auto || !B.filledIn(r.guys)) && !B.filledIn(r.days);
   }
 
   /** One place every edit funnels through, so nothing can change a value without the bid, the
@@ -1489,10 +1489,10 @@
     // see laborInert -- so typing in either box beside it un-dims the card live.
     var inert = laborInert(r);
     // NO "TYPE MY OWN" SWITCH (Hanz, 2026-10-07). The Guys box is editable, so a control to ask
-    // for permission to type was a second way to do what the box already does. Typing a number
-    // makes it the estimator's own (guys_auto false); CLEARING the box hands the figure back to
-    // the man-days (the change handler below). The "Included" slider is a different thing and
-    // stays.
+    // for permission to type was a second way to do what the box already does. A NEW bid's box opens
+    // EMPTY and stays the estimator's (2026-10-12); only a bid saved before then can still be on
+    // auto, and typing a number makes it the estimator's own (guys_auto false). The "Included"
+    // slider is a different thing and stays.
     var on = B.rowOn(r);
     return '<div class="tk lab' + ((inert || !on) ? " inert" : "") + (on ? "" : " off") +
       '" data-lab-card="' + i +
@@ -1514,7 +1514,7 @@
       dfltWarnHtml('data-calcwarn="' + i + ':guys"', calcDefaultText(r, "guys")) +
       // "Guys", never "Crew" -- Hanz renamed that column and
       // test_nothing_on_screen_says_labour_or_crew holds the page to it.
-      '<p class="hint" data-hint-lab="' + i + '">' + (hours ? B.manDaysHint(auto)
+      '<p class="hint" data-hint-lab="' + i + '">' + (hours ? B.manDaysHint(auto, B.travelManDays(M.labor))
         : 'How many on it.') + '</p></div>' +
 
       '<div class="f"><label>' + (hours ? "Hours" : "Days") + '</label>' +
@@ -1587,7 +1587,7 @@
       '<div class="f"><label>' + unitWord + '</label>' +
       '<input class="n" data-trv="' + key + '" data-k="qty" value="' + esc(nv(l.qty)) + '"' +
       (auto ? ' data-auto="1"' : '') + '>' +
-      '<p class="hint" data-hint-trv="' + key + '">' + B.manDaysHint(auto) + '</p></div>' +
+      '<p class="hint" data-hint-trv="' + key + '">' + B.manDaysHint(auto, B.travelManDays(M.labor)) + '</p></div>' +
       '<div class="f"><label>Rate</label>' +
       '<span class="mny">$<input class="n" data-trv="' + key + '" data-k="rate" value="' +
       esc(nv(l.rate)) + '"></span>' +
@@ -2106,7 +2106,7 @@
     });
     document.querySelectorAll("[data-hint-lab]").forEach(function (el) {
       var r = M.labor[parseInt(el.getAttribute("data-hint-lab"), 10)];
-      if (r && r.unit === "hours") el.textContent = B.manDaysHint(!!r.guys_auto);
+      if (r && r.unit === "hours") el.textContent = B.manDaysHint(!!r.guys_auto, B.travelManDays(M.labor));
     });
     // The Travel card's own dim state, live: typing in Guys or Hours takes this path
     // (`changed(false)`), never a rebuild, so nothing else repaints the card's class. Keyed
@@ -2144,7 +2144,7 @@
       });
       document.querySelectorAll("[data-hint-trv]").forEach(function (el) {
         var l = M.travel[el.getAttribute("data-hint-trv")];
-        if (l) el.textContent = B.manDaysHint(l.qty_auto !== false);
+        if (l) el.textContent = B.manDaysHint(l.qty_auto !== false, B.travelManDays(M.labor));
       });
       document.querySelectorAll("[data-trv-card]").forEach(function (el) {
         var l = M.travel[el.getAttribute("data-trv-card")];
@@ -2740,37 +2740,14 @@
       changed(false);
       return;
     }
-    // CLEARING A TYPED BOX GOES BACK TO AUTO (Hanz, 2026-10-07: this replaced the "Type my own"
-    // switch). It happens HERE, on change (blur or Enter), and not on input. On input, typing "1",
-    // backspace, "2" would hit an empty box after the backspace, the figure would snap back to the
-    // man-days and the card would rebuild under the caret, so the "2" would land after the
-    // man-days instead of replacing the "1". Change only fires once the estimator has stopped.
-    // Whitespace counts as empty. The next changed(true) runs syncAutoGuys, which writes the
-    // man-days into the row, so the box, the cost and the saved blob agree.
+    // A CLEARED GUYS / NIGHTS / DAYS BOX STAYS EMPTY (Hanz, 2026-10-12: "nights, days, guys and hours
+    // should have nothing when it starts"). From 2026-10-07 clearing the box handed the figure back
+    // to the man-days; that is gone, because the man-days are no longer a value the box can hold.
+    // Empty is the estimator's own answer and prices $0. The hint under the box says what the
+    // man-days are, as text.
     var blankKey = el.getAttribute("data-k");
-    if (blankKey === "guys" || blankKey === "qty") {
-      var blankLab = el.getAttribute("data-lab");
-      var blankTrv = el.getAttribute("data-trv");
-      if (String(el.value).trim() === "") {
-        if (blankLab !== null && blankKey === "guys") {
-          var br = M.labor[parseInt(blankLab, 10)];
-          if (br && br.unit === "hours" && !br.guys_auto) {
-            br.guys_auto = true;
-            changed(false);                              // in place: a rebuild eats the next click
-            return;
-          }
-        } else if (blankTrv !== null && blankKey === "qty") {
-          var bl = M.travel && M.travel[blankTrv];
-          if (bl && bl.qty_auto === false) {
-            bl.qty_auto = true;
-            changed(false);                              // in place: a rebuild eats the next click
-            return;
-          }
-        }
-      }
-    }
-    // A CLEARED RATE BOX GOES BACK TO THE LINE'S OWN RATE (Hanz, 2026-10-09), on change like Guys
-    // above, so typing "3", backspace, "4" never snaps. The row was already priced at that rate while
+    // A CLEARED RATE BOX GOES BACK TO THE LINE'S OWN RATE (Hanz, 2026-10-09), on change, so typing
+    // "3", backspace, "4" never snaps. The row was already priced at that rate while
     // the box was empty (B.laborRateOf); this writes it back into the model and the box so the screen,
     // the total and the saved blob agree. In place, never a rebuild: a rebuild eats the next click.
     // Typing 0 is not blank and stays zero. A row with no default to fall back to stays blank.

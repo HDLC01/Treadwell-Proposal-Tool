@@ -135,7 +135,9 @@ const RULE = (key, formula, extra) => Object.assign({ id: "r-" + key, layout: "g
       perDiemEmptyWithShippedPlaceholder:
         /data-travel-rate="travel_per_diem" value="" placeholder="45"/.test(html),
       units: /<td>a night<\/td>/.test(html) && /<td>a day<\/td>/.test(html),
-      how: html.indexOf("Nights are the crew&#39;s man-days unless the estimator types a number.") !== -1,
+      how: html.indexOf("The estimator types the nights; a new estimate leaves them empty.") !== -1 &&
+           html.indexOf("The estimator types the days; a new estimate leaves them empty.") !== -1 &&
+           html.indexOf("man-days") === -1,
       startsOff: (html.match(/Starts off on every new estimate\./g) || []).length,
       seventyMiles: html.indexOf("70 miles or more") !== -1,
       emDash: html.indexOf("—") !== -1,

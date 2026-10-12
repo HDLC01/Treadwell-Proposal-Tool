@@ -90,6 +90,9 @@ def test_what_the_page_saves_and_what_a_new_bid_opens_holding_is_the_golden_byte
     Mutations: see test_the_golden_goes_red_when_the_code_changes."""
     want = json.loads(GOLDEN.read_text(encoding="utf-8"))
     assert want["meta"]["commit"] == "28a5d1f"
+    # The 26 `saved` records are still the 28a5d1f ones, byte for byte. The seven `newBid` records were
+    # re-recorded on 2026-10-12 (meta.newBid_recut): a new bid's Labor step opens with every quantity empty.
+    assert "newBid_recut" in want["meta"]
     assert len(want["golden"]["saved"]) == 26 and len(want["golden"]["newBid"]) == 7
     assert json.dumps(recorded) == json.dumps(want["golden"])
 
@@ -694,8 +697,15 @@ GOLDEN_BREAKS = {
         "js/bid-model.js", "    if (single) { out.computed_bid = rootComputed; return out; }",
         "    if (false) { out.computed_bid = rootComputed; return out; }"),
     "the seeding forgets the travel rates": (
-        "js/bid-model.js", "      out.travel = applyTravelRates(out.travel, ctx.travelRates);",
+        "js/bid-model.js", "      out.travel = travelLinesStartEmpty(applyTravelRates(out.travel, ctx.travelRates));",
         "      void ctx.travelRates;"),
+    "the seeding leaves every labor row filled in by the man-days": (
+        "js/bid-model.js",
+        "      rows = rows.map(function (r) { return r ? laborRowStartsEmpty(r) : r; });",
+        "      void laborRowStartsEmpty;"),
+    "the calculator fills the days again": (
+        "js/bid-model.js", '      copy.guys = ""; copy.days = ""; copy.rate = v.rate; copy.hours_per_day = v.hours_per_day;',
+        "      copy.guys = v.guys; copy.days = v.days; copy.rate = v.rate; copy.hours_per_day = v.hours_per_day;"),
     "the seeding forgets which cards a bid shows": (
         "js/bid-model.js", "      out.conditions_shown = seedConditionsShown(ctx.conditionRows);", "      void ctx.conditionRows;"),
     "the seeding lets the library beat the intake's cell": (

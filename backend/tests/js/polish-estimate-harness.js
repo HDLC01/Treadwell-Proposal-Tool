@@ -992,30 +992,24 @@ const rendered = [];      // every string the page put on screen, for the Labour
       const midBackspace = { guys: travelRow().guys, auto: travelRow().guys_auto };
       typeInto(c, '[data-lab="' + travelIdx() + '"][data-k="guys"]', "2");
       const afterRetype = { guys: travelRow().guys, auto: travelRow().guys_auto };
+      // CLEARING THE BOX LEAVES IT EMPTY (2026-10-12): it no longer hands the figure back to the
+      // man-days. A real clear is an input event (the box goes empty) and then a change event.
+      typeInto(c, '[data-lab="' + travelIdx() + '"][data-k="guys"]', "");
       const writesBefore = cp.htmlWrites;
       changeTo(c, '[data-lab="' + travelIdx() + '"][data-k="guys"]', "   ");
       const clearRebuilds = cp.htmlWrites - writesBefore;
-      const afterBackToAuto = { guys: travelRow().guys, auto: travelRow().guys_auto };
-      const clearedBox = String(need(c, '[data-lab="' + travelIdx() + '"][data-k="guys"]').value);
-      const clearedHint = need(c, '[data-hint-lab="' + travelIdx() + '"]').textContent
-        === "Man-days from the tasks above.";
-      const costAuto = txt(c, '[data-lcost-for="' + travelIdx() + '"]');
-      // And the cost is the one the same man-days price on a never-touched row.
-      const fresh = build();
-      await fresh.api.init();
-      fresh.api.go(1);
-      typeInto(fresh, '[data-lab="0"][data-k="days"]', "9");
-      const freshIdx = fresh.api.model().labor.findIndex((r) => r.id === "travel");
-      typeInto(fresh, '[data-lab="' + freshIdx + '"][data-k="days"]', "10");
-      const costFresh = txt(fresh, '[data-lcost-for="' + freshIdx + '"]');
-      // Typing "2" over the man-days priced differently from the man-days.
+      const afterClear = { guys: travelRow().guys, auto: travelRow().guys_auto };
+      const clearedBox = String(need(c, '[data-lab="' + travelIdx() + '"][data-k="guys"]').value).trim();
+      const clearedHint = need(c, '[data-hint-lab="' + travelIdx() + '"]').textContent;
+      const costCleared = txt(c, '[data-lcost-for="' + travelIdx() + '"]');
       out.travelClear = { costTyped: costTyped, midBackspace: midBackspace,
-        afterRetype: afterRetype, costAuto: costAuto, costFresh: costFresh,
-        clearedBox: clearedBox, clearedHint: clearedHint, clearRebuilds: clearRebuilds };
+        afterRetype: afterRetype, costCleared: costCleared,
+        clearedBox: clearedBox, clearedHint: clearedHint, clearRebuilds: clearRebuilds,
+        manDaysNow: B.travelManDays(c.api.model().labor) };
       out.travelGuys = {
         seeded: before, afterCrewEdit: afterCrewEdit,
         afterTyping: afterTyping, stickyAfterCrewMoves: stickyAfterCrewMoves,
-        afterBackToAuto: afterBackToAuto,
+        afterClear: afterClear,
         // The box shows the derived figure rather than sitting empty next to a priced row.
         boxShowsIt: String(need(c, '[data-lab="' + travelIdx() + '"][data-k="guys"]').value),
       };
@@ -1027,7 +1021,16 @@ const rendered = [];      // every string the page put on screen, for the Labour
     // cells and the totals, and nothing repainted the derived INPUT. The model was right the whole
     // time, which is exactly why every existing test passed.
     {
-      const f = build({ blob: blob({ polish_estimate: null, polish_sf: 9000 }) });
+      // A bid SAVED on auto (a new bid no longer starts there, 2026-10-12): Polishing's days still
+      // blank, Mock-up's half a day, so the man-days are 1.5 until days go into Polishing.
+      const f = build({ blob: blob({ polish_sf: 9000, polish_estimate: {
+        version: 2, takeoff: clone(MODEL.takeoff),
+        labor: [
+          { id: "polishing", label: "Polishing", guys: 3, days: "", rate: 33 },
+          { id: "mockup", label: "Mock-up", guys: 3, days: 0.5, rate: 33 },
+          { id: "travel", label: "Travel Labor", guys: "", days: "", rate: 33, unit: "hours", guys_auto: true },
+        ],
+        conditions: clone(MODEL.conditions), contingency: 0, totals: {} } }) });
       await f.api.init();
       f.api.go(1);
       const ti = () => f.api.model().labor.findIndex((r) => r.id === "travel");
@@ -1167,7 +1170,8 @@ const rendered = [];      // every string the page put on screen, for the Labour
       sv.api.go(1);
       const svH = sv.dom.get("panels").innerHTML;
       out.savedTypedRow = {
-        typedHint: svH.indexOf("Typed by you. Clear it to use the man-days from the tasks above.") !== -1,
+        // Typed, not auto: the hint names the man-days of the (here empty) crew as text.
+        typedHint: svH.indexOf("Man-days from the tasks above: 0.") !== -1,
         guys: sv.api.model().labor[0].guys, auto: sv.api.model().labor[0].guys_auto,
         box: String(need(sv, '[data-lab="0"][data-k="guys"]').value),
         cost: txt(sv, '[data-lcost-for="0"]'),
@@ -2970,6 +2974,10 @@ const rendered = [];      // every string the page put on screen, for the Labour
           .filter((r) => r.id === "lab-night").map((r) => r.guys),
         travelGuys: brandNew.api.model().labor
           .filter((r) => r.id === "travel").map((r) => r.guys),
+        // guys_auto on the two lines that used to be filled from the man-days (Travel, and the
+        // library's hours default that carries guys_auto): both false on a new bid.
+        autoFlags: brandNew.api.model().labor
+          .filter((r) => r.id === "travel" || r.id === "lab-night").map((r) => r.guys_auto),
         // A default must not quietly put money on the bid.
         laborTotal: B.laborTotal(brandNew.api.model().labor),
         builtInTotal: B.laborTotal(B.freshModel().labor),
@@ -3414,8 +3422,8 @@ const rendered = [];      // every string the page put on screen, for the Labour
     const typedLodging = clone(old.api.model().travel.lodging);
     const typedBid = old.api.bid();
     const typedCostCell = txt(old, '[data-trvcost-for="lodging"]');
-    // And back to auto by CLEARING the box (the "Type my own" switch is gone). An empty box on
-    // input stays typed; the change commits it.
+    // CLEARING the box leaves it EMPTY and typed (2026-10-12: it used to hand the figure back to
+    // the man-days). The line then prices $0 until somebody types a number again.
     typeInto(old, '[data-trv="lodging"][data-k="qty"]', "");
     const midClearLodging = clone(old.api.model().travel.lodging);
     const lodgeWrites = old.dom.get("panels").htmlWrites;
@@ -3426,14 +3434,16 @@ const rendered = [];      // every string the page put on screen, for the Labour
     const clearedLodgingCost = txt(old, '[data-trvcost-for="lodging"]');
     const lodgingHtml = old.dom.get("panels").innerHTML;
     const lodgingHints = {
-      auto: need(old, '[data-hint-trv="lodging"]').textContent === "Man-days from the tasks above.",
+      // Typed (the box was cleared, which is not auto): the hint names the man-days as TEXT.
+      auto: need(old, '[data-hint-trv="lodging"]').textContent === "Man-days from the tasks above: 16.5.",
       noTypeMyOwn: lodgingHtml.indexOf("Type my own") === -1 &&
         lodgingHtml.indexOf("data-trv-manual") === -1 && lodgingHtml.indexOf("data-trv-auto") === -1,
     };
     typeInto(old, '[data-trv="lodging"][data-k="qty"]', "10");
     const typedHintLodging = old.dom.get("panels").innerHTML
-      .indexOf("Typed by you. Clear it to use the man-days from the tasks above.") !== -1;
-    changeTo(old, '[data-trv="lodging"][data-k="qty"]', "");
+      .indexOf("Man-days from the tasks above: 16.5.") !== -1;
+    // The nights the sheet would count, typed in by hand: the same $1,155 the old auto line priced.
+    typeInto(old, '[data-trv="lodging"][data-k="qty"]', "16.5");
 
     // Per Diem ON as well, rate typed over.
     clickOn(old, '[data-on-trv="per_diem"]');
@@ -3614,6 +3624,8 @@ const rendered = [];      // every string the page put on screen, for the Labour
     const unkSnap = snap(unk);
     typeInto(unk, "[data-dist-miles]", "85");
     const typed85 = snap(unk);
+    // Per Diem's days are the estimator's to type now (a new bid opens them empty): 3 days.
+    typeInto(unk, '[data-trv="per_diem"][data-k="qty"]', "3");
     // A hand flip on Lodging, then the miles move around: the line the estimator flipped stays.
     clickOn(unk, '[data-on-trv="lodging"]');                 // on -> OFF, by hand
     typeInto(unk, "[data-dist-miles]", "20");
@@ -3677,7 +3689,20 @@ const rendered = [];      // every string the page put on screen, for the Labour
     // TYPED NIGHTS on a far job, and a repaint after the miles move (the note must follow).
     const nights = build({ blob: newBlob(), distance: { ok: true, miles: 150, reason: "" } });
     await nights.api.init(); nights.api.go(1); await settle();
+    // Straight after the lookup nothing is typed: every quantity is empty and the distance filled no hours.
     const nightsAuto = snap(nights);
+    nightsAuto.travelRow = clone(nights.api.model().labor.find((r) => r.id === "travel"));
+    nightsAuto.travelBoxes = {
+      guys: need(nights, '[data-lab="' + nights.api.model().labor.findIndex((r) => r.id === "travel") + '"][data-k="guys"]').value,
+      hours: need(nights, '[data-lab="' + nights.api.model().labor.findIndex((r) => r.id === "travel") + '"][data-k="days"]').value,
+      nights: need(nights, '[data-trv="lodging"][data-k="qty"]').value,
+      days: need(nights, '[data-trv="per_diem"][data-k="qty"]').value,
+    };
+    // Every quantity typed by hand: Travel Labor 2 guys x 5 hours, 10 nights, 8 days of meals.
+    const nTi = nights.api.model().labor.findIndex((r) => r.id === "travel");
+    typeInto(nights, '[data-lab="' + nTi + '"][data-k="guys"]', "2");
+    typeInto(nights, '[data-lab="' + nTi + '"][data-k="days"]', "5");
+    typeInto(nights, '[data-trv="per_diem"][data-k="qty"]', "8");
     typeInto(nights, '[data-trv="lodging"][data-k="qty"]', "10");
     const nightsTyped = snap(nights);
     // Miles typed over the looked-up figure: 150 -> 20, in place.
@@ -3687,6 +3712,12 @@ const rendered = [];      // every string the page put on screen, for the Labour
     // in-place repaint can move the man-days and dollars in the note.
     const nights2 = build({ blob: newBlob(), distance: { ok: true, miles: 150, reason: "" } });
     await nights2.api.init(); nights2.api.go(1); await settle();
+    // The quantities are typed (nothing follows the man-days now); the crew is 3 guys, so the
+    // man-days the note quotes are 3 x days.
+    typeInto(nights2, '[data-lab="0"][data-k="guys"]', "3");
+    typeInto(nights2, '[data-lab="0"][data-k="days"]', "2");
+    typeInto(nights2, '[data-trv="lodging"][data-k="qty"]', "4");
+    typeInto(nights2, '[data-trv="per_diem"][data-k="qty"]', "4");
     const daysBefore = snap(nights2);
     typeInto(nights2, '[data-lab="0"][data-k="days"]', "20");
     const daysAfter = snap(nights2);
@@ -3744,6 +3775,10 @@ const rendered = [];      // every string the page put on screen, for the Labour
     const over = warn(nb, pi + ":days");
     typeInto(nb, '[data-lab="' + pi + '"][data-k="days"]', "5");
     const back = warn(nb, pi + ":days");
+    // The crew is typed by hand now (a new bid's Guys opens empty): 3 guys x 5 days x $40 x 10 hours.
+    typeInto(nb, '[data-lab="' + pi + '"][data-k="guys"]', "3");
+    const typedCost = B.laborCost(rowOf(nb, "polishing"));
+    const guysWarn = warn(nb, pi + ":guys");
     // hours a day 10 -> 8 reprices and warns
     const hsel = need(nb, '[data-lab="' + pi + '"][data-k="hours_per_day"]');
     hsel.value = "8";
@@ -3846,6 +3881,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
       travelWarn: travelWarn,
       followed: followed,
       first: first, over: over, back: back, hrs: hrs, mockRateBefore: mockRateBefore,
+      typedCost: typedCost, guysWarn: guysWarn,
       mockRateAfter: mockRateAfter,
       saved: { polishing: clone(rowOf(sv, "polishing")), asked: sv.rec.fetches.some((u) => /labor-calc/.test(u)) },
       noSf: noSfRow, noSfWarn: noSfWarn,
@@ -3960,10 +3996,20 @@ const rendered = [];      // every string the page put on screen, for the Labour
     const p = build({ blob: nb, asms: FAV_ASMS, items: FAV_ITEMS, labor: PLABOR, laborCalc: PCALC,
                       markupRules: PRULES, conditionDefaults: PCONDS });
     await p.api.init();
-    // Travel's hours, typed by the estimator (it is the one default whose quantity is theirs).
+    // EVERY quantity is the estimator's to type (a new bid opens them all empty, 2026-10-12), so a
+    // switch has money to move: the crew's guys and days (the calculator's figures, typed by hand),
+    // Travel's 2 guys x 2 hours, 4 nights of Lodging and 4 days of Per Diem.
     p.api.go(1);
     const ti = p.api.model().labor.findIndex((r) => r.id === "travel");
-    typeInto(p, '[data-lab="' + ti + '"][data-k="days"]', "2");
+    const typeCrew = (id, guys, days) => {
+      const i = p.api.model().labor.findIndex((r) => r.id === id);
+      typeInto(p, '[data-lab="' + i + '"][data-k="guys"]', guys);
+      typeInto(p, '[data-lab="' + i + '"][data-k="days"]', days);
+    };
+    typeCrew("polishing", "3", "5"); typeCrew("mockup", "3", "1"); typeCrew("jointfill", "3", "2");
+    typeCrew("c1", "2", "3"); typeCrew("travel", "2", "2");
+    typeInto(p, '[data-trv="lodging"][data-k="qty"]', "4");
+    typeInto(p, '[data-trv="per_diem"][data-k="qty"]', "4");
     const M0 = () => p.api.model();
     const asmIdx = M0().takeoff.findIndex((r) => r.assembly_id === "a1");
     const itemIdx = M0().takeoff.findIndex((r) => r.item_id === "i4");
@@ -4213,6 +4259,9 @@ const rendered = [];      // every string the page put on screen, for the Labour
     d.api.go(1);
     const pi = idx(d, "polishing");
     const rateSel = '[data-lab="' + pi + '"][data-k="rate"]';
+    // The 4 guys the calculator used to fill are typed by hand now (a new bid's Guys opens empty).
+    const guysOnOpen = rowOf(d, "polishing").guys;
+    typeInto(d, '[data-lab="' + pi + '"][data-k="guys"]', "4");
     typeInto(d, '[data-lab="' + pi + '"][data-k="days"]', "5");
     const priced = B.laborCost(rowOf(d, "polishing"));
     const cardBefore = d.doc.querySelector('[data-lab-card="' + pi + '"]');
@@ -4230,7 +4279,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
     changeTo(d, rateSel, "");
     const off = clone(rowOf(d, "polishing"));
     off.rate = ""; off.enabled = false;
-    out.ls1Blank = { priced: priced, whileEmpty: whileEmpty, afterChange: afterChange, zero: zero,
+    out.ls1Blank = { guysOnOpen: guysOnOpen, priced: priced, whileEmpty: whileEmpty, afterChange: afterChange, zero: zero,
                      offCost: B.laborCost(off), unstampedBlank: B.laborCost({ guys: 3, days: 5, rate: "" }),
                      stampedBlank: B.laborCost({ guys: 3, days: 5, rate: "", rate_default: 33 }),
                      calcBlank: B.laborCost({ guys: 3, days: 5, rate: "", calc_default: { rate: 50 }, rate_default: 33 }),
@@ -4571,6 +4620,112 @@ const rendered = [];      // every string the page put on screen, for the Labour
     typeInto(c, '[data-lab="0"][data-k="rate"]', "41");
     rows.rebuilds = c.dom.get("panels").htmlWrites - writes;
     out.costBoxRepaint = rows;
+  }
+
+  // ── R. EVERY QUANTITY STARTS EMPTY; ONLY THE RATES ARE FILLED (Hanz, 2026-10-12) ──────────────────
+  // "Whatever the default values are for the rate that should be it; nights, days, guys and hours
+  // should have nothing when it starts." EXECUTED THROUGH THE PAGE'S OWN INIT, with a library that
+  // would have filled every box before: a calculator that gives each crew line guys and days, a
+  // library Travel that asks for guys_auto, an hours default that does too, and a distance answer
+  // that used to write the drive hours. A saved bid on auto is the other half: it opens unchanged.
+  {
+    const settleQ = async () => { for (let i = 0; i < 6; i++) await new Promise((r) => setImmediate(r)); };
+    const crewQ = (id, name, sort) => ({ id: id, name: name, rate: 33, unit: "days", guys_auto: false,
+      favorite: true, default_work_types: ["polish"], sort: sort, notes: "" });
+    const LIBQ = [
+      { id: "travel", name: "Travel", rate: 36, unit: "hours", guys_auto: true, favorite: true,
+        default_work_types: [], sort: -1, notes: "" },
+      crewQ("polishing", "Polishing", 1), crewQ("mockup", "Mock-up", 2), crewQ("jointfill", "Joint filler", 3),
+      { id: "lab-night", name: "Night shift", rate: 12.5, unit: "hours", guys_auto: true, favorite: true,
+        default_work_types: [], sort: 4, notes: "" },
+      { id: "lab-saw", name: "Saw cutting", rate: 45, unit: "days", guys_auto: false, favorite: false,
+        default_work_types: [], sort: 5, notes: "" },
+    ];
+    const CALCQ = [
+      { line_id: "polishing", mode: "fixed", guys: 3, days: 5, hours_per_day: 8, rate: null },
+      { line_id: "mockup", mode: "fixed", guys: 3, days: 0.5, hours_per_day: 8, rate: 50 },
+      { line_id: "jointfill", mode: "sf", crew: 3, sf_per_day: 2500, hours_per_day: 8, rate: null }];
+    const RULESQ = [
+      { id: "q1", layout: "global", line_key: "labor_rate", formula: "40", applies: true },
+      { id: "q2", layout: "global", line_key: "travel_lodging", formula: "80", applies: true },
+      { id: "q3", layout: "global", line_key: "travel_per_diem", formula: "50", applies: true }];
+    const ADDR = { address: "100 Main St", city: "Wichita", state: "KS", zip: "67202" };
+    const nbQ = blob(Object.assign({ polish_estimate: null, polish_sf: 12000 }, ADDR));
+    const q = build({ blob: nbQ, labor: LIBQ, laborCalc: CALCQ, markupRules: RULESQ,
+                      distance: { ok: true, miles: 150, reason: "" } });
+    await q.api.init(); q.api.go(1); await settleQ();
+    const boxOf = (built, sel) => String(need(built, sel).value);
+    const qm = q.api.model();
+    const cards = qm.labor.map((r, i) => ({
+      id: r.id, auto: !!r.guys_auto,
+      guys: boxOf(q, '[data-lab="' + i + '"][data-k="guys"]'),
+      days: boxOf(q, '[data-lab="' + i + '"][data-k="days"]'),
+      rate: boxOf(q, '[data-lab="' + i + '"][data-k="rate"]'),
+      cost: B.laborCost(r) }));
+    const travelBoxes = { lodging: boxOf(q, '[data-trv="lodging"][data-k="qty"]'),
+      per_diem: boxOf(q, '[data-trv="per_diem"][data-k="qty"]'),
+      lodgingRate: boxOf(q, '[data-trv="lodging"][data-k="rate"]'),
+      perDiemRate: boxOf(q, '[data-trv="per_diem"][data-k="rate"]') };
+    const openState = { lodgingOn: qm.travel.lodging.enabled, perDiemOn: qm.travel.per_diem.enabled,
+      lodgingAuto: qm.travel.lodging.qty_auto, perDiemAuto: qm.travel.per_diem.qty_auto,
+      local: qm.conditions.local, bid: q.api.bid().travel, labor: B.laborTotal(qm.labor) };
+    // Lodging is on (150 miles), nights empty: $0. Type 2 nights: 2 x $80.
+    const nightsEmpty = { cost: txt(q, '[data-trvcost-for="lodging"]'), travel: q.api.bid().travel };
+    typeInto(q, '[data-trv="lodging"][data-k="qty"]', "2");
+    const nightsTwo = { cost: txt(q, '[data-trvcost-for="lodging"]'), travel: q.api.bid().travel,
+      expected: 2 * 80, box: boxOf(q, '[data-trv="lodging"][data-k="qty"]') };
+    // The crew is typed, and the typed crew moves NOTHING in Lodging, Per Diem or Travel's Guys
+    // (they no longer follow the man-days). The hint names the man-days as text.
+    typeInto(q, '[data-lab="0"][data-k="guys"]', "3");
+    typeInto(q, '[data-lab="0"][data-k="days"]', "5");
+    const tIdxQ = q.api.model().labor.findIndex((r) => r.id === "travel");
+    const afterCrew = { nights: q.api.model().travel.lodging.qty,
+      perDiemBox: boxOf(q, '[data-trv="per_diem"][data-k="qty"]'),
+      travelGuys: q.api.model().labor[tIdxQ].guys,
+      travelGuysBox: boxOf(q, '[data-lab="' + tIdxQ + '"][data-k="guys"]'),
+      hint: need(q, '[data-hint-trv="lodging"]').textContent };
+
+    // A SAVED bid on auto opens unchanged: its nights follow the man-days as they always did.
+    const SAVEDQ = { version: 2, takeoff: clone(MODEL.takeoff),
+      labor: [{ id: "polishing", label: "Polishing", guys: 3, days: 5, rate: 33 },
+              { id: "mockup", label: "Mock-up", guys: 3, days: 0.5, rate: 33 },
+              { id: "travel", label: "Travel Labor", guys: "", days: 5, rate: 33, unit: "hours", guys_auto: true }],
+      conditions: Object.assign(clone(MODEL.conditions), { local: false }),
+      travel: { lodging: { label: "Lodging", enabled: true, qty: 16.5, qty_auto: true, rate: 70 },
+                per_diem: { label: "Per Diem", enabled: true, qty: 16.5, qty_auto: true, rate: 45 } },
+      contingency: 0, fees: 0, totals: {} };
+    const svq = build({ blob: blob({ polish_estimate: clone(SAVEDQ) }), labor: LIBQ, laborCalc: CALCQ, markupRules: RULESQ });
+    await svq.api.init(); svq.api.go(1);
+    const svm = svq.api.model();
+    const tIdx = svm.labor.findIndex((r) => r.id === "travel");
+    const savedAuto = { nights: svm.travel.lodging.qty, auto: svm.travel.lodging.qty_auto,
+      perDiem: svm.travel.per_diem.qty, nightsBox: boxOf(svq, '[data-trv="lodging"][data-k="qty"]'),
+      guys: svm.labor[tIdx].guys, guysAuto: svm.labor[tIdx].guys_auto,
+      guysBox: boxOf(svq, '[data-lab="' + tIdx + '"][data-k="guys"]'),
+      hours: svm.labor[tIdx].days, travel: svq.api.bid().travel,
+      expectedTravel: B.travelCosts(SAVEDQ.travel, SAVEDQ.labor).total,
+      hint: need(svq, '[data-hint-trv="lodging"]').textContent,
+      fetched: svq.rec.fetches.some((u) => /\/labor/.test(u)) };
+    // ...and typing over it leaves auto, exactly as before.
+    typeInto(svq, '[data-trv="lodging"][data-k="qty"]', "3");
+    savedAuto.afterTyping = { auto: svq.api.model().travel.lodging.qty_auto, qty: svq.api.model().travel.lodging.qty };
+
+    // A line ADDED FROM THE POP-UP: empty Guys and Days, the line's own rate.
+    await openLaborPopup(q);
+    tick(q, "lab:lab-saw");
+    pressAdd(q);
+    const addedIdx = q.api.model().labor.length - 1;
+    const added = q.api.model().labor[addedIdx];
+    const addedLine = { id: added.id, guys: added.guys, days: added.days, rate: added.rate, auto: !!added.guys_auto,
+      guysBox: boxOf(q, '[data-lab="' + addedIdx + '"][data-k="guys"]'),
+      daysBox: boxOf(q, '[data-lab="' + addedIdx + '"][data-k="days"]'),
+      rateBox: boxOf(q, '[data-lab="' + addedIdx + '"][data-k="rate"]') };
+    // The library's hours default that asks for guys_auto, added from the pop-up, is empty too.
+    const viaLib = B.laborRowFromLibrary(LIBQ[4], 40);
+    out.qtyEmpty = { cards: cards, travelBoxes: travelBoxes, openState: openState, nightsEmpty: nightsEmpty,
+      nightsTwo: nightsTwo, afterCrew: afterCrew, savedAuto: savedAuto, addedLine: addedLine,
+      viaLib: { guys: viaLib.guys, days: viaLib.days, auto: viaLib.guys_auto, rate: viaLib.rate },
+      travelRow: clone(q.api.model().labor[tIdxQ]) };
   }
 
   console.log(JSON.stringify(out));

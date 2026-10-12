@@ -575,7 +575,9 @@ def test_a_rate_that_arrives_as_a_string_still_reads_as_money(ran):
         "a rate that came back as a string is not rendered as money, so it reads as unpriced")
     assert s["notTheRawString"], "the raw string is printed into the cell"
     assert s["guysAutoIsExplained"], (
-        "a line whose man-days come off the crew rows does not say so")
+        "a guys_auto line does not say it is typed on a new estimate and only older ones follow the crew")
+    assert s["noFillPromise"], (
+        "the Defaults list still says man-days come off the crew rows, but a new estimate opens empty")
 
 
 @needs_node

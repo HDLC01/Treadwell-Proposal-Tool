@@ -3,7 +3,9 @@
 A far job whose Travel Labor row is switched off must say so, or the note reads "Travel Labor ...
 come on" and then "Travel Labor: off, $0" with nothing in between. And once the miles are cleared
 the seeded drive hours stay priced, so the note must not still claim "round trip at 60 mph" with
-no distance behind it. Runs the real engine through travel-how-harness.js.
+no distance behind it. Only a bid SAVED while the distance filled the hours carries that marker
+(since 2026-10-12 the distance fills none), so the harness builds one. Runs the real engine through
+travel-how-harness.js.
 """
 import json
 import pathlib
