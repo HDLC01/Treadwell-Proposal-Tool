@@ -188,6 +188,60 @@ def test_a_polish_bid_and_an_epoxy_bid_have_no_whole_bid_card_and_read_as_they_d
     assert s["epoxyLaborHasTravelBlock"] is True
 
 
+# ── a saved job whose type is switched on the intake ─────────────────────────────────────────────
+# The intake's job-type radio stays open once an estimate exists, so a saved Epoxy, Polish or Combo bid can be switched.
+# The bid must follow the job type: before this, Epoxy to Combo kept pricing Epoxy alone (the Polish root stayed off),
+# Polish to Combo added an Epoxy section with no crew row, and Combo to Polish went on pricing both sections.
+def _digits(figure):
+    return int(figure.replace("$", "").replace(",", ""))
+
+
+def test_a_saved_epoxy_job_switched_to_combo_turns_the_polish_section_back_on(page):
+    s = page["switched"]["epoxyToCombo"]
+    assert s["kinds"] == [["Polish", "base"], ["Epoxy", "base"]]
+    assert s["strip"] == ['data-section-tab="Polish"', 'data-section-tab="Epoxy"']
+    assert s["bar"] == s["handBar"] and s["barOnOpen"] == s["bar"], "the bar is the saved job priced by hand, both sections"
+
+
+def test_that_switch_is_saved_once_with_both_sections_so_the_proposal_never_sees_the_old_job(page):
+    s = page["switched"]["epoxyToCombo"]
+    assert s["savesOnOpen"] == 0 and s["saves"] == 1, "the page opens quietly and arms exactly one save"
+    assert s["savedPricedTabs"] == [["Polish", "base"], ["Epoxy", "base"]]
+    assert s["savedLump"] == _digits(s["bar"])
+    again = page["switched"]["epoxyToComboReopen"]
+    assert again["saves"] == 0 and again["armed"] == 0, "the switched bid, reopened, writes nothing"
+
+
+def test_a_saved_polish_job_switched_to_combo_gets_an_epoxy_section_with_its_crew_row(page):
+    s = page["switched"]["polishToCombo"]
+    assert s["kinds"] == [["Polish", "base"], ["Epoxy", "base"]]
+    assert s["epoxyLabor"] == ["epoxy-install"], "the new section is crewed from the library like a new combo's"
+    assert s["epoxyTakeoff"] == [[6000, "SF"], [300, "LF"]]
+    assert s["bar"] == s["handBar"] and s["saves"] == 1 and s["savesOnOpen"] == 0
+    assert s["savedPricedTabs"] == [["Polish", "base"], ["Epoxy", "base"]]
+
+
+def test_a_saved_combo_job_switched_to_polish_prices_polish_alone_and_keeps_the_epoxy_rows(page):
+    sw = page["switched"]
+    s = sw["comboToPolish"]
+    assert s["kinds"] == [["Polish", "base"], ["Epoxy", "off"]]
+    assert s["strip"] == [], "a job with one section has no section strip"
+    assert s["bar"] == s["handBar"] and _digits(s["bar"]) < _digits(sw["comboBefore"])
+    assert s["savedPricedTabs"] == [["Polish", "base"]] and s["savedLump"] == _digits(s["bar"])
+    back = sw["comboToPolishAndBack"]
+    assert back["kinds"] == [["Polish", "base"], ["Epoxy", "base"]] and back["bar"] == sw["comboBefore"]
+    assert back["epoxyTakeoff"] == [["5500", "SF"], [300, "LF"]], "switching away and back loses no row"
+
+
+def test_sections_for_job_follows_the_job_type_both_ways_and_leaves_a_plain_polish_bid_alone(page):
+    m = page["switchModel"]
+    assert m["epoxyToCombo"] == [["Polish", "base"], ["Epoxy", "base"]] and m["carrier"] == "Polish"
+    assert m["rootKindAfterCombo"] == "none", "the root's off is lifted, not replaced by a stamp a Polish bid never had"
+    assert m["comboToPolish"] == [["Polish", "base"], ["Epoxy", "off"]] and m["rowsKept"] is True
+    assert m["plainPolishUnchanged"] is True
+    assert m["toAdd"] == [["Epoxy"], [], [], []]
+
+
 # ── the document ─────────────────────────────────────────────────────────────────────────────────
 def _document(page):
     import test_price_block_reconciles as R
@@ -244,6 +298,20 @@ PAGE_BREAKS = {
     "the whole bid card is not repainted on a keystroke": (
         "js/polish-estimate.js", "    repaintJob();", "    void 0;",
         lambda r: r["review"]["afterContingency"]["job"] != r["review"]["afterContingency"]["handJob"]),
+    "a saved Epoxy job switched to Combo keeps the Polish root off": (
+        "js/bid-model.js", '    if (needsRoot && out.kind === "off") { out = Object.assign({}, out); delete out.kind; }',
+        "    void 0;",
+        lambda r: r["switched"]["epoxyToCombo"]["kinds"] != [["Polish", "base"], ["Epoxy", "base"]]),
+    "a saved Combo job switched to Polish keeps Epoxy as a base": (
+        "js/bid-model.js", 'isObject(s) && s.kind === "base";', 'isObject(s) && s.kind === "never";',
+        lambda r: r["switched"]["comboToPolish"]["kinds"] != [["Polish", "base"], ["Epoxy", "off"]]),
+    "a section added to a saved bid is not crewed": (
+        "js/polish-estimate.js", "    var laborDefaults = (newBid || addsSection) ? loadLaborDefaults() : null;",
+        "    var laborDefaults = newBid ? loadLaborDefaults() : null;",
+        lambda r: r["switched"]["polishToCombo"]["epoxyLabor"] != ["epoxy-install"]),
+    "a switched job type is never saved": (
+        "js/polish-estimate.js", "    if (restructured) saveSoon();", "    void 0;",
+        lambda r: r["switched"]["epoxyToCombo"]["saves"] != 1),
     "every section draws the travel block": (
         "js/polish-estimate.js", "    try { return B.travelCarrier(ROOT) === activeTab; } catch (err) { return true; }",
         "    return true;",

@@ -3207,18 +3207,27 @@
     // landed. Null, not an empty array, for "not asked": an empty array is a real answer (the
     // table exists and holds nothing) and the two must not be confused.
     var savedEstimate = state.polish_estimate;
-    var laborDefaults = B.laborUnstated(savedEstimate) ? loadLaborDefaults() : null;
+    var newBid = B.laborUnstated(savedEstimate);
+    // A SAVED BID WHOSE JOB TYPE MOVED (Polish to Combo) is given a new section, and a new section is crewed
+    // from the library like any other, so the library's labor lines and the calculator's modes are asked for
+    // it too. Nothing else the defaults carry (travel rates, the fees default, the distance) is asked: those
+    // belong to a new bid, and the root keeps the rows it was saved with.
+    var jobType = state.work_type;
+    var jobSections = T.isJobType(jobType) && T.jobType(jobType).ready === true &&
+      (jobType !== "polish" || B.sectionsLeaving(ROOT, jobType).length > 0);
+    var addsSection = jobSections && B.sectionsToAdd(ROOT, jobType).length > 0;
+    var laborDefaults = (newBid || addsSection) ? loadLaborDefaults() : null;
     // The company labor rate is read for EVERY bid, a saved one included: it is only APPLIED to a
     // new bid (the laborDefaults gate below), but "Default $X" under a rate needs it on any.
     var laborRate = loadLaborRate();
     // Lodging and Per Diem rates ride the same gate as the labor defaults: a NEW bid copies them
     // from Items & Assemblies -> Labor once; a saved bid keeps the rates it was saved with.
-    var travelRates = laborDefaults ? loadTravelRates() : null;
+    var travelRates = newBid ? loadTravelRates() : null;
     // The Labor Calculator's per-line modes: same gate again -- a NEW bid fills its default labor
     // from them, a saved bid is never recomputed.
     var laborCalc = laborDefaults ? loadLaborCalc() : null;
     // The Fees + Textura default: same gate, a NEW bid's D77 starts at it.
-    var feesDefault = laborDefaults ? loadFeesDefault() : null;
+    var feesDefault = newBid ? loadFeesDefault() : null;
 
     // THE CONDITION DEFAULTS, ON THE SAME TERMS AND WITH A STRICTER GATE. B.conditionsUnstated is
     // true only when NOTHING has ever been saved for this estimate, because Hanz's rule for this
@@ -3295,9 +3304,12 @@
       // the seeding below, so the new section is given the library's defaults like any other new one. The Markups
       // rules filed today are kept on it as text (B.activateSection), and no later edit to them moves this bid.
       // A job type that is Polish, or that Estimating Tool v2 cannot price yet, adds nothing.
-      var jobType = state.work_type;
-      var jobSections = T.isJobType(jobType) && jobType !== "polish" && T.jobType(jobType).ready === true;
+      // A saved bid whose job type moved is brought to the new one here too (Epoxy to Combo turns the Polish root
+      // back on, Combo to Polish marks the Epoxy section off, its rows kept), and is saved once because what the
+      // draft holds is behind what the page shows. A Polish bid with no other sections adds and changes nothing.
+      var sectionsBefore = JSON.stringify(ROOT);
       if (jobSections) ROOT = B.sectionsForJob(ROOT, jobType, { rules: await loadMarkupRules() });
+      var restructured = !newBid && JSON.stringify(ROOT) !== sectionsBefore;
       ROOT = B.seedNewSections(ROOT, {
       saved: savedEstimate,
       laborRows: libraryLaborRows,
@@ -3319,6 +3331,7 @@
     // The model was replaced above (the seeding hands back a new one), so the panels' view of it is made again.
     show(openingTab());
     followSf = B.takeoffSf(M.takeoff);
+    if (restructured) saveSoon();
     // THE TAKEOFF TOTAL IS polish_sf, SO MAKE THE DRAFT SAY SO NOW. Two ways the draft can be
     // behind the model this page just opened with: (1) seeding filled rows in memory only, so
     // polish_sf held System 1 alone and computed_bid held nothing until the first edit; (2) the
@@ -3351,7 +3364,7 @@
     // DISTANCE, AFTER THE PAINT AND NEVER AWAITED: a slow or dead map service costs the page
     // nothing. Only a NEW bid asks by itself (the same gate as the defaults above); a saved bid
     // keeps what it was saved with and offers the button. See lookupDistance.
-    if (laborDefaults && !M.distance) lookupDistance(false);
+    if (newBid && laborDefaults && !M.distance) lookupDistance(false);
   }
 
   init();

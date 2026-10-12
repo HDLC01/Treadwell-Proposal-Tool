@@ -2644,14 +2644,61 @@
     var out = model;
     var baseTabs = tabs.map(function (key) { return types.tab(key); });
     var needsRoot = baseTabs.some(function (rec) { return rec.sheets.indexOf(ROOT_TAB) >= 0; });
+    var wanted = [];
     baseTabs.forEach(function (rec) {
       var id = rec.sheets[0];
       if (id === ROOT_TAB) return;
-      if (isObject(out.tabs) && has.call(out.tabs, id)) return;
+      wanted.push(id);
+      if (isObject(out.tabs) && has.call(out.tabs, id)) {
+        // A saved bid whose job type moved back to this tab: the section was marked off when it left, and its
+        // rows are kept, so bringing it back is only turning it on.
+        if (isObject(out.tabs[id]) && out.tabs[id].kind === "off") out = withSectionKind(out, id, "base");
+        return;
+      }
       out = activateSection(out, id, "base", ctx);
     });
+    // A saved bid whose job type moved to one that does not use a base section it has: that section is marked
+    // off, never deleted, so the estimator's rows survive a switch back.
+    sectionsLeaving(out, jobType).forEach(function (id) { out = withSectionKind(out, id, "off"); });
     if (!needsRoot && out.kind !== "off") out = Object.assign({}, out, { kind: "off" });
+    // The root is part of this job type again (a saved Epoxy bid switched to Combo or Polish): only its "off" is
+    // lifted. The key is dropped rather than written as "base", so a bid that never left Polish saves as it did.
+    if (needsRoot && out.kind === "off") { out = Object.assign({}, out); delete out.kind; }
     return out;
+  }
+
+  /** The base sections a model has that a job type does not use, and that Estimating Tool v2 can price (a job
+   *  type that is ready): the ones sectionsForJob marks off. An option stays an option, and a section v2 cannot
+   *  price (Gyp, today) is never touched. Reads only, and never throws. */
+  function sectionsLeaving(model, jobType) {
+    if (!isObject(model) || !isObject(model.tabs) || !types.jobType(jobType)) return [];
+    var mine = types.tabsFor(jobType).map(function (key) { return types.tab(key).sheets[0]; });
+    var ready = [];
+    types.jobTypeKeys().forEach(function (k) {
+      if (types.jobType(k).ready === true) types.tabsFor(k).forEach(function (key) { ready.push(types.tab(key).sheets[0]); });
+    });
+    return Object.keys(model.tabs).filter(function (id) {
+      var s = model.tabs[id];
+      return id !== ROOT_TAB && mine.indexOf(id) < 0 && ready.indexOf(id) >= 0 && isObject(s) && s.kind === "base";
+    });
+  }
+
+  /** A NEW model with one existing section's kind changed. The section's rows are the same objects' contents. */
+  function withSectionKind(model, tabId, kind) {
+    var out = jsonCopy(model);
+    out.tabs = copyInto(copyInto({}, out.tabs), Object.fromEntries([[tabId, Object.assign({}, model.tabs[tabId], { kind: kind })]]));
+    return out;
+  }
+
+  /** The tabs sectionsForJob would ADD to this model for a job type: the base tabs it has no section for yet.
+   *  The estimate page asks it before it loads the library, because a section added to a SAVED bid is a new
+   *  section and is given the library's crew like one. [] for a job type that is not ready. */
+  function sectionsToAdd(model, jobType) {
+    var job = types.jobType(jobType);
+    if (!isObject(model) || !job || job.ready !== true) return [];
+    return types.tabsFor(jobType).map(function (key) { return types.tab(key).sheets[0]; }).filter(function (id) {
+      return id !== ROOT_TAB && !(isObject(model.tabs) && has.call(model.tabs, id));
+    });
   }
 
   function takeoffStated(rows) {
@@ -3218,7 +3265,7 @@
     ROOT_TAB: ROOT_TAB, SECTION_KINDS: SECTION_KINDS, sectionsOf: sectionsOf, activeSections: activeSections,
     sectionOf: sectionOf, isNewSection: isNewSection, travelCarrier: travelCarrier,
     // Phase 12: the model as a panel sees one section, and the sections a job type is made of.
-    SECTION_KEYS: SECTION_KEYS, sectionView: sectionView, sectionsForJob: sectionsForJob,
+    SECTION_KEYS: SECTION_KEYS, sectionView: sectionView, sectionsForJob: sectionsForJob, sectionsToAdd: sectionsToAdd, sectionsLeaving: sectionsLeaving,
     priceSection: priceSection, priceTabs: priceTabs, activateSection: activateSection,
     seedNewSections: seedNewSections, syncAutoGuys: syncAutoGuys,
     composePricingSnapshot: composePricingSnapshot, sectionSwitcherHtml: sectionSwitcherHtml,

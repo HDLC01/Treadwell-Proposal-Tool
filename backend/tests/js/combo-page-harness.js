@@ -283,6 +283,76 @@ async function main() {
     carrier: B.travelCarrier(m), sameAgain: JSON.stringify(B.sectionsForJob(m, "combo", {})) === JSON.stringify(m),
     rootKindWritten: m.kind === undefined ? "none" : m.kind,
   };
+
+  // ── 10. a SAVED job whose type is switched on the intake: the bid follows the job type ──
+  // Each starting bid is a real saved one (worked on the page, then read back from the draft), so the switch is made on
+  // what a draft holds. The rest of each fact is the page after it opened: the strip, the bar, the crew, the saves.
+  const workedBid = async (workType, extra, fill) => {
+    const w = await open(P.blob(Object.assign({ work_type: workType }, extra)));
+    fill(w);
+    w.api.changed(false);
+    w.clock.fire();
+    return clone(w.store.blob);
+  };
+  const crewOn = (w, id, guys, days) => {
+    const at = w.api.model().labor.findIndex((r) => r.id === id);
+    P.typeInto(w, '[data-lab="' + at + '"][data-k="guys"]', guys);
+    P.typeInto(w, '[data-lab="' + at + '"][data-k="days"]', days);
+  };
+  const epoxyDraft = await workedBid("epoxy", { system_1_sf: 6000, cove_1_lf: 300,
+    polish_estimate: { version: 2, conditions: { taxable: true, prevailing_wage: false, remodel_tax: false, dye: false, joint_filler: false, remove_existing_jf: false } } },
+  (w) => { w.api.go(0); w.api.setAssembly(0, flake.name); w.api.setAssembly(1, cove.name); w.api.changed(true); w.api.go(1); crewOn(w, "epoxy-install", "3", "9"); });
+  const polishDraft = await workedBid("polish", { polish_sf: 10000,
+    polish_estimate: { version: 2, conditions: { taxable: true, prevailing_wage: false, remodel_tax: false, dye: false, joint_filler: false, remove_existing_jf: false } } },
+  (w) => { w.api.go(0); w.api.setAssembly(0, polishAsm.name); w.api.changed(true); w.api.go(1); crewOn(w, "polishing", "3", "5"); });
+  const comboDraftSaved = clone(b.store.blob);
+
+  const snap = (w) => {
+    const m = w.api.model();
+    const last = w.rec.saves.length ? w.rec.saves[w.rec.saves.length - 1] : null;
+    const shown = last ? clone(last.polish_estimate) : clone(m);
+    return {
+      bar: text(w, "bid-total"), strip: (html(w, "sections").match(/data-section-tab="([^"]*)"/g) || []),
+      kinds: B.sectionsOf(m).map((e) => [e.tab, e.kind]), saves: w.rec.saves.length,
+      handBar: money((() => { const h = byHand(shown, undefined); return B.activeSections(shown).reduce((t, e) => t + (e.root ? h.polish.total : h.epoxy.total), 0); })()),
+      epoxyLabor: m.tabs && m.tabs.Epoxy ? m.tabs.Epoxy.labor.map((r) => r.id) : null,
+      epoxyTakeoff: m.tabs && m.tabs.Epoxy ? clone(m.tabs.Epoxy.takeoff).map((r) => [r.measurement, r.unit]) : null,
+      savedPricedTabs: last ? (last.priced_tabs || []).map((t) => [t.id, t.kind]) : null,
+      savedLump: last ? last.proposal_lump_sum : null,
+    };
+  };
+  const switched = async (draft, to) => {
+    const w = await open(Object.assign(clone(draft), to));
+    const before = snap(w);   // what is on screen the moment it opens
+    w.clock.fire();           // and what the one save the switch arms writes
+    return { w: w, got: Object.assign(snap(w), { barOnOpen: before.bar, savesOnOpen: before.saves }) };
+  };
+  const toCombo = Object.assign({ work_type: "combo", polish_sf: 10000, system_1_sf: 6000, cove_1_lf: 300 });
+  const eToC = await switched(epoxyDraft, toCombo);
+  const pToC = await switched(polishDraft, toCombo);
+  const cToP = await switched(comboDraftSaved, { work_type: "polish" });
+  // the switched bid is the one saved: reopening it writes nothing, and a second switch back and forth keeps the rows
+  const eToCReopen = await open(clone(eToC.w.store.blob));
+  const cToPBack = await switched(clone(cToP.w.store.blob), { work_type: "combo" });
+  out.switched = {
+    epoxyToCombo: eToC.got, polishToCombo: pToC.got, comboToPolish: cToP.got,
+    epoxyToComboReopen: { saves: eToCReopen.rec.saves.length, armed: eToCReopen.clock.armed(), kinds: B.sectionsOf(eToCReopen.api.model()).map((e) => [e.tab, e.kind]) },
+    comboToPolishAndBack: { kinds: cToPBack.got.kinds, bar: cToPBack.got.bar, epoxyTakeoff: cToPBack.got.epoxyTakeoff },
+    comboBefore: text(b, "bid-total"),
+    polishBase: B.activeSections(polishDraft.polish_estimate).length, epoxyBase: B.activeSections(epoxyDraft.polish_estimate).length,
+  };
+  // the model path: switching does not lose rows, and a polish job with no other section is left exactly as it was
+  const mEpoxy = B.sectionsForJob(B.freshModel(), "epoxy", {});
+  const mCombo = B.sectionsForJob(mEpoxy, "combo", {});
+  const mPolish = B.sectionsForJob(mCombo, "polish", {});
+  const plain = B.freshModel();
+  out.switchModel = {
+    epoxyToCombo: B.sectionsOf(mCombo).map((e) => [e.tab, e.kind]), carrier: B.travelCarrier(mCombo),
+    comboToPolish: B.sectionsOf(mPolish).map((e) => [e.tab, e.kind]), rowsKept: !!mPolish.tabs.Epoxy && mPolish.tabs.Epoxy.takeoff.length === mCombo.tabs.Epoxy.takeoff.length,
+    rootKindAfterCombo: mCombo.kind === undefined ? "none" : mCombo.kind,
+    plainPolishUnchanged: B.sectionsForJob(plain, "polish", {}) === plain,
+    toAdd: [B.sectionsToAdd(plain, "combo"), B.sectionsToAdd(mCombo, "combo"), B.sectionsToAdd(plain, "polish"), B.sectionsToAdd(plain, "gyp")],
+  };
   return out;
 }
 
