@@ -57,16 +57,20 @@ const IS = require(path.join(ROOT, "js", "intake-scope.js"));
 const COUNTY_SRC = read(path.join(ROOT, "js", "county-picker.js"));
 
 /** The REAL work-types.js and intake-scope.js, evaluated from source with the named job types set to
- *  `ready: true`. This is how "a later phase enables a type by flipping data, not code" is executed: nothing
- *  else in the files changes, so whatever the page does with the flipped type it does from the data. */
-function vocabularyWith(readyKeys) {
+ *  `ready: true` (readyKeys) or `ready: false` (notReadyKeys). This is how "a later phase enables a type by flipping
+ *  data, not code" is executed: nothing else in the files changes, so whatever the page does with the flipped type it
+ *  does from the data. Every job type is ready now (Gyp was the last, Phase 14), so the not-ready case is the one a
+ *  test has to make: it marks Gyp not ready and the page must go on treating a type that is not ready as one. */
+function vocabularyWith(readyKeys, notReadyKeys) {
   let wsrc = read(path.join(ROOT, "js", "work-types.js"));
-  readyKeys.forEach((k) => {
+  const flip = (keys, from, to) => keys.forEach((k) => {
     if (!/^[a-z]+$/.test(k)) throw new Error("a job type key is lower-case letters: " + k);
-    const re = new RegExp('(key: "' + k + '",[^\n]*ready: )false');
-    if (!re.test(wsrc)) throw new Error("no not-ready job type " + k + " in work-types.js");
-    wsrc = wsrc.replace(re, "$1true");
+    const re = new RegExp('(key: "' + k + '",[^\n]*ready: )' + from);
+    if (!re.test(wsrc)) throw new Error("no job type " + k + " with ready: " + from + " in work-types.js");
+    wsrc = wsrc.replace(re, "$1" + to);
   });
+  flip(readyKeys || [], "false", "true");
+  flip(notReadyKeys || [], "true", "false");
   const load = (src, req) => {
     const mod = { exports: {} };
     new Function("module", "exports", "require", "self", src)(mod, mod.exports, req, {});
@@ -440,7 +444,8 @@ function build(opts) {
 
   const clock = makeClock();
   const winListeners = [];
-  const vocab = opts.fakeReady ? vocabularyWith(opts.fakeReady) : { W: W, IS: IS };
+  const vocab = (opts.fakeReady || opts.fakeNotReady)
+    ? vocabularyWith(opts.fakeReady, opts.fakeNotReady) : { W: W, IS: IS };
   const win = {
     TWAuth: { ready: Promise.resolve() },
     // The REAL pricing core, under the real global name. The page's own
@@ -1308,20 +1313,26 @@ out.engineMoves = (function () {
       radios: radios(b), note: noteOf(b), current: b.api.jobType(),
       savedOnOpen: b.rec.saves.length, armedOnOpen: b.clock.armed(),
     };
-    const markupBefore = b.dom.nodes["job-type"].innerHTML;
+    // EVERY JOB TYPE IS READY NOW (Gyp was the last, Phase 14), so a type that is not ready has to be made: the same
+    // page, with a vocabulary that marks Gyp not ready. It is shown and disabled with the plain note, a click or a key
+    // on it does nothing, and nothing is saved.
+    const d = build({ fakeNotReady: ["gyp"] });
+    await d.api.boot();
+    const markupBefore = d.dom.nodes["job-type"].innerHTML;
     const attempts = {};
     ["gyp", "seal", "leveling", "nonsense", ""].forEach((key) => {
-      jobClick(b, key, 1);                    // the mouse
-      jobClick(b, key, 0);                    // the keyboard
-      attempts[key || "(empty)"] = { current: b.api.jobType(), armed: b.clock.armed(), saves: b.rec.saves.length };
+      jobClick(d, key, 1);                    // the mouse
+      jobClick(d, key, 0);                    // the keyboard
+      attempts[key || "(empty)"] = { current: d.api.jobType(), armed: d.clock.armed(), saves: d.rec.saves.length };
     });
     out.jobTypes.disabledClicks = {
-      attempts: attempts, markupUnchanged: b.dom.nodes["job-type"].innerHTML === markupBefore,
+      attempts: attempts, markupUnchanged: d.dom.nodes["job-type"].innerHTML === markupBefore,
     };
+    out.jobTypes.notReady = { radios: radios(d), note: noteOf(d), current: d.api.jobType() };
 
-    // The same page, with a vocabulary that also marks Gyp ready (Epoxy has been since Phase 12 and Combo since Phase 13):
-    // nothing in the page changes.
-    const f = build({ fakeReady: ["gyp"] });
+    // The page as it ships: Gyp is ready, so a click on it picks it and saves it, and a name that is not a job type is
+    // still refused.
+    const f = build({});
     await f.api.boot();
     out.jobTypes.fakeReady = { radios: radios(f), note: noteOf(f), before: f.api.jobType() };
     jobClick(f, "gyp", 1);
@@ -1338,10 +1349,15 @@ out.engineMoves = (function () {
                      county_notes: "KCK, Bonner Springs." };
     const none = build({ blob: blob(picked) });                  // no work_type at all
     await none.api.boot();
-    const combo = build({ blob: blob(Object.assign({ work_type: "gyp" }, picked)) });
+    const combo = build({ blob: blob(Object.assign({ work_type: "gyp" }, picked)), fakeNotReady: ["gyp"] });
     await combo.api.boot();
+    const realGyp = build({ blob: blob(Object.assign({ work_type: "gyp" }, picked)) });
+    await realGyp.api.boot();
     const realCombo = build({ blob: blob(Object.assign({ work_type: "combo" }, picked)) });
     await realCombo.api.boot();
+    // THE GYPSUM BOX (Phase 14): the live intake's three area boxes, shown for a Gyp job and hidden for the rest, with
+    // the two-system block the other way round.
+    const gypBox = (x) => ({ gyp: x.dom.nodes["gyp-sf-container"].style.display, systems: x.dom.nodes["systems-container"].style.display });
     const noneOpenSaves = none.rec.saves.length;
     none.api.save();
     out.jobTypes.savedDrafts = {
@@ -1351,6 +1367,9 @@ out.engineMoves = (function () {
       combo: { current: combo.api.jobType(), checked: radios(combo).filter((r) => r.checked).map((r) => r.value),
                county: readCountyField(combo).input, savedOnOpen: combo.rec.saves.length,
                armedOnOpen: combo.clock.armed() },
+      gypBoxes: { gypJob: gypBox(realGyp), polishJob: gypBox(none) },
+      readyGyp: { current: realGyp.api.jobType(), checked: radios(realGyp).filter((r) => r.checked).map((r) => r.value),
+                  savedOnOpen: realGyp.rec.saves.length, armedOnOpen: realGyp.clock.armed() },
       readyCombo: { current: realCombo.api.jobType(), checked: radios(realCombo).filter((r) => r.checked).map((r) => r.value),
                     savedOnOpen: realCombo.rec.saves.length, armedOnOpen: realCombo.clock.armed() },
     };

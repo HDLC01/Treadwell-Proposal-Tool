@@ -71,11 +71,11 @@ def live_rows(ran):
 # ══ 1. what the table says ═══════════════════════════════════════════════════════════════════════════
 def test_the_four_job_types_and_the_five_tabs_are_the_ones_the_tool_has(ran):
     """The live intake's four radios, in its order, and markup.TABS' five, in its order. Polish is ready, since
-    Phase 12 so is epoxy, and since Phase 13 so is combo: Estimating Tool v2 prices gyp nowhere yet."""
+    Phase 12 so is epoxy, since Phase 13 combo, and since Phase 14 gyp: all four job types are ready."""
     data = ran["data"]
     assert ran["keys"] == {"jobTypes": JOB_TYPES, "tabs": TABS}
     ready = {j["key"]: j["ready"] for j in data["JOB_TYPES"]}
-    assert ready == {"epoxy": True, "polish": True, "combo": True, "gyp": False}
+    assert ready == {"epoxy": True, "polish": True, "combo": True, "gyp": True}
     assert {j["key"]: j["tabs"] for j in data["JOB_TYPES"]} == {
         "epoxy": ["epoxy"], "polish": ["polish"], "combo": ["epoxy", "polish"], "gyp": ["gyp"]}
 
@@ -243,7 +243,9 @@ def test_a_sheet_belongs_to_one_tab_and_a_lookalike_belongs_to_none(ran):
 def test_the_table_cannot_be_edited_by_a_reader_and_the_readers_hand_out_copies(ran):
     for name, r in ran["frozen"].items():
         assert "threw" in r, "the table accepted an edit: %s" % name
-    assert ran["copies"]["cells"]["cells"] == ["Epoxy!B4", "Polish!B4"] and ran["copies"]["cells"]["on"] == "Yes"
+    # Local is a literal on four sheets: Epoxy!B4, Polish!B4 and (Phase 14) the Gyp base's B5 and Gyp (FR)'s own
+    assert ran["copies"]["cells"]["cells"] == ["Epoxy!B4", "Polish!B4", 'Gyp (USG 1-8")!B5', "Gyp (FR)!B5"] \
+        and ran["copies"]["cells"]["on"] == "Yes"
     assert ran["copies"]["row"] == "Local job" and ran["copies"]["rows"] == 8
     assert ran["copies"]["local"] is True and ran["copies"]["reserved"] == "dye"
 

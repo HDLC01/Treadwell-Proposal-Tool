@@ -39,7 +39,7 @@ TESTS = pathlib.Path(__file__).resolve().parent
 HARNESS = TESTS / "js" / "system2-areas-harness.js"
 
 FILES = ["polish-estimate.html", "js/polish-estimate.js", "js/bid-model.js", "js/library-core.js",
-         "js/work-types.js", "js/polish-sandbox.js", "js/library-picker.js", "js/epoxy-takeoff.js"]
+         "js/work-types.js", "js/polish-sandbox.js", "js/library-picker.js", "js/epoxy-takeoff.js", "js/gyp-takeoff.js"]
 
 
 def _run(frontend=FRONTEND):

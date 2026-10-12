@@ -53,7 +53,7 @@ def test_the_plan_is_the_same_every_time_and_ids_come_from_names(plan):
     for it in plan.as_dict()["items"]:
         assert re.fullmatch(r"wb-(epoxy|gyp)-[a-z0-9-]+", it["id"]), it["id"]
     for a in plan.as_dict()["assemblies"]:
-        assert re.fullmatch(r"wb-epoxy-(sys|primer|cove)-[a-z0-9-]+", a["id"]), a["id"]
+        assert re.fullmatch(r"wb-(epoxy-(sys|primer|cove)|gyp-area)-[a-z0-9-]+", a["id"]), a["id"]
     # an id is its name's slug, so renaming a product in the workbook is a NEW row and never an overwrite
     assert plan.items["wb-epoxy-glaze-4-125-sf-gallon"]["name"] == "Glaze #4, 125 SF/Gallon"
 
@@ -68,8 +68,12 @@ def test_the_counts_are_the_workbooks(plan):
     assert sum(a.startswith("wb-epoxy-cove-") for a in asm) == 12
     items = list(plan.items)
     assert sum(i.startswith("wb-epoxy-") for i in items) == 46
-    assert sum(i.startswith("wb-gyp-") for i in items) == 14
-    assert list(plan.labor) == ["epoxy-install"] and list(plan.labor_calc) == ["epoxy-install"]
+    # the Gyp tabs' 20 products: 3 bags (Levelrock 2500 and 3500, Treadstone FR25), 3 primers (USG, wood, Treadstone TP1),
+    # 2 ISO strips, tape, sand, and 10 sound mats (the USG and GrassWorx table's 7 and Gyp (FR)'s 3 Treadstone ones)
+    assert sum(i.startswith("wb-gyp-") for i in items) == 20
+    assert sum(a.startswith("wb-gyp-area-") for a in asm) == 3
+    assert set(plan.labor) == {"epoxy-install", "gyp-prepour", "gyp-prep", "gyp-mat", "gyp-pour", "gyp-unload"}
+    assert list(plan.labor_calc) == ["epoxy-install"], "the Gyp crew is priced by the hour and has no calculator line"
 
 
 # ── the rows are the library's own kind of row ───────────────────────────────

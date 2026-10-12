@@ -111,7 +111,10 @@
   const CONDITIONS = [
     { key: "local", label: "Local job", scope: ["epoxy", "polish", "combo", "gyp"],
       why: "Under 70 miles. Off means travel and lodging get added.",
-      def: true,  cells: ["Epoxy!B4", "Polish!B4"], on: "Yes", off: "No" },
+      // Local is a literal on four sheets: Epoxy!B4, Polish!B4, and on the Gyp tabs the base's B5 and Gyp (FR)'s
+      // own (the other three Gyp tabs mirror the base). Writing the Gyp cells is what keeps a non-local Gyp bid
+      // from pricing as local, which its lodging line reads (Estimating Tool v2, Phase 14).
+      def: true,  cells: ["Epoxy!B4", "Polish!B4", 'Gyp (USG 1-8")!B5', "Gyp (FR)!B5"], on: "Yes", off: "No" },
     // NO HARD BID. Hanz, 2026-10-03: "We also need to remove the hard bid discount. Even on
     // active projects and direct projects." The switch wrote Epoxy!B5/Polish!B5, the cell Kyle's
     // automatic 2.5% / 4% give-back reads; nothing may set it now (estimate_writer

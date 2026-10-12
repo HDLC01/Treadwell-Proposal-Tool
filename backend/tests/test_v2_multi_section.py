@@ -48,7 +48,7 @@ GOLDEN = TESTS / "fixtures" / "save_patch_golden.json"
 
 SCRATCH_FILES = ["polish-estimate.html", "js/polish-estimate.js", "js/bid-model.js", "js/bid-engine.js",
                  "js/bid-profiles.js", "js/markup-core.js", "js/library-core.js", "js/library-picker.js",
-                 "js/work-types.js", "js/excel-math.js", "js/epoxy-takeoff.js"]
+                 "js/work-types.js", "js/excel-math.js", "js/epoxy-takeoff.js", "js/gyp-takeoff.js"]
 
 
 def _run(script, frontend=FRONTEND):
@@ -144,7 +144,9 @@ def test_the_roots_profile_is_always_the_legacy_one_whatever_the_root_keys_say(r
 
 def test_the_page_prices_a_gyp_section_from_its_takeoff(ran):
     """The page's sectionMaterial answered a number for every tab. A Gyp section needs the gyp-split inputs,
-    so it gets them: a priced section with a material, and a combined price, never a $0 material."""
+    so it gets them (js/gyp-takeoff.js splits the takeoff into gypsum, extras, sand and sound mat): a priced
+    section with a material, and a combined price, never a $0 material. This section's one row is not an area, so
+    the sheet buys it as an extra."""
     g = ran["page"]["gypOnPage"]
     assert g["priceable"] is True and g["material"] > 0 and g["total"] > 0
     assert g["computed"] is True and g["lump"] > 0
@@ -175,8 +177,9 @@ def test_a_tab_sections_contingency_fees_and_labor_conditions_reach_its_own_pric
 
 def test_a_gyp_base_section_writes_its_area_and_a_base_tab_carries_travel_when_the_root_is_off(ran):
     p = ran["pins"]
-    assert p["gypArea"] == {"polish_sf": 10000, "gyp_soft_sf": 9000}
-    assert p["gypTabArea"] == {"gyp_soft_sf": 9000}
+    # a Gyp section's area line is its three areas (a row with no area mark is the soft surface's)
+    assert p["gypArea"] == {"polish_sf": 10000, "gyp_soft_sf": 9000, "gyp_hard_sf": 0, "gyp_corridor_sf": 0}
+    assert p["gypTabArea"] == {"gyp_soft_sf": 9000, "gyp_hard_sf": 0, "gyp_corridor_sf": 0}
     assert p["carrierRootOff"] == 'Gyp (USG 1-8")', "the first BASE section carries it, not the first section"
 
 
@@ -649,9 +652,9 @@ BREAKS = {
         "    out.proposal_sales_tax = ok ? sums.taxes : null;",
         lambda r: r["pins"]["taxes"]["sales"] != r["pins"]["taxes"]["rootSales"] + r["pins"]["taxes"]["epoxySales"]),
     "the gyp area is forgotten": (
-        "js/bid-model.js", '    if (e.role === "gyp") return { gyp_soft_sf: takeoffSf(rows) };',
+        "js/bid-model.js", '    if (e.role === "gyp") return gypAreaFields(rows);',
         '    if (e.role === "gyp") return {};',
-        lambda r: r["pins"]["gypArea"] != {"polish_sf": 10000, "gyp_soft_sf": 9000}),
+        lambda r: r["pins"]["gypArea"] != {"polish_sf": 10000, "gyp_soft_sf": 9000, "gyp_hard_sf": 0, "gyp_corridor_sf": 0}),
     "the travel carrier is the first section": (
         "js/bid-model.js", '    for (var i = 0; i < list.length; i++) if (list[i].kind === "base") return list[i].tab;',
         "    for (var i = 0; i < list.length; i++) if (i >= 0) return list[i].tab;",
@@ -669,8 +672,8 @@ BREAKS = {
         "      contingency: s.contingency, fees: 0, conditions: model.conditions,",
         lambda r: r["pins"]["feesMove"] is False),
     "the page hands a gyp section a plain number": (
-        "js/polish-estimate.js", '    if (entry.role === "gyp") return { gyp: sum, extras: 0, sand: 0, soundMat: 0, soundMatRolls: 0 };',
-        "    void 0;",
+        "js/polish-estimate.js", '    if (entry.role === "gyp" && G) {',
+        "    if (false) {",
         lambda r: r["page"]["gypOnPage"]["priceable"] is False or not r["page"]["gypOnPage"].get("material")),
     "the page saves without pricing its other sections": (
         "js/polish-estimate.js", "      return B.buildSavePatch(ROOT, now, priceCtx());",

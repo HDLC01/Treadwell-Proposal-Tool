@@ -729,7 +729,8 @@
   };
 
   // THE TABS. Which profile prices each of the eleven priced tabs, and the one thing that differs between
-  // tabs of a profile: a Gyp tab's truckload, in sound-mat rolls (Gyp (USG 1-8")!H36 and its copies). The
+  // tabs of a profile: a Gyp tab's truckload, in sound-mat rolls (Gyp (USG 1-8")!H36 and its copies), and its `label`,
+  // what the proposal calls the system (the tab's own A1: B16 and C16 of the sheet). The
   // oracle's `fixed.truckload` holds the same numbers, and backend/tests/test_bid_engine.py holds the two.
   var TAB_PROFILES = {
     "Epoxy": { profile: "epoxy" },
@@ -738,11 +739,11 @@
     "Seal (+Jnts)": { profile: "seal" },
     "Epoxy blank": { profile: "epoxy-blank" },
     "Leveling": { profile: "leveling" },
-    "Gyp (USG 1-8\")": { profile: "gyp", truckload: 280 },
-    "Gyp (USG N12ULTRA)": { profile: "gyp", truckload: 260 },
-    "Gyp (USG N25 1-4\")": { profile: "gyp", truckload: 208 },
-    "Gyp (GWorx SC190)": { profile: "gyp", truckload: 384 },
-    "Gyp (FR)": { profile: "gyp", truckload: 448 }
+    "Gyp (USG 1-8\")": { profile: "gyp", truckload: 280, label: 'N12 1/8" + 3/4" Gyp' },
+    "Gyp (USG N12ULTRA)": { profile: "gyp", truckload: 260, label: "N12 ULTRA + 3/4\" Gyp" },
+    "Gyp (USG N25 1-4\")": { profile: "gyp", truckload: 208, label: 'N25 1/4" + 1" Gyp' },
+    "Gyp (GWorx SC190)": { profile: "gyp", truckload: 384, label: "G-Worx SC 190 + 3/4\" Gyp" },
+    "Gyp (FR)": { profile: "gyp", truckload: 448, label: "Treadstone FR25 + R1 mat" }
   };
 
   /** What the Markups page shows as the built-in for each layout and for Global, as { layout: { line:

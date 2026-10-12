@@ -78,13 +78,25 @@ def test_the_four_job_types_are_drawn_from_the_vocabulary_in_its_order(ran):
 
 
 @needs_node
-def test_polish_is_selected_epoxy_and_combo_are_ready_and_gyp_is_disabled_with_a_plain_note(ran):
+def test_all_four_types_are_ready_and_polish_is_selected(ran):
+    """Gyp was the last to be enabled (Phase 14): with every type ready nothing is disabled and there is no note."""
     j = ran["jobTypes"]
     state = {r["value"]: (r["checked"], r["disabled"]) for r in j["radios"]}
     assert state == {"epoxy": (False, False), "polish": (True, False),
-                     "combo": (False, False), "gyp": (False, True)}, state
+                     "combo": (False, False), "gyp": (False, False)}, state
     assert j["current"] == "polish"
-    assert j["note"] == {"text": NOTE_TEXT, "hidden": False}, j["note"]
+    assert j["note"]["hidden"] is True, j["note"]
+
+
+@needs_node
+def test_a_type_that_is_not_ready_is_disabled_with_a_plain_note(ran):
+    """The mechanism is kept for the next type that waits: the same page and a vocabulary that marks Gyp not ready."""
+    n = ran["jobTypes"]["notReady"]
+    state = {r["value"]: (r["checked"], r["disabled"]) for r in n["radios"]}
+    assert state == {"epoxy": (False, False), "polish": (True, False),
+                     "combo": (False, False), "gyp": (False, True)}, state
+    assert n["current"] == "polish"
+    assert n["note"] == {"text": NOTE_TEXT, "hidden": False}, n["note"]
     assert "—" not in NOTE_TEXT and "–" not in NOTE_TEXT, "plain words: no dashes"
 
 
@@ -111,7 +123,7 @@ def test_a_disabled_type_cannot_be_picked_by_click_or_keyboard(ran):
     assert d["markupUnchanged"] is True
     # The browser half: the radio is disabled, so a real browser will not focus it, click it or reach it with
     # the arrow keys. The page's own refusal above is for a click that arrives some other way.
-    assert all(r["disabled"] for r in ran["jobTypes"]["radios"] if r["value"] not in ("polish", "epoxy", "combo"))
+    assert all(r["disabled"] for r in ran["jobTypes"]["notReady"]["radios"] if r["value"] not in ("polish", "epoxy", "combo"))
 
 
 # ── saved drafts open unchanged ─────────────────────────────────────────────────────────────────
@@ -123,9 +135,12 @@ def test_a_saved_draft_with_no_job_type_or_one_v2_cannot_price_opens_as_polish(r
         assert s[name]["current"] == "polish" and s[name]["checked"] == ["polish"], (name, s[name])
         assert s[name]["savedOnOpen"] == 0, "opening a saved draft wrote to it: " + name
     assert s["combo"]["armedOnOpen"] == 0
-    # (the draft keyed "combo" here is a Gyp one: Combo itself is ready since Phase 13 and opens as Combo)
+    # (the draft keyed "combo" here is a Gyp one opened on a vocabulary that marks Gyp not ready: Combo itself is
+    # ready since Phase 13 and opens as Combo, and Gyp is ready since Phase 14 and opens as Gyp)
     r = s["readyCombo"]
     assert r == {"current": "combo", "checked": ["combo"], "savedOnOpen": 0, "armedOnOpen": 0}, r
+    g = s["readyGyp"]
+    assert g == {"current": "gyp", "checked": ["gyp"], "savedOnOpen": 0, "armedOnOpen": 0}, g
     assert s["absent"]["saved"] == "polish", "a draft with no job type is saved as Polish"
 
 
@@ -157,8 +172,8 @@ def test_the_module_reads_the_vocabulary_for_what_is_pickable_and_what_a_draft_o
         throws: (() => { try { S.hiddenNames(""); return false; } catch (e) { return true; } })(),
       }));
     """ % json.dumps(str(FRONTEND / "js" / "intake-scope.js")))
-    assert got["pick"] == [True, True, True, False, False, False, False, False, False]
-    assert got["open"] == ["polish", "polish", "polish", "polish", "epoxy", "combo", "polish", "polish", "polish"]
+    assert got["pick"] == [True, True, True, True, False, False, False, False, False]
+    assert got["open"] == ["polish", "polish", "polish", "polish", "epoxy", "combo", "gyp", "polish", "polish"]
     assert got["hidden"] == ["system_1_sf", "cove_1_lf", "system_2_sf", "cove_2_lf",
                              "gyp_soft_sf", "gyp_hard_sf", "gyp_corridor_sf"]
     assert got["gypHidden"] == ["system_1_sf", "polish_sf", "cove_1_lf", "system_2_sf", "polish_2_sf", "cove_2_lf"]
@@ -219,7 +234,7 @@ MUTATIONS = {
         lambda r: r["jobTypes"]["disabledClicks"]["attempts"]["gyp"]["current"] != "polish"),
     "the radios are not disabled": (
         "js/intake-scope.js", """(c.ready ? "" : ' disabled title="' + esc(note) + '"')""", '""',
-        lambda r: not all(x["disabled"] for x in r["jobTypes"]["radios"] if x["value"] not in ("polish", "epoxy", "combo"))),
+        lambda r: not all(x["disabled"] for x in r["jobTypes"]["notReady"]["radios"] if x["value"] not in ("polish", "epoxy", "combo"))),
     "the page hard-codes polish as the one pickable type": (
         "js/intake-scope.js", "return workTypes.isJobType(key) && workTypes.jobType(key).ready === true;",
         'return key === "polish";',

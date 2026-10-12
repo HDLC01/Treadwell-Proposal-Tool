@@ -5,7 +5,9 @@ WHAT IT DOES. Reads backend/templates/estimate_sheet_5.7.xlsx and PLANS the libr
 materials priceable in Estimating Tool v2: the Epoxy tab's products (as library_items), its fifteen floor
 systems and six wall systems and its primers (as library_assemblies), the price sources its code-priced
 formulas read (a patch, the cove materials), one epoxy crew line (library_labor and library_labor_calc),
-and the Gyp tab's material products (library_items, price only: Phase 14 owns the Gyp formulas).
+and the Gyp tabs: their material products (library_items; the USG and GrassWorx ones from the first Gyp tab, the
+Treadstone ones from Gyp (FR)), the three area rows a Gyp takeoff is made of (library_assemblies) and the five crew
+lines priced by the hour (library_labor).
 
 DRY RUN IS THE DEFAULT. With no flag it prints the plan and writes nothing. `--apply --target staging`
 writes it, and nothing else is accepted: PRODUCTION IS NOT APPROVED (Hanz, 2026-10-12: staging only).
@@ -70,6 +72,10 @@ TEMPLATE_PATH = BACKEND / "templates" / "estimate_sheet_5.7.xlsx"
 
 EPOXY_SHEET = "Epoxy"
 GYP_SHEET = 'Gyp (USG 1-8")'
+GYP_FR_SHEET = "Gyp (FR)"
+# The five Gyp tabs, in the workbook's order. The plan reads the first and Gyp (FR); the others are loaded too so a
+# test can hold the code's presets to every one of them.
+GYP_SHEETS = [GYP_SHEET, "Gyp (USG N12ULTRA)", 'Gyp (USG N25 1-4")', "Gyp (GWorx SC190)", GYP_FR_SHEET]
 
 # What the staging database is, and how this script reaches it. The staging stack is a Postgres container
 # on the VPS (see the memory note on the staging data store). Nothing here names a password: the psql runs
@@ -111,7 +117,7 @@ def load(path: pathlib.Path = TEMPLATE_PATH) -> Dict[str, Sheet]:
         wf = openpyxl.load_workbook(path)
         wv = openpyxl.load_workbook(path, data_only=True)
     names = {n: d.attr_text for n, d in wf.defined_names.items()}
-    return {s: Sheet(s, wf[s], wv[s], names) for s in (EPOXY_SHEET, GYP_SHEET)}
+    return {s: Sheet(s, wf[s], wv[s], names) for s in [EPOXY_SHEET] + GYP_SHEETS}
 
 
 def _col_index(col: str) -> int:
@@ -531,39 +537,122 @@ def _plan_epoxy_labor(sh: Sheet, plan: Plan) -> None:
     }
 
 
-# ── Gyp: the material products, price only ───────────────────────────────────
-GYP_NOTE = "Seeded from Kyle's estimate workbook, Gyp (USG 1-8\") tab, cell %s. Price only: the yield by thickness is Phase 14."
+# ── Gyp: the products, the three areas of a takeoff, and the crew ────────────
+GYP_NOTE = "Seeded from Kyle's estimate workbook, %s tab, cell %s. A price source for js/gyp-takeoff.js: edit the price here, the formula is code."
+
+# The three areas a Gyp takeoff is made of. A row of each is a line of the takeoff; js/gyp-takeoff.js prices it (a
+# bag's yield depends on the thickness, which a library line cannot say), so the line listed here is the gypsum the
+# sheet reads its price from. `cell` is the sheet's own SF cell for the area.
+GYP_AREAS = [
+    ("wb-gyp-area-soft", "Gypsum: soft surfaces", "F23"),
+    ("wb-gyp-area-hard", "Gypsum: hard surfaces over the sound mat", "F24"),
+    ("wb-gyp-area-corridor", "Gypsum: corridors", "F25"),
+]
+
+# The five crew lines of the Gyp sheets, priced by the hour (A45:C49): the sheet's label, the name the library row
+# gets, and the guys the sheet puts on it. Guys and hours are the estimator's to type, so only the line and its rate
+# are seeded; the crew goes into the gap text.
+GYP_CREW = [
+    ("gyp-prepour", "Pre-pour", "Pre-Pours Hours", "A45"),
+    ("gyp-prep", "Prep, prime and seal", "Prep/Prime/Seal Hours", "A46"),
+    ("gyp-mat", "Mat time", "Mat Time Hours", "A47"),
+    ("gyp-pour", "Pour", "Pour Hours", "A48"),
+    ("gyp-unload", "Semi delivery unload", "Semi Delivery Unload Hours", "A49"),
+]
+
+
+def _gyp_item(plan: Plan, sheet: Sheet, id_: str, name: str, unit: str, addr: str, pack: float = 1.0,
+              coverage: Optional[float] = None, cost: Optional[float] = None) -> str:
+    """One Gyp product at the price its cell holds. `pack` is the units a purchase buys (a 53 gallon drum), so the
+    row's cost is the cell's value times the pack and a price per unit comes back exactly (891 / 53)."""
+    v = sheet.value(addr) if cost is None else cost
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        raise PlanError("%s!%s should hold the price of %s, found %r" % (sheet.name, addr, name, v))
+    return plan.add_item(_item(id_, name, unit, pack, _money4(float(v) * pack), coverage,
+                               "Gypsum Underlayment", "gyp", GYP_NOTE % (sheet.name, addr)))
+
+
+def _gyp_mats(plan: Plan, sh: Sheet, rows: Tuple[int, ...], name_col: str, price_col: str, sf_col: str,
+              seen: Dict[str, Tuple[float, float]]) -> None:
+    """The sound mats of one Gyp tab's table: a roll's price and the SF a roll covers. A mat that both tabs carry
+    (the GrassWorx ones) must say the same on both, or the plan stops."""
+    for r in rows:
+        name = sh.text("%s%d" % (name_col, r))
+        price, per_roll = sh.value("%s%d" % (price_col, r)), sh.value("%s%d" % (sf_col, r))
+        if not name or not isinstance(price, (int, float)) or not isinstance(per_roll, (int, float)):
+            raise PlanError("%s!%s%d:%s%d should hold a sound mat, its roll price and its roll size" % (
+                sh.name, name_col, r, sf_col, r))
+        label = "Sound mat %s, roll" % name
+        figures = (_money4(float(price)), float(per_roll))
+        if name in seen:
+            if seen[name] != figures:
+                raise PlanError("the sound mat %r is %r on one Gyp tab and %r on another" % (name, seen[name], figures))
+            continue                       # the same product on both tabs is one library row
+        seen[name] = figures
+        plan.add_item(_item("wb-gyp-" + _slug(label), label, "Roll", 1.0, figures[0], figures[1],
+                            "Gypsum Underlayment", "gyp", GYP_NOTE % (sh.name, "%s%d" % (price_col, r))))
 
 
 def plan_gyp(sheets: Dict[str, Sheet], plan: Plan) -> None:
     sh = sheets[GYP_SHEET]
-    plain = [
-        # (name, unit, price cell, label cell, what it is bought by)
-        ("Levelrock 2500, bag", "Bag", "T37"),
-        ("Levelrock 3500, bag", "Bag", "V37"),
-        ("USG primer, 53 gallon drum, per gallon", "Gallon", "D27"),
-        ("Wood primer, 5 gallon, per gallon", "Gallon", "T38"),
-        ("ISO strip, 3 inch adhesive roll", "Roll", "D28"),
-        ("Joint tape roll", "Roll", "D29"),
-        ("Sand, per ton", "Ton", "D33"),
-    ]
-    for name, unit, addr in plain:
-        v = sh.value(addr)
-        if isinstance(v, bool) or not isinstance(v, (int, float)):
-            raise PlanError("%s!%s should hold the price of %s, found %r" % (GYP_SHEET, addr, name, v))
-        plan.add_item(_item("wb-gyp-" + _slug(name), name, unit, 1.0, _money4(float(v)), None,
-                            "Gypsum Underlayment", "gyp", GYP_NOTE % addr))
-    # the sound mats: a price per roll and the square feet one roll covers (columns O, P, Q of rows 37-44)
-    for r in (37, 38, 39, 40, 42, 43, 44):
-        name = sh.text("O%d" % r)
-        price, per_roll = sh.value("P%d" % r), sh.value("Q%d" % r)
-        if not name or not isinstance(price, (int, float)) or not isinstance(per_roll, (int, float)):
-            raise PlanError("%s!O%d:Q%d should hold a sound mat, its roll price and its roll size" % (GYP_SHEET, r, r))
-        label = "Sound mat %s, roll" % name
-        plan.add_item(_item("wb-gyp-" + _slug(label), label, "Roll", 1.0, _money4(float(price)), float(per_roll),
-                            "Gypsum Underlayment", "gyp", GYP_NOTE % ("P%d" % r)))
-    plan.gap("Gyp bags are fractional and their yield depends on the thickness and the mix (Kyle's odd rule 7); "
-             "Phase 14 prices them from reserved rows. This seed writes the products and their prices only.")
+    fr = sheets[GYP_FR_SHEET]
+    # the USG tabs: bag, primer (a 53 gallon drum, so the gallon is exactly 891 / 53), ISO strip, tape, sand
+    _gyp_item(plan, sh, "wb-gyp-levelrock-2500-bag", "Levelrock 2500, bag", "Bag", "D23")
+    _gyp_item(plan, sh, "wb-gyp-levelrock-3500-bag", "Levelrock 3500, bag", "Bag", "V37")
+    _gyp_item(plan, sh, "wb-gyp-usg-primer-53-gallon-drum", "USG primer, 53 gallon drum", "Gallon", "D27", pack=53.0,
+              cost=_number(sh.value("D27"), GYP_SHEET + "!D27"))
+    _gyp_item(plan, sh, "wb-gyp-wood-primer-5-gallon-per-gallon", "Wood primer, 5 gallon, per gallon", "Gallon", "T38")
+    _gyp_item(plan, sh, "wb-gyp-iso-strip-3-inch-adhesive-roll", "ISO strip, 3 inch adhesive roll", "Roll", "D28")
+    _gyp_item(plan, sh, "wb-gyp-joint-tape-roll", "Joint tape roll", "Roll", "D29")
+    _gyp_item(plan, sh, "wb-gyp-sand-per-ton", "Sand, per ton", "Ton", "D33")
+    # Gyp (FR): its own bag, primer (5 gallons at 139.50) and ISO strip. Its joint tape and sand cost what the USG
+    # tabs' do, which the plan checks rather than assumes.
+    _gyp_item(plan, fr, "wb-gyp-treadstone-fr25-bag", "Treadstone FR25, bag", "Bag", "D23")
+    _gyp_item(plan, fr, "wb-gyp-treadstone-primer-tp1-gallon", "Treadstone primer TP1, 5 gallon", "Gallon", "D27",
+              pack=5.0, cost=_number(fr.value("D27"), GYP_FR_SHEET + "!D27"))
+    _gyp_item(plan, fr, "wb-gyp-iso-strip-roll", "ISO strip, roll (Gyp FR)", "Roll", "D28")
+    for addr in ("D29", "D33"):
+        if sh.value(addr) != fr.value(addr):
+            raise PlanError("Gyp (FR)!%s is %r and the USG tab's is %r: the two tabs no longer share this price" % (
+                addr, fr.value(addr), sh.value(addr)))
+    # the sound mats: a price per roll and the SF a roll covers. The USG and GrassWorx table (O37:Q44) on the first
+    # tab, and Gyp (FR)'s own (N37:P44, one column further left).
+    seen: Dict[str, Tuple[float, float]] = {}
+    _gyp_mats(plan, sh, (37, 38, 39, 40, 42, 43, 44), "O", "P", "Q", seen)
+    _gyp_mats(plan, fr, (37, 38, 39, 42, 43, 44), "N", "O", "P", seen)
+
+    # the three areas of a takeoff, each listing the gypsum bag its price is read from
+    for id_, name, cell in GYP_AREAS:
+        plan.add_assembly({
+            "id": id_, "name": name, "unit": "SF", "category": "Gypsum Underlayment",
+            "description": "Seeded from Kyle's estimate workbook, Gyp tabs (%s). One area of a Gyp takeoff. Priced by "
+                           "a formula in code (a bag's yield depends on the thickness); the bag listed here is the "
+                           "price it reads. The primer, ISO strip, tape, sand and sound mat are worked out from all "
+                           "the areas together." % cell,
+            "lines": [{"role": "Gypsum bags", "item_id": "wb-gyp-levelrock-2500-bag"}],
+            "default_work_types": ["gyp"],
+        })
+
+    # the crew: five lines priced by the hour at the Gyp tabs' rate
+    rate = _number(sh.value("C45"), GYP_SHEET + "!C45")
+    for sort, (id_, name, label, guys_cell) in enumerate(GYP_CREW, start=10):
+        if not sh.text("F%s" % guys_cell[1:]).startswith(label):
+            raise PlanError("%s!F%s should label the line %r, found %r" % (GYP_SHEET, guys_cell[1:], label,
+                                                                          sh.text("F%s" % guys_cell[1:])))
+        plan.labor[id_] = {
+            "id": id_, "name": name, "rate": rate, "unit": "hours", "guys_auto": False, "sort": sort,
+            "favorite": True, "default_work_types": ["gyp"],
+        }
+    crew = [int(_number(sh.value(c[3]), GYP_SHEET + "!" + c[3])) for c in GYP_CREW]
+    plan.gap("Gyp bags are fractional and their yield depends on the thickness and the mix (Kyle's odd rule 7): they are "
+             "priced by a formula in js/gyp-takeoff.js from the editable price rows above, as are the sand, the "
+             "primer, the ISO strip and the tape. The sound mat's rolls and the truckload that waives its shipping are "
+             "counted there too (odd rule 6).")
+    plan.gap("The Gyp sheets work the labor hours out of the takeoff (mobilizations, bags a pour hour, the hard area a mat "
+             "hour). v2 seeds the five lines (guys %s on the sheet) at $%s an hour and leaves the hours to be typed, "
+             "quoting the sheet's own figures beside them." % (", ".join(str(c) for c in crew), _g(rate)))
+    plan.gap("Gyp (FR) has its own bag, primer and ISO strip, and a catalogue of its own mats; the truckload on that "
+             "tab is a typed 448 whichever mat is picked, where the other four tabs follow the mat.")
 
 
 # ── the whole plan ───────────────────────────────────────────────────────────

@@ -135,6 +135,8 @@ def test_the_proof_touches_every_system_primer_wall_and_cove_the_seed_plans(gold
             if c["in"].get(k):
                 used.add(" ".join(c["in"][k].split()))
     for a in PLAN.as_dict()["assemblies"]:
+        if a["id"].startswith("wb-gyp-"):
+            continue                                     # the Gyp areas are proved in test_gyp_v2_proof.py
         name = " ".join(a["name"].replace("Primer: ", "").replace("Cove: ", "").split())
         assert name in used, "no recorded job prices %s" % a["name"]
 

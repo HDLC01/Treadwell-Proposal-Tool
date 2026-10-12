@@ -55,6 +55,9 @@
   // The Epoxy tab's patch, cove and tooling: what the sheet does before its markup chain and a library row
   // cannot say (js/epoxy-takeoff.js). Bound ABOVE adopt() like T, because pricing a section reads it.
   var E = window.TWEpoxyTakeoff;
+  // The Gyp tabs' areas, bags, extras, sand and sound mat (js/gyp-takeoff.js). Bound here for the same reason; a page
+  // that does not load it prices no Gyp section (priceSection says so) and every other section is untouched.
+  var G = window.TWGypTakeoff;
   var S = window.TWPolishSandbox;  // never edit a live bid
   var P = window.TWLibraryPicker;  // the one search pop-up both "Add" buttons open (js/library-picker.js)
   var $ = function (id) { return document.getElementById(id); };
@@ -320,6 +323,14 @@
       return E.priceCoveRow(asm.id, B.num(r.measurement),
         { items: ITEMS, quartz: E.systemOneIsQuartz(takeoff || M.takeoff) });
     }
+    // A GYP AREA ROW IS THE GYPSUM OF THAT AREA at the section's thickness and mix (js/gyp-takeoff.js), not a library
+    // line: a bag's yield depends on the thickness, which the library cannot say. A takeoff that is not a Gyp
+    // section's (an area assembly picked into a Polish bid) is priced as any assembly is.
+    if (G && G.bucketOfAssembly(asm.id)) {
+      var gyp = gypEntryOf(takeoff || M.takeoff);
+      if (gyp) return G.priceAreaRow(asm.id, B.num(r.measurement),
+        { items: ITEMS, tab: gyp.tab, settings: gyp.section.gyp });
+    }
     return priceAssemblyRow(asm, r, B.num(r.measurement));
   }
 
@@ -479,7 +490,11 @@
   function materialTotal() {
     if (activeTab === B.ROOT_TAB) return rootMaterial();
     var e = openEntry();
-    return e ? sectionMaterial(e).material : 0;
+    if (!e) return 0;
+    var m = sectionMaterial(e);
+    // A Gyp section's material comes as the engine's four figures (gypsum, extras, sand, sound mat), not a sum.
+    if (m && typeof m === "object" && m.material === undefined) return m.gyp + m.extras + m.sand + m.soundMat;
+    return m.material;
   }
 
   /** The raw material of the ROOT (Polish) section, which is what bid() prices. */
@@ -561,21 +576,55 @@
       });
       return { material: r.material, tooling: r.tooling };
     }
+    // A GYP SECTION'S MATERIAL IS SPLIT FOUR WAYS AND ITS ROLLS COUNTED (js/gyp-takeoff.js): the gypsum bags by
+    // thickness, the extras (primer, ISO strip, tape, and any other row), the sand worked out from the fractional
+    // bags, and the sound mat with its rolls, which decide whether the mat ships free. Without the module no Gyp
+    // section is priced: a plain sum is refused by priceSection, never charged as the gypsum alone.
+    if (entry.role === "gyp" && G) {
+      var g = G.sectionMaterial(takeoff, entry.section.gyp, entry.tab, {
+        items: ITEMS, rowPrice: function (row) { return rowPrice(row, takeoff); }
+      });
+      var figures = { gyp: g.gyp, extras: g.extras, sand: g.sand, soundMat: g.soundMat,
+                      soundMatRolls: g.soundMatRolls, truckload: g.truckload, tooling: g.tooling };
+      if (g.unpriceable) figures.unpriceable = g.unpriceable;
+      return figures;
+    }
     var sum = 0;
     takeoff.forEach(function (r) {
       if (!B.rowOn(r)) return;
       var p = rowPrice(r, takeoff);
       if (p) sum += p.total;
     });
-    // A Gyp section prices its material from gyp, extras, sand and sound mat (the engine's gyp-split inputs), and
-    // a plain number is refused there: the library's sum goes in as the gyp line.
-    if (entry.role === "gyp") return { gyp: sum, extras: 0, sand: 0, soundMat: 0, soundMatRolls: 0 };
     return sum;
   }
 
   /** The entry of the section on show (never the root's: materialTotal answers that one itself). */
   function openEntry() {
     try { return B.sectionOf(ROOT, activeTab); } catch (err) { return null; }
+  }
+
+  /** The Gyp section whose takeoff is this very list, as B.sectionsOf's entry, or null. A row is priced against the
+   *  list it sits in, and that list belongs to one section, which holds the thickness, the mix and the preset. */
+  function gypEntryOf(takeoff) {
+    try {
+      var list = B.sectionsOf(ROOT);
+      for (var i = 0; i < list.length; i++) {
+        if (list[i].role === "gyp" && list[i].section.takeoff === takeoff) return list[i];
+      }
+    } catch (err) { /* a bid whose sections cannot be read has no Gyp section to price against */ }
+    return null;
+  }
+
+  /** The Gyp section on show, or null. */
+  function gypOpen() {
+    if (!G || activeTab === B.ROOT_TAB) return null;
+    var e = openEntry();
+    return e && e.role === "gyp" ? e : null;
+  }
+
+  /** The workbook tab a Gyp bid's section is filed under (its preset), or null when the bid has none. */
+  function gypTab() {
+    try { return B.sheetHeld(ROOT, T.tab("gyp")); } catch (err) { return null; }
   }
 
   /** The bids of every section but the root, { tabId: bid } (B.priceTabs). {} for a bid with one section,
@@ -657,6 +706,13 @@
     B.syncAutoGuys(ROOT);
   }
 
+  /** Is this labor row drive time? Every hours row is, except in a Gyp section, where the crew is priced by the hour
+   *  and only the row called travel is the drive. Travel's guys follow the crew's man-days, it dims on a local job, and
+   *  its second box is drive time; a Gyp pour is none of those. */
+  function travelLike(r) {
+    return !!(r && r.unit === "hours") && (r.id === "travel" || !gypOpen());
+  }
+
   /** Whether an hours-based labor row (Travel) renders dimmed: on a local job, untouched.
    *  Untouched is Guys not typed (blank on a new bid, or still on auto on a bid saved before
    *  2026-10-12) and Hours blank. A typed Guys or a typed Hours is the estimator saying "we need
@@ -666,7 +722,7 @@
    *  ONE FUNCTION, used by both the first paint (laborCard) and the live repaint
    *  (repaintNumbers), so the two cannot disagree about a row that is being typed into right now. */
   function laborInert(r) {
-    return !!(r && r.unit === "hours") && !!(M.conditions || {}).local &&
+    return travelLike(r) && !!(M.conditions || {}).local &&
       (!!r.guys_auto || !B.filledIn(r.guys)) && !B.filledIn(r.days);
   }
 
@@ -750,12 +806,12 @@
     }).join(' <i>+</i> ');
   }
 
-  /** Is the section on show edited on the page's own panels? Polish and Epoxy are (their work types are `ready`
+  /** Is the section on show edited on the page's own panels? Polish, Epoxy and Gyp are (their work types are `ready`
    *  in Estimating Tool v2). The others, until their phases, show the summary below, so nothing is hidden. */
   function openSectionEditable() {
     if (activeTab === B.ROOT_TAB) return true;
     var e = openEntry();
-    return !!e && (e.role === "polish" || e.role === "epoxy");
+    return !!e && (e.role === "polish" || e.role === "epoxy" || e.role === "gyp");
   }
 
   /** What the panel shows while a section that is not edited here yet is open: what it holds and how it was
@@ -1414,6 +1470,7 @@
     } else {
       setAssembly(i, p.name);
       row.assembly_id = p.id;
+      stampArea(row);
       // setAssembly found the assembly by NAME, so with two assemblies of one name the unit it
       // adopted is the first one's. Take the unit of the one that was actually ticked, through
       // the same resolve the row's own search uses.
@@ -1625,6 +1682,109 @@
     card.innerHTML = rowCardInner(M.takeoff[i], i);
   }
 
+  // ── the Gyp section's own boxes (js/gyp-takeoff.js) ─────────────────────────────────────────
+  var GYP_AREA_LABELS = { soft: "Soft surfaces", hard: "Hard surfaces", corridor: "Corridors" };
+
+  /** What the Gyp sheet works out from the section on show, for the card, the caption and the Review step. */
+  function gypFigures(entry) {
+    return G.figures(entry.section.takeoff || [], entry.section.gyp, entry.tab, ITEMS);
+  }
+
+  /** Text for a quantity of a thing the sheet buys in fractions: two places, no trailing zeros. */
+  function gypQty(n) {
+    return String(Math.round(B.num(n) * 100) / 100);
+  }
+
+  /** The Gyp card: the sheet to price on, the mix, the thickness of each area, the sound mat, ISO strip and the
+   *  mobilizations. A blank thickness is the sheet's own (the placeholder says what it is), as a blank coverage
+   *  is the library's. The boxes are keyed `data-gyp` and handled in the delegated listeners below. */
+  function gypCard(entry) {
+    var set = entry.section.gyp || {};
+    var preset = G.presetOf(entry.tab);
+    var opt = function (value, label, on) {
+      return '<option value="' + esc(value) + '"' + (on ? " selected" : "") + '>' + esc(label) + '</option>';
+    };
+    var sheets = G.tabs().map(function (tab) {
+      return opt(tab, B.sheetLabel(tab), tab === entry.tab);
+    }).join("");
+    var mixes = G.MIXES.map(function (m) { return opt(String(m.mix), m.label, m.mix === G.mixOf(set)); }).join("");
+    var matId = G.matIdOf(entry.tab, set);
+    var mats = G.matList(entry.tab).map(function (m) {
+      var item = itemById(m.id);
+      return opt(m.id, item ? item.name : m.id, m.id === matId);
+    }).join("");
+    var thick = G.BUCKETS.map(function (b) {
+      var typed = set.thickness ? set.thickness[b] : "";
+      return '<div class="f"><label>' + esc(GYP_AREA_LABELS[b]) + ' thickness</label>' +
+        '<input class="n" data-gyp="thickness.' + b + '" inputmode="decimal" value="' + esc(nv(typed)) +
+        '" placeholder="' + esc(String(preset.thickness[b])) + '">' +
+        '<p class="hint">Inches. Blank is the sheet\'s ' + esc(String(preset.thickness[b])) + '.</p></div>';
+    }).join("");
+    return '<div class="tk gyp" data-gyp-card>' +
+      '<div class="tk-h"><span class="tag">GYPSUM</span>' +
+      '<span class="tk-sub">What the sheet works the bags, sand and sound mat out of</span></div>' +
+      '<div class="tk-g">' +
+      '<div class="f"><label>Gyp sheet</label><select data-gyp="preset" aria-label="Gyp sheet">' + sheets + '</select>' +
+      '<p class="hint">Sets the bag, primer, ISO strip, sound mat and thickness the sheet starts from.</p></div>' +
+      '<div class="f"><label>Mix design</label><select data-gyp="mix" aria-label="Mix design">' + mixes + '</select>' +
+      '<p class="hint">A stronger mix covers less from a bag.</p></div>' +
+      thick +
+      '<div class="f"><label>Sound mat</label><select data-gyp="sound_mat" aria-label="Sound mat">' + mats + '</select>' +
+      '<p class="hint" data-gyp-truck>' + esc(gypTruckText(entry)) + '</p></div>' +
+      '<div class="f"><label>ISO strip at all areas</label>' +
+      B.sliderHtml(!!set.iso_all, 'data-gyp-iso="1"', set.iso_all ? "Yes" : "No",
+        "Off puts ISO strip on the hard surfaces only") +
+      '<p class="hint">Off is hard surfaces only.</p></div>' +
+      '<div class="f"><label>Moisture tests</label>' +
+      '<input class="n" data-gyp="moisture_tests" inputmode="decimal" value="' + esc(nv(set.moisture_tests)) + '">' +
+      '<p class="hint">$' + esc(String(G.TOOLING.moistureTest)) + ' a test. Tooling and consumables are added for you.</p></div>' +
+      '<div class="f"><label>Mobilizations</label>' +
+      '<input class="n" data-gyp="mobs" inputmode="decimal" value="' + esc(nv(set.mobs)) + '">' +
+      '<p class="hint">How many times the crew comes out. It sets the hours the sheet suggests on the Labor step.</p></div>' +
+      '</div></div>';
+  }
+
+  /** The lines of a Gyp section's material that are not a takeoff row: what the sheet buys from the areas. Each is
+   *  { label, qty, cost }. Rows are the page's own (the takeoff rows above them are priced as rows). */
+  function gypLines(entry) {
+    var f = gypFigures(entry);
+    var p = f.parts;
+    var lines = [];
+    var add = function (label, qty, cost) { lines.push({ label: label, qty: qty, cost: cost }); };
+    if (f.primerGal > 0) add("Primer", gypQty(f.primerGal) + " gallons", p.primer);
+    if (f.isoRolls > 0) add("ISO strip", gypQty(f.isoRolls) + " rolls", p.iso);
+    if (f.tapeRolls > 0) add("Joint tape", gypQty(f.tapeRolls) + " rolls", p.tape);
+    if (f.tons > 0) add("Sand", gypQty(f.tons) + " tons", p.sand);
+    if (f.rolls > 0) add("Sound mat", f.rolls + " rolls", p.soundMat);
+    return lines;
+  }
+
+  /** What the sound mat box says under it: the truckload, and where this job stands against it. */
+  function gypTruckText(entry) {
+    var f = gypFigures(entry);
+    return "A truckload is " + f.truckload + " rolls" + (f.rolls ? "; this job has " + f.rolls : "") + ".";
+  }
+
+  /** The words under the Gyp rows (the inside of the caption): what is added for them, and the sound mat's
+   *  truckload. */
+  function gypCaptionText(entry) {
+    var f = gypFigures(entry);
+    if (f.problem) return 'Cannot be priced yet: ' + esc(f.problem) + '.';
+    var lines = gypLines(entry);
+    var bits = lines.map(function (l) {
+      return esc(l.label) + ' ' + esc(l.qty) + ' <b>' + esc(moneyAuto(l.cost)) + '</b>';
+    });
+    var truck = f.rolls > 0
+      ? ' The sound mat ships free from ' + f.truckload + ' rolls on this sheet (this job has ' + f.rolls + ').'
+      : '';
+    return 'Added for you from the areas above: ' + (bits.length ? bits.join(", ") : "nothing yet") + '.' + esc(truck) +
+      ' Bags are not rounded up: ' + esc(gypQty(f.bags.total)) + ' in all.';
+  }
+
+  function gypCaption(entry) {
+    return '<p class="cap" data-gyp-cap>' + gypCaptionText(entry) + '</p>';
+  }
+
   function takeoffPanel() {
     // ONE BUTTON, AT THE TOP, IN THE PAGE'S OWN PRIMARY STYLE. It was two dashed buttons under
     // the last row until 2026-09-23 -- "+ Add another assembly" and "+ Add a material" -- on the
@@ -1638,7 +1798,9 @@
     // The row it adds still lands at the BOTTOM of the list, so the list keeps the order it was
     // built in and ROW n keeps meaning what it says. The caret goes with it -- see the handler --
     // which is what makes a button at the top and a row at the bottom read as one action.
-    var html = '<button class="btn addline" data-add-row="1">' + icon("plus", 16) +
+    var gypSec = gypOpen();
+    var html = gypSec ? gypCard(gypSec) : "";
+    html += '<button class="btn addline" data-add-row="1">' + icon("plus", 16) +
       ' Add assembly or material</button>';
     html += M.takeoff.map(takeoffRowCard).join("");
 
@@ -1683,6 +1845,7 @@
         ? ' Default rows that share the floor carry the same square feet but are not added to ' +
           'it again.' : '') + '</p>';
     html += epoxyCaption();
+    html += gypSec ? gypCaption(gypSec) : "";
 
     return shell("Material",
       "One row per assembly. The library prices it against the measurement you give it.", html);
@@ -1719,6 +1882,9 @@
    *  `i` is still the row's real index in M.labor, which is what the delete splices by. */
   function laborCard(r, i) {
     var hours = r && r.unit === "hours";
+    // Travel is the one hours row with a driving meaning: its guys follow the crew's man-days and it dims on a local
+    // job. A crew line priced by the hour (a Gyp pour) is an ordinary line whose second box is hours.
+    var travelRow = travelLike(r);
     var auto = !!(hours && r.guys_auto);
     // Dimmed, not disabled, and not hidden: `.sw.inert`'s rule, for `.sw.inert`'s reason. A local
     // job that does need drive time must not send somebody back to the intake step to type it,
@@ -1751,13 +1917,13 @@
       dfltWarnHtml('data-calcwarn="' + i + ':guys"', calcDefaultText(r, "guys")) +
       // "Guys", never "Crew" -- Hanz renamed that column and
       // test_nothing_on_screen_says_labour_or_crew holds the page to it.
-      '<p class="hint" data-hint-lab="' + i + '">' + (hours ? B.manDaysHint(auto, B.travelManDays(M.labor))
+      '<p class="hint" data-hint-lab="' + i + '">' + (travelRow ? B.manDaysHint(auto, B.travelManDays(M.labor))
         : 'How many on it.') + '</p></div>' +
 
       '<div class="f"><label>' + (hours ? "Hours" : "Days") + '</label>' +
       '<input class="n" data-lab="' + i + '" data-k="days" value="' + esc(nv(r.days)) + '">' +
       dfltWarnHtml('data-calcwarn="' + i + ':days"', calcDefaultText(r, "days")) +
-      '<p class="hint">' + (hours ? "Drive time, each way counted." : "How long it takes.") +
+      '<p class="hint">' + (travelRow ? "Drive time, each way counted." : (hours ? "Hours on the job." : "How long it takes.")) +
       '</p></div>' +
 
       '<div class="f"><label>Rate</label>' +
@@ -1783,7 +1949,7 @@
           '</div>'
         : "") +
 
-      '</div>' + (hours
+      '</div>' + (travelRow
         // Rendered unconditionally on hours rows -- CSS (`.lab:not(.inert) .inertline`) decides
         // whether it shows, so the card's class is the one source of truth for both the dimming
         // and the caption, and the two cannot drift apart on a live repaint.
@@ -1950,6 +2116,25 @@
     paintDistance();
   }
 
+  /** What the Gyp sheet works the labor hours out to, quoted beside the boxes: the figure the workbook would have,
+   *  with the crew it uses. The hours are the estimator's to type; this is the sheet's own answer to check them by. */
+  function gypHoursCaption(entry) {
+    var f = gypFigures(entry);
+    var mobs = B.num((entry.section.gyp || {}).mobs);
+    var h = G.sheetHours(f, mobs, M.distance && M.distance.miles);
+    var hrs = function (n) { return gypQty(n) + " hours"; };
+    var bits = [
+      "Prep, prime and seal " + hrs(h.prep) + " (" + G.HOURS.prepPerMob + " hours a mobilization)",
+      "Mat time " + hrs(h.mat) + " (the hard surfaces at " + G.HOURS.matSfPerHour + " SF an hour)",
+      "Pour " + hrs(h.pour) + " (" + gypQty(f.bags.total) + " bags at " + G.HOURS.poursPerHour + " an hour)",
+      "Semi delivery unload " + hrs(h.unload) + " (" + G.HOURS.unloadPerMob + " hours a mobilization)"
+    ];
+    return '<p class="cap" data-gyp-hours>The sheet works these out for ' + (mobs > 0 ? mobs : "no") +
+      ' mobilizations: ' + esc(bits.join("; ")) + '. Pre-pour hours are typed on the sheet. The sheet\'s crews are ' +
+      G.CREWS.prePour + ', ' + G.CREWS.prep + ', ' + G.CREWS.mat + ', ' + G.CREWS.pour + ' and ' + G.CREWS.unload +
+      ' guys.</p>';
+  }
+
   function laborPanel() {
     // Travel Labor is its own block, below a dividing line, with Lodging and Per Diem. Every other
     // task keeps its place above it. `i` stays the row's real index in M.labor -- the handlers
@@ -1989,13 +2174,18 @@
     }
 
     var pw = !!(M.conditions || {}).prevailing_wage;
-    html += '<p class="cap">Prevailing wage is <b>' + (pw ? "on" : "off") + '</b>' +
-      (pw ? ", so a 5% escalation is added on the review step" : "") +
-      '. Change it on <a href="' + esc(TW.withDraft("/polish-intake.html")) +
-      '">the intake step</a>.</p>';
+    var gypLab = gypOpen();
+    html += gypLab
+      ? '<p class="cap">A Gyp bid adds the 5% labor escalation whatever prevailing wage says (the sheet types it in).</p>'
+      : '<p class="cap">Prevailing wage is <b>' + (pw ? "on" : "off") + '</b>' +
+        (pw ? ", so a 5% escalation is added on the review step" : "") +
+        '. Change it on <a href="' + esc(TW.withDraft("/polish-intake.html")) +
+        '">the intake step</a>.</p>';
+    if (gypLab) html += gypHoursCaption(gypLab);
 
     return shell("Labor",
-      "Guys × days × rate, at " + B.HOURS_PER_DAY + " hours a day. Travel is priced per hour.",
+      gypLab ? "Guys × hours × rate. A Gyp crew is priced by the hour, in 10 hour days. Travel is priced per hour."
+        : "Guys × days × rate, at " + B.HOURS_PER_DAY + " hours a day. Travel is priced per hour.",
       html);
   }
 
@@ -2093,11 +2283,21 @@
                    esc(rowCost(r).text)]);
     });
     if (!tkRows.length) tkRows.push(["Nothing measured yet", "", ""]);
+    // A Gyp section's other lines: the primer, ISO strip, tape, sand and sound mat the sheet buys from the areas.
+    var gypRev = gypOpen();
+    if (gypRev) gypLines(gypRev).forEach(function (l) { tkRows.push([l.label, l.qty, esc(moneyAuto(l.cost))]); });
     tkRows.push(["Material Subtotal", "", mkAmt(b, "material")]);
     // A rate the engine reports for the section on show is the one printed (an Epoxy section ships at its tier);
     // the root's chain reports none of these, so it prints the Polish figures it always did.
     var rateOf = function (key, fallback) { return b[key] != null ? b[key] : fallback; };
-    tkRows.push(["Shipping", B.pct(rateOf("ship_pct", B.RATES.SHIPPING)), mkAmt(b, "shipping")]);
+    if (b.ship_pct === null) {
+      // A Gyp chain has no one shipping rate: 8% escalation on gypsum, extras and mat, and shipping of 20% on the
+      // gypsum and 10% on the rest, the sound mat free from a truckload on.
+      tkRows.push(["Material escalation", "", mkAmt(b, "material_escalation")]);
+      tkRows.push(["Shipping", "", mkAmt(b, "shipping")]);
+    } else {
+      tkRows.push(["Shipping", B.pct(rateOf("ship_pct", B.RATES.SHIPPING)), mkAmt(b, "shipping")]);
+    }
     tkRows.push(["Material Total", "", mkAmt(b, "material_total"), "tot"]);
     html += card("Takeoff and Material", 0, "takeoff", revTable(tkRows));
 
@@ -2122,7 +2322,7 @@
     });
     if (!labRows.length) labRows.push(["No labor entered yet", "", ""]);
     labRows.push(["Labor Subtotal", "", mkAmt(b, "labor")]);
-    labRows.push([{ raw: condSwitch("prevailing_wage", "Labor escalation") },
+    labRows.push([gypRev ? "Labor escalation (always on for Gyp)" : { raw: condSwitch("prevailing_wage", "Labor escalation") },
       b.escalation ? B.pct(rateOf("esc_pct", B.RATES.ESCALATION)) : "", mkAmt(b, "escalation")]);
     labRows.push(["Labor burden", B.pct(rateOf("burden_pct", B.RATES.BURDEN)), mkAmt(b, "burden")]);
     labRows.push(["Labor Total", "", mkAmt(b, "labor_total"), "tot"]);
@@ -2409,7 +2609,7 @@
     });
     document.querySelectorAll("[data-hint-lab]").forEach(function (el) {
       var r = M.labor[parseInt(el.getAttribute("data-hint-lab"), 10)];
-      if (r && r.unit === "hours") el.textContent = B.manDaysHint(!!r.guys_auto, B.travelManDays(M.labor));
+      if (travelLike(r)) el.textContent = B.manDaysHint(!!r.guys_auto, B.travelManDays(M.labor));
     });
     // The Travel card's own dim state, live: typing in Guys or Hours takes this path
     // (`changed(false)`), never a rebuild, so nothing else repaints the card's class. Keyed
@@ -2501,6 +2701,13 @@
       if (el) el.textContent = txt;
     };
     one("[data-mat-total]", moneyAuto(materialTotal()));
+    var gypNow = gypOpen();
+    if (gypNow) {
+      var capEl = document.querySelector("[data-gyp-cap]");
+      if (capEl) capEl.innerHTML = gypCaptionText(gypNow);
+      var truckEl = document.querySelector("[data-gyp-truck]");
+      if (truckEl) truckEl.textContent = gypTruckText(gypNow);
+    }
     one("[data-area-total]", B.fmtSf(B.takeoffSf(M.takeoff)) + " SF");
     one("[data-labor-total]", moneyAuto(B.laborTotal(M.labor, M.conditions)));
     one("[data-travel-total]", moneyAuto(B.travelCosts(M.travel, M.labor).total));
@@ -2729,6 +2936,15 @@
     // THE ON/OFF SLIDER on a takeoff row and on a labor row (the condition cards' own switch is the
     // `data-cond` one below). Off is an explicit `enabled:false`; back on DELETES the key, so a row
     // that has been flipped back is indistinguishable from one never touched.
+    var gypIso = t.closest("[data-gyp-iso]");
+    if (gypIso) {
+      var isoSec = gypOpen();
+      if (isoSec) {
+        isoSec.section.gyp = Object.assign({}, isoSec.section.gyp, { iso_all: !(isoSec.section.gyp || {}).iso_all });
+      }
+      changed(true);
+      return;
+    }
     var onTk = t.closest("[data-on-tk]");
     if (onTk) {
       var oi = parseInt(onTk.getAttribute("data-on-tk"), 10);
@@ -2773,6 +2989,40 @@
     }
   });
 
+  /** Write one box of the Gyp card into the section on show. `key` is "preset", "mix", "sound_mat", "mobs",
+   *  "moisture_tests" or
+   *  "thickness.<area>"; any other key is ignored (the keys come off an attribute). The preset renames the section's
+   *  workbook tab, so the model and the tab on show are both replaced. */
+  function setGyp(key, value) {
+    var e = gypOpen();
+    if (!e) return;
+    var held = e.section.gyp || {};
+    if (key === "preset") {
+      if (G.tabs().indexOf(value) < 0 || value === e.tab) return;
+      ROOT = B.moveSectionSheet(ROOT, e.tab, value);
+      show(value);
+      return;
+    }
+    var next = null;
+    if (key === "mix") next = { mix: G.mixOf({ mix: value }) };
+    else if (key === "sound_mat") next = { sound_mat: value };
+    else if (key === "mobs") next = { mobs: value };
+    else if (key === "moisture_tests") next = { moisture_tests: value };
+    else if (key.indexOf("thickness.") === 0) {
+      var area = key.slice("thickness.".length);
+      if (G.BUCKETS.indexOf(area) < 0) return;
+      next = { thickness: Object.assign({}, held.thickness, Object.fromEntries([[area, value]])) };
+    }
+    if (next) e.section.gyp = Object.assign({}, held, next);
+  }
+
+  /** A Gyp area row says which area it is (soft, hard or corridor) with a `bucket` mark, which the model reads to
+   *  split the proposal's area line. A row pointed at any other assembly carries none. */
+  function stampArea(row) {
+    var area = G ? G.bucketOfAssembly(row.assembly_id) : null;
+    if (area) row.bucket = area; else delete row.bucket;
+  }
+
   /** Point a takeoff row at an assembly, by the name that was typed or picked. */
   function setAssembly(i, text) {
     var row = M.takeoff[i];
@@ -2788,6 +3038,7 @@
       asm = cur;
     }
     row.assembly_id = asm ? asm.id : "";
+    stampArea(row);
     // A DIFFERENT ASSEMBLY IS DIFFERENT LINES: coverage typed against the old one's lines would
     // land on the wrong materials, so it goes with the old pick.
     if (row.assembly_id !== before) delete row.line_cov;
@@ -2949,6 +3200,13 @@
       return;
     }
     if (!el.matches("input")) return;
+    // The Gyp card's text boxes: a thickness for an area, and the mobilizations. Repriced in place, never rebuilt.
+    var gypKey = el.getAttribute("data-gyp");
+    if (gypKey !== null) {
+      setGyp(gypKey, el.value);
+      changed(false);
+      return;
+    }
     var k = el.getAttribute("data-k");
 
     // THIS BID'S COVERAGE for Joint Filler / Dye (M.cond_cov). It takes `changed(false)`: reprice
@@ -3065,6 +3323,14 @@
   document.addEventListener("change", function (e) {
     var el = e.target;
     if (!el || !el.getAttribute) return;
+    // The Gyp card's three selects (sheet, mix, sound mat). The sheet moves the section to another workbook tab, so
+    // the whole page is repainted; the other two reprice and repaint the panel.
+    var gypSel = el.getAttribute("data-gyp");
+    if (gypSel === "preset" || gypSel === "mix" || gypSel === "sound_mat") {
+      setGyp(gypSel, el.value);
+      changed(true);
+      return;
+    }
     // HOURS A DAY on a calculator-filled labor line is a <select>, which the "input" handler above
     // skips (it only takes <input>); it reprices here, the way the takeoff unit select does.
     var hl = el.getAttribute("data-lab");
@@ -3371,9 +3637,14 @@
       cellValues: state.cell_values,
       split: T.isSplit(state),
       asms: ASMS, items: ITEMS, reserved: RESERVED_ITEM_IDS,
-      sf: Object.fromEntries([[B.ROOT_TAB, [state.polish_sf, state.polish_2_sf]]].concat(jobSections
-        ? [["Epoxy", [state.system_1_sf, state.system_2_sf]]] : [])),
-      lf: Object.fromEntries(jobSections ? [["Epoxy", [state.cove_1_lf, state.cove_2_lf]]] : []),
+      sf: Object.fromEntries([[B.ROOT_TAB, [state.polish_sf, state.polish_2_sf]]].concat(
+        jobSections && jobType !== "gyp" ? [["Epoxy", [state.system_1_sf, state.system_2_sf]]] : [],
+        jobSections && jobType === "gyp" && gypTab() ? [[gypTab(), [state.gyp_soft_sf, state.gyp_hard_sf, state.gyp_corridor_sf]]] : [])),
+      lf: Object.fromEntries(jobSections && jobType !== "gyp" ? [["Epoxy", [state.cove_1_lf, state.cove_2_lf]]] : []),
+      // A Gyp section's takeoff is its three areas, one row each, the library's area assemblies.
+      takeoffRows: function (entry, sfs) {
+        return entry.role === "gyp" && G ? G.seedTakeoff(ASMS, sfs[0], sfs[1], sfs[2]) : null;
+      },
       calcRows: laborCalc ? B.withCrewCalcFallback(await laborCalc) : null
       });
     } catch (err) {

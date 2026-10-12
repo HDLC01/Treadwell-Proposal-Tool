@@ -39,7 +39,7 @@ PAGE_HARNESS = TESTS / "js" / "combo-page-harness.js"
 PROOF_HARNESS = TESTS / "js" / "combo-v2-proof-harness.js"
 PAGE_FILES = ["polish-estimate.html", "js/polish-estimate.js", "js/bid-model.js", "js/bid-engine.js", "js/bid-profiles.js",
               "js/markup-core.js", "js/library-core.js", "js/library-picker.js", "js/work-types.js", "js/excel-math.js",
-              "js/epoxy-takeoff.js"]
+              "js/epoxy-takeoff.js", "js/gyp-takeoff.js"]
 
 
 def run_page(frontend=FRONTEND, tmp=None):
@@ -239,7 +239,8 @@ def test_sections_for_job_follows_the_job_type_both_ways_and_leaves_a_plain_poli
     assert m["rootKindAfterCombo"] == "none", "the root's off is lifted, not replaced by a stamp a Polish bid never had"
     assert m["comboToPolish"] == [["Polish", "base"], ["Epoxy", "off"]] and m["rowsKept"] is True
     assert m["plainPolishUnchanged"] is True
-    assert m["toAdd"] == [["Epoxy"], [], [], []]
+    # the fourth is a Gyp job: since Phase 14 it is ready, so a bid that has no Gyp section is given one (the base sheet)
+    assert m["toAdd"] == [["Epoxy"], [], [], ['Gyp (USG 1-8")']]
 
 
 # ── the document ─────────────────────────────────────────────────────────────────────────────────

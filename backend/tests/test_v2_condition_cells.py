@@ -56,7 +56,7 @@ DOC = ROOT / "docs" / "v2-architecture.md"
 # What each page harness reads out of a frontend directory (they do not fall back to the real one), so a
 # scratch copy that breaks ONE file can be completed with the rest.
 TAKEOFF_FILES = ["polish-estimate.html", "js/polish-estimate.js", "js/bid-model.js", "js/library-core.js",
-                 "js/work-types.js", "js/polish-sandbox.js", "js/library-picker.js", "js/epoxy-takeoff.js"]
+                 "js/work-types.js", "js/polish-sandbox.js", "js/library-picker.js", "js/epoxy-takeoff.js", "js/gyp-takeoff.js"]
 INTAKE_FILES = ["polish-intake.html", "js/polish-intake.js", "js/bid-model.js", "js/work-types.js",
                 "js/polish-sandbox.js", "js/intake-scope.js", "js/county-picker.js"]
 BETA_FILES = ["js/index.js", "index.html", "shared.js", "js/projects.js", "js/county-picker.js",
@@ -184,7 +184,9 @@ def test_a_caller_that_knows_the_base_better_replaces_the_tables_cells_and_only_
     assert own["filtered"] == {"ok": ["Polish!B6", "Gyp (FR)!B8"]}, "an address that is no cell got through"
     assert own["empty"] == {"ok": []}
     assert own["ignoredWhenUnsplit"] == {"ok": FAN_OUT}
-    assert own["ignoredForAConditionNoSheetOwns"] == {"ok": ["Epoxy!B4", "Polish!B4"]}
+    # Local is a literal on four sheets since Phase 14: Epoxy, Polish, and the Gyp base's and Gyp (FR)'s own B5
+    assert own["ignoredForAConditionNoSheetOwns"] == {
+        "ok": ["Epoxy!B4", "Polish!B4", 'Gyp (USG 1-8")!B5', "Gyp (FR)!B5"]}
     assert own["notAList"] == {"ok": ["Polish!B6"]}, "something that is not a list was read as one"
 
 
@@ -239,8 +241,8 @@ def test_a_save_on_a_split_draft_writes_the_base_sheets_own_cells_and_no_other_t
                                "Polish!B6": "No", "Epoxy!D6": None, "Polish!D6": "Yes", GYP + "!D8": None}
     # every other condition writes the same cells whether or not the draft is split
     assert w["otherCells"]["same"] is True
-    assert w["otherCells"]["keys"] == ["Epoxy!B10", "Epoxy!B4", "Epoxy!D5", "Polish!B10", "Polish!B4",
-                                       "Polish!E25", "Polish!E29", "Polish!F29"]
+    assert w["otherCells"]["keys"] == ["Epoxy!B10", "Epoxy!B4", "Epoxy!D5", "Gyp (FR)!B5", 'Gyp (USG 1-8")!B5',
+                                       "Polish!B10", "Polish!B4", "Polish!E25", "Polish!E29", "Polish!F29"]
 
 
 def test_a_save_is_idempotent_and_leaves_its_inputs_alone(ran):
@@ -535,18 +537,12 @@ KNOWN_GAPS = {
     "Leveling!B10": ("Phase 16", False,
                      "New / Reno: is a blank input on Leveling that no formula on the sheet reads today. No "
                      "Leveling option is priced in v2 yet." + NOT_WRITTEN_LIVE),
-    GYP + "!B5": ("Phase 14", True,
-                  "Local? is the gyp base's own literal (three of the other four gyp sheets mirror it) and the "
-                  "sheet's travel and markup lines read it. Gyp is not priced in v2 yet." + NOT_WRITTEN_LIVE),
-    "Gyp (FR)!B5": ("Phase 14", True,
-                    "Local? is Gyp (FR)'s own literal, not a mirror of the gyp base's, and its travel and markup "
-                    "lines read it. Gyp is not priced in v2 yet." + NOT_WRITTEN_LIVE),
     GYP + "!B12": ("Phase 14", False,
-                   "New / Reno: is the gyp base's own 'New' and no formula on the sheet reads it today. Gyp is "
-                   "not priced in v2 yet." + NOT_WRITTEN_LIVE),
+                   "New / Reno: is the gyp base's own 'New' and no formula on the sheet reads it. Gyp is priced "
+                   "in v2 now, and it has no renovation question (its scope is epoxy, polish and combo)." + NOT_WRITTEN_LIVE),
     "Gyp (FR)!B12": ("Phase 14", False,
-                     "New / Reno: is Gyp (FR)'s own 'New' and no formula on the sheet reads it today. Gyp is not "
-                     "priced in v2 yet." + NOT_WRITTEN_LIVE),
+                     "New / Reno: is Gyp (FR)'s own 'New' and no formula on the sheet reads it. Gyp is priced in "
+                     "v2 now, and it has no renovation question (its scope is epoxy, polish and combo)." + NOT_WRITTEN_LIVE),
 }
 PHASE_OF_SHEET = {"Seal": "Phase 15", "Leveling": "Phase 16", "Gyp": "Phase 14"}
 
