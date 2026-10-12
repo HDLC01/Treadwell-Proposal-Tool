@@ -773,14 +773,13 @@ const rendered = [];      // every string the page put on screen, for the Labour
     const before = v.api.model().takeoff[2].unit;                       // "SF"
     v.api.setAssembly(2, "Cove Base");                                  // an LF assembly
     const afterPick = { unit: v.api.model().takeoff[2].unit,
-                        select: need(v, 'select[data-tk="2"][data-k="unit"]').value };
-    // The estimator overrides it by hand, through the page's own change handler.
-    const sel = need(v, 'select[data-tk="2"][data-k="unit"]');
-    sel.value = "SF";
-    v.doc.fire("change", { target: sel });
+                        select: txt(v, '[data-unit-for="2"]') };
+    // The unit is read-only (it comes from Items & Assemblies), so there is no control to override
+    // it with. A SAVED row is the case that differs from the library: set it straight on the model,
+    // the way a saved bid arrives, and re-type the SAME assembly. The pick has not changed, so the
+    // unit must not be re-stamped back to the library's.
+    v.api.model().takeoff[2].unit = "SF";
     const afterHand = v.api.model().takeoff[2].unit;
-    // …and re-types the SAME assembly. The pick has not changed, so the unit must not be
-    // re-stamped back to the library's.
     v.api.setAssembly(2, "Cove Base");
     out.unit = {
       before: before,
@@ -855,7 +854,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
         // The pick still took effect, which is what the rebuild was there for.
         idNow: (c.api.model().takeoff[0] || {}).assembly_id,
         expectedId: ASMS[1].id,
-        unitSyncedInPlace: need(c, 'select[data-tk="0"][data-k="unit"]').value,
+        unitSyncedInPlace: txt(c, '[data-unit-for="0"]'),
         expectedUnit: ASMS[1].unit,
         hintNow: txt(c, '[data-asmhint-for="0"]'),
       };

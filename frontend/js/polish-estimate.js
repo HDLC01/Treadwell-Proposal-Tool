@@ -847,6 +847,46 @@
     return null;
   }
 
+  /** The library row a takeoff row points at, with the kind that tells takeoffUnit which field is
+   *  its unit: an assembly's own `unit`, a material's `coverage_basis` (never `item.unit`, which is
+   *  the pack it is bought in). Null for a row nothing is picked on. */
+  function libraryRowOf(row) {
+    var r = row || {};
+    if (rowKind(r) === "item") {
+      var it = itemById(r.item_id);
+      return it ? { kind: "item", lib: it } : null;
+    }
+    var asm = asmById(r.assembly_id);
+    return asm ? { kind: "asm", lib: asm } : null;
+  }
+
+  /** What the row's Unit box shows: {text, hint, note}. See B.takeoffUnitView. */
+  function unitView(row) {
+    var ref = libraryRowOf(row);
+    return B.takeoffUnitView(row, ref ? ref.kind : "asm", ref ? ref.lib : null);
+  }
+
+  /** The line under the Unit box. A link to Items & Assemblies, where the unit is set, so a row
+   *  that says "Not set" is one click from the place that fixes it. */
+  function unitHintHtml(v, i) {
+    return '<a class="hint unithint' + (v.note ? ' note' : '') + '" href="/library.html" ' +
+      'target="_blank" rel="noopener" data-unithint-for="' + i + '">' + esc(v.hint) + '</a>';
+  }
+
+  /** Redraw every takeoff row's Unit box and the line under it, in place. A pick that changes the
+   *  unit does not rebuild the card (a rebuild mid-keystroke takes the caret with it), so this is
+   *  how the screen catches up. */
+  function paintUnits() {
+    document.querySelectorAll("[data-unit-for]").forEach(function (el) {
+      el.textContent = unitView(M.takeoff[parseInt(el.getAttribute("data-unit-for"), 10)]).text;
+    });
+    document.querySelectorAll("[data-unithint-for]").forEach(function (el) {
+      var v = unitView(M.takeoff[parseInt(el.getAttribute("data-unithint-for"), 10)]);
+      el.textContent = v.hint;
+      el.className = "hint unithint" + (v.note ? " note" : "");
+    });
+  }
+
   function matHint(row) {
     var it = itemById((row || {}).item_id);
     if (it) {
@@ -1308,14 +1348,17 @@
     if (p.kind === "item") {
       setMaterial(i, p.name);
       row.item_id = p.id;
+      // The same pin for the unit: two materials of one name must not hand the row the first one's.
+      var tickedItem = itemById(p.id);
+      if (tickedItem) { row.unit = B.takeoffUnit("item", tickedItem).unit; paintUnits(); }
     } else {
       setAssembly(i, p.name);
       row.assembly_id = p.id;
       // setAssembly found the assembly by NAME, so with two assemblies of one name the unit it
-      // adopted is the first one's. Take the unit of the one that was actually ticked.
+      // adopted is the first one's. Take the unit of the one that was actually ticked, through
+      // the same resolve the row's own search uses.
       var ticked = ASMS.filter(function (a) { return a.id === p.id; })[0];
-      var tu = ticked ? String(ticked.unit == null ? "" : ticked.unit).toUpperCase() : "";
-      if (tu === "SF" || tu === "LF") row.unit = tu;
+      if (ticked) row.unit = B.takeoffUnit("asm", ticked).unit;
     }
     // A SYSTEM IS SEVERAL ROWS ON ONE FLOOR (a primer, a body coat, a topcoat), so in a section other than the
     // root a square-foot row added beside a measured one starts as the same floor: it carries that number and is
@@ -1433,12 +1476,13 @@
       esc(nv(r.measurement)) + '">' +
       '<p class="hint">How much of it there is.</p></div>' +
 
-      '<div class="f"><label>Unit</label><select data-tk="' + i + '" data-k="unit">' +
-      UNITS.map(function (u) {
-        return '<option value="' + u + '"' + (r.unit === u ? " selected" : "") + '>' + u +
-          '</option>';
-      }).join("") + '</select>' +
-      '<p class="hint">SF or LF.</p></div>' +
+      // THE UNIT IS ITEMS & ASSEMBLIES' ANSWER, NOT A CHOICE (Hanz, 2026-10-12: "Unit should be
+      // pulled from the items and assemblies tab"). A read-only box in the same chrome as the
+      // other facts on this page, and a line under it that says where the word came from, linking
+      // to the page where it is set. unitView says what to show; paintUnits keeps it in step.
+      '<div class="f"><label>Unit</label>' +
+      '<div class="costbox txt" data-unit-for="' + i + '">' + esc(unitView(r).text) + '</div>' +
+      unitHintHtml(unitView(r), i) + '</div>' +
 
       (mat
         ? '<div class="f"><label>Coverage</label>' +
@@ -2174,6 +2218,7 @@
     document.querySelectorAll("[data-measure-for]").forEach(function (el) {
       el.textContent = measureText(M.takeoff[parseInt(el.getAttribute("data-measure-for"), 10)]);
     });
+    paintUnits();
     // The undecided row's mark, which changes the moment a typed name turns out to be two
     // things. It exists only while the row is undecided; the pick that ends that redraws the card
     // and takes the mark with it.
@@ -2609,25 +2654,25 @@
     // A DIFFERENT ASSEMBLY IS DIFFERENT LINES: coverage typed against the old one's lines would
     // land on the wrong materials, so it goes with the old pick.
     if (row.assembly_id !== before) delete row.line_cov;
-    // Adopt the assembly's own unit only when the pick actually CHANGES. Doing it on every
-    // keystroke would snap a row whose unit the estimator switched by hand back to the library's.
+    // The row's unit is the assembly's own, taken when the pick actually CHANGES. Doing it on
+    // every keystroke would re-stamp a SAVED row whose unit differs from the library's, which is
+    // the one case that must keep what it was saved with (and say so; see unitView). An assembly
+    // with no unit set is SF, today's default. Painted in place: a rebuild here would take the
+    // caret with it.
     if (asm && row.assembly_id !== before) {
-      var u = String(asm.unit == null ? "" : asm.unit).toUpperCase();
-      if (u === "SF" || u === "LF") {
-        row.unit = u;
-        var sel = document.querySelector('select[data-tk="' + i + '"][data-k="unit"]');
-        if (sel) sel.value = u;        // in place: a rebuild here would take the caret with it
-      }
+      row.unit = B.takeoffUnit("asm", asm).unit;
+      paintUnits();
     }
     return !!asm;
   }
 
   /** setAssembly's opposite number, and deliberately simpler than it.
    *
-   *  NO UNIT ADOPTION. An assembly declares the unit it is measured in, so picking one can
+   *  NEVER ADOPTS `item.unit`. An assembly declares the unit it is measured in, so picking one can
    *  legitimately switch the row to LF. An item's `unit` is the unit it is BOUGHT in -- gallons,
    *  kits, pails -- which has nothing to do with how the floor is measured. Copying it onto the
-   *  row would set a 12,000 SF area to "gallons" and price against it.
+   *  row would set a 12,000 SF area to "gallons" and price against it. What a material CAN say
+   *  about measurement is its coverage basis (SF or LF), and that is what the row takes.
    *
    *  COVERAGE IS LEFT ALONE on a pick, for the reason covPlaceholder gives: the item's default is
    *  shown as a placeholder and used when the box is empty, so writing it INTO the box would turn
@@ -2636,11 +2681,18 @@
   function setMaterial(i, text) {
     var row = M.takeoff[i];
     if (!row) return false;
+    var before = row.item_id || "";
     row.item_name = text;
     // Through itemByName, not a loop of its own: that is the one name lookup that refuses Dye and
     // the joint filler kit, so a row typed as "Dye, per coat" cannot become a second dye charge.
     var hit = itemByName(text);
     row.item_id = hit ? hit.id : "";
+    // THE UNIT IS THE MATERIAL'S COVERAGE BASIS (Items & Assemblies: "Coverage is per SF / LF"),
+    // taken when the pick CHANGES, like an assembly's. Never `hit.unit`: see the paragraph above.
+    if (hit && row.item_id !== before) {
+      row.unit = B.takeoffUnit("item", hit).unit;
+      paintUnits();
+    }
     return !!hit;
   }
 
@@ -2895,11 +2947,8 @@
     if (ti === null) return;
     var i = parseInt(ti, 10);
     var k = el.getAttribute("data-k");
-    if (k === "unit") {
-      if (M.takeoff[i]) M.takeoff[i].unit = el.value;
-      changed(false);
-      return;
-    }
+    // No `unit` branch: a takeoff row's unit is read-only now (it comes from Items & Assemblies),
+    // so nothing on the page fires a change for it.
     if (k === "pick") {
       // Committed — blurred, or picked off the list. A TARGETED repaint, not a re-render.
       //

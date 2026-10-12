@@ -240,9 +240,10 @@ def test_unknown_text_clears_the_id_and_keeps_what_was_typed(ran):
 
 @needs_node
 def test_the_unit_follows_the_assembly_only_when_the_pick_changes(ran):
-    """An LF assembly stamps LF on the row, on the model AND on the <select> the page rendered.
-    But once the estimator has overridden it by hand, re-typing the same assembly must NOT snap it
-    back: assembly_id has not changed, so there is no new pick to adopt.
+    """An LF assembly stamps LF on the row, on the model AND on the read-only Unit box the page
+    rendered (the unit is Items & Assemblies' answer now; there is no dropdown). But a SAVED row
+    whose unit differs from the library's keeps it when the same assembly is re-typed:
+    assembly_id has not changed, so there is no new pick to adopt.
 
     Mutation: move the unit adoption outside the `row.assembly_id !== before` guard. Every keystroke
     in the assembly box then re-stamps the unit, and a hand-set SF row flips to LF while it is being
@@ -251,10 +252,10 @@ def test_the_unit_follows_the_assembly_only_when_the_pick_changes(ran):
     assert u["before"] == "SF"
     assert u["afterPick"]["unit"] == "LF", "the row did not adopt the assembly's unit"
     assert u["afterPick"]["select"] == "LF", (
-        "the model changed but the dropdown on screen still shows the old unit")
-    assert u["afterHand"] == "SF", "the change handler did not record a hand-set unit"
+        "the model changed but the Unit box on screen still shows the old unit")
+    assert u["afterHand"] == "SF"
     assert u["afterRetype"] == "SF", (
-        "re-typing the same assembly re-stamped the unit over the estimator's own choice")
+        "re-typing the same assembly re-stamped a saved row's unit over the one it was saved with")
     assert u["afterDifferentPick"] == "SF", "a genuinely new pick did not adopt its unit"
 
 
@@ -2525,7 +2526,7 @@ def test_leaving_the_assembly_field_does_not_destroy_the_box_you_tabbed_into(ran
     # And the pick still lands — the repaint has to do everything the rebuild used to.
     assert r["idNow"] == r["expectedId"], "the newly typed assembly was not adopted"
     assert r["unitSyncedInPlace"] == r["expectedUnit"], (
-        "the unit select still shows the previous assembly's unit")
+        "the Unit box still shows the previous assembly's unit")
     assert "item line" in (r["hintNow"] or ""), "the hint under the picker was not refreshed"
 
 

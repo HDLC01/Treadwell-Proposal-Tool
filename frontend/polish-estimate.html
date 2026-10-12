@@ -169,6 +169,12 @@
     :where(input,select,button,a,[tabindex]):focus-visible{outline:2px solid var(--red);
           outline-offset:1px}
     .f .hint{color:var(--ink-3);font-size:11.5px;margin:5px 0 0}
+    /* The Unit line is a link to Items & Assemblies, where the unit is set. It reads as a hint, not
+       a link, until it is hovered; `.note` is the saved-bid case (saved unit differs from the
+       library's), which gets the same amber the page's other warnings use. */
+    .f a.unithint{display:block;text-decoration:none}
+    .f a.unithint:hover{text-decoration:underline}
+    .f a.unithint.note{color:var(--warn)}
 
     /* ── takeoff rows ──────────────────────────────────────────────────────── */
     .tk{border:1px solid var(--line);border-radius:10px;padding:15px;margin:0 0 11px;
