@@ -637,8 +637,8 @@
       // the REAL project's. Continue has to carry the draft the page is actually editing.
       : '<a class="btn" href="' + esc(TW.withDraft("/proposal-review.html")) +
         '">Continue to proposal →</a>';
-    return '<section class="sec"><div class="sec-h"><h2>' + esc(title) + '</h2><p>' +
-      esc(blurb) + '</p></div><div class="sec-b">' + body + '</div>' +
+    return '<section class="sec"><div class="sec-h"><h2>' + esc(title) + '</h2>' +
+      (blurb ? '<p>' + esc(blurb) + '</p>' : '') + '</div><div class="sec-b">' + body + '</div>' +
       '<div class="nav"><span class="step-of">Step ' + (at + 1) + ' of ' + STEPS.length +
       '</span>' + prev + next + '</div></section>';
   }
@@ -1755,8 +1755,9 @@
     html += card("Hotel and Per Diem", 1, moneyAuto(b.travel), revTable(trvRows));
 
     html += '<div class="rev">' + markupTable(b) + '</div>';
-    return shell("Review the bid",
-      "Costs, then the markup Kyle's sheet applies, then the lump sum.", html);
+    // No blurb on Review: the figures speak for themselves, and shell() leaves out the grey
+    // line entirely when the blurb is empty, so no gap is left behind.
+    return shell("Review the bid", "", html);
   }
 
   /** Any condition Intake has a toggle for and Review already talks about gets a real, clickable

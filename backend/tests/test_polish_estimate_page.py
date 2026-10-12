@@ -878,6 +878,24 @@ def test_clicking_a_review_switch_answers_the_question_and_reprices(ran):
 
 
 @needs_node
+def test_the_review_step_has_no_grey_line_under_its_heading(ran):
+    """Hanz, 2026-10-12: "remove this label in review". The Review step's heading stands alone.
+
+    The header is cut out of what the rendered page emitted, so this goes red if the sentence
+    comes back, or if shell() keeps an empty <p> (a blank grey gap) in its place. The other steps
+    still carry their blurbs, which is what keeps this from passing on a shell() that drops them
+    all.
+    """
+    h = ran["stepHeaders"]
+    assert "<h2>Review the bid</h2>" in h["review"], h["review"]
+    assert "Costs, then the markup" not in h["review"], h["review"]
+    assert "<p" not in h["review"], (
+        "Review still emits a paragraph under its heading: %r" % h["review"])
+    assert "<p>One row per assembly." in h["takeoff"], h["takeoff"]
+    assert "<p>Guys" in h["labor"], h["labor"]
+
+
+@needs_node
 def test_bond_is_a_switch_that_changes_no_number(ran):
     """The one row that must NOT move when it is clicked.
 
