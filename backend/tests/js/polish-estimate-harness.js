@@ -4371,5 +4371,65 @@ const rendered = [];      // every string the page put on screen, for the Labour
     out.addPopup = pop;
   }
 
+  // ── the Cost box in a Labor card's body repaints with the header figure ──
+  // Hanz, 2026-10-12: Travel Labor at Guys 1.5, Hours 12, Rate 33 read $594 in the card header and
+  // $0 in the Cost box under it. Typing takes the `changed(false)` path, which repaints text in
+  // place and never rebuilds the card, and only the header carried a hook.
+  {
+    const c = build();
+    await c.api.init();
+    c.api.go(1);
+    const ti = c.api.model().labor.findIndex((r) => r.id === "travel");
+    // The box is found INSIDE its card by class, not by any hook the fix adds, so a renamed or
+    // missing hook cannot hide the defect this block exists to catch.
+    // The stub's tree is flat, in markup order: the first .costbox AFTER the card's own div is
+    // the card's Cost box (every card holds exactly one, and the next card starts after it).
+    const boxIn = (cardSel) => {
+      const card = need(c, cardSel);
+      const divs = c.doc.querySelectorAll("div");
+      return divs.slice(divs.indexOf(card) + 1)
+        .filter((e) => /(^| )costbox( |$)/.test(e.className))[0];
+    };
+    const pair = (idx) => ({
+      head: txt(c, '[data-lcost-for="' + idx + '"]'),
+      box: boxIn('[data-lab-card="' + idx + '"]').textContent,
+      cls: boxIn('[data-lab-card="' + idx + '"]').className,
+    });
+    const rows = {};
+    rows.labor0Before = pair(0);
+    typeInto(c, '[data-lab="0"][data-k="guys"]', "2");
+    typeInto(c, '[data-lab="0"][data-k="days"]', "3");
+    typeInto(c, '[data-lab="0"][data-k="rate"]', "40");
+    rows.labor0Typed = pair(0);
+    rows.labor0Expected = B.laborCost(c.api.model().labor[0]);
+    typeInto(c, '[data-lab="0"][data-k="days"]', "");
+    rows.labor0Cleared = pair(0);
+    // Travel Labor: the screenshot's exact numbers.
+    rows.travelBefore = pair(ti);
+    typeInto(c, '[data-lab="' + ti + '"][data-k="guys"]', "1.5");
+    typeInto(c, '[data-lab="' + ti + '"][data-k="days"]', "12");
+    typeInto(c, '[data-lab="' + ti + '"][data-k="rate"]', "33");
+    rows.travelTyped = pair(ti);
+    typeInto(c, '[data-lab="' + ti + '"][data-k="days"]', "");
+    rows.travelCleared = pair(ti);
+    // Lodging, switched on, Nights then Rate.
+    clickOn(c, '[data-on-trv="lodging"]');
+    const lp = () => ({
+      head: txt(c, '[data-trvcost-for="lodging"]'),
+      box: boxIn('[data-trv-card="lodging"]').textContent,
+      cls: boxIn('[data-trv-card="lodging"]').className,
+    });
+    typeInto(c, '[data-trv="lodging"][data-k="qty"]', "4");
+    typeInto(c, '[data-trv="lodging"][data-k="rate"]', "100");
+    rows.lodgingTyped = lp();
+    typeInto(c, '[data-trv="lodging"][data-k="rate"]', "");
+    rows.lodgingCleared = lp();
+    // Focus must survive: no card rebuild while typing.
+    const writes = c.dom.get("panels").htmlWrites;
+    typeInto(c, '[data-lab="0"][data-k="rate"]', "41");
+    rows.rebuilds = c.dom.get("panels").htmlWrites - writes;
+    out.costBoxRepaint = rows;
+  }
+
   console.log(JSON.stringify(out));
 })().catch((err) => { console.error(err && err.stack || err); process.exit(1); });
