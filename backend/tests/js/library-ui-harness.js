@@ -238,7 +238,10 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", "WT", `
   "use strict";
   var ITEMS = state.ITEMS, ASMS = state.ASMS, VENDORS = state.VENDORS;
   // New-this-session records, read by renderItems (the Save button) and renderPanel (#asm-save).
-  var FRESH = state.FRESH || { items: {}, assemblies: {} };
+  var FRESH = state.FRESH || { items: {}, assemblies: {}, labor: {}, divisions: {}, units: {}, vendors: {} };
+  // The Save button of a labor line / an Administration value, drawn by renderLabor and renderRefSection.
+  ${grab(/^  var MANUAL_KINDS = \[[^\]]*\];$/m, "the MANUAL_KINDS declaration")}
+  ${grab(/^  var SAVE_WHAT = \{[^}]*\};$/m, "the SAVE_WHAT declaration")}
   var DIVISION_REFS = state.DIVISION_REFS || [], UNIT_REFS = state.UNIT_REFS || [];
   var VENDOR_USE = state.VENDOR_USE, DIVISION_USE = state.DIVISION_USE || {}, UNIT_USE = state.UNIT_USE || {};
   var ADMIN = state.ADMIN;
@@ -251,6 +254,18 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", "WT", `
   var FEES_CALLS = [];
   async function api(path, opts) {
     FEES_CALLS.push({ path: path, opts: opts });
+    // THE LIBRARY PATCH A SAVE PRESS SENDS (state.REAL_SAVE scenarios only): answered the way the
+    // server does, with the record under its own key, or refused with state.PATCH_STATUS.
+    if (state.REAL_SAVE && opts && opts.method === "PATCH" && path.indexOf("/api/library/") === 0) {
+      if (state.PATCH_STATUS) {
+        return { status: state.PATCH_STATUS, ok: false, json: async function () { return { detail: "refused" }; } };
+      }
+      var segs = path.split("/"), pid = decodeURIComponent(segs.pop()), pkind = segs.pop();
+      var prow = Object.assign({ id: pid, updated_at: "t2" }, JSON.parse(opts.body));
+      var pkey = { divisions: "division", units: "unit", vendors: "vendor" }[pkind] || "row";
+      var pout = {}; pout[pkey] = prow;
+      return { status: 200, ok: true, json: async function () { return pout; } };
+    }
     var r = state.FEES_RESPONSE || { status: 200, body: null };
     var body = r.body || (opts && opts.body ? { ok: true, rule: JSON.parse(opts.body) } : {});
     return { status: r.status, ok: r.status < 400, json: async function () { return body; } };
@@ -345,6 +360,7 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", "WT", `
   // out is a ReferenceError that kills every scenario in this file at once.
   ${fn("icon")}
   ${fn("itemSaveButtonHtml")}
+  ${fn("rowSaveButtonHtml")}
   ${fn("renderItems")}
   // THE DEFAULTS TAB'S OWN RENDERERS, lifted so they are EXECUTED rather than read. A source-text
   // assertion cannot catch an unbound identifier, and this repo has taken production down that
@@ -443,9 +459,14 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", "WT", `
     LABOR_CALLS.push({ op: "POST", kind: kind, body: body });
     if (LABOR_FAIL.post) throw new Error("the server said no");
     LABOR_SEQ++;
-    return { ok: true, row: Object.assign({ id: "new" + LABOR_SEQ, guys_auto: false, sort: 0,
-                                            notes: null, owner_email: null, favorite: false },
-                                           body) };
+    var made = Object.assign({ id: "new" + LABOR_SEQ, guys_auto: false, sort: 0,
+                               notes: null, owner_email: null, favorite: false }, body);
+    // Labor answers { row }; the three Administration lists answer under their singular name.
+    var shaped = { ok: true, row: made };
+    if (kind === "divisions") shaped.division = made;
+    if (kind === "units") shaped.unit = made;
+    if (kind === "vendors") shaped.vendor = made;
+    return shaped;
   }
   async function del(kind, id) {
     LABOR_CALLS.push({ op: "DELETE", kind: kind, id: id });
@@ -489,6 +510,8 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", "WT", `
   ${grab(/^  var timers = \{\};$/m, "the timers declaration")}
   ${grab(/^  var pendingPatch = \{\};$/m, "the pendingPatch declaration")}
   ${fn("addLaborLine")}
+  // removeLaborLine drops the deleted row's queued edit and unsaved mark through forgetRow.
+  ${fn("forgetRow")}
   ${fn("removeLaborLine")}
   // setDefault's OWN NETWORK, stubbed the same way post/del/patchLabor are above -- captured so a
   // test can see the write it WOULD have sent, never a real socket. Sits beside them rather than
@@ -629,7 +652,49 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", "WT", `
   // The real handler, with only the network stubbed. Everything it touches on the way to the
   // model — the coercion list, the duplicate hint, the queued body — is the code the page runs.
   var QUEUED = [];
-  function patchSoon(kind, id, body) { QUEUED.push({ kind: kind, id: id, body: body }); }
+  function patchSoon(kind, id, body) {
+    // THE REAL QUEUE on request (state.REAL_SAVE): the Labor and Administration Save scenarios need
+    // the page's own patchSoon, arm and flush, because "nothing is sent until Save" is a statement
+    // about them. Everything else keeps the recorder.
+    if (state.REAL_SAVE) return realPatchSoon(kind, id, body);
+    QUEUED.push({ kind: kind, id: id, body: body });
+  }
+  var inFlight = {};
+  var takenP = {};
+  var SAYS = [], SAVINGS = [];
+  function saving(m) { SAVINGS.push(m); }
+  var setTimeout = (state.clock || globalThis).setTimeout.bind(state.clock || globalThis);
+  var clearTimeout = (state.clock || globalThis).clearTimeout.bind(state.clock || globalThis);
+  ${fn("patchSoon").replace("function patchSoon(", "function realPatchSoon(")}
+  ${fn("arm")}
+  ${fn("requeueFailed")}
+  ${fn("flush")}
+  ${fn("saveNow")}
+  ${fn("flushAllPending")}
+  ${fn("savePending")}
+  ${fn("manualSaveCell")}
+  ${fn("showUnsaved")}
+  ${fn("hideUnsaved")}
+  ${fn("refSaved")}
+  ${fn("pressSave")}
+  ${grab(/^  var LABOR_RATE_DEF = .*$/m, "the LABOR_RATE_DEF declaration")}
+  ${grab(/^  var TRAVEL_KEYS = \[[\s\S]*?\n  \];$/m, "the TRAVEL_KEYS declaration")}
+  ${grab(/^  var RATE_DRAFT = \{\};$/m, "the RATE_DRAFT declaration")}
+  ${fn("knownRateKey")}
+  ${fn("rateKeyOf")}
+  ${fn("rateUnsavedCount")}
+  // The rate boxes' own press is the labor-calculator harness's business; here it is a recorder, so
+  // a test can see that Enter in a rate box reached it.
+  var RATE_PRESSES = [];
+  async function pressRateSave(key) { RATE_PRESSES.push(key); }
+  ${fn("onEnterSave")}
+  ${grab(/^  var PANE_NAME = \{[^}]*\};$/m, "the PANE_NAME declaration")}
+  ${fn("unsavedOnPane")}
+  ${fn("leaveOk")}
+  var VIEWS = [];
+  function showView(w) { VIEWS.push(w); }
+  ${fn("addRefValue")}
+  ${fn("onRefEdit")}
   // The pre-edit snapshot the confirmation dialog quotes and Cancel restores from. LIFTED, not
   // stubbed: onItemEdit calls rememberItem on every keystroke, so a stub here would be testing a
   // different function from the one that ships. The DIALOG itself is not reachable from this
@@ -709,6 +774,21 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", "WT", `
            // the same capture array, shared by every kind that calls patchSoon.
            onLaborEdit, toggleLaborMore, focusLaborRow, renderLabor, NUMERIC_LABOR_FIELDS,
            addLaborLine, removeLaborLine,
+           // THE SAVE BUTTON ON LABOR LINES AND THE ADMINISTRATION LISTS (state.REAL_SAVE builds):
+           // the page's own queue, flush and Save, with the network answered by the api stub above.
+           onRefEdit, addRefValue, pressSave, onEnterSave, saveNow, flushAllPending, savePending,
+           unsavedOnPane, leaveOk, showUnsaved, hideUnsaved, forgetRow, adoptSaved,
+           requestsNow: function () { return FEES_CALLS; },
+           freshNow: function () { return FRESH; },
+           ratePresses: function () { return RATE_PRESSES; },
+           viewsNow: function () { return VIEWS; },
+           divisionsNow: function () { return DIVISIONS; },
+           unitsNow: function () { return UNITS; },
+           divisionRefsNow: function () { return DIVISION_REFS; },
+           vendorsNow: function () { return VENDORS; },
+           pendingKeys: function () { return Object.keys(pendingPatch); },
+           armedNow: function () { return Object.keys(timers); },
+           setRateDraft: function (k, v) { RATE_DRAFT[k] = v; },
            setPending: function (k, v) { pendingPatch[k] = v; },
            pendingNow: function () { return pendingPatch; },
            // GETTERS, because the delete handler REASSIGNS LABOR (filter, not splice) -- a test
@@ -783,7 +863,9 @@ function build(overrides, docSelectors) {
                            // A scenario that presses a delete answers its dialog through this --
                            // the Labor tab's removeLaborLine asks TW.confirmDanger first.
                            st.TW || {});
-  const doc = makeDocument(docSelectors || []);
+  // A scenario that needs cells it can read back (the Labor and Administration Save buttons) hands in
+  // its own document; every other one gets the write-recorder.
+  const doc = st.document || makeDocument(docSelectors || []);
   const api = scope(L, d.el, TW, st, doc, CRM, WT);
   d.el("area").value = "2875";
   return { api, dom: d, st, doc };
@@ -1490,7 +1572,8 @@ async function conflictChecks() {
     // PATCH while one is on the wire.
     var inFlight = {};
     var takenP = {};
-    var FRESH = state.FRESH || { items: {}, assemblies: {} };
+    var FRESH = state.FRESH || { items: {}, assemblies: {}, labor: {}, divisions: {}, units: {}, vendors: {} };
+    ${grab(/^  var MANUAL_KINDS = \[[^\]]*\];$/m, "the MANUAL_KINDS declaration")}
     var ASMS = state.ASMS, ITEMS = state.ITEMS, VENDORS = state.VENDORS;
     var setTimeout = clock.setTimeout, clearTimeout = clock.clearTimeout;
     function saving(m) { hooks.saving.push(m); }
@@ -5452,6 +5535,7 @@ function itemRowDoc(rowHtml, id) {
     "use strict";
     var ITEMS = state.ITEMS, ASMS = state.ASMS, VENDORS = state.VENDORS;
     var FRESH = { items: {}, assemblies: {} };
+    ${grab(/^  var MANUAL_KINDS = \[[^\]]*\];$/m, "the MANUAL_KINDS declaration")}
     var openId = null;
     var timers = {};
     var pendingPatch = {};
@@ -5836,7 +5920,432 @@ async function globalTabChecks() {
   };
 }
 
+// ── EXECUTED: THE LABOR TAB AND THE ADMINISTRATION LISTS SAVE ON A BUTTON, NOT BY THEMSELVES ──
+// Hanz, 2026-10-12, after the Items rows got a Save left of the name (#645): "apply that save button
+// here" on the Labor tab, "same as here" on Administration, and "put all add buttons to the top".
+//
+// THE REAL QUEUE. These scenarios build the page scope with state.REAL_SAVE, which swaps the
+// patchSoon recorder for the page's own patchSoon, arm, flush and saveNow, and answers the PATCH from
+// an api stub. "Nothing is sent until Save is pressed" is a statement about THOSE functions, so a
+// recorder in their place would pass whatever they did. Timers go through a hand-cranked clock that
+// counts every setTimeout, so "no autosave" is a count of armed timers and a request log, not a hope.
+async function manualSaveChecks() {
+  const B = require(path.join(ROOT, "js", "bid-model.js"));
+  const labor = () => JSON.parse(JSON.stringify([
+    { id: "travel", name: "Travel", rate: 41.5, unit: "hours", guys_auto: true, sort: -1,
+      notes: null, owner_email: null, favorite: true, updated_at: "t1" },
+    { id: "L1", name: "Prevailing wage", rate: 58.25, unit: "hours", guys_auto: false, sort: 0,
+      notes: "Davis-Bacon jobs", owner_email: "kyle@wetreadwell.com", favorite: true, updated_at: "t1" },
+  ]));
+  const clockOf = () => {
+    const c = { calls: [], setTimeout(fn, ms) { c.calls.push({ fn, ms }); return c.calls.length; },
+                clearTimeout() {} };
+    return c;
+  };
+  // A document that can hand back the Save cell of a row, and take the button the page puts in it.
+  // The cell is cut out of the REAL rendered row, so a cell that renderLabor or renderRefSection
+  // stops drawing breaks this loudly (it throws on a selector it does not model).
+  const cellDoc = (bodies) => {
+    const store = {};
+    const addrows = {};
+    const cutCell = (rowHtml) => {
+      const at = rowHtml.indexOf('<td class="rowsave">');
+      if (at === -1) return null;
+      const from = at + '<td class="rowsave">'.length;
+      return rowHtml.slice(from, rowHtml.indexOf("</td>", from));
+    };
+    const rowHtmlOf = (bodyId, attrs) => {
+      const rows = bodies()[bodyId].split("</tr>");
+      return rows.find((r) => attrs.every((a) => r.indexOf(a) !== -1)) || "";
+    };
+    const cellFor = (key, bodyId, attrs) => {
+      if (store[key]) return store[key];
+      const initial = cutCell(rowHtmlOf(bodyId, attrs));
+      if (initial === null) return null;
+      store[key] = {
+        html: initial,
+        get innerHTML() { return this.html; }, set innerHTML(v) { this.html = v; },
+        querySelector(sel) {
+          if (sel === "[data-save-new]") return this.html.indexOf("data-save-new=") !== -1 ? { parentNode: this } : null;
+          if (sel === ".rowsaved") return this.html.indexOf('class="rowsaved"') !== -1 ? {} : null;
+          throw new Error("a Save cell was asked for " + sel + ", which this stub does not model");
+        },
+        appendChild(node) { this.html += node.outerHTML; },
+        removeChild() {
+          const a = this.html.indexOf("<button"), z = this.html.indexOf("</button>");
+          if (a !== -1 && z !== -1) this.html = this.html.slice(0, a) + this.html.slice(z + "</button>".length);
+        },
+      };
+      return store[key];
+    };
+    return {
+      reset() { Object.keys(store).forEach((k) => delete store[k]); },
+      createElement() { return { set innerHTML(h) { this.firstChild = { outerHTML: h }; } }; },
+      querySelector(sel) {
+        let m = /^#labor-body \[data-labor="([^"]+)"\] \.rowsave$/.exec(sel);
+        if (m) return cellFor("labor:" + m[1], "labor-body", ['data-labor="' + m[1] + '"']);
+        m = /^#(divisions|units|vendors)-body \[data-ref-kind="([a-z]+)"\]\[data-ref-id="([^"]+)"\] \.rowsave$/.exec(sel);
+        if (m) {
+          return cellFor(m[2] + ":" + m[3], m[1] + "-body",
+            ['data-ref-kind="' + m[2] + '"', 'data-ref-id="' + m[3] + '"']);
+        }
+        m = /^\[data-addrow-ref="([a-z]+)"\]$/.exec(sel);
+        if (m) return (addrows[m[1]] = addrows[m[1]] || { hidden: false });
+        throw new Error("the page asked document for " + sel + ", which this stub does not model");
+      },
+      addrows,
+    };
+  };
+  const mount = (extra) => {
+    const clock = clockOf();
+    let b = null;
+    const doc = cellDoc(() => ({
+      "labor-body": b.dom.nodes["labor-body"].innerHTML,
+      "divisions-body": b.dom.nodes["divisions-body"].innerHTML,
+      "units-body": b.dom.nodes["units-body"].innerHTML,
+      "vendors-body": b.dom.nodes["vendors-body"].innerHTML,
+    }));
+    const asked = [];
+    b = build(Object.assign({
+      window: { TWBidModel: B }, LABOR: labor(), ADMIN: true, REAL_SAVE: true, clock, document: doc,
+      TW: { confirmDanger: async (o) => { asked.push(o); return (extra || {}).answer !== false; } },
+    }, extra || {}));
+    b.api.renderLabor();
+    b.api.renderVendors();
+    doc.reset();
+    return { b, api: b.api, d: b.dom, clock, doc, asked };
+  };
+  const laborEv = (id, f, value, checked, type) => ({ type: type || "input", target: {
+    value, checked: !!checked, type: f === "guys_auto" ? "checkbox" : "text",
+    getAttribute: (k) => (k === "data-f" ? f : null),
+    closest: (sel) => (sel === "[data-labor]"
+      ? { getAttribute: (k) => (k === "data-labor" ? id : null) } : null) } });
+  const refEv = (kind, id, f, value) => ({ type: "input", target: {
+    value, type: "text", getAttribute: (k) => (k === "data-rf" ? f : null),
+    closest: (sel) => (sel === "[data-ref-kind]"
+      ? { getAttribute: (k) => (k === "data-ref-kind" ? kind : k === "data-ref-id" ? id : null) } : null) } });
+  const patches = (s) => s.api.requestsNow().filter((c) => c.opts && c.opts.method === "PATCH")
+    .map((c) => ({ path: c.path, body: JSON.parse(c.opts.body) }));
+  const autosaveTimers = (s) => s.clock.calls.filter((c) => c.ms === 600).length;
+
+  // ── a labor line: edit, wait, leave the page, press Save ──────────────────────────────────────
+  {
+    const s = mount();
+    s.api.onLaborEdit(laborEv("L1", "rate", "61"));
+    s.api.onLaborEdit(laborEv("L1", "rate", "61", false, "change"));   // the blur a click on Save causes
+    const timerBefore = s.clock.calls.filter((c) => c.ms === 600).length;
+    // Run every timer the page armed and fire the page-hide flush: neither may send anything.
+    s.clock.calls.forEach((c) => c.fn());
+    s.api.flushAllPending();
+    await new Promise((r) => setImmediate(r));
+    const cell = s.doc.querySelector('#labor-body [data-labor="L1"] .rowsave');
+    const showsSave = cell.html;
+    const before = {
+      sent: patches(s).length, armed: timerBefore, pending: s.api.pendingKeys(),
+      saveShown: /data-save-new="labor"/.test(showsSave) && /data-save-id="L1"/.test(showsSave),
+      unsavedOnPane: s.api.unsavedOnPane("labor"), savePending: s.api.savePending(),
+      otherRowsClean: s.doc.querySelector('#labor-body [data-labor="travel"] .rowsave').html === "",
+    };
+    // A second field of the same row: still one Save, and the PATCH carries both.
+    s.api.onLaborEdit(laborEv("L1", "name", "Prevailing wage KS"));
+    const still = await s.api.pressSave("labor", "L1");
+    const sent = patches(s);
+    const after = s.doc.querySelector('#labor-body [data-labor="L1"] .rowsave');
+    s.clock.calls.filter((c) => c.ms === 2200).forEach((c) => c.fn());
+    out.laborSaveButton = {
+      before,
+      sentAfterPress: sent,
+      stillUnsaved: still,
+      cellSaysSavedInTheRow: /class="rowsaved"/.test(after.html) || after.html === "",
+      noButtonAfter: after.html.indexOf("data-save-new") === -1,
+      fadedToEmpty: after.html === "",
+      freshEmpty: Object.keys(s.api.freshNow().labor).length === 0,
+      pendingEmpty: s.api.pendingKeys().length === 0,
+      unsavedAfter: s.api.unsavedOnPane("labor"),
+      savePendingAfter: s.api.savePending(),
+      // The model took what was typed, and the Defaults tab (another pane) keeps showing it.
+      model: s.api.laborNow().find((r) => r.id === "L1").name,
+    };
+  }
+
+  // ── every other field of a labor line behaves the same: unit, notes, the More fields ──────────
+  {
+    const s = mount();
+    s.api.onLaborEdit(laborEv("L1", "unit", "days", false, "change"));
+    s.api.onLaborEdit(laborEv("L1", "notes", "Union only"));
+    s.api.onLaborEdit(laborEv("L1", "guys_auto", "on", true, "change"));
+    s.api.onLaborEdit(laborEv("L1", "sort", "4"));
+    s.clock.calls.forEach((c) => c.fn());
+    const quiet = patches(s).length;
+    await s.api.pressSave("labor", "L1");
+    out.laborSaveEveryField = { quietUntilSave: quiet, sent: patches(s) };
+  }
+
+  // ── Enter in a box presses that row's Save ─────────────────────────────────────────────────────
+  {
+    const s = mount();
+    const key = (k, target, extra) => Object.assign({ key: k, preventDefault() { this.prevented = true; } },
+      { target }, extra || {});
+    const typed = laborEv("L1", "rate", "70");
+    s.api.onLaborEdit(typed);
+    const esc = key("Escape", typed.target);
+    await s.api.onEnterSave(esc);
+    const tab = key("Tab", typed.target);
+    await s.api.onEnterSave(tab);
+    const composing = key("Enter", typed.target, { isComposing: true });
+    await s.api.onEnterSave(composing);
+    const box = laborEv("L1", "guys_auto", "on", true, "change");
+    await s.api.onEnterSave(key("Enter", box.target));
+    const quiet = patches(s).length;
+    const enter = key("Enter", typed.target);
+    await s.api.onEnterSave(enter);
+    // A clean row: Enter sends nothing.
+    const clean = key("Enter", laborEv("travel", "rate", "41.5").target);
+    await s.api.onEnterSave(clean);
+    // An Administration box.
+    s.api.onRefEdit(refEv("vendors", "v2", "notes", "Local branch"));
+    const ref = refEv("vendors", "v2", "notes", "Local branch");
+    await s.api.onEnterSave(key("Enter", ref.target));
+    // A rate box goes to its own press.
+    const rate = { type: "text", getAttribute: (k) => (k === "data-labor-rate" ? "1" : null) };
+    await s.api.onEnterSave(key("Enter", rate));
+    const hotel = { type: "text", getAttribute: (k) => (k === "data-travel-rate" ? "travel_lodging" : null) };
+    await s.api.onEnterSave(key("Enter", hotel));
+    const stray = { type: "text", getAttribute: (k) => (k === "data-travel-rate" ? "__proto__" : null) };
+    await s.api.onEnterSave(key("Enter", stray));
+    out.enterSaves = {
+      quietForOtherKeys: quiet, sent: patches(s), enterPrevented: !!enter.prevented,
+      escapeLeftAlone: !esc.prevented, ratePresses: s.api.ratePresses(),
+    };
+  }
+
+  // ── the Administration lists: a division, a unit and a vendor ──────────────────────────────────
+  {
+    const s = mount();
+    const items = [];
+    s.api.onRefEdit(refEv("divisions", "d2", "name", "Epoxy Coatings"));
+    s.api.onRefEdit(refEv("units", "u2", "notes", "Sold by the box"));
+    s.api.onRefEdit(refEv("vendors", "v2", "name", "Sika USA"));
+    s.clock.calls.forEach((c) => c.fn());
+    s.api.flushAllPending();
+    await new Promise((r) => setImmediate(r));
+    const quiet = { sent: patches(s).length, armed: autosaveTimers(s), pending: s.api.pendingKeys().sort() };
+    const shown = ["divisions:d2", "units:u2", "vendors:v2"].map((k) => {
+      const [kind, id] = k.split(":");
+      const c = s.doc.querySelector("#" + kind + "-body [data-ref-kind=\"" + kind + "\"][data-ref-id=\"" + id + "\"] .rowsave");
+      return /data-save-new="/.test(c.html) && c.html.indexOf('data-save-id="' + id + '"') !== -1;
+    });
+    // The Items tab does not learn the new division name until it is saved.
+    const divisionsBefore = s.api.divisionsNow().slice();
+    await s.api.pressSave("divisions", "d2");
+    const divisionsAfter = s.api.divisionsNow().slice();
+    await s.api.pressSave("units", "u2");
+    await s.api.pressSave("vendors", "v2");
+    out.adminSaveButton = {
+      quiet, shown, divisionsBefore, divisionsAfter, sent: patches(s),
+      unsavedAfter: s.api.unsavedOnPane("vendors"), pendingAfter: s.api.pendingKeys(),
+    };
+  }
+
+  // ── a refused or failed save keeps its Save, and the second press goes out ─────────────────────
+  {
+    const s = mount({ PATCH_STATUS: 400 });
+    s.api.onLaborEdit(laborEv("L1", "rate", "99"));
+    const first = await s.api.pressSave("labor", "L1");
+    const cell = s.doc.querySelector('#labor-body [data-labor="L1"] .rowsave');
+    out.refusedSave = {
+      stillUnsaved: first, buttonStays: /data-save-new="labor"/.test(cell.html),
+      pendingKept: s.api.pendingKeys().length === 1, markKept: s.api.unsavedOnPane("labor") === 1,
+      oneAttemptPerPress: patches(s).length === 1,
+    };
+  }
+
+  // ── the tab-switch warning ─────────────────────────────────────────────────────────────────────
+  {
+    const clean = mount();
+    const cleanAnswer = await clean.api.leaveOk("labor");
+    const dirty = mount({ answer: false });
+    dirty.api.onLaborEdit(laborEv("L1", "rate", "61"));
+    dirty.api.onRefEdit(refEv("divisions", "d1", "name", "Polished"));
+    const stay = await dirty.api.leaveOk("labor");
+    const staySent = patches(dirty).length;
+    const adminPane = await dirty.api.leaveOk("vendors");
+    const itemsPane = await dirty.api.leaveOk("items");
+    const go = mount({ answer: true });
+    go.api.onLaborEdit(laborEv("L1", "rate", "61"));
+    go.api.onLaborEdit(laborEv("travel", "rate", "50"));
+    const leave = await go.api.leaveOk("labor");
+    out.leaveWarning = {
+      cleanPaneNoQuestion: cleanAnswer === true && clean.asked.length === 0,
+      staysWhenAskedTo: stay === false, askedOnce: dirty.asked.length === 2,
+      nothingSentByWarning: staySent === 0 && patches(go).length === 0,
+      sayHowMany: /2 changes on the Labor tab/.test(go.asked[0].message) &&
+        /1 change on the Labor tab/.test(dirty.asked[0].message),
+      leavesWhenAgreed: leave === true,
+      editsSurviveTheLeave: go.api.unsavedOnPane("labor") === 2,
+      adminPaneCounts: adminPane === false, itemsPaneNeverAsks: itemsPane === true,
+      plainWords: !/[—–]/.test(go.asked[0].message + go.asked[0].title),
+      isWarnToned: go.asked[0].tone === "warn",
+    };
+  }
+
+  // ── the blur `change` after an Enter save is an echo, not an edit ──────────────────────────────
+  {
+    const s = mount();
+    s.api.onLaborEdit(laborEv("L1", "notes", "Union only"));
+    await s.api.pressSave("labor", "L1");                                   // Enter in the box
+    s.clock.calls.filter((c) => c.ms === 2200).forEach((c) => c.fn());
+    s.api.onLaborEdit(laborEv("L1", "notes", "Union only", false, "change"));   // then the blur
+    const cell = s.doc.querySelector('#labor-body [data-labor="L1"] .rowsave');
+    const sentOnce = patches(s).length;
+    const noButtonBack = cell.html.indexOf("data-save-new") === -1;
+    const nothingQueued = s.api.pendingKeys().length === 0;
+    // A select that reports ONLY `change` (a different value) is still an edit.
+    s.api.onLaborEdit(laborEv("L1", "unit", "days", false, "change"));
+    out.blurEchoIsNotAnEdit = {
+      noButtonBack, nothingQueued,
+      sentOnce: sentOnce === 1,
+      selectChangeStillCounts: s.api.unsavedOnPane("labor") === 1,
+    };
+    const t = mount();
+    t.api.onLaborEdit(laborEv("L1", "rate", "61"));
+    await t.api.pressSave("labor", "L1");
+    t.api.onLaborEdit(laborEv("L1", "rate", "61", false, "change"));
+    t.api.onLaborEdit(laborEv("L1", "guys_auto", "", true));
+    await t.api.pressSave("labor", "L1");
+    t.api.onLaborEdit(laborEv("L1", "guys_auto", "", true, "change"));
+    out.blurEchoIsNotAnEdit.numberAndCheckboxToo = t.api.unsavedOnPane("labor") === 0 &&
+      t.api.pendingKeys().length === 0;
+  }
+
+  // ── the Save button's spoken name follows the typed name ───────────────────────────────────────
+  {
+    const s = mount();
+    const saveBtn = { a: "Save Z", setAttribute(k, v) { if (k === "aria-label") this.a = v; } };
+    const lrow = { getAttribute: () => "L1", querySelector: (sel) => (sel === "[data-save-new]" ? saveBtn : null) };
+    const ev = (v) => ({ type: "input", target: { value: v, getAttribute: (k) => (k === "data-f" ? "name" : null),
+      closest: (sel) => (sel === "[data-labor]" ? lrow : null) } });
+    s.api.onLaborEdit(ev("Zebra"));
+    const labor = saveBtn.a;
+    const rbtn = { a: "Save D", setAttribute(k, v) { if (k === "aria-label") this.a = v; } };
+    const rrow = { getAttribute: (k) => (k === "data-ref-kind" ? "divisions" : "d1"),
+      querySelector: (sel) => (sel === "[data-save-new]" ? rbtn : null) };
+    s.api.onRefEdit({ type: "input", target: { value: "Decorative", type: "text",
+      getAttribute: (k) => (k === "data-rf" ? "name" : null),
+      closest: (sel) => (sel === "[data-ref-kind]" ? rrow : null) } });
+    out.saveButtonNameFollows = { labor, admin: rbtn.a };
+  }
+
+  // ── a deleted line leaves nothing unsaved behind ───────────────────────────────────────────────
+  {
+    const s = mount();
+    s.api.onLaborEdit(laborEv("L1", "rate", "61"));
+    await s.api.removeLaborLine("L1");
+    out.deletedDirtyLine = {
+      pendingGone: s.api.pendingKeys().length === 0, markGone: s.api.unsavedOnPane("labor") === 0,
+      nothingToWarnAbout: s.api.savePending() === false,
+    };
+  }
+
+  // ── the Save is the FIRST cell, and only for an admin ───────────────────────────────────────────
+  {
+    const marks = { FRESH: { items: {}, assemblies: {}, labor: { L1: true },
+                             divisions: { d2: true }, units: { u1: true }, vendors: { v1: true } } };
+    const s = mount(marks);
+    const labRow = s.d.nodes["labor-body"].innerHTML.split("</tr>").find((r) => r.indexOf('data-labor="L1"') !== -1).trim();
+    const labClean = s.d.nodes["labor-body"].innerHTML.split("</tr>").find((r) => r.indexOf('data-labor="travel"') !== -1).trim();
+    const refRow = (k, id) => s.d.nodes[k + "-body"].innerHTML.split("</tr>").find((r) => r.indexOf('data-ref-id="' + id + '"') !== -1).trim();
+    const cleanRef = s.d.nodes["divisions-body"].innerHTML.split("</tr>").find((r) => r.indexOf('data-ref-id="d1"') !== -1).trim();
+    const firstIsSave = (row, kind) => new RegExp('^<tr [^>]*><td class="rowsave"><button class="btn sm" type="button" data-save-new="'
+      + kind + '" data-save-id="[^"]+"[^>]*>Save</button></td><td><input data-(?:f|rf)="name"').test(row);
+    const moreOpen = mount(marks);
+    moreOpen.api.toggleLaborMore("L1");
+    const laborHtml = moreOpen.d.nodes["labor-body"].innerHTML;
+    const ro = mount({ ADMIN: false, FRESH: marks.FRESH });
+    const roLab = ro.d.nodes["labor-body"].innerHTML;
+    const roRefs = ro.d.nodes["divisions-body"].innerHTML + ro.d.nodes["units-body"].innerHTML +
+      ro.d.nodes["vendors-body"].innerHTML;
+    out.saveFirstCell = {
+      laborFirst: firstIsSave(labRow, "labor"),
+      divisionFirst: firstIsSave(refRow("divisions", "d2"), "divisions"),
+      unitFirst: firstIsSave(refRow("units", "u1"), "units"),
+      vendorFirst: firstIsSave(refRow("vendors", "v1"), "vendors"),
+      cleanLaborCellEmpty: labClean.indexOf('<td class="rowsave"></td>') !== -1 &&
+        labClean.indexOf("data-save-new") === -1 && /^<tr [^>]*><td class="rowsave"><\/td><td><input data-f="name"/.test(labClean),
+      cleanRefCellEmpty: /^<tr [^>]*><td class="rowsave"><\/td><td><input data-rf="name"/.test(cleanRef),
+      // A repaint (the More toggle) keeps the button for a line that is still unsaved.
+      survivesARepaint: /data-labor="L1"><td class="rowsave"><button/.test(laborHtml),
+      moreRowSpansEveryColumn: /<td colspan="7">/.test(laborHtml),
+      nonAdminNoSave: roLab.indexOf("data-save-new") === -1 && roRefs.indexOf("data-save-new") === -1,
+      nonAdminNoInputs: roLab.indexOf("<input") === -1 && roRefs.indexOf("<input") === -1,
+      nonAdminKeepsTheColumn: (roLab.match(/<td class="rowsave"><\/td>/g) || []).length === 2 &&
+        (ro.d.nodes["divisions-body"].innerHTML.match(/<td class="rowsave"><\/td>/g) || []).length === 3,
+    };
+  }
+
+  // ── a new Administration row goes to the TOP and takes the focus ───────────────────────────────
+  {
+    const res = {};
+    for (const kind of ["divisions", "units", "vendors"]) {
+      const s = mount();
+      const focus = [];
+      s.d.el(kind + "-body").querySelector = (sel) => ({ focus() { focus.push(sel); }, select() {} });
+      await s.api.addRefValue(kind);
+      const list = kind === "divisions" ? s.api.divisionRefsNow() : kind === "vendors" ? s.api.vendorsNow() : null;
+      const html = s.d.nodes[kind + "-body"].innerHTML;
+      const ids = html.split("</tr>").filter((r) => /<tr/.test(r)).map((r) => (/data-ref-id="([^"]+)"/.exec(r) || [])[1]);
+      res[kind] = { firstRowIsTheNewOne: /^new/.test(ids[0]), rowsAfter: ids.length,
+                    focusedItsName: focus.length === 1 && /input\[data-rf="name"\]/.test(focus[0]) &&
+                      focus[0].indexOf(ids[0]) !== -1,
+                    tabShown: s.api.viewsNow().indexOf("vendors") !== -1,
+                    listFirst: list ? /^new/.test(list[0].id) : null };
+      if (kind === "divisions") res.divisionChipsStayAlphabetical = s.api.divisionsNow().join("|");
+    }
+    out.addGoesToTheTop = res;
+  }
+
+  // ── the page markup: Add is the FIRST thing in each Administration card ───────────────────────
+  {
+    const dropComments = (s) => {
+      let o = "", at = 0;
+      for (;;) {
+        const open = s.indexOf("<!--", at);
+        if (open === -1) return o + s.slice(at);
+        o += s.slice(at, open);
+        const close = s.indexOf("-->", open + 4);
+        if (close === -1) return o;
+        at = close + 3;
+      }
+    };
+    const page = dropComments(html);
+    const res = {};
+    for (const kind of ["divisions", "units", "vendors"]) {
+      const start = page.indexOf('id="admin-' + kind + '"');
+      const nextAt = page.indexOf('id="admin-', start + 10);
+      const end = nextAt === -1 ? page.indexOf("</section>", start) : nextAt;
+      const cardAt = page.indexOf('<div class="card">', start);
+      const after = page.slice(cardAt + '<div class="card">'.length).trimStart();
+      const emptyAt = page.indexOf('id="' + kind + '-empty"');
+      const emptyBlock = page.slice(emptyAt, page.indexOf("</div>", emptyAt));
+      res[kind] = {
+        addIsFirstInItsCard: after.indexOf('<div class="addrow" data-addrow-ref="' + kind + '">') === 0,
+        beforeTheTable: page.indexOf('data-addrow-ref="' + kind + '"') < page.indexOf('id="' + kind + '-body"'),
+        oneAddButton: (page.slice(start, end).match(new RegExp('data-add-ref="' + kind + '"', "g")) || []).length === 1,
+        emptyStateHasNoButton: emptyBlock.indexOf("<button") === -1 && emptyBlock.indexOf("data-add-ref") === -1,
+        emptyStateKeepsItsWords: /<h3>No [a-z]+ yet<\/h3>/.test(emptyBlock) && /<p>[A-Z][^<]{20,}<\/p>/.test(emptyBlock),
+        headerSaveFirst: /<thead><tr><th class="rowsave"><\/th><th>[A-Za-z]+<\/th><th>Notes<\/th>/.test(
+          page.slice(start, page.indexOf('id="' + kind + '-body"', start))),
+      };
+    }
+    const laborPane = page.slice(page.indexOf('id="pane-labor"'), page.indexOf('id="pane-labcalc"'));
+    res.laborHeaderSaveFirst = /<thead>\s*<tr>\s*<th class="rowsave"><\/th>\s*<th>Line<\/th>/.test(laborPane);
+    res.laborAddStillTop = laborPane.indexOf('id="labor-addrow"') < laborPane.indexOf('id="labor-body"');
+    res.cssForTheTick = /\.rowsaved \{[^}]*color:var\(--ok\)/.test(html) && /\.ratesave \{[^}]*min-width/.test(html);
+    out.adminMarkup = res;
+  }
+}
+
 Promise.all([conflictChecks(), dialogChecks(), laborChecks(), laborTabChecks(),
-             conditionChecks(), sliderChecks(), feesChecks(), globalTabChecks()]).then(
+             conditionChecks(), sliderChecks(), feesChecks(), globalTabChecks(), manualSaveChecks()]).then(
   () => { clearTimeout(watchdog); console.log(JSON.stringify(out)); },
   (err) => { clearTimeout(watchdog); console.error(err); process.exit(1); });

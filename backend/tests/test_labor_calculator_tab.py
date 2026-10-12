@@ -300,17 +300,22 @@ def test_lodging_and_per_diem_still_save_through_the_shared_helper(ran):
 
 
 def test_the_labor_tab_carries_the_box_and_nothing_still_says_markups_sets_the_rate(html):
-    """The mount points exist, the change listener is wired, and no code comment or text still
+    """The mount points exist, the typing listener is wired, and no code comment or text still
     names Markups -> Global as the labor rate's home.
 
-    Mutation: drop the pane-labor change listener -- the box draws and saves nothing."""
+    The rate boxes stopped filing on `change` on 2026-10-12 (they have a Save now): the pane
+    listens to `input` and no longer to `change`.
+
+    Mutation: drop the pane-labor input listener -- typing in a rate box shows no Save."""
     pane = html.split('id="pane-labor"')[1].split("</section>")[0]
     assert 'id="labor-rate-box"' in pane and 'id="labor-rate-alert"' in pane
     assert 'id="travel-rates-box"' in pane and 'id="travel-rate-alert"' in pane
     labcalc = html.split('id="pane-labcalc"')[1].split("</section>")[0]
     assert "Markup page" not in labcalc, "the Labor Calculator still names the Markup page as a home"
     js = (FRONTEND / "js" / "library.js").read_text(encoding="utf-8", errors="replace")
-    assert re.search(r'\$\("pane-labor"\)\.addEventListener\("change"', js)
+    assert re.search(r'\$\("pane-labor"\)\.addEventListener\("input", onRateEdit\)', js)
+    assert not re.search(r'\$\("pane-labor"\)\.addEventListener\("change"', js), (
+        "the rate boxes file on `change` again: they save when the box merely loses focus")
     assert 'if (p === "labor") renderLaborRate();' in js
     for name in ("polish-estimate.js", "bid-model.js"):
         text = (FRONTEND / "js" / name).read_text(encoding="utf-8", errors="replace")
@@ -327,3 +332,62 @@ def test_the_defaults_tab_markup_list_no_longer_lists_hotel_or_per_diem():
     block = js.split("GLOBAL_MARKUP = (mj.rules || []).filter(function (r) {")[1].split("}).map(")[0]
     for key in ("fees_textura", "labor_rate", "travel_lodging", "travel_per_diem"):
         assert 'r.line_key !== "%s"' % key in block, key
+
+
+# ── the rate boxes have a Save and nothing files by itself (Hanz, 2026-10-12) ────────────────────
+
+
+@needs_node
+def test_a_rate_box_files_only_when_its_save_is_pressed(ran):
+    """The company labor rate and the Hotel and Per Diem rows. Typing sends nothing and shows the
+    box's Save, in a cell LEFT of its name; typing the filed figure back is not a change; a repaint
+    draws what is typed with its Save; the press files the same PUT as before (the whole row, notes
+    kept), the Save goes, and the confirmation lands in the section's own alert line.
+
+    Mutations: file on `input` or `change` again (typed.putsSent goes to 2); drop RATE_DRAFT from the
+    renders (repaintKeepsTypedFigure red); put the Save cell after the name (saveCellIsFirstInTheHotelRow
+    / laborSaveLeftOfName red); let pressRateSave take a key off the page unchecked (stray true)."""
+    r = ran["rateSaveButton"]
+    assert r["drawnWithoutSave"], "a clean rate box draws a Save button"
+    t = r["typed"]
+    assert t["putsSent"] == 0, "typing in a rate box filed it"
+    assert 'data-save-rate="labor_rate"' in t["laborSave"] and 'data-save-rate="travel_lodging"' in t["hotelSave"]
+    assert t["perDiemSave"] == "", "an untouched box shows a Save"
+    assert t["unsaved"] == 2
+    assert r["typedBackToFiled"] == {"laborSave": "", "unsaved": 1}, (
+        "typing the filed figure back still counts as unsaved")
+    assert r["repaintKeepsTypedFigure"] and r["repaintKeepsItsSave"], (
+        "a repaint threw away what was typed")
+    assert r["saveCellIsFirstInTheHotelRow"] and r["hotelHeaderSaveFirst"], (
+        "the Hotel and Per Diem Save is not in the first column")
+    assert r["laborSaveLeftOfName"], "the labor rate's Save is not left of its label"
+    assert r["pressed"] is True and r["hotelPressed"] is True
+    assert r["stray"] is False, "a key that is not a rate line was pressed"
+    assert r["puts"] == [
+        {"layout": "global", "line_key": "labor_rate", "applies": True, "notes": "kept note", "formula": "45"},
+        {"layout": "global", "line_key": "travel_lodging", "applies": True, "notes": "hotel note",
+         "formula": "91"}], "the press sent a different PUT than the autosave did"
+    assert r["saveGoneAfter"] == {"labor": "", "hotel": ""} and r["unsavedAfter"] == 0
+    assert r["alert"].startswith("Labor rate saved: $45") and r["hotelAlert"].startswith("Hotel saved: $91"), (
+        "the confirmation is not beside the section it belongs to")
+
+
+@needs_node
+def test_a_refused_rate_press_puts_the_figure_back_and_takes_the_save_away(ran):
+    """A 403 puts the old figure back (as before) and the Save goes with it, because nothing differs
+    from what is filed any more; the reason is said in the section's line.
+
+    Mutation: leave the draft behind after a refusal (saveGone red)."""
+    r = ran["rateSaveRefused"]
+    assert r["shown"] and r["ok"] is False and r["boxBack"] == "80" and r["saveGone"]
+    assert "admin-only" in r["said"]
+
+
+@needs_node
+def test_a_non_admin_gets_no_rate_save(ran):
+    """Read-only as today: no box, no Save; the Hotel table keeps its first column so the cells line
+    up under the header.
+
+    Mutation: draw the Save cell's button for a non-admin."""
+    r = ran["rateSaveNonAdmin"]
+    assert r["noSave"] and r["noInputs"] and r["columnKept"]
