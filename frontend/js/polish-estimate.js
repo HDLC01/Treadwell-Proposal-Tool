@@ -105,6 +105,22 @@
     try { return B.travelCarrier(ROOT); } catch (err) { return B.ROOT_TAB; }
   }
 
+  /** Is the section on show the one that carries the job's travel? ONE section does (B.travelCarrier), so a combo
+   *  bid charges Hotel and Per Diem once and not once for each of its two sections. A bid with one section is
+   *  always its own carrier. */
+  function carriesTravel() {
+    if (!ROOT || !ROOT.tabs) return true;
+    try { return B.travelCarrier(ROOT) === activeTab; } catch (err) { return true; }
+  }
+
+  /** The words on the Labor and Review steps of a section that does not carry the job's travel. */
+  function travelNote() {
+    var tab = B.ROOT_TAB;
+    try { tab = B.travelCarrier(ROOT); } catch (err) { tab = B.ROOT_TAB; }
+    return "Travel, Hotel and Per Diem are charged once for the whole job, on the " + tab +
+      " section. Open it to change them.";
+  }
+
   function adopt(blob) {
     state = blob || {};
     ROOT = B.migrateModel(state.polish_estimate);
@@ -1890,8 +1906,11 @@
     if (!M.travel) M.travel = B.normalizeTravel(null);
     var html = "";
     var travelRows = "";
+    // The job's travel is charged ONCE, on the section that carries it (B.travelCarrier). Any other section of a
+    // combo bid has no Travel block to draw: its crew is priced as labor and nothing else (see travelNote).
+    var carries = carriesTravel();
     M.labor.forEach(function (r, i) {
-      if ((r || {}).id === "travel") travelRows += laborCard(r, i);
+      if ((r || {}).id === "travel" && carries) travelRows += laborCard(r, i);
       else html += laborCard(r, i);
     });
 
@@ -1902,16 +1921,21 @@
     html += '<p class="cap">Labor total <b data-labor-total>' +
       esc(moneyAuto(B.laborTotal(M.labor, M.conditions))) + '</b>.</p>';
 
-    html += '<div class="trvsep" role="separator"><span>Travel</span></div>' +
-      '<p class="cap">Travel is expected when the job is 70 miles or more from the office. Under ' +
-      '70 miles all three lines below stay gray until you switch one on.</p>';
-    html += distanceBlock();
-    // HOW IT IS WORKED OUT: the local-or-not call and the sums, in words. Text only (one element,
-    // pre-line), so the live repaint can replace it without touching anything the estimator is in.
-    html += '<p class="cap trvhow" data-trv-how>' + esc(B.travelHow(M).text) + '</p>';
-    html += travelRows + travelCard("lodging") + travelCard("per_diem");
-    html += '<p class="cap">Lodging and Per Diem total <b data-travel-total>' +
-      esc(moneyAuto(B.travelCosts(M.travel, M.labor).total)) + '</b>, added before the markups.</p>';
+    if (!carries) {
+      html += '<div class="trvsep" role="separator"><span>Travel</span></div>' +
+        '<p class="cap" data-travel-note>' + esc(travelNote()) + '</p>';
+    } else {
+      html += '<div class="trvsep" role="separator"><span>Travel</span></div>' +
+        '<p class="cap">Travel is expected when the job is 70 miles or more from the office. Under ' +
+        '70 miles all three lines below stay gray until you switch one on.</p>';
+      html += distanceBlock();
+      // HOW IT IS WORKED OUT: the local-or-not call and the sums, in words. Text only (one element,
+      // pre-line), so the live repaint can replace it without touching anything the estimator is in.
+      html += '<p class="cap trvhow" data-trv-how>' + esc(B.travelHow(M).text) + '</p>';
+      html += travelRows + travelCard("lodging") + travelCard("per_diem");
+      html += '<p class="cap">Lodging and Per Diem total <b data-travel-total>' +
+        esc(moneyAuto(B.travelCosts(M.travel, M.labor).total)) + '</b>, added before the markups.</p>';
+    }
 
     var pw = !!(M.conditions || {}).prevailing_wage;
     html += '<p class="cap">Prevailing wage is <b>' + (pw ? "on" : "off") + '</b>' +
@@ -1957,6 +1981,44 @@
     return '<span data-mk="' + key + '">' + esc(moneyAuto(b[key])) + '</span>';
   }
 
+  /** THE WHOLE BID, on the Review step of a bid made of more than one section (a combo job: Epoxy and Polish).
+  *  One row for each section that is part of the bid, at its OWN price (each has had its own gross profit taken),
+  *  and the combined base bid under them: the same figure the save writes as the lump sum. An option is listed and
+  *  is not in the combined figure. "" for a bid with one section, so a Polish or an Epoxy bid reads as it always did. */
+  function jobCard() {
+    var live = sectionList().filter(function (e) { return e.kind !== "off"; });
+    if (live.length < 2) return "";
+    var bids = allBids();
+    var rows = live.map(function (e) {
+      var sb = bids[e.tab];
+      return [e.tab + (e.kind === "option" ? " (option)" : ""), "",
+              '<span data-job-sec="' + esc(e.tab) + '">' + esc(sectionMoney(sb)) + '</span>'];
+    });
+    rows.push(["Combined base bid", "", '<span data-job-total>' + esc(jobMoney()) + '</span>', "tot"]);
+    return '<div data-rev="markup" class="rev" data-job-card><div class="rev-h">Whole bid</div>' + revTable(rows) + '</div>';
+  }
+
+  function sectionMoney(sb) {
+    return sb && sb.priceable !== false && sb.total ? moneyAuto(sb.total) : "no price";
+  }
+
+  /** The combined base bid as the save composes it, or "no price" when a section cannot be priced. */
+  function jobMoney() {
+    var c = null;
+    try { c = B.composePricingSnapshot(ROOT, priceCtx()).computed_bid; } catch (err) { c = null; }
+    return c && c.lump_sum ? moneyAuto(c.lump_sum) : "no price";
+  }
+
+  /** Keep the whole-bid card's figures in step with a keystroke (repaintNumbers). */
+  function repaintJob() {
+    var secs = document.querySelectorAll("[data-job-sec]");
+    var tot = document.querySelector("[data-job-total]");
+    if (!secs.length && !tot) return;
+    var bids = allBids();
+    secs.forEach(function (el) { el.textContent = sectionMoney(bids[el.getAttribute("data-job-sec")]); });
+    if (tot) tot.textContent = jobMoney();
+  }
+
   function reviewPanel() {
     // The bid of the section on show: the root's chain, or the engine's answer for another section.
     var b = activeBid();
@@ -1966,6 +2028,7 @@
       html += '<div class="blockers"><b>Not finished yet.</b><ul>' +
         blk.map(function (x) { return "<li>" + esc(x) + "</li>"; }).join("") + '</ul></div>';
     }
+    html += jobCard();
 
     // Takeoff and material
     var tkRows = [];
@@ -2021,14 +2084,20 @@
     // alone -- every other screen still calls the line "Lodging". The lodging line shows "Hotel"
     // here unless the estimator typed a label of their own over the default.
     var trvRows = [];
+    // A section that does not carry the job's travel (the second section of a combo bid) prices none: the job's
+    // Hotel and Per Diem are charged once, on the carrier, and this card says where instead of listing lines
+    // that belong to another section's crew.
+    var carries = carriesTravel();
     B.TRAVEL_LINE_KEYS.forEach(function (k) {
       var tl = (M.travel || {})[k];
-      if (!tl || !tl.enabled) return;
+      if (!carries || !tl || !tl.enabled) return;
       var name = (k === "lodging" && (!tl.label || tl.label === "Lodging")) ? "Hotel" : tl.label;
       trvRows.push([name, B.num(B.travelQty(tl, M.labor)) + " × " + B.money2(tl.rate),
                     esc(moneyAuto(B.travelLineCost(tl, M.labor)))]);
     });
-    if (!trvRows.length) {
+    if (!carries) {
+      trvRows.push([travelNote(), "", ""]);
+    } else if (!trvRows.length) {
       trvRows.push(["Not included. Switch Lodging or Per Diem on in the Labor step.", "", ""]);
     }
     trvRows.push(["Hotel and Per Diem Total", "", mkAmt(b, "travel"), "tot"]);
@@ -2395,6 +2464,7 @@
     document.querySelectorAll("[data-mkpct]").forEach(function (el) {
       el.textContent = B.pct(b[el.getAttribute("data-mkpct")]);
     });
+    repaintJob();
   }
 
   // ── events ──────────────────────────────────────────────────────────────────

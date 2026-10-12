@@ -206,7 +206,8 @@ def test_the_sections_a_job_type_needs():
     assert got["epoxyTabs"] == ["Epoxy"] and got["epoxyRoot"] == "off" and got["epoxyKind"] == "base" and got["stamp"] == "epoxy@1"
     assert got["callersModelUntouched"] is True and got["idempotent"] is True and got["polishIsTheSameObject"] is True
     assert got["sections"] == [["Polish", "off"], ["Epoxy", "base"]] and got["active"] == ["Epoxy"] and got["carrier"] == "Epoxy"
-    assert "not ready" in got["combo"] and "not ready" in got["gyp"], "a job type v2 cannot price is refused, not guessed"
+    assert got["combo"] is None, "Combo is ready since Phase 13 (test_v2_combo.py holds what it builds)"
+    assert "not ready" in got["gyp"], "a job type v2 cannot price is refused, not guessed"
     assert "not a job type" in got["seal"] and "not a job type" in got["none"]
     assert got["keepsTheSection"] == 99, "a section that is already there is never replaced"
 

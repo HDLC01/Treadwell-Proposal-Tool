@@ -1310,7 +1310,7 @@ out.engineMoves = (function () {
     };
     const markupBefore = b.dom.nodes["job-type"].innerHTML;
     const attempts = {};
-    ["combo", "gyp", "seal", "leveling", "nonsense", ""].forEach((key) => {
+    ["gyp", "seal", "leveling", "nonsense", ""].forEach((key) => {
       jobClick(b, key, 1);                    // the mouse
       jobClick(b, key, 0);                    // the keyboard
       attempts[key || "(empty)"] = { current: b.api.jobType(), armed: b.clock.armed(), saves: b.rec.saves.length };
@@ -1319,18 +1319,18 @@ out.engineMoves = (function () {
       attempts: attempts, markupUnchanged: b.dom.nodes["job-type"].innerHTML === markupBefore,
     };
 
-    // The same page, with a vocabulary that also marks Combo ready (Epoxy has been since Phase 12): nothing in the
-    // page changes.
-    const f = build({ fakeReady: ["combo"] });
+    // The same page, with a vocabulary that also marks Gyp ready (Epoxy has been since Phase 12 and Combo since Phase 13):
+    // nothing in the page changes.
+    const f = build({ fakeReady: ["gyp"] });
     await f.api.boot();
     out.jobTypes.fakeReady = { radios: radios(f), note: noteOf(f), before: f.api.jobType() };
-    jobClick(f, "combo", 1);
+    jobClick(f, "gyp", 1);
     const armed = f.clock.armed();
     f.clock.fire();
     out.jobTypes.fakeReady.afterPick = { current: f.api.jobType(), armed: armed, radios: radios(f),
       savedWorkType: (f.rec.saves[f.rec.saves.length - 1] || {}).work_type };
-    jobClick(f, "gyp", 0);
-    out.jobTypes.fakeReady.gypStillDisabled = f.api.jobType();
+    jobClick(f, "seal", 0);
+    out.jobTypes.fakeReady.sealStillRefused = f.api.jobType();
 
     // Saved drafts open unchanged: no job type reads as Polish, one v2 cannot price yet reads as Polish,
     // and opening writes nothing. The county the draft holds is still shown.
@@ -1338,8 +1338,10 @@ out.engineMoves = (function () {
                      county_notes: "KCK, Bonner Springs." };
     const none = build({ blob: blob(picked) });                  // no work_type at all
     await none.api.boot();
-    const combo = build({ blob: blob(Object.assign({ work_type: "combo" }, picked)) });
+    const combo = build({ blob: blob(Object.assign({ work_type: "gyp" }, picked)) });
     await combo.api.boot();
+    const realCombo = build({ blob: blob(Object.assign({ work_type: "combo" }, picked)) });
+    await realCombo.api.boot();
     const noneOpenSaves = none.rec.saves.length;
     none.api.save();
     out.jobTypes.savedDrafts = {
@@ -1349,6 +1351,8 @@ out.engineMoves = (function () {
       combo: { current: combo.api.jobType(), checked: radios(combo).filter((r) => r.checked).map((r) => r.value),
                county: readCountyField(combo).input, savedOnOpen: combo.rec.saves.length,
                armedOnOpen: combo.clock.armed() },
+      readyCombo: { current: realCombo.api.jobType(), checked: radios(realCombo).filter((r) => r.checked).map((r) => r.value),
+                    savedOnOpen: realCombo.rec.saves.length, armedOnOpen: realCombo.clock.armed() },
     };
 
     // The quantity boxes a polish job does not ask for are drawn (hidden, never removed) and so are swept
