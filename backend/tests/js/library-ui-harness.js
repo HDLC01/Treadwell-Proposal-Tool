@@ -5576,10 +5576,30 @@ function itemRowDoc(rowHtml, id) {
     cleanRowCellEmpty: (cleanRow.cells.find((c) => c.cls.indexOf("rowsave") !== -1) || {}).html === "",
     headerCells: (tableHtml.match(/<th[\s>]/g) || []).length,
     rowCells: cleanRow.cells.length,
-    headerHasPinnedColumn: /<th class="rowsave"><\/th>\s*<th class="w-act"><\/th>/.test(tableHtml),
-    cssPinsTheCell: /td\.rowsave \{ position:sticky; right:0; \}/.test(html),
-    cssZeroWideWhenEmpty: /\.rowsave \{ padding:0; \}/.test(html) &&
-      /td\.rowsave:not\(:empty\) \{[^}]*background:var\(--card\)/.test(html),
+    // HANZ, 2026-10-12: "put a save button to the left of the name". The Save cell is the FIRST
+    // cell of the rendered row, ahead of the name box, and its header is the first header.
+    saveCellIsFirst: cleanRow.cells[0].cls.indexOf("rowsave") !== -1,
+    nameCellIsSecond: cleanRow.cells[1].html.indexOf('data-f="name"') !== -1,
+    freshRowSaveFirst: (() => {
+      const f = build({ FRESH: { items: { i2: true }, assemblies: {} } });
+      f.api.renderItems();
+      const row = f.dom.nodes["items-body"].innerHTML.split("</tr>")
+        .find((r) => r.indexOf('data-item="i2"') !== -1) || "";
+      const save = row.indexOf('data-save-new="items"');
+      const name = row.indexOf('data-f="name"');
+      const m = /<button[^>]*data-save-new="items"[^>]*data-save-id="i2"[^>]*>Save<\/button>/.exec(row);
+      return { saveBeforeName: save !== -1 && save < name, buttonMarkup: !!m,
+               inFirstCell: /^<tr data-item="i2"><td class="rowsave"><button/.test(row.trim()) };
+    })(),
+    headerSaveFirst: /<tr>\s*<th class="rowsave"><\/th>\s*<th>Materials/.test(tableHtml),
+    headerHasNoStrayPinnedColumn: (tableHtml.match(/<th class="rowsave">/g) || []).length === 1,
+    cssPinsTheCell: /td\.rowsave \{ position:sticky; left:0;/.test(html) &&
+      /th\.rowsave \{ position:sticky; left:0;/.test(html),
+    cssKeepsItsWidth: /\.rowsave \{ width:72px; min-width:72px;/.test(html) &&
+      /td\.rowsave \{[^}]*background:var\(--card\)/.test(html),
+    asmSaveLeftOfName: html.indexOf('id="asm-save"') !== -1 &&
+      html.indexOf('id="asm-save"') < html.indexOf('id="asm-name"'),
+    hotelNoteBelowItsRows: html.indexOf('id="travel-rate-alert"') > html.indexOf('id="travel-rates-box"'),
   };
 }
 

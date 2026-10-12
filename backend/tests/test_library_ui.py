@@ -3875,9 +3875,36 @@ def test_one_edit_to_any_material_field_shows_save_in_the_pinned_cell(ran):
     assert v["cleanRowCellEmpty"], "a clean row's pinned cell is not empty, so it takes up width"
     assert v["headerCells"] == v["rowCells"], (
         "header and row have different column counts", v["headerCells"], v["rowCells"])
-    assert v["headerHasPinnedColumn"]
-    assert v["cssPinsTheCell"], "the .rowsave cell is no longer pinned to the scroller's edge"
-    assert v["cssZeroWideWhenEmpty"]
+    assert v["headerSaveFirst"], "the header's Save column is not the first column"
+    assert v["headerHasNoStrayPinnedColumn"]
+    assert v["cssPinsTheCell"], "the .rowsave cell is no longer pinned to the scroller's left edge"
+    assert v["cssKeepsItsWidth"], "the Save column lost its fixed width, so it moves the table"
+
+
+@needs_node
+def test_every_per_row_save_sits_left_of_the_name(ran):
+    """Hanz, 2026-10-12: "For all item lines in default items and assemblies please put a save
+    button to the left of the name." The Items row's Save was the last-but-one cell of a table 1,990px
+    wide, so it was off screen until you scrolled sideways.
+
+    Executed: the real renderItems output for a row that has an unsaved mark. The Save cell is the
+    first cell, the name is the second, the button is the same one (data-save-new, data-save-id)
+    the click handler already saves from. The assembly's Save is left of its name box in the title
+    bar, and the Hotel and Per Diem confirmation line is below the Hotel rows, not above them.
+
+    Mutations: put the .rowsave cell back after datescell in renderItems (saveCellIsFirst,
+    saveBeforeName, inFirstCell red); put the th back after History (headerSaveFirst red); move
+    #asm-save back after the unit select (asmSaveLeftOfName red); move #travel-rate-alert back above
+    #travel-rates-box (hotelNoteBelowItsRows red)."""
+    v = ran["saveVisible"]
+    assert v["saveCellIsFirst"], "the Save cell is not the first cell of an Items row"
+    assert v["nameCellIsSecond"], "the name box is not the second cell, right after Save"
+    f = v["freshRowSaveFirst"]
+    assert f["saveBeforeName"], "Save comes after the name box in the row"
+    assert f["buttonMarkup"], "the Save button lost its handler attributes"
+    assert f["inFirstCell"], "the Save button is not the first thing in the row"
+    assert v["asmSaveLeftOfName"], "the assembly's Save is not left of its name box"
+    assert v["hotelNoteBelowItsRows"], "the Hotel confirmation is above its section again"
 
 
 @needs_node
