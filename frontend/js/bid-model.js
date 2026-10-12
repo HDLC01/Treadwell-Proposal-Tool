@@ -852,6 +852,84 @@
     return rows;
   }
 
+  /** THE UNIT A TAKEOFF ROW IS MEASURED IN COMES FROM ITEMS & ASSEMBLIES (Hanz, 2026-10-12: "Unit
+   *  should be pulled from the items and assemblies tab").
+   *
+   *  An ASSEMBLY declares its own unit, SF or LF. A MATERIAL is measured by its COVERAGE BASIS,
+   *  never by `item.unit`: that one is the unit the material is BOUGHT in (Gallon, Kit, Pail) and
+   *  has nothing to do with how the floor is measured. A takeoff only prices SF and LF (takeoffSf
+   *  and takeoffLf are the two measures the bid reads), so a basis of "each" cannot be priced as a
+   *  count here and is read as SF; `state` says so, so the screen can too.
+   *
+   *  `kind` is "asm" or "item"; `lib` is that library row. Returns null when there is no row, and
+   *  otherwise `{unit: "SF"|"LF", state}`: "set" when the library said, "unset" when it did not
+   *  (priced as SF, today's default), "each" for a count. Lives in this file, not in
+   *  js/polish-estimate.js, because the harness for that file lifts functions BY NAME and a new
+   *  local helper called from one of them is a ReferenceError in every scenario. */
+  function takeoffUnit(kind, lib) {
+    if (!lib || typeof lib !== "object") return null;
+    var word = kind === "asm" ? lib.unit : lib.coverage_basis;
+    word = String(word == null ? "" : word).trim().toUpperCase();
+    if (word === "SF" || word === "LF") return { unit: word, state: "set" };
+    if (kind !== "asm" && word === "EACH") return { unit: "SF", state: "each" };
+    return { unit: "SF", state: "unset" };
+  }
+
+  /** True for exactly "SF" or "LF": the only two units takeoffSf and takeoffLf count. */
+  function validTakeoffUnit(u) {
+    return u === "SF" || u === "LF";
+  }
+
+  /** Give takeoff row `i` the unit a pick on Items & Assemblies decided, without quietly turning a
+   *  number into a different kind of number.
+   *
+   *  A measurement is a count of ONE unit. Moving a row that holds one from SF to LF (or back) would
+   *  keep the digits and change what they mean: a 5,000 SF floor becomes 5,000 LF of cove and drops
+   *  out of the area. So when the unit really changes and the row holds a measurement, the
+   *  measurement is cleared (through setMeasurement, so a floor's same-floor rows follow it and a
+   *  follower stops following) and the estimator types the new one. A row whose saved unit was not
+   *  SF or LF counted nowhere, so its number belongs to no unit and is kept. Returns true when the
+   *  unit changed. */
+  function adoptTakeoffUnit(rows, i, unit) {
+    var r = rows && rows[i];
+    if (!r || r.unit === unit) return false;
+    var held = String(r.measurement == null ? "" : r.measurement).trim() !== "";
+    if (held && validTakeoffUnit(r.unit)) setMeasurement(rows, i, "");
+    delete r.same_floor;
+    r.unit = unit;
+    return true;
+  }
+
+  /** What a takeoff row's Unit box shows and the line under it says.
+   *
+   *  `row` is the takeoff row, `kind` and `lib` as takeoffUnit. The row's SAVED unit is what it
+   *  prices with, so that is what shows; when it differs from the library's the line says so
+   *  instead of repricing a saved bid behind the estimator's back. No library row (nothing picked
+   *  yet) is a dash. Returns `{text, hint, note}`; `note` is true only for the saved-differs
+   *  case, which the page draws louder than the ordinary line. */
+  function takeoffUnitView(row, kind, lib) {
+    var lu = takeoffUnit(kind, lib);
+    if (!lu) return { text: "—", hint: "From Items & Assemblies.", note: false };
+    var saved = (row || {}).unit;
+    // A SAVED UNIT THAT IS NOT EXACTLY "SF" OR "LF" IS COUNTED IN NEITHER MEASURE: takeoffSf and
+    // takeoffLf compare strictly. Showing the library's unit there would say the row is measured in
+    // a unit the totals ignore, so the box says what is true instead.
+    if (!validTakeoffUnit(saved)) {
+      return { text: "—", note: true,
+        hint: "No unit is saved on this row, so the bid does not count it. Retype the name to take " +
+              "the unit from Items & Assemblies." };
+    }
+    var ordinary = lu.state === "set" ? "From Items & Assemblies."
+      : (lu.state === "each"
+        ? "Items & Assemblies says Each, which a takeoff prices as SF."
+        : "Not set in Items & Assemblies, so SF.");
+    if (saved === lu.unit) return { text: saved, hint: ordinary, note: false };
+    var now = lu.state === "set" ? "Items & Assemblies now says " + lu.unit + "."
+      : (lu.state === "each" ? "Items & Assemblies now says Each, which prices as SF."
+        : "Items & Assemblies has no unit set, so it would be SF.");
+    return { text: saved, hint: "Saved as " + saved + "; " + now, note: true };
+  }
+
   /** THE DEFAULTS, LOADED INTO A NEW ESTIMATE'S TAKEOFF (Hanz, 2026-10-05: "each default becomes its
    *  own Takeoff row, measured with the intake polish SF").
    *
@@ -912,17 +990,14 @@
     var carried = false;
     picks.forEach(function (p) {
       var on = p.row.default_on !== false;
-      var unit = "SF";
-      if (p.kind === "asm") {
-        var u = String(p.row.unit == null ? "" : p.row.unit).toUpperCase();
-        if (u === "LF") unit = "LF";
-      }
+      // The unit is Items & Assemblies' say: an assembly's own unit, a material's coverage basis.
+      var unit = takeoffUnit(p.kind, p.row).unit;
       var r;
       if (p.kind === "asm") {
         r = { assembly_id: p.row.id, assembly_name: p.row.name, measurement: "", unit: unit };
       } else {
         r = { kind: "item", item_id: p.row.id, item_name: p.row.name, coverage: "",
-              measurement: "", unit: "SF" };
+              measurement: "", unit: unit };
       }
       if (unit === "SF" && total > 0) {
         r.measurement = total;
@@ -3130,6 +3205,9 @@
     measuredSfValues: measuredSfValues, setAreaSf: setAreaSf,
     seedTakeoffSf: seedTakeoffSf,
     seedDefaultTakeoff: seedDefaultTakeoff,
+    takeoffUnit: takeoffUnit,
+    takeoffUnitView: takeoffUnitView,
+    validTakeoffUnit: validTakeoffUnit, adoptTakeoffUnit: adoptTakeoffUnit,
     dyeCost: dyeCost, jointFillerCost: jointFillerCost,
     markupChain: markupChain,
     freshModel: freshModel, migrateModel: migrateModel, blockers: blockers,
