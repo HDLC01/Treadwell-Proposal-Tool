@@ -4292,8 +4292,9 @@
     // for "the one input every number below depends on" -- with the results table under it.
     html += '</tbody></table></div></div></div>' +
       '<div class="admin-section"><h2>Try it</h2>' +
-      '<p class="paneintro">Type a job size to see what a new estimate would fill in. This changes ' +
-      'nothing.</p>' +
+      '<p class="paneintro">Type a job size to see what this works out. A new estimate fills in only ' +
+      'the rate and the hours a day; guys and days start empty and are typed on the estimate. This ' +
+      'changes nothing.</p>' +
       '<div class="card"><div class="areaband"><label for="labcalc-try-sf">Job SF</label>' +
       '<input id="labcalc-try-sf" class="num" type="text" inputmode="decimal" data-tryit-sf ' +
       'value="' + esc(CALC_TRY_SF) + '" aria-label="Job square feet" /></div>' +

@@ -173,10 +173,14 @@
   // to B5, so his own formula reads it as not-hard-bid, which is the same outcome.
 
   /** The hint under a Guys / Lodging / Per Diem box: one wording, drawn by the card builders and
-   *  repainted in place when clearing the box hands the figure back to the man-days. */
-  function manDaysHint(auto) {
-    return auto ? "Man-days from the tasks above."
-      : "Typed by you. Clear it to use the man-days from the tasks above.";
+   *  repainted in place as the tasks above change. A box on auto (a bid saved before 2026-10-12)
+   *  says the figure IS the man-days. Any other box says what the sheet would count, as text and
+   *  never as a value: the box itself is the estimator's to type. `manDays` is travelManDays of the
+   *  rows; left out, the hint says only that the box is typed. */
+  function manDaysHint(auto, manDays) {
+    if (auto) return "Man-days from the tasks above.";
+    if (manDays === undefined || manDays === null) return "Typed by you.";
+    return "Man-days from the tasks above: " + (Math.round(num(manDays) * 100) / 100) + ".";
   }
 
   /** Is this row counted? `enabled` is absent on every row saved before the slider existed and on
@@ -288,11 +292,13 @@
     return { guys: guys, days: days, hours_per_day: hpd, rate: rate };
   }
 
-  /** `labor` with each row that has a saved mode filled from it -- NEW BIDS ONLY (the caller's gate
-   *  is laborUnstated, the same one that guards every other default). A NEW array of NEW rows.
+  /** `labor` with each row that has a saved mode given its RATE and hours a day -- NEW BIDS ONLY (the
+   *  caller's gate is laborUnstated, the same one that guards every other default). A NEW array of
+   *  NEW rows. Guys and Days are NOT filled (Hanz, 2026-10-12): they start empty and are typed.
    *  The values written are also kept on the row as `calc_default`, which is what the estimate's
-   *  "Default value: N" warning compares against: once saved, the bid keeps its own numbers and
-   *  nothing here ever runs on it again. Travel (an hours row) is never touched. */
+   *  "Default value: N" warning compares against (an empty default names nothing): once saved, the
+   *  bid keeps its own numbers and nothing here ever runs on it again. Travel (an hours row) is
+   *  never touched. */
   function applyLaborCalc(labor, cfgs, sf, dflt) {
     var out = (labor instanceof Array) ? labor.slice() : [];
     if (!(cfgs instanceof Array)) return out;
@@ -303,13 +309,15 @@
       if (!r || r.unit === "hours" || r.id === "travel") continue;
       var v = laborCalcValues(byId[String(r.id)], sf, dflt);
       if (!v) continue;
+      // GUYS AND DAYS ARE NOT FILLED (Hanz, 2026-10-12: "nights, days, guys and hours should have
+      // nothing when it starts"). A new bid takes the calculator's RATE and hours a day and nothing
+      // else; how many guys and how many days is the estimator's to type. So the "From SF" marker
+      // (sf_per_day, which made Days follow the takeoff) is not written either: there is no filled
+      // Days for it to follow. laborCalcValues still works the full figures out for the Calculator
+      // page's "Try it" box.
       var copy = copyInto({}, r);
-      copy.guys = v.guys; copy.days = v.days; copy.rate = v.rate; copy.hours_per_day = v.hours_per_day;
-      copy.calc_default = { guys: v.guys, days: v.days, rate: v.rate, hours_per_day: v.hours_per_day };
-      // THE UNTOUCHED-FOLLOW MARKER (G2): a "From SF" line keeps its production rate so its days can
-      // keep following the takeoff (followLaborDays). Fixed lines carry none and never move.
-      var cfg = byId[String(r.id)];
-      if (cfg.mode === "sf" && num(cfg.sf_per_day) > 0) copy.calc_default.sf_per_day = num(cfg.sf_per_day);
+      copy.guys = ""; copy.days = ""; copy.rate = v.rate; copy.hours_per_day = v.hours_per_day;
+      copy.calc_default = { guys: "", days: "", rate: v.rate, hours_per_day: v.hours_per_day };
       out[i] = copy;
     }
     return out;
@@ -439,10 +447,13 @@
    *  `{lodging: line, per_diem: line}`, each `{label, enabled, qty, qty_auto, rate}`, and not as rows
    *  of M.labor, because a labor row is guys x days x rate x 8 and neither of these is.
    *
-   *  THE QUANTITY. Nights (and days of food) are the crew's man-days, the way backend/pricing.py
-   *  works them out (`nights = labor man-days`, one lodging and one meal charge per man per night).
-   *  `qty_auto` follows travelManDays until the estimator types a number; typing is how you leave
-   *  auto, and clearing the box is how you come back. An OFF line, or an absent `travel`, is $0.
+   *  THE QUANTITY. Nights (and days of food) are the crew's man-days on Kyle's sheet and in
+   *  backend/pricing.py (`nights = labor man-days`, one lodging and one meal charge per man per
+   *  night). A NEW bid does NOT count them (Hanz, 2026-10-12): its lines open with an empty quantity
+   *  and `qty_auto` false (travelLinesStartEmpty), and a line switched on with nothing typed is $0.
+   *  A bid SAVED before then keeps `qty_auto` true and still follows travelManDays until the
+   *  estimator types a number; typing is how you leave auto, and clearing the box leaves it empty.
+   *  An OFF line, or an absent `travel`, is $0.
    *
    *  THE RATES are the Global markup_rules rows (set on Items & Assemblies -> Labor) `travel_lodging` ($70) and `travel_per_diem` ($45),
    *  copied onto a NEW bid when it opens (applyTravelRates) and never again, so a rate edited later
@@ -534,6 +545,34 @@
     // G3: each line remembers the rate it was filled with (the Items & Assemblies -> Labor figure, or the
     // shipped one when none is filed), which is what the "Default value" warning compares against.
     TRAVEL_LINE_KEYS.forEach(function (k) { out[k].rate_default = num(out[k].rate); });
+    return out;
+  }
+
+  /** A NEW bid's Lodging and Per Diem with their quantities empty (Hanz, 2026-10-12: "nights, days,
+   *  guys and hours should have nothing when it starts"). The rate stays; the quantity is typed, and
+   *  a line switched on with nothing typed prices $0. Not on auto, so the man-days never fill it in
+   *  behind the estimator's back. This departs from Kyle's sheet, which counts nights and days from
+   *  the man-days. A NEW object; the one handed in is never touched. */
+  function travelLinesStartEmpty(travel) {
+    var out = copyInto({}, travel || {});
+    TRAVEL_LINE_KEYS.forEach(function (k) {
+      if (!out[k] || typeof out[k] !== "object") return;
+      var line = copyInto({}, out[k]);
+      line.qty_auto = false;
+      line.qty = "";
+      out[k] = line;
+    });
+    return out;
+  }
+
+  /** A NEW bid's Travel Labor row with its quantities empty: no guys, no hours, and neither on
+   *  auto (guys_auto false is what stops syncAutoGuys writing the man-days into it), and no
+   *  hours_seed (the distance answer no longer fills the hours). The rate and the rest of the row
+   *  stay. A copy; the row handed in is never touched. */
+  function travelRowStartsEmpty(row) {
+    var out = copyInto({}, row);
+    out.guys = ""; out.days = ""; out.guys_auto = false;
+    delete out.hours_seed;
     return out;
   }
 
@@ -634,36 +673,21 @@
       var l = model.travel[k];
       if (l && l.hand !== true) l.enabled = far;
     });
-    seedTravelHours(model, miles);
     return model;
   }
 
-  /** THE DRIVE HOURS A NEW BID'S TRAVEL LABOR STARTS WITH (walk 2026-10-06: 150 miles typed, travel
-   *  on, and the card read "7.5 x 0 x $33 = $0"). The 7.5 is Guys: the crew's man-days (Polish A44),
-   *  filled by syncAutoGuys. The 0 is Hours, Polish B44 = Epoxy!B52, which Kyle's sheet leaves at 0
-   *  with the note "Drive Time: ?" -- so a travel job priced nothing until somebody typed the hours.
-   *  Now the distance answer fills it: a round trip at DRIVE_MPH, to the half hour (150 mi -> 5).
-   *
-   *  NEW BIDS ONLY: the row opts in with `hours_seed` (freshModel writes it; a saved bid never has
-   *  it), so no saved bid's total can move. `hours_seed` remembers what was written, so the figure
-   *  follows a changed distance until the estimator types their own hours, which is then theirs. */
+  /** THE DISTANCE NO LONGER FILLS THE DRIVE HOURS (Hanz, 2026-10-12). From 2026-10-06 the distance
+   *  answer wrote a round trip at DRIVE_MPH into a new bid's Travel Labor hours (150 mi -> 5). It
+   *  does not any more: "nights, days, guys and hours should have nothing when it starts". The
+   *  distance still decides local or travel (the lines gray or come on); the hours are typed.
+   *  driveHoursFor stays as the pure arithmetic (a round trip to the half hour); nothing on a bid
+   *  calls it. A bid saved with the old `hours_seed` marker keeps the hours it was saved with, and
+   *  travelHow still words them as the round trip they were. */
   var DRIVE_MPH = 60;
   function driveHoursFor(miles) {
     var m = milesOrNull(miles);
     if (m === null || m < LOCAL_MILES) return "";
     return Math.ceil((2 * m / DRIVE_MPH) * 2) / 2;
-  }
-  function seedTravelHours(model, miles) {
-    var labor = (model && model.labor) || [];
-    for (var i = 0; i < labor.length; i++) {
-      var r = labor[i];
-      if (!r || r.id !== "travel" || !Object.prototype.hasOwnProperty.call(r, "hours_seed")) continue;
-      var untouched = isBlank(r.days) || (!isBlank(r.hours_seed) && num(r.days) === num(r.hours_seed));
-      if (!untouched) continue;
-      var h = driveHoursFor(miles);
-      r.days = h;
-      r.hours_seed = h;
-    }
   }
 
   /** Back to "unknown": the estimator cleared the miles they had typed. Local again (the shipped
@@ -743,6 +767,8 @@
 
     var lines = [];
     var usesAuto = false;
+    // Set when a travel line that is on is not on auto: the man-days the sheet would count are then shown as text.
+    var showManDays = false;
     if (tr && rowOn(tr) && (num(tr.days) > 0 || !local)) {
       var hrs = "";
       if (!isBlank(tr.days) && num(tr.days) > 0) {
@@ -754,7 +780,8 @@
           : " (typed)";
       }
       if (tr.guys_auto) usesAuto = true;
-      lines.push("Travel Labor: " + qty(tr.guys) + " man-days" + (tr.guys_auto ? "" : " (typed)") +
+      if (!tr.guys_auto) showManDays = true;
+      lines.push("Travel Labor: " + qty(tr.guys) + " man-days" + ((tr.guys_auto || !filledIn(tr.guys)) ? "" : " (typed)") +
         " x " + qty(tr.days) + " drive hours" + hrs + " x " + money2(tr.rate) + " = " +
         money2(laborCost(tr)) + (num(tr.days) > 0 ? "" : ". Type the drive hours."));
     } else {
@@ -767,13 +794,19 @@
       var prod = q * num(l.rate);
       var cost = travelLineCost(l, rows);
       if (l.qty_auto !== false) usesAuto = true;
+      var typedQty = l.qty_auto === false && filledIn(l.qty);
+      if (l.qty_auto === false) showManDays = true;
       lines.push(names[k] + ": " + qty(q) + (k === "lodging" ? " nights" : " days") +
-        (l.qty_auto === false ? " (typed)" : "") + " x " + money2(l.rate) + " = " +
-        (prod === cost ? money2(cost) : money2(prod) + ", rounded up to " + money(cost)));
+        (typedQty ? " (typed)" : "") + " x " + money2(l.rate) + " = " +
+        (prod === cost ? money2(cost) : money2(prod) + ", rounded up to " + money(cost)) +
+        (typedQty || l.qty_auto !== false ? "" : ". Type the " + (k === "lodging" ? "nights." : "days.")));
     });
     if (usesAuto) {
       lines.push("Man-days = guys x days on the labor lines above (" + qty(travelManDays(rows)) +
         " now).");
+    } else if (showManDays) {
+      // Text only: the figure is not used anywhere until the estimator types it into a box.
+      lines.push("For reference, the man-days on the labor lines above are " + qty(travelManDays(rows)) + ".");
     }
     return { decision: decision, hand: hand, lines: lines,
              text: [decision].concat(hand, lines).join("\n") };
@@ -1211,7 +1244,11 @@
                ? !!r.guys_auto : true };
   }
 
-  /** A NEW bid's Travel row, opted in to distance-filled hours (seedTravelHours). */
+  /** The Travel row's `hours_seed` marker, written on the shipped model's Travel row only. Since
+   *  2026-10-12 nothing READS it to fill the hours (the distance answer no longer does, see
+   *  driveHoursFor), and a new bid's Travel row has it taken off again (travelRowStartsEmpty). It
+   *  stays on freshModel() because that model's exact shape is pinned by the polish chain golden,
+   *  and travelHow still words the hours of a bid saved with the marker as the round trip they were. */
   function withHoursSeed(row) { row.hours_seed = ""; return row; }
 
   /** One row of `public.library_labor`, read as one of THIS model's labor rows.
@@ -1239,8 +1276,10 @@
     // exactly as it does for Travel.
     var rate = (dflt !== undefined && dflt !== null && !libraryRateIsOwn(r, isCrewId(r.id)))
       ? laborRateOrShipped(dflt) : Number(r.rate);
+    // guys_auto is false whatever the library row says (2026-10-12): a line added to a bid never
+    // takes its Guys from the man-days; the estimator types them.
     var out = { id: r.id, label: r.name, guys: "", days: "", rate: rate,
-                unit: r.unit, guys_auto: !!r.guys_auto };
+                unit: r.unit, guys_auto: false };
     // THE DEFAULTS-TAB SLIDER: a default saved as OFF starts the bid's row switched off (grayed,
     // $0). Written only when explicitly false, so every other row keeps exactly the shape it had.
     if (r.default_on === false) out.enabled = false;
@@ -2606,6 +2645,8 @@
       // the rest on. Another section than the carrier has no Travel of its own.
       var keep = carrierTab === e.tab ? (s.labor || []).filter(function (r) { return r && r.id === "travel"; }) : [];
       var rows = crewFirst(applyLaborRate(seedLibraryLabor(keep, ctx.laborRows, ctx.laborRate, e.layout), ctx.laborRate));
+      // Travel Labor opens with no guys and no hours, on neither auto nor the distance (see travelRowStartsEmpty).
+      rows = rows.map(function (r) { return r && r.id === "travel" ? travelRowStartsEmpty(r) : r; });
       s.labor = carrierTab === e.tab ? rows : rows.filter(function (r) { return !r || r.id !== "travel"; });
     });
     if (asked) {
@@ -2613,7 +2654,7 @@
       // a reload does not append the "missing" row back (migrateModel).
       if (travelDeclined(ctx.laborRows, sectionOf(out, carrierTab).layout)) out = Object.assign(out, { no_travel_labor: true });
       syncAutoGuys(out);
-      out.travel = applyTravelRates(out.travel, ctx.travelRates);
+      out.travel = travelLinesStartEmpty(applyTravelRates(out.travel, ctx.travelRates));
       if (carrierTab === ROOT_TAB) {
         out = applyFeesDefault(out, ctx.feesDefault);
       } else {

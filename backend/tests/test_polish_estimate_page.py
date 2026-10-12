@@ -364,7 +364,8 @@ def test_the_travel_guys_figure_follows_the_tasks_above_it_until_somebody_disagr
     AND THE KEYSTROKE IS THE DISAGREEMENT. Typing in the box is what leaves auto — asking somebody
     to find a control first, to then be allowed to type the number they already have in mind, is a
     worse trade than noticing. Once left, the figure stops following the tasks above; the way back
-    is to clear the box (there is no switch any more; see the clearing tests below)."""
+    is not to clear the box any more (2026-10-12: a cleared box stays empty; see the clearing tests
+    below). This is the path of a bid saved on auto; a NEW bid never starts on auto."""
     t = ran["travelGuys"]
     assert t["seeded"] == 16.5, "3x5 + 3x0.5 man-days: %r" % t["seeded"]
     assert t["afterCrewEdit"] == 13.5, (
@@ -376,8 +377,9 @@ def test_the_travel_guys_figure_follows_the_tasks_above_it_until_somebody_disagr
     assert t["stickyAfterCrewMoves"] == "7", (
         "a hand-typed figure was overwritten when a task above it changed: %r"
         % t["stickyAfterCrewMoves"])
-    assert t["afterBackToAuto"] == {"guys": 28.5, "auto": True}, (
-        "clearing the box did not resume following the tasks above: %r" % t["afterBackToAuto"])
+    assert t["afterClear"] == {"guys": "", "auto": False}, (
+        "clearing the box handed the figure back to the tasks above (it stays empty now): %r"
+        % t["afterClear"])
 
 
 @needs_node
@@ -521,7 +523,8 @@ def test_the_hint_says_whether_the_figure_is_typed_or_the_man_days(ran):
     Mutation: put the old 'Man-days on the road.' wording back."""
     h = ran["labor"]["hintsAndIncluded"]
     assert h["autoHint"] == "Man-days from the tasks above."
-    assert h["typedHint"] == "Typed by you. Clear it to use the man-days from the tasks above."
+    # A box that is not on auto names the man-days as TEXT (the fixture's 3x5 + 3x0.5), never as a value.
+    assert h["typedHint"] == "Man-days from the tasks above: 16.5."
     # Included still toggles, and does not disturb the Guys mode.
     assert h["onBefore"] is True and h["afterOff"]["enabled"] is False
     assert h["afterOff"]["guys_auto"] is False, "Included changed the Guys mode"
@@ -529,47 +532,46 @@ def test_the_hint_says_whether_the_figure_is_typed_or_the_man_days(ran):
 
 
 @needs_node
-def test_clearing_the_guys_box_returns_it_to_the_man_days_on_change_not_on_input(ran):
-    """Going back to auto is CLEARING THE BOX, committed on change (blur / Enter).
+def test_clearing_the_guys_box_leaves_it_empty_and_never_snaps_back_to_the_man_days(ran):
+    """Hanz, 2026-10-12: "nights, days, guys and hours should have nothing when it starts". From
+    2026-10-07 clearing the box handed the figure back to the man-days; that road is closed, because
+    the man-days are no longer a value a box can hold. A cleared box is the estimator's own empty
+    answer: it stays empty, stays typed, and prices $0. The hint under it still says what the
+    man-days are, as text.
 
-    On input it would fight typing: "1", backspace, "2" passes through an empty box, the figure
-    would snap back to the man-days and the card rebuild under the caret. So an empty box
-    mid-typing stays typed; only the commit hands it back. Whitespace counts as empty, and the
-    cost afterwards is the one the man-days price on a never-touched row.
-
-    Mutation: revert on input instead of change and `midBackspace` goes red; drop the change
-    branch and `afterBackToAuto` goes red."""
+    Mutation: put the old `guys_auto = true` on change back and `afterClear` / `clearedBox` go red."""
     t = ran["travelGuys"]
     c = ran["travelClear"]
     assert c["midBackspace"]["auto"] is False and c["midBackspace"]["guys"] == "", (
         "an empty box on input already went back to auto: %r" % c["midBackspace"])
     assert c["afterRetype"] == {"guys": "2", "auto": False}, (
         "retyping after a backspace did not land: %r" % c["afterRetype"])
-    assert t["afterBackToAuto"] == {"guys": 28.5, "auto": True}
-    assert c["clearedBox"] == "28.5", "the box does not show the man-days: %r" % c["clearedBox"]
-    assert c["clearedHint"], "the hint did not go back to the auto wording"
+    assert t["afterClear"] == {"guys": "", "auto": False}
+    assert c["clearedBox"] == "", "the box refilled itself with the man-days: %r" % c["clearedBox"]
+    assert c["clearedHint"] == "Man-days from the tasks above: %s." % c["manDaysNow"], c["clearedHint"]
     assert c["clearRebuilds"] == 0, (
         "clearing the box rebuilt the Labor panel %d time(s): the element the estimator just "
         "tabbed or clicked into is destroyed and the next click or keystroke is lost"
         % c["clearRebuilds"])
-    assert c["costAuto"] == c["costFresh"] != c["costTyped"], (
-        "cleared cost %r, never-touched cost %r, typed cost %r"
-        % (c["costAuto"], c["costFresh"], c["costTyped"]))
+    assert c["costCleared"] == "$0" != c["costTyped"], (
+        "cleared cost %r, typed cost %r" % (c["costCleared"], c["costTyped"]))
 
 
 @needs_node
-def test_clearing_lodging_or_per_diem_returns_it_to_the_man_days(ran):
-    """The same rule on the Lodging / Per Diem quantity, plus the hints and no switch there.
+def test_clearing_lodging_or_per_diem_leaves_it_empty(ran):
+    """The same rule on the Lodging / Per Diem quantity: a cleared box stays empty and typed, prices
+    $0, and the hint names the man-days as text.
 
-    Mutation: drop the data-trv branch of the clearing rule and `backToAuto` stays typed."""
+    Mutation: put the old `qty_auto = true` on change back and `backToAuto` flips to auto."""
     t = ran["travelCosts"]
     assert t["midClearLodging"]["qty_auto"] is False, "empty on input went back to auto"
-    assert t["backToAuto"]["qty_auto"] is True and t["backToAuto"]["qty"] == 16.5
-    assert t["clearedLodgingBox"] == "16.5"
+    assert t["backToAuto"]["qty_auto"] is False and t["backToAuto"]["qty"] == "", (
+        "clearing the box handed it back to the man-days: %r" % t["backToAuto"])
+    assert t["clearedLodgingBox"] == ""
     assert t["lodgeClearRebuilds"] == 0, "clearing Lodging rebuilt the panel and dropped focus"
-    assert t["clearedLodgingCost"] == "$1,155"
+    assert t["clearedLodgingCost"] == "$0"
     assert t["lodgingHints"]["auto"] and t["lodgingHints"]["noTypeMyOwn"]
-    assert t["typedHintLodging"], "the typed hint is not the new wording"
+    assert t["typedHintLodging"], "the hint does not name the man-days"
 
 
 @needs_node
@@ -1815,11 +1817,11 @@ def test_intake_seeds_the_first_measurement_only_when_nothing_is_measured(ran):
         "intake's polish_sf overwrote a measured takeoff row: %r" % m["seededFromIntake"])
     assert m["freshFromIntake"] == 8250, (
         "a brand-new project did not pick up intake's square footage: %r" % m["freshFromIntake"])
-    # A fresh model also seeds the four labor rows the template itself carries. Travel's 1.5 is
-    # DERIVED on adopt rather than seeded: the only crew row carrying days out of the box is the
-    # mock-up's half day, so the man-days come to 3 x 0.5. Its rate is the sheet's own C44 = $33.
-    assert m["freshLabor"] == [["polishing", 3, 33.0], ["mockup", 3, 33.0], ["jointfill", 3, 33.0],
-                              ["travel", 1.5, 33]]
+    # A fresh bid seeds the four labor rows the template itself carries, with EVERY quantity empty
+    # (2026-10-12): the shipped crew of 3 and Mock-up's half day are not filled in, and Travel's
+    # man-days no longer derive into its Guys. Only the rate is there, the sheet's own $33.
+    assert m["freshLabor"] == [["polishing", "", 33.0], ["mockup", "", 33.0], ["jointfill", "", 33.0],
+                              ["travel", "", 33]]
 
 
 @needs_node
@@ -2660,17 +2662,21 @@ def test_a_brand_new_bid_opens_holding_travel_and_every_default_line(ran):
     # The estimator's own boxes are left for the estimator. A default says what the line is and
     # what it costs per unit, never how much of it this job needs.
     assert n["days"][4:] == ["", ""], "a default arrived with days already typed in"
-    # ...with the one documented exception, which is not a typed figure at all: a default that
-    # carries guys_auto gets the derived man-day sum before the first paint, exactly as Travel
-    # does. Compared to Travel's own rather than to a literal, because the point is that the two
-    # went through the same sync, not that today's fixture sums to any particular number.
-    assert n["autoGuys"] == n["travelGuys"] and n["travelGuys"] != [""], (
-        "a guys_auto default was not filled the way Travel is: %r vs %r"
-        % (n["autoGuys"], n["travelGuys"]))
+    # NO EXCEPTION ANY MORE (2026-10-12). A default that carries guys_auto used to get the derived
+    # man-day sum before the first paint, like Travel. Hanz: "nights, days, guys and hours should
+    # have nothing when it starts", so a new bid's Guys boxes are ALL empty, Travel's included,
+    # and none of them is on auto.
+    assert n["autoGuys"] == [""] and n["travelGuys"] == [""], (
+        "a new bid's Guys was filled from the man-days: %r vs %r" % (n["autoGuys"], n["travelGuys"]))
+    assert n["autoFlags"] == [False, False], (
+        "a new bid's line is on auto, so the man-days would fill it in: %r" % n["autoFlags"])
+    assert all(g == "" for g in n["guys"]), "a new bid opened with Guys already typed in: %r" % n["guys"]
     # A default must not quietly put money on a bid nobody has priced yet.
-    assert n["laborTotal"] == n["builtInTotal"], (
-        "seeding the defaults changed the labor total before anything was typed: %r vs %r"
-        % (n["laborTotal"], n["builtInTotal"]))
+    # Since 2026-10-12 a new bid carries NO labor money at all: the shipped Mock-up half day
+    # (the $396 builtInTotal) is not filled in either, because every quantity starts empty.
+    assert n["laborTotal"] == 0 < n["builtInTotal"], (
+        "a new bid opened with labor already priced before anything was typed: %r (the shipped "
+        "model carries %r)" % (n["laborTotal"], n["builtInTotal"]))
     assert n["mainShown"]
 
 
@@ -2805,7 +2811,7 @@ def test_a_default_that_still_needs_numbers_says_which_one(ran):
         "nobody is driving to opens blocked: %r" % says)
     # …and the built-in rows are still named the way they always were, so the defaults have not
     # drowned them out.
-    assert "Add the days for Polishing" in says
+    assert "Add the guys and days for Polishing" in says
 
 
 # ── the Takeoff conditions' company answers ───────────────────────────────────
@@ -3164,7 +3170,7 @@ def test_lodging_and_per_diem_price_inside_the_bid_and_off_adds_nothing(ran):
     """THROUGH THE PAGE'S OWN HANDLERS. Switching Lodging on moves the bid by the nights (the crew's
     16.5 man-days at the saved bid's $70) AND the markups on top -- more than the travel dollars --
     while off adds exactly nothing. The quantity box shows the auto figure, typing leaves auto and
-    prices the typed number, and the switch brings it back.
+    prices the typed number, and clearing the box leaves it empty ($0).
 
     Mutation: leave `travel:` out of bid() in polish-estimate.js -- the switch moves nothing."""
     t = ran["travelCosts"]
@@ -3179,7 +3185,6 @@ def test_lodging_and_per_diem_price_inside_the_bid_and_off_adds_nothing(ran):
     assert t["typedLodging"]["qty_auto"] is False and t["typedTravel"] == 700, (
         "typing a quantity did not leave auto and price on the typed number")
     assert t["typedCostCell"] == "$700", "the cost cell did not repaint live: %r" % t["typedCostCell"]
-    assert t["backToAuto"]["qty_auto"] is True and t["backToAuto"]["qty"] == 16.5
     assert t["bothOnTravel"] == 1155 + 990, "per diem at a typed $60 over 16.5 days is $990"
     assert t["perDiemOffTravel"] == 1155, "switching per diem off again did not take it out"
 
@@ -3416,7 +3421,9 @@ def test_the_how_note_on_a_far_job_says_not_local_and_shows_every_sum(ran):
     answer is exactly what the bid prices that line at.
 
     Mutation: drop the note from laborPanel, or compute the sums in the note a second way."""
-    f = ran["distance"]["howNights"]["auto"]
+    # Every quantity typed by hand (a new bid opens them empty, 2026-10-12): 2 guys x 5 hours,
+    # 10 nights, 8 days of meals.
+    f = ran["distance"]["howNights"]["typed"]
     how = f["how"]
     assert how.startswith("150 mi from Olathe office. That is 70 miles or more, so this is NOT a "
                           "local job: Travel Labor, Lodging and Per Diem come on.")
@@ -3424,12 +3431,24 @@ def test_the_how_note_on_a_far_job_says_not_local_and_shows_every_sum(ran):
         line = _how_line(how, label)
         assert _last_dollars(line) == f["cost"][key] > 0
         assert " x $" in line
-    assert "nights x $70.00" in _how_line(how, "Lodging")
-    assert "days x $45.00" in _how_line(how, "Per Diem")
+    assert "10 nights (typed) x $70.00" in _how_line(how, "Lodging")
+    assert "8 days (typed) x $45.00" in _how_line(how, "Per Diem")
     travel = _how_line(how, "Travel Labor")
-    assert "drive hours (round trip at 60 mph)" in travel
-    assert _last_dollars(travel) == f["cost"]["travel"] > 0
-    assert "Man-days = guys x days on the labor lines above" in how
+    assert "5 drive hours (typed)" in travel and "2 man-days (typed)" in travel
+    assert _last_dollars(travel) == f["cost"]["travel"] == 330 > 0
+    # Nothing is on auto, so the man-days appear as a reference sentence, not as a working sum.
+    assert "For reference, the man-days on the labor lines above are" in how
+    assert "Man-days = guys x days" not in how
+    # Straight after the lookup nothing is typed: every box is empty, every line is $0 and says what
+    # to type, and the distance has NOT filled the drive hours (it used to write 7.5 here).
+    e = ran["distance"]["howNights"]["auto"]
+    assert e["travelBoxes"] == {"guys": "", "hours": "", "nights": "", "days": ""}, e["travelBoxes"]
+    assert e["travelRow"]["days"] == "" and e["travelRow"]["guys"] == ""
+    assert e["travelRow"]["guys_auto"] is False and "hours_seed" not in e["travelRow"]
+    assert e["cost"] == {"lodging": 0, "per_diem": 0, "travel": 0}
+    assert _how_line(e["how"], "Lodging").endswith("= $0.00. Type the nights.")
+    assert _how_line(e["how"], "Per Diem").endswith("= $0.00. Type the days.")
+    assert _how_line(e["how"], "Travel Labor").endswith("= $0.00. Type the drive hours.")
 
 
 def test_the_how_note_on_a_local_job_says_so_and_shows_the_lines_off(ran):
@@ -3490,37 +3509,53 @@ def test_the_how_note_follows_a_typed_labor_day_without_a_rebuild(ran):
     Mutation: drop the data-trv-how line from repaintNumbers (the note keeps the old man-days)."""
     h = ran["distance"]["howDays"]
     before, after = h["before"], h["after"]
-    assert _last_dollars(_how_line(before["how"], "Lodging")) == before["cost"]["lodging"] > 0
-    assert after["cost"]["lodging"] != before["cost"]["lodging"]
+    # Nothing follows the man-days any more (2026-10-12), so the typed nights and days price the
+    # same before and after; what moves in the note is the man-days it quotes for reference.
+    assert _last_dollars(_how_line(before["how"], "Lodging")) == before["cost"]["lodging"] == 280
+    assert after["cost"]["lodging"] == before["cost"]["lodging"]
     assert _last_dollars(_how_line(after["how"], "Lodging")) == after["cost"]["lodging"]
-    assert _last_dollars(_how_line(after["how"], "Per Diem")) == after["cost"]["per_diem"]
+    assert _last_dollars(_how_line(after["how"], "Per Diem")) == after["cost"]["per_diem"] == 180
+    assert "the man-days on the labor lines above are 6." in before["how"]
+    assert "the man-days on the labor lines above are 60." in after["how"]
     assert after["how"] != before["how"]
 
 
 # ── B7b: the Labor Calculator fills a NEW bid's default labor lines ──────────────────────────────
-def test_a_new_bid_fills_its_default_labor_from_the_calculator(ran):
-    """From SF: crew 3, 2,500 SF/day, 12,000 SF job -> 5 days at 10 h, company rate $40 = $6,000.
-    Fixed: 2 guys x 1 day at its own $50. A line with no mode keeps today's blank row.
-    Mutation: apply before the takeoff is seeded (days blank), or skip the laborCalc gate."""
+def test_a_new_bid_takes_only_the_rate_and_hours_a_day_from_the_calculator(ran):
+    """Hanz, 2026-10-12: "whatever the default values are for the rate that should be it; nights,
+    days, guys and hours should have nothing when it starts". The calculator's From SF line (crew
+    3, 2,500 SF/day, 12,000 SF job) used to fill 3 guys x 5 days at 10 h = $6,000, and its Fixed
+    line 2 guys x 1 day. Now every line opens with Guys and Days EMPTY and keeps only what the
+    calculator says about the rate ($40 company, $50 the Fixed line's own) and the hours a day (10).
+    Typing the crew by hand then prices it the way the calculator's figures did.
+
+    Mutation: put `copy.guys = v.guys; copy.days = v.days` back in applyLaborCalc and every
+    empty-box assertion here goes red."""
     lc = ran["laborCalc"]
     p = lc["first"]["polishing"]
-    assert (p["guys"], p["days"], p["rate"], p["hours_per_day"]) == (3, 5, 40, 10)
-    assert lc["first"]["cost"] == 6000
+    assert (p["guys"], p["days"], p["rate"], p["hours_per_day"]) == ("", "", 40, 10)
+    assert lc["first"]["cost"] == 0, "a new bid's labor priced before anything was typed"
+    assert lc["typedCost"] == 6000, "3 guys x 5 days x $40 x 10 hours, typed by hand"
     m = lc["first"]["mockup"]
-    assert (m["guys"], m["days"], m["rate"]) == (2, 1, 50)
+    assert (m["guys"], m["days"], m["rate"]) == ("", "", 50)
     j = lc["first"]["jointfill"]
-    # A line with no saved mode still opens as the shipped crew line did (3 guys, blank days, the
-    # company rate): the shipped starting crew stands in for a calculator row (Phase LS1).
-    assert j["days"] == "" and j["guys"] == 3 and j["rate"] == 40
-    assert j["calc_default"]["guys"] == 3 and j["calc_default"]["rate"] == 40
+    # A line with no saved mode (the shipped crew stands in for a calculator row) is empty too:
+    # the company rate, and nothing else.
+    assert j["days"] == "" and j["guys"] == "" and j["rate"] == 40
+    assert j["calc_default"]["guys"] == "" and j["calc_default"]["rate"] == 40
+    # No line is on auto: the man-days fill nothing in.
+    assert not any(lc["first"][k].get("guys_auto") for k in ("polishing", "mockup", "jointfill"))
 
 
 def test_changing_a_calculator_figure_shows_the_default_value_warning_and_typing_it_back_clears_it(ran):
     lc = ran["laborCalc"]
     assert lc["first"]["warnDays"] == {"text": "", "hidden": True}
     assert lc["first"]["warnRate"] is True
-    assert lc["over"] == {"text": "Default value: 5", "hidden": False}
+    # The calculator filled no days, so there is no default to name: typing days or guys over an
+    # empty box shows no "Default value" note at all.
+    assert lc["over"] == {"text": "", "hidden": True}
     assert lc["back"] == {"text": "", "hidden": True}
+    assert lc["guysWarn"] == {"text": "", "hidden": True}
     assert lc["hrs"] == {"warn": {"text": "Default value: 10 hours", "hidden": False}, "cost": 4800}
     # a rate typed over the calculator's OWN rate warns against that rate, not the company's
     assert lc["mockRateBefore"] is True and lc["mockRateAfter"] == "Default value: $50.00"
@@ -3532,33 +3567,34 @@ def test_a_saved_bid_is_never_recomputed_and_does_not_even_ask(ran):
     assert (sv["polishing"]["guys"], sv["polishing"]["days"]) == (4, 6) and sv["asked"] is False
 
 
-def test_no_sf_leaves_days_blank_and_an_absent_table_opens_exactly_as_before(ran):
+def test_no_sf_leaves_days_blank_and_an_absent_table_opens_the_same_empty_lines(ran):
     lc = ran["laborCalc"]
-    assert lc["noSf"]["days"] == "" and lc["noSf"]["guys"] == 3
+    assert lc["noSf"]["days"] == "" and lc["noSf"]["guys"] == ""
     # typing days over a blank default must not warn "Default value: blank"
     w = lc["noSfWarn"]
     assert w is not None and (w["hidden"] or w["text"].strip() == "")
-    # An absent calculator table opens the crew lines exactly as before: the shipped starting crew
-    # (3 guys, blank days) is what fills them, so the figures are the same ones.
+    # An absent calculator table opens the crew lines the same way: empty Guys and Days.
     assert lc["gone"]["same"] is True
-    assert lc["gone"]["polishing"]["guys"] == 3 and lc["gone"]["polishing"]["days"] == ""
+    assert lc["gone"]["polishing"]["guys"] == "" and lc["gone"]["polishing"]["days"] == ""
 
 
-def test_labor_days_follow_the_takeoff_until_the_estimator_edits_them(ran):
-    """G2. A From-SF line (3 crew, 2,500 SF/day): 12,000 SF -> 5 days; the takeoff goes to 20,000 ->
-    8 days, in the box too, with no 'Default value' warning; a fixed line never moves. After the
-    estimator types 11 the next SF change leaves 11. A new bid with no SF fills days as soon as SF
-    exists (5,000 -> 2). A SAVED bid's stale marker row (9 days on 17,500 SF) is not recomputed on
-    open or by an unrelated edit.
+def test_a_new_bids_labor_days_no_longer_follow_the_takeoff(ran):
+    """G2, retired for NEW bids on 2026-10-12. A From-SF line (3 crew, 2,500 SF/day) used to fill 5
+    days on 12,000 SF and follow the takeoff to 8 at 20,000. Days start EMPTY now, so there is
+    nothing filled for the takeoff to move: the box stays empty whatever the SF does, a typed 11
+    stays 11, and a new bid with no SF stays empty when SF arrives (5,000). A SAVED bid's stale
+    marker row (9 days on 17,500 SF) is still not recomputed on open or by an unrelated edit, and
+    followLaborDays itself still does its arithmetic for a saved row that carries the marker.
 
-    Mutation: drop the followLaborDays call in changed() -- afterUp stays 5."""
+    Mutation: put the `sf_per_day` marker back in applyLaborCalc's calc_default -- afterUp moves
+    off the empty string."""
     f = ran["laborCalc"]["followed"]
-    assert f["start"] == 5
-    assert f["afterUp"] == 8 and f["boxAfterUp"] == "8"
+    assert f["start"] == ""
+    assert f["afterUp"] == "" and f["boxAfterUp"] == ""
     assert f["warnAfterUp"] == {"text": "", "hidden": True}
-    assert f["fixedStays"] == 1
+    assert f["fixedStays"] == ""
     assert str(f["editedStays"]) == "11"
-    assert f["noSfBlank"] == "" and f["noSfFilled"] == 2
+    assert f["noSfBlank"] == "" and f["noSfFilled"] == ""
     assert f["savedOnOpen"] == 9 and f["savedAfterOtherEdit"] == 9
     assert f["pureMoves"] == [4, 5]
 
@@ -4131,3 +4167,99 @@ def test_the_pop_up_header_puts_the_title_left_and_the_close_button_right(page):
     # and the markup the picker builds lists the title, then the sub line, then the button
     js = (FRONTEND / "js" / "library-picker.js").read_text(encoding="utf-8")
     assert js.index('<h2 id="pk-h">') < js.index("bulk-sub") < js.index('data-pk-close="1" title="Close"')
+
+
+# ── Hanz, 2026-10-12: every quantity of a NEW bid starts empty; only the rates are filled ──────────
+# "Whatever the default values are for the rate that should be it; nights, days, guys and hours
+# should have nothing when it starts." This DEPARTS FROM KYLE'S SHEET, which counts nights, days and
+# drive time from the man-days (Polish A44 and the lodging / per diem rows): add it to the odd-rules
+# list for Kyle. The harness opens a NEW bid against a library that would have filled every box
+# before: a calculator that gives each crew line guys and days, a library Travel and hours default
+# asking for guys_auto, and a distance answer that used to write the drive hours.
+@needs_node
+def test_a_new_bids_labor_cards_open_with_guys_days_and_hours_empty_and_only_the_rate_filled(ran):
+    """Mutation: put `copy.guys = v.guys; copy.days = v.days` back in applyLaborCalc, or take
+    travelRowStartsEmpty out of seedNewSections, or let libraryLaborRow read the library's
+    guys_auto: a Guys / Days / Hours box fills and this goes red."""
+    q = ran["qtyEmpty"]
+    assert [c["id"] for c in q["cards"]] == ["polishing", "mockup", "jointfill", "travel", "lab-night"]
+    for c in q["cards"]:
+        assert c["guys"] == "" and c["days"] == "", "%s opened with a quantity typed in: %r" % (c["id"], c)
+        assert c["auto"] is False, "%s is on auto, so the man-days would fill it: %r" % (c["id"], c)
+        assert c["cost"] == 0
+    # The rates ARE filled: the company rate ($40), a line's own ($50 on the calculator, $36 on the
+    # library Travel, $12.50 on the library hours default).
+    assert [c["rate"] for c in q["cards"]] == ["40", "50", "40", "36", "12.5"]
+    assert q["openState"]["labor"] == 0 and q["openState"]["bid"] == 0, "a new bid priced before anything was typed"
+    row = q["travelRow"]
+    assert row["guys"] == "" and row["days"] == "" and row["guys_auto"] is False
+    assert "hours_seed" not in row, "the distance marker is still on a new bid's Travel row"
+
+
+@needs_node
+def test_a_new_bids_nights_and_days_open_empty_with_the_rates_filled_and_the_distance_fills_no_hours(ran):
+    """150 miles came back: Lodging and Per Diem are switched ON by the distance (far job) and
+    Travel Labor's hours stay empty (it used to read 5, a round trip at 60 mph). The two rates are the
+    Markups -> Global figures ($80 / $50).
+
+    Mutation: put the seedTravelHours call back in applyDistance -- the hours read 5; or let
+    syncAutoGuys fill the quantity of a line whose qty_auto is false -- the nights read the man-days."""
+    q = ran["qtyEmpty"]
+    assert q["travelBoxes"] == {"lodging": "", "per_diem": "", "lodgingRate": "80", "perDiemRate": "50"}
+    s = q["openState"]
+    assert s["local"] is False and s["lodgingOn"] is True and s["perDiemOn"] is True
+    assert s["lodgingAuto"] is False and s["perDiemAuto"] is False
+    assert q["travelRow"]["days"] == "", "the distance answer filled the drive hours"
+
+
+@needs_node
+def test_lodging_on_with_no_nights_prices_nothing_and_two_typed_nights_price_two_times_the_rate(ran):
+    """Mutation: let an empty quantity fall back to the man-days again (travelQty on a line with
+    qty_auto false) and the first figure stops being $0."""
+    q = ran["qtyEmpty"]
+    assert q["nightsEmpty"] == {"cost": "$0", "travel": 0}
+    assert q["nightsTwo"] == {"cost": "$160", "travel": 160, "expected": 160, "box": "2"}
+
+
+@needs_node
+def test_typing_the_crew_moves_no_quantity_and_the_hint_names_the_man_days_as_text(ran):
+    """15 man-days (3 guys x 5 days) after the crew is typed. The nights stay what was typed (2), the
+    Per Diem and Travel Guys boxes stay empty, and the hint says the figure as words, never a value.
+
+    Mutation: leave the syncAutoGuys effect running for these lines -- Travel's Guys box reads 15."""
+    a = ran["qtyEmpty"]["afterCrew"]
+    assert a["nights"] == "2" and a["perDiemBox"] == "" and a["travelGuys"] == "" and a["travelGuysBox"] == ""
+    assert a["hint"] == "Man-days from the tasks above: 15."
+
+
+@needs_node
+def test_a_saved_bid_with_auto_nights_opens_unchanged_and_never_blank(ran):
+    """A bid saved while Lodging and Per Diem followed the man-days keeps following them: 16.5 nights
+    and days (3 x 5 + 3 x 0.5), Travel's Guys auto at 16.5, its 5 saved hours untouched, and the
+    price the same $1,898 the engine works out for the saved model. It never asked the library for
+    anything. Typing over it leaves auto as before.
+
+    Mutation: apply the new-bid rule to every bid (qty_auto false and qty '' on open) -- the nights
+    read '' and the travel money drops to $0."""
+    s = ran["qtyEmpty"]["savedAuto"]
+    assert s["nights"] == 16.5 and s["auto"] is True and s["perDiem"] == 16.5 and s["nightsBox"] == "16.5"
+    assert s["guys"] == 16.5 and s["guysAuto"] is True and s["guysBox"] == "16.5" and s["hours"] == 5
+    assert s["travel"] == s["expectedTravel"] == 1898
+    assert s["hint"] == "Man-days from the tasks above."
+    assert s["fetched"] is False, "a saved bid asked the library for its labor defaults"
+    assert s["afterTyping"] == {"auto": False, "qty": "3"}
+
+
+@needs_node
+def test_a_line_added_from_the_popup_has_empty_guys_and_days_and_the_lines_own_rate(ran):
+    """Saw cutting ($45, not a default) ticked in the Add labor lines pop-up: its Guys and Days boxes
+    are empty and it is not on auto; the library's hours default that asks for guys_auto
+    ($12.50) is empty and off auto as well.
+
+    Mutation: let libraryLaborRow read the library's guys_auto -- `viaLib.auto` flips to True and the
+    man-days would fill the box."""
+    a = ran["qtyEmpty"]["addedLine"]
+    assert a == {"id": "lab-saw", "guys": "", "days": "", "rate": 45, "auto": False,
+                 "guysBox": "", "daysBox": "", "rateBox": "45"}, a
+    v = ran["qtyEmpty"]["viaLib"]
+    assert v == {"guys": "", "days": "", "auto": False, "rate": 12.5}, v
