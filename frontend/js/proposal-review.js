@@ -2489,6 +2489,13 @@
     Object.keys(d).forEach((k) => {
       if (String(out[k] == null ? "" : out[k]).trim() === "") out[k] = String(d[k]);
     });
+    // The GC spec line's "(NO spec)" is the one default that depends on another field: a typed spec
+    // section takes it off the line. Judged on what the intake holds, not on the spec default just
+    // applied above. Same rule as proposal_writer._with_token_defaults (NO_SPEC_TOKEN).
+    if (Object.prototype.hasOwnProperty.call(d, "no_spec_note")
+        && String(tokens.spec_section == null ? "" : tokens.spec_section).trim() !== "") {
+      out.no_spec_note = "";
+    }
     return out;
   }
 

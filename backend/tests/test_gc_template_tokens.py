@@ -51,6 +51,8 @@ BACKEND = pathlib.Path(__file__).resolve().parents[1]
 REPO = BACKEND.parent
 RAW_DIR = REPO / "docs" / "GC Templates"
 PREDECESSORS = pathlib.Path(__file__).resolve().parent / "fixtures" / "gc_predecessors"
+# The files as installed on 2026-10-02, before the spec line's "(NO spec)" became a token (2026-10-12).
+PREDECESSORS_1002 = pathlib.Path(__file__).resolve().parent / "fixtures" / "gc_predecessors_2026_10_02"
 FRONTEND_JS = REPO / "frontend" / "js"
 
 POLISH = "GC/xx TREADWELL POLISH PROPOSAL - xx.docx"
@@ -63,7 +65,7 @@ WORK_TYPE = {POLISH: "polish", RESINOUS: "epoxy", SEALER: "sealer"}
 
 # The tokens the intake fields fill, plus the job header's two (the Gyp form's treatment).
 NEW_TOKENS = {"job_name", "city_state", "spec_section", "architect", "drawings_dated_formatted",
-              "finish_tag", "plan_sheet", "addenda_count"}
+              "finish_tag", "plan_sheet", "addenda_count", "no_spec_note"}
 _TOKEN = re.compile(r"\{\{\s*([#/]?[A-Za-z_][A-Za-z0-9_.]*)\s*\}\}")
 _WP = re.compile(r"<w:p[ >].*?</w:p>", re.DOTALL)
 _WT = re.compile(r"<w:t\b[^>]*>([^<]*)</w:t>")
@@ -245,7 +247,8 @@ def test_intake_values_land_on_the_spec_finish_and_addenda_lines(rel):
         "finish_tag": "RES-1", "plan_sheet": "A601", "addenda_count": 3})
     got = [b["text"] for b in _walk(out)]
     spec = [t for t in got if "Drawings by" in t]
-    assert len(spec) == 1 and "per Spec 09 67 23 & Drawings by Gould Evans dated 8/15/26 (NO spec)" in spec[0]
+    # A typed spec section prints WITHOUT Kyle's "(NO spec)" caveat (test_gc_spec_line.py).
+    assert len(spec) == 1 and spec[0].endswith("per Spec 09 67 23 & Drawings by Gould Evans dated 8/15/26")
     area = [t for t in got if "Finish Schedule" in t]
     assert len(area) == 1 and "[RES-1]" in area[0] and area[0].endswith("per the Finish Schedule on A601")
     assert "Addenda Acknowledged: 3" in got
@@ -353,7 +356,11 @@ def test_the_predecessor_entry_is_pinned_to_the_walk(rel):
         f"{rel} changed since its PREDECESSOR_VERSIONS entry was written: re-prove the walk and "
         f"write a new entry, or delete it")
     fixture = PREDECESSORS / pathlib.Path(rel).name
-    assert preds == (tv.content_version(fixture),), "the fixture is not the predecessor's bytes"
+    # Two generations: Kyle's original re-save (fixture one) and the 2026-10-02 install that carried
+    # "(NO spec)" as plain words (fixture two, in the order the table lists them).
+    fixture_1002 = PREDECESSORS_1002 / pathlib.Path(rel).name
+    assert preds == (tv.content_version(fixture), tv.content_version(fixture_1002)), (
+        "the fixtures are not the predecessors' bytes")
     old, new = _walk(fixture), _walk(BACKEND / "templates" / rel)
     assert len(old) == len(new)
     shape = lambda w: [(b["id"], b["kind"], b["txbx"], b["in_block"]) for b in w]
@@ -361,6 +368,12 @@ def test_the_predecessor_entry_is_pinned_to_the_walk(rel):
     assert {a["id"] for a, b in zip(old, new) if a["text"] != b["text"]} == CHANGED_IDS[rel]
     geo = lambda p: pw.template_geometry(docx.Document(str(p)))
     assert geo(fixture) == geo(BACKEND / "templates" / rel), "the boxes moved"
+    # The 2026-10-02 files against these: the only paragraph whose words moved is the spec line.
+    mid = _walk(fixture_1002)
+    assert len(mid) == len(new) and shape(mid) == shape(new)
+    spec_id = sorted(CHANGED_IDS[rel] - {99, 100, 101})[0]
+    assert {a["id"] for a, b in zip(mid, new) if a["text"] != b["text"]} == {spec_id}
+    assert geo(fixture_1002) == geo(BACKEND / "templates" / rel), "the boxes moved"
 
 
 def test_no_other_template_has_a_predecessor():

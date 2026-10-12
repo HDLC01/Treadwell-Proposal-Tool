@@ -458,6 +458,7 @@ function build(opts) {
     fire(type, event) { winListeners.filter((l) => l.type === type).forEach((l) => l.handler(event)); },
   };
   win.TW = TW;                         // js/county-picker.js reads window.TW, not an injected parameter
+  if (opts.winExtra) Object.assign(win, opts.winExtra);   // e.g. TWAudienceBox, which js/audience-box.js publishes
   doc.getElementById = dom.el;         // ... and document.getElementById, for the field it fills
   // THE REAL SHARED CONTROL, executed from its own file the way the browser loads it: it sets
   // window.TWCounty, which the page's mountCounty() reads.
@@ -2083,6 +2084,62 @@ out.engineMoves = (function () {
         localInModel: oldSave && oldSave.polish_estimate.conditions.local,
         takeoffKept: oldSave && oldSave.polish_estimate.takeoff.length,
         navigated: subB.rec.navigated.length, submitSaved: subB.rec.saves.length > 0 },
+    };
+  }
+
+  // ── the Drawings & specs box: a typed Spec section reaches the saved draft (Will, 2026-10-12) ──
+  //
+  // Through the REAL readForm (lifted from shared.js) over a form whose named inputs are the REAL
+  // polish-intake.html's, so a field renamed or pulled out of #intake-form, or a save that stopped
+  // spreading the form, shows up as a spec that never reaches the draft. Then a second page over the
+  // saved blob, which is what the proposal step and a reopened intake read.
+  {
+    const shared = read(path.join(ROOT, "shared.js"));
+    const rf = /function readForm\(formEl\) \{[\s\S]*?\n  \}/.exec(shared);
+    if (!rf) throw new Error("readForm() is gone from shared.js — rewrite this, don't stub it");
+    const realReadForm = new Function(rf[0] + " return readForm;")();
+    const from = pageHtml.indexOf('<form id="intake-form">');
+    const to = pageHtml.indexOf("</form>", from);
+    if (from < 0 || to < 0) throw new Error("#intake-form is gone from polish-intake.html");
+    const inputs = pageHtml.slice(from, to).match(/<input\b[^>]*>/g) || [];
+    const attr = (tag, k) => {
+      const i = tag.indexOf(" " + k + '="');
+      if (i < 0) return null;
+      const start = i + k.length + 3;
+      return tag.slice(start, tag.indexOf('"', start));
+    };
+    const elements = inputs.map((t) => ({ name: attr(t, "name") || "", type: attr(t, "type") || "text",
+      value: attr(t, "value") || "", checked: /\schecked\b/.test(t) }))
+      .filter((e) => e.name);
+    const el = (name) => elements.filter((e) => e.name === name)[0];
+    const specBox = el("spec_section");
+    if (!specBox) throw new Error("polish-intake.html has no spec_section input in #intake-form");
+    specBox.value = "033543-A";
+    elements.filter((e) => e.name === "audience").forEach((e) => { e.checked = e.value === "GC"; });
+    el("project_name").value = "Spec QA";
+    el("bid_date").value = "2026-10-12";
+
+    let syncs = 0;
+    const b = build({ blob: blob({ polish_estimate: null }),
+      readForm: () => realReadForm({ elements: elements }),
+      winExtra: { TWAudienceBox: { sync: () => { syncs++; } } } });
+    await b.api.boot();
+    const syncsAfterBoot = syncs;
+    b.api.save();
+    const saved = JSON.parse(JSON.stringify(b.store.blob));
+    // A second page over what was saved: the form is written back from it.
+    const again = build({ blob: saved, readForm: () => ({}) });
+    await again.api.boot();
+    // Blanking the box saves a blank: the draft does not hang on to the old spec.
+    specBox.value = "";
+    b.api.save();
+    out.gcSpec = {
+      savedSpec: saved.spec_section, savedAudience: saved.audience,
+      reopenedWith: again.rec.written.map((w) => w.values.spec_section)[0],
+      reopenedAudience: again.rec.written.map((w) => w.values.audience)[0],
+      blankSaved: b.store.blob.spec_section,
+      syncsAfterBoot: syncsAfterBoot,
+      formNames: elements.map((e) => e.name),
     };
   }
 

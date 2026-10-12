@@ -1080,10 +1080,11 @@ out.fixture = { block115: BLOCK_115.runs, tokens: TOKENS_A };
 // replaces it; clearing it brings the placeholder back. None of that is the estimator's edit.
 {
   STORE.blob = JSON.parse(JSON.stringify(SEED));
-  const SPEC = { id: 113, text: "Polished Concrete: per Spec {{spec_section}} & Drawings by {{architect}} dated {{drawings_dated_formatted}} (NO spec)",
-                 runs: [Object.assign({ text: "Polished Concrete: per Spec {{spec_section}} & Drawings by {{architect}} dated {{drawings_dated_formatted}} (NO spec)", bold: false }, FMT)] };
+  const SPEC = { id: 113, text: "Polished Concrete: per Spec {{spec_section}} & Drawings by {{architect}} dated {{drawings_dated_formatted}}{{no_spec_note}}",
+                 runs: [Object.assign({ text: "Polished Concrete: per Spec {{spec_section}} & Drawings by {{architect}} dated {{drawings_dated_formatted}}{{no_spec_note}}", bold: false }, FMT)] };
   const p = makePage("token-defaults");
-  p.setTokenDefaults({ spec_section: "033543", architect: "xx Architects", drawings_dated_formatted: "8/1/26" });
+  p.setTokenDefaults({ spec_section: "033543", architect: "xx Architects", drawings_dated_formatted: "8/1/26",
+                      no_spec_note: " (NO spec)" });
   p.mount([SPEC], {}, VER);
   p.refreshFills({ spec_section: "", architect: null });
   const blank = p.snapshot(113);
@@ -1092,8 +1093,11 @@ out.fixture = { block115: BLOCK_115.runs, tokens: TOKENS_A };
   const filled = p.snapshot(113);
   p.refreshFills({ spec_section: "033543", architect: "  ", drawings_dated_formatted: "8/15/26" });
   const cleared = p.snapshot(113);
+  // The spec typed and then taken out again: the caveat comes back, and none of it is an edit.
+  p.refreshFills({ spec_section: "  ", architect: "Gould Evans", drawings_dated_formatted: "8/15/26" });
+  const specCleared = p.snapshot(113);
   out.tokenDefaults = { blank: blank, blankCollect: blankCollect, filled: filled, cleared: cleared,
-                        finalCollect: p.collect() };
+                        specCleared: specCleared, finalCollect: p.collect() };
 }
 
 // ═══ 13. An untouched document still ships NOTHING ═══════════════════════════════════════════
