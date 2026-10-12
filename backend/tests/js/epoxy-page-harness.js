@@ -147,6 +147,8 @@ async function main() {
   api.go(1);
   const before = api.activeBid().total;
   const crew = api.model().labor.findIndex((r) => r.id === "epoxy-install");
+  // A new bid opens with the crew's guys and days empty (only the rate is filled), so the crew is typed in: three guys, nine days.
+  P.typeInto(b, '[data-lab="' + crew + '"][data-k="guys"]', "3");
   P.typeInto(b, '[data-lab="' + crew + '"][data-k="days"]', "9");
   api.changed(false);
   const after = api.activeBid().total;

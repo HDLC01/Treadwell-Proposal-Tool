@@ -55,7 +55,7 @@ def test_the_intakes_quantities_seed_the_takeoff_and_the_library_seeds_the_crew(
     o = ran["opened"]
     assert [(r["measurement"], r["unit"], r["assembly_id"]) for r in o["takeoff"]] == [(6000, "SF", ""), (300, "LF", "")]
     assert o["laborIdsAll"] == ["travel", "epoxy-install"], "Travel stays built in, and the Epoxy crew line is the library's"
-    assert o["laborGuys"][-1] == 3 or 3 in o["laborGuys"], "the sheet's crew is three guys"
+    assert o["laborGuys"] == ["", ""], "a new bid opens with the crew's guys empty; only the rate is the library's"
     assert o["travelRowOnSection"] is True
 
 
