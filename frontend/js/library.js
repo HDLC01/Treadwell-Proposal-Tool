@@ -1794,7 +1794,7 @@
           '<td colspan="7">' +
             '<label class="morefield"><input type="checkbox" data-f="guys_auto"' +
               (r.guys_auto ? " checked" : "") +
-              '> Man-days come off the crew rows above it</label>' +
+              '> Older saved estimates: man-days come off the crew rows above it</label>' +
             '<label class="morefield">Position ' +
               '<input type="number" data-f="sort" class="num" value="' +
               (r.sort == null ? 0 : r.sort) + '"></label>' +
@@ -3808,7 +3808,7 @@
         '<td class="n">' + esc(L.money(r.rate)) + (r.unit === "hours" ? " / hr" : " / day") +
         "</td>" +
         "<td>" + (r.guys_auto
-          ? "Man-days come off the crew rows above it"
+          ? "Typed on the estimate. Older saved estimates take the crew man-days."
           : "Typed on the estimate") + "</td>" +
         // Travel's slider needs the stored row to PATCH; with none there is nothing to switch.
         '<td class="rowon">' + (storedTravel
@@ -3837,7 +3837,7 @@
         '<td class="n">' + esc(L.money(c.rate)) +
           (c.unit === "days" ? " / day" : " / hr") + "</td>" +
         "<td>" + (c.guys_auto
-          ? "Man-days come off the crew rows above it"
+          ? "Typed on the estimate. Older saved estimates take the crew man-days."
           : "Typed on the estimate") + "</td>" +
         '<td class="rowon">' + defaultSlider("labor", c.id, c.name, c.default_on !== false, ADMIN && !cro) +
           "</td>" +
@@ -3882,11 +3882,11 @@
    *  forgot the note would clear one filed elsewhere. */
   var TRAVEL_KEYS = [
     { line: "travel_lodging", label: "Hotel", per: "night", unitWord: "a night", shipped: 70,
-      how: "One charge a night away. Nights are the crew's man-days unless the estimator types " +
-           "a number. Starts off on every new estimate." },
+      how: "One charge a night away. The estimator types the nights; a new estimate leaves " +
+           "them empty. Starts off on every new estimate." },
     { line: "travel_per_diem", label: "Per Diem", per: "day", unitWord: "a day", shipped: 45,
-      how: "One charge a day away, for meals. Days are counted the same way as nights. " +
-           "Starts off on every new estimate." }
+      how: "One charge a day away, for meals. The estimator types the days; a new estimate " +
+           "leaves them empty. Starts off on every new estimate." }
   ];
   /** The company labor rate's box, on the Labor tab. `shipped` is bid-model's one constant, read
    *  lazily so this block stays the only place that names the line. */

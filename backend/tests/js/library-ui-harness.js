@@ -4697,7 +4697,9 @@ async function laborChecks() {
       readsAsMoney: /\$41\.00/.test(h),
       notTheRawString: !/>41\.00</.test(h),
       // And guys_auto is explained rather than left blank, the same way Travel's is.
-      guysAutoIsExplained: /Night differential[\s\S]*?Man-days come off the crew rows/.test(h),
+      guysAutoIsExplained: /Night differential[\s\S]*?Typed on the estimate\. Older saved estimates take the crew man-days\./.test(h),
+      // A new bid opens with guys empty, so the list must not promise man-days are filled in.
+      noFillPromise: h.indexOf("come off the crew rows") === -1,
     };
   }
 
