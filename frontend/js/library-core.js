@@ -364,7 +364,9 @@
     if (!(sum > 0)) return weights.map(function (w, k) { return k === 0 ? total : 0; });
     var grain = 1e4, scaled = total * grain, whole = Math.round(scaled);
     var out = [];
-    if (Math.abs(scaled - whole) > 1e-5 * Math.max(1, Math.abs(scaled))) {
+    // "On a ten-thousandth" is judged against float noise only (a few ulps of the scaled figure). A looser, size-
+    // relative tolerance read every total above about $5 as on the grain and snapped a fractional purchase to it.
+    if (Math.abs(scaled - whole) > Math.max(1e-6, 1e-12 * Math.abs(scaled))) {
       var rest = total;
       for (i = 0; i < n - 1; i++) { out.push(total * weights[i] / sum); rest -= out[i]; }
       out.push(rest);

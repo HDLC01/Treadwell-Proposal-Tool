@@ -17,7 +17,8 @@ what they priced, so no second formula exists):
   * Different materials on one price LADDER (identical price breaks, pack cost, bulk cost, pack size, unit and roundup, which is
     how the sheet reads a system's two flake lines) pool for the BREAK only: each keeps its own packs and the break is judged
     on every pack bought across the ladder. A ladder is derived, not stored: it needs no column and no reseed.
-  * Dye, Joint Filler and Remove Existing are never pooled, and a cove is priced by its own formula, as before. An OFF row buys
+  * Dye, Joint Filler and Remove Existing are never pooled. A cove is priced by its own formula, but the same cove on two or more
+    rows is one length priced once (epoxy-takeoff poolCoves) and split back by length. An OFF row buys
     nothing. A coverage typed on one bid is the same material.
   * SAVED BIDS DO NOT MOVE. Only a section stamped `pool_packs: true` pools, and the stamp is written when a section is made
     (activateSection) or a new bid's root is seeded (seedNewSections), never on a saved one.
@@ -90,6 +91,17 @@ def check_the_leftover_goes_to_the_largest_remainder(r):
     assert a["thirds"] == [0.3334, 0.3333, 0.3333] and r["unit"]["remainder"]["exact"] is True, (a, r["unit"]["remainder"])
     # a total that is not on a ten-thousandth is split in proportion and still adds up
     assert near(sum(a["offGrain"]), 1 / 3, 1e-12) and near(a["offGrain"][1], 2 * a["offGrain"][0], 1e-12), a["offGrain"]
+
+
+def check_a_fractional_total_off_the_grain_is_split_exactly_at_any_size(r):
+    """A pooled roundup-off purchase whose cost is not on a ten-thousandth ($800.0025846...) was snapped to the grain,
+    because the tolerance for "on the grain" grew with the total and passed everything above about $5."""
+    a = r["unit"]["allocate"]
+    total = 800.0025846153845
+    assert near(a["offGrainBig"][0], total / 2, 1e-9) and near(a["offGrainBig"][1], total / 2, 1e-9), a["offGrainBig"]
+    assert near(sum(a["offGrainBig"]), total, 1e-9), a["offGrainBig"]
+    assert near(a["offGrainUneven"][0], total / 4, 1e-9) and near(a["offGrainUneven"][1], total * 3 / 4, 1e-9), a["offGrainUneven"]
+    # ... while an on-the-grain total still splits in whole ten-thousandths (the checks above)
 
 
 def check_a_row_nothing_pools_with_comes_back_as_it_went_in(r):
@@ -220,6 +232,30 @@ def check_an_off_row_takes_no_share_on_the_page(r):
     assert near(o["material"], o["alone"], 1e-6) and o["sf"] == [5000, 5000], o
 
 
+def check_the_same_cove_on_two_areas_is_one_length(r):
+    """5,000 + 3,000 SF with 100 LF of cove in each area cost what 8,000 SF with 200 LF cost. Priced one by one the cove
+    rounded twice per area: $443 against $354 for 200 LF, and $399 against $222 for 40 + 40 LF."""
+    c = r["page"]["cove"]
+    assert c["two"] == c["one"] and near(c["twoMaterial"], c["oneMaterial"], 1e-6), c
+    assert near(c["odd"], c["oddOne"], 1e-6), c
+    assert c["saved"] > c["two"] and c["savedMaterial"] > c["twoMaterial"] + 50, "a saved bid must still pay the split: %r" % c
+
+
+def check_the_pooled_cove_rows_show_a_cost_and_add_up(r):
+    c = r["page"]["cove"]
+    assert c["rowsAdd"] is True and len(c["coveCosts"]) == 2 and all(x > 0 for x in c["coveCosts"]), c
+    assert near(c["coveCosts"][0], c["coveCosts"][1], 1e-6), "equal lengths take equal shares: %r" % c["coveCosts"]
+    assert near(sum(c["coveCosts"]), c["wholeCove"], 1e-6), "the cove rows are the pooled 200 LF cove, every line of it: %r" % c
+
+
+def check_an_off_cove_takes_no_share_and_two_different_coves_are_two_purchases(r):
+    c = r["page"]["cove"]
+    assert near(c["offMaterial"], c["firstMaterial"], 1e-6), c
+    # an off row still shows what it would cost alone (it is not in the pool, so it is not repriced)
+    assert near(c["offRowCost"], c["separate"][0], 1e-6), c
+    assert near(c["mixedCoves"][0], c["separate"][0], 1e-6) and near(c["mixedCoves"][1], c["separate"][1], 1e-6), c
+
+
 def check_the_polish_root_pools_too(r):
     o = r["page"]["root"]
     assert o["two"] == o["one"] and near(o["twoMaterial"], o["oneMaterial"], 1e-6), o
@@ -231,6 +267,7 @@ CHECKS = [
     check_the_rows_add_up_to_the_pooled_cost_exactly,
     check_a_pooled_row_keeps_its_cost_per_unit,
     check_the_leftover_goes_to_the_largest_remainder,
+    check_a_fractional_total_off_the_grain_is_split_exactly_at_any_size,
     check_a_row_nothing_pools_with_comes_back_as_it_went_in,
     check_an_off_row_buys_nothing_and_takes_no_share,
     check_a_reserved_material_is_never_pooled,
@@ -251,6 +288,9 @@ CHECKS = [
     check_every_rows_cost_still_shows_and_the_rows_add_up_to_the_sections_material,
     check_a_saved_section_with_no_stamp_prices_row_by_row_as_it_did,
     check_an_off_row_takes_no_share_on_the_page,
+    check_the_same_cove_on_two_areas_is_one_length,
+    check_the_pooled_cove_rows_show_a_cost_and_add_up,
+    check_an_off_cove_takes_no_share_and_two_different_coves_are_two_purchases,
     check_the_polish_root_pools_too,
 ]
 
@@ -264,6 +304,7 @@ def test_a_material_is_bought_once_for_the_section(ran, check):
 CORE = "js/library-core.js"
 MODEL = "js/bid-model.js"
 PAGE = "js/polish-estimate.js"
+TAKEOFF = "js/epoxy-takeoff.js"
 
 BREAKS = {
     "an off row is pooled like the others": (
@@ -339,13 +380,37 @@ BREAKS = {
         PAGE, "    return pooledRows(list)[i];", "    return rawRowPrice(row, takeoff);",
         [check_two_areas_cost_what_one_floor_costs_on_the_real_library, check_the_polish_root_pools_too]),
     "the page pools its reserved materials": (
-        PAGE, "    return L.pricePool(alone, { on: list.map(function (r) { return B.rowOn(r); }), skip: RESERVED_ITEM_IDS });",
-        "    return L.pricePool(alone, { on: list.map(function (r) { return B.rowOn(r); }), skip: [] });",
+        PAGE, "    var pooled = L.pricePool(alone, { on: on, skip: RESERVED_ITEM_IDS });",
+        "    var pooled = L.pricePool(alone, { on: on, skip: [] });",
         [check_a_reserved_material_is_never_pooled]),
     "the page pools an off row": (
-        PAGE, "    return L.pricePool(alone, { on: list.map(function (r) { return B.rowOn(r); }), skip: RESERVED_ITEM_IDS });",
-        "    return L.pricePool(alone, { skip: RESERVED_ITEM_IDS });",
+        PAGE, "    var pooled = L.pricePool(alone, { on: on, skip: RESERVED_ITEM_IDS });",
+        "    var pooled = L.pricePool(alone, { skip: RESERVED_ITEM_IDS });",
         [check_an_off_row_takes_no_share_on_the_page]),
+    "an off-the-grain total is snapped to the grain at any size": (
+        CORE, "    if (Math.abs(scaled - whole) > Math.max(1e-6, 1e-12 * Math.abs(scaled))) {",
+        "    if (Math.abs(scaled - whole) > 1e-5 * Math.max(1, Math.abs(scaled))) {",
+        [check_a_fractional_total_off_the_grain_is_split_exactly_at_any_size]),
+    "the page prices every cove alone": (
+        PAGE, "    return E.poolCoves(pooled, list, { items: ITEMS, quartz: E.systemOneIsQuartz(list), on: on });",
+        "    return pooled;",
+        [check_the_pooled_cove_rows_show_a_cost_and_add_up]),
+    "the section's material prices every cove alone": (
+        PAGE, "        items: ITEMS, sf: B.takeoffSf(takeoff), poolCoves: B.poolsPacks(entry.section),",
+        "        items: ITEMS, sf: B.takeoffSf(takeoff),",
+        [check_the_pooled_cove_rows_show_a_cost_and_add_up, check_the_same_cove_on_two_areas_is_one_length]),
+    "the page pools an off cove": (
+        PAGE, "    return E.poolCoves(pooled, list, { items: ITEMS, quartz: E.systemOneIsQuartz(list), on: on });",
+        "    return E.poolCoves(pooled, list, { items: ITEMS, quartz: E.systemOneIsQuartz(list) });",
+        [check_an_off_cove_takes_no_share_and_two_different_coves_are_two_purchases]),
+    "every cove is one purchase whatever its size": (
+        TAKEOFF, "      var key = r.assembly_id;                      // one purchase per cove assembly",
+        '      var key = "all";',
+        [check_an_off_cove_takes_no_share_and_two_different_coves_are_two_purchases]),
+    "a pooled cove row keeps only its first line": (
+        TAKEOFF, "          total += split[j][k];",
+        "          total += j === 0 ? split[j][k] : 0;",
+        [check_the_pooled_cove_rows_show_a_cost_and_add_up]),
     "a typed coverage on an assembly line is another material": (
         PAGE, "      items = items.concat([Object.assign({}, real, { id: tmp, coverage: cov, pool_of: real.id })]);",
         "      items = items.concat([Object.assign({}, real, { id: tmp, coverage: cov })]);",

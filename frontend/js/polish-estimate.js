@@ -302,7 +302,10 @@
    *  index with `list`. */
   function pooledRows(list) {
     var alone = list.map(function (r) { return rawRowPrice(r, list); });
-    return L.pricePool(alone, { on: list.map(function (r) { return B.rowOn(r); }), skip: RESERVED_ITEM_IDS });
+    var on = list.map(function (r) { return B.rowOn(r); });
+    var pooled = L.pricePool(alone, { on: on, skip: RESERVED_ITEM_IDS });
+    // a cove on two areas is one length, priced once (the library's pool has no item to add up for it)
+    return E.poolCoves(pooled, list, { items: ITEMS, quartz: E.systemOneIsQuartz(list), on: on });
   }
 
   function rawRowPrice(row, takeoff) {
@@ -553,7 +556,7 @@
     var takeoff = entry.section.takeoff || [];
     if (entry.role === "epoxy") {
       var r = E.sectionMaterial(takeoff, {
-        items: ITEMS, sf: B.takeoffSf(takeoff),
+        items: ITEMS, sf: B.takeoffSf(takeoff), poolCoves: B.poolsPacks(entry.section),
         rowPrice: function (row) { return rowPrice(row, takeoff); }
       });
       return { material: r.material, tooling: r.tooling };

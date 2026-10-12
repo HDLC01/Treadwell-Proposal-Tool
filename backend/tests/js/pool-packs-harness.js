@@ -64,6 +64,8 @@ function unit() {
   out.allocate = {
     thirds: LIB.allocate(1, [1, 1, 1]), uneven: LIB.allocate(300, [1.5, 1.3]), none: LIB.allocate(5, []),
     zeroWeights: LIB.allocate(7, [0, 0]), offGrain: LIB.allocate(1 / 3, [1, 2]),
+    // a fractional purchase far past $5 whose cost is NOT on a ten-thousandth: split exactly, not snapped to the grain
+    offGrainBig: LIB.allocate(800.0025846153845, [1, 1]), offGrainUneven: LIB.allocate(800.0025846153845, [1, 3]),
   };
 
   // a row nothing pools with is the very object it went in as
@@ -346,6 +348,35 @@ async function page() {
     const gallons = Math.ceil(parseFloat(((5000 / 300 + 3000 / 275) * 1.05).toPrecision(12)));
     const kits = Math.ceil(parseFloat(((8000 / 775) * 1.05).toPrecision(12)));
     out.typedCoverage = { rowSum: sum(rc), expected: gallons * 85.3827 + kits * 382.4475, gallons: gallons, kits: kits };
+  }
+
+  // THE COVE pools too: the same cove on both areas is one length. 100 + 100 LF of 4 inch epoxy cove cost what 200 LF cost,
+  // not the $443 two separate purchases cost against $354. The rows add up, an OFF cove takes no share, a saved section
+  // (no stamp) prices each cove alone, and two different coves are two purchases.
+  {
+    const COVE4 = "wb-epoxy-cove-epoxy-4in", COVE6 = "wb-epoxy-cove-epoxy-6in";
+    const coveRow = (id, lf, extra) => Object.assign({ assembly_id: id, assembly_name: id, measurement: lf, unit: "LF" }, extra || {});
+    const priceCove = async (areas, coves, pooled) => {
+      const rows = areaRows(SYSTEM, areas, false).concat(coves);
+      const p = await epoxyPrice(rows, pooled);
+      return { total: p.total, material: p.material, rowCosts: p.rowCosts, rowSum: p.rowSum, patch: p.patch,
+        coveCosts: rows.map((r, i) => (X.coveVariant(r.assembly_id) ? p.rowCosts[i] : null)).filter((c) => c !== null) };
+    };
+    const two = await priceCove([5000, 3000], [coveRow(COVE4, 100), coveRow(COVE4, 100)], true);
+    const one = await priceCove([8000], [coveRow(COVE4, 200)], true);
+    const saved = await priceCove([5000, 3000], [coveRow(COVE4, 100), coveRow(COVE4, 100)], false);
+    const odd = await priceCove([5000, 3000], [coveRow(COVE4, 40), coveRow(COVE4, 40)], true);
+    const oddOne = await priceCove([8000], [coveRow(COVE4, 80)], true);
+    const off = await priceCove([5000, 3000], [coveRow(COVE4, 100), coveRow(COVE4, 100, { enabled: false })], true);
+    const first = await priceCove([5000, 3000], [coveRow(COVE4, 100)], true);
+    const mixed = await priceCove([5000, 3000], [coveRow(COVE4, 100), coveRow(COVE6, 100)], true);
+    const sep = [COVE4, COVE6].map((id) => X.priceCoveRow(id, 100, { items: items, quartz: false }).total);
+    out.cove = { two: two.total, one: one.total, twoMaterial: two.material, oneMaterial: one.material,
+      saved: saved.total, savedMaterial: saved.material, odd: odd.material, oddOne: oddOne.material,
+      rowsAdd: near(two.rowSum + two.patch, two.material), coveCosts: two.coveCosts,
+      offMaterial: off.material, firstMaterial: first.material, offRowCost: off.rowCosts[off.rowCosts.length - 1],
+      mixedCoves: mixed.coveCosts, separate: sep,
+      wholeCove: X.priceCoveRow(COVE4, 200, { items: items, quartz: false }).total };
   }
 
   // THE POLISH ROOT pools too (its rows are priced by the same wrapper): the Polish assembly in two areas
