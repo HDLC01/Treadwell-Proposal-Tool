@@ -1359,11 +1359,17 @@
   }
 
   /** True when the row carries a coverage that actually changes its price: the same test
-   *  priceAssemblyRow applies (a positive figure), so the note and the arithmetic cannot disagree. */
-  function rowHasLineCov(r) {
+   *  priceAssemblyRow applies (a positive figure on a line of THIS assembly whose item the library
+   *  still has), so the note and the arithmetic cannot disagree. A figure keyed to a line the
+   *  assembly does not have, or to a line with no real item, prices nothing and earns no note. */
+  function rowHasLineCov(r, asm) {
     var lc = r && r.line_cov;
     if (!lc || typeof lc !== "object") return false;
-    return Object.keys(lc).some(function (k) { return B.num(lc[k]) > 0; });
+    var lines = (asm && asm.lines) || [];
+    return lines.some(function (ln, j) {
+      var id = ln && (ln.item_id || ln.item);
+      return B.num(lc[j]) > 0 && !!id && !!L.findItem(ITEMS, id);
+    });
   }
 
   /** An ASSEMBLY row has no coverage boxes (Hanz, 2026-10-12: "Remove these coverage for
@@ -1378,7 +1384,7 @@
    *  Empty string for every other kind of row, and for a line_cov that holds no positive figure
    *  (it prices exactly like none, so a note about it would be a lie). */
   function asmSavedCovNote(r, i, kind) {
-    if (kind !== "asm" || !rowHasLineCov(r)) return "";
+    if (kind !== "asm" || !rowHasLineCov(r, asmById(r.assembly_id))) return "";
     return '<div class="asmcov-note" data-asmcov-note="' + i + '">' +
       '<p class="hint">This row uses coverage typed on this bid before.</p>' +
       '<button class="btn ghost sm" data-asmcov-reset="' + i + '">Use the library coverage</button></div>';
@@ -2390,6 +2396,9 @@
         delete M.takeoff[ari].line_cov;
         repaintRow(ari);
         changed(false);
+        // This button was removed from the page by its own click; focus left on it falls to
+        // <body>. Put the caret on Measurement, as the kind pick above does.
+        refocus('[data-tk="' + ari + '"][data-k="measurement"]');
       }
       return;
     }

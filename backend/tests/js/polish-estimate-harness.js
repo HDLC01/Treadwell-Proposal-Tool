@@ -2578,10 +2578,20 @@ const rendered = [];      // every string the page put on screen, for the Labour
       typeInto(sb, '[data-tk="1"][data-k="measurement"]', "12500");
       const afterEdit = { line_cov: clone(sb.api.model().takeoff[1].line_cov), note: /data-asmcov-note=/.test(cardHtml(sb, 1)) };
       // (absent on a page that still draws boxes: report that, rather than crash every test)
+      // Which boxes the page asked to focus while the click ran: the button is gone after it, so
+      // focus must land on Measurement and not fall to <body>.
+      const focused = [];
+      const realQs = sb.doc.querySelector;
+      sb.doc.querySelector = (sel) => {
+        const el = realQs(sel);
+        if (el) el.focus = () => { focused.push(sel); };
+        return el;
+      };
       if (sb.doc.querySelector("[data-asmcov-reset]")) clickOn(sb, "[data-asmcov-reset]");
+      sb.doc.querySelector = realQs;
       // the card element itself: reset redraws that one card in place, not the panel
       const liveCard = sb.doc.querySelector('[data-row-card="1"]').innerHTML;
-      const savedAfter = { cost: txt(sb, '[data-cost-for="1"]'), line_cov: sb.api.model().takeoff[1].line_cov === undefined,
+      const savedAfter = { focused: focused, cost: txt(sb, '[data-cost-for="1"]'), line_cov: sb.api.model().takeoff[1].line_cov === undefined,
                            note: /data-asmcov-note=/.test(liveCard), noteWas: /data-asmcov-note=/.test(cardHtml(sb, 1)),
                            labels: (liveCard.match(/<label[^>]*>[^<]*<\/label>/g) || []).map((x) => x.replace(/<[^>]*>/g, "")), matTotal: sb.api.materialTotal(),
                            libraryUntouched: ITEMS.find((i) => i.id === "i1").coverage };
@@ -2593,6 +2603,14 @@ const rendered = [];      // every string the page put on screen, for the Labour
       await bb.api.init();
       bb.api.go(0);
       const blankRow = { note: !!bb.doc.querySelector("[data-asmcov-note]"), cost: txt(bb, '[data-cost-for="1"]') };
+
+      // A figure keyed to a line the assembly does not have prices nothing, so it earns no note.
+      const stale = clone(saved);
+      stale.takeoff[1].line_cov = { 7: "300" };
+      const stb = build({ blob: blob({ polish_estimate: stale }) });
+      await stb.api.init();
+      stb.api.go(0);
+      const staleRow = { note: !!stb.doc.querySelector("[data-asmcov-note]"), cost: txt(stb, '[data-cost-for="1"]') };
 
       // Switching a saved row to a different assembly drops the old lines' coverage and its note.
       const sw = build({ blob: blob({ polish_estimate: clone(saved) }) });
@@ -2606,7 +2624,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
       typeInto(b, '[data-tk="1"][data-k="pick"]', "Cove Base");
       const asmSwitched = { boxes: (b.doc.querySelector('[data-row-card="1"]').innerHTML.match(/data-asmcov=/g) || []).length };
       const asmTyped = { savedBefore: savedBefore, afterEdit: afterEdit, savedAfter: savedAfter,
-                         blankRow: blankRow, expectedSaved: asmWith(swap("i1", 300)) };
+                         blankRow: blankRow, staleRow: staleRow, expectedSaved: asmWith(swap("i1", 300)) };
       out.rowCoverage = { first: first, matTyped: matTyped, asmTyped: asmTyped,
                           matBackToLib: matBackToLib, switched: switched, asmSwitched: asmSwitched,
                           expectedFirstAsm: asmWith(ITEMS),

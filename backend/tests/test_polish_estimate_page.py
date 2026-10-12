@@ -3033,7 +3033,8 @@ def test_a_saved_assembly_row_keeps_its_own_coverage_until_a_click_removes_it(ra
     and shows nothing, and picking a different assembly drops the old lines' figures.
 
     Mutation: drop line_cov from pricing; clear it on load or on an edit; show the note for an
-    all-blank line_cov; make the button a no-op; leave the note up after the row is reset."""
+    all-blank line_cov or for a figure keyed to a line the assembly lacks; make the button a no-op;
+    leave the note up after the row is reset; skip the refocus after the click."""
     a = ran["rowCoverage"]["asmTyped"]
     s = a["savedBefore"]
     assert s["cost"] == "$10,258.45" and a["expectedSaved"] == pytest.approx(10258.4463), a
@@ -3049,7 +3050,9 @@ def test_a_saved_assembly_row_keeps_its_own_coverage_until_a_click_removes_it(ra
     assert after["cost"] == "$10,599.98", "after the click the row prices at the library coverage"
     assert after["labels"] == ["Assembly", "Measurement", "Unit", "Total cost"]
     assert after["libraryUntouched"] == 275
+    assert after["focused"] == ['[data-tk="1"][data-k="measurement"]'],         "the button is removed by its own click, so focus must go to Measurement, not <body>"
     assert a["blankRow"] == {"note": False, "cost": "$10,599.98"}, a["blankRow"]
+    assert a["staleRow"] == {"note": False, "cost": "$10,599.98"},         "a figure on a line the assembly does not have prices nothing and must earn no note"
     assert r_switched(ran) == {"line_cov": True, "note": False, "boxes": 0}
 
 
