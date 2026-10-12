@@ -218,17 +218,28 @@
    *  `ctx.rowPrice(row)` prices an ordinary row (the page's own, so a coverage typed on a bid still counts) and
    *  answers what priceAssembly does or null; a cove row is priced HERE, because the library cannot. `ctx.items`
    *  is the library's materials, `ctx.sf` the area the bid prices (the page's takeoffSf). Answers
-   *  { material, tooling, patch, cove, rows } where `material` is the raw sum the chain rounds up (D40). */
+   *  { material, tooling, patch, cove, rows } where `material` is the raw sum the chain rounds up (D40).
+   *
+   *  `ctx.pool` BUYS EACH MATERIAL ONCE FOR THE WHOLE SECTION (library-core's pricePool): the rows that are on are
+   *  priced first (a cove by its own formula, which the pool never touches, an ordinary row by `ctx.rowPrice`,
+   *  which must then answer each row ALONE), and the pool then adds up what the rows buy of the same material.
+   *  `ctx.skip` are item ids never pooled (pricePool's). A caller whose `ctx.rowPrice` already answers pooled
+   *  figures (the estimate page's does) does not set `pool`. */
   function sectionMaterial(takeoff, ctx) {
     var rows = takeoff instanceof Array ? takeoff : [];
     var items = (ctx && ctx.items) || [];
     var quartz = systemOneIsQuartz(rows);
     var sum = 0, cove = 0;
-    rows.forEach(function (r) {
-      if (!r || !isOn(r)) return;
+    var priced = rows.map(function (r) {
+      if (!r || !isOn(r)) return null;
       var id = r.assembly_id;
-      var p = coveVariant(id) ? priceCoveRow(id, r.measurement, { items: items, quartz: quartz })
-                              : ctx.rowPrice(r);
+      return coveVariant(id) ? priceCoveRow(id, r.measurement, { items: items, quartz: quartz })
+                             : ctx.rowPrice(r);
+    });
+    if (ctx && ctx.pool) {
+      priced = lib.pricePool(priced, { on: rows.map(function (r) { return !!r && isOn(r); }), skip: ctx.skip });
+    }
+    priced.forEach(function (p) {
       if (!p) return;
       sum += p.total;
       if (p.cove) cove += p.total;

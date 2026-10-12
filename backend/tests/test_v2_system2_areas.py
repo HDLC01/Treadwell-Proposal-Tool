@@ -218,18 +218,29 @@ def test_the_two_systems_are_two_areas(ran, check):
     check(ran)
 
 
-def test_two_areas_never_cost_less_than_one_combined_floor(ran):
-    """The caveat, measured on the real library fixture: a material bought in whole packs rounds up once per
-    area, so two areas can cost a pack or two MORE than one combined floor and never less. Both read 8,000 SF.
+def test_two_areas_cost_exactly_what_one_combined_floor_costs(ran):
+    """Hanz, 2026-10-13, "Buy packs for the whole job": a material used on several takeoff rows is bought ONCE,
+    so two areas price what one combined floor prices, on the REAL library fixture (OPF at 275 SF a gallon with
+    5% waste, a 5 gallon glaze, whole kits), whose packs do NOT divide the floors evenly.
 
-    HOW MUCH, on the real library (reviewer run, 2026-10-13): System 1 5,000 + System 2 3,000 is $26,742 against
-    $25,162 for one 8,000 SF floor (+$1,580, about 6%); 1,000 + 1,000 is $9,138 against $7,804 (+17%). A known
-    cost of two areas, not a bug in the seed: Kyle's workbook rounds each line to whole packs on its own, and
-    pooling packs across areas would change the pricing chain (library-core + pricing.py) that is checked
-    against his workbook. It is left to Hanz to decide whether that is wanted."""
+    BEFORE THE POOL, on the real library (reviewer run, 2026-10-13): System 1 5,000 + System 2 3,000 was $26,742
+    against $25,162 for one 8,000 SF floor (+$1,580, about 6%), and 1,000 + 1,000 was $9,138 against $7,804
+    (+17%): each area rounded each material up to whole packs on its own. The pool (library-core pricePool) sums
+    the fractional quantity first and rounds once, so both pairs now equal the combined floor."""
     p = ran["packs"]
     assert p["twoPriced"] == p["onePriced"] == 8000, p
-    assert p["two"] >= p["one"] > 0, p
+    assert p["two"] == p["one"] == 25162, p
+    s = ran["packsSmall"]
+    assert s["twoPriced"] == s["onePriced"] == 2000, s
+    assert s["two"] == s["one"] > 0, s
+
+
+def test_a_bid_saved_before_the_pool_keeps_pricing_each_rows_packs_on_its_own(ran):
+    """The gate: only a section stamped `pool_packs` pools. A new bid is stamped; the SAME takeoff opened as a saved
+    bid without the stamp costs what it cost before the pool ($26,742), so no saved bid moves."""
+    l = ran["packsLegacy"]
+    assert l["stamped"] is True and l["legacyStamped"] is False, l
+    assert l["total"] == 26742, l
 
 
 # ── RED WITHOUT THE CHANGE ───────────────────────────────────────────────────

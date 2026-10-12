@@ -962,8 +962,9 @@
    *  System 1 lines measured with System 1, the System 2 lines with System 2, the floor being the
    *  two added. Before this, one carrier held the SUM and System 2 read blank, so typing System 2
    *  added a third row on top (a double count). A line costs its rate times its measurement, so the
-   *  two copies price the same as one copy on the combined floor; the one place that is not exact
-   *  is a material bought in whole packs, which rounds up once per area instead of once overall.
+   *  two copies price the same as one copy on the combined floor. A material bought in whole packs
+   *  used to round up once per area; a section made now buys each material once for the whole
+   *  section (poolsPacks, library-core pricePool), so the two areas cost what one floor costs.
    *  The marker that says which area a row belongs to is data on the row, so it survives save and
    *  reload: the carrier holds `floor_area: n`, every row that follows it `same_floor: true` and
    *  `same_floor_of: n` (n = 1 for the first area, 2 for the second). A saved takeoff made before
@@ -2802,6 +2803,14 @@
    *  activateSection hands back; its rates snapshot says nothing either way (activating writes it). A section
    *  that the library gave no default rows stays new until somebody types in it, as the root does when it has
    *  no labor, and only ever receives what is in the library at that moment. */
+  /** DOES THIS SECTION BUY EACH MATERIAL ONCE FOR THE WHOLE SECTION? (Hanz, 2026-10-13, "Buy packs for the whole job".)
+   *  True only for a section stamped `pool_packs: true`, which is stamped when a section is made or seeded
+   *  (activateSection, seedNewSections). A section saved before that carries no stamp and keeps pricing each
+   *  takeoff row's packs on its own, so no saved bid moves. The pool itself is library-core's pricePool. */
+  function poolsPacks(section) {
+    return isObject(section) && section.pool_packs === true;
+  }
+
   function isNewSection(section, isRoot) {
     if (isRoot) return laborUnstated(section);
     if (!isObject(section)) return true;
@@ -2905,7 +2914,8 @@
       takeoff: [{ assembly_id: "", assembly_name: "", measurement: "", unit: "SF" }],
       labor: [], contingency: 0, fees: 0,
       rates: engine.snapshotRates(profile, isObject(ctx) ? ctx.rules : undefined),
-      totals: {}
+      totals: {},
+      pool_packs: true      // a section made now buys each material once for the whole section (see poolsPacks)
     };
     var out = jsonCopy(model);
     var tabs = isObject(out.tabs) ? out.tabs : {};
@@ -3058,6 +3068,11 @@
       });
       if (calculated) syncAutoGuys(out);
     }
+
+    // 5. THE NEW ROOT BUYS ITS MATERIAL ONCE FOR THE WHOLE SECTION (see poolsPacks). A tab section is stamped
+    // when it is made (activateSection), so this is the root's half: it is new on exactly the gate that seeds its
+    // labor or its conditions, and a saved root never passes it, so a bid saved before the pool keeps its pricing.
+    if ((laborGate || condGate) && now().some(function (e) { return e.root; }) && out.pool_packs === undefined) out.pool_packs = true;
     return out;
   }
 
@@ -3356,7 +3371,7 @@
     // Phase 12: the model as a panel sees one section, and the sections a job type is made of.
     SECTION_KEYS: SECTION_KEYS, sectionView: sectionView, sectionsForJob: sectionsForJob, sectionsToAdd: sectionsToAdd, sectionsLeaving: sectionsLeaving,
     priceSection: priceSection, priceTabs: priceTabs, activateSection: activateSection,
-    seedNewSections: seedNewSections, syncAutoGuys: syncAutoGuys,
+    seedNewSections: seedNewSections, syncAutoGuys: syncAutoGuys, poolsPacks: poolsPacks,
     composePricingSnapshot: composePricingSnapshot, sectionSwitcherHtml: sectionSwitcherHtml,
     takeoffLf: takeoffLf, sectionManHours: sectionManHours,
     // EXPORTED 2026-09-16 for a THIRD reader: the library page's Defaults tab lists Travel as the

@@ -213,7 +213,7 @@ def test_activating_a_section_stamps_its_profile_and_keeps_the_rules_filed_at_th
     a = ran["activation"]
     assert a["frozenThrew"] is None, "activateSection edited a frozen input: %s" % a["frozenThrew"]
     assert a["shape"] == {"keys": ["layout", "kind", "profile", "takeoff", "labor", "contingency", "fees", "rates",
-                                   "totals"], "layout": "epoxy", "kind": "base", "profile": "epoxy@1", "labor": 0,
+                                   "totals", "pool_packs"], "layout": "epoxy", "kind": "base", "profile": "epoxy@1", "labor": 0,
                           "takeoffRows": 1, "contingency": 0, "fees": 0}
     assert a["snapshot"] == {"version": 1, "profile": "epoxy@1", "rates": {"soft_costs": "10%"},
                              "fees_default": None, "notes": []}

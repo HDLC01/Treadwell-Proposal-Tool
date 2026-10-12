@@ -4,7 +4,8 @@
   "note": "recorded from origin/staging 28a5d1f (git archive of its frontend/), BEFORE Phase 10 changed the model or the page: node tests/js/save-patch-golden-harness.js <that frontend>",
   "harness": "tests/js/save-patch-golden-harness.js",
   "newBid_recut": "the seven newBid records were re-recorded on 2026-10-12 on origin/staging 4870ae1 (a new bid's Labor step opens with every quantity empty, only the rates filled): the crew's guys and days, Travel Labor's guys and hours and Lodging's nights and Per Diem's days are empty, nothing is on auto, and the bid's totals follow. The 26 `saved` records are untouched and still byte-identical to 28a5d1f.",
-  "newBid_recut2": "the newBid records were re-recorded again on 2026-10-13 on the tree that makes System 1 and System 2 two separate takeoff areas (Hanz, 'Separate areas'): a new bid's defaults are now seeded once per area (System 1's lines measured with System 1, System 2's with System 2, each row marked with its area), so `library`, `twoSystems`, `conditionCells` and `mintedByIntake`, which seed defaults over two SF boxes, hold the second area's rows. `empty`, `noSf` and `savedEmptyTakeoff` and all 26 `saved` records are byte-identical to before."
+  "newBid_recut2": "the newBid records were re-recorded again on 2026-10-13 on the tree that makes System 1 and System 2 two separate takeoff areas (Hanz, 'Separate areas'): a new bid's defaults are now seeded once per area (System 1's lines measured with System 1, System 2's with System 2, each row marked with its area), so `library`, `twoSystems`, `conditionCells` and `mintedByIntake`, which seed defaults over two SF boxes, hold the second area's rows. `empty`, `noSf` and `savedEmptyTakeoff` and all 26 `saved` records are byte-identical to before.",
+  "newBid_recut3": "the newBid records were re-recorded again on 2026-10-13 on the tree that buys each material once for the whole section (Hanz, 'Buy packs for the whole job'): a NEW Polish bid's model now carries `pool_packs: true`, the stamp that makes its takeoff price as one purchase (bid-model.js poolsPacks, library-core.js pricePool). That key is the ONLY difference in all seven records (no total moved), and `savedEmptyTakeoff`, a bid that was already saved, is unstamped and byte-identical. The 26 `saved` records are untouched and still byte-identical to 28a5d1f."
  },
  "golden": {
   "saved": {
@@ -8420,7 +8421,8 @@
       }
      },
      "totals": {},
-     "conditions_shown": {}
+     "conditions_shown": {},
+     "pool_packs": true
     },
     "bid": {
      "material": 4300,
@@ -8659,7 +8661,8 @@
        "sf": 10000,
        "per_sf": 1.1921
       },
-      "conditions_shown": {}
+      "conditions_shown": {},
+      "pool_packs": true
      },
      "cell_values": {
       "Epoxy!B4": "Yes",
@@ -8792,7 +8795,8 @@
       }
      },
      "totals": {},
-     "conditions_shown": {}
+     "conditions_shown": {},
+     "pool_packs": true
     },
     "bid": {
      "material": 0,
@@ -8957,7 +8961,8 @@
        "sf": 10000,
        "per_sf": 0
       },
-      "conditions_shown": {}
+      "conditions_shown": {},
+      "pool_packs": true
      },
      "cell_values": {
       "Epoxy!B4": "Yes",
@@ -9225,7 +9230,8 @@
       }
      },
      "totals": {},
-     "conditions_shown": {}
+     "conditions_shown": {},
+     "pool_packs": true
     },
     "bid": {
      "material": 4090,
@@ -9526,7 +9532,8 @@
        "sf": 9250,
        "per_sf": 1.2257297297297298
       },
-      "conditions_shown": {}
+      "conditions_shown": {},
+      "pool_packs": true
      },
      "cell_values": {
       "Epoxy!B4": "Yes",
@@ -9732,7 +9739,8 @@
       }
      },
      "totals": {},
-     "conditions_shown": {}
+     "conditions_shown": {},
+     "pool_packs": true
     },
     "bid": {
      "material": 2800,
@@ -9988,7 +9996,8 @@
        "sf": 10000,
        "per_sf": 0.7762
       },
-      "conditions_shown": {}
+      "conditions_shown": {},
+      "pool_packs": true
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -10161,7 +10170,8 @@
       }
      },
      "totals": {},
-     "conditions_shown": {}
+     "conditions_shown": {},
+     "pool_packs": true
     },
     "bid": {
      "material": 0,
@@ -10381,7 +10391,8 @@
        "sf": 0,
        "per_sf": null
       },
-      "conditions_shown": {}
+      "conditions_shown": {},
+      "pool_packs": true
      },
      "cell_values": {
       "Epoxy!B4": "Yes",
@@ -10825,7 +10836,8 @@
        "rate": 77,
        "rate_default": 77
       }
-     }
+     },
+     "pool_packs": true
     },
     "bid": {
      "material": 0,
@@ -11065,7 +11077,8 @@
         "rate": 77,
         "rate_default": 77
        }
-      }
+      },
+      "pool_packs": true
      },
      "polish_sf": 9000,
      "cell_values": {

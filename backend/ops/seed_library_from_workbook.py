@@ -29,10 +29,12 @@ WHAT A LIBRARY ROW CANNOT SAY (named modelling gaps, listed for Kyle and Hanz in
   * coverage is kept to three places, so a bag of flake that covers 266.6667 SF is stored as 266.667. The
     planner rounds a coverage UP, which on a whole number of square feet can never buy a bag the sheet does
     not (see _round_up_3); an area typed to two decimals within 0.003 SF past a bag edge buys one fewer.
-  * a flake or quartz price break is judged on the TWO broadcast lines added together in the sheet and on
-    each line alone in the library (the Phase 11 gap), so a job whose two lines reach the break together
-    and neither does alone prices both lines at the small-lot price where the sheet pays the large-lot price.
-    For the flake and quartz systems that is every size up to 1,000 to 1,600 SF depending on the system, never a price under the sheet's.
+  * a flake or quartz price break is judged on the TWO broadcast lines added together in the sheet, and the
+    library now reads it the same way: the estimate buys each material ONCE for the section (js/library-core.js
+    pricePool, Hanz 2026-10-13), and a system's two broadcast lines, which are two library rows on one price
+    ladder, are pooled for the break. What is left of that gap runs the other way: the pool also rounds the
+    packs once where the sheet rounds each broadcast line to its own bags, so a small flake or quartz job is a
+    pack or more BELOW the workbook, never above it (see test_epoxy_v2_proof.py).
   * a library cost is kept to four places and the sheet's prices have more, so at a few sizes (about 5 jobs
     in 1,500 scanned) a sum lands a hair either side of a whole dollar and ROUNDUP differs by one.
   * the cove is two ROUNDUPs deep and its aggregate follows System 1 (Kyle's odd rule 11); a library line
@@ -452,11 +454,11 @@ def plan_epoxy(sheets: Dict[str, Sheet], plan: Plan) -> None:
     _plan_epoxy_labor(sh, plan)
 
     if plan.combined_breaks:
-        plan.gap("A price break the sheet judges on two broadcast lines added together is judged on each line alone "
-                 "in the library (the Phase 11 gap), so a job whose two lines reach the break together and neither "
-                 "does alone prices them at the small-lot price where the sheet pays the large-lot price. It shows at "
-                 "every size up to 1,000 to 1,600 SF, depending on the system, for these. Materials: %s."
-                 % ", ".join(sorted(plan.combined_breaks)))
+        plan.gap("A price break the sheet judges on two broadcast lines added together is read the same way by the "
+                 "estimate: it buys each material once for the section, and the two lines, two library rows on one "
+                 "price ladder, are pooled for the break. The pool also rounds the packs once where the sheet rounds "
+                 "each broadcast line to its own bags, so a small job prices a pack or more below the workbook and "
+                 "never above it. Materials: %s." % ", ".join(sorted(plan.combined_breaks)))
     plan.gap("Coverage is kept to three places (a bag of flake that covers 266.6667 SF is stored as 266.667, "
              "rounded up so it cannot buy a bag the sheet does not).")
     plan.gap("Cove is two ROUNDUPs deep and its aggregate follows System 1 (Kyle's odd rule 11): it is priced by "

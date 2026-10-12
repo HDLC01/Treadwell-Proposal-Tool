@@ -93,11 +93,10 @@ function rowPriceOf(row) {
  *  through priceSection (the engine's epoxy profile), both from the saved model, then the engine's combine. Nothing of the
  *  page's own pricing, and nothing of composePricingSnapshot, is in it. */
 function byHand(model, remodelRate) {
-  const rootMaterial = model.takeoff.reduce((t, r) => {
-    if (!B.rowOn(r)) return t;
-    const p = rowPriceOf(r);
-    return t + (p ? p.total : 0);
-  }, 0);
+  // each row ALONE, then bought once for the section when it is stamped to pool (library-core pricePool)
+  const alone = model.takeoff.map((r) => (B.rowOn(r) ? rowPriceOf(r) : null));
+  const bought = B.poolsPacks(model) ? LIB.pricePool(alone, { on: model.takeoff.map((r) => B.rowOn(r)) }) : alone;
+  const rootMaterial = bought.reduce((t, p) => t + (p ? p.total : 0), 0);
   const polish = B.markupChain({
     material: rootMaterial, labor: B.laborTotal(model.labor, model.conditions),
     travel: B.travelCosts(model.travel, model.labor).total, contingency: model.contingency, fees: model.fees,
@@ -106,7 +105,7 @@ function byHand(model, remodelRate) {
   const epoxy = B.priceSection(model, "Epoxy", {
     material: (e) => {
       const t = e.section.takeoff;
-      const r = X.sectionMaterial(t, { items: items, sf: B.takeoffSf(t), rowPrice: (row) => rowPriceOf(row) });
+      const r = X.sectionMaterial(t, { items: items, sf: B.takeoffSf(t), pool: B.poolsPacks(e.section), rowPrice: (row) => rowPriceOf(row) });
       return { material: r.material, tooling: r.tooling };
     },
     remodel_rate: remodelRate,

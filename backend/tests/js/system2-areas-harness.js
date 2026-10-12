@@ -80,6 +80,17 @@ const view = (m) => ({ rows: shape(m), values: B.measuredSfValues(m.takeoff), ar
     const r1 = await open(NEW_BID(8000, ""), realAsms, realItems);
     out.packs = { two: totalOf(r2), one: totalOf(r1), twoPriced: B.takeoffSf(r2.api.model().takeoff),
                   onePriced: B.takeoffSf(r1.api.model().takeoff) };
+    // The smaller pair, where whole-pack rounding bit hardest (+17% before the pool): 1,000 + 1,000 against 2,000.
+    const s2 = await open(NEW_BID(1000, 1000), realAsms, realItems);
+    const s1 = await open(NEW_BID(2000, ""), realAsms, realItems);
+    out.packsSmall = { two: totalOf(s2), one: totalOf(s1), twoPriced: B.takeoffSf(s2.api.model().takeoff),
+                       onePriced: B.takeoffSf(s1.api.model().takeoff) };
+    // A bid saved BEFORE the pool carries no stamp and keeps pricing each row's packs on its own: the same two areas
+    // opened as a saved bid (the model without the pool_packs stamp) cost what they cost then.
+    const saved = clone(r2.store.blob);
+    delete saved.polish_estimate.pool_packs;
+    const legacy = await open(saved, realAsms, realItems);
+    out.packsLegacy = { total: totalOf(legacy), stamped: B.poolsPacks(r2.api.model()), legacyStamped: B.poolsPacks(legacy.api.model()) };
   }
 
   // ── 3. WHAT THE INTAKE BOXES SHOW, AND TYPING INTO EACH ───────────────────────────────────────────────

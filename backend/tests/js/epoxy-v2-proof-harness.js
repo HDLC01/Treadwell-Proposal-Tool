@@ -77,31 +77,24 @@ function modelFor(spec) {
   return m;
 }
 
+/** The section's material, priced the way the page prices it: each row ALONE, then the pool (library-core's pricePool,
+ *  through epoxy-takeoff's `pool`) when the section is stamped, which a section made by activateSection is. A section
+ *  saved before the pool carries no stamp and is priced row by row. */
 function material(entry) {
   const takeoff = entry.section.takeoff;
-  const r = X.sectionMaterial(takeoff, { items: items, sf: B.takeoffSf(takeoff), rowPrice: priceRow });
+  const r = X.sectionMaterial(takeoff, { items: items, sf: B.takeoffSf(takeoff), rowPrice: priceRow,
+    pool: B.poolsPacks(entry.section) });
   return { material: r.material, tooling: r.tooling, _parts: r };
 }
 
-/** One cove of a job: what the section charges it (the aggregate follows System 1), and what it would be as quartz and
- *  as silica, so a test can show odd rule 11 happening and not merely agree with it. */
-function coveOf(spec, n, takeoff) {
-  const name = spec["cove" + n];
-  if (!name) return null;
-  const id = asmNamed(name, "Cove: ").id;
-  const lf = spec["lf" + n];
-  const price = (quartz) => X.priceCoveRow(id, lf, { items: items, quartz: quartz }).total;
-  return { actual: price(X.systemOneIsQuartz(takeoff)), quartz: price(true), silica: price(false) };
-}
-
-/** THE PRICE BREAK THE LIBRARY JUDGES ON ONE LINE AND THE SHEET ON TWO. The sheet pools the pounds of a system's two
- *  broadcast lines (`IF((O201+O202)<240, ...)`); priceAssembly prices each line alone. For every takeoff row, the
- *  lines that buy the same material at the same ladder are pooled here with the library's own breakAt, and a line that
- *  the pooled quantity would have put in a bigger break but that was priced without it is a line the library
- *  over-charges. Answers whether any is, and the dollars: the sum of packs times (the pack cost it paid less the pack
- *  cost the break gives). Nothing here prices the job; the figures are only what the departure predicts. */
-function pooledBreakGap(takeoff) {
-  let gap = 0, lines = 0;
+/** WHAT THE SHEET DOES WITH A PRICE BREAK, WORKED OUT WITHOUT THE POOL. The sheet judges a flake or quartz break on a
+ *  system's two broadcast lines ADDED TOGETHER (`IF((O201+O202)<240, ...)`) and still rounds each line to its own bags.
+ *  For every takeoff row, the lines that buy at the same ladder are pooled here with the library's own breakAt, and a
+ *  line that the pooled quantity would have put in a bigger break but that was priced without it is a line a row-by-row
+ *  library over-charges. Answers the dollars: the sum of packs times (the pack cost it paid less the pack cost the break
+ *  gives). Nothing here prices the job and nothing here is pricePool: this is the independent reading the pool is held to. */
+function sheetBreakGap(takeoff) {
+  let gap = 0;
   takeoff.forEach((r) => {
     const asm = asms.find((a) => a.id === r.assembly_id);
     if (!asm) return;
@@ -115,23 +108,40 @@ function pooledBreakGap(takeoff) {
     priced.forEach((row) => {
       if (!row.ok || !row.priced || !row.item.price_breaks) return;
       const brk = L.breakAt(row.item, pool.get(keyOf(row)));
-      if (brk && !row.price_break) { gap += row.packs * (row.pack_cost - brk.unit_cost); lines += 1; }
+      if (brk && !row.price_break) gap += row.packs * (row.pack_cost - brk.unit_cost);
     });
   });
-  return { gap: gap, lines: lines };
+  return gap;
+}
+
+/** One cove of a job: what the section charges it (the aggregate follows System 1), and what it would be as quartz and
+ *  as silica, so a test can show odd rule 11 happening and not merely agree with it. */
+function coveOf(spec, n, takeoff) {
+  const name = spec["cove" + n];
+  if (!name) return null;
+  const id = asmNamed(name, "Cove: ").id;
+  const lf = spec["lf" + n];
+  const price = (quartz) => X.priceCoveRow(id, lf, { items: items, quartz: quartz }).total;
+  return { actual: price(X.systemOneIsQuartz(takeoff)), quartz: price(true), silica: price(false) };
 }
 
 const out = [];
 golden.cases.forEach((c) => {
   const m = modelFor(c.in);
-  const pb = pooledBreakGap(m.tabs.Epoxy.takeoff);
-  const raw = material(m.tabs.Epoxy ? { section: m.tabs.Epoxy } : null);
+  const raw = material({ section: m.tabs.Epoxy });
   const bid = B.priceSection(m, "Epoxy", { material: (e) => { const r = material(e); return { material: r.material, tooling: r.tooling }; } });
+  // the same job with no pool at all: every row rounds its own packs, which is what a section saved before the pool
+  // still does, and the sheet's own price break read independently of the pool (sheetBreakGap)
+  const stripped = JSON.parse(JSON.stringify(m));
+  delete stripped.tabs.Epoxy.pool_packs;
+  const rawAlone = material({ section: stripped.tabs.Epoxy });
+  const sheetGap = sheetBreakGap(m.tabs.Epoxy.takeoff);
   out.push({
     id: c.id, raw: raw.material, patch: raw._parts.patch, cove: raw._parts.cove,
     material: bid.material, tooling: bid.tooling, material_total: bid.material_total, labor: bid.labor,
     sub_total: bid.sub_total, gp: bid.gp, sales_tax: bid.sales_tax, remodel_tax: bid.remodel_tax, taxes: bid.taxes,
-    total: bid.total, priceable: bid.priceable !== false, pooled_break_gap: pb.gap, pooled_break_lines: pb.lines,
+    total: bid.total, priceable: bid.priceable !== false, pooled: B.poolsPacks(m.tabs.Epoxy),
+    alone: rawAlone.material, sheet_break_gap: sheetGap, sheet_raw: rawAlone.material - sheetGap,
     cove1: coveOf(c.in, 1, m.tabs.Epoxy.takeoff), cove2: coveOf(c.in, 2, m.tabs.Epoxy.takeoff),
   });
 });

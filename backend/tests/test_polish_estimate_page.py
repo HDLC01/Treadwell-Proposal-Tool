@@ -1926,12 +1926,15 @@ def test_defaults_load_into_a_new_bid_one_row_each_without_counting_the_floor_tw
 def test_a_loaded_default_follows_the_library_coverage_not_a_constant(ran):
     """The addendum: a default's coverage is the MATERIAL's library coverage. i1 is 333 in this
     library (the shipped fixture says 275), the row's coverage box is left blank so it keeps
-    following the library, and the row prices exactly as priceLine does at 333 over its 8,000 SF (System 1).
+    following the library, and the row's cost is its share of one purchase of that material at 333: OPF is
+    bought by four rows (the assembly's line and the OPF row, in each of the two areas), so the section buys
+    20,000 SF of it once and this 8,000 SF row pays 8,000/20,000 of the pooled cost, to the ten-thousandth
+    of a dollar the split is made in (pricePool).
 
     Mutation: seed the row with a literal coverage 275 and i1Price no longer equals i1Expected."""
     d = ran["defaultsLoad"]
     assert d["i1CoverageBox"] == "", "coverage was frozen onto the row"
-    assert d["i1Price"] == d["i1Expected"] and d["i1Price"] > 0, d
+    assert abs(d["i1Price"] - d["i1Expected"]) <= 1e-4 and d["i1Price"] > 0, d
 
 
 @needs_node
