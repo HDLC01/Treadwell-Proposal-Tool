@@ -3441,6 +3441,10 @@ const rendered = [];      // every string the page put on screen, for the Labour
       oldTitleAnywhere: [hotelOff, hotelOne, hotelBoth].some((r) => r.html.indexOf("Lodging and Per Diem") !== -1),
     };
 
+    // THE REVIEW CARDS, as the real renderer drew them with both travel lines on, plus the bid
+    // the same render priced. The python side parses the html; the figures come from here.
+    out.reviewCards = { html: hotelBoth.html, bid: hotelBoth.bid };
+
     out.travelCosts = {
       // layout
       order: { sep: at('class="trvsep"'), travelLabor: at('data-lab-card="2"'),
