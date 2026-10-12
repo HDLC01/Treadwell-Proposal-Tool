@@ -184,6 +184,15 @@ def check_a_unit_change_takes_the_row_out_of_its_area(a):
     assert u["values"] == [3000], u["values"]
 
 
+def check_a_row_added_beside_a_two_area_floor_covers_both_areas(a):
+    p, one = a["pickedBeside"], a["pickedBesideOne"]
+    assert p["coatA"] == [{"m": 5000, "follows": 1, "on": True}, {"m": 3000, "follows": 2, "on": True}], (
+        "a row added in a two-system section must cover System 1 AND System 2: %r" % p["coatA"])
+    assert p["rowCount"] == p["before"] + 2 and p["priced"] == 8000 and p["measured"] == 8000, p
+    # a one-area bid still gets the one row
+    assert one["rowCount"] == one["before"] + 1, one
+
+
 CHECKS = [
     check_a_new_bid_is_two_areas_each_with_its_own_defaults,
     check_the_intake_boxes_show_area_1_and_area_2,
@@ -200,6 +209,7 @@ CHECKS = [
     check_no_enabled_default_still_gives_one_plain_row_per_area,
     check_an_area_whose_carrier_was_deleted_is_still_an_area,
     check_a_unit_change_takes_the_row_out_of_its_area,
+    check_a_row_added_beside_a_two_area_floor_covers_both_areas,
 ]
 
 
@@ -210,7 +220,13 @@ def test_the_two_systems_are_two_areas(ran, check):
 
 def test_two_areas_never_cost_less_than_one_combined_floor(ran):
     """The caveat, measured on the real library fixture: a material bought in whole packs rounds up once per
-    area, so two areas can cost a pack or two MORE than one combined floor and never less. Both read 8,000 SF."""
+    area, so two areas can cost a pack or two MORE than one combined floor and never less. Both read 8,000 SF.
+
+    HOW MUCH, on the real library (reviewer run, 2026-10-13): System 1 5,000 + System 2 3,000 is $26,742 against
+    $25,162 for one 8,000 SF floor (+$1,580, about 6%); 1,000 + 1,000 is $9,138 against $7,804 (+17%). A known
+    cost of two areas, not a bug in the seed: Kyle's workbook rounds each line to whole packs on its own, and
+    pooling packs across areas would change the pricing chain (library-core + pricing.py) that is checked
+    against his workbook. It is left to Hanz to decide whether that is wanted."""
     p = ran["packs"]
     assert p["twoPriced"] == p["onePriced"] == 8000, p
     assert p["two"] >= p["one"] > 0, p
@@ -281,6 +297,9 @@ BREAKS = {
     "a typed System 2 is a plain row on a bid that has areas": (
         MODEL, "      if (tag) {",
         "      if (false) {", check_a_second_area_typed_later_gets_its_own_defaults),
+    "a row added beside two areas follows only the first": (
+        PAGE, "          if (!c.floor_area || covered.indexOf(c.floor_area) !== -1) return;",
+        "          return;", check_a_row_added_beside_a_two_area_floor_covers_both_areas),
     "the second box can only add an area, never change one": (
         MODEL, "    var areas = measuredSfRows(rows);",
         "    var areas = measuredSfRows(rows).slice(0, 1);", check_typing_system_2_changes_only_area_2),

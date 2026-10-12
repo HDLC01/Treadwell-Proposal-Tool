@@ -183,6 +183,28 @@ const view = (m) => ({ rows: shape(m), values: B.measuredSfValues(m.takeoff), ar
     out.typedCarrier = view(b.api.model());
   }
 
+  // ── 12. A ROW ADDED BESIDE A MEASURED ONE IN AN EPOXY SECTION COVERS EVERY AREA, NOT ONLY THE FIRST ───────
+  {
+    const ep = await open(blob({ work_type: "epoxy", polish_estimate: null, system_1_sf: 5000, system_2_sf: 3000 }),
+      EVEN_ASMS, EVEN_ITEMS);
+    ep.api.go(0);
+    const before = ep.api.model().takeoff.length;
+    ep.api.addPickedTakeoffRow({ kind: "item", id: "e1", name: "Coat A" });
+    const em = ep.api.model();
+    out.pickedBeside = Object.assign(view(em), { before: before, rowCount: em.takeoff.length,
+      total: totalOf(ep) });
+    // the floor each area gives the row that was picked (Coat A is not a default of this library)
+    out.pickedBeside.coatA = em.takeoff.filter((r) => r.item_id === "e1")
+      .map((r) => ({ m: r.measurement, follows: r.same_floor ? (r.same_floor_of || 0) : null, on: r.enabled !== false }));
+    // a bid with ONE area keeps adding one row, and a saved unmarked bid keeps following its one carrier
+    const single = await open(blob({ work_type: "epoxy", polish_estimate: null, system_1_sf: 5000, system_2_sf: "" }),
+      EVEN_ASMS, EVEN_ITEMS);
+    single.api.go(0);
+    const sb = single.api.model().takeoff.length;
+    single.api.addPickedTakeoffRow({ kind: "item", id: "e1", name: "Coat A" });
+    out.pickedBesideOne = { before: sb, rowCount: single.api.model().takeoff.length, rows: shape(single.api.model()) };
+  }
+
   console.log(JSON.stringify(out));
 })().catch((err) => { console.error(err && err.stack || err); process.exit(1); });
 `;
