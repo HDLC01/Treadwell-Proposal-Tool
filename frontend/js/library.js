@@ -5442,14 +5442,7 @@
         // Every priced field comes across. A copy that dropped the cost or the pack size would be
         // a row that looks finished and prices at nothing, which is the failure this button is
         // meant to save people from by hand-typing.
-        var copy = await post("items", {
-          name: duplicateName(src.name),
-          unit: src.unit || "",
-          buy_qty: src.buy_qty,
-          unit_cost: src.unit_cost,
-          vendor: src.vendor || "",
-          divisions: itemDivisions(src),
-        });
+        var copy = await post("items", L.itemCopyBody(src, duplicateName(src.name), itemDivisions(src), ADMIN));
         // Same reasoning as the Add button above: land at the top, don't re-sort it away.
         ITEMS.unshift(copy.item);
         showView("items"); paint();

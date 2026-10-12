@@ -486,3 +486,54 @@ def test_the_writable_list_and_the_request_model_know_the_three_fields():
         assert field in library.ITEM_WRITABLE
         assert field in main.LibraryItemIn.model_fields, "the API would drop %s without a word" % field
         assert field in library.ITEM_ADMIN_ONLY
+
+
+# ── review findings: a dearer break never beats bulk; Duplicate carries the columns ─────────────
+@needs_node
+def test_switching_bulk_on_never_raises_the_price_when_a_break_costs_more_than_bulk():
+    """Bulk 70 against a 240+ break of 90: with bulk on the cheaper bulk price stands. A break that is
+    cheaper than the bulk cost still wins, and with bulk off the break applies as it always did."""
+    dear = dict(BASE, unit_cost=100, buy_qty=1, waste_pct=0, bulk_cost=70,
+                price_breaks=[{"min_qty": 240, "unit_cost": 90}])
+    cheap = dict(dear, price_breaks=[{"min_qty": 240, "unit_cost": 60}])
+    got = run("const area = 275 * 240;"
+              "const f = (it, o) => L.priceLine({item_id:'m'}, [it], area, o);"
+              "const d = f(%s, {bulk:true}), c = f(%s, {bulk:true}), off = f(%s);"
+              "out([d.pack_cost, !!d.price_break, d.cost, c.pack_cost, !!c.price_break, off.pack_cost])"
+              % (json.dumps(dear), json.dumps(cheap), json.dumps(dear)))
+    assert got == [70, False, 70 * 240, 60, True, 90]
+
+
+@needs_node
+def test_the_fractional_path_also_keeps_bulk_when_the_break_is_dearer():
+    dear = dict(BASE, unit_cost=100, buy_qty=1, waste_pct=0, roundup=False, bulk_cost=70,
+                price_breaks=[{"min_qty": 240, "unit_cost": 90}])
+    got = run("const r = L.priceLine({item_id:'m'}, [%s], 275 * 240, {bulk:true}); out([r.pack_cost, r.cost])"
+              % json.dumps(dear))
+    assert got == [70, 70 * 240]
+
+
+FULL = dict(BASE, unit="Lb", buy_qty=40, unit_cost=90, vendor="V", coverage=12, waste_pct=3, roundup=False,
+            price_breaks=[{"min_qty": 240, "unit_cost": 80}], bulk_cost=70, coverage_basis="lf")
+
+
+@needs_node
+def test_duplicate_carries_every_priced_field_for_an_admin():
+    got = run("out(L.itemCopyBody(%s, 'OPF (2)', ['Epoxy'], true))" % json.dumps(FULL))
+    assert got["price_breaks"] == [{"min_qty": 240, "unit_cost": 80}]
+    assert (got["bulk_cost"], got["coverage_basis"]) == (70, "lf")
+    assert (got["coverage"], got["waste_pct"], got["roundup"]) == (12, 3, False)
+    assert (got["name"], got["buy_qty"], got["unit_cost"], got["divisions"]) == ("OPF (2)", 40, 90, ["Epoxy"])
+
+
+@needs_node
+def test_duplicate_sends_the_admin_only_columns_to_nobody_else_and_only_when_present():
+    non_admin = run("out(L.itemCopyBody(%s, 'x', [], false))" % json.dumps(FULL))
+    assert not set(non_admin) & set(library.ITEM_ADMIN_ONLY), "a 403 on every non-admin Duplicate"
+    bare = run("out(L.itemCopyBody(%s, 'x', [], true))" % json.dumps(BASE))
+    assert not set(bare) & set(library.ITEM_ADMIN_ONLY), "a column production does not have yet"
+
+
+def test_the_items_tab_builds_the_duplicate_body_with_the_shared_helper():
+    src = (FRONTEND / "js" / "library.js").read_text(encoding="utf-8")
+    assert "L.itemCopyBody(src, duplicateName(src.name), itemDivisions(src), ADMIN)" in src

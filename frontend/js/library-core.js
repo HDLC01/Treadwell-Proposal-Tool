@@ -160,6 +160,8 @@
    *  on (Kyle's D41): pass `{bulk: true}` as `opts`, otherwise it is ignored. `coverage_basis` says
    *  which measure the coverage is quoted per (see areaFor). When a price break and the bulk cost
    *  both apply, the price break wins: it is the more specific price, the quantity actually bought.
+   *  The one exception is a break dearer than the bulk cost: then the bulk cost stands, because
+   *  turning a discount on must never raise the price (see breakHelps).
    *
    *  Returns `{ok: false, reason}` rather than throwing or defaulting to zero. A line whose
    *  material was deleted must be VISIBLE and must not contribute — pricing it at zero would
@@ -246,16 +248,24 @@
       // coverage anybody types and coarser than the error.
       var packs = Math.ceil(parseFloat((needed / pack).toPrecision(12)));
       var brk = breakAt(item, packs * pack);
-      if (brk) packCost = withBreak(base, brk);
+      if (brk && breakHelps(bulk, packCost, brk)) packCost = withBreak(base, brk);
       return Object.assign(base, { priced: true, needed: needed, packs: packs,
                                    units: packs * pack, qty: packs, cost: packs * packCost });
     }
     // Fractional: buy exactly what is needed, at the price of one unit rather than one pack.
     var brk2 = breakAt(item, needed);
-    if (brk2) packCost = withBreak(base, brk2);
+    if (brk2 && breakHelps(bulk, packCost, brk2)) packCost = withBreak(base, brk2);
     return Object.assign(base, { priced: true, needed: needed, packs: null,
                                  units: needed, qty: needed,
                                  cost: needed * (packCost / pack) });
+  }
+
+  /** Does a price break change the price? Always, EXCEPT when the bid has Bulk Discount on and the
+   *  break costs no less than the bulk cost already in use: switching a discount on must never
+   *  raise the price, so the cheaper of the two stands. With bulk off the break always applies,
+   *  as it always did. */
+  function breakHelps(bulk, packCost, brk) {
+    return !(bulk && brk.unit_cost >= packCost);
   }
 
   /** Put a price break's cost on a priced row and say which break it was. Returns the pack cost. */
@@ -389,7 +399,37 @@
     return qty4(row.needed) + " ÷ " + qtyText(row.buy_qty) + " × " + price4(row.pack_cost);
   }
 
+  /** The POST body for a copy of a material. Every priced field comes across, so the copy does not
+   *  price differently from the original. The three Phase 11 columns ride along ONLY for an admin
+   *  (the server refuses them from anybody else) and ONLY when the source has them, so a database
+   *  without those columns is never sent one. `divisions` is passed in already normalised. */
+  function itemCopyBody(src, name, divisions, isAdmin) {
+    src = src || {};
+    var body = {
+      name: name,
+      unit: src.unit || "",
+      buy_qty: src.buy_qty,
+      unit_cost: src.unit_cost,
+      coverage: src.coverage,
+      waste_pct: src.waste_pct,
+      roundup: src.roundup,
+      vendor: src.vendor || "",
+      divisions: divisions,
+    };
+    if (isAdmin) {
+      if (Array.isArray(src.price_breaks) && src.price_breaks.length) {
+        body.price_breaks = src.price_breaks.map(function (b) {
+          return { min_qty: b.min_qty, unit_cost: b.unit_cost };
+        });
+      }
+      if (num(src.bulk_cost) !== null && num(src.bulk_cost) > 0) body.bulk_cost = src.bulk_cost;
+      if (src.coverage_basis) body.coverage_basis = src.coverage_basis;
+    }
+    return body;
+  }
+
   return {
+    itemCopyBody: itemCopyBody,
     num: num, findItem: findItem, priceLine: priceLine, priceAssembly: priceAssembly,
     money: money, perUnit: perUnit, explain: explain,
     wastePct: wastePct, buyQty: buyQty, qtyText: qtyText, qty4: qty4, price4: price4,
