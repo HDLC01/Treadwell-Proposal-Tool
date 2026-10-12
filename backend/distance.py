@@ -55,6 +55,16 @@ USER_AGENT = "Treadwell-proposal-tool/1.0 (+https://proposals.wetreadwell.com)"
 # Each service answers in well under a second. Past this the estimator is better served by typing the
 # number than by waiting on a map service.
 TIMEOUT_SECONDS = 6.0
+CONNECT_SECONDS = 3.0
+
+# ONE deadline for the whole lookup (geocode + route, or Google + both). httpx's timeout applies to
+# each phase of each call separately, so two calls could add up to 12 s or more; each call is instead
+# given only what is left of this budget, and a spent budget skips the next call. The page's own
+# abort (polish-estimate.js lookupDistance) must sit past WORST_CASE_SECONDS, or a lookup that did
+# succeed would be shown as "did not answer". A test pins that.
+TOTAL_BUDGET_SECONDS = 8.0
+WORST_CASE_SECONDS = TOTAL_BUDGET_SECONDS + CONNECT_SECONDS
+_now = time.monotonic
 
 # A repeated address costs nothing. Only real answers are kept; "not found" is kept briefly so a
 # typo is not re-billed on every keystroke-driven re-open, and errors are never kept.
@@ -125,7 +135,16 @@ def rate_limited(bucket: str) -> bool:
     return False
 
 
-def _routes_post(addr: str, key: str) -> httpx.Response:
+def _timeout(deadline: float) -> Optional[httpx.Timeout]:
+    """What one call may spend: the usual allowance, cut to what is left of the budget. None when
+    nothing is left (the caller then skips the call)."""
+    left = deadline - _now()
+    if left <= 0.05:
+        return None
+    return httpx.Timeout(min(TIMEOUT_SECONDS, left), connect=min(CONNECT_SECONDS, left))
+
+
+def _routes_post(addr: str, key: str, timeout: httpx.Timeout) -> httpx.Response:
     body = {
         "origin": {"address": OFFICE_ADDRESS},
         "destination": {"address": addr},
@@ -133,19 +152,19 @@ def _routes_post(addr: str, key: str) -> httpx.Response:
         "units": "IMPERIAL",
     }
     headers = {"X-Goog-Api-Key": key, "X-Goog-FieldMask": "routes.distanceMeters"}
-    with httpx.Client(timeout=TIMEOUT_SECONDS, transport=_TRANSPORT) as c:
+    with httpx.Client(timeout=timeout, transport=_TRANSPORT) as c:
         return c.post(ROUTES_URL, json=body, headers=headers)
 
 
-def _census_get(addr: str) -> httpx.Response:
+def _census_get(addr: str, timeout: httpx.Timeout) -> httpx.Response:
     params = {"address": addr, "benchmark": "Public_AR_Current", "format": "json"}
-    with httpx.Client(timeout=TIMEOUT_SECONDS, transport=_TRANSPORT) as c:
+    with httpx.Client(timeout=timeout, transport=_TRANSPORT) as c:
         return c.get(CENSUS_URL, params=params, headers={"User-Agent": USER_AGENT})
 
 
-def _osrm_get(lon: float, lat: float) -> httpx.Response:
+def _osrm_get(lon: float, lat: float, timeout: httpx.Timeout) -> httpx.Response:
     url = "%s%.6f,%.6f;%.6f,%.6f" % (OSRM_URL, OFFICE_LON, OFFICE_LAT, lon, lat)
-    with httpx.Client(timeout=TIMEOUT_SECONDS, transport=_TRANSPORT) as c:
+    with httpx.Client(timeout=timeout, transport=_TRANSPORT) as c:
         return c.get(url, params={"overview": "false"}, headers={"User-Agent": USER_AGENT})
 
 
@@ -160,10 +179,16 @@ def _miles(meters: Any) -> Optional[float]:
     return round(m / METERS_PER_MILE, 1)
 
 
-def _google(addr: str, key: str) -> tuple:
-    """(miles | None, reason). reason is "" on success, else not_found | error."""
+def _google(addr: str, key: str, deadline: Optional[float] = None) -> tuple:
+    """(miles | None, reason). reason is "" on success, else not_found | error. `deadline` is the
+    lookup's shared budget; called on its own it gets a fresh one."""
+    if deadline is None:
+        deadline = _now() + TOTAL_BUDGET_SECONDS
+    timeout = _timeout(deadline)
+    if timeout is None:
+        return None, "error"
     try:
-        resp = _routes_post(addr, key)
+        resp = _routes_post(addr, key, timeout)
     except Exception as exc:  # noqa: BLE001 -- timeout, DNS, TLS: all the same answer, "unknown"
         # The message can carry the request URL; it never carries the key (header, not query).
         log.warning("distance lookup failed: %s", type(exc).__name__)
@@ -184,10 +209,13 @@ def _google(addr: str, key: str) -> tuple:
     return None, "error"
 
 
-def _geocode(addr: str, state: str) -> tuple:
+def _geocode(addr: str, state: str, deadline: float) -> tuple:
     """(lon, lat, reason) from the Census geocoder. No match is "not_found", never a guess."""
+    timeout = _timeout(deadline)
+    if timeout is None:
+        return None, None, "error"
     try:
-        resp = _census_get(addr)
+        resp = _census_get(addr, timeout)
     except Exception as exc:  # noqa: BLE001
         log.warning("census geocode failed: %s", type(exc).__name__)
         return None, None, "error"
@@ -196,53 +224,61 @@ def _geocode(addr: str, state: str) -> tuple:
         return None, None, "error"
     try:
         matches = ((resp.json() or {}).get("result") or {}).get("addressMatches") or []
-    except Exception:  # noqa: BLE001 -- not JSON: the service is misbehaving, not "no match"
+    except Exception:  # noqa: BLE001 -- not JSON / not an object: the service is misbehaving
         return None, None, "error"
     if not matches:
         return None, None, "not_found"
-    m = matches[0] or {}
     try:
-        lon = float(m["coordinates"]["x"])
-        lat = float(m["coordinates"]["y"])
+        m = matches[0] or {}
+        coords = m["coordinates"]
+        lon = float(coords["x"])
+        lat = float(coords["y"])
     except Exception:  # noqa: BLE001
         return None, None, "not_found"
     if not (-180 <= lon <= 180 and -90 <= lat <= 90):
         return None, None, "not_found"
     # A match in a different state than the one typed is a street the typed town does not have.
-    got = str(((m.get("addressComponents") or {}).get("state")) or "").upper()
+    try:
+        got = str(((m.get("addressComponents") or {}).get("state")) or "").upper()
+    except Exception:  # noqa: BLE001 -- components that are not an object: no state to compare
+        got = ""
     if state and got and got != state.upper():
         return None, None, "not_found"
     return lon, lat, ""
 
 
-def _osrm(lon: float, lat: float) -> tuple:
+def _osrm(lon: float, lat: float, deadline: float) -> tuple:
     """(miles | None, reason): driving distance office -> (lon, lat) from the OSRM public router."""
+    timeout = _timeout(deadline)
+    if timeout is None:
+        return None, "error"
     try:
-        resp = _osrm_get(lon, lat)
+        resp = _osrm_get(lon, lat, timeout)
     except Exception as exc:  # noqa: BLE001
         log.warning("osrm route failed: %s", type(exc).__name__)
         return None, "error"
     try:
-        body = resp.json() or {}
-    except Exception:  # noqa: BLE001
-        body = {}
-    code = str(body.get("code") or "")
-    if resp.status_code == 200 and code == "Ok":
-        routes = body.get("routes") or []
-        miles = _miles((routes[0] or {}).get("distance")) if routes else None
-        return (miles, "") if miles is not None else (None, "error")
-    if code in ("NoRoute", "NoSegment"):
-        return None, "not_found"
+        body = resp.json()
+        code = str(body.get("code") or "")
+        if resp.status_code == 200 and code == "Ok":
+            routes = body.get("routes") or []
+            miles = _miles((routes[0] or {}).get("distance")) if routes else None
+            return (miles, "") if miles is not None else (None, "error")
+        if code in ("NoRoute", "NoSegment"):
+            return None, "not_found"
+    except Exception:  # noqa: BLE001 -- 200 with a body that is not the promised shape: unknown
+        log.warning("osrm answered %s with an unexpected body", resp.status_code)
+        return None, "error"
     log.warning("osrm answered %s %s", resp.status_code, code)
     return None, "error"
 
 
-def _free(addr: str, state: str) -> tuple:
+def _free(addr: str, state: str, deadline: float) -> tuple:
     """Census geocode of the job, then ONE OSRM route from the pinned office coordinates."""
-    lon, lat, why = _geocode(addr, state)
+    lon, lat, why = _geocode(addr, state, deadline)
     if why:
         return None, why
-    return _osrm(lon, lat)
+    return _osrm(lon, lat, deadline)
 
 
 def lookup(address: Any, city: Any = "", state: Any = "", zip_code: Any = "") -> Dict[str, Any]:
@@ -262,13 +298,14 @@ def lookup(address: Any, city: Any = "", state: Any = "", zip_code: Any = "") ->
         return out
     miles: Optional[float] = None
     reason = "error"
+    deadline = _now() + TOTAL_BUDGET_SECONDS
     key = api_key()
     if key:
-        miles, reason = _google(addr, key)
+        miles, reason = _google(addr, key, deadline)
     if miles is None:
         # No key, or Google failed: the free pair. Its answer is the final one.
         st = str(state or "").strip()[:2]
-        miles, reason = _free(addr, st)
+        miles, reason = _free(addr, st, deadline)
     if miles is not None:
         _cache_put(ck, miles, "", _CACHE_TTL_OK)
         out.update(ok=True, miles=miles)

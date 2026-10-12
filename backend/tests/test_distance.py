@@ -172,6 +172,100 @@ def test_timeouts_are_short():
     assert 0 < distance.TIMEOUT_SECONDS <= 8
 
 
+# -- a 200 that is not the shape the service promised is "unknown", never a 500 -------------------
+
+_ODD_BODIES = [[1], "x", 7, {"code": "Ok", "routes": ["x"]}, {"code": "Ok", "routes": {"a": 1}},
+               {"code": "Ok", "routes": [[1]]}]
+
+
+@pytest.mark.parametrize("body", _ODD_BODIES)
+def test_an_odd_osrm_200_is_an_error_not_an_exception(monkeypatch, body):
+    _mock(monkeypatch, census=_c_match(), osrm=lambda r: httpx.Response(200, json=body))
+    out = distance.lookup(**KW)
+    assert out["ok"] is False and out["miles"] is None and out["reason"] == "error"
+
+
+@pytest.mark.parametrize("comps", [[1], "KS", 5])
+def test_an_odd_census_match_is_not_an_exception(monkeypatch, comps):
+    body = {"result": {"addressMatches": [{"coordinates": {"x": -97.3, "y": 37.7},
+                                           "addressComponents": comps}]}}
+    _mock(monkeypatch, census=lambda r: httpx.Response(200, json=body), osrm=_o_ok(1000))
+    out = distance.lookup(**KW)           # must answer, whatever it answers
+    assert out["ok"] in (True, False) and out["reason"] in ("", "error", "not_found")
+
+
+@pytest.mark.parametrize("body", [[1], "x", {"result": []}, {"result": {"addressMatches": {"a": 1}}},
+                                  {"result": {"addressMatches": ["x"]}}])
+def test_an_odd_census_200_is_not_an_exception(monkeypatch, body):
+    _mock(monkeypatch, census=lambda r: httpx.Response(200, json=body), osrm=_o_ok(1000))
+    out = distance.lookup(**KW)
+    assert out["ok"] is False and out["miles"] is None and out["reason"] in ("error", "not_found")
+
+
+# -- one deadline for the whole lookup, shorter than the page's own abort ------------------------
+
+class _Clock:
+    t = 100.0
+
+
+def _spy_client(monkeypatch):
+    """Records the timeout each outgoing call was given, and lets a handler move the fake clock."""
+    seen = []
+    real = httpx.Client
+
+    def spy(*a, **kw):
+        seen.append(kw.get("timeout"))
+        return real(*a, **kw)
+    monkeypatch.setattr(distance.httpx, "Client", spy)
+    clock = _Clock()
+    clock.t = 100.0
+    monkeypatch.setattr(distance, "_now", lambda: clock.t)
+    return seen, clock
+
+
+def test_the_second_call_only_gets_what_the_first_left(monkeypatch):
+    seen, clock = _spy_client(monkeypatch)
+
+    def slow_census(request):
+        clock.t += distance.TOTAL_BUDGET_SECONDS - 1.0       # census ate all but one second
+        return _c_match()(request)
+    _mock(monkeypatch, census=slow_census, osrm=_o_ok(160934))
+    out = distance.lookup(**KW)
+    assert out["ok"] is True and out["miles"] == 100.0
+    assert len(seen) == 2
+    assert seen[0].read == distance.TIMEOUT_SECONDS          # full allowance while the budget is whole
+    assert 0 < seen[1].read <= 1.0 + 1e-6 and seen[1].connect <= 1.0 + 1e-6
+
+
+def test_a_spent_budget_skips_the_route_call_and_says_error(monkeypatch):
+    seen, clock = _spy_client(monkeypatch)
+
+    def slow_census(request):
+        clock.t += distance.TOTAL_BUDGET_SECONDS + 0.5
+        return _c_match()(request)
+    calls = _mock(monkeypatch, census=slow_census, osrm=_o_ok(160934))
+    out = distance.lookup(**KW)
+    assert out["ok"] is False and out["reason"] == "error"
+    assert _hosts(calls) == [CENSUS_HOST]
+
+
+def test_the_page_waits_longer_than_the_server_ever_can():
+    """A lookup that succeeds must never be shown as "did not answer": the page's abort (ms) has to
+    sit past the server's worst case."""
+    src = (Path(main.__file__).resolve().parent.parent / "frontend" / "js" / "polish-estimate.js"
+           ).read_text(encoding="utf-8")
+    marker = "AbortSignal.timeout("
+    assert src.count(marker) >= 1
+    after = src.split(marker, 1)[1]
+    digits = ""
+    for ch in after:
+        if not ch.isdigit():
+            break
+        digits += ch
+    assert digits, "AbortSignal.timeout() has no literal number"
+    assert int(digits) / 1000.0 > distance.WORST_CASE_SECONDS
+
+
 @pytest.mark.parametrize("addr,city,state,zip_code", [
     ("", "Wichita", "KS", "67202"),            # no street
     ("100 Main St", "", "", ""),               # a street with nothing to place it by

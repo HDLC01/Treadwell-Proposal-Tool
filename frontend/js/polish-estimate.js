@@ -1699,7 +1699,7 @@
         body: JSON.stringify({ address: s.address || "", city: s.city || "", state: s.state || "",
                                zip: s.zip || "" }),
         signal: (typeof AbortSignal !== "undefined" && AbortSignal.timeout)
-          ? AbortSignal.timeout(10000) : undefined
+          ? AbortSignal.timeout(14000) : undefined
       });
       var j = await res.json();
       miles = B.milesOrNull(j && j.miles);
