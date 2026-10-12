@@ -666,6 +666,9 @@
     renderConditions();
     if (county) county.hydrate(state);      // after the toggles: the note quotes Remodel tax
     paintProjLine();
+    // After writeForm, which ticks the Audience radio the draft names: the Drawings & specs box shows
+    // for a GC only (js/audience-box.js). A page served without that script has nothing to repaint.
+    if (window.TWAudienceBox) window.TWAudienceBox.sync();
   }
 
   function onClick(e) {

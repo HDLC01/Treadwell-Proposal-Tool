@@ -238,10 +238,15 @@ def test_a_blank_token_shows_the_templates_placeholder_and_is_not_an_edit(ran):
                   "(NO spec)")
     assert got["blank"]["text"] == want_blank
     assert got["blank"]["dirty"] is False and got["blankCollect"] == []
+    # A typed spec section takes Kyle's trailing "(NO spec)" off the line (the {{no_spec_note}}
+    # token), with no space left behind; taking the spec out again puts it back.
     assert got["filled"]["text"] == ("Polished Concrete: per Spec 033543 & Drawings by Gould Evans "
-                                     "dated 8/15/26 (NO spec)")
+                                     "dated 8/15/26")
     assert got["cleared"]["text"] == ("Polished Concrete: per Spec 033543 & Drawings by xx Architects "
-                                      "dated 8/15/26 (NO spec)"), "a cleared field did not fall back"
+                                      "dated 8/15/26"), "a cleared field did not fall back"
+    assert got["specCleared"]["text"] == ("Polished Concrete: per Spec 033543 & Drawings by Gould Evans "
+                                          "dated 8/15/26 (NO spec)"), "a blank spec lost its caveat"
+    assert got["specCleared"]["dirty"] is False
     assert got["finalCollect"] == []
 
 

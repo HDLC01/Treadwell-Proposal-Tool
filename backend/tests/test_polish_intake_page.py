@@ -1114,7 +1114,10 @@ def test_the_page_loads_no_formula_engine(html):
                     "/js/intake-scope.js",
                     "/js/markup-core.js", "/js/bid-profiles.js", "/js/bid-engine.js",
                     "/js/bid-model.js", "/js/address-lookup.js",
-                    "/js/polish-sandbox.js", "/js/county-picker.js", "/js/polish-intake.js",
+                    "/js/polish-sandbox.js", "/js/county-picker.js",
+                    # 2026-10-12: shows the Drawings & specs box only for a GC. BEFORE polish-intake.js,
+                    # which calls window.TWAudienceBox.sync() once it has filled the Audience radios.
+                    "/js/audience-box.js", "/js/polish-intake.js",
                     "/js/polish-verbal.js"], (
         "the page's script list has changed: %r" % srcs)
     # bid-model is the model's shape and the condition keys, NOT a formula engine: no CDN, no
@@ -1805,3 +1808,30 @@ def test_the_local_job_switch_is_gone_but_the_hidden_answer_still_reaches_b4(ran
     assert "local" not in h["switchKeys"]
     assert h["modelLocal"] is False and h["modelLocalAfterToggle"] is False
     assert h["polishB4"] == "No" and h["epoxyB4"] == "No"
+
+
+@needs_node
+def test_a_typed_spec_section_reaches_the_saved_draft_from_the_beta_intake(ran):
+    """Will, 2026-10-12: a spec typed on the intake has to reach the proposal. Run through the REAL
+    readForm over the REAL page's named inputs: the spec section is saved as typed (a leading zero
+    and a suffix intact), comes back on reopening, and clearing the box saves a blank so the draft
+    does not hold on to a spec nobody wants.
+
+    Mutation: rename the input or move it out of #intake-form (the harness stops finding it), or
+    stop spreading the form in save()."""
+    g = ran["gcSpec"]
+    assert g["savedSpec"] == "033543-A" and g["savedAudience"] == "GC"
+    assert g["reopenedWith"] == "033543-A" and g["reopenedAudience"] == "GC"
+    assert g["blankSaved"] == ""
+    for name in ("spec_section", "drawings_dated", "addenda_count", "finish_tag", "plan_sheet", "architect"):
+        assert name in g["formNames"], name
+
+
+@needs_node
+def test_the_beta_intake_repaints_the_drawings_box_after_it_fills_the_audience(ran):
+    """js/audience-box.js looks at the radios when it loads, and this page fills them later, once
+    its sandbox has settled, so hydrate() has to ask for a repaint after writeForm.
+
+    Mutation: delete the TWAudienceBox.sync() call from hydrate() and a GC draft opens with the box
+    hidden."""
+    assert ran["gcSpec"]["syncsAfterBoot"] == 1

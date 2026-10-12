@@ -341,6 +341,9 @@ GC_NARRATIVE_TEMPLATES = set(GC_SCOPE_CONTINUATIONS.keys())
 #   spec line           "033543" / "096723" / "03xx"  -> {{spec_section}}
 #                       "xx Architects"               -> {{architect}}
 #                       "8/1/26"                      -> {{drawings_dated_formatted}}
+#                       " (NO spec)"                  -> {{no_spec_note}}   (the caveat Kyle prints when
+#                                                              there is no spec; blank once a spec is typed,
+#                                                              see proposal_writer.NO_SPEC_TOKEN)
 #   finish line         "[PC]" / "[RESx]" / "[SC]"    -> [{{finish_tag}}]   (brackets kept)
 #                       "A900"                        -> {{plan_sheet}}
 #   addenda line        "Addenda Acknowledged: 0"     -> Addenda Acknowledged: {{addenda_count}}
@@ -366,7 +369,8 @@ GC_SPAN_RULES: dict[str, list[tuple[str, list[tuple[str, str]]]]] = {
     "GC/xx TREADWELL POLISH PROPOSAL - xx.docx": [
         ("Polished Concrete: per Spec 033543 &amp; Drawings by xx Architects dated 8/1/26 (NO spec)",
          [("033543", "{{spec_section}}"), ("xx Architects", "{{architect}}"),
-          ("8/1/26", "{{drawings_dated_formatted}}")]),
+          ("8/1/26", "{{drawings_dated_formatted}}"),
+          (" (NO spec)", "{{no_spec_note}}")]),
         ("Area:~{{sqft}} sf of polished concrete flooring [PC] per the Finish Schedule on A900",
          [("[PC]", "[{{finish_tag}}]"), ("A900", "{{plan_sheet}}")]),
         ("Addenda Acknowledged: 0", [("0", "{{addenda_count}}")]),
@@ -374,7 +378,8 @@ GC_SPAN_RULES: dict[str, list[tuple[str, list[tuple[str, str]]]]] = {
     "GC/xx TREADWELL RESINOUS PROPOSAL - xx.docx": [
         ("Resinous Flooring: per Spec 096723 &amp; Drawings by xx Architects dated 8/1/26 (NO spec)",
          [("096723", "{{spec_section}}"), ("xx Architects", "{{architect}}"),
-          ("8/1/26", "{{drawings_dated_formatted}}")]),
+          ("8/1/26", "{{drawings_dated_formatted}}"),
+          (" (NO spec)", "{{no_spec_note}}")]),
         ("Area:~{{sqft}} sf of resinous flooring [RESx] &amp; {{cove_lf}} lf of integral base "
          "per the Finish Schedule on A900",
          [("[RESx]", "[{{finish_tag}}]"), ("A900", "{{plan_sheet}}")]),
@@ -383,7 +388,8 @@ GC_SPAN_RULES: dict[str, list[tuple[str, list[tuple[str, str]]]]] = {
     "GC/xx TREADWELL SEALER PROPOSAL - xx.docx": [
         ("Sealed Concrete: per Spec 03xx &amp; Drawings by xx Architects dated 8/1/26 (NO spec)",
          [("03xx", "{{spec_section}}"), ("xx Architects", "{{architect}}"),
-          ("8/1/26", "{{drawings_dated_formatted}}")]),
+          ("8/1/26", "{{drawings_dated_formatted}}"),
+          (" (NO spec)", "{{no_spec_note}}")]),
         ("Area:~{{sqft}} sf of sealed concrete flooring [SC] per the Finish Schedule on A900",
          [("[SC]", "[{{finish_tag}}]"), ("A900", "{{plan_sheet}}")]),
         ("Addenda Acknowledged: 0", [("0", "{{addenda_count}}")]),
