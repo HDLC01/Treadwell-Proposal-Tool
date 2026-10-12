@@ -4058,8 +4058,11 @@ def test_takeoff_rows_say_what_each_material_and_assembly_costs(ran):
     assert p["item:i2"] == "$398.79 per 5 Gal", "a 5 Gal pack must say so: %r" % p["item:i2"]
     # an assembly: priceAssembly's own per-unit figure (the expectation is computed by the real
     # module in the harness, so a literal here cannot drift from it), LF for an LF assembly
-    assert p["asm:a1"] == t["expectA1"] == "$1.11 per SF"
-    assert p["asm:a2"] == t["expectA2"] == "$0.80 per LF"
+    # a1 buys whole units, so its figure moves with the area: the text names the area it is at
+    assert t["expectA1"] == "$1.11 per SF"
+    assert p["asm:a1"] == t["expectA1"] + " at 1,000 SF"
+    assert t["expectA2"] == "$0.80 per LF"
+    assert p["asm:a2"] == t["expectA2"] + " at 1,000 LF"
     assert t["noRawTag"], "a row still carries the old Assembly/Material tag instead of a price"
 
 
