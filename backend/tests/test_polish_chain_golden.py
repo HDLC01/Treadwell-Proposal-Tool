@@ -25,7 +25,7 @@ argument and the new rule: a split draft (`split`, the fourth argument of `condi
 moved: all of `chain/*`, and every `cond/cells/*` and `cond/fromCells/*` that was already there bar the one
 above, answer as before (2,228 - 1 + 1 + 19 = 2,247).
 
-The v2 quantities-start-empty change (2026-10-12) re-cut it on 4870ae1 and FOUR vectors moved, all of them
+The v2 quantities-start-empty change (2026-10-12) re-cut it on 632355a and FOUR vectors moved, all of them
 new-bid seeding and none of them a price: `calc/apply/{all,noSf,nullEntries,numericIds}` (applyLaborCalc fills
 the rate and the hours a day and no longer the guys, the days or the From-SF follow marker). Every `chain/*`,
 `model/*`, `travel/*` and `labor/*` vector, the saved-bid arithmetic, and `libraryLaborRow` (still one faithful
