@@ -2536,8 +2536,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
         return h.slice(a, m ? a + 1 + m.index : h.length);
       };
       // What the card is made of: its labels, and the keyed boxes inside it.
-      const labelsOf = (bb, i) => (cardHtml(bb, i).match(/<label[^>]*>[^<]*<\/label>/g) || [])
-        .map((x) => x.replace(/<[^>]*>/g, ""));
+      const labelsOf = (bb, i) => Array.from(cardHtml(bb, i).matchAll(/<label[^>]*>([^<]*)<\/label>/g), (m) => m[1]);
       const boxKeysOf = (bb, i) => (cardHtml(bb, i).match(/data-tk="\d+" data-k="\w+"/g) || [])
         .map((x) => /data-k="(\w+)"/.exec(x)[1]);
       const cost = (i) => txt(b, '[data-cost-for="' + i + '"]');
@@ -2593,7 +2592,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
       const liveCard = sb.doc.querySelector('[data-row-card="1"]').innerHTML;
       const savedAfter = { focused: focused, cost: txt(sb, '[data-cost-for="1"]'), line_cov: sb.api.model().takeoff[1].line_cov === undefined,
                            note: /data-asmcov-note=/.test(liveCard), noteWas: /data-asmcov-note=/.test(cardHtml(sb, 1)),
-                           labels: (liveCard.match(/<label[^>]*>[^<]*<\/label>/g) || []).map((x) => x.replace(/<[^>]*>/g, "")), matTotal: sb.api.materialTotal(),
+                           labels: Array.from(liveCard.matchAll(/<label[^>]*>([^<]*)<\/label>/g), (m) => m[1]), matTotal: sb.api.materialTotal(),
                            libraryUntouched: ITEMS.find((i) => i.id === "i1").coverage };
 
       // A line_cov holding no positive figure prices like none, so there is no note about it.
