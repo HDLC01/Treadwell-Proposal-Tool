@@ -993,6 +993,72 @@
     return t > 0 ? t : same;
   }
 
+  /** THE SEPARATE MEASURED AREAS OF A TAKEOFF, in takeoff order: the row index of each (the rows
+   *  measuredSf adds up). Intake's System 1 box mirrors the first, System 2 the second.
+   *
+   *  Counted exactly the way measuredSf counts: SF rows with a number on them, the on/off slider
+   *  ignored, and a same_floor row not counted on top of its carrier. When the carrier has no
+   *  number and only same_floor rows hold the floor, they are all the one floor: that is one area,
+   *  shown by the first of them. */
+  function measuredSfRows(rows) {
+    rows = rows || [];
+    var own = [], same = -1;
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i] || {};
+      if (r.unit !== "SF" || !(num(r.measurement) > 0)) continue;
+      if (r.same_floor) { if (same < 0) same = i; } else own.push(i);
+    }
+    return own.length ? own : (same >= 0 ? [same] : []);
+  }
+
+  /** How many separate measured areas the takeoff holds. */
+  function measuredSfAreas(rows) {
+    return measuredSfRows(rows).length;
+  }
+
+  /** The measurement of each separate area, in order (what the two intake boxes show). */
+  function measuredSfValues(rows) {
+    rows = rows || [];
+    return measuredSfRows(rows).map(function (i) { return num(rows[i].measurement); });
+  }
+
+  /** TYPE A FLOOR SIZE FOR AREA `k` (0 = the first measured area, 1 = the second). Returns true when
+   *  it wrote, false when it left the model alone (no positive number, k not 0 or 1, or nothing
+   *  measured yet: then intake's boxes SEED the takeoff instead).
+   *
+   *  Area 0 and 1 change that row's measurement and nothing else. Asking for area 1 when only one
+   *  area is measured ADDS a row, the shape seedTakeoffSf makes. Rows after the second are never
+   *  touched. The same_floor rows that carried the SAME total as the whole floor move with it (the
+   *  rows a defaults load made as one floor keep pricing one floor), on or off: the on/off slider
+   *  must not decide which number the bid is built on. Changes `model.takeoff` in place; callers
+   *  hand it a copy (patchModel does). */
+  function setAreaSf(model, k, sf) {
+    var v = num(sf);
+    var rows = model && model.takeoff;
+    if (!(v > 0) || !(rows instanceof Array) || (k !== 0 && k !== 1)) return false;
+    var areas = measuredSfRows(rows);
+    if (!areas.length) return false;
+    var before = measuredSf(rows);
+    if (k < areas.length) {
+      var row = rows[areas[k]];
+      if (row.same_floor) {
+        // Only same_floor rows hold the floor: they are all the one number, so all move.
+        rows.forEach(function (x) {
+          if (x && x.unit === "SF" && x.same_floor && num(x.measurement) > 0) x.measurement = v;
+        });
+        return true;
+      }
+      row.measurement = v;
+    } else {
+      rows.push({ assembly_id: "", assembly_name: "", measurement: v, unit: "SF" });
+    }
+    var after = measuredSf(rows);
+    rows.forEach(function (x) {
+      if (x && x.unit === "SF" && x.same_floor && num(x.measurement) === before) x.measurement = after;
+    });
+    return true;
+  }
+
   /** HOW MANY COATS OF DYE A JOB BUYS: Kyle's Polish tab has TWO "Dye" lines, rows 25 and 26,
    *  both =IF(E25="Yes",E18) at 0.14 a square foot, switched by the one E25 answer. So with dye
    *  on his sheet charges $0.28/SF, and backend/pricing.py (dye_coats 2) always agreed.
@@ -2272,9 +2338,18 @@
    *                      answer the patch does not mention stays as it was saved
    *    conditions_shown  which condition cards this bid shows, replaced when the patch states one
    *
+   *  and ONE more, read only as positive numbers:
+   *
+   *    sf_areas          [first, second]: the floor sizes typed into intake's System 1 and System 2
+   *                      boxes, each null when that box was not typed in. Written to the first and
+   *                      second measured SF rows of the takeoff (setAreaSf; the second is ADDED when
+   *                      the takeoff has only one) and to nothing else, so the boxes and the takeoff
+   *                      cannot disagree. Ignored while nothing is measured: then the boxes seed.
+   *
    *  Anything else in `patch` is ignored. The takeoff, the labor rows and `tabs` belong to the
    *  estimate page, and a patch that could overwrite them is how recording one toggle deletes a
-   *  finished takeoff.
+   *  finished takeoff. sf_areas is the one narrow, named way in: it changes one number on a row, or
+   *  adds the second area.
    *
    *  A PATCH NEVER STATES LABOR ON A BID THAT NEVER STATED IT. migrateModel fills a missing `labor`
    *  in from freshModel(), and the intake used to persist those four rows: that made the library's
@@ -2289,6 +2364,13 @@
     var p = isObject(patch) ? patch : {};
     if (isObject(p.conditions)) model.conditions = Object.assign({}, model.conditions, p.conditions);
     if (isObject(p.conditions_shown)) model.conditions_shown = copyInto({}, p.conditions_shown);
+    if (p.sf_areas instanceof Array && measuredSfAreas(model.takeoff) > 0 &&
+        (num(p.sf_areas[0]) > 0 || num(p.sf_areas[1]) > 0)) {
+      // A COPY of the rows: migrateModel hands back the SAVED array, and this function is pure.
+      model.takeoff = JSON.parse(JSON.stringify(model.takeoff));
+      setAreaSf(model, 0, p.sf_areas[0]);
+      setAreaSf(model, 1, p.sf_areas[1]);
+    }
     if (laborUnstated(existing)) delete model.labor;
     return model;
   }
@@ -2972,7 +3054,8 @@
     clearDistance: clearDistance, distanceNote: distanceNote, travelHow: travelHow,
     rowOn: rowOn, sliderHtml: sliderHtml, manDaysHint: manDaysHint,
     filledIn: filledIn,
-    takeoffSf: takeoffSf, measuredSf: measuredSf,
+    takeoffSf: takeoffSf, measuredSf: measuredSf, measuredSfAreas: measuredSfAreas, measuredSfRows: measuredSfRows,
+    measuredSfValues: measuredSfValues, setAreaSf: setAreaSf,
     seedTakeoffSf: seedTakeoffSf,
     seedDefaultTakeoff: seedDefaultTakeoff,
     dyeCost: dyeCost, jointFillerCost: jointFillerCost,

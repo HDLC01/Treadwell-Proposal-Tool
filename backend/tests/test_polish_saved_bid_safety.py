@@ -174,19 +174,6 @@ def test_switching_off_the_only_sf_row_keeps_the_measured_floor(ran):
 
 
 @needs_node
-def test_intake_keeps_its_sf_lock_when_the_only_row_is_off(intake):
-    """Mutation: sfLocked back to B.takeoffSf(model.takeoff) > 0 unlocks both boxes and lets the
-    stale 1 / 2 the form hands over reach polish_sf."""
-    o = intake["f5"]["offLocked"]
-    assert o["ro1"] is True and o["ro2"] is True
-    assert o["v1"] == 12500
-    assert o["noteHidden"] is False
-    assert o["saveHasSf"] is False
-    assert o["blobSf"] == 12500
-    assert o["takeoffEnabled"] is False
-
-
-@needs_node
 def test_required_project_name_and_bid_date_never_block_an_old_drafts_save(intake):
     """`required` on Bid date and Project name is the browser's gate on the Continue button. The
     page's own save() (the 600ms autosave, the pagehide flush, onSubmit) asks nobody for validity:

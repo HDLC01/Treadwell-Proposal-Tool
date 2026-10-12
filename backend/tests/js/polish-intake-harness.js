@@ -221,7 +221,7 @@ function makeDom(log, formValues) {
   const fields = {};
   Object.keys(formValues || {}).forEach((k) => { fields[k] = { name: k, value: "" }; });
   if (!fields.bid_date) fields.bid_date = { name: "bid_date", value: "" };
-  // The two SF boxes the page finds by NAME (paintSfLock): js/intake-scope.js draws them, so a lookup that
+  // The two SF boxes the page finds by NAME (paintSfBoxes): js/intake-scope.js draws them, so a lookup that
   // asked for an id would find nothing.
   ["polish_sf", "polish_2_sf"].forEach((k) => { if (!fields[k]) fields[k] = { name: k, value: "" }; });
 
@@ -321,8 +321,8 @@ const scope = new Function("$", "TW", "SB", "document", "window", "clock", "fetc
   ${fn("countyKeys")}
   ${fn("paintProjLine")}
   ${fn("saveSoon")}
-  ${fn("sfLocked")}
-  ${fn("paintSfLock")}
+  ${fn("sfMeasured")}
+  ${fn("paintSfBoxes")}
   ${fn("save")}
   ${fn("paintSaveBlocked")}
   ${fn("renderJobTypes")}
@@ -333,7 +333,7 @@ const scope = new Function("$", "TW", "SB", "document", "window", "clock", "fetc
   ${fn("onSubmit")}
   ${fn("wire")}
   ${fn("boot")}
-  return { boot: boot, save: save, sfLocked: sfLocked, paintSfLock: paintSfLock, saveSoon: saveSoon, toggleCondition: toggleCondition,
+  return { boot: boot, save: save, sfMeasured: sfMeasured, paintSfBoxes: paintSfBoxes, saveSoon: saveSoon, toggleCondition: toggleCondition,
            renderConditions: renderConditions, adoptModel: adoptModel, hydrate: hydrate,
            onClick: onClick, onSubmit: onSubmit, CONDITIONS: CONDITIONS,
            DEFAULT_CONDITIONS: DEFAULT_CONDITIONS, COUNTY_LIMIT: window.TWCounty.LIMIT,
@@ -399,7 +399,15 @@ function build(opts) {
       store.blob = Object.assign(store.blob, JSON.parse(JSON.stringify(partial)));
       return store.blob;
     },
-    readForm: opts.readForm || (() => Object.assign({}, opts.formValues || FORM_VALUES)),
+    // A box the page's own `input` listener saw typed into (fromUser, set by a test's typeInto) hands
+    // over what is in it NOW, as a real form would; every other field is the fixture's.
+    readForm: opts.readForm || (() => {
+      const v = Object.assign({}, opts.formValues || FORM_VALUES);
+      ["polish_sf", "polish_2_sf"].forEach((k) => {
+        if (dom.fields[k] && dom.fields[k].fromUser) v[k] = dom.fields[k].value;
+      });
+      return v;
+    }),
     writeForm: (f, values) => { rec.written.push({ isForm: f === dom.nodes["intake-form"],
                                                    values: values }); },
     withDraft: (p) => p + (p.indexOf("?") >= 0 ? "&" : "?") + "d=" + store.id,
@@ -1040,13 +1048,13 @@ out.engineMoves = (function () {
     await b.api.boot();
     const fire = (t) => b.dom.nodes["intake-form"].listeners
       .filter((l) => l.type === "focusin").forEach((l) => l.handler({ target: t }));
-    const mk = (over) => Object.assign({ type: "number", value: "0", readOnly: false, selected: 0,
+    const mk = (over) => Object.assign({ type: "number", value: "0", selected: 0,
       select() { this.selected++; } }, over);
-    const zero = mk({}), typed = mk({ value: "8000" }), locked = mk({ readOnly: true });
-    fire(zero); fire(typed); fire(locked);
+    const zero = mk({}), typed = mk({ value: "8000" });
+    fire(zero); fire(typed);
     out.zeroTrap = {
       wired: b.dom.nodes["intake-form"].listeners.some((l) => l.type === "focusin"),
-      zeroSelected: zero.selected, typedSelected: typed.selected, lockedSelected: locked.selected,
+      zeroSelected: zero.selected, typedSelected: typed.selected,
     };
   }
 
@@ -1788,22 +1796,23 @@ out.engineMoves = (function () {
     };
   }
 
-  // ── Scope (quick): the SF boxes, seeded and then locked (Hanz, 2026-10-05) ─────
+  // ── Scope (quick): the two SF boxes mirror the takeoff's first and second measured areas ─────────
   //
-  // "Add SF, seed the takeoff". Intake carries System 1 / System 2 Polish SF; step 2 seeds the
-  // takeoff from them; and once the takeoff holds a measurement the boxes lock and intake's save
-  // can no longer touch polish_sf, which is the takeoff TOTAL the proposal and /api/generate read.
+  // Hanz, 2026-10-05: "Add SF, seed the takeoff". Hanz, 2026-10-12: the boxes stay editable once the
+  // takeoff is measured, so they are NEVER read-only. System 1 mirrors the first measured SF row
+  // of the takeoff and System 2 the second; typing changes that row (System 2 adds one when there is
+  // none); a third area and beyond is left alone with a note and a link; polish_sf always ends as
+  // the takeoff total, and a box nobody typed in never writes.
   {
-    // The REAL readForm, lifted out of shared.js. Whether a locked box can leak into the save
-    // turns on what this function does with readonly and disabled inputs, so a stub that returns
-    // whatever the test says would prove nothing about it.
+    // The REAL readForm, lifted out of shared.js: it takes every NAMED input, so what a stale or
+    // untyped box could leak turns on what this function hands to save(), not on a stub.
     const shared = read(path.join(ROOT, "shared.js"));
     const rf = /function readForm\(formEl\) \{[\s\S]*?\n  \}/.exec(shared);
     if (!rf) throw new Error("readForm() is gone from shared.js — rewrite this, don't stub it");
     const realReadForm = new Function(rf[0] + " return readForm;")();
     const fakeForm = { elements: [
-      { name: "polish_sf", type: "number", value: "999", readOnly: true },
-      { name: "polish_2_sf", type: "number", value: "5", disabled: true },
+      { name: "polish_sf", type: "number", value: "999" },
+      { name: "polish_2_sf", type: "number", value: "5" },
       { name: "", type: "number", value: "77" },
       { name: "project_name", type: "text", value: "Nearman Creek" },
     ] };
@@ -1811,86 +1820,214 @@ out.engineMoves = (function () {
 
     const sfOf = (st) => ({ sf1: st.polish_sf, sf2: st.polish_2_sf });
     const lastSave = (bb) => bb.rec.saves[bb.rec.saves.length - 1];
+    const clone = (x) => JSON.parse(JSON.stringify(x));
+    const sfRows = (model) => model.takeoff.filter((r) => r.unit === "SF").map((r) => r.measurement);
+    const savedModel = (bb) => bb.store.blob.polish_estimate;
+    const modelWith = (takeoff) => ({ version: 2, takeoff: clone(takeoff), labor: clone(LABOR),
+      conditions: { local: true, prevailing_wage: false, taxable: true, remodel_tax: false } });
+    const SF_ROW = { assembly_id: "asm-sp", assembly_name: "Salt & Pepper polish", measurement: 12500, unit: "SF" };
+    const SF_2 = { assembly_id: "asm-sp", assembly_name: "Dock", measurement: 11000, unit: "SF" };
+    const SF_3 = { assembly_id: "asm-sp", assembly_name: "Mezzanine", measurement: 4000, unit: "SF" };
+    const LF_ROW = { assembly_id: "asm-edge", assembly_name: "Edge grind", measurement: 900, unit: "LF" };
+    const withSf = (sf, rows) => blob({ polish_sf: sf, polish_2_sf: "", polish_estimate: modelWith(rows) });
+    const typedBox = (v1, v2) => Object.assign({}, FORM_VALUES, { polish_sf: v1, polish_2_sf: v2 });
+    // What an estimator does: the box takes the text, the page's own `input` listener sees it.
+    const typeInto = (bb, name, value) => {
+      bb.dom.fields[name].value = value;
+      bb.dom.fields[name].fromUser = true;
+      bb.dom.nodes["intake-form"].listeners.filter((l) => l.type === "input")
+        .forEach((l) => l.handler({ target: bb.dom.fields[name] }));
+    };
+    // ...and leaving the box: a `change` event.
+    const blur = (bb, name) => bb.dom.nodes["intake-form"].listeners.filter((l) => l.type === "change")
+      .forEach((l) => l.handler({ target: bb.dom.fields[name] }));
+    const priceOf = (model) => P.priceSection(P.migrateModel(model), P.ROOT_TAB,
+      { material: (e) => 0.5 * P.takeoffSf(e.section.takeoff) }).total;
+    const boxes = (bb) => ({ v1: bb.dom.fields.polish_sf.value, v2: bb.dom.fields.polish_2_sf.value,
+      ro1: bb.dom.fields.polish_sf.readOnly === true, ro2: bb.dom.fields.polish_2_sf.readOnly === true });
+    const note = (bb) => ({ hidden: bb.dom.nodes["sf-areas-note"].hidden !== false,
+      text: bb.dom.nodes["sf-areas-note"].textContent || "",
+      linkRowHidden: bb.dom.nodes["sf-takeoff-row"].hidden !== false,
+      href: bb.dom.nodes["sf-takeoff-link"].href || "" });
+    const settle = (bb) => { bb.clock.fire(); };
 
-    // 1. unlocked: nothing measured. Both boxes editable, and what is typed round-trips.
+    // ── 0 measured areas: the boxes seed, exactly as before ──
     const fresh = build({ blob: blob({ polish_estimate: null, polish_sf: 4000, polish_2_sf: 1500 }),
-      formValues: Object.assign({}, FORM_VALUES, { polish_sf: 4000, polish_2_sf: 1500 }) });
+      formValues: typedBox(4000, 1500) });
     await fresh.api.boot();
-    const n1 = fresh.dom.fields.polish_sf, n2 = fresh.dom.fields.polish_2_sf;
-    const unlockedPaint = { ro1: n1.readOnly, ro2: n2.readOnly,
-      noteHidden: fresh.dom.nodes["sf-locked-note"].hidden !== false };
+    const freshPaint = Object.assign(boxes(fresh), { noteHidden: note(fresh).hidden });
     const hydratedWith = fresh.rec.written.map((w) => sfOf(w.values))[0];
     fresh.api.save();
-    const freshSave = lastSave(fresh);
-    // reload: a second page over the blob the first one saved
+    const freshSaved = sfOf(lastSave(fresh));
     const reload = build({ blob: fresh.store.blob, formValues: FORM_VALUES });
     await reload.api.boot();
     const reloadWritten = reload.rec.written.map((w) => sfOf(w.values))[0];
+    const seedB = build({ blob: blob({ polish_estimate: null, polish_sf: 4000, polish_2_sf: 1500 }),
+      formValues: typedBox(52000, 1500) });
+    await seedB.api.boot();
+    typeInto(seedB, "polish_sf", 52000);
+    settle(seedB);
+    const seeded = sfOf(lastSave(seedB));
+    // a takeoff of linear-foot rows alone has no SF to mirror: still seeding
+    const lfOnly = build({ blob: blob({ polish_estimate: modelWith([LF_ROW]), polish_sf: 0 }) });
+    await lfOnly.api.boot();
 
-    // 2. locked: the takeoff measures 12,500 SF. Boxes read-only, showing the TOTAL, with a note;
-    //    a save whose form hands over a different number cannot move polish_sf.
-    const lockedB = build({ blob: blob({ polish_sf: 12500, polish_2_sf: 800 }),
-      formValues: Object.assign({}, FORM_VALUES, { polish_sf: 999, polish_2_sf: 5 }) });
-    await lockedB.api.boot();
-    lockedB.api.save();
-    const lockedSave = lastSave(lockedB);
+    // ── 1 measured area (plus an LF row, which has no SF) ──
+    const oneBlob = withSf(12500, [SF_ROW, LF_ROW]);
+    const oneB = build({ blob: oneBlob, formValues: typedBox(50000, "") });
+    await oneB.api.boot();
+    const oneBoot = Object.assign(boxes(oneB), { note: note(oneB), writesAtBoot: oneB.rec.saves.length });
+    const totalBefore = priceOf(oneBlob.polish_estimate);
+    typeInto(oneB, "polish_sf", 50000);
+    const armed = oneB.clock.armed();
+    settle(oneB);
+    const oneModel = savedModel(oneB);
+    const oneAfter = { sf: sfRows(oneModel), lf: oneModel.takeoff.filter((r) => r.unit === "LF").map((r) => r.measurement),
+      rows: oneModel.takeoff.length, polishSf: oneB.store.blob.polish_sf, polishSf2: oneB.store.blob.polish_2_sf,
+      totalBefore, totalAfter: priceOf(oneModel), pageInput: oneBlob.polish_estimate.takeoff[0].measurement };
+    oneB.api.save();
+    const oneSecond = { sf: sfRows(savedModel(oneB)), polishSf: oneB.store.blob.polish_sf };
 
-    // 3. the same, through the REAL readForm over a form whose SF boxes are readonly/disabled:
-    //    the real function still reads them (the reason the guard lives in save()).
-    const realB = build({ blob: blob({ polish_sf: 12500 }),
+    // System 2 on a one-area takeoff ADDS the second area (the seed's own row shape)
+    const addB = build({ blob: withSf(12500, [SF_ROW, LF_ROW]), formValues: typedBox(12500, 8000) });
+    await addB.api.boot();
+    typeInto(addB, "polish_2_sf", 8000);
+    settle(addB);
+    const addModel = savedModel(addB);
+    const addReload = build({ blob: addB.store.blob, formValues: FORM_VALUES });
+    await addReload.api.boot();
+    const added = { rows: addModel.takeoff.map((r) => [r.unit, r.measurement]),
+      newRow: addModel.takeoff[addModel.takeoff.length - 1], polishSf: addB.store.blob.polish_sf,
+      polishSf2: addB.store.blob.polish_2_sf, totalBefore: priceOf(oneBlob.polish_estimate), totalAfter: priceOf(addModel),
+      reloadBoxes: boxes(addReload) };
+
+    // clearing System 2 while it mirrors a row deletes nothing and shows the row's figure back
+    const clearB = build({ blob: withSf(20500, [SF_ROW, Object.assign({}, SF_2, { measurement: 8000 }), LF_ROW]),
+      formValues: typedBox(12500, "") });
+    await clearB.api.boot();
+    typeInto(clearB, "polish_2_sf", "");
+    settle(clearB);
+    const clearedSave = lastSave(clearB);
+    const beforeBlur = clearB.dom.fields.polish_2_sf.value;
+    blur(clearB, "polish_2_sf");
+    const cleared = { rows: clearB.rec.saves.length ? sfRows(savedModel(clearB)) : null,
+      saveHasSf: clearedSave ? ("polish_sf" in clearedSave || "polish_2_sf" in clearedSave) : null,
+      beforeBlur, afterBlur: clearB.dom.fields.polish_2_sf.value };
+
+    // ── 2 measured areas: both mirror, both editable ──
+    const twoBlob = withSf(23500, [SF_ROW, Object.assign({}, SF_2, { measurement: 11000 }), LF_ROW]);
+    const twoB = build({ blob: twoBlob, formValues: typedBox(12500, 9000) });
+    await twoB.api.boot();
+    const twoBoot = Object.assign(boxes(twoB), { note: note(twoB) });
+    typeInto(twoB, "polish_2_sf", 9000);
+    settle(twoB);
+    const twoAfter2 = { sf: sfRows(savedModel(twoB)), polishSf: twoB.store.blob.polish_sf };
+    typeInto(twoB, "polish_sf", 30000);
+    settle(twoB);
+    const twoAfter1 = { sf: sfRows(savedModel(twoB)), polishSf: twoB.store.blob.polish_sf,
+      polishSf2: twoB.store.blob.polish_2_sf, rowCount: savedModel(twoB).takeoff.length };
+
+    // ── 3 measured areas: both boxes editable, the third left alone, a note and a link ──
+    const threeBlob = withSf(27500, [SF_ROW, SF_2, SF_3, LF_ROW]);
+    const threeB = build({ blob: threeBlob, formValues: typedBox(70000, "") });
+    await threeB.api.boot();
+    const threeBoot = Object.assign(boxes(threeB), { note: note(threeB) });
+    typeInto(threeB, "polish_sf", 70000);
+    settle(threeB);
+    const threeAfter = { sf: sfRows(savedModel(threeB)), polishSf: threeB.store.blob.polish_sf,
+      rowCount: savedModel(threeB).takeoff.length };
+    const fourB = build({ blob: withSf(40500, [SF_ROW, SF_2, SF_3, Object.assign({}, SF_3, { measurement: 13000 })]),
+      formValues: FORM_VALUES });
+    await fourB.api.boot();
+    const fourNote = note(fourB).text;
+
+    // ── same_floor rows (a defaults load): they follow the total they carried ──
+    const SAME = { kind: "item", item_id: "i-1", item_name: "Densifier", measurement: 12500, unit: "SF", same_floor: true };
+    const sameB = build({ blob: withSf(12500, [SF_ROW, SAME, LF_ROW]), formValues: typedBox(30000, "") });
+    await sameB.api.boot();
+    typeInto(sameB, "polish_sf", 30000);
+    settle(sameB);
+    const sameRows = savedModel(sameB).takeoff.map((r) => [r.unit, r.measurement, !!r.same_floor]);
+    const samePolishSf = sameB.store.blob.polish_sf;
+    const same2B = build({ blob: withSf(12500, [SF_ROW, SAME, LF_ROW]), formValues: typedBox(12500, 5000) });
+    await same2B.api.boot();
+    typeInto(same2B, "polish_2_sf", 5000);
+    settle(same2B);
+    const same2Rows = savedModel(same2B).takeoff.map((r) => [r.unit, r.measurement, !!r.same_floor]);
+    const same2PolishSf = same2B.store.blob.polish_sf;
+
+    // ── a box nobody typed in, or typed after another tab moved the takeoff ──
+    const untouchedB = build({ blob: withSf(12500, [SF_ROW, LF_ROW]), formValues: typedBox(999, 888) });
+    await untouchedB.api.boot();
+    untouchedB.api.save();
+    const untouchedSave = lastSave(untouchedB);
+    const untouched = { sf: sfRows(savedModel(untouchedB)), saveHasSf: "polish_sf" in untouchedSave || "polish_2_sf" in untouchedSave,
+      polishSf: untouchedB.store.blob.polish_sf };
+    // another tab made it three areas after this one painted: an UNTYPED stale box writes nothing
+    const staleB = build({ blob: withSf(12500, [SF_ROW, LF_ROW]), formValues: typedBox(999, 888) });
+    await staleB.api.boot();
+    staleB.store.blob.polish_estimate = modelWith([SF_ROW, SF_2, SF_3]);
+    staleB.store.blob.polish_sf = 27500;
+    staleB.api.save();
+    const stale = { sf: sfRows(savedModel(staleB)), saveHasSf: "polish_sf" in lastSave(staleB), polishSf: staleB.store.blob.polish_sf };
+    // ...and a TYPED one goes to the first row of what is saved NOW, and polish_sf is that takeoff's total
+    const staleTypedB = build({ blob: withSf(12500, [SF_ROW, LF_ROW]), formValues: typedBox(999, "") });
+    await staleTypedB.api.boot();
+    staleTypedB.store.blob.polish_estimate = modelWith([SF_ROW, SF_2, SF_3]);
+    staleTypedB.store.blob.polish_sf = 27500;
+    typeInto(staleTypedB, "polish_sf", 999);
+    settle(staleTypedB);
+    const staleTyped = { sf: sfRows(savedModel(staleTypedB)), polishSf: staleTypedB.store.blob.polish_sf };
+    // the REAL readForm hands over 999 / 5 for the two boxes; untyped, neither reaches the draft
+    const realB = build({ blob: withSf(12500, [SF_ROW, LF_ROW]),
       readForm: () => Object.assign({}, FORM_VALUES, viaReal) });
     await realB.api.boot();
     realB.api.save();
     const realSave = lastSave(realB);
-    // ...and the pagehide flush goes through the same save(), so it cannot leak either.
     realB.api.saveSoon();
     realB.win.fire("pagehide", {});
     const flushSave = lastSave(realB);
 
-    // 4. a takeoff of LINEAR-foot rows only has no SF to disagree about: not locked.
-    const lfOnly = build({ blob: blob({ polish_estimate: { version: 2,
-      takeoff: [{ assembly_id: "a", assembly_name: "Edge", measurement: 900, unit: "LF" }],
-      labor: [], conditions: {}, contingency: 0, fees: 0, totals: {} }, polish_sf: 0 }) });
-    await lfOnly.api.boot();
+    // blank, 0 or negative is not a figure: nothing is written, no row is wiped
+    const junk = {};
+    for (const v of ["", 0, -5]) {
+      const jb = build({ blob: withSf(12500, [SF_ROW, LF_ROW]), formValues: typedBox(v, v) });
+      await jb.api.boot();
+      typeInto(jb, "polish_sf", v);
+      typeInto(jb, "polish_2_sf", v);
+      settle(jb);
+      junk[String(v === "" ? "blank" : v)] = { sf: sfRows(savedModel(jb)),
+        hasKey: "polish_sf" in lastSave(jb) || "polish_2_sf" in lastSave(jb) };
+    }
 
-    out.sfBoxes = {
-      unlockedPaint, hydratedWith,
-      freshSaved: sfOf(freshSave),
-      reloadWritten,
-      reloadReadOnly: reload.dom.fields.polish_sf.readOnly,
-      lockedPaint: { ro1: lockedB.dom.fields.polish_sf.readOnly,
-        ro2: lockedB.dom.fields.polish_2_sf.readOnly,
-        v1: lockedB.dom.fields.polish_sf.value, v2: lockedB.dom.fields.polish_2_sf.value,
-        note: lockedB.dom.nodes["sf-locked-note"].textContent,
-        noteHidden: lockedB.dom.nodes["sf-locked-note"].hidden },
-      lockedSaveKeys: { hasSf1: "polish_sf" in lockedSave, hasSf2: "polish_2_sf" in lockedSave },
-      lockedBlobAfter: sfOf(lockedB.store.blob),
-      realReadFormLeaks: { sf1: viaReal.polish_sf, sf2: viaReal.polish_2_sf,
-        unnamedRead: Object.keys(viaReal).indexOf("") >= 0 },
-      realSaveKeys: { hasSf1: "polish_sf" in realSave, hasSf2: "polish_2_sf" in realSave },
-      flushSaveKeys: { hasSf1: "polish_sf" in flushSave, hasSf2: "polish_2_sf" in flushSave },
-      realBlobAfter: sfOf(realB.store.blob),
-      lfOnlyReadOnly: lfOnly.dom.fields.polish_sf.readOnly,
-    };
+    // the F5 case: the only SF row switched OFF is still a measured floor, and still editable
+    const offRow = Object.assign({}, SF_ROW, { enabled: false });
+    const offB = build({ blob: withSf(12500, [offRow]), formValues: typedBox(40000, "") });
+    await offB.api.boot();
+    const offBoot = boxes(offB);
+    typeInto(offB, "polish_sf", 40000);
+    settle(offB);
+    const offAfter = { sf: sfRows(savedModel(offB)), enabled: savedModel(offB).takeoff[0].enabled,
+      polishSf: offB.store.blob.polish_sf };
+
+    out.sfAreas = { freshPaint, hydratedWith, freshSaved, reloadWritten, seeded,
+      lfOnly: boxes(lfOnly),
+      one: { boot: oneBoot, armed, after: oneAfter, second: oneSecond }, added, cleared,
+      two: { boot: twoBoot, after2: twoAfter2, after1: twoAfter1 },
+      three: { boot: threeBoot, after: threeAfter, fourNote },
+      same: { rows: sameRows, polishSf: samePolishSf, rows2: same2Rows, polishSf2: same2PolishSf },
+      untouched, stale, staleTyped,
+      real: { leaks: { sf1: viaReal.polish_sf, sf2: viaReal.polish_2_sf, unnamedRead: Object.keys(viaReal).indexOf("") >= 0 },
+        saveKeys: { hasSf1: "polish_sf" in realSave, hasSf2: "polish_2_sf" in realSave },
+        flushKeys: { hasSf1: "polish_sf" in flushSave, hasSf2: "polish_2_sf" in flushSave },
+        blobAfter: sfOf(realB.store.blob) },
+      junk, off: { boot: offBoot, after: offAfter } };
   }
 
   // ── F5: saved-bid safety on the intake page ────────────────────────────────────
   {
     const lastSave = (bb) => bb.rec.saves[bb.rec.saves.length - 1];
-    // (a) THE ONLY SF ROW IS SWITCHED OFF. The floor is still measured, so the boxes stay locked
-    //     and a save cannot hand polish_sf over to whatever they show.
-    const offBlob = blob({ polish_sf: 12500, polish_2_sf: "",
-      polish_estimate: { version: 2,
-        takeoff: [{ assembly_id: "a1", assembly_name: "Polish", measurement: 12500, unit: "SF",
-                    enabled: false }],
-        labor: JSON.parse(JSON.stringify(LABOR)),
-        conditions: { local: true, prevailing_wage: false, taxable: true, remodel_tax: false } } });
-    const offB = build({ blob: offBlob,
-      formValues: Object.assign({}, FORM_VALUES, { polish_sf: 1, polish_2_sf: 2 }) });
-    await offB.api.boot();
-    offB.api.save();
-    const offSave = lastSave(offB);
-    // (b) AN OLD INTAKE BLOB: no Drawings fields, no local answer in the model, blank Project name.
+    // AN OLD INTAKE BLOB: no Drawings fields, no local answer in the model, blank Project name.
     //     The two `required` attributes are the browser's gate on the Continue button only; this
     //     page's autosave and save() never ask for validity, so nothing is withheld from a draft.
     const oldBlob = { __draft_id: "old-intake", address: "1 Water Works Dr", city: "Kansas City",
@@ -1911,11 +2048,6 @@ out.engineMoves = (function () {
     await subB.api.boot();
     subB.api.onSubmit({ preventDefault() {} });
     out.f5 = {
-      offLocked: { ro1: offB.dom.fields.polish_sf.readOnly, ro2: offB.dom.fields.polish_2_sf.readOnly,
-        v1: offB.dom.fields.polish_sf.value,
-        noteHidden: offB.dom.nodes["sf-locked-note"].hidden !== false,
-        saveHasSf: ("polish_sf" in offSave) || ("polish_2_sf" in offSave),
-        blobSf: offB.store.blob.polish_sf, takeoffEnabled: offSave.polish_estimate.takeoff[0].enabled },
       oldBlob: { threw: threw, saved: !!oldSave, dateAfterBoot: dateAfterBoot,
         savedName: oldSave && oldSave.project_name,
         localInModel: oldSave && oldSave.polish_estimate.conditions.local,

@@ -596,12 +596,11 @@ def test_focusing_a_box_that_holds_zero_selects_it_so_typing_replaces_it(ran):
     in front of the zero. The focusin handler selects a lone "0" so the first key replaces it.
 
     Mutation: delete the focusin listener in wire() and this fails. A box holding a real figure
-    or a locked (readonly) box must never be selected."""
+    must never be selected."""
     z = ran["zeroTrap"]
     assert z["wired"], "wire() has no focusin listener"
     assert z["zeroSelected"] == 1, "a box holding 0 was not selected on focus"
     assert z["typedSelected"] == 0, "a box holding a real figure was selected"
-    assert z["lockedSelected"] == 0, "a readonly box was selected"
 
 
 @needs_node
@@ -1431,11 +1430,11 @@ def test_the_beta_scope_box_reads_like_the_live_one_for_a_polish_job():
     box = _scope_fieldset()
     assert "Pre-fills the estimate. You can refine on the next screen." in box
     # Since Phase 9b the System boxes are DRAWN by js/intake-scope.js, the live intake's own renderer, so
-    # the page's static markup holds the container, the lock note, Area and the start date, and the drawn
+    # the page's static markup holds the container, the areas note, Area and the start date, and the drawn
     # markup is read off the module itself.
     names = re.findall(r'name="([a-z0-9_]+)"', box)
     assert names == ["work_areas", "approx_start_date"], names
-    assert 'id="systems-container"' in box and 'id="sf-locked-note"' in box
+    assert 'id="systems-container"' in box and 'id="sf-areas-note"' in box
     assert box.index('id="systems-container"') < box.index("work_areas")
     drawn = _drawn_systems()
     assert drawn.index("System 1") < drawn.index("System 2 (optional)")
@@ -1452,52 +1451,167 @@ def test_the_beta_scope_box_reads_like_the_live_one_for_a_polish_job():
     assert ".system-tag" in html and ".system-block + .system-block" in html
 
 
-@needs_node
-def test_the_sf_boxes_start_editable_and_round_trip_through_save_and_reload(ran):
-    """Nothing is measured yet, so both boxes are editable, and what the estimator typed is what
-    the draft holds and what a reload writes back into the form.
+def test_the_scope_card_has_the_takeoff_link_and_no_em_dash_and_no_read_only_box():
+    """The note about areas 3 and on links to the Takeoff from a row the page keeps hidden until it is
+    needed, the card's own copy carries no em dash (house rule), and nothing in the page or its script
+    can make an SF box read-only (Hanz, 2026-10-12). The live intake's own Area
+    label is a different page and is left as it is.
 
-    Mutation: leave polish_2_sf off the form, or hydrate before the lock paint overwrites it."""
-    s = ran["sfBoxes"]
-    assert s["unlockedPaint"] == {"ro1": False, "ro2": False, "noteHidden": True}
+    Mutation: remove the link row, put &mdash; back in the Area label, or add a readOnly assignment."""
+    box = _scope_fieldset()
+    assert 'id="sf-takeoff-row" hidden' in box and 'id="sf-takeoff-link" href="/polish-estimate.html"' in box
+    assert 'id="sf-areas-note" hidden' in box
+    assert "&mdash;" not in box and "—" not in box
+    js = (FRONTEND / "js" / "polish-intake.js").read_text(encoding="utf-8")
+    html = (FRONTEND / "polish-intake.html").read_text(encoding="utf-8")
+    assert "readOnly" not in js and "readonly" not in js.lower()
+    assert "readonly" not in html.lower()
+
+
+@needs_node
+def test_with_nothing_measured_both_boxes_are_editable_and_seed_as_they_always_did(ran):
+    """Nothing measured (or a takeoff of linear-foot rows alone, which has no SF to mirror): both boxes
+    editable, no note, and what is typed is the draft's polish_sf / polish_2_sf, the seed for step 2.
+    A saved draft writes its boxes back on reload.
+
+    Mutation: leave polish_2_sf off the form, or let the new sync path run with no measured area."""
+    s = ran["sfAreas"]
+    assert s["freshPaint"]["ro1"] is False and s["freshPaint"]["ro2"] is False
+    assert s["freshPaint"]["noteHidden"] is True
     assert s["hydratedWith"] == {"sf1": 4000, "sf2": 1500}
     assert s["freshSaved"] == {"sf1": 4000, "sf2": 1500}
     assert s["reloadWritten"] == {"sf1": 4000, "sf2": 1500}
-    assert s["reloadReadOnly"] is False
+    assert s["seeded"] == {"sf1": 52000, "sf2": 1500}
+    assert s["lfOnly"]["ro1"] is False and s["lfOnly"]["v1"] == ""
 
 
 @needs_node
-def test_once_the_takeoff_is_measured_the_boxes_lock_and_say_where_to_change_it(ran):
-    """The takeoff owns the SF after step 2: both boxes read-only, System 1 showing the takeoff
-    total, a plain line naming step 2. A takeoff of linear-foot rows alone has no SF, so no lock.
+def test_with_one_measured_area_system_1_is_that_row_and_typing_changes_it(ran):
+    """The takeoff holds ONE measured SF row (plus a linear-foot row, which has no SF): System 1 shows
+    that row, System 2 is blank, nothing is read-only, opening the bid writes nothing. Typing 50000
+    moves THAT row to 50000, leaves the LF row alone, writes polish_sf = 50000, and the estimate priced
+    through the real priceSection from the saved model moves with it. The model the page was handed is
+    not edited in place and a second save changes nothing.
 
-    Mutation: make sfLocked() return false."""
-    p = ran["sfBoxes"]["lockedPaint"]
-    assert p["ro1"] is True and p["ro2"] is True
-    assert p["v1"] == 12500 and p["v2"] == ""
-    assert p["noteHidden"] is False
-    assert "Measured on the takeoff (step 2)" in p["note"] and "12,500 SF" in p["note"]
-    assert ran["sfBoxes"]["lfOnlyReadOnly"] is False
+    Mutation: delete the sf_areas branch in patchModel (bid-model.js), or the `patch.sf_areas` line in
+    save(): the row stays 12,500 and the total does not move."""
+    o = ran["sfAreas"]["one"]
+    b = o["boot"]
+    assert (b["v1"], b["v2"], b["ro1"], b["ro2"]) == (12500, "", False, False)
+    assert b["note"]["hidden"] is True and b["writesAtBoot"] == 0, "opening a bid writes nothing"
+    assert o["armed"] == 1, "typing arms the debounced save"
+    a = o["after"]
+    assert a["sf"] == [50000] and a["lf"] == [900] and a["rows"] == 2
+    assert a["polishSf"] == 50000 and a["polishSf2"] == ""
+    assert a["totalAfter"] > a["totalBefore"] * 2, (a["totalBefore"], a["totalAfter"])
+    assert a["pageInput"] == 12500
+    assert o["second"] == {"sf": [50000], "polishSf": 50000}
 
 
 @needs_node
-def test_a_locked_intake_cannot_write_over_the_takeoff_total(ran):
-    """polish_sf is the takeoff TOTAL once step 2 has saved: proposal-review reads it for the SF
-    token and /api/generate gates on it. The real shared.js readForm takes every NAMED input,
-    readonly and disabled included, so a read-only attribute alone would still leak the box's value
-    -- proven below by running the real function. The guard that holds is save() dropping both keys.
-    The pagehide flush goes through the same save().
+def test_system_2_adds_the_second_area_and_clearing_it_deletes_nothing(ran):
+    """Typing in System 2 when the takeoff has one measured area ADDS a second SF row, the shape the
+    new-bid seeding makes (blank assembly, SF), leaves the first row alone, and polish_sf becomes the
+    total of both. A reload shows 12,500 and 8,000. Clearing System 2 while it mirrors a row deletes
+    nothing: the row stays, and on leaving the box its figure is shown back.
 
-    Mutation: delete the `if (sfLocked(model)) { delete ... }` line in save() -- the blob's
-    polish_sf becomes 999."""
-    s = ran["sfBoxes"]
-    assert s["realReadFormLeaks"] == {"sf1": 999, "sf2": 5, "unnamedRead": False}, (
-        "readForm no longer reads readonly/disabled inputs -- the lock may be simplifiable")
-    assert s["lockedSaveKeys"] == {"hasSf1": False, "hasSf2": False}
-    assert s["realSaveKeys"] == {"hasSf1": False, "hasSf2": False}
-    assert s["flushSaveKeys"] == {"hasSf1": False, "hasSf2": False}
-    assert s["lockedBlobAfter"] == {"sf1": 12500, "sf2": 800}
-    assert s["realBlobAfter"]["sf1"] == 12500
+    Mutation: make setAreaSf(model, 1, ...) do nothing when there is no second row, or delete the
+    `change` listener in wire()."""
+    s = ran["sfAreas"]
+    ad = s["added"]
+    assert ad["rows"] == [["SF", 12500], ["LF", 900], ["SF", 8000]]
+    assert ad["newRow"] == {"assembly_id": "", "assembly_name": "", "measurement": 8000, "unit": "SF"}
+    assert ad["polishSf"] == 20500 and ad["polishSf2"] == ""
+    assert ad["totalAfter"] > ad["totalBefore"]
+    assert (ad["reloadBoxes"]["v1"], ad["reloadBoxes"]["v2"]) == (12500, 8000)
+    c = s["cleared"]
+    assert c["rows"] == [12500, 8000] and c["saveHasSf"] is False
+    assert c["beforeBlur"] == "" and c["afterBlur"] == 8000
+
+
+@needs_node
+def test_with_two_measured_areas_each_box_changes_its_own_row(ran):
+    """System 1 mirrors the first measured row and System 2 the second, both editable. Typing 9000 in
+    System 2 changes the second row only, and typing 30000 in System 1 then changes the first only;
+    polish_sf is the total of the takeoff each time, and no third row appears.
+
+    Mutation: point both boxes at the first row, or let System 2 add a row instead of updating."""
+    t = ran["sfAreas"]["two"]
+    b = t["boot"]
+    assert (b["v1"], b["v2"], b["ro1"], b["ro2"]) == (12500, 11000, False, False)
+    assert b["note"]["hidden"] is True
+    assert t["after2"] == {"sf": [12500, 9000], "polishSf": 21500}
+    assert t["after1"] == {"sf": [30000, 9000], "polishSf": 39000, "polishSf2": "", "rowCount": 3}
+
+
+@needs_node
+def test_a_third_area_is_left_alone_with_a_plain_note_and_a_link_to_the_takeoff(ran):
+    """Three measured areas: both boxes still editable and still mirror the first and second; the
+    note names the count and the total and says areas 3 and on are changed on the Takeoff, with a link
+    that carries the draft. Typing in System 1 changes the first row only and polish_sf is the total of
+    all three. Four areas read "4".
+
+    Mutation: let the note show for two areas, drop the link row, or let a save touch row 3."""
+    t = ran["sfAreas"]["three"]
+    b = t["boot"]
+    assert (b["v1"], b["v2"], b["ro1"], b["ro2"]) == (12500, 11000, False, False)
+    assert b["note"]["text"] == ("The takeoff has 3 measured areas, 27,500 SF in total. "
+                                 "Areas 3 and on are changed on the Takeoff.")
+    assert b["note"]["hidden"] is False and b["note"]["linkRowHidden"] is False
+    assert b["note"]["href"].startswith("/polish-estimate.html") and "d=proj-1" in b["note"]["href"]
+    assert t["after"] == {"sf": [70000, 11000, 4000], "polishSf": 85000, "rowCount": 4}
+    assert t["fourNote"].startswith("The takeoff has 4 measured areas, 40,500 SF in total.")
+
+
+@needs_node
+def test_same_floor_rows_follow_the_total_they_carried(ran):
+    """A defaults load makes one carrier row plus same_floor rows holding the whole floor. Changing
+    System 1 moves the carrier and the same-floor row with it, markers intact; adding a second area
+    moves the same-floor row to the new total, so a per-SF default still prices the whole floor.
+
+    Mutation: drop the same_floor loop in setAreaSf."""
+    s = ran["sfAreas"]["same"]
+    assert s["rows"] == [["SF", 30000, False], ["SF", 30000, True], ["LF", 900, False]]
+    assert s["polishSf"] == 30000
+    assert s["rows2"] == [["SF", 12500, False], ["SF", 17500, True], ["LF", 900, False], ["SF", 5000, False]]
+    assert s["polishSf2"] == 17500
+
+
+@needs_node
+def test_a_stale_untyped_or_empty_box_never_overwrites_the_takeoff(ran):
+    """The one-source guarantee. (a) a box painted and never typed in, holding a different number than
+    the takeoff, writes nothing, even through the REAL readForm that hands over 999 and 5; (b) a stale
+    untyped box after another tab added areas writes nothing; (c) a box typed into after another tab
+    changed the takeoff goes to the first row of what is saved NOW, and polish_sf is that takeoff's
+    total; (d) typing blank, 0 or a negative number never wipes a row; (e) the pagehide flush goes
+    through the same save().
+
+    Mutation: save() applies a box whenever it differs from the takeoff, or drops the `sfTyped` mark
+    test: (a) becomes 999."""
+    s = ran["sfAreas"]
+    assert s["untouched"] == {"sf": [12500], "saveHasSf": False, "polishSf": 12500}
+    assert s["stale"] == {"sf": [12500, 11000, 4000], "saveHasSf": False, "polishSf": 27500}
+    assert s["staleTyped"] == {"sf": [999, 11000, 4000], "polishSf": 15999}
+    r = s["real"]
+    assert r["leaks"] == {"sf1": 999, "sf2": 5, "unnamedRead": False}, (
+        "readForm no longer takes every named input -- the guard in save() may be simplifiable")
+    assert r["saveKeys"] == {"hasSf1": False, "hasSf2": False}
+    assert r["flushKeys"] == {"hasSf1": False, "hasSf2": False}
+    assert r["blobAfter"] == {"sf1": 12500, "sf2": ""}
+    for k in ("blank", "0", "-5"):
+        assert s["junk"][k] == {"sf": [12500], "hasKey": False}, k
+
+
+@needs_node
+def test_the_only_row_switched_off_is_still_a_measured_editable_floor(ran):
+    """The slider is a price choice, not a measurement. With the only SF row OFF, System 1 still shows
+    its figure and is editable; typing changes that row (it stays off) and polish_sf is the measured
+    floor, as the estimate page's own save keeps it.
+
+    Mutation: count only ON rows as measured: the box is blank and the typed figure seeds instead."""
+    o = ran["sfAreas"]["off"]
+    assert (o["boot"]["v1"], o["boot"]["ro1"]) == (12500, False)
+    assert o["after"] == {"sf": [40000], "enabled": False, "polishSf": 40000}
 
 
 # ── B1: the beta intake carries everything the live intake asks a polish job ─────────────────────
