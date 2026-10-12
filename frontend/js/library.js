@@ -815,10 +815,11 @@
    *  NOT THE ACTION CELL ANY MORE. Hanz, 2026-10-06: "the save button only pops up when we click
    *  away". It never did pop up late -- it went into .rowact on the first keystroke -- but .rowact
    *  is the last column of a table about 1,990px wide, so on a 1366 screen it sat 600px past the
-   *  right edge of the scroller and nobody saw it. .rowsave is pinned to the scroller's right edge
-   *  (position:sticky in library.html), so the button lands on screen, on the row being edited,
-   *  wherever the table is scrolled. Not the name cell: focusing Cost or Vendor scrolls the table
-   *  600px, which takes the name column off screen with it. */
+   *  right edge of the scroller and nobody saw it. .rowsave was pinned to the scroller's right edge
+   *  that day and is the FIRST column, pinned to the left edge, since 2026-10-12 (Hanz: "to the
+   *  left of the name"): position:sticky in library.html, so the button lands on screen, on the row
+   *  being edited, wherever the table is scrolled. Not inside the name cell: focusing Cost or
+   *  Vendor scrolls the table 600px, which takes the name column off screen with it. */
   function itemSaveButtonHtml(id, name) {
     return '<button class="btn sm" type="button" data-save-new="items" data-save-id="' + esc(id) +
       '" title="Save this material now" aria-label="Save ' + esc(name) + '">Save</button>';
@@ -1303,6 +1304,12 @@
     for (var i = 0; i < shown.length; i++) {
       var it = shown[i];
       out += '<tr data-item="' + esc(it.id) + '">' +
+        // THE SAVE BUTTON'S OWN CELL, the FIRST cell, so Save sits left of the name (Hanz,
+        // 2026-10-12) and is the first stop in the keyboard order. library.html pins it to the
+        // scroller's left edge, so it is on screen however far the table is scrolled. Empty until
+        // the row has an unsaved edit, but the column keeps its width either way, so the button
+        // appearing moves nothing under the caret. See showUnsaved.
+        '<td class="rowsave">' + (FRESH.items[it.id] ? itemSaveButtonHtml(it.id, it.name) : "") + "</td>" +
         '<td><input data-f="name" class="cell-name" value="' + esc(it.name) + '" aria-label="Material name, as the manufacturer names it" maxlength="200" list="dl-materials">' +
           dupeHtml(similarNames(it.name, it.id)) + "</td>" +
         "<td>" + divisionPick(it) + "</td>" +
@@ -1330,14 +1337,6 @@
           : '<span class="money"><span>$</span><input data-f="unit_cost" class="num cell-cost" value="' + (it.unit_cost == null ? "" : it.unit_cost) + '" aria-label="Cost of one purchase"></span>') + "</td>" +
         "<td>" + pick("vendor", it.vendor, vendorNames(), "Vendor", ' class="cell-vendor"') + "</td>" +
         '<td class="datescell">' + datesHtml(it) + "</td>" +
-        // THE SAVE BUTTON'S OWN CELL, pinned to the right edge of the scroller -- see showUnsaved.
-        // Empty (and zero wide) until the row has an unsaved edit. Ahead of .rowact, so with the
-        // table scrolled to its end the row still reads Save, Duplicate, Remove.
-        '<td class="rowsave">' +
-          (FRESH.items[it.id]
-            ? itemSaveButtonHtml(it.id, it.name)
-            : "") +
-          "</td>" +
         '<td class="rowact">' +
           '<button class="icon" type="button" data-dupe-item="' + esc(it.id) + '" title="Make a copy of this material" aria-label="Duplicate ' + esc(it.name) + '">' + icon("copy") + "</button>" +
           // NO REMOVE ON THE THREE RESERVED ROWS (joint filler kit, remove-existing, dye) -- see

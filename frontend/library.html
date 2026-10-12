@@ -227,7 +227,7 @@
     tbody tr.broken:hover td { background:var(--warn-bg); }
     td.n, th.n { text-align:right; font-variant-numeric:tabular-nums; }
     .items-table thead th { text-align:center; }
-    .items-table thead th:first-child { text-align:left; }
+    .items-table thead th:first-child, .items-table thead th.rowsave + th { text-align:left; }
     .th-sub { font-weight:400; text-transform:none; letter-spacing:0; }
     /* Widths as classes. They were eight inline style attributes on the <th> row. */
     .w-order { width:112px; } .w-cov { width:116px; } .w-waste { width:104px; }
@@ -250,22 +250,21 @@
     .cell-qty { width:64px; }
     .cell-cost { width:92px; }
     .rowact { white-space:nowrap; }
-    /* THE ITEMS ROW'S SAVE BUTTON, PINNED TO THE RIGHT EDGE OF THE SCROLLER. Hanz, 2026-10-06:
-       "the save button only pops up when we click away". The Items table is about 1,990px wide
-       inside a .tw scroller, and the button used to go into .rowact, the last column -- 600px past
-       the right edge on a 1366 screen, 1,600px past it on a phone. It was there from the first
-       keystroke; nobody could see it. Sticky right:0 keeps it on the edited row and on screen at
-       any scroll position, Cost and Vendor included (focusing those scrolls the NAME column off
-       screen, which is why the button is not in the name cell).
-       Zero wide while empty: no padding, no background, so a clean table carries no strip down its
-       right edge and the column costs nothing. Only a cell holding a button paints, opaque so the
-       columns sliding under it do not show through. The hover fill is --surf rather than the
-       translucent row tint, which would let those columns through; the two differ by 3 levels. */
-    .rowsave { padding:0; }
-    td.rowsave { position:sticky; right:0; }
-    td.rowsave:not(:empty) { padding:0 11px; background:var(--card);
-      box-shadow:inset 1px 0 0 var(--line); }
-    tbody tr:hover td.rowsave:not(:empty) { background:var(--surf); }
+    /* THE ITEMS ROW'S SAVE BUTTON, FIRST COLUMN, LEFT OF THE NAME. Hanz, 2026-10-06: "the save
+       button only pops up when we click away" -- the button was in the last column of a table about
+       1,990px wide, 600px past the right edge on a 1366 screen. It moved to a cell pinned to the
+       right edge that day; on 2026-10-12 he asked for it "to the left of the name", so it is now
+       the first column and pinned to the LEFT edge (position:sticky, left:0): on screen on the
+       edited row at any scroll position, and in the keyboard order Save, then name.
+       A fixed width, not zero-while-empty as it was on the right: a column that grows from nothing
+       on the first keystroke would push every cell under the caret 72px sideways. The cell is
+       opaque so the columns sliding under it while the table scrolls do not show through; the
+       hover fill is --surf rather than the translucent row tint for the same reason. */
+    .rowsave { width:72px; min-width:72px; padding:0 8px; white-space:nowrap; }
+    td.rowsave { position:sticky; left:0; z-index:1; background:var(--card);
+      box-shadow:inset -1px 0 0 var(--line); }
+    th.rowsave { position:sticky; left:0; z-index:2; }
+    tbody tr:hover td.rowsave { background:var(--surf); }
 
     /* WHICH CELLS THE PAGE WORKS OUT FOR YOU. Quantity and Cost are the only two columns nobody
        types into — they are the arithmetic this page exists to show — so they carry a faint band
@@ -854,6 +853,11 @@
           <table class="items-table">
             <thead>
               <tr>
+                <!-- The Save button's column, FIRST so Save sits left of the name (Hanz, 2026-10-12).
+                     A fixed narrow width, so the button appearing on the first keystroke moves
+                     nothing, and pinned to the scroller's left edge so it stays on screen while the
+                     table is scrolled sideways. -->
+                <th class="rowsave"></th>
                 <th>Materials <span class="th-sub">(how the manufacturer names it)</span></th>
                 <th>Division</th><th class="n">Order Quantity</th><th>Unit</th>
                 <!-- COVERAGE, WASTE AND ROUNDUP LIVE HERE NOW, from 2026-09-22. Hanz: "for the
@@ -879,8 +883,6 @@
                      default items in assemblies should be handled in default items in assemblies
                      tab" -- one screen owns defaults, and a switch here would be a second place to
                      set the same thing. The Defaults tab's own search adds them now. -->
-                <!-- The Save button's column, zero wide until a row has an unsaved edit. -->
-                <th class="rowsave"></th>
                 <th class="w-act"></th>
               </tr>
             </thead>
@@ -966,8 +968,10 @@
       </div>
       <!-- HOTEL AND PER DIEM (Hanz, 2026-10-09). Filled by renderTravelRates(). The Global lines
            `travel_lodging` and `travel_per_diem` in markup_rules; this is their only door now. -->
-      <p class="alert" id="travel-rate-alert" role="status" aria-live="polite"></p>
       <div id="travel-rates-box"></div>
+      <!-- BELOW THE HOTEL AND PER DIEM ROWS, where it was above the section and read as a note about
+           the labor lines over it (Hanz, 2026-10-12). -->
+      <p class="alert" id="travel-rate-alert" role="status" aria-live="polite"></p>
     </section>
 
     <!-- ── Labor Calculator ───────────────────────────────────────────── -->
@@ -1367,6 +1371,9 @@
 
         <div class="card apanel" id="asm-panel" hidden>
           <div class="atitle">
+            <!-- SAVE SITS LEFT OF THE NAME (Hanz, 2026-10-12: "put a save button to the left of the
+                 name"), the same side as every Items row's Save. Same button, same handler. -->
+            <button class="btn sm" type="button" id="asm-save" hidden title="Save this new assembly now">Save</button>
             <input id="asm-name" aria-label="Assembly name" maxlength="200" />
             <!-- WHAT THIS ASSEMBLY IS MEASURED PER. Hanz, 2026-08-28: "Coverage per Unit — is there
                  a way we can change it from SF and LF?"
@@ -1381,7 +1388,6 @@
               <option value="SF">per SF</option>
               <option value="LF">per LF</option>
             </select>
-            <button class="btn sm" type="button" id="asm-save" hidden title="Save this new assembly now">Save</button>
             <button class="icon danger" type="button" id="asm-del" title="Delete this assembly"
                     aria-label="Delete this assembly">
               <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
