@@ -43,7 +43,11 @@ function parsePage(file) {
     .map((t) => ({ name: "audience", value: attr(t, "value"), checked: t.indexOf(" checked") >= 0 }));
   const boxInputs = boxAt < 0 ? [] : tags(form.slice(boxAt, boxEnd)).map((t) => attr(t, "name"));
   const scripts = (html.match(/<script src="[^"]*"/g) || []).map((s) => s.slice(13, -1));
-  return { html, radios, boxInputs, boxInForm: boxAt >= 0, scripts };
+  // The addenda box's own limits, as the page draws them: what the browser checks on Continue.
+  const addendaTag = tags(form).filter((t) => attr(t, "name") === "addenda_count")[0] || "";
+  const addendaLimits = {};
+  ["min", "max", "step"].forEach((k) => { const v = attr(addendaTag, k); if (v !== null) addendaLimits[k] = v; });
+  return { html, radios, boxInputs, boxInForm: boxAt >= 0, scripts, addendaLimits };
 }
 
 /** Run the REAL audience-box.js against stubs shaped like `page`. */
@@ -53,7 +57,23 @@ function mount(page, opts) {
   const winListeners = [];
   const radios = page.radios.map((r) => Object.assign({}, r));
   const spec = { name: "spec_section", value: "033543-A" };
-  const box = { id: "drawings-specs-box", style: {}, removed: false };
+  // The number input in the box, modelled only as far as its attributes: hidden, a limit the value
+  // breaks (2.5 under step=1) cancels the form's submit with no message, so the limits must be off.
+  const attrs = Object.assign({}, page.addendaLimits);
+  const addenda = {
+    name: "addenda_count", type: "number",
+    hasAttribute: (k) => Object.prototype.hasOwnProperty.call(attrs, k),
+    getAttribute: (k) => (Object.prototype.hasOwnProperty.call(attrs, k) ? attrs[k] : null),
+    setAttribute: (k, v) => { attrs[k] = String(v); },
+    removeAttribute: (k) => { delete attrs[k]; },
+  };
+  const box = {
+    id: "drawings-specs-box", style: {}, removed: false,
+    querySelectorAll: (sel) => {
+      if (sel !== "input[type='number']") throw new Error("audience-box.js asked the box for " + sel + " -- teach the harness");
+      return [addenda];
+    },
+  };
   const form = {
     id: "intake-form",
     addEventListener: (type, fn) => formListeners.push({ type: type, fn: fn }),
@@ -78,6 +98,7 @@ function mount(page, opts) {
   return {
     box, spec, win, radios,
     display: () => box.style.display,
+    limits: () => ["min", "max", "step"].filter((k) => addenda.hasAttribute(k)).map((k) => k + "=" + attrs[k]),
     pick,
     // What the browser does when a person clicks a radio: the value changes, then `change` fires.
     click: (value) => { pick(value); formListeners.filter((l) => l.type === "change")
@@ -119,6 +140,14 @@ out.unit = {
   m.click("Direct");
   r.valueKept = m.spec.value;
   r.boxStillThere = m.box.removed === false && m.box.style.display === "none";
+  // 3b. the number box's limits are set aside while hidden (a value they reject would cancel Continue
+  //     on a field nobody can see) and are back, unchanged, once it shows again.
+  r.limitsDrawn = Object.keys(page.addendaLimits).map((k) => k + "=" + page.addendaLimits[k]);
+  r.limitsOpenHidden = mount(page).limits();
+  m.click("GC");        r.limitsShown = m.limits();
+  m.click("Direct");    r.limitsHidden = m.limits();
+  m.click("GC");        r.limitsBack = m.limits();
+  m.click("Direct");
   // 4. a change on some other field does not toggle it.
   m.typeInSpecBox();    r.afterOtherChange = m.display();
   // 5. a draft that was saved as GC and restored by the page BEFORE this script ran (index.js fills

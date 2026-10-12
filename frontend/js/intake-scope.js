@@ -210,7 +210,28 @@
    *  sets `display` would beat the `hidden` attribute, and this box must go away for real. */
   function applyAudience(audience, box) {
     if (!box) return;
-    box.style.display = isGcAudience(audience) ? "" : "none";
+    var gc = isGcAudience(audience);
+    box.style.display = gc ? "" : "none";
+    paintLimits(box, gc);
+  }
+
+  // A hidden number box still takes part in the form's native check on Continue. A value like 2.5 or -1
+  // typed under GC would make the browser cancel the submit on a field nobody can see, with no message.
+  // So while the box is hidden its range and step limits are set aside, and put back when it shows.
+  var LIMITS = ["min", "max", "step"];
+  function paintLimits(box, shown) {
+    if (!box.querySelectorAll) return;
+    Array.prototype.forEach.call(box.querySelectorAll("input[type='number']"), function (el) {
+      LIMITS.forEach(function (k) {
+        var held = "data-held-" + k;
+        if (shown) {
+          if (el.hasAttribute(held)) { el.setAttribute(k, el.getAttribute(held)); el.removeAttribute(held); }
+        } else if (el.hasAttribute(k)) {
+          el.setAttribute(held, el.getAttribute(k));
+          el.removeAttribute(k);
+        }
+      });
+    });
   }
 
   return {

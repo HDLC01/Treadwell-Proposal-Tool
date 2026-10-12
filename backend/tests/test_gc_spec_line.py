@@ -312,6 +312,19 @@ def test_hiding_the_box_keeps_what_was_typed(ran, page):
 
 @needs_node
 @pytest.mark.parametrize("page", PAGES)
+def test_a_hidden_box_cannot_cancel_continue_with_a_value_nobody_can_see(ran, page):
+    """The form is checked natively on Continue. A 2.5 or -1 typed in Addenda under GC, then Audience
+    switched to Direct, would cancel the submit on a hidden field with no message. So the number
+    box's limits are set aside while the box is hidden and restored exactly when it shows.
+    Mutation: drop paintLimits from applyAudience and the hidden list is not empty."""
+    r = ran["pages"][page]
+    assert r["limitsDrawn"] == ["min=0", "step=1"], "the page's own limits changed: " + str(r["limitsDrawn"])
+    assert r["limitsOpenHidden"] == [] and r["limitsHidden"] == [], "a hidden box still carries limits"
+    assert r["limitsShown"] == r["limitsBack"] == r["limitsDrawn"], "the limits did not come back"
+
+
+@needs_node
+@pytest.mark.parametrize("page", PAGES)
 def test_a_draft_saved_as_gc_opens_with_the_box_showing(ran, page):
     """index.js fills the radios as it loads, so audience-box.js must run after it; the v2 intake
     fills them later and calls sync() (pinned below). pageshow covers Back."""
