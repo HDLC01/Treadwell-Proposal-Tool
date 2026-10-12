@@ -1429,7 +1429,7 @@
       '<p class="hint">Per hour.</p></div>' +
 
       '<div class="f"><label>Cost</label>' +
-      '<div class="costbox' + (B.laborCost(r) > 0 ? "" : " empty") + '">' +
+      '<div class="costbox' + (B.laborCost(r) > 0 ? "" : " empty") + '" data-lcostbox-for="' + i + '">' +
       esc(moneyAuto(B.laborCost(r))) + '</div>' +
       '<p class="hint">' + (hours ? "guys × hours × rate" :
         "guys × days × rate × " + B.dayHours(r)) + '</p></div>' +
@@ -1494,7 +1494,8 @@
       '<p class="hint">' + (isNight ? "Per night." : "Per day.") + ' Set under Items &amp; ' +
       'Assemblies, Labor tab.</p></div>' +
       '<div class="f"><label>Cost</label>' +
-      '<div class="costbox' + (cost > 0 ? "" : " empty") + '">' + esc(moneyAuto(cost)) + '</div>' +
+      '<div class="costbox' + (cost > 0 ? "" : " empty") + '" data-trvcostbox-for="' + key + '">' +
+      esc(moneyAuto(cost)) + '</div>' +
       '<p class="hint">' + unitWord.toLowerCase() + ' × rate</p></div>' +
       '</div><p class="hint trvnote">' + (isNight
         ? "Overnight stays are expected at 70 miles or more from the office. Under 70 miles " +
@@ -1967,6 +1968,14 @@
       el.textContent = moneyAuto(B.laborCost(M.labor[parseInt(
         el.getAttribute("data-lcost-for"), 10)]));
     });
+    // The Cost box in the card body shows the same figure as the header above it, so it repaints in
+    // the same pass. Until it had its own hook only the header moved while the box kept the value
+    // it was rendered with ($594 up top, $0 below). Class and text only: no rebuild, no lost focus.
+    document.querySelectorAll("[data-lcostbox-for]").forEach(function (el) {
+      var c = B.laborCost(M.labor[parseInt(el.getAttribute("data-lcostbox-for"), 10)]);
+      el.textContent = moneyAuto(c);
+      el.className = "costbox" + (c > 0 ? "" : " empty");
+    });
     // A DERIVED BOX IS A NUMBER ON SCREEN, so it repaints here with the costs. Everything else in
     // this function is text the estimator cannot type into, which is why nothing repainted an
     // INPUT before — and it is exactly what made this go wrong: typing days into a task takes the
@@ -2011,6 +2020,11 @@
       });
       document.querySelectorAll("[data-trvcost-for]").forEach(function (el) {
         el.textContent = moneyAuto(B.travelLineCost(M.travel[el.getAttribute("data-trvcost-for")], M.labor));
+      });
+      document.querySelectorAll("[data-trvcostbox-for]").forEach(function (el) {
+        var c = B.travelLineCost(M.travel[el.getAttribute("data-trvcostbox-for")], M.labor);
+        el.textContent = moneyAuto(c);
+        el.className = "costbox" + (c > 0 ? "" : " empty");
       });
       document.querySelectorAll('[data-trv][data-k="qty"]').forEach(function (el) {
         var l = M.travel[el.getAttribute("data-trv")];
