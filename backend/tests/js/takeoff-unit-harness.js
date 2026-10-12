@@ -184,6 +184,73 @@ const NAMES = { "u-sf": "SF Floor Coat", "u-lf": "LF Cove Coat", "u-none": "Unse
     out.repick = { first: first, same: same, second: second, third: third };
   }
 
+  // ── 10. A RE-PICK NEVER TURNS A MEASUREMENT INTO A DIFFERENT UNIT'S NUMBER ────────────────────────
+  // Typing a different material into a row that already holds a measurement changes the unit with the
+  // pick. Keeping the digits would make a 5,000 SF floor into 5,000 LF of cove and drop it out of the
+  // area, so the measurement goes with the old unit and the box is cleared on screen too.
+  {
+    const floor = { kind: "item", item_id: "u-sf", item_name: "SF Floor Coat", coverage: "", measurement: 5000, unit: "SF" };
+    const follower = Object.assign({}, floor, { same_floor: true });
+    const mbox = (b, i) => b.doc.querySelector('[data-tk="' + i + '"][data-k="measurement"]').value;
+    const sums = (b) => ({ sf: B.takeoffSf(b.api.model().takeoff), lf: B.takeoffLf(b.api.model().takeoff) });
+
+    const a = await open([floor, follower]);
+    typeInto(a, '[data-tk="0"][data-k="pick"]', "LF Cove Coat");
+    const carrier = { row: a.api.model().takeoff[0], box: mbox(a, 0), follower: a.api.model().takeoff[1], sums: sums(a) };
+
+    const f = await open([floor, follower]);
+    typeInto(f, '[data-tk="1"][data-k="pick"]', "LF Cove Coat");
+    const lone = { row: f.api.model().takeoff[1], carrier: f.api.model().takeoff[0], box: mbox(f, 1), sums: sums(f) };
+
+    // the same unit on a new pick keeps the number, and so does a first pick on an unpicked row
+    const same = await open([floor]);
+    typeInto(same, '[data-tk="0"][data-k="pick"]', "Counted Coat");
+    const sameUnit = { row: same.api.model().takeoff[0], sums: sums(same) };
+    const first = await open([Object.assign({}, BLANK, { measurement: 200 })]);
+    typeInto(first, '[data-tk="0"][data-k="pick"]', "SF Floor Coat");
+    const firstPick = { row: first.api.model().takeoff[0], sums: sums(first) };
+
+    const asm = await open([{ assembly_id: "x-sf", assembly_name: "SF Floor System", measurement: 300, unit: "SF" }]);
+    typeInto(asm, '[data-tk="0"][data-k="pick"]', "LF Cove System");
+    const asmRepick = { row: asm.api.model().takeoff[0], box: mbox(asm, 0), sums: sums(asm) };
+    out.repickMeasured = { carrier: carrier, lone: lone, sameUnit: sameUnit, firstPick: firstPick, asmRepick: asmRepick };
+  }
+
+  // ── 11. A ROW ADDED FROM THE POP-UP KEEPS THE MATERIAL THAT WAS TICKED WHEN ITS FIELD IS LEFT ────
+  {
+    const b = await open([BLANK]);
+    clickOn(b, "[data-add-row]");
+    tick(b, "item:u-t2"); tick(b, "asm:x-t2");
+    pressAdd(b);
+    const idx = (id) => b.api.model().takeoff.findIndex((r) => (r.item_id || r.assembly_id) === id);
+    const ii = idx("u-t2"), ai = idx("x-t2");
+    const before = { item: face(b, ii), asm: face(b, ai) };
+    changeTo(b, '[data-tk="' + ii + '"][data-k="pick"]', "Twin Material");
+    changeTo(b, '[data-tk="' + ai + '"][data-k="pick"]', "Twin System");
+    typeInto(b, '[data-tk="' + ii + '"][data-k="pick"]', "Twin Material");
+    out.twinBlur = { before: before, itemId: b.api.model().takeoff[ii].item_id,
+                     asmId: b.api.model().takeoff[ai].assembly_id,
+                     item: face(b, ii), asm: face(b, ai) };
+  }
+
+  // ── 12. A SAVED ROW WITH NO USABLE UNIT: the box says what the bid does with it ──────────────────
+  {
+    out.noUnit = {};
+    const variants = { missing: undefined, blank: "", lower: "lf", junk: "ft", follower: "ft" };
+    for (const key of Object.keys(variants)) {
+      const row = { kind: "item", item_id: "u-lf", item_name: "LF Cove Coat", coverage: "", measurement: 200 };
+      if (variants[key] !== undefined) row.unit = variants[key];
+      if (key === "follower") row.same_floor = true;
+      const b = await open([row]);
+      const sums = () => ({ sf: B.takeoffSf(b.api.model().takeoff), lf: B.takeoffLf(b.api.model().takeoff) });
+      const opened = face(b, 0);
+      const openedSums = sums();
+      typeInto(b, '[data-tk="0"][data-k="pick"]', "LF Cove Coat");
+      out.noUnit[key] = { opened: opened, openedSums: openedSums, retyped: face(b, 0), retypedSums: sums(),
+                          measurement: b.api.model().takeoff[0].measurement };
+    }
+  }
+
   console.log(JSON.stringify(out));
 })().catch((err) => { console.error(err && err.stack || err); process.exit(1); });
 `;

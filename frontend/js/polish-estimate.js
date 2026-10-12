@@ -885,6 +885,15 @@
       el.textContent = v.hint;
       el.className = "hint unithint" + (v.note ? " note" : "");
     });
+    // A pick that changes the unit clears the row's measurement (B.adoptTakeoffUnit), and the card
+    // is not rebuilt, so the box has to be told. A box somebody is typing in is never touched.
+    document.querySelectorAll('[data-tk][data-k="measurement"]').forEach(function (box) {
+      if (box === document.activeElement) return;
+      var row = M.takeoff[parseInt(box.getAttribute("data-tk"), 10)];
+      if (!row) return;
+      var want = row.measurement == null ? "" : String(row.measurement);
+      if (String(box.value) !== want) box.value = want;
+    });
   }
 
   function matHint(row) {
@@ -2650,6 +2659,13 @@
     var before = row.assembly_id || "";
     row.assembly_name = text;
     var asm = assemblyByName(text);
+    // A ROW ALREADY POINTED AT AN ASSEMBLY OF THIS NAME KEEPS IT. Two assemblies can share a name
+    // (the add-line pop-up pins the one that was ticked); resolving by name again on a later blur
+    // would hand the row the first twin and its unit.
+    var cur = asmById(before);
+    if (asm && cur && cur.id !== asm.id && String(cur.name == null ? "" : cur.name) === String(asm.name == null ? "" : asm.name)) {
+      asm = cur;
+    }
     row.assembly_id = asm ? asm.id : "";
     // A DIFFERENT ASSEMBLY IS DIFFERENT LINES: coverage typed against the old one's lines would
     // land on the wrong materials, so it goes with the old pick.
@@ -2659,8 +2675,12 @@
     // the one case that must keep what it was saved with (and say so; see unitView). An assembly
     // with no unit set is SF, today's default. Painted in place: a rebuild here would take the
     // caret with it.
-    if (asm && row.assembly_id !== before) {
-      row.unit = B.takeoffUnit("asm", asm).unit;
+    //
+    // Also taken when the saved unit is not SF or LF (a row the totals count nowhere): retyping the
+    // name is the way out, as the row's note says. A measurement already on the row is cleared when
+    // the unit really changes (B.adoptTakeoffUnit): the digits belong to the old unit.
+    if (asm && (row.assembly_id !== before || !B.validTakeoffUnit(row.unit))) {
+      B.adoptTakeoffUnit(M.takeoff, i, B.takeoffUnit("asm", asm).unit);
       paintUnits();
     }
     return !!asm;
@@ -2686,11 +2706,22 @@
     // Through itemByName, not a loop of its own: that is the one name lookup that refuses Dye and
     // the joint filler kit, so a row typed as "Dye, per coat" cannot become a second dye charge.
     var hit = itemByName(text);
+    // A ROW ALREADY POINTED AT A MATERIAL OF THIS NAME KEEPS IT. Two materials can share a name (the
+    // add-line pop-up pins the one that was ticked); resolving by name again on a later blur would
+    // hand the row the first twin and re-stamp its unit.
+    var cur = itemById(before);
+    if (hit && cur && cur.id !== hit.id &&
+        String(cur.name == null ? "" : cur.name).trim().toLowerCase() ===
+        String(hit.name == null ? "" : hit.name).trim().toLowerCase()) {
+      hit = cur;
+    }
     row.item_id = hit ? hit.id : "";
     // THE UNIT IS THE MATERIAL'S COVERAGE BASIS (Items & Assemblies: "Coverage is per SF / LF"),
     // taken when the pick CHANGES, like an assembly's. Never `hit.unit`: see the paragraph above.
-    if (hit && row.item_id !== before) {
-      row.unit = B.takeoffUnit("item", hit).unit;
+    // Also when the saved unit is not SF or LF (see setAssembly). A measurement already on the row
+    // is cleared if the unit really changes: the digits belong to the old unit (B.adoptTakeoffUnit).
+    if (hit && (row.item_id !== before || !B.validTakeoffUnit(row.unit))) {
+      B.adoptTakeoffUnit(M.takeoff, i, B.takeoffUnit("item", hit).unit);
       paintUnits();
     }
     return !!hit;

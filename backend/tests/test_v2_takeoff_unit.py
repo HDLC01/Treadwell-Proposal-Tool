@@ -172,6 +172,51 @@ def check_changing_the_pick_repaints_the_unit_in_place(a):
         "the Unit box did not follow a changed assembly pick: %r" % r["third"])
 
 
+def check_a_repick_never_turns_a_measurement_into_another_units_number(a):
+    r = a["repickMeasured"]
+    c = r["carrier"]
+    assert c["row"]["unit"] == "LF" and c["row"]["measurement"] == "", (
+        "a 5000 SF floor re-picked to an LF material kept its digits as LF: %r" % c["row"])
+    assert c["sums"] == {"sf": 0, "lf": 0}, "the floor's number came back as cove: %r" % c["sums"]
+    assert c["box"] == "", "the model was cleared but the measurement box still shows %r" % c["box"]
+    assert c["follower"]["measurement"] == "", "a same-floor row still holds the floor the carrier lost"
+    lone = r["lone"]
+    assert lone["row"]["unit"] == "LF" and lone["row"]["measurement"] == "" and "same_floor" not in lone["row"], (
+        "a same-floor row re-picked to LF kept a number nothing counts: %r" % lone["row"])
+    assert lone["carrier"]["measurement"] == 5000 and lone["sums"] == {"sf": 5000, "lf": 0}, (
+        "re-picking the follower disturbed the floor: %r" % lone)
+    assert lone["box"] == ""
+    # nothing to clear when the unit does not move, or when the row was never on a unit of its own
+    assert r["sameUnit"]["row"]["measurement"] == 5000 and r["sameUnit"]["sums"]["sf"] == 5000, (
+        "a re-pick to a material of the same unit lost the measurement: %r" % r["sameUnit"])
+    assert r["firstPick"]["row"]["measurement"] == 200 and r["firstPick"]["sums"]["sf"] == 200, (
+        "the first pick on a row that already had a number lost it: %r" % r["firstPick"])
+    asm = r["asmRepick"]
+    assert asm["row"]["unit"] == "LF" and asm["row"]["measurement"] == "" and asm["box"] == "" and asm["sums"]["lf"] == 0, (
+        "an assembly re-pick turned 300 SF into LF: %r" % asm)
+
+
+def check_leaving_a_pop_up_added_row_keeps_the_library_row_that_was_ticked(a):
+    t = a["twinBlur"]
+    assert t["itemId"] == "u-t2" and t["asmId"] == "x-t2", (
+        "leaving the field re-resolved the name to the first twin: %r" % ((t["itemId"], t["asmId"]),))
+    for key in ("item", "asm"):
+        assert t[key] == t["before"][key], "leaving the field changed the %s row's unit or note: %r" % (key, t[key])
+        assert t[key]["text"] == "LF" and t[key]["note"] is False
+
+
+def check_a_saved_row_with_no_usable_unit_says_so_and_retyping_fixes_it(a):
+    for key, got in a["noUnit"].items():
+        o = got["opened"]
+        assert o["text"] == DASH and o["note"] is True and o["hint"].startswith("No unit is saved on this row"), (
+            "%s: the box says %r over a row the totals ignore: %r" % (key, o["text"], o))
+        assert got["openedSums"] == {"sf": 0, "lf": 0}, "%s: %r" % (key, got["openedSums"])
+        assert got["retyped"]["text"] == "LF" and got["retyped"]["model"] == "LF" and got["retyped"]["note"] is False, (
+            "%s: retyping the name did not set the library's unit: %r" % (key, got["retyped"]))
+        assert got["measurement"] == 200 and got["retypedSums"] == {"sf": 0, "lf": 200}, (
+            "%s: the row's number was lost or not counted: %r" % (key, got))
+
+
 CHECKS = [
     check_the_row_search_takes_the_unit_from_the_library,
     check_the_add_line_pop_up_sets_the_same_unit,
@@ -185,6 +230,9 @@ CHECKS = [
     check_a_new_bids_default_materials_take_their_coverage_basis,
     check_two_library_rows_of_one_name_each_get_their_own_unit,
     check_changing_the_pick_repaints_the_unit_in_place,
+    check_a_repick_never_turns_a_measurement_into_another_units_number,
+    check_leaving_a_pop_up_added_row_keeps_the_library_row_that_was_ticked,
+    check_a_saved_row_with_no_usable_unit_says_so_and_retyping_fixes_it,
 ]
 
 
@@ -205,16 +253,16 @@ BREAKS = {
         MODEL, '    var word = kind === "asm" ? lib.unit : lib.coverage_basis;',
         '    var word = kind === "asm" ? lib.unit : "sf";', check_the_row_search_takes_the_unit_from_the_library),
     "picking a material adopts nothing": (
-        PAGE, "    if (hit && row.item_id !== before) {",
+        PAGE, "    if (hit && (row.item_id !== before || !B.validTakeoffUnit(row.unit))) {",
         "    if (false) {", check_the_row_search_takes_the_unit_from_the_library),
     "picking an assembly adopts nothing": (
-        PAGE, '      row.unit = B.takeoffUnit("asm", asm).unit;',
+        PAGE, '      B.adoptTakeoffUnit(M.takeoff, i, B.takeoffUnit("asm", asm).unit);',
         "      row.unit = row.unit;", check_the_row_search_takes_the_unit_from_the_library),
     "an LF material stays an SF row, so it is priced and counted as area": (
-        PAGE, "    if (hit && row.item_id !== before) {",
+        PAGE, "    if (hit && (row.item_id !== before || !B.validTakeoffUnit(row.unit))) {",
         "    if (false) {", check_an_lf_material_prices_per_lf),
     "a pick re-stamps the unit on every keystroke": (
-        PAGE, "    if (hit && row.item_id !== before) {",
+        PAGE, "    if (hit && (row.item_id !== before || !B.validTakeoffUnit(row.unit))) {",
         "    if (hit) {", check_retyping_a_saved_row_does_not_restamp_it_but_a_new_pick_follows_the_library),
     "the Unit box is a dropdown again": (
         PAGE, "      '<div class=\"costbox txt\" data-unit-for=\"' + i + '\">' + esc(unitView(r).text) + '</div>' +",
@@ -250,6 +298,24 @@ BREAKS = {
         PAGE, "    return '<a class=\"hint unithint' + (v.note ? ' note' : '') + '\" href=\"/library.html\" ' +",
         "    return '<a class=\"hint unithint' + (v.note ? ' note' : '') + '\" href=\"/\" ' +",
         check_the_hint_links_to_items_and_assemblies),
+    "a re-pick keeps the old unit's digits under the new unit": (
+        MODEL, '    if (held && validTakeoffUnit(r.unit)) setMeasurement(rows, i, "");',
+        "    if (false) setMeasurement(rows, i, \"\");", check_a_repick_never_turns_a_measurement_into_another_units_number),
+    "a same-floor row keeps its marker when it changes unit": (
+        MODEL, "    delete r.same_floor;",
+        "    r.same_floor = r.same_floor;", check_a_saved_row_with_no_usable_unit_says_so_and_retyping_fixes_it),
+    "the measurement box is not told it was cleared": (
+        PAGE, "      if (String(box.value) !== want) box.value = want;",
+        "      if (false) box.value = want;", check_a_repick_never_turns_a_measurement_into_another_units_number),
+    "a material is re-resolved by name on every blur": (
+        PAGE, "      hit = cur;", "      hit = hit;", check_leaving_a_pop_up_added_row_keeps_the_library_row_that_was_ticked),
+    "an assembly is re-resolved by name on every blur": (
+        PAGE, "      asm = cur;", "      asm = asm;", check_leaving_a_pop_up_added_row_keeps_the_library_row_that_was_ticked),
+    "a row with no usable unit shows the library's unit": (
+        MODEL, "    if (!validTakeoffUnit(saved)) {", "    if (false) {", check_a_saved_row_with_no_usable_unit_says_so_and_retyping_fixes_it),
+    "retyping the name does not repair a row with no usable unit": (
+        PAGE, "    if (hit && (row.item_id !== before || !B.validTakeoffUnit(row.unit))) {",
+        "    if (hit && row.item_id !== before) {", check_a_saved_row_with_no_usable_unit_says_so_and_retyping_fixes_it),
     "an empty row shows SF instead of a dash": (
         MODEL, '    if (!lu) return { text: "' + DASH + '", hint: "From Items & Assemblies.", note: false };',
         '    if (!lu) return { text: "SF", hint: "From Items & Assemblies.", note: false };',

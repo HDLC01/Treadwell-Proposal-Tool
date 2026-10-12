@@ -875,6 +875,31 @@
     return { unit: "SF", state: "unset" };
   }
 
+  /** True for exactly "SF" or "LF": the only two units takeoffSf and takeoffLf count. */
+  function validTakeoffUnit(u) {
+    return u === "SF" || u === "LF";
+  }
+
+  /** Give takeoff row `i` the unit a pick on Items & Assemblies decided, without quietly turning a
+   *  number into a different kind of number.
+   *
+   *  A measurement is a count of ONE unit. Moving a row that holds one from SF to LF (or back) would
+   *  keep the digits and change what they mean: a 5,000 SF floor becomes 5,000 LF of cove and drops
+   *  out of the area. So when the unit really changes and the row holds a measurement, the
+   *  measurement is cleared (through setMeasurement, so a floor's same-floor rows follow it and a
+   *  follower stops following) and the estimator types the new one. A row whose saved unit was not
+   *  SF or LF counted nowhere, so its number belongs to no unit and is kept. Returns true when the
+   *  unit changed. */
+  function adoptTakeoffUnit(rows, i, unit) {
+    var r = rows && rows[i];
+    if (!r || r.unit === unit) return false;
+    var held = String(r.measurement == null ? "" : r.measurement).trim() !== "";
+    if (held && validTakeoffUnit(r.unit)) setMeasurement(rows, i, "");
+    delete r.same_floor;
+    r.unit = unit;
+    return true;
+  }
+
   /** What a takeoff row's Unit box shows and the line under it says.
    *
    *  `row` is the takeoff row, `kind` and `lib` as takeoffUnit. The row's SAVED unit is what it
@@ -885,8 +910,15 @@
   function takeoffUnitView(row, kind, lib) {
     var lu = takeoffUnit(kind, lib);
     if (!lu) return { text: "—", hint: "From Items & Assemblies.", note: false };
-    var saved = String((row || {}).unit == null ? "" : row.unit).trim().toUpperCase();
-    if (saved !== "SF" && saved !== "LF") saved = lu.unit;
+    var saved = (row || {}).unit;
+    // A SAVED UNIT THAT IS NOT EXACTLY "SF" OR "LF" IS COUNTED IN NEITHER MEASURE: takeoffSf and
+    // takeoffLf compare strictly. Showing the library's unit there would say the row is measured in
+    // a unit the totals ignore, so the box says what is true instead.
+    if (!validTakeoffUnit(saved)) {
+      return { text: "—", note: true,
+        hint: "No unit is saved on this row, so the bid does not count it. Retype the name to take " +
+              "the unit from Items & Assemblies." };
+    }
     var ordinary = lu.state === "set" ? "From Items & Assemblies."
       : (lu.state === "each"
         ? "Items & Assemblies says Each, which a takeoff prices as SF."
@@ -3175,6 +3207,7 @@
     seedDefaultTakeoff: seedDefaultTakeoff,
     takeoffUnit: takeoffUnit,
     takeoffUnitView: takeoffUnitView,
+    validTakeoffUnit: validTakeoffUnit, adoptTakeoffUnit: adoptTakeoffUnit,
     dyeCost: dyeCost, jointFillerCost: jointFillerCost,
     markupChain: markupChain,
     freshModel: freshModel, migrateModel: migrateModel, blockers: blockers,
