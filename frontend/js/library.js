@@ -418,6 +418,7 @@
     name: "Name", unit: "Unit", unit_cost: "Cost", buy_qty: "Order amount",
     coverage: "Coverage per unit", waste_pct: "Waste factor", roundup: "Roundup",
     vendor: "Vendor", divisions: "Division",
+    bulk_cost: "Bulk cost", coverage_basis: "Coverage measured per", price_breaks: "Price breaks",
   };
 
   // THE SERVER'S FIELDS, NOT OURS. `updated_at` moves on every write, `cost_updated_at` moves
@@ -457,7 +458,12 @@
   }
 
   function shownValue(v) {
-    if (Array.isArray(v)) return v.length ? v.join(", ") : "(none)";
+    // A list of price breaks reads "240 at $90", not "[object Object]".
+    if (Array.isArray(v)) {
+      return v.length ? v.map(function (x) {
+        return x && typeof x === "object" ? x.min_qty + " at $" + x.unit_cost : x;
+      }).join(", ") : "(none)";
+    }
     var t = String(v === undefined || v === null ? "" : v).trim();
     return t === "" ? "(blank)" : t;
   }
@@ -469,8 +475,10 @@
    *  button, is not leaving the row and must not raise the question. */
   function rowHasFocus(id) {
     var row = document.querySelector('[data-item="' + id + '"]');
+    var more = document.querySelector('[data-item-more="' + id + '"]');
     var here = document.activeElement;
-    return !!(row && here && row.contains && row.contains(here));
+    return !!(here && ((row && row.contains && row.contains(here)) ||
+                       (more && more.contains && more.contains(here))));
   }
 
   /** Put the caret back in the field a cancelled edit was typed into.
@@ -955,11 +963,18 @@
    *  the cost box to the vendor dropdown, or that row's own Duplicate button — so nothing fires.
    *  A null relatedTarget is a click on something unfocusable, which IS leaving. */
   function onItemRowFocusOut(e) {
-    var row = e.target.closest && e.target.closest("[data-item]");
+    // THE MORE PANEL IS PART OF ITS ROW: it is a second <tr>, so tabbing from the Cost box down
+    // into a price break is not leaving the material and must not ask for the save.
+    var row = e.target.closest && (e.target.closest("[data-item]") || e.target.closest("[data-item-more]"));
     if (!row) return;
+    var id = row.getAttribute("data-item") || row.getAttribute("data-item-more");
     var to = e.relatedTarget;
     if (to && row.contains && row.contains(to)) return;
-    return flushItemRow(row.getAttribute("data-item"));
+    if (to && to.closest) {
+      var toRow = to.closest("[data-item]") || to.closest("[data-item-more]");
+      if (toRow && (toRow.getAttribute("data-item") || toRow.getAttribute("data-item-more")) === id) return;
+    }
+    return flushItemRow(id);
   }
 
   async function post(kind, body) {
@@ -1380,6 +1395,101 @@
     return base + " (copy)";
   }
 
+  /** Which materials have their More panel open (price breaks, bulk cost, coverage basis). Module
+   *  state, never a property on the material: which row is open is this SCREEN's business and must
+   *  not ride along on a save. Same rule as laborMoreOpen. */
+  var itemMoreOpen = {};
+
+  /** The More panel of one material, as a second <tr> under its row. ADMIN ONLY, drawn by
+   *  renderItems only for an admin: these three set how a price is reached, and the server refuses
+   *  anybody else.
+   *
+   *  A price break says "from this many units bought, one purchase costs this instead". It starts
+   *  AT its quantity (Kyle's flake pays the bulk price at 240 lb, not above it), and below the
+   *  first break the ordinary Cost applies. `data-brk-i` is the break's place in the list, so an
+   *  edit lands on the right one without reading the page back. */
+  function itemMoreHtml(it) {
+    var id = esc(it.id), unit = esc(it.unit || "unit");
+    var list = Array.isArray(it.price_breaks) ? it.price_breaks : [];
+    var rows = "";
+    for (var i = 0; i < list.length; i++) {
+      var b = list[i] || {};
+      rows += '<div class="brk">From ' +
+        '<input data-f="brk_qty" data-brk-i="' + i + '" class="num" value="' + esc(b.min_qty) +
+          '" aria-label="Price break ' + (i + 1) + ', the quantity it starts at, in ' + unit + '"> ' +
+        unit + ' bought, one purchase costs ' +
+        '<span class="money"><span>$</span><input data-f="brk_cost" data-brk-i="' + i +
+          '" class="num cell-cost" value="' + esc(b.unit_cost) + '" aria-label="Price break ' +
+          (i + 1) + ', the cost of one purchase at that quantity"></span> ' +
+        '<button class="icon danger" type="button" data-del-break="' + id + '" data-brk-i="' + i +
+          '" title="Remove this price break" aria-label="Remove price break ' + (i + 1) + '">' +
+          icon("trash") + "</button></div>";
+    }
+    var basis = it.coverage_basis || "";
+    var opts = [["", "Whatever the bid measures"], ["sf", "SF (floor area)"],
+                ["lf", "LF (length)"], ["each", "Each (a count)"]];
+    var select = '<select data-f="coverage_basis" aria-label="What the coverage is measured per">';
+    for (var k = 0; k < opts.length; k++) {
+      select += '<option value="' + opts[k][0] + '"' + (basis === opts[k][0] ? " selected" : "") +
+        ">" + opts[k][1] + "</option>";
+    }
+    select += "</select>";
+    return '<tr class="item-more" data-item-more="' + id + '"><td></td><td colspan="11">' +
+      '<label class="morefield">Bulk cost ' +
+        '<span class="money"><span>$</span><input data-f="bulk_cost" class="num cell-cost" value="' +
+        esc(it.bulk_cost) + '" aria-label="Bulk cost of one purchase, used when the bid has Bulk ' +
+        'Discount on"></span></label>' +
+      '<label class="morefield">Coverage is per ' + select + "</label>" +
+      '<div class="breaks"><div class="breakhead">Price breaks <span class="th-sub">A break starts ' +
+        "at its quantity. Below the first one, the Cost column applies.</span></div>" + rows +
+        '<button class="btn ghost sm" type="button" data-add-break="' + id + '">Add a price ' +
+        "break</button></div>" +
+      "</td></tr>";
+  }
+
+  /** The price breaks a save carries: a break with BOTH boxes still empty is an "Add a price break"
+   *  nobody filled in, so it is left off rather than refused. A half-filled one stays in, and the
+   *  server answers with what it is missing. An empty list clears the material's breaks. */
+  function breaksForSave(list) {
+    return (list || []).filter(function (b) {
+      var q = String(b && b.min_qty != null ? b.min_qty : "").trim();
+      var c = String(b && b.unit_cost != null ? b.unit_cost : "").trim();
+      return q !== "" || c !== "";
+    });
+  }
+
+  /** Open or close one material's More panel. The redraw replaces the button that was pressed, so
+   *  the focus goes back onto its successor. */
+  function toggleItemMore(id) {
+    itemMoreOpen[id] = !itemMoreOpen[id];
+    renderItems();
+    var b = document.querySelector('[data-item-more-toggle="' + id + '"]');
+    if (b && b.focus) b.focus();
+  }
+
+  /** "Add a price break": a blank line under the material's last one, with the caret in its
+   *  quantity. Nothing is sent until something is typed in it. */
+  function addPriceBreak(id) {
+    var it = itemOf(id);
+    if (!it) return;
+    var list = Array.isArray(it.price_breaks) ? it.price_breaks : [];
+    it.price_breaks = list.concat([{ min_qty: "", unit_cost: "" }]);
+    renderItems();
+    var box = document.querySelector('[data-item-more="' + id + '"] [data-f="brk_qty"][data-brk-i="' +
+      (it.price_breaks.length - 1) + '"]');
+    if (box && box.focus) box.focus();
+  }
+
+  /** Take one price break off the list. A real change, so it is queued like any other edit. */
+  function removePriceBreak(id, index) {
+    var it = itemOf(id);
+    if (!it || !Array.isArray(it.price_breaks)) return;
+    rememberItem(it);
+    it.price_breaks = it.price_breaks.filter(function (b, i) { return i !== index; });
+    renderItems(); renderList(); renderPanel();
+    patchSoon("items", it.id, { price_breaks: breaksForSave(it.price_breaks) });
+  }
+
   function renderItems() {
     var out = "";
     var shown = visibleItems();
@@ -1420,6 +1530,11 @@
         "<td>" + pick("vendor", it.vendor, vendorNames(), "Vendor", ' class="cell-vendor"') + "</td>" +
         '<td class="datescell">' + datesHtml(it) + "</td>" +
         '<td class="rowact">' +
+          // PRICE BREAKS, BULK COST AND COVERAGE BASIS live behind More, for an admin only.
+          (ADMIN ? '<button class="btn ghost sm" type="button" data-item-more-toggle="' + esc(it.id) +
+            '" aria-expanded="' + (itemMoreOpen[it.id] ? "true" : "false") + '" aria-label="' +
+            (itemMoreOpen[it.id] ? "Hide" : "Show") + " price breaks, bulk cost and coverage basis for " +
+            esc(it.name) + '">' + (itemMoreOpen[it.id] ? "Less" : "More") + "</button>" : "") +
           '<button class="icon" type="button" data-dupe-item="' + esc(it.id) + '" title="Make a copy of this material" aria-label="Duplicate ' + esc(it.name) + '">' + icon("copy") + "</button>" +
           // NO REMOVE ON THE THREE RESERVED ROWS (joint filler kit, remove-existing, dye) -- see
           // isReservedItem. Every other cell on the row stays editable; that is the point of it.
@@ -1427,6 +1542,7 @@
           '<button class="icon danger" type="button" data-del-item="' + esc(it.id) + '" title="Remove this material" aria-label="Remove ' + esc(it.name) + '">' + icon("trash") + "</button>") +
           "</td>" +
       "</tr>";
+      if (ADMIN && itemMoreOpen[it.id]) out += itemMoreHtml(it);
     }
     $("items-body").innerHTML = out;
     // Three states, not two: nothing in the library, nothing matching the search, and rows. The
@@ -4658,7 +4774,7 @@
   // `5 / "5"` work by luck and `"5" * 2` produce "55" the first time somebody multiplied instead
   // of divided — the pricing layer's `num()` is defensive, but the model it reads should not be
   // the thing needing defending.
-  var NUMERIC_ITEM_FIELDS = ["unit_cost", "coverage", "buy_qty", "waste_pct"];
+  var NUMERIC_ITEM_FIELDS = ["unit_cost", "coverage", "buy_qty", "waste_pct", "bulk_cost"];
   function onItemEdit(e) {
     // NOTHING GETS IN WHILE A CONFIRMATION IS ON SCREEN. The modal overlay traps every real
     // keystroke and click, so the only event that can arrive here in that window is one the dialog
@@ -4675,9 +4791,9 @@
     if (itemConfirmOpen) return;
     var f = e.target.getAttribute && e.target.getAttribute("data-f");
     if (!f) return;
-    var row = e.target.closest("[data-item]");
+    var row = e.target.closest("[data-item]") || e.target.closest("[data-item-more]");
     if (!row) return;
-    var it = itemOf(row.getAttribute("data-item"));
+    var it = itemOf(row.getAttribute("data-item") || row.getAttribute("data-item-more"));
     if (!it) return;
     // BEFORE the model is touched, and before the divisions branch below returns early — this is
     // what Cancel puts back and what the dialog quotes. No-op after the first keystroke of a
@@ -4694,6 +4810,22 @@
       it.category = vals[0] || "";
       renderList(); renderPanel();
       patchSoon("items", it.id, { divisions: vals });
+      return;
+    }
+    // ONE PRICE BREAK'S QUANTITY OR COST. The list is rebuilt, not written into, and the body that
+    // goes out drops a break that is still entirely blank (an "Add a price break" nobody filled in);
+    // one that is half filled goes out as it is and the server says what is missing.
+    if (f === "brk_qty" || f === "brk_cost") {
+      var bi = Number(e.target.getAttribute("data-brk-i"));
+      var typed = e.target.value;
+      it.price_breaks = (Array.isArray(it.price_breaks) ? it.price_breaks : []).map(function (b, i) {
+        return i !== bi ? b : {
+          min_qty: f === "brk_qty" ? typed : b.min_qty,
+          unit_cost: f === "brk_cost" ? typed : b.unit_cost,
+        };
+      });
+      renderList(); renderPanel();
+      patchSoon("items", it.id, { price_breaks: breaksForSave(it.price_breaks) });
       return;
     }
     // A checkbox, not a text field: `.value` on an unchecked box is still "on", so the generic
@@ -5213,6 +5345,15 @@
 
     // ── the Labor tab: every labor line, created and edited here ─────────────────────────────
     if (t.closest && t.closest("[data-add-labor]")) { await addLaborLine(); return; }
+    var itemMore = t.closest && t.closest("[data-item-more-toggle]");
+    if (itemMore) { toggleItemMore(itemMore.getAttribute("data-item-more-toggle")); return; }
+    var addBrk = t.closest && t.closest("[data-add-break]");
+    if (addBrk) { addPriceBreak(addBrk.getAttribute("data-add-break")); return; }
+    var delBrk = t.closest && t.closest("[data-del-break]");
+    if (delBrk) {
+      removePriceBreak(delBrk.getAttribute("data-del-break"), Number(delBrk.getAttribute("data-brk-i")));
+      return;
+    }
     var moreBtn = t.closest && t.closest("[data-labor-more-toggle]");
     if (moreBtn) { toggleLaborMore(moreBtn.getAttribute("data-labor-more-toggle")); return; }
     var delLab = t.closest && t.closest("[data-del-labor]");

@@ -1199,7 +1199,9 @@ def test_the_editor_is_a_server_owned_field_so_cancel_cannot_put_a_stale_one_bac
 
 @needs_node
 def test_the_pack_size_is_on_the_numeric_field_list(ran):
-    assert ran["numericFields"] == ["unit_cost", "coverage", "buy_qty", "waste_pct"]
+    # bulk_cost joined it with Phase 11: it is a money figure typed beside the cost, and a string
+    # "58.18" would concatenate the first time anything multiplied it.
+    assert ran["numericFields"] == ["unit_cost", "coverage", "buy_qty", "waste_pct", "bulk_cost"]
 
 
 @needs_node
@@ -4336,3 +4338,87 @@ def test_each_administration_card_opens_with_its_add_button(ran):
     assert m["laborHeaderSaveFirst"], "the Labor table header has no Save column first"
     assert m["laborAddStillTop"], "Labor's Add moved off the top"
     assert m["cssForTheTick"], "the Saved tick and the rate box's Save cell have no styles"
+
+
+# ── PHASE 11: THE ITEMS TAB'S MORE PANEL (price breaks, bulk cost, coverage basis) ─────────────
+@needs_node
+def test_the_more_panel_is_an_admins_and_draws_what_the_material_holds(ran):
+    """Rendered by the page's own renderItems. An admin gets a More button on every row and, once it
+    is open, a second row under the material with the bulk cost, the coverage basis and one line per
+    price break. A non-admin gets neither, even if the open set says otherwise: the server refuses
+    them anyway, so offering the controls would be a button that always 403s.
+
+    Mutations: drop the ADMIN test on the button or on the panel (nonAdminHas* red); stop drawing the
+    break lines (breakQtys red)."""
+    u = ran["priceBreaksUi"]
+    assert u["closedAdminHasMore"] and u["closedAdminHasNoPanel"]
+    assert u["nonAdminHasNoMore"] and u["nonAdminHasNoPanel"]
+    assert u["panelIsItsOwnRow"], "the panel is a second <tr> carrying data-item-more, not a cell of the row"
+    assert u["bulkShown"] and u["basisShown"] and u["toggleSaysLess"]
+    assert u["breakQtys"] == ["240", "480"] and u["breakCosts"] == ["90", "88"]
+
+
+@needs_node
+def test_typing_in_the_panel_reaches_the_model_and_the_queue(ran):
+    """EXECUTED THROUGH onItemEdit. A break's quantity and cost land on the right break; the bulk cost
+    goes in as a number (it is on the numeric list); the basis goes in as the word. Each is queued as
+    a field-level PATCH body for the Save press, and a typed break goes out exactly as typed (the
+    server tolerates a pasted $).
+
+    Mutation: delete the brk_qty/brk_cost branch of onItemEdit (the break stays at 240 and the generic
+    path writes it_brk_qty onto the material); drop bulk_cost from NUMERIC_ITEM_FIELDS (bulkType red)."""
+    t = ran["priceBreaksUi"]["typed"]
+    assert t["breaks"] == [{"min_qty": "300", "unit_cost": "$89.5"}]
+    assert (t["bulkType"], t["bulk"], t["basis"]) == ("number", 88.25, "each")
+    assert t["queued"][-1] == 'items:m1:{"coverage_basis":"each"}'
+    assert t["queued"][-2] == 'items:m1:{"bulk_cost":"$88.25"}'
+    assert t["queued"][1] == 'items:m1:{"price_breaks":[{"min_qty":"300","unit_cost":"$89.5"}]}'
+
+
+@needs_node
+def test_a_break_nobody_filled_in_is_never_sent_and_a_half_filled_one_is(ran):
+    """"Add a price break" draws a blank line. Sending it would be a 400 for something nobody typed, so
+    a line with both boxes empty is left off the body; one box filled goes out, and the server says what
+    is missing. Removing a break queues the shorter list, and the last one queues an empty list (which
+    the server stores as NULL)."""
+    a = ran["priceBreaksUi"]["add"]
+    assert a["afterAdd"][-1] == {"min_qty": "", "unit_cost": ""}
+    assert a["queuedCount"] == 2, "adding a blank break must not queue a save by itself"
+    assert a["blankOnly"] == []
+    assert a["halfTyped"][-1] == {"min_qty": "480", "unit_cost": ""}
+    assert a["afterRemove"] == [{"min_qty": "480", "unit_cost": ""}]
+    assert a["removedLastBreak"] == [[]]
+
+
+@needs_node
+def test_the_more_toggle_opens_and_closes_the_panel_and_a_bare_material_draws_it_empty(ran):
+    assert ran["priceBreaksUi"]["toggle"] == {"opened": True, "closedAgain": True}
+    b = ran["priceBreaksUi"]["bare"]
+    assert b["noBreakInputs"] and b["queued"] == 0 and b["basisBlankSelected"]
+
+
+def test_the_more_panel_is_wired_to_the_page_and_styled():
+    """The click router reaches the three handlers, tabbing into the panel is not leaving the row, and
+    library.html styles the panel's row. (The handlers themselves are executed above; this is the wiring
+    a lifted function cannot show.)"""
+    js = (FRONTEND / "js" / "library.js").read_text(encoding="utf-8")
+    html = (FRONTEND / "library.html").read_text(encoding="utf-8")
+    assert 'toggleItemMore(itemMore.getAttribute("data-item-more-toggle"))' in js
+    assert 'addPriceBreak(addBrk.getAttribute("data-add-break"))' in js
+    assert 'removePriceBreak(delBrk.getAttribute("data-del-break")' in js
+    assert 'e.target.closest("[data-item-more]")' in js, "an edit inside the panel must find its material"
+    assert ".item-more > td" in html and ".item-more .brk" in html
+
+
+@needs_node
+def test_tabbing_between_a_row_and_its_more_panel_is_not_leaving_the_material(ran):
+    """The panel is a second <tr>. Moving from the Cost box into a price break (or back) must not ask
+    "Save this change?" mid-edit, while leaving the pair for anywhere else still saves.
+
+    Mutation: make onItemRowFocusOut look only for [data-item] on the target (panelToElsewhereSends
+    red: an edit made in the panel never saves on leaving) or drop the same-material check on the
+    destination (rowToPanelStays red)."""
+    f = ran["moreRowFocus"]
+    assert f["rowToPanelStays"] and f["panelToRowStays"]
+    assert f["panelToElsewhereSends"] and f["rowToAnotherMaterialSends"]
+    assert f["noErrors"]
