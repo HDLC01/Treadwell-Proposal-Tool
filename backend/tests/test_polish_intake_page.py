@@ -1603,6 +1603,35 @@ def test_a_stale_untyped_or_empty_box_never_overwrites_the_takeoff(ran):
 
 
 @needs_node
+def test_a_typed_mark_is_good_for_one_save_even_when_nothing_was_measured(ran):
+    """Typed while the takeoff is empty (the seed save), the box's typed mark used to stay on. The takeoff
+    was then measured elsewhere, and the next unrelated save from this page (Back, a second tab: not
+    re-booted, the box still reads the old figure) wrote the old number over the first row. The mark
+    is cleared by every save that read it. A box typed into AGAIN is a fresh figure and still reaches
+    the row.
+
+    Mutation: clear the mark only inside `if (sfTyped)` in save(): sf comes back [4000], polishSf 4000."""
+    s = ran["sfAreas"]["staleMark"]
+    assert s["seeded"] == 4000
+    assert (s["sf"], s["polishSf"]) == ([12500], 12500)
+    assert s["retyped"] == {"sf": [7000], "polishSf": 7000}
+
+
+@needs_node
+def test_adding_a_second_area_to_a_floor_held_only_by_same_floor_rows_grows_the_floor(ran):
+    """The carrier row was deleted, so two same_floor rows (8,000) hold the floor. System 2 = 3,000
+    must ADD an area: the first same_floor row becomes the counted one, the other follows to the new
+    floor of 11,000. It used to shrink the whole floor to 3,000 (and after a reload System 1 read 3,000).
+
+    Mutation: drop the same_floor promotion in setAreaSf's add branch: rows come back
+    [3000 same, 3000 same, 3000], polishSf 3000."""
+    s = ran["sfAreas"]["onlySame"]
+    assert s["rows"] == [["SF", 8000, False], ["SF", 11000, True], ["SF", 3000, False]]
+    assert s["polishSf"] == 11000
+    assert (s["reloadBoxes"]["v1"], s["reloadBoxes"]["v2"]) == (8000, 3000)
+
+
+@needs_node
 def test_the_only_row_switched_off_is_still_a_measured_editable_floor(ran):
     """The slider is a price choice, not a measurement. With the only SF row OFF, System 1 still shows
     its figure and is editable; typing changes that row (it stays off) and polish_sf is the measured

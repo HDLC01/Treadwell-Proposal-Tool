@@ -514,6 +514,16 @@
     var sfTyped = !!(typed[0] || typed[1]) &&
       B.measuredSfAreas(B.migrateModel(cur.polish_estimate).takeoff) > 0;
     if (sfTyped) patch.sf_areas = typed;
+    // A MARK IS GOOD FOR ONE SAVE. Whatever the box held was just read (above), and from here the
+    // draft holds it (as polish_sf when nothing is measured yet, as a takeoff row when something is),
+    // so the box is PAINTED again, not typed. A mark that outlived this save was the stale-number
+    // trap: typed while the takeoff was empty, the mark stayed on; the takeoff was then measured
+    // elsewhere, and the next unrelated save from this (not re-booted) page wrote the old number
+    // over the first row.
+    ["polish_sf", "polish_2_sf"].forEach(function (name) {
+      var box = boxOf(name);
+      if (box) box.sfTyped = false;
+    });
     var model = B.patchModel(cur.polish_estimate, patch);
 
     // ONE SOURCE OF TRUTH FOR SF. Once the takeoff holds a measurement, polish_sf is the takeoff
@@ -529,10 +539,6 @@
       var priced = B.takeoffSf(model.takeoff);
       values.polish_sf = priced > 0 ? priced : B.measuredSf(model.takeoff);
       values.polish_2_sf = "";
-      ["polish_sf", "polish_2_sf"].forEach(function (name) {
-        var box = boxOf(name);
-        if (box) box.sfTyped = false;
-      });
       M.takeoff = model.takeoff;     // paintSfBoxes reads M; keep it the takeoff that was just saved
     }
     // A quantity the job type does not ask for is drawn (hidden, never removed) and so is swept into `values`

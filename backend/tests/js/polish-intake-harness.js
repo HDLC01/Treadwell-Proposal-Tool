@@ -1978,6 +1978,36 @@ out.engineMoves = (function () {
     typeInto(staleTypedB, "polish_sf", 999);
     settle(staleTypedB);
     const staleTyped = { sf: sfRows(savedModel(staleTypedB)), polishSf: staleTypedB.store.blob.polish_sf };
+    // A TYPED MARK IS GOOD FOR ONE SAVE. Typed while the takeoff is EMPTY (the seed save), the mark
+    // used to stay on. The takeoff is then measured elsewhere, and this page (not re-booted: Back,
+    // a second tab) saves for an unrelated edit: the old box figure went over the first row.
+    const emptyB = build({ blob: blob({ polish_estimate: null, polish_sf: "", polish_2_sf: "" }),
+      formValues: typedBox(4000, "") });
+    await emptyB.api.boot();
+    typeInto(emptyB, "polish_sf", 4000);
+    settle(emptyB);
+    const emptySeeded = emptyB.store.blob.polish_sf;
+    emptyB.store.blob.polish_estimate = modelWith([SF_ROW]);
+    emptyB.store.blob.polish_sf = 12500;
+    typeInto(emptyB, "project_name", "Renamed");
+    settle(emptyB);
+    const staleMark = { seeded: emptySeeded, sf: sfRows(savedModel(emptyB)), polishSf: emptyB.store.blob.polish_sf };
+    // ...and a box typed AGAIN after that save is a fresh figure and does reach the row
+    typeInto(emptyB, "polish_sf", 7000);
+    settle(emptyB);
+    staleMark.retyped = { sf: sfRows(savedModel(emptyB)), polishSf: emptyB.store.blob.polish_sf };
+    // Only same_floor rows hold the floor (the carrier was deleted): System 2 ADDS an area, and the
+    // floor grows by it rather than shrinking to it.
+    const SAME_A = { assembly_id: "asm-sp", assembly_name: "Floor", measurement: 8000, unit: "SF", same_floor: true };
+    const onlySameB = build({ blob: withSf(8000, [SAME_A, Object.assign({}, SAME_A)]), formValues: typedBox(8000, 3000) });
+    await onlySameB.api.boot();
+    typeInto(onlySameB, "polish_2_sf", 3000);
+    settle(onlySameB);
+    const onlySame = { rows: savedModel(onlySameB).takeoff.map((r) => [r.unit, r.measurement, !!r.same_floor]),
+      polishSf: onlySameB.store.blob.polish_sf };
+    const onlySameReload = build({ blob: onlySameB.store.blob, formValues: FORM_VALUES });
+    await onlySameReload.api.boot();
+    onlySame.reloadBoxes = boxes(onlySameReload);
     // the REAL readForm hands over 999 / 5 for the two boxes; untyped, neither reaches the draft
     const realB = build({ blob: withSf(12500, [SF_ROW, LF_ROW]),
       readForm: () => Object.assign({}, FORM_VALUES, viaReal) });
@@ -2016,7 +2046,7 @@ out.engineMoves = (function () {
       two: { boot: twoBoot, after2: twoAfter2, after1: twoAfter1 },
       three: { boot: threeBoot, after: threeAfter, fourNote },
       same: { rows: sameRows, polishSf: samePolishSf, rows2: same2Rows, polishSf2: same2PolishSf },
-      untouched, stale, staleTyped,
+      untouched, stale, staleTyped, staleMark, onlySame,
       real: { leaks: { sf1: viaReal.polish_sf, sf2: viaReal.polish_2_sf, unnamedRead: Object.keys(viaReal).indexOf("") >= 0 },
         saveKeys: { hasSf1: "polish_sf" in realSave, hasSf2: "polish_2_sf" in realSave },
         flushKeys: { hasSf1: "polish_sf" in flushSave, hasSf2: "polish_2_sf" in flushSave },

@@ -1031,7 +1031,14 @@
    *  touched. The same_floor rows that carried the SAME total as the whole floor move with it (the
    *  rows a defaults load made as one floor keep pricing one floor), on or off: the on/off slider
    *  must not decide which number the bid is built on. Changes `model.takeoff` in place; callers
-   *  hand it a copy (patchModel does). */
+   *  hand it a copy (patchModel does).
+   *
+   *  OPEN QUESTION FOR HANZ (2026-10-12): on a takeoff a defaults load made, the carrier row already
+   *  holds the SUM of both intake boxes (seedDefaultTakeoff), so System 1 reads the whole floor and
+   *  System 2 reads blank. Typing a figure into that blank System 2 ADDS an area on top of the
+   *  carrier (the floor grows by it), which double counts if the estimator was re-entering what
+   *  they had already given. Whether System 2 there means "an additional floor" (today) or "part of
+   *  System 1" is a product decision; "part of" needs a marker on the carrier to stay idempotent. */
   function setAreaSf(model, k, sf) {
     var v = num(sf);
     var rows = model && model.takeoff;
@@ -1050,6 +1057,11 @@
       }
       row.measurement = v;
     } else {
+      // Only same_floor rows hold the floor (the carrier was deleted or has no number), and
+      // measuredSf counts them only while no row of the takeoff's own does. Adding a plain row
+      // would make that row the whole floor and the old figure vanish (8,000 + 3,000 read as
+      // 3,000). So the first of them becomes the counted row, as the carrier is, and the rest follow.
+      if (rows[areas[0]].same_floor) delete rows[areas[0]].same_floor;
       rows.push({ assembly_id: "", assembly_name: "", measurement: v, unit: "SF" });
     }
     var after = measuredSf(rows);
