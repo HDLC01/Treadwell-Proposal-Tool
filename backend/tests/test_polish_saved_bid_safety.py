@@ -147,7 +147,10 @@ def test_the_library_stub_is_live_so_the_pass_above_is_not_vacuous(ran):
 def test_an_old_intake_blob_seeds_from_system_one_exactly_as_before(ran):
     got = ran["fixtures"]["intake_only_no_estimate"]
     assert got["sf"] == 8250
-    assert got["total"] == 1102
+    # 1102 until 2026-10-12: that was the shipped Mock-up half day (3 guys x 0.5 day) priced under the
+    # markups. This blob has no polish_estimate, so it opens as a NEW bid, and a new bid's labor
+    # quantities start empty now (Hanz). The SF is still seeded from System 1; the labor is $0.
+    assert got["total"] == 0
 
 
 @needs_node

@@ -565,11 +565,13 @@
     return out;
   }
 
-  /** A NEW bid's Travel Labor row with its quantities empty: no guys, no hours, and neither on
-   *  auto (guys_auto false is what stops syncAutoGuys writing the man-days into it), and no
-   *  hours_seed (the distance answer no longer fills the hours). The rate and the rest of the row
-   *  stay. A copy; the row handed in is never touched. */
-  function travelRowStartsEmpty(row) {
+  /** A NEW bid's labor row with its quantities empty: no guys, no days or hours, and not on auto
+   *  (guys_auto false is what stops syncAutoGuys writing the man-days into an hours row), and no
+   *  hours_seed (the distance answer no longer fills the hours). The library row's own guys_auto
+   *  stays what the library says (libraryLaborRow is one faithful mapping); it is this step, the
+   *  one that opens a new bid, that decides the man-days fill nothing. The rate and the rest of the
+   *  row stay. A copy; the row handed in is never touched. */
+  function laborRowStartsEmpty(row) {
     var out = copyInto({}, row);
     out.guys = ""; out.days = ""; out.guys_auto = false;
     delete out.hours_seed;
@@ -1246,7 +1248,7 @@
 
   /** The Travel row's `hours_seed` marker, written on the shipped model's Travel row only. Since
    *  2026-10-12 nothing READS it to fill the hours (the distance answer no longer does, see
-   *  driveHoursFor), and a new bid's Travel row has it taken off again (travelRowStartsEmpty). It
+   *  driveHoursFor), and a new bid's Travel row has it taken off again (laborRowStartsEmpty). It
    *  stays on freshModel() because that model's exact shape is pinned by the polish chain golden,
    *  and travelHow still words the hours of a bid saved with the marker as the round trip they were. */
   function withHoursSeed(row) { row.hours_seed = ""; return row; }
@@ -1276,10 +1278,8 @@
     // exactly as it does for Travel.
     var rate = (dflt !== undefined && dflt !== null && !libraryRateIsOwn(r, isCrewId(r.id)))
       ? laborRateOrShipped(dflt) : Number(r.rate);
-    // guys_auto is false whatever the library row says (2026-10-12): a line added to a bid never
-    // takes its Guys from the man-days; the estimator types them.
     var out = { id: r.id, label: r.name, guys: "", days: "", rate: rate,
-                unit: r.unit, guys_auto: false };
+                unit: r.unit, guys_auto: !!r.guys_auto };
     // THE DEFAULTS-TAB SLIDER: a default saved as OFF starts the bid's row switched off (grayed,
     // $0). Written only when explicitly false, so every other row keeps exactly the shape it had.
     if (r.default_on === false) out.enabled = false;
@@ -1292,7 +1292,9 @@
    *  blank-rate fallback behave on a picked line exactly as on a seeded one. Guys and days start
    *  empty. A NEW object. */
   function laborRowFromLibrary(row, dflt) {
-    return stampRateDefaults([libraryLaborRow(row, dflt)])[0];
+    // A line picked for a bid never takes its Guys from the man-days (2026-10-12), whatever the
+    // library row's guys_auto says.
+    return stampRateDefaults([laborRowStartsEmpty(libraryLaborRow(row, dflt))])[0];
   }
 
   /** WHAT THE LABOR POP-UP SAYS A LINE COSTS (Hanz, 2026-10-12): the rate the line will start at,
@@ -2645,8 +2647,8 @@
       // the rest on. Another section than the carrier has no Travel of its own.
       var keep = carrierTab === e.tab ? (s.labor || []).filter(function (r) { return r && r.id === "travel"; }) : [];
       var rows = crewFirst(applyLaborRate(seedLibraryLabor(keep, ctx.laborRows, ctx.laborRate, e.layout), ctx.laborRate));
-      // Travel Labor opens with no guys and no hours, on neither auto nor the distance (see travelRowStartsEmpty).
-      rows = rows.map(function (r) { return r && r.id === "travel" ? travelRowStartsEmpty(r) : r; });
+      // Every row opens with no guys, days or hours, and on neither auto nor the distance (see laborRowStartsEmpty).
+      rows = rows.map(function (r) { return r ? laborRowStartsEmpty(r) : r; });
       s.labor = carrierTab === e.tab ? rows : rows.filter(function (r) { return !r || r.id !== "travel"; });
     });
     if (asked) {
