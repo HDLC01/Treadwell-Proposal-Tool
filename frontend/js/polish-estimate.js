@@ -1378,6 +1378,8 @@
         return q && q !== row && q.unit === "SF" && B.rowOn(q) && !q.same_floor && B.num(q.measurement) > 0;
       })[0];
       if (carrier) { row.measurement = carrier.measurement; row.same_floor = true; }
+      // A carrier of a separate area (seedDefaultTakeoff marks it) is followed as that area's row.
+      if (carrier && carrier.floor_area) row.same_floor_of = carrier.floor_area;
     }
     return i;
   }

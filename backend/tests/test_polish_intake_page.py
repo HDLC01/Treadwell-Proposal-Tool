@@ -1635,6 +1635,26 @@ def test_adding_a_second_area_to_a_floor_held_only_by_same_floor_rows_grows_the_
 
 
 @needs_node
+def test_system_1_and_system_2_are_separate_areas_from_the_start(ran):
+    """Hanz, 2026-10-13 ("Separate areas"). A bid seeded with System 1 5,000 and System 2 3,000 holds two
+    areas (a carrier plus the rows that follow it, each marked with its area). The boxes show 5,000 and
+    3,000; typing System 2 = 3,500 changes only area 2 (no third row, polish_sf 8,500) and a reload reads
+    5,000 / 3,500 back; typing System 1 = 4,000 changes only area 1; and with both areas on 4,000, System 1
+    = 5,000 leaves area 2 on 4,000.
+
+    Mutation: drop the follower's area test in B.setAreaSf's drag loop: the equal case drags area 2 to 5,000."""
+    s = ran["sfAreas"]["separate"]
+    assert (s["boot"]["v1"], s["boot"]["v2"]) == (5000, 3000), s["boot"]
+    assert s["sys2"]["rows"] == [[5000, 1, 0], [5000, 0, 1], [3500, 2, 0], [3500, 0, 2]], s["sys2"]
+    assert s["sys2"]["polishSf"] == 8500
+    assert (s["sys2"]["reloadBoxes"]["v1"], s["sys2"]["reloadBoxes"]["v2"]) == (5000, 3500)
+    assert s["sys1"]["rows"] == [[4000, 1, 0], [4000, 0, 1], [3000, 2, 0], [3000, 0, 2]], s["sys1"]
+    assert s["sys1"]["polishSf"] == 7000
+    assert s["equal"]["rows"] == [[5000, 1, 0], [5000, 0, 1], [4000, 2, 0], [4000, 0, 2]], s["equal"]
+    assert s["equal"]["polishSf"] == 9000
+
+
+@needs_node
 def test_the_only_row_switched_off_is_still_a_measured_editable_floor(ran):
     """The slider is a price choice, not a measurement. With the only SF row OFF, System 1 still shows
     its figure and is editable; typing changes that row (it stays off) and polish_sf is the measured

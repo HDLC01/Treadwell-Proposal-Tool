@@ -3,7 +3,8 @@
   "commit": "28a5d1f",
   "note": "recorded from origin/staging 28a5d1f (git archive of its frontend/), BEFORE Phase 10 changed the model or the page: node tests/js/save-patch-golden-harness.js <that frontend>",
   "harness": "tests/js/save-patch-golden-harness.js",
-  "newBid_recut": "the seven newBid records were re-recorded on 2026-10-12 on origin/staging 4870ae1 (a new bid's Labor step opens with every quantity empty, only the rates filled): the crew's guys and days, Travel Labor's guys and hours and Lodging's nights and Per Diem's days are empty, nothing is on auto, and the bid's totals follow. The 26 `saved` records are untouched and still byte-identical to 28a5d1f."
+  "newBid_recut": "the seven newBid records were re-recorded on 2026-10-12 on origin/staging 4870ae1 (a new bid's Labor step opens with every quantity empty, only the rates filled): the crew's guys and days, Travel Labor's guys and hours and Lodging's nights and Per Diem's days are empty, nothing is on auto, and the bid's totals follow. The 26 `saved` records are untouched and still byte-identical to 28a5d1f.",
+  "newBid_recut2": "the newBid records were re-recorded again on 2026-10-13 on the tree that makes System 1 and System 2 two separate takeoff areas (Hanz, 'Separate areas'): a new bid's defaults are now seeded once per area (System 1's lines measured with System 1, System 2's with System 2, each row marked with its area), so `library`, `twoSystems`, `conditionCells` and `mintedByIntake`, which seed defaults over two SF boxes, hold the second area's rows. `empty`, `noSf` and `savedEmptyTakeoff` and all 26 `saved` records are byte-identical to before."
  },
  "golden": {
   "saved": {
@@ -8253,6 +8254,7 @@
        "measurement": 10000,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
        "enabled": false
       },
       {
@@ -8268,6 +8270,7 @@
        "measurement": 10000,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
        "enabled": false
       },
       {
@@ -8276,6 +8279,7 @@
        "measurement": 10000,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
        "enabled": false
       },
       {
@@ -8284,6 +8288,7 @@
        "measurement": 10000,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
        "enabled": false
       },
       {
@@ -8292,6 +8297,7 @@
        "measurement": 10000,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
        "enabled": false
       },
       {
@@ -8300,13 +8306,15 @@
        "measurement": 10000,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
        "enabled": false
       },
       {
        "assembly_id": "",
        "assembly_name": "",
        "measurement": 10000,
-       "unit": "SF"
+       "unit": "SF",
+       "floor_area": 1
       }
      ],
      "labor": [
@@ -8458,6 +8466,7 @@
         "measurement": 10000,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
         "enabled": false
        },
        {
@@ -8473,6 +8482,7 @@
         "measurement": 10000,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
         "enabled": false
        },
        {
@@ -8481,6 +8491,7 @@
         "measurement": 10000,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
         "enabled": false
        },
        {
@@ -8489,6 +8500,7 @@
         "measurement": 10000,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
         "enabled": false
        },
        {
@@ -8497,6 +8509,7 @@
         "measurement": 10000,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
         "enabled": false
        },
        {
@@ -8505,13 +8518,15 @@
         "measurement": 10000,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
         "enabled": false
        },
        {
         "assembly_id": "",
         "assembly_name": "",
         "measurement": 10000,
-        "unit": "SF"
+        "unit": "SF",
+        "floor_area": 1
        }
       ],
       "labor": [
@@ -8980,9 +8995,10 @@
       {
        "assembly_id": "a1",
        "assembly_name": "Polish 800 Grit",
-       "measurement": 9250,
+       "measurement": 8250,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
        "enabled": false
       },
       {
@@ -8995,54 +9011,115 @@
       {
        "assembly_id": "a5",
        "assembly_name": "Densifier Only",
-       "measurement": 9250,
+       "measurement": 8250,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
        "enabled": false
       },
       {
        "assembly_id": "a3",
        "assembly_name": "Grind & Seal",
-       "measurement": 9250,
+       "measurement": 8250,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
        "enabled": false
       },
       {
        "assembly_id": "a4",
        "assembly_name": "GRIND & SEAL",
-       "measurement": 9250,
+       "measurement": 8250,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
        "enabled": false
       },
       {
        "assembly_id": "a6",
        "assembly_name": "Grout Compound",
-       "measurement": 9250,
+       "measurement": 8250,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
        "enabled": false
       },
       {
        "assembly_id": "a9",
        "assembly_name": "Orphaned System",
-       "measurement": 9250,
+       "measurement": 8250,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
+       "enabled": false
+      },
+      {
+       "assembly_id": "a1",
+       "assembly_name": "Polish 800 Grit",
+       "measurement": 1000,
+       "unit": "SF",
+       "same_floor": true,
+       "same_floor_of": 2,
+       "enabled": false
+      },
+      {
+       "assembly_id": "a5",
+       "assembly_name": "Densifier Only",
+       "measurement": 1000,
+       "unit": "SF",
+       "same_floor": true,
+       "same_floor_of": 2,
+       "enabled": false
+      },
+      {
+       "assembly_id": "a3",
+       "assembly_name": "Grind & Seal",
+       "measurement": 1000,
+       "unit": "SF",
+       "same_floor": true,
+       "same_floor_of": 2,
+       "enabled": false
+      },
+      {
+       "assembly_id": "a4",
+       "assembly_name": "GRIND & SEAL",
+       "measurement": 1000,
+       "unit": "SF",
+       "same_floor": true,
+       "same_floor_of": 2,
+       "enabled": false
+      },
+      {
+       "assembly_id": "a6",
+       "assembly_name": "Grout Compound",
+       "measurement": 1000,
+       "unit": "SF",
+       "same_floor": true,
+       "same_floor_of": 2,
+       "enabled": false
+      },
+      {
+       "assembly_id": "a9",
+       "assembly_name": "Orphaned System",
+       "measurement": 1000,
+       "unit": "SF",
+       "same_floor": true,
+       "same_floor_of": 2,
        "enabled": false
       },
       {
        "assembly_id": "",
        "assembly_name": "",
        "measurement": 8250,
-       "unit": "SF"
+       "unit": "SF",
+       "floor_area": 1
       },
       {
        "assembly_id": "",
        "assembly_name": "",
        "measurement": 1000,
-       "unit": "SF"
+       "unit": "SF",
+       "floor_area": 2
       }
      ],
      "labor": [
@@ -9192,9 +9269,10 @@
        {
         "assembly_id": "a1",
         "assembly_name": "Polish 800 Grit",
-        "measurement": 9250,
+        "measurement": 8250,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
         "enabled": false
        },
        {
@@ -9207,54 +9285,115 @@
        {
         "assembly_id": "a5",
         "assembly_name": "Densifier Only",
-        "measurement": 9250,
+        "measurement": 8250,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
         "enabled": false
        },
        {
         "assembly_id": "a3",
         "assembly_name": "Grind & Seal",
-        "measurement": 9250,
+        "measurement": 8250,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
         "enabled": false
        },
        {
         "assembly_id": "a4",
         "assembly_name": "GRIND & SEAL",
-        "measurement": 9250,
+        "measurement": 8250,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
         "enabled": false
        },
        {
         "assembly_id": "a6",
         "assembly_name": "Grout Compound",
-        "measurement": 9250,
+        "measurement": 8250,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
         "enabled": false
        },
        {
         "assembly_id": "a9",
         "assembly_name": "Orphaned System",
-        "measurement": 9250,
+        "measurement": 8250,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
+        "enabled": false
+       },
+       {
+        "assembly_id": "a1",
+        "assembly_name": "Polish 800 Grit",
+        "measurement": 1000,
+        "unit": "SF",
+        "same_floor": true,
+        "same_floor_of": 2,
+        "enabled": false
+       },
+       {
+        "assembly_id": "a5",
+        "assembly_name": "Densifier Only",
+        "measurement": 1000,
+        "unit": "SF",
+        "same_floor": true,
+        "same_floor_of": 2,
+        "enabled": false
+       },
+       {
+        "assembly_id": "a3",
+        "assembly_name": "Grind & Seal",
+        "measurement": 1000,
+        "unit": "SF",
+        "same_floor": true,
+        "same_floor_of": 2,
+        "enabled": false
+       },
+       {
+        "assembly_id": "a4",
+        "assembly_name": "GRIND & SEAL",
+        "measurement": 1000,
+        "unit": "SF",
+        "same_floor": true,
+        "same_floor_of": 2,
+        "enabled": false
+       },
+       {
+        "assembly_id": "a6",
+        "assembly_name": "Grout Compound",
+        "measurement": 1000,
+        "unit": "SF",
+        "same_floor": true,
+        "same_floor_of": 2,
+        "enabled": false
+       },
+       {
+        "assembly_id": "a9",
+        "assembly_name": "Orphaned System",
+        "measurement": 1000,
+        "unit": "SF",
+        "same_floor": true,
+        "same_floor_of": 2,
         "enabled": false
        },
        {
         "assembly_id": "",
         "assembly_name": "",
         "measurement": 8250,
-        "unit": "SF"
+        "unit": "SF",
+        "floor_area": 1
        },
        {
         "assembly_id": "",
         "assembly_name": "",
         "measurement": 1000,
-        "unit": "SF"
+        "unit": "SF",
+        "floor_area": 2
        }
       ],
       "labor": [
@@ -9427,6 +9566,7 @@
        "measurement": 10000,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
        "enabled": false
       },
       {
@@ -9442,6 +9582,7 @@
        "measurement": 10000,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
        "enabled": false
       },
       {
@@ -9450,6 +9591,7 @@
        "measurement": 10000,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
        "enabled": false
       },
       {
@@ -9458,6 +9600,7 @@
        "measurement": 10000,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
        "enabled": false
       },
       {
@@ -9466,6 +9609,7 @@
        "measurement": 10000,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
        "enabled": false
       },
       {
@@ -9474,13 +9618,15 @@
        "measurement": 10000,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
        "enabled": false
       },
       {
        "assembly_id": "",
        "assembly_name": "",
        "measurement": 10000,
-       "unit": "SF"
+       "unit": "SF",
+       "floor_area": 1
       }
      ],
      "labor": [
@@ -9649,6 +9795,7 @@
         "measurement": 10000,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
         "enabled": false
        },
        {
@@ -9664,6 +9811,7 @@
         "measurement": 10000,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
         "enabled": false
        },
        {
@@ -9672,6 +9820,7 @@
         "measurement": 10000,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
         "enabled": false
        },
        {
@@ -9680,6 +9829,7 @@
         "measurement": 10000,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
         "enabled": false
        },
        {
@@ -9688,6 +9838,7 @@
         "measurement": 10000,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
         "enabled": false
        },
        {
@@ -9696,13 +9847,15 @@
         "measurement": 10000,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
         "enabled": false
        },
        {
         "assembly_id": "",
         "assembly_name": "",
         "measurement": 10000,
-        "unit": "SF"
+        "unit": "SF",
+        "floor_area": 1
        }
       ],
       "labor": [
@@ -10504,6 +10657,7 @@
        "measurement": 9000,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
        "enabled": false
       },
       {
@@ -10519,6 +10673,7 @@
        "measurement": 9000,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
        "enabled": false
       },
       {
@@ -10527,6 +10682,7 @@
        "measurement": 9000,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
        "enabled": false
       },
       {
@@ -10535,6 +10691,7 @@
        "measurement": 9000,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
        "enabled": false
       },
       {
@@ -10543,6 +10700,7 @@
        "measurement": 9000,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
        "enabled": false
       },
       {
@@ -10551,13 +10709,15 @@
        "measurement": 9000,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
        "enabled": false
       },
       {
        "assembly_id": "",
        "assembly_name": "",
        "measurement": 9000,
-       "unit": "SF"
+       "unit": "SF",
+       "floor_area": 1
       }
      ],
      "labor": [
@@ -10710,6 +10870,7 @@
         "measurement": 9000,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
         "enabled": false
        },
        {
@@ -10725,6 +10886,7 @@
         "measurement": 9000,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
         "enabled": false
        },
        {
@@ -10733,6 +10895,7 @@
         "measurement": 9000,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
         "enabled": false
        },
        {
@@ -10741,6 +10904,7 @@
         "measurement": 9000,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
         "enabled": false
        },
        {
@@ -10749,6 +10913,7 @@
         "measurement": 9000,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
         "enabled": false
        },
        {
@@ -10757,13 +10922,15 @@
         "measurement": 9000,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
         "enabled": false
        },
        {
         "assembly_id": "",
         "assembly_name": "",
         "measurement": 9000,
-        "unit": "SF"
+        "unit": "SF",
+        "floor_area": 1
        }
       ],
       "labor": [

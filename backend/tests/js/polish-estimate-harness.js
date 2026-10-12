@@ -2002,7 +2002,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
     const lm = loaded.api.model();
     out.defaultsLoad = { rows: shape(lm), area: B.takeoffSf(lm.takeoff),
       i1Price: loaded.api.rowPrice(lm.takeoff[2]).total,
-      i1Expected: L.priceLine({ item_id: "i1" }, dItems, 10000).cost,
+      i1Expected: L.priceLine({ item_id: "i1" }, dItems, 8000).cost,
       i1CoverageBox: lm.takeoff[2].coverage,
       offPrice: B.takeoffSf([lm.takeoff[3]]) };
     loaded.clock.fire();

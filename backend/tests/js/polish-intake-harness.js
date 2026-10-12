@@ -2042,7 +2042,38 @@ out.engineMoves = (function () {
     const offAfter = { sf: sfRows(savedModel(offB)), enabled: savedModel(offB).takeoff[0].enabled,
       polishSf: offB.store.blob.polish_sf };
 
-    out.sfAreas = { freshPaint, hydratedWith, freshSaved, reloadWritten, seeded,
+    // SEPARATE AREAS (Hanz, 2026-10-13): a new bid seeded with System 1 5,000 and System 2 3,000 holds two
+    // areas, each a carrier plus the rows that follow it. The boxes show 5,000 and 3,000, and typing into
+    // one changes that area (its follower too) and nothing of the other, even when both hold one number.
+    const area = (n, m, over) => Object.assign({ assembly_id: "asm-sp", assembly_name: "Floor " + n, measurement: m,
+      unit: "SF", floor_area: n }, over || {});
+    const follow = (n, m) => ({ kind: "item", item_id: "i-1", item_name: "Densifier " + n, coverage: "", measurement: m,
+      unit: "SF", same_floor: true, same_floor_of: n });
+    const areaRows = (a, b) => [area(1, a), follow(1, a), area(2, b), follow(2, b)];
+    const rowsOf = (bb) => savedModel(bb).takeoff.map((r) => [r.measurement, r.floor_area || 0, r.same_floor_of || 0]);
+    const sepBoot = build({ blob: withSf(8000, areaRows(5000, 3000)), formValues: typedBox(5000, 3000) });
+    await sepBoot.api.boot();
+    const separate = { boot: boxes(sepBoot) };
+    const sep2 = build({ blob: withSf(8000, areaRows(5000, 3000)), formValues: typedBox(5000, 3500) });
+    await sep2.api.boot();
+    typeInto(sep2, "polish_2_sf", 3500);
+    settle(sep2);
+    separate.sys2 = { rows: rowsOf(sep2), polishSf: sep2.store.blob.polish_sf, total: priceOf(savedModel(sep2)) };
+    const sep2Reload = build({ blob: sep2.store.blob, formValues: FORM_VALUES });
+    await sep2Reload.api.boot();
+    separate.sys2.reloadBoxes = boxes(sep2Reload);
+    const sep1 = build({ blob: withSf(8000, areaRows(5000, 3000)), formValues: typedBox(4000, 3000) });
+    await sep1.api.boot();
+    typeInto(sep1, "polish_sf", 4000);
+    settle(sep1);
+    separate.sys1 = { rows: rowsOf(sep1), polishSf: sep1.store.blob.polish_sf };
+    const sepEq = build({ blob: withSf(8000, areaRows(4000, 4000)), formValues: typedBox(5000, 4000) });
+    await sepEq.api.boot();
+    typeInto(sepEq, "polish_sf", 5000);
+    settle(sepEq);
+    separate.equal = { rows: rowsOf(sepEq), polishSf: sepEq.store.blob.polish_sf };
+
+    out.sfAreas = { freshPaint, hydratedWith, freshSaved, reloadWritten, seeded, separate,
       lfOnly: boxes(lfOnly),
       one: { boot: oneBoot, armed, after: oneAfter, second: oneSecond }, added, cleared,
       two: { boot: twoBoot, after2: twoAfter2, after1: twoAfter1 },

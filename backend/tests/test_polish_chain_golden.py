@@ -311,11 +311,11 @@ MUTATIONS = {
         "for (var k = 1; k < rows.length; k++) {",
         ["seed/setMeasurement/sameFloorAbove", ".after[0][0].measurement: golden 12000, now 10000"]),
     "a plain row holding the same number is dragged along": (
-        "o && o.same_floor && num(o.measurement) === num(old)",
+        "o && o.same_floor && followerTag(o) === tag && num(o.measurement) === num(old)",
         "o && (o.same_floor || num(o.measurement) === num(old))",
         ["seed/setMeasurement/plainRowsSameNumber", ".after[0][1].measurement: golden 10000, now 12000"]),
     "a same-floor row holding another number is dragged anyway": (
-        "o.same_floor && num(o.measurement) === num(old)",
+        "o.same_floor && followerTag(o) === tag && num(o.measurement) === num(old)",
         "o.same_floor",
         ["seed/setMeasurement/sameFloorHoldsOther", ".after[0][2].measurement: golden 7500, now 12000"]),
     "rows are compared as text, not as numbers": (
