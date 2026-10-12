@@ -105,6 +105,22 @@
     try { return B.travelCarrier(ROOT); } catch (err) { return B.ROOT_TAB; }
   }
 
+  /** Is the section on show the one that carries the job's travel? ONE section does (B.travelCarrier), so a combo
+   *  bid charges Hotel and Per Diem once and not once for each of its two sections. A bid with one section is
+   *  always its own carrier. */
+  function carriesTravel() {
+    if (!ROOT || !ROOT.tabs) return true;
+    try { return B.travelCarrier(ROOT) === activeTab; } catch (err) { return true; }
+  }
+
+  /** The words on the Labor and Review steps of a section that does not carry the job's travel. */
+  function travelNote() {
+    var tab = B.ROOT_TAB;
+    try { tab = B.travelCarrier(ROOT); } catch (err) { tab = B.ROOT_TAB; }
+    return "Travel, Hotel and Per Diem are charged once for the whole job, on the " + tab +
+      " section. Open it to change them.";
+  }
+
   function adopt(blob) {
     state = blob || {};
     ROOT = B.migrateModel(state.polish_estimate);
@@ -1906,8 +1922,11 @@
     if (!M.travel) M.travel = B.normalizeTravel(null);
     var html = "";
     var travelRows = "";
+    // The job's travel is charged ONCE, on the section that carries it (B.travelCarrier). Any other section of a
+    // combo bid has no Travel block to draw: its crew is priced as labor and nothing else (see travelNote).
+    var carries = carriesTravel();
     M.labor.forEach(function (r, i) {
-      if ((r || {}).id === "travel") travelRows += laborCard(r, i);
+      if ((r || {}).id === "travel" && carries) travelRows += laborCard(r, i);
       else html += laborCard(r, i);
     });
 
@@ -1918,16 +1937,21 @@
     html += '<p class="cap">Labor total <b data-labor-total>' +
       esc(moneyAuto(B.laborTotal(M.labor, M.conditions))) + '</b>.</p>';
 
-    html += '<div class="trvsep" role="separator"><span>Travel</span></div>' +
-      '<p class="cap">Travel is expected when the job is 70 miles or more from the office. Under ' +
-      '70 miles all three lines below stay gray until you switch one on.</p>';
-    html += distanceBlock();
-    // HOW IT IS WORKED OUT: the local-or-not call and the sums, in words. Text only (one element,
-    // pre-line), so the live repaint can replace it without touching anything the estimator is in.
-    html += '<p class="cap trvhow" data-trv-how>' + esc(B.travelHow(M).text) + '</p>';
-    html += travelRows + travelCard("lodging") + travelCard("per_diem");
-    html += '<p class="cap">Lodging and Per Diem total <b data-travel-total>' +
-      esc(moneyAuto(B.travelCosts(M.travel, M.labor).total)) + '</b>, added before the markups.</p>';
+    if (!carries) {
+      html += '<div class="trvsep" role="separator"><span>Travel</span></div>' +
+        '<p class="cap" data-travel-note>' + esc(travelNote()) + '</p>';
+    } else {
+      html += '<div class="trvsep" role="separator"><span>Travel</span></div>' +
+        '<p class="cap">Travel is expected when the job is 70 miles or more from the office. Under ' +
+        '70 miles all three lines below stay gray until you switch one on.</p>';
+      html += distanceBlock();
+      // HOW IT IS WORKED OUT: the local-or-not call and the sums, in words. Text only (one element,
+      // pre-line), so the live repaint can replace it without touching anything the estimator is in.
+      html += '<p class="cap trvhow" data-trv-how>' + esc(B.travelHow(M).text) + '</p>';
+      html += travelRows + travelCard("lodging") + travelCard("per_diem");
+      html += '<p class="cap">Lodging and Per Diem total <b data-travel-total>' +
+        esc(moneyAuto(B.travelCosts(M.travel, M.labor).total)) + '</b>, added before the markups.</p>';
+    }
 
     var pw = !!(M.conditions || {}).prevailing_wage;
     html += '<p class="cap">Prevailing wage is <b>' + (pw ? "on" : "off") + '</b>' +
@@ -1973,6 +1997,44 @@
     return '<span data-mk="' + key + '">' + esc(moneyAuto(b[key])) + '</span>';
   }
 
+  /** THE WHOLE BID, on the Review step of a bid made of more than one section (a combo job: Epoxy and Polish).
+  *  One row for each section that is part of the bid, at its OWN price (each has had its own gross profit taken),
+  *  and the combined base bid under them: the same figure the save writes as the lump sum. An option is listed and
+  *  is not in the combined figure. "" for a bid with one section, so a Polish or an Epoxy bid reads as it always did. */
+  function jobCard() {
+    var live = sectionList().filter(function (e) { return e.kind !== "off"; });
+    if (live.length < 2) return "";
+    var bids = allBids();
+    var rows = live.map(function (e) {
+      var sb = bids[e.tab];
+      return [e.tab + (e.kind === "option" ? " (option)" : ""), "",
+              '<span data-job-sec="' + esc(e.tab) + '">' + esc(sectionMoney(sb)) + '</span>'];
+    });
+    rows.push(["Combined base bid", "", '<span data-job-total>' + esc(jobMoney()) + '</span>', "tot"]);
+    return '<div data-rev="markup" class="rev" data-job-card><div class="rev-h">Whole bid</div>' + revTable(rows) + '</div>';
+  }
+
+  function sectionMoney(sb) {
+    return sb && sb.priceable !== false && sb.total ? moneyAuto(sb.total) : "no price";
+  }
+
+  /** The combined base bid as the save composes it, or "no price" when a section cannot be priced. */
+  function jobMoney() {
+    var c = null;
+    try { c = B.composePricingSnapshot(ROOT, priceCtx()).computed_bid; } catch (err) { c = null; }
+    return c && c.lump_sum ? moneyAuto(c.lump_sum) : "no price";
+  }
+
+  /** Keep the whole-bid card's figures in step with a keystroke (repaintNumbers). */
+  function repaintJob() {
+    var secs = document.querySelectorAll("[data-job-sec]");
+    var tot = document.querySelector("[data-job-total]");
+    if (!secs.length && !tot) return;
+    var bids = allBids();
+    secs.forEach(function (el) { el.textContent = sectionMoney(bids[el.getAttribute("data-job-sec")]); });
+    if (tot) tot.textContent = jobMoney();
+  }
+
   function reviewPanel() {
     // The bid of the section on show: the root's chain, or the engine's answer for another section.
     var b = activeBid();
@@ -1982,6 +2044,7 @@
       html += '<div class="blockers"><b>Not finished yet.</b><ul>' +
         blk.map(function (x) { return "<li>" + esc(x) + "</li>"; }).join("") + '</ul></div>';
     }
+    html += jobCard();
 
     // Takeoff and material
     var tkRows = [];
@@ -2037,14 +2100,20 @@
     // alone -- every other screen still calls the line "Lodging". The lodging line shows "Hotel"
     // here unless the estimator typed a label of their own over the default.
     var trvRows = [];
+    // A section that does not carry the job's travel (the second section of a combo bid) prices none: the job's
+    // Hotel and Per Diem are charged once, on the carrier, and this card says where instead of listing lines
+    // that belong to another section's crew.
+    var carries = carriesTravel();
     B.TRAVEL_LINE_KEYS.forEach(function (k) {
       var tl = (M.travel || {})[k];
-      if (!tl || !tl.enabled) return;
+      if (!carries || !tl || !tl.enabled) return;
       var name = (k === "lodging" && (!tl.label || tl.label === "Lodging")) ? "Hotel" : tl.label;
       trvRows.push([name, B.num(B.travelQty(tl, M.labor)) + " × " + B.money2(tl.rate),
                     esc(moneyAuto(B.travelLineCost(tl, M.labor)))]);
     });
-    if (!trvRows.length) {
+    if (!carries) {
+      trvRows.push([travelNote(), "", ""]);
+    } else if (!trvRows.length) {
       trvRows.push(["Not included. Switch Lodging or Per Diem on in the Labor step.", "", ""]);
     }
     trvRows.push(["Hotel and Per Diem Total", "", mkAmt(b, "travel"), "tot"]);
@@ -2411,6 +2480,7 @@
     document.querySelectorAll("[data-mkpct]").forEach(function (el) {
       el.textContent = B.pct(b[el.getAttribute("data-mkpct")]);
     });
+    repaintJob();
   }
 
   // ── events ──────────────────────────────────────────────────────────────────
@@ -3153,18 +3223,27 @@
     // landed. Null, not an empty array, for "not asked": an empty array is a real answer (the
     // table exists and holds nothing) and the two must not be confused.
     var savedEstimate = state.polish_estimate;
-    var laborDefaults = B.laborUnstated(savedEstimate) ? loadLaborDefaults() : null;
+    var newBid = B.laborUnstated(savedEstimate);
+    // A SAVED BID WHOSE JOB TYPE MOVED (Polish to Combo) is given a new section, and a new section is crewed
+    // from the library like any other, so the library's labor lines and the calculator's modes are asked for
+    // it too. Nothing else the defaults carry (travel rates, the fees default, the distance) is asked: those
+    // belong to a new bid, and the root keeps the rows it was saved with.
+    var jobType = state.work_type;
+    var jobSections = T.isJobType(jobType) && T.jobType(jobType).ready === true &&
+      (jobType !== "polish" || B.sectionsLeaving(ROOT, jobType).length > 0);
+    var addsSection = jobSections && B.sectionsToAdd(ROOT, jobType).length > 0;
+    var laborDefaults = (newBid || addsSection) ? loadLaborDefaults() : null;
     // The company labor rate is read for EVERY bid, a saved one included: it is only APPLIED to a
     // new bid (the laborDefaults gate below), but "Default $X" under a rate needs it on any.
     var laborRate = loadLaborRate();
     // Lodging and Per Diem rates ride the same gate as the labor defaults: a NEW bid copies them
     // from Items & Assemblies -> Labor once; a saved bid keeps the rates it was saved with.
-    var travelRates = laborDefaults ? loadTravelRates() : null;
+    var travelRates = newBid ? loadTravelRates() : null;
     // The Labor Calculator's per-line modes: same gate again -- a NEW bid fills its default labor
     // from them, a saved bid is never recomputed.
     var laborCalc = laborDefaults ? loadLaborCalc() : null;
     // The Fees + Textura default: same gate, a NEW bid's D77 starts at it.
-    var feesDefault = laborDefaults ? loadFeesDefault() : null;
+    var feesDefault = newBid ? loadFeesDefault() : null;
 
     // THE CONDITION DEFAULTS, ON THE SAME TERMS AND WITH A STRICTER GATE. B.conditionsUnstated is
     // true only when NOTHING has ever been saved for this estimate, because Hanz's rule for this
@@ -3241,9 +3320,12 @@
       // the seeding below, so the new section is given the library's defaults like any other new one. The Markups
       // rules filed today are kept on it as text (B.activateSection), and no later edit to them moves this bid.
       // A job type that is Polish, or that Estimating Tool v2 cannot price yet, adds nothing.
-      var jobType = state.work_type;
-      var jobSections = T.isJobType(jobType) && jobType !== "polish" && T.jobType(jobType).ready === true;
+      // A saved bid whose job type moved is brought to the new one here too (Epoxy to Combo turns the Polish root
+      // back on, Combo to Polish marks the Epoxy section off, its rows kept), and is saved once because what the
+      // draft holds is behind what the page shows. A Polish bid with no other sections adds and changes nothing.
+      var sectionsBefore = JSON.stringify(ROOT);
       if (jobSections) ROOT = B.sectionsForJob(ROOT, jobType, { rules: await loadMarkupRules() });
+      var restructured = !newBid && JSON.stringify(ROOT) !== sectionsBefore;
       ROOT = B.seedNewSections(ROOT, {
       saved: savedEstimate,
       laborRows: libraryLaborRows,
@@ -3265,6 +3347,7 @@
     // The model was replaced above (the seeding hands back a new one), so the panels' view of it is made again.
     show(openingTab());
     followSf = B.takeoffSf(M.takeoff);
+    if (restructured) saveSoon();
     // THE TAKEOFF TOTAL IS polish_sf, SO MAKE THE DRAFT SAY SO NOW. Two ways the draft can be
     // behind the model this page just opened with: (1) seeding filled rows in memory only, so
     // polish_sf held System 1 alone and computed_bid held nothing until the first edit; (2) the
@@ -3297,7 +3380,7 @@
     // DISTANCE, AFTER THE PAINT AND NEVER AWAITED: a slow or dead map service costs the page
     // nothing. Only a NEW bid asks by itself (the same gate as the defaults above); a saved bid
     // keeps what it was saved with and offers the button. See lookupDistance.
-    if (laborDefaults && !M.distance) lookupDistance(false);
+    if (newBid && laborDefaults && !M.distance) lookupDistance(false);
   }
 
   init();

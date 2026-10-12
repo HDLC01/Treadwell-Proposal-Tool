@@ -70,12 +70,12 @@ def live_rows(ran):
 
 # ══ 1. what the table says ═══════════════════════════════════════════════════════════════════════════
 def test_the_four_job_types_and_the_five_tabs_are_the_ones_the_tool_has(ran):
-    """The live intake's four radios, in its order, and markup.TABS' five, in its order. Polish is ready, and
-    since Phase 12 so is epoxy: Estimating Tool v2 prices nothing else yet."""
+    """The live intake's four radios, in its order, and markup.TABS' five, in its order. Polish is ready, since
+    Phase 12 so is epoxy, and since Phase 13 so is combo: Estimating Tool v2 prices gyp nowhere yet."""
     data = ran["data"]
     assert ran["keys"] == {"jobTypes": JOB_TYPES, "tabs": TABS}
     ready = {j["key"]: j["ready"] for j in data["JOB_TYPES"]}
-    assert ready == {"epoxy": True, "polish": True, "combo": False, "gyp": False}
+    assert ready == {"epoxy": True, "polish": True, "combo": True, "gyp": False}
     assert {j["key"]: j["tabs"] for j in data["JOB_TYPES"]} == {
         "epoxy": ["epoxy"], "polish": ["polish"], "combo": ["epoxy", "polish"], "gyp": ["gyp"]}
 
@@ -673,8 +673,8 @@ BREAKS = {
         "    if (!Array.isArray(defaultWorkTypes)) return true;", [MODEL],
         test_appliesto_reads_an_empty_list_as_every_tab_and_a_list_as_those_tabs),
     "a combo job loses its polish tab": (
-        TYPES, '    { key: "combo",  label: "Combo (Epoxy + Polish)", tabs: ["epoxy", "polish"], ready: false,',
-        '    { key: "combo",  label: "Combo (Epoxy + Polish)", tabs: ["epoxy"], ready: false,', [MODEL],
+        TYPES, '    { key: "combo",  label: "Combo (Epoxy + Polish)", tabs: ["epoxy", "polish"], ready: true,',
+        '    { key: "combo",  label: "Combo (Epoxy + Polish)", tabs: ["epoxy"], ready: true,', [MODEL],
         test_the_four_job_types_and_the_five_tabs_are_the_ones_the_tool_has),
     "Taxable goes back to one cell": (
         TYPES, """      default: true, cells: ["Epoxy!B6", "Leveling!B6", 'Gyp (USG 1-8")!B8', "Gyp (FR)!B8"],""",

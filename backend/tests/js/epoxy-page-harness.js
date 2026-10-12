@@ -219,7 +219,7 @@ async function main() {
                silica: X.priceCoveRow(coveRow.assembly_id, 777, { items: items, quartz: false }).total };
 
   // ── 11. a Polish base with an Epoxy base beside it: editing Epoxy never touches the root's rows in what is saved ──
-  const both = P.blob({ work_type: "polish", polish_estimate: Object.assign(clone(P.MODEL), { tabs: { Epoxy: {
+  const both = P.blob({ work_type: "combo", polish_estimate: Object.assign(clone(P.MODEL), { tabs: { Epoxy: {
     layout: "epoxy", kind: "base", profile: "epoxy@1", takeoff: [{ assembly_id: flake.id, assembly_name: flake.name, measurement: 4000, unit: "SF" }],
     labor: [{ id: "epoxy-install", label: "Epoxy install", guys: 3, days: 4, rate: 33, unit: "days" }], contingency: 0, fees: 0, totals: {} } } }) });
   const w = await open(both);

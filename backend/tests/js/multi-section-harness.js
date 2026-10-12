@@ -507,7 +507,7 @@ async function page() {
     Seal: { layout: "seal", kind: "option", profile: "seal@1", takeoff: [], labor: [], contingency: 0, fees: 0, totals: {},
       rates: { version: 1, profile: "seal@1", rates: {}, fees_default: null, notes: ["Soft costs: the rule filed on the Markups page is blank, so the built-in rate is charged."] } },
   } });
-  const b = P.build({ blob: P.blob({ polish_estimate: clone(model), polish_sf: 17500 }) });
+  const b = P.build({ blob: P.blob({ work_type: "combo", polish_estimate: clone(model), polish_sf: 17500 }) });
   await b.api.init();
   const strip = seg(b);
   const rootOnly = b.api.bid().total;
@@ -530,7 +530,7 @@ async function page() {
 
   // a bid whose sections cannot be read still saves what was typed, and keeps the sections as they were
   const broken = clone(model); delete broken.tabs.Epoxy.layout;
-  const c = P.build({ blob: P.blob({ polish_estimate: clone(broken), polish_sf: 17500 }) });
+  const c = P.build({ blob: P.blob({ work_type: "combo", polish_estimate: clone(broken), polish_sf: 17500 }) });
   await c.api.init();
   P.typeInto(c, '[data-tk="0"][data-k="measurement"]', "12000");
   c.clock.fire();

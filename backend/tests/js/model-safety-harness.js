@@ -362,7 +362,7 @@ async function estimateSection() {
    *  "both" (the timer fires, THEN the tab closes). The page never clears its timer handle once the
    *  timer has fired, so its pagehide handler runs after every edit, not only inside the window. */
   async function run(sc, way) {
-    const b = E.build({ blob: E.blob({ polish_estimate: clone(sc.model), polish_sf: sc.sf }),
+    const b = E.build({ blob: E.blob({ work_type: "combo", polish_estimate: clone(sc.model), polish_sf: sc.sf }),
                         items: sc.items });
     await b.api.init();
     const before = b.rec.saves.length;
@@ -418,7 +418,7 @@ async function intakeSection() {
 
   // (b) the cross-page law: an estimate save, then an intake save, over one draft
   const start = Object.assign(clone(E.MODEL), clone(EVERYTHING));
-  const e = E.build({ blob: E.blob({ polish_estimate: clone(start), polish_sf: 17500 }) });
+  const e = E.build({ blob: E.blob({ work_type: "combo", polish_estimate: clone(start), polish_sf: 17500 }) });
   await e.api.init();
   E.typeInto(e, '[data-tk="0"][data-k="measurement"]', "12000");
   e.clock.fire();

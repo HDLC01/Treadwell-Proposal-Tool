@@ -13,7 +13,7 @@
 //
 //   JOB TYPE   what the intake's Work Type radios pick and what a project is called: epoxy, polish, combo,
 //              gyp. A job type is priced on one or more TABS (a combo job is Epoxy plus Polish). Polish and
-//              epoxy are `ready` in Estimating Tool v2 so far; the others wait for their phase.
+//              epoxy and combo are `ready` in Estimating Tool v2 so far; gyp waits for its phase.
 //   TAB        a family of sheets in Kyle's workbook that share one markup layout: polish, seal, epoxy,
 //              leveling, gyp. The Markups page files its rules by tab, and the Defaults tab of Items and
 //              Assemblies scopes a default by tab. Seal and Leveling are `optionOnly`: they are priced as
@@ -127,7 +127,7 @@
     { key: "polish", label: "Polish", tabs: ["polish"], ready: true,
       proposalKey: "polish", audiences: ["Direct", "GC"],
       fields: ["polish_sf", "polish_2_sf"], thickness: false },
-    { key: "combo",  label: "Combo (Epoxy + Polish)", tabs: ["epoxy", "polish"], ready: false,
+    { key: "combo",  label: "Combo (Epoxy + Polish)", tabs: ["epoxy", "polish"], ready: true,
       proposalKey: "combo", audiences: ["Direct", "GC"],
       fields: ["system_1_sf", "polish_sf", "cove_1_lf", "system_2_sf", "polish_2_sf", "cove_2_lf"],
       thickness: true },
