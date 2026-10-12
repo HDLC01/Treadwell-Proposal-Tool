@@ -1503,6 +1503,16 @@
     var r = byId("labor", row.getAttribute("data-labor"));
     if (!r) return;
     var body = {};
+    // THE BLUR `change` THAT FOLLOWS EVERY TYPED BOX IS NOT AN EDIT. A text box reports `input` per
+    // keystroke and then `change` when the focus leaves; after Enter has saved the row, that
+    // `change` used to queue the same value again and bring the Save button back with nothing
+    // new to save (and a false "unsaved" warning on close). A `change` that carries what the
+    // model already holds is that echo; a select or checkbox that only reports `change` still
+    // differs from the model, so it goes on through.
+    if (e.type === "change") {
+      if (f === "guys_auto" ? r.guys_auto === !!e.target.checked
+        : r[f] === (NUMERIC_LABOR_FIELDS.indexOf(f) !== -1 ? L.num(e.target.value) : e.target.value)) return;
+    }
     if (f === "guys_auto") {
       r.guys_auto = !!e.target.checked;
       body.guys_auto = r.guys_auto;
@@ -1518,6 +1528,9 @@
         if (mb) mb.setAttribute("aria-label", (mb.getAttribute("aria-expanded") === "true"
           ? "Hide" : "Show") + " more fields for " + raw);
         if (db) db.setAttribute("aria-label", "Remove " + raw);
+        // The Save button was drawn on the first keystroke, with the one letter typed by then.
+        var sb = row.querySelector("[data-save-new]");
+        if (sb) sb.setAttribute("aria-label", "Save " + raw);
       }
     }
     // THE DEFAULTS TAB DRAWS THE SAME ROW, and a tab switch only flips `hidden` -- it does not
@@ -4942,6 +4955,11 @@
     for (var i = 0; i < list.length; i++) if (list[i].id === id) v = list[i];
     if (!v) return;
     v[f] = e.target.value;
+    // The row's Save button was drawn on the first keystroke; keep its spoken name on the typed one.
+    if (f === "name" && row.querySelector) {
+      var rsb = row.querySelector("[data-save-new]");
+      if (rsb) rsb.setAttribute("aria-label", "Save " + e.target.value);
+    }
     // A rename changes what the Items tab offers, but NOT what an item already says. Existing
     // values stay put and render as off-list choices until someone changes that item. THE ITEMS TAB
     // LEARNS THE NEW NAME WHEN IT IS SAVED (refSaved, from flush), no longer on the keystroke: the

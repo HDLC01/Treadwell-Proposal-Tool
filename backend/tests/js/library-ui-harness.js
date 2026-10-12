@@ -6189,6 +6189,53 @@ async function manualSaveChecks() {
     };
   }
 
+  // ── the blur `change` after an Enter save is an echo, not an edit ──────────────────────────────
+  {
+    const s = mount();
+    s.api.onLaborEdit(laborEv("L1", "notes", "Union only"));
+    await s.api.pressSave("labor", "L1");                                   // Enter in the box
+    s.clock.calls.filter((c) => c.ms === 2200).forEach((c) => c.fn());
+    s.api.onLaborEdit(laborEv("L1", "notes", "Union only", false, "change"));   // then the blur
+    const cell = s.doc.querySelector('#labor-body [data-labor="L1"] .rowsave');
+    const sentOnce = patches(s).length;
+    const noButtonBack = cell.html.indexOf("data-save-new") === -1;
+    const nothingQueued = s.api.pendingKeys().length === 0;
+    // A select that reports ONLY `change` (a different value) is still an edit.
+    s.api.onLaborEdit(laborEv("L1", "unit", "days", false, "change"));
+    out.blurEchoIsNotAnEdit = {
+      noButtonBack, nothingQueued,
+      sentOnce: sentOnce === 1,
+      selectChangeStillCounts: s.api.unsavedOnPane("labor") === 1,
+    };
+    const t = mount();
+    t.api.onLaborEdit(laborEv("L1", "rate", "61"));
+    await t.api.pressSave("labor", "L1");
+    t.api.onLaborEdit(laborEv("L1", "rate", "61", false, "change"));
+    t.api.onLaborEdit(laborEv("L1", "guys_auto", "", true));
+    await t.api.pressSave("labor", "L1");
+    t.api.onLaborEdit(laborEv("L1", "guys_auto", "", true, "change"));
+    out.blurEchoIsNotAnEdit.numberAndCheckboxToo = t.api.unsavedOnPane("labor") === 0 &&
+      t.api.pendingKeys().length === 0;
+  }
+
+  // ── the Save button's spoken name follows the typed name ───────────────────────────────────────
+  {
+    const s = mount();
+    const saveBtn = { a: "Save Z", setAttribute(k, v) { if (k === "aria-label") this.a = v; } };
+    const lrow = { getAttribute: () => "L1", querySelector: (sel) => (sel === "[data-save-new]" ? saveBtn : null) };
+    const ev = (v) => ({ type: "input", target: { value: v, getAttribute: (k) => (k === "data-f" ? "name" : null),
+      closest: (sel) => (sel === "[data-labor]" ? lrow : null) } });
+    s.api.onLaborEdit(ev("Zebra"));
+    const labor = saveBtn.a;
+    const rbtn = { a: "Save D", setAttribute(k, v) { if (k === "aria-label") this.a = v; } };
+    const rrow = { getAttribute: (k) => (k === "data-ref-kind" ? "divisions" : "d1"),
+      querySelector: (sel) => (sel === "[data-save-new]" ? rbtn : null) };
+    s.api.onRefEdit({ type: "input", target: { value: "Decorative", type: "text",
+      getAttribute: (k) => (k === "data-rf" ? "name" : null),
+      closest: (sel) => (sel === "[data-ref-kind]" ? rrow : null) } });
+    out.saveButtonNameFollows = { labor, admin: rbtn.a };
+  }
+
   // ── a deleted line leaves nothing unsaved behind ───────────────────────────────────────────────
   {
     const s = mount();

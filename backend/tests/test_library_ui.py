@@ -4239,6 +4239,30 @@ def test_leaving_a_tab_with_unsaved_rows_warns_once_and_saves_nothing(ran):
 
 
 @needs_node
+def test_the_blur_change_after_an_enter_save_does_not_unsave_the_row(ran):
+    """A text box fires `input` per keystroke, then `change` on blur. After Enter saved the row, that
+    `change` re-queued the same value and brought Save back (and a false unsaved warning). A `change`
+    carrying what the model already holds is dropped; a select that only reports `change` still counts.
+
+    Mutation: remove the `e.type === "change"` guard in onLaborEdit (noButtonBack goes red)."""
+    r = ran["blurEchoIsNotAnEdit"]
+    assert r["noButtonBack"], "the blur change brought the Save button back on a saved row"
+    assert r["nothingQueued"] and r["sentOnce"]
+    assert r["selectChangeStillCounts"], "a select that reports only change no longer queues its edit"
+    assert r["numberAndCheckboxToo"]
+
+
+@needs_node
+def test_a_save_buttons_spoken_name_follows_the_typed_name(ran):
+    """The Save button is drawn on the first keystroke, so its aria-label read 'Save Z' for a row
+    that ends up called Zebra. Labor lines and Administration rows both keep it current.
+
+    Mutation: drop the aria-label update in onLaborEdit or onRefEdit."""
+    r = ran["saveButtonNameFollows"]
+    assert r["labor"] == "Save Zebra" and r["admin"] == "Save Decorative"
+
+
+@needs_node
 def test_deleting_an_unsaved_line_leaves_nothing_to_warn_about(ran):
     """The queued edit and the unsaved mark of a deleted row go with it, or the leave-page warning
     would stay on for a record nobody can see.
