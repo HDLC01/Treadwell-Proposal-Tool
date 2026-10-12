@@ -428,6 +428,54 @@
     return body;
   }
 
+  /** WHAT A SEARCH POP-UP SAYS A MATERIAL COSTS (Hanz, 2026-10-12): the cost the Items tab shows,
+   *  in words, per what it is bought in. `unit_cost` is what ONE PURCHASE costs, so a 5 Gallon pail
+   *  reads "$120.00 per 5 Gallon" and a single-unit material "$1,200.00 per Gallon". No cost in the
+   *  library (blank, or 0, which the Items tab files under "no cost") is "No price set", never $0. */
+  function materialPriceText(item) {
+    var cost = num((item || {}).unit_cost);
+    if (cost === null || cost <= 0) return "No price set";
+    var unit = String((item || {}).unit || "").trim() || "unit";
+    var pack = buyQty(item);
+    return money(cost) + " per " + (pack === 1 ? "" : qtyText(pack) + " ") + unit;
+  }
+
+  /** The area an assembly is priced at when it has to be shown as "per SF" with no job to measure:
+   *  the Items & Assemblies page's own default for its area box, so the pop-up and that page quote
+   *  the same figure. Roundup moves the answer with the area, which is why it is stated once. */
+  var REFERENCE_AREA = 1000;
+
+  /** What a search pop-up says an ASSEMBLY costs: priceAssembly's own per-unit answer at the
+   *  reference area, per the assembly's unit (SF unless it is LF, the library's own reading).
+   *  Not a second formula: the number is `priceAssembly(...).per_unit`. An assembly nothing can
+   *  price (no lines, a line with no cost or coverage) is "No price set", never $0.
+   *
+   *  THREE WAYS A QUOTED FIGURE COULD MISLEAD, each closed here:
+   *   - ONE LINE CANNOT PRICE (deleted material, no coverage, or a line not filled in): the other
+   *     lines' sum is an understated figure that looks clean, so the whole assembly is "No price
+   *     set". `per_unit` alone cannot say this; it only goes null when NO line prices.
+   *   - EVERYTHING PRICES AT $0: free is not a price. A $0 material already reads "No price set"
+   *     (materialPriceText), so the assembly built from it must agree.
+   *   - ROUNDUP MAKES THE FIGURE DEPEND ON THE AREA: a kit bought whole is $1.20/SF at 1,000 SF and
+   *     $0.72/SF at 10,000. When a second area gives a different answer the text names the area it
+   *     was worked at, instead of quoting a number that matches no real bid. */
+  function assemblyPriceText(asm, items) {
+    var priced = priceAssembly(asm, items, REFERENCE_AREA);
+    var per = priced.per_unit;
+    if (per === null || per === undefined || !(per > 0)) return "No price set";
+    for (var i = 0; i < priced.rows.length; i++) {
+      if (!priced.rows[i].priced) return "No price set";
+    }
+    var unit = String((asm || {}).unit || "").trim().toUpperCase() === "LF" ? "LF" : "SF";
+    var text = money(per) + " per " + unit;
+    var other = priceAssembly(asm, items, REFERENCE_AREA * 10).per_unit;
+    // A few percent is ordinary rounding noise every assembly has; only a real swing earns the words.
+    if (other === null || other === undefined || Math.abs(other - per) > per * 0.05) {
+      text += " at " + qtyText(REFERENCE_AREA) + " " + unit;
+    }
+    return text;
+  }
+
   return {
     itemCopyBody: itemCopyBody,
     num: num, findItem: findItem, priceLine: priceLine, priceAssembly: priceAssembly,
@@ -435,5 +483,7 @@
     wastePct: wastePct, buyQty: buyQty, qtyText: qtyText, qty4: qty4, price4: price4,
     qtyLabel: qtyLabel, costWorking: costWorking,
     coverageBasis: coverageBasis, areaFor: areaFor, priceBreaks: priceBreaks, breakAt: breakAt,
+    materialPriceText: materialPriceText, assemblyPriceText: assemblyPriceText,
+    REFERENCE_AREA: REFERENCE_AREA,
   };
 });

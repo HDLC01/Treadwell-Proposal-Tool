@@ -1208,13 +1208,13 @@
     ASMS.forEach(function (a) {
       out.push({ key: "asm:" + a.id, kind: "asm", id: a.id, name: String(a.name == null ? "" : a.name),
                  sub: "Assembly" + (a.unit ? ", per " + String(a.unit).toUpperCase() : ""),
-                 tag: "Assembly" });
+                 tag: L.assemblyPriceText(a, ITEMS) });
     });
     ITEMS.forEach(function (it) {
       if (RESERVED_ITEM_IDS.indexOf(it.id) !== -1) return;
       out.push({ key: "item:" + it.id, kind: "item", id: it.id,
                  name: String(it.name == null ? "" : it.name),
-                 sub: "Material" + (it.unit ? ", " + it.unit : ""), tag: "Material" });
+                 sub: "Material" + (it.unit ? ", " + it.unit : ""), tag: L.materialPriceText(it) });
     });
     out.sort(function (x, y) { return x.name.localeCompare(y.name) || (x.kind < y.kind ? -1 : 1); });
     return out;
@@ -2258,10 +2258,9 @@
     var out = [];
     B.withCrewFallback(rows).forEach(function (r) {
       if (!r || r.id == null || String(r.id) === "travel") return;
-      var card = B.libraryLaborRow(r, LABOR_RATE);
       out.push({ key: "lab:" + r.id, id: r.id, row: r, name: String(r.name == null ? "" : r.name),
                  sub: (r.unit === "hours" ? "Hours" : "Days") + (r.notes ? ", " + r.notes : ""),
-                 tag: B.money2(card.rate) + " per hour",
+                 tag: B.laborPriceText(r, LABOR_RATE),
                  first: B.workTypeApplies(r, "polish"),
                  on: !!onBid[String(r.id)], onText: "On this bid" });
     });
@@ -2290,6 +2289,7 @@
         },
         oneOff: {
           label: "One-off line", placeholder: "Name this line", button: "Add line",
+          note: B.oneOffRateText(LABOR_RATE),
           onAdd: function (name) {
             var first = M.labor.length;
             M.labor.push(newLaborRow(name));

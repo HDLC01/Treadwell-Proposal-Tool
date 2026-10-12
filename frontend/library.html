@@ -638,8 +638,8 @@
       box-shadow:0 18px 48px rgba(92,64,63,.22); text-align:left; }
     .bulk-head { display:grid; grid-template-columns:1fr auto; align-items:start;
       gap:4px 10px; padding:16px 16px 12px; border-bottom:1px solid var(--line); }
-    .bulk-head h2 { margin:0; font:700 15px var(--ui); letter-spacing:-.01em; }
-    .bulk-head .icon { grid-row:1 / span 2; align-self:center; }
+    .bulk-head h2 { grid-column:1; margin:0; font:700 15px var(--ui); letter-spacing:-.01em; }
+    .bulk-head .icon { grid-column:2; grid-row:1 / span 2; align-self:center; }
     .bulk-sub { grid-column:1; margin:0; color:var(--ink-v); font-size:12.5px; }
     .bulk-filters { display:flex; flex-wrap:wrap; align-items:center; gap:10px 14px;
       padding:12px 16px; background:var(--surf-low); border-bottom:1px solid var(--line); }
