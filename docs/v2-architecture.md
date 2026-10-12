@@ -9,8 +9,9 @@ exist now, and so does the workbook oracle (Phase 6, also section 6). Every modu
 except the v2 intake's use of `intake-scope.js`, which Phase 9 finishes (9a created the module and moved the live intake onto it). `js/bid-profiles.js` was created by Phase 6
 with only the cell maps of the eleven priced tabs in it, and Phase 8 added its second half (the profiles, the
 global defaults and the table of Markups lines) and created `js/bid-engine.js`, which prices a bid from a profile
-(see "The engine and the profiles" below). Nothing on a screen calls the engine yet except through
-`markupChain`, which is now a thin wrapper over it.
+(see "The engine and the profiles" below). The estimate page calls the engine through `markupChain`, a thin wrapper over it,
+and, since Phase 10, through `priceSection` for any section beyond the Polish one, which no saved bid has yet
+(see 7.10).
 `bid-model.js` is the old `polish-bid-core.js` under its new name, and `excel-math.js` is the leaf
 Phase 5 took the model's number helpers out into, both with no change to what any of it does (see
 "Module names" and "The leaf" below). Phase 4 added `patchModel`, `buildSavePatch` and `MODEL_KEYS`
@@ -147,7 +148,7 @@ Each layer may use the layers above it in this table and nothing below it. A lea
 | leaf (data) | `js/work-types.js` | Exists since Phase 7. The one vocabulary: job types (polish, epoxy, combo, gyp) and tabs (polish, epoxy, gyp, seal, leveling; seal and leveling are option-only). For each: label, which tabs a job type prices (combo is Epoxy plus Polish), workbook tab ids, role, quantity fields and snapshot keys, proposal template keys, whether it is ready. Also the one job-conditions table. | nothing |
 | leaf (data) | `js/bid-profiles.js` | Part one (Phase 6): the cell maps of the eleven priced tabs. Part two (Phase 8): one profile per kind of tab as plain data, with rates and GP ladders as Markups formula text, a closed set of quirk flags and an `extends` link (Seal is Polish plus one ladder). The one home of the global defaults: labor rate, lodging, per diem, fees, sales tax, bond and the two remodel rates. `builtinRules()` is what the Markups page shows as built-ins. | nothing |
 | model | `js/bid-model.js` (Phase 5 renamed it from `js/polish-bid-core.js`, with no logic change) | The saved estimate: fresh, migrate, seed a new bid, labor, travel, distance, conditions per section; building the save patch; composing the price snapshot the proposal reads. Since Phase 8 `markupChain` is a wrapper over the engine on `polish-legacy`, and `RATES` and `GP_BANDS` are read off the profile. | excel-math, work-types and bid-engine |
-| engine | `js/bid-engine.js` (Phase 8) | `priceChain(profile, input, rates)`: the markup chain for any profile. `resolveProfile`, `forTab`, `compileRates` and `ruleNumber` turn the filed Markups rules into numbers or into an unpriceable line with a reason. `combine` adds the tabs of a combo job after each tab has had its own gross profit. | excel-math, bid-profiles, markup-core |
+| engine | `js/bid-engine.js` (Phase 8) | `priceChain(profile, input, rates)`: the markup chain for any profile. `resolveProfile`, `forTab`, `compileRates` and `ruleNumber` turn the filed Markups rules into numbers or into an unpriceable line with a reason. `combine` adds the tabs of a combo job after each tab has had its own gross profit. `snapshotRates` and `ratesOf` (Phase 10) say what rates a section keeps when it is first used. | excel-math, bid-profiles, markup-core |
 | render | `js/intake-scope.js` | Draws and shows the quantity fields of the intake from `work-types.js`. Extracted from `js/index.js` in Phase 9a; the live intake calls it (`renderSystems`, `applyScope`) and holds no copy. | work-types |
 
 Already shared and kept as they are: `js/library-core.js` (priceLine and priceAssembly, every
@@ -738,6 +739,45 @@ normalise (`MODEL_KEYS` is the list it does), `tabs` included, through `copyInto
 Nothing writes `tabs` yet: this change only makes it survive. The golden moved by one vector for
 it (section 6), and `test_v2_model_safety.py` holds the laws.
 
+**Done (Phase 10): a bid priced on several workbook tabs.** The data model is the program plan's, unchanged on disk
+for every saved bid. `polish_estimate` stays at `version: 2`; the root keys keep their meaning (the job-level keys and
+the Polish section); new `tabs: { <workbook tab id>: Section }` holds every other section, where a section is
+`{ layout, kind: base | option | off, profile: "<id>@<rev>", takeoff, labor, contingency, fees, rates, totals }`.
+The job-level keys (`conditions`, `conditions_shown`, `cond_cov`, `travel`, `distance`, `fees_default`,
+`no_travel_labor`) stay at the root and are shared. What is in `js/bid-model.js` and `js/bid-engine.js`:
+
+| Piece | What it does |
+|---|---|
+| `sectionsOf(model)` | The one place that knows the root from `tabs`. Every section, root first, by reference. Refuses a section with no layout, a wrong layout for its tab, a kind or profile stamp that is not one, or a profile of another layout. No default layout, "polish" included. `activeSections` leaves out `kind: "off"` (an Epoxy-only job holds an off Polish section). |
+| `priceSection`, `priceTabs` | One section's bid through the engine, with the profile it was SAVED with (the stamp) and the rates it kept. The page hands in `ctx.material` (the library is its). A rev that has moved, or an unknown profile, is unpriceable with the reason, never repriced. The job's travel and the fees default belong to one carrier section (the first base). |
+| `activateSection` | The first use of a tab: a blank section, its profile stamped, and `snapshotRates` of the Markups rules filed at that moment kept as text. |
+| `snapshotRates`, `ratesOf` (engine) | The snapshot is `{ version, profile, rates: { line: formula }, fees_default, notes }`. Filed rules are honoured and kept. A blank, unreadable or out-of-range rule is left out with a note and the built-in stands, never $0. A bond rule is not taken (bond is 0 and unwired until Kyle decides). |
+| `isNewSection`, `seedNewSections`, `syncAutoGuys` | The estimate page's new-bid seeding, moved out of `init()`, per section and behind the same gates. The page collects what the library answered and makes one call. |
+| `composePricingSnapshot` | The one pure composition of the derived keys the proposal side reads. `buildSavePatch` is its only caller, so the autosave and the `pagehide` flush write the same thing. |
+| `sectionSwitcherHtml`, the page's strip | Drawn only when the bid has more than one section. |
+
+**How a saved bid is kept from repricing.** The live Markups rules are never read when a section is priced. A section
+with no snapshot (every saved bid, and the Polish root always, for now) prices at its profile's built-ins; a section
+activated after a rule was filed keeps that rule as text and is not moved by a later edit. The data dump of
+2026-10-12 had one production rule, `(polish, bond, '1%')`, and none the engine reads (bond is not taken, and a
+polish-layout bond rule is not a line the engine reads: its home is Global). The root has no snapshot until Phase 17
+(Polish rev 2 for new bids); a `profile`, `rates` or `kind` of base or option at the root is reserved for that and is
+not read, so no saved bid's total can move.
+
+**What a save writes.** A bid with only the root section writes exactly what the page always wrote, in the same
+order (`polish_estimate` with its totals stamped, `polish_sf`, `polish_2_sf`, `computed_bid`, then the condition
+cells). `tests/fixtures/save_patch_golden.json` is that, byte for byte, cut from `28a5d1f` before this phase
+changed a line, over every saved-bid fixture and seven new or part-saved bids, with the model each new bid holds
+after `init()`. A bid with several sections also writes `priced_tabs` (every tab marked `v2: true`),
+`proposal_lump_sum`, `proposal_sales_tax`, `proposal_remodel_tax`, `proposal_taxable`, `proposal_remodel_on`,
+`sheet_area`, `cost_snapshot`, `phase_price` and a combined `computed_bid`. The lump sum is each BASE section's own
+total summed after its own gross profit (`engine.combine`), never one pooled chain, and an option-only tab (Seal,
+Leveling) is never in it. A section that cannot price takes the combined price with it: those keys are null, and the
+tab lists the reason. **Left for later phases:** nothing writes a second section yet (no work type but Polish is
+`ready`), so the panels for a section other than the root arrive with its work type. The strip switches the panel to
+a summary of the section until then. `rooms` and `base_tab_id` are not written (the Proposal step rebuilds rooms
+from `priced_tabs`).
+
 ### 7.11 "Is this draft a v2 estimate"
 
 | Copy | What it is |
@@ -803,4 +843,5 @@ v2 bids stay test copies until Kyle signs off each work type. Where each phase t
 | 7 | Done, with some copies left on purpose. 7.1, 7.2, 7.3, 7.6, 7.7 and 7.8 each say what was replaced and what stays and why. `js/work-types.js` and the Python pin, the vocabulary paragraph near the top, the header in section 4 and the tests in section 6. |
 | 8 | Done. 7.4 and its row in the summary table (built-in rates now one source), the paragraph "The engine and the profiles", the rows of the engine, the model and `bid-profiles.js` in section 3, the header in section 4, and "The bid engine's proof" in section 6. Nothing is wired into a new screen: no bid changed price. |
 | 9 | 7.6, 7.9. `js/intake-scope.js`; the v2 intake for the four job types. |
-| 10 and later | Multi-section estimates, and the work types one at a time. v2 bids stay test copies until Kyle signs each work type off. |
+| 10 | Done. 7.10 (sections, the rates a section keeps, the one composition of what a save writes) and the module rows of section 3. No screen shows a second section yet and no saved bid changed: the save golden is byte for byte. |
+| 11 and later | The work types one at a time. v2 bids stay test copies until Kyle signs each work type off. |

@@ -72,6 +72,9 @@
   var ITEMS = [];
 
   var at = 0;
+  // The section on show (a workbook tab id). The root, Polish, unless the bid has more than one section and
+  // the estimator picked another (paintSections). Every bid today has one section, so this never moves.
+  var activeTab = B.ROOT_TAB;
 
   function adopt(blob) {
     state = blob || {};
@@ -445,6 +448,46 @@
     });
   }
 
+  /** The raw material of a section that is not the root: its takeoff rows priced from the library, the rows
+   *  that are on. Dye and Joint Filler are Polish's conditions and stay with the root (materialTotal). */
+  function sectionMaterial(entry) {
+    var sum = 0;
+    (entry.section.takeoff || []).forEach(function (r) {
+      if (!B.rowOn(r)) return;
+      var p = rowPrice(r);
+      if (p) sum += p.total;
+    });
+    return sum;
+  }
+
+  /** The bids of every section but the root, { tabId: bid } (B.priceTabs). {} for a bid with one section,
+   *  which reads nothing and costs nothing. */
+  function sectionBids() {
+    return B.priceTabs(M, { material: sectionMaterial, remodel_rate: remodelRate() });
+  }
+
+  /** What a save is composed from (B.buildSavePatch): the root's bid, the other sections' and the library's
+   *  figures for Dye and Joint Filler. */
+  function priceCtx() {
+    return { bid: bid(), bids: sectionBids(), library: conditionLibrary() };
+  }
+
+  /** The patch a save lays over the draft. A bid whose sections cannot be read (a saved `tabs` that is not well
+   *  formed) must still SAVE what was typed, so the root is composed on its own and the sections go back as they
+   *  were saved, untouched, with the reason on screen; a save that threw would lose the edit. */
+  function savePatch(now) {
+    try {
+      return B.buildSavePatch(M, now, priceCtx());
+    } catch (err) {
+      say("This bid's other sections cannot be read, so they were saved as they were: " + (err && err.message));
+      var rootOnly = Object.assign({}, M);
+      delete rootOnly.tabs;
+      var patch = B.buildSavePatch(rootOnly, now, { bid: bid(), library: conditionLibrary() });
+      if (M.tabs !== undefined) patch.polish_estimate = Object.assign({}, patch.polish_estimate, { tabs: M.tabs });
+      return patch;
+    }
+  }
+
   // ── saving ──────────────────────────────────────────────────────────────────
   var saveTimer = null;
   // WHAT IS WRITTEN, AND WHY EACH KEY IS THERE, IS B.buildSavePatch'S BUSINESS (bid-model.js).
@@ -456,8 +499,7 @@
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(function () {
       var now = TW.getState();
-      TW.setState(Object.assign({}, now,
-        B.buildSavePatch(M, now, { bid: bid(), library: conditionLibrary() })));
+      TW.setState(Object.assign({}, now, savePatch(now)));
     }, 600);
   }
 
@@ -469,8 +511,7 @@
     clearTimeout(saveTimer);
     saveTimer = null;
     var cur = TW.getState();
-    TW.setState(Object.assign({}, cur,
-      B.buildSavePatch(M, cur, { bid: bid(), library: conditionLibrary() })));
+    TW.setState(Object.assign({}, cur, savePatch(cur)));
     TW.flushState();
   });
 
@@ -484,19 +525,10 @@
    *  assignment on the way through `changed()` keeps the screen, the price, the validation and
    *  the saved blob describing the same row. */
   function syncAutoGuys() {
-    var manDays = B.travelManDays(M.labor);
-    for (var i = 0; i < M.labor.length; i++) {
-      var r = M.labor[i];
-      if (r && r.unit === "hours" && r.guys_auto) r.guys = manDays;
-    }
-    // Lodging and Per Diem count the same man-days while they are on auto (nights = man-days, the
-    // way backend/pricing.py counts them), written into the line for the reason above.
-    if (M.travel) {
-      B.TRAVEL_LINE_KEYS.forEach(function (k) {
-        var l = M.travel[k];
-        if (l && l.qty_auto !== false) l.qty = manDays;
-      });
-    }
+    // The rule moved into the model (B.syncAutoGuys) so the new-bid seeding can run it between its steps:
+    // Lodging and Per Diem count the same man-days while they are on auto (nights = man-days, the way
+    // backend/pricing.py counts them), and each section's Travel row follows its own crew.
+    B.syncAutoGuys(M);
   }
 
   /** Whether an hours-based labor row (Travel) renders dimmed: on a local job, untouched.
@@ -536,6 +568,8 @@
   function paintBid() {
     var b = bid();
     $("bidbar").hidden = false;
+    paintSections();
+    if (sectionList().length > 1) { paintJobBid(); return; }
     $("bid-total").textContent = b.total ? B.money(b.total) : "—";
     $("bid-psf").textContent = (b.per_sf == null ? "" : B.money2(b.per_sf) + " / SF")
       + (b.sf ? " · " + B.fmtSf(b.sf) + " SF" : "");
@@ -543,6 +577,72 @@
     if (b.material_total) bits.push("Material " + B.money(b.material_total));
     if (b.labor_total) bits.push("Labor " + B.money(b.labor_total));
     $("maths").innerHTML = bits.map(esc).join(' <i>+</i> ');
+  }
+
+  // ── more than one section ───────────────────────────────────────────────────
+  /** The model's sections, or [] when it has only the root (every bid today, which is why nothing below shows).
+   *  A saved `tabs` that is not well formed answers [] and says so; saving still works (savePatch). */
+  function sectionList() {
+    if (!M.tabs) return [];
+    try { return B.sectionsOf(M); } catch (err) {
+      say("This bid's other sections cannot be read: " + (err && err.message));
+      return [];
+    }
+  }
+
+  /** Every section's bid, the root's under its own tab id. */
+  function allBids() {
+    return Object.assign({}, sectionBids(), Object.fromEntries([[B.ROOT_TAB, bid()]]));
+  }
+
+  /** The strip that switches between sections: drawn only when there is more than one. */
+  function paintSections() {
+    var el = $("sections");
+    var list = sectionList();
+    if (list.length < 2) {
+      activeTab = B.ROOT_TAB;
+      if (!el.hidden) { el.innerHTML = ""; el.hidden = true; }
+      return;
+    }
+    if (!list.some(function (e) { return e.tab === activeTab; })) activeTab = B.ROOT_TAB;
+    el.innerHTML = B.sectionSwitcherHtml(M, activeTab, allBids());
+    el.hidden = false;
+  }
+
+  /** The bar for a bid priced on several sections: the combined base bid (the same figure a save writes as the
+   *  lump sum) and each section's own price. No price when a section cannot be priced, never a wrong one. */
+  function paintJobBid() {
+    var c = null;
+    try { c = B.composePricingSnapshot(M, priceCtx()).computed_bid; } catch (err) { c = null; }
+    $("bid-total").textContent = c && c.lump_sum ? B.money(c.lump_sum) : "no price";
+    $("bid-psf").textContent = (c && c.price_per_sf != null ? B.money2(c.price_per_sf) + " / SF" : "");
+    var bids = allBids();
+    $("maths").innerHTML = sectionList().filter(function (e) { return e.kind !== "off"; }).map(function (e) {
+      var b = bids[e.tab];
+      return esc(e.tab + " " + (b && b.priceable !== false && b.total ? B.money(b.total) : "no price"));
+    }).join(' <i>+</i> ');
+  }
+
+  /** What the panel shows while a section other than the root is open. Its takeoff and labor are edited on
+   *  their own panels when its work type is switched on for Estimating Tool v2 (no work type but Polish is yet);
+   *  until then this says what the section holds and how it was priced, so nothing is hidden. */
+  function otherSectionPanel() {
+    var e;
+    try { e = B.sectionOf(M, activeTab); } catch (err) { activeTab = B.ROOT_TAB; return PANELS[at](); }
+    var b = allBids()[e.tab] || {};
+    var s = e.section;
+    var rates = (s.rates && s.rates.notes) || [];
+    var priced = b.priceable === false
+      ? "It cannot be priced: " + (b.reason || "the reason was not given") + "."
+      : "Priced at " + (b.total ? B.money(b.total) : "nothing yet") + ".";
+    var body = '<p>' + esc(priced) + '</p>' +
+      '<p>' + esc((s.takeoff || []).length + " takeoff row(s), " + (s.labor || []).length + " labor row(s). " +
+        "Priced with " + e.profile + ".") + '</p>' +
+      (rates.length ? '<p>Markups rules that were not used when this section was added:</p><ul>' +
+        rates.map(function (n) { return '<li>' + esc(n) + '</li>'; }).join("") + '</ul>' : "");
+    return '<section class="sec"><div class="sec-h"><h2>' + esc(e.tab) + '</h2><p>' +
+      esc(e.kind === "option" ? "An option on this bid." : e.kind === "off" ? "Not part of this bid." : "Part of the base bid.") +
+      '</p></div><div class="sec-b">' + body + '</div></section>';
   }
 
   // ── the rail ────────────────────────────────────────────────────────────────
@@ -1866,7 +1966,9 @@
 
   var PANELS = [takeoffPanel, laborPanel, reviewPanel];
 
-  function renderPanel() { $("panels").innerHTML = PANELS[at](); }
+  function renderPanel() {
+    $("panels").innerHTML = activeTab === B.ROOT_TAB ? PANELS[at]() : otherSectionPanel();
+  }
 
   /** ONE LIST, BOTH COLLECTIONS, sorted by name.
    *
@@ -2252,6 +2354,15 @@
 
     var go_ = t.closest("[data-go]");
     if (go_) { e.preventDefault(); go(parseInt(go_.getAttribute("data-go"), 10)); return; }
+
+    // The section strip (drawn only when the bid has more than one section).
+    var secTab = t.closest("[data-section-tab]");
+    if (secTab) {
+      activeTab = secTab.getAttribute("data-section-tab");
+      paintSections();
+      renderPanel();
+      return;
+    }
 
     // The explicit lookup: replaces a typed figure too, because the estimator asked.
     if (t.closest("[data-dist-lookup]")) { lookupDistance(true); return; }
@@ -2829,8 +2940,8 @@
     // library means the two overlap instead of queueing. It is awaited below, once the library has
     // landed. Null, not an empty array, for "not asked": an empty array is a real answer (the
     // table exists and holds nothing) and the two must not be confused.
-    var laborDefaults = B.laborUnstated(state.polish_estimate) ? loadLaborDefaults() : null;
-    var libraryLaborRows = [];
+    var savedEstimate = state.polish_estimate;
+    var laborDefaults = B.laborUnstated(savedEstimate) ? loadLaborDefaults() : null;
     // The company labor rate is read for EVERY bid, a saved one included: it is only APPLIED to a
     // new bid (the laborDefaults gate below), but "Default $X" under a rate needs it on any.
     var laborRate = loadLaborRate();
@@ -2853,7 +2964,7 @@
     // Started here so it overlaps the library read instead of queueing behind it, and awaited
     // below. Null, not [], for "not asked" — [] is a real answer (nobody has overridden anything)
     // and the two must not be confused.
-    var conditionDefaults = B.conditionsUnstated(state.polish_estimate)
+    var conditionDefaults = B.conditionsUnstated(savedEstimate)
       ? loadConditionDefaults() : null;
 
     $("proj-line").textContent = [state.project_name, state.city && state.state
@@ -2888,83 +2999,47 @@
     // later leave the bids already holding it alone: once saved, the rows are the BID's, and
     // laborUnstated has answered false ever since.
     LABOR_RATE = await laborRate;
-    if (laborDefaults) {
-      // Library rows with no rate of their own and Travel follow the company rate, then the three
-      // crew rows are set to it. New bids only: this whole block is behind the laborUnstated gate.
-      var laborRows = B.withCrewFallback(await laborDefaults);
-      libraryLaborRows = laborRows;
-      // THE CREW LINES COME FROM THE LABOR LIST LIKE ANY OTHER DEFAULT (Hanz, 2026-10-09). A model
-      // that states no rows reads as the four shipped ones (migrateModel's legacyLabor), so keep
-      // only Travel here and let the library put the rest on; withCrewFallback above is the shipped
-      // set standing in only when the library cannot answer.
-      M.labor = M.labor.filter(function (r) { return r && r.id === "travel"; });
-      M.labor = B.crewFirst(B.applyLaborRate(
-        B.seedLibraryLabor(M.labor, laborRows, LABOR_RATE, "polish"), LABOR_RATE));
-      // Travel is a default like any other: if the library says this bid does not get it, say so
-      // on the model so a reload does not append the "missing" row back (migrateModel).
-      if (B.travelDeclined(laborRows, "polish")) M.no_travel_labor = true;
-      // A default can carry guys_auto, exactly as Travel does. Re-run for the same reason adopt()
-      // runs it: before the first paint, not on the first edit.
-      syncAutoGuys();
-      // The two travel rates, onto the new bid's Lodging / Per Diem lines (both start OFF).
-      M.travel = B.applyTravelRates(M.travel, await travelRates);
-      // Fees + Textura starts at the Defaults tab's amount (nothing when none is set).
-      M = B.applyFeesDefault(M, await feesDefault);
-    }
 
-    // The library's answers for joint filler, remove-existing and dye, written over the shipped
-    // ones — on a brand new bid and on nothing else.
+    // EVERYTHING A NEW BID IS GIVEN, IN ONE CALL (bid-model.js seedNewSections; it was written out here until
+    // Phase 10 and is the same steps in the same order). The library's answers are collected first and each is
+    // null when it was not asked, which is the gate: a saved bid never asked, so nothing lands on it.
     //
-    // THE CELL STILL WINS, so conditionsFromCells runs AFTER the seed rather than only in adopt().
-    // A project that came through the beta intake has its answers in cell_values and no
-    // polish_estimate at all, which is precisely the blob conditionsUnstated calls seedable; if
-    // the seed ran last it would write a company-wide default over the answer the estimator gave
-    // on intake, and their next save would put that default into Kyle's workbook. Seed first, then
-    // let the cell win, which is the order every other reader of these three already uses.
-    //
-    // Nothing is written to the draft here, exactly as with the labor defaults above: the seeded
-    // answers are persisted by the first edit, which is what makes changing a default later leave
-    // the bids already holding it alone.
-    if (conditionDefaults) {
-      var condRows = await conditionDefaults;
-      M.conditions = B.conditionsFromCells(
-        B.seedConditionDefaults(M.conditions, condRows), state.cell_values, T.isSplit(state));
-      // Which cards this new bid shows: the ones still on the Defaults tab (seedConditionsShown).
-      M.conditions_shown = B.seedConditionsShown(condRows);
-    }
-
-    // Seed the measurement from intake if nothing has been measured here yet, so the page opens
-    // with the number the estimator already gave us rather than a blank.
-    //
-    // BOTH of intake's boxes (Hanz, 2026-10-05): System 1 -> polish_sf, System 2 (optional) ->
-    // polish_2_sf, one takeoff row each. Seeding only ever fills an EMPTY takeoff -- see
-    // B.seedTakeoffSf for the rules. polish_sf is rewritten as the takeoff total on the first
-    // save, and from then on intake shows its boxes locked.
-    if (!B.takeoffSf(M.takeoff)) {
-      // A NEW BID ALSO LOADS THE DEFAULTS (Hanz, 2026-10-05), on the same gate as the condition
-      // defaults above: nothing ever saved. seedDefaultTakeoff owns how they combine with intake's
-      // SF boxes (one area-carrying row, the rest marked same_floor); it falls through to
-      // seedTakeoffSf when the library has no defaults, and a saved bid takes seedTakeoffSf alone.
-      // "New" is the saved blob stating nothing, OR nothing but what the beta intake minted: intake
-      // saves a model (conditions, a blank takeoff row) but deletes `labor`, which only this page
-      // ever states, so laborUnstated is the signal that the calculator has never saved here.
-      M.takeoff = (B.conditionsUnstated(state.polish_estimate) || B.laborUnstated(state.polish_estimate))
-        ? B.seedDefaultTakeoff(M.takeoff, ASMS, ITEMS, RESERVED_ITEM_IDS,
-                               state.polish_sf, state.polish_2_sf, "polish")
-        : B.seedTakeoffSf(M.takeoff, state.polish_sf, state.polish_2_sf);
-    }
-    // THE LABOR CALCULATOR, AFTER THE TAKEOFF SEED because "from SF" lines need the job's SF
-    // (B.takeoffSf, the same figure the bid divides by). New bids only (laborCalc is null
-    // otherwise). Nothing is written to the draft here; the first edit saves the filled rows, and
-    // from then on the rows are the BID's.
-    if (laborCalc) {
-      var calcRows = B.withCrewCalcFallback(await laborCalc);
-      M.labor = B.applyLaborCalc(M.labor, calcRows, B.takeoffSf(M.takeoff), LABOR_RATE);
-      // A rate typed on the Labor tab beats the calculator's blank ("company rate").
-      M.labor = B.keepLibraryRates(M.labor, libraryLaborRows, calcRows);
-      // Every row the calculator did not fill remembers the rate it was seeded with (G1).
-      M.labor = B.stampRateDefaults(M.labor);
-      syncAutoGuys();
+    //   labor     the library's default labor lines beside Travel, which is built in and stays built in; the
+    //             crew rows come from the Labor list like any other default, with the shipped set standing in
+    //             only when the library cannot answer. Library rows with no rate of their own and Travel follow
+    //             the company rate. Travel is a default like any other: if the library says this bid does not
+    //             get it, the model says so, so a reload does not append the "missing" row back.
+    //   travel    the two rates onto Lodging / Per Diem (both start OFF), and Fees + Textura at the Defaults
+    //             tab's amount (nothing when none is set)
+    //   conditions  the library's answers for joint filler, remove-existing and dye, and which cards the bid
+    //             shows. THE CELL STILL WINS, so the seed lets a cell the intake wrote override it: a project
+    //             that came through the beta intake has its answers in cell_values and no polish_estimate, and a
+    //             company-wide default written over one would reach Kyle's workbook on the next save.
+    //   takeoff   intake's SF boxes (System 1 -> polish_sf, System 2 -> polish_2_sf), one row each, and the
+    //             library's default takeoff when the bid is new
+    //   calculator  the Labor Calculator's per-line modes, AFTER the takeoff because a "from SF" line needs the
+    //             job's SF
+    // Nothing is written to the draft here: the first edit saves what was seeded, and from then on the rows are
+    // the BID's, which is what makes a later library change leave the bids already holding them alone.
+    var libraryLaborRows = laborDefaults ? B.withCrewFallback(await laborDefaults) : null;
+    // A bid whose sections cannot be read is opened as it is, unseeded, with the reason on screen: refusing to
+    // open it would lose the estimator's work.
+    try {
+      M = B.seedNewSections(M, {
+      saved: savedEstimate,
+      laborRows: libraryLaborRows,
+      laborRate: LABOR_RATE,
+      travelRates: travelRates ? await travelRates : null,
+      feesDefault: feesDefault ? await feesDefault : null,
+      conditionRows: conditionDefaults ? await conditionDefaults : null,
+      cellValues: state.cell_values,
+      split: T.isSplit(state),
+      asms: ASMS, items: ITEMS, reserved: RESERVED_ITEM_IDS,
+      sf: Object.fromEntries([[B.ROOT_TAB, [state.polish_sf, state.polish_2_sf]]]),
+      calcRows: laborCalc ? B.withCrewCalcFallback(await laborCalc) : null
+      });
+    } catch (err) {
+      say("This bid's other sections cannot be read, so the library's defaults were not added: " + (err && err.message));
     }
     followSf = B.takeoffSf(M.takeoff);
     // THE TAKEOFF TOTAL IS polish_sf, SO MAKE THE DRAFT SAY SO NOW. Two ways the draft can be

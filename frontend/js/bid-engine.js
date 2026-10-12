@@ -15,6 +15,8 @@
 //   priceChain(profile, input, rates)   the bid: every line of the chain, one key per cell of the markup column
 //   compileRates(profile, rules)        the Markups rules filed for a profile's layout, read into rates
 //   ruleNumber(rules, layout, line)     one filed rule as a number, or "unpriceable" with the reason
+//   snapshotRates(profile, rules)       the rates a section keeps when it is first used (Phase 10), notes included
+//   ratesOf(snapshot)                   a saved snapshot as priceChain's `rates`, or nothing
 //   combine(tabs)                the bid of a job priced on several tabs (Combo): each tab's own total, summed
 //   rateNumber / defaultNumber / bandsOf   readers for the code that needs a built-in as a number
 //
@@ -321,6 +323,80 @@
     return out;
   }
 
+  // ── the rates a section keeps (Phase 10) ─────────────────────────────────────
+  /** The shape of the snapshot below. A saved snapshot of another version is not read. */
+  var SNAPSHOT_VERSION = 1;
+
+  /** Lines a filed Markups rule is NOT taken for, because v2 does not charge them yet. Bond is 0 and unwired
+   *  (a decision for Kyle, program plan "Later, for Kyle"): the production Markups table holds one rule, polish
+   *  bond 1%, and a new section must not start charging a bond because somebody filed that. */
+  var UNWIRED = ["bond"];
+
+  /** WHAT A SECTION KEEPS WHEN IT IS FIRST USED: the rates it prices with, so a saved bid never reprices because
+   *  somebody edits the Markups page afterwards. Returns
+   *
+   *    { version, profile: "epoxy@1", rates: { line: formula text }, fees_default, notes: [plain words] }
+   *
+   *  `rates` holds ONLY the lines a rule is filed for; every other line prices at the profile's built-in, which
+   *  is pinned by the profile's rev. Filed rules are honoured (plan default), each as the text the Markups page
+   *  holds, which priceChain reads like a built-in.
+   *
+   *  A FILED RULE THAT WILL NOT PRICE IS LEFT OUT AND SAID SO, never $0 (the safety property at the top of this
+   *  file): a blank formula, one that cannot be read or worked out, or one that comes to a dollar figure where a
+   *  rate belongs. The built-in stands and `notes` says which line and why, so the page can show it. A bond rule
+   *  is left out for the reason UNWIRED gives. The Fees + Textura rule is the fees DEFAULT (a dollar figure the
+   *  job's fees line starts at), not a rate: it is kept as `fees_default`, a number or null.
+   *
+   *  `rules` is GET /api/markup/rules' list, or nothing (no rules: an empty snapshot, which prices at the
+   *  built-ins). Nothing here reads a clock or the network. */
+  function snapshotRates(profileArg, rules) {
+    var profile = need(profileArg, "snapshotRates");
+    var list = (rules instanceof Array) ? rules : [];
+    var compiled = compileRates(profile, list);
+    var notes = [];
+    var kept = [];
+    compiled.filed.forEach(function (line) {
+      if (UNWIRED.indexOf(line) >= 0) {
+        notes.push(labelOf(line) + ": a rule is filed on the Markups page, but v2 does not charge it yet, so it was not used.");
+      } else if (line !== "fees_textura") {
+        kept.push([line, compiled.rates[line]]);
+      }
+    });
+    Object.keys(compiled.unpriceable).forEach(function (line) {
+      if (line === "fees_textura") return;
+      notes.push(labelOf(line) + ": the rule filed on the Markups page cannot be used (" + compiled.unpriceable[line] +
+        "), so the built-in rate is charged.");
+    });
+    // A blank rule reads as "nothing filed" to ruleNumber, which is right for pricing and silent for a person.
+    Object.keys(P.lines).forEach(function (line) {
+      var home = P.lines[line].home === "global" ? "global" : profile.layout;
+      var blank = list.some(function (r) {
+        return r && r.layout === home && r.line_key === line && r.applies !== false &&
+          (r.formula === null || r.formula === undefined || String(r.formula).trim() === "");
+      });
+      if (blank && line !== "fees_textura") {
+        notes.push(labelOf(line) + ": the rule filed on the Markups page is blank, so the built-in rate is charged.");
+      }
+    });
+    var fees = ruleNumber(list, profile.layout, "fees_textura");
+    if (fees && !fees.ok) {
+      notes.push(labelOf("fees_textura") + ": the rule filed on the Markups page cannot be used (" + fees.reason +
+        "), so the fees line starts at nothing.");
+    }
+    return {
+      version: SNAPSHOT_VERSION, profile: profile.stamp, rates: Object.fromEntries(kept),
+      fees_default: (fees && fees.ok) ? fees.value : null, notes: notes
+    };
+  }
+
+  /** What priceChain takes as `rates`, out of a saved snapshot: `{ rates: { line: formula } }`, or undefined for
+   *  a section that has none (it prices at the profile's built-ins, NEVER at the live Markups rules) or one that
+   *  is not a snapshot of this version. */
+  function ratesOf(snapshot) {
+    if (!snapshot || typeof snapshot !== "object" || snapshot.version !== SNAPSHOT_VERSION) return undefined;
+    if (!snapshot.rates || typeof snapshot.rates !== "object" || snapshot.rates instanceof Array) return undefined;
+    return { rates: snapshot.rates };
+  }
   // ── THE CHAIN ───────────────────────────────────────────────────────────────
   function isBlank(v) { return v === null || v === undefined || v === ""; }
 
@@ -524,6 +600,7 @@
     resolveProfile: resolveProfile, forTab: forTab,
     priceChain: priceChain, combine: combine,
     compileRates: compileRates, ruleNumber: ruleNumber,
+    snapshotRates: snapshotRates, ratesOf: ratesOf, SNAPSHOT_VERSION: SNAPSHOT_VERSION, UNWIRED: UNWIRED,
     rateNumber: rateNumber, defaultNumber: defaultNumber, bandsOf: bandsOf,
     CONTEXT_NAMES: CONTEXT_NAMES
   };

@@ -193,18 +193,18 @@ MUTATIONS = {
         lambda r: len(r["ls1Empty"]["ids"]) == 7),
     "no fallback when the library cannot answer": (
         "js/polish-estimate.js",
-        "var laborRows = B.withCrewFallback(await laborDefaults);",
-        "var laborRows = await laborDefaults;",
+        "var libraryLaborRows = laborDefaults ? B.withCrewFallback(await laborDefaults) : null;",
+        "var libraryLaborRows = laborDefaults ? await laborDefaults : null;",
         lambda r: r["ls1Fallback"]["ids"] == ["travel"]),
     "the model's own crew rows win over the library's": (
-        "js/polish-estimate.js",
-        'M.labor = M.labor.filter(function (r) { return r && r.id === "travel"; });',
-        "M.labor = M.labor;",
+        "js/bid-model.js",
+        'var keep = carrierTab === e.tab ? (s.labor || []).filter(function (r) { return r && r.id === "travel"; }) : [];',
+        "var keep = carrierTab === e.tab ? (s.labor || []) : [];",
         lambda r: r["ls1Library"]["mockup"]["label"] == "Mock-up"),
     "a Labor-tab rate loses to the company rate": (
-        "js/polish-estimate.js",
-        "M.labor = B.keepLibraryRates(M.labor, libraryLaborRows, calcRows);",
-        "M.labor = M.labor;",
+        "js/bid-model.js",
+        "s.labor = keepLibraryRates(s.labor, ctx.laborRows || [], ctx.calcRows);",
+        "s.labor = s.labor;",
         lambda r: r["ls1Library"]["polishing"]["rate"] == 40),
     "the box is not written back on change": (
         "js/polish-estimate.js",
