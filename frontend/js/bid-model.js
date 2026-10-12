@@ -2277,33 +2277,544 @@
    *
    *  Pure: nothing it is handed is changed. The model is COPIED to take the `totals` stamp. */
   function buildSavePatch(model, state, ctx) {
-    var b = ctx && ctx.bid;
     if (!isObject(model)) throw new Error("buildSavePatch needs the model it is saving");
-    if (!isObject(b)) {
+    if (!isObject(ctx)) {
       throw new Error("buildSavePatch needs ctx.bid, the markupChain result for this model: a save " +
                       "with no price is a save of zero");
     }
     var cells = isObject(state) ? state.cell_values : undefined;
-    return {
-      polish_estimate: Object.assign(copyInto({}, model), { totals: b }),
+    // EVERY KEY THE PROPOSAL SIDE READS, AND THE MODEL WITH ITS TOTALS STAMPED, IS composePricingSnapshot's.
+    // For a bid with one section (all of them today) that is exactly what this function wrote by hand until
+    // Phase 10: polish_estimate, polish_sf, polish_2_sf, computed_bid, in that order.
+    var derived = composePricingSnapshot(model, ctx);
+    var rest = Object.assign({}, derived);
+    delete rest.polish_estimate;
+    return Object.assign({
+      polish_estimate: derived.polish_estimate,
       // `split` is the draft's own mark (work-types.js isSplit), so the one save both pages share is also
       // the one that keeps an option's tax answer out of the base's way on a split draft.
       cell_values: conditionCellWrites(model.conditions, cells, ctx.library, types.isSplit(state)),
-      polish_sf: b.sf > 0 ? b.sf : measuredSf(model.takeoff),
-      polish_2_sf: "",
-      computed_bid: {
-        lump_sum: b.total,
-        price_per_sf: b.per_sf,
-        polish_sf: b.sf,
-        full_bid: {
-          total_base_bid: b.total,
-          sales_tax: b.sales_tax,
-          remodel_tax: b.remodel_tax
-        }
-      }
-    };
+    }, rest);
   }
 
+  // ══ SECTIONS (Phase 10): a bid priced on several workbook tabs ═══════════════════════════════════════════
+  //
+  // WHAT A SECTION IS. One workbook tab's worth of bid: its takeoff, labor, contingency and fees, the profile
+  // that prices it, the rates it kept, and the totals last stamped. The model has always held exactly one, the
+  // Polish section, as its ROOT keys (takeoff, labor, contingency, fees, totals). Every other section lives
+  // under `tabs`, keyed by the workbook tab id ("Epoxy", 'Gyp (USG 1-8")'), as
+  //
+  //   { layout, kind: "base" | "option" | "off", profile: "<id>@<rev>", takeoff, labor, contingency, fees,
+  //     rates: <the snapshot, see snapshotRates>, totals }
+  //
+  // JOB-LEVEL KEYS STAY AT THE ROOT and are shared by every section: conditions, conditions_shown, cond_cov,
+  // travel, distance, fees_default (and no_travel_labor). The root keys keep today's meaning, so the model is
+  // still `polish_estimate` at `version: 2` and no saved bid is rewritten.
+  //
+  // `sectionsOf` is the ONE place that knows root from tabs; everything else asks it and gets the section BY
+  // REFERENCE. THE ROOT SECTION is always priced by `polish-legacy@1`'s built-ins, as it has been since the model
+  // was written, and no snapshot is written for it: its totals must not move, and Phase 17 (Polish rev 2 for NEW
+  // bids) is where it gains one. A `profile`, `rates` or `kind: "base"` at the root is reserved for that and is not
+  // read (`kind: "off"` is: a root Polish section that is not part of the bid, which is what an Epoxy-only job
+  // will hold).
+  //
+  // PRICING NEVER READS THE LIVE MARKUPS RULES. A section prices with its own profile (resolved by the stamp it
+  // was saved with) and the rates it kept when it was first used. A section with no snapshot prices at the
+  // profile's built-ins. A Markups rule filed afterwards moves no saved bid; it applies to a section activated
+  // after it was filed (activateSection), and only as a snapshot.
+  /** The workbook tab id of the root section. */
+  var ROOT_TAB = "Polish";
+  var SECTION_KINDS = ["base", "option", "off"];
+  var PROFILE_STAMP = /^([a-z0-9-]+)@(\d+)$/;
+  var has = Object.prototype.hasOwnProperty;
+
+  /** Every section of the model, root first, then `tabs` in the order they were added, as
+   *  { tab, root, section, layout, kind, profile, role }. `section` is the live object (the root section IS
+   *  the model); nothing here copies. THROWS on a section that is not well formed, because a section priced as
+   *  something it is not is a wrong bid: a tab that is not a priced workbook tab, a missing or wrong layout, a
+   *  kind or profile stamp that is not one, a profile that belongs to another layout. There is no default
+   *  layout, and "polish" is never assumed. */
+  function sectionsOf(model) {
+    if (!isObject(model)) throw new Error("sectionsOf needs the model");
+    // Only "off" is read at the root. A root kind of base or option is reserved (Phase 17) and means base: the
+    // root is priced through bid(), which always charges the job's travel, so an "option" root would carry it twice.
+    var rootKind = model.kind === "off" ? "off" : "base";
+    var out = [{ tab: ROOT_TAB, root: true, section: model, layout: "polish", kind: rootKind,
+                 profile: LEGACY.stamp, role: "polish" }];
+    var tabs = model.tabs;
+    if (tabs === undefined || tabs === null) return out;
+    if (!isObject(tabs)) throw new Error("model.tabs must be an object of sections keyed by workbook tab id");
+    Object.keys(tabs).forEach(function (id) {
+      var s = tabs[id];
+      var where = "section " + JSON.stringify(id);
+      if (id === ROOT_TAB) throw new Error(where + " is the root section's own tab: it lives at the root of the model, not under tabs");
+      var tabKey = types.tabOfSheet(id);
+      if (!tabKey) throw new Error(where + " is not a priced workbook tab");
+      if (!isObject(s)) throw new Error(where + " is not a section");
+      if (typeof s.layout !== "string" || s.layout === "") throw new Error(where + " does not say its layout (there is no default)");
+      var rec = types.tab(tabKey);
+      if (s.layout !== rec.markupLayout) throw new Error(where + " says layout " + JSON.stringify(s.layout) + ", but that tab is " + rec.markupLayout);
+      if (SECTION_KINDS.indexOf(s.kind) < 0) throw new Error(where + " has kind " + JSON.stringify(s.kind) + " (base, option or off)");
+      var stamp = typeof s.profile === "string" ? PROFILE_STAMP.exec(s.profile) : null;
+      if (!stamp) throw new Error(where + " has no profile stamp (like epoxy@1)");
+      var known = null;
+      try { known = engine.resolveProfile(stamp[1]); } catch (err) { known = null; }   // an unknown id is priceSection's to say
+      if (known && known.layout !== s.layout) {
+        throw new Error(where + " is priced by profile " + stamp[1] + ", which belongs to another layout");
+      }
+      out.push({ tab: id, root: false, section: s, layout: s.layout, kind: s.kind, profile: s.profile, role: rec.role });
+    });
+    return out;
+  }
+
+  /** The sections that are part of the bid: every kind but "off". */
+  function activeSections(model) {
+    return sectionsOf(model).filter(function (e) { return e.kind !== "off"; });
+  }
+
+  /** One section's entry, by workbook tab id. THROWS when there is none. */
+  function sectionOf(model, tabId) {
+    var list = sectionsOf(model);
+    for (var i = 0; i < list.length; i++) if (list[i].tab === tabId) return list[i];
+    throw new Error("the model has no section for " + JSON.stringify(String(tabId)));
+  }
+
+  function takeoffStated(rows) {
+    return rows instanceof Array && rows.some(function (r) {
+      return !!r && (!!r.assembly_id || !!r.item_id || !isBlank(r.measurement));
+    });
+  }
+
+  /** Has nobody stated anything in this section yet? The gate on seeding it from the library, the per-section
+   *  form of laborUnstated (and as strict). ROOT: exactly laborUnstated, the gate the page has always used,
+   *  which reads the SAVED blob (see it). A TAB SECTION: no labor rows and nothing in its takeoff, which is what
+   *  activateSection hands back; its rates snapshot says nothing either way (activating writes it). A section
+   *  that the library gave no default rows stays new until somebody types in it, as the root does when it has
+   *  no labor, and only ever receives what is in the library at that moment. */
+  function isNewSection(section, isRoot) {
+    if (isRoot) return laborUnstated(section);
+    if (!isObject(section)) return true;
+    return !(section.labor instanceof Array && section.labor.length) && !takeoffStated(section.takeoff);
+  }
+
+  /** WHICH SECTION CARRIES THE JOB'S TRAVEL (and the Fees + Textura default): once per job, not once per tab
+   *  (plan default for Combo, to be confirmed with Kyle). The first section that is part of the bid as a base,
+   *  else the first that is part of it at all, else the root. Returns a workbook tab id. */
+  function travelCarrier(model) {
+    var list = activeSections(model);
+    for (var i = 0; i < list.length; i++) if (list[i].kind === "base") return list[i].tab;
+    return list.length ? list[0].tab : ROOT_TAB;
+  }
+
+  // ── pricing a section ───────────────────────────────────────────────────────
+  function unpriceableSection(stamp, line, reason) {
+    return { priceable: false, profile: stamp, line: line, reason: reason, total: null };
+  }
+
+  /** One section's bid, through the engine with THAT SECTION'S profile and the rates it kept.
+   *
+   *  `ctx.material(entry)` is the page's: a takeoff is priced from the library, which the model does not hold.
+   *  It answers a number (the raw material sum) or an object of the engine's material inputs
+   *  ({ material } or { gyp, extras, sand, soundMat, soundMatRolls }). `ctx.remodel_rate` is the county's, or
+   *  nothing for the profile's own default.
+   *
+   *  The job's travel is charged to the carrier section only (travelCarrier); the others carry none. A profile
+   *  that is not the one the section was saved with (an unknown id, or a rev that has moved) is not priced: the
+   *  answer is unpriceable with the reason, never a silent reprice at the new rules. */
+  function priceSection(model, tabId, ctx) {
+    if (!isObject(ctx) || typeof ctx.material !== "function") {
+      throw new Error("priceSection needs ctx.material(entry): the page prices a takeoff from its library");
+    }
+    var e = sectionOf(model, tabId);
+    var s = e.section;
+    var stamp = PROFILE_STAMP.exec(e.profile);
+    var profile;
+    try { profile = engine.resolveProfile(stamp[1]); } catch (err) {
+      return unpriceableSection(e.profile, "profile", "this section was priced with " + e.profile +
+        ", which the engine does not have. Its saved figures are kept.");
+    }
+    if (String(profile.rev) !== stamp[2]) {
+      return unpriceableSection(e.profile, "profile", "this section was priced with " + e.profile +
+        ", and the engine's " + profile.id + " is now " + profile.stamp + ". Its saved figures are kept.");
+    }
+    var carrier = travelCarrier(model) === e.tab;
+    var input = {
+      labor: laborTotal(s.labor, model.conditions),
+      travel: carrier ? travelCosts(model.travel, s.labor).total : 0,
+      contingency: s.contingency, fees: s.fees, conditions: model.conditions,
+      sf: takeoffSf(s.takeoff), remodel_rate: ctx.remodel_rate
+    };
+    var mat = ctx.material(e);
+    if (isObject(mat)) copyInto(input, mat); else input.material = num(mat);
+    // A gyp-split profile reads the engine's material inputs (gyp, extras, sand, soundMat), never a plain sum:
+    // a number would price the material at $0 and still call the section priceable. No price rather than a wrong one.
+    if (profile.quirks.shippingRule === "gyp-split" && !isObject(mat)) {
+      return unpriceableSection(e.profile, "material", "the " + e.tab + " material has to come as gyp, extras, sand " +
+        "and sound mat figures. A single material total cannot be priced here.");
+    }
+    try {
+      if (profile.quirks.shippingRule === "gyp-split") input.truckload = engine.forTab(e.tab).truckload;
+      // The root keeps no snapshot (see above): it prices at the built-ins.
+      return engine.priceChain(profile, input, e.root ? undefined : engine.ratesOf(s.rates));
+    } catch (err) {
+      if (err && err.name === "BidEngineError") return unpriceableSection(e.profile, "profile", err.message);
+      throw err;
+    }
+  }
+
+  /** The bids of every section that is NOT the root and is part of the bid, as { tabId: bid }. {} when the
+   *  model has no `tabs`, without reading anything else of it. */
+  function priceTabs(model, ctx) {
+    if (!isObject(model) || !isObject(model.tabs)) return {};
+    return Object.fromEntries(activeSections(model).filter(function (e) { return !e.root; })
+      .map(function (e) { return [e.tab, priceSection(model, e.tab, ctx)]; }));
+  }
+
+  // ── activating and seeding a section ────────────────────────────────────────
+  function jsonCopy(v) { return JSON.parse(JSON.stringify(v)); }
+
+  /** ADD A SECTION: the first time a tab is used on a bid. A NEW model with `tabs[tabId]` holding a blank
+   *  section, its profile stamped, and the rates it prices with kept: snapshotRates of `ctx.rules` (the Markups
+   *  rules as GET /api/markup/rules lists them; none means the profile's built-ins). Filed rules are honoured and
+   *  kept as text; one that will not price is left out with a note in `rates.notes` (never $0); a bond rule is
+   *  not taken (it is unwired). THROWS for the root's tab (it is always there), a tab the engine has no profile
+   *  for, a tab that is already a section, and a BASE kind on an option-only tab (Seal, Leveling: never a base). */
+  function activateSection(model, tabId, kind, ctx) {
+    if (!isObject(model)) throw new Error("activateSection needs the model");
+    if (tabId === ROOT_TAB) throw new Error("the " + ROOT_TAB + " section is the root of the model and is always there");
+    var tabKey = types.tabOfSheet(tabId);
+    if (!tabKey) throw new Error(JSON.stringify(String(tabId)) + " is not a priced workbook tab");
+    if (kind !== "base" && kind !== "option") throw new Error("a section is activated as a base or an option, not " + JSON.stringify(kind));
+    var rec = types.tab(tabKey);
+    if (kind === "base" && rec.optionOnly) throw new Error(rec.label + " is an option on a bid, never the base");
+    if (isObject(model.tabs) && has.call(model.tabs, tabId)) throw new Error(JSON.stringify(tabId) + " is already a section of this bid");
+    var profile = engine.forTab(tabId).profile;
+    var section = {
+      layout: rec.markupLayout, kind: kind, profile: profile.stamp,
+      takeoff: [{ assembly_id: "", assembly_name: "", measurement: "", unit: "SF" }],
+      labor: [], contingency: 0, fees: 0,
+      rates: engine.snapshotRates(profile, isObject(ctx) ? ctx.rules : undefined),
+      totals: {}
+    };
+    var out = jsonCopy(model);
+    var tabs = isObject(out.tabs) ? out.tabs : {};
+    out.tabs = copyInto(copyInto({}, tabs), Object.fromEntries([[tabId, section]]));
+    return out;
+  }
+
+
+
+  /** Keep the Travel row's Guys (and Lodging and Per Diem's quantity) in step with the crew's man-days while
+   *  they are on auto. The estimate page's syncAutoGuys, as a function of the model, because the seeding below
+   *  has to run it between its steps. MUTATES `model`. Each section's own Travel row follows that section's
+   *  crew; the job's Lodging and Per Diem follow the carrier section's. */
+  function syncAutoGuys(model) {
+    var multi = isObject(model.tabs);
+    var sections = [model];
+    if (multi) {
+      // A saved model whose tabs are not well formed is not this function's to refuse (the page runs it on every
+      // open, and priceSection / composePricingSnapshot say what is wrong): it keeps the root in step.
+      try { sections = activeSections(model).map(function (e) { return e.section; }); } catch (err) { multi = false; }
+    }
+    sections.forEach(function (s) {
+      var manDays = travelManDays(s.labor);
+      (s.labor || []).forEach(function (r) {
+        if (r && r.unit === "hours" && r.guys_auto) r.guys = manDays;
+      });
+    });
+    if (model.travel) {
+      var carrier = multi ? sectionOf(model, travelCarrier(model)).section : model;
+      var days = travelManDays(carrier.labor);
+      TRAVEL_LINE_KEYS.forEach(function (k) {
+        var l = model.travel[k];
+        if (l && l.qty_auto !== false) l.qty = days;
+      });
+    }
+  }
+
+  function requireLayout(layout) {
+    if (typeof layout !== "string" || !types.isTab(layout)) {
+      throw new Error("seeding needs the layout of every section, one of " + types.tabKeys().join(", ") +
+        " (got " + JSON.stringify(layout) + ")");
+    }
+  }
+
+  /** Put the library's defaults on every NEW section of a bid: the estimate page's whole new-bid seeding, once,
+   *  per section. Returns a NEW model; the one handed in is not touched.
+   *
+   *  `ctx` is what the library answered, each part null when it was not asked (the page asks only for a new bid):
+   *    saved          what the draft held under polish_estimate when the page opened. The gates read it: the
+   *                   model cannot be asked, because migrateModel has already answered every question
+   *    laborRows      the library's default labor lines (after withCrewFallback), or null
+   *    laborRate      the company labor rate
+   *    travelRates    { lodging, per_diem } or null          feesDefault   a number or null
+   *    calcRows       the labor calculator's rows (after withCrewCalcFallback), or null
+   *    conditionRows  the stored condition defaults, or null
+   *    cellValues, split   the draft's cell_values and isSplit(draft): a condition answer a cell holds wins
+   *    asms, items, reserved   the library, for the default takeoff
+   *    sf             { tabId: [sf1, sf2] }, intake's two area boxes for each section
+   *
+   *  THE ORDER IS THE PAGE'S, step for step: labor and Travel, the job's lodging and per diem rates and fees
+   *  default, then the job's conditions, then each takeoff, then the labor calculator, with the Travel guys kept
+   *  in step after the labor and after the calculator. THE ROOT is seeded behind laborUnstated(saved) (its labor,
+   *  the job's travel and fees), conditionsUnstated(saved) (the job's conditions) and either of them (which
+   *  default takeoff it gets); a TAB SECTION behind isNewSection. A section that is "off" is left alone. Every
+   *  section's layout is REQUIRED: sectionsOf throws for a tab section that has none, and nothing here guesses
+   *  one. The job's Travel and the fees default go to the carrier section (travelCarrier), once per job. */
+  function seedNewSections(model, ctx) {
+    if (!isObject(model)) throw new Error("seedNewSections needs the model");
+    if (!isObject(ctx)) throw new Error("seedNewSections needs ctx, what the library answered");
+    var out = jsonCopy(model);   // the caller's model is never edited
+    var saved = ctx.saved;
+    var laborGate = laborUnstated(saved);
+    var condGate = conditionsUnstated(saved);
+    var carrierTab = travelCarrier(out);
+    var names = sectionsOf(out).filter(function (e) {
+      return e.kind !== "off" && (e.root || isNewSection(e.section, false));
+    }).map(function (e) { return e.tab; });
+    // The entries again, from the model as it stands (applyFeesDefault hands back a new root object).
+    var now = function () {
+      return sectionsOf(out).filter(function (e) { return names.indexOf(e.tab) >= 0; });
+    };
+    names.forEach(function (tab) { requireLayout(sectionOf(out, tab).layout); });
+    var sfOf = function (tab) {
+      return isObject(ctx.sf) && has.call(ctx.sf, tab) && ctx.sf[tab] instanceof Array ? ctx.sf[tab] : [undefined, undefined];
+    };
+    var asked = laborGate && !!ctx.laborRows;
+
+    // 1. labor and Travel, then the job's lodging and per diem rates and the fees default
+    now().forEach(function (e) {
+      if (!(e.root ? asked : !!ctx.laborRows)) return;
+      var s = e.section;
+      // A model that states no rows reads as the four shipped ones, so keep only Travel and let the library put
+      // the rest on. Another section than the carrier has no Travel of its own.
+      var keep = carrierTab === e.tab ? (s.labor || []).filter(function (r) { return r && r.id === "travel"; }) : [];
+      var rows = crewFirst(applyLaborRate(seedLibraryLabor(keep, ctx.laborRows, ctx.laborRate, e.layout), ctx.laborRate));
+      s.labor = carrierTab === e.tab ? rows : rows.filter(function (r) { return !r || r.id !== "travel"; });
+    });
+    if (asked) {
+      // Travel is a default like any other: if the library says this bid does not get it, say so on the model so
+      // a reload does not append the "missing" row back (migrateModel).
+      if (travelDeclined(ctx.laborRows, sectionOf(out, carrierTab).layout)) out = Object.assign(out, { no_travel_labor: true });
+      syncAutoGuys(out);
+      out.travel = applyTravelRates(out.travel, ctx.travelRates);
+      if (carrierTab === ROOT_TAB) {
+        out = applyFeesDefault(out, ctx.feesDefault);
+      } else {
+        var fee = Number(ctx.feesDefault);
+        if (isFinite(fee) && fee > 0) { sectionOf(out, carrierTab).section.fees = fee; out.fees_default = fee; }
+      }
+    }
+
+    // 2. the job's conditions: the library's answers, then a cell wins (see the page)
+    if (condGate && ctx.conditionRows) {
+      out.conditions = conditionsFromCells(seedConditionDefaults(out.conditions, ctx.conditionRows), ctx.cellValues, !!ctx.split);
+      out.conditions_shown = seedConditionsShown(ctx.conditionRows);
+    }
+
+    // 3. each takeoff, an empty one only
+    now().forEach(function (e) {
+      var s = e.section;
+      if (takeoffSf(s.takeoff)) return;
+      var sfs = sfOf(e.tab);
+      s.takeoff = (e.root ? (condGate || laborGate) : true)
+        ? seedDefaultTakeoff(s.takeoff, ctx.asms, ctx.items, ctx.reserved, sfs[0], sfs[1], e.layout)
+        : seedTakeoffSf(s.takeoff, sfs[0], sfs[1]);
+    });
+
+    // 4. the labor calculator, after the takeoff (a "from SF" line needs the area)
+    if (ctx.calcRows) {
+      var calculated = false;
+      now().forEach(function (e) {
+        if (e.root && !laborGate) return;
+        calculated = true;
+        var s = e.section;
+        s.labor = applyLaborCalc(s.labor, ctx.calcRows, takeoffSf(s.takeoff), ctx.laborRate);
+        // A rate typed on the Labor tab beats the calculator's blank ("company rate").
+        s.labor = keepLibraryRates(s.labor, ctx.laborRows || [], ctx.calcRows);
+        // Every row the calculator did not fill remembers the rate it was seeded with.
+        s.labor = stampRateDefaults(s.labor);
+      });
+      if (calculated) syncAutoGuys(out);
+    }
+    return out;
+  }
+
+  // ── the proposal's side of the price ────────────────────────────────────────
+  /** The LF rows of a takeoff that the bid prices (cove, base), counted like takeoffSf counts SF. */
+  function takeoffLf(rows) {
+    rows = rows || [];
+    var t = 0;
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i] || {};
+      if (r.unit === "LF" && rowOn(r) && !r.same_floor) t += num(r.measurement);
+    }
+    return t;
+  }
+
+  /** The area fields a section's priced tab carries (the keys the Estimate step's snapshot uses, which the
+   *  proposal's Area line sums from the base tabs): Polish and Seal one SF figure, Epoxy its area and cove,
+   *  Gyp its one bucket so far (the soft area; the hard and corridor buckets come with Gyp's own phase), Leveling
+   *  none. */
+  function areaFields(e) {
+    var rows = e.section.takeoff;
+    if (e.role === "polish" || e.role === "seal") return { polish_sf: takeoffSf(rows) };
+    if (e.role === "epoxy") return { epoxy_sf: takeoffSf(rows), cove_lf: takeoffLf(rows) };
+    if (e.role === "gyp") return { gyp_soft_sf: takeoffSf(rows) };
+    return {};
+  }
+
+  /** The workbook's "Man Hour Budget" (Polish!F67, Epoxy!F73) as the model has it: every labor row that is on,
+   *  Guys x Days x the row's hours in a day, and an hours row (Travel) Guys x Hours. */
+  function sectionManHours(s) {
+    var t = 0;
+    (s.labor || []).forEach(function (r) {
+      if (!r || !rowOn(r)) return;
+      var g = num(r.guys), d = num(r.days);
+      t += r.unit === "hours" ? g * d : g * d * dayHours(r);
+    });
+    return t;
+  }
+
+  function systemDesc(s) {
+    var rows = s.takeoff || [];
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      if (!r || !rowOn(r)) continue;
+      var name = String(r.assembly_name || r.item_name || "").replace(/\s+/g, " ").trim();
+      if (name) return name;
+    }
+    return "";
+  }
+
+  /** THE ONE COMPOSITION OF WHAT A SAVE WRITES THAT THE PROPOSAL SIDE READS. A pure function of the model and the
+   *  bids the page priced; buildSavePatch is its only caller, so the 600 ms autosave and the `pagehide` flush
+   *  write the same keys, and on a v2 draft nothing else writes a derived key.
+   *
+   *  `ctx.bid` is the root (Polish) section's bid, `ctx.bids` { tabId: bid } the others' (priceTabs). A section
+   *  that is part of the bid and has no bid THROWS: a save with no price is a save of zero.
+   *
+   *  A MODEL WITH ONLY THE ROOT SECTION (every saved bid today) gets exactly the keys the page has always
+   *  written, in the order it wrote them: polish_estimate (the model with `totals` stamped from the bid), polish_sf,
+   *  polish_2_sf and computed_bid. save_patch_golden.json holds that, byte for byte. Nothing else is added: a
+   *  price snapshot (priced_tabs marked v2) on a Polish bid would change what the proposal side reads for every
+   *  saved bid, and it is not wanted until another section exists.
+   *
+   *  A MODEL WITH MORE THAN ONE SECTION writes the complete set the proposal side reads, all of it from the
+   *  sections' bids (engine.combine: each section has had its OWN gross profit taken, and what is summed is those
+   *  totals):
+   *    priced_tabs         one entry per section that is part of the bid, base and option, each marked `v2: true`
+   *                        with its tab id, role, kind, total, taxes, area, and the job's two tax answers
+   *    proposal_lump_sum, proposal_sales_tax, proposal_remodel_tax   the sum of the BASE sections (an option-only
+   *                        tab, Seal or Leveling, is never in it)
+   *    proposal_taxable, proposal_remodel_on   the job's two answers (conditions.taxable, conditions.remodel_tax)
+   *    sheet_area          the base sections' areas, summed key by key
+   *    cost_snapshot       the base sections' costs (sub-total, taxes, fees and bond) and man hours
+   *    phase_price         0: v2 has no phase surcharge, and the proposal falls back to its own default
+   *    computed_bid        { lump_sum, price_per_sf, polish_sf, full_bid } as above, for the combined base
+   *  A section that cannot price (a profile rev that has moved, a rate that cannot be read) is listed with a null
+   *  total and the reason, and takes the combined price with it: there is NO price rather than a wrong one, so
+   *  computed_bid, the lump sum and the tax figures are null. */
+  function composePricingSnapshot(model, ctx) {
+    if (!isObject(model)) throw new Error("composePricingSnapshot needs the model it is pricing");
+    if (!isObject(ctx)) throw new Error("composePricingSnapshot needs ctx, the bids the page priced");
+    var entries = sectionsOf(model);
+    var bidOf = function (e) {
+      var b = e.root ? ctx.bid : (isObject(ctx.bids) && has.call(ctx.bids, e.tab) ? ctx.bids[e.tab] : undefined);
+      if (!isObject(b)) {
+        throw new Error("a save needs ctx." + (e.root ? "bid" : "bids[" + JSON.stringify(e.tab) + "]") + ", the " +
+          (e.root ? "markupChain result" : "priced bid") + " of the " + e.tab + " section: a save with no price is a save of zero");
+      }
+      return b;
+    };
+    var live = entries.filter(function (e) { return e.kind !== "off"; });
+    var bids = live.map(function (e) { return { e: e, b: bidOf(e) }; });
+    var rootLive = live.length && live[0].root ? bids[0].b : null;
+    var root = entries[0];
+
+    // the model, with every section's totals stamped from its bid
+    var stamped = Object.assign(copyInto({}, model), rootLive ? { totals: rootLive } : {});
+    if (isObject(model.tabs)) {
+      stamped.tabs = Object.fromEntries(entries.filter(function (e) { return !e.root; }).map(function (e) {
+        var hit = bids.filter(function (x) { return x.e.tab === e.tab; })[0];
+        return [e.tab, hit ? Object.assign(copyInto({}, e.section), { totals: hit.b }) : e.section];
+      }));
+    }
+
+    var out = { polish_estimate: stamped };
+    if (rootLive) {
+      out.polish_sf = rootLive.sf > 0 ? rootLive.sf : measuredSf(model.takeoff);
+      out.polish_2_sf = "";
+    }
+    var single = entries.length === 1 && root.kind === "base";
+    var rootComputed = rootLive ? {
+      lump_sum: rootLive.total, price_per_sf: rootLive.per_sf, polish_sf: rootLive.sf,
+      full_bid: { total_base_bid: rootLive.total, sales_tax: rootLive.sales_tax, remodel_tax: rootLive.remodel_tax }
+    } : null;
+    if (single) { out.computed_bid = rootComputed; return out; }
+
+    // ── more than one section: the complete derived set ──
+    var cond = isObject(model.conditions) ? model.conditions : {};
+    var priceable = function (b) { return b.priceable !== false; };
+    var isBase = function (e) { return e.kind === "base" && !types.tab(types.tabOfSheet(e.root ? ROOT_TAB : e.tab)).optionOnly; };
+    var base = bids.filter(function (x) { return isBase(x.e); });
+    var ok = base.length > 0 && base.every(function (x) { return priceable(x.b); });
+    var sums = ok ? engine.combine(base.map(function (x) { return { layout: x.e.layout, result: x.b }; })).sums : null;
+    var area = {};
+    base.forEach(function (x) {
+      var f = areaFields(x.e);
+      Object.keys(f).forEach(function (k) { area = Object.assign({}, area, Object.fromEntries([[k, num(area[k]) + f[k]]])); });
+    });
+    var areaTotal = base.reduce(function (t, x) { return t + takeoffSf(x.e.section.takeoff); }, 0);
+
+    out.computed_bid = ok ? {
+      lump_sum: sums.total, price_per_sf: areaTotal > 0 ? sums.total / areaTotal : null,
+      polish_sf: rootLive ? rootLive.sf : 0,
+      full_bid: { total_base_bid: sums.total, sales_tax: sums.sales_tax, remodel_tax: sums.remodel_tax }
+    } : null;
+    out.priced_tabs = bids.map(function (x) {
+      var b = x.b, good = priceable(b);
+      return Object.assign({
+        id: x.e.tab, name: x.e.tab, role: x.e.role, kind: x.e.kind,
+        total: good ? b.total : null, sales_tax: good ? b.sales_tax : null, remodel: good ? b.remodel_tax : null,
+        system_desc: systemDesc(x.e.section), notes_auto: [],
+        sf: areaFields(x.e), sys_names: [],
+        taxable: !!cond.taxable, remodel_on: !!cond.remodel_tax, v2: true
+      }, good ? {} : { unpriceable: String(b.reason || "") });
+    });
+    out.proposal_lump_sum = ok ? sums.total : null;
+    out.proposal_sales_tax = ok ? sums.sales_tax : null;
+    out.proposal_remodel_tax = ok ? sums.remodel_tax : null;
+    out.proposal_taxable = !!cond.taxable;
+    out.proposal_remodel_on = !!cond.remodel_tax;
+    out.sheet_area = area;
+    out.cost_snapshot = ok ? {
+      costs: sums.sub_total + sums.taxes + sums.fees_and_bond,
+      man_hours: Math.round(base.reduce(function (t, x) { return t + sectionManHours(x.e.section); }, 0))
+    } : { costs: 0, man_hours: 0 };
+    out.phase_price = 0;
+    return out;
+  }
+
+  /** The strip that switches between a bid's sections, or "" when there is only one (every bid today), so a
+   *  single-section estimate looks exactly as it did. One button per section, naming it, its kind and its price;
+   *  `active` is the tab id on show and `bids` the { tabId: bid } the page priced (the root's under its own tab
+   *  id). The page's delegated click handler reads `data-section-tab`. */
+  function sectionSwitcherHtml(model, active, bids) {
+    var list = sectionsOf(model);
+    if (list.length < 2) return "";
+    var esc = function (s) {
+      return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    };
+    return list.map(function (e) {
+      var b = isObject(bids) && has.call(bids, e.tab) ? bids[e.tab] : null;
+      var price = b && b.priceable !== false && b.total ? money(b.total) : "no price";
+      var kind = e.kind === "base" ? "" : (e.kind === "option" ? " (option)" : " (off)");
+      return '<button type="button" data-section-tab="' + esc(e.tab) + '" aria-current="' +
+        (e.tab === active ? "true" : "false") + '">' + esc(e.tab) + esc(kind) + " · " + esc(price) + "</button>";
+    }).join("");
+  }
   /** What is stopping this model being priced, in plain words. [] when nothing is.
    *
    *  Written for estimators, not for the console: every line names the row it is about, so the
@@ -2411,6 +2922,13 @@
     // The model's safety (Phase 4): the keys migrateModel owns, what the intake may state on a saved
     // model, and the ONE composition of everything the estimate page saves.
     MODEL_KEYS: MODEL_KEYS, patchModel: patchModel, buildSavePatch: buildSavePatch,
+    // Sections (Phase 10): a bid priced on several workbook tabs. See the block above blockers().
+    ROOT_TAB: ROOT_TAB, SECTION_KINDS: SECTION_KINDS, sectionsOf: sectionsOf, activeSections: activeSections,
+    sectionOf: sectionOf, isNewSection: isNewSection, travelCarrier: travelCarrier,
+    priceSection: priceSection, priceTabs: priceTabs, activateSection: activateSection,
+    seedNewSections: seedNewSections, syncAutoGuys: syncAutoGuys,
+    composePricingSnapshot: composePricingSnapshot, sectionSwitcherHtml: sectionSwitcherHtml,
+    takeoffLf: takeoffLf, sectionManHours: sectionManHours,
     // EXPORTED 2026-09-16 for a THIRD reader: the library page's Defaults tab lists Travel as the
     // labor default that already exists. It is exported rather than re-typed there for the reason
     // written above travelSeed itself -- the two copies that existed before drifted within a day,

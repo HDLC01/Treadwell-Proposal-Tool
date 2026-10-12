@@ -46,6 +46,10 @@ const last = (list) => list[list.length - 1];
 const nn = (v) => (v === undefined ? null : v);
 /** A value as JSON text, or null when there is none (what an erased `tabs` looks like). */
 const text = (v) => (v === undefined ? null : JSON.stringify(v));
+/** `tabs` as JSON text with each section's `totals` taken out. A save restamps every section's totals from
+ *  its bid (Phase 10, composePricingSnapshot), and that is the one thing about a section it may change. */
+const withoutTotals = (tabs) => (tabs === undefined ? null : JSON.stringify(Object.fromEntries(
+  Object.entries(tabs).map(([id, s]) => [id, Object.fromEntries(Object.entries(s).filter(([k]) => k !== "totals"))]))));
 
 /** Where two values first part, as a sentence, or null when they do not. */
 function where(want, got) {
@@ -93,9 +97,9 @@ const TABS = {
     totals: { total: 18250, sf: 4000 }, preset: null,
   },
   'Gyp (USG 1-8")': {
-    layout: "gyp", kind: "base", profile: "gyp@2",
+    layout: "gyp", kind: "base", profile: "gyp@1",
     takeoff: [{ assembly_id: "g1", assembly_name: "Underlayment", measurement: 9000, unit: "SF" }],
-    labor: [], contingency: 150, fees: 0, rates: { version: 2 }, totals: {}, preset: "usg-n12-1/8",
+    labor: [], contingency: 150, fees: 0, rates: { version: 1 }, totals: {}, preset: "usg-n12-1/8",
   },
   "Seal (+Jnts)": {
     layout: "seal", kind: "option", profile: "seal@1",
@@ -241,7 +245,10 @@ function savePatchSection() {
   const bidOf = (m) => B.markupChain({ material: 10000, labor: B.laborTotal(m.labor, m.conditions), travel: 0,
     contingency: m.contingency, fees: m.fees, conditions: m.conditions, sf: B.takeoffSf(m.takeoff),
     remodel_rate: null });
-  const model = withExtras(EVERYTHING);
+  // ONE SECTION: the five keys every saved bid has always written. A model that carries `tabs` is a bid on
+  // several sections and writes more (test_v2_multi_section.py holds that), so it is left out of this law.
+  const NO_TABS = Object.fromEntries(Object.entries(EVERYTHING).filter(([k]) => k !== "tabs"));
+  const model = withExtras(NO_TABS);
   model.conditions = Object.assign({}, model.conditions, { taxable: false, dye: true, joint_filler: true, local: true });
   const bid = bidOf(model);
   const state = { cell_values: { "Epoxy!E20": 5000, "Polish!B4": "stale" }, polish_sf: 1, other: "kept" };
@@ -347,7 +354,7 @@ async function estimateSection() {
     computedSf: s.computed_bid.polish_sf,
     cells: s.cell_values ? Object.fromEntries(CELLS.filter((c) => has(s.cell_values, c)).map((c) => [c, s.cell_values[c]])) : null,
     modelKeys: Object.keys(s.polish_estimate).sort(),
-    tabs: text(s.polish_estimate.tabs),
+    tabs: withoutTotals(s.polish_estimate.tabs),
     taxable: s.polish_estimate.conditions.taxable,
     totalsTotal: s.polish_estimate.totals && s.polish_estimate.totals.total,
   });
@@ -387,7 +394,7 @@ async function estimateSection() {
       settled: !!(both.first && both.saved) && G.same(both.first, both.saved),
       settledDiff: both.first && both.saved ? where(both.first, both.saved) : "nothing was saved",
       autosave: a.saved ? pick(a.saved) : null, pagehide: p.saved ? pick(p.saved) : null,
-      sentTabs: text(sc.model.tabs),
+      sentTabs: withoutTotals(sc.model.tabs),
       expectedSf: sc.sf,
     }]);
   }
@@ -421,17 +428,20 @@ async function intakeSection() {
   I.clickSwitch(i, "prevailing_wage");
   i.clock.fire();
   const afterIntake = last(i.rec.saves);
-  const tabsOf = (m) => text((m || {}).tabs);
+  const tabsOf = (m) => withoutTotals((m || {}).tabs);
+  const rawTabsOf = (m) => text((m || {}).tabs);
   return {
     alone: {
-      tabsIdentical: tabsOf(alone) === JSON.stringify(TABS),
+      tabsIdentical: rawTabsOf(alone) === JSON.stringify(TABS),
       extrasMissing: Object.keys(EVERYTHING).filter((k) => !has(alone, k)),
       taxableFlipped: alone.conditions.taxable === false,
       takeoffKept: alone.takeoff.length === 1 && alone.takeoff[0].measurement === 12500,
       version: alone.version,
     },
     cross: {
-      tabsBefore: JSON.stringify(TABS),
+      tabsBefore: withoutTotals(TABS),
+      // the intake never prices: what the estimate saved, totals included, is what it hands back
+      intakeLeavesTabsAsSaved: rawTabsOf(afterIntake.polish_estimate) === rawTabsOf(afterEstimate.polish_estimate),
       tabsAfterEstimate: tabsOf(afterEstimate.polish_estimate),
       tabsAfterIntake: tabsOf(afterIntake.polish_estimate),
       extrasMissingAfterEstimate: Object.keys(EVERYTHING).filter((k) => !has(afterEstimate.polish_estimate, k)),

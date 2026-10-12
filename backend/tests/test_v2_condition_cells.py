@@ -699,7 +699,7 @@ RENO_LINE = "      var first = firstFilled(carried.cells, out, isBlank);"
 MARK_LINE = '    "polish_estimate", "cell_values", "tax_flags_per_sheet",'
 COPY_BASE_LINE = "    if (WT.isSplit(srcData) && WT.isJobType(srcData.work_type)) {"
 ESTIMATE_ADOPT = "    M.conditions = B.conditionsFromCells(M.conditions, state.cell_values, T.isSplit(state));"
-ESTIMATE_SEEDED = "        B.seedConditionDefaults(M.conditions, condRows), state.cell_values, T.isSplit(state));"
+ESTIMATE_SEEDED = "      split: T.isSplit(state),"
 INTAKE_ADOPT = "    M.conditions = B.conditionsFromCells(M.conditions, state.cell_values, T.isSplit(state));"
 INTAKE_SAVE = "    return B.conditionCellWrites(M.conditions, draft.cell_values, undefined, T.isSplit(draft));"
 INTAKE_SEEDED = "        state.cell_values, T.isSplit(state));"
@@ -771,7 +771,7 @@ BREAKS = {
         test_the_takeoff_step_saves_a_split_copy_without_touching_its_options),
     "the Takeoff step's seeded read ignores the mark": (
         "takeoff", ESTIMATE, ESTIMATE_SEEDED,
-        "        B.seedConditionDefaults(M.conditions, condRows), state.cell_values);", [],
+        "      split: false,", [],
         test_the_takeoff_step_saves_a_split_copy_without_touching_its_options),
     "the v2 intake reads the draft as unsplit": (
         "intake", INTAKE, INTAKE_ADOPT,
