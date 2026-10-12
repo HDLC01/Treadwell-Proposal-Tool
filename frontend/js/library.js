@@ -280,7 +280,14 @@
   // saved row somebody has edited since. patchSoon sets it; only a server-confirmed save (or a
   // refused/reverted change, or a conflict repaint, or a delete) clears it. The name is kept
   // because the harnesses seed it.
-  var FRESH = { items: {}, assemblies: {} };
+  var FRESH = { items: {}, assemblies: {}, labor: {}, divisions: {}, units: {}, vendors: {} };
+  // THE KINDS THAT SAVE ONLY WHEN THEIR SAVE BUTTON IS PRESSED (Hanz, 2026-10-12: "apply that save
+  // button here"). Labor lines and the three Administration lists used to PATCH 600ms after the last
+  // keystroke; now an edit queues, marks the row unsaved, shows the row's Save and WAITS. arm()
+  // sets no timer for these, flushAllPending leaves them alone, and the page warns instead of
+  // saving behind the estimator's back (savePending, leaveOk). Items and assemblies keep their
+  // own, older autosave. The request a Save press sends is the one the autosave sent: flush().
+  var MANUAL_KINDS = ["labor", "divisions", "units", "vendors"];
   // A FLUSH THAT HAS TAKEN ITS PAYLOAD BUT NOT YET HEARD BACK, by record key: a promise that settles
   // when that flush is completely finished (confirm dialog answered, PATCH answered). flush deletes
   // pendingPatch[key] the moment it starts, so "nothing pending" used to read as "saved" while the
@@ -604,6 +611,10 @@
   // against the next keystroke. The alternative was an async callback whose promise nothing could
   // reach, which is what made a 409 scenario there pass while the second write went out anyway.
   function arm(kind, id, key) {
+    // A MANUAL KIND NEVER ARMS. Its payload sits in pendingPatch, its row shows Save, and only that
+    // button (or Enter in the row) sends it. This is also what keeps flush() honest when it asks to
+    // re-arm behind a save in flight: the edit simply stays queued for the next press.
+    if (MANUAL_KINDS.indexOf(kind) !== -1) return;
     if (timers[key]) clearTimeout(timers[key]);
     timers[key] = setTimeout(function () { return flush(kind, id, key); }, 600);
   }
@@ -708,6 +719,10 @@
       var fresh = saved.assembly || saved.item || saved.vendor || saved.division || saved.unit ||
         saved.row;
       if (fresh && fresh.id) adoptSaved(kind, fresh);
+      // A renamed division or unit reaches the Items tab's lists NOW, when the name is on file,
+      // and not on the keystroke (it used to): the Items table must not offer a name that a refused
+      // or unsent Save would leave the database without. typeof: absent in a bare harness scope.
+      if (typeof refSaved === "function") refSaved(kind, payload);
       // CONFIRMED -- this is the only place the unsaved mark is lifted by a save. Not while a newer
       // edit is already queued behind this one: that keystroke is still unsaved.
       if (FRESH[kind] && !pendingPatch[key]) {
@@ -784,6 +799,10 @@
     // Loop: a keystroke can land while a save is out, queueing another behind it. Bounded, so a
     // page that keeps producing edits cannot trap the press.
     for (var n = 0; n < 6; n++) {
+      // A MANUAL KIND'S EARLIER PRESS may still be on the wire (Enter, then Save). flush() would
+      // decline to start a second request for the record and the press would do nothing; wait for
+      // the first to land, then send whatever was typed meanwhile.
+      if (MANUAL_KINDS.indexOf(kind) !== -1 && takenP[key]) await takenP[key];
       if (pendingPatch[key]) {
         clearTimeout(timers[key]);
         delete timers[key];
@@ -824,11 +843,38 @@
     return '<button class="btn sm" type="button" data-save-new="items" data-save-id="' + esc(id) +
       '" title="Save this material now" aria-label="Save ' + esc(name) + '">Save</button>';
   }
+  /** THE SAVE BUTTON OF A LABOR LINE OR AN ADMINISTRATION VALUE (Hanz, 2026-10-12), the same
+   *  button as an Items row's -- same class, same data-save-new / data-save-id the one document
+   *  click listener reads -- with its own title. `what` is the thing it saves, in words. */
+  var SAVE_WHAT = { labor: "labor line", divisions: "division", units: "unit", vendors: "vendor" };
+  function rowSaveButtonHtml(kind, id, name) {
+    return '<button class="btn sm" type="button" data-save-new="' + esc(kind) + '" data-save-id="' +
+      esc(id) + '" title="Save this ' + SAVE_WHAT[kind] + ' now" aria-label="Save ' + esc(name) +
+      '">Save</button>';
+  }
+  /** The cell a manual row keeps its Save in: the FIRST cell of the row, left of the name. */
+  function manualSaveCell(kind, id) {
+    var sel = kind === "labor"
+      ? '#labor-body [data-labor="' + id + '"] .rowsave'
+      : '#' + kind + '-body [data-ref-kind="' + kind + '"][data-ref-id="' + id + '"] .rowsave';
+    return document.querySelector(sel);
+  }
   function showUnsaved(kind, id) {
     if (typeof document === "undefined") return;
     if (kind === "assemblies") {
       var b = $("asm-save");
       if (b && openId === id) b.hidden = false;
+      return;
+    }
+    if (MANUAL_KINDS.indexOf(kind) !== -1) {
+      var mc = manualSaveCell(kind, id);
+      if (mc && !mc.querySelector("[data-save-new]")) {
+        var mtmp = document.createElement("span");
+        mtmp.innerHTML = rowSaveButtonHtml(kind, id, (byId(kind, id) || {}).name || "");
+        // The "Saved" tick of the last save gives way to the button the new edit needs.
+        mc.innerHTML = "";
+        mc.appendChild(mtmp.firstChild);
+      }
       return;
     }
     var cell = document.querySelector('#items-body [data-item="' + id + '"] .rowsave');
@@ -845,8 +891,40 @@
       if (b && openId === id) b.hidden = true;
       return;
     }
+    if (MANUAL_KINDS.indexOf(kind) !== -1) {
+      // THE CONFIRMATION LIVES IN THE ROW IT BELONGS TO: the button gives way to "Saved" in the same
+      // cell for a moment, then the cell is empty again. A global status line two screens away
+      // from the row somebody just pressed Save on is a confirmation nobody sees.
+      var done = manualSaveCell(kind, id);
+      if (done) {
+        done.innerHTML = '<span class="rowsaved" role="status">Saved</span>';
+        setTimeout(function () {
+          if (done.querySelector && done.querySelector(".rowsaved")) done.innerHTML = "";
+        }, 2200);
+      }
+      return;
+    }
     var btn = document.querySelector('#items-body [data-item="' + id + '"] [data-save-new]');
     if (btn && btn.parentNode) btn.parentNode.removeChild(btn);
+  }
+  /** Drop everything this page holds for a labor line or an Administration value that is gone:
+   *  the queued edit, its timer and its unsaved mark. Without it a deleted row's pending edit
+   *  would keep the leave-page warning on for a record nobody can see. */
+  function forgetRow(kind, id) {
+    var key = kind + ":" + id;
+    clearTimeout(timers[key]);
+    delete timers[key];
+    delete pendingPatch[key];
+    if (FRESH[kind]) delete FRESH[kind][id];
+  }
+  /** A division or unit that has just been SAVED under a new name is now what the Items tab offers. */
+  function refSaved(kind, payload) {
+    if (!payload || payload.name === undefined) return;
+    var byName = function (a, b) { return String(a).localeCompare(String(b)); };
+    if (kind === "divisions") DIVISIONS = DIVISION_REFS.map(function (d) { return d.name; }).sort(byName);
+    else if (kind === "units") UNITS = UNIT_REFS.map(function (u) { return u.name; }).sort(byName);
+    else return;
+    renderItems();
   }
 
   /** LEAVING THE PAGE MUST NOT LOSE A TYPED CHANGE. Send everything queued the moment the tab goes
@@ -857,6 +935,10 @@
     Object.keys(pendingPatch).forEach(function (key) {
       var cut = key.indexOf(":");
       var kind = key.slice(0, cut), id = key.slice(cut + 1);
+      // NOT THE MANUAL KINDS: a labor line or an Administration value waits for its Save press.
+      // Sending it because the tab went to the background would be a silent save, which is what
+      // Hanz asked to be rid of; the beforeunload warning (savePending) covers the close instead.
+      if (MANUAL_KINDS.indexOf(kind) !== -1) return;
       clearTimeout(timers[key]);
       delete timers[key];
       flush(kind, id, key, true);
@@ -1403,9 +1485,11 @@
   var laborMoreOpen = {};
 
   /** One edit inside the Labor tab's table -- name, rate, unit or notes as headline fields, and
-   *  guys_auto/sort behind the "more" disclosure. Debounced onto the wire the same way Items' own
-   *  inline table already is, generalized to a third row-kind rather than reached for a second
-   *  time: patchSoon/flush/arm/post/del do not know or care that "labor" is new to them.
+   *  guys_auto/sort behind the "more" disclosure. QUEUED THROUGH patchSoon like Items' own inline
+   *  table, generalized to a third row-kind rather than reached for a second time: patchSoon/flush/
+   *  post/del do not know or care that "labor" is new to them. UNLIKE ITEMS IT DOES NOT SAVE BY
+   *  ITSELF (Hanz, 2026-10-12): "labor" is a MANUAL kind, so arm() sets no timer, the row shows its
+   *  Save and the PATCH goes out when that is pressed (or on Enter in the row) -- the same body.
    *
    *  NO CONFIRMATION DIALOG, unlike onItemEdit. That gate is a PRICING-INTEGRITY control, Hanz's
    *  own words, because an item's cost reprices every assembly built on it live the moment it
@@ -1533,6 +1617,8 @@
         ? window.TWBidModel.travelLabel(r.name) : r.name;
       if (!ADMIN) {
         out += '<tr data-labor="' + esc(r.id) + '">' +
+          // The Save column, empty for somebody who cannot save, so the cells line up under the head.
+          '<td class="rowsave"></td>' +
           "<td><b>" + esc(shownName) + "</b></td>" +
           '<td class="n">' + esc(L.money(r.rate)) + perUnit + "</td>" +
           "<td>" + esc(r.unit) + "</td>" +
@@ -1548,6 +1634,13 @@
           (r.unit === LABOR_UNITS[u] ? " selected" : "") + ">" + esc(LABOR_UNITS[u]) + "</option>";
       }
       out += '<tr data-labor="' + esc(r.id) + '">' +
+        // THE SAVE BUTTON'S OWN CELL, FIRST, so Save sits left of the name (Hanz, 2026-10-12: "apply
+        // that save button here", after the Items rows). Empty until the line has an unsaved edit; a
+        // repaint draws it for a line that has one (a More toggle, an Add above it), so the button
+        // survives anything that redraws the table. Pinned by library.html, like Items'.
+        '<td class="rowsave">' +
+          (FRESH.labor && FRESH.labor[r.id] ? rowSaveButtonHtml("labor", r.id, shownName) : "") +
+          "</td>" +
         '<td><input data-f="name" class="cell-name" value="' + esc(shownName) +
           '" aria-label="Labor line name" maxlength="200"></td>' +
         '<td class="n"><span class="money"><span>$</span><input data-f="rate" class="num cell-rate" value="' +
@@ -1569,7 +1662,7 @@
         "</td></tr>";
       if (open) {
         out += '<tr data-labor="' + esc(r.id) + '" class="labor-more">' +
-          '<td colspan="6">' +
+          '<td colspan="7">' +
             '<label class="morefield"><input type="checkbox" data-f="guys_auto"' +
               (r.guys_auto ? " checked" : "") +
               '> Man-days come off the crew rows above it</label>' +
@@ -1635,10 +1728,7 @@
       await del("labor", id);
       // An edit typed into the row just before the press is still queued, and would PATCH a
       // dead id 600ms later -- a 404 about a line the estimator watched go. forgetItem's reason.
-      var key = "labor:" + id;
-      clearTimeout(timers[key]);
-      delete timers[key];
-      delete pendingPatch[key];
+      forgetRow("labor", id);
       LABOR = LABOR.filter(function (r) { return r.id !== id; });
       paint();
     } catch (err) { say("Couldn't remove that labor line. " + err.message); }
@@ -1665,6 +1755,11 @@
       var v = list[i], one = singular(kind);
       var used = usageFor(kind, v.name);
       out += '<tr data-ref-kind="' + kind + '" data-ref-id="' + esc(v.id) + '">' +
+        // THE SAVE BUTTON'S OWN CELL, FIRST, left of the name (Hanz, 2026-10-12: "same as here").
+        // Empty until the value has an unsaved edit; a repaint draws it again for one that has.
+        '<td class="rowsave">' +
+          (ADMIN && FRESH[kind] && FRESH[kind][v.id] ? rowSaveButtonHtml(kind, v.id, v.name) : "") +
+          "</td>" +
         "<td>" + (ADMIN
           ? '<input data-rf="name" class="cell-ref" value="' + esc(v.name) + '" aria-label="' + one + ' name" maxlength="200">'
           : "<b>" + esc(v.name) + "</b>") + "</td>" +
@@ -1684,6 +1779,32 @@
     var first = $(kind + "-empty").querySelector
       ? $(kind + "-empty").querySelector("[data-add-ref]") : null;
     if (first) first.hidden = !ADMIN;
+  }
+
+  /** "Add division", "Add unit", "Add vendor": a new row, NAMED so a test can press it (the click
+   *  listener is out of the harness's reach, which is how the Labor add shipped dead once).
+   *
+   *  THE TOP OF THE LIST, not sorted into place (Hanz, 2026-10-12: the Add buttons are at the top of
+   *  their cards now, so the row they make appears directly under them -- the Items, Assemblies and
+   *  Labor adds already work this way) and its name box takes the focus. The server's A-Z order
+   *  comes back on the next load. */
+  async function addRefValue(addRef) {
+    try {
+      var one = singular(addRef);
+      var made = await post(addRef, { name: newRefName(addRef) });
+      var row = made[one];
+      adminList(addRef).unshift(row);
+      // The Items tab keeps its A-Z choices whatever order this list is drawn in.
+      var byName = function (a, b) { return String(a).localeCompare(String(b)); };
+      if (addRef === "divisions") DIVISIONS = DIVISION_REFS.map(function (d) { return d.name; }).sort(byName);
+      if (addRef === "units") UNITS = UNIT_REFS.map(function (u) { return u.name; }).sort(byName);
+      showView("vendors"); paint();
+      var rf = $(addRef + "-body")
+        .querySelector('[data-ref-id="' + row.id + '"] input[data-rf="name"]');
+      if (rf) { rf.focus(); rf.select(); }
+    } catch (err) {
+      say("Couldn't add that value. " + err.message);
+    }
   }
 
   function renderVendors() {
@@ -3720,6 +3841,69 @@
     renderTryIt();
   }
 
+  /** THE RATE BOXES HAVE A SAVE BUTTON TOO (Hanz, 2026-10-12: "apply that save button here" on the
+   *  Labor tab). The company labor rate and the Hotel and Per Diem rows used to file on `change`,
+   *  the moment the box lost focus; now typing only marks the box unsaved and shows ITS Save, left
+   *  of its name, and the press files the same PUT as before (fileGlobalRate, unchanged).
+   *
+   *  RATE_DRAFT holds what is typed and not yet filed, by line key, so a repaint of the boxes
+   *  (clicking the Labor tab again, the first read of the rates landing) draws the typed figure and
+   *  its Save instead of the filed one. The keys are the code's own line keys (rateKeyOf maps a
+   *  box to one of them and to nothing else), never a string read off the page. */
+  var RATE_DRAFT = {};
+  /** The code's own constant for a line key, or "" for anything that is not one. */
+  function knownRateKey(k) {
+    if (k === LABOR_RATE_DEF.line) return LABOR_RATE_DEF.line;
+    for (var i = 0; i < TRAVEL_KEYS.length; i++) if (TRAVEL_KEYS[i].line === k) return TRAVEL_KEYS[i].line;
+    return "";
+  }
+  function rateKeyOf(el) {
+    if (!el || !el.getAttribute) return "";
+    if (el.getAttribute("data-labor-rate") !== null) return LABOR_RATE_DEF.line;
+    var k = el.getAttribute("data-travel-rate");
+    return k === null ? "" : knownRateKey(k);
+  }
+  function rateLabel(key) {
+    if (key === LABOR_RATE_DEF.line) return LABOR_RATE_DEF.label;
+    for (var i = 0; i < TRAVEL_KEYS.length; i++) if (TRAVEL_KEYS[i].line === key) return TRAVEL_KEYS[i].label;
+    return "";
+  }
+  function hasDraft(key) { return Object.prototype.hasOwnProperty.call(RATE_DRAFT, key); }
+  function rateUnsavedCount() { return Object.keys(RATE_DRAFT).length; }
+  function rateSaveHtml(key) {
+    return '<button class="btn sm" type="button" data-save-rate="' + esc(key) +
+      '" title="Save this rate now" aria-label="Save ' + esc(rateLabel(key)) +
+      (/rate$/i.test(rateLabel(key)) ? "" : " rate") + '">Save</button>';
+  }
+  /** Draw or take away one box's Save without a repaint (a repaint would steal the caret). */
+  function setRateSave(key, on) {
+    var cell = $("rate-save-" + key);
+    if (cell) cell.innerHTML = on ? rateSaveHtml(key) : "";
+  }
+  /** Compare what is typed with what is filed, and let the box's Save follow. */
+  function syncRateDraft(key, input) {
+    var typed = String(input.value == null ? "" : input.value).trim().replace(/^\$/, "");
+    if (typed === travelFigure(TRAVEL_RULES[key])) delete RATE_DRAFT[key];
+    else RATE_DRAFT[key] = String(input.value);
+    setRateSave(key, hasDraft(key));
+  }
+  /** A keystroke in a rate box. Saves nothing. */
+  function onRateEdit(e) {
+    var key = rateKeyOf(e && e.target);
+    if (key) syncRateDraft(key, e.target);
+  }
+  /** The press of a rate box's Save (or Enter in the box): file it, then let the Save follow what
+   *  is left -- gone when the figure is on file, still there when the server or the page refused it. */
+  async function pressRateSave(key) {
+    key = knownRateKey(key);
+    if (!key) return false;
+    var input = $(key === LABOR_RATE_DEF.line ? "labor-rate-input" : "travel-rate-" + key);
+    if (!input) return false;
+    var ok = key === LABOR_RATE_DEF.line ? await saveLaborRate(input) : await saveTravelRate(input);
+    syncRateDraft(key, input);
+    return ok;
+  }
+
   /** Save one travel rate. See fileGlobalRate; the Labor tab's labor-rate box shares it. */
   async function saveTravelRate(input) {
     var key = input.getAttribute("data-travel-rate");
@@ -3743,14 +3927,19 @@
       html += '<p class="ronote">Could not read the saved figures, so the boxes are empty. ' +
         'Reload to try again.</p>';
     }
-    html += '<div class="card"><div class="tw"><table><thead><tr><th>Line</th><th class="n">Rate</th>' +
-      '<th>Unit</th><th>How it is worked out</th></tr></thead><tbody>';
+    html += '<div class="card"><div class="tw"><table><thead><tr><th class="rowsave"></th><th>Line</th>' +
+      '<th class="n">Rate</th><th>Unit</th><th>How it is worked out</th></tr></thead><tbody>';
     TRAVEL_KEYS.forEach(function (t) {
       var fig = travelFigure(TRAVEL_RULES[t.line]);
-      html += '<tr data-travel-row="' + esc(t.line) + '"><td>' + esc(t.label) + '</td><td class="n">' +
+      // WHAT IS TYPED AND NOT FILED comes back on a repaint, with its Save (see RATE_DRAFT).
+      var drafted = ADMIN && hasDraft(t.line);
+      if (drafted) fig = RATE_DRAFT[t.line];
+      // The Save cell is FIRST, left of the name, the same as every other row on this tab.
+      html += '<tr data-travel-row="' + esc(t.line) + '"><td class="rowsave" id="rate-save-' + esc(t.line) +
+        '">' + (drafted ? rateSaveHtml(t.line) : "") + '</td><td>' + esc(t.label) + '</td><td class="n">' +
         (ADMIN
           ? '<span class="money"><span>$</span><input class="num cell-cost" type="text" ' +
-            'inputmode="decimal" data-travel-rate="' + esc(t.line) +
+            'id="travel-rate-' + esc(t.line) + '" inputmode="decimal" data-travel-rate="' + esc(t.line) +
             '" value="' + esc(fig) + '" placeholder="' + esc(String(t.shipped)) +
             '" aria-label="' + esc(t.label) + ' rate, dollars ' + esc(t.unitWord) + '" /></span>'
           : esc(L.money(fig === "" ? t.shipped : Number(fig)))) +
@@ -3769,15 +3958,15 @@
     var say2 = function (m) { if (out) out.textContent = m || ""; };
     var raw = String(input.value || "").trim().replace(/^\$/, "");
     var prev = travelFigure(TRAVEL_RULES[key]);
-    if (raw === prev) return;
+    if (raw === prev) return true;
     if (raw === "") {
       say2("Type a dollar figure. The shipped $" + def.shipped + " stands until you do.");
-      return;
+      return false;
     }
     if (!/^\d+(\.\d+)?$/.test(raw) || Number(raw) <= 0) {
       say2(def.label + " has to be a dollar figure above zero, like " + def.shipped + ".");
       input.value = prev;
-      return;
+      return false;
     }
     say2("");
     try {
@@ -3789,18 +3978,20 @@
       if (res.status === 403) {
         say2("Changing these figures is admin-only. Nothing was saved.");
         input.value = prev;
-        return;
+        return false;
       }
       var j = await res.json().catch(function () { return {}; });
-      if (!res.ok) { say2(j.detail || "That didn't save."); input.value = prev; return; }
+      if (!res.ok) { say2(j.detail || "That didn't save."); input.value = prev; return false; }
       TRAVEL_RULES[key] = j.rule || Object.assign({}, rule, { layout: "global", line_key: key,
                                                                applies: true, formula: raw });
       // The Defaults tab's Markup list reads the same row; keep its copy honest.
       GLOBAL_MARKUP.forEach(function (g) { if (g.line_key === key) g.formula = raw; });
       say2(def.label + " saved: $" + raw + " per " + def.per + ". New estimates start from it.");
+      return true;
     } catch (err) {
       say2("Couldn't reach the server. Nothing was saved.");
       input.value = prev;
+      return false;
     }
   }
 
@@ -3817,7 +4008,13 @@
     }
     var shipped = window.TWBidModel.SHIPPED_LABOR_RATE;
     var fig = travelFigure(TRAVEL_RULES[LABOR_RATE_DEF.line]);
-    var html = '<div class="card"><div class="areaband"><label for="labor-rate-input"><b>Labor rate</b></label> ';
+    var drafted = ADMIN && hasDraft(LABOR_RATE_DEF.line);
+    if (drafted) fig = RATE_DRAFT[LABOR_RATE_DEF.line];
+    // THE SAVE SITS LEFT OF THE NAME (Hanz, 2026-10-12), in a cell of its own so it appearing moves nothing.
+    var html = '<div class="card"><div class="areaband">' +
+      (ADMIN ? '<span class="ratesave" id="rate-save-' + esc(LABOR_RATE_DEF.line) + '">' +
+        (drafted ? rateSaveHtml(LABOR_RATE_DEF.line) : "") + '</span>' : "") +
+      '<label for="labor-rate-input"><b>Labor rate</b></label> ';
     if (ADMIN) {
       html += '<span class="money"><span>$</span><input id="labor-rate-input" class="num cell-cost" ' +
         'type="text" inputmode="decimal" data-labor-rate="1" value="' + esc(fig) + '" placeholder="' +
@@ -4127,8 +4324,37 @@
     showView(M.pick(M.read(window, "tab"), PANES, view));
     setWorkType(M.pick(M.read(window, "wt"), ["global"].concat(WORK_TYPES), DEFAULT_WT));
   }
+  /** HOW MANY ROWS ON ONE PANE HAVE A CHANGE NOT YET SAVED. Only the two panes whose rows save on
+   *  a button count (Labor, and Administration): Items and Assemblies have their own autosave and
+   *  their own leave rules. The Labor pane counts its rate boxes too. */
+  function unsavedOnPane(pane) {
+    var n = function (k) { return FRESH[k] ? Object.keys(FRESH[k]).length : 0; };
+    if (pane === "labor") return n("labor") + rateUnsavedCount();
+    if (pane === "vendors") return n("divisions") + n("units") + n("vendors");
+    return 0;
+  }
+  var PANE_NAME = { labor: "Labor", vendors: "Administration" };
+  /** THE ONE WARNING ON A TAB SWITCH (Hanz, 2026-10-12: warn, do not drop and do not save behind my
+   *  back). Asked when the pane being left holds unsaved rows; Stay keeps the estimator where the
+   *  Save buttons are, Switch tab goes on. The edits are NOT discarded by switching -- the rows stay
+   *  unsaved, Save and all, for when the estimator comes back -- and nothing is sent. Closing the
+   *  page is the browser's own warning (beforeunload). Resolves true to go ahead. */
+  async function leaveOk(pane) {
+    var n = unsavedOnPane(pane);
+    if (!n) return true;
+    if (!TW.confirmDanger) return true;
+    return await TW.confirmDanger({
+      tone: "warn", icon: "warning",
+      title: "Unsaved changes",
+      message: n + (n === 1 ? " change on the " : " changes on the ") + PANE_NAME[pane] +
+        " tab " + (n === 1 ? "is" : "are") + " not saved. They stay here, waiting for their Save " +
+        "button, but they are lost if you close or reload the page.",
+      cancelText: "Stay on this tab", confirmText: "Switch tab",
+    });
+  }
   PANES.forEach(function (p) {
-    $(TAB_OF[p]).addEventListener("click", function () {
+    $(TAB_OF[p]).addEventListener("click", async function () {
+      if (p !== view && !(await leaveOk(view))) return;
       showView(p);
       if (p === "labcalc") renderLabCalc();
       if (p === "labor") renderLaborRate();
@@ -4651,7 +4877,7 @@
   });
   window.addEventListener("pagehide", flushAllPending);
   window.addEventListener("beforeunload", function (e) {
-    if (!savePending()) return;
+    if (!savePending() && !rateUnsavedCount()) return;
     e.preventDefault();
     e.returnValue = "";
     return "";
@@ -4662,6 +4888,44 @@
   // there is no confirmation dialog on this table for one to schedule around.
   $("labor-body").addEventListener("input", onLaborEdit);
   $("labor-body").addEventListener("change", onLaborEdit);
+
+  /** SAVE ONE LABOR LINE OR ADMINISTRATION VALUE, the press of its Save button -- and Enter in one
+   *  of its boxes, which is the same press. Both go through saveNow, so the request is the one the
+   *  autosave used to send; the row's button is retired here when nothing is left unsaved (a
+   *  refused or failed request keeps it, and the words are already on screen). Returns whether the
+   *  row is still unsaved. */
+  async function pressSave(kind, id) {
+    var still = await saveNow(kind, id);
+    if (!still && typeof document !== "undefined") {
+      var cell = manualSaveCell(kind, id);
+      var btn = cell && cell.querySelector ? cell.querySelector("[data-save-new]") : null;
+      if (btn && btn.parentNode) btn.parentNode.removeChild(btn);
+    }
+    return still;
+  }
+
+  /** ENTER IN A BOX PRESSES THAT ROW'S SAVE. A text box only: a checkbox has no use for Enter, a
+   *  select opens on it, and a composing IME is mid-word. preventDefault so the key does not also
+   *  do whatever the browser would. The rate boxes file through their own save (pressRateSave). */
+  async function onEnterSave(e) {
+    if (!e || e.key !== "Enter" || e.isComposing) return;
+    var t = e.target;
+    if (!t || !t.getAttribute || t.type === "checkbox" || t.tagName === "SELECT") return;
+    var rateKey = rateKeyOf(t);
+    if (rateKey) { e.preventDefault(); await pressRateSave(rateKey); return; }
+    var row = null, kind = "", id = "";
+    if (t.getAttribute("data-f") !== null && t.closest) {
+      row = t.closest("[data-labor]");
+      if (row) { kind = "labor"; id = row.getAttribute("data-labor"); }
+    } else if (t.getAttribute("data-rf") !== null && t.closest) {
+      row = t.closest("[data-ref-kind]");
+      if (row) { kind = row.getAttribute("data-ref-kind"); id = row.getAttribute("data-ref-id"); }
+    }
+    if (!kind || MANUAL_KINDS.indexOf(kind) === -1) return;
+    e.preventDefault();
+    if (FRESH[kind] && FRESH[kind][id]) await pressSave(kind, id);
+  }
+  $("labor-body").addEventListener("keydown", onEnterSave);
 
   // ── administration ────────────────────────────────────────────────────────
   // Writes are admin-only on the server too (`_require_admin`). The read-only render is what keeps
@@ -4679,16 +4943,14 @@
     if (!v) return;
     v[f] = e.target.value;
     // A rename changes what the Items tab offers, but NOT what an item already says. Existing
-    // values stay put and render as off-list choices until someone changes that item.
-    if (f === "name") {
-      if (kind === "divisions") DIVISIONS = DIVISION_REFS.map(function (d) { return d.name; });
-      if (kind === "units") UNITS = UNIT_REFS.map(function (u) { return u.name; });
-      renderItems();
-    }
+    // values stay put and render as off-list choices until someone changes that item. THE ITEMS TAB
+    // LEARNS THE NEW NAME WHEN IT IS SAVED (refSaved, from flush), no longer on the keystroke: the
+    // edit is a draft until Save, and a draft must not reach another tab's choices.
     patchSoon(kind, id, (function () { var b = {}; b[f] = e.target.value; return b; })());
   }
   ["divisions-body", "units-body", "vendors-body"].forEach(function (id) {
     $(id).addEventListener("input", onRefEdit);
+    $(id).addEventListener("keydown", onEnterSave);
   });
 
   function lineOf(target) {
@@ -4999,6 +5261,11 @@
       return;
     }
 
+    // A RATE BOX'S SAVE (the company labor rate, Hotel, Per Diem): its own attribute, because it
+    // files a Global markup row and not a library record. See pressRateSave.
+    var rateBtn = t.closest && t.closest("[data-save-rate]");
+    if (rateBtn) { await pressRateSave(rateBtn.getAttribute("data-save-rate")); return; }
+
     var saveBtn = t.closest && t.closest("[data-save-new]");
     if (saveBtn) {
       var sk = saveBtn.getAttribute("data-save-new"), sid = saveBtn.getAttribute("data-save-id");
@@ -5120,24 +5387,7 @@
 
     var addRefBtn = t.closest && t.closest("[data-add-ref]");
     var addRef = addRefBtn && addRefBtn.getAttribute("data-add-ref");
-    if (addRef) {
-      try {
-        var one = singular(addRef);
-        var made = await post(addRef, { name: newRefName(addRef) });
-        var row = made[one];
-        adminList(addRef).push(row);
-        adminList(addRef).sort(function (a, b) { return String(a.name).localeCompare(String(b.name)); });
-        if (addRef === "divisions") DIVISIONS = DIVISION_REFS.map(function (d) { return d.name; });
-        if (addRef === "units") UNITS = UNIT_REFS.map(function (u) { return u.name; });
-        showView("vendors"); paint();
-        var rf = $(addRef + "-body")
-          .querySelector('[data-ref-id="' + row.id + '"] input[data-rf="name"]');
-        if (rf) { rf.focus(); rf.select(); }
-      } catch (err) {
-        say("Couldn't add that value. " + err.message);
-      }
-      return;
-    }
+    if (addRef) { await addRefValue(addRef); return; }
 
     var delRefBtn = t.closest && t.closest("[data-del-ref]");
     var delRef = delRefBtn && delRefBtn.getAttribute("data-del-ref");
@@ -5161,6 +5411,7 @@
       if (!okRef) return;
       try {
         await del(delRef, rid);
+        forgetRow(delRef, rid);
         if (delRef === "divisions") {
           DIVISION_REFS = DIVISION_REFS.filter(function (x) { return x.id !== rid; });
           DIVISIONS = DIVISION_REFS.map(function (d) { return d.name; });
@@ -5212,7 +5463,8 @@
       if (!okv) return;
       try {
         await del("vendors", dv);
-        VENDORS = VENDORS.filter(function (x) { return x.id !== dv; });
+        forgetRow("vendors", dv);
+        VENDORS =VENDORS.filter(function (x) { return x.id !== dv; });
         paint();
       } catch (err) { say("Couldn't remove that vendor. " + err.message); }
       return;
@@ -5289,10 +5541,12 @@
   });
 
   // The Labor tab's rate box and its Hotel / Per Diem rows are the one door onto the Global rows.
-  $("pane-labor").addEventListener("change", function (e) {
-    var el = e.target;
-    if (el && el.getAttribute && el.getAttribute("data-labor-rate") !== null) saveLaborRate(el);
-    else if (el && el.getAttribute && el.getAttribute("data-travel-rate") !== null) saveTravelRate(el);
+  // THEY NO LONGER FILE ON `change` (Hanz, 2026-10-12): typing marks the box unsaved and shows its
+  // Save (onRateEdit), and the Save press or Enter in the box files it (pressRateSave, wired by the
+  // one document click listener and onEnterSave). Nothing goes out when the box merely loses focus.
+  $("pane-labor").addEventListener("input", onRateEdit);
+  $("pane-labor").addEventListener("keydown", function (e) {
+    if (rateKeyOf(e.target)) onEnterSave(e);
   });
 
   load().then(function () {
