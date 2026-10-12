@@ -3213,7 +3213,8 @@ def test_review_always_draws_hotel_and_per_diem_with_a_note_when_both_are_off(ra
     c = ran["hotelCard"]["off"]
     assert c["count"] == 1, "Review has no Hotel and Per Diem container when both lines are off"
     assert NOT_INCLUDED in c["body"]
-    assert c["header"] == "$0" and c["total"] == "$0" and c["travel"] == 0
+    assert c["header"] is None, "the card header still repeats the total"
+    assert c["total"] == "$0" and c["travel"] == 0
     assert ">Hotel<" not in c["body"] and ">Per Diem<" not in c["body"], "an off line was listed"
     assert not ran["hotelCard"]["oldTitleAnywhere"], "Review still carries the old card title"
 
@@ -3227,13 +3228,13 @@ def test_review_hotel_card_lists_only_lines_that_are_on_and_totals_the_bid_trave
     one, both = ran["hotelCard"]["one"], ran["hotelCard"]["both"]
     assert ">Hotel<" in one["body"] and ">Per Diem<" not in one["body"]
     assert NOT_INCLUDED not in one["body"]
-    assert one["travel"] > 0 and one["total"] == one["header"]
+    assert one["travel"] > 0 and one["header"] is None and one["total"] != "$0"
     assert ">Hotel<" in both["body"] and ">Per Diem<" in both["body"]
     assert NOT_INCLUDED not in both["body"]
     assert both["travel"] > one["travel"], "Per Diem added nothing to the card"
     expected = "${:,.0f}".format(both["travel"]) if both["travel"] == int(both["travel"]) \
         else "${:,.2f}".format(both["travel"])
-    assert both["total"] == expected == both["header"]
+    assert both["total"] == expected and both["header"] is None
 
 
 @needs_node
@@ -3887,3 +3888,155 @@ def test_the_old_empty_row_paths_are_gone():
     assert "M.labor.push(newLaborRow())" not in src, "an unnamed Task card can be pushed again"
     assert not re.search(r"newLaborRow\(\s*\)", src), "newLaborRow() is called with no name"
     assert "openTakeoffPicker(addRow)" in src and "openLaborPicker(addLab)" in src
+
+
+# ── Review cards: no header total, one colour each (Hanz, 2026-10-12) ────────────────────────────
+from html.parser import HTMLParser
+
+REVIEW_KEYS = ("takeoff", "labor", "travel", "markup")
+PAGE_HTML = FRONTEND / "polish-estimate.html"
+
+
+class _ReviewCards(HTMLParser):
+    """Reads the Review html the page really drew into: {key: {"title", "head_text", "rows"}}.
+
+    A real parser, not a regex: the figures live inside spans inside cells inside rows, and a
+    pattern that only works on today's nesting is the kind of check that goes green by accident."""
+
+    def __init__(self):
+        super().__init__()
+        self.cards, self._card, self._in_head, self._row, self._cell = {}, None, False, None, None
+        self._depth = 0
+
+    def handle_starttag(self, tag, attrs):
+        a = dict(attrs)
+        if tag == "div" and "data-rev" in a and "rev" in (a.get("class") or "").split():
+            self._card = {"head": "", "rows": [], "start_depth": self._depth}
+            self.cards[a["data-rev"]] = self._card
+        if tag == "div":
+            self._depth += 1
+            if self._card is not None and a.get("class") == "rev-h":
+                self._in_head = True
+        if self._card is None:
+            return
+        if tag == "tr":
+            self._row = {"cls": a.get("class") or "", "cells": []}
+            self._card["rows"].append(self._row)
+        elif tag == "td" and self._row is not None:
+            self._cell = []
+            self._row["cells"].append(self._cell)
+
+    def handle_endtag(self, tag):
+        if tag == "td":
+            self._cell = None
+        elif tag == "tr":
+            self._row = None
+        elif tag == "div":
+            self._depth -= 1
+            self._in_head = False
+            if self._card is not None and self._depth == self._card["start_depth"]:
+                self._card = None
+
+    def handle_data(self, data):
+        if self._in_head and self._card is not None:
+            self._card["head"] += data
+        if self._cell is not None:
+            self._cell.append(data)
+
+
+def _cards(html):
+    p = _ReviewCards()
+    p.feed(html)
+    for c in p.cards.values():
+        c["rows"] = [{"cls": r["cls"], "cells": ["".join(x).strip() for x in r["cells"]]}
+                     for r in c["rows"]]
+    return p.cards
+
+
+def _money(n):
+    return "${:,.0f}".format(n) if n == int(n) else "${:,.2f}".format(n)
+
+
+@needs_node
+def test_every_review_card_has_a_colour_key_and_the_page_draws_all_four(ran):
+    """Each Review container is keyed by data-rev, not coloured by its position, so a card that is
+    added or moved keeps its own hue.
+
+    Mutation: drop the data-rev attribute from card() or from the markup wrapper -- a key goes
+    missing."""
+    cards = _cards(ran["reviewCards"]["html"])
+    assert sorted(cards) == sorted(REVIEW_KEYS), "Review cards drawn: %r" % sorted(cards)
+
+
+@needs_node
+def test_no_review_card_header_carries_a_money_figure(ran):
+    """Hanz, 2026-10-12: the total in the upper right of each container is gone; the totals stay
+    below. The header keeps its title and its Edit link and nothing with a dollar sign.
+
+    Mutation: put `amt` back into card()'s header -- the header text gains the figure."""
+    cards = _cards(ran["reviewCards"]["html"])
+    titles = {"takeoff": "Takeoff and Material", "labor": "Labor", "travel": "Hotel and Per Diem"}
+    for key, title in titles.items():
+        head = " ".join(cards[key]["head"].split())
+        assert head == title + " Edit", "%s header reads %r" % (key, head)
+        assert "$" not in head
+    assert 'class="amt"' not in ran["reviewCards"]["html"].split('data-rev="markup"')[0], (
+        "a header amount span is still drawn")
+
+
+@needs_node
+def test_each_review_card_ends_on_its_own_total_and_it_equals_the_old_header_figure(ran):
+    """Nothing was lost with the header figure: each card's LAST row is its total, flagged tot, and
+    it carries exactly the number the header used to repeat (the bid's own figure).
+
+    Mutation: remove the closing `tot` row from any card, or key it to another bid field -- the
+    last row is no longer the total or the figure moves."""
+    cards, bid = _cards(ran["reviewCards"]["html"]), ran["reviewCards"]["bid"]
+    want = {"takeoff": ("Material Total", "material_total"),
+            "labor": ("Labor Total", "labor_total"),
+            "travel": ("Hotel and Per Diem Total", "travel")}
+    for key, (label, field) in want.items():
+        last = cards[key]["rows"][-1]
+        assert "tot" in last["cls"].split(), "%s does not end on a total row" % key
+        assert last["cells"][0] == label
+        assert last["cells"][-1] == _money(bid[field]), (
+            "%s total reads %r, the bid says %r" % (key, last["cells"][-1], _money(bid[field])))
+    assert bid["travel"] > 0, "the fixture never exercised a non-zero card total"
+    # The markup card closes on the lump sum, which keeps its own emphasis.
+    grand = cards["markup"]["rows"][-1]
+    assert "grand" in grand["cls"].split() and grand["cells"][-1] == _money(bid["total"])
+
+
+def _luminance(hex6):
+    ch = [int(hex6[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+    ch = [v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4 for v in ch]
+    return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2]
+
+
+def _contrast(a, b):
+    la, lb = sorted((_luminance(a), _luminance(b)), reverse=True)
+    return (la + 0.05) / (lb + 0.05)
+
+
+def test_the_page_defines_a_darker_band_and_a_lighter_total_shade_for_every_review_key():
+    """Both shades exist per key, the band is the DARKER of the two, every card has its own hue,
+    ink on either shade and the Edit link on the band clear WCAG AA (4.5:1), and the rules that use
+    the pair are keyed on data-rev.
+
+    Mutation: delete one --rev-*-tot token, swap a band for a lighter value, or reuse one hue for
+    two cards -- a pair is missing, inverted or duplicated."""
+    css = PAGE_HTML.read_text(encoding="utf-8")
+    token = {m.group(1): m.group(2).lower()
+             for m in re.finditer(r"--([a-z-]+):\s*(#[0-9a-fA-F]{6})", css)}
+    ink, edit = token["ink"], token["red-dark"]
+    seen = set()
+    for key in REVIEW_KEYS:
+        band, tot = token.get("rev-%s-band" % key), token.get("rev-%s-tot" % key)
+        assert band and tot, "%s is missing one of its two shades" % key
+        assert _luminance(band) < _luminance(tot), "%s: the title band is not the darker shade" % key
+        assert _contrast(band, ink) >= 4.5 and _contrast(tot, ink) >= 4.5, key
+        assert _contrast(band, edit) >= 4.5, "%s: the Edit link fails AA on the band" % key
+        assert band not in seen, "%s reuses another card's colour" % key
+        seen.add(band)
+        assert ('.rev[data-rev="%s"]' % key) in css, "no rule assigns %s by data-rev" % key
+    assert "background:var(--rev-band" in css and "background:var(--rev-tot" in css

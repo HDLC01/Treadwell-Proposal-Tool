@@ -1757,10 +1757,15 @@
   }
 
   // ── review ──────────────────────────────────────────────────────────────────
-  function card(title, step, amt, inner) {
-    return '<div class="rev"><div class="rev-h">' + esc(title) +
-      ' <button data-go="' + step + '">Edit</button>' +
-      (amt ? '<span class="amt">' + esc(amt) + '</span>' : '') + '</div>' + inner + '</div>';
+  /** A Review card. `key` is its colour (data-rev, see the --rev-* tokens in polish-estimate.html).
+   *
+   *  THE HEADER CARRIES NO FIGURE (Hanz, 2026-10-12): the total sits once, on the card's own last
+   *  row, where it is also keyed for repaintNumbers. The header used to repeat it at the far right
+   *  and had no repaint hook, so it could go stale while the row below it moved. The attribute is
+   *  written BEFORE class on purpose: tests cut the review html at 'class="rev"'. */
+  function card(title, step, key, inner) {
+    return '<div data-rev="' + key + '" class="rev"><div class="rev-h">' + esc(title) +
+      ' <button data-go="' + step + '">Edit</button></div>' + inner + '</div>';
   }
 
   /** rows: [label, middle, money, rowClass]. `money` may be pre-built HTML for a keyed cell.
@@ -1808,7 +1813,7 @@
     tkRows.push(["Material Subtotal", "", mkAmt(b, "material")]);
     tkRows.push(["Shipping", B.pct(B.RATES.SHIPPING), mkAmt(b, "shipping")]);
     tkRows.push(["Material Total", "", mkAmt(b, "material_total"), "tot"]);
-    html += card("Takeoff and Material", 0, moneyAuto(b.material_total), revTable(tkRows));
+    html += card("Takeoff and Material", 0, "takeoff", revTable(tkRows));
 
     // Labor
     var labRows = [];
@@ -1835,7 +1840,7 @@
       b.escalation ? B.pct(B.RATES.ESCALATION) : "", mkAmt(b, "escalation")]);
     labRows.push(["Labor burden", B.pct(B.RATES.BURDEN), mkAmt(b, "burden")]);
     labRows.push(["Labor Total", "", mkAmt(b, "labor_total"), "tot"]);
-    html += card("Labor", 1, moneyAuto(b.labor_total), revTable(labRows));
+    html += card("Labor", 1, "labor", revTable(labRows));
 
     // Hotel and Per Diem (Hanz, 2026-10-06): ALWAYS drawn, straight after Labor, because it is
     // inside the markups but is not labor and he wants to see the container whether or not it is
@@ -1855,9 +1860,9 @@
       trvRows.push(["Not included. Switch Lodging or Per Diem on in the Labor step.", "", ""]);
     }
     trvRows.push(["Hotel and Per Diem Total", "", mkAmt(b, "travel"), "tot"]);
-    html += card("Hotel and Per Diem", 1, moneyAuto(b.travel), revTable(trvRows));
+    html += card("Hotel and Per Diem", 1, "travel", revTable(trvRows));
 
-    html += '<div class="rev">' + markupTable(b) + '</div>';
+    html += '<div data-rev="markup" class="rev">' + markupTable(b) + '</div>';
     // No blurb on Review: the figures speak for themselves, and shell() leaves out the grey
     // line entirely when the blurb is empty, so no gap is left behind.
     return shell("Review the bid", "", html);

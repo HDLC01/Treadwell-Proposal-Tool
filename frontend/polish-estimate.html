@@ -350,16 +350,31 @@
 
     /* ── review ───────────────────────────────────────────────────────────── */
     .rev{border:1px solid var(--line);border-radius:10px;overflow:hidden;margin:0 0 11px}
-    .rev-h{display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--surf-low);
-           font:600 12.5px var(--sans)}
-    .rev-h .amt{margin-left:auto;font-family:var(--mono);font-variant-numeric:tabular-nums}
+    /* One muted hue per Review card (Hanz, 2026-10-12), each in two shades: -band is the darker
+       tint for the card's title, -tot the lighter tint for its total row. Picked by the card's
+       data-rev key, never by position, so a card added or reordered keeps its colour. Ink on the
+       darker shade is 11:1 or better and the Edit link (red-dark) is 5.4:1 or better, both past
+       WCAG AA. The page is light-only (color-scheme above), so there is no dark set. The lump-sum
+       row keeps the brand red-tint of .mk tr.grand. */
+    :root{
+      --rev-takeoff-band:#cddcc7; --rev-takeoff-tot:#e6efe2;
+      --rev-labor-band:#c9d8e8;   --rev-labor-tot:#e4edf6;
+      --rev-travel-band:#e8d8ae;  --rev-travel-tot:#f5eed7;
+      --rev-markup-band:#dccadb;  --rev-markup-tot:#f0e7ef}
+    .rev[data-rev="takeoff"]{--rev-band:var(--rev-takeoff-band);--rev-tot:var(--rev-takeoff-tot)}
+    .rev[data-rev="labor"]{--rev-band:var(--rev-labor-band);--rev-tot:var(--rev-labor-tot)}
+    .rev[data-rev="travel"]{--rev-band:var(--rev-travel-band);--rev-tot:var(--rev-travel-tot)}
+    .rev[data-rev="markup"]{--rev-band:var(--rev-markup-band);--rev-tot:var(--rev-markup-tot)}
+    .rev-h{display:flex;align-items:center;gap:10px;padding:10px 14px;
+           background:var(--rev-band,var(--surf-low));font:600 12.5px var(--sans)}
     .rev-h button{background:none;border:0;color:var(--red-dark);font:600 12px var(--sans);
            cursor:pointer;text-decoration:underline}
     .rev-t{width:100%;border-collapse:collapse;font-size:12.5px}
     .rev-t td{padding:7px 14px;border-top:1px solid var(--line-2);color:var(--ink-v)}
     .rev-t td.r{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums;
            color:var(--ink)}
-    .rev-t tr.tot td{border-top:1px solid var(--line);font-weight:700;color:var(--ink)}
+    .rev-t tr.tot td{border-top:1px solid var(--line);font-weight:700;color:var(--ink);
+           background:var(--rev-tot,transparent)}
     .blockers{background:var(--warn-bg);border:1px solid #e8d9a8;color:var(--warn);
            border-radius:9px;padding:11px 13px;font-size:12.5px;margin:0 0 12px}
     .blockers ul{margin:6px 0 0;padding-left:18px}
@@ -375,6 +390,10 @@
     .mk tr.band td{background:var(--surf-low);font:700 10.5px var(--sans);letter-spacing:.06em;
         text-transform:uppercase;color:var(--ink-v);border-top:1px solid var(--line)}
     .mk tr.sub td,.mk tr.tot td{border-top:2px solid var(--line);font-weight:700;color:var(--ink)}
+    /* The markup card has no title bar of its own, so its two section bands wear the darker shade
+       and its sub-total and total rows the lighter one. (0,3,2) beats the (0,2,2) rules above. */
+    .rev .mk tr.band td{background:var(--rev-band,var(--surf-low))}
+    .rev .mk tr.sub td,.rev .mk tr.tot td{background:var(--rev-tot,transparent)}
     .mk tr.grand td{border-top:2px solid var(--line);font-weight:700;
         background:var(--red-tint);color:var(--red-dark)}
     .mk tr.grand td.amt{font:700 18px var(--mono);font-variant-numeric:tabular-nums}
