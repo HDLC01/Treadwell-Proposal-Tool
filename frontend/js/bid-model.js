@@ -3157,8 +3157,10 @@
     var out = { gyp_soft_sf: 0, gyp_hard_sf: 0, gyp_corridor_sf: 0 };
     (rows || []).forEach(function (r) {
       if (!r || !rowOn(r) || r.unit === "LF" || r.same_floor) return;
-      var key = r.bucket === "hard" ? "gyp_hard_sf" : (r.bucket === "corridor" ? "gyp_corridor_sf" : "gyp_soft_sf");
-      out[key] += num(r.measurement);
+      // An explicit branch for each area (never `out[name] +=`): the mark came out of a saved draft.
+      if (r.bucket === "hard") out.gyp_hard_sf += num(r.measurement);
+      else if (r.bucket === "corridor") out.gyp_corridor_sf += num(r.measurement);
+      else out.gyp_soft_sf += num(r.measurement);
     });
     return out;
   }
