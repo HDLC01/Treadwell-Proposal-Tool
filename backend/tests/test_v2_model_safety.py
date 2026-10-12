@@ -221,10 +221,12 @@ def test_the_save_patch_holds_exactly_the_five_keys_the_estimate_page_saves(ran)
 
 
 def test_the_save_patch_carries_the_whole_model_and_stamps_the_bid_as_its_totals(ran):
-    """Everything the model holds rides along (`tabs` included), `totals` is the bid it was handed,
-    and the model it was handed is neither the object it saved nor edited to take the stamp.
+    """Everything the model holds rides along (`work_type`, a rates snapshot and a profile stamp here; a
+    model that carries `tabs` is a bid on several sections, covered by test_v2_multi_section.py), `totals`
+    is the bid it was handed, and the model it was handed is neither the object it saved nor edited to take
+    the stamp.
 
-    Mutation: `Object.assign(copyInto({}, model), { totals: b })` -> `Object.assign(model, { totals: b })`."""
+    Mutation: `Object.assign(copyInto({}, model), ...)` -> `Object.assign(model, ...)` in composePricingSnapshot."""
     s = ran["savePatch"]
     assert s["modelExpected"] is None, s["modelExpected"]
     assert s["totalsAreTheBid"] is True and s["tabsIdentical"] is True
@@ -236,7 +238,7 @@ def test_the_save_patch_writes_the_condition_cells_merged_over_the_drafts_own(ra
     Filler's rate and quantity cells follow the library lines the page priced with; and with no library
     handed in, those two are left exactly as they were.
 
-    Mutation: `cell_values: conditionCellWrites(model.conditions, cells, ctx.library)` -> `cell_values: cells`."""
+    Mutation: `cell_values: conditionCellWrites(model.conditions, cells, ctx.library, ...)` -> `cell_values: cells`."""
     s = ran["savePatch"]
     c = s["cells"]
     assert c["foreignKept"] == 5000
@@ -251,7 +253,7 @@ def test_the_save_patch_keeps_the_measured_floor_when_nothing_is_priced(ran):
     (a 0 unlocked intake's SF boxes and sent the proposal an empty SF token). computed_bid keeps the
     AREA PRICED, because price per SF divides by it.
 
-    Mutation: `polish_sf: b.sf > 0 ? b.sf : measuredSf(model.takeoff)` -> `polish_sf: b.sf`."""
+    Mutation: `rootLive.sf > 0 ? rootLive.sf : measuredSf(model.takeoff)` -> `rootLive.sf`."""
     s = ran["savePatch"]
     assert s["polishSf"]["saved"] == s["polishSf"]["priced"] == 17500
     assert s["floor"] == {"pricedSf": 0, "saved": 12500, "computedSf": 0}
@@ -312,7 +314,8 @@ def test_the_estimate_scenarios_exercise_what_used_to_drift(ran):
 
 def test_an_estimate_save_keeps_the_tabs_and_everything_else_the_model_does_not_know(ran):
     """Through the real page, both ways: the model the page saves holds `work_type`, `tabs`, `rates`,
-    `profile` and a null, and `tabs` is byte for byte what was sent."""
+    `profile` and a null, and `tabs` is what was sent, byte for byte, except that each section's `totals` is
+    restamped from its bid (the one thing a save may change in a section)."""
     w = ran["estimate"]["withTabs"]
     for way in ("autosave", "pagehide"):
         keys = w[way]["modelKeys"]
@@ -337,6 +340,7 @@ def test_an_intake_save_after_an_estimate_save_leaves_tabs_byte_identical(ran):
     c = ran["intake"]["cross"]
     assert c["tabsAfterEstimate"] == c["tabsBefore"]
     assert c["tabsAfterIntake"] == c["tabsBefore"]
+    assert c["intakeLeavesTabsAsSaved"] is True, "the intake changed a section the estimate had saved"
     assert c["extrasMissingAfterEstimate"] == [] and c["extrasMissingAfterIntake"] == []
     assert c["measurementAfterEstimate"] == c["measurementAfterIntake"] == "12000"
     assert c["prevailingWageAfterIntake"] is True, "the intake's own answer did not land"
@@ -361,17 +365,18 @@ MUTATIONS = {
         "return Object.assign(out, Object.fromEntries(rest));",
         lambda r: r["hostile"]["protoIsObjectPrototype"] is False),
     "the pagehide flush forgets the library's dye and joint filler lines": (
-        "js/polish-estimate.js", "B.buildSavePatch(M, cur, { bid: bid(), library: conditionLibrary() })",
-        "B.buildSavePatch(M, cur, { bid: bid() })",
+        "js/polish-estimate.js", "TW.setState(Object.assign({}, cur, savePatch(cur)));",
+        "TW.setState(Object.assign({}, cur, B.buildSavePatch(M, cur, { bid: bid(), bids: sectionBids() })));",
         lambda r: r["estimate"]["library"]["equal"] is False
         and "Polish!C25" in r["estimate"]["library"]["diff"]),
     "the pagehide flush saves the priced area again, as it did before": (
-        "js/polish-estimate.js", "B.buildSavePatch(M, cur, { bid: bid(), library: conditionLibrary() })));",
-        "Object.assign(B.buildSavePatch(M, cur, { bid: bid(), library: conditionLibrary() }), { polish_sf: bid().sf })));",
+        "js/polish-estimate.js", "TW.setState(Object.assign({}, cur, savePatch(cur)));",
+        "TW.setState(Object.assign({}, cur, Object.assign(savePatch(cur), { polish_sf: bid().sf })));",
         lambda r: r["estimate"]["onlyRowOff"]["equal"] is False and r["estimate"]["onlyRowOff"]["settled"] is False
         and r["estimate"]["typed"]["settled"] is True),
     "a save keeps the priced area when the only row is off": (
-        "js/bid-model.js", "polish_sf: b.sf > 0 ? b.sf : measuredSf(model.takeoff),", "polish_sf: b.sf,",
+        "js/bid-model.js", "out.polish_sf = rootLive.sf > 0 ? rootLive.sf : measuredSf(model.takeoff);",
+        "out.polish_sf = rootLive.sf;",
         lambda r: r["savePatch"]["floor"]["saved"] == 0 and r["estimate"]["onlyRowOff"]["autosave"]["polish_sf"] == 0),
     "a save forgets the condition cells": (
         "js/bid-model.js", "cell_values: conditionCellWrites(model.conditions, cells, ctx.library, types.isSplit(state)),",
@@ -379,8 +384,8 @@ MUTATIONS = {
         lambda r: r["savePatch"]["cells"]["taxable"] is None
         and (r["estimate"]["condition"]["autosave"]["cells"] or {}).get("Epoxy!B6") != "No"),
     "a save edits the model it was handed": (
-        "js/bid-model.js", "polish_estimate: Object.assign(copyInto({}, model), { totals: b }),",
-        "polish_estimate: Object.assign(model, { totals: b }),",
+        "js/bid-model.js", "var stamped = Object.assign(copyInto({}, model), rootLive ? { totals: rootLive } : {});",
+        "var stamped = Object.assign(model, rootLive ? { totals: rootLive } : {});",
         lambda r: r["savePatch"]["modelCopied"] is False and r["savePatch"]["frozenThrew"] is not None),
     "a patch overwrites what the intake does not own": (
         "js/bid-model.js", "var p = isObject(patch) ? patch : {};",
@@ -393,10 +398,10 @@ MUTATIONS = {
         "js/polish-intake.js", "var model = B.patchModel(cur.polish_estimate, {", "var model = B.patchModel({}, {",
         lambda r: r["intake"]["alone"]["takeoffKept"] is False and r["intake"]["alone"]["tabsIdentical"] is False),
     "an estimate save stops carrying what the model holds": (
-        "js/bid-model.js", "polish_estimate: Object.assign(copyInto({}, model), { totals: b }),",
-        "polish_estimate: { version: 2, takeoff: model.takeoff, labor: model.labor, conditions: model.conditions, contingency: model.contingency, fees: model.fees, travel: model.travel, totals: b },",
-        lambda r: "tabs" not in r["estimate"]["withTabs"]["autosave"]["modelKeys"]
-        and r["intake"]["cross"]["tabsAfterIntake"] != r["intake"]["cross"]["tabsBefore"]),
+        "js/bid-model.js", "var stamped = Object.assign(copyInto({}, model), rootLive ? { totals: rootLive } : {});",
+        "var stamped = { version: 2, takeoff: model.takeoff, labor: model.labor, conditions: model.conditions, contingency: model.contingency, fees: model.fees, travel: model.travel, totals: rootLive };",
+        lambda r: "work_type" not in r["estimate"]["withTabs"]["autosave"]["modelKeys"]
+        and r["intake"]["cross"]["extrasMissingAfterEstimate"] != []),
 }
 
 

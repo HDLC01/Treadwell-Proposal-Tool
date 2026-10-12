@@ -372,7 +372,8 @@ def test_the_labor_tab_sits_between_assemblies_and_administration(ran):
     assert t["afterAssemblies"] and t["beforeAdministration"], (
         "the Labor tab is not between Assemblies and Administration")
     assert t["paneStartsHidden"], "the Labor pane shows under whichever tab is open"
-    assert t["headers"] == ["Line", "Rate", "Unit", "Notes", "Work types", ""], (
+    # The first header is the Save button's column (Hanz, 2026-10-12), left of the name.
+    assert t["headers"] == ["", "Line", "Rate", "Unit", "Notes", "Work types", ""], (
         "the Labor table's columns are %s" % t["headers"])
     assert t["body"] and t["emptyState"], "the Labor pane has no table or no empty state"
     assert t["addButtons"] == 2 and t["addRowIsAbove"], (
@@ -3875,9 +3876,36 @@ def test_one_edit_to_any_material_field_shows_save_in_the_pinned_cell(ran):
     assert v["cleanRowCellEmpty"], "a clean row's pinned cell is not empty, so it takes up width"
     assert v["headerCells"] == v["rowCells"], (
         "header and row have different column counts", v["headerCells"], v["rowCells"])
-    assert v["headerHasPinnedColumn"]
-    assert v["cssPinsTheCell"], "the .rowsave cell is no longer pinned to the scroller's edge"
-    assert v["cssZeroWideWhenEmpty"]
+    assert v["headerSaveFirst"], "the header's Save column is not the first column"
+    assert v["headerHasNoStrayPinnedColumn"]
+    assert v["cssPinsTheCell"], "the .rowsave cell is no longer pinned to the scroller's left edge"
+    assert v["cssKeepsItsWidth"], "the Save column lost its fixed width, so it moves the table"
+
+
+@needs_node
+def test_every_per_row_save_sits_left_of_the_name(ran):
+    """Hanz, 2026-10-12: "For all item lines in default items and assemblies please put a save
+    button to the left of the name." The Items row's Save was the last-but-one cell of a table 1,990px
+    wide, so it was off screen until you scrolled sideways.
+
+    Executed: the real renderItems output for a row that has an unsaved mark. The Save cell is the
+    first cell, the name is the second, the button is the same one (data-save-new, data-save-id)
+    the click handler already saves from. The assembly's Save is left of its name box in the title
+    bar, and the Hotel and Per Diem confirmation line is below the Hotel rows, not above them.
+
+    Mutations: put the .rowsave cell back after datescell in renderItems (saveCellIsFirst,
+    saveBeforeName, inFirstCell red); put the th back after History (headerSaveFirst red); move
+    #asm-save back after the unit select (asmSaveLeftOfName red); move #travel-rate-alert back above
+    #travel-rates-box (hotelNoteBelowItsRows red)."""
+    v = ran["saveVisible"]
+    assert v["saveCellIsFirst"], "the Save cell is not the first cell of an Items row"
+    assert v["nameCellIsSecond"], "the name box is not the second cell, right after Save"
+    f = v["freshRowSaveFirst"]
+    assert f["saveBeforeName"], "Save comes after the name box in the row"
+    assert f["buttonMarkup"], "the Save button lost its handler attributes"
+    assert f["inFirstCell"], "the Save button is not the first thing in the row"
+    assert v["asmSaveLeftOfName"], "the assembly's Save is not left of its name box"
+    assert v["hotelNoteBelowItsRows"], "the Hotel confirmation is above its section again"
 
 
 @needs_node
@@ -4092,3 +4120,219 @@ def test_adding_a_default_files_the_work_types_of_the_view_it_was_added_on(ran):
     assert g["rowsAfterPolishAdd"] == {"n2": ["polish"], "n3": ["polish"], "n4": ["epoxy", "polish"]}
     assert g["removeCalls"] == [{"kind": "items", "id": "g1", "on": False, "workTypes": None}]
     assert g["refusedPutsTypesBack"]
+
+
+# ── the Labor tab and the Administration lists save on a button (Hanz, 2026-10-12) ───────────────
+# After #645 put each Items row's Save left of the name: "apply that save button here" (Labor),
+# "same as here" (Administration), "put all add buttons to the top". Executed through the page's REAL
+# patchSoon, arm, flush and saveNow (REAL_SAVE scope in library-ui-harness.js), with a counted clock.
+
+
+@needs_node
+def test_a_labor_line_is_not_saved_until_its_save_is_pressed(ran):
+    """Editing a labor line sends NOTHING: no timer is armed, running every timer and the page-hide
+    flush still sends nothing, and the row shows its own Save. Pressing it sends the SAME request the
+    autosave sent (PATCH /api/library/labor/<id>, the typed fields as the raw strings), once.
+
+    Mutations: drop the MANUAL_KINDS guard from arm() (armed goes to 1, and the timer run sends a
+    PATCH: `before.sent` red); drop the MANUAL_KINDS guard from flushAllPending (the page-hide flush
+    sends it); stop patchSoon marking FRESH.labor (saveShown red)."""
+    r = ran["laborSaveButton"]
+    b = r["before"]
+    assert b["sent"] == 0, "an edit to a labor line was sent without a Save press"
+    assert b["armed"] == 0, "an autosave timer was armed for a labor line"
+    assert b["pending"] == ["labor:L1"], "the edit is not queued for the Save press"
+    assert b["saveShown"], "the edited line shows no Save button for itself"
+    assert b["otherRowsClean"], "an untouched line shows a Save button"
+    assert b["unsavedOnPane"] == 1 and b["savePending"], (
+        "the page does not know it holds an unsaved line, so the leave-page warning stays quiet")
+    assert r["sentAfterPress"] == [{"path": "/api/library/labor/L1",
+                                    "body": {"rate": "61", "name": "Prevailing wage KS"}}], (
+        "the press did not send the one PATCH, with both edited fields in the body the autosave sent")
+    assert r["stillUnsaved"] is False and r["freshEmpty"] and r["pendingEmpty"]
+    assert r["unsavedAfter"] == 0 and r["savePendingAfter"] is False
+    assert r["noButtonAfter"] and r["cellSaysSavedInTheRow"], (
+        "the confirmation does not appear in the row the Save belonged to")
+    assert r["fadedToEmpty"], "the Saved tick never clears, so the column keeps text in it"
+    assert r["model"] == "Prevailing wage KS"
+    every = ran["laborSaveEveryField"]
+    assert every["quietUntilSave"] == 0, "a unit, notes, checkbox or position edit saved by itself"
+    assert every["sent"] == [{"path": "/api/library/labor/L1",
+                              "body": {"unit": "days", "notes": "Union only", "guys_auto": True, "sort": "4"}}], (
+        "the More fields and the selects reach the server in a different body than before")
+
+
+@needs_node
+def test_a_division_unit_or_vendor_is_not_saved_until_its_save_is_pressed(ran):
+    """The three Administration lists, the same: nothing sent and no timer armed on an edit, a Save in
+    the row, and the press sends the one PATCH the autosave sent. A renamed division or unit reaches
+    the Items tab's choices when it is SAVED, not on the keystroke.
+
+    Mutations: put the three kinds back out of MANUAL_KINDS (they autosave: quiet.sent goes to 3);
+    call refSaved's repaint from onRefEdit again (divisionsBefore already holds the new name)."""
+    a = ran["adminSaveButton"]
+    assert a["quiet"] == {"sent": 0, "armed": 0,
+                          "pending": ["divisions:d2", "units:u2", "vendors:v2"]}, a["quiet"]
+    assert a["shown"] == [True, True, True], "an edited value shows no Save of its own"
+    assert "Epoxy Coatings" not in a["divisionsBefore"] and "Epoxy" in a["divisionsBefore"], (
+        "a division the estimator has only typed over is already on the Items tab")
+    assert "Epoxy Coatings" in a["divisionsAfter"] and "Epoxy" not in a["divisionsAfter"], (
+        "a saved division rename never reached the Items tab's choices")
+    assert a["sent"] == [
+        {"path": "/api/library/divisions/d2", "body": {"name": "Epoxy Coatings"}},
+        {"path": "/api/library/units/u2", "body": {"notes": "Sold by the box"}},
+        {"path": "/api/library/vendors/v2", "body": {"name": "Sika USA"}}], a["sent"]
+    assert a["unsavedAfter"] == 0 and a["pendingAfter"] == []
+
+
+@needs_node
+def test_enter_in_a_box_presses_that_rows_save(ran):
+    """Enter in a text box saves the row it is in; every other key, a composing IME, a checkbox and a
+    clean row do nothing. A rate box goes to the rate save; a stray key name is refused.
+
+    Mutations: drop the wiring of onEnterSave onto labor-body (the test calls the handler, so this one
+    is the source assertion below); make onEnterSave save on any key (`quietForOtherKeys` red); skip
+    preventDefault (`enterPrevented` red)."""
+    e = ran["enterSaves"]
+    assert e["quietForOtherKeys"] == 0, "Escape, Tab, an IME or a checkbox saved the row"
+    assert e["sent"] == [{"path": "/api/library/labor/L1", "body": {"rate": "70"}},
+                         {"path": "/api/library/vendors/v2", "body": {"notes": "Local branch"}}], (
+        "Enter did not send exactly the dirty rows' PATCHes (a clean row must send nothing)")
+    assert e["enterPrevented"] and e["escapeLeftAlone"]
+    assert e["ratePresses"] == ["labor_rate", "travel_lodging"], e["ratePresses"]
+    js = (FRONTEND / "js" / "library.js").read_text(encoding="utf-8", errors="replace")
+    assert '$("labor-body").addEventListener("keydown", onEnterSave);' in js
+    assert '$(id).addEventListener("keydown", onEnterSave);' in js, (
+        "the Administration lists do not pass Enter to onEnterSave")
+
+
+@needs_node
+def test_a_refused_save_keeps_its_button_and_each_press_is_one_attempt(ran):
+    """A 400 leaves the line unsaved, with its Save and its queued edit, so the next press sends it
+    again; one press is one request, never a retry loop.
+
+    Mutation: clear FRESH or the queue when the request is refused (buttonStays / pendingKept red)."""
+    r = ran["refusedSave"]
+    assert r["stillUnsaved"] and r["buttonStays"] and r["pendingKept"] and r["markKept"]
+    assert r["oneAttemptPerPress"]
+
+
+@needs_node
+def test_leaving_a_tab_with_unsaved_rows_warns_once_and_saves_nothing(ran):
+    """The warning on a tab switch: asked once per departure when the pane being left holds unsaved
+    rows, quiet when it holds none, never asked for Items (which has its own rules). Staying keeps
+    the estimator on the Save buttons; going on does NOT drop the edits and does NOT send them.
+    The close-the-page warning is savePending (checked in the first test above).
+
+    Mutations: have leaveOk save the rows instead of asking (nothingSentByWarning red); drop the
+    pane count for Administration (adminPaneCounts red); make the Items pane ask."""
+    w = ran["leaveWarning"]
+    for key in ("cleanPaneNoQuestion", "staysWhenAskedTo", "askedOnce", "nothingSentByWarning",
+                "sayHowMany", "leavesWhenAgreed", "editsSurviveTheLeave", "adminPaneCounts",
+                "itemsPaneNeverAsks", "plainWords", "isWarnToned"):
+        assert w[key], key
+    js = (FRONTEND / "js" / "library.js").read_text(encoding="utf-8", errors="replace")
+    assert "if (p !== view && !(await leaveOk(view))) return;" in js, (
+        "the tab strip does not ask before leaving a pane with unsaved rows")
+    assert 'window.addEventListener("beforeunload"' in js and "!rateUnsavedCount()" in js, (
+        "closing the page with an unsaved rate box would not warn")
+
+
+@needs_node
+def test_the_blur_change_after_an_enter_save_does_not_unsave_the_row(ran):
+    """A text box fires `input` per keystroke, then `change` on blur. After Enter saved the row, that
+    `change` re-queued the same value and brought Save back (and a false unsaved warning). A `change`
+    carrying what the model already holds is dropped; a select that only reports `change` still counts.
+
+    Mutation: remove the `e.type === "change"` guard in onLaborEdit (noButtonBack goes red)."""
+    r = ran["blurEchoIsNotAnEdit"]
+    assert r["noButtonBack"], "the blur change brought the Save button back on a saved row"
+    assert r["nothingQueued"] and r["sentOnce"]
+    assert r["selectChangeStillCounts"], "a select that reports only change no longer queues its edit"
+    assert r["numberAndCheckboxToo"]
+
+
+@needs_node
+def test_a_save_buttons_spoken_name_follows_the_typed_name(ran):
+    """The Save button is drawn on the first keystroke, so its aria-label read 'Save Z' for a row
+    that ends up called Zebra. Labor lines and Administration rows both keep it current.
+
+    Mutation: drop the aria-label update in onLaborEdit or onRefEdit."""
+    r = ran["saveButtonNameFollows"]
+    assert r["labor"] == "Save Zebra" and r["admin"] == "Save Decorative"
+
+
+@needs_node
+def test_deleting_an_unsaved_line_leaves_nothing_to_warn_about(ran):
+    """The queued edit and the unsaved mark of a deleted row go with it, or the leave-page warning
+    would stay on for a record nobody can see.
+
+    Mutation: take forgetRow out of removeLaborLine (pendingGone and markGone red)."""
+    d = ran["deletedDirtyLine"]
+    assert d["pendingGone"] and d["markGone"] and d["nothingToWarnAbout"]
+
+
+@needs_node
+def test_every_labor_and_administration_row_has_its_save_first_and_only_an_admin_sees_it(ran):
+    """The Save cell is the FIRST cell of every labor line and every division, unit and vendor, left
+    of the name (the same pinned column as the Items rows), empty while the row is clean, redrawn for
+    a row that is still unsaved when the table repaints, and absent for a non-admin (who keeps the
+    column so the cells line up under the head). The More row spans the extra column.
+
+    Mutations: put the .rowsave cell after the name in renderLabor or renderRefSection (laborFirst /
+    divisionFirst red); drop `ADMIN &&` from renderRefSection (nonAdminNoSave red); leave the More
+    row at colspan 6 (moreRowSpansEveryColumn red)."""
+    f = ran["saveFirstCell"]
+    for key, why in [
+            ("laborFirst", "a labor line's Save is not the first cell"),
+            ("divisionFirst", "a division's Save is not the first cell"),
+            ("unitFirst", "a unit's Save is not the first cell"),
+            ("vendorFirst", "a vendor's Save is not the first cell"),
+            ("cleanLaborCellEmpty", "a clean labor row's Save cell is not an empty first cell"),
+            ("cleanRefCellEmpty", "a clean Administration row's Save cell is not an empty first cell"),
+            ("survivesARepaint", "an unsaved line loses its Save when the table repaints"),
+            ("moreRowSpansEveryColumn", "the More row no longer spans the table"),
+            ("nonAdminNoSave", "a non-admin is offered a Save"),
+            ("nonAdminNoInputs", "a non-admin is offered an editable box"),
+            ("nonAdminKeepsTheColumn", "a non-admin row lost the column the header still draws")]:
+        assert f[key], why
+
+
+@needs_node
+def test_a_new_administration_row_goes_to_the_top_and_takes_the_focus(ran):
+    """Add division, Add unit and Add vendor put the new row FIRST in its list (not sorted into
+    place), with its name box focused; the Items tab's division chips stay A to Z.
+
+    Mutation: sort the list after the add again (firstRowIsTheNewOne red), or push instead of
+    unshift."""
+    t = ran["addGoesToTheTop"]
+    for kind in ("divisions", "units", "vendors"):
+        r = t[kind]
+        assert r["firstRowIsTheNewOne"], kind + ": the new row is not at the top"
+        assert r["focusedItsName"], kind + ": the new row's name box is not focused"
+        assert r["tabShown"]
+    assert t["divisions"]["listFirst"] and t["vendors"]["listFirst"]
+    assert t["divisionChipsStayAlphabetical"] == "Epoxy|Gypsum Underlayment|New division|Polished Concrete"
+
+
+@needs_node
+def test_each_administration_card_opens_with_its_add_button(ran):
+    """The Add button is the FIRST element of its card, in the same .addrow style as Labor's, above
+    the table; the empty state keeps its words but not a second button; the header carries the Save
+    column; Labor's own Add stays at its top.
+
+    Mutations: move the add row back below the table in library.html (addIsFirstInItsCard,
+    beforeTheTable red); put the 'Add your first ...' button back in an empty state
+    (emptyStateHasNoButton red); drop the first th (headerSaveFirst red)."""
+    m = ran["adminMarkup"]
+    for kind in ("divisions", "units", "vendors"):
+        for key, why in [("addIsFirstInItsCard", "the Add button is not the first thing in the card"),
+                         ("beforeTheTable", "the Add button is below the table"),
+                         ("oneAddButton", "there is more than one Add button in the section"),
+                         ("emptyStateHasNoButton", "the empty state still carries its own Add button"),
+                         ("emptyStateKeepsItsWords", "the empty state lost its explanation"),
+                         ("headerSaveFirst", "the table header has no Save column first")]:
+            assert m[kind][key], kind + ": " + why
+    assert m["laborHeaderSaveFirst"], "the Labor table header has no Save column first"
+    assert m["laborAddStillTop"], "Labor's Add moved off the top"
+    assert m["cssForTheTick"], "the Saved tick and the rate box's Save cell have no styles"
