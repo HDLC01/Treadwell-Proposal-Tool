@@ -1256,6 +1256,22 @@
     return stampRateDefaults([libraryLaborRow(row, dflt)])[0];
   }
 
+  /** WHAT THE LABOR POP-UP SAYS A LINE COSTS (Hanz, 2026-10-12): the rate the line will start at,
+   *  in plain words. A rate is ALWAYS dollars an hour, on a "Days" line too (laborCost multiplies
+   *  guys x days x rate x hours in a day), so it never reads "a day": "$33.00 a day" would be an
+   *  eighth of what the card charges. A line with no rate of its own starts at the company labor
+   *  rate (libraryLaborRow's rule, asked of libraryRateIsOwn, not restated) and says so. */
+  function laborPriceText(row, companyRate) {
+    var r = row || {};
+    if (libraryRateIsOwn(r, isCrewId(r.id))) return money2(Number(r.rate)) + " an hour";
+    return money2(laborRateOrShipped(companyRate)) + " an hour (labor rate)";
+  }
+
+  /** The note under the pop-up's One-off line: where a typed line starts. */
+  function oneOffRateText(companyRate) {
+    return "Starts at the company labor rate, " + money2(laborRateOrShipped(companyRate)) + " an hour.";
+  }
+
   /** `labor` with the library's default lines standing beside it. A NEW array; the one handed in
    *  is never touched, and neither are the rows inside it.
    *
@@ -2955,6 +2971,7 @@
     dropEmptyLaborRows: dropEmptyLaborRows, crewFirst: crewFirst,
     // The company labor rate (Items & Assemblies -> Labor): read, applied to a new bid, and the fallback.
     SHIPPED_LABOR_RATE: SHIPPED_LABOR_RATE, laborRateOrShipped: laborRateOrShipped,
+    laborPriceText: laborPriceText, oneOffRateText: oneOffRateText,
     laborRateFromRules: laborRateFromRules, applyLaborRate: applyLaborRate,
     stampRateDefaults: stampRateDefaults, followLaborDays: followLaborDays,
     // The Fees + Textura default (Markups -> Global `fees_textura`), read and applied to a new bid.

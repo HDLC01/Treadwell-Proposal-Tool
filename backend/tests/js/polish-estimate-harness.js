@@ -4382,6 +4382,63 @@ const rendered = [];      // every string the page put on screen, for the Labour
     pressAdd(dp);
     pop.dupName = dp.api.model().takeoff.slice(dBefore).map((r) => ({ id: r.assembly_id, unit: r.unit }));
 
+    // N15. THE PRICE ON EVERY ROW (Hanz, 2026-10-12). Each row names what it costs, in words, from
+    // data the page already holds: a material per what it is bought in, an assembly per SF or LF
+    // through the library's own priceAssembly, a labor line at its own rate or the company's.
+    const pricesOf = (b) => {
+      const keys = keysOf(b);
+      const costs = popup(b).querySelectorAll("span")
+        .filter((e) => /(^| )bulk-cost( |$)/.test(e.className)).map((e) => e.textContent);
+      const m = {};
+      keys.forEach((k, i) => { m[k] = costs[i]; });
+      return { map: m, rows: keys.length, costs: costs.length };
+    };
+    const noteOf = (b) => {
+      const el = popup(b).querySelector('[data-pk-el="oneoff-note"]');
+      return el ? el.textContent : null;
+    };
+    const priced = build({ items: clone(ITEMS).concat([
+      { id: "i9", name: "Unpriced Thing", unit: "Pail", buy_qty: 1, unit_cost: null, coverage: 100 },
+      { id: "i10", name: "Zero Thing", unit: "Pail", buy_qty: 1, unit_cost: 0, coverage: 100 }]) });
+    await priced.api.init();
+    priced.api.go(0);
+    clickOn(priced, "[data-add-row]");
+    const tp = pricesOf(priced);
+    const refArea = L.REFERENCE_AREA;
+    const perSf = (id) => L.money(L.priceAssembly(ASMS.filter((a) => a.id === id)[0], ITEMS,
+                                                  refArea).per_unit);
+    pop.takeoffPrices = {
+      rows: tp.rows, costs: tp.costs, prices: tp.map,
+      expectA1: perSf("a1") + " per SF", expectA2: perSf("a2") + " per LF",
+      noRawTag: Object.keys(tp.map).every((k) => tp.map[k] !== "Assembly" && tp.map[k] !== "Material") };
+    esc(priced);
+
+    // Labor: own rate, no rate (company rate), and a company rate that is not $33.
+    const LIB2 = LIB.concat([{ id: "L4", name: "Zero rate", rate: 0, unit: "days",
+                               default_work_types: [], sort: 6 }]);
+    const lp = build({ labor: LIB2, markupRules: [{ id: "mk1", layout: "global", line_key: "labor_rate",
+                                                    formula: "40", applies: true }] });
+    await lp.api.init();
+    lp.api.go(1);
+    await openLaborPopup(lp);
+    const lpp = pricesOf(lp);
+    pop.laborPrices = { rows: lpp.rows, costs: lpp.costs, prices: lpp.map,
+                        note: noteOf(lp) };
+    tick(lp, "lab:L1"); pressAdd(lp);
+    await openLaborPopup(lp);
+    const lockedHtml = popup(lp).querySelector('[data-pk-el="list"]').innerHTML;
+    const lockedRow = lockedHtml.slice(lockedHtml.indexOf('data-pk="lab:L1"'));
+    const lockedEnd = lockedRow.indexOf("</label>");
+    pop.laborLockedPrice = { row: lockedRow.slice(0, lockedEnd) };
+    esc(lp);
+    // the same pop-up on the default company rate
+    const lq = build({ labor: LIB });
+    await lq.api.init();
+    lq.api.go(1);
+    await openLaborPopup(lq);
+    pop.laborDefaultNote = noteOf(lq);
+    esc(lq);
+
     out.addPopup = pop;
   }
 

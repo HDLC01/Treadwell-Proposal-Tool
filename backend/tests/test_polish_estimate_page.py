@@ -4040,3 +4040,91 @@ def test_the_page_defines_a_darker_band_and_a_lighter_total_shade_for_every_revi
         seen.add(band)
         assert ('.rev[data-rev="%s"]' % key) in css, "no rule assigns %s by data-rev" % key
     assert "background:var(--rev-band" in css and "background:var(--rev-tot" in css
+
+
+# ── the price on every pop-up row (Hanz, 2026-10-12) ─────────────────────────────────────────────
+
+@needs_node
+def test_takeoff_rows_say_what_each_material_and_assembly_costs(ran):
+    """Mutation: put the old tag back ("Assembly" / "Material") in takeoffPickEntries, or price an
+    assembly by a formula of its own. The figure beside each assembly must be the one library-core's
+    priceAssembly gives at the reference area, per the assembly's own unit."""
+    t = ran["addPopup"]["takeoffPrices"]
+    assert t["rows"] == t["costs"], "a row has no price beside it: %r" % t
+    p = t["prices"]
+    # a material: what ONE PURCHASE costs, per what it is bought in
+    assert p["item:i1"] == "$85.38 per Gal"
+    assert p["item:i4"] == "$100.00 per Pail"
+    assert p["item:i2"] == "$398.79 per 5 Gal", "a 5 Gal pack must say so: %r" % p["item:i2"]
+    # an assembly: priceAssembly's own per-unit figure (the expectation is computed by the real
+    # module in the harness, so a literal here cannot drift from it), LF for an LF assembly
+    assert p["asm:a1"] == t["expectA1"] == "$1.11 per SF"
+    assert p["asm:a2"] == t["expectA2"] == "$0.80 per LF"
+    assert t["noRawTag"], "a row still carries the old Assembly/Material tag instead of a price"
+
+
+@needs_node
+def test_a_line_nothing_can_price_says_no_price_set_not_zero(ran):
+    """Mutation: let materialPriceText / assemblyPriceText fall through to money(0). A material
+    with a blank or 0 cost, and an assembly whose only material was deleted, then read $0.00."""
+    p = ran["addPopup"]["takeoffPrices"]["prices"]
+    assert p["item:i9"] == "No price set" and p["item:i10"] == "No price set"
+    assert p["asm:a9"] == "No price set"
+    assert not any(v.startswith("$0.00") for v in p.values())
+
+
+@needs_node
+def test_labor_rows_show_their_own_rate_or_the_company_rate_in_plain_words(ran):
+    """Mutation: hard-code the company rate to the shipped $33, or read the stored rate even when it
+    is 0. The company rate in this fixture is $40, so a hard-coded $33 shows."""
+    t = ran["addPopup"]["laborPrices"]
+    assert t["rows"] == t["costs"]
+    p = t["prices"]
+    assert p["lab:L2"] == "$61.00 an hour" and p["lab:L1"] == "$40.00 an hour"
+    # rate-less (NULL in the library, and a stored 0): the rate the card will actually start at
+    assert p["lab:L3"] == "$40.00 an hour (labor rate)"
+    assert p["lab:L4"] == "$40.00 an hour (labor rate)"
+    # the shipped crew carry the seeded $33 nobody chose: they follow the company rate too
+    assert p["lab:polishing"] == "$40.00 an hour (labor rate)"
+    # a Days line is still dollars an HOUR: laborCost multiplies by the hours in a day
+    assert not any(" a day" in v for v in p.values()), p
+
+
+@needs_node
+def test_the_one_off_line_says_where_it_starts(ran):
+    """Mutation: drop `note:` from the oneOff config, or print the shipped rate."""
+    a = ran["addPopup"]
+    assert a["laborPrices"]["note"] == "Starts at the company labor rate, $40.00 an hour."
+    assert a["laborDefaultNote"] == "Starts at the company labor rate, $33.00 an hour."
+
+
+@needs_node
+def test_a_row_already_on_the_bid_keeps_its_price_beside_the_on_this_bid_tag(ran):
+    """Mutation: render the locked row as the tag alone (the old rowHtml)."""
+    row = ran["addPopup"]["laborLockedPrice"]["row"]
+    assert "$40.00 an hour" in row and "On this bid" in row
+    assert row.index("$40.00 an hour") < row.index("On this bid")
+
+
+def _css_rule(page, selector):
+    """The declarations of the first rule that starts with `selector`, whitespace folded."""
+    src = (FRONTEND / page).read_text(encoding="utf-8")
+    at = src.index(selector + " {") if (selector + " {") in src else src.index(selector + "{")
+    end = src.index("}", at)
+    return " ".join(src[at:end].split())
+
+
+@pytest.mark.parametrize("page", ["polish-estimate.html", "library.html"])
+def test_the_pop_up_header_puts_the_title_left_and_the_close_button_right(page):
+    """Mutation: remove `grid-column:1` / `grid-column:2` from .bulk-head. The close button has a
+    definite row and no column, so the browser places it FIRST, in column 1, and the title falls to
+    the narrow second column: the x in the middle and the title pushed right (Hanz's screenshot).
+    Checked in a real Chrome while writing this: without the rules x=24 and the title x=661; with
+    them title x=24 and x=731."""
+    h2 = _css_rule(page, ".bulk-head h2")
+    icon = _css_rule(page, ".bulk-head .icon")
+    assert "grid-column:1" in h2.replace(": ", ":"), h2
+    assert "grid-column:2" in icon.replace(": ", ":"), icon
+    # and the markup the picker builds lists the title, then the sub line, then the button
+    js = (FRONTEND / "js" / "library-picker.js").read_text(encoding="utf-8")
+    assert js.index('<h2 id="pk-h">') < js.index("bulk-sub") < js.index('data-pk-close="1" title="Close"')
