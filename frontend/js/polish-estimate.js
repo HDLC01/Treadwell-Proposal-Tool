@@ -1609,7 +1609,7 @@
 
   // ── distance decides "local" ────────────────────────────────────────────────
   // The intake's "Local job" switch is gone (Kyle 9/18; Hanz, 2026-10-05). The server works the
-  // driving miles from the Olathe office to the job address out (POST /api/distance, Google Routes)
+  // driving miles from the Olathe office to the job address out (POST /api/distance, free Census geocoder + OSRM)
   // and B.applyDistance turns them into the hidden `conditions.local` answer, which is still what
   // Polish!B4 is written from. >= 70 miles: the three travel lines come on. < 70: they gray.
   //
@@ -1699,7 +1699,7 @@
         body: JSON.stringify({ address: s.address || "", city: s.city || "", state: s.state || "",
                                zip: s.zip || "" }),
         signal: (typeof AbortSignal !== "undefined" && AbortSignal.timeout)
-          ? AbortSignal.timeout(10000) : undefined
+          ? AbortSignal.timeout(14000) : undefined
       });
       var j = await res.json();
       miles = B.milesOrNull(j && j.miles);

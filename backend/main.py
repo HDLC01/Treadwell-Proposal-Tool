@@ -3717,10 +3717,11 @@ class DistanceIn(BaseModel):
 
 @app.post("/api/distance")
 def api_distance(payload: DistanceIn, request: Request) -> Dict[str, Any]:
-    """Driving miles from the Olathe office to the job address (Google Routes, server-side).
+    """Driving miles from the Olathe office to the job address (server-side; US Census geocoder +
+    OSRM by default, Google Routes first when GOOGLE_MAPS_API_KEY is set).
 
-    ALWAYS 200. Every case that cannot produce a real figure -- no key configured, address not
-    found, Google slow or down, address too thin, rate limit -- answers `{ok: false, miles: null,
+    ALWAYS 200. Every case that cannot produce a real figure -- address not found, a service slow
+    or down, address too thin, rate limit -- answers `{ok: false, miles: null,
     reason}` and the Labor step asks the estimator to type the miles. Nothing here is a guess.
 
     PERMISSION. Any signed-in user (the auth gate above); no tab owns this route and it is NOT in
