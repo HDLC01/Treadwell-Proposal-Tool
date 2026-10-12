@@ -361,6 +361,11 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", "WT", `
   ${fn("icon")}
   ${fn("itemSaveButtonHtml")}
   ${fn("rowSaveButtonHtml")}
+  // THE ITEMS TAB'S MORE PANEL (price breaks, bulk cost, coverage basis): renderItems asks for the
+  // open set and draws the panel through itemMoreHtml, so both are lifted BEFORE it. The open set
+  // can be handed in (state.itemMoreOpen) so a scenario renders the panel without a click.
+  var itemMoreOpen = state.itemMoreOpen || {};
+  ${fn("itemMoreHtml")}
   ${fn("renderItems")}
   // THE DEFAULTS TAB'S OWN RENDERERS, lifted so they are EXECUTED rather than read. A source-text
   // assertion cannot catch an unbound identifier, and this repo has taken production down that
@@ -708,6 +713,12 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", "WT", `
   ${grab(/^  var itemLastField = \{\};$/m, "the itemLastField declaration")}
   ${fn("snapshotItem")}
   ${fn("rememberItem")}
+  // THE MORE PANEL'S OWN HANDLERS (Phase 11), lifted so they are PRESSED rather than read. onItemEdit
+  // asks breaksForSave for the body of a price-break edit, so it is lifted BEFORE it.
+  ${fn("breaksForSave")}
+  ${fn("toggleItemMore")}
+  ${fn("addPriceBreak")}
+  ${fn("removePriceBreak")}
   ${fn("onItemEdit")}
   // Test glue, and the only piece in this file: load() replaces DIVISIONS with the Administration
   // tab list, and a test of "an added division reaches the filter chips" has to be able to do the
@@ -716,7 +727,9 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", "WT", `
            numberHits, FILTERS,
            renderItems, datesHtml, byHtml, renderVendors, renderPanel, renderList, refreshNumbers,
            pickerFor, itemByName, similarNames, pick, adoptSaved,
-           onItemEdit, QUEUED, NUMERIC_ITEM_FIELDS, SERVER_OWNED_ITEM_FIELDS, ITEMS, VENDORS,
+           onItemEdit, breaksForSave, toggleItemMore, addPriceBreak, removePriceBreak,
+           itemMoreOpenNow: function () { return itemMoreOpen; },
+           QUEUED, NUMERIC_ITEM_FIELDS, SERVER_OWNED_ITEM_FIELDS, ITEMS, VENDORS,
            itemMatches, itemResultsHtml, lineForSave, visibleItems, duplicateName, nameKey,
            asmQuery, ASM_FILTERS, anyAsmFilterActive, asmMatches, asmMatchesFilters,
            asmConditionHits, asmTermHits, asmFilterSummary, visibleAssemblies,
@@ -1659,6 +1672,8 @@ async function conflictChecks() {
       querySelector(sel) {
         let m = /^\[data-item="([^"]+)"\]$/.exec(sel);
         if (m) return rows[m[1]] || null;
+        // The More panel's own row (price breaks, bulk cost, coverage basis). This stub draws none.
+        if (/^\[data-item-more="([^"]+)"\]$/.test(sel)) return null;
         m = /^\[data-item="([^"]+)"\] \[data-f="([^"]+)"\]$/.exec(sel);
         if (m) return (rows[m[1]] || { cells: {} }).cells[m[2]] || null;
         throw new Error("the page asked document for " + sel + ", which this stub does not model "
@@ -1827,6 +1842,36 @@ async function conflictChecks() {
     screenRepainted: c.hooks.renders.join(",") === "list,panel",
     toldTheUser: c.hooks.said.some((m) => /changed/i.test(String(m))),
   };
+
+  // ── EXECUTED: the More panel is part of its material's row (Phase 11) ──────────────────
+  // The panel is a second <tr>, so tabbing from the Cost box down into a price break moves focus out of
+  // the row's own <tr>. That is NOT leaving the material: it must not raise "Save this change?" while
+  // the estimator is still working on it. Leaving the pair for anywhere else still saves.
+  {
+    const okItem = { status: 200, ok: true, json: async () => ({ item: { id: "i1", updated_at: "T2" } }) };
+    const panelRow = { getAttribute: (k) => (k === "data-item-more" ? "i1" : null), contains: () => true };
+    const inPanel = { getAttribute: (k) => (k === "data-f" ? "bulk_cost" : null),
+      closest: (sel) => (sel === "[data-item-more]" ? panelRow : null) };
+    const a = run409(); a.hooks.autoReply = okItem;
+    a.type("i1", "unit_cost", "52");
+    await a.leaveRow("i1", "unit_cost", inPanel);
+    const b = run409(); b.hooks.autoReply = okItem;
+    b.type("i1", "unit_cost", "52");
+    await Promise.resolve(b.s.onItemRowFocusOut({ target: inPanel, relatedTarget: b.doc.rows.i1.cells.unit_cost }));
+    const c = run409(); c.hooks.autoReply = okItem;
+    c.type("i1", "unit_cost", "52");
+    await Promise.resolve(c.s.onItemRowFocusOut({ target: inPanel, relatedTarget: null }));
+    const d = run409(); d.hooks.autoReply = okItem;
+    d.type("i1", "unit_cost", "52");
+    await d.leaveRow("i1", "unit_cost", b.doc.rows.i2.cells.unit_cost);
+    out.moreRowFocus = {
+      rowToPanelStays: a.hooks.requests.length === 0 && a.s.pending() === 1,
+      panelToRowStays: b.hooks.requests.length === 0 && b.s.pending() === 1,
+      panelToElsewhereSends: c.hooks.requests.length === 1,
+      rowToAnotherMaterialSends: d.hooks.requests.length === 1,
+      noErrors: [a, b, c, d].every((x) => x.hooks.errors.length === 0),
+    };
+  }
 
   // ── EXECUTED: the Save button on a NEW material / assembly (Hanz, 2026-10-05) ────────
   // The row exists server-side from the create POST; what the button sends is what was typed over
@@ -3226,6 +3271,90 @@ async function dialogChecks() {
 
 // ── the numeric coercion list ────────────────────────────────────────────────
 out.numericFields = build().api.NUMERIC_ITEM_FIELDS;
+
+// ── EXECUTED: the Items tab's More panel (Phase 11: price breaks, bulk cost, coverage basis) ──────
+// Rendered by the page's own renderItems and edited through its own onItemEdit, so a renamed
+// attribute or a dropped branch breaks a number here rather than leaving a panel that draws and does
+// nothing. The "events" are the smallest objects the handler's own calls need.
+{
+  const rowOf = (attrs) => ({ getAttribute: (k) => (attrs[k] === undefined ? null : attrs[k]) });
+  // A field inside the More panel: its own row carries data-item-more, and it is NOT inside a
+  // [data-item] row (that is a different <tr>).
+  const moreInput = (id, field, value, index) => {
+    const row = rowOf({ "data-item-more": id });
+    return { target: {
+      getAttribute: (k) => (k === "data-f" ? field : (k === "data-brk-i" && index !== undefined ? String(index) : null)),
+      value,
+      closest: (sel) => (sel === "[data-item-more]" ? row : null),
+    } };
+  };
+  const rowHtml = (b) => b.dom.nodes["items-body"].innerHTML;
+  const item = (extra) => Object.assign({ id: "m1", name: "Flake", category: "Epoxy", unit: "Lb", buy_qty: 40,
+    unit_cost: 92, coverage: 6.6667, waste_pct: 0, roundup: true, vendor: "", notes: "",
+    created_at: "2026-08-01T14:30:00Z", cost_updated_at: null }, extra || {});
+
+  // 1. An admin with the panel closed sees a More button and no panel; a non-admin sees neither.
+  const closedAdmin = build({ ADMIN: true, ITEMS: [item()] }); closedAdmin.api.renderItems();
+  const nonAdmin = build({ ADMIN: false, ITEMS: [item()], itemMoreOpen: { m1: true } }); nonAdmin.api.renderItems();
+  // 2. Open: the panel draws the three fields with what the material holds.
+  const open = build({ ADMIN: true, itemMoreOpen: { m1: true }, ITEMS: [item({
+    bulk_cost: 88.5, coverage_basis: "lf",
+    price_breaks: [{ min_qty: 240, unit_cost: 90 }, { min_qty: 480, unit_cost: 88 }] })] });
+  open.api.renderItems();
+  const html = rowHtml(open);
+  out.priceBreaksUi = {
+    closedAdminHasMore: /data-item-more-toggle="m1"/.test(rowHtml(closedAdmin)),
+    closedAdminHasNoPanel: !/data-item-more="m1"/.test(rowHtml(closedAdmin)),
+    nonAdminHasNoMore: !/data-item-more-toggle/.test(rowHtml(nonAdmin)),
+    nonAdminHasNoPanel: !/data-item-more=/.test(rowHtml(nonAdmin)),
+    panelIsItsOwnRow: /<tr class="item-more" data-item-more="m1">/.test(html),
+    bulkShown: /data-f="bulk_cost"[^>]*value="88.5"/.test(html),
+    basisShown: /<option value="lf" selected>/.test(html),
+    breakQtys: (html.match(/data-f="brk_qty"[^>]*value="([^"]*)"/g) || []).map((x) => /value="([^"]*)"/.exec(x)[1]),
+    breakCosts: (html.match(/data-f="brk_cost"[^>]*value="([^"]*)"/g) || []).map((x) => /value="([^"]*)"/.exec(x)[1]),
+    toggleSaysLess: /data-item-more-toggle="m1"[^>]*aria-expanded="true"/.test(html),
+  };
+  // 3. Typing in a break reaches the model and the queue; the panel's other two fields too.
+  const typed = build({ ADMIN: true, itemMoreOpen: { m1: true }, ITEMS: [item({
+    price_breaks: [{ min_qty: 240, unit_cost: 90 }] })] });
+  typed.api.renderItems();
+  typed.api.onItemEdit(moreInput("m1", "brk_qty", "300", 0));
+  typed.api.onItemEdit(moreInput("m1", "brk_cost", "$89.5", 0));
+  typed.api.onItemEdit(moreInput("m1", "bulk_cost", "$88.25"));
+  typed.api.onItemEdit(moreInput("m1", "coverage_basis", "each"));
+  const m = typed.api.ITEMS[0];
+  out.priceBreaksUi.typed = {
+    breaks: m.price_breaks, bulkType: typeof m.bulk_cost, bulk: m.bulk_cost, basis: m.coverage_basis,
+    queued: typed.api.QUEUED.map((q) => q.kind + ":" + q.id + ":" + JSON.stringify(q.body)),
+  };
+  // 4. Add makes a blank break, which goes out as nothing; remove queues the shorter list.
+  const added = build({ ADMIN: true, itemMoreOpen: { m1: true }, ITEMS: [item({ price_breaks: [{ min_qty: 240, unit_cost: 90 }] })] });
+  added.api.addPriceBreak("m1");
+  const afterAdd = JSON.parse(JSON.stringify(added.api.ITEMS[0].price_breaks));
+  added.api.onItemEdit(moreInput("m1", "brk_qty", "480", 1));   // half typed: the cost is still blank
+  const halfTyped = added.api.QUEUED[added.api.QUEUED.length - 1].body.price_breaks;
+  const blankOnly = added.api.breaksForSave([{ min_qty: "", unit_cost: "" }, { min_qty: " ", unit_cost: null }]);
+  added.api.removePriceBreak("m1", 0);
+  const afterRemove = added.api.QUEUED[added.api.QUEUED.length - 1].body.price_breaks;
+  out.priceBreaksUi.add = { afterAdd, halfTyped, blankOnly, afterRemove, queuedCount: added.api.QUEUED.length,
+    removedLastBreak: (() => {
+      const only = build({ ADMIN: true, ITEMS: [item({ price_breaks: [{ min_qty: 240, unit_cost: 90 }] })] });
+      only.api.removePriceBreak("m1", 0);
+      return only.api.QUEUED.map((q) => q.body.price_breaks);
+    })() };
+  // 5. The toggle flips the open set and redraws.
+  const tog = build({ ADMIN: true, ITEMS: [item()] });
+  tog.api.renderItems();
+  tog.api.toggleItemMore("m1");
+  const opened = /data-item-more="m1"/.test(rowHtml(tog));
+  tog.api.toggleItemMore("m1");
+  out.priceBreaksUi.toggle = { opened, closedAgain: !/data-item-more="m1"/.test(rowHtml(tog)) };
+  // 6. A material that holds nothing new draws an empty panel and sends nothing until typed in.
+  const bare = build({ ADMIN: true, itemMoreOpen: { m1: true }, ITEMS: [item()] });
+  bare.api.renderItems();
+  out.priceBreaksUi.bare = { noBreakInputs: !/data-f="brk_qty"/.test(rowHtml(bare)), queued: bare.api.QUEUED.length,
+    basisBlankSelected: /<option value="" selected>/.test(rowHtml(bare)) };
+}
 
 // The real declaration, evaluated — same idiom as numericFields above. Added because a mutation
 // run proved nothing caught `updated_by` being dropped from this list: the field would still

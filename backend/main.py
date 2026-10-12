@@ -1020,6 +1020,12 @@ class LibraryItemIn(BaseModel):
     # updated_at. `Any`, like unit_cost and buy_qty, because both arrive as text from an input.
     waste_pct: Optional[Any] = None
     roundup: Optional[bool] = None
+    # PHASE 11: price breaks (a list of {min_qty, unit_cost}), a bulk cost, and what the coverage
+    # is quoted per (sf / lf / each). `Any` because library.validate_item is the one authority and
+    # answers a 400 with a plain message; declared here or the API drops them without a word.
+    price_breaks: Optional[Any] = None
+    bulk_cost: Optional[Any] = None
+    coverage_basis: Optional[Any] = None
     # WHICH WORK TYPES THIS DEFAULT IS OFFERED FOR. `Any`, like the fields above, because
     # library._coerce_work_types accepts a list, a JSON string or a bare name and is the
     # single authority on the answer.
@@ -1060,8 +1066,11 @@ def api_library_items() -> Dict[str, Any]:
 
 @app.post("/api/library/items")
 def api_library_item_create(payload: LibraryItemIn, request: Request) -> Dict[str, Any]:
+    body = payload.model_dump(exclude_unset=True)
+    if any(k in body for k in library.ITEM_ADMIN_ONLY):
+        _require_admin(request)
     try:
-        row = library.create_item(payload.model_dump(exclude_unset=True), _user_email(request))
+        row = library.create_item(body, _user_email(request))
     except library.ValidationError as exc:
         raise HTTPException(400, str(exc))
     return {"ok": True, "item": row}
@@ -1070,11 +1079,14 @@ def api_library_item_create(payload: LibraryItemIn, request: Request) -> Dict[st
 @app.patch("/api/library/items/{item_id}")
 def api_library_item_update(item_id: str, payload: LibraryItemIn,
                             request: Request) -> Dict[str, Any]:
+    body = payload.model_dump(exclude_unset=True)
+    # Price breaks, a bulk cost and a coverage basis are an admin's to set (Phase 11).
+    if any(k in body for k in library.ITEM_ADMIN_ONLY):
+        _require_admin(request)
     try:
         # The caller's identity is the ONLY source of "who edited it" — the payload model has no
         # such field and validate_item would drop it, so a client cannot sign somebody else's name.
-        row = library.update_item(item_id, payload.model_dump(exclude_unset=True),
-                                  _user_email(request))
+        row = library.update_item(item_id, body, _user_email(request))
     except library.ValidationError as exc:
         raise HTTPException(400, str(exc))
     if row is None:

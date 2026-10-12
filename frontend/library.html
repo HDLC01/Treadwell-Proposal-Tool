@@ -145,6 +145,14 @@
     .morefield { display:inline-flex; align-items:center; gap:6px; font-size:12.5px;
        color:var(--ink-v); margin-right:20px; }
     .morefield input[type="number"] { width:70px; }
+    /* THE ITEMS TAB'S "MORE" ROW, admin only: price breaks, bulk cost and what the coverage is
+       measured per. A second <tr> under the material, like the labor one above. */
+    .item-more > td { background:var(--surf-low); padding:8px 12px; }
+    .item-more .morefield .money { margin-left:2px; }
+    .item-more .breaks { margin-top:8px; font-size:12.5px; color:var(--ink-v); }
+    .item-more .breakhead { font-weight:600; margin-bottom:4px; }
+    .item-more .brk { display:flex; align-items:center; gap:6px; margin:4px 0; }
+    .item-more .brk input.num { width:90px; }
     /* A SUB-HEADING INSIDE THE TABLE, not a row pretending to be one. Left-aligned and
        quiet: it is a signpost over rows that carry the actual content, so it must not
        out-shout the names beneath it. The first one drops its top border -- a rule directly

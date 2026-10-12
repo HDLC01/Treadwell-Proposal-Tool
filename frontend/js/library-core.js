@@ -88,7 +88,80 @@
     return (v === null || v <= 0) ? 1 : v;
   }
 
+  /** The kinds of measure a coverage can be quoted against: floor area, length, or a count. */
+  var BASES = ["sf", "lf", "each"];
+
+  /** What a material's coverage is measured per: "sf", "lf" or "each". Null when the material has
+   *  not said, which is every row written before the column and means "use the area you were given". */
+  function coverageBasis(item) {
+    var b = (item || {}).coverage_basis;
+    if (typeof b !== "string") return null;
+    b = b.trim().toLowerCase();
+    return BASES.indexOf(b) === -1 ? null : b;
+  }
+
+  /** The measured quantity this material is priced against.
+   *
+   *  A plain number is returned untouched, which is how every caller works today: the caller has
+   *  already decided which measure drives the line. An OBJECT, `{sf, lf, each}`, is a whole takeoff,
+   *  and each material picks its own: a cove material takes the LF, a floor material the SF (also
+   *  what a material with no basis gets). A takeoff without the measure asked for answers undefined,
+   *  which prices as "no area yet" rather than as zero. */
+  function areaFor(item, area) {
+    if (area === null || typeof area !== "object" || Array.isArray(area)) return area;
+    var basis = coverageBasis(item);
+    if (basis === "lf") return area.lf;
+    if (basis === "each") return area.each;
+    return area.sf;
+  }
+
+  /** A material's price breaks as clean numbers: `[{min_qty, unit_cost}]`. Anything malformed is
+   *  left out instead of guessed at, so a half-typed break can never price a line. Order does not
+   *  matter here; the break chosen is decided by the quantity alone. */
+  function priceBreaks(item) {
+    var raw = (item || {}).price_breaks;
+    if (!Array.isArray(raw)) return [];
+    var out = [];
+    for (var i = 0; i < raw.length; i++) {
+      var b = raw[i];
+      if (!b || typeof b !== "object") continue;
+      var q = num(b.min_qty), c = num(b.unit_cost);
+      if (q === null || q <= 0 || c === null || c < 0) continue;
+      out.push({ min_qty: q, unit_cost: c });
+    }
+    return out;
+  }
+
+  /** The price break a purchase falls in, or null when it is below every one.
+   *
+   *  THE EDGE RULE, taken from Kyle's sheet. His flake line is
+   *  `=IF(O194<240, O194*small-lot price, O194*MACROFlake)`: strictly under 240 lb pays the small-lot
+   *  price, and 240 lb exactly already pays the bulk price. So a break applies FROM its quantity,
+   *  inclusive, and the one with the largest quantity not above the purchase wins. Quantity is the
+   *  units BOUGHT, in the material's own unit (pounds for flake), after rounding up to whole packs.
+   *
+   *  The same twelve-figure guard as the pack count: 239.99999999999997 pounds is 240. */
+  function breakAt(item, units) {
+    var u = num(units);
+    if (u === null) return null;
+    u = parseFloat(u.toPrecision(12));
+    var list = priceBreaks(item), hit = null;
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].min_qty <= u && (hit === null || list[i].min_qty > hit.min_qty)) hit = list[i];
+    }
+    return hit;
+  }
+
   /** Price one line against an area.
+   *
+   *  THREE OPTIONAL COLUMNS ON THE MATERIAL (Phase 11), and a row without them prices exactly as it
+   *  always did. `price_breaks` swaps the pack cost for a cheaper one once the purchase is big
+   *  enough (see breakAt). `bulk_cost` is the pack cost when the bid has the Bulk Discount switched
+   *  on (Kyle's D41): pass `{bulk: true}` as `opts`, otherwise it is ignored. `coverage_basis` says
+   *  which measure the coverage is quoted per (see areaFor). When a price break and the bulk cost
+   *  both apply, the price break wins: it is the more specific price, the quantity actually bought.
+   *  The one exception is a break dearer than the bulk cost: then the bulk cost stands, because
+   *  turning a discount on must never raise the price (see breakHelps).
    *
    *  Returns `{ok: false, reason}` rather than throwing or defaulting to zero. A line whose
    *  material was deleted must be VISIBLE and must not contribute — pricing it at zero would
@@ -104,7 +177,7 @@
    *  Waste INFLATES — 5% means buy 5% more than the area needs, not price 5% of it away.
    *  With buy_qty 1, roundup on and waste 0 this is exactly the old CEIL(area/coverage) model,
    *  which is how every line written before today keeps its number. */
-  function priceLine(line, items, area) {
+  function priceLine(line, items, area, opts) {
     line = line || {};
     // A LINE NOBODY HAS FILLED IN IS NOT A BROKEN LINE, and this is the only place that
     // distinction can be drawn once. `findItem` returns null for an empty id and for a deleted
@@ -147,10 +220,20 @@
     // "you cannot buy 3.7 kits" since it shipped. Read off the MATERIAL now -- see above.
     var roundup = (item.roundup === undefined || item.roundup === null) ? true : !!item.roundup;
 
+    // The Bulk Discount switch swaps the pack cost for the material's bulk cost, but only when
+    // the caller says the bid has it on AND the material has a bulk cost worth using.
+    var bulkCost = (opts && opts.bulk) ? num(item.bulk_cost) : null;
+    var bulk = bulkCost !== null && bulkCost > 0;
+    if (bulk) packCost = bulkCost;
+
     var base = { ok: true, coverage: cov, waste_pct: waste, roundup: roundup,
                  buy_qty: pack, pack_cost: packCost, unit_price: packCost / pack, item: item };
+    // Only named when the material has said so: a row without the columns answers as it always did.
+    if (bulk) base.bulk = true;
+    var basis = coverageBasis(item);
+    if (basis) base.basis = basis;
 
-    var a = num(area);
+    var a = num(areaFor(item, area));
     if (a === null || a <= 0) {
       // No area yet is not an error — it is the state the screen opens in.
       return Object.assign(base, { priced: false, qty: 0, cost: 0, needed: 0, units: 0,
@@ -164,22 +247,42 @@
       // numbers an estimator checks by hand. Twelve significant figures is far finer than any
       // coverage anybody types and coarser than the error.
       var packs = Math.ceil(parseFloat((needed / pack).toPrecision(12)));
+      var brk = breakAt(item, packs * pack);
+      if (brk && breakHelps(bulk, packCost, brk)) packCost = withBreak(base, brk);
       return Object.assign(base, { priced: true, needed: needed, packs: packs,
                                    units: packs * pack, qty: packs, cost: packs * packCost });
     }
     // Fractional: buy exactly what is needed, at the price of one unit rather than one pack.
+    var brk2 = breakAt(item, needed);
+    if (brk2 && breakHelps(bulk, packCost, brk2)) packCost = withBreak(base, brk2);
     return Object.assign(base, { priced: true, needed: needed, packs: null,
                                  units: needed, qty: needed,
                                  cost: needed * (packCost / pack) });
   }
 
+  /** Does a price break change the price? Always, EXCEPT when the bid has Bulk Discount on and the
+   *  break costs no less than the bulk cost already in use: switching a discount on must never
+   *  raise the price, so the cheaper of the two stands. With bulk off the break always applies,
+   *  as it always did. */
+  function breakHelps(bulk, packCost, brk) {
+    return !(bulk && brk.unit_cost >= packCost);
+  }
+
+  /** Put a price break's cost on a priced row and say which break it was. Returns the pack cost. */
+  function withBreak(base, brk) {
+    base.pack_cost = brk.unit_cost;
+    base.unit_price = brk.unit_cost / base.buy_qty;
+    base.price_break = { min_qty: brk.min_qty, unit_cost: brk.unit_cost };
+    return brk.unit_cost;
+  }
+
   /** Price a whole assembly. `lines[i]` in, `rows[i]` out — same order, same length, so the
    *  caller can render them side by side without matching anything up. */
-  function priceAssembly(assembly, items, area) {
+  function priceAssembly(assembly, items, area, opts) {
     var lines = (assembly && assembly.lines) || [];
     var rows = [], total = 0, priced = 0, broken = 0;
     for (var i = 0; i < lines.length; i++) {
-      var r = priceLine(lines[i], items, area);
+      var r = priceLine(lines[i], items, area, opts);
       rows.push(r);
       // `broken_lines` means "faults to fix" -- what the sidebar badge and the Polish page's
       // warning both count. An unfilled line is work not started, not work gone wrong, so it is
@@ -296,10 +399,41 @@
     return qty4(row.needed) + " ÷ " + qtyText(row.buy_qty) + " × " + price4(row.pack_cost);
   }
 
+  /** The POST body for a copy of a material. Every priced field comes across, so the copy does not
+   *  price differently from the original. The three Phase 11 columns ride along ONLY for an admin
+   *  (the server refuses them from anybody else) and ONLY when the source has them, so a database
+   *  without those columns is never sent one. `divisions` is passed in already normalised. */
+  function itemCopyBody(src, name, divisions, isAdmin) {
+    src = src || {};
+    var body = {
+      name: name,
+      unit: src.unit || "",
+      buy_qty: src.buy_qty,
+      unit_cost: src.unit_cost,
+      coverage: src.coverage,
+      waste_pct: src.waste_pct,
+      roundup: src.roundup,
+      vendor: src.vendor || "",
+      divisions: divisions,
+    };
+    if (isAdmin) {
+      if (Array.isArray(src.price_breaks) && src.price_breaks.length) {
+        body.price_breaks = src.price_breaks.map(function (b) {
+          return { min_qty: b.min_qty, unit_cost: b.unit_cost };
+        });
+      }
+      if (num(src.bulk_cost) !== null && num(src.bulk_cost) > 0) body.bulk_cost = src.bulk_cost;
+      if (src.coverage_basis) body.coverage_basis = src.coverage_basis;
+    }
+    return body;
+  }
+
   return {
+    itemCopyBody: itemCopyBody,
     num: num, findItem: findItem, priceLine: priceLine, priceAssembly: priceAssembly,
     money: money, perUnit: perUnit, explain: explain,
     wastePct: wastePct, buyQty: buyQty, qtyText: qtyText, qty4: qty4, price4: price4,
     qtyLabel: qtyLabel, costWorking: costWorking,
+    coverageBasis: coverageBasis, areaFor: areaFor, priceBreaks: priceBreaks, breakAt: breakAt,
   };
 });
