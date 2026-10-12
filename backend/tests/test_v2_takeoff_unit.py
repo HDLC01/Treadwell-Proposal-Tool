@@ -39,7 +39,7 @@ HARNESS = TESTS / "js" / "takeoff-unit-harness.js"
 # What the page harness reads out of a frontend directory, so a scratch copy that breaks one file can
 # be completed with the rest.
 FILES = ["polish-estimate.html", "js/polish-estimate.js", "js/bid-model.js", "js/library-core.js",
-         "js/work-types.js", "js/polish-sandbox.js", "js/library-picker.js"]
+         "js/work-types.js", "js/polish-sandbox.js", "js/library-picker.js", "js/epoxy-takeoff.js"]
 
 DASH = "—"
 FROM_LIB = "From Items & Assemblies."
