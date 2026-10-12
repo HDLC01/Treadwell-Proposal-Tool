@@ -459,14 +459,16 @@
            type the same number could disagree with it. That risk is now handled, not ignored:
              * Seeding: step 2 turns polish_sf / polish_2_sf into takeoff rows (B.seedTakeoffSf, in
                js/bid-model.js), only onto an EMPTY takeoff. Typed once.
-             * One source after that: once the takeoff has any SF, js/polish-intake.js locks both
-               boxes read-only (paintSfLock) and save() refuses to write polish_sf / polish_2_sf at
-               all, so polish_sf stays the takeoff TOTAL that proposal-review and /api/generate read.
-               The lock is in save(), not in the DOM, because TW.readForm reads readonly AND disabled
-               inputs alike -- see the note on sfLocked().
+             * One source after that (changed 2026-10-12, twice): the boxes are never read-only.
+               Once the takeoff has SF, System 1 mirrors its first measured SF row and System 2 the
+               second; typing changes that row (System 2 adds it when there is none), through
+               B.setAreaSf by way of patchModel's sf_areas, and polish_sf is written as the takeoff
+               TOTAL that proposal-review and /api/generate read. Areas 3 and on are left alone, with
+               a plain line and a link to the Takeoff. save() only ever acts on a box the estimator
+               typed in, so a stale box cannot overwrite the total -- see the note on sfMeasured().
            The boxes are drawn by js/intake-scope.js (Phase 9b), the live intake's renderer, so the names are
            the live form's own (polish_sf, polish_2_sf) and both intakes write the same keys on the same draft.
-           The lock finds them by name.
+           The paint finds them by name.
 
            Still left off: system_thickness (a resin question; index.js hides it for polish) and the gypsum
            box, which a later phase adds when it enables Gyp. The Epoxy SF and Cove LF boxes are drawn and
@@ -477,8 +479,9 @@
         <!-- Drawn by js/intake-scope.js, the live intake's own renderer: System 1 and System 2 blocks with
              every quantity field, the ones the job type does not ask for hidden. -->
         <div id="systems-container"></div>
-        <p class="hint" id="sf-locked-note" hidden></p>
-        <label>Area &mdash; what the floor covers
+        <p class="hint" id="sf-areas-note" hidden></p>
+        <p class="hint" id="sf-takeoff-row" hidden><a id="sf-takeoff-link" href="/polish-estimate.html">Go to the Takeoff</a></p>
+        <label>Area (what the floor covers)
           <input type="text" name="work_areas"
                  placeholder="Warehouse expansion and 4 offices"
                  title="Prints on the cover letter as the Area line. Plain words, the way you would say it to the customer.">

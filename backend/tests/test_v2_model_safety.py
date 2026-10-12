@@ -395,7 +395,7 @@ MUTATIONS = {
         "js/bid-model.js", "if (laborUnstated(existing)) delete model.labor;", "void 0;",
         lambda r: r["patch"]["mint"]["undef"]["hasLabor"] is True),
     "the intake rebuilds the model from nothing": (
-        "js/polish-intake.js", "var model = B.patchModel(cur.polish_estimate, {", "var model = B.patchModel({}, {",
+        "js/polish-intake.js", "var model = B.patchModel(cur.polish_estimate, patch);", "var model = B.patchModel({}, patch);",
         lambda r: r["intake"]["alone"]["takeoffKept"] is False and r["intake"]["alone"]["tabsIdentical"] is False),
     "an estimate save stops carrying what the model holds": (
         "js/bid-model.js", "var stamped = Object.assign(copyInto({}, model), rootLive ? { totals: rootLive } : {});",

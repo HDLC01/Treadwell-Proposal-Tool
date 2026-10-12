@@ -1956,6 +1956,21 @@ const rendered = [];      // every string the page put on screen, for the Labour
       polish_sf: 5000 }) });
     await inLine.api.init();
     out.migration.savesWhenInLine = lastSave(inLine) ? 1 : 0;
+    // THE PRICE SNAPSHOT. Intake's SF boxes edit a measured takeoff and polish_sf together, so the two agree
+    // while computed_bid still holds the SF it was priced on. Reopening must reprice and save it once; a
+    // snapshot already on this floor writes nothing.
+    const snapModel = (sf) => ({ version: 2,
+      takeoff: [{ assembly_id: "", assembly_name: "", measurement: sf, unit: "SF" }],
+      labor: [], conditions: {}, contingency: 0, fees: 0, totals: { total: 111111 } });
+    const staleSnap = build({ blob: blob({ polish_estimate: snapModel(50000), polish_sf: 50000,
+      computed_bid: { lump_sum: 111111, polish_sf: 12500 } }) });
+    await staleSnap.api.init();
+    const sSnap = lastSave(staleSnap);
+    out.migration.staleSnapshot = sSnap && { sf: sSnap.polish_sf, bidSf: sSnap.computed_bid.polish_sf };
+    const freshSnap = build({ blob: blob({ polish_estimate: snapModel(50000), polish_sf: 50000,
+      computed_bid: { lump_sum: 111111, polish_sf: 50000 } }) });
+    await freshSnap.api.init();
+    out.migration.savesWhenSnapshotInLine = lastSave(freshSnap) ? 1 : 0;
     // The helper's own guard, which init's !takeoffSf check hides: an LF-only measurement is still
     // a measurement, so neither intake number may be seeded beside it.
     const lfRows = [{ assembly_id: "", assembly_name: "", measurement: 900, unit: "LF" }];

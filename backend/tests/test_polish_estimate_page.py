@@ -1859,6 +1859,19 @@ def test_opening_step_2_puts_the_takeoff_total_into_the_draft_without_an_edit(ra
 
 
 @needs_node
+def test_opening_step_2_reprices_a_snapshot_priced_on_another_floor(ran):
+    """Intake's SF boxes stay editable on a measured takeoff: typing there moves the takeoff rows and
+    polish_sf together, but cannot reprice, so computed_bid still names the SF it was priced on
+    (12,500) while the takeoff and polish_sf say 50,000. A plain open must save once so the price
+    follows the floor; a snapshot already on this floor is not rewritten.
+
+    Mutation: drop the `snapSf` clause from the guard in init(): staleSnapshot comes back None."""
+    m = ran["migration"]
+    assert m["staleSnapshot"] == {"sf": 50000, "bidSf": 50000}, m["staleSnapshot"]
+    assert m["savesWhenSnapshotInLine"] == 0, "a snapshot already on this floor was rewritten on open"
+
+
+@needs_node
 def test_seeding_never_lands_beside_an_lf_only_measurement(ran):
     """B.seedTakeoffSf's own early return, which init's SF-total guard hides: a takeoff whose only
     measurement is in LF is still somebody's work, and the old code overwrote it.

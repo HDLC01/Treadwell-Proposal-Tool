@@ -3023,8 +3023,16 @@
     // live intake's beta-continue door saved a polish_sf typed over a takeoff that was already
     // measured. proposal-review reads polish_sf for the SF token. One debounced save, only when
     // the two actually differ, so a plain reopen writes nothing.
+    //
+    // (3) THE PRICE SNAPSHOT: intake's SF boxes stay editable on a measured takeoff, and a figure
+    // typed there moves the takeoff rows and polish_sf together but cannot reprice (the library
+    // lives on this page). So polish_sf agrees with the takeoff while computed_bid, which holds
+    // the SF it was priced on, still says the old figure. A snapshot priced on another floor is
+    // stale: save once so computed_bid and the stamped totals come from the model as it is.
+    // Only when a snapshot exists and names an SF, so a draft that never had one still writes nothing.
     var tkSf = B.takeoffSf(M.takeoff);
-    if (tkSf > 0 && tkSf !== B.num(state.polish_sf)) saveSoon();
+    var snapSf = state.computed_bid ? B.num(state.computed_bid.polish_sf) : 0;
+    if (tkSf > 0 && (tkSf !== B.num(state.polish_sf) || (snapSf > 0 && snapSf !== tkSf))) saveSoon();
 
     renderDatalist();
     $("loading").hidden = true;
