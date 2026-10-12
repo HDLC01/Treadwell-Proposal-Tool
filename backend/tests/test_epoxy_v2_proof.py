@@ -4,7 +4,7 @@ THE QUESTION. Hanz's decision (2026-10-12): match Kyle's workbook EXACTLY, odd r
 already proves the markup chain on each tab (test_bid_engine.py). What it cannot prove is the material that arrives at
 the chain, and the plumbing between a takeoff and the chain. This does both, against the workbook itself:
 
-  1. THE JOBS. tests/js/epoxy-jobs-recorder.js typed 250 jobs into the Epoxy tab of the template (a system for System 1
+  1. THE JOBS. tests/js/epoxy-jobs-recorder.js typed 440 jobs into the Epoxy tab of the template (a system for System 1
      and for System 2, a primer, a cove and its length, the job questions, a crew) and recorded what its cells answered
      (tests/fixtures/epoxy_jobs_golden.json). tests/js/epoxy-v2-proof-harness.js builds each job as a v2 Epoxy section
      over the library backend/ops/seed_library_from_workbook.py plans and prices it the way the estimate page does.
@@ -16,10 +16,20 @@ the chain, and the plumbing between a takeoff and the chain. This does both, aga
      they share, except the vectors that a declared departure keeps out.
 
 THE DECLARED DEPARTURES (each is in docs/v2-architecture.md, and each is a named modelling gap for Kyle):
-  * PRICE BREAK ON TWO LINES. The sheet judges a flake or quartz price break on the two broadcast lines ADDED TOGETHER;
-    the library judges each line alone (the Phase 11 gap). It only shows where the two lines straddle the break.
-  * FOUR PLACES. A library cost has four decimal places and the sheet's prices have more, so a sum can land exactly on a
-    whole dollar that the sheet's sum is a hair above, and ROUNDUP then differs by a dollar.
+  * PRICE BREAK ON TWO LINES. The sheet judges a flake or quartz price break on the two broadcast lines of a system ADDED
+    TOGETHER; the library judges each line alone (the Phase 11 gap). It shows wherever the two lines reach the break
+    together and neither does alone: for the flake and quartz systems that is every size up to 1,000 to 1,600 SF (the
+    two MACRO flake systems are the widest), on a job of any size that has such a system in it, so a big job with one small
+    system is hit too. The library charges the small-lot price for it, so v2 is never under the workbook. The jobs it
+    bites in are not listed by hand: tests/js/epoxy-v2-proof-harness.js pools each system's lines with the library's own
+    breakAt and says which jobs a line was priced without the break the pool earns, and by how much. The test requires
+    that set to be the jobs that differ, both ways, and the dollars to be those the pool predicts.
+  * FOUR PLACES. A library cost has four decimal places and the sheet's prices have more, so a sum can land a hair
+    either side of a whole dollar and ROUNDUP then differs by a dollar. It is rare (about 5 jobs in 1,500 scanned, all of
+    them large or on a cove) and is checked at the three cove jobs and two plain sizes recorded.
+  * THREE PLACES. A coverage has three places (a bag of flake covers 266.66667 SF and is stored 266.667, rounded up), so
+    an area typed to two decimals within 0.003 SF past a bag edge buys one bag fewer than the sheet. Whole square feet
+    cannot do this.
   * NO TOOLING FOR NO AREA. The sheet charges its tooling minimums for a job with no square feet; a v2 section does not.
   * HARD BID, BOND, LODGING. v2 has no hard bid (Hanz removed it, 2026-09-22), no bond input (it is 0 and unwired), and
     prices travel from the model's own Lodging and Per Diem lines, not from the sheet's local switch.
@@ -43,23 +53,18 @@ HARNESS = TESTS / "js" / "epoxy-v2-proof-harness.js"
 GOLDEN = TESTS / "fixtures" / "epoxy_jobs_golden.json"
 ORACLE_EPOXY = ORACLE / "epoxy.json"
 
-# Jobs where a declared departure applies, and why.
-COMBINED_BREAK = {   # the two broadcast lines straddle the 240 lb / 450 lb break at 1,000 SF or under
-    "system/40-s-q28-quartz-double-broadcast/1000",
-    "system/hybrid-macro-flake/1000",
-    "system/hybrid-micro-flake/1000",
-    "system/hybrid-quartz-double-broadcast-standard-texture/1000",
-    "system/micro-flake-double-broadcast/1000",
-    "system/trowel-hybrid-quartz-double-broadcast-orange-peel-texture-trowel-texture/1000",
-    "edge/quartz/800",
-}
-FOUR_PLACES = {      # the library's 4-place WR kit price puts the sum on 32,804.0000; the sheet's is 32,804.0000002
+# Jobs where a declared departure applies, and why. The price break is not listed: it is read from the proof's run (see
+# _break_jobs), because it bites at too many sizes to list and a hand list is what understated it.
+FOUR_PLACES = {      # a sum a hair either side of a whole dollar
+    # the library's 4-place WR kit price puts the sum on 32,804.0000; the sheet's is 32,804.0000002
     "cove/wr-4/40/under-trowel-hybrid-quartz-double-broadcast-orange-peel-texture-trowel-texture",
     "cove/wr-4-cap/40/under-trowel-hybrid-quartz-double-broadcast-orange-peel-texture-trowel-texture",
     "cove/wr-6/40/under-trowel-hybrid-quartz-double-broadcast-orange-peel-texture-trowel-texture",
+    "places/q28/3000",            # the sheet's sum is 10,915.0002 and the library's 10,914.9976
+    "places/shop-single/15500",   # the sheet's sum is 38,325.9981 and the library's 38,326.0022
 }
+THREE_PLACES = {"places/frac/macro-2666.67"}   # 2,666.67 SF is 0.003 past 10 bags of 266.66667; stored 266.667 it is 10
 NO_AREA = {"empty/none"}
-DECLARED = COMBINED_BREAK | FOUR_PLACES | NO_AREA
 CHAIN_SKIPS = {"hard bid": 60, "bond": 12, "lodging": 8}
 
 
@@ -97,6 +102,16 @@ def _differing(golden, ran):
     return {c["id"] for c in golden["cases"] if _differs(c, by_id[c["id"]])}
 
 
+def _break_jobs(ran):
+    """The jobs where the library priced a line without the price break the sheet gives it (the harness pools each
+    system's lines with the library's own breakAt)."""
+    return {c["id"] for c in ran["cases"] if c["pooled_break_lines"] > 0}
+
+
+def _declared(ran):
+    return _break_jobs(ran) | FOUR_PLACES | THREE_PLACES | NO_AREA
+
+
 # ── the recorded answers are the workbook's, and current ─────────────────────────────────────────
 def test_the_recorded_jobs_were_taken_from_the_template_and_the_engine_as_they_are_now(golden):
     digest, cells, names = template_hash(["Epoxy"])
@@ -122,36 +137,61 @@ def test_the_proof_touches_every_system_primer_wall_and_cove_the_seed_plans(gold
 # ── 1. the jobs ──────────────────────────────────────────────────────────────────────────────────
 def test_every_job_outside_the_declared_departures_is_equal_to_the_workbook_to_the_dollar(golden, ran):
     by_id = {c["id"]: c for c in ran["cases"]}
+    declared = _declared(ran)
     checked = 0
     for case in golden["cases"]:
-        if case["id"] in DECLARED:
+        if case["id"] in declared:
             continue
         w, g = case["out"], by_id[case["id"]]
         assert abs(g["raw"] - w["raw"]) <= _tolerance(w["raw"]), (case["id"], w["raw"], g["raw"])
         assert (g["material"], g["tooling"], g["sub_total"], g["gp"], g["taxes"], g["total"]) == (
             w["D40"], w["D62"], w["D70"], w["D73"], w["D82"], w["D88"]), case["id"]
         checked += 1
-    assert checked >= 230, "the proof compared only %d jobs" % checked
+    assert checked >= 300, "the proof compared only %d jobs" % checked
 
 
 def test_the_declared_departures_are_exactly_the_jobs_that_differ(golden, ran):
-    assert _differing(golden, ran) == DECLARED, (
+    declared = _declared(ran)
+    assert _differing(golden, ran) == declared, (
         "the jobs that differ from the workbook are not the declared ones. Differ and not declared: %s. Declared and "
         "equal (a departure closed, so say so): %s" % (
-            sorted(_differing(golden, ran) - DECLARED), sorted(DECLARED - _differing(golden, ran))))
+            sorted(_differing(golden, ran) - declared), sorted(declared - _differing(golden, ran))))
 
 
 def test_each_departure_is_the_one_it_says_it_is(golden, ran):
     by_id = {c["id"]: c for c in ran["cases"]}
     want = {c["id"]: c for c in golden["cases"]}
-    for cid in COMBINED_BREAK:
-        w, g = want[cid]["out"], by_id[cid]
-        assert g["raw"] > w["raw"] + 1, "%s: the library should charge the small-lot price where the sheet pays the large-lot one" % cid
     for cid in FOUR_PLACES:
         w, g = want[cid]["out"], by_id[cid]
-        assert abs(g["raw"] - w["raw"]) < 0.01 and g["material"] == w["D40"] - 1, cid
+        assert abs(g["raw"] - w["raw"]) < 0.01 and abs(g["material"] - w["D40"]) == 1, cid
+    for cid in THREE_PLACES:
+        w, g = want[cid]["out"], by_id[cid]
+        assert g["material"] < w["D40"] - 50, "%s: the stored coverage should buy one bag fewer than the sheet" % cid
+    # ... and the same area a hair further on is a whole bag past the edge and is equal, so the departure is a window
+    assert by_id["places/frac/macro-2666.7"]["material"] == want["places/frac/macro-2666.7"]["out"]["D40"]
     w, g = want["empty/none"]["out"], by_id["empty/none"]
     assert w["D62"] == 220 and g["tooling"] == 0 and g["material"] == 0, "a section with no area charges no tooling"
+
+
+def test_the_price_break_departure_is_where_the_library_says_and_costs_what_the_pool_predicts(golden, ran):
+    """The library charges a flake or quartz line the small-lot price where the sheet, pooling the system's two
+    broadcast lines, pays the large-lot one. For every job it bites in, the raw material is over the workbook's by
+    exactly packs times the difference of the two pack prices (the harness adds that up from the library's own rows), so
+    the departure is the one named and nothing else hides inside it. It is never under the workbook."""
+    by_id = {c["id"]: c for c in ran["cases"]}
+    want = {c["id"]: c for c in golden["cases"]}
+    hit = _break_jobs(ran)
+    assert len(hit) >= 80, "the price break was recorded biting in only %d jobs" % len(hit)
+    for cid in sorted(hit):
+        w, g = want[cid]["out"], by_id[cid]
+        assert g["pooled_break_gap"] > 1, cid
+        assert abs((g["raw"] - w["raw"]) - g["pooled_break_gap"]) <= _tolerance(w["raw"]), (
+            cid, g["raw"] - w["raw"], g["pooled_break_gap"])
+    # where it reaches: the widest system still bites at 1,600 SF and not at 1,700, and a small system on a big job bites
+    assert "break/hybrid-macro-flake/1600" in hit and "break/hybrid-macro-flake/1700" not in hit
+    assert {"break/two-systems/1", "break/two-systems/2", "break/two-systems/3"} <= hit
+    # not vacuous: the pool agrees with the workbook wherever the lines do not straddle (every job that is equal)
+    assert len([c for c in golden["cases"] if c["id"] not in _declared(ran)]) >= 300
 
 
 def test_the_flake_systems_are_exact_at_every_size_the_pack_edges_were_recorded_at(golden, ran):
@@ -247,6 +287,9 @@ BREAKS = {
     "the section's tooling never reaches the chain": (
         MODEL, "    if (isObject(mat)) copyInto(input, mat); else input.material = num(mat);",
         "    if (isObject(mat)) input.material = num(mat.material); else input.material = num(mat);"),
+    "a price break starts above its quantity, not from it": (
+        "js/library-core.js", "      if (list[i].min_qty <= u && (hit === null || list[i].min_qty > hit.min_qty)) hit = list[i];",
+        "      if (list[i].min_qty < u && (hit === null || list[i].min_qty > hit.min_qty)) hit = list[i];"),
     "the section's labor is not read": (
         MODEL, "      labor: laborTotal(s.labor, model.conditions),", "      labor: 0,"),
 }
@@ -257,6 +300,6 @@ def test_the_proof_goes_red_when_the_takeoff_or_the_model_changes(tmp_path, gold
     rel, old, new = BREAKS[name]
     frontend = break_source(tmp_path, rel, old, new, also=[MODEL, "js/library-core.js", TAKEOFF])
     broken = run(frontend, tmp_path)
-    jobs_red = _differing(golden, broken) != DECLARED
+    jobs_red = _differing(golden, broken) != _declared(ran)
     chain_red = any(c.get("wrong") for c in broken["chain"])
     assert jobs_red or chain_red, "the proof did not notice: " + name

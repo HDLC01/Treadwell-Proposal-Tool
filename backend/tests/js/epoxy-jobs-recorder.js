@@ -123,6 +123,30 @@ function buildCases(plan) {
   jobs.forEach((j, i) => add("job/" + (i + 1), j));
   // nothing measured: the sheet still charges its tooling minimums, the v2 section does not (a declared difference)
   add("empty/none", {});
+  // THE PRICE BREAK, SCANNED. The sheet judges a flake or quartz break on the two broadcast lines of a system added
+  // together; the library judges each line alone. It bites wherever a system's lines pool across the break and none
+  // does alone, which is every size up to about 1,600 SF, not only the 1,000 SF the cases above sit at. So every
+  // system whose two lines pool is walked from 100 to 2,000 SF, and the proof says which jobs it bites in and by how much.
+  const named = (list, n) => list.find((x) => norm(x) === norm(n)) || fail("the plan has no system called " + n);
+  const pooled =["Hybrid MACRO Flake", "Hybrid micro Flake", "micro Flake Double Broadcast", "40-S (Q28) Quartz Double Broadcast",
+    "Hybrid Quartz Double Broadcast (Standard Texture)", "Trowel - Hybrid Quartz Double Broadcast (Orange Peel Texture/Trowel Texture)"];
+  const pooledWalls = ["Walls: MACRO Flake Double Broadcast", "Walls: micro Flake Double Broadcast", "Walls: Troweled Quartz"];
+  for (let sf = 100; sf <= 2000; sf += 100) {
+    pooled.forEach((n) => add("break/" + slug(n) + "/" + sf, { sys1: named(floors, n), sf1: sf }));
+    pooledWalls.forEach((n) => add("break/" + slug(n) + "/" + sf, { sys2: named(walls, n), sf2: sf }));
+  }
+  // two systems on one job, each with its own lines to pool (the sheet pools a system's lines, never two systems')
+  add("break/two-systems/1", { sys1: named(floors, "Hybrid MACRO Flake"), sf1: 862, sys2: named(floors, "MACRO Flake Single Broadcast"), sf2: 10298 });
+  add("break/two-systems/2", { sys1: named(floors, "Hybrid micro Flake"), sf1: 849, sys2: named(floors, "Dur-A-Gard"), sf2: 11707, cove1: named(coves, "WR 4\""), lf1: 300 });
+  add("break/two-systems/3", { sys1: named(floors, "Hybrid micro Flake"), sf1: 11826, sys2: named(walls, "Walls: Troweled Quartz"), sf2: 999 });
+  // a library cost is kept to four places and the sheet's prices have more: at some plain sizes a sum lands a hair
+  // either side of a whole dollar, and ROUNDUP then differs by one
+  add("places/q28/3000", { sys1: named(floors, "40-S (Q28) Quartz Double Broadcast"), sf1: 3000 });
+  add("places/shop-single/15500", { sys1: named(floors, "Shop Floor Single Broadcast"), sf1: 15500 });
+  // a coverage is kept to three places, so an area typed to two decimals that sits within 0.003 SF past a bag edge buys
+  // one bag fewer than the sheet (a bag of flake covers 266.66667 SF and is stored as 266.667)
+  add("places/frac/macro-2666.67", { sys1: named(floors, "MACRO Flake Single Broadcast"), sf1: 2666.67 });
+  add("places/frac/macro-2666.7", { sys1: named(floors, "MACRO Flake Single Broadcast"), sf1: 2666.7 });
   return cases;
 }
 

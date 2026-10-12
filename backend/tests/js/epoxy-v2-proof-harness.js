@@ -94,16 +94,44 @@ function coveOf(spec, n, takeoff) {
   return { actual: price(X.systemOneIsQuartz(takeoff)), quartz: price(true), silica: price(false) };
 }
 
+/** THE PRICE BREAK THE LIBRARY JUDGES ON ONE LINE AND THE SHEET ON TWO. The sheet pools the pounds of a system's two
+ *  broadcast lines (`IF((O201+O202)<240, ...)`); priceAssembly prices each line alone. For every takeoff row, the
+ *  lines that buy the same material at the same ladder are pooled here with the library's own breakAt, and a line that
+ *  the pooled quantity would have put in a bigger break but that was priced without it is a line the library
+ *  over-charges. Answers whether any is, and the dollars: the sum of packs times (the pack cost it paid less the pack
+ *  cost the break gives). Nothing here prices the job; the figures are only what the departure predicts. */
+function pooledBreakGap(takeoff) {
+  let gap = 0, lines = 0;
+  takeoff.forEach((r) => {
+    const asm = asms.find((a) => a.id === r.assembly_id);
+    if (!asm) return;
+    const priced = L.priceAssembly(asm, items, B.num(r.measurement)).rows;
+    const pool = new Map();
+    const keyOf = (row) => JSON.stringify([row.item.price_breaks, row.item.unit_cost, row.buy_qty]);
+    priced.forEach((row) => {
+      if (!row.ok || !row.priced || !row.item.price_breaks) return;
+      pool.set(keyOf(row), (pool.get(keyOf(row)) || 0) + row.units);
+    });
+    priced.forEach((row) => {
+      if (!row.ok || !row.priced || !row.item.price_breaks) return;
+      const brk = L.breakAt(row.item, pool.get(keyOf(row)));
+      if (brk && !row.price_break) { gap += row.packs * (row.pack_cost - brk.unit_cost); lines += 1; }
+    });
+  });
+  return { gap: gap, lines: lines };
+}
+
 const out = [];
 golden.cases.forEach((c) => {
   const m = modelFor(c.in);
+  const pb = pooledBreakGap(m.tabs.Epoxy.takeoff);
   const raw = material(m.tabs.Epoxy ? { section: m.tabs.Epoxy } : null);
   const bid = B.priceSection(m, "Epoxy", { material: (e) => { const r = material(e); return { material: r.material, tooling: r.tooling }; } });
   out.push({
     id: c.id, raw: raw.material, patch: raw._parts.patch, cove: raw._parts.cove,
     material: bid.material, tooling: bid.tooling, material_total: bid.material_total, labor: bid.labor,
     sub_total: bid.sub_total, gp: bid.gp, sales_tax: bid.sales_tax, remodel_tax: bid.remodel_tax, taxes: bid.taxes,
-    total: bid.total, priceable: bid.priceable !== false,
+    total: bid.total, priceable: bid.priceable !== false, pooled_break_gap: pb.gap, pooled_break_lines: pb.lines,
     cove1: coveOf(c.in, 1, m.tabs.Epoxy.takeoff), cove2: coveOf(c.in, 2, m.tabs.Epoxy.takeoff),
   });
 });
