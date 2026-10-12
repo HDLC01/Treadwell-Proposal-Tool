@@ -194,7 +194,10 @@ def test_the_old_copy_of_the_county_picker_is_gone_from_the_page():
     assert html.index("/js/county-picker.js") < html.index("/js/polish-intake.js"), (
         "the page script mounts the control as it boots, so the control loads first")
     assert html.index("/js/work-types.js") < html.index("/js/intake-scope.js") < html.index("/js/polish-intake.js")
-    assert len(src.splitlines()) < 760, "the page grew back toward its old size"
+    # 760 until 2026-10-12, when the SF boxes' mirror of the takeoff (paintSfBoxes, the typed-box guard in
+    # save()) added ~45 lines of the page's own. The ceiling is for the county picker's old inline copy,
+    # which was hundreds of lines; it moves with a named feature, not by habit.
+    assert len(src.splitlines()) < 820, "the page grew back toward its old size"
 
 
 # ── the checks go red when the code changes ─────────────────────────────────────────────────────
