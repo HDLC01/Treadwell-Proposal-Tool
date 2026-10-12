@@ -72,6 +72,7 @@ function make(opts) {
   };
   const body = BLOCK + "\nreturn { renderLabCalc: renderLabCalc, saveTravelRate: saveTravelRate, " +
     "renderLaborRate: renderLaborRate, saveLaborRate: saveLaborRate, " +
+    "onRateEdit: onRateEdit, pressRateSave: pressRateSave, rateUnsavedCount: rateUnsavedCount, " +
     "travelFigure: travelFigure, rules: function () { return TRAVEL_RULES; }, " +
     "calcEdit: calcEdit, renderTryIt: renderTryIt, calcProblem: calcProblem, " +
     "setTry: function (v) { CALC_TRY_SF = v; }, calc: function () { return CALC; }, " +
@@ -369,6 +370,102 @@ const RULE = (key, formula, extra) => Object.assign({ id: "r-" + key, layout: "g
     t.api.renderLaborRate(); await settle();
     await t.api.saveTravelRate(input("travel_lodging", "91"));
     out.travelStillSaves = t.puts;
+  }
+
+  // ── THE RATE BOXES HAVE A SAVE BUTTON, AND NOTHING FILES ON ITS OWN (Hanz, 2026-10-12) ────────────
+  // "apply that save button here" on the Labor tab: the company labor rate and the Hotel and Per Diem
+  // rows. Typing shows the box's Save (left of its name); the press files the SAME PUT as before.
+  // Elements are registered by the ids the page looks them up by, so a renamed id breaks this loudly.
+  {
+    const wire = (opts) => {
+      const s = make(opts);
+      ["rate-save-labor_rate", "rate-save-travel_lodging", "rate-save-travel_per_diem"].forEach((id) => {
+        s.els[id] = { id, innerHTML: "", textContent: "", hidden: false };
+      });
+      s.els["labor-rate-input"] = { id: "labor-rate-input", value: "",
+        getAttribute: (k) => (k === "data-labor-rate" ? "1" : null) };
+      ["travel_lodging", "travel_per_diem"].forEach((k) => {
+        s.els["travel-rate-" + k] = { id: "travel-rate-" + k, value: "",
+          getAttribute: (a) => (a === "data-travel-rate" ? k : null) };
+      });
+      return s;
+    };
+    const typeInto = (s, id, v) => { s.els[id].value = v; return s.els[id]; };
+    const s = wire({ rules: [RULE("labor_rate", "40", { notes: "kept note" }),
+                             RULE("travel_lodging", "80", { notes: "hotel note" })] });
+    s.api.renderLaborRate(); await settle();
+    const drawn = s.els["labor-rate-box"].innerHTML + s.els["travel-rates-box"].innerHTML;
+    // typing: no PUT, the Save appears in the box's own cell
+    const lab = typeInto(s, "labor-rate-input", "45");
+    s.api.onRateEdit({ target: lab });
+    const hot = typeInto(s, "travel-rate-travel_lodging", "91");
+    s.api.onRateEdit({ target: hot });
+    await settle();
+    const typed = {
+      putsSent: s.puts.length,
+      laborSave: s.els["rate-save-labor_rate"].innerHTML,
+      hotelSave: s.els["rate-save-travel_lodging"].innerHTML,
+      perDiemSave: s.els["rate-save-travel_per_diem"].innerHTML,
+      unsaved: s.api.rateUnsavedCount(),
+    };
+    // typing the filed figure back is not a change
+    lab.value = "40";
+    s.api.onRateEdit({ target: lab });
+    const backToFiled = { laborSave: s.els["rate-save-labor_rate"].innerHTML, unsaved: s.api.rateUnsavedCount() };
+    lab.value = "45";
+    s.api.onRateEdit({ target: lab });
+    // a repaint draws what is typed, with its Save
+    s.api.renderLaborRate(); await settle();
+    const repainted = s.els["labor-rate-box"].innerHTML + s.els["travel-rates-box"].innerHTML;
+    // the press
+    const pressed = await s.api.pressRateSave("labor_rate");
+    const hotelPressed = await s.api.pressRateSave("travel_lodging");
+    // an unknown key presses nothing
+    const stray = await s.api.pressRateSave("__proto__");
+    out.rateSaveButton = {
+      drawnWithoutSave: drawn.indexOf("data-save-rate") === -1,
+      typed,
+      typedBackToFiled: backToFiled,
+      repaintKeepsTypedFigure: /data-labor-rate="1" value="45"/.test(repainted) &&
+        /data-travel-rate="travel_lodging" value="91"/.test(repainted),
+      repaintKeepsItsSave: /data-save-rate="labor_rate"/.test(repainted) && /data-save-rate="travel_lodging"/.test(repainted) &&
+        repainted.indexOf('data-save-rate="travel_per_diem"') === -1,
+      saveCellIsFirstInTheHotelRow: /<tr data-travel-row="travel_lodging"><td class="rowsave" id="rate-save-travel_lodging"><button/.test(repainted),
+      hotelHeaderSaveFirst: /<thead><tr><th class="rowsave"><\/th><th>Line<\/th>/.test(repainted),
+      laborSaveLeftOfName: /<span class="ratesave" id="rate-save-labor_rate"><button[^>]*data-save-rate="labor_rate"[^>]*>Save<\/button><\/span><label/.test(repainted),
+      pressed, hotelPressed, stray,
+      puts: s.puts,
+      saveGoneAfter: { labor: s.els["rate-save-labor_rate"].innerHTML, hotel: s.els["rate-save-travel_lodging"].innerHTML },
+      unsavedAfter: s.api.rateUnsavedCount(),
+      alert: s.els["labor-rate-alert"].textContent,
+      hotelAlert: s.els["travel-rate-alert"].textContent,
+    };
+  }
+  // a refused press keeps the Save only while the box still differs from what is filed
+  {
+    const s = (() => {
+      const w = make({ rules: [RULE("travel_lodging", "80")], putStatus: 403 });
+      w.els["rate-save-travel_lodging"] = { id: "rate-save-travel_lodging", innerHTML: "" };
+      w.els["travel-rate-travel_lodging"] = { id: "travel-rate-travel_lodging", value: "",
+        getAttribute: (a) => (a === "data-travel-rate" ? "travel_lodging" : null) };
+      return w;
+    })();
+    s.api.renderLaborRate(); await settle();
+    const box = s.els["travel-rate-travel_lodging"];
+    box.value = "99";
+    s.api.onRateEdit({ target: box });
+    const shown = s.els["rate-save-travel_lodging"].innerHTML !== "";
+    const ok = await s.api.pressRateSave("travel_lodging");
+    out.rateSaveRefused = { shown, ok, boxBack: box.value, saveGone: s.els["rate-save-travel_lodging"].innerHTML === "",
+                            said: s.els["travel-rate-alert"].textContent };
+  }
+  // a non-admin gets no Save cell content, no box
+  {
+    const s = make({ admin: false, rules: [RULE("labor_rate", "40"), RULE("travel_lodging", "80")] });
+    s.api.renderLaborRate(); await settle();
+    const h = s.els["labor-rate-box"].innerHTML + s.els["travel-rates-box"].innerHTML;
+    out.rateSaveNonAdmin = { noSave: h.indexOf("data-save-rate") === -1, noInputs: h.indexOf("<input") === -1,
+                             columnKept: (h.match(/<td class="rowsave" id="rate-save-[a-z_]+"><\/td>/g) || []).length === 2 };
   }
 
   console.log(JSON.stringify(out));

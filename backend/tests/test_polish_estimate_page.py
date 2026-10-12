@@ -416,6 +416,29 @@ def test_the_derived_guys_figure_repaints_on_screen_and_not_only_in_the_model(ra
 
 
 @needs_node
+def test_the_labor_cost_box_repaints_live_beside_the_header_figure(ran):
+    """The Cost box in a Labor card, Travel Labor and Lodging must move with the figure in the card
+    header. Hanz, 2026-10-12: Guys 1.5, Hours 12, Rate 33 read $594 up top and $0 in the box below,
+    because typing repaints text in place and only the header carried a hook.
+
+    Mutation: delete the data-lcostbox-for / data-trvcostbox-for repaint loops from repaintNumbers
+    (the harness then cannot move the box at all) and every assertion below goes red."""
+    r = ran["costBoxRepaint"]
+    for key in ("labor0Typed", "travelTyped", "lodgingTyped"):
+        assert r[key]["box"] == r[key]["head"], (
+            "%s: the Cost box and the header show different figures: %r" % (key, r[key]))
+        assert r[key]["cls"] == "costbox", "%s: a priced box must not be dimmed: %r" % (key, r[key])
+    assert r["labor0Typed"]["box"] == "$1,920" and r["labor0Expected"] == 1920
+    assert r["travelTyped"]["box"] == "$594", "1.5 x 12 x $33 is $594: %r" % r["travelTyped"]
+    assert r["lodgingTyped"]["box"] == "$400", "4 nights x $100: %r" % r["lodgingTyped"]
+    # And back to nothing: text and the `empty` class both follow.
+    for key in ("labor0Cleared", "travelCleared", "lodgingCleared"):
+        assert r[key]["box"] == r[key]["head"] == "$0", "%s: %r" % (key, r[key])
+        assert r[key]["cls"] == "costbox empty", "%s: an empty box lost its class: %r" % (key, r[key])
+    assert r["rebuilds"] == 0, "typing rebuilt the panel, which would drop the cursor"
+
+
+@needs_node
 def test_travel_dims_on_a_local_job_and_is_still_typeable(ran):
     """The intake toggle's own words are "Local job. Under 70 miles. Off means travel and lodging
     get added" — so on a local job, an UNTOUCHED Travel row is not expected, and the card says so.
@@ -852,6 +875,24 @@ def test_clicking_a_review_switch_answers_the_question_and_reprices(ran):
             % (key, c["reRendered"]))
         money_is(c["totalAfter"], c["expectedAfter"]["total"],
                  "the lump sum after clicking %r" % key)
+
+
+@needs_node
+def test_the_review_step_has_no_grey_line_under_its_heading(ran):
+    """Hanz, 2026-10-12: "remove this label in review". The Review step's heading stands alone.
+
+    The header is cut out of what the rendered page emitted, so this goes red if the sentence
+    comes back, or if shell() keeps an empty <p> (a blank grey gap) in its place. The other steps
+    still carry their blurbs, which is what keeps this from passing on a shell() that drops them
+    all.
+    """
+    h = ran["stepHeaders"]
+    assert "<h2>Review the bid</h2>" in h["review"], h["review"]
+    assert "Costs, then the markup" not in h["review"], h["review"]
+    assert "<p" not in h["review"], (
+        "Review still emits a paragraph under its heading: %r" % h["review"])
+    assert "<p>One row per assembly." in h["takeoff"], h["takeoff"]
+    assert "<p>Guys" in h["labor"], h["labor"]
 
 
 @needs_node

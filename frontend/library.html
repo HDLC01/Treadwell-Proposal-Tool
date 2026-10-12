@@ -227,7 +227,7 @@
     tbody tr.broken:hover td { background:var(--warn-bg); }
     td.n, th.n { text-align:right; font-variant-numeric:tabular-nums; }
     .items-table thead th { text-align:center; }
-    .items-table thead th:first-child { text-align:left; }
+    .items-table thead th:first-child, .items-table thead th.rowsave + th { text-align:left; }
     .th-sub { font-weight:400; text-transform:none; letter-spacing:0; }
     /* Widths as classes. They were eight inline style attributes on the <th> row. */
     .w-order { width:112px; } .w-cov { width:116px; } .w-waste { width:104px; }
@@ -250,22 +250,29 @@
     .cell-qty { width:64px; }
     .cell-cost { width:92px; }
     .rowact { white-space:nowrap; }
-    /* THE ITEMS ROW'S SAVE BUTTON, PINNED TO THE RIGHT EDGE OF THE SCROLLER. Hanz, 2026-10-06:
-       "the save button only pops up when we click away". The Items table is about 1,990px wide
-       inside a .tw scroller, and the button used to go into .rowact, the last column -- 600px past
-       the right edge on a 1366 screen, 1,600px past it on a phone. It was there from the first
-       keystroke; nobody could see it. Sticky right:0 keeps it on the edited row and on screen at
-       any scroll position, Cost and Vendor included (focusing those scrolls the NAME column off
-       screen, which is why the button is not in the name cell).
-       Zero wide while empty: no padding, no background, so a clean table carries no strip down its
-       right edge and the column costs nothing. Only a cell holding a button paints, opaque so the
-       columns sliding under it do not show through. The hover fill is --surf rather than the
-       translucent row tint, which would let those columns through; the two differ by 3 levels. */
-    .rowsave { padding:0; }
-    td.rowsave { position:sticky; right:0; }
-    td.rowsave:not(:empty) { padding:0 11px; background:var(--card);
-      box-shadow:inset 1px 0 0 var(--line); }
-    tbody tr:hover td.rowsave:not(:empty) { background:var(--surf); }
+    /* THE ITEMS ROW'S SAVE BUTTON, FIRST COLUMN, LEFT OF THE NAME. Hanz, 2026-10-06: "the save
+       button only pops up when we click away" -- the button was in the last column of a table about
+       1,990px wide, 600px past the right edge on a 1366 screen. It moved to a cell pinned to the
+       right edge that day; on 2026-10-12 he asked for it "to the left of the name", so it is now
+       the first column and pinned to the LEFT edge (position:sticky, left:0): on screen on the
+       edited row at any scroll position, and in the keyboard order Save, then name.
+       A fixed width, not zero-while-empty as it was on the right: a column that grows from nothing
+       on the first keystroke would push every cell under the caret 72px sideways. The cell is
+       opaque so the columns sliding under it while the table scrolls do not show through; the
+       hover fill is --surf rather than the translucent row tint for the same reason. */
+    .rowsave { width:72px; min-width:72px; padding:0 8px; white-space:nowrap; }
+    td.rowsave { position:sticky; left:0; z-index:1; background:var(--card);
+      box-shadow:inset -1px 0 0 var(--line); }
+    th.rowsave { position:sticky; left:0; z-index:2; }
+    tbody tr:hover td.rowsave { background:var(--surf); }
+    /* THE SAME COLUMN ON THE LABOR AND ADMINISTRATION TABLES (Hanz, 2026-10-12: "apply that save
+       button here", "same as here"), and the same two states of it: the Save button while the row has
+       an unsaved change, and for about two seconds after the save lands, "Saved" in that same cell --
+       the confirmation sits on the row it belongs to. The cell keeps its width either way. */
+    .rowsaved { font:600 12px var(--ui); color:var(--ok); }
+    /* The labor rate box is not a table row: its Save sits in a fixed-width cell left of the name, so
+       the label does not shift when the button appears. */
+    .ratesave { display:inline-block; min-width:56px; }
 
     /* WHICH CELLS THE PAGE WORKS OUT FOR YOU. Quantity and Cost are the only two columns nobody
        types into — they are the arithmetic this page exists to show — so they carry a faint band
@@ -291,7 +298,9 @@
        card idiom — it is a table row that happens to be a button.
 
        WHICH END, per list, and each one was asked for:
-         * the three administration lists — the FOOT, unchanged, reading as "the next row";
+         * the three administration lists — the TOP of their cards since 2026-10-12 (Hanz: "put all
+           add buttons to the top"), like Labor's and Materials'. They were at the foot, reading as
+           "the next row";
          * materials — the TOP (2026-08-28), see the #items-addrow note below;
          * assemblies — the TOP (Hanz, 2026-09-04: "Move the assembly button up top and when a
            new assembly is added it should append up top not below"). The rail is a 272px column
@@ -854,6 +863,11 @@
           <table class="items-table">
             <thead>
               <tr>
+                <!-- The Save button's column, FIRST so Save sits left of the name (Hanz, 2026-10-12).
+                     A fixed narrow width, so the button appearing on the first keystroke moves
+                     nothing, and pinned to the scroller's left edge so it stays on screen while the
+                     table is scrolled sideways. -->
+                <th class="rowsave"></th>
                 <th>Materials <span class="th-sub">(how the manufacturer names it)</span></th>
                 <th>Division</th><th class="n">Order Quantity</th><th>Unit</th>
                 <!-- COVERAGE, WASTE AND ROUNDUP LIVE HERE NOW, from 2026-09-22. Hanz: "for the
@@ -879,8 +893,6 @@
                      default items in assemblies should be handled in default items in assemblies
                      tab" -- one screen owns defaults, and a switch here would be a second place to
                      set the same thing. The Defaults tab's own search adds them now. -->
-                <!-- The Save button's column, zero wide until a row has an unsaved edit. -->
-                <th class="rowsave"></th>
                 <th class="w-act"></th>
               </tr>
             </thead>
@@ -944,6 +956,9 @@
           <table class="items-table">
             <thead>
               <tr>
+                <!-- THE SAVE BUTTON'S COLUMN, FIRST, so each line's Save sits left of its name (Hanz,
+                     2026-10-12: "apply that save button here"). Same pinned column as the Items table. -->
+                <th class="rowsave"></th>
                 <th>Line</th><th class="n">Rate</th><th>Unit</th><th>Notes</th>
                 <th>Work types</th><th class="w-act"></th>
               </tr>
@@ -966,8 +981,10 @@
       </div>
       <!-- HOTEL AND PER DIEM (Hanz, 2026-10-09). Filled by renderTravelRates(). The Global lines
            `travel_lodging` and `travel_per_diem` in markup_rules; this is their only door now. -->
-      <p class="alert" id="travel-rate-alert" role="status" aria-live="polite"></p>
       <div id="travel-rates-box"></div>
+      <!-- BELOW THE HOTEL AND PER DIEM ROWS, where it was above the section and read as a note about
+           the labor lines over it (Hanz, 2026-10-12). -->
+      <p class="alert" id="travel-rate-alert" role="status" aria-live="polite"></p>
     </section>
 
     <!-- ── Labor Calculator ───────────────────────────────────────────── -->
@@ -992,17 +1009,10 @@
         <div class="admin-section" id="admin-divisions">
           <h2>Divisions</h2>
           <div class="card">
-            <div class="tw">
-              <table>
-                <thead><tr><th>Division</th><th>Notes</th><th class="n">Items</th><th class="w-act"></th></tr></thead>
-                <tbody id="divisions-body"></tbody>
-              </table>
-            </div>
-            <div id="divisions-empty" class="empty" hidden>
-              <h3>No divisions yet</h3>
-              <p>Add divisions and they become chips on every item.</p>
-              <button class="btn" type="button" data-add-ref="divisions">Add your first division</button>
-            </div>
+            <!-- THE ADD BUTTON IS THE FIRST THING IN ITS CARD (Hanz, 2026-10-12: "put all add buttons
+                 to the top"), the way Labor's is, and the row it makes appears directly under it. It
+                 stays when the list is empty: the explanation below says what the list is for, and
+                 this is where a first one is added. -->
             <div class="addrow" data-addrow-ref="divisions">
               <button class="addbtn" type="button" data-add-ref="divisions">
                 <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
@@ -1010,22 +1020,25 @@
                      aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"></path></svg>
                 Add division</button>
             </div>
+            <div class="tw">
+              <table>
+                <thead><tr><th class="rowsave"></th><th>Division</th><th>Notes</th><th class="n">Items</th><th class="w-act"></th></tr></thead>
+                <tbody id="divisions-body"></tbody>
+              </table>
+            </div>
+            <div id="divisions-empty" class="empty" hidden>
+              <h3>No divisions yet</h3>
+              <p>Add divisions and they become chips on every item.</p>
+            </div>
           </div>
         </div>
         <div class="admin-section" id="admin-units">
           <h2>Units</h2>
           <div class="card">
-            <div class="tw">
-              <table>
-                <thead><tr><th>Unit</th><th>Notes</th><th class="n">Items</th><th class="w-act"></th></tr></thead>
-                <tbody id="units-body"></tbody>
-              </table>
-            </div>
-            <div id="units-empty" class="empty" hidden>
-              <h3>No units yet</h3>
-              <p>Add purchase units and they become options on every item.</p>
-              <button class="btn" type="button" data-add-ref="units">Add your first unit</button>
-            </div>
+            <!-- THE ADD BUTTON IS THE FIRST THING IN ITS CARD (Hanz, 2026-10-12: "put all add buttons
+                 to the top"), the way Labor's is, and the row it makes appears directly under it. It
+                 stays when the list is empty: the explanation below says what the list is for, and
+                 this is where a first one is added. -->
             <div class="addrow" data-addrow-ref="units">
               <button class="addbtn" type="button" data-add-ref="units">
                 <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
@@ -1033,28 +1046,41 @@
                      aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"></path></svg>
                 Add unit</button>
             </div>
+            <div class="tw">
+              <table>
+                <thead><tr><th class="rowsave"></th><th>Unit</th><th>Notes</th><th class="n">Items</th><th class="w-act"></th></tr></thead>
+                <tbody id="units-body"></tbody>
+              </table>
+            </div>
+            <div id="units-empty" class="empty" hidden>
+              <h3>No units yet</h3>
+              <p>Add purchase units and they become options on every item.</p>
+            </div>
           </div>
         </div>
         <div class="admin-section" id="admin-vendors">
           <h2>Vendors</h2>
           <div class="card">
-            <div class="tw">
-              <table>
-                <thead><tr><th>Vendor</th><th>Notes</th><th class="n">Items</th><th class="w-act"></th></tr></thead>
-                <tbody id="vendors-body"></tbody>
-              </table>
-            </div>
-            <div id="vendors-empty" class="empty" hidden>
-              <h3>No vendors yet</h3>
-              <p>Add the suppliers you buy from and they become options on every item.</p>
-              <button class="btn" type="button" data-add-ref="vendors">Add your first vendor</button>
-            </div>
+            <!-- THE ADD BUTTON IS THE FIRST THING IN ITS CARD (Hanz, 2026-10-12: "put all add buttons
+                 to the top"), the way Labor's is, and the row it makes appears directly under it. It
+                 stays when the list is empty: the explanation below says what the list is for, and
+                 this is where a first one is added. -->
             <div class="addrow" data-addrow-ref="vendors">
               <button class="addbtn" type="button" data-add-ref="vendors">
                 <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
                      stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
                      aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"></path></svg>
                 Add vendor</button>
+            </div>
+            <div class="tw">
+              <table>
+                <thead><tr><th class="rowsave"></th><th>Vendor</th><th>Notes</th><th class="n">Items</th><th class="w-act"></th></tr></thead>
+                <tbody id="vendors-body"></tbody>
+              </table>
+            </div>
+            <div id="vendors-empty" class="empty" hidden>
+              <h3>No vendors yet</h3>
+              <p>Add the suppliers you buy from and they become options on every item.</p>
             </div>
           </div>
         </div>
@@ -1367,6 +1393,9 @@
 
         <div class="card apanel" id="asm-panel" hidden>
           <div class="atitle">
+            <!-- SAVE SITS LEFT OF THE NAME (Hanz, 2026-10-12: "put a save button to the left of the
+                 name"), the same side as every Items row's Save. Same button, same handler. -->
+            <button class="btn sm" type="button" id="asm-save" hidden title="Save this new assembly now">Save</button>
             <input id="asm-name" aria-label="Assembly name" maxlength="200" />
             <!-- WHAT THIS ASSEMBLY IS MEASURED PER. Hanz, 2026-08-28: "Coverage per Unit — is there
                  a way we can change it from SF and LF?"
@@ -1381,7 +1410,6 @@
               <option value="SF">per SF</option>
               <option value="LF">per LF</option>
             </select>
-            <button class="btn sm" type="button" id="asm-save" hidden title="Save this new assembly now">Save</button>
             <button class="icon danger" type="button" id="asm-del" title="Delete this assembly"
                     aria-label="Delete this assembly">
               <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
