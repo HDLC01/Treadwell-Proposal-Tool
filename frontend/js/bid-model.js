@@ -896,6 +896,8 @@
     var held = String(r.measurement == null ? "" : r.measurement).trim() !== "";
     if (held && validTakeoffUnit(r.unit)) setMeasurement(rows, i, "");
     delete r.same_floor;
+    delete r.same_floor_of;
+    delete r.floor_area;
     r.unit = unit;
     return true;
   }
@@ -946,16 +948,27 @@
    *
    *  HOW IT COMBINES WITH seedTakeoffSf WITHOUT COUNTING THE FLOOR TWICE. takeoffSf adds every SF
    *  row, so ten defaults each measured with the intake 8,250 SF would read as 82,500 SF of floor,
-   *  and polish_sf, the price per SF and every area-driven condition would follow it. They are all
-   *  the SAME floor, so:
+   *  and polish_sf, the price per SF and every area-driven condition would follow it. The defaults
+   *  of ONE area are all the SAME floor, so:
    *    - ONE row carries the area: the first ENABLED SF-unit default. Counted as always.
    *    - every other default carries the same number for pricing but is marked `same_floor`, which
    *      takeoffSf skips. The marker is data on the row, so it survives save and reload.
    *    - no enabled SF default (all off, all LF, or the library has none): the intake boxes seed
    *      plain area rows exactly as seedTakeoffSf always did (System 1 / System 2, one row each),
    *      appended after the defaults, and every default is marked `same_floor`.
-   *  With both intake systems filled, the defaults take the SUM (the whole floor each default
-   *  covers) and the carrier counts it once.
+   *
+   *  SYSTEM 1 AND SYSTEM 2 ARE TWO AREAS FROM THE START (Hanz, 2026-10-13, "Separate areas"). Each
+   *  positive intake box is its OWN area, and each area gets its OWN copy of the default lines: the
+   *  System 1 lines measured with System 1, the System 2 lines with System 2, the floor being the
+   *  two added. Before this, one carrier held the SUM and System 2 read blank, so typing System 2
+   *  added a third row on top (a double count). A line costs its rate times its measurement, so the
+   *  two copies price the same as one copy on the combined floor; the one place that is not exact
+   *  is a material bought in whole packs, which rounds up once per area instead of once overall.
+   *  The marker that says which area a row belongs to is data on the row, so it survives save and
+   *  reload: the carrier holds `floor_area: n`, every row that follows it `same_floor: true` and
+   *  `same_floor_of: n` (n = 1 for the first area, 2 for the second). A saved takeoff made before
+   *  this has neither, and keeps behaving as one area. An LF default is not a floor: it is seeded
+   *  once, blank, with the first area.
    *
    *  A default switched OFF (default_on === false) is kept, grayed (`enabled:false`), measured too
    *  so flipping it on needs nothing typed; rowOn already gives it $0 and leaves it out of area.
@@ -985,50 +998,71 @@
     });
     if (!picks.length) return seedTakeoffSf(rows, sf1, sf2);
 
-    var total = (num(sf1) > 0 ? num(sf1) : 0) + (num(sf2) > 0 ? num(sf2) : 0);
+    // One pass per measured area, in box order. With nothing measured there is one pass of blank rows.
+    var areas = [num(sf1), num(sf2)].filter(function (v) { return v > 0; });
     var out = [];
-    var carried = false;
-    picks.forEach(function (p) {
-      var on = p.row.default_on !== false;
-      // The unit is Items & Assemblies' say: an assembly's own unit, a material's coverage basis.
-      var unit = takeoffUnit(p.kind, p.row).unit;
-      var r;
-      if (p.kind === "asm") {
-        r = { assembly_id: p.row.id, assembly_name: p.row.name, measurement: "", unit: unit };
-      } else {
-        r = { kind: "item", item_id: p.row.id, item_name: p.row.name, coverage: "",
-              measurement: "", unit: unit };
+    var plain = [];
+    (areas.length ? areas : [0]).forEach(function (sf, a) {
+      var tag = sf > 0 ? a + 1 : 0;
+      var carried = false;
+      picks.forEach(function (p) {
+        var on = p.row.default_on !== false;
+        // The unit is Items & Assemblies' say: an assembly's own unit, a material's coverage basis.
+        var unit = takeoffUnit(p.kind, p.row).unit;
+        // A linear-foot default measures something else than a floor: one row, with the first area.
+        if (unit !== "SF" && a > 0) return;
+        var r;
+        if (p.kind === "asm") {
+          r = { assembly_id: p.row.id, assembly_name: p.row.name, measurement: "", unit: unit };
+        } else {
+          r = { kind: "item", item_id: p.row.id, item_name: p.row.name, coverage: "",
+                measurement: "", unit: unit };
+        }
+        if (unit === "SF" && sf > 0) {
+          r.measurement = sf;
+          if (on && !carried) { carried = true; r.floor_area = tag; }
+          else { r.same_floor = true; r.same_floor_of = tag; }
+        }
+        if (!on) r.enabled = false;
+        out.push(r);
+      });
+      if (!carried && sf > 0) {
+        plain.push({ assembly_id: "", assembly_name: "", measurement: sf, unit: "SF", floor_area: tag });
       }
-      if (unit === "SF" && total > 0) {
-        r.measurement = total;
-        if (on && !carried) carried = true;
-        else r.same_floor = true;
-      }
-      if (!on) r.enabled = false;
-      out.push(r);
     });
-    if (!carried && total > 0) {
-      seedTakeoffSf([], sf1, sf2).forEach(function (r) { out.push(r); });
-    }
+    // No default carried an area: the plain System rows seedTakeoffSf makes, after the defaults.
+    plain.forEach(function (r) { out.push(r); });
     return out;
   }
+
+  /** The area a takeoff row belongs to, as seedDefaultTakeoff marks it: a carrier holds `floor_area`,
+   *  a row that follows it holds `same_floor_of`, both the same whole number (1, 2, ...). 0 = no mark,
+   *  which is every row of a bid saved before the areas were separate: they all read as one area. */
+  function areaTagOf(n) {
+    var v = Number(n);
+    return v > 0 && v === Math.floor(v) ? v : 0;
+  }
+  function carrierTag(r) { return r ? areaTagOf(r.floor_area) : 0; }
+  function followerTag(r) { return r ? areaTagOf(r.same_floor_of) : 0; }
 
   /** Type `value` into row `i`'s measurement, keeping the same-floor rows honest.
    *  - A `same_floor` row the estimator types its OWN number into stops sharing: the marker is
    *    cleared, so takeoffSf counts what it was told rather than ignoring it for good.
    *  - The carrier (an enabled SF row that is not same_floor) moving drags every same_floor row
-   *    still holding its old number along, so the rows the default load made as one floor keep
-   *    pricing one floor. A same_floor row already set to something else is left alone. */
+   *    of ITS OWN area still holding its old number along, so the rows the default load made as
+   *    one floor keep pricing one floor. A same_floor row already set to something else is left
+   *    alone, and so is a row that follows the OTHER area (two areas can hold the same number). */
   function setMeasurement(rows, i, value) {
     var r = rows && rows[i];
     if (!r) return;
     var old = r.measurement;
     r.measurement = value;
-    if (r.same_floor) { delete r.same_floor; return; }
+    if (r.same_floor) { delete r.same_floor; delete r.same_floor_of; return; }
     if (r.unit !== "SF" || !rowOn(r)) return;
+    var tag = carrierTag(r);
     for (var k = 0; k < rows.length; k++) {
       var o = rows[k];
-      if (k !== i && o && o.same_floor && num(o.measurement) === num(old)) o.measurement = value;
+      if (k !== i && o && o.same_floor && followerTag(o) === tag && num(o.measurement) === num(old)) o.measurement = value;
     }
   }
 
@@ -1055,16 +1089,31 @@
    *
    *  Counted the way takeoffSf counts (SF rows, a same_floor row not added on top of its carrier),
    *  minus the on/off test. When the carrier itself is off and only same_floor rows remain they
-   *  all carry the one floor's number, so the largest of them is the answer. */
+   *  all carry the one floor's number, so the largest of them is the answer.
+   *
+   *  PER AREA, FOR A BID SEEDED WITH SEPARATE AREAS. An area whose carrier is gone but whose
+   *  same_floor rows (marked `same_floor_of`) remain still counts, once, as the largest of them,
+   *  added to the other areas. A takeoff with no marks reads exactly as it always did. */
   function measuredSf(rows) {
     rows = rows || [];
-    var t = 0, same = 0;
+    var t = 0, same = 0, carriers = [], held = [];
     for (var i = 0; i < rows.length; i++) {
       var r = rows[i] || {};
       if (r.unit !== "SF") continue;
-      if (r.same_floor) { if (num(r.measurement) > same) same = num(r.measurement); }
-      else t += num(r.measurement);
+      var m = num(r.measurement);
+      if (r.same_floor) {
+        var ft = followerTag(r);
+        if (!ft) { if (m > same) same = m; continue; }
+        var g = null;
+        for (var h = 0; h < held.length; h++) if (held[h].tag === ft) g = held[h];
+        if (!g) { g = { tag: ft, max: 0 }; held.push(g); }
+        if (m > g.max) g.max = m;
+      } else {
+        t += m;
+        if (carrierTag(r) && m > 0) carriers.push(carrierTag(r));
+      }
     }
+    held.forEach(function (g) { if (carriers.indexOf(g.tag) < 0) t += g.max; });
     return t > 0 ? t : same;
   }
 
@@ -1074,16 +1123,28 @@
    *  Counted exactly the way measuredSf counts: SF rows with a number on them, the on/off slider
    *  ignored, and a same_floor row not counted on top of its carrier. When the carrier has no
    *  number and only same_floor rows hold the floor, they are all the one floor: that is one area,
-   *  shown by the first of them. */
+   *  shown by the first of them.
+   *
+   *  A bid seeded with separate areas marks which area a row belongs to (seedDefaultTakeoff). An
+   *  area whose carrier is gone but whose marked same_floor rows remain is still an area, shown by
+   *  the first of those rows. An unmarked same_floor row is the one-floor case above. */
   function measuredSfRows(rows) {
     rows = rows || [];
-    var own = [], same = -1;
+    var carriers = [];
+    for (var j = 0; j < rows.length; j++) {
+      var c = rows[j] || {};
+      if (c.unit === "SF" && !c.same_floor && num(c.measurement) > 0 && carrierTag(c)) carriers.push(carrierTag(c));
+    }
+    var areas = [], seen = [], same = -1;
     for (var i = 0; i < rows.length; i++) {
       var r = rows[i] || {};
       if (r.unit !== "SF" || !(num(r.measurement) > 0)) continue;
-      if (r.same_floor) { if (same < 0) same = i; } else own.push(i);
+      if (!r.same_floor) { areas.push(i); continue; }
+      var ft = followerTag(r);
+      if (!ft) { if (same < 0) same = i; continue; }
+      if (carriers.indexOf(ft) < 0 && seen.indexOf(ft) < 0) { seen.push(ft); areas.push(i); }
     }
-    return own.length ? own : (same >= 0 ? [same] : []);
+    return areas.length ? areas : (same >= 0 ? [same] : []);
   }
 
   /** How many separate measured areas the takeoff holds. */
@@ -1102,18 +1163,20 @@
    *  measured yet: then intake's boxes SEED the takeoff instead).
    *
    *  Area 0 and 1 change that row's measurement and nothing else. Asking for area 1 when only one
-   *  area is measured ADDS a row, the shape seedTakeoffSf makes. Rows after the second are never
-   *  touched. The same_floor rows that carried the SAME total as the whole floor move with it (the
-   *  rows a defaults load made as one floor keep pricing one floor), on or off: the on/off slider
-   *  must not decide which number the bid is built on. Changes `model.takeoff` in place; callers
-   *  hand it a copy (patchModel does).
+   *  area is measured ADDS the area. Rows after the second are never touched. Changes
+   *  `model.takeoff` in place; callers hand it a copy (patchModel does).
    *
-   *  OPEN QUESTION FOR HANZ (2026-10-12): on a takeoff a defaults load made, the carrier row already
-   *  holds the SUM of both intake boxes (seedDefaultTakeoff), so System 1 reads the whole floor and
-   *  System 2 reads blank. Typing a figure into that blank System 2 ADDS an area on top of the
-   *  carrier (the floor grows by it), which double counts if the estimator was re-entering what
-   *  they had already given. Whether System 2 there means "an additional floor" (today) or "part of
-   *  System 1" is a product decision; "part of" needs a marker on the carrier to stay idempotent. */
+   *  TWO KINDS OF TAKEOFF.
+   *  - SEPARATE AREAS (a new bid, seeded by seedDefaultTakeoff: the carrier holds `floor_area: n`,
+   *    the rows that follow it `same_floor_of: n`). Typing an area moves its carrier and the rows
+   *    following THAT area that still held its old number, and nothing of the other area. Adding the
+   *    second area gives it its own copy of the first area's rows (the same assemblies and materials,
+   *    the typed floor on each), so the defaults price the new floor as they price the first.
+   *  - ONE FLOOR (a bid saved before the areas were separate: one carrier holding the whole floor,
+   *    unmarked same_floor rows carrying the same number). Behaves as it always did: the carrier is
+   *    area 0, the second area is a plain row added after it, and the same_floor rows that carried the
+   *    whole floor move with it, on or off, so the on/off slider never decides which number the bid
+   *    is built on. */
   function setAreaSf(model, k, sf) {
     var v = num(sf);
     var rows = model && model.takeoff;
@@ -1121,27 +1184,53 @@
     var areas = measuredSfRows(rows);
     if (!areas.length) return false;
     var before = measuredSf(rows);
+    var isRow = function (x) { return x && x.unit === "SF"; };
     if (k < areas.length) {
       var row = rows[areas[k]];
       if (row.same_floor) {
-        // Only same_floor rows hold the floor: they are all the one number, so all move.
+        // Only same_floor rows hold this area (its carrier is gone): they are all the one number, so all move.
+        var ft = followerTag(row);
         rows.forEach(function (x) {
-          if (x && x.unit === "SF" && x.same_floor && num(x.measurement) > 0) x.measurement = v;
+          if (isRow(x) && x.same_floor && followerTag(x) === ft && num(x.measurement) > 0) x.measurement = v;
         });
         return true;
       }
+      var old = num(row.measurement);
       row.measurement = v;
+      var ct = carrierTag(row);
+      if (ct) {
+        rows.forEach(function (x) {
+          if (isRow(x) && x.same_floor && followerTag(x) === ct && num(x.measurement) === old) x.measurement = v;
+        });
+        return true;
+      }
     } else {
+      var first = rows[areas[0]];
+      var tag = first.same_floor ? followerTag(first) : carrierTag(first);
+      if (tag) {
+        // A SEPARATE-AREAS bid: promote a carrier-less area's first row, then copy the area under a new tag.
+        if (first.same_floor) { delete first.same_floor; delete first.same_floor_of; first.floor_area = tag; }
+        var next = 1;
+        rows.forEach(function (x) { next = Math.max(next, carrierTag(x) + 1, followerTag(x) + 1); });
+        var group = rows.filter(function (x) { return isRow(x) && (carrierTag(x) === tag || (x.same_floor && followerTag(x) === tag)); });
+        group.forEach(function (x) {
+          var c = JSON.parse(JSON.stringify(x));
+          c.measurement = v;
+          if (c.same_floor) c.same_floor_of = next; else c.floor_area = next;
+          rows.push(c);
+        });
+        return true;
+      }
       // Only same_floor rows hold the floor (the carrier was deleted or has no number), and
       // measuredSf counts them only while no row of the takeoff's own does. Adding a plain row
       // would make that row the whole floor and the old figure vanish (8,000 + 3,000 read as
       // 3,000). So the first of them becomes the counted row, as the carrier is, and the rest follow.
-      if (rows[areas[0]].same_floor) delete rows[areas[0]].same_floor;
+      if (first.same_floor) delete first.same_floor;
       rows.push({ assembly_id: "", assembly_name: "", measurement: v, unit: "SF" });
     }
     var after = measuredSf(rows);
     rows.forEach(function (x) {
-      if (x && x.unit === "SF" && x.same_floor && num(x.measurement) === before) x.measurement = after;
+      if (isRow(x) && x.same_floor && !followerTag(x) && num(x.measurement) === before) x.measurement = after;
     });
     return true;
   }

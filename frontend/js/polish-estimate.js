@@ -1374,10 +1374,26 @@
     // not added to the area again (the `same_floor` mark takeoffSf skips). Typing its own number stops sharing.
     // The root keeps what it always did, a new row empty.
     if (activeTab !== B.ROOT_TAB && row.unit === "SF") {
-      var carrier = M.takeoff.filter(function (q) {
+      var carriers = M.takeoff.filter(function (q) {
         return q && q !== row && q.unit === "SF" && B.rowOn(q) && !q.same_floor && B.num(q.measurement) > 0;
-      })[0];
+      });
+      var carrier = carriers[0];
       if (carrier) { row.measurement = carrier.measurement; row.same_floor = true; }
+      // A carrier of a separate area (seedDefaultTakeoff marks it) is followed as that area's row.
+      if (carrier && carrier.floor_area) {
+        row.same_floor_of = carrier.floor_area;
+        // A bid with two areas has two floors: the row covers each, one copy per area, so a primer added
+        // beside System 1 and System 2 is bought for both floors and not for the first alone.
+        var covered = [carrier.floor_area];
+        carriers.forEach(function (c) {
+          if (!c.floor_area || covered.indexOf(c.floor_area) !== -1) return;
+          covered.push(c.floor_area);
+          var copy = JSON.parse(JSON.stringify(row));
+          copy.measurement = c.measurement;
+          copy.same_floor_of = c.floor_area;
+          M.takeoff.push(copy);
+        });
+      }
     }
     return i;
   }

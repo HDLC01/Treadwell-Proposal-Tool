@@ -1900,20 +1900,25 @@ def test_emptying_the_takeoff_does_not_reseed_a_deleted_system_2_row(ran):
 @needs_node
 def test_defaults_load_into_a_new_bid_one_row_each_without_counting_the_floor_twice(ran):
     """Hanz, 2026-10-05: each favorited assembly and material becomes its own Takeoff row, measured
-    with the intake SF. System 1 8,000 + System 2 2,000 = 10,000 SF.
+    with the intake SF. Hanz, 2026-10-13 ("Separate areas"): System 1 and System 2 are TWO takeoff
+    areas from the start, each with its own copy of the default lines. System 1 8,000 + System 2
+    2,000 = 10,000 SF.
 
-    Loads: a1 (SF assembly, carries the area), a2 (LF assembly, measurement left BLANK, never a
-    guess), i1 (material), i4 (material switched OFF: kept, grayed, measured). Does NOT load: the
-    reserved dye row, an epoxy-only favorite, a non-favorite. The floor counts ONCE: only the first
-    enabled SF default carries it, the rest are `same_floor`, so the area, polish_sf and the caption
-    all read 10,000 -- not 30,000.
+    Loads, per area: a1 (SF assembly, carries the area), a2 (LF assembly, measurement left BLANK,
+    never a guess, and only with the first area), i1 (material), i4 (material switched OFF: kept,
+    grayed, measured). Does NOT load: the reserved dye row, an epoxy-only favorite, a non-favorite.
+    The floor counts ONCE per area: only the first enabled SF default of an area carries it, the rest
+    are `same_floor`, so the area, polish_sf and the caption all read 10,000 -- not 40,000.
 
-    Mutation: drop the `same_floor` marking in B.seedDefaultTakeoff and area/savedSf become 20,000;
-    drop the reserved-id test and a `dye` row appears."""
+    Mutation: drop the `same_floor` marking in B.seedDefaultTakeoff and area/savedSf become 20,000 or
+    more; drop the reserved-id test and a `dye` row appears; seed the sum on one carrier again and
+    the second area's rows are gone."""
     d = ran["defaultsLoad"]
     keys = [(r["a"] or r["i"], r["m"], r["u"], r["sf"], r["off"]) for r in d["rows"]]
-    assert keys == [("a1", 10000, "SF", False, False), ("a2", "", "LF", False, False),
-                    ("i1", 10000, "SF", True, False), ("i4", 10000, "SF", True, True)], keys
+    assert keys == [("a1", 8000, "SF", False, False), ("a2", "", "LF", False, False),
+                    ("i1", 8000, "SF", True, False), ("i4", 8000, "SF", True, True),
+                    ("a1", 2000, "SF", False, False), ("i1", 2000, "SF", True, False),
+                    ("i4", 2000, "SF", True, True)], keys
     assert d["area"] == 10000 and d["savedSf"] == 10000 and d["caption"] == "10,000 SF", d
 
 
@@ -1921,7 +1926,7 @@ def test_defaults_load_into_a_new_bid_one_row_each_without_counting_the_floor_tw
 def test_a_loaded_default_follows_the_library_coverage_not_a_constant(ran):
     """The addendum: a default's coverage is the MATERIAL's library coverage. i1 is 333 in this
     library (the shipped fixture says 275), the row's coverage box is left blank so it keeps
-    following the library, and the row prices exactly as priceLine does at 333 over 10,000 SF.
+    following the library, and the row prices exactly as priceLine does at 333 over its 8,000 SF (System 1).
 
     Mutation: seed the row with a literal coverage 275 and i1Price no longer equals i1Expected."""
     d = ran["defaultsLoad"]
@@ -1963,8 +1968,9 @@ def test_defaults_load_into_a_bid_minted_by_the_beta_intake(ran):
     d = ran["defaultsLoad"]
     assert d["mintedGateWasFalse"] is False
     keys = [(r["a"] or r["i"], r["m"], r["sf"]) for r in d["minted"]]
-    assert keys == [("a1", 10000, False), ("a2", "", False), ("i1", 10000, True),
-                    ("i4", 10000, True)], keys
+    assert keys == [("a1", 8000, False), ("a2", "", False), ("i1", 8000, True),
+                    ("i4", 8000, True), ("a1", 2000, False), ("i1", 2000, True),
+                    ("i4", 2000, True)], keys
 
 
 @needs_node
@@ -1972,16 +1978,22 @@ def test_same_floor_rows_follow_the_carrier_and_stop_sharing_when_typed_over(ran
     """Typing into a same_floor row counts its own number; changing the carrier drags the rows
     still sharing its number along.
 
-    Mutation: use a plain `measurement = value` in the input handler and ownTyped area stays 10,000."""
+    With two areas the carrier drags only the rows of ITS OWN area: moving System 1's a1 to 6,000
+    drags i4 (area 1, still on 8,000) and leaves System 2's rows on 2,000.
+
+    Mutation: use a plain `measurement = value` in the input handler and ownTyped area stays 10,000;
+    drop the area test in B.setMeasurement and the second area's i4 moves to 6,000 as well."""
     d = ran["defaultsLoad"]
     own = d["ownTyped"]
     assert [(r["a"] or r["i"], r["m"], r["sf"]) for r in own["rows"]][2:] == [
-        ("i1", "2000", False), ("i4", 10000, True)], own
+        ("i1", "2000", False), ("i4", 8000, True), ("a1", 2000, False), ("i1", 2000, True),
+        ("i4", 2000, True)], own
     assert own["area"] == 12000, own
     moved = d["carrierMoved"]
     assert [(r["a"] or r["i"], r["m"], r["sf"]) for r in moved["rows"]][2:] == [
-        ("i1", "2000", False), ("i4", "6000", True)], moved
-    assert moved["area"] == 8000, moved
+        ("i1", "2000", False), ("i4", "6000", True), ("a1", 2000, False), ("i1", 2000, True),
+        ("i4", 2000, True)], moved
+    assert moved["area"] == 10000, moved
 
 
 # ── H. boot ──────────────────────────────────────────────────────────────────
