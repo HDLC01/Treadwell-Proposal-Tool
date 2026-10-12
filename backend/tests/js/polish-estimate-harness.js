@@ -1297,6 +1297,16 @@ const rendered = [];      // every string the page put on screen, for the Labour
         || [],
       expectedPerSf: B.money2(expectedChain(live, ASMS, ITEMS).per_sf) + " / SF",
     };
+    // The grey line under each step's heading. Each step is rendered for real and the header cut
+    // out of what the page emitted, so a blurb that came back (or an empty <p> left behind) shows.
+    const headerOf = (html) => (/<div class="sec-h">([\s\S]*?)<\/div><div class="sec-b">/
+      .exec(String(html)) || [])[1];
+    out.stepHeaders = { review: headerOf(panels.innerHTML) };
+    [["takeoff", 0], ["labor", 1]].forEach(([key, step]) => {
+      b.api.go(step);
+      out.stepHeaders[key] = headerOf(b.dom.get("panels").innerHTML);
+    });
+    b.api.go(2);
 
     // ── contingency feeds super/PTO, soft costs and the remodel tax ──────────
     const rebuilds = panels.htmlWrites;
