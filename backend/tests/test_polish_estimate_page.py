@@ -3030,7 +3030,9 @@ def test_a_material_row_keeps_its_coverage_box_and_an_assembly_row_has_none(ran)
     assert "Coverage" in f["matLabels"], "the material row lost its single Coverage box"
     assert f["asmBoxes"] == 0, "an assembly row still draws per-line coverage boxes"
     assert f["asmLabels"] == ["Assembly", "Measurement", "Unit", "Total cost"], f["asmLabels"]
-    assert f["asmKeys"] == ["pick", "measurement", "unit"], f["asmKeys"]
+    # The Unit label is still there, but it is read-only text now (Items & Assemblies' answer), so it
+    # no longer carries a data-k: only the two boxes the estimator can type in do.
+    assert f["asmKeys"] == ["pick", "measurement"], f["asmKeys"]
     assert f["asmNote"] is False, "a new row has no saved coverage to talk about"
     assert f["matCost"] == "$1,793.04" and r["expectedFirstMat"] == pytest.approx(1793.0367)
     assert f["asmCost"] == "$10,599.98" and r["expectedFirstAsm"] == pytest.approx(10599.9771)
@@ -3059,7 +3061,7 @@ def test_a_saved_assembly_row_keeps_its_own_coverage_until_a_click_removes_it(ra
     s = a["savedBefore"]
     assert s["cost"] == "$10,258.45" and a["expectedSaved"] == pytest.approx(10258.4463), a
     assert s["boxes"] == 0 and s["labels"] == ["Assembly", "Measurement", "Unit", "Total cost"], s
-    assert s["keys"] == ["pick", "measurement", "unit"], s["keys"]
+    assert s["keys"] == ["pick", "measurement"], s["keys"]
     assert s["note"] == "This row uses coverage typed on this bid before.", s["note"]
     assert s["resetLabel"] == "Use the library coverage", s["resetLabel"]
     assert s["line_cov"] == {"0": "300"}, "loading the row must not touch its saved coverage"
