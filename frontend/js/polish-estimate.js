@@ -896,22 +896,6 @@
     return itemById(T.itemIdOf(key));
   }
 
-  /** An assembly row's lines that name a real material, each with the figure it will price with:
-   *  [{ j, name, lib, typed }]. `j` is the line's position, the key row.line_cov is stored under. */
-  function asmCovLines(row) {
-    var asm = asmById((row || {}).assembly_id);
-    var out = [];
-    if (!asm) return out;
-    var lc = (row.line_cov && typeof row.line_cov === "object") ? row.line_cov : {};
-    (asm.lines || []).forEach(function (ln, j) {
-      var id = ln && (ln.item_id || ln.item);
-      var it = id ? itemById(id) : null;
-      if (!it) return;
-      out.push({ j: j, name: it.name || "Material", lib: B.num(it.coverage), typed: lc[j] });
-    });
-    return out;
-  }
-
   function measureText(row) {
     var r = row || {};
     return B.num(r.measurement) ? B.fmtSf(r.measurement) + " " + (r.unit || "SF") : "";
@@ -1306,8 +1290,8 @@
     var warn = "";
     if (p && p.broken_lines) {
       warn = '<p class="warnline" data-broken-for="' + i + '">' + p.broken_lines + ' line' +
-        (p.broken_lines === 1 ? '' : 's') + ' in this assembly cannot price yet — check the ' +
-        'cost and coverage of its items in the library.</p>';
+        (p.broken_lines === 1 ? '' : 's') + ' in this assembly cannot price yet. Check their ' +
+        'cost and coverage in the Items &amp; Assemblies library.</p>';
     }
     // A MATERIAL ROW IS THE SAME CARD with a different first field and one extra, not a second
     // kind of card. An estimator reading the takeoff should see one list of things the job
@@ -1371,25 +1355,39 @@
       esc(p && p.per_unit != null ? B.money2(p.per_unit) + " / " + (r.unit || "SF") : "") +
       '</p></div>' +
 
-      '</div>' + asmCoverageBlock(r, i, kind) + warn;
+      '</div>' + asmSavedCovNote(r, i, kind) + warn;
   }
 
-  /** An ASSEMBLY row's coverage, one box per material line -- an assembly keeps coverage on its
-   *  materials, so a row loaded from the defaults (or picked by hand) shows what each of its lines
-   *  will price with, and the estimator can change any of them for THIS bid (row.line_cov). The
-   *  same covLine text sits under each box. Empty string for every other kind of row. */
-  function asmCoverageBlock(r, i, kind) {
-    if (kind !== "asm") return "";
-    var lines = asmCovLines(r);
-    if (!lines.length) return "";
-    return '<div class="tk-g asmcov" data-asmcov-for="' + i + '">' + lines.map(function (x) {
-      return '<div class="f"><label>' + esc(x.name) + ' coverage</label>' +
-        '<input class="n" data-asmcov="' + i + '" data-line="' + x.j + '" value="' +
-        esc(nv(x.typed)) + '" placeholder="' + esc(x.lib ? String(x.lib) : "") + '">' +
-        dfltWarnHtml('data-asmcovwarn="' + i + ':' + x.j + '"', covWarn(x.typed, x.lib)) +
-        '<p class="hint" data-asmcovhint="' + i + ':' + x.j + '">' +
-        esc(covLine(x.typed, x.lib)) + '</p></div>';
-    }).join("") + '</div>';
+  /** True when the row carries a coverage that actually changes its price: the same test
+   *  priceAssemblyRow applies (a positive figure on a line of THIS assembly whose item the library
+   *  still has), so the note and the arithmetic cannot disagree. A figure keyed to a line the
+   *  assembly does not have, or to a line with no real item, prices nothing and earns no note. */
+  function rowHasLineCov(r, asm) {
+    var lc = r && r.line_cov;
+    if (!lc || typeof lc !== "object") return false;
+    var lines = (asm && asm.lines) || [];
+    return lines.some(function (ln, j) {
+      var id = ln && (ln.item_id || ln.item);
+      return B.num(lc[j]) > 0 && !!id && !!L.findItem(ITEMS, id);
+    });
+  }
+
+  /** An ASSEMBLY row has no coverage boxes (Hanz, 2026-10-12: "Remove these coverage for
+   *  assemblies in the estimating tool. Just leave the Assembly name, measurement, unit and total
+   *  cost."). A new row prices every line at the library's coverage, which is what a blank box did.
+   *
+   *  A row SAVED before that carries `line_cov`, and its total was made with those figures, so it
+   *  keeps pricing with them: silently dropping them would move a bid someone already sent. With
+   *  the boxes gone, the one honest thing to do is say so and offer the way back, which is a click
+   *  that deletes `line_cov`. Nothing here ever deletes it by itself.
+   *
+   *  Empty string for every other kind of row, and for a line_cov that holds no positive figure
+   *  (it prices exactly like none, so a note about it would be a lie). */
+  function asmSavedCovNote(r, i, kind) {
+    if (kind !== "asm" || !rowHasLineCov(r, asmById(r.assembly_id))) return "";
+    return '<div class="asmcov-note" data-asmcov-note="' + i + '">' +
+      '<p class="hint">This row uses coverage typed on this bid before.</p>' +
+      '<button class="btn ghost sm" data-asmcov-reset="' + i + '">Use the library coverage</button></div>';
   }
 
   /** Redraw ONE row card, in place, class and inside.
@@ -2188,23 +2186,11 @@
     document.querySelectorAll("[data-covwarn-for]").forEach(function (el) {
       paintDfltWarn(el, covRowWarn(M.takeoff[parseInt(el.getAttribute("data-covwarn-for"), 10)]));
     });
-    document.querySelectorAll("[data-asmcovwarn]").forEach(function (el) {
-      var parts = el.getAttribute("data-asmcovwarn").split(":");
-      var row = M.takeoff[parseInt(parts[0], 10)];
-      var hit = asmCovLines(row).filter(function (x) { return String(x.j) === parts[1]; })[0];
-      if (hit) paintDfltWarn(el, covWarn(hit.typed, hit.lib));
-    });
     // The Coverage hints under every takeoff box: typing takes `changed(false)`, which repaints in
     // place, so "Library default: N" has to appear here rather than wait for a rebuild.
     document.querySelectorAll("[data-covhint-for]").forEach(function (el) {
       var hi = parseInt(el.getAttribute("data-covhint-for"), 10);
       el.textContent = covHint(M.takeoff[hi]);
-    });
-    document.querySelectorAll("[data-asmcovhint]").forEach(function (el) {
-      var parts = el.getAttribute("data-asmcovhint").split(":");
-      var row = M.takeoff[parseInt(parts[0], 10)];
-      var hit = asmCovLines(row).filter(function (x) { return String(x.j) === parts[1]; })[0];
-      if (hit) el.textContent = covLine(hit.typed, hit.lib);
     });
 
     var one = function (sel, txt) {
@@ -2399,6 +2385,21 @@
       }
       changed(true);
       refocus('[data-tk="' + ki + '"][data-k="measurement"]');
+      return;
+    }
+    // The way back from a saved row's own coverage to the library's. Only ever on a click: the
+    // figures priced a bid that may already have gone out, so nothing else removes them.
+    var acr = t.closest("[data-asmcov-reset]");
+    if (acr) {
+      var ari = parseInt(acr.getAttribute("data-asmcov-reset"), 10);
+      if (M.takeoff[ari]) {
+        delete M.takeoff[ari].line_cov;
+        repaintRow(ari);
+        changed(false);
+        // This button was removed from the page by its own click; focus left on it falls to
+        // <body>. Put the caret on Measurement, as the kind pick above does.
+        refocus('[data-tk="' + ari + '"][data-k="measurement"]');
+      }
       return;
     }
     var dr = t.closest("[data-del-row]");
@@ -2617,23 +2618,12 @@
     if (!el.matches("input")) return;
     var k = el.getAttribute("data-k");
 
-    // THIS BID'S COVERAGE for Joint Filler / Dye (M.cond_cov) and for one line of an assembly row
-    // (row.line_cov). Both take `changed(false)`: reprice and repaint in place, never a rebuild,
-    // so the caret stays in the box being typed in.
+    // THIS BID'S COVERAGE for Joint Filler / Dye (M.cond_cov). It takes `changed(false)`: reprice
+    // and repaint in place, never a rebuild, so the caret stays in the box being typed in.
     var cc = el.getAttribute("data-condcov");
     if (cc !== null) {
       if (!M.cond_cov || typeof M.cond_cov !== "object") M.cond_cov = {};
       M.cond_cov[cc] = el.value;
-      changed(false);
-      return;
-    }
-    var ac = el.getAttribute("data-asmcov");
-    if (ac !== null) {
-      var arow = M.takeoff[parseInt(ac, 10)];
-      if (arow) {
-        if (!arow.line_cov || typeof arow.line_cov !== "object") arow.line_cov = {};
-        arow.line_cov[el.getAttribute("data-line")] = el.value;
-      }
       changed(false);
       return;
     }
@@ -2652,8 +2642,8 @@
       if (k === "pick") {
         var asmBefore = M.takeoff[i] ? (M.takeoff[i].assembly_id || "") : "";
         var flipped = setPick(i, el.value);
-        // A new assembly brings its own lines, and the coverage boxes under the card are one per
-        // line -- so the card is redrawn then too, not only when the kind moved.
+        // A new assembly drops the old one's saved coverage (setAssembly), and the note about it
+        // lives in the card -- so the card is redrawn then too, not only when the kind moved.
         if (!flipped && M.takeoff[i] && (M.takeoff[i].assembly_id || "") !== asmBefore) flipped = true;
         changed(false);
         if (flipped) {
