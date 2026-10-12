@@ -4045,6 +4045,65 @@ def test_the_open_assemblys_save_stays_on_screen_in_a_sticky_title_bar():
     assert float(margin["scroll-margin-top"][:-2]) >= 150, margin
 
 
+def _specificity(selector):
+    """(ids, classes+attributes+pseudo-classes, tags) of ONE compound selector list entry, with
+    :where(...) counted as zero, which is what the cascade does with it."""
+    import re
+    sel = selector
+    while ":where(" in sel:
+        a = sel.index(":where(")
+        depth, j = 0, a + len(":where")
+        while True:
+            if sel[j] == "(":
+                depth += 1
+            elif sel[j] == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            j += 1
+        sel = sel[:a] + sel[j + 1:]
+    ids = len(re.findall(r"#[\w-]+", sel))
+    classes = len(re.findall(r"\.[\w-]+|\[[^\]]*\]|(?<!:):[\w-]+", sel))
+    tags = len(re.findall(r"(?:^|[\s>+~])[a-zA-Z][\w-]*", sel))
+    return (ids, classes, tags)
+
+
+def test_a_money_box_draws_one_focus_ring_and_the_labor_rate_box_matches_its_neighbours():
+    """Hanz, 2026-10-12: click the Labor rate box on Items & Assemblies -> Labor and it drew TWO red
+    rings, the inner one over the "$". The wrapper's `.money:focus-within` ring is the intended one;
+    the page-wide `:where(...input...):focus-visible` rule added a second on the input itself.
+
+    This pins the fix by resolving the cascade for an input inside .money: the input's own rule must
+    be `outline: none` and must out-rank the global one (specificity, :where counting zero); the
+    wrapper must still draw its ring; every cost box on the page (Items cost, Labor rate, Hotel and
+    Per Diem) must sit inside a .money wrapper, so each of them still shows exactly one ring when
+    focused. The Labor rate box is 92px like the others rather than the band's 116px.
+
+    Mutations: delete the `.money input:focus-visible` rule; give it an outline; weaken its selector
+    to one the global rule out-ranks; delete `.areaband .money input`; take the wrapper's focus-within
+    ring out; render any cell-cost input outside a .money wrapper -> each assert goes red."""
+    import re
+    html = (FRONTEND / "library.html").read_text(encoding="utf-8")
+    own = _css_rule(html, ".money input:focus-visible")
+    assert own == {"outline": "none"}, own
+    glob = re.search(r"^    (:where\([^{]*\):focus-visible) \{ outline:", html, re.M)
+    assert glob and "input" in glob.group(1), "the page-wide focus rule moved; update this test"
+    assert _specificity(".money input:focus-visible") > _specificity(glob.group(1)), (
+        "the global ring would out-rank the .money rule again")
+    ring = _css_rule(html, ".money:focus-within")
+    assert ring.get("outline", "").startswith("2px solid"), "the wrapper lost its one ring: " + str(ring)
+    band = _css_rule(html, ".areaband .money input")
+    assert band == {"width": "92px"}, band
+    assert _specificity(".areaband .money input") > _specificity(".areaband input")
+    js = (FRONTEND / "js" / "library.js").read_text(encoding="utf-8")
+    wrapper = '<span class="money"><span>$</span>'
+    boxes = [m.start() for m in re.finditer(r"<input[^>]*cell-cost", js)]
+    assert len(boxes) >= 4, boxes
+    for at in boxes:
+        assert js[max(0, at - len(wrapper)):at] == wrapper, (
+            "a cost box outside the .money wrapper would show NO ring now", js[at - 60:at + 40])
+
+
 # ── the Defaults tab's Global pill (Hanz, 2026-10-09) ─────────────────────────────────────────────
 class _Pills(HTMLParser):
     """The work-type pills as markup."""

@@ -197,9 +197,11 @@
        keeps on its own lines. Its own column template rather than a fifth column on the shared
        one, so an assembly row does not grow an empty gap where coverage would go. */
     .tk-g.matg{grid-template-columns:1.9fr .9fr .7fr .85fr 1.05fr}
-    /* An assembly row's per-line coverage boxes: one field per material line, wrapping, under the
-       card's own four columns. */
-    .tk-g.asmcov{grid-template-columns:repeat(auto-fill,minmax(190px,1fr));margin-top:12px}
+    /* A saved assembly row that still prices with coverage typed on this bid: one line and one
+       button under the card's four columns. New rows have no such line. */
+    .asmcov-note{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-top:10px}
+    .asmcov-note .hint{color:var(--ink-3);font-size:11.5px;margin:0}
+    .asmcov-note .btn.sm{padding:5px 11px;font-size:12px}
     /* Marked, not restyled. It is the same kind of thing as the row above it -- something the job
        buys -- so it reads as one list. The tag says which kind it is; the card does not need to. */
     .tk.mat .tag{background:var(--surf-low);color:var(--ink-v)}

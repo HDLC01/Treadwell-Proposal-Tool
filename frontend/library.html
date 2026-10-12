@@ -472,6 +472,11 @@
       background:none; }
     .money input:hover { border-color:transparent; }
     .money:focus-within { outline:2px solid var(--red); outline-offset:2px; }
+    /* ONE ring, on the wrapper. The global :focus-visible rule drew a second one on the input, and
+       its offset put that ring over the $. */
+    .money input:focus-visible { outline:none; }
+    /* The Labor rate box, the same width as the Hotel and Per Diem boxes beside it on the next tab. */
+    .areaband .money input { width:92px; }
 
     /* Two dates, both muted: when the material was added, and when its price last moved. The
        second is the one an estimator actually asks about. */

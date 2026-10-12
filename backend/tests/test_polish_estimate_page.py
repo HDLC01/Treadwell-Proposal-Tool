@@ -2988,38 +2988,73 @@ def test_a_condition_off_the_defaults_tab_is_not_drawn_on_a_new_bid(ran):
 
 # ── B2: coverage on the estimate, per bid ────────────────────────────────────────────────────
 @needs_node
-def test_every_row_kind_shows_the_library_coverage_and_prices_with_a_typed_one(ran):
+def test_a_material_row_keeps_its_coverage_box_and_an_assembly_row_has_none(ran):
     """HANZ: "In the estimate form in the beta it should pull the default coverage areas for the
-    defaults." A row that arrives from the Defaults carries NO coverage of its own, so the box has
-    to show the LIBRARY's figure (275 for OPF, 275 / 775 for the two lines of Polish 800 Grit --
-    none of them the old 3,500 constant) and the total has to price with it. A number typed over
-    it prices the bid, and the amber line directly under the box says "Default value: N"; the library item
-    itself is never touched. An ASSEMBLY row gets one box per material line.
+    defaults." A row that arrives from the Defaults carries NO coverage of its own, so a MATERIAL
+    row's box shows the LIBRARY's figure (275 for OPF, not the old 3,500 constant) and the total
+    prices with it. A number typed over it prices the bid, and the amber line under the box says
+    "Default value: N"; the library item itself is never touched.
 
-    Mutation: render the assembly row with no coverage boxes; have priceAssemblyRow ignore the
-    typed figure; leave the hint at "How far one goes" when the figures differ."""
+    An ASSEMBLY row has no coverage boxes at all (Hanz, 2026-10-12: "Remove these coverage for
+    assemblies in the estimating tool. Just leave the Assembly name, measurement, unit and total
+    cost."): Assembly, Measurement, Unit and Total cost, and it prices every line at the library's
+    figure, the same total a blank box gave.
+
+    Mutation: render the per-line boxes on an assembly row again; strip the material row's Coverage box; have the assembly row price with
+    something other than the library coverage; leave the hint at "How far one goes" when the
+    figures differ."""
     r = ran["rowCoverage"]
     f = r["first"]
     assert f["matBox"] == ["", "275"], f["matBox"]
     assert f["matHint"] == "Blank uses the library's 275."
-    assert len(f["asmBoxes"]) == 2 and 'placeholder="275"' in f["asmBoxes"][0]         and 'placeholder="775"' in f["asmBoxes"][1], f["asmBoxes"]
+    assert "Coverage" in f["matLabels"], "the material row lost its single Coverage box"
+    assert f["asmBoxes"] == 0, "an assembly row still draws per-line coverage boxes"
+    assert f["asmLabels"] == ["Assembly", "Measurement", "Unit", "Total cost"], f["asmLabels"]
+    assert f["asmKeys"] == ["pick", "measurement", "unit"], f["asmKeys"]
+    assert f["asmNote"] is False, "a new row has no saved coverage to talk about"
     assert f["matCost"] == "$1,793.04" and r["expectedFirstMat"] == pytest.approx(1793.0367)
     assert f["asmCost"] == "$10,599.98" and r["expectedFirstAsm"] == pytest.approx(10599.9771)
     m = r["matTyped"]
     assert m["cost"] == "$1,707.65" and m["expected"] == pytest.approx(1707.654)
     assert m["hint"] == "How far one goes, for this job."
     assert m["warn"] == {"text": "Default value: 275", "hidden": False}, m["warn"]
-    a = r["asmTyped"]
-    assert a["cost"] == "$10,258.45" and a["expected"] == pytest.approx(10258.4463), a
-    assert a["hint0"] == "How far one goes, for this job."
-    assert a["warn0"] == {"text": "Default value: 275", "hidden": False} and a["warn1"] == {"text": "", "hidden": True}, (a["warn0"], a["warn1"])
-    assert a["hint1"] == "Blank uses the library's 775.", "an untouched line keeps the library figure"
-    assert a["line_cov"] == {"0": "300"} and a["libraryUntouched"] == 275
     assert r["matBackToLib"]["hint"] == "How far one goes, for this job."
     assert r["matBackToLib"]["warn"] == {"text": "", "hidden": True}, "typing the default back must hide the warning"
     assert "Library default" not in str(r), "the old wording is gone"
-    # a different assembly means different lines: the old lines' coverage must not follow
-    assert r["switched"] == {"line_cov": True, "boxes": 1}, r["switched"]
+    assert r["asmSwitched"] == {"boxes": 0}
+
+
+@needs_node
+def test_a_saved_assembly_row_keeps_its_own_coverage_until_a_click_removes_it(ran):
+    """A row saved with `line_cov` was priced with those figures, and the bid may have gone out, so
+    it still prices with them ($10,258.45 for 300 on the first line, not the library's $10,599.98).
+    With the boxes gone it shows one short line and one button; the button deletes `line_cov` and
+    only a click does: editing the row does not, a line_cov with no positive figure prices like none
+    and shows nothing, and picking a different assembly drops the old lines' figures.
+
+    Mutation: drop line_cov from pricing; clear it on load or on an edit; show the note for an
+    all-blank line_cov; make the button a no-op; leave the note up after the row is reset."""
+    a = ran["rowCoverage"]["asmTyped"]
+    s = a["savedBefore"]
+    assert s["cost"] == "$10,258.45" and a["expectedSaved"] == pytest.approx(10258.4463), a
+    assert s["boxes"] == 0 and s["labels"] == ["Assembly", "Measurement", "Unit", "Total cost"], s
+    assert s["keys"] == ["pick", "measurement", "unit"], s["keys"]
+    assert s["note"] == "This row uses coverage typed on this bid before.", s["note"]
+    assert s["resetLabel"] == "Use the library coverage", s["resetLabel"]
+    assert s["line_cov"] == {"0": "300"}, "loading the row must not touch its saved coverage"
+    assert s["materialRowHasReset"] is False, "a material row has its own Coverage box, no reset"
+    assert a["afterEdit"] == {"line_cov": {"0": "300"}, "note": True}, "an edit must not drop the coverage"
+    after = a["savedAfter"]
+    assert after["line_cov"] is True and after["note"] is False, after
+    assert after["cost"] == "$10,599.98", "after the click the row prices at the library coverage"
+    assert after["labels"] == ["Assembly", "Measurement", "Unit", "Total cost"]
+    assert after["libraryUntouched"] == 275
+    assert a["blankRow"] == {"note": False, "cost": "$10,599.98"}, a["blankRow"]
+    assert r_switched(ran) == {"line_cov": True, "note": False, "boxes": 0}
+
+
+def r_switched(ran):
+    return ran["rowCoverage"]["switched"]
 
 
 @needs_node

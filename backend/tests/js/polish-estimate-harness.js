@@ -2510,7 +2510,8 @@ const rendered = [];      // every string the page put on screen, for the Labour
     };
 
     // A MATERIAL ROW and an ASSEMBLY ROW, as a loaded default would arrive: the row carries NO
-    // coverage of its own, so the box must show the LIBRARY's figure (275, 775) and price with it.
+    // coverage of its own. The material's box shows the LIBRARY's figure (275); the ASSEMBLY row has
+    // no coverage boxes at all (Hanz, 2026-10-12) and prices every line at the library's figure.
     {
       const model = clone(MODEL);
       model.takeoff = [
@@ -2523,12 +2524,27 @@ const rendered = [];      // every string the page put on screen, for the Labour
       const html = () => b.dom.get("panels").innerHTML;
       const matBox = () => (/data-tk="0" data-k="coverage" value="([^"]*)" placeholder="([^"]*)"/
         .exec(html()) || []).slice(1);
-      const asmBoxes = () => (html().match(/data-asmcov="1" data-line="\d+" value="[^"]*" placeholder="[^"]*"/g)
-        || []);
+      const asmBoxes = () => (html().match(/data-asmcov=/g) || []).length;
+      // The card's own markup, cut out of the panel's HTML (the stub only nests what was set on an
+      // element itself, so a freshly built panel cannot be queried card by card).
+      const cardHtml = (bb, i) => {
+        const h = bb.dom.get("panels").innerHTML;
+        const a = h.indexOf('data-row-card="' + i + '"');
+        // up to the next card of any kind (rows and condition cards all open `<div class="tk"` or `tk `)
+        const rest = h.slice(a + 1);
+        const m = /<div class="tk[ "]/.exec(rest);
+        return h.slice(a, m ? a + 1 + m.index : h.length);
+      };
+      // What the card is made of: its labels, and the keyed boxes inside it.
+      const labelsOf = (bb, i) => (cardHtml(bb, i).match(/<label[^>]*>[^<]*<\/label>/g) || [])
+        .map((x) => x.replace(/<[^>]*>/g, ""));
+      const boxKeysOf = (bb, i) => (cardHtml(bb, i).match(/data-tk="\d+" data-k="\w+"/g) || [])
+        .map((x) => /data-k="(\w+)"/.exec(x)[1]);
       const cost = (i) => txt(b, '[data-cost-for="' + i + '"]');
       const first = { matBox: matBox(), matHint: txt(b, '[data-covhint-for="0"]'),
-                      asmBoxes: asmBoxes(), asmHint0: txt(b, '[data-asmcovhint="1:0"]'),
-                      asmHint1: txt(b, '[data-asmcovhint="1:1"]'),
+                      asmBoxes: asmBoxes(), asmLabels: labelsOf(b, 1), asmKeys: boxKeysOf(b, 1),
+                      asmNote: !!b.doc.querySelector("[data-asmcov-note]"),
+                      matLabels: labelsOf(b, 0),
                       matCost: cost(0), asmCost: cost(1) };
       // The expected money, from library-core against the SAME library with the figure swapped.
       const swap = (id, cov) => ITEMS.map((it) => it.id === id ? Object.assign({}, it, { coverage: cov }) : it);
@@ -2537,24 +2553,62 @@ const rendered = [];      // every string the page put on screen, for the Labour
       const matTyped = { cost: cost(0), hint: txt(b, '[data-covhint-for="0"]'),
                          warn: warn(b, '[data-covwarn-for="0"]'),
                          expected: L.priceLine({ item_id: "i1" }, swap("i1", 300), 5500).cost };
-      typeInto(b, '[data-asmcov="1"][data-line="0"]', "300");
-      const asmTyped = { cost: cost(1), hint0: txt(b, '[data-asmcovhint="1:0"]'),
-                         warn0: warn(b, '[data-asmcovwarn="1:0"]'),
-                         warn1: warn(b, '[data-asmcovwarn="1:1"]'),
-                         hint1: txt(b, '[data-asmcovhint="1:1"]'),
-                         expected: asmWith(swap("i1", 300)),
-                         libraryUntouched: ITEMS.find((i) => i.id === "i1").coverage,
-                         line_cov: clone(b.api.model().takeoff[1].line_cov),
-                         matTotal: b.api.materialTotal() };
       typeInto(b, '[data-tk="0"][data-k="coverage"]', "275");
       const matBackToLib = { hint: txt(b, '[data-covhint-for="0"]'),
                              warn: warn(b, '[data-covwarn-for="0"]') };
-      // Switching the row to a different assembly drops the old lines' coverage.
+      // A row SAVED with coverage typed on its lines still prices with it (that figure priced a bid
+      // that may have gone out), draws no boxes for it, and says so with one way back.
+      const saved = clone(MODEL);
+      saved.takeoff = [
+        { kind: "item", item_id: "i1", item_name: "OPF", coverage: "", measurement: 5500, unit: "SF" },
+        { assembly_id: "a1", assembly_name: "Polish 800 Grit", measurement: 12500, unit: "SF",
+          line_cov: { 0: "300" } },
+      ];
+      const sb = build({ blob: blob({ polish_estimate: saved }) });
+      await sb.api.init();
+      sb.api.go(0);
+      const savedBefore = { cost: txt(sb, '[data-cost-for="1"]'), boxes: (sb.dom.get("panels").innerHTML.match(/data-asmcov=/g) || []).length,
+                            labels: labelsOf(sb, 1), keys: boxKeysOf(sb, 1),
+                            note: ((/data-asmcov-note="1"><p class="hint">([^<]*)<\/p>/.exec(cardHtml(sb, 1))) || [])[1] || null,
+                            resetLabel: ((/data-asmcov-reset="1">([^<]*)</.exec(cardHtml(sb, 1))) || [])[1] || null,
+                            line_cov: clone(sb.api.model().takeoff[1].line_cov),
+                            materialRowHasReset: /data-asmcov-reset="0"/.test(cardHtml(sb, 0)),
+                            matTotal: sb.api.materialTotal() };
+      // Nothing removes it by itself: retyping the measurement keeps it.
+      typeInto(sb, '[data-tk="1"][data-k="measurement"]', "12500");
+      const afterEdit = { line_cov: clone(sb.api.model().takeoff[1].line_cov), note: /data-asmcov-note=/.test(cardHtml(sb, 1)) };
+      // (absent on a page that still draws boxes: report that, rather than crash every test)
+      if (sb.doc.querySelector("[data-asmcov-reset]")) clickOn(sb, "[data-asmcov-reset]");
+      // the card element itself: reset redraws that one card in place, not the panel
+      const liveCard = sb.doc.querySelector('[data-row-card="1"]').innerHTML;
+      const savedAfter = { cost: txt(sb, '[data-cost-for="1"]'), line_cov: sb.api.model().takeoff[1].line_cov === undefined,
+                           note: /data-asmcov-note=/.test(liveCard), noteWas: /data-asmcov-note=/.test(cardHtml(sb, 1)),
+                           labels: (liveCard.match(/<label[^>]*>[^<]*<\/label>/g) || []).map((x) => x.replace(/<[^>]*>/g, "")), matTotal: sb.api.materialTotal(),
+                           libraryUntouched: ITEMS.find((i) => i.id === "i1").coverage };
+
+      // A line_cov holding no positive figure prices like none, so there is no note about it.
+      const blanks = clone(saved);
+      blanks.takeoff[1].line_cov = { 0: "", 1: "0" };
+      const bb = build({ blob: blob({ polish_estimate: blanks }) });
+      await bb.api.init();
+      bb.api.go(0);
+      const blankRow = { note: !!bb.doc.querySelector("[data-asmcov-note]"), cost: txt(bb, '[data-cost-for="1"]') };
+
+      // Switching a saved row to a different assembly drops the old lines' coverage and its note.
+      const sw = build({ blob: blob({ polish_estimate: clone(saved) }) });
+      await sw.api.init();
+      sw.api.go(0);
+      typeInto(sw, '[data-tk="1"][data-k="pick"]', "Cove Base");
+      const swCard = sw.doc.querySelector('[data-row-card="1"]').innerHTML;
+      const switched = { line_cov: sw.api.model().takeoff[1].line_cov === undefined,
+                         note: /data-asmcov-note=/.test(swCard),
+                         boxes: (swCard.match(/data-asmcov=/g) || []).length };
       typeInto(b, '[data-tk="1"][data-k="pick"]', "Cove Base");
-      const switched = { line_cov: b.api.model().takeoff[1].line_cov === undefined,
-                         boxes: b.doc.querySelector('[data-row-card="1"]').querySelectorAll('[data-asmcov]').length };
+      const asmSwitched = { boxes: (b.doc.querySelector('[data-row-card="1"]').innerHTML.match(/data-asmcov=/g) || []).length };
+      const asmTyped = { savedBefore: savedBefore, afterEdit: afterEdit, savedAfter: savedAfter,
+                         blankRow: blankRow, expectedSaved: asmWith(swap("i1", 300)) };
       out.rowCoverage = { first: first, matTyped: matTyped, asmTyped: asmTyped,
-                          matBackToLib: matBackToLib, switched: switched,
+                          matBackToLib: matBackToLib, switched: switched, asmSwitched: asmSwitched,
                           expectedFirstAsm: asmWith(ITEMS),
                           expectedFirstMat: L.priceLine({ item_id: "i1" }, ITEMS, 5500).cost };
     }
