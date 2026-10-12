@@ -15,6 +15,7 @@ One live smoke test exists and is skipped unless TW_LIVE_DISTANCE=1.
 import json
 import os
 from pathlib import Path
+from urllib.parse import urlparse
 
 import httpx
 import pytest
@@ -117,7 +118,8 @@ def test_free_answer_is_driving_miles_to_one_decimal_with_one_call_each(monkeypa
     # A descriptive User-Agent on both: the OSRM demo server's usage policy asks for one.
     for c in calls:
         assert c.headers["User-Agent"] == distance.USER_AGENT
-        assert "proposals.wetreadwell.com" in c.headers["User-Agent"]
+        contact = c.headers["User-Agent"].split("(+")[1].rstrip(")")
+        assert urlparse(contact).hostname == "proposals.wetreadwell.com"
 
 
 def test_geocoder_no_match_is_not_found_and_osrm_is_never_asked(monkeypatch):
