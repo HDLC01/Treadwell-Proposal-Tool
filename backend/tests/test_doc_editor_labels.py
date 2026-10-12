@@ -913,7 +913,7 @@ def _work_paras():
     from docx.oxml.ns import qn
     import docx as _docx
     tpl = pathlib.Path(__file__).resolve().parents[1] / "templates" / "Direct"
-    path = [p for p in glob.glob(str(tpl / "*.docx")) if "EPOXY" in p.upper()][0]
+    path = [p for p in glob.glob(str(tpl / "*.docx")) if "EPOXY" in pathlib.Path(p).name.upper()][0]
     d = _docx.Document(path)
     seen = 0
     for tx in d.element.body.iter(qn("w:txbxContent")):

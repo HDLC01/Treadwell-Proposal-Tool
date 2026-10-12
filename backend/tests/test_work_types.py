@@ -70,12 +70,12 @@ def live_rows(ran):
 
 # ══ 1. what the table says ═══════════════════════════════════════════════════════════════════════════
 def test_the_four_job_types_and_the_five_tabs_are_the_ones_the_tool_has(ran):
-    """The live intake's four radios, in its order, and markup.TABS' five, in its order. Only polish is ready:
-    Estimating Tool v2 prices nothing else yet."""
+    """The live intake's four radios, in its order, and markup.TABS' five, in its order. Polish is ready, and
+    since Phase 12 so is epoxy: Estimating Tool v2 prices nothing else yet."""
     data = ran["data"]
     assert ran["keys"] == {"jobTypes": JOB_TYPES, "tabs": TABS}
     ready = {j["key"]: j["ready"] for j in data["JOB_TYPES"]}
-    assert ready == {"epoxy": False, "polish": True, "combo": False, "gyp": False}
+    assert ready == {"epoxy": True, "polish": True, "combo": False, "gyp": False}
     assert {j["key"]: j["tabs"] for j in data["JOB_TYPES"]} == {
         "epoxy": ["epoxy"], "polish": ["polish"], "combo": ["epoxy", "polish"], "gyp": ["gyp"]}
 

@@ -56,7 +56,7 @@ DOC = ROOT / "docs" / "v2-architecture.md"
 # What each page harness reads out of a frontend directory (they do not fall back to the real one), so a
 # scratch copy that breaks ONE file can be completed with the rest.
 TAKEOFF_FILES = ["polish-estimate.html", "js/polish-estimate.js", "js/bid-model.js", "js/library-core.js",
-                 "js/work-types.js", "js/polish-sandbox.js", "js/library-picker.js"]
+                 "js/work-types.js", "js/polish-sandbox.js", "js/library-picker.js", "js/epoxy-takeoff.js"]
 INTAKE_FILES = ["polish-intake.html", "js/polish-intake.js", "js/bid-model.js", "js/work-types.js",
                 "js/polish-sandbox.js", "js/intake-scope.js", "js/county-picker.js"]
 BETA_FILES = ["js/index.js", "index.html", "shared.js", "js/projects.js", "js/county-picker.js",
@@ -698,7 +698,7 @@ PATCH_LINE = "      cell_values: conditionCellWrites(model.conditions, cells, ct
 RENO_LINE = "      var first = firstFilled(carried.cells, out, isBlank);"
 MARK_LINE = '    "polish_estimate", "cell_values", "tax_flags_per_sheet",'
 COPY_BASE_LINE = "    if (WT.isSplit(srcData) && WT.isJobType(srcData.work_type)) {"
-ESTIMATE_ADOPT = "    M.conditions = B.conditionsFromCells(M.conditions, state.cell_values, T.isSplit(state));"
+ESTIMATE_ADOPT = "    ROOT.conditions = B.conditionsFromCells(ROOT.conditions, state.cell_values, T.isSplit(state));"
 ESTIMATE_SEEDED = "      split: T.isSplit(state),"
 INTAKE_ADOPT = "    M.conditions = B.conditionsFromCells(M.conditions, state.cell_values, T.isSplit(state));"
 INTAKE_SAVE = "    return B.conditionCellWrites(M.conditions, draft.cell_values, undefined, T.isSplit(draft));"
@@ -767,7 +767,7 @@ BREAKS = {
         test_a_v2_copy_of_a_split_project_that_is_not_polish_opens_at_the_source_bases_own_tax_answer),
     "the Takeoff step reads the draft as unsplit": (
         "takeoff", ESTIMATE, ESTIMATE_ADOPT,
-        "    M.conditions = B.conditionsFromCells(M.conditions, state.cell_values);", [],
+        "    ROOT.conditions = B.conditionsFromCells(ROOT.conditions, state.cell_values);", [],
         test_the_takeoff_step_saves_a_split_copy_without_touching_its_options),
     "the Takeoff step's seeded read ignores the mark": (
         "takeoff", ESTIMATE, ESTIMATE_SEEDED,

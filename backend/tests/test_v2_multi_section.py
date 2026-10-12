@@ -48,7 +48,7 @@ GOLDEN = TESTS / "fixtures" / "save_patch_golden.json"
 
 SCRATCH_FILES = ["polish-estimate.html", "js/polish-estimate.js", "js/bid-model.js", "js/bid-engine.js",
                  "js/bid-profiles.js", "js/markup-core.js", "js/library-core.js", "js/library-picker.js",
-                 "js/work-types.js", "js/excel-math.js"]
+                 "js/work-types.js", "js/excel-math.js", "js/epoxy-takeoff.js"]
 
 
 def _run(script, frontend=FRONTEND):
@@ -503,8 +503,11 @@ def test_the_page_draws_the_strip_prices_every_section_and_switches_the_panel(ra
     m = ran["page"]["multi"]
     assert m["strip"]["hidden"] is False
     assert m["strip"]["html"].count("data-section-tab=") == 3
-    assert "Epoxy" in m["panelEpoxy"] and "Priced with epoxy@1" in m["panelEpoxy"]
-    assert "blank, so the built-in rate is charged" in m["panelEpoxy"], "the Markups notes are shown, not hidden"
+    # Epoxy is edited on the page's own panels now (Phase 12): its Material panel is the takeoff, with the patch
+    # that the sheet always charges, not a summary. A section not edited here yet keeps the summary.
+    assert "data-epoxy-patch" in m["panelEpoxy"] and "Priced with epoxy@1" not in m["panelEpoxy"]
+    assert "Seal" in m["panelSeal"] and "Priced with seal@1" in m["panelSeal"]
+    assert "blank, so the built-in rate is charged" in m["panelSeal"], "the Markups notes are shown, not hidden"
     assert 'aria-current="true">Epoxy' in m["stripAfterClick"]
     assert m["panelRootIsTakeoff"] is True, "choosing Polish again brings the takeoff panel back"
     assert m["maths"].startswith("Polish $") and "+ Epoxy $" in m["maths"]
@@ -670,8 +673,8 @@ BREAKS = {
         "    void 0;",
         lambda r: r["page"]["gypOnPage"]["priceable"] is False or not r["page"]["gypOnPage"].get("material")),
     "the page saves without pricing its other sections": (
-        "js/polish-estimate.js", "      return B.buildSavePatch(M, now, priceCtx());",
-        "      return B.buildSavePatch(M, now, { bid: bid(), library: conditionLibrary() });",
+        "js/polish-estimate.js", "      return B.buildSavePatch(ROOT, now, priceCtx());",
+        "      return B.buildSavePatch(ROOT, now, { bid: bid(), library: conditionLibrary() });",
         lambda r: "error" in r["page"] or "priced_tabs" not in r["page"]["multi"]["savedKeys"]),
 }
 

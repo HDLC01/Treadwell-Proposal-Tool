@@ -118,6 +118,14 @@ left on purpose. No page prices with the engine itself yet, so no bid moved. And
 chain (the fractional bags, the travel hours, the overage rows, the cove aggregate) are the takeoff's: the chain is
 handed their dollars.
 
+**Epoxy end to end (Phase 12).** An Epoxy job is priced in v2 and `ready` is `true` for it. The library gets Kyle's Epoxy
+and Gyp materials from a one-time script, `backend/ops/seed_library_from_workbook.py` (dry run by default, `--apply
+--target staging` only, insert-only), and `js/epoxy-takeoff.js` carries the four things the Epoxy sheet does before its
+chain that a library row cannot say. An Epoxy job is an Epoxy SECTION of the bid with the Polish root marked off
+(`sectionsForJob`), and the estimate page's Material, Labor and Review panels edit whichever section is on show
+(`sectionView`). The proof is in section 6 ("The Epoxy proof") and the named modelling gaps are in the Phase 12 row of
+section 8. v2 Epoxy bids stay test copies until Kyle signs the work type off.
+
 ## 1. Why this exists
 
 Estimating Tool v2 (first called the Polish beta) was built one screen at a time, and the same fact ended up in many files. The list
@@ -149,6 +157,7 @@ Each layer may use the layers above it in this table and nothing below it. A lea
 | leaf (data) | `js/bid-profiles.js` | Part one (Phase 6): the cell maps of the eleven priced tabs. Part two (Phase 8): one profile per kind of tab as plain data, with rates and GP ladders as Markups formula text, a closed set of quirk flags and an `extends` link (Seal is Polish plus one ladder). The one home of the global defaults: labor rate, lodging, per diem, fees, sales tax, bond and the two remodel rates. `builtinRules()` is what the Markups page shows as built-ins. | nothing |
 | model | `js/bid-model.js` (Phase 5 renamed it from `js/polish-bid-core.js`, with no logic change) | The saved estimate: fresh, migrate, seed a new bid, labor, travel, distance, conditions per section; building the save patch; composing the price snapshot the proposal reads. Since Phase 8 `markupChain` is a wrapper over the engine on `polish-legacy`, and `RATES` and `GP_BANDS` are read off the profile. | excel-math, work-types and bid-engine |
 | engine | `js/bid-engine.js` (Phase 8) | `priceChain(profile, input, rates)`: the markup chain for any profile. `resolveProfile`, `forTab`, `compileRates` and `ruleNumber` turn the filed Markups rules into numbers or into an unpriceable line with a reason. `combine` adds the tabs of a combo job after each tab has had its own gross profit. `snapshotRates` and `ratesOf` (Phase 10) say what rates a section keeps when it is first used. | excel-math, bid-profiles, markup-core |
+| takeoff | `js/epoxy-takeoff.js` (Phase 12) | What the Epoxy tab does before its chain that a library row cannot say: the patch, the cove (two ROUNDUPs deep, aggregate following System 1) and the tooling. The formulas are code; the prices they read are editable library rows (`PRICE_ROWS`) with a constant as the fallback, and a test holds each constant equal to the row the seed plans. | excel-math, library-core |
 | render | `js/intake-scope.js` | Draws and shows the quantity fields of the intake from `work-types.js`. Extracted from `js/index.js` in Phase 9a; the live intake calls it (`renderSystems`, `applyScope`) and holds no copy. | work-types |
 
 Already shared and kept as they are: `js/library-core.js` (priceLine and priceAssembly, every
@@ -450,6 +459,20 @@ written by the table or sit on a list of known gaps that names the phase that wi
 (Phase 15), the Leveling ones (Phase 16) and the Gyp Local and New or Reno ones (Phase 14). The live intake does
 not write those either, and a new literal flag cell that is on neither list fails the test.
 
+**The Epoxy proof (Phase 12).** `tests/js/epoxy-jobs-recorder.js` types 440 jobs into the Epoxy tab of the template (a
+system for System 1 and for System 2, a primer, a cove and its length, the job questions, a crew) in the same engine the
+oracle uses, and records what its cells answer (`tests/fixtures/epoxy_jobs_golden.json`, guarded by a hash of the Epoxy tab
+and of every defined name, so a template edit says "re-run the recorder"). `tests/js/epoxy-v2-proof-harness.js` builds each
+job as a v2 Epoxy section over the library the seed script plans and prices it the way the estimate page does, and
+`tests/test_epoxy_v2_proof.py` requires material before D40, D40, tooling, sub-total, gross profit, taxes and total to equal
+the workbook's, to the dollar, for every job outside the declared departures, and requires every declared departure to
+really differ. The same harness prices every Epoxy vector of the workbook oracle through a v2 section (105 of the 185; the
+other 80 are the hard bid, the bond and the lodging cases that v2 does not carry) and every figure equals the oracle's.
+`tests/test_epoxy_takeoff.py` holds each constant in `js/epoxy-takeoff.js` to the cell of the template it was copied from and
+each price fallback to the row the seed plans. `tests/test_epoxy_estimate_page.py` boots the real estimate page on an Epoxy
+job and sets the price it shows beside the same job priced with no page in it. `tests/test_seed_library.py` runs the seed's
+statements against a database and shows that a row somebody edited is still as they left it.
+
 ## 7. Every concept, where it is copied today, and what happens to each copy
 
 Line numbers are on `origin/staging` at `3f94ed2`, except those in `js/bid-model.js` and
@@ -706,9 +729,11 @@ a sample of searches, every row the box offers and, for each row, the four keys 
 engine charges. The shared control must reproduce all of it.
 
 The same change gave the v2 intake a Job type choice. It is drawn from `js/work-types.js` by `js/intake-scope.js`
-(`jobTypesMarkup`), so there is no list of job types on the page. Only Polish is `ready`; Epoxy, Combo and Gyp are
-shown and disabled with a plain note, and a later phase enables one by setting `ready` in the vocabulary. The
-quantity fields on the page are drawn by the same renderer as the live intake.
+(`jobTypesMarkup`), so there is no list of job types on the page. Polish was the only type `ready` when this was
+written; Epoxy, Combo and Gyp were shown and disabled with a plain note, and a later phase enables one by setting
+`ready` in the vocabulary (Phase 12 did that for Epoxy: the note now names Combo and Gyp alone, and a draft
+whose job type is Epoxy opens as an Epoxy bid). The quantity fields on the page are drawn by the same renderer as the
+live intake.
 
 ### 7.10 The estimate page's save, now one composition
 
@@ -773,10 +798,9 @@ after `init()`. A bid with several sections also writes `priced_tabs` (every tab
 `sheet_area`, `cost_snapshot`, `phase_price` and a combined `computed_bid`. The lump sum is each BASE section's own
 total summed after its own gross profit (`engine.combine`), never one pooled chain, and an option-only tab (Seal,
 Leveling) is never in it. A section that cannot price takes the combined price with it: those keys are null, and the
-tab lists the reason. **Left for later phases:** nothing writes a second section yet (no work type but Polish is
-`ready`), so the panels for a section other than the root arrive with its work type. The strip switches the panel to
-a summary of the section until then. `rooms` and `base_tab_id` are not written (the Proposal step rebuilds rooms
-from `priced_tabs`).
+tab lists the reason. **Phase 12 wrote the first second section** (Epoxy, below): the page's own panels edit it. A section
+whose work type is not `ready` (Seal, Leveling, Gyp) still shows the summary until its phase. `rooms` and
+`base_tab_id` are not written (the Proposal step rebuilds rooms from `priced_tabs`).
 
 ### 7.11 "Is this draft a v2 estimate"
 
@@ -845,4 +869,5 @@ v2 bids stay test copies until Kyle signs off each work type. Where each phase t
 | 9 | 7.6, 7.9. `js/intake-scope.js`; the v2 intake for the four job types. |
 | 10 | Done. 7.10 (sections, the rates a section keeps, the one composition of what a save writes) and the module rows of section 3. No screen shows a second section yet and no saved bid changed: the save golden is byte for byte. |
 | 11 | Done. A material can carry `price_breaks` (a list of `{min_qty, unit_cost}`, each break applying FROM its quantity, inclusive, as Kyle's flake line `IF(O194<240, ...)` does), a `bulk_cost` (the pack cost when the bid has Bulk Discount on, passed to `priceLine` as `{bulk: true}`) and a `coverage_basis` (`sf`, `lf` or `each`, which measure of a whole takeoff the material is priced against). All three are nullable and a material without them prices exactly as before (the library golden is unchanged). A price break beats the bulk cost. Admin only on the Items tab's More panel and on the API. Staging has the columns (`backend/ops/library_price_breaks.sql`); production does not until Hanz approves. Named modelling gap: microFlake's break is judged on the TWO flake lines added together in the sheet (`O201+O202`), and the library judges each line on its own. |
-| 12 and later | The work types one at a time. v2 bids stay test copies until Kyle signs each work type off. |
+| 12 | Done. The seed script (`backend/ops/seed_library_from_workbook.py`: 60 materials, 39 assemblies and one crew line; dry run by default, staging only, insert-only), `js/epoxy-takeoff.js`, an Epoxy job as a section of the bid (`sectionsForJob`, `sectionView`), the estimate page's panels for any section it edits, the proof (section 6), and `ready: true` for Epoxy in `js/work-types.js`. Saved Polish bids are unchanged (the goldens have no diff). **Declared departures from the workbook, each a named modelling gap for Kyle:** (1) a flake or quartz price break is judged on the two broadcast lines of a system added together in the sheet and on each line alone in the library, so wherever the two lines reach the break together and neither does alone, v2 charges the small-lot price and is over the workbook (by $10 to $40 of material on the jobs recorded, never under). For the six flake and quartz floor systems and the three wall ones that is every size up to 1,000 to 1,300 SF, and up to 1,600 SF for the two MACRO flake ones (hybrid and wall), and it applies to a big job that holds one small system too (a 862 SF hybrid beside a 10,298 SF floor is $26 over on a $62,160 bid). The proof does not list these jobs by hand: it pools each system's lines with the library's own break and requires the jobs it names to be exactly the jobs that differ, at the dollars the pool predicts (440 recorded jobs, 83 of them in this departure); the way to close it is for the library to pool lines that buy the same material, which is a library change and not made here; (2) a coverage is kept to three places (a 40 lb bag of flake covers 266.66667 SF and is stored as 266.667, rounded UP so that a whole number of square feet can never buy a bag the sheet does not); an area typed to two decimals within 0.003 SF past a bag edge does buy one bag fewer (2,666.67 SF of MACRO flake is $90 under), because the sheet would round that up to a bag; (3) a library cost is kept to four places, so a sum can land a hair either side of a whole dollar (5 jobs in about 1,500 scanned, a dollar apart in material and one to three dollars in the bid, mostly large jobs or ones with a cove: 40-S quartz at 3,000 SF is $2 under, Shop Floor Single Broadcast at 15,500 SF is $2 over); (4) the cove is two ROUNDUPs deep and its aggregate follows System 1 (odd rule 11), so it is priced by a formula in code from editable price rows (`wb-epoxy-cove-*`), with a constant as the fallback; (5) tooling is moisture tests and $0.33 a square foot with a $150 floor, in code, and a section with no area charges none (the sheet charges its minimums); demo tooling and plastic are typed quantities v2 does not carry; (6) the patch is $0.10 a square foot of the whole area, always, from `wb-epoxy-patch`; (7) Bulk Discount is stored on the material and not used, because the v2 model has no switch for it; (8) no hard bid, no bond input, and travel from the model's Lodging and Per Diem lines, not the sheet's local switch (the oracle vectors that need them are left out of the proof and counted); (9) System 1 is the first seeded floor system row that is on, and a system Kyle composes himself is not read as quartz; (10) a square-foot row added beside a measured one in a section other than the root starts as the same floor. **Left for Kyle:** the one seeded crew line (3 guys, $33, days blank, from `Epoxy!A47` and `C47`), which primers go with which system (the sheet lists four for System 1 and two more for System 2, v2 offers them all), and the remodel rate when no county is picked (the Epoxy profile charges the sheet's 10%, where Polish charges the Kansas state rate). |
+| 13 and later | The work types one at a time. v2 bids stay test copies until Kyle signs each work type off. |

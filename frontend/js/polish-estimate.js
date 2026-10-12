@@ -52,6 +52,9 @@
   // adopt() runs at parse time, and condLine reads the reserved library ids off it.
   var T = window.TWWorkTypes;
   var L = window.TWLib;            // priceAssembly — the same maths the library page shows
+  // The Epoxy tab's patch, cove and tooling: what the sheet does before its markup chain and a library row
+  // cannot say (js/epoxy-takeoff.js). Bound ABOVE adopt() like T, because pricing a section reads it.
+  var E = window.TWEpoxyTakeoff;
   var S = window.TWPolishSandbox;  // never edit a live bid
   var P = window.TWLibraryPicker;  // the one search pop-up both "Add" buttons open (js/library-picker.js)
   var $ = function (id) { return document.getElementById(id); };
@@ -61,6 +64,13 @@
   // copy instead, and rendering the copy with the real bid's numbers still in hand would be the
   // same silent mix-up in a different direction.
   var state = {};
+  // ROOT IS THE WHOLE MODEL and M IS THE MODEL THE PANELS EDIT (Phase 12). They are the same object for every
+  // bid with one section, which is every Polish bid. When a bid has several and the estimator opens one that is
+  // not the root, M is a view of that section (B.sectionView): `M.takeoff`, `M.labor`, `M.contingency` and
+  // `M.fees` are that section's and every other key is the model's, so the Material, Labor and Review panels are
+  // the same code for every section and nothing is copied. Anything that is about the WHOLE bid (saving, pricing
+  // every section, the strip) reads ROOT, never M. See show().
+  var ROOT = null;
   var M = null;
   // The takeoff SF the labor days last followed (null until the page has opened). See changed().
   var followSf = null;
@@ -76,9 +86,29 @@
   // the estimator picked another (paintSections). Every bid today has one section, so this never moves.
   var activeTab = B.ROOT_TAB;
 
+  /** The model a panel edits while `tab` is on show: the root itself, or a view of that section. A bid whose
+   *  sections cannot be read has only its root to show. */
+  function viewOf(tab) {
+    if (tab === B.ROOT_TAB || !ROOT.tabs) return ROOT;
+    try { return B.sectionView(ROOT, tab); } catch (err) { activeTab = B.ROOT_TAB; return ROOT; }
+  }
+
+  /** Put a section on show: the panels from here on edit it. */
+  function show(tab) {
+    activeTab = tab;
+    M = viewOf(tab);
+  }
+
+  /** The section a bid opens on: the first one that is part of it (an Epoxy job's Polish root is off, so it
+   *  opens on Epoxy). The root when the sections cannot be read. */
+  function openingTab() {
+    try { return B.travelCarrier(ROOT); } catch (err) { return B.ROOT_TAB; }
+  }
+
   function adopt(blob) {
     state = blob || {};
-    M = B.migrateModel(state.polish_estimate);
+    ROOT = B.migrateModel(state.polish_estimate);
+    M = ROOT;
     // THE CELL WINS WHERE THERE IS ONE, the same rule polish-intake.js has always applied, through
     // the same shared reader so the two screens cannot disagree about one answer.
     //
@@ -95,12 +125,13 @@
     //
     // `T.isSplit(state)`: on a draft the estimate screen has split per sheet, the two tax answers are the
     // base sheet's own cell, and the save below (B.buildSavePatch) writes the same one.
-    M.conditions = B.conditionsFromCells(M.conditions, state.cell_values, T.isSplit(state));
+    ROOT.conditions = B.conditionsFromCells(ROOT.conditions, state.cell_values, T.isSplit(state));
     // BEFORE THE FIRST PAINT, not on the first edit. `changed()` is what normally keeps a derived
     // Guys figure current, and nothing calls it on load -- so without this a reopened draft shows
     // Travel's Guys box empty until somebody touches an unrelated field, and prices it at nothing
     // in the meantime.
     syncAutoGuys();
+    show(openingTab());
   }
 
   adopt(TW.getState());
@@ -227,11 +258,18 @@
    *
    *  The return is shaped like priceAssembly's so every caller -- rowCost, materialTotal, the
    *  broken-line warning, the per-unit hint -- keeps working without knowing which kind it got. */
-  function rowPrice(row) {
+  function rowPrice(row, takeoff) {
     var r = row || {};
     if (r.item_id) return priceMaterialRow(r);
     var asm = asmById(r.assembly_id);
     if (!asm) return null;
+    // A COVE IS PRICED BY THE SHEET'S OWN FORMULA, NOT BY A LIBRARY LINE (js/epoxy-takeoff.js): it rounds twice,
+    // and its aggregate follows System 1, the first system of the takeoff this row sits in. `takeoff` is that
+    // list, and it is the one on show unless a caller prices another section's.
+    if (E.coveVariant(asm.id)) {
+      return E.priceCoveRow(asm.id, B.num(r.measurement),
+        { items: ITEMS, quartz: E.systemOneIsQuartz(takeoff || M.takeoff) });
+    }
     return priceAssemblyRow(asm, r, B.num(r.measurement));
   }
 
@@ -386,23 +424,31 @@
     return out;
   }
 
+  /** The raw material of the section on show: the root's (rootMaterial) or another section's. */
   function materialTotal() {
+    if (activeTab === B.ROOT_TAB) return rootMaterial();
+    var e = openEntry();
+    return e ? sectionMaterial(e).material : 0;
+  }
+
+  /** The raw material of the ROOT (Polish) section, which is what bid() prices. */
+  function rootMaterial() {
     var sum = 0;
-    M.takeoff.forEach(function (r) {
+    ROOT.takeoff.forEach(function (r) {
       // OFF ROWS ARE SKIPPED HERE, in the raw sum, so the chain rounds only what the bid really
       // buys (D31 is ROUNDUP of the sum -- zeroing a row after that would drift the total).
       if (!B.rowOn(r)) return;
-      var p = rowPrice(r);
+      var p = rowPrice(r, ROOT.takeoff);
       if (p) sum += p.total;
     });
     // Dye and Joint Filler are keyed on the polished area (Polish!E25/E29), not on a row's own
-    // measurement. `area` is the SAME B.takeoffSf(M.takeoff) that bid() below uses for the
+    // measurement. `area` is the SAME B.takeoffSf(ROOT.takeoff) that bid() below uses for the
     // sheet's SF, so the Material total and the price-per-SF divisor can never disagree about
     // what "the area" is. Each prices off its reserved library row, or off the shipped formula
     // when that row is not there -- see condLine. Off means nothing, as it always has.
-    var area = B.takeoffSf(M.takeoff);
-    if (M.conditions.dye) sum += condLine("dye", area).cost;
-    if (M.conditions.joint_filler) sum += condLine("joint_filler", area).cost;
+    var area = B.takeoffSf(ROOT.takeoff);
+    if (ROOT.conditions.dye) sum += condLine("dye", area).cost;
+    if (ROOT.conditions.joint_filler) sum += condLine("joint_filler", area).cost;
     return sum;
   }
 
@@ -433,28 +479,41 @@
     return null;                        // nobody has picked a county yet
   }
 
-  /** The whole bid, recomputed from the model. Cheap enough to call on every keystroke. */
+  /** The ROOT (Polish) section's bid, recomputed from the model. Cheap enough to call on every keystroke.
+   *  It reads ROOT, never M: M is whichever section is on show. */
   function bid() {
     return B.markupChain({
-      material: materialTotal(),
-      labor: B.laborTotal(M.labor, M.conditions),
+      material: rootMaterial(),
+      labor: B.laborTotal(ROOT.labor, ROOT.conditions),
       // Lodging + Per Diem: inside the markups (the sheet's D61), not labor.
-      travel: B.travelCosts(M.travel, M.labor).total,
-      contingency: M.contingency,
-      fees: M.fees,
-      conditions: M.conditions,
-      sf: B.takeoffSf(M.takeoff),
+      travel: B.travelCosts(ROOT.travel, ROOT.labor).total,
+      contingency: ROOT.contingency,
+      fees: ROOT.fees,
+      conditions: ROOT.conditions,
+      sf: B.takeoffSf(ROOT.takeoff),
       remodel_rate: remodelRate(),
     });
   }
 
   /** The raw material of a section that is not the root: its takeoff rows priced from the library, the rows
-   *  that are on. Dye and Joint Filler are Polish's conditions and stay with the root (materialTotal). */
+   *  that are on. Dye and Joint Filler are Polish's conditions and stay with the root (rootMaterial).
+   *
+   *  AN EPOXY SECTION ADDS WHAT THE SHEET DOES BEFORE ITS CHAIN (js/epoxy-takeoff.js): the patch, the cove (a
+   *  cove row is priced by the sheet's own formula, not by a library line) and the tooling, which the chain takes
+   *  as its own input. It answers { material, tooling }, the engine's material inputs. */
   function sectionMaterial(entry) {
+    var takeoff = entry.section.takeoff || [];
+    if (entry.role === "epoxy") {
+      var r = E.sectionMaterial(takeoff, {
+        items: ITEMS, sf: B.takeoffSf(takeoff),
+        rowPrice: function (row) { return rowPrice(row, takeoff); }
+      });
+      return { material: r.material, tooling: r.tooling };
+    }
     var sum = 0;
-    (entry.section.takeoff || []).forEach(function (r) {
+    takeoff.forEach(function (r) {
       if (!B.rowOn(r)) return;
-      var p = rowPrice(r);
+      var p = rowPrice(r, takeoff);
       if (p) sum += p.total;
     });
     // A Gyp section prices its material from gyp, extras, sand and sound mat (the engine's gyp-split inputs), and
@@ -463,10 +522,23 @@
     return sum;
   }
 
+  /** The entry of the section on show (never the root's: materialTotal answers that one itself). */
+  function openEntry() {
+    try { return B.sectionOf(ROOT, activeTab); } catch (err) { return null; }
+  }
+
   /** The bids of every section but the root, { tabId: bid } (B.priceTabs). {} for a bid with one section,
    *  which reads nothing and costs nothing. */
   function sectionBids() {
-    return B.priceTabs(M, { material: sectionMaterial, remodel_rate: remodelRate() });
+    return B.priceTabs(ROOT, { material: sectionMaterial, remodel_rate: remodelRate() });
+  }
+
+  /** The bid of the section on show, whichever it is: the root's chain, or the engine's answer for the section.
+   *  The Review panel and the repaint read this, so they show the section they are about. */
+  function activeBid() {
+    if (activeTab === B.ROOT_TAB) return bid();
+    var all = sectionBids();
+    return Object.prototype.hasOwnProperty.call(all, activeTab) ? all[activeTab] : bid();
   }
 
   /** What a save is composed from (B.buildSavePatch): the root's bid, the other sections' and the library's
@@ -480,13 +552,13 @@
    *  were saved, untouched, with the reason on screen; a save that threw would lose the edit. */
   function savePatch(now) {
     try {
-      return B.buildSavePatch(M, now, priceCtx());
+      return B.buildSavePatch(ROOT, now, priceCtx());
     } catch (err) {
       say("This bid's other sections cannot be read, so they were saved as they were: " + (err && err.message));
-      var rootOnly = Object.assign({}, M);
+      var rootOnly = Object.assign({}, ROOT);
       delete rootOnly.tabs;
       var patch = B.buildSavePatch(rootOnly, now, { bid: bid(), library: conditionLibrary() });
-      if (M.tabs !== undefined) patch.polish_estimate = Object.assign({}, patch.polish_estimate, { tabs: M.tabs });
+      if (ROOT.tabs !== undefined) patch.polish_estimate = Object.assign({}, patch.polish_estimate, { tabs: ROOT.tabs });
       return patch;
     }
   }
@@ -531,7 +603,7 @@
     // The rule moved into the model (B.syncAutoGuys) so the new-bid seeding can run it between its steps:
     // Lodging and Per Diem count the same man-days while they are on auto (nights = man-days, the way
     // backend/pricing.py counts them), and each section's Travel row follows its own crew.
-    B.syncAutoGuys(M);
+    B.syncAutoGuys(ROOT);
   }
 
   /** Whether an hours-based labor row (Travel) renders dimmed: on a local job, untouched.
@@ -586,8 +658,8 @@
   /** The model's sections, or [] when it has only the root (every bid today, which is why nothing below shows).
    *  A saved `tabs` that is not well formed answers [] and says so; saving still works (savePatch). */
   function sectionList() {
-    if (!M.tabs) return [];
-    try { return B.sectionsOf(M); } catch (err) {
+    if (!ROOT.tabs) return [];
+    try { return B.sectionsOf(ROOT); } catch (err) {
       say("This bid's other sections cannot be read: " + (err && err.message));
       return [];
     }
@@ -598,17 +670,18 @@
     return Object.assign({}, sectionBids(), Object.fromEntries([[B.ROOT_TAB, bid()]]));
   }
 
-  /** The strip that switches between sections: drawn only when there is more than one. */
+  /** The strip that switches between sections: drawn only when the bid is made of more than one. A section that
+   *  is not part of the bid (an Epoxy job's Polish root) is not on it. */
   function paintSections() {
     var el = $("sections");
-    var list = sectionList();
-    if (list.length < 2) {
-      activeTab = B.ROOT_TAB;
+    var live = sectionList().filter(function (e) { return e.kind !== "off"; });
+    if (live.length < 2) {
+      if (!live.length || live[0].tab !== activeTab) show(live.length ? live[0].tab : B.ROOT_TAB);
       if (!el.hidden) { el.innerHTML = ""; el.hidden = true; }
       return;
     }
-    if (!list.some(function (e) { return e.tab === activeTab; })) activeTab = B.ROOT_TAB;
-    el.innerHTML = B.sectionSwitcherHtml(M, activeTab, allBids());
+    if (!live.some(function (e) { return e.tab === activeTab; })) show(live[0].tab);
+    el.innerHTML = B.sectionSwitcherHtml(ROOT, activeTab, allBids(), { skipOff: true });
     el.hidden = false;
   }
 
@@ -616,7 +689,7 @@
    *  lump sum) and each section's own price. No price when a section cannot be priced, never a wrong one. */
   function paintJobBid() {
     var c = null;
-    try { c = B.composePricingSnapshot(M, priceCtx()).computed_bid; } catch (err) { c = null; }
+    try { c = B.composePricingSnapshot(ROOT, priceCtx()).computed_bid; } catch (err) { c = null; }
     $("bid-total").textContent = c && c.lump_sum ? B.money(c.lump_sum) : "no price";
     $("bid-psf").textContent = (c && c.price_per_sf != null ? B.money2(c.price_per_sf) + " / SF" : "");
     var bids = allBids();
@@ -626,12 +699,19 @@
     }).join(' <i>+</i> ');
   }
 
-  /** What the panel shows while a section other than the root is open. Its takeoff and labor are edited on
-   *  their own panels when its work type is switched on for Estimating Tool v2 (no work type but Polish is yet);
-   *  until then this says what the section holds and how it was priced, so nothing is hidden. */
+  /** Is the section on show edited on the page's own panels? Polish and Epoxy are (their work types are `ready`
+   *  in Estimating Tool v2). The others, until their phases, show the summary below, so nothing is hidden. */
+  function openSectionEditable() {
+    if (activeTab === B.ROOT_TAB) return true;
+    var e = openEntry();
+    return !!e && (e.role === "polish" || e.role === "epoxy");
+  }
+
+  /** What the panel shows while a section that is not edited here yet is open: what it holds and how it was
+   *  priced. */
   function otherSectionPanel() {
     var e;
-    try { e = B.sectionOf(M, activeTab); } catch (err) { activeTab = B.ROOT_TAB; return PANELS[at](); }
+    try { e = B.sectionOf(ROOT, activeTab); } catch (err) { show(B.ROOT_TAB); return PANELS[at](); }
     var b = allBids()[e.tab] || {};
     var s = e.section;
     var rates = (s.rates && s.rates.notes) || [];
@@ -1189,16 +1269,26 @@
    *  condition card of their own. Pure over ASMS and ITEMS. */
   function takeoffPickEntries() {
     var out = [];
+    // IN A SECTION OTHER THAN THE ROOT, THE WORK TYPE'S OWN ROWS COME FIRST (Phase 12): an Epoxy section offers the
+    // assemblies and materials filed for epoxy above the rest. `first` is the pop-up's own mark for that (js/
+    // library-picker.js lists those rows on top, each group still in the order given), and it is set only here, so
+    // the root's entries are the ones they always were. A row filed for no work type is everyone's and is not moved.
+    var layout = null;
+    if (activeTab !== B.ROOT_TAB) { var oe = openEntry(); layout = oe ? oe.layout : null; }
+    var mark = function (entry, row) {
+      if (layout !== null && (row.default_work_types || []).indexOf(layout) >= 0) entry.first = true;
+      return entry;
+    };
     ASMS.forEach(function (a) {
-      out.push({ key: "asm:" + a.id, kind: "asm", id: a.id, name: String(a.name == null ? "" : a.name),
+      out.push(mark({ key: "asm:" + a.id, kind: "asm", id: a.id, name: String(a.name == null ? "" : a.name),
                  sub: "Assembly" + (a.unit ? ", per " + String(a.unit).toUpperCase() : ""),
-                 tag: L.assemblyPriceText(a, ITEMS) });
+                 tag: L.assemblyPriceText(a, ITEMS) }, a));
     });
     ITEMS.forEach(function (it) {
       if (RESERVED_ITEM_IDS.indexOf(it.id) !== -1) return;
-      out.push({ key: "item:" + it.id, kind: "item", id: it.id,
+      out.push(mark({ key: "item:" + it.id, kind: "item", id: it.id,
                  name: String(it.name == null ? "" : it.name),
-                 sub: "Material" + (it.unit ? ", " + it.unit : ""), tag: L.materialPriceText(it) });
+                 sub: "Material" + (it.unit ? ", " + it.unit : ""), tag: L.materialPriceText(it) }, it));
     });
     out.sort(function (x, y) { return x.name.localeCompare(y.name) || (x.kind < y.kind ? -1 : 1); });
     return out;
@@ -1226,6 +1316,16 @@
       var ticked = ASMS.filter(function (a) { return a.id === p.id; })[0];
       var tu = ticked ? String(ticked.unit == null ? "" : ticked.unit).toUpperCase() : "";
       if (tu === "SF" || tu === "LF") row.unit = tu;
+    }
+    // A SYSTEM IS SEVERAL ROWS ON ONE FLOOR (a primer, a body coat, a topcoat), so in a section other than the
+    // root a square-foot row added beside a measured one starts as the same floor: it carries that number and is
+    // not added to the area again (the `same_floor` mark takeoffSf skips). Typing its own number stops sharing.
+    // The root keeps what it always did, a new row empty.
+    if (activeTab !== B.ROOT_TAB && row.unit === "SF") {
+      var carrier = M.takeoff.filter(function (q) {
+        return q && q !== row && q.unit === "SF" && B.rowOn(q) && !q.same_floor && B.num(q.measurement) > 0;
+      })[0];
+      if (carrier) { row.measurement = carrier.measurement; row.same_floor = true; }
     }
     return i;
   }
@@ -1447,7 +1547,8 @@
     //
     // REMOVE EXISTING FOLLOWS JOINT FILLER: its `needs` card hidden means there is no switch on this
     // page that could ever un-gray it, so it is not drawn either -- unless it is itself switched on.
-    html += CONDITION_CARDS.filter(function (c) {
+    // These three are Polish's questions (dye, joint filler, remove existing), so another section has none.
+    html += (activeTab === B.ROOT_TAB ? CONDITION_CARDS : []).filter(function (c) {
       if (!B.conditionShown(M, c.key)) return false;
       return !c.needs || B.conditionShown(M, c.needs) || !!(M.conditions || {})[c.key];
     }).map(function (c) {
@@ -1461,9 +1562,25 @@
       (M.takeoff.some(function (r) { return r && r.same_floor; })
         ? ' Default rows that share the floor carry the same square feet but are not added to ' +
           'it again.' : '') + '</p>';
+    html += epoxyCaption();
 
     return shell("Material",
       "One row per assembly. The library prices it against the measurement you give it.", html);
+  }
+
+  /** What an Epoxy section charges that is not one of its rows, in words: the patch (a flat price on the whole
+   *  area, always charged) and where the cove rows and the tooling are. "" for any other section. */
+  function epoxyCaption() {
+    var e = activeTab === B.ROOT_TAB ? null : openEntry();
+    if (!e || e.role !== "epoxy") return "";
+    var takeoff = e.section.takeoff || [];
+    var r = E.sectionMaterial(takeoff, {
+      items: ITEMS, sf: B.takeoffSf(takeoff), rowPrice: function (row) { return rowPrice(row, takeoff); }
+    });
+    return '<p class="cap">Patch <b data-epoxy-patch>' + esc(moneyAuto(r.patch)) + '</b> is added for you: ' +
+      esc(B.money2(E.unitPrice(ITEMS, "patch").cost)) + ' a square foot of the whole area, whatever the system. ' +
+      'A cove row is priced the way the estimate sheet prices it, from its length. Tooling and consumables, ' +
+      esc(moneyAuto(r.tooling)) + ', are added on the Review step.</p>';
   }
 
   /** One labor task, as its own card.
@@ -1788,7 +1905,8 @@
   }
 
   function reviewPanel() {
-    var b = bid();
+    // The bid of the section on show: the root's chain, or the engine's answer for another section.
+    var b = activeBid();
     var blk = B.blockers(M);
     var html = "";
     if (blk.length) {
@@ -1809,7 +1927,10 @@
     });
     if (!tkRows.length) tkRows.push(["Nothing measured yet", "", ""]);
     tkRows.push(["Material Subtotal", "", mkAmt(b, "material")]);
-    tkRows.push(["Shipping", B.pct(B.RATES.SHIPPING), mkAmt(b, "shipping")]);
+    // A rate the engine reports for the section on show is the one printed (an Epoxy section ships at its tier);
+    // the root's chain reports none of these, so it prints the Polish figures it always did.
+    var rateOf = function (key, fallback) { return b[key] != null ? b[key] : fallback; };
+    tkRows.push(["Shipping", B.pct(rateOf("ship_pct", B.RATES.SHIPPING)), mkAmt(b, "shipping")]);
     tkRows.push(["Material Total", "", mkAmt(b, "material_total"), "tot"]);
     html += card("Takeoff and Material", 0, "takeoff", revTable(tkRows));
 
@@ -1835,8 +1956,8 @@
     if (!labRows.length) labRows.push(["No labor entered yet", "", ""]);
     labRows.push(["Labor Subtotal", "", mkAmt(b, "labor")]);
     labRows.push([{ raw: condSwitch("prevailing_wage", "Labor escalation") },
-      b.escalation ? B.pct(B.RATES.ESCALATION) : "", mkAmt(b, "escalation")]);
-    labRows.push(["Labor burden", B.pct(B.RATES.BURDEN), mkAmt(b, "burden")]);
+      b.escalation ? B.pct(rateOf("esc_pct", B.RATES.ESCALATION)) : "", mkAmt(b, "escalation")]);
+    labRows.push(["Labor burden", B.pct(rateOf("burden_pct", B.RATES.BURDEN)), mkAmt(b, "burden")]);
     labRows.push(["Labor Total", "", mkAmt(b, "labor_total"), "tot"]);
     html += card("Labor", 1, "labor", revTable(labRows));
 
@@ -1859,6 +1980,14 @@
     }
     trvRows.push(["Hotel and Per Diem Total", "", mkAmt(b, "travel"), "tot"]);
     html += card("Hotel and Per Diem", 1, "travel", revTable(trvRows));
+
+    // TOOLING AND CONSUMABLES, for a section whose chain has the line (Epoxy: the moisture test, and $0.33 a
+    // square foot with a $150 floor). The root's chain has none, so a Polish bid draws nothing here.
+    // The card header carries no figure now; the total is the card's own last row. It takes the takeoff colour.
+    if (b.tooling > 0) {
+      html += card("Tooling and consumables", 0, "takeoff",
+        revTable([["Moisture test, tooling and consumables", "", mkAmt(b, "tooling"), "tot"]]));
+    }
 
     html += '<div data-rev="markup" class="rev">' + markupTable(b) + '</div>';
     // No blurb on Review: the figures speak for themselves, and shell() leaves out the grey
@@ -1933,8 +2062,8 @@
     // NO HARD BID ROW. Hanz, 2026-09-22: "remove all hard bids from the polish intake form. And
     // also on the markups" -- the switch and its row came out with the condition itself; see
     // bid-model.js's note on bid() for where the arithmetic went.
-    r += row("Superintendent &amp; PTO", esc(B.pct(B.RATES.SUPER_PTO)), "super_pto");
-    r += row("Soft costs", esc(B.pct(B.RATES.SOFT_COSTS)), "soft_costs");
+    r += row("Superintendent &amp; PTO", esc(B.pct(b.super_pct != null ? b.super_pct : B.RATES.SUPER_PTO)), "super_pto");
+    r += row("Soft costs", esc(B.pct(b.soft_pct != null ? b.soft_pct : B.RATES.SOFT_COSTS)), "soft_costs");
     r += '<tr><td>Contingency <span class="note">yours to set</span></td>' +
       '<td class="pct"></td><td class="amt"><input data-contingency value="' +
       esc(nv(M.contingency)) + '" inputmode="decimal"></td></tr>';
@@ -1973,7 +2102,7 @@
   var PANELS = [takeoffPanel, laborPanel, reviewPanel];
 
   function renderPanel() {
-    $("panels").innerHTML = activeTab === B.ROOT_TAB ? PANELS[at]() : otherSectionPanel();
+    $("panels").innerHTML = openSectionEditable() ? PANELS[at]() : otherSectionPanel();
   }
 
   /** ONE LIST, BOTH COLLECTIONS, sorted by name.
@@ -2028,7 +2157,7 @@
    *  cells by column index and shipped Quantity and Cost written into each other's columns; the
    *  test agreed with the constants and missed it entirely. An attribute cannot be off by one. */
   function repaintNumbers() {
-    var b = bid();
+    var b = activeBid();
 
     document.querySelectorAll("[data-cost-for]").forEach(function (el) {
       var rc = rowCost(M.takeoff[parseInt(el.getAttribute("data-cost-for"), 10)]);
@@ -2352,7 +2481,7 @@
     // The section strip (drawn only when the bid has more than one section).
     var secTab = t.closest("[data-section-tab]");
     if (secTab) {
-      activeTab = secTab.getAttribute("data-section-tab");
+      show(secTab.getAttribute("data-section-tab"));
       paintSections();
       renderPanel();
       return;
@@ -2863,6 +2992,18 @@
     }
   }
 
+  /** Every filed Markups rule, for the rates a NEW section keeps (B.activateSection). NEVER THROWS: a rate service
+   *  that is down means the section is priced at the built-ins, which is what it is given when nothing is filed. */
+  async function loadMarkupRules() {
+    try {
+      var res = await api("/api/markup/rules");
+      var j = await res.json();
+      return (j && j.rules instanceof Array) ? j.rules : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
   /** The Fees + Textura default (Markups -> Global), a number or null. Read for a NEW bid only and
    *  NEVER THROWS: a rate service being down must not stop an estimate opening. */
   async function loadFeesDefault() {
@@ -3000,7 +3141,14 @@
     // A bid whose sections cannot be read is opened as it is, unseeded, with the reason on screen: refusing to
     // open it would lose the estimator's work.
     try {
-      M = B.seedNewSections(M, {
+      // AN EPOXY JOB'S BID IS AN EPOXY SECTION, with the Polish root marked off (B.sectionsForJob). Added before
+      // the seeding below, so the new section is given the library's defaults like any other new one. The Markups
+      // rules filed today are kept on it as text (B.activateSection), and no later edit to them moves this bid.
+      // A job type that is Polish, or that Estimating Tool v2 cannot price yet, adds nothing.
+      var jobType = state.work_type;
+      var jobSections = T.isJobType(jobType) && jobType !== "polish" && T.jobType(jobType).ready === true;
+      if (jobSections) ROOT = B.sectionsForJob(ROOT, jobType, { rules: await loadMarkupRules() });
+      ROOT = B.seedNewSections(ROOT, {
       saved: savedEstimate,
       laborRows: libraryLaborRows,
       laborRate: LABOR_RATE,
@@ -3010,12 +3158,16 @@
       cellValues: state.cell_values,
       split: T.isSplit(state),
       asms: ASMS, items: ITEMS, reserved: RESERVED_ITEM_IDS,
-      sf: Object.fromEntries([[B.ROOT_TAB, [state.polish_sf, state.polish_2_sf]]]),
+      sf: Object.fromEntries([[B.ROOT_TAB, [state.polish_sf, state.polish_2_sf]]].concat(jobSections
+        ? [["Epoxy", [state.system_1_sf, state.system_2_sf]]] : [])),
+      lf: Object.fromEntries(jobSections ? [["Epoxy", [state.cove_1_lf, state.cove_2_lf]]] : []),
       calcRows: laborCalc ? B.withCrewCalcFallback(await laborCalc) : null
       });
     } catch (err) {
       say("This bid's other sections cannot be read, so the library's defaults were not added: " + (err && err.message));
     }
+    // The model was replaced above (the seeding hands back a new one), so the panels' view of it is made again.
+    show(openingTab());
     followSf = B.takeoffSf(M.takeoff);
     // THE TAKEOFF TOTAL IS polish_sf, SO MAKE THE DRAFT SAY SO NOW. Two ways the draft can be
     // behind the model this page just opened with: (1) seeding filled rows in memory only, so
@@ -3032,7 +3184,9 @@
     // Only when a snapshot exists and names an SF, so a draft that never had one still writes nothing.
     var tkSf = B.takeoffSf(M.takeoff);
     var snapSf = state.computed_bid ? B.num(state.computed_bid.polish_sf) : 0;
-    if (tkSf > 0 && (tkSf !== B.num(state.polish_sf) || (snapSf > 0 && snapSf !== tkSf))) saveSoon();
+    // polish_sf is the ROOT section's total, so only a Polish-led bid is behind it; another section keeps what
+    // the first edit saves, and a plain reopen of it writes nothing.
+    if (activeTab === B.ROOT_TAB && tkSf > 0 && (tkSf !== B.num(state.polish_sf) || (snapSf > 0 && snapSf !== tkSf))) saveSoon();
 
     renderDatalist();
     $("loading").hidden = true;

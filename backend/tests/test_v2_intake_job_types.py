@@ -2,15 +2,16 @@
 
 WHAT HANZ DECIDED. The v2 job types are the live four (polish, epoxy, combo, gyp). Seal and Leveling are options
 on a bid and are never intake job types. A v2 bid stays a test copy until Kyle signs off each type, so a type that
-is not priced yet is shown and DISABLED with a plain note, and Polish is the one that is ready. Which types are
-ready is `ready` in js/work-types.js: a later phase enables one by flipping that data, not by editing a page.
+is not priced yet is shown and DISABLED with a plain note, and Polish and (since Phase 12) Epoxy are the ready ones.
+Which types are ready is `ready` in js/work-types.js: a later phase enables one by flipping that data, not by
+editing a page.
 
 WHAT IS PROVEN, BY EXECUTION. The real js/polish-intake.js runs against a DOM stub (tests/js/polish-intake-harness.js)
 with the real js/work-types.js, js/intake-scope.js and js/county-picker.js. Nothing below greps the page for a word
 and calls it proof, apart from the one check that the old county copy's functions are gone.
 
-  * The choice is the vocabulary's: the four job types in its order, Polish checked, the other three disabled, and a
-    vocabulary with Epoxy marked ready (the REAL file, edited by one flag) shows Epoxy enabled and saves it.
+  * The choice is the vocabulary's: the four job types in its order, Polish checked, Combo and Gyp disabled, and a
+    vocabulary with Combo marked ready (the REAL file, edited by one flag) shows Combo enabled and saves it.
   * A disabled type cannot be picked by the mouse or by a click the keyboard makes, and nothing is saved.
   * A saved draft opens unchanged: no job type, or one v2 cannot price, reads as Polish, the saved county is shown,
     and opening writes nothing. A save never adds a quantity the bid did not already hold.
@@ -40,7 +41,7 @@ GOLDEN = TESTS / "fixtures" / "county_picker_golden.json"
 
 needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 
-NOTE_TEXT = "Epoxy, Combo and Gyp pricing in v2 is coming. Use the live estimate for now."
+NOTE_TEXT = "Combo and Gyp pricing in v2 is coming. Use the live estimate for now."
 PAGE_FILES = ["polish-intake.html", "js/polish-intake.js", "js/bid-model.js", "js/work-types.js",
               "js/polish-sandbox.js", "js/intake-scope.js", "js/county-picker.js", "shared.js"]
 
@@ -77,10 +78,10 @@ def test_the_four_job_types_are_drawn_from_the_vocabulary_in_its_order(ran):
 
 
 @needs_node
-def test_polish_is_selected_and_the_other_three_are_disabled_with_a_plain_note(ran):
+def test_polish_is_selected_epoxy_is_ready_and_the_other_two_are_disabled_with_a_plain_note(ran):
     j = ran["jobTypes"]
     state = {r["value"]: (r["checked"], r["disabled"]) for r in j["radios"]}
-    assert state == {"epoxy": (False, True), "polish": (True, False),
+    assert state == {"epoxy": (False, False), "polish": (True, False),
                      "combo": (False, True), "gyp": (False, True)}, state
     assert j["current"] == "polish"
     assert j["note"] == {"text": NOTE_TEXT, "hidden": False}, j["note"]
@@ -93,13 +94,13 @@ def test_a_type_the_vocabulary_marks_ready_is_enabled_and_saved_with_no_page_cha
     pickable type (see the mutations below) and this goes red."""
     f = ran["jobTypes"]["fakeReady"]
     assert {r["value"]: r["disabled"] for r in f["radios"]} == {
-        "epoxy": False, "polish": False, "combo": True, "gyp": True}
-    assert f["note"]["text"] == "Combo and Gyp pricing in v2 is coming. Use the live estimate for now."
+        "epoxy": False, "polish": False, "combo": False, "gyp": True}
+    assert f["note"]["text"] == "Gyp pricing in v2 is coming. Use the live estimate for now."
     assert f["before"] == "polish"
-    assert f["afterPick"]["current"] == "epoxy" and f["afterPick"]["armed"] == 1
-    assert [r["value"] for r in f["afterPick"]["radios"] if r["checked"]] == ["epoxy"]
-    assert f["afterPick"]["savedWorkType"] == "epoxy"
-    assert f["comboStillDisabled"] == "epoxy", "a type that is still not ready was picked"
+    assert f["afterPick"]["current"] == "combo" and f["afterPick"]["armed"] == 1
+    assert [r["value"] for r in f["afterPick"]["radios"] if r["checked"]] == ["combo"]
+    assert f["afterPick"]["savedWorkType"] == "combo"
+    assert f["gypStillDisabled"] == "combo", "a type that is still not ready was picked"
 
 
 @needs_node
@@ -110,7 +111,7 @@ def test_a_disabled_type_cannot_be_picked_by_click_or_keyboard(ran):
     assert d["markupUnchanged"] is True
     # The browser half: the radio is disabled, so a real browser will not focus it, click it or reach it with
     # the arrow keys. The page's own refusal above is for a click that arrives some other way.
-    assert all(r["disabled"] for r in ran["jobTypes"]["radios"] if r["value"] != "polish")
+    assert all(r["disabled"] for r in ran["jobTypes"]["radios"] if r["value"] not in ("polish", "epoxy"))
 
 
 # ── saved drafts open unchanged ─────────────────────────────────────────────────────────────────
@@ -153,8 +154,8 @@ def test_the_module_reads_the_vocabulary_for_what_is_pickable_and_what_a_draft_o
         throws: (() => { try { S.hiddenNames(""); return false; } catch (e) { return true; } })(),
       }));
     """ % json.dumps(str(FRONTEND / "js" / "intake-scope.js")))
-    assert got["pick"] == [True, False, False, False, False, False, False, False, False]
-    assert got["open"] == ["polish"] * 9
+    assert got["pick"] == [True, True, False, False, False, False, False, False, False]
+    assert got["open"] == ["polish", "polish", "polish", "polish", "epoxy", "polish", "polish", "polish", "polish"]
     assert got["hidden"] == ["system_1_sf", "cove_1_lf", "system_2_sf", "cove_2_lf",
                              "gyp_soft_sf", "gyp_hard_sf", "gyp_corridor_sf"]
     assert got["gypHidden"] == ["system_1_sf", "polish_sf", "cove_1_lf", "system_2_sf", "polish_2_sf", "cove_2_lf"]
@@ -212,14 +213,14 @@ MUTATIONS = {
         lambda r: json.loads(json.dumps(r["countyGolden"])) != json.loads(GOLDEN.read_text(encoding="utf-8"))),
     "the page lets a script pick a type that is not ready": (
         "js/polish-intake.js", "if (!S.isPickable(key) || key === JOB) return;", "if (!T.isJobType(key) || key === JOB) return;",
-        lambda r: r["jobTypes"]["disabledClicks"]["attempts"]["epoxy"]["current"] != "polish"),
+        lambda r: r["jobTypes"]["disabledClicks"]["attempts"]["combo"]["current"] != "polish"),
     "the radios are not disabled": (
         "js/intake-scope.js", """(c.ready ? "" : ' disabled title="' + esc(note) + '"')""", '""',
-        lambda r: not all(x["disabled"] for x in r["jobTypes"]["radios"] if x["value"] != "polish")),
+        lambda r: not all(x["disabled"] for x in r["jobTypes"]["radios"] if x["value"] not in ("polish", "epoxy"))),
     "the page hard-codes polish as the one pickable type": (
         "js/intake-scope.js", "return workTypes.isJobType(key) && workTypes.jobType(key).ready === true;",
         'return key === "polish";',
-        lambda r: r["jobTypes"]["fakeReady"]["afterPick"]["current"] != "epoxy"),
+        lambda r: r["jobTypes"]["fakeReady"]["afterPick"]["current"] != "combo"),
     "a draft's own job type is trusted without asking the vocabulary": (
         "js/polish-intake.js", "JOB = S.chosenJobType(state.work_type);", 'JOB = state.work_type || "polish";',
         lambda r: r["jobTypes"]["savedDrafts"]["combo"]["current"] != "polish"),
