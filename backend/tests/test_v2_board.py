@@ -18,9 +18,12 @@ WHAT HAS TO HOLD
      the data.
   C. SEPARATE STORAGE: every key the board writes starts tw_v2_; seeding the real boards' keys
      changes nothing it reads; localStorage is never touched (the harness throws if it is).
-  D. READ ONLY: the panel carries no send, follow-up, deposit, chat or status control.
+  D. READ ONLY: the panel carries no send, follow-up, deposit, chat or status control, and the page's
+     code, executed, makes exactly one GET (to its own feed) however it is walked.
   E. THE PAGE: Direct and GC tabs by audience, test copies on the board with a chip, no price is a
-     dash and never $0, search kept, month and sort gone.
+     dash and never $0, search kept, month and sort gone. It says so when the customer portal is
+     stale or down, and "v2 total" is only ever what v2 priced.
+  F. HOSTILE TEXT: a name, email or id with markup in it comes out as plain text everywhere.
 
 Everything JavaScript here is EXECUTED (tests/js/v2-board-harness.js), not read as source text.
 """
@@ -29,6 +32,8 @@ import json
 import pathlib
 import re
 import tempfile
+from datetime import datetime, timezone
+from html.parser import HTMLParser
 
 import pytest
 from fastapi.testclient import TestClient
@@ -42,6 +47,64 @@ client = TestClient(main.app)
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 FRONTEND = ROOT / "frontend"
 HARNESS = pathlib.Path(__file__).resolve().parent / "js" / "v2-board-harness.js"
+
+
+# ── reading markup with a parser, never a pattern ────────────────────────────
+class Markup(HTMLParser):
+    """Walks a fragment of HTML and keeps what a person (or a browser) would act on: the text, every
+    tag, every attribute. `skip(tag, attrs)` names an element to leave out whole, children included.
+    Comments are not words and <style>/<script> bodies are not words, so none of them reach `text`.
+
+    A regular expression is the wrong tool for any of this: a pattern that strips tags or comments
+    in one pass can be walked around, and one that is wrong fails by looking at the wrong text."""
+
+    def __init__(self, skip=None, attrs_as_text=False):
+        super().__init__(convert_charrefs=True)
+        self._skip = skip or (lambda tag, attrs: False)
+        self._attrs_as_text = attrs_as_text      # placeholder="..." and title="..." are read by people too
+        self._dropping = None        # [tag, depth] while inside a dropped element
+        self._code = 0               # depth inside <style> / <script>
+        self.chunks, self.tags, self.attrs = [], [], []
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ("style", "script"):
+            self._code += 1
+            return
+        if self._dropping:
+            if tag == self._dropping[0]:
+                self._dropping[1] += 1
+            return
+        if self._skip(tag, dict(attrs)):
+            self._dropping = [tag, 1]
+            return
+        self.tags.append(tag)
+        for name, value in attrs:
+            self.attrs.append((tag, name, value))
+            if value and self._attrs_as_text:
+                self.chunks.append(value)
+
+    def handle_endtag(self, tag):
+        if tag in ("style", "script"):
+            self._code = max(0, self._code - 1)
+        elif self._dropping and tag == self._dropping[0]:
+            self._dropping[1] -= 1
+            if not self._dropping[1]:
+                self._dropping = None
+
+    def handle_data(self, data):
+        if not self._code and not self._dropping:
+            self.chunks.append(data)
+
+    @property
+    def text(self):
+        return " ".join(self.chunks)
+
+
+def markup(html, skip=None, attrs_as_text=False):
+    m = Markup(skip, attrs_as_text)
+    m.feed(html)
+    m.close()
+    return m
 
 
 # ── fixtures ─────────────────────────────────────────────────────────────────
@@ -141,6 +204,47 @@ def test_the_portals_row_wins_for_a_v2_bid_it_knows_and_a_real_ones_never_leaks(
     assert rows["v-deposit"]["deposit_status"] == "received" and "not_sent" not in rows["v-deposit"]
     assert rows["v-deposit"]["approved_total"] == 13000
     assert rows["v-viewed"]["bid_total"] == 12500     # our figure fills a null, never replaces one
+    # what v2 itself priced rides beside the portal's figures and is never one of them
+    assert rows["v-deposit"]["v2_total"] == 12500 and rows["v-fresh"]["v2_total"] == 12500
+    assert rows["v-unpriced"]["v2_total"] is None
+
+
+def test_an_archived_v2_bid_stays_when_the_portal_has_it_and_goes_when_it_does_not(monkeypatch):
+    """Parity with the real board, which drops an archived draft only when nothing was sent: a bid
+    the customer has is live work, whatever the Proposals Database says about its filing."""
+    drafts = [_draft("arch-sent", archived=True, has_files=True, sent_revision=1),
+              _draft("arch-never", archived=True),
+              _draft("live-one")]
+    portal = [_portal_row("arch-sent", proposal_status="sent")]
+    body = _v2(monkeypatch, drafts=drafts, portal=portal)
+    ids = {p["proposal_id"] for p in body["proposals"]}
+    assert ids == {"arch-sent", "live-one"}
+    real = {p["proposal_id"] for p in client.get("/api/portal/pipeline").json()["proposals"]}
+    assert "arch-sent" in real and "arch-never" not in real       # the real board does the same
+    # the portal down and nothing cached: neither board invents a card for an archived draft
+    main._PIPELINE_CACHE.update({"rows": None, "fetched_at": None})
+
+    def boom(*a, **k):
+        raise main.HTTPException(502, "down")
+    monkeypatch.setattr(main, "_portal", boom)
+    ids = {p["proposal_id"] for p in client.get("/api/v2/pipeline").json()["proposals"]}
+    real = {p["proposal_id"] for p in client.get("/api/portal/pipeline").json()["proposals"]}
+    assert ids == {"live-one"} and "arch-sent" not in real
+
+
+def test_the_feed_says_how_old_the_portals_answer_is(monkeypatch):
+    live = _v2(monkeypatch)
+    assert live["portal_status"] == "live" and isinstance(live["portal_fetched_at"], float)
+    stamp = live["portal_fetched_at"]
+
+    def boom(*a, **k):
+        raise main.HTTPException(502, "down")
+    monkeypatch.setattr(main, "_portal", boom)
+    stale = client.get("/api/v2/pipeline").json()
+    assert stale["portal_status"] == "stale" and stale["portal_fetched_at"] == stamp
+    main._PIPELINE_CACHE.update({"rows": None, "fetched_at": None})
+    offline = client.get("/api/v2/pipeline").json()
+    assert offline["portal_status"] == "offline" and offline["portal_fetched_at"] is None
 
 
 def test_a_portal_outage_files_a_sent_v2_bid_as_unknown_not_as_unsent(monkeypatch):
@@ -333,6 +437,106 @@ def test_no_price_is_a_dash_and_never_zero(payload):
     assert "$13,000" in cards["v-deposit"]            # the portal's approved figure wins
 
 
+def test_the_panel_calls_a_figure_v2_total_only_when_v2_priced_it(monkeypatch, payload):
+    """The card shows the board's figure (the portal's approved total wins), so the panel's "v2 total"
+    row must be the draft's own price, and the other figure gets a row that says whose it is."""
+    panels = _run(payload, [])["core"]["panels"]
+    dep = panels["v-deposit"]
+    assert "<dt>v2 total</dt><dd>$12,500</dd>" in dep           # NOT the $13,000 the card shows
+    assert "<dt>Approved total</dt><dd>$13,000</dd>" in dep
+    # a bid whose board figure IS v2's gets the one row
+    for pid in ("v-viewed", "v-fresh"):
+        assert "<dt>v2 total</dt><dd>$12,500</dd>" in panels[pid], pid
+        assert "Approved total" not in panels[pid] and "Sent total" not in panels[pid], pid
+    assert "<dt>v2 total</dt><dd>Not priced yet</dd>" in panels["v-unpriced"]
+    # sent at a different figure than v2 priced, not yet approved: "Sent total", never "v2 total"
+    edited = _v2(monkeypatch, portal=[], drafts=[_draft("v-edit")])
+    edited["proposals"][0].update({"proposal_status": "sent", "bid_total": 11000, "not_sent": False})
+    sent = _run(edited, [])["core"]["panels"]["v-edit"]
+    assert "<dt>v2 total</dt><dd>$12,500</dd>" in sent and "<dt>Sent total</dt><dd>$11,000</dd>" in sent
+
+
+# ── the customer portal's health ─────────────────────────────────────────────
+STAMP = datetime(2026, 10, 10, 15, 0, tzinfo=timezone.utc).timestamp()
+
+
+def _with_portal(payload, status, fetched_at):
+    return dict(payload, portal_status=status, portal_fetched_at=fetched_at)
+
+
+def test_the_board_says_so_when_the_portals_answer_is_old_or_missing(payload):
+    """Placement is right in every mode (the server decides it); what the page owed was a sentence
+    saying the figures may be behind. Said once, outside the board, and gone when the portal is back."""
+    html = (FRONTEND / "polish-estimates.html").read_text(encoding="utf-8")
+    assert 'id="v2-degraded" class="v2-degraded" role="status" hidden>' in html
+    assert ".v2-degraded[hidden] { display:none; }" in html       # a class display rule outranks [hidden]
+    live = _run(_with_portal(payload, "live", STAMP), [{"name": "l", "actions": []}])["runs"][0]["first"]
+    assert live["degradedHidden"] is True and live["degraded"] == ""
+    stale = _run(_with_portal(payload, "stale", STAMP), [{"name": "s", "actions": []}])["runs"][0]["first"]
+    assert stale["degradedHidden"] is False
+    assert "Showing the board as of 2026-10-10 15:00." in stale["degraded"]
+    assert "customer portal is not responding" in stale["degraded"]
+    undated = _run(_with_portal(payload, "stale", None), [{"name": "u", "actions": []}])["runs"][0]["first"]
+    assert "Showing the last answer the customer portal gave." in undated["degraded"]
+    offline = _run(_with_portal(payload, "offline", None), [{"name": "o", "actions": []}])["runs"][0]["first"]
+    assert offline["degradedHidden"] is False
+    assert "built from the list this tool keeps" in offline["degraded"]
+    assert "Created but not sent" in offline["degraded"]
+    # the notice is not part of the board, so a repaint of the columns can never wipe or double it
+    assert "not responding" not in offline["list"]
+    # and none of it is customer-facing copy with a dash in it (house rule)
+    assert "—" not in stale["degraded"] + offline["degraded"] + undated["degraded"]
+
+
+# ── hostile strings: names, emails and ids come from forms and drafts ────────
+HOSTILE_ID = "a\"b'c&d<e>"
+HOSTILE_ROWS = [
+    _draft(HOSTILE_ID, project_name="<img src=x onerror=window.__xss=1>",
+           contact_email="\"><script>window.__xss=2</script>@x.com",
+           owner_email="x<u>boss</u>@x.com"),
+    _draft("lost-one", project_name="<svg onload=window.__xss=3>", closed_lost_reason="</span><i>why</i>",
+           closed_lost_at="2026-10-11T10:00:00+00:00"),
+]
+# Every tag the board's own markup uses. A hostile string that gets through unescaped shows up as a
+# tag outside this set (or an attribute that is not a plain name); if a new tag is added on purpose,
+# add it here.
+BOARD_TAGS = {"div", "span", "h2", "button", "dl", "dt", "dd", "p", "a", "option", "b"}
+PLAIN_ATTR = re.compile(r"^[a-z][a-z0-9-]*$")
+
+
+def _assert_inert(label, html):
+    m = markup(html)
+    stray = [t for t in m.tags if t not in BOARD_TAGS]
+    assert not stray, (label, stray, html)
+    bad = [(t, n) for t, n, _v in m.attrs if not PLAIN_ATTR.match(n) or n.startswith("on")]
+    assert not bad, (label, bad, html)
+
+
+def test_hostile_names_emails_and_ids_come_out_as_plain_text(monkeypatch):
+    payload = _v2(monkeypatch, drafts=HOSTILE_ROWS, portal=[])
+    out = _run(payload, [{"name": "d", "actions": [{"type": "open", "id": HOSTILE_ID}]},
+                         {"name": "l", "actions": [{"type": "tab", "tab": "lost"}]}])
+    pieces = {}
+    pieces.update({"card " + k: v for k, v in out["core"]["cards"].items()})
+    pieces.update({"panel " + k: v for k, v in out["core"]["panels"].items()})
+    for run in out["runs"]:
+        for where in ("first", "last"):
+            for field in ("list", "tabs", "est", "panel"):
+                pieces["%s %s %s" % (run["name"], where, field)] = run[where][field]
+    assert len(pieces) > 10
+    for label, html in pieces.items():
+        _assert_inert(label, html)
+    # the words themselves arrive, as text
+    card = out["core"]["cards"][HOSTILE_ID]
+    assert "&lt;img src=x onerror=window.__xss=1&gt;" in card
+    # an id in an attribute: quote, apostrophe, ampersand and angle brackets all escaped
+    assert 'data-id="a&quot;b&#39;c&amp;d&lt;e&gt;"' in card
+    # and in the link: encodeURIComponent leaves an apostrophe alone, so the escape is what covers it
+    panel = out["core"]["panels"][HOSTILE_ID]
+    assert re.findall(r'href="([^"]*)"', panel) == ["/polish-intake.html?d=a%22b&#39;c%26d%3Ce%3E"]
+    assert "x&lt;u&gt;boss" in out["runs"][0]["last"]["est"]       # the estimator menu, label and value
+
+
 # ── C. separate storage ──────────────────────────────────────────────────────
 REAL_BOARD_KEYS = {"tw_crm_tab": "lost", "tw_crm_tab_gc": "lost", "tw_crm_est": "kyle@wetreadwell.com",
                    "tw_crm_est_gc": "nobody@x.com", "tw_crm_month": "2026-01", "tw_crm_view_active": "table",
@@ -406,7 +610,8 @@ def test_the_page_has_no_month_or_sort_controls_and_says_beta():
     assert 'id="month"' not in html and 'id="sort"' not in html and 'id="dir"' not in html
     assert '<span class="tag">Beta</span>' in html
     assert 'href="/polish-intake.html">Open Estimating Tool v2</a>' in html
-    assert "—" not in re.sub(r"<!--.*?-->|<style.*?</style>", "", html, flags=re.S)
+    # house rule: no em dash in copy. Read with a parser, so a comment or the stylesheet is not copy.
+    assert "—" not in markup(html, attrs_as_text=True).text
 
 
 # ── D. read only ─────────────────────────────────────────────────────────────
@@ -421,8 +626,8 @@ def test_clicking_a_card_opens_a_read_only_panel_with_one_link(payload):
     opened, escaped = run[0], run[1]
     assert opened["last"]["panelOpen"] is True
     panel = opened["last"]["panel"]
-    for fact in ("Job v-deposit", "Estimator", "Kyle", "Stage", "Deposit received", "v2 total", "$13,000",
-                 "Last updated"):
+    for fact in ("Job v-deposit", "Estimator", "Kyle", "Stage", "Deposit received", "v2 total", "$12,500",
+                 "Approved total", "$13,000", "Last updated"):
         assert fact in panel, fact
     assert re.findall(r'href="([^"]*)"', panel) == ["/polish-intake.html?d=v-deposit"]
     assert "Open in Estimating Tool v2" in panel
@@ -439,11 +644,22 @@ def test_the_panel_has_no_customer_facing_or_status_controls(payload):
         assert not re.search(r"<(input|textarea|select|form)", html, re.I), pid
         # The words a person reads as INSTRUCTIONS: labels, the notice, the link, the close button.
         # The project's own name, its stage ("Deposit received") and chips are facts about the bid.
-        static = re.sub(r'<(dd|h2)[^>]*>.*?</(?:dd|h2)>|<div class="chips">.*?</div>', " ", html, flags=re.S)
-        text = re.sub(r"<[^>]+>", " ", static)
+        text = markup(html, skip=lambda tag, attrs: tag in ("dd", "h2")
+                      or (tag == "div" and "chips" in (attrs.get("class") or "").split())).text
         # "Read only. Nothing on this panel reaches a customer." is the one sentence allowed to say so
         text = text.replace("Nothing on this panel reaches a customer.", "")
         assert not FORBIDDEN.search(text.replace("Open in Estimating Tool v2", "")), (pid, text)
     # and the cards carry no action buttons either
     cards = _run(payload, [])["core"]["cards"]
     assert not any("<button" in c for c in cards.values())
+
+
+def test_the_page_makes_one_get_to_its_own_feed_and_nothing_else(payload):
+    """The page's code is EXECUTED through a full walk (tabs, search, estimator, open, close, escape)
+    and every request it made is read back: a write on load, or behind a click, shows up here."""
+    walk = ACTIONS + [{"type": "open", "id": "v-deposit"}, {"type": "escape"},
+                      {"type": "open", "id": "v-viewed"}, {"type": "close"}]
+    runs = _run(payload, [{"name": "walk", "actions": walk}, {"name": "idle", "actions": []}])["runs"]
+    for run in runs:
+        assert run["fetches"] == [{"url": "/api/v2/pipeline", "method": "GET"}], run["fetches"]
+        assert run["opened"] == [], "the page sent the browser somewhere on its own"

@@ -44,6 +44,32 @@
 
   function openHref(id) { return "/polish-intake.html?d=" + encodeURIComponent(String(id)); }
 
+  /** What Estimating Tool v2 itself priced: the draft's own total, never the portal's figure. A card
+   *  shows the figure the Direct Projects board shows (C.cardTotal, which becomes the customer's
+   *  approved total), so this is the one number that is always v2's. null when nothing is priced. */
+  function v2Total(p) { return typeof p.v2_total === "number" ? p.v2_total : null; }
+
+  /** The notice for a customer portal that is not answering: "" when it is live (or unsaid), else
+   *  the sentence to show above the board. `fetchedAt` is epoch seconds, the server's own stamp.
+   *  Plain text, escaped here, so the page can put it straight into the banner. */
+  function degradedHtml(status, fetchedAt, env) {
+    if (!status || status === "live") return "";
+    var msg;
+    if (status === "stale") {
+      var when = "";
+      if (typeof fetchedAt === "number" && isFinite(fetchedAt)) {
+        var iso = new Date(fetchedAt * 1000).toISOString();
+        when = env && env.fmtDateTime ? env.fmtDateTime(iso) : iso;
+      }
+      msg = (when ? "Showing the board as of " + when + ". " : "Showing the last answer the customer portal gave. ")
+        + "The customer portal is not responding, so nothing a customer did since then is shown.";
+    } else {
+      msg = "The customer portal is not responding. This board is built from the list this tool keeps, so "
+        + "nothing a customer did is shown, and a bid that was sent may sit under Created but not sent.";
+    }
+    return "<span>" + esc(msg) + "</span>";
+  }
+
   // ── which cards, on which tab ──────────────────────────────────────────────
   // The four pools PARTITION the rows: a dead deal is Lost whichever board it was on, a handed-off
   // one is Handed off, and everything else is live on the board its audience names. Test copies
@@ -150,7 +176,7 @@
       + (act ? '<div class="meta act"><span class="k">' + esc(act.label) + ":</span> " + esc(dateOf(act.ts, env)) + "</div>" : "")
       + (chips ? '<div class="chips">' + chips + "</div>" : "")
       // A bid with no price yet shows a dash, never $0: a v2 bid is saved before it has a price.
-      + (total != null ? '<div class="val" title="Priced in Estimating Tool v2">' + esc(money(total)) + "</div>"
+      + (total != null ? '<div class="val" title="The same figure the Direct Projects board shows">' + esc(money(total)) + "</div>"
                        : '<div class="val val-none" title="Not priced yet">&mdash;</div>')
       + "</div>";
   }
@@ -185,6 +211,7 @@
   function panelHtml(p, env) {
     var act = C.lastActivity(p);
     var total = C.cardTotal(p);
+    var priced = v2Total(p);
     var email = C.estimatorOf(p);
     function row(k, v) { return "<dt>" + esc(k) + "</dt><dd>" + v + "</dd>"; }
     var chips = chipsHtml(p);
@@ -196,7 +223,11 @@
       + row("Project", esc(p.project_name || "Untitled"))
       + row("Estimator", email ? esc(C.nameOf(email)) + (C.isAssigned(p) ? "" : " (whoever built it)") : "Nobody yet")
       + row("Stage", esc(C.stage(p)))
-      + row("v2 total", total != null ? esc(money(total)) : "Not priced yet")
+      // "v2 total" is only ever v2's own figure. When the board's figure (the card's) is a different
+      // one, it gets its own row under the name that says whose it is, so neither is mislabelled.
+      + row("v2 total", priced != null ? esc(money(priced)) : "Not priced yet")
+      + (total != null && total !== priced
+          ? row(typeof p.approved_total === "number" ? "Approved total" : "Sent total", esc(money(total))) : "")
       + row("Last updated", act ? esc(dateOf(act.ts, env)) : "&mdash;")
       + "</dl>"
       + '<a class="v2p-open" href="' + esc(openHref(p.proposal_id)) + '">Open in Estimating Tool v2</a>';
@@ -204,7 +235,7 @@
 
   return {
     KEYS: KEYS, TABS: TABS, TAB_LABEL: TAB_LABEL,
-    esc: esc, money: money, openHref: openHref,
+    esc: esc, money: money, openHref: openHref, v2Total: v2Total, degradedHtml: degradedHtml,
     pool: pool, counts: counts, tabsToShow: tabsToShow, normTab: normTab,
     columnsFor: columnsFor, groupFor: groupFor,
     filterSearch: filterSearch, filterEstimator: filterEstimator, estimatorCounts: estimatorCounts,

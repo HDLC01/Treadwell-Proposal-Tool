@@ -7853,6 +7853,8 @@ def api_v2_pipeline() -> Dict[str, Any]:
     return {"ok": True,
             "proposals": v2_pipeline.build_rows(summaries, portal_rows, portal_status),
             "portal_status": portal_status,
+            # The cache's stamp, null when "offline": the page dates a "stale" notice with it.
+            "portal_fetched_at": _PIPELINE_CACHE["fetched_at"],
             "read_ceiling": v2_pipeline.READ_CEILING}
 
 

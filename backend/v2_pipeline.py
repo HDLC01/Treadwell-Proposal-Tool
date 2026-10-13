@@ -7,9 +7,10 @@ boards' route, /api/portal/pipeline, and the page code behind it are not touched
 into this file.
 
 WHAT IT RETURNS: every Estimating Tool v2 draft (`polish_beta`), from the moment it is created,
-test copies included, and nothing else. A v2 bid that was never generated is still a row here (the
-real board hides those, because a started intake form is not a proposal; on a beta board the
-started bid IS the thing being watched).
+test copies included, and nothing else. An archived v2 draft is left off unless the customer portal
+still has a row for it (a sent bid is live work), which is what the real board does too. A v2 bid
+that was never generated is still a row here (the real board hides those, because a started intake
+form is not a proposal; on a beta board the started bid IS the thing being watched).
 
 THE ROWS ARE THE SAME SHAPE as pipeline rows, so the browser reads them with the shared, DOM-free
 js/crm-core.js (stage, group, cardTotal) and the columns match the real board exactly. A v2 draft the
@@ -31,9 +32,10 @@ READ_CEILING = 300
 
 
 def is_v2(summary: Dict[str, Any]) -> bool:
-    """A live (not archived) Estimating Tool v2 draft. `polish_beta` is drafts._polish_beta's
-    answer to "was this priced in v2", already coerced to a real boolean on both read paths."""
-    return bool(summary.get("polish_beta")) and not summary.get("archived")
+    """An Estimating Tool v2 draft. `polish_beta` is drafts._polish_beta's answer to "was this
+    priced in v2", already coerced to a real boolean on both read paths. Archived or not: whether
+    an archived one belongs on the board is build_rows' call, because it turns on the portal."""
+    return bool(summary.get("polish_beta"))
 
 
 def _synth(s: Dict[str, Any], *, unknown: bool) -> Dict[str, Any]:
@@ -52,6 +54,7 @@ def _synth(s: Dict[str, Any], *, unknown: bool) -> Dict[str, Any]:
         "last_activity_at": s.get("updated_at"),
         # NOT approved_total: nobody has approved a draft. cardTotal() reads both fields.
         "bid_total": s.get("total"),
+        "v2_total": s.get("total"),
         "work_type": s.get("work_type"),
         "audience": s.get("audience"),
         "won_at": s.get("won_at"),
@@ -77,6 +80,9 @@ def _decorate(row: Dict[str, Any], s: Dict[str, Any]) -> Dict[str, Any]:
     out = dict(row)
     out["is_test"] = s.get("is_test")
     out["audience"] = s.get("audience")
+    # What Estimating Tool v2 itself priced, kept apart from the portal's own figures (bid_total /
+    # approved_total) so the panel can say "v2 total" truthfully once the portal has a different one.
+    out["v2_total"] = s.get("total")
     if out.get("bid_total") is None and s.get("total") is not None:
         out["bid_total"] = s["total"]
     if s.get("won_at"):
@@ -98,6 +104,11 @@ def build_rows(summaries: List[Dict[str, Any]], portal_rows: List[Dict[str, Any]
         if not is_v2(s):
             continue
         portal = by_id.get(s["id"])
+        # An archived draft is filed away, so it only stays when the portal still has a row for it:
+        # a bid that was sent is live work whatever the Proposals Database says, and the real board
+        # keeps it for exactly that reason (it drops an archived draft only when nothing is sent).
+        if s.get("archived") and portal is None:
+            continue
         if portal is not None:
             row = _decorate(portal, s)
         else:

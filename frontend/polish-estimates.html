@@ -33,6 +33,12 @@
     .hint-quiet.is-last { margin-bottom:14px; }
     .hint-quiet b { font-weight:700; }
 
+    /* The customer portal's notice. [hidden] restated: a class display rule outranks the attribute. */
+    .v2-degraded { display:flex; align-items:center; gap:8px; font-size:12.5px; font-weight:600;
+      background:#fdf6e3; border:1px solid #e8d9a8; color:#7a5c00; border-radius:8px;
+      padding:8px 12px; margin:0 0 10px; }
+    .v2-degraded[hidden] { display:none; }
+
     .tw-tabs { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:0 0 12px; }
     .tw-tab { background:#fff; color:var(--ink-v); border:1px solid var(--line); border-radius:999px;
       min-height:36px; padding:0 14px; font:700 13px system-ui; cursor:pointer; display:inline-flex;
@@ -131,7 +137,8 @@
     </div>
     <p class="hint">Every bid made in Estimating Tool v2, from the moment it is created, in the same columns as Direct Projects and GC Projects. Click a card to see it, and open it in the tool to keep working.</p>
     <p class="hint-quiet">These figures never reach <b>Analytics</b>. Analytics is built entirely from BasisBoard and does not read this tool's projects, so nothing priced here can move a real number.</p>
-    <p class="hint-quiet is-last"><b>v2 total</b> is what Estimating Tool v2 priced. It is not the estimate sheet's lump sum, and not necessarily what a proposal document would print. This board only reads: it sends nothing to a customer.</p>
+    <p class="hint-quiet is-last"><b>v2 total</b> is what Estimating Tool v2 priced. It is not the estimate sheet's lump sum, and not necessarily what a proposal document would print. A card shows the same figure the Direct Projects board does, and its panel adds the sent or approved total when that is different from v2's. This board only reads: it sends nothing to a customer.</p>
+    <div id="v2-degraded" class="v2-degraded" role="status" hidden></div>
     <div id="v2-tabs" class="tw-tabs"></div>
     <div id="toolbar" class="toolbar" hidden>
       <input id="q" type="search" placeholder="Search v2 estimates…" aria-label="Search v2 estimates" autocomplete="off" />

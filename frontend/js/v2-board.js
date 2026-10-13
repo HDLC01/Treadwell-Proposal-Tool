@@ -31,7 +31,24 @@
   var CUR = null;        // the project whose panel is open
   var OPENED_FROM_URL = false;
 
-  var ENV = { fmtDate: function (ts) { return (window.TW && TW.fmtBizDate) ? TW.fmtBizDate(ts) : String(ts || "").slice(0, 10); } };
+  var DEG_SIG = "";      // what the portal notice shows; an unchanged poll must not repaint it
+
+  var ENV = {
+    fmtDate: function (ts) { return (window.TW && TW.fmtBizDate) ? TW.fmtBizDate(ts) : String(ts || "").slice(0, 10); },
+    fmtDateTime: function (iso) { return (window.TW && TW.fmtBizDateTime) ? TW.fmtBizDateTime(iso) : String(iso || "").slice(0, 16); }
+  };
+
+  // The customer portal's own health, said the way the real board says it: nothing when it is live,
+  // a notice when the rows are old (stale) or were rebuilt from this tool's list alone (offline). It
+  // lives outside #list, so the board's repaint never touches it.
+  function paintDegraded(j) {
+    var html = V.degradedHtml(j && j.portal_status, j && j.portal_fetched_at, ENV);
+    if (html === DEG_SIG) return;
+    DEG_SIG = html;
+    var el = $("v2-degraded");
+    el.innerHTML = html;
+    el.hidden = !html;
+  }
 
   function tokenSoon() {
     return new Promise(function (res) {
@@ -137,6 +154,7 @@
       if (!r.ok || !j || j.ok === false) throw new Error((j && (j.error || j.detail)) || "the server could not read the list");
       ALL = j.proposals || [];
       LOADED = true;
+      paintDegraded(j);
       $("ceiling").hidden = false;
       $("ceiling").textContent = "Reads the " + (j.read_ceiling || 300) + " most recently updated projects, so a v2 bid older than that will not appear here.";
       render();

@@ -11,8 +11,8 @@
  * `core`: crm-core's own stage()/boardOf() and the board's own pool()/counts() over the payload.
  * `runs`: the whole v2-board.js in a bare VM with ONLY a stub page (a bag of fields, not jsdom, so a
  *         missing import cannot hide behind a global), reporting what it painted, every sessionStorage
- *         key it READ and WROTE, and every address it sent the browser to. localStorage THROWS if
- *         touched: this board has no business there.
+ *         key it READ and WROTE, every address it sent the browser to, and every request it made
+ *         (`fetches`: url and method). localStorage THROWS if touched: this board has no business there.
  */
 const fs = require("fs");
 const path = require("path");
@@ -41,7 +41,7 @@ function stub() {
 async function run(payload, scenario) {
   const els = {};
   const el = (id) => (els[id] = els[id] || stub());
-  const reads = [], writes = [], opened = [], urls = [];
+  const reads = [], writes = [], opened = [], urls = [], fetches = [];
   const session = Object.assign({}, scenario.session || {});
   let docKeydown = null;
   const box = {
@@ -66,11 +66,19 @@ async function run(payload, scenario) {
       box.location.pathname = i < 0 ? String(u) : String(u).slice(0, i);
     } },
     TW: { fmtBizDate(iso) { return String(iso || "").slice(0, 10); },
+          fmtBizDateTime(iso) { return String(iso || "").slice(0, 16).replace("T", " "); },
           authHeaders() { return {}; }, resolveApiBase() { return ""; } },
     __TW_TOKEN: "t",
-    fetch: async () => ({ ok: true, json: async () => payload }),
+    // Every request the page makes is recorded, with its method: a board that "only reads" is held
+    // to exactly that by test_v2_board.py. (There is no XMLHttpRequest or sendBeacon in this VM, so
+    // using either throws and fails the run instead of slipping past the log.)
+    fetch: async (url, init) => {
+      fetches.push({ url: String(url), method: String((init && init.method) || "GET").toUpperCase() });
+      return { ok: true, json: async () => payload };
+    },
   };
   box.window = box; box.self = box; box.TWCrm = C;
+  el("v2-degraded").hidden = true;       // polish-estimates.html ships it hidden (test_v2_board.py checks)
   vm.createContext(box);
   vm.runInContext(coreSrc, box, { filename: "v2-board-core.js" });
   vm.runInContext(boardSrc, box, { filename: "v2-board.js" });
@@ -80,6 +88,7 @@ async function run(payload, scenario) {
     count: el("count").textContent, toolbarHidden: el("toolbar").hidden,
     clearHidden: el("clear").hidden, ceiling: el("ceiling").textContent,
     panel: el("v2-panel").innerHTML, panelOpen: el("v2-panel").classList.contains("open"),
+    degraded: el("v2-degraded").innerHTML, degradedHidden: el("v2-degraded").hidden,
   });
   const first = snap();
   for (const a of scenario.actions || []) {
@@ -101,7 +110,7 @@ async function run(payload, scenario) {
     }
   }
   return { name: scenario.name, first: first, last: snap(), reads: reads, writes: writes,
-           opened: opened, urls: urls, session: session };
+           opened: opened, urls: urls, session: session, fetches: fetches };
 }
 
 async function main() {
