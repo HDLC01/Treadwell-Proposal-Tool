@@ -15,6 +15,9 @@ The rules pinned here, in the order the estimator meets them:
   * a county picked by hand, or held by a saved draft, is NEVER overwritten and costs no lookup;
   * a later address re-fills only a county that was itself a fill;
   * a county or city the list has no row for stays empty (and clears a stale fill);
+  * a fill belongs to its address: it goes when the street is emptied or nothing answers for the new one;
+  * a county the estimator cleared is theirs too, and their typing in the county box is never interrupted;
+  * a city with no row of its own gets the county rate AND a sentence saying the city may charge more;
   * opening a saved bid fires nothing;
   * any failure is silent and a later change retries; a slow answer for a left address is dropped.
 """
@@ -210,6 +213,148 @@ def test_a_slow_answer_for_an_address_already_left_is_dropped(page):
     assert s["after"] == "Wyandotte County, KS", "the old address's answer overwrote the new one"
 
 
+# ---------------------------------------------------------------- a fill belongs to its address
+
+def test_no_answer_for_a_new_address_removes_the_fill_made_for_the_old_one(page):
+    """Not found (a new build, a rural road), down, or an empty answer: the county from the OLD address
+    must not stay on screen under a note that says it was filled from the address."""
+    rows = page["staleAfterNoAnswer"]
+    assert [r["mode"] for r in rows] == ["not_found", "down", "empty"]
+    for r in rows:
+        assert r["before"] == "Sedgwick County, KS", r["mode"]
+        assert r["keys"]["county"] == "" and r["keys"]["county_remodel_rate"] is None, r["mode"]
+        assert r["has"] is False and r["input"] == "", r["mode"]
+        assert AUTO_NOTE not in r["note"], r["mode"]
+
+
+def test_emptying_the_street_removes_the_fill_and_typing_it_back_asks_again(page):
+    s = page["streetCleared"]
+    assert s["emptied"]["keys"]["county"] == "" and s["emptied"]["has"] is False
+    assert s["back"]["keys"]["county"] == "Sedgwick County, KS" and s["back"]["auto"] is True
+    assert s["back"]["lookups"] == 2, "the same street typed back was not looked up again"
+
+
+def test_a_picked_address_keeps_photons_guess_when_the_census_never_answers(page):
+    """The guess is for THIS address, so only an older address's fill is removed on a failure."""
+    g = page["guessSurvivesNoAnswer"]
+    assert g["keys"]["county"] == "Sedgwick County, KS" and g["auto"] is True and g["lookups"] == 1
+
+
+def test_an_address_that_moved_on_while_the_list_loaded_gets_no_stale_fill(page):
+    m = page["movedOnWhileLoading"]
+    assert m["typed"] == "", "an answer for an address already left landed when the list arrived"
+    assert m["guess"] == "", "Photon's guess for an address already left landed when the list arrived"
+    assert m["typedSaves"] == 0 and m["guessSaves"] == 0, "a stale county was written to the draft, even briefly"
+    assert m["guessAlone"] == "Sedgwick County, KS", "the guess never lands once the list does"
+
+
+# ---------------------------------------------------------------- the typed city, and the Census's doubts
+
+def test_with_no_zip_the_typed_city_beats_a_census_place_it_may_have_got_wrong(page):
+    """Real, 2026-10-13: 701 N 7th St, Kansas City KS with no zip comes back as Edwardsville, place_sure
+    true (nothing to disprove it). Kansas City KS has a verified row in that county; Edwardsville has
+    none, so the county floor of 7.5% would under-tax the bid by 1.625 points."""
+    t = page["typedCityWins"]
+    for how in ("noZip", "photon"):
+        assert t[how]["keys"]["county"] == "Kansas City, KS", how
+        assert t[how]["keys"]["county_remodel_rate"] == pytest.approx(0.09125), how
+    # A postal name with no row (Shawnee Mission) never beats the Census place.
+    assert t["postalName"]["keys"]["county"] == "Overland Park, KS"
+    # A typed city whose row is in ANOTHER county never beats the Census county.
+    assert t["otherCounty"]["keys"]["county"] == "Shawnee County, KS"
+
+
+# ---------------------------------------------------------------- a city with no row of its own
+
+def test_a_city_the_list_has_no_row_for_gets_the_county_rate_and_a_warning(page):
+    c = page["cityNotOnList"]
+    for name, county, rate in (("gardner", "Johnson County, KS", 0.07975),
+                               ("bonner", "Wyandotte County, KS", 0.075),
+                               ("derby", "Sedgwick County, KS", 0.075)):
+        row = c[name]
+        assert row["keys"]["county"] == county and row["keys"]["county_remodel_rate"] == pytest.approx(rate), name
+        assert "is not on the list, so this is the county rate only" in row["note"], name
+        assert "A city can charge its own tax on top." in row["note"], name
+        assert row["note"].endswith(AUTO_NOTE), name        # the fill sentence stays last
+        said = row["note"].split("Never on materials.")[1]  # the sentences this change added
+        assert "—" not in said and "–" not in said, "plain words: no dashes (%s)" % name
+    assert c["gardner"]["note"].count("Gardner is not on the list") == 1
+    assert "Bonner Springs is not on the list" in c["bonner"]["note"]
+    assert "Derby is not on the list" in c["derby"]["note"]
+
+
+def test_the_warning_arrives_when_a_later_answer_names_the_city(page):
+    """Photon gave a county and no city; the Census then names Gardner: same county row, new sentence."""
+    c = page["cityNotOnList"]["lateCity"]
+    assert c["keys"]["county"] == "Johnson County, KS" and c["auto"] is True
+    assert "Gardner is not on the list" in c["note"]
+
+
+def test_no_warning_where_the_county_rate_is_the_right_one(page):
+    c = page["cityNotOnList"]
+    # A city with its own verified row, an address outside any city, a hand pick: nothing to warn about.
+    for name in ("withRow", "unincorporated", "hand"):
+        assert "is not on the list" not in c[name]["note"], name
+    # Wichita levies no city tax of its own (the Sedgwick row's city_ok), so the county rate is right.
+    assert c["wichita"]["keys"]["county"] == "Sedgwick County, KS"
+    assert "is not on the list" not in c["wichita"]["note"]
+    # Missouri labor is exempt: there is no rate for a city to add to.
+    assert c["missouri"]["keys"]["county"] == "Jackson County, MO"
+    assert "is not on the list" not in c["missouri"]["note"]
+
+
+def test_the_city_ok_list_names_real_places_and_only_where_the_row_says_so():
+    rows = {(r["kind"], r["name"], r["state"]): r for r in reference_tax.list_tax_areas()}
+    assert rows[("county", "Sedgwick", "KS")]["city_ok"] == ["Wichita"]
+    city_rows = {r["name"] for r in rows.values() if r["kind"] == "city"}
+    for r in rows.values():
+        for name in r.get("city_ok", []):
+            assert r["kind"] == "county" and name not in city_rows, "a city with its own row needs no city_ok"
+    assert "Wichita currently levies no general city sales tax" in rows[("county", "Sedgwick", "KS")]["notes"]
+
+
+# ---------------------------------------------------------------- the state guards
+
+def test_missouri_and_kansas_twins_are_told_apart(page):
+    """Both states have a Johnson County (7.975% in KS, exempt in MO), and a Missouri city named like a
+    Kansas one is not that city."""
+    g = page["stateGuards"]
+    assert g["johnsonKS"]["keys"]["county"] == "Johnson County, KS"
+    assert g["johnsonKS"]["keys"]["county_remodel_rate"] == pytest.approx(0.07975)
+    assert g["johnsonMO"]["keys"]["county"] == "Johnson County, MO"
+    assert g["johnsonMO"]["keys"]["county_remodel_rate"] is None
+    assert g["photonMoCityNoCounty"]["keys"]["county"] == "", "Kansas City, MO was filled as Kansas City, KS"
+
+
+# ---------------------------------------------------------------- the box is the estimator's
+
+def test_a_county_the_estimator_cleared_is_not_filled_again_by_an_address_edit(page):
+    c = page["clearIsTheirs"]
+    for name in ("afterHandClear", "afterClearedFill"):
+        assert c[name]["keys"]["county"] == "" and c[name]["has"] is False, name
+    assert c["afterHandClear"]["lookups"] == 0, "a cleared box spent a lookup"
+    assert c["afterClearedFill"]["lookups"] == 1, "a cleared fill asked again"
+    # A fill the PAGE removed (a new address with no row) is not the estimator's Clear: the next fills.
+    assert c["pageRemovalIsNot"]["removedByPage"] is False
+    assert c["pageRemovalIsNot"]["keys"]["county"] == "Sedgwick County, KS"
+
+
+def test_the_estimators_typing_in_the_county_box_is_never_overwritten(page):
+    t = page["typingInCountyBox"]
+    assert t["typing"] == {"input": "john", "open": True}
+    assert t["during"]["input"] == "john" and t["during"]["open"] is True, "the answer overwrote their text"
+    assert t["during"]["keys"]["county"] == "" and t["during"]["has"] is False
+    # Once they are done, the same address is looked up again and fills.
+    assert t["afterEscape"]["keys"]["county"] == "Sedgwick County, KS" and t["afterEscape"]["lookups"] == 2
+
+
+def test_an_answer_before_the_list_was_requested_is_asked_again_later(page):
+    """The live intake requests the list after its condition defaults arrive; an answer that lands first
+    cannot be filled, and committing the same address afterwards must not be swallowed as a repeat."""
+    b = page["beforeLoadCalled"]
+    assert b["before"] == "" and b["after"] == "Sedgwick County, KS" and b["lookups"] == 2
+
+
 # ---------------------------------------------------------------- the pages carry it
 
 @pytest.mark.parametrize("html, script", [("index.html", "js/index.js"),
@@ -243,8 +388,15 @@ def test_the_frontend_calls_the_route_the_server_serves():
 
 MUTATIONS = {
     "the picker overwrites a hand pick": (
-        "js/county-picker.js", 'if (pick && !autoPick) return "hand";', 'if (false) return "hand";',
+        "js/county-picker.js", 'if ((pick && !autoPick) || handCleared) return "hand";', 'if (false) return "hand";',
         lambda r: r["live"]["handPickKept"]["keys"]["county"] != "Jackson County, MO"),
+    "a Clear is not remembered": (
+        "js/county-picker.js", "handCleared = true;", "handCleared = false;",
+        lambda r: r["live"]["clearIsTheirs"]["afterHandClear"]["keys"]["county"] != ""),
+    "the picker fills over the estimator's typing": (
+        "js/county-picker.js", 'if (input && String(input.value || "") !== (pick ? pick.county : "")) return "busy";',
+        "",
+        lambda r: r["live"]["typingInCountyBox"]["during"]["input"] != "john"),
     "a saved county counts as a fill": (
         "js/county-picker.js", "autoPick = false;                      // a saved county is treated as chosen, never refilled",
         "autoPick = !!state.county;",
@@ -256,30 +408,94 @@ MUTATIONS = {
         "js/county-picker.js", "if (pl) {", "if (false) {",
         lambda r: r["live"]["cityRow"]["keys"]["county"] != "Olathe, KS"),
     "a stale fill is left standing": (
-        "js/county-picker.js", "if (pick && autoPick) clear();", ";",
+        "js/county-picker.js", "if (pick && autoPick) reset();", ";",
         lambda r: r["live"]["notInList"]["staleFillCleared"]["keys"]["county"] != ""),
     "the note forgets to say it was filled": (
-        "js/county-picker.js", 'return baseNote() + (pick && autoPick ? " " + AUTO_NOTE : "");',
-        "return baseNote();",
+        "js/county-picker.js", 'return baseNote() + gap + " " + AUTO_NOTE;', "return baseNote() + gap;",
         lambda r: not r["live"]["pickFills"]["final"]["note"].endswith(r["autoNote"])),
+    "the county state is ignored": (
+        "js/county-picker.js", 'if (c.kind !== "city" && c.state === st && bareName(c.name) === cn) return c;',
+        'if (c.kind !== "city" && bareName(c.name) === cn) return c;',
+        lambda r: r["live"]["stateGuards"]["johnsonKS"]["keys"]["county"] != "Johnson County, KS"),
+    "the city state is ignored": (
+        "js/county-picker.js", 'if (c.kind !== "city" || c.state !== st || bareName(c.name) !== pl) continue;',
+        'if (c.kind !== "city" || bareName(c.name) !== pl) continue;',
+        lambda r: r["live"]["stateGuards"]["photonMoCityNoCounty"]["keys"]["county"] != ""),
+    "a city with no row gets no warning": (
+        "js/county-picker.js",
+        '? " " + autoGap + " is not on the list, so this is the county rate only. A city can charge its own tax on top."',
+        '? ""',
+        lambda r: "Gardner is not on the list" not in r["live"]["cityNotOnList"]["gardner"]["note"]),
+    "the warning ignores a row that vouches for its city": (
+        "js/county-picker.js",
+        "var verified = (row.city_ok || []).some(function (n) { return bareName(n) === bareName(placeName); });",
+        "var verified = false;",
+        lambda r: "is not on the list" in r["live"]["cityNotOnList"]["wichita"]["note"]),
+    "the warning is said about Missouri labor": (
+        "js/county-picker.js", 'var gap = autoGap && stateOf(pick) !== "MO"', "var gap = autoGap",
+        lambda r: "is not on the list" in r["live"]["cityNotOnList"]["missouri"]["note"]),
+    "a later answer's city never reaches the note": (
+        "js/county-picker.js", "if (autoGap !== gap) { autoGap = gap; renderNote(); }", ";",
+        lambda r: "Gardner is not on the list" not in r["live"]["cityNotOnList"]["lateCity"]["note"]),
     "a slow answer overwrites a newer address": (
         "js/county-autofill.js", "var stale = function () { return mine !== seq || key !== keyNow(); };",
         "var stale = function () { return false; };",
         lambda r: r["live"]["staleAnswer"]["after"] != "Wyandotte County, KS"),
     "a doubted city is trusted anyway": (
-        "js/county-autofill.js", "ans.place_sure === false ? val(els.city) : ans.place);",
-        "ans.place);",
+        "js/county-autofill.js", "if (ans.place_sure === false) return typed;", "if (false) return typed;",
         lambda r: r["live"]["placeUnsure"]["unsure"]["keys"]["county"] != "Kansas City, KS"),
+    "the typed city never beats the Census place": (
+        "js/county-autofill.js", "if (row && row.kind === \"city\") return typed;", ";",
+        lambda r: r["live"]["typedCityWins"]["noZip"]["keys"]["county"] != "Kansas City, KS"),
+    "the typed city beats the Census place even with a zip": (
+        "js/county-autofill.js", 'if (typed && val(els.zip).replace(/\\D/g, "").length < 5) {', "if (typed) {",
+        lambda r: r["live"]["placeUnsure"]["sure"]["keys"]["county"] != "Wyandotte County, KS"),
+    "a typed city with no row is trusted over the Census": (
+        "js/county-autofill.js", "if (row && row.kind === \"city\") return typed;", "return typed;",
+        lambda r: r["live"]["typedCityWins"]["postalName"]["keys"]["county"] != "Overland Park, KS"),
     "a failed lookup is never retried": (
-        "js/county-autofill.js", 'if (!ans || ans.ok !== true) { lastKey = ""; return; }   // no answer: a later change retries',
-        "if (!ans || ans.ok !== true) { return; }",
+        "js/county-autofill.js", 'lastKey = "";                // no answer: a later change asks again', "",
         lambda r: r["live"]["failures"]["seen"]["throw"]["afterRetry"]["county"] != "Sedgwick County, KS"),
+    "no answer leaves the old address's fill standing": (
+        "js/county-autofill.js", "dropStaleFill(key);          // and an older address's fill is not left standing as this one's",
+        ";",
+        lambda r: r["live"]["staleAfterNoAnswer"][0]["keys"]["county"] != ""),
+    "an emptied street leaves its fill standing": (
+        "js/county-autofill.js", "dropStaleFill(key);   // the address is gone", ";",
+        lambda r: r["live"]["streetCleared"]["emptied"]["keys"]["county"] != ""),
+    "a dropped fill keeps the repeat guard": (
+        "js/county-autofill.js", 'lastKey = "";                // the same address typed again is asked again', "",
+        lambda r: r["live"]["streetCleared"]["back"]["lookups"] != 2),
+    "a failure removes the guess made for the same address": (
+        "js/county-autofill.js", "if (!county.isAuto() || fillKey === key) return;", "if (!county.isAuto()) return;",
+        lambda r: r["live"]["guessSurvivesNoAnswer"]["keys"]["county"] != "Sedgwick County, KS"),
+    "a fill forgets which address it was for": (
+        "js/county-autofill.js", 'if (res === "filled" || res === "same") fillKey = key;',
+        'if (false) fillKey = key;',
+        lambda r: r["live"]["guessSurvivesNoAnswer"]["keys"]["county"] != "Sedgwick County, KS"),
+    "an answer that could not be filled is swallowed as a repeat": (
+        "js/county-autofill.js", 'else if (res === "pending" || res === "busy") lastKey = "";   // nothing written: ask again later',
+        ";",
+        lambda r: r["live"]["beforeLoadCalled"]["after"] != "Sedgwick County, KS"),
+    "an answer for an address left during the list load lands": (
+        "js/county-autofill.js", "if (stale()) return;           // the address moved on while the list loaded", "",
+        lambda r: r["live"]["movedOnWhileLoading"]["typed"] != ""),
+    "a guess for an address left during the list load lands": (
+        "js/county-autofill.js", "if (keyNow() !== pickKey) return;", "",
+        lambda r: r["live"]["movedOnWhileLoading"]["guessSaves"] != 0),
+    "the guess does not wait for the list": (
+        "js/county-autofill.js", "guess = county.whenLoaded().then(function () {",
+        "guess = Promise.resolve().then(function () {",
+        lambda r: r["live"]["movedOnWhileLoading"]["guessAlone"] != "Sedgwick County, KS"),
     "the fill does not wait for the list": (
         "js/county-autofill.js", "await county.whenLoaded();", "",
         lambda r: r["live"]["listNotLoaded"]["typed"]["late"] != "Sedgwick County, KS"),
     "a hand-picked bid still spends a lookup": (
-        "js/county-autofill.js", "if (county.hasPick() && !county.isAuto()) return;", "",
+        "js/county-autofill.js", "if (county.isTheirs()) return;", "",
         lambda r: r["live"]["handPickKept"]["lookups"] != 0),
+    "a cleared box still spends a lookup": (
+        "js/county-autofill.js", "if (county.isTheirs()) return;", "if (county.hasPick() && !county.isAuto()) return;",
+        lambda r: r["live"]["clearIsTheirs"]["afterHandClear"]["lookups"] != 0),
     "the address pick never reaches the autofill": (
         "js/address-lookup.js", 'if (typeof els.onPick === "function") {', "if (false) {",
         lambda r: r["live"]["pickFills"]["lookups"] != 1 or r["polish"]["pickFills"]["lookups"] != 1),

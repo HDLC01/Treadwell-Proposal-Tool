@@ -24,9 +24,15 @@
  *     lookup runs and the saved county stays exactly as it was.
  *   - A fill is remembered as a fill (picker.isAuto), so changing the address later re-fills it,
  *     and picking or clearing by hand makes it theirs.
- *   - A county or city the list has no row for leaves the box empty. Nothing is approximated.
- *   - Any failure (no answer, slow, address not found) changes nothing and is silent: this is a
- *     convenience, and the box still works by hand.
+ *   - A county or city the list has no row for leaves the box empty. Nothing is approximated. A city
+ *     the list has no row for, inside a county it does have, gets the county rate and a sentence
+ *     saying the city may charge more (picker.autoFill).
+ *   - A fill belongs to the address it was made for. When that address is gone (the street emptied) or
+ *     nothing answers for the new one, the fill is removed; a county picked or cleared by hand never is.
+ *   - Any failure (no answer, slow, address not found) is silent: this is a convenience, and the box
+ *     still works by hand. It writes nothing, and a later change asks again.
+ *   - The estimator typing in the county search box is never interrupted: the answer waits and the same
+ *     address is asked again later.
  */
 (function () {
   "use strict";
@@ -53,10 +59,46 @@
 
     var seq = 0;                 // each lookup gets a number; only the newest may write
     var lastKey = "";            // the address last looked up, so the same one is not asked twice
+    var fillKey = null;          // the address the county on screen was filled for; null when none
     var timer = null;
 
     function keyNow() {
       return addressKey(val(els.address), val(els.city), val(els.state), val(els.zip));
+    }
+
+    /** A county the address filled belongs to THAT address. When the address has gone (the street was
+     *  emptied) or has moved on and nothing answered for the new one, the fill is taken away, because
+     *  the note under it still says "Filled from the address" and would be false. Only a fill: a
+     *  county picked or cleared by hand is never touched. The dedupe key is dropped with it, so the
+     *  same address typed again is looked up again. */
+    function dropStaleFill(key) {
+      if (!county.isAuto() || fillKey === key) return;
+      if (county.clearFill) county.clearFill();
+      fillKey = null;
+      lastKey = "";                // the same address typed again is asked again
+    }
+
+    /** What the picker did with an answer, and what that means for the next one. */
+    function settle(res, key) {
+      if (res === "filled" || res === "same") fillKey = key;
+      else if (res === "none") fillKey = null;              // the picker cleared the old fill itself
+      else if (res === "pending" || res === "busy") lastKey = "";   // nothing written: ask again later
+    }
+
+    /** The city to look for in the list. The Census place, unless that cannot be trusted: it said so
+     *  (it matched the street in another zip than the typed one), or there was no zip to confirm it
+     *  and the city the estimator typed has a verified row in the county the Census found. Without a
+     *  zip the geocoder can match 701 N 7th St, Kansas City KS into Edwardsville (real, 2026-10-13);
+     *  with a matching zip the Census place stands, since a postal city is not always the legal one. A
+     *  typed city with no row (Shawnee Mission) or a row in another county never beats the Census. */
+    function placeFor(ans) {
+      var typed = val(els.city);
+      if (ans.place_sure === false) return typed;
+      if (typed && val(els.zip).replace(/\D/g, "").length < 5) {
+        var row = county.resolveArea(ans.county, ans.state, typed);
+        if (row && row.kind === "city") return typed;
+      }
+      return ans.place;
     }
 
     /** One POST. Resolves to the parsed body, or null for ANY failure; never rejects. */
@@ -81,21 +123,33 @@
     async function check() {
       try {
         var key = keyNow();
-        if (!key || key === lastKey) return;
-        // Their county. Skipped BEFORE the request, so a hand-picked bid spends no lookup at all.
-        if (county.hasPick() && !county.isAuto()) return;
+        if (!key) {
+          // Not an address any more (the street was emptied): the fill made for it goes.
+          dropStaleFill(key);   // the address is gone
+          return;
+        }
+        if (key === lastKey) return;
+        // Their county, picked or cleared. Skipped BEFORE the request, so a bid they have settled
+        // spends no lookup at all.
+        if (county.isTheirs()) return;
         lastKey = key;
         var mine = ++seq;
         // A newer address (or a second lookup) owns the box now: this answer is for one it has left.
         var stale = function () { return mine !== seq || key !== keyNow(); };
         var ans = await (opts.ask ? opts.ask() : ask());
         if (stale()) return;
-        if (!ans || ans.ok !== true) { lastKey = ""; return; }   // no answer: a later change retries
+        if (!ans || ans.ok !== true) {
+          // No answer for THIS address: a later change retries, and a county filled for an older one
+          // is not left standing as if it were this one's.
+          lastKey = "";                // no answer: a later change asks again
+          dropStaleFill(key);          // and an older address's fill is not left standing as this one's
+          return;
+        }
         await county.whenLoaded();
-        if (stale()) return;
+        if (stale()) return;           // the address moved on while the list loaded
         // The Census can match the street in another zip and name a city the job is not in
         // (place_sure false). Its county is still right; the city then comes from the box.
-        county.autoFill(ans.county, ans.state, ans.place_sure === false ? val(els.city) : ans.place);
+        settle(county.autoFill(ans.county, ans.state, placeFor(ans)), key);
       } catch (e) { lastKey = ""; }
     }
 
@@ -110,11 +164,13 @@
     function onPick(p) {
       p = p || {};
       if (timer) { clearTimeout(timer); timer = null; }
+      var pickKey = keyNow();
       var guess = Promise.resolve();
       if (p.county || p.place) {
         guess = county.whenLoaded().then(function () {
-          // Only if the address has not moved on (a second pick) since this one.
-          if (county.autoFill) county.autoFill(p.county || "", p.state || "", p.place || "");
+          // Only if the address has not moved on (a second pick, an edit) since this one.
+          if (keyNow() !== pickKey) return;
+          settle(county.autoFill(p.county || "", p.state || "", p.place || ""), pickKey);
         }).catch(function () {});
       }
       lastKey = "";               // a pick is a new address, whatever the fields said before

@@ -150,8 +150,10 @@ async function world(page, opts) {
     onChange: () => rec.saves.push(clone(county.keys())),
   });
   county.wire(page === "live");
-  const loading = county.load();
-  if (!opts.holdList) await loading;
+  // deferLoad: the live intake calls load() only AFTER its condition defaults arrive, so the autofill
+  // is mounted for a moment before any list has been requested. The test calls api.load() itself.
+  const loading = opts.deferLoad ? null : county.load();
+  if (!opts.holdList && loading) await loading;
 
   const addr = get("address-input"), city = get("city-input"), st = get("state-input"), zip = get("zip-input");
   get("address-results"); get("business-results"); get("business-input");
@@ -171,6 +173,10 @@ async function world(page, opts) {
     keys: () => clone(county.keys()),
     shown: () => ({ input: get("county-input").value, note: get("county-note").textContent,
                     auto: county.isAuto(), has: county.hasPick() }),
+    async load() { const p = county.load(); await p; await settle(); },
+    /** The estimator typing in the County search box itself (no pick made). */
+    typeInCountyBox(text) { get("county-input").value = text; county.onInput(); },
+    resultsOpen: () => get("county-results").hidden === false,
     /** Type a suggestion and click its row: the real path, debounce and all. */
     async pick(feature) {
       w.feats = [feature];
@@ -400,6 +406,206 @@ async function scenarios(page) {
     wd.handPick("Jackson", "MO");
     h.release(); await settle();
     o.handPickDuringLookup = Object.assign({ keys: wd.keys() }, wd.shown());
+  }
+
+  // 15. NO ANSWER for a NEW address (not found, down): the county filled for the OLD address must go,
+  // because the note under it still says "Filled from the address". A same-address guess must stay.
+  {
+    const noAnswer = [
+      { mode: "not_found", census: async () => ({ ok: false, reason: "not_found", county: "", place: "" }) },
+      { mode: "down", census: async () => { throw new Error("down"); } },
+      { mode: "empty", census: async () => ({}) },
+    ];
+    o.staleAfterNoAnswer = [];
+    for (const m of noAnswer) {
+      const wd = await world(page);
+      await wd.pick(FEAT());
+      const before = wd.keys().county;
+      wd.w.census = m.census;
+      await wd.type("1 New Subdivision Ct", "Kansas City", "MO", "64150");
+      o.staleAfterNoAnswer.push(Object.assign({ mode: m.mode, before, keys: wd.keys() }, wd.shown()));
+    }
+    // The street emptied: the address is no longer one, and the fill that belonged to it goes. Typing
+    // the same street back is looked up again (the dedupe key was dropped with the fill).
+    const ws = await world(page);
+    await ws.pick(FEAT());
+    await ws.type("", "Wichita", "KS", "67202");
+    const emptied = Object.assign({ keys: ws.keys() }, ws.shown());
+    await ws.type("455 N Main St", "Wichita", "KS", "67202");
+    o.streetCleared = { emptied, back: Object.assign({ keys: ws.keys(), lookups: ws.rec.lookups.length }, ws.shown()) };
+    // A picked address whose Census answer never comes keeps Photon's guess: it is for THIS address.
+    const wg = await world(page);
+    wg.w.census = async () => ({ ok: false, reason: "error", county: "", place: "" });
+    await wg.pick(FEAT());
+    o.guessSurvivesNoAnswer = Object.assign({ keys: wg.keys(), lookups: wg.rec.lookups.length }, wg.shown());
+  }
+
+  // 16. The Census can match a street with no zip typed into a different incorporated place
+  // (real, 2026-10-13: 701 N 7th St, Kansas City KS, no zip -> Edwardsville, place_sure true). The city the
+  // estimator typed has a verified row in that county, so with nothing to confirm the Census place the
+  // typed city wins. With a zip typed the Census place stands (see placeUnsure).
+  {
+    const wd = await world(page);
+    wd.w.census = async () => ANS("Wyandotte County", "KS", "Edwardsville", true);
+    await wd.type("701 N 7th St", "Kansas City", "KS", "");
+    const noZip = Object.assign({ keys: wd.keys() }, wd.shown());
+    const wp = await world(page);
+    wp.w.census = async () => ANS("Wyandotte County", "KS", "Edwardsville", true);
+    await wp.pick(FEAT({ city: "Kansas City", county: "Wyandotte County", postcode: "" }));
+    const photon = Object.assign({ keys: wp.keys() }, wp.shown());
+    // A typed city with NO row never beats the Census place: Shawnee Mission is a postal name.
+    const wm = await world(page);
+    wm.w.census = async () => ANS("Johnson County", "KS", "Overland Park", true);
+    await wm.type("7000 W 80th St", "Shawnee Mission", "KS", "");
+    const postalName = Object.assign({ keys: wm.keys() }, wm.shown());
+    // A typed city whose row belongs to ANOTHER county never beats the Census county either.
+    const wo = await world(page);
+    wo.w.census = async () => ANS("Shawnee County", "KS", "", true);
+    await wo.type("1 Main St", "Shawnee", "KS", "");
+    const otherCounty = Object.assign({ keys: wo.keys() }, wo.shown());
+    o.typedCityWins = { noZip, photon, postalName, otherCounty };
+  }
+
+  // 17. A city the list has no row for: the county FLOOR rate is filled, and the note says so.
+  {
+    const wd = await world(page);
+    wd.w.census = async () => ANS("Johnson County", "KS", "Gardner", true);
+    await wd.type("120 E Main St", "Gardner", "KS", "66030");
+    const gardner = Object.assign({ keys: wd.keys() }, wd.shown());
+    const wb = await world(page);
+    wb.w.census = async () => ANS("Wyandotte County", "KS", "Bonner Springs", true);
+    await wb.type("1 Front St", "Bonner Springs", "KS", "66012");
+    const bonner = Object.assign({ keys: wb.keys() }, wb.shown());
+    // A city that HAS a row, an unincorporated address and a hand pick carry no such sentence.
+    const wo = await world(page);
+    wo.w.census = async () => ANS("Johnson County", "KS", "Olathe", true);
+    await wo.type("1 Main St", "Olathe", "KS", "66061");
+    const withRow = Object.assign({ keys: wo.keys() }, wo.shown());
+    const wu = await world(page);
+    wu.w.census = async () => ANS("Johnson County", "KS", "", true);
+    await wu.type("1 Country Rd", "Gardner", "KS", "66030");
+    const unincorporated = Object.assign({ keys: wu.keys() }, wu.shown());
+    const wh = await world(page);
+    wh.handPick("Johnson", "KS");
+    const hand = wh.shown();
+    // Photon names the county but no city; the Census then names the place: the sentence arrives with it.
+    const wl = await world(page);
+    wl.w.census = async () => ANS("Johnson County", "KS", "Gardner", true);
+    await wl.pick(FEAT({ city: "", county: "Johnson County", postcode: "66030" }));
+    const lateCity = Object.assign({ keys: wl.keys() }, wl.shown());
+    // Missouri labor is exempt, so a city sentence about a tax that is not charged would only confuse.
+    const wm = await world(page);
+    wm.w.census = async () => ANS("Jackson County", "MO", "Kansas City", true);
+    await wm.type("1 Grand Blvd", "Kansas City", "MO", "64108");
+    const missouri = Object.assign({ keys: wm.keys() }, wm.shown());
+    // Wichita levies no city tax of its own: the Sedgwick row says the county rate is right there
+    // (city_ok), so no warning. Another Sedgwick city is warned about.
+    const ww = await world(page);
+    ww.w.census = async () => ANS("Sedgwick County", "KS", "Wichita", true);
+    await ww.type("455 N Main St", "Wichita", "KS", "67202");
+    const wichita = Object.assign({ keys: ww.keys() }, ww.shown());
+    const wy = await world(page);
+    wy.w.census = async () => ANS("Sedgwick County", "KS", "Derby", true);
+    await wy.type("1 Madison Ave", "Derby", "KS", "67037");
+    const derby = Object.assign({ keys: wy.keys() }, wy.shown());
+    o.cityNotOnList = { gardner, bonner, withRow, unincorporated, hand, lateCity, missouri, wichita, derby };
+  }
+
+  // 18. The state guards, with real Missouri/Kansas twins. Both states have a Johnson County.
+  {
+    const wk = await world(page);
+    wk.w.census = async () => ANS("Johnson County", "KS", "", true);
+    await wk.type("1 Country Rd", "Spring Hill", "KS", "66083");
+    const wm = await world(page);
+    wm.w.census = async () => ANS("Johnson County", "MO", "Warrensburg", true);
+    await wm.type("1 Main St", "Warrensburg", "MO", "64093");
+    // Photon names a city in Missouri and no county, and the Census never answers: Kansas City, KS is
+    // a different place, so nothing is filled.
+    const wc = await world(page);
+    wc.w.census = async () => ({ ok: false, reason: "error", county: "", place: "" });
+    await wc.pick(FEAT({ city: "Kansas City", county: "", state: "Missouri", postcode: "64108" }));
+    o.stateGuards = { johnsonKS: Object.assign({ keys: wk.keys() }, wk.shown()),
+                      johnsonMO: Object.assign({ keys: wm.keys() }, wm.shown()),
+                      photonMoCityNoCounty: Object.assign({ keys: wc.keys() }, wc.shown()) };
+  }
+
+  // 19. The list has not been requested yet (the live intake calls load() after its defaults arrive).
+  // The answer that lands in that window cannot be filled; the SAME address is looked up again later.
+  {
+    const wd = await world(page, { deferLoad: true });
+    await wd.type("455 N Main St", "Wichita", "KS", "67202");
+    const before = wd.keys().county;
+    await wd.load();
+    fire(wd.nodes["address-input"], "change"); wd.clock.run(); await settle();
+    o.beforeLoadCalled = { before, after: wd.keys().county, lookups: wd.rec.lookups.length };
+  }
+
+  // 20. Clear is theirs: correcting the address afterwards does not bring the county back.
+  {
+    const wd = await world(page);
+    wd.handPick("Jackson", "MO");
+    wd.county.clear();
+    wd.rec.lookups.length = 0;
+    await wd.type("455 N Main St", "Wichita", "KS", "67202");
+    const afterHandClear = Object.assign({ keys: wd.keys(), lookups: wd.rec.lookups.length }, wd.shown());
+    const wf = await world(page);
+    await wf.pick(FEAT());
+    wf.county.clear();                              // the estimator says this fill is wrong
+    await wf.type("455 N Main St", "Wichita", "KS", "67203");
+    const afterClearedFill = Object.assign({ keys: wf.keys(), lookups: wf.rec.lookups.length }, wf.shown());
+    // A fill the PAGE removed (a new address with no county) is not a clear by hand: the next address fills.
+    const wp = await world(page);
+    await wp.pick(FEAT());
+    wp.w.census = async () => ANS("Cherokee County", "KS", "");
+    await wp.type("5 Oak St", "Baxter Springs", "KS", "66713");      // no row: the Sedgwick fill is removed
+    const removedByPage = wp.county.hasPick();
+    wp.w.census = async () => ANS("Sedgwick County", "KS", "Wichita");
+    await wp.type("455 N Main St", "Wichita", "KS", "67202");
+    o.clearIsTheirs = { afterHandClear, afterClearedFill,
+                        pageRemovalIsNot: Object.assign({ removedByPage, keys: wp.keys() }, wp.shown()) };
+  }
+
+  // 21. The estimator is typing in the County search box when the answer lands: their text stays, the list
+  // stays open, and once they are done the same address is looked up again.
+  {
+    const h = gate();
+    const wd = await world(page);
+    wd.w.census = async () => { await h.p; return ANS("Sedgwick County", "KS", "Wichita"); };
+    await wd.type("455 N Main St", "Wichita", "KS", "67202");
+    wd.typeInCountyBox("john");
+    const typing = { input: wd.nodes["county-input"].value, open: wd.resultsOpen() };
+    h.release(); await settle();
+    const during = Object.assign({ keys: wd.keys(), open: wd.resultsOpen() }, wd.shown());
+    wd.county.close();                              // Escape: the box goes back to what is saved (empty)
+    wd.w.census = async () => ANS("Sedgwick County", "KS", "Wichita");
+    fire(wd.nodes["address-input"], "change"); wd.clock.run(); await settle();
+    o.typingInCountyBox = { typing, during, afterEscape: Object.assign({ keys: wd.keys(),
+                            lookups: wd.rec.lookups.length }, wd.shown()) };
+  }
+
+  // 22. The address moved on while the list was still loading: no answer for the old one may land.
+  {
+    // (a) a typed address, answered, then waiting for the list; a second address has no answer.
+    const wa = await world(page, { holdList: true });
+    await wa.type("455 N Main St", "Wichita", "KS", "67202");
+    wa.w.census = async () => ({ ok: false, reason: "not_found", county: "", place: "" });
+    await wa.type("1 New Subdivision Ct", "Kansas City", "MO", "64150");
+    wa.listGate.release(); await settle();
+    // (b) a picked address (Photon's guess waits for the list), no answer for it, then a second address.
+    const wb = await world(page, { holdList: true });
+    wb.w.census = async () => ({ ok: false, reason: "error", county: "", place: "" });
+    await wb.pick(FEAT());
+    await wb.type("1 New Subdivision Ct", "Kansas City", "MO", "64150");
+    wb.listGate.release(); await settle();
+    // (c) the same pick left alone: the guess waits for the list and then lands.
+    const wc = await world(page, { holdList: true });
+    wc.w.census = async () => ({ ok: false, reason: "error", county: "", place: "" });
+    await wc.pick(FEAT());
+    wc.listGate.release(); await settle();
+    // The draft is saved on every fill AND every removal, so "never written" is the strong claim: the
+    // next lookup would remove a stale guess again, but the wrong county would already have been saved.
+    o.movedOnWhileLoading = { typed: wa.keys().county, guess: wb.keys().county, guessAlone: wc.keys().county,
+                              typedSaves: wa.rec.saves.length, guessSaves: wb.rec.saves.length };
   }
   return o;
 }
