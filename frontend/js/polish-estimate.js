@@ -278,7 +278,7 @@
    *  The return is shaped like priceAssembly's so every caller -- rowCost, materialTotal, the
    *  broken-line warning, the per-unit hint -- keeps working without knowing which kind it got.
    *
-   *  THE ROW AS THE SECTION BUYS IT. A section that pools (B.poolsPacks) buys each material once for the
+   *  THE ROW AS THE SECTION BUYS IT. A section that pools (B.poolsPacks) buys each coat once for the
    *  whole section, so the cost of one row is its share of the pooled purchase (rawRowPrice below prices the
    *  row alone, which is what the pool starts from). `takeoff` is the list the row sits in; any other list,
    *  or a row that is not in it, prices alone as it always did. EVERY reader of a row's price goes through

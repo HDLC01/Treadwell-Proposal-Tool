@@ -305,7 +305,7 @@
       if (r.priced) { total += r.cost; priced += 1; }
     }
     var a = num(area);
-    return {
+    var answer = {
       rows: rows,
       total: total,
       // Only meaningful with an area. Reporting 0 would read as "free" rather than "unknown".
@@ -313,11 +313,16 @@
       priced_lines: priced,
       broken_lines: broken,
     };
+    // WHICH ASSEMBLY these rows are the lines of: pricePool tells one coat from another by it (the same line of the
+    // same assembly on two takeoff rows is one coat; two lines of one assembly are two). Only an assembly that has an
+    // id says so, so an answer for an unnamed assembly keeps exactly the shape it always had.
+    if (assembly && assembly.id !== undefined && assembly.id !== null) answer.assembly_id = assembly.id;
+    return answer;
   }
 
   // ── ONE PURCHASE FOR THE WHOLE JOB (Hanz, 2026-10-13, "Buy packs for the whole job") ────────────────
   //
-  // A material used on several takeoff rows is bought ONCE. Priced row by row, each row rounded its own
+  // A coat used on several takeoff rows is bought ONCE. Priced row by row, each row rounded its own
   // fractional quantity up to whole packs, so System 1 5,000 SF plus System 2 3,000 SF bought up to one
   // more pack per material than one 8,000 SF floor does (+$1,580, 6%, on the real library; 1,000 + 1,000
   // is +17%). The pool sums the FRACTIONAL quantity of the same material across every row and line that
@@ -325,8 +330,14 @@
   // proportion to what each needed, so a row still shows a cost and the rows add up to the pooled total.
   //
   // TWO LEVELS, because Kyle's sheet does two different things.
-  //   1. THE SAME MATERIAL (one library item id; a coverage typed on a bid is the same item, see `pool_of`):
-  //      its fractional quantities are added first, then waste, roundup and the break happen once.
+  //   1. THE SAME COAT (Hanz, 2026-10-13, "Round each coat like Kyle"): one line of one assembly, which is the
+  //      same library item on the same line index of the same assembly (a coverage typed on a bid is the same
+  //      item, see `pool_of`). The coat's fractional quantities on every row and area that holds that assembly are
+  //      added first, then waste, roundup and the break happen once. TWO DIFFERENT LINES of one assembly that buy
+  //      the same item are TWO coats, each rounded up to its own whole packs, exactly as Kyle's sheet rounds each
+  //      line (Shop Floor Double Broadcast is three lines of Shop Floor and buys three roundups, not one). A
+  //      single-area, single-system job therefore prices to the workbook to the cent. A material row (no
+  //      assembly) is its own coat, keyed by the item, so two rows of the same item still pool.
   //   2. A PRICE LADDER SHARED BY DIFFERENT MATERIALS. The sheet judges a flake or quartz break on a system's
   //      two broadcast lines ADDED TOGETHER (`IF((O201+O202)<240, ...)`), and each line still rounds to its own
   //      bags. The library holds those two lines as two items (the name carries the pounds per SF), so they
@@ -340,6 +351,13 @@
   function poolId(item) {
     var it = item || {};
     return (it.pool_of !== undefined && it.pool_of !== null && it.pool_of !== "") ? it.pool_of : it.id;
+  }
+
+  /** The coat a priced line belongs to: the line of its assembly (assembly id and line index) plus the item, or
+   *  just the item for a line that is not a line of an assembly (a material row). One string, a Map key. */
+  function coatKey(res, j, id) {
+    var a = res ? res.assembly_id : undefined;
+    return (a === undefined || a === null || a === "") ? JSON.stringify(["m", id]) : JSON.stringify(["a", a, j, id]);
   }
 
   /** A price ladder as one string, or null for a material with no price breaks (those pool at level 1 only). */
@@ -385,8 +403,9 @@
 
   /** PRICE SEVERAL PRICED TAKEOFF ROWS AS ONE PURCHASE. `results[i]` is what a row priced to (the shape
    *  priceAssembly answers: `rows` of priceLine answers, `total`, `per_unit`, ...) or null; the answer is a new
-   *  array of the same length, where every row that buys a material another row (or another line of its own)
-   *  also buys has that material's cost replaced by its share of the pooled purchase. A row nothing pools with
+   *  array of the same length, where every row that buys a coat (one line of one assembly, see coatKey) another
+   *  row also buys has that coat's cost replaced by its share of the pooled purchase. Two lines of ONE assembly
+   *  that buy the same item are two coats and are not pooled with each other. A row nothing pools with
    *  comes back as the very object it went in as, so a bid with nothing to pool prices to the cent as it did.
    *
    *  `opts.on[i] === false` leaves row i out (an OFF row buys nothing). `opts.skip` is a list of item ids that
@@ -403,7 +422,7 @@
     opts = opts || {};
     var list = Array.isArray(results) ? results : [];
     var skip = Array.isArray(opts.skip) ? opts.skip : [];
-    var groups = new Map();                 // level 1: material -> every line that buys it
+    var groups = new Map();                 // level 1: coat -> every line that buys it
     list.forEach(function (res, i) {
       if (!res || !Array.isArray(res.rows)) return;
       if (opts.on && opts.on[i] === false) return;
@@ -411,8 +430,9 @@
         if (!r || !r.ok || !r.priced || !r.item) return;
         var id = poolId(r.item);
         if (id === undefined || id === null || id === "" || skip.indexOf(id) >= 0) return;
-        var g = groups.get(id);
-        if (!g) { g = { rep: r, lines: [], needed: 0 }; groups.set(id, g); }
+        var ck = coatKey(res, j, id);
+        var g = groups.get(ck);
+        if (!g) { g = { rep: r, lines: [], needed: 0 }; groups.set(ck, g); }
         g.lines.push({ i: i, j: j, r: r });
         g.needed += r.needed;
       });

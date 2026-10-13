@@ -16,19 +16,21 @@ the chain, and the plumbing between a takeoff and the chain. This does both, aga
      they share, except the vectors that a declared departure keeps out.
 
 THE DECLARED DEPARTURES (each is in docs/v2-architecture.md, and each is a named modelling gap for Kyle):
-  * ONE PURCHASE (Hanz, 2026-10-13, "Buy packs for the whole job"). This REPLACES the Phase 12 departure "price break on
-    two lines", where the library charged the small-lot price for a flake or quartz system whose two broadcast lines reach
-    the break together and neither does alone (every size up to 1,000 to 1,600 SF, 83 of the 440 jobs, $10 to $38 high).
-    A section now buys each material ONCE (library-core pricePool): the fractional quantity of every row and line that
-    buys it is added first, and the roundup and the price break happen once. Two things follow, both measured here:
-      - the break is now read as the sheet reads it. 54 of the 83 jobs are exactly the workbook's (a system's two
-        broadcast lines are two library items on one price ladder, pooled for the break), and no job is above it.
-      - the pooling also rounds the packs once where the sheet rounds each line on its own (two broadcast lines of the
-        same flake, a primer or a system that appears in both System 1 and System 2). The library is then one pack or more
-        BELOW the workbook, never above it: 110 of the 440 jobs. They are not listed by hand. The harness prices every
-        job the sheet's way WITHOUT the pool (each line to its own packs, the break judged on the lines added together,
-        worked out from the library's own breakAt) and the test requires that to equal the workbook on every job, and the
-        departure to be exactly the jobs where the pool buys fewer packs, with the dollars it saves.
+  * NO ONE-PURCHASE DEPARTURE (Hanz, 2026-10-13, "Buy packs for the whole job", then "Round each coat like Kyle"). This
+    REPLACED the Phase 12 departure "price break on two lines", where the library charged the small-lot price for a flake or
+    quartz system whose two broadcast lines reach the break together and neither does alone (every size up to 1,000 to 1,600
+    SF, 83 of the 440 jobs, $10 to $38 high). A section buys each COAT once (library-core pricePool): a coat is one line of
+    one assembly, and its fractional quantity on every row that holds it is added first, then the roundup and the price break
+    happen once. Two different lines of one assembly that buy the same item are two coats, each rounded to its own whole packs
+    exactly as the sheet rounds each line, and a system's two broadcast lines (two library items on one price ladder) have the
+    break judged together as the sheet does. So a single-area job is the workbook to the cent again and the departure set is
+    EMPTY: 83 of 83 formerly gapped jobs are now exactly the workbook's, 0 jobs are below it (the version of the pool that
+    bought the ITEM once for a whole system, #662, was below it on 110 jobs, $79 to $476 of material). The harness still
+    prices every job the sheet's way WITHOUT the pool (each line to its own packs, the break judged on the lines added
+    together, worked out from the library's own breakAt) and the test requires the pooled price to equal it on every job.
+    What stays a deliberate, undeclared-by-job difference is the one thing Hanz asked for and the workbook has no way to say:
+    the SAME coat on two areas is one purchase (5,000 + 3,000 SF costs what 8,000 SF does), shown on the real library in
+    test_v2_pool_packs.py. Only one recorded job has one system on both areas and it lands on the workbook's figure.
   * FOUR PLACES. A library cost has four decimal places and the sheet's prices have more, so a sum can land a hair
     either side of a whole dollar and ROUNDUP then differs by a dollar. It is rare (about 5 jobs in 1,500 scanned, all of
     them large or on a cove) and is checked at the three cove jobs and two plain sizes recorded.
@@ -58,8 +60,8 @@ HARNESS = TESTS / "js" / "epoxy-v2-proof-harness.js"
 GOLDEN = TESTS / "fixtures" / "epoxy_jobs_golden.json"
 ORACLE_EPOXY = ORACLE / "epoxy.json"
 
-# Jobs where a declared departure applies, and why. The one purchase is not listed: it is read from the proof's run (see
-# _one_purchase_jobs), because it bites at too many sizes to list and a hand list is what understated the first one.
+# Jobs where a declared departure applies, and why. The one purchase has no jobs left (see _one_purchase_jobs, which the proof
+# requires to be empty): it is read from the proof's run, not listed by hand, because a hand list is what understated the first one.
 FOUR_PLACES = {      # a sum a hair either side of a whole dollar
     # the library's 4-place WR kit price puts the sum on 32,804.0000; the sheet's is 32,804.0000002
     "cove/wr-4/40/under-trowel-hybrid-quartz-double-broadcast-orange-peel-texture-trowel-texture",
@@ -108,13 +110,13 @@ def _differing(golden, ran):
 
 
 def _one_purchase_jobs(ran):
-    """The jobs where buying each material once costs less than the sheet's way (each line to its own packs, the price
-    break judged on the lines added together): the harness prices both, the second without pricePool."""
+    """The jobs where the pool costs anything other than the sheet's way (each line to its own packs, the price break
+    judged on the lines added together): the harness prices both, the second without pricePool. There are none."""
     return {c["id"] for c in ran["cases"] if abs(c["raw"] - c["sheet_raw"]) > _tolerance(c["raw"])}
 
 
 def _declared(ran):
-    return _one_purchase_jobs(ran) | FOUR_PLACES | THREE_PLACES | NO_AREA
+    return FOUR_PLACES | THREE_PLACES | NO_AREA
 
 
 # ── the recorded answers are the workbook's, and current ─────────────────────────────────────────
@@ -159,6 +161,7 @@ def test_every_job_outside_the_declared_departures_is_equal_to_the_workbook_to_t
 
 def test_the_declared_departures_are_exactly_the_jobs_that_differ(golden, ran):
     declared = _declared(ran)
+    assert _one_purchase_jobs(ran) == set(), "the pool must cost what the sheet's way costs on every recorded job"
     assert _differing(golden, ran) == declared, (
         "the jobs that differ from the workbook are not the declared ones. Differ and not declared: %s. Declared and "
         "equal (a departure closed, so say so): %s" % (
@@ -168,14 +171,10 @@ def test_the_declared_departures_are_exactly_the_jobs_that_differ(golden, ran):
 def test_each_departure_is_the_one_it_says_it_is(golden, ran):
     by_id = {c["id"]: c for c in ran["cases"]}
     want = {c["id"]: c for c in golden["cases"]}
-    once = _one_purchase_jobs(ran)
     for cid in FOUR_PLACES:
         w, g = want[cid]["out"], by_id[cid]
-        # `places/q28/3000` is a one-purchase job too (the pool saves a pack of its quartz), so its four-place sum is read
-        # on the sheet's own way of buying, which is the workbook's to within the four places; the others are read whole
         assert abs(g["sheet_raw"] - w["raw"]) < 0.01, cid
-        if cid not in once:
-            assert abs(g["raw"] - w["raw"]) < 0.01 and abs(g["material"] - w["D40"]) == 1, cid
+        assert abs(g["raw"] - w["raw"]) < 0.01 and abs(g["material"] - w["D40"]) == 1, cid
     for cid in THREE_PLACES:
         w, g = want[cid]["out"], by_id[cid]
         assert g["material"] < w["D40"] - 50, "%s: the stored coverage should buy one bag fewer than the sheet" % cid
@@ -208,19 +207,21 @@ def test_the_sheets_own_way_of_buying_is_the_workbook_on_every_job(golden, ran):
     assert all(by_id["break/two-systems/%d" % i]["sheet_break_gap"] > 1 for i in (1, 2, 3))
 
 
-def test_buying_each_material_once_closes_the_price_break_and_never_prices_above_the_workbook(golden, ran):
-    """The Phase 12 departure was a library price ABOVE the workbook on 83 jobs (the break judged on each line alone).
-    With the pool, no job is above it. Of those 83, 54 are now exactly the workbook's (the break read on the two
-    broadcast lines of a system, which are two library items on one price ladder) and the other 29 are below it, because
-    the pool also rounds the two broadcast lines' packs once where the sheet rounds each."""
+def test_buying_each_coat_once_closes_the_price_break_and_prices_every_job_at_the_workbook(golden, ran):
+    """The Phase 12 departure was a library price ABOVE the workbook on 83 jobs (the break judged on each line alone). The
+    version of the pool that bought each ITEM once for a system (#662) closed 54 of them and put the other 29 BELOW the sheet
+    (and 110 jobs in all, $79 to $476 of material, the packs rounded once where the sheet rounds each line). Buying each COAT
+    once (one line of one assembly) closes all 83, exactly, and leaves nothing above or below the workbook."""
     by_id = {c["id"]: c for c in ran["cases"]}
     want = {c["id"]: c for c in golden["cases"]}
     for cid, w in want.items():
         assert by_id[cid]["raw"] <= w["out"]["raw"] + _tolerance(w["out"]["raw"]), (
             "%s: the pool priced ABOVE the workbook: %r against %r" % (cid, by_id[cid]["raw"], w["out"]["raw"]))
+    below = {cid for cid, w in want.items() if by_id[cid]["raw"] < w["out"]["raw"] - _tolerance(w["out"]["raw"])}
+    assert below == THREE_PLACES, "jobs below the workbook that are not the stored-coverage window: %s" % sorted(below - THREE_PLACES)
     formerly = {c["id"] for c in ran["cases"] if c["sheet_break_gap"] > 1}
     exact = {cid for cid in formerly if abs(by_id[cid]["raw"] - want[cid]["out"]["raw"]) <= _tolerance(want[cid]["out"]["raw"])}
-    assert len(formerly) == 83 and len(exact) == 54, (len(formerly), len(exact))
+    assert len(formerly) == 83 and len(exact) == 83, (len(formerly), len(exact))
     # one such job, whole: the 700 SF hybrid flake (two flake items, one ladder) is the workbook's to the dollar
     for cid in ("break/hybrid-macro-flake/700", "break/hybrid-macro-flake/1000"):
         w, g = want[cid]["out"], by_id[cid]
@@ -229,21 +230,21 @@ def test_buying_each_material_once_closes_the_price_break_and_never_prices_above
         assert g["alone"] > g["raw"], "%s: pooled and priced alone should differ, or this proves nothing" % cid
 
 
-def test_the_one_purchase_departure_is_the_packs_the_sheet_rounds_twice_and_it_is_always_below_the_workbook(golden, ran):
-    """Where the pool differs from the sheet's way of buying, it buys fewer packs: a material two lines of a system
-    share (the flake of a double broadcast), or a primer or a system in both System 1 and System 2, rounded once. So the
-    raw material is BELOW the workbook's by at least a pack, on exactly the jobs the harness says."""
+def test_the_pool_costs_what_the_sheets_own_way_of_buying_costs_on_every_job(golden, ran):
+    """Where #662 bought the ITEM once, 110 jobs priced below the sheet's way (a material two lines of a system share, such
+    as the flake of a double broadcast, or a primer or system in both System 1 and System 2 rounded once). Each coat now
+    keeps its own rounding, so the pooled raw material IS the sheet's way on EVERY job, the recorded ones that name a
+    material twice included, and a system used on both areas still lands on the workbook's figure."""
     by_id = {c["id"]: c for c in ran["cases"]}
     want = {c["id"]: c for c in golden["cases"]}
-    hit = _one_purchase_jobs(ran)
-    assert len(hit) >= 100, "the one purchase was recorded in only %d jobs" % len(hit)
-    for cid in sorted(hit):
-        w, g = want[cid]["out"], by_id[cid]
-        saved = g["sheet_raw"] - g["raw"]
-        assert saved > 1, (cid, saved)
-        assert abs((w["raw"] - g["raw"]) - saved) <= _tolerance(w["raw"]), (cid, w["raw"] - g["raw"], saved)
-    assert {"system2/hybrid-micro-flake", "primer2/hp-gripper-primer", "break/two-systems/1"} <= hit
-    # not vacuous: the pool agrees with the workbook wherever nothing is bought twice (every job that is equal)
+    for cid, g in by_id.items():
+        assert abs(g["raw"] - g["sheet_raw"]) <= _tolerance(g["raw"]), (cid, g["raw"], g["sheet_raw"])
+    assert _one_purchase_jobs(ran) == set()
+    # the jobs that used to be a one-purchase departure, named: a double broadcast, a primer on both areas, two systems
+    for cid in ("system2/hybrid-micro-flake", "primer2/hp-gripper-primer", "break/two-systems/1", "system2/shop-floor-single-broadcast"):
+        assert abs(by_id[cid]["raw"] - want[cid]["out"]["raw"]) <= _tolerance(want[cid]["out"]["raw"]), cid
+    # not vacuous: the sheet's way differs from the old no-break reading on jobs the pool changes, and 300+ jobs are equal
+    assert any(c["alone"] > c["raw"] + 1 for c in ran["cases"])
     assert len([c for c in golden["cases"] if c["id"] not in _declared(ran)]) >= 300
 
 
@@ -355,8 +356,9 @@ BREAKS = {
     "a price break is judged on each line alone again": (
         "js/library-core.js", "                       g.needed, rep.roundup, g.bulk, g.cost0, g.ladder.units);",
         "                       g.needed, rep.roundup, g.bulk, g.cost0);"),
-    "a material is bought once per row, not once per section": (
-        "js/library-core.js", "        var id = poolId(r.item);", "        var id = poolId(r.item) + \"#\" + i;"),
+    "a coat is the item alone again (every line of the item pools, as #662 did)": (
+        "js/library-core.js", '    return (a === undefined || a === null || a === "") ? JSON.stringify(["m", id]) : JSON.stringify(["a", a, j, id]);',
+        '    return JSON.stringify(["m", id]);'),
     "a new section is not stamped to pool": (
         MODEL, "      pool_packs: true      // a section made now", "      pool_packs: false     // a section made now"),
     "the pooled cost is not handed back to its rows": (
