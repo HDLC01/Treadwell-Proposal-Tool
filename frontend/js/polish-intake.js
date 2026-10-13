@@ -554,9 +554,8 @@
     // county on the other screen writes the same values back rather than losing them here.
     TW.setState(Object.assign({}, values, {
       city_state: cs,
-      // The chosen job type. Polish is the only one Estimating Tool v2 prices so far, so this is "polish" until
-      // the vocabulary marks another ready; a draft opened here with no job type, or one v2 cannot price,
-      // saves as the default.
+      // The chosen job type: any the vocabulary marks ready (all four now); a draft opened here with no job
+      // type, or one v2 cannot price, saves as the default.
       work_type: JOB,
       // Mirrored the way the live intake mirrors it: the Projects list, the bell's due-date
       // reminders and the Dropbox folder date all read `deadline`.
@@ -635,7 +634,7 @@
     var box = $("systems-container");
     if (!box) return;
     S.renderSystems(box, S.systemCount());
-    S.applyScope(JOB, { systems: box });
+    S.applyScope(JOB, { systems: box, gyp: $("gyp-sf-container") });
   }
 
   /** Pick a job type. A type the vocabulary has not marked ready does nothing: not changed, not saved. The
@@ -645,7 +644,7 @@
     JOB = key;
     renderJobTypes();
     var box = $("systems-container");
-    if (box) S.applyScope(JOB, { systems: box });
+    if (box) S.applyScope(JOB, { systems: box, gyp: $("gyp-sf-container") });
     saveSoon();
   }
 

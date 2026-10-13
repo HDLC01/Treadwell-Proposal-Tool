@@ -1637,14 +1637,15 @@ def test_the_save_writes_the_condition_cells_and_no_others(ran):
     # polish job, and a blank Polish!B10 is not "New" to IF(B10="New",0.05,0.15), it takes the Reno branch.
     # No price moves (test_work_types.py and the chain golden), only what a save puts in the workbook cells.
     assert ran["save"]["cellValueKeys"] == [
-        "Epoxy!B10", "Epoxy!B4", "Epoxy!B6", "Epoxy!D5", "Epoxy!D6", "Gyp (FR)!B8", 'Gyp (USG 1-8")!B8',
-        "Leveling!B6", "Polish!B10", "Polish!B4", "Polish!E25", "Polish!E29", "Polish!F29"], (
+        "Epoxy!B10", "Epoxy!B4", "Epoxy!B6", "Epoxy!D5", "Epoxy!D6", "Gyp (FR)!B5", "Gyp (FR)!B8", 'Gyp (USG 1-8")!B5',
+        'Gyp (USG 1-8")!B8', "Leveling!B6", "Polish!B10", "Polish!B4", "Polish!E25", "Polish!E29", "Polish!F29"], (
         "the save's worksheet cells are not exactly the conditions' a polish job is asked: %r"
         % ran["save"]["cellValueKeys"])
     # And the literals are the model's own answers. The fixture has local and taxable on, the other
     # two off, so a mapping written backwards cannot pass this.
     assert ran["save"]["cellValues"] == {
-        "Epoxy!B4": "Yes", "Polish!B4": "Yes",      # local
+        # local: Epoxy and Polish, and since Phase 14 the two Gyp sheets that hold their own (the base and Gyp (FR))
+        "Epoxy!B4": "Yes", "Polish!B4": "Yes", 'Gyp (USG 1-8")!B5': "Yes", "Gyp (FR)!B5": "Yes",
         "Epoxy!D5": "No",                           # prevailing_wage
         "Epoxy!B6": "Yes",                          # taxable
         "Epoxy!D6": "No",                           # remodel_tax
@@ -1665,7 +1666,7 @@ def test_the_save_writes_the_condition_cells_and_no_others(ran):
     # A draft that already carried a worksheet map keeps it, and gains only those same conditions' cells.
     carried = ran["save"]["legacyCellValues"] or {}
     assert set(carried) == {"Polish!D82", "Epoxy!B4", "Epoxy!B6", "Epoxy!D5",
-                            "Epoxy!D6", "Polish!B4",
+                            "Epoxy!D6", "Polish!B4", 'Gyp (USG 1-8")!B5', "Gyp (FR)!B5",
                             "Polish!E25", "Polish!E29", "Polish!F29",
                             "Leveling!B6", 'Gyp (USG 1-8")!B8', "Gyp (FR)!B8", "Epoxy!B10", "Polish!B10"}, (
         "the page added a worksheet cell beyond the four conditions', or dropped a carried one: %r"
@@ -2423,6 +2424,7 @@ def test_the_page_loads_no_formula_engine_and_the_modules_in_order(html):
                     "/js/icons.js", "/auth.js", "/shared.js", "/js/tab-memo.js",
                     "/js/library-core.js", "/js/excel-math.js", "/js/work-types.js", "/js/markup-core.js",
                     "/js/bid-profiles.js", "/js/bid-engine.js", "/js/bid-model.js", "/js/epoxy-takeoff.js",
+                    "/js/gyp-takeoff.js",
                     "/js/polish-sandbox.js", "/js/library-picker.js", "/js/polish-estimate.js"], (
         "the page's script list has changed: %r" % srcs)
 

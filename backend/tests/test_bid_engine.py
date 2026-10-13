@@ -535,7 +535,7 @@ CHAIN_MUTATIONS = {
         PROFILES, 'var SHIP_TIERS = "0.05+IF(material<=5000,0.1,IF(material<=10000,0.06,0.04))";',
         'var SHIP_TIERS = "0.05+IF(material<5000,0.1,IF(material<=10000,0.06,0.04))";', "Epoxy"),
     "a Gyp truckload is wrong": (
-        PROFILES, '"Gyp (USG 1-8\\")": { profile: "gyp", truckload: 280 },', '"Gyp (USG 1-8\\")": { profile: "gyp", truckload: 281 },', "truckload"),
+        PROFILES, '"Gyp (USG 1-8\\")": { profile: "gyp", truckload: 280,', '"Gyp (USG 1-8\\")": { profile: "gyp", truckload: 281,', "truckload"),
     "Epoxy's super and PTO is 3.1 percent": (
         PROFILES, 'rates: { ship_pct: SHIP_TIERS, super_pto: "3%", soft_costs: "13%" }',
         'rates: { ship_pct: SHIP_TIERS, super_pto: "3.1%", soft_costs: "13%" }', "Epoxy"),

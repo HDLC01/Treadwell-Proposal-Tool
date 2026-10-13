@@ -11,7 +11,7 @@
 // holds no work type, no rate and no cell address of its own.
 //
 //   resolveProfile(id)           a profile with everything it extends folded in, frozen
-//   forTab(tab)                  the profile that prices a workbook tab, and that tab's truckload
+//   forTab(tab)                  the profile that prices a workbook tab, and that tab's truckload and label
 //   priceChain(profile, input, rates)   the bid: every line of the chain, one key per cell of the markup column
 //   compileRates(profile, rules)        the Markups rules filed for a profile's layout, read into rates
 //   ruleNumber(rules, layout, line)     one filed rule as a number, or "unpriceable" with the reason
@@ -204,11 +204,14 @@
     return resolved;
   }
 
-  /** The profile that prices a workbook tab, and what is particular to the tab: { tab, profile, truckload }. */
+  /** The profile that prices a workbook tab, and what is particular to the tab: { tab, profile, truckload, label }.
+   *  `truckload` and `label` are the Gyp tabs' (the rolls of sound mat in a truckload, and what the proposal calls
+   *  the system); null on a tab that has none. */
   function forTab(tab) {
     if (typeof tab !== "string" || !has.call(P.tabs, tab)) throw new BidEngineError("no profile prices a tab called " + String(tab));
     var entry = P.tabs[tab];
-    return { tab: tab, profile: resolveProfile(entry.profile), truckload: has.call(entry, "truckload") ? entry.truckload : null };
+    return { tab: tab, profile: resolveProfile(entry.profile), truckload: has.call(entry, "truckload") ? entry.truckload : null,
+             label: has.call(entry, "label") ? entry.label : null };
   }
 
   function need(profile, who) {

@@ -1436,9 +1436,12 @@ def test_the_beta_scope_box_reads_like_the_live_one_for_a_polish_job():
     # the page's static markup holds the container, the areas note, Area and the start date, and the drawn
     # markup is read off the module itself.
     names = re.findall(r'name="([a-z0-9_]+)"', box)
-    assert names == ["work_areas", "approx_start_date"], names
+    # The gypsum box (three area boxes) is the live intake's own and is drawn after the systems, hidden until the job
+    # type is Gyp (Phase 14); a polish job sees none of it.
+    assert names == ["gyp_soft_sf", "gyp_hard_sf", "gyp_corridor_sf", "work_areas", "approx_start_date"], names
     assert 'id="systems-container"' in box and 'id="sf-areas-note"' in box
-    assert box.index('id="systems-container"') < box.index("work_areas")
+    assert box.index('id="systems-container"') < box.index('id="gyp-sf-container"') < box.index("work_areas")
+    assert 'id="gyp-sf-container" style="display:none;"' in box, "a polish job must not see the gypsum areas"
     drawn = _drawn_systems()
     assert drawn.index("System 1") < drawn.index("System 2 (optional)")
     assert drawn.count('class="system-block"') == 2 and drawn.count('class="system-tag"') == 2
@@ -1704,6 +1707,11 @@ def test_every_field_a_polish_job_sees_on_the_live_intake_is_on_the_beta_with_th
     # The SF boxes are drawn by js/intake-scope.js now (Phase 9b), so the beta's side is its markup plus
     # what a polish job shows of the drawn fields.
     beta = set(_named_fields(FRONTEND / "polish-intake.html")) | set(_shown_for("polish"))
+    # The gypsum areas are in the beta's markup since Phase 14 (a Gyp job asks for them), hidden for a polish job
+    # as on the live form, so they are on the beta's side and not on a polish job's.
+    gyp = {"gyp_soft_sf", "gyp_hard_sf", "gyp_corridor_sf"}
+    assert gyp <= beta, "the beta's gypsum box lost its fields"
+    beta -= gyp
     assert live - beta == set(), "the live intake asks for fields the beta does not: %r" % (live - beta)
     assert beta - live == set(), "the beta asks for fields the live intake does not: %r" % (beta - live)
 

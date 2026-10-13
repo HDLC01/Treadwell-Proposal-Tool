@@ -2739,10 +2739,13 @@
       var id = rec.sheets[0];
       if (id === ROOT_TAB) return;
       wanted.push(id);
-      if (isObject(out.tabs) && has.call(out.tabs, id)) {
+      // A tab that has several sheets (Gyp's five presets) is ONE section, filed under the sheet the estimator
+      // chose, so "does the bid have it" asks every sheet of the tab and not the first alone.
+      var held = sheetHeld(out, rec);
+      if (held !== null) {
         // A saved bid whose job type moved back to this tab: the section was marked off when it left, and its
         // rows are kept, so bringing it back is only turning it on.
-        if (isObject(out.tabs[id]) && out.tabs[id].kind === "off") out = withSectionKind(out, id, "base");
+        if (isObject(out.tabs[held]) && out.tabs[held].kind === "off") out = withSectionKind(out, held, "base");
         return;
       }
       out = activateSection(out, id, "base", ctx);
@@ -2757,20 +2760,61 @@
     return out;
   }
 
+  /** The sheet of tab record `rec` that the model already holds a section under, or null. A tab has several sheets
+   *  only for Gyp (its five presets); every other tab has the one, so for them this is the plain "is there a
+   *  section called that". The sheets are asked in the tab's own order. */
+  function sheetHeld(model, rec) {
+    if (!isObject(model) || !isObject(model.tabs)) return null;
+    for (var i = 0; i < rec.sheets.length; i++) if (has.call(model.tabs, rec.sheets[i])) return rec.sheets[i];
+    return null;
+  }
+
   /** The base sections a model has that a job type does not use, and that Estimating Tool v2 can price (a job
    *  type that is ready): the ones sectionsForJob marks off. An option stays an option, and a section v2 cannot
-   *  price (Gyp, today) is never touched. Reads only, and never throws. */
+   *  price (Leveling, until its phase) is never touched. Reads only, and never throws. */
   function sectionsLeaving(model, jobType) {
     if (!isObject(model) || !isObject(model.tabs) || !types.jobType(jobType)) return [];
-    var mine = types.tabsFor(jobType).map(function (key) { return types.tab(key).sheets[0]; });
+    var mine = types.tabsFor(jobType);
     var ready = [];
     types.jobTypeKeys().forEach(function (k) {
-      if (types.jobType(k).ready === true) types.tabsFor(k).forEach(function (key) { ready.push(types.tab(key).sheets[0]); });
+      if (types.jobType(k).ready === true) types.tabsFor(k).forEach(function (key) { ready.push(key); });
     });
     return Object.keys(model.tabs).filter(function (id) {
       var s = model.tabs[id];
-      return id !== ROOT_TAB && mine.indexOf(id) < 0 && ready.indexOf(id) >= 0 && isObject(s) && s.kind === "base";
+      var tabKey = types.tabOfSheet(id);
+      return id !== ROOT_TAB && mine.indexOf(tabKey) < 0 && ready.indexOf(tabKey) >= 0 && isObject(s) && s.kind === "base";
     });
+  }
+
+  /** What a workbook tab is called on screen: the name the proposal gives its system (a Gyp tab's "N12 1/8" + 3/4" Gyp"),
+   *  else the tab id itself. Never throws. */
+  function sheetLabel(tab) {
+    try { return engine.forTab(tab).label || String(tab); } catch (err) { return String(tab); }
+  }
+
+  /** MOVE A SECTION TO ANOTHER SHEET OF ITS OWN TAB: the Gyp preset. A Gyp bid is priced on one of five Gyp sheets
+   *  and its section is filed under that sheet's workbook tab id, so changing the preset renames the section's key
+   *  and keeps everything inside it (rows, settings, rates). The profile is restamped from the new sheet, which is
+   *  the same profile for all five Gyp tabs, so no price changes except the ones the preset itself makes. A NEW
+   *  model; the order of the sections is kept. THROWS for a section the model does not have, a sheet of another
+   *  tab, and a sheet the model already holds a section under. Moving to the sheet it is already on returns the
+   *  model it was given. */
+  function moveSectionSheet(model, fromTab, toTab) {
+    var e = sectionOf(model, fromTab);
+    if (e.root) throw new Error("the " + ROOT_TAB + " section is the root of the model and has no other sheet");
+    if (fromTab === toTab) return model;
+    var tabKey = types.tabOfSheet(toTab);
+    if (!tabKey || tabKey !== types.tabOfSheet(fromTab)) {
+      throw new Error(JSON.stringify(String(toTab)) + " is not another sheet of the " + e.layout + " tab");
+    }
+    if (has.call(model.tabs, toTab)) throw new Error(JSON.stringify(toTab) + " is already a section of this bid");
+    var profile = engine.forTab(toTab).profile;
+    var out = jsonCopy(model);
+    var moved = Object.assign({}, out.tabs[fromTab], { profile: profile.stamp });
+    out.tabs = copyInto({}, Object.fromEntries(Object.keys(out.tabs).map(function (id) {
+      return id === fromTab ? [toTab, moved] : [id, out.tabs[id]];
+    })));
+    return out;
   }
 
   /** A NEW model with one existing section's kind changed. The section's rows are the same objects' contents. */
@@ -2786,9 +2830,9 @@
   function sectionsToAdd(model, jobType) {
     var job = types.jobType(jobType);
     if (!isObject(model) || !job || job.ready !== true) return [];
-    return types.tabsFor(jobType).map(function (key) { return types.tab(key).sheets[0]; }).filter(function (id) {
-      return id !== ROOT_TAB && !(isObject(model.tabs) && has.call(model.tabs, id));
-    });
+    return types.tabsFor(jobType).map(function (key) { return types.tab(key); }).filter(function (rec) {
+      return rec.sheets[0] !== ROOT_TAB && sheetHeld(model, rec) === null;
+    }).map(function (rec) { return rec.sheets[0]; });
   }
 
   function takeoffStated(rows) {
@@ -2865,6 +2909,11 @@
       sf: takeoffSf(s.takeoff), remodel_rate: ctx.remodel_rate
     };
     var mat = ctx.material(e);
+    // A material that says why it cannot be worked out (a Gyp area with no thickness) is no price, in its own
+    // words, and never a bid priced on the part that could be.
+    if (isObject(mat) && typeof mat.unpriceable === "string" && mat.unpriceable) {
+      return unpriceableSection(e.profile, "material", mat.unpriceable);
+    }
     if (isObject(mat)) copyInto(input, mat); else input.material = num(mat);
     // A gyp-split profile reads the engine's material inputs (gyp, extras, sand, soundMat), never a plain sum:
     // a number would price the material at $0 and still call the section priceable. No price rather than a wrong one.
@@ -2873,7 +2922,11 @@
         "and sound mat figures. A single material total cannot be priced here.");
     }
     try {
-      if (profile.quirks.shippingRule === "gyp-split") input.truckload = engine.forTab(e.tab).truckload;
+      // A Gyp tab's truckload is the tab's own (H36), unless the page says the sound mat chosen has another: on
+      // four of the five tabs the truckload follows the product (js/gyp-takeoff.js).
+      if (profile.quirks.shippingRule === "gyp-split" && !(num(input.truckload) > 0)) {
+        input.truckload = engine.forTab(e.tab).truckload;
+      }
       // The root keeps no snapshot (see above): it prices at the built-ins.
       return engine.priceChain(profile, input, e.root ? undefined : engine.ratesOf(s.rates));
     } catch (err) {
@@ -2973,7 +3026,8 @@
    *    conditionRows  the stored condition defaults, or null
    *    cellValues, split   the draft's cell_values and isSplit(draft): a condition answer a cell holds wins
    *    asms, items, reserved   the library, for the default takeoff
-   *    sf             { tabId: [sf1, sf2] }, intake's two area boxes for each section
+   *    sf             { tabId: [sf1, sf2] }, intake's two area boxes for each section (Gyp's are three)
+   *    takeoffRows    function (entry, sfs), optional: a section's own starting takeoff (Gyp), else null
    *
    *  THE ORDER IS THE PAGE'S, step for step: labor and Travel, the job's lodging and per diem rates and fees
    *  default, then the job's conditions, then each takeoff, then the labor calculator, with the Travel guys kept
@@ -3040,6 +3094,14 @@
       var s = e.section;
       if (takeoffSf(s.takeoff)) return;
       var sfs = sfOf(e.tab);
+      // A section whose takeoff is not "System 1 and System 2" (Gyp's three areas) asks the page for its own rows:
+      // `ctx.takeoffRows(entry, sfs)` answers a list of rows, or null to take the ordinary path. An empty list
+      // leaves the section's blank row as it is.
+      var own = typeof ctx.takeoffRows === "function" ? ctx.takeoffRows(e, sfs) : null;
+      if (own instanceof Array) {
+        if (own.length) s.takeoff = own;
+        return;
+      }
       s.takeoff = (e.root ? (condGate || laborGate) : true)
         ? seedDefaultTakeoff(s.takeoff, ctx.asms, ctx.items, ctx.reserved, sfs[0], sfs[1], e.layout)
         : seedTakeoffSf(s.takeoff, sfs[0], sfs[1]);
@@ -3088,15 +3150,29 @@
     return t;
   }
 
+  /** A Gyp section's three area figures, the keys the proposal's Area line sums (gyp_soft_sf, gyp_hard_sf,
+   *  gyp_corridor_sf). A row says which area it is with its `bucket` mark; a square-foot row that names none is the
+   *  soft surface's, which is what the single figure it replaces always was. */
+  function gypAreaFields(rows) {
+    var out = { gyp_soft_sf: 0, gyp_hard_sf: 0, gyp_corridor_sf: 0 };
+    (rows || []).forEach(function (r) {
+      if (!r || !rowOn(r) || r.unit === "LF" || r.same_floor) return;
+      // An explicit branch for each area (never `out[name] +=`): the mark came out of a saved draft.
+      if (r.bucket === "hard") out.gyp_hard_sf += num(r.measurement);
+      else if (r.bucket === "corridor") out.gyp_corridor_sf += num(r.measurement);
+      else out.gyp_soft_sf += num(r.measurement);
+    });
+    return out;
+  }
+
   /** The area fields a section's priced tab carries (the keys the Estimate step's snapshot uses, which the
    *  proposal's Area line sums from the base tabs): Polish and Seal one SF figure, Epoxy its area and cove,
-   *  Gyp its one bucket so far (the soft area; the hard and corridor buckets come with Gyp's own phase), Leveling
-   *  none. */
+   *  Gyp its three areas (soft, hard, corridor), Leveling none. */
   function areaFields(e) {
     var rows = e.section.takeoff;
     if (e.role === "polish" || e.role === "seal") return { polish_sf: takeoffSf(rows) };
     if (e.role === "epoxy") return { epoxy_sf: takeoffSf(rows), cove_lf: takeoffLf(rows) };
-    if (e.role === "gyp") return { gyp_soft_sf: takeoffSf(rows) };
+    if (e.role === "gyp") return gypAreaFields(rows);
     return {};
   }
 
@@ -3112,7 +3188,13 @@
     return t;
   }
 
-  function systemDesc(s) {
+  function systemDesc(s, entry) {
+    // A Gyp section is named by the tab it is filed under (the sheet's own A1: "N12 1/8" + 3/4" Gyp"), not by its
+    // first row, which is an area.
+    if (entry && entry.role === "gyp") {
+      var label = engine.forTab(entry.tab).label;
+      if (label) return label;
+    }
     var rows = s.takeoff || [];
     for (var i = 0; i < rows.length; i++) {
       var r = rows[i];
@@ -3213,7 +3295,7 @@
       return Object.assign({
         id: x.e.tab, name: x.e.tab, role: x.e.role, kind: x.e.kind,
         total: good ? b.total : null, sales_tax: good ? b.sales_tax : null, remodel: good ? b.remodel_tax : null,
-        system_desc: systemDesc(x.e.section), notes_auto: [],
+        system_desc: systemDesc(x.e.section, x.e), notes_auto: [],
         sf: areaFields(x.e), sys_names: [],
         taxable: !!cond.taxable, remodel_on: !!cond.remodel_tax, v2: true
       }, good ? {} : { unpriceable: String(b.reason || "") });
@@ -3370,6 +3452,7 @@
     sectionOf: sectionOf, isNewSection: isNewSection, travelCarrier: travelCarrier,
     // Phase 12: the model as a panel sees one section, and the sections a job type is made of.
     SECTION_KEYS: SECTION_KEYS, sectionView: sectionView, sectionsForJob: sectionsForJob, sectionsToAdd: sectionsToAdd, sectionsLeaving: sectionsLeaving,
+    moveSectionSheet: moveSectionSheet, sheetHeld: sheetHeld, sheetLabel: sheetLabel, gypAreaFields: gypAreaFields,
     priceSection: priceSection, priceTabs: priceTabs, activateSection: activateSection,
     seedNewSections: seedNewSections, syncAutoGuys: syncAutoGuys, poolsPacks: poolsPacks,
     composePricingSnapshot: composePricingSnapshot, sectionSwitcherHtml: sectionSwitcherHtml,

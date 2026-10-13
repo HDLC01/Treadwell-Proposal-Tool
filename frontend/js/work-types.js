@@ -12,8 +12,8 @@
 // THREE WORDS, AND THEY ARE NOT THE SAME THING.
 //
 //   JOB TYPE   what the intake's Work Type radios pick and what a project is called: epoxy, polish, combo,
-//              gyp. A job type is priced on one or more TABS (a combo job is Epoxy plus Polish). Polish and
-//              epoxy and combo are `ready` in Estimating Tool v2 so far; gyp waits for its phase.
+//              gyp. A job type is priced on one or more TABS (a combo job is Epoxy plus Polish). All four are
+//              `ready` in Estimating Tool v2 (Gyp was the last, Phase 14).
 //   TAB        a family of sheets in Kyle's workbook that share one markup layout: polish, seal, epoxy,
 //              leveling, gyp. The Markups page files its rules by tab, and the Defaults tab of Items and
 //              Assemblies scopes a default by tab. Seal and Leveling are `optionOnly`: they are priced as
@@ -131,7 +131,7 @@
       proposalKey: "combo", audiences: ["Direct", "GC"],
       fields: ["system_1_sf", "polish_sf", "cove_1_lf", "system_2_sf", "polish_2_sf", "cove_2_lf"],
       thickness: true },
-    { key: "gyp",    label: "Gyp (Gypsum Underlayment)", tabs: ["gyp"], ready: false,
+    { key: "gyp",    label: "Gyp (Gypsum Underlayment)", tabs: ["gyp"], ready: true,
       proposalKey: "gyp", audiences: [null],
       fields: ["gyp_soft_sf", "gyp_hard_sf", "gyp_corridor_sf"], thickness: false }
   ];
@@ -174,7 +174,8 @@
   // `cells` on a split draft would put the base's answer over every option's, which is the defect this rule
   // exists to stop. writeCellsFor() below is the one place that decides, for the live intake and for a v2 save.
   //
-  // THINGS READ OUT OF THE TEMPLATE, not assumed. Polish!B4 holds its own Yes/No, so Local writes both.
+  // THINGS READ OUT OF THE TEMPLATE, not assumed. Polish!B4 holds its own Yes/No, so Local writes both, and
+  // since Phase 14 the Gyp base's B5 and Gyp (FR)'s own B5 (the other three Gyp tabs mirror the base).
   // Polish!D5, B6 and D6 are the formulas =Epoxy!D5, =Epoxy!B6, =Epoxy!D6, so the Polish tab is never
   // written for them. Epoxy!D41 is compared against V136 and V137 by all six of its consumers, which read
   // "BULK Discount ON" and "Bulk Discount OFF", mixed case and inconsistent with each other: any other
@@ -184,7 +185,7 @@
   var CONDITIONS = [
     { key: "local", label: "Local job", scope: ALL_JOBS,
       why: "Under 70 miles. Off means travel and lodging get added.",
-      default: true, cells: ["Epoxy!B4", "Polish!B4"], on: "Yes", off: "No", needs: null,
+      default: true, cells: ["Epoxy!B4", "Polish!B4", 'Gyp (USG 1-8")!B5', "Gyp (FR)!B5"], on: "Yes", off: "No", needs: null,
       model: true, item_id: null, asked_on: { live: 1, v2Intake: 0, v2Takeoff: 0 } },
     { key: "prevailing_wage", label: "Prevailing wage", scope: ALL_JOBS,
       why: "Raises every labor line to the prevailing rate.",

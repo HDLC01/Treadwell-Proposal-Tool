@@ -28,7 +28,7 @@ TESTS = pathlib.Path(__file__).resolve().parent
 HARNESS = TESTS / "js" / "epoxy-page-harness.js"
 PAGE_FILES = ["polish-estimate.html", "js/polish-estimate.js", "js/bid-model.js", "js/bid-engine.js", "js/bid-profiles.js",
               "js/markup-core.js", "js/library-core.js", "js/library-picker.js", "js/work-types.js", "js/excel-math.js",
-              "js/epoxy-takeoff.js"]
+              "js/epoxy-takeoff.js", "js/gyp-takeoff.js"]
 
 
 def run(frontend=FRONTEND, tmp=None):
@@ -135,10 +135,11 @@ def test_a_saved_epoxy_bid_opens_as_saved_and_writes_nothing(ran):
     assert r["total"] == ran["labor"]["after"]
 
 
-def test_a_polish_job_and_a_job_v2_cannot_price_yet_are_untouched(ran):
+def test_a_polish_job_is_untouched_and_a_gyp_job_is_given_its_own_section(ran):
     assert ran["polish"] == {"tabs": "none", "kind": "base", "strip": True, "bid": ran["polish"]["bid"], "activeBid": ran["polish"]["bid"]}
     assert ran["polish"]["bid"] > 0
-    assert ran["gyp"] == {"tabs": "none"}, "a job type that is not ready adds no section"
+    # Gyp is ready since Phase 14: its job opens on a Gyp section filed under the base sheet (test_v2_gyp.py holds the rest)
+    assert ran["gyp"] == {"tabs": ['Gyp (USG 1-8")']}
 
 
 def test_the_strip_lists_what_the_bid_is_made_of_and_never_the_polish_root_of_an_epoxy_job(ran):
@@ -207,7 +208,7 @@ def test_the_sections_a_job_type_needs():
     assert got["callersModelUntouched"] is True and got["idempotent"] is True and got["polishIsTheSameObject"] is True
     assert got["sections"] == [["Polish", "off"], ["Epoxy", "base"]] and got["active"] == ["Epoxy"] and got["carrier"] == "Epoxy"
     assert got["combo"] is None, "Combo is ready since Phase 13 (test_v2_combo.py holds what it builds)"
-    assert "not ready" in got["gyp"], "a job type v2 cannot price is refused, not guessed"
+    assert got["gyp"] is None, "Gyp is ready since Phase 14 (test_v2_gyp.py holds what it builds and the refusal of a type that is not)"
     assert "not a job type" in got["seal"] and "not a job type" in got["none"]
     assert got["keepsTheSection"] == 99, "a section that is already there is never replaced"
 

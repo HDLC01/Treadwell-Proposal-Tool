@@ -97,7 +97,9 @@ const TABS = {
     totals: { total: 18250, sf: 4000 }, preset: null,
   },
   'Gyp (USG 1-8")': {
-    layout: "gyp", kind: "base", profile: "gyp@1",
+    // An OPTION, not a base: this is a combo bid (Epoxy and Polish), and a Gyp base section on a bid whose job type does
+    // not use it is marked off by sectionsForJob since Gyp became ready (Phase 14). The section's own keys are the point.
+    layout: "gyp", kind: "option", profile: "gyp@1",
     takeoff: [{ assembly_id: "g1", assembly_name: "Underlayment", measurement: 9000, unit: "SF" }],
     labor: [], contingency: 150, fees: 0, rates: { version: 1 }, totals: {}, preset: "usg-n12-1/8",
   },

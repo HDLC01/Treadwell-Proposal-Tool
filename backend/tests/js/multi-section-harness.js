@@ -542,7 +542,8 @@ async function page() {
   gypModel.tabs = { [GYP]: { layout: "gyp", kind: "base", profile: "gyp@1",
     takeoff: [{ assembly_id: "a1", assembly_name: "Polish 800 Grit", measurement: 9000, unit: "SF" }],
     labor: [{ id: "inst", label: "Install", guys: 4, days: 3, rate: 33.66 }], contingency: 0, fees: 0, totals: {} } };
-  const gb = P.build({ blob: P.blob({ polish_estimate: clone(gypModel), polish_sf: 17500 }) });
+  // (a Gyp job: since Phase 14 Gyp is ready, so a Polish bid holding a Gyp base section would have it marked off)
+  const gb = P.build({ blob: P.blob({ work_type: "gyp", polish_estimate: clone(gypModel), polish_sf: 17500 }) });
   await gb.api.init();
   P.typeInto(gb, '[data-tk="0"][data-k="measurement"]', "12000");
   gb.clock.fire();

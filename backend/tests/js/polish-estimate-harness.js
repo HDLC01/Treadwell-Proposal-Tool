@@ -50,6 +50,8 @@ const B = require(path.join(ROOT, "js", "bid-model.js"));
 const L = require(path.join(ROOT, "js", "library-core.js"));
 // The Epoxy tab's patch, cove and tooling (js/epoxy-takeoff.js): the page reads it as it parses.
 const EPOXY = require(path.join(ROOT, "js", "epoxy-takeoff.js"));
+// The Gyp tabs' areas, bags, extras, sand and sound mat (js/gyp-takeoff.js): the page prices a Gyp section with it.
+const GYP = require(path.join(ROOT, "js", "gyp-takeoff.js"));
 // The one vocabulary (js/work-types.js): the page builds its Takeoff cards off it as it parses.
 const W = require(path.join(ROOT, "js", "work-types.js"));
 // The one search pop-up both Add buttons open: the REAL module, mounted on this file's stub DOM.
@@ -438,7 +440,7 @@ function build(opts) {
 
   const winListeners = [];
   const win = {
-    TWBidModel: B, TWWorkTypes: W, TWLib: L, TWEpoxyTakeoff: EPOXY, TWPolishSandbox: S, TWLibraryPicker: PICKER,
+    TWBidModel: B, TWWorkTypes: W, TWLib: L, TWEpoxyTakeoff: EPOXY, TWGypTakeoff: GYP, TWPolishSandbox: S, TWLibraryPicker: PICKER,
     TWAuth: { ready: Promise.resolve() },
     scrollTo: () => { log.push("scroll"); },
     location: { href: "https://x/polish-estimate.html?d=proj-1" },
