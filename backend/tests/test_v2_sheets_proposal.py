@@ -21,6 +21,13 @@ PROVEN BY EXECUTION. Nothing here greps the page for what it says it does.
   3. THE DOCUMENT is rendered from the payload the page composed, through the real renderer and main._build_options: the Options &
      Unit Prices lines, the lump sum, and the template the base picks.
 
+  4. THE FOLLOW-UPS FROM THE REVIEW OF THIS PHASE, each run the same way:
+     * the NOTES re-seed when the base is picked on the estimate (tests/js/v2-notes-reseed-harness.js: the page's own prefill, run
+       over two visits to one draft);
+     * a combined base's Deduct says it is against BOTH systems;
+     * a base the estimate could not price keeps no price, prints no option against it, is said on the page and stops Continue
+       (the panel harness for the pricing, the Files-door harness for the page and Continue).
+
 Each mutation at the bottom breaks a scratch copy of the page and the check it belongs to goes red.
 """
 from __future__ import annotations
@@ -39,6 +46,8 @@ TESTS = pathlib.Path(__file__).resolve().parent
 SNAPSHOTS = TESTS / "js" / "v2-proposal-snapshot-harness.js"
 PANEL = TESTS / "js" / "v2-options-panel-harness.js"
 BLOCKS = TESTS / "js" / "price-block-harness.js"
+NOTES = TESTS / "js" / "v2-notes-reseed-harness.js"
+DOOR = TESTS / "js" / "files-door-harness.js"
 
 PANEL_FILES = ["js/proposal-review.js", "js/price-lines-core.js", "shared.js", "js/bid-model.js", "js/bid-engine.js"]
 BLOCK_FILES = ["js/proposal-review.js", "js/price-lines-core.js"]
@@ -297,9 +306,27 @@ def test_the_pair_made_the_base_adds_the_two_totals_and_prints_each_system_as_an
     assert any("Option 1: Epoxy flooring as described above" in ln for ln in lines)
     assert any("Option 2: Polished Concrete flooring as described above" in ln for ln in lines)
     opts = _options(lines)
-    assert opts[0].startswith("Deduct ($31,929) " + EN + " "), "the copy against the pair: 29,955 less 61,884"
+    # the copy against the pair: 29,955 less 61,884, and "in lieu of" names BOTH systems the customer gives up (it said "Flake" alone, as
+    # if the epoxy's $28,086 were what the deduction saved)
+    assert opts[0] == "Deduct ($31,929) " + EN + " VE for Polish 400 Grit, in lieu of Flake and Polish 800 Grit."
     assert opts[1] == "$4,159 " + EN + " Sealed Concrete as described above (material sales tax INCLUDED)"
     assert 61884 - 29955 == 31929
+
+
+def test_the_pairs_deduct_reads_the_same_out_of_main_build_options(snaps):
+    import main
+    R, res = _drive(snaps["combined"]["state"], "combo")
+    built = main._build_options(res["payload"]["rooms"], res["payload"]["values"], res["payload"]["work_type"])
+    assert [(b["id"], b["price_formatted"], b["price_desc"]) for b in built][0] == (
+        "Copy1", "Deduct ($31,929)", "VE for Polish 400 Grit, in lieu of Flake and Polish 800 Grit.")
+    base = res["payload"]["rooms"][0]
+    assert base["is_base"] and base["base_desc"] == "Flake and Polish 800 Grit"
+
+
+def test_a_single_sheet_base_still_names_that_one_sheet_in_its_deduct(snaps):
+    """The explicit base is untouched: only a base made of two sheets is named by both."""
+    R, res = _drive(snaps["polish"]["state"], "polish")
+    assert _options(_document(R, res))[0] == "Deduct ($3,843) " + EN + " VE for Polish 400 Grit, in lieu of Polish 800 Grit."
 
 
 def test_the_polish_copy_made_the_base_prints_the_copy_as_the_base_and_the_old_base_as_an_option(snaps):
@@ -350,6 +377,141 @@ def test_the_words_typed_on_an_option_are_its_line_on_a_v2_draft_as_on_any_other
         "Deduct ($3,843) " + EN + " Deduct for the lower grit polish in the back rooms.",
         "$28,086 " + EN + " Add for epoxy in the loading dock, if required. (material sales tax INCLUDED)",
     ]
+
+
+# ── 3. THE NOTES, WHEN THE BASE IS PICKED ON THE ESTIMATE ────────────────────────────────────────
+def run_notes(frontend=FRONTEND):
+    proc = run_node(NOTES, frontend)
+    assert proc.returncode == 0, "the harness itself failed:\n" + proc.stderr
+    return last_json_line(proc.stdout)
+
+
+@pytest.fixture(scope="module")
+def notes():
+    require_node()
+    return run_notes()
+
+
+PHASE = ["Add $4,500 for each additional phase beyond the above stated schedule."]
+
+
+def test_a_base_picked_on_the_estimate_gives_the_notes_the_new_bases_boilerplate(notes):
+    """The review's finding. A Polish-base bid is opened (its notes are seeded), the base is made Epoxy on the estimate, and the
+    Proposal step is opened again. The notes it kept were Polish ones: they said "Concrete flatness, mix design..." and left out the
+    Epoxy-only "Excludes warranty for floor failure due to hydrostatic pressure..." line the Epoxy template carries. The radios that
+    used to re-seed them are read-only on a v2 draft, so nothing else did."""
+    s = notes["switched"]
+    assert s["first"]["flatness"] and not s["first"]["warranty"] and s["first"]["asked"] == ["polish"]
+    assert s["seed"] == {"work_type": "polish", "savedText": True}, "the boilerplate is written down with whose it is"
+    assert s["second"]["warranty"] and not s["second"]["flatness"] and s["second"]["asked"] == ["epoxy"]
+    assert s["saved"] == {"work_type": "epoxy", "textIsTheBox": True, "seedIsTheBox": True}, "saved again, with its own record"
+    assert s["first"]["phase"] == s["second"]["phase"] == s["third"]["phase"] == PHASE, "the phase line is still the estimate's"
+    assert s["first"]["lines"] == s["second"]["lines"] == 11
+    assert s["third"]["asked"] == [] and s["third"]["same"] is True, "a third visit on the same base asks for nothing and changes nothing"
+
+
+def test_switching_back_and_the_pair_re_seed_too(notes):
+    back = notes["backToPolish"]
+    assert back["flatness"] and not back["warranty"] and back["asked"] == ["polish"], "Epoxy, then a Polish copy as the base: Polish again"
+    both = notes["combined"]
+    assert both["warranty"] and both["flatness"] and both["asked"] == ["combo"] and both["exactlyTheComboNotes"] is True
+
+
+def test_a_hand_edit_a_draft_without_the_record_and_the_same_base_are_left_alone(notes):
+    edited = notes["handEdited"]
+    assert edited["kept"] is True and edited["asked"] == [], "one typed line and the notes are the estimator's, whatever the base"
+    assert edited["flatness"] and not edited["warranty"]
+    old = notes["noRecord"]
+    assert old["kept"] is True and old["asked"] == [], "a draft saved before the record is left exactly as it was"
+    same = notes["sameBase"]
+    assert same["first"] == ["polish"] and same["again"] == [] and same["same"] is True
+
+
+def test_words_typed_while_the_new_ones_are_on_their_way_are_not_written_over(notes):
+    typed = notes["typedMeanwhile"]
+    assert typed["kept"] is True and typed["hasWarranty"] is False
+
+
+def test_the_files_door_waits_for_the_re_seed_and_a_new_project_writes_its_record(notes):
+    """composeForFiles waits on _notesReady: by the time that resolves the box must already hold the new bases words, or the Files
+    page rebuilds the document from the old ones."""
+    assert notes["doorWaits"] == {"warrantyBefore": False, "warrantyAtReady": True}
+    fresh = notes["fresh"]
+    assert fresh["warranty"] and fresh["asked"] == ["epoxy"] and fresh["seed"] == "epoxy" and fresh["saved"] is True
+
+
+# ── 4. A BASE THE ESTIMATE COULD NOT PRICE ───────────────────────────────────────────────────────
+NO_PRICE_FIX = " Open the estimate, price this sheet, and come back to this page."
+
+
+def test_a_base_with_no_price_keeps_none_prints_no_option_against_it_and_says_so_in_the_panel(panel):
+    """The review's finding. The estimate saves a sheet it cannot price with total: null and shows "no price". The Proposal step read
+    the null as 0: the document printed "$0 - Total" and the options as Adds against nothing."""
+    u = panel["unpriced"]
+    base = u["base"]
+    assert base["lump"] == 0 and base["tax"] == 0 and base["tb"] == 0 and base["rooms"] == [], "no price, and nothing printed against it"
+    assert base["ask"] == {"say": "The base bid has no price yet.", "fix": u["reason"] + NO_PRICE_FIX, "reason": u["reason"]}
+    assert "no price" in base["rows"]["Polish"] and "$0" not in base["rows"]["Polish"]
+    # no reason given (a base that simply has no total): the same answer, without a reason in front of the instruction
+    assert u["noReason"]["ask"] == {"say": "The base bid has no price yet.", "fix": NO_PRICE_FIX.strip(), "reason": ""}
+    assert u["noReason"]["rooms"] == []
+
+
+def test_a_combined_base_with_one_sheet_unpriced_is_not_priced_by_the_other(panel):
+    pair = panel["unpriced"]["pair"]
+    assert pair["lump"] == 0 and pair["rooms"] == [], "Epoxy's $28,086 alone would have read as the whole base bid"
+    assert pair["ask"] and pair["ask"]["reason"] == panel["unpriced"]["reason"]
+    assert "$28,086" in pair["rows"]["Epoxy"] and "no price" in pair["rows"]["Polish"]
+
+
+def test_an_unpriced_option_is_left_off_and_the_base_is_as_it_was(panel):
+    u = panel["unpriced"]
+    option, priced = u["option"], u["priced"]
+    assert option["ask"] is None and option["lump"] == priced["lump"] == 33798
+    assert option["rooms"] == ["Polish", "Copy1", "Seal"] and "Epoxy" not in option["rooms"]
+    assert "no price" in option["rows"]["Epoxy"] and "$0" not in option["rows"]["Epoxy"]
+    assert priced["ask"] is None and priced["rooms"] == ["Polish", "Copy1", "Epoxy", "Seal"]
+
+
+def test_a_spreadsheet_draft_is_not_asked_and_the_question_has_these_answers(panel):
+    u = panel["unpriced"]
+    assert u["sheet"]["ask"] is None and u["sheet"]["rooms"] == ["Polish", "Copy1", "Epoxy", "Seal"], "read as it always was"
+    t = u["truthTable"]
+    assert t["nullState"] is None and t["noTabs"] is None and t["emptyTabs"] is None
+    assert t["reasonOnAnOption"] is None, "a sheet that is not part of the base does not stop the proposal"
+    assert t["reasonTrimmed"] == "Why. Open the estimate, price this sheet, and come back to this page."
+    assert t["blankReason"] == "", "a reason of spaces is no reason"
+
+
+@pytest.fixture(scope="module")
+def door():
+    require_node()
+    proc = run_node(DOOR, FRONTEND)
+    assert proc.returncode == 0, "the harness itself failed:\n" + proc.stderr
+    return last_json_line(proc.stdout)["v2NoBasePrice"]
+
+
+def test_continue_stops_on_a_base_with_no_price_and_the_page_says_why(door):
+    """Run on the real page, shared.js and all: the page opens on a v2 bid whose Polish base has no price. It says so on the strip
+    the page uses for a refused save, and Continue leaves nothing composed, saved or navigated, the button as it was. Opening it, and
+    running the pricing again as an option ticked on the page does, leaves the document the draft already held as it was."""
+    u = door["unpriced"]
+    assert u["opened"] == {"lump": 0, "tb": "$0.00", "rooms": 0, "tax": 0}
+    assert u["note"] == {"head": "The base bid has no price yet.", "doIt": door["reason"] + NO_PRICE_FIX, "shown": True}
+    assert u["went"] is False and u["nav"] == [] and u["putsByContinue"] == 0 and u["composed"] is False
+    assert u["button"]["disabled"] is False and not u["button"]["text"].startswith("Generating")
+    assert u["rebuildMovedPayload"] is False and u["payloadKept"] is True
+
+
+def test_the_same_bid_with_its_base_priced_and_a_spreadsheet_bid_go_through_as_they_did(door):
+    """The control: the document the draft held IS brought up to date by the pricing on these, so the guard above is what keeps the
+    unpriced one still, not a payload that never moves."""
+    for name in ("priced", "sheet"):
+        p = door[name]
+        assert p["went"] is True and p["nav"][0][0] == "assign" and p["nav"][0][1].startswith("/done.html"), name
+        assert p["note"]["shown"] is False and p["putsByContinue"] == 1 and p["composed"] is True, name
+        assert p["rebuildMovedPayload"] is True, name
+    assert door["priced"]["opened"] == {"lump": 8000, "tb": "$8,000.00", "rooms": 2, "tax": 300}
 
 
 # ── the checks go red when the code changes ──────────────────────────────────────────────────────
@@ -440,6 +602,10 @@ DOCUMENT_BREAKS = {
     "the lump sum is the base and the options added": (
         "js/proposal-review.js", "    state.proposal_lump_sum = shownBase;", "    state.proposal_lump_sum = shownBase + 1;",
         "polish", lambda r: r["payload"]["values"]["proposal_lump_sum"] != 33798),
+    "a combined base names only the epoxy in its deduct": (
+        "js/proposal-review.js", '    const baseDesc = combinedDesc || (baseTab ? (baseTab.system_desc || "") : "");',
+        '    const baseDesc = baseTab ? (baseTab.system_desc || "") : "";',
+        "combined", lambda r: [x for x in r["payload"]["rooms"] if x["id"] == "Copy1"][0]["base_desc"] != "Flake and Polish 800 Grit"),
 }
 
 
@@ -449,8 +615,8 @@ def test_the_document_checks_go_red_when_the_code_changes(tmp_path, snaps, name)
     rel, old, new, which, noticed = DOCUMENT_BREAKS[name]
     frontend = break_source(tmp_path, rel, old, new)
     copy_unmodified(frontend, BLOCK_FILES)
-    state = json.loads(json.dumps(snaps["epoxy" if which == "epoxy" else "polish"]["state"]))
-    work_type = "epoxy" if which == "epoxy" else "polish"
+    state = json.loads(json.dumps(snaps[{"epoxy": "epoxy", "combined": "combined"}.get(which, "polish")]["state"]))
+    work_type = {"epoxy": "epoxy", "combined": "combo"}.get(which, "polish")
     if which == "epoxy":
         state["work_type"] = "polish"    # the base, not the job type left on the draft, decides
     if which == "seal":
@@ -459,3 +625,112 @@ def test_the_document_checks_go_red_when_the_code_changes(tmp_path, snaps, name)
     if got is None:
         return   # the break stopped the page outright: noticed
     assert noticed(got), "the checks did not notice: " + name
+
+
+# ── the follow-ups' checks go red when the code changes ──────────────────────────────────────────
+NOTES_BREAKS = {
+    "the open page never asks again": (
+        "js/proposal-review.js", "      const again = reseedNotesIfBaseChangedElsewhere();", "      const again = undefined;",
+        lambda r: r["switched"]["second"]["flatness"] is True),
+    "the first seed writes no record": (
+        "js/proposal-review.js", "      try { TW.setState({ notes_text: ta.value, notes_seed: seed }); } catch {}",
+        "      try { TW.setState({ notes_text: ta.value }); } catch {}",
+        lambda r: r["switched"]["seed"] is None),
+    "the record names the wrong work type": (
+        "js/proposal-review.js", "      const seed = { work_type: wt, text: ta.value };", '      const seed = { work_type: "epoxy", text: ta.value };',
+        lambda r: r["switched"]["second"]["flatness"] is True),
+    "the re-seed writes no record": (
+        "js/proposal-review.js", "      try { TW.setState({ notes_text: ta.value, notes_seed: reseeded }); } catch {}",
+        "      try { TW.setState({ notes_text: ta.value }); } catch {}",
+        lambda r: r["switched"]["saved"]["seedIsTheBox"] is not True),
+    "a hand edit is written over": (
+        "js/proposal-review.js", '    if (!cur.trim() || cur !== String(seed.text || "")) return; // hand-edited since → keep',
+        "    if (!cur.trim()) return;",
+        lambda r: r["handEdited"]["kept"] is not True),
+    "the same work type is asked for again": (
+        "js/proposal-review.js", "    if (seed.work_type === effectiveWorkType()) return;        // the base is the one they were seeded for",
+        "    void 0;",
+        lambda r: r["sameBase"]["again"] != []),
+    "typing in the meantime is written over": (
+        "js/proposal-review.js", '      if (String(ta.value || "") !== cur) return;     // typed during the fetch → theirs wins',
+        "      void 0;",
+        lambda r: r["typedMeanwhile"]["kept"] is not True),
+    "the Files door does not wait for the re-seed": (
+        "js/proposal-review.js", "      return again.then(() => syncPhaseNote());", "      return;",
+        lambda r: r["doorWaits"]["warrantyAtReady"] is not True),
+}
+
+
+@pytest.mark.parametrize("name", sorted(NOTES_BREAKS))
+def test_the_notes_checks_go_red_when_the_code_changes(tmp_path, name):
+    require_node()
+    rel, old, new, noticed = NOTES_BREAKS[name]
+    frontend = break_source(tmp_path, rel, old, new)
+    copy_unmodified(frontend, PANEL_FILES)
+    proc = run_node(NOTES, frontend)
+    if proc.returncode != 0:
+        return   # the break stopped the page outright: noticed
+    assert noticed(last_json_line(proc.stdout)), "the checks did not notice: " + name
+
+
+UNPRICED_PANEL_BREAKS = {
+    "an unpriced base is read as priced": (
+        "js/price-lines-core.js", "    if (!reason && Number(st.proposal_lump_sum) > 0) return null;", "    return null;",
+        lambda r: r["unpriced"]["base"]["ask"] is None),
+    "a sheet of the base that has no price is not looked for": (
+        "js/price-lines-core.js",
+        '      if (!reason && t.kind === "base" && typeof t.unpriceable === "string" && t.unpriceable.trim()) reason = t.unpriceable.trim();',
+        '      if (!reason && false) reason = "";',
+        lambda r: r["unpriced"]["pair"]["ask"] is None),
+    "a base with no price keeps the other sheets total": (
+        "js/proposal-review.js", "    if (baseless) { shownBase = 0; salesTax = 0; remodelTax = 0; }", "    void 0;",
+        lambda r: r["unpriced"]["pair"]["lump"] != 0),
+    "options print against a base with no price": (
+        "js/proposal-review.js", "    state.rooms = (shown.length && baseTab && !baseless) ? [mkRoom(baseTab, true), ...shown] : [];",
+        "    state.rooms = (shown.length && baseTab) ? [mkRoom(baseTab, true), ...shown] : [];",
+        lambda r: r["unpriced"]["base"]["rooms"] != []),
+    "a sheet with no price is listed at $0": (
+        "js/proposal-review.js",
+        '            const priceText = (typeof t.unpriceable === "string" && t.unpriceable) ? "no price" : fmtUSDdoc(N(t.total));',
+        "            const priceText = fmtUSDdoc(N(t.total));",
+        lambda r: "no price" not in r["unpriced"]["base"]["rows"]["Polish"]),
+}
+
+
+@pytest.mark.parametrize("name", sorted(UNPRICED_PANEL_BREAKS))
+def test_the_unpriced_panel_checks_go_red_when_the_code_changes(tmp_path, name):
+    require_node()
+    rel, old, new, noticed = UNPRICED_PANEL_BREAKS[name]
+    frontend = break_source(tmp_path, rel, old, new)
+    copy_unmodified(frontend, PANEL_FILES)
+    proc = run_node(PANEL, frontend)
+    if proc.returncode != 0:
+        return   # the break stopped the page outright: noticed
+    assert noticed(last_json_line(proc.stdout)), "the checks did not notice: " + name
+
+
+DOOR_BREAKS = {
+    "an unpriced base is read as priced": (
+        "js/price-lines-core.js", "    if (!reason && Number(st.proposal_lump_sum) > 0) return null;", "    return null;",
+        lambda d: d["unpriced"]["went"] is not False),
+    "Continue goes on past a base with no price": (
+        "js/proposal-review.js", "    if (sayTheBaseHasNoPrice()) return false;", "    sayTheBaseHasNoPrice();",
+        lambda d: d["unpriced"]["went"] is not False),
+    "the page does not say there is no price": (
+        "js/proposal-review.js", "    return p ? repaintNote(p.say, p.fix) : false;", "    return !!p;",
+        lambda d: d["unpriced"]["note"]["shown"] is not True),
+    "the document the draft held is rewritten to zero": (
+        "js/proposal-review.js", "    if (TWPrice.noBasePrice(state)) return null;", "    void 0;",
+        lambda d: d["unpriced"]["rebuildMovedPayload"] is not False),
+}
+
+
+@pytest.mark.parametrize("name", sorted(DOOR_BREAKS))
+def test_the_continue_checks_go_red_when_the_code_changes(tmp_path, name):
+    require_node()
+    rel, old, new, noticed = DOOR_BREAKS[name]
+    frontend = break_source(tmp_path, rel, old, new)
+    proc = run_node(DOOR, frontend)
+    if proc.returncode != 0:
+        return   # the break stopped the page outright: noticed
+    assert noticed(last_json_line(proc.stdout)["v2NoBasePrice"]), "the checks did not notice: " + name

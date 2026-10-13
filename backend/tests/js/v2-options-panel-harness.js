@@ -324,4 +324,46 @@ out.parity = (() => {
   }));
 })();
 
+// 8. A SHEET THE ESTIMATE COULD NOT PRICE is saved with total: null and an `unpriceable` reason, and the proposal read the null as 0.
+//    An unpriced BASE keeps no price: the base is 0 on the page, nothing prints as an option against it, the panel says "no price"
+//    and not "$0", and the question TWPrice.noBasePrice answers is yes (Continue stops on it, the Files-door scenario). A combined
+//    base with one of its two sheets unpriced is unpriced too, not the other sheet's price standing for the whole. An unpriced
+//    OPTION is left off the proposal and the base is as it was. A spreadsheet draft is not asked.
+out.unpriced = (() => {
+  const WHY = "The Polish takeoff did not load, so this sheet cannot be priced.";
+  const unprice = (s, ids) => {
+    s.priced_tabs.forEach((t) => { if (ids.indexOf(t.id) >= 0) { t.total = null; t.sales_tax = null; t.remodel = null; t.unpriceable = WHY; } });
+    return s;
+  };
+  const baseUnpriced = (s) => { unprice(s, ["Polish"]); s.proposal_lump_sum = null; s.proposal_sales_tax = null; s.proposal_remodel_tax = null; s.computed_bid = null; return s; };
+  const look = (s) => {
+    const p = open(s);
+    return {
+      lump: p.st.proposal_lump_sum, tax: p.st.proposal_sales_tax, rooms: (p.st.rooms || []).map((r) => r[0] || r.id),
+      ask: TWPrice.noBasePrice(p.st), rows: Object.fromEntries(p.panel.querySelectorAll(".op-row").map((r) => [r.dataset.id, rowFacts(p, r.dataset.id).text])),
+      tb: p.st.proposal_lump_sum,
+    };
+  };
+  const res = {
+    reason: WHY,
+    base: look(baseUnpriced(draft("polish"))),
+    option: look(unprice(draft("polish"), ["Epoxy"])),
+    // the pair: Epoxy priced, Polish not. composePricingSnapshot saves the lump sum as null; the page must not print Epoxy's alone
+    pair: look(baseUnpriced(draft("combined"))),
+    priced: look(draft("polish")),
+    // the same unpriced bid as a spreadsheet wrote it (no v2 marks): read as it always was
+    sheet: look(unmarked(baseUnpriced(draft("polish")))),
+    // no reason given, a base that simply has no total
+    noReason: look((() => { const s = draft("polish"); s.priced_tabs[0].total = 0; s.proposal_lump_sum = 0; return s; })()),
+    truthTable: {
+      nullState: TWPrice.noBasePrice(null), noTabs: TWPrice.noBasePrice({ proposal_lump_sum: 5 }),
+      emptyTabs: TWPrice.noBasePrice({ priced_tabs: [], proposal_lump_sum: 0 }),
+      reasonTrimmed: (TWPrice.noBasePrice({ priced_tabs: [{ id: "A", kind: "base", v2: true, unpriceable: "  Why  " }], proposal_lump_sum: 7 }) || {}).fix,
+      reasonOnAnOption: TWPrice.noBasePrice({ priced_tabs: [{ id: "A", kind: "base", v2: true, total: 4 }, { id: "B", kind: "option", v2: true, unpriceable: "x" }], proposal_lump_sum: 4 }),
+      blankReason: (TWPrice.noBasePrice({ priced_tabs: [{ id: "A", kind: "base", v2: true, unpriceable: "   " }], proposal_lump_sum: 0 }) || {}).reason,
+    },
+  };
+  return res;
+})();
+
 console.log(JSON.stringify(out));

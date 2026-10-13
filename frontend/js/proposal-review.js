@@ -119,6 +119,16 @@
     return repaintNote(b.say, b.fix);
   }
 
+  /** Say, on the same strip, that a v2 bid's base has no price, and stop. The estimate shows "no price" for a sheet it cannot
+   *  price and still lets the estimator on; this page read that as $0 and would have built a proposal around it. It paints when
+   *  the page opens and again when Continue is pressed, so the estimator is told before and after. Returns true when it painted,
+   *  i.e. when the caller must NOT proceed (TWPrice.noBasePrice in price-lines-core.js is the question, asked of the page's own
+   *  draft after rebuildPricing has priced it). */
+  function sayTheBaseHasNoPrice() {
+    const p = TWPrice.noBasePrice(state);
+    return p ? repaintNote(p.say, p.fix) : false;
+  }
+
   // THE TAX CONTROL: LAYOUT ONLY. Hanz, 2026-09-25: the estimate sheet decides WHETHER there is
   // tax (Taxable? for material sales tax, Remodel Tax? for remodel tax, per priced tab); this picks
   // how it is shown, "One line" or "Broken out". It is stored as `tax_layout` only when somebody
@@ -379,15 +389,17 @@
 
   // Fetch the EFFECTIVE work type's default notes (auth-gated — wait for the
   // Supabase token, else authHeaders() has no Bearer yet and it 401s) and hand
-  // the joined text to `onText`. Shared by the initial prefill + the base re-seed.
+  // the joined text to `onText`, with the work type they are for. Shared by the
+  // initial prefill + the base re-seed.
   function fetchDefaultNotes(onText) {
     return (async () => {
       try { if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready; } catch {}
       try {
-        const r = await fetch("/api/default-notes?work_type=" + encodeURIComponent(effectiveWorkType()),
+        const wt = effectiveWorkType();
+        const r = await fetch("/api/default-notes?work_type=" + encodeURIComponent(wt),
                               { headers: TW.authHeaders() });
         const j = await r.json();
-        if (Array.isArray(j.notes)) onText(j.notes.join("\n"));
+        if (Array.isArray(j.notes)) onText(j.notes.join("\n"), wt);
       } catch {}
     })();
   }
@@ -405,12 +417,23 @@
       try { scheduleFit(); } catch {}
     };
     if (Array.isArray(state.notes) && state.notes.length) { applyAndPreview(state.notes.join("\n")); return; }
-    if (String(ta.value || "").trim()) { syncPhaseNote(); return; }
+    if (String(ta.value || "").trim()) {
+      // Asked BEFORE the phase line is re-synced: the saved notes are compared as they were saved. A
+      // re-seed syncs the line itself when its words arrive; this is for when it never comes.
+      const again = reseedNotesIfBaseChangedElsewhere();
+      if (!again) { syncPhaseNote(); return; }
+      return again.then(() => syncPhaseNote());
+    }
     // Brand-new project: pull this work type's boilerplate scope/schedule/exclusions.
-    return fetchDefaultNotes((text) => {
+    return fetchDefaultNotes((text, wt) => {
       if (String(ta.value || "").trim()) return;   // user typed during the fetch
       applyAndPreview(text);
       _seededNotes = text;
+      // Written down WITH the notes: which work type these words are the boilerplate of, so a later
+      // visit can tell them from a hand edit after the base was changed somewhere else.
+      const seed = { work_type: wt, text: ta.value };
+      state.notes_seed = seed;
+      try { TW.setState({ notes_text: ta.value, notes_seed: seed }); } catch {}
     });
   })();
 
@@ -422,13 +445,35 @@
     if (!ta) return;
     const cur = String(ta.value || "");
     if (cur.trim() && cur !== _seededNotes) return;   // hand-edited / saved → keep
-    fetchDefaultNotes((text) => {
+    return fetchDefaultNotes((text, wt) => {
+      if (String(ta.value || "") !== cur) return;     // typed during the fetch → theirs wins
       ta.value = text; _seededNotes = text; syncPhaseNote();
       try { renderNotesPreview(); } catch {}
-      try { TW.setState({ notes_text: ta.value }); } catch {}
+      const reseeded = { work_type: wt, text: ta.value };
+      state.notes_seed = reseeded;
+      try { TW.setState({ notes_text: ta.value, notes_seed: reseeded }); } catch {}
       // Arrives after the base flip's own fit was answered: ask again, for the new notes.
       try { scheduleFit(); } catch {}
     });
+  }
+
+  // THE BASE CAN BE PICKED SOMEWHERE ELSE. On a v2 draft this page only reads the base (the radios are
+  // read-only), so the base changes on the estimate and this page opens on the new one. The in-page
+  // switch above never runs, so the NOTES kept the old work type's boilerplate for good: an Epoxy base
+  // printed the Polish notes and left out the Epoxy warranty line. The boilerplate is written down when
+  // it is seeded (state.notes_seed: its work type and its exact text), so an open page can tell untouched
+  // boilerplate of ANOTHER work type from a hand edit, and re-seeds only the first. A draft saved before
+  // the record existed has none and is left as it was. Returns the re-seed's promise (the Files page's
+  // door waits on it), or nothing.
+  function reseedNotesIfBaseChangedElsewhere() {
+    const ta = document.getElementById("notes-text");
+    const seed = state.notes_seed;
+    if (!ta || !seed || typeof seed !== "object" || !seed.work_type) return;
+    if (seed.work_type === effectiveWorkType()) return;        // the base is the one they were seeded for
+    const cur = String(ta.value || "");
+    if (!cur.trim() || cur !== String(seed.text || "")) return; // hand-edited since → keep
+    _seededNotes = cur;
+    return reseedNotesForWorkType();
   }
 
   // Pre-fill the Estimator (signature) with the signed-in user's name unless
@@ -1063,6 +1108,8 @@
     const tFlag = (t, k) => (t && typeof t[k] === "boolean") ? t[k] : undefined;
     const orFlag = (a, b) => (a === undefined && b === undefined) ? undefined : (a === true || b === true);
     let baseTaxable, baseRemodelOn;
+    // The systems a COMBINED base is made of, named for "in lieu of ...": a Deduct taken against the pair is against both.
+    let combinedDesc = "";
     if (baseTab) {
       shownBase = N(baseTab.total); salesTax = N(baseTab.sales_tax); remodelTax = N(baseTab.remodel);
       baseTaxable = tFlag(baseTab, "taxable"); baseRemodelOn = tFlag(baseTab, "remodel_on");
@@ -1095,16 +1142,25 @@
           : orFlag(tFlag(eB, "taxable"), tFlag(pB, "taxable"));
         baseRemodelOn = printed.length ? printed.some(r => r.remodel_on)
           : orFlag(tFlag(eB, "remodel_on"), tFlag(pB, "remodel_on"));
+        // Both systems, in the order the document prints them. A Deduct against this base is against the pair, and a line
+        // that said "in lieu of Flake" alone read as the epoxy's price being what the customer saves.
+        combinedDesc = [eB, pB].filter(t => t && N(t.total) > 0).map(t => t.system_desc || t.name).join(" and ");
       } else {
         baseTaxable = tFlag(baseTab, "taxable"); baseRemodelOn = tFlag(baseTab, "remodel_on");
       }
     }
+    // A v2 base the estimate could not price comes in as total: null, which N() reads as 0: the document printed "$0 - Total"
+    // and every option as an Add against it. There is no price to print, so none is kept: the base is 0 on this page (the
+    // page says so and Continue stops, see sayTheBaseHasNoPrice), and no option is printed against it (rooms, below). A combined
+    // base with one of its two sheets unpriced is the same: the other sheet's price alone would read as the whole.
+    const baseless = v2Snapshot && !!TWPrice.noBasePrice({ priced_tabs: all, proposal_lump_sum: shownBase });
+    if (baseless) { shownBase = 0; salesTax = 0; remodelTax = 0; }
     state.proposal_lump_sum = shownBase;
     state.proposal_sales_tax = salesTax;
     state.proposal_remodel_tax = remodelTax;
     state.proposal_taxable = baseTaxable;
     state.proposal_remodel_on = baseRemodelOn;
-    const baseDesc = baseTab ? (baseTab.system_desc || "") : "";
+    const baseDesc = combinedDesc || (baseTab ? (baseTab.system_desc || "") : "");
     const mkRoom = (t, isBase) => {
       const total = isBase ? shownBase : N(t.total);
       const o = opts[t.id] || {};
@@ -1141,7 +1197,7 @@
     // mkRoom, which a harness lifts on its own (option-desc-harness.js) with only the names it closes over. A bid from the
     // spreadsheet is read as it always was.
     if (v2Snapshot) shown.forEach(room => { if (isOptionOnlyTab(byId(room.id))) room.price_mode = "total"; });
-    state.rooms = (shown.length && baseTab) ? [mkRoom(baseTab, true), ...shown] : [];
+    state.rooms = (shown.length && baseTab && !baseless) ? [mkRoom(baseTab, true), ...shown] : [];
     // Recompute Area from the base tab(s) so a base switch / option toggle HERE
     // re-derives the proposal's SF without the sheet engine (mirrors the
     // estimate snapshot; combo default = the epoxy + polish base-kind tabs).
@@ -1232,6 +1288,9 @@
   function syncPayloadPricing() {
     const pp = state.proposal_payload;
     if (!pp || typeof pp !== "object" || !pp.values || typeof pp.values !== "object") return null;
+    // A v2 base with no price is not money either: the document it made before keeps the figures it had, rather than
+    // being rewritten to "$0 - Total" (the page says why, and Continue stops).
+    if (TWPrice.noBasePrice(state)) return null;
     // NEVER WRITE MONEY WE CANNOT CORROBORATE. computeTokenValues reads the lump sum from
     // #tb-total — and that element does not exist in proposal-review.html at all: the init block
     // near the bottom of this file CREATES it, which happens AFTER the page-init rebuildPricing()
@@ -1821,7 +1880,9 @@
             let r = `<div class="op-row" data-id="${esc(t.id)}">`;
             // No Base-bid radio on an option-only sheet — the same suppression the Estimate strip
             // applies, so the two screens cannot offer different answers to "can this be the base?".
-            const nameRow = `<span class="op-name">${esc(t.name)} <span class="op-price">${fmtUSDdoc(N(t.total))}</span></span>`;
+            // A sheet the estimate could not price has no figure (total: null), and is not listed as $0.
+            const priceText = (typeof t.unpriceable === "string" && t.unpriceable) ? "no price" : fmtUSDdoc(N(t.total));
+            const nameRow = `<span class="op-name">${esc(t.name)} <span class="op-price">${priceText}</span></span>`;
             r += isOptionOnlyTab(t)
               ? `<div class="pr-baserow" title="Priced as an option only, never as the base bid">${nameRow}</div>`
               : `<label class="pr-baserow"><input type="radio" name="pr-base" class="pr-base" value="${esc(t.id)}"${isBase ? " checked" : ""}${baseRO}> ` +
@@ -9706,6 +9767,8 @@
     el.textContent = fmtUSD(lump);
     refreshPriceDisplay();
   })();
+  // A v2 base with no price is said on the page as it opens (the strip Continue also uses), not first when Continue is pressed.
+  sayTheBaseHasNoPrice();
 
   // Default the bid date to today if intake didn't carry one through.
   // Use the local timezone so the displayed date matches what the user
@@ -9887,6 +9950,8 @@
     // RESOLVES TRUE ONLY WHEN IT LEFT FOR THE FILES PAGE, false when it stopped and said why: the
     // Files page's door, which presses this unattended, has to know the page is still here.
     if (sayTheSaveIsBlocked()) return false;
+    // AND A BASE WITH NO PRICE has no proposal to build: nothing is composed, saved or left for.
+    if (sayTheBaseHasNoPrice()) return false;
     const btn = document.getElementById("generate-btn");
     btn.disabled = true;
     btn.textContent = "Generating…";

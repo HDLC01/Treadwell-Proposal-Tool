@@ -876,6 +876,34 @@
     return true;
   }
 
+  /** DOES A v2 BID HAVE NO BASE PRICE TO PRINT? Answers null for every draft that has one (and for every draft from the
+   *  spreadsheet, which is read as it always was), else { say, fix, reason }: what to tell the estimator, and the estimate's
+   *  own reason when it gave one.
+   *
+   *  WHY IT EXISTS. A v2 estimate saves a sheet it cannot price (a takeoff that did not load, a profile it will not reprice)
+   *  with `total: null` and an `unpriceable` reason, and shows "no price". The Proposal step reads a null as 0, so the same
+   *  bid printed "$0 - Total" under a base and every option as an Add against it. A base is unpriced when any sheet that is
+   *  part of the base says so (`kind: "base"`: a combined Epoxy and Polish base with one of the two unpriced would otherwise
+   *  print the other's price as the whole), or when the lump sum the page worked out is not a positive figure. An unpriced
+   *  OPTION is not this: it is left off the proposal, as a sheet with no total always was.
+   *
+   *  Lives here, in a core module, for the reason allV2 does: rebuildPricing, syncPayloadPricing and continueToDone ask it,
+   *  and a harness lifts each of those by name. `st` is the page's draft after rebuildPricing has set proposal_lump_sum. */
+  function noBasePrice(st) {
+    if (!st || typeof st !== "object" || !allV2(st.priced_tabs)) return null;
+    var reason = "";
+    st.priced_tabs.forEach(function (t) {
+      if (!reason && t.kind === "base" && typeof t.unpriceable === "string" && t.unpriceable.trim()) reason = t.unpriceable.trim();
+    });
+    if (!reason && Number(st.proposal_lump_sum) > 0) return null;
+    return {
+      say: "The base bid has no price yet.",
+      fix: (reason ? reason + (/[.!?]$/.test(reason) ? " " : ". ") : "") +
+        "Open the estimate, price this sheet, and come back to this page.",
+      reason: reason,
+    };
+  }
+
 
   return {
     AMOUNT: AMOUNT, TAX: TAX, PHRASE: PHRASE, KNOWN_PHRASES: KNOWN_PHRASES,
@@ -893,6 +921,6 @@
     LEVEL_LEFT: LEVEL_LEFT, LEVEL_HANG: LEVEL_HANG, INDENT_STEP: INDENT_STEP, INDENT_MAX: INDENT_MAX,
     HEADING_KEYS: HEADING_KEYS, cleanLineProps: cleanLineProps, lineDefault: lineDefault,
     lineIntent: lineIntent, resolveLineProps: resolveLineProps, paraStep: paraStep,
-    overrideFor: overrideFor, allV2: allV2,
+    overrideFor: overrideFor, allV2: allV2, noBasePrice: noBasePrice,
   };
 });

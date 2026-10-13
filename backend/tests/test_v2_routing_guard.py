@@ -492,7 +492,7 @@ DERIVED = [
     "tab_opts", "tab_copies", "tab_labels", "tab_order", "tab_notes", "tab_structs", "lock_overrides",
     "tax_layout", "tax_inclusion", "price_overrides", "price_lines", "extras",
     "paragraph_overrides", "paragraph_overrides_all", "system_name", "texture", "scope_notes",
-    "schedule_notes", "exclusions", "notes_text", "estimator_name",
+    "schedule_notes", "exclusions", "notes_text", "notes_seed", "estimator_name",
     "dropbox_result", "portal_message", "portal_emails", "require_deposit", "job_number",
     "info_cell_values", "notify_picks", "won", "handed_off", "closed_lost", "on_hold",
 ]
