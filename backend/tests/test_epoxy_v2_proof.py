@@ -360,7 +360,7 @@ BREAKS = {
         "js/library-core.js", '    return (a === undefined || a === null || a === "") ? JSON.stringify(["m", id]) : JSON.stringify(["a", a, j, id]);',
         '    return JSON.stringify(["m", id]);'),
     "a new section is not stamped to pool": (
-        MODEL, "      pool_packs: true      // a section made now", "      pool_packs: false     // a section made now"),
+        MODEL, "    section.pool_packs = true;      // a section made now", "    section.pool_packs = false;     // a section made now"),
     "the pooled cost is not handed back to its rows": (
         "js/library-core.js", "          cost: share[k], pack_cost: fin.pack_cost,", "          cost: 0, pack_cost: fin.pack_cost,"),
 }

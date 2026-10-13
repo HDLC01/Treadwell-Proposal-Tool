@@ -408,6 +408,15 @@ def _second_system(data: Dict[str, Any], base_role: str):
         opt = opts.get(tab.get("id"))
         if isinstance(opt, dict) and opt.get("is_option"):
             continue
+        # * **A v2 section that is an option, on the proposal or not.** The estimating tool v2 writes
+        #   each section's own `kind`, and an option (a Copy<N> made off the base, a sheet that was
+        #   the base before another was picked) starts OFF the proposal: its tab_opts entry says
+        #   is_option false until the estimator puts it on. Off the proposal it was never quoted, so
+        #   the flag above cannot be the only guard, or a scratch copy's area would be booked as sold
+        #   scope. Older drafts write kind "base" (or "copy", whose option state IS the flag above), so
+        #   this changes nothing for them.
+        if _txt(tab.get("kind")).lower() == "option":
+            continue
         sf_src = tab.get("sf") if isinstance(tab.get("sf"), dict) else {}
         sheet_keys, _ = _SF_KEYS.get(role, _SF_KEYS["epoxy"])
         sf = _sum_area(sf_src, sheet_keys)

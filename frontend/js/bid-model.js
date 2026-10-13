@@ -1703,10 +1703,23 @@
   }
 
   /** The options travelCosts takes for the section `tab` of this model: the sheet's way of counting nights (sheetNights) for
-   *  the ROOT section of a bid priced by polish-rev2, and none for every other section, which count as they always did. */
+   *  a Polish section priced by polish-rev2 (the root of a bid stamped so, or a Polish section under `tabs` that was made
+   *  with the stamp), and none for every other section, which count as they always did. */
   function travelOpts(model, tab) {
-    if (tab !== ROOT_TAB || rootProfile(model) !== REV2) return undefined;
+    if (!isRev2Polish(model, tab)) return undefined;
     return { sheetNights: true, conditions: model.conditions };
+  }
+
+  /** Is the section `tab` of this model a Polish section priced by polish-rev2? The root is when its own `profile` key
+   *  says so (rootProfile). A Polish section under `tabs` (a copy, or a sheet added to the bid) is when its own profile
+   *  stamp is exactly REV2's. Reads the model without throwing: a tab the model does not hold, or a section that is not
+   *  one, is not. */
+  function isRev2Polish(model, tab) {
+    if (!isObject(model)) return false;
+    if (tab === ROOT_TAB) return rootProfile(model) === REV2;
+    if (!isObject(model.tabs) || !has.call(model.tabs, tab)) return false;
+    var s = model.tabs[tab];
+    return isObject(s) && s.layout === "polish" && s.profile === REV2.stamp;
   }
 
   /** The tooling of a model's ROOT section: the sheet's, for a bid priced by polish-rev2, and 0 for every other (the
@@ -1714,10 +1727,16 @@
    *  the chain's sf is read from. */
   function rootTooling(model) {
     if (!rootProfile(model).quirks.toolingInSubTotal) return 0;
-    var rows = model.takeoff || [];
+    return takeoffTooling(model.takeoff, model.conditions);
+  }
+
+  /** The sheet's tooling for ONE Polish section's takeoff, on a profile that charges it: the same figure rootTooling gives
+   *  the root, for a Polish section under `tabs`. `conditions` are the job's (Dye is the job's, not a section's). */
+  function takeoffTooling(takeoff, conditions) {
+    var rows = takeoff || [];
     var kind = polishSystemOf(rows);
     return polishTooling(takeoffSf(rows), takeoffLf(rows), {
-      dye: !!(model.conditions && model.conditions.dye), system: kind.system, traditional: kind.traditional }).total;
+      dye: !!(conditions && conditions.dye), system: kind.system, traditional: kind.traditional }).total;
   }
 
   /** THE CHAIN. Materials and labor in, a bid out, one key per cell of Kyle's markup column.
@@ -3096,13 +3115,20 @@
   // travel, distance, fees_default (and no_travel_labor). The root keys keep today's meaning, so the model is
   // still `polish_estimate` at `version: 2` and no saved bid is rewritten.
   //
+  // A SECTION'S KEY IS ITS WORKBOOK SHEET, OR A Copy<N> ID (Sheets phase 1). A copy of a sheet, and any second section of
+  // a type, is filed under "Copy1", "Copy2" and so on and says its workbook sheet in `sheet`, what it is called in `label`
+  // and what it was copied from in `source`. The key never changes and a label is never a key. Code that means "the
+  // workbook sheet" (the engine's tab, a Gyp preset, a truckload) reads the entry's `sheet`; code that means "this section"
+  // (a price, a proposal setting, a click) reads its `tab`. The root's own `kind` is read in full (base, option, off; a
+  // missing key is base), so the Polish sheet can be an option when something else is the base.
+  //
   // `sectionsOf` is the ONE place that knows root from tabs; everything else asks it and gets the section BY
   // REFERENCE. THE ROOT SECTION is priced by `polish-legacy@1`'s built-ins, as it has been since the model was
   // written, unless its own `profile` key is exactly `polish-rev2@1` (Phase 17): a NEW bid is stamped so when it is
   // seeded (seedNewSections), and a saved bid has no such key and never will, so its totals cannot move (rootProfile).
-  // No snapshot is written for the root either way. A `rates` or `kind: "base"` at the root is reserved and is not
-  // read (`kind: "off"` is: a root Polish section that is not part of the bid, which is what an Epoxy-only job
-  // will hold).
+  // No snapshot is written for the root either way. A `rates` at the root is reserved and is not read. Its `kind` is:
+  // "off" is a root Polish section that is not part of the bid (what an Epoxy-only job holds), "option" is a Polish sheet
+  // that is not the base (since Sheets phase 1; it is then charged its own travel), and base is a missing key.
   //
   // PRICING NEVER READS THE LIVE MARKUPS RULES. A section prices with its own profile (resolved by the stamp it
   // was saved with) and the rates it kept when it was first used. A section with no snapshot prices at the
@@ -3113,6 +3139,12 @@
   var SECTION_KINDS = ["base", "option", "off"];
   var PROFILE_STAMP = /^([a-z0-9-]+)@(\d+)$/;
   var has = Object.prototype.hasOwnProperty;
+  /** A SECTION'S KEY IS EITHER ITS WORKBOOK SHEET OR A Copy<N> ID (Sheets phase 1). A copy of a sheet, and any second section
+   *  of a type, is filed under "Copy1", "Copy2" and so on, and says which workbook sheet it is in its own `sheet` key, so a
+   *  key is never a label somebody typed and a rename moves nothing. A key that is a sheet's own name is the old,
+   *  unchanged form every saved bid uses. At most MAX_COPIES sections hold a Copy id, the live estimate's own limit. */
+  var COPY_ID = /^Copy[1-9]\d*$/;
+  var MAX_COPIES = 12;
 
   /** Every section of the model, root first, then `tabs` in the order they were added, as
    *  { tab, root, section, layout, kind, profile, role }. `section` is the live object (the root section IS
@@ -3122,11 +3154,12 @@
    *  layout, and "polish" is never assumed. */
   function sectionsOf(model) {
     if (!isObject(model)) throw new Error("sectionsOf needs the model");
-    // Only "off" is read at the root. A root kind of base or option is reserved (Phase 17) and means base: the
-    // root is priced through bid(), which always charges the job's travel, so an "option" root would carry it twice.
-    var rootKind = model.kind === "off" ? "off" : "base";
-    var out = [{ tab: ROOT_TAB, root: true, section: model, layout: "polish", kind: rootKind,
-                 profile: rootProfile(model).stamp, role: "polish" }];
+    // The root's kind is read in full since the Sheets work (Sheets phase 1): "off" (an Epoxy job's Polish, not part of
+    // the bid), "option" (a Polish sheet that is no longer the base, priced apart like any option) and base, which is what a
+    // missing key means, so a bid saved before any of this reads as it always did. Anything else is base.
+    var rootKind = model.kind === "off" ? "off" : (model.kind === "option" ? "option" : "base");
+    var out = [{ tab: ROOT_TAB, sheet: ROOT_TAB, label: rootLabel(model), source: null, root: true, section: model,
+                 layout: "polish", kind: rootKind, profile: rootProfile(model).stamp, role: "polish" }];
     var tabs = model.tabs;
     if (tabs === undefined || tabs === null) return out;
     if (!isObject(tabs)) throw new Error("model.tabs must be an object of sections keyed by workbook tab id");
@@ -3134,9 +3167,14 @@
       var s = tabs[id];
       var where = "section " + JSON.stringify(id);
       if (id === ROOT_TAB) throw new Error(where + " is the root section's own tab: it lives at the root of the model, not under tabs");
-      var tabKey = types.tabOfSheet(id);
-      if (!tabKey) throw new Error(where + " is not a priced workbook tab");
+      // A key is either a workbook sheet ("Epoxy", "Seal (+Jnts)") or a Copy<N> id, which names its sheet in `sheet`.
+      var copy = COPY_ID.test(id);
+      if (copy && !isObject(s)) throw new Error(where + " is not a section");
+      var sheet = copy ? (typeof s.sheet === "string" ? s.sheet : "") : id;
+      var tabKey = types.tabOfSheet(sheet);
+      if (!tabKey) throw new Error(where + (copy ? " does not name a priced workbook sheet" : " is not a priced workbook tab"));
       if (!isObject(s)) throw new Error(where + " is not a section");
+      if (!copy && s.sheet !== undefined && s.sheet !== id) throw new Error(where + " says it is the sheet " + JSON.stringify(s.sheet));
       if (typeof s.layout !== "string" || s.layout === "") throw new Error(where + " does not say its layout (there is no default)");
       var rec = types.tab(tabKey);
       if (s.layout !== rec.markupLayout) throw new Error(where + " says layout " + JSON.stringify(s.layout) + ", but that tab is " + rec.markupLayout);
@@ -3148,9 +3186,16 @@
       if (known && known.layout !== s.layout) {
         throw new Error(where + " is priced by profile " + stamp[1] + ", which belongs to another layout");
       }
-      out.push({ tab: id, root: false, section: s, layout: s.layout, kind: s.kind, profile: s.profile, role: rec.role });
+      out.push({ tab: id, sheet: sheet, label: typeof s.label === "string" && s.label.trim() ? s.label : id,
+                 source: typeof s.source === "string" ? s.source : null,
+                 root: false, section: s, layout: s.layout, kind: s.kind, profile: s.profile, role: rec.role });
     });
     return out;
+  }
+
+  /** What the root section is called on screen: its own `label` when it was renamed, else its workbook sheet. */
+  function rootLabel(model) {
+    return typeof model.label === "string" && model.label.trim() ? model.label : ROOT_TAB;
   }
 
   /** The sections that are part of the bid: every kind but "off". */
@@ -3194,44 +3239,113 @@
    *  and an Epoxy section as the base. Polish returns the model it was given, unchanged (no saved bid moves).
    *  Idempotent: a section the model already has is left as it is, and the root's kind is only ever written
    *  here, never read back to decide anything else. Returns a NEW model when it changes anything, else the one
-   *  handed in. A job type that is not ready in the vocabulary THROWS, because pricing it would be a guess. */
+   *  handed in. A job type that is not ready in the vocabulary THROWS, because pricing it would be a guess.
+   *
+   *  BASE-AWARE (Sheets phase 1). A bid whose base already IS this job type (baseOf) is left exactly as it is, which
+   *  is what lets the estimator make a copy or a second sheet the base without the intake's job type undoing it.
+   *  When the job type really moved, each tab it is priced on gets its base from the sections the bid HAS, found by
+   *  their workbook sheet and not by their key: one that is already a base, else the sheet's own section, else a
+   *  copy. A section that was an option or off is made the base (it keeps its rows); only a tab with no section at
+   *  all is added. Bases the new job type does not use are marked off, rows kept, as since Phase 12, and an option
+   *  stays an option. A bid whose sections cannot be read is returned as it is. */
   function sectionsForJob(model, jobType, ctx) {
     if (!isObject(model)) throw new Error("sectionsForJob needs the model");
     var job = types.jobType(jobType);
     if (!job) throw new Error(JSON.stringify(String(jobType)) + " is not a job type");
     if (job.ready !== true) throw new Error(job.label + " is not ready in Estimating Tool v2 yet");
-    var tabs = types.tabsFor(jobType);
+    var held = readableSections(model);
+    if (held === null) return model;
+    if (baseTypeOf(held) === jobType) return model;
     var out = model;
-    var baseTabs = tabs.map(function (key) { return types.tab(key); });
-    var needsRoot = baseTabs.some(function (rec) { return rec.sheets.indexOf(ROOT_TAB) >= 0; });
-    var rootLifted = needsRoot && model.kind === "off";
-    var wanted = [];
+    var baseTabs = types.tabsFor(jobType).map(function (key) { return types.tab(key); });
+    var picked = [];
     baseTabs.forEach(function (rec) {
-      var id = rec.sheets[0];
-      if (id === ROOT_TAB) return;
-      wanted.push(id);
       // A tab that has several sheets (Gyp's five presets) is ONE section, filed under the sheet the estimator
       // chose, so "does the bid have it" asks every sheet of the tab and not the first alone.
-      var held = sheetHeld(out, rec);
-      if (held !== null) {
-        // A saved bid whose job type moved back to this tab: the section was marked off when it left, and its
-        // rows are kept, so bringing it back is only turning it on.
-        if (isObject(out.tabs[held]) && out.tabs[held].kind === "off") out = withSectionKind(out, held, "base");
+      var mine = held.filter(function (e) { return types.tabOfSheet(e.sheet) === rec.key; });
+      if (!mine.length) {
+        out = activateSection(out, rec.sheets[0], "base", ctx);
+        picked.push(rec.sheets[0]);
         return;
       }
-      out = activateSection(out, id, "base", ctx);
+      // A saved bid whose job type moved back to this tab: the section was marked off when it left, and its
+      // rows are kept, so bringing it back is only turning it on.
+      picked.push(preferredSection(mine).tab);
+    });
+    var rootLifted = model.kind === "off" && picked.indexOf(ROOT_TAB) >= 0;
+    picked.forEach(function (id) {
+      // The root is part of this job type again (a saved Epoxy bid switched to Combo or Polish): only its "off" (or
+      // "option") is lifted. The key is dropped rather than written as "base", so a bid that never left Polish saves as it did.
+      if (id === ROOT_TAB) {
+        if (out.kind === "off" || out.kind === "option") { out = Object.assign({}, out); delete out.kind; }
+      } else if (out.tabs[id].kind !== "base") out = withSectionKind(out, id, "base");
     });
     // A saved bid whose job type moved to one that does not use a base section it has: that section is marked
     // off, never deleted, so the estimator's rows survive a switch back.
-    sectionsLeaving(out, jobType).forEach(function (id) { out = withSectionKind(out, id, "off"); });
-    if (!needsRoot && out.kind !== "off") out = Object.assign({}, out, { kind: "off" });
-    // The root is part of this job type again (a saved Epoxy bid switched to Combo or Polish): only its "off" is
-    // lifted. The key is dropped rather than written as "base", so a bid that never left Polish saves as it did.
-    if (needsRoot && out.kind === "off") { out = Object.assign({}, out); delete out.kind; }
+    held.forEach(function (e) {
+      if (e.kind !== "base" || picked.indexOf(e.tab) >= 0 || !leavesWithJob(e)) return;
+      out = e.root ? Object.assign({}, out, { kind: "off" }) : withSectionKind(out, e.tab, "off");
+    });
     // A Polish section that has never held a takeoff is new to the bid, so it is priced by Polish rev 2 like any other new
     // one (Phase 17). A root that was priced before and is coming back keeps the profile it had, or none.
     if (rootLifted && out.profile === undefined && !takeoffStated(out.takeoff)) out = Object.assign({}, out, { profile: REV2.stamp });
     return out;
+  }
+
+  /** The model's sections, or null when they cannot be read (sectionsOf throws). The job-type functions below never throw
+   *  for a bid whose `tabs` are malformed: the page opens such a bid as it is and says why. */
+  function readableSections(model) {
+    try { return sectionsOf(model); } catch (err) { return null; }
+  }
+
+  /** Is this entry a BASE of the bid: a section that is part of it as a base, and on a tab that can be one (Seal and
+   *  Leveling never are, even if a saved model says so). */
+  function isBaseEntry(e) {
+    return e.kind === "base" && !types.tab(types.tabOfSheet(e.sheet)).optionOnly;
+  }
+
+  /** The job type a list of section entries is a bid for: the one base's own work type, "combo" for exactly one Epoxy and one
+   *  Polish base, and null for anything else (no base, two bases that are not that pair). */
+  function baseTypeOf(entries) {
+    var bases = entries.filter(isBaseEntry);
+    if (bases.length === 1) return types.isJobType(bases[0].role) ? bases[0].role : null;
+    if (bases.length === 2) {
+      var roles = bases.map(function (e) { return e.role; }).sort();
+      if (roles[0] === "epoxy" && roles[1] === "polish") return "combo";
+    }
+    return null;
+  }
+
+  /** WHICH SECTIONS ARE THE BASE BID AND WHAT JOB TYPE THAT MAKES IT (Sheets phase 1): `{ ids, jobType }`. `ids` are the
+   *  section ids of the bases in the model's order (one, or the Epoxy and Polish pair, or none), and `jobType` is
+   *  the intake's job type they amount to: polish, epoxy or gyp for one base, "combo" for the pair, null when there is
+   *  no base or the bases are not a job type. THROWS for sections that cannot be read, like sectionsOf. */
+  function baseOf(model) {
+    var entries = sectionsOf(model);
+    return { ids: entries.filter(isBaseEntry).map(function (e) { return e.tab; }), jobType: baseTypeOf(entries) };
+  }
+
+  /** Of several sections of one tab, the one a job type takes as its base: one that already is a base, else the
+   *  sheet's own section (the root, or the one filed under its sheet's name), else the first copy. */
+  function preferredSection(entries) {
+    var base = entries.filter(function (e) { return e.kind === "base"; });
+    if (base.length) return base[0];
+    var named = entries.filter(function (e) { return !COPY_ID.test(e.tab); });
+    return named.length ? named[0] : entries[0];
+  }
+
+  /** Does a base section stop being one when the job type moves away from its tab? Only on a tab Estimating Tool v2
+   *  prices (a job type that is ready) and that can be a base: Leveling, until its phase, is never touched. */
+  function leavesWithJob(e) {
+    var tabKey = types.tabOfSheet(e.sheet);
+    return !types.tab(tabKey).optionOnly && tabIsReady(tabKey);
+  }
+
+  /** Is this workbook tab part of a job type that Estimating Tool v2 prices yet? */
+  function tabIsReady(tabKey) {
+    return types.jobTypeKeys().some(function (k) {
+      return types.jobType(k).ready === true && types.tabsFor(k).indexOf(tabKey) >= 0;
+    });
   }
 
   /** The sheet of tab record `rec` that the model already holds a section under, or null. A tab has several sheets
@@ -3248,16 +3362,12 @@
    *  price (Leveling, until its phase) is never touched. Reads only, and never throws. */
   function sectionsLeaving(model, jobType) {
     if (!isObject(model) || !isObject(model.tabs) || !types.jobType(jobType)) return [];
+    var held = readableSections(model);
+    if (held === null) return [];
     var mine = types.tabsFor(jobType);
-    var ready = [];
-    types.jobTypeKeys().forEach(function (k) {
-      if (types.jobType(k).ready === true) types.tabsFor(k).forEach(function (key) { ready.push(key); });
-    });
-    return Object.keys(model.tabs).filter(function (id) {
-      var s = model.tabs[id];
-      var tabKey = types.tabOfSheet(id);
-      return id !== ROOT_TAB && mine.indexOf(tabKey) < 0 && ready.indexOf(tabKey) >= 0 && isObject(s) && s.kind === "base";
-    });
+    return held.filter(function (e) {
+      return !e.root && e.kind === "base" && mine.indexOf(types.tabOfSheet(e.sheet)) < 0 && tabIsReady(types.tabOfSheet(e.sheet));
+    }).map(function (e) { return e.tab; });
   }
 
   /** What a workbook tab is called on screen: the name the proposal gives its system (a Gyp tab's "N12 1/8" + 3/4" Gyp"),
@@ -3276,15 +3386,19 @@
   function moveSectionSheet(model, fromTab, toTab) {
     var e = sectionOf(model, fromTab);
     if (e.root) throw new Error("the " + ROOT_TAB + " section is the root of the model and has no other sheet");
-    if (fromTab === toTab) return model;
+    // A copy keeps its Copy<N> key and names its sheet in `sheet`, so a preset change on one rewrites that and leaves the key.
+    if (e.sheet === toTab) return model;
     var tabKey = types.tabOfSheet(toTab);
-    if (!tabKey || tabKey !== types.tabOfSheet(fromTab)) {
+    if (!tabKey || tabKey !== types.tabOfSheet(e.sheet)) {
       throw new Error(JSON.stringify(String(toTab)) + " is not another sheet of the " + e.layout + " tab");
     }
-    if (has.call(model.tabs, toTab)) throw new Error(JSON.stringify(toTab) + " is already a section of this bid");
     var profile = engine.forTab(toTab).profile;
+    if (COPY_ID.test(fromTab)) return withSectionPatch(model, fromTab, { sheet: toTab, profile: profile.stamp });
+    if (has.call(model.tabs, toTab)) throw new Error(JSON.stringify(toTab) + " is already a section of this bid");
     var out = jsonCopy(model);
     var moved = Object.assign({}, out.tabs[fromTab], { profile: profile.stamp });
+    // A section with no name of its own is called by its key, and the key is changing: it must not take a name another section has.
+    if (!(typeof moved.label === "string" && moved.label.trim())) moved = Object.assign(moved, labelIfTaken(out, toTab));
     out.tabs = copyInto({}, Object.fromEntries(Object.keys(out.tabs).map(function (id) {
       return id === fromTab ? [toTab, moved] : [id, out.tabs[id]];
     })));
@@ -3294,6 +3408,11 @@
   /** A NEW model with one existing section's kind changed. The section's rows are the same objects' contents. */
   function withSectionKind(model, tabId, kind) {
     var out = jsonCopy(model);
+    // The root's kind is the model's own `kind` key, and base is a missing key, so a bid that never left Polish saves as it did.
+    if (tabId === ROOT_TAB) {
+      if (kind === "base") delete out.kind; else out.kind = kind;
+      return out;
+    }
     out.tabs = copyInto(copyInto({}, out.tabs), Object.fromEntries([[tabId, Object.assign({}, model.tabs[tabId], { kind: kind })]]));
     return out;
   }
@@ -3304,8 +3423,10 @@
   function sectionsToAdd(model, jobType) {
     var job = types.jobType(jobType);
     if (!isObject(model) || !job || job.ready !== true) return [];
+    var held = readableSections(model);
+    if (held === null) return [];
     return types.tabsFor(jobType).map(function (key) { return types.tab(key); }).filter(function (rec) {
-      return rec.sheets[0] !== ROOT_TAB && sheetHeld(model, rec) === null;
+      return rec.sheets[0] !== ROOT_TAB && !held.some(function (e) { return types.tabOfSheet(e.sheet) === rec.key; });
     }).map(function (rec) { return rec.sheets[0]; });
   }
 
@@ -3365,6 +3486,8 @@
       throw new Error("priceSection needs ctx.material(entry): the page prices a takeoff from its library");
     }
     var e = sectionOf(model, tabId);
+    // A Polish section under `tabs` (a copy, or a sheet added to the bid) is priced exactly as the root is: polishBid.
+    if (e.layout === "polish" && !e.root) return polishBid(model, tabId, ctx);
     var s = e.section;
     var stamp = PROFILE_STAMP.exec(e.profile);
     var profile;
@@ -3399,14 +3522,14 @@
     // A gyp-split profile reads the engine's material inputs (gyp, extras, sand, soundMat), never a plain sum:
     // a number would price the material at $0 and still call the section priceable. No price rather than a wrong one.
     if (profile.quirks.shippingRule === "gyp-split" && !isObject(mat)) {
-      return unpriceableSection(e.profile, "material", "the " + e.tab + " material has to come as gyp, extras, sand " +
+      return unpriceableSection(e.profile, "material", "the " + e.label + " material has to come as gyp, extras, sand " +
         "and sound mat figures. A single material total cannot be priced here.");
     }
     try {
       // A Gyp tab's truckload is the tab's own (H36), unless the page says the sound mat chosen has another: on
       // four of the five tabs the truckload follows the product (js/gyp-takeoff.js).
       if (profile.quirks.shippingRule === "gyp-split" && !(num(input.truckload) > 0)) {
-        input.truckload = engine.forTab(e.tab).truckload;
+        input.truckload = engine.forTab(e.sheet).truckload;
       }
       // The root keeps no snapshot (see above): it prices at the built-ins.
       return engine.priceChain(profile, input, e.root ? undefined : engine.ratesOf(s.rates));
@@ -3414,6 +3537,79 @@
       if (err && err.name === "BidEngineError") return unpriceableSection(e.profile, "profile", err.message);
       throw err;
     }
+  }
+
+  /** THE BID OF A POLISH SECTION, the root's or one under `tabs` (Sheets phase 1): markupChain over the section's own rows, so a
+   *  copy of the Polish sheet, or a Polish sheet added to the bid, prices exactly as the root does. The estimate page's
+   *  bid() calls it for the root, and priceSection calls it for every other Polish section.
+   *
+   *  `ctx.material(entry)` is the page's: the raw material of the section's takeoff (a number, or an object holding
+   *  `material`), because the library belongs to the page. Dye and Joint Filler are the JOB's conditions and the Polish
+   *  tab's lines, so the page adds them to the material of every Polish section. `ctx.remodel_rate` is the county's.
+   *
+   *  THE PROFILE is the one the section was made with: the root's by rootProfile (a saved bid has no key and prices
+   *  as polish-legacy), a section under `tabs` by its own stamp, polish-legacy@1 or polish-rev2@1, which is what
+   *  a copy keeps from its source. Any other stamp is unpriceable with the reason, never repriced. No rates snapshot
+   *  is read, as for the root: a Polish section prices at the profile's built-ins.
+   *
+   *  THE JOB'S TRAVEL goes by the section's role. The carrier (the first base) takes the job's Lodging and Per Diem, counted
+   *  the sheet's way on rev2. An option takes its own, for its own crew (optionTravelCosts). Any other base takes none.
+   *  A root that is off (an Epoxy job's) still answers with the job's travel, as bid() always has; nothing reads it.
+   *
+   *  Answers markupChain's keys, so what a save stamps into `totals` is what it always was. THROWS for a section that is not
+   *  Polish and for a section the model does not have, except the root, which a bid whose sections cannot be read still has. */
+  function polishBid(model, tabId, ctx) {
+    if (!isObject(model)) throw new Error("polishBid needs the model");
+    if (!isObject(ctx) || typeof ctx.material !== "function") {
+      throw new Error("polishBid needs ctx.material(entry): the page prices a takeoff from its library");
+    }
+    var e = polishEntry(model, tabId);
+    var s = e.section;
+    var profile = e.profile === LEGACY.stamp ? LEGACY : (e.profile === REV2.stamp ? REV2 : null);
+    if (!profile) {
+      return unpriceableSection(e.profile, "profile", "this section was priced with " + e.profile +
+        ", which a Polish section is not priced with. Its saved figures are kept.");
+    }
+    var mat = ctx.material(e);
+    var labor = laborTotal(s.labor, model.conditions);
+    return markupChain({
+      material: isObject(mat) ? mat.material : mat,
+      labor: labor,
+      // Lodging + Per Diem: inside the markups (the sheet's D61), not labor.
+      travel: polishTravel(model, e),
+      // The sheet's tooling and consumables (D55) for a profile that charges it; 0 for every saved bid.
+      tooling: profile.quirks.toolingInSubTotal ? takeoffTooling(s.takeoff, model.conditions) : 0,
+      contingency: s.contingency,
+      fees: s.fees,
+      conditions: model.conditions,
+      sf: takeoffSf(s.takeoff),
+      remodel_rate: ctx.remodel_rate
+    }, profile.stamp);
+  }
+
+  /** The entry polishBid prices. The root of a bid whose `tabs` cannot be read is still the root, as it was when bid() read
+   *  only the model's own keys: a bid like that opens as it is and saves what was typed. */
+  function polishEntry(model, tabId) {
+    var e;
+    try { e = sectionOf(model, tabId); } catch (err) {
+      if (tabId !== ROOT_TAB) throw err;
+      e = { tab: ROOT_TAB, sheet: ROOT_TAB, label: rootLabel(model), source: null, root: true, section: model,
+            layout: "polish", kind: "base", profile: rootProfile(model).stamp, role: "polish" };
+    }
+    if (e.layout !== "polish") {
+      throw new Error("the " + e.label + " section is a " + e.layout + " section, and polishBid prices Polish sections");
+    }
+    return e;
+  }
+
+  /** What a Polish section is charged for the job's travel, by its role (see polishBid). */
+  function polishTravel(model, e) {
+    var s = e.section;
+    var carrier = true;
+    try { carrier = travelCarrier(model) === e.tab; } catch (err) { carrier = true; }
+    if (carrier || (e.root && e.kind === "off")) return travelCosts(model.travel, s.labor, travelOpts(model, e.tab)).total;
+    if (e.kind === "option") return optionTravelCosts(model.travel, s.labor).total;
+    return 0;
   }
 
   /** The bids of every section that is NOT the root and is part of the bid, as { tabId: bid }. {} when the
@@ -3442,18 +3638,43 @@
     var rec = types.tab(tabKey);
     if (kind === "base" && rec.optionOnly) throw new Error(rec.label + " is an option on a bid, never the base");
     if (isObject(model.tabs) && has.call(model.tabs, tabId)) throw new Error(JSON.stringify(tabId) + " is already a section of this bid");
-    var profile = engine.forTab(tabId).profile;
+    return withSectionPut(model, tabId, Object.assign(newSectionBody(tabId, kind, ctx), labelIfTaken(model, tabId)));
+  }
+
+  /** A BLANK SECTION for a workbook sheet, as activateSection and addSheet make it: its layout, its kind, the profile that
+   *  prices it stamped, an empty takeoff and labor, and `pool_packs`, so it buys each material once for the whole
+   *  section (see poolsPacks). A Polish sheet is stamped polish-rev2 (Phase 17: what a NEW Polish section is priced
+   *  by) and keeps no rates snapshot, because a Polish section prices at its profile's built-ins (polishBid). Every
+   *  other sheet keeps `snapshotRates` of `ctx.rules`, the Markups rules filed at this moment, as text. */
+  function newSectionBody(sheet, kind, ctx) {
+    var rec = types.tab(types.tabOfSheet(sheet));
+    var polish = rec.markupLayout === "polish";
+    var profile = polish ? REV2 : engine.forTab(sheet).profile;
     var section = {
       layout: rec.markupLayout, kind: kind, profile: profile.stamp,
       takeoff: [{ assembly_id: "", assembly_name: "", measurement: "", unit: "SF" }],
-      labor: [], contingency: 0, fees: 0,
-      rates: engine.snapshotRates(profile, isObject(ctx) ? ctx.rules : undefined),
-      totals: {},
-      pool_packs: true      // a section made now buys each material once for the whole section (see poolsPacks)
+      labor: [], contingency: 0, fees: 0
     };
+    if (!polish) section.rates = engine.snapshotRates(profile, isObject(ctx) ? ctx.rules : undefined);
+    section.totals = {};
+    section.pool_packs = true;      // a section made now buys each material once for the whole section (see poolsPacks)
+    return section;
+  }
+
+  /** A NEW model with `section` filed under `id` in `tabs` (added, or replacing the one there). The model handed in is not touched. */
+  function withSectionPut(model, id, section) {
     var out = jsonCopy(model);
     var tabs = isObject(out.tabs) ? out.tabs : {};
-    out.tabs = copyInto(copyInto({}, tabs), Object.fromEntries([[tabId, section]]));
+    out.tabs = copyInto(copyInto({}, tabs), Object.fromEntries([[id, section]]));
+    return out;
+  }
+
+  /** A NEW model with some keys of one section laid over it. The root is the model itself, so for it they land on the
+   *  model's own keys. The model handed in is not touched. */
+  function withSectionPatch(model, id, patch) {
+    var out = jsonCopy(model);
+    if (id === ROOT_TAB) return Object.assign(out, patch);
+    out.tabs = copyInto(copyInto({}, out.tabs), Object.fromEntries([[id, Object.assign({}, out.tabs[id], patch)]]));
     return out;
   }
 
@@ -3537,6 +3758,264 @@
     return patch;
   }
 
+  // ══ SHEETS (Sheets phase 1): copy, add, rename and delete a sheet, and pick the base bid ═══════════════════════
+  //
+  // A BID IS MADE OF SHEETS, each a section (see the block above). The root is the Polish one. Any sheet can be copied, a
+  // fresh one of any ready type can be added, and exactly one thing is the BASE BID: one sheet, or the combined Epoxy and Polish
+  // pair. Everything else is an option, priced apart with its own travel and never in the lump sum. Everything follows the
+  // base: the lump sum, the job's travel (the first base carries it), the job type baseOf answers, and what the proposal
+  // reads (composePricingSnapshot writes `base_tab_id`).
+  //
+  // Every function here is pure: it answers a NEW model and never touches the one it was handed. A function that also changes
+  // what the DRAFT holds around the model (the proposal's per-sheet settings, `tab_opts`, and the words typed over an option's
+  // line) answers `patch`, for TW.setState, built from `ctx.state`, the draft as it stands.
+
+  /** THE SHEETS A BID CAN TAKE (workbook sheet ids): Polish, Epoxy, the five Gyp presets, Seal and Seal (+Jnts), in the
+   *  vocabulary's order. Leveling is not offered until it is priced, and Epoxy blank is not a sheet v2 uses. A new array. */
+  function sheetsToAdd() {
+    var out = [];
+    types.tabKeys().forEach(function (key) {
+      var rec = types.tab(key);
+      if (!(rec.optionOnly ? rec.offered === true : tabIsReady(key))) return;
+      rec.sheets.forEach(function (sheet) { if (sheet !== "Epoxy blank") out.push(sheet); });
+    });
+    return out;
+  }
+
+  /** The next free Copy<N> id: the smallest N not used as a key. A deleted copy's id is handed out again, which is why
+   *  deleteSection forgets everything the draft kept under it. */
+  function nextCopyId(model) {
+    var used = new Set(isObject(model) && isObject(model.tabs) ? Object.keys(model.tabs) : []);
+    var i = 1;
+    while (used.has("Copy" + i)) i++;
+    return "Copy" + i;
+  }
+
+  function requireRoomForCopy(model) {
+    var held = isObject(model.tabs) ? Object.keys(model.tabs).filter(function (id) { return COPY_ID.test(id); }).length : 0;
+    if (held >= MAX_COPIES) throw new Error("A bid can hold " + MAX_COPIES + " copied sheets at most.");
+  }
+
+  /** WHY A SHEET NAME WILL NOT DO, in plain words, or null when it will: not blank, 31 characters at most, none of
+   *  ! : \ / ? * [ ] " (a workbook's own limits), and not another sheet's name (the check ignores case). `exceptId` is the
+   *  sheet being renamed, which may keep its own name. THROWS for sections that cannot be read, like sectionsOf. */
+  function validateLabel(model, label, exceptId) {
+    var n = String(label == null ? "" : label).trim();
+    if (!n) return "Enter a sheet name.";
+    if (n.length > 31 && !keepsItsName(model, n, exceptId)) return "A sheet name can have 31 characters at most.";
+    if (/[!:\\/?*\[\]"]/.test(n) && !keepsItsName(model, n, exceptId)) return 'A sheet name cannot have any of these: ! : \\ / ? * [ ] "';
+    var taken = sectionsOf(model).some(function (e) { return e.tab !== exceptId && e.label.toLowerCase() === n.toLowerCase(); });
+    return taken ? '"' + n + '" is already the name of a sheet.' : null;
+  }
+
+  /** Is `name` the name the sheet `id` already has (any case)? A sheet may keep its name even when it is one the tool made for it that
+   *  a typed name could not be: a Gyp sheet's own name has a quote mark in it, and so does the name of its copy. False for a bid
+   *  whose sections cannot be read. */
+  function keepsItsName(model, name, id) {
+    try {
+      return sectionsOf(model).some(function (e) { return e.tab === id && e.label.toLowerCase() === name.toLowerCase(); });
+    } catch (err) { return false; }
+  }
+
+  /** What a section filed under its own sheet's name needs beside its key, as keys to lay over it: nothing when that name is free (it is
+   *  called by its key, which is the form every saved bid has), else a `label` that is free. A rename can have given the name to another
+   *  section, and two sheets of one name would print twice on the proposal. A bid whose sections cannot be read has nothing to compare
+   *  with and is left as it was. */
+  function labelIfTaken(model, sheet) {
+    var free;
+    try { free = uniqueLabel(model, sheet); } catch (err) { return {}; }
+    return free === sheet ? {} : { label: free };
+  }
+
+  /** `base` as a sheet name that is free: itself when it is, else with " 2", " 3" and so on, cut to leave room. */
+  function uniqueLabel(model, base) {
+    var used = new Set(sectionsOf(model).map(function (e) { return e.label.toLowerCase(); }));
+    var root = base.slice(0, 31);
+    if (!used.has(root.toLowerCase())) return root;
+    for (var i = 2; ; i++) {
+      var suffix = " " + i;
+      var label = base.slice(0, 31 - suffix.length) + suffix;
+      if (!used.has(label.toLowerCase())) return label;
+    }
+  }
+
+  /** THE DRAFT'S SIDE OF A NEW OPTION: a patch that forgets everything the draft kept under this id (a Copy<N> id is handed
+   *  out again after a delete) and lays the option's proposal settings (`settings`) in its tab_opts. A NEW object. */
+  function newOptionPatch(state, id, settings) {
+    var st = isObject(state) ? state : {};
+    var gone = optionLeftoverPatch(st, id);
+    var held = isObject(gone.tab_opts) ? gone.tab_opts : (isObject(st.tab_opts) ? st.tab_opts : {});
+    return Object.assign({}, gone, { tab_opts: Object.assign(copyInto({}, held), Object.fromEntries([[id, settings]])) });
+  }
+
+  /** COPY A SHEET (Sheets phase 1). Answers `{ model, id, patch }`: a NEW model holding the copy under the next free Copy<N> id,
+   *  that id, and the draft's side (`patch`, from `ctx.state`).
+   *
+   *  A COPY PRICES EXACTLY LIKE THE SHEET IT CAME FROM: it takes everything the source holds (takeoff, labor, contingency, fees,
+   *  and for Gyp its settings), and keeps the source's PROFILE and pool_packs stamps, so a copy of a bid saved before Polish
+   *  rev 2 or before the purchase pool is still priced the way its source is, whatever is stamped on new bids today. A section
+   *  under `tabs` also keeps its rates snapshot. The copy is an OPTION that starts OFF the proposal (`patch.tab_opts[id]` says
+   *  is_option false), so copying a sheet to try something prints nothing until the estimator turns it on. Its totals start
+   *  empty, because a save stamps them. Its name is "<source name> copy", made free. The root can be copied, and so can a sheet
+   *  that is off.
+   *
+   *  Money by role is not copied: an option carries its own travel (optionTravelCosts), so the copy matches its source in
+   *  every figure but the job's Lodging and Per Diem, which only the carrier takes. Made the base (pickBase) it prices like the
+   *  source. THROWS for a sheet the bid does not have, and at the limit of twelve copies. */
+  function copySection(model, sourceId, ctx) {
+    if (!isObject(model)) throw new Error("copySection needs the model");
+    var src = sectionOf(model, sourceId);
+    requireRoomForCopy(model);
+    var id = nextCopyId(model);
+    var body;
+    if (src.root) {
+      // The root's own keys are its section. Read the way migrateModel reads them, so a model that states none copies the shipped rows.
+      var fresh = freshModel();
+      var pick = function (key) { return jsonCopy(model[key] !== undefined ? model[key] : fresh[key]); };
+      body = { layout: "polish", profile: rootProfile(model).stamp, takeoff: pick("takeoff"), labor: pick("labor"),
+               contingency: pick("contingency"), fees: pick("fees") };
+      if (model.pool_packs !== undefined) body.pool_packs = model.pool_packs;
+    } else {
+      body = jsonCopy(src.section);
+    }
+    body = Object.assign(body, { kind: "option", sheet: src.sheet, label: uniqueLabel(model, src.label + " copy"),
+                                 source: sourceId, totals: {} });
+    return { model: withSectionPut(model, id, body), id: id,
+             patch: newOptionPatch(isObject(ctx) ? ctx.state : undefined, id, optionSettings(false)) };
+  }
+
+  /** ADD A FRESH SHEET (Sheets phase 1): one of sheetsToAdd, as an OPTION that starts ON the proposal, priced as a total. Answers
+   *  `{ model, id, patch }` like copySection.
+   *
+   *  The id is the sheet's own name when the bid has no section of that tab yet (the form every saved bid uses), else the next
+   *  Copy<N> with `sheet` and `label`, so a second Epoxy sheet, or any Polish one (the root is the first), is a Copy. The section is made as
+   *  activateSection makes one (a Polish sheet stamped polish-rev2, every sheet pool_packs) and then given the library's
+   *  defaults like a new section of a new bid (seedNewSections): its own crew from the labor lines filed under its work type, the
+   *  calculator's fills, and a starting takeoff over the area in `ctx.sf`, keyed by the new id or by the sheet's name. ONLY THE NEW
+   *  SECTION IS TAKEN from that seeding, so nothing the estimator typed anywhere else is reseeded (see addOption). `ctx` is
+   *  seedNewSections' (rules, laborRows, laborRate, calcRows, asms, items, reserved, sf, lf, takeoffRows), and `ctx.state` the draft.
+   *  THROWS for a sheet that is not offered, and at the limit of twelve copies. */
+  function addSheet(model, sheet, ctx) {
+    if (!isObject(model)) throw new Error("addSheet needs the model");
+    if (sheetsToAdd().indexOf(sheet) < 0) {
+      throw new Error(JSON.stringify(String(sheet)) + " cannot be added to a bid (" + sheetsToAdd().join(", ") + ")");
+    }
+    var c = isObject(ctx) ? ctx : {};
+    var tabKey = types.tabOfSheet(sheet);
+    var held = sectionsOf(model);
+    var ownKey = !held.some(function (e) { return types.tabOfSheet(e.sheet) === tabKey; }) && !has.call(model.tabs || {}, sheet) && sheet !== ROOT_TAB;
+    if (!ownKey) requireRoomForCopy(model);
+    var id = ownKey ? sheet : nextCopyId(model);
+    var body = newSectionBody(sheet, "option", { rules: c.rules });
+    body = Object.assign(body, ownKey ? labelIfTaken(model, sheet) : { sheet: sheet, label: uniqueLabel(model, sheet) });
+    var withSection = withSectionPut(model, id, body);
+    var seeded = seedNewSections(withSection, Object.assign({}, c, { saved: model }));
+    return { model: withSectionPut(withSection, id, seeded.tabs[id]), id: id,
+             patch: newOptionPatch(c.state, id, optionSettings(true)) };
+  }
+
+  /** RENAME A SHEET: what it is called on screen and on the proposal. A NEW model. The id is never changed and the label is never used as a
+   *  key, so nothing the draft keeps for the sheet is orphaned. Answers the model it was handed when the name is the one it has.
+   *  THROWS with validateLabel's words for a name that will not do, and for a sheet the bid does not have. */
+  function renameSection(model, id, label) {
+    var e = sectionOf(model, id);
+    var next = String(label == null ? "" : label).trim();
+    var why = validateLabel(model, next, id);
+    if (why) throw new Error(why);
+    if (next === e.label) return model;
+    return withSectionPatch(model, id, { label: next });
+  }
+
+  /** DELETE A SHEET, rows and all. Answers `{ model, patch }`: a NEW model without it, and the draft's side, which is
+   *  optionLeftoverPatch, ALWAYS: a Copy<N> id is handed out again, so anything the draft kept under it (its proposal settings,
+   *  notes, and the words typed over its line) would print on the next sheet to take the id. A bid keeps an (empty) `tabs`
+   *  object, so its next save still writes the whole price snapshot. THROWS for the BASE bid (pick another base first), for
+   *  the root, which is where a bid starts and cannot be removed from itself, and for a sheet the bid does not have. */
+  function deleteSection(model, id, ctx) {
+    var e = sectionOf(model, id);
+    if (e.root) throw new Error("The " + e.label + " sheet is where this bid starts, so it cannot be deleted. Take it off the proposal instead.");
+    if (e.kind === "base") throw new Error("Pick another base bid before you delete " + e.label + ".");
+    var out = jsonCopy(model);
+    out.tabs = copyInto({}, Object.fromEntries(Object.keys(out.tabs).filter(function (k) { return k !== id; })
+      .map(function (k) { return [k, out.tabs[k]]; })));
+    return { model: out, patch: optionLeftoverPatch(isObject(ctx) ? ctx.state : undefined, id) };
+  }
+
+  /** PICK THE BASE BID (Sheets phase 1): one sheet, or the combined pair, one Epoxy and one Polish. Answers `{ model, patch }`: a
+   *  NEW model and the draft's side. THE PRIOR BASE BECOMES AN OPTION that is ON the proposal, priced as a total, and the new
+   *  base is no option, so nothing is dropped from what the customer sees. Every other sheet keeps its kind. The job's
+   *  travel follows the carrier (the first base): when it moves, the Travel Labor row moves with it to the new carrier, unless
+   *  the new carrier has its own, so the base the job is priced on is the one that drives. `patch` carries `work_type` (what baseOf
+   *  says the base amounts to: a combined base is "combo"), `base_tab_id` (the one base, null for the pair) and, when it changed,
+   *  `tab_opts` from `ctx.state`. THROWS for Seal and Leveling (an option on a bid, never the base), for two sheets
+   *  that are not one Epoxy and one Polish, and for a sheet the bid does not have. Picking the base it already has changes
+   *  nothing but still answers the patch. */
+  function pickBase(model, ids, ctx) {
+    if (!isObject(model)) throw new Error("pickBase needs the model");
+    var want = ids instanceof Array ? ids.slice() : [ids];
+    if (want.length < 1 || want.length > 2 || (want.length === 2 && want[0] === want[1])) {
+      throw new Error("The base bid is one sheet, or one Epoxy sheet and one Polish sheet together.");
+    }
+    var list = sectionsOf(model);
+    var chosen = want.map(function (id) {
+      var found = list.filter(function (e) { return e.tab === id; })[0];
+      if (!found) throw new Error("the model has no section for " + JSON.stringify(String(id)));
+      var rec = types.tab(types.tabOfSheet(found.sheet));
+      if (rec.optionOnly) throw new Error(rec.label + " is an option on a bid, never the base");
+      return found;
+    });
+    if (chosen.length === 2) {
+      var roles = chosen.map(function (e) { return e.role; }).sort();
+      if (roles[0] !== "epoxy" || roles[1] !== "polish") throw new Error("A combined base is one Epoxy sheet and one Polish sheet.");
+    }
+    var carrierBefore = travelCarrier(model);
+    var out = model;
+    var demoted = [];
+    list.forEach(function (e) {
+      var next = want.indexOf(e.tab) >= 0 ? "base" : (isBaseEntry(e) ? "option" : e.kind);
+      if (next === e.kind) return;
+      if (next === "option") demoted.push(e.tab);
+      out = withSectionKind(out, e.tab, next);
+    });
+    var carrierAfter = travelCarrier(out);
+    if (carrierAfter !== carrierBefore) out = moveTravelLabor(out, carrierBefore, carrierAfter);
+    var st = isObject(ctx) && isObject(ctx.state) ? ctx.state : {};
+    var held = isObject(st.tab_opts) ? st.tab_opts : {};
+    var opts = copyInto({}, held);
+    var touched = false;
+    var entryOf = function (id) { return has.call(held, id) && isObject(held[id]) ? held[id] : {}; };
+    demoted.forEach(function (id) {
+      touched = true;
+      var kept = Object.assign(optionSettings(true), entryOf(id), { is_option: true, show: true, price_mode: "total" });
+      opts = Object.assign({}, opts, Object.fromEntries([[id, kept]]));
+    });
+    want.forEach(function (id) {
+      if (!has.call(held, id) || !isObject(held[id]) || held[id].is_option !== true) return;
+      touched = true;
+      opts = Object.assign({}, opts, Object.fromEntries([[id, Object.assign({}, held[id], { is_option: false })]]));
+    });
+    var patch = { work_type: baseOf(out).jobType, base_tab_id: want.length === 1 ? want[0] : null };
+    if (touched) patch.tab_opts = opts;
+    return { model: out, patch: patch };
+  }
+
+  /** The job's Travel Labor row follows the carrier. The row (labor id `travel`) is the job's drive, and only the carrier holds one,
+   *  so when the base moves to another sheet the row moves with it. Moved only when the old carrier has one, the new carrier has
+   *  none, and the old one keeps at least one other row (a root with no labor reads as the four shipped rows, so it is
+   *  copied instead). A NEW model; the one handed in when nothing moves. */
+  function moveTravelLabor(model, fromTab, toTab) {
+    var out = jsonCopy(model);
+    var from = sectionOf(out, fromTab).section, to = sectionOf(out, toTab).section;
+    var isTravel = function (r) { return !!r && r.id === "travel"; };
+    var mine = (from.labor instanceof Array ? from.labor : []).filter(isTravel);
+    var theirs = (to.labor instanceof Array ? to.labor : []).filter(isTravel);
+    if (!mine.length || theirs.length) return model;
+    var rest = from.labor.filter(function (r) { return !isTravel(r); });
+    if (rest.length) from.labor = rest;
+    to.labor = (to.labor instanceof Array ? to.labor : []).concat(mine);
+    return out;
+  }
+
   /** Keep the Travel row's Guys (and Lodging and Per Diem's quantity) in step with the crew's man-days while
    *  they are on auto. The estimate page's syncAutoGuys, as a function of the model, because the seeding below
    *  has to run it between its steps. MUTATES `model`. Each section's own Travel row follows that section's
@@ -3611,8 +4090,16 @@
       return sectionsOf(out).filter(function (e) { return names.indexOf(e.tab) >= 0; });
     };
     names.forEach(function (tab) { requireLayout(sectionOf(out, tab).layout); });
-    var sfOf = function (tab) {
-      return isObject(ctx.sf) && has.call(ctx.sf, tab) && ctx.sf[tab] instanceof Array ? ctx.sf[tab] : [undefined, undefined];
+    // A section's two area boxes, by its id, else by its workbook sheet: the caller of a NEW sheet does not know the Copy<N>
+    // id the model is about to give it, only the sheet it is adding.
+    var byTabOrSheet = function (map, e) {
+      if (!isObject(map)) return undefined;
+      if (has.call(map, e.tab) && map[e.tab] instanceof Array) return map[e.tab];
+      return has.call(map, e.sheet) && map[e.sheet] instanceof Array ? map[e.sheet] : undefined;
+    };
+    var sfOf = function (e) {
+      var v = byTabOrSheet(ctx.sf, e);
+      return v ? v : [undefined, undefined];
     };
     var asked = laborGate && !!ctx.laborRows;
 
@@ -3652,7 +4139,7 @@
     now().forEach(function (e) {
       var s = e.section;
       if (takeoffSf(s.takeoff)) return;
-      var sfs = sfOf(e.tab);
+      var sfs = sfOf(e);
       // A section whose takeoff is not "System 1 and System 2" (Gyp's three areas) asks the page for its own rows:
       // `ctx.takeoffRows(entry, sfs)` answers a list of rows, or null to take the ordinary path. An empty list
       // leaves the section's blank row as it is.
@@ -3666,7 +4153,7 @@
         : seedTakeoffSf(s.takeoff, sfs[0], sfs[1]);
       // The intake's cove lengths, as takeoff rows of their own (Epoxy has a cove, Polish does not). A blank
       // assembly the estimator picks a cove for, never over a row that is already measured in linear feet.
-      var lfs = isObject(ctx.lf) && has.call(ctx.lf, e.tab) && ctx.lf[e.tab] instanceof Array ? ctx.lf[e.tab] : [];
+      var lfs = byTabOrSheet(ctx.lf, e) || [];
       if (!(takeoffLf(s.takeoff) > 0)) {
         lfs.forEach(function (v) {
           if (num(v) > 0) s.takeoff.push({ assembly_id: "", assembly_name: "", measurement: num(v), unit: "LF" });
@@ -3758,7 +4245,7 @@
     // ("Sealed Concrete", "Sealed Concrete with Joint Filler"): two options can be on one proposal, and the joints
     // one must not read as the plain one.
     if (entry && (entry.role === "gyp" || entry.role === "seal")) {
-      var label = engine.forTab(entry.tab).label;
+      var label = engine.forTab(entry.sheet).label;
       if (label) return label;
     }
     var rows = s.takeoff || [];
@@ -3846,8 +4333,7 @@
     // ── more than one section: the complete derived set ──
     var cond = isObject(model.conditions) ? model.conditions : {};
     var priceable = function (b) { return b.priceable !== false; };
-    var isBase = function (e) { return e.kind === "base" && !types.tab(types.tabOfSheet(e.root ? ROOT_TAB : e.tab)).optionOnly; };
-    var base = bids.filter(function (x) { return isBase(x.e); });
+    var base = bids.filter(function (x) { return isBaseEntry(x.e); });
     var ok = base.length > 0 && base.every(function (x) { return priceable(x.b); });
     var sums = ok ? engine.combine(base.map(function (x) { return { layout: x.e.layout, result: x.b }; })).sums : null;
     var area = {};
@@ -3865,13 +4351,17 @@
     out.priced_tabs = bids.map(function (x) {
       var b = x.b, good = priceable(b);
       return Object.assign({
-        id: x.e.tab, name: x.e.tab, role: x.e.role, kind: x.e.kind,
+        id: x.e.tab, name: x.e.label, role: x.e.role, kind: x.e.kind,
         total: good ? b.total : null, sales_tax: good ? b.sales_tax : null, remodel: good ? b.remodel_tax : null,
         system_desc: systemDesc(x.e.section, x.e), notes_auto: [],
         sf: areaFields(x.e), sys_names: [],
         taxable: !!cond.taxable, remodel_on: !!cond.remodel_tax, v2: true
       }, good ? {} : { unpriceable: String(b.reason || "") });
     });
+    // THE BASE'S ID, for the Proposal step (Sheets phase 1): the one base's own id, and null for a combined base (Epoxy and
+    // Polish together), which the proposal tells by role. The proposal reads `base_tab_id` to know which priced tab IS the
+    // base, so a copy or a second sheet made the base is named here, and a bid with no base names none.
+    out.base_tab_id = base.length === 1 ? base[0].e.tab : null;
     out.proposal_lump_sum = ok ? sums.total : null;
     out.proposal_sales_tax = ok ? sums.sales_tax : null;
     out.proposal_remodel_tax = ok ? sums.remodel_tax : null;
@@ -3889,15 +4379,15 @@
     // writes the entry with the option on and shown, as a total (its own price). An entry the draft already holds is
     // never rewritten, so what the estimator did in the Proposal step's sidebar (hide it, turn it into a deduction,
     // type its words) survives the next save of this page. `ctx.tabOpts` is the draft's own tab_opts.
+    // Every option the bid holds, a Copy<N> one and the root as an option included, has an entry here. What the model WRITES is
+    // always a total (optionSettings), so a Seal option, which has no Add or Deduct, is never written as one.
     var optionIds = bids.filter(function (x) { return x.e.kind === "option"; }).map(function (x) { return x.e.tab; });
     if (optionIds.length) {
       var heldOpts = isObject(ctx.tabOpts) ? ctx.tabOpts : {};
       var opts = copyInto({}, heldOpts);
       optionIds.forEach(function (id) {
         if (has.call(heldOpts, id)) return;
-        opts = Object.assign({}, opts, Object.fromEntries([[id, {
-          show_system: true, show_diff: false, is_option: true, show: true, price_mode: "total"
-        }]]));
+        opts = Object.assign({}, opts, Object.fromEntries([[id, optionSettings(true)]]));
       });
       out.tab_opts = opts;
     }
@@ -3933,6 +4423,13 @@
     });
   }
 
+  /** The proposal's own settings for a section that is an option (tab_opts[id]): the keys the Estimate step's tick and the
+   *  Proposal step's sidebar both write. `on` is whether the option prints on the proposal (is_option); it always starts
+   *  shown, as a total, with its system named and no difference line. */
+  function optionSettings(on) {
+    return { show_system: true, show_diff: false, is_option: !!on, show: true, price_mode: "total" };
+  }
+
   /** The strip that switches between a bid's sections, or "" when there is only one (every bid today), so a
    *  single-section estimate looks exactly as it did. One button per section, naming it, its kind and its price;
    *  `active` is the tab id on show and `bids` the { tabId: bid } the page priced (the root's under its own tab
@@ -3952,7 +4449,7 @@
       var price = b && b.priceable !== false && b.total ? money(b.total) : "no price";
       var kind = e.kind === "base" ? "" : (e.kind === "option" ? " (option)" : " (off)");
       return '<button type="button" data-section-tab="' + esc(e.tab) + '" aria-current="' +
-        (e.tab === active ? "true" : "false") + '">' + esc(e.tab) + esc(kind) + " · " + esc(price) + "</button>";
+        (e.tab === active ? "true" : "false") + '">' + esc(e.label) + esc(kind) + " · " + esc(price) + "</button>";
     }).join("");
   }
   /** What is stopping this model being priced, in plain words. [] when nothing is.
@@ -4080,6 +4577,10 @@
     moveSectionSheet: moveSectionSheet, sheetHeld: sheetHeld, sheetLabel: sheetLabel, gypAreaFields: gypAreaFields,
     priceSection: priceSection, priceTabs: priceTabs, activateSection: activateSection,
     optionsToOffer: optionsToOffer, addOption: addOption, removeOption: removeOption, optionLeftoverPatch: optionLeftoverPatch,
+    // Sheets (Sheets phase 1): the bid's sheets, its base, and how a Polish section is priced.
+    MAX_COPIES: MAX_COPIES, polishBid: polishBid, baseOf: baseOf, pickBase: pickBase, sheetsToAdd: sheetsToAdd,
+    copySection: copySection, addSheet: addSheet, renameSection: renameSection, deleteSection: deleteSection,
+    validateLabel: validateLabel, nextCopyId: nextCopyId, optionSettings: optionSettings,
     seedNewSections: seedNewSections, syncAutoGuys: syncAutoGuys, poolsPacks: poolsPacks,
     composePricingSnapshot: composePricingSnapshot, sectionSwitcherHtml: sectionSwitcherHtml,
     takeoffLf: takeoffLf, sectionManHours: sectionManHours,

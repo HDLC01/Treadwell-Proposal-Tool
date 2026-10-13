@@ -284,7 +284,8 @@ BREAKS = {
         "      get: function (target, key) { return Reflect.get(target, key); },",
         lambda r: r["labor"]["after"] == r["labor"]["before"] or "error" in r),
     "the sections of an epoxy job leave the root on": (
-        "js/bid-model.js", '    if (!needsRoot && out.kind !== "off") out = Object.assign({}, out, { kind: "off" });', "    void needsRoot;",
+        "js/bid-model.js", '      out = e.root ? Object.assign({}, out, { kind: "off" }) : withSectionKind(out, e.tab, "off");',
+        "      out = e.root ? out : withSectionKind(out, e.tab, \"off\");",
         lambda r: r["opened"]["rootKind"] != "off" or r["priced"]["lump"] != r["priced"]["byHand"] or r["priced"]["pricedTabs"][0][0] != "Epoxy"),
 }
 

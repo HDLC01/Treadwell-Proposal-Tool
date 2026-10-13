@@ -431,7 +431,7 @@ BREAKS = {
         MODEL, "out.pool_packs === undefined) out.pool_packs = true;", "out.pool_packs === undefined) void 0;",
         [check_a_new_bid_is_stamped_to_pool]),
     "a section made now is not stamped": (
-        MODEL, "      pool_packs: true      // a section made now", "      pool_packs: false     // a section made now",
+        MODEL, "    section.pool_packs = true;      // a section made now", "    section.pool_packs = false;     // a section made now",
         [check_a_section_made_now_is_stamped_to_pool]),
     "a saved section pools whether or not it is stamped": (
         PAGE, "    if (i < 0 || !poolsList(list)) return rawRowPrice(row, takeoff);", "    if (i < 0) return rawRowPrice(row, takeoff);",

@@ -137,8 +137,9 @@ def test_an_off_section_is_part_of_the_model_and_not_of_the_bid(ran):
 
 
 def test_the_roots_profile_is_always_the_legacy_one_whatever_the_root_keys_say(ran):
-    """`profile`, `rates` and a `kind` of base or option at the root are reserved for Polish rev 2 (Phase 17)
-    and are not read: the root prices at polish-legacy@1's built-ins, so no saved bid's total can move."""
+    """A `profile` at the root other than polish-rev2@1 (and a `rates` snapshot) is not read: the root prices at
+    polish-legacy@1's built-ins, so no saved bid's total can move. The root's `kind` IS read since Sheets phase 1, and
+    that is the one thing this test's model also says (an option), which moves no profile."""
     assert ran["sections"]["rootProfileKeyIsReserved"] == "polish-legacy@1"
 
 
@@ -152,12 +153,14 @@ def test_the_page_prices_a_gyp_section_from_its_takeoff(ran):
     assert g["computed"] is True and g["lump"] > 0
 
 
-def test_a_root_kind_of_option_is_not_read_so_the_jobs_travel_is_charged_once(ran):
-    """Only `kind: "off"` is read at the root. An "option" root used to move the travel carrier to Epoxy while
-    the page still charged the root the job's travel through bid(): the same travel on both sections."""
+def test_a_root_kind_of_option_is_read_and_each_section_is_charged_travel_by_its_role(ran):
+    """The root's `kind` is read in full since Sheets phase 1 (base, option, off). An "option" root moves the travel carrier to
+    the first base, Epoxy, and the page's bid() prices the root through polishBid, which charges it by its role too: the job's
+    Lodging and Per Diem once, on the carrier (10 x $100), and the option its own for its own crew (15 man-days x $100)."""
     r = ran["pins"]["rootOption"]
-    assert r["kind"] == "base" and r["carrier"] == "Polish"
-    assert r["rootTravel"] > 0 and r["epoxyTravel"] == 0
+    assert r["kind"] == "option" and r["carrier"] == "Epoxy"
+    assert r["epoxyTravel"] == 1000 and r["rootTravel"] == 1500
+    assert r["polishBidTravel"] == r["rootTravel"], "bid() and priceSection charge the option root alike"
 
 
 def test_the_combined_tax_figures_are_each_sections_own_sales_and_remodel_tax_summed(ran):
@@ -372,7 +375,7 @@ def test_a_bid_with_one_section_writes_exactly_the_four_keys_it_always_wrote(ran
 def test_a_bid_with_several_sections_writes_the_complete_derived_set(ran):
     c = ran["composer"]
     assert c["frozenThrew"] is None, c["frozenThrew"]
-    assert c["keys"] == ["polish_estimate", "polish_sf", "polish_2_sf", "computed_bid", "priced_tabs",
+    assert c["keys"] == ["polish_estimate", "polish_sf", "polish_2_sf", "computed_bid", "priced_tabs", "base_tab_id",
                          "proposal_lump_sum", "proposal_sales_tax", "proposal_remodel_tax", "proposal_taxable",
                          "proposal_remodel_on", "sheet_area", "cost_snapshot", "phase_price", "tab_opts"], (
         "tab_opts is written only because this bid holds an option (Phase 15): the proposal side prints a priced tab "
@@ -588,13 +591,13 @@ BREAKS = {
         lambda r: r["composer"]["singleHasNoSnapshot"] is False),
     "an option is added into the base bid": (
         "js/bid-model.js",
-        '    var isBase = function (e) { return e.kind === "base" && !types.tab(types.tabOfSheet(e.root ? ROOT_TAB : e.tab)).optionOnly; };',
-        '    var isBase = function (e) { return e.kind !== "off"; };',
+        '    return e.kind === "base" && !types.tab(types.tabOfSheet(e.sheet)).optionOnly;',
+        '    return e.kind !== "off";',
         lambda r: r["composer"]["sealIsNotInTheLump"] is False),
     "an option-only tab declared a base is believed": (
         "js/bid-model.js",
-        '    var isBase = function (e) { return e.kind === "base" && !types.tab(types.tabOfSheet(e.root ? ROOT_TAB : e.tab)).optionOnly; };',
-        '    var isBase = function (e) { return e.kind === "base"; };',
+        '    return e.kind === "base" && !types.tab(types.tabOfSheet(e.sheet)).optionOnly;',
+        '    return e.kind === "base";',
         lambda r: r["composer"]["sealDeclaredBaseIsNeverBase"] is False),
     "a section that cannot price is priced as zero": (
         "js/bid-model.js", "    var priceable = function (b) { return b.priceable !== false; };",
@@ -609,7 +612,7 @@ BREAKS = {
         "    var stamped = Object.assign(model, rootLive ? { totals: rootLive } : {});",
         lambda r: r["composer"]["inputsUntouched"] is False or r["composer"]["frozenThrew"] is not None),
     "the area of an option is added to the proposal's": (
-        "js/bid-model.js", "    var base = bids.filter(function (x) { return isBase(x.e); });",
+        "js/bid-model.js", "    var base = bids.filter(function (x) { return isBaseEntry(x.e); });",
         "    var base = bids;",
         lambda r: r["composer"]["area"] != {"polish_sf": 10000, "epoxy_sf": 4000, "cove_lf": 300}
         or r["composer"]["lump"] != r["composer"]["sumOfBaseParts"]),
@@ -640,10 +643,10 @@ BREAKS = {
     "the strip is drawn for one section": (
         "js/bid-model.js", "    if (list.length < 2) return \"\";", "    if (list.length < 1) return \"\";",
         lambda r: r["switcher"]["single"] != ""),
-    "a root kind of option is read": (
-        "js/bid-model.js", '    var rootKind = model.kind === "off" ? "off" : "base";',
-        '    var rootKind = SECTION_KINDS.indexOf(model.kind) >= 0 ? model.kind : "base";',
-        lambda r: r["pins"]["rootOption"]["epoxyTravel"] != 0 or r["pins"]["rootOption"]["kind"] != "base"),
+    "a root kind of option is not read": (
+        "js/bid-model.js", '    var rootKind = model.kind === "off" ? "off" : (model.kind === "option" ? "option" : "base");',
+        '    var rootKind = model.kind === "off" ? "off" : "base";',
+        lambda r: r["pins"]["rootOption"]["kind"] != "option" or r["pins"]["rootOption"]["epoxyTravel"] != 1000),
     "a gyp section is priced from a plain number": (
         "js/bid-model.js", '    if (profile.quirks.shippingRule === "gyp-split" && !isObject(mat)) {',
         "    if (false) {",

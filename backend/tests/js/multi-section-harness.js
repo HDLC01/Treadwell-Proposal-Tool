@@ -460,7 +460,8 @@ function pins() {
   const gd = B.composePricingSnapshot(g, { bid: rootBid(g, MATERIAL.Polish), bids: B.priceTabs(g, gctx) });
   let carrier = B.activateSection(Object.assign(polishBid(), { kind: "off" }), "Epoxy", "option", {});
   carrier = B.activateSection(carrier, GYP, "base", {});
-  // a root kind of "option" is reserved, not read: the root stays a base and the job's travel is charged once
+  // a root kind of "option" is read since Sheets phase 1: the root is an option, the carrier moves to Epoxy (the first base), and each
+  // is charged by its role, the carrier the job's Lodging and Per Diem and the option its own for its own crew
   const rootOpt = withEpoxy([]);
   rootOpt.kind = "option";
   rootOpt.conditions.local = false;
@@ -476,7 +477,8 @@ function pins() {
     carrierRootOff: B.travelCarrier(carrier),
     rootOption: { kind: B.sectionsOf(rootOpt)[0].kind, carrier: B.travelCarrier(rootOpt),
                   epoxyTravel: B.priceSection(rootOpt, "Epoxy", ctxOf()).travel,
-                  rootTravel: B.priceSection(rootOpt, "Polish", ctxOf()).travel },
+                  rootTravel: B.priceSection(rootOpt, "Polish", ctxOf()).travel,
+                  polishBidTravel: B.polishBid(rootOpt, "Polish", { material: () => MATERIAL.Polish }).travel },
   };
 }
 
