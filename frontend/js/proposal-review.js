@@ -1016,6 +1016,7 @@
   function rebuildPricing() {
     const all = Array.isArray(state.priced_tabs) ? state.priced_tabs : [];
     if (!all.length) return;   // older draft w/o the snapshot — leave state.rooms as-is
+    const v2Snapshot = TWPrice.allV2(all);   // written by the v2 estimate, not the spreadsheet (price-lines-core.js)
     // Reconcile per-option PRICE overrides against the live tabs: drop any
     // price_overrides.options[id] whose tab no longer exists (deleted, or a
     // "Copy<N>" id freed then reused by a different copy). Belt-and-suspenders
@@ -1135,6 +1136,11 @@
       opts[t.id] && opts[t.id].is_option && opts[t.id].show !== false &&
       !inCombinedBase(t));
     const shown = optionTabs.map(t => mkRoom(t, false)).filter(o => o.bid.total > 0);
+    // A v2 Seal option is priced as a total and never an Add or Deduct (the estimate's panel offers it nothing else, and
+    // bid-model.js optionOnlyTotalPatch sets one back), so a stale "deduct" left on it does not print as one. Done HERE and not in
+    // mkRoom, which a harness lifts on its own (option-desc-harness.js) with only the names it closes over. A bid from the
+    // spreadsheet is read as it always was.
+    if (v2Snapshot) shown.forEach(room => { if (isOptionOnlyTab(byId(room.id))) room.price_mode = "total"; });
     state.rooms = (shown.length && baseTab) ? [mkRoom(baseTab, true), ...shown] : [];
     // Recompute Area from the base tab(s) so a base switch / option toggle HERE
     // re-derives the proposal's SF without the sheet engine (mirrors the
@@ -1774,9 +1780,20 @@
           const engaged = (t) => t.id === baseId || (opts[t.id] && opts[t.id].is_option);
           const defaultVis = (t) => (wt === "gyp") ? (t.role === "gyp" || engaged(t))
                                                     : (t.role !== "gyp" || engaged(t));
+          // A v2 estimate wrote this snapshot (every tab marked v2): the BASE is picked on the estimate and only read here.
+          // Each v2 option was priced with its own travel beside the base it was priced against, so a base switched on
+          // this page would print a price nobody worked out. Option on/off, total or add/deduct and the description stay
+          // editable, and write the same tab_opts keys they always did. A v2 bid holds only the sheets somebody put in it,
+          // so every one is listed and there is no "+ Add another system" to reveal the rest.
+          const v2Locked = TWPrice.allV2(allTabs);
+          // The Estimate step's own door, the one the Back button uses: estimate-review.js sends a v2 draft on to the v2 estimate. It is not
+          // linked to directly, because the v2 estimate page has exactly two doors and test_nav_access.py pins that (a third would be a way
+          // past a role the Admin matrix keeps off Estimating Tool v2). Asked only when the panel is read-only: the draft id helper is not
+          // needed, or present in every harness, for any other panel.
+          const estimateHref = v2Locked ? TW.withDraft("/estimate-review.html") : "";
           const revealSystems = !!state.reveal_systems;
-          const visTabs = revealSystems ? allTabs.slice() : allTabs.filter(defaultVis);
-          const hasHiddenSystems = allTabs.some(t => !defaultVis(t));
+          const visTabs = (revealSystems || v2Locked) ? allTabs.slice() : allTabs.filter(defaultVis);
+          const hasHiddenSystems = !v2Locked && allTabs.some(t => !defaultVis(t));
           // Auto base = epoxy/polish base-kind tab(s). For gyp the base is shown
           // explicitly (via effectiveBaseId), so nothing is "part of" a hidden auto-base.
           // Same rule as rebuildPricing's inCombinedBase, and for the same reason: `role !== "gyp"`
@@ -1789,9 +1806,13 @@
           // A "Base bid" radio toggle per sheet. Combo additionally retains its
           // explicit named combined base. The base row hides its option controls; the
           // others keep show + total/deduct.
+          const baseRO = v2Locked ? " disabled" : "";
           let h = `<div class="op-drag" title="Drag to move">Pricing options</div>` +
-            `<p class="op-hint">Turn on which sheet is the <strong>Base bid</strong>; mark the others as options (show + total / add/deduct).</p>` +
-            (wt === "combo" ? `<label class="pr-baserow"><input type="radio" name="pr-base" class="pr-base" value=""${!baseId ? " checked" : ""}> Epoxy + Polish (combined)</label>` : "");
+            (v2Locked
+              ? `<p class="op-hint pr-base-locked">Pick the base bid on the estimate. <a class="pr-est-link" href="${esc(estimateHref)}">Open the estimate</a></p>` +
+                `<p class="op-hint">Mark the other sheets as options (show + total / add/deduct).</p>`
+              : `<p class="op-hint">Turn on which sheet is the <strong>Base bid</strong>; mark the others as options (show + total / add/deduct).</p>`) +
+            (wt === "combo" ? `<label class="pr-baserow"><input type="radio" name="pr-base" class="pr-base" value=""${!baseId ? " checked" : ""}${baseRO}> Epoxy + Polish (combined)</label>` : "");
           h += visTabs.map(t => {
             const o = opts[t.id] || {};
             const isBase = effectiveBaseId === t.id;
@@ -1803,7 +1824,7 @@
             const nameRow = `<span class="op-name">${esc(t.name)} <span class="op-price">${fmtUSDdoc(N(t.total))}</span></span>`;
             r += isOptionOnlyTab(t)
               ? `<div class="pr-baserow" title="Priced as an option only, never as the base bid">${nameRow}</div>`
-              : `<label class="pr-baserow"><input type="radio" name="pr-base" class="pr-base" value="${esc(t.id)}"${isBase ? " checked" : ""}> ` +
+              : `<label class="pr-baserow"><input type="radio" name="pr-base" class="pr-base" value="${esc(t.id)}"${isBase ? " checked" : ""}${baseRO}> ` +
                 nameRow + `</label>`;
             if (isBase) {
               r += `<div class="pr-optsub"><span class="op-hint">This sheet is the Base bid.</span></div>`;
@@ -1823,13 +1844,19 @@
                    + `appears in neither the PDF nor the customer portal until “Show in `
                    + `proposal” is ticked.</span>`;
               }
-              r += `<label>Price as <select class="pr-mode"><option value="total"${mode === "total" ? " selected" : ""}>total amount</option><option value="deduct"${mode === "deduct" ? " selected" : ""}>add/deduct (VE)</option></select></label>`;
+              // A v2 Seal sheet is priced as a total and only that (rebuildPricing reads it so), so there is no choice to draw.
+              const totalOnly = v2Locked && isOptionOnlyTab(t);
+              r += totalOnly
+                ? `<span class="op-hint pr-total-only">Seal is priced as a total only.</span>`
+                : `<label>Price as <select class="pr-mode"><option value="total"${mode === "total" ? " selected" : ""}>total amount</option><option value="deduct"${mode === "deduct" ? " selected" : ""}>add/deduct (VE)</option></select></label>`;
               // Deduct only reads as a "($savings) – Deduct VE …" line when it SAVES
               // vs the base; add/deduct now self-labels by sign (option − base):
               // cheaper prints "Deduct ($X)", costlier prints "Add $X" — surface
               // which one this option will be so the estimator isn't surprised.
               const savings = N(state.proposal_lump_sum) - N(t.total);
-              r += `<span class="op-hint pr-deduct-hint"${(mode === "deduct" && savings <= 0) ? "" : ' style="display:none"'}>Costs more than the base — will print as an Add.</span>`;
+              if (!totalOnly) {
+                r += `<span class="op-hint pr-deduct-hint"${(mode === "deduct" && savings <= 0) ? "" : ' style="display:none"'}>Costs more than the base — will print as an Add.</span>`;
+              }
               // The option's own long description. Empty = the option prints the system name
               // (shown as the placeholder: what it prints now).
               r += `<label class="op-notes op-desc">Description<textarea class="room-desc" rows="3" maxlength="400" placeholder="${esc(t.system_desc || t.name)}">${esc(o.desc || "")}</textarea><span class="op-hint">Prints as the option line.</span></label>`;
@@ -1856,7 +1883,8 @@
           const ensureOpt = (id) => { if (!opts[id]) opts[id] = { show_system: true, show_diff: false, is_option: false, show: true, price_mode: "total" }; return opts[id]; };
           const applyAndRefresh = () => { rebuildPricing(); refreshPriceDisplay(); scheduleFit(); };
           // Base-bid radios — turning one on sets the base.
-          optsPanel.querySelectorAll("input.pr-base").forEach(rb => rb.addEventListener("change", () => {
+          // On a v2 draft the radios are drawn disabled and wired to nothing: a base is not picked on this page.
+          if (!v2Locked) optsPanel.querySelectorAll("input.pr-base").forEach(rb => rb.addEventListener("change", () => {
             if (!rb.checked) return;
             const priorBaseId = state.base_tab_id;
             state.base_tab_id = rb.value || null;

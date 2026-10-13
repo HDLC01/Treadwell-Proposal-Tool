@@ -855,6 +855,27 @@
     return off;
   }
 
+  /** IS THIS PRICE SNAPSHOT ONE THE v2 ESTIMATE WROTE? True when `tabs` (a draft's `priced_tabs`) holds at least one
+   *  tab and every one is marked `v2: true`, which is how bid-model.js composePricingSnapshot stamps each tab it writes.
+   *  One tab without the mark (a spreadsheet snapshot, or a stale one left on a v2 draft) is NOT v2, and the Proposal
+   *  step then treats the draft as it always did.
+   *
+   *  WHY THE PROPOSAL STEP ASKS. A v2 bid prices each option with its OWN travel (optionTravelCosts), so an option's total
+   *  was worked out beside one particular base. Picking another base here would print a price nobody worked out, so on
+   *  such a draft the base is picked on the estimate and this page only reads it. Lives here, in a core module, because
+   *  two page functions ask it (renderProposalExtras and rebuildPricing) and a harness lifts each of those by name: a helper
+   *  defined in the page file would be an unbound name in every lifted copy.
+   *
+   *  The same test as shared.js v2PricingView's (`tabs.length && tabs.every(t => t.v2 === true)`); a test runs both over the
+   *  same cases, because two answers to one question is how a draft is read as v2 "but only sometimes". */
+  function allV2(tabs) {
+    if (!Array.isArray(tabs) || !tabs.length) return false;
+    for (var i = 0; i < tabs.length; i++) {
+      if (!tabs[i] || typeof tabs[i] !== "object" || tabs[i].v2 !== true) return false;
+    }
+    return true;
+  }
+
 
   return {
     AMOUNT: AMOUNT, TAX: TAX, PHRASE: PHRASE, KNOWN_PHRASES: KNOWN_PHRASES,
@@ -872,6 +893,6 @@
     LEVEL_LEFT: LEVEL_LEFT, LEVEL_HANG: LEVEL_HANG, INDENT_STEP: INDENT_STEP, INDENT_MAX: INDENT_MAX,
     HEADING_KEYS: HEADING_KEYS, cleanLineProps: cleanLineProps, lineDefault: lineDefault,
     lineIntent: lineIntent, resolveLineProps: resolveLineProps, paraStep: paraStep,
-    overrideFor: overrideFor,
+    overrideFor: overrideFor, allV2: allV2,
   };
 });

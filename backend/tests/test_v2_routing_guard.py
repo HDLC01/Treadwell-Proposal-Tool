@@ -359,8 +359,8 @@ DOORS = [
     ("js/portal.js", "&edit=1", 2, INTAKE, "the board's drawer: Open"),
     ("js/projects.js", "&edit=1", 1, INTAKE, "a Projects card (a v2 card goes to the v2 intake first)"),
     ("js/proposal-review.js", 'href="/?edit=1"', 1, INTAKE, "Go to Intake on the no-project card"),
-    ("js/proposal-review.js", 'TW.withDraft("/estimate-review.html")', 1, SHEET,
-     "Back from the proposal step"),
+    ("js/proposal-review.js", 'TW.withDraft("/estimate-review.html")', 2, SHEET,
+     "Back from the proposal step, and the Pricing options panel's link to the estimate on a v2 draft"),
     ("shared.js", 'searchParams.has("edit")', 1, NOT_A_DOOR,
      "the step-link rewriter reads the parameter, it opens nothing"),
 ]
