@@ -117,7 +117,11 @@ async function world(page, opts) {
   const listGate = opts.holdList ? gate() : null;
   const fetchStub = async function (url, init) {
     url = String(url);
-    if (url.indexOf("photon.komoot.io") >= 0) {
+    // The suggestion service is recognised by its parsed host, exactly. A relative URL (our own API)
+    // does not parse and has no host.
+    let host = "";
+    try { host = new URL(url).hostname; } catch (e) { host = ""; }
+    if (host === "photon.komoot.io") {
       rec.photon++;
       return { json: async () => ({ features: clone(w.feats) }) };
     }
